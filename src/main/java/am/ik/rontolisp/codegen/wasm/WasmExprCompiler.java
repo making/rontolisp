@@ -33,11 +33,12 @@ final class WasmExprCompiler {
 
 	/**
 	 * Compiles a printing operator, routed through {@code print-object} when the program
-	 * defines a method on it and compiled as it always was otherwise -- the gate that
-	 * keeps every print-object-free module byte-identical.
+	 * defines a method on it and through {@code %print-cased} when it mentions
+	 * {@code *print-case*}; compiled as it always was otherwise -- the gate that keeps
+	 * every module using neither byte-identical.
 	 */
 	private static void compilePrintOperator(LispCons cons, WasmLispCompiler.Ctx ctx, Runnable plain) {
-		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, false);
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, false, ctx.printCase);
 		if (hooked == null) {
 			plain.run();
 			return;
@@ -862,7 +863,8 @@ final class WasmExprCompiler {
 						WasmWriteStringCompiler.compileWriteString(cons, ctx);
 					}
 				}
-				case LispNames.WRITE_TO_STRING -> WasmPrin1ToStringCompiler.compile(cons, ctx);
+				case LispNames.WRITE_TO_STRING ->
+					compilePrintOperator(cons, ctx, () -> WasmPrin1ToStringCompiler.compile(cons, ctx));
 				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL ->
 					WasmWriteStringCompiler.compileMakeOutputStream(cons, ctx);
 				case LispNames.MAKE_STRING_OUTPUT_STREAM ->

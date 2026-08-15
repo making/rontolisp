@@ -157,6 +157,18 @@ class WasmLispCompilerIntegrationTest {
 	// A --component program run for its standard output, the fourth backend. The core
 	// module is the same one Preview 1 gets, but the I/O adapter is not, so a text
 	// differential is only complete once it has run here too.
+	// The component twin of compileAndRunPrelude: a program reaching a prelude defun
+	// needs the CLI pipeline's splice here too, or the module compiles to a call-time
+	// "undefined function".
+	private static String compileComponentAndRunPrelude(String lispCode) throws Exception {
+		byte[] component = new WasmLispCompiler(false, true)
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
 	private static String compileComponentAndRun(String lispCode) throws Exception {
 		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
@@ -5286,6 +5298,44 @@ class WasmLispCompilerIntegrationTest {
 		// The fixed branch uses the backend's native float printing; keep to simple
 		// values that print identically everywhere.
 		assertThat(compileAndRun("(format t \"~g ~g ~g\" 0.5 0.00012345 0.0)")).isEqualTo("0.5 1.2345e-4 0.0");
+	}
+
+	/** The program both wasm backends run for {@code *print-case*}. */
+	private static final String PRINT_CASE_PROGRAM = """
+			(dolist (m (list :upcase :downcase :capitalize))
+			  (let ((*print-case* m))
+			    (princ (princ-to-string 'add-test)) (princ "|")
+			    (princ (prin1-to-string '(foo "Str" nil t 1))) (princ "|")
+			    (princ (write-to-string (vector 'a 'b))) (terpri)))
+			(let ((*print-case* :downcase))
+			  (princ (format nil "~a ~s ~a" 'foo :foo (princ-to-string nil))) (terpri)
+			  (princ 'foo) (princ "|") (prin1 :foo) (terpri))
+			(let ((*print-case* :capitalize))
+			  (princ (princ-to-string (intern "*FOO*"))) (princ "|")
+			  (princ (princ-to-string (intern "foo-BAR"))) (terpri))
+			""";
+
+	/**
+	 * What SBCL 2.2.9 prints for {@link #PRINT_CASE_PROGRAM}, minus the trailing newline.
+	 */
+	private static final String PRINT_CASE_EXPECTED = """
+			ADD-TEST|(FOO "Str" NIL T 1)|#(A B)
+			add-test|(foo "Str" nil t 1)|#(a b)
+			Add-Test|(Foo "Str" Nil T 1)|#(A B)
+			foo :foo nil
+			foo|:foo
+			*Foo*|foo-Bar""";
+
+	@Test
+	void printCase() throws Exception {
+		// *print-case* converts the case of every SYMBOL the printer spells, through the
+		// shared %print-cased renderer the prelude splice brings in.
+		assertThat(compileAndRunPrelude(PRINT_CASE_PROGRAM)).isEqualTo(PRINT_CASE_EXPECTED);
+	}
+
+	@Test
+	void printCaseOnTheComponentPath() throws Exception {
+		assertThat(compileComponentAndRunPrelude(PRINT_CASE_PROGRAM)).isEqualTo(PRINT_CASE_EXPECTED);
 	}
 
 	@Test

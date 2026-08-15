@@ -299,6 +299,15 @@ program defines `+`. Names are matched by both the exact spelling and the
 package-stripped member name, so a library's `(defun cl-user::length ...)` blocks
 `length` too.
 
+**A program that mentions `*print-case*` blocks `princ-to-string` / `prin1-to-string`**
+(2026-08-15, `.todo/041`): `nil` and `t` render as SYMBOLS, so
+`(princ-to-string nil)` is `"nil"` under a `:downcase` binding and the two entries stop
+being constant. The block is on the OPERATORS rather than on the two literal types --
+one line instead of a type carve-out, and a program that binds the printer variable is
+not the one measuring bytes. Nothing else in the table renders a symbol: `symbol-name`
+and `string` answer the NAME, which `*print-case*` does not touch
+(`.kb/pretty-printer.md`).
+
 **The plain `(defun length ...)` is DIAGNOSED, not honoured (decided 2026-08-09,
 `compiler.ClRedefinitionWarnings`)**: the fold declines it, but the expression
 dispatchers still compile the standard operator at the call site, so the definition

@@ -9406,6 +9406,40 @@ cases:
       (0 T CHARACTER)
       :SW-DONE
       :MUFFLED
+  - name: print-case
+    source: |
+      ;; *print-case* converts the case of every SYMBOL the printer spells --
+      ;; princ / prin1 / print / write-to-string and the ~A / ~S directives,
+      ;; which lower to the first two. Mentioning the variable anywhere routes
+      ;; the whole program's printing through the shared %print-cased renderer,
+      ;; so this case is also what pins every OTHER case's output as unchanged
+      ;; under it. Values verified against SBCL 2.2.9.
+      (dolist (m (list :upcase :downcase :capitalize))
+        (let ((*print-case* m))
+          (princ (princ-to-string 'add-test)) (princ "|")
+          (princ (prin1-to-string '(foo "Str" nil t 1))) (princ "|")
+          (princ (write-to-string (vector 'a 'b))) (terpri)))
+      (let ((*print-case* :downcase))
+        (princ (format nil "~a ~s ~a" 'foo :foo (princ-to-string nil))) (terpri)
+        (princ 'foo) (princ "|") (prin1 :foo) (princ "|") (princ (princ-to-string '(a . b))) (terpri)
+        ;; a #'-reference carries the same route as the operator form
+        (princ (car (mapcar #'princ-to-string (list 'abc)))) (princ "|")
+        (princ (with-output-to-string (s) (write 'my-sym :stream s))) (princ "|")
+        (princ (format nil "~w" 'my-sym)) (terpri))
+      ;; a word is a run of alphanumerics, and :capitalize never UPCASES a
+      ;; lower-case character (CLHS 22.1.3.3 converts only the upper-case ones)
+      (let ((*print-case* :capitalize))
+        (princ (princ-to-string (intern "*FOO*"))) (princ "|")
+        (princ (princ-to-string (intern "A1B2-C3"))) (princ "|")
+        (princ (princ-to-string (intern "foo-BAR"))) (terpri))
+    expected: |
+      ADD-TEST|(FOO "Str" NIL T 1)|#(A B)
+      add-test|(foo "Str" nil t 1)|#(a b)
+      Add-Test|(Foo "Str" Nil T 1)|#(A B)
+      foo :foo nil
+      foo|:foo|(a . b)
+      abc|my-sym|my-sym
+      *Foo*|A1b2-C3|foo-Bar
 
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report

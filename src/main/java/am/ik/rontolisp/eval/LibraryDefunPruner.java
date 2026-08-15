@@ -223,8 +223,10 @@ public final class LibraryDefunPruner {
 		// %synonym-target is the same case twice over: both compile-path stream seams
 		// insert the call inside the expression compilers, and gray.lisp's dispatch
 		// helpers -- which call it -- are spliced after this walk.
+		// %print-cased is reached from the printing operators, rewritten onto it inside
+		// the expression compilers as well.
 		for (String synthesized : List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.TEMP_FILE_NAME,
-				LispNames.DELETE_FILE_IF_EXISTS, LispNames.SYNONYM_TARGET)) {
+				LispNames.DELETE_FILE_IF_EXISTS, LispNames.SYNONYM_TARGET, LispNames.PRINT_CASED_INTERNAL)) {
 			if (LispPreludeLibrary.referencedBySurfaceForm(synthesized, resolved, true)) {
 				roots.add(LispPreludeLibrary.definedName(synthesized));
 			}

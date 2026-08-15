@@ -67,6 +67,32 @@ $ rontolisp keys.lisp
 (eval (read-from-string "(reverse (list 1 2 3))")) ; => (3 2 1)
 ```
 
+## 印字する側: `*print-case*`
+
+プリンタは格納されている（大文字の）綴りをそのまま書き出します。これが
+`*print-case*` の標準値 `:upcase` の意味です。この変数を束縛すると、印字操作が
+綴るすべてのシンボルの大小文字が変換されます。対象は `princ`、`prin1`、
+`print`、`princ-to-string`、`prin1-to-string`、`write-to-string`、`write` と
+format の `~A` / `~S` ディレクティブで、インタプリタ・JVM・2 つの WASM
+バックエンドすべてで同じように動作します。
+
+```lisp
+(let ((*print-case* :downcase)) (princ-to-string 'add-test)) ; => "add-test"
+(let ((*print-case* :capitalize)) (princ-to-string 'add-test)) ; => "Add-Test"
+(let ((*print-case* :downcase)) (format nil "~a ~s" 'foo :foo)) ; => "foo :foo"
+(let ((*print-case* :downcase)) (prin1-to-string '(foo "Str" nil))) ; => "(foo \"Str\" nil)"
+```
+
+変換されるのはシンボルだけです。文字列は自身の文字をそのまま保ち、文字は文字と
+して印字されます。`nil` / `t` はシンボルなので変換されます。`:capitalize` は各語
+の先頭文字をそのまま残し、語の残りを小文字にします（語は英数字の連なりです）。
+小文字を大文字にすることはありません。標準が変換するのは大文字だけであり、
+そこが `string-capitalize` との違いです。
+
+差異: 構造体・CLOS インスタンス・ハッシュテーブル・階数が 1 以外の配列の中に
+入れ子になったシンボルは、格納された綴りのままになります。変換が辿るのはリストと
+ベクタで、これらのコンテナは通常のレンダラに委ねられます。
+
 ## Common Lisp との相違点
 
 - `intern`・`make-symbol`・`find-symbol` は名前をそのまま受け取ります(別の

@@ -958,8 +958,8 @@ before and every existing artifact stays byte-identical.
 - `printObjectTags(registry)` is ONE of the two gates and the routed tag set (class
   specializers and `defstruct` ones -- a struct name parses as a TYPE specializer
   carrying the struct name, so both descendant-tag families are collected).
-- `expandPrintObjectHook` rewrites `princ-to-string`/`prin1-to-string` to
-  `(%print-object-str x escape)` and `print`/`princ`/`prin1` to a
+- `expandPrintObjectHook` rewrites `princ-to-string`/`prin1-to-string`/`write-to-string`
+  to `(%print-object-str x escape)` and `print`/`princ`/`prin1` to a
   `write-string` of it (+ `terpri` for `print`). `format`'s `~A`/`~S` need no case of
   their own: they lower to those two conversions.
 - The generated `%print-object-str` falls back to `%princ-to-string` /
@@ -979,6 +979,12 @@ before and every existing artifact stays byte-identical.
   and therefore sees the route's own reference. That ORDER is the load-bearing part: a
   `setq` would not proclaim the name special, and injecting before the expansion would
   miss the reference the expansion creates.
+- **The THIRD gate is `*print-case*`** (2026-08-15, `.todo/041`): the same rewrite fires
+  for a program that MENTIONS the variable, and the leaf every arm above falls back to
+  becomes `(%print-cased x escape)` -- the shared prelude renderer that applies the
+  variable to each symbol spelling, whose own leaves are the two raw aliases. It sits
+  UNDER the method route, so a `print-object` method still wins where one applies.
+  `.kb/pretty-printer.md` owns the rest.
 - **The SECOND gate is a condition's `:report`** (`.kb/error-handling.md`, todo-206):
   the same rewrite fires for a program that can build a condition, and the
   escape-off arm of `%print-object-str` renders one through

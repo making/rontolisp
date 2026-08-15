@@ -611,7 +611,7 @@ public final class Environment implements Scope {
 		env.define(LispNames.PRINT_LEVEL_VAR, LispNil.INSTANCE);
 		env.define(LispNames.PRINT_BASE_VAR, new LispInteger(10));
 		env.define(LispNames.PRINT_RADIX_VAR, LispNil.INSTANCE);
-		env.define(LispNames.PRINT_CASE_VAR, new LispSymbol(":UPCASE"));
+		env.define(LispNames.PRINT_CASE_VAR, new LispSymbol(LispNames.PRINT_CASE_UPCASE));
 		env.define(LispNames.PRINT_ARRAY_VAR, LispTrue.INSTANCE);
 		env.define(LispNames.PRINT_GENSYM_VAR, LispTrue.INSTANCE);
 		// The remaining standard stream variables, all the t designator like

@@ -4086,6 +4086,57 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalPrintCase() {
+		// *print-case* converts the case of every SYMBOL the printer spells -- the value
+		// verified against SBCL 2.2.9. :downcase and :capitalize are the two that
+		// convert; :upcase is the stored spelling and the default.
+		assertThat(evalMulti("""
+				(list (let ((*print-case* :upcase)) (princ-to-string 'add-test))
+				      (let ((*print-case* :downcase)) (princ-to-string 'add-test))
+				      (let ((*print-case* :capitalize)) (princ-to-string 'add-test)))
+				""").print()).isEqualTo("(\"ADD-TEST\" \"add-test\" \"Add-Test\")");
+		// Every printing entry point: princ / prin1 / print / write-to-string and the
+		// ~A / ~S directives, which lower to the first two.
+		assertThat(evalMulti("""
+				(let ((*print-case* :downcase))
+				  (list (with-output-to-string (s) (princ 'foo s))
+				        (with-output-to-string (s) (prin1 :foo s))
+				        (write-to-string 'foo)
+				        (format nil "~a ~s" 'foo 'foo)))
+				""").print()).isEqualTo("(\"foo\" \":foo\" \"foo\" \"foo foo\")");
+		// A STRING keeps its own characters and a character prints as itself, so the
+		// conversion has to walk the value rather than the rendered text. nil and t are
+		// symbols and do convert.
+		assertThat(evalMulti("""
+				(let ((*print-case* :downcase))
+				  (list (prin1-to-string '(foo "Str" #\\A nil t 1))
+				        (princ-to-string '(a . b))
+				        (prin1-to-string (vector 'a 'b))
+				        (princ-to-string nil)))
+				""").print()).isEqualTo("(\"(foo \\\"Str\\\" #\\\\A nil t 1)\" \"(a . b)\" \"#(a b)\" \"nil\")");
+		// A #'-reference honors it too: (mapcar #'princ-to-string names) never reaches
+		// the operator seam, so the function VALUE carries the same route (the compile
+		// paths get it from the wrapper defun whose body is the operator form).
+		assertThat(evalMulti("""
+				(let ((*print-case* :downcase))
+				  (list (car (mapcar #'princ-to-string (list 'abc)))
+				        (funcall #'prin1-to-string :def)
+				        (apply #'write-to-string (list 'ghi))))
+				""").print()).isEqualTo("(\"abc\" \":def\" \"ghi\")");
+		// :capitalize keeps each word's first character as it stands and downcases the
+		// rest of the word; a word is a run of alphanumerics. It never UPCASES a
+		// lower-case character -- CLHS 22.1.3.3 converts only the upper-case ones, which
+		// is where the rule parts company with string-capitalize.
+		assertThat(evalMulti("""
+				(let ((*print-case* :capitalize))
+				  (list (princ-to-string (intern "*FOO*"))
+				        (princ-to-string (intern "A1B2-C3"))
+				        (princ-to-string (intern "foo-BAR"))
+				        (string-capitalize "foo-BAR")))
+				""").print()).isEqualTo("(\"*Foo*\" \"A1b2-C3\" \"foo-Bar\" \"Foo-Bar\")");
+	}
+
+	@Test
 	void evalWriteAndPprintDispatch() {
 		// write's keywords BIND the printer control variables around one print, which is
 		// CL's own definition of them; only :escape / :readably change the text.

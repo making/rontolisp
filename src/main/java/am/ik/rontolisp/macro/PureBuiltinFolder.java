@@ -283,6 +283,15 @@ public final class PureBuiltinFolder {
 				return null;
 			}
 		}
+		// A program that mentions *print-case* can rebind it around any print, and NIL /
+		// T render as symbols -- (princ-to-string nil) is "nil" under :downcase -- so the
+		// two rendering entries stop being constant. Blocking the operators outright
+		// rather than the two literal types keeps the rule one line and costs a program
+		// that binds the variable nothing measurable.
+		if (LispMacroExpander.usesPrintCase(program)) {
+			blocked.add(LispNames.PRINC_TO_STRING);
+			blocked.add(LispNames.PRIN1_TO_STRING);
+		}
 		return blocked;
 	}
 

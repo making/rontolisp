@@ -283,10 +283,13 @@ separating was never its size, it was the funcall-dispatch gate it held open.
   its own scan trigger the way `print-unreadable-object` has one. Its modifiers bind
   variables that change no text today (`~:W` -> `*print-pretty*` t, `~@W` ->
   `*print-level*`/`*print-length*` nil), so all three spellings are the one call, and
-  it takes no prefix parameters. **Re-evaluation trigger**: when the printer entry
-  points honor the control variables past `write`'s own keywords, `~W` has to consult
-  `*print-escape*`/`*print-readably*` exactly as `write` does -- and the static path
-  then owes the scan trigger above. Pinned by the `~w` rows of
+  it takes no prefix parameters. It DOES honor `*print-case*` (2026-08-15,
+  `.todo/041`): the case seam rewrites the `prin1-to-string` it lowers to, on both
+  renderings, so a `~W` under a `:downcase` binding prints lower case like every other
+  printing operator -- the gap left is the escape pair. **Re-evaluation trigger**: when
+  the printer entry points honor the control variables past `write`'s own keywords, `~W`
+  has to consult `*print-escape*`/`*print-readably*` exactly as `write` does -- and the
+  static path then owes the scan trigger above. Pinned by the `~w` rows of
   `FormatRendererTest.staticAndRuntimeRenderingAgree` and the
   `format-directive-write` ci-spec case (all four backends).
 - **`~&` measures the column from the text rendered so far** (an empty

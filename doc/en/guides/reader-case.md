@@ -66,6 +66,33 @@ symbols identically on the interpreter, the JVM and both WASM backends.
 (eval (read-from-string "(reverse (list 1 2 3))")) ; => (3 2 1)
 ```
 
+## Printing back: `*print-case*`
+
+The printer writes the stored (upper-case) spelling, which is what
+`*print-case*`'s standard value `:upcase` says. Binding the variable converts
+the case of every symbol a printing operator spells -- `princ`, `prin1`,
+`print`, `princ-to-string`, `prin1-to-string`, `write-to-string`, `write` and
+the `~A` / `~S` format directives -- on the interpreter, the JVM and both WASM
+backends:
+
+```lisp
+(let ((*print-case* :downcase)) (princ-to-string 'add-test)) ; => "add-test"
+(let ((*print-case* :capitalize)) (princ-to-string 'add-test)) ; => "Add-Test"
+(let ((*print-case* :downcase)) (format nil "~a ~s" 'foo :foo)) ; => "foo :foo"
+(let ((*print-case* :downcase)) (prin1-to-string '(foo "Str" nil))) ; => "(foo \"Str\" nil)"
+```
+
+Only symbols convert: a string keeps its own characters, a character prints as
+itself, and `nil` / `t` are symbols and do convert. `:capitalize` keeps each
+word's first character as it stands and downcases the rest of the word (a word
+is a run of alphanumerics); it never upcases a lower-case character, because the
+standard converts only the upper-case ones -- which is where the rule parts
+company with `string-capitalize`.
+
+Deviation: a symbol nested inside a structure, a CLOS instance, a hash table or
+an array of rank other than one keeps its stored spelling. The conversion walks
+lists and vectors and hands those containers to the ordinary renderer.
+
 ## Deviations from Common Lisp
 
 - `intern`, `make-symbol` and `find-symbol` take the name verbatim (there is

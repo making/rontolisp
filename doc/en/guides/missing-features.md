@@ -218,9 +218,13 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
   accepted and ignored. Only `(pprint-newline :mandatory)` and `~:@_` break a
   line. Every other `*print-*` variable exists and holds the value the printer
   really behaves as -- binding one to a non-default value is what has no effect,
-  except for `*print-escape*` / `*print-readably*` / `*print-pretty*`. The
-  ordinary printing operators do not consult `*print-pprint-dispatch*`: an entry
-  fires where the program calls the entry function itself.
+  except for `*print-escape*` / `*print-readably*` / `*print-pretty*` and
+  `*print-case*`, which are honored. `*print-case*` converts the case of the
+  symbols the printer spells but leaves a symbol nested in a structure, a CLOS
+  instance, a hash table or an array of rank other than one at its stored
+  spelling ([Reader Case](reader-case.md)). The ordinary printing operators do
+  not consult `*print-pprint-dispatch*`: an entry fires where the program calls
+  the entry function itself.
 - `#.` read-time eval is skipped with a warning inside `.asd` files.
 - built-in macro names (`cond`, `case`, `when`, `setf`, `push`, ...) cannot be
   redefined; list them with `(rontolisp:list-macros)`.

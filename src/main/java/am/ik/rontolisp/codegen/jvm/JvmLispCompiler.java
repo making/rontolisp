@@ -296,6 +296,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// expandTopLevelDefinitions, which runs the same scan to inject the
 		// restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
+		// Whether *print-case* is in play. Decided on the SURFACE program, like the scan
+		// that gives the variable its defvar, and threaded into the expression compiler
+		// so every printing operator routes through the case-applying renderer.
+		boolean printCase = LispMacroExpander.usesPrintCase(program);
 		// The dispatch narrower drops generic-function branches no call site can select
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
@@ -1170,6 +1174,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.dynamic(this.dynamic)
 			.blockExitChannel(blockExitChannel)
 			.restartMode(restartMode)
+			.printCase(printCase)
 			.usesFloatArray(usesFloatArray)
 			.usesIntArray(usesIntArray)
 			.usesArrays(usesArrays)
@@ -3957,6 +3962,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean restartMode = false;
 
 		/**
+		 * True when the program MENTIONS {@code *print-case*}
+		 * ({@code LispMacroExpander.usesPrintCase}): every printing operator is rewritten
+		 * onto the {@code %print-cased} renderer, which applies the variable to each
+		 * symbol spelling. Off, the printing operators compile exactly as they always
+		 * did.
+		 */
+		boolean printCase = false;
+
+		/**
 		 * True when the program can produce a packed float array (a {@code #d(...)}
 		 * literal or {@code make-array :element-type 'double-float}). When set, the array
 		 * op compilers route through the {@code _fv*} dispatch helpers (which handle both
@@ -4223,6 +4237,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.blockExitChannel = builder.blockExitChannel;
 			this.restartMode = builder.restartMode;
+			this.printCase = builder.printCase;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesIntArray = builder.usesIntArray;
 			this.usesArrays = builder.usesArrays;
@@ -4464,6 +4479,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean blockExitChannel = false;
 
 			private boolean restartMode = false;
+
+			private boolean printCase = false;
 
 			private boolean usesFloatArray = false;
 
@@ -4838,6 +4855,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder restartMode(boolean restartMode) {
 				this.restartMode = restartMode;
+				return this;
+			}
+
+			Builder printCase(boolean printCase) {
+				this.printCase = printCase;
 				return this;
 			}
 

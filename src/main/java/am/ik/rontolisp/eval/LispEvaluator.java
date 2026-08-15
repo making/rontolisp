@@ -1287,6 +1287,16 @@ public final class LispEvaluator {
 		wrapGrayOutputOperator(LispNames.PRINC, 1, GRAY_PRINC_DISPATCH);
 		wrapGrayOutputOperator(LispNames.PRIN1, 1, GRAY_PRIN1_DISPATCH);
 		wrapGrayOutputOperator(LispNames.PRINT, 1, GRAY_PRINT_DISPATCH);
+		// *print-case* as a FIRST-CLASS value: (mapcar #'princ-to-string names) under a
+		// :downcase binding never reaches the operator seam in evalConsRareOperator, so
+		// the case route has to sit in the function value too -- the compile paths get it
+		// for free (a #'-reference compiles to a wrapper defun whose body IS the operator
+		// form, which the seam rewrites). Wrapped AFTER the Gray wrappers, so the
+		// no-case path still reaches them and the rewritten write-string is Gray-aware.
+		for (String printer : List.of(LispNames.PRINC, LispNames.PRIN1, LispNames.PRINT, LispNames.PRINC_TO_STRING,
+				LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING)) {
+			wrapPrintCaseOperator(printer);
+		}
 		// close is the one operator a program can legitimately own: CL spells a stream's
 		// close as a method on CLOSE ITSELF, and a defmethod on a built-in name already
 		// dispatches on every backend (.kb/clos.md) -- fast-io's stream classes do
@@ -3538,6 +3548,20 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Whether {@code *print-case*} currently holds something other than {@code :upcase},
+	 * i.e. whether a printing operator has to route through the case-applying renderer.
+	 * Read dynamic-first, like any special: the value a {@code let} binding established
+	 * on this thread wins over the global default.
+	 * @return true when the printer must apply a case conversion
+	 */
+	private boolean printCaseInEffect() {
+		LispVal value = this.dynamicBindings.isBound(LispNames.PRINT_CASE_VAR)
+				? this.dynamicBindings.get(LispNames.PRINT_CASE_VAR)
+				: this.globalEnv.lookupOrNull(LispNames.PRINT_CASE_VAR);
+		return value instanceof LispSymbol mode && !LispNames.PRINT_CASE_UPCASE.equals(mode.name());
+	}
+
+	/**
 	 * Evaluates a bare symbol reference. Keywords self-evaluate. A special variable with
 	 * an active dynamic binding reads that binding (dynamic extent, visible across
 	 * function calls); otherwise the reference falls through to the ordinary
@@ -3733,6 +3757,40 @@ public final class LispEvaluator {
 			}
 			return apply(base, args, this.globalEnv);
 		}));
+	}
+
+	/**
+	 * Wraps a printing operator's FUNCTION VALUE so a {@code #'}-reference honors
+	 * {@code *print-case*} exactly as the operator form does: while the variable holds a
+	 * converting value the call is rebuilt as the source form it would have been (its
+	 * evaluated arguments quoted in place) and handed to the SAME expansion the operator
+	 * seam uses, so no second rendering rule can drift from it. With the variable at
+	 * {@code :upcase} -- the default, and every program that never binds it -- the
+	 * wrapped built-in runs unchanged.
+	 * @param name the operator name
+	 */
+	private void wrapPrintCaseOperator(String name) {
+		LispVal base = this.globalEnv.lookupFunction(name);
+		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			if (!args.isEmpty() && args.size() <= 2 && printCaseInEffect()) {
+				LispVal form = new LispCons(new LispSymbol(name), quotedArguments(args));
+				LispVal hooked = LispMacroExpander.expandPrintObjectHook((LispCons) form, this.closRegistry, true,
+						true);
+				if (hooked != null) {
+					return eval(hooked, this.globalEnv);
+				}
+			}
+			return apply(base, args, this.globalEnv);
+		}));
+	}
+
+	/** The evaluated arguments as a quoted argument LIST, ready to re-evaluate. */
+	private static LispVal quotedArguments(List<LispVal> args) {
+		LispVal list = LispNil.INSTANCE;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			list = new LispCons(quoteValue(args.get(i)), list);
+		}
+		return list;
 	}
 
 	/**
@@ -4402,18 +4460,24 @@ public final class LispEvaluator {
 			case LispNames.HB_GUARD_INTERNAL:
 				return evalHbGuard(cons, env);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
-					LispNames.PRIN1_TO_STRING: {
+					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING: {
 				// Routed through print-object only when the program defines a method on
-				// it; otherwise the ordinary Environment function runs, unchanged. The
-				// renderer is INLINED here rather than called as a generated defun: the
-				// interpreter re-expands per call, so it always sees the current method
-				// set (a defmethod may follow the first print).
+				// it, and through %print-cased only while *print-case* holds something
+				// other than :upcase; otherwise the ordinary Environment function runs,
+				// unchanged. The renderer is INLINED here rather than called as a
+				// generated defun: the interpreter re-expands per call, so it always sees
+				// the current method set (a defmethod may follow the first print). The
+				// case gate is the CURRENT VALUE rather than the compile paths'
+				// "the program mentions the variable" scan -- the interpreter has no
+				// whole-program pass to run one in -- and the two agree because
+				// %print-cased re-reads the variable itself.
 				if (this.closRegistry.routesConditionReports()) {
 					// Already routing: only the freshness check, so a condition class
 					// defined between two prints renders through its report too.
 					ensureConditionReportRuntimeLoaded();
 				}
-				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, true);
+				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, true,
+						printCaseInEffect());
 				if (hooked != null) {
 					return eval(hooked, env);
 				}

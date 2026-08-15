@@ -6168,6 +6168,26 @@ public final class LispNames {
 	public static final String PRIN1_TO_STRING_RAW = "%PRIN1-TO-STRING";
 
 	/**
+	 * The internal {@code (%print-cased x escape)} renderer: the text the printer writes
+	 * for a value with {@link #PRINT_CASE_VAR} applied to every SYMBOL it spells. A
+	 * prelude defun (one definition for all four backends), spliced into -- and called
+	 * from the printing operators of -- a program that mentions {@code *print-case*};
+	 * nothing else changes shape. Its own leaves are the non-consulting
+	 * {@link #PRINC_TO_STRING_RAW} / {@link #PRIN1_TO_STRING_RAW} conversions, which is
+	 * what makes the recursion terminate.
+	 */
+	public static final String PRINT_CASED_INTERNAL = "%PRINT-CASED";
+
+	/**
+	 * The internal {@code (%print-case-fold text)} helper: one symbol spelling under the
+	 * current {@link #PRINT_CASE_VAR}. {@code :downcase} is {@code string-downcase};
+	 * {@code :capitalize} keeps each word's first character and downcases the rest (CLHS
+	 * 22.1.3.3 converts only the UPPERCASE characters, so a lowercase one is never
+	 * upcased -- which is where this differs from {@code string-capitalize}).
+	 */
+	public static final String PRINT_CASE_FOLD_INTERNAL = "%PRINT-CASE-FOLD";
+
+	/**
 	 * The {@code type-error-datum} condition reader (prelude): the {@code datum} slot of
 	 * a {@code type-error}. Its {@code expected-type} twin is
 	 * {@link #TYPE_ERROR_EXPECTED_TYPE}.
@@ -6287,10 +6307,21 @@ public final class LispNames {
 	public static final String PRINT_RADIX_VAR = "*PRINT-RADIX*";
 
 	/**
-	 * {@code *print-case*} -- {@code :upcase}, which is how the printer spells a symbol
-	 * (the reader upcases, {@code .kb/reader-case-upcase.md}).
+	 * {@code *print-case*} -- {@code :upcase} by default, which is how the printer spells
+	 * a symbol (the reader upcases, {@code .kb/reader-case-upcase.md}). HONORED: binding
+	 * it to {@code :downcase} or {@code :capitalize} converts the case of every symbol
+	 * the printing operators spell, through the shared {@link #PRINT_CASED_INTERNAL}
+	 * renderer ({@code .kb/pretty-printer.md}).
 	 */
 	public static final String PRINT_CASE_VAR = "*PRINT-CASE*";
+
+	/**
+	 * The default (and rontolisp-canonical) {@link #PRINT_CASE_VAR} value: symbols print
+	 * with the stored, upper-case spelling the reader gave them
+	 * ({@code .kb/reader-case-upcase.md}). {@code :downcase} and {@code :capitalize} are
+	 * the two values that make the printer convert.
+	 */
+	public static final String PRINT_CASE_UPCASE = ":UPCASE";
 
 	/** {@code *print-array*} -- t: an array prints its elements, like the printer. */
 	public static final String PRINT_ARRAY_VAR = "*PRINT-ARRAY*";

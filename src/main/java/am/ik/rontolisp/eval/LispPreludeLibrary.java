@@ -1461,6 +1461,69 @@ public final class LispPreludeLibrary {
 				  (let ((n (char-code character)))
 				    (if (or (and (> n 31) (< n 127)) (= n 10)) t nil)))
 				""");
+		// *print-case*: the ONE case-applying renderer every backend prints through when
+		// the program mentions the variable (LispMacroExpander rewrites the printing
+		// operators onto it). It walks the value rather than the rendered text because
+		// only SYMBOL spellings are cased -- a string element keeps its own characters,
+		// and a character prints as itself. What it does NOT walk is the containers whose
+		// rendering is a runtime form of its own (a structure, an instance, a hash table,
+		// an array of rank != 1): those delegate to the raw conversion, so a symbol
+		// nested in one keeps the stored (upper-case) spelling. .kb/pretty-printer.md
+		// carries the re-evaluation trigger.
+		SOURCES.put(LispNames.PRINT_CASED_INTERNAL, """
+				(defun %print-cased (%pc-x %pc-esc)
+				  (if (eq *print-case* :upcase)
+				      (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x))
+				      (cond ((symbolp %pc-x)
+				             (%print-case-fold (if %pc-esc
+				                                   (%prin1-to-string %pc-x)
+				                                   (%princ-to-string %pc-x))))
+				            ((consp %pc-x)
+				             (let ((%pc-acc "(") (%pc-cur %pc-x) (%pc-sep ""))
+				               (while (consp %pc-cur)
+				                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
+				                                            (%print-cased (car %pc-cur) %pc-esc)))
+				                 (setq %pc-sep " ")
+				                 (setq %pc-cur (cdr %pc-cur)))
+				               (unless (null %pc-cur)
+				                 (setq %pc-acc (concatenate 'string %pc-acc " . "
+				                                            (%print-cased %pc-cur %pc-esc))))
+				               (concatenate 'string %pc-acc ")")))
+				            ((and (vectorp %pc-x) (not (stringp %pc-x)))
+				             (let ((%pc-acc "#(") (%pc-i 0) (%pc-n (length %pc-x)) (%pc-sep ""))
+				               (while (< %pc-i %pc-n)
+				                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
+				                                            (%print-cased (aref %pc-x %pc-i) %pc-esc)))
+				                 (setq %pc-sep " ")
+				                 (setq %pc-i (+ %pc-i 1)))
+				               (concatenate 'string %pc-acc ")")))
+				            (%pc-esc (%prin1-to-string %pc-x))
+				            (t (%princ-to-string %pc-x)))))
+				""");
+		// One symbol spelling under the current *print-case*. :downcase is
+		// string-downcase (char-downcase leaves a lower-case character alone, which is
+		// exactly CLHS's "only the UPPERCASE characters are converted"); :capitalize
+		// keeps each word's first character as it stands -- never upcasing a lower-case
+		// one, which is where CL's rule parts company with string-capitalize -- and
+		// downcases the rest of the word. A word is a run of alphanumerics, so *FOO*
+		// capitalizes to *Foo* and A1B2-C3 to A1b2-C3.
+		SOURCES.put(LispNames.PRINT_CASE_FOLD_INTERNAL, """
+				(defun %print-case-fold (%pcf-s)
+				  (cond ((eq *print-case* :downcase) (string-downcase %pcf-s))
+				        ((eq *print-case* :capitalize)
+				         (let ((%pcf-acc "") (%pcf-i 0) (%pcf-n (length %pcf-s)) (%pcf-word nil))
+				           (while (< %pcf-i %pcf-n)
+				             (let* ((%pcf-c (char %pcf-s %pcf-i))
+				                    (%pcf-a (if (or (alpha-char-p %pcf-c) (digit-char-p %pcf-c)) t nil)))
+				               (setq %pcf-acc (concatenate 'string %pcf-acc
+				                                           (string (if (and %pcf-a %pcf-word)
+				                                                       (char-downcase %pcf-c)
+				                                                       %pcf-c))))
+				               (setq %pcf-word %pcf-a))
+				             (setq %pcf-i (+ %pcf-i 1)))
+				           %pcf-acc))
+				        (t %pcf-s)))
+				""");
 		// The printer entry point: CL specifies write's keywords as BINDINGS of the
 		// printer
 		// control variables around one print, so that is literally what this does -- the
@@ -1728,6 +1791,15 @@ public final class LispPreludeLibrary {
 		if (LispNames.SYNONYM_TARGET.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_SYNONYM_STREAM, canonical)
 					|| GrayStreamsLibrary.usesProtocol(program);
+		}
+		// %print-cased: the printing operators are rewritten onto it inside the
+		// expression compilers, after this pass, so the reference this selection would
+		// look for does not exist yet either. The surface fact is the program MENTIONING
+		// *print-case* -- the same scan that gives the variable its defvar
+		// (LispMacroExpander.injectMvSpillGlobal), so the renderer and the variable it
+		// reads are spliced together or not at all.
+		if (LispNames.PRINT_CASED_INTERNAL.equals(entry)) {
+			return referencesName(program, LispNames.PRINT_CASE_VAR, canonical);
 		}
 		if (LispNames.PROBE_FILE.equals(entry)) {
 			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical);

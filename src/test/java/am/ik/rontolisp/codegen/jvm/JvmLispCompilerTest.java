@@ -3984,6 +3984,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunPrintCase() throws Exception {
+		// *print-case* converts the case of every SYMBOL the printer spells, on the
+		// compile path as on the interpreter (the shared %print-cased renderer, spliced
+		// because the program mentions the variable). Values verified against SBCL 2.2.9.
+		assertThat(compileAndRun("""
+				(dolist (m (list :upcase :downcase :capitalize))
+				  (let ((*print-case* m))
+				    (princ (princ-to-string 'add-test)) (princ "|")
+				    (princ (prin1-to-string '(foo "Str" nil t 1))) (princ "|")
+				    (princ (write-to-string (vector 'a 'b))) (terpri)))
+				(let ((*print-case* :downcase))
+				  (princ (format nil "~a ~s ~a" 'foo :foo (princ-to-string nil))) (terpri)
+				  (princ 'foo) (princ "|") (prin1 :foo) (terpri))
+				(let ((*print-case* :capitalize))
+				  (princ (princ-to-string (intern "*FOO*"))) (princ "|")
+				  (princ (princ-to-string (intern "foo-BAR"))) (terpri))
+				""")).isEqualTo("""
+				ADD-TEST|(FOO "Str" NIL T 1)|#(A B)
+				add-test|(foo "Str" nil t 1)|#(a b)
+				Add-Test|(Foo "Str" Nil T 1)|#(A B)
+				foo :foo nil
+				foo|:foo
+				*Foo*|foo-Bar""");
+	}
+
+	@Test
 	void compileAndRunPrincToString() throws Exception {
 		assertThat(compileAndRun("(print (princ-to-string 42)) (princ (princ-to-string 'sym))"))
 			.isEqualTo("\"42\"\nSYM");

@@ -4,7 +4,9 @@
 actually behaves as, and the pretty-printing operators produce the text a wide enough
 line holds -- identically on the interpreter, the JVM and both WASM GC backends.** What
 they do NOT do is change the LAYOUT: no rontolisp stream carries a column, so nothing
-wraps.
+wraps. The variables that change the TEXT when bound are `*print-escape*` /
+`*print-readably*` (which of the two conversions runs), `*print-pretty*` (the mandatory
+line break) and `*print-case*` (the section below).
 
 Pinned by `LispEvaluatorTest.evalWriteAndPprintDispatch` /
 `evalPprintLogicalBlock`, the `esrap-enablement-language-group` ci-spec case (all four
@@ -46,6 +48,59 @@ uses any of it.
   justification's `~;` segments consume arguments in turn; a logical block's first section
   is the prefix, its last the suffix when there are three, and a block without `@` takes
   ONE argument -- a list -- as its whole argument list).
+
+## `*print-case*`: one shared renderer, gated on the program naming the variable
+
+Landed 2026-08-15 (`.todo/041`; the consumer is rove's `(let ((*print-case* :downcase))
+(princ-to-string name))`, `.todo/372` row 12). Binding the variable to `:downcase` or
+`:capitalize` converts the case of every SYMBOL the printer spells -- `princ` / `prin1` /
+`print` / `princ-to-string` / `prin1-to-string` / `write-to-string` / `write` and the
+`~A` / `~S` directives, which lower to the two conversions -- on all four backends, with
+text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
+`JvmLispCompilerTest.compileAndRunPrintCase`,
+`WasmLispCompilerIntegrationTest.printCase` + `printCaseOnTheComponentPath`, the
+`print-case` ci-spec case).
+
+- **One implementation, not four.** `%print-cased` is a `LispPreludeLibrary` defun (with
+  `%print-case-fold` beside it), so the interpreter and the three compiled backends run
+  the SAME recursive renderer -- the alternative, a case pass inside each backend's
+  symbol-spelling arm (two of them hand-emitted bytecode), is three implementations that
+  have to be kept identical. It walks the VALUE rather than the rendered text because
+  only symbol spellings are cased: a string element keeps its own characters
+  (`(a "Str")` under `:downcase`), and a character prints as itself.
+- **The gate is "the program MENTIONS `*print-case*`"** (`LispMacroExpander.usesPrintCase`)
+  -- the same scan that gives the variable its `defvar` (`injectMvSpillGlobal`), roots the
+  prelude splice (`LispPreludeLibrary.referencedBySurfaceForm`, `LibraryDefunPruner`) and
+  flips `Ctx.printCase` in both compilers. A program that never names it is
+  BYTE-IDENTICAL to a pre-`*print-case*` build (checked over `size-report/programs` and
+  `examples/console`). The interpreter gates on the CURRENT VALUE instead (it has no
+  whole-program pass to run the scan in); the two agree because `%print-cased` re-reads
+  the variable itself and takes the raw conversion under `:upcase`.
+- **It sits UNDER the `print-object` route, not beside it** -- the same
+  `expandPrintObjectHook` seam rewrites both, and `%print-cased` is what the route's
+  fallback (and, with no method defined, the operator itself) becomes. A program with
+  both gets the method first and the case only where no method applies.
+  `%print-cased`'s own leaves are the RAW (`%princ-to-string` / `%prin1-to-string`)
+  conversions, which is what terminates the recursion.
+- **The pure-builtin fold stands down for `princ-to-string`/`prin1-to-string`** in such a
+  program (`PureBuiltinFolder.shadowedOperators`): `nil` and `t` render as SYMBOLS, so
+  `(princ-to-string nil)` is `"nil"` under `:downcase` and no longer a compile-time
+  constant.
+- **`:capitalize` is not `string-capitalize`.** CLHS 22.1.3.3 converts only the UPPERCASE
+  characters, so a word's first character is kept AS IT STANDS (never upcased) and the
+  rest of the word is downcased: `foo-BAR` prints `foo-Bar` where `string-capitalize`
+  answers `Foo-Bar`. A word is a run of alphanumerics (`*FOO*` -> `*Foo*`,
+  `A1B2-C3` -> `A1b2-C3`). `:downcase` IS `string-downcase` (`char-downcase` leaves a
+  lower-case character alone).
+- **Known gap, and the re-evaluation trigger:** a symbol nested in a STRUCTURE, a CLOS
+  instance, a hash table or an array of rank != 1 keeps its stored spelling -- the walk
+  covers symbols, conses and vectors and delegates those containers to the raw
+  conversion, whose rendering is a runtime form of its own (SBCL prints `#S(pt :x a)`).
+  Re-evaluate when a container's rendering becomes reachable from Lisp: the walk gains a
+  branch, nothing else moves. The same gate would carry `write`'s `:case` keyword and
+  `write-to-string`'s keyword set (below), which are deliberately still absent: adding
+  `:case` to the prelude `write` would make every `write` user MENTION `*print-case*` and
+  so pull the renderer into modules that never bind it.
 
 ## What a stream with no column cannot do, and the re-evaluation trigger
 
@@ -97,7 +152,7 @@ binding); the compile paths get a top-level `(defvar name value)` from
 | `*print-length*` / `*print-level*` | `nil` | the value IS the behavior (no truncation) |
 | `*print-base*` | `10` | the value IS the behavior |
 | `*print-radix*` | `nil` | the value IS the behavior |
-| `*print-case*` | `:upcase` | the value IS the behavior (`.kb/reader-case-upcase.md`) |
+| `*print-case*` | `:upcase` | yes -- `:downcase`/`:capitalize` convert every symbol spelling (below) |
 | `*print-array*` / `*print-gensym*` | `t` | the value IS the behavior |
 | `*print-pprint-dispatch*` | a fresh empty table | entries and lookup, but see above |
 

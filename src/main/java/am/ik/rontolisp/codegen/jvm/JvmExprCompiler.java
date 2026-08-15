@@ -36,11 +36,12 @@ final class JvmExprCompiler {
 
 	/**
 	 * Compiles a printing operator, routed through {@code print-object} when the program
-	 * defines a method on it and compiled as it always was otherwise -- the gate that
-	 * keeps every print-object-free program byte-identical.
+	 * defines a method on it and through {@code %print-cased} when it mentions
+	 * {@code *print-case*}; compiled as it always was otherwise -- the gate that keeps
+	 * every program using neither byte-identical.
 	 */
 	private static void compilePrintOperator(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Runnable plain) {
-		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, false);
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, false, ctx.printCase);
 		if (hooked == null) {
 			plain.run();
 			return;
@@ -561,7 +562,8 @@ final class JvmExprCompiler {
 						JvmStringStreamCompiler.compileWriteString(cons, ctx, className);
 					}
 				}
-				case LispNames.WRITE_TO_STRING -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
+				case LispNames.WRITE_TO_STRING -> compilePrintOperator(cons, ctx, className,
+						() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
 				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL ->
 					JvmStringStreamCompiler.compileMakeOutputStream(cons, ctx, className);
 				case LispNames.MAKE_STRING_OUTPUT_STREAM ->

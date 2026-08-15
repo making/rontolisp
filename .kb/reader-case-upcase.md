@@ -50,7 +50,9 @@ is unchanged). Non-ASCII code chars on WASM are a separate limitation (`.todo/15
 package marker of a keyword/gensym (`LispSymbol.displayName`, shared with `princ`/`~A`/
 `string`; `prin1`/`print` keep the stored spelling). Any Java-side name synthesis from a
 user symbol goes through `LispMacroExpander.affixFor` (defstruct `MAKE-PT`/`PT-P`, class
-`%MAKE-`+base), which case-matches its base -- now always upper case.
+`%MAKE-`+base), which case-matches its base -- now always upper case. The printer's own
+side of the model -- `*print-case*`, which converts that stored spelling on the way OUT
+when a program binds it -- is `.kb/pretty-printer.md`.
 
 **Case-tolerance seams that REMAIN** (these are NOT the fold -- they bridge upcased Lisp
 data with lower-kebab WIT / host-ABI names, or give CL-style case-insensitive keyword

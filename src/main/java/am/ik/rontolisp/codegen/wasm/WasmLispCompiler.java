@@ -2947,6 +2947,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.condMessagesObservable(condMessagesObservable)
 			.blockExitTag(blockExitTag)
 			.restartMode(restartMode)
+			.printCase(LispMacroExpander.usesPrintCase(program))
 			.usesSeqString(usesSeqString)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
@@ -6932,6 +6933,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean restartMode = false;
 
 		/**
+		 * True when the program MENTIONS {@code *print-case*}
+		 * ({@code LispMacroExpander.usesPrintCase}): every printing operator is rewritten
+		 * onto the {@code %print-cased} renderer, which applies the variable to each
+		 * symbol spelling. Off, the printing operators compile exactly as they always
+		 * did.
+		 */
+		boolean printCase = false;
+
+		/**
 		 * True when the program can build a SYNONYM STREAM ({@code make-synonym-stream}
 		 * is the only way to, and it has no read syntax), so every stream-designator
 		 * resolution has to run through {@code %SYNONYM-TARGET}. A program that never
@@ -7311,6 +7321,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.condMessagesObservable = builder.condMessagesObservable;
 			this.blockExitTag = builder.blockExitTag;
 			this.restartMode = builder.restartMode;
+			this.printCase = builder.printCase;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
 			this.usesSeqString = builder.usesSeqString;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
@@ -7406,6 +7417,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean blockExitTag = false;
 
 			private boolean restartMode = false;
+
+			private boolean printCase = false;
 
 			private boolean usesSynonymStreams = false;
 
@@ -7605,6 +7618,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder restartMode(boolean restartMode) {
 				this.restartMode = restartMode;
+				return this;
+			}
+
+			Builder printCase(boolean printCase) {
+				this.printCase = printCase;
 				return this;
 			}
 

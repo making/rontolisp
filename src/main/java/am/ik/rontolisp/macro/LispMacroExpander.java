@@ -58,7 +58,7 @@ public final class LispMacroExpander {
 		PRINTER_MODE_VARS.put(LispNames.PRINT_LEVEL_VAR, () -> LispNil.INSTANCE);
 		PRINTER_MODE_VARS.put(LispNames.PRINT_BASE_VAR, () -> new LispInteger(10));
 		PRINTER_MODE_VARS.put(LispNames.PRINT_RADIX_VAR, () -> LispNil.INSTANCE);
-		PRINTER_MODE_VARS.put(LispNames.PRINT_CASE_VAR, () -> new LispSymbol(":UPCASE"));
+		PRINTER_MODE_VARS.put(LispNames.PRINT_CASE_VAR, () -> new LispSymbol(LispNames.PRINT_CASE_UPCASE));
 		PRINTER_MODE_VARS.put(LispNames.PRINT_ARRAY_VAR, () -> LispTrue.INSTANCE);
 		PRINTER_MODE_VARS.put(LispNames.PRINT_GENSYM_VAR, () -> LispTrue.INSTANCE);
 		// The remaining standard STREAM variables. They are not printer modes, but they
@@ -16911,7 +16911,7 @@ public final class LispMacroExpander {
 		// or routes condition reports. Emitted here so the tag list is the COMPLETE
 		// method set, whatever order the defmethods came in.
 		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.routesConditionReports()) {
-			out.add(printObjectStrDefun(closRegistry));
+			out.add(printObjectStrDefun(closRegistry, usesPrintCase(program)));
 		}
 		// The runtime format renderer, once per program that can reach it. Emitted here
 		// so the scan sees the definitions injected above (the condition report renders a
@@ -21996,13 +21996,15 @@ public final class LispMacroExpander {
 	 * else falls back to the RAW ({@code print-object}-free) conversions, which is what
 	 * makes the recursion terminate.
 	 * @param closRegistry the class registry
+	 * @param printCase whether the program mentions {@code *print-case*}, in which case
+	 * the fallback is the case-applying renderer instead of the raw conversion
 	 * @return the {@code %print-object-str} defun
 	 */
-	public static LispVal printObjectStrDefun(ClosRegistry closRegistry) {
+	public static LispVal printObjectStrDefun(ClosRegistry closRegistry, boolean printCase) {
 		LispSymbol value = new LispSymbol("__pox");
 		LispSymbol escape = new LispSymbol("__poe");
-		LispVal fallback = makeIf(escape, listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING_RAW), value)),
-				princRendering(value, closRegistry.routesConditionReports()));
+		LispVal fallback = makeIf(escape, rawRendering(value, true, printCase),
+				princRendering(value, closRegistry.routesConditionReports(), printCase));
 		LispVal body = printObjectRouting(value, fallback, closRegistry, escape);
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL),
 				listToCons(List.of(value, escape)), body));
@@ -22027,8 +22029,8 @@ public final class LispMacroExpander {
 	 * "{@code princ} of a condition runs its report, {@code prin1} prints the unreadable
 	 * {@code #<...>} form" -- the escape-on arm is deliberately untouched.
 	 */
-	private static LispVal princRendering(LispVal value, boolean routesConditionReports) {
-		LispVal raw = listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING_RAW), value));
+	private static LispVal princRendering(LispVal value, boolean routesConditionReports, boolean printCase) {
+		LispVal raw = rawRendering(value, false, printCase);
 		if (!routesConditionReports) {
 			return raw;
 		}
@@ -22704,19 +22706,24 @@ public final class LispMacroExpander {
 	 * @param inline whether to inline the renderer instead of calling the generated defun
 	 * (the interpreter re-expands per call, so it always has the current registry; the
 	 * compile paths emit the defun once)
+	 * @param printCase whether {@code *print-case*} is in play (the compile paths: the
+	 * program mentions the variable; the interpreter: its current value is not
+	 * {@code :upcase}), which routes the same operators through {@code %print-cased}
 	 * @return the rewritten form, or null when the program neither defines a print-object
-	 * method nor can build a condition
+	 * method nor can build a condition nor mentions {@code *print-case*}
 	 */
-	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean inline) {
-		if ((printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports())
+	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean inline,
+			boolean printCase) {
+		if ((printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports() && !printCase)
 				|| !cons.isProperList()) {
 			return null;
 		}
 		List<LispVal> parts = cons.toList();
 		String op = ((LispSymbol) parts.get(0)).name();
 		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op);
-		if (LispNames.PRINC_TO_STRING.equals(op) || LispNames.PRIN1_TO_STRING.equals(op)) {
-			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, inline, closRegistry) : null;
+		if (LispNames.PRINC_TO_STRING.equals(op) || LispNames.PRIN1_TO_STRING.equals(op)
+				|| LispNames.WRITE_TO_STRING.equals(op)) {
+			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, inline, closRegistry, printCase) : null;
 		}
 		if (parts.size() < 2 || parts.size() > 3) {
 			return null;
@@ -22724,7 +22731,7 @@ public final class LispMacroExpander {
 		LispSymbol valueVar = new LispSymbol("__po" + MV_COUNTER.getAndIncrement() + "_v");
 		List<LispVal> write = new java.util.ArrayList<>();
 		write.add(new LispSymbol(LispNames.WRITE_STRING));
-		write.add(printObjectStr(valueVar, escape, inline, closRegistry));
+		write.add(printObjectStr(valueVar, escape, inline, closRegistry, printCase));
 		List<LispVal> terpri = new java.util.ArrayList<>();
 		terpri.add(new LispSymbol(LispNames.TERPRI));
 		if (parts.size() == 3) {
@@ -22745,18 +22752,45 @@ public final class LispMacroExpander {
 	 * value to a temp first: it is tested before it is rendered, and the argument of a
 	 * {@code (princ-to-string (pop x))} must not be evaluated twice.
 	 */
-	private static LispVal printObjectStr(LispVal value, boolean escape, boolean inline, ClosRegistry closRegistry) {
+	private static LispVal printObjectStr(LispVal value, boolean escape, boolean inline, ClosRegistry closRegistry,
+			boolean printCase) {
 		LispVal escapeArg = escape ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		// Nothing to route: the operator is here for *print-case* alone, so the
+		// case-applying renderer IS the rewrite (and the %print-object-str defun this
+		// would otherwise call is not generated for such a program).
+		if (printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports()) {
+			return rawRendering(value, escape, printCase);
+		}
 		if (!inline) {
 			return listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL), value, escapeArg));
 		}
 		if (!(value instanceof LispSymbol)) {
 			LispSymbol temp = new LispSymbol("__pos" + MV_COUNTER.getAndIncrement() + "_v");
-			return makeLet(temp.name(), value, printObjectStr(temp, escape, true, closRegistry));
+			return makeLet(temp.name(), value, printObjectStr(temp, escape, true, closRegistry, printCase));
 		}
-		LispVal fallback = escape ? listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING_RAW), value))
-				: princRendering(value, closRegistry.routesConditionReports());
+		LispVal fallback = escape ? rawRendering(value, true, printCase)
+				: princRendering(value, closRegistry.routesConditionReports(), printCase);
 		return printObjectRouting(value, fallback, closRegistry, escapeArg);
+	}
+
+	/**
+	 * The leaf rendering of one value: the RAW ({@code print-object}-free) conversion, or
+	 * -- when the program mentions {@code *print-case*} -- the case-applying
+	 * {@code %print-cased} renderer, whose own leaves are those same raw conversions. It
+	 * sits UNDER the {@code print-object} route rather than beside it, so a program with
+	 * both gets the method first and the case only where no method applies.
+	 * @param value the value form (evaluated once by the caller)
+	 * @param escape the {@code prin1} rendering rather than the {@code princ} one
+	 * @param printCase whether {@code *print-case*} is in play
+	 * @return the rendering form
+	 */
+	private static LispVal rawRendering(LispVal value, boolean escape, boolean printCase) {
+		if (printCase) {
+			return listToCons(List.of(new LispSymbol(LispNames.PRINT_CASED_INTERNAL), value,
+					escape ? LispTrue.INSTANCE : LispNil.INSTANCE));
+		}
+		return listToCons(
+				List.of(new LispSymbol(escape ? LispNames.PRIN1_TO_STRING_RAW : LispNames.PRINC_TO_STRING_RAW), value));
 	}
 
 	/**
@@ -24638,6 +24672,25 @@ public final class LispMacroExpander {
 					listToCons(callParts), dispatch);
 		}
 		return makeLet(lenVar.name(), callOf(LispNames.LENGTH, argsVar), dispatch);
+	}
+
+	/**
+	 * Whether the program MENTIONS {@code *print-case*} anywhere -- the same scan that
+	 * gives the variable its {@code defvar} ({@link #injectMvSpillGlobal}) and splices
+	 * the {@code %print-cased} renderer ({@code LispPreludeLibrary}), so the three
+	 * decisions cannot disagree. A program that never names the variable can never bind
+	 * it, so its printing operators keep their own compilation and it stays
+	 * byte-identical.
+	 * @param program the top-level forms
+	 * @return true when some form names {@code *print-case*}
+	 */
+	public static boolean usesPrintCase(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (usesSymbol(form, LispNames.PRINT_CASE_VAR)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** The surface operators that flip a program into restart mode. */
