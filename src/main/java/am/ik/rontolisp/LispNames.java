@@ -3598,6 +3598,26 @@ public final class LispNames {
 	 */
 	public static final String END_SYSTEM = "%END-SYSTEM";
 
+	/**
+	 * Internal marker inserted by {@code LoadInliner} before the forms it splices for one
+	 * FILE, carrying that file's {@link #LOAD_PATHNAME_VAR} and
+	 * {@link #LOAD_TRUENAME_VAR} values as two strings: it is what gives a spliced file
+	 * the load context the interpreter binds around the same file.
+	 * {@code LispMacroExpander.lowerLoadContextMarkers} lowers the bracket to top-level
+	 * assignments of the two variables (and a restore of the enclosing file's values at
+	 * {@link #END_FILE}) when the program reads either one, and drops it otherwise, so a
+	 * program that never mentions them is byte-identical. Brackets nest with a nested
+	 * {@code load}; the payload is a string rather than a symbol for the same reason
+	 * {@link #BEGIN_SYSTEM}'s is. Paired with {@link #END_FILE}.
+	 */
+	public static final String BEGIN_FILE = "%BEGIN-FILE";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} after the forms it splices for one
+	 * file, closing the innermost {@link #BEGIN_FILE}.
+	 */
+	public static final String END_FILE = "%END-FILE";
+
 	/** The {@code :use} clause keyword of {@code defpackage}. */
 	public static final String USE_KEYWORD = ":USE";
 

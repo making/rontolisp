@@ -9,13 +9,20 @@ symbols), and every export nothing implements yet already signals
 it does not add names. Read `.kb/uiop.md` first: a definition carries its HOME
 sub-package's spelling, and a new one goes in that sub-package's `.lisp` resource.
 Measured coverage here today (`UiopCoverageTest.printCoverage`, the authority for
-every count below): **2 / 50 (`merge-pathnames*`, now Lisp source and REAL on all four backends, and `ensure-directory-pathname`)**.
+every count below): **4 / 50 (`merge-pathnames*`, now Lisp source and REAL on all four backends,
+`ensure-directory-pathname`, and -- since `.todo/375` -- `absolute-pathname-p` +
+`ensure-absolute-pathname`, which rove's `resolve-file` calls on EVERY `deftest`
+once `*load-pathname*` is real, so a stub there was a hard error)**. The two new
+ones carry a deliberate divergence to keep in mind for the rest of this family:
+rontolisp absolutizes NOWHERE, so `ensure-absolute-pathname` answers a relative
+path as itself where upstream signals (`.kb/uiop.md`, `doc/*/reference/uiop.md`).
 
 Depends on `.todo/353`, `.todo/354`. The largest single-subject item of the
 twelve, and the one with a real prerequisite outside uiop.
 
-50 externals; two present (`merge-pathnames*` -- interpreter-only today, see
-`.todo/353` -- and `ensure-directory-pathname`). The **48** missing:
+50 externals; four present (`merge-pathnames*`, `ensure-directory-pathname`,
+`absolute-pathname-p`, `ensure-absolute-pathname`). The **46** missing (the list
+below still names the last two; strike them when you work it):
 
 ```
 ABSOLUTE-PATHNAME-P CALL-WITH-ENOUGH-PATHNAME

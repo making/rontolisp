@@ -291,8 +291,9 @@ public final class LoadInliner {
 			}
 			String operator = require != null ? LispNames.REQUIRE : LispNames.LOAD;
 			// Resolve relative to the loading file's directory (the entry source at the
-			// top level), the same rule the runtime load uses.
-			spliceFile(operator, SourceLoader.resolve(baseDir, rawPath), out, ctx);
+			// top level), the same rule the runtime load uses. *load-pathname* is the
+			// path load was CALLED with, so the raw spelling rides along beside it.
+			spliceFile(operator, SourceLoader.resolve(baseDir, rawPath), out, ctx, rawPath);
 		}
 	}
 
@@ -300,9 +301,13 @@ public final class LoadInliner {
 	 * Reads the file at the (resolved) path and recursively expands its forms into
 	 * {@code out}, guarding against load cycles. Nested loads inside the file resolve
 	 * relative to the file's directory.
+	 * @param pathname the spelling {@code load} was called with -- the file's
+	 * {@code *load-pathname*}, which is the RESOLVED path for an ASDF component (that is
+	 * what ASDF hands {@code load}, and it is what makes the value equal
+	 * {@code asdf:component-pathname})
 	 */
-	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx) {
-		spliceFile(operator, path, out, ctx, null, null, null);
+	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx, String pathname) {
+		spliceFile(operator, path, out, ctx, pathname, null, null, null);
 	}
 
 	/**
@@ -311,7 +316,7 @@ public final class LoadInliner {
 	 * {@link ShimLibraries#rewriteComponentSource} can rewrite forms of the real source
 	 * (uax-15's table building).
 	 */
-	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx,
+	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx, String pathname,
 			@Nullable String systemName, @Nullable String componentFile, @Nullable String systemBaseDir) {
 		if (ctx.loading().contains(path)) {
 			throw new IllegalStateException(
@@ -348,6 +353,12 @@ public final class LoadInliner {
 		// plain
 		// file of defuns) are spliced verbatim, so their output is unchanged.
 		boolean bracket = selectsAPackage(forms);
+		// The load context of the file, for the two variables the interpreter binds
+		// around the same file: the spelling load was called with and the path it
+		// resolved to. The bracket is emitted unconditionally and lowered (or dropped)
+		// once the whole program is in view -- this pass cannot yet know whether
+		// anything reads the variables, because the libraries spliced after it may.
+		out.add(beginFile(pathname, path));
 		if (bracket) {
 			out.add(marker(LispNames.PUSH_PACKAGE));
 		}
@@ -355,6 +366,7 @@ public final class LoadInliner {
 		if (bracket) {
 			out.add(marker(LispNames.POP_PACKAGE));
 		}
+		out.add(marker(LispNames.END_FILE));
 		ctx.loading().removeLast();
 	}
 
@@ -497,8 +509,13 @@ public final class LoadInliner {
 					out.addAll(leafShim);
 					continue;
 				}
-				spliceFile(LispNames.ASDF_LOAD_SYSTEM, SourceLoader.resolve(system.baseDir(), file), out, systemCtx,
-						name, file, system.baseDir());
+				// A component is loaded by its RESOLVED path (real ASDF hands load the
+				// component pathname), so *load-pathname* equals *load-truename* equals
+				// asdf:component-pathname for it -- what rove's file-to-package map
+				// correlates by.
+				String resolved = SourceLoader.resolve(system.baseDir(), file);
+				spliceFile(LispNames.ASDF_LOAD_SYSTEM, resolved, out, systemCtx, resolved, name, file,
+						system.baseDir());
 			}
 			// The system's recorded :perform (test-op ...) body, as the defun the
 			// generated asdf:test-system dispatch calls -- emitted at the system's own
@@ -722,8 +739,9 @@ public final class LoadInliner {
 	}
 
 	/**
-	 * A bare {@code (%push-package)} / {@code (%pop-package)} / {@code (%end-system)}
-	 * directive consumed by the package resolver (see {@link #spliceFile}).
+	 * A bare {@code (%push-package)} / {@code (%pop-package)} / {@code (%end-system)} /
+	 * {@code (%end-file)} directive consumed by the package resolver (see
+	 * {@link #spliceFile}).
 	 */
 	private static LispVal marker(String name) {
 		return new LispCons(new LispSymbol(name), LispNil.INSTANCE);
@@ -737,6 +755,16 @@ public final class LoadInliner {
 	private static LispVal beginSystem(String name) {
 		return new LispCons(new LispSymbol(LispNames.BEGIN_SYSTEM),
 				new LispCons(new LispString(name), LispNil.INSTANCE));
+	}
+
+	/**
+	 * A {@code (%begin-file "PATHNAME" "TRUENAME")} load-context marker (see
+	 * {@link #spliceFile}), carrying the two values the interpreter binds around the same
+	 * file. Strings for the same reason {@link #beginSystem}'s name is one.
+	 */
+	private static LispVal beginFile(String pathname, String truename) {
+		return new LispCons(new LispSymbol(LispNames.BEGIN_FILE),
+				new LispCons(new LispString(pathname), new LispCons(new LispString(truename), LispNil.INSTANCE)));
 	}
 
 	private record RequireForm(String name, @Nullable String path) {

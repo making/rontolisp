@@ -80,7 +80,8 @@ public final class UiopLibrary {
 	 */
 	private static final Map<String, String> RESOURCES = Map.of("UIOP/PACKAGE", "uiop-package.lisp", "UIOP/UTILITY",
 			"uiop-utility.lisp", "UIOP/PATHNAME", "uiop-pathname.lisp", "UIOP/FILESYSTEM", "uiop-filesystem.lisp",
-			"UIOP/STREAM", "uiop-stream.lisp", "UIOP/IMAGE", "uiop-image.lisp");
+			"UIOP/STREAM", "uiop-stream.lisp", "UIOP/IMAGE", "uiop-image.lisp", "UIOP/LISP-BUILD",
+			"uiop-lisp-build.lisp");
 
 	/**
 	 * Members the interpreter defines in Java (and the compilers lower or wrap

@@ -4488,6 +4488,29 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aSplicedFileGetsItsOwnLoadContext() throws Exception {
+		// The same lowering as on the JVM (JvmLispCompilerTest): the (%begin-file
+		// PATHNAME TRUENAME) brackets LoadInliner puts around every spliced file become
+		// assignments of the two variables, with the enclosing file's values assigned
+		// back at the end.
+		assertThat(compileAndRun("""
+				(defun ctx () (list *load-pathname* *load-truename*))
+				(%begin-file "a.lisp" "/tmp/a.lisp")
+				(print (ctx))
+				(%begin-file "b.lisp" "/tmp/b.lisp")
+				(print (ctx))
+				(%end-file)
+				(print (ctx))
+				(%end-file)
+				(print (ctx))
+				""")).isEqualTo("""
+				("a.lisp" "/tmp/a.lisp")
+				("b.lisp" "/tmp/b.lisp")
+				("a.lisp" "/tmp/a.lisp")
+				(NIL NIL)""");
+	}
+
+	@Test
 	void exportAndUnexport() throws Exception {
 		// Both are consumed by the PackageResolver, so they work here even though the
 		// compiled module carries no package registry.

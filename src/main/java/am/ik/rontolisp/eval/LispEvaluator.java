@@ -2518,9 +2518,13 @@ public final class LispEvaluator {
 		// *load-pathname* / *load-truename* for the duration of the file, so a library
 		// that locates a data directory relative to its own source finds it. Bound
 		// dynamically (not assigned) so a nested load restores the outer file's values.
+		// A COMPONENT is loaded by its resolved path -- that is what real ASDF hands
+		// load, and it is what makes *load-pathname* equal asdf:component-pathname, the
+		// correlation rove's file-to-package map is built on. A plain load keeps the
+		// spelling it was called with, like CL.
 		this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
 		this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
-		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(rawPath));
+		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(systemName != null ? resolved : rawPath));
 		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR, new LispString(resolved));
 		try {
 			// Only a file that textually contains #. pays for the marker read + the

@@ -237,6 +237,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private byte[] compile(List<LispVal> program, Set<String> forcedGroups) {
+		// The load-context brackets LoadInliner put around each spliced file become
+		// assignments of *load-pathname* / *load-truename* -- when the program reads
+		// either; otherwise they are dropped here and nothing downstream sees them.
+		// Before the resolver, whose own marker arm is the backstop for a bracket this
+		// pass did not lower.
+		program = LispMacroExpander.lowerLoadContextMarkers(program);
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
 		// so
 		// the rest of compilation sees canonical names.

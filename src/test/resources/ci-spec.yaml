@@ -9139,6 +9139,13 @@ cases:
       (defun ci-uiop-merge (a b) (uiop:merge-pathnames* a b))
       (print (ci-uiop-merge "b.txt" "/tmp/"))
       (print (uiop:ensure-directory-pathname "src"))
+      ;; The absolute-path pair rove's file-to-suite map goes through. Lite where
+      ;; upstream signals: a relative path with no absolute default is answered as
+      ;; itself, because rontolisp absolutizes nowhere (.kb/uiop.md).
+      (defun ci-uiop-abs (p d) (uiop:ensure-absolute-pathname p d))
+      (print (list (uiop:absolute-pathname-p "/tmp/x") (uiop:absolute-pathname-p "tmp/x")))
+      (print (list (ci-uiop-abs "/a/b.lisp" nil) (ci-uiop-abs "b.lisp" "/a/")
+                   (ci-uiop-abs "a/b.lisp" nil) (uiop:compile-file-type)))
       ;; A member nothing implements yet signals uiop:not-implemented-error naming
       ;; the operation -- never "undefined function", and the same on all four.
       (print (handler-case (uiop:chdir "/tmp")
@@ -9152,6 +9159,8 @@ cases:
       (T T)
       #P"/tmp/b.txt"
       #P"src/"
+      (#P"/tmp/x" NIL)
+      (#P"/a/b.lisp" #P"/a/b.lisp" #P"a/b.lisp" NIL)
       "Not (currently) implemented on rontolisp: UIOP/OS:CHDIR"
       :SIGNALLED
       NIL

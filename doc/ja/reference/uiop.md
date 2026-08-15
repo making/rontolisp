@@ -33,13 +33,13 @@
 | [`uiop/utility`](uiop/utility.md) | 移植性のあるヘルパ (`strcat`、`split-string`、`if-let`、`not-implemented-error`) | 68 / 68 |
 | `uiop/version` | バージョン比較と非推奨コンディション | 1 / 15 |
 | `uiop/os` | ホストの識別、環境変数、作業ディレクトリ | 1 / 22 |
-| `uiop/pathname` | パス名の代数 (`merge-pathnames*`、`ensure-directory-pathname`) | 2 / 50 |
+| `uiop/pathname` | パス名の代数 (`merge-pathnames*`、`ensure-absolute-pathname`) | 4 / 50 |
 | `uiop/filesystem` | ファイルシステムの探索・走査・変更 | 7 / 32 |
 | `uiop/stream` | ファイル内容、一時ファイル、エンコーディング、標準ストリーム | 3 / 66 |
 | `uiop/image` | コマンドライン、終了、ダンプフック | 1 / 30 |
 | `uiop/launch-program` | 非同期のサブプロセス | 0 / 19 |
 | `uiop/run-program` | 同期のサブプロセス | 0 / 7 |
-| `uiop/lisp-build` | `compile-file*` と遅延警告 | 0 / 44 |
+| `uiop/lisp-build` | `compile-file*` と遅延警告 | 1 / 44 |
 | `uiop/configuration` | XDG パスと設定ファイルの探索 | 0 / 38 |
 | `uiop/backward-driver` | 非推奨の別名 | 0 / 7 |
 
@@ -64,6 +64,9 @@ uiop の他のすべてがその上に書かれている移植性ヘルパ群 `u
 | `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | ファイルの内容全体を 1 つの文字列として返します。ファイルを入力用に開けるすべてのバックエンドで動きます。lite 版: 本家 UIOP の `&rest` キーワードは受け付けて無視します (`:external-format` は rontolisp には存在せず、どのバックエンドも UTF-8 で読みます) |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ。4 つのバックエンドすべてで動作します |
 | `uiop:ensure-directory-pathname` | `(uiop:ensure-directory-pathname "src")` | `#P"src/"` — ディレクトリ形式のパス名。これに対してマージすると末尾に追加されます |
+| `uiop:absolute-pathname-p` | `(uiop:absolute-pathname-p "/tmp/x")` | `#P"/tmp/x"` — 名前文字列が絶対パス (先頭が `/`) ならそのパス名、そうでなければ `nil`。本家と同じく一般化ブーリアンです |
+| `uiop:ensure-absolute-pathname` | `(uiop:ensure-absolute-pathname "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — 絶対パスはそのまま通し、相対パスはデフォルト (パス名、またはそれを返す関数) に対してマージします。lite 版: 絶対デフォルトのない相対パスは、本家がシグナルするのに対しそれ自身を返します — rontolisp はどこでも絶対化を行わず (`truename` も渡された名前文字列をそのまま持ちます)、`chdir` もないため相対名前文字列は実行中ずっと同じファイルを指し、呼び出し側が使うファイルの同一性としてすでに機能するからです |
+| `uiop:compile-file-type` | `(uiop:compile-file-type)` | `nil` — コンパイル済みファイルが持つパス名の型。ここには `compile-file` が存在せずそのような型もないため、「このパスは fasl か?」を問う呼び出し側はソースパスに対して「いいえ」を得ます |
 | `uiop:default-temporary-directory` | `(uiop:default-temporary-directory)` | `$TMPDIR` をディレクトリ形式で。環境変数が空の場合 (`--env` なしの 2 つの WASM バックエンド) は `#P"/tmp/"` |
 | `uiop:delete-file-if-exists` | `(uiop:delete-file-if-exists "scratch.txt")` | ファイルを削除します。存在しない場合はシグナルではなく `nil` を返します — UIOP がこれをエクスポートしている理由そのものです |
 | `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — パス名のホスト OS の綴り。ここでは名前文字列そのものなので `namestring` と同じです |

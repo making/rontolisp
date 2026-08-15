@@ -80,7 +80,8 @@ without deduplicating the six names two sub-packages both export).
 ## `eval.UiopLibrary`: one home for every definition
 
 Real definitions live in `uiop-<sub-package>.lisp` resources next to the class
-(currently `package`, `utility`, `pathname`, `filesystem`, `stream`, `image`), in
+(currently `package`, `utility`, `pathname`, `filesystem`, `stream`, `image`,
+`lisp-build`), in
 canonical shape. **A resource may only define names the inventory lists** --
 `build()` fails loudly otherwise -- so there are no private helpers: a body that
 wants one uses `flet`/`labels`. Everything the inventory lists that no resource

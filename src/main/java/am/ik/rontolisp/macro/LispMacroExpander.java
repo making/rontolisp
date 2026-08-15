@@ -29326,6 +29326,113 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Lowers the {@code (%begin-file PATHNAME TRUENAME)} / {@code (%end-file)} load-
+	 * context brackets {@code LoadInliner} puts around every SPLICED file into top-level
+	 * assignments of {@code *load-pathname*} / {@code *load-truename*} -- the two values
+	 * the interpreter BINDS around the same file, so a library that records the file it
+	 * was defined in (rove's suite-to-file map) correlates identically on every backend.
+	 *
+	 * <p>
+	 * The bracket is static, so the restore is too: {@code %end-file} assigns the
+	 * ENCLOSING file's values back (nil at the outermost level) rather than saving
+	 * anything at run time. A top-level form of a spliced file therefore reads its own
+	 * file's path, and a function CALLED after the load reads what is current then --
+	 * exactly the dynamic binding's observable behavior, without a binding.
+	 *
+	 * <p>
+	 * Only a variable the program actually mentions is assigned, and a program that
+	 * mentions neither has the brackets simply dropped: nothing is emitted that only gets
+	 * dropped ({@code .kb/toplevel-statement-values.md}), and such a program stays
+	 * byte-identical to one compiled before the brackets existed. Both compile backends
+	 * run this before their package-resolution pass -- which is why the emitted names are
+	 * spelled {@code cl:}-qualified: a spliced file's forms sit inside its own
+	 * {@code in-package}, and a bare name would re-qualify into that package.
+	 * @param program the top-level forms, after the splice chain
+	 * @return the program with the load-context brackets lowered (or removed)
+	 */
+	public static List<LispVal> lowerLoadContextMarkers(List<LispVal> program) {
+		boolean bracketed = false;
+		for (LispVal form : program) {
+			if (isLoadContextMarker(form, LispNames.BEGIN_FILE) || isLoadContextMarker(form, LispNames.END_FILE)) {
+				bracketed = true;
+				break;
+			}
+		}
+		if (!bracketed) {
+			return program;
+		}
+		// The gate: the variables the program READS. Computed over the whole program
+		// (the marker payloads are strings, so they cannot answer for themselves), and
+		// per variable, so a program reading only *load-truename* carries no
+		// *load-pathname* assignment.
+		List<String> assigned = new java.util.ArrayList<>(2);
+		for (String name : List.of(LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR)) {
+			for (LispVal form : program) {
+				if (usesSymbol(form, name)) {
+					assigned.add(name);
+					break;
+				}
+			}
+		}
+		List<LispVal> out = new java.util.ArrayList<>(program.size());
+		java.util.Deque<LispVal[]> open = new java.util.ArrayDeque<>();
+		for (LispVal form : program) {
+			LispVal[] entered = loadContextValues(form);
+			if (entered != null) {
+				open.addLast(entered);
+				emitLoadContext(out, assigned, entered);
+				continue;
+			}
+			if (isLoadContextMarker(form, LispNames.END_FILE)) {
+				if (!open.isEmpty()) {
+					open.removeLast();
+				}
+				emitLoadContext(out, assigned, open.peekLast());
+				continue;
+			}
+			out.add(form);
+		}
+		return out;
+	}
+
+	/**
+	 * Appends the {@code (setq cl:*load-pathname* ...)} / {@code (setq cl:*load-truename*
+	 * ...)} statements for one bracket level -- {@code values} being the pair the level
+	 * carries, or {@code null} outside every bracket (both variables go back to nil).
+	 */
+	private static void emitLoadContext(List<LispVal> out, List<String> assigned, LispVal @Nullable [] values) {
+		for (int i = 0; i < 2; i++) {
+			String name = i == 0 ? LispNames.LOAD_PATHNAME_VAR : LispNames.LOAD_TRUENAME_VAR;
+			if (!assigned.contains(name)) {
+				continue;
+			}
+			out.add(listToCons(List.of(new LispSymbol(LispNames.SETQ),
+					new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, name)),
+					values == null ? LispNil.INSTANCE : values[i])));
+		}
+	}
+
+	/** Whether the form is the named bare load-context marker. */
+	private static boolean isLoadContextMarker(LispVal form, String marker) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && marker.equals(op.name());
+	}
+
+	/**
+	 * The {@code (*load-pathname* *load-truename*)} pair a {@code (%begin-file P T)}
+	 * marker carries, or {@code null} when the form is not one.
+	 */
+	private static LispVal @Nullable [] loadContextValues(LispVal form) {
+		if (!isLoadContextMarker(form, LispNames.BEGIN_FILE) || !(form instanceof LispCons cons)
+				|| !(cons.cdr() instanceof LispCons pathnameCell)
+				|| !(pathnameCell.car() instanceof LispString pathname)
+				|| !(pathnameCell.cdr() instanceof LispCons truenameCell)
+				|| !(truenameCell.car() instanceof LispString truename)) {
+			return null;
+		}
+		return new LispVal[] { pathname, truename };
+	}
+
+	/**
 	 * Injects the top-level {@code (setq %mv-spill nil)} /
 	 * {@code (setq *read-default-float-format* ...)} /
 	 * {@code (defvar *package* :cl-user)} globals the compilers need when the program

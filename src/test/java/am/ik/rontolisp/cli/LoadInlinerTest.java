@@ -40,15 +40,21 @@ class LoadInlinerTest {
 	void inlinesTopLevelLoadInPlace() {
 		List<LispVal> result = inline("(load \"core.lisp\") (print (f 5))",
 				Map.of("core.lisp", "(defun f (x) (* x x))"));
-		// (defun F ...) from the loaded file, then the original (print (F 5)).
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN F (X) (* X X))", "(PRINT (F 5))");
+		// (defun F ...) from the loaded file, bracketed with the file's load-context
+		// marker pair (what *load-pathname* / *load-truename* lower from), then the
+		// original (print (F 5)).
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-FILE \"core.lisp\" \"core.lisp\")",
+				"(DEFUN F (X) (* X X))", "(%END-FILE)", "(PRINT (F 5))");
 	}
 
 	@Test
 	void inlineIsRecursive() {
 		List<LispVal> result = inline("(load \"a.lisp\")",
 				Map.of("a.lisp", "(load \"b.lisp\") (defun a () 1)", "b.lisp", "(defun b () 2)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN B NIL 2)", "(DEFUN A NIL 1)");
+		// The load-context brackets nest with the loads.
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-FILE \"a.lisp\" \"a.lisp\")",
+				"(%BEGIN-FILE \"b.lisp\" \"b.lisp\")", "(DEFUN B NIL 2)", "(%END-FILE)", "(DEFUN A NIL 1)",
+				"(%END-FILE)");
 	}
 
 	@Test
@@ -60,8 +66,12 @@ class LoadInlinerTest {
 				loaderOf(Map.of("proj/core.lisp", "(load \"common.lisp\") (defun cube (x) (* x (sq x)))", //
 						"proj/common.lisp", "(defun sq (x) (* x x))")),
 				"proj");
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN SQ (X) (* X X))",
-				"(DEFUN CUBE (X) (* X (SQ X)))", "(PRINT (CUBE 3))");
+		// The load-context marker carries both spellings: the path the load was CALLED
+		// with (*load-pathname*) and the one it resolved to (*load-truename*).
+		assertThat(result.stream().map(LispVal::print)).containsExactly(
+				"(%BEGIN-FILE \"core.lisp\" \"proj/core.lisp\")", "(%BEGIN-FILE \"common.lisp\" \"proj/common.lisp\")",
+				"(DEFUN SQ (X) (* X X))", "(%END-FILE)", "(DEFUN CUBE (X) (* X (SQ X)))", "(%END-FILE)",
+				"(PRINT (CUBE 3))");
 	}
 
 	@Test
@@ -133,8 +143,8 @@ class LoadInlinerTest {
 	void requireSplicesTheModuleFile() {
 		List<LispVal> result = inline("(require :util) (print (u-sq 5))",
 				Map.of("util.lisp", "(provide :util) (defun u-sq (x) (* x x))"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE UTIL)", "(DEFUN U-SQ (X) (* X X))",
-				"(PRINT (U-SQ 5))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-FILE \"util.lisp\" \"util.lisp\")",
+				"(QUOTE UTIL)", "(DEFUN U-SQ (X) (* X X))", "(%END-FILE)", "(PRINT (U-SQ 5))");
 	}
 
 	@Test
@@ -145,8 +155,10 @@ class LoadInlinerTest {
 				Map.of("a.lisp", "(provide :a) (require :utils) (defun a () (u 1))", //
 						"b.lisp", "(provide :b) (require :utils) (defun b () (u 2))", //
 						"utils.lisp", "(provide :utils) (defun u (x) x)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE A)", "(QUOTE UTILS)", "(DEFUN U (X) X)",
-				"(DEFUN A NIL (U 1))", "(QUOTE B)", "(QUOTE UTILS)", "(DEFUN B NIL (U 2))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-FILE \"a.lisp\" \"a.lisp\")",
+				"(QUOTE A)", "(%BEGIN-FILE \"utils.lisp\" \"utils.lisp\")", "(QUOTE UTILS)", "(DEFUN U (X) X)",
+				"(%END-FILE)", "(DEFUN A NIL (U 1))", "(%END-FILE)", "(%BEGIN-FILE \"b.lisp\" \"b.lisp\")", "(QUOTE B)",
+				"(QUOTE UTILS)", "(DEFUN B NIL (U 2))", "(%END-FILE)");
 	}
 
 	@Test
@@ -162,8 +174,9 @@ class LoadInlinerTest {
 		List<LispVal> result = inline("(require :util \"lib/util-v2.lisp\") (require 'util) (require \"UTIL\")", files);
 		// The explicit path wins; the later requires (quoted-symbol and string
 		// designators) see the module as provided and are consumed.
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE UTIL)", "(DEFUN U NIL 1)",
-				"(QUOTE UTIL)", "(QUOTE UTIL)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly(
+				"(%BEGIN-FILE \"lib/util-v2.lisp\" \"lib/util-v2.lisp\")", "(QUOTE UTIL)", "(DEFUN U NIL 1)",
+				"(%END-FILE)", "(QUOTE UTIL)", "(QUOTE UTIL)");
 	}
 
 	@Test
@@ -191,8 +204,10 @@ class LoadInlinerTest {
 				loaderOf(Map.of("proj/core.lisp", "(provide :core) (require :util) (defun c () (u))", //
 						"proj/util.lisp", "(provide :util) (defun u () 42)")),
 				"proj");
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE CORE)", "(QUOTE UTIL)",
-				"(DEFUN U NIL 42)", "(DEFUN C NIL (U))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly(
+				"(%BEGIN-FILE \"core.lisp\" \"proj/core.lisp\")", "(QUOTE CORE)",
+				"(%BEGIN-FILE \"util.lisp\" \"proj/util.lisp\")", "(QUOTE UTIL)", "(DEFUN U NIL 42)", "(%END-FILE)",
+				"(DEFUN C NIL (U))", "(%END-FILE)");
 	}
 
 	@Test
@@ -212,12 +227,15 @@ class LoadInlinerTest {
 				"package.lisp", "(defpackage :my-lib (:use :cl) (:export :greet))", //
 				"main.lisp", "(in-package :my-lib) (defun greet () 1)"));
 		// The system's forms are bracketed with provenance markers (the tree-shaker's
-		// only record of which forms came from a library); main.lisp additionally selects
-		// a package, so it is bracketed with package save/restore markers (package.lisp
-		// has no in-package, so it is spliced verbatim).
+		// only record of which forms came from a library) and each FILE with its
+		// load-context pair; main.lisp additionally selects a package, so it is
+		// bracketed with package save/restore markers inside its own file bracket
+		// (package.lisp has no in-package, so it gets no package markers).
 		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"my-lib\")",
-				"(DEFPACKAGE :MY-LIB (:USE :CL) (:EXPORT :GREET))", "(%PUSH-PACKAGE)", "(IN-PACKAGE :MY-LIB)",
-				"(DEFUN GREET NIL 1)", "(%POP-PACKAGE)", "(%END-SYSTEM)", "(QUOTE my-lib)", "(PRINT (MY-LIB:GREET))");
+				"(%BEGIN-FILE \"package.lisp\" \"package.lisp\")", "(DEFPACKAGE :MY-LIB (:USE :CL) (:EXPORT :GREET))",
+				"(%END-FILE)", "(%BEGIN-FILE \"main.lisp\" \"main.lisp\")", "(%PUSH-PACKAGE)", "(IN-PACKAGE :MY-LIB)",
+				"(DEFUN GREET NIL 1)", "(%POP-PACKAGE)", "(%END-FILE)", "(%END-SYSTEM)", "(QUOTE my-lib)",
+				"(PRINT (MY-LIB:GREET))");
 	}
 
 	@Test
@@ -231,8 +249,9 @@ class LoadInlinerTest {
 		// provenance bracket nests inside app's, so the tree-shaker attributes each defun
 		// to the system whose file it came from.
 		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"app\")",
-				"(%BEGIN-SYSTEM \"base\")", "(DEFUN BASE NIL 1)", "(%END-SYSTEM)", "(DEFUN APP NIL (BASE))",
-				"(%END-SYSTEM)", "(QUOTE app)", "(QUOTE base)");
+				"(%BEGIN-SYSTEM \"base\")", "(%BEGIN-FILE \"base.lisp\" \"base.lisp\")", "(DEFUN BASE NIL 1)",
+				"(%END-FILE)", "(%END-SYSTEM)", "(%BEGIN-FILE \"app.lisp\" \"app.lisp\")", "(DEFUN APP NIL (BASE))",
+				"(%END-FILE)", "(%END-SYSTEM)", "(QUOTE app)", "(QUOTE base)");
 	}
 
 	@Test
@@ -241,7 +260,8 @@ class LoadInlinerTest {
 				(asdf:defsystem :inline-sys :components ((:file "main")))
 				(asdf:load-system :inline-sys)""", Map.of("main.lisp", "(defun f () 42)"));
 		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE inline-sys)",
-				"(%BEGIN-SYSTEM \"inline-sys\")", "(DEFUN F NIL 42)", "(%END-SYSTEM)", "(QUOTE inline-sys)");
+				"(%BEGIN-SYSTEM \"inline-sys\")", "(%BEGIN-FILE \"main.lisp\" \"main.lisp\")", "(DEFUN F NIL 42)",
+				"(%END-FILE)", "(%END-SYSTEM)", "(QUOTE inline-sys)");
 	}
 
 	@Test
@@ -253,7 +273,10 @@ class LoadInlinerTest {
 						"(defsystem :lib :components ((:module \"src\" :components ((:file \"main\")))))",
 						"registry/src/main.lisp", "(defun f () 1)")),
 				"proj", List.of("registry"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"lib\")", "(DEFUN F NIL 1)",
+		// A COMPONENT is loaded by its resolved path, so both halves of its load-context
+		// marker are that path -- which is what asdf:component-pathname answers for it.
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"lib\")",
+				"(%BEGIN-FILE \"registry/src/main.lisp\" \"registry/src/main.lisp\")", "(DEFUN F NIL 1)", "(%END-FILE)",
 				"(%END-SYSTEM)", "(QUOTE lib)");
 	}
 
@@ -263,8 +286,9 @@ class LoadInlinerTest {
 				Map.of("lib.asd", "(defsystem :lib :components ((:file \"main\")))", //
 						"main.lisp", "(load \"helper.lisp\") (defun f () (h))", //
 						"helper.lisp", "(defun h () 7)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"lib\")", "(DEFUN H NIL 7)",
-				"(DEFUN F NIL (H))", "(%END-SYSTEM)", "(QUOTE lib)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"lib\")",
+				"(%BEGIN-FILE \"main.lisp\" \"main.lisp\")", "(%BEGIN-FILE \"helper.lisp\" \"helper.lisp\")",
+				"(DEFUN H NIL 7)", "(%END-FILE)", "(DEFUN F NIL (H))", "(%END-FILE)", "(%END-SYSTEM)", "(QUOTE lib)");
 	}
 
 	@Test
@@ -428,8 +452,14 @@ class LoadInlinerTest {
 				LispReader.readAllFromString("(ql:quickload \"mylib\") (print (mylib-answer))"),
 				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER,
 				quicklispClient(home, "(defun mylib-answer () 42)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"mylib\")",
-				"(DEFUN MYLIB-ANSWER NIL 42)", "(%END-SYSTEM)", "(QUOTE mylib)", "(PRINT (MYLIB-ANSWER))");
+		// The component's load-context marker carries the path inside the temporary
+		// quicklisp cache, so it is matched rather than spelled out.
+		assertThat(result.stream().map(LispVal::print).filter(form -> !form.startsWith("(%BEGIN-FILE ")))
+			.containsExactly("(%BEGIN-SYSTEM \"mylib\")", "(DEFUN MYLIB-ANSWER NIL 42)", "(%END-FILE)", "(%END-SYSTEM)",
+					"(QUOTE mylib)", "(PRINT (MYLIB-ANSWER))");
+		assertThat(result.stream().map(LispVal::print).filter(form -> form.startsWith("(%BEGIN-FILE ")))
+			.singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
+			.endsWith("software/mylib-1.0/mylib.lisp\" \"" + home + "/software/mylib-1.0/mylib.lisp\")");
 	}
 
 	@Test

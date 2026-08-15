@@ -196,7 +196,14 @@ public final class PackageResolver {
 			// package the spliced file selected. Unlike the package markers they carry no
 			// state: the pruner reads them from the UNRESOLVED program (which is
 			// index-aligned with the resolved copy) and drops them from its output.
-			if (LispNames.BEGIN_SYSTEM.equals(member) || LispNames.END_SYSTEM.equals(member)) {
+			// The load-context brackets are consumed here for the same reason. They are
+			// LOWERED (to assignments of *load-pathname*/*load-truename*) before this
+			// pass runs, and only when the program reads either variable
+			// (LispMacroExpander.lowerLoadContextMarkers); what reaches here is a
+			// bracket that pass dropped -- or, in the CLI, one the macro expander
+			// re-emitted verbatim on its way to that lowering.
+			if (LispNames.BEGIN_SYSTEM.equals(member) || LispNames.END_SYSTEM.equals(member)
+					|| LispNames.BEGIN_FILE.equals(member) || LispNames.END_FILE.equals(member)) {
 				return quotedSymbol(this.currentPackage);
 			}
 			// A literal top-level (uiop:add-package-local-nickname 'nick 'pkg) is

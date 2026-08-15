@@ -33,13 +33,13 @@ one member name:
 | [`uiop/utility`](uiop/utility.md) | the portable helpers (`strcat`, `split-string`, `if-let`, `not-implemented-error`) | 68 / 68 |
 | `uiop/version` | version comparison and the deprecation conditions | 1 / 15 |
 | `uiop/os` | host identity, the environment, the working directory | 1 / 22 |
-| `uiop/pathname` | the pathname algebra (`merge-pathnames*`, `ensure-directory-pathname`) | 2 / 50 |
+| `uiop/pathname` | the pathname algebra (`merge-pathnames*`, `ensure-absolute-pathname`) | 4 / 50 |
 | `uiop/filesystem` | probe, walk and mutate the file system | 7 / 32 |
 | `uiop/stream` | file contents, temporary files, encodings, the standard streams | 3 / 66 |
 | `uiop/image` | the command line, exit, the dump hooks | 1 / 30 |
 | `uiop/launch-program` | asynchronous subprocesses | 0 / 19 |
 | `uiop/run-program` | synchronous subprocesses | 0 / 7 |
-| `uiop/lisp-build` | `compile-file*` and the deferred warnings | 0 / 44 |
+| `uiop/lisp-build` | `compile-file*` and the deferred warnings | 1 / 44 |
 | `uiop/configuration` | XDG paths and the configuration search | 0 / 38 |
 | `uiop/backward-driver` | the deprecated aliases | 0 / 7 |
 
@@ -64,6 +64,9 @@ is complete and has [its own page](uiop/utility.md). The rest:
 | `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | the whole file as one string. Runs on every backend that can open a file for input. Lite: real UIOP's `&rest` keys are accepted and ignored (`:external-format` has no rontolisp surface — every backend reads UTF-8) |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — the defaults-aware pathname merge, on all four backends |
 | `uiop:ensure-directory-pathname` | `(uiop:ensure-directory-pathname "src")` | `#P"src/"` — the pathname in directory form, which is what merging against it appends to |
+| `uiop:absolute-pathname-p` | `(uiop:absolute-pathname-p "/tmp/x")` | `#P"/tmp/x"` — the pathname when the namestring is absolute (a leading `/`), `nil` otherwise. A generalized boolean, like upstream |
+| `uiop:ensure-absolute-pathname` | `(uiop:ensure-absolute-pathname "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — an absolute path passes through and a relative one is merged against the defaults (a pathname, or a function answering one). Lite: a relative path with no absolute defaults is answered as ITSELF where upstream signals — rontolisp absolutizes nowhere (`truename` carries the namestring it was given), and with no `chdir` a relative namestring denotes the same file for the whole run, so it is already the file identity callers use it as |
+| `uiop:compile-file-type` | `(uiop:compile-file-type)` | `nil` — the pathname type a compiled file carries. There is no `compile-file` here, so there is no such type, and a caller asking "is this path a fasl?" gets `no` for a source path |
 | `uiop:default-temporary-directory` | `(uiop:default-temporary-directory)` | `$TMPDIR` in directory form, or `#P"/tmp/"` when the environment is empty (both WASM backends without `--env`) |
 | `uiop:delete-file-if-exists` | `(uiop:delete-file-if-exists "scratch.txt")` | delete a file, answering `nil` instead of signalling when it is not there — the whole reason UIOP exports it |
 | `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — the host-OS spelling of a pathname, which here IS the namestring, so this is `namestring` |

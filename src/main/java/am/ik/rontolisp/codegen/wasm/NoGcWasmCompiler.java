@@ -329,6 +329,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	@Override
 	public byte[] compile(List<LispVal> program) {
+		// The spliced files' load-context brackets, like the other backends: this
+		// backend has no dynamic variables at all, so the pass only ever DROPS them
+		// here (a program reading *load-pathname* fails on the symbol either way).
+		program = LispMacroExpander.lowerLoadContextMarkers(program);
 		// Resolve packages first, like the other backends, so qualified names
 		// (rontolisp:wasm-export) and in-package directives are canonical.
 		program = new PackageResolver().resolveProgram(program);

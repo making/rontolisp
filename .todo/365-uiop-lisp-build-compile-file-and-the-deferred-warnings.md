@@ -9,13 +9,16 @@ symbols), and every export nothing implements yet already signals
 it does not add names. Read `.kb/uiop.md` first: a definition carries its HOME
 sub-package's spelling, and a new one goes in that sub-package's `.lisp` resource.
 Measured coverage here today (`UiopCoverageTest.printCoverage`, the authority for
-every count below): **0 / 44 rows in the inventory (this file's "48 portable externals" was a miscount)**.
+every count below): **1 / 44 rows in the inventory (this file's "48 portable externals" was a
+miscount)** -- `compile-file-type`, which answers nil (there is no
+`compile-file` here, so there is no compiled-file type) and landed with
+`.todo/375` because rove's `resolve-file` asks it on every `deftest`.
 
 Depends on `.todo/353`, `.todo/354`, `.todo/357`, `.todo/359`. The last of the
 twelve, and the one whose subject rontolisp mostly does not have.
 
 48 portable externals (`sb-grovel-unknown-constant-condition` is `#+sbcl` and
-excluded), **none** present:
+excluded), one present (`compile-file-type`):
 
 ```
 COMPILE-FILE* COMPILE-FILE-PATHNAME* COMPILE-FILE-TYPE LISPIZE-PATHNAME

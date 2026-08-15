@@ -217,16 +217,22 @@ below.
   `--dynamic`) to keep every definition; see
   [Compiling to the JVM](../compiling/jvm.md) for the one consequence.
 
-- **The load-context variables are bound.** While a file is being loaded,
-  `*load-pathname*` holds the path `load` was called with and `*load-truename*`
-  the path it resolved to, restored when the file finishes; outside a load both
-  are `nil`. `*compile-file-pathname*` and `*compile-file-truename*` are always
-  `nil` — there is no `compile-file` here, and a spliced library file is inlined
-  at compile time rather than loaded at run time, so on the compile backends all
-  four read `nil`. Libraries use the `(or *compile-file-truename*
-  *load-truename*)` idiom to find data files beside their own sources; a
-  registered system's directory is available more directly as
-  [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md).
+- **The load-context variables hold the file being loaded, on every backend.**
+  While a file is being loaded, `*load-pathname*` holds the path `load` was
+  called with and `*load-truename*` the path it resolved to; the enclosing
+  file's values come back when it finishes, and outside a load both are `nil` —
+  read at top level or from a function the load defined and your program calls
+  later. **A component is loaded by its resolved path**, so both variables hold
+  what
+  [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md)
+  answers for it, which is what lets a test framework correlate the definitions
+  of a file with the system that owns it. This works the same on the compile
+  backends: a spliced file's forms are compiled with its own load context,
+  because nothing is being loaded at run time there for them to read otherwise.
+  `*compile-file-pathname*` and `*compile-file-truename*` are always `nil` —
+  there is no `compile-file` here. Libraries use the `(or
+  *compile-file-truename* *load-truename*)` idiom to find data files beside
+  their own sources.
 
 ## Built-in shim systems
 

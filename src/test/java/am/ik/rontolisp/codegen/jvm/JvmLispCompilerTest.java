@@ -2652,6 +2652,49 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunASplicedFileGetsItsOwnLoadContext() throws Exception {
+		// The (%begin-file PATHNAME TRUENAME) brackets LoadInliner puts around every
+		// spliced file (LoadInlinerTest) lower to assignments of the two variables here,
+		// with the enclosing file's values assigned back at the end -- so a top-level
+		// form of a spliced file reads its own file, a nested load reads the nested
+		// file, and a function called after the load reads nil, exactly like the
+		// interpreter's dynamic binding around the same file.
+		assertThat(compileAndRun("""
+				(defun ctx () (list *load-pathname* *load-truename*))
+				(%begin-file "a.lisp" "/tmp/a.lisp")
+				(print (ctx))
+				(%begin-file "b.lisp" "/tmp/b.lisp")
+				(print (ctx))
+				(%end-file)
+				(print (ctx))
+				(%end-file)
+				(print (ctx))
+				""")).isEqualTo("""
+				("a.lisp" "/tmp/a.lisp")
+				("b.lisp" "/tmp/b.lisp")
+				("a.lisp" "/tmp/a.lisp")
+				(NIL NIL)""");
+	}
+
+	@Test
+	void aLoadContextBracketCostsNothingWhenTheProgramNeverReadsIt() throws Exception {
+		// The gate: a program that mentions neither variable has the brackets dropped
+		// and is byte-identical to the same program without them, so splicing a file
+		// into a program that does not care about its own path changes no output.
+		byte[] bracketed = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(%begin-file "a.lisp" "/tmp/a.lisp")
+				(defun f () 42)
+				(%end-file)
+				(print (f))
+				"""));
+		byte[] plain = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f () 42)
+				(print (f))
+				"""));
+		assertThat(bracketed).isEqualTo(plain);
+	}
+
+	@Test
 	void withOpenFileWriteThenRead() throws Exception {
 		String file = tempDir.resolve("wof.txt").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun("""
