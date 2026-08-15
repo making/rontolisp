@@ -6,7 +6,7 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-15
-- rontolisp: 0.1.0-SNAPSHOT (`7a3cd11`)
+- rontolisp: 0.1.0-SNAPSHOT (`9d264e7`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
@@ -14,15 +14,15 @@ How the report is built and run: [../README.md](../README.md).
 | hello | `--no-gc --optimize` | 563 | 428 | 0.0% |
 | hello-clack | `--no-wasi --optimize=size` | 237,176 | 73,304 | 2.3% |
 | hello-tiny-routes | `--no-wasi --optimize=size` | 262,809 | 79,189 | 2.5% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 695,233 | 183,940 | 5.8% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,277,597 | 527,196 | 16.8% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 695,234 | 183,938 | 5.8% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,277,597 | 527,223 | 16.8% |
 | httpbin | `--no-wasi --host-boundary=streaming --optimize=size` | 155,886 | 50,274 | 1.6% |
 | httpbin-clack | `--no-wasi --host-boundary=streaming --optimize=size` | 253,988 | 78,071 | 2.5% |
 | httpbin-clack-one-source | `--no-wasi --host-boundary=streaming --optimize=size` | 253,515 | 77,965 | 2.5% |
 | httpbin-tiny-routes | `--no-wasi --host-boundary=streaming --optimize=size` | 291,192 | 86,548 | 2.8% |
 | httpbin-tiny-routes (full tiny-routes) | `--no-wasi --host-boundary=streaming --optimize=size` | 723,630 | 191,429 | 6.1% |
-| httpbin-ningle | `--no-wasi --host-boundary=streaming --optimize=size` | 2,284,570 | 529,334 | 16.8% |
-| dog-fetcher | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 271,375 | 83,433 | 2.7% |
+| httpbin-ningle | `--no-wasi --host-boundary=streaming --optimize=size` | 2,284,570 | 529,297 | 16.8% |
+| dog-fetcher | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 271,376 | 83,434 | 2.7% |
 | dog-relay | `--no-wasi --host-fetch --host-boundary=streaming --reentrant --optimize=size` | 268,278 | 81,725 | 2.6% |
 | btc-ticker | `--no-wasi --host-fetch --optimize=size` | 243,097 | 75,959 | 2.4% |
 | btc-ticker (streaming boundary) | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 245,293 | 76,726 | 2.4% |
