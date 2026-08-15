@@ -1373,6 +1373,56 @@ class JvmLispCompilerTest {
 		}
 	}
 
+	// macro-function / special-operator-p partition the operators with no function value
+	// between them on the compile path too: the pass appends the program's own
+	// macro-function over its macro names and the prelude carries the built-in half, so
+	// the answers match the interpreter's (LispEvaluatorTest, SBCL-checked) name for
+	// name. The expander VALUE is a stub here -- non-nil for the predicate, a signal when
+	// called -- because a compiled program has no macro table left.
+	@Test
+	void compileAndRunMacroFunctionAndSpecialOperatorP() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defmacro mfp-mac (x) `(list ,x))
+					(defun mfp-probe (form)
+					  (cond ((special-operator-p (first form)) :special)
+					        ((macro-function (first form)) :macro)
+					        (t :function)))
+					(print (list (mfp-probe '(if a b)) (mfp-probe '(quote a)) (mfp-probe '(mfp-mac 1))
+					             (mfp-probe '(when a b)) (mfp-probe '(handler-case a)) (mfp-probe '(car x))
+					             (mfp-probe '(+ 1 2))))
+					(print (list (special-operator-p 'defun) (and (macro-function 'defun) t)
+					             (and (macro-function (intern "WHEN")) t)
+					             (macro-function 'car) (macro-function 'if)))
+					(print (list (multiple-value-list (macroexpand-1 '(mfp-mac 1)))
+					             (multiple-value-list (macroexpand-1 '(+ 1 2)))))
+					""")));
+		assertThat(compileAndRun(program)).isEqualTo("(:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)\n"
+				+ "(NIL T T NIL NIL)\n" + "(((LIST 1) T) ((+ 1 2) NIL))");
+	}
+
+	// A COMPUTED macroexpand-1 argument is the one shape the fold cannot decide, and the
+	// answer has to agree with macro-function's: a macro call signals (a compiled program
+	// has no macro table left), anything else comes back unchanged with expanded-p nil.
+	// Answering a macro call with ITSELF would spin the standard "expand until it stops
+	// expanding" loop forever, since macro-function keeps saying "macro".
+	@Test
+	void compileAndRunMacroexpandOfAComputedArgument() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defmacro mxc-mac (x) `(list ,x))
+					(defun mxc-steps (form)
+					  (do ((step form (macroexpand-1 step)))
+					      ((or (special-operator-p (first step)) (not (macro-function (first step)))) step)))
+					(print (mxc-steps (list 'car 'x)))
+					(print (handler-case (mxc-steps (list 'mxc-mac 9)) (error (e) :no-runtime-macro-table)))
+					(print (handler-case (mxc-steps (list 'when 'a 'b)) (error (e) :no-runtime-macro-table)))
+					(print (multiple-value-list (macroexpand-1 (list '+ 1 2))))
+					""")));
+		assertThat(compileAndRun(program))
+			.isEqualTo("(CAR X)\n" + ":NO-RUNTIME-MACRO-TABLE\n" + ":NO-RUNTIME-MACRO-TABLE\n" + "((+ 1 2) NIL)");
+	}
+
 	// (setf (macro-function 'new) (macro-function 'existing)) is a macro-TABLE write, so
 	// the same pass carries it out and drops the form: the compiler sees only the
 	// expanded call site, exactly as for the defmacro it aliases (lisp-namespace's

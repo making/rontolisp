@@ -5,7 +5,9 @@ against SBCL 2.2.9 on the host. **Pre-existing** and already listed as a
 limitation (`doc/*/guides/missing-features.md`, "other built-ins with secondary
 values in CL (`read-from-string`, `macroexpand-1`, `intern`, ...) remain
 single-value") -- this item is the concrete inventory plus the diff harness, so
-the list stops being open-ended.
+the list stops being open-ended. The transcript below is the state of 2026-07-30;
+`intern`/`find-symbol` landed 2026-08-12 and `macroexpand-1`/`macroexpand`
+2026-08-15.
 
 ```console
 $ sbcl --noinform                  $ rontolisp
@@ -23,7 +25,7 @@ T                                             <- SBCL also echoes the expanded-p
 | operator | CL secondary value(s) | ours |
 | --- | --- | --- |
 | `read-from-string` | index after the object read | primary only |
-| `macroexpand-1` / `macroexpand` | expanded-p | primary only |
+| `macroexpand-1` / `macroexpand` | expanded-p | **done** (2026-08-15, `.todo/378`) |
 | `intern` | `:internal` / `:external` / `:inherited` / nil | **done** (2026-08-12) |
 | `find-symbol` | same status keyword | **done** (2026-08-12) |
 | `get-setf-expansion` | 5 values (we DO return all 5 -- keep) | ok |
@@ -75,6 +77,15 @@ inventory, and they are the two biggest single wins the suite reports:
 
 Both are wrong-VALUE failures, not signals: they will not show up as a missing
 operator anywhere, and they cost more tests than any absent function does.
+
+**The `macroexpand-1` / `macroexpand` row landed 2026-08-15** (`.todo/378`, whose
+real `macro-function` needed the flag's consumer to be honest). Its extra value is
+NOT a pure function of the arguments -- it says whether the expander fired -- so it
+took the `%mv-spill` channel on the interpreter (`LispEvaluator.expandedWithFlag`:
+both expanders answer the SAME reference when nothing expanded, so identity decides
+the flag) and, on the compile paths, a literal `(values 'expansion expanded-p)` from
+`UserMacroExpander`'s existing literal-argument fold. Mechanics:
+`.kb/symbol-runtime-api.md`.
 
 **The `find-symbol` row landed 2026-08-12** and the chapter went 4.2% -> 58.4%
 (+617 tests). It did NOT need the `%mv-spill` channel or `.todo/213`: the status is

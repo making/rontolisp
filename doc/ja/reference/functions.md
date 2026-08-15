@@ -101,8 +101,8 @@
 | `sbit` | `(sbit #*0110 1)` | ビットベクタ要素の読み取り。`(setf (sbit v i) b)` で書き込み |
 | `bit` | `(bit #*0110 1)` | ビット配列の要素読み出し。`(setf (bit v i) b)` で書き込み |
 | `both-case-p` | `(both-case-p #\a)` | 大小両形を持つ英字なら真(`lower-case-p` または `upper-case-p`) |
-| `special-operator-p` | `(special-operator-p 'if)` | ライト版スタブ: 常に `nil`(演算子テーブルの実体なし) |
-| `macro-function` | `(macro-function 'when)` | ライト版スタブ: 常に `nil`(マクロはコンパイル時に完全展開) |
+| `special-operator-p` | `(special-operator-p 'if)` | ANSI の 25 個の特殊オペレータで `t`、それ以外は `nil` |
+| `macro-function` | `(macro-function 'when)` | マクロ展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。関数と特殊オペレータには `nil` |
 | `compiled-function-p` | `(compiled-function-p #'car)` | ライト版スタブ: 常に `nil` |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | ライト版スタブ: `(values nil t nil)`(ソース未記録) |
 | `list-all-packages` | `(list-all-packages)` | ライト版スタブ: 常に `nil`(列挙可能なパッケージテーブルなし) |

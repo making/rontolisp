@@ -119,8 +119,9 @@ function's tail values, `values` through `cond`/`let`/`if`, `(values)` (no echo)
 an empty line, and two forms on one line. The four remaining differences are all
 pre-existing and each has a todo: `.todo/212` (floor-family/gethash secondary
 values do not cross a function boundary), `.todo/213` (a non-tail `values` nobody
-consumes leaks), `.todo/214` (`read-from-string`/`macroexpand-1`/... are
-single-valued), `.todo/215` (`print` omits CL's leading newline / trailing space,
+consumes leaks), `.todo/214` (`read-from-string`/`subtypep`/... are
+single-valued -- `macroexpand-1`/`macroexpand` came off that list with todo-378,
+`.kb/gensym-macroexpand.md`), `.todo/215` (`print` omits CL's leading newline / trailing space,
 and the prompt-per-form difference). Re-run the diff harness in `.todo/214` after
 touching this area.
 

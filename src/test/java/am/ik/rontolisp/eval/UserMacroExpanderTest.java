@@ -235,19 +235,24 @@ class UserMacroExpanderTest {
 
 	// --- macroexpand / macroexpand-1 folding ---
 
+	// The fold answers BOTH of CL's values: the expansion, and the expanded-p flag the
+	// interpreter publishes through the spill channel. A literal (values ...) is what a
+	// consumer's syntactic lowering recognizes, so the second value survives the
+	// compilers.
 	@Test
 	void macroexpand1WithALiteralQuotedUserMacroCallIsFolded() {
 		assertThat(expand("""
 				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
 				(print (macroexpand-1 '(my-when2 a b)))
-				""")).isEqualTo("(PRINT (QUOTE (IF A (PROGN B) NIL)))");
+				""")).isEqualTo("(PRINT (VALUES (QUOTE (IF A (PROGN B) NIL)) T))");
 	}
 
 	@Test
 	void macroexpandFoldsBuiltinMacrosWithoutAnyDefmacro() {
 		// The pass must activate on macroexpand alone (no defmacro in the program).
-		assertThat(expand("(print (macroexpand-1 '(unless c x)))")).isEqualTo("(PRINT (QUOTE (IF C NIL X)))");
-		assertThat(expand("(print (macroexpand '(outer 1)))")).isEqualTo("(PRINT (QUOTE (OUTER 1)))");
+		assertThat(expand("(print (macroexpand-1 '(unless c x)))"))
+			.isEqualTo("(PRINT (VALUES (QUOTE (IF C NIL X)) T))");
+		assertThat(expand("(print (macroexpand '(outer 1)))")).isEqualTo("(PRINT (VALUES (QUOTE (OUTER 1)) NIL))");
 	}
 
 	@Test
@@ -257,19 +262,22 @@ class UserMacroExpanderTest {
 				(defmacro outer (x) `(inner ,x))
 				(print (macroexpand '(outer 41)))
 				(print (macroexpand-1 '(outer 41)))
-				""")).isEqualTo("(PRINT (QUOTE (+ 41 1)))\n(PRINT (QUOTE (INNER 41)))");
+				""")).isEqualTo("(PRINT (VALUES (QUOTE (+ 41 1)) T))\n(PRINT (VALUES (QUOTE (INNER 41)) T))");
 	}
 
 	@Test
 	void macroexpandOfANonMacroFormFoldsToTheFormItself() {
-		assertThat(expand("(print (macroexpand-1 '(+ 1 2)))")).isEqualTo("(PRINT (QUOTE (+ 1 2)))");
-		assertThat(expand("(print (macroexpand-1 'x))")).isEqualTo("(PRINT (QUOTE X))");
+		// Nothing expanded, so expanded-p is nil -- the flag is decided by the expander
+		// answering the SAME reference it was handed.
+		assertThat(expand("(print (macroexpand-1 '(+ 1 2)))")).isEqualTo("(PRINT (VALUES (QUOTE (+ 1 2)) NIL))");
+		assertThat(expand("(print (macroexpand-1 'x))")).isEqualTo("(PRINT (VALUES (QUOTE X) NIL))");
 	}
 
 	@Test
 	void macroexpandWithAComputedArgumentIsLeftAlone() {
-		// Only a literal quoted argument can be folded; a computed one stays and fails
-		// in the compilers ("Cannot compile").
+		// Only a literal quoted argument can be folded; a computed one stays and reaches
+		// the prelude identity defun, which answers the form unchanged with expanded-p
+		// nil (a compiled program has no macro table left).
 		assertThat(expand("(setq f '(when a b))\n(print (macroexpand-1 f))"))
 			.isEqualTo("(SETQ F (QUOTE (WHEN A B)))\n(PRINT (MACROEXPAND-1 F))");
 	}

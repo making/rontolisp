@@ -4397,6 +4397,73 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void macroFunctionAndSpecialOperatorPPartitionTheOperators() {
+		// Every operator with no function value is EITHER a special operator OR a macro,
+		// and the two predicates agree on which -- the decision rove's assertion macro
+		// makes about a form it is handed. Verified form for form against SBCL 2.2.9.
+		assertThat(evalMulti("""
+				(defmacro mfp-mac (x) `(list ,x))
+				(defun mfp-probe (form)
+				  (cond ((special-operator-p (first form)) :special)
+				        ((macro-function (first form)) :macro)
+				        (t :function)))
+				(list (mfp-probe '(if a b)) (mfp-probe '(quote a)) (mfp-probe '(mfp-mac 1))
+				      (mfp-probe '(when a b)) (mfp-probe '(handler-case a)) (mfp-probe '(car x))
+				      (mfp-probe '(+ 1 2)))
+				""").print()).isEqualTo("(:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)");
+		// defun/dolist are CL MACROS that rontolisp implements as special forms of its
+		// own: special-operator-p says nil (a caller only asks "may I apply this"), and
+		// macro-function answers for them instead. A computed name is decided the same
+		// way as a literal one.
+		assertThat(eval("(list (special-operator-p 'defun) (and (macro-function 'defun) t)"
+				+ " (and (macro-function (intern \"WHEN\")) t) (macro-function 'car) (macro-function 'if))")
+			.print()).isEqualTo("(NIL T T NIL NIL)");
+	}
+
+	@Test
+	void macroFunctionIsTheRealExpanderOnTheInterpreter() {
+		// The value is callable as CL's (funcall expander form env) single-step
+		// expansion. The form's own car is data to the expander, so a form headed by
+		// another name still expands through the macro that was asked for (SBCL's
+		// answer). A compiled program answers a signalling stub instead -- the predicate
+		// above is what every real caller reads.
+		assertThat(evalMulti("""
+				(defmacro mfe-mac (x) `(list ,x))
+				(list (funcall (macro-function 'when) '(when t 1) nil)
+				      (funcall (macro-function 'mfe-mac) '(mfe-mac 2))
+				      (funcall (macro-function 'when) '(foo t 3) nil))
+				""").print()).isEqualTo("((IF T 1 NIL) (LIST 2) (IF T 3 NIL))");
+	}
+
+	@Test
+	void macroexpand1AnswersTheExpandedPFlag() {
+		// CL's second value: t when the operator was a macro, nil when the form came
+		// back unchanged (the .todo/214 inventory row).
+		assertThat(evalMulti("""
+				(defmacro mxp-mac (x) `(list ,x))
+				(list (multiple-value-list (macroexpand-1 '(mxp-mac 1)))
+				      (multiple-value-list (macroexpand-1 '(+ 1 2)))
+				      (multiple-value-list (macroexpand '(mxp-mac 1))))
+				""").print()).isEqualTo("(((LIST 1) T) ((+ 1 2) NIL) ((LIST 1) T))");
+	}
+
+	@Test
+	void macroexpand1OfAComputedArgumentExpandsOnTheInterpreter() {
+		// The interpreter still HOLDS the macro table, so a computed argument expands
+		// like a literal one and the standard "expand until it stops expanding" loop
+		// terminates by making progress. The compiled backends cannot expand, and they
+		// SIGNAL rather than answer the form itself, so the same loop terminates there
+		// too (JvmLispCompilerTest / WasmLispCompilerIntegrationTest).
+		assertThat(evalMulti("""
+				(defmacro mxc-mac (x) `(list ,x))
+				(defun mxc-steps (form)
+				  (do ((step form (macroexpand-1 step)))
+				      ((or (special-operator-p (first step)) (not (macro-function (first step)))) step)))
+				(list (mxc-steps (list 'car 'x)) (mxc-steps (list 'mxc-mac 9)) (mxc-steps (list 'when 'a 'b)))
+				""").print()).isEqualTo("((CAR X) (LIST 9) (IF A B NIL))");
+	}
+
+	@Test
 	void setfMacroFunctionAliasesAUserMacro() {
 		// lisp-namespace's (setf (macro-function 'nslet) (macro-function
 		// 'namespace-let)):

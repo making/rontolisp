@@ -5526,6 +5526,36 @@ cases:
       (CAR :EXTERNAL)
       NIL
       (A 1)
+  - name: macro-function-and-special-operator-p
+    source: |
+      ;; Every operator with no function value is EITHER a special operator OR a
+      ;; macro, and the two predicates agree on which -- exactly the decision an
+      ;; assertion macro makes about the form it was handed (rove's form-inspect).
+      ;; Verified form for form against SBCL 2.2.9.
+      (defmacro mfp-mac (x) (list 'list x))
+      (defun mfp-probe (form)
+        (cond ((special-operator-p (first form)) :special)
+              ((macro-function (first form)) :macro)
+              (t :function)))
+      (print (list (mfp-probe '(if a b)) (mfp-probe '(quote a)) (mfp-probe '(mfp-mac 1))
+                   (mfp-probe '(when a b)) (mfp-probe '(handler-case a))
+                   (mfp-probe '(car x)) (mfp-probe '(+ 1 2))))
+      ;; defun and dolist are CL MACROS that rontolisp implements as special forms
+      ;; of its own: special-operator-p is nil for them (a caller only ever asks
+      ;; "may I apply this name") and macro-function answers for them instead.
+      (print (list (special-operator-p 'if) (special-operator-p 'defun) (special-operator-p 'car)))
+      (print (list (and (macro-function 'when) t) (and (macro-function 'mfp-mac) t)
+                   (and (macro-function 'defun) t) (and (macro-function (intern "WHEN")) t)
+                   (macro-function 'car) (macro-function 'if)))
+      ;; macroexpand-1 answers CL's expanded-p as its second value.
+      (print (multiple-value-list (macroexpand-1 '(mfp-mac 1))))
+      (print (multiple-value-list (macroexpand-1 '(+ 1 2))))
+    expected: |
+      (:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)
+      (T NIL NIL)
+      (T T T T NIL NIL)
+      ((LIST 1) T)
+      ((+ 1 2) NIL)
   - name: setf-symbol-function-and-fdefinition
     source: |
       (defun csf-orig (x) (* x 2))

@@ -238,7 +238,8 @@ public final class PackageRegistry {
 			LispNames.BROADCAST_STREAM_CLASS, LispNames.BROADCAST_STREAM_COMPONENTS,
 			LispNames.PATHNAME_DIRECTORY_STRING, LispNames.PATHNAME_COMPONENT_STRING, LispNames.DELETE_FILE_INTERNAL,
 			LispNames.SET_SYMBOL_FUNCTION_INTERNAL, LispNames.FENV_FUNCTION_INTERNAL, LispNames.TEMP_FILE_NAME,
-			LispNames.PROBE_FILE_INTERNAL, LispNames.PATH_NS, LispNames.SYNONYM_TARGET, LispNames.CLOSE_INTERNAL);
+			LispNames.PROBE_FILE_INTERNAL, LispNames.PATH_NS, LispNames.SYNONYM_TARGET, LispNames.CLOSE_INTERNAL,
+			LispNames.MACRO_FN_INTERNAL, LispNames.MACRO_EXPANDER_STUB);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
@@ -364,6 +365,34 @@ public final class PackageRegistry {
 	private static final List<String> CL_SPECIAL_FORM_NAMES = sorted(CL_SPECIAL_FORMS);
 
 	private static final Set<String> SPECIAL_OPERATOR_NAMES = union(CL_SPECIAL_FORMS, CL_MACROS);
+
+	/**
+	 * The 25 ANSI SPECIAL OPERATORS -- the only names {@code special-operator-p} answers
+	 * t for. Deliberately not the same set as {@link #SPECIAL_OPERATOR_NAMES}: rontolisp
+	 * implements plenty of CL MACROS as special forms of its own ({@code defun},
+	 * {@code handler-case}, {@code dolist}, ...), and a caller of
+	 * {@code special-operator-p} only ever asks "can I {@code apply} this" -- those names
+	 * answer through {@code macro-function} instead, exactly as in CL.
+	 */
+	private static final Set<String> ANSI_SPECIAL_OPERATORS = Set.of(LispNames.BLOCK, LispNames.CATCH,
+			LispNames.EVAL_WHEN, LispNames.FLET, LispNames.FUNCTION, LispNames.GO, LispNames.IF, LispNames.LABELS,
+			LispNames.LET, LispNames.LET_STAR, LispNames.LOAD_TIME_VALUE, LispNames.LOCALLY, LispNames.MACROLET,
+			LispNames.MULTIPLE_VALUE_CALL, LispNames.MULTIPLE_VALUE_PROG1, LispNames.PROGN, LispNames.PROGV,
+			LispNames.QUOTE, LispNames.RETURN_FROM, LispNames.SETQ, LispNames.SYMBOL_MACROLET, LispNames.TAGBODY,
+			LispNames.THE, LispNames.THROW, LispNames.UNWIND_PROTECT);
+
+	/**
+	 * The names {@code macro-function} answers a macro function for, before the program's
+	 * own {@code defmacro}s are added: every operator with no function value that is not
+	 * one of the 25 ANSI special operators. That includes the {@code cl} macros the
+	 * expander dispatches on AND the CL macros rontolisp happens to implement as special
+	 * forms -- the two are indistinguishable to a caller, and both answers are "you
+	 * cannot apply this name".
+	 */
+	private static final List<String> RUNTIME_MACRO_NAMES = SPECIAL_OPERATOR_NAMES.stream()
+		.filter(name -> !ANSI_SPECIAL_OPERATORS.contains(name))
+		.sorted()
+		.toList();
 
 	private final Map<String, LispPackage> packages = new HashMap<>();
 
@@ -737,6 +766,25 @@ public final class PackageRegistry {
 	 */
 	public static Set<String> specialOperatorNames() {
 		return SPECIAL_OPERATOR_NAMES;
+	}
+
+	/**
+	 * Returns the 25 ANSI special operators -- the exact set {@code special-operator-p}
+	 * answers t for.
+	 * @return the ANSI special operator names
+	 */
+	public static Set<String> ansiSpecialOperatorNames() {
+		return ANSI_SPECIAL_OPERATORS;
+	}
+
+	/**
+	 * Returns the built-in names {@code macro-function} answers a macro function for
+	 * (every operator with no function value except the 25 ANSI special operators),
+	 * sorted alphabetically so the baked table a compiled program carries is stable.
+	 * @return the sorted built-in macro names
+	 */
+	public static List<String> runtimeMacroNames() {
+		return RUNTIME_MACRO_NAMES;
 	}
 
 	/**

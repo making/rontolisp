@@ -719,13 +719,37 @@ public final class LispEvaluator {
 			if (args.isEmpty() || args.size() > 2) {
 				throw new LispEvalException(LispNames.MACROEXPAND_1 + " expects 1 or 2 arguments, got " + args.size());
 			}
-			return macroexpand1(args.get(0));
+			return expandedWithFlag(args.get(0), macroexpand1(args.get(0)));
 		}));
 		this.globalEnv.defineFunction(LispNames.MACROEXPAND, new LispFunction(LispNames.MACROEXPAND, args -> {
 			if (args.isEmpty() || args.size() > 2) {
 				throw new LispEvalException(LispNames.MACROEXPAND + " expects 1 or 2 arguments, got " + args.size());
 			}
-			return macroexpand(args.get(0));
+			return expandedWithFlag(args.get(0), macroexpand(args.get(0)));
+		}));
+		// macro-function: the expander of a macro NAME, or nil for a function, a special
+		// operator and an unknown name -- what a caller asking "can I apply this" reads.
+		// It lives here (not in the prelude, which serves the compiled backends) because
+		// the answer is the macro table this evaluator holds: a user defmacro, a macrolet
+		// body's local macro, and the built-in expander LispMacroExpander dispatches on.
+		// The returned function is the real single-step expander, callable as
+		// (funcall f form env) like CL's; env is accepted and ignored (there is no
+		// lexical macro environment to consult -- macrolet is expanded away before any
+		// body runs, so the global answer is the only one).
+		this.globalEnv.defineFunction(LispNames.MACRO_FUNCTION, new LispFunction(LispNames.MACRO_FUNCTION, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.MACRO_FUNCTION + " expects 1 or 2 arguments, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispSymbol sym) || !isMacroName(sym.name())) {
+				return LispNil.INSTANCE;
+			}
+			String name = sym.name();
+			return new LispFunction(LispNames.MACRO_FUNCTION + " " + name, callArgs -> {
+				if (callArgs.isEmpty() || callArgs.size() > 2) {
+					throw new LispEvalException("a macro function expects 1 or 2 arguments, got " + callArgs.size());
+				}
+				return macroexpand1(macroCallForm(name, callArgs.get(0)));
+			});
 		}));
 		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
 			if (args.size() != 1) {
@@ -5249,6 +5273,16 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Returns the names of every user macro this evaluator holds, sorted -- the macro
+	 * table {@code UserMacroExpander} bakes into a compiled program so its
+	 * {@code macro-function} answers for the program's own macros too.
+	 * @return the sorted user macro names
+	 */
+	public List<String> userMacroNames() {
+		return this.userMacros.keySet().stream().sorted().toList();
+	}
+
+	/**
 	 * Carries out {@code (setf (macro-function 'new) (macro-function 'existing))} -- a
 	 * macro ALIAS, the shape lisp-namespace uses to give {@code namespace-let} the short
 	 * name {@code nslet}. The new name is bound to the SAME expander, so the two names
@@ -5822,6 +5856,47 @@ public final class LispEvaluator {
 		while (expanded != form) {
 			form = expanded;
 			expanded = macroexpand1(form);
+		}
+		return form;
+	}
+
+	/**
+	 * Publishes {@code macroexpand-1}/{@code macroexpand}'s {@code expanded-p} second
+	 * value and returns the primary. Both expanders answer the SAME reference when the
+	 * operator is not a macro, so identity decides the flag; it travels through the
+	 * {@code %mv-spill} channel (the {@code parse-integer} precedent), which is what
+	 * carries it across the call boundary into a consumer.
+	 * @param form the form that was handed in
+	 * @param expansion what the expander answered
+	 * @return the expansion
+	 */
+	private LispVal expandedWithFlag(LispVal form, LispVal expansion) {
+		this.globalEnv.define(LispNames.MV_SPILL,
+				new LispCons(expansion == form ? LispNil.INSTANCE : LispTrue.INSTANCE, LispNil.INSTANCE));
+		return expansion;
+	}
+
+	/**
+	 * Whether the name has a macro function: a user {@code defmacro} (a {@code macrolet}
+	 * body's local macro and a {@code (setf macro-function)} alias register in the same
+	 * table) or a built-in operator with no function value that is not one of the 25 ANSI
+	 * special operators -- the CL macros the expander dispatches on, plus the ones
+	 * rontolisp implements as special forms of its own.
+	 */
+	private boolean isMacroName(String name) {
+		return isUserMacro(name)
+				|| (SPECIAL_OPERATORS.contains(name) && !PackageRegistry.ansiSpecialOperatorNames().contains(name));
+	}
+
+	/**
+	 * The form a macro function received, headed by the macro it belongs to. CL applies
+	 * the expander to the WHOLE form and the expander reads the car as data (only
+	 * {@code &whole} looks at it), so {@code (funcall (macro-function 'when) '(foo t 1))}
+	 * expands through {@code when} exactly as it does in CL.
+	 */
+	private static LispVal macroCallForm(String name, LispVal form) {
+		if (form instanceof LispCons cons && !(cons.car() instanceof LispSymbol head && head.name().equals(name))) {
+			return new LispCons(new LispSymbol(name), cons.cdr());
 		}
 		return form;
 	}

@@ -1309,12 +1309,15 @@ public final class LispNames {
 
 	/**
 	 * The {@code macroexpand-1} function. Expands the top-level form once when its
-	 * operator is a user macro or a built-in macro; returns the form unchanged otherwise
-	 * (rontolisp has no multiple values, so no second {@code expanded-p} value).
+	 * operator is a user macro or a built-in macro; returns the form unchanged otherwise.
+	 * The second value is CL's {@code expanded-p} flag.
 	 */
 	public static final String MACROEXPAND_1 = "MACROEXPAND-1";
 
-	/** The {@code macroexpand} function. Repeats {@code macroexpand-1} to a fixpoint. */
+	/**
+	 * The {@code macroexpand} function. Repeats {@code macroexpand-1} to a fixpoint,
+	 * returning the same two values.
+	 */
 	public static final String MACROEXPAND = "MACROEXPAND";
 
 	/**
@@ -2716,17 +2719,37 @@ public final class LispNames {
 	public static final String BOTH_CASE_P = "BOTH-CASE-P";
 
 	/**
-	 * The {@code special-operator-p} standard function: a lite prelude stub returning nil
-	 * (compiled programs have no operator table; the interpreter's evaluator dispatch is
-	 * not reified).
+	 * The {@code special-operator-p} standard function: a prelude defun testing the name
+	 * against the 25 ANSI special operators
+	 * ({@link am.ik.rontolisp.PackageRegistry#ansiSpecialOperatorNames()}), so every
+	 * backend answers from ONE definition. Nil for the CL macros rontolisp implements as
+	 * special forms of its own -- those answer through {@link #MACRO_FUNCTION}.
 	 */
 	public static final String SPECIAL_OPERATOR_P = "SPECIAL-OPERATOR-P";
 
 	/**
-	 * The {@code macro-function} standard function: a lite prelude stub returning nil
-	 * (macros are fully expanded at compile time; no runtime macro table exists).
+	 * The {@code macro-function} standard function: the macro expander of a name, or nil
+	 * for a function, a special operator or an unknown name. The interpreter answers with
+	 * a real expander (a {@code (funcall f form env)} single-step expansion); a compiled
+	 * program has no macro table left, so it answers the {@link #MACRO_EXPANDER_STUB}
+	 * function -- exact as a predicate, a signal when called.
 	 */
 	public static final String MACRO_FUNCTION = "MACRO-FUNCTION";
+
+	/**
+	 * The {@code %macro-fn} internal: the compile-path body of {@link #MACRO_FUNCTION},
+	 * testing the name against the baked built-in macro table plus the program's own
+	 * macro names ({@code UserMacroExpander} passes them in).
+	 */
+	public static final String MACRO_FN_INTERNAL = "%MACRO-FN";
+
+	/**
+	 * The {@code %macro-expander-stub} internal: what {@link #MACRO_FUNCTION} answers on
+	 * the compiled backends. Non-nil (the predicate every caller uses is exact) and
+	 * signals when actually CALLED -- the macro it would expand is gone before the
+	 * backend sees the program.
+	 */
+	public static final String MACRO_EXPANDER_STUB = "%MACRO-EXPANDER-STUB";
 
 	/**
 	 * The {@code compiled-function-p} standard function: a lite prelude stub returning

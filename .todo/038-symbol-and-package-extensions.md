@@ -8,8 +8,9 @@ global-only variable lookups, compile-path folds/gates). The DECLARATIVE package
 system shipped too: `defpackage` with `:use`/`:export`/`:nicknames`
 /`:import-from`/`:documentation`/`:size` is a top-level directive resolved by
 `PackageResolver` (see `.kb/packages.md`). What remains is the RUNTIME
-package/symbol reflection API (symbol plists, `symbol-package`,
-`macro-function`, `unintern`, and the package-query functions). Medium priority
+package/symbol reflection API (symbol plists, `symbol-package`, `unintern`,
+and the package-query functions; `macro-function` landed 2026-08-15 as
+`.todo/378`). Medium priority
 — needed for larger programs and libraries.
 
 ## What's missing
@@ -26,12 +27,12 @@ operators are absent:
 |----------|---------|------------|
 | `symbol-plist` | Symbol property list: `(symbol-plist 'foo)` | Easy |
 | `symbol-package` | Home package of the symbol | Easy |
-| `macro-function` | Get a macro's expansion function | Easy |
 | `unintern` | Remove symbol from package | Easy |
 
-`.kb/symbol-runtime-api.md` argues `symbol-plist` and `macro-function` are
-feasible as name-keyed side tables — nothing about the no-intern-table design
-blocks them.
+`.kb/symbol-runtime-api.md` argues `symbol-plist` is feasible as a name-keyed
+side table — nothing about the no-intern-table design blocks it.
+`macro-function` shipped 2026-08-15 (`.todo/378`): real on all four backends,
+partitioned against `special-operator-p`.
 
 ### Missing package functions
 
@@ -62,14 +63,13 @@ blocks them.
 
 **Symbol functions** (highest ROI):
 1. `symbol-plist` — a name-keyed side table (no field on the symbol needed).
-2. `macro-function` — expose the macro table the expander already keeps.
-3. `symbol-package` — derive from the canonical `pkg::name` spelling.
-4. `unintern` — package symbol removal.
+2. `symbol-package` — derive from the canonical `pkg::name` spelling.
+3. `unintern` — package symbol removal.
 
 **Package functions**:
-5. `find-package`, `list-all-packages` — package registry queries.
-6. `package-name`, `package-use-list`, `package-used-by-list` — metadata.
-7. `export`, `import` — the runtime forms of clauses `defpackage` already
+4. `find-package`, `list-all-packages` — package registry queries.
+5. `package-name`, `package-use-list`, `package-used-by-list` — metadata.
+6. `export`, `import` — the runtime forms of clauses `defpackage` already
    implements declaratively. (`use-package` shipped 2026-07-31 as a
    read/compile-time directive: the use list is consulted while the resolver
    walks the program, so a purely runtime effect would be invisible to the forms
@@ -99,5 +99,5 @@ spelling. Hit while trying to patch uiop from Lisp. Fix belongs to the runtime
 **Consumer (2026-08-15, rove `.todo/372`)**: `remprop` -- rove's `remove-test`
 is `(remprop name 'test)`; today "the function REMPROP is undefined; compiled as
 a call-time error". Same name-keyed side table as `get`/`(setf get)`
-(`LispPreludeLibrary` `%symbol-plists`), one prelude defun. `macro-function` is
-now `.todo/378` (rove needs the compile-path half too).
+(`LispPreludeLibrary` `%symbol-plists`), one prelude defun. `macro-function`
+was `.todo/378` and shipped 2026-08-15 (the compile-path half included).

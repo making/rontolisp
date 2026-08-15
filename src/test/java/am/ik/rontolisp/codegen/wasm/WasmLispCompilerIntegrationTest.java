@@ -9012,6 +9012,52 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileMacroFunctionAndSpecialOperatorP() throws Exception {
+		// The four-backend partition of the operators with no function value: the pass
+		// appends the program's own macro-function over its macro names and the prelude
+		// carries the built-in half, so wasm answers exactly what the interpreter and the
+		// JVM answer (LispEvaluatorTest / JvmLispCompilerTest, SBCL-checked).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defmacro mfp-mac (x) `(list ,x))
+					(defun mfp-probe (form)
+					  (cond ((special-operator-p (first form)) :special)
+					        ((macro-function (first form)) :macro)
+					        (t :function)))
+					(print (list (mfp-probe '(if a b)) (mfp-probe '(quote a)) (mfp-probe '(mfp-mac 1))
+					             (mfp-probe '(when a b)) (mfp-probe '(handler-case a)) (mfp-probe '(car x))
+					             (mfp-probe '(+ 1 2))))
+					(print (list (special-operator-p 'defun) (and (macro-function 'defun) t)
+					             (and (macro-function (intern "WHEN")) t)
+					             (macro-function 'car) (macro-function 'if)))
+					(print (list (multiple-value-list (macroexpand-1 '(mfp-mac 1)))
+					             (multiple-value-list (macroexpand-1 '(+ 1 2)))))
+					""")))))
+			.isEqualTo("(:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)\n"
+					+ "(NIL T T NIL NIL)\n(((LIST 1) T) ((+ 1 2) NIL))");
+	}
+
+	@Test
+	void compileMacroexpandOfAComputedArgument() throws Exception {
+		// A COMPUTED macroexpand-1 argument is the one shape the fold cannot decide, and
+		// the answer must agree with macro-function's on every backend: a macro call
+		// signals (no macro table survives compilation), anything else comes back
+		// unchanged with expanded-p nil. Answering a macro call with ITSELF would spin
+		// the standard "expand until it stops expanding" loop forever.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defmacro mxc-mac (x) `(list ,x))
+					(defun mxc-steps (form)
+					  (do ((step form (macroexpand-1 step)))
+					      ((or (special-operator-p (first step)) (not (macro-function (first step)))) step)))
+					(print (mxc-steps (list 'car 'x)))
+					(print (handler-case (mxc-steps (list 'mxc-mac 9)) (error (e) :no-runtime-macro-table)))
+					(print (handler-case (mxc-steps (list 'when 'a 'b)) (error (e) :no-runtime-macro-table)))
+					(print (multiple-value-list (macroexpand-1 (list '+ 1 2))))
+					"""))))).isEqualTo("(CAR X)\n:NO-RUNTIME-MACRO-TABLE\n:NO-RUNTIME-MACRO-TABLE\n((+ 1 2) NIL)");
+	}
+
+	@Test
 	void compileSetfMacroFunctionAliasAfterExpansionPass() throws Exception {
 		// The macro alias is carried out by the compile-path macro pass (the only macro
 		// table the backends have) and the form is dropped, like the defmacro it aliases.

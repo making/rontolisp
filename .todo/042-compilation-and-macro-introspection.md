@@ -7,8 +7,10 @@ and metaprogramming.
 
 | Operator | Note |
 |----------|------|
-| `macroexpand` | `LispEvaluator.macroexpand` (see below) |
-| `macroexpand-1` | `LispEvaluator.macroexpand1` (see below) |
+| `macroexpand` | `LispEvaluator.macroexpand` (see below); answers CL's `expanded-p` second value since 2026-08-15 (`.todo/378`) |
+| `macroexpand-1` | `LispEvaluator.macroexpand1` (see below); same second value |
+| `macro-function` | `.todo/378` (2026-08-15): the real expander on the interpreter, a signalling stub in compiled output, non-nil on all four backends for every macro name |
+| `special-operator-p` | `.todo/378` (2026-08-15): t for the 25 ANSI special operators, and it partitions the operators with no function value against `macro-function` |
 | `eval-when` | `LispNames.java:1171` + doc: expands to `progn`, top-level bodies spliced into top-level forms |
 | `deftype` | `LispNames.java:1092` + doc: parsed no-op, the type name is not registered |
 | `documentation` | `LispNames.java:1158` + doc: lite — reads expand to nil, `(setf (documentation ...) "...")` discards |
@@ -57,20 +59,21 @@ and metaprogramming.
 **Macro introspection** — done:
 1. `macroexpand-1` — single-step expansion (`LispEvaluator.macroexpand1`).
 2. `macroexpand` — full expansion (repeated `macroexpand-1`).
+3. `macro-function` / `special-operator-p` — `.kb/symbol-runtime-api.md`.
 
 **Compilation**:
-3. `compile` — runtime compilation (use the same compiler pipeline).
-4. `load-time-value` — evaluate at load time, embed result.
+4. `compile` — runtime compilation (use the same compiler pipeline).
+5. `load-time-value` — evaluate at load time, embed result.
 
 **Implementation introspection**:
-5. `lisp-implementation-type` -> "RontoLisp".
-6. `lisp-implementation-version` -> version string (`rontolisp:version` already
+6. `lisp-implementation-type` -> "RontoLisp".
+7. `lisp-implementation-version` -> version string (`rontolisp:version` already
    returns one; this is the CL-named front for it).
-7. `features` -> feature list (e.g., `:rontolisp`, `:lisp`, `:ansi-cl`).
+8. `features` -> feature list (e.g., `:rontolisp`, `:lisp`, `:ansi-cl`).
 
 **Random state**:
-8. `make-random-state` — create a seeded random state.
-9. Extend `random` to accept a state argument.
+9. `make-random-state` — create a seeded random state.
+10. Extend `random` to accept a state argument.
 
 ### Related
 

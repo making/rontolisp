@@ -1,4 +1,4 @@
-# Runtime symbol API (`symbol-name`/`intern`/`find-symbol`/`make-symbol`/`boundp`/`fboundp`/`symbol-value`)
+# Runtime symbol API (`symbol-name`/`intern`/`find-symbol`/`make-symbol`/`boundp`/`fboundp`/`symbol-value`/`macro-function`/`special-operator-p`)
 
 ## `symbol-name` drops the package qualifier; the package API (todo-173)
 
@@ -498,3 +498,85 @@ Tests: `LispEvaluatorTest#findSymbolAnswersTheAccessibilityStatusAsItsSecondValu
 `#symbolPlistReadsTheWholePropertyList`, the matching pairs in `JvmLispCompilerTest` and
 `WasmLispCompilerIntegrationTest`, and the `symbol-runtime-api` ci-spec case (all four
 backends). The cl function count moves 391 -> 392.
+
+## `macro-function` / `special-operator-p` are real, and they PARTITION the operators (todo-378, 2026-08-15)
+
+**Invariant: every operator with no function value is either a special operator or a
+macro, on all four backends, and the two predicates agree on which.**
+`special-operator-p` is t for exactly the 25 ANSI special operators
+(`PackageRegistry.ansiSpecialOperatorNames()`); `macro-function` is non-nil for
+everything else rontolisp expands — `PackageRegistry.runtimeMacroNames()` is
+`specialOperatorNames()` (special forms + cl macros: the "no function value" set) minus
+those 25, plus the program's own `defmacro` names. The split is deliberately NOT
+rontolisp's own special-form/macro boundary: `defun`, `handler-case`, `dolist`,
+`lambda`, `in-package` are special forms HERE and macros in CL, and a caller of either
+predicate is only ever asking "may I `apply` this name", which both answers get right.
+Verified form for form against SBCL 2.2.9 (`(cond ((special-operator-p op) ...)
+((macro-function op) ...) (t ...))` over `if`/`quote`/a user macro/`when`/`car`/`+`/
+`handler-case`).
+
+**One definition per predicate, shared by every backend, and no compile-time fold.**
+Both are `LispPreludeLibrary` entries whose baked name table is GENERATED from
+`PackageRegistry` (so it cannot drift from the expander it describes) and tested with
+`member`. A literal `(special-operator-p 'if)` therefore compiles to a call, not to a
+constant, unlike the `fboundp` fold next door — deliberately: a fold decides the answer
+from Pass-1 knowledge while a computed name reads a table, and two paths that can
+disagree is exactly the shape this item was created to remove. Re-evaluation trigger: if
+a program is ever measured to care about the call, fold the LITERAL case in
+`LispMacroExpander` (both compile paths at once) and keep the table as the fallback —
+never per backend.
+
+**The interpreter answers `macro-function` natively; the compile paths answer a name
+test.** `LispEvaluator.registerEval` defines it over the macro table it holds
+(`isMacroName` = `isUserMacro` ∪ the built-in set above), and the value is the REAL
+expander: a `LispFunction` that macroexpand-1's the form it is handed, after re-heading
+it with the macro's own name (`macroCallForm` — CL applies the expander to the whole
+form and the expander reads the car as data, so `(funcall (macro-function 'when) '(foo
+t 1))` expands through `when`, as in SBCL). A compiled program has no macro table left,
+so `macro-function` answers `#'%macro-expander-stub`: non-nil (the predicate every real
+caller uses is exact) and a signal when CALLED. The program's own macro names cannot be
+in a static table, so `UserMacroExpander.emitMacroFunctionTable` APPENDS
+`(defun macro-function (symbol &optional environment) (%macro-fn symbol '(names...)))`
+when the program names `macro-function` at all, which suppresses the prelude entry
+(`LispPreludeLibrary.process` skips an entry the program defines itself) and delegates
+the built-in half to the shared `%macro-fn`.
+
+Two details in that emission are load-bearing, both because the BACKENDS resolve the
+program a second time: it is appended (by the end every `defpackage` has been seen, so a
+qualified table entry resolves), and an unqualified name is spelled `cl-user::name`
+(`CL-USER::X` canonicalizes back to bare `X` under any current package, where a bare `x`
+would be re-qualified into the trailing `in-package`'s package and stop matching the
+table key the macro was registered under).
+
+`macroexpand-1`/`macroexpand` gained CL's `expanded-p` second value with it (the
+`macroexpand-1` row of `.todo/214`): the interpreter publishes it through `%mv-spill`
+(`expandedWithFlag`; both expanders answer the SAME reference when nothing expanded, so
+identity decides the flag), and the compile paths get it from
+`UserMacroExpander.expandAll`, whose literal-argument fold now emits
+`(values 'expansion expanded-p)` — a literal `values` form, which is what a consumer's
+syntactic lowering recognizes.
+
+**The two must not contradict each other.** A COMPUTED `macroexpand-1` argument is the
+shape no fold can decide, and on the compiled backends its prelude body now consults
+`macro-function`: a macro call SIGNALS (the expander stub's answer, reached through the
+other door), anything else comes back unchanged with `expanded-p` nil (the identity
+answer ironclad's `trivial-macroexpand-all` needs to compile). Answering a macro call
+with itself — what the identity defun did before todo-378 — leaves `macro-function`
+saying "macro" while the expander makes no progress, and the standard
+`(do ((step form (macroexpand-1 step))) ((not (macro-function (first step))) ...))` loop
+(rove's `form-steps`) then spins forever on the compiled backends and terminates on the
+interpreter. Because those bodies read `macro-function`, a surviving `macroexpand`/
+`macroexpand-1` call also triggers `emitMacroFunctionTable` (`usesMacroIntrospection`),
+so a USER macro call is not answered with silence where a built-in one signals.
+Mechanics and the pinning tests: `.kb/gensym-macroexpand.md`.
+
+The one shape that must NOT be walked as a call is
+`(setf (macro-function 'new) (macro-function 'existing))` — a write to the macro table,
+recognized syntactically (`.kb/defmacro-backquote.md`); `expandAll`'s `SETF` case returns
+it verbatim.
+
+Tests: `LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators` /
+`#macroFunctionIsTheRealExpanderOnTheInterpreter` /
+`#macroexpand1AnswersTheExpandedPFlag`, the matching pairs in `JvmLispCompilerTest` and
+`WasmLispCompilerIntegrationTest`, and the `macro-function` ci-spec case (all four
+backends).

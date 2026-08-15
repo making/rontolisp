@@ -25,9 +25,10 @@ Tests: `LispReaderTest`/`LispLexerTest` (backquote), `LispEvaluatorTest` (defmac
 ## `(setf (macro-function 'new) (macro-function 'existing))` — macro aliases (todo-242, 2026-08-02)
 
 **Invariant: a macro alias is a write to the MACRO TABLE, carried out by whichever pass
-owns that table, and the form never reaches a backend.** `macro-function` itself stays the
-lite prelude stub that always answers `nil` (there is no runtime macro table on any
-backend), so the alias is recognized SYNTACTICALLY, before the value form would evaluate:
+owns that table, and the form never reaches a backend.** A plain `(macro-function 'name)`
+is a real call answering a real expander since todo-378 (`.kb/symbol-runtime-api.md`), but
+the alias never evaluates one: it is recognized SYNTACTICALLY, before the value form would
+run —
 `LispMacroExpander.isSetfMacroFunctionForm` + `macroFunctionArgumentName` (both public,
 shared) match `(setf (macro-function 'new) (macro-function 'existing))`. The interpreter
 handles it in `evalCons`'s `SETF` case (`LispEvaluator.aliasMacroFunction`, before the
@@ -35,8 +36,10 @@ place expansion) by putting the existing `UserMacro` under the new name, so the 
 share ONE expander from then on; the compile path handles it in `UserMacroExpander.expand`
 by replaying the form into the macro-time evaluator and DROPPING it, exactly like the
 `defmacro` it aliases (the same predicate is in the pass's activation list, so a program
-whose only macro business is an alias still activates it). Both sides therefore agree by
-construction — the compile path's macro table IS a `LispEvaluator`.
+whose only macro business is an alias still activates it, and `expandAll`'s `SETF` case
+returns the shape verbatim so the walk cannot turn either half into an ordinary call).
+Both sides therefore agree by construction — the compile path's macro table IS a
+`LispEvaluator`, and the alias name is in the table `macro-function` answers from.
 
 Reaching `expandSetf`'s `MACRO-FUNCTION` case means neither interception applied, i.e. the
 form is not an alias of a user macro; it throws naming the one supported shape. The
@@ -44,7 +47,8 @@ consumer is lisp-namespace's `(setf (macro-function 'nslet) (macro-function 'nam
 (a trivia.level2 dependency, `.todo/238`). **Deliberate narrowness, with its re-evaluation
 trigger**: an arbitrary expander FUNCTION (a lambda over form+env) is rejected because
 there is no macro function object to store — the day a program needs one, the macro table
-would have to hold callables, and `macro-function` itself would have to answer one; the
+would have to hold callables (`macro-function` answers a `LispFunction` on the
+interpreter, but it is built on demand from the table entry, not stored in it); the
 lookup is package-tolerant (`LispEvaluator.lookupUserMacro`, exact → member of the
 qualified spelling → unique member match) because a QUOTED name is resolved against the
 current package while the table may be keyed by either spelling. The alias captures the

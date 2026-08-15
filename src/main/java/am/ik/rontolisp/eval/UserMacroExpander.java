@@ -12,8 +12,11 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
 
 /**
  * Compile-path expansion of user macros defined with {@code defmacro}. Runs in the CLI
@@ -257,7 +260,69 @@ public final class UserMacroExpander {
 			}
 		}
 		emitMacroGeneratedDeftypes(macroEval, result);
+		emitMacroFunctionTable(macroEval, result);
 		return result;
+	}
+
+	/**
+	 * Appends the program's own {@code macro-function}, when it asks the question at all:
+	 * a compiled program has no macro table left, so the answer is a NAME test, and only
+	 * this pass knows which names the program's {@code defmacro}s claimed. The prelude
+	 * definition (the built-in table alone) is suppressed by the presence of this one
+	 * ({@code LispPreludeLibrary.process} skips an entry the program defines itself); the
+	 * shared {@code %macro-fn} it delegates to carries the built-in half.
+	 *
+	 * <p>
+	 * A surviving {@code macroexpand}/{@code macroexpand-1} call counts as asking too:
+	 * the prelude bodies of those two consult {@code macro-function} to decide between
+	 * answering the form unchanged and signalling, so without the program's own names
+	 * they would answer a USER macro call with silence where the built-ins signal. (Only
+	 * a COMPUTED argument survives -- a literal one was folded to its expansion above --
+	 * which is exactly the case those bodies serve.)
+	 *
+	 * <p>
+	 * Appended, not prepended, and every unqualified name is spelled
+	 * {@code cl-user::name}: the backends resolve the program a second time, and this
+	 * form has to survive it unchanged. At the END every {@code defpackage} has been
+	 * seen, so a qualified name resolves; and {@code cl-user::x} canonicalizes back to
+	 * bare {@code X} under ANY current package, where a bare {@code x} would be
+	 * re-qualified into the trailing {@code in-package}'s package and stop matching the
+	 * table key.
+	 */
+	private static void emitMacroFunctionTable(LispEvaluator macroEval, List<LispVal> result) {
+		List<String> macroNames = macroEval.userMacroNames();
+		if (macroNames.isEmpty() || result.stream().noneMatch(UserMacroExpander::usesMacroIntrospection)
+				|| result.stream().anyMatch(UserMacroExpander::definesMacroFunction)) {
+			return;
+		}
+		StringBuilder table = new StringBuilder();
+		for (String name : macroNames) {
+			table.append(table.isEmpty() ? "" : " ")
+				.append(PackageRegistry.splitQualified(name) == null ? LispNames.CL_USER_PKG + "::" + name : name);
+		}
+		result.addAll(
+				LispReader.readAllFromString("(defun " + LispNames.MACRO_FUNCTION + " (symbol &optional environment) ("
+						+ LispNames.MACRO_FN_INTERNAL + " symbol '(" + table + ")))", Features.INTERPRETER));
+	}
+
+	/**
+	 * Whether the form names one of the three run-time macro-table readers anywhere (a
+	 * call, {@code #'} it) -- they share the one answer, so they share the trigger.
+	 */
+	private static boolean usesMacroIntrospection(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			String name = member(sym.name());
+			return LispNames.MACRO_FUNCTION.equals(name) || LispNames.MACROEXPAND.equals(name)
+					|| LispNames.MACROEXPAND_1.equals(name);
+		}
+		return form instanceof LispCons cons
+				&& (usesMacroIntrospection(cons.car()) || usesMacroIntrospection(cons.cdr()));
+	}
+
+	/** Whether the top-level form is the program's OWN {@code macro-function} defun. */
+	private static boolean definesMacroFunction(LispVal form) {
+		return isOperator(form, LispNames.DEFUN) && form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name && LispNames.MACRO_FUNCTION.equals(member(name.name()));
 	}
 
 	/**
@@ -1133,20 +1198,25 @@ public final class UserMacroExpander {
 				}
 				case LispNames.MACROEXPAND, LispNames.MACROEXPAND_1: {
 					// Fold a literal quoted argument to its expansion at compile time
-					// (the
-					// only form the compilers can support: the macro table does not exist
-					// at runtime). A computed argument is left as-is and fails naturally.
-					// The optional second argument is CL's macro-expansion environment,
-					// accepted and ignored (there is none to consult), so the fold
-					// applies
-					// to both call shapes.
+					// (the only form the compilers can support: the macro table does not
+					// exist at runtime). A computed argument is left as-is and reaches
+					// the prelude identity defun, which answers it unchanged with
+					// expanded-p nil. The optional second argument is CL's
+					// macro-expansion environment, accepted and ignored (there is none to
+					// consult), so the fold applies to both call shapes.
 					if ((parts.size() == 2 || parts.size() == 3) && parts.get(1) instanceof LispCons quoted
 							&& quoted.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())
 							&& quoted.cdr() instanceof LispCons quotedCdr) {
 						LispVal target = quotedCdr.car();
 						LispVal expanded = LispNames.MACROEXPAND.equals(sym.name()) ? macroEval.macroexpand(target)
 								: macroEval.macroexpand1(target);
-						return properList(List.of(new LispSymbol(LispNames.QUOTE), expanded));
+						// CL's expanded-p rides along as a literal second value (both
+						// expanders answer the SAME reference when nothing expanded), so
+						// the fold answers what the interpreter answers -- and a literal
+						// values form is exactly what a consumer's lowering recognizes.
+						return properList(List.of(new LispSymbol(LispNames.VALUES),
+								properList(List.of(new LispSymbol(LispNames.QUOTE), expanded)),
+								expanded == target ? LispNil.INSTANCE : LispTrue.INSTANCE));
 					}
 					return rebuild(cons, parts, 1, macroEval);
 				}
@@ -1172,6 +1242,13 @@ public final class UserMacroExpander {
 					return LispCons.rebuiltList(cons, newParts);
 				}
 				case LispNames.SETF: {
+					if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
+						// A macro ALIAS is a fact about the macro table, not an
+						// expression: leave it verbatim so the top-level interception
+						// above -- and the error every other shape gets -- still see the
+						// shape they key on.
+						return cons;
+					}
 					// Walk the subforms first, then, if any place is a registered user
 					// setf-expander place, rewrite the whole setf through the macro-time
 					// evaluator (the compilers cannot run the expander themselves).

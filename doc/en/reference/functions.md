@@ -104,8 +104,8 @@ page.
 | `sbit` | `(sbit #*0110 1)` | Bit-vector element read; `(setf (sbit v i) b)` writes |
 | `bit` | `(bit #*0110 1)` | Bit-array element read; `(setf (bit v i) b)` writes |
 | `both-case-p` | `(both-case-p #\a)` | True for a cased letter (`lower-case-p` or `upper-case-p`) |
-| `special-operator-p` | `(special-operator-p 'if)` | Lite stub: always `nil` (no reified operator table) |
-| `macro-function` | `(macro-function 'when)` | Lite stub: always `nil` (macros are fully expanded at compile time) |
+| `special-operator-p` | `(special-operator-p 'if)` | `t` for the 25 ANSI special operators, `nil` for everything else |
+| `macro-function` | `(macro-function 'when)` | The macro expander (real on the interpreter, a signalling stub in compiled output), `nil` for a function or special operator |
 | `compiled-function-p` | `(compiled-function-p #'car)` | Lite stub: always `nil` |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | Lite stub: `(values nil t nil)` (no source recorded) |
 | `list-all-packages` | `(list-all-packages)` | Lite stub: always `nil` (no enumerable package tables) |

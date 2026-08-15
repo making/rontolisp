@@ -163,23 +163,62 @@ public final class LispPreludeLibrary {
 				(defun both-case-p (c)
 				  (or (lower-case-p c) (upper-case-p c)))
 				""");
+		// special-operator-p / macro-function partition the operators with no function
+		// value between them, from ONE definition each: the 25 ANSI special operators
+		// answer t here, everything else rontolisp expands (a cl macro, or a CL macro it
+		// implements as a special form of its own) answers a macro function below. Both
+		// tables are generated from PackageRegistry so they cannot drift from the
+		// expander they describe.
 		SOURCES.put(LispNames.SPECIAL_OPERATOR_P, """
-				(defun special-operator-p (symbol) nil)
-				""");
+				(defun special-operator-p (symbol)
+				  (if (member symbol '(%s)) t nil))
+				""".formatted(nameTable(PackageRegistry.ansiSpecialOperatorNames().stream().sorted().toList())));
+		// The compiled backends have no macro table left (every macro is expanded before
+		// a backend sees the program), so the answer is a NAME test against the baked
+		// table plus the program's own macro names -- UserMacroExpander overrides this
+		// defun with one passing them in. The interpreter never reaches it: it defines
+		// the real macro-function eagerly, over the expander table it still holds.
 		SOURCES.put(LispNames.MACRO_FUNCTION, """
-				(defun macro-function (symbol &optional environment) nil)
+				(defun macro-function (symbol &optional environment)
+				  (%macro-fn symbol nil))
 				""");
-		// A compiled image has no macro table, so a form built at RUNTIME is already its
-		// own expansion: these identity defuns are what let a portable code walker
-		// (ironclad's trivial-macroexpand-all) compile. A literal quoted argument never
-		// reaches them -- UserMacroExpander folds it to the real expansion at compile
-		// time -- and the interpreter defines the real functions eagerly, so the prelude
-		// only ever serves the compiled backends.
+		SOURCES.put(LispNames.MACRO_FN_INTERNAL, """
+				(defun %%macro-fn (symbol names)
+				  (if (or (member symbol names) (member symbol '(%s)))
+				      #'%%macro-expander-stub
+				      nil))
+				""".formatted(nameTable(PackageRegistry.runtimeMacroNames())));
+		// What macro-function answers with on the compiled backends: non-nil (which is
+		// all a caller deciding "can I apply this" reads) and a signal when CALLED,
+		// because the expander it stands for is gone.
+		SOURCES.put(LispNames.MACRO_EXPANDER_STUB, """
+				(defun %macro-expander-stub (form &optional environment)
+				  (error "macro-function: a compiled program cannot expand a macro at run time"))
+				""");
+		// A compiled image has no macro table, so a form built at RUNTIME that is not a
+		// macro call is already its own expansion: that identity answer is what lets a
+		// portable code walker (ironclad's trivial-macroexpand-all) compile. A literal
+		// quoted argument never reaches these -- UserMacroExpander folds it to the real
+		// expansion at compile time -- and the interpreter defines the real functions
+		// eagerly, so the prelude only ever serves the compiled backends.
+		//
+		// A form whose operator IS a macro signals instead of answering itself, and that
+		// is the same answer macro-function's expander stub gives: the two must agree,
+		// or the standard "expand until it stops expanding" loop (rove's form-steps)
+		// spins forever here -- macro-function keeps saying "macro" while an identity
+		// macroexpand-1 never makes progress. A signal is a wrong answer a caller can
+		// see and handle; silence is one it cannot.
 		SOURCES.put(LispNames.MACROEXPAND, """
-				(defun macroexpand (form &optional environment) (values form nil))
+				(defun macroexpand (form &optional environment)
+				  (if (and (consp form) (macro-function (car form)))
+				      (error "macroexpand: a compiled program cannot expand a macro at run time")
+				      (values form nil)))
 				""");
 		SOURCES.put(LispNames.MACROEXPAND_1, """
-				(defun macroexpand-1 (form &optional environment) (values form nil))
+				(defun macroexpand-1 (form &optional environment)
+				  (if (and (consp form) (macro-function (car form)))
+				      (error "macroexpand-1: a compiled program cannot expand a macro at run time")
+				      (values form nil)))
 				""");
 		SOURCES.put(LispNames.COMPILED_FUNCTION_P, """
 				(defun compiled-function-p (object) nil)
@@ -1262,6 +1301,14 @@ public final class LispPreludeLibrary {
 	// rontolisp: entry, bare EQUALP for a cl one (a bundled library source is a resolver
 	// fixed point, so its raw spelling IS the canonical one).
 	private static final Map<String, String> DEFINED_NAMES = new ConcurrentHashMap<>();
+
+	/**
+	 * A name set as the body of a quoted list literal, lowercased so the baked table
+	 * reads like source (the reader upcases it back).
+	 */
+	private static String nameTable(List<String> names) {
+		return String.join(" ", names).toLowerCase(java.util.Locale.ROOT);
+	}
 
 	private LispPreludeLibrary() {
 	}
