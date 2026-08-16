@@ -35,7 +35,7 @@ interpreter, JVM (`-o X.class`), and WASM `--component`:
 | `:cookie-jar` + `Set-Cookie` | OK |
 | `:want-stream t` | BROKEN when measured -- `.todo/400` is done since, re-probe |
 | `https://` | OK since 2026-08-16 (`.todo/399` done) -- via the cl+ssl shim over `rontolisp:tls-upgrade`; on `--component` too since `.todo/410` (wasi:tls@0.3.0-draft, `-S tls=y`), verified with `(dex:get "https://8.8.8.8/resolve?...")` against the spike tree -- an IP-literal URL, because hostname lookup is still `.todo/048`, and the target's certificate must carry an IP SAN |
-| 2nd..5th return values (status, headers, uri) | BROKEN -- `.todo/397` |
+| 2nd..5th return values (status, headers, uri) | BROKEN when measured -- `.todo/397` is done since, re-probe |
 
 WASM Preview 1 does not compile at all (`.todo/405`).
 
@@ -50,12 +50,17 @@ built-in fallback table.
 
 Blockers, in the order that unblocks the most:
 
-1. `.todo/397` -- `unwind-protect` cleanup clobbers the protected form's
+1. ~~`.todo/397` -- `unwind-protect` cleanup clobbers the protected form's
    secondary values, on ALL FOUR backends. This is the one that makes
    `(dex:get url)` answer only the body: dexador returns
    `(values body status headers uri stream)` through an `unwind-protect` whose
-   cleanup ends in `(values)`. Independent of dexador, and the most serious
-   finding of the spike.
+   cleanup ends in `(values)`.~~ **DONE (2026-08-16)**: the cleanup and the
+   protected form shared the one `%mv-spill` channel that carries the second
+   and later values; every backend now saves it across the cleanup and writes
+   it back, in the SHARED cleanup emitter, so the copies a `return-from` / `go`
+   inlines on the way out are covered too (`.kb/multiple-values.md`, ci-spec
+   `unwind-protect-values`). Left behind: `.todo/406` (`handler-case`'s
+   `:no-error` clause binds only its first variable).
 2. ~~`.todo/398` -- the babel/babel-encodings shim needs the decoding-MAPPING
    protocol~~ **DONE (2026-08-16)**: `lookup-mapping` /
    `code-point-counter` / `octet-counter` / `decoder` / `encoder` over
@@ -76,8 +81,15 @@ Blockers, in the order that unblocks the most:
    `system-relative-pathname` needed nothing -- it has worked on all four
    backends since todo-374 and is now pinned. `dexador.asd` itself now parses;
    `(ql:quickload "dexador")` reaches cl+ssl -> cffi, i.e. `.todo/399`.
-4. `.todo/402` -- the CL leftovers: `file-namestring`, the `nstring-*` case
-   family (chunga), and the environment-enquiry family.
+4. ~~`.todo/402` -- the CL leftovers: `file-namestring`, the `nstring-*` case
+   family (chunga), and the environment-enquiry family.~~
+   **DONE (2026-08-16)**: 15 functions, all as ONE prelude definition each, so
+   the four backends cannot drift. `file-namestring`/`directory-namestring` are
+   the two halves of a single split (they concatenate back to `namestring`);
+   the `nstring-*` family writes back in place; and the environment enquiries
+   are CONSTANTS that deliberately never read the host -- only `machine-type`
+   varies, by target ABI (`.kb/pathnames.md`,
+   `.kb/time-environment-builtins.md`).
 5. ~~`.todo/404` -- `uiop:symbol-call` has no compiler case, so dexador's
    backend dispatch cannot be compiled.~~ **DONE (2026-08-16)**: two halves.
    The operator now carries uiop's own Lisp definition beside the call-position
@@ -88,10 +100,18 @@ Blockers, in the order that unblocks the most:
    `ecase` over `*dexador-backend*` compiles and runs on all four backends,
    unreachable `:winhttp` arm and all (`ci-spec.yaml`
    `uiop-symbol-call-as-a-value`).
-6. `.todo/403` -- a run-time `(export 'pkg::name pkg)` does not publish a
+6. ~~`.todo/403` -- a run-time `(export 'pkg::name pkg)` does not publish a
    function under the `pkg:name` spelling. Not on dexador's own path (found
    while building the spike shims), but it breaks the common
-   `defun`-then-`export` idiom.
+   `defun`-then-`export` idiom.~~ **DONE (2026-08-16)**: `export` changes
+   ACCESSIBILITY, not symbol identity -- the resolver decided the canonical
+   spelling (i.e. the symbol) from the live external set, so a later `export`
+   silently rebound an already-defined name to a different symbol on all four
+   backends. The spelling oracle now reads the set as it stood when the first
+   directive touched the package (`.kb/packages.md`, ci-spec
+   `export-after-the-definitions`). Side effect: `mgl-pax:defsection`'s
+   autoexport resolves too, so an upstream that puts its section at the END of
+   the file works.
 
 Then the feature work:
 
