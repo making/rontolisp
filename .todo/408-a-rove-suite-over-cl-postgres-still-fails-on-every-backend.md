@@ -56,11 +56,12 @@ SBCL is the reference: `make test` there needs SBCL and Docker only, and is all
 | rontolisp JVM | 178 | 7 |
 | rontolisp WASI 0.3 component | 183 | 2 |
 
-The component is the best backend here, and by a distance -- but only up to
-`7f496c5b`. From `55af7714` on it traps with `cast failure` 166 assertions in and
-never reaches the end: `.todo/409`, bisected to that one commit. The numbers
-above are the component's at `7f496c5b`; the interpreter's and the JVM's are
-unchanged at HEAD.
+The component is the best backend here, and by a distance. It spent a stretch of
+commits trapping with `cast failure` 166 assertions in -- that was never a
+language bug: with too little GC-heap headroom wasmtime 47's copying collector
+loses a live reference during an exception unwind, and the `_start` pre-grow now
+scales with the program so the suite has the headroom
+(`.kb/wasm-gc-heap-pregrow.md`).
 
 ### Failing on all three -- `.todo/393`
 

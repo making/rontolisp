@@ -2,10 +2,17 @@
 
 **Invariant**: the first thing the emitted `_start` body does (both Preview 1 and the
 component core; NOT `--no-gc`, which has no GC heap) is allocate and immediately drop
-a `TYPE_STR_BYTES` byte array — `GC_HEAP_PREGROW_BYTES` (16 MiB) normally,
-`GC_HEAP_PREGROW_SERVE_BYTES` (1 MiB) in **serve** mode. Pinned by
-`WasmGcHeapPregrowTest` (both sizes, and that a serve core carries only the serve one);
-the emission site is Pass 2b in `WasmLispCompiler.compile`.
+a `TYPE_STR_BYTES` byte array. Its size **follows the program**
+(`WasmLispCompiler.gcHeapPregrowBytes`): `GC_HEAP_PREGROW_CODE_FACTOR` (16) times the
+emitted user-function bytes, clamped between `GC_HEAP_PREGROW_BYTES` (16 MiB, the floor
+a library-free program keeps) and `GC_HEAP_PREGROW_MAX_BYTES` (64 MiB) — except in
+**serve** mode, which always pre-grows `GC_HEAP_PREGROW_SERVE_BYTES` (1 MiB). Pinned by
+`WasmGcHeapPregrowTest` (the floor, the serve size, the clamp formula, and that a
+program carrying a stack's worth of code does NOT pre-grow only the floor); the emission
+site is Pass 2b in `WasmLispCompiler.compile`.
+
+**The size is a CORRECTNESS matter on wasmtime 47, not only a performance one** — see
+"the copying collector loses a reference" below before lowering any of these numbers.
 
 **Why**: wasmtime's copying (semispace) collector grows the heap only when a SINGLE
 allocation cannot fit in the space a collection frees
@@ -21,13 +28,57 @@ cl-postgres stack made the component leg 20.8 s instead of ~3 s. The heap never
 shrinks, so one large transient allocation at startup permanently buys the headroom
 the incremental path never asks for.
 
-**Cost, non-serve: none measurable.** The array is garbage before user code runs;
-steady-state and peak RSS of a hello-world module are unchanged (~35 MB either way --
-the pages of an untouched default-zero byte array are never committed), and V8
-discards the transient allocation with a minor GC. 16 MiB is ~4x the live set of the
-largest library stack shipped today (cl-postgres + deps, low single-digit MB); if
-stacks grow past that, raise the constant -- the sweep in todo-188 showed the benefit
-plateaus once headroom clears the live set by ~2x.
+**Cost, non-serve: none measurable at the floor.** The array is garbage before user
+code runs; steady-state and peak RSS of a hello-world module are unchanged (~35 MB
+either way -- the pages of an untouched default-zero byte array are never committed),
+and V8 discards the transient allocation with a minor GC. 16 MiB is ~4x the live set of
+a program that loads no library stack; the sweep in todo-188 showed the benefit plateaus
+once headroom clears the live set by ~2x. **Why the size is no longer a single
+constant**: the live set is not a property of the compiler, it is a property of what the
+program LOADS -- interned symbols, function wrappers, CLOS/defstruct metaobjects, class
+and dispatch tables all scale with the amount of code spliced in. 16 MiB covered
+cl-postgres alone (low single-digit MB); `rove` on top of it does not fit, and a
+program that pre-grows too little pays far more than slowness (below). Scaling off the
+emitted user code keeps a small program at exactly the old floor -- which matters for
+memory-capped hosts (a Cloudflare Worker reactor gets the floor, not 64 MiB) -- while a
+library stack gets headroom proportional to what it loaded. Measured on the biggest
+stack here (cl-postgres + rove, 3.3 MB of emitted defuns): a 26.5 MiB heap still
+collects, 32 MiB does not, i.e. ~9x the emitted code; the factor is 16 for the same ~2x
+margin the plateau above wants.
+
+## The copying collector loses a reference when the heap has no headroom (todo-409)
+
+On **wasmtime 47.0.3** the pre-grow is what keeps a large `--component` program
+CORRECT, not merely fast. With too little headroom the default **copying** collector
+loses a live GC reference: a boxed local's cell reads back as *another cell* rather than
+its value, so the next use of it traps uncatchably -- `close` on the stale value fails
+its `ref.cast (ref i31)` and the run dies with `wasm trap: cast failure`, with no
+condition any handler can see.
+
+What it took to establish that, and how to re-establish it if it comes back:
+
+- The reproduction is `.todo/408`'s cl-postgres-client rove suite compiled
+  `--component`. Symptom: 166 assertions pass, then the raw trap.
+- **The same module is green under `-C collector=drc`** (183 passed / 2 failed, the
+  `.todo/393` pair) and green under `-O gc-heap-initial-size=33554432`; it traps under
+  `-C collector=copying` (the default) with the stock heap. That pair of runs is the
+  whole diagnosis: same bytes, same program, collector-dependent behavior.
+- It is not the heap moving in the host address space (`-O gc-heap-may-move=n` still
+  traps) and not a Cranelift optimization (`-O opt-level=0` still traps).
+- It is not something the emitted module can be doing wrong: wasm-GC references cannot
+  be stored anywhere the collector does not trace (locals, globals, tables and GC
+  objects are all traced, and linear memory cannot hold a reference at all), so a
+  reference that survives a collection stale is the engine's to fix.
+- The failure always lands during a NON-LOCAL EXIT -- the value read wrong is a boxed
+  local of a frame whose `unwind-protect` cleanup is running while an exception is in
+  flight -- which is why it looks like a language bug and why it is so
+  layout-sensitive: whether a collection happens to land inside that window depends on
+  the allocation history, so adding one form anywhere in the program hides it.
+
+**Re-evaluation trigger**: when wasmtime fixes the copying collector (or rontolisp pins
+a version where the two runs above agree), the sizing goes back to being a pure
+performance knob and the factor can be re-tuned on the todo-188 benchmark alone. Until
+then, treat lowering the floor, the ceiling or the factor as a correctness change.
 
 ## Why serve is different (todo-259)
 
@@ -51,6 +102,15 @@ loop, `rps` (`Bench.java`); "native" = `rontolisp:http-handler` directly, "clack
 | **1 MiB**| 1708 | **5025** | **4719** | 4736 |
 | 4 MiB    |  617 | 4409 | 4235 | -    |
 | 16 MiB   |  154 | 3810 | 3702 | 4832 |
+
+**The correctness caveat above applies here too, and serve does not buy its way out
+of it**: a served component keeps the 1 MiB per-instance pre-grow whatever it loads, so
+a handler carrying a stack the size of cl-postgres + rove is exposed to the wasmtime 47
+copying-collector bug that the process-lifetime sizing avoids. Nothing measured has hit
+it yet (a served handler's live set is the same load-time environment, but its requests
+allocate far less than a test suite does between collections); if one does, the answer
+is not to raise the serve constant blindly -- re-run the sweep below with the handler's
+own stack, and weigh it against `-C collector=drc` on the host.
 
 1 MiB is the compromise the code ships: at the reuse count every real host uses it
 is the optimum (+30% native / +27% clack over 16 MiB), and on an instance that is

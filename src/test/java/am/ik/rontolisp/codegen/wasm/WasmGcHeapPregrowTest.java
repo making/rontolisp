@@ -86,6 +86,51 @@ class WasmGcHeapPregrowTest {
 			.isFalse();
 	}
 
+	/**
+	 * The size follows the program. wasmtime 47's copying collector does not merely slow
+	 * a program down when the heap has no headroom over the live set -- it loses a live
+	 * reference when it collects during an exception unwind (.kb/wasm-gc-heap-pregrow.md)
+	 * -- so a program that carries a library stack must pre-grow more than the floor a
+	 * library-free program does.
+	 */
+	@Test
+	void aProgramCarryingMuchCodePregrowsMoreThanTheFloor() {
+		byte[] module = new WasmLispCompiler().compile(LispReader.readAllFromString(manyDefuns(900)));
+		assertThat(containsSubsequence(module, pregrowPrologue(WasmLispCompiler.GC_HEAP_PREGROW_BYTES)))
+			.as("a program with a library stack's worth of code must not pre-grow only the floor")
+			.isFalse();
+	}
+
+	/**
+	 * The formula itself: the floor for a program with no code to speak of, linear in the
+	 * emitted code in between, the ceiling past that, and the per-instance constant for
+	 * serve whatever the program carries.
+	 */
+	@Test
+	void pregrowSizeIsClampedBetweenTheFloorAndTheCeiling() {
+		assertThat(WasmLispCompiler.gcHeapPregrowBytes(false, 0)).isEqualTo(WasmLispCompiler.GC_HEAP_PREGROW_BYTES);
+		assertThat(WasmLispCompiler.gcHeapPregrowBytes(false, 4L * 1024 * 1024))
+			.isEqualTo(4 * 1024 * 1024 * WasmLispCompiler.GC_HEAP_PREGROW_CODE_FACTOR);
+		assertThat(WasmLispCompiler.gcHeapPregrowBytes(false, 64L * 1024 * 1024))
+			.isEqualTo(WasmLispCompiler.GC_HEAP_PREGROW_MAX_BYTES);
+		assertThat(WasmLispCompiler.gcHeapPregrowBytes(true, 64L * 1024 * 1024))
+			.isEqualTo(WasmLispCompiler.GC_HEAP_PREGROW_SERVE_BYTES);
+	}
+
+	/** {@code count} defuns whose bodies are large enough to add up to a real stack. */
+	private static String manyDefuns(int count) {
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < count; i++) {
+			out.append("(defun f").append(i).append(" (a b) (list");
+			for (int j = 0; j < 12; j++) {
+				out.append(" (+ (* a ").append(j).append(") (- b ").append(j).append("))");
+			}
+			out.append("))\n");
+		}
+		out.append("(print (f0 1 2))\n");
+		return out.toString();
+	}
+
 	// The library splices a served handler needs, in the CLI's order (the subset
 	// WasmLispCompilerIntegrationTest.compileServeComponent uses; no Docker here --
 	// this only inspects the emitted bytes).

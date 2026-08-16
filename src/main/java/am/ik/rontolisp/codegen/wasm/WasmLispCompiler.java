@@ -1712,13 +1712,33 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int HEAP_PTR_ADDR = 84;
 
-	// Size of the transient _start-prologue allocation that forces the engine to grow
-	// its GC heap once, up front (see the emission site in compile() and
-	// .kb/wasm-gc-heap-pregrow.md). 16 MiB comfortably dwarfs the live set of the
-	// largest library stack shipped today (the cl-postgres stack is low single-digit
-	// MB); the array is garbage immediately, so the cost is a one-time zeroing plus
-	// the retained heap capacity, not a live copy on every collection.
+	// FLOOR for the transient _start-prologue allocation that forces the engine to grow
+	// its GC heap once, up front (see gcHeapPregrowBytes, the emission site in compile()
+	// and .kb/wasm-gc-heap-pregrow.md). 16 MiB dwarfs the live set of a program that
+	// loads no library stack at all; the array is garbage immediately, so the cost is a
+	// one-time zeroing plus the retained heap capacity, not a live copy on every
+	// collection.
 	static final int GC_HEAP_PREGROW_BYTES = 16 * 1024 * 1024;
+
+	// CEILING for the same allocation. Growth costs ~1.5 ms per MiB (first-touch page
+	// faults on the new semispace), so the headroom a very large program would ask for
+	// under the factor below is capped rather than paid in unbounded startup latency;
+	// 64 MiB is twice what the largest stack measured here (cl-postgres + rove) needs.
+	static final int GC_HEAP_PREGROW_MAX_BYTES = 64 * 1024 * 1024;
+
+	// How much heap headroom one byte of emitted user code is worth. The long-lived
+	// environment a library stack leaves behind -- interned symbols, function wrappers,
+	// CLOS/defstruct metaobjects, the class and dispatch tables -- scales with the
+	// amount of code loaded, and a copying collector needs roughly twice the live set as
+	// headroom before it stops collecting every few hundred KB. A fixed 16 MiB covered
+	// the biggest stack while that was cl-postgres alone; rove on top of it pushed the
+	// live set past what 16 MiB buys, and on wasmtime 47 that is not merely slow but
+	// WRONG -- the copying collector loses a live reference when it runs during an
+	// exception unwind (.kb/wasm-gc-heap-pregrow.md) -- so the size follows the program
+	// instead of being guessed once. Measured on that stack: 3.3 MB of emitted defuns
+	// still collects at a 26.5 MiB heap and stops at 32 MiB, i.e. ~9x; 16x leaves the
+	// same ~2x margin over the live set that the todo-188 sweep found the plateau at.
+	static final int GC_HEAP_PREGROW_CODE_FACTOR = 16;
 
 	// The serve-mode counterpart. A served component is instantiated MANY times over a
 	// process lifetime (wasmtime serve retires an instance after
@@ -3137,7 +3157,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (the host retires an instance every N requests), so it pre-grows a smaller
 		// heap. See .kb/wasm-gc-heap-pregrow.md.
 		startWriter.write(Instruction.I32_CONST);
-		startWriter.writeSignedLeb128(this.serve ? GC_HEAP_PREGROW_SERVE_BYTES : GC_HEAP_PREGROW_BYTES);
+		startWriter.writeSignedLeb128(gcHeapPregrowBytes(userFunctionBodies));
 		startWriter.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
 		startWriter.writeUnsignedLeb128(TYPE_STR_BYTES);
 		startWriter.write(Instruction.DROP);
@@ -6658,6 +6678,45 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param functionBoundary whether this is the {@code %fn-block} function boundary
 	 */
 	record BlockMarker(int depth, @Nullable String name, boolean catchesPlain, boolean functionBoundary) {
+	}
+
+	/**
+	 * The size of the {@code _start} GC-heap pre-grow allocation for this module.
+	 * <p>
+	 * A served component keeps the small per-instance constant. Everything else scales
+	 * with how much code the program carries -- the live set a library stack leaves
+	 * behind grows with it, and a copying collector that cannot clear the live set by a
+	 * wide margin collects every few hundred KB. The result is clamped between
+	 * {@link #GC_HEAP_PREGROW_BYTES} (a program with no libraries pre-grows exactly what
+	 * it always did) and {@link #GC_HEAP_PREGROW_MAX_BYTES}.
+	 * @param userFunctionBodies the emitted user function bodies so far (Pass 2a's
+	 * output; entries reserved for import wrappers are still {@code null} and count as
+	 * nothing)
+	 * @return the allocation size in bytes
+	 */
+	private int gcHeapPregrowBytes(List<byte[]> userFunctionBodies) {
+		long code = 0;
+		for (byte[] body : userFunctionBodies) {
+			if (body != null) {
+				code += body.length;
+			}
+		}
+		return gcHeapPregrowBytes(this.serve, code);
+	}
+
+	/**
+	 * The pre-grow size for a module carrying {@code codeBytes} of user code -- the
+	 * formula {@link #gcHeapPregrowBytes(List)} applies, exposed for the pinning test.
+	 * @param serve whether this is a served component (per-instance, latency-bound)
+	 * @param codeBytes the emitted user function bodies' total size
+	 * @return the allocation size in bytes
+	 */
+	static int gcHeapPregrowBytes(boolean serve, long codeBytes) {
+		if (serve) {
+			return GC_HEAP_PREGROW_SERVE_BYTES;
+		}
+		long scaled = codeBytes * GC_HEAP_PREGROW_CODE_FACTOR;
+		return (int) Math.max(GC_HEAP_PREGROW_BYTES, Math.min(GC_HEAP_PREGROW_MAX_BYTES, scaled));
 	}
 
 	/**
