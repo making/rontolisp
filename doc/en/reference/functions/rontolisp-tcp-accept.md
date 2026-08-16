@@ -34,7 +34,7 @@ program never blocks for long:
   `tcp-socket` handle from the `wasi:sockets@0.3.0` accept stream; in an async
   body a pending accept suspends only its own task, so other tasks (a
   `rontolisp:wait-for` timer, another request) keep running. Returns
-  `nil` if accepting fails. Compile error in Preview 1 (core-module) mode.
+  `nil` if accepting fails. Call-time error in Preview 1 (core-module) mode.
 - **Browser playground**: not supported.
 
 ## Limitations

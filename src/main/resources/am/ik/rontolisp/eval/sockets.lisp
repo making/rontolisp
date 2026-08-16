@@ -260,6 +260,18 @@
   (let ((addr (rontolisp::%sock-remote-address fd)))
     (if (consp addr) (getf (cdr addr) :PORT) nil)))
 
+(defun rontolisp:tcp-set-timeout (fd ms)
+  ;; A per-socket read deadline does not exist on this backend:
+  ;; wasi:sockets@0.3.0 exposes no receive-timeout knob and the stream reads
+  ;; are futures with no deadline argument. A LOUD refusal, never a silent
+  ;; no-op -- a timeout that never fires is the failure mode a client sets it
+  ;; to avoid. Catchable (EH mode is always on with sockets spliced), and dead
+  ;; code referencing it still compiles. Re-evaluate when the scheduler gains
+  ;; a future-race/deadline primitive (the timer future exists; racing it
+  ;; against a read does not).
+  (error
+   "tcp-set-timeout: no read deadline exists on the WASM component backend (wasi:sockets has no timeout knob); do not set a read timeout here"))
+
 ;;; --- buffered reads (chunked; the %...-future internals are async-defuns so an
 ;;; async body's promoted read suspends instead of blocking the task). A chunk
 ;;; is a packed (unsigned-byte 8) vector holding exactly the bytes the host

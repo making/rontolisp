@@ -327,6 +327,19 @@ class WasmLispCompilerTest {
 		assertThat(compile("(rontolisp:tcp-listen 7777)")).isNotEmpty();
 		assertThat(compile("(rontolisp:tcp-accept 0)")).isNotEmpty();
 		assertThat(compile("(rontolisp:tcp-local-port 0)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-set-timeout 200 1000)")).isNotEmpty();
+	}
+
+	@Test
+	void listenInPreview1ModeIsACallTimeError() {
+		// listen was a COMPILE error on Preview 1 until the usocket shim grew
+		// wait-for-input (a listen-based poll): the shim is spliced unpruned into
+		// every usocket program, so its listen call site is dead code that must
+		// still build -- the same todo-195 policy as the tcp built-ins above. A
+		// program that actually calls it gets the old message at CALL time
+		// (catchable under EH mode); the real Preview 1 probe decision stays with
+		// its own todo.
+		assertThat(compile("(listen 5)")).isNotEmpty();
 	}
 
 	@Test
@@ -344,6 +357,9 @@ class WasmLispCompilerTest {
 				""")).isNotEmpty();
 		// tcp-listen without a host (bind all interfaces) compiles too
 		assertThat(compileComponent("(rontolisp:tcp-listen 7777)")).isNotEmpty();
+		// tcp-set-timeout resolves against its sockets.lisp defun (which SIGNALS at
+		// run time: wasi:sockets has no read-deadline knob -- .kb/tcp-sockets.md)
+		assertThat(compileComponent("(rontolisp:tcp-set-timeout 200 1000)")).isNotEmpty();
 	}
 
 	@Test
@@ -430,10 +446,12 @@ class WasmLispCompilerTest {
 	}
 
 	// The CLI order for a usocket component program: the usocket shim, then the
+	// wait.lisp splice its wait-for-input's sleep resolves against, then the
 	// sockets.lisp splice its tcp-* calls resolve against, then the wit runtime the
 	// binding wrappers reference.
 	private static List<LispVal> compileChainForUsocket(String source) {
 		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString(source));
+		program = am.ik.rontolisp.eval.WaitForLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
 		return WitLibrary.process(program);

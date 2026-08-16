@@ -336,9 +336,9 @@ public final class PackageRegistry {
 	 * on, by their qualified names).
 	 */
 	private static final Set<String> USOCKET_FUNCTIONS = Set.of(LispNames.USOCKET_SOCKET_CONNECT, "SOCKET-LISTEN",
-			"SOCKET-ACCEPT", "SOCKET-CLOSE", "SOCKET-STREAM", "GET-LOCAL-PORT", "GET-LOCAL-ADDRESS", "GET-LOCAL-NAME",
-			"GET-PEER-PORT", "GET-PEER-ADDRESS", "GET-PEER-NAME", LispNames.USOCKET_HOST_TO_HOSTNAME,
-			LispNames.USOCKET_GET_HOST_BY_NAME);
+			"SOCKET-ACCEPT", "SOCKET-CLOSE", "SOCKET-STREAM", "SOCKET-OPTION", "WAIT-FOR-INPUT", "GET-LOCAL-PORT",
+			"GET-LOCAL-ADDRESS", "GET-LOCAL-NAME", "GET-PEER-PORT", "GET-PEER-ADDRESS", "GET-PEER-NAME",
+			LispNames.USOCKET_HOST_TO_HOSTNAME, LispNames.USOCKET_GET_HOST_BY_NAME);
 
 	/**
 	 * The macros exported by the {@code usocket} package: built-in
@@ -493,10 +493,10 @@ public final class PackageRegistry {
 				LispNames.MAKE_MUTEX, LispNames.MUTEX_ACQUIRE, LispNames.MUTEX_RELEASE, LispNames.WITH_MUTEX,
 				LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT,
 				LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
-				LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
-				LispNames.TLS_LISTEN_P12, LispNames.TLS_UPGRADE, LispNames.RANDOM_BYTES, LispNames.MAKE_THREAD,
-				LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
-				LispNames.CURRENT_THREAD,
+				LispNames.TCP_PEER_PORT, LispNames.TCP_SET_TIMEOUT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN,
+				LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12, LispNames.TLS_UPGRADE, LispNames.RANDOM_BYTES,
+				LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P,
+				LispNames.DESTROY_THREAD, LispNames.CURRENT_THREAD,
 				// Read-time source literals (reader.LispReader), not functions.
 				LispNames.CURRENT_FILE, LispNames.CURRENT_LINE,
 				// rontolisp's own Gray-stream extension

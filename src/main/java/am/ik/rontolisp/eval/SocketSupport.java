@@ -357,6 +357,25 @@ final class SocketSupport {
 	}
 
 	/**
+	 * Sets the read deadline of a connected socket ({@code SO_TIMEOUT}): every subsequent
+	 * blocking read signals after {@code milliseconds} without data. Zero clears the
+	 * deadline (blocking reads wait indefinitely again). The deadline lives on the raw
+	 * socket, so it keeps governing a connection later upgraded with {@code tls-upgrade}
+	 * (the wrapping {@code SSLSocket} reads through the same transport).
+	 * @param socket the connected socket
+	 * @param milliseconds the deadline in milliseconds, or 0 to clear it
+	 * @throws LispEvalException if the socket rejects the option (e.g. already closed)
+	 */
+	static void setTimeout(Socket socket, int milliseconds) {
+		try {
+			socket.setSoTimeout(milliseconds);
+		}
+		catch (java.net.SocketException ex) {
+			throw new LispEvalException("tcp-set-timeout: " + ex.getMessage());
+		}
+	}
+
+	/**
 	 * Returns the local port bound to a socket or listener handle, or {@code -1} for any
 	 * other stream entry.
 	 * @param entry a stream-table entry

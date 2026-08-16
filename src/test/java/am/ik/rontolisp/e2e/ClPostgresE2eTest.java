@@ -58,9 +58,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ol>
  *
  * WASM Preview 1 is the fourth backend and is deliberately absent from all three: TCP is
- * a compile error there by design ({@code .kb/tcp-sockets.md}), which
- * {@link #failsToCompileOnWasmPreview1()} pins so the gap stays a checked statement
- * rather than an untested claim.
+ * a CALL-time error there by design ({@code .kb/tcp-sockets.md} -- the module compiles,
+ * per the todo-195 spliced-dead-code policy, and the first socket call raises), which
+ * {@link #preview1ModuleCompilesAndFailsLoudlyAtTheFirstSocketCall(Path)} pins so the gap
+ * stays a checked statement rather than an untested claim.
  *
  * <p>
  * Unlike the other library E2Es this one drives the real CLI in a subprocess rather than
@@ -301,24 +302,26 @@ class ClPostgresE2eTest {
 	}
 
 	@Test
-	void failsToCompileOnWasmPreview1(@TempDir Path workDir) throws Exception {
-		// The documented fourth-backend gap: Preview 1 has no host socket API, so the
-		// driver is a compile error there -- a loud one naming the built-in it cannot
-		// lower and the backends that do work, not a module that fails at run time.
+	void preview1ModuleCompilesAndFailsLoudlyAtTheFirstSocketCall(@TempDir Path workDir) throws Exception {
+		// The documented fourth-backend gap: Preview 1 has no host socket API. Since
+		// the usocket shim grew wait-for-input (a listen-based poll spliced unpruned
+		// into every usocket program), `listen` joined the tcp built-ins on the
+		// todo-195 CALL-time policy -- so the driver now COMPILES here like any other
+		// spliced-socket program and the refusal moved to run time: the first socket
+		// call raises the message naming the built-in and the backends that do work.
+		// The real Preview 1 probe decision stays with its own todo.
 		//
-		// WHICH built-in is named is deliberately not pinned: the driver trips two
-		// separate Preview 1 gaps (tcp-connect, and listen's non-blocking input probe)
-		// and the one reported is whichever the compiler reaches first, which is a
-		// compile-order fact rather than a contract. Pinning `listen` here would break on
-		// any reordering; pinning TCP-CONNECT did break, silently, while the class was
-		// still opt-in.
+		// WHICH built-in is named is deliberately not pinned as a single name: the
+		// driver trips several Preview 1 gaps and the one reported is whichever the
+		// run reaches first, a call-order fact rather than a contract.
 		Path program = writeExercise(workDir, authLadder("127.0.0.1", 5432));
-		Result result = run(workDir, JAVA, "-cp", CLASSPATH, "am.ik.rontolisp.cli.RontoLispCli",
-				program.getFileName().toString(), "-o", "probe-p1.wasm");
-		assertThat(result.exitCode()).as("%s", result).isNotZero();
-		assertThat(result.err()).as("%s", result)
+		runCli(workDir, program.getFileName().toString(), "-o", "probe-p1.wasm");
+		String path = "/tmp/" + workDir.getFileName() + ".p1.wasm";
+		WASMTIME.copyFileToContainer(Transferable.of(Files.readAllBytes(workDir.resolve("probe-p1.wasm"))), path);
+		ExecResult result = WASMTIME.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path);
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isNotZero();
+		assertThat(result.getStderr() + result.getStdout()).as("stderr: %s", result.getStderr())
 			.containsPattern("(TCP-CONNECT|listen) requires the interpreter, the JVM backend or");
-		assertThat(workDir.resolve("probe-p1.wasm")).doesNotExist();
 	}
 
 	private static String authLadder(String host, int port) {

@@ -3,12 +3,21 @@
 Difficulty: High
 
 Found by the dexador spike (`.todo/396`). Compiling a dexador program to
-Preview 1 stops at the frontend:
+Preview 1 used to stop at the frontend:
 
 ```
 error: listen requires the interpreter, the JVM backend or a --component
        socket stream (no non-blocking input probe exists on this WASM target)
 ```
+
+**Update (2026-08-16, todo-114):** the compile error became a CALL-time error
+(same message, raised when the call runs) -- the usocket shim's new
+`wait-for-input` carries a `listen` call site spliced unpruned into every
+usocket program, so it had to build as dead code (the todo-195 policy, the
+same transition tcp-connect made). That moves the refusal, it does NOT decide
+this item: options 1-3 below are all still open, and option 1 should be
+costed together with `.todo/415`'s future-race primitive (polling a read
+future's settled state is the same machinery).
 
 Interpreter, JVM and WASM `--component` all run the program; Preview 1 is the
 only backend that cannot, which breaks the "all four backends" rule

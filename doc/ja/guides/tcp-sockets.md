@@ -32,8 +32,8 @@
 > **バックエンドのサポート。** インタプリタとJVMコンパイル済みクラスはJDKの
 > ソケットクラスを使い、ホスト名とIPリテラルの両方を受け付けます。WASM
 > バックエンドは **componentモード専用** です (`--component`、
-> `wasi:sockets@0.3.0` 経由): tcp関数はPreview 1 (コアモジュール) モードでは
-> コンパイルエラーになり、ホストはIPv4リテラルでなければならず、component
+> `wasi:sockets@0.3.0` 経由): tcp関数はPreview 1 (コアモジュール) モードでも
+> コンパイルは通りますが呼び出し時エラーになり、ホストはIPv4リテラルでなければならず、component
 > は通常のフラグに加えて `-W exceptions=y -S tcp=y -S inherit-network=y` を
 > 付けて実行する必要があります (tcp componentは常にexception-handlingモードで
 > コンパイルされます)。tcp関数と
@@ -757,10 +757,26 @@ rontolisp のソケットはストリームハンドルそのものなので、�
   再通知は常に `socket-error` を使います(そちらを捕捉してください)。WASM
   コンポーネントバックエンドでは connect/accept の失敗はシグナルせず `nil`
   ハンドルを返すため、そこでは `handler-case` パターンには捕捉対象がありません
-  (代わりにハンドルの `nil` を判定してください)。`wait-for-input` 的な
-  コンディション処理は存在しません。
-- **`wait-for-input` と `socket-server` は存在しません**(読み込みは
-  ブロックします。accept ループは自分で書いてください)。
+  (代わりにハンドルの `nil` を判定してください)。
+- **`socket-option` は `:receive-timeout` のみをサポートします。**
+  `(setf (usocket:socket-option sock :receive-timeout) seconds)` は
+  インタープリタと JVM では実際のソケット単位の読み取りデッドラインを設定します
+  ([`rontolisp:tcp-set-timeout`](../reference/functions/rontolisp-tcp-set-timeout.md)
+  経由)。タイムアウトした読み取りは `usocket:timeout-error` ではなく通常の
+  捕捉可能な `error` を通知し、ゲッターは設定した秒数を読み返せます。WASM
+  バックエンドでは、決して発火しないタイムアウトを黙って据え付ける代わりに、
+  書き込み自体がエラーを通知します。その他のオプションは黙って無視される
+  ことなくエラーを通知します。
+- **`wait-for-input` は `listen` ベースのポーリングです**: インタープリタと
+  JVM では本物の待機です(`listen` がカーネルの受信バッファに問い合わせ、
+  データが届くか `:timeout` が経過するまで 10 ms ごとにポーリングします。
+  `:ready-only` も動作します)。WASM バックエンドでは、何もバッファされて
+  いないときは即座に「読み取り可能」を主張して戻ります — どのみち読み取りは
+  ブロックするため、よくある wait してから read するループは同じように
+  振る舞いますが、`:timeout` によるポーリングはそこでは守れません。
+  ストリームソケット限定で(リストにリスナーがあるとエラーを通知します)、
+  wait-list オブジェクトは存在しません。
+- **`socket-server` は存在しません**(accept ループは自分で書いてください)。
 - **`with-*` マクロはインタープリタと JVM ではあらゆる脱出時にソケットを
   閉じます**([`unwind-protect`](../reference/special-forms/unwind-protect.md)
   に展開されます)。これは WASM コンポーネントバックエンドでも成り立ちます

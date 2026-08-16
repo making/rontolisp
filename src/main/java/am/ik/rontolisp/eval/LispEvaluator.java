@@ -5864,6 +5864,7 @@ public final class LispEvaluator {
 	 */
 	public LispVal expandSetfMaybeUserExpander(LispCons cons) {
 		ensureUiopSetfPlaceLoaded(cons);
+		ensureUsocketSetfPlaceLoaded(cons);
 		if (this.setfExpanders.isEmpty()) {
 			return LispMacroExpander.expandSetf(cons, this.structAccessors, this.closRegistry);
 		}
@@ -5907,6 +5908,29 @@ public final class LispEvaluator {
 			if (parts.get(i) instanceof LispCons place && place.car() instanceof LispSymbol accessor
 					&& !this.structAccessors.containsKey(accessor.name()) && UiopLibrary.definesName(accessor.name())) {
 				loadUiopDefinition(accessor.name());
+			}
+		}
+	}
+
+	/**
+	 * The usocket twin of {@link #ensureUiopSetfPlaceLoaded}: the shim's
+	 * {@code (defun (setf usocket:socket-option) ...)} registers its place only when
+	 * {@code usocket.lisp} loads, and a program whose first usocket touch is the write
+	 * ({@code (setf (usocket:socket-option s :receive-timeout) n)} -- dexador's read
+	 * timeout) would otherwise expand against an empty registry.
+	 * @param cons the setf form, whose place heads are inspected
+	 */
+	private void ensureUsocketSetfPlaceLoaded(LispCons cons) {
+		if (this.usocketLibraryLoaded || !cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispCons place && place.car() instanceof LispSymbol accessor
+					&& !this.structAccessors.containsKey(accessor.name())
+					&& UsocketLibrary.isUsocketQualified(accessor.name())) {
+				ensureUsocketLoaded();
+				return;
 			}
 		}
 	}

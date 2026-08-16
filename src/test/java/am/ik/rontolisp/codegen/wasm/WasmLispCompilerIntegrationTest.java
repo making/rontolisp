@@ -10894,7 +10894,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TCP-SET-TIMEOUT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("NIL");
 	}
 
@@ -11776,21 +11776,65 @@ class WasmLispCompilerIntegrationTest {
 				    (usocket:socket-close client)
 				    (usocket:socket-close listener)))
 				""";
-		List<LispVal> spliced = am.ik.rontolisp.eval.WitLibrary
-			.process(
-					am.ik.rontolisp.eval.StdinLibrary
-						.process(
-								am.ik.rontolisp.eval.SocketsLibrary.process(
+		List<LispVal> spliced = am.ik.rontolisp.eval.WitLibrary.process(
+				am.ik.rontolisp.eval.StdinLibrary.process(
+						am.ik.rontolisp.eval.SocketsLibrary.process(
+								am.ik.rontolisp.eval.WaitForLibrary.process(
 										am.ik.rontolisp.eval.UsocketLibrary
 											.process(LispReader.readAllFromString(program)),
 										am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
-								am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
+								am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
+						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(spliced);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/usocket-echo.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"tcp=y", "-S", "inherit-network=y", "/tmp/usocket-echo.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\n\"127.0.0.1\"");
+	}
+
+	@Test
+	void componentUsocketSocketOptionRefusesAndWaitForInputClaimsReadiness() throws Exception {
+		// The two todo-114 decisions on this backend (.kb/tcp-sockets.md): a
+		// :receive-timeout write SIGNALS loudly and catchably (wasi:sockets has no
+		// read deadline; a timeout that never fires is worse than an error, so the
+		// refusal leaves no bookkeeping behind), and wait-for-input returns
+		// immediately claiming readiness (reads block anyway, so the wait-then-read
+		// loop behaves like the interpreter/JVM; a listen poll would spin forever on
+		// data waiting host-side).
+		String program = """
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port)))
+				  (print (handler-case (setf (usocket:socket-option client :receive-timeout) 0.2)
+				           (error (e) :refused)))
+				  (print (usocket:socket-option client :receive-timeout))
+				  (let ((server (usocket:socket-accept listener)))
+				    (multiple-value-bind (ready remaining)
+				        (usocket:wait-for-input (list client) :timeout 5 :ready-only t)
+				      (print (if ready :claimed :not-ready)))
+				    (print (eql (usocket:wait-for-input client) client))
+				    (write-line "ping" server)
+				    (print (read-line client))
+				    (usocket:socket-close server))
+				  (usocket:socket-close client)
+				  (usocket:socket-close listener))
+				""";
+		List<LispVal> spliced = am.ik.rontolisp.eval.WitLibrary.process(
+				am.ik.rontolisp.eval.StdinLibrary.process(
+						am.ik.rontolisp.eval.SocketsLibrary.process(
+								am.ik.rontolisp.eval.WaitForLibrary.process(
+										am.ik.rontolisp.eval.UsocketLibrary
+											.process(LispReader.readAllFromString(program)),
+										am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
+								am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
+						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(spliced);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/usocket-option.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "/tmp/usocket-option.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo(":REFUSED\nNIL\n:CLAIMED\nT\n\"ping\"");
 	}
 
 	@Test

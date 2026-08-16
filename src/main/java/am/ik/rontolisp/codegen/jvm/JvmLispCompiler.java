@@ -597,6 +597,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_ADDRESS))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_PORT))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_SET_TIMEOUT))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_UPGRADE))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN))
@@ -664,6 +666,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant tcpPeerPortHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_PORT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_PORT_DESC)))
+				: null;
+		MethodrefConstant tcpSetTimeoutHelperMethod = usesSockets ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_SET_TIMEOUT_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_SET_TIMEOUT_DESC)))
 				: null;
 		MethodrefConstant tlsConnectHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_CONNECT_METHOD),
@@ -1196,6 +1202,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.tcpLocalAddressHelper(tcpLocalAddressHelperMethod)
 			.tcpPeerAddressHelper(tcpPeerAddressHelperMethod)
 			.tcpPeerPortHelper(tcpPeerPortHelperMethod)
+			.tcpSetTimeoutHelper(tcpSetTimeoutHelperMethod)
 			.tlsConnectHelper(tlsConnectHelperMethod)
 			.tlsUpgradeHelper(tlsUpgradeHelperMethod)
 			.tlsListenHelper(tlsListenHelperMethod)
@@ -3866,6 +3873,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant tcpPeerPortHelper;
 
+		final @Nullable MethodrefConstant tcpSetTimeoutHelper;
+
 		final @Nullable MethodrefConstant tlsConnectHelper;
 
 		final @Nullable MethodrefConstant tlsUpgradeHelper;
@@ -4329,6 +4338,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tcpLocalAddressHelper = builder.tcpLocalAddressHelper;
 			this.tcpPeerAddressHelper = builder.tcpPeerAddressHelper;
 			this.tcpPeerPortHelper = builder.tcpPeerPortHelper;
+			this.tcpSetTimeoutHelper = builder.tcpSetTimeoutHelper;
 			this.tlsConnectHelper = builder.tlsConnectHelper;
 			this.tlsUpgradeHelper = builder.tlsUpgradeHelper;
 			this.tlsListenHelper = builder.tlsListenHelper;
@@ -4468,6 +4478,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant tcpPeerAddressHelper;
 
 			private @Nullable MethodrefConstant tcpPeerPortHelper;
+
+			private @Nullable MethodrefConstant tcpSetTimeoutHelper;
 
 			private @Nullable MethodrefConstant tlsConnectHelper;
 
@@ -4801,6 +4813,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder tcpPeerPortHelper(@Nullable MethodrefConstant tcpPeerPortHelper) {
 				this.tcpPeerPortHelper = tcpPeerPortHelper;
+				return this;
+			}
+
+			Builder tcpSetTimeoutHelper(@Nullable MethodrefConstant tcpSetTimeoutHelper) {
+				this.tcpSetTimeoutHelper = tcpSetTimeoutHelper;
 				return this;
 			}
 

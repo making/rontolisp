@@ -64,6 +64,11 @@ final class Target_SocketSupport {
 	}
 
 	@Substitute
+	static void setTimeout(Socket socket, int milliseconds) {
+		throw new LispEvalException("tcp-set-timeout: TCP sockets are not supported in the browser playground");
+	}
+
+	@Substitute
 	static long localPort(Closeable entry) {
 		return -1;
 	}

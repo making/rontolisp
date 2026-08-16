@@ -6839,7 +6839,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TCP-SET-TIMEOUT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -6883,7 +6883,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TCP-SET-TIMEOUT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -7410,6 +7410,75 @@ class LispEvaluatorTest {
 				    (list addr (= p port))))
 				""";
 		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" T)");
+	}
+
+	@Test
+	void usocketSocketOptionReceiveTimeoutIsARealReadDeadline() {
+		// (setf (usocket:socket-option s :receive-timeout) seconds) is the portable
+		// usocket read-timeout spelling (dexador sets it on every connection). It
+		// rides rontolisp:tcp-set-timeout (SO_TIMEOUT), and the deadline FIRES: a
+		// read on a silent peer signals a catchable error instead of blocking
+		// forever. The getter reads the set seconds back, nil clears the deadline,
+		// and any other option signals loudly (never accept-and-ignore --
+		// .kb/tcp-sockets.md).
+		String program = """
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port)))
+				  (setf (usocket:socket-option client :receive-timeout) 0.2)
+				  (let ((result (list (usocket:socket-option client :receive-timeout)
+				                      (handler-case (progn (read-line client) :read)
+				                        (error (e) :timed-out))
+				                      (progn
+				                        (setf (usocket:socket-option client :receive-timeout) nil)
+				                        (usocket:socket-option client :receive-timeout))
+				                      (handler-case (setf (usocket:socket-option client :tcp-nodelay) t)
+				                        (error (e) :unsupported)))))
+				    (usocket:socket-close client)
+				    (usocket:socket-close listener)
+				    result))
+				""";
+		assertThat(eval(program).print()).isEqualTo("(0.2 :TIMED-OUT NIL :UNSUPPORTED)");
+	}
+
+	@Test
+	void usocketSetfSocketOptionAsTheFirstReferenceLoadsLibraryAndSignalsTyped() {
+		// The program's FIRST usocket touch is the setf place write: the
+		// ensureUsocketSetfPlaceLoaded hook must load the shim before the place
+		// expands. A non-socket handle fails inside the %usock-guard, so the
+		// failure is a typed usocket:socket-error.
+		assertThat(eval("""
+				(handler-case (setf (usocket:socket-option 999 :receive-timeout) 1)
+				  (usocket:socket-error (e) :no-such-socket))
+				""").print()).isEqualTo(":NO-SUCH-SOCKET");
+	}
+
+	@Test
+	void usocketWaitForInputPollsThroughListen() {
+		// A REAL wait on this backend: listen probes the kernel receive buffer, so
+		// an empty socket polls to its timeout (nil with :ready-only) and a socket
+		// with data comes back ready with time remaining. Without :ready-only the
+		// original argument is returned, as upstream documents.
+		String program = """
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port))
+				       (server (usocket:socket-accept listener)))
+				  (let ((empty (usocket:wait-for-input (list client) :timeout 0 :ready-only t)))
+				    (write-line "ping" server)
+				    (multiple-value-bind (ready remaining)
+				        (usocket:wait-for-input (list client) :timeout 5 :ready-only t)
+				      (let ((result (list empty
+				                          (equal ready (list client))
+				                          (if remaining t nil)
+				                          (eql (usocket:wait-for-input client :timeout 1) client)
+				                          (read-line client))))
+				        (usocket:socket-close server)
+				        (usocket:socket-close client)
+				        (usocket:socket-close listener)
+				        result))))
+				""";
+		assertThat(eval(program).print()).isEqualTo("(NIL T T T \"ping\")");
 	}
 
 	@Test

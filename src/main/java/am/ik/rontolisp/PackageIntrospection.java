@@ -22,9 +22,10 @@ public final class PackageIntrospection {
 			LispNames.MUTEX_ACQUIRE, LispNames.MUTEX_RELEASE, LispNames.QUERY_PARAM, LispNames.QUERY_PARAMS,
 			LispNames.RANDOM_BYTES, LispNames.TCP_ACCEPT, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN,
 			LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_LOCAL_PORT, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT,
-			LispNames.THEN, LispNames.THEN_STAR, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
-			LispNames.TLS_UPGRADE, LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.URL_PATH, LispNames.URL_QUERY,
-			LispNames.VERSION, LispNames.WIT_ERROR_PAYLOAD, LispNames.WIT_PROVIDE);
+			LispNames.TCP_SET_TIMEOUT, LispNames.THEN, LispNames.THEN_STAR, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN,
+			LispNames.TLS_LISTEN_PEM, LispNames.TLS_UPGRADE, LispNames.URL_DECODE, LispNames.URL_ENCODE,
+			LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.VERSION, LispNames.WIT_ERROR_PAYLOAD,
+			LispNames.WIT_PROVIDE);
 
 	/**
 	 * The functions owned by the {@code java} interop package, sorted alphabetically.

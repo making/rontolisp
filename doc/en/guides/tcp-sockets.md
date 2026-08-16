@@ -34,7 +34,8 @@ take a socket; render with `(format nil ...)` and send the result with
 > **Backend support.** The interpreter and JVM-compiled classes use the JDK
 > socket classes and accept hostnames or IP literals. The WASM backend is
 > **component-only** (`--component`, over `wasi:sockets@0.3.0`): the tcp
-> functions are a compile error in Preview 1 (core-module) mode, hosts must be
+> functions compile in Preview 1 (core-module) mode but raise call-time
+> errors, hosts must be
 > IPv4 literals, and the component must run with `-W exceptions=y -S tcp=y
 > -S inherit-network=y` on top of the usual flags (a tcp component always
 > compiles in exception-handling mode). Combining the tcp functions with
@@ -754,10 +755,23 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
   the re-signal always uses `socket-error` (catch that). On the WASM
   component backend a failed connect/accept yields a `nil` handle instead of
   signaling, so the `handler-case` pattern has nothing to catch there (test
-  the handle for `nil` instead); `wait-for-input`-style condition handling
-  does not exist.
-- **`wait-for-input` and `socket-server` do not exist** (reads block; write
-  your own accept loop).
+  the handle for `nil` instead).
+- **`socket-option` supports `:receive-timeout` only.**
+  `(setf (usocket:socket-option sock :receive-timeout) seconds)` sets a real
+  per-socket read deadline on the interpreter and the JVM (via
+  [`rontolisp:tcp-set-timeout`](../reference/functions/rontolisp-tcp-set-timeout.md));
+  a timed-out read signals an ordinary catchable `error`, not
+  `usocket:timeout-error`, and the getter reads the set seconds back. On the
+  WASM backends the write SIGNALS instead of installing a timeout that never
+  fires. Every other option signals rather than being silently ignored.
+- **`wait-for-input` is a `listen`-based poll**: on the interpreter and the
+  JVM the wait is real (`listen` asks the kernel receive buffer, polled every
+  10 ms until data arrives or `:timeout` elapses; `:ready-only` works). On
+  the WASM backends it returns immediately claiming readiness when nothing is
+  buffered — reads block anyway, so the common wait-then-read loop behaves
+  identically, but a `:timeout` poll cannot be honoured there. Stream sockets
+  only (a listener in the list signals), and wait-list objects do not exist.
+- **`socket-server` does not exist** (write your own accept loop).
 - **The `with-*` macros close the socket on every exit** on the interpreter
   and the JVM (they expand over
   [`unwind-protect`](../reference/special-forms/unwind-protect.md)); this

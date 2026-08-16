@@ -5071,6 +5071,30 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(port);
 		}));
+		// (tcp-set-timeout handle milliseconds): a per-socket read deadline
+		// (SO_TIMEOUT). Milliseconds is a non-negative integer like rontolisp:wait-for;
+		// nil clears the deadline. Listener handles are deliberately not accepted (the
+		// deadline is a READ deadline; an accept deadline has no consumer).
+		String tcpSetTimeoutName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_SET_TIMEOUT);
+		env.defineFunction(tcpSetTimeoutName, new LispFunction(tcpSetTimeoutName, args -> {
+			requireArgCount(LispNames.TCP_SET_TIMEOUT, args, 2);
+			if (!(args.get(0) instanceof LispInteger handle)
+					|| !(streams.get(handle.value()) instanceof Socket socket)) {
+				throw new LispEvalException(
+						LispNames.TCP_SET_TIMEOUT + " expects a connected socket handle, got: " + args.get(0).print());
+			}
+			LispVal ms = args.get(1);
+			if (ms instanceof LispNil) {
+				SocketSupport.setTimeout(socket, 0);
+				return LispNil.INSTANCE;
+			}
+			if (!(ms instanceof LispInteger millis) || millis.value() < 0) {
+				throw new LispEvalException(LispNames.TCP_SET_TIMEOUT
+						+ " expects a non-negative integer (milliseconds) or nil, got: " + ms.print());
+			}
+			SocketSupport.setTimeout(socket, (int) Math.min(millis.value(), Integer.MAX_VALUE));
+			return millis;
+		}));
 		// One datum out of a runtime-read line. With the evaluator's #. resolver
 		// installed, a datum textually containing #. is read in marker mode and the
 		// resolver evaluates each marker in place -- CL's read under a true *read-eval*

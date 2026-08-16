@@ -29,6 +29,6 @@ It also works on a connected socket handle, where it reports the local
   `java.net.ServerSocket` / `Socket`. A handle that is not a socket or
   listener signals an error (interpreter) or fails with a cast error (JVM).
 - **WASM**: component-only, via `wasi:sockets`' `get-local-address`; returns
-  `nil` for a handle that is not a socket or listener. Compile error in
-  Preview 1 (core-module) mode.
+  `nil` for a handle that is not a socket or listener. Call-time error in
+  Preview 1 (core-module) mode, like every tcp built-in.
 - **Browser playground**: not supported.

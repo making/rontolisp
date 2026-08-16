@@ -142,8 +142,16 @@ Then the feature work:
 9. `.todo/405` -- WASM Preview 1 has no non-blocking input probe, so `listen`
    is a compile error and dexador cannot target it.
 
-`usocket:socket-option` (dexador sets `:receive-timeout` with it) is a usocket
-shim gap and is tracked in `.todo/114`, not here.
+~~`usocket:socket-option` (dexador sets `:receive-timeout` with it) is a
+usocket shim gap and is tracked in `.todo/114`, not here.~~ **DONE
+(2026-08-16, todo-114)**: the `(setf (usocket:socket-option s
+:receive-timeout) secs)` place exists and is a REAL `SO_TIMEOUT` deadline on
+the interpreter/JVM (`rontolisp:tcp-set-timeout`). On the WASM component the
+primitive SIGNALS (no wasi deadline knob), so dexador's DEFAULT
+`:read-timeout 10` fails there at connect time until `.todo/415` (future-race
+deadline) lands -- pass `:read-timeout nil` on the component meanwhile. The
+Preview 1 `listen` compile error also became a call-time error (`.todo/405`),
+so a dexador program now COMPILES to Preview 1 and refuses at run time.
 
 ## The alternative considered and DEFERRED: a shim over `rontolisp:fetch`
 

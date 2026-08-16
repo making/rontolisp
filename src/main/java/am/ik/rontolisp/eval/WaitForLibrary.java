@@ -70,7 +70,11 @@ public final class WaitForLibrary {
 			// (await (wait-for ms)) in WasmExprCompiler, which resolves to THIS splice's
 			// defun -- and that lowering happens long after this pass, so the trigger has
 			// to name the surface form. Preview 1 spins instead and never gets here.
-			if (references(form, LispNames.WAIT_FOR) || referencesSleep(form)) {
+			// A usocket reference counts too (the SocketsLibrary precedent): the usocket
+			// shim splices later in the pipeline and its wait-for-input carries a sleep
+			// call site unconditionally (usocket.lisp is not pruned), so its sleep
+			// reference is not visible to this pass.
+			if (references(form, LispNames.WAIT_FOR) || referencesSleep(form) || referencesUsocket(form)) {
 				referenced = true;
 				break;
 			}
@@ -123,6 +127,17 @@ public final class WaitForLibrary {
 				yield qn != null && LispNames.CL_PKG.equals(qn.pkg()) && LispNames.SLEEP.equals(qn.member());
 			}
 			case LispCons cons -> referencesSleep(cons.car()) || referencesSleep(cons.cdr());
+			default -> false;
+		};
+	}
+
+	// Whether the form mentions ANY usocket-package member (usocket:socket-connect,
+	// usocket::%usock-guard, ...) -- the shim these names load carries an unconditional
+	// sleep call site, so the trigger must fire before that splice runs.
+	private static boolean referencesUsocket(LispVal form) {
+		return switch (form) {
+			case LispSymbol sym -> UsocketLibrary.isUsocketQualified(sym.name());
+			case LispCons cons -> referencesUsocket(cons.car()) || referencesUsocket(cons.cdr());
 			default -> false;
 		};
 	}

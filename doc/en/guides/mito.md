@@ -212,9 +212,10 @@ backend — the interpreter re-expands macros on every evaluation.
   ```
 
   The `:host` must be an **IPv4 literal** — hostname lookup is unwired on WASM.
-- **WASM Preview 1** has no host socket API by design, so a mito program is a
-  **compile error** there (`listen requires the interpreter, the JVM backend or
-  a --component socket stream`), not a module that fails at run time.
+- **WASM Preview 1** has no host socket API by design. A mito program compiles
+  there (socket call sites become **call-time errors**, so spliced dead code
+  builds), and the first socket call fails loudly at run time with a message
+  naming the backends that work.
 
 ## Current limits
 

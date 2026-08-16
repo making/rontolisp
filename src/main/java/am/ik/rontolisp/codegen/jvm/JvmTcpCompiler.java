@@ -141,6 +141,12 @@ final class JvmTcpCompiler {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				invoke(ctx, ctx.tcpPeerPortHelper, member);
 			}
+			case LispNames.TCP_SET_TIMEOUT -> {
+				requireArgs(member, args, 2, 2);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				invoke(ctx, ctx.tcpSetTimeoutHelper, member);
+			}
 			default -> throw new UnsupportedOperationException("Unknown tcp built-in: " + member);
 		}
 	}

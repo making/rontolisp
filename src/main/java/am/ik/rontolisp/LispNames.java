@@ -4564,6 +4564,20 @@ public final class LispNames {
 	public static final String TCP_PEER_PORT = "TCP-PEER-PORT";
 
 	/**
+	 * The {@code tcp-set-timeout} function provided by the {@code rontolisp} package.
+	 * Sets the read deadline of a connected socket handle: {@code (tcp-set-timeout
+	 * handle milliseconds)} makes every subsequent blocking read on the handle signal an
+	 * error after that many milliseconds without data (milliseconds is a non-negative
+	 * integer, like {@code rontolisp:wait-for}; {@code nil} clears the deadline).
+	 * Interpreter and JVM backends only ({@code Socket.setSoTimeout}); the WASM component
+	 * backend SIGNALS at call time (wasi:sockets has no read-deadline knob and a timeout
+	 * that never fires is worse than an error), and Preview 1 keeps the tcp family's
+	 * call-time error. The {@code usocket} shim's
+	 * {@code (setf (usocket:socket-option s :receive-timeout) seconds)} rides this.
+	 */
+	public static final String TCP_SET_TIMEOUT = "TCP-SET-TIMEOUT";
+
+	/**
 	 * The {@code tls-connect} function provided by the {@code rontolisp} package. Opens a
 	 * blocking TCP connection to {@code host} and {@code port}, performs a TLS handshake
 	 * (the server certificate is validated against the JDK default trust store and the

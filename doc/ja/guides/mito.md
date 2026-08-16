@@ -215,10 +215,11 @@ DELETE FROM article WHERE (id = ?)
 
   `:host` は **IPv4 リテラル**でなければなりません — WASM ではホスト名解決が
   配線されていません。
-- **WASM Preview 1** は設計上ホストのソケット API を持たないため、mito の
-  プログラムはそこでは実行時に失敗するモジュールではなく**コンパイルエラー**に
-  なります (`listen requires the interpreter, the JVM backend or a --component
-  socket stream`)。
+- **WASM Preview 1** は設計上ホストのソケット API を持ちません。mito の
+  プログラムはそこでもコンパイルは通り (ソケット呼び出し箇所は**呼び出し時
+  エラー**になるため、スプライスされたデッドコードもビルドできます)、最初の
+  ソケット呼び出しが実行時に、動作するバックエンドを名指しするメッセージと
+  ともに大きく失敗します。
 
 ## 現在の制限
 

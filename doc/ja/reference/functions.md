@@ -427,6 +427,7 @@
 | `rontolisp:tcp-local-address` | `(rontolisp:tcp-local-address listener)` | リスナーまたはソケットがバインドされているローカルIPアドレス（文字列） |
 | `rontolisp:tcp-peer-address` | `(rontolisp:tcp-peer-address sock)` | 接続済みソケットのリモートIPアドレス（文字列） |
 | `rontolisp:tcp-peer-port` | `(rontolisp:tcp-peer-port sock)` | 接続済みソケットのリモートポート |
+| `rontolisp:tcp-set-timeout` | `(rontolisp:tcp-set-timeout sock 5000)` | 読み取りデッドラインをミリ秒で設定します(`nil` で解除)。タイムアウトした読み取りは捕捉可能なエラーを通知します |
 | `rontolisp:tls-connect` | `(rontolisp:tls-connect "example.com" 443)` | 暗号化（TLS）クライアント接続を開きます。`tcp-connect` と同じ種類のストリームハンドルを返します |
 | `rontolisp:tls-listen` | `(rontolisp:tls-listen "server.p12" "changeit" 8443)` | PKCS12キーストアから暗号化リスニングソケットをバインドします。`tcp-accept` で受け付けます |
 | `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | PEMの証明書／鍵ファイルから暗号化リスニングソケットをバインドします |

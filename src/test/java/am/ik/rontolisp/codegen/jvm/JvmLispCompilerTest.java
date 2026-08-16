@@ -8472,7 +8472,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TCP-SET-TIMEOUT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("NIL");
 	}
 
@@ -8874,6 +8874,54 @@ class JvmLispCompilerTest {
 				  (usocket:socket-close client)
 				  (usocket:socket-close listener))
 				""")).isEqualTo("\"127.0.0.1\"\nT\n\"127.0.0.1\"");
+	}
+
+	@Test
+	void compileAndRunUsocketSocketOptionReceiveTimeoutIsARealReadDeadline() throws Exception {
+		// The interpreter twin is usocketSocketOptionReceiveTimeoutIsARealReadDeadline:
+		// the setf place rides the emitted _tcpSetTimeout (Socket.setSoTimeout), the
+		// deadline FIRES on a silent peer as a catchable error, nil clears it, and an
+		// unsupported option signals loudly.
+		assertThat(compileAndRunUsocket("""
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port)))
+				  (setf (usocket:socket-option client :receive-timeout) 0.2)
+				  (print (usocket:socket-option client :receive-timeout))
+				  (print (handler-case (progn (read-line client) :read)
+				           (error (e) :timed-out)))
+				  (setf (usocket:socket-option client :receive-timeout) nil)
+				  (print (usocket:socket-option client :receive-timeout))
+				  (print (handler-case (setf (usocket:socket-option client :tcp-nodelay) t)
+				           (error (e) :unsupported)))
+				  (usocket:socket-close client)
+				  (usocket:socket-close listener))
+				""")).isEqualTo("0.2\n:TIMED-OUT\nNIL\n:UNSUPPORTED");
+	}
+
+	@Test
+	void compileAndRunUsocketWaitForInputPollsThroughListen() throws Exception {
+		// The interpreter twin is usocketWaitForInputPollsThroughListen: a real
+		// listen-based poll on this backend -- empty polls to the timeout, buffered
+		// data comes back ready with time remaining, and without :ready-only the
+		// original argument returns.
+		assertThat(compileAndRunUsocket("""
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port))
+				       (server (usocket:socket-accept listener)))
+				  (print (usocket:wait-for-input (list client) :timeout 0 :ready-only t))
+				  (write-line "ping" server)
+				  (multiple-value-bind (ready remaining)
+				      (usocket:wait-for-input (list client) :timeout 5 :ready-only t)
+				    (print (equal ready (list client)))
+				    (print (if remaining t nil)))
+				  (print (eql (usocket:wait-for-input client :timeout 1) client))
+				  (print (read-line client))
+				  (usocket:socket-close server)
+				  (usocket:socket-close client)
+				  (usocket:socket-close listener))
+				""")).isEqualTo("NIL\nT\nT\nT\n\"ping\"");
 	}
 
 	@Test

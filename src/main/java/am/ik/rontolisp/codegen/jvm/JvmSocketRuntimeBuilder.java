@@ -85,6 +85,10 @@ final class JvmSocketRuntimeBuilder {
 
 	static final String TCP_PEER_PORT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String TCP_SET_TIMEOUT_METHOD = "_tcpSetTimeout";
+
+	static final String TCP_SET_TIMEOUT_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	private static final String SOCK_READ_LINE_METHOD = "_sockReadLine";
 
 	private static final String SOCK_READ_LINE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -212,6 +216,8 @@ final class JvmSocketRuntimeBuilder {
 	private final MethodrefConstant socketGetInetAddress;
 
 	private final MethodrefConstant socketGetPort;
+
+	private final MethodrefConstant socketSetSoTimeout;
 
 	private final MethodrefConstant serverSocketGetInetAddress;
 
@@ -365,6 +371,8 @@ final class JvmSocketRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("getInetAddress"), cp.addUtf8("()Ljava/net/InetAddress;")));
 		this.socketGetPort = cp.addMethodref(this.socketClass,
 				cp.addNameAndType(cp.addUtf8("getPort"), cp.addUtf8("()I")));
+		this.socketSetSoTimeout = cp.addMethodref(this.socketClass,
+				cp.addNameAndType(cp.addUtf8("setSoTimeout"), cp.addUtf8("(I)V")));
 		this.serverSocketGetInetAddress = cp.addMethodref(this.serverSocketClass,
 				cp.addNameAndType(cp.addUtf8("getInetAddress"), cp.addUtf8("()Ljava/net/InetAddress;")));
 		this.inetGetHostAddress = cp.addMethodref(inetAddressClass,
@@ -440,6 +448,8 @@ final class JvmSocketRuntimeBuilder {
 				builder.buildTcpPeerAddress()));
 		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_PORT_METHOD), cp.addUtf8(TCP_PEER_PORT_DESC), 3, 2,
 				builder.buildTcpPeerPort()));
+		methods.add(new SocketMethod(cp.addUtf8(TCP_SET_TIMEOUT_METHOD), cp.addUtf8(TCP_SET_TIMEOUT_DESC), 3, 2,
+				builder.buildTcpSetTimeout()));
 		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC), 7, 6,
 				builder.buildSockReadLine()));
 		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_LINE_METHOD), cp.addUtf8(SOCK_WRITE_LINE_DESC), 4, 3,
@@ -929,6 +939,38 @@ final class JvmSocketRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.socketGetLocalPort.index());
 		emitBoxLong(code);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _tcpSetTimeout(Object handle, Object ms) -> Object}. Sets the socket entry's
+	 * read deadline ({@code Socket.setSoTimeout}): a boxed {@code Long} millisecond
+	 * count, or {@code null} (nil) to clear it. Returns the {@code ms} argument. A
+	 * non-socket entry fails on the {@code CHECKCAST} (a {@code ClassCastException},
+	 * catchable like the other runtime failures).
+	 */
+	private List<Integer> buildTcpSetTimeout() {
+		// Slots: 0=handle, 1=ms
+		List<Integer> code = new ArrayList<>();
+		emitLoadStreamEntry(code, 0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.socketClass.index());
+		code.add(Opcode.ALOAD_1);
+		int ifNilPos = code.size();
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		emitUnboxInt(code);
+		int gotoSetPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNilPos, code.size());
+		code.add(Opcode.ICONST_0);
+		patchBranch(code, gotoSetPos, code.size());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.socketSetSoTimeout.index());
+		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ARETURN);
 		return code;
 	}

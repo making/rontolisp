@@ -38,7 +38,7 @@
   は IPv4 リテラルである必要があります。`--component` でコンパイルし、
   `wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y` で
   実行します(wasmtime 46+)。バインド失敗は `nil` を返します。
-  Preview 1(コアモジュール)モードではコンパイルエラーです。
+  Preview 1(コアモジュール)モードでは呼び出し時エラーです。
 - **ブラウザプレイグラウンド**: 非対応(ブラウザのサンドボックスに生の TCP は
   ありません)。
 

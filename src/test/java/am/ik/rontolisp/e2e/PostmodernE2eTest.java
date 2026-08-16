@@ -66,9 +66,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ol>
  *
  * WASM Preview 1 is the fourth backend and is deliberately absent from both: TCP is a
- * compile error there by design ({@code .kb/tcp-sockets.md}), which
- * {@link #failsToCompileOnWasmPreview1()} pins so the gap stays a checked statement
- * rather than an untested claim.
+ * CALL-time error there by design ({@code .kb/tcp-sockets.md}), which
+ * {@link #preview1ModuleCompilesAndFailsLoudlyAtTheFirstSocketCall(Path)} pins so the gap
+ * stays a checked statement rather than an untested claim.
  *
  * <p>
  * {@link #programOutput} drops postmodern's own reconnect diagnostic before comparing;
@@ -248,18 +248,22 @@ class PostmodernE2eTest {
 	}
 
 	@Test
-	void failsToCompileOnWasmPreview1(@TempDir Path workDir) throws Exception {
-		// The documented fourth-backend gap: Preview 1 has no host socket API, so the
-		// driver underneath postmodern is a compile error there -- a loud one naming the
-		// backends that do work, not a module that fails at run time. The socket call the
-		// compiler reaches first here is `listen` (cl-postgres probes for pending input
-		// before every message read), not tcp-connect.
+	void preview1ModuleCompilesAndFailsLoudlyAtTheFirstSocketCall(@TempDir Path workDir) throws Exception {
+		// The documented fourth-backend gap: Preview 1 has no host socket API. Since
+		// the usocket shim grew wait-for-input, `listen` joined the tcp built-ins on
+		// the todo-195 CALL-time policy (the shim's listen call site is spliced
+		// unpruned into every usocket program and must build as dead code), so the
+		// driver underneath postmodern now COMPILES here and the refusal moved to run
+		// time: the first socket call raises the message naming the backends that
+		// work. WHICH built-in is named is a call-order fact and not pinned.
 		Path program = writeExercise(workDir, milestone(Backend.INTERPRETER).source("127.0.0.1", 5432));
-		Result result = run(workDir, JAVA, "-cp", CLASSPATH, "am.ik.rontolisp.cli.RontoLispCli",
-				program.getFileName().toString(), "-o", "probe-p1.wasm");
-		assertThat(result.exitCode()).as("%s", result).isNotZero();
-		assertThat(result.err()).contains("requires the interpreter, the JVM backend or a --component socket stream");
-		assertThat(workDir.resolve("probe-p1.wasm")).doesNotExist();
+		runCli(workDir, program.getFileName().toString(), "-o", "probe-p1.wasm");
+		String path = "/tmp/" + workDir.getFileName() + ".p1.wasm";
+		WASMTIME.copyFileToContainer(Transferable.of(Files.readAllBytes(workDir.resolve("probe-p1.wasm"))), path);
+		ExecResult result = WASMTIME.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path);
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isNotZero();
+		assertThat(result.getStderr() + result.getStdout()).as("stderr: %s", result.getStderr())
+			.containsPattern("(TCP-CONNECT|listen) requires the interpreter, the JVM backend or");
 	}
 
 	// The .todo/202 program verbatim, except for the per-backend table name (the three

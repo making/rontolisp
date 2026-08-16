@@ -46,7 +46,7 @@ public final class SocketsLibrary {
 
 	private static final List<String> TCP_MEMBERS = List.of(LispNames.TCP_CONNECT, LispNames.TCP_LISTEN,
 			LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
-			LispNames.TCP_PEER_PORT);
+			LispNames.TCP_PEER_PORT, LispNames.TCP_SET_TIMEOUT);
 
 	private static volatile @Nullable List<LispVal> forms;
 

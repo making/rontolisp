@@ -250,8 +250,9 @@ final class JvmExprCompiler {
 						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
 						|| LispNames.TCP_LOCAL_ADDRESS.equals(qn.member())
 						|| LispNames.TCP_PEER_ADDRESS.equals(qn.member()) || LispNames.TCP_PEER_PORT.equals(qn.member())
-						|| LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_UPGRADE.equals(qn.member())
-						|| LispNames.TLS_LISTEN.equals(qn.member()) || LispNames.TLS_LISTEN_P12.equals(qn.member())) {
+						|| LispNames.TCP_SET_TIMEOUT.equals(qn.member()) || LispNames.TLS_CONNECT.equals(qn.member())
+						|| LispNames.TLS_UPGRADE.equals(qn.member()) || LispNames.TLS_LISTEN.equals(qn.member())
+						|| LispNames.TLS_LISTEN_P12.equals(qn.member())) {
 					JvmTcpCompiler.compile(qn.member(), cons, ctx, className);
 					return;
 				}

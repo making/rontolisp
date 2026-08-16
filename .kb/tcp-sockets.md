@@ -575,6 +575,98 @@ spliced usocket programs keep compiling AND now report real peers. `tcp-local-po
 reads the real bound port the same way (ephemeral `tcp-listen 0` included).
 Preview 1 lowers to the call-time error like the other tcp built-ins.
 
+## Read deadlines: `rontolisp:tcp-set-timeout` and the usocket timeout/wait decisions
+
+`(rontolisp:tcp-set-timeout handle milliseconds)` (nil clears; non-negative
+integer ms, the `wait-for` convention) sets a per-socket READ deadline;
+`(setf (usocket:socket-option s :receive-timeout) seconds)` — the portable
+usocket spelling every client uses, dexador on every connection — rides it.
+The decisions and their reasons, taken together (they were one todo):
+
+- **Interpreter/JVM: REAL**, via `Socket.setSoTimeout`
+  (`SocketSupport.setTimeout` / `JvmSocketRuntimeBuilder._tcpSetTimeout`,
+  gated by the same `usesSockets`). A timed-out read then throws
+  `SocketTimeoutException` out of the ORDINARY stream built-in it happened in,
+  so it surfaces as a catchable plain `error` ("read-line: Read timed out"),
+  NOT as `usocket:timeout-error` — the reads do not go through usocket
+  functions and per-read wrapping in the shim would tax every socket program;
+  documented lite edge on the doc pages. The deadline lives on the raw
+  socket, so it keeps governing a `tls-upgrade`d connection. Listener handles
+  are rejected (a read deadline; an accept deadline has no consumer).
+- **WASM component: the primitive SIGNALS at call time** (a sockets.lisp
+  defun) — wasi:sockets@0.3.0 has no receive-timeout knob and the stream
+  reads are futures with no deadline argument; a silent no-op would install
+  the exact failure mode (a hang) the client set the timeout to avoid, the
+  cl+ssl "what has no backing SIGNALS" rule. Consequence for dexador: its
+  DEFAULT `:read-timeout 10` dies at connect time on the component until
+  either the caller passes `:read-timeout nil` (dexador guards the setf with
+  `(when read-timeout ...)`) or the scheduler grows a future-race/deadline
+  primitive — `.todo/415`, which is also what would make `wait-for-input`
+  real there. Preview 1: the call-time stub like every tcp built-in.
+- **`usocket:socket-option`** supports `:receive-timeout` ONLY; every other
+  option signals naming the option (never accept-and-ignore — even
+  `:tcp-nodelay`, although `socket-connect`'s `:nodelay` KEY is still
+  accepted-and-ignored, the shim's pre-existing connect-knob convention). The
+  GETTER answers from shim-side bookkeeping (`usocket::*%usock-timeouts*`, an
+  alist the setf maintains; the shim is the only writer so it is
+  authoritative; entries survive socket-close — a handle is never reused).
+  The setf converts seconds→ms and calls the primitive through
+  `%usock-guard`, so an interpreter/JVM failure is a typed
+  `usocket:socket-error` and the component's signal passes through raw; the
+  refusal happens BEFORE the bookkeeping records anything.
+- **`usocket:wait-for-input` is a `listen`-based poll**, pure Lisp in
+  usocket.lisp: compute the ready set via `listen` (the kernel receive buffer
+  on interpreter/JVM; the chunk readahead buffer on the component — listen's
+  own documented divergence), and when none is ready poll every 10 ms
+  (`sleep 0.01`) until `:timeout` (0 = one poll; none = forever). Upstream's
+  two values are honoured (`:ready-only`, remaining time). **On the WASM
+  backends it instead returns IMMEDIATELY claiming readiness** (branching at
+  RUN time on `(member :rontolisp-wasm *features*)` — the shim source is
+  parsed once for all backends, so a reader feature cannot branch it, but the
+  runtime `*features*` list is seeded per backend): the two candidate
+  behaviors there are both wrong for someone, and the degenerate claim is
+  wrong for strictly fewer — the dominant wait-then-read loop behaves
+  IDENTICALLY (reads block anyway), while an honest poll would sleep-spin
+  forever on data waiting host-side that component `listen` cannot see.
+  `:ready-only` claims the full list in that case. Stream sockets only (a
+  listener probes through `listen`, which signals on it — no backend has a
+  non-blocking accept probe); wait-list objects are not reproduced.
+- **`listen` on Preview 1 became a CALL-time error** (was a compile error) as
+  part of this: the shim is spliced UNPRUNED into every usocket program
+  (`LibraryDefunPruner` deliberately excludes it), so wait-for-input's listen
+  call site is dead code that must build — the todo-195 policy, the same
+  transition tcp-connect made. Consequence: a cl-postgres/postmodern/mito
+  program now COMPILES on Preview 1 and fails loudly at its first socket call
+  at RUN time (their `failsToCompileOnWasmPreview1` pins became
+  `preview1ModuleCompilesAndFailsLoudlyAtTheFirstSocketCall`). This does NOT
+  decide `.todo/405` (a real P1 probe); it only moves the refusal to call
+  time uniformly.
+- **The WaitForLibrary trigger widened to any usocket reference** (the
+  SocketsLibrary precedent): the shim carries an unconditional `sleep` call
+  site the component must resolve against wait.lisp, and the usocket splice
+  runs AFTER WaitForLibrary in every pipeline — so the trigger has to fire on
+  what is visible before the splice. Every component usocket program now
+  imports wasi:clocks. Non-CLI component pipelines (tests) must run
+  `WaitForLibrary.process` in their chain or the compile fails on the shim's
+  `sleep`.
+- **`socket-server` (todo-114 Tier 2) was split out, not shipped as the
+  keys-ignored sketch**: silently ignoring `:in-new-thread` blocks a caller
+  that expects to continue — the same lying-no-op shape the timeout decision
+  rejects — and since todo-227 the thread primitives exist on
+  interpreter/JVM, so an honest implementation is possible and is its own
+  item (`.todo/416`, incl. the WASM story for a shim that would then
+  reference `rontolisp:make-thread`).
+
+Pinned by `LispEvaluatorTest#usocketSocketOptionReceiveTimeoutIsARealReadDeadline`
+/ `#usocketSetfSocketOptionAsTheFirstReferenceLoadsLibraryAndSignalsTyped` (the
+interpreter's lazy-load third trigger, `ensureUsocketSetfPlaceLoaded` — a
+program whose FIRST usocket touch is the setf place) /
+`#usocketWaitForInputPollsThroughListen`, their JVM twins
+(`compileAndRunUsocket...`), `WasmLispCompilerTest#listenInPreview1ModeIsACallTimeError`
+/ the widened `#tcpBuiltinsInPreview1ModeAreCallTimeErrors` /
+`#tcpBuiltinsCompileInComponentMode`, and
+`WasmLispCompilerIntegrationTest#componentUsocketSocketOptionRefusesAndWaitForInputClaimsReadiness`.
+
 ## The usocket shim (`usocket` package, `usocket.lisp` + `UsocketLibrary`)
 
 A usocket-compatible API over the tcp built-ins, targeting the surface
@@ -657,9 +749,11 @@ splice). Key mechanics:
   a reader feature). The re-signal always uses `socket-error` (the subtypes
   are defined but not auto-selected). See `.kb/error-handling.md`.
 - **Not reproduced** (rontolisp has no substrate): UDP
-  (`socket-send`/`socket-receive`), `socket-shutdown`, `wait-for-input`, and
-  `socket-server`. (Restart-based retry -- `handler-bind`/`restart-case` -- IS
-  available since todo-196; usocket.lisp simply does not use it.)
+  (`socket-send`/`socket-receive`), `socket-shutdown`, wait-list objects, and
+  `socket-server` (split out to `.todo/416` -- see the read-deadlines section
+  above; `socket-option` and `wait-for-input` ARE reproduced there).
+  (Restart-based retry -- `handler-bind`/`restart-case` -- IS available since
+  todo-196; usocket.lisp simply does not use it.)
 
 ## The cl+ssl shim (`cl+ssl` package, `cl-ssl.lisp` + `ShimLibraries`)
 
@@ -741,7 +835,9 @@ UDP (`.todo/047-udp-sockets.md`), hostname resolution on WASM
 (`.todo/048-wasm-tcp-hostname-lookup.md` — it also caps the component TLS
 story: a real-world `https://` host needs its IP by hand plus `tls-upgrade`
 with the DNS name), TLS servers on WASM (permanent — client-only proposal),
-mutual TLS (`.todo/050-tls-server-and-extensions.md`), timeouts,
-`--no-gc`, the browser playground, and `(do () ...)`-style empty do bindings
+mutual TLS (`.todo/050-tls-server-and-extensions.md`), CONNECT timeouts (read
+deadlines exist on the interpreter/JVM -- `tcp-set-timeout` above; the
+component's is `.todo/415`), `--no-gc`, the browser playground, and
+`(do () ...)`-style empty do bindings
 in examples (pre-existing `expandDo` limitation — the echo examples use a
 dummy binding).

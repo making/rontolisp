@@ -57,7 +57,8 @@ the server closes:
   failed connection returns `nil` instead of a handle (the same nil-on-failure
   convention as `rontolisp:fetch`); without the `-S` flags the component still
   starts, but every socket operation fails and yields `nil`. The tcp built-ins
-  are a compile error in Preview 1 (core-module) mode.
+  compile in Preview 1 (core-module) mode but every call raises a call-time
+  error naming the backends that work.
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so every tcp function signals an error.
 

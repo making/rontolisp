@@ -40,6 +40,6 @@ Error: tcp-peer-address expects a connected socket handle
 - **WASM**: component mode only -- all three return real addresses and ports,
   exactly like the interpreter/JVM. On failure or a wrong kind of handle they
   return `nil` instead of signaling (so a spliced usocket program still runs
-  there). Compile error in Preview 1 (core-module) mode, like every tcp
+  there). Call-time error in Preview 1 (core-module) mode, like every tcp
   built-in.
 - **Browser playground**: not supported.
