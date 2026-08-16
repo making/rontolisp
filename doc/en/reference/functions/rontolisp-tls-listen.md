@@ -47,9 +47,12 @@ Complete servers live in the `examples/` directory:
   the WASM backend, failures never yield `nil`: a missing keystore, a wrong
   password or a busy port signals an error on both backends.
 - **WASM**: not supported — `tls-listen` is a **compile error** in both
-  Preview 1 and `--component` mode. The `wasi:tls` proposal is **client-only**
-  (there is no server-side TLS interface for WASM components), so a TLS
-  *server* has no WASM path.
+  Preview 1 and `--component` mode. The `wasi:tls` proposal is **client-only
+  by design** (there is no server-side TLS interface in any draft), so a TLS
+  *server* has no WASM path — only the client side
+  ([`rontolisp:tls-connect`](rontolisp-tls-connect.md) /
+  [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md)) runs under
+  `--component`.
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so `tls-listen` signals an error.
 

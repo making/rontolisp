@@ -189,6 +189,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.TlsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/tls\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.TlsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/tls\\.wit"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/stdin\\.lisp"

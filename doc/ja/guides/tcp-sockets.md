@@ -52,12 +52,18 @@
 > UDPなし) については
 > [tcp-connect](../reference/functions/rontolisp-tcp-connect.md)
 > のリファレンスページを参照してください。
-> TLS関数
-> ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)、
-> [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md)、
-> [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md)、
+> TLSの*クライアント*関数
+> ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)
+> と
+> [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md))
+> はインタプリタ、JVM、WASM `--component` バックエンドで動きます
+> (上記フラグに `-S tls=y` を追加)。TLSの*サーバー*関数
+> ([`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md)
+> と
 > [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md))
-> はインタプリタ/JVM専用です (WASMバックエンドではコンパイルエラー)。
+> はインタプリタ/JVM専用です — `wasi:tls` の提案にはサーバー
+> インターフェイスが存在しないため、すべてのWASMターゲットで恒久的な
+> コンパイルエラーです。
 
 このガイドのプログラムは完全で自己完結しています: それぞれをファイルにコピーし、
 任意のバックエンドで実行できます。使うのは `rontolisp:tcp-*`
@@ -440,8 +446,15 @@ PKCS12 キーストアファイルを受け取り、プレーンな
 完了します。PKCS12 キーストアの代わりに PEM ファイル(certbot / OpenSSL の
 出力)から直接提供するには、
 [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md)
-を使ってください。TLS 版はインタプリタ/JVM 専用です (WASM バックエンドでは
-コンパイルエラー)。
+を使ってください。TLS の*クライアント*関数(`tls-connect` / `tls-upgrade`)は
+WASM `--component` バックエンドでも動きます。wasmtime の実験的な
+`wasi:tls@0.3.0-draft` インターフェイス上で動き、ソケット実行フラグに
+`-S tls=y` を追加します — そこでは失敗は `nil` を返し、`:insecure` は
+エラーを通知し(ドラフトには検証をスキップするノブがありません)、
+`tls-upgrade` はハンドルを**その場で**アップグレードします(同じハンドルを
+返し、まだ何も書き込まれていないことを要求します)。TLS の*サーバー*関数は
+インタプリタ/JVM 専用です — `wasi:tls` の提案にはサーバーインターフェイスが
+存在しないため、すべての WASM ターゲットで恒久的なコンパイルエラーです。
 
 以下の2つのサーバープログラムはいずれもサーバーの鍵と証明書を格納した PKCS12
 キーストアを必要とします。localhost 用の自己署名キーストアを JDK の `keytool`

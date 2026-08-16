@@ -55,6 +55,7 @@ import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.StdinLibrary;
+import am.ik.rontolisp.eval.TlsLibrary;
 import am.ik.rontolisp.eval.WaitForLibrary;
 import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.WitImportInliner;
@@ -637,6 +638,15 @@ public final class RontoLispCli {
 		// interpreter/JVM keep their CompletableFuture timer, Preview 1 keeps the
 		// compile error).
 		loaded = WaitForLibrary.process(loaded, spliceBackend);
+		// The CLIENT tls built-ins (tls-connect / tls-upgrade) on the --component path
+		// are the tls.lisp library over a wit-imported wasi:tls@0.3.0-draft. It rides
+		// sockets.lisp's entry table, so it must splice BEFORE SocketsLibrary: the
+		// spliced forms reference rontolisp:tcp-connect, which fires the sockets
+		// trigger for a program that only names tls. A no-op elsewhere (the
+		// interpreter/JVM keep SSLSocket, Preview 1 keeps the compile error; the
+		// tls-listen family is a compile error on every WASM target -- the wasi:tls
+		// proposal has no server interface).
+		loaded = TlsLibrary.process(loaded, spliceBackend);
 		// The rontolisp:tcp-* built-ins on the --component path are the sockets.lisp
 		// library over a wit-imported wasi:sockets/types@0.3.0 (this splice replaced
 		// the hand-written sockets adapter). Spliced like http.lisp; a no-op elsewhere

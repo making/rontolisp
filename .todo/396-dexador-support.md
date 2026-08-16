@@ -34,7 +34,7 @@ interpreter, JVM (`-o X.class`), and WASM `--component`:
 | `dex:post` string / alist / JSON | OK |
 | `:cookie-jar` + `Set-Cookie` | OK |
 | `:want-stream t` | BROKEN when measured -- `.todo/400` is done since, re-probe |
-| `https://` | OK since 2026-08-16 (`.todo/399` done) -- via the cl+ssl shim over `rontolisp:tls-upgrade` |
+| `https://` | OK since 2026-08-16 (`.todo/399` done) -- via the cl+ssl shim over `rontolisp:tls-upgrade`; on `--component` too since `.todo/410` (wasi:tls@0.3.0-draft, `-S tls=y`), verified with `(dex:get "https://8.8.8.8/resolve?...")` against the spike tree -- an IP-literal URL, because hostname lookup is still `.todo/048`, and the target's certificate must carry an IP SAN |
 | 2nd..5th return values (status, headers, uri) | BROKEN -- `.todo/397` |
 
 WASM Preview 1 does not compile at all (`.todo/405`).
@@ -98,7 +98,8 @@ Then the feature work:
 7. ~~`.todo/399` -- `cl+ssl` shim over a new TLS-over-an-existing-stream
    primitive.~~ **DONE (2026-08-16)**: `rontolisp:tls-upgrade` (stream host
    [:insecure v]) upgrades an already-connected handle on interpreter + JVM
-   (compile error on both WASM targets, like the rest of the TLS family), and
+   (and, since `.todo/410`, on the WASM `--component` backend over
+   wasi:tls@0.3.0-draft; Preview 1 keeps the compile error), and
    the `cl+ssl` built-in shim system rides it -- `make-ssl-client-stream`
    (`:verify` defaulting from the `with-global-context`-carried mode, so
    `dex:*not-verify-ssl*`/`:insecure` reaches the primitive), signals on
@@ -174,7 +175,8 @@ precedent (`ShimLibraries.CONFLICTS`).
 `(ql:quickload "dexador")` loads the UNPATCHED upstream system, and a program
 doing `(dex:get url)` / `(dex:post url :content ...)` -- reading the status and
 the header table from the secondary values -- runs on all four backends over
-`http://` and, on interpreter and JVM, over `https://`. Then: an
+`http://` and, on interpreter, JVM and `--component` (`.todo/410`; IP-literal
+URLs until `.todo/048` lands hostname lookup), over `https://`. Then: an
 `examples/net/` program, `ci-spec.yaml` coverage, a `doc/{en,ja}` page under
 the library guides, and a `.kb/` file for whatever invariant the cl+ssl shim
 ends up owning.

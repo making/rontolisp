@@ -416,12 +416,15 @@ class WasmLispCompilerIntegrationTest {
 
 	private static byte[] compileFetchComponent(String program, OptimizeLevel optimize) {
 		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
+		// TlsLibrary before SocketsLibrary, mirroring the CLI: tls.lisp references
+		// rontolisp:tcp-connect, which is what fires the sockets trigger for a
+		// tls-only program (a no-op for every program that names no client tls).
 		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.WitLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary
-				.process(am.ik.rontolisp.eval.StdinLibrary.process(am.ik.rontolisp.eval.SocketsLibrary.process(
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.StdinLibrary
+				.process(am.ik.rontolisp.eval.SocketsLibrary.process(am.ik.rontolisp.eval.TlsLibrary.process(
 						am.ik.rontolisp.eval.WaitForLibrary.process(am.ik.rontolisp.eval.HttpLibrary
 							.process(LispReader.readAllFromString(program), witBackend, false), witBackend),
-						witBackend), witBackend, false)));
+						witBackend), witBackend), witBackend, false)));
 		return new WasmLispCompiler(false, true, false, optimize).compile(forms);
 	}
 
@@ -11955,6 +11958,78 @@ class WasmLispCompilerIntegrationTest {
 				"/tmp/tcp-noflag.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("NIL");
+	}
+
+	@Test
+	void componentTlsUpgradeAttemptsARealHandshakeAndRejectsAnUntrustedServer() throws Exception {
+		// The deterministic in-container leg of the wasi:tls@0.3.0-draft support: an
+		// in-container `openssl s_server` presents a fresh self-signed certificate,
+		// and wasmtime's TLS provider (rustls over the compiled-in webpki/Mozilla
+		// roots -- there is no CA-file knob) rejects it, so tls-upgrade answers nil
+		// (the WASM error convention). This drives the WHOLE pipeline for real --
+		// the wasi:tls instance imports link (-S tls=y), the connector transforms
+		// wrap the socket's streams, the async handshake runs a genuine
+		// ClientHello/ServerHello exchange and the error arm releases the error
+		// resource. A trusted-path success E2E cannot be run against a local
+		// fixture (the host trust store is compiled in); that leg is the opt-in
+		// componentTlsFetchesARealHostOverHttps below.
+		String program = """
+				(let ((s (rontolisp:tcp-connect "127.0.0.1" 14443)))
+				  (print (rontolisp:tls-upgrade s "localhost"))
+				  (close s))
+				(print (rontolisp:tls-connect "127.0.0.1" 14443))
+				(print (handler-case (rontolisp:tls-upgrade 999 "h" :insecure t)
+				         (error () :insecure-signals)))
+				(print (rontolisp:tls-upgrade 999 "h"))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tls-reject.component.wasm");
+		ExecResult result = wasmtime.execInContainer("sh", "-c", """
+				cd /tmp || exit 1
+				openssl req -x509 -newkey rsa:2048 -nodes -keyout tls-reject-key.pem \
+				  -out tls-reject-cert.pem -days 1 -subj "/CN=localhost" 2>/dev/null || exit 1
+				openssl s_server -accept 14443 -cert tls-reject-cert.pem -key tls-reject-key.pem \
+				  -quiet > /dev/null 2>&1 &
+				server=$!
+				sleep 0.5
+				wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y -S tls=y \
+				  tls-reject.component.wasm
+				status=$?
+				kill $server 2>/dev/null
+				exit $status
+				""");
+		assertThat(result.getExitCode()).as("stdout: %s stderr: %s", result.getStdout(), result.getStderr()).isZero();
+		// Line 1: the handshake against the untrusted cert fails -> nil. Line 2:
+		// tls-connect (tcp-connect + tls-upgrade) fails the same way. Line 3: a
+		// non-nil :insecure SIGNALS at run time (the draft has no verification
+		// knob; silently verifying would betray the caller). Line 4: a non-socket
+		// handle answers nil.
+		assertThat(result.getStdout().trim()).isEqualTo("NIL\nNIL\n:INSECURE-SIGNALS\nNIL");
+	}
+
+	@Test
+	@org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "RONTOLISP_HTTP_E2E", matches = "1")
+	void componentTlsFetchesARealHostOverHttps() throws Exception {
+		// The trusted success path needs a certificate wasmtime's compiled-in webpki
+		// roots accept, i.e. a real public host -- opt-in like the other network
+		// E2Es. 1.1.1.1's certificate carries its IP as a SAN, so the IP-literal
+		// tcp-connect (hostname lookup is .todo/048) verifies cleanly.
+		String program = """
+				(let ((s (rontolisp:tcp-connect "1.1.1.1" 443)))
+				  (let ((tls (rontolisp:tls-upgrade s "1.1.1.1")))
+				    (write-line "GET / HTTP/1.1" tls)
+				    (write-line "Host: 1.1.1.1" tls)
+				    (write-line "Connection: close" tls)
+				    (write-line "" tls)
+				    (print (read-line tls))
+				    (close tls)))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tls-real.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "-S", "tls=y", "/tmp/tls-real.component.wasm");
+		assertThat(result.getExitCode()).as("stdout: %s stderr: %s", result.getStdout(), result.getStderr()).isZero();
+		assertThat(result.getStdout()).contains("HTTP/1.1");
 	}
 
 	@Test

@@ -51,12 +51,18 @@ take a socket; render with `(format nil ...)` and send the result with
 > playground** every tcp function signals an error (the browser sandbox has no
 > raw TCP), so the runnable example below only works outside the browser. See
 > the [tcp-connect](../reference/functions/rontolisp-tcp-connect.md) reference
-> page for the shared limitations (TCP only, no UDP). The TLS functions
-> ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md),
-> [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md),
-> [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) and
+> page for the shared limitations (TCP only, no UDP). The TLS *client*
+> functions
+> ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)
+> and
+> [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md))
+> run on the interpreter, the JVM and the WASM `--component` backend (add
+> `-S tls=y` to the flags above); the TLS *server* functions
+> ([`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md)
+> and
 > [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md))
-> are interpreter/JVM only (a compile error on the WASM backend).
+> are interpreter/JVM only — the `wasi:tls` proposal defines no server
+> interface, so they are a permanent compile error on every WASM target.
 
 The programs in this guide are complete and self-contained: copy each one into
 a file and run it with any backend. They use only the `rontolisp:tcp-*`
@@ -438,8 +444,15 @@ accepted connection completes its handshake on the first read. To serve
 straight from PEM files (certbot / OpenSSL output) instead of a PKCS12
 keystore, use
 [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md).
-The TLS variants are interpreter/JVM only (a compile error on the WASM
-backend).
+The TLS *client* functions (`tls-connect` / `tls-upgrade`) also run on the
+WASM `--component` backend, over wasmtime's experimental
+`wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the socket run flags;
+failures answer `nil` there, `:insecure` signals (the draft exposes no
+verification knob), and `tls-upgrade` upgrades the handle **in place** (it
+answers the same handle, and requires that nothing was written to it yet). The
+TLS *server* functions are interpreter/JVM only — a permanent compile error on
+every WASM target, because the `wasi:tls` proposal defines no server
+interface.
 
 Both server programs below need a PKCS12 keystore holding the server key and
 certificate. Generate a self-signed one for localhost with the JDK `keytool`

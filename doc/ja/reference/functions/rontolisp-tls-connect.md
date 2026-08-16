@@ -48,12 +48,22 @@
   `host` にはホスト名または IP リテラルを指定できます。接続やハンドシェイクの
   失敗(ポート拒否、信頼されていない証明書、ホスト名の不一致)はエラーを通知
   します。
-- **WASM**: 現時点では非サポート — `tls-connect` は Preview 1 と
-  `--component` のどちらのモードでも**コンパイルエラー**です。component
-  モードのクライアントは wasmtime の実験的な `wasi:tls@0.3.0-draft`
-  インターフェイス上に構築できますが、このインターフェイスは不安定です
-  (semver の保証なし)。安定するまではインタープリタか JVM
-  バックエンドを使ってください。
+- **WASM `--component`**(WASI 0.3): サポートされます。wasmtime の
+  `wasi:tls@0.3.0-draft` インターフェイス上で動き、通常のソケット実行フラグ
+  (`-W exceptions=y -S tcp=y -S inherit-network=y`)に `-S tls=y`
+  を追加します。そこでの `tcp-connect` と同じく `host` は **IPv4 リテラル**
+  (または `localhost`)でなければならず、さらに証明書の検証名を兼ねるため、
+  実在のホストには「アドレスへの `tcp-connect` + DNS 名での
+  [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md)」を使ってください。
+  失敗は WASM のエラー規約に従い、エラー通知ではなく `nil` を返します。
+  証明書はホストに組み込まれたトラストアンカー(wasmtime は Mozilla
+  ルートストアを同梱)で検証され、トラストストアのシステムプロパティと
+  `:insecure` はそこでは効きません — 非 `nil` の `:insecure` 値は黙って
+  検証する代わりに**エラーを通知**します。このインターフェイスは明示的に
+  実験段階のドラフトなので、wasmtime の更新に rontolisp 側の追随が
+  必要になることがあります。
+- **WASM Preview 1**: 非サポート — **コンパイルエラー**です(Preview 1 には
+  `wasi:tls` のホスト API が存在しません)。
 - **ブラウザプレイグラウンド**: 非サポート — ブラウザのサンドボックスには生の
   TCP ソケットがないため、`tls-connect` はエラーを通知します。
 

@@ -8,7 +8,8 @@ plus the address accessors `tcp-local-address` (handle) / `tcp-peer-address`
 host &optional :insecure value; upgrades an ALREADY-CONNECTED handle, the
 cl+ssl shim's substrate), `tls-listen` (keystore
 password port &optional host) and `tls-listen-pem` (cert-file key-file port
-&optional host; all four interpreter/JVM only, see below), that return
+&optional host; the two clients run on interpreter/JVM AND the WASM component,
+the two listeners on interpreter/JVM only — see the TLS section), that return
 **bidirectional stream handles in the same handle space as file streams**, so
 the standard stream built-ins (`read-line`, `write-line`, `write-string`,
 `write-char`, `read-char`, `read-byte`, `write-byte`, `close`) work on sockets
@@ -81,7 +82,9 @@ matches fetch: interpreter/JVM signal, the WASM component returns `nil`.
 
 ## TLS (`rontolisp:tls-connect` / `tls-upgrade` / `tls-listen` / `tls-listen-pem`)
 
-Interpreter/JVM-only. The whole design leans on `SSLSocket` /
+The clients (`tls-connect`/`tls-upgrade`) run on interpreter, JVM AND the WASM
+component (the WASM bullet below); the listeners are interpreter/JVM only,
+permanently. On the interpreter/JVM the whole design leans on `SSLSocket` /
 `SSLServerSocket` being `java.net.Socket` / `ServerSocket` subclasses: the
 handshaken socket (and the TLS listener) goes into the same stream table as a
 plain entry and every existing `instanceof` branch (and the JVM `_sock*` /
@@ -154,20 +157,83 @@ handshake failure surface at first-I/O time, not accept time).
   `tcp-*` OR `tls-connect`/`tls-listen`/`%tls-listen-p12`, so a tls-only
   program gets the full socket runtime (and the stream built-ins grow their
   socket branches).
-- **WASM**: `tls-connect` / `tls-upgrade` / `tls-listen` / `tls-listen-pem`
-  (and the internal `%tls-listen-p12`) are a compile error in BOTH Preview 1
-  and `--component` mode (`WasmExprCompiler`) — TLS is interpreter/JVM only,
-  no component fallback. NOTE (corrected 2026-07): wasmtime 46 *does* host
-  `wasi:tls@0.3.0-draft` (p3), composable with the existing WASI-0.3 sockets
-  streams, so a component-mode `tls-connect`/`tls-upgrade` is technically
-  feasible — but the interface is **client-only** (no server API, so
-  `tls-listen`/`tls-listen-pem` can never work on WASM) and explicitly
-  experimental/non-semver (WIT churn between wasmtime releases, no
-  cert/insecure knobs). Deferred pending a stable interface; see
-  `.todo/050-tls-server-and-extensions.md`. Consequence for the cl+ssl shim:
-  a WASM program whose LIVE code reaches `cl+ssl:make-ssl-client-stream`
-  fails to compile with the tls-upgrade message (an https-free consumer is
-  fine once `LibraryDefunPruner` drops the unused shim defuns).
+- **WASM: the CLIENT half is `--component`-only and REAL since todo-410
+  (2026-08-16)** — `tls-connect` / `tls-upgrade` are the `tls.lisp` library
+  (spliced by `eval/TlsLibrary`) over a wit-imported `wasi:tls@0.3.0-draft`
+  (`eval/tls.wit`, vendored from wasmtime v47.0.2's
+  `crates/wasi-tls/src/p3/wit`), the sockets.lisp pattern. Run with
+  `-S tls=y` on top of the tcp flags. The server half (`tls-listen` /
+  `tls-listen-pem` / `%tls-listen-p12`) is a compile error on EVERY WASM
+  target **permanently** — the proposal defines only `client.wit`, there is
+  no server/accept interface in any draft, and the `WasmExprCompiler`
+  message says so ("client-only by design"), deliberately not reading like a
+  not-yet. Preview 1 keeps a compile error for the client half too (no
+  wasi:tls host API exists for p1; unlike the tcp call-time stubs, no
+  spliced library carries a dead `tls-connect` call site — the cl+ssl shim's
+  `tls-upgrade` site is prunable). Key mechanics:
+  - **The upgrade IS the primitive there** (the mirror image of the JVM):
+    `connector.receive` takes the socket's in-flight recv stream and answers
+    the cleartext read stream; `connector.send` takes the read end of a
+    fresh cleartext pair and answers the ciphertext stream, which goes
+    STRAIGHT into `tcp-socket.send` — no guest-side pump (wasmtime's own
+    `p3_tls_sample_application` is the reference wiring). `tls-connect` is
+    literally `tcp-connect` + `tls-upgrade`.
+  - **That wiring is why sockets.lisp DEFERS the send half of its plumbing**
+    (`%sock-plumb` takes only `receive()`; `%sock-ensure-tx` makes the write
+    pair and calls the at-most-once `tcp-socket.send` on the FIRST write):
+    `tls-upgrade` must interpose the transform before the socket's send side
+    is committed, so it requires a handle with no prior write (answers `nil`
+    otherwise) — the deferral is peer-invisible (nothing went out before the
+    first write either way) and atomic (no await between test and store).
+  - **The entry is swapped onto the cleartext ends IN PLACE**
+    (`%sock-set-streams`), so on this backend `tls-upgrade` answers the SAME
+    fd it was given (interpreter/JVM answer a NEW handle over the same
+    connection) and every stream built-in / `WasmSocketsRewrite` dispatch
+    keeps working on it unchanged — the handshaken handle lives in the same
+    `*sock-table*` as a plain socket, the invariant the other backends hold.
+    The swap happens BEFORE the handshake await, so a close after a failed
+    handshake drops handles the guest owns, never a transferred one.
+  - **Error convention**: nil on failure (the tcp/fetch convention);
+    `connector.connect`'s err arm is an `own<error>` RESOURCE whose handle
+    the handler releases (`%tls-err:error-drop`). **`:insecure` with a
+    non-nil value SIGNALS at run time** (the draft exposes no verification
+    knob — silently verifying where the caller asked not to, or the reverse,
+    is worse than an error; run time because the value is a runtime
+    expression, and the cl+ssl shim's verify path passes a literal
+    `:insecure nil`, which passes through). Verification runs against the
+    host's OWN trust anchors: wasmtime's default rustls provider compiles in
+    the webpki (Mozilla) roots — `javax.net.ssl.trustStore` and any CA file
+    have no effect, which is why the deterministic E2E pins the REJECTION of
+    a self-signed server and the trusted success path is an opt-in test
+    against a real host (an IP-SAN certificate, since `tcp-connect` takes
+    IPv4 literals only until `.todo/048`).
+  - **Splice trigger is textual** (`rontolisp:tls-connect`/`tls-upgrade`
+    references, the sockets precedent), and tls.lisp references
+    `rontolisp:tcp-connect` + the `%sock` package, so `TlsLibrary.process`
+    runs BEFORE `SocketsLibrary.process` in every chain (CLI, test
+    pipelines) and fires the sockets trigger itself. Consequence: a
+    component program that textually references the client tls names imports
+    `wasi:tls` and needs `-S tls=y` even when the calls are dead code
+    (tls.lisp is not in `LibraryDefunPruner`'s prunable set).
+  - **`wasmtime serve` does NOT host wasi:tls (measured on 47.0.3)**: a
+    serve+tls component compiles (the imports ride
+    `WasmServeComponentBuilder.additionalImports` like any user interface)
+    but fails instantiation with "component imports instance
+    `wasi:tls/types@0.3.0-draft` ... resource implementation is missing" --
+    serve.rs never links wasi-tls, even with `-S tls=y` on the command line
+    (`wasmtime run` does, in run.rs). Not ours to fix: a served handler that
+    needs outbound https uses `rontolisp:fetch` (wasi:http, where the HOST
+    does TLS). Re-check on wasmtime bumps alongside the WIT diff below.
+  - **Re-evaluation trigger (the draft's price)**: `tls.wit` was vendored
+    from wasmtime **v47.0.2** and verified against wasmtime 47.0.3 (local)
+    and the 47.0.2 test image; the interface is explicitly experimental /
+    non-semver ("no patch releases for wasip3 fixes"), so on every wasmtime
+    floor bump re-diff `eval/tls.wit` against
+    `crates/wasi-tls/src/p3/wit/deps/tls/` at the new tag — a WIT change is
+    a file edit here, not compiler work. Also re-check whether the draft
+    gained verification/client-cert/ALPN knobs (then the `:insecure` signal
+    and the cl+ssl shim gates should be revisited) or a server interface
+    (then the "permanent" compile error stops being true).
 - **Tests**: `TlsTestSupport` (shared, package `am.ik.rontolisp`) generates
   one self-signed PKCS12 keystore per JVM with the JDK `keytool`
   (CN=localhost, SAN ip:127.0.0.1 + dns:localhost so endpoint identification
@@ -184,9 +250,18 @@ handshake failure surface at first-I/O time, not accept time).
   `LispEvaluatorTest#tls*` (incl. `tlsConnectInsecure*`, `tlsListenPem*`),
   `JvmLispCompilerTest#compileAndRunTls*` (incl. `*Insecure*`,
   `*TlsListenP12*`) / `#compileTlsRejectsWrongArgCount`,
-  `WasmLispCompilerTest#tlsConnectIsCompileErrorInBothWasmModes` /
-  `#tlsListenIsCompileErrorInBothWasmModes` /
-  `#tlsListenPemIsCompileErrorInBothWasmModes`.
+  `WasmLispCompilerTest#tlsConnectIsCompileErrorOnPreview1` /
+  `#tlsUpgradeIsCompileErrorOnPreview1` /
+  `#tlsClientProgramCompilesAsComponentWithWasiTlsImports` /
+  `#tlsFreeSocketComponentImportsNoWasiTls` /
+  `#tlsListenIsCompileErrorOnEveryWasmTarget` /
+  `#tlsListenPemIsCompileErrorOnEveryWasmTarget`. The component E2E cannot use
+  this fixture (wasmtime's rustls trusts only its compiled-in webpki roots):
+  `WasmLispCompilerIntegrationTest#componentTlsUpgradeAttemptsARealHandshakeAndRejectsAnUntrustedServer`
+  pins the untrusted-rejection path against an in-container `openssl s_server`
+  (a REAL handshake attempt, deterministic), and
+  `#componentTlsFetchesARealHostOverHttps` (opt-in `RONTOLISP_HTTP_E2E=1`)
+  pins the trusted success path against 1.1.1.1's IP-SAN certificate.
 - **Examples**: `examples/net/https-hello.lisp` and `examples/net/kv-server-tls.lisp`
   are the TLS twins of `http-hello.lisp` / `kv-server.lisp` (only the listen
   call differs; both headers carry the keytool one-liner that generates
@@ -592,7 +667,9 @@ Todo-399. Every CL HTTP client (dexador, drakma, any usocket+cl+ssl stack)
 reaches TLS through cl+ssl, and the real cl+ssl is a CFFI binding to OpenSSL
 — unloadable here (cffi's `.asd` errors "Sorry, this Lisp is not yet
 supported"). The shim is the CLIENT side only, over `tls-upgrade`
-(interpreter/JVM; the WASM consequence is in the TLS section above). The
+(interpreter, JVM and the WASM component since todo-410 — the WASM mechanics,
+incl. the run-time `:insecure` signal the shim's verify-none path surfaces,
+are in the TLS section above; Preview 1 keeps the compile error). The
 `flexi-streams.lisp` pattern: a canonical-shape resource next to
 `ShimLibraries`, the package seeded in `PackageRegistry`, the system in
 `BuiltinSystems` + `ShimLibraries.RESOURCES` + the native-image
@@ -636,8 +713,8 @@ verify-none-context insecure path and the signal-on-no-backing gates),
 / `#compileTcpRejectsWrongArgCount` / `#compileAndRunUsocket*` /
 `#compileAndRunTlsUpgrade*` / `#compileAndRunClSslShim*` /
 `#compileTlsUpgradeRejectsWrongArgCount`,
-`WasmLispCompilerTest#tcp*` / `#usocket*` /
-`#tlsUpgradeIsCompileErrorInBothWasmModes` /
+`WasmLispCompilerTest#tcp*` / `#usocket*` / `#tls*` (the Preview-1 compile
+errors, the component compile + import pins, the permanent listen-family pins) /
 `#fetchAndTcpInOneComponentProgramCompiles` / `#httpHandlerWithTcpCompilesInServeMode`,
 `WasmLispCompilerIntegrationTest#componentTcp*` / `#componentUsocket*` (a full
 loopback echo runs deterministically inside the wasmtime container — no opt-in
@@ -661,8 +738,10 @@ touches `LispEvaluatorTest`, `JvmLispCompilerTest`,
 ## Not supported
 
 UDP (`.todo/047-udp-sockets.md`), hostname resolution on WASM
-(`.todo/048-wasm-tcp-hostname-lookup.md`), TLS servers /
-insecure-mode / WASM TLS (`.todo/050-tls-server-and-extensions.md`), timeouts,
+(`.todo/048-wasm-tcp-hostname-lookup.md` — it also caps the component TLS
+story: a real-world `https://` host needs its IP by hand plus `tls-upgrade`
+with the DNS name), TLS servers on WASM (permanent — client-only proposal),
+mutual TLS (`.todo/050-tls-server-and-extensions.md`), timeouts,
 `--no-gc`, the browser playground, and `(do () ...)`-style empty do bindings
 in examples (pre-existing `expandDo` limitation — the echo examples use a
 dummy binding).

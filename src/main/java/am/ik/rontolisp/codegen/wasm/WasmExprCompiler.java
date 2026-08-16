@@ -576,20 +576,32 @@ final class WasmExprCompiler {
 					WasmMutexCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
-				if (LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_UPGRADE.equals(qn.member())
-						|| LispNames.TLS_LISTEN.equals(qn.member()) || LispNames.TLS_LISTEN_PEM.equals(qn.member())
+				if ((LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_UPGRADE.equals(qn.member()))
+						&& !ctx.component) {
+					// Under --component the CLIENT tls built-ins are the spliced tls.lisp
+					// defuns (over the wit-imported wasi:tls@0.3.0-draft) -- the symbol
+					// falls through to the ordinary call path like the tcp family above.
+					// Preview 1 has no wasi:tls host API, so there it stays a compile
+					// error (unlike the tcp call-time stubs: no spliced library carries a
+					// dead tls-connect call site the way s-sql carries cl-postgres'
+					// socket layer -- the cl+ssl shim's tls-upgrade site is prunable).
+					throw new UnsupportedOperationException(
+							"rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
+									+ " (no wasi:tls host API is wired on Preview 1 WASM)");
+				}
+				if (LispNames.TLS_LISTEN.equals(qn.member()) || LispNames.TLS_LISTEN_PEM.equals(qn.member())
 						|| LispNames.TLS_LISTEN_P12.equals(qn.member())) {
-					// TLS is not implemented on the WASM backend: the wasi:tls proposal
-					// wasmtime exposes is an experimental client-only 0.3 draft (no
-					// server-side interface), so unlike the plain tcp built-ins there is
-					// no component fallback -- the tls built-ins are interpreter/JVM
-					// only.
+					// PERMANENT, not a not-yet: the wasi:tls proposal is client-only by
+					// design -- client.wit is all any draft defines, there is no
+					// server/accept interface to bind -- so TLS servers are
+					// interpreter/JVM only on every WASM target, --component included.
 					// (%tls-listen-p12 is the internal shape the tls-listen-pem inliner
 					// produces on the JVM path; the name is normalized to tls-listen-pem
 					// in the message.)
 					String name = LispNames.TLS_LISTEN_P12.equals(qn.member()) ? LispNames.TLS_LISTEN_PEM : qn.member();
 					throw new UnsupportedOperationException("rontolisp:" + name
-							+ " is not supported on the WASM backend (TLS is interpreter/JVM only); use the interpreter or the JVM backend");
+							+ " is not supported on any WASM target: the wasi:tls proposal defines no server"
+							+ " interface (it is client-only by design), so TLS servers are interpreter/JVM only");
 				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}

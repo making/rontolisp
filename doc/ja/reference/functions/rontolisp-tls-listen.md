@@ -50,9 +50,11 @@ keytool -genkeypair -alias my-server -keyalg EC -dname CN=localhost \
   でもエラーを通知します。
 - **WASM**: 非サポート — `tls-listen` は Preview 1 と `--component` の
   どちらのモードでも**コンパイルエラー**です。`wasi:tls` の提案は
-  **クライアント専用**(WASM コンポーネント向けのサーバー側 TLS
+  **設計上クライアント専用**(どのドラフトにもサーバー側 TLS
   インターフェイスは存在しない)であり、TLS *サーバー*には WASM
-  の経路がありません。
+  の経路がありません — `--component` で動くのはクライアント側
+  ([`rontolisp:tls-connect`](rontolisp-tls-connect.md) /
+  [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md))だけです。
 - **ブラウザプレイグラウンド**: 非サポート — ブラウザのサンドボックスには生の
   TCP ソケットがないため、`tls-listen` はエラーを通知します。
 

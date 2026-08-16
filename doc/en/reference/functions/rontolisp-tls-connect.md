@@ -48,11 +48,22 @@ TLS-wrapped protocols:
 - **Interpreter** and **JVM**: use the JDK TLS stack (`SSLSocket`); `host` may
   be a hostname or an IP literal. A failed connection or handshake (refused
   port, untrusted certificate, hostname mismatch) signals an error.
-- **WASM**: not supported yet — `tls-connect` is a **compile error** in both
-  Preview 1 and `--component` mode. A component-mode client could be built on
-  wasmtime's experimental `wasi:tls@0.3.0-draft` interface, but that interface
-  is unstable (no semver guarantee); until it settles, use the interpreter or
-  the JVM backend.
+- **WASM `--component`** (WASI 0.3): supported, over wasmtime's
+  `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the usual socket run
+  flags (`-W exceptions=y -S tcp=y -S inherit-network=y`). Like
+  `tcp-connect` there, `host` must be an **IPv4 literal** (or `localhost`) —
+  and it doubles as the name the certificate is verified against, so for a
+  real-world host prefer `tcp-connect` to its address plus
+  [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md) with the DNS name.
+  Failures follow the WASM error convention and return `nil` instead of
+  signaling. Certificates are verified against the trust anchors compiled
+  into the host (wasmtime bundles the Mozilla root store; the trust-store
+  system properties and `:insecure` have no effect there — a non-`nil`
+  `:insecure` value **signals** rather than silently verifying). The
+  interface is an explicitly experimental draft, so a wasmtime update may
+  need a matching rontolisp update.
+- **WASM Preview 1**: not supported — a **compile error** (no `wasi:tls` host
+  API exists for Preview 1).
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so `tls-connect` signals an error.
 

@@ -9,6 +9,7 @@ import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.StdinLibrary;
+import am.ik.rontolisp.eval.TlsLibrary;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -32,9 +33,13 @@ class WasmLispCompilerTest {
 		// no-op for every non-fetch program.
 		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
 				WitExportDirective.Backend.WASM_COMPONENT, false);
-		// The tcp built-ins are the sockets.lisp library over wit-imported
+		// The client tls built-ins are the tls.lisp library over wit-imported
+		// wasi:tls@0.3.0-draft, spliced BEFORE sockets.lisp (its forms reference
+		// rontolisp:tcp-connect, which fires the sockets trigger), then the tcp
+		// built-ins are the sockets.lisp library over wit-imported
 		// wasi:sockets the same way (a no-op for every non-socket program), followed
 		// by the stdin machinery its dispatchers fall through to.
+		program = TlsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
 		// uiop:getenv is environment.lisp over wit-imported wasi:cli/environment on this
@@ -49,6 +54,7 @@ class WasmLispCompilerTest {
 	private byte[] compileComponentOptimized(String lispCode) {
 		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
 				WitExportDirective.Backend.WASM_COMPONENT, false);
+		program = TlsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
 		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
@@ -470,53 +476,76 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void tlsConnectIsCompileErrorInBothWasmModes() {
-		// Unlike the plain tcp built-ins there is no component fallback: wasmtime hosts
-		// no TLS for WASI 0.3 components, so the tls built-ins are interpreter/JVM only.
+	void tlsConnectIsCompileErrorOnPreview1() {
+		// Preview 1 only: --component compiles the client tls built-ins against the
+		// spliced tls.lisp (over wit-imported wasi:tls@0.3.0-draft) since todo-410;
+		// Preview 1 has no wasi:tls host API, so there the compile error stays.
 		assertThatThrownBy(() -> compile("(rontolisp:tls-connect \"example.com\" 443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-CONNECT is not supported on the WASM backend");
-		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-connect \"example.com\" 443)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-CONNECT is not supported on the WASM backend");
+			.hasMessageContaining("TLS-CONNECT requires the interpreter, the JVM backend or --component");
 	}
 
 	@Test
-	void tlsUpgradeIsCompileErrorInBothWasmModes() {
-		// The cl+ssl shim's substrate stays a compile error like the rest of the tls
-		// family: wasi:tls@0.3.0-draft exists but is experimental/non-semver, so no
-		// component fallback until it settles (.kb/tcp-sockets.md, .todo/050).
+	void tlsUpgradeIsCompileErrorOnPreview1() {
+		// The cl+ssl shim's substrate: a compile error on Preview 1 only (see above).
 		assertThatThrownBy(() -> compile("(rontolisp:tls-upgrade 200 \"example.com\")"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-UPGRADE is not supported on the WASM backend");
-		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-upgrade 200 \"example.com\")"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-UPGRADE is not supported on the WASM backend");
+			.hasMessageContaining("TLS-UPGRADE requires the interpreter, the JVM backend or --component");
 	}
 
 	@Test
-	void tlsListenIsCompileErrorInBothWasmModes() {
+	void tlsClientProgramCompilesAsComponentWithWasiTlsImports() {
+		// The client tls built-ins under --component are the tls.lisp splice over
+		// wit-imported wasi:tls@0.3.0-draft: the component imports BOTH tls
+		// instances (types carries the error resource the client results use).
+		byte[] component = compileComponent("""
+				(let ((s (rontolisp:tcp-connect "127.0.0.1" 8443)))
+				  (print (rontolisp:tls-upgrade s "localhost"))
+				  (print (rontolisp:tls-connect "127.0.0.1" 8443)))
+				""");
+		assertThat(componentImportNames(component)).contains("wasi:tls/types@0.3.0-draft",
+				"wasi:tls/client@0.3.0-draft");
+	}
+
+	@Test
+	void tlsFreeSocketComponentImportsNoWasiTls() {
+		// The splice is reference-gated: a plain socket program must not grow the
+		// wasi:tls imports (they would demand -S tls=y at run time).
+		byte[] component = compileComponent("""
+				(let ((s (rontolisp:tcp-connect "127.0.0.1" 8080)))
+				  (print s))
+				""");
+		assertThat(componentImportNames(component)).noneMatch(name -> name.startsWith("wasi:tls/"));
+	}
+
+	@Test
+	void tlsListenIsCompileErrorOnEveryWasmTarget() {
+		// PERMANENT: the wasi:tls proposal is client-only by design (no server
+		// interface exists in any draft), so the server family stays off every WASM
+		// target, --component included.
 		assertThatThrownBy(() -> compile("(rontolisp:tls-listen \"ks.p12\" \"pw\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-LISTEN is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN is not supported on any WASM target")
+			.hasMessageContaining("no server interface");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-listen \"ks.p12\" \"pw\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-LISTEN is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN is not supported on any WASM target")
+			.hasMessageContaining("no server interface");
 	}
 
 	@Test
-	void tlsListenPemIsCompileErrorInBothWasmModes() {
+	void tlsListenPemIsCompileErrorOnEveryWasmTarget() {
 		assertThatThrownBy(() -> compile("(rontolisp:tls-listen-pem \"cert.pem\" \"key.pem\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-LISTEN-PEM is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN-PEM is not supported on any WASM target");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-listen-pem \"cert.pem\" \"key.pem\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-LISTEN-PEM is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN-PEM is not supported on any WASM target");
 		// The internal %tls-listen-p12 shape (were the inliner ever run for WASM) also
 		// reports as tls-listen-pem.
 		assertThatThrownBy(() -> compile("(rontolisp:%tls-listen-p12 \"blob\" \"pw\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-LISTEN-PEM is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN-PEM is not supported on any WASM target");
 	}
 
 	// The serve library pipeline the CLI runs for a --component rontolisp:http-handler:

@@ -1,11 +1,12 @@
-# TLS follow-ups: insecure mode (DONE), PEM input (DONE), mutual TLS, WASM support
+# TLS follow-ups: insecure mode (DONE), PEM input (DONE), WASM client (DONE), mutual TLS
+
+Difficulty: Medium
 
 `rontolisp:tls-connect` (client) and `rontolisp:tls-listen` (server, PKCS12
 keystore + password; accepted via the plain `tcp-accept`) were added 2026-07
 on the interpreter and JVM backends; `rontolisp:tls-upgrade` (client TLS over
 an ALREADY-CONNECTED handle, the cl+ssl shim's substrate; same `:insecure`
-mechanics, same WASM compile error) followed 2026-08-16 (todo-399). Follow-up
-status:
+mechanics) followed 2026-08-16 (todo-399). Follow-up status:
 
 ## Insecure mode (skip certificate verification) -- DONE (2026-07)
 
@@ -14,7 +15,9 @@ Shipped as `(rontolisp:tls-connect host port :insecure value)`; a non-nil
 uses a trust-all `X509TrustManager`; the JVM makes the generated program class
 itself implement `X509TrustManager` (no-arg `<init>` + the three trust methods,
 gated on `usesTlsConnect`, kept as extra `--optimize` roots). Details in
-`.kb/tcp-sockets.md`.
+`.kb/tcp-sockets.md`. NOTE: on the WASM component (below) `:insecure` has no
+backing -- a non-nil value SIGNALS at run time (`wasi:tls@0.3.0-draft` exposes
+no verification knob).
 
 ## PEM certificate/key input -- DONE (2026-07)
 
@@ -25,47 +28,30 @@ JVM `TlsPemInliner` cli pre-pass parses literal paths at compile time, embeds a
 Base64 PKCS12 blob and rewrites to the internal `%tls-listen-p12`. Details in
 `.kb/tcp-sockets.md`.
 
+## TLS clients on the WASM component -- DONE (2026-08-16, todo-410)
+
+`tls-connect` / `tls-upgrade` run under `--component` over a wit-imported
+`wasi:tls@0.3.0-draft` (`eval/tls.wit` + `eval/tls.lisp`, spliced by
+`eval/TlsLibrary`; run with `-S tls=y`). The upgrade is the primitive there
+(the host `connector` transforms wrap the socket's own streams, which is why
+sockets.lisp defers its send-side plumbing to the first write), the entry is
+upgraded IN PLACE (same fd), failures answer nil, and the interface's draft
+status is contained: a WIT bump is a file edit, with the re-evaluation trigger
+written into `.kb/tcp-sockets.md` (vendored from wasmtime v47.0.2). Preview 1
+keeps the compile error (no wasi:tls host API exists for p1).
+
+## TLS servers on WASM -- PERMANENTLY OUT (not a deferral)
+
+The `wasi:tls` proposal defines only `client.wit`; there is no server/accept
+interface in any draft, so `tls-listen` / `tls-listen-pem` are a compile error
+on every WASM target and the `WasmExprCompiler` message says so ("client-only
+by design"). Re-open ONLY if the proposal ever grows a server interface (the
+re-evaluation trigger in `.kb/tcp-sockets.md` covers this).
+
 ## Mutual TLS (client-certificate authentication) -- TODO
 
 `tls-listen` has no need-client-auth option and `tls-connect` cannot present a
 client certificate (`javax.net.ssl.keyStore` system properties would work on
-the client side today, undocumented).
-
-## TLS on the WASM backend -- DEFERRED (feasibility re-checked 2026-07)
-
-Correction to the earlier note (which said "wasmtime hosts no TLS for WASI
-0.3"): **wasmtime 46 DOES host `wasi:tls@0.3.0-draft`** (a p3, component-model-
-async interface over `stream<u8>`), enabled with `-S tls=y` alongside the
-existing `-S tcp=y -S inherit-network=y`. Its `connector.send`/`receive`
-transform `stream<u8>` <-> `stream<u8>`, the same currency as the existing
-`sockets.lisp` plumbing, so a component-mode `tls-connect` is technically
-feasible without any 0.2 hybrid machinery.
-
-Why it is deferred anyway:
-
-1. **Client-only.** The `wasi:tls` proposal (WASI Phase 1) has only
-   `client.wit`; there is NO server/accept interface in any draft. So
-   `tls-listen` / `tls-listen-pem` can never work on WASM -- and every TLS
-   example in this project (`https-hello.lisp`, `kv-server-tls.lisp`) is a
-   server.
-2. **Experimental / non-semver.** wasmtime's `crates/wasi-tls/src/p3` says
-   verbatim it is "under heavy development ... not ready for production ... no
-   patch releases for wasip3 fixes." The WIT will churn between wasmtime
-   releases, and no ALPN / client-cert / insecure knobs are exposed yet.
-3. **Upstream churn is the only real blocker -- the effort is now small.**
-   The earlier "large effort" estimate (a new tls import instance, the
-   `connector` resource type, ~4 new stream built-ins, an async `connect`
-   lowering) predates the `wit-import` pipeline. Since that landed, a new host
-   interface costs a `.wit` file plus a Lisp library, NOT compiler work
-   (`.kb/wasi-component.md`, `.kb/wit.md`); `sockets.lisp`, `http.lisp` and
-   `examples/wit/keyvalue` are all exactly this shape. So a component-mode
-   `tls-connect` is a `rontolisp:wit-import` of wasi-tls's
-   `wit-0.3.0-draft/client.wit` plus a `tls.lisp` over the existing stream
-   built-ins -- small. It is deferred on reasons 1 and 2 alone.
-
-Decision: keep `tls-connect` / `tls-upgrade` / `tls-listen` / `tls-listen-pem`
-a WASM compile
-error for now; revisit a component-mode `tls-connect`/`tls-upgrade` when `wasi:tls` stabilizes
-(leaves Phase 1 / gains a semver-stable wasmtime host). Investigation sources:
-wasmtime release-46.0.0 `crates/wasi-tls` (p2 + p3 impls, `src/commands/run.rs`
-TLS wiring), `WebAssembly/wasi-tls` (`wit-0.3.0-draft/client.wit`, no server.wit).
+the client side today, undocumented). On the WASM component the draft exposes
+no client-identity API either, so this is interpreter/JVM work when it comes;
+the cl+ssl shim signals on `:key`/`:certificate`/`:password` until then.

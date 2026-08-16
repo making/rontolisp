@@ -51,11 +51,22 @@ HTTPS requests prefer [`rontolisp:fetch`](rontolisp-fetch.md)):
   (`SSLSocketFactory.createSocket(socket, host, port, true)`); a failed
   handshake (untrusted certificate, hostname mismatch, a peer that does not
   speak TLS) signals an error.
-- **WASM**: not supported yet — `tls-upgrade` is a **compile error** in both
-  Preview 1 and `--component` mode, like the rest of the TLS family. wasmtime's
-  experimental `wasi:tls@0.3.0-draft` interface could host it, but it is
-  unstable (no semver guarantee); until it settles, use the interpreter or the
-  JVM backend.
+- **WASM `--component`** (WASI 0.3): supported, over wasmtime's
+  `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the usual socket run
+  flags. On this backend the upgrade is the *natural* primitive (the host's
+  `connector` transforms wrap the socket's own streams), with three
+  divergences: the answer is the **same** handle it was given (upgraded in
+  place, not a new handle); the handle must not have been **written to** yet
+  (the transform has to be interposed before the socket's send side is
+  committed — a handle with prior writes answers `nil`); and failures return
+  `nil` instead of signaling (the WASM error convention). Certificates are
+  verified against the trust anchors compiled into the host (wasmtime bundles
+  the Mozilla root store; the trust-store system properties and `:insecure`
+  have no effect there — a non-`nil` `:insecure` value **signals** rather
+  than silently verifying). The interface is an explicitly experimental
+  draft, so a wasmtime update may need a matching rontolisp update.
+- **WASM Preview 1**: not supported — a **compile error** (no `wasi:tls` host
+  API exists for Preview 1).
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so `tls-upgrade` signals an error.
 

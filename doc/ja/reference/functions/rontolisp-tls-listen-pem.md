@@ -45,9 +45,11 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
   PEM ファイルを必要としません。
 - **WASM**: 非サポート — `tls-listen-pem` は Preview 1 と `--component` の
   どちらのモードでも**コンパイルエラー**です。`wasi:tls` の提案は
-  **クライアント専用**(WASM コンポーネント向けのサーバー側 TLS
+  **設計上クライアント専用**(どのドラフトにもサーバー側 TLS
   インターフェイスは存在しない)であり、TLS *サーバー*には WASM
-  の経路がありません。
+  の経路がありません — `--component` で動くのはクライアント側
+  ([`rontolisp:tls-connect`](rontolisp-tls-connect.md) /
+  [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md))だけです。
 - **ブラウザプレイグラウンド**: 非サポート — ブラウザのサンドボックスには生の
   TCP ソケットがないため、`tls-listen-pem` はエラーを通知します。
 

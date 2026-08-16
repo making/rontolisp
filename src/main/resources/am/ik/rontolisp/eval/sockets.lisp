@@ -14,10 +14,13 @@
 ;;;;   - `listen` returns a stream<tcp-socket>; accept = one element read of that
 ;;;;     stream through the accept-stream alias built-in (a 4-byte handle element,
 ;;;;     the one non-u8 stream lift).
-;;;;   - a connected socket is plumbed eagerly like the old adapter: receive()
-;;;;     yields the recv stream (its future dropped immediately -- EOF is the
-;;;;     stream status), a fresh stream.new pair's read end goes to send() (called
-;;;;     at most once) and the write end stays for the write built-ins.
+;;;;   - a connected socket's READ half is plumbed eagerly like the old adapter:
+;;;;     receive() yields the recv stream (its future dropped immediately -- EOF
+;;;;     is the stream status). The WRITE half is deferred to the first write
+;;;;     (%sock-ensure-tx): a fresh stream.new pair's read end goes to send()
+;;;;     (called at most once) and the write end stays for the write built-ins.
+;;;;     The deferral is what lets tls.lisp's tls-upgrade route send() through
+;;;;     the wasi:tls transform instead.
 ;;;;   - the socket HANDLE is an integer >= 200 in the file-stream handle space;
 ;;;;     the entry lives in the Lisp-side *sock-table*. The stream built-ins
 ;;;;     (read-line/read-byte/read-char/write-line/write-byte/close, plus
@@ -64,6 +67,16 @@
 
 (defun rontolisp::%sock-set-eof (e)
   (rplaca (cdr (cdr (cdr (cdr (cdr (cdr e)))))) t))
+
+(defun rontolisp::%sock-set-tx (e tx) (rplaca (cdr (cdr (cdr e))) tx))
+
+(defun rontolisp::%sock-set-streams (e recv tx)
+  ;; tls.lisp's tls-upgrade swaps the entry onto the cleartext stream ends IN
+  ;; PLACE -- same fd before and after the upgrade (the component divergence
+  ;; from the interpreter/JVM's new-handle convention, .kb/tcp-sockets.md), so
+  ;; every stream built-in keeps dispatching on it unchanged.
+  (rplaca (cdr (cdr e)) recv)
+  (rontolisp::%sock-set-tx e tx))
 
 (defun rontolisp::%sock-register (sock kind recv tx)
   (let ((fd rontolisp::*sock-next-fd*))
@@ -119,14 +132,33 @@
          :payload :invalid-argument
          :message (concatenate 'string "tcp: not an IPv4 literal: " host)))))
 
-;;; --- plumbing (the old adapter's $plumb): recv stream + send pair, eagerly ---
+;;; --- plumbing (the old adapter's $plumb): the recv stream eagerly, the send
+;;; half DEFERRED to the first write ---
 
 (defun rontolisp::%sock-plumb (sock kind)
+  ;; receive() is taken eagerly (its future dropped immediately -- EOF is the
+  ;; stream status). The send half is deferred to %sock-ensure-tx at the first
+  ;; write: tcp-socket.send may be called at most once, and deferring it is
+  ;; what leaves room for tls.lisp's tls-upgrade to interpose the wasi:tls
+  ;; transform between the cleartext writes and the wire. The peer sees no
+  ;; difference -- nothing went out before the first write either way.
   (let* ((rpair (%sock:tcp-socket-receive sock)) (recv (car rpair)))
     (%sock:sock-future-drop-readable (car (cdr rpair)))
-    (let ((spair (%sock:sock-stream-new)))
-      (%sock:sock-future-drop-readable (%sock:tcp-socket-send sock (car spair)))
-      (rontolisp::%sock-register sock kind recv (cdr spair)))))
+    (rontolisp::%sock-register sock kind recv nil)))
+
+(defun rontolisp::%sock-ensure-tx (e)
+  ;; First write: make the write pair and hand its read end to the (at most
+  ;; once) tcp-socket.send. No await sits between the test and the store, so
+  ;; the deferral is atomic under the single-threaded scheduler -- two tasks
+  ;; sharing one socket cannot both call send.
+  (let ((tx (rontolisp::%sock-e-tx e)))
+    (if tx
+        tx
+        (let ((spair (%sock:sock-stream-new)))
+          (%sock:sock-future-drop-readable
+           (%sock:tcp-socket-send (rontolisp::%sock-e-sock e) (car spair)))
+          (rontolisp::%sock-set-tx e (cdr spair))
+          (cdr spair)))))
 
 ;;; --- the tcp-* surface (sync wrappers force; async bodies are rewritten onto
 ;;; the %...-future internals by the compiler's promotion pass) ---
@@ -504,8 +536,10 @@
 (defun rontolisp::%sock-write-string (e s)
   ;; The byte-length guard, not the char count: a %str-from-byte payload whose
   ;; byte is a UTF-8 continuation value has char count 0 but must still go out.
+  ;; %sock-ensure-tx makes the write pair (and calls the at-most-once
+  ;; tcp-socket.send) on the first write -- the deferral tls-upgrade rests on.
   (when (> (rontolisp::%str-byte-length s) 0)
-    (%sock:sock-stream-write (rontolisp::%sock-e-tx e) s))
+    (%sock:sock-stream-write (rontolisp::%sock-ensure-tx e) s))
   s)
 
 (defun rontolisp::%io-write-line (s &optional stream)
@@ -566,7 +600,11 @@
                 (%sock:accept-stream-drop-readable (rontolisp::%sock-e-recv e))
                 (%sock:tcp-socket-drop (rontolisp::%sock-e-sock e)))
               (progn
-                (%sock:sock-stream-drop-writable (rontolisp::%sock-e-tx e))
+                ;; A never-written socket has no tx (the send half is deferred
+                ;; to the first write); the socket drop below closes it and
+                ;; sends the FIN.
+                (let ((tx (rontolisp::%sock-e-tx e)))
+                  (when tx (%sock:sock-stream-drop-writable tx)))
                 (%sock:sock-stream-drop-readable (rontolisp::%sock-e-recv e))
                 (%sock:tcp-socket-drop (rontolisp::%sock-e-sock e))))
           (remhash stream rontolisp::*sock-table*)
