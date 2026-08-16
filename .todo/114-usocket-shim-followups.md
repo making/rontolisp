@@ -17,6 +17,26 @@ select needs a poll primitive on every backend (interpreter:
 semantically-lying no-op is worth shipping (document loudly) or wait for the
 poll primitive.
 
+## Tier 1b: socket-option (`:receive-timeout`)
+
+`usocket:socket-option` is absent, so a consumer setting a read timeout dies
+at LOAD time on the package-qualified reference:
+
+```
+error: The symbol SOCKET-OPTION is not external in the USOCKET package
+```
+
+dexador (`.todo/396`) does exactly that --
+`(setf (usocket:socket-option connection :receive-timeout) read-timeout)` --
+and it is the portable spelling every usocket client uses for timeouts. The
+`(setf ...)` place is the whole surface worth having; `:receive-timeout` needs
+a per-socket read deadline on the interpreter/JVM socket table
+(`SO_TIMEOUT`), which the WASM backends have no equivalent for. Decide the
+same way Tier 1 above decides `wait-for-input`: a real option on the two
+backends that can, and a loud refusal rather than a silent no-op on the two
+that cannot -- a timeout that never fires is the failure mode a client sets it
+to avoid.
+
 ## Tier 2: socket-server
 
 A single-threaded accept loop (`socket-server host port handler` with
