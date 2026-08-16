@@ -142,7 +142,17 @@ vectors, but a half-contract builtin is worse than none), and the string rebuild
 splices a `(make-array n :element-type 'character :initial-element item)` filler
 between the untouched head and tail. The interpreter writes a string in place
 through `LispString.setCharAt`, so that one deviation is compile-path-only,
-exactly as it is for `replace`. `lowerCharacterInitialContentsMakeArray` lowers rank-1 character
+exactly as it is for `replace`. `nstring-upcase` / `nstring-downcase` /
+`nstring-capitalize` (todo-402) join that family rather than forming a second
+one: they are prelude Lisp that folds with the NON-destructive sibling and then
+walks `%nstring-replace`'s `(setf (aref s i) c)` over the result, so they inherit
+the same split — a mutable character vector is written in place and comes back
+`eq` on every backend, an immutable string is rebuilt on the compile paths while
+the interpreter folds the caller's own object. The RETURN value is correct on all
+four either way, which is what portable code (chunga's
+`(intern (nstring-upcase s) :keyword)`) consumes; `.kb/string-write-runtime.md`.
+
+`lowerCharacterInitialContentsMakeArray` lowers rank-1 character
 `:initial-contents` to a fresh string copy (`subseq` of a stringp contents,
 else `coerce 'string`) — both compilers try it BEFORE the general
 `:initial-contents` lowering. Default `:initial-element` for a char vector

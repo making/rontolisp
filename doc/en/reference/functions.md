@@ -45,6 +45,7 @@ page.
 | `string-upcase` | `(string-upcase "abc")` | `"ABC"` (full-Unicode, and length-preserving: `char-upcase` per character) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"` (first letter of each word) |
+| `nstring-upcase` `nstring-downcase` `nstring-capitalize` | `(nstring-upcase (copy-seq "abc"))` | `"ABC"` — the destructive spellings: the fold is written back into the argument (a mutable character vector is written in place on every backend; an immutable string is rebuilt on the compile paths) |
 | `subseq` | `(subseq "hello" 1 3)` | `"el"` (works on strings and lists, e.g. `(subseq '(1 2 3 4) 1 3)` => `(2 3)`; the `end` argument is optional) |
 | `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- a fresh string of `n` copies of `:initial-element` (default space); `:element-type` is accepted and ignored |
 | `make-sequence` | `(make-sequence 'list 3)` | `(nil nil nil)` -- a sequence of the literal quoted result type (string types via `make-string`, `list` via `make-list`, vector types via `make-array`) |
@@ -73,6 +74,7 @@ page.
 | `pathname-version` | `(pathname-version #P"d/a.txt")` | always `nil` — there are no file versions here |
 | `wild-pathname-p` | `(wild-pathname-p "d/*.txt" :name)` | whether the pathname (or just the `:directory`/`:name`/`:type` component named) holds a `*` or `?`. `:host`/`:device`/`:version` are always `nil` |
 | `enough-namestring` | `(enough-namestring "/a/b/c.lisp" "/a/")` | `"b/c.lisp"` — the shortest namestring that still names the file when merged against the defaults (`*default-pathname-defaults*` by default): the inverse of `merge-pathnames` |
+| `file-namestring` `directory-namestring` `host-namestring` | `(file-namestring #P"/a/b/c.txt")` | `"c.txt"` — the string-valued components: the name-and-type half, the directory half (they concatenate back to `namestring`), and `""` for the host a rontolisp namestring does not carry |
 | `translate-pathname` | `(translate-pathname "src/f.lisp" "src/*.lisp" "build/*.fasl")` | `#P"build/f.fasl"` — matches the source against the from-wildcard and substitutes what each `*`/`?` captured into the to-wildcard. A source that does not match signals |
 | `translate-logical-pathname` | `(translate-logical-pathname "d/a.txt")` | `#P"d/a.txt"` — the identity: every rontolisp pathname is physical, so there is nothing to translate |
 | `logical-pathname` | `(logical-pathname "SYS:SRC;")` | always signals — no logical host can be defined here, so no argument can name a logical pathname |
@@ -265,6 +267,7 @@ page.
 | `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (integer on every backend) |
 | `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (integer on every backend) |
 | `sleep` | `(sleep 0.5)` | block for a non-negative number of seconds and return `nil` (a real host timer everywhere but WASM Preview 1, which busy-waits on the clock, and `--no-wasi`, which signals) |
+| `lisp-implementation-type` `lisp-implementation-version` `software-type` `software-version` `machine-type` `machine-version` `machine-instance` `short-site-name` `long-site-name` | `(lisp-implementation-type)` | `"rontolisp"` — the environment enquiry constants: the version is the build's, `software-type` is `"Unix"`, `machine-type` is the ABI targeted (`"JVM"` / `"WASM32"`), and everything rontolisp cannot know is `nil` |
 | `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM use `Math.log`, WASM a software approximation) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM use `Math.sin`/`cos`/`tan`, WASM a software approximation) |

@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.UiopExports;
+import am.ik.rontolisp.Version;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -59,6 +60,19 @@ import org.jspecify.annotations.Nullable;
  * wraps the answer back into a pathname; {@code truename} is {@code probe-file} plus a
  * signal on a missing file, which is what makes the {@code (ignore-errors (truename x))}
  * existence-probe idiom work.</li>
+ * <li>{@code file-namestring} / {@code directory-namestring} / {@code host-namestring} --
+ * the string-valued halves of a namestring, split where {@code %pathname-split} splits it
+ * (so the first two concatenate back to the whole namestring) and {@code ""} for the host
+ * a rontolisp namestring does not carry.</li>
+ * <li>{@code nstring-upcase} / {@code nstring-downcase} / {@code nstring-capitalize} --
+ * the DESTRUCTIVE case family: the fold comes from the non-destructive sibling and
+ * {@code %nstring-replace} writes it back into the argument.</li>
+ * <li>The environment-enquiry family ({@code lisp-implementation-type} /
+ * {@code -version}, {@code software-type} / {@code -version}, {@code machine-type} /
+ * {@code -version} / {@code machine-instance}, {@code short-site-name} /
+ * {@code long-site-name}) -- a per-backend constant each; only {@code machine-type}
+ * differs between backends, through the {@code %target-machine-type} primitive. See
+ * {@code .kb/time-environment-builtins.md} for what each one answers and why.</li>
  * <li>{@code directory} -- the directory-LISTING primitive, one rendering of the pattern
  * / prefix / kind / ordering rules over the single {@code %list-directory} primitive each
  * backend implements. uiop's listing family sits on top of it in
@@ -496,6 +510,29 @@ public final class LispPreludeLibrary {
 				             (string= %en-dir (subseq %en-p 0 %en-n)))
 				        (subseq %en-p %en-n)
 				        %en-p)))
+				""");
+		// file-namestring / directory-namestring: the two halves of a namestring, split
+		// at the SAME place %pathname-split splits it (its first element is a literal
+		// prefix of the namestring), so the pair concatenates back to the namestring for
+		// every path and neither can drift from pathname-name / pathname-type. A
+		// namestring that names a directory ("d/") has an empty file-namestring, and one
+		// with no slash at all ("a.txt") an empty directory-namestring -- both what CL
+		// answers. Values are STRINGS, as CL specifies.
+		SOURCES.put(LispNames.FILE_NAMESTRING, """
+				(defun file-namestring (%fns-path)
+				  (let ((%fns-p (namestring %fns-path)))
+				    (subseq %fns-p (length (first (%pathname-split %fns-p))))))
+				""");
+		SOURCES.put(LispNames.DIRECTORY_NAMESTRING, """
+				(defun directory-namestring (%dns-path)
+				  (first (%pathname-split (namestring %dns-path))))
+				""");
+		// host-namestring: the empty string, the STRING counterpart of pathname-host's
+		// nil -- a rontolisp namestring has no host syntax, so there is no host name to
+		// render, and CL requires a string here. SBCL answers "" on Unix as well.
+		SOURCES.put(LispNames.HOST_NAMESTRING, """
+				(defun host-namestring (%hns-path)
+				  (progn (namestring %hns-path) ""))
 				""");
 		// %wild-captures: the CAPTURING twin of %wild-match -- one matcher rule, two
 		// answers. Each wildcard contributes the substring it consumed (one character
@@ -1157,6 +1194,46 @@ public final class LispPreludeLibrary {
 				            (mod (+ (- days 25567) 3) 7)
 				            nil tz)))
 				""");
+		// The environment-enquiry family (CLHS 25.1.5). Every one of them is a CONSTANT
+		// per backend, so they are prelude defuns rather than per-backend built-ins, and
+		// only machine-type actually differs between backends (through the
+		// %target-machine-type primitive below). The choice of answers -- and why the
+		// unknowable ones are nil rather than a fabricated string -- is
+		// .kb/time-environment-builtins.md; a caller composing a User-Agent out of them
+		// must not get a different string per backend by accident, which is why the
+		// version is BAKED here from the compiling build rather than read at run time.
+		SOURCES.put(LispNames.LISP_IMPLEMENTATION_TYPE, """
+				(defun lisp-implementation-type () "rontolisp")
+				""");
+		SOURCES.put(LispNames.LISP_IMPLEMENTATION_VERSION,
+				"(defun lisp-implementation-version () \"" + Version.getVersion() + "\")\n");
+		// software-type: the SAME claim uiop/os makes unconditionally (os-unix-p is t,
+		// operating-system is :unix -- every backend presents the POSIX-shaped file
+		// model), so the CL spelling and the uiop one cannot contradict each other.
+		SOURCES.put(LispNames.SOFTWARE_TYPE, """
+				(defun software-type () "Unix")
+				""");
+		SOURCES.put(LispNames.SOFTWARE_VERSION, """
+				(defun software-version () nil)
+				""");
+		// machine-type: the ABI the artifact targets, not the host CPU -- a class file
+		// and a wasm module are both CPU-independent, which is the same reason
+		// uiop:architecture answers :jvm / :wasm32 rather than the processor.
+		SOURCES.put(LispNames.MACHINE_TYPE, """
+				(defun machine-type () (%target-machine-type))
+				""");
+		SOURCES.put(LispNames.MACHINE_VERSION, """
+				(defun machine-version () nil)
+				""");
+		SOURCES.put(LispNames.MACHINE_INSTANCE, """
+				(defun machine-instance () nil)
+				""");
+		SOURCES.put(LispNames.SHORT_SITE_NAME, """
+				(defun short-site-name () nil)
+				""");
+		SOURCES.put(LispNames.LONG_SITE_NAME, """
+				(defun long-site-name () nil)
+				""");
 		// rontolisp:random-bytes -- the public cryptographic-entropy API, one Lisp
 		// definition over the per-backend %random-byte primitive (SecureRandom on the
 		// interpreter/JVM, WASI random_get on both WASM backends).
@@ -1420,6 +1497,36 @@ public final class LispPreludeLibrary {
 				(defun string-not-equal (string1 string2 &key (start1 0) end1 (start2 0) end2)
 				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 t)))
 				    (if (= (car r) 0) nil (cdr r))))
+				""");
+		// The DESTRUCTIVE case family. The fold itself is delegated to the
+		// non-destructive sibling, so nstring-upcase and string-upcase cannot answer
+		// different characters; what the n- spelling adds is the write BACK into the
+		// argument, which is the whole point of the name (a caller that keeps a
+		// reference to the string sees the change). %nstring-replace performs it with
+		// (setf (aref s i) c) and answers what that write chain left behind: the SAME
+		// object for a mutable character vector on every backend, and -- on the compile
+		// paths only -- a rebuilt string for an IMMUTABLE one, the lite edge
+		// .kb/string-write-runtime.md already documents for every indexed write. The
+		// value is correct on all four backends either way, which is what chunga's
+		// (intern (nstring-upcase s) :keyword) consumes.
+		SOURCES.put(LispNames.NSTRING_REPLACE, """
+				(defun %nstring-replace (%nsr-s %nsr-folded)
+				  (let ((%nsr-n (length %nsr-s)) (%nsr-i 0))
+				    (do () ((>= %nsr-i %nsr-n) %nsr-s)
+				      (setf (aref %nsr-s %nsr-i) (char %nsr-folded %nsr-i))
+				      (setq %nsr-i (+ %nsr-i 1)))))
+				""");
+		SOURCES.put(LispNames.NSTRING_UPCASE, """
+				(defun nstring-upcase (%nsu-s)
+				  (%nstring-replace %nsu-s (string-upcase %nsu-s)))
+				""");
+		SOURCES.put(LispNames.NSTRING_DOWNCASE, """
+				(defun nstring-downcase (%nsd-s)
+				  (%nstring-replace %nsd-s (string-downcase %nsd-s)))
+				""");
+		SOURCES.put(LispNames.NSTRING_CAPITALIZE, """
+				(defun nstring-capitalize (%nsc-s)
+				  (%nstring-replace %nsc-s (string-capitalize %nsc-s)))
 				""");
 		// The case-INSENSITIVE character ordering family, on the same "one shared walk,
 		// one-line operators" plan as %string-compare above: %char-fold-chain checks each

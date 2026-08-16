@@ -136,7 +136,7 @@ another form (not top-level) is an error.
 (print (rontolisp:list-special-forms))
 ; => (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
 (print (length (rontolisp:list-functions)))
-; => 412
+; => 427
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (SQUARE)

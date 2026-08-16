@@ -861,6 +861,12 @@ final class WasmExprCompiler {
 				// that nil into its not-implemented-error, so the divergence is a value
 				// rather than a second code path.
 				case LispNames.HOST_GETCWD -> WasmExprCompiler.compileExpr(LispNil.INSTANCE, ctx);
+				// %target-machine-type: the ABI this artifact targets, the one thing the
+				// environment-enquiry family (machine-type, a prelude defun over it)
+				// answers differently per backend. Both WASM backends emit wasm32
+				// modules, so the module -- not the host processor, which no wasm
+				// program can see -- is the answer, matching uiop:architecture.
+				case LispNames.TARGET_MACHINE_TYPE -> WasmExprCompiler.compileExpr(new LispString("WASM32"), ctx);
 				case LispNames.LIST_DIRECTORY -> WasmListDirectoryCompiler.compile(cons, ctx);
 				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
 				case LispNames.WRITE_STRING -> {

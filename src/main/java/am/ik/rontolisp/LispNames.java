@@ -170,6 +170,80 @@ public final class LispNames {
 	 */
 	public static final String SLEEP_MS = "%SLEEP-MS";
 
+	/**
+	 * The {@code lisp-implementation-type} built-in: {@code "rontolisp"} on every
+	 * backend. The first half of the pair a portable library prints in a User-Agent or a
+	 * banner.
+	 */
+	public static final String LISP_IMPLEMENTATION_TYPE = "LISP-IMPLEMENTATION-TYPE";
+
+	/**
+	 * The {@code lisp-implementation-version} built-in: the project version, the same
+	 * string {@code rontolisp --version} and {@code (getf (rontolisp:version) :version)}
+	 * report. Baked into the prelude source from {@link Version}, so all four backends
+	 * answer the build that compiled them.
+	 */
+	public static final String LISP_IMPLEMENTATION_VERSION = "LISP-IMPLEMENTATION-VERSION";
+
+	/**
+	 * The {@code software-type} built-in: {@code "Unix"} on every backend -- the one
+	 * supporting-software claim rontolisp already makes everywhere
+	 * ({@code uiop:os-unix-p} is {@code t} outright and {@code uiop:operating-system} is
+	 * {@code :unix}), so the CL spelling and the uiop one cannot contradict each other.
+	 */
+	public static final String SOFTWARE_TYPE = "SOFTWARE-TYPE";
+
+	/**
+	 * The {@code software-version} built-in: {@code nil} on every backend. No backend can
+	 * name a version of the answer {@link #SOFTWARE_TYPE} gives -- a compiled artifact
+	 * carries no host, and WASI exposes none -- and {@code nil} is the answer CL
+	 * prescribes when no appropriate and relevant result can be supplied.
+	 */
+	public static final String SOFTWARE_VERSION = "SOFTWARE-VERSION";
+
+	/**
+	 * The {@code machine-type} built-in: the ABI the running artifact targets --
+	 * {@code "JVM"} on the interpreter and the JVM backend, {@code "WASM32"} on both WASM
+	 * backends -- over {@link #TARGET_MACHINE_TYPE}. Deliberately NOT the host CPU: a
+	 * class file and a wasm module are both CPU-independent, which is the same reason
+	 * {@code uiop:architecture} answers {@code :jvm} / {@code :wasm32}.
+	 */
+	public static final String MACHINE_TYPE = "MACHINE-TYPE";
+
+	/**
+	 * The {@code %target-machine-type} internal primitive behind {@link #MACHINE_TYPE}:
+	 * the ABI name as a string, a per-backend CONSTANT (no host is consulted). The
+	 * interpreter defines it, and both compilers lower it to the string literal for the
+	 * target they are emitting.
+	 */
+	public static final String TARGET_MACHINE_TYPE = "%TARGET-MACHINE-TYPE";
+
+	/**
+	 * The {@code machine-version} built-in: {@code nil} on every backend, for the reason
+	 * {@link #SOFTWARE_VERSION} is -- {@link #MACHINE_TYPE} names an ABI, and an ABI the
+	 * artifact targets has no version the program can read.
+	 */
+	public static final String MACHINE_VERSION = "MACHINE-VERSION";
+
+	/**
+	 * The {@code machine-instance} built-in: {@code nil} on every backend. No backend has
+	 * a host-identity primitive (WASI exposes no hostname at all), and a fabricated
+	 * {@code "localhost"} would be an answer rather than the absence of one -- which is
+	 * exactly what {@code uiop:hostname} already says.
+	 */
+	public static final String MACHINE_INSTANCE = "MACHINE-INSTANCE";
+
+	/**
+	 * The {@code short-site-name} built-in: {@code nil} on every backend. There is no
+	 * site database to read, and CL blesses {@code nil} for that.
+	 */
+	public static final String SHORT_SITE_NAME = "SHORT-SITE-NAME";
+
+	/**
+	 * The {@code long-site-name} built-in: {@code nil}, like {@link #SHORT_SITE_NAME}.
+	 */
+	public static final String LONG_SITE_NAME = "LONG-SITE-NAME";
+
 	/** The {@code sin} built-in function. */
 	public static final String SIN = "SIN";
 
@@ -2337,6 +2411,35 @@ public final class LispNames {
 	/** The {@code string-capitalize} built-in function. */
 	public static final String STRING_CAPITALIZE = "STRING-CAPITALIZE";
 
+	/**
+	 * The {@code nstring-upcase} built-in: the DESTRUCTIVE spelling of
+	 * {@link #STRING_UPCASE} -- it writes the folded characters back into the argument
+	 * and answers the string the writes left behind. Prelude Lisp over
+	 * {@link #NSTRING_REPLACE}, so the fold itself is the same one {@code string-upcase}
+	 * performs and the two cannot drift. chunga's {@code make-keyword} passes it as
+	 * {@code #'nstring-upcase}.
+	 */
+	public static final String NSTRING_UPCASE = "NSTRING-UPCASE";
+
+	/** The {@code nstring-downcase} built-in: {@link #NSTRING_UPCASE} downwards. */
+	public static final String NSTRING_DOWNCASE = "NSTRING-DOWNCASE";
+
+	/**
+	 * The {@code nstring-capitalize} built-in: {@link #NSTRING_UPCASE} over
+	 * {@link #STRING_CAPITALIZE}'s word rule.
+	 */
+	public static final String NSTRING_CAPITALIZE = "NSTRING-CAPITALIZE";
+
+	/**
+	 * The {@code %nstring-replace} internal helper: writes a folded string back into the
+	 * original character by character with {@code (setf (aref s i) c)} and answers what
+	 * that write chain left behind -- the SAME object for a mutable character vector, a
+	 * rebuilt one for an immutable string on the compile paths
+	 * ({@code .kb/string-write-runtime.md}). The one walk behind all three
+	 * {@code nstring-*} names.
+	 */
+	public static final String NSTRING_REPLACE = "%NSTRING-REPLACE";
+
 	/** The {@code subseq} built-in function (strings only). */
 	public static final String SUBSEQ = "SUBSEQ";
 
@@ -3268,6 +3371,32 @@ public final class LispNames {
 	 * Prelude Lisp, all four backends.
 	 */
 	public static final String ENOUGH_NAMESTRING = "ENOUGH-NAMESTRING";
+
+	/**
+	 * The {@code file-namestring} built-in: the name-and-type part of a namestring --
+	 * everything after the last {@code /}, or the whole namestring when there is none.
+	 * The complement of {@link #DIRECTORY_NAMESTRING}, taken as the substring the shared
+	 * {@code %pathname-split} directory ends at, so the two always concatenate back to
+	 * {@link #NAMESTRING_CL}. A namestring naming a directory answers {@code ""}. Prelude
+	 * Lisp, all four backends; dexador names a multipart content part with it.
+	 */
+	public static final String FILE_NAMESTRING = "FILE-NAMESTRING";
+
+	/**
+	 * The {@code directory-namestring} built-in: the directory part of a namestring, up
+	 * to and INCLUDING the last {@code /} ({@code ""} when there is none). The complement
+	 * of {@link #FILE_NAMESTRING}.
+	 */
+	public static final String DIRECTORY_NAMESTRING = "DIRECTORY-NAMESTRING";
+
+	/**
+	 * The {@code host-namestring} built-in: always {@code ""}. A rontolisp namestring
+	 * carries no host ({@link #PATHNAME_HOST} is the {@code nil}-answering component),
+	 * and {@code ""} is what CL requires here -- the function is specified to answer a
+	 * STRING, which is also what SBCL answers on Unix. The argument is validated as a
+	 * pathname designator, so a non-designator signals where the rest of the family does.
+	 */
+	public static final String HOST_NAMESTRING = "HOST-NAMESTRING";
 
 	/**
 	 * The {@code translate-pathname} built-in: matches {@code source} against

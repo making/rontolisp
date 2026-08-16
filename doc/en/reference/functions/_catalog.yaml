@@ -125,6 +125,7 @@ categories:
       - { slug: string-upcase, name: "string-upcase" }
       - { slug: string-downcase, name: "string-downcase" }
       - { slug: string-capitalize, name: "string-capitalize" }
+      - { slug: nstring-case, name: "nstring-upcase nstring-downcase nstring-capitalize" }
       - { slug: subseq, name: "subseq" }
       - { slug: string-eq, name: "string=" }
       - { slug: string-compare, name: "string< string> string<= string>= string/= string-lessp string-greaterp string-not-greaterp string-not-lessp string-not-equal" }
@@ -365,6 +366,7 @@ categories:
       - { slug: pathname-version, name: "pathname-version" }
       - { slug: wild-pathname-p, name: "wild-pathname-p" }
       - { slug: enough-namestring, name: "enough-namestring" }
+      - { slug: namestring-components, name: "file-namestring directory-namestring host-namestring" }
       - { slug: translate-pathname, name: "translate-pathname" }
       - { slug: translate-logical-pathname, name: "translate-logical-pathname" }
       - { slug: logical-pathname, name: "logical-pathname" }
@@ -402,6 +404,7 @@ categories:
       - { slug: get-internal-real-time, name: "get-internal-real-time" }
       - { slug: get-internal-run-time, name: "get-internal-run-time" }
       - { slug: sleep, name: "sleep" }
+      - { slug: environment-enquiry, name: "lisp-implementation-type lisp-implementation-version software-type software-version machine-type machine-version machine-instance short-site-name long-site-name" }
   - title: "rontolisp Package"
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }

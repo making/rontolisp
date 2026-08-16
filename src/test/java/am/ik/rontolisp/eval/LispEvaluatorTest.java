@@ -6231,6 +6231,84 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void namestringHalvesSplitAtTheDirectoryBoundary() {
+		// file-namestring and directory-namestring are complements -- they split the
+		// namestring exactly where %pathname-split does -- so concatenating them back
+		// gives the namestring for every shape. host-namestring is "", the STRING
+		// counterpart of pathname-host's nil. Every expectation SBCL-checked.
+		assertThat(eval("""
+				(list (file-namestring #P"/a/b/c.txt") (directory-namestring #P"/a/b/c.txt")
+				      (host-namestring #P"/a/b/c.txt"))
+				""").print()).isEqualTo("(\"c.txt\" \"/a/b/\" \"\")");
+		// No slash at all: the whole namestring is the file half.
+		assertThat(eval("(list (file-namestring \"a.txt\") (directory-namestring \"a.txt\"))").print())
+			.isEqualTo("(\"a.txt\" \"\")");
+		// A namestring that names a DIRECTORY has no file half.
+		assertThat(eval("(list (file-namestring \"/a/b/\") (directory-namestring \"/a/b/\"))").print())
+			.isEqualTo("(\"\" \"/a/b/\")");
+		// The leading dot belongs to the NAME, the same rule pathname-name follows.
+		assertThat(eval("(list (file-namestring \"/a/.bashrc\") (directory-namestring \"/a/.bashrc\"))").print())
+			.isEqualTo("(\".bashrc\" \"/a/\")");
+		assertThat(eval("""
+				(let ((p "d/e/f.g"))
+				  (string= (concatenate 'string (directory-namestring p) (file-namestring p)) (namestring p)))
+				""")).isEqualTo(LispTrue.INSTANCE);
+		// A non-designator signals where the rest of the family signals.
+		assertThatThrownBy(() -> eval("(file-namestring 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("not a pathname designator");
+		assertThatThrownBy(() -> eval("(host-namestring 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("not a pathname designator");
+	}
+
+	@Test
+	void nstringCaseFamilyWritesTheFoldBackIntoTheString() {
+		// The destructive spelling of the case family: the fold is the one
+		// string-upcase / -downcase / -capitalize performs, and the write goes back into
+		// the argument. Every expectation SBCL-checked.
+		assertThat(eval("(nstring-upcase (copy-seq \"hello world\"))")).isEqualTo(new LispString("HELLO WORLD"));
+		assertThat(eval("(nstring-downcase (copy-seq \"ABC\"))")).isEqualTo(new LispString("abc"));
+		assertThat(eval("(nstring-capitalize (copy-seq \"hello world\"))")).isEqualTo(new LispString("Hello World"));
+		// It answers the SAME object, and the caller sees the change through its own
+		// reference -- what a plain string-upcase under another name could not give.
+		assertThat(eval("""
+				(let ((s (make-string 3 :initial-element #\\a)))
+				  (list (eq s (nstring-upcase s)) s))
+				""").print()).isEqualTo("(T \"AAA\")");
+		assertThat(eval("(let ((s (copy-seq \"ab\"))) (nstring-upcase s) s)")).isEqualTo(new LispString("AB"));
+		// First-class: chunga's make-keyword passes #'nstring-upcase to intern.
+		assertThat(eval("(funcall #'nstring-downcase (copy-seq \"ABC\"))")).isEqualTo(new LispString("abc"));
+		assertThat(eval("(mapcar #'nstring-upcase (list (copy-seq \"a\") (copy-seq \"b\")))").print())
+			.isEqualTo("(\"A\" \"B\")");
+	}
+
+	@Test
+	void environmentEnquiryFamilyAnswersPerBackendConstants() {
+		// CLHS 25.1.5. Every answer is a constant here: the implementation pair names
+		// the build, software-type is the one supporting-software claim rontolisp makes
+		// everywhere (uiop:operating-system says the same), machine-type is the ABI the
+		// artifact targets (uiop:architecture's rule), and everything rontolisp cannot
+		// know is nil rather than a fabricated string.
+		assertThat(eval("(lisp-implementation-type)")).isEqualTo(new LispString("rontolisp"));
+		assertThat(eval("(lisp-implementation-version)"))
+			.isEqualTo(new LispString(am.ik.rontolisp.Version.getVersion()));
+		assertThat(eval("(equal (lisp-implementation-version) (getf (rontolisp:version) :version))"))
+			.isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(list (software-type) (software-version))").print()).isEqualTo("(\"Unix\" NIL)");
+		// The interpreter runs on the JVM, so it answers what the JVM backend's emitted
+		// class does; both WASM backends answer "WASM32".
+		assertThat(eval("(list (machine-type) (machine-version) (machine-instance))").print())
+			.isEqualTo("(\"JVM\" NIL NIL)");
+		assertThat(eval("(list (short-site-name) (long-site-name))").print()).isEqualTo("(NIL NIL)");
+		// A User-Agent built out of the family is the shape dexador composes.
+		assertThat(eval("""
+				(format nil "dexador/1.0 (~A ~A); ~A; ~A"
+				        (lisp-implementation-type) (lisp-implementation-version)
+				        (software-type) (machine-type))
+				""")).isEqualTo(
+				new LispString("dexador/1.0 (rontolisp " + am.ik.rontolisp.Version.getVersion() + "); Unix; JVM"));
+	}
+
+	@Test
 	void translatePathnameSubstitutesTheCapturedWildcards() {
 		// Every expectation checked against SBCL 2.2.9 on the same forms.
 		assertThat(eval("(translate-pathname \"d/a.txt\" \"d/*.*\" \"e/*.*\")").print()).isEqualTo("#P\"e/a.txt\"");
@@ -6698,8 +6776,13 @@ class LispEvaluatorTest {
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default", "%synonym-target")
 			.contains("TREE-EQUAL", "COUNT-IF-NOT", "SET-EXCLUSIVE-OR", "MERGE")
 			.doesNotContain("%set-xor-match")
+			.contains("FILE-NAMESTRING", "DIRECTORY-NAMESTRING", "HOST-NAMESTRING", "NSTRING-UPCASE",
+					"NSTRING-DOWNCASE", "NSTRING-CAPITALIZE")
+			.contains("LISP-IMPLEMENTATION-TYPE", "LISP-IMPLEMENTATION-VERSION", "SOFTWARE-TYPE", "SOFTWARE-VERSION",
+					"MACHINE-TYPE", "MACHINE-VERSION", "MACHINE-INSTANCE", "SHORT-SITE-NAME", "LONG-SITE-NAME")
+			.doesNotContain("%nstring-replace", "%target-machine-type")
 			.isSorted()
-			.hasSize(412);
+			.hasSize(427);
 	}
 
 	@Test

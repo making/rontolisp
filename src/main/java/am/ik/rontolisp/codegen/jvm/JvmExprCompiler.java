@@ -547,6 +547,13 @@ final class JvmExprCompiler {
 				// turns a nil answer into its not-implemented-error.
 				case LispNames.HOST_GETENV -> JvmGetenvCompiler.compile(cons, ctx, className);
 				case LispNames.HOST_GETCWD -> JvmGetcwdCompiler.compile(cons, ctx, className);
+				// %target-machine-type: the ABI this artifact targets, the one thing the
+				// environment-enquiry family (machine-type, a prelude defun over it)
+				// answers differently per backend. A class file is CPU-independent, so
+				// the answer names the ABI and not the host processor -- the same rule
+				// uiop:architecture follows. A literal, so it folds like any constant.
+				case LispNames.TARGET_MACHINE_TYPE ->
+					JvmExprCompiler.compileExpr(new LispString("JVM"), ctx, className);
 				// The exit primitive behind uiop:quit (uiop-image.lisp finishes the
 				// output streams first, on every backend).
 				case LispNames.HOST_EXIT -> JvmExitCompiler.compile(cons, ctx, className);

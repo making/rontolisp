@@ -42,6 +42,7 @@
 | `string-upcase` | `(string-upcase "abc")` | `"ABC"`(全 Unicode 対応。各文字に `char-upcase` を適用するため長さは保存されます) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"`(各単語の最初の文字) |
+| `nstring-upcase` `nstring-downcase` `nstring-capitalize` | `(nstring-upcase (copy-seq "abc"))` | `"ABC"` — 破壊的な綴り。変換結果を引数に書き戻します(可変な文字ベクタは全バックエンドでその場書き換え。不変な文字列はコンパイル系で再構築) |
 | `subseq` | `(subseq "hello" 1 3)` | `"el"`(文字列とリストで機能します。例: `(subseq '(1 2 3 4) 1 3)` => `(2 3)`。`end` 引数は省略可能) |
 | `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- `:initial-element`（デフォルトは空白）を `n` 個並べた新しい文字列。`:element-type` は受け付けるが無視 |
 | `make-sequence` | `(make-sequence 'list 3)` | `(nil nil nil)` -- リテラルのクォートされた結果型のシーケンス（文字列型は `make-string`、`list` は `make-list`、ベクタ型は `make-array` 経由） |
@@ -70,6 +71,7 @@
 | `pathname-version` | `(pathname-version #P"d/a.txt")` | 常に `nil` — ここにファイルのバージョンはありません |
 | `wild-pathname-p` | `(wild-pathname-p "d/*.txt" :name)` | パス名 (またはフィールドキーで指定した `:directory`/`:name`/`:type` 構成要素) が `*` か `?` を含むか。`:host`/`:device`/`:version` は常に `nil` |
 | `enough-namestring` | `(enough-namestring "/a/b/c.lisp" "/a/")` | `"b/c.lisp"` — `defaults` (省略時は `*default-pathname-defaults*`) にマージし直すと同じファイルを指す最短の名前文字列。`merge-pathnames` の逆操作です |
+| `file-namestring` `directory-namestring` `host-namestring` | `(file-namestring #P"/a/b/c.txt")` | `"c.txt"` — ネームストリングの文字列成分。名前と型の部分、ディレクトリ部分(連結すると `namestring` に戻ります)、および rontolisp が持たないホストを表す `""` |
 | `translate-pathname` | `(translate-pathname "src/f.lisp" "src/*.lisp" "build/*.fasl")` | `#P"build/f.fasl"` — source を from-wildcard と照合し、各 `*`/`?` が捕捉した部分を to-wildcard に差し込みます。一致しない source はエラー |
 | `translate-logical-pathname` | `(translate-logical-pathname "d/a.txt")` | `#P"d/a.txt"` — 恒等写像。rontolisp のパス名はすべて物理パス名なので変換するものがありません |
 | `logical-pathname` | `(logical-pathname "SYS:SRC;")` | 常にエラー — 論理ホストを定義できないため、論理パス名を指す引数は存在しません |
@@ -262,6 +264,7 @@
 | `get-internal-real-time` | `(get-internal-real-time)` | 経過実時間(ミリ秒)(すべてのバックエンドで整数) |
 | `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(すべてのバックエンドで整数) |
 | `sleep` | `(sleep 0.5)` | 非負の秒数だけブロックして `nil` を返します(WASM Preview 1 と `--no-wasi` 以外は本物のホストタイマー。Preview 1 はクロックをビジーウェイト、`--no-wasi` はシグナル) |
+| `lisp-implementation-type` `lisp-implementation-version` `software-type` `software-version` `machine-type` `machine-version` `machine-instance` `short-site-name` `long-site-name` | `(lisp-implementation-type)` | `"rontolisp"` — 環境問い合わせの定数群。バージョンはビルド固有、`software-type` は `"Unix"`、`machine-type` は対象 ABI(`"JVM"` / `"WASM32"`)、rontolisp が知り得ないものはすべて `nil` |
 | `exp` | `(exp 0)` | `1.0`(インタプリタ/JVMは `Math.exp` を使用。WASMはソフトウェア近似を使用) |
 | `log` | `(log 1)` | `0.0`(自然対数。インタプリタ/JVM は `Math.log`、WASM はソフトウェア近似) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(インタプリタ/JVM は `Math.sin`/`cos`/`tan`、WASM はソフトウェア近似) |

@@ -2291,6 +2291,14 @@ public final class Environment implements Scope {
 			}
 			return cwd == null || cwd.isEmpty() ? LispNil.INSTANCE : new LispString(cwd);
 		}));
+		// %target-machine-type: the ABI the running artifact targets, which is what
+		// machine-type answers (a per-backend CONSTANT, no host is consulted -- see
+		// .kb/time-environment-builtins.md). The interpreter runs on the JVM, so it
+		// gives the same answer the JVM backend's emitted class does.
+		env.defineFunction(LispNames.TARGET_MACHINE_TYPE, new LispFunction(LispNames.TARGET_MACHINE_TYPE, args -> {
+			requireArgCount(LispNames.TARGET_MACHINE_TYPE, args, 0);
+			return new LispString("JVM");
+		}));
 		// %host-exit: end the process with a status code. uiop:quit is Lisp over this
 		// (uiop-image.lisp) and finishes the output streams first, so the four backends
 		// share one definition of what quitting means. Here it is a SIGNAL rather than a

@@ -3127,6 +3127,52 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void namestringHalvesNstringCaseAndEnvironmentEnquiry() throws Exception {
+		// The three families of .todo/402, all prelude Lisp: the string-valued halves of
+		// a namestring, the destructive case family, and the environment-enquiry
+		// constants. Same expectations as the interpreter suite except the two noted
+		// below, which are the machine-type target name and the compile-path-only
+		// immutable-string deviation every indexed write has
+		// (.kb/string-write-runtime.md).
+		assertThat(compileAndRun("""
+				(print (list (file-namestring #P"/a/b/c.txt") (directory-namestring #P"/a/b/c.txt")
+				             (host-namestring #P"/a/b/c.txt")))
+				(print (list (file-namestring "a.txt") (directory-namestring "a.txt")))
+				(print (list (file-namestring "/a/b/") (directory-namestring "/a/b/")))
+				(print (list (file-namestring "/a/.bashrc") (directory-namestring "/a/.bashrc")))
+				(print (nstring-upcase (copy-seq "hello world")))
+				(print (nstring-downcase (copy-seq "ABC")))
+				(print (nstring-capitalize (copy-seq "hello world")))
+				(print (funcall #'nstring-upcase (copy-seq "ab")))
+				;; A mutable character vector IS written in place, on every backend.
+				(print (let ((s (make-string 3 :initial-element #\\a)))
+				         (list (eq s (nstring-upcase s)) s)))
+				;; An IMMUTABLE string is not: the write rebuilds and setqs back, so the
+				;; caller's own reference is unchanged here where the interpreter's is
+				;; upcased. The compile-path deviation the whole mutation family has.
+				(print (let ((s (copy-seq "ab"))) (nstring-upcase s) s))
+				(print (list (lisp-implementation-type) (software-type) (software-version)))
+				(print (list (machine-type) (machine-version) (machine-instance)))
+				(print (list (short-site-name) (long-site-name)))
+				(print (equal (lisp-implementation-version) (getf (rontolisp:version) :version)))
+				""")).isEqualTo("""
+				("c.txt" "/a/b/" "")
+				("a.txt" "")
+				("" "/a/b/")
+				(".bashrc" "/a/")
+				"HELLO WORLD"
+				"abc"
+				"Hello World"
+				"AB"
+				(T "AAA")
+				"ab"
+				("rontolisp" "Unix" NIL)
+				("JVM" NIL NIL)
+				(NIL NIL)
+				T""");
+	}
+
+	@Test
 	void renameFileMovesTheFileOnDisk() throws Exception {
 		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("rn"));
 		java.nio.file.Files.writeString(root.resolve("a.txt"), "hi\n");
@@ -8312,12 +8358,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("412");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("427");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("412");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("427");
 	}
 
 	@Test

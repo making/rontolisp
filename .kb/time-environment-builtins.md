@@ -1,4 +1,4 @@
-# Time / environment built-ins (`get-universal-time`, `get-internal-real-time`, `get-internal-run-time`, `uiop:getenv`)
+# Time / environment built-ins (`get-universal-time`, `get-internal-real-time`, `get-internal-run-time`, `uiop:getenv`, and the environment-enquiry family)
 
 Implemented in all three backends, returning an **integer everywhere** (the three time built-ins). Interpreter/JVM: `JvmTimeCompiler` via a `systemOps` methodref map on `Ctx`; `JvmGetenvCompiler`. WASM (`WasmTimeCompiler`) reads WASI `clock_time_get` -- or, under `--no-wasi`, the cell a host writes through the exported `__ronto_set_time` hook, all three names off the ONE cell and signalling while it is unset (`.kb/wasm-export-no-wasi.md` has the rule and the reason a host-supplied time is not the fabrication a stubbed clock would be) -- computes in i64 and normalizes through `_int_new`, so the value is an exact boxed integer (`TYPE_BIGNUM`, `.kb/wasm-bignum.md`) and `integerp` answers like the other backends. (Historical: before the boxed exact-integer path existed the WASM value was a FLOAT because the magnitudes exceed the `i31` range; that divergence is retired.) `uiop:getenv` on **Preview 1** uses a `_getenv` runtime helper (`WasmGetenvRuntimeBuilder`) scanning the host-filled WASI environ buffer; **every component variant** instead reads `wasi:cli/environment@0.3.0` through the `environment.lisp` library (see below). `get-universal-time` is seconds since the 1900 CL epoch (Unix + 2208988800). The three time built-ins are registered in `LispNames`/`PackageRegistry.CL_FUNCTIONS`. The WASM clock/environ *imports* exist in both modes (Preview 1 -> real host; component -> adapter over `wasi:clocks@0.3.0`/`wasi:cli/environment@0.3.0`), keeping import indices identical -- but since 2026-07-30 the component's `environ_*` imports are DEAD WEIGHT on every variant (`_getenv` is no longer the component getenv; the base adapter's environ decode and the serve bridge's zero-entry stub are both unreachable from Lisp), kept only because the eight preview1 import slots are index-pinned.
 
@@ -122,3 +122,49 @@ Pinned by `LispEvaluatorTest#evalSleepParksAndReturnsNil`,
 `WasmLispCompilerIntegrationTest#sleepSpinsOnTheClockOnPreview1` +
 `#componentSleepUsesTheHostTimerInsteadOfSpinning` (which also pins the plain-defun call
 site and `#'sleep`), and the ci-spec case `clack-enablement-builtins`.
+
+## The environment-enquiry family (CLHS 25.1.5, 2026-08-16, `.todo/402`)
+
+**All nine are CONSTANTS, and only `machine-type` differs between backends.** They are
+`LispPreludeLibrary` defuns, not per-backend built-ins, precisely because there is
+nothing to read at run time -- which is also what makes `#'software-type` and friends
+first-class for free.
+
+| name | answer | why |
+| --- | --- | --- |
+| `lisp-implementation-type` | `"rontolisp"` | one implementation |
+| `lisp-implementation-version` | `Version.getVersion()` | BAKED into the prelude source at class-init, so the four backends report the build that COMPILED them; equal to `(getf (rontolisp:version) :version)` |
+| `software-type` | `"Unix"` | the claim `uiop/os` already makes unconditionally (`os-unix-p` -> `t`, `operating-system` -> `:unix`): every backend presents the POSIX-shaped file model |
+| `software-version` | `nil` | nothing can name a version of that |
+| `machine-type` | `"JVM"` / `"WASM32"` | the ABI the artifact targets, through `%target-machine-type` |
+| `machine-version` | `nil` | an ABI has no version the program can read |
+| `machine-instance` | `nil` | no backend has a host-identity primitive; `uiop:hostname` says the same |
+| `short-site-name` / `long-site-name` | `nil` | no site database |
+
+**Why the host is NOT consulted anywhere, including on the interpreter and the JVM.**
+`System.getProperty("os.name")` / `("os.arch")` are available there and are deliberately
+unused. A compiled `.class` runs on a machine the compiler never saw, so baking the
+build host would be wrong and querying it at run time would make the JVM backend answer
+something the WASM backends structurally cannot -- a program's User-Agent would then
+change with where it was RUN, which is exactly what the emitted-output determinism rule
+exists to prevent. `machine-type` names the ABI for the same reason `uiop:architecture`
+does (`.kb/uiop.md`): a class file and a wasm module are both CPU-independent, so the CPU
+is not the answer. Everything unknowable answers `nil` -- CL's own answer when "no
+appropriate and relevant result can be supplied" -- rather than a fabricated string,
+the `uiop:hostname` rule.
+
+**`%target-machine-type`** is the one per-backend piece: `Environment.createGlobal`
+defines it (`"JVM"`; the interpreter runs on the JVM, so it agrees with the JVM
+backend's emitted class), `JvmExprCompiler` lowers it to the `"JVM"` literal and
+`WasmExprCompiler` to `"WASM32"` -- a literal on both, so it folds like any constant and
+costs a wasm/JVM string and nothing else. **Re-evaluation trigger**: a third compile
+target needs a third arm here and nowhere else; a backend that ever gains a real
+host-identity or OS primitive should revisit `machine-instance` / `software-type` (and
+`uiop:hostname` with them) TOGETHER, not one at a time -- their agreement is the point.
+
+Pinned by `LispEvaluatorTest#environmentEnquiryFamilyAnswersPerBackendConstants`,
+`Jvm/WasmLispCompilerTest#namestringHalvesNstringCaseAndEnvironmentEnquiry` (plus the
+component twin), and the ci-spec case
+`namestring-halves-nstring-case-and-environment-enquiry`, whose `expectedByBackend`
+carries the one `machine-type` divergence and which spells the version as an AGREEMENT
+with `rontolisp:version` rather than a literal a release bump would invalidate.

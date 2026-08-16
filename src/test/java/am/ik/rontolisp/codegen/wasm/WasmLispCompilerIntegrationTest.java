@@ -8889,6 +8889,54 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunComponent(PATHNAME_ALGEBRA_PROGRAM)).isEqualTo(PATHNAME_ALGEBRA_EXPECTED);
 	}
 
+	// One program for both WASM modes: the three families of .todo/402, all prelude
+	// Lisp. Only machine-type differs from the JVM expectations -- it names the ABI the
+	// artifact targets, which here is the wasm32 module.
+	private static final String ENQUIRY_AND_NAMESTRING_PROGRAM = """
+			(print (list (file-namestring #P"/a/b/c.txt") (directory-namestring #P"/a/b/c.txt")
+			             (host-namestring #P"/a/b/c.txt")))
+			(print (list (file-namestring "a.txt") (directory-namestring "a.txt")))
+			(print (list (file-namestring "/a/b/") (directory-namestring "/a/b/")))
+			(print (list (file-namestring "/a/.bashrc") (directory-namestring "/a/.bashrc")))
+			(print (nstring-upcase (copy-seq "hello world")))
+			(print (nstring-downcase (copy-seq "ABC")))
+			(print (nstring-capitalize (copy-seq "hello world")))
+			(print (funcall #'nstring-upcase (copy-seq "ab")))
+			(print (let ((s (make-string 3 :initial-element #\\a)))
+			         (list (eq s (nstring-upcase s)) s)))
+			(print (let ((s (copy-seq "ab"))) (nstring-upcase s) s))
+			(print (list (lisp-implementation-type) (software-type) (software-version)))
+			(print (list (machine-type) (machine-version) (machine-instance)))
+			(print (list (short-site-name) (long-site-name)))
+			(print (equal (lisp-implementation-version) (getf (rontolisp:version) :version)))
+			""";
+
+	private static final String ENQUIRY_AND_NAMESTRING_EXPECTED = """
+			("c.txt" "/a/b/" "")
+			("a.txt" "")
+			("" "/a/b/")
+			(".bashrc" "/a/")
+			"HELLO WORLD"
+			"abc"
+			"Hello World"
+			"AB"
+			(T "AAA")
+			"ab"
+			("rontolisp" "Unix" NIL)
+			("WASM32" NIL NIL)
+			(NIL NIL)
+			T""";
+
+	@Test
+	void namestringHalvesNstringCaseAndEnvironmentEnquiry() throws Exception {
+		assertThat(compileAndRunPrelude(ENQUIRY_AND_NAMESTRING_PROGRAM)).isEqualTo(ENQUIRY_AND_NAMESTRING_EXPECTED);
+	}
+
+	@Test
+	void componentNamestringHalvesNstringCaseAndEnvironmentEnquiry() throws Exception {
+		assertThat(compileAndRunComponent(ENQUIRY_AND_NAMESTRING_PROGRAM)).isEqualTo(ENQUIRY_AND_NAMESTRING_EXPECTED);
+	}
+
 	@Test
 	void fileMetadataAnswersNilAndDirectoryCreationSignals() throws Exception {
 		// The documented WASM divergence (.kb/read-load-streams.md): no WASI filestat
@@ -10459,7 +10507,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("412");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("427");
 	}
 
 	@Test

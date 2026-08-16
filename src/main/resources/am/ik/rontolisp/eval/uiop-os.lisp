@@ -119,8 +119,9 @@
 ;; none of its #+ clauses names: no backend has a host-identity primitive
 ;; (rontolisp has no machine-instance, WASI exposes no hostname at all), and a
 ;; fabricated "localhost" would be an answer rather than the absence of one.
-;; Re-evaluation trigger: the day a machine-instance built-in exists, this is
-;; one line.
+;; machine-instance EXISTS now and answers nil for that same reason, so wiring
+;; hostname to it would only move the constant; re-evaluation trigger: the day a
+;; backend gains a host-identity primitive, both become one line.
 (defun uiop/os:hostname () nil)
 
 ;;; The working directory.

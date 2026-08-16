@@ -1671,7 +1671,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      412
+      427
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -9628,6 +9628,52 @@ cases:
         :CHDIR-SIGNALS
         :NO-WORKING-DIRECTORY
         :NOT-IMPLEMENTED
+  - name: namestring-halves-nstring-case-and-environment-enquiry
+    source: |
+      ;; The string-valued halves of a namestring: complements, split where
+      ;; %pathname-split splits it, so they concatenate back to the namestring.
+      ;; host-namestring is "" -- the STRING counterpart of pathname-host's nil.
+      (print (list (file-namestring #P"/a/b/c.txt") (directory-namestring #P"/a/b/c.txt")
+                   (host-namestring #P"/a/b/c.txt")))
+      (print (list (file-namestring "a.txt") (directory-namestring "a.txt")
+                   (file-namestring "/a/b/") (directory-namestring "/a/b/")))
+      ;; The DESTRUCTIVE case family. The fold is the non-destructive sibling's, so
+      ;; the value is identical everywhere; the write back into the argument is real
+      ;; for a mutable character vector on every backend. An IMMUTABLE string is the
+      ;; documented compile-path deviation every indexed write has, so it is pinned
+      ;; per backend rather than here (.kb/string-write-runtime.md).
+      (print (list (nstring-upcase (copy-seq "hello world")) (nstring-downcase (copy-seq "ABC"))
+                   (nstring-capitalize (copy-seq "hello world")) (funcall #'nstring-upcase (copy-seq "ab"))))
+      (print (let ((s (make-string 3 :initial-element #\a))) (list (eq s (nstring-upcase s)) s)))
+      ;; The environment-enquiry family (CLHS 25.1.5): constants, so a User-Agent a
+      ;; library composes out of them is the same string on every backend except for
+      ;; machine-type, which names the ABI the artifact targets.
+      ;; The version itself is the build's, so the case pins its AGREEMENT with
+      ;; rontolisp:version instead of a literal that a release bump would invalidate.
+      (print (format nil "dexador/1.0 (~A ~A); ~A" (lisp-implementation-type)
+                     (if (equal (lisp-implementation-version) (getf (rontolisp:version) :version))
+                         "<version>" "MISMATCH")
+                     (software-type)))
+      (print (list (software-version) (machine-type) (machine-version) (machine-instance)
+                   (short-site-name) (long-site-name)))
+    expected: |
+      ("c.txt" "/a/b/" "")
+      ("a.txt" "" "" "/a/b/")
+      ("HELLO WORLD" "abc" "Hello World" "AB")
+      (T "AAA")
+      "dexador/1.0 (rontolisp <version>); Unix"
+      (NIL "JVM" NIL NIL NIL NIL)
+    expectedByBackend:
+      # machine-type is the ABI the running artifact targets, not the host CPU (a
+      # class file and a wasm module are both CPU-independent, which is why
+      # uiop:architecture answers :jvm / :wasm32 the same way).
+      wasm: |
+        ("c.txt" "/a/b/" "")
+        ("a.txt" "" "" "/a/b/")
+        ("HELLO WORLD" "abc" "Hello World" "AB")
+        (T "AAA")
+        "dexador/1.0 (rontolisp <version>); Unix"
+        (NIL "WASM32" NIL NIL NIL NIL)
   - name: uiop-image-hooks-and-backtraces
     source: |
       ;; uiop/image (uiop-image.lisp), everything but the EXIT half -- which no

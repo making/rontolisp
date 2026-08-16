@@ -183,6 +183,21 @@ drift:
   signal (`LispMacroExpander.renameFileStub`, the `deleteFileStub` rule --
   `.todo/257` owns closing that). CL's second and third values (the truenames)
   are not returned, the `ensure-directories-exist` rule.
+- `file-namestring` / `directory-namestring` (2026-08-16, `.todo/402`) -- the two
+  string-valued HALVES, taken as one split rather than two computations:
+  `%pathname-split`'s first element is a literal PREFIX of the namestring, so
+  `directory-namestring` IS that element and `file-namestring` is
+  `(subseq ns (length it))`. That is what makes them exact complements --
+  concatenating them back gives `namestring` for every path -- and what stops
+  them drifting from `pathname-name` / `pathname-type`, which read the same
+  split. All five shapes SBCL-checked: `"/a/b/c.txt"` -> `("c.txt" "/a/b/")`,
+  `"a.txt"` -> `("a.txt" "")`, `"/a/b/"` -> `("" "/a/b/")`, `"/a/.bashrc"` ->
+  `(".bashrc" "/a/")`. Deliberately NOT built out of name + `"." + type`: that
+  spelling loses a trailing dot and has to re-decide the dotfile rule.
+- `host-namestring` -- `""`, the STRING counterpart of `pathname-host`'s `nil`
+  (CL specifies a string here, and SBCL answers `""` on Unix). Written as
+  `(progn (namestring x) "")` so the designator is still validated, the
+  `pathname-host` shape.
 
 **`*default-pathname-defaults*` is a genuine dynamic variable on all four
 backends**, holding `#P""` -- the empty pathname, SBCL's own initial value and
@@ -203,6 +218,7 @@ todo-357 retired the literal-`""` built-in; the whole `uiop/pathname` algebra
 `#pathnameComponentsRontolispDoesNotModelAnswerNil` /
 `#wildPathnamePAnswersPerComponent` /
 `#enoughNamestringDropsTheDefaultsDirectoryPrefix` /
+`#namestringHalvesSplitAtTheDirectoryBoundary` /
 `#translatePathnameSubstitutesTheCapturedWildcards` /
 `#renameFileMovesTheFileAndSignalsWhenItIsNotThere` /
 `#directoryFamilyAnswersPathnames` /
@@ -218,4 +234,7 @@ ci-spec cases `pathname-algebra-over-the-flat-namestring`,
 `pathname-family-and-broadcast-streams` (predicates, printer,
 `parse-namestring`, `merge-pathnames`, the lack `finalize-response` body cond
 verbatim), `lite-builtins-residue`, `probe-file-existing-and-missing`,
-`directory-listing-and-uiop-walkers` (all four backends).
+`directory-listing-and-uiop-walkers` (all four backends). The namestring HALVES
+add `Jvm/WasmLispCompilerTest#namestringHalvesNstringCaseAndEnvironmentEnquiry`
+(plus the component twin) and the ci-spec case
+`namestring-halves-nstring-case-and-environment-enquiry`.

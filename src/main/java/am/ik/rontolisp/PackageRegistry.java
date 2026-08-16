@@ -165,7 +165,11 @@ public final class PackageRegistry {
 			LispNames.PACKAGE_SHADOWING_SYMBOLS, LispNames.PATHNAME_HOST, LispNames.PATHNAME_DEVICE,
 			LispNames.PATHNAME_VERSION, LispNames.WILD_PATHNAME_P, LispNames.ENOUGH_NAMESTRING,
 			LispNames.TRANSLATE_PATHNAME, LispNames.TRANSLATE_LOGICAL_PATHNAME, LispNames.LOGICAL_PATHNAME,
-			LispNames.RENAME_FILE);
+			LispNames.RENAME_FILE, LispNames.FILE_NAMESTRING, LispNames.DIRECTORY_NAMESTRING, LispNames.HOST_NAMESTRING,
+			LispNames.NSTRING_UPCASE, LispNames.NSTRING_DOWNCASE, LispNames.NSTRING_CAPITALIZE,
+			LispNames.LISP_IMPLEMENTATION_TYPE, LispNames.LISP_IMPLEMENTATION_VERSION, LispNames.SOFTWARE_TYPE,
+			LispNames.SOFTWARE_VERSION, LispNames.MACHINE_TYPE, LispNames.MACHINE_VERSION, LispNames.MACHINE_INSTANCE,
+			LispNames.SHORT_SITE_NAME, LispNames.LONG_SITE_NAME);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -262,7 +266,8 @@ public final class PackageRegistry {
 			LispNames.MACRO_FN_INTERNAL, LispNames.MACRO_EXPANDER_STUB, LispNames.WILD_COMPONENT_P,
 			LispNames.WILD_CAPTURES, LispNames.RENAME_FILE_INTERNAL, LispNames.PRINT_CASED_INTERNAL,
 			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.HOST_GETENV, LispNames.HOST_GETCWD, LispNames.HOST_EXIT,
-			LispNames.GETENV_OVERRIDE, LispNames.GETENV_OVERRIDE_SET);
+			LispNames.GETENV_OVERRIDE, LispNames.GETENV_OVERRIDE_SET, LispNames.NSTRING_REPLACE,
+			LispNames.TARGET_MACHINE_TYPE);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
