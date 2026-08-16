@@ -7388,6 +7388,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void nestedNonLocalExitInACleanupDoesNotLoseTheOuterOne() throws Exception {
+		// An unwind-protect cleanup that itself completes a non-local exit runs WHILE the
+		// outer exit is still travelling. Here the exit rides the tag's own payload, so
+		// the inner one cannot consume the outer's -- the JVM twin of this test pinned a
+		// real bug in its single-slot channel, and this one keeps the two backends
+		// answering alike.
+		assertThat(compileAndRun("""
+				(defun run-protected (thunk cleanup)
+				  (unwind-protect (funcall thunk) (funcall cleanup)))
+				(defun inner-block-exit ()
+				  (block in (mapcar (lambda (x) (return-from in x)) '(:inner))))
+				(defun catch-throw-cleanup () (catch 'tag (throw 'tag :cleaned)))
+				(defun probe (cleanup)
+				  (block done
+				    (run-protected (lambda () (return-from done :from-inner)) cleanup)))
+				(print (probe #'catch-throw-cleanup))
+				(print (probe #'inner-block-exit))
+				(print (handler-case (probe #'catch-throw-cleanup) (error (e) :swallowed)))
+				(print (block done
+				         (handler-bind ((error (lambda (e) e)))
+				           (run-protected (lambda () (return-from done :past-guard))
+				                          #'catch-throw-cleanup))))
+				""")).isEqualTo(":FROM-INNER\n:FROM-INNER\n:FROM-INNER\n:PAST-GUARD");
+	}
+
+	@Test
 	void goInsideLambdaReentersOuterTagbody() throws Exception {
 		// A go whose tag belongs to a tagbody in the ENCLOSING function -- the shape a
 		// handler-bind handler resuming its loop produces (quri's :lenient

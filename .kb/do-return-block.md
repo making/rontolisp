@@ -111,8 +111,9 @@ compiled function. Machinery:
   lexical the existing closure machinery (`FreeVarAnalyzer`) captures into the lambda,
   minted fresh per block activation (`%nlx-tag`), so recursion targets the right frame and
   an exit after the block returned surfaces as an error. `%nlx-throw`/`%nlx-catch` unwind
-  the real stack: JVM via a plain `RuntimeException` + the `_nleTl` `{throwable,id,value}`
-  channel (`JvmNlxCompiler`), wasm via a dedicated `$block-exit` tag carrying an
+  the real stack: JVM via a plain `RuntimeException` + the `_nleTl`
+  `{throwable,id,value,previous}` channel (`JvmNlxCompiler`), wasm via a dedicated
+  `$block-exit` tag carrying an
   `(id . value)` cons (`WasmNlxCompiler`, tag 1, gated). **On wasm the id is an i31 VALUE**
   (the next integer from the `NLX_ID_CTR` linear-memory cell, compared by `ref.eq` which
   is value equality for i31), and the catch snapshots it into a dedicated local at region
@@ -122,7 +123,23 @@ compiled function. Machinery:
   code insertions; the forensic record lives in `.todo/115`). The JVM keeps plain object
   identity (`new Object()`-style tags), which is sound there. Intervening
   `unwind-protect` cleanups run on the way out (JVM native
-  unwind; wasm `catch_all_ref`). `handler-case` does NOT intercept it: the JVM handler
+  unwind; wasm `catch_all_ref`) — and **the JVM channel is a STACK, not a slot, precisely
+  because of them**: a cleanup runs while the exit that triggered it is still travelling,
+  and a cleanup that completes a non-local exit OF ITS OWN (a nested `catch`/`throw` pair,
+  a `return-from` out of an inner block — cl-postgres-client's
+  `(unless settled (ignore-errors (execute client "ROLLBACK")))`) used to clear the
+  channel on its way out. The outer exit then found nothing at its own landing pad, was
+  rethrown past its block, and the first enclosing `handler-case`/`%hb-guard` synthesized
+  it into a message-less `simple-error` — surfacing as rove's "Raise an error while
+  testing." `%nlx-throw` pushes `previous` (read after the tag/value forms have run, so an
+  exit those complete is already popped) and a matching `%nlx-catch`/`catch` pops back to
+  it instead of nulling. wasm never had the bug: the id and value ride the tag payload, so
+  there is no shared channel to consume. Pinned by
+  `compileAndRunNestedNonLocalExitInACleanupDoesNotLoseTheOuterOne` (JVM),
+  `nestedNonLocalExitInACleanupDoesNotLoseTheOuterOne` (wasm),
+  `unwindProtectCleanupCompletingItsOwnExitKeepsThePendingOne` (interpreter) and the
+  `nested-exit-in-an-unwind-cleanup` ci-spec case. `handler-case` does NOT intercept it:
+  the JVM handler
   rethrows a pending `_nleTl` before dispatching, and wasm uses a distinct tag with a
   block-exit passthrough that restores the handler depth (`JvmHandlerCaseCompiler` /
   `WasmHandlerCaseCompiler`, both gated on the cross-lambda-exit flag). **EH-mode / flag

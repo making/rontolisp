@@ -6468,6 +6468,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunNestedNonLocalExitInACleanupDoesNotLoseTheOuterOne() throws Exception {
+		// An unwind-protect cleanup that itself completes a non-local exit runs WHILE the
+		// outer exit is still travelling, so the two share the exit channel. The inner
+		// one must not consume the outer one's entry: after the cleanup returns, the
+		// outer exit still has to reach its own block, and it must not be intercepted as
+		// a synthesized condition by an intervening handler-case/handler-bind.
+		assertThat(compileAndRun("""
+				(defun run-protected (thunk cleanup)
+				  (unwind-protect (funcall thunk) (funcall cleanup)))
+				(defun inner-block-exit ()
+				  (block in (mapcar (lambda (x) (return-from in x)) '(:inner))))
+				(defun catch-throw-cleanup () (catch 'tag (throw 'tag :cleaned)))
+				(defun probe (cleanup)
+				  (block done
+				    (run-protected (lambda () (return-from done :from-inner)) cleanup)))
+				(print (probe #'catch-throw-cleanup))
+				(print (probe #'inner-block-exit))
+				(print (handler-case (probe #'catch-throw-cleanup) (error (e) :swallowed)))
+				(print (block done
+				         (handler-bind ((error (lambda (e) e)))
+				           (run-protected (lambda () (return-from done :past-guard))
+				                          #'catch-throw-cleanup))))
+				""")).isEqualTo(":FROM-INNER\n:FROM-INNER\n:FROM-INNER\n:PAST-GUARD");
+	}
+
+	@Test
 	void compileAndRunCharComparisonExtensions() throws Exception {
 		assertThat(compileAndRun("""
 				(print (char> #\\c #\\b #\\a))

@@ -1089,7 +1089,21 @@ public final class AsdfSystems {
 	static LispVal normalizeAsdUserForm(LispVal form, Set<String> bound) {
 		if (form instanceof LispSymbol sym) {
 			String symName = sym.name();
-			if (sym.isKeyword() || symName.startsWith("#:") || symName.contains(":") || bound.contains(symName)) {
+			if (sym.isKeyword() || symName.startsWith("#:") || bound.contains(symName)) {
+				return form;
+			}
+			int colon = symName.indexOf(':');
+			if (colon > 0) {
+				// Written with a uiop-family prefix of its own (uiop:, uiop::, or the
+				// home sub-package): only the HOME spelling has a definition behind it,
+				// so rewrite to it exactly as PackageResolver does for ordinary source.
+				String pkg = symName.substring(0, colon);
+				String member = symName.substring(symName.lastIndexOf(':') + 1);
+				return am.ik.rontolisp.UiopExports.isUiopFamily(pkg)
+						&& am.ik.rontolisp.UiopExports.homePackage(member) != null
+								? new LispSymbol(am.ik.rontolisp.UiopExports.qualified(member)) : form;
+			}
+			if (colon == 0) {
 				return form;
 			}
 			if (am.ik.rontolisp.UiopExports.homePackage(symName) != null) {

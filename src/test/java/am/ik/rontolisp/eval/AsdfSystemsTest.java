@@ -906,6 +906,26 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void recordsATestOpPerformBodyWritingTheUiopPrefixItself() {
+		// The other half of the same resolution: a .asd may spell the call
+		// uiop:symbol-call (or uiop::, or the home sub-package) instead of leaning on
+		// asdf-user's :use. Only the HOME spelling has a definition behind it, so an
+		// explicit uiop-family prefix has to be rewritten here too -- left as written it
+		// reached the perform body as "The function UIOP:SYMBOL-CALL is undefined", while
+		// the identical call in a .lisp file worked.
+		String home = am.ik.rontolisp.UiopExports.qualified("SYMBOL-CALL");
+		for (String written : List.of("uiop:symbol-call", "uiop::symbol-call", home.toLowerCase())) {
+			AsdfSystems.LispSystem system = parse("""
+					(asdf:defsystem "lib/tests"
+					  :components ((:file "main"))
+					  :perform (test-op (op c) (%s :rove :run c)))""".formatted(written));
+			AsdfSystems.TestOp testOp = system.testOp();
+			assertThat(testOp).isNotNull();
+			assertThat(testOp.body().get(0).print()).as(written).isEqualTo("(" + home + " :ROVE :RUN C)");
+		}
+	}
+
+	@Test
 	void recordsTheInOrderToTestOpChain() {
 		AsdfSystems.LispSystem system = parse("""
 				(asdf:defsystem "lib"

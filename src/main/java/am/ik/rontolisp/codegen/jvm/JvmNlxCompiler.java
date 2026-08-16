@@ -20,21 +20,27 @@ import am.ik.rontolisp.LispVal;
  * <li>{@code (%nlx-tag)} mints a fresh {@code new Object()} -- the dynamic block-instance
  * id. A {@code let} binds one per establishing block activation, and the existing closure
  * machinery captures it into the lambda, so recursion targets the right frame.</li>
- * <li>{@code (%nlx-throw id value)} publishes {@code {throwable, id, value}} on the
- * per-thread {@code _nleTl} channel and {@code athrow}s a plain {@code RuntimeException};
- * the real stack unwind runs every intervening
+ * <li>{@code (%nlx-throw id value)} PUSHES {@code {throwable, id, value, previous}} onto
+ * the per-thread {@code _nleTl} channel and {@code athrow}s a plain
+ * {@code RuntimeException}; the real stack unwind runs every intervening
  * {@code unwind-protect}/{@code handler-case} handler.</li>
  * <li>{@code (%nlx-catch id body...)} runs {@code body} inside a catch-any region; when
  * the caught throwable is the pending NLE whose id matches {@code id}, its value becomes
- * the form's value, otherwise it is rethrown (a real condition, or an outer block's
- * exit).</li>
+ * the form's value and the channel is POPPED back to {@code previous}, otherwise it is
+ * rethrown (a real condition, or an outer block's exit).</li>
  * </ul>
  *
- * The {@code _nleTl} triple keys on the throwable's identity
- * ({@code triple[0] == caught}) so a stale channel (an unwind-protect cleanup that itself
- * threw a new exception) never misfires. {@link JvmHandlerCaseCompiler} rethrows a
- * matching NLE before dispatching, so a cross-lambda exit is never swallowed as a
- * synthesized condition.
+ * The channel is a STACK rather than a single slot because an {@code unwind-protect}
+ * cleanup runs while the exit that triggered it is still travelling, and that cleanup may
+ * complete a non-local exit of its own -- a nested {@code catch}/{@code throw} pair, a
+ * {@code return-from} out of an inner block. Overwriting-and-clearing left the outer
+ * exit's entry gone by the time it reached its own landing pad, so it was rethrown past
+ * its block and then synthesized into a message-less {@code simple-error} by the first
+ * enclosing {@code handler-case}. Each entry also keys on the throwable's identity
+ * ({@code entry[0] == caught}) so a cleanup that threw a NEW exception, abandoning the
+ * pending exit, never misfires. {@link JvmHandlerCaseCompiler} rethrows a matching NLE
+ * before dispatching, so a cross-lambda exit is never swallowed as a synthesized
+ * condition.
  * <p>
  * The user-level {@code catch}/{@code throw} pair rides the same channel through
  * {@link #compileTagCatch}/{@link #compileTagThrow}, differing only in the tag test: the
@@ -111,10 +117,13 @@ final class JvmNlxCompiler {
 		ctx.emitU2(exCtor.index());
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(exSlot);
-		// _nleTl.set(new Object[]{ex, id, value})
+		// _nleTl.set(new Object[]{ex, id, value, previous}) -- pushing onto the channel
+		// rather than overwriting it. The previous entry is read LAST, after the tag and
+		// value forms have run, so an exit those forms complete themselves is already
+		// popped by the time it is captured.
 		ctx.emit(Opcode.GETSTATIC);
 		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
-		ctx.emit(Opcode.ICONST_3);
+		ctx.emit(Opcode.ICONST_4);
 		ctx.emit(Opcode.ANEWARRAY);
 		ctx.emitU2(ctx.objectClass.index());
 		ctx.emit(Opcode.DUP);
@@ -129,6 +138,13 @@ final class JvmNlxCompiler {
 		ctx.emit(Opcode.DUP);
 		ctx.emit(Opcode.ICONST_2);
 		JvmExprCompiler.compileExpr(valueForm, ctx, className);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_3);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
 		ctx.emit(Opcode.AASTORE);
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
@@ -270,10 +286,13 @@ final class JvmNlxCompiler {
 			ctx.emit(Opcode.IF_ACMPNE);
 			ctx.emitU2(0);
 		}
-		// Matched: clear the channel, deliver triple[2].
+		// Matched: pop the channel back to the entry this one was pushed over (null at
+		// the bottom), deliver entry[2]. Popping rather than clearing is what keeps an
+		// exit that was already travelling -- this catch may be running inside an
+		// unwind-protect cleanup on ITS way out -- findable by its own landing pad.
 		ctx.emit(Opcode.GETSTATIC);
 		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
-		ctx.emit(Opcode.ACONST_NULL);
+		emitArrayElement(ctx, arrSlot, objectArrayClass, 3);
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
 		emitArrayElement(ctx, arrSlot, objectArrayClass, 2);
@@ -320,7 +339,8 @@ final class JvmNlxCompiler {
 		switch (index) {
 			case 0 -> ctx.emit(Opcode.ICONST_0);
 			case 1 -> ctx.emit(Opcode.ICONST_1);
-			default -> ctx.emit(Opcode.ICONST_2);
+			case 2 -> ctx.emit(Opcode.ICONST_2);
+			default -> ctx.emit(Opcode.ICONST_3);
 		}
 		ctx.emit(Opcode.AALOAD);
 	}

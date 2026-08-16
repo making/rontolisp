@@ -8186,6 +8186,31 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void unwindProtectCleanupCompletingItsOwnExitKeepsThePendingOne() {
+		// A cleanup that itself completes a non-local exit runs WHILE the outer exit is
+		// still travelling, so it must not consume it: the outer exit still has to reach
+		// its own block afterwards, and must not be reported as an error on the way.
+		// Pinned here because the JVM backend's shared exit channel got this wrong.
+		assertThat(evalMulti("""
+				(defun run-protected (thunk cleanup)
+				  (unwind-protect (funcall thunk) (funcall cleanup)))
+				(defun inner-block-exit ()
+				  (block in (mapcar (lambda (x) (return-from in x)) '(:inner))))
+				(defun catch-throw-cleanup () (catch 'tag (throw 'tag :cleaned)))
+				(defun probe (cleanup)
+				  (block done
+				    (run-protected (lambda () (return-from done :from-inner)) cleanup)))
+				(list (probe #'catch-throw-cleanup)
+				      (probe #'inner-block-exit)
+				      (handler-case (probe #'catch-throw-cleanup) (error (e) :swallowed))
+				      (block done
+				        (handler-bind ((error (lambda (e) e)))
+				          (run-protected (lambda () (return-from done :past-guard))
+				                         #'catch-throw-cleanup))))
+				""").print()).isEqualTo("(:FROM-INNER :FROM-INNER :FROM-INNER :PAST-GUARD)");
+	}
+
+	@Test
 	void unwindProtectCleanupErrorReplacesPendingUnwind() {
 		// CL semantics: a cleanup that itself signals replaces the pending unwind.
 		assertThatThrownBy(() -> eval("(unwind-protect (error \"first\") (error \"second\"))"))
