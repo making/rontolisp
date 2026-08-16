@@ -65,6 +65,37 @@ sidestep `char-from-hexstring` entirely (`eval/Uax15Tables`, and the pin in
 library that pushes a feature and reads it back gets the same silent wrong
 branch.
 
+**Update 2026-08-16 (found while landing `.todo/392`): it is no longer only a
+silent wrong branch -- BINDING `*features*` CRASHES both compile paths, and it
+already breaks eighteen example legs.** The reader substitutes the symbol with
+the literal feature LIST wherever it appears, binding position included, so a
+`let` binding degenerates to a cons where the variable name belongs:
+
+```lisp
+(defun f (a) (let ((*features* nil)) a))
+;; interpreter: fine (*features* is a real special there)
+;; -o Prog.class / -o prog.wasm:
+;;   while compiling defun F: class am.ik.rontolisp.LispCons cannot be cast to
+;;   class am.ik.rontolisp.LispSymbol
+;;   at FreeVarAnalyzer.collectFreeVarsLocated (the LET case's
+;;   ((LispSymbol) pairList.get(0)).name())
+```
+
+The victim is `clack:clackup`, whose `buildapp` opens
+`(let* ((*features* (cons :clackup *features*)) ...)`: EVERY example that
+quickloads clack fails to compile on both compile backends --
+`net/httpbin-{clack,tiny-routes,ningle}.lisp` and
+`cloudflare-workers/{hello,httpbin}-{clack,tiny-routes,ningle}/check.lisp`, 18
+legs of `ExamplesE2eTest`, all with this one stack. Nothing noticed because
+`ci.yaml` neither opts the examples suite in nor triggers on `examples/**`
+(`.todo/392`'s survey; closing THAT gap is its own item, and it would have
+caught this).
+
+Scope item 1 below is the fix. A band-aid that merely refuses to substitute the
+symbol in a binding NAME position stops the crash but keeps the body's reads
+substituted, i.e. a binding that binds nothing -- do not ship that as the answer
+without writing down why.
+
 ## Scope
 
 1. **Make `*features*` mutable at run time on the compile paths** (the plain
