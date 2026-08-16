@@ -577,6 +577,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | システムのソースディレクトリを基準に解決した名前文字列 (コンパイルパスではリテラルへ畳み込まれる) |
 | `asdf:component-pathname` | `(asdf:component-pathname (asdf:find-system :my-lib))` | システムのソースディレクトリ (末尾に `/`)、またはソースファイルの子の解決済みパス。メタオブジェクトも名前指示子も受け付ける |
 | `asdf:component-name` | `(asdf:component-name (asdf:find-system :my-lib))` | リーダー: コンポーネントの小文字正規形の名前 |
+| `asdf:component-version` | `(asdf:component-version (asdf:find-system :my-lib))` | リーダー: 宣言された `:version` 文字列。素の文字列で宣言されていなければ nil (計算された書き方は評価されません) |
 | `asdf:component-children` | `(asdf:component-children (asdf:find-system :my-lib))` | リーダー: システムのコンポーネントファイル (ロード順、ファイルごとに 1 つの `asdf:cl-source-file`) |
 | `asdf:component-sideway-dependencies` | `(asdf:component-sideway-dependencies (asdf:find-system :my-lib))` | リーダー: システムの `:depends-on` の名前 (package-inferred のサブシステム名を含む) |
 | `asdf:component-parent` | `(asdf:component-parent child)` | リーダー: 親コンポーネント — ソースファイルではシステム、システムでは nil |

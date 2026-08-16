@@ -131,6 +131,39 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void componentVersionAnswersTheDeclaredVersionStringAndNilForEveryOtherSpelling() {
+		// dexador builds its User-Agent from (asdf:component-version (find-system
+		// :dexador)). The value is recorded AS WRITTEN: a plain string, and nil for the
+		// (:read-file-form ...) indirection nothing here evaluates.
+		String output = run("""
+				(asdf:defsystem :demo :version "0.9.15" :components ((:file "main")))
+				(asdf:defsystem :other :version (:read-file-form "version.sexp"))
+				(print (asdf:component-version (asdf:find-system :demo)))
+				(print (asdf:component-version (asdf:find-system :other)))
+				(print (asdf:component-version (car (asdf:component-children (asdf:find-system :demo)))))
+				""", Map.of(), List.of());
+		assertThat(output.trim().lines().map(String::trim)).containsExactly("\"0.9.15\"", "NIL", "NIL");
+	}
+
+	@Test
+	void aDefsystemDependsOnBuiltinIsLoadedFirstAndAnnouncesItsFeatures() {
+		// dexador.asd's opener. Real ASDF loads such a system while the .asd is READ, so
+		// its announcement holds for this system's component files -- here the built-in
+		// trivial-features shim's :unix -- and it never becomes a sideway dependency.
+		String output = run("""
+				(asdf:load-system "app")
+				(print (which))
+				(print (asdf:component-sideway-dependencies (asdf:find-system "app")))
+				(print (if (member :unix *features*) :announced :absent))
+				""", Map.of("app.asd", """
+				(defsystem :app
+				  :defsystem-depends-on ("trivial-features")
+				  :components ((:file "main")))""", //
+				"main.lisp", "(defun which () #+unix \"unix\" #-unix \"unannounced\")"), List.of());
+		assertThat(output.trim().lines().map(String::trim)).containsExactly("\"unix\"", "NIL", ":ANNOUNCED");
+	}
+
+	@Test
 	void testSystemFollowsTheInOrderToChainIntoThePerformBody() {
 		// fukamachi's .asd shape reduced: test-system on the primary loads it, follows
 		// the :in-order-to test-op edge into the tests system, and runs its recorded

@@ -139,7 +139,13 @@ $ rontolisp
   situation が `(:compile-toplevel)` だけの `eval-when` は無効です (ASDF は `.asd` を
   ロードするだけでコンパイルしません)。`eval-when` 内のそれ以外のフォームは、その
   フォームを名指しするエラーです。
-- `defsystem` はメタデータオプション (無視)、`:depends-on`、`:serial`、`:pathname`
+- `defsystem` はメタデータオプション (無視。ただし素の文字列の `:version` だけは
+  [`asdf:component-version`](../reference/functions/asdf-component-version.md) が
+  読み返します)、`:depends-on`、`:defsystem-depends-on` (本物の ASDF が `.asd` の
+  **読み込み中** にロードするシステム。同じ方法で検索され、`:depends-on` より先に
+  ロードされ、システムの依存にはなりません。ここに書かれた組み込みシムはこのシステムに
+  フィーチャーを宣言します — `("trivial-features")` はその句とコンポーネントファイルに
+  対して `:unix` と `:little-endian` を有効にします)、`:serial`、`:pathname`
   (全コンポーネントに前置されるリテラルなディレクトリ。ソースが `src/` にあるシステムは
   コンポーネント名を裸で書けます)、`:file`/`:module`/`:static-file` エントリを持つ
   `:components` をサポートします。
@@ -153,8 +159,8 @@ $ rontolisp
   `#.` は従来どおり許容されて無視されます — 汎用の `operate` 機構は依然として
   ありません)。`:version` の値は ASDF の
   `(:read-file-form ...)` 間接参照を含む任意のリテラルフォームで構いません
-  (検査されません)。それ以外 (`:defsystem-depends-on` など) は句を名指しする
-  エラーです。
+  (検査されません — 記録されるのは素の文字列だけです)。それ以外
+  (`:around-compile` など) は句を名指しするエラーです。
 - `:class :package-inferred-system` をサポートします — ningle、rove、
   array-operations が採用しているスタイルです。このクラスのシステムは
   **`:components` を一切持ちません**: サブシステム名がシステムのディレクトリ配下の
@@ -187,6 +193,8 @@ $ rontolisp
   対する `typep`、`typecase`、`defmethod` の特定化子はすべてのバックエンドで
   動作します。リーダー
   [`asdf:component-name`](../reference/functions/asdf-component-name.md)、
+  [`asdf:component-version`](../reference/functions/asdf-component-version.md)
+  (素の文字列で書かれていた場合の `:version` 文字列)、
   [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md)、
   [`asdf:component-children`](../reference/functions/asdf-component-children.md)
   (コンポーネントファイルごとに 1 つの `cl-source-file`、ロード順)、
@@ -245,7 +253,8 @@ Quicklisp ライブラリの中には、rontolisp 側を知り得ない実装ご
 | `bordeaux-threads` (ニックネーム `bt` と `bt2`) | 1 つのシムが両方の API 名前空間を提供します。ロック関連のサブセット — `make-lock`、`acquire-lock`、`release-lock`、`with-lock-held`、`*supports-threads-p*` — は [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) などの上に、スレッド生成 — `bt2:make-thread` (`:initial-bindings` 付き)、`join-thread`、`threadp`、`thread-alive-p`、`destroy-thread` — は [`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md) の上に実装されており、インタプリタと JVM では本物の仮想スレッドが生成されます。シングルスレッドの WASM バックエンドではスレッド生成の入口は呼び出し時にエラーを送出し、`bt:*supports-threads-p*` は `nil` です。`make-lock` は再入可能なロックを返し (上流のものは再入不可)、`acquire-lock` の `:wait-p` は無視されます — 獲得は常にブロックします。`:initial-bindings` の値フォームは quote フォームか自己評価値に限られます (それ以外は新スレッドの動的環境が必要になるためエラーを送出します) |
 | `uiop` | ASDF の移植性レイヤ。15 個のサブパッケージと 429 個のエクスポートとして登録されています。実装済みのものは **[uiop パッケージ](../reference/uiop.md)** を参照してください。これ以外のエクスポートは解決はされ、操作名とともに `uiop:not-implemented-error` をシグナルするので、名前を挙げているだけのライブラリも読み込めます |
 | `swank` | 依存しているライブラリをロードできるようにするためだけのスタブです: `swank:create-server` はエラーを送出し (「rontolisp はリモート REPL を提供できません」)、`swank:stop-server` は `nil` を返す何もしない関数です。本物の swank は SLIME のサーバ側であり、その `.asd` はデータとしての defsystem フロントエンドが読めないプログラムです -- スタブがないと `(ql:quickload "clack")` は SLIME の tarball を取得してそこで失敗します |
-| `mgl-pax-bootstrap` | [mgl-pax](https://github.com/melisgl/mgl-pax) でドキュメント化されたライブラリをロードできるようにする、`mgl-pax` パッケージ (ニックネーム `pax`) のスタブです (uuid の依存である trivial-utf-8 がハード依存しています。本物のシステムの `.asd` は `:defsystem-depends-on` を使います)。`pax:define-package` は `defpackage` として働き、`pax:defsection` はセクション名を `nil` の変数として定義し、**さらにセクションの `(シンボル ロケーティブ)` エントリを export します** — mgl-pax のドキュメント化されたデフォルトであり、この種のライブラリが公開 API を export する方法です。PAX-World 登録ヘルパーは `nil` を返す何もしない関数です。ドキュメントは生成されません |
+| `mgl-pax-bootstrap` | [mgl-pax](https://github.com/melisgl/mgl-pax) でドキュメント化されたライブラリをロードできるようにする、`mgl-pax` パッケージ (ニックネーム `pax`) のスタブです (uuid の依存である trivial-utf-8 がハード依存しています。本物のシステムの `.asd` は defsystem-as-data のサブセット外のコンパイルフックである `:around-compile` を宣言しています)。`pax:define-package` は `defpackage` として働き、`pax:defsection` はセクション名を `nil` の変数として定義し、**さらにセクションの `(シンボル ロケーティブ)` エントリを export します** — mgl-pax のドキュメント化されたデフォルトであり、この種のライブラリが公開 API を export する方法です。PAX-World 登録ヘルパーは `nil` を返す何もしない関数です。ドキュメントは生成されません |
+| `trivial-features` | 本家 trivial-features が CFFI で調べて行うフィーチャー宣言を、調査なしで提供します: `:defsystem-depends-on` (または `:depends-on`) にこの名前を書くと、依存する側のシステム自身の句とコンポーネントファイルに対して **`:unix`** と **`:little-endian`** が宣言され、実行時には両方が `*features*` に push されます。`:unix` は、どのバックエンドでもファイル/パス/環境変数まわりが POSIX 形であり Windows ではないためです。`:little-endian` は、プログラムがマシンのレイアウトを見られる唯一の場所 (WASM のリニアメモリ、リアクタの `:bytes` 境界) が wasm 仕様でリトルエンディアンだからです。CPU 名 (`:x86-64`、`:64-bit`) は意図的にありません — rontolisp には記述すべきマシンワードの表面がありません。本家の `.asd` はそもそもここではロードできません: 認識できない処理系に対して `(error "Sorry, your Lisp is not supported")` で終わるためです |
 | `trivial-garbage` (ニックネーム `tg`) | GC ファイナライザを正直な no-op として提供します: `tg:finalize` は何も登録せずオブジェクトを返し、`tg:cancel-finalization` は `nil` を返す no-op です。GC フックを公開するバックエンドは存在せず — そして Common Lisp はファイナライザの実行を何も保証しないため、準拠したコンシューマは実行されなくても動作しなければなりません。`dbd-postgres` (このシムのコンシューマ) への実際的な帰結: リークした prepared statement は接続が閉じるまで残ります。`dbi:disconnect` を明示的に呼んでください |
 | `clack-handler-rontolisp` | [Clack](https://github.com/fukamachi/clack) のハンドラバックエンド: `run`/`stop` をエクスポートするパッケージ `clack.handler.rontolisp` で、Clack のアプリケーションプロトコルを rontolisp の組み込み HTTP サーバに橋渡しします。手動でロードすることはありません — `(clack:clackup app :server :rontolisp)` が実行時に名前で解決します (clack がパッケージ名から導出するドット区切りの綴り `clack.handler.rontolisp` でもこのシステムが応答します)。[Clack ガイド](clack.md)を参照 |
 | `clack-handler-reactor` | **ホスト駆動のリアクタ**向けの Clack ハンドラバックエンド: Cloudflare Worker、ブラウザページ、node や JVM への埋め込みなど、リクエストを既にホスト側でパースし、プログラムにソケットを渡す代わりにエクスポートされた関数を呼ぶホストのためのものです。パッケージ `clack.handler.reactor` は `run`/`stop` に加えて、その下にある `handle` (アプリケーションと JSON リクエスト文字列を受け取り JSON レスポンス文字列を返す) と `dispatch` (`clackup` が格納したアプリケーションに対する同じ操作) をエクスポートします。上のバックエンドと同じく、`(clack:clackup app :server :reactor)` がドット区切りの綴りも含めて解決します。[Clack ガイド](clack.md#driving-the-reactor-by-hand-clack-handler-reactor)を参照 |

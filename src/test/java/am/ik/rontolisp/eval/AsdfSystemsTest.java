@@ -138,9 +138,63 @@ class AsdfSystemsTest {
 
 	@Test
 	void unsupportedOptionIsAHardError() {
-		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :defsystem-depends-on (:some-plugin))"))
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :around-compile \"pax:compile-pax\")"))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("unsupported option :DEFSYSTEM-DEPENDS-ON");
+			.hasMessageContaining("unsupported option :AROUND-COMPILE");
+	}
+
+	@Test
+	void defsystemDependsOnIsRecordedSeparatelyFromTheSidewayDependencies() {
+		// dexador.asd's shape: the .asd-read-time dependency is not a dependency of the
+		// system (asdf:component-sideway-dependencies never lists it), and each loader
+		// resolves it through the ordinary ladder BEFORE :depends-on.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :defsystem-depends-on ("trivial-features")
+				  :depends-on ("alexandria"))""");
+		assertThat(system.defsystemDependsOn()).containsExactly("trivial-features");
+		assertThat(system.dependsOn()).containsExactly("alexandria");
+	}
+
+	@Test
+	void aBuiltInDefsystemDependsOnAnnouncesItsFeaturesToTheSystemThatNamesIt() {
+		// The read-time half of the option, and the reason anyone depends on
+		// trivial-features: the component files (and this system's own clauses) are read
+		// with the announced features in force.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :defsystem-depends-on ("trivial-features")
+				  :components ((:file "posix" :if-feature :unix) (:file "win" :if-feature :windows)))""");
+		assertThat(system.features()).contains("unix");
+		assertThat(system.files()).containsExactly("posix.lisp");
+	}
+
+	@Test
+	void aPlainDependsOnBuiltinAnnouncesItsFeaturesToo() {
+		// Real ASDF loads a :depends-on system before this system's files are compiled,
+		// so its pushes reach them there as well -- cl+ssl's spelling of the same
+		// dependency.
+		AsdfSystems.LispSystem system = parse("(asdf:defsystem :lib :depends-on (\"trivial-features\"))");
+		assertThat(system.features()).contains("unix", "little-endian");
+		assertThat(system.defsystemDependsOn()).isEmpty();
+	}
+
+	@Test
+	void aThirdPartyDefsystemDependsOnAnnouncesNothing() {
+		// A real system announces its features by RUNNING, and a .asd is parsed as data
+		// -- so it is loaded first and contributes no read-time feature.
+		AsdfSystems.LispSystem system = parse("(asdf:defsystem :lib :defsystem-depends-on (\"cffi-grovel\"))");
+		assertThat(system.defsystemDependsOn()).containsExactly("cffi-grovel");
+		assertThat(system.features()).isEmpty();
+	}
+
+	@Test
+	void aStringVersionIsRecordedAndAnyOtherSpellingIsNot() {
+		assertThat(parse("(asdf:defsystem :lib :version \"0.9.15\")").version()).isEqualTo("0.9.15");
+		// ASDF's file indirection is never evaluated here, so there is no version to
+		// answer -- silently, like the metadata option it stays.
+		assertThat(parse("(asdf:defsystem :lib :version (:read-file-form \"version.sexp\"))").version()).isNull();
+		assertThat(parse("(asdf:defsystem :lib)").version()).isNull();
 	}
 
 	@Test

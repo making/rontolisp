@@ -65,9 +65,17 @@ Blockers, in the order that unblocks the most:
    with `string-to-octets`/`octets-to-string` re-expressed as drivers over the
    mapping layer (`.kb/asdf.md`, `BabelMappingE2eTest`).
    `src/decoding-stream.lisp` now loads VERBATIM.
-3. `.todo/401` -- ASDF: `:defsystem-depends-on` (dexador.asd's first line),
+3. ~~`.todo/401` -- ASDF: `:defsystem-depends-on` (dexador.asd's first line),
    `asdf:component-version` (dexador's User-Agent), and
-   `asdf:system-relative-pathname` on the compile paths (trivial-mimes).
+   `asdf:system-relative-pathname` on the compile paths (trivial-mimes).~~
+   **DONE (2026-08-16)**: the option is parsed and both loaders resolve it
+   ahead of `:depends-on`, a built-in dependency ANNOUNCES its features to the
+   system that names it (the new `trivial-features` shim declares `:unix` and
+   `:little-endian`), and `asdf:component-version` reads back a plain-string
+   `:version` on every backend (`.kb/asdf.md`, `AsdfMetaobjectsE2eTest`).
+   `system-relative-pathname` needed nothing -- it has worked on all four
+   backends since todo-374 and is now pinned. `dexador.asd` itself now parses;
+   `(ql:quickload "dexador")` reaches cl+ssl -> cffi, i.e. `.todo/399`.
 4. `.todo/402` -- the CL leftovers: `file-namestring`, the `nstring-*` case
    family (chunga), and the environment-enquiry family.
 5. `.todo/404` -- `uiop:symbol-call` has no compiler case, so dexador's

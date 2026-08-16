@@ -3237,6 +3237,12 @@ public final class LispEvaluator {
 		// base directory, not the caller's.
 		this.loadDirStack.addLast(system.baseDir());
 		try {
+			// :defsystem-depends-on first: real ASDF loads those while the .asd is READ,
+			// so they precede the system's own dependencies (they are not sideway
+			// dependencies of it -- component-sideway-dependencies never lists them).
+			for (String dependency : system.defsystemDependsOn()) {
+				loadSystem(dependency);
+			}
 			for (String dependency : system.dependsOn()) {
 				loadSystem(dependency);
 			}

@@ -1,10 +1,15 @@
 package am.ik.rontolisp.eval;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 
@@ -19,6 +24,9 @@ import am.ik.rontolisp.reader.Features;
  * through its lazy-load hook and mark the system loaded.
  */
 public final class BuiltinSystems {
+
+	/** The built-in system name of the platform-feature announcer. */
+	static final String TRIVIAL_FEATURES = "trivial-features";
 
 	// Keyed by the ASDF system name -- always the canonical lower-case coerce-name form
 	// (system names are a separate namespace from the upcase-canonical package names).
@@ -35,12 +43,17 @@ public final class BuiltinSystems {
 			// library re-exports host-implementation members that do not exist here.
 			Map.entry("trivial-cltl2", features -> ShimLibraries.forms("trivial-cltl2", features)),
 			// The mgl-pax package stub (trivial-utf-8's hard dependency, on the uuid /
-			// mito path): real mgl-pax-bootstrap's .asd uses :defsystem-depends-on,
-			// which the defsystem-as-data front-end cannot read -- the swank precedent.
+			// mito path): real mgl-pax-bootstrap's .asd declares :around-compile, a
+			// compile hook the defsystem-as-data front-end cannot honor -- the swank
+			// precedent.
 			Map.entry("mgl-pax-bootstrap", features -> ShimLibraries.forms("mgl-pax-bootstrap", features)),
 			// GC finalizers as no-ops (dbd-postgres's dependency): the real library's
 			// .asd errors under rontolisp's features, and no backend has GC hooks.
 			Map.entry("trivial-garbage", features -> ShimLibraries.forms("trivial-garbage", features)),
+			// The platform-feature announcer (dexador's :defsystem-depends-on entry).
+			// Its whole content is the announcement, so the forms are generated from
+			// the same list the .asd parse reads (DECLARED_FEATURES).
+			Map.entry(TRIVIAL_FEATURES, features -> trivialFeaturesForms()),
 			// The Clack handler backend: both the hyphenated ecosystem spelling and the
 			// dotted spelling lack's find-package-or-load derives from the package name
 			// resolve to the one shim (see ShimLibraries.RESOURCES).
@@ -67,7 +80,72 @@ public final class BuiltinSystems {
 	private static final Map<String, List<String>> DEPENDENCIES = Map.of("flexi-streams",
 			List.of("trivial-gray-streams"));
 
+	/**
+	 * The features a built-in system ANNOUNCES to whatever names it in
+	 * {@code :defsystem-depends-on} -- the read-time half of such a dependency, and the
+	 * only half a parse can honor (a real third-party system announces its features by
+	 * RUNNING, and a {@code .asd} is data here, never evaluated).
+	 * <p>
+	 * One entry: upstream trivial-features exists to make {@code *features*} agree across
+	 * implementations, and its {@code .asd} ends in
+	 * {@code (error "Sorry, your Lisp is not supported")} for one it does not recognize
+	 * -- so the shim states directly what rontolisp's own model already implies, rather
+	 * than probing anything:
+	 * <ul>
+	 * <li>{@code :unix} -- every backend's file, path and environment surface is
+	 * POSIX-shaped ({@code /} separators, {@code uiop:getenv}, WASI's POSIX model), and
+	 * no backend is Windows; {@code #-windows} / {@code #+unix} is the branch a consumer
+	 * must take here.</li>
+	 * <li>{@code :little-endian} -- the two places a program can see machine layout at
+	 * all (WASM linear memory and the {@code :bytes} boundary of a reactor import) are
+	 * little-endian by the wasm spec, and the JVM backend exposes no such view to
+	 * disagree.</li>
+	 * </ul>
+	 * The CPU/word-size names ({@code :x86-64}, {@code :64-bit}) are deliberately absent:
+	 * rontolisp has no machine-word surface to describe -- an integer degrades to a float
+	 * past the {@code i31} range on the WASM backends -- so a program branching on one
+	 * would be branching on a claim nothing here can keep.
+	 */
+	private static final Map<String, List<String>> DECLARED_FEATURES = Map.of(TRIVIAL_FEATURES,
+			List.of("unix", "little-endian"));
+
 	private BuiltinSystems() {
+	}
+
+	/**
+	 * The features the named built-in systems announce, merged in order. A name that is
+	 * not built in (or announces nothing) contributes nothing.
+	 * @param names the system names, canonical lower-case
+	 * @return the announced feature names, without the leading colon
+	 */
+	public static List<String> declaredFeatures(List<String> names) {
+		List<String> declared = new ArrayList<>();
+		for (String name : names) {
+			for (String feature : DECLARED_FEATURES.getOrDefault(name, List.of())) {
+				if (!declared.contains(feature)) {
+					declared.add(feature);
+				}
+			}
+		}
+		return List.copyOf(declared);
+	}
+
+	/**
+	 * The trivial-features shim's forms: the run-time half of the announcement, one
+	 * {@code (pushnew :F *features*)} per declared name, so a program that reads
+	 * {@code *features*} at run time sees what its {@code #+} conditionals saw while it
+	 * was read ({@code *features*} is an ordinary special variable on every backend,
+	 * {@code .kb/reader-features.md}).
+	 */
+	private static List<LispVal> trivialFeaturesForms() {
+		List<LispVal> forms = new ArrayList<>();
+		for (String feature : DECLARED_FEATURES.getOrDefault(TRIVIAL_FEATURES, List.of())) {
+			LispVal push = new LispCons(new LispSymbol(LispNames.PUSHNEW),
+					new LispCons(new LispSymbol(":" + feature.toUpperCase(Locale.ROOT)),
+							new LispCons(new LispSymbol(LispNames.FEATURES_VAR), LispNil.INSTANCE)));
+			forms.add(push);
+		}
+		return List.copyOf(forms);
 	}
 
 	/**

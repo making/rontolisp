@@ -29,17 +29,21 @@ import org.jspecify.annotations.Nullable;
  * {@code .asd} files as plain data (they are never evaluated), orders a system's
  * components by their {@code :depends-on}/{@code :serial} constraints, and locates
  * {@code NAME.asd} files on a search path. Real ASDF is not ported -- there is no CLOS
- * {@code operate} machinery, no {@code :defsystem-depends-on}, no {@code :perform} -- so
- * anything outside the supported subset is a hard error naming the unsupported clause.
+ * {@code operate} machinery, no general {@code :perform} -- so anything outside the
+ * supported subset is a hard error naming the unsupported clause.
  *
  * <p>
  * The supported {@code defsystem} grammar is: a literal system name (string, keyword or
- * symbol), the ignored metadata options ({@code :description}, {@code :version} and
- * friends), {@code :depends-on} (system names loaded first, through the same search
- * path), {@code :serial} (each component implicitly depends on the previous one),
- * {@code :pathname} (a path prefix for every component), and {@code :components} with
- * {@code (:file "name" [:depends-on (...)])}, {@code (:module "dir" :components (...))}
- * (a path prefix) and {@code (:static-file "name")} (ignored) entries.
+ * symbol), the ignored metadata options ({@code :description} and friends; only
+ * {@code :version} is read back, by {@code asdf:component-version}), {@code :depends-on}
+ * (system names loaded first, through the same search path),
+ * {@code :defsystem-depends-on} (the same, loaded ahead of them -- real ASDF loads those
+ * while the {@code .asd} is READ, and a built-in one contributes its declared features to
+ * this system's read), {@code :serial} (each component implicitly depends on the previous
+ * one), {@code :pathname} (a path prefix for every component), and {@code :components}
+ * with {@code (:file "name" [:depends-on (...)])},
+ * {@code (:module "dir" :components (...))} (a path prefix) and
+ * {@code (:static-file "name")} (ignored) entries.
  *
  * <p>
  * Consumers: the compile path splices systems in the {@code LoadInliner} pass (so the
@@ -88,10 +92,25 @@ public final class AsdfSystems {
 	 * @param testOpEdges the system names a {@code :in-order-to ((test-op (test-op
 	 * ...)))} option chains test-op to, in order; {@code asdf:test-system} follows them
 	 * before the system's own perform
+	 * @param defsystemDependsOn the {@code :defsystem-depends-on} names: systems real
+	 * ASDF loads while the {@code .asd} is READ, so that the rest of the definition (and
+	 * the component files) may rely on what they announce. Each loader loads/splices them
+	 * BEFORE {@link #dependsOn} -- they are not sideway dependencies of the system and
+	 * never appear in {@code asdf:component-sideway-dependencies}. A BUILT-IN one also
+	 * ANNOUNCES its declared features into {@link #features} at parse time
+	 * ({@code BuiltinSystems.declaredFeatures} -- as a built-in {@code :depends-on} entry
+	 * does, see {@link #dependencyNames}), which is the whole point of the option for a
+	 * reader: dexador's {@code trivial-features} entry
+	 * @param version the {@code :version} value when it is a plain string literal,
+	 * {@code null} otherwise (a {@code (:read-file-form ...)} indirection or an
+	 * unresolved {@code #.} marker -- the option stays in {@link #IGNORED_OPTIONS}, so
+	 * nothing here evaluates anything to find out). Read back by
+	 * {@code asdf:component-version}
 	 */
 	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 			List<String> features, @Nullable String packageInferredDir, boolean packageInferredClass,
-			@Nullable TestOp testOp, List<String> testOpEdges) {
+			@Nullable TestOp testOp, List<String> testOpEdges, List<String> defsystemDependsOn,
+			@Nullable String version) {
 
 		/**
 		 * The old-shape constructor: no test-op wiring, package-inferred class iff the
@@ -107,7 +126,7 @@ public final class AsdfSystems {
 		public LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 				List<String> features, @Nullable String packageInferredDir) {
 			this(name, dependsOn, files, baseDir, features, packageInferredDir, packageInferredDir != null, null,
-					List.of());
+					List.of(), List.of(), null);
 		}
 	}
 
@@ -773,6 +792,12 @@ public final class AsdfSystems {
 	 * unresolvable one fails the parse ({@link #resolveReadEval}); the default direction
 	 * is deliberate, so a load-bearing option added later is covered without being
 	 * remembered here.
+	 * <p>
+	 * {@code :version} is on this list even though {@code asdf:component-version} reads
+	 * it back: what is recorded is the value AS WRITTEN when it is a plain string, and
+	 * every other spelling answers nil. Resolving its markers instead would open a README
+	 * at parse time to fill a field a User-Agent string prints -- the {@code #.} rule is
+	 * that the consumer decides, and this consumer decides not to.
 	 */
 	private static final Set<String> IGNORED_OPTIONS = Set.of(":NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":VERSION",
 			":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO",
@@ -817,8 +842,22 @@ public final class AsdfSystems {
 		// options happen to appear in. A push the .asd really made (pushedFeatures) is
 		// the same declaration, arriving from the file rather than from the option.
 		List<String> declaredFeatures = mergeFeatureNames(pushedFeatures, declaredFeatures(name, items, asd));
+		// The dependency lists are read BEFORE the option loop for the same reason: a
+		// dependency ANNOUNCES its features to this system, and the announcement has to
+		// hold while the rest of this definition and the component files are read.
+		// :defsystem-depends-on is the one real ASDF loads while the .asd is READ; a
+		// plain :depends-on is loaded before this system's files are compiled, so it
+		// shows them its pushes too. Only a BUILT-IN system announces anything here (its
+		// features are a static table -- nothing is evaluated at parse time), which is
+		// exactly the trivial-features case the option exists for.
+		Features preFeatures = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
+		List<String> defsystemDependsOn = dependencyNames(":DEFSYSTEM-DEPENDS-ON", name, items, asd, preFeatures);
+		List<String> announcers = new ArrayList<>(defsystemDependsOn);
+		announcers.addAll(dependencyNames(":DEPENDS-ON", name, items, asd, preFeatures));
+		declaredFeatures = mergeFeatureNames(declaredFeatures, BuiltinSystems.declaredFeatures(announcers));
 		Features features = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
 		List<String> dependsOn = new ArrayList<>();
+		String version = null;
 		boolean serial = false;
 		boolean packageInferred = false;
 		LispVal components = null;
@@ -837,13 +876,24 @@ public final class AsdfSystems {
 			LispVal value = IGNORED_OPTIONS.contains(key.name()) ? items.get(i + 1) : resolveReadEval(asd,
 					LispNames.ASDF_DEFSYSTEM + " " + name + " " + lower(key.name()), items.get(i + 1));
 			switch (key.name()) {
-				// Metadata: accepted for .asd compatibility, not recorded anywhere. The
-				// :version value may be any literal form, including ASDF's
-				// (:read-file-form "version.sexp") indirection -- it is never inspected.
-				case ":NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":VERSION", ":AUTHOR", ":MAINTAINER", ":LICENSE",
-						":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO" ->
+				// Metadata: accepted for .asd compatibility, not recorded anywhere.
+				case ":NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE",
+						":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO" ->
 					{
 					}
+				// The one metadata option something reads back: asdf:component-version.
+				// It stays in IGNORED_OPTIONS -- nothing is evaluated to find the value,
+				// so a plain string literal is recorded and every other spelling (ASDF's
+				// (:read-file-form "version.sexp") indirection, an unresolved #. marker)
+				// answers nil, silently, as it always did.
+				case ":VERSION" -> {
+					if (value instanceof LispString versionString) {
+						version = versionString.value();
+					}
+				}
+				// Already consumed by defsystemDependsOn above.
+				case ":DEFSYSTEM-DEPENDS-ON" -> {
+				}
 				// Test-op wiring: the ONE op with machinery behind it
 				// (asdf:test-system). The test-op shapes are RECORDED -- a
 				// :perform (test-op (o c) BODY) body and the :in-order-to
@@ -892,8 +942,8 @@ public final class AsdfSystems {
 				}
 				default -> throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
 						+ ": unsupported option " + key.name() + " (supported: :name :description :long-description"
-						+ " :version :author :maintainer :license :depends-on :serial :components :pathname :class"
-						+ " :rontolisp-features)");
+						+ " :version :author :maintainer :license :depends-on :defsystem-depends-on :serial"
+						+ " :components :pathname :class :rontolisp-features)");
 			}
 		}
 		String prefix = pathname == null || pathname.isEmpty() ? "" : pathname + "/";
@@ -909,7 +959,7 @@ public final class AsdfSystems {
 		// array-operations says :pathname "src/" and then names array-operations/all.
 		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures,
 				packageInferred ? (pathname == null ? "" : pathname) : null, packageInferred, testOp,
-				List.copyOf(testOpEdges));
+				List.copyOf(testOpEdges), defsystemDependsOn, version);
 	}
 
 	/**
@@ -1033,8 +1083,8 @@ public final class AsdfSystems {
 	private static final Set<String> ASDF_USER_FUNCTION_MEMBERS = Set.of(LispNames.TEST_SYSTEM, LispNames.LOAD_SYSTEM,
 			LispNames.FIND_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
 			LispNames.COMPONENT_PATHNAME, LispNames.REGISTERED_SYSTEMS, LispNames.COMPONENT_NAME,
-			LispNames.COMPONENT_CHILDREN, LispNames.COMPONENT_SIDEWAY_DEPENDENCIES, LispNames.COMPONENT_PARENT,
-			LispNames.COMPONENT_SYSTEM);
+			LispNames.COMPONENT_VERSION, LispNames.COMPONENT_CHILDREN, LispNames.COMPONENT_SIDEWAY_DEPENDENCIES,
+			LispNames.COMPONENT_PARENT, LispNames.COMPONENT_SYSTEM);
 
 	static LispVal normalizeAsdUserForm(LispVal form, Set<String> bound) {
 		if (form instanceof LispSymbol sym) {
@@ -1100,6 +1150,47 @@ public final class AsdfSystems {
 			}
 		}
 		return List.copyOf(declared);
+	}
+
+	/**
+	 * Reads a dependency-list option ({@code :depends-on} /
+	 * {@code :defsystem-depends-on}) ahead of the option loop, which is what lets a
+	 * dependency ANNOUNCE features to this system before its clauses and component files
+	 * are read -- the same reason {@link #declaredFeatures(String, List, AsdContext)} is
+	 * read early. The entries take the shapes {@link #dependencyName} accepts: a plain
+	 * designator, {@code (:feature EXPR DEP)}, {@code (:version DEP "1.2.3")}.
+	 * <p>
+	 * What a dependency may CONTRIBUTE is narrow and deliberately so: only a BUILT-IN
+	 * system announces features ({@code BuiltinSystems.declaredFeatures}), because that
+	 * is a static table a parse can read, while a real third-party system announces its
+	 * features by RUNNING -- and a {@code .asd} is parsed as data, never evaluated. Both
+	 * options announce, because real ASDF loads a {@code :depends-on} system before this
+	 * system's files are compiled and so shows them its pushes too; the only divergence
+	 * is that here such an announcement also reaches this definition's OWN
+	 * {@code :if-feature} clauses (there is no "load between the clauses" in a one-pass
+	 * parse), which is precisely what {@code :defsystem-depends-on} exists to guarantee.
+	 * @param option the option keyword, upcased with its leading colon
+	 * @param systemName the system being parsed
+	 * @param items the {@code defsystem} form's items
+	 * @param asd the enclosing {@code .asd} context (for {@code #.} resolution)
+	 * @param features the feature set a {@code (:feature ...)} entry tests
+	 * @return the dependency names, in order
+	 */
+	private static List<String> dependencyNames(String option, String systemName, List<LispVal> items, AsdContext asd,
+			Features features) {
+		String context = LispNames.ASDF_DEFSYSTEM + " " + systemName + " " + lower(option);
+		List<String> names = new ArrayList<>();
+		for (int i = 2; i + 1 < items.size(); i += 2) {
+			if (items.get(i) instanceof LispSymbol key && key.isKeyword() && option.equals(key.name())) {
+				for (LispVal dep : properList(context, resolveReadEval(asd, context, items.get(i + 1)))) {
+					String depName = dependencyName(systemName, dep, features);
+					if (depName != null && !names.contains(depName)) {
+						names.add(depName);
+					}
+				}
+			}
+		}
+		return List.copyOf(names);
 	}
 
 	/**
@@ -1223,7 +1314,7 @@ public final class AsdfSystems {
 		LispVal packageForm = LispReader.readFirstFormMatching(source, features, path,
 				AsdfSystems::isPackageDefinitionForm);
 		return new LispSystem(name, packageDependencies(packageForm, path, systemPackages), List.of(file),
-				primary.baseDir(), primary.features(), null, true, null, List.of());
+				primary.baseDir(), primary.features(), null, true, null, List.of(), primary.defsystemDependsOn(), null);
 	}
 
 	/**

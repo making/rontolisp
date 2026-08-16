@@ -495,6 +495,12 @@ public final class LoadInliner {
 		// form to the system whose file it actually came from.
 		out.add(beginSystem(name));
 		try {
+			// :defsystem-depends-on first: real ASDF loads those while the .asd is READ,
+			// so they precede the system's own dependencies (they are not sideway
+			// dependencies of it -- component-sideway-dependencies never lists them).
+			for (String dependency : system.defsystemDependsOn()) {
+				spliceSystem(dependency, out, ctx, system.baseDir());
+			}
 			for (String dependency : system.dependsOn()) {
 				// A dependency's .asd most likely sits next to this system's (or on the
 				// search path), so its directory becomes the first search entry.

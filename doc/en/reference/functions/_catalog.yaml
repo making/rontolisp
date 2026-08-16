@@ -552,6 +552,7 @@ categories:
       - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }
       - { slug: asdf-component-pathname, name: "asdf:component-pathname" }
       - { slug: asdf-component-name, name: "asdf:component-name" }
+      - { slug: asdf-component-version, name: "asdf:component-version" }
       - { slug: asdf-component-children, name: "asdf:component-children" }
       - { slug: asdf-component-sideway-dependencies, name: "asdf:component-sideway-dependencies" }
       - { slug: asdf-component-parent, name: "asdf:component-parent" }

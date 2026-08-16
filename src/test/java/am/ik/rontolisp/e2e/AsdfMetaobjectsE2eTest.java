@@ -14,6 +14,15 @@ import java.util.List;
  * already-spliced system is a no-op, and {@code (asdf:test-system "meta-demo")} follows
  * the {@code :in-order-to} test-op chain into the tests system's recorded
  * {@code :perform} body. Fixture: {@code src/test/resources/asdf-metaobjects-demo}.
+ *
+ * <p>
+ * It also pins the three ASDF gaps of {@code .todo/401}: {@code asdf:component-version}
+ * answers the declared {@code :version} (and nil for a system that declares none), the
+ * {@code :defsystem-depends-on} entry on the built-in trivial-features shim is loaded
+ * ahead of everything and its announced {@code :unix} is in force while the component
+ * file is READ (the {@code platform} defun) without ever becoming a sideway dependency,
+ * and {@code asdf:system-relative-pathname} has a runtime form on the compile paths --
+ * the relative argument is a variable there, so the compile-time fold cannot answer it.
  */
 class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
@@ -37,6 +46,14 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			    (print (eq (asdf:component-parent child) sys))
 			    (print (eq (asdf:component-system child) sys))))
 			(print (asdf:component-sideway-dependencies (asdf:find-system "meta-demo/tests")))
+			(print (asdf:component-version (asdf:find-system "meta-demo")))
+			(print (asdf:component-version (asdf:find-system "meta-demo/tests")))
+			(print (platform))
+			(print (if (search "asdf-metaobjects-demo/data.txt"
+			                   (let ((rel "data.txt"))
+			                     (asdf:system-relative-pathname "meta-demo" rel)))
+			           :relative-ok
+			           :relative-bad))
 			(defmethod kind-of ((c asdf:system)) :system)
 			(defmethod kind-of ((c asdf:cl-source-file)) :file)
 			(print (kind-of (asdf:find-system "meta-demo")))
@@ -52,8 +69,10 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			""";
 
 	private static final List<String> EXPECTED = List.of("T", "T", "NIL", "T", "\"meta-demo\"",
-			"(\"src/one\" \"src/m/two\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", ":SYSTEM", ":FILE", "NIL",
-			"NIL", "(\"meta-demo\" \"meta-demo/tests\")", ":NESTED-LOAD-OK", "\"testing meta-demo/tests\"", "3", "1");
+			"(\"src/one\" \"src/m/two\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "NIL", ":UNIX",
+			":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "NIL",
+			"(\"meta-demo\" \"meta-demo/tests\" \"trivial-features\")", ":NESTED-LOAD-OK",
+			"\"testing meta-demo/tests\"", "3", "1");
 
 	@Override
 	protected String systemDir() {

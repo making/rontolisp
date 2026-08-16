@@ -549,9 +549,9 @@ public final class PackageRegistry {
 						// the whole component model).
 						LispNames.COMPONENT, LispNames.CHILD_COMPONENT, LispNames.PARENT_COMPONENT, LispNames.MODULE,
 						"SYSTEM", LispNames.PACKAGE_INFERRED_SYSTEM, LispNames.SOURCE_FILE, LispNames.CL_SOURCE_FILE,
-						LispNames.STATIC_FILE, LispNames.COMPONENT_NAME, LispNames.COMPONENT_CHILDREN,
-						LispNames.COMPONENT_SIDEWAY_DEPENDENCIES, LispNames.COMPONENT_PARENT,
-						LispNames.COMPONENT_SYSTEM,
+						LispNames.STATIC_FILE, LispNames.COMPONENT_NAME, LispNames.COMPONENT_VERSION,
+						LispNames.COMPONENT_CHILDREN, LispNames.COMPONENT_SIDEWAY_DEPENDENCIES,
+						LispNames.COMPONENT_PARENT, LispNames.COMPONENT_SYSTEM,
 						// The missing-component CONDITION name and the retry RESTART
 						// name, external in real ASDF and resolve-only here (never
 						// defined): dbi's with-autoload-on-missing handler-binds
@@ -764,8 +764,8 @@ public final class PackageRegistry {
 						"ENCLOSE"))));
 		// mgl-pax (nickname pax): the STUB behind the built-in ASDF system
 		// "mgl-pax-bootstrap" (mgl-pax-bootstrap.lisp, eval.ShimLibraries). Real
-		// mgl-pax-bootstrap's own .asd uses :defsystem-depends-on, outside the
-		// defsystem-as-data subset; trivial-utf-8 (a uuid dependency) hard-depends on
+		// mgl-pax-bootstrap's own .asd declares :around-compile, a compile hook outside
+		// the defsystem-as-data subset; trivial-utf-8 (a uuid dependency) hard-depends on
 		// it and its source calls exactly these members. define-package is consumed by
 		// PackageResolver.resolve like defpackage; section appears only as data inside
 		// defsection bodies (unevaluated, so it needs to resolve but never to be

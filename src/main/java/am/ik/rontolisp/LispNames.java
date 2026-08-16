@@ -5518,6 +5518,15 @@ public final class LispNames {
 	public static final String COMPONENT_NAME = "COMPONENT-NAME";
 
 	/**
+	 * {@code asdf:component-version} -- reader: the {@code :version} string the system's
+	 * {@code defsystem} declared, or nil when it declared none as a plain string (an ASDF
+	 * {@code (:read-file-form ...)} indirection is never evaluated here, and a component
+	 * file has no version of its own). dexador builds its {@code User-Agent} from
+	 * {@code (asdf:component-version (asdf:find-system :dexador))}.
+	 */
+	public static final String COMPONENT_VERSION = "COMPONENT-VERSION";
+
+	/**
 	 * {@code asdf:component-children} -- reader: a parent component's children in load
 	 * order (a system's {@code cl-source-file}s, one per component file).
 	 */
@@ -7228,11 +7237,13 @@ public final class LispNames {
 	 * The {@code mgl-pax} stub package (nickname {@code pax}) behind the built-in ASDF
 	 * system {@code mgl-pax-bootstrap}. Real mgl-pax is a documentation system;
 	 * mgl-pax-bootstrap is its tiny package-definition core, which trivial-utf-8 (a uuid
-	 * dependency) hard-depends on -- and whose own {@code .asd} uses
-	 * {@code :defsystem-depends-on}, outside the defsystem-as-data subset. The stub
-	 * defines only what trivial-utf-8's source calls: {@code define-package} (consumed by
-	 * the resolver as {@code defpackage}), {@code defsection} (defines the section name
-	 * as a nil variable), and nil no-ops for the PAX-World registration helpers.
+	 * dependency) hard-depends on -- and whose own {@code .asd} declares
+	 * {@code :around-compile "mgl-pax.asdf:compile-pax"}, a compile hook outside the
+	 * defsystem-as-data subset (its {@code :defsystem-depends-on} is readable since
+	 * {@code .todo/401}; the hook is what still stops it). The stub defines only what
+	 * trivial-utf-8's source calls: {@code define-package} (consumed by the resolver as
+	 * {@code defpackage}), {@code defsection} (defines the section name as a nil
+	 * variable), and nil no-ops for the PAX-World registration helpers.
 	 */
 	public static final String MGL_PAX_PKG = "MGL-PAX";
 

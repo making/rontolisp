@@ -521,6 +521,26 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void aDefsystemDependsOnEntryIsSplicedAheadOfTheDependenciesAndAnnouncesItsFeatures() throws Exception {
+		// dexador.asd's opener: the .asd-read-time dependency resolves through the
+		// ordinary ladder (trivial-features is a built-in shim), splices BEFORE
+		// :depends-on, and its announced :unix is in force while this system's own
+		// component files are read -- but not for the dependency, which declares its own.
+		List<LispVal> program = LoadInliner.inline(
+				LispReader.readAllFromString("(asdf:load-system :app) (print (which)) (print (dep-which))",
+						Features.JVM),
+				loaderOf(Map.of("app.asd",
+						"(defsystem :app :defsystem-depends-on (\"trivial-features\") :depends-on (\"dep\")"
+								+ " :components ((:file \"main\")))", //
+						"main.lisp", "(defun which () #+unix \"unix\" #-unix \"unannounced\")", //
+						"dep.asd", "(defsystem :dep :components ((:file \"dep\")))", //
+						"dep.lisp", "(defun dep-which () #+unix \"leaked\" #-unix \"clean\")")),
+				null, List.of(), Features.JVM);
+		byte[] classBytes = new JvmLispCompiler("TestDefsystemDependsOn").compile(program);
+		assertThat(runMain(classBytes, "TestDefsystemDependsOn")).isEqualTo("\"unix\"\n\"clean\"");
+	}
+
+	@Test
 	void loadedFileWithReadEvalCompilesAndRunsOnJvm() throws Exception {
 		// #. in a loaded file rides the marker read; the markers resolve in
 		// UserMacroExpander against the macro-time evaluator, mirroring the runtime

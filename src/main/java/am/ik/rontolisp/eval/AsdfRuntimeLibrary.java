@@ -41,10 +41,11 @@ import org.jspecify.annotations.Nullable;
  * system's splice point.
  *
  * <p>
- * A record is {@code (CLASS DIR FILES DEPS LOADED-P)}: the component class keyword
- * ({@code :system} / {@code :package-inferred-system}), the source directory with a
- * trailing slash, the component files as {@code (RELATIVE . RESOLVED)} namestring pairs
- * in load order, the {@code :depends-on} names and whether the system is loaded.
+ * A record is {@code (CLASS DIR FILES DEPS LOADED-P VERSION)}: the component class
+ * keyword ({@code :system} / {@code :package-inferred-system}), the source directory with
+ * a trailing slash, the component files as {@code (RELATIVE . RESOLVED)} namestring pairs
+ * in load order, the {@code :depends-on} names, whether the system is loaded, and the
+ * declared {@code :version} string (nil when it declared none as a plain string).
  */
 public final class AsdfRuntimeLibrary {
 
@@ -57,7 +58,8 @@ public final class AsdfRuntimeLibrary {
 
 	/** The names {@code asdf.lisp} defines (functions plus the one variable). */
 	private static final Set<String> DEFINED_NAMES = Set.of(LispNames.ASDF_FIND_SYSTEM,
-			qualify(LispNames.REGISTERED_SYSTEMS), qualify(LispNames.COMPONENT_NAME), LispNames.ASDF_COMPONENT_PATHNAME,
+			qualify(LispNames.REGISTERED_SYSTEMS), qualify(LispNames.COMPONENT_NAME),
+			qualify(LispNames.COMPONENT_VERSION), LispNames.ASDF_COMPONENT_PATHNAME,
 			qualify(LispNames.COMPONENT_CHILDREN), qualify(LispNames.COMPONENT_SIDEWAY_DEPENDENCIES),
 			qualify(LispNames.COMPONENT_PARENT), qualify(LispNames.COMPONENT_SYSTEM),
 			LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME,
@@ -192,18 +194,19 @@ public final class AsdfRuntimeLibrary {
 		}
 		return list(new LispSymbol(system.packageInferredClass() ? ":PACKAGE-INFERRED-SYSTEM" : ":SYSTEM"),
 				new LispString(normalizeDir(system.baseDir())), list(files.toArray(LispVal[]::new)),
-				list(deps.toArray(LispVal[]::new)), loaded ? LispTrue.INSTANCE : LispNil.INSTANCE);
+				list(deps.toArray(LispVal[]::new)), loaded ? LispTrue.INSTANCE : LispNil.INSTANCE,
+				system.version() == null ? LispNil.INSTANCE : new LispString(system.version()));
 	}
 
 	/**
 	 * The record for a built-in shim system ({@code BuiltinSystems}): a plain system with
-	 * no directory, files or dependencies.
+	 * no directory, files, dependencies or version.
 	 * @param loaded whether the shim has been loaded
 	 * @return the record as Lisp data
 	 */
 	public static LispVal builtinRecord(boolean loaded) {
 		return list(new LispSymbol(":SYSTEM"), new LispString("./"), LispNil.INSTANCE, LispNil.INSTANCE,
-				loaded ? LispTrue.INSTANCE : LispNil.INSTANCE);
+				loaded ? LispTrue.INSTANCE : LispNil.INSTANCE, LispNil.INSTANCE);
 	}
 
 	/**

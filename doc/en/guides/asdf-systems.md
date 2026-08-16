@@ -146,7 +146,14 @@ below.
   It does not reach a dependency, which declares its own. An `eval-when` whose situations are only
   `(:compile-toplevel)` is inert (ASDF loads a `.asd`, it never compiles one),
   and any other form inside the `eval-when` is an error naming it.
-- `defsystem` supports the metadata options (ignored), `:depends-on`,
+- `defsystem` supports the metadata options (ignored, except that a plain-string
+  `:version` is read back by
+  [`asdf:component-version`](../reference/functions/asdf-component-version.md)),
+  `:depends-on`, `:defsystem-depends-on` (systems real ASDF loads while the
+  `.asd` is **read**: located the same way, loaded before `:depends-on`, never
+  a sideway dependency of the system, and a built-in shim named there announces
+  its features to this system — `("trivial-features")` puts `:unix` and
+  `:little-endian` in force for its clauses and component files),
   `:serial`, `:pathname` (a literal directory prefixed to every component, so
   a system whose sources live in `src/` can name them bare) and `:components`
   with `:file`/`:module`/`:static-file` entries;
@@ -160,8 +167,9 @@ below.
   operation, a qualified `test-op :after` method, or a `#.` in the body stays
   tolerated and ignored — there is still no general `operate` machinery). A
   `:version` value may be any literal form including ASDF's
-  `(:read-file-form ...)` indirection (never inspected). Anything else
-  (`:defsystem-depends-on`, ...) is an error naming the clause.
+  `(:read-file-form ...)` indirection (never inspected — only a plain string is
+  recorded). Anything else (`:around-compile`, ...) is an error naming the
+  clause.
 - `:class :package-inferred-system` is supported — the style ningle, rove and
   array-operations use. Such a system has **no `:components` at all**: a
   sub-system name is a file path under the system's directory (`my-lib/main`
@@ -194,6 +202,8 @@ below.
   `asdf:source-file`, `asdf:cl-source-file`, `asdf:static-file` — so `typep`,
   `typecase` and `defmethod` specializers over them work on every backend. The
   readers [`asdf:component-name`](../reference/functions/asdf-component-name.md),
+  [`asdf:component-version`](../reference/functions/asdf-component-version.md)
+  (the declared `:version` string, when it was written as a plain string),
   [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md),
   [`asdf:component-children`](../reference/functions/asdf-component-children.md)
   (one `cl-source-file` per component file, in load order),
@@ -255,7 +265,8 @@ real library) resolve the name to a bundled shim instead of downloading it.
 | `bordeaux-threads` (nicknames `bt` and `bt2`) | both API namespaces of the one shim. The locking subset — `make-lock`, `acquire-lock`, `release-lock`, `with-lock-held`, `*supports-threads-p*` — rides [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) and friends; thread creation — `bt2:make-thread` (with `:initial-bindings`), `join-thread`, `threadp`, `thread-alive-p`, `destroy-thread` — rides [`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md), a real virtual thread on the interpreter and the JVM. On the single-threaded WASM backends the thread entry points signal at call time and `bt:*supports-threads-p*` is `nil`. `make-lock` returns a reentrant lock (upstream's is not), `acquire-lock`'s `:wait-p` is ignored — the acquisition always blocks — and an `:initial-bindings` value form must be a quote form or self-evaluating (anything else would need the new thread's dynamic environment and signals) |
 | `uiop` | ASDF's portability layer, registered as 15 sub-packages and 429 exports. See **[The uiop Package](../reference/uiop.md)** for what is implemented; every other export resolves and signals `uiop:not-implemented-error` naming the operation, so a library that merely names one still loads |
 | `swank` | a stub, and only so that a library depending on it can load: `swank:create-server` signals ("rontolisp cannot serve a remote REPL") and `swank:stop-server` is a `nil` no-op. Real swank is SLIME's server half, whose own `.asd` is a program the defsystem-as-data front-end cannot read -- without the stub, `(ql:quickload "clack")` fetches the SLIME tarball and dies on it |
-| `mgl-pax-bootstrap` | the `mgl-pax` package (nickname `pax`) as a stub, so a library documented with [mgl-pax](https://github.com/melisgl/mgl-pax) can load (trivial-utf-8, a uuid dependency, hard-depends on it; the real system's `.asd` uses `:defsystem-depends-on`). `pax:define-package` acts as `defpackage`, `pax:defsection` defines its section name as a `nil` variable **and exports the section's `(symbol locative)` entries** — mgl-pax's documented default, and how such libraries export their public API — and the PAX-World registration helpers are `nil` no-ops. No documentation is generated |
+| `mgl-pax-bootstrap` | the `mgl-pax` package (nickname `pax`) as a stub, so a library documented with [mgl-pax](https://github.com/melisgl/mgl-pax) can load (trivial-utf-8, a uuid dependency, hard-depends on it; the real system's `.asd` declares `:around-compile`, a compile hook outside the defsystem-as-data subset). `pax:define-package` acts as `defpackage`, `pax:defsection` defines its section name as a `nil` variable **and exports the section's `(symbol locative)` entries** — mgl-pax's documented default, and how such libraries export their public API — and the PAX-World registration helpers are `nil` no-ops. No documentation is generated |
+| `trivial-features` | the platform-feature announcement upstream trivial-features exists to make portable, without the CFFI probing: naming it in `:defsystem-depends-on` (or `:depends-on`) declares **`:unix`** and **`:little-endian`** for the depending system's own clauses and component files, and pushes both onto `*features*` at run time. `:unix` because every backend's file/path/environment surface is POSIX-shaped and none is Windows; `:little-endian` because the only places a program can see machine layout (WASM linear memory, a reactor's `:bytes` boundary) are little-endian by the wasm spec. The CPU names (`:x86-64`, `:64-bit`) are deliberately absent — rontolisp has no machine-word surface to describe. Upstream's own `.asd` cannot load here at all: it ends in `(error "Sorry, your Lisp is not supported")` for an implementation it does not recognize |
 | `trivial-garbage` (nickname `tg`) | GC finalizers as honest no-ops: `tg:finalize` registers nothing and returns the object, `tg:cancel-finalization` is a `nil` no-op. No backend exposes GC hooks — and Common Lisp gives finalizers no guarantee of ever running, so a conforming consumer must already work when they never fire. Practical consequence for `dbd-postgres` (its consumer): a leaked prepared statement lives until the connection closes; call `dbi:disconnect` explicitly |
 | `clack-handler-rontolisp` | the [Clack](https://github.com/fukamachi/clack) handler backend: package `clack.handler.rontolisp` exporting `run`/`stop`, bridging the Clack application protocol onto rontolisp's embedded HTTP server. You never load it by hand — `(clack:clackup app :server :rontolisp)` resolves it by name at run time (the system also answers to the dotted spelling `clack.handler.rontolisp` that clack derives from the package name). See the [Clack guide](clack.md) |
 | `clack-handler-reactor` | the Clack handler backend for a **host-driven reactor**: a Cloudflare Worker, a browser page, a node or JVM embedding — any host that has already parsed the request and calls an exported function instead of handing the program a socket. Package `clack.handler.reactor` exports `run`/`stop` and, under them, `handle` (an application and a JSON request string in, a JSON response string out) and `dispatch` (the same over the application `clackup` stored). Resolved by `(clack:clackup app :server :reactor)`, the dotted spelling included, exactly like the backend above. See the [Clack guide](clack.md#driving-the-reactor-by-hand-clack-handler-reactor) |

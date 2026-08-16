@@ -2,8 +2,8 @@
 ;; "mgl-pax-bootstrap". Upstream mgl-pax is a full documentation system;
 ;; mgl-pax-bootstrap is its package-definition core, which trivial-utf-8 (a
 ;; uuid dependency, hence on the mito path) hard-depends on -- and whose own
-;; .asd uses :defsystem-depends-on, outside the defsystem-as-data subset
-;; (.kb/asdf.md). The swank precedent: without the stub, (ql:quickload "uuid")
+;; .asd declares :around-compile, a compile hook outside the defsystem-as-data
+;; subset (.kb/asdf.md). The swank precedent: without the stub, (ql:quickload "uuid")
 ;; dies parsing mgl-pax's system definition.
 ;;
 ;; Written in canonical shape; the mgl-pax package (nickname pax) is seeded in

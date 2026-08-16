@@ -78,8 +78,8 @@ public final class ShimLibraries {
 			Map.entry("bordeaux-threads", "bordeaux-threads.lisp"), Map.entry("babel", "babel.lisp"),
 			Map.entry("swank", "swank.lisp"), Map.entry("trivial-cltl2", "trivial-cltl2.lisp"),
 			// The mgl-pax package stub (trivial-utf-8's hard dependency, on the uuid /
-			// mito path): real mgl-pax-bootstrap's .asd uses :defsystem-depends-on,
-			// outside the defsystem-as-data subset -- the swank precedent.
+			// mito path): real mgl-pax-bootstrap's .asd declares :around-compile, a
+			// compile hook outside the defsystem-as-data subset -- the swank precedent.
 			Map.entry("mgl-pax-bootstrap", "mgl-pax-bootstrap.lisp"),
 			// GC finalizers (dbd-postgres's dependency): no backend exposes GC hooks,
 			// and CL guarantees finalizers nothing anyway -- finalize is a no-op
