@@ -33,6 +33,12 @@ Callers that want it: `cl-json`'s decoder, `local-time`'s parser, and chunga's
 `unread-char*` (which is on dexador's path, though chunga's own stream is a
 Gray one and already works).
 
+cl-json's decoder makes this a hard blocker for jose (`.todo/419`): without
+`unread-char` it cannot scan a number, `true`, `false`, `null` or a nested
+aggregate, so `jose:decode` refuses every JWT carrying an integer `exp` / `iat`
+/ `nbf` -- i.e. every real one. Handing the same decoder a Gray input stream
+instead decodes all of those correctly, which measures the gap exactly.
+
 ## 2. `input-stream-p` / `output-stream-p` answer `nil` for a Gray instance
 
 On every backend. Everything else in the input family dispatches now, so a

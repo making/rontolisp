@@ -85,6 +85,16 @@ verification against the actual Quicklisp dist at probe time)
     stream built-in as if it were a call** (`.kb/gray-streams.md`), and **a
     `funcall` past `MAX_CALLABLE_ARITY` compiled to a call-time signal** instead
     of routing through `apply`'s spread dispatcher.
+- **`jose` (JWT/JOSE) + `cl-json` — probed 2026-08-16, `.todo/419`.** jose is a
+  `:package-inferred-system` and its deps load unpatched except cl-json, whose
+  `.asd` wants three parse widenings (`.todo/420`). With those plus `logtest`
+  (`.todo/421`), `jose:encode` runs byte-identically on all four backends
+  (HS256/384/512 cross-checked against Python's `hmac`); `jose:decode` is
+  blocked by `unread-char` on a handle (`.todo/411`) and, on the compiled
+  backends, by `progv` (`.todo/423`, which cl-json's decoder forces on every
+  program that loads it). RSA needs the ironclad slice widened
+  (`.todo/424`) — the real public-key sources were verified to load and
+  round-trip.
 - **`salza2` (deflate) — verified loadable, deliberately not kept.** 2.1 gzips
   correctly on all four backends once the `deftype`-alias fix above is in (it was
   the library that surfaced it). It is not vendored: nothing in the repo consumes
