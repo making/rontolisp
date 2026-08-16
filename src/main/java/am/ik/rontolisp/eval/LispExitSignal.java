@@ -23,6 +23,7 @@ package am.ik.rontolisp.eval;
  */
 public final class LispExitSignal extends RuntimeException {
 
+	/** The process status code {@code uiop:quit} was given. */
 	private final int code;
 
 	/**
