@@ -40,8 +40,14 @@ Current built-in systems (`eval.BuiltinSystems` + `eval.ShimLibraries`):
   Unicode code point, the external form is UTF-8 on every backend), so
   there is nothing for the other 39 to convert between. Loading it for real
   would splice ~20,000 lines of code-page tables (jpn-table.lisp alone is
-  17,637) that no rontolisp program can use into every artifact -- an
-  ASDF-spliced third-party tree is not tree-shaken. The shim therefore
+  17,637) that no rontolisp program can use into every artifact. (This bullet
+  originally justified that with "an ASDF-spliced third-party tree is not
+  tree-shaken", which is STALE: `LibraryDefunPruner` has covered third-party
+  trees since 2026-08-09 (`.kb/library-defun-pruning.md`). Re-measure before
+  quoting the cost half again -- the tables are data reachable from the
+  encoding registry, not unreferenced defuns, so pruning may well not reach
+  them. The capability half below is unchanged and is the real reason.) The
+  shim therefore
   implements the UTF-8 codec plus the Latin-1/ASCII aliases and SIGNALS on
   any other `:encoding` rather than mis-coding silently. It becomes
   reviewable only if the string model ever grows a second external

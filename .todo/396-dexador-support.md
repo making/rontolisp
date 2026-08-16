@@ -85,6 +85,51 @@ Then the feature work:
 `usocket:socket-option` (dexador sets `:receive-timeout` with it) is a usocket
 shim gap and is tracked in `.todo/114`, not here.
 
+## The alternative considered and DEFERRED: a shim over `rontolisp:fetch`
+
+Instead of loading dexador's sources, `dex:get`/`dex:post` could be a shim
+system implemented over `rontolisp:fetch` -- the `usocket.lisp` /
+`clack-handler-rontolisp.lisp` pattern. **Decision (2026-08-16): not now.
+Reach the UNPATCHED load first, then re-evaluate with that in hand.**
+
+Why it is not the default route:
+
+- `.todo/147` (design line, 2026-07-18) puts the boundary at usocket-CLASS
+  libraries -- per-implementation portability layers that cannot support
+  rontolisp from their side. dexador is ordinary portable CL, and the spike
+  proved it: every dependency but cl+ssl loads unpatched. **cl+ssl is the one
+  that falls on the shim side of that line**, which is what `.todo/399`
+  already is.
+- `fetch` delegates redirect following, `Content-Encoding` decompression,
+  chunked decoding and header normalization to THREE different host clients
+  (JDK `HttpClient`, `wasi:http`, the reactor host's own `fetch`). A
+  dex-shaped API on top of that imports host policy divergence into a contract
+  that is precise about `:max-redirects`, cookie-jar merging and the body's
+  encoding. Real dexador does all of it in Lisp: the spike got byte-identical
+  gzip / 302 / cookie / UTF-8 answers on interpreter, JVM and `--component`.
+- It is not a thin shim. `:want-stream`, the connection pool, the
+  `retry-request` / `ignore-and-continue` restarts, the per-status condition
+  hierarchy, multipart bodies and `:proxy` would all be reimplemented, and
+  every divergence from upstream is silent.
+
+What it WOULD buy, for the re-evaluation:
+
+- `https://` for free -- `.todo/399` (High) disappears on this path, as do
+  `.todo/398`, `.todo/401`, `.todo/404` and chunga's half of `.todo/402`.
+- The targets real dexador can NEVER reach: a `--no-wasi --host-fetch` reactor
+  (Cloudflare Worker) and the browser playground have no TCP sockets at all.
+- It does NOT fix `.todo/397` (a language bug any program can hit) and does
+  NOT fix `.todo/405` (`fetch` is a compile error on plain Preview 1 too).
+- Artifact size is a WEAK argument either way: `LibraryDefunPruner` has
+  covered ASDF-spliced third-party trees since 2026-08-09 (`.todo/147`'s "an
+  ASDF-spliced third-party tree is not tree-shaken" predates that), and the
+  spike's 5.6 MB `.class` / 4.5 MB `.wasm` were measured WITHOUT `--optimize`.
+  Measure before arguing from it.
+
+If it is ever adopted, it must NOT claim the `dexador` name: an opt-in system
+of its own, refusing to load beside the real one -- the `tiny-routes/lite`
+precedent (`ShimLibraries.CONFLICTS`).
+
 ## Definition of done
 
 `(ql:quickload "dexador")` loads the UNPATCHED upstream system, and a program
