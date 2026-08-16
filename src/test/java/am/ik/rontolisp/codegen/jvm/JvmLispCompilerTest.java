@@ -319,6 +319,37 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage() throws Exception {
+		// The JVM half of the type-of spelling contract (rove prints (type-of
+		// (assertion-reason f)) in its failure report): type-of interns the remainder of
+		// the %class- / %struct- tag, which for a class defined in another package is
+		// already a canonical PKG:NAME spelling, and the compile paths' intern is
+		// package-blind so it keeps that spelling. The interpreter used to home it into
+		// the CURRENT package instead (TOF-APP::TOF-LIB:WIDGET) -- pinned here so the
+		// four backends stay one answer
+		// (LispEvaluatorTest#evalTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage).
+		assertThat(compileAndRun("""
+				(defpackage :tof-lib (:use :cl) (:export :widget :make-w))
+				(in-package :tof-lib)
+				(defclass widget () ())
+				(defclass gadget () ())
+				(defstruct point x y)
+				(defun make-w () (make-instance 'widget))
+				(defun make-g () (make-instance 'gadget))
+				(defpackage :tof-app (:use :cl))
+				(in-package :tof-app)
+				(print (list (type-of (tof-lib:make-w))
+				             (type-of (tof-lib::make-g))
+				             (type-of (tof-lib::make-point :x 1 :y 2))))
+				(print (list (eq (type-of (tof-lib:make-w)) 'tof-lib:widget)
+				             (eq (type-of (tof-lib::make-g)) 'tof-lib::gadget)
+				             (eq (type-of (tof-lib::make-point :x 1 :y 2)) 'tof-lib::point)
+				             (eq (type-of (tof-lib:make-w)) (class-name (class-of (tof-lib:make-w))))
+				             (type-of 42)))
+				""")).isEqualTo("(TOF-LIB:WIDGET TOF-LIB::GADGET TOF-LIB::POINT)\n(T T T T INTEGER)");
+	}
+
+	@Test
 	void compileCloserMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators() throws Exception {
 		// The closer-mop system is spliced by the compile-time LoadInliner pass (cli),
 		// mirroring the CLI pipeline; the shim serves BOTH generations, exactly like the

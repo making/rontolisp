@@ -50,7 +50,24 @@ Upcased because the compile paths' spelling comes from reader-upcased literals.
   `class-of`, which answers a class metaobject since the DAO/MOP migration) —
   it strips the `%struct-`/`%class-` tag prefix to yield the type NAME, so a
   digest object's type is usable as the digest-name designator it came from,
-  and it drags no metaobject runtime into the program.
+  and it drags no metaobject runtime into the program. The tag remainder of a
+  class defined in ANOTHER package is already a canonical `PKG:NAME` spelling,
+  and `type-of` `intern`s it, so the answer is only right if `intern` gives an
+  already-qualified spelling back unchanged. It does on all four backends now:
+  the compile paths' `intern` is package-blind, and
+  `PackageResolver.internSpelling` recognizes a qualifier the REGISTRY knows and
+  routes it through `resolveQualified` instead of homing the whole string into
+  the current package (which produced `APP::LIB:WIDGET`, so `(eq (type-of x)
+  'lib:widget)` was nil on the interpreter and t everywhere else — todo-383,
+  found in rove's failure report, which prints `(type-of (assertion-reason f))`).
+  An exported class keeps its single colon and an internal one its double, so
+  `type-of` agrees with `class-name` — which reaches the same name through the
+  metaobject and was always right. Pinned four ways:
+  `LispEvaluatorTest#evalTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage`,
+  its `Jvm`/`Wasm` twins, and `ci-spec.yaml`'s `type-of-foreign-package-class-name`.
+  **Re-evaluate when** symbol identity stops being spelling
+  (the `.todo/156` axis): the round-trip this relies on is a property of
+  "a symbol IS its canonical spelling", not of `intern` itself.
 - **2-argument `find-symbol`**: interpreter = registry-backed ("interned" means
   the package owns/exports/imports the verbatim name), returning the canonical
   spelling so plist and dispatch lookups keyed by a resolver-canonicalized quote

@@ -7924,6 +7924,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void typeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage() throws Exception {
+		// The WASM twin of
+		// JvmLispCompilerTest#compileTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage:
+		// type-of interns the already-qualified remainder of the class tag, and a
+		// package-blind intern keeps that spelling -- what the interpreter was taught to
+		// match. type-of and class-name are prelude defuns, so the program needs the
+		// CLI pipeline's prelude splice.
+		assertThat(compileAndRunPrelude("""
+				(defpackage :tof-lib (:use :cl) (:export :widget :make-w))
+				(in-package :tof-lib)
+				(defclass widget () ())
+				(defclass gadget () ())
+				(defstruct point x y)
+				(defun make-w () (make-instance 'widget))
+				(defun make-g () (make-instance 'gadget))
+				(defpackage :tof-app (:use :cl))
+				(in-package :tof-app)
+				(print (list (type-of (tof-lib:make-w))
+				             (type-of (tof-lib::make-g))
+				             (type-of (tof-lib::make-point :x 1 :y 2))))
+				(print (list (eq (type-of (tof-lib:make-w)) 'tof-lib:widget)
+				             (eq (type-of (tof-lib::make-g)) 'tof-lib::gadget)
+				             (eq (type-of (tof-lib::make-point :x 1 :y 2)) 'tof-lib::point)
+				             (eq (type-of (tof-lib:make-w)) (class-name (class-of (tof-lib:make-w))))
+				             (type-of 42)))
+				""")).isEqualTo("(TOF-LIB:WIDGET TOF-LIB::GADGET TOF-LIB::POINT)\n(T T T T INTEGER)");
+	}
+
+	@Test
 	void defclassMetaclassRunsTheClassDefinitionProtocol() throws Exception {
 		// The postmodern dao-class shape on the WASM path, mirroring
 		// JvmLispCompilerTest#compileDefclassMetaclassRunsTheClassDefinitionProtocol.

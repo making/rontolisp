@@ -1331,6 +1331,38 @@ cases:
       T
       T
       5
+  - name: type-of-foreign-package-class-name
+    source: |
+      ;; type-of peels the %class- / %struct- tag off %class-designator and INTERNS
+      ;; the remainder, which for a class defined in another package is already a
+      ;; canonical PKG:NAME spelling (rove prints (type-of (assertion-reason f)) in
+      ;; its failure report). The interpreter used to home that whole string into
+      ;; the CURRENT package -- CI-TOF-APP::CI-TOF-LIB:WIDGET, so (eq (type-of x)
+      ;; 'ci-tof-lib:widget) was NIL there and T on the compile paths, whose intern
+      ;; is package-blind. All four keep the spelling now, single colon for an
+      ;; exported class and double for an internal one, agreeing with class-name.
+      (defpackage :ci-tof-lib (:use :cl) (:export :widget :make-w))
+      (in-package :ci-tof-lib)
+      (defclass widget () ())
+      (defclass gadget () ())
+      (defstruct point x y)
+      (defun make-w () (make-instance 'widget))
+      (defun make-g () (make-instance 'gadget))
+      (defpackage :ci-tof-app (:use :cl))
+      (in-package :ci-tof-app)
+      (print (list (type-of (ci-tof-lib:make-w))
+                   (type-of (ci-tof-lib::make-g))
+                   (type-of (ci-tof-lib::make-point :x 1 :y 2))))
+      (print (list (eq (type-of (ci-tof-lib:make-w)) 'ci-tof-lib:widget)
+                   (eq (type-of (ci-tof-lib::make-g)) 'ci-tof-lib::gadget)
+                   (eq (type-of (ci-tof-lib::make-point :x 1 :y 2)) 'ci-tof-lib::point)
+                   (eq (type-of (ci-tof-lib:make-w))
+                       (class-name (class-of (ci-tof-lib:make-w))))
+                   (type-of 42)))
+      (in-package :cl-user)
+    expected: |
+      (CI-TOF-LIB:WIDGET CI-TOF-LIB::GADGET CI-TOF-LIB::POINT)
+      (T T T T INTEGER)
   - name: lisp-2-function-namespace-via-function
     source: |
       (cl:in-package cl-user)

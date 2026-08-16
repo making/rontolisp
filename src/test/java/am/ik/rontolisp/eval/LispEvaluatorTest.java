@@ -4089,6 +4089,41 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage() {
+		// type-of is the prelude defun that peels the %class- / %struct- tag prefix off
+		// %class-designator and INTERNS the remainder, and the remainder of a class
+		// defined in another package is already a canonical PKG:NAME spelling. The
+		// interpreter's intern used to home that whole string into the current package
+		// (TOF-APP::TOF-LIB:WIDGET), so (eq (type-of x) 'tof-lib:widget) was nil here
+		// while the package-blind intern of the compile paths answered t
+		// (JvmLispCompilerTest#compileTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage).
+		// An already-qualified spelling now names the symbol it spells
+		// (PackageResolver.internSpelling), so type-of agrees with class-name and with
+		// the other three backends -- and an exported class keeps its single colon while
+		// an internal one keeps its double colon.
+		LispVal result = evalMulti("""
+				(defpackage :tof-lib (:use :cl) (:export :widget :make-w))
+				(in-package :tof-lib)
+				(defclass widget () ())
+				(defclass gadget () ())
+				(defstruct point x y)
+				(defun make-w () (make-instance 'widget))
+				(defun make-g () (make-instance 'gadget))
+				(defpackage :tof-app (:use :cl))
+				(in-package :tof-app)
+				(list (type-of (tof-lib:make-w))
+				      (type-of (tof-lib::make-g))
+				      (type-of (tof-lib::make-point :x 1 :y 2))
+				      (eq (type-of (tof-lib:make-w)) 'tof-lib:widget)
+				      (eq (type-of (tof-lib::make-g)) 'tof-lib::gadget)
+				      (eq (type-of (tof-lib::make-point :x 1 :y 2)) 'tof-lib::point)
+				      (eq (type-of (tof-lib:make-w)) (class-name (class-of (tof-lib:make-w))))
+				      (type-of 42))
+				""");
+		assertThat(result.print()).isEqualTo("(TOF-LIB:WIDGET TOF-LIB::GADGET TOF-LIB::POINT T T T T INTEGER)");
+	}
+
+	@Test
 	void evalTypecase() {
 		assertThat(eval("(typecase 42 (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"i\"");
 		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");

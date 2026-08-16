@@ -1520,10 +1520,37 @@ public final class PackageResolver {
 	 * unknown name is interned into the current package. This is what makes a macro-time
 	 * {@code (intern (concatenate ...))} under {@code (in-package p)} name the same
 	 * function as a literal {@code defun} in that file.
+	 * <p>
+	 * A name that is ALREADY a package-qualified canonical spelling ({@code PKG:NAME} /
+	 * {@code PKG::NAME} for a package the registry knows) names the symbol it spells --
+	 * it is not a fresh symbol of that whole string in the current package. A symbol IS
+	 * its canonical spelling here, so a runtime string that carries a qualifier (the type
+	 * name {@code type-of} peels off a {@code %class-} tag, say) round-trips instead of
+	 * coming back doubly qualified as {@code APP::LIB:WIDGET}; that is also what the
+	 * package-blind {@code intern} of the compile paths does.
 	 * @param name the bare name to intern
 	 * @return the canonical spelling for the current package
 	 */
 	public String internSpelling(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn != null) {
+			String pkg = registeredPackageName(this.registry.canonicalName(qn.pkg()));
+			if (this.registry.contains(pkg)) {
+				try {
+					if (resolveQualified(qn) instanceof LispSymbol sym) {
+						return sym.name();
+					}
+				}
+				catch (LispPackageException ignored) {
+					// A single-colon spelling of a symbol the package does not export:
+					// intern is not the reader, so it interns rather than refusing.
+				}
+				if (LispNames.CL_PKG.equals(pkg) || LispNames.CL_USER_PKG.equals(pkg)) {
+					return qn.member();
+				}
+				return canonical(pkg, qn.member()).name();
+			}
+		}
 		try {
 			if (resolveUnqualified(name) instanceof LispSymbol sym) {
 				return sym.name();
