@@ -55,14 +55,14 @@ import am.ik.rontolisp.reader.LispReader;
  * defines them:
  * <ul>
  * <li>{@link #JAVA_DEFINED} -- built-ins the interpreter defines in Java and the
- * compilers lower directly ({@code getenv}, {@code symbol-call},
- * {@code add-package-local-nickname});</li>
+ * compilers lower directly ({@code add-package-local-nickname});</li>
  * <li>{@code LispMacroExpander.hasUiopMacroExpansion} -- forms with a real expansion
  * ({@code if-let}, {@code with-temporary-file}, {@code with-deprecation},
  * {@code define-package});</li>
  * <li>the folds {@code LispMacroExpander.expandUiopStubCall} performs
- * ({@code file-exists-p}, {@code native-namestring}) -- those DO carry a Lisp definition
- * here as well, so {@code #'uiop:file-exists-p} is a value like any other.</li>
+ * ({@code file-exists-p}, {@code native-namestring}, {@code symbol-call}) -- those DO
+ * carry a Lisp definition here as well, so {@code #'uiop:file-exists-p} is a value like
+ * any other.</li>
  * </ul>
  *
  * <p>
@@ -88,14 +88,19 @@ public final class UiopLibrary {
 
 	/**
 	 * Members the interpreter defines in Java (and the compilers lower or wrap
-	 * themselves), so a stub would shadow a working built-in. {@code symbol-call} is late
-	 * binding through the runtime intern; {@code add-package-local-nickname} reaches the
-	 * package registry. {@code getenv} used to be here and is not: it is a Lisp
-	 * definition now ({@code uiop-os.lisp}) over the {@code %host-getenv} primitive, so
-	 * that the override map a {@code (setf (uiop:getenv ...))} writes is consulted on
-	 * every backend.
+	 * themselves), so a stub would shadow a working built-in.
+	 * {@code add-package-local-nickname} reaches the package registry, at resolve time on
+	 * every backend. {@code getenv} used to be here and is not: it is a Lisp definition
+	 * now ({@code uiop-os.lisp}) over the {@code %host-getenv} primitive, so that the
+	 * override map a {@code (setf (uiop:getenv ...))} writes is consulted on every
+	 * backend. {@code symbol-call} left for the same kind of reason: a Java-only member
+	 * has no value the compile paths can materialize, so {@code #'uiop:symbol-call} --
+	 * dexador's backend dispatch -- did not compile at all. It carries a Lisp definition
+	 * now ({@code uiop-package.lisp}) beside the call-position fold, exactly as
+	 * {@code file-exists-p} does; the interpreter's Java built-in resolves first, so the
+	 * definition never loads there.
 	 */
-	private static final Set<String> JAVA_DEFINED = Set.of(LispNames.SYMBOL_CALL, LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
+	private static final Set<String> JAVA_DEFINED = Set.of(LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
 
 	/** The {@code &rest} parameter of a synthesized stub; its arguments are ignored. */
 	private static final String STUB_ARGS = "%UIOP-STUB-ARGS";

@@ -10624,6 +10624,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void uiopSymbolCallAsAFirstClassValueOverUninternedDesignators() throws Exception {
+		// The JVM twin is JvmLispCompilerTest
+		// .compileAndRunUiopSymbolCallAsAFirstClassValueOverUninternedDesignators:
+		// dexador's backend dispatch, where the operator is a VALUE and both
+		// designators are uninterned symbols. #' needs uiop's own definition of
+		// symbol-call (the fold only covers call position); '#:name needs the dispatch
+		// gate to probe the "#:member" spelling (.todo/404). Run through the prelude
+		// helper because that definition arrives by the SPLICE the CLI pipeline does
+		// (LispPreludeLibrary.process drives UiopLibrary.process); the fold-only
+		// uiopSymbolCall case above needs no splice and keeps the bare helper.
+		assertThat(compileAndRunPrelude("(defpackage :dex-usocket (:use :cl) (:export :request))"
+				+ "(in-package :dex-usocket) (defun request (uri &rest args) (list uri args))"
+				+ "(in-package :cl-user) (defvar *backend* :usocket)"
+				+ "(defun dex-request (uri &rest args) (ecase *backend*"
+				+ "  (:usocket (apply #'uiop:symbol-call '#:dex-usocket '#:request uri args))"
+				+ "  (:winhttp (apply #'uiop:symbol-call '#:dex-winhttp '#:request uri args))))"
+				+ "(print (dex-request \"http://x\" :method :get))"
+				+ "(print (uiop:symbol-call '#:dex-usocket '#:request \"u\"))"))
+			.isEqualTo("(\"http://x\" (:METHOD :GET))\n(\"u\" NIL)");
+	}
+
+	@Test
 	void applyOfAnUndefinedRuntimeSymbolTraps() throws Exception {
 		// _apply's symbol-designator miss used to return nil SILENTLY; it must fail
 		// loudly like the funcall dispatcher's miss arm (a trap -- the tree-shaker

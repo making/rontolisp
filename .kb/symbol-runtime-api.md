@@ -433,6 +433,18 @@ died with the registry:
   `usesIntern` (the real `_intern` body). **Any future lowering that synthesizes
   `intern`/`funcall`/`apply` at compile-expression time has the same obligation** —
   check every gate the synthesized forms need, or the runtime pieces are stubs.
+- **`#'uiop:symbol-call` is a VALUE too** (todo-404): a fold covers CALL position and
+  nothing else, so the operator still had to exist as a function, and the shape the
+  idiom is actually written in — `(apply #'uiop:symbol-call '#:pkg '#:name uri args)`,
+  dexador's backend dispatch — was `Cannot compile` until `uiop-package.lisp` gained
+  upstream's own `(apply (find-symbol* name package) args)` definition beside the fold
+  (`.kb/uiop.md`). The other half of that shape is the DESIGNATOR spelling: the
+  uninterned `'#:name` reaches the function through `(string '#:NAME)` exactly as
+  `:name` does, so the dispatch gate probes `#:member` alongside `:member`
+  (`compiler.DesignatorSpellings`, `.kb/optimize-dead-code-elimination.md`) — without
+  that row the call compiled and then died undefined at run time. Each arm of such a
+  dispatch resolves on its own, so an arm naming a package the program does not have
+  costs a call-time error and never the compile.
 
 The rest was already in place since the cl-postgres work: the registry and `_lookup`
 themselves, symbol resolution in the funcall dispatchers and `_apply`, builtin

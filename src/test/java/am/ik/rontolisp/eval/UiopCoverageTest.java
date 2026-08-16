@@ -226,7 +226,11 @@ class UiopCoverageTest {
 		}
 		// A member the interpreter defines in Java carries no library form at all, so
 		// nothing can shadow the built-in; a member implemented in Lisp carries its own.
-		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.SYMBOL_CALL))).isEmpty();
+		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.ADD_PACKAGE_LOCAL_NICKNAME))).isEmpty();
+		// symbol-call is BOTH: the interpreter's Java built-in resolves first and this
+		// definition never loads there, while the compile paths need it as the value a
+		// first-class #'uiop:symbol-call denotes (the call position is folded away).
+		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.SYMBOL_CALL))).hasSize(1);
 		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.EMPTYP))).hasSize(1);
 		// getenv carries TWO: the reader and the (setf getenv) writer, keyed under the
 		// one member -- the reader consults the override map the writer fills, and no

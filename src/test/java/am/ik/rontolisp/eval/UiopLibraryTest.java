@@ -125,7 +125,18 @@ class UiopLibraryTest {
 		// A member with a real LispMacroExpander expansion or a Java built-in carries no
 		// library form at all, so nothing can shadow it.
 		assertThat(splicedNames("(uiop:if-let ((x 1)) x)")).isEmpty();
-		assertThat(splicedNames("(uiop:symbol-call :cl :list 1 2)")).isEmpty();
+		assertThat(splicedNames("(uiop:add-package-local-nickname \"A\" \"CL\")")).isEmpty();
+	}
+
+	@Test
+	void symbolCallCarriesADefinitionBesideItsFold() {
+		// The fold rewrites a CALL of symbol-call, so the definition is dead weight
+		// there -- but it is what a first-class #'uiop:symbol-call resolves to, and
+		// without it dexador's (apply #'uiop:symbol-call '#:pkg '#:name uri args)
+		// backend dispatch did not compile at all. Same arrangement as file-exists-p.
+		assertThat(splicedNames("(uiop:symbol-call :cl :list 1 2)")).contains("UIOP/PACKAGE:SYMBOL-CALL",
+				"UIOP/PACKAGE:FIND-SYMBOL*", "UIOP/PACKAGE:FIND-PACKAGE*");
+		assertThat(splicedNames("(mapcar #'uiop:symbol-call nil)")).contains("UIOP/PACKAGE:SYMBOL-CALL");
 	}
 
 	@Test

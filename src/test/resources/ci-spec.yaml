@@ -9514,6 +9514,36 @@ cases:
       "Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM"
       :SIGNALLED
       NIL
+  - name: uiop-symbol-call-as-a-value
+    source: |
+      ;; dexador's backend dispatch: uiop:symbol-call taken as a VALUE and applied
+      ;; to a runtime argument list, over UNINTERNED symbol designators. Both
+      ;; halves used to be compile paths only: #'uiop:symbol-call was "Cannot
+      ;; compile" (a Java-only built-in has no value to materialize) and a '#:name
+      ;; designator armed no registry row, so the target came back undefined.
+      (defpackage :ci-dex-usocket (:use :cl) (:export :request))
+      (in-package :ci-dex-usocket)
+      (defun request (uri &rest args) (list uri args))
+      (in-package :cl-user)
+      (defvar *ci-dex-backend* :usocket)
+      ;; The unreachable arm names a package that does not exist anywhere in the
+      ;; program: each arm resolves on its own, so an absent backend costs a
+      ;; call-time error and never the compile.
+      (defun ci-dex-request (uri &rest args)
+        (ecase *ci-dex-backend*
+          (:usocket (apply #'uiop:symbol-call '#:ci-dex-usocket '#:request uri args))
+          (:winhttp (apply #'uiop:symbol-call '#:ci-dex-winhttp '#:request uri args))))
+      (print (ci-dex-request "http://x" :method :get))
+      ;; Call position folds to a runtime intern + funcall; every designator
+      ;; spelling reaches the same function.
+      (print (list (uiop:symbol-call '#:ci-dex-usocket '#:request "a")
+                   (uiop:symbol-call :ci-dex-usocket :request "b")
+                   (uiop:symbol-call "CI-DEX-USOCKET" "REQUEST" "c")))
+      (print (funcall #'uiop:symbol-call :cl :list 1 2))
+    expected: |
+      ("http://x" (:METHOD :GET))
+      (("a" NIL) ("b" NIL) ("c" NIL))
+      (1 2)
   - name: uiop-utility-helpers
     source: |
       ;; uiop/utility's portable helpers, the layer everything else in uiop is

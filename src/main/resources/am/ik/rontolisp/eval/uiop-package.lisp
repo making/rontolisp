@@ -1,7 +1,7 @@
 ;;;; uiop/package -- the symbol and package surgery family.
 ;;;; Canonical shape; see .kb/uiop.md.
 ;;;;
-;;;; Only the two LOOKUP primitives are here. They are not this sub-package's own
+;;;; Only the LOOKUP primitives are here. They are not this sub-package's own
 ;;;; item: uiop/utility's find-standard-case-symbol, coerce-class and
 ;;;; symbol-test-to-feature-expression are all written over find-symbol*, so
 ;;;; routing them around it would leave three copies of "look a name up in a
@@ -30,3 +30,12 @@
                 (%fs-error (error "There is no symbol ~S in package ~S" %fs-name
                                   (package-name %fs-package)))
                 (t (values nil nil)))))))
+
+;; Upstream's own shape, and here for the same reason file-exists-p carries one:
+;; symbol-call in CALL position is folded away (expandUiopStubCall lowers it to a
+;; runtime intern + funcall), so this definition is what a FIRST-CLASS
+;; #'uiop:symbol-call resolves to -- the (apply #'uiop:symbol-call '#:pkg '#:name
+;; args) backend dispatch dexador writes. The interpreter keeps its Java built-in,
+;; which resolves first and never lets this one load.
+(defun uiop/package:symbol-call (%sc-package %sc-name &rest %sc-args)
+  (apply (uiop/package:find-symbol* %sc-name %sc-package) %sc-args))

@@ -1805,6 +1805,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUiopSymbolCallAsAFirstClassValueOverUninternedDesignators() throws Exception {
+		// dexador's backend dispatch, verbatim in shape: the operator is a VALUE
+		// (#'uiop:symbol-call applied to a runtime argument list) and both designators
+		// are uninterned symbols. The value needs uiop's own definition of symbol-call
+		// (the fold only covers call position); the '#:name designator needs the
+		// dispatch gate to probe the "#:member" spelling, or the registry has no row
+		// for the target and the call dies undefined (.todo/404).
+		assertThat(compileAndRun("(defpackage :dex-usocket (:use :cl) (:export :request))"
+				+ "(in-package :dex-usocket) (defun request (uri &rest args) (list uri args))"
+				+ "(in-package :cl-user) (defvar *backend* :usocket)"
+				+ "(defun dex-request (uri &rest args) (ecase *backend*"
+				+ "  (:usocket (apply #'uiop:symbol-call '#:dex-usocket '#:request uri args))"
+				+ "  (:winhttp (apply #'uiop:symbol-call '#:dex-winhttp '#:request uri args))))"
+				+ "(print (dex-request \"http://x\" :method :get))"
+				+ "(print (uiop:symbol-call '#:dex-usocket '#:request \"u\"))"))
+			.isEqualTo("(\"http://x\" (:METHOD :GET))\n(\"u\" NIL)");
+	}
+
+	@Test
 	void compileAndRunUiopBindingMacrosAndWithDeprecation() throws Exception {
 		// with-deprecation wraps top-level defuns in the wild, so its expansion has to
 		// SPLICE at top level -- burying them in an expression would stop Pass 1 from

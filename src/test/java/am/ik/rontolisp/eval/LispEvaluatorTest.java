@@ -6380,6 +6380,16 @@ class LispEvaluatorTest {
 				(in-package :cl-user)
 				(uiop:symbol-call :sc-demo :twice 21)
 				""")).isEqualTo(new LispInteger(42));
+		// dexador's shape: the operator as a VALUE, over uninterned designators. The
+		// interpreter's Java built-in is a first-class function already -- the compile
+		// paths get uiop's own definition of it (.todo/404).
+		assertThat(evalMulti("""
+				(defpackage :sc-uninterned (:use :cl) (:export :thrice))
+				(in-package :sc-uninterned)
+				(defun thrice (x) (* 3 x))
+				(in-package :cl-user)
+				(apply #'uiop:symbol-call '#:sc-uninterned '#:thrice (list 14))
+				""")).isEqualTo(new LispInteger(42));
 	}
 
 	@Test

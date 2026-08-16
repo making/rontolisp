@@ -78,8 +78,16 @@ Blockers, in the order that unblocks the most:
    `(ql:quickload "dexador")` reaches cl+ssl -> cffi, i.e. `.todo/399`.
 4. `.todo/402` -- the CL leftovers: `file-namestring`, the `nstring-*` case
    family (chunga), and the environment-enquiry family.
-5. `.todo/404` -- `uiop:symbol-call` has no compiler case, so dexador's
-   backend dispatch cannot be compiled.
+5. ~~`.todo/404` -- `uiop:symbol-call` has no compiler case, so dexador's
+   backend dispatch cannot be compiled.~~ **DONE (2026-08-16)**: two halves.
+   The operator now carries uiop's own Lisp definition beside the call-position
+   fold, so `#'uiop:symbol-call` is a value (`.kb/uiop.md`); and the
+   dispatch gate probes the uninterned `#:member` designator spelling
+   (`compiler.DesignatorSpellings`, shared by both backends), without which
+   `'#:request` compiled and then died undefined at run time. Dexador's
+   `ecase` over `*dexador-backend*` compiles and runs on all four backends,
+   unreachable `:winhttp` arm and all (`ci-spec.yaml`
+   `uiop-symbol-call-as-a-value`).
 6. `.todo/403` -- a run-time `(export 'pkg::name pkg)` does not publish a
    function under the `pkg:name` spelling. Not on dexador's own path (found
    while building the spike shims), but it breaks the common

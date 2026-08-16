@@ -37,6 +37,7 @@ import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
+import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
@@ -2908,7 +2909,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * machinery (layout tables, runtime error messages), and no run-time path turns those
 	 * into a designator the program did not spell itself. This is the constant-pool
 	 * counterpart of the WASM side's spelled-literal test, and the two must classify
-	 * alike.</li>
+	 * alike -- which is why the spellings themselves come from the shared
+	 * {@link DesignatorSpellings} rather than from a list repeated on each side.</li>
 	 * </ul>
 	 *
 	 * <p>
@@ -2940,29 +2942,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<Integer> dispatchable = new HashSet<>(valueFuncIds);
 		if (registryLive) {
 			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
-				String name = entry.getKey();
-				int q = name.indexOf("::");
-				// The registry's alias row spells an internal name with one colon, and a
-				// runtime-interned symbol carries that spelling, so an interned ALIAS
-				// reaches the function just as its canonical name does.
-				int colon = name.lastIndexOf(':');
-				// (intern "EX-FN" :pkg) spells only the MEMBER name at compile time; the
-				// run time assembles the qualified one. A STRING literal lands in the
-				// pool FRAMED (LispString.literal(), quotes included), so both the
-				// member and the full name are probed in that spelling too -- (intern
-				// "RUN" pkg) is how clack's handler protocol resolves its entry point.
-				// The ":member" spelling is a keyword designator (uiop:symbol-call :pkg
-				// :member). Both widened spellings need a symbol BUILDER to become
-				// designators, so they are probed only when one is present -- without it
-				// a defun whose member name collides with an unrelated literal stays
-				// call-only.
-				String member = name.substring(colon + 1);
-				if (spelledLiterals.contains(name)
-						|| (q > 0 && spelledLiterals.contains(name.substring(0, q) + name.substring(q + 1)))
-						|| (colon >= 0 && spelledLiterals.contains(member))
-						|| (symbolBuilders && (spelledLiterals.contains("\"" + name + "\"")
-								|| spelledLiterals.contains("\"" + member + "\"")
-								|| spelledLiterals.contains(":" + member)))) {
+				// Every spelling a runtime designator can carry for the name --
+				// canonical, the alias row's, the bare member, and (only with a symbol
+				// BUILDER present) the framed string literal and the two package-less
+				// symbol spellings. The list is shared with the WASM twin
+				// (compiler.DesignatorSpellings) so the two cannot drift.
+				if (DesignatorSpellings.anySpelled(entry.getKey(), spelledLiterals, symbolBuilders)) {
 					dispatchable.add(entry.getValue().funcId());
 				}
 			}
@@ -2973,7 +2958,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
 				if (dispatchable.contains(entry.getValue().funcId())
 						&& !valueFuncIds.contains(entry.getValue().funcId())) {
-					System.err.println("[dispatch-gate] name-armed\t" + entry.getKey());
+					System.err.println("[dispatch-gate] name-armed\t" + entry.getKey() + "\tby\t"
+							+ DesignatorSpellings.matched(entry.getKey(), spelledLiterals, symbolBuilders));
 				}
 			}
 		}

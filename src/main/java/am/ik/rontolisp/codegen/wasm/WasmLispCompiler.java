@@ -37,6 +37,7 @@ import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
+import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
@@ -6220,7 +6221,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * names), and no run-time path turns those bytes into a designator the program did
 	 * not spell itself, so letting them arm a row gave every same-named defun a ladder
 	 * case -- measured as one row + arm per chipz accessor whose slot name the layout
-	 * directory happened to intern.</li>
+	 * directory happened to intern. Which spellings count is the shared
+	 * {@link am.ik.rontolisp.compiler.DesignatorSpellings}, so the JVM twin cannot drift
+	 * from this one.</li>
 	 * </ul>
 	 *
 	 * <p>
@@ -6255,28 +6258,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<Integer> dispatchable = new HashSet<>(valueFuncIds);
 		if (registryLive) {
 			for (int i = 0; i < defuns.size(); i++) {
-				String name = defuns.get(i).name;
-				int q = name.indexOf("::");
-				// The registry's alias row spells an internal name with one colon, and a
-				// runtime-interned symbol carries that spelling -- so an interned ALIAS
-				// reaches the defun just as its canonical name does.
-				int colon = name.lastIndexOf(':');
-				// (intern "EX-FN" :pkg) spells only the MEMBER name at compile time; the
-				// run time assembles the qualified one. A STRING literal interns FRAMED
-				// (LispString.literal(), quotes included), so both the member and the
-				// full name are probed in that spelling too -- (intern "RUN" pkg) is how
-				// clack's handler protocol resolves its entry point. The ":member"
-				// spelling is a keyword designator (uiop:symbol-call :pkg :member).
-				// Both widened spellings need a symbol BUILDER to become designators, so
-				// they are probed only when one is present -- without it a defun whose
-				// member name collides with an unrelated literal stays call-only.
-				String member = name.substring(colon + 1);
-				if (spelledLiterals.contains(name)
-						|| (q > 0 && spelledLiterals.contains(name.substring(0, q) + name.substring(q + 1)))
-						|| (colon >= 0 && spelledLiterals.contains(member))
-						|| (symbolBuilders && (spelledLiterals.contains("\"" + name + "\"")
-								|| spelledLiterals.contains("\"" + member + "\"")
-								|| spelledLiterals.contains(":" + member)))) {
+				// Every spelling a runtime designator can carry for the name --
+				// canonical, the alias row's, the bare member, and (only with a symbol
+				// BUILDER present) the framed string literal and the two package-less
+				// symbol spellings. The list is shared with the JVM twin
+				// (compiler.DesignatorSpellings) so the two cannot drift.
+				if (DesignatorSpellings.anySpelled(defuns.get(i).name, spelledLiterals, symbolBuilders)) {
 					dispatchable.add(i);
 				}
 			}
@@ -6293,17 +6280,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				else if (!valueFuncIds.contains(i)) {
 					String name = defuns.get(i).name;
-					int q = name.indexOf("::");
-					int colon = name.lastIndexOf(':');
-					String member = name.substring(colon + 1);
-					String spelling = spelledLiterals.contains(name) ? name
-							: q > 0 && spelledLiterals.contains(name.substring(0, q) + name.substring(q + 1))
-									? name.substring(0, q) + name.substring(q + 1)
-									: colon >= 0 && spelledLiterals.contains(member) ? member
-											: spelledLiterals.contains("\"" + name + "\"") ? "\"" + name + "\""
-													: spelledLiterals.contains("\"" + member + "\"")
-															? "\"" + member + "\"" : ":" + member;
-					System.err.println("[dispatch-gate] name-armed\t" + name + "\tby\t" + spelling);
+					System.err.println("[dispatch-gate] name-armed\t" + name + "\tby\t"
+							+ DesignatorSpellings.matched(name, spelledLiterals, symbolBuilders));
 				}
 			}
 		}

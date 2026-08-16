@@ -102,13 +102,30 @@ defines gets a stub SYNTHESIZED from its kind:
 | `type` | `(deftype NAME () t)` |
 
 Three groups are deliberately NOT stubbed, because something else defines them
-and a stub would shadow it: `JAVA_DEFINED` (`symbol-call`,
-`add-package-local-nickname` -- Java built-ins the compilers lower or wrap;
-`getenv` used to be here and moved out with todo-356, see below),
+and a stub would shadow it: `JAVA_DEFINED` (`add-package-local-nickname` -- a
+Java built-in the compilers lower or wrap; `getenv` moved out with todo-356 and
+`symbol-call` with todo-404, both below),
 `LispMacroExpander.hasUiopMacroExpansion` (`if-let`, `with-temporary-file`,
 `with-deprecation`, `define-package`), and -- separately -- the members that
-ALSO carry a fold (`file-exists-p`, `native-namestring`), which do have a Lisp
-definition here so `#'uiop:file-exists-p` is a value like any other.
+ALSO carry a fold (`file-exists-p`, `native-namestring`, `symbol-call`), which
+do have a Lisp definition here so `#'uiop:file-exists-p` is a value like any
+other.
+
+**A Java-only member has no VALUE the compile paths can materialize** (todo-404).
+`symbol-call` was in `JAVA_DEFINED` and is not any more: the fold covers CALL
+position only, so `#'uiop:symbol-call` -- the spelling dexador's backend
+dispatch uses, `(apply #'uiop:symbol-call '#:pkg '#:name uri args)` -- was
+`Cannot compile: UIOP/PACKAGE:SYMBOL-CALL` on both compile paths. It now carries
+upstream's own one-liner in `uiop-package.lisp`, `(apply (find-symbol* name
+package) args)`, beside the fold, exactly the arrangement `file-exists-p` has.
+The INTERPRETER is unchanged: its Java built-in is registered eagerly in
+`LispEvaluator`, resolves first, and so this definition never loads there -- which
+keeps the two sharper probes (`package X does not exist` / `symbol Y is not
+present in package X`) that the compile paths cannot make, since there the
+lookup is the ordinary intern + undefined-function pair. Re-evaluate that split
+if the compile paths ever gain a package-membership probe. `add-package-local-
+nickname` stays Java-only on purpose: it is consumed at RESOLVE time by
+`PackageResolver`, so a value of it could not do anything at run time anyway.
 
 **Filling a name in is a one-line change**: add the real definition to the
 matching `.lisp` resource and the stub disappears on its own, because a name the
