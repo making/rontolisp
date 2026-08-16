@@ -38,7 +38,11 @@ assertions green.
 | rontolisp JVM | 178 | 7 |
 | rontolisp WASI 0.3 component | 183 | 2 |
 
-The component is the best backend here, and by a distance.
+The component is the best backend here, and by a distance -- but only up to
+`7f496c5b`. From `55af7714` on it traps with `cast failure` 166 assertions in and
+never reaches the end: `.todo/409`, bisected to that one commit. The numbers
+above are the component's at `7f496c5b`; the interpreter's and the JVM's are
+unchanged at HEAD.
 
 ### Failing on all three -- `.todo/393`
 
