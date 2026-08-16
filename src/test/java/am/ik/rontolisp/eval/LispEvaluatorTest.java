@@ -6839,7 +6839,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -6883,7 +6883,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -8220,6 +8220,145 @@ class LispEvaluatorTest {
 			assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
 				.hasMessageContaining("tls-connect");
 		}
+	}
+
+	@Test
+	void tlsUpgradeEchoRoundTripOnLoopback() throws Exception {
+		// tls-upgrade wraps an ALREADY-CONNECTED handle (the cl+ssl
+		// make-ssl-client-stream shape): plain tcp-connect first, then the upgrade
+		// performs the handshake over that connection and answers a NEW handle.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				String program = """
+						(let* ((sock (rontolisp:tcp-connect "127.0.0.1" %d))
+						       (tls (rontolisp:tls-upgrade sock "127.0.0.1")))
+						  (write-line "hello over upgraded tls" tls)
+						  (let ((reply (read-line tls)))
+						    (close tls)
+						    reply))
+						""".formatted(server.getLocalPort());
+				assertThat(eval(program)).isEqualTo(new LispString("hello over upgraded tls"));
+				echo.join();
+			}
+		});
+	}
+
+	@Test
+	void tlsUpgradeInsecureSkipsCertificateVerification() throws Exception {
+		// No trust store here; :insecure t must skip both the chain validation and
+		// the hostname check, like tls-connect's.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			String program = """
+					(let* ((sock (rontolisp:tcp-connect "127.0.0.1" %d))
+					       (tls (rontolisp:tls-upgrade sock "127.0.0.1" :insecure t)))
+					  (write-line "hello insecurely upgraded" tls)
+					  (let ((reply (read-line tls)))
+					    (close tls)
+					    reply))
+					""".formatted(server.getLocalPort());
+			assertThat(eval(program)).isEqualTo(new LispString("hello insecurely upgraded"));
+			echo.join();
+		}
+	}
+
+	@Test
+	void tlsUpgradeUntrustedCertificateSignalsError() throws Exception {
+		// The verifying default must reject the untrusted self-signed certificate.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			String program = """
+					(let ((sock (rontolisp:tcp-connect "127.0.0.1" %d)))
+					  (rontolisp:tls-upgrade sock "127.0.0.1"))
+					""".formatted(server.getLocalPort());
+			assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
+				.hasMessageContaining("tls-upgrade");
+		}
+	}
+
+	@Test
+	void tlsUpgradeArgumentValidation() {
+		assertThatThrownBy(() -> eval("(rontolisp:tls-upgrade 99)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("TLS-UPGRADE");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-upgrade 99 \"h\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a connected socket handle");
+		assertThatThrownBy(() -> evalMulti("""
+				(let ((listener (rontolisp:tcp-listen 0 "127.0.0.1")))
+				  (rontolisp:tls-upgrade listener "h"))
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects a connected socket handle");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-upgrade \"nope\" \"h\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a connected socket handle");
+	}
+
+	@Test
+	void clSslShimHttpsRequestAgainstLocalTlsServer() throws Exception {
+		// The cl+ssl shim end to end, the dexador shape: usocket:socket-connect,
+		// then make-ssl-client-stream upgrades the connected stream (default
+		// :verify from ssl-check-verify-p), then an HTTP-style line goes over the
+		// encrypted stream and the echo comes back.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				String program = """
+						(asdf:load-system "cl+ssl")
+						(let* ((sock (usocket:socket-connect "127.0.0.1" %d))
+						       (tls (cl+ssl:make-ssl-client-stream (usocket:socket-stream sock)
+						                                           :hostname "127.0.0.1")))
+						  (write-line "GET / HTTP/1.1" tls)
+						  (let ((reply (read-line tls)))
+						    (close tls)
+						    reply))
+						""".formatted(server.getLocalPort());
+				assertThat(evalMulti(program)).isEqualTo(new LispString("GET / HTTP/1.1"));
+				echo.join();
+			}
+		});
+	}
+
+	@Test
+	void clSslShimVerifyNoneContextReachesTheInsecureFlag() throws Exception {
+		// dex:*not-verify-ssl* / :insecure travels as make-context :verify-mode
+		// +ssl-verify-none+ (installed by with-global-context) plus :verify nil;
+		// both must reach tls-upgrade's :insecure -- no trust store is set here.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			String program = """
+					(asdf:load-system "cl+ssl")
+					(cl+ssl:ensure-initialized)
+					(cl+ssl:with-global-context
+					    ((cl+ssl:make-context :verify-mode cl+ssl:+ssl-verify-none+) :auto-free-p t)
+					  (let* ((sock (usocket:socket-connect "127.0.0.1" %d))
+					         (tls (cl+ssl:make-ssl-client-stream (usocket:socket-stream sock)
+					                                             :hostname "127.0.0.1"
+					                                             :verify (cl+ssl:ssl-check-verify-p))))
+					    (write-line "hello via verify-none context" tls)
+					    (let ((reply (read-line tls)))
+					      (close tls)
+					      reply)))
+					""".formatted(server.getLocalPort());
+			assertThat(evalMulti(program)).isEqualTo(new LispString("hello via verify-none context"));
+			echo.join();
+		}
+	}
+
+	@Test
+	void clSslShimSignalsOnWhatHasNoBacking() {
+		// Client certificates and CA paths signal instead of being accepted and
+		// ignored: silently unauthenticated (or silently trusting the default
+		// store where the caller named a CA path) is worse than a message.
+		assertThatThrownBy(() -> evalMulti("""
+				(asdf:load-system "cl+ssl")
+				(cl+ssl:make-ssl-client-stream 99 :hostname "h" :key "client-key.pem")
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("client certificates");
+		assertThatThrownBy(() -> evalMulti("""
+				(asdf:load-system "cl+ssl")
+				(cl+ssl:use-certificate-chain-file "client-cert.pem")
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("client certificates");
+		assertThatThrownBy(() -> evalMulti("""
+				(asdf:load-system "cl+ssl")
+				(cl+ssl:make-context :verify-location "/etc/ssl/certs")
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("javax.net.ssl.trustStore");
 	}
 
 	@Test

@@ -428,6 +428,7 @@
 | `rontolisp:tls-connect` | `(rontolisp:tls-connect "example.com" 443)` | 暗号化（TLS）クライアント接続を開きます。`tcp-connect` と同じ種類のストリームハンドルを返します |
 | `rontolisp:tls-listen` | `(rontolisp:tls-listen "server.p12" "changeit" 8443)` | PKCS12キーストアから暗号化リスニングソケットをバインドします。`tcp-accept` で受け付けます |
 | `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | PEMの証明書／鍵ファイルから暗号化リスニングソケットをバインドします |
+| `rontolisp:tls-upgrade` | `(rontolisp:tls-upgrade sock "example.com")` | 接続済みのストリームハンドルをクライアントとしてTLSでラップします。新しいストリームハンドルを返します |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | WASMコアモジュールへのコンパイル時に、ホスト関数をLispから呼び出し可能として宣言します |
 | `rontolisp:wit-export` | `(rontolisp:wit-export "greeter.wit" :world greeter)` | プログラムがWIT worldを実装していることを宣言します。worldのエクスポートはプログラムの `defun` と照合され、型はWITから得られます |
@@ -451,8 +452,9 @@
 [tcp-connect](functions/rontolisp-tcp-connect.md)、
 [tcp-listen](functions/rontolisp-tcp-listen.md)、
 [tcp-accept](functions/rontolisp-tcp-accept.md)、
-[tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。既存のCommon Lispコードとの互換のために、これらの上に[usocket互換シム](#usocket-package-functions)が用意されています。TLS版（`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`）は同じストリームハンドルをTLSで包みます。
+[tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。既存のCommon Lispコードとの互換のために、これらの上に[usocket互換シム](#usocket-package-functions)が用意されています。TLS版（`rontolisp:tls-connect` / `tls-upgrade` / `tls-listen` / `tls-listen-pem`）は同じストリームハンドルをTLSで包みます。
 [tls-connect](functions/rontolisp-tls-connect.md)、
+[tls-upgrade](functions/rontolisp-tls-upgrade.md)、
 [tls-listen](functions/rontolisp-tls-listen.md)、
 [tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export`、`rontolisp:wasm-import`、`rontolisp:wit-export`、`rontolisp:wit-import`
 はコンパイル時ディレクティブです。WITの2つは `.wit` ファイルを境界の唯一の真実の源とするため、型を手書きすることはありません。`wit-export` はプログラムがWIT worldを**実装している**ことを宣言し（`--scaffold-wit` はそこから実装のスケルトンを生成します）、`wit-import` はWITインターフェースを**呼び出す**ことを宣言して、インターフェースが宣言する各関数を通常のLisp関数として束縛します。インタプリタとJVMバックエンドでは*プロバイダ*（[`rontolisp:wit-provide`](functions/rontolisp-wit-provide.md)）へ、Preview 1 WASMでは `rontolisp:wasm-import` へ、`--component` では `canon lower` 済みのコンポーネントモデルのインスタンスインポートへローワリングされ（後者2つではホストがプロバイダになります）、1つのソースがすべてのバックエンドで動きます。rontolispは**どのインターフェースについてもプロバイダを同梱していません**。同梱しているのはプロバイダの仕組みであって、個々のインターフェースが何であるかは知らないため、WITインターフェースの実装は通常のLispコードです。WITの `result` のerrorアームは `rontolisp:wit-error` コンディションをシグナルし、そのペイロードは `rontolisp:wit-error-payload` で読みます。

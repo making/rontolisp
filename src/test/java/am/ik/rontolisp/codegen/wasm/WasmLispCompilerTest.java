@@ -482,6 +482,19 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void tlsUpgradeIsCompileErrorInBothWasmModes() {
+		// The cl+ssl shim's substrate stays a compile error like the rest of the tls
+		// family: wasi:tls@0.3.0-draft exists but is experimental/non-semver, so no
+		// component fallback until it settles (.kb/tcp-sockets.md, .todo/050).
+		assertThatThrownBy(() -> compile("(rontolisp:tls-upgrade 200 \"example.com\")"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("TLS-UPGRADE is not supported on the WASM backend");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-upgrade 200 \"example.com\")"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("TLS-UPGRADE is not supported on the WASM backend");
+	}
+
+	@Test
 	void tlsListenIsCompileErrorInBothWasmModes() {
 		assertThatThrownBy(() -> compile("(rontolisp:tls-listen \"ks.p12\" \"pw\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)

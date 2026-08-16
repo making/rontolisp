@@ -1,12 +1,14 @@
-# TCP sockets (`rontolisp:tcp-*`), TLS (`rontolisp:tls-*`) and the usocket shim
+# TCP sockets (`rontolisp:tcp-*`), TLS (`rontolisp:tls-*`), the usocket shim and the cl+ssl shim
 
 Seven `rontolisp`-package built-ins — `tcp-connect` (host port), `tcp-listen`
 (port &optional host), `tcp-accept` (listener), `tcp-local-port` (handle),
 plus the address accessors `tcp-local-address` (handle) / `tcp-peer-address`
 (handle) / `tcp-peer-port` (handle) — plus the encrypted variants
-`tls-connect` (host port &optional :insecure value), `tls-listen` (keystore
+`tls-connect` (host port &optional :insecure value), `tls-upgrade` (stream
+host &optional :insecure value; upgrades an ALREADY-CONNECTED handle, the
+cl+ssl shim's substrate), `tls-listen` (keystore
 password port &optional host) and `tls-listen-pem` (cert-file key-file port
-&optional host; all three interpreter/JVM only, see below), that return
+&optional host; all four interpreter/JVM only, see below), that return
 **bidirectional stream handles in the same handle space as file streams**, so
 the standard stream built-ins (`read-line`, `write-line`, `write-string`,
 `write-char`, `read-char`, `read-byte`, `write-byte`, `close`) work on sockets
@@ -77,7 +79,7 @@ matches fetch: interpreter/JVM signal, the WASM component returns `nil`.
   "The component mechanics" below; there is no hand-written sockets adapter
   and no dedicated blob variant anymore.
 
-## TLS (`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`)
+## TLS (`rontolisp:tls-connect` / `tls-upgrade` / `tls-listen` / `tls-listen-pem`)
 
 Interpreter/JVM-only. The whole design leans on `SSLSocket` /
 `SSLServerSocket` being `java.net.Socket` / `ServerSocket` subclasses: the
@@ -97,6 +99,20 @@ handshake failure surface at first-I/O time, not accept time).
   overrides) work without JVM restarts. HTTPS-style endpoint identification
   (`SSLParameters.setEndpointIdentificationAlgorithm("HTTPS")`) is enabled
   before `startHandshake()`; the JDK does NOT verify hostnames by default.
+- **`tls-upgrade` (todo-399, the cl+ssl shim's substrate)**: `(tls-upgrade
+  stream host [:insecure value])` wraps an ALREADY-CONNECTED socket handle in
+  TLS as a client — the shape `cl+ssl:make-ssl-client-stream` has (a client
+  library connects, possibly issues a proxy CONNECT, THEN starts TLS), which
+  `tls-connect` cannot express. Same fresh-`SSLContext`/endpoint-id/`:insecure`
+  policy as `tls-connect`; the transport is
+  `SSLSocketFactory.createSocket(socket, host, port, true)` over the existing
+  connection, and the handshaken `SSLSocket` goes in as a NEW stream-table
+  entry (the original handle still names the raw socket underneath — closing
+  the new one closes both, autoClose). Interpreter:
+  `SocketSupport.upgradeTls`; JVM: `_tlsUpgrade` (the `usesTlsConnect`
+  trust-all gate covers it too, so `:insecure` shares the
+  program-class-as-X509TrustManager mechanism and the `--optimize` roots);
+  WASM: same compile error as the rest of the family (below).
 - **`tls-connect` `:insecure`**: `(tls-connect host port :insecure value)` —
   a non-nil `value` skips BOTH cert-chain validation and endpoint
   identification. The option keyword must be the literal `:insecure` (like
@@ -138,16 +154,20 @@ handshake failure surface at first-I/O time, not accept time).
   `tcp-*` OR `tls-connect`/`tls-listen`/`%tls-listen-p12`, so a tls-only
   program gets the full socket runtime (and the stream built-ins grow their
   socket branches).
-- **WASM**: `tls-connect` / `tls-listen` / `tls-listen-pem` (and the internal
-  `%tls-listen-p12`) are a compile error in BOTH Preview 1 and `--component`
-  mode (`WasmExprCompiler`) — TLS is interpreter/JVM only, no component
-  fallback. NOTE (corrected 2026-07): wasmtime 46 *does* host
+- **WASM**: `tls-connect` / `tls-upgrade` / `tls-listen` / `tls-listen-pem`
+  (and the internal `%tls-listen-p12`) are a compile error in BOTH Preview 1
+  and `--component` mode (`WasmExprCompiler`) — TLS is interpreter/JVM only,
+  no component fallback. NOTE (corrected 2026-07): wasmtime 46 *does* host
   `wasi:tls@0.3.0-draft` (p3), composable with the existing WASI-0.3 sockets
-  streams, so a component-mode `tls-connect` is technically feasible — but the
-  interface is **client-only** (no server API, so `tls-listen`/`tls-listen-pem`
-  can never work on WASM) and explicitly experimental/non-semver (WIT churn
-  between wasmtime releases, no cert/insecure knobs). Deferred pending a stable
-  interface; see `.todo/050-tls-server-and-extensions.md`.
+  streams, so a component-mode `tls-connect`/`tls-upgrade` is technically
+  feasible — but the interface is **client-only** (no server API, so
+  `tls-listen`/`tls-listen-pem` can never work on WASM) and explicitly
+  experimental/non-semver (WIT churn between wasmtime releases, no
+  cert/insecure knobs). Deferred pending a stable interface; see
+  `.todo/050-tls-server-and-extensions.md`. Consequence for the cl+ssl shim:
+  a WASM program whose LIVE code reaches `cl+ssl:make-ssl-client-stream`
+  fails to compile with the tls-upgrade message (an https-free consumer is
+  fine once `LibraryDefunPruner` drops the unused shim defuns).
 - **Tests**: `TlsTestSupport` (shared, package `am.ik.rontolisp`) generates
   one self-signed PKCS12 keystore per JVM with the JDK `keytool`
   (CN=localhost, SAN ip:127.0.0.1 + dns:localhost so endpoint identification
@@ -566,15 +586,58 @@ splice). Key mechanics:
   `socket-server`. (Restart-based retry -- `handler-bind`/`restart-case` -- IS
   available since todo-196; usocket.lisp simply does not use it.)
 
+## The cl+ssl shim (`cl+ssl` package, `cl-ssl.lisp` + `ShimLibraries`)
+
+Todo-399. Every CL HTTP client (dexador, drakma, any usocket+cl+ssl stack)
+reaches TLS through cl+ssl, and the real cl+ssl is a CFFI binding to OpenSSL
+— unloadable here (cffi's `.asd` errors "Sorry, this Lisp is not yet
+supported"). The shim is the CLIENT side only, over `tls-upgrade`
+(interpreter/JVM; the WASM consequence is in the TLS section above). The
+`flexi-streams.lisp` pattern: a canonical-shape resource next to
+`ShimLibraries`, the package seeded in `PackageRegistry`, the system in
+`BuiltinSystems` + `ShimLibraries.RESOURCES` + the native-image
+`resource-config.json`. Key decisions:
+
+- **`make-ssl-client-stream stream :hostname h [:verify v] ...`** is
+  `(rontolisp:tls-upgrade stream h :insecure (if v nil t))`; `:verify`
+  defaults from `(ssl-check-verify-p)` exactly like upstream, which consults
+  the `with-global-context`-bound internal `*ssl-global-context*` (a context
+  IS its recorded `:verify-mode`; `+ssl-verify-none+` 0 / `+ssl-verify-peer+`
+  1 as upstream). That is the whole path a client's insecure knob takes:
+  dexador's `dex:*not-verify-ssl*`/`:insecure` becomes `make-context
+  :verify-mode +ssl-verify-none+` plus `:verify nil`, and both spellings land
+  on the primitive's `:insecure`.
+- **`:hostname` is REQUIRED** (it is what the certificate is verified
+  against, and the SNI); nil signals rather than silently skipping
+  verification.
+- **What has no backing SIGNALS, never accept-and-ignore**: client
+  certificates (`:key`/`:certificate`/`:password`,
+  `use-certificate-chain-file`) — silently unauthenticated is worse than a
+  message — and `make-context :verify-location` CA paths (only `:default`/nil
+  pass; the message names the `javax.net.ssl.trustStore` properties, which
+  the fresh-per-call `SSLContext` re-reads). Re-evaluation trigger: wire
+  `:verify-location` up the day the primitive can take a CA path, and client
+  certs the day `tls-upgrade` grows a client identity.
+- `with-global-context` is an ordinary shim `defmacro` (unlike the usocket
+  `with-*`s, which predate shim defmacros and carry a per-backend
+  unwind-protect split); `ensure-initialized` is a no-op returning t.
+- dexador's exact `(:import-from :cl+ssl ...)` list is the export set;
+  `*ssl-global-context*` stays internal, as upstream.
+
 ## Pinning tests
 
 `LispEvaluatorTest#tcp*` (incl. `#tcpCharacterOpsOnSocket` /
-`#tcpReadCharAtPeerCloseHonoursTheEofArguments`) / `#usocket*`,
+`#tcpReadCharAtPeerCloseHonoursTheEofArguments`) / `#usocket*` / `#tlsUpgrade*`
+/ `#clSslShim*` (the https-over-a-local-TLS-server pins, incl. the
+verify-none-context insecure path and the signal-on-no-backing gates),
 `JvmLispCompilerTest#compileAndRunTcp*` (incl.
 `#compileAndRunTcpCharacterOpsOnSocket` /
 `#compileAndRunTcpReadCharAtPeerCloseHonoursTheEofArguments`)
-/ `#compileTcpRejectsWrongArgCount` / `#compileAndRunUsocket*`,
+/ `#compileTcpRejectsWrongArgCount` / `#compileAndRunUsocket*` /
+`#compileAndRunTlsUpgrade*` / `#compileAndRunClSslShim*` /
+`#compileTlsUpgradeRejectsWrongArgCount`,
 `WasmLispCompilerTest#tcp*` / `#usocket*` /
+`#tlsUpgradeIsCompileErrorInBothWasmModes` /
 `#fetchAndTcpInOneComponentProgramCompiles` / `#httpHandlerWithTcpCompilesInServeMode`,
 `WasmLispCompilerIntegrationTest#componentTcp*` / `#componentUsocket*` (a full
 loopback echo runs deterministically inside the wasmtime container — no opt-in

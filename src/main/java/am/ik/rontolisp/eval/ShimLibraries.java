@@ -85,6 +85,11 @@ public final class ShimLibraries {
 			// and CL guarantees finalizers nothing anyway -- finalize is a no-op
 			// returning the object, so explicit dbi:disconnect stays the contract.
 			Map.entry("trivial-garbage", "trivial-garbage.lisp"),
+			// Client-side TLS (every CL HTTP client's dependency): the real library
+			// is a CFFI binding to OpenSSL, unloadable here. make-ssl-client-stream
+			// upgrades an already-connected stream over rontolisp:tls-upgrade; what
+			// has no backing (client certificates, CA paths) signals.
+			Map.entry("cl+ssl", "cl-ssl.lisp"),
 			// The Clack handler backend (run/stop over the %http-server-* seam). Both
 			// system spellings resolve to the ONE resource: the hyphenated name is the
 			// ecosystem convention a user names directly, the dotted one is what lack's

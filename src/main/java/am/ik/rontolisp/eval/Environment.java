@@ -4832,6 +4832,39 @@ public final class Environment implements Scope {
 			streams.put(handle, socket);
 			return new LispInteger(handle);
 		}));
+		// tls-upgrade wraps an ALREADY-CONNECTED socket handle in TLS as a client (the
+		// cl+ssl shim's make-ssl-client-stream substrate): same option shape as
+		// tls-connect (a literal :insecure keyword, runtime value), but the first
+		// argument is an existing stream handle and the result is a NEW handle over the
+		// same connection.
+		String tlsUpgradeName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_UPGRADE);
+		env.defineFunction(tlsUpgradeName, new LispFunction(tlsUpgradeName, args -> {
+			if (args.size() != 2 && args.size() != 4) {
+				throw new LispEvalException(LispNames.TLS_UPGRADE + " expects 2 or 4 arguments, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispInteger handle)
+					|| !(streams.get(handle.value()) instanceof Socket socket)) {
+				throw new LispEvalException(
+						LispNames.TLS_UPGRADE + " expects a connected socket handle, got: " + args.get(0).print());
+			}
+			if (!(args.get(1) instanceof LispString host)) {
+				throw new LispEvalException(
+						LispNames.TLS_UPGRADE + " expects a string host, got: " + args.get(1).print());
+			}
+			boolean insecure = false;
+			if (args.size() == 4) {
+				if (!(args.get(2) instanceof LispSymbol option) || !option.isKeyword()
+						|| !":INSECURE".equals(option.name())) {
+					throw new LispEvalException(
+							LispNames.TLS_UPGRADE + " expects :insecure, got: " + args.get(2).print());
+				}
+				insecure = !(args.get(3) instanceof LispNil);
+			}
+			Socket upgraded = SocketSupport.upgradeTls(socket, host.value(), insecure);
+			long upgradedHandle = nextStreamHandle.getAndIncrement();
+			streams.put(upgradedHandle, upgraded);
+			return new LispInteger(upgradedHandle);
+		}));
 		String tcpListenName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN);
 		env.defineFunction(tcpListenName, new LispFunction(tcpListenName, args -> {
 			if (args.isEmpty() || args.size() > 2) {

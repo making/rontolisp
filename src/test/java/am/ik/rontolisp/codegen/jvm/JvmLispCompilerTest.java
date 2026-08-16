@@ -8423,7 +8423,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("NIL");
 	}
 
@@ -8959,6 +8959,89 @@ class JvmLispCompilerTest {
 					"(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + " :insecure nil)"))
 				.hasStackTraceContaining("SSLHandshakeException");
 		}
+	}
+
+	@Test
+	void compileAndRunTlsUpgradeEchoRoundTripOnLoopback() throws Exception {
+		// _tlsUpgrade wraps an ALREADY-CONNECTED _streams entry (the cl+ssl
+		// make-ssl-client-stream shape): plain _tcpConnect first, then the upgrade
+		// handshakes over that connection and stores the SSLSocket as a NEW entry.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				assertThat(compileAndRun("""
+						(let* ((sock (rontolisp:tcp-connect "127.0.0.1" %d))
+						       (tls (rontolisp:tls-upgrade sock "127.0.0.1")))
+						  (write-line "hello over upgraded tls" tls)
+						  (let ((reply (read-line tls)))
+						    (close tls)
+						    (print reply)))
+						""".formatted(server.getLocalPort()))).isEqualTo("\"hello over upgraded tls\"");
+				echo.join();
+			}
+		});
+	}
+
+	@Test
+	void compileAndRunTlsUpgradeInsecureSkipsCertificateVerification() throws Exception {
+		// No trust store here; :insecure t makes _tlsUpgrade install the generated
+		// class as the trust-all X509TrustManager (the _tlsConnect mechanism).
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThat(compileAndRun("""
+					(let* ((sock (rontolisp:tcp-connect "127.0.0.1" %d))
+					       (tls (rontolisp:tls-upgrade sock "127.0.0.1" :insecure t)))
+					  (write-line "hello insecurely upgraded" tls)
+					  (let ((reply (read-line tls)))
+					    (close tls)
+					    (print reply)))
+					""".formatted(server.getLocalPort()))).isEqualTo("\"hello insecurely upgraded\"");
+			echo.join();
+		}
+	}
+
+	@Test
+	void compileTlsUpgradeRejectsWrongArgCount() {
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-upgrade 99)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("TLS-UPGRADE expects 2 or 4 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-upgrade 99 \"h\" :verify t)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("expects :insecure");
+	}
+
+	@Test
+	void compileAndRunClSslShimHttpsRequestAgainstLocalTlsServer() throws Exception {
+		// The cl+ssl shim on the compile path, the dexador shape: the shim is
+		// spliced by LoadInliner (like the closer-mop test above), usocket by the
+		// UsocketLibrary pre-pass, and make-ssl-client-stream upgrades the
+		// connected stream over _tlsUpgrade.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+						(asdf:load-system "cl+ssl")
+						(cl+ssl:with-global-context ((cl+ssl:make-context) :auto-free-p t)
+						  (let* ((sock (usocket:socket-connect "127.0.0.1" %d))
+						         (tls (cl+ssl:make-ssl-client-stream (usocket:socket-stream sock)
+						                                             :hostname "127.0.0.1"
+						                                             :verify (cl+ssl:ssl-check-verify-p))))
+						    (write-line "GET / HTTP/1.1" tls)
+						    (let ((reply (read-line tls)))
+						      (close tls)
+						      (print reply))))
+						""".formatted(server.getLocalPort())), path -> {
+					throw new java.io.FileNotFoundException(path);
+				});
+				// The CLI pre-pass order: UserMacroExpander first (the shim's
+				// with-global-context is a defmacro), then prelude, then usocket.
+				assertThat(compileAndRun(
+						am.ik.rontolisp.eval.UsocketLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
+							.process(am.ik.rontolisp.eval.UserMacroExpander.expand(program)))))
+					.isEqualTo("\"GET / HTTP/1.1\"");
+				echo.join();
+			}
+		});
 	}
 
 	@Test

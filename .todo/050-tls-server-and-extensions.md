@@ -2,7 +2,10 @@
 
 `rontolisp:tls-connect` (client) and `rontolisp:tls-listen` (server, PKCS12
 keystore + password; accepted via the plain `tcp-accept`) were added 2026-07
-on the interpreter and JVM backends. Follow-up status:
+on the interpreter and JVM backends; `rontolisp:tls-upgrade` (client TLS over
+an ALREADY-CONNECTED handle, the cl+ssl shim's substrate; same `:insecure`
+mechanics, same WASM compile error) followed 2026-08-16 (todo-399). Follow-up
+status:
 
 ## Insecure mode (skip certificate verification) -- DONE (2026-07)
 
@@ -60,8 +63,9 @@ Why it is deferred anyway:
    `wit-0.3.0-draft/client.wit` plus a `tls.lisp` over the existing stream
    built-ins -- small. It is deferred on reasons 1 and 2 alone.
 
-Decision: keep `tls-connect` / `tls-listen` / `tls-listen-pem` a WASM compile
-error for now; revisit a component-mode `tls-connect` when `wasi:tls` stabilizes
+Decision: keep `tls-connect` / `tls-upgrade` / `tls-listen` / `tls-listen-pem`
+a WASM compile
+error for now; revisit a component-mode `tls-connect`/`tls-upgrade` when `wasi:tls` stabilizes
 (leaves Phase 1 / gains a semver-stable wasmtime host). Investigation sources:
 wasmtime release-46.0.0 `crates/wasi-tls` (p2 + p3 impls, `src/commands/run.rs`
 TLS wiring), `WebAssembly/wasi-tls` (`wit-0.3.0-draft/client.wit`, no server.wit).

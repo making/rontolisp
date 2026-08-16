@@ -598,6 +598,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_ADDRESS))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_PORT))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_UPGRADE))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN))
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN_P12));
@@ -668,6 +669,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_CONNECT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_CONNECT_DESC)))
 				: null;
+		MethodrefConstant tlsUpgradeHelperMethod = usesSockets
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_UPGRADE_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_UPGRADE_DESC)))
+				: null;
 		MethodrefConstant tlsListenHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_DESC)))
@@ -677,14 +682,15 @@ public final class JvmLispCompiler implements LispCompiler {
 						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_P12_DESC)))
 				: null;
 
-		// tls-connect's :insecure opt-out installs the generated class itself as a
-		// trust-all X509TrustManager (the JVM backend cannot emit an anonymous class),
-		// so when the program uses tls-connect the class implements the interface, gets
-		// a no-arg constructor (for _tlsConnect's `new Prog()`) and the three trust
-		// methods. JSSE calls the trust methods through the interface, an edge the
-		// tree-shaker cannot see, so they are extra --optimize roots.
+		// The :insecure opt-out of tls-connect AND tls-upgrade installs the generated
+		// class itself as a trust-all X509TrustManager (the JVM backend cannot emit an
+		// anonymous class), so when the program uses either the class implements the
+		// interface, gets a no-arg constructor (for the helper's `new Prog()`) and the
+		// three trust methods. JSSE calls the trust methods through the interface, an
+		// edge the tree-shaker cannot see, so they are extra --optimize roots.
 		boolean usesTlsConnect = programUsesSymbol(program,
-				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT));
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_UPGRADE));
 		// rontolisp:http-handler reuses the same "the generated class implements the
 		// interface" mechanism: the class implements HttpHandlerSupport.Handler, the
 		// directive stores the handler funcref in a static field and calls
@@ -692,11 +698,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// marshals the request/response plists through the _invoke_1 dispatcher.
 		// The async runtime is a third user: the class implements Runnable and
 		// _async_run does `new Prog()` per spawned body.
-		// The whole socket group is emitted together, and _tlsConnect's body instantiates
-		// the generated class as its trust-all X509TrustManager -- so the constructor is
-		// part of the SOCKET gate, not the narrower tls-connect one. Only the interface
-		// and its three trust methods stay on usesTlsConnect (nothing calls them from
-		// bytecode; JSSE does, and only a tls-connect call site can reach _tlsConnect).
+		// The whole socket group is emitted together, and the _tlsConnect/_tlsUpgrade
+		// bodies instantiate the generated class as their trust-all X509TrustManager --
+		// so the constructor is part of the SOCKET gate, not the narrower tls one. Only
+		// the interface and its three trust methods stay on usesTlsConnect (nothing
+		// calls them from bytecode; JSSE does, and only a tls-connect/tls-upgrade call
+		// site can reach those helpers).
 		boolean needsInstanceCtor = usesSockets || usesHttpHandler || usesAsyncRuntime || usesThreads;
 		ClassConstant x509TrustManagerClass = usesTlsConnect ? cp.addClass(cp.addUtf8("javax/net/ssl/X509TrustManager"))
 				: null;
@@ -1190,6 +1197,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.tcpPeerAddressHelper(tcpPeerAddressHelperMethod)
 			.tcpPeerPortHelper(tcpPeerPortHelperMethod)
 			.tlsConnectHelper(tlsConnectHelperMethod)
+			.tlsUpgradeHelper(tlsUpgradeHelperMethod)
 			.tlsListenHelper(tlsListenHelperMethod)
 			.tlsListenP12Helper(tlsListenP12HelperMethod)
 			.httpHandlerRuntime(httpHandlerRuntime)
@@ -3860,6 +3868,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant tlsConnectHelper;
 
+		final @Nullable MethodrefConstant tlsUpgradeHelper;
+
 		final @Nullable MethodrefConstant tlsListenHelper;
 
 		final @Nullable MethodrefConstant tlsListenP12Helper;
@@ -4320,6 +4330,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tcpPeerAddressHelper = builder.tcpPeerAddressHelper;
 			this.tcpPeerPortHelper = builder.tcpPeerPortHelper;
 			this.tlsConnectHelper = builder.tlsConnectHelper;
+			this.tlsUpgradeHelper = builder.tlsUpgradeHelper;
 			this.tlsListenHelper = builder.tlsListenHelper;
 			this.tlsListenP12Helper = builder.tlsListenP12Helper;
 			this.httpHandlerRuntime = builder.httpHandlerRuntime;
@@ -4459,6 +4470,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant tcpPeerPortHelper;
 
 			private @Nullable MethodrefConstant tlsConnectHelper;
+
+			private @Nullable MethodrefConstant tlsUpgradeHelper;
 
 			private @Nullable MethodrefConstant tlsListenHelper;
 
@@ -4798,6 +4811,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder tlsConnectHelper(@Nullable MethodrefConstant tlsConnectHelper) {
 				this.tlsConnectHelper = tlsConnectHelper;
+				return this;
+			}
+
+			Builder tlsUpgradeHelper(@Nullable MethodrefConstant tlsUpgradeHelper) {
+				this.tlsUpgradeHelper = tlsUpgradeHelper;
 				return this;
 			}
 

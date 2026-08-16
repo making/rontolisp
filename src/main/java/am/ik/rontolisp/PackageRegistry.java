@@ -467,7 +467,7 @@ public final class PackageRegistry {
 					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
 					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
 					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
-					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, "KEYWORD"),
+					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
 			Set.copyOf(UiopExports.subPackages()));
 
 	/**
@@ -494,8 +494,9 @@ public final class PackageRegistry {
 				LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT,
 				LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
 				LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
-				LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD,
-				LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.CURRENT_THREAD,
+				LispNames.TLS_LISTEN_P12, LispNames.TLS_UPGRADE, LispNames.RANDOM_BYTES, LispNames.MAKE_THREAD,
+				LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
+				LispNames.CURRENT_THREAD,
 				// Read-time source literals (reader.LispReader), not functions.
 				LispNames.CURRENT_FILE, LispNames.CURRENT_LINE,
 				// rontolisp's own Gray-stream extension
@@ -782,6 +783,20 @@ public final class PackageRegistry {
 		// eval.ShimLibraries) -- dbd-postgres imports these two members.
 		define(new LispPackage(LispNames.TRIVIAL_GARBAGE_PKG, List.of(),
 				new HashSet<>(Set.of("FINALIZE", "CANCEL-FINALIZATION"))));
+		// cl+ssl: the CLIENT-side TLS shim behind the built-in ASDF system of the same
+		// name (cl-ssl.lisp, eval.ShimLibraries), over the rontolisp:tls-upgrade
+		// primitive. The externals are the surface dexador (and the other
+		// usocket+cl+ssl client stacks) import: make-ssl-client-stream upgrades an
+		// already-connected stream; make-context / with-global-context /
+		// ssl-check-verify-p carry the verify mode; ensure-initialized is a no-op;
+		// use-certificate-chain-file (a client certificate, no backing) signals. The
+		// global-context special stays INTERNAL, as upstream.
+		Set<String> clSslExternals = Set.of("ENSURE-INITIALIZED", "MAKE-CONTEXT", "WITH-GLOBAL-CONTEXT",
+				"+SSL-VERIFY-NONE+", "+SSL-VERIFY-PEER+", "SSL-CHECK-VERIFY-P", "USE-CERTIFICATE-CHAIN-FILE",
+				"MAKE-SSL-CLIENT-STREAM");
+		Set<String> clSslSymbols = new HashSet<>(clSslExternals);
+		clSslSymbols.add("*SSL-GLOBAL-CONTEXT*");
+		define(new LispPackage(LispNames.CL_SSL_PKG, List.of(), clSslSymbols, clSslExternals));
 	}
 
 	/**

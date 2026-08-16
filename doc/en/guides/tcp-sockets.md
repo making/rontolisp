@@ -27,6 +27,7 @@ take a socket; render with `(format nil ...)` and send the result with
 | [`rontolisp:tcp-accept`](../reference/functions/rontolisp-tcp-accept.md) | Wait for a client connection: `(rontolisp:tcp-accept listener)` |
 | [`rontolisp:tcp-local-port`](../reference/functions/rontolisp-tcp-local-port.md) | Read the bound port back (useful after listening on port `0`) |
 | [`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md) | Open an **encrypted** client connection: `(rontolisp:tls-connect host port)` |
+| [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md) | Wrap an **already-connected** stream handle in TLS as a client: `(rontolisp:tls-upgrade stream host)` |
 | [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) | Bind an **encrypted** listening socket from a PKCS12 keystore: `(rontolisp:tls-listen keystore password port &optional host)` |
 | [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md) | Bind an **encrypted** listening socket from PEM files: `(rontolisp:tls-listen-pem cert-file key-file port &optional host)` |
 
@@ -52,6 +53,7 @@ take a socket; render with `(format nil ...)` and send the result with
 > the [tcp-connect](../reference/functions/rontolisp-tcp-connect.md) reference
 > page for the shared limitations (TCP only, no UDP). The TLS functions
 > ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md),
+> [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md),
 > [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) and
 > [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md))
 > are interpreter/JVM only (a compile error on the WASM backend).
@@ -418,6 +420,15 @@ details and an HTTPS-by-hand example:
   ...  ; speak any TLS-wrapped protocol over the handle
   (close sock))
 ```
+
+To start TLS **over a connection you already opened** — the shape an HTTP
+client library needs, since it connects (and possibly issues a proxy `CONNECT`)
+before starting TLS — use
+[`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md): it
+takes an existing socket handle plus the server name to verify against and
+returns a new handle over the same connection. The bundled
+[`cl+ssl` shim system](asdf-systems.md#built-in-shim-systems) rides it, which
+is what gives `usocket`+`cl+ssl` client libraries their `https://` path.
 
 The *server* side is
 [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md): it

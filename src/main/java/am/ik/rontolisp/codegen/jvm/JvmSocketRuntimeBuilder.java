@@ -49,6 +49,10 @@ final class JvmSocketRuntimeBuilder {
 
 	static final String TLS_CONNECT_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String TLS_UPGRADE_METHOD = "_tlsUpgrade";
+
+	static final String TLS_UPGRADE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String TLS_LISTEN_METHOD = "_tlsListen";
 
 	static final String TLS_LISTEN_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
@@ -130,6 +134,10 @@ final class JvmSocketRuntimeBuilder {
 	private final MethodrefConstant sslContextGetSocketFactory;
 
 	private final MethodrefConstant socketFactoryCreateSocket;
+
+	private final ClassConstant sslSocketFactoryClass;
+
+	private final MethodrefConstant sslSocketFactoryCreateOverSocket;
 
 	private final MethodrefConstant sslSocketGetSSLParameters;
 
@@ -280,6 +288,11 @@ final class JvmSocketRuntimeBuilder {
 		ClassConstant socketFactoryClass = cp.addClass(cp.addUtf8("javax/net/SocketFactory"));
 		this.socketFactoryCreateSocket = cp.addMethodref(socketFactoryClass,
 				cp.addNameAndType(cp.addUtf8("createSocket"), cp.addUtf8("(Ljava/lang/String;I)Ljava/net/Socket;")));
+		// The layered createSocket overload (_tlsUpgrade's transport) is declared on
+		// SSLSocketFactory, not on the javax.net.SocketFactory base.
+		this.sslSocketFactoryClass = cp.addClass(cp.addUtf8("javax/net/ssl/SSLSocketFactory"));
+		this.sslSocketFactoryCreateOverSocket = cp.addMethodref(this.sslSocketFactoryClass, cp.addNameAndType(
+				cp.addUtf8("createSocket"), cp.addUtf8("(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;")));
 		this.sslSocketGetSSLParameters = cp.addMethodref(this.sslSocketClass,
 				cp.addNameAndType(cp.addUtf8("getSSLParameters"), cp.addUtf8("()Ljavax/net/ssl/SSLParameters;")));
 		this.sslSocketSetSSLParameters = cp.addMethodref(this.sslSocketClass,
@@ -409,6 +422,8 @@ final class JvmSocketRuntimeBuilder {
 				builder.buildTcpConnect()));
 		methods.add(new SocketMethod(cp.addUtf8(TLS_CONNECT_METHOD), cp.addUtf8(TLS_CONNECT_DESC), 8, 6,
 				builder.buildTlsConnect()));
+		methods.add(new SocketMethod(cp.addUtf8(TLS_UPGRADE_METHOD), cp.addUtf8(TLS_UPGRADE_DESC), 8, 7,
+				builder.buildTlsUpgrade()));
 		methods.add(new SocketMethod(cp.addUtf8(TLS_LISTEN_METHOD), cp.addUtf8(TLS_LISTEN_DESC), 5, 13,
 				builder.buildTlsListen()));
 		methods.add(new SocketMethod(cp.addUtf8(TLS_LISTEN_P12_METHOD), cp.addUtf8(TLS_LISTEN_P12_DESC), 5, 13,
@@ -549,6 +564,107 @@ final class JvmSocketRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.sslSocketStartHandshake.index());
 		emitAload(code, 4);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.addStreamRef.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _tlsUpgrade(Object handle, Object host, Object insecure) -> Long handle}.
+	 * Wraps an ALREADY-CONNECTED socket entry in TLS as a client (the substrate of the
+	 * {@code cl+ssl} shim's {@code make-ssl-client-stream}): same per-call
+	 * {@code SSLContext} and trust policy as {@link #buildTlsConnect} -- a {@code null}
+	 * (nil) {@code insecure} verifies against the JDK trust store with HTTPS-style
+	 * endpoint identification, non-nil installs the generated program class as the
+	 * trust-all {@code X509TrustManager} -- but the handshake runs over the EXISTING
+	 * connection via {@code SSLSocketFactory.createSocket(socket, host, port, true)}
+	 * instead of opening a new one. The wrapping {@code SSLSocket} is stored as a NEW
+	 * stream-table entry (a plain {@code Socket} subclass, so every socket branch of the
+	 * stream built-ins works on it unchanged).
+	 */
+	private List<Integer> buildTlsUpgrade() {
+		// Slots: 0=handle, 1=host, 2=insecure, 3=h (String), 4=sock (Socket),
+		// 5=tls (SSLSocket), 6=params
+		List<Integer> code = new ArrayList<>();
+		emitStripQuotes(code, 1, 3);
+		// sock = (Socket) _streams[(int) handle];
+		emitLoadStreamEntry(code, 0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.socketClass.index());
+		emitAstore(code, 4);
+		// SSLContext ctx = SSLContext.getInstance("TLS");
+		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
+		// null);
+		emitLdc(code, this.tlsStr.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.sslContextGetInstance.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ALOAD_2);
+		int ifSecurePos = code.size();
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ANEWARRAY);
+		emitU2(code, this.trustManagerClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.NEW);
+		emitU2(code, this.thisClassRef.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.thisClassInit.index());
+		code.add(Opcode.AASTORE);
+		int gotoInitPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifSecurePos, code.size());
+		code.add(Opcode.ACONST_NULL);
+		patchBranch(code, gotoInitPos, code.size());
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslContextInit.index());
+		// tls = (SSLSocket) ((SSLSocketFactory) ctx.getSocketFactory())
+		// .createSocket(sock, h, sock.getPort(), true)
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslContextGetSocketFactory.index());
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.sslSocketFactoryClass.index());
+		emitAload(code, 4);
+		code.add(Opcode.ALOAD_3);
+		emitAload(code, 4);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.socketGetPort.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslSocketFactoryCreateOverSocket.index());
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.sslSocketClass.index());
+		emitAstore(code, 5);
+		// endpoint identification only on the verifying path (see buildTlsConnect)
+		code.add(Opcode.ALOAD_2);
+		int ifInsecurePos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		emitAload(code, 5);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslSocketGetSSLParameters.index());
+		emitAstore(code, 6);
+		emitAload(code, 6);
+		emitLdc(code, this.httpsStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslParametersSetEndpointIdAlg.index());
+		emitAload(code, 5);
+		emitAload(code, 6);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslSocketSetSSLParameters.index());
+		patchBranch(code, ifInsecurePos, code.size());
+		// tls.startHandshake();
+		emitAload(code, 5);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslSocketStartHandshake.index());
+		emitAload(code, 5);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, this.addStreamRef.index());
 		code.add(Opcode.ARETURN);

@@ -57,6 +57,28 @@ final class JvmTcpCompiler {
 				}
 				invoke(ctx, ctx.tlsConnectHelper, member);
 			}
+			case LispNames.TLS_UPGRADE -> {
+				// (tls-upgrade stream host) or (tls-upgrade stream host :insecure
+				// value): the tls-connect option shape over an existing socket handle.
+				int given = args.size() - 1;
+				if (given != 2 && given != 4) {
+					throw new UnsupportedOperationException(member + " expects 2 or 4 arguments, got " + given);
+				}
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				if (given == 4) {
+					if (!(args.get(3) instanceof LispSymbol option) || !option.isKeyword()
+							|| !":INSECURE".equals(option.name())) {
+						throw new UnsupportedOperationException(
+								member + " expects :insecure, got: " + args.get(3).print());
+					}
+					JvmExprCompiler.compileExpr(args.get(4), ctx, className);
+				}
+				else {
+					ctx.emit(Opcode.ACONST_NULL);
+				}
+				invoke(ctx, ctx.tlsUpgradeHelper, member);
+			}
 			case LispNames.TLS_LISTEN -> {
 				requireArgs(member, args, 3, 4);
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);

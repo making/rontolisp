@@ -92,6 +92,43 @@ final class SocketSupport {
 		}
 	}
 
+	/**
+	 * Wraps an ALREADY-CONNECTED socket in TLS as a client -- the
+	 * {@code rontolisp:tls-upgrade} primitive behind the {@code cl+ssl} shim's
+	 * {@code make-ssl-client-stream}. Identical trust policy to {@link #connectTls}
+	 * (fresh {@link SSLContext} per call, JDK default trust store + HTTPS-style endpoint
+	 * identification against {@code host}, both skipped by {@code insecure}); the
+	 * difference is the transport: the handshake runs over the given socket's existing
+	 * connection ({@code SSLSocketFactory.createSocket(socket, host, port, true)})
+	 * instead of opening a new one, which is what an HTTP client that has already
+	 * connected (and possibly issued a proxy CONNECT) needs. The returned
+	 * {@link SSLSocket} closes the underlying socket when closed.
+	 * @param socket the connected TCP socket to upgrade
+	 * @param host the server name the certificate is verified against (and sent as SNI)
+	 * @param insecure whether to skip certificate and hostname verification
+	 * @return the wrapping socket with the handshake completed
+	 * @throws LispEvalException if the handshake fails
+	 */
+	static Socket upgradeTls(Socket socket, String host, boolean insecure) {
+		try {
+			SSLContext context = SSLContext.getInstance("TLS");
+			context.init(null, insecure ? new TrustManager[] { new TrustAllManager() } : null, null);
+			SSLSocket tls = (SSLSocket) ((javax.net.ssl.SSLSocketFactory) context.getSocketFactory())
+				.createSocket(socket, host, socket.getPort(), true);
+			if (!insecure) {
+				SSLParameters parameters = tls.getSSLParameters();
+				parameters.setEndpointIdentificationAlgorithm("HTTPS");
+				tls.setSSLParameters(parameters);
+			}
+			tls.startHandshake();
+			return tls;
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException(
+					"tls-upgrade: cannot upgrade the stream to TLS against " + host + ": " + ex.getMessage());
+		}
+	}
+
 	/** Accepts any peer certificate chain; used only by the {@code :insecure} opt-out. */
 	private static final class TrustAllManager implements X509TrustManager {
 

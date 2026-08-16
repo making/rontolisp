@@ -50,6 +50,9 @@ public final class BuiltinSystems {
 			// GC finalizers as no-ops (dbd-postgres's dependency): the real library's
 			// .asd errors under rontolisp's features, and no backend has GC hooks.
 			Map.entry("trivial-garbage", features -> ShimLibraries.forms("trivial-garbage", features)),
+			// Client-side TLS over rontolisp:tls-upgrade (dexador/drakma's https
+			// path): the real cl+ssl is a CFFI binding to OpenSSL, unloadable here.
+			Map.entry("cl+ssl", features -> ShimLibraries.forms("cl+ssl", features)),
 			// The platform-feature announcer (dexador's :defsystem-depends-on entry).
 			// Its whole content is the announcement, so the forms are generated from
 			// the same list the .asd parse reads (DECLARED_FEATURES).

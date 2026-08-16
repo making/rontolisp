@@ -576,8 +576,8 @@ final class WasmExprCompiler {
 					WasmMutexCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
-				if (LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_LISTEN.equals(qn.member())
-						|| LispNames.TLS_LISTEN_PEM.equals(qn.member())
+				if (LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_UPGRADE.equals(qn.member())
+						|| LispNames.TLS_LISTEN.equals(qn.member()) || LispNames.TLS_LISTEN_PEM.equals(qn.member())
 						|| LispNames.TLS_LISTEN_P12.equals(qn.member())) {
 					// TLS is not implemented on the WASM backend: the wasi:tls proposal
 					// wasmtime exposes is an experimental client-only 0.3 draft (no

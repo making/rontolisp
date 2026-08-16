@@ -25,6 +25,7 @@
 | [`rontolisp:tcp-accept`](../reference/functions/rontolisp-tcp-accept.md) | クライアント接続を待つ: `(rontolisp:tcp-accept listener)` |
 | [`rontolisp:tcp-local-port`](../reference/functions/rontolisp-tcp-local-port.md) | バインドされたポートを読み取る (ポート `0` でlistenした後に便利) |
 | [`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md) | **暗号化された**クライアント接続を開く: `(rontolisp:tls-connect host port)` |
+| [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md) | **接続済み**のストリームハンドルをクライアントとして TLS でラップする: `(rontolisp:tls-upgrade stream host)` |
 | [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) | PKCS12 キーストアから**暗号化された**リスニングソケットをバインドする: `(rontolisp:tls-listen keystore password port &optional host)` |
 | [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md) | PEM ファイルから**暗号化された**リスニングソケットをバインドする: `(rontolisp:tls-listen-pem cert-file key-file port &optional host)` |
 
@@ -53,6 +54,7 @@
 > のリファレンスページを参照してください。
 > TLS関数
 > ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)、
+> [`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md)、
 > [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md)、
 > [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md))
 > はインタプリタ/JVM専用です (WASMバックエンドではコンパイルエラー)。
@@ -419,6 +421,16 @@ redis-cli -p 6379 incr counter
   ...  ; speak any TLS-wrapped protocol over the handle
   (close sock))
 ```
+
+**すでに開いた接続の上で** TLS を開始するには — HTTP クライアントライブラリが
+必要とする形です。クライアントはまず接続し(場合によってはプロキシへ
+`CONNECT` を発行し)、その後で TLS を開始するからです —
+[`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md)
+を使います: 既存のソケットハンドルと検証対象のサーバー名を受け取り、同じ接続の
+上の新しいハンドルを返します。バンドルされた
+[`cl+ssl` シムシステム](asdf-systems.md#built-in-shim-systems)はこの上に
+実装されており、`usocket`+`cl+ssl` を使うクライアントライブラリの `https://`
+経路を提供します。
 
 *サーバー*側は
 [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) です:

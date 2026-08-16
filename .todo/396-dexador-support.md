@@ -34,7 +34,7 @@ interpreter, JVM (`-o X.class`), and WASM `--component`:
 | `dex:post` string / alist / JSON | OK |
 | `:cookie-jar` + `Set-Cookie` | OK |
 | `:want-stream t` | BROKEN -- `.todo/400` |
-| `https://` | BROKEN -- `.todo/399` |
+| `https://` | OK since 2026-08-16 (`.todo/399` done) -- via the cl+ssl shim over `rontolisp:tls-upgrade` |
 | 2nd..5th return values (status, headers, uri) | BROKEN -- `.todo/397` |
 
 WASM Preview 1 does not compile at all (`.todo/405`).
@@ -95,8 +95,16 @@ Blockers, in the order that unblocks the most:
 
 Then the feature work:
 
-7. `.todo/399` -- `cl+ssl` shim over a new TLS-over-an-existing-stream
-   primitive. Without it `https://` -- i.e. most real dexador use -- is dead.
+7. ~~`.todo/399` -- `cl+ssl` shim over a new TLS-over-an-existing-stream
+   primitive.~~ **DONE (2026-08-16)**: `rontolisp:tls-upgrade` (stream host
+   [:insecure v]) upgrades an already-connected handle on interpreter + JVM
+   (compile error on both WASM targets, like the rest of the TLS family), and
+   the `cl+ssl` built-in shim system rides it -- `make-ssl-client-stream`
+   (`:verify` defaulting from the `with-global-context`-carried mode, so
+   `dex:*not-verify-ssl*`/`:insecure` reaches the primitive), signals on
+   client certs / `:verify-location` (`.kb/tcp-sockets.md`). dexador's exact
+   `(:import-from :cl+ssl ...)` list resolves; `(ql:quickload "dexador")` now
+   loads past cl+ssl and stops at `usocket:socket-option` (`.todo/114`).
 8. `.todo/400` -- the Gray INPUT protocol is defined but no built-in
    dispatches to it, so `:want-stream t` is unusable (and fails DIFFERENTLY on
    each backend, which is its own reason to fix it).

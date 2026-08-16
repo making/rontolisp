@@ -431,6 +431,7 @@ package system. Each name below links to its own page.
 | `rontolisp:tls-connect` | `(rontolisp:tls-connect "example.com" 443)` | open an encrypted (TLS) client connection; returns the same kind of stream handle as `tcp-connect` |
 | `rontolisp:tls-listen` | `(rontolisp:tls-listen "server.p12" "changeit" 8443)` | bind an encrypted listening socket from a PKCS12 keystore; accept with `tcp-accept` |
 | `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | bind an encrypted listening socket from PEM certificate/key files |
+| `rontolisp:tls-upgrade` | `(rontolisp:tls-upgrade sock "example.com")` | wrap an already-connected stream handle in TLS as a client; returns a new stream handle |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | declare a host function callable from Lisp when compiling to a WASM core module |
 | `rontolisp:wit-export` | `(rontolisp:wit-export "greeter.wit" :world greeter)` | declare that the program implements a WIT world: its exports are checked against the program's `defun`s, and their types come from the WIT |
@@ -471,8 +472,9 @@ the [tcp-connect](functions/rontolisp-tcp-connect.md),
 backend support and limitations. A
 [usocket-compatible shim](#usocket-package-functions) is layered over them for
 portability with existing Common Lisp code. The TLS variants (`rontolisp:tls-connect` /
-`tls-listen` / `tls-listen-pem`) wrap the same stream handles in TLS; see the
+`tls-upgrade` / `tls-listen` / `tls-listen-pem`) wrap the same stream handles in TLS; see the
 [tls-connect](functions/rontolisp-tls-connect.md),
+[tls-upgrade](functions/rontolisp-tls-upgrade.md),
 [tls-listen](functions/rontolisp-tls-listen.md) and
 [tls-listen-pem](functions/rontolisp-tls-listen-pem.md) reference pages.
 `rontolisp:wasm-export`,

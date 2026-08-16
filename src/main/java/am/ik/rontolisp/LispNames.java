@@ -4586,6 +4586,21 @@ public final class LispNames {
 	 */
 	public static final String TLS_LISTEN_P12 = "%TLS-LISTEN-P12";
 
+	/**
+	 * The {@code tls-upgrade} function provided by the {@code rontolisp} package. Wraps
+	 * an ALREADY-CONNECTED TCP stream handle in TLS as a client --
+	 * {@code (tls-upgrade stream host)} or
+	 * {@code (tls-upgrade stream host :insecure value)} -- performing the handshake
+	 * against {@code host} (certificate chain + HTTPS-style endpoint identification, both
+	 * skipped by a non-nil {@code :insecure}) and returning a NEW stream handle over the
+	 * same connection. This is the primitive behind the {@code cl+ssl} shim's
+	 * {@code make-ssl-client-stream}, which upgrades a stream a client library has
+	 * already connected (and possibly proxied) rather than opening a new one like
+	 * {@code tls-connect}. Interpreter and JVM backends only; the WASM backend has no TLS
+	 * host support.
+	 */
+	public static final String TLS_UPGRADE = "TLS-UPGRADE";
+
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "CL";
 
@@ -7394,6 +7409,18 @@ public final class LispNames {
 	 * consumer already works when they never fire); dbd-postgres is the consumer.
 	 */
 	public static final String TRIVIAL_GARBAGE_PKG = "TRIVIAL-GARBAGE";
+
+	/**
+	 * The {@code cl+ssl} shim package (and built-in ASDF system) name. The real library
+	 * is a CFFI binding to OpenSSL, unloadable here (its {@code cffi} dependency's
+	 * {@code .asd} errors on an unsupported Lisp); every CL HTTP client (dexador, drakma,
+	 * ...) reaches TLS through it. The shim covers the CLIENT side over the
+	 * {@code rontolisp:tls-upgrade} primitive -- {@code make-ssl-client-stream} upgrades
+	 * an already-connected stream -- and SIGNALS on what has no backing (client
+	 * certificates, {@code :verify-location} CA paths) rather than accepting and
+	 * ignoring. See {@code cl-ssl.lisp} and {@code .kb/tcp-sockets.md}.
+	 */
+	public static final String CL_SSL_PKG = "CL+SSL";
 
 	/**
 	 * The {@code trivial-cltl2} shim package (nickname {@code cltl2}, and built-in ASDF
