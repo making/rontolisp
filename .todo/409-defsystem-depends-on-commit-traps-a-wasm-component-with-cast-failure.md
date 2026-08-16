@@ -39,11 +39,24 @@ is now the only unusable one.
 
 ## Reproduction
 
+Needs Docker and `wasmtime` 37+; the suite is
+[cl-postgres-client](https://github.com/making/cl-postgres-client), see
+`.todo/408`.
+
 ```bash
-cd ~/git/cl-postgres-client            # see .todo/408
-make RONTOLISP="java -jar ~/git/rontolisp/target/rontolisp-0.1.0-SNAPSHOT-exec.jar" \
-     rontolisp-test-wasm
+# 1. the rontolisp under test, at whichever commit is being bisected
+./mvnw --no-transfer-progress clean package -DskipTests
+JAR="$PWD/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
+
+# 2. the suite
+git clone https://github.com/making/cl-postgres-client
+cd cl-postgres-client && git checkout e4dea9e
+make RONTOLISP="java -jar $JAR" rontolisp-test-wasm
 ```
+
+The target builds its own component and starts its own PostgreSQL container, so
+the only variable is the jar. Green is 183 passed / 2 failed and a clean exit;
+the regression is 166 passed and a trap.
 
 It dies in `database-errors-pass-through`, on the assertion after
 
