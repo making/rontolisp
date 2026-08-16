@@ -182,6 +182,7 @@ public final class DocGen {
 			HtmlTemplate.Crumb prev = (i > 0) ? crumb(lang, pages.get(i - 1)) : null;
 			HtmlTemplate.Crumb next = (i < pages.size() - 1) ? crumb(lang, pages.get(i + 1)) : null;
 			renderNavPage(lang, nav, languageList, langDir, page, prev, next, indexToCatalog.get(page.file()));
+			renderSubpages(lang, nav, languageList, langDir, page);
 		}
 
 		for (Catalog catalog : catalogs) {
@@ -206,6 +207,38 @@ public final class DocGen {
 		HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
 				docPath, body, TocBuilder.build(body), null, prev, next, languageList);
 		writePage(docPath, HtmlTemplate.render(ctx));
+	}
+
+	/**
+	 * Renders the sub-pages of one nav page. They are reachable only through their
+	 * parent, so they get its sidebar row highlighted, a back link to it, and a
+	 * previous/next chain of their own that starts at the parent -- the same shape the
+	 * per-operator detail pages have, with the parent page standing in for the catalog
+	 * index.
+	 */
+	private void renderSubpages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
+			Nav.Page parent) throws IOException {
+		List<Nav.Page> subpages = parent.subpages();
+		if (subpages.isEmpty()) {
+			return;
+		}
+		String parentDocPath = lang + "/" + replaceExtension(parent.file());
+		HtmlTemplate.Crumb backlink = new HtmlTemplate.Crumb(parentDocPath, parent.title());
+		for (int i = 0; i < subpages.size(); i++) {
+			Nav.Page page = subpages.get(i);
+			Path mdPath = langDir.resolve(page.file());
+			if (!Files.exists(mdPath)) {
+				throw new IOException("Missing Markdown source: " + mdPath);
+			}
+			String docPath = lang + "/" + replaceExtension(page.file());
+			HtmlTemplate.Crumb prev = (i > 0) ? crumb(lang, subpages.get(i - 1)) : backlink;
+			HtmlTemplate.Crumb next = (i < subpages.size() - 1) ? crumb(lang, subpages.get(i + 1)) : null;
+			String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang);
+			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
+					parentDocPath, body, TocBuilder.build(body), backlink, prev, next, languageList);
+			writePage(docPath, HtmlTemplate.render(ctx));
+			renderSubpages(lang, nav, languageList, langDir, page);
+		}
 	}
 
 	private void renderDetailPages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,

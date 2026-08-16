@@ -613,9 +613,13 @@ small enough to sit there, and what an unimplemented member signals.
 
 **A sub-package that fills up moves to `reference/uiop/<sub-package>.md`** --
 `.todo/353`'s proposal arrived at when it pays. `uiop/utility` was the first
-(todo-354, 61 members at once): `reference/uiop/utility.md`, its own `nav.yaml`
-entry in every language tree, and the parent page keeps the coverage row (now a
-link) and one sentence. `uiop/pathname` and `uiop/os` followed. Per-operator
+(todo-354, 61 members at once): `reference/uiop/utility.md`, a `subpages:` entry
+under `reference/uiop.md` in every language tree's `nav.yaml`, and the parent
+page keeps the coverage row (now a link) and one sentence. `uiop/pathname` and
+`uiop/os` followed. The sub-package pages are `subpages:`, NOT sidebar rows of
+Language Reference (2026-08-16): four `uiop/*` rows beside `Data Types` and
+`Functions` is the wrong granularity for that section, so they are reachable
+only through the parent page (`.kb/documentation-site.md`). Per-operator
 detail pages stay for names a user program actually calls, not for all 429 --
 and when a member MOVES to a sub-package page, its row leaves the parent's
 implemented-member table (todo-356 moved `uiop:getenv`'s), or the same fact is

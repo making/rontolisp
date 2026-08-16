@@ -172,6 +172,24 @@ class DocGenTest {
 		assertThat(dead).isEmpty();
 	}
 
+	/**
+	 * A sub-page is rendered and reachable from its parent, but the sidebar keeps one row
+	 * for the whole topic -- the uiop sub-package pages are a breakdown of "The uiop
+	 * Package", not four more entries of the Language Reference section.
+	 */
+	@Test
+	void subpagesAreRenderedButAbsentFromTheSidebar() throws IOException {
+		String parent = Files.readString(site.resolve("en/reference/uiop.html"), StandardCharsets.UTF_8);
+		String sidebar = parent.substring(parent.indexOf("<aside class=\"sidebar\""), parent.indexOf("</aside>"));
+		assertThat(sidebar).contains("<a class=\"nav-link active\" href=\"uiop.html\">The uiop Package</a>")
+			.doesNotContain("uiop/os.html");
+		// ...and the page it links to exists, with the parent's row highlighted and a
+		// back link to it.
+		String sub = Files.readString(site.resolve("en/reference/uiop/os.html"), StandardCharsets.UTF_8);
+		assertThat(sub).contains("<a class=\"nav-link active\" href=\"../uiop.html\">The uiop Package</a>")
+			.contains("<a class=\"backlink\" href=\"../uiop.html\">&larr; The uiop Package</a>");
+	}
+
 	@Test
 	void translatedPagesKeepTheReferenceLanguagesAnchors() throws IOException {
 		String ja = Files.readString(site.resolve("ja/guides/wasm-gc-module.html"), StandardCharsets.UTF_8);

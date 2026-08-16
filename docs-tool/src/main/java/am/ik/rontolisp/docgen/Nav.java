@@ -26,6 +26,9 @@ import org.yaml.snakeyaml.Yaml;
  *     pages:
  *       - file: index.md
  *         title: Introduction
+ *         subpages:
+ *           - file: reference/uiop/os.md
+ *             title: uiop/os
  * </pre>
  */
 public record Nav(String title, String langName, List<Section> sections) {
@@ -40,11 +43,25 @@ public record Nav(String title, String langName, List<Section> sections) {
 	 * @param file the Markdown source path relative to the language directory (e.g.
 	 * {@code reference/data-types.md})
 	 * @param title the human-readable title shown in the sidebar and {@code <title>}
+	 * @param subpages pages that belong to this one and are reachable only THROUGH it:
+	 * they are rendered, chained to each other with previous/next links and given a back
+	 * link to this page, but they are NOT sidebar rows. The sidebar carries one row per
+	 * topic, so a page whose sub-pages are a breakdown of that one topic (the uiop
+	 * sub-package pages under "The uiop Package") lists them here instead of spilling
+	 * them into the section
 	 */
-	public record Page(String file, String title) {
+	public record Page(String file, String title, List<Page> subpages) {
+
+		public Page(String file, String title) {
+			this(file, title, List.of());
+		}
 	}
 
-	/** Returns every page in document order (used for prev/next navigation). */
+	/**
+	 * Returns every sidebar page in document order (used for prev/next navigation).
+	 * Sub-pages are deliberately absent: they are neither sidebar rows nor stops on the
+	 * top-level previous/next chain, and are rendered from their parent instead.
+	 */
 	public List<Page> flatPages() {
 		List<Page> all = new ArrayList<>();
 		for (Section section : this.sections) {
@@ -69,21 +86,26 @@ public record Nav(String title, String langName, List<Section> sections) {
 				for (Object rawSection : sectionList) {
 					Map<String, Object> sectionMap = (Map<String, Object>) rawSection;
 					String sectionTitle = String.valueOf(sectionMap.getOrDefault("title", ""));
-					List<Page> pages = new ArrayList<>();
-					Object rawPages = sectionMap.get("pages");
-					if (rawPages instanceof List<?> pageList) {
-						for (Object rawPage : pageList) {
-							Map<String, Object> pageMap = (Map<String, Object>) rawPage;
-							String file = String.valueOf(pageMap.get("file"));
-							String pageTitle = String.valueOf(pageMap.getOrDefault("title", file));
-							pages.add(new Page(file, pageTitle));
-						}
-					}
-					sections.add(new Section(sectionTitle, pages));
+					sections.add(new Section(sectionTitle, parsePages(sectionMap.get("pages"))));
 				}
 			}
 			return new Nav(title, langName, sections);
 		}
+	}
+
+	/** Parses a {@code pages:} / {@code subpages:} list; sub-pages nest arbitrarily. */
+	@SuppressWarnings("unchecked")
+	private static List<Page> parsePages(Object rawPages) {
+		List<Page> pages = new ArrayList<>();
+		if (rawPages instanceof List<?> pageList) {
+			for (Object rawPage : pageList) {
+				Map<String, Object> pageMap = (Map<String, Object>) rawPage;
+				String file = String.valueOf(pageMap.get("file"));
+				String title = String.valueOf(pageMap.getOrDefault("title", file));
+				pages.add(new Page(file, title, parsePages(pageMap.get("subpages"))));
+			}
+		}
+		return pages;
 	}
 
 }

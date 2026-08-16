@@ -20,6 +20,16 @@ Per-operator reference pages live in catalog directories, each with a
 renders one HTML page per entry with prev/next, and links each operator name in
 the index table to its page.
 
+**A nav entry may own `subpages:`** -- a nested `{file, title}` list, rendered
+like the catalog detail pages (previous/next chained among themselves, a back
+link to the parent, the PARENT's sidebar row highlighted) but absent from the
+sidebar itself. Use it when a page's sub-pages are a breakdown of that one topic
+rather than sibling topics: the sidebar carries one row per topic, and
+`reference/uiop/*.md` (four sub-package pages, 2026-08-16) is reachable only
+through `reference/uiop.md`. It is NOT the catalog mechanism -- a catalog entry
+is an OPERATOR, and `SkillGen` turns every catalog entry into a row of the
+skill bundle's `operators.md`, where a sub-package page does not belong.
+
 **Code-fence conventions** (parsed by `DocExamplesTest` and the docgen
 `RunnableBlockTransformer`):
 - ` ```lisp ` = a runnable, self-contained example (becomes a "Run" cell). It is
