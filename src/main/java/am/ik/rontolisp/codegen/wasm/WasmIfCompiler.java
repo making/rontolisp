@@ -21,8 +21,15 @@ final class WasmIfCompiler {
 			compileAsync(parts, ctx);
 			return;
 		}
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		ctx.writer.write(Instruction.REF_IS_NULL);
+		// A fusable binary comparison keeps its truth value as a raw i32 (no t/nil
+		// boxing); the wasm-if arms stay THEN-on-nil either way.
+		if (WasmComparisonCompiler.tryCompileConditionI32(parts.get(1), ctx)) {
+			ctx.writer.write(Instruction.I32_EQZ);
+		}
+		else {
+			WasmExprCompiler.compileExpr(parts.get(1), ctx);
+			ctx.writer.write(Instruction.REF_IS_NULL);
+		}
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		// The branches are compiled inside the if structure; track the depth so a return

@@ -1,5 +1,47 @@
 # WASM integer expression-tree fusion (the unboxed fast path)
 
+> Stage-5 additions (2026-08-16, todo 413; ironclad PBKDF2 `--component`
+> ~121 ms -> ~87 ms per 4096-round derivation, wasmtime 47.0.3):
+> (1) **inline literal add/sub check** (`emitInlineCheckedLiteral`): a fused
+> `+`/`-` step whose operand is a LITERAL emits a plain i64 add/sub plus ONE
+> signed compare against the recomputed accumulator (exact for every i64, `k =
+> Long.MIN_VALUE` included; `k = 0` emits nothing) instead of the
+> `_fx_add`/`_fx_sub` helper call -- loop counters and aref index math
+> (`(+ i 1)`, `(- i 15)`) stop paying a call per evaluation. One shared i64
+> scratch slot per site (`Ctx.fxLitTempSlot`, reset after each site's
+> `evalLeaves`).
+> (2) **declare-tolerant flet unwrap**: `eligibleLocalLambda` skips leading
+> `(declare ...)` forms inside the flet lowering's `(block name ...)` wrapper
+> (via `singleBodyExpr`) -- ironclad's `sha256-expand-block` declares its flet
+> parameter types, which silently demoted `sigma0`/`sigma1` to per-iteration
+> funcall dispatch.
+> (3) **accessor-shaped substitution**: an inlinable defun whose whole body is
+> `(aref P I)` over parameters/literals (a `:type vector` struct accessor)
+> substitutes as an `ArefLeaf` over the CALLER's operands when each is a bare
+> symbol or literal (`inlineArefOperand`) -- the general classify refuses
+> `aref` under a non-empty env, so the accessor call used to survive as a boxed
+> call leaf.
+> (4) **condition-position raw compares**: `tryCompileCompare` gained a
+> `boxResult = false` variant; `WasmWhileCompiler`/`WasmIfCompiler` test the
+> raw i32 (via `WasmComparisonCompiler.tryCompileConditionI32`) instead of
+> boxing t/nil only to null-test it -- the boxed form paid a `_t_sym` call per
+> true loop test.
+> (5) Statement position now propagates through `let`/`let*`/`progn`
+> (`.kb/wasm-unboxed-locals.md`): a round-shaped
+> `(let ((x ...)) (setf d .. h ..))` in a progn re-read its just-stored raw
+> local through `_ub_read` only to DROP it -- ~24% of the PBKDF2 profile.
+> Companion changes outside this file: `loop`'s numeric `for` splices literal
+> `by`/limit values instead of binding gensyms (`.kb/loop-iteration-heads.md`),
+> `%replace-bulk` (`.kb/sequence-op-runtimes.md`), and packed `:type vector`
+> defstructs (`.kb/defstruct.md`).
+>
+> **Profiling note (hard-won, twice now):** wasmtime 47's guest profiler
+> attributes samples inside a LARGE function (the 60k-instruction fused
+> `update-sha256-block`) to small CALLEE functions -- the giant function shows
+> ~0 self while a tiny accessor or `_iv_set` shows an impossible 30-60%. Check
+> a suspicious self% against the callee's static call count before believing
+> it; wall-clock A/B against a standalone reproduction is the reliable oracle.
+
 > Stage-2 additions (2026-07-27, todo 194): `(aref a i)` leaves read packed
 > integer vectors raw, `%aset` values compile raw through `tryCompileRaw` +
 > `_iv_set`, statement-position stores skip the value-as-stored box entirely,

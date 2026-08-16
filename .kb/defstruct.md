@@ -116,11 +116,27 @@ so it is not registered as a type (no specializer, no `typep`, not a
 `structure-object`, matching CL). The constructor builds `(vector v...)`, the
 copier is `copy-seq`, an accessor is an `aref` read, and each accessor also gets
 a generated `%setf-<accessor>` writer defun (the setf-function protocol) since
-there is no instance to `%obj-set`. The element type is dropped (rontolisp arrays
-are generic). `(:type list)` is not supported; `:include` on a typed struct is
-rejected. This is what makes ironclad's `define-digest-registers` — a
-`(:type (vector (unsigned-byte 32)))` struct over the digest registers — load
-verbatim.
+there is no instance to `%obj-set`. `(:type list)` is not supported; `:include`
+on a typed struct is rejected. This is what makes ironclad's
+`define-digest-registers` — a `(:type (vector (unsigned-byte 32)))` struct over
+the digest registers — load verbatim.
+
+Since todo-413 (2026-08-16) a **declared `(vector (unsigned-byte 8|16|32))`
+element type is KEPT**: the constructor builds
+`(make-array n :element-type '(unsigned-byte w) :initial-contents (list v...))`,
+so the instance is a packed integer vector on every backend and each accessor's
+`aref` takes the packed fast path (a general vector boxed every 32-bit digest
+register read through the generic array dispatch — the wasm hot-path driver).
+Any other element type (or none) keeps the plain `(vector ...)` construction.
+The store side rides `LispMacroExpander.TYPED_VECTOR_SLOT_BASE`: such an
+accessor registers in `structAccessors` as `TYPED_VECTOR_SLOT_BASE - index`
+(below the `-1` setf-function marker; the one value-reading consumer is
+`expandSetf`), and `(setf (acc obj) v)` expands to the `(setf (aref obj i) v)`
+the `%setf-` writer would perform — same subform order, same value, no boxed
+trip across the writer's call boundary. The writer defun still exists and still
+serves first-class uses. Consequence to remember: stores into such a struct now
+MASK to the declared width (`(setf (aref r 0) (expt 2 33))` reads back 0), as
+in a real CL packed array — the general-vector behavior kept the wide value.
 
 ## `(:print-object fn)` / `(:print-function fn)` -- the printer options
 

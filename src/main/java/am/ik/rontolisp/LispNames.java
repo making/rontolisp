@@ -2528,6 +2528,18 @@ public final class LispNames {
 	 */
 	public static final String REPLACE_ARRAY_RUNTIME = "%REPLACE-RUNTIME-ARRAY";
 
+	/**
+	 * The {@code %replace-bulk} internal predicate, emitted only inside
+	 * {@link #REPLACE_ARRAY_RUNTIME}'s body: {@code (%replace-bulk dst src s1 s2 n)}
+	 * answers true after copying the {@code n} elements in one engine-level bulk copy
+	 * when the backend can (WASM: both sequences are packed integer vectors of the SAME
+	 * width and the bounds are in range -- {@code array.copy}), and nil -- copying
+	 * nothing -- otherwise, in which case the caller's element loop runs. A backend with
+	 * no bulk path (the JVM today) compiles it to constant nil. See
+	 * {@code .kb/sequence-op-runtimes.md}.
+	 */
+	public static final String REPLACE_BULK = "%REPLACE-BULK";
+
 	/** The {@code %fill-runtime} internal helper; see {@link #REPLACE_RUNTIME}. */
 	public static final String FILL_RUNTIME = "%FILL-RUNTIME";
 

@@ -142,6 +142,23 @@ final class WasmExprCompiler {
 				WasmSetqCompiler.compileForEffect(cons, ctx);
 				return;
 			}
+			// Statement position propagates through the sequencing forms, so a
+			// tail-position setq of an unboxed local inside them stops re-reading the
+			// value it just stored only to have it dropped here (ironclad's SHA-256
+			// rounds end in (let ((x ..)) (setf d .. h ..)) and paid a _ub_read per
+			// round for the discarded let value).
+			if (LispNames.LET.equals(sym.name())) {
+				WasmLetCompiler.compile(cons, ctx, true);
+				return;
+			}
+			if (LispNames.LET_STAR.equals(sym.name())) {
+				compileForEffect(LispMacroExpander.expandLetStar(cons), ctx);
+				return;
+			}
+			if (LispNames.PROGN.equals(sym.name())) {
+				WasmPrognCompiler.compileForEffect(cons, ctx);
+				return;
+			}
 		}
 		compileExpr(expr, ctx);
 		ctx.writer.write(Instruction.DROP);
@@ -1359,6 +1376,7 @@ final class WasmExprCompiler {
 				case LispNames.ARRAY_DIMENSIONS -> WasmArrayCompiler.compileDims(cons, ctx);
 				case LispNames.ROW_MAJOR_AREF -> WasmArrayCompiler.compileRowMajorAref(cons, ctx);
 				case LispNames.ROW_MAJOR_ASET -> WasmArrayCompiler.compileRowMajorAset(cons, ctx);
+				case LispNames.REPLACE_BULK -> WasmArrayCompiler.compileReplaceBulk(cons, ctx);
 				case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx);
 				case LispNames.VECTOR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx);

@@ -986,6 +986,12 @@ final class JvmExprCompiler {
 				case LispNames.ARRAY_DIMENSIONS -> JvmArrayCompiler.compileDims(cons, ctx, className);
 				case LispNames.ROW_MAJOR_AREF -> JvmArrayCompiler.compileRowMajorAref(cons, ctx, className);
 				case LispNames.ROW_MAJOR_ASET -> JvmArrayCompiler.compileRowMajorAset(cons, ctx, className);
+				// %replace-bulk (the replace runtime's engine-level copy arm, see
+				// LispNames.REPLACE_BULK): no JVM bulk path yet, so it answers constant
+				// nil and the caller's element loop runs. The arguments are the helper
+				// body's own bindings (pure reads), so skipping their evaluation is
+				// unobservable.
+				case LispNames.REPLACE_BULK -> ctx.emit(Opcode.ACONST_NULL);
 				case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, className);
 				case LispNames.VECTOR ->

@@ -1550,14 +1550,24 @@ public final class LispMacroExpander {
 			}
 			piece.binds.add(new ForBinding(var, from, true));
 			String limitKw = null;
-			LispSymbol limitVar = null;
+			LispVal limitRef = null;
 			String lk = peekKeyword();
 			if ("to".equals(lk) || "upto".equals(lk) || "below".equals(lk) || "downto".equals(lk)
 					|| "above".equals(lk)) {
 				limitKw = lk;
 				pos++;
-				limitVar = gensym("limit");
-				piece.binds.add(new ForBinding(limitVar, nextForm(), false));
+				// A literal limit is used in place -- binding it behind a gensym only
+				// hides the constant from the compilers' fused comparison, and a
+				// literal cannot have side effects for the once-only binding to guard.
+				LispVal limitForm = nextForm();
+				if (isSelfEvaluatingNumber(limitForm)) {
+					limitRef = limitForm;
+				}
+				else {
+					LispSymbol limitVar = gensym("limit");
+					piece.binds.add(new ForBinding(limitVar, limitForm, false));
+					limitRef = limitVar;
+				}
 				if ("downto".equals(lk) || "above".equals(lk)) {
 					down = true;
 				}
@@ -1567,10 +1577,17 @@ public final class LispMacroExpander {
 				pos++;
 				by = nextForm();
 			}
-			LispSymbol byVar = gensym("by");
-			piece.binds.add(new ForBinding(byVar, by, false));
-			piece.steps.add(new LispVal[] { var, call(down ? LispNames.SUB : LispNames.ADD, var, byVar) });
-			if (limitVar != null) {
+			// Same for the step: `for i from 16 below 64` used to bind __by = 1 and step
+			// (+ i __by), whose non-literal operand kept every iteration on the generic
+			// (or checked-helper) add; (+ i 1) is the shape the backends fold or fuse.
+			LispVal byRef = by;
+			if (!isSelfEvaluatingNumber(by)) {
+				LispSymbol byVar = gensym("by");
+				piece.binds.add(new ForBinding(byVar, by, false));
+				byRef = byVar;
+			}
+			piece.steps.add(new LispVal[] { var, call(down ? LispNames.SUB : LispNames.ADD, var, byRef) });
+			if (limitRef != null) {
 				boolean exclusive = "below".equals(limitKw) || "above".equals(limitKw);
 				String cmp;
 				if (down) {
@@ -1579,8 +1596,18 @@ public final class LispMacroExpander {
 				else {
 					cmp = exclusive ? LispNames.GE : LispNames.GT;
 				}
-				piece.endTests.add(call(cmp, var, limitVar));
+				piece.endTests.add(call(cmp, var, limitRef));
 			}
+		}
+
+		/**
+		 * A literal number, safe to splice into a step/end-test in place of a once-bound
+		 * gensym: evaluating it per iteration is indistinguishable from reading a
+		 * binding.
+		 */
+		private static boolean isSelfEvaluatingNumber(LispVal form) {
+			return form instanceof LispInteger || form instanceof LispDouble || form instanceof LispBigInteger
+					|| form instanceof LispRatio;
 		}
 
 		private void parseForList(ForPiece piece, LispVal pattern, String sub) {
@@ -3630,7 +3657,19 @@ public final class LispMacroExpander {
 				{
 					Integer structSlot = structAccessors.get(accessor);
 					if (structSlot != null) {
-						if (structSlot == SETF_FUNCTION_MARKER) {
+						if (structSlot <= TYPED_VECTOR_SLOT_BASE && placeParts.size() == 2) {
+							// A :type vector struct accessor with a known slot index:
+							// inline the store as the aref place the %setf- writer defun
+							// would perform, so the value never has to box across the
+							// writer's call boundary (ironclad's digest-register updates
+							// are a per-block hot path). Same subform evaluation order
+							// and the same value answered.
+							LispVal arefPlace = listToCons(List.of(new LispSymbol(LispNames.AREF), placeParts.get(1),
+									new LispInteger(TYPED_VECTOR_SLOT_BASE - structSlot)));
+							yield expandSetf(listToCons(List.of(new LispSymbol(LispNames.SETF), arefPlace, value)),
+									structAccessors, closRegistry);
+						}
+						if (structSlot <= SETF_FUNCTION_MARKER) {
 							// (setf (name args...) val) -> (funcall #'%setf-name val
 							// args...):
 							// the CL setf-function convention passes the new value as the
@@ -3717,6 +3756,17 @@ public final class LispMacroExpander {
 	 * through every backend.
 	 */
 	public static final int SETF_FUNCTION_MARKER = -1;
+
+	/**
+	 * Registry marker base for a {@code (:type (vector ...))} struct accessor whose slot
+	 * index is known: the accessor registers as {@code TYPED_VECTOR_SLOT_BASE - index}
+	 * (so {@code -2} = slot 0, {@code -3} = slot 1, ...). {@code expandSetf} then inlines
+	 * the store as the {@code (setf (aref obj index) v)} the writer defun would perform,
+	 * skipping the writer's call boundary; every other consumer only tests
+	 * {@code <= SETF_FUNCTION_MARKER} (a setf-function-style place, which the generated
+	 * {@code %setf-} writer still serves for first-class uses).
+	 */
+	public static final int TYPED_VECTOR_SLOT_BASE = -2;
 
 	/**
 	 * Internal function-namespace name for a {@code (setf NAME)} writer function.
@@ -7396,10 +7446,17 @@ public final class LispMacroExpander {
 				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k),
 						fmtCall(LispNames.AREF, r2, fmtCall(LispNames.ADD, vs2, k)))));
 		LispVal copyLoop = makeIf(callOf(LispNames.LISTP, r2), listSourceLoop, arefLoop);
-		LispVal mutating = makeProgn(List.of(copyLoop, r1));
 		if (arms == SeqOpArms.ARRAY_ONLY) {
-			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, mutating));
+			// The shared array helper's element loop is fronted by the backend's bulk
+			// copy (%replace-bulk): true = the elements were copied in one engine-level
+			// move, nil = nothing happened and the loop runs. Only here -- inline sites
+			// (SeqOpArms.ALL) are rare and keep the plain loop, and the wide helper
+			// delegates its array arm to this body.
+			copyLoop = makeIf(callOf(LispNames.LISTP, r2), listSourceLoop,
+					makeIf(fmtCall(LispNames.REPLACE_BULK, r1, r2, vs1, vs2, n), LispNil.INSTANCE, arefLoop));
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, makeProgn(List.of(copyLoop, r1))));
 		}
+		LispVal mutating = makeProgn(List.of(copyLoop, r1));
 		if (arms == SeqOpArms.ALL_CALLING_ARRAY_ARM) {
 			// The bounds are already defaulted here, so the callee's own or-wrappers see
 			// integers and default nothing again.
@@ -9890,6 +9947,9 @@ public final class LispMacroExpander {
 		// inherited slots, keyed by the slot's unqualified name.
 		java.util.Map<String, LispVal> includeOverrides = new java.util.LinkedHashMap<>();
 		boolean typedVector = false;
+		// The packed element width of a (:type (vector (unsigned-byte 8|16|32))) struct,
+		// or 0 for any other typed-vector element type (see the :TYPE case below).
+		int typedVectorElementBits = 0;
 		// (:print-object fn) / (:print-function fn): the struct's printer, as a function
 		// DESIGNATOR. Both ride the print-object seam (.kb/clos.md) as a generated
 		// defmethod rather than a printer mechanism of their own; the CLtL1
@@ -10014,6 +10074,14 @@ public final class LispMacroExpander {
 									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
 						}
 						typedVector = true;
+						// (:type (vector (unsigned-byte 8|16|32))) keeps the declared
+						// width: the constructor then builds a PACKED integer vector, so
+						// the accessors' aref reads take every backend's packed fast
+						// path (ironclad's digest registers are this shape, and as a
+						// general vector every register read boxed its 32-bit word
+						// through the generic array dispatch). Any other element type
+						// keeps the plain (vector ...) construction.
+						typedVectorElementBits = packedElementBits(optValue);
 					}
 					default -> throw new UnsupportedOperationException(
 							LispNames.DEFSTRUCT + " option is not supported: " + option.print());
@@ -10179,7 +10247,8 @@ public final class LispMacroExpander {
 						boaValues.add(param != null ? param : slotDefaults.get(i));
 					}
 					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor.name()),
-							ctor.boaLambdaList(), typedVector ? vectorOf(boaValues) : objNew(structTag, boaValues))));
+							ctor.boaLambdaList(),
+							typedVector ? vectorOf(boaValues, typedVectorElementBits) : objNew(structTag, boaValues))));
 				}
 				else {
 					// A slot-less struct has an EMPTY lambda list, which is nil rather
@@ -10187,7 +10256,8 @@ public final class LispMacroExpander {
 					// a cons -- listToCons would blow up casting it.
 					LispVal params0 = lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList);
 					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor.name()), params0,
-							typedVector ? vectorOf(List.copyOf(slotSyms)) : objNew(structTag, List.copyOf(slotSyms)))));
+							typedVector ? vectorOf(List.copyOf(slotSyms), typedVectorElementBits)
+									: objNew(structTag, List.copyOf(slotSyms)))));
 				}
 			}
 		}
@@ -10242,7 +10312,7 @@ public final class LispMacroExpander {
 				LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), arefPlace, newVal));
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 						new LispSymbol(setfFunctionName(accessor)), writerParams, store)));
-				structAccessors.put(accessor, SETF_FUNCTION_MARKER);
+				structAccessors.put(accessor, TYPED_VECTOR_SLOT_BASE - i);
 			}
 			else {
 				forms.add(listToCons(
@@ -10310,12 +10380,43 @@ public final class LispMacroExpander {
 				listToCons(List.of(specialized, stream)), listToCons(call)));
 	}
 
-	/** A {@code (vector v...)} construction form (the :type vector struct instance). */
-	private static LispVal vectorOf(List<LispVal> values) {
-		List<LispVal> call = new java.util.ArrayList<>();
-		call.add(new LispSymbol(LispNames.VECTOR));
-		call.addAll(values);
-		return listToCons(call);
+	/**
+	 * The :type vector struct's construction form: a plain {@code (vector v...)}, or --
+	 * when the option declared a packed element width -- a
+	 * {@code (make-array n :element-type '(unsigned-byte w) :initial-contents (list
+	 * v...))} so the instance is a packed integer vector and every accessor's
+	 * {@code aref} takes the packed fast path on every backend.
+	 */
+	private static LispVal vectorOf(List<LispVal> values, int elementBits) {
+		if (elementBits == 0) {
+			List<LispVal> call = new java.util.ArrayList<>();
+			call.add(new LispSymbol(LispNames.VECTOR));
+			call.addAll(values);
+			return listToCons(call);
+		}
+		List<LispVal> contents = new java.util.ArrayList<>();
+		contents.add(new LispSymbol(LispNames.LIST));
+		contents.addAll(values);
+		LispVal elementType = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+				listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(elementBits)))));
+		return listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispInteger(values.size()),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), elementType,
+				new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD), listToCons(contents)));
+	}
+
+	/**
+	 * The packed element width (8, 16 or 32) of a {@code (vector (unsigned-byte w))}
+	 * type-option value, or 0 when the element type is anything else (including absent).
+	 */
+	private static int packedElementBits(LispVal typeOption) {
+		if (typeOption instanceof LispCons tc && tc.toList() instanceof List<LispVal> tl && tl.size() == 2
+				&& tl.get(1) instanceof LispCons et && et.toList() instanceof List<LispVal> el && el.size() == 2
+				&& el.get(0) instanceof LispSymbol ub && LispNames.UNSIGNED_BYTE.equals(plainTypeName(ub))
+				&& el.get(1) instanceof LispInteger bits
+				&& (bits.value() == 8 || bits.value() == 16 || bits.value() == 32)) {
+			return (int) bits.value();
+		}
+		return 0;
 	}
 
 	private static final String STRUCT_VAR = "__struct";

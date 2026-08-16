@@ -1,5 +1,15 @@
 # WASM unboxed (dual-representation) locals
 
+> 2026-08-16 (todo 413): statement position propagates through the sequencing
+> forms -- `WasmExprCompiler.compileForEffect` routes `let`/`let*`/`progn`
+> through forEffect overloads (`WasmLetCompiler.compile(cons, ctx, true)`,
+> `WasmPrognCompiler.compileForEffect`) so their LAST form is a statement too.
+> Before this, a statement-position `(let ((x ...)) (setf d .. h ..))` -- every
+> SHA-256 round -- compiled its tail setq via `compilePair`, which re-reads the
+> just-stored raw local through `_ub_read` as the let's value, only for the
+> enclosing statement to DROP it: ~24% of the ironclad PBKDF2 profile was that
+> read-and-drop.
+
 **Invariant: giving a `let` binding the dual representation must never change a
 result, an error shape, or an observable side effect -- it is an alternative
 STORAGE for the same Lisp value, with a total boxed escape hatch.** Introduced

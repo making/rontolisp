@@ -36,6 +36,16 @@ final class WasmLetCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compile(cons, ctx, false);
+	}
+
+	/**
+	 * With {@code forEffect}, the {@code let}'s value is discarded by the caller: the
+	 * LAST body form also compiles for effect, so a tail-position setq of an unboxed
+	 * local (or a packed-array store) materializes no value -- and nothing is left on the
+	 * stack. The caller must NOT emit its own DROP.
+	 */
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean forEffect) {
 		// A binding that only holds a literal designator for the body's funcall sites is
 		// propagated into them and dropped, so the designator never becomes a VALUE here
 		// (LetBoundDesignators; the JVM twin does the same). It cannot collide with the
@@ -392,12 +402,16 @@ final class WasmLetCompiler {
 
 		if (async) {
 			WasmAsyncEmit.compileGuardedProgn(parts.subList(2, parts.size()), ctx);
+			if (forEffect) {
+				ctx.writer.write(Instruction.DROP);
+			}
 		}
 		else {
 			// Non-tail statements compile for effect: a statement-position setq of an
-			// unboxed local (or a packed-array setf) then materializes no value.
+			// unboxed local (or a packed-array setf) then materializes no value. In a
+			// forEffect let the tail form is a statement too.
 			for (int i = 2; i < parts.size(); i++) {
-				if (i < parts.size() - 1) {
+				if (forEffect || i < parts.size() - 1) {
 					WasmExprCompiler.compileForEffect(parts.get(i), ctx);
 				}
 				else {

@@ -96,6 +96,18 @@ matching SBCL would mean turning working programs into type errors for no gain.
 Re-evaluate if a real library ever depends on the nil-at-setup reading (a nested
 `for y in x` that means to iterate nothing).
 
+## Literal `by`/limit values splice in place (todo-413, 2026-08-16)
+
+`parseForNumeric` binds the step and limit behind gensyms only when the form is
+NOT a literal number (`isSelfEvaluatingNumber`): `for i from 16 below 64` steps
+by `(+ i 1)` and tests `(>= i 64)` directly, where it used to bind `__by0 = 1`
+and `__limit0 = 64` and emit `(+ i __by0)` / `(>= i __limit0)`. Semantically
+identical (a literal has no side effect for the once-only binding to guard),
+and it is what lets the wasm backend's fused single-op / fused-compare paths
+see the constant -- the gensym-hidden `1` kept every iteration of ironclad's
+`sha256-expand-block` on the checked `_fx_add` helper call (~14% of the PBKDF2
+profile). A computed step or limit still binds exactly as before.
+
 ## Pinning
 
 - `LispEvaluatorTest.evalLoopVariableKeepsLastValueAfterTermination` -- the full

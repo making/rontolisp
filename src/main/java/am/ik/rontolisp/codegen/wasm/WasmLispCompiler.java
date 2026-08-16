@@ -7838,6 +7838,15 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		int maxI64Locals = 0;
 
+		/**
+		 * The current fused site's shared i64 scratch slot for the inline literal-operand
+		 * add/sub overflow check (WasmIntFusionCompiler), allocated lazily on first use;
+		 * {@code -1} = none allocated yet. Each site emission resets it after its leaves
+		 * are evaluated (a nested site inside a leaf has its own), and the site's
+		 * watermark restore releases the slot with the rest.
+		 */
+		int fxLitTempSlot = -1;
+
 		/** The byte width of one {@link #writeI64LocalIndex} placeholder. */
 		static final int I64_LOCAL_PLACEHOLDER_WIDTH = 3;
 

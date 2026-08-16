@@ -43,6 +43,36 @@ final class WasmComparisonCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
+	/**
+	 * Compiles a CONDITION-position test as a raw i32 truth value (0 = false, non-0 =
+	 * true) when it is a binary numeric comparison the fusion compiler takes -- the
+	 * consumer ({@code while}/{@code if}) then tests the i32 directly, skipping the boxed
+	 * t/nil round trip (a {@code _t_sym} call per true evaluation). Returns {@code false}
+	 * having emitted nothing for every other shape.
+	 */
+	static boolean tryCompileConditionI32(LispVal test, WasmLispCompiler.Ctx ctx) {
+		if (!(test instanceof LispCons cons) || !cons.isProperList()
+				|| !(cons.car() instanceof am.ik.rontolisp.LispSymbol head)) {
+			return false;
+		}
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			return false;
+		}
+		int i32Opcode = switch (head.name()) {
+			case am.ik.rontolisp.LispNames.EQ -> am.ik.wasm.Instruction.I32_EQ;
+			case am.ik.rontolisp.LispNames.LT -> am.ik.wasm.Instruction.I32_LT_S;
+			case am.ik.rontolisp.LispNames.GT -> am.ik.wasm.Instruction.I32_GT_S;
+			case am.ik.rontolisp.LispNames.LE -> am.ik.wasm.Instruction.I32_LE_S;
+			case am.ik.rontolisp.LispNames.GE -> am.ik.wasm.Instruction.I32_GE_S;
+			default -> -1;
+		};
+		if (i32Opcode < 0 || WasmLispCompiler.hasDoubleLiteral(args)) {
+			return false;
+		}
+		return WasmIntFusionCompiler.tryCompileCompare(cons, ctx, i64OpcodeFor(i32Opcode), maskFor(i32Opcode), false);
+	}
+
 	private static int i64OpcodeFor(int i32Opcode) {
 		return switch (i32Opcode) {
 			case am.ik.wasm.Instruction.I32_EQ -> am.ik.wasm.Instruction.I64_EQ;

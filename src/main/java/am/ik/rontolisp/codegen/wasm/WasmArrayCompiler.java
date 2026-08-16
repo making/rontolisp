@@ -2617,6 +2617,108 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
+	/**
+	 * Compiles {@code (%replace-bulk dst src s1 s2 n)} -- the bulk-copy arm the shared
+	 * {@code %replace-runtime-array} body fronts its element loop with
+	 * ({@code LispMacroExpander.replaceDispatch}): when {@code dst} and {@code src} are
+	 * DISTINCT packed integer vectors of the SAME width, the three bounds are
+	 * non-negative i31s and both ranges are in bounds, the {@code n} elements move with
+	 * ONE {@code array.copy} and the form answers {@code t}; every other shape answers
+	 * nil having copied nothing, and the caller's loop runs. The same-object case is
+	 * deliberately declined: the loop copies forward element by element, and matching it
+	 * exactly (rather than {@code array.copy}'s memmove semantics) is what keeps an
+	 * overlapping same-array {@code replace} identical across backends. Out-of-range
+	 * bounds decline too, so the error shape stays the loop's.
+	 */
+	static void compileReplaceBulk(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		int[] slots = new int[5];
+		for (int i = 0; i < 5; i++) {
+			WasmExprCompiler.compileExpr(parts.get(i + 1), ctx);
+			slots[i] = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slots[i]);
+		}
+		int dst = slots[0];
+		int src = slots[1];
+		// block $done (result eqref) { block $fail { guards; per-width array.copy;
+		// t; br $done } } ref.null eq } -- a decline falls out of $fail to the nil.
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		// The same object must take the loop (see above).
+		getLocal(ctx, dst);
+		getLocal(ctx, src);
+		ctx.writer.write(Instruction.REF_EQ);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		// Each bound must be a non-negative i31.
+		for (int i = 2; i < 5; i++) {
+			getLocal(ctx, slots[i]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(Type.I31.code());
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.BR_IF, 0);
+			getLocal(ctx, slots[i]);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.I32_LT_S);
+			ctx.writer.write(Instruction.BR_IF, 0);
+		}
+		for (int type : new int[] { WasmLispCompiler.TYPE_I8ARR, WasmLispCompiler.TYPE_I16ARR,
+				WasmLispCompiler.TYPE_I32ARR }) {
+			getLocal(ctx, dst);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(type);
+			getLocal(ctx, src);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(type);
+			ctx.writer.write(Instruction.I32_AND);
+			ctx.writer.write(Instruction.IF, 0x40);
+			// start + n > len declines (i31 bounds cannot overflow an i32 add).
+			emitBulkBoundsGuard(ctx, dst, slots[2], slots[4], type);
+			emitBulkBoundsGuard(ctx, src, slots[3], slots[4], type);
+			getLocal(ctx, dst);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(type);
+			getLocal(ctx, slots[2]);
+			WasmEmitHelper.castI31GetS(ctx);
+			getLocal(ctx, src);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(type);
+			getLocal(ctx, slots[3]);
+			WasmEmitHelper.castI31GetS(ctx);
+			getLocal(ctx, slots[4]);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+			ctx.writer.writeUnsignedLeb128(type);
+			ctx.writer.writeUnsignedLeb128(type);
+			WasmEmitHelper.emitTrue(ctx);
+			ctx.writer.write(Instruction.BR, 2);
+			ctx.writer.write(Instruction.END);
+		}
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.END);
+	}
+
+	// [ ] -> [ ]: br_if to the enclosing $fail (depth 1, from inside the width arm's if)
+	// when start + n exceeds the packed vector's length.
+	private static void emitBulkBoundsGuard(WasmLispCompiler.Ctx ctx, int arrSlot, int startSlot, int nSlot, int type) {
+		getLocal(ctx, startSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, nSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_ADD);
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(type);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		ctx.writer.write(Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.BR_IF, 1);
+	}
+
 	// [ ] -> [i64]: data[idx] zero-extended (array.get_u for the sub-i32 widths, a plain
 	// array.get for i32 -- its element IS the raw 32 bits -- then i64.extend_i32_u).
 	private static void emitIntArrGetU(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int type) {

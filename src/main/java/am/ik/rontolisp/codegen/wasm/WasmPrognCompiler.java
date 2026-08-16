@@ -14,6 +14,23 @@ final class WasmPrognCompiler {
 	private WasmPrognCompiler() {
 	}
 
+	/**
+	 * Statement-position {@code progn} (its value is discarded): EVERY form compiles for
+	 * effect, so a tail-position store into an unboxed local or packed vector
+	 * materializes no value. An empty {@code progn} emits nothing.
+	 */
+	static void compileForEffect(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		if (ctx.asyncResume != null) {
+			compile(cons, ctx);
+			ctx.writer.write(Instruction.DROP);
+			return;
+		}
+		for (int i = 1; i < parts.size(); i++) {
+			WasmExprCompiler.compileForEffect(parts.get(i), ctx);
+		}
+	}
+
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() == 1) {

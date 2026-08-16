@@ -259,6 +259,7 @@ final class WasmIntFusionCompiler {
 		// stack on its way to $bail and recomputes generically.
 		int savedI64 = ctx.nextI64Local;
 		evalLeaves(leaves, ctx);
+		ctx.fxLitTempSlot = -1;
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.BLOCK, 0x40);
@@ -318,6 +319,18 @@ final class WasmIntFusionCompiler {
 	 * nothing) when it does not apply.
 	 */
 	static boolean tryCompileCompare(LispCons cons, WasmLispCompiler.Ctx ctx, int i64Opcode, int cmpMask) {
+		return tryCompileCompare(cons, ctx, i64Opcode, cmpMask, true);
+	}
+
+	/**
+	 * The {@code boxResult = false} variant leaves the RAW i32 truth value (0 = false,
+	 * non-0 = true) on the stack instead of boxing it into t/nil -- for CONDITION
+	 * positions ({@code while}/{@code if} tests), whose consumer immediately re-derives
+	 * an i32; the boxed form paid a {@code _t_sym} call plus a null test per loop
+	 * iteration.
+	 */
+	static boolean tryCompileCompare(LispCons cons, WasmLispCompiler.Ctx ctx, int i64Opcode, int cmpMask,
+			boolean boxResult) {
 		if (!speedTradesEnabled(ctx) || ctx.asyncResume != null) {
 			return false;
 		}
@@ -343,6 +356,7 @@ final class WasmIntFusionCompiler {
 		// then the shared i32 -> t/nil boxing.
 		int savedI64 = ctx.nextI64Local;
 		evalLeaves(leaves, ctx);
+		ctx.fxLitTempSlot = -1;
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.I32);
 		ctx.writer.write(Instruction.BLOCK, 0x40);
@@ -359,7 +373,9 @@ final class WasmIntFusionCompiler {
 		ctx.writer.writeSignedLeb128(cmpMask);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.END);
-		WasmEmitHelper.emitBoolFromI32(ctx);
+		if (boxResult) {
+			WasmEmitHelper.emitBoolFromI32(ctx);
+		}
 		ctx.nextI64Local = savedI64;
 		return true;
 	}
@@ -401,6 +417,7 @@ final class WasmIntFusionCompiler {
 		// fallback -> boxed; unbox with the store semantics } end
 		int savedI64 = ctx.nextI64Local;
 		evalLeaves(leaves, ctx);
+		ctx.fxLitTempSlot = -1;
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.I64);
 		ctx.writer.write(Instruction.BLOCK, 0x40);
@@ -469,8 +486,12 @@ final class WasmIntFusionCompiler {
 		LispVal body = singleBodyExpr(parts.subList(2, parts.size()));
 		if (body instanceof LispCons bodyCons && bodyCons.isProperList() && bodyCons.car() instanceof LispSymbol h
 				&& LispNames.BLOCK.equals(h.name())) {
+			// The block body may carry leading (declare ...) forms (ironclad's
+			// sha256-expand-block declares its flet parameters' types); they are
+			// meaningless to the classifier and skipping them is what singleBodyExpr
+			// already does for the lambda level.
 			List<LispVal> blockParts = bodyCons.toList();
-			body = blockParts.size() == 3 ? blockParts.get(2) : null;
+			body = blockParts.size() >= 3 ? singleBodyExpr(blockParts.subList(2, blockParts.size())) : null;
 		}
 		if (body == null || !isClosedIntTree(body, params, ctx)) {
 			return null;
@@ -576,6 +597,7 @@ final class WasmIntFusionCompiler {
 					&& leaves.size() <= MAX_EXPR_LEAVES) {
 				int savedI64 = ctx.nextI64Local;
 				evalLeaves(leaves, ctx);
+				ctx.fxLitTempSlot = -1;
 				// block $done { block $bail { unboxes; fast; raw store; null shadow;
 				// br $done } fallback -> shadow store } end
 				ctx.writer.write(Instruction.BLOCK, 0x40);
@@ -996,6 +1018,25 @@ final class WasmIntFusionCompiler {
 	private static Node substituteCall(List<String> params, LispVal body, List<LispVal> args, WasmLispCompiler.Ctx ctx,
 			java.util.Map<String, Node> env, Site site, int depth) {
 		List<Node> leaves = site.leaves;
+		// An accessor-shaped body -- exactly (aref P I) over parameters/literals -- maps
+		// straight onto an ArefLeaf over the CALLER's operand expressions, provided each
+		// is a bare symbol or literal at the top env (pure, so re-reading and eliding the
+		// call are unobservable). This is what lets a typed-struct accessor call
+		// ((sha256-regs-a regs), a one-line (aref s 0) defun) read a packed vector's
+		// element raw inside a fused tree instead of surviving as a boxed call leaf: the
+		// general classify below refuses aref under a non-empty env, because the
+		// slot-based ArefLeaf cannot express parameter references.
+		if (env.isEmpty() && body instanceof LispCons bodyCons && bodyCons.isProperList()
+				&& bodyCons.car() instanceof LispSymbol bodyHead && LispNames.AREF.equals(bodyHead.name())) {
+			List<LispVal> bodyParts = bodyCons.toList();
+			if (bodyParts.size() == 3) {
+				LispVal arr = inlineArefOperand(bodyParts.get(1), params, args);
+				LispVal idx = inlineArefOperand(bodyParts.get(2), params, args);
+				if (arr != null && idx != null) {
+					return registerLeaf(new ArefLeaf(arr, idx), leaves);
+				}
+			}
+		}
 		int mark = leaves.size();
 		java.util.Map<String, Node> callEnv = new java.util.HashMap<>();
 		Node substituted = null;
@@ -1018,6 +1059,28 @@ final class WasmIntFusionCompiler {
 	private static Node registerLeaf(Node leaf, List<Node> leaves) {
 		leaves.add(leaf);
 		return leaf;
+	}
+
+	/**
+	 * Resolves one operand of an accessor-shaped inlined {@code aref} body onto the
+	 * caller's expression: a literal passes through, a parameter maps to its argument
+	 * when that argument is itself a bare symbol or an integer literal (pure -- safe to
+	 * read in leaf position without an evaluation-order hazard). Anything else answers
+	 * null and the ordinary substitution path decides.
+	 */
+	@org.jspecify.annotations.Nullable
+	private static LispVal inlineArefOperand(LispVal operand, List<String> params, List<LispVal> args) {
+		if (operand instanceof LispInteger) {
+			return operand;
+		}
+		if (operand instanceof LispSymbol sym) {
+			int i = params.indexOf(sym.name());
+			if (i >= 0 && i < args.size()
+					&& (args.get(i) instanceof LispSymbol || args.get(i) instanceof LispInteger)) {
+				return args.get(i);
+			}
+		}
+		return null;
 	}
 
 	/** Counts fused operations (an n-ary node left-folds into arity - 1 binary ops). */
@@ -1251,6 +1314,16 @@ final class WasmIntFusionCompiler {
 				}
 				emitFast(op.args().get(0), ctx);
 				for (int i = 1; i < op.args().size(); i++) {
+					// A literal +/- operand: the checked op inlines as a plain i64
+					// add/sub plus ONE compare-and-bail instead of the _fx_add/_fx_sub
+					// helper call -- exact for every i64 accumulator (see
+					// emitInlineCheckedLiteral). Loop counters and aref index math
+					// ((+ i 1), (- i 15)) are this shape.
+					boolean addOrSub = LispNames.ADD.equals(op.op()) || LispNames.SUB.equals(op.op());
+					if (addOrSub && op.args().get(i) instanceof ConstLeaf c) {
+						emitInlineCheckedLiteral(LispNames.ADD.equals(op.op()), c.value(), ctx);
+						continue;
+					}
 					emitFast(op.args().get(i), ctx);
 					emitFastOp(op.op(), ctx);
 				}
@@ -1319,6 +1392,45 @@ final class WasmIntFusionCompiler {
 			}
 			default -> emitFast(node, ctx);
 		}
+	}
+
+	/**
+	 * The checked add/sub of a LITERAL operand, inline: with the accumulator {@code a} on
+	 * the i64 stack, computes {@code r = a +/- k} wrapped and bails ({@code br_if} to the
+	 * fallback, like {@code emitCheckedCall}) exactly when the infinite-precision result
+	 * left i64. The test is one signed compare of {@code r} against {@code a} (recomputed
+	 * from {@code r} by the inverse wrap op, so only one scratch local is needed): adding
+	 * a positive {@code p < 2^64} wraps iff {@code r < a}, subtracting one wraps iff
+	 * {@code r > a}, and a negative literal mirrors -- exact for EVERY i64 accumulator,
+	 * {@code Long.MIN_VALUE} literals included. {@code k = 0} emits nothing. This is the
+	 * profile-driven replacement for the {@code _fx_add}/{@code _fx_sub} helper call on
+	 * the loop-counter / index-math shape ({@code (+ i 1)}, {@code (- i 15)}), which no
+	 * literal mask covers and which paid a function call per evaluation.
+	 */
+	private static void emitInlineCheckedLiteral(boolean add, long k, WasmLispCompiler.Ctx ctx) {
+		if (k == 0) {
+			return;
+		}
+		if (ctx.fxLitTempSlot < 0) {
+			ctx.fxLitTempSlot = ctx.allocI64Temp();
+		}
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(k);
+		ctx.writer.write(add ? Instruction.I64_ADD : Instruction.I64_SUB);
+		ctx.writer.write(Instruction.TEE_LOCAL);
+		ctx.writeI64LocalIndex(ctx.fxLitTempSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(ctx.fxLitTempSlot);
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(k);
+		// The inverse op recovers a exactly (wrap-around), leaving [r, a] for the
+		// compare.
+		ctx.writer.write(add ? Instruction.I64_SUB : Instruction.I64_ADD);
+		boolean bailIfLess = add == (k > 0);
+		ctx.writer.write(bailIfLess ? Instruction.I64_LT_S : Instruction.I64_GT_S);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(ctx.fxLitTempSlot);
 	}
 
 	private static void emitFastOp(String op, WasmLispCompiler.Ctx ctx) {

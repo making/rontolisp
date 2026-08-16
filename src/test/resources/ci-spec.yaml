@@ -9864,6 +9864,38 @@ cases:
       foo|:foo|(a . b)
       abc|my-sym|my-sym
       *Foo*|A1b2-C3|foo-Bar
+  - name: typed-vector-struct-packs-and-replace-bulk
+    source: |
+      ;; A (:type (vector (unsigned-byte w))) struct is a PACKED vector: stores
+      ;; mask to the declared width, the copier is copy-seq, and the accessor
+      ;; setf inlines the aref store (.kb/defstruct.md). The replace runtime's
+      ;; array arm fronts its loop with the backend's bulk copy; the mixed-width
+      ;; and general-destination shapes must decline onto the element loop and
+      ;; answer the same thing (.kb/sequence-op-runtimes.md).
+      (defstruct (pvs (:type (vector (unsigned-byte 32))) (:constructor initial-pvs ()))
+        (a 1)
+        (b 2)
+        (c 3))
+      (defvar *pvs* (initial-pvs))
+      (setf (pvs-b *pvs*) 4294967298)
+      (print (pvs-b *pvs*))
+      (print (copy-pvs *pvs*))
+      (defvar *pv-src* (make-array 5 :element-type '(unsigned-byte 8) :initial-contents (list 9 8 7 6 5)))
+      (defvar *pv-dst* (make-array 5 :element-type '(unsigned-byte 8) :initial-element 0))
+      (replace *pv-dst* *pv-src* :start1 1 :end1 4 :start2 2)
+      (print *pv-dst*)
+      (defvar *pv32* (make-array 3 :element-type '(unsigned-byte 32) :initial-element 0))
+      (replace *pv32* *pv-src*)
+      (print *pv32*)
+      (defvar *pv-gen* (vector 0 0 0))
+      (replace *pv-gen* *pv-src* :start2 1)
+      (print *pv-gen*)
+    expected: |
+      2
+      #(1 2 3)
+      #(0 7 6 5 0)
+      #(9 8 7)
+      #(8 7 6)
 
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report

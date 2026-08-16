@@ -16,6 +16,23 @@ mechanics first, this one records only the deltas), `.kb/seq-conversion-runtime.
 `.kb/string-write-runtime.md` and `.kb/format.md`'s `%fixed-decimal`: a per-site
 expansion that grew past a few hundred bytes becomes a callee.
 
+**The bulk-copy arm (todo-413, 2026-08-16).** `%replace-runtime-array`'s element
+loop is fronted by `(%replace-bulk dst src s1 s2 n)` (`LispNames.REPLACE_BULK`,
+emitted ONLY in the narrow helper's body by `replaceDispatch`; inline
+`SeqOpArms.ALL` sites keep the plain loop): true = the n elements moved in one
+engine-level copy, nil = nothing happened and the loop runs. On the wasm-GC
+backend (`WasmArrayCompiler.compileReplaceBulk`) it fires when both sequences
+are DISTINCT packed integer vectors of the SAME width, the bounds are
+non-negative i31s and both ranges are in bounds -- then it is one `array.copy`
+-- and declines everything else so the loop keeps owning the error shape, the
+overlap-forward semantics of a same-object replace, and every mixed-width /
+general-array pair. The JVM compiles the form to constant nil (no bulk path
+yet; its element loop was never the JVM profile's problem -- `.todo/412`); the
+interpreter never sees it (native `replace`). The driver: ironclad's HMAC
+re-keys per PBKDF2 iteration, and `(replace padded-key key)` + the block fills
+put ~13% of the wasm profile into the element loop's checked-add/`_iv_set`
+machinery.
+
 ## Why these three were the last ones left
 
 `subseq`, `coerce`, `search` and `concatenate` had already become calls; these
