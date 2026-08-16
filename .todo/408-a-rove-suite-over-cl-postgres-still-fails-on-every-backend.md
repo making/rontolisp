@@ -1,7 +1,8 @@
 # 408. A rove suite over cl-postgres still fails, differently on each backend
 
-Difficulty: Low (this file is a status record and a reduction vehicle; the fixes
-live in `.todo/393`, `.todo/394` and `.todo/407`)
+Difficulty: Low (this file is a status record and a reduction vehicle; the one
+fix still outstanding lives in `.todo/393` -- the `coerce` first-class gap and
+the lexical-block-exit gap have since landed)
 
 [cl-postgres-client](https://github.com/making/cl-postgres-client) (MIT,
 cl-postgres its only runtime dependency) is a JdbcClient-style layer over
@@ -77,13 +78,16 @@ retry never completes and the assertion after it fails. Nothing on the library
 side can avoid this; it is not a test that catches an error, it is production
 code that does.
 
-### Failing on the interpreter -- `.todo/407`
+### Failing on the interpreter -- FIXED, re-measure
 
-Every remaining interpreter failure is the `return`-out-of-a-`handler-bind`-
+Every remaining interpreter failure was the `return`-out-of-a-`handler-bind`-
 handler bug: `(ok (signals ... 'some-error))` where the code under test raises
 from inside a `loop`/`dolist`, plus `do-rows`' documented early exit
 (`(do-rows (row ...) (when ... (return row)))`), which is a USER-VISIBLE break
-of the library's API and not only of its tests.
+of the library's API and not only of its tests. The interpreter now resolves a
+block exit LEXICALLY like the compile path (`.kb/do-return-block.md`), so this
+whole group should be gone -- **the suite has not been re-run since**; that is
+the next step on this file.
 
 ### Failing on the JVM -- unexplained, related to `.todo/207`
 
@@ -106,7 +110,8 @@ system, both compile and answer correctly on the JVM. So neither the shape nor
 the splice alone is the trigger, exactly as 207 records.
 
 The fifth JVM failure is `do-rows` + `return`, which the component passes -- so
-whatever 407 is on the interpreter has a JVM-side twin in this path.
+the interpreter's (now fixed) lexical-block-exit gap has a JVM-side twin in this
+path, and the JVM one is NOT the same bug.
 
 ## Two things this cost that are worth writing down
 
