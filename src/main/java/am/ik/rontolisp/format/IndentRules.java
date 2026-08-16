@@ -61,6 +61,10 @@ public final class IndentRules {
 			rules.put(name, Style.body(2, 2));
 		}
 		rules.put("defmethod", Style.defmethod());
+		// rove's (defhook NAME :before body...): the hook name AND the phase keyword are
+		// the header. The def* convention would read only the name as one, stranding the
+		// keyword at the body indent.
+		rules.put("defhook", Style.body(2, 2));
 		// One distinguished argument, then a body at 2.
 		for (String name : List.of("lambda", "async-lambda", "when", "unless", "while", "block", "catch",
 				"unwind-protect", "prog1", "multiple-value-prog1", "dolist", "dotimes", "do-symbols",
@@ -75,14 +79,23 @@ public final class IndentRules {
 				// the distinguished argument. It has no with-/do- prefix, so the naming
 				// convention would read it as a call and align the whole body under the
 				// collector list.
-				"while-collecting")) {
+				"while-collecting",
+				// rove's (testing "description" assertions...) and its expected-failure
+				// twin (failing "why" assertions...). The description is the
+				// distinguished argument; laid out as a call, every assertion in the
+				// block would align under the description STRING's own width. `deftest`
+				// needs no entry -- the def* convention already reads its shape -- and
+				// neither do `ok`/`ng`/`signals`, which take arguments.
+				"testing", "failing")) {
 			rules.put(name, Style.body(1, 2));
 		}
 		// No distinguished argument: every subform is a body form. (uiop:nest FORM...)
 		// is the extreme case -- it exists precisely to flatten nesting, so laying it
 		// out as a call would undo what the writer used it for.
 		for (String name : List.of("progn", "locally", "tagbody", "ignore-errors", "time", "with-standard-io-syntax",
-				"nest")) {
+				"nest",
+				// rove's per-suite (setup body...) / (teardown body...).
+				"setup", "teardown")) {
 			rules.put(name, Style.body(0, 2));
 		}
 		// Operator plus operands or options -- no body, so a short one stays on one line

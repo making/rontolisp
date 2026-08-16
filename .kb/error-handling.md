@@ -976,7 +976,17 @@ already. `--no-gc` is the one exception and keeps the historical lite lowering.
     handler-case catches first (the pad is outside it) while the interpreter
     runs them (its seam is at the built-in, below the handler-case); CL agrees
     with the compiled backends here. Re-evaluate (3) if handler-case ever
-    joins the cluster stack.
+    joins the cluster stack. **(3) has a real victim now (`.todo/393`)**: for a
+    SIGNALED condition EVERY backend runs the enclosing `handler-bind` handler
+    even though the nearer `handler-case` is the one that handles it, and rove
+    records a failing test by transferring control out of exactly such a
+    handler -- so a rove test over code that catches its own error (a parse
+    with a fallback) is reported as "Raise an error while testing." and ends
+    there. The inner handler-case still wins the control transfer, so a program
+    that only READS the value is unaffected; what breaks is an outer handler
+    that exits. Documented as a limitation in `doc/{en,ja}/guides/testing.md`,
+    and `examples/cloudflare-workers/httpbin/check.lisp` drives its probes
+    ahead of the suite because of it.
   - Pinned by `handlerBindSeesTheErrorABuiltInRaises` /
     `handlerBindSeesAnUndefinedFunctionError` /
     `handlerBindRunsEachClusterOnceForABuiltInErrorInnermostFirst` /

@@ -102,6 +102,33 @@ process on every backend — so a CI gate is one line at the end of the program:
 (uiop:quit (if (rove:run :my-app/tests) 0 1))
 ```
 
+## Examples that check themselves
+
+Three examples in this repository are written this way, and the example harness
+runs them on every backend — copy whichever shape fits:
+
+| Example | Shape |
+| --- | --- |
+| [`examples/console/roman.lisp`](https://github.com/making/rontolisp/blob/develop/examples/console/roman.lisp) | A program that prints its demo and then asserts what it printed |
+| [`examples/cloudflare-workers/httpbin/check.lisp`](https://github.com/making/rontolisp/blob/develop/examples/cloudflare-workers/httpbin/check.lisp) | A driver: it `load`s the program under test, exercises it and asserts the parsed answers |
+| [`examples/browser/minesweeper/minesweeper-core-test.lisp`](https://github.com/making/rontolisp/blob/develop/examples/browser/minesweeper/minesweeper-core-test.lisp) | A test file beside a program that cannot run head-less, over the rendering-free core it shares |
+
+None of them defines a package or an ASDF system. For a single file,
+`(use-package :rove)` in `cl-user` plus `run-suite *package*` at the end is the
+whole of it:
+
+```console
+(asdf:load-system :rove)
+(use-package :rove)
+(setf *enable-colors* nil)
+
+(deftest arithmetic
+  (testing "adding two integers"
+    (ok (= (add 1 2) 3))))
+
+(uiop:quit (if (run-suite *package*) 0 1))
+```
+
 ## Limitations
 
 - **A raw WASM trap ends the run.** On the interpreter and the JVM a test body
@@ -122,3 +149,10 @@ process on every backend — so a CI gate is one line at the end of the program:
   `rove/reporter/none` itself — `make-reporter` loads an unknown style's system
   at run time, which only the interpreter can do. `:spec` (the default) and
   `:dot` are built in.
+- **A `handler-case` inside a test body does not shadow rove's recorder.** rove
+  wraps each test body in a `handler-bind`, and an intervening `handler-case`
+  does not yet stop that outer handler from running — so code under test that
+  catches its own error (a parse with a fallback, say) is reported as "Raise an
+  error while testing." and the test ends there, on every backend. Drive such
+  code *before* the test and assert the value it returned;
+  `cloudflare-workers/httpbin/check.lisp` above does exactly that.

@@ -102,6 +102,32 @@ WASM の実行は両方とも `-W exceptions=y` が必要です: rove は失敗�
 (uiop:quit (if (rove:run :my-app/tests) 0 1))
 ```
 
+## 自分自身を検査するサンプル
+
+このリポジトリのサンプル 3 本がこの形で書かれており、サンプル用のハーネスが
+すべてのバックエンドで実行します — 合う形をコピーしてください:
+
+| サンプル | 形 |
+| --- | --- |
+| [`examples/console/roman.lisp`](https://github.com/making/rontolisp/blob/develop/examples/console/roman.lisp) | デモを印字したうえで、印字した内容そのものをアサートするプログラム |
+| [`examples/cloudflare-workers/httpbin/check.lisp`](https://github.com/making/rontolisp/blob/develop/examples/cloudflare-workers/httpbin/check.lisp) | ドライバ: 対象プログラムを `load` し、実行し、パース済みの応答をアサートする |
+| [`examples/browser/minesweeper/minesweeper-core-test.lisp`](https://github.com/making/rontolisp/blob/develop/examples/browser/minesweeper/minesweeper-core-test.lisp) | ヘッドレスで動かせないプログラムの隣に置いたテストファイル。共有している描画抜きのコアを対象にする |
+
+いずれもパッケージも ASDF システムも定義していません。1 ファイルなら、`cl-user`
+での `(use-package :rove)` と末尾の `run-suite *package*` だけで足ります:
+
+```console
+(asdf:load-system :rove)
+(use-package :rove)
+(setf *enable-colors* nil)
+
+(deftest arithmetic
+  (testing "adding two integers"
+    (ok (= (add 1 2) 3))))
+
+(uiop:quit (if (run-suite *package*) 0 1))
+```
+
 ## 制限事項
 
 - **WASM の生トラップは実行を終わらせます。** インタプリタと JVM では `(car 1)`
@@ -123,3 +149,11 @@ WASM の実行は両方とも `-W exceptions=y` が必要です: rove は失敗�
   `rove/reporter/none` をロードする必要があります — `make-reporter` は未知の
   スタイルのシステムを実行時にロードし、それができるのはインタプリタだけです。
   `:spec` (デフォルト) と `:dot` は組み込みです。
+- **テスト本体の内側の `handler-case` は rove の記録機構を覆い隠しません。**
+  rove は各テスト本体を `handler-bind` で包みますが、その内側の `handler-case`
+  はまだ外側のハンドラの起動を止められません — したがって、自分でエラーを
+  捕捉するコード (フォールバック付きのパースなど) をテストすると、どの
+  バックエンドでも "Raise an error while testing." として報告され、そこで
+  テストが終わります。そうしたコードはテストの**前**に実行し、返ってきた値を
+  アサートしてください。上記の `cloudflare-workers/httpbin/check.lisp` が
+  まさにその形です。

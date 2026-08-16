@@ -10,12 +10,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.dataformat.yaml.YAMLMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,8 +59,11 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * </ul>
  * When {@code expect} is omitted the baseline check is "exit 0 and non-empty
  * output".</li>
- * <li>{@code systemPath} -- directory added as {@code --system-path} (ASDF
- * registry).</li>
+ * <li>{@code systemPath} -- directory (or LIST of directories) added as
+ * {@code --system-path}, the ASDF source registry. Each element is resolved against the
+ * project directory and they are joined with the platform path separator, so a system
+ * whose dependencies are vendored side by side (rove needs rove + dissect + cl-ppcre)
+ * names them all. Passed to the interpreter leg as well as the compiling ones.</li>
  * <li>{@code workDir} -- sub-directory under {@code examples/} the process runs from
  * (default: none, i.e. the throwaway workdir itself). Set it when the script's
  * CWD-relative reads are written against a book root (e.g.
@@ -113,6 +119,10 @@ class ExamplesE2eTest {
 	/** Per-process wall-clock cap; the slowest interpreter examples take ~20s. */
 	private static final long TIMEOUT_SECONDS = 240;
 
+	private static final YAMLMapper MAPPER = YAMLMapper.builder()
+		.enable(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY)
+		.build();
+
 	enum Backend {
 
 		// RUN backends run the program; COMPILE backends only build it (see verify()).
@@ -141,8 +151,8 @@ class ExamplesE2eTest {
 	}
 
 	record Example(String path, List<String> backends, @Nullable List<String> args, @Nullable String stdin,
-			@Nullable String stdinFile, @Nullable Expect expect, @Nullable String systemPath, @Nullable String workDir,
-			@Nullable List<String> workFiles, @Nullable String note) {
+			@Nullable String stdinFile, @Nullable Expect expect, @Nullable List<String> systemPath,
+			@Nullable String workDir, @Nullable List<String> workFiles, @Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
@@ -150,6 +160,69 @@ class ExamplesE2eTest {
 	}
 
 	record Manifest(List<Example> examples) {
+	}
+
+	/**
+	 * The manifest's {@code systemPath} takes one directory or a LIST of them, and each
+	 * element is absolutized SEPARATELY before they are joined.
+	 * <p>
+	 * {@code --system-path} is a {@link File#pathSeparator}-joined list
+	 * ({@code RontoLispCli.systemPath}), so writing {@code "a:b"} as a single path used
+	 * to absolutize only {@code a} and leave {@code b} resolving against the throwaway
+	 * working directory the leg runs in -- silently, as a system that is simply not
+	 * found. rove needs three directories (rove, dissect, cl-ppcre), which is what forced
+	 * the list; the single-directory spelling is still what most entries use.
+	 * <p>
+	 * Needs neither the examples opt-in nor a driver, so it runs in a plain
+	 * {@code mvn test}.
+	 * @throws Exception if the inline manifest cannot be parsed
+	 */
+	@Test
+	void systemPathTakesOneDirectoryOrAList() throws Exception {
+		Manifest manifest = MAPPER.readValue("""
+				examples:
+				  - path: one.lisp
+				    backends: [interpreter]
+				    systemPath: src/test/resources/cl-who
+				  - path: many.lisp
+				    backends: [interpreter]
+				    systemPath:
+				      - src/test/resources/rove
+				      - src/test/resources/dissect
+				  - path: none.lisp
+				    backends: [interpreter]
+				""", Manifest.class);
+		Example one = manifest.examples().get(0);
+		Example many = manifest.examples().get(1);
+		Example none = manifest.examples().get(2);
+
+		assertThat(systemPathFlags(one)).containsExactly("--system-path",
+				PROJECT_DIR.resolve("src/test/resources/cl-who").toString());
+		assertThat(systemPathFlags(many)).containsExactly("--system-path",
+				PROJECT_DIR.resolve("src/test/resources/rove") + File.pathSeparator
+						+ PROJECT_DIR.resolve("src/test/resources/dissect"));
+		assertThat(systemPathFlags(none)).isEmpty();
+	}
+
+	/**
+	 * Every directory the real manifest names actually exists: a mistyped one would
+	 * otherwise surface only as "system not found" inside an opt-in leg nobody runs
+	 * locally.
+	 * @throws Exception if the manifest cannot be read
+	 */
+	@Test
+	void everySystemPathDirectoryInTheManifestExists() throws Exception {
+		assumeTrue(Files.isRegularFile(MANIFEST), () -> "manifest not found: " + MANIFEST);
+		for (Example example : loadManifest().examples()) {
+			if (example.systemPath() == null) {
+				continue;
+			}
+			for (String dir : example.systemPath()) {
+				assertThat(PROJECT_DIR.resolve(dir))
+					.as("%s declares a systemPath directory that does not exist: %s", example.path(), dir)
+					.isDirectory();
+			}
+		}
 	}
 
 	@TestFactory
@@ -224,7 +297,12 @@ class ExamplesE2eTest {
 		List<String> flags = systemPathFlags(example);
 		switch (backend) {
 			case INTERPRETER -> {
-				Result run = exec(runDir, concat(driver, concat(List.of(src), args)), stdin);
+				// The flags come BEFORE the program's own arguments: the CLI takes one
+				// positional (the input file), so an option written after them would be
+				// read as a second one. An interpreted example needs --system-path just
+				// as much as a compiled one -- asdf:load-system resolves the .asd at run
+				// time here.
+				Result run = exec(runDir, concat(driver, concat(concat(List.of(src), flags), args)), stdin);
 				assertRan(run, example, "interpreter");
 			}
 			case JVM -> {
@@ -444,17 +522,40 @@ class ExamplesE2eTest {
 		}
 	}
 
-	private static List<String> systemPathFlags(Example example) {
-		if (example.systemPath() == null || example.systemPath().isBlank()) {
+	/**
+	 * The {@code --system-path} flag pair for an example's {@code systemPath}, or nothing
+	 * when it declares none.
+	 * <p>
+	 * {@code --system-path} takes a {@link File#pathSeparator}-joined LIST of directories
+	 * ({@code RontoLispCli.systemPath}), and each element is resolved against the project
+	 * directory separately -- the leg runs from a throwaway working directory, so a
+	 * relative element would otherwise resolve against that. Joining first and
+	 * absolutizing the result would only absolutize the first element; rove needs three
+	 * directories, which is why the manifest field is a list.
+	 * @param example the manifest entry
+	 * @return {@code ["--system-path", "<abs>:<abs>:..."]}, or an empty list
+	 */
+	static List<String> systemPathFlags(Example example) {
+		List<String> declared = example.systemPath();
+		if (declared == null || declared.isEmpty()) {
 			return List.of();
 		}
-		// Resolve against the project dir so it works from the throwaway work dir.
-		Path abs = PROJECT_DIR.resolve(example.systemPath()).toAbsolutePath();
-		return List.of("--system-path", abs.toString());
+		String joined = declared.stream()
+			.filter(dir -> !dir.isBlank())
+			.map(dir -> PROJECT_DIR.resolve(dir).toAbsolutePath().toString())
+			.collect(Collectors.joining(File.pathSeparator));
+		return joined.isEmpty() ? List.of() : List.of("--system-path", joined);
 	}
 
+	/**
+	 * Reads {@code examples.yaml}. {@code ACCEPT_SINGLE_VALUE_AS_ARRAY} is what lets a
+	 * one-directory {@code systemPath} keep its scalar spelling now that the field is a
+	 * list.
+	 * @return the parsed manifest
+	 * @throws IOException if the manifest cannot be read
+	 */
 	private static Manifest loadManifest() throws IOException {
-		return new YAMLMapper().readValue(Files.readString(MANIFEST), Manifest.class);
+		return MAPPER.readValue(Files.readString(MANIFEST), Manifest.class);
 	}
 
 	private static List<String> concat(List<String> a, List<String> b) {

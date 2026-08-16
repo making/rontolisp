@@ -39,7 +39,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`parse-numbers.lisp`](console/parse-numbers.lisp) | `parse-integer` and character classification over file lines |
 | [`sieve.lisp`](console/sieve.lisp) | Sieve of Eratosthenes over a boolean array, plus prime factorization |
 | [`hanoi.lisp`](console/hanoi.lisp) | Tower of Hanoi, in a printing and a list-returning variant |
-| [`roman.lisp`](console/roman.lisp) | Roman numerals both ways, with a full 3999-value round-trip check |
+| [`roman.lisp`](console/roman.lisp) | Roman numerals both ways, and an example that **checks itself**: the full 3999-value round-trip is a [rove](#an-example-that-checks-itself) assertion |
 | [`word-frequency.lisp`](console/word-frequency.lisp) | Hash-table accumulation, custom-comparator `sort`, `maphash` |
 | [`contact-book.lisp`](console/contact-book.lisp) | `defstruct` with `setf`-able accessors and `&key` lambda lists |
 | [`error-handling.lisp`](console/error-handling.lisp) | Typed conditions on a bank account: `define-condition`, `handler-case` dispatch by class, `ignore-errors`, `unwind-protect`, non-fatal `signal`. **Interpreter/JVM only** |
@@ -126,7 +126,7 @@ needs no glue at all. Each directory has its own README.
 | [`wit-component/`](browser/wit-component) | The first rontolisp component in a browser: a Mandelbrot/Julia explorer whose page supplies *nothing* — no `instantiate`, no import object, no WASI shim, no `(ptr, len)` decoding. A WIT world types the exports and `jco transpile` produces one self-contained ES module |
 | [`rainbow/`](browser/rainbow) | HSV↔RGB and shortest-arc hue interpolation in Lisp, behind one `rainbow-html(string) -> string` export |
 | [`wasm-browser/`](browser/wasm-browser) | The plumbing: running a rontolisp `.wasm` from plain HTML + JavaScript, stdin included |
-| [`minesweeper/`](browser/minesweeper) | A playable Minesweeper whose rules live in a `minesweeper-core.lisp` shared with the Swing build |
+| [`minesweeper/`](browser/minesweeper) | A playable Minesweeper whose rules live in a `minesweeper-core.lisp` shared with the Swing build — and checked head-less by [`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp) |
 | [`hiragana/`](browser/hiragana) | A 46-class handwriting recognizer: the ch07 SimpleConvNet trained offline on Kuzushiji-49, its weights read back at startup, driven from a `<canvas>` |
 | [`webgl-triangle/`](browser/webgl-triangle) | The WebGL hello world and the smallest `rontolisp:wasm-import` program: ten imported host functions, no exports, no frame loop |
 | [`webgl-cube/`](browser/webgl-cube) | Hello 3D: perspective and rotation matrices computed in Lisp every frame; bulk floats cross through a staging array |
@@ -179,6 +179,48 @@ java -jar $JAR examples/console/line-numbers.lisp -o ln.wasm
 wasmtime run -W gc --dir . ln.wasm
 ```
 
+## An example that checks itself
+
+Most examples print a result and leave the checking to
+[`examples.yaml`](examples.yaml). Three of them do it in the Lisp instead, with
+[rove](../doc/en/guides/testing.md) — the shape to copy when what you are
+writing has a right answer rather than only an output:
+
+| File | What it asserts |
+| --- | --- |
+| [`console/roman.lisp`](console/roman.lisp) | The demo prints its tables, then asserts the encodings, the out-of-range errors and the whole 1..3999 round-trip |
+| [`cloudflare-workers/httpbin/check.lisp`](cloudflare-workers/httpbin/check.lisp) | Drives the Worker's `handle-request` over six requests and asserts the **parsed** reply, field by field |
+| [`browser/minesweeper/minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp) | A test file beside a GUI example: its rules live in a rendering-free core, so they can be checked head-less |
+
+The recipe is four lines. Load rove, silence its ANSI colors, write `deftest`s,
+and make the verdict the exit code:
+
+```lisp
+(asdf:load-system :rove)
+(use-package :rove)
+(setf *enable-colors* nil)
+
+(deftest arithmetic
+  (testing "adding two integers"
+    (ok (= (add 1 2) 3))))
+
+(uiop:quit (if (run-suite *package*) 0 1))
+```
+
+rove is vendored in this repository, so its three directories go on
+`--system-path` and nothing is downloaded; outside it, `(ql:quickload "rove")`
+fetches the same sources. The systems are spliced in at compile time, so the
+compiled class / module is self-contained:
+
+```bash
+SP=src/test/resources/rove:src/test/resources/dissect:src/test/resources/cl-ppcre
+java -jar $JAR examples/console/roman.lisp --system-path $SP
+```
+
+Both WASM runs need `-W exceptions=y`: rove records a failing test through
+`handler-bind`. The full story — the entry points, the exit code, and what does
+not work — is the [Testing guide](../doc/en/guides/testing.md).
+
 ## Verifying every non-GUI example at once
 
 [`examples.yaml`](examples.yaml) lists each non-GUI example and the backends it
@@ -192,7 +234,9 @@ Each entry declares its `args` / `stdin` and one `expect`: `equals` (stdout
 matches this text), `file` (matches a file under `examples/`), `contains`
 (every listed substring appears) or `skip: true`. Omitting `expect` means "exit
 0 and non-empty output". `equals`/`file` are checked against **all** run
-backends, so a per-backend divergence is a real failure.
+backends, so a per-backend divergence is a real failure. An example that loads
+an ASDF system names its directory — or, like the rove ones above, the LIST of
+directories — under `systemPath`.
 
 The suite is opt-in, so a plain `./mvnw test` skips it:
 
@@ -211,4 +255,7 @@ the whole suite.
 Adding an example means appending an entry to `examples.yaml` — no Java changes.
 To regenerate an externalised expected file, run the example and save its
 stdout. GUI examples (`jvm/` and the `browser/` demos) are excluded: they open a
-window or run in a page and cannot be checked headless.
+window or run in a page and cannot be checked headless — though the part of one
+that is not GUI can be, which is what
+[`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp)
+is.

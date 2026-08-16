@@ -171,6 +171,14 @@ laid out as a CALL aligns its whole body under its first argument, so one
 `usocket:with-server-socket` pushes everything inside it thirty columns right and
 every line of it past the margin.
 
+The table therefore also carries THIRD-PARTY body-taking operators, whenever one
+of them shows up in a checked-in `.lisp`: uiop's `with-deprecation` /
+`while-collecting`, alexandria's `if-let` / `when-let`, and rove's `testing` /
+`failing` (a description then a body), `setup` / `teardown` (a body) and
+`defhook` (a name AND a phase keyword, then a body). rove's `deftest` needs no
+entry -- the `def*` guess below already reads its shape -- and neither do
+`ok` / `ng` / `signals`, whose trailing forms are arguments.
+
 `def*` is the one guess that is not made from the name alone, because the name does
 not carry the answer. A definition macro has two shapes -- `(define-get "/x" (req)
 BODY)` wants `defun`'s two distinguished arguments, alexandria's `(deftest NAME

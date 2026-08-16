@@ -103,6 +103,13 @@ Internal helpers outside the public API are `%`-prefixed (e.g. `%remf-tail`).
 `#'+`/`#'car` work as first-class values -- internal encoding, not a real user
 definition (Lisp-2).
 
+**A CL FUNCTION with an operator-position case and no wrapper is a bug, not a
+choice (`.todo/394`)**: `#'coerce` / `#'elt` answer "The function COERCE is
+undefined" on every backend, and the consumer is not only `mapcar` -- rove's
+`form-inspect` rewrites every non-macro form inside an `ok` into
+`(apply #'op args)`, so an assertion mentioning one dies as a recorded error.
+The sweep (which CL names have a case but no wrapper) is the todo.
+
 **The invariant a wrapper must not break: a wrapper's arity is the OPERATOR's
 arity, not the shape that was convenient to write.** The body puts the operator
 in call position, where the backends inline it -- so anything the operator

@@ -38,7 +38,7 @@ curl         http://localhost:8787/nope                   # 404
 | File | Purpose |
 | --- | --- |
 | [`worker.lisp`](worker.lisp) | **The whole program**: the endpoints plus the reactor adapter |
-| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop |
+| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and a [rove](../../../doc/en/guides/testing.md) suite: every answer it expects is an assertion, and the run's exit code is the verdict |
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`. The one **hand-written** host left in these directories — see below |
 | `src/worker.wasm` | A build product — run `./build.sh` first |
 
@@ -249,17 +249,23 @@ Lisp heap cannot be trusted afterwards.
 
 `handle-request` is an ordinary function of a string, adapter included, so the
 whole loop can happen on the interpreter — and identically on the other
-backends, which is what keeps the handler honest:
+backends, which is what keeps the handler honest. `check.lisp` prints each
+exchange *and* asserts it with rove, so a drifted answer exits non-zero instead
+of quietly no longer looking right; rove is vendored in this repository, hence
+the three directories on `--system-path`:
 
 ```bash
-rontolisp check.lisp
-rontolisp check.lisp -o Check.class && java -cp . Check
-rontolisp check.lisp -o check.wasm --optimize && wasmtime run -W gc -W exceptions=y check.wasm
+SP=src/test/resources/rove:src/test/resources/dissect:src/test/resources/cl-ppcre
+rontolisp check.lisp --system-path $SP
+rontolisp check.lisp --system-path $SP -o Check.class && java -cp . Check
+rontolisp check.lisp --system-path $SP -o check.wasm --optimize && \
+  wasmtime run -W gc -W exceptions=y check.wasm
 ```
 
-Expect one difference when comparing those outputs: the **order of keys inside a
-JSON object differs between backends**, because it follows hash-table iteration
-order. The values are identical.
+Expect one difference when comparing the printed exchanges: the **order of keys
+inside a JSON object differs between backends**, because it follows hash-table
+iteration order. The values are identical — which is why the assertions read
+the reply as parsed data rather than as text.
 
 ## Limitations
 

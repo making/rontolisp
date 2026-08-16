@@ -145,7 +145,10 @@ module's start section inside `instantiate`.
 
 The Lisp in every one of these is an ordinary function, so the whole edit/run
 loop happens locally: every directory with a handler has a `check.lisp` that
-drives it on the interpreter, the JVM and wasmtime.
+drives it on the interpreter, the JVM and wasmtime. `httpbin/`'s goes one step
+further and asserts each answer with
+[rove](../../doc/en/guides/testing.md), so it exits non-zero when the handler
+drifts — which is why that one needs rove's directories on `--system-path`.
 `httpbin-clack-one-source/` needs none — its program IS
 `../net/httpbin-clack.lisp`, so its loop is serving that file and `curl`; and
 `dog-fetcher/` and `btc-ticker/` cannot have one, because their HTTP client is

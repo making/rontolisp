@@ -1,12 +1,27 @@
 ;;;; Roman numeral encoder and decoder in rontolisp
-;;;; Demonstrates association lists, string concatenation, recursion,
-;;;; and a round-trip correctness check over all 3999 values.
+;;;; Demonstrates association lists, string concatenation, recursion -- and an
+;;;; example that CHECKS ITSELF: the 1..3999 round-trip is a rove assertion, so
+;;;; a broken encoder fails the run instead of printing a line nobody reads.
 ;;;; Runs on all three backends (interpreter / JVM / WASM).
 ;;;;
+;;;; rove is loaded with asdf, so pass the directories holding its .asd files
+;;;; (rove, dissect and cl-ppcre, all vendored in this repository) with
+;;;; --system-path; outside this repository (ql:quickload "rove") fetches the
+;;;; same sources instead. The compile paths splice the system in at compile
+;;;; time, so the produced class / module is self-contained. See the Testing
+;;;; guide: doc/en/guides/testing.md
+;;;;
 ;;;; Run:
-;;;;   rontolisp examples/console/roman.lisp
-;;;;   rontolisp examples/console/roman.lisp -o Roman.class && java Roman
-;;;;   rontolisp examples/console/roman.lisp -o roman.wasm && wasmtime run -W gc roman.wasm
+;;;;   SP=src/test/resources/rove:src/test/resources/dissect:src/test/resources/cl-ppcre
+;;;;   rontolisp examples/console/roman.lisp --system-path $SP
+;;;;   rontolisp examples/console/roman.lisp --system-path $SP -o Roman.class && java Roman
+;;;;   rontolisp examples/console/roman.lisp --system-path $SP -o roman.wasm && \
+;;;;     wasmtime run -W gc -W exceptions=y roman.wasm
+
+(asdf:load-system :rove)
+(use-package :rove)
+;; rove colors its report for a terminal; a checked pipeline wants plain text.
+(setf *enable-colors* nil)
 
 ;;; Mapping of integer values to Roman numeral strings, sorted descending.
 (defparameter *roman-values*
@@ -47,6 +62,8 @@
           (setq last current))))
     result))
 
+;;; --- the demonstration ------------------------------------------------------
+
 (format t "Integer -> Roman:~%")
 (dolist (n '(1 4 9 14 42 99 399 400 999 1999 2024 3999))
   (format t "  ~4d -> ~a~%" n (integer-to-roman n)))
@@ -55,11 +72,45 @@
 (dolist (s '("I" "IV" "IX" "XIV" "XLII" "XCIX" "CMXCIX" "MCMXCIX" "MMXXIV"))
   (format t "  ~-6s -> ~a~%" s (roman-to-integer s)))
 
-(format t "~%Round-trip check (1..3999):~%")
-(let ((all-match t))
-  (dotimes (i 3999)
-    (let ((n (1+ i)))
-      (when (not (= n (roman-to-integer (integer-to-roman n))))
-        (format t "  MISMATCH at ~d!~%" n)
-        (setq all-match nil))))
-  (when all-match (format t "  All 3999 round-trips passed!~%")))
+(terpri)
+
+;;; --- the assertions ---------------------------------------------------------
+
+(deftest encoding
+  (testing "the subtractive pairs and the extremes"
+    (ok (string= (integer-to-roman 1) "I"))
+    (ok (string= (integer-to-roman 4) "IV"))
+    (ok (string= (integer-to-roman 400) "CD"))
+    (ok (string= (integer-to-roman 3999) "MMMCMXCIX")))
+  (testing "out of range"
+    (ok (signals (integer-to-roman 0)))
+    (ok (signals (integer-to-roman 4000)))))
+
+(deftest decoding
+  (testing "a smaller numeral before a larger one subtracts"
+    (ok (= (roman-to-integer "MCMXCIX") 1999))
+    (ok (= (roman-to-integer "XLII") 42)))
+  (testing "lowercase is accepted" (ok (= (roman-to-integer "mmxxiv") 2024)))
+  (testing "an unknown character is an error"
+    (ok (signals (roman-to-integer "MMZ")))))
+
+;;; The whole point of the pair: every value in range survives the trip out and
+;;; back. Reported as ONE assertion carrying the first counter-example, so a
+;;; broken encoder names the value it broke on instead of printing 3999 lines.
+(deftest round-trip
+  (testing "every integer 1..3999 encodes and decodes back to itself"
+    (let ((mismatch nil))
+      (dotimes (i 3999)
+        (let ((n (1+ i)))
+          (when (and (null mismatch)
+                     (/= n (roman-to-integer (integer-to-roman n))))
+            (setq mismatch n))))
+      (ok (null mismatch)
+          (if mismatch
+              (format nil "first mismatch at ~d" mismatch)
+              "all 3999 round-trips")))))
+
+;;; Loading this file runs its suite (rove's file-driven entry point), and the
+;;; exit code is the verdict -- which is what makes a broken example fail a
+;;; build instead of scrolling past.
+(uiop:quit (if (run-suite *package*) 0 1))

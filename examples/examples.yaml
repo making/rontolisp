@@ -38,7 +38,12 @@
 #                omit expect entirely -> baseline "exit 0 and non-empty output".
 #                equals/file are compared against ALL run backends, so a per-backend
 #                divergence is a real failure.
-#   systemPath   directory added as --system-path (ASDF source registry)
+#   systemPath   directory -- or a LIST of directories -- added as
+#                --system-path (the ASDF source registry). Each element is
+#                resolved against the repository root and they are joined with
+#                the platform path separator, so a system whose dependencies
+#                are vendored side by side (rove needs rove + dissect +
+#                cl-ppcre) names them all. Passed to the interpreter leg too.
 #   workDir      sub-dir under examples/ the process runs from (default: none,
 #                i.e. the throwaway workdir itself). Set it when the script's
 #                CWD-relative reads assume a book root (e.g. deep-learning-from-
@@ -54,10 +59,12 @@
 #
 # GUI examples (jvm/, minesweeper, rainbow/, the webgl-*/ and other browser
 # demos) are intentionally absent: they open a window or run in a page and
-# cannot be checked headless. The one exception is browser/wit-component, whose
-# Lisp half is a pure-compute module with no host imports: its jco/browser half
-# cannot run here, but its COMPILE leg can, and that is what pins its WIT world
-# against the program.
+# cannot be checked headless. Two exceptions, both for the same reason -- the
+# part that is not GUI: browser/wit-component's Lisp half is a pure-compute
+# module with no host imports, so its COMPILE leg pins its WIT world against the
+# program even though its jco/browser half cannot run here; and
+# browser/minesweeper's rules live in a rendering-free core, which
+# minesweeper-core-test.lisp loads and checks with rove.
 
 examples:
   # --- console: pure, cross-backend algorithms & I/O -------------------------
@@ -117,8 +124,26 @@ examples:
         letters=9 digits=6
   - path: console/roman.lisp
     backends: [interpreter, jvm, wasm]
+    systemPath: [src/test/resources/rove, src/test/resources/dissect, src/test/resources/cl-ppcre]
+    note: >-
+      the example CHECKS ITSELF with rove: the 1..3999 round-trip and the
+      known encodings/decodings are assertions, and the file ends with
+      (uiop:quit (if (run-suite *package*) 0 1)) -- so a broken encoder exits
+      non-zero and fails this leg instead of printing a line nobody reads. The
+      needles are the demo tables and rove's summary only; the per-assertion
+      lines print the forms, which spell symbols package-qualified until
+      .todo/391 lands, and rove appends a "(Nms)" duration to any assertion
+      slower than 37ms.
     expect:
-      file: .expected/roman.txt
+      contains:
+        - "Integer -> Roman:"
+        - "     1 -> I"
+        - "   400 -> CD"
+        - "  3999 -> MMMCMXCIX"
+        - "Roman -> Integer:"
+        - '  "MCMXCIX" -> 1999'
+        - "✓ 3 tests completed"
+        - "All 3 tests passed."
   - path: console/sieve.lisp
     backends: [interpreter, jvm, wasm]
     expect:
@@ -373,6 +398,25 @@ examples:
     backends: [no-gc, wasm-component]
     note: implements count_vowels_component.wit via rontolisp:wit-export -- the world is the export list, so this also pins the contract check on both component paths (the README builds it --no-gc --component; the wasm-component backend here exercises the wasm-GC lowering of the same world). Host-invoked (wasmtime run --invoke 'count-vowels("Hello, World!")' -> 3), so the harness only compiles
 
+  # --- browser/minesweeper: the rules of a GUI example, checked head-less -----
+  - path: browser/minesweeper/minesweeper-core-test.lisp
+    backends: [interpreter, jvm, wasm]
+    systemPath: [src/test/resources/rove, src/test/resources/dissect, src/test/resources/cl-ppcre]
+    note: >-
+      the two minesweeper front-ends (browser/WASM and Swing) open a window and
+      are excluded like every other GUI example, but the rules they share --
+      minesweeper-core.lisp, a pure state machine that touches neither screen nor
+      entropy -- are not GUI at all. This file loads it and asserts them with
+      rove (geometry, the flood fill, the win and loss transitions, flagging, and
+      the placement rule that keeps the first click safe), ending with
+      (uiop:quit (if (run-suite *package*) 0 1)). Nothing verified that core
+      before. The needles are rove's summary only; the per-assertion lines print
+      forms, which spell symbols package-qualified until .todo/391 lands.
+    expect:
+      contains:
+        - "✓ 7 tests completed"
+        - "All 7 tests passed."
+
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp
     backends: [no-gc, wasm-component]
@@ -617,31 +661,31 @@ examples:
         - '"status":404'
   - path: cloudflare-workers/httpbin/check.lisp
     backends: [interpreter, jvm, wasm]
+    systemPath: [src/test/resources/rove, src/test/resources/dissect, src/test/resources/cl-ppcre]
     note: >-
       loads worker.lisp -- the LIBRARY-FREE flavour: plain defuns, and thirty
       lines of reactor adapter written out under them where the other three call
-      clack:clackup -- and drives it over the requests the README curls. The
-      adapter calls the same rontolisp::%http-make-env /
-      %http-normalize-response entry points the handler backends do, so what it
-      pins is that a hand-written adapter builds the same environment on every
-      backend: the "?" split and the percent-decoding of the raw target (/%67et
-      answers "path":"/get"), the content-length the buffered :raw-body needs,
-      and the response header ALIST crossing as a JSON array of pairs rather
-      than an object. The Worker itself calls the wasm-export'ed handle-request
-      from JavaScript and is built by the directory's build.sh (--no-wasi
-      --optimize, a shape no backend token here covers). Checked with contains,
-      not equals: the key ORDER inside a JSON object follows hash-table
-      iteration order, which differs per backend.
+      clack:clackup -- and drives it over the requests the README curls, then
+      CHECKS ITSELF with rove: every needle this entry used to spell is now an
+      assertion over the PARSED reply, and the file ends with
+      (uiop:quit (if (run-suite *package*) 0 1)), so a drifted answer exits
+      non-zero instead of quietly no longer matching. The adapter calls the same
+      rontolisp::%http-make-env / %http-normalize-response entry points the
+      handler backends do, so what it pins is that a hand-written adapter builds
+      the same environment on every backend: the "?" split and the
+      percent-decoding of the raw target (/%67et answers "path":"/get"), the
+      content-length the buffered :raw-body needs, and the response header ALIST
+      crossing as a JSON array of pairs rather than an object. The Worker itself
+      calls the wasm-export'ed handle-request from JavaScript and is built by the
+      directory's build.sh (--no-wasi --optimize, a shape no backend token here
+      covers). The needles left here are rove's summary only -- the exchange is
+      still printed, but its key ORDER inside a JSON object follows hash-table
+      iteration order and differs per backend, and the per-assertion lines print
+      forms, which spell symbols package-qualified until .todo/391 lands.
     expect:
       contains:
-        # The response body is a JSON string nested in the outer JSON, so its
-        # own quotes arrive backslash-escaped. One key per needle: a needle
-        # spanning two keys would depend on their order.
-        - '\"path\":\"/get\"'
-        - '\"json\":{\"name\":\"rontolisp\"}'
-        - '\"json\":null'
-        - '\"allowed\":\"POST\"'
-        - '"status":404'
+        - "✓ 6 tests completed"
+        - "All 6 tests passed."
   - path: cloudflare-workers/httpbin-clack/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-

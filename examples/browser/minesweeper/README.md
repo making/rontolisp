@@ -14,11 +14,25 @@ win/lose detection -- happens in Lisp; only the drawing differs between the two.
 | [`minesweeper.wasm`](minesweeper.wasm) | Prebuilt module (regenerate with `build.sh`) |
 | [`build.sh`](build.sh) | Recompile `minesweeper-wasm.lisp` to `minesweeper.wasm` |
 | [`minesweeper-swing.lisp`](minesweeper-swing.lisp) | Desktop front-end: loads the core, paints a Swing grid |
+| [`minesweeper-core-test.lisp`](minesweeper-core-test.lisp) | The rules, checked with [rove](../../../doc/en/guides/testing.md) -- neither front-end can be run head-less, the core can |
 
 The two front-ends share `minesweeper-core.lisp` verbatim -- the browser build
 inlines it at compile time (a top-level literal `load`), and the Swing build
 loads it at run time. Swapping the rendering layer is all it takes to move the
 same game between WebAssembly and the JVM.
+
+Because the core touches neither the screen nor entropy, it is also the part
+that can be TESTED, and `minesweeper-core-test.lisp` does — the flood fill, the
+win and loss transitions, flagging, and the placement rule that keeps the first
+click safe. rove is vendored in this repository, so its three directories go on
+`--system-path`, and the run's exit code is the verdict:
+
+```bash
+# from the repo root, after ./mvnw package
+SP=src/test/resources/rove:src/test/resources/dissect:src/test/resources/cl-ppcre
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar \
+  examples/browser/minesweeper/minesweeper-core-test.lisp --system-path $SP
+```
 
 ## Play it on the desktop (Java / Swing)
 
