@@ -4036,10 +4036,16 @@ public final class Environment implements Scope {
 		// the close-if-open idiom (cl-postgres's ensure-socket-is-closed) neither
 		// double-closes nor leaks. A closed-elsewhere Socket answers nil too. nil (no
 		// stream) answers nil rather than signaling -- callers probe with the raw slot.
+		// A CLOS INSTANCE is open: it is a Gray stream (or a synonym), holding nothing
+		// this table could have closed, and this arm is what the compiled backends'
+		// lite lowering already answered -- without it the two seams disagreed for a
+		// program that OWNS open-stream-p with a defmethod, which is the one case the
+		// Gray dispatch stands down for (.kb/gray-streams.md).
 		env.defineFunction(LispNames.OPEN_STREAM_P, new LispFunction(LispNames.OPEN_STREAM_P, args -> {
 			requireArgCount(LispNames.OPEN_STREAM_P, args, 1);
 			return switch (args.get(0)) {
 				case LispTrue ignored -> LispTrue.INSTANCE;
+				case LispInstance ignored -> LispTrue.INSTANCE;
 				case LispInteger handle -> switch (streams.get(handle.value())) {
 					case Socket socket -> socket.isClosed() ? LispNil.INSTANCE : LispTrue.INSTANCE;
 					case null -> LispNil.INSTANCE;
@@ -4659,6 +4665,27 @@ public final class Environment implements Scope {
 			}
 		};
 		env.defineFunction(LispNames.PEEK_CHAR_INTERNAL, new LispFunction(LispNames.PEEK_CHAR_INTERNAL, peekChar));
+		// read-char-no-hang on a stream HANDLE is read-char: no source rontolisp can open
+		// answers "a character would block" separately from "read one", and CL lets an
+		// implementation say so. A Gray instance reaches
+		// rontolisp:stream-read-char-no-hang through LispEvaluator's wrap instead, which
+		// is where a class with a genuinely non-blocking source gets its answer.
+		env.defineFunction(LispNames.READ_CHAR_NO_HANG, new LispFunction(LispNames.READ_CHAR_NO_HANG, args -> {
+			if (args.size() > 3) {
+				throw new LispEvalException(LispNames.READ_CHAR_NO_HANG + " expects 0 to 3 arguments");
+			}
+			return readChar.apply(args);
+		}));
+		// unread-char: the Gray protocol's own one-slot pushback carries it for an
+		// INSTANCE stream (LispEvaluator's wrap). A stream handle has no pushback on any
+		// backend, so this arm signals rather than dropping the character silently --
+		// the same message the compiled backends' lowering produces.
+		env.defineFunction(LispNames.UNREAD_CHAR, new LispFunction(LispNames.UNREAD_CHAR, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.UNREAD_CHAR + " expects 1 or 2 arguments");
+			}
+			throw new LispEvalException(LispMacroExpander.UNREAD_CHAR_ONLY_GRAY_MESSAGE);
+		}));
 		// (peek-char [peek-type [stream [eof-error-p [eof-value]]]]): the peek-type
 		// skipping forms of CL 21.2 -- nil peeks, t skips whitespace, a character skips
 		// up to that character; the character stopped on stays in the stream in every

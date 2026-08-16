@@ -26,8 +26,13 @@ leaves (all in the `rontolisp` package).
 | `write-byte` | `rontolisp:stream-write-byte` |
 | `read-byte` | `rontolisp:stream-read-byte` |
 | `read-char` | `rontolisp:stream-read-char` |
+| `read-char-no-hang` | `rontolisp:stream-read-char-no-hang` (default method IS `stream-read-char`) |
+| `peek-char` | `rontolisp:stream-peek-char` (default method: read one, hand it back through `stream-unread-char`); the `peek-type` skipping forms loop over it |
+| `unread-char` | `rontolisp:stream-unread-char` (default method parks the character in the protocol's one-slot pushback) |
 | `read-line` | `rontolisp:stream-read-line` (default method loops `stream-read-char`) |
 | `listen` | `rontolisp:stream-listen` (default method answers `nil`) |
+| `open-stream-p` | answers `t` -- like `close`, a name a program may own |
+| `stream-element-type` | `character`, or `(unsigned-byte 8)` for a binary base class -- a name a program may own |
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (default methods loop the element generics) |
 | `file-position` | `rontolisp:stream-file-position`; the two-argument form calls the `(setf rontolisp:stream-file-position)` writer generic |
 
@@ -66,6 +71,15 @@ release. A stream that DOES hold something writes CL's own spelling, a method on
 
 Such a method dispatches on every backend. A program that defines one owns
 `close` outright: the Gray default steps aside for it.
+
+A character INPUT stream defines **`stream-read-char` -- that one method is
+enough** (a binary one defines `stream-read-byte`). Everything else on the read
+side is written over it: `stream-read-line` and `stream-read-sequence` loop it,
+`stream-read-char-no-hang` is it, and `stream-peek-char` reads one character and
+hands it back through `stream-unread-char`, whose own default parks the
+character in the protocol's one-slot pushback. A class that can rewind its own
+source defines `stream-unread-char` and owns the pushback instead — the pushback
+cell is then never written.
 
 On the read side the methods answer the keyword `:eof` at end of stream; the
 built-ins translate that through the usual `eof-error-p` / `eof-value`
@@ -125,6 +139,28 @@ A binary input stream with the `file-position` protocol:
   (list (read-byte in) (read-byte in nil :done))) ; => (10 20)
 ```
 
+A character input stream defining only `stream-read-char`, driven through the
+rest of the read protocol:
+
+```lisp
+(defclass text-source (rontolisp:fundamental-character-input-stream)
+  ((text :initarg :text) (pos :initform 0)))
+(defmethod rontolisp:stream-read-char ((s text-source))
+  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+    (if (>= pos (length text))
+        :eof
+        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+(let ((in (make-instance 'text-source :text "ab  cd")))
+  (list (peek-char nil in)                ; look, do not consume
+        (read-char in)
+        (progn (unread-char #\a in) (read-char in))
+        (read-char-no-hang in)
+        (peek-char t in)                  ; skip whitespace
+        (read-line in)
+        (open-stream-p in)
+        (stream-element-type in))) ; => (#\a #\a #\a #\b #\c "cd" T CHARACTER)
+```
+
 ## The trivial-gray-streams shim
 
 Portable libraries are written against
@@ -166,10 +202,17 @@ rontolisp protocol has, so a portable class that defines only
 
 ## Limits
 
-- `rontolisp:stream-unread-char` and `rontolisp:stream-advance-to-column` exist
-  as protocol generics but no built-in dispatches to them (`unread-char` is not
-  a built-in, and `format`'s `~T` does not consult the column); `peek-char` does
-  not dispatch to Gray instances either.
+- `rontolisp:stream-advance-to-column` exists as a protocol generic but no
+  built-in dispatches to it (`format`'s `~T` does not consult the column).
+- The protocol's pushback holds ONE character for ONE stream at a time, which is
+  what CL promises for `unread-char`. It is drained by every read that goes
+  through the protocol's own defaults; a class that overrides
+  `stream-read-line` or `stream-read-sequence` outright reads past it, so such a
+  class should define `stream-unread-char` too.
+- `input-stream-p` / `output-stream-p` do not dispatch: a Gray instance answers
+  `nil` to both.
+- `unread-char` on a stream HANDLE signals — no backend keeps a pushback a
+  handle-based read would drain.
 - The read generics return primary values only: `stream-read-line` has no
   `(values line missing-newline-p)` pair — `:eof` is the whole EOF signal.
 - `listen` on a Gray instance works on the interpreter and the JVM; the

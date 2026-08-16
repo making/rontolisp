@@ -6808,7 +6808,7 @@ class LispEvaluatorTest {
 					"MACHINE-TYPE", "MACHINE-VERSION", "MACHINE-INSTANCE", "SHORT-SITE-NAME", "LONG-SITE-NAME")
 			.doesNotContain("%nstring-replace", "%target-machine-type")
 			.isSorted()
-			.hasSize(427);
+			.hasSize(429);
 	}
 
 	@Test
@@ -13212,6 +13212,79 @@ class LispEvaluatorTest {
 				               (list (read-sequence buf in) buf))
 				        (slot-value out 'acc)))
 				""").print()).isEqualTo("(#\\a \"b\" \"cd\" NIL :END (2 \"ab\") \"xy\")");
+	}
+
+	@Test
+	void grayInputStreamPeekUnreadNoHangAndStreamQueries() {
+		// The rest of the input protocol over the ONE required method
+		// (stream-read-char): peek-char in all three peek-type forms, unread-char
+		// through the protocol's own pushback, read-char-no-hang, and the two
+		// stream queries a program did NOT take over -- open-stream-p (an instance
+		// is open) and stream-element-type (character here, octets for a binary
+		// base class).
+		assertThat(evalMulti("""
+				(defclass gin-source (rontolisp:fundamental-character-input-stream)
+				  ((text :initarg :text) (pos :initform 0)))
+				(defmethod rontolisp:stream-read-char ((s gin-source))
+				  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+				    (if (>= pos (length text))
+				        :eof
+				        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+				(defclass gin-bytes (rontolisp:fundamental-binary-input-stream) ())
+				(let ((in (make-instance 'gin-source :text (format nil "ab~%  cd"))))
+				  (list (peek-char nil in)
+				        (read-char in)
+				        (unread-char #\\a in)
+				        (read-char in)
+				        (read-char-no-hang in)
+				        (read-line in)
+				        (peek-char t in)
+				        (peek-char #\\d in)
+				        (read-line in)
+				        (peek-char nil in nil :done)
+				        (open-stream-p in)
+				        (stream-element-type in)
+				        (stream-element-type (make-instance 'gin-bytes))))
+				""").print())
+			.isEqualTo("(#\\a #\\a NIL #\\a #\\b \"\" #\\c #\\d \"d\" :DONE T CHARACTER (UNSIGNED-BYTE 8))");
+	}
+
+	@Test
+	void grayInputStreamUnreadCharMethodOwnsThePushback() {
+		// dexador's decoding-stream shape: the class defines stream-unread-char and
+		// rewinds its OWN source, so the protocol's pushback cell is never written
+		// and peek-char goes through the class's rewind instead.
+		assertThat(evalMulti("""
+				(defclass gin-rewind (rontolisp:fundamental-character-input-stream)
+				  ((text :initarg :text) (pos :initform 0)))
+				(defmethod rontolisp:stream-read-char ((s gin-rewind))
+				  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+				    (if (>= pos (length text))
+				        :eof
+				        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+				(defmethod rontolisp:stream-unread-char ((s gin-rewind) c)
+				  (setf (slot-value s 'pos) (- (slot-value s 'pos) 1))
+				  nil)
+				(let ((in (make-instance 'gin-rewind :text "xyz")))
+				  (list (peek-char nil in)
+				        (slot-value in 'pos)
+				        (read-char in)
+				        (unread-char #\\x in)
+				        (slot-value in 'pos)
+				        (read-char in)))
+				""").print()).isEqualTo("(#\\x 0 #\\x NIL 0 #\\x)");
+	}
+
+	@Test
+	void unreadCharOnAStreamHandleSignals() {
+		// No backend keeps a pushback a handle-based read would drain, so the
+		// operator signals rather than dropping the character silently. Same
+		// message on the compiled backends (LispMacroExpander.expandUnreadChar).
+		assertThatThrownBy(() -> evalMulti("""
+				(let ((s (make-string-input-stream "abc")))
+				  (read-char s)
+				  (unread-char #\\a s))
+				""")).hasMessageContaining("UNREAD-CHAR is supported only on a Gray input stream");
 	}
 
 	@Test

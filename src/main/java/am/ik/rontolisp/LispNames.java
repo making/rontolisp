@@ -2382,6 +2382,26 @@ public final class LispNames {
 	public static final String READ_CHAR = "READ-CHAR";
 
 	/**
+	 * The {@code read-char-no-hang} built-in function
+	 * ({@code (read-char-no-hang [stream [eof-error-p [eof-value]]])}). On a stream
+	 * HANDLE it IS {@code read-char}: no source rontolisp can open answers "a character
+	 * would block" separately from "read one". On a Gray instance it dispatches to
+	 * {@code rontolisp:stream-read-char-no-hang}, which a class that DOES have a
+	 * non-blocking source overrides.
+	 */
+	public static final String READ_CHAR_NO_HANG = "READ-CHAR-NO-HANG";
+
+	/**
+	 * The {@code unread-char} built-in function ({@code (unread-char character
+	 * [stream])}). Supported on a Gray instance stream only -- it dispatches to
+	 * {@code rontolisp:stream-unread-char}, whose default parks the character in the
+	 * protocol's one-slot pushback. A stream HANDLE has no pushback on any backend, so
+	 * the handle arm signals rather than silently dropping the character
+	 * ({@code .kb/gray-streams.md}).
+	 */
+	public static final String UNREAD_CHAR = "UNREAD-CHAR";
+
+	/**
 	 * The {@code peek-char} built-in function
 	 * ({@code (peek-char [peek-type [stream [eof-error-p [eof-value]]]])}): the next
 	 * character of a stream WITHOUT consuming it. A literal {@code peek-type} of
@@ -7561,7 +7581,27 @@ public final class LispNames {
 	/** {@code rontolisp:stream-read-char} -- see {@link #GRAY_STREAM_READ_BYTE}. */
 	public static final String GRAY_STREAM_READ_CHAR = "STREAM-READ-CHAR";
 
-	/** {@code rontolisp:stream-unread-char} -- protocol-only (no built-in dispatches). */
+	/**
+	 * {@code rontolisp:stream-read-char-no-hang} -- the {@code read-char-no-hang} Gray
+	 * generic. Its default method IS {@code stream-read-char} (sb-gray's default too): no
+	 * rontolisp source is non-blocking in a way a class could not wrap itself.
+	 */
+	public static final String GRAY_STREAM_READ_CHAR_NO_HANG = "STREAM-READ-CHAR-NO-HANG";
+
+	/**
+	 * {@code rontolisp:stream-peek-char} -- the {@code peek-char} Gray generic. Its
+	 * default method reads one character and hands it back through
+	 * {@link #GRAY_STREAM_UNREAD_CHAR}.
+	 */
+	public static final String GRAY_STREAM_PEEK_CHAR = "STREAM-PEEK-CHAR";
+
+	/**
+	 * {@code rontolisp:stream-unread-char} -- the {@code unread-char} Gray generic, and
+	 * what {@code stream-peek-char}'s default pushes back through. Its own default method
+	 * parks the character in the protocol's one-slot pushback cell, so
+	 * {@code stream-read-char} stays the single method a character input stream must
+	 * define; a class that can rewind its source defines this and owns the pushback.
+	 */
 	public static final String GRAY_STREAM_UNREAD_CHAR = "STREAM-UNREAD-CHAR";
 
 	/** {@code rontolisp:stream-read-line} -- see {@link #GRAY_STREAM_READ_BYTE}. */

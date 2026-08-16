@@ -58,6 +58,8 @@
 | `read-line` | `(read-line)`, `(read-line stream)` | 標準入力(または入力ストリーム)から1行読み込み、文字列として返します。EOFでは `nil` |
 | `y-or-n-p` | `(y-or-n-p "Delete ~A?" f)` | 省略可能な `format` 制御文字列と `" (y or n) "` を出力し、標準入力から 1 **行**読んで、`y`/`Y` なら `t`、`n`/`N` なら `nil` を返し、それ以外は聞き直します。lite 版: CL はエコーなしで 1 文字を読み、入力の終端ではここでは `nil` を返します |
 | `peek-char` | `(peek-char nil s)`, `(peek-char t s)`, `(peek-char #\; s)` | ストリームの次の文字を消費せずに返します。`peek-type` が `nil` なら何も読み飛ばさず、`t` なら空白を、文字ならその文字までを読み飛ばします。返した文字はストリームに残ります。EOF では `end-of-file` を通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
+| `read-char-no-hang` | `(read-char-no-hang s)` | 待たずに取得できる文字があればそれを返します。ストリームハンドルでは `read-char` と同じで、[Gray ストリーム](../guides/gray-streams.md)のインスタンスでは `rontolisp:stream-read-char-no-hang` にディスパッチします |
+| `unread-char` | `(unread-char c s)` | 直前に読み取った文字を押し戻し、次の読み取りが再びそれを返すようにします。`nil` を返します。[Gray ストリーム](../guides/gray-streams.md)のインスタンス専用で、ストリームハンドルはどのバックエンドにも押し戻しを持たないため通知します |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | ファイルを開いてストリームを返します。方向はリテラルの `:input`(デフォルト、読み込み)または `:output`(作成/切り詰め、書き込み)でなければなりません。省略可能な要素型はリテラルの `'character`(デフォルト、テキスト)または `'(unsigned-byte 8)`(バイナリ)でなければなりません |
 | `close` | `(close stream)` | `open` で開いたストリームを閉じます。`t` を返します |
 | `probe-file` | `(probe-file "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil`。存在しないパスで失敗しない唯一のファイル操作です（`open` は通知します）。`uiop:file-exists-p` は同じ操作です |

@@ -33,7 +33,7 @@ interpreter, JVM (`-o X.class`), and WASM `--component`:
 | 404 -> `dex:http-request-failed` | OK (signals) |
 | `dex:post` string / alist / JSON | OK |
 | `:cookie-jar` + `Set-Cookie` | OK |
-| `:want-stream t` | BROKEN -- `.todo/400` |
+| `:want-stream t` | BROKEN when measured -- `.todo/400` is done since, re-probe |
 | `https://` | OK since 2026-08-16 (`.todo/399` done) -- via the cl+ssl shim over `rontolisp:tls-upgrade` |
 | 2nd..5th return values (status, headers, uri) | BROKEN -- `.todo/397` |
 
@@ -105,9 +105,19 @@ Then the feature work:
    client certs / `:verify-location` (`.kb/tcp-sockets.md`). dexador's exact
    `(:import-from :cl+ssl ...)` list resolves; `(ql:quickload "dexador")` now
    loads past cl+ssl and stops at `usocket:socket-option` (`.todo/114`).
-8. `.todo/400` -- the Gray INPUT protocol is defined but no built-in
+8. ~~`.todo/400` -- the Gray INPUT protocol is defined but no built-in
    dispatches to it, so `:want-stream t` is unusable (and fails DIFFERENTLY on
-   each backend, which is its own reason to fix it).
+   each backend, which is its own reason to fix it).~~ **DONE (2026-08-16)**:
+   `peek-char` / `unread-char` / `read-char-no-hang` / `open-stream-p` /
+   `stream-element-type` now dispatch beside the read family that already did,
+   `stream-read-char` is the ONE method a character input stream must define
+   (everything else has a default over it, including a one-slot pushback behind
+   `stream-unread-char`), and the failure when a class supplies no reader is the
+   same on all four backends (`.kb/gray-streams.md`, ci-spec
+   `gray-stream-input-protocol-widening`). `:want-stream t` itself is worth
+   re-probing against the spike tree: the spike's row above predates this, and
+   dexador's `decoding-stream` defines exactly the three ownable operators and
+   `stream-unread-char`. Left behind: `.todo/410`.
 9. `.todo/405` -- WASM Preview 1 has no non-blocking input probe, so `listen`
    is a compile error and dexador cannot target it.
 

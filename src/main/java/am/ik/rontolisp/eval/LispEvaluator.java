@@ -1252,6 +1252,46 @@ public final class LispEvaluator {
 			}
 			return apply(baseReadLine, args, this.globalEnv);
 		}));
+		LispVal baseReadCharNoHang = this.globalEnv.lookupFunction(LispNames.READ_CHAR_NO_HANG);
+		this.globalEnv.defineFunction(LispNames.READ_CHAR_NO_HANG,
+				new LispFunction(LispNames.READ_CHAR_NO_HANG, rawArgs -> {
+					List<LispVal> args = resolveSynonymArg(rawArgs, 0);
+					if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+						return applyGrayDispatch(GRAY_READ_CHAR_NO_HANG_DISPATCH,
+								List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
+										args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
+					}
+					return apply(baseReadCharNoHang, args, this.globalEnv);
+				}));
+		// peek-char's stream is argument ONE (the peek-type precedes it), and the
+		// peek-type travels into the helper: the skipping forms are looped there, over
+		// stream-peek-char and the protocol's pushback, rather than by the built-in's own
+		// %peek-char loop, which cannot see an instance.
+		LispVal basePeekChar = this.globalEnv.lookupFunction(LispNames.PEEK_CHAR);
+		this.globalEnv.defineFunction(LispNames.PEEK_CHAR, new LispFunction(LispNames.PEEK_CHAR, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
+			if (args.size() >= 2 && args.get(1) instanceof LispInstance) {
+				return applyGrayDispatch(GRAY_PEEK_CHAR_DISPATCH,
+						List.of(args.get(0), args.get(1), args.size() >= 3 ? args.get(2) : LispTrue.INSTANCE,
+								args.size() >= 4 ? args.get(3) : LispNil.INSTANCE));
+			}
+			return apply(basePeekChar, args, this.globalEnv);
+		}));
+		LispVal baseUnreadChar = this.globalEnv.lookupFunction(LispNames.UNREAD_CHAR);
+		this.globalEnv.defineFunction(LispNames.UNREAD_CHAR, new LispFunction(LispNames.UNREAD_CHAR, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
+			if (args.size() == 2 && args.get(1) instanceof LispInstance) {
+				return applyGrayDispatch(GRAY_UNREAD_CHAR_DISPATCH, List.of(args.get(0), args.get(1)));
+			}
+			return apply(baseUnreadChar, args, this.globalEnv);
+		}));
+		// open-stream-p / stream-element-type: the close rule, applied to the other two
+		// operators CL spells as plain functions a stream class may own with a defmethod
+		// of its own (dexador's decoding-stream defines both). The Gray default answers
+		// only while the program registers no generic for the name, which is exactly the
+		// condition GrayStreamsLibrary.OWNABLE_OPERATORS checks on the compile path.
+		wrapGrayOwnableOperator(LispNames.OPEN_STREAM_P, GRAY_OPEN_STREAM_P_DISPATCH);
+		wrapGrayOwnableOperator(LispNames.STREAM_ELEMENT_TYPE, GRAY_STREAM_ELEMENT_TYPE_DISPATCH);
 		LispVal baseWriteByte = this.globalEnv.lookupFunction(LispNames.WRITE_BYTE);
 		this.globalEnv.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, rawArgs -> {
 			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
@@ -3767,6 +3807,16 @@ public final class LispEvaluator {
 
 	private static final String GRAY_WRITE_CHAR_DISPATCH = GrayStreamsLibrary.WRITE_CHAR_DISPATCH;
 
+	private static final String GRAY_READ_CHAR_NO_HANG_DISPATCH = GrayStreamsLibrary.READ_CHAR_NO_HANG_DISPATCH;
+
+	private static final String GRAY_PEEK_CHAR_DISPATCH = GrayStreamsLibrary.PEEK_CHAR_DISPATCH;
+
+	private static final String GRAY_UNREAD_CHAR_DISPATCH = GrayStreamsLibrary.UNREAD_CHAR_DISPATCH;
+
+	private static final String GRAY_OPEN_STREAM_P_DISPATCH = GrayStreamsLibrary.OPEN_STREAM_P_DISPATCH;
+
+	private static final String GRAY_STREAM_ELEMENT_TYPE_DISPATCH = GrayStreamsLibrary.STREAM_ELEMENT_TYPE_DISPATCH;
+
 	/**
 	 * Wraps one stream-taking output built-in so a CLOS-instance stream at
 	 * {@code streamIndex} routes to the given {@code rontolisp::%gray-*-dispatch} helper
@@ -3786,6 +3836,29 @@ public final class LispEvaluator {
 			if (args.size() == streamIndex + 1 && args.get(streamIndex) instanceof LispInstance) {
 				List<LispVal> forwarded = streamIndex == 0 ? List.of(args.get(0)) : List.of(args.get(0), args.get(1));
 				return applyGrayDispatch(helperName, forwarded);
+			}
+			return apply(base, args, this.globalEnv);
+		}));
+	}
+
+	/**
+	 * Wraps one of the unary stream queries a program may OWN -- {@code open-stream-p} /
+	 * {@code stream-element-type}, the two that join {@code close} in
+	 * {@code GrayStreamsLibrary.OWNABLE_OPERATORS} -- so a CLOS-instance stream gets the
+	 * Gray default answer while the program registers no generic for the name. A program
+	 * that defines its own method takes the name over outright (the shadowed-built-in
+	 * machinery, {@code .kb/clos.md}), and the compile path stands down on exactly the
+	 * same condition.
+	 * @param name the built-in's name
+	 * @param helperName the dispatch helper to apply
+	 */
+	private void wrapGrayOwnableOperator(String name, String helperName) {
+		LispVal base = this.globalEnv.lookupFunction(name);
+		this.globalEnv.defineFunction(name, new LispFunction(name, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
+			if (args.size() == 1 && args.get(0) instanceof LispInstance
+					&& this.closRegistry.findGeneric(name) == null) {
+				return applyGrayDispatch(helperName, List.of(args.get(0)));
 			}
 			return apply(base, args, this.globalEnv);
 		}));

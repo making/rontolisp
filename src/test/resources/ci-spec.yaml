@@ -1671,7 +1671,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      427
+      429
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -6821,6 +6821,60 @@ cases:
       20
       30
       :GBT-DONE
+  - name: gray-stream-input-protocol-widening
+    source: |
+      ; todo-400: the whole INPUT protocol reaches a Gray instance. This class
+      ; defines only stream-read-char -- the ONE method a character input stream
+      ; must supply -- and answers peek-char (all three peek-type forms),
+      ; unread-char (through the protocol's own one-slot pushback, since the class
+      ; defines no stream-unread-char), read-char-no-hang and read-line.
+      ; open-stream-p / stream-element-type answer the Gray defaults because no
+      ; case in this program methods either name (close is a different story: a
+      ; case further down owns it, so it is deliberately absent here).
+      (defclass gip-source (rontolisp:fundamental-character-input-stream)
+        ((gip-text :initarg :gip-text) (gip-pos :initform 0)))
+      (defmethod rontolisp:stream-read-char ((gip-s gip-source))
+        (let ((gip-text (slot-value gip-s 'gip-text)) (gip-pos (slot-value gip-s 'gip-pos)))
+          (if (>= gip-pos (length gip-text))
+              :eof
+              (progn (setf (slot-value gip-s 'gip-pos) (+ gip-pos 1))
+                     (char gip-text gip-pos)))))
+      (defclass gip-bytes (rontolisp:fundamental-binary-input-stream) ())
+      (let ((gip-in (make-instance 'gip-source :gip-text (format nil "ab~%  cd"))))
+        (print (peek-char nil gip-in))
+        (print (read-char gip-in))
+        (print (unread-char #\a gip-in))
+        (print (read-char gip-in))
+        (print (read-char-no-hang gip-in))
+        (print (read-line gip-in))
+        (print (peek-char t gip-in))
+        (print (peek-char #\d gip-in))
+        (print (read-line gip-in))
+        (print (peek-char nil gip-in nil :gip-done))
+        (print (open-stream-p gip-in))
+        (print (stream-element-type gip-in))
+        (print (stream-element-type (make-instance 'gip-bytes))))
+      ; The handle arm of unread-char is the same signal on every backend.
+      (print (handler-case
+                 (let ((gip-h (make-string-input-stream "abc")))
+                   (read-char gip-h)
+                   (unread-char #\a gip-h))
+               (error (gip-e) (princ-to-string gip-e))))
+    expected: |
+      #\a
+      #\a
+      NIL
+      #\a
+      #\b
+      ""
+      #\c
+      #\d
+      "d"
+      :GIP-DONE
+      T
+      CHARACTER
+      (UNSIGNED-BYTE 8)
+      "UNREAD-CHAR is supported only on a Gray input stream"
   - name: uiop-add-package-local-nickname
     source: |
       (defpackage #:com.example.apn.deep (:use #:cl) (:export #:apn-answer))

@@ -515,6 +515,10 @@ final class JvmExprCompiler {
 				}
 				case LispNames.PEEK_CHAR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPeekChar(cons), ctx, className);
+				case LispNames.READ_CHAR_NO_HANG ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadCharNoHang(cons), ctx, className);
+				case LispNames.UNREAD_CHAR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandUnreadChar(cons), ctx, className);
 				case LispNames.PEEK_CHAR_INTERNAL -> {
 					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
 					if (typed != null) {

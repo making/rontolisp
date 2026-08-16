@@ -68,7 +68,8 @@ public final class GrayStreamsLibrary {
 	private static final java.util.Set<String> PROTOCOL_NAMES = java.util.Set.of(LispNames.GRAY_STREAM_WRITE_CHAR,
 			LispNames.GRAY_STREAM_WRITE_STRING, LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE,
 			LispNames.GRAY_STREAM_READ_CHAR, LispNames.GRAY_STREAM_UNREAD_CHAR, LispNames.GRAY_STREAM_READ_LINE,
-			LispNames.GRAY_STREAM_LISTEN, LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
+			LispNames.GRAY_STREAM_READ_CHAR_NO_HANG, LispNames.GRAY_STREAM_PEEK_CHAR, LispNames.GRAY_STREAM_LISTEN,
+			LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
 			LispNames.GRAY_STREAM_FILE_POSITION, LispNames.GRAY_STREAM_LINE_COLUMN, LispNames.GRAY_STREAM_START_LINE_P,
 			LispNames.GRAY_STREAM_TERPRI, LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
 			LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT, LispNames.GRAY_STREAM_CLEAR_OUTPUT,
@@ -85,6 +86,16 @@ public final class GrayStreamsLibrary {
 	static final String READ_BYTE_DISPATCH = "%GRAY-READ-BYTE-DISPATCH";
 
 	static final String READ_CHAR_DISPATCH = "%GRAY-READ-CHAR-DISPATCH";
+
+	static final String READ_CHAR_NO_HANG_DISPATCH = "%GRAY-READ-CHAR-NO-HANG-DISPATCH";
+
+	static final String PEEK_CHAR_DISPATCH = "%GRAY-PEEK-CHAR-DISPATCH";
+
+	static final String UNREAD_CHAR_DISPATCH = "%GRAY-UNREAD-CHAR-DISPATCH";
+
+	static final String OPEN_STREAM_P_DISPATCH = "%GRAY-OPEN-STREAM-P-DISPATCH";
+
+	static final String STREAM_ELEMENT_TYPE_DISPATCH = "%GRAY-STREAM-ELEMENT-TYPE-DISPATCH";
 
 	static final String READ_LINE_DISPATCH = "%GRAY-READ-LINE-DISPATCH";
 
@@ -126,14 +137,16 @@ public final class GrayStreamsLibrary {
 	 * call sites).
 	 */
 	private static final java.util.Set<String> DISPATCH_DEFUNS = java.util.Set.of(WRITE_STRING_DISPATCH,
-			WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH, READ_BYTE_DISPATCH, READ_CHAR_DISPATCH, READ_LINE_DISPATCH,
-			LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH, WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH,
-			FILE_POSITION_SET_DISPATCH, TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH,
-			FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH, CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH,
-			PRINT_DISPATCH, CLOSE_DISPATCH, "%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE",
-			"%GRAY-DEFAULT-WRITE-SEQUENCE", "%GRAY-DEFAULT-WRITE-STRING", "%GRAY-DEFAULT-WRITE-CHAR",
-			"%GRAY-DEFAULT-TERPRI", "%GRAY-DEFAULT-START-LINE-P", "%GRAY-DEFAULT-FRESH-LINE",
-			"%GRAY-DEFAULT-ADVANCE-TO-COLUMN");
+			WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH, READ_BYTE_DISPATCH, READ_CHAR_DISPATCH,
+			READ_CHAR_NO_HANG_DISPATCH, PEEK_CHAR_DISPATCH, UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH,
+			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
+			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, TERPRI_DISPATCH,
+			FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH,
+			"%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE", "%GRAY-DEFAULT-WRITE-SEQUENCE",
+			"%GRAY-DEFAULT-WRITE-STRING", "%GRAY-DEFAULT-WRITE-CHAR", "%GRAY-DEFAULT-TERPRI",
+			"%GRAY-DEFAULT-START-LINE-P", "%GRAY-DEFAULT-FRESH-LINE", "%GRAY-DEFAULT-ADVANCE-TO-COLUMN",
+			"%GRAY-DEFAULT-UNREAD-CHAR", "%GRAY-DEFAULT-PEEK-CHAR", "%GRAY-READ-CHAR-1", "%GRAY-WHITESPACE-CHAR-P");
 
 	/**
 	 * The dispatch defuns spliced only when a rewrite references them (see
@@ -142,11 +155,12 @@ public final class GrayStreamsLibrary {
 	 * (and the shim's) call and which therefore always travel with the protocol.
 	 */
 	private static final java.util.Set<String> SPLICE_ON_USE = java.util.Set.of(WRITE_STRING_DISPATCH,
-			WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH, READ_BYTE_DISPATCH, READ_CHAR_DISPATCH, READ_LINE_DISPATCH,
-			LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH, WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH,
-			FILE_POSITION_SET_DISPATCH, TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH,
-			FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH, CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH,
-			PRINT_DISPATCH, CLOSE_DISPATCH);
+			WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH, READ_BYTE_DISPATCH, READ_CHAR_DISPATCH,
+			READ_CHAR_NO_HANG_DISPATCH, PEEK_CHAR_DISPATCH, UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH,
+			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
+			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, TERPRI_DISPATCH,
+			FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH);
 
 	/**
 	 * The compile-path pre-pass (the usocket {@code process()} pattern): when the program
@@ -175,7 +189,7 @@ public final class GrayStreamsLibrary {
 		if (!usesProtocol(program)) {
 			return program;
 		}
-		RewriteContext ctx = new RewriteContext(new java.util.LinkedHashSet<>(), !ownsClose(program));
+		RewriteContext ctx = new RewriteContext(new java.util.LinkedHashSet<>(), ownedOperators(program));
 		java.util.List<LispVal> rewritten = new java.util.ArrayList<>();
 		for (LispVal form : program) {
 			rewritten.add(rewrite(form, ctx));
@@ -416,33 +430,45 @@ public final class GrayStreamsLibrary {
 	 * rewritten at all.
 	 *
 	 * @param used the helper names a rewrite has produced
-	 * @param rewriteClose whether the program leaves {@code close} to this protocol --
-	 * false when it defines a method on {@code close} itself
+	 * @param owned the {@link #OWNABLE_OPERATORS} the PROGRAM defines a method on -- the
+	 * rewrite stands down for each of them
 	 */
-	private record RewriteContext(java.util.Set<String> used, boolean rewriteClose) {
+	private record RewriteContext(java.util.Set<String> used, java.util.Set<String> owned) {
 	}
 
 	/**
-	 * Whether the program OWNS {@code close}: it defines a {@code defmethod} /
-	 * {@code defgeneric} on that name, which is CL's own spelling for a stream class's
-	 * close (fast-io's {@code (defmethod close ((stream fast-output-stream) &key abort)
-	 * ...)}) and already dispatches on every backend through the shadowed-built-in
-	 * machinery ({@code .kb/clos.md}). The Gray default must not get in front of it, so
-	 * the {@code close} rewrite stands down for such a program -- the same condition the
-	 * interpreter's {@code close} wrap checks against its class registry, which is what
-	 * keeps the two seams answering alike.
+	 * The built-in names CL itself spells as ordinary functions a stream class may define
+	 * a method on, rather than giving them a {@code stream-*} generic of their own:
+	 * fast-io's {@code (defmethod close ((stream fast-output-stream) &key abort) ...)}
+	 * and dexador's {@code (defmethod open-stream-p ((stream decoding-stream)) ...)} /
+	 * {@code (defmethod stream-element-type ((stream decoding-stream)) ...)} are exactly
+	 * that shape, and such a method already dispatches on every backend through the
+	 * shadowed-built-in machinery ({@code .kb/clos.md}). So this protocol deliberately
+	 * has no competing generic for them, and the Gray default steps aside as soon as the
+	 * program defines one.
 	 */
-	private static boolean ownsClose(List<LispVal> program) {
+	private static final java.util.Set<String> OWNABLE_OPERATORS = java.util.Set.of(LispNames.CLOSE,
+			LispNames.OPEN_STREAM_P, LispNames.STREAM_ELEMENT_TYPE);
+
+	/**
+	 * The {@link #OWNABLE_OPERATORS} the program OWNS: it defines a {@code defmethod} /
+	 * {@code defgeneric} on the name. The Gray default must not get in front of such a
+	 * method, so the rewrite stands down for it -- the same condition the interpreter's
+	 * wraps check against their class registry, which is what keeps the two seams
+	 * answering alike.
+	 */
+	private static java.util.Set<String> ownedOperators(List<LispVal> program) {
+		java.util.Set<String> owned = new java.util.HashSet<>();
 		for (LispVal form : program) {
 			if (form instanceof am.ik.rontolisp.LispCons cons && cons.car() instanceof am.ik.rontolisp.LispSymbol op
 					&& (LispNames.DEFMETHOD.equals(member(op.name())) || LispNames.DEFGENERIC.equals(member(op.name())))
 					&& cons.cdr() instanceof am.ik.rontolisp.LispCons rest
 					&& rest.car() instanceof am.ik.rontolisp.LispSymbol name
-					&& LispNames.CLOSE.equals(member(name.name()))) {
-				return true;
+					&& OWNABLE_OPERATORS.contains(member(name.name()))) {
+				owned.add(member(name.name()));
 			}
 		}
-		return false;
+		return owned;
 	}
 
 	private static LispVal rewrite(LispVal form, RewriteContext ctx) {
@@ -496,6 +522,32 @@ public final class GrayStreamsLibrary {
 						parts.size() >= 3 ? rewrite(parts.get(2), ctx) : eofDefault,
 						parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
 			}
+			// read-char-no-hang shares the read family's shape but not its helper: a
+			// class with a genuinely non-blocking source overrides
+			// stream-read-char-no-hang, whose default IS stream-read-char.
+			if (LispNames.READ_CHAR_NO_HANG.equals(opName) && parts.size() >= 2 && parts.size() <= 4
+					&& streamArgMayBeInstance(parts.get(1))) {
+				return listOf(dispatchSymbol(READ_CHAR_NO_HANG_DISPATCH, ctx), rewrite(parts.get(1), ctx),
+						parts.size() >= 3 ? rewrite(parts.get(2), ctx) : am.ik.rontolisp.LispTrue.INSTANCE,
+						parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
+			}
+			// (peek-char peek-type stream [eof-error-p [eof-value]]): the stream is
+			// argument TWO, and the peek-type travels with it -- the skipping forms are
+			// looped inside the helper, because LispMacroExpander.expandPeekChar runs
+			// after this pass and its %peek-char/read-char calls would never see the
+			// instance. The stream-LESS (peek-char) / (peek-char t) spellings read
+			// standard input and are left alone.
+			if (LispNames.PEEK_CHAR.equals(opName) && parts.size() >= 3 && parts.size() <= 5
+					&& streamArgMayBeInstance(parts.get(2))) {
+				return listOf(dispatchSymbol(PEEK_CHAR_DISPATCH, ctx), rewrite(parts.get(1), ctx),
+						rewrite(parts.get(2), ctx),
+						parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispTrue.INSTANCE,
+						parts.size() >= 5 ? rewrite(parts.get(4), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
+			}
+			if (LispNames.UNREAD_CHAR.equals(opName) && parts.size() == 3 && streamArgMayBeInstance(parts.get(2))) {
+				return listOf(dispatchSymbol(UNREAD_CHAR_DISPATCH, ctx), rewrite(parts.get(1), ctx),
+						rewrite(parts.get(2), ctx));
+			}
 			if (LispNames.WRITE_BYTE.equals(opName) && parts.size() == 3 && streamArgMayBeInstance(parts.get(2))) {
 				return listOf(dispatchSymbol(WRITE_BYTE_DISPATCH, ctx), rewrite(parts.get(1), ctx),
 						rewrite(parts.get(2), ctx));
@@ -503,17 +555,27 @@ public final class GrayStreamsLibrary {
 			if (LispNames.LISTEN.equals(opName) && parts.size() == 2 && streamArgMayBeInstance(parts.get(1))) {
 				return listOf(dispatchSymbol(LISTEN_DISPATCH, ctx), rewrite(parts.get(1), ctx));
 			}
-			// The line-oriented and flush operators, all (op STREAM) with an explicit
-			// stream: the stream-LESS spelling writes to *standard-output* and can never
-			// be an instance, so it keeps its own lowering (and every program that does
-			// not name a stream stays byte-identical).
+			// The line-oriented, flush and stream-query operators, all (op STREAM) with
+			// an
+			// explicit stream. close / open-stream-p / stream-element-type are the three
+			// a
+			// program may OWN with a defmethod (OWNABLE_OPERATORS); the rewrite stands
+			// down
+			// for each one it does. On the write side the stream-LESS spelling writes to
+			// *standard-output* and can never be an instance, so it keeps its own
+			// lowering
+			// (and every program that does not name a stream stays byte-identical).
 			String unaryStreamHelper = switch (opName) {
 				case LispNames.TERPRI -> TERPRI_DISPATCH;
 				case LispNames.FRESH_LINE -> FRESH_LINE_DISPATCH;
 				case LispNames.FORCE_OUTPUT -> FORCE_OUTPUT_DISPATCH;
 				case LispNames.FINISH_OUTPUT -> FINISH_OUTPUT_DISPATCH;
 				case LispNames.CLEAR_OUTPUT -> CLEAR_OUTPUT_DISPATCH;
-				case LispNames.CLOSE -> ctx.rewriteClose() ? CLOSE_DISPATCH : null;
+				case LispNames.CLOSE -> ctx.owned().contains(LispNames.CLOSE) ? null : CLOSE_DISPATCH;
+				case LispNames.OPEN_STREAM_P ->
+					ctx.owned().contains(LispNames.OPEN_STREAM_P) ? null : OPEN_STREAM_P_DISPATCH;
+				case LispNames.STREAM_ELEMENT_TYPE ->
+					ctx.owned().contains(LispNames.STREAM_ELEMENT_TYPE) ? null : STREAM_ELEMENT_TYPE_DISPATCH;
 				default -> null;
 			};
 			if (unaryStreamHelper != null && parts.size() == 2 && streamArgMayBeInstance(parts.get(1))) {

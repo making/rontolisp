@@ -2843,6 +2843,66 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The message {@code unread-char} answers for a stream HANDLE, on every backend. No
+	 * backend keeps a pushback a handle-based read would drain -- the one-slot pushback
+	 * is the Gray protocol's, held by {@code rontolisp:stream-unread-char}'s default
+	 * method -- so the operator signals here rather than dropping the character silently.
+	 * Shared with {@code Environment}'s interpreter definition so the two seams answer
+	 * alike.
+	 */
+	public static final String UNREAD_CHAR_ONLY_GRAY_MESSAGE = "UNREAD-CHAR is supported only on a Gray input stream";
+
+	/**
+	 * Expands {@code (read-char-no-hang [stream [eof-error-p [eof-value]]])} to the
+	 * {@code read-char} of the same arguments: no source rontolisp can open answers "a
+	 * character would block" separately from "read one", which CL explicitly allows an
+	 * implementation to say. A Gray instance never reaches this expansion --
+	 * {@code GrayStreamsLibrary.process} has already routed the call to
+	 * {@code rontolisp:stream-read-char-no-hang}, the generic a class with a genuinely
+	 * non-blocking source overrides.
+	 * @param cons the read-char-no-hang expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReadCharNoHang(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() > 4) {
+			throw new UnsupportedOperationException(
+					LispNames.READ_CHAR_NO_HANG + " expects 0 to 3 arguments, got " + (parts.size() - 1));
+		}
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(LispNames.READ_CHAR));
+		for (int i = 1; i < parts.size(); i++) {
+			call.add(parts.get(i));
+		}
+		return listToCons(call);
+	}
+
+	/**
+	 * Expands {@code (unread-char character [stream])} to its arguments followed by the
+	 * {@link #UNREAD_CHAR_ONLY_GRAY_MESSAGE} signal: a stream HANDLE has no pushback on
+	 * any backend. The arguments are kept in front of the {@code error} so their effects
+	 * still happen in CL's order. A Gray instance never reaches this expansion --
+	 * {@code GrayStreamsLibrary.process} has already routed the call to
+	 * {@code rontolisp:stream-unread-char}.
+	 * @param cons the unread-char expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUnreadChar(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new UnsupportedOperationException(
+					LispNames.UNREAD_CHAR + " expects 1 or 2 arguments, got " + (parts.size() - 1));
+		}
+		List<LispVal> body = new ArrayList<>();
+		body.add(new LispSymbol(LispNames.PROGN));
+		for (int i = 1; i < parts.size(); i++) {
+			body.add(parts.get(i));
+		}
+		body.add(listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(UNREAD_CHAR_ONLY_GRAY_MESSAGE))));
+		return listToCons(body);
+	}
+
+	/**
 	 * Expands {@code (arrayp x)} to {@code (or (stringp x) (%arrayp x))} over a let-bound
 	 * temporary, so the argument is evaluated once. A string is an array in CL but is not
 	 * one of the array representations {@link am.ik.rontolisp.LispNames#ARRAYP_INTERNAL}

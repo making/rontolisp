@@ -807,6 +807,10 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.PEEK_CHAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPeekChar(cons), ctx);
+				case LispNames.READ_CHAR_NO_HANG ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandReadCharNoHang(cons), ctx);
+				case LispNames.UNREAD_CHAR ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandUnreadChar(cons), ctx);
 				case LispNames.PEEK_CHAR_INTERNAL -> {
 					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
 					if (typed != null) {

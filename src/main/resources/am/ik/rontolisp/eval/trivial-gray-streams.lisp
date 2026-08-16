@@ -150,6 +150,12 @@
     ((stream trivial-gray-streams:fundamental-input-stream) character)
   (trivial-gray-streams:stream-unread-char stream character))
 
+;; stream-peek-char / stream-read-char-no-hang are NOT part of upstream
+;; trivial-gray-streams' exported set (sb-gray has them, the portability layer
+;; does not), so there is no portable generic to delegate to: rontolisp's own
+;; defaults over stream-read-char are what an adapter class inherits, and the
+;; delegating stream-read-char above is what they reach.
+
 (defmethod rontolisp:stream-read-line
     ((stream trivial-gray-streams:fundamental-input-stream))
   (trivial-gray-streams:stream-read-line stream))
@@ -224,6 +230,10 @@
 (defmethod trivial-gray-streams:stream-read-line
     ((stream trivial-gray-streams:fundamental-input-stream))
   (rontolisp::%gray-default-read-line stream))
+
+(defmethod trivial-gray-streams:stream-unread-char
+    ((stream trivial-gray-streams:fundamental-input-stream) character)
+  (rontolisp::%gray-default-unread-char stream character))
 
 (defmethod trivial-gray-streams:stream-listen
     ((stream trivial-gray-streams:fundamental-input-stream))

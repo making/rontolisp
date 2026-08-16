@@ -155,7 +155,7 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 (print (rontolisp:list-special-forms))
 ; => (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
 (print (length (rontolisp:list-functions)))
-; => 427
+; => 429
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (SQUARE)

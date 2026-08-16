@@ -8315,6 +8315,41 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void grayInputStreamPeekUnreadAndStreamQueries() throws Exception {
+		// The rest of the input protocol on the WASM path: peek-char (all three
+		// peek-type forms, looped inside the dispatch helper -- expandPeekChar runs
+		// after the rewrite and could not see the instance), unread-char through the
+		// protocol's pushback, read-char-no-hang, open-stream-p and
+		// stream-element-type. Same answers as the interpreter and the JVM.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gin-source (rontolisp:fundamental-character-input-stream)
+					  ((text :initarg :text) (pos :initform 0)))
+					(defmethod rontolisp:stream-read-char ((s gin-source))
+					  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+					    (if (>= pos (length text))
+					        :eof
+					        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+					(defclass gin-bytes (rontolisp:fundamental-binary-input-stream) ())
+					(let ((in (make-instance 'gin-source :text (format nil "ab~%  cd"))))
+					  (print (peek-char nil in))
+					  (print (read-char in))
+					  (print (unread-char #\\a in))
+					  (print (read-char in))
+					  (print (read-char-no-hang in))
+					  (print (read-line in))
+					  (print (peek-char t in))
+					  (print (peek-char #\\d in))
+					  (print (read-line in))
+					  (print (peek-char nil in nil :done))
+					  (print (open-stream-p in))
+					  (print (stream-element-type in))
+					  (print (stream-element-type (make-instance 'gin-bytes))))
+					""")))))
+			.isEqualTo("#\\a\n#\\a\nNIL\n#\\a\n#\\b\n\"\"\n#\\c\n#\\d\n\"d\"\n:DONE\nT\nCHARACTER\n(UNSIGNED-BYTE 8)");
+	}
+
+	@Test
 	void grayBinaryStreamDispatchAndFilePosition() throws Exception {
 		// The read side of the Gray pre-pass (todo-235): read-byte/write-byte and
 		// file-position call sites with a non-literal stream rewrite onto the
@@ -10526,7 +10561,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("427");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("429");
 	}
 
 	@Test

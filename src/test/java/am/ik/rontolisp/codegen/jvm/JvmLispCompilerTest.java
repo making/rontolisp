@@ -7343,6 +7343,55 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGrayInputStreamPeekUnreadAndStreamQueries() throws Exception {
+		// The rest of the input protocol on the compile path: peek-char (all three
+		// peek-type forms, looped inside the dispatch helper), unread-char through
+		// the protocol's pushback, read-char-no-hang, open-stream-p and
+		// stream-element-type. Same answers as the interpreter, character by
+		// character.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gin-source (rontolisp:fundamental-character-input-stream)
+					  ((text :initarg :text) (pos :initform 0)))
+					(defmethod rontolisp:stream-read-char ((s gin-source))
+					  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+					    (if (>= pos (length text))
+					        :eof
+					        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+					(defclass gin-bytes (rontolisp:fundamental-binary-input-stream) ())
+					(let ((in (make-instance 'gin-source :text (format nil "ab~%  cd"))))
+					  (print (peek-char nil in))
+					  (print (read-char in))
+					  (print (unread-char #\\a in))
+					  (print (read-char in))
+					  (print (read-char-no-hang in))
+					  (print (read-line in))
+					  (print (peek-char t in))
+					  (print (peek-char #\\d in))
+					  (print (read-line in))
+					  (print (peek-char nil in nil :done))
+					  (print (open-stream-p in))
+					  (print (stream-element-type in))
+					  (print (stream-element-type (make-instance 'gin-bytes))))
+					""")))))
+			.isEqualTo("#\\a\n#\\a\nNIL\n#\\a\n#\\b\n\"\"\n#\\c\n#\\d\n\"d\"\n:DONE\nT\nCHARACTER\n(UNSIGNED-BYTE 8)");
+	}
+
+	@Test
+	void compileAndRunUnreadCharOnAStreamHandleSignals() throws Exception {
+		// The handle arm of unread-char is the same signal on every backend --
+		// LispMacroExpander.expandUnreadChar keeps the arguments in front of it, so
+		// their effects still happen in CL's order.
+		assertThat(compileAndRun("""
+				(handler-case
+				    (let ((s (make-string-input-stream "abc")))
+				      (read-char s)
+				      (unread-char #\\a s))
+				  (error (e) (print (princ-to-string e))))
+				""")).isEqualTo("\"UNREAD-CHAR is supported only on a Gray input stream\"");
+	}
+
+	@Test
 	void compileAndRunReadTimeEval() throws Exception {
 		// The CLI pipeline: marker read -> UserMacroExpander resolves each marker
 		// against the macro-time evaluator -> the compilers see plain forms.
@@ -8396,12 +8445,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("427");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("429");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("427");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("429");
 	}
 
 	@Test

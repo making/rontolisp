@@ -12,8 +12,8 @@ as leaves — plus the generics `stream-write-char`, `stream-write-string
 family `stream-line-column`, `stream-start-line-p`, `stream-terpri`,
 `stream-fresh-line`, `stream-advance-to-column`, the flush family
 `stream-force-output` / `stream-finish-output` / `stream-clear-output`,
-`stream-read-byte`, `stream-read-char`, `stream-unread-char` (protocol-only, no
-built-in dispatches), `stream-read-line`, `stream-listen`,
+`stream-read-byte`, `stream-read-char`, `stream-read-char-no-hang`,
+`stream-peek-char`, `stream-unread-char`, `stream-read-line`, `stream-listen`,
 `stream-read-sequence` / `stream-write-sequence` `(stream sequence start end)`
 (end always an integer by method time), `stream-file-position` and its
 `(setf ...)` writer generic (todo-232 setf methods) — all plain CLOS-subset
@@ -45,6 +45,27 @@ stream), `stream-fresh-line` is
 `(unless (stream-start-line-p s) (stream-terpri s) t)`, and the flush trio
 answers nil (no backend buffers output in a way a program could discard).
 
+**Exactly ONE required method on the read side too: `stream-read-char`**
+(`stream-read-byte` for a binary stream) -- todo-400, the read-side twin of
+todo-252's output widening. `stream-read-line` / `stream-read-sequence` loop it,
+`stream-read-char-no-hang` IS it (sb-gray's own default; no rontolisp source is
+non-blocking in a way a class could not wrap itself), and `stream-peek-char`
+reads one and hands it back through `stream-unread-char`. **`stream-unread-char`
+has a default too, and where it keeps the character is the decision worth
+knowing**: a pair of gray.lisp defvars, `rontolisp::*gray-unread-stream*` /
+`*gray-unread-char*` -- ONE character for ONE stream at a time, the same shape
+the WASM backend's own fd pushback (`PEEK_FD_ADDR`/`PEEK_CP_ADDR`) already has,
+and exactly what CL promises for `unread-char`. Full Gray puts that state in the
+CLASS; keeping the default here is what makes `stream-read-char` the single
+required method, and a class that CAN rewind its source (dexador's
+`decoding-stream`) defines `stream-unread-char`, after which the cell is never
+written. `rontolisp::%gray-read-char-1` is the ONE read-one-character entry that
+drains the cell -- `%gray-default-read-line`, `%gray-default-read-sequence`,
+`%gray-default-peek-char` and the read dispatch helpers all go through it, so a
+class overriding `stream-read-line`/`stream-read-sequence` OUTRIGHT is the one
+shape that reads past a pushed-back character (documented in the doc page's
+Limits).
+
 **Read-side EOF convention: the read generics answer the keyword `:eof`**; the dispatch layer
 translates it into the `eof-error-p`/`eof-value` contract, signalling
 `(error 'end-of-file)` (same class + "end of file" message as the built-ins).
@@ -71,8 +92,30 @@ does not exist yet. A pipeline that splices gray.lisp must therefore run
 write-string/char, write-byte, read-byte/char/line (read-line's eof-error-p
 defaults NIL — the built-in's lite convention; read-byte/char default T),
 listen, read-sequence/write-sequence (normalize a missing end to
-`(length sequence)`), file-position get/set, and (todo-252) terpri, fresh-line,
-write-line, princ/prin1/print, force-output/finish-output/clear-output, close.
+`(length sequence)`), file-position get/set, (todo-252) terpri, fresh-line,
+write-line, princ/prin1/print, force-output/finish-output/clear-output, close,
+and (todo-400) read-char-no-hang, peek-char, unread-char, open-stream-p,
+stream-element-type.
+
+**`peek-char` carries its `peek-type` INTO the helper**, which loops the
+skipping forms itself (`%gray-whitespace-char-p` is the third copy of the
+five-character whitespace set, beside `Environment.isLispWhitespace` and
+`LispMacroExpander.whitespaceCharTest`). It has to: `expandPeekChar` lowers the
+`t` / character forms onto `%peek-char` + `read-char` and runs AFTER the rewrite,
+so its calls would never see the instance.
+
+**`open-stream-p` and `stream-element-type` join `close` as the operators a
+program can OWN** (`GrayStreamsLibrary.OWNABLE_OPERATORS`, the interpreter's
+`wrapGrayOwnableOperator`): CL spells all three as ordinary functions a class
+methods directly -- dexador's `decoding-stream` defines exactly these three --
+so the protocol deliberately grows no competing `rontolisp:stream-*` generic for
+them, and both seams stand down for a program that defines one. The Gray answers
+otherwise are `t` (an instance holds nothing that could be shut) and `character`
+/ `(unsigned-byte 8)` off a `typep` against the two binary base classes.
+`Environment`'s `open-stream-p` also answers `t` for ANY instance now: without
+that, a program that OWNS the name -- the one case the dispatch stands down for
+-- had the interpreter answer nil where the compile paths' lite lowering
+answered t.
 
 **The print-family helpers RENDER and then write**: `%gray-princ-dispatch` /
 `-prin1-dispatch` / `-print-dispatch` call `princ-to-string` / `prin1-to-string`
@@ -247,8 +290,7 @@ uses the protocol, so the failure was "Parameter must be a symbol" in an
 unrelated library. Latent until todo-249 made a mito program trigger the splice
 across cl-postgres.
 
-**Limits**: `stream-unread-char` has no dispatching built-in and `peek-char`
-does not dispatch. `listen` on a Gray instance works interpreter/JVM; Preview 1
+**Limits**: `listen` on a Gray instance works interpreter/JVM; Preview 1
 WASM rejects ANY `listen` at compile time (pre-existing platform limit, Gray
 or not — the rewrite keeps that error, it neither adds nor removes it). Both
 seams key on "is this an instance", so they agree; a plain cons handed as a
@@ -266,7 +308,29 @@ stopping at the two write generics — `terpri`/`fresh-line`/`write-line`/
 Gray instance, and `princ`/`print` writing PAST the instance on the compile
 paths — is retired too (todo-252); what is left of that boundary is
 `stream-advance-to-column`, which has no dispatching built-in (`format`'s
-`~T` does not consult it).
+`~T` does not consult it). The INPUT side stopping at read-byte/read-char/
+read-line/read-sequence/listen -- `peek-char` signalling "expects an input
+stream" on the interpreter and BLOCKING ON STDIN on the JVM, `unread-char` /
+`read-char-no-hang` not existing at all, `open-stream-p` answering nil on the
+interpreter and t on the JVM -- is retired too (todo-400). What is left of that
+boundary is `input-stream-p` / `output-stream-p`, which answer nil for a Gray
+instance on every backend: giving them the Gray answer needs a direction
+predicate per base class (two generics, four methods) spliced into every Gray
+program, and no consumer has asked yet.
+
+**`unread-char` and `read-char-no-hang` are new built-ins, and only the second
+is complete for a stream HANDLE.** `read-char-no-hang` lowers to `read-char`
+(`LispMacroExpander.expandReadCharNoHang`, plus `Environment`'s own definition
+for the interpreter) -- no source rontolisp can open reports "would block"
+separately from "read one". `unread-char`'s handle arm SIGNALS
+(`LispMacroExpander.UNREAD_CHAR_ONLY_GRAY_MESSAGE`, shared verbatim by both
+seams): no backend keeps a pushback a handle-based read would drain, and adding
+one means a per-handle cell that `read-char`/`%peek-char`/`read-line` all consult
+in hand-written JVM bytecode and WASM as well as in `Environment` -- a feature of
+its own, not part of the Gray dispatch. Signalling is what keeps the four
+backends identical in the meantime; cl-json, local-time and chunga are the
+callers that would want the handle arm. Neither operator needed a per-backend
+compiler class: both are macro lowerings plus `BuiltinFunctionWrappers` entries.
 
 ## `make-broadcast-stream` is a Gray stream (todo-249)
 
@@ -300,14 +364,21 @@ Pinning tests: `LispEvaluatorTest#grayStreamInstanceReceivesWriteCharAndWriteStr
 (shim), `#grayBaseClassSuperclassLoadsGrayStreamsEagerly` (bare protocol),
 `#grayBinaryStreamReadWriteBytesAndFilePosition`,
 `#grayInputStreamReadCharReadLineAndSequenceDefaults`,
+`#grayInputStreamPeekUnreadNoHangAndStreamQueries`,
+`#grayInputStreamUnreadCharMethodOwnsThePushback`,
+`#unreadCharOnAStreamHandleSignals`,
 `#grayShimBinaryInputStreamWithMixinAndSetfFilePosition` (the circular-streams
 class shape), `JvmLispCompilerTest#compileAndRunGrayStreamInstanceDispatch`,
 `#compileAndRunGrayBinaryStreamDispatchAndFilePosition`,
 `#compileAndRunGrayInputStreamReadLineAndSequenceDefaults`,
+`#compileAndRunGrayInputStreamPeekUnreadAndStreamQueries`,
+`#compileAndRunUnreadCharOnAStreamHandleSignals`,
 `WasmLispCompilerIntegrationTest#grayStreamInstanceDispatch`,
-`#grayBinaryStreamDispatchAndFilePosition`, ci-spec
-`gray-stream-instance-dispatch` and
-`gray-stream-binary-round-trip-and-file-position`.
+`#grayBinaryStreamDispatchAndFilePosition`,
+`#grayInputStreamPeekUnreadAndStreamQueries`, ci-spec
+`gray-stream-instance-dispatch`,
+`gray-stream-binary-round-trip-and-file-position` and
+`gray-stream-input-protocol-widening`.
 
 ## flexi-streams' in-memory octet streams are REAL Gray streams (todo-231)
 

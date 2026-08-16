@@ -4,9 +4,11 @@
 ;; ansi-streams, ...). The stream-taking built-ins (write-string/write-char,
 ;; princ/prin1/print, terpri/fresh-line/write-line,
 ;; force-output/finish-output/clear-output, close, write-byte,
-;; read-byte/read-char/read-line, listen, read-sequence/write-sequence,
-;; file-position) dispatch to the rontolisp:stream-* generics when handed a
-;; CLOS instance instead of a stream handle. Third-party portability layers
+;; read-byte/read-char/read-char-no-hang/peek-char/unread-char/read-line,
+;; listen, read-sequence/write-sequence, file-position, and the stream
+;; predicates open-stream-p/input-stream-p/output-stream-p plus
+;; stream-element-type) dispatch to the rontolisp:stream-* generics when handed
+;; a CLOS instance instead of a stream handle. Third-party portability layers
 ;; adapt to THIS protocol (see trivial-gray-streams.lisp); no third-party name
 ;; is known to the core.
 ;;
@@ -17,14 +19,23 @@
 ;; Defining NEITHER is the one broken shape: the two defaults then call each
 ;; other.
 ;;
+;; Read-side requirement: a character input stream defines stream-read-char and
+;; nothing else is mandatory (a binary one defines stream-read-byte). Every
+;; other read generic has a default written over it -- stream-read-line and
+;; stream-read-sequence loop it, stream-read-char-no-hang IS it, and
+;; stream-peek-char reads one and pushes it back through stream-unread-char,
+;; whose own default parks the character in the protocol's one-slot pushback
+;; cell. A class that can rewind its source defines stream-unread-char and owns
+;; the pushback instead; the cell is then never written.
+;;
 ;; Read-side EOF convention: stream-read-byte / stream-read-char /
-;; stream-read-line return the keyword :eof at end of stream; the built-in
-;; dispatch translates that into the eof-error-p / eof-value contract
-;; (signalling end-of-file like the handle-based built-ins).
-;; stream-read-line answers a partial last line as that line; :eof means "no
-;; characters left at all". Primary values only -- no (values line
-;; missing-newline-p) pair crosses a function boundary on the compile
-;; backends.
+;; stream-read-line / stream-peek-char / stream-read-char-no-hang return the
+;; keyword :eof at end of stream; the built-in dispatch translates that into
+;; the eof-error-p / eof-value contract (signalling end-of-file like the
+;; handle-based built-ins). stream-read-line answers a partial last line as
+;; that line; :eof means "no characters left at all". Primary values only -- no
+;; (values line missing-newline-p) pair crosses a function boundary on the
+;; compile backends.
 
 (defclass rontolisp:fundamental-stream () ())
 
@@ -86,6 +97,10 @@
 
 (defgeneric rontolisp:stream-read-char (stream))
 
+(defgeneric rontolisp:stream-read-char-no-hang (stream))
+
+(defgeneric rontolisp:stream-peek-char (stream))
+
 (defgeneric rontolisp:stream-unread-char (stream character))
 
 (defgeneric rontolisp:stream-read-line (stream))
@@ -112,11 +127,52 @@
 ;; read-line and the sequence built-ins. The loops are plain defuns so the
 ;; trivial-gray-streams shim can reuse them for its own defaults.
 
+;; The protocol's ONE-SLOT pushback: stream-unread-char's default method parks
+;; the character here and %gray-read-char-1 -- the single read-one-character
+;; entry every default and every read dispatch helper goes through -- drains it
+;; first. One character for one stream at a time, which is what CL promises for
+;; unread-char and exactly the shape the WASM backend's own fd pushback has.
+;; A class that defines stream-unread-char itself never reaches this cell: its
+;; method rewinds its own source and its stream-read-char answers the rewound
+;; character.
+
+(defvar rontolisp::*gray-unread-stream* nil)
+
+(defvar rontolisp::*gray-unread-char* nil)
+
+(defun rontolisp::%gray-default-unread-char (stream character)
+  (setq rontolisp::*gray-unread-stream* stream)
+  (setq rontolisp::*gray-unread-char* character)
+  nil)
+
+(defun rontolisp::%gray-read-char-1 (stream)
+  (if (eq rontolisp::*gray-unread-stream* stream)
+      (let ((c rontolisp::*gray-unread-char*))
+        (setq rontolisp::*gray-unread-stream* nil)
+        (setq rontolisp::*gray-unread-char* nil)
+        c)
+      (rontolisp:stream-read-char stream)))
+
+;; The five characters CL's standard readtable calls whitespace -- the set
+;; peek-char's t peek-type skips. Kept in step with Environment's
+;; isLispWhitespace and LispMacroExpander.whitespaceCharTest, the other two
+;; copies of this set.
+(defun rontolisp::%gray-whitespace-char-p (c)
+  (or (char= c #\Space) (char= c #\Tab) (char= c #\Newline) (char= c #\Return)
+      (char= c #\Page)))
+
+(defun rontolisp::%gray-default-peek-char (stream)
+  (let ((c (rontolisp::%gray-read-char-1 stream)))
+    (if (eq c :eof)
+        :eof (progn
+               (rontolisp:stream-unread-char stream c)
+               c))))
+
 (defun rontolisp::%gray-default-read-line (stream)
   (let ((acc "") (result nil) (done nil))
     (do ()
         (done result)
-      (let ((c (rontolisp:stream-read-char stream)))
+      (let ((c (rontolisp::%gray-read-char-1 stream)))
         (cond ((eq c :eof)
                (setq result (if (string= acc "") :eof acc))
                (setq done t))
@@ -131,7 +187,7 @@
         ((or done (>= i end)) i)
       (let ((elt
              (if chars
-                 (rontolisp:stream-read-char stream)
+                 (rontolisp::%gray-read-char-1 stream)
                  (rontolisp:stream-read-byte stream))))
         (if (eq elt :eof)
             (setq done t)
@@ -246,6 +302,25 @@
 (defmethod rontolisp:stream-read-line
     ((stream rontolisp:fundamental-input-stream))
   (rontolisp::%gray-default-read-line stream))
+
+;; The read-side pair to the write side's write-char/write-string defaults:
+;; stream-read-char is the ONE method a character input stream must supply and
+;; everything else is written over it. stream-read-char-no-hang IS
+;; stream-read-char (rontolisp has no non-blocking source a class could not
+;; wrap itself); stream-peek-char reads one and hands it back through
+;; stream-unread-char, whose default parks it in the protocol's pushback cell.
+
+(defmethod rontolisp:stream-read-char-no-hang
+    ((stream rontolisp:fundamental-input-stream))
+  (rontolisp::%gray-read-char-1 stream))
+
+(defmethod rontolisp:stream-peek-char
+    ((stream rontolisp:fundamental-input-stream))
+  (rontolisp::%gray-default-peek-char stream))
+
+(defmethod rontolisp:stream-unread-char
+    ((stream rontolisp:fundamental-input-stream) character)
+  (rontolisp::%gray-default-unread-char stream character))
 
 (defmethod rontolisp:stream-listen ((stream rontolisp:fundamental-input-stream))
   nil)
@@ -416,9 +491,79 @@
 (defun rontolisp::%gray-read-char-dispatch (stream eof-error-p eof-value)
   (let ((stream (%synonym-target stream)))
     (if (%obj-p stream)
-        (let ((c (rontolisp:stream-read-char stream)))
+        (let ((c (rontolisp::%gray-read-char-1 stream)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
         (read-char stream eof-error-p eof-value))))
+
+(defun rontolisp::%gray-read-char-no-hang-dispatch
+    (stream eof-error-p eof-value)
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (let ((c (rontolisp:stream-read-char-no-hang stream)))
+          (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
+        (read-char-no-hang stream eof-error-p eof-value))))
+
+;; peek-char carries CL's peek-type argument, and the SKIPPING forms have to be
+;; looped here rather than left to LispMacroExpander.expandPeekChar: that
+;; expansion runs after this rewrite, so its %peek-char / read-char calls would
+;; never see the instance. nil peeks, t skips whitespace, a character skips up
+;; to that character, and in every case the character stopped on stays in the
+;; stream -- the same contract the handle-based built-in follows (CL 21.2).
+(defun rontolisp::%gray-peek-char-dispatch
+    (peek-type stream eof-error-p eof-value)
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (let ((result nil) (done nil))
+          (do ()
+              (done result)
+            (let ((c (rontolisp:stream-peek-char stream)))
+              (cond ((eq c :eof)
+                     (if eof-error-p (error 'end-of-file) nil)
+                     (setq result eof-value)
+                     (setq done t))
+                    ((null peek-type)
+                     (setq result c)
+                     (setq done t))
+                    ((eq peek-type t)
+                     (if (rontolisp::%gray-whitespace-char-p c)
+                         (rontolisp::%gray-read-char-1 stream)
+                         (progn
+                           (setq result c)
+                           (setq done t))))
+                    (t (if (char= c peek-type)
+                           (progn
+                             (setq result c)
+                             (setq done t))
+                           (rontolisp::%gray-read-char-1 stream)))))))
+        (peek-char peek-type stream eof-error-p eof-value))))
+
+(defun rontolisp::%gray-unread-char-dispatch (character stream)
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (progn
+          (rontolisp:stream-unread-char stream character)
+          nil)
+        (unread-char character stream))))
+
+;; open-stream-p / stream-element-type follow the close rule: CL spells both as
+;; ordinary functions a program may own with a defmethod, so there is no
+;; competing rontolisp: generic and these helpers are used only when the
+;; program defines no method of its own. An instance with no method is OPEN (a
+;; Gray stream holds nothing that could be shut) and answers the element type
+;; of the base class it extends.
+
+(defun rontolisp::%gray-open-stream-p-dispatch (stream)
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream) t (open-stream-p stream))))
+
+(defun rontolisp::%gray-stream-element-type-dispatch (stream)
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (if (or (typep stream 'rontolisp:fundamental-binary-input-stream)
+                (typep stream 'rontolisp:fundamental-binary-output-stream))
+            '(unsigned-byte 8)
+            'character)
+        (stream-element-type stream))))
 
 (defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)
   (let ((stream (%synonym-target stream)))

@@ -103,6 +103,7 @@ public final class BuiltinFunctionWrappers {
 		// values should not carry (and which the mayCreateInstances gate would not see
 		// coming -- it scans the source program, not the injected wrappers).
 		gated.add(LispNames.READ_CHAR);
+		gated.add(LispNames.READ_CHAR_NO_HANG);
 		gated.add(LispNames.PEEK_CHAR);
 		gated.add(LispNames.READ_BYTE);
 		// #'class-of resolves through the generated %find-class metaobject runtime,
@@ -1052,7 +1053,12 @@ public final class BuiltinFunctionWrappers {
 			new WrapperDef(LispNames.READ_CHAR, List.of(), List.of(call(LispNames.READ_CHAR))),
 			new WrapperDef(LispNames.PEEK_CHAR, List.of(LispNames.LAMBDA_OPTIONAL, "a", "b"),
 					List.of(call(LispNames.PEEK_CHAR, "a", "b"))),
-			unary(LispNames.READ_BYTE),
+			// read-char-no-hang mirrors read-char's 0-arity stdin shape; unread-char is
+			// binary (character + stream) -- its body signals on a handle, and a Gray
+			// instance reaches it only through a rewritten CALL site, so #'unread-char is
+			// the handle answer by construction.
+			new WrapperDef(LispNames.READ_CHAR_NO_HANG, List.of(), List.of(call(LispNames.READ_CHAR_NO_HANG))),
+			binary(LispNames.UNREAD_CHAR), unary(LispNames.READ_BYTE),
 			// gensym: 0-arity (the literal-prefix form cannot be a first-class value;
 			// macroexpand/macroexpand-1 have no wrapper at all -- the macro table does
 			// not exist at runtime in compiled output)

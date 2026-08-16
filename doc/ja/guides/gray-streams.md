@@ -26,8 +26,13 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `write-byte` | `rontolisp:stream-write-byte` |
 | `read-byte` | `rontolisp:stream-read-byte` |
 | `read-char` | `rontolisp:stream-read-char` |
+| `read-char-no-hang` | `rontolisp:stream-read-char-no-hang` (デフォルトメソッドは `stream-read-char` そのもの) |
+| `peek-char` | `rontolisp:stream-peek-char` (デフォルトメソッドは 1 文字読んで `stream-unread-char` で押し戻す)。`peek-type` の読み飛ばし形式はこれをループします |
+| `unread-char` | `rontolisp:stream-unread-char` (デフォルトメソッドはプロトコルが持つ 1 文字ぶんの押し戻しスロットに保管) |
 | `read-line` | `rontolisp:stream-read-line` (デフォルトメソッドは `stream-read-char` をループ) |
 | `listen` | `rontolisp:stream-listen` (デフォルトメソッドは `nil` を返す) |
+| `open-stream-p` | `t` を返します -- `close` と同じく、プログラムが所有できる名前です |
+| `stream-element-type` | `character`、バイナリ基底クラスなら `(unsigned-byte 8)` -- プログラムが所有できる名前です |
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (デフォルトメソッドは要素総称関数をループ) |
 | `file-position` | `rontolisp:stream-file-position`。2 引数形式は `(setf rontolisp:stream-file-position)` ライタ総称関数を呼ぶ |
 
@@ -64,6 +69,15 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 
 このメソッドはすべてのバックエンドでディスパッチします。これを定義したプログラムが
 `close` を完全に所有し、Gray のデフォルトは道を譲ります。
+
+文字**入力**ストリームが定義すべきなのは **`stream-read-char` ただ 1 つ**です
+(バイナリなら `stream-read-byte`)。読み取り側の残りはすべてその上に書かれています:
+`stream-read-line` と `stream-read-sequence` はそれをループし、
+`stream-read-char-no-hang` はそれ自体で、`stream-peek-char` は 1 文字読んでから
+`stream-unread-char` で押し戻します。`stream-unread-char` の既定メソッドは、その文字を
+プロトコルが持つ 1 文字ぶんの押し戻しスロットに保管します。自前でソースを巻き戻せる
+クラスは `stream-unread-char` を定義して押し戻しを自分で所有します — そのときスロットは
+一度も書かれません。
 
 読み取り側のメソッドはストリーム終端でキーワード `:eof` を返します。組み込みはそれを通常の
 `eof-error-p` / `eof-value` 契約に翻訳します。`stream-read-line`
@@ -122,6 +136,28 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
   (list (read-byte in) (read-byte in nil :done))) ; => (10 20)
 ```
 
+`stream-read-char` だけを定義した文字入力ストリームを、読み取りプロトコルの残りで
+駆動する例です:
+
+```lisp
+(defclass text-source (rontolisp:fundamental-character-input-stream)
+  ((text :initarg :text) (pos :initform 0)))
+(defmethod rontolisp:stream-read-char ((s text-source))
+  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+    (if (>= pos (length text))
+        :eof
+        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+(let ((in (make-instance 'text-source :text "ab  cd")))
+  (list (peek-char nil in)                ; 消費せずに覗く
+        (read-char in)
+        (progn (unread-char #\a in) (read-char in))
+        (read-char-no-hang in)
+        (peek-char t in)                  ; 空白を読み飛ばす
+        (read-line in)
+        (open-stream-p in)
+        (stream-element-type in))) ; => (#\a #\a #\a #\b #\c "cd" T CHARACTER)
+```
+
 ## trivial-gray-streams シム
 
 ポータブルなライブラリは処理系独自のプロトコルではなく
@@ -163,10 +199,17 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 
 ## 制限
 
-- `rontolisp:stream-unread-char` と `rontolisp:stream-advance-to-column` は
-  プロトコル総称関数として存在しますが、どの組み込みもディスパッチしません
-  (`unread-char` は組み込みになく、`format` の `~T` も桁位置を参照しません)。
-  `peek-char` も Gray インスタンスへディスパッチしません。
+- `rontolisp:stream-advance-to-column` はプロトコル総称関数として存在しますが、
+  どの組み込みもディスパッチしません (`format` の `~T` は桁位置を参照しません)。
+- プロトコルの押し戻しは 1 ストリームにつき 1 文字だけを保持します。これは CL が
+  `unread-char` に約束している範囲そのものです。プロトコル自身のデフォルトを通る読み取りは
+  すべてこれを消費しますが、`stream-read-line` や `stream-read-sequence` を丸ごと
+  オーバーライドしたクラスは押し戻しを読み飛ばすので、そうしたクラスは
+  `stream-unread-char` も定義してください。
+- `input-stream-p` / `output-stream-p` はディスパッチしません。Gray インスタンスは
+  どちらにも `nil` を返します。
+- ストリーム**ハンドル**への `unread-char` は通知します — ハンドル経由の読み取りが
+  消費できる押し戻しは、どのバックエンドにもありません。
 - 読み取り総称関数はプライマリ値のみを返します: `stream-read-line` に
   `(values line missing-newline-p)` のペアはなく、`:eof` が EOF の唯一のシグナルです。
 - Gray インスタンスへの `listen` はインタープリタと JVM で動作します。Preview 1 WASM
