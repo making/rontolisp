@@ -563,6 +563,27 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void theTestSubcommandHasItsOwnHelp() {
+		assertThat(runCli("", "test", "--help")).contains("Usage: rontolisp test")
+			.contains("--reporter")
+			.doesNotContain("--scaffold-wit");
+		// ...and the top-level usage says the subcommand exists at all.
+		assertThat(runCli("", "-h")).contains("test TARGET");
+	}
+
+	@Test
+	void aTestCommandLineThatCannotNameATargetExitsTwo() {
+		// 2, not 1: "the command was wrong" has to stay distinct from "a test failed",
+		// which is the whole point of the subcommand's exit code (as with `format`).
+		for (String[] args : List.of(new String[] { "test" }, new String[] { "test", "nope.lisp" },
+				new String[] { "test", "-r", "not a style", "x.lisp" })) {
+			String[] result = runReporting(args);
+			assertThat(result[0]).as("%s", String.join(" ", args)).isEqualTo("2");
+			assertThat(result[2]).as("%s", String.join(" ", args)).startsWith("rontolisp: test: ");
+		}
+	}
+
+	@Test
 	void versionOption() {
 		String output = runCli("", "-v");
 		assertThat(output).contains("\"version\":");

@@ -74,13 +74,14 @@ rontolisp hello.lisp -o Hello.class && java Hello              # JVM -> 3
 rontolisp hello.lisp -o hello.wasm && wasmtime run -W gc hello.wasm  # WASM -> 3
 
 rontolisp format hello.lisp               # re-indent (a directory works too)
+rontolisp test tests/main.lisp            # run a rove suite; the exit code is the verdict
 ```
 
 For the REPL, file interpretation, JVM/WASM compilation (including
 `rontolisp:wasm-export`, `rontolisp:wasm-import`, `rontolisp:wit-export` with
 `--scaffold-wit` (implement a WIT world), `--no-wasi`, `--optimize`,
-`--component`, and `--dynamic`), the `format` source formatter, the full
-language reference, and the `rontolisp` extensions (`fetch`), see the
+`--component`, and `--dynamic`), the `format` source formatter, the `test`
+rove runner, the full language reference, and the `rontolisp` extensions (`fetch`), see the
 [documentation site](https://making.github.io/rontolisp/docs/).
 
 ## Project Structure

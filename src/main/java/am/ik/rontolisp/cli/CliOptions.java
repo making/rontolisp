@@ -15,7 +15,7 @@ public class CliOptions {
 	private static final Set<String> noValueKeys = Set.of("-h", "--help", //
 			"-v", "--version", "--dynamic", "--buffered-output", "--component", "--no-wasi", "--host-random",
 			"--host-fetch", "--reentrant", "--optimize", "--no-gc", "--simd", "--no-prune", "--emit-wit",
-			"--emit-js-glue");
+			"--emit-js-glue", "--color", "--no-color", "--disable-colors");
 
 	// A key that may be REPEATED: every occurrence appends to the same value, joined with
 	// a newline, instead of the last one winning. -e is one program written in several
@@ -25,7 +25,7 @@ public class CliOptions {
 
 	// Long spellings that mean an existing key; the value is stored under the short one,
 	// so every reader looks at one name.
-	private static final Map<String, String> aliases = Map.of("--eval", "-e");
+	private static final Map<String, String> aliases = Map.of("--eval", "-e", "--reporter", "-r");
 
 	private final Map<String, String> options;
 

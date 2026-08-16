@@ -135,6 +135,17 @@ these were.
   path is the top-level statement position and nothing else; read the value and the form
   still answers its own name.
 
+## The user-visible corollary: a run's EXIT CODE
+
+The value of the last top-level form is dropped on every backend, the interpreter
+included, so `(rove:run-suite *package*)` at the end of a test file says nothing to the
+shell and a red suite exits 0 -- exactly as `sbcl --script` behaves, and deliberately kept
+(`.todo/395`). A program that wants a status of its own calls `uiop:quit`; a rove suite
+gets one from the `rontolisp test` subcommand, which wraps the target in a runner that
+reads the verdict and quits with it ([asdf.md](asdf.md), the `rontolisp test` section). A
+stderr hint from the plain run path was weighed and rejected there -- do not re-propose a
+silent status change.
+
 ## Related
 
 - [pure-builtin-fold.md](pure-builtin-fold.md) -- the other always-on compile-time

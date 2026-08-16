@@ -8,6 +8,42 @@ WASM Preview 1、WASI 0.3 コンポーネント。依存は自動で解決され
 [dissect](https://github.com/Shinmera/dissect) は実物のソースから、uiop /
 trivial-gray-streams / bordeaux-threads は組み込みシムからです。
 
+## スイートを実行する: `rontolisp test`
+
+`rontolisp test TARGET` は rove のターゲットを実行し、**その判定を終了コードに
+します** — 全テストがパスすれば 0、1 つでも失敗すれば 1。rove 自身の
+`roswell/rove.ros` スクリプトに相当するもので、CI のステップや `make test`、
+git フックが `$?` を読めるようになります:
+
+```bash
+rontolisp test tests/main.lisp     # a test file
+rontolisp test my-app.asd          # the system the .asd is named after
+rontolisp test my-app/tests        # an ASDF system designator
+```
+
+| ターゲット | 実行されるもの |
+| --- | --- |
+| `FILE.lisp` | ファイルをロードします。その `defpackage` が検索パス上の ASDF システムを名指していれば、代わりにそのシステムをロードしてテストします (ASDF の package-inferred 規則)。そうでなければファイル自身のパッケージのスイートを実行します — ただしファイルが既に実行済みならそれを検出するので、テストがちょうど 1 回だけ走ります |
+| `FILE.asd` | そのファイル名が示すシステム |
+| `SYSTEM` | `asdf:load-system` + `asdf:test-system`。`:perform (test-op ...)` を宣言していないシステムでは続けて `rove:run` |
+
+終了コードは、全テストがパスで **0**、失敗があった場合・プログラムがエラーを
+送出した場合・そして*テストが 1 つも走らなかった*場合 (テストの登録が止まった
+スイートは空虚なパスではなく失敗として扱います) は **1**、コマンドライン自体が
+誤っていた場合は **2** です。
+
+| オプション | 意味 |
+| --- | --- |
+| `-r`, `--reporter spec\|dot\|none` | rove のレポータースタイル。既定は `spec` |
+| `--disable-colors`, `--color` | ANSI カラーを強制的に切る / 点ける。既定は出力先に従い、端末なら点き、パイプなら切れます |
+| `--system-path DIRS` | `NAME.asd` を探すディレクトリ (`PATH` と同じ形式) |
+| `-o FILE` | 実行する代わりにコンパイルします (後述) |
+
+素の `rontolisp FILE` は従来どおりで、Common Lisp のセマンティクスを保ちます:
+最後のトップレベルフォームの値は捨てられ、ステータスは 0 のままです —
+`sbcl --script` とまったく同じです。独自のステータスを返したいプログラムは
+`uiop:quit` を書きます。
+
 ## テストを書く
 
 アサーション一式が動作します: `deftest`、`testing`、`ok`、`ng`、`signals`
@@ -58,7 +94,8 @@ $ cat tests/main.lisp
 各エントリポイントは、すべてパスしたかどうかを第 1 の値として返します。
 
 非対話出力では、まず ANSI カラーを切ってください — rove のデフォルトは
-Emacs 外ではカラー ON です:
+Emacs 外ではカラー ON です (`rontolisp test` は、出力先が端末でなければ自動で
+切ります):
 
 ```console
 (setf rove:*enable-colors* nil)
@@ -70,33 +107,46 @@ Emacs 外ではカラー ON です:
 `asdf:load-system` が名指すシステムはコンパイル時にスプライスされ、rove 自身が
 実行時に行うロード済みシステムの `load-system` は no-op になります。
 `--system-path` に `.asd` を持つディレクトリ (テスト対象アプリ、rove、dissect、
-cl-ppcre) を指定します:
+cl-ppcre) を指定します。
+
+`rontolisp test -o` は実行する代わりにコンパイルし、出力される成果物は同じ
+終了コードの契約を持ちます。コンパイラのフラグはすべてそのまま使えます:
 
 ```bash
 SP="path/to/my-app:path/to/rove:path/to/dissect:path/to/cl-ppcre"
+T="rontolisp test --system-path $SP tests/main.lisp"
 
 # 1. Interpreter
-rontolisp --system-path "$SP" run-tests.lisp
+$T
 
 # 2. JVM
-rontolisp --system-path "$SP" run-tests.lisp -o Tests.class && java Tests
+$T -o Tests.class && java Tests
 
 # 3. WASM Preview 1
-rontolisp --system-path "$SP" run-tests.lisp -o tests.wasm && \
-  wasmtime run -W gc -W exceptions=y tests.wasm
+$T -o tests.wasm && wasmtime run -W gc=y -W exceptions=y tests.wasm
 
 # 4. WASI 0.3 component
-rontolisp --system-path "$SP" run-tests.lisp -o tests-comp.wasm --component && \
+$T -o tests-comp.wasm --component && \
   wasmtime run -W gc=y -W exceptions=y tests-comp.wasm
 ```
 
 WASM の実行は両方とも `-W exceptions=y` が必要です: rove は失敗したテストを
-`handler-bind` で記録するため、モジュールは EH モードになります。
+`handler-bind` で記録するため、モジュールは EH モードになります。自分自身が
+ランナーであるテストプログラム (後述) は、`test` を付けない素の `rontolisp`
+で同じようにコンパイルできます。
 
 ## 終了コード
 
-`rove:run` はパスしたかどうかの真偽値を返し、`uiop:quit` はどのバックエンドでも
-本当にプロセスを終了させます — CI のゲートはプログラム末尾の 1 行です:
+終了コードは `rontolisp test` が持ちます。そしてそれが本来あるべき場所です:
+テストファイルの中に書いた `uiop:quit` は、そのファイルを*他の何か* — 別の
+スイート、REPL、それに依存するシステム — がロードした瞬間にプロセスを殺します。
+ファイルはテストを持ち、ランナーは終了コードを持つ。上流も同じ線を引いています:
+`uiop:quit` を呼ぶのは `rove.ros` であり、`.asd` の `:perform (test-op ...)` は
+終了を ASDF の呼び出し元に委ねます。
+
+手で書くのが正しいのはただ 1 か所、自前の 1 行ランナーです。`rove:run` は
+パスしたかどうかの真偽値を返し、`uiop:quit` はどのバックエンドでも本当に
+プロセスを終了させます:
 
 ```console
 (uiop:quit (if (rove:run :my-app/tests) 0 1))
@@ -148,7 +198,8 @@ WASM の実行は両方とも `-W exceptions=y` が必要です: rove は失敗�
 - **コンパイルされたプログラムでの `:style :none`** は、プログラム自身が
   `rove/reporter/none` をロードする必要があります — `make-reporter` は未知の
   スタイルのシステムを実行時にロードし、それができるのはインタプリタだけです。
-  `:spec` (デフォルト) と `:dot` は組み込みです。
+  `:spec` (デフォルト) と `:dot` は組み込みです。`rontolisp test -r none -o ...`
+  なら代わりにロードします。
 - **テスト本体の内側の `handler-case` は rove の記録機構を覆い隠しません。**
   rove は各テスト本体を `handler-bind` で包みますが、その内側の `handler-case`
   はまだ外側のハンドラの起動を止められません — したがって、自分でエラーを

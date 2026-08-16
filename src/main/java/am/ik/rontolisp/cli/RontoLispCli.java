@@ -110,11 +110,25 @@ public final class RontoLispCli {
 			this.exitCode = new FormatCommand(this.in, this.out).run(Arrays.copyOfRange(args, 1, args.length));
 			return;
 		}
+		// `test` is the exception: it takes one target and every compiler flag the
+		// ordinary modes take, because it GENERATES a program (the rove runner around
+		// the target) and then runs or compiles it through the very same pipeline. So
+		// its arguments are parsed by CliOptions like any other run's, and only the
+		// source is different.
+		boolean test = args.length > 0 && "test".equals(args[0]);
+		if (test) {
+			args = Arrays.copyOfRange(args, 1, args.length);
+		}
 
 		CliOptions options = CliOptions.build(args);
 
 		if (options.contains("-h") || options.contains("--help")) {
-			printUsage();
+			if (test) {
+				TestCommand.printUsage(this.out);
+			}
+			else {
+				printUsage();
+			}
 			return;
 		}
 		if (options.contains("-v") || options.contains("--version")) {
@@ -145,17 +159,37 @@ public final class RontoLispCli {
 			throw new IllegalArgumentException("-e/--eval cannot be combined with the input file '" + options.getNokey()
 					+ "': give the program either inline or in a file");
 		}
-		if (inline == null && !options.containsNoKey()) {
+		if (!test && inline == null && !options.containsNoKey()) {
 			repl(systemPath, options.contains("--simd"));
 			return;
 		}
 
-		String inputFile = inline == null ? Objects.requireNonNull(options.getNokey()) : null;
-		String source = inputFile == null ? Objects.requireNonNull(inline) : readFile(inputFile);
-		// Relative (load "...") paths resolve against the entry file's directory, so a
-		// program can be run or compiled from any working directory and still find its
-		// companion files (like Common Lisp's *load-pathname*).
-		String baseDir = inputFile == null ? null : SourceLoader.parentDir(inputFile);
+		String inputFile;
+		String source;
+		String baseDir;
+		if (test) {
+			// The generated program is nobody's file, so it names none: an error inside
+			// it prints line:column, while everything the target itself contributes
+			// keeps the target's own positions.
+			TestCommand.Program program = TestCommand.build(options, systemPath);
+			if (program == null) {
+				// The command line was wrong, not the tests: 2 keeps that distinct from
+				// the 1 a failing suite exits with, the way `format` separates them.
+				this.exitCode = 2;
+				return;
+			}
+			inputFile = null;
+			source = program.source();
+			baseDir = program.baseDir();
+		}
+		else {
+			inputFile = inline == null ? Objects.requireNonNull(options.getNokey()) : null;
+			source = inputFile == null ? Objects.requireNonNull(inline) : readFile(inputFile);
+			// Relative (load "...") paths resolve against the entry file's directory, so
+			// a program can be run or compiled from any working directory and still find
+			// its companion files (like Common Lisp's *load-pathname*).
+			baseDir = inputFile == null ? null : SourceLoader.parentDir(inputFile);
+		}
 
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
@@ -857,6 +891,11 @@ public final class RontoLispCli {
 		this.out.println("  format PATH...     Re-indent Lisp source files in place (a");
 		this.out.println("                     directory is walked for .lisp and .asd files).");
 		this.out.println("                     See: rontolisp format --help");
+		this.out.println("  test TARGET        Run a rove test file, .asd or system and EXIT with");
+		this.out.println("                     its verdict: 0 all passed, 1 a test failed or none");
+		this.out.println("                     ran. With -o it compiles the run instead, and the");
+		this.out.println("                     artifact carries the same exit contract.");
+		this.out.println("                     See: rontolisp test --help");
 		this.out.println();
 		this.out.println("Options:");
 		this.out.println("  -h, --help         Show this help message");

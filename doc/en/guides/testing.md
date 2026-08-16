@@ -8,6 +8,42 @@ WASI 0.3 component. Its dependencies resolve automatically: cl-ppcre and
 [dissect](https://github.com/Shinmera/dissect) from their real sources, uiop /
 trivial-gray-streams / bordeaux-threads to the built-in shims.
 
+## Running a suite: `rontolisp test`
+
+`rontolisp test TARGET` runs a rove target and **exits with its verdict** — 0
+when every test passed, 1 when one did not. It is this tree's version of rove's
+own `roswell/rove.ros` script, so a CI step, a `make test` or a git hook can
+read `$?`:
+
+```bash
+rontolisp test tests/main.lisp     # a test file
+rontolisp test my-app.asd          # the system the .asd is named after
+rontolisp test my-app/tests        # an ASDF system designator
+```
+
+| Target | What runs |
+| --- | --- |
+| `FILE.lisp` | The file is loaded. If its `defpackage` names an ASDF system on the search path, that system is loaded and tested instead (ASDF's package-inferred rule); otherwise the suite of the file's own package is run — unless the file already ran it, which is detected, so its tests run exactly once |
+| `FILE.asd` | The system the file is named after |
+| `SYSTEM` | `asdf:load-system` + `asdf:test-system`, then `rove:run` for a system that declares no `:perform (test-op ...)` |
+
+The status is **0** when every test passed, **1** when one failed, when the
+program signalled, or when *no test ran at all* — a suite that stopped
+registering its tests is a failure rather than a vacuous pass — and **2** when
+the command line itself was wrong.
+
+| Option | Meaning |
+| --- | --- |
+| `-r`, `--reporter spec\|dot\|none` | rove's reporter style, `spec` by default |
+| `--disable-colors`, `--color` | Force the ANSI colors off / on. The default follows the destination: a terminal gets them, a pipe does not |
+| `--system-path DIRS` | Directories searched for `NAME.asd` (like `PATH`) |
+| `-o FILE` | Compile the run instead of performing it (see below) |
+
+A plain `rontolisp FILE` is unchanged and keeps Common Lisp semantics: the value
+of the last top-level form is dropped and the status stays 0, exactly as
+`sbcl --script` drops it. A program that wants a status of its own says
+`uiop:quit`.
+
 ## Writing tests
 
 The full assertion surface works: `deftest`, `testing`, `ok`, `ng`, `signals`
@@ -58,7 +94,8 @@ loading the file runs it:
 entry point returns whether everything passed as its first value.
 
 For non-interactive output, turn the ANSI colors off first — rove's default is
-colors ON outside Emacs:
+colors ON outside Emacs (`rontolisp test` already does this whenever its output
+is not a terminal):
 
 ```console
 (setf rove:*enable-colors* nil)
@@ -70,33 +107,45 @@ A compiled test program is self-contained: the systems named by top-level
 `asdf:load-system` calls are spliced in at compile time, and rove's own runtime
 `load-system` of an already-loaded system is a no-op. Point `--system-path` at
 the directories holding the `.asd` files (the app under test, rove, dissect,
-cl-ppcre):
+cl-ppcre).
+
+`rontolisp test -o` compiles the run instead of performing it, and the emitted
+artifact carries the same exit contract; every compiler flag applies:
 
 ```bash
 SP="path/to/my-app:path/to/rove:path/to/dissect:path/to/cl-ppcre"
+T="rontolisp test --system-path $SP tests/main.lisp"
 
 # 1. Interpreter
-rontolisp --system-path "$SP" run-tests.lisp
+$T
 
 # 2. JVM
-rontolisp --system-path "$SP" run-tests.lisp -o Tests.class && java Tests
+$T -o Tests.class && java Tests
 
 # 3. WASM Preview 1
-rontolisp --system-path "$SP" run-tests.lisp -o tests.wasm && \
-  wasmtime run -W gc -W exceptions=y tests.wasm
+$T -o tests.wasm && wasmtime run -W gc=y -W exceptions=y tests.wasm
 
 # 4. WASI 0.3 component
-rontolisp --system-path "$SP" run-tests.lisp -o tests-comp.wasm --component && \
+$T -o tests-comp.wasm --component && \
   wasmtime run -W gc=y -W exceptions=y tests-comp.wasm
 ```
 
 Both WASM runs need `-W exceptions=y`: rove records a failing test through
-`handler-bind`, which puts the module in EH mode.
+`handler-bind`, which puts the module in EH mode. A test program that is its own
+runner (below) compiles the same way with a plain `rontolisp`, no `test`.
 
 ## The exit code
 
-`rove:run` returns the passed-p boolean, and `uiop:quit` really ends the
-process on every backend — so a CI gate is one line at the end of the program:
+`rontolisp test` owns the exit code, and that is where it belongs: a
+`uiop:quit` written inside a test file kills the process the moment anything
+*else* loads that file — another suite, the REPL, a system that depends on it.
+The file owns the tests; the runner owns the exit. Upstream draws the same line:
+`rove.ros` calls `uiop:quit`, and a `.asd`'s `:perform (test-op ...)` leaves the
+exit to whoever invoked ASDF.
+
+Writing it by hand is right in exactly one place: a one-line runner of your own.
+`rove:run` returns the passed-p boolean, and `uiop:quit` really ends the process
+on every backend:
 
 ```console
 (uiop:quit (if (rove:run :my-app/tests) 0 1))
@@ -148,7 +197,7 @@ whole of it:
 - **`:style :none` on a compiled program** needs the program to load
   `rove/reporter/none` itself — `make-reporter` loads an unknown style's system
   at run time, which only the interpreter can do. `:spec` (the default) and
-  `:dot` are built in.
+  `:dot` are built in. `rontolisp test -r none -o ...` loads it for you.
 - **A `handler-case` inside a test body does not shadow rove's recorder.** rove
   wraps each test body in a `handler-bind`, and an intervening `handler-case`
   does not yet stop that outer handler from running — so code under test that

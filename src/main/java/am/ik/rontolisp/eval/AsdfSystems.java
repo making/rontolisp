@@ -1422,6 +1422,30 @@ public final class AsdfSystems {
 	}
 
 	/**
+	 * The package a source FILE declares, read the way real ASDF's
+	 * {@code asdf/package-inferred-system::file-defpackage-form} reads it: the first
+	 * {@code defpackage} / {@code uiop:define-package} in the file, whatever precedes it
+	 * (the common {@code (in-package #:cl-user)} header) skipped, downcased like a system
+	 * designator. That correspondence is the point -- in a package-inferred system the
+	 * declared package IS the sub-system name, which is how {@code rontolisp test FILE}
+	 * (and upstream rove's {@code roswell/rove.ros}) finds the system a test file belongs
+	 * to.
+	 * @param source the file's source text
+	 * @param path the file's path, for error messages
+	 * @param features the reader features the file is read with
+	 * @return the declared package name, downcased, or {@code null} when the file
+	 * declares none
+	 */
+	@Nullable public static String fileDefpackageName(String source, String path, Features features) {
+		LispVal form = LispReader.readFirstFormMatching(source, features, path, AsdfSystems::isPackageDefinitionForm);
+		if (!isPackageDefinitionForm(form)) {
+			return null;
+		}
+		List<LispVal> items = ((LispCons) form).toList();
+		return items.size() < 2 ? null : packageDesignatorName(path, items.get(1));
+	}
+
+	/**
 	 * Parses a PACKAGE-name designator -- a string, a keyword, a {@code #:} designator or
 	 * a bare symbol -- to the downcased package name. Unlike a system designator
 	 * ({@link #designator}, where a string stays verbatim like ASDF's

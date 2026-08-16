@@ -424,7 +424,9 @@ PRIMITIVE, which is per backend. Three groups, three answers.
   of a buffered program from being lost -- and masks the code to eight bits,
   which is what a POSIX host does with it anyway and what `wasi:cli/exit`'s `u8`
   accepts, so `(uiop:quit 300)` is 44 everywhere instead of 300 on one backend.
-  `die` and `shell-boolean-exit` are written over it. Per backend:
+  `die` and `shell-boolean-exit` are written over it. The first-party consumer
+  is the `rontolisp test` runner, whose generated epilogue quits with a rove
+  suite's verdict on every backend ([asdf.md](asdf.md)). Per backend:
   - the interpreter raises `eval.LispExitSignal`, which ESCAPES
     `RontoLispCli.run` and becomes the process code in `main` (`runReporting`
     catches it ahead of the `RuntimeException` arm and returns the code, which

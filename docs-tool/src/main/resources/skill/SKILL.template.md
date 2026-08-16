@@ -64,6 +64,7 @@ rontolisp prog.lisp -o prog.wasm --component && wasmtime run -W gc=y prog.wasm  
 rontolisp                                            # REPL
 rontolisp -e '(print (+ 1 2))'                       # one form
 rontolisp format prog.lisp                           # re-indent in place (whitespace only)
+rontolisp test tests/main.lisp                       # run a rove suite; exit 0 passed, 1 failed
 ```
 
 `rontolisp` is the native binary; `references/getting-started/build.md` says how
