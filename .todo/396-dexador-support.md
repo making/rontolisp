@@ -56,10 +56,15 @@ Blockers, in the order that unblocks the most:
    `(values body status headers uri stream)` through an `unwind-protect` whose
    cleanup ends in `(values)`. Independent of dexador, and the most serious
    finding of the spike.
-2. `.todo/398` -- the babel/babel-encodings shim needs the decoding-MAPPING
-   protocol (`unicode-char`, `*string-vector-mappings*`, `lookup-mapping`,
-   `code-point-counter`, `decoder`, ...). Without it dexador does not even
-   load: `src/decoding-stream.lisp` imports those names.
+2. ~~`.todo/398` -- the babel/babel-encodings shim needs the decoding-MAPPING
+   protocol~~ **DONE (2026-08-16)**: `lookup-mapping` /
+   `code-point-counter` / `octet-counter` / `decoder` / `encoder` over
+   `babel:*string-vector-mappings*`, `unicode-char`,
+   `enc-max-units-per-char`, `get-character-encoding`, the
+   `character-coding-error` hierarchy and `*suppress-character-coding-errors*`,
+   with `string-to-octets`/`octets-to-string` re-expressed as drivers over the
+   mapping layer (`.kb/asdf.md`, `BabelMappingE2eTest`).
+   `src/decoding-stream.lisp` now loads VERBATIM.
 3. `.todo/401` -- ASDF: `:defsystem-depends-on` (dexador.asd's first line),
    `asdf:component-version` (dexador's User-Agent), and
    `asdf:system-relative-pathname` on the compile paths (trivial-mimes).

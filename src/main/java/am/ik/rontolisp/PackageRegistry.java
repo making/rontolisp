@@ -693,26 +693,56 @@ public final class PackageRegistry {
 		// other :encoding rather than mis-coding silently. Both packages export
 		// *default-character-encoding* -- real babel's babel package inherits it by
 		// :use-ing babel-encodings, and callers spell both.
-		define(new LispPackage(LispNames.BABEL_ENCODINGS_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.DEFAULT_CHARACTER_ENCODING, LispNames.LIST_CHARACTER_ENCODINGS))));
-		Set<String> babelExternals = Set.of(LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING,
-				LispNames.STRING_SIZE_IN_OCTETS, LispNames.DEFAULT_CHARACTER_ENCODING,
-				LispNames.LIST_CHARACTER_ENCODINGS);
+		//
+		// babel-encodings owns the ENCODING half: the two specials, the encoding /
+		// mapping lookups, the four mapping readers a consumer that decodes
+		// INCREMENTALLY calls (dexador's decoding-stream imports exactly those), and
+		// the condition hierarchy the consumer's fallback path catches. The names are
+		// string literals rather than LispNames constants because nothing in Java
+		// refers to them -- the trivial-cltl2 precedent below.
+		Set<String> babelEncodingsExternals = new HashSet<>(Set.of(LispNames.DEFAULT_CHARACTER_ENCODING,
+				LispNames.LIST_CHARACTER_ENCODINGS, "*SUPPRESS-CHARACTER-CODING-ERRORS*", "GET-CHARACTER-ENCODING",
+				"ENC-MAX-UNITS-PER-CHAR", "LOOKUP-MAPPING", "CODE-POINT-COUNTER", "OCTET-COUNTER", "DECODER", "ENCODER",
+				"CHARACTER-CODING-ERROR", "CHARACTER-CODING-ERROR-BUFFER", "CHARACTER-CODING-ERROR-POSITION",
+				"CHARACTER-CODING-ERROR-ENCODING", "CHARACTER-DECODING-ERROR", "CHARACTER-DECODING-ERROR-OCTETS",
+				"CHARACTER-ENCODING-ERROR", "CHARACTER-ENCODING-ERROR-CODE", "END-OF-INPUT-IN-CHARACTER",
+				"CHARACTER-OUT-OF-RANGE", "INVALID-UTF8-STARTER-BYTE", "INVALID-UTF8-CONTINUATION-BYTE",
+				"OVERLONG-UTF8-SEQUENCE"));
+		define(new LispPackage(LispNames.BABEL_ENCODINGS_PKG, List.of(), babelEncodingsExternals));
+		Set<String> babelExternals = new HashSet<>(
+				Set.of(LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING, LispNames.STRING_SIZE_IN_OCTETS,
+						// The mapping TABLE and the character type live in babel proper
+						// upstream, not in babel-encodings. *string-vector-mappings* is
+						// INTERNAL upstream -- a defpackage :import-from reads it anyway
+						// --
+						// but a rontolisp :import-from resolves through the external
+						// list, so
+						// the shim exports it.
+						"*STRING-VECTOR-MAPPINGS*", "UNICODE-CHAR"));
+		// Real babel :uses babel-encodings and re-exports it, so every babel-encodings
+		// external must also answer to the babel: spelling -- as an IMPORT REDIRECT,
+		// not an owned symbol, so babel:X and babel-encodings:X canonicalize to the
+		// SAME spelling (the home package's). http-body's detect-charset defaults from
+		// babel:*default-character-encoding* while the shim's defvar spells
+		// babel-encodings:; dexador imports character-decoding-error from babel and
+		// *suppress-character-coding-errors* from babel-encodings. Without the
+		// redirect each pair is two symbols, and the babel: one is a global nothing
+		// binds.
+		Map<String, String> babelImports = new HashMap<>();
+		for (String name : babelEncodingsExternals) {
+			babelImports.put(name, LispNames.BABEL_ENCODINGS_PKG);
+		}
+		babelExternals.addAll(babelEncodingsExternals);
 		Set<String> babelSymbols = new HashSet<>(babelExternals);
-		// Internal: the shim's own encoding-name normalizer, spelled
-		// babel::normalize-encoding by its two call sites. Owned by the package rather
-		// than left to the resolver's tolerance for an unknown :: member.
-		babelSymbols.add(LispNames.NORMALIZE_ENCODING);
-		// The two babel-encodings members are IMPORT REDIRECTS, not owned symbols:
-		// real babel re-exports babel-encodings' symbols, so babel:X and
-		// babel-encodings:X must canonicalize to the SAME spelling (the home
-		// package's). http-body's detect-charset defaults from
-		// babel:*default-character-encoding*; the shim's defvar spells
-		// babel-encodings: -- without the redirect the babel: spelling is a distinct
-		// global nothing binds.
-		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals,
-				Map.of(LispNames.DEFAULT_CHARACTER_ENCODING, LispNames.BABEL_ENCODINGS_PKG,
-						LispNames.LIST_CHARACTER_ENCODINGS, LispNames.BABEL_ENCODINGS_PKG)));
+		// Internal: the shim's own encoding-name normalizer and the codec the mapping
+		// readers hand out (the counters, the two coders, the one-character UTF-8
+		// decode and its two octet predicates), spelled babel::name by their call
+		// sites. Owned by the package rather than left to the resolver's tolerance for
+		// an unknown :: member.
+		babelSymbols.addAll(Set.of(LispNames.NORMALIZE_ENCODING, "%DECODING-ERROR", "%ENCODING-ERROR",
+				"%COUNT-CODE-POINTS", "%COUNT-OCTETS", "%DECODE-INTO", "%ENCODE-INTO", "%UTF-8-DECODE-1",
+				"%CONTINUATION-P", "%INVALID-CB-P"));
+		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals, babelImports));
 		// swank: the STUB behind the built-in ASDF system of the same name
 		// (swank.lisp, eval.ShimLibraries). The real swank is SLIME's server half --
 		// a remote REPL attached to a running image, which no backend can offer, and

@@ -6612,9 +6612,11 @@ public final class LispNames {
 	public static final String BABEL_PKG = "BABEL";
 
 	/**
-	 * The {@code babel-encodings} shim package name: the encoding-object half of real
-	 * babel, of which the shim keeps only {@code *default-character-encoding*} (the
-	 * default value every babel caller's {@code &key encoding} names).
+	 * The {@code babel-encodings} shim package name: the encoding half of real babel --
+	 * the two specials, the encoding and mapping lookups, the four mapping readers a
+	 * consumer that decodes INCREMENTALLY calls per character, and the character-coding
+	 * condition hierarchy. An encoding (and a mapping) IS its name here, since one
+	 * character model leaves an encoding object nothing to carry.
 	 */
 	public static final String BABEL_ENCODINGS_PKG = "BABEL-ENCODINGS";
 
@@ -6633,7 +6635,9 @@ public final class LispNames {
 
 	/**
 	 * {@code babel::normalize-encoding} -- internal to the shim: folds a caller's
-	 * {@code :encoding} onto one of the implemented names, or signals.
+	 * {@code :encoding} onto one of the implemented names, or signals. Every driver and
+	 * every mapping reader starts there, so an encoding designator is normalized exactly
+	 * once per entry point.
 	 */
 	public static final String NORMALIZE_ENCODING = "NORMALIZE-ENCODING";
 

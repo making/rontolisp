@@ -479,6 +479,22 @@ class PackageResolverTest {
 		assertThat(resolve("babel:*default-character-encoding*"))
 			.isEqualTo("BABEL-ENCODINGS:*DEFAULT-CHARACTER-ENCODING*");
 		assertThat(resolve("(babel:list-character-encodings)")).isEqualTo("(BABEL-ENCODINGS:LIST-CHARACTER-ENCODINGS)");
+		// The redirect covers EVERY babel-encodings external, not a hand-picked pair:
+		// the mapping protocol and the condition hierarchy are spelled both ways by
+		// one consumer (dexador imports character-decoding-error from babel and
+		// *suppress-character-coding-errors* from babel-encodings), and a
+		// handler-case naming the babel: spelling must select the type the shim's
+		// define-condition defined under the babel-encodings: one.
+		assertThat(resolve("(babel:lookup-mapping m e)")).isEqualTo("(BABEL-ENCODINGS:LOOKUP-MAPPING M E)");
+		assertThat(resolve("(babel:decoder m)")).isEqualTo("(BABEL-ENCODINGS:DECODER M)");
+		assertThat(resolve("babel:character-decoding-error")).isEqualTo("BABEL-ENCODINGS:CHARACTER-DECODING-ERROR");
+		assertThat(resolve("babel:*suppress-character-coding-errors*"))
+			.isEqualTo("BABEL-ENCODINGS:*SUPPRESS-CHARACTER-CODING-ERRORS*");
+		// babel's own two: the mapping table and the character type are defined in
+		// babel proper upstream, so they stay owned here (and stay external, since a
+		// defpackage :import-from resolves through the external list).
+		assertThat(resolve("babel:*string-vector-mappings*")).isEqualTo("BABEL:*STRING-VECTOR-MAPPINGS*");
+		assertThat(resolve("'babel:unicode-char")).isEqualTo("(QUOTE BABEL:UNICODE-CHAR)");
 	}
 
 	@Test
