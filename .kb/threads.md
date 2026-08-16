@@ -66,7 +66,8 @@ request, not a kill.
 `Features.INTERPRETER` and `Features.JVM` include **`thread-support`**; the WASM
 set does not. It is the ecosystem's portable spelling of "this image spawns
 threads": upstream bordeaux-threads pushes it from its `.asd` at load time, and
-a push can never reach a read-time conditional here (`.todo/181`), so the
+a push in a `.asd` reaches only that file's own conditionals, never the
+component files of the systems it defines (`.kb/reader-features.md`), so the
 backends whose threads are real declare it statically like `:unicode`. The
 driving consumer is `clack:clackup`'s `#+thread-support t #-thread-support nil`
 default for `:use-thread` — t on the interpreter/JVM, nil on WASM, exactly the

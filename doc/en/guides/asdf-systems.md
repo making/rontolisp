@@ -138,9 +138,12 @@ below.
   every system defined after it in the file — the same effect as writing
   `:rontolisp-features (:my-feature)` on those systems. The declaration reaches
   the system's own `:if-feature` / `(:feature ...)` clauses and the reading of
-  its component files; it does **not** reach a `#+`/`#-` in the same `.asd`,
-  which was already resolved when the file was read, nor a dependency, which
-  declares its own. An `eval-when` whose situations are only
+  its component files — carrying the announcement out of the `.asd`, which is
+  the half the reader cannot do for itself. (A `#+`/`#-` in the **same** `.asd`
+  sees the push too, but through the reader's own handling of a source's
+  announcement — see
+  [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features).)
+  It does not reach a dependency, which declares its own. An `eval-when` whose situations are only
   `(:compile-toplevel)` is inert (ASDF loads a `.asd`, it never compiles one),
   and any other form inside the `eval-when` is an error naming it.
 - `defsystem` supports the metadata options (ignored), `:depends-on`,

@@ -33,7 +33,7 @@ gap:
 | `uiop:implementation-type` / `uiop:*implementation-type*` | `:rontolisp` |
 | `uiop:lisp-version-string` | this build's version, the same string `(rontolisp:version)` carries |
 | `uiop:operating-system` | `:unix` |
-| `uiop:detect-os` | `:os-unix` — upstream pushes the winning feature and returns it; nothing here can push, so it just returns it |
+| `uiop:detect-os` | `:os-unix` — upstream's own body minus the loop: only one predicate can win here, so it pushes that feature onto `*features*` and returns it |
 | `uiop:architecture` | the ABI the artifact targets: `:jvm` on the interpreter and the JVM (a class file is CPU-independent), `:wasm32` on both WASM outputs |
 | `uiop:implementation-identifier` | all four joined and downcased, the way upstream builds a fasl-cache directory name: `"rontolisp-<version>-unix-jvm"` |
 | `uiop:hostname` | `nil` — no backend has a host-identity primitive, and this is exactly what upstream answers on an implementation its own `#+` clauses do not name |
@@ -76,8 +76,8 @@ The feature set differs per backend by design — `:rontolisp-interpreter`,
 `uiop:featurep` (and `uiop:architecture` with it) answers for the backend that
 is running. A second, optional argument tests a feature set of your own:
 `(uiop:featurep :x '(:x))` is `T`. Rebinding `*features*` around the call, which
-upstream's parameter list invites, is an interpreter-only shape here: the
-compile backends substitute the variable at read time.
+upstream's parameter list invites, works on every backend — it is an ordinary
+special variable.
 
 ## Environment variables
 

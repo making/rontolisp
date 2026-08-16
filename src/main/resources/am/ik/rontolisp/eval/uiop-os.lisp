@@ -1,12 +1,12 @@
 ;;;; uiop/os -- host identity, feature expressions and the working directory.
 ;;;;
 ;;;; Everything a caller can ask about the host here is answered from ONE
-;;;; source, upstream's own: featurep over *features*. The reader substitutes
-;;;; that variable with the target backend's list on the compile paths and
-;;;; leaves it a real global on the interpreter, so the definitions below are
-;;;; read per backend (UiopLibrary.process takes the feature set) and
-;;;; architecture / implementation-identifier answer for the backend that is
-;;;; running rather than for the one that compiled. See .kb/uiop.md.
+;;;; source, upstream's own: featurep over *features*, which is an ordinary
+;;;; special variable holding the running backend's feature list on every
+;;;; backend. The definitions below are read per backend (UiopLibrary.process
+;;;; takes the feature set), so architecture / implementation-identifier answer
+;;;; for the backend that is running rather than for the one that compiled.
+;;;; See .kb/uiop.md.
 ;;;;
 ;;;; Three decisions this file makes, with their reasons:
 ;;;;
@@ -32,13 +32,13 @@
 ;;;;   where the primitive answers nil (both WASM backends), which keeps the
 ;;;;   divergence in a VALUE rather than in a second code path.
 
-;;; Feature expressions. Upstream's definition verbatim, including the
-;;; &optional feature set (which lets a caller test a set other than the
-;;; running one) -- with the parameter NOT named *features*: the compile
-;;; backends substitute that symbol at read time, so a parameter spelled that
-;;; way would lose its name. A program that rebinds *features* is therefore an
-;;; interpreter-only shape here, and passing the set explicitly is the portable
-;;; spelling.
+;;; Feature expressions. Upstream's definition, including the &optional feature
+;;; set (which lets a caller test a set other than the running one) and its
+;;; default, the live *features* list -- so (let ((*features* ...)) (featurep
+;;; :x)) works, upstream's own invitation. Upstream spells that parameter
+;;; *features* and lets the binding be dynamic; here it carries this file's
+;;; %-prefix like every other parameter and is threaded through the recursion,
+;;; which answers the same for every input.
 (defun uiop/os:featurep (%fp-x &optional (%fp-features *features*))
   (cond ((atom %fp-x) (and (member %fp-x %fp-features) t))
         ((eq :not (car %fp-x))
@@ -66,9 +66,12 @@
 (defun uiop/os:os-genera-p () (uiop/os:featurep :genera))
 
 ;; Upstream loops over the OS predicates, pushes the winner onto *features* and
-;; returns it. Nothing here can push (the reader consumed *features* on the
-;; compile paths), and only one predicate can win, so this answers the winner.
-(defun uiop/os:detect-os () :os-unix)
+;; returns it. Only one predicate can win here (os-unix-p is t outright), so
+;; the loop is the constant -- and the push is upstream's own, which a caller
+;; can read back with (featurep :os-unix).
+(defun uiop/os:detect-os ()
+  (pushnew :os-unix *features*)
+  :os-unix)
 
 ;;; Identity.
 (defun uiop/os:implementation-type () :rontolisp)

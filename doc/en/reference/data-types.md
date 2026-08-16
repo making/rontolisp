@@ -111,11 +111,23 @@ has `:rontolisp-component`, which names the component BOUNDARY rather than a
 backend: a component's host functions cross the canonical ABI, so
 [`rontolisp:wasm-import`](../guides/wasm-gc-module.md) is refused there and a
 source that declares one guards it with `#-rontolisp-component`. (A
-`--component --no-wasi` build is a reactor too, so it has both.) The variable `*features*` reads as the active feature list
-(a quoted list of keywords; it cannot be assigned). On the interpreter it is a
-real global variable; on the JVM/WASM compile path it is substituted at read
-time like `pi` -- a constant, so binding the name (e.g. a lambda parameter
-named `*features*`) is not supported there.
+`--component --no-wasi` build is a reactor too, so it has both.)
+
+`*features*` is an ordinary special variable holding that list, on every
+backend: a program may `push` onto it, `setq` it, and bind it with `let` like
+any other special.
+
+A source may also **announce a feature about itself**: a top-level
+`(pushnew :my-feature *features*)` — bare or inside an `eval-when`/`progn` —
+is read by the reader, so a `#+my-feature` in the same file sees it. That is
+the header idiom real Common Lisp gets from loading a file form at a time, and
+it behaves identically on all four backends here. Only a **literal** keyword
+push counts: a push whose value the program computes
+(`(pushnew (intern name :keyword) *features*)`) is a real run-time push but is
+invisible to the reader, because deciding it would mean running the program to
+decide how the program is read. A `.asd` that needs to announce a feature to
+the files of the systems it defines uses `:rontolisp-features` instead (see the
+[Systems guide](../guides/asdf-systems.md)).
 
 ```lisp
 #| a block comment
@@ -125,15 +137,21 @@ named `*features*`) is not supported there.
 #-(or sbcl ccl) (print :portable)   ; kept: neither feature is active
 #+sbcl (print (uses #.unsupported-syntax))
 (print (car *features*))            ; the first feature is always :rontolisp
+
+(pushnew :my-feature *features*)
+#+my-feature (print :announced)     ; kept: the reader saw the push above
+(print (and (member :my-feature *features*) t))
 ```
 
 Notes:
 
 - Reading happens once, at the frontend: the interpreter reads with
   `:rontolisp-interpreter`, and compiling to a `.class`/`.wasm` file reads with
-  `:rontolisp-jvm`/`:rontolisp-wasm`, so a compiled program's feature set is
-  fixed at compile time. Files pulled in by the compile-time `load`/`require`/
-  `asdf:load-system` include are read with the same target features.
+  `:rontolisp-jvm`/`:rontolisp-wasm`, so the set a compiled program's `#+`
+  conditionals were resolved against is fixed at compile time. Files pulled in
+  by the compile-time `load`/`require`/`asdf:load-system` include are read with
+  the same target features. The run-time `*features*` list starts out holding
+  that same set.
 - A form skipped by a failing `#+`/`#-` guard is skipped at the raw character
   level without being parsed, so it may use syntax rontolisp does not support
   (that is the point of guarding it).
@@ -153,7 +171,7 @@ Notes:
 ## Source position literals (`rontolisp:current-file`, `rontolisp:current-line`)
 
 Two symbols the reader substitutes with the position they stand on, the way
-`pi` and `*features*` are substituted: `rontolisp:current-file` becomes the
+`pi` and `array-dimension-limit` are substituted: `rontolisp:current-file` becomes the
 origin file as a string (or `nil` when there is none — a REPL line, a
 `read-from-string`), and `rontolisp:current-line` becomes the 1-based line the
 symbol itself is on. They are ordinary literals afterwards, so they cost

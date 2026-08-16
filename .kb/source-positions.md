@@ -190,7 +190,7 @@ a raw `ClassCastException` reaches the user).
 
 `rontolisp:current-file` and `rontolisp:current-line` (`LispNames.CURRENT_FILE` /
 `CURRENT_LINE`) are substituted by `LispReader.sourceLiteral`, next to `pi`,
-`most-positive-fixnum` and `*features*`: the first becomes a `LispString` of the origin
+`most-positive-fixnum` and `array-dimension-limit`: the first becomes a `LispString` of the origin
 file (or `nil` when the read has none -- a REPL line, a `read-from-string`), the second a
 `LispInteger` of the 1-based line the SYMBOL itself stands on.
 

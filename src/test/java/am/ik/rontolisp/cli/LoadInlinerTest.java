@@ -500,7 +500,8 @@ class LoadInlinerTest {
 	@Test
 	void aDeclaredRontolispFeatureWidensTheBackendSetForThatSystemOnly() throws Exception {
 		// :rontolisp-features is the static encoding of a .asd that pushes onto
-		// *features* from an eval-when (invisible to the reader, .todo/181). It must
+		// *features* from an eval-when -- which the reader honors inside that .asd but
+		// cannot carry to the component files it names. It must
 		// WIDEN the backend set rather than replace it -- the backend feature is still
 		// the compile target's -- and it must not reach a dependency, which declares its
 		// own.

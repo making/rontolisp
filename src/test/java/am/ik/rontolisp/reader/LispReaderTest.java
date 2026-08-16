@@ -711,13 +711,65 @@ class LispReaderTest {
 
 	@Test
 	void readFeaturesVariable() {
-		// The interpreter keeps *features* a symbol (a real global variable binds it;
-		// the substitution would corrupt binding positions); the compile backends
-		// substitute the quoted list so a compiled program's feature set is fixed.
-		LispVal result = LispReader.readFromString("*features*");
-		assertThat(result.print()).isEqualTo("*FEATURES*");
-		List<LispVal> jvm = LispReader.readAllFromString("*features*", Features.JVM);
-		assertThat(jvm.get(0).print()).isEqualTo("(QUOTE (:RONTOLISP :RONTOLISP-JVM :UNICODE :THREAD-SUPPORT))");
+		// *features* stays a SYMBOL on every target: it is a variable, which a program
+		// binds and pushes onto, and every backend seeds it as an ordinary special. The
+		// compile backends used to have the reader substitute the quoted list here,
+		// which put a cons where a binding needs a name.
+		assertThat(LispReader.readFromString("*features*").print()).isEqualTo("*FEATURES*");
+		assertThat(LispReader.readAllFromString("*features*", Features.JVM).get(0).print()).isEqualTo("*FEATURES*");
+		assertThat(LispReader.readAllFromString("(let ((*features* nil)) *features*)", Features.WASM).get(0).print())
+			.isEqualTo("(LET ((*FEATURES* NIL)) *FEATURES*)");
+	}
+
+	@Test
+	void readOwnFeaturePushIsVisibleToTheSameSourcesConditionals() {
+		// The announcement idiom: push in the header, #+ on it below. Real CL sees it
+		// because load/compile-file go form at a time; here the READER makes the
+		// announcement, so every backend agrees without evaluating anything.
+		String source = """
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (pushnew :announced *features*))
+				#+announced (yes)
+				#-announced (no)
+				""";
+		for (Features features : List.of(Features.INTERPRETER, Features.JVM, Features.WASM)) {
+			List<LispVal> forms = LispReader.readAllFromString(source, features);
+			assertThat(forms).hasSize(2);
+			assertThat(forms.get(1).print()).isEqualTo("(YES)");
+		}
+	}
+
+	@Test
+	void readOwnFeaturePushOnlyCountsALiteralPush() {
+		// A push the program COMPUTES is invisible: deciding it means running the
+		// program to decide how the program is read, which a compile backend cannot do
+		// before the program exists (FeaturePushes).
+		String computed = """
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (pushnew (intern "COMPUTED" :keyword) *features*))
+				#+computed (yes)
+				#-computed (no)
+				""";
+		List<LispVal> computedForms = LispReader.readAllFromString(computed);
+		assertThat(computedForms.get(computedForms.size() - 1).print()).isEqualTo("(NO)");
+		// ... and a push onto something that is not *features* is not an announcement.
+		String elsewhere = "(pushnew :announced *my-list*) #+announced (yes) #-announced (no)";
+		List<LispVal> elsewhereForms = LispReader.readAllFromString(elsewhere);
+		assertThat(elsewhereForms.get(elsewhereForms.size() - 1).print()).isEqualTo("(NO)");
+	}
+
+	@Test
+	void readOwnFeaturePushIsSeenThroughAnEarlierPushesConditional() {
+		// The scan runs to a fixpoint, so a push that only becomes readable once an
+		// earlier push has widened the set lands too.
+		String source = """
+				(pushnew :first *features*)
+				#+first (pushnew :second *features*)
+				#+second (both)
+				#-second (only-first)
+				""";
+		List<LispVal> forms = LispReader.readAllFromString(source);
+		assertThat(forms.get(forms.size() - 1).print()).isEqualTo("(BOTH)");
 	}
 
 	@Test

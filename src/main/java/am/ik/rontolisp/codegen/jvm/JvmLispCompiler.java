@@ -81,6 +81,14 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final boolean simdAccel;
 
+	/**
+	 * The names the compiled program's {@code *features*} starts out holding. The JVM
+	 * backend's own set unless the frontend {@link #runtimeFeatures(List) says otherwise}
+	 * -- reading and running must agree on it, and only the frontend knows what it read
+	 * with.
+	 */
+	private List<String> runtimeFeatures = LispMacroExpander.backendFeatures(false);
+
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
 
@@ -191,6 +199,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.dynamic = dynamic;
 		this.optimize = optimize;
 		this.simdAccel = simdAccel;
+	}
+
+	/**
+	 * Sets the feature names the compiled program's {@code *features*} starts out
+	 * holding. The frontend passes the set it READ the program with, so a
+	 * {@code (member :rontolisp-component *features*)} at run time answers what the
+	 * {@code #+rontolisp-component} beside it answered at read time. Left alone, the
+	 * backend's base set stands ({@link LispMacroExpander#backendFeatures}).
+	 * @param features the feature names, without the leading colon
+	 * @return this compiler
+	 */
+	public JvmLispCompiler runtimeFeatures(List<String> features) {
+		this.runtimeFeatures = List.copyOf(features);
+		return this;
 	}
 
 	@Override
@@ -339,7 +361,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		program = LambdaLists.desugarProgram(program);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
-		program = LispMacroExpander.injectMvSpillGlobal(program);
+		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
 		ConstantPool cp = new ConstantPool();
 		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
 		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));

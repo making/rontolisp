@@ -9,14 +9,23 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
 /**
- * The set of active reader features, consulted by the {@code #+}/{@code #-} feature
- * conditionals in {@link LispLexer}, the {@code *features*} read-time substitution in
- * {@link LispReader}, and the {@code :if-feature} component option of the ASDF subset.
- * Every backend has {@code :rontolisp} plus one backend-identifying feature
- * ({@code :rontolisp-interpreter}, {@code :rontolisp-jvm} or {@code :rontolisp-wasm}) and
- * {@code :unicode}; {@code :common-lisp} is deliberately absent (rontolisp is not a
- * conforming implementation). Reading happens once, at the frontend, so the feature set
- * of a compiled program is fixed at compile time.
+ * The set of active READER features, consulted by the {@code #+}/{@code #-} feature
+ * conditionals in {@link LispLexer}, the {@code :if-feature} component option of the ASDF
+ * subset, and -- as its starting point -- the {@code *features*} global every backend
+ * seeds at run time. Every backend has {@code :rontolisp} plus one backend-identifying
+ * feature ({@code :rontolisp-interpreter}, {@code :rontolisp-jvm} or
+ * {@code :rontolisp-wasm}) and {@code :unicode}; {@code :common-lisp} is deliberately
+ * absent (rontolisp is not a conforming implementation).
+ * <p>
+ * A read-time feature set and the run-time {@code *features*} list are two different
+ * things, and keeping them apart is the whole point: this set is what {@code #+} tests
+ * while the source is being READ, and it is fixed for the duration of that read --
+ * widened only by a declaration the reader can see for itself ({@link #with}: an ASDF
+ * {@code :rontolisp-features} option, or the file's own literal top-level push, see
+ * {@link FeaturePushes}). {@code *features*} is an ordinary special variable holding a
+ * list, initialized to these names on every backend, and a program may
+ * {@code push}/{@code setq} it at run time like any other. See
+ * {@code .kb/reader-features.md}.
  * <p>
  * {@code :unicode} is the portable spelling (CLISP / ECL / CMUCL / LispWorks) of "this
  * implementation's characters are Unicode code points, not octets", which is true of
@@ -38,14 +47,13 @@ public final class Features {
 	 * to t here and to nil there.
 	 */
 	public static final Features INTERPRETER = new Features(
-			List.of("rontolisp", "rontolisp-interpreter", "unicode", "thread-support"), false);
+			List.of("rontolisp", "rontolisp-interpreter", "unicode", "thread-support"));
 
 	/** The features active when compiling to JVM bytecode. */
-	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support"),
-			true);
+	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support"));
 
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
-	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode"), true);
+	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode"));
 
 	/**
 	 * The features active when compiling to WASM in REACTOR mode -- {@code --no-wasi}
@@ -61,7 +69,7 @@ public final class Features {
 	 * {@code clackup} source run on every host ({@code .kb/clack.md}).
 	 */
 	public static final Features WASM_REACTOR = new Features(
-			List.of("rontolisp", "rontolisp-wasm", "unicode", "rontolisp-reactor"), true);
+			List.of("rontolisp", "rontolisp-wasm", "unicode", "rontolisp-reactor"));
 
 	/**
 	 * The feature naming the component BOUNDARY, added to whichever WASM set is in force
@@ -99,24 +107,8 @@ public final class Features {
 
 	private final List<String> names;
 
-	private final boolean substituteFeaturesVar;
-
-	private Features(List<String> names, boolean substituteFeaturesVar) {
+	private Features(List<String> names) {
 		this.names = names;
-		this.substituteFeaturesVar = substituteFeaturesVar;
-	}
-
-	/**
-	 * Whether the reader substitutes the {@code *features*} symbol with the quoted
-	 * feature list. The compile backends do (a compiled program's feature set is fixed at
-	 * compile time); the interpreter does not -- it binds {@code *features*} as a global
-	 * variable instead, so the symbol survives in binding positions (a
-	 * {@code (&optional (*features* *features*))} rebinding idiom must not lose the
-	 * parameter name to the substitution).
-	 * @return {@code true} when the reader substitutes the symbol
-	 */
-	public boolean substituteFeaturesVar() {
-		return this.substituteFeaturesVar;
 	}
 
 	/**
@@ -125,17 +117,18 @@ public final class Features {
 	 * @return the feature set
 	 */
 	public static Features of(String... names) {
-		return new Features(List.of(names), true);
+		return new Features(List.of(names));
 	}
 
 	/**
 	 * Returns this feature set widened by the given names, or {@code this} when they are
-	 * all present already. This is the static encoding of a {@code .asd} that pushes onto
-	 * {@code *features*} from an {@code eval-when} before its {@code defsystem}: such a
-	 * push never reaches the reader here, so a replacement {@code .asd} declares the
-	 * features with {@code :rontolisp-features} and the system's component files are read
-	 * with the widened set (see {@code AsdfSystems}). Deliberately additive only --
-	 * nothing may switch OFF a backend feature and claim to be that backend.
+	 * all present already. Two callers, both of them a feature ANNOUNCEMENT the reader
+	 * can see for itself: {@link FeaturePushes}, for a source's own literal top-level
+	 * push, and {@code AsdfSystems}, for a {@code .asd}'s {@code :rontolisp-features}
+	 * declaration -- the cross-FILE half, which the push cannot do (a push in a
+	 * {@code .asd} reaches that file's own {@code #+} and not the component files of the
+	 * systems it defines). Deliberately additive only -- nothing may switch OFF a backend
+	 * feature and claim to be that backend.
 	 * @param extra the feature names to add, without the leading colon
 	 * @return the widened feature set
 	 */
@@ -147,8 +140,7 @@ public final class Features {
 				widened.add(canonical);
 			}
 		}
-		return widened.size() == this.names.size() ? this
-				: new Features(List.copyOf(widened), this.substituteFeaturesVar);
+		return widened.size() == this.names.size() ? this : new Features(List.copyOf(widened));
 	}
 
 	/**

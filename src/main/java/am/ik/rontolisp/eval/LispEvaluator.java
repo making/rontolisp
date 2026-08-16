@@ -417,6 +417,13 @@ public final class LispEvaluator {
 		// block of path work ((let ((*default-pathname-defaults* d)) ...)), which is a
 		// dynamic binding or nothing.
 		this.specialVars.add(LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR);
+		// *features* joins them for the same reason, and it is the one the COMPILE
+		// PATHS force: they seed the variable with a defvar (LispMacroExpander), which
+		// proclaims it special, so a (let ((*features* ...)) ...) around a call to
+		// uiop:featurep -- whose &optional default reads the variable, exactly what
+		// upstream's parameter list invites -- binds dynamically there. Without this
+		// the interpreter would bind it lexically and answer differently.
+		this.specialVars.add(LispNames.FEATURES_VAR);
 	}
 
 	/**

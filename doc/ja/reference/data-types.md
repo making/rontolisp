@@ -88,11 +88,21 @@ WASM コンパイル(`--no-wasi` または `--no-gc`)には
 が加わります。これはバックエンドではなく**バウンダリ**の名前です。コンポーネントのホスト関数は canonical ABI
 を通るので [`rontolisp:wasm-import`](../guides/wasm-gc-module.md)
 はそこでは拒否され、これを宣言するソースは `#-rontolisp-component` で囲みます(`--component --no-wasi`
-のビルドはリアクタでもあるので、両方が立ちます)。変数
-`*features*` はアクティブなフィーチャーのリストとして読まれます(quote
-されたキーワードのリストで、代入はできません)。インタープリタでは本物のグローバル変数です。JVM / WASM
-コンパイルパスでは `pi` と同様に read 時に置換される定数なので、この名前の束縛（例:
-`*features*` という名前のラムダ引数）はサポートされません。
+のビルドはリアクタでもあるので、両方が立ちます)。
+
+`*features*` はそのリストを保持する普通のスペシャル変数で、これはすべてのバックエンドで同じです。`push`
+でき、`setq` でき、他のスペシャル変数と同様に `let` で束縛できます。
+
+ソースは**自分自身についてフィーチャーを宣言**することもできます。トップレベルの
+`(pushnew :my-feature *features*)`(裸でも `eval-when`/`progn`
+の中でもかまいません)はリーダに読まれるので、同じファイル内の `#+my-feature`
+がそれを見ます。これは本物の Common Lisp
+がファイルを1フォームずつロードすることで得ている定石で、ここでは4つのバックエンドすべてで同じように振る舞います。数えられるのは**リテラル**のキーワードの
+push だけです。値をプログラムが計算する push
+(`(pushnew (intern name :keyword) *features*)`)は実行時の push
+としては本物ですが、リーダからは見えません。それを見るにはプログラムをどう読むかを決めるためにプログラムを実行することになるからです。`.asd`
+が、自分が定義するシステムのファイルに対してフィーチャーを宣言したい場合は、代わりに
+`:rontolisp-features` を使います([システムガイド](../guides/asdf-systems.md)を参照)。
 
 ```lisp
 #| a block comment
@@ -102,14 +112,21 @@ WASM コンパイル(`--no-wasi` または `--no-gc`)には
 #-(or sbcl ccl) (print :portable)   ; kept: neither feature is active
 #+sbcl (print (uses #.unsupported-syntax))
 (print (car *features*))            ; the first feature is always :rontolisp
+
+(pushnew :my-feature *features*)
+#+my-feature (print :announced)     ; kept: the reader saw the push above
+(print (and (member :my-feature *features*) t))
 ```
 
 注意点:
 
 - 読み取りはフロントエンドで一度だけ行われます。インタプリタは
   `:rontolisp-interpreter` で読み、`.class`/`.wasm` へのコンパイルは
-  `:rontolisp-jvm`/`:rontolisp-wasm` で読むため、コンパイル済みプログラムのフィーチャーセットはコンパイル時に固定されます。コンパイル時の
-  `load`/`require`/`asdf:load-system` インクルードで取り込まれるファイルも、同じターゲットフィーチャーで読まれます。
+  `:rontolisp-jvm`/`:rontolisp-wasm` で読むため、コンパイル済みプログラムの `#+`
+  条件が解決されるセットはコンパイル時に固定されます。コンパイル時の
+  `load`/`require`/`asdf:load-system`
+  インクルードで取り込まれるファイルも、同じターゲットフィーチャーで読まれます。実行時の
+  `*features*` のリストも、その同じセットから始まります。
 - 不成立の `#+`/`#-` ガードでスキップされるフォームは、パースされずに生の文字レベルでスキップされるため、rontolisp
   がサポートしない構文を使っていても構いません(それがガードの目的です)。
 - `#.` の read 時評価はサポート **されます**: 各 `#.` データはそのトップレベルフォームが実行される直前に評価され
@@ -126,7 +143,7 @@ WASM コンパイル(`--no-wasi` または `--no-gc`)には
 ## ソース位置リテラル(`rontolisp:current-file`、`rontolisp:current-line`)
 
 リーダが、そのシンボルが置かれている位置に置換する2つのシンボルです。`pi` や
-`*features*` の置換と同じ仕組みで、`rontolisp:current-file` は元ファイル名の文字列
+`array-dimension-limit` の置換と同じ仕組みで、`rontolisp:current-file` は元ファイル名の文字列
 (存在しない場合 — REPL の1行や `read-from-string` — は `nil`)に、
 `rontolisp:current-line` はそのシンボル自身が乗っている1始まりの行番号になります。置換後はただのリテラルなので実行時コストはゼロで、インタープリタと全コンパイルバックエンドで同じ値になります。
 

@@ -5279,6 +5279,43 @@ cases:
         4
         :RONTOLISP
         :UNICODE
+  - name: reader-features-own-push-is-visible
+    # A source announces a feature about ITSELF -- push in the header, #+ on it
+    # below -- and real CL sees it because load/compile-file both go form at a
+    # time. Here the READER makes the announcement (reader.FeaturePushes), so all
+    # four backends agree without evaluating anything. *features* itself is an
+    # ordinary special holding a list: the push really lands at run time, and
+    # binding it works. Both used to be broken on the compile paths, where the
+    # reader substituted the symbol with the quoted list -- every push a no-op,
+    # and a cons where a binding needs a variable name (which crashed the compile
+    # outright on clack:clackup's (let* ((*features* (cons :clackup *features*)))).
+    source: |
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (pushnew :ci-announced *features*))
+      (print #+ci-announced :saw-it #-ci-announced :missed-it)
+      (print (and (member :ci-announced *features*) t))
+      (print (let ((*features* (cons :ci-bound *features*))) (car *features*)))
+      (print (car *features*))
+      ;; ... and the binding is DYNAMIC: it must reach a callee that reads the
+      ;; variable, which is what upstream uiop:featurep's own parameter list
+      ;; (&optional (features *features*)) invites a caller to do.
+      (defun ci-feature-default (&optional (fs *features*)) (car fs))
+      (print (let ((*features* '(:ci-rebound))) (ci-feature-default)))
+      ;; A push whose value the program COMPUTES stays invisible to the reader on
+      ;; every backend: honoring it means running the program's code to decide how
+      ;; the program's own text is read, which a compile backend cannot do before
+      ;; the program exists. It is still a real run-time push.
+      (pushnew (intern "CI-COMPUTED" :keyword) *features*)
+      (print #+ci-computed :read-it #-ci-computed :not-read)
+      (print (and (member :ci-computed *features*) t))
+    expected: |
+      :SAW-IT
+      T
+      :CI-BOUND
+      :CI-ANNOUNCED
+      :CI-REBOUND
+      :NOT-READ
+      T
   - name: reader-sharp-dot-generated-defconstants
     # fast-http's multipart-parser idiom: #. generates definitions via a
     # backquoted eval-when whose datum value is CODE, evaluated in place. The

@@ -120,10 +120,9 @@ features)`, passed by `RontoLispCli.compileToFile` and the playground frontend;
 the one-argument overloads mean `Features.INTERPRETER`, which is also what the
 interpreter's lazy load uses. `Tables` is therefore cached per feature set, not
 once. The reason is `featurep`: it evaluates a feature expression against
-`*features*`, which the reader SUBSTITUTES with the target's list on the compile
-backends and leaves as the symbol (a real global) on the interpreter -- so a
-resource read with the interpreter's set would have answered
-`:rontolisp-interpreter` inside a wasm module. Everything else in `uiop/os` that
+`*features*`, which each backend SEEDS with the set the frontend read it with
+(`.kb/reader-features.md`) -- so a resource read with the interpreter's set
+would have answered `:rontolisp-interpreter` inside a wasm module. Everything else in `uiop/os` that
 differs per backend (`architecture`, and `implementation-identifier` through it)
 is derived from `featurep`, so this one thread is the whole per-backend story.
 A test harness that compiles a uiop program must pass the same set (see the
@@ -261,8 +260,8 @@ answers.
   unix-domain socket path, bordeaux-threads, ...), which is a far wider claim
   than one OS predicate. `os-macosx-p` / `os-windows-p` / `os-genera-p` keep
   upstream's derivations and answer nil, because no backend carries a host-OS
-  feature. `detect-os` returns `:os-unix` without the push upstream does (the
-  reader consumed `*features*`); `os-cond` is a Java macro expansion to a plain
+  feature. `detect-os` pushes `:os-unix` onto `*features*` and returns it,
+  upstream's own body minus the loop (only one predicate can win here); `os-cond` is a Java macro expansion to a plain
   `cond` (upstream's own abcl arm -- upstream evaluates the clause tests at
   MACROEXPANSION time, which the compile paths have no evaluator for, and the
   predicates here are ordinary runtime functions that select the same clause).

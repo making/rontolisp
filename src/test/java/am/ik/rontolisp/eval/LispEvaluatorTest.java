@@ -8373,6 +8373,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFeaturesIsAnOrdinarySpecialVariableAndItsOwnPushIsRead() {
+		// The interpreter half of the four-backend pin: *features* is a list-valued
+		// special a program pushes onto and binds, and the reader lets a source's own
+		// literal top-level push reach the #+ below it (reader.FeaturePushes). All four
+		// backends answer this the same way -- ci-spec case
+		// reader-features-own-push-is-visible.
+		assertThat(evalMulti("""
+				(defun feature-default (&optional (fs *features*)) (car fs))
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (pushnew :announced *features*))
+				(list #+announced :saw-it #-announced :missed-it
+				      (and (member :announced *features*) t)
+				      (let ((*features* nil)) *features*)
+				      ;; the binding is DYNAMIC -- it has to reach a callee reading the
+				      ;; variable, which upstream uiop:featurep's own parameter list
+				      ;; (&optional (features *features*)) invites a caller to do.
+				      (let ((*features* '(:rebound))) (feature-default)))
+				""").print()).isEqualTo("(:SAW-IT T NIL :REBOUND)");
+	}
+
+	@Test
 	void evalReadEvalNilMakesSharpDotSignal() {
 		// CLHS: binding *read-eval* to nil makes reading #. signal, catchably; the
 		// read after the binding exits works again.

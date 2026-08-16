@@ -290,7 +290,7 @@ public final class AsdfSystems {
 			}
 			if (operatorMemberIs(form, LispNames.EVAL_WHEN) || operatorMemberIs(form, LispNames.PUSHNEW)
 					|| operatorMemberIs(form, LispNames.PUSH)) {
-				collectFeaturePushes(form, true, features, pushedFeatures, asdPath);
+				collectFeaturePushes(form, true, pushedFeatures, asdPath);
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.DEFMETHOD)) {
@@ -383,8 +383,8 @@ public final class AsdfSystems {
 	 * for any {@code esrap.} feature reference found zero hits (2026-08-03). If a future
 	 * esrap or a downstream starts reading one, fold the pushed keywords into the
 	 * system's features instead (the {@code :rontolisp-features} channel,
-	 * {@code collectFeaturePushes}); a load-time push could never reach a reader
-	 * conditional anyway ({@code .todo/181}).
+	 * {@code collectFeaturePushes}); a push in a {@code .asd} reaches only that file's
+	 * own conditionals, never the component files it names.
 	 */
 	private static void checkToleratedPerformMethod(LispVal form, String asdPath) {
 		List<LispVal> items = ((LispCons) form).toList();
@@ -462,9 +462,11 @@ public final class AsdfSystems {
 	 * system had declared it with {@code :rontolisp-features} -- one mechanism, so an
 	 * upstream file and a bundled replacement {@code .asd} behave identically (see
 	 * {@code .kb/asdf.md}). What that buys is the system's own {@code :if-feature} /
-	 * {@code (:feature ...)} clauses and the reading of its component files; it does NOT
-	 * reach a {@code #+} in the same {@code .asd}, which the reader resolved before this
-	 * parse ever ran ({@code .todo/181}), nor a dependency, which declares its own.
+	 * {@code (:feature ...)} clauses and the reading of its component files -- carrying
+	 * the announcement OUT of the {@code .asd}, which is the half the reader cannot do
+	 * for itself (a {@code #+} in the SAME file already sees the push,
+	 * {@code reader.FeaturePushes}). It does not reach a dependency, which declares its
+	 * own.
 	 * <p>
 	 * Only the feature-announcement shape is accepted -- anything else inside the
 	 * {@code eval-when} is a hard error naming the form, like every other unsupported
@@ -472,13 +474,10 @@ public final class AsdfSystems {
 	 * @param form the {@code eval-when}/{@code pushnew} form
 	 * @param fires whether the enclosing {@code eval-when} situations fire when the
 	 * {@code .asd} is loaded
-	 * @param features the active reader features (to recognize a substituted
-	 * {@code *features*})
 	 * @param pushed the accumulating feature names, in file order
 	 * @param asdPath the {@code .asd} path, for error messages
 	 */
-	private static void collectFeaturePushes(LispVal form, boolean fires, Features features, List<String> pushed,
-			String asdPath) {
+	private static void collectFeaturePushes(LispVal form, boolean fires, List<String> pushed, String asdPath) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			throw featurePushError(asdPath, form);
 		}
@@ -489,7 +488,7 @@ public final class AsdfSystems {
 			}
 			boolean nested = fires && firesOnLoad(items.get(1));
 			for (LispVal body : items.subList(2, items.size())) {
-				collectFeaturePushes(body, nested, features, pushed, asdPath);
+				collectFeaturePushes(body, nested, pushed, asdPath);
 			}
 			return;
 		}
@@ -497,7 +496,7 @@ public final class AsdfSystems {
 			throw featurePushError(asdPath, form);
 		}
 		if (items.size() != 3 || !(items.get(1) instanceof LispSymbol feature) || !feature.isKeyword()
-				|| !isFeaturesReference(items.get(2), features)) {
+				|| !isFeaturesReference(items.get(2))) {
 			throw featurePushError(asdPath, form);
 		}
 		String name = symbolName(feature);
@@ -548,36 +547,21 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * Whether {@code form} is a reference to {@code *features*}. Two spellings reach
-	 * here, because the reader that produced this form differs per target: the
-	 * interpreter leaves the symbol standing (it binds {@code *features*} as a global),
-	 * while the compile backends substitute it at read time with the quoted active
-	 * feature list ({@code Features.substituteFeaturesVar}). Matching the substituted
-	 * list against the active set -- rather than accepting any quoted list -- keeps a
-	 * stray {@code (pushnew :x '(:a :b))} an error.
+	 * Whether {@code form} is a reference to {@code *features*}. One spelling reaches
+	 * here on every target: the symbol itself, because {@code *features*} is a variable
+	 * on all of them ({@code .kb/reader-features.md}). It used to be two -- the compile
+	 * backends had the reader substitute the quoted feature list for the symbol, which
+	 * this had to match against the active set to keep a stray
+	 * {@code (pushnew :x '(:a :b))} an error.
 	 */
-	private static boolean isFeaturesReference(LispVal form, Features features) {
-		if (form instanceof LispSymbol sym) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-			return LispNames.FEATURES_VAR.equals(qn == null ? sym.name() : qn.member());
-		}
-		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
-			return false;
-		}
-		List<LispVal> items = cons.toList();
-		if (items.size() != 2 || !(items.get(0) instanceof LispSymbol op) || !LispNames.QUOTE.equals(op.name())) {
-			return false;
-		}
-		List<String> substituted = new ArrayList<>();
-		LispVal rest = items.get(1);
-		while (rest instanceof LispCons cell) {
-			if (!(cell.car() instanceof LispSymbol name)) {
-				return false;
-			}
-			substituted.add(symbolName(name));
-			rest = cell.cdr();
-		}
-		return rest instanceof LispNil && substituted.equals(features.names());
+	private static boolean isFeaturesReference(LispVal form) {
+		return form instanceof LispSymbol sym && LispNames.FEATURES_VAR.equals(memberNameOf(sym));
+	}
+
+	/** The symbol's name with any package qualifier removed ({@code cl:*features*}). */
+	private static String memberNameOf(LispSymbol symbol) {
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(symbol.name());
+		return qualified == null ? symbol.name() : qualified.member();
 	}
 
 	/**

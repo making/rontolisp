@@ -29741,14 +29741,18 @@ public final class LispMacroExpander {
 	/**
 	 * Injects the top-level {@code (setq %mv-spill nil)} /
 	 * {@code (setq *read-default-float-format* ...)} /
-	 * {@code (defvar *package* :cl-user)} globals the compilers need when the program
-	 * uses a multiple-value operator, the float-format variable or reads
-	 * {@code *package*}; returns the program unchanged otherwise (a program that only
-	 * switches packages has its {@code *package*} assignments dropped, see below).
+	 * {@code (defvar *package* :cl-user)} / {@code (defvar *features* '(...))} globals
+	 * the compilers need when the program uses a multiple-value operator, the
+	 * float-format variable, or mentions {@code *package*} / {@code *features*}; returns
+	 * the program unchanged otherwise (a program that only switches packages has its
+	 * {@code *package*} assignments dropped, see below).
 	 * @param program the top-level forms
+	 * @param runtimeFeatures the feature names the program's {@code *features*} starts
+	 * out holding -- the set the frontend READ it with, so the compiled program answers
+	 * what the reader decided (see {@link #backendFeatures})
 	 * @return the program with the required global initializers prepended
 	 */
-	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program) {
+	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program, List<String> runtimeFeatures) {
 		boolean usesMv = false;
 		boolean usesFloatFormat = false;
 		// The printer-mode variables the program actually mentions, in PRINTER_MODE_VARS
@@ -29797,6 +29801,21 @@ public final class LispMacroExpander {
 				}
 			}
 		}
+		// *features*: an ordinary special holding a list, exactly as it is on the
+		// interpreter (Environment.createGlobal). The reader used to substitute the
+		// symbol with the quoted list here, which made a compiled program unable to push
+		// onto it -- and, in a BINDING position, put a cons where the variable name goes
+		// and crashed the compile outright (clack:clackup's
+		// (let* ((*features* (cons :clackup *features*))) ...)). Seeded with the names
+		// the frontend READ the program with, so the value the program sees is the set
+		// its own #+ conditionals were resolved against.
+		boolean usesFeatures = false;
+		for (LispVal form : program) {
+			if (usesSymbol(form, LispNames.FEATURES_VAR)) {
+				usesFeatures = true;
+				break;
+			}
+		}
 		// *package*: a genuine dynamic variable on every backend (PackageResolver
 		// resolves a read to the bare variable and a top-level in-package to
 		// (setq *package* :P)). It gets its (defvar *package* :cl-user) default -- the
@@ -29824,13 +29843,18 @@ public final class LispMacroExpander {
 			}
 			program = kept;
 		}
-		if (!usesMv && !usesFloatFormat && printerVars.isEmpty() && loadContextVars.isEmpty() && !readsPackage) {
+		if (!usesMv && !usesFloatFormat && printerVars.isEmpty() && loadContextVars.isEmpty() && !readsPackage
+				&& !usesFeatures) {
 			return program;
 		}
-		List<LispVal> out = new java.util.ArrayList<>(program.size() + 3 + printerVars.size() + loadContextVars.size());
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 4 + printerVars.size() + loadContextVars.size());
 		if (readsPackage) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.PACKAGE_VAR),
 					new LispSymbol(":" + LispNames.CL_USER_PKG))));
+		}
+		if (usesFeatures) {
+			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.FEATURES_VAR),
+					quotedKeywordList(runtimeFeatures))));
 		}
 		for (String name : loadContextVars) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), LispNil.INSTANCE)));
@@ -29860,6 +29884,30 @@ public final class LispMacroExpander {
 		}
 		out.addAll(program);
 		return out;
+	}
+
+	/**
+	 * The base runtime {@code *features*} names a backend seeds when its compiler is
+	 * driven directly -- unit tests and the browser playground -- rather than by the CLI,
+	 * which knows the exact target set (a {@code --component} build carries
+	 * {@code :rontolisp-component} too) and passes it to {@link #injectMvSpillGlobal}.
+	 * The codegen packages may not import {@code reader} (see CLAUDE.md's
+	 * package-dependency direction) and the expander may, so the names are handed down
+	 * from here rather than spelled a second time per backend.
+	 * @param wasm whether the target is a WASM backend rather than the JVM
+	 * @return the feature names, without the leading colon
+	 */
+	public static List<String> backendFeatures(boolean wasm) {
+		return (wasm ? am.ik.rontolisp.reader.Features.WASM : am.ik.rontolisp.reader.Features.JVM).names();
+	}
+
+	/** {@code '(:A :B ...)} over the given feature names, as the reader would read it. */
+	private static LispVal quotedKeywordList(List<String> names) {
+		LispVal list = LispNil.INSTANCE;
+		for (int i = names.size() - 1; i >= 0; i--) {
+			list = new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(java.util.Locale.ROOT)), list);
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), list));
 	}
 
 	/**

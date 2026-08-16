@@ -3881,8 +3881,10 @@ public final class LispNames {
 	public static final String COMPLEX = "COMPLEX";
 
 	/**
-	 * The {@code *features*} variable, substituted at read time with the active feature
-	 * list (see {@code reader.Features}).
+	 * The {@code *features*} variable: an ordinary special holding the active feature
+	 * list on every backend, seeded from the set the frontend READ the program with (see
+	 * {@code reader.Features} and {@code .kb/reader-features.md}). Not a read-time
+	 * substitution -- a program binds it, pushes onto it and reads it back.
 	 */
 	public static final String FEATURES_VAR = "*FEATURES*";
 

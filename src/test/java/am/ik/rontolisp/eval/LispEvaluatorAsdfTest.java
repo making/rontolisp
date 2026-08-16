@@ -58,9 +58,10 @@ class LispEvaluatorAsdfTest {
 	@Test
 	void aDeclaredRontolispFeatureIsVisibleToTheReaderOfTheSystemsOwnComponents() {
 		// The static encoding of a .asd that pushes onto *features* from an eval-when:
-		// the push would happen at LOAD time and the conditionals are resolved at READ
-		// time, so only a declaration can reach them (.todo/181). It must reach BOTH the
-		// system's own :if-feature clauses and the component sources.
+		// the push would happen at LOAD time and the COMPONENT files' conditionals are
+		// resolved at READ time, so only a declaration can carry it across files. It
+		// must reach BOTH the system's own :if-feature clauses and the component
+		// sources.
 		String output = run("(asdf:load-system \"feat-lib\") (print (feat-lib-mode))", Map.of(//
 				"feat-lib.asd", """
 						(defsystem :feat-lib

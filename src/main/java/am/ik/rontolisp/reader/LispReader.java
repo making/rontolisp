@@ -281,11 +281,53 @@ public final class LispReader {
 
 	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file) {
-		List<LocatedToken> tokens = new LispLexer(input, features, readEvalMode, file).tokenizeWithPositions();
-		LispReader reader = new LispReader(tokens, features, input, file, true);
+		// A source may announce features about ITSELF -- the header
+		// (eval-when (...) (pushnew :F *features*)) idiom -- and the #+F below it must
+		// see them. Real CL gets that free by loading form at a time; here the reader
+		// makes the announcement instead, so every backend agrees without evaluating
+		// anything (FeaturePushes).
+		Features effective = FeaturePushes.widen(input, features, readEvalMode, file);
+		List<LocatedToken> tokens = new LispLexer(input, effective, readEvalMode, file).tokenizeWithPositions();
+		LispReader reader = new LispReader(tokens, effective, input, file, true);
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
 			result.add(reader.readExpr());
+		}
+		return result;
+	}
+
+	/**
+	 * Reads as many top-level forms as the input yields, recording NO provenance and
+	 * propagating NO read error -- whatever was read before the failure is the answer.
+	 * This is the shape {@link FeaturePushes} needs and nothing else should want: its
+	 * conses are inspected and thrown away, so the real read of the same source must be
+	 * the one that claims its positions (the provenance table is first-write-wins), and a
+	 * source that does not read cleanly is the real read's error to report, positioned,
+	 * rather than a scan's.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param readEvalMode how a {@code #.} datum is treated
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the forms read before the input ended or a read error stopped the scan
+	 */
+	static List<LispVal> readAllForScan(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file) {
+		List<LocatedToken> tokens;
+		try {
+			tokens = new LispLexer(input, features, readEvalMode, file).tokenizeWithPositions();
+		}
+		catch (RuntimeException ex) {
+			return List.of();
+		}
+		LispReader reader = new LispReader(tokens, features, input, file, false);
+		List<LispVal> result = new ArrayList<>();
+		try {
+			while (reader.pos < reader.tokens.size()) {
+				result.add(reader.readExpr());
+			}
+		}
+		catch (RuntimeException ex) {
+			// Deliberately swallowed; see the contract above.
 		}
 		return result;
 	}
@@ -453,19 +495,14 @@ public final class LispReader {
 			}
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(list, LispNil.INSTANCE));
 		}
-		if (LispNames.FEATURES_VAR.equals(name) && this.features.substituteFeaturesVar()) {
-			// The active feature list, substituted at read time like pi: a quoted
-			// list of keywords, so a compiled program's feature set is fixed at compile
-			// time -- (setq *features* ...) is not supported there. The interpreter
-			// skips the substitution and binds *features* as a global variable instead
-			// (see Features.substituteFeaturesVar).
-			LispVal list = LispNil.INSTANCE;
-			List<String> names = this.features.names();
-			for (int i = names.size() - 1; i >= 0; i--) {
-				list = new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(java.util.Locale.ROOT)), list);
-			}
-			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(list, LispNil.INSTANCE));
-		}
+		// *features* is deliberately NOT substituted here, unlike pi and the limits
+		// above: it is a VARIABLE, not a constant, and CL programs bind it
+		// ((let ((*features* nil)) ...)), push onto it and read it back. Substituting
+		// the quoted list put a cons where a binding needs a name -- which is a compile
+		// crash, not a fidelity gap -- and made every push a no-op. Every backend now
+		// seeds it as an ordinary special holding this feature set instead (the
+		// interpreter in Environment.createGlobal, the compile paths from
+		// LispMacroExpander.injectMvSpillGlobal). See .kb/reader-features.md.
 		LispVal sourceLiteral = sourceLiteral(name);
 		if (sourceLiteral != null) {
 			return sourceLiteral;

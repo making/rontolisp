@@ -6,8 +6,9 @@
 ;;;; :postmodern-thread-safe / :postmodern-use-mop onto *features* per
 ;;;; implementation. AsdfSystems never evaluates a system definition (only
 ;;;; defsystem/defpackage/in-package/pure-data defparameter are recognized), so
-;;;; that form makes the file unreadable -- and a push would be invisible to the
-;;;; reader anyway (.todo/181). Both decisions are therefore taken here, once:
+;;;; that form makes the file unreadable -- and a push in a .asd is only ever
+;;;; read back inside that same file, never by the system's component files
+;;;; (.kb/reader-features.md). Both decisions are therefore taken here, once:
 ;;;;
 ;;;; :postmodern-use-mop -- ON. table.lisp (the :if-feature component below)
 ;;;; joins the build and postmodern's own defpackage takes its
@@ -24,7 +25,7 @@
 ;;;; finalization (query.lisp), plus five more in the MOP-only table.lisp. The
 ;;;; feature is declared through :rontolisp-features below, which is what makes
 ;;;; it visible to the READER for this system's own component files -- a
-;;;; *features* push from an eval-when never is (.todo/181). It is honest to
+;;;; *features* push in the .asd reaches only the .asd itself. It is honest to
 ;;;; declare because bordeaux-threads' `with-lock-held` now really serializes:
 ;;;; the bt shim is a built-in system over the rontolisp:*-mutex primitives,
 ;;;; which are a ReentrantLock on the interpreter and the JVM and no-ops on the

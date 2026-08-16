@@ -31,7 +31,7 @@
 | `uiop:implementation-type` / `uiop:*implementation-type*` | `:rontolisp` |
 | `uiop:lisp-version-string` | このビルドのバージョン。`(rontolisp:version)` が持つ文字列と同じ |
 | `uiop:operating-system` | `:unix` |
-| `uiop:detect-os` | `:os-unix` -- 上流は勝った feature を push して返しますが、ここでは push できないので返すだけです |
+| `uiop:detect-os` | `:os-unix` -- 上流の本体からループを除いたもの: ここで勝てる述語は1つだけなので、その feature を `*features*` に push して返します |
 | `uiop:architecture` | 成果物が対象とする ABI。インタプリタと JVM では `:jvm`（クラスファイルは CPU 非依存）、両方の WASM 出力では `:wasm32` |
 | `uiop:implementation-identifier` | 上の 4 つを連結して小文字化したもの。上流が fasl キャッシュのディレクトリ名を作るのと同じ形式です: `"rontolisp-<version>-unix-jvm"` |
 | `uiop:hostname` | `nil` -- ホスト識別のプリミティブを持つバックエンドはなく、これは上流が自身の `#+` 節にない処理系上で返す値そのものです |
@@ -74,8 +74,8 @@ feature 集合は設計上バックエンドごとに異なります -- `:rontol
 `uiop:featurep`（およびそこから導かれる `uiop:architecture`）は実行中のバック
 エンドについて答えます。省略可能な第 2 引数で独自の feature 集合を判定できます:
 `(uiop:featurep :x '(:x))` は `T` です。上流の引数リストが誘うような
-`*features*` の再束縛は、ここではインタプリタ限定の書き方です。コンパイル
-バックエンドは読み取り時にこの変数を置き換えるためです。
+`*features*` の再束縛は、すべてのバックエンドで動きます -- 普通のスペシャル
+変数だからです。
 
 ## 環境変数
 

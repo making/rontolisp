@@ -86,6 +86,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	private final boolean reentrant;
 
 	/**
+	 * The names the compiled program's {@code *features*} starts out holding. The WASM
+	 * backend's own set unless the frontend {@link #runtimeFeatures(List) says otherwise}
+	 * -- reading and running must agree on it, and only the frontend knows what it read
+	 * with (a {@code --component} or {@code --no-wasi} build carries more).
+	 */
+	private List<String> runtimeFeatures = LispMacroExpander.backendFeatures(true);
+
+	/**
 	 * The one import a {@code --host-random} module carries: preview1's
 	 * {@code random_get(buf, len) -> errno} signature exactly (so a host can forward its
 	 * own WASI implementation unchanged), under the conventional host module name rather
@@ -1963,6 +1971,20 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shared monotonic allocator, see src/wasm-component/mem.wat).
 	private static final int COMPONENT_DATA_BASE_OFFSET = 0x60000;
 
+	/**
+	 * Sets the feature names the compiled program's {@code *features*} starts out
+	 * holding. The frontend passes the set it READ the program with, so a
+	 * {@code (member :rontolisp-component *features*)} at run time answers what the
+	 * {@code #+rontolisp-component} beside it answered at read time. Left alone, the
+	 * backend's base set stands ({@link LispMacroExpander#backendFeatures}).
+	 * @param features the feature names, without the leading colon
+	 * @return this compiler
+	 */
+	public WasmLispCompiler runtimeFeatures(List<String> features) {
+		this.runtimeFeatures = List.copyOf(features);
+		return this;
+	}
+
 	@Override
 	public byte[] compile(List<LispVal> program) {
 		// The load-context brackets LoadInliner put around each spliced file become
@@ -2308,7 +2330,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		program = LambdaLists.desugarProgram(program);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
-		program = LispMacroExpander.injectMvSpillGlobal(program);
+		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
 		// Bundle the surplus parameters of too-wide fixed-arity defuns into a list
 		// (and rewrite their direct call sites) so real-library signatures compile
 		// despite the MAX_CALLABLE_ARITY type limit.

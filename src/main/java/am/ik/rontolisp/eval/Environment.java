@@ -638,13 +638,14 @@ public final class Environment implements Scope {
 		env.define(LispNames.LOAD_TRUENAME_VAR, LispNil.INSTANCE);
 		env.define(LispNames.COMPILE_FILE_PATHNAME_VAR, LispNil.INSTANCE);
 		env.define(LispNames.COMPILE_FILE_TRUENAME_VAR, LispNil.INSTANCE);
-		// The interpreter's *features* is a real global variable (the compile backends
-		// substitute the symbol at read time instead; see reader.Features).
+		// *features*: an ordinary special holding the interpreter's feature list. The
+		// compile paths seed the same variable with their own target set
+		// (LispMacroExpander.injectMvSpillGlobal); see .kb/reader-features.md.
 		LispVal featureList = LispNil.INSTANCE;
 		List<String> featureNames = am.ik.rontolisp.reader.Features.INTERPRETER.names();
 		for (int i = featureNames.size() - 1; i >= 0; i--) {
 			// Features are keywords, printed uppercase like every other symbol under the
-			// reader's upcase premise; the compile backends substitute :RONTOLISP too.
+			// reader's upcase premise; the compile paths spell them the same way.
 			featureList = new LispCons(new LispSymbol(":" + featureNames.get(i).toUpperCase(java.util.Locale.ROOT)),
 					featureList);
 		}

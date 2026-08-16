@@ -5025,6 +5025,39 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void featuresIsAnOrdinarySpecialVariable() throws Exception {
+		// The WASM half of JvmLispCompilerTest's pin of the same name: *features* is a
+		// list-valued special here too, seeded with the set the frontend read with,
+		// pushed onto and bound like any other. The reader used to substitute the symbol
+		// with the quoted list, which made every push a no-op and crashed the compile
+		// outright in a BINDING position (clack:clackup's
+		// (let* ((*features* (cons :clackup *features*))) ...)).
+		assertThat(compileAndRun("(print (car *features*))")).isEqualTo(":RONTOLISP");
+		assertThat(compileAndRun("(pushnew :my-feature *features*)(print (and (member :my-feature *features*) t))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun("(defun f (a) (let ((*features* (cons :inner *features*))) (list a (car *features*))))"
+				+ "(print (f 1))(print (car *features*))"))
+			.isEqualTo("(1 :INNER)\n:RONTOLISP");
+		// ... and the binding is DYNAMIC, so it reaches a callee reading the variable
+		// -- the shape upstream uiop:featurep's own parameter list invites.
+		assertThat(compileAndRun("(defun g (&optional (fs *features*)) (car fs))"
+				+ "(print (let ((*features* '(:rebound))) (g)))(print (g))"))
+			.isEqualTo(":REBOUND\n:RONTOLISP");
+	}
+
+	@Test
+	void ownFeaturePushIsVisibleToTheSameSourcesConditionals() throws Exception {
+		// The announcement idiom, decided in the READER so every backend agrees
+		// (reader.FeaturePushes).
+		assertThat(compileAndRun("""
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (pushnew :announced *features*))
+				(print #+announced :saw-it #-announced :missed-it)
+				(print (and (member :announced *features*) t))
+				""")).isEqualTo(":SAW-IT\nT");
+	}
+
+	@Test
 	void multipleExpressions() throws Exception {
 		assertThat(compileAndRun("(print 1) (print 2) (print 3)")).isEqualTo("1\n2\n3");
 	}

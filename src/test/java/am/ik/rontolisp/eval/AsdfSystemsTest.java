@@ -335,11 +335,10 @@ class AsdfSystemsTest {
 	@Test
 	void parsesTheFastIoAsdFeatureAnnouncementHeader() {
 		// The push is recorded as a declared feature of the system defined after it (so
-		// its component files are read with :fast-io active); the #+-gated one never
-		// happens, so the #+fast-io-sv :depends-on entry drops :static-vectors. Every
-		// backend, because the two reader spellings of *features* differ: the
-		// interpreter leaves the symbol standing, the compile paths substitute the
-		// quoted active list at read time.
+		// its component files are read with :fast-io active); the second push sits
+		// behind an #+(or sbcl ccl ...) no rontolisp backend satisfies, so the
+		// #+fast-io-sv :depends-on entry drops :static-vectors. Checked on every
+		// backend: the announcement must not depend on which set is reading.
 		for (Features features : List.of(Features.INTERPRETER, Features.JVM, Features.WASM)) {
 			List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(FAST_IO_ASD, "sw/fast-io.asd", features);
 			assertThat(systems).hasSize(1);
@@ -353,8 +352,8 @@ class AsdfSystemsTest {
 	@Test
 	void anAnnouncedFeatureReachesTheSystemsOwnFeatureClauses() {
 		// What the declaration buys inside the same defsystem: :if-feature and
-		// (:feature ...) see the pushed name. (A #+ in the same file does not -- the
-		// reader resolved it before this parse, .todo/181.)
+		// (:feature ...) see the pushed name. (A #+ in the same file sees it too, but
+		// through the reader -- reader.FeaturePushes -- not through this parse.)
 		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
 				(eval-when (:load-toplevel :execute) (pushnew :lib-sv *features*))
 				(defsystem :lib

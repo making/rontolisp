@@ -429,8 +429,7 @@ public final class UiopLibrary {
 	}
 
 	private static Tables tables(Features features) {
-		return TABLES.computeIfAbsent(String.join(",", features.names()) + "|" + features.substituteFeaturesVar(),
-				ignored -> build(features));
+		return TABLES.computeIfAbsent(String.join(",", features.names()), ignored -> build(features));
 	}
 
 	private static Tables build(Features features) {

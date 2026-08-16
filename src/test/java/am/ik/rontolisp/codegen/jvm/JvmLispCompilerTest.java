@@ -3818,6 +3818,41 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFeaturesIsAnOrdinarySpecialVariable() throws Exception {
+		// *features* is a VARIABLE on this backend too: seeded with the set the frontend
+		// read the program with, pushed onto and bound like any other special. The
+		// reader used to substitute the symbol with the quoted list, which made every
+		// push a no-op -- and in a BINDING position put a cons where the variable name
+		// goes, so clack:clackup's (let* ((*features* (cons :clackup *features*))) ...)
+		// failed to compile at all.
+		assertThat(compileAndRun("(print (car *features*))")).isEqualTo(":RONTOLISP");
+		assertThat(
+				compileAndRun("(pushnew :my-feature *features*)" + "(print (and (member :my-feature *features*) t))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun("(defun f (a) (let ((*features* (cons :inner *features*))) (list a (car *features*))))"
+				+ "(print (f 1))(print (car *features*))"))
+			.isEqualTo("(1 :INNER)\n:RONTOLISP");
+		// ... and the binding is DYNAMIC, so it reaches a callee reading the variable
+		// -- the shape upstream uiop:featurep's own parameter list invites.
+		assertThat(compileAndRun("(defun g (&optional (fs *features*)) (car fs))"
+				+ "(print (let ((*features* '(:rebound))) (g)))(print (g))"))
+			.isEqualTo(":REBOUND\n:RONTOLISP");
+	}
+
+	@Test
+	void compileAndRunOwnFeaturePushIsVisibleToTheSameSourcesConditionals() throws Exception {
+		// The announcement idiom, decided in the READER so every backend agrees
+		// (reader.FeaturePushes): the #+ below the push sees it, and the run-time list
+		// grows when the push itself runs.
+		assertThat(compileAndRun("""
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (pushnew :announced *features*))
+				(print #+announced :saw-it #-announced :missed-it)
+				(print (and (member :announced *features*) t))
+				""")).isEqualTo(":SAW-IT\nT");
+	}
+
+	@Test
 	void compileAndRunSubtraction() throws Exception {
 		assertThat(compileAndRun("(print (- 10 3))")).isEqualTo("7");
 	}

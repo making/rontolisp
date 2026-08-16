@@ -770,8 +770,13 @@ public final class RontoLispCli {
 				// module then imports env.random_get(buf, len) -> errno and every
 				// `random` draw is the host's entropy, which is also what makes
 				// rontolisp:random-bytes sound again.
+				// runtimeFeatures: the compiled program's *features* starts out holding
+				// exactly what the frontend READ it with -- component / reactor /
+				// body-imports included -- so a run-time (member :F *features*) and the
+				// #+F beside it cannot disagree.
 				WasmLispCompiler compiler = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd,
-						hostRandom, hostFetch, reentrant);
+						hostRandom, hostFetch, reentrant)
+					.runtimeFeatures(features.names());
 				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
 				if (glueFile != null) {
@@ -784,7 +789,7 @@ public final class RontoLispCli {
 			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic, optimize, simd)
+			bytes = new JvmLispCompiler(className, dynamic, optimize, simd).runtimeFeatures(features.names())
 				.compile(TlsPemInliner.inline(program, baseDir));
 		}
 		try {
