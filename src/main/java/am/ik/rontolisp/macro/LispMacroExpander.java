@@ -27849,7 +27849,7 @@ public final class LispMacroExpander {
 			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
 					listToCons(List.<LispVal>of(ha)), body)));
 			List<String> spellings = new java.util.ArrayList<>();
-			spellings.add(info.name());
+			addDesignatorSpellings(spellings, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
 			if (qn != null && closRegistry.findClass(qn.member()) == info) {
 				spellings.add(qn.member());
@@ -27931,7 +27931,7 @@ public final class LispMacroExpander {
 			List<String> tags = closRegistry.descendantTags(info.name());
 			java.util.LinkedHashSet<String> names = namesByTags.computeIfAbsent(tags,
 					k -> new java.util.LinkedHashSet<>());
-			names.add(info.name());
+			addDesignatorSpellings(names, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
 			if (qn != null) {
 				names.add(qn.member());
@@ -27943,7 +27943,7 @@ public final class LispMacroExpander {
 				if (!ClosRegistry.normalize(info.name()).equals(alias.getValue())) {
 					continue;
 				}
-				names.add(alias.getKey());
+				addDesignatorSpellings(names, alias.getKey());
 				PackageRegistry.QualifiedName aliasQn = PackageRegistry.splitQualified(alias.getKey());
 				if (aliasQn != null) {
 					names.add(aliasQn.member());
@@ -27963,7 +27963,7 @@ public final class LispMacroExpander {
 					List<String> tags = closRegistry.descendantStructTags(name);
 					java.util.LinkedHashSet<String> names = namesByTags.computeIfAbsent(tags,
 							k -> new java.util.LinkedHashSet<>());
-					names.add(name);
+					addDesignatorSpellings(names, name);
 					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 					if (qn != null) {
 						names.add(qn.member());
@@ -28111,7 +28111,7 @@ public final class LispMacroExpander {
 			java.util.LinkedHashSet<String> spellings = new java.util.LinkedHashSet<>();
 			// The canonical spelling comes FIRST: the generated %find-class memoizes
 			// (and names the metaobject) by (car (car entry)).
-			spellings.add(info.name());
+			addDesignatorSpellings(spellings, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
 			if (qn != null) {
 				spellings.add(qn.member());
@@ -28126,7 +28126,7 @@ public final class LispMacroExpander {
 				if (!ClosRegistry.normalize(info.name()).equals(alias.getValue())) {
 					continue;
 				}
-				spellings.add(alias.getKey());
+				addDesignatorSpellings(spellings, alias.getKey());
 				PackageRegistry.QualifiedName aliasQn = PackageRegistry.splitQualified(alias.getKey());
 				if (aliasQn != null) {
 					spellings.add(aliasQn.member());
@@ -28159,7 +28159,7 @@ public final class LispMacroExpander {
 				continue;
 			}
 			java.util.LinkedHashSet<String> spellings = new java.util.LinkedHashSet<>();
-			spellings.add(layout.printName());
+			addDesignatorSpellings(spellings, layout.printName());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(layout.printName());
 			if (qn != null) {
 				spellings.add(qn.member());
@@ -28410,7 +28410,7 @@ public final class LispMacroExpander {
 				continue;
 			}
 			List<String> spellings = new java.util.ArrayList<>();
-			spellings.add(info.name());
+			addDesignatorSpellings(spellings, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
 			if (qn != null && closRegistry.findClass(qn.member()) == info) {
 				spellings.add(qn.member());
@@ -28648,7 +28648,7 @@ public final class LispMacroExpander {
 				continue;
 			}
 			List<String> spellings = new java.util.ArrayList<>();
-			spellings.add(info.name());
+			addDesignatorSpellings(spellings, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
 			if (qn != null && closRegistry.findClass(qn.member()) == info) {
 				spellings.add(qn.member());
@@ -28965,7 +28965,7 @@ public final class LispMacroExpander {
 				continue;
 			}
 			List<String> spellings = new java.util.ArrayList<>();
-			spellings.add(info.name());
+			addDesignatorSpellings(spellings, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
 			if (qn != null && closRegistry.findClass(qn.member()) == info) {
 				spellings.add(qn.member());
@@ -29177,7 +29177,7 @@ public final class LispMacroExpander {
 				"EXTENDED-CHAR", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", "SIMPLE-VECTOR", "SIMPLE-ARRAY",
 				"CHARACTER", "STANDARD-OBJECT", "CONDITION", "ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION"));
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
-			names.add(info.name());
+			addDesignatorSpellings(names, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
 			if (qn != null) {
 				names.add(qn.member());
@@ -29189,7 +29189,7 @@ public final class LispMacroExpander {
 		// 'alias
 		// 'target) with the target's own row.
 		for (String alias : closRegistry.classAliases().keySet()) {
-			names.add(alias);
+			addDesignatorSpellings(names, alias);
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(alias);
 			if (qn != null) {
 				names.add(qn.member());
@@ -29203,7 +29203,7 @@ public final class LispMacroExpander {
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			if (layout.kind() == LispLayout.Kind.STRUCT) {
 				String structName = layout.tag().substring(LispLayout.STRUCT_TAG_PREFIX.length());
-				names.add(structName);
+				addDesignatorSpellings(names, structName);
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
 				if (qn != null) {
 					names.add(qn.member());
@@ -29212,6 +29212,33 @@ public final class LispMacroExpander {
 		}
 		names.addAll(closRegistry.deftypeNames());
 		return List.copyOf(names);
+	}
+
+	/**
+	 * Adds every RUNTIME spelling that designates a class (or struct, or condition) named
+	 * {@code className} to {@code out}: the canonical {@code PKG::MEMBER} one the
+	 * registry keys by, and -- when the name is package-qualified -- the single-colon
+	 * {@code PKG:MEMBER} one a symbol BUILT at run time carries. The compile paths have
+	 * no package registry at run time, so {@code (intern "SPEC-REP" pkg)} always
+	 * assembles the EXTERNAL spelling (exportedness is compile-time knowledge -- the
+	 * documented deviation of {@code .kb/symbol-runtime-api.md}, the same reason the
+	 * function registry ships single-colon alias rows); without this spelling every
+	 * generated designator dispatch -- {@code %find-class}, {@code %mop-make-instance},
+	 * {@code %allocate-instance}, the runtime {@code typep}/{@code subtypep} tables, the
+	 * condition-class dispatch of {@code error}/{@code signal} -- misses a class whose
+	 * name the program interned rather than spelled, while the interpreter (whose
+	 * {@code ClosRegistry.normalize} folds {@code :} to {@code ::}) resolves it. One
+	 * package cannot house two distinct symbols with one member name, so the added
+	 * spelling can never designate another class.
+	 * @param out the spelling collection to add to (order-preserving; a set deduplicates)
+	 * @param className the registered class name
+	 */
+	private static void addDesignatorSpellings(java.util.Collection<String> out, String className) {
+		out.add(className);
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(className);
+		if (qn != null && qn.internal()) {
+			out.add(qn.pkg() + ":" + qn.member());
+		}
 	}
 
 	/** Builds {@code '(name...)} from name strings. */

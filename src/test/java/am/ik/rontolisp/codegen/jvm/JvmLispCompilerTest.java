@@ -290,6 +290,35 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileRuntimeClassDesignatorResolvesAnInternedNonExportedName() throws Exception {
+		// rove's make-reporter is (make-instance (intern (format nil "~A-~A" style
+		// '#:reporter) package) ...): the compile paths have no package registry at run
+		// time, so intern always builds the single-colon EXTERNAL spelling
+		// (RCD-PKG:SPEC-REP) while the class is registered as RCD-PKG::SPEC-REP. Every
+		// generated designator dispatch matches both spellings, so the class need not be
+		// exported for make-instance / find-class / typep / subtypep / the
+		// condition-class arm of error to resolve it -- the interpreter's registry folds
+		// the same two spellings (ClosRegistry.normalize).
+		assertThat(compileAndRun("""
+				(defpackage :rcd-pkg (:use :cl))
+				(in-package :rcd-pkg)
+				(defclass spec-rep () ((s :initarg :s)))
+				(defclass sub-rep (spec-rep) ())
+				(define-condition rcd-err (error) ((k :initarg :k)))
+				(defun make-rep (style package)
+				  (make-instance (intern (format nil "~A-~A" style '#:rep) package) :s 7))
+				(in-package :cl-user)
+				(let ((n (intern "SPEC-REP" :rcd-pkg)))
+				  (print (slot-value (rcd-pkg::make-rep '#:spec (find-package :rcd-pkg)) 's))
+				  (print (eq (find-class n) (find-class 'rcd-pkg::spec-rep)))
+				  (print (typep (make-instance n :s 1) n))
+				  (print (subtypep (intern "SUB-REP" :rcd-pkg) n))
+				  (print (handler-case (error (intern "RCD-ERR" :rcd-pkg) :k 5)
+				           (rcd-pkg::rcd-err (c) (slot-value c 'k)))))
+				""")).isEqualTo("7\nT\nT\nT\n5");
+	}
+
+	@Test
 	void compileCloserMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators() throws Exception {
 		// The closer-mop system is spliced by the compile-time LoadInliner pass (cli),
 		// mirroring the CLI pipeline; the shim serves BOTH generations, exactly like the

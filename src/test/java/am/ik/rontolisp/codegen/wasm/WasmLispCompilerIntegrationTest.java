@@ -7899,6 +7899,31 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void runtimeClassDesignatorResolvesAnInternedNonExportedName() throws Exception {
+		// The WASM twin of
+		// JvmLispCompilerTest#compileRuntimeClassDesignatorResolvesAnInternedNonExportedName:
+		// a runtime-interned class name carries the single-colon external spelling on
+		// both compile paths, and every designator dispatch answers to it.
+		assertThat(compileAndRun("""
+				(defpackage :rcd-pkg (:use :cl))
+				(in-package :rcd-pkg)
+				(defclass spec-rep () ((s :initarg :s)))
+				(defclass sub-rep (spec-rep) ())
+				(define-condition rcd-err (error) ((k :initarg :k)))
+				(defun make-rep (style package)
+				  (make-instance (intern (format nil "~A-~A" style '#:rep) package) :s 7))
+				(in-package :cl-user)
+				(let ((n (intern "SPEC-REP" :rcd-pkg)))
+				  (print (slot-value (rcd-pkg::make-rep '#:spec (find-package :rcd-pkg)) 's))
+				  (print (eq (find-class n) (find-class 'rcd-pkg::spec-rep)))
+				  (print (typep (make-instance n :s 1) n))
+				  (print (subtypep (intern "SUB-REP" :rcd-pkg) n))
+				  (print (handler-case (error (intern "RCD-ERR" :rcd-pkg) :k 5)
+				           (rcd-pkg::rcd-err (c) (slot-value c 'k)))))
+				""")).isEqualTo("7\nT\nT\nT\n5");
+	}
+
+	@Test
 	void defclassMetaclassRunsTheClassDefinitionProtocol() throws Exception {
 		// The postmodern dao-class shape on the WASM path, mirroring
 		// JvmLispCompilerTest#compileDefclassMetaclassRunsTheClassDefinitionProtocol.

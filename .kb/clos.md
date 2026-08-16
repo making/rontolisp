@@ -825,6 +825,47 @@ name make the bare spelling unresolvable (qualify it). `slot-value` matches by
 slot base name for the same reason. `defmethod` stores the specializer as the
 FOUND class's canonical name (not the spelling at the method site).
 
+## A RUNTIME class designator: both colon spellings (todo-382, 2026-08-16)
+
+`(make-instance (intern (format nil "~A-~A" style '#:reporter) package) ...)` --
+rove's `make-reporter` -- names a class by a symbol BUILT at run time. The
+compile paths carry no package registry at run time, so `intern` always
+assembles the single-colon EXTERNAL spelling `PKG:MEMBER` (exportedness is
+compile-time knowledge -- the documented deviation of
+`.kb/symbol-runtime-api.md`, the same reason the function registry ships
+single-colon alias rows), while the class is registered canonically as
+`PKG::MEMBER`. Every generated designator dispatch matches by SPELLING, so
+before this every such lookup missed a class the program did not EXPORT --
+`%MOP-MAKE-INSTANCE: not an instantiable class: SPEC-REP` -- while the
+interpreter resolved it, because `ClosRegistry.normalize` folds `:` to `::`.
+
+The fix is at the LOOKUP, not at the interned symbol (whose own spelling is
+`.todo/254`'s business): `LispMacroExpander.addDesignatorSpellings` is the ONE
+place that turns a registered name into the spellings that designate it -- the
+canonical one plus, for a qualified name, the single-colon one -- and every
+generated table/dispatch built from a class, struct, condition or
+`(setf find-class)` alias name goes through it:
+
+- `%class-meta-table%` (`find-class` / `class-of` / `%class-designator`),
+- `%mop-make-instance` (and its `%MMI-REFILL` arms),
+- `%allocate-instance`, `%class-direct-subclasses`,
+- the runtime `typep` tag table and the `subtypep` universe,
+- the condition-class dispatch of `error`/`signal` (`%error-runtime`).
+
+One package cannot house two distinct symbols with one member name, so the added
+spelling can never designate another class. Cost: the extra symbol rides only in
+the tables a program already emits, and only for PACKAGE-QUALIFIED names -- a
+`cl-user` program is byte-identical, and the whole of rove compiled +959 B on a
+1.71 MB module, so no spellability gate (the `.kb/symbol-runtime-api.md`
+todo-317 one) was added. Pinned by
+`LispEvaluatorTest#evalRuntimeClassDesignatorResolvesAnInternedNonExportedName`,
+`JvmLispCompilerTest#compileRuntimeClassDesignatorResolvesAnInternedNonExportedName`,
+`WasmLispCompilerIntegrationTest#runtimeClassDesignatorResolvesAnInternedNonExportedName`
+and ci-spec `runtime-class-designator-spellings`.
+
+**Still literal-only**: `change-class`'s class argument (`CHANGE-CLASS requires a
+literal quoted class name` on every backend -- there is no runtime arm to widen).
+
 ## Real slot unboundness (todo-199)
 
 **A slot written with no `:initform` starts UNBOUND, not nil.** Reading it signals

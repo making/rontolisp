@@ -4060,6 +4060,35 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRuntimeClassDesignatorResolvesAnInternedNonExportedName() {
+		// rove's make-reporter shape ((make-instance (intern (format nil "~A-~A" style
+		// '#:reporter) package) ...)): a class named by a runtime-interned symbol
+		// resolves whether or not its package exports it -- the interpreter registry
+		// folds the single-colon and double-colon spellings alike
+		// (ClosRegistry.normalize), which is what the compile paths' designator
+		// dispatches were widened to match
+		// (JvmLispCompilerTest#compileRuntimeClassDesignatorResolvesAnInternedNonExportedName).
+		LispVal result = evalMulti("""
+				(defpackage :rcd-pkg (:use :cl))
+				(in-package :rcd-pkg)
+				(defclass spec-rep () ((s :initarg :s)))
+				(defclass sub-rep (spec-rep) ())
+				(define-condition rcd-err (error) ((k :initarg :k)))
+				(defun make-rep (style package)
+				  (make-instance (intern (format nil "~A-~A" style '#:rep) package) :s 7))
+				(in-package :cl-user)
+				(let ((n (intern "SPEC-REP" :rcd-pkg)))
+				  (list (slot-value (rcd-pkg::make-rep '#:spec (find-package :rcd-pkg)) 's)
+				        (eq (find-class n) (find-class 'rcd-pkg::spec-rep))
+				        (typep (make-instance n :s 1) n)
+				        (subtypep (intern "SUB-REP" :rcd-pkg) n)
+				        (handler-case (error (intern "RCD-ERR" :rcd-pkg) :k 5)
+				          (rcd-pkg::rcd-err (c) (slot-value c 'k)))))
+				""");
+		assertThat(result.print()).isEqualTo("(7 T T T 5)");
+	}
+
+	@Test
 	void evalTypecase() {
 		assertThat(eval("(typecase 42 (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"i\"");
 		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");

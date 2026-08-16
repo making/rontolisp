@@ -379,6 +379,15 @@ resolves designators against the live environment and needs none of it):
   interned symbol probe the `_genv` mirror by the single-colon spelling, so only
   EXPORTED specials resolve (lack's `*lack-middleware-backtrace*` is exported).
   Re-evaluate if a library reads an unexported special through runtime intern.
+- **CLASS names get the same widening, at the LOOKUP** (todo-382): every generated
+  class-designator dispatch — `%find-class`, `%mop-make-instance`,
+  `%allocate-instance`, the runtime `typep`/`subtypep` tables, the condition-class
+  arm of `error` — matches BOTH colon spellings of a registered class, so
+  `(make-instance (intern "SPEC-REPORTER" pkg) ...)` over a NON-exported class
+  resolves (rove's `make-reporter`). One helper builds the spellings
+  (`LispMacroExpander.addDesignatorSpellings`); unlike the function rows here it is
+  ungated, because it costs one symbol per package-qualified class in a table the
+  program already emits (`.kb/clos.md`).
 - **`_apply`'s symbol miss is LOUD**: a designator resolving in neither `_fenv` nor
   the registry throws `The function X is undefined` (JVM,
   `emitUndefinedFunctionThrow` — same text as the funcall dispatchers' miss arm) /

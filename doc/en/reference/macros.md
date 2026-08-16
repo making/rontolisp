@@ -63,7 +63,7 @@ description and a runnable example you can evaluate in your browser.
 | `multiple-value-list` | `(multiple-value-list values-form)` | Collects the producer's values into a list (recognized like `multiple-value-bind`) |
 | `multiple-value-call` | `(multiple-value-call function values-form...)` | Calls the function with all values of every producer as the arguments, including a user function's values spread at runtime (deviates from CL: classified as a macro, not a special operator) |
 | `nth-value` | `(nth-value n values-form)` | The n-th (0-based) value of the producer, or nil; expands to `nth` over `multiple-value-list` |
-| `make-instance` | `(make-instance 'class-name :initarg value ...)` | Create an instance of a [`defclass`](special-forms/defclass.md) class (static CLOS subset). The class name must be a literal quoted symbol |
+| `make-instance` | `(make-instance 'class-name :initarg value ...)` | Create an instance of a [`defclass`](special-forms/defclass.md) class (static CLOS subset). The class name may be literal or computed; the class SET is fixed at compile time |
 | `slot-value` | `(slot-value object 'slot-name)` | Read a slot of a [`defclass`](special-forms/defclass.md) instance; a `setf`-able place. The slot name must be a literal quoted symbol |
 | `with-slots` | `(with-slots (x (v y)) instance body...)` | Bind slot names as symbol-macro-style places for the body: reads see the slots, and `setf`/`push`/`incf` of a bound name writes back to the slot. Resolves `defstruct` slots too |
 | `with-accessors` | `(with-accessors ((x pt-x)) instance body...)` | Bind variables as symbol-macro-style places standing for accessor calls on the instance |

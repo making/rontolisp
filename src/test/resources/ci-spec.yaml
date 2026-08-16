@@ -1301,6 +1301,36 @@ cases:
       "suite"
       "suite"
       (:PACKAGE :KEYWORD :SYMBOL :OTHER)
+  - name: runtime-class-designator-spellings
+    source: |
+      ;; rove's make-reporter names its class by INTERNING it: (make-instance
+      ;; (intern (format nil "~A-~A" style '#:reporter) package) ...). The compile
+      ;; paths carry no package registry at run time, so intern always builds the
+      ;; single-colon EXTERNAL spelling (CI-RCD:SPEC-REP) while the class is
+      ;; registered as CI-RCD::SPEC-REP -- every generated designator dispatch
+      ;; (make-instance, find-class, typep, subtypep, the condition-class arm of
+      ;; error) answers to both, so the class need not be exported.
+      (defpackage :ci-rcd (:use :cl))
+      (in-package :ci-rcd)
+      (defclass spec-rep () ((s :initarg :s)))
+      (defclass sub-rep (spec-rep) ())
+      (define-condition rcd-err (error) ((k :initarg :k)))
+      (defun ci-make-rep (style package)
+        (make-instance (intern (format nil "~A-~A" style '#:rep) package) :s 7))
+      (in-package :cl-user)
+      (let ((n (intern "SPEC-REP" :ci-rcd)))
+        (print (slot-value (ci-rcd::ci-make-rep '#:spec (find-package :ci-rcd)) 's))
+        (print (eq (find-class n) (find-class 'ci-rcd::spec-rep)))
+        (print (typep (make-instance n :s 1) n))
+        (print (subtypep (intern "SUB-REP" :ci-rcd) n))
+        (print (handler-case (error (intern "RCD-ERR" :ci-rcd) :k 5)
+                 (ci-rcd::rcd-err (c) (slot-value c 'k)))))
+    expected: |
+      7
+      T
+      T
+      T
+      5
   - name: lisp-2-function-namespace-via-function
     source: |
       (cl:in-package cl-user)
