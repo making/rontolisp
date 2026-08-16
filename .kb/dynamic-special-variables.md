@@ -58,7 +58,7 @@ gets a backing store.
   special/progv is ever used).
 - `evalProgv`: runtime-computed symbol/value lists; binds each dynamically (extra
   symbols -> nil), sets `progvUsed`. progv-bound names need not be declared special.
-- Restore fires on EVERY exit: normal return, non-local exit (`LispReturnSignal`),
+- Restore fires on EVERY exit: normal return, non-local exit (`BlockReturnSignal`),
   error unwind (`LispEvalException`) -- all unchecked, so the `finally` runs.
 
 ## JVM (`JvmLetCompiler`) -- thread-scoped shallow binding (hybrid representation)

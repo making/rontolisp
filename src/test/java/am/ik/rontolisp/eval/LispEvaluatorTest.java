@@ -7799,6 +7799,86 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void returnInAHandlerBindHandlerExitsTheLEXICALNilBlock() {
+		// rove's SIGNALS shape: the handler's (return c) names the (block nil ...)
+		// that LEXICALLY encloses the handler, never the implicit nil block of
+		// whatever iteration form the SIGNALLING function happens to be running.
+		assertThat(evalMulti("""
+				(define-condition my-error (error) ())
+				(defun raise () (error 'my-error))
+				(defun sig-nil (thunk)
+				  (block nil
+				    (handler-bind ((condition (lambda (c) (return c))))
+				      (funcall thunk)
+				      nil)))
+				(list (type-of (sig-nil (lambda () (raise))))
+				      (type-of (sig-nil (lambda () (loop :for i :from 1 :to 3 :collect (raise)))))
+				      (type-of (sig-nil (lambda () (dolist (x (list 1 2)) (raise)))))
+				      (type-of (sig-nil (lambda () (dotimes (i 2) (raise)))))
+				      (type-of (sig-nil (lambda () (do ((i 0 (+ i 1))) ((> i 2)) (raise))))))
+				""").print()).isEqualTo("(MY-ERROR MY-ERROR MY-ERROR MY-ERROR MY-ERROR)");
+	}
+
+	@Test
+	void returnFromANamedBlockInAHandlerBindHandlerStillExitsIt() {
+		// The named twin of the shape above -- it always worked, and must keep
+		// working now that both resolve through the same lexical lookup.
+		assertThat(evalMulti("""
+				(define-condition my-error (error) ())
+				(defun raise () (error 'my-error))
+				(defun sig-named (thunk)
+				  (block outer
+				    (handler-bind ((condition (lambda (c) (return-from outer c))))
+				      (funcall thunk)
+				      nil)))
+				(type-of (sig-named (lambda () (loop :for i :from 1 :to 3 :collect (raise)))))
+				""").print()).isEqualTo("MY-ERROR");
+	}
+
+	@Test
+	void roveShapedSignalsSeesAConditionRaisedFromInsideALoop() {
+		// What rove's (signals FORM 'type) expands to, verbatim in essence.
+		assertThat(evalMulti("""
+				(define-condition my-error (error) ())
+				(defun loop-raiser () (loop :for i :from 1 :to 3 :collect (error 'my-error)))
+				(let ((g 'my-error))
+				  (typep (block nil
+				           (handler-bind ((condition (lambda (c) (when (typep c g) (return c)))))
+				             (loop-raiser)
+				             nil))
+				         g))
+				""").print()).isEqualTo("T");
+	}
+
+	@Test
+	void returnExitsTheInnermostLexicalIterationNotADynamicOne() {
+		// The lookup must stay LEXICAL in the ordinary direction too: the inner
+		// loop's return exits the inner loop, and a callee's return never reaches
+		// its caller's loop.
+		assertThat(eval("""
+				(loop :for i :from 1 :to 3
+				      :collect (loop :for j :from 1 :to 9 :do (if (= j i) (return (* 10 j)))))
+				""").print()).isEqualTo("(10 20 30)");
+		assertThatThrownBy(() -> evalMulti("""
+				(defun callee () (return :dynamic))
+				(dotimes (i 1) (callee))
+				""")).hasMessageContaining("no enclosing block named NIL");
+	}
+
+	@Test
+	void anExitToABlockThatIsNoLongerActiveIsAnError() {
+		// The closure captures the block LEXICALLY, so calling it after the block
+		// returned is the current error -- not a silent no-op, and not an exit to
+		// some unrelated block that happens to be active.
+		assertThatThrownBy(() -> evalMulti("""
+				(defun escaper () (block nil (lambda () (return :late))))
+				(funcall (escaper))
+				""")).hasMessageContaining("no enclosing block named NIL");
+		assertThatThrownBy(() -> eval("(return 1)")).hasMessageContaining("no enclosing block named NIL");
+		assertThatThrownBy(() -> eval("(return-from nowhere 1)")).hasMessageContaining("no enclosing block named");
+	}
+
+	@Test
 	void handlerBindRunsEachClusterOnceForABuiltInErrorInnermostFirst() {
 		// Declining handlers: inner cluster first, then outer, each exactly once,
 		// and the escaping error is still catchable as a typed condition outside.

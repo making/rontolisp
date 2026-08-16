@@ -325,11 +325,47 @@ public final class Environment implements Scope {
 	@Nullable private final Environment parent;
 
 	/**
+	 * The name of the {@code block} this scope ESTABLISHES, or {@code null} for an
+	 * ordinary scope. A block is a LEXICAL construct: {@code (return-from name v)}
+	 * resolves the name up this scope chain -- the same chain a {@code lambda} closes
+	 * over -- so a handler or callback built inside a block exits THAT block, never
+	 * whichever same-named block happens to be dynamically active at the signal point.
+	 * The scope object itself is the block's identity (one per activation), so recursion
+	 * and a re-entered loop body each get their own.
+	 */
+	@Nullable private String blockName;
+
+	/**
 	 * Create a new environment with the given parent scope.
 	 * @param parent the parent environment, or {@code null} for a top-level scope
 	 */
 	public Environment(@Nullable Environment parent) {
 		this.parent = parent;
+	}
+
+	/**
+	 * Marks this scope as the one a {@code (block name ...)} establishes; see
+	 * {@link #blockName}. Called once, on a scope created for the block body alone.
+	 * @param name the block name ({@code "NIL"} for the nil block)
+	 */
+	void installBlock(String name) {
+		this.blockName = name;
+	}
+
+	/**
+	 * The innermost scope in this lexical chain establishing a block of the given name --
+	 * the exit target of a {@code return-from} evaluated here -- or {@code null} when no
+	 * such block is lexically visible.
+	 * @param name the block name being exited
+	 * @return the establishing scope, which is the block's identity
+	 */
+	@Nullable Environment findBlock(String name) {
+		for (Environment scope = this; scope != null; scope = scope.parent) {
+			if (name.equals(scope.blockName)) {
+				return scope;
+			}
+		}
+		return null;
 	}
 
 	@Override

@@ -4353,7 +4353,7 @@ public final class LispEvaluator {
 				case LispNames.UNWIND_PROTECT:
 					return evalUnwindProtect(cons, env);
 				case LispNames.RETURN:
-					throw new LispReturnSignal(evalReturnValue(cons, env));
+					throw blockExit(NIL_BLOCK, evalReturnValue(cons, env), env);
 				case LispNames.PROG1:
 					return eval(LispMacroExpander.expandProg1(cons), env);
 				case LispNames.TIME:
@@ -7051,7 +7051,8 @@ public final class LispEvaluator {
 			return result;
 		}
 		finally {
-			// Restore on ANY exit: normal return, a non-local exit (LispReturnSignal), or
+			// Restore on ANY exit: normal return, a non-local exit (BlockReturnSignal),
+			// or
 			// an error unwind (LispEvalException) -- both are unchecked, so finally
 			// fires.
 			if (dynamicNames != null) {
@@ -7228,51 +7229,67 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Evaluates the internal {@code %block} return boundary: runs the body normally, but
-	 * if a {@code return} fires inside it, yields the returned value instead.
+	 * Evaluates the internal {@code %block} return boundary the iteration macros wrap
+	 * their expansion in: an implicit {@code (block nil ...)}, so a {@code return} fired
+	 * in its LEXICAL scope yields the returned value instead.
 	 */
 	private LispVal evalBlock(LispCons cons, Environment env) {
-		List<LispVal> parts = cons.toList();
-		try {
-			LispVal result = LispNil.INSTANCE;
-			for (int i = 1; i < parts.size(); i++) {
-				result = eval(parts.get(i), env);
-			}
-			return result;
-		}
-		catch (LispReturnSignal signal) {
-			return signal.value();
-		}
+		return runBlock(cons.toList(), 1, NIL_BLOCK, env);
 	}
 
 	/**
 	 * Evaluates a user {@code (block name body...)}: runs the body and yields the value
-	 * of a matching {@code (return-from name value)} fired inside its dynamic extent. A
-	 * non-matching named signal propagates (an outer block catches it); {@code (block
-	 * nil ...)} additionally catches plain {@code return}, mirroring the implicit
-	 * {@code nil} block the loop macros establish.
+	 * of a matching {@code (return-from name value)} fired in its lexical scope while
+	 * this activation is still running. {@code (block nil ...)} is the same construct the
+	 * iteration macros establish implicitly, so a plain {@code return} exits it too.
 	 */
 	private LispVal evalNamedBlock(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new LispEvalException(LispNames.BLOCK + " expects a block name");
 		}
-		String name = blockName(parts.get(1));
+		return runBlock(parts, 2, blockName(parts.get(1)), env);
+	}
+
+	/**
+	 * Runs a block body in a scope of its own, that scope BEING the block's identity: a
+	 * closure built inside the body captures it like any other lexical, which is what
+	 * makes {@code (return-from name v)} inside a callback exit this activation rather
+	 * than the innermost same-named block that is dynamically active where the callback
+	 * runs (a {@code handler-bind} handler runs deep inside the signalling function's
+	 * loops). An exit aimed at another block -- or at another activation of this one --
+	 * propagates.
+	 * @param parts the block form's elements
+	 * @param bodyStart the index of the first body form
+	 * @param name the block name ({@link #NIL_BLOCK} for the nil block)
+	 * @param env the scope the block form is evaluated in
+	 * @return the body's value, or the exiting value
+	 */
+	private LispVal runBlock(List<LispVal> parts, int bodyStart, String name, Environment env) {
+		Environment blockEnv = new Environment(env);
+		blockEnv.installBlock(name);
+		return runBlockIn(parts, bodyStart, blockEnv);
+	}
+
+	/**
+	 * Runs a block body in a scope ALREADY marked as establishing it -- see
+	 * {@link #runBlock}, which creates that scope, and {@code apply}, which reuses a
+	 * call's own scope for the block a {@code defun} body is wrapped in.
+	 * @param parts the block form's elements
+	 * @param bodyStart the index of the first body form
+	 * @param blockEnv the scope establishing the block, i.e. its identity
+	 * @return the body's value, or the exiting value
+	 */
+	private LispVal runBlockIn(List<LispVal> parts, int bodyStart, Environment blockEnv) {
 		try {
 			LispVal result = LispNil.INSTANCE;
-			for (int i = 2; i < parts.size(); i++) {
-				result = eval(parts.get(i), env);
+			for (int i = bodyStart; i < parts.size(); i++) {
+				result = eval(parts.get(i), blockEnv);
 			}
 			return result;
 		}
 		catch (BlockReturnSignal signal) {
-			if (signal.name().equals(name)) {
-				return signal.value();
-			}
-			throw signal;
-		}
-		catch (LispReturnSignal signal) {
-			if (name == null) {
+			if (signal.target() == blockEnv) {
 				return signal.value();
 			}
 			throw signal;
@@ -7280,10 +7297,9 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Evaluates {@code (return-from name [value])}: throws the named non-local exit
-	 * caught by the matching {@code block}. {@code (return-from nil v)} is plain
-	 * {@code return} (the loop macros' implicit block), so it throws the unnamed signal
-	 * the {@code %block} boundaries catch.
+	 * Evaluates {@code (return-from name [value])}: throws the non-local exit the
+	 * matching {@code block} activation catches. {@code (return-from nil v)} names the
+	 * nil block, which is what plain {@code return} and the iteration macros use.
 	 */
 	private LispVal evalReturnFrom(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
@@ -7291,11 +7307,27 @@ public final class LispEvaluator {
 			throw new LispEvalException(LispNames.RETURN_FROM + " expects (return-from name [value])");
 		}
 		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : LispNil.INSTANCE;
-		String name = blockName(parts.get(1));
-		if (name == null) {
-			throw new LispReturnSignal(value);
+		throw blockExit(blockName(parts.get(1)), value, env);
+	}
+
+	/**
+	 * The exit signal a {@code return}/{@code return-from} raises: the target block is
+	 * resolved LEXICALLY, up the scope chain of the exit site, exactly as the compiled
+	 * backends resolve it. A name no enclosing scope establishes is an error at the exit
+	 * site, and so is an exit whose block already returned -- the scope survives in the
+	 * closure, but nothing on the stack answers to it, so the signal reaches the
+	 * top-level entry and is reported there.
+	 * @param name the block name being exited
+	 * @param value the value the block should yield
+	 * @param env the scope the exit form is evaluated in
+	 * @return the signal to throw
+	 */
+	private static RuntimeException blockExit(String name, LispVal value, Environment env) {
+		Environment target = env.findBlock(name);
+		if (target == null) {
+			return new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + name);
 		}
-		throw new BlockReturnSignal(name, value);
+		return new BlockReturnSignal(target, name, value);
 	}
 
 	/**
@@ -7341,14 +7373,23 @@ public final class LispEvaluator {
 		throw new ThrowSignal(tag, value);
 	}
 
-	/** The block name a designator form denotes: null for the {@code nil} block. */
-	@org.jspecify.annotations.Nullable
+	/**
+	 * The name of the nil block: the one {@code (block nil ...)} establishes, the
+	 * iteration macros establish implicitly through {@code %block}, and a plain
+	 * {@code (return v)} exits. Making it an ordinary name is what lets one lexical
+	 * lookup serve every block.
+	 */
+	private static final String NIL_BLOCK = "NIL";
+
+	/**
+	 * The block name a designator form denotes; {@code nil} denotes {@link #NIL_BLOCK}.
+	 */
 	private static String blockName(LispVal designator) {
 		if (designator instanceof LispNil) {
-			return null;
+			return NIL_BLOCK;
 		}
 		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
-			return "NIL".equals(sym.name()) ? null : sym.name();
+			return sym.name();
 		}
 		throw new LispEvalException(LispNames.BLOCK + ": block name must be a symbol, got " + designator.print());
 	}
@@ -7372,8 +7413,8 @@ public final class LispEvaluator {
 	 * {@code simple-error} instance from the message) and rethrown when none does. The
 	 * {@code :no-error} clause (at most one variable -- the primary value, multiple
 	 * values being syntactic) runs on normal completion, outside the handler. A
-	 * {@code return}/{@code return-from} non-local exit ({@link LispReturnSignal}) passes
-	 * through uncaught.
+	 * {@code return}/{@code return-from} non-local exit ({@link BlockReturnSignal})
+	 * passes through uncaught.
 	 */
 	private LispVal evalHandlerCase(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
@@ -7631,8 +7672,8 @@ public final class LispEvaluator {
 	 * Evaluates {@code (unwind-protect protected cleanup...)}: the cleanup forms run on
 	 * every exit from the protected form -- normal return, an error unwind
 	 * ({@link LispEvalException}) and a {@code return}/{@code return-from} non-local exit
-	 * ({@link LispReturnSignal}). A cleanup form that itself signals replaces the pending
-	 * unwind (CL semantics: the newer exit wins), which is exactly what a Java
+	 * ({@link BlockReturnSignal}). A cleanup form that itself signals replaces the
+	 * pending unwind (CL semantics: the newer exit wins), which is exactly what a Java
 	 * {@code finally} does.
 	 *
 	 * <p>
@@ -8633,6 +8674,22 @@ public final class LispEvaluator {
 		return apply(function, args, this.globalEnv);
 	}
 
+	/**
+	 * The elements of a lambda body that is nothing but ONE named {@code block} form --
+	 * what {@code evalDefun} and {@code expandDefmethod} wrap every function body in --
+	 * or {@code null} for any other body. See the call site in {@link #apply}.
+	 * @param body the lambda's body forms
+	 * @return the block form's elements, or null
+	 */
+	private static @Nullable List<LispVal> soleBlockForm(List<LispVal> body) {
+		if (body.size() != 1 || !(body.get(0) instanceof LispCons form)
+				|| !(form.car() instanceof LispSymbol head && LispNames.BLOCK.equals(head.name()))) {
+			return null;
+		}
+		List<LispVal> parts = form.toList();
+		return parts.size() >= 2 ? parts : null;
+	}
+
 	private LispVal apply(LispVal function, List<LispVal> args, Environment env) {
 		if (function instanceof LispSymbol sym) {
 			// A symbol is a function designator naming its global function (CL-style).
@@ -8710,6 +8767,15 @@ public final class LispEvaluator {
 			// buried in a function body evaluated long after its file was read.
 			this.functionBodyDepth++;
 			try {
+				List<LispVal> blockForm = soleBlockForm(lambda.body());
+				if (blockForm != null) {
+					// A defun/defmethod body IS one block form. Its block runs in the
+					// call's own scope -- fresh, private to this activation, and covering
+					// exactly the block's lexical extent, so it can BE the block's
+					// identity: the commonest call still allocates one scope, not two.
+					lambdaEnv.installBlock(blockName(blockForm.get(1)));
+					return runBlockIn(blockForm, 2, lambdaEnv);
+				}
 				LispVal result = LispNil.INSTANCE;
 				for (LispVal bodyExpr : lambda.body()) {
 					result = eval(bodyExpr, lambdaEnv);

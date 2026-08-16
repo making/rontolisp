@@ -6278,6 +6278,28 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunReturnInAHandlerBindHandlerExitsTheLexicalNilBlock() throws Exception {
+		// rove's SIGNALS shape: the handler's plain (return c) names the (block nil ...)
+		// that LEXICALLY encloses it, whatever iteration form -- each of which
+		// establishes an implicit nil block of its own -- the SIGNALLING function is
+		// running. The lexical answer was already this backend's; the interpreter's
+		// dynamic lookup is what moved to match it.
+		assertThat(compileAndRun("""
+				(define-condition my-error (error) ())
+				(defun raise () (error 'my-error))
+				(defun sig-nil (thunk)
+				  (block nil
+				    (handler-bind ((condition (lambda (c) (return c))))
+				      (funcall thunk)
+				      nil)))
+				(print (type-of (sig-nil (lambda () (raise)))))
+				(print (type-of (sig-nil (lambda () (loop :for i :from 1 :to 3 :collect (raise))))))
+				(print (type-of (sig-nil (lambda () (dolist (x (list 1 2)) (raise))))))
+				(print (type-of (sig-nil (lambda () (dotimes (i 2) (raise))))))
+				""")).isEqualTo("MY-ERROR\nMY-ERROR\nMY-ERROR\nMY-ERROR");
+	}
+
+	@Test
 	void compileAndRunGoInsideLambdaReentersOuterTagbody() throws Exception {
 		// A go whose tag belongs to a tagbody in the ENCLOSING function -- the shape a
 		// handler-bind handler resuming its loop produces (quri's :lenient

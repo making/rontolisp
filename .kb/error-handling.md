@@ -25,7 +25,7 @@ everywhere except `--no-gc`.
 
 - **Interpreter**: `LispEvaluator.evalUnwindProtect` = literal
   `try { eval protected } finally { eval cleanups }`. Both unwind channels are
-  Java exceptions (`LispEvalException`, `LispReturnSignal`), so error AND
+  Java exceptions (`LispEvalException`, `BlockReturnSignal`), so error AND
   `return`/`return-from` exits run the cleanup; a cleanup that itself signals
   replaces the pending unwind (CL: the newer exit wins — Java `finally`
   semantics exactly).
@@ -178,7 +178,7 @@ everywhere except `--no-gc`.
   multiple values are syntactic). `ignore-errors` = sugar expansion
   (`expandIgnoreErrors`) over `(error (c) (values nil c))`.
 - **Interpreter** (`evalHandlerCase`): `try/catch (LispEvalException)` —
-  `LispReturnSignal` passes through; clause tests eval'd against a child env
+  `BlockReturnSignal` passes through; clause tests eval'd against a child env
   binding a temp to the condition. A per-evaluator
   `ThreadLocal<ArrayDeque<List<LispVal>>> handlerCaseTypes` holds the clause
   TYPE SPECIFIERS of every established handler-case (pushed around the
