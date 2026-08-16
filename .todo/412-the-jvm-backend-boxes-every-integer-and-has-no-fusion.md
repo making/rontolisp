@@ -4,7 +4,7 @@ Difficulty: High (a new emitter pass on the JVM side; the design is proven --
 `WasmIntFusionCompiler` is the reference implementation -- but the JVM's value
 model, locals and verifier constraints are its own)
 
-The sibling of `.todo/411`, from the same measurement session. Both compiled
+The sibling of `.todo/413`, from the same measurement session. Both compiled
 backends are ~15-25x off a native kernel on ironclad's PBKDF2, and they are off
 for OPPOSITE reasons: wasm-GC's arithmetic is fused and its dispatch is not,
 while the JVM's dispatch is fine (HotSpot inlines the static methods) and its

@@ -1,4 +1,4 @@
-# 411. On wasm-GC a real library's hot loop pays for dispatch and `&key` parsing, not for arithmetic
+# 413. On wasm-GC a real library's hot loop pays for dispatch and `&key` parsing, not for arithmetic
 
 Difficulty: High (two independent seams in the emitter -- the fused/boxed
 boundary and the call ABI -- each with a measured share and no existing
