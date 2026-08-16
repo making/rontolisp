@@ -62,13 +62,19 @@ time:
 Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
 ```
 
-There is no runtime `export` function — a package's export set is fixed when
-it is defined: the built-in packages export their documented API, and a
-user-defined package exports its `(:export ...)` clause (see
-[Missing features](../guides/missing-features.md)). A symbol defined
-while `(in-package rontolisp)` is in effect is interned into the `rontolisp`
-package as an internal symbol, so from other packages it must be referenced
-with the double colon.
+A package's export set comes from its definition — the built-in packages export
+their documented API, a user-defined package its `(:export ...)` clause — and
+[`export`](functions/export.md)/[`unexport`](functions/unexport.md) adjust it
+afterwards. A symbol defined while `(in-package rontolisp)` is in effect is
+interned into the `rontolisp` package as an internal symbol, so from other
+packages it must be referenced with the double colon.
+
+Exporting changes which qualifier *reaches* a symbol, never which symbol it is,
+so an `export` may come before or after the definitions it publishes. One
+deviation from Common Lisp: a symbol exported after it was first named keeps the
+double colon when *printed* — the qualifier is stored with the symbol here
+rather than recomputed at print time — though both spellings name the same
+symbol.
 
 ## User-defined packages (`defpackage`)
 
@@ -122,9 +128,10 @@ clause, and follows the same read/compile-time rule as `in-package`: a literal
 top-level `(use-package :mypkg)` widens the current package's use list for the
 forms that follow it, on every backend.
 
-Beyond it there is no runtime package manipulation: `make-package`, `export`,
-`import` and `rename-package` are not available, and a `defpackage` inside
-another form (not top-level) is an error.
+[`export`](functions/export.md), [`unexport`](functions/unexport.md) and
+[`import`](functions/import.md) follow the same rule. `make-package` and
+`rename-package` are not available, and a `defpackage` inside another form (not
+top-level) is an error.
 
 ## Package introspection
 

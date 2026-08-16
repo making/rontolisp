@@ -6,7 +6,7 @@ Makes `symbols` (a symbol or a list of them) **external** in `package` (the curr
 
 Packages are resolved at read/compile time here (see [Packages](../packages.md)), so a literal top-level call is consumed at compile time like `in-package` and takes effect for the forms that follow it — which is what makes it work on every backend. A runtime-computed call (a symbol list built at run time) works on the interpreter only.
 
-**Export before you define.** A symbol is identified by its canonical spelling here, and exporting flips that spelling from `pkg::name` to `pkg:name`; a `defun` made *before* the export keeps the internal spelling and a later `pkg:name` call site will not find it. Put the `export` at the top of the file, or use the `defpackage` `:export` clause.
+Exporting changes only *accessibility*, so it may come before or after the definitions it publishes — the everyday shape of a Common Lisp file, which defines its functions and exports them at the end, works:
 
 ```lisp
 (defpackage #:greeter2 (:use #:cl))
@@ -16,3 +16,14 @@ Packages are resolved at read/compile time here (see [Packages](../packages.md))
 (in-package #:cl-user)
 (greeter2:hello) ; => "hi"
 ```
+
+```lisp
+(defpackage #:greeter3 (:use #:cl))
+(defun greeter3::hi () "hi")
+(export '(greeter3::hi) :greeter3)
+(greeter3:hi) ; => "hi"
+```
+
+A reference written *before* the `export` is still an error, as in Common Lisp — the symbol is not external yet at that point.
+
+One deviation: a symbol exported *after* it was first named prints with the double colon (`greeter3::hi`), because the qualifier is part of the stored symbol here rather than recomputed at print time. Both spellings name the same symbol.

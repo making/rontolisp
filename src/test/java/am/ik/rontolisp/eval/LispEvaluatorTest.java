@@ -5382,9 +5382,8 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalExportMakesASymbolExternal() {
-		// export before the definitions: symbols are identified by their canonical
-		// SPELLING here, and exporting flips that spelling from mypkg::run to mypkg:run
-		// (see .kb/packages.md).
+		// export before the definitions; the mirror case (export after them) is
+		// evalExportAfterTheDefinitionsPublishesThemUnderTheSingleColon below.
 		assertThat(evalMulti("""
 				(defpackage :expkg (:use :cl))
 				(in-package :expkg)
@@ -5393,6 +5392,23 @@ class LispEvaluatorTest {
 				(in-package :cl-user)
 				(expkg:run)
 				""")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalExportAfterTheDefinitionsPublishesThemUnderTheSingleColon() {
+		// export grants ACCESSIBILITY and never re-keys the symbol, so the function, the
+		// value and the setf-function cells a defun/defvar filled BEFORE the export are
+		// all reachable through the external spelling afterwards.
+		assertThat(evalMulti("""
+				(defpackage :latepkg (:use :cl))
+				(defun latepkg::my-fn (x) (* x 2))
+				(defvar latepkg::*v* 7)
+				(defun (setf latepkg::slot) (v c) (rplaca c v) v)
+				(export '(latepkg::my-fn latepkg::*v* latepkg::slot) :latepkg)
+				(let ((c (list 1 2)))
+				  (setf (latepkg:slot c) 9)
+				  (list (latepkg:my-fn 21) latepkg:*v* (car c)))
+				""").print()).isEqualTo("(42 7 9)");
 	}
 
 	@Test

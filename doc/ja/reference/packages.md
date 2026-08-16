@@ -71,13 +71,18 @@ external でないシンボルへのシングルコロンでの参照は read/�
 Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
 ```
 
-ランタイムの `export` 関数はありません — パッケージの export セットは定義時に
-固定されます: 組み込みパッケージはドキュメント化された API を export し、
-ユーザー定義パッケージは `(:export ...)` clause の内容を export します
-([未対応の機能](../guides/missing-features.md)を参照)。`(in-package rontolisp)`
-が有効な間に定義されたシンボルは `rontolisp` パッケージに internal
-シンボルとして intern されるため、他のパッケージからはダブルコロンで参照する
-必要があります。
+パッケージの export セットは定義時に決まり — 組み込みパッケージはドキュメント化
+された API を、ユーザー定義パッケージは `(:export ...)` clause の内容を export
+します — その後は [`export`](functions/export.md)/[`unexport`](functions/unexport.md)
+で調整できます。`(in-package rontolisp)` が有効な間に定義されたシンボルは
+`rontolisp` パッケージに internal シンボルとして intern されるため、他の
+パッケージからはダブルコロンで参照する必要があります。
+
+export が変えるのはシンボルに*到達できる*修飾子であって、どのシンボルであるかは
+変わりません。そのため `export` は公開する定義の前でも後でも構いません。Common
+Lisp との相違が1点あります: 最初に名前が現れた後で export されたシンボルは、
+*表示*時にダブルコロンのままになります — ここでは修飾子は表示時に計算されるので
+はなくシンボルに保持されているためです — が、どちらの綴りも同じシンボルを指します。
 
 ## ユーザー定義パッケージ(defpackage)
 
@@ -133,8 +138,9 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 トップレベルの `(use-package :mypkg)` は、それ以降のフォームに対して現在の
 パッケージの use リストを広げます(すべてのバックエンドで動作します)。
 
-それ以外のランタイムのパッケージ操作はありません: `make-package`、`export`、
-`import`、`rename-package` は利用できず、(トップレベルでない)他のフォームの中の
+[`export`](functions/export.md)、[`unexport`](functions/unexport.md)、
+[`import`](functions/import.md) も同じルールに従います。`make-package` と
+`rename-package` は利用できず、(トップレベルでない)他のフォームの中の
 `defpackage` はエラーです。
 
 ## パッケージのイントロスペクション

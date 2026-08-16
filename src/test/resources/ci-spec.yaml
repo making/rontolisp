@@ -1707,8 +1707,8 @@ cases:
     expected: |
       "hi"
   # A runtime (export ...) is consumed by the PackageResolver like use-package, so the
-  # names it publishes resolve on every backend. It must PRECEDE the definitions: symbols
-  # are identified by their canonical spelling, and exporting flips ci-exp::f to ci-exp:f.
+  # names it publishes resolve on every backend, on either side of the definitions it
+  # publishes (see export-after-the-definitions below).
   - name: export-and-unexport
     source: |
       (defpackage :ci-exp (:use :cl))
@@ -1727,6 +1727,25 @@ cases:
     expected: |
       42
       3
+  # export grants ACCESSIBILITY and never re-keys the symbol: a defun/defvar/setf-function
+  # made BEFORE the export is reachable through the external spelling afterwards. The
+  # everyday CL file shape -- define, then export at the end.
+  - name: export-after-the-definitions
+    source: |
+      (defpackage :ci-late (:use :cl))
+      (defun ci-late::my-fn (x) (* x 2))
+      (defvar ci-late::*ci-late-v* 7)
+      (defun (setf ci-late::slot) (v c) (rplaca c v) v)
+      (export '(ci-late::my-fn ci-late::*ci-late-v* ci-late::slot) :ci-late)
+      (print (ci-late:my-fn 21))
+      (print ci-late:*ci-late-v*)
+      (let ((c (list 1 2)))
+        (setf (ci-late:slot c) 9)
+        (print (car c)))
+    expected: |
+      42
+      7
+      9
   # The runtime spelling of defpackage's :import-from clause, and the three package
   # registry queries: the interpreter reads its live registry, the compile paths a
   # table baked in at compile time -- so all four backends must print the same thing.

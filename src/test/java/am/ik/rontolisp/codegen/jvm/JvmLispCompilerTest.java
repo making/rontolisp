@@ -2936,6 +2936,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunExportAfterTheDefinitions() throws Exception {
+		// export grants ACCESSIBILITY and never re-keys the symbol, so the function, the
+		// value and the setf-function cells defined BEFORE the export are all reachable
+		// through the external spelling afterwards.
+		assertThat(compileAndRun("""
+				(defpackage :latepkg (:use :cl))
+				(defun latepkg::my-fn (x) (* x 2))
+				(defvar latepkg::*v* 7)
+				(defun (setf latepkg::slot) (v c) (rplaca c v) v)
+				(export '(latepkg::my-fn latepkg::*v* latepkg::slot) :latepkg)
+				(print (latepkg:my-fn 21))
+				(print latepkg:*v*)
+				(let ((c (list 1 2)))
+				  (setf (latepkg:slot c) 9)
+				  (print (car c)))
+				""")).isEqualTo("42\n7\n9");
+	}
+
+	@Test
 	void compileAndRunImportMakesASymbolAccessibleUnqualified() throws Exception {
 		// Like export: a literal top-level import is consumed by the PackageResolver,
 		// which is what makes it work in output that has no package registry.

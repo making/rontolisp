@@ -416,8 +416,13 @@ class PackageResolverTest {
 		resolve(resolver, "(in-package :tu8)");
 		resolve(resolver, "(pax:defsection @manual (:title \"Manual\") \"docs\" (frob function) (@sub pax:section))");
 		resolve(resolver, "(in-package :cl-user)");
-		assertThat(resolve(resolver, "(tu8:frob 1)")).isEqualTo("(TU8:FROB 1)");
-		assertThat(resolve(resolver, "tu8:@sub")).isEqualTo("TU8:@SUB");
+		// The autoexport is an export DIRECTIVE, so it grants accessibility under the
+		// single colon while the symbol keeps the spelling its package was declared with
+		// (no :export clause here, so the internal one). That is what makes the reference
+		// name the package's own defun wherever the section sits in the file -- upstream
+		// puts it at the END, after the definitions it documents.
+		assertThat(resolve(resolver, "(tu8:frob 1)")).isEqualTo("(TU8::FROB 1)");
+		assertThat(resolve(resolver, "tu8:@sub")).isEqualTo("TU8::@SUB");
 	}
 
 	@Test
@@ -662,6 +667,42 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(priv)")).isEqualTo("(PRIV)");
 		resolve(resolver, "(in-package :tgtpkg)");
 		assertThat(resolve(resolver, "(priv)")).isEqualTo("(SRCPKG::PRIV)");
+	}
+
+	@Test
+	void exportAfterTheDefinitionKeepsOneSpellingForTheSymbol() {
+		// A symbol IS its canonical spelling here, so export must not re-key it: it
+		// grants ACCESSIBILITY under the single colon, and the symbol keeps the spelling
+		// its package was DECLARED with. Otherwise the defun below is SPIKE::MY-FN while
+		// every later spike:my-fn call site names a symbol nothing defines.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :spike (:use :cl))");
+		assertThat(resolve(resolver, "(defun spike::my-fn (x) x)")).isEqualTo("(DEFUN SPIKE::MY-FN (X) X)");
+		// Before the export the single colon is an error, as in Common Lisp.
+		assertThatThrownBy(() -> resolve(resolver, "(spike:my-fn 1)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("is not external");
+		assertThat(resolve(resolver, "(export '(spike::my-fn) :spike)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(spike:my-fn 1)")).isEqualTo("(SPIKE::MY-FN 1)");
+		assertThat(resolve(resolver, "(spike::my-fn 1)")).isEqualTo("(SPIKE::MY-FN 1)");
+		// A definition made AFTER the export spells the same way, so the two agree
+		// whichever side of the directive they sit on.
+		assertThat(resolve(resolver, "(defvar spike::*v* 1)")).isEqualTo("(DEFVAR SPIKE::*V* 1)");
+		assertThat(resolve(resolver, "(export '(spike::*v*) :spike)")).isEqualTo("T");
+		assertThat(resolve(resolver, "spike:*v*")).isEqualTo("SPIKE::*V*");
+	}
+
+	@Test
+	void unexportKeepsTheDeclaredSpellingToo() {
+		// The mirror image: unexport drops accessibility under the single colon, and the
+		// symbol keeps the spelling the :export clause declared -- so a definition made
+		// after it still names the same symbol as one made before.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :unexp (:use :cl) (:export #:a))");
+		assertThat(resolve(resolver, "(defun unexp::a () 1)")).isEqualTo("(DEFUN UNEXP:A NIL 1)");
+		assertThat(resolve(resolver, "(unexport '(unexp::a) :unexp)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(unexp::a)")).isEqualTo("(UNEXP:A)");
+		assertThatThrownBy(() -> resolve(resolver, "(unexp:a)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("is not external");
 	}
 
 	@Test

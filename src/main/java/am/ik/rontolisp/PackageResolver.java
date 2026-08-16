@@ -82,6 +82,24 @@ public final class PackageResolver {
 	private boolean inQuotedData = false;
 
 	/**
+	 * The external set each package was DECLARED with -- its {@code defpackage}
+	 * {@code :export} clause, or the set the registry seeded a built-in package with --
+	 * captured the first time a runtime {@code export}/{@code unexport} directive touches
+	 * that package.
+	 * <p>
+	 * A symbol IS its canonical spelling here, so the spelling has to be a property of
+	 * the SYMBOL and not of a package state that changes underneath it: an
+	 * {@code export}/{@code unexport} changes ACCESSIBILITY (which colon a reference may
+	 * use, and what a {@code use-package} inherits) and never identity. Without this,
+	 * exporting re-keyed the symbol -- a {@code defun} made before the export kept
+	 * {@code pkg::name} while every later {@code pkg:name} call site named a symbol
+	 * nothing defined. A package the directives never touch has no entry and reads its
+	 * live external set, so the {@code defpackage}-only corpus resolves byte-identically.
+	 * @see #spellsExternal
+	 */
+	private final Map<String, Set<String>> declaredExternals = new HashMap<>();
+
+	/**
 	 * Creates a resolver with a fresh registry of the built-in packages.
 	 */
 	public PackageResolver() {
@@ -362,6 +380,10 @@ public final class PackageResolver {
 			throw new LispPackageException("No such package: " + targetPackage);
 		}
 		LispPackage pkg = this.registry.get(target);
+		// Pin the spelling before the accessibility changes: from here on the package's
+		// symbols keep the colon they were declared with, whichever way the external set
+		// moves (see declaredExternals).
+		this.declaredExternals.putIfAbsent(target, pkg.externals());
 		Set<String> externals = new HashSet<>(pkg.externals());
 		Set<String> owned = new HashSet<>(pkg.symbols());
 		Map<String, String> imports = new HashMap<>(pkg.imports());
@@ -1315,6 +1337,20 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * Whether the symbol is SPELLED with one colon -- the identity question, decided by
+	 * the package's DECLARED external set rather than by its current accessibility. The
+	 * two differ only once a runtime {@code export}/{@code unexport} directive has moved
+	 * the external set of that package (see {@link #declaredExternals}).
+	 */
+	private boolean spellsExternal(String pkg, String member) {
+		if (LispNames.CL_PKG.equals(pkg) && LispNames.isCarCdrComposition(member)) {
+			return true;
+		}
+		Set<String> declared = this.declaredExternals.get(pkg);
+		return declared != null ? declared.contains(member) : this.registry.get(pkg).exports(member);
+	}
+
+	/**
 	 * Whether {@code member} is external in {@code pkg} -- i.e. whether this resolver
 	 * spells that symbol with ONE colon. A macro expansion that SYNTHESIZES a name (the
 	 * only one is {@code defstruct}: its constructor/predicate/copier/accessors are
@@ -1328,7 +1364,7 @@ public final class PackageResolver {
 	 * @return {@code true} when the package exports the name
 	 */
 	public boolean spellsAsExternal(String pkg, String member) {
-		return this.registry.contains(pkg) && isExternal(pkg, member);
+		return this.registry.contains(pkg) && spellsExternal(pkg, member);
 	}
 
 	private LispVal resolveUnqualified(String name) {
@@ -1501,13 +1537,16 @@ public final class PackageResolver {
 	/**
 	 * The canonical spelling of a resolved symbol: bare for {@code cl-user}, and
 	 * qualified otherwise -- single colon for an external symbol, double colon for an
-	 * internal one (so the canonical form re-resolves to itself).
+	 * internal one (so the canonical form re-resolves to itself). "External" here is the
+	 * DECLARED external set ({@link #spellsExternal}): a symbol keeps one spelling for
+	 * the whole program, whichever way a runtime {@code export}/{@code unexport} later
+	 * moves the package's accessibility.
 	 */
 	private LispSymbol canonical(String pkg, String name) {
 		if (LispNames.CL_USER_PKG.equals(pkg)) {
 			return new LispSymbol(name);
 		}
-		if (isExternal(pkg, name)) {
+		if (spellsExternal(pkg, name)) {
 			return new LispSymbol(PackageRegistry.qualify(pkg, name));
 		}
 		return new LispSymbol(PackageRegistry.qualifyInternal(pkg, name));

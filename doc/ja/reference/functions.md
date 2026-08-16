@@ -335,7 +335,7 @@
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
 | `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |
 | `use-package` | `(use-package :mypkg)` | パッケージを use リストに追加し、その外部シンボルを修飾なしで見えるようにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
-| `export` | `(export '(run))` | シンボルをパッケージの外部シンボルにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ。定義より前に export してください） |
+| `export` | `(export '(run))` | シンボルをパッケージの外部シンボルにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `unexport` | `(unexport 'run)` | `export` の逆操作。シンボルは残りますが修飾なしでは見えなくなります |
 | `import` | `(import 'other:sym)` | 他パッケージのシンボルを修飾なしでアクセスできるようにします -- `:import-from` の実行時版（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `file-position` | `(file-position s)` | 常に `nil`(lite: ストリームはシーク非対応) |
