@@ -7775,6 +7775,54 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void anInnerHandlerCaseShadowsAnEnclosingHandlerBind() {
+		// CLHS 9.1.4.1: handlers run MOST RECENT FIRST and handler-case transfers
+		// control, so a handler-case established inside a handler-bind's extent
+		// handles the condition and the enclosing handler-bind handler never runs.
+		// The visible break is an outer handler that transfers control itself --
+		// every test framework's failure recorder.
+		assertThat(eval("""
+				(block b
+				  (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				    (handler-case (error "boom") (error () :caught))))
+				""").print()).isEqualTo(":CAUGHT");
+		assertThat(eval("""
+				(block b
+				  (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				    (ignore-errors (error "boom"))))
+				""").print()).isEqualTo("NIL");
+	}
+
+	@Test
+	void anInnerHandlerCaseWhoseClausesDoNotMatchStillLetsTheHandlerBindRun() {
+		assertThat(eval("""
+				(block b
+				  (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				    (handler-case (error "boom") (end-of-file () :caught))))
+				""").print()).isEqualTo(":OUTER-RAN");
+	}
+
+	@Test
+	void aHandlerCaseClauseBodyDoesNotCatchWhatItSignals() {
+		// The clause body runs with this handler-case's own cluster popped, so its
+		// error reaches the enclosing handler-bind instead of looping back here.
+		assertThat(eval("""
+				(block b
+				  (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				    (handler-case (error "boom") (error () (error "again")))))
+				""").print()).isEqualTo(":OUTER-RAN");
+	}
+
+	@Test
+	void anInnerHandlerCaseShadowsAnEnclosingHandlerBindForABuiltInError() {
+		assertThat(eval("""
+				(block b
+				  (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				    (handler-case (car 1) (error () :caught))))
+				""").print()).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void handlerBindSeesTheErrorABuiltInRaises() {
 		// The rove shape (.todo/379): a broken test body -- a bad car, an index out
 		// of bounds, a bad argument type -- must run the handler-bind handler, not

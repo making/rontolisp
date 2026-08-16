@@ -7443,8 +7443,13 @@ public final class LispEvaluator {
 			}
 			ArrayDeque<List<LispVal>> frames = this.handlerCaseTypes.get();
 			frames.addLast(clauseTypes);
+			// In restart mode the clause types also go on the DYNAMIC handler stack, so
+			// %run-handlers stops at this handler-case instead of running an enclosing
+			// handler-bind's handler for a condition this form is nearer to.
+			LispVal protectedForm = LispMacroExpander.handlerCaseProtectedForm(parts.get(1), clauseTypes,
+					this.closRegistry, this.restartRuntimeLoaded);
 			try {
-				value = eval(parts.get(1), env);
+				value = eval(protectedForm, env);
 			}
 			finally {
 				frames.removeLast();

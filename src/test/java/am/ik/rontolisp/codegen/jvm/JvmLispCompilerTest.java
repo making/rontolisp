@@ -707,6 +707,50 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAnInnerHandlerCaseShadowsAnEnclosingHandlerBind() throws Exception {
+		// CLHS 9.1.4.1: handlers run MOST RECENT FIRST and handler-case transfers
+		// control, so the nearer handler-case handles the condition and the enclosing
+		// handler-bind handler never runs.
+		assertThat(compileAndRun("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (handler-case (error "boom") (error () :caught)))))
+				""")).isEqualTo(":CAUGHT");
+		assertThat(compileAndRun("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (ignore-errors (error "boom")))))
+				""")).isEqualTo("NIL");
+	}
+
+	@Test
+	void compileAndRunAnInnerHandlerCaseWhoseClausesDoNotMatchStillLetsTheHandlerBindRun() throws Exception {
+		assertThat(compileAndRun("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (handler-case (error "boom") (end-of-file () :caught)))))
+				""")).isEqualTo(":OUTER-RAN");
+	}
+
+	@Test
+	void compileAndRunAHandlerCaseClauseBodyDoesNotCatchWhatItSignals() throws Exception {
+		assertThat(compileAndRun("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (handler-case (error "boom") (error () (error "again"))))))
+				""")).isEqualTo(":OUTER-RAN");
+	}
+
+	@Test
+	void compileAndRunAnInnerHandlerCaseShadowsAnEnclosingHandlerBindForABuiltInError() throws Exception {
+		assertThat(compileAndRun("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (handler-case (car 1) (error () :caught)))))
+				""")).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void compileAndRunHandlerBindSeesTheErrorABuiltInRaises() throws Exception {
 		// The rove shape (.todo/379): a raw runtime failure (a bad car, an index out
 		// of bounds) lands in the handler-bind expansion's %hb-guard pad, which runs

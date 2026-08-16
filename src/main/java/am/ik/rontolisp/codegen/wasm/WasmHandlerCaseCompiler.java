@@ -134,7 +134,13 @@ final class WasmHandlerCaseCompiler {
 		// State-machine mode: the protected expression is a spine child (an await there
 		// suspends; the resume routes back through this try_table, re-arming it, and
 		// the suspension undid the depth increment this form's head re-runs).
-		WasmAsyncEmit.spine(parts.get(1), ctx);
+		// In restart mode the clause types also go on the DYNAMIC handler stack for the
+		// protected extent, so %run-handlers stops at this handler-case instead of
+		// running an enclosing handler-bind's handler for a condition this form is
+		// nearer to. Outside restart mode the form is unchanged, byte for byte.
+		WasmAsyncEmit.spine(LispMacroExpander.handlerCaseProtectedForm(parts.get(1),
+				errorClauses.stream().map(clauseParts -> clauseParts.get(0)).toList(), ctx.closRegistry,
+				ctx.restartMode), ctx);
 		ctx.unwindScopes.pop();
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // try_table

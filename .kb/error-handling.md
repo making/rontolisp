@@ -976,24 +976,9 @@ already. `--no-gc` is the one exception and keeps the historical lite lowering.
     integer division by zero) stay uncatchable and skip handlers -- the same
     three-point spectrum handler-case documents. **A rove test whose body
     traps therefore still ends a wasm run**; on the interpreter and the JVM it
-    becomes the recorded "Raise an error while testing." failure. (3) an
-    intervening `handler-case` never suppresses the signal-point hook (its
-    clauses are not clusters -- pre-existing Phase 4 shape), and for RAW
-    errors the compiled backends DO suppress the handlers when an inner
-    handler-case catches first (the pad is outside it) while the interpreter
-    runs them (its seam is at the built-in, below the handler-case); CL agrees
-    with the compiled backends here. Re-evaluate (3) if handler-case ever
-    joins the cluster stack. **(3) has a real victim now (`.todo/393`)**: for a
-    SIGNALED condition EVERY backend runs the enclosing `handler-bind` handler
-    even though the nearer `handler-case` is the one that handles it, and rove
-    records a failing test by transferring control out of exactly such a
-    handler -- so a rove test over code that catches its own error (a parse
-    with a fallback) is reported as "Raise an error while testing." and ends
-    there. The inner handler-case still wins the control transfer, so a program
-    that only READS the value is unaffected; what breaks is an outer handler
-    that exits. Documented as a limitation in `doc/{en,ja}/guides/testing.md`,
-    and `examples/cloudflare-workers/httpbin/check.lisp` drives its probes
-    ahead of the suite because of it.
+    becomes the recorded "Raise an error while testing." failure. Deviation
+    (3) -- an intervening `handler-case` not suppressing the hook -- is GONE,
+    see the next section.
   - Pinned by `handlerBindSeesTheErrorABuiltInRaises` /
     `handlerBindSeesAnUndefinedFunctionError` /
     `handlerBindRunsEachClusterOnceForABuiltInErrorInnermostFirst` /
@@ -1002,6 +987,65 @@ already. `--no-gc` is the one exception and keeps the historical lite lowering.
     `ehHandlerBindRunsEachClusterOnceInnermostFirst` (wasm), the
     same-instance test in all three, and the extended ci-spec
     `restart-system` case.
+
+### A `handler-case` joins the cluster stack, so it SHADOWS an enclosing `handler-bind` (todo-393)
+
+**The invariant: CLHS 9.1.4.1 -- handlers run MOST RECENT FIRST, and
+`handler-case` transfers control -- so a `handler-case` established inside a
+`handler-bind`'s extent handles the condition and the enclosing handler-bind
+handler never runs.** Before this, the signal-point hook walked only
+`handler-bind` clusters (a `handler-case` compiles to its own catch/throw and
+pushed nothing), so the outer handler ran on EVERY backend. The inner
+handler-case still won the control TRANSFER, so a program that only reads the
+value was unaffected; what broke is an outer handler that exits -- and that is
+exactly what every test framework's failure recorder is. rove wraps each test
+body in `handler-bind` + `return-from`, so a test over code that catches its
+own error (a parse with a fallback, cl-postgres-client's SQLSTATE-26000 retry)
+was reported as `Raise an error while testing.` and ended there.
+
+- **One shared Lisp-level lowering, like the rest of Phase 4.**
+  `LispMacroExpander.handlerCaseProtectedForm` wraps the PROTECTED FORM (only
+  it) in the same `let`-saved / `unwind-protect`-restored push the
+  `handler-bind` expansion uses, pushing one cluster of
+  `(type-test-closure . nil)` entries -- the clause types, through the same
+  `makeHandlerTypeTest` the landing pad dispatches with. The **nil cdr is the
+  marker**: an entry whose handler is nil is a handler-case clause, which
+  HANDLES by transferring control, so `%run-handlers` stops its walk there
+  (`__rh_stop`) instead of calling anything. The transfer itself is still the
+  ordinary throw the signal terminal performs immediately afterwards, landing
+  in that very handler-case -- so no backend needed a new control path.
+- **Wrapping only the protected form is what pops the cluster for the clause
+  bodies.** A clause body (and `:no-error`) runs after the `unwind-protect`
+  cleanup has restored the saved list on the throw path, so a clause body that
+  signals is not caught by its own handler-case and reaches the enclosing
+  handler-bind -- CL semantics, pinned.
+- **The three call sites are the three handler-case implementations**
+  (`LispEvaluator.evalHandlerCase`, `JvmHandlerCaseCompiler.compile`,
+  `WasmHandlerCaseCompiler.compile`), each passing its own restart-mode flag
+  (`restartRuntimeLoaded` / `ctx.restartMode`). **Restart mode is the gate**:
+  with no `handler-bind` anywhere there is no cluster stack to shadow and no
+  `%run-handlers` call, so every other program is byte-identical
+  (`.kb/emitted-output-determinism.md`). `ignore-errors` expands to
+  `handler-case` and inherits it.
+- **The RAW-error half of the old deviation goes with it.** The compiled
+  backends already suppressed the handlers when an inner handler-case caught
+  first (their `%hb-guard` pad sits outside it); the interpreter's built-in
+  seam sits BELOW the handler-case and ran them. Now the seam's
+  `%run-handlers` walk finds the handler-case cluster first and stops, so all
+  three agree with CL. (wasm-GC still cannot catch a raw TRAP at all --
+  deviation (2) above is untouched.)
+- Deliberately NOT changed: `signal`'s fall-through still consults the
+  handler-DEPTH counter on the compiled backends, not the clause types (the
+  Phase 3 divergence and its own re-evaluation trigger). The cluster stack now
+  carries what that fix would need; closing it is a separate item.
+- Pinned by `anInnerHandlerCaseShadowsAnEnclosingHandlerBind` /
+  `anInnerHandlerCaseWhoseClausesDoNotMatchStillLetsTheHandlerBindRun` /
+  `aHandlerCaseClauseBodyDoesNotCatchWhatItSignals` /
+  `anInnerHandlerCaseShadowsAnEnclosingHandlerBindForABuiltInError`
+  (`LispEvaluatorTest`), their `compileAndRun*` twins (`JvmLispCompilerTest`),
+  the `eh*` triple in `WasmLispCompilerIntegrationTest` (the built-in probe has
+  no wasm twin -- a raw trap is uncatchable there), and four lines of the
+  cross-backend ci-spec `restart-system` case.
 - **The gate is `LispMacroExpander.usesRestartSystem(program)`, computed on the
   SURFACE program** (the four macros plus a call to / `#'` reference of a
   restart-runtime function). The scan matches those names in OPERATOR POSITION of

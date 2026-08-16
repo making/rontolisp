@@ -59,8 +59,9 @@ What it took to establish that, and how to re-establish it if it comes back:
 
 - The reproduction is `.todo/408`'s cl-postgres-client rove suite compiled
   `--component`. Symptom: 166 assertions pass, then the raw trap.
-- **The same module is green under `-C collector=drc`** (183 passed / 2 failed, the
-  `.todo/393` pair) and green under `-O gc-heap-initial-size=33554432`; it traps under
+- **The same module is green under `-C collector=drc`** (183 passed / 2 failed at the
+  time, the handler-case-shadowing pair, fixed since) and green under
+  `-O gc-heap-initial-size=33554432`; it traps under
   `-C collector=copying` (the default) with the stock heap. That pair of runs is the
   whole diagnosis: same bytes, same program, collector-dependent behavior.
 - It is not the heap moving in the host address space (`-O gc-heap-may-move=n` still

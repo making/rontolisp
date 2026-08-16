@@ -22,6 +22,15 @@ A handler that returns declines, and the error keeps propagating:
     (error (e) (list :caught log)))) ; => (:CAUGHT :SEEN)
 ```
 
+Handlers run **most recent first**, and a [`handler-case`](handler-case.md) established inside the body is one of them: a condition it matches is handled there and the enclosing handler is never called. Only when no clause of the inner `handler-case` matches does the search reach the outer handler.
+
+```lisp
+(block b
+  (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+    (handler-case (error "boom")
+      (error () :caught)))) ; => :CAUGHT
+```
+
 An error a built-in raises runs the handlers too — how a test framework turns a broken test body into a recorded failure instead of an aborted run:
 
 ```lisp

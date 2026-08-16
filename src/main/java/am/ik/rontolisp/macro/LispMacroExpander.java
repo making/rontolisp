@@ -24487,6 +24487,10 @@ public final class LispMacroExpander {
 
 	private static final String HB_COND_VAR = "__hb_cond";
 
+	private static final String HC_SAVED_VAR = "__hc_saved";
+
+	private static final String HC_COND_VAR = "__hc_clcond";
+
 	/**
 	 * Expands
 	 * {@code (restart-case form (restart-name (args...) [options...] body...)...)}: the
@@ -24727,6 +24731,55 @@ public final class LispMacroExpander {
 		}
 		return makeLet(HB_SAVED_VAR, clustersVar, listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT),
 				listToCons(List.of(new LispSymbol(LispNames.PROGN), push, body)), restore)));
+	}
+
+	/**
+	 * The protected form of a {@code handler-case}, wrapped so the form's OWN clause
+	 * types sit on the dynamic handler stack for the protected extent -- one cluster of
+	 * {@code (type-test-closure . nil)} entries, the nil cdr marking a handler that
+	 * TRANSFERS CONTROL rather than being called. CLHS 9.1.4.1: handlers run most recent
+	 * first and {@code handler-case} transfers control, so a handler-case established
+	 * inside a {@code handler-bind}'s extent handles the condition and the enclosing
+	 * handler-bind handler never runs. {@code %run-handlers} finds the nearer cluster
+	 * first and stops its walk there; the ordinary throw then performs the transfer into
+	 * this very handler-case, so nothing else has to change per backend.
+	 * <p>
+	 * The push/pop rides an {@code unwind-protect} over a LEXICALLY saved value, like
+	 * {@link #expandHandlerBind}'s, and wraps ONLY the protected form -- so the cluster
+	 * is already popped when a clause body (or {@code :no-error}) runs, and a clause body
+	 * that signals is not caught by its own handler-case.
+	 * <p>
+	 * Restart mode is the gate: without a {@code handler-bind} anywhere in the program
+	 * there is no cluster stack to shadow and no {@code %run-handlers} call, so every
+	 * other program is byte-identical.
+	 * @param protectedForm the handler-case's protected expression
+	 * @param clauseTypes the type specifiers of the error clauses, in order
+	 * ({@code :no-error} excluded)
+	 * @param closRegistry the class registry resolving the clause types
+	 * @param restartMode whether the program establishes the handler/restart stacks
+	 * @return the wrapped protected form, or the original when nothing can observe it
+	 */
+	public static LispVal handlerCaseProtectedForm(LispVal protectedForm, List<LispVal> clauseTypes,
+			ClosRegistry closRegistry, boolean restartMode) {
+		if (!restartMode || clauseTypes.isEmpty()) {
+			return protectedForm;
+		}
+		LispSymbol clustersVar = new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR);
+		LispSymbol condVar = new LispSymbol(HC_COND_VAR);
+		List<LispVal> clusterParts = new java.util.ArrayList<>();
+		clusterParts.add(new LispSymbol(LispNames.LIST));
+		for (LispVal clauseType : clauseTypes) {
+			LispVal test = makeHandlerTypeTest(condVar, clauseType, closRegistry);
+			LispVal testLambda = listToCons(
+					List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.<LispVal>of(condVar)), test));
+			clusterParts.add(listToCons(List.of(new LispSymbol(LispNames.CONS), testLambda, LispNil.INSTANCE)));
+		}
+		LispVal push = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), listToCons(clusterParts), clustersVar))));
+		LispVal restore = listToCons(
+				List.of(new LispSymbol(LispNames.SETQ), clustersVar, new LispSymbol(HC_SAVED_VAR)));
+		return makeLet(HC_SAVED_VAR, clustersVar, listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT),
+				listToCons(List.of(new LispSymbol(LispNames.PROGN), push, protectedForm)), restore)));
 	}
 
 	/**
@@ -25050,8 +25103,9 @@ public final class LispMacroExpander {
 	}
 
 	// (defun %run-handlers (__rh_c)
+	// (let ((__rh_stop nil))
 	// (let ((__rh_clusters %handler-clusters%))
-	// (while (consp __rh_clusters)
+	// (while (and (null __rh_stop) (consp __rh_clusters))
 	// (let ((__rh_cluster (car __rh_clusters)))
 	// (setq __rh_clusters (cdr __rh_clusters))
 	// (let ((__rh_saved %handler-clusters%))
@@ -25059,11 +25113,13 @@ public final class LispMacroExpander {
 	// (progn
 	// (setq %handler-clusters% __rh_clusters) ; CLHS: handlers run
 	// (let ((__rh_entries __rh_cluster)) ; outside their cluster
-	// (while (consp __rh_entries)
+	// (while (and (null __rh_stop) (consp __rh_entries))
 	// (when (funcall (car (car __rh_entries)) __rh_c)
-	// (funcall (cdr (car __rh_entries)) __rh_c))
+	// (if (cdr (car __rh_entries)) ; nil cdr = a handler-case
+	// (funcall (cdr (car __rh_entries)) __rh_c) ; clause: it TRANSFERS
+	// (setq __rh_stop t))) ; control, so stop here
 	// (setq __rh_entries (cdr __rh_entries)))))
-	// (setq %handler-clusters% __rh_saved))))))
+	// (setq %handler-clusters% __rh_saved)))))))
 	// nil)
 	private static LispVal runHandlersDefun() {
 		LispSymbol c = new LispSymbol("__rh_c");
@@ -25071,31 +25127,43 @@ public final class LispMacroExpander {
 		LispSymbol cluster = new LispSymbol("__rh_cluster");
 		LispSymbol saved = new LispSymbol("__rh_saved");
 		LispSymbol entries = new LispSymbol("__rh_entries");
+		LispSymbol stop = new LispSymbol("__rh_stop");
 		LispSymbol globalVar = new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR);
 		LispVal entry = callOf(LispNames.CAR, entries);
+		// A cluster entry with a nil handler is a handler-case's own clause: the
+		// nearest matching one HANDLES the condition (it transfers control when the
+		// ordinary throw resumes), so the walk stops instead of running any enclosing
+		// handler-bind handler -- CLHS 9.1.4.1, most recent first.
 		LispVal callEntry = makeIf(
 				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CAR, entry), c)),
-				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c)),
+				makeIf(callOf(LispNames.CDR, entry),
+						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c)),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), stop, LispTrue.INSTANCE))),
 				LispNil.INSTANCE);
 		LispVal entriesLoop = makeLet(entries.name(), cluster,
-				listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, entries), callEntry,
+				listToCons(List.of(new LispSymbol(LispNames.WHILE),
+						listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.NULL, stop),
+								callOf(LispNames.CONSP, entries))),
+						callEntry,
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), entries, callOf(LispNames.CDR, entries))))));
 		LispVal runCluster = makeLet(saved.name(), globalVar,
 				listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT),
 						listToCons(List.of(new LispSymbol(LispNames.PROGN),
 								listToCons(List.of(new LispSymbol(LispNames.SETQ), globalVar, clusters)), entriesLoop)),
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), globalVar, saved)))));
-		LispVal clustersLoop = makeLet(clusters.name(), globalVar, listToCons(List.of(new LispSymbol(LispNames.WHILE),
-				callOf(LispNames.CONSP, clusters),
-				makeLet(cluster.name(), callOf(LispNames.CAR, clusters),
-						listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(
-								List.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters))),
-								runCluster))))));
-		// The mark is set at the END of a completed walk (every handler declined), so
-		// a %hb-guard landing pad can tell this condition's handlers already ran. A
-		// nested signal inside a handler completes ITS walk first and is overwritten
-		// here when the outer walk finishes -- the identity a pad compares stays the
-		// outermost pending condition's.
+		LispVal clustersLoop = makeLet(stop.name(), LispNil.INSTANCE,
+				makeLet(clusters.name(), globalVar, listToCons(List.of(new LispSymbol(LispNames.WHILE),
+						listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.NULL, stop),
+								callOf(LispNames.CONSP, clusters))),
+						makeLet(cluster.name(), callOf(LispNames.CAR, clusters),
+								listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(List
+									.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters))),
+										runCluster)))))));
+		// The mark is set at the END of the walk -- every handler declined, or a
+		// handler-case entry stopped it -- so a %hb-guard landing pad can tell this
+		// condition's handlers already ran. A nested signal inside a handler completes
+		// ITS walk first and is overwritten here when the outer walk finishes -- the
+		// identity a pad compares stays the outermost pending condition's.
 		LispVal mark = listToCons(
 				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.HANDLERS_RAN_VAR), c));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.RUN_HANDLERS_INTERNAL),

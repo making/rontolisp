@@ -78,7 +78,13 @@ final class JvmHandlerCaseCompiler {
 				ctx.blockTargets.size());
 		ctx.unwindScopes.push(scope);
 		int start = ctx.code.size();
-		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// In restart mode the clause types also go on the DYNAMIC handler stack for the
+		// protected extent, so %run-handlers stops at this handler-case instead of
+		// running an enclosing handler-bind's handler for a condition this form is
+		// nearer to. Outside restart mode the form is unchanged, byte for byte.
+		JvmExprCompiler.compileExpr(LispMacroExpander.handlerCaseProtectedForm(parts.get(1),
+				errorClauses.stream().map(clauseParts -> clauseParts.get(0)).toList(), ctx.closRegistry,
+				ctx.restartMode), ctx, className);
 		int end = ctx.code.size();
 		ctx.unwindScopes.pop();
 		ctx.emit(Opcode.ASTORE);

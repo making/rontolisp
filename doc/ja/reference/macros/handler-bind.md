@@ -22,6 +22,15 @@
     (error (e) (list :caught log)))) ; => (:CAUGHT :SEEN)
 ```
 
+ハンドラは**内側から順に**実行され、本体の内側で確立された [`handler-case`](handler-case.md) もそのひとつです: それにマッチするコンディションはそこで処理され、外側のハンドラは呼ばれません。内側の `handler-case` のどの節にもマッチしなかったときにだけ、探索は外側のハンドラに届きます。
+
+```lisp
+(block b
+  (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+    (handler-case (error "boom")
+      (error () :caught)))) ; => :CAUGHT
+```
+
 組み込みが起こすエラーでもハンドラは実行されます — テストフレームワークが壊れたテスト本体を実行の中断ではなく失敗の記録に変える仕組みです:
 
 ```lisp

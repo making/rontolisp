@@ -6551,6 +6551,22 @@ cases:
                      (handler-bind ((error (lambda (c) (setq ci-hb-log (cons :inner ci-hb-log)))))
                        (error 'type-error :datum 1 :expected-type 'cons)))
                  (type-error (e) (cons :caught ci-hb-log)))))
+      ;; Handlers run MOST RECENT FIRST and handler-case transfers
+      ;; control, so a handler-case established inside a handler-bind's extent
+      ;; handles the condition and the enclosing handler never runs -- unless no
+      ;; clause of it matches, or the signal comes from a clause body of its own.
+      (print (block ci-hb-b
+               (handler-bind ((error (lambda (e) (return-from ci-hb-b :outer-ran))))
+                 (handler-case (error "boom") (error () :caught)))))
+      (print (block ci-hb-b
+               (handler-bind ((error (lambda (e) (return-from ci-hb-b :outer-ran))))
+                 (ignore-errors (error "boom")))))
+      (print (block ci-hb-b
+               (handler-bind ((error (lambda (e) (return-from ci-hb-b :outer-ran))))
+                 (handler-case (error "boom") (end-of-file () :caught)))))
+      (print (block ci-hb-b
+               (handler-bind ((error (lambda (e) (return-from ci-hb-b :outer-ran))))
+                 (handler-case (error "boom") (error () (error "again"))))))
     expected: |
       (:RECONNECTED 42)
       3
@@ -6564,6 +6580,10 @@ cases:
       NIL
       (:CAUGHT T 1)
       (:CAUGHT :OUTER :INNER)
+      :CAUGHT
+      NIL
+      :OUTER-RAN
+      :OUTER-RAN
   # A catching form in an ARGUMENT position: the enclosing call has operands live
   # when the protected region begins, and entering a handler discards them (on the
   # JVM the compiler spills them around the region). The float case keeps a raw

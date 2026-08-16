@@ -50,12 +50,12 @@
 (defun reply-body (reply) (rontolisp:json-parse (gethash "body" reply)))
 
 ;;; --- the exchanges ----------------------------------------------------------
-;;; Every request is driven BEFORE the suite: arrange first, then assert. It
-;;; also keeps the probes clear of rove's failure recorder, which is a
-;;; handler-bind around each test body -- a handler-case nested inside one (the
-;;; "json": null fallback further down is exactly that) does not yet stop the
-;;; outer handler from firing, which would end the test on the very case it
-;;; checks.
+;;; Most requests are driven BEFORE the suite: arrange first, then assert, so
+;;; the local edit/run loop's printed JSON stays in one block above the report.
+;;; The unparseable-body probe is the exception and runs INSIDE its test --
+;;; read-body's "json": null fallback is a handler-case, and a handler-case
+;;; nested in rove's failure recorder (a handler-bind around each test body) is
+;;; exactly the shape that has to keep working.
 
 ;; GET /get with a query string. The target arrives raw -- path and query still
 ;; joined -- and the environment's :query-string is what becomes "args".
@@ -90,17 +90,6 @@
          :remote-addr "203.0.113.7"
          :headers (json-headers "{\"name\":\"rontolisp\"}")
          :body "{\"name\":\"rontolisp\"}")))
-
-;; POST /post with a body that does not parse -- "json" falls back to null,
-;; which is `handler-case` doing its work.
-(defparameter *bad-body-reply*
-  (probe
-   (list :method "POST"
-         :target "/post"
-         :scheme "https"
-         :remote-addr "203.0.113.7"
-         :headers (json-headers "{not json")
-         :body "{not json")))
 
 ;; The wrong method for an endpoint -- 405.
 (defparameter *wrong-method-reply*
@@ -149,8 +138,18 @@
     (ok (string= (gethash "data" body) "{\"name\":\"rontolisp\"}"))
     (ok (string= (gethash "name" (gethash "json" body)) "rontolisp"))))
 
+;; POST /post with a body that does not parse -- "json" falls back to null,
+;; which is `handler-case` doing its work, inside rove's own handler-bind.
 (deftest post-with-a-body-that-does-not-parse
-  (let ((body (reply-body *bad-body-reply*)))
+  (let* ((reply
+          (probe
+           (list :method "POST"
+                 :target "/post"
+                 :scheme "https"
+                 :remote-addr "203.0.113.7"
+                 :headers (json-headers "{not json")
+                 :body "{not json")))
+         (body (reply-body reply)))
     (ok (eq (gethash "json" body) 'null))
     (testing "the raw text still comes back untouched"
       (ok (string= (gethash "data" body) "{not json")))))

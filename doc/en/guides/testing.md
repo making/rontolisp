@@ -198,10 +198,3 @@ whole of it:
   `rove/reporter/none` itself — `make-reporter` loads an unknown style's system
   at run time, which only the interpreter can do. `:spec` (the default) and
   `:dot` are built in. `rontolisp test -r none -o ...` loads it for you.
-- **A `handler-case` inside a test body does not shadow rove's recorder.** rove
-  wraps each test body in a `handler-bind`, and an intervening `handler-case`
-  does not yet stop that outer handler from running — so code under test that
-  catches its own error (a parse with a fallback, say) is reported as "Raise an
-  error while testing." and the test ends there, on every backend. Drive such
-  code *before* the test and assert the value it returned;
-  `cloudflare-workers/httpbin/check.lisp` above does exactly that.

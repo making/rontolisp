@@ -15475,6 +15475,42 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehAnInnerHandlerCaseShadowsAnEnclosingHandlerBind() throws Exception {
+		// CLHS 9.1.4.1: handlers run MOST RECENT FIRST and handler-case transfers
+		// control, so the nearer handler-case handles the condition and the enclosing
+		// handler-bind handler never runs. A raw TRAP is out of reach here (the
+		// three-point spectrum), so the probes signal.
+		assertThat(compileAndRunEh("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (handler-case (error "boom") (error () :caught)))))
+				""")).isEqualTo(":CAUGHT");
+		assertThat(compileAndRunEh("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (ignore-errors (error "boom")))))
+				""")).isEqualTo("NIL");
+	}
+
+	@Test
+	void ehAnInnerHandlerCaseWhoseClausesDoNotMatchStillLetsTheHandlerBindRun() throws Exception {
+		assertThat(compileAndRunEh("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (handler-case (error "boom") (end-of-file () :caught)))))
+				""")).isEqualTo(":OUTER-RAN");
+	}
+
+	@Test
+	void ehAHandlerCaseClauseBodyDoesNotCatchWhatItSignals() throws Exception {
+		assertThat(compileAndRunEh("""
+				(print (block b
+				         (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+				           (handler-case (error "boom") (error () (error "again"))))))
+				""")).isEqualTo(":OUTER-RAN");
+	}
+
+	@Test
 	void ehHandlerBindRunsEachClusterOnceInnermostFirst() throws Exception {
 		assertThat(compileAndRunEh("""
 				(print (let ((log nil))
