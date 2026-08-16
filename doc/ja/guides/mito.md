@@ -248,10 +248,6 @@ DELETE FROM article WHERE (id = ?)
   `there is no parameter $1` を返します — これも上流の不具合で、SBCL でも同一
   です。呼び出しを包んでください:
   `(let ((sxql:*use-placeholder* nil)) (mito.migration:migrate-table 'article))`。
-- **開発中は `trust` か `md5` 認証を推奨します。** scram-sha-256 のハンドシェイク
-  はインタプリタ上の ironclad スライスで PBKDF2 を 4096 回まわすため 1 分ほど
-  かかり、PostgreSQL 自身の 60 秒 `authentication_timeout` との競争に負けて
-  `Database error: end of file` として表面化することがあります。
 
 関連: ライブラリ一覧と下層の cl-dbi / cl-postgres については
 [システム (asdf)](asdf-systems.md)、バックエンドごとのソケットの扱いについては

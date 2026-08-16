@@ -1,13 +1,24 @@
-# 253. A SCRAM PostgreSQL connect costs ~60 s, and a cached connection is never reaped under clack
+# 253. A cached connection is never reaped under clack
 
-Difficulty: 中 (two independent items that meet in the same program: a hot-loop
-performance item with a clear target, and a lifetime decision to record)
+Difficulty: 中 (a lifetime decision to record; the performance half is DONE)
 
 Both surfaced while closing `.todo/249` (the Mito milestone). Neither is a
-correctness bug; together they make a served mito/clack app unusable against a
+correctness bug; together they made a served mito/clack app unusable against a
 default-configured PostgreSQL.
 
-## 1. `dbi:connect` to a scram-sha-256 server: ~60 s, and it RACES the server
+## 1. `dbi:connect` to a scram-sha-256 server: ~60 s -- DONE 2026-08-16
+
+Closed by the native interpreter PBKDF2 (`eval/IroncladNative` +
+`eval/Sha2Kernels`, `.kb/asdf.md` "Native PBKDF2 on the INTERPRETER"): the
+4096-round derivation went 17,091 ms -> 9 ms, so a SCRAM connect is ~0.1 s and
+cannot race any `authentication_timeout`. The measurement below said to check
+the compiled backends first, and that is what decided the shape: they were
+already fine (~1 s JVM, ~3 s component), so the fast path is interpreter-only
+and the compiled backends keep running ironclad's Lisp -- which is also what
+keeps `IroncladE2eTest` an honest cross-backend oracle. What remains of this
+half is nothing; the original text is kept below as the record.
+
+### The original measurement
 
 Same box, same program, `postgres:17-alpine`:
 
@@ -25,14 +36,18 @@ that looks like a socket bug and is not one.
 
 Consequences to fix or record:
 
-- Any DB E2E must create its container with `POSTGRES_HOST_AUTH_METHOD=trust`
-  (or `md5`), or raise `authentication_timeout`, or it is flaky. Recorded in
-  `.kb/mito.md`; `.todo/250`'s `MitoE2eTest` must follow it.
-- The obvious fix is a native `pbkdf2-hmac-sha256` (and the `hmac`/`sha256`
+- ~~Any DB E2E must create its container with `POSTGRES_HOST_AUTH_METHOD=trust`
+  (or `md5`), or raise `authentication_timeout`, or it is flaky.~~ Retired: no
+  container setting is load-bearing any more (`.kb/mito.md`).
+- ~~The obvious fix is a native `pbkdf2-hmac-sha256` (and the `hmac`/`sha256`
   inner loop) rather than the interpreted ironclad one -- the digest itself is
   already pinned byte-for-byte by `IroncladE2eTest`, so a fast path has an
   oracle to match. Measure the compiled backends first: they may already be
-  fine, in which case this is an interpreter-only item.
+  fine, in which case this is an interpreter-only item.~~ Done, exactly that
+  way. One measurement worth keeping: replacing only ironclad's
+  `update-sha256-block` / `sha256-expand-block` -- the smallest semantic surface
+  -- buys ~4x and does NOT solve this, because the interpreted mdx buffering
+  around the compression function is the other 23%.
 
 ## 2. `connect-cached` + clack = one connection per request, never disconnected
 
@@ -63,6 +78,6 @@ promises and needs its reason written down, not just its "how".
 
 - A served mito app over N requests opens a bounded number of connections, and
   the number is stated in `.kb/mito.md` (or `.kb/clack.md`) with the reason.
-- A scram connect is fast enough that the default `authentication_timeout`
+- ~~A scram connect is fast enough that the default `authentication_timeout`
   cannot be raced, or the E2E harness requirement is enforced somewhere a test
-  author cannot miss it.
+  author cannot miss it.~~ Met 2026-08-16.

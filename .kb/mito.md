@@ -176,7 +176,7 @@ asserts the failure, so closing the gap turns it red.
   round trip and the DB-side migration diff cycle, each asserted BYTE-IDENTICAL
   on the interpreter, the JVM and the WASM component, plus the Preview 1
   compile-error pin and the `count-dao` tripwire above. Its container takes
-  `POSTGRES_HOST_AUTH_METHOD=trust` for the SCRAM reason below.
+  `POSTGRES_HOST_AUTH_METHOD=trust` (see the retired SCRAM caveat below).
 - The user-facing docs are `doc/{en,ja}/guides/mito.md` (mito AND sxql on one
   page -- mito's query clauses ARE sxql, so a second page would duplicate), the
   rewritten mito row in `guides/asdf-systems.md`, and the nav entry in both
@@ -184,8 +184,11 @@ asserts the failure, so closing the gap turns it red.
 - The lack middleware (`lack-middleware-mito`) loads verbatim and its three
   branches (cached / `:no-cache t` / nil config) run on all three in-scope
   backends; `.kb/clack.md` owns the lack/clack machinery it rides.
-- The SCRAM caveat for any E2E: `dbi:connect` against a
-  `password_encryption = scram-sha-256` server costs ~60 s here (PBKDF2 x4096
-  in interpreted ironclad) and races PostgreSQL's 60 s `authentication_timeout`,
-  surfacing as `Database error: end of file`. Create the test container with
-  `POSTGRES_HOST_AUTH_METHOD=trust` (or `md5`), or raise the timeout.
+- The SCRAM caveat for any E2E is RETIRED (2026-08-16): `dbi:connect` against a
+  `password_encryption = scram-sha-256` server used to cost ~60 s here (PBKDF2
+  x4096 in interpreted ironclad) and race PostgreSQL's 60 s
+  `authentication_timeout`, surfacing as `Database error: end of file`. The
+  interpreter's PBKDF2 is native now (`.kb/asdf.md`, "Native PBKDF2 on the
+  INTERPRETER"), so a SCRAM connect is ~0.1 s and no container setting is
+  load-bearing. `MitoE2eTest`'s `POSTGRES_HOST_AUTH_METHOD=trust` stays because
+  it is the cheapest auth for a test, not because SCRAM is unaffordable.

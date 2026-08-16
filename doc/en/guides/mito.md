@@ -241,10 +241,6 @@ backend — the interpreter re-expands macros on every evaluation.
   emit `DEFAULT ?` with an empty bind list, and PostgreSQL answers `there is no
   parameter $1` — again upstream, again identical on SBCL. Wrap the call:
   `(let ((sxql:*use-placeholder* nil)) (mito.migration:migrate-table 'article))`.
-- **Prefer `trust` or `md5` authentication in development.** A scram-sha-256
-  handshake runs PBKDF2 x4096 through the interpreted ironclad slice and takes
-  about a minute, which can lose the race against PostgreSQL's own 60 s
-  `authentication_timeout` and surface as `Database error: end of file`.
 
 See also: [Systems (asdf)](asdf-systems.md) for the whole library catalogue and
 the cl-dbi / cl-postgres layers underneath, [TCP Sockets](tcp-sockets.md) for

@@ -98,6 +98,8 @@ public final class LispEvaluator {
 
 	private boolean vecLibraryLoaded = false;
 
+	private boolean ironcladNativeInstalled = false;
+
 	private boolean simd = false;
 
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
@@ -3265,6 +3267,23 @@ public final class LispEvaluator {
 			this.loadingSystems.removeLast();
 		}
 		this.loadedSystems.add(name);
+		installIroncladNative();
+	}
+
+	/**
+	 * Replaces ironclad's {@code pbkdf2-derive-key} with the native kernel once the
+	 * system that defines it has finished loading -- keyed on the definition, not on a
+	 * system name, so it fires whether the caller asked for the {@code ironclad}
+	 * aggregate or only for {@code ironclad/kdf/pkcs5}. Interpreter only, and always on:
+	 * the kernel computes the same spec-defined bytes ({@link IroncladNative}).
+	 */
+	private void installIroncladNative() {
+		if (this.ironcladNativeInstalled
+				|| this.globalEnv.lookupFunctionOrNull(IroncladNative.PBKDF2_DERIVE_KEY) == null) {
+			return;
+		}
+		this.ironcladNativeInstalled = true;
+		IroncladNative.install(this.globalEnv, this);
 	}
 
 	/**
