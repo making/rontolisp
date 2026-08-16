@@ -50,6 +50,13 @@ everywhere except `--no-gc`.
   scope's own exception entries exclude (a throw from an inlined cleanup must
   not re-enter its own handler; it still lands in OUTER handlers — the CL
   unwinding order). `JvmClassShaker` was already exception-table-aware.
+- **A cleanup's VALUES are discarded, its value COUNT included**: the cleanup
+  sequence is bracketed by a save/restore of the `%mv-spill` channel on all
+  three backends, so `(unwind-protect (values 1 2 3) (release))` answers all
+  three values whatever `release` returns — and the save lives in each backend's
+  SHARED cleanup emitter, so the copies a `return`/`go` inlines at an escape
+  site get it too. Rationale, exclusions and the pinning matrix:
+  [multiple-values.md](multiple-values.md).
 - **with-* retrofit**: `expandWithOpenFile` / `expandWithOutputToString` /
   `expandWithInputFromString` / the three usocket `with-*` expansions take a
   `boolean unwindProtect` (default true); the WASM call sites pass `false` to

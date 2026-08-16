@@ -7493,6 +7493,11 @@ public final class LispEvaluator {
 	 * ({@link LispReturnSignal}). A cleanup form that itself signals replaces the pending
 	 * unwind (CL semantics: the newer exit wins), which is exactly what a Java
 	 * {@code finally} does.
+	 *
+	 * <p>
+	 * The cleanups run for effect: their values are discarded, and so is whatever they
+	 * left on the {@code %mv-spill} channel -- the whole form answers the protected
+	 * form's values, ALL of them (see {@link #runUnwindCleanups}).
 	 */
 	private LispVal evalUnwindProtect(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
@@ -7511,15 +7516,35 @@ public final class LispEvaluator {
 			throw exit;
 		}
 		catch (RuntimeException | Error ex) {
-			for (int i = 2; i < parts.size(); i++) {
-				eval(parts.get(i), env);
-			}
+			runUnwindCleanups(parts, env);
 			throw ex;
 		}
+		runUnwindCleanups(parts, env);
+		return result;
+	}
+
+	/**
+	 * Runs the cleanup forms of an {@code unwind-protect} with the {@code %mv-spill}
+	 * channel ({@link LispNames#MV_SPILL}) saved across them: a cleanup's values are
+	 * discarded, so the SECONDARY values the protected form published must survive it --
+	 * {@code (unwind-protect (values 1 2 3) (release))} answers 1, 2 and 3 however many
+	 * values {@code release} returns. Applies to the unwind path too, where the values of
+	 * a {@code return-from} in the protected form are already in flight.
+	 * @param parts the {@code unwind-protect} form's parts (the cleanups start at index
+	 * 2)
+	 * @param env the evaluation environment
+	 */
+	private void runUnwindCleanups(List<LispVal> parts, Environment env) {
+		if (parts.size() < 3) {
+			return;
+		}
+		LispVal spill = this.globalEnv.lookupOrNull(LispNames.MV_SPILL);
 		for (int i = 2; i < parts.size(); i++) {
 			eval(parts.get(i), env);
 		}
-		return result;
+		if (spill != null) {
+			this.globalEnv.define(LispNames.MV_SPILL, spill);
+		}
 	}
 
 	/** Evaluates the optional value of a {@code return} form, defaulting to nil. */

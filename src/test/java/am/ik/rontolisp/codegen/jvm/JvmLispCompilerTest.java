@@ -7360,6 +7360,69 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUnwindProtectKeepsTheProtectedFormsValues() throws Exception {
+		// A cleanup runs for effect: its values -- and its value COUNT -- are discarded,
+		// so the whole form answers the protected form's values, all of them
+		// (.kb/multiple-values.md). Cleanup shapes x exit shapes; the same matrix the
+		// interpreter and the wasm backends pin, and the unwind-protect-values ci-spec
+		// case runs on all four.
+		assertThat(compileAndRun("""
+				(setq uwp-log nil)
+				(defun uwp-zero () (values))
+				(defun uwp-one () (values 7))
+				(defun uwp-two () (values 7 8))
+				(defun uwp-release () (setq uwp-log (cons 'released uwp-log)) (values))
+				(defun uwp-compute () (values 1 2 3))
+				(defun uwp-nil () (unwind-protect (values 1 2 3) nil))
+				(defun uwp-v0 () (unwind-protect (values 1 2 3) (uwp-zero)))
+				(defun uwp-v1 () (unwind-protect (values 1 2 3) (uwp-one)))
+				(defun uwp-v2 () (unwind-protect (values 1 2 3) (values 7 8)))
+				(defun uwp-call () (unwind-protect (uwp-compute) (uwp-release)))
+				(defun uwp-nested ()
+				  (unwind-protect (values 1 2 3) (unwind-protect (uwp-two) (uwp-zero))))
+				(defun uwp-return ()
+				  (block b (unwind-protect (return-from b (values 1 2 3)) (uwp-two))))
+				(defun uwp-return-call ()
+				  (block b (unwind-protect (return-from b (uwp-compute)) (uwp-release))))
+				(defun uwp-go ()
+				  (let ((r 0))
+				    (block b (tagbody (unwind-protect (go done) (uwp-two)) done))
+				    (values r 2 3)))
+				(defun uwp-signal ()
+				  (handler-case (unwind-protect (error "boom") (uwp-release))
+				    (error (e) (values 1 2 3))))
+				(defun uwp-signal-plain ()
+				  (handler-case (unwind-protect (error "boom") (uwp-two)) (error (e) 'caught)))
+				(print (multiple-value-list (uwp-nil)))
+				(print (multiple-value-list (uwp-v0)))
+				(print (multiple-value-list (uwp-v1)))
+				(print (multiple-value-list (uwp-v2)))
+				(print (multiple-value-list (uwp-call)))
+				(print (multiple-value-list (uwp-nested)))
+				(print (multiple-value-list (uwp-return)))
+				(print (multiple-value-list (uwp-return-call)))
+				(print (multiple-value-list (uwp-go)))
+				(print (multiple-value-list (uwp-signal)))
+				(print (multiple-value-list (uwp-signal-plain)))
+				(print (multiple-value-list (unwind-protect (values 1 2 3) (uwp-zero))))
+				(print uwp-log)
+				""")).isEqualTo("""
+				(1 2 3)
+				(1 2 3)
+				(1 2 3)
+				(1 2 3)
+				(1 2 3)
+				(1 2 3)
+				(1 2 3)
+				(1 2 3)
+				(0 2 3)
+				(1 2 3)
+				(CAUGHT)
+				(1 2 3)
+				(RELEASED RELEASED RELEASED)""");
+	}
+
+	@Test
 	void compileAndRunMapFamilyErrorsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) signals an error
 		// rather than silently returning nil, matching the interpreter.

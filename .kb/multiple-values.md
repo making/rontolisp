@@ -84,6 +84,66 @@ on the interpreter; classified CL_FUNCTIONS with a unary wrapper). The
 `parse-integer` expansion returns its stop position as a literal second value,
 so PARSE_INTEGER and VALUES_LIST are part of the `injectMvSpillGlobal` scan.
 
+## An unwind-protect cleanup may not clobber the channel (todo-397, 2026-08-16)
+
+**Invariant: a cleanup's values are DISCARDED, and the protected form's value
+COUNT is part of what is restored.** `unwind-protect` answers the protected
+form's values, all of them, whatever the cleanup forms return. The channel is a
+single global, so a cleanup that reaches `values` overwrites what the protected
+form published: before this, `(unwind-protect (values 1 2 3) (release))` answered
+`(1)` when `release` ended in `(values)` — the idiomatic "I return nothing" — and
+`(1 8)` when it ended in `(values 7 8)`. `(1 8)` is the tell: the primary value is
+the form's ordinary result and survives; every SECONDARY value was read back out
+of whatever the cleanup left behind. Found by the dexador spike (`.todo/396`),
+whose `request` returns `(values body status headers uri stream)` out of an
+`unwind-protect` whose cleanup pushes the connection back and ends in `(values)`,
+so every caller saw the body and nothing else.
+
+The fix is the same shape on all four backends: SAVE the channel before the
+cleanup sequence and write it back after, on every exit path.
+
+- Interpreter: `LispEvaluator.runUnwindCleanups` (used by both the normal and the
+  error/`return` path of `evalUnwindProtect`) reads `%mv-spill` out of the global
+  env and re-`define`s it after the cleanups.
+- JVM: `JvmUnwindProtectCompiler.compileCleanups` brackets the sequence with
+  `getstatic`/`astore` + `aload`/`putstatic` over the `%mv-spill` field.
+- WASM GC: `WasmUnwindProtectCompiler.compileCleanups` does the same with
+  `global.get`/`local.set` + `local.get`/`global.set`. A LOCAL, not the operand
+  stack: the landing pads run with the caught `exnref` / the escaping return value
+  beneath them.
+
+Both compilers put the save in the SHARED cleanup emitter rather than in the
+`unwind-protect` layout, so every exit path inherits it — including the copies a
+`return`/`return-from`/`go` inlines at an escape site, where the values of a
+`(return-from f (values 1 2 3))` are already in flight when the cleanup runs.
+`WasmTagbodyCompiler.compileGo` was inlining cleanups with its own loop and now
+calls the shared emitter for exactly that reason.
+
+Two deliberate exclusions keep emitted output identical for programs that cannot
+be affected: a program with no multiple-value operator has no `%mv-spill` global
+(the `injectMvSpillGlobal` gate) and gets nothing, and an `UnwindScope` whose
+cleanup is the compiler's own `(%hc-depth-dec)` bookkeeping — what
+`handler-case` pushes so an escape adjusts the handler-depth counter — is
+recognized by `internalOnly` and skipped, since an i32 counter cannot reach the
+channel.
+
+The sibling forms that also run code between a producer and its consumer were
+checked and are NOT affected: `handler-case` (body values reach the caller),
+`catch`/`throw` (a thrown `(values 1 2 3)` arrives whole), `ignore-errors`,
+`restart-case` and the `with-*` macros — the last group expands to
+`unwind-protect`, so it inherits the fix. One genuinely separate gap surfaced:
+`handler-case`'s `:no-error` clause is not a multiple-value consumer at all
+(`(handler-case (values 1 2 3) (:no-error (a b c) ...))` leaves `b`/`c` unbound),
+filed as `.todo/406`.
+
+Pinned by the cleanup-shape x exit-shape matrix (cleanup: `nil`, a call returning
+zero/one/two values, a literal `(values 7 8)`, a nested `unwind-protect`; exit:
+fall-through, `return-from`, `go`, a signalled unwind) in
+`LispEvaluatorTest.evalUnwindProtectCleanupKeepsTheProtectedFormsValues`,
+`JvmLispCompilerTest.compileAndRunUnwindProtectKeepsTheProtectedFormsValues`,
+`WasmLispCompilerIntegrationTest.unwindProtectKeepsTheProtectedFormsValues` and
+the `unwind-protect-values` ci-spec case (which adds the `--component` leg).
+
 ## The REPL echo is a consumer (added 2026-07-30)
 
 The top level of a CL REPL is a multiple-value consumer -- `(floor 10 3)` echoes

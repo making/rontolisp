@@ -141,17 +141,16 @@ final class WasmTagbodyCompiler {
 			return;
 		}
 		// Inline the cleanups of every unwind-protect scope entered after the tagbody,
-		// innermost first -- the jump leaves their protected regions.
+		// innermost first -- the jump leaves their protected regions. Through the shared
+		// emitter, so an inlined cleanup discards its own values here exactly as it does
+		// on the scope's other exit paths (.kb/multiple-values.md).
 		int escapedCount = ctx.unwindScopes.size() - scope.unwindDepth();
 		int i = 0;
 		for (WasmLispCompiler.UnwindScope unwindScope : ctx.unwindScopes) {
 			if (i++ >= escapedCount) {
 				break;
 			}
-			for (LispVal cleanup : unwindScope.cleanupForms()) {
-				WasmExprCompiler.compileExpr(cleanup, ctx);
-				ctx.writer.write(Instruction.DROP);
-			}
+			WasmUnwindProtectCompiler.compileCleanups(unwindScope.cleanupForms(), ctx);
 		}
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(java.util.Objects.requireNonNull(scope.labelIndex().get(tag)));

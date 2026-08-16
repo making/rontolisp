@@ -6,6 +6,7 @@ import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -81,12 +82,65 @@ final class JvmUnwindProtectCompiler {
 	/**
 	 * Compiles the cleanup forms as statements, popping each value (a cleanup's value is
 	 * discarded; the whole form yields the protected form's value).
+	 *
+	 * <p>
+	 * A cleanup's value count is discarded with it: the {@code %mv-spill} channel the
+	 * protected form published its SECONDARY values on is saved into a local across the
+	 * whole cleanup sequence and written back after it, so
+	 * {@code (unwind-protect (values 1 2 3) (release))} answers all three values however
+	 * many {@code release} returns ({@code .kb/multiple-values.md}). Emitted only when
+	 * the program has the spill global at all -- a program using no multiple-value
+	 * operator never writes the channel, and stays byte-identical to one compiled before
+	 * this. Every exit path routes through here (normal completion, the error-unwind
+	 * handler and the copies {@link JvmReturnCompiler}/{@link JvmGoCompiler} inline at an
+	 * escape), so the save covers the in-flight values of a {@code return-from} inside
+	 * the protected form too.
 	 */
 	static void compileCleanups(List<LispVal> cleanups, JvmLispCompiler.Ctx ctx, String className) {
+		if (cleanups.isEmpty()) {
+			return;
+		}
+		am.ik.jvm.ConstantPool.FieldrefConstant spillField = internalOnly(cleanups) ? null
+				: ctx.globalFields.get(LispNames.MV_SPILL);
+		int savedNextLocal = ctx.nextLocal;
+		int spillSlot = -1;
+		if (spillField != null) {
+			spillSlot = ctx.allocTemp();
+			ctx.emit(Opcode.GETSTATIC);
+			ctx.emitU2(spillField.index());
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(spillSlot);
+		}
 		for (LispVal form : cleanups) {
 			JvmExprCompiler.compileExpr(form, ctx, className);
 			ctx.emit(Opcode.POP);
 		}
+		if (spillField != null) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(spillSlot);
+			ctx.emit(Opcode.PUTSTATIC);
+			ctx.emitU2(spillField.index());
+			ctx.nextLocal = savedNextLocal;
+		}
+	}
+
+	/**
+	 * Whether the cleanup sequence is the compiler's OWN bookkeeping rather than a user's
+	 * cleanup forms -- the {@code (%hc-depth-dec)} a {@code handler-case} scope carries,
+	 * which is an i32 counter adjustment and can never reach the {@code %mv-spill}
+	 * channel. Such a scope skips the save/restore above, so a program's handler-case
+	 * escape paths stay byte-identical to a build compiled before it existed.
+	 * @param cleanups the cleanup forms
+	 * @return whether every form is compiler-internal
+	 */
+	private static boolean internalOnly(List<LispVal> cleanups) {
+		for (LispVal form : cleanups) {
+			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !LispNames.HC_DEPTH_DEC_INTERNAL.equals(head.name())) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**

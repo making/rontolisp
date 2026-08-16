@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -5052,6 +5053,71 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(defun mv-two2 () (values 4 5))" + " (defun mv-one2 () (values 6))"
 				+ " (multiple-value-bind (a b) (mv-two2) nil)" + " (multiple-value-bind (a b) (mv-one2) (list a b))")
 			.print()).isEqualTo("(6 NIL)");
+	}
+
+	/**
+	 * The cleanup-shape x exit-shape matrix of
+	 * {@link #evalUnwindProtectCleanupKeepsTheProtectedFormsValues()}, shared verbatim
+	 * with the compile backends' copies (JvmLispCompilerTest /
+	 * WasmLispCompilerIntegration Test) and the {@code unwind-protect-values} ci-spec
+	 * case.
+	 */
+	private static final String UNWIND_PROTECT_VALUES_DEFS = """
+			(setq uwp-log nil)
+			(defun uwp-zero () (values))
+			(defun uwp-one () (values 7))
+			(defun uwp-two () (values 7 8))
+			(defun uwp-release () (setq uwp-log (cons 'released uwp-log)) (values))
+			(defun uwp-compute () (values 1 2 3))
+			(defun uwp-nil () (unwind-protect (values 1 2 3) nil))
+			(defun uwp-v0 () (unwind-protect (values 1 2 3) (uwp-zero)))
+			(defun uwp-v1 () (unwind-protect (values 1 2 3) (uwp-one)))
+			(defun uwp-v2 () (unwind-protect (values 1 2 3) (values 7 8)))
+			(defun uwp-call () (unwind-protect (uwp-compute) (uwp-release)))
+			(defun uwp-nested ()
+			  (unwind-protect (values 1 2 3) (unwind-protect (uwp-two) (uwp-zero))))
+			(defun uwp-return ()
+			  (block b (unwind-protect (return-from b (values 1 2 3)) (uwp-two))))
+			(defun uwp-return-call ()
+			  (block b (unwind-protect (return-from b (uwp-compute)) (uwp-release))))
+			(defun uwp-go ()
+			  (let ((r 0))
+			    (block b (tagbody (unwind-protect (go done) (uwp-two)) done))
+			    (values r 2 3)))
+			(defun uwp-signal ()
+			  (handler-case (unwind-protect (error "boom") (uwp-release))
+			    (error (e) (values 1 2 3))))
+			(defun uwp-signal-plain ()
+			  (handler-case (unwind-protect (error "boom") (uwp-two)) (error (e) 'caught)))
+			""";
+
+	@Test
+	void evalUnwindProtectCleanupKeepsTheProtectedFormsValues() {
+		// A cleanup runs for effect: its values -- and its value COUNT -- are discarded,
+		// so the whole form answers the protected form's values, all of them
+		// (.kb/multiple-values.md). Every cleanup shape below used to truncate the
+		// protected (values 1 2 3) to whatever it left on the %mv-spill channel: (1) for
+		// a cleanup returning zero or one values, (1 8) for one returning two.
+		for (String call : List.of("(uwp-nil)", "(uwp-v0)", "(uwp-v1)", "(uwp-v2)", "(uwp-call)", "(uwp-nested)",
+				// exit shapes: the values of a return-from are already in flight when the
+				// cleanup runs
+				"(uwp-return)", "(uwp-return-call)",
+				// a signalled unwind: the handler's own values, not the cleanup's
+				"(uwp-signal)",
+				// and inline, without a function boundary in between
+				"(unwind-protect (values 1 2 3) (uwp-zero))")) {
+			assertThat(evalMulti(UNWIND_PROTECT_VALUES_DEFS + "(multiple-value-list " + call + ")").print()).as(call)
+				.isEqualTo("(1 2 3)");
+		}
+		// A go exit runs the cleanups too, and leaves nothing of theirs behind.
+		assertThat(evalMulti(UNWIND_PROTECT_VALUES_DEFS + "(multiple-value-list (uwp-go))").print())
+			.isEqualTo("(0 2 3)");
+		// A single-valued form stays single-valued across a two-valued cleanup.
+		assertThat(evalMulti(UNWIND_PROTECT_VALUES_DEFS + "(multiple-value-list (uwp-signal-plain))").print())
+			.isEqualTo("(CAUGHT)");
+		// The cleanups still ran -- once per exit path, no more.
+		assertThat(evalMulti(UNWIND_PROTECT_VALUES_DEFS + "(uwp-call) (uwp-return-call) (uwp-signal) uwp-log").print())
+			.isEqualTo("(RELEASED RELEASED RELEASED)");
 	}
 
 	@Test

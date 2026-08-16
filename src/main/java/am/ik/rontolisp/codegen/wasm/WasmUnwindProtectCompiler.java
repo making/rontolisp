@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -147,12 +148,64 @@ final class WasmUnwindProtectCompiler {
 	 * Compiles the cleanup forms as statements, dropping each value (a cleanup's value is
 	 * discarded; the whole form yields the protected form's value). Safe to run with
 	 * extra values (the exnref / the return value) beneath on the operand stack.
+	 *
+	 * <p>
+	 * A cleanup's value count is discarded with it: the {@code %mv-spill} channel the
+	 * protected form published its SECONDARY values on is saved into a local across the
+	 * whole cleanup sequence and written back after it, so
+	 * {@code (unwind-protect (values 1 2 3) (release))} answers all three values however
+	 * many {@code release} returns ({@code .kb/multiple-values.md}). Emitted only when
+	 * the program has the spill global at all -- a program using no multiple-value
+	 * operator never writes the channel, and stays byte-identical to one compiled before
+	 * this. Every exit path routes through here (normal completion, the exception landing
+	 * and the return trampoline, plus the copies {@link WasmTagbodyCompiler} /
+	 * {@link WasmReturnFromCompiler} inline at an escape), so the save covers the
+	 * in-flight values of a {@code return-from} inside the protected form too. A local,
+	 * not the operand stack: the landing pads run with an exnref / the return value
+	 * beneath them.
 	 */
 	static void compileCleanups(List<LispVal> cleanups, WasmLispCompiler.Ctx ctx) {
+		if (cleanups.isEmpty()) {
+			return;
+		}
+		Integer spillGlobal = internalOnly(cleanups) ? null : ctx.globalIndices.get(LispNames.MV_SPILL);
+		int spillSlot = -1;
+		if (spillGlobal != null) {
+			spillSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(spillGlobal);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(spillSlot);
+		}
 		for (LispVal form : cleanups) {
 			WasmExprCompiler.compileExpr(form, ctx);
 			ctx.writer.write(Instruction.DROP);
 		}
+		if (spillGlobal != null) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(spillSlot);
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(spillGlobal);
+		}
+	}
+
+	/**
+	 * Whether the cleanup sequence is the compiler's OWN bookkeeping rather than a user's
+	 * cleanup forms -- the {@code (%hc-depth-dec)} a {@code handler-case} scope carries,
+	 * which is an i32 counter adjustment and can never reach the {@code %mv-spill}
+	 * channel. Such a scope skips the save/restore above, so a program's handler-case
+	 * escape paths stay byte-identical to a build compiled before it existed.
+	 * @param cleanups the cleanup forms
+	 * @return whether every form is compiler-internal
+	 */
+	private static boolean internalOnly(List<LispVal> cleanups) {
+		for (LispVal form : cleanups) {
+			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !LispNames.HC_DEPTH_DEC_INTERNAL.equals(head.name())) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 }
