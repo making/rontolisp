@@ -17217,8 +17217,13 @@ public final class LispMacroExpander {
 	private static boolean reachesScharSet(LispVal form) {
 		if (form instanceof LispSymbol sym) {
 			return switch (sym.name()) {
+				// map-into is on the list although it names no place itself: its
+				// expansion STORES through the (setf (elt ...)) place, and that
+				// expansion runs per form, long after this scan -- so a
+				// (map-into "..." ...) whose result is a string used to reach a helper
+				// the scan never injected.
 				case LispNames.AREF, LispNames.SVREF, LispNames.ELT, LispNames.CHAR, LispNames.SCHAR,
-						LispNames.SCHAR_SET ->
+						LispNames.SCHAR_SET, LispNames.MAP_INTO ->
 					true;
 				default -> false;
 			};
@@ -28039,6 +28044,12 @@ public final class LispMacroExpander {
 	 * {@link #expandTypep(LispCons, ClosRegistry, boolean)} emits a call to the shared
 	 * {@code %typep-runtime} dispatch defun, which {@link #expandTopLevelDefinitions}
 	 * must then inject together with its data table. Quoted data is skipped.
+	 *
+	 * <p>
+	 * {@code (function typep)} counts as well: the injected {@code #'typep} wrapper's
+	 * body is a call whose specifier is a PARAMETER, i.e. the computed shape, and the
+	 * wrapper is added long after this scan runs -- so a program that only ever takes
+	 * {@code typep} as a value would otherwise call a defun the gate never injected.
 	 * @param program the top-level forms
 	 * @return {@code true} when the shared dispatch defun is needed
 	 */
@@ -28061,6 +28072,11 @@ public final class LispMacroExpander {
 				if (parts.size() == 3 && isComputedTypepSpec(parts.get(2))) {
 					return true;
 				}
+			}
+			if (LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons named
+					&& named.car() instanceof LispSymbol target && LispNames.TYPEP.equals(memberOf(target.name()))) {
+				// #'typep: the wrapper's specifier is a parameter, i.e. computed.
+				return true;
 			}
 		}
 		return containsRuntimeTypep(cons.car()) || containsRuntimeTypep(cons.cdr());

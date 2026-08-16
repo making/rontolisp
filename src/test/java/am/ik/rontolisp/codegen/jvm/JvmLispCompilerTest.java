@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -4587,6 +4588,15 @@ class JvmLispCompilerTest {
 				#(1 4)
 				T
 				T""");
+	}
+
+	@Test
+	void compileAndRunTheLoweredOnlyBuiltinsAsFunctionValues() throws Exception {
+		// The sweep: every CL FUNCTION the expression compiler lowers in operator
+		// position must also have a wrapper, or #'name is undefined here while the
+		// interpreter answers. Each of these used to be "The function NAME is
+		// undefined" on all four backends.
+		assertThat(compileAndRun(LoweredBuiltinValues.PROGRAM)).isEqualTo(LoweredBuiltinValues.OUTPUT);
 	}
 
 	@Test

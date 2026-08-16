@@ -19,6 +19,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -710,6 +711,14 @@ class WasmLispCompilerIntegrationTest {
 				(UNSIGNED-BYTE 8)
 				#(1 4)
 				T""");
+	}
+
+	@Test
+	void theLoweredOnlyBuiltinsAreFirstClassFunctionValues() throws Exception {
+		// The sweep: every CL FUNCTION this compiler lowers in operator position must
+		// also have a wrapper, or #'name is undefined here while the interpreter
+		// answers. Same program and same expectation as the interpreter and the JVM.
+		assertThat(compileAndRun(LoweredBuiltinValues.PROGRAM)).isEqualTo(LoweredBuiltinValues.OUTPUT);
 	}
 
 	@Test

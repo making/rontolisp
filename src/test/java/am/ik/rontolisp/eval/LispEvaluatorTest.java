@@ -26,6 +26,7 @@ import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -364,6 +365,52 @@ class LispEvaluatorTest {
 		LispVal result = evaluator.eval(LispReader.readFromString("(map nil #'print '(7 8 9))"));
 		assertThat(result).isSameAs(LispNil.INSTANCE);
 		assertThat(baos.toString()).isEqualTo("7\n8\n9\n");
+	}
+
+	@Test
+	void evalTheLoweredOnlyBuiltinsAsFunctionValues() {
+		// The sweep: a CL FUNCTION with an evalCons case and no function VALUE answered
+		// "The function NAME is undefined" for #'name -- and the consumer is not only
+		// mapcar, rove's form-inspect rewrites every non-macro form inside an ok into
+		// (apply #'op args). The interpreter reads the value out of the same
+		// BuiltinFunctionWrappers catalog the compile paths inject, so this is the same
+		// program and the same expectation as JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(LoweredBuiltinValues.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().stripTrailing()).isEqualTo(LoweredBuiltinValues.OUTPUT);
+	}
+
+	@Test
+	void evalReadSequenceAndWriteSequenceAsFunctionValues(@TempDir Path dir) throws Exception {
+		// The bounding-index pair is its own shape: the operator reads :start / :end as
+		// LITERAL keywords, so the wrapper re-extracts the runtime plist -- and an
+		// ABSENT :end must not become an explicit nil, which the expansion would not
+		// default to (length seq).
+		Path file = dir.resolve("seq.txt");
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString("""
+				(with-open-file (s "%s" :direction :output)
+				  (funcall #'write-sequence "hello world" s))
+				(let ((buf (make-string 5)))
+				  (with-open-file (s "%s") (print (funcall #'read-sequence buf s)))
+				  (print buf))
+				(let ((buf (make-string 5)))
+				  (with-open-file (s "%s") (print (funcall #'read-sequence buf s :start 1 :end 3)))
+				  (print (funcall #'elt buf 1)))
+				""".formatted(file, file, file))) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString()).isEqualTo("""
+				5
+				"hello"
+				3
+				#\\h
+				""");
 	}
 
 	@Test

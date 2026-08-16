@@ -3599,6 +3599,65 @@ cases:
       T
       T
       (1 2)
+  # Every CL FUNCTION the frontends lower in OPERATOR position must also have a
+  # first-class VALUE: a name with a case and no BuiltinFunctionWrappers entry
+  # answered "The function NAME is undefined" on all four backends, and rove's
+  # form-inspect rewrites every non-macro form inside an `ok` into
+  # (apply #'op args), so an assertion merely MENTIONING one died.
+  # .kb/core-representation.md.
+  - name: lowered-builtin-function-values
+    source: |
+      (defun ci-lowered-values ()
+        (print (funcall #'coerce #("a" "b") 'list))
+        (print (funcall #'elt '(1 2 3) 1))
+        (print (funcall #'elt "abc" 2))
+        (print (funcall #'endp '()))
+        (print (apply #'list* '(1 2 (3 4))))
+        (print (funcall #'vector 1 2 3))
+        (print (funcall #'svref (vector 7 8 9) 1))
+        (print (funcall #'array-rank (make-array '(2 3))))
+        (print (funcall #'array-dimension (make-array '(2 3)) 1))
+        (print (funcall #'array-total-size (make-array '(2 3))))
+        (print (funcall #'array-row-major-index (make-array '(2 3)) 1 2))
+        (print (funcall #'revappend '(1 2 3) '(4 5)))
+        (print (funcall #'nreconc (list 1 2 3) (list 4 5)))
+        (print (funcall #'map 'list #'1+ '(1 2 3)))
+        (print (funcall #'map 'string #'char-upcase "abc"))
+        (print (funcall #'map 'vector #'+ '(1 2) '(10 20)))
+        (print (funcall #'map nil #'1+ '(1 2 3)))
+        (print (funcall #'map-into (list 0 0 0) #'1+ '(1 2 3)))
+        (print (funcall #'notany #'evenp '(1 3 5)))
+        (print (funcall #'notevery #'evenp '(2 4 5)))
+        (print (funcall #'typep 3 'integer))
+        (print (funcall #'typep "x" 'integer))
+        (print (funcall #'/= 1 2))
+        (print (funcall #'readtable-case nil)))
+      (ci-lowered-values)
+    expected: |
+      ("a" "b")
+      2
+      #\c
+      T
+      (1 2 3 4)
+      #(1 2 3)
+      8
+      2
+      3
+      6
+      5
+      (3 2 1 4 5)
+      (3 2 1 4 5)
+      (2 3 4)
+      "ABC"
+      #(11 22)
+      NIL
+      (2 3 4)
+      T
+      T
+      T
+      NIL
+      T
+      :UPCASE
   # A redefined defun binds every call to its LAST definition on the compile
   # backends (whole-program static resolution through the per-name map); the
   # JVM emits only that definition (a class cannot hold duplicate methods), the

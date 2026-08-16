@@ -103,12 +103,52 @@ Internal helpers outside the public API are `%`-prefixed (e.g. `%remf-tail`).
 `#'+`/`#'car` work as first-class values -- internal encoding, not a real user
 definition (Lisp-2).
 
+**The catalog is the answer on ALL FOUR backends, not just the compile paths.**
+`BuiltinFunctionWrappers.lambdaFor(name)` hands the bare `(lambda ...)` to
+`LispEvaluator.resolveFunction`, which evaluates it on the first `#'name` /
+`(symbol-function 'name)` of a built-in `evalCons` lowers but `Environment` never
+binds as a `LispFunction` -- the `isCarCdrComposition` synthesis two lines below
+it, generalized. It runs BEFORE the special-operator guard, for the same reason
+the registered-function lookup above it does: a name in the catalog IS a
+function, whatever the operator table calls it (`typep` is the CL FUNCTION
+rontolisp implements as a special form). It cannot recurse, because every
+wrapped operator has a real lowering. Before that, the interpreter kept a
+SECOND list -- the Java builtins in `Environment.createGlobal` -- and the two
+drifted: `#'/=` worked compiled and was undefined interpreted.
+
 **A CL FUNCTION with an operator-position case and no wrapper is a bug, not a
-choice (`.todo/394`)**: `#'coerce` / `#'elt` answer "The function COERCE is
-undefined" on every backend, and the consumer is not only `mapcar` -- rove's
-`form-inspect` rewrites every non-macro form inside an `ok` into
-`(apply #'op args)`, so an assertion mentioning one dies as a recorded error.
-The sweep (which CL names have a case but no wrapper) is the todo.
+choice.** `#'coerce` / `#'elt` answered "The function COERCE is undefined" on
+every backend, and the consumer is not only `mapcar` -- rove's `form-inspect`
+rewrites every non-macro form inside an `ok` into `(apply #'op args)`, so an
+assertion merely MENTIONING one died as a recorded error, or (`#'vector`, which
+only BUILDS an argument) as a silent false assertion with the function under
+test never called. The sweep is closed and PINNED:
+`BuiltinFunctionWrapperCatalogTest` walks `PackageRegistry.clFunctionNames()`
+and fails on any name with no function value. Its one exclusion is the four
+standard GENERICS with no built-in definition of their own -- `print-object`,
+`initialize-instance`, `reinitialize-instance`, `shared-initialize` -- whose
+value appears when the program's own `defmethod` generates the dispatcher defun,
+exactly as in CL; a wrapper there would be a lambda whose body resolves back to
+itself. Cross-backend pins: `LoweredBuiltinValues` (one program, identical
+expectation in `LispEvaluatorTest` / `JvmLispCompilerTest` /
+`WasmLispCompilerIntegrationTest`) and the `lowered-builtin-function-values`
+`ci-spec.yaml` case for the component backend.
+
+**A wrapper whose body reaches a GATED runtime must be reference-gated too.**
+The gates scan the SOURCE program and the wrappers are injected after them, so
+an ungated wrapper is a call into a defun the gate never emitted -- which shows
+up as an `is undefined; compiled as a call-time error` warning on EVERY
+compiled program, not only the ones that use the name. `#'typep` (its specifier
+is a parameter, so the body is `%typep-runtime`) and `#'map-into` (it stores
+through `(setf (elt ...))`, whose string arm is `%schar-set-runtime`) are in
+`REFERENCE_GATED_FUNCTIONS` for exactly that, and each gate was widened to see
+the `(function name)` spelling: `LispMacroExpander.needsRuntimeTypep` and
+`reachesScharSet`. The latter also names `map-into` itself -- its CALL-position
+expansion stores through the same place, which the scan never used to predict.
+`#'map` / `#'map-into` additionally force the JVM's array gate
+(`JvmLispCompiler.programUsesAnyArrayOp`), the `#'concatenate` precedent: map's
+result type is a runtime value here, so its conversion goes through the computed
+`coerce`, which always carries the vector-building arm.
 
 **The invariant a wrapper must not break: a wrapper's arity is the OPERATOR's
 arity, not the shape that was convenient to write.** The body puts the operator

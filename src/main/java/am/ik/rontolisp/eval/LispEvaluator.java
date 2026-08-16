@@ -48,6 +48,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
@@ -6514,7 +6515,25 @@ public final class LispEvaluator {
 		if (fn != null) {
 			return fn;
 		}
-		if (SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)) {
+		if (this.userMacros.containsKey(name)) {
+			throw new LispEvalException(name + " is a macro or special operator, not a function");
+		}
+		// A BuiltinFunctionWrappers entry IS the function value of a built-in that
+		// evalCons lowers in operator position but Environment never binds as a
+		// LispFunction (elt, coerce, vector, map, typep, /=, ...): the catalog is by
+		// construction "built-in FUNCTIONS every backend lowers in call position", so
+		// evaluating its lambda here answers exactly what the compile paths answer,
+		// from the same table -- rather than a second list of Java builtins that drifts
+		// from it. It runs BEFORE the special-operator guard for the same reason the
+		// lookup above does: a name with a wrapper is a function, whatever the operator
+		// table calls it (typep is the CL function rontolisp implements as a special
+		// form). The synthesized lambda cannot recurse: every wrapped operator has a
+		// real lowering, so its body never resolves back to this branch.
+		LispVal wrapper = BuiltinFunctionWrappers.lambdaFor(name);
+		if (wrapper != null) {
+			return eval(wrapper, this.globalEnv);
+		}
+		if (SPECIAL_OPERATORS.contains(name)) {
 			throw new LispEvalException(name + " is a macro or special operator, not a function");
 		}
 		// Everything below LOADS something into the shared global environment, so it runs

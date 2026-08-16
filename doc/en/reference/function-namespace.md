@@ -67,9 +67,10 @@ Built-in operators like `+`, `car`, `1+` can be passed to higher-order functions
 ```
 
 **Compiler restrictions.** In the JVM/WASM compilers, `#'name` resolves against the
-functions known at compile time (user `defun`s and built-in operators); `#'mapcar`,
-`#'reduce`, `#'apply` and `#'funcall` themselves are not available as values (`#'mapcan`
-and `#'sort` are). `symbol-function` requires a quoted symbol literal argument. In
+functions known at compile time (user `defun`s and built-in operators). `#'reduce` and
+`#'apply` themselves are not available as values there (the interpreter has them);
+`#'mapcar`, `#'mapcan`, `#'sort` and `#'funcall` are. `symbol-function` requires a quoted
+symbol literal argument. In
 `--dynamic` mode an unresolved `#'name` is deferred to the runtime `eval` environment like
 any other unresolved reference. In compiled code `apply`/`funcall` dispatch by the actual
 argument count against a fixed-arity wrapper synthesized for each built-in operator. The

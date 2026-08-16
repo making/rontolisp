@@ -3118,7 +3118,25 @@ public final class JvmLispCompiler implements LispCompiler {
 		// carries the helper is exactly a program this returns true for, and a subseq
 		// site
 		// never routes to a helper that was not injected.
-		return LispMacroExpander.programUsesGeneralArrayOp(program) || programBuildsConcatenateSequence(program);
+		return LispMacroExpander.programUsesGeneralArrayOp(program) || programBuildsConcatenateSequence(program)
+				|| programTakesSequenceBuilderValue(program);
+	}
+
+	// True when the program takes #'map or #'map-into as a value. Both wrappers do
+	// STATICALLY in call position what is a runtime value here -- map's result type
+	// (so its conversion goes through the computed coerce, which always carries the
+	// vector-building arm) and map-into's element store (an (setf (elt ...)) that can
+	// land in an array) -- so the wrapper body reaches the array runtime even though
+	// the source scan above, which never sees the injected wrapper, finds no array op.
+	// The #'concatenate precedent one method up.
+	private static boolean programTakesSequenceBuilderValue(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (BuiltinFunctionWrappers.referencesFunctionValue(expr, LispNames.MAP)
+					|| BuiltinFunctionWrappers.referencesFunctionValue(expr, LispNames.MAP_INTO)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// True when concatenate can build a list / vector here, which lowers through coerce
