@@ -10,6 +10,8 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.LoadInliner;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
@@ -92,6 +94,16 @@ abstract class AsdfLibraryE2eSupport {
 	/** The expected stdout, one trimmed line per element. */
 	protected abstract List<String> expected();
 
+	/**
+	 * Normalization applied to each trimmed actual line before comparison. The default is
+	 * identity; override for a library whose report carries values that legitimately
+	 * differ per run on one machine (RoveE2eTest strips rove's {@code  (Nms)} duration
+	 * suffix, printed for any assertion slower than 37 ms).
+	 */
+	protected String normalizeLine(String line) {
+		return line;
+	}
+
 	/** A path-free name for the compiled JVM class / WASM temp files. */
 	protected abstract String artifactName();
 
@@ -110,28 +122,34 @@ abstract class AsdfLibraryE2eSupport {
 		for (LispVal expr : LispReader.readAllFromString(exercise())) {
 			evaluator.eval(expr);
 		}
-		assertThat(out.toString(StandardCharsets.UTF_8).trim().lines().map(String::trim))
+		assertThat(out.toString(StandardCharsets.UTF_8).trim().lines().map(String::trim).map(this::normalizeLine))
 			.containsExactlyElementsOf(expected());
 	}
 
 	@Test
 	void compilesAndRunsOnJvm() throws Exception {
-		byte[] classBytes = new JvmLispCompiler(artifactName()).compile(compileProgram(Features.JVM));
-		assertThat(runMain(classBytes, artifactName()).lines().map(String::trim)).containsExactlyElementsOf(expected());
+		byte[] classBytes = new JvmLispCompiler(artifactName())
+			.compile(compileProgram(Features.JVM, WitExportDirective.Backend.OTHER));
+		assertThat(runMain(classBytes, artifactName()).lines().map(String::trim).map(this::normalizeLine))
+			.containsExactlyElementsOf(expected());
 	}
 
 	@Test
 	void compilesAndRunsOnWasmPreview1() throws Exception {
 		assumeTrue(DOCKER_AVAILABLE, "Docker is not available");
-		byte[] wasmBytes = new WasmLispCompiler().compile(compileProgram(Features.WASM));
-		assertThat(runWasm(wasmBytes, false).lines().map(String::trim)).containsExactlyElementsOf(expected());
+		byte[] wasmBytes = new WasmLispCompiler()
+			.compile(compileProgram(Features.WASM, WitExportDirective.Backend.WASM_GC));
+		assertThat(runWasm(wasmBytes, false).lines().map(String::trim).map(this::normalizeLine))
+			.containsExactlyElementsOf(expected());
 	}
 
 	@Test
 	void compilesAndRunsOnWasmComponent() throws Exception {
 		assumeTrue(DOCKER_AVAILABLE, "Docker is not available");
-		byte[] wasmBytes = new WasmLispCompiler(false, true).compile(compileProgram(Features.WASM));
-		assertThat(runWasm(wasmBytes, true).lines().map(String::trim)).containsExactlyElementsOf(expected());
+		byte[] wasmBytes = new WasmLispCompiler(false, true)
+			.compile(compileProgram(Features.WASM, WitExportDirective.Backend.WASM_COMPONENT));
+		assertThat(runWasm(wasmBytes, true).lines().map(String::trim).map(this::normalizeLine))
+			.containsExactlyElementsOf(expected());
 	}
 
 	// The CLI compile pipeline for the given feature set: inline the system's component
@@ -142,11 +160,24 @@ abstract class AsdfLibraryE2eSupport {
 	// pruning a real third-party tree. Each library below exercises its own API on three
 	// compile backends, so a definition the pass drops that the program still needs fails
 	// here rather than in a user's build.
-	private List<LispVal> compileProgram(Features features) {
-		return LibraryDefunPruner
-			.prune(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispPreludeLibrary
-				.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
-						SourceLoader.fileSystem(), null, systemPath(), features))))));
+	private List<LispVal> compileProgram(Features features, WitExportDirective.Backend backend) {
+		// LispPreludeLibrary must be handed the TARGET feature set (mirroring
+		// RontoLispCli.compileToFile): uiop:featurep's definition reads *features*,
+		// which the reader substitutes with the target's list per feature set, so the
+		// one-argument overload would splice the INTERPRETER's answer into a compiled
+		// module (.kb/uiop.md). EnvironmentLibrary mirrors the CLI too: uiop:getenv on
+		// the --component path is environment.lisp over a wit-imported
+		// wasi:cli/environment (a no-op on the other backends), and rove's
+		// with-local-envs -- run's :env option -- reads it.
+		return LibraryDefunPruner.prune(
+				EnvironmentLibrary.process(
+						UsocketLibrary.process(
+								am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispPreludeLibrary.process(
+										UserMacroExpander.expand(
+												LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
+														SourceLoader.fileSystem(), null, systemPath(), features)),
+										features))),
+						backend));
 	}
 
 	// Defines the compiled class from its bytes and runs main, capturing UTF-8 stdout.

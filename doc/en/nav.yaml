@@ -73,6 +73,8 @@ sections:
         title: Clack Web Applications
       - file: guides/mito.md
         title: O/R Mapping (mito, sxql)
+      - file: guides/testing.md
+        title: Testing (rove)
       - file: guides/reader-case.md
         title: Reader Case (Upcasing)
       - file: guides/math-backends.md
