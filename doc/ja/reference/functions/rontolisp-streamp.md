@@ -7,7 +7,7 @@
 なら `t`、それ以外なら `nil` を返します。
 
 ```lisp
-(rontolisp:streamp (rontolisp:make-stream))   ; => t
+(rontolisp:streamp (rontolisp:make-stream))   ; => T
 (rontolisp:streamp 42)                        ; => NIL
 ```
 

@@ -56,7 +56,7 @@ rontolisp 上でのみ動作します。
 ```
 
 ```lisp
-(rontolisp:json-stringify :key)   ; => "\"key\""
+(rontolisp:json-stringify :key)   ; => "\"KEY\""
 (rontolisp:json-stringify 3/2)   ; => "1.5"
 (rontolisp:json-stringify "a\"b")   ; => "\"a\\\"b\""
 ```

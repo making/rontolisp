@@ -9,7 +9,7 @@
 ```
 
 ```lisp
-(member '(a d) '((a b) (a d)) :test 'equal) ; => ((a d))
+(member '(a d) '((a b) (a d)) :test 'equal) ; => ((A D))
 ```
 
 ```lisp

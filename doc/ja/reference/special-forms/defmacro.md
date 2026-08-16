@@ -18,7 +18,7 @@
 ```lisp
 (defmacro my-unless (test &body body)
   `(if ,test nil (progn ,@body)))
-(my-unless (> 1 3) 'a 'b) ; => b
+(my-unless (> 1 3) 'a 'b) ; => B
 ```
 
 ```lisp

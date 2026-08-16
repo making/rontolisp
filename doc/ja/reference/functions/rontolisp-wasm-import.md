@@ -15,7 +15,7 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
 
 ```lisp
 (rontolisp:wasm-import 'draw-pixel :from "gl" :as "drawPixel"
-                       :params '(:int :int :int) :returns :void)   ; => draw-pixel
+                       :params '(:int :int :int) :returns :void)   ; => DRAW-PIXEL
 ```
 
 ## 引数

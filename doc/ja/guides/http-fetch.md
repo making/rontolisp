@@ -52,11 +52,10 @@
 個々のフィールドの読み取り:
 
 ```lisp
-(let ((res (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get"))))
-  (print (getf res :status))    ; => 200
-  (print (rontolisp:await (rontolisp:read-all (getf res :body))))
-                                ; => "{...}"
-  (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
+(defparameter *res* (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get")))
+(getf *res* :status)                                                  ; => 200
+(stringp (rontolisp:await (rontolisp:read-all (getf *res* :body))))   ; => T
+(cdr (assoc "content-type" (getf *res* :headers) :test #'string=))    ; => "application/json"
 ```
 
 `fetch` が返った時点でリクエストは既に走っているので、複数のリクエストは
@@ -111,7 +110,7 @@ alist)、`:body` (文字列) を指定できます:
 ```
 
 ```lisp
-(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 t null)
+(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 T NULL)
 ```
 
 `rontolisp:json-stringify` はその逆です: ハッシュテーブルはオブジェクトに、

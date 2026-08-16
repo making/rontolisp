@@ -14,7 +14,7 @@
 既存パッケージの再定義はエラーで、`:shadow`/`:shadowing-import-from`(rontolisp にシンボルのシャドウイングはありません)およびその他の clause(`:intern` など)もエラーです。完全なルールは[パッケージ](../packages.md#user-defined-packages-defpackage)を参照してください。
 
 ```lisp
-(defpackage :util (:use :cl) (:export :trim)) ; => util
+(defpackage :util (:use :cl) (:export :trim)) ; => UTIL
 ```
 
 ```lisp

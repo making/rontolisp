@@ -6,7 +6,7 @@ Resizes `array` to `new-dimensions` (an integer for a vector, or a list of the s
 
 ```lisp
 (defparameter *v* (make-array 3 :adjustable t :initial-element 1))
-(eq (adjust-array *v* 5 :initial-element 9) *v*) ; => t
+(eq (adjust-array *v* 5 :initial-element 9) *v*) ; => T
 *v* ; => #(1 1 1 9 9)
 (adjust-array (make-array '(2 2) :initial-element 5) '(2 3) :initial-element 0) ; => #2A((5 5 0) (5 5 0))
 ```

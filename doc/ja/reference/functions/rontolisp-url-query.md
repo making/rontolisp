@@ -11,7 +11,7 @@ URL やリクエストターゲット文字列の生のクエリ文字列部分�
 
 ```lisp
 (rontolisp:url-query "/get?a=1&b=2")   ; => "a=1&b=2"
-(rontolisp:url-query "/get")   ; => nil
+(rontolisp:url-query "/get")   ; => NIL
 (rontolisp:query-param (rontolisp:url-query "https://example.com/s?q=lisp") "q")   ; => "lisp"
 ```
 

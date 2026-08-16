@@ -52,7 +52,7 @@ The call itself is an opaque future — `rontolisp:futurep` recognizes it, and
 it prints as `#<FUTURE>`:
 
 ```lisp
-(rontolisp:futurep (add-later 1 2))   ; => t
+(rontolisp:futurep (add-later 1 2))   ; => T
 ```
 
 The future settles with the value of the last body form, or with the error the
@@ -157,7 +157,7 @@ a future *as a value*, each returning a fresh future:
 ```lisp
 (rontolisp:async-defun boom () (error "nope"))
 (rontolisp:await
-  (rontolisp:catch (boom) (lambda (c) (declare (ignore c)) :fallback)))   ; => :fallback
+  (rontolisp:catch (boom) (lambda (c) (declare (ignore c)) :fallback)))   ; => :FALLBACK
 ```
 
 - [`rontolisp:finally`](../reference/functions/rontolisp-finally.md) runs a
@@ -170,7 +170,7 @@ a future *as a value*, each returning a fresh future:
 (let ((v (rontolisp:await
            (rontolisp:finally (make-value)
                               (lambda () (push :done *cleanup-log*))))))
-  (list v (reverse *cleanup-log*)))   ; => (5 (:done))
+  (list v (reverse *cleanup-log*)))   ; => (5 (:DONE))
 ```
 
 A non-future first argument to any of the four is a `type-error` — there is no

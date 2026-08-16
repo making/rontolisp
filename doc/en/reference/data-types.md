@@ -323,8 +323,8 @@ kernels over packed arrays -- and their optional hardware acceleration -- see th
 
 ```lisp
 (aref #d(1.0 2.0 3.0) 1)                   ; => 2.0
-(array-element-type #d(1 2 3))             ; => double-float
-(array-element-type #f(1.0 2.0))           ; => single-float
+(array-element-type #d(1 2 3))             ; => DOUBLE-FLOAT
+(array-element-type #f(1.0 2.0))           ; => SINGLE-FLOAT
 (print #d((1.0 2.0) (3.0 4.0)))            ; #d((1.0 2.0) (3.0 4.0))
 (coerce #d(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
 (let ((v (make-array 3 :element-type 'single-float :initial-element 0.0)))

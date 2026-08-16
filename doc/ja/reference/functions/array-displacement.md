@@ -8,6 +8,6 @@
 (defparameter *base* (make-array 5 :initial-element 0))
 (defparameter *view* (make-array 2 :displaced-to *base* :displaced-index-offset 3))
 (multiple-value-bind (target offset) (array-displacement *view*)
-  (list (eq target *base*) offset)) ; => (t 3)
+  (list (eq target *base*) offset)) ; => (T 3)
 (array-displacement *base*) ; => NIL
 ```

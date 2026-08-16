@@ -9,5 +9,5 @@
 ```
 
 ```lisp
-(nth-value 0 (values 'a 'b)) ; => a
+(nth-value 0 (values 'a 'b)) ; => A
 ```

@@ -7,7 +7,7 @@
 ```lisp
 (define-condition my-parse-error (error)
   ((input :initarg :input :reader my-parse-error-input))
-  (:report "input did not parse")) ; => my-parse-error
+  (:report "input did not parse")) ; => MY-PARSE-ERROR
 ```
 
 レポートは `princ`/`~A` が出力するもので、`prin1`/`~S` は引き続きインスタンスを表示します:

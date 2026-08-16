@@ -15,13 +15,13 @@ rontolisp has a small namespace (package) system with a set of built-in packages
 A symbol can be referenced with a package qualifier: `package:symbol` (e.g. `cl:car`, `rontolisp:version`) reaches the package's external (exported) symbols, and `package::symbol` reaches any of its symbols, internal ones included — the same single/double colon distinction as Common Lisp (see [External and internal symbols](#external-and-internal-symbols)). `*package*` holds the current package — as the package keyword `find-package` answers, so `(eq *package* (find-package ...))` holds — and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`). Like Common Lisp's, `*package*` is a dynamic variable read when a form runs: a function reads the package current at call time, `(let ((*package* ...)) ...)` binds it for the extent, `with-standard-io-syntax` binds it to `cl-user`, and `setq` assigns it. The standard Common Lisp names `common-lisp` and `common-lisp-user` are built-in **nicknames** for `cl` and `cl-user`, so portable `(:use #:common-lisp)` clauses and `common-lisp:car` references resolve; the shorthands `rl` and `la` are built-in nicknames for `rontolisp` and `linalg`, and `quicklisp` for `ql`. User packages can register their own nicknames with the `defpackage` `:nicknames` clause.
 
 ```lisp
-(print *package*)              ; => :cl-user
-(print (rontolisp:version))    ; => (:version "0.1.0-SNAPSHOT" :build-timestamp "..." :git-commit "..." :git-branch "...")
+(print *package*)              ; => :CL-USER
+(print (rontolisp:version))    ; the build's own version plist
 (print (gethash "n" (rl:json-parse "{\"n\": 41}")))  ; => 41
 (print (la:to-list (la:from-list '(1 2 3))))        ; => (1.0 2.0 3.0)
 ```
 
-`rontolisp:version` returns the same information as `rontolisp --version`, as a property list.
+[`rontolisp:version`](functions/rontolisp-version.md) returns the same information as `rontolisp --version`, as a property list `(:version "0.1.0-SNAPSHOT" :build-timestamp "..." :git-commit "..." :git-branch "...")`. Its timestamp and revision are whatever the running build was made from, so no fixed result is shown for it here.
 
 Because the `rontolisp` package does not use `cl`, standard symbols must be qualified with `cl:` inside it, while `version` (which it owns) is available unqualified:
 
@@ -132,11 +132,11 @@ another form (not top-level) is an error.
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
+; => (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
 (print (rontolisp:list-special-forms))
 ; => (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
 (print (length (rontolisp:list-functions)))
-; => 367
+; => 412
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (SQUARE)

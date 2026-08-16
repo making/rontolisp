@@ -15,7 +15,7 @@
 ASDF/UIOP 側の綴りです。
 
 ```lisp
-(merge-pathnames "zoneinfo/" "/opt/local-time/")   ; => "/opt/local-time/zoneinfo/"
+(merge-pathnames "zoneinfo/" "/opt/local-time/")   ; => #P"/opt/local-time/zoneinfo/"
 ```
 
 ## バックエンドサポート

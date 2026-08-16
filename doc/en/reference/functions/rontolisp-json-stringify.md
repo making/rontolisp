@@ -54,7 +54,7 @@ object), a list or vector (an array), or another instance:
 ```
 
 ```lisp
-(rontolisp:json-stringify :key)   ; => "\"key\""
+(rontolisp:json-stringify :key)   ; => "\"KEY\""
 (rontolisp:json-stringify 3/2)   ; => "1.5"
 (rontolisp:json-stringify "a\"b")   ; => "\"a\\\"b\""
 ```

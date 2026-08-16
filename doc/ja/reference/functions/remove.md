@@ -13,5 +13,5 @@
 ```
 
 ```lisp
-(remove 1 '((1 a) (2 b) (1 c)) :key #'car) ; => ((2 b))
+(remove 1 '((1 a) (2 b) (1 c)) :key #'car) ; => ((2 B))
 ```

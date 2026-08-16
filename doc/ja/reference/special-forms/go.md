@@ -14,5 +14,5 @@ JVM / WASM コンパイラでの `go` は字句的です: 字句的に囲む `ta
     (push :never acc)
    skip
     (push :b acc))
-  (nreverse acc)) ; => (:a :b)
+  (nreverse acc)) ; => (:A :B)
 ```

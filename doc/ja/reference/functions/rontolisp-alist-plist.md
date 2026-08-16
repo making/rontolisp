@@ -8,7 +8,7 @@
 alexandria に切り替えられます。
 
 ```lisp
-(rontolisp:alist-plist '((:a . 1) (:b . 2)))   ; => (:a 1 :b 2)
+(rontolisp:alist-plist '((:a . 1) (:b . 2)))   ; => (:A 1 :B 2)
 ```
 
 [`rontolisp:hash-table-plist`](rontolisp-hash-table-plist.md) と違い間に

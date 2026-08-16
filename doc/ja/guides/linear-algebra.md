@@ -79,7 +79,7 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 ```lisp
 (linalg:seed 42)         ; => 42
 (linalg:choice 60000 4)  ; => #d(26833.0 11120.0 29256.0 22347.0)
-(linalg:permutation 5)   ; => #d(3.0 4.0 0.0 2.0 1.0)
+(linalg:permutation 5)   ; => #d(0.0 4.0 2.0 3.0 1.0)
 ```
 
 ## 離散微積分
@@ -106,7 +106,7 @@ linalg はデフォルトで `double-float` で計算しますが、**幅多相 
 (linalg:from-list '((1 2) (3 4)) 'single-float)  ; => #f((1.0 2.0) (3.0 4.0))
 (linalg:add (linalg:from-list '(1 2 3) 'single-float) 10) ; => #f(11.0 12.0 13.0)
 (array-element-type
-  (linalg:transpose (linalg:eye 2 'single-float)))        ; => single-float
+  (linalg:transpose (linalg:eye 2 'single-float)))        ; => SINGLE-FLOAT
 ```
 
 ## SIMD アクセラレーション

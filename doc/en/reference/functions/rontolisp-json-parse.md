@@ -34,7 +34,7 @@ rontolisp.
 | `null` | the symbol `null` |
 
 ```lisp
-(rontolisp:json-parse "[1, 2.5, \"x\", false, null]")   ; => #(1 2.5 "x" nil null)
+(rontolisp:json-parse "[1, 2.5, \"x\", false, null]")   ; => #(1 2.5 "x" NIL NULL)
 (rontolisp:json-parse "1e3")   ; => 1000.0
 (rontolisp:json-parse "\"a\\u3042b\"")   ; => "aあb"
 ```

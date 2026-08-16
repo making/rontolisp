@@ -29,7 +29,7 @@
 [`merge-pathnames`](merge-pathnames.md) を使ってください。
 
 ```lisp
-(make-pathname :name "20260101.down" :defaults "db/20260101.up.sql")   ; => "db/20260101.down.sql"
+(make-pathname :name "20260101.down" :defaults "db/20260101.up.sql")   ; => #P"db/20260101.down.sql"
 ```
 
 ## バックエンドサポート

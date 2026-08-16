@@ -23,9 +23,19 @@ the index table to its page.
 **Code-fence conventions** (parsed by `DocExamplesTest` and the docgen
 `RunnableBlockTransformer`):
 - ` ```lisp ` = a runnable, self-contained example (becomes a "Run" cell). It is
-  executed by `DocExamplesTest` and must not throw. Annotate the final form with
+  executed by `DocExamplesTest` and must not throw. Annotate a form with
   `; => value` (prin1 form) to show + assert its result; or follow the block with
   a plain ` ``` ` output block to assert stdout (use this for printing examples).
+  **Every** `; =>` is asserted, on every page of every language tree, not only
+  the block's last one: the test splits a block into its top-level forms and
+  checks each form's own annotation -- written after the form on its line, or on
+  the comment line just below it (how a long result is written). An annotation
+  therefore belongs to a TOP-LEVEL form; one written inside a form (on an inner
+  `print`, say) is checked against the whole form's value and will not match.
+  A result that is not reproducible -- a build timestamp, a live server's
+  response headers, an unseeded `random` -- must not be an arrow at all: reshape
+  the example so its value is stable (`(getf res :status)`, a seeded generator),
+  leave the line an ordinary comment, or move the block to ` ```console `.
 - ` ```console ` = a static transcript or an example that needs stdin/files/network
   or that signals (`read`, `open`, `load`, `with-open-file`, `error`,
   `rontolisp:fetch`). Not executed.
@@ -41,9 +51,11 @@ trees must stay structurally identical -- same file set, same heading layout, an
 **byte-identical fenced code blocks** (`lisp`/`console`/`bash` and their `; =>`
 annotations / output blocks); only prose, headings, link text, `nav.yaml`
 `title:`/`lang_name:`, and `_catalog.yaml` category `title:`s are translated
-(slugs and operator `name:`s stay identical). Note `DocExamplesTest` only
-executes `doc/en` examples, so a broken `doc/ja` code block will NOT be caught by
-the build -- this is why ja code fences must be copied verbatim from en.
+(slugs and operator `name:`s stay identical). `DocExamplesTest` executes EVERY
+language tree (`DOC_ROOTS`), so a broken or stale `doc/ja` block fails the build
+on its own -- it was `doc/en`-only until 2026-08-16, and the ja tree had by then
+accumulated ~60 pages of hand-written results the interpreter never answered
+(lowercased symbols, a `list-functions` listing several releases old).
 
 **Heading ANCHORS are the reference language's, in every tree (2026-08-12).** A
 translated heading keeps its translated TEXT and takes en's `id`: `DocGen`
@@ -70,7 +82,7 @@ examples, normalize the shown results to the real interpreter values and catch
 any non-runnable example:
 
 ```bash
-./mvnw -Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixDetailResults test  # rewrite ; => / output of detail pages
+./mvnw -Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixShownResults test   # rewrite every page's ; => / output blocks, both trees
 ./mvnw -Dtest=DocExamplesTest test                                            # verify every example runs + matches
 ```
 

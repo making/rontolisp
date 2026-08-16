@@ -57,7 +57,7 @@
 (defmethod describe-point ((p point)) (list :x (px p)))
 (defmethod describe-point ((p point3d)) (append (call-next-method) (list :z (pz p))))
 (defmethod describe-point :around ((p point)) (list :point (call-next-method)))
-(describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:point (:x 1 :z 3))
+(describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:POINT (:X 1 :Z 3))
 ```
 
 ライトサブセット: `&key` はエラー、標準メソッド結合はクラスメソッドとデフォルトメソッドについてサポートされます（`eql` や組み込み型の specializer を持つ `:around`/`:before`/`:after` は、同じ specializer の基本メソッドとデフォルトメソッドのみと結合します）。コンパイルパスでは `defmethod` はトップレベルフォームとしてのみサポートされ、コンパイルされたプログラムのメソッド集合はコンパイル時に固定されます。

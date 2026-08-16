@@ -14,7 +14,7 @@
 ```
 
 ```lisp
-(symbol-value :key) ; => :key
+(symbol-value :key) ; => :KEY
 ```
 
 未束縛の変数はエラーを通知します:

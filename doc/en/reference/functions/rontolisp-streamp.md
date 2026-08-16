@@ -7,7 +7,7 @@ Returns `t` if `value` is an *asynchronous* stream — as returned by
 [`rontolisp:fetch`](rontolisp-fetch.md) response body — and `nil` otherwise.
 
 ```lisp
-(rontolisp:streamp (rontolisp:make-stream))   ; => t
+(rontolisp:streamp (rontolisp:make-stream))   ; => T
 (rontolisp:streamp 42)                        ; => NIL
 ```
 

@@ -9,7 +9,7 @@
 alexandria に切り替えられます。
 
 ```lisp
-(rontolisp:plist-alist '(:a 1 :b 2))   ; => ((:a . 1) (:b . 2))
+(rontolisp:plist-alist '(:a 1 :b 2))   ; => ((:A . 1) (:B . 2))
 ```
 
 [`rontolisp:plist-hash-table`](rontolisp-plist-hash-table.md) と違い間に
@@ -17,7 +17,7 @@ alexandria に切り替えられます。
 決定的)であり、重複キーもまとめられずに残ります:
 
 ```lisp
-(rontolisp:plist-alist '(:a 1 :a 9))   ; => ((:a . 1) (:a . 9))
+(rontolisp:plist-alist '(:a 1 :a 9))   ; => ((:A . 1) (:A . 9))
 ```
 
 ## バックエンドサポート

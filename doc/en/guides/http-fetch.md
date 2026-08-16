@@ -51,11 +51,10 @@ decoded string with
 Reading the individual fields:
 
 ```lisp
-(let ((res (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get"))))
-  (print (getf res :status))    ; => 200
-  (print (rontolisp:await (rontolisp:read-all (getf res :body))))
-                                ; => "{...}"
-  (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
+(defparameter *res* (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get")))
+(getf *res* :status)                                                  ; => 200
+(stringp (rontolisp:await (rontolisp:read-all (getf *res* :body))))   ; => T
+(cdr (assoc "content-type" (getf *res* :headers) :test #'string=))    ; => "application/json"
 ```
 
 Because the request is already running when `fetch` returns, several requests
@@ -107,7 +106,7 @@ table with string keys, an array a vector, and `true`/`false`/`null` become
 ```
 
 ```lisp
-(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 t null)
+(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 T NULL)
 ```
 
 `rontolisp:json-stringify` is the inverse: a hash table becomes an object, a

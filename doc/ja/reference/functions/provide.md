@@ -7,12 +7,12 @@
 バックエンドの分担は `require` と同じです: インタプリタでは通常のランタイム関数、JVM/WASM のコンパイルパスではリテラルなトップレベルのコンパイル時ディレクティブです (ネストした、あるいは計算された `provide` はコンパイルエラー)。Common Lisp の `*modules*` 変数は利用できません。
 
 ```lisp
-(provide :my-module) ; => my-module
+(provide :my-module) ; => MY-MODULE
 ```
 
 ```lisp
 (provide :my-module)
-(require :my-module) ; => my-module
+(require :my-module) ; => MY-MODULE
 ```
 
 この `require` はモジュールが同じプログラム内ですでに provide 済みのため即座に戻ります — `my-module.lisp` というファイルは探されません。

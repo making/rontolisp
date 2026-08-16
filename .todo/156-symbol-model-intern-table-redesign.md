@@ -224,7 +224,7 @@ converge over several `run → autoflip → rerun` rounds (scratch `autoflip2.py
   section shrinks — a plus); update `reference/functions/{symbol-name,string,
   read,read-from-string,find-symbol,intern}.md` + the `functions.md` table row;
   fix the pre-existing `defpackage.md` en/ja `UTIL`/`util` mismatch. Run
-  `-Drontolisp.doc.fix=true DocExamplesTest#fixDetailResults` (AFTER editing fence
+  `-Drontolisp.doc.fix=true DocExamplesTest#fixShownResults` (AFTER editing fence
   ARGS for find-symbol/intern), then `DocExamplesTest`.
 - `.kb`: rewrite `reader-case-upcase.md` for the new model; update
   `symbol-runtime-api.md`, `core-representation.md`. Close `.todo/155` item 1 here.
@@ -391,8 +391,8 @@ REMAINING FAILURES (~11 classes, ~30, ALL are test-EXPECTATION case updates — 
 - `autoflip2.py` + `flipall.sh` — line-anchored pure-case-flip for simple `expected/actual`;
   `flipall.sh` SKIPS DocExamplesTest (it corrupts it, see gotcha).
 - `fliploop.sh <FQCN> <src> <rounds>` — run→flip→rerun loop for one class.
-- `sync_doc_ja.py` — run AFTER `-Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixDetailResults test`
-  (which only rewrites doc/en) to mirror the same result-line changes into doc/ja.
+- `sync_doc_ja.py` — obsolete since the doc-fix helper (`DocExamplesTest#fixShownResults`)
+  rewrites every language tree itself.
 - `isequal_replace.py`/`formflip.py`/`globalflip.py` — earlier iterations; repl2 supersedes.
 
 ### GOTCHAS (learned the hard way)
@@ -401,8 +401,9 @@ REMAINING FAILURES (~11 classes, ~30, ALL are test-EXPECTATION case updates — 
 - autoflip flips a Java identifier `block`→`BLOCK` in DocExamplesTest.java (its examples are
   .md, not .java) → breaks test-compile. Keep DocExamplesTest OUT of any autoflip; fix its
   results only via `-Drontolisp.doc.fix=true` then `sync_doc_ja.py`.
-- doc-fix (`DocExamplesTest#fixDetailResults`) only walks `doc/en` (DOC_ROOT). Always run
-  `sync_doc_ja.py` after to keep en/ja code-fences byte-identical.
+- doc-fix (`DocExamplesTest#fixShownResults`) walks every language tree, so `sync_doc_ja.py`
+  is no longer needed to keep en/ja shown results in step (it did only walk `doc/en` before
+  2026-08-16).
 - `spring-javaformat:apply` re-wraps long escaped-string test expecteds; harmless.
 
 ### To finish + verify

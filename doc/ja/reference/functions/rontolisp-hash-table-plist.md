@@ -7,7 +7,7 @@
 `alexandria:hash-table-plist` の軽量なサブセットです。
 
 ```lisp
-(rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1)))   ; => (:a 1)
+(rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1)))   ; => (:A 1)
 ```
 
 ペアの順序はテーブルの反復順序に従う(`maphash` と同様にバックエンド依存)

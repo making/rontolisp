@@ -52,7 +52,7 @@
 `#<FUTURE>` と印字されます:
 
 ```lisp
-(rontolisp:futurep (add-later 1 2))   ; => t
+(rontolisp:futurep (add-later 1 2))   ; => T
 ```
 
 future は本体の最後のフォームの値で確定するか、本体がシグナルしたエラーで
@@ -151,7 +151,7 @@ rontolisp:await is only allowed inside rontolisp:async-defun/async-lambda or at 
 ```lisp
 (rontolisp:async-defun boom () (error "nope"))
 (rontolisp:await
-  (rontolisp:catch (boom) (lambda (c) (declare (ignore c)) :fallback)))   ; => :fallback
+  (rontolisp:catch (boom) (lambda (c) (declare (ignore c)) :fallback)))   ; => :FALLBACK
 ```
 
 - [`rontolisp:finally`](../reference/functions/rontolisp-finally.md) は引数なしの
@@ -164,7 +164,7 @@ rontolisp:await is only allowed inside rontolisp:async-defun/async-lambda or at 
 (let ((v (rontolisp:await
            (rontolisp:finally (make-value)
                               (lambda () (push :done *cleanup-log*))))))
-  (list v (reverse *cleanup-log*)))   ; => (5 (:done))
+  (list v (reverse *cleanup-log*)))   ; => (5 (:DONE))
 ```
 
 四つのいずれも、第1引数が future でない場合は `type-error` です — JavaScript 風の

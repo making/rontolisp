@@ -6,5 +6,5 @@ Lite: `t` for any stream handle (every rontolisp stream answers both directions)
 
 ```lisp
 (with-output-to-string (s)
-  (princ (output-stream-p s))) ; => ""
+  (princ (output-stream-p s) s)) ; => "T"
 ```

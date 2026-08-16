@@ -6,9 +6,9 @@
 
 ```lisp
 (setf (get 'my-sym 'color) :red)
-(get 'my-sym 'color) ; => :red
+(get 'my-sym 'color) ; => :RED
 ```
 
 ```lisp
-(get 'my-sym 'absent :fallback) ; => :fallback
+(get 'my-sym 'absent :fallback) ; => :FALLBACK
 ```

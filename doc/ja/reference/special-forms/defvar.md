@@ -7,7 +7,7 @@
 `defvar` は `name` を **スペシャル** としても宣言します。以降の [`let`](let.md)/`let*` によるその名前の束縛は、レキシカルではなくダイナミック束縛(そのエクステント内で呼ばれた関数からも見え、脱出時に復元される)になります。[`let`](let.md) と [`progv`](progv.md) を参照してください。
 
 ```lisp
-(defvar *counter* 0) ; => *counter*
+(defvar *counter* 0) ; => *COUNTER*
 ```
 
 ```lisp

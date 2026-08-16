@@ -9,7 +9,7 @@
   (when (= n 0)
     (return-from classify :zero))
   (* n 10))
-(classify 0) ; => :zero
+(classify 0) ; => :ZERO
 ```
 
 ```lisp

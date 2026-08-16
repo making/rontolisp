@@ -8,6 +8,6 @@
 (defparameter *v* (make-array 2 :fill-pointer 0))
 (vector-push 10 *v*) ; => 0
 (vector-push 20 *v*) ; => 1
-(vector-push 30 *v*) ; => nil
+(vector-push 30 *v*) ; => NIL
 *v* ; => #(10 20)
 ```

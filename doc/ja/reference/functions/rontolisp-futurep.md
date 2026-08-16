@@ -9,7 +9,7 @@
 
 ```lisp
 (rontolisp:async-defun f () 1)
-(rontolisp:futurep (f))    ; => t
+(rontolisp:futurep (f))    ; => T
 (rontolisp:futurep 42)     ; => NIL
 ```
 

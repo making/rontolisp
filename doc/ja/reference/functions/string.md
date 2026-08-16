@@ -7,7 +7,7 @@
 コンパイル系バックエンド (JVM/WASM) では `string` は `princ-to-string` の仕組みを共有するため、指定子でない引数はエラーを通知せず、その表示テキストを返します (インタプリタはエラーを通知します)。
 
 ```lisp
-(string 'foo) ; => "foo"
+(string 'foo) ; => "FOO"
 ```
 
 ```lisp

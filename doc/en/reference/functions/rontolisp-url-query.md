@@ -11,7 +11,7 @@ before it. The result is not decoded — pass it to
 
 ```lisp
 (rontolisp:url-query "/get?a=1&b=2")   ; => "a=1&b=2"
-(rontolisp:url-query "/get")   ; => nil
+(rontolisp:url-query "/get")   ; => NIL
 (rontolisp:query-param (rontolisp:url-query "https://example.com/s?q=lisp") "q")   ; => "lisp"
 ```
 

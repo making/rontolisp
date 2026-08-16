@@ -198,7 +198,7 @@ and `docs-tool` is not in the root reactor, so run
 After editing examples, normalize results and catch non-runnable examples:
 
 ```bash
-./mvnw -Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixDetailResults test  # rewrite ; => / output of detail pages
+./mvnw -Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixShownResults test   # rewrite every page's ; => / output blocks (en + ja)
 ./mvnw -Dtest=DocExamplesTest test                                            # verify every example runs + matches
 ```
 

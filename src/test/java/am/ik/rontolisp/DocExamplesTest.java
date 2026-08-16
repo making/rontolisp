@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import com.sun.net.httpserver.HttpServer;
@@ -30,7 +31,7 @@ import static org.assertj.core.api.Assertions.fail;
 
 /**
  * Verifies the runnable Lisp examples in the documentation site sources under
- * {@code doc/en}. This replaces the former {@code ReadmeExamplesTest}: instead of
+ * {@code doc/<lang>}. This replaces the former {@code ReadmeExamplesTest}: instead of
  * hard-coded snippets mirroring the README, it parses every Markdown page and exercises
  * the examples that actually ship on the site.
  *
@@ -42,10 +43,13 @@ import static org.assertj.core.api.Assertions.fail;
  * <li>When a <code>```lisp</code> block is immediately followed by a plain
  * (no-info-string, {@code text} or {@code output}) fenced block, that block is the
  * program's expected standard output, which is asserted exactly.</li>
- * <li>On the per-function reference pages ({@code reference/functions/}) a final form
- * annotated with <code>; =&gt; value</code> has its printed value asserted.</li>
+ * <li>A form annotated with <code>; =&gt; value</code> -- trailing on its own line, or on
+ * the comment line just below it -- has its printed value asserted. This holds on EVERY
+ * page, guide and reference alike: a shown result no test re-measures is a number that
+ * drifts.</li>
  * <li>REPL transcripts (<code>```console</code>) and shell blocks (<code>```bash</code>)
- * are static and not executed.</li>
+ * are static and not executed, and are where an example that cannot run headless (stdin,
+ * files, a form that signals) belongs.</li>
  * </ul>
  *
  * <p>
@@ -55,32 +59,45 @@ import static org.assertj.core.api.Assertions.fail;
  * {@code CiSpecE2eTest} and {@code ci-spec.yaml}.
  *
  * <p>
- * Run with {@code -Drontolisp.doc.fix=true} to instead rewrite the function pages' shown
- * results ({@code ; => ...} annotations and stdout output blocks) to the actual evaluated
- * values -- a maintenance helper that keeps the shown results exact. The normal
- * verification factory is disabled in that mode.
+ * Run with {@code -Drontolisp.doc.fix=true} to instead rewrite the shown results
+ * ({@code ; => ...} annotations and stdout output blocks) of every page in every language
+ * tree to the actual evaluated values -- a maintenance helper that keeps the shown
+ * results exact. The normal verification factory is disabled in that mode.
  */
 class DocExamplesTest {
 
-	private static final Path DOC_ROOT = Path.of("doc", "en");
+	// Both language trees are verified: the pages are the same file set with the same
+	// code fences (only prose is translated), so a result that drifts drifts in both.
+	private static final List<Path> DOC_ROOTS = List.of(Path.of("doc", "en"), Path.of("doc", "ja"));
 
 	private static final String ARROW = "; =>";
 
 	// The rontolisp:fetch examples document a public URL (e.g.
-	// https://httpbin.ik.am/get),
-	// but the test must not reach the network: it serves the requests from a local JDK
-	// HttpServer and rewrites the URL in the example to point at it before evaluating.
-	// The
-	// documented URL is intentionally left as-is on the page -- this is the one place the
-	// executed example diverges from what the page shows.
+	// https://httpbin.ik.am/get), but the test must not reach the network: it serves the
+	// requests from a local JDK HttpServer and rewrites the URL's ORIGIN (scheme + host)
+	// in the example to point at it before evaluating. Only the origin is replaced, so
+	// the path still reaches the stub -- an example whose shown result depends on which
+	// endpoint it asked for (httpbin's /status/NNN) stays exact. The documented origin is
+	// intentionally left as-is on the page -- this is the one place the executed example
+	// diverges from what the page shows.
 	private static @Nullable HttpServer fetchServer;
 
-	private static synchronized String localFetchUrl() {
+	private static final Pattern STATUS_PATH = Pattern.compile("/status/(\\d{3})");
+
+	private static synchronized String localFetchOrigin() {
 		HttpServer server = fetchServer;
 		if (server == null) {
 			try {
 				server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 				server.createContext("/", exchange -> {
+					// httpbin's /status/NNN answers with that status and no body;
+					// everything else answers a small JSON document.
+					Matcher status = STATUS_PATH.matcher(exchange.getRequestURI().getPath());
+					if (status.matches()) {
+						exchange.sendResponseHeaders(Integer.parseInt(status.group(1)), -1);
+						exchange.close();
+						return;
+					}
 					byte[] body = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
 					exchange.getResponseHeaders().add("Content-Type", "application/json");
 					exchange.sendResponseHeaders(200, body.length);
@@ -95,7 +112,7 @@ class DocExamplesTest {
 				throw new UncheckedIOException(ex);
 			}
 		}
-		return "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+		return "http://127.0.0.1:" + server.getAddress().getPort();
 	}
 
 	@AfterAll
@@ -107,35 +124,38 @@ class DocExamplesTest {
 	}
 
 	/**
-	 * If an example uses {@code rontolisp:fetch}, rewrites the http(s) URL string
-	 * literals to the local test server so evaluation stays offline; otherwise returns
-	 * the source unchanged.
+	 * If an example uses {@code rontolisp:fetch}, rewrites the origin of its http(s) URL
+	 * string literals to the local test server (keeping the path) so evaluation stays
+	 * offline; otherwise returns the source unchanged.
 	 */
 	private static String rewriteFetchUrls(String source) {
 		if (!source.contains("rontolisp:fetch")) {
 			return source;
 		}
-		return source.replaceAll("\"https?://[^\"]*\"", Matcher.quoteReplacement("\"" + localFetchUrl() + "\""));
+		return source.replaceAll("(?<=\")https?://[^\"/]*", Matcher.quoteReplacement(localFetchOrigin()));
 	}
 
 	@TestFactory
 	@DisabledIfSystemProperty(named = "rontolisp.doc.fix", matches = "true")
 	Stream<DynamicTest> documentationExamples() throws IOException {
-		assertThat(Files.isDirectory(DOC_ROOT)).as("documentation source directory %s exists", DOC_ROOT).isTrue();
-		try (Stream<Path> paths = Files.walk(DOC_ROOT)) {
-			List<Path> markdownFiles = paths.filter(p -> p.toString().endsWith(".md")).sorted().toList();
-			assertThat(markdownFiles).as("at least one Markdown page is present").isNotEmpty();
-			return markdownFiles.stream()
-				.map(md -> DynamicTest.dynamicTest(DOC_ROOT.relativize(md).toString(), () -> checkPage(md)))
-				.toList()
-				.stream();
+		List<DynamicTest> tests = new ArrayList<>();
+		for (Path root : DOC_ROOTS) {
+			assertThat(Files.isDirectory(root)).as("documentation source directory %s exists", root).isTrue();
+			for (Path md : markdownPages(root)) {
+				tests.add(DynamicTest.dynamicTest(root.getFileName() + "/" + root.relativize(md), () -> checkPage(md)));
+			}
+		}
+		assertThat(tests).as("at least one Markdown page is present").isNotEmpty();
+		return tests.stream();
+	}
+
+	private static List<Path> markdownPages(Path root) throws IOException {
+		try (Stream<Path> paths = Files.walk(root)) {
+			return paths.filter(p -> p.toString().endsWith(".md")).sorted().toList();
 		}
 	}
 
 	private void checkPage(Path markdown) throws IOException {
-		// A per-operator detail page lives in a directory with a _catalog.yaml; on
-		// those pages a final form's `; => value` annotation is asserted.
-		boolean detailPage = Files.exists(markdown.resolveSibling("_catalog.yaml"));
 		List<Block> blocks = parseFencedBlocks(Files.readString(markdown, StandardCharsets.UTF_8));
 
 		ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -147,14 +167,21 @@ class DocExamplesTest {
 				continue;
 			}
 			buffer.reset();
-			LispVal last = LispNil.INSTANCE;
-			try {
-				for (LispVal expr : LispReader.readAllFromString(rewriteFetchUrls(block.content()))) {
-					last = evaluator.eval(expr);
+			for (List<String> form : splitForms(block.content())) {
+				String source = String.join("\n", form);
+				LispVal last = LispNil.INSTANCE;
+				try {
+					for (LispVal expr : LispReader.readAllFromString(rewriteFetchUrls(source))) {
+						last = evaluator.eval(expr);
+					}
 				}
-			}
-			catch (RuntimeException ex) {
-				fail("Example in %s failed to evaluate:%n%s%n-> %s".formatted(markdown, block.content(), ex), ex);
+				catch (RuntimeException ex) {
+					fail("Example in %s failed to evaluate:%n%s%n-> %s".formatted(markdown, source, ex), ex);
+				}
+				String annotation = lastArrowAnnotation(source);
+				if (!annotation.isEmpty()) {
+					assertThat(last.print()).as("`; =>` result in %s:%n%s", markdown, source).isEqualTo(annotation);
+				}
 			}
 			String actual = buffer.toString(StandardCharsets.UTF_8).strip();
 
@@ -163,36 +190,21 @@ class DocExamplesTest {
 				assertThat(actual).as("output of example in %s:%n%s", markdown, block.content())
 					.isEqualTo(expected.content().strip());
 			}
-			else if (detailPage) {
-				String annotation = lastArrowAnnotation(block.content());
-				if (!annotation.isEmpty()) {
-					assertThat(last.print()).as("`; =>` result of example in %s:%n%s", markdown, block.content())
-						.isEqualTo(annotation);
-				}
-			}
 		}
 	}
 
 	/**
-	 * Maintenance helper: rewrites the per-function pages so the shown results exactly
-	 * match the interpreter. Enabled only with {@code -Drontolisp.doc.fix=true}.
+	 * Maintenance helper: rewrites every documentation page in every language tree so the
+	 * shown results exactly match the interpreter. Enabled only with
+	 * {@code -Drontolisp.doc.fix=true}.
 	 */
 	@Test
 	@EnabledIfSystemProperty(named = "rontolisp.doc.fix", matches = "true")
-	void fixDetailResults() throws IOException {
+	void fixShownResults() throws IOException {
 		List<String> failures = new ArrayList<>();
 		List<Path> pages = new ArrayList<>();
-		// Every directory that holds a _catalog.yaml is a detail-page directory.
-		try (Stream<Path> paths = Files.walk(DOC_ROOT)) {
-			List<Path> catalogDirs = paths.filter(p -> p.getFileName().toString().equals("_catalog.yaml"))
-				.map(Path::getParent)
-				.sorted()
-				.toList();
-			for (Path dir : catalogDirs) {
-				try (Stream<Path> mds = Files.list(dir)) {
-					mds.filter(p -> p.toString().endsWith(".md")).sorted().forEach(pages::add);
-				}
-			}
+		for (Path root : DOC_ROOTS) {
+			pages.addAll(markdownPages(root));
 		}
 		int fixed = 0;
 		for (Path page : pages) {
@@ -205,7 +217,7 @@ class DocExamplesTest {
 				failures.add(ex.getMessage());
 			}
 		}
-		System.out.println("Fixed shown results in " + fixed + " detail pages");
+		System.out.println("Fixed shown results in " + fixed + " pages");
 		if (!failures.isEmpty()) {
 			fail("Non-runnable examples (%d):%n%s".formatted(failures.size(), String.join("\n---\n", failures)));
 		}
@@ -234,23 +246,24 @@ class DocExamplesTest {
 
 				if (info.equals("lisp")) {
 					buffer.reset();
-					LispVal last = LispNil.INSTANCE;
-					try {
-						// Evaluate with fetch URLs rewritten to the local server, but
-						// keep
-						// `content` (the page source) unchanged so the fix helper
-						// rewrites
-						// only the shown result, not the documented URL.
-						for (LispVal expr : LispReader
-							.readAllFromString(rewriteFetchUrls(String.join("\n", content)))) {
-							last = evaluator.eval(expr);
+					List<String> rewritten = new ArrayList<>();
+					for (List<String> form : splitForms(String.join("\n", content))) {
+						String source = String.join("\n", form);
+						LispVal last = LispNil.INSTANCE;
+						try {
+							// Evaluate with fetch URLs rewritten to the local server, but
+							// keep the page source unchanged so the fix helper rewrites
+							// only the shown result, not the documented URL.
+							for (LispVal expr : LispReader.readAllFromString(rewriteFetchUrls(source))) {
+								last = evaluator.eval(expr);
+							}
 						}
+						catch (RuntimeException ex) {
+							throw new IllegalStateException("Example in " + page + " failed:\n" + source, ex);
+						}
+						rewritten.addAll(rewriteArrow(form, last.print()));
 					}
-					catch (RuntimeException ex) {
-						throw new IllegalStateException(
-								"Example in " + page + " failed:\n" + String.join("\n", content), ex);
-					}
-					content = rewriteArrow(content, last.print());
+					content = rewritten;
 					pendingStdout = buffer.toString(StandardCharsets.UTF_8).strip();
 				}
 				else if (isOutputInfo(info) && pendingStdout != null) {
@@ -283,6 +296,51 @@ class DocExamplesTest {
 			out.setLength(out.length() - 1);
 		}
 		return out.toString();
+	}
+
+	/**
+	 * Splits a <code>```lisp</code> block into one group of lines per top-level form, so
+	 * every form's own {@code ; =>} annotation can be checked (and rewritten) against
+	 * that form's value rather than only the block's last one.
+	 *
+	 * <p>
+	 * A group grows until the accumulated text reads as at least one complete form, then
+	 * keeps absorbing the comment and blank lines that follow it -- the annotation of a
+	 * long result is written on the line below its form, and it belongs to that form.
+	 * Reading is side-effect free, so re-reading the growing prefix is safe.
+	 */
+	static List<List<String>> splitForms(String content) {
+		List<List<String>> forms = new ArrayList<>();
+		List<String> current = new ArrayList<>();
+		boolean complete = false;
+		for (String line : content.split("\n", -1)) {
+			if (complete && !isCommentOrBlank(line)) {
+				forms.add(current);
+				current = new ArrayList<>();
+				complete = false;
+			}
+			current.add(line);
+			complete = complete || readsCompletely(String.join("\n", current));
+		}
+		if (current.stream().anyMatch(line -> !isCommentOrBlank(line))) {
+			forms.add(current);
+		}
+		return forms;
+	}
+
+	private static boolean isCommentOrBlank(String line) {
+		String stripped = line.strip();
+		return stripped.isEmpty() || stripped.startsWith(";");
+	}
+
+	/** Whether {@code source} reads as at least one complete form. */
+	private static boolean readsCompletely(String source) {
+		try {
+			return !LispReader.readAllFromString(source).isEmpty();
+		}
+		catch (RuntimeException ex) {
+			return false;
+		}
 	}
 
 	/** Replaces the text after the last {@code ; =>} on its line with {@code value}. */

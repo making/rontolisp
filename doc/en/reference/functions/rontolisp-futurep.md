@@ -9,7 +9,7 @@ Returns `t` if `value` is a future — as returned by calling an
 
 ```lisp
 (rontolisp:async-defun f () 1)
-(rontolisp:futurep (f))    ; => t
+(rontolisp:futurep (f))    ; => T
 (rontolisp:futurep 42)     ; => NIL
 ```
 
