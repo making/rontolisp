@@ -1987,10 +1987,22 @@ public final class LispNames {
 
 	/**
 	 * Internal two-argument primitive {@code (%signal-cond condition message)} behind
-	 * {@link #SIGNAL}: raises the condition when a {@code handler-case} handler is
-	 * established on the current thread of control, and returns nil otherwise.
+	 * {@link #SIGNAL}: raises the condition when a {@code handler-case} whose clause
+	 * types match it is established on the current thread of control, and returns nil
+	 * otherwise (CLHS 9.1.4.1: {@code signal} transfers control only to a handler that
+	 * will handle the condition).
 	 */
 	public static final String SIGNAL_COND_INTERNAL = "%SIGNAL-COND";
+
+	/**
+	 * Internal one-argument predicate defun behind {@link #SIGNAL_COND_INTERNAL} on the
+	 * compiled backends: whether any {@code handler-case} clause entry (nil cdr) of the
+	 * dynamic {@code %handler-clusters%} stack matches the condition. Injected by
+	 * {@code expandTopLevelDefinitions} when the program both signals and establishes a
+	 * {@code handler-case}; the interpreter keeps its own per-thread clause-type stack
+	 * and never resolves this name.
+	 */
+	public static final String HC_MATCH_INTERNAL = "%HC-MATCH-P";
 
 	/**
 	 * The {@code with-slots} macro: binds variables to the slots of a CLOS-subset or

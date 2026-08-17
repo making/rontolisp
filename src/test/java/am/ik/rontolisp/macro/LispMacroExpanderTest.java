@@ -86,6 +86,30 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void needsSignalClauseMatchRequiresBothASignalAndACatchingForm() {
+		// The signal-point clause match (CLHS 9.1.4.1) is needed exactly when the
+		// program both signals and establishes a handler-case/ignore-errors; either
+		// half alone keeps the historical byte-identical emission.
+		assertThat(LispMacroExpander
+			.needsSignalClauseMatch(LispReader.readAllFromString("(handler-case (f) (error (e) 1))"))).isFalse();
+		assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString("(signal 'x)"))).isFalse();
+		assertThat(LispMacroExpander.needsSignalClauseMatch(
+				LispReader.readAllFromString("(defun f () (signal 'x)) (handler-case (f) (error (e) 1))")))
+			.isTrue();
+		assertThat(
+				LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString("(ignore-errors (signal 'x))")))
+			.isTrue();
+		// A #'signal reference counts; quoted data does not (the todo-315
+		// operator-position discipline).
+		assertThat(LispMacroExpander.needsSignalClauseMatch(
+				LispReader.readAllFromString("(handler-case (funcall #'signal \"s\") (error (e) 1))")))
+			.isTrue();
+		assertThat(LispMacroExpander
+			.needsSignalClauseMatch(LispReader.readAllFromString("(handler-case (print '(signal x)) (error (e) 1))")))
+			.isFalse();
+	}
+
+	@Test
 	void applyRuntimeIsNotNeededForLiteralTargetsAndNeededForComputedOnes() {
 		java.util.Set<String> wrappers = java.util.Set.of("+", "LIST");
 		// Literal #'defun-name / 'defun-name targets compile to direct calls.

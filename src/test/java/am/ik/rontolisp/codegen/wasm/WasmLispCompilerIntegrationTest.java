@@ -15387,6 +15387,59 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehSignalFallsThroughAHandlerCaseWhoseClausesDoNotMatch() throws Exception {
+		// CLHS 9.1.4.1: signal runs the applicable handlers and, if none transfers
+		// control, returns nil. A handler-case whose clauses do not match the
+		// condition is not an applicable handler, so it must decline and the forms
+		// after the signal still run (cl-mustache's read-partial shape).
+		assertThat(compileAndRunEh("""
+				(define-condition note () ())
+				(defun boom () (signal 'note) :returned)
+				(print (handler-case (boom) (error (e) :err)))
+				(print (handler-case (progn (signal 'note) :after) (type-error (e) :te)))
+				""")).isEqualTo(":RETURNED\n:AFTER");
+	}
+
+	@Test
+	void ehAnUnmatchedSignalLeavesTheHandlerCaseArmedForALaterCondition() throws Exception {
+		assertThat(compileAndRunEh("""
+				(define-condition note () ())
+				(print (handler-case (progn (signal 'note) (error "boom")) (error (e) :err)))
+				(print (handler-case (progn (signal 'note) :after) (note (e) :caught)))
+				""")).isEqualTo(":ERR\n:CAUGHT");
+	}
+
+	@Test
+	void ehHandlerBindHandlersStillRunWhenAnUnmatchedHandlerCaseDeclines() throws Exception {
+		// Restart mode: the intervening handler-bind handler runs at the signal
+		// point and declines; the unmatched handler-case then declines too, so the
+		// form after the signal still runs.
+		assertThat(compileAndRunEh("""
+				(define-condition note () ())
+				(defvar *log* nil)
+				(print (handler-bind ((note (lambda (c) (setq *log* (cons :hb *log*)))))
+				         (handler-case (progn (signal 'note) (setq *log* (cons :after *log*)) :done)
+				           (error (e) :err))))
+				(print *log*)
+				""")).isEqualTo(":DONE\n(:AFTER :HB)");
+	}
+
+	@Test
+	void ehAnErrorStillUnwindsThroughAnUnmatchedHandlerCase() throws Exception {
+		// The decline applies to signal only: error (and cerror, here real under
+		// restart mode) must keep unwinding through a handler-case that does not
+		// match, and a restart-case arm changes nothing about the decline.
+		assertThat(compileAndRunEh("""
+				(define-condition note () ())
+				(print (handler-case
+				           (handler-case (cerror "Continue." "boom") (type-error (e) :te))
+				         (error (e) :outer)))
+				(print (handler-case (restart-case (progn (signal 'note) :after) (continue () :c))
+				         (error (e) :err)))
+				""")).isEqualTo(":OUTER\n:AFTER");
+	}
+
+	@Test
 	void ehHandlerCaseRunsUnwindProtectCleanupBeforeHandler() throws Exception {
 		assertThat(compileAndRunEh("""
 				(let ((log nil))

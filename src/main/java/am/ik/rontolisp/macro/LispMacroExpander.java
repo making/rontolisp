@@ -16817,6 +16817,12 @@ public final class LispMacroExpander {
 		boolean runtimeTypep = needsRuntimeTypep(program);
 		boolean runtimeError = needsRuntimeErrorDispatch(program);
 		boolean restartMode = usesRestartSystem(program);
+		// The signal-point clause match (CLHS 9.1.4.1): on when the program both
+		// signals and establishes a handler-case, so %signal-cond can decline a
+		// handler-case whose clauses do not match instead of aborting. Injects the
+		// %hc-match-p defun (and, outside restart mode, the %handler-clusters%
+		// defvar) below.
+		boolean signalClauseMatch = needsSignalClauseMatch(program);
 		// The condition-report gate, answered TWICE: here on the source program (a
 		// program whose only condition is the simple-error a handler-case synthesizes
 		// has no definition to splice and would take the fast path below), and again on
@@ -16825,9 +16831,10 @@ public final class LispMacroExpander {
 		closRegistry.setRoutesConditionReports(
 				conditionRoutingGate(program, closRegistry, lazyConditionMessages, dynamic, restartMode));
 		boolean symbolFunctionWrite = usesSymbolFunctionWrite(program);
-		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !metaobjectRuntime
-				&& !allocateInstanceRuntime && !compileRuntime && !makeInstanceFunction && !classSlotDefsRuntime
-				&& !symbolFunctionWrite && !readsSlots(program) && !closRegistry.routesConditionReports()
+		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !signalClauseMatch
+				&& !metaobjectRuntime && !allocateInstanceRuntime && !compileRuntime && !makeInstanceFunction
+				&& !classSlotDefsRuntime && !symbolFunctionWrite && !readsSlots(program)
+				&& !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -17092,6 +17099,15 @@ public final class LispMacroExpander {
 			}
 			out.addAll(restartRuntimeDefunForms(userDefinedNames));
 			out.addAll(0, restartRuntimeGlobalForms());
+		}
+		if (signalClauseMatch) {
+			// The signal-point clause match defun is position-independent and appended;
+			// the cluster-stack defvar it reads must run before any handler-case, so it
+			// goes FIRST -- restart mode already prepended it just above.
+			out.add(hcMatchDefun());
+			if (!restartMode) {
+				out.add(0, handlerClustersGlobalForm());
+			}
 		}
 		if (needsSlotUnboundHelper(program, out)) {
 			out.addAll(slotUnboundDefuns());
@@ -19740,9 +19756,10 @@ public final class LispMacroExpander {
 	 * Expands {@code (signal datum args...)} -- the non-fatal signaling operator, with
 	 * the same designator surface as {@link #expandError} -- into
 	 * {@code (%signal-cond condition message)}: the condition is raised when a
-	 * {@code handler-case} handler is established on the current thread of control and
-	 * falls through to nil otherwise (always nil on the WASM backends, which have no
-	 * handlers).
+	 * {@code handler-case} whose clause types match it is established on the current
+	 * thread of control and falls through to nil otherwise (CLHS 9.1.4.1; the compiled
+	 * backends match through {@code %hc-match-p} over the cluster stack, see
+	 * {@link #needsSignalClauseMatch}).
 	 * @param cons the signal expression
 	 * @return the expanded expression
 	 */
@@ -24776,19 +24793,23 @@ public final class LispMacroExpander {
 	 * is already popped when a clause body (or {@code :no-error}) runs, and a clause body
 	 * that signals is not caught by its own handler-case.
 	 * <p>
-	 * Restart mode is the gate: without a {@code handler-bind} anywhere in the program
-	 * there is no cluster stack to shadow and no {@code %run-handlers} call, so every
-	 * other program is byte-identical.
+	 * Two gates open it, and only they observe it: restart mode (without a
+	 * {@code handler-bind} anywhere there is no cluster stack to shadow and no
+	 * {@code %run-handlers} call) and the signal-point clause match
+	 * ({@link #needsSignalClauseMatch}, whose {@code %hc-match-p} reads the same stack to
+	 * let {@code %signal-cond} decline an unmatched handler-case). Every other program is
+	 * byte-identical.
 	 * @param protectedForm the handler-case's protected expression
 	 * @param clauseTypes the type specifiers of the error clauses, in order
 	 * ({@code :no-error} excluded)
 	 * @param closRegistry the class registry resolving the clause types
-	 * @param restartMode whether the program establishes the handler/restart stacks
+	 * @param pushClusters whether a consumer of the cluster stack exists (restart mode,
+	 * or the compiled backends' signal-point clause match)
 	 * @return the wrapped protected form, or the original when nothing can observe it
 	 */
 	public static LispVal handlerCaseProtectedForm(LispVal protectedForm, List<LispVal> clauseTypes,
-			ClosRegistry closRegistry, boolean restartMode) {
-		if (!restartMode || clauseTypes.isEmpty()) {
+			ClosRegistry closRegistry, boolean pushClusters) {
+		if (!pushClusters || clauseTypes.isEmpty()) {
 			return protectedForm;
 		}
 		LispSymbol clustersVar = new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR);
@@ -25017,6 +25038,74 @@ public final class LispMacroExpander {
 		return false;
 	}
 
+	/**
+	 * Whether the compiled backends need the CLAUSE-TYPE match at the signal point --
+	 * i.e. the program both signals ({@code signal} in operator position, or
+	 * {@code #'signal}) and establishes a {@code handler-case}/{@code ignore-errors}.
+	 * CLHS 9.1.4.1: {@code signal} transfers control only to a handler that will handle
+	 * the condition, so a {@code handler-case} whose clauses do not match must be
+	 * declined and the signal falls through to nil -- with the handler-case still armed
+	 * for a later condition that does match. Under this gate the handler-case emitters
+	 * push their clause types on the dynamic {@code %handler-clusters%} stack (the same
+	 * {@code (test-closure . nil)} cluster shape restart mode pushes, see
+	 * {@link #handlerCaseProtectedForm}), {@code expandTopLevelDefinitions} injects the
+	 * {@code %hc-match-p} defun (and the stack's defvar outside restart mode), and
+	 * {@code %signal-cond} throws only when an armed clause matches. A program missing
+	 * either half keeps the historical depth-counter emission and stays byte-identical.
+	 * The walk applies the same operator-position discipline as
+	 * {@link #usesRestartSystem} (todo-315: quoted data and non-operator spellings do not
+	 * count). The interpreter needs none of this -- its per-thread clause-type stack
+	 * already matches at the signal point.
+	 * @param program the top-level forms (post library splice)
+	 * @return whether the signal-point clause match is needed
+	 */
+	public static boolean needsSignalClauseMatch(List<LispVal> program) {
+		boolean signals = false;
+		boolean catches = false;
+		for (LispVal form : program) {
+			signals = signals || formContainsOperator(form, true);
+			catches = catches || formContainsOperator(form, false);
+			if (signals && catches) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the form contains, in operator position of an evaluated sub-form, either
+	 * the {@code signal} operator / a {@code #'signal} reference ({@code signal} true) or
+	 * a {@code handler-case}/{@code ignore-errors} head ({@code signal} false).
+	 */
+	private static boolean formContainsOperator(LispVal form, boolean signal) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String name = head.name();
+			if (LispNames.QUOTE.equals(name)) {
+				return false;
+			}
+			String plain = memberOf(name);
+			if (!name.startsWith(":")) {
+				if (signal ? LispNames.SIGNAL.equals(plain)
+						: (LispNames.HANDLER_CASE.equals(plain) || LispNames.IGNORE_ERRORS.equals(plain))) {
+					return true;
+				}
+			}
+			if (signal && LispNames.FUNCTION.equals(name) && cons.cdr() instanceof LispCons fnCons
+					&& fnCons.car() instanceof LispSymbol fnSym && LispNames.SIGNAL.equals(memberOf(fnSym.name()))) {
+				return true;
+			}
+		}
+		for (LispVal rest = cons; rest instanceof LispCons cell; rest = cell.cdr()) {
+			if (formContainsOperator(cell.car(), signal)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static boolean usesRestartSystemForm(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
@@ -25195,6 +25284,59 @@ public final class LispMacroExpander {
 				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.HANDLERS_RAN_VAR), c));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.RUN_HANDLERS_INTERNAL),
 				listToCons(List.<LispVal>of(c)), clustersLoop, mark, LispNil.INSTANCE));
+	}
+
+	// (defun %hc-match-p (__hm_c)
+	// (let ((__hm_found nil))
+	// (let ((__hm_clusters %handler-clusters%))
+	// (while (and (null __hm_found) (consp __hm_clusters))
+	// (let ((__hm_entries (car __hm_clusters)))
+	// (while (and (null __hm_found) (consp __hm_entries))
+	// (if (null (cdr (car __hm_entries))) ; nil cdr = a handler-case clause,
+	// (if (funcall (car (car __hm_entries)) __hm_c) ; the only kind that TRANSFERS;
+	// (setq __hm_found t) ; a handler-bind handler already
+	// nil) ; ran at the signal hook and
+	// nil) ; never unwinds %signal-cond
+	// (setq __hm_entries (cdr __hm_entries))))
+	// (setq __hm_clusters (cdr __hm_clusters))))
+	// __hm_found))
+	private static LispVal hcMatchDefun() {
+		LispSymbol c = new LispSymbol("__hm_c");
+		LispSymbol clusters = new LispSymbol("__hm_clusters");
+		LispSymbol entries = new LispSymbol("__hm_entries");
+		LispSymbol found = new LispSymbol("__hm_found");
+		LispSymbol globalVar = new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR);
+		LispVal entry = callOf(LispNames.CAR, entries);
+		LispVal testEntry = makeIf(callOf(LispNames.NULL, callOf(LispNames.CDR, entry)),
+				makeIf(listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CAR, entry), c)),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), found, LispTrue.INSTANCE)),
+						LispNil.INSTANCE),
+				LispNil.INSTANCE);
+		LispVal entriesLoop = makeLet(entries.name(), callOf(LispNames.CAR, clusters),
+				listToCons(List.of(new LispSymbol(LispNames.WHILE),
+						listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.NULL, found),
+								callOf(LispNames.CONSP, entries))),
+						testEntry,
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), entries, callOf(LispNames.CDR, entries))))));
+		LispVal clustersLoop = makeLet(clusters.name(), globalVar, listToCons(List.of(new LispSymbol(LispNames.WHILE),
+				listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.NULL, found),
+						callOf(LispNames.CONSP, clusters))),
+				entriesLoop,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters))))));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.HC_MATCH_INTERNAL),
+				listToCons(List.<LispVal>of(c)), makeLet(found.name(), LispNil.INSTANCE,
+						listToCons(List.of(new LispSymbol(LispNames.PROGN), clustersLoop, found)))));
+	}
+
+	/**
+	 * The nil-initialized {@code %handler-clusters%} defvar, prepended when the
+	 * signal-point clause match ({@link #needsSignalClauseMatch}) is on OUTSIDE restart
+	 * mode -- restart mode already prepends it with the other stack globals
+	 * ({@link #restartRuntimeGlobalForms}).
+	 */
+	private static LispVal handlerClustersGlobalForm() {
+		return listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR),
+				LispNil.INSTANCE));
 	}
 
 	// (defun find-restart (__fr_id &optional __fr_c)

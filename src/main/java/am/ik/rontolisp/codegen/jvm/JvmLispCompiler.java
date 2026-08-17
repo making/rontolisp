@@ -319,6 +319,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// expandTopLevelDefinitions, which runs the same scan to inject the
 		// restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
+		// Whether signal needs the clause-type match at the signal point (the program
+		// both signals and establishes a handler-case). Decided on the SURFACE program
+		// like restartMode; expandTopLevelDefinitions runs the same scan to inject the
+		// %hc-match-p defun and the cluster-stack defvar.
+		boolean signalClauseMatch = LispMacroExpander.needsSignalClauseMatch(program);
 		// Whether *print-case* is in play. Decided on the SURFACE program, like the scan
 		// that gives the variable its defvar, and threaded into the expression compiler
 		// so every printing operator routes through the case-applying renderer.
@@ -1212,6 +1217,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.dynamic(this.dynamic)
 			.blockExitChannel(blockExitChannel)
 			.restartMode(restartMode)
+			.signalClauseMatch(signalClauseMatch)
 			.printCase(printCase)
 			.usesFloatArray(usesFloatArray)
 			.usesIntArray(usesIntArray)
@@ -4007,6 +4013,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean restartMode = false;
 
 		/**
+		 * True when the program both signals and establishes a {@code handler-case}
+		 * ({@code LispMacroExpander.needsSignalClauseMatch}): {@code handler-case} pushes
+		 * its clause types on the dynamic {@code %handler-clusters%} stack and
+		 * {@code %signal-cond} throws only when an armed clause MATCHES the condition
+		 * (through the injected {@code %hc-match-p} defun), so a handler-case whose
+		 * clauses do not match is declined and the signal falls through to nil (CLHS
+		 * 9.1.4.1). Off, {@code %signal-cond} keeps the historical depth-counter emission
+		 * and stays byte-identical.
+		 */
+		boolean signalClauseMatch = false;
+
+		/**
 		 * True when the program MENTIONS {@code *print-case*}
 		 * ({@code LispMacroExpander.usesPrintCase}): every printing operator is rewritten
 		 * onto the {@code %print-cased} renderer, which applies the variable to each
@@ -4282,6 +4300,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.blockExitChannel = builder.blockExitChannel;
 			this.restartMode = builder.restartMode;
+			this.signalClauseMatch = builder.signalClauseMatch;
 			this.printCase = builder.printCase;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesIntArray = builder.usesIntArray;
@@ -4530,6 +4549,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean blockExitChannel = false;
 
 			private boolean restartMode = false;
+
+			private boolean signalClauseMatch = false;
 
 			private boolean printCase = false;
 
@@ -4916,6 +4937,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder restartMode(boolean restartMode) {
 				this.restartMode = restartMode;
+				return this;
+			}
+
+			Builder signalClauseMatch(boolean signalClauseMatch) {
+				this.signalClauseMatch = signalClauseMatch;
 				return this;
 			}
 

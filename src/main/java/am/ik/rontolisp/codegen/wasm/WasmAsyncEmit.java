@@ -771,6 +771,10 @@ final class WasmAsyncEmit {
 			.condMessagesObservable(proto.condMessagesObservable)
 			.blockExitTag(proto.blockExitTag)
 			.restartMode(proto.restartMode)
+			// NOT optional (the restartMode lesson): without it a top-level chunk would
+			// compile %signal-cond with the depth test alone while defun bodies match
+			// clause types, and a top-level unmatched signal would abort again.
+			.signalClauseMatch(proto.signalClauseMatch)
 			.printCase(proto.printCase)
 			// NOT optional, same reason as the instance pair below: a synonym stream
 			// built or written through at the SYNCHRONOUS top level must resolve like

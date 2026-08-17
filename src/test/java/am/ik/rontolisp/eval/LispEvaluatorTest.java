@@ -7717,6 +7717,52 @@ class LispEvaluatorTest {
 				    (handler-case (progn (signal 'ping-sig2) :no) (error (e) :inner))
 				  (ping-sig2 () :outer))
 				""").print()).isEqualTo(":OUTER");
+		// The decline crosses a function boundary (cl-mustache's read-partial shape).
+		assertThat(evalMulti("""
+				(define-condition ping-sig3 () ())
+				(defun ping-boom () (signal 'ping-sig3) :returned)
+				(handler-case (ping-boom) (error (e) :err))
+				""").print()).isEqualTo(":RETURNED");
+	}
+
+	@Test
+	void anUnmatchedSignalLeavesTheHandlerCaseArmedForALaterCondition() {
+		assertThat(evalMulti("""
+				(define-condition note-sig () ())
+				(handler-case (progn (signal 'note-sig) (error "boom")) (error (e) :err))
+				""").print()).isEqualTo(":ERR");
+	}
+
+	@Test
+	void handlerBindHandlersStillRunWhenAnUnmatchedHandlerCaseDeclines() {
+		// Restart mode: the intervening handler-bind handler runs at the signal
+		// point and declines; the unmatched handler-case then declines too, so the
+		// form after the signal still runs.
+		assertThat(evalMulti(
+				"""
+						(define-condition note-sig2 () ())
+						(defvar *hc-decline-log* nil)
+						(list (handler-bind ((note-sig2 (lambda (c) (setq *hc-decline-log* (cons :hb *hc-decline-log*)))))
+						        (handler-case (progn (signal 'note-sig2) (setq *hc-decline-log* (cons :after *hc-decline-log*)) :done)
+						          (error (e) :err)))
+						      *hc-decline-log*)
+						""")
+			.print()).isEqualTo("(:DONE (:AFTER :HB))");
+	}
+
+	@Test
+	void anErrorStillUnwindsThroughAnUnmatchedHandlerCase() {
+		// The decline applies to signal only: error (and cerror, here real under
+		// restart mode) must keep unwinding through a handler-case that does not
+		// match, and a restart-case arm changes nothing about the decline.
+		assertThat(evalMulti("""
+				(define-condition note-sig3 () ())
+				(list (handler-case
+				          (handler-case (cerror "Continue." "boom") (type-error (e) :te))
+				        (error (e) :outer))
+				      (handler-case (restart-case (progn (signal 'note-sig3) :after) (continue () :c))
+				        (error (e) :err)))
+				""").print()).isEqualTo("(:OUTER :AFTER)");
 	}
 
 	@Test

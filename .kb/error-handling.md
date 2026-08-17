@@ -189,20 +189,13 @@ everywhere except `--no-gc`.
   driving consumer is trivia level2 (todo-243), whose pattern expander
   signals its own wildcard/guard-pattern conditions inside USER handler-case
   bodies at macro-expansion time; under the old depth-counter approximation
-  any active handler-case turned those into aborts. **DIVERGENCE, with its
-  re-evaluation trigger**: the COMPILED backends keep the depth-counter
-  approximation (`Jvm/WasmSignalCondCompiler` test `_hcDepthTl > 0`), so a
-  runtime `(handler-case (signal 'x) (error () ...))` falls through to nil
-  on the interpreter but unwinds (and, unmatched, aborts) compiled. Reason:
-  matching at the signal point needs a runtime stack of per-handler-case
-  clause-type tests, machinery the emitted depth channel does not carry —
-  and trivia itself never needs it, because pattern expansion always runs on
-  the (macro-time) interpreter for every backend. Trigger: a library that
-  signals non-error conditions at RUN time under a handler-case for another
-  type (progress/telemetry signaling); then teach the handler-case emitters
-  to push a static clause-tag set and `%signal-cond` to consult it. Pinned
-  by `LispEvaluatorTest#signalFallsThroughAHandlerCaseWhoseClausesDoNotMatch`
-  (deliberately absent from ci-spec).
+  any active handler-case turned those into aborts. The COMPILED backends
+  used to keep that depth-counter approximation as a documented divergence;
+  its re-evaluation trigger (a library signaling non-error conditions at RUN
+  time under a handler-case for another type) fired with cl-mustache's
+  `read-partial` and todo-429 retired it — all four backends now match
+  clause types at the signal point, see "`signal` declines a handler-case no
+  clause matches" below.
 - **JVM** (`JvmHandlerCaseCompiler`): catch-any exception-table region over
   the protected expression (the unwind-protect machinery, holes included — a
   `return` inside the region decrements the depth through the
@@ -1034,10 +1027,9 @@ was reported as `Raise an error while testing.` and ended there.
   `%run-handlers` walk finds the handler-case cluster first and stops, so all
   three agree with CL. (wasm-GC still cannot catch a raw TRAP at all --
   deviation (2) above is untouched.)
-- Deliberately NOT changed: `signal`'s fall-through still consults the
-  handler-DEPTH counter on the compiled backends, not the clause types (the
-  Phase 3 divergence and its own re-evaluation trigger). The cluster stack now
-  carries what that fix would need; closing it is a separate item.
+- `signal`'s fall-through consulted only the handler-DEPTH counter on the
+  compiled backends until todo-429 closed the gap through this very cluster
+  stack — see the next section.
 - Pinned by `anInnerHandlerCaseShadowsAnEnclosingHandlerBind` /
   `anInnerHandlerCaseWhoseClausesDoNotMatchStillLetsTheHandlerBindRun` /
   `aHandlerCaseClauseBodyDoesNotCatchWhatItSignals` /
@@ -1112,6 +1104,64 @@ was reported as `Raise an error while testing.` and ended there.
   concatenated program into restart mode**, so every other case's expectations
   now also exercise the signal hook — a hook regression shows up as an unrelated
   case failing.
+
+### `signal` declines a handler-case no clause matches — on every backend (todo-429)
+
+**The invariant: CLHS 9.1.4.1 — `signal` transfers control only to a handler that
+will handle the condition. A `handler-case` whose clause types do not match the
+condition is not an applicable handler: the signal passes it by, returns nil so the
+forms after it run, and the handler-case stays armed for a later condition that does
+match — identically on all four backends.** The interpreter always did this
+(`handlerCaseTypes` + `anyHandlerCaseMatches`, Phase 3 above); the compiled backends
+approximated with the handler-DEPTH counter alone and turned an unmatched decline
+into a top-level abort — a caller's unrelated `(handler-case ... (error ...))` broke
+any callee using `signal` as an optional notification (cl-mustache's `read-partial`
+against its `partial-cant-be-found`, the `.todo/425` spike that fired the recorded
+re-evaluation trigger).
+
+- **The clause types ride the todo-393 cluster stack, now outside restart mode
+  too.** `LispMacroExpander.handlerCaseProtectedForm` (the `(test-closure . nil)`
+  cluster push over `%handler-clusters%`) is called by both compiled handler-case
+  emitters with `ctx.restartMode || ctx.signalClauseMatch`, so the same wrapping
+  restart mode always did now also happens under the new gate — one mechanism, not
+  a second stack.
+- **`%signal-cond` consults the stack**: `Jvm/WasmSignalCondCompiler` still require
+  the depth channel to be positive FIRST (the depth is per thread of control while
+  the cluster stack is a shared global, so a signal on a thread with no armed
+  handler-case keeps falling through), then compile a call to the injected
+  `%hc-match-p` defun — an iterative walk over `%handler-clusters%` testing
+  nil-cdr entries only, because a handler-bind entry never transfers at
+  `%signal-cond` (its handler already ran at the signal hook, or runs in the
+  `%hb-guard` pad) — and throw only on a match. A handler-case with only a
+  `:no-error` clause pushes nothing and is therefore declined, which is also CL.
+- **The gate is `LispMacroExpander.needsSignalClauseMatch(program)`**: the program
+  contains BOTH a `signal` (operator position, or `#'signal`) AND a
+  `handler-case`/`ignore-errors` head — a surface scan with the todo-315
+  operator-position discipline, computed by each compiler before
+  `expandTopLevelDefinitions` (which re-runs it to inject the `%hc-match-p` defun,
+  prepend the `%handler-clusters%` defvar outside restart mode, and disable the
+  no-definitions fast path). A program missing either half keeps the historical
+  emission byte for byte; the interpreter is untouched (it loads no defun and its
+  per-thread stack already matches). `WasmAsyncEmit.freshCtx` copies the flag —
+  the documented per-`Ctx`-flag trap.
+- Known blind corner, unchanged in kind from the depth counter: a `signal` or
+  catching form reachable only through a channel the surface scan cannot see
+  (runtime `eval`, a computed designator forged from quoted data) keeps the old
+  depth-only behavior.
+- In restart mode nothing about handler ORDER changes: `%run-handlers` still runs
+  handler-bind handlers innermost-first and stops at the first matching
+  handler-case cluster; `%hc-match-p` only decides whether the terminal throw
+  happens at all.
+- Pinned by `signalFallsThroughAHandlerCaseWhoseClausesDoNotMatch` /
+  `anUnmatchedSignalLeavesTheHandlerCaseArmedForALaterCondition` /
+  `handlerBindHandlersStillRunWhenAnUnmatchedHandlerCaseDeclines` /
+  `anErrorStillUnwindsThroughAnUnmatchedHandlerCase` (`LispEvaluatorTest`), their
+  `compileAndRun*` twins (`JvmLispCompilerTest`), the `eh*` quadruple
+  (`WasmLispCompilerIntegrationTest`), the scan by
+  `LispMacroExpanderTest.needsSignalClauseMatchRequiresBothASignalAndACatchingForm`,
+  and cross-backend by the ci-spec `signal-declines-an-unmatched-handler-case`
+  case (the old "deliberately absent from ci-spec" note is retired with the
+  divergence).
 
 ### Undefined functions keep the call-time stub contract
 

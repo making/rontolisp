@@ -2271,6 +2271,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Computed before expandTopLevelDefinitions, which runs the same scan to
 		// inject the restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
+		// Whether signal needs the clause-type match at the signal point (the program
+		// both signals and establishes a handler-case). Decided on the SURFACE program
+		// like restartMode; expandTopLevelDefinitions runs the same scan to inject the
+		// %hc-match-p defun and the cluster-stack defvar.
+		boolean signalClauseMatch = LispMacroExpander.needsSignalClauseMatch(program);
 		// Whether the entry function's landing pad will READ the condition that escapes
 		// it (WasmUncaughtReportCompiler) -- which is exactly EH mode, decided below on
 		// the post-expansion program but needed here, because the report-routing gate is
@@ -2990,6 +2995,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.condMessagesObservable(condMessagesObservable)
 			.blockExitTag(blockExitTag)
 			.restartMode(restartMode)
+			.signalClauseMatch(signalClauseMatch)
 			.printCase(LispMacroExpander.usesPrintCase(program))
 			.usesSeqString(usesSeqString)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
@@ -6992,6 +6998,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean restartMode = false;
 
 		/**
+		 * True when the program both signals and establishes a {@code handler-case}
+		 * ({@code LispMacroExpander.needsSignalClauseMatch}): {@code handler-case} pushes
+		 * its clause types on the dynamic {@code %handler-clusters%} stack and
+		 * {@code %signal-cond} throws only when an armed clause MATCHES the condition
+		 * (through the injected {@code %hc-match-p} defun), so a handler-case whose
+		 * clauses do not match is declined and the signal falls through to nil (CLHS
+		 * 9.1.4.1). Off, {@code %signal-cond} keeps the historical depth-counter emission
+		 * and stays byte-identical.
+		 */
+		boolean signalClauseMatch = false;
+
+		/**
 		 * True when the program MENTIONS {@code *print-case*}
 		 * ({@code LispMacroExpander.usesPrintCase}): every printing operator is rewritten
 		 * onto the {@code %print-cased} renderer, which applies the variable to each
@@ -7380,6 +7398,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.condMessagesObservable = builder.condMessagesObservable;
 			this.blockExitTag = builder.blockExitTag;
 			this.restartMode = builder.restartMode;
+			this.signalClauseMatch = builder.signalClauseMatch;
 			this.printCase = builder.printCase;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
 			this.usesSeqString = builder.usesSeqString;
@@ -7476,6 +7495,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean blockExitTag = false;
 
 			private boolean restartMode = false;
+
+			private boolean signalClauseMatch = false;
 
 			private boolean printCase = false;
 
@@ -7677,6 +7698,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder restartMode(boolean restartMode) {
 				this.restartMode = restartMode;
+				return this;
+			}
+
+			Builder signalClauseMatch(boolean signalClauseMatch) {
+				this.signalClauseMatch = signalClauseMatch;
 				return this;
 			}
 
