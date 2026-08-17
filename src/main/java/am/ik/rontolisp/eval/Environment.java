@@ -37,6 +37,7 @@ import java.util.function.DoubleUnaryOperator;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
+import am.ik.rontolisp.FloatText;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -6161,7 +6162,7 @@ public final class Environment implements Scope {
 			return Long.toString(i.value());
 		}
 		if (val instanceof LispDouble d) {
-			return Double.toString(d.value());
+			return FloatText.doubleText(d.value());
 		}
 		return val.display();
 	}
@@ -6175,7 +6176,7 @@ public final class Environment implements Scope {
 			return Long.toString(i.value());
 		}
 		if (val instanceof LispDouble d) {
-			return Double.toString(d.value());
+			return FloatText.doubleText(d.value());
 		}
 		return val.print();
 	}

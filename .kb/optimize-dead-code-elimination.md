@@ -423,11 +423,12 @@ shakes out.
 (`WasmPrintCompiler`, switched on readable-vs-display and newline-vs-not) precisely so the
 fold cannot exist for one spelling and not the others; `write-string` / `write-line` fold a
 string literal the same way, through the same helper. Folded types: string, fixnum, bignum,
-character, ratio, `nil`, `t` — everything whose `LispVal.print()` / `display()` the emitted
-renderer reproduces exactly. **A FLOAT is deliberately excluded**: `_print_f64` and
-`LispDouble.print()` disagree at large magnitudes, so folding one would give a program two
-spellings of the same value. That is the re-evaluation trigger — fold floats when those two
-renderers agree.
+character, ratio, float, `nil`, `t` — everything whose `LispVal.print()` / `display()` the
+emitted renderer reproduces exactly. Floats joined with todo-431: the emitted printer now
+selects the same Schubfach shortest decimal as `LispDouble.print()` (`FloatText`,
+`.kb/format.md` "The float printer"), so the literal's spelling and the computed one's are
+identical -- and a program whose only float use is printing a literal carries none of the
+printer runtime at all.
 
 The fold costs no data for strings: an escape-free readable form re-uses the literal's own
 interned bytes verbatim, and a DISPLAY rendering points at the interior of the same framed
@@ -455,7 +456,10 @@ The fold above needs a literal. The same reachability argument covers an argumen
 that is not a literal but whose TYPE the compiler knows, and there the numbers are
 bigger, because what the generic dispatch drags in is not the renderer for the type
 at hand -- it is every other renderer. Measured on the `size-report pi_approx` loop at
-`--optimize`: the loop ending in `(princ "done")` is 1,770 bytes and the same loop
+`--optimize` (pre-todo-431 numbers; the correct Schubfach printer that replaced the
+379-byte digit extraction is ~2.7 KB of code plus a 755-byte table, so the chain below
+is a few KB bigger today -- `.kb/format.md` "The float printer" carries the current
+breakdown): the loop ending in `(princ "done")` is 1,770 bytes and the same loop
 ending in `(princ <the f64 result>)` was **6,307** -- +3,777 bytes to print one
 float, of which `_print_f64_no_nl` is **379**. The rest is `_princ_val` itself
 (1,540), the character-vector normalizer it calls on every value before dispatching

@@ -155,15 +155,25 @@ public sealed interface LispFloatArray extends LispVal permits LispDoubleFloatAr
 		return flat;
 	}
 
+	/**
+	 * The printed text of one element, at the array's own float width: a single-float
+	 * array element prints the shortest f32 decimal (so {@code #f(0.1)} round-trips), a
+	 * double-float array element the shortest f64 decimal. {@code aref} still widens to a
+	 * scalar {@code double} whose own text is the f64 spelling of the widened value; the
+	 * width lives in the array, not in the scalar.
+	 * @param flat the flat row-major index
+	 * @return the element's printed text
+	 */
+	String elementText(int flat);
+
 	@Override
 	default String print() {
-		return LispArray.renderArrayData(dims(), totalSize(), openPrefix(), k -> new LispDouble(elementAt(k)).print());
+		return LispArray.renderArrayData(dims(), totalSize(), openPrefix(), this::elementText);
 	}
 
 	@Override
 	default String display() {
-		return LispArray.renderArrayData(dims(), totalSize(), openPrefix(),
-				k -> new LispDouble(elementAt(k)).display());
+		return LispArray.renderArrayData(dims(), totalSize(), openPrefix(), this::elementText);
 	}
 
 }

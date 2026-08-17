@@ -109,8 +109,8 @@ contract) and by the `~f` / `~$` rows of
 **A `%fixed-decimal` piece goes out through `write-string`, not `princ`.** It is a
 string by construction, and `princ` of a value whose type the compiler cannot see has
 to keep the generic printer reachable -- on the WASM GC backend that is the float
-digit printer and ~3.8 KB of runtime, in a program that no longer prints a float
-anywhere. `write-string` tracks the output column the same way, so a following `~&`
+printer and several KB of runtime (see "The float printer" below), in a program that
+no longer prints a float anywhere. `write-string` tracks the output column the same way, so a following `~&`
 is unaffected. The `write-string` sites additionally skip the character-vector
 normalizer for an argument that CANNOT be one
 (`compiler/StringValuedForms.certainlyString`; `_charvec_to_str` plus the
@@ -307,3 +307,57 @@ separating was never its size, it was the funcall-dispatch gate it held open.
   it. `.kb/error-handling.md` ("the string designator renders eagerly") has the
   reason and the one observable consequence; the point here is that BOTH paths
   deviate the same way, so the two spellings of one signal cannot drift.
+
+
+## The float printer: one Schubfach selection on all four backends (todo-431)
+
+Free-format float text (`print`/`princ`/`prin1`, `princ-to-string`, `format ~A`/`~S`,
+the array printers, JSON output through the jzon shim) is **byte-identical on all four
+backends**: the shortest decimal that reads back as the same IEEE value, chosen exactly
+as `Double.toString` chooses it (Schubfach: fewest digits that round-trip, refined to a
+two-digit minimum, closest to the value, ties to the even significand), spelled with
+Java's notation thresholds (plain for decimal exponent -3..6, scientific otherwise)
+and CL's lowercase exponent marker (`1.0e10`). The authority is
+`am.ik.rontolisp.FloatText` (root package): `doubleText` = `Double.toString` + the
+`E -> e` rewrite, `singleText` = `Float.toString` likewise.
+
+- **Interpreter**: `LispDouble.print()` / `Environment.displayString`/`printString`
+  call `FloatText`.
+- **JVM**: the emitted `_lispToString` / `_lispToDisplayString` call
+  `Double.toString` then `String.replace("E", "e")` -- the same text by definition.
+- **WASM GC + `--no-gc`**: a hand-emitted Schubfach (`WasmSchubfachRuntimeBuilder`,
+  shared bodies parameterized only by function indices and addresses): `_f64_dec`
+  selects digits+exponent, `_dec_fmt` renders the spelling, with `_schub_umulhi` /
+  `_schub_g` / `_schub_rop` beneath. The 617-entry 126-bit power table is compressed
+  to a **~755-byte blob** (`SchubfachTables`): every 27th entry exactly, a `5^j`
+  multiplier table, and a 2-bit correction per entry **derived at emit time by
+  comparing a bit-exact replay of the runtime recomposition against the exact
+  BigInteger value** -- the build fails if a correction ever leaves 2 bits, so the
+  compressed table cannot drift from the exact one. `SchubfachTables` also carries a
+  Java mirror of the precise u64 instruction sequence the wasm bodies perform;
+  `SchubfachTablesTest` pins that mirror against `FloatText` over millions of values
+  (exhaustive tiny denormals included -- the region where the JDK's two-digit
+  refinement differs from a naive shortest selection), and the per-backend corpus
+  tests + the `ieee-float-shortest-round-trip-printing` ci-spec case pin the
+  transcription.
+
+**Single-float width**: scalars are all `double-float` (no single scalar exists), but a
+packed `#f(...)` array element prints at its **f32** width (`FloatText.singleText`,
+`_f32_dec` on wasm, a transient `Float`/`TYPE_F32BOX` box on the JVM/GC print path) so
+`#f(0.1)` round-trips instead of showing the widened double's 17 digits. `aref` still
+answers the widened double, whose own text is the f64 spelling of that value -- the
+width lives in the array, not in the scalar.
+
+**Size**: the printer runtime measured on a program printing one computed f64 at
+`--optimize`: `_dec_fmt` 915 B, `_f32_dec` 589 B, `_f64_dec` 524 B, `_schub_g` 304 B,
+`_schub_umulhi` 106 B, `_print_f64_no_nl` 90 B, `_schub_rop` 71 B,
+`_print_f32_no_nl` 62 B, `_write_dec` 23 B -- ~2.7 KB of code plus the 755-byte table,
+vs the 379-byte (and wrong) digit extraction it replaced. The trade is recorded in
+`size-report/`; correctness wins. The f32 half rides along whenever the generic
+printer is reachable (its arm lives in `_print_val`/`_princ_val` like every other
+type's); a program whose only prints are literals folds them to static text
+(`WasmLiteralPrint` now folds floats too) and carries none of this.
+
+**What this deliberately does not touch**: `~F`/`~$`/`~E` keep their own fixed-decimal
+renderers above (a different question -- a REQUESTED digit count, not the shortest),
+and `read`/`parse` stay on the eisel-lemire/parseDouble side.

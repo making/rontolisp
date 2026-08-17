@@ -2374,6 +2374,25 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// Check the transient f32 print box (a packed single-float array element):
+		// print at the f32 width so #f(0.1) round-trips.
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F32BOX);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F32BOX);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32BOX);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_F32_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
 		// Check character struct -> #\name
 		emitPrintChar(w, st, true);
 
@@ -2657,6 +2676,25 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_F64_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// Check the transient f32 print box (a packed single-float array element):
+		// print at the f32 width so #f(0.1) round-trips.
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F32BOX);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F32BOX);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32BOX);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_F32_NO_NL);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -3385,35 +3423,52 @@ final class WasmRuntimeBuilder {
 		getLocal(w, lenSlot);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
+		// element boxed at its own width: a single-float element goes into the
+		// transient TYPE_F32BOX so the generic printer spells it as the shortest f32
+		// decimal (#f(0.1) round-trips); a double element keeps the TYPE_FLOAT box.
+		getLocal(w, singleSlot);
+		w.write(Instruction.IF, 0x40);
 		getBucketsLocal(w, dimsSlot);
 		getLocal(w, idxSlot);
-		// element as f64 (widen f32 -> f64 for a single-float array), then box it
 		if (simd) {
-			// _v_get owns the width and lane branches
+			// _v_get owns the lane branches and widens; demote back (exact for a
+			// value that came from an f32 lane)
+			farrayDataRaw(w, dataSlot);
+			getLocal(w, idxSlot);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_GET);
+			w.write(Instruction.F32_DEMOTE_F64);
+		}
+		else {
+			farrayDataF32(w, dataSlot);
+			getLocal(w, idxSlot);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32BOX);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.ELSE);
+		getBucketsLocal(w, dimsSlot);
+		getLocal(w, idxSlot);
+		if (simd) {
 			farrayDataRaw(w, dataSlot);
 			getLocal(w, idxSlot);
 			w.write(Instruction.CALL);
 			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_GET);
 		}
 		else {
-			getLocal(w, singleSlot);
-			w.write(Instruction.IF, Type.F64.code());
-			farrayDataF32(w, dataSlot);
-			getLocal(w, idxSlot);
-			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
-			w.write(Instruction.F64_PROMOTE_F32);
-			w.write(Instruction.ELSE);
 			farrayData(w, dataSlot);
 			getLocal(w, idxSlot);
 			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
-			w.write(Instruction.END);
 		}
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.END);
 		getLocal(w, idxSlot);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
@@ -3911,75 +3966,38 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the print_f64 helper function body. Prints integer part via print_i32_no_nl,
-	 * then '.' and fractional digits.
+	 * Builds the print_f64 helper function body: the IEEE specials and the sign, then the
+	 * Schubfach shortest decimal (_f64_dec) rendered by _write_dec -- the same text
+	 * FloatText.doubleText answers on the interpreter and the JVM (todo-431).
 	 */
 	static byte[] buildPrintF64Core(boolean appendNewline, WasmLispCompiler.StringTable st) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
+		w.writeUnsignedLeb128(0); // no locals
 
-		// Locals: 0=f64 value (param), 1=i32 is_neg, 2=i32 int_part, 3=f64 frac,
-		// 4=i32 digit, 5=i32 digit_count, 6=i64 int64, 7=i64 pow, 8=i32 exp,
-		// 9=i32 started
-		// Adjacent runs of the same type are ONE run in the shortest legal encoding, so
-		// the grouping below follows the types rather than the names above.
-		w.write(5);
-		w.write(2);
-		w.write(Type.I32); // locals 1-2: is_neg, int_part
-		w.write(1);
-		w.write(Type.F64); // local 3: frac
-		w.write(2);
-		w.write(Type.I32); // locals 4-5: digit, digit_count
-		w.write(2);
-		w.write(Type.I64); // locals 6-7: int64, pow
-		w.write(2);
-		w.write(Type.I32); // locals 8-9: exp, started
-
-		// NaN prints as text (digit extraction would trap in i32.trunc): value != value
+		// NaN prints as text, unsigned (Java's spelling): value != value
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.F64_NE);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.nanStr.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.nanStr.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		emitWriteEntry(w, st.nanStr);
 		if (appendNewline) {
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(st.newline.offset());
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(st.newline.length());
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+			emitWriteEntry(w, st.newline);
 		}
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// Check if negative -- by the sign BIT, so -0.0 keeps its sign (f64.lt
-		// against 0.0 is false for -0.0)
+		// Sign by the sign BIT, so -0.0 keeps its '-'
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.I64_REINTERPRET_F64);
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.I64_LT_S);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1); // is_neg
-
-		// If negative, write '-' and negate
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.minus.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.minus.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		emitWriteEntry(w, st.minus);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.F64_NEG);
@@ -3987,311 +4005,125 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END);
 
-		// Infinity prints as text, after the sign so -Infinity gets its '-'
+		// Infinity, after the sign so -Infinity gets its '-'
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.F64_CONST);
 		w.writeF64(Double.POSITIVE_INFINITY);
 		w.write(Instruction.F64_EQ);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.infinityStr.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.infinityStr.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		emitWriteEntry(w, st.infinityStr);
 		if (appendNewline) {
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(st.newline.offset());
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(st.newline.length());
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+			emitWriteEntry(w, st.newline);
 		}
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// value >= 2^63 cannot go through integer digit extraction at all: divide
-		// into [1, 10) and remember the decimal exponent (printed as E<exp> at the
-		// end). The digits are approximate up here -- each /10 rounds -- which is
-		// the best a digit-extraction printer can do; magnitudes below 2^63 are
-		// exact as before.
+		// Zero renders through the formatter (digits 0 -> "0.0")
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.F64_CONST);
-		w.writeF64(0x1p63);
-		w.write(Instruction.F64_GE);
+		w.writeF64(0.0);
+		w.write(Instruction.F64_EQ);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(10.0);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.BR_IF, 1);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(10.0);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(8);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(8); // exp
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		w.write(Instruction.END); // if >= 2^63
-
-		// Integer part: the historical i32 path below 2^31, i64 digits up to 2^63
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(2147483648.0);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF, 0x40);
-		// int_part = i32(floor(value)); print; frac = value - f64(int_part)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.F64_FLOOR);
-		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(2); // int_part
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(2);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(2);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(3); // frac
-		w.write(Instruction.ELSE);
-		// int64 = i64(floor(value)); print its decimal digits MSD-first over a
-		// descending power-of-ten (10^18 covers every value below 2^63)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.F64_FLOOR);
-		w.write(Instruction.I64_TRUNC_S_F64);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(6); // int64
-		// pow = 1e9 * 1e9 (10^18; the writer's LEB is 32-bit, so build it by i64.mul)
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(1000000000);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(1000000000);
-		w.write(Instruction.I64_MUL);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(7); // pow
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(9); // started
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		// digit = i32((int64 / pow) % 10)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(6);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(7);
-		w.write(Instruction.I64_DIV_U);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(10);
-		w.write(Instruction.I64_REM_U);
-		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(4); // digit
-		// emit when significant: digit != 0, already started, or the last power
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(4);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(9);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(7);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I64_EQ);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.OUT_BUF_OFFSET);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(4);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(48); // '0'
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.OUT_BUF_OFFSET);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(9); // started
-		w.write(Instruction.END);
-		// pow /= 10; continue while pow != 0
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(7);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(10);
-		w.write(Instruction.I64_DIV_U);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(7);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(7);
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(0);
-		w.write(Instruction.I64_NE);
-		w.write(Instruction.BR_IF, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		// frac = value - f64(int64)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(6);
-		w.write(Instruction.F64_CONVERT_S_I64);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(3); // frac
-		w.write(Instruction.END); // if int-part width
-
-		// Print '.'
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.period.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.period.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-
-		// digit_count = 0
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(5);
-
-		// Loop to extract fractional digits
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-
-		// frac = frac * 10.0
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(3);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(10.0);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(3);
-
-		// digit = i32(trunc(frac))
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(3);
-		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(4);
-
-		// Store digit char at OUT_BUF_OFFSET
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.OUT_BUF_OFFSET);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(4);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(48); // '0'
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-
-		// Write the single digit
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.OUT_BUF_OFFSET);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
 		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-
-		// frac = frac - f64(digit)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(3);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(4);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(3);
-
-		// digit_count++
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(5);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(5);
-
-		// Continue if: digit_count < 1 OR (frac > epsilon AND digit_count < 6)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(5);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_LT_S);
-		// OR
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(3);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(0.0000001);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(5);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(6);
-		w.write(Instruction.I32_LT_S);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.I32_OR);
-
-		w.write(Instruction.BR_IF, 0); // loop
-		w.write(Instruction.END); // end loop
-		w.write(Instruction.END); // end block
-
-		// Exponent suffix from the >= 2^63 normalization: "E<exp>"
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(8);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.expE.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.expE.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(8);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
-		w.write(Instruction.END);
-
-		// Append newline if needed
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_DEC);
 		if (appendNewline) {
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(st.newline.offset());
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(st.newline.length());
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+			emitWriteEntry(w, st.newline);
 		}
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 
+		// Finite positive nonzero: shortest decimal
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_F64_DEC);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_DEC);
+		if (appendNewline) {
+			emitWriteEntry(w, st.newline);
+		}
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _print_f32_no_nl body: prints a single-float (a packed #f array element)
+	 * at its f32 width. The IEEE specials and zeros delegate to the f64 printer
+	 * (identical text); everything else selects the shortest f32 decimal.
+	 */
+	static byte[] buildPrintF32Core(WasmLispCompiler.StringTable st) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.writeUnsignedLeb128(0); // no locals
+
+		// NaN, +-Infinity and +-0.0 print exactly as the f64 printer prints them
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.F32_NE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.F32_ABS);
+		w.write(Instruction.F32_CONST);
+		w.writeF32(Float.POSITIVE_INFINITY);
+		w.write(Instruction.F32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.F32_CONST);
+		w.writeF32(0.0f);
+		w.write(Instruction.F32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.F64_PROMOTE_F32);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_F64_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// Sign
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.I32_REINTERPRET_F32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitWriteEntry(w, st.minus);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.F32_NEG);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_F32_DEC);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_DEC);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// write_str of one string-table entry
+	private static void emitWriteEntry(WasmWriter w, WasmLispCompiler.StringTable.StringEntry entry) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(entry.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(entry.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 	}
 
 }

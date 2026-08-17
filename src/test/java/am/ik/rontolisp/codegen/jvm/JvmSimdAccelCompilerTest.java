@@ -116,10 +116,10 @@ class JvmSimdAccelCompilerTest {
 	@Test
 	void acceleratedReductionsComputeTheExpectedValuesOverTheVectorLoop() throws Exception {
 		// sum(0..999) = 999*1000/2 = 499500; dot = sum of i^2 for i in 0..999 =
-		// 999*1000*1999/6 = 332833500 (both f64-exact; the JVM prints the large dot
-		// magnitude in Double.toString scientific form).
+		// 999*1000*1999/6 = 332833500 (both f64-exact; the large dot magnitude prints
+		// in scientific form with the FloatText lowercase exponent marker).
 		assertThat(accel("(print (vec:sum (vec:arange 1000)))")).isEqualTo("499500.0");
-		assertThat(accel("(print (vec:dot (vec:arange 1000) (vec:arange 1000)))")).isEqualTo("3.328335E8");
+		assertThat(accel("(print (vec:dot (vec:arange 1000) (vec:arange 1000)))")).isEqualTo("3.328335e8");
 	}
 
 	@Test

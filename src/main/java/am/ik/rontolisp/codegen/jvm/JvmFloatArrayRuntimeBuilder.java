@@ -37,6 +37,8 @@ final class JvmFloatArrayRuntimeBuilder {
 
 	static final String TO_GENERAL = "_fvToGeneral";
 
+	static final String TO_GENERAL_PRINT = "_fvToGeneralPrint";
+
 	static final String TO_GENERAL_DESC = "(" + OBJ + ")" + OBJ;
 
 	static final String AREF1 = "_fvAref1";
@@ -179,9 +181,17 @@ final class JvmFloatArrayRuntimeBuilder {
 		MethodrefConstant arrayDims = self(cp, selfClass, JvmArrayRuntimeBuilder.DIMS,
 				JvmArrayRuntimeBuilder.DIMS_DESC);
 
+		MethodrefConstant floatValueOf = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Float")),
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(F)Ljava/lang/Float;")));
+
 		List<ArrayMethod> methods = new ArrayList<>();
-		methods.add(buildToGeneral(cp, doubleArrayClass, floatArrayClass, arrayListClass, objectClass, alInit, alAdd,
-				longValueOf, doubleValueOf));
+		methods.add(buildToGeneral(cp, TO_GENERAL, doubleArrayClass, floatArrayClass, arrayListClass, objectClass,
+				alInit, alAdd, longValueOf, doubleValueOf, null));
+		// The print-only variant: a single-float element is boxed as a transient Float
+		// so _lispToString renders it at its f32 width (#f(0.1) round-trips); every
+		// semantic conversion keeps going through _fvToGeneral's widened Doubles.
+		methods.add(buildToGeneral(cp, TO_GENERAL_PRINT, doubleArrayClass, floatArrayClass, arrayListClass, objectClass,
+				alInit, alAdd, longValueOf, doubleValueOf, floatValueOf));
 		methods.add(buildAref1(cp, doubleArrayClass, floatArrayClass, longClass, longIntValue, doubleValueOf, aref1));
 		methods.add(buildAref2(cp, doubleArrayClass, floatArrayClass, longClass, longIntValue, doubleValueOf, aref2));
 		methods.add(buildArefN(cp, doubleArrayClass, floatArrayClass, objectArrayClass, longClass, longIntValue,
@@ -215,26 +225,29 @@ final class JvmFloatArrayRuntimeBuilder {
 	// (the print/length dispatch tests instanceof first), so it dispatches double[] then
 	// float[] with no general fallback. Locals: 0=o, 1=d (array), 2=rank, 3=off, 4=total,
 	// 5=dimsArr, 6=list, 7=k, 8=f.
-	private static ArrayMethod buildToGeneral(ConstantPool cp, ClassConstant doubleArrayClass,
+	private static ArrayMethod buildToGeneral(ConstantPool cp, String name, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant arrayListClass, ClassConstant objectClass,
 			MethodrefConstant alInit, MethodrefConstant alAdd, MethodrefConstant longValueOf,
-			MethodrefConstant doubleValueOf) {
+			MethodrefConstant doubleValueOf, @org.jspecify.annotations.Nullable MethodrefConstant floatValueOf) {
 		JvmAsm a = new JvmAsm();
 		int tryFloat = a.label();
 		a.aload(0);
 		a.instanceOf(doubleArrayClass);
 		a.branch(Opcode.IFEQ, tryFloat);
 		emitToGeneralBody(a, false, doubleArrayClass, arrayListClass, objectClass, alInit, alAdd, longValueOf,
-				doubleValueOf);
+				doubleValueOf, null);
 		a.bind(tryFloat);
 		emitToGeneralBody(a, true, floatArrayClass, arrayListClass, objectClass, alInit, alAdd, longValueOf,
-				doubleValueOf);
-		return new ArrayMethod(cp.addUtf8(TO_GENERAL), cp.addUtf8(TO_GENERAL_DESC), 6, 9, a.finish());
+				doubleValueOf, floatValueOf);
+		return new ArrayMethod(cp.addUtf8(name), cp.addUtf8(TO_GENERAL_DESC), 6, 9, a.finish());
 	}
 
+	// floatValueOf non-null selects the print-only boxing: a single-float element is
+	// boxed as a Float (no widening) so the renderer can spell it at its f32 width.
 	private static void emitToGeneralBody(JvmAsm a, boolean single, ClassConstant arrayClass,
 			ClassConstant arrayListClass, ClassConstant objectClass, MethodrefConstant alInit, MethodrefConstant alAdd,
-			MethodrefConstant longValueOf, MethodrefConstant doubleValueOf) {
+			MethodrefConstant longValueOf, MethodrefConstant doubleValueOf,
+			@org.jspecify.annotations.Nullable MethodrefConstant floatValueOf) {
 		int o = 0, d = 1, rank = 2, off = 3, total = 4, dimsArr = 5, list = 6, k = 7, f = 8;
 		a.aload(o);
 		a.checkcast(arrayClass);
@@ -302,8 +315,14 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iload(off);
 		a.iload(f);
 		a.op(Opcode.IADD);
-		loadElem(a, single);
-		a.invokestatic(doubleValueOf);
+		if (single && floatValueOf != null) {
+			a.faload();
+			a.invokestatic(floatValueOf);
+		}
+		else {
+			loadElem(a, single);
+			a.invokestatic(doubleValueOf);
+		}
 		a.invokevirtual(alAdd);
 		a.pop();
 		a.iinc(f, 1);

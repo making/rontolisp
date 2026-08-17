@@ -1708,7 +1708,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			packedPrint = new JvmRuntimeBuilder.PackedPrint(cp.addClass(cp.addUtf8("[D")),
 					cp.addClass(cp.addUtf8("[F")),
 					cp.addMethodref(thisClass,
-							cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL),
+							cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_PRINT),
 									cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_DESC))),
 					cp.addMethodref(stringClass,
 							cp.addNameAndType(cp.addUtf8("replaceFirst"),
@@ -1796,21 +1796,30 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
 				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat);
 
+		// Float text: every double spelling gets the lowercase exponent marker (the
+		// FloatText contract), and a packed single-float array element prints through a
+		// transient Float box at its f32 width.
+		ClassConstant floatBoxClass = cp.addClass(cp.addUtf8("java/lang/Float"));
+		MethodrefConstant floatToString = cp.addMethodref(floatBoxClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		JvmRuntimeBuilder.FloatPrint floatPrint = new JvmRuntimeBuilder.FloatPrint(floatBoxClass, floatToString,
+				stringReplace, cp.addString("E"), cp.addString("e"));
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
-				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
-				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, charBoxClass, charPrin1Method,
-				arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint, packedPrint,
-				packedIntPrint, instPrint, strEscMethod, hashPrint);
+				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
+				consToStringMethod, nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, charBoxClass,
+				charPrin1Method, arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint,
+				packedPrint, packedIntPrint, instPrint, strEscMethod, hashPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
-				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
-				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, stringLastIndexOf, ratioArrayClass,
-				stringConcat, slashStr, charBoxClass, characterToString, arrayListClassForPrint,
-				arrayToDisplayStringMethod, strvMethod, javaPrint, futurePrint, packedPrint, packedIntPrint, instPrint,
-				hashPrint);
+				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
+				consToDisplayStringMethod, nilStr, funcStr, stringCharAt, stringLength, stringSubstring,
+				stringLastIndexOf, ratioArrayClass, stringConcat, slashStr, charBoxClass, characterToString,
+				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, futurePrint, packedPrint,
+				packedIntPrint, instPrint, hashPrint);
 		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),

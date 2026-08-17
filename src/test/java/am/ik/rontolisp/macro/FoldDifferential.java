@@ -192,9 +192,16 @@ public final class FoldDifferential {
 		add(probes, "princ-to-string", "#\\a");
 		add(probes, "princ-to-string", "nil");
 		add(probes, "princ-to-string", "t");
+		// Floats fold since todo-431: every backend prints the same Schubfach
+		// shortest round-trip decimal, lowercase exponent marker included.
+		add(probes, "princ-to-string", "1.21");
+		add(probes, "princ-to-string", "1.0e10");
+		add(probes, "princ-to-string", "-0.0");
+		add(probes, "princ-to-string", "4.9e-324");
 		add(probes, "prin1-to-string", "\"hi\"");
 		add(probes, "prin1-to-string", "#\\a");
 		add(probes, "prin1-to-string", "42");
+		add(probes, "prin1-to-string", "3.14159");
 		add(probes, "string-upcase", "\"hello\"");
 		add(probes, "string-downcase", "\"HELLO\"");
 		// CL folds character by character, so no mapping changes the length -- and the

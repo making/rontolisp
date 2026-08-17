@@ -107,9 +107,11 @@ supported at the top level and inside `~{ ... ~}` / `~@{ ... ~}` bodies (the
 join idiom `"~{~a~^, ~}"`; inside `~:{ ... ~}` it ends the current sublist's
 body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes:
 
-- A `~f` (and the fixed branch of `~g`) without a digit count falls back to each
-  backend's native float printing, so its exact form is backend-specific; supply
-  a digit count for portable output. `~g` accepts no prefix parameters.
+- A `~f` (and the fixed branch of `~g`) without a digit count falls back to the
+  free-format float printing (the shortest round-trip decimal, identical on every
+  backend), which may use exponent notation where `~f` with a digit count never
+  would; supply a digit count for a fixed decimal layout. `~g` accepts no prefix
+  parameters.
 - `~e` builds its mantissa from integer arithmetic (so the output is identical on
   every backend) and the digit count must be a literal, not a runtime `v`. The scaled mantissa is computed in 64-bit arithmetic, which limits `~,De` to roughly `D` <= 17 digits of precision (identically on every backend); the default (`~e`, 6 digits) is well within that bound. The scale factor of `~e` must be 1 (the default), and
   the overflow character of `~f`/`~e` requires a literal width.

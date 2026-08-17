@@ -513,8 +513,8 @@ final class JvmRuntimeBuilder {
 	 */
 	static List<Integer> buildLispToStringBody(ClassConstant longClass, ClassConstant doubleClass,
 			ClassConstant stringClass, ClassConstant objectArrayClass, ClassConstant integerClass,
-			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
-			MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
+			MethodrefConstant longToString, MethodrefConstant doubleToString, FloatPrint floatPrint,
+			MethodrefConstant objectToString, MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
 			ConstantPool.StringConstant slashStr, ClassConstant charBoxClass, MethodrefConstant charPrin1Method,
 			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
@@ -561,7 +561,8 @@ final class JvmRuntimeBuilder {
 		emitU2(code, longToString.index());
 		code.add(Opcode.ARETURN);
 
-		// if (val instanceof Double) return ((Double)val).toString();
+		// if (val instanceof Double) return ((Double)val).toString().replace("E", "e");
+		// (the FloatText lowercase-marker spelling, identical on every backend)
 		patchBranch(code, ifNotLongPos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
@@ -574,13 +575,38 @@ final class JvmRuntimeBuilder {
 		emitU2(code, doubleClass.index());
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, doubleToString.index());
+		emitLdc(code, floatPrint.upperE().index());
+		emitLdc(code, floatPrint.lowerE().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, floatPrint.stringReplace().index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof Float) return ((Float)val).toString().replace("E", "e");
+		// A Float box exists only transiently while a packed single-float array prints
+		// its elements at their f32 width (_fvToGeneralPrint); no Lisp value holds one.
+		patchBranch(code, ifNotDoublePos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, floatPrint.floatClass().index());
+		int ifNotFloatPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, floatPrint.floatClass().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, floatPrint.floatToString().index());
+		emitLdc(code, floatPrint.upperE().index());
+		emitLdc(code, floatPrint.lowerE().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, floatPrint.stringReplace().index());
 		code.add(Opcode.ARETURN);
 
 		// if (val instanceof String) return _strEsc((String)val);
 		//
 		// The quote-framed content still needs its embedded " and \ escaped before it can
 		// be read back; _strEsc passes a bare symbol name through untouched (todo 216).
-		patchBranch(code, ifNotDoublePos, code.size());
+		patchBranch(code, ifNotFloatPos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, stringClass.index());
@@ -936,12 +962,13 @@ final class JvmRuntimeBuilder {
 	 */
 	static List<Integer> buildLispToDisplayStringBody(ClassConstant longClass, ClassConstant doubleClass,
 			ClassConstant stringClass, ClassConstant objectArrayClass, ClassConstant integerClass,
-			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
-			MethodrefConstant consToDisplayStringMethod, ConstantPool.StringConstant nilStr,
-			ConstantPool.StringConstant funcStr, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, MethodrefConstant stringLastIndexOf, ClassConstant ratioArrayClass,
-			MethodrefConstant stringConcat, ConstantPool.StringConstant slashStr, ClassConstant charBoxClass,
-			MethodrefConstant characterToString, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
+			MethodrefConstant longToString, MethodrefConstant doubleToString, FloatPrint floatPrint,
+			MethodrefConstant objectToString, MethodrefConstant consToDisplayStringMethod,
+			ConstantPool.StringConstant nilStr, ConstantPool.StringConstant funcStr, MethodrefConstant stringCharAt,
+			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringLastIndexOf,
+			ClassConstant ratioArrayClass, MethodrefConstant stringConcat, ConstantPool.StringConstant slashStr,
+			ClassConstant charBoxClass, MethodrefConstant characterToString,
+			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
@@ -984,7 +1011,8 @@ final class JvmRuntimeBuilder {
 		emitU2(code, longToString.index());
 		code.add(Opcode.ARETURN);
 
-		// if (val instanceof Double) return ((Double)val).toString();
+		// if (val instanceof Double) return ((Double)val).toString().replace("E", "e");
+		// (the FloatText lowercase-marker spelling, identical on every backend)
 		patchBranch(code, ifNotLongPos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
@@ -997,10 +1025,35 @@ final class JvmRuntimeBuilder {
 		emitU2(code, doubleClass.index());
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, doubleToString.index());
+		emitLdc(code, floatPrint.upperE().index());
+		emitLdc(code, floatPrint.lowerE().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, floatPrint.stringReplace().index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof Float) return ((Float)val).toString().replace("E", "e");
+		// A Float box exists only transiently while a packed single-float array prints
+		// its elements at their f32 width (_fvToGeneralPrint); no Lisp value holds one.
+		patchBranch(code, ifNotDoublePos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, floatPrint.floatClass().index());
+		int ifNotFloatPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, floatPrint.floatClass().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, floatPrint.floatToString().index());
+		emitLdc(code, floatPrint.upperE().index());
+		emitLdc(code, floatPrint.lowerE().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, floatPrint.stringReplace().index());
 		code.add(Opcode.ARETURN);
 
 		// if (val instanceof String) -> strip quotes if leading '"'
-		patchBranch(code, ifNotDoublePos, code.size());
+		patchBranch(code, ifNotFloatPos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, stringClass.index());
@@ -1296,6 +1349,15 @@ final class JvmRuntimeBuilder {
 	 * into the two lisp-to-string builders only when the program uses packed float
 	 * arrays.
 	 */
+	/**
+	 * Constants for the float text of _lispToString/_lispToDisplayString: the lowercase
+	 * exponent-marker rewrite every float spelling gets (the FloatText contract), and the
+	 * transient Float box a packed single-float array element prints through.
+	 */
+	record FloatPrint(ClassConstant floatClass, MethodrefConstant floatToString, MethodrefConstant stringReplace,
+			ConstantPool.StringConstant upperE, ConstantPool.StringConstant lowerE) {
+	}
+
 	record PackedPrint(ClassConstant doubleArrayClass, ClassConstant floatArrayClass,
 			MethodrefConstant fvToGeneralMethod, MethodrefConstant stringReplaceFirst,
 			ConstantPool.StringConstant prefixRegex, ConstantPool.StringConstant prefixRepl,

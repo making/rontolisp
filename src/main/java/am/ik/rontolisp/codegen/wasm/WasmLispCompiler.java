@@ -475,7 +475,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * after the fixed and {@code --simd} types in {@code asyncMode} only.
 	 */
 	private int asyncTypeBase() {
-		return IARR_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
+		return SCHUB_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
 	}
 
 	/**
@@ -682,7 +682,28 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_PRINT_F64_NO_NL = FUNC_PRINT_F64 + 1;
 
-	static final int FUNC_APPEND = FUNC_PRINT_F64_NO_NL + 1;
+	// The Schubfach shortest-decimal runtime behind the float printers (todo-431):
+	// digit selection identical to Double.toString/Float.toString, so all four
+	// backends print byte-identical float text. Bodies in WasmSchubfachRuntimeBuilder,
+	// tables in SchubfachTables.
+	static final int FUNC_SCHUB_UMULHI = FUNC_PRINT_F64_NO_NL + 1;
+
+	static final int FUNC_SCHUB_G = FUNC_SCHUB_UMULHI + 1;
+
+	static final int FUNC_SCHUB_ROP = FUNC_SCHUB_G + 1;
+
+	static final int FUNC_F64_DEC = FUNC_SCHUB_ROP + 1;
+
+	static final int FUNC_F32_DEC = FUNC_F64_DEC + 1;
+
+	static final int FUNC_DEC_FMT = FUNC_F32_DEC + 1;
+
+	static final int FUNC_WRITE_DEC = FUNC_DEC_FMT + 1;
+
+	// Prints a single-float (a packed #f array element) at its f32 width.
+	static final int FUNC_PRINT_F32_NO_NL = FUNC_WRITE_DEC + 1;
+
+	static final int FUNC_APPEND = FUNC_PRINT_F32_NO_NL + 1;
 
 	static final int FUNC_READ_LINE = FUNC_APPEND + 1;
 
@@ -1594,6 +1615,31 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int IARR_TYPE_LAST = TYPE_ARR_SET;
 
+	// The Schubfach float-printer runtime types (todo-431). Unconditional, like the
+	// printer itself; the tree shaker removes what a program does not reach.
+	static final int TYPE_SCHUB_UMULHI = IARR_TYPE_LAST + 1; // (i64, i64) -> i64
+
+	static final int TYPE_SCHUB_G = TYPE_SCHUB_UMULHI + 1; // (i32) -> (i64, i64)
+
+	static final int TYPE_SCHUB_ROP = TYPE_SCHUB_G + 1; // (i64, i64, i64) -> i64
+
+	static final int TYPE_F64_DEC = TYPE_SCHUB_ROP + 1; // (f64) -> (i64, i32)
+
+	static final int TYPE_F32_DEC = TYPE_F64_DEC + 1; // (f32) -> (i64, i32)
+
+	static final int TYPE_DEC_FMT = TYPE_F32_DEC + 1; // (i64, i32, i32, i32) -> i32
+
+	static final int TYPE_WRITE_DEC = TYPE_DEC_FMT + 1; // (i64, i32) -> ()
+
+	static final int TYPE_PRINT_F32 = TYPE_WRITE_DEC + 1; // (f32) -> ()
+
+	// struct {f32}: the transient box a packed single-float array element prints
+	// through, so the generic printer can spell it at its f32 width. No Lisp value
+	// holds one outside the array printer's buckets.
+	static final int TYPE_F32BOX = TYPE_PRINT_F32 + 1;
+
+	static final int SCHUB_TYPE_LAST = TYPE_F32BOX;
+
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
 	// Four types, emitted ONLY under --simd, appended after the packed integer-vector
@@ -1605,7 +1651,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = IARR_TYPE_LAST + 1; // 68
+	static final int TYPE_V128ARR = SCHUB_TYPE_LAST + 1; // 68
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -1617,13 +1663,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = IARR_TYPE_LAST + 2; // 69
+	static final int TYPE_VBLOCK = SCHUB_TYPE_LAST + 2; // 69
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = IARR_TYPE_LAST + 3; // 70
+	static final int TYPE_V_GET = SCHUB_TYPE_LAST + 3; // 70
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = IARR_TYPE_LAST + 4; // 71
+	static final int TYPE_V_SET = SCHUB_TYPE_LAST + 4; // 71
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -2875,6 +2921,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase);
 		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
+		// The Schubfach float-printer tables (todo-431): ONE shakeable blob whose only
+		// readers are the _schub_* helper bodies built later, so a program that never
+		// prints a float carries no table bytes. Appended here, BEFORE any user body
+		// compiles, so a user literal blob (a packed lookup table) stays the LAST
+		// aligned append and its marginal per-element cost stays exact.
+		int schubBlobBase = stringTable.appendShakeableBlobProbedOnBase(SchubfachTables.blob());
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
 		// emits a record's address as an i32.const inside an ordinary function body, so
 		// unlike the eval registry, the intern table and the case-fold tables -- all of
@@ -3917,6 +3969,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
 				this.usesInstances ? instanceTypeBase() : -1);
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
+		byte[] schubUmulhiBody = WasmSchubfachRuntimeBuilder.buildUmulhiBody();
+		byte[] schubGBody = WasmSchubfachRuntimeBuilder.buildGBody(FUNC_SCHUB_UMULHI, schubBlobBase);
+		byte[] schubRopBody = WasmSchubfachRuntimeBuilder.buildRopBody(FUNC_SCHUB_UMULHI);
+		byte[] f64DecBody = WasmSchubfachRuntimeBuilder.buildF64DecBody(FUNC_SCHUB_G, FUNC_SCHUB_ROP);
+		byte[] f32DecBody = WasmSchubfachRuntimeBuilder.buildF32DecBody(FUNC_SCHUB_G, FUNC_SCHUB_UMULHI);
+		byte[] decFmtBody = WasmSchubfachRuntimeBuilder.buildDecFmtBody();
+		byte[] writeDecBody = WasmSchubfachRuntimeBuilder.buildWriteDecBody(FUNC_DEC_FMT, FUNC_WRITE_STR,
+				OUT_BUF_OFFSET, PRINT_BUF_OFFSET);
+		byte[] printF32NoNlBody = WasmRuntimeBuilder.buildPrintF32Core(stringTable);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
 		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
@@ -4647,6 +4708,27 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.writeRefType(true, Type.EQ.code());
 				});
+				// The Schubfach float-printer runtime (todo-431), in constant order.
+				// TYPE_SCHUB_UMULHI: (i64, i64) -> i64
+				types.addFunc(new Type[] { Type.I64, Type.I64 }, new Type[] { Type.I64 });
+				// TYPE_SCHUB_G: (i32) -> (i64 g1, i64 g0)
+				types.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I64, Type.I64 });
+				// TYPE_SCHUB_ROP: (i64, i64, i64) -> i64
+				types.addFunc(new Type[] { Type.I64, Type.I64, Type.I64 }, new Type[] { Type.I64 });
+				// TYPE_F64_DEC: (f64) -> (i64 digits, i32 k)
+				types.addFunc(new Type[] { Type.F64 }, new Type[] { Type.I64, Type.I32 });
+				// TYPE_F32_DEC: (f32) -> (i64 digits, i32 k)
+				types.addFunc(new Type[] { Type.F32 }, new Type[] { Type.I64, Type.I32 });
+				// TYPE_DEC_FMT: (i64 digits, i32 k, i32 scratch, i32 out) -> i32 len
+				types.addFunc(new Type[] { Type.I64, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
+				// TYPE_WRITE_DEC: (i64 digits, i32 k) -> ()
+				types.addFunc(new Type[] { Type.I64, Type.I32 }, new Type[] {});
+				// TYPE_PRINT_F32: (f32) -> ()
+				types.addFunc(new Type[] { Type.F32 }, new Type[] {});
+				// TYPE_F32BOX: struct {f32} -- the transient single-float print box
+				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
+					fields.addField(false, w -> w.write(Type.F32));
+				}));
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -4949,6 +5031,14 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(TYPE_PRINT_I32) // _print_i32_no_nl
 					.addFunction(TYPE_PRINT_F64) // _print_f64
 					.addFunction(TYPE_PRINT_F64) // _print_f64_no_nl
+					.addFunction(TYPE_SCHUB_UMULHI) // _schub_umulhi
+					.addFunction(TYPE_SCHUB_G) // _schub_g
+					.addFunction(TYPE_SCHUB_ROP) // _schub_rop
+					.addFunction(TYPE_F64_DEC) // _f64_dec
+					.addFunction(TYPE_F32_DEC) // _f32_dec
+					.addFunction(TYPE_DEC_FMT) // _dec_fmt
+					.addFunction(TYPE_WRITE_DEC) // _write_dec
+					.addFunction(TYPE_PRINT_F32) // _print_f32_no_nl
 					.addFunction(TYPE_CALLABLE_BASE + 1) // _append
 					.addFunction(TYPE_READ_LINE_FD) // _read_line
 					.addFunction(TYPE_PRINT_VAL); // _princ_val
@@ -5610,6 +5700,14 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(printI32NoNlBody)
 					.addFunction(printF64Body)
 					.addFunction(printF64NoNlBody)
+					.addFunction(schubUmulhiBody)
+					.addFunction(schubGBody)
+					.addFunction(schubRopBody)
+					.addFunction(f64DecBody)
+					.addFunction(f32DecBody)
+					.addFunction(decFmtBody)
+					.addFunction(writeDecBody)
+					.addFunction(printF32NoNlBody)
 					.addFunction(appendBody)
 					.addFunction(readLineBody)
 					.addFunction(princValBody)
@@ -8187,7 +8285,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.slash = addBodyString("/");
 			this.nanStr = addBodyString("NaN");
 			this.infinityStr = addBodyString("Infinity");
-			this.expE = addBodyString("E");
+			this.expE = addBodyString("e");
 			this.charPrefix = addBodyString("#\\");
 			this.charSpace = addBodyString("Space");
 			this.charNewline = addBodyString("Newline");
@@ -8329,7 +8427,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (int[] blob : this.shakeableBlobs) {
 				int start = blob[0] - dataBase;
-				ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, start, start + blob[1]));
+				int probeLen = blob[2] > 0 ? blob[2] : blob[1];
+				ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, start, start + blob[1], start,
+						start + probeLen));
 			}
 			return ranges;
 		}
@@ -8365,7 +8465,23 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		int appendShakeableBlob(byte[] blob) {
 			int offset = appendBlob(blob);
-			this.shakeableBlobs.add(new int[] { offset, blob.length });
+			this.shakeableBlobs.add(new int[] { offset, blob.length, 0 });
+			return offset;
+		}
+
+		/**
+		 * {@link #appendShakeableBlob} for a blob whose readers all cite its BASE address
+		 * (interior offsets are derived arithmetically inside the reading bodies): the
+		 * droppable range is probed on the first word only, so an unrelated small
+		 * constant landing somewhere inside a wide blob cannot pin it -- with a 755-byte
+		 * table that false retention was near-certain (todo-431's Schubfach tables are
+		 * the one user today).
+		 * @param blob the bytes to place
+		 * @return the absolute offset where the blob was placed
+		 */
+		int appendShakeableBlobProbedOnBase(byte[] blob) {
+			int offset = appendBlob(blob);
+			this.shakeableBlobs.add(new int[] { offset, blob.length, 4 });
 			return offset;
 		}
 

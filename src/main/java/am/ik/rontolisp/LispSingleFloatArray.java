@@ -38,6 +38,12 @@ public record LispSingleFloatArray(float[] data, int[] dims) implements LispFloa
 	}
 
 	@Override
+	public String elementText(int flat) {
+		// The element prints at its stored f32 width, so #f(0.1) round-trips.
+		return FloatText.singleText(this.data[flat]);
+	}
+
+	@Override
 	public String openPrefix() {
 		return "#f(";
 	}

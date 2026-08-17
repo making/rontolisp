@@ -1,6 +1,7 @@
 ;;;; pi_approx -- --no-gc edition: the same Leibniz loop as a reactor.
-;;;; princ instead of format (outside the subset), so it prints 6 significant
-;;;; digits, not 15 decimals -- hence reported apart from the main table.
+;;;; princ instead of format (outside the subset), so it prints the shortest
+;;;; round-trip decimal, not 15 fixed decimals -- hence reported apart from
+;;;; the main table.
 ;;;;
 ;;;; Run:
 ;;;;   rontolisp size-report/programs/pi_approx/pi_approx-nogc.lisp \

@@ -552,7 +552,9 @@ class WasmTreeShakerTest {
 		// alias alist) go, rows included -- the module was over 24 KB of data before.
 		byte[] interning = compile("(print (intern (string-upcase \"foo\")))", false, OptimizeLevel.DEFAULT);
 		Module.parse(interning).assertWellFormed();
-		assertThat(dataSectionSize(interning)).isLessThan(1024);
+		// The generic printer keeps its own data: the printer prologue strings plus
+		// the ~755-byte Schubfach float table (todo-431).
+		assertThat(dataSectionSize(interning)).isLessThan(2048);
 		byte[] data = dataSectionPayload(interning);
 		for (String dead : new String[] { ":FROM-END", "\"ASDF\"", "keyword" }) {
 			assertThat(contains(data, dead)).as("dead wrapper literal %s survived the interning program", dead)

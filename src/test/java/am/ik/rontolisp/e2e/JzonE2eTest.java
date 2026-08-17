@@ -161,7 +161,7 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 			(terpri)
 			""";
 
-	private static final List<String> INTERPRETER_RESIDUE_EXPECTED = List.of("\"a", "bé\"", "-1.5E10", "{",
+	private static final List<String> INTERPRETER_RESIDUE_EXPECTED = List.of("\"a", "bé\"", "-1.5e10", "{",
 			"\"only-keys\": \"ARE-AFFECTED\",", "\"noChange\": \"when used\",", "\"AS A\": \"value\"", "}");
 
 	@Test

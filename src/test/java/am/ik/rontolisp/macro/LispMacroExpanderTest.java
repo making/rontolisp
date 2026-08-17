@@ -237,7 +237,7 @@ class LispMacroExpanderTest {
 	void aFixedDecimalPieceGoesOutThroughWriteStringNotPrinc() {
 		// %fixed-decimal answers a string by construction, and `princ` of a value whose
 		// type the compiler cannot see has to keep the whole generic printer reachable
-		// -- on the WASM GC backend that is the float digit printer and its ~3.8 KB of
+		// -- on the WASM GC backend that is the float printer and several KB of
 		// runtime, in a program that no longer prints a float anywhere.
 		String out = expandOne("(format t \"pi = ~,15F~%\" x)");
 		assertThat(out).contains("WRITE-STRING").contains("%FIXED-DECIMAL");

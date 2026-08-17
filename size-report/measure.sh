@@ -139,7 +139,7 @@ json_rows=()
 # to run it. Nothing about the build asks for it.
 hello_expected='Hello, World!'
 pi_expected='pi = 3.141591653589774'
-pi_nogc_expected='3.141591'
+pi_nogc_expected='3.1415916535897743'
 
 wasm_builds=(
   "hello_world_plain|programs/hello_world/hello_world.lisp||-W gc|$hello_expected"

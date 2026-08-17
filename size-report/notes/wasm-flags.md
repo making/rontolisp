@@ -225,6 +225,12 @@ above.
 
 ### pi_approx
 
+A float-PRINTING program carries the shortest-round-trip float printer
+(todo-431: Schubfach digit selection, ~2.7 KB of code plus a ~0.75 KB table;
+`.kb/format.md`, "The float printer"). The `--no-gc` row prints via `princ`, so
+its floor includes that printer; the GC rows render through `~,15F`'s
+fixed-decimal primitive and shake the free-format printer out.
+
 | Language | WASI | Size (bytes) |
 | --- | --- | ---: |
 | wado | Preview 3 (component) | 6,034 |

@@ -7232,7 +7232,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (scale-float 1.5 3))")).isEqualTo("12.0");
 		// The subnormal-to-max edge: 2^-1074 scaled by 2097 is exactly 2^1023.
 		assertThat(compileAndRun("(print (scale-float 4.9406564584124654d-324 2097))"))
-			.isEqualTo("8.98846567431158E307");
+			.isEqualTo("8.98846567431158e307");
 		assertThat(compileAndRun("(print (scale-float 1.0 -100000))")).isEqualTo("0.0");
 	}
 

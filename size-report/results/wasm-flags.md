@@ -5,25 +5,25 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-17
-- rontolisp: 0.1.0-SNAPSHOT (`019de94`)
+- rontolisp: 0.1.0-SNAPSHOT (`7e74cee`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
-| hello_world | (none) | core (command) | Preview 1 | 148,358 |
-| hello_world | `--optimize` | core (command) | Preview 1 | 531 |
-| hello_world | `--optimize=size` | core (command) | Preview 1 | 531 |
-| hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,685 |
+| hello_world | (none) | core (command) | Preview 1 | 151,354 |
+| hello_world | `--optimize` | core (command) | Preview 1 | 538 |
+| hello_world | `--optimize=size` | core (command) | Preview 1 | 538 |
+| hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,693 |
 | hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 406 |
-| pi_approx | (none) | core (command) | Preview 1 | 148,558 |
-| pi_approx | `--optimize` | core (command) | Preview 1 | 2,874 |
-| pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,874 |
-| pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 4,005 |
-| pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 332,382 |
-| zlib | `--optimize` | core (command) | Preview 1 | 114,011 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 89,193 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 92,342 |
+| pi_approx | (none) | core (command) | Preview 1 | 151,554 |
+| pi_approx | `--optimize` | core (command) | Preview 1 | 2,858 |
+| pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,858 |
+| pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 4,013 |
+| pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 3,442 |
+| zlib | (none) | core (command) | Preview 1 | 335,423 |
+| zlib | `--optimize` | core (command) | Preview 1 | 117,287 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 92,479 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 95,604 |
 
 ## What is measured
 
@@ -251,6 +251,12 @@ above.
 | rust | Preview 1 | 40,365 |
 
 ### pi_approx
+
+A float-PRINTING program carries the shortest-round-trip float printer
+(todo-431: Schubfach digit selection, ~2.7 KB of code plus a ~0.75 KB table;
+`.kb/format.md`, "The float printer"). The `--no-gc` row prints via `princ`, so
+its floor includes that printer; the GC rows render through `~,15F`'s
+fixed-decimal primitive and shake the free-format printer out.
 
 | Language | WASI | Size (bytes) |
 | --- | --- | ---: |

@@ -131,8 +131,8 @@ The rule this pass commits to, in order:
    divergences the fold actually surfaced went this way in the same session -- the
    JVM's silent `sipush` truncation and `assert`'s lost diagnostic, both below.
 2. **If the two answers are each defensible and the fix is a known open item, decline
-   the shape and name the item.** Non-ASCII case conversion (`.todo/269`) and every
-   float (`.todo/046`) are here. Declining is the only interim answer that cannot be
+   the shape and name the item.** Non-ASCII case conversion (`.todo/269`) and float
+   arithmetic (unpinned contagion/edge semantics, see below) are here. Declining is the only interim answer that cannot be
    wrong, and the trigger is written down so the next visitor can widen it.
 3. **Never make the fold "usually right".** A fold that prints a value differently from
    the runtime is worse than no fold, because the program now has two spellings of one
@@ -140,13 +140,16 @@ The rule this pass commits to, in order:
 
 ### What is deliberately OUT, with its re-evaluation trigger
 
-- **Every FLOAT** — as an argument and as a result. `_print_f64` and
-  `LispDouble.print()` disagree at large magnitudes (`.todo/046`), which is already why
-  `WasmLiteralPrint` excludes floats, and `princ-to-string` would bake that
-  disagreement into the output as text. The arithmetic itself (`f64.add` & co.) is
-  IEEE-754 and would fold soundly; the contagion rules, the zero divisor and the
-  overflow-to-infinity cases are not pinned across the four backends. **Trigger:**
-  close `.todo/046`, then add float rows to `FoldDifferential` and see what survives.
+- **Float ARITHMETIC** — the print half of the old exclusion is retired: since
+  todo-431 every backend prints the same Schubfach shortest decimal
+  (`.kb/format.md`, "The float printer"), so a float literal is accepted as an
+  ARGUMENT and the print-family entries fold it (`(princ-to-string 1.5)` ->
+  `"1.5"`; `WasmLiteralPrint` folds float print literals the same session). What
+  stays out is folding float-COMPUTING entries: every arithmetic entry still
+  declines a float itself (the integer guards), because the contagion rules, the
+  zero divisor and the overflow-to-infinity cases are not pinned across the four
+  backends. **Trigger:** pin those semantics with float rows in
+  `FoldDifferential`, then widen the arithmetic entries.
 - **Every RATIO** — as an argument and as a result, which is why `(/ 7 2)` declines and
   `(/ 100 5)` folds. The WASM ratio tier has **i32 components** (`.kb/wasm-bignum.md`),
   so a folded ratio literal is not representable at every magnitude the compiler can

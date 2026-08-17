@@ -2063,11 +2063,9 @@ class WasmLispCompilerIntegrationTest {
 	void noGcPrintWritesToStdoutMatchingTheInterpreter() throws Exception {
 		// print = prin1 text + a trailing newline (strings quoted), princ =
 		// display text (no quotes, no newline), terpri = a newline -- byte-for-byte the
-		// interpreter's output for every line below. The float lines ride the __ftoa
-		// port of the GC backend's IEEE-hardened printer (NaN / Infinity / -0.0 by
-		// sign bit); a magnitude >= 2^63 prints in the WASM backends' E-notation digit
-		// shape (the interpreter's Double.toString shape differs there -- the known
-		// large-finite-float print-shape divergence, same as the GC backend).
+		// interpreter's output for every line below, INCLUDING every float: __ftoa
+		// renders the Schubfach shortest round-trip decimal (todo-431), so the old
+		// large-finite-float print-shape divergence is gone.
 		String program = """
 				(defun show ()
 				  (print 42)
@@ -2096,7 +2094,7 @@ class WasmLispCompilerIntegrationTest {
 				NaN
 				Infinity
 				-Infinity
-				9.223372E18
+				9.223372036854776e18
 				"hello"
 				bare
 				T
@@ -4855,8 +4853,9 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void piConstant() throws Exception {
-		// WASM float printing is limited to 6 fractional digits.
-		assertThat(compileAndRun("(print pi)")).isEqualTo("3.141592");
+		// The full shortest round-trip decimal, identical to the interpreter and the
+		// JVM (todo-431).
+		assertThat(compileAndRun("(print pi)")).isEqualTo("3.141592653589793");
 	}
 
 	@Test
@@ -13040,11 +13039,10 @@ class WasmLispCompilerIntegrationTest {
 
 	// --- packed single-float arrays (#f / :element-type 'single-float) -------
 	// The same TYPE_FARRAY struct as #d, distinguished by a TYPE_F32ARR data array;
-	// reads widen f32->f64, writes narrow. Cross-backend assertions use exact
-	// (power-of-two / integer-valued) f32 values so the printed form is byte-identical
-	// (a non-terminating f32 decimal renders differently under the WASM float printer;
-	// lossy narrowing is asserted arithmetically below and byte-exactly in
-	// JvmFloatArrayTest).
+	// reads widen f32->f64, writes narrow. A single-float ELEMENT prints at its f32
+	// width on every backend since todo-431 (the shortest f32 round-trip decimal, so
+	// #f(0.1) round-trips); lossy narrowing is also asserted arithmetically below and
+	// byte-exactly in JvmFloatArrayTest.
 
 	@Test
 	void compilePackedSingleFloatVectorLiteralArefAndPrint() throws Exception {
@@ -13121,13 +13119,19 @@ class WasmLispCompilerIntegrationTest {
 	void compileSingleFloatStorageNarrowsToF32() throws Exception {
 		// f32(0.1) widened != f64 0.1, so a single-float element differs from the double
 		// (proving the store really narrows to f32); the double width keeps the value.
-		// The boolean result is byte-identical across every backend (unlike the printed
-		// decimal, which the WASM float printer renders differently).
 		assertThat(compileAndRun("""
 				(let ((a (make-array 1 :element-type 'single-float)))
 				  (setf (aref a 0) 0.1)
 				  (print (= (aref a 0) 0.1)))
 				""")).isEqualTo("NIL");
+		// The element itself prints at the f32 width (the widened double would show
+		// 0.10000000149011612), while aref answers the widened double.
+		assertThat(compileAndRun("""
+				(let ((a (make-array 1 :element-type 'single-float)))
+				  (setf (aref a 0) 0.1)
+				  (print a)
+				  (print (aref a 0)))
+				""")).isEqualTo("#f(0.1)\n0.10000000149011612");
 		assertThat(compileAndRun("""
 				(let ((b (make-array 1 :element-type 'double-float)))
 				  (setf (aref b 0) 0.1)
@@ -15198,9 +15202,9 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (/ 1.0 0.0))")).isEqualTo("Infinity");
 		assertThat(compileAndRun("(print (/ -1.0 0.0))")).isEqualTo("-Infinity");
 		assertThat(compileAndRun("(print (/ 0.0 0.0))")).isEqualTo("NaN");
-		assertThat(compileAndRun("(print (* 1.5 (expt 10.0 12)))")).isEqualTo("1500000000000.0");
-		assertThat(compileAndRun("(print (- (* 2.5 (expt 10.0 15))))")).isEqualTo("-2500000000000000.0");
-		assertThat(compileAndRun("(print (expt 10.0 19))")).isEqualTo("1.0E19");
+		assertThat(compileAndRun("(print (* 1.5 (expt 10.0 12)))")).isEqualTo("1.5e12");
+		assertThat(compileAndRun("(print (- (* 2.5 (expt 10.0 15))))")).isEqualTo("-2.5e15");
+		assertThat(compileAndRun("(print (expt 10.0 19))")).isEqualTo("1.0e19");
 		// print of the returned STRING prin1-quotes it; the point is princ-to-string
 		// shares the fixed core and no longer traps
 		assertThat(compileAndRun("(print (princ-to-string (/ 1.0 0.0)))")).isEqualTo("\"Infinity\"");

@@ -11,6 +11,7 @@ import java.util.Set;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispIntVector;
@@ -188,6 +189,14 @@ public final class PureBuiltinFolder {
 			case LispIntVector ignored -> {
 				return form;
 			}
+			case LispDouble ignored -> {
+				// A float literal is self-evaluating. Since todo-431 its printed text
+				// is identical on every backend (FloatText), so the print-family
+				// entries may fold it; every arithmetic entry still declines a float
+				// itself (the integer guards), keeping the contagion / zero-divisor /
+				// overflow semantics out of the fold until they are pinned.
+				return form;
+			}
 			case LispCons cons -> {
 				if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())
 						&& cons.cdr() instanceof LispCons datum && datum.cdr() instanceof LispNil) {
@@ -196,7 +205,7 @@ public final class PureBuiltinFolder {
 				return foldCall(cons, blocked);
 			}
 			default -> {
-				// A float, an array, a hash table, an instance: excluded by
+				// An array, a hash table, an instance: excluded by
 				// .kb/pure-builtin-fold.md, each for its own reason.
 				return null;
 			}
@@ -1324,15 +1333,16 @@ public final class PureBuiltinFolder {
 	/**
 	 * The text a value renders as, for the types whose emitted renderer reproduces
 	 * {@link LispVal#print()} / {@code display()} exactly -- the same set
-	 * {@code WasmLiteralPrint} folds. A FLOAT is deliberately absent: {@code _print_f64}
-	 * and {@code LispDouble.print()} disagree at large magnitudes ({@code .todo/046}), so
-	 * folding one would give a program two spellings of the same value.
+	 * {@code WasmLiteralPrint} folds. A FLOAT folds too since todo-431: every backend's
+	 * printer now selects the same Schubfach shortest decimal as
+	 * {@code LispDouble.print()} ({@code FloatText}), so one spelling exists.
 	 */
 	private static @Nullable LispVal renderedLiteral(LispVal value, boolean readably) {
 		String text = switch (value) {
 			case LispString s -> readably ? s.print() : s.value();
 			case LispInteger i -> i.print();
 			case LispBigInteger b -> b.print();
+			case LispDouble d -> d.print();
 			case LispChar c -> readably ? c.print() : c.display();
 			case LispNil nil -> nil.print();
 			case LispTrue t -> t.print();

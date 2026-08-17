@@ -87,11 +87,11 @@ point after todo 153 (see [[characters-code-points]]) so no per-backend
 representation branch is needed. Integers up to 18 digits parse exactly
 everywhere (the WASM GC backend's boxed exact integers carry the signed 64-bit
 range, `.kb/wasm-bignum.md`; `parse-integer` expands to arithmetic that rides
-the same path); wider than 18 digits parses as a float on every backend. For
-the float cases WASM *prints* magnitudes since todo-108 group C fixed the
-float printer (exact integer part up to 2^63), but between 10^7 and 2^63 the
-SHAPE differs: WASM emits all digits (`1500000000000.0`) where the
-interpreter/JVM use `1.5E12` (residual of `.todo/046`). Objects build a
+the same path); wider than 18 digits parses as a float on every backend. Float
+OUTPUT is byte-identical on all four backends since todo-431: every printer
+selects the Schubfach shortest round-trip decimal with the lowercase exponent
+marker (`1.5e12`), so JSON bodies carry one spelling everywhere
+(`.kb/format.md`, "The float printer"). Objects build a
 `(make-hash-table :test 'equal)` with the verbatim string keys and arrays a
 simple vector (`%json-list->vector`: reverse-accumulated list filled into a
 `make-array`), so — unlike the former keyword-plist mode — `json.lisp` no

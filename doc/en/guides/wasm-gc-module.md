@@ -56,13 +56,11 @@ Two behavioral notes on the wasm-GC value model:
   counts as one parameter, so a `&rest` function may declare at most six
   required parameters while accepting any number of arguments at a direct
   call site.
-- **Float printing shape.** Floats of every magnitude print on WASM: the
-  integer part is exact up to 2⁶³, larger values fall back to an approximate
-  exponent form (`1.0E19`), and `Infinity`, `-Infinity` and `NaN` print as
-  those words, like the other backends. One shape difference remains: from
-  10⁷ up to 2⁶³ WASM prints all the digits (`1500000000000.0`) where the
-  interpreter and the JVM use exponent notation (`1.5E12`);
-  `rontolisp:json-stringify` inherits that shape difference.
+- **Float printing.** Floats print byte-identically on every backend: the
+  shortest decimal that reads back as the same value (`(print 1.21)` prints
+  `1.21`, `(print (* 1.5 (expt 10.0 12)))` prints `1.5e12`), with `Infinity`,
+  `-Infinity` and `NaN` as those words. `rontolisp:json-stringify` carries
+  the same text.
 
 ## Reclaiming the Host's Buffer (the Arena API)
 

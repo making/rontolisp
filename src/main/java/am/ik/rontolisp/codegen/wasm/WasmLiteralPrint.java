@@ -4,6 +4,7 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
@@ -37,11 +38,9 @@ final class WasmLiteralPrint {
 	 * The text a literal argument prints as.
 	 *
 	 * <p>
-	 * A FLOAT literal is deliberately absent. The emitted {@code _print_f64} does not
-	 * agree with {@code LispDouble.print()} on every magnitude (the open large-float
-	 * rounding gap), so folding one would give a program TWO spellings of the same value
-	 * -- the literal's and the computed one's. Re-evaluate when those two renderers
-	 * agree.
+	 * A FLOAT literal folds too since todo-431: the emitted printer selects the same
+	 * Schubfach shortest decimal {@code LispDouble.print()} (i.e. {@code FloatText})
+	 * answers, so the literal's spelling and the computed one's are identical.
 	 * @param obj the argument expression
 	 * @param readably {@code *print-escape*}: the {@code prin1} rendering rather than the
 	 * {@code princ} one
@@ -53,6 +52,7 @@ final class WasmLiteralPrint {
 			case LispString s -> readably ? s.print() : s.value();
 			case LispInteger i -> i.print();
 			case LispBigInteger bi -> bi.print();
+			case LispDouble d -> d.print();
 			case LispChar c -> readably ? c.print() : c.display();
 			case LispRatio r -> r.print();
 			case LispNil nil -> nil.print();

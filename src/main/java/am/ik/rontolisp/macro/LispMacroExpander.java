@@ -19224,9 +19224,9 @@ public final class LispMacroExpander {
 	 * to) is a STRING by construction, so it goes out through {@code write-string} rather
 	 * than {@code princ}: {@code princ} of a value whose type the compiler cannot see has
 	 * to keep the whole generic printer reachable -- on the WASM GC backend that is the
-	 * float digit printer and its ~3.8 KB of runtime, in a program that no longer prints
-	 * a float anywhere. {@code write-string} tracks the output column exactly as
-	 * {@code princ} does, so a following {@code ~&} is unaffected.
+	 * float printer and several KB of runtime, in a program that no longer prints a float
+	 * anywhere. {@code write-string} tracks the output column exactly as {@code princ}
+	 * does, so a following {@code ~&} is unaffected.
 	 * @param expr the string-valued piece
 	 * @return the form that writes it
 	 */

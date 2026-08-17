@@ -45,6 +45,15 @@ public final class WasmWriter {
 	}
 
 	/**
+	 * Write a 32-bit float in little-endian format.
+	 * @param value the float value to write
+	 * @return this instance for chaining
+	 */
+	public WasmWriter writeF32(float value) {
+		return this.write((Object) ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putFloat(value).array());
+	}
+
+	/**
 	 * Write an integer using signed LEB128 encoding.
 	 * <p>
 	 * <strong>Pick by the FIELD, not by the value's sign.</strong> Almost every integer

@@ -33,6 +33,11 @@ public record LispDoubleFloatArray(double[] data, int[] dims) implements LispFlo
 	}
 
 	@Override
+	public String elementText(int flat) {
+		return FloatText.doubleText(this.data[flat]);
+	}
+
+	@Override
 	public String openPrefix() {
 		return "#d(";
 	}

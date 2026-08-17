@@ -988,7 +988,29 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private record Mem(Map<String, Integer> literals, byte[] data, int dataBase, int heapBase, int iovAddr,
 			int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex, int markIndex, int resetIndex,
-			int ftoaIndex, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed) {
+			int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed) {
+
+		// The five Schubfach helpers behind __ftoa (todo-431), appended right after it
+		// in this order; bodies come from WasmSchubfachRuntimeBuilder.
+		int schubUmulhiIndex() {
+			return this.ftoaIndex + 1;
+		}
+
+		int schubGIndex() {
+			return this.ftoaIndex + 2;
+		}
+
+		int schubRopIndex() {
+			return this.ftoaIndex + 3;
+		}
+
+		int schubF64DecIndex() {
+			return this.ftoaIndex + 4;
+		}
+
+		int schubDecFmtIndex() {
+			return this.ftoaIndex + 5;
+		}
 
 		/**
 		 * The absolute function index of an internal function / export wrapper given its
@@ -1062,6 +1084,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			data.write(bytes, 0, bytes.length);
 			cursor += 4 + bytes.length;
 		}
+		// The Schubfach tables behind __ftoa (todo-431): raw bytes after the literals.
+		int schubBase = 0;
+		if (ftoaUsed) {
+			while ((cursor & 3) != 0) {
+				data.write(0);
+				cursor++;
+			}
+			schubBase = cursor;
+			byte[] blob = SchubfachTables.blob();
+			data.write(blob, 0, blob.length);
+			cursor += blob.length;
+		}
 		int heapBase = (cursor + 7) & ~7;
 		// The fd_write scratch (iovec + nwritten) sits between the static data and the
 		// bump heap, present only when the module prints.
@@ -1115,9 +1149,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int resetIndex = markIndex + 1;
 		// The printing helpers append after the arena pair, again gated.
 		int ftoaIndex = ftoaUsed ? resetIndex + 1 : -1;
-		int writeStdoutIndex = printUsed ? (ftoaUsed ? ftoaIndex + 1 : resetIndex + 1) : -1;
+		// __ftoa is followed by its five Schubfach helpers (see Mem.schub*Index).
+		int writeStdoutIndex = printUsed ? (ftoaUsed ? ftoaIndex + 6 : resetIndex + 1) : -1;
 		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, iovAddr, funcBase, allocIndex, memcpyIndex,
-				streqIndex, itoaIndex, markIndex, resetIndex, ftoaIndex, writeStdoutIndex, used, printUsed, ftoaUsed);
+				streqIndex, itoaIndex, markIndex, resetIndex, ftoaIndex, schubBase, writeStdoutIndex, used, printUsed,
+				ftoaUsed);
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -1222,7 +1258,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// A memory-using module emits a wrapper for EVERY export (the heap reset /
 		// marshalling), so the helper indices planned in planMemory over
 		// exportDecls.size() stay correct.
-		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 1 : 0)
+		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 6 : 0)
 				+ (mem.printUsed() ? 1 : 0);
 		// Canonical string ABI for --component :string exports:
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
@@ -1289,6 +1325,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				if (mem.ftoaUsed()) {
 					// __ftoa (f64) -> i32 (a fresh [len][bytes] string pointer).
 					typeSec.addFunc(new Type[] { Type.F64 }, new Type[] { Type.I32 });
+					// Its five Schubfach helpers, in Mem.schub*Index order:
+					// __schub_umulhi (i64, i64) -> i64
+					typeSec.addFunc(new Type[] { Type.I64, Type.I64 }, new Type[] { Type.I64 });
+					// __schub_g (i32) -> (i64, i64)
+					typeSec.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I64, Type.I64 });
+					// __schub_rop (i64, i64, i64) -> i64
+					typeSec.addFunc(new Type[] { Type.I64, Type.I64, Type.I64 }, new Type[] { Type.I64 });
+					// __schub_f64_dec (f64) -> (i64, i32)
+					typeSec.addFunc(new Type[] { Type.F64 }, new Type[] { Type.I64, Type.I32 });
+					// __schub_dec_fmt (i64, i32, i32, i32) -> i32
+					typeSec.addFunc(new Type[] { Type.I64, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
 				}
 				if (mem.printUsed()) {
 					// __write_stdout (ptr i32, len i32) -> (): the sole fd_write caller.
@@ -1400,6 +1447,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 				if (mem.ftoaUsed()) {
 					code.addFunction(ftoaBody(mem));
+					code.addFunction(WasmSchubfachRuntimeBuilder.buildUmulhiBody());
+					code.addFunction(WasmSchubfachRuntimeBuilder.buildGBody(mem.schubUmulhiIndex(), mem.schubBase()));
+					code.addFunction(WasmSchubfachRuntimeBuilder.buildRopBody(mem.schubUmulhiIndex()));
+					code.addFunction(
+							WasmSchubfachRuntimeBuilder.buildF64DecBody(mem.schubGIndex(), mem.schubRopIndex()));
+					code.addFunction(WasmSchubfachRuntimeBuilder.buildDecFmtBody());
 				}
 				if (mem.printUsed()) {
 					code.addFunction(writeStdoutBody(mem));
@@ -1753,29 +1806,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING, Ty.STRING));
 	}
 
-	// __ftoa(v f64) -> i32: render the float as a fresh [len][bytes] string, the exact
-	// digit-extraction algorithm of the GC backend's FUNC_PRINT_F64_NO_NL (hardened for
-	// the IEEE edges: NaN/Infinity/-Infinity return their static literal header
-	// directly, the sign is taken from the sign BIT so -0.0 prints "-0.0", magnitudes
-	// >= 2^63 divide into [1, 10) and append an E<exp> suffix) so print/princ-to-string
-	// output matches the GC backend byte for byte. Integer digits go MSD-first over a
-	// descending power of ten (10^18 covers everything below 2^63); the fractional part
-	// prints at least 1 and at most 6 digits, stopping once the residue drops below 1e-7.
-	// Param 0=v; locals 1=p (i32 result), 2=c (i32 write cursor), 3=int64 (i64),
-	// 4=pow (i64), 5=digit (i32), 6=started (i32), 7=frac (f64), 8=exp (i32),
-	// 9=digit_count (i32).
+	// __ftoa(v f64) -> i32: render the float as a fresh [len][bytes] string carrying
+	// the FloatText spelling -- the Schubfach shortest decimal (__schub_f64_dec) laid
+	// out by __schub_dec_fmt -- so print/princ-to-string output matches the other
+	// three backends byte for byte (todo-431). The IEEE specials return their static
+	// literal header directly and the sign comes from the sign BIT so -0.0 prints
+	// "-0.0". Param 0=v; locals 1=p (i32 result), 2=c (i32 write cursor),
+	// 3=len (i32), 4=digits (i64), 5=k (i32).
 	private static byte[] ftoaBody(Mem mem) {
-		final int P = 1, C = 2, INT64 = 3, POW = 4, DIGIT = 5, STARTED = 6, FRAC = 7, EXP = 8, COUNT = 9;
+		final int P = 1, C = 2, LEN = 3, DIGITS = 4, K = 5;
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		Runnable getV = () -> w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
-		Runnable getC = () -> w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(C);
-		Runnable incC = () -> {
-			getC.run();
-			w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-			w.write(Instruction.I32_ADD);
-			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(C);
-		};
 		// NaN: value != value -> the static "NaN" literal (no allocation).
 		getV.run();
 		getV.run();
@@ -1799,8 +1841,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_CONST).writeSignedLeb128(Objects.requireNonNull(mem.literals().get("-Infinity")));
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// p = __alloc(48): 4 header + at most 31 content bytes ('-' + 19 integer digits
-		// + '.' + 6 fraction digits + 'E' + 3 exponent digits); c = p + 4.
+		// p = __alloc(48): 4 header + at most 25 text bytes ('-' + 24) + digit scratch
+		// at p + 28 (17 bytes); c = p + 4.
 		w.write(Instruction.I32_CONST).writeSignedLeb128(48);
 		w.write(Instruction.CALL).writeUnsignedLeb128(mem.allocIndex());
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(P);
@@ -1814,190 +1856,42 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
 		w.write(Instruction.I64_LT_S);
 		w.write(Instruction.IF, 0x40);
-		getC.run();
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(C);
 		w.write(Instruction.I32_CONST).writeSignedLeb128('-');
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		incC.run();
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(C);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(C);
 		getV.run();
 		w.write(Instruction.F64_NEG);
 		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.END);
-		// value >= 2^63 cannot go through integer digit extraction: divide into [1, 10)
-		// and remember the decimal exponent (appended as E<exp> at the end).
+		// Nonzero: (digits, k) = __schub_f64_dec(v); zero keeps the locals (0, 0),
+		// which the formatter renders as "0.0".
 		getV.run();
-		w.write(Instruction.F64_CONST).writeF64(0x1p63);
-		w.write(Instruction.F64_GE);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_NE);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
 		getV.run();
-		w.write(Instruction.F64_CONST).writeF64(10.0);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.BR_IF, 1);
-		getV.run();
-		w.write(Instruction.F64_CONST).writeF64(10.0);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(0);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(EXP);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		w.write(Instruction.END); // if >= 2^63
-		// Integer digits MSD-first: int64 = i64(floor(v)); pow = 10^18; emit once a
-		// non-zero digit started (or at the final power, so 0 renders "0").
-		getV.run();
-		w.write(Instruction.F64_FLOOR);
-		w.write(Instruction.I64_TRUNC_S_F64);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(INT64);
-		w.write(Instruction.I64_CONST).writeSignedLeb128(1000000000);
-		w.write(Instruction.I64_CONST).writeSignedLeb128(1000000000);
-		w.write(Instruction.I64_MUL);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(POW);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(INT64);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(POW);
-		w.write(Instruction.I64_DIV_U);
-		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
-		w.write(Instruction.I64_REM_U);
-		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(STARTED);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(POW);
-		w.write(Instruction.I64_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I64_EQ);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.IF, 0x40);
-		getC.run();
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		incC.run();
-		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(STARTED);
+		w.write(Instruction.CALL).writeUnsignedLeb128(mem.schubF64DecIndex());
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(K);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGITS);
 		w.write(Instruction.END);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(POW);
-		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
-		w.write(Instruction.I64_DIV_U);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(POW);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(POW);
-		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
-		w.write(Instruction.I64_NE);
-		w.write(Instruction.BR_IF, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		// frac = v - f64(int64); '.'
-		getV.run();
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(INT64);
-		w.write(Instruction.F64_CONVERT_S_I64);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(FRAC);
-		getC.run();
-		w.write(Instruction.I32_CONST).writeSignedLeb128('.');
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		incC.run();
-		// Fraction digits: at least 1, at most 6, stop when the residue < 1e-7.
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(FRAC);
-		w.write(Instruction.F64_CONST).writeF64(10.0);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(FRAC);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(FRAC);
-		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGIT);
-		getC.run();
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		incC.run();
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(FRAC);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(FRAC);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(COUNT);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(COUNT);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(COUNT);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_LT_S);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(FRAC);
-		w.write(Instruction.F64_CONST).writeF64(0.0000001);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(COUNT);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(6);
-		w.write(Instruction.I32_LT_S);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.BR_IF, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		// Exponent suffix from the >= 2^63 normalization: 'E' then up to three decimal
-		// digits with leading-zero suppression (exp <= 291 for finite doubles).
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
-		w.write(Instruction.IF, 0x40);
-		getC.run();
-		w.write(Instruction.I32_CONST).writeSignedLeb128('E');
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		incC.run();
-		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(STARTED);
-		// hundreds
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(100);
-		w.write(Instruction.I32_DIV_U);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.IF, 0x40);
-		getC.run();
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		incC.run();
-		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(STARTED);
-		w.write(Instruction.END);
-		// tens
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
-		w.write(Instruction.I32_DIV_U);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
-		w.write(Instruction.I32_REM_U);
-		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(STARTED);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.IF, 0x40);
-		getC.run();
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
-		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		incC.run();
-		w.write(Instruction.END);
-		// ones (always written)
-		getC.run();
-		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
-		w.write(Instruction.I32_REM_U);
-		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		incC.run();
-		w.write(Instruction.END); // if exp
-		// Store the length header: p.len = c - p - 4; return p.
+		// len = __schub_dec_fmt(digits, k, p + 28, c)
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGITS);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(K);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(P);
-		getC.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128(28);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(C);
+		w.write(Instruction.CALL).writeUnsignedLeb128(mem.schubDecFmtIndex());
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(LEN);
+		// Store the length header: p.len = (c + len) - p - 4; return p.
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(P);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(C);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(LEN);
+		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(P);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
@@ -2005,10 +1899,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(P);
 		w.write(Instruction.END);
-		// Locals 1..9: p, c (i32), int64, pow (i64), digit, started (i32), frac (f64),
-		// exp, digit_count (i32).
-		return withLocalsRaw(b.toByteArray(), List.of(Type.I32.code(), Type.I32.code(), Type.I64.code(),
-				Type.I64.code(), Type.I32.code(), Type.I32.code(), Type.F64.code(), Type.I32.code(), Type.I32.code()));
+		return withLocalsRaw(b.toByteArray(),
+				List.of(Type.I32.code(), Type.I32.code(), Type.I32.code(), Type.I64.code(), Type.I32.code()));
 	}
 
 	// __write_stdout(ptr i32, len i32): the ONE funnel through which every printing op
