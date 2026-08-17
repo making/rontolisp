@@ -630,8 +630,27 @@ class LispFormatterTest {
 	@Test
 	void normalizesLineEndingsAndTheFinalNewline() {
 		assertThat(LispFormatter.format("(a)\r\n(b)")).isEqualTo("(a)\n(b)\n");
+		assertThat(LispFormatter.format("(a)\r(b)")).isEqualTo("(a)\n(b)\n");
 		assertThat(LispFormatter.format("")).isEmpty();
 		assertThat(LispFormatter.format("\n\n  \n")).isEmpty();
+	}
+
+	@Test
+	void keepsACarriageReturnThatIsInsideALiteral() {
+		// A CR between two tokens is a line ending and normalizes to LF (above); a CR
+		// INSIDE a string or character literal is part of that token, and rewriting it
+		// changes the program. The mustache spec suite -- vendored with cl-mustache, and
+		// in the corpus below -- carries "{{! Comment }}\r\n" template literals whose
+		// whole point is CRLF handling.
+		assertThat(LispFormatter.format("(render \"a\r\nb\")\r\n")).contains("\"a\r\nb\"").endsWith(")\n");
+		assertThat(LispFormatter.format("(render \"a\rb\")\n")).contains("\"a\rb\"");
+		assertThat(LispFormatter.format("(f #\\\r)\n")).contains("#\\\r");
+		// A CR ends a line comment; it does not become part of it (nor, on a CR-only
+		// source, swallow the rest of the file).
+		assertThat(LispFormatter.format("(a) ; note\r(b)\r")).isEqualTo("(a) ; note\n(b)\n");
+		// ...and formatting stays a fixpoint over such a source.
+		String once = LispFormatter.format("(render \"a\r\nb\" \"c\rd\")\r\n");
+		assertThat(LispFormatter.format(once)).isEqualTo(once);
 	}
 
 	@Test

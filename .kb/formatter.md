@@ -45,6 +45,23 @@ The only thing a node keeps of the original layout is `Trivia`: two bits,
 `blankLineBefore` and `startsLine`. Everything else about the whitespace is
 discarded and re-derived.
 
+**The source reaches `FormatReader` VERBATIM -- nothing normalizes line endings
+first** (2026-08-17). `LispFormatter.format` used to open with
+`source.replace("\r\n", "\n").replace('\r', '\n')`, which is a whitespace-only
+change everywhere EXCEPT inside a token: a `\r` in a string literal (or after a
+`#\`) is data, and rewriting it edits the program the invariant above forbids
+editing. So `skipSpace` is now the one place that decides what a line break is --
+LF, CRLF and a lone CR, each counted once -- and `readLineComment` ends at CR as
+well as LF (otherwise a CR-only source folds the whole file into one comment).
+Output is LF wherever the formatter emits the line break itself; a CR that was
+inside a literal (or inside a `#|...|#` block comment, reproduced verbatim) stays.
+The bug was invisible for as long as the corpus was LF-only: the case that found
+it is the vendored mustache spec suite
+(`src/test/resources/cl-mustache/t/test-spec.lisp`, `.kb/asdf.md`), whose template
+literals carry real CRLFs BECAUSE testing CRLF handling is the point of those
+cases. Pinned by `keepsACarriageReturnThatIsInsideALiteral` +
+`normalizesLineEndingsAndTheFinalNewline`.
+
 ## The layout model
 
 `IndentRules` maps an operator to a `Style`; `LispFormatter` walks the tree

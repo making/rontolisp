@@ -22,8 +22,9 @@ public final class FormatReader {
 	private int pos;
 
 	/**
-	 * Create a reader over the given source. Line endings are expected to be normalized
-	 * to {@code \n} already ({@link LispFormatter} does that).
+	 * Create a reader over the given source, VERBATIM: nothing normalizes it first, since
+	 * a {@code \r} inside a string or character literal is part of that token. LF, CRLF
+	 * and a lone CR are all line endings between tokens ({@code skipSpace}).
 	 * @param source the source text
 	 */
 	public FormatReader(String source) {
@@ -60,11 +61,17 @@ public final class FormatReader {
 		}
 	}
 
-	// Consumes whitespace, returning how many line breaks it crossed.
+	// Consumes whitespace, returning how many line breaks it crossed. A line ending is
+	// LF, CRLF or a lone CR, each counting once -- the source is read verbatim, so this
+	// is the only place that decides what a line break IS. (Nothing normalizes the source
+	// up front: a CR inside a string or character literal is part of that token, and the
+	// formatter may not touch it. `.kb/formatter.md`.)
 	private int skipSpace() {
 		int newlines = 0;
 		while (this.pos < this.source.length() && Character.isWhitespace(this.source.charAt(this.pos))) {
-			if (this.source.charAt(this.pos) == '\n') {
+			char c = this.source.charAt(this.pos);
+			if (c == '\n' || (c == '\r'
+					&& (this.pos + 1 >= this.source.length() || this.source.charAt(this.pos + 1) != '\n'))) {
 				newlines++;
 			}
 			this.pos++;
@@ -178,9 +185,13 @@ public final class FormatReader {
 		return new CstNode.Listing(open, items, trivia);
 	}
 
+	// A line comment ends at the line ending, whichever of the three it is -- a CR that
+	// ends the line would otherwise be swallowed into the comment (and, on a CR-only
+	// source, the rest of the file with it).
 	private String readLineComment() {
 		int start = this.pos;
-		while (this.pos < this.source.length() && this.source.charAt(this.pos) != '\n') {
+		while (this.pos < this.source.length() && this.source.charAt(this.pos) != '\n'
+				&& this.source.charAt(this.pos) != '\r') {
 			this.pos++;
 		}
 		return this.source.substring(start, this.pos).stripTrailing();

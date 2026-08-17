@@ -88,10 +88,12 @@ public final class LispFormatter {
 	 * @throws FormatException if the source cannot be read as Lisp
 	 */
 	public static String format(String source, int width) {
-		// CRLF and a lone CR are normalized away; the output is LF-only.
-		String normalized = source.indexOf('\r') < 0 ? source : source.replace("\r\n", "\n").replace('\r', '\n');
+		// Line endings are normalized to LF where they are LAYOUT -- which is
+		// FormatReader's job, not a pass over the source: a CR inside a string or
+		// character literal belongs to that token, and rewriting it would change the
+		// program (`.kb/formatter.md`).
 		LispFormatter formatter = new LispFormatter(width);
-		formatter.renderTopLevel(new FormatReader(normalized).readAll());
+		formatter.renderTopLevel(new FormatReader(source).readAll());
 		return formatter.alignTrailingComments();
 	}
 
