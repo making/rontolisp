@@ -15,14 +15,368 @@ import am.ik.wasm.WasmWriter;
  * <p>
  * A stream value is the WASI file descriptor returned by {@code path_open}, boxed as an
  * i31 integer (mirroring the JVM backend, where the handle indexes a stream table). Like
- * {@code load}, {@code open} resolves the path relative to the first preopened directory
- * (fd 3), so the module must run with {@code --dir}. {@code _write_line} writes the
- * string bytes plus a newline straight through {@code fd_write} (fd 1 = stdout when no
- * stream is given), and {@code _close} delegates to {@code fd_close}.
+ * {@code load}, {@code open} resolves its path through {@link #buildPathDirFdBody()}
+ * against the PREOPEN TABLE -- a relative path against the first preopened directory (fd
+ * 3), an absolute one against the preopen whose name is its longest prefix -- so the
+ * module must run with {@code --dir}. {@code _write_line} writes the string bytes plus a
+ * newline straight through {@code fd_write} (fd 1 = stdout when no stream is given), and
+ * {@code _close} delegates to {@code fd_close}.
  */
 final class WasmIoRuntimeBuilder {
 
 	private WasmIoRuntimeBuilder() {
+	}
+
+	/**
+	 * The longest preopen name {@code _path_dirfd} will compare against, and the linear
+	 * scratch it reserves for one {@code prestat} record (8 bytes) plus that name.
+	 * Preview 1 caps a path component at 255 bytes and a preopen name is a host-chosen
+	 * directory path, so 512 is generous; a longer one is SKIPPED rather than truncated,
+	 * because a truncated name would compare equal to a prefix that is not the directory
+	 * it names.
+	 */
+	private static final int PRESTAT_NAME_MAX = 512;
+
+	private static final int PRESTAT_SCRATCH_BYTES = 8 + PRESTAT_NAME_MAX;
+
+	/**
+	 * How many descriptors above fd 2 the preopen walk will look at. Every host lays its
+	 * preopens out contiguously from fd 3 and the walk stops at the first
+	 * {@code fd_prestat_get} errno anyway, so this is only a bound against a host that
+	 * answers success forever.
+	 */
+	private static final int PREOPEN_SCAN_MAX = 64;
+
+	/**
+	 * Builds the _path_dirfd(ptr, len) function body: the directory descriptor the staged
+	 * path at {@code [ptr, ptr+len)} must be opened relative to, with the number of
+	 * leading bytes that descriptor already accounts for left in the
+	 * {@link WasmLispCompiler#PATH_SKIP_ADDR} cell. The front end of EVERY
+	 * {@code path_open} call on this backend -- {@code _open}, {@code _probe_file},
+	 * {@code _list_directory} and {@code _load} -- so the resolution rule has one
+	 * definition rather than four.
+	 *
+	 * <p>
+	 * A RELATIVE path answers fd 3 with skip 0: the first preopened directory, exactly
+	 * what every site hard-coded before, so nothing that worked moves. An ABSOLUTE one (a
+	 * leading {@code /}) is matched against the preopen NAMES, which is the whole point:
+	 * {@code fd_prestat_get} answers a preopened fd's name length and
+	 * {@code fd_prestat_dir_name} the name itself, and without them nothing here can
+	 * learn that fd 3 IS {@code /tmp} -- so {@code "/tmp/x.txt"} went to
+	 * {@code path_open} whole and WASI rejected it, which is why a runtime-computed
+	 * absolute path (asdf:system-relative-pathname, a merge against *load-truename*, a
+	 * path out of a config file) could not be opened at all.
+	 *
+	 * <p>
+	 * The match is a path-COMPONENT prefix, longest wins: with {@code --dir /} and
+	 * {@code --dir /tmp} both preopened, {@code /tmp/x} resolves against {@code /tmp}
+	 * rather than {@code /}, and {@code /tmpfoo} matches neither (the byte after the
+	 * prefix must be a separator). A trailing slash on the preopen name is stripped
+	 * first, so a host spelling {@code /} and one spelling {@code /tmp/} both behave.
+	 * When the remainder would be EMPTY -- the path names the preopened directory itself
+	 * -- it becomes {@code "."}, written over the path's last staged byte: WASI takes no
+	 * empty path, and the staging is scratch the caller pops right after.
+	 *
+	 * <p>
+	 * When NO preopen covers an absolute path the answer is fd 3 with skip 0, i.e. the
+	 * call the site would have made anyway, so the failure surfaces as the ordinary
+	 * "cannot open" errno each caller already turns into nil -- an errno, never a trap.
+	 * @return the function body bytes
+	 */
+	static byte[] buildPathDirFdBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: PTR=0 (i32), LEN=1 (i32) ; i32 locals: SCR=2, FD=3, NLEN=4, BFD=5,
+		// BSKIP=6, T=7, I=8
+		w.write(1);
+		w.write(7);
+		w.write(Type.I32);
+		final int PTR = 0, LEN = 1, SCR = 2, FD = 3, NLEN = 4, BFD = 5, BSKIP = 6, T = 7, I = 8;
+		final int SLASH = '/', DOT = '.';
+
+		// mem[PATH_SKIP_ADDR] = 0 -- the answer for every path that is not absolute.
+		i32(w, WasmLispCompiler.PATH_SKIP_ADDR);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// if (len == 0 || mem8[ptr] != '/') return 3
+		getLocal(w, LEN);
+		w.write(Instruction.I32_EQZ);
+		getLocal(w, PTR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, SLASH);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 3);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// scr = HEAP_PTR, reserved over the walk and popped after it. Under --component
+		// the first fd_prestat_get lifts the preopen list through cabi_realloc, which
+		// allocates at HEAP_PTR -- an un-advanced scratch would be overwritten by the
+		// very names being read into it (the discipline _open uses for its staged path).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, SCR);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, SCR);
+			i32(w, PRESTAT_SCRATCH_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		i32(w, PRESTAT_SCRATCH_BYTES + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// bfd = 3 ; bskip = 0 (no match yet -- any match scores at least 1) ; fd = 3
+		i32(w, 3);
+		setLocal(w, BFD);
+		i32(w, 0);
+		setLocal(w, BSKIP);
+		i32(w, 3);
+		setLocal(w, FD);
+
+		w.write(Instruction.BLOCK, 0x40); // $done
+		w.write(Instruction.LOOP, 0x40); // $scan
+		// a non-zero fd_prestat_get errno means fd is not preopened: the walk is over
+		getLocal(w, FD);
+		getLocal(w, SCR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_GET);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// nlen = prestat.u.dir.pr_name_len (u32 at scr+4; the tag byte at scr+0 is 0 for
+		// a directory, and a directory is the only preopen kind preview1 defines)
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		setLocal(w, NLEN);
+		w.write(Instruction.BLOCK, 0x40); // $next
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, NLEN);
+		i32(w, PRESTAT_NAME_MAX);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// fd_prestat_dir_name(fd, scr + 8, nlen)
+		getLocal(w, FD);
+		getLocal(w, SCR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_DIR_NAME);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// strip trailing slashes: a host may spell the root "/" and a directory "/tmp/"
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, SCR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x07);
+		i32(w, SLASH);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, NLEN);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// a preopen whose own name is relative (wasmtime's `--dir .` spells it ".") can
+		// never cover an absolute path
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x08);
+		i32(w, SLASH);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// t = this preopen's skip, 0 when it does not cover the path
+		i32(w, 0);
+		setLocal(w, T);
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// the root preopen "/" covers every absolute path
+		i32(w, 1);
+		setLocal(w, T);
+		w.write(Instruction.ELSE);
+		getLocal(w, NLEN);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.IF, 0x40);
+		// t = memeq(ptr, scr + 8, nlen) -- provisionally 1, cleared on the first
+		// differing byte
+		i32(w, 0);
+		setLocal(w, I);
+		i32(w, 1);
+		setLocal(w, T);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, I);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		getLocal(w, SCR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x08);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		setLocal(w, T);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.END); // if (byte differs)
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, I);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		getLocal(w, T);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, NLEN);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// the path names the preopened directory itself
+		getLocal(w, NLEN);
+		setLocal(w, T);
+		w.write(Instruction.ELSE);
+		getLocal(w, PTR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, SLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, T);
+		w.write(Instruction.ELSE);
+		// a component boundary is required: "/tmpfoo" is not under "/tmp"
+		i32(w, 0);
+		setLocal(w, T);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // if (the name matched)
+		w.write(Instruction.END); // if (nlen <= len)
+		w.write(Instruction.END); // if (nlen == 1)
+		// longest prefix wins
+		getLocal(w, T);
+		getLocal(w, BSKIP);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, T);
+		setLocal(w, BSKIP);
+		getLocal(w, FD);
+		setLocal(w, BFD);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // $next
+		getLocal(w, FD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, FD);
+		getLocal(w, FD);
+		i32(w, 3 + PREOPEN_SCAN_MAX);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // $scan
+		w.write(Instruction.END); // $done
+
+		// pop the prestat scratch
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// nothing covers it: hand the whole path to fd 3, whose path_open answers the
+		// ordinary "cannot open" errno the call site already turns into nil
+		getLocal(w, BSKIP);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 3);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// an empty remainder is not a path WASI accepts: relative to its own descriptor
+		// the preopened directory is ".". The staging is scratch, so the dot goes in
+		// place of the path's last byte.
+		getLocal(w, BSKIP);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, PTR);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		i32(w, DOT);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, BSKIP);
+		w.write(Instruction.END);
+		i32(w, WasmLispCompiler.PATH_SKIP_ADDR);
+		getLocal(w, BSKIP);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, BFD);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Emits the first four {@code path_open} arguments -- {@code dirfd},
+	 * {@code dirflags}, {@code path_ptr}, {@code path_len} -- for a path staged at
+	 * {@code off + 1} with length {@code plen} (the {@code _str_to_mem} framing every
+	 * caller here uses: the content sits between the quote bytes). The pair comes from
+	 * {@link #buildPathDirFdBody()} rather than from a hard-coded fd 3, which is what
+	 * makes an absolute runtime path resolvable; a relative one is unchanged.
+	 * @param w the writer
+	 * @param off the local holding the staged path's base offset
+	 * @param plen the local holding the staged path's content length
+	 */
+	static void emitDirFdAndPath(WasmWriter w, int off, int plen) {
+		// dirfd = _path_dirfd(off + 1, plen) -- it also writes PATH_SKIP_ADDR
+		getLocal(w, off);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, plen);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		// dirflags = 0 (no symlink following, as before)
+		i32(w, 0);
+		// path_ptr = off + 1 + skip
+		getLocal(w, off);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
+		w.write(Instruction.I32_ADD);
+		// path_len = plen - skip
+		getLocal(w, plen);
+		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
+		w.write(Instruction.I32_SUB);
 	}
 
 	/**
@@ -70,18 +424,14 @@ final class WasmIoRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen,
+		// path_open(dirfd, dirflags=0, path_ptr, path_len -- all four from
+		// emitDirFdAndPath, which resolves the staged path against the preopen table,
 		// oflags=(read: 0, write: CREAT|TRUNC=9, append: CREAT=1),
 		// fs_rights_base=(read: FD_READ=2, write: FD_WRITE|FD_SEEK|FD_TELL=100),
 		// fs_rights_inheriting=0, fdflags=(append: APPEND=1, else 0),
 		// fd_out=OPEN_FD_ADDR).
 		// MODE here is WasmOpenCompiler.wasmMode: 0 read / 1 write / 2 append.
-		i32(w, 3);
-		i32(w, 0);
-		getLocal(w, OFF);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, PLEN);
+		emitDirFdAndPath(w, OFF, PLEN);
 		getLocal(w, MODE);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF);
@@ -178,15 +528,10 @@ final class WasmIoRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen, oflags=0,
+		// path_open(dirfd/dirflags/path_ptr/path_len from emitDirFdAndPath, oflags=0,
 		// fs_rights_base=FD_READ=2, fs_rights_inheriting=0, fdflags=0,
 		// fd_out=OPEN_FD_ADDR)
-		i32(w, 3);
-		i32(w, 0);
-		getLocal(w, OFF);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, PLEN);
+		emitDirFdAndPath(w, OFF, PLEN);
 		i32(w, 0);
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(2);
@@ -285,15 +630,10 @@ final class WasmIoRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen,
+		// path_open(dirfd/dirflags/path_ptr/path_len from emitDirFdAndPath,
 		// oflags=DIRECTORY=2, fs_rights_base=FD_READDIR=1<<14, fs_rights_inheriting=0,
 		// fdflags=0, fd_out=OPEN_FD_ADDR)
-		i32(w, 3);
-		i32(w, 0);
-		getLocal(w, OFF);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, PLEN);
+		emitDirFdAndPath(w, OFF, PLEN);
 		i32(w, 2);
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(1 << 14);

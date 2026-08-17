@@ -45,8 +45,9 @@ What works inside a component, and what each feature needs at run time:
   stream `read-line`, `load`, `with-open-file`) all work. In an async body a
   pending stdin `read-line`/`read-char` suspends only its own task, like a
   socket read — a concurrent `rontolisp:wait-for` timer keeps running while
-  the program waits for input. File access requires `--dir` (paths resolve
-  against the first preopened directory):
+  the program waits for input. File access requires `--dir` (a relative path
+  resolves against the first preopened directory, an absolute one against the
+  preopened directory whose name is its longest prefix):
 
 ```bash
 cat > fileio.lisp <<'EOF'

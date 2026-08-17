@@ -9,6 +9,6 @@ Reads a file and evaluates every top-level form in it in the global environment,
 (eval '(square 5))
 ```
 
-After loading a file that defines `square`, the definition is invoked through `eval`. The WASM backend needs `--dir` because it resolves the path against the first preopened directory.
+After loading a file that defines `square`, the definition is invoked through `eval`. The WASM backend needs `--dir` because it resolves the path against the preopened directories: a relative path against the first one, an absolute path against the preopened directory whose name is its longest prefix.
 
 `load` is deliberately **not** idempotent: loading the same file twice evaluates it twice, matching Common Lisp. For load-once module semantics, see [`require`](require.md) / [`provide`](provide.md).

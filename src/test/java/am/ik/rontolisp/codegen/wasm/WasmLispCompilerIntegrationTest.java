@@ -8908,6 +8908,51 @@ class WasmLispCompilerIntegrationTest {
 
 	// file I/O tests (with-open-file/open/close/write-line/read-line)
 
+	/**
+	 * {@link #compileAndRunWithDir} plus extra preopened directories, named by their
+	 * ABSOLUTE host paths (wasmtime maps {@code --dir
+	 *
+	<p>
+	 * } to the guest path {@code
+	 *
+	<p>
+	 * }). That is what a test of absolute-path resolution needs: {@code --dir .} preopens
+	 * a directory whose NAME is {@code "."}, which can never cover an absolute path.
+	 * @param lispCode the program
+	 * @param dirs the additional directories to preopen
+	 * @return its trimmed standard output
+	 * @throws Exception if the run fails
+	 */
+	private static String compileAndRunWithDirs(String lispCode, String... dirs) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c", "cd " + workDir()
+				+ " && wasmtime --wasm gc --wasm exceptions=y --dir ." + preopenFlags(dirs) + " test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	/** The component twin of {@link #compileAndRunWithDirs}. */
+	private static String compileAndRunComponentWithDirs(String lispCode, String... dirs) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c", "cd " + workDir()
+				+ " && wasmtime run -W gc=y -W exceptions=y --dir ." + preopenFlags(dirs) + " test.component.wasm");
+		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	private static String preopenFlags(String... dirs) {
+		StringBuilder flags = new StringBuilder();
+		for (String dir : dirs) {
+			flags.append(" --dir ").append(dir);
+		}
+		return flags.toString();
+	}
+
 	private static String compileAndRunWithDir(String lispCode) throws Exception {
 		// The prelude splice mirrors the CLI pipeline; it emits nothing for a program
 		// that references no prelude name, so every pre-existing case is unaffected.
@@ -9145,6 +9190,87 @@ class WasmLispCompilerIntegrationTest {
 				(print (probe-file "cabsent.txt"))
 				""";
 		assertThat(compileAndRunComponentWithDir(code)).isEqualTo("#P\"cprobe.txt\"\nNIL");
+	}
+
+	/**
+	 * Stages the tree the two absolute-path tests share, in its OWN per-thread directory
+	 * rather than under {@link #workDir()} -- the work dir's stale-file sweep deletes
+	 * plain files, so a directory left there would break the NEXT run's setup.
+	 *
+	 * <p>
+	 * The layout is chosen to make the prefix match the thing under test. The preopen
+	 * handed to wasmtime is {@code <root>}, the file's GRANDPARENT, so the module has to
+	 * strip the preopen name and hand {@code path_open} the remainder. And both
+	 * {@code <root>-sibling/abs.txt} and {@code <root>/-sibling/abs.txt} exist, so a
+	 * resolution that matched the preopen name WITHOUT requiring a component boundary
+	 * would find a real file where the answer must be nil.
+	 * @return the absolute path of the staged root
+	 * @throws Exception if the tree cannot be staged
+	 */
+	private static String stageAbsolutePathTree() throws Exception {
+		Path root = Path.of(System.getProperty("java.io.tmpdir"), "rontolisp-wasmtime",
+				"abs" + Thread.currentThread().threadId());
+		try (Stream<Path> stale = Files.isDirectory(root) ? Files.walk(root) : Stream.<Path>empty()) {
+			for (Path entry : stale.sorted(java.util.Comparator.reverseOrder()).toList()) {
+				Files.deleteIfExists(entry);
+			}
+		}
+		wasmtime.copyFileToContainer(Transferable.of("absolute\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				root + "/sub/abs.txt");
+		wasmtime.copyFileToContainer(Transferable.of("boundary\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				root + "-sibling/abs.txt");
+		wasmtime.copyFileToContainer(Transferable.of("boundary\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				root + "/-sibling/abs.txt");
+		wasmtime.copyFileToContainer(Transferable.of("relative\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				path("rel-abs432.txt"));
+		return root.toString();
+	}
+
+	// One program for both WASM modes, and the shape the whole feature is about: the path
+	// is BUILT AT RUN TIME. A LITERAL absolute path proves nothing here -- both compile
+	// paths bundle the file's compile-time contents into the artifact
+	// (CompileTimePathnameFolder, .kb/asdf.md), so nothing is opened and the program
+	// "works" with no --dir at all.
+	private static final String ABSOLUTE_PATH_PROGRAM = """
+			(defvar *root* "%s")
+			(print (with-open-file (s (concatenate 'string *root* "/sub/abs.txt")) (read-line s)))
+			(print (probe-file (concatenate 'string *root* "/sub/abs.txt")))
+			(print (probe-file (concatenate 'string *root* "/sub/absent.txt")))
+			(print (probe-file (concatenate 'string *root* "-sibling/abs.txt")))
+			(print (probe-file *root*))
+			(print (with-open-file (s "rel-abs432.txt") (read-line s)))
+			""";
+
+	private static String absolutePathExpected(String root) {
+		return """
+				"absolute"
+				#P"%s/sub/abs.txt"
+				NIL
+				NIL
+				#P"%s"
+				"relative"
+				""".formatted(root, root).trim();
+	}
+
+	@Test
+	void absoluteRuntimePathResolvesAgainstThePreopenThatCoversIt() throws Exception {
+		// The bug this pins: _open / _probe_file handed every path to fd 3, so an
+		// absolute one was rejected by WASI even when a preopen mapped exactly the
+		// directory meant -- and probe-file, which cannot signal, answered "not there"
+		// for a file that exists.
+		String root = stageAbsolutePathTree();
+		assertThat(compileAndRunWithDirs(ABSOLUTE_PATH_PROGRAM.formatted(root), root))
+			.isEqualTo(absolutePathExpected(root));
+	}
+
+	@Test
+	void componentAbsoluteRuntimePathResolvesAgainstThePreopenThatCoversIt() throws Exception {
+		// The component reaches path_open through adapter.wat over wasi:filesystem@0.3.0,
+		// which used to cache ONE preopen descriptor and ignore dirfd entirely -- so the
+		// same widening had to happen there, and only this leg exercises it.
+		String root = stageAbsolutePathTree();
+		assertThat(compileAndRunComponentWithDirs(ABSOLUTE_PATH_PROGRAM.formatted(root), root))
+			.isEqualTo(absolutePathExpected(root));
 	}
 
 	// One program for both WASM modes: the entries are created by the program itself so
@@ -16548,7 +16674,7 @@ class WasmLispCompilerIntegrationTest {
 		return c.toByteArray();
 	}
 
-	// The nine wasi_snapshot_preview1 imports of a component-mode core, as trap stubs:
+	// The eleven wasi_snapshot_preview1 imports of a component-mode core, as trap stubs:
 	// the probe never does I/O, so reaching one is a probe bug worth trapping on.
 	private static byte[] probePreview1Stub() {
 		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
@@ -16573,6 +16699,9 @@ class WasmLispCompilerIntegrationTest {
 						new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I32, am.ik.wasm.Type.I32,
 								am.ik.wasm.Type.I64, am.ik.wasm.Type.I32 },
 						new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 5 fd_readdir
+			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I32, am.ik.wasm.Type.I32 },
+					new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 6
+																	// fd_prestat_dir_name
 		});
 		w.writeFunction(f -> f.addFunction(0) // fd_write
 			.addFunction(0) // fd_read
@@ -16582,7 +16711,9 @@ class WasmLispCompilerIntegrationTest {
 			.addFunction(4) // clock_time_get
 			.addFunction(3) // environ_sizes_get
 			.addFunction(3) // environ_get
-			.addFunction(5)); // fd_readdir
+			.addFunction(5) // fd_readdir
+			.addFunction(3) // fd_prestat_get
+			.addFunction(6)); // fd_prestat_dir_name
 		w.writeExport(e -> e.addExport("fd_write", am.ik.wasm.ExternalKind.FUNCTION, 0)
 			.addExport("fd_read", am.ik.wasm.ExternalKind.FUNCTION, 1)
 			.addExport("path_open", am.ik.wasm.ExternalKind.FUNCTION, 2)
@@ -16591,9 +16722,11 @@ class WasmLispCompilerIntegrationTest {
 			.addExport("clock_time_get", am.ik.wasm.ExternalKind.FUNCTION, 5)
 			.addExport("environ_sizes_get", am.ik.wasm.ExternalKind.FUNCTION, 6)
 			.addExport("environ_get", am.ik.wasm.ExternalKind.FUNCTION, 7)
-			.addExport("fd_readdir", am.ik.wasm.ExternalKind.FUNCTION, 8));
+			.addExport("fd_readdir", am.ik.wasm.ExternalKind.FUNCTION, 8)
+			.addExport("fd_prestat_get", am.ik.wasm.ExternalKind.FUNCTION, 9)
+			.addExport("fd_prestat_dir_name", am.ik.wasm.ExternalKind.FUNCTION, 10));
 		w.writeCode(codes -> {
-			for (int i = 0; i < 9; i++) {
+			for (int i = 0; i < 11; i++) {
 				codes.addFunction(new byte[] { 0x00, 0x00, 0x0b }); // unreachable
 			}
 		});

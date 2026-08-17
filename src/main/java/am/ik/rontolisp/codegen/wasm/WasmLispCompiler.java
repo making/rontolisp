@@ -665,10 +665,21 @@ public final class WasmLispCompiler implements LispCompiler {
 	// %list-directory -- and therefore `directory` and the uiop: spellings -- run on.
 	static final int FUNC_FD_READDIR = 8; // imported
 
-	/** Number of preview1-style imported functions (fd_write..fd_readdir). */
-	static final int IMPORT_FUNC_COUNT = 9;
+	// The preopen TABLE, in both modes like the five above: without it fd 3 is the only
+	// directory a path can be resolved against, which makes every ABSOLUTE runtime path
+	// unopenable (a host that maps `/` still rejects "/tmp/x" relative to the fd, and
+	// nothing here can learn that the fd IS "/"). fd_prestat_get answers a preopened
+	// fd's name LENGTH (and EBADF for the first fd that is not preopened, which is what
+	// ends the walk); fd_prestat_dir_name answers the name itself. _path_dirfd walks the
+	// pair and picks the longest matching prefix -- see WasmIoRuntimeBuilder.
+	static final int FUNC_FD_PRESTAT_GET = 9; // imported
 
-	static final int FUNC_START = IMPORT_FUNC_COUNT; // 9
+	static final int FUNC_FD_PRESTAT_DIR_NAME = 10; // imported
+
+	/** Number of preview1-style imported functions (fd_write..fd_prestat_dir_name). */
+	static final int IMPORT_FUNC_COUNT = 11;
+
+	static final int FUNC_START = IMPORT_FUNC_COUNT; // 11
 
 	static final int FUNC_PRINT_I32 = FUNC_START + 1;
 
@@ -1315,7 +1326,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	// new type entry; appended after the last fixed helper so no index above shifts.
 	static final int FUNC_IV_UTF8_STR = FUNC_OSTREAM_ROOM + 1;
 
-	static final int FX_FUNC_LAST = FUNC_IV_UTF8_STR;
+	// _path_dirfd (i32 ptr, i32 len) -> i32: the directory fd a path is opened relative
+	// to, and the number of leading bytes path_open must NOT see (written to
+	// PATH_SKIP_ADDR). Every path_open call site -- _open, _probe_file, _list_directory,
+	// _load -- goes through it, which is what makes an ABSOLUTE runtime path openable:
+	// it walks the preopen table (fd_prestat_get / fd_prestat_dir_name) and picks the
+	// LONGEST matching prefix. A relative path answers fd 3 / skip 0, today's behavior
+	// byte for byte. Reuses the (i32,i32) -> i32 signature (TYPE_INTERN), so no new type
+	// entry; appended after the last fixed helper so no index above shifts.
+	static final int FUNC_PATH_DIRFD = FUNC_IV_UTF8_STR + 1;
+
+	static final int FX_FUNC_LAST = FUNC_PATH_DIRFD;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -1962,6 +1983,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int PARK_FLOOR_ADDR = 244;
 
+	// _path_dirfd's out-parameter: how many leading bytes of the staged path the
+	// preopen it resolved against already accounts for, so the pointer path_open sees is
+	// `ptr + mem[PATH_SKIP_ADDR]` and its length `len - mem[PATH_SKIP_ADDR]`. Zero for a
+	// relative path (the whole path goes to fd 3, as it always did). A second cell is
+	// not needed: the fd is the function's result.
+	static final int PATH_SKIP_ADDR = 248;
+
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
 	// the allocation base just above its 8 bytes. cabi_realloc keeps its pointer in this
@@ -2017,7 +2045,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// and
 	// the time built-ins (TIME_SCRATCH_ADDR=128 .. 135) would clobber shared string bytes
 	// (notably the newline at the old base+9). The highest scratch byte
-	// (HOST_TIME_ADDR=224 .. 231) ends at 231, so 256
+	// (PATH_SKIP_ADDR=248 .. 251) ends at 251, so 256
 	// gives headroom; the next fixed region (RT_INTERN_BASE=8192) is far above realistic
 	// string-segment sizes. Shifting this base does not move any function/import index,
 	// so
@@ -4982,7 +5010,17 @@ public final class WasmLispCompiler implements LispCompiler {
 						// fd_readdir backs %list-directory. Preview 1 binds the real host
 						// function; component mode binds the adapter's implementation
 						// over wasi:filesystem's read-directory.
-						.addImport("wasi_snapshot_preview1", "fd_readdir", ExternalKind.FUNCTION, TYPE_FD_READDIR);
+						.addImport("wasi_snapshot_preview1", "fd_readdir", ExternalKind.FUNCTION, TYPE_FD_READDIR)
+						// The preopen table, read by _path_dirfd so an ABSOLUTE runtime
+						// path resolves against the preopen that actually covers it
+						// instead of being handed to fd 3 whole. fd_prestat_get(fd, buf)
+						// -> errno is (i32,i32)->i32 like _intern;
+						// fd_prestat_dir_name(fd, ptr, len) -> errno is
+						// (i32,i32,i32)->i32
+						// like _rd_memeq -- no new type entry for either.
+						.addImport("wasi_snapshot_preview1", "fd_prestat_get", ExternalKind.FUNCTION, TYPE_INTERN)
+						.addImport("wasi_snapshot_preview1", "fd_prestat_dir_name", ExternalKind.FUNCTION,
+								TYPE_RD_MEMEQ);
 				}
 				if (this.component && !this.noWasi) {
 					// Import the linear memory from the shared canonical-memory module so
@@ -5006,11 +5044,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Function section
 			.writeFunction(fnDef -> {
-				// No-wasi mode: the nine wasi imports were omitted, so define nine trap
-				// stubs at function indices 0-8 with the SAME type indices the imports
+				// No-wasi mode: the eleven wasi imports were omitted, so define eleven
+				// trap
+				// stubs at function indices 0-10 with the SAME type indices the imports
 				// used
 				// (fd_write, fd_read, path_open, fd_close, random_get, clock_time_get,
-				// environ_sizes_get, environ_get, fd_readdir). This keeps every FUNC_*
+				// environ_sizes_get, environ_get, fd_readdir, fd_prestat_get,
+				// fd_prestat_dir_name). This keeps every FUNC_*
 				// constant
 				// valid.
 				if (this.noWasi) {
@@ -5022,7 +5062,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addFunction(TYPE_CLOCK_TIME_GET) // 5: clock_time_get
 						.addFunction(TYPE_INTERN) // 6: environ_sizes_get
 						.addFunction(TYPE_INTERN) // 7: environ_get
-						.addFunction(TYPE_FD_READDIR); // 8: fd_readdir
+						.addFunction(TYPE_FD_READDIR) // 8: fd_readdir
+						.addFunction(TYPE_INTERN) // 9: fd_prestat_get
+						.addFunction(TYPE_RD_MEMEQ); // 10: fd_prestat_dir_name
 				}
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
@@ -5231,6 +5273,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_RAT_NEW); // _ostream_room (rec, n) -> buffer
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _iv_utf8_str (v) -> string
 															// (FUNC_IV_UTF8_STR)
+				fnDef.addFunction(TYPE_INTERN); // _path_dirfd (ptr, len) -> dirfd
+												// (FUNC_PATH_DIRFD)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -5653,17 +5697,20 @@ public final class WasmLispCompiler implements LispCompiler {
 		mainWriter
 			// Code section
 			.writeCode(code -> {
-				// No-wasi mode: bodies for the nine stubs at indices 0-8. TWO are
+				// No-wasi mode: bodies for the eleven stubs at indices 0-10. TWO are
 				// `unreachable; end` (no locals) -- fd_read and clock_time_get;
 				// unreachable is stack-polymorphic so one shape satisfies every WASI
 				// signature, and calling one traps.
-				// The other seven ANSWER, each for its own reason (see the builders):
+				// The other nine ANSWER, each for its own reason (see the builders):
 				// fd_write is a SINK, so writing to stdout/stderr on a reactor discards
 				// the bytes instead of killing the instance; random_get is a
 				// self-contained SplitMix64 generator over a linear-memory state cell;
 				// the two environ functions report an EMPTY environment; and the three
 				// filesystem slots report an errno, which the _open / _probe_file /
-				// _list_directory / _load runtimes already turn into nil.
+				// _list_directory / _load runtimes already turn into nil. EBADF on
+				// fd_prestat_get is what ends _path_dirfd's preopen walk at the FIRST
+				// fd, so a reactor answers "no preopen covers this path" instead of
+				// looping.
 				// The line the last two keep trapping over: a stub may discard output,
 				// draw a pseudo-random number, or report a state the module really is
 				// in (no environment, no files) -- but it may not invent INPUT, and it
@@ -5687,7 +5734,7 @@ public final class WasmLispCompiler implements LispCompiler {
 							case FUNC_ENVIRON_GET -> WasmIoRuntimeBuilder.buildNoWasiErrnoBody(0);
 							case FUNC_PATH_OPEN ->
 								WasmIoRuntimeBuilder.buildNoWasiErrnoBody(WasmIoRuntimeBuilder.ERRNO_NOENT);
-							case FUNC_FD_CLOSE, FUNC_FD_READDIR ->
+							case FUNC_FD_CLOSE, FUNC_FD_READDIR, FUNC_FD_PRESTAT_GET, FUNC_FD_PRESTAT_DIR_NAME ->
 								WasmIoRuntimeBuilder.buildNoWasiErrnoBody(WasmIoRuntimeBuilder.ERRNO_BADF);
 							default -> new byte[] { 0x00, 0x00, 0x0b };
 						});
@@ -5912,6 +5959,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildOstreamRoomBody(ostreamTableGlobalIndex));
 				// strict UTF-8 octet-vector decode body (FUNC_IV_UTF8_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildIvUtf8StrBody());
+				// preopen-resolving path front end body (FUNC_PATH_DIRFD)
+				code.addFunction(WasmIoRuntimeBuilder.buildPathDirFdBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

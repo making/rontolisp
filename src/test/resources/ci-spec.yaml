@@ -5144,6 +5144,29 @@ cases:
       NIL
       YES
       (#P"probe.dat" NIL)
+  - name: runtime-absolute-path-open-probe-and-load
+    source: |
+      ;; An ABSOLUTE path BUILT AT RUN TIME opens, probes and loads the same on all
+      ;; four backends. Building it with concatenate is load-bearing twice over: a
+      ;; LITERAL absolute path is not a test of this, because the compile paths bundle
+      ;; the file's compile-time contents instead of opening anything, and on WASM the
+      ;; path has to be resolved against the preopen whose name COVERS it (/tmp here)
+      ;; rather than handed to the first preopened directory whole.
+      (defvar *abs-dir* "/tmp")
+      (defvar *abs-file* (concatenate 'string *abs-dir* "/ronto-abs-432.txt"))
+      (with-open-file (out *abs-file* :direction :output) (write-line "absolute" out))
+      (print (with-open-file (in *abs-file*) (read-line in)))
+      (print (probe-file *abs-file*))
+      (print (probe-file (concatenate 'string *abs-dir* "/ronto-absent-432.txt")))
+      (with-open-file (out (concatenate 'string *abs-dir* "/ronto-abs-432.lisp")
+                       :direction :output)
+        (write-line "(print \"loaded-by-absolute-path\")" out))
+      (load (concatenate 'string *abs-dir* "/ronto-abs-432.lisp"))
+    expected: |
+      "absolute"
+      #P"/tmp/ronto-abs-432.txt"
+      NIL
+      "loaded-by-absolute-path"
   - name: directory-listing-and-uiop-walkers
     source: |
       ;; The whole matching family over the one %list-directory primitive: ANSI wild

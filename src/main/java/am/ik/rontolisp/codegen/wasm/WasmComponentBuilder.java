@@ -92,7 +92,7 @@ public final class WasmComponentBuilder {
 	/**
 	 * The preview1-to-WASI-0.3 adapter core module: it imports the shared memory, the
 	 * lowered WASI 0.3 functions and the async canonical built-ins (under {@code "w"})
-	 * and exports the nine preview1-style functions rontolisp imports -- plus the
+	 * and exports the eleven preview1-style functions rontolisp imports -- plus the
 	 * STDIO-ONLY halves of the two fd-polymorphic ones ({@code fd_write_stdio} /
 	 * {@code fd_read_stdin}), which {@link #fixedSurface} retains under the preview1
 	 * names for a core module that imports no {@code path_open}. Source:
@@ -125,12 +125,13 @@ public final class WasmComponentBuilder {
 	private static final String IFACE_STDERR = "wasi:cli/stderr@0.3.0";
 
 	/**
-	 * The nine {@code wasi_snapshot_preview1} functions the adapter implements, in its
+	 * The eleven {@code wasi_snapshot_preview1} functions the adapter implements, in its
 	 * own export order. A core module imports a subset of them (after {@code --optimize},
 	 * only what it reaches), and that subset drives everything below.
 	 */
 	private static final List<String> PREVIEW1_FUNCS = List.of("fd_write", "fd_read", "path_open", "fd_readdir",
-			"fd_close", "random_get", "clock_time_get", "environ_sizes_get", "environ_get");
+			"fd_close", "random_get", "clock_time_get", "environ_sizes_get", "environ_get", "fd_prestat_get",
+			"fd_prestat_dir_name");
 
 	/**
 	 * The adapter's NARROW implementations of the two fd-polymorphic entry points,
@@ -1324,18 +1325,19 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * Assemble the {@code --no-wasi} REACTOR component: the single rontolisp core module
-	 * -- which imports <strong>nothing</strong> (its nine {@code wasi_snapshot_preview1}
-	 * slots are internal stubs and it declares its own memory) and runs its top-level
-	 * forms from its core <em>start section</em> at instantiation -- instantiated with no
-	 * arguments and wrapped as {@code alias / type / lift / export} per
-	 * {@code wasm-export}, exactly the {@link NoGcWasmComponentBuilder} print-free shape
-	 * on the GC backend. There is no import block, no WASI adapter, no shared memory
-	 * module and no {@code wasi:cli/run} export, with or without {@code --optimize}: the
-	 * zero-import surface is the flag's contract, not a narrowing outcome. A
-	 * {@code :string}/{@code :s-expr} boundary lifts through the canonical string ABI
-	 * over the core's <em>own</em> exported memory and its own {@code cabi_realloc} /
-	 * {@code cabi_post_*} helpers ({@link #appendFuncExports} aliases them off the
-	 * rontolisp instance -- instance 0 here).
+	 * -- which imports <strong>nothing</strong> (its eleven
+	 * {@code wasi_snapshot_preview1} slots are internal stubs and it declares its own
+	 * memory) and runs its top-level forms from its core <em>start section</em> at
+	 * instantiation -- instantiated with no arguments and wrapped as
+	 * {@code alias / type / lift / export} per {@code wasm-export}, exactly the
+	 * {@link NoGcWasmComponentBuilder} print-free shape on the GC backend. There is no
+	 * import block, no WASI adapter, no shared memory module and no {@code wasi:cli/run}
+	 * export, with or without {@code --optimize}: the zero-import surface is the flag's
+	 * contract, not a narrowing outcome. A {@code :string}/{@code :s-expr} boundary lifts
+	 * through the canonical string ABI over the core's <em>own</em> exported memory and
+	 * its own {@code cabi_realloc} / {@code cabi_post_*} helpers
+	 * ({@link #appendFuncExports} aliases them off the rontolisp instance -- instance 0
+	 * here).
 	 * @param coreModule the rontolisp core module compiled in component no-wasi mode
 	 * @param funcExports the {@code wasm-export} directives to lift and export
 	 * @return the reactor component binary
@@ -1434,8 +1436,8 @@ public final class WasmComponentBuilder {
 	 * lowered, which component types are declared, and finally which interfaces the
 	 * import block still has to declare.
 	 * <p>
-	 * Without {@link Narrowing#shake()} the core keeps all nine imports, so every step is
-	 * the identity and the component is the one this builder always emitted.
+	 * Without {@link Narrowing#shake()} the core keeps all eleven imports, so every step
+	 * is the identity and the component is the one this builder always emitted.
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param blockBound the block-declared interfaces the program binds directly
 	 * (wait.lisp's monotonic-clock &c) -- they are reached by the Lisp library rather

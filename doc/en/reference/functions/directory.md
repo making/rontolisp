@@ -44,8 +44,9 @@ the interpreter (so a host without a filesystem, such as the browser playground,
 answers `nil` rather than failing), `java.io.File.list` on the JVM, and WASI
 `fd_readdir` on both WASM backends -- Preview 1 binds the real host function,
 `--component` an adapter over `wasi:filesystem`'s `read-directory`. A WASM module
-resolves the path against its first preopened directory, so run it with `--dir`;
-without one nothing matches.
+resolves the path against its preopened directories -- a relative path against the
+first one, an absolute path against the preopened directory whose name is its
+longest prefix -- so run it with `--dir`; without one nothing matches.
 
 The `.` and `..` self/parent entries are never returned on any backend.
 

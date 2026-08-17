@@ -1,16 +1,16 @@
 ;; preview1-to-WASI-0.3 adapter core module.
 ;;
 ;; Imports the shared memory and the lowered WASI 0.3 functions plus the async canonical
-;; built-ins (under "w"); exports the nine wasi_snapshot_preview1 functions rontolisp
+;; built-ins (under "w"); exports the eleven wasi_snapshot_preview1 functions rontolisp
 ;; imports. In WASI 0.3 the wasi:io package is gone and all byte I/O flows through the
-;; built-in stream<u8> / future<T> types, so fd_write/fd_read/path_open/fd_close/fd_readdir
+;; built-in stream<u8> / future<T> types, so fd_write/fd_read/path_open/fd_close/fd_readdir/fd_prestat_*
 ;; are implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
 ;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
 ;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment. The environ_*
 ;; pair is UNREACHABLE from Lisp since todo 217: uiop:getenv under --component is
 ;; environment.lisp, which binds get-environment straight off this block's own
 ;; wasi:cli/environment instance (see ../../.kb/time-environment-builtins.md), so these
-;; two stay only because the core's eight preview1 import slots are index-pinned.
+;; two stay only because the core's preview1 import slots are index-pinned.
 ;;
 ;; Straight-line synchronous code is fine WITHOUT any gated feature: the stream/future
 ;; built-ins are the ASYNC (non-blocking) variants of base component-model-async, and a
@@ -26,7 +26,7 @@
 ;;   0x50010 system-clock instant scratch (seconds s64 @0x50010, nanoseconds u32 @0x50018)
 ;;   0x50020 environ list {ptr@0x50020, count@0x50024}
 ;;   0x50030 get-directories list {ptr@0x50030, count@0x50034}
-;;   0x50040 preopen descriptor cache {flag@0x50040, descriptor@0x50044}
+;;   0x50040 preopen table header {flag@0x50040, count@0x50044}
 ;;   0x50050 open-at result {disc@0x50050 byte, descriptor-or-errcode i32@0x50054}
 ;;   0x50060 file read-via-stream tuple {stream@0x50060, future@0x50064}
 ;;   0x50070 stdin read-via-stream tuple {stream@0x50070, future@0x50074}
@@ -36,7 +36,14 @@
 ;;   0x500a0 read-directory result tuple {stream@0x500a0, future@0x500a4}
 ;;   0x500b0 one lowered directory-entry (24 bytes: type variant @0, name ptr@16 len@20)
 ;;   0x50100 fd table: 64 slots x 16 bytes {descriptor@0, read-stream@4, valid@12}
-;; A preview1 file fd is 100 + slotIndex (so it never clashes with stdout=1 or dirfd=3).
+;;   0x50500 preopen table: 16 slots x 264 bytes {descriptor@0, name-len@4, name@8..}
+;; A preview1 file fd is 100 + slotIndex (so it never clashes with stdout=1 or a
+;; preopen dirfd, which is 3 + preopen index).
+;; The preopen table is a COPY, taken once at the first $ensure_preopens: the
+;; get-directories list and its name strings are lifted through cabi_realloc, which
+;; allocates at the CORE's HEAP_PTR -- and the core pops that cell back after every
+;; path resolution, so anything still pointing into the lifted list would be handed
+;; out again as heap. The descriptors are copied for the same reason.
 ;; Writes use append-via-stream (each fd_write is a full append cycle, so no per-fd write
 ;; offset needs tracking) and await the write future; reads cache the readable stream per fd
 ;; and let it advance, dropping the read future immediately (EOF is signalled by the stream
@@ -135,23 +142,88 @@
       (then (local.set $ret (call $await_waitable (local.get $f)))))
     (local.get $ret))
 
-  ;; Return the first preopened directory descriptor (cached).
-  ;; The preopened directory descriptor, cached. -1 when the host granted NO preopen
-  ;; (an empty get-directories list): reading the first element of an empty list would
-  ;; hand open-at descriptor handle 0 and TRAP ("unknown handle index 0"), which no
-  ;; handler-case can catch -- so the caller turns -1 into a plain errno instead, and a
-  ;; program that probes for an optional file under a component with no --dir simply
-  ;; sees "not there" like it does on Preview 1.
-  (func $ensure_preopen (result i32)
-    (if (i32.eqz (i32.load (i32.const 0x50040)))
-      (then
-        (call $get_directories (i32.const 0x50030))
-        (i32.store (i32.const 0x50044)
-          (if (result i32) (i32.load (i32.const 0x50034))
-            (then (i32.load (i32.load (i32.const 0x50030))))
-            (else (i32.const -1))))
-        (i32.store (i32.const 0x50040) (i32.const 1))))
-    (i32.load (i32.const 0x50044)))
+  ;; Cache the WHOLE preopen table (descriptor + name) once, so preview1's
+  ;; fd_prestat_get / fd_prestat_dir_name can answer and dirfd can MEAN something.
+  ;; It used to cache only the first descriptor, which made every preopen but the
+  ;; first unreachable and -- since nothing could learn what a preopen is CALLED --
+  ;; every absolute path unopenable.
+  ;;
+  ;; An empty get-directories list leaves count 0: reading the first element of an
+  ;; empty list would hand open-at descriptor handle 0 and TRAP ("unknown handle
+  ;; index 0"), which no handler-case can catch -- so $path_open turns "no such
+  ;; preopen index" into a plain errno instead, and a program that probes for an
+  ;; optional file under a component with no --dir simply sees "not there" like it
+  ;; does on Preview 1.
+  ;;
+  ;; A name longer than 256 bytes is recorded with length 0 rather than truncated: a
+  ;; truncated name would compare equal to a prefix that is not the directory it
+  ;; names, and a preopen the core cannot see is merely unreachable.
+  (func $ensure_preopens
+    (local $i i32) (local $n i32) (local $el i32) (local $sl i32) (local $len i32) (local $j i32)
+    (if (i32.load (i32.const 0x50040)) (then (return)))
+    (i32.store (i32.const 0x50040) (i32.const 1))
+    (call $get_directories (i32.const 0x50030))
+    (local.set $n (i32.load (i32.const 0x50034)))
+    (if (i32.gt_u (local.get $n) (i32.const 16)) (then (local.set $n (i32.const 16))))
+    (i32.store (i32.const 0x50044) (local.get $n))
+    (block $done
+      (loop $l
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (local.set $el (i32.add (i32.load (i32.const 0x50030)) (i32.mul (local.get $i) (i32.const 12))))
+        (local.set $sl (i32.add (i32.const 0x50500) (i32.mul (local.get $i) (i32.const 264))))
+        (i32.store (local.get $sl) (i32.load (local.get $el)))
+        (local.set $len (i32.load offset=8 (local.get $el)))
+        (if (i32.gt_u (local.get $len) (i32.const 256)) (then (local.set $len (i32.const 0))))
+        (i32.store offset=4 (local.get $sl) (local.get $len))
+        (local.set $j (i32.const 0))
+        (block $copied
+          (loop $c
+            (br_if $copied (i32.ge_u (local.get $j) (local.get $len)))
+            (i32.store8 offset=8 (i32.add (local.get $sl) (local.get $j))
+              (i32.load8_u (i32.add (i32.load offset=4 (local.get $el)) (local.get $j))))
+            (local.set $j (i32.add (local.get $j) (i32.const 1)))
+            (br $c)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l))))
+
+  ;; The descriptor of preopen index `idx`, or -1 when there is no such preopen.
+  (func $preopen_desc (param $idx i32) (result i32)
+    (call $ensure_preopens)
+    (if (i32.ge_u (local.get $idx) (i32.load (i32.const 0x50044))) (then (return (i32.const -1))))
+    (i32.load (i32.add (i32.const 0x50500) (i32.mul (local.get $idx) (i32.const 264)))))
+
+  ;; fd_prestat_get(fd, buf) -> errno. buf takes preview1's `prestat`: the tag byte at
+  ;; 0 (0 = directory, the only kind preview1 defines) and pr_name_len at 4. EBADF (8)
+  ;; for an fd that is not preopened, which is what ends the core's preopen walk.
+  (func $fd_prestat_get (param $fd i32) (param $buf i32) (result i32)
+    (local $idx i32)
+    (call $ensure_preopens)
+    (local.set $idx (i32.sub (local.get $fd) (i32.const 3)))
+    (if (i32.ge_u (local.get $idx) (i32.load (i32.const 0x50044))) (then (return (i32.const 8))))
+    (i32.store (local.get $buf) (i32.const 0))
+    (i32.store offset=4 (local.get $buf)
+      (i32.load offset=4 (i32.add (i32.const 0x50500) (i32.mul (local.get $idx) (i32.const 264)))))
+    (i32.const 0))
+
+  ;; fd_prestat_dir_name(fd, path, path_len) -> errno. Copies the preopen's name into
+  ;; the caller's buffer; ENAMETOOLONG (37) when it does not fit, EBADF (8) when the fd
+  ;; is not preopened.
+  (func $fd_prestat_dir_name (param $fd i32) (param $path i32) (param $plen i32) (result i32)
+    (local $idx i32) (local $sl i32) (local $n i32) (local $i i32)
+    (call $ensure_preopens)
+    (local.set $idx (i32.sub (local.get $fd) (i32.const 3)))
+    (if (i32.ge_u (local.get $idx) (i32.load (i32.const 0x50044))) (then (return (i32.const 8))))
+    (local.set $sl (i32.add (i32.const 0x50500) (i32.mul (local.get $idx) (i32.const 264))))
+    (local.set $n (i32.load offset=4 (local.get $sl)))
+    (if (i32.gt_u (local.get $n) (local.get $plen)) (then (return (i32.const 37))))
+    (block $done
+      (loop $l
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (i32.store8 (i32.add (local.get $path) (local.get $i))
+          (i32.load8_u offset=8 (i32.add (local.get $sl) (local.get $i))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l)))
+    (i32.const 0))
 
   ;; fd table slot address for a preview1 file fd.
   (func $slot (param $fd i32) (result i32)
@@ -302,14 +374,17 @@
     (call $fd_read_file (local.get $fd) (local.get $iov) (local.get $cnt) (local.get $nread)))
 
   ;; path_open(dirfd, dirflags, pptr, plen, oflags, rights_base, rights_inh, fdflags, fdout)
-  ;; -> errno. dirfd is ignored (the preopened dir is used). oflags 0 = read, 9 = write
+  ;; -> errno. dirfd NAMES a preopen (3 + preopen index), which is what lets the core
+  ;; resolve an absolute path against the preopen that covers it rather than against
+  ;; the first one; it used to be ignored. oflags 0 = read, 9 = write
   ;; (create|truncate, same bit values as WASI 0.3 open-flags).
   (func $path_open
     (param $dirfd i32) (param $dirflags i32) (param $pptr i32) (param $plen i32)
     (param $oflags i32) (param $rb i64) (param $ri i64) (param $fdflags i32) (param $fdout i32) (result i32)
     (local $pre i32) (local $df i32) (local $idx i32) (local $sl i32)
-    (local.set $pre (call $ensure_preopen))
-    ;; No preopened directory: nothing can be opened, so report the failure as an errno.
+    (local.set $pre (call $preopen_desc (i32.sub (local.get $dirfd) (i32.const 3))))
+    ;; No such preopened directory: nothing can be opened, so report the failure as an
+    ;; errno.
     (if (i32.eq (local.get $pre) (i32.const -1)) (then (return (i32.const 76))))
     ;; descriptor-flags: write only when the caller asked to create or truncate
     ;; (oflags 9). A plain read is 1, and so is a DIRECTORY open (oflags 2) -- asking
@@ -515,4 +590,6 @@
   (export "random_get" (func $random_get))
   (export "clock_time_get" (func $clock_time_get))
   (export "environ_sizes_get" (func $environ_sizes_get))
-  (export "environ_get" (func $environ_get)))
+  (export "environ_get" (func $environ_get))
+  (export "fd_prestat_get" (func $fd_prestat_get))
+  (export "fd_prestat_dir_name" (func $fd_prestat_dir_name)))

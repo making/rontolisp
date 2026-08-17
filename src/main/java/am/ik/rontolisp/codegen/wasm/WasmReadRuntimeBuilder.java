@@ -2088,8 +2088,10 @@ final class WasmReadRuntimeBuilder {
 
 	/**
 	 * Opens the file named by the {@code path} string value via WASI {@code path_open}
-	 * (relative to the first preopened directory, fd 3), reads it into the heap, then
-	 * parses and evaluates each top-level datum in the global environment. Returns
+	 * (resolved against the preopen table -- a relative path against the first preopened
+	 * directory, fd 3, an absolute one against the preopen whose name is its longest
+	 * prefix; {@code WasmIoRuntimeBuilder.emitDirFdAndPath}), reads it into the heap,
+	 * then parses and evaluates each top-level datum in the global environment. Returns
 	 * {@code t}; on a failed open returns nil.
 	 */
 	static byte[] buildLoadBody(ReadCtx ctx) {
@@ -2129,14 +2131,12 @@ final class WasmReadRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen, oflags=0,
+		// path_open(dirfd/dirflags/path_ptr/path_len from
+		// WasmIoRuntimeBuilder.emitDirFdAndPath -- which resolves the staged path against
+		// the preopen table, so an ABSOLUTE path (a merge against *load-truename*,
+		// asdf:system-relative-pathname) loads here too, oflags=0,
 		// fs_rights_base=FD_READ(2), fs_rights_inheriting=0, fdflags=0, fd_out=FD_ADDR)
-		i32(w, 3);
-		i32(w, 0);
-		getLocal(w, OFF);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, PLEN);
+		WasmIoRuntimeBuilder.emitDirFdAndPath(w, OFF, PLEN);
 		i32(w, 0);
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(2);

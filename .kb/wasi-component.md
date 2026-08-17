@@ -24,7 +24,11 @@ the wrapper retains the narrow pair under the preview1 names when the core impor
 
 **Gotchas to preserve**: `wasi:cli` and `wasi:filesystem` expose DISTINCT `error-code` types -> separate future built-ins (`future-read-cli`/`-fs`); the fs error-code is a string-bearing variant -> `future-read-fs` needs realloc. The directory listing added a THIRD distinction: `read-directory` hands back a `stream<directory-entry>`, structurally distinct from `stream<u8>`, so it needs its own read/drop built-ins and its read carries realloc (each element owns a string name) -- plus a cookie-as-entry-index and a "a short round is NOT the end" rule that Preview 1 does not share (`.kb/directory-listing.md`).
 
-**No preopened directory is an ERRNO, not a trap** (2026-07-31). `adapter.wat`'s
+**No preopened directory is an ERRNO, not a trap** (2026-07-31; the helper is
+`$ensure_preopens` and caches the WHOLE table since todo-432 --
+`.kb/read-load-streams.md` -- but the errno policy below is unchanged, with
+"no preopen index `dirfd`" standing where "no preopen at all" stood).
+`adapter.wat`'s
 `$ensure_preopen` used to read the first element of the `wasi:filesystem/preopens`
 `get-directories` list unconditionally. Run a component with no `--dir` and that list is
 EMPTY, so it cached descriptor handle 0 and the first `path_open` trapped inside the host

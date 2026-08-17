@@ -277,14 +277,14 @@ class CiSpecE2eTest {
 			case WASM -> {
 				execLabeled("compile-wasm-" + standalone.name(),
 						List.of(bin.toString(), source.toString(), "-o", stem + ".wasm"));
-				yield execCapture(
-						List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir", ".", stem + ".wasm"));
+				yield execCapture(List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir", ".", "--dir",
+						"/tmp", stem + ".wasm"));
 			}
 			case WASM_COMPONENT -> {
 				execLabeled("compile-wasm-component-" + standalone.name(),
 						List.of(bin.toString(), source.toString(), "-o", stem + ".component.wasm", "--component"));
-				yield execCapture(List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--dir", ".",
-						stem + ".component.wasm"));
+				yield execCapture(List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--dir", ".", "--dir",
+						"/tmp", stem + ".component.wasm"));
 			}
 		};
 		String where = "standalone case '%s' on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
@@ -311,18 +311,21 @@ class CiSpecE2eTest {
 			}
 			case WASM -> {
 				execLabeled("compile-wasm", List.of(bin.toString(), program.toString(), "-o", "test.wasm"));
-				// --dir . preopens the work dir so the file-stream cases can open files;
+				// --dir . preopens the work dir so the file-stream cases can open files,
+				// and --dir /tmp preopens a directory whose NAME is absolute -- the
+				// runtime-absolute-path case needs a preopen that can COVER an absolute
+				// path, and "." never does (.kb/read-load-streams.md);
 				// exceptions=y because the concatenated program contains catching cases
 				// (handler-case &c), which put the whole module in EH mode (harmless
 				// otherwise).
-				yield execLabeled("run-wasm",
-						List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir", ".", "test.wasm"));
+				yield execLabeled("run-wasm", List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir",
+						".", "--dir", "/tmp", "test.wasm"));
 			}
 			case WASM_COMPONENT -> {
 				execLabeled("compile-wasm-component",
 						List.of(bin.toString(), program.toString(), "-o", "test.component.wasm", "--component"));
 				yield execLabeled("run-wasm-component", List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
-						"--dir", ".", "test.component.wasm"));
+						"--dir", ".", "--dir", "/tmp", "test.component.wasm"));
 			}
 		};
 	}

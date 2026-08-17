@@ -1,6 +1,6 @@
 ;; Preview-1 bridge core module for serve components (rontolisp:http-handler +
 ;; --component), on WASI 0.3. Instantiated between the shared memory and the rontolisp
-;; core, it exports the nine preview1 functions the core imports, implemented over the
+;; core, it exports the eleven preview1 functions the core imports, implemented over the
 ;; interfaces the wasi:http@0.3 service world provides:
 ;;
 ;;   random_get       -> wasi:random/random@0.3.0 get-random-u64 (8 bytes at a time)
@@ -22,6 +22,10 @@
 ;;                       nonzero open errno, matching the run-variant failure mode)
 ;;   fd_close         -> errno 0
 ;;   fd_readdir       -> errno 76 (no filesystem; %list-directory reads it as nil)
+;;   fd_prestat_get / fd_prestat_dir_name -> errno 8 (EBADF): no preopen exists, and
+;;                       EBADF at fd 3 is what ends the core's preopen walk at once,
+;;                       so an absolute path resolves to "nothing covers it" and the
+;;                       path_open below answers its usual errno.
 ;;
 ;; Scratch: 0x50000-0x5002F -- each cell but the waitable-set handle is written and
 ;; read back within a single export call.
@@ -148,6 +152,18 @@
     (i32.store (local.get $used) (i32.const 0))
     (i32.const 76))
 
+  ;; fd_prestat_get(fd, buf) -> errno 8 (EBADF): the service world has no preopened
+  ;; directory, and EBADF is how preview1 says so. The core's preopen walk stops at the
+  ;; first one, so an absolute path is simply not covered.
+  (func $fd_prestat_get (param $fd i32) (param $buf i32) (result i32)
+    (i32.const 8))
+
+  ;; fd_prestat_dir_name(fd, path, path_len) -> errno 8 (EBADF), for the same reason.
+  ;; The core never reaches it (fd_prestat_get already failed), but the import must be
+  ;; satisfied.
+  (func $fd_prestat_dir_name (param $fd i32) (param $path i32) (param $plen i32) (result i32)
+    (i32.const 8))
+
   ;; random_get(buf, len) -> errno. Fills buf with wasi:random bytes (8 at a time, like
   ;; adapter.wat).
   (func $random_get (param $buf i32) (param $len i32) (result i32)
@@ -191,4 +207,6 @@
   (export "clock_time_get" (func $clock_time_get))
   (export "environ_sizes_get" (func $environ_sizes_get))
   (export "environ_get" (func $environ_get))
-  (export "fd_readdir" (func $fd_readdir)))
+  (export "fd_readdir" (func $fd_readdir))
+  (export "fd_prestat_get" (func $fd_prestat_get))
+  (export "fd_prestat_dir_name" (func $fd_prestat_dir_name)))
