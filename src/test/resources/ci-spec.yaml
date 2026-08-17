@@ -2697,6 +2697,13 @@ cases:
       "BC"
       "i"
       "s"
+  - name: ctypecase-exhaustive-type-dispatch
+    source: |
+      (print (ctypecase 42 (string "s") (integer "i")))
+      (print (ctypecase "x" (string "s") (integer "i")))
+    expected: |
+      "i"
+      "s"
   # random draws differ per backend and per run (interpreter/JVM use Math.random;
   # WASM draws real entropy from the WASI random_get host function), so the output
   # is only asserted on deterministic properties: (random 1) is always 0, the

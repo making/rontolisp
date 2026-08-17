@@ -1556,6 +1556,12 @@ public final class LispNames {
 	public static final String ETYPECASE = "ETYPECASE";
 
 	/**
+	 * The {@code ctypecase} macro. Without a restart system this behaves like
+	 * {@code etypecase} (signals an error when no type matches).
+	 */
+	public static final String CTYPECASE = "CTYPECASE";
+
+	/**
 	 * The {@code ccase} macro. Without a restart system this behaves like {@code ecase}
 	 * (signals an error when no key matches).
 	 */

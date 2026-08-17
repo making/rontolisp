@@ -1120,7 +1120,8 @@ public final class LibraryDefunPruner {
 			return false;
 		}
 		String member = member(op.name());
-		return LispNames.TYPECASE.equals(member) || LispNames.ETYPECASE.equals(member);
+		return LispNames.TYPECASE.equals(member) || LispNames.ETYPECASE.equals(member)
+				|| LispNames.CTYPECASE.equals(member);
 	}
 
 	private static boolean isTypecaseDefaultHead(LispSymbol head) {

@@ -516,7 +516,8 @@ public final class PureBuiltinFolder {
 				return rebuilt(cons, rebuilt);
 			}
 			// -- clause heads -------------------------------------------------------
-			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE:
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+					LispNames.CTYPECASE:
 				// (case keyform (keys body...)...): the keys are unevaluated data.
 				return foldClauses(cons, parts, blocked, 1);
 			case LispNames.HANDLER_CASE, LispNames.RESTART_CASE:

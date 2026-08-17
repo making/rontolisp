@@ -6677,6 +6677,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunCtypecase() throws Exception {
+		assertThat(compileAndRun(
+				"(print (ctypecase 42 (string \"s\") (integer \"i\"))) (print (ctypecase \"x\" (string \"s\") (integer \"i\")))"))
+			.isEqualTo("\"i\"\n\"s\"");
+		assertThatThrownBy(() -> compileAndRun("(print (ctypecase 'sym (string \"s\") (integer \"i\")))"))
+			.hasRootCauseMessage("ETYPECASE: no clause matches SYM");
+	}
+
+	@Test
 	void compileAndRunEtypecaseInsideACapturingLambda() throws Exception {
 		// The lack-middleware-backtrace shape: an etypecase whose clause heads include
 		// (or pathname string), inside a lambda that captures the scrutinee. The
@@ -6691,6 +6700,26 @@ class JvmLispCompilerTest {
 				               (symbol :symbol)
 				               (stream :stream)
 				               ((or pathname string) :path))))
+				      (lambda (env)
+				        (list (classify) (funcall app env))))))
+				(print (funcall (funcall *mw* (lambda (e) (* e 2))) 21))
+				""")).isEqualTo("(:SYMBOL 42)");
+	}
+
+	@Test
+	void compileAndRunCtypecaseInsideACapturingLambda() throws Exception {
+		// The ctypecase twin of the etypecase shape above: the free/captured-variable
+		// analysis must read the clause HEADS as type specifiers, not variable
+		// references.
+		assertThat(compileAndRun("""
+				(defparameter *mw*
+				  (lambda (app &key (output '*error-output*) result-on-error)
+				    (check-type output (or symbol stream pathname string))
+				    (flet ((classify ()
+				            (ctypecase output
+				              (symbol :symbol)
+				              (stream :stream)
+				              ((or pathname string) :path))))
 				      (lambda (env)
 				        (list (classify) (funcall app env))))))
 				(print (funcall (funcall *mw* (lambda (e) (* e 2))) 21))
@@ -8536,7 +8565,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND CTYPECASE DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test

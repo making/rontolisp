@@ -1662,6 +1662,8 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx);
 				case LispNames.ETYPECASE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx);
+				case LispNames.CTYPECASE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandCtypecase(cons, ctx.closRegistry), ctx);
 				case LispNames.TYPEP ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry, false), ctx);
 				case LispNames.SUBTYPEP ->

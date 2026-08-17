@@ -588,8 +588,8 @@ public final class NoWasiLoadPathRefusals {
 				this.form(pathCell.car(), at);
 				return;
 			}
-			if ((LispNames.TYPECASE.equals(name) || LispNames.ETYPECASE.equals(name))
-					&& cons.cdr() instanceof LispCons rest) {
+			if ((LispNames.TYPECASE.equals(name) || LispNames.ETYPECASE.equals(name)
+					|| LispNames.CTYPECASE.equals(name)) && cons.cdr() instanceof LispCons rest) {
 				this.typecase(rest, at);
 				return;
 			}
