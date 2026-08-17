@@ -321,6 +321,7 @@ Preview 1、`--component` を意味します。**特筆事項**列はロード�
 | [parse-number](https://github.com/sharplispers/parse-number) v1.8 | 4 つ全て | API 全体が整数・有理数・浮動小数点数・基数プレフィクス付きリテラル (`#xFF`、`#3r12`)・指数マーカーを扱い、`invalid-number` コンディションも意図した診断情報付きでシグナルされます |
 | [cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4 | 4 つ全て | 公開 API 全体 — 独自の `split-sequence`、`extremum` ファミリー、`read-delimited`、`expt-mod`、`collecting`/`with-collectors`、自作マクロから使える `with-unique-names`/`with-gensyms`/`once-only` (3 段のネストバッククォート)、`rotate-byte`、`copy-array`、`compose` |
 | [cl-who](https://edicl.github.io/cl-who/) v1.1.5 | 4 つ全て | (X)HTML 生成マクロ — `with-html-output(-to-string)` が属性・ネストしたタグ・ローカルな `str`/`esc`/`fmt`/`htm` 演算子を扱い、`:xml` と `:html5` はどちらも正しくレンダリングされます。**`:indent` (整形出力) は未対応**で、出力モードの切り替えは **`(setf (html-mode) :html5)`** を使います: cl-who はモードをマクロ展開時に読み取るため、`*html-mode*` の実行時 `let` 再束縛は反映されません |
+| [cl-mustache](https://github.com/kanru/cl-mustache) 0.12.3 | 4 つ全て | Mustache テンプレートレンダラを無改変でロードします — 文字列テンプレートとファイルテンプレートの両方に対する `render`/`render*`、一度だけパースして何度でも描画する `compile-template`、レンダラに名前を束縛する `define`、`:data`/`:partials` を取る `make-context`。コンテキストは alist、ハッシュテーブル、あるいはそれらの連鎖です。セクション、反転セクション、パーシャル、動的パーシャル名 (`{{>*name}}`)、ラムダセクションのいずれも描画できます。同梱の **194 ケースの mustache 仕様スイートは全バックエンドで 158/194 — SBCL が通すのと同一の集合**であり、残る 36 件は上流の制約です (null の補間、ドット名によるコンテキストフレームの追加、および cl-mustache が対象とする 1.1.2 仕様より後に追加された 26 ケースの継承モジュール全体)。`t/test-api.lisp` は 20/20 です。存在しないパーシャルは `use-value` リスタートを提供しつつ `partial-cant-be-found` を `signal` するため、これを処理する成果物は EH モードでコンパイルされます (WASM 両バックエンドで `-W exceptions=y` が必要) |
 | [assoc-utils](https://github.com/fukamachi/assoc-utils) | 4 つ全て | Alist ユーティリティの API 全体 — `aget` (setf 可能)、alist/plist/ハッシュの相互変換、`remove-from-alist`/`delete-from-alistf`、`with-keys`、`alist-get`、`alist=`、`alistp` |
 | [cl-base64](https://github.com/darabi/cl-base64) v3.4 | 4 つ全て | Base64。文字列・`(unsigned-byte 8)` 配列・整数に対して動作し、`:columns` の折り返しと `:uri` アルファベットも扱います。不正な入力文字は `bad-base64-character` を通知しますが、その `:input`/`:position`/`:code` スロットを読めるのはインタプリタのみです (コンパイル系バックエンドは素のコンディションを通知し、同じ `handler-case` で捕捉できます) |
 | [md5](https://github.com/pmai/md5) v2.0.4 | 4 つ全て | MD5 (RFC 1321) — `md5sum-sequence`/`md5sum-string` とインクリメンタル API が、4 バックエンドすべてで RFC のテストベクタと一致します |
@@ -401,7 +402,7 @@ alexandria のバッチは、他のすべてのライブラリが受け継いだ
 `arrayp`、`with-open-stream`、第一級の値としての `#'open` — さらに `mappend` の
 ために、複数リストを取る第一級の値としての `#'mapcar`。
 
-そのうち 12 ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待
+そのうち 16 ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待
 出力付き — は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。

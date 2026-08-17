@@ -152,7 +152,7 @@ needs no glue at all. Each directory has its own README.
 
 | Directory | What it demonstrates |
 | --- | --- |
-| [`asdf/`](asdf) | Loading unmodified upstream libraries — split-sequence, parse-number, cl-utilities, cl-who, assoc-utils, cl-base64, md5, cl-ppcre, jzon, ironclad, uax-15 — on all four backends |
+| [`asdf/`](asdf) | Loading unmodified upstream libraries — split-sequence, parse-number, cl-utilities, cl-who, cl-mustache, assoc-utils, cl-base64, md5, chipz, cl-ppcre, jzon, ironclad, uax-15, tiny-routes, clack — on all four backends |
 | [`wasmcloud/`](wasmcloud) | The wasmCloud Rust templates ported to `rontolisp:http-handler`, each with a `.wash/config.yaml` so `wash dev` builds and serves it |
 | [`cloudflare-workers/`](cloudflare-workers) | Twelve independent Workers: two subjects written once with no library and then in the idiom of each web library, plus two that call out over HTTP on the two `--host-boundary` shapes — from a `--no-gc` module with zero imports to a routed application deployed by `npx wrangler deploy` |
 

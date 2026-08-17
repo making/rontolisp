@@ -12,6 +12,7 @@ identically on all four backends (interpreter, JVM, WASM Preview 1,
 | [`parse-number-demo.lisp`](parse-number-demo.lisp) | parse-number v1.8 (BSD 3-Clause) | <https://github.com/sharplispers/parse-number> |
 | [`cl-utilities-demo.lisp`](cl-utilities-demo.lisp) | cl-utilities v1.2.4 (public domain) | <https://common-lisp.net/project/cl-utilities/> |
 | [`cl-who-demo.lisp`](cl-who-demo.lisp) | cl-who v1.1.5 (BSD 2-Clause) | <https://github.com/edicl/cl-who> |
+| [`mustache-demo.lisp`](mustache-demo.lisp) | cl-mustache 0.12.3 (MIT) — Mustache templates. The missing-partial demo invokes a `use-value` restart, so both WASM runs need `-W exceptions=y` | <https://github.com/kanru/cl-mustache> |
 | [`assoc-utils-demo.lisp`](assoc-utils-demo.lisp) | assoc-utils (public domain) | <https://github.com/fukamachi/assoc-utils> |
 | [`cl-base64-demo.lisp`](cl-base64-demo.lisp) | cl-base64 v3.4 (BSD-style) | <https://github.com/darabi/cl-base64> |
 | [`jzon-demo.lisp`](jzon-demo.lisp) | com.inuoe.jzon v1.1.4 (MIT) | <https://github.com/Zulu-Inuoe/jzon> |
@@ -110,6 +111,8 @@ specifiers, declarations (parsed no-ops) and the lite
 `define-condition`/`make-condition`/`warn`/`restart-case`/`return-from` idioms.
 Libraries built on the CLOS static subset, the lite condition system, dynamic
 (special) variables, Gray output streams and adjustable fill-pointered string
-buffers load too — jzon exercises all of these on every backend. Restarts remain
-out of reach; the [ASDF systems guide](../../doc/en/guides/asdf-systems.md) has
-the supported subset.
+buffers load too — jzon exercises all of these on every backend, and
+`restart-case`/`invoke-restart` are in (cl-mustache's missing-partial
+`use-value` restart runs on every backend). The
+[ASDF systems guide](../../doc/en/guides/asdf-systems.md) has the supported
+subset.
