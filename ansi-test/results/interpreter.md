@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**8,272 / 17,883 tests pass (46.3%)** -- 2,997 fail, 6,614 signal an error.
+**8,272 / 17,884 tests pass (46.3%)** -- 2,997 fail, 6,615 signal an error.
 
-7 top-level forms could not be read, 2,106 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 2,105 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -26,14 +26,14 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | printer | 504 | 99 | 74 | 331 | 19.6% | 93 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 19 |
 | reader | 568 | 50 | 290 | 228 | 8.8% | 32 |
-| sequences | 2,454 | 1,691 | 218 | 545 | 68.9% | 850 |
+| sequences | 2,455 | 1,691 | 218 | 546 | 68.9% | 849 |
 | streams | 709 | 154 | 88 | 467 | 21.7% | 112 |
 | strings | 495 | 213 | 100 | 182 | 43.0% | 32 |
 | structures | 960 | 311 | 241 | 408 | 32.4% | 46 |
 | symbols | 1,138 | 727 | 327 | 84 | 63.9% | 24 |
 | system-construction | 58 | 12 | 3 | 43 | 20.7% | 36 |
 | types-and-classes | 613 | 264 | 235 | 114 | 43.1% | 31 |
-| **total** | **17,883** | **8,272** | **2,997** | **6,614** | **46.3%** | **2,113** |
+| **total** | **17,884** | **8,272** | **2,997** | **6,615** | **46.3%** | **2,112** |
 
 ## Most frequent failure reasons
 
@@ -67,7 +67,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 52 | `The function MAKE-TWO-WAY-STREAM is undefined` |
 | 52 | `The function SET-UP-PACKAGES is undefined` |
 | 52 | `X expects 1 arguments, got 7` |
-| 52 | `X expects an array, got "X"` |
+| 51 | `X expects an array, got "X"` |
 | 50 | `LispEvalException: X cannot redefine the standard operator X` |
 | 50 | `The variable *REALS* is unbound` |
 | 50 | `X supports :input and :output directions` |
