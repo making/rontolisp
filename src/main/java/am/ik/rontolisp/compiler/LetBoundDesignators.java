@@ -190,7 +190,8 @@ public final class LetBoundDesignators {
 			// binding -- which the occurrence count then refuses.
 			case LispNames.LAMBDA -> sumUses(parts, 2, name);
 			case LispNames.DEFUN -> sumUses(parts, 3, name);
-			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE ->
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+					LispNames.CTYPECASE ->
 				caseUses(parts, name);
 			default -> {
 				int slot = designatorSlot(head.name(), parts.size());

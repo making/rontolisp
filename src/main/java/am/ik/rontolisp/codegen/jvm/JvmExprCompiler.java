@@ -1357,6 +1357,8 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, className);
 				case LispNames.ETYPECASE -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx, className);
+				case LispNames.CTYPECASE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandCtypecase(cons, ctx.closRegistry), ctx, className);
 				case LispNames.TYPEP -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry, false), ctx, className);
 				case LispNames.SUBTYPEP -> JvmExprCompiler

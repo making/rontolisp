@@ -107,6 +107,7 @@ public final class LispMacroExpander {
 			case LispNames.CCASE -> expandCcase(cons);
 			case LispNames.TYPECASE -> expandTypecase(cons);
 			case LispNames.ETYPECASE -> expandEtypecase(cons);
+			case LispNames.CTYPECASE -> expandCtypecase(cons);
 			case LispNames.AND -> expandAnd(cons);
 			case LispNames.OR -> expandOr(cons);
 			case LispNames.WHEN -> expandWhen(cons);
@@ -347,9 +348,9 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (ccase keyform ...)}. Without a restart (store-value) mechanism,
-	 * {@code ccase} behaves exactly like {@code ecase}: an unmatched key signals an
-	 * error.
+	 * Expands {@code (ccase keyform ...)}. No {@code store-value} restart is established
+	 * around the unmatched-key error, so {@code ccase} behaves exactly like
+	 * {@code ecase}: an unmatched key signals an error.
 	 * @param cons the ccase expression
 	 * @return the expanded expression
 	 */
@@ -14141,7 +14142,8 @@ public final class LispMacroExpander {
 				}
 				return listToCons(out);
 			}
-			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE: {
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+					LispNames.CTYPECASE: {
 				// (case keyform (keys body...)...): keys/type specifiers are data. Walked
 				// structurally, not expanded: the typecase expansion needs the class
 				// registry, which the shared walk does not have.
@@ -22498,7 +22500,7 @@ public final class LispMacroExpander {
 				return;
 			}
 			if (LispNames.CASE.equals(member) || LispNames.ECASE.equals(member) || LispNames.TYPECASE.equals(member)
-					|| LispNames.ETYPECASE.equals(member)) {
+					|| LispNames.ETYPECASE.equals(member) || LispNames.CTYPECASE.equals(member)) {
 				// A clause's keys / type-specifier head are compared, never called or
 				// funcalled -- only the subject and the clause bodies are code.
 				if (parts.size() > 1) {
@@ -23255,6 +23257,31 @@ public final class LispMacroExpander {
 		}
 		condParts.add(makeExhaustiveErrorClause(var, "ETYPECASE"));
 		return makeLet(ETYPECASE_VAR, keyform, listToCons(condParts));
+	}
+
+	/**
+	 * Expands {@code (ctypecase keyform (type body...) ...)} exactly like
+	 * {@code etypecase}: in full Common Lisp the no-clause-matched error is correctable
+	 * through a {@code store-value} restart, which is not established here (the
+	 * {@code check-type}/{@code assert}/{@code ccase} deviation, .kb/error-handling.md),
+	 * so the expansion is shared with {@link #expandEtypecase(LispCons)} (an unmatched
+	 * object signals an error).
+	 * @param cons the ctypecase expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCtypecase(LispCons cons) {
+		return expandEtypecase(cons);
+	}
+
+	/**
+	 * Expands {@code (ctypecase ...)} with a class registry; see
+	 * {@link #expandEtypecase(LispCons, ClosRegistry)}.
+	 * @param cons the ctypecase expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCtypecase(LispCons cons, ClosRegistry closRegistry) {
+		return expandEtypecase(cons, closRegistry);
 	}
 
 	/**
@@ -26154,7 +26181,8 @@ public final class LispMacroExpander {
 				}
 				return rewriteKeeping(parts, 2, fns, rewriteDestructuringPattern(parts.get(1), fns));
 			}
-			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE: {
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+					LispNames.CTYPECASE: {
 				// (case keyform (keys body...)...): keys are unevaluated data.
 				List<LispVal> newParts = new java.util.ArrayList<>();
 				newParts.add(parts.get(0));
@@ -27986,7 +28014,8 @@ public final class LispMacroExpander {
 	@Nullable private static List<LispVal> evaluatedClauseForms(String member, LispCons cons) {
 		boolean handlerCase = LispNames.HANDLER_CASE.equals(member);
 		boolean caseFamily = handlerCase || LispNames.CASE.equals(member) || LispNames.ECASE.equals(member)
-				|| LispNames.TYPECASE.equals(member) || LispNames.ETYPECASE.equals(member);
+				|| LispNames.TYPECASE.equals(member) || LispNames.ETYPECASE.equals(member)
+				|| LispNames.CTYPECASE.equals(member);
 		boolean handlerBind = LispNames.HANDLER_BIND.equals(member);
 		if (!(caseFamily || handlerBind) || !cons.isProperList()) {
 			return null;

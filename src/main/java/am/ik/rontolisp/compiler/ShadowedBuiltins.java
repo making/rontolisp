@@ -332,7 +332,8 @@ public final class ShadowedBuiltins {
 					}
 					break;
 				}
-				case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE: {
+				case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+						LispNames.CTYPECASE: {
 					if (parts.size() >= 2) {
 						List<LispVal> rebuilt = new ArrayList<>(parts.size());
 						rebuilt.add(parts.get(0));

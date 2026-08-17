@@ -728,7 +728,8 @@ public final class UserMacroExpander {
 			case LispNames.SETF -> allowSpecialMutation && isPureAssignment(parts, macroEval);
 			case LispNames.LET, LispNames.LET_STAR -> isPureLet(parts, allowSpecialMutation, macroEval);
 			case LispNames.COND -> isPureCond(parts, allowSpecialMutation, macroEval);
-			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE ->
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+					LispNames.CTYPECASE ->
 				isPureCase(parts, allowSpecialMutation, macroEval);
 			case LispNames.THE ->
 				// (the type value): the type is data; only the value is evaluated.
@@ -1220,7 +1221,8 @@ public final class UserMacroExpander {
 					}
 					return rebuild(cons, parts, 1, macroEval);
 				}
-				case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE: {
+				case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+						LispNames.CTYPECASE: {
 					// (case keyform (keys body...)...): keys are unevaluated data.
 					List<LispVal> newParts = new ArrayList<>();
 					newParts.add(parts.get(0));

@@ -22,6 +22,7 @@ categories:
       - { slug: psetf, name: psetf }
       - { slug: typecase, name: typecase }
       - { slug: etypecase, name: etypecase }
+      - { slug: ctypecase, name: ctypecase }
       - { slug: error, name: error }
       - { slug: cerror, name: cerror }
       - { slug: warn, name: warn }

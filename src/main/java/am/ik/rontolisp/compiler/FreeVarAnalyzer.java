@@ -232,8 +232,8 @@ public final class FreeVarAnalyzer {
 						// surfaced this), and a case key list like mito's
 						// (lambda flet labels) read as an expression makes its keys
 						// free variables.
-						case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CASE, LispNames.ECASE,
-								LispNames.CCASE -> {
+						case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CTYPECASE, LispNames.CASE,
+								LispNames.ECASE, LispNames.CCASE -> {
 							List<LispVal> parts = cons.toList();
 							if (parts.size() > 1) {
 								collectFreeVars(parts.get(1), boundVars, knownFunctions, globals, specialNames,
@@ -562,8 +562,8 @@ public final class FreeVarAnalyzer {
 								knownFunctions, captured, insideLambda);
 						// typecase/case clause HEADS are data: walk the keyform and the
 						// clause bodies only (the collectFreeVars twin).
-						case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CASE, LispNames.ECASE,
-								LispNames.CCASE -> {
+						case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CTYPECASE, LispNames.CASE,
+								LispNames.ECASE, LispNames.CCASE -> {
 							List<LispVal> parts = cons.toList();
 							if (parts.size() > 1) {
 								collectCapturedVars(parts.get(1), localVars, knownFunctions, captured, insideLambda);

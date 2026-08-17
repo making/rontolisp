@@ -1091,7 +1091,8 @@ was reported as `Raise an error while testing.` and ended there.
   optional condition argument of `find-restart`/`compute-restarts` is ignored),
   restart records print as plain lists, `:report`/`:interactive` are stored but
   never rendered/run (no debugger — `break`/`*debugger-hook*` remain absent), and
-  `check-type`/`assert`/`ccase` still offer no `store-value` restart.
+  `check-type`/`assert`/`ccase`/`ctypecase` still offer no `store-value`
+  restart.
 - `use-value` / `store-value` (todo-243) joined the restart-runtime defuns
   (`LispMacroExpander.valueRestartDefun`, one shape for both): invoke the
   innermost restart of the same name with ONE value, nil when none is active —
@@ -1245,7 +1246,12 @@ by the same-named pair.
 
 The interactive debugger (`break`, `*debugger-hook*`, rendering a restart's
 `:report`, running its `:interactive` function), condition-restart association,
-a `store-value` restart for `check-type`/`assert`/`ccase`, `--no-gc` catching (a
+a `store-value` restart for `check-type`/`assert`/`ccase`/`ctypecase` (the two
+`c`-operators are plain aliases of their `e`-twins -- `expandCcase` ->
+`expandEcase`, `expandCtypecase` -> `expandEtypecase`; the reason this is out of
+scope was "there is no restart machinery", which Phase 4 retired, so what is
+left is the restart-mode split `cerror` already demonstrates -- `.todo/433`),
+`--no-gc` catching (a
 scalar error-code data path would be the shape if ever needed; the GC path's
 `$lisp-cond` tag has no MVP equivalent, which is why `--no-gc` rejects the
 catching forms outright rather than degrading), and the

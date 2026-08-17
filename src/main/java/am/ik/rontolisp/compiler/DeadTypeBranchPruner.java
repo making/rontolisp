@@ -357,7 +357,8 @@ public final class DeadTypeBranchPruner {
 					return LispCons.rebuilt(cons, head,
 							LispCons.rebuilt(rest, rest.car(), this.forms(rest.cdr(), inner)));
 				}
-				if (LispNames.TYPECASE.equals(name) || LispNames.ETYPECASE.equals(name)) {
+				if (LispNames.TYPECASE.equals(name) || LispNames.ETYPECASE.equals(name)
+						|| LispNames.CTYPECASE.equals(name)) {
 					return this.typecase(cons, head, rest, env);
 				}
 				if (PAIR_BINDING_HEADS.contains(name)) {

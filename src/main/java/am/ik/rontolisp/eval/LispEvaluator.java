@@ -4697,6 +4697,9 @@ public final class LispEvaluator {
 			case LispNames.ETYPECASE:
 				ensureAsdfClassesFor(cons);
 				return eval(LispMacroExpander.expandEtypecase(cons, this.closRegistry), env);
+			case LispNames.CTYPECASE:
+				ensureAsdfClassesFor(cons);
+				return eval(LispMacroExpander.expandCtypecase(cons, this.closRegistry), env);
 			case LispNames.CHECK_TYPE:
 				return eval(LispMacroExpander.expandCheckType(cons), env);
 			case LispNames.ASSERT:

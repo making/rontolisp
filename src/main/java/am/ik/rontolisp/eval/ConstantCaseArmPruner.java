@@ -735,7 +735,8 @@ final class ConstantCaseArmPruner {
 								scanEscapes(parts.get(i), false);
 							}
 						}
-						case LispNames.CASE, LispNames.ECASE, LispNames.TYPECASE, LispNames.ETYPECASE -> {
+						case LispNames.CASE, LispNames.ECASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+								LispNames.CTYPECASE -> {
 							if (parts.size() > 1) {
 								scanEscapes(parts.get(1), asData);
 							}
@@ -1035,7 +1036,7 @@ final class ConstantCaseArmPruner {
 				case LispNames.CASE, LispNames.ECASE -> {
 					return walkCase(parts, LispNames.ECASE.equals(member), env, deadArms);
 				}
-				case LispNames.TYPECASE, LispNames.ETYPECASE -> {
+				case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CTYPECASE -> {
 					walkAt(parts, 1, env, deadArms);
 					ValueSet result = LispNames.TYPECASE.equals(member) ? ValueSet.ofConstant(nilConstant())
 							: ValueSet.empty();
