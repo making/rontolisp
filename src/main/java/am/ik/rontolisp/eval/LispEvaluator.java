@@ -5047,6 +5047,13 @@ public final class LispEvaluator {
 		for (int i = blockParts.size() - 1; i >= 0; i--) {
 			blockForm = new LispCons(blockParts.get(i), blockForm);
 		}
+		// A syntactic multiple-value producer (gethash/floor-family/find-symbol/
+		// intern/array-displacement) in the body's tail publishes through %mv-spill,
+		// so its secondary value survives the function return like a values tail
+		// does (defmethod bodies arrive here as defuns). The interpreter's spill
+		// global always exists, so no gate is needed; the compile paths run the same
+		// rewrite in LispMacroExpander.injectMvSpillGlobal.
+		blockForm = LispMacroExpander.spillEscapingMvProducers(blockForm);
 		// defun installs into the global function namespace, capturing the current
 		// lexical environment, and returns the function name like Common Lisp.
 		this.globalEnv.defineFunction(funcName,

@@ -5054,6 +5054,12 @@ class LispEvaluatorTest {
 		evaluator.evalValues(LispReader.readFromString("(setf (gethash 'x tlv-h) 42)"));
 		assertThat(topLevelValues(evaluator, "(gethash 'x tlv-h)")).isEqualTo("42 T");
 		assertThat(topLevelValues(evaluator, "(gethash 'z tlv-h)")).isEqualTo("NIL NIL");
+		// A syntactic producer in a user function's tail crosses the call boundary
+		// too (the spill rewrite of evalDefun), so the echo matches SBCL's.
+		evaluator.evalValues(LispReader.readFromString("(defun tlv-g () (floor 10 3))"));
+		assertThat(topLevelValues(evaluator, "(tlv-g)")).isEqualTo("3 1");
+		evaluator.evalValues(LispReader.readFromString("(defun tlv-h-get () (gethash 'x tlv-h))"));
+		assertThat(topLevelValues(evaluator, "(tlv-h-get)")).isEqualTo("42 T");
 	}
 
 	@Test
@@ -5109,6 +5115,65 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(defun mv-two2 () (values 4 5))" + " (defun mv-one2 () (values 6))"
 				+ " (multiple-value-bind (a b) (mv-two2) nil)" + " (multiple-value-bind (a b) (mv-one2) (list a b))")
 			.print()).isEqualTo("(6 NIL)");
+	}
+
+	/**
+	 * The syntactic producer definitions of
+	 * {@link #evalSyntacticMvProducerTailPublishesThroughAFunctionReturn()}, shared
+	 * verbatim with the compile backends' copies (JvmLispCompilerTest /
+	 * WasmLispCompilerIntegrationTest) and the {@code mv-producer-function-return}
+	 * ci-spec case.
+	 */
+	static final String MV_PRODUCER_TAIL_DEFS = """
+			(defun f-gethash (h) (gethash "K" h))
+			(defun f-floor (a b) (floor a b))
+			(defun f-find (n) (find-symbol n))
+			(defun f-intern (n) (intern n))
+			(defun f-disp (a) (array-displacement a))
+			(defmethod ctx-get ((key string) (context hash-table))
+			  (gethash (string-upcase key) context))
+			(defun f-cond (h k) (cond (k (gethash "K" h)) (t nil)))
+			(setq mv427-tbl (make-hash-table :test 'equal))
+			(setf (gethash "K" mv427-tbl) "V")
+			""";
+
+	@Test
+	void evalSyntacticMvProducerTailPublishesThroughAFunctionReturn() {
+		// A syntactic multiple-value producer (gethash / the floor family /
+		// find-symbol / intern / array-displacement) in tail position of a function
+		// body publishes its secondary value through %mv-spill, so the extra value
+		// survives an arbitrary call chain -- including a defmethod, the shape that
+		// found this (cl-mustache's context-get IS a gethash).
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-gethash mv427-tbl))").print())
+			.isEqualTo("(\"V\" T)");
+		// A stored nil is still distinguished from a missing key through the return.
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-gethash (make-hash-table)))").print())
+			.isEqualTo("(NIL NIL)");
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-floor 7 2))").print())
+			.isEqualTo("(3 1)");
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-find \"CAR\"))").print())
+			.isEqualTo("(CAR :INHERITED)");
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-intern \"CAR\"))").print())
+			.isEqualTo("(CAR :INHERITED)");
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-disp (make-array 3)))").print())
+			.isEqualTo("(NIL 0)");
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (ctx-get \"k\" mv427-tbl))").print())
+			.isEqualTo("(\"V\" T)");
+		// A producer under a tail cond clause escapes too; the untaken branch is a
+		// single value.
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-cond mv427-tbl t))").print())
+			.isEqualTo("(\"V\" T)");
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-cond mv427-tbl nil))").print())
+			.isEqualTo("(NIL)");
+		// multiple-value-bind through the same indirection: the shape the todo names.
+		assertThat(
+				evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-bind (v f) (ctx-get \"k\" mv427-tbl) (list v f))")
+					.print())
+			.isEqualTo("(\"V\" T)");
+		// A NON-tail producer stays single-valued: the caller's consumer reads nil.
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (defun f-nontail (h) (let ((v (gethash \"K\" h))) v))"
+				+ " (multiple-value-list (f-nontail mv427-tbl))")
+			.print()).isEqualTo("(\"V\")");
 	}
 
 	/**

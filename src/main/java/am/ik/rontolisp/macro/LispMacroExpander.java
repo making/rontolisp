@@ -26581,6 +26581,162 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.MV_SPILL), value));
 	}
 
+	/**
+	 * Rewrites every SYNTACTIC multiple-value producer sitting in a value-escaping (tail)
+	 * position of the given function body so it PUBLISHES its secondary value through the
+	 * {@code %mv-spill} channel, exactly like a {@code values} tail does -- which is what
+	 * lets {@code (defun f (h) (gethash "K" h))} answer two values to a caller's
+	 * consumer. Without this, the extra value of {@code gethash} / the {@code floor}
+	 * family / {@code find-symbol} / {@code intern} / {@code array-displacement} existed
+	 * only when the producer was written LEXICALLY inside the consumer (the syntactic
+	 * tier), and ANY indirection -- a function return, a {@code defmethod} -- silently
+	 * turned present-p into nil.
+	 *
+	 * <p>
+	 * The walk descends tail positions only (the selective wiring: an unconditional spill
+	 * would tax every {@code gethash} in the program), through the value-escaping
+	 * contexts: {@code progn}/{@code locally}, the {@code let} family and
+	 * {@code flet}/{@code labels}/{@code macrolet} bodies, {@code if}/{@code when}/
+	 * {@code unless}, the last form of {@code and}/{@code or}, {@code cond}/
+	 * {@code case}-family clause bodies (a bodyless {@code (test)} clause returns the
+	 * test's PRIMARY value only, so it is left alone), {@code block},
+	 * {@code multiple-value-bind} bodies, an {@code unwind-protect} protected form (whose
+	 * cleanups save/restore the channel), {@code return}/{@code return-from} and
+	 * {@code the}. A literal {@code (values ...)} tail already publishes through
+	 * {@link #expandValues} / the interpreter's {@code values} function and is left
+	 * untouched, keeping its emitted shape byte-identical. A producer lexically inside a
+	 * consumer is intercepted by the consumer's own expansion BEFORE this rewrite can see
+	 * it (the consumers take the producer form verbatim), so the temp-only fast path is
+	 * preserved there too.
+	 *
+	 * <p>
+	 * Callers: the compile paths apply this to every top-level {@code defun} body (see
+	 * {@link #injectMvSpillGlobal}; {@code defmethod} bodies are defuns by then), gated
+	 * on the program using a multiple-value operator so a consumer-free program stays
+	 * byte-identical; the interpreter applies it in {@code evalDefun}, where the spill
+	 * global always exists. Unchanged subtrees keep their cons identity
+	 * (.kb/source-positions.md).
+	 * @param form a function-body form in tail position
+	 * @return the rewritten form, or {@code form} itself when nothing changed
+	 */
+	public static LispVal spillEscapingMvProducers(LispVal form) {
+		if (isMvProducerForm(form)) {
+			LispCons producer = (LispCons) form;
+			if (LispNames.VALUES.equals(((LispSymbol) producer.car()).name())) {
+				return form;
+			}
+			MvProducer lowered = lowerMvProducer(producer, "__mv" + MV_COUNTER.getAndIncrement());
+			List<LispVal> listParts = new java.util.ArrayList<>();
+			listParts.add(new LispSymbol(LispNames.LIST));
+			listParts.addAll(lowered.values().subList(1, lowered.values().size()));
+			return nestMvBindings(lowered.bindings(),
+					makeProgn(List.of(setMvSpill(listToCons(listParts)), lowered.values().get(0))));
+		}
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		int last = parts.size() - 1;
+		return switch (op.name()) {
+			case LispNames.PROGN, LispNames.LOCALLY, LispNames.AND, LispNames.OR -> spillTailAt(cons, parts, last, 1);
+			case LispNames.LET, LispNames.LET_STAR, LispNames.FLET, LispNames.LABELS, LispNames.MACROLET,
+					LispNames.WHEN, LispNames.UNLESS, LispNames.BLOCK, LispNames.BLOCK_INTERNAL,
+					LispNames.FN_BLOCK_INTERNAL ->
+				spillTailAt(cons, parts, last, 2);
+			case LispNames.MULTIPLE_VALUE_BIND -> spillTailAt(cons, parts, last, 3);
+			case LispNames.IF -> {
+				if (parts.size() < 3) {
+					yield form;
+				}
+				List<LispVal> out = new java.util.ArrayList<>(parts);
+				out.set(2, spillEscapingMvProducers(parts.get(2)));
+				if (parts.size() > 3) {
+					out.set(3, spillEscapingMvProducers(parts.get(3)));
+				}
+				yield LispCons.rebuiltList(cons, out);
+			}
+			case LispNames.COND -> spillClauseTails(cons, parts, 1);
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+					LispNames.CTYPECASE ->
+				spillClauseTails(cons, parts, 2);
+			case LispNames.UNWIND_PROTECT -> spillTailAt(cons, parts, 1, 1);
+			case LispNames.RETURN -> parts.size() == 2 ? spillTailAt(cons, parts, 1, 1) : form;
+			case LispNames.RETURN_FROM, LispNames.THE -> parts.size() == 3 ? spillTailAt(cons, parts, 2, 2) : form;
+			default -> form;
+		};
+	}
+
+	/**
+	 * Rewrites the element at {@code index} of the form through
+	 * {@link #spillEscapingMvProducers}, keeping the original cons when nothing changed
+	 * or when the form has no body ({@code index < firstBodyIndex}).
+	 */
+	private static LispVal spillTailAt(LispCons original, List<LispVal> parts, int index, int firstBodyIndex) {
+		if (index < firstBodyIndex) {
+			return original;
+		}
+		LispVal rewritten = spillEscapingMvProducers(parts.get(index));
+		if (rewritten == parts.get(index)) {
+			return original;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(parts);
+		out.set(index, rewritten);
+		return LispCons.rebuiltList(original, out);
+	}
+
+	/**
+	 * Rewrites the last body form of every {@code cond}/{@code case}-family clause
+	 * through {@link #spillEscapingMvProducers}. A clause with no body forms is left
+	 * alone: {@code (cond (test))} answers the test's PRIMARY value only in CL.
+	 */
+	private static LispVal spillClauseTails(LispCons original, List<LispVal> parts, int firstClauseIndex) {
+		List<LispVal> out = new java.util.ArrayList<>(parts);
+		boolean changed = false;
+		for (int i = firstClauseIndex; i < parts.size(); i++) {
+			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
+				continue;
+			}
+			List<LispVal> clauseParts = clause.toList();
+			if (clauseParts.size() < 2) {
+				continue;
+			}
+			LispVal lastForm = clauseParts.get(clauseParts.size() - 1);
+			LispVal rewritten = spillEscapingMvProducers(lastForm);
+			if (rewritten == lastForm) {
+				continue;
+			}
+			List<LispVal> newClause = new java.util.ArrayList<>(clauseParts);
+			newClause.set(newClause.size() - 1, rewritten);
+			out.set(i, LispCons.rebuiltList(clause, newClause));
+			changed = true;
+		}
+		return changed ? LispCons.rebuiltList(original, out) : original;
+	}
+
+	/**
+	 * Applies {@link #spillEscapingMvProducers} to the tail of every top-level
+	 * {@code defun} body -- the compile paths' half of the wiring, run by
+	 * {@link #injectMvSpillGlobal} only when the program uses a multiple-value operator
+	 * (no consumer means no observer, and the emitted output stays byte-identical).
+	 */
+	private static List<LispVal> spillDefunTails(List<LispVal> program) {
+		List<LispVal> out = new java.util.ArrayList<>(program.size());
+		boolean changed = false;
+		for (LispVal form : program) {
+			LispVal rewritten = form;
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name()) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() >= 4) {
+					rewritten = spillTailAt(cons, parts, parts.size() - 1, 3);
+				}
+			}
+			changed = changed || rewritten != form;
+			out.add(rewritten);
+		}
+		return changed ? out : program;
+	}
+
 	/** Wraps the body in nested single-binding {@code let}s, first binding outermost. */
 	private static LispVal nestMvBindings(List<MvBinding> bindings, LispVal body) {
 		LispVal result = body;
@@ -30051,6 +30207,13 @@ public final class LispMacroExpander {
 		for (LispVal form : program) {
 			usesMv = usesMv || usesMvOperator(form);
 			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
+		}
+		if (usesMv) {
+			// A syntactic producer in a defun's tail publishes through the spill so
+			// its secondary value survives the function return (defmethod bodies are
+			// defuns by this point). Gated on usesMv: without a consumer nothing can
+			// observe the spill, and the emitted output stays byte-identical.
+			program = spillDefunTails(program);
 		}
 		for (String name : PRINTER_MODE_VARS.keySet()) {
 			// print-unreadable-object READS *print-escape* to decide how it spells the

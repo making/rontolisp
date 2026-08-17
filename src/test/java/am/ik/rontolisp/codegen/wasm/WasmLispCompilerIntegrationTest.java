@@ -7872,6 +7872,42 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void syntacticMvProducerTailPublishesThroughAFunctionReturn() throws Exception {
+		// A syntactic producer (gethash / floor family / find-symbol / intern /
+		// array-displacement) in a defun's tail publishes through %mv-spill, so the
+		// secondary value survives the function return -- including a defmethod, the
+		// shape that found this (cl-mustache's context-get IS a gethash). Shared
+		// verbatim with LispEvaluatorTest / JvmLispCompilerTest and the
+		// mv-producer-function-return ci-spec case.
+		assertThat(compileAndRun("""
+				(defun f-gethash (h) (gethash "K" h))
+				(defun f-floor (a b) (floor a b))
+				(defun f-disp (a) (array-displacement a))
+				(defmethod ctx-get ((key string) (context hash-table))
+				  (gethash (string-upcase key) context))
+				(defun f-cond (h k) (cond (k (gethash "K" h)) (t nil)))
+				(defun my-user-fn (x) x)
+				(defun f-find (n) (find-symbol n))
+				(defun f-intern (n) (intern n))
+				(defun f-nontail (h) (let ((v (gethash "K" h))) v))
+				(setq mv427-tbl (make-hash-table :test 'equal))
+				(setf (gethash "K" mv427-tbl) "V")
+				(print (multiple-value-list (f-gethash mv427-tbl)))
+				(print (multiple-value-list (f-gethash (make-hash-table))))
+				(print (multiple-value-list (f-floor 7 2)))
+				(print (multiple-value-list (f-find "MY-USER-FN")))
+				(print (multiple-value-list (f-intern "MY-USER-FN")))
+				(print (multiple-value-list (f-disp (make-array 3))))
+				(print (multiple-value-list (ctx-get "k" mv427-tbl)))
+				(print (multiple-value-list (f-cond mv427-tbl t)))
+				(print (multiple-value-list (f-cond mv427-tbl nil)))
+				(multiple-value-bind (v f) (ctx-get "k" mv427-tbl) (print (list v f)))
+				(print (multiple-value-list (f-nontail mv427-tbl)))
+				""")).isEqualTo("(\"V\" T)\n(NIL NIL)\n(3 1)\n(MY-USER-FN :INTERNAL)\n(MY-USER-FN :INTERNAL)\n(NIL 0)\n"
+				+ "(\"V\" T)\n(\"V\" T)\n(NIL)\n(\"V\" T)\n(\"V\")");
+	}
+
+	@Test
 	void multipleValueSetqAndRotatef() throws Exception {
 		assertThat(compileAndRun("(let (a b) (multiple-value-setq (a b) (values 1 2)) (print (list a b)))"
 				+ " (let (a b) (print (multiple-value-setq (a b) (floor 17 5))) (print (list a b)))"

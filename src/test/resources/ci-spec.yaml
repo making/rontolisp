@@ -5762,6 +5762,48 @@ cases:
       (CAUGHT)
       (1 2 3)
       (RELEASED RELEASED RELEASED)
+  - name: mv-producer-function-return
+    source: |
+      ; A syntactic producer (gethash / floor family / find-symbol / intern /
+      ; array-displacement) in a function's tail publishes through %mv-spill, so
+      ; the secondary value survives the return -- including a defmethod, the
+      ; shape that found this (cl-mustache's context-get IS a gethash). A
+      ; non-tail producer stays single-valued.
+      (defun ci-mvp-gethash (h) (gethash "K" h))
+      (defun ci-mvp-floor (a b) (floor a b))
+      (defun ci-mvp-disp (a) (array-displacement a))
+      (defmethod ci-mvp-ctx-get ((key string) (context hash-table))
+        (gethash (string-upcase key) context))
+      (defun ci-mvp-cond (h k) (cond (k (gethash "K" h)) (t nil)))
+      (defun ci-mvp-user-fn (x) x)
+      (defun ci-mvp-find (n) (find-symbol n))
+      (defun ci-mvp-intern (n) (intern n))
+      (defun ci-mvp-nontail (h) (let ((v (gethash "K" h))) v))
+      (setq ci-mvp-tbl (make-hash-table :test 'equal))
+      (setf (gethash "K" ci-mvp-tbl) "V")
+      (print (multiple-value-list (ci-mvp-gethash ci-mvp-tbl)))
+      (print (multiple-value-list (ci-mvp-gethash (make-hash-table))))
+      (print (multiple-value-list (ci-mvp-floor 7 2)))
+      (print (multiple-value-list (ci-mvp-find "CI-MVP-USER-FN")))
+      (print (multiple-value-list (ci-mvp-intern "CI-MVP-USER-FN")))
+      (print (multiple-value-list (ci-mvp-disp (make-array 3))))
+      (print (multiple-value-list (ci-mvp-ctx-get "k" ci-mvp-tbl)))
+      (print (multiple-value-list (ci-mvp-cond ci-mvp-tbl t)))
+      (print (multiple-value-list (ci-mvp-cond ci-mvp-tbl nil)))
+      (multiple-value-bind (v f) (ci-mvp-ctx-get "k" ci-mvp-tbl) (print (list v f)))
+      (print (multiple-value-list (ci-mvp-nontail ci-mvp-tbl)))
+    expected: |
+      ("V" T)
+      (NIL NIL)
+      (3 1)
+      (CI-MVP-USER-FN :INTERNAL)
+      (CI-MVP-USER-FN :INTERNAL)
+      (NIL 0)
+      ("V" T)
+      ("V" T)
+      (NIL)
+      ("V" T)
+      ("V")
   - name: multiple-value-setq-and-rotatef
     source: |
       (let (a b) (multiple-value-setq (a b) (values 1 2)) (print (list a b)))

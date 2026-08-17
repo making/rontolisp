@@ -144,6 +144,64 @@ fall-through, `return-from`, `go`, a signalled unwind) in
 `WasmLispCompilerIntegrationTest.unwindProtectKeepsTheProtectedFormsValues` and
 the `unwind-protect-values` ci-spec case (which adds the `--component` leg).
 
+## A syntactic producer's tail escapes through the spill (todo-427 + todo-212, 2026-08-17)
+
+**Invariant: the tier boundary is not observable through a function return.** A
+recognized syntactic producer (floor family, `gethash`, `find-symbol`, `intern`,
+`array-displacement` -- everything `isMvProducerForm` accepts except a literal
+`values`, which already publishes) sitting in a value-escaping position of a
+function body is rewritten to publish its secondary value to `%mv-spill` as it
+returns its primary (`LispMacroExpander.spillEscapingMvProducers`), so
+`(defun f (h) (gethash "K" h))` answers two values to any consumer, however many
+calls away -- including a `defmethod`, the shape that found this (cl-mustache's
+`context-get` IS a gethash: present-p died at the method boundary, every
+`{{name}}` rendered empty, and nothing errored).
+
+The wiring is SELECTIVE, not unconditional -- the reason todo-212 stalled is
+that an unconditional spill would tax the hottest built-ins in the language on
+every call:
+
+- The rewrite walks TAIL positions only, through `progn`/`locally`, the `let`
+  family, `flet`/`labels`/`macrolet` BODIES, `if`/`when`/`unless`, the last form
+  of `and`/`or`, `cond` + `case`/`typecase`-family clause bodies (a bodyless
+  `(test)` clause keeps CL's primary-value-only semantics and is left alone),
+  `block`/`%block`/`%fn-block`, `multiple-value-bind` bodies, an
+  `unwind-protect` protected form (its cleanups save/restore the channel,
+  todo-397), `return`/`return-from` and `the`.
+- Compile paths: `injectMvSpillGlobal` applies it to every top-level `defun`
+  body (`defmethod`/CLOS bodies are defuns by then -- it runs after
+  `expandTopLevelDefinitions`), gated on `usesMv`: a program with no
+  multiple-value operator has no observer, and its emitted output stays
+  byte-identical (verified against the size-report programs, none of which use
+  a multiple-value operator).
+- Interpreter: `evalDefun` applies the same rewrite to the block-wrapped body
+  (`defmethod` arrives there as a generated defun); the spill global always
+  exists on the interpreter, so no gate.
+- A producer LEXICALLY inside a consumer is intercepted by the consumer's own
+  expansion before this rewrite can see it (consumers take the producer form
+  verbatim), so the temp-only fast path keeps emitting no spill round-trip and
+  those forms stay byte-identical -- the syntactic tier survives as the
+  optimization it was meant to be, not as an observable semantics boundary.
+- `--no-gc` keeps the pure single-value expansion as before (no reference
+  globals, no spill channel; it never calls `injectMvSpillGlobal`).
+
+Remaining gaps, deliberate (revisit if a library trips one): a producer tail in
+a bare `lambda` or in a `flet`/`labels` LOCAL function body is not rewritten on
+any path (both callers would need the shape added together), a non-tail
+`return-from`/`go` escape is not scanned for, and `handler-case` /
+`multiple-value-prog1` are not tail contexts.
+
+Pinned:
+`LispEvaluatorTest.evalSyntacticMvProducerTailPublishesThroughAFunctionReturn`
+(plus the tail-function echo cases in `evalValuesAtTopLevelYieldsEveryValue`),
+`JvmLispCompilerTest.compileAndRunSyntacticMvProducerTailPublishesThroughAFunctionReturn`,
+`WasmLispCompilerIntegrationTest.syntacticMvProducerTailPublishesThroughAFunctionReturn`,
+and the `mv-producer-function-return` ci-spec case (all four backends, one
+expectation -- which is why its `find-symbol`/`intern` rows probe a USER symbol:
+the runtime status of a NON-literal name diverges between the interpreter and
+the compile paths, `.todo/254`, and a user symbol answers `:internal`
+everywhere).
+
 ## The REPL echo is a consumer (added 2026-07-30)
 
 The top level of a CL REPL is a multiple-value consumer -- `(floor 10 3)` echoes
@@ -176,9 +234,10 @@ form only: the same entry point backs the documentation site's "Run" cells
 Verified against SBCL 2.2.9 (installed on the dev host) by diffing transcripts --
 identical for `floor`/`values`/`values-list`/`parse-integer`/`gethash`, a user
 function's tail values, `values` through `cond`/`let`/`if`, `(values)` (no echo),
-an empty line, and two forms on one line. The four remaining differences are all
-pre-existing and each has a todo: `.todo/212` (floor-family/gethash secondary
-values do not cross a function boundary), `.todo/213` (a non-tail `values` nobody
+an empty line, and two forms on one line. The remaining differences are all
+pre-existing and each has a todo (`.todo/212` -- floor-family/gethash secondary
+values did not cross a function boundary -- was closed by todo-427, see the
+tail-escape section above): `.todo/213` (a non-tail `values` nobody
 consumes leaks), `.todo/214` (`read-from-string`/`subtypep`/... are
 single-valued -- `macroexpand-1`/`macroexpand` came off that list with todo-378,
 `.kb/gensym-macroexpand.md`), `.todo/215` (`print` omits CL's leading newline / trailing space,
