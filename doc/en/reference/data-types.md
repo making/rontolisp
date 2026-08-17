@@ -358,7 +358,15 @@ Keys are compared structurally (as if by `equal`): a list key like `(list r c)`
 matches an equal list, and numbers, symbols, characters and strings match by
 value. `:test` is accepted for familiarity but does not change this -- an `eql`
 table also matches structurally-equal aggregate keys. Iteration order (`maphash`)
-is not guaranteed across backends, so portable code should not depend on it. They
+is not guaranteed across backends, so portable code should not depend on it. A
+table itself prints as the opaque tag `#<HASH-TABLE>` -- the same text on every
+backend, with no entry content:
+
+```lisp
+(princ-to-string (make-hash-table)) ; => "#<HASH-TABLE>"
+```
+
+They
 are also usable as first-class function values (`#'gethash`, `#'remhash`,
 `#'clrhash`, `#'hash-table-count`, `#'hash-table-p`, `#'maphash`, and
 `#'make-hash-table` in its no-argument form) on all three backends -- passed via

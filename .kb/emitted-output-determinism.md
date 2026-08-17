@@ -45,6 +45,17 @@ document-ordered `LinkedHashSet`, but the signature promises nothing), and the
 `LinkedHashSet` chains in `FreeVarAnalyzer`/`GlobalVarCollector` that mint JVM static
 fields.
 
+## The sibling: what the emitted program PRINTS must not vary either
+
+The same rule applies one level down, to the stdout of the compiled program: run it
+twice, get the same text. The way to break it is to let a host `toString` reach a
+printer, because the default `Object.toString` ends in an identity hash. The JVM
+backend did exactly that for a hash table until `.todo/430` (`{"a"=[Ljava.lang.Object;@3fee733d}`,
+a different number each run) and still does for the mutex handle -- which is why
+`.kb/mutexes.md` declares the handle opaque and unprintable rather than leaving the
+question open. A printer arm that answers a fixed tag is the fix; `.kb/hash-tables.md`
+has the shape.
+
 ## Why CI cannot catch this
 
 `native-image` freezes `ImmutableCollections.SALT` at BUILD time, so the native binary

@@ -12668,6 +12668,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileHashTablePrintsAsOpaqueTag() throws Exception {
+		// A table is the non-array shape of the TYPE_CELL box; before it had a printer
+		// arm
+		// it fell into the cons tail, which re-entered the printer on the same value and
+		// trapped with "call stack exhausted", losing the buffered stdout with it
+		// (todo 430). It prints the interpreter's opaque tag instead.
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(princ *h*)
+				(terpri)
+				(prin1 *h*)
+				(terpri)
+				(format t "~a ~s~%" *h* *h*)
+				(print (list *h*))
+				""")).isEqualTo("#<HASH-TABLE>\n#<HASH-TABLE>\n#<HASH-TABLE> #<HASH-TABLE>\n(#<HASH-TABLE>)");
+	}
+
+	@Test
 	void compileHashTableListKeysIncfCountAndPredicate() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *q* (make-hash-table :test 'equal))

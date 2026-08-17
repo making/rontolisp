@@ -1740,18 +1740,23 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmRuntimeBuilder.@Nullable JavaPrint javaPrint;
 		if (usesJava) {
 			ClassConstant bigIntegerClassForPrint = cp.addClass(cp.addUtf8("java/math/BigInteger"));
-			ClassConstant hashMapClassForPrint = usesHashTables ? cp.addClass(cp.addUtf8("java/util/HashMap")) : null;
 			MethodrefConstant objectGetClass = cp.addMethodref(objectClass,
 					cp.addNameAndType(cp.addUtf8("getClass"), cp.addUtf8("()Ljava/lang/Class;")));
 			ClassConstant classClass = cp.addClass(cp.addUtf8("java/lang/Class"));
 			MethodrefConstant classGetName = cp.addMethodref(classClass,
 					cp.addNameAndType(cp.addUtf8("getName"), cp.addUtf8("()Ljava/lang/String;")));
-			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, hashMapClassForPrint, objectGetClass,
-					classGetName, stringConcat, cp.addString("#<java "), cp.addString(">"));
+			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, objectGetClass, classGetName,
+					stringConcat, cp.addString("#<java "), cp.addString(">"));
 		}
 		else {
 			javaPrint = null;
 		}
+
+		// A hash table prints as the opaque #<HASH-TABLE> tag, the same text the
+		// interpreter and both WASM backends emit; the branch is emitted only when the
+		// program uses hash tables.
+		final JvmRuntimeBuilder.@Nullable HashPrint hashPrint = usesHashTables ? new JvmRuntimeBuilder.HashPrint(
+				cp.addClass(cp.addUtf8(JvmHashRuntimeBuilder.MAP_CLASS)), cp.addString("#<HASH-TABLE>")) : null;
 
 		// Futures (CompletableFutures / stream-read tokens at runtime) print as
 		// #<FUTURE> and streams as #<STREAM> (interpreter parity); the branches are
@@ -1796,7 +1801,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, charBoxClass, charPrin1Method,
 				arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint, packedPrint,
-				packedIntPrint, instPrint, strEscMethod);
+				packedIntPrint, instPrint, strEscMethod, hashPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -1804,7 +1809,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, stringLastIndexOf, ratioArrayClass,
 				stringConcat, slashStr, charBoxClass, characterToString, arrayListClassForPrint,
-				arrayToDisplayStringMethod, strvMethod, javaPrint, futurePrint, packedPrint, packedIntPrint, instPrint);
+				arrayToDisplayStringMethod, strvMethod, javaPrint, futurePrint, packedPrint, packedIntPrint, instPrint,
+				hashPrint);
 		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),

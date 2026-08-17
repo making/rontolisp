@@ -3038,6 +3038,23 @@ cases:
       (2 GONE)
       14
       0
+  - name: hash-table-print-syntax
+    source: |
+      (defparameter *htp* (make-hash-table :test 'equal))
+      (setf (gethash "a" *htp*) 1)
+      (princ *htp*)
+      (terpri)
+      (prin1 *htp*)
+      (terpri)
+      (format t "~a ~s~%" *htp* *htp*)
+      (print (list *htp*))
+      (print (princ-to-string *htp*))
+    expected: |
+      #<HASH-TABLE>
+      #<HASH-TABLE>
+      #<HASH-TABLE> #<HASH-TABLE>
+      (#<HASH-TABLE>)
+      "#<HASH-TABLE>"
   - name: hash-table-functions-first-class
     source: |
       (defun ci-ht-fc ()

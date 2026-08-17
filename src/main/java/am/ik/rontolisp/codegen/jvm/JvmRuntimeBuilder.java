@@ -524,7 +524,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
-			@org.jspecify.annotations.Nullable InstPrint instPrint, MethodrefConstant strEscMethod) {
+			@org.jspecify.annotations.Nullable InstPrint instPrint, MethodrefConstant strEscMethod,
+			@org.jspecify.annotations.Nullable HashPrint hashPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -664,8 +665,10 @@ final class JvmRuntimeBuilder {
 		emitU2(code, consToStringMethod.index());
 		code.add(Opcode.ARETURN);
 
-		// "#<java class>" for a wrapped host object (java: interop), then val.toString()
+		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
+		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
+		emitHashTableBranch(code, hashPrint);
 		emitDefaultTail(code, objectToString, javaPrint);
 
 		return code;
@@ -945,7 +948,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
-			@org.jspecify.annotations.Nullable InstPrint instPrint) {
+			@org.jspecify.annotations.Nullable InstPrint instPrint,
+			@org.jspecify.annotations.Nullable HashPrint hashPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -1113,8 +1117,10 @@ final class JvmRuntimeBuilder {
 		emitU2(code, consToDisplayStringMethod.index());
 		code.add(Opcode.ARETURN);
 
-		// "#<java class>" for a wrapped host object (java: interop), then val.toString()
+		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
+		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
+		emitHashTableBranch(code, hashPrint);
 		emitDefaultTail(code, objectToString, javaPrint);
 
 		return code;
@@ -1241,13 +1247,26 @@ final class JvmRuntimeBuilder {
 	 * Constant-pool references for printing a wrapped {@code java:} host object as
 	 * {@code #<java class.Name>} (interpreter parity), threaded into the two
 	 * lisp-to-string builders only when the program uses {@code java:} interop.
-	 * {@code hashMapClass} is non-null only when the program also uses hash tables, so a
-	 * Lisp hash table (a {@code HashMap} at runtime) keeps its plain {@code toString}
-	 * printing instead of being mistaken for a host object.
 	 */
-	record JavaPrint(ClassConstant bigIntegerClass, @org.jspecify.annotations.Nullable ClassConstant hashMapClass,
-			MethodrefConstant objectGetClass, MethodrefConstant classGetName, MethodrefConstant stringConcat,
-			ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix) {
+	record JavaPrint(ClassConstant bigIntegerClass, MethodrefConstant objectGetClass, MethodrefConstant classGetName,
+			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix) {
+	}
+
+	/**
+	 * Constant-pool references for printing a hash table as the opaque
+	 * {@code #<HASH-TABLE>} tag the interpreter's {@code LispHashTable.print()} answers.
+	 * Threaded into the two lisp-to-string builders only when the program uses hash
+	 * tables.
+	 *
+	 * <p>
+	 * {@code mapClass} is {@link JvmHashRuntimeBuilder#MAP_CLASS}, the runtime class a
+	 * COMPILED table has and a host {@code java:} map does not: without a branch of its
+	 * own a table used to fall through to {@code toString()} and print Java's own map
+	 * syntax -- container braces, the raw {@code Object[]} entry pair, and an IDENTITY
+	 * HASH, which made the same program print different text on two runs
+	 * ({@code .kb/emitted-output-determinism.md}).
+	 */
+	record HashPrint(ClassConstant mapClass, ConstantPool.StringConstant tag) {
 	}
 
 	/**
@@ -1594,12 +1613,31 @@ final class JvmRuntimeBuilder {
 		}
 	}
 
+	// Emits "if (val is the compiled hash-table class) return "#<HASH-TABLE>"" -- the
+	// interpreter's LispHashTable.print() answer, so all four backends print one table
+	// identically. A no-op in a program that never makes a table.
+	private static void emitHashTableBranch(List<Integer> code,
+			@org.jspecify.annotations.Nullable HashPrint hashPrint) {
+		if (hashPrint == null) {
+			return;
+		}
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, hashPrint.mapClass().index());
+		int skip = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		emitLdc(code, hashPrint.tag().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, skip, code.size());
+	}
+
 	/**
 	 * Emits the final fallback of {@code _lispToString}/{@code _lispToDisplayString}:
 	 * plain {@code val.toString()}, preceded -- when {@code java:} interop is in use --
-	 * by a {@code #<java class.Name>} branch for wrapped host objects. {@code
-	 * BigInteger} (a promoted Lisp integer) and, when hash tables are used,
-	 * {@code HashMap} still fall through to {@code toString()}.
+	 * by a {@code #<java class.Name>} branch for wrapped host objects. {@code BigInteger}
+	 * (a promoted Lisp integer) still falls through to {@code toString()}, which is its
+	 * decimal digits.
 	 */
 	private static void emitDefaultTail(List<Integer> code, MethodrefConstant objectToString,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
@@ -1611,14 +1649,6 @@ final class JvmRuntimeBuilder {
 			toStringBranches.add(code.size());
 			code.add(Opcode.IFNE);
 			emitU2(code, 0);
-			if (javaPrint.hashMapClass() != null) {
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.INSTANCEOF);
-				emitU2(code, javaPrint.hashMapClass().index());
-				toStringBranches.add(code.size());
-				code.add(Opcode.IFNE);
-				emitU2(code, 0);
-			}
 			// return "#<java ".concat(val.getClass().getName()).concat(">");
 			emitLdc(code, javaPrint.prefix().index());
 			code.add(Opcode.ALOAD_0);

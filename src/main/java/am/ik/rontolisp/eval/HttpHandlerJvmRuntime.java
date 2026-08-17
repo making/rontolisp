@@ -2,7 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 
@@ -25,10 +25,14 @@ import org.jspecify.annotations.Nullable;
  * Everything here speaks the JVM backend's RUNTIME VALUE REPRESENTATION: nil is
  * {@code null}, a cons is an {@code Object[2]}, an integer is a {@code Long}, a string is
  * its quote-wrapped text, a symbol its bare name, and a hash table is a
- * {@code java.util.HashMap} whose key is the {@code prin1} text of the Lisp key and whose
- * value is an {@code Object[2]} of the original key and the stored value (the
+ * {@code java.util.LinkedHashMap} whose key is the {@code prin1} text of the Lisp key and
+ * whose value is an {@code Object[2]} of the original key and the stored value (the
  * {@code JvmHashRuntimeBuilder} convention -- a quoted string IS its own {@code prin1}
  * text, which is why the header names below go in as their quote-wrapped form directly).
+ * The table class is exact, not merely map-shaped: the emitted helpers cast to it and
+ * both {@code hash-table-p} and the printer key off it, so a plain {@code HashMap} here
+ * would fail the cast at the first {@code gethash} (pinned by
+ * {@code JvmHashRuntimeBuilderTest#theHandwrittenRuntimeBuildsTheSameTableClass}).
  *
  * <p>
  * The environment's KEY SET and order are {@link ClackEnv#FIELDS}; only the per-field
@@ -56,7 +60,7 @@ public final class HttpHandlerJvmRuntime {
 		Object query = q < 0 ? null : quote(target.substring(q + 1));
 		// The header table: lowercased names, repeated headers joined with ", " in wire
 		// order (the Clack handler-backend rule), never nil.
-		HashMap<String, Object> headers = new HashMap<>();
+		LinkedHashMap<String, Object> headers = new LinkedHashMap<>();
 		String host = null;
 		String contentType = null;
 		String contentLength = null;

@@ -9694,6 +9694,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileHashTablePrintsAsOpaqueTag() throws Exception {
+		// The compiled table is a host map, so without a printer arm of its own it used
+		// to
+		// reach Object.toString and print Java's container syntax -- including an
+		// IDENTITY
+		// HASH, i.e. different text on two runs (todo 430,
+		// .kb/emitted-output-determinism.md).
+		// It prints the interpreter's opaque tag instead, nested positions included.
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(princ *h*)
+				(terpri)
+				(prin1 *h*)
+				(terpri)
+				(format t "~a ~s~%" *h* *h*)
+				(print (list *h*))
+				""")).isEqualTo("#<HASH-TABLE>\n#<HASH-TABLE>\n#<HASH-TABLE> #<HASH-TABLE>\n(#<HASH-TABLE>)");
+	}
+
+	@Test
 	void compileHashTableGetWithDefault() throws Exception {
 		assertThat(compileAndRun("(print (gethash 'x (make-hash-table) 42))")).isEqualTo("42");
 	}

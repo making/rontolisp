@@ -3300,9 +3300,12 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(field);
 	}
 
-	// Emits the array branch shared by _print_val and _princ_val: if param 0 is a
-	// TYPE_CELL box whose header car is a TYPE_HASH_BUCKETS array (i.e. an array, not a
-	// hash table), prints it as #(...) (rank 1) or #nA((...) ...) (rank n) and returns.
+	// Emits the TYPE_CELL branch shared by _print_val and _princ_val, i.e. every value
+	// carried in the box: if param 0 is a TYPE_CELL whose header car is a
+	// TYPE_HASH_BUCKETS array (an array), prints it as #(...) (rank 1) or #nA((...) ...)
+	// (rank n) and returns; any other cell is a hash table and prints #<HASH-TABLE>.
+	// The branch RETURNS for every cell -- nothing may reach the cons tail of the caller,
+	// which would re-enter the printer on the same value (see the tail of this method).
 	// elementFunc is the per-element printer (FUNC_PRINT_VAL for prin1, FUNC_PRINC_VAL
 	// for princ). A nested group paren opens where the flat index is a multiple of that
 	// dimension's stride (the product of the trailing dimension sizes) and closes where
@@ -3794,6 +3797,17 @@ final class WasmRuntimeBuilder {
 		writeStr(w, st.rparen);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // is-array if
+
+		// The other TYPE_CELL shape is a hash table (header car = the i31 entry count),
+		// and it prints as the opaque #<HASH-TABLE> tag -- the interpreter's answer, so
+		// all four backends agree. Without this arm the value left the cell branch
+		// unhandled and fell into the cons tail below, which prints " . " and re-enters
+		// the printer on the SAME value: unbounded recursion, i.e. an unrecoverable
+		// "call stack exhausted" trap that also lost the stdout buffered before it. Any
+		// other cell (an unexposed internal box) survives here for the same reason
+		// rather than trapping.
+		writeStr(w, st.hashTableStr);
+		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // is-cell if
 	}
 

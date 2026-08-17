@@ -8104,6 +8104,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry futureStr;
 
+		// A hash table is the OTHER shape of the TYPE_CELL box the array printer walks
+		// (see WasmRuntimeBuilder.emitPrintArray): it prints as this opaque tag, the same
+		// text LispHashTable.print() answers on the interpreter.
+		final StringEntry hashTableStr;
+
 		// Vector/array literal printing: the "#(" prefix for rank-1; a rank-n array
 		// prints "#", the rank as an integer, then "A(". A packed float array
 		// (TYPE_FARRAY) prints "#d(" (double) or "#f(" (single) at every rank instead, so
@@ -8171,6 +8176,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.newline = addBodyString("\n");
 			this.funcStr = addBodyString("#<function>");
 			this.futureStr = addBodyString("#<FUTURE>");
+			this.hashTableStr = addBodyString("#<HASH-TABLE>");
 			this.vecPrefix = addBodyString("#(");
 			this.hashPrefix = addBodyString("#");
 			this.rankAOpen = addBodyString("A(");

@@ -9154,6 +9154,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void hashTablePrintsAsOpaqueTag() {
+		// A hash table prints as one opaque tag, with no entry content and nothing that
+		// varies between runs, through every printer -- and identically on all four
+		// backends (todo 430; pinned end-to-end by the ci-spec case
+		// hash-table-print-syntax).
+		LispVal result = evalMulti("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(list (princ-to-string *h*) (prin1-to-string *h*) (format nil "~a ~s" *h* *h*))
+				""");
+		assertThat(result.print()).isEqualTo("(\"#<HASH-TABLE>\" \"#<HASH-TABLE>\" \"#<HASH-TABLE> #<HASH-TABLE>\")");
+	}
+
+	@Test
 	void hashTableGetWithDefault() {
 		assertThat(eval("(gethash 'x (make-hash-table) 42)")).isEqualTo(new LispInteger(42));
 	}

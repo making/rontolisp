@@ -13,7 +13,7 @@ import am.ik.jvm.Opcode;
 
 /**
  * Builds the JVM bytecode for the hash-table runtime helpers. A hash table is represented
- * at runtime as a plain {@code java.util.HashMap}; each entry maps the canonical key (the
+ * at runtime as a {@link #MAP_CLASS}; each entry maps the canonical key (the
  * {@code prin1} string of the Lisp key, produced by {@code _lispToString}) to an
  * {@code Object[2]} pair holding the original key and the stored value. Keying by the
  * printed representation gives structural ({@code equal}) comparison, matching the
@@ -22,7 +22,7 @@ import am.ik.jvm.Opcode;
  * <p>
  * The generated static helpers (all gated on the program actually using hash tables):
  * <ul>
- * <li>{@code _hashMake()} -&gt; a fresh HashMap</li>
+ * <li>{@code _hashMake()} -&gt; a fresh map</li>
  * <li>{@code _hashGet(key, table, default)} -&gt; the stored value or the default</li>
  * <li>{@code _hashPut(key, table, value)} -&gt; the stored value</li>
  * <li>{@code _hashRem(key, table)} -&gt; t if an entry was removed, else nil</li>
@@ -34,6 +34,17 @@ import am.ik.jvm.Opcode;
  * </ul>
  */
 final class JvmHashRuntimeBuilder {
+
+	/**
+	 * The runtime class of a Lisp hash table. It is deliberately NOT the plain
+	 * {@code java.util.HashMap} a host {@code java:} call can hand back: {@code _hashP}
+	 * and the printer both discriminate a Lisp table by this exact class, so a host map
+	 * stays a host object ({@code hash-table-p} is nil, it prints as {@code #<java ...>})
+	 * instead of impersonating a Lisp table. Being LINKED is the second half of the
+	 * choice: iteration is insertion-ordered, which is what the interpreter's
+	 * {@code LispHashTable} does, so {@code maphash} agrees with it for free.
+	 */
+	static final String MAP_CLASS = "java/util/LinkedHashMap";
 
 	static final String MAKE = "_hashMake";
 
@@ -84,7 +95,7 @@ final class JvmHashRuntimeBuilder {
 
 	static List<HashMethod> build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, MethodrefConstant longValueOf, MethodrefConstant lispToString) {
-		ClassConstant hashMapClass = cp.addClass(cp.addUtf8("java/util/HashMap"));
+		ClassConstant hashMapClass = cp.addClass(cp.addUtf8(MAP_CLASS));
 		ClassConstant collectionClass = cp.addClass(cp.addUtf8("java/util/Collection"));
 		MethodrefConstant hashMapInit = cp.addMethodref(hashMapClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
@@ -107,7 +118,7 @@ final class JvmHashRuntimeBuilder {
 
 		List<HashMethod> methods = new ArrayList<>();
 
-		// _hashMake() -> new HashMap()
+		// _hashMake() -> new LinkedHashMap()
 		JvmAsm make = new JvmAsm();
 		make.anew(hashMapClass);
 		make.dup();
@@ -115,7 +126,7 @@ final class JvmHashRuntimeBuilder {
 		make.areturn();
 		methods.add(new HashMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 2, 1, make.code));
 
-		// _hashGet(key, table, default): pair = ((HashMap)
+		// _hashGet(key, table, default): pair = ((LinkedHashMap)
 		// table).get(_lispToString(key));
 		// return (pair == null) ? default : pair[1]
 		JvmAsm get = new JvmAsm();
@@ -139,7 +150,8 @@ final class JvmHashRuntimeBuilder {
 		get.areturn();
 		methods.add(new HashMethod(cp.addUtf8(GET), cp.addUtf8(GET_DESC), 4, 4, get.code));
 
-		// _hashPut(key, table, value): ((HashMap) table).put(_lispToString(key), new
+		// _hashPut(key, table, value): ((LinkedHashMap) table).put(_lispToString(key),
+		// new
 		// Object[]{key, value}); return value
 		JvmAsm put = new JvmAsm();
 		put.aload(1);
@@ -162,7 +174,8 @@ final class JvmHashRuntimeBuilder {
 		put.areturn();
 		methods.add(new HashMethod(cp.addUtf8(PUT), cp.addUtf8(PUT_DESC), 7, 3, put.code));
 
-		// _hashRem(key, table): return (((HashMap) table).remove(_lispToString(key)) !=
+		// _hashRem(key, table): return (((LinkedHashMap)
+		// table).remove(_lispToString(key)) !=
 		// null) ? Long(1) : null
 		JvmAsm rem = new JvmAsm();
 		rem.aload(1);
@@ -179,7 +192,7 @@ final class JvmHashRuntimeBuilder {
 		rem.areturn();
 		methods.add(new HashMethod(cp.addUtf8(REM), cp.addUtf8(REM_DESC), 3, 2, rem.code));
 
-		// _hashClr(table): ((HashMap) table).clear(); return table
+		// _hashClr(table): ((LinkedHashMap) table).clear(); return table
 		JvmAsm clr = new JvmAsm();
 		clr.aload(0);
 		clr.checkcast(hashMapClass);
@@ -188,7 +201,7 @@ final class JvmHashRuntimeBuilder {
 		clr.areturn();
 		methods.add(new HashMethod(cp.addUtf8(CLR), cp.addUtf8(CLR_DESC), 1, 1, clr.code));
 
-		// _hashCount(table): return Long.valueOf(((HashMap) table).size())
+		// _hashCount(table): return Long.valueOf(((LinkedHashMap) table).size())
 		JvmAsm count = new JvmAsm();
 		count.aload(0);
 		count.checkcast(hashMapClass);
@@ -198,7 +211,7 @@ final class JvmHashRuntimeBuilder {
 		count.areturn();
 		methods.add(new HashMethod(cp.addUtf8(COUNT), cp.addUtf8(COUNT_DESC), 2, 1, count.code));
 
-		// _hashP(x): return (x instanceof HashMap) ? Long(1) : null
+		// _hashP(x): return (x instanceof LinkedHashMap) ? Long(1) : null
 		JvmAsm hp = new JvmAsm();
 		hp.aload(0);
 		hp.instanceOf(hashMapClass);
@@ -211,7 +224,7 @@ final class JvmHashRuntimeBuilder {
 		hp.areturn();
 		methods.add(new HashMethod(cp.addUtf8(P), cp.addUtf8(P_DESC), 2, 1, hp.code));
 
-		// _hashValues(table): return ((HashMap) table).values().toArray()
+		// _hashValues(table): return ((LinkedHashMap) table).values().toArray()
 		JvmAsm values = new JvmAsm();
 		values.aload(0);
 		values.checkcast(hashMapClass);
