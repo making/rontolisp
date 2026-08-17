@@ -6,7 +6,7 @@ import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 
 /**
- * Web Image substitution for {@link QuicklispClient}. The browser playground compiles the
+ * Web Image substitution for {@link DistClient}. The browser playground compiles the
  * interpreter to WebAssembly with GraalVM Web Image, where {@code java.net.http.HttpClient}
  * cannot be compiled (it pulls in virtual threads and the TLS/host-socket stack the browser
  * sandbox does not provide). {@code ql:quickload} needs both network and a filesystem cache
@@ -15,16 +15,16 @@ import com.oracle.svm.core.annotate.TargetClass;
  * {@code httpGet} downloader (removing the only path to {@code HttpClient}), and any
  * downloader call raises a clear error. Compiled only under the {@code web} Maven profile
  * (it lives in {@code src/web/java}); the JVM and regular native-image builds use the real
- * {@link QuicklispClient}.
+ * {@link DistClient}.
  */
-@TargetClass(QuicklispClient.class)
-final class Target_QuicklispClient {
+@TargetClass(DistClient.class)
+final class Target_DistClient {
 
 	@Substitute
-	static QuicklispClient createDefault() {
-		// The inline lambda avoids the `QuicklispClient::httpGet` method reference of the
+	static DistClient createDefault() {
+		// The inline lambda avoids the `DistClient::httpGet` method reference of the
 		// real createDefault, so httpGet -- and therefore HttpClient -- is unreachable.
-		return new QuicklispClient(QuicklispClient.defaultHome(), url -> {
+		return new DistClient(DistClient.defaultBase(), url -> {
 			throw new IOException(
 					"ql:quickload is not available in the browser playground (no network or filesystem access)");
 		});

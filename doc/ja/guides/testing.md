@@ -37,6 +37,7 @@ rontolisp test my-app/tests        # an ASDF system designator
 | `-r`, `--reporter spec\|dot\|none` | rove のレポータースタイル。既定は `spec` |
 | `--disable-colors`, `--color` | ANSI カラーを強制的に切る / 点ける。既定は出力先に従い、端末なら点き、パイプなら切れます |
 | `--system-path DIRS` | `NAME.asd` を探すディレクトリ (`PATH` と同じ形式) |
+| `--dist DISTS` | quicklisp に加えて `ql:quickload` がダウンロードできる dist (例: `ultralisp`。[システムガイド](asdf-systems.md#adding-a-dist-ultralisp)を参照) |
 | `-o FILE` | 実行する代わりにコンパイルします (後述) |
 
 素の `rontolisp FILE` は従来どおりで、Common Lisp のセマンティクスを保ちます:

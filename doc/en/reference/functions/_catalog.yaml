@@ -595,9 +595,11 @@ categories:
       - { slug: uiop-split-string, name: "uiop:split-string" }
       - { slug: uiop-symbol-call, name: "uiop:symbol-call" }
       - { slug: uiop-print-condition-backtrace, name: "uiop/image:print-condition-backtrace" }
-  - title: "ql Package (Quicklisp)"
+  - title: "ql / ql-dist Packages (Quicklisp)"
     functions:
       - { slug: ql-quickload, name: "ql:quickload" }
+      - { slug: ql-dist-install-dist, name: "ql-dist:install-dist" }
+      - { slug: ql-update-dist, name: "ql:update-dist" }
   - title: "usocket Package (usocket-compatible sockets)"
     functions:
       - { slug: usocket-socket-connect, name: "usocket:socket-connect" }

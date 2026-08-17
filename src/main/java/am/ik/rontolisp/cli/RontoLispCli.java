@@ -49,6 +49,7 @@ import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.VecSimd;
+import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
@@ -150,6 +151,13 @@ public final class RontoLispCli {
 		// directory of the loading file is always searched first, before these.
 		List<String> systemPath = systemPath(options.get("--system-path"), System.getenv("RONTOLISP_SOURCE_REGISTRY"));
 
+		// The distributions ql:quickload downloads from: quicklisp always, plus whatever
+		// --dist / RONTOLISP_DISTS name (a dist name or a distinfo URL, comma-separated).
+		// A program can install one itself with (ql-dist:install-dist ...); these two are
+		// for the invocations that have nowhere to put a form -- `rontolisp test SYSTEM`,
+		// or a build that must not edit the sources it compiles.
+		DistClient dists = DistClient.createDefault(distSpecs(options.get("--dist"), System.getenv("RONTOLISP_DISTS")));
+
 		// -e/--eval "FORMS": the program is the argument itself rather than a file, and
 		// nothing downstream can tell the difference -- it interprets, and with -o it
 		// compiles. Only what a file itself provides is missing: a directory for a
@@ -161,7 +169,7 @@ public final class RontoLispCli {
 					+ "': give the program either inline or in a file");
 		}
 		if (!test && inline == null && !options.containsNoKey()) {
-			repl(systemPath, options.contains("--simd"));
+			repl(systemPath, dists, options.contains("--simd"));
 			return;
 		}
 
@@ -205,7 +213,7 @@ public final class RontoLispCli {
 						+ "' given): it writes the JavaScript half of whatever boundary was built."
 						+ " The boundary itself is --host-boundary=" + HostBoundary.spellings());
 			}
-			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
+			compileToFile(source, baseDir, systemPath, dists, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--no-prune"), options.contains("--emit-wit"),
@@ -229,8 +237,34 @@ public final class RontoLispCli {
 				throw new UnsupportedOperationException(
 						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
 			}
-			interpret(source, baseDir, systemPath, options.contains("--simd"), inputFile);
+			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), inputFile);
 		}
+	}
+
+	/**
+	 * The dists named by {@code --dist} and by {@code RONTOLISP_DISTS}, in that order:
+	 * each is a comma-separated list of dist names ({@code ultralisp}) or distinfo URLs.
+	 * Comma-separated rather than {@code File.pathSeparator}-joined like
+	 * {@code --system-path}, because a URL contains the separator itself.
+	 * @param option the {@code --dist} value, or {@code null}
+	 * @param env the {@code RONTOLISP_DISTS} value, or {@code null}
+	 * @return the dist specs, in search order, without duplicates
+	 */
+	static List<String> distSpecs(@Nullable String option, @Nullable String env) {
+		List<String> specs = new ArrayList<>();
+		for (String joined : new String[] { option, env }) {
+			if (joined == null) {
+				continue;
+			}
+			// A repeated --dist arrives newline-joined (CliOptions.repeatableKeys).
+			for (String spec : joined.split("[,\n]")) {
+				String trimmed = spec.trim();
+				if (!trimmed.isEmpty() && !specs.contains(trimmed)) {
+					specs.add(trimmed);
+				}
+			}
+		}
+		return specs;
 	}
 
 	static List<String> systemPath(@Nullable String option, @Nullable String env) {
@@ -258,9 +292,10 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void repl(List<String> systemPath, boolean simd) {
+	private void repl(List<String> systemPath, DistClient dists, boolean simd) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
+		evaluator.setDistClient(dists);
 		if (simd) {
 			enableSimd(evaluator);
 		}
@@ -351,11 +386,12 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, boolean simd,
-			@Nullable String entryFile) {
+	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
+			boolean simd, @Nullable String entryFile) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
+		evaluator.setDistClient(dists);
 		if (simd) {
 			enableSimd(evaluator);
 		}
@@ -379,10 +415,10 @@ public final class RontoLispCli {
 		this.out.flush();
 	}
 
-	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
-			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
-			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
+	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
+			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
+			boolean simd, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
+			boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -391,8 +427,8 @@ public final class RontoLispCli {
 		// see SourceProvenance for why the interpreter deliberately does not record.
 		SourceProvenance.startRecording();
 		try {
-			compileRecorded(source, baseDir, systemPath, outputFile, dynamic, component, noWasi, optimize, noGc, simd,
-					noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary, entryFile);
+			compileRecorded(source, baseDir, systemPath, dists, outputFile, dynamic, component, noWasi, optimize, noGc,
+					simd, noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -421,10 +457,10 @@ public final class RontoLispCli {
 		return new LispCompileException(prefix + ex.getMessage(), ex);
 	}
 
-	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
-			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
-			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
+	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
+			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
+			boolean simd, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
+			boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -550,7 +586,8 @@ public final class RontoLispCli {
 		// macro-time evaluator, per top-level form (the interpreter's loadFile timing).
 		List<LispVal> read = source.contains("#.") ? LispReader.readAllWithReadEvalMarkers(source, features, entryFile)
 				: LispReader.readAllFromString(source, features, entryFile);
-		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), baseDir, systemPath, features);
+		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), baseDir, systemPath, features,
+				dists);
 		// Expand the (rontolisp:async (defun ...)) wrapper before anything scans for
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.
@@ -1050,6 +1087,12 @@ public final class RontoLispCli {
 		this.out.println("                     RONTOLISP_SOURCE_REGISTRY environment variable adds more)");
 		this.out.println("                     ql:quickload downloads systems into ~/.rontolisp/quicklisp");
 		this.out.println("                     (override with the RONTOLISP_QUICKLISP_HOME env variable)");
+		this.out.println("  --dist DISTS       Quicklisp-format distributions ql:quickload may download from,");
+		this.out.println("                     beside quicklisp: a name (ultralisp) or a distinfo URL, several");
+		this.out.println("                     comma-separated (the RONTOLISP_DISTS env variable adds more).");
+		this.out.println("                     Searched in the order given, quicklisp first unless named;");
+		this.out.println("                     each caches under ~/.rontolisp/<dist> (RONTOLISP_DIST_HOME).");
+		this.out.println("                     A program can install one itself: (ql-dist:install-dist NAME)");
 	}
 
 	static boolean isBalanced(String input) {

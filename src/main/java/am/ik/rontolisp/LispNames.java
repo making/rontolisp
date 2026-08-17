@@ -5893,6 +5893,36 @@ public final class LispNames {
 	public static final String QL_QUICKLOAD = QL_PKG + ":" + QUICKLOAD;
 
 	/**
+	 * The {@code ql-dist} package name -- where Quicklisp keeps the distribution
+	 * machinery, of which rontolisp implements the one member a program writes:
+	 * {@code install-dist}. See {@code eval.DistClient}.
+	 */
+	public static final String QL_DIST_PKG = "QL-DIST";
+
+	/**
+	 * {@code ql-dist:install-dist} -- installs a Quicklisp-format distribution (a known
+	 * dist name, {@code "ultralisp"}, or the URL of its distinfo) beside the Quicklisp
+	 * dist {@code ql:quickload} downloads from. The dists are searched in installation
+	 * order. Like {@code ql:quickload} it takes effect at interpret time or compile time
+	 * (Java-side): a literal top-level call is consumed by the {@code LoadInliner} pass.
+	 */
+	public static final String INSTALL_DIST = "INSTALL-DIST";
+
+	/** The canonical qualified spelling of {@code ql-dist:install-dist}. */
+	public static final String QL_DIST_INSTALL_DIST = QL_DIST_PKG + ":" + INSTALL_DIST;
+
+	/**
+	 * {@code ql:update-dist} -- drops a dist's cached indexes so the next
+	 * {@code ql:quickload} sees the releases published since the cache was written (what
+	 * a dist rebuilt every few minutes, like Ultralisp, needs). Same timing as
+	 * {@code ql:quickload}: interpret time, or compile time for a literal top-level call.
+	 */
+	public static final String UPDATE_DIST = "UPDATE-DIST";
+
+	/** The canonical qualified spelling of {@code ql:update-dist}. */
+	public static final String QL_UPDATE_DIST = QL_PKG + ":" + UPDATE_DIST;
+
+	/**
 	 * The {@code tagbody} special form: body forms interleaved with go-tag labels
 	 * (symbols/integers); {@code go} transfers control to a label. Interpreter-only for
 	 * now (the compile path rejects it).

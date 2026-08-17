@@ -101,6 +101,49 @@ loading still goes through the `asdf` subset, the same limitations apply — a
 downloaded library only loads if its sources stay inside the supported subset
 below.
 
+## Adding a dist (Ultralisp)
+
+Quicklisp's dist format is spoken by more than one distribution, and
+[Ultralisp](https://ultralisp.org/) — rebuilt every few minutes, so a library
+lands in it the day it is published — is the usual second one. It is **opt-in**:
+a program installs it with
+[`ql-dist:install-dist`](../reference/functions/ql-dist-install-dist.md), the
+same call real Quicklisp takes,
+
+```console
+$ rontolisp
+> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
+"ultralisp"
+> (ql:quickload "circular-buffer")
+(circular-buffer)
+```
+
+and an invocation with nowhere to put a form (`rontolisp test SYSTEM`, a build
+script that must not edit the sources it compiles) names it on the command line
+instead — `--dist ultralisp`, several comma-separated, or the
+`RONTOLISP_DISTS` environment variable. Either channel also takes the URL of any
+other Quicklisp-format distinfo.
+
+The dists are searched **in installation order, per system**: `ql:quickload`
+takes each system — and each dependency — from the first dist that lists it, so
+adding one supplies the names Quicklisp does not have and changes where nothing
+else comes from. Quicklisp is installed first unless it is named explicitly, so
+`--dist ultralisp,quicklisp` is how Ultralisp's copy of a library both dists
+carry wins. A dist's index is downloaded only when a lookup actually reaches it,
+and each dist caches under its own `~/.rontolisp/<dist>/` (`RONTOLISP_DIST_HOME`
+overrides the base; `RONTOLISP_QUICKLISP_HOME` still overrides the quicklisp
+one). Because the index is then cached forever,
+[`ql:update-dist`](../reference/functions/ql-update-dist.md) is what makes a
+fast-moving dist worth having:
+
+```console
+$ rontolisp -e '(ql:update-dist "ultralisp")'
+```
+
+Everything else is unchanged: the download happens at interpret time or compile
+time, so an installed dist works the same on all four backends, and a downloaded
+library still has to stay inside the supported subset below.
+
 ## What is (and is not) supported
 
 - `.asd` files are parsed as **data**: `defsystem` (bare or

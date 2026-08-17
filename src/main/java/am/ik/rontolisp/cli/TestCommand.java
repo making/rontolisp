@@ -334,6 +334,8 @@ final class TestCommand {
 		out.println("                     --optimize, ...); a .wasm needs -W exceptions=y to");
 		out.println("                     run, rove's handler-bind putting it in EH mode");
 		out.println("  --system-path DIRS Directories searched for NAME.asd (like PATH)");
+		out.println("  --dist DISTS       Dists ql:quickload may download from, beside");
+		out.println("                     quicklisp: a name (ultralisp) or a distinfo URL");
 		out.println("  -h, --help         Show this help message");
 	}
 

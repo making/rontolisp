@@ -6,9 +6,9 @@ import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
-import am.ik.rontolisp.eval.QuicklispClient;
+import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.UserMacroExpander;
-import am.ik.rontolisp.eval.QuicklispTestSupport;
+import am.ik.rontolisp.eval.DistTestSupport;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
@@ -435,13 +435,39 @@ class LoadInlinerTest {
 
 	private static final String QL_MYLIB_URL = "http://fake.quicklisp/archive/mylib-1.0.tar.gz";
 
-	private static QuicklispClient quicklispClient(Path home, String componentBody) {
-		return new QuicklispClient(home, QuicklispTestSupport.dist(//
+	private static DistClient quicklispClient(Path home, String componentBody) {
+		return new DistClient(home, DistTestSupport.dist(//
 				"mylib mylib mylib\n", //
 				"mylib " + QL_MYLIB_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
-				Map.of(QL_MYLIB_URL, QuicklispTestSupport.tarGz(Map.of(//
+				Map.of(QL_MYLIB_URL, DistTestSupport.tarGz(Map.of(//
 						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
 						"mylib-1.0/mylib.lisp", componentBody)))));
+	}
+
+	private static final String UL_FRESH_URL = "http://fake.ultralisp/archive/fresh-1.0.tar.gz";
+
+	@Test
+	void installDistIsConsumedAtCompileTimeAndTheQuickloadBelowItUsesTheDist(@TempDir Path home) {
+		// The system exists only in the second dist, so this splices at all only because
+		// the install-dist ABOVE it was applied while inlining -- the compiled program
+		// downloads nothing, so a run-time install would be too late.
+		DistClient client = new DistClient(home, DistTestSupport.dists(//
+				DistTestSupport.quicklisp("", "", Map.of()), //
+				DistTestSupport.ultralisp(//
+						"fresh fresh fresh\n", //
+						"fresh " + UL_FRESH_URL + " 100 md5 sha1 fresh-1.0 fresh\n", //
+						Map.of(UL_FRESH_URL, DistTestSupport.tarGz(Map.of(//
+								"fresh-1.0/fresh.asd", "(defsystem \"fresh\" :components ((:file \"fresh\")))", //
+								"fresh-1.0/fresh.lisp", "(defun fresh-answer () 42)"))))));
+
+		List<LispVal> result = LoadInliner.inline(
+				LispReader.readAllFromString(
+						"(ql-dist:install-dist \"ultralisp\") (ql:quickload \"fresh\") (print (fresh-answer))"),
+				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER, client);
+
+		assertThat(result.stream().map(LispVal::print).filter(form -> !form.startsWith("(%BEGIN-FILE ")))
+			.containsExactly("\"ultralisp\"", "(%BEGIN-SYSTEM \"fresh\")", "(DEFUN FRESH-ANSWER NIL 42)", "(%END-FILE)",
+					"(%END-SYSTEM)", "(QUOTE fresh)", "(PRINT (FRESH-ANSWER))");
 	}
 
 	@Test
@@ -459,7 +485,7 @@ class LoadInlinerTest {
 					"(QUOTE mylib)", "(PRINT (MYLIB-ANSWER))");
 		assertThat(result.stream().map(LispVal::print).filter(form -> form.startsWith("(%BEGIN-FILE ")))
 			.singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
-			.endsWith("software/mylib-1.0/mylib.lisp\" \"" + home + "/software/mylib-1.0/mylib.lisp\")");
+			.endsWith("software/mylib-1.0/mylib.lisp\" \"" + home + "/quicklisp/software/mylib-1.0/mylib.lisp\")");
 	}
 
 	@Test

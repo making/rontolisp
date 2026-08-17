@@ -21,7 +21,10 @@ public class CliOptions {
 	// a newline, instead of the last one winning. -e is one program written in several
 	// arguments, so `-e "(defun f () 1)" -e "(print (f))"` reads exactly like the two
 	// forms written on two lines of a file.
-	private static final Set<String> repeatableKeys = Set.of("-e");
+	// --dist is repeatable for the same reason -e is: `--dist ultralisp --dist URL` is
+	// one search order written in two arguments, and the value itself is comma-separated,
+	// so the newline join reads as one more separator.
+	private static final Set<String> repeatableKeys = Set.of("-e", "--dist");
 
 	// Long spellings that mean an existing key; the value is stored under the short one,
 	// so every reader looks at one name.

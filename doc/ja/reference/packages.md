@@ -8,7 +8,8 @@ rontolispには、一連の組み込みパッケージと[`defpackage` による
 - **`linalg`** — numpy スタイルのベクトル・行列演算(`linalg:zeros`、`linalg:matmul`、`linalg:solve` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`la` は組み込みのニックネームです。`cl` を **使用しません**。[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
 - **`java`** — リフレクションによる Java 連携。JVM インタプリタ (`java -jar rontolisp.jar`) でのみ使え、コンパイラやネイティブバイナリでは使えません。`cl` を **使用しません**。`new`、`call`、`static`、`field`、`proxy` を所有します。[Java 連携ガイド](../guides/java-interop.md)を参照してください。
 - **`asdf`** — ASDF の限定的な API 互換サブセット(システム定義): `defsystem` と `load-system`。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md)を参照してください。
-- **`ql`** — Quicklisp の限定的な API 互換サブセット: `quickload` は本物の Quicklisp ディストリビューションからシステムをダウンロードし、`asdf` サブセットを経由してロードします。`quicklisp` は組み込みのニックネームです。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#downloading-with-quickload)を参照してください。
+- **`ql`** — Quicklisp の限定的な API 互換サブセット: `quickload` は本物の Quicklisp ディストリビューションからシステムをダウンロードし、`asdf` サブセットを経由してロードします。`update-dist` は dist の index を更新します。`quicklisp` は組み込みのニックネームです。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#downloading-with-quickload)を参照してください。
+- **`ql-dist`** — Quicklisp のディストリビューション管理パッケージ。プログラムが書くメンバーは `install-dist` の 1 つで、Quicklisp 形式の別のディストリビューション ([Ultralisp](https://ultralisp.org/) や任意の distinfo URL) を `ql:quickload` の検索対象に加えます。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#adding-a-dist-ultralisp)を参照してください。
 - **`uiop`** — ASDF の移植性レイヤ。15 個のサブパッケージ (`uiop/os`、`uiop/pathname` など) として登録され、`uiop` がそれらを再エクスポートするので、メンバのどちらの綴りも同じシンボルを指します。`cl` を **use しません**。[uiop パッケージ](uiop.md) を参照してください。
 - **`usocket`** — `rontolisp:tcp-*` ソケット組み込みの上に載った [usocket](https://github.com/usocket/usocket) 互換シム(`usocket:socket-connect`、`usocket:socket-listen` など)。Lisp ソースで一度だけ実装され、組み込み ASDF システム `"usocket"` としても登録されています。`cl` を **使用しません**。[TCPソケットガイド](../guides/tcp-sockets.md#the-usocket-compatible-shim)を参照してください。
 

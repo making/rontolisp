@@ -27,6 +27,11 @@ path `ql:quickload` already runs, and the cache directory it writes into should
 then be on the search path for the rest of the run without the caller naming it.
 An unresolvable name still signals what it signals today.
 
+That fetch-and-cache path is `eval/DistClient` over a LIST of Quicklisp-format
+dists now (`.kb/dists.md`), so the fallback resolves against whatever the run
+installed — quicklisp plus any `--dist` / `ql-dist:install-dist` — and needs
+nothing dist-specific of its own.
+
 Watch:
 
 - **A silent network fetch from `load-system` is a behavior change**, and a

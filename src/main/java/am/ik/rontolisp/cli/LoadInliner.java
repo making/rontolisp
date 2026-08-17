@@ -23,7 +23,7 @@ import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.eval.AsdfRuntimeLibrary;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.BuiltinSystems;
-import am.ik.rontolisp.eval.QuicklispClient;
+import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.ShimLibraries;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
@@ -145,29 +145,29 @@ public final class LoadInliner {
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath, Features features) {
-		return inline(program, loader, baseDir, systemPath, features, QuicklispClient.createDefault());
+		return inline(program, loader, baseDir, systemPath, features, DistClient.createDefault());
 	}
 
 	/**
 	 * Same as {@link #inline(List, SourceLoader, String, List, Features)} but with an
-	 * injectable {@link QuicklispClient} for {@code ql:quickload} (a test seam: an
-	 * in-memory downloader over a temporary cache).
+	 * injectable {@link DistClient} for {@code ql:quickload} (a test seam: an in-memory
+	 * downloader over a temporary cache).
 	 * @param program the top-level forms read from the source
 	 * @param loader the loader used to resolve {@code load} paths
 	 * @param baseDir the directory of the entry source, or {@code null}
 	 * @param systemPath extra directories searched for {@code NAME.asd} files
 	 * @param features the reader features for loaded files
-	 * @param quicklisp the Quicklisp downloader behind {@code ql:quickload}
+	 * @param dists the dist downloader behind {@code ql:quickload}
 	 * @return the program with top-level {@code load}/system forms inlined
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
-			List<String> systemPath, Features features, QuicklispClient quicklisp) {
+			List<String> systemPath, Features features, DistClient dists) {
 		List<LispVal> result = new ArrayList<>();
 		// The system registry and the loaded set are insertion-ordered: the baked
 		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
 		// program must be deterministic (.kb/emitted-output-determinism.md).
 		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
-				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp,
+				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, dists,
 				baseDir);
 		expandInto(program, result, ctx, baseDir);
 		// Fold the ASDF/UIOP pathname primitives + bundle with-open-file bodies of
@@ -191,13 +191,13 @@ public final class LoadInliner {
 	 * system reads when it derives a dependency), the already-loaded systems, the
 	 * in-progress system stack (cycle guard) and the (mutable) {@code .asd} search path,
 	 * which {@code ql:quickload} extends with the downloaded cache directories -- the
-	 * reader features for loaded files, the Quicklisp downloader, and the entry source's
+	 * reader features for loaded files, the dist downloader, and the entry source's
 	 * directory (the base every path in the spliced program is resolved against once this
 	 * pass has flattened it).
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
-			Deque<String> loadingSystems, List<String> systemPath, Features features, QuicklispClient quicklisp,
+			Deque<String> loadingSystems, List<String> systemPath, Features features, DistClient dists,
 			@Nullable String entryBaseDir) {
 	}
 
@@ -239,6 +239,31 @@ public final class LoadInliner {
 				// defuns spliced with each system.
 				spliceTestOpClosure(testSystemName, out, ctx, baseDir, new HashSet<>());
 				out.add(form);
+				continue;
+			}
+			String distSpec = distDirective(form, LispNames.QL_DIST_PKG, LispNames.INSTALL_DIST);
+			if (distSpec != null) {
+				// Installing a dist is a COMPILE-TIME configuration of where the
+				// quickloads below it download from, so it is applied here and consumed
+				// (the compiled program downloads nothing at run time). Its value is the
+				// dist name, like the interpreter's.
+				try {
+					out.add(new LispString(ctx.dists().installDist(distSpec)));
+				}
+				catch (IllegalArgumentException ex) {
+					throw new IllegalStateException(LispNames.QL_DIST_INSTALL_DIST + ": " + ex.getMessage(), ex);
+				}
+				continue;
+			}
+			String updatedDist = distDirective(form, LispNames.QL_PKG, LispNames.UPDATE_DIST);
+			if (updatedDist != null) {
+				try {
+					ctx.dists().updateDist(updatedDist);
+				}
+				catch (IOException ex) {
+					throw new IllegalStateException(LispNames.QL_UPDATE_DIST + ": " + ex.getMessage(), ex);
+				}
+				out.add(new LispString(updatedDist));
 				continue;
 			}
 			List<String> quickloadNames = quickloadNames(form);
@@ -488,7 +513,7 @@ public final class LoadInliner {
 		Ctx systemCtx = system.features().isEmpty() ? ctx
 				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.systemPackages(),
 						ctx.loadedSystems(), ctx.loadingSystems(), ctx.systemPath(),
-						ctx.features().with(system.features()), ctx.quicklisp(), ctx.entryBaseDir());
+						ctx.features().with(system.features()), ctx.dists(), ctx.entryBaseDir());
 		// Everything spliced from here on belongs to this system. A dependency opens its
 		// own bracket inside this one, so the pruner's innermost-wins rule attributes
 		// each
@@ -550,6 +575,32 @@ public final class LoadInliner {
 	}
 
 	/**
+	 * If {@code form} is a top-level literal call of the dist directive
+	 * {@code pkg:member} ({@code ql-dist:install-dist} / {@code ql:update-dist}), returns
+	 * its single string-designator argument; otherwise {@code null}. Trailing keyword
+	 * options are accepted and ignored like {@code quickload}'s; a non-literal argument
+	 * is a hard error, since the compile path configures the dists while it splices and
+	 * has nothing to evaluate one with (the interpreter's runtime function does accept a
+	 * computed one).
+	 */
+	@Nullable private static String distDirective(LispVal form, String pkg, String member) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !pkg.equals(qn.pkg()) || !member.equals(qn.member())) {
+			return null;
+		}
+		String spelling = pkg + ":" + member;
+		List<LispVal> items = cons.toList();
+		if (items.size() < 2) {
+			throw new IllegalStateException(spelling + " expects exactly one argument: " + form.print());
+		}
+		AsdfSystems.checkIgnoredLoadOptions(spelling, items.subList(2, items.size()));
+		return AsdfSystems.designator(spelling, items.get(1));
+	}
+
+	/**
 	 * If {@code form} is a top-level literal {@code (ql:quickload NAME)} (or
 	 * {@code (ql:quickload '("a" "b"))}), returns the system names; otherwise
 	 * {@code null}. A non-literal argument is a hard error (the compile path cannot
@@ -587,13 +638,13 @@ public final class LoadInliner {
 
 	/**
 	 * Downloads the named system (and its dependencies) through the context's
-	 * {@link QuicklispClient} and adds the extracted {@code .asd} directories to the
-	 * search path, so the following {@link #spliceSystem} can locate and splice it.
+	 * {@link DistClient} and adds the extracted {@code .asd} directories to the search
+	 * path, so the following {@link #spliceSystem} can locate and splice it.
 	 */
 	private static void downloadQuicklisp(String name, Ctx ctx) {
 		List<String> asdDirs;
 		try {
-			asdDirs = ctx.quicklisp().ensureAvailable(name);
+			asdDirs = ctx.dists().ensureAvailable(name);
 		}
 		catch (IOException ex) {
 			throw new IllegalStateException(LispNames.QL_QUICKLOAD + ": " + ex.getMessage(), ex);

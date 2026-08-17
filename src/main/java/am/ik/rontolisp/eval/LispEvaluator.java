@@ -317,11 +317,12 @@ public final class LispEvaluator {
 	private List<String> systemPath = List.of();
 
 	/**
-	 * The Quicklisp downloader behind {@code ql:quickload}: created lazily on first use
-	 * (so a program that never calls {@code ql:quickload} touches no network/cache), or
-	 * injected by a test via {@link #setQuicklispClient}.
+	 * The dist downloader behind {@code ql:quickload} / {@code ql-dist:install-dist}:
+	 * created lazily on first use (so a program that never calls either touches no
+	 * network/cache), or injected by the CLI ({@code --dist}) resp. a test via
+	 * {@link #setDistClient}.
 	 */
-	@Nullable private QuicklispClient quicklispClient;
+	@Nullable private DistClient distClient;
 
 	/**
 	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
@@ -620,14 +621,27 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Installs the Quicklisp downloader used by {@code ql:quickload}. Mainly a test seam
-	 * (inject a client with an in-memory {@link QuicklispClient.Downloader} and a
-	 * temporary cache directory); left {@code null} in production, where the default
-	 * client ({@link QuicklispClient#createDefault}) is created on first use.
-	 * @param client the Quicklisp client
+	 * Installs the dist downloader used by {@code ql:quickload} and
+	 * {@code ql-dist:install-dist}. The CLI passes one carrying the {@code --dist} /
+	 * {@code RONTOLISP_DISTS} dists; a test injects one with an in-memory
+	 * {@link DistClient.Downloader} and a temporary cache directory. Left {@code null}
+	 * otherwise, where the default client ({@link DistClient#createDefault}) is created
+	 * on first use.
+	 * @param client the dist client
 	 */
-	public void setQuicklispClient(QuicklispClient client) {
-		this.quicklispClient = client;
+	public void setDistClient(DistClient client) {
+		this.distClient = client;
+	}
+
+	/**
+	 * Returns the dist client, creating the default one (Quicklisp only) on first use.
+	 * @return the dist client
+	 */
+	private DistClient distClient() {
+		if (this.distClient == null) {
+			this.distClient = DistClient.createDefault();
+		}
+		return this.distClient;
 	}
 
 	private void registerEval() {
@@ -2571,6 +2585,43 @@ public final class LispEvaluator {
 			}
 			return result;
 		}));
+		// ql-dist:install-dist adds a Quicklisp-format distribution -- Ultralisp, or any
+		// distinfo URL -- to the dists quickload downloads from, searched after the ones
+		// already installed. Returns the dist name, and installing twice is a no-op.
+		String installDistName = PackageRegistry.qualify(LispNames.QL_DIST_PKG, LispNames.INSTALL_DIST);
+		this.globalEnv.defineFunction(installDistName, new LispFunction(installDistName, args -> {
+			if (args.isEmpty()) {
+				throw new LispEvalException(LispNames.QL_DIST_INSTALL_DIST + " expects 1 argument, got 0");
+			}
+			// (ql-dist:install-dist "..." :prompt nil) -- real Quicklisp asks before it
+			// downloads; nothing here prompts, so the options are ignored like
+			// quickload's.
+			ignoreLoadOptions(LispNames.QL_DIST_INSTALL_DIST, args.subList(1, args.size()));
+			String spec = AsdfSystems.designator(LispNames.QL_DIST_INSTALL_DIST, args.get(0));
+			try {
+				return new LispString(distClient().installDist(spec));
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(LispNames.QL_DIST_INSTALL_DIST + ": " + ex.getMessage());
+			}
+		}));
+		// ql:update-dist drops a dist's cached indexes: the next quickload re-reads
+		// systems.txt/releases.txt and so sees the releases published since.
+		String updateDistName = PackageRegistry.qualify(LispNames.QL_PKG, LispNames.UPDATE_DIST);
+		this.globalEnv.defineFunction(updateDistName, new LispFunction(updateDistName, args -> {
+			if (args.isEmpty()) {
+				throw new LispEvalException(LispNames.QL_UPDATE_DIST + " expects 1 argument, got 0");
+			}
+			ignoreLoadOptions(LispNames.QL_UPDATE_DIST, args.subList(1, args.size()));
+			String name = AsdfSystems.designator(LispNames.QL_UPDATE_DIST, args.get(0));
+			try {
+				distClient().updateDist(name);
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(LispNames.QL_UPDATE_DIST + ": " + ex.getMessage());
+			}
+			return new LispString(name);
+		}));
 		registerJava();
 	}
 
@@ -3061,24 +3112,21 @@ public final class LispEvaluator {
 	 */
 	/**
 	 * Implements {@code ql:quickload}: downloads the named system (and its transitive
-	 * dependencies) from the Quicklisp distribution into the local cache, adds the
-	 * extracted {@code .asd} directories to the system search path, and then loads it
-	 * through {@link #loadSystem} -- so quickload is {@code asdf:load-system} with an
+	 * dependencies) from the installed dists into the local cache, adds the extracted
+	 * {@code .asd} directories to the system search path, and then loads it through
+	 * {@link #loadSystem} -- so quickload is {@code asdf:load-system} with an
 	 * auto-download step in front.
 	 */
 	private void quickload(String name) {
 		// A built-in system ("usocket") is satisfied by the embedded library: no
-		// download, no cache, no QuicklispClient.
+		// download, no cache, no DistClient.
 		if (BuiltinSystems.isBuiltin(name)) {
 			loadSystem(name);
 			return;
 		}
-		if (this.quicklispClient == null) {
-			this.quicklispClient = QuicklispClient.createDefault();
-		}
 		List<String> asdDirs;
 		try {
-			asdDirs = this.quicklispClient.ensureAvailable(name);
+			asdDirs = distClient().ensureAvailable(name);
 		}
 		catch (IOException ex) {
 			throw new LispEvalException(LispNames.QL_QUICKLOAD + ": " + ex.getMessage());

@@ -37,6 +37,7 @@ the command line itself was wrong.
 | `-r`, `--reporter spec\|dot\|none` | rove's reporter style, `spec` by default |
 | `--disable-colors`, `--color` | Force the ANSI colors off / on. The default follows the destination: a terminal gets them, a pipe does not |
 | `--system-path DIRS` | Directories searched for `NAME.asd` (like `PATH`) |
+| `--dist DISTS` | Dists `ql:quickload` may download from beside quicklisp, e.g. `ultralisp` (see the [Systems guide](asdf-systems.md#adding-a-dist-ultralisp)) |
 | `-o FILE` | Compile the run instead of performing it (see below) |
 
 A plain `rontolisp FILE` is unchanged and keeps Common Lisp semantics: the value

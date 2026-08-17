@@ -571,7 +571,12 @@ public final class PackageRegistry {
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
 		// spelling is ql; quicklisp is a built-in nickname. Does not use cl; the symbol
 		// is external.
-		define(new LispPackage(LispNames.QL_PKG, List.of(), new HashSet<>(Set.of(LispNames.QUICKLOAD))));
+		define(new LispPackage(LispNames.QL_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.QUICKLOAD, LispNames.UPDATE_DIST))));
+		// ql-dist, where Quicklisp keeps the distribution machinery: the one member a
+		// program writes is install-dist, which adds a Quicklisp-format distribution
+		// (Ultralisp, say) to the dists ql:quickload downloads from. Does not use cl.
+		define(new LispPackage(LispNames.QL_DIST_PKG, List.of(), new HashSet<>(Set.of(LispNames.INSTALL_DIST))));
 		// uiop, as upstream builds it: `uiop` IS `uiop/driver`, a re-export of 15
 		// sub-packages, and a library may name either spelling --
 		// lack-middleware-backtrace

@@ -862,4 +862,17 @@ class RontoLispCliTest {
 		assertThat(SourceProvenance.isRecording()).isFalse();
 	}
 
+	@Test
+	void distSpecsReadTheOptionThenTheEnvironment() {
+		// Comma-separated (a distinfo URL contains the path separator --system-path
+		// joins on), newline-separated where a repeated --dist accumulated, and
+		// deduplicated while keeping the order the search will follow.
+		assertThat(RontoLispCli.distSpecs("ultralisp", null)).containsExactly("ultralisp");
+		assertThat(RontoLispCli.distSpecs("ultralisp,http://dist.example.org/x.txt", null)).containsExactly("ultralisp",
+				"http://dist.example.org/x.txt");
+		assertThat(RontoLispCli.distSpecs("ultralisp\nquicklisp", null)).containsExactly("ultralisp", "quicklisp");
+		assertThat(RontoLispCli.distSpecs(" ultralisp , ", "ultralisp,other")).containsExactly("ultralisp", "other");
+		assertThat(RontoLispCli.distSpecs(null, null)).isEmpty();
+	}
+
 }

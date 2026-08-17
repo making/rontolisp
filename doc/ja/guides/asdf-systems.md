@@ -98,6 +98,47 @@ $ rontolisp
 できたライブラリでも、そのソースが下記のサポート範囲に収まっている場合にのみロード
 できます。
 
+## dist を追加する (Ultralisp)
+
+Quicklisp の dist 形式を話すディストリビューションは 1 つではなく、2 つ目として
+よく使われるのが [Ultralisp](https://ultralisp.org/) です (数分ごとに再構築される
+ため、公開されたその日にライブラリが入ります)。これは**オプトイン**で、プログラム
+からは本物の Quicklisp と同じ呼び出し
+[`ql-dist:install-dist`](../reference/functions/ql-dist-install-dist.md) で
+追加します:
+
+```console
+$ rontolisp
+> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
+"ultralisp"
+> (ql:quickload "circular-buffer")
+(circular-buffer)
+```
+
+フォームを書く場所がない起動 (`rontolisp test SYSTEM`、コンパイル対象のソースを
+書き換えられないビルドスクリプト) では、コマンドラインで指定します —
+`--dist ultralisp`、カンマ区切りで複数指定、または環境変数 `RONTOLISP_DISTS`。
+どちらの経路でも、Quicklisp 形式の distinfo の URL を直接指定できます。
+
+dist は**追加した順に、システム単位で**検索されます: `ql:quickload` は各システム
+(と各依存) を、それを列挙している最初の dist から取得します。したがって dist の追加は
+「Quicklisp にない名前が引けるようになる」だけで、他の取得元は変わりません。
+quicklisp は明示的に指定しない限り先頭に入るので、両方の dist にあるライブラリで
+Ultralisp 側を優先したい場合は `--dist ultralisp,quicklisp` と書きます。dist の
+index は、実際にその dist まで検索が到達したときにだけダウンロードされ、各 dist は
+自身の `~/.rontolisp/<dist>/` にキャッシュします (ベースは `RONTOLISP_DIST_HOME`、
+quicklisp については従来どおり `RONTOLISP_QUICKLISP_HOME` が優先)。index は一度
+取得すると永続的にキャッシュされるので、更新の速い dist を活かすには
+[`ql:update-dist`](../reference/functions/ql-update-dist.md) を使います:
+
+```console
+$ rontolisp -e '(ql:update-dist "ultralisp")'
+```
+
+それ以外は同じです。ダウンロードはインタプリタ実行時またはコンパイル時に行われる
+ので、追加した dist も 4 バックエンドすべてで同じように動作しますし、ダウンロード
+したライブラリが下記のサポート範囲に収まっている必要がある点も変わりません。
+
 ## サポート範囲 (と非サポート)
 
 - `.asd` ファイルは**データ**として解析されます: `defsystem` (裸または `asdf:` 修飾)、
