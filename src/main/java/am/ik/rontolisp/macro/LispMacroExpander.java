@@ -348,9 +348,9 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (ccase keyform ...)}. Without a restart (store-value) mechanism,
-	 * {@code ccase} behaves exactly like {@code ecase}: an unmatched key signals an
-	 * error.
+	 * Expands {@code (ccase keyform ...)}. No {@code store-value} restart is established
+	 * around the unmatched-key error, so {@code ccase} behaves exactly like
+	 * {@code ecase}: an unmatched key signals an error.
 	 * @param cons the ccase expression
 	 * @return the expanded expression
 	 */
@@ -23262,8 +23262,9 @@ public final class LispMacroExpander {
 	/**
 	 * Expands {@code (ctypecase keyform (type body...) ...)} exactly like
 	 * {@code etypecase}: in full Common Lisp the no-clause-matched error is correctable
-	 * through a {@code store-value} restart, but without a restart system it is not, so
-	 * the expansion is shared with {@link #expandEtypecase(LispCons)} (an unmatched
+	 * through a {@code store-value} restart, which is not established here (the
+	 * {@code check-type}/{@code assert}/{@code ccase} deviation, .kb/error-handling.md),
+	 * so the expansion is shared with {@link #expandEtypecase(LispCons)} (an unmatched
 	 * object signals an error).
 	 * @param cons the ctypecase expression
 	 * @return the expanded expression

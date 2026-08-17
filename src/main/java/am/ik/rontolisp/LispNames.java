@@ -1556,14 +1556,16 @@ public final class LispNames {
 	public static final String ETYPECASE = "ETYPECASE";
 
 	/**
-	 * The {@code ctypecase} macro. Without a restart system this behaves like
-	 * {@code etypecase} (signals an error when no type matches).
+	 * The {@code ctypecase} macro. No {@code store-value} restart is established around
+	 * the unmatched-object error, so this behaves like {@code etypecase} (signals an
+	 * error when no type matches).
 	 */
 	public static final String CTYPECASE = "CTYPECASE";
 
 	/**
-	 * The {@code ccase} macro. Without a restart system this behaves like {@code ecase}
-	 * (signals an error when no key matches).
+	 * The {@code ccase} macro. No {@code store-value} restart is established around the
+	 * unmatched-key error, so this behaves like {@code ecase} (signals an error when no
+	 * key matches).
 	 */
 	public static final String CCASE = "CCASE";
 
