@@ -11,6 +11,7 @@ import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
@@ -86,6 +87,11 @@ public final class UserMacroExpander {
 		// (depth 0) keep compile-file semantics: only definitions register, nothing
 		// else runs.
 		int systemDepth = 0;
+		// Nesting depth of the (%begin-file P T) / (%end-file) load-context brackets
+		// LoadInliner puts around every spliced file, so the closing marker knows whether
+		// it has a binding to undo. The values themselves live in the macro-time
+		// evaluator's dynamic bindings, which restore the enclosing file's pair for free.
+		int fileDepth = 0;
 		for (LispVal rawForm : program) {
 			// The fallback position for anything in this iteration that fails outside
 			// expandAll's own hook (a defmacro whose registration signals, a package
@@ -96,6 +102,26 @@ public final class UserMacroExpander {
 			}
 			else if (isProvenanceMarker(rawForm, LispNames.END_SYSTEM)) {
 				systemDepth = Math.max(0, systemDepth - 1);
+			}
+			// The load context of the spliced file the following forms came from.
+			// Establishing it HERE is the point: the bracket lowers to top-level
+			// (setq *load-pathname* ...) STATEMENTS, which run long after a #. datum of
+			// the same file has been resolved -- so without this a #. reading
+			// *load-truename* answered nil on both compile paths while the interpreter,
+			// which binds the pair around its read, answered the path
+			// (.kb/load-inliner.md). The values are the ones the bracket carries, so the
+			// read-time and run-time answers agree by construction. No unwind protection:
+			// the macro-time evaluator dies with a failed compile, and the bracket is
+			// balanced by construction (LoadInliner emits both halves or neither).
+			LispVal[] loadContext = LispMacroExpander.loadContextValues(rawForm);
+			if (loadContext != null && loadContext[0] instanceof LispString pathname
+					&& loadContext[1] instanceof LispString truename) {
+				macroEval.pushLoadContext(pathname.value(), truename.value());
+				fileDepth++;
+			}
+			else if (isProvenanceMarker(rawForm, LispNames.END_FILE) && fileDepth > 0) {
+				macroEval.popLoadContext();
+				fileDepth--;
 			}
 			// Resolve #. markers first (before package resolution, like the interpreter
 			// resolves them just before its top-level form evaluates): each datum runs in

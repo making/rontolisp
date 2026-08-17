@@ -12,7 +12,16 @@ import java.util.List;
  * paths lower the {@code LoadInliner} brackets to assignments, so the two agree byte for
  * byte. An ASDF component is loaded by its resolved path, which is what makes its
  * {@code *load-pathname*} equal {@code asdf:component-pathname} -- the correlation rove's
- * suite-to-file map is built on. Fixture: {@code src/test/resources/load-context-demo}.
+ * suite-to-file map is built on.
+ *
+ * <p>
+ * The context is established at READ time as well ({@code .todo/428}): a {@code #.} datum
+ * runs before any top-level form of its own file, so the interpreter's binding and the
+ * compile paths' lowered assignments are both too late for it --
+ * {@code UserMacroExpander} establishes the {@code %begin-file} bracket's two values
+ * around the file's forms instead, which is what makes the portable
+ * {@code (or *compile-file-pathname* *load-truename*)} idiom find a data file shipping
+ * beside the source that reads it. Fixture: {@code src/test/resources/load-context-demo}.
  */
 class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 
@@ -51,10 +60,19 @@ class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 			;; A plain top-level load resolves against the working directory, so both
 			;; halves are the path as written.
 			(print (list *plain-pathname* *plain-truename*))
+			;; READ time: a #. datum inside a loaded file sees that file's context, and
+			;; the value it captured is byte-identical with the run-time pair -- for a
+			;; component, for a load nested inside one, and for a plain load.
+			(print (equal *one-read-time* (format nil "~A|~A" *one-pathname* *one-truename*)))
+			(print (equal *helper-read-time* (format nil "~A|~A" *helper-pathname* *helper-truename*)))
+			(print (equal *plain-read-time* (format nil "~A|~A" *plain-pathname* *plain-truename*)))
+			;; The idiom that motivated it: a data file read at read time from beside the
+			;; source that ships it, through (or *compile-file-pathname* *load-truename*).
+			(print *one-data*)
 			""".formatted(PLAIN_FILE);
 
 	private static final List<String> EXPECTED = List.of("(NIL NIL)", "(NIL NIL)", "T", "T", "T", "\"helper.lisp\"",
-			"T", "T", "(\"" + PLAIN_FILE + "\" \"" + PLAIN_FILE + "\")");
+			"T", "T", "(\"" + PLAIN_FILE + "\" \"" + PLAIN_FILE + "\")", "T", "T", "T", "\"lc-demo-data\"");
 
 	@Override
 	protected String systemDir() {

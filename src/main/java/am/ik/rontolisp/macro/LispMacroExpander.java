@@ -30156,8 +30156,18 @@ public final class LispMacroExpander {
 	/**
 	 * The {@code (*load-pathname* *load-truename*)} pair a {@code (%begin-file P T)}
 	 * marker carries, or {@code null} when the form is not one.
+	 *
+	 * <p>
+	 * Public because the bracket has a SECOND consumer that runs long before this
+	 * lowering: {@code UserMacroExpander} establishes the same two values in its
+	 * macro-time evaluator while it walks a spliced file's forms, so a {@code #.} datum
+	 * reading {@code *load-truename*} answers what the lowered assignments will answer at
+	 * run time. Both consumers must read the payload the same way, hence one accessor.
+	 * @param form a top-level form
+	 * @return the pathname/truename pair, or {@code null} when the form is not a
+	 * {@code %begin-file} marker
 	 */
-	private static LispVal @Nullable [] loadContextValues(LispVal form) {
+	public static LispVal @Nullable [] loadContextValues(LispVal form) {
 		if (!isLoadContextMarker(form, LispNames.BEGIN_FILE) || !(form instanceof LispCons cons)
 				|| !(cons.cdr() instanceof LispCons pathnameCell)
 				|| !(pathnameCell.car() instanceof LispString pathname)

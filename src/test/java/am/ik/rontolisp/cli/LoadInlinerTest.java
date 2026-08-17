@@ -579,6 +579,44 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void readEvalInALoadedFileSeesThatFilesLoadContext() throws Exception {
+		// The %begin-file bracket lowers to top-level (setq *load-pathname* ...)
+		// STATEMENTS, which run long after a #. datum of the same file has been
+		// resolved -- so a #. reading the load context used to answer NIL on the compile
+		// paths while the interpreter, which binds the pair around its read, answered
+		// the path. UserMacroExpander establishes the bracket's own two values around
+		// the file's forms, so read time and run time agree by construction.
+		List<LispVal> program = UserMacroExpander.expand(inline("(load \"lib.lisp\") (print (lib-where))",
+				Map.of("lib.lisp", "(defvar +lib-where+ #.(format nil \"~A|~A\" *load-pathname* *load-truename*))"
+						+ " (defun lib-where () +lib-where+)")));
+		byte[] classBytes = new JvmLispCompiler("TestReadEvalLoadContext").compile(program);
+		assertThat(runMain(classBytes, "TestReadEvalLoadContext")).isEqualTo("\"lib.lisp|lib.lisp\"");
+	}
+
+	@Test
+	void readEvalLoadContextRestoresTheEnclosingFileAndIsNilOutsideEveryLoad() throws Exception {
+		// The brackets nest with the loads (see inlineIsRecursive), so a #. in the outer
+		// file AFTER the nested load reads the outer file again, and one in the entry
+		// program -- which no bracket covers -- reads nil, exactly as on the
+		// interpreter.
+		// The entry program has a #. of its own, so it needs the marker read the CLI
+		// gives
+		// a source textually containing one.
+		List<LispVal> read = LispReader
+			.readAllWithReadEvalMarkers("(load \"a.lisp\") (print (list (a-first) (b-where) (a-after)))"
+					+ " (print #.(format nil \"~A\" *load-truename*))", Features.JVM);
+		List<LispVal> program = UserMacroExpander.expand(LoadInliner.inline(read,
+				loaderOf(Map.of("a.lisp",
+						"(defvar +a1+ #.(format nil \"~A\" *load-truename*)) (load \"b.lisp\")"
+								+ " (defvar +a2+ #.(format nil \"~A\" *load-truename*))"
+								+ " (defun a-first () +a1+) (defun a-after () +a2+)",
+						"b.lisp", "(defvar +b+ #.(format nil \"~A\" *load-truename*)) (defun b-where () +b+)"))));
+		byte[] classBytes = new JvmLispCompiler("TestReadEvalNestedLoadContext").compile(program);
+		assertThat(runMain(classBytes, "TestReadEvalNestedLoadContext"))
+			.isEqualTo("(\"a.lisp\" \"b.lisp\" \"a.lisp\")\n\"NIL\"");
+	}
+
+	@Test
 	void splitProgramCompilesAndRunsOnJvm() throws Exception {
 		// This is the regression: before compile-time inlining, a console driver that
 		// (load "core.lisp")s its functions failed to compile on the JVM backend because

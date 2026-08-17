@@ -288,7 +288,10 @@ library still has to stay inside the supported subset below.
   `*compile-file-pathname*` and `*compile-file-truename*` are always `nil` —
   there is no `compile-file` here. Libraries use the `(or
   *compile-file-truename* *load-truename*)` idiom to find data files beside
-  their own sources.
+  their own sources. **That works at read time too**: a `#.` form — the way
+  that idiom is normally spelled, so the file is read while the source is being
+  read — sees its own file's load context on every backend, so a library can
+  bake in a data file that ships next to it.
 
 ## Built-in shim systems
 

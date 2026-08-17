@@ -2710,6 +2710,36 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Binds {@code *load-pathname*} / {@code *load-truename*} for a file whose forms this
+	 * evaluator is about to process -- the same push {@link #loadFile} does around a file
+	 * it reads, exposed for the COMPILE path, where the file was already read and spliced
+	 * by {@code LoadInliner} and only its {@code (%begin-file P T)} bracket is left.
+	 * {@code UserMacroExpander} calls this as it crosses that bracket, so a {@code #.}
+	 * datum it resolves against this evaluator -- and a spliced system's replayed
+	 * top-level form -- sees the load context the interpreter would have established, and
+	 * the compiled program's run-time value (the assignments the bracket lowers to)
+	 * agrees with it by construction.
+	 * @param pathname the {@code *load-pathname*} value (the spelling {@code load} was
+	 * called with; a component's resolved path)
+	 * @param truename the {@code *load-truename*} value (the path it resolved to)
+	 */
+	public void pushLoadContext(String pathname, String truename) {
+		this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
+		this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
+		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(pathname));
+		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR, new LispString(truename));
+	}
+
+	/**
+	 * Undoes one {@link #pushLoadContext}, restoring the enclosing file's values (nil
+	 * outside every file).
+	 */
+	public void popLoadContext() {
+		this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
+		this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+	}
+
+	/**
 	 * Replaces every {@code (%read-eval datum)} marker in a form with the value of
 	 * evaluating the datum in the global environment -- the {@code #.} read-time-eval
 	 * semantics. The value is substituted raw (not quoted), matching CL: a
