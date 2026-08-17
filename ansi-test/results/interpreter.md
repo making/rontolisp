@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**8,272 / 17,884 tests pass (46.3%)** -- 2,997 fail, 6,615 signal an error.
+**8,277 / 17,880 tests pass (46.3%)** -- 3,001 fail, 6,602 signal an error.
 
-7 top-level forms could not be read, 2,105 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 2,109 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -12,7 +12,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | characters | 255 | 144 | 18 | 93 | 56.5% | 21 |
 | conditions | 665 | 370 | 223 | 72 | 55.6% | 25 |
 | cons | 1,809 | 723 | 137 | 949 | 40.0% | 77 |
-| data-and-control-flow | 1,390 | 869 | 206 | 315 | 62.5% | 56 |
+| data-and-control-flow | 1,387 | 875 | 209 | 303 | 63.1% | 59 |
 | environment | 209 | 90 | 10 | 109 | 43.1% | 18 |
 | eval-and-compile | 295 | 187 | 54 | 54 | 63.4% | 28 |
 | files | 87 | 13 | 7 | 67 | 14.9% | 17 |
@@ -26,14 +26,14 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | printer | 504 | 99 | 74 | 331 | 19.6% | 93 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 19 |
 | reader | 568 | 50 | 290 | 228 | 8.8% | 32 |
-| sequences | 2,455 | 1,691 | 218 | 546 | 68.9% | 849 |
+| sequences | 2,454 | 1,691 | 218 | 545 | 68.9% | 850 |
 | streams | 709 | 154 | 88 | 467 | 21.7% | 112 |
 | strings | 495 | 213 | 100 | 182 | 43.0% | 32 |
 | structures | 960 | 311 | 241 | 408 | 32.4% | 46 |
-| symbols | 1,138 | 727 | 327 | 84 | 63.9% | 24 |
+| symbols | 1,138 | 728 | 326 | 84 | 64.0% | 24 |
 | system-construction | 58 | 12 | 3 | 43 | 20.7% | 36 |
-| types-and-classes | 613 | 264 | 235 | 114 | 43.1% | 31 |
-| **total** | **17,884** | **8,272** | **2,997** | **6,615** | **46.3%** | **2,112** |
+| types-and-classes | 613 | 262 | 237 | 114 | 42.7% | 31 |
+| **total** | **17,880** | **8,277** | **3,001** | **6,602** | **46.3%** | **2,116** |
 
 ## Most frequent failure reasons
 
@@ -54,29 +54,29 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 89 | `X expects 2 arguments, got 1` |
 | 86 | `X expects 1 arguments, got 0` |
 | 80 | `The variable *NUMBERS* is unbound` |
-| 75 | `complex numbers are not supported (imaginary part X)` |
+| 71 | `complex numbers are not supported (imaginary part X)` |
 | 70 | `Unknown keyword argument: :X` |
 | 68 | `The function FLOAT-RADIX is undefined` |
 | 65 | `The variable *FLOATS* is unbound` |
+| 64 | `X expects 1 arguments, got 5` |
 | 63 | `The function CLASS-PRECEDENCE-LIST-FOO is undefined` |
-| 63 | `X expects 1 arguments, got 5` |
 | 62 | `Index 1 out of bounds for length 1` |
 | 55 | `The variable #C is unbound` |
 | 54 | `The function NUNION is undefined` |
 | 54 | `X: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element` |
 | 52 | `The function MAKE-TWO-WAY-STREAM is undefined` |
 | 52 | `The function SET-UP-PACKAGES is undefined` |
-| 52 | `X expects 1 arguments, got 7` |
+| 51 | `X expects 1 arguments, got 7` |
 | 51 | `X expects an array, got "X"` |
 | 50 | `LispEvalException: X cannot redefine the standard operator X` |
 | 50 | `The variable *REALS* is unbound` |
 | 50 | `X supports :input and :output directions` |
 | 49 | `The function NSET-EXCLUSIVE-OR is undefined` |
 | 48 | `X: :X supports only the native default value` |
+| 46 | `IllegalArgumentException: Unsupported type specifier: X` |
 | 46 | `The function FIND-METHOD is undefined` |
 | 46 | `The function NINTERSECTION is undefined` |
-| 45 | `a macro function expects 1 or 2 arguments, got 0` |
-| 44 | `IllegalArgumentException: Unsupported type specifier: X` |
+| 46 | `a macro function expects 1 or 2 arguments, got 0` |
 | 44 | `The function SUBLIS is undefined` |
 | 44 | `UnsupportedOperationException: X :element-type must be the literal 'character or '(unsigned-byte 8)` |
 
