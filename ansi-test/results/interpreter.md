@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**8,277 / 17,880 tests pass (46.3%)** -- 3,001 fail, 6,602 signal an error.
+**8,307 / 17,908 tests pass (46.4%)** -- 3,005 fail, 6,596 signal an error.
 
-7 top-level forms could not be read, 2,109 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 2,081 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -17,23 +17,23 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | eval-and-compile | 295 | 187 | 54 | 54 | 63.4% | 28 |
 | files | 87 | 13 | 7 | 67 | 14.9% | 17 |
 | hash-tables | 156 | 78 | 27 | 51 | 50.0% | 20 |
-| iteration | 753 | 487 | 199 | 67 | 64.7% | 109 |
+| iteration | 780 | 510 | 203 | 67 | 65.4% | 82 |
 | misc | 738 | 556 | 17 | 165 | 75.3% | 19 |
-| numbers | 1,379 | 508 | 74 | 797 | 36.8% | 96 |
+| numbers | 1,379 | 511 | 74 | 794 | 37.1% | 96 |
 | objects | 695 | 239 | 163 | 293 | 34.4% | 238 |
 | packages | 455 | 24 | 43 | 388 | 5.3% | 72 |
 | pathnames | 215 | 74 | 29 | 112 | 34.4% | 17 |
 | printer | 504 | 99 | 74 | 331 | 19.6% | 93 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 19 |
 | reader | 568 | 50 | 290 | 228 | 8.8% | 32 |
-| sequences | 2,454 | 1,691 | 218 | 545 | 68.9% | 850 |
-| streams | 709 | 154 | 88 | 467 | 21.7% | 112 |
+| sequences | 2,455 | 1,691 | 218 | 546 | 68.9% | 849 |
+| streams | 709 | 157 | 89 | 463 | 22.1% | 112 |
 | strings | 495 | 213 | 100 | 182 | 43.0% | 32 |
 | structures | 960 | 311 | 241 | 408 | 32.4% | 46 |
-| symbols | 1,138 | 728 | 326 | 84 | 64.0% | 24 |
+| symbols | 1,138 | 729 | 325 | 84 | 64.1% | 24 |
 | system-construction | 58 | 12 | 3 | 43 | 20.7% | 36 |
 | types-and-classes | 613 | 262 | 237 | 114 | 42.7% | 31 |
-| **total** | **17,880** | **8,277** | **3,001** | **6,602** | **46.3%** | **2,116** |
+| **total** | **17,908** | **8,307** | **3,005** | **6,596** | **46.4%** | **2,088** |
 
 ## Most frequent failure reasons
 
@@ -51,7 +51,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 139 | `X expects at least one dimension` |
 | 105 | `UnsupportedOperationException: setf does not support place: X` |
 | 92 | `X expects 2 arguments, got 4` |
-| 89 | `X expects 2 arguments, got 1` |
+| 90 | `X expects 2 arguments, got 1` |
 | 86 | `X expects 1 arguments, got 0` |
 | 80 | `The variable *NUMBERS* is unbound` |
 | 71 | `complex numbers are not supported (imaginary part X)` |
