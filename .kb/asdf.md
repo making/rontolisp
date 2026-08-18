@@ -409,7 +409,9 @@ So the answer to "could we?" is yes-in-principle. Three things decided against i
    `unwind-protect` cleanup of `find-system`. That, plus `print-object` being
    dispatched only for a TOP-LEVEL object (so upstream's own component
    `print-object`, which would cut the cycle, is never consulted), is where the
-   spike stopped. Both are recorded as plain CL defects in `.todo/436`.
+   spike stopped. Both are recorded as plain CL defects, with the rest of the
+spike's by-product, under `.todo/436` (`.todo/437` and `.todo/438` are those
+two).
 
 Also measured, and worth knowing when widening the shim: the compile paths
 resolve systems at COMPILE time (`cli/LoadInliner` splices component sources,
