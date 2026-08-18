@@ -528,7 +528,10 @@ class WasmImportCompilerTest {
 				(defun run () (rontolisp::%future-force (dog)))
 				(rontolisp:wasm-export 'run :params '() :returns :string)
 				""");
-		int g = globalCount(fetching) - UNCONDITIONAL_TRAILING_GLOBALS - 1;
+		// A fetching module builds header tables, so it also carries the _hash
+		// recursion-depth global, which is appended after the unconditional three
+		// (.kb/hash-tables.md) and pushes the guard one further down.
+		int g = globalCount(fetching) - UNCONDITIONAL_TRAILING_GLOBALS - HASH_DEPTH_GLOBAL - 1;
 		assertThat(countOf(fetching, prependGlobalGet(g, GUARD_TRAP_AND_SET), (byte) g)).isEqualTo(1);
 		byte[] noFetch = compileHostFetch("""
 				(defun run () 1)
@@ -541,6 +544,10 @@ class WasmImportCompilerTest {
 	// raw-local sentinel and the string output-stream buffer table. The re-entry guard
 	// is the last MODE-GATED global, so it sits just below them.
 	private static final int UNCONDITIONAL_TRAILING_GLOBALS = 3;
+
+	// The _hash recursion-depth global, present exactly when the program uses a hash
+	// table; it is appended after the three above, so it is the very last global.
+	private static final int HASH_DEPTH_GLOBAL = 1;
 
 	// if (blocktype empty); unreachable; end; i32.const 1; global.set -- the re-entry
 	// guard's trap-and-set, minus the leading global.get whose index varies by module.

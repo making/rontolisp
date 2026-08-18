@@ -52,10 +52,12 @@ class JvmRuntimeGroupNamesTest {
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		MethodrefConstant longValueOf = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
-		MethodrefConstant lispToString = selfMethod(cp, selfClass, "_lispToString", TO_STRING_DESC);
+		MethodrefConstant equal = selfMethod(cp, selfClass, "_equal", "(Ljava/lang/Object;Ljava/lang/Object;)I");
+		MethodrefConstant strv = selfMethod(cp, selfClass, "_strv", "(Ljava/lang/Object;)Ljava/lang/Object;");
+		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
 
 		List<JvmHashRuntimeBuilder.HashMethod> emitted = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, lispToString);
+				objectArrayClass, longValueOf, equal, strv, stringArrayClass);
 
 		assertThat(emitted.stream().map(m -> m.name().index()).collect(Collectors.toSet()))
 			.isEqualTo(indicesOf(cp, JvmHashRuntimeBuilder.METHOD_NAMES));

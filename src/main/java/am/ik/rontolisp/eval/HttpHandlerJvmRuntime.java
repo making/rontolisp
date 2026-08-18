@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 
 import am.ik.rontolisp.compiler.ClackEnv;
+import am.ik.rontolisp.compiler.JvmHashTableShape;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -24,14 +25,13 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Everything here speaks the JVM backend's RUNTIME VALUE REPRESENTATION: nil is
  * {@code null}, a cons is an {@code Object[2]}, an integer is a {@code Long}, a string is
- * its quote-wrapped text, a symbol its bare name, and a hash table is a
- * {@code java.util.LinkedHashMap} whose key is the {@code prin1} text of the Lisp key and
- * whose value is an {@code Object[2]} of the original key and the stored value (the
- * {@code JvmHashRuntimeBuilder} convention -- a quoted string IS its own {@code prin1}
- * text, which is why the header names below go in as their quote-wrapped form directly).
- * The table class is exact, not merely map-shaped: the emitted helpers cast to it and
- * both {@code hash-table-p} and the printer key off it, so a plain {@code HashMap} here
- * would fail the cast at the first {@code gethash} (pinned by
+ * its quote-wrapped text, a symbol its bare name, and a hash table is a bucket index
+ * built through {@link JvmHashTableShape} -- the ONE declaration of that shape, shared
+ * with the emitter of the {@code _hash*} helpers, so the table this builds and the table
+ * compiled code builds cannot drift apart. The table class is exact, not merely
+ * map-shaped: the emitted helpers cast to it and both {@code hash-table-p} and the
+ * printer key off it, so a plain {@code HashMap} here would fail the cast at the first
+ * {@code gethash} (pinned by
  * {@code JvmHashRuntimeBuilderTest#theHandwrittenRuntimeBuildsTheSameTableClass}).
  *
  * <p>
@@ -60,16 +60,16 @@ public final class HttpHandlerJvmRuntime {
 		Object query = q < 0 ? null : quote(target.substring(q + 1));
 		// The header table: lowercased names, repeated headers joined with ", " in wire
 		// order (the Clack handler-backend rule), never nil.
-		LinkedHashMap<String, Object> headers = new LinkedHashMap<>();
+		LinkedHashMap<Object, Object> headers = JvmHashTableShape.newTable();
 		String host = null;
 		String contentType = null;
 		String contentLength = null;
 		for (HttpHandlerSupport.Header header : request.headers()) {
 			String name = header.name().toLowerCase(Locale.ROOT);
 			String key = quote(name);
-			Object[] seen = (Object[]) headers.get(key);
-			String value = seen == null ? header.value() : unquote((String) seen[1]) + ", " + header.value();
-			headers.put(key, new Object[] { key, quote(value) });
+			Object seen = JvmHashTableShape.get(headers, key);
+			String value = seen == null ? header.value() : unquote((String) seen) + ", " + header.value();
+			JvmHashTableShape.put(headers, key, quote(value));
 			switch (name) {
 				case "host" -> host = value;
 				case "content-type" -> contentType = value;

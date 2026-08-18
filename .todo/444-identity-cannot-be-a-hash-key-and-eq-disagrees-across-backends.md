@@ -11,8 +11,9 @@ that was already worked out so the next visitor does not redo it.
 ## Gap 1: `:test` is ignored; every table is `EQUAL`
 
 `(hash-table-test (make-hash-table :test 'eq))` answers `EQUAL`, and lookup is
-structural on every backend. `.todo/438` fixes HOW an `EQUAL` table hashes; it
-deliberately does not make the four tests real.
+structural on every backend. `.todo/438` (landed 2026-08-18) fixed HOW an
+`EQUAL` table hashes -- a depth-capped structural hash plus a real `equal` in the
+bucket, `.kb/hash-tables.md`; it deliberately did not make the four tests real.
 
 **Where that bites**: a table whose keys are mutable AGGREGATES -- CLOS
 instances, structs, conses -- and whose point is identity. Two distinct objects

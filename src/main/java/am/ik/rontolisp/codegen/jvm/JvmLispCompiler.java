@@ -1133,8 +1133,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				: null;
 
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
+		// The interned layout array of an instance -- the discriminator the structural
+		// _equal and _hash arms share, minted once so both see the same constant.
+		ClassConstant instanceLayoutClass = mayUseInstances ? cp.addClass(cp.addUtf8("[Ljava/lang/String;")) : null;
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass,
-				strvMethod, mayUseInstances ? cp.addClass(cp.addUtf8("[Ljava/lang/String;")) : null);
+				strvMethod, instanceLayoutClass);
 
 		// --vec: emit the Vector API acceleration bridge only when the program actually
 		// references one of the six accelerated vec: kernels (directly or via a spliced
@@ -1674,8 +1677,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<Integer> structTableClinitFinal = structTableClinit;
 
 		// Build the hash-table runtime helpers, only when the program uses hash tables.
-		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables ? JvmHashRuntimeBuilder.build(cp,
-				thisClass, objectClass, objectArrayClass, longValueOf, lispToStringMethod) : List.of();
+		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables
+				? JvmHashRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, longValueOf,
+						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)), strvMethod,
+						instanceLayoutClass)
+				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
 		// the
@@ -1766,8 +1772,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmRuntimeBuilder.@Nullable HashPrint hashPrint;
 		if (usesHashTables) {
 			ClassConstant mapClassForPrint = cp.addClass(cp.addUtf8(JvmHashRuntimeBuilder.MAP_CLASS));
-			MethodrefConstant mapSize = cp.addMethodref(mapClassForPrint,
-					cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
+			// The live entry count comes from the same helper hash-table-count reads, so
+			// the printed :COUNT and the accessor cannot disagree (the map's own size()
+			// counts buckets, not entries).
+			MethodrefConstant mapSize = cp.addMethodref(thisClass, cp
+				.addNameAndType(cp.addUtf8(JvmHashRuntimeBuilder.SIZE), cp.addUtf8(JvmHashRuntimeBuilder.SIZE_DESC)));
 			MethodrefConstant intToString = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Integer")),
 					cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
 			hashPrint = new JvmRuntimeBuilder.HashPrint(mapClassForPrint, cp.addString(LispHashTable.HASH_TABLE_PREFIX),

@@ -13022,6 +13022,27 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	// A key is placed by a DEPTH-CAPPED structural hash and decided by equal, not by
+	// the key's printed text: a cyclic key stores and retrieves (printing one never
+	// terminated), two equal keys deeper than the cap are still ONE key, and a general
+	// vector key is compared by identity -- which is what equal does to a vector.
+	void compileHashTableCyclicDeepAndVectorKeys() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table)) (k (list 1 2)))
+				  (setf (cdr (last k)) k)
+				  (setf (gethash k h) :cyclic)
+				  (print (list (gethash k h) (hash-table-count h))))
+				(let ((h (make-hash-table)) (deep (loop for i from 1 to 200 collect i)))
+				  (setf (gethash deep h) :deep)
+				  (print (list (gethash (loop for i from 1 to 200 collect i) h)
+				               (gethash (loop for i from 1 to 199 collect i) h))))
+				(let ((h (make-hash-table)) (v (vector 1 2)))
+				  (setf (gethash v h) :self)
+				  (print (list (gethash v h) (gethash (vector 1 2) h))))
+				""")).isEqualTo("(:CYCLIC 1)\n(:DEEP NIL)\n(:SELF NIL)");
+	}
+
+	@Test
 	void compileHashTableMaphashRemhashAndClrhash() throws Exception {
 		assertThat(compileAndRun("""
 				(defun sum-values (h)

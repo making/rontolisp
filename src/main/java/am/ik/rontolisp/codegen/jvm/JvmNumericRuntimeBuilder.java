@@ -1513,6 +1513,18 @@ final class JvmNumericRuntimeBuilder {
 			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant eqv, MethodrefConstant equal,
 			@org.jspecify.annotations.Nullable ClassConstant strArrClass) {
 		List<Integer> c = new ArrayList<>();
+		// if (a == b) return 1 -- identity BEFORE any recursion, which is what makes a
+		// cyclic value comparable to itself (a hash table storing and retrieving under
+		// the SAME cyclic key terminates here). Two DISTINCT cyclic structures are
+		// still undefined, as in ANSI.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ALOAD_1);
+		int ifNotIdentical = c.size();
+		c.add(Opcode.IF_ACMPNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotIdentical, c.size());
 		// if (a == null) return (b == null) ? 1 : 0;
 		c.add(Opcode.ALOAD_0);
 		int ifANotNull = c.size();

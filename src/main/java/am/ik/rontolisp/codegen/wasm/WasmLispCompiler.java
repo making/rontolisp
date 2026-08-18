@@ -2941,6 +2941,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// stream records reach their bytes through, since a linear-memory record cannot
 		// hold a reference. Last of all, for the same reason the two above are.
 		int ostreamTableGlobalIndex = rawSentinelGlobalIndex + 1;
+		// The live recursion depth of _hash, the one piece of state its depth cap needs
+		// (its signature is fixed at ((ref null eq)) -> i32, and a hash-table call site
+		// cannot pass a budget in). Emitted only for a hash-table-using program, so
+		// every other module is byte-identical to a build that never knew the cap; if
+		// the source scan under-predicts, _hash simply keeps its uncapped recursion.
+		// Appended AFTER the three above for the same reason they are last.
+		int hashDepthGlobalIndex = programUsesAnyHashOp(program) ? ostreamTableGlobalIndex + 1 : -1;
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -5563,6 +5570,18 @@ public final class WasmLispCompiler implements LispCompiler {
 					g.writeHeapType(Type.EQ.code());
 					g.write(Instruction.END);
 				});
+				// The _hash recursion depth at hashDepthGlobalIndex, a (mut i32) = 0:
+				// incremented on entry and restored on exit, so the cap is by DEPTH and
+				// two equal keys still fold identically.
+				if (hashDepthGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
 			})
 			// Export section -- component mode exports `run` (the i32-returning _start)
 			// for
@@ -5808,7 +5827,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// plist runtime helper body (FUNC_PLIST_GET)
 				code.addFunction(WasmPlistRuntimeBuilder.buildPlistGet());
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
-				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1));
+				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1,
+						hashDepthGlobalIndex));
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody());
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(false));

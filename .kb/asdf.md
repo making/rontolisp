@@ -402,7 +402,7 @@ So the answer to "could we?" is yes-in-principle. Three things decided against i
    against a 0.40 s floor for `(print 1)` on the same jar — ~2.45 s is ASDF, ~7x
    the whole current startup. Only "do not load it unless the program needs it"
    makes that survivable, and the shim already gives that for free.
-3. **The real blocker is ours, not upstream's**: every hash table here is keyed
+3. **The real blocker was ours, not upstream's**: every hash table here was keyed
    by `key.print()` with an `EQUAL` test and there is no `eq` table, while
    ASDF's session cache keys are lists holding live components whose graph is
    cyclic — a `StackOverflowError` in `LispHashTable.put`, out of the
@@ -410,8 +410,12 @@ So the answer to "could we?" is yes-in-principle. Three things decided against i
    dispatched only for a TOP-LEVEL object (so upstream's own component
    `print-object`, which would cut the cycle, is never consulted), is where the
    spike stopped. Both are recorded as plain CL defects, with the rest of the
-spike's by-product, under `.todo/436` (`.todo/437` and `.todo/438` are those
-two).
+spike's by-product, under `.todo/436` (`.todo/437` and `.todo/438` were those
+two). **Both have since landed** — a table now places a key by a depth-capped
+structural hash and decides it with `equal` (`.kb/hash-tables.md`), so a cyclic
+key stores and retrieves, and `print-object` is dispatched for a nested object.
+The cyclic-key blocker is therefore gone; reasons 1 and 2 are not, and they are
+what still decides this. Still no `eq` table (`.todo/444`).
 
 Also measured, and worth knowing when widening the shim: the compile paths
 resolve systems at COMPILE time (`cli/LoadInliner` splices component sources,

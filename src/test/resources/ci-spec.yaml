@@ -10503,6 +10503,38 @@ cases:
       #<E443!>
       #<E443!>
 
+  - name: cyclic-hash-key-438
+    source: |
+      ;; A hash table places a key by a DEPTH-CAPPED structural hash and decides it
+      ;; with equal, instead of keying on the key's printed text. Three consequences
+      ;; the four backends must agree on: a cyclic key stores and retrieves (printing
+      ;; one never terminated); two equal keys deeper than the cap are still ONE key
+      ;; (the cap may not break "equal keys hash equal"); and a general vector key is
+      ;; compared by identity, which is what equal does to a vector.
+      (let ((h (make-hash-table))
+            (k (list 1 2)))
+        (setf (cdr (last k)) k)
+        (setf (gethash k h) :cyclic)
+        (print (list (gethash k h) (hash-table-count h))))
+      (let ((h (make-hash-table))
+            (deep (loop for i from 1 to 200 collect i)))
+        (setf (gethash deep h) :deep)
+        (print (list (gethash (loop for i from 1 to 200 collect i) h)
+                     (gethash (loop for i from 1 to 199 collect i) h))))
+      (let ((h (make-hash-table))
+            (v (vector 1 2)))
+        (setf (gethash v h) :self)
+        (print (list (gethash v h) (gethash (vector 1 2) h))))
+      (let ((h (make-hash-table)))
+        (setf (gethash "ab" h) 1)
+        (setf (gethash (concatenate 'string "a" "b") h) 2)
+        (print (list (gethash "ab" h) (hash-table-count h))))
+    expected: |
+      (:CYCLIC 1)
+      (:DEEP NIL)
+      (:SELF NIL)
+      (2 1)
+
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report
 # plus a non-zero exit. `stderr` lines must APPEAR -- wasmtime wraps its own

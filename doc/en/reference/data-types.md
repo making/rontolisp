@@ -363,7 +363,10 @@ table itself prints as SBCL's unreadable tag minus its trailing identity hash --
 `#<HASH-TABLE :TEST EQUAL :COUNT n>`, the same text on every backend, with no
 entry content. `:TEST` is always `EQUAL`, the test lookup actually implements and
 the one `hash-table-test` reports, whatever `:test` the table was made with;
-`:COUNT` is the live entry count, the same number `hash-table-count` returns:
+`:COUNT` is the live entry count, the same number `hash-table-count` returns.
+A key is placed by a depth-capped structural hash and then decided by `equal`, so
+lookup does not depend on the size of the key's printed form and a key whose
+structure is CYCLIC is usable -- stored and retrieved under the same object:
 
 ```lisp
 (let ((h (make-hash-table)))

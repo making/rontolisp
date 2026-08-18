@@ -7,13 +7,13 @@ import java.util.LinkedHashMap;
  * A hash table value (Common Lisp {@code hash-table}).
  *
  * <p>
- * Keys are compared structurally: each key is canonicalized to its printed
- * ({@code prin1}) representation, so two keys that print the same (e.g. two {@code equal}
- * lists, or two equal numbers of the same type) map to the same entry. This means an
- * {@code eql} table additionally matches structurally-equal aggregate keys (lists,
- * strings); for atoms (numbers, symbols, characters) the behavior coincides with
- * {@code eql}. The compiled backends use the same canonicalization so all three backends
- * agree.
+ * Keys are compared structurally, with hashing and comparison separated the way a hash
+ * table separates them: a key is placed by {@link LispEquality#hash} (a depth-capped fold
+ * over its structure) and decided by {@link LispEquality#equal} against the other keys in
+ * its bucket. Both compiled backends reproduce that pair, so all four backends agree on
+ * which keys are one key. A CYCLIC key is therefore usable -- the cap bounds the hash and
+ * {@code equal} answers on identity -- where keying on the printed text of the key never
+ * terminated.
  *
  * <p>
  * Insertion order is preserved for {@code maphash}, but portable programs should not rely
@@ -42,7 +42,30 @@ public final class LispHashTable implements LispVal {
 
 	private final boolean equalTest;
 
-	private final LinkedHashMap<String, Entry> map = new LinkedHashMap<>();
+	private final LinkedHashMap<Key, Entry> map = new LinkedHashMap<>();
+
+	/**
+	 * A key as the backing {@link LinkedHashMap} sees it: the Lisp value plus its
+	 * precomputed structural hash. Bucket membership is {@link LispEquality#hash} and
+	 * bucket comparison is {@link LispEquality#equal}, which is the whole point -- the
+	 * value's own {@code hashCode} recurses without a bound.
+	 */
+	private record Key(LispVal val, int hash) {
+
+		static Key of(LispVal val) {
+			return new Key(val, LispEquality.hash(val));
+		}
+
+		@Override
+		public int hashCode() {
+			return this.hash;
+		}
+
+		@Override
+		public boolean equals(Object o) {
+			return o instanceof Key other && LispEquality.equal(this.val, other.val);
+		}
+	}
 
 	/**
 	 * Creates an empty hash table.
@@ -60,7 +83,7 @@ public final class LispHashTable implements LispVal {
 	 * @return the stored value, or {@code dflt}
 	 */
 	public LispVal get(LispVal key, LispVal dflt) {
-		Entry e = this.map.get(key.print());
+		Entry e = this.map.get(Key.of(key));
 		return (e == null) ? dflt : e.value();
 	}
 
@@ -71,7 +94,7 @@ public final class LispHashTable implements LispVal {
 	 * @return the stored value
 	 */
 	public LispVal put(LispVal key, LispVal value) {
-		this.map.put(key.print(), new Entry(key, value));
+		this.map.put(Key.of(key), new Entry(key, value));
 		return value;
 	}
 
@@ -81,7 +104,7 @@ public final class LispHashTable implements LispVal {
 	 * @return {@code true} if an entry was removed
 	 */
 	public boolean remove(LispVal key) {
-		return this.map.remove(key.print()) != null;
+		return this.map.remove(Key.of(key)) != null;
 	}
 
 	/**

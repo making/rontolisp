@@ -47,6 +47,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispHashTable;
@@ -2664,14 +2665,11 @@ public final class Environment implements Scope {
 
 	// equal: structural equality. Cons cells are compared recursively by car and cdr;
 	// everything else falls back to eql (so numbers, symbols, strings, and nil compare by
-	// value).
+	// value). The predicate itself lives in the root package next to the structural hash
+	// that must agree with it (LispEquality) -- a hash table is exactly that pair, and
+	// the two may not drift apart.
 	private static LispVal equalValue(LispVal a, LispVal b) {
-		if (a instanceof LispCons consA && b instanceof LispCons consB) {
-			return (equalValue(consA.car(), consB.car()) == LispTrue.INSTANCE
-					&& equalValue(consA.cdr(), consB.cdr()) == LispTrue.INSTANCE) ? LispTrue.INSTANCE
-							: LispNil.INSTANCE;
-		}
-		return eqlValue(a, b);
+		return LispEquality.equal(a, b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 	}
 
 	private static boolean isEq(LispVal a, LispVal b) {

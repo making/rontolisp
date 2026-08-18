@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.LispEquality;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -335,10 +336,24 @@ final class WasmRuntimeBuilder {
 	 * closures, which {@code equal} compares by identity) hash to a constant 0, which is
 	 * correct (they simply collide into one bucket). An instance folds its layout address
 	 * and its slot hashes, so it agrees with {@code _equal}'s structural instance arm.
+	 *
+	 * <p>
+	 * The walk is capped at {@link LispEquality#HASH_DEPTH_CAP} levels: {@code _hash}
+	 * counts its own live recursion depth in {@code depthGlobalIndex} and folds a
+	 * constant 0 instead of descending past it. That is what lets a CYCLIC key be hashed
+	 * at all -- unbounded recursion here is a {@code call stack exhausted} trap -- and it
+	 * costs nothing in agreement with {@code _equal}, because a hash need not be
+	 * injective and the cap is by DEPTH alone: two {@code equal} keys have the same shape
+	 * and so fold identically. Retrieving under such a key terminates for the matching
+	 * reason on {@code _equal}'s side: its {@code ref.eq} fast path answers before it
+	 * recurses.
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
+	 * @param depthGlobalIndex the {@code (mut i32)} recursion-depth global, or -1 to emit
+	 * the uncapped body (a program with no hash table never calls {@code _hash}, and
+	 * carries neither the global nor the guard)
 	 * @return the function body
 	 */
-	static byte[] buildHashBody(int instanceTypeIndex) {
+	static byte[] buildHashBody(int instanceTypeIndex, int depthGlobalIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -352,6 +367,23 @@ final class WasmRuntimeBuilder {
 		w.write(Type.I32);
 		w.write(1); // 1 local
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+
+		// Depth cap: at the limit answer 0 without descending (and without counting a
+		// level, so the counter is exact); otherwise count this level, fold, and restore
+		// the counter on the way out. The fold's i32 result sits under the restore.
+		if (depthGlobalIndex >= 0) {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(depthGlobalIndex);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(LispEquality.HASH_DEPTH_CAP);
+			w.write(Instruction.I32_GE_S);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.ELSE);
+			emitDepthAdjust(w, depthGlobalIndex, Instruction.I32_ADD);
+		}
 
 		// Normalize a mutable character vector into a string up front, so a character
 		// vector key hashes exactly like the string with the same content (agreeing
@@ -575,8 +607,24 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // end i31 if
 		w.write(Instruction.END); // end null if
 
+		if (depthGlobalIndex >= 0) {
+			emitDepthAdjust(w, depthGlobalIndex, Instruction.I32_SUB);
+			w.write(Instruction.END); // end depth-cap if
+		}
+
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
+	}
+
+	/** Emits {@code depth = depth +/- 1} for the {@code _hash} recursion counter. */
+	private static void emitDepthAdjust(WasmWriter w, int depthGlobalIndex, int op) {
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(op);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
 	}
 
 	/**

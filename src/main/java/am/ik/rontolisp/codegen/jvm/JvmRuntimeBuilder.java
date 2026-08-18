@@ -1318,8 +1318,8 @@ final class JvmRuntimeBuilder {
 	 * syntax -- container braces, the raw {@code Object[]} entry pair, and an IDENTITY
 	 * HASH, which made the same program print different text on two runs
 	 * ({@code .kb/emitted-output-determinism.md}). The count comes from {@code mapSize},
-	 * the same {@code size()} call {@code _hashCount} makes, so the printed number and
-	 * {@code hash-table-count} cannot disagree.
+	 * the {@code _hashSize} helper {@code _hashCount} reads too, so the printed number
+	 * and {@code hash-table-count} cannot disagree.
 	 */
 	record HashPrint(ClassConstant mapClass, ConstantPool.StringConstant tag, MethodrefConstant mapSize,
 			MethodrefConstant intToString, MethodrefConstant stringConcat, ConstantPool.StringConstant suffix) {
@@ -1695,9 +1695,7 @@ final class JvmRuntimeBuilder {
 		emitU2(code, 0);
 		emitLdc(code, hashPrint.tag().index());
 		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, hashPrint.mapClass().index());
-		code.add(Opcode.INVOKEVIRTUAL);
+		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, hashPrint.mapSize().index());
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, hashPrint.intToString().index());

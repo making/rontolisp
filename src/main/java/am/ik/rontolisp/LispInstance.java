@@ -155,8 +155,14 @@ public final class LispInstance implements LispVal {
 		return sb.append(this.layout.closeDelimiter()).toString();
 	}
 
+	// The identity arm is what makes a CYCLIC instance graph comparable at all: a slot
+	// pointing back at the instance ends the recursion here instead of running out of
+	// stack. Two DISTINCT cyclic graphs are still undefined (as in ANSI).
 	@Override
 	public boolean equals(Object o) {
+		if (this == o) {
+			return true;
+		}
 		return o instanceof LispInstance other && this.layout.tag().equals(other.layout.tag())
 				&& Arrays.equals(this.slots, 0, slotCount(), other.slots, 0, other.slotCount());
 	}

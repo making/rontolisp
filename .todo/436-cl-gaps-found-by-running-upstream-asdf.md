@@ -33,14 +33,14 @@ a ready-made exerciser for all of it.
 | todo | what | items |
 | --- | --- | --- |
 | ~~`.todo/437`~~ | `print-object` is not dispatched for a NESTED object | bug -- LANDED 2026-08-18 |
-| `.todo/438` | hash tables key by the printed form | bug |
+| ~~`.todo/438`~~ | hash tables key by the printed form | bug -- LANDED 2026-08-18 |
 | ~~`.todo/439`~~ | `with-open-file` / `open` / `load` reject computed keywords | surface -- LANDED 2026-08-18 |
 | ~~`.todo/440`~~ | string designators | surface -- LANDED 2026-08-18 |
 | ~~`.todo/441`~~ | wild pathname components | surface -- LANDED 2026-08-18 |
 | ~~`.todo/442`~~ | the CLOS surface (`reinitialize-instance` &c) | surface -- LANDED 2026-08-18 |
 | ~~`.todo/443`~~ | the missing standard names | surface -- LANDED 2026-08-18 |
 
-`437` and `438` are real BUGS -- a library hitting them is silently wrong or
+`437` and `438` were real BUGS -- a library hitting them is silently wrong or
 does not terminate. The rest is missing surface.
 
 ## Ordering
@@ -51,8 +51,9 @@ does not terminate. The rest is missing surface.
 - **Wave 2: `443`.** Done. It added the most names, so the shared counter below
   moved with it: `list-functions` 430 -> 436, and the pinned `list-macros` STRING
   gained `DO-SYMBOLS` and `WITH-COMPILATION-UNIT`.
-- **Wave 3: `438`.** After `437` -- a cyclic key stops being an unreadable stack
-  trace once nested `print-object` works.
+- **Wave 3: `438`.** Done. A table now places a key by a depth-capped structural
+  hash and decides it with `equal` on every backend, so a cyclic key stores and
+  retrieves (`.kb/hash-tables.md`); the deferred `:test` half is `.todo/444`.
 
 `.todo/445` came OUT of `437` rather than out of the spike: a `defmethod
 print-object` below its first use crashes the JVM backend, and it predates this
