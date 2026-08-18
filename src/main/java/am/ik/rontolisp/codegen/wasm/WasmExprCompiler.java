@@ -1705,6 +1705,7 @@ final class WasmExprCompiler {
 				case LispNames.DPB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx);
 				case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2 ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandLogComplement(cons), ctx);
+				case LispNames.LOGTEST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLogtest(cons), ctx);
 				case LispNames.MAKE_SEQUENCE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSequence(cons), ctx);
 				case LispNames.DESTRUCTURING_BIND ->

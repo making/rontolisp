@@ -1414,6 +1414,8 @@ final class JvmExprCompiler {
 				case LispNames.DPB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx, className);
 				case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2 ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLogComplement(cons), ctx, className);
+				case LispNames.LOGTEST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLogtest(cons), ctx, className);
 				case LispNames.MAKE_SEQUENCE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSequence(cons), ctx, className);
 				case LispNames.DESTRUCTURING_BIND ->

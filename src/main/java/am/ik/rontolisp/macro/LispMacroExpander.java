@@ -27068,6 +27068,24 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (logtest x y)} into {@code (not (zerop (logand x y)))}, its ANSI
+	 * definition. Each operand appears exactly once, so evaluation order and count match
+	 * the function-call semantics; the {@code logand}/{@code zerop} expansion reuses
+	 * their fixnum fast paths for free ({@code .kb/integer-bitwise-fast-paths.md}).
+	 * @param cons the two-argument call expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLogtest(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException("logtest expects 2 arguments: " + cons.print());
+		}
+		LispVal x = parts.get(1);
+		LispVal y = parts.get(2);
+		return mvCall(LispNames.NOT, mvCall(LispNames.ZEROP, mvCall(LispNames.LOGAND, x, y)));
+	}
+
+	/**
 	 * Normalizes a two-argument {@code (float x prototype)} call to the one-argument
 	 * shape the backends compile: {@code (float (prog1 x prototype))}. The prototype only
 	 * selects the float subtype in CL, and the runtime has a single float representation,

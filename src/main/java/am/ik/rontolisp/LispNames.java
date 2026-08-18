@@ -327,6 +327,12 @@ public final class LispNames {
 	public static final String LOGBITP = "LOGBITP";
 
 	/**
+	 * The {@code logtest} built-in function ({@code (not (zerop (logand x y)))}: tests
+	 * whether any bits are set in common between two integers).
+	 */
+	public static final String LOGTEST = "LOGTEST";
+
+	/**
 	 * The {@code byte} built-in (builds a byte specifier). Represented internally as a
 	 * two-element list {@code (size position)}.
 	 */

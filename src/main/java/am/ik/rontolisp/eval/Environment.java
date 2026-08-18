@@ -2523,6 +2523,14 @@ public final class Environment implements Scope {
 			}
 			return asBigInteger(args.get(1)).testBit(index) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		env.defineFunction(LispNames.LOGTEST, new LispFunction(LispNames.LOGTEST, args -> {
+			requireArgCount(LispNames.LOGTEST, args, 2);
+			if (args.get(0) instanceof LispInteger a && args.get(1) instanceof LispInteger b) {
+				return (a.value() & b.value()) != 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			return asBigInteger(args.get(0)).and(asBigInteger(args.get(1))).signum() != 0 ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
+		}));
 		// byte specifier: a plain (size position) list, matching the compile-path
 		// macro lowering (LispMacroExpander.expandByte). ldb/dpb read it back.
 		env.defineFunction(LispNames.BYTE, new LispFunction(LispNames.BYTE, args -> {

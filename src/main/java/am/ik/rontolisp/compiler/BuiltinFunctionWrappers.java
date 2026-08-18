@@ -1152,7 +1152,7 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.LOGAND), binary(LispNames.LOGIOR), binary(LispNames.LOGXOR), unary(LispNames.LOGNOT),
 			binary(LispNames.LOGANDC1), binary(LispNames.LOGANDC2), binary(LispNames.LOGORC1),
 			binary(LispNames.LOGORC2), binary(LispNames.ASH), unary(LispNames.INTEGER_LENGTH),
-			binary(LispNames.LOGBITP),
+			binary(LispNames.LOGBITP), binary(LispNames.LOGTEST),
 			// Byte-field operations (macro-lowered to list/car/ash/logand/logior/lognot)
 			binary(LispNames.BYTE), unary(LispNames.BYTE_SIZE), unary(LispNames.BYTE_POSITION), binary(LispNames.LDB),
 			ternary(LispNames.DPB), binary(LispNames.MASK_FIELD), binary(LispNames.SCALE_FLOAT),

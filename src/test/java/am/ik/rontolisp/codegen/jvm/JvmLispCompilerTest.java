@@ -6195,6 +6195,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLogtest() throws Exception {
+		assertThat(compileAndRun(
+				"(print (logtest 1 2)) (print (logtest 1 3)) (print (logtest -1 5)) (print (logtest (expt 2 100) (expt 2 100))) (print (funcall #'logtest 1 3))"))
+			.isEqualTo("NIL\nT\nT\nT\nT");
+	}
+
+	@Test
 	void compileAndRunByteFieldOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))
@@ -8711,12 +8718,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("429");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("430");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("429");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("430");
 	}
 
 	@Test

@@ -3661,6 +3661,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLogtest() {
+		assertThat(eval("(logtest 1 2)").print()).isEqualTo("NIL");
+		assertThat(eval("(logtest 1 3)").print()).isEqualTo("T");
+		assertThat(eval("(logtest 0 0)").print()).isEqualTo("NIL");
+		assertThat(eval("(logtest -1 5)").print()).isEqualTo("T");
+		assertThat(eval("(logtest (expt 2 100) (expt 2 100))").print()).isEqualTo("T");
+		assertThat(eval("(logtest (expt 2 100) 1)").print()).isEqualTo("NIL");
+		assertThat(eval("(funcall #'logtest 1 3)").print()).isEqualTo("T");
+	}
+
+	@Test
 	void evalByteFieldOps() {
 		assertThat(eval("(byte-size (byte 8 3))").print()).isEqualTo("8");
 		assertThat(eval("(byte-position (byte 8 3))").print()).isEqualTo("3");
@@ -6929,7 +6940,7 @@ class LispEvaluatorTest {
 					"MACHINE-TYPE", "MACHINE-VERSION", "MACHINE-INSTANCE", "SHORT-SITE-NAME", "LONG-SITE-NAME")
 			.doesNotContain("%nstring-replace", "%target-machine-type")
 			.isSorted()
-			.hasSize(429);
+			.hasSize(430);
 	}
 
 	@Test
