@@ -10258,6 +10258,36 @@ cases:
       #(9 8 7)
       #(8 7 6)
 
+  - name: print-object-nested-437
+    source: |
+      ;; The method decides the text wherever the instance SITS -- alone, in a
+      ;; list, in a dotted tail, in a vector -- and the walk that makes that true
+      ;; renders everything it does NOT route exactly as the raw printer does.
+      (defclass pon-c () ((x :initarg :x)))
+      (defmethod print-object ((o pon-c) s) (format s "#<C custom>"))
+      (defvar *pon-i* (make-instance 'pon-c :x 1))
+      (print *pon-i*)
+      (print (list *pon-i*))
+      (format t "~S~%" (list *pon-i*))
+      (print (vector *pon-i*))
+      (print (list 1 "s" (list *pon-i*) 2))
+      (print (cons 1 *pon-i*))
+      (print '(1 2 . 3))
+      (princ (list 1 "s" 'sym))
+      (terpri)
+      (print (list (make-array '(2 2) :initial-element 3)
+                   (make-array 2 :element-type 'double-float :initial-element 1.5d0)))
+    expected: |
+      #<C custom>
+      (#<C custom>)
+      (#<C custom>)
+      #(#<C custom>)
+      (1 "s" (#<C custom>) 2)
+      (1 . #<C custom>)
+      (1 2 . 3)
+      (1 s SYM)
+      (#2A((3 3) (3 3)) #d(1.5 1.5))
+
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report
 # plus a non-zero exit. `stderr` lines must APPEAR -- wasmtime wraps its own

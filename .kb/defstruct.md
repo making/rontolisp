@@ -170,8 +170,10 @@ Consequences worth knowing:
   raw `defmethod` reaches Pass 1 as an unknown top-level form.
 - A later user `defmethod print-object` on the same struct simply replaces this
   method -- same generic, same specializer.
-- The seam's LITE limitation applies: the printer fires for the value an operator is
-  HANDED, not for one nested inside a printed list.
+- The seam's reach applies: since todo-437 the printer fires for a value nested inside
+  a printed list or general rank-1 vector too, but NOT for one stored in a structure
+  slot -- `#S(BOX :ITEM #S(NODE ...))` keeps the built-in rendering of the inner struct
+  (`.kb/clos.md` carries the trigger).
 
 **Rejected, not ignored**: the pair is mutually exclusive with `:type` (a typed
 struct IS a plain vector -- no instance tag to specialize on, and silently printing

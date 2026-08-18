@@ -38,7 +38,7 @@ final class WasmExprCompiler {
 	 * every module using neither byte-identical.
 	 */
 	private static void compilePrintOperator(LispCons cons, WasmLispCompiler.Ctx ctx, Runnable plain) {
-		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, false, ctx.printCase);
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, ctx.printCase);
 		if (hooked == null) {
 			plain.run();
 			return;

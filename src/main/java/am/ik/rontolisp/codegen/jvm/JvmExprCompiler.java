@@ -41,7 +41,7 @@ final class JvmExprCompiler {
 	 * every program using neither byte-identical.
 	 */
 	private static void compilePrintOperator(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Runnable plain) {
-		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, false, ctx.printCase);
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, ctx.printCase);
 		if (hooked == null) {
 			plain.run();
 			return;

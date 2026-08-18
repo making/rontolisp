@@ -22,6 +22,8 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.StructLiteralFolder;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17376,7 +17378,7 @@ public final class LispMacroExpander {
 		// or routes condition reports. Emitted here so the tag list is the COMPLETE
 		// method set, whatever order the defmethods came in.
 		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.routesConditionReports()) {
-			out.add(printObjectStrDefun(closRegistry, usesPrintCase(program)));
+			out.addAll(printObjectStrDefuns(closRegistry, usesPrintCase(program), programUsesGeneralArrayOp(out)));
 		}
 		// The runtime format renderer, once per program that can reach it. Emitted here
 		// so the scan sees the definitions injected above (the condition report renders a
@@ -22461,24 +22463,89 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The generated {@code (%print-object-str x escape)} renderer: the text the printer
-	 * writes for a value. An instance of a type some {@code print-object} method
-	 * specializes on is rendered by calling the generic into a string stream; everything
-	 * else falls back to the RAW ({@code print-object}-free) conversions, which is what
-	 * makes the recursion terminate.
+	 * The cons arm of the {@code %print-object-str} walk: the element text is the
+	 * renderer's own, so an instance nested at any depth reaches the generic. It
+	 * reproduces the raw cons rendering exactly -- one space before every element but the
+	 * first, {@code " . "} before a non-nil tail -- because for a list holding no routed
+	 * value the two must agree byte for byte.
+	 */
+	private static final String PRINT_OBJECT_CONS_ARM = """
+			((consp %pos-x)
+			 (let ((%pos-acc "(") (%pos-cur %pos-x) (%pos-sep ""))
+			   (while (consp %pos-cur)
+			     (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
+			                                 (%print-object-str (car %pos-cur) %pos-esc)))
+			     (setq %pos-sep " ")
+			     (setq %pos-cur (cdr %pos-cur)))
+			   (unless (null %pos-cur)
+			     (setq %pos-acc (concatenate 'string %pos-acc " . "
+			                                 (%print-object-str %pos-cur %pos-esc))))
+			   (concatenate 'string %pos-acc ")")))
+			""";
+
+	/**
+	 * The vector arm, emitted only for a program that can hold a general array at all
+	 * ({@link #programUsesGeneralArrayOp}) -- otherwise it would drag the array runtime
+	 * into every artifact that merely defines a {@code print-object} method. The guard is
+	 * the exact set the raw renderer spells {@code #(...)} for: a STRING renders as
+	 * itself, a rank != 1 array as {@code #nA(...)} with nested group parens, and a
+	 * packed FLOAT array as {@code #d(...)}/{@code #f(...)} -- none of which this loop
+	 * writes, and none of which can hold an instance. The float exclusion is spelled as
+	 * those two element types rather than as "the element type is {@code t}" because only
+	 * the former is one value on every backend (the general answer is a {@code T} SYMBOL
+	 * in the interpreter and the {@code t} VALUE on the JVM, which no {@code eq} spans);
+	 * a packed INTEGER vector needs no exclusion at all -- it renders {@code #(...)} and
+	 * its elements are integers, so the walk reproduces the raw text exactly.
+	 */
+	private static final String PRINT_OBJECT_VECTOR_ARM = """
+			((and (vectorp %pos-x) (not (stringp %pos-x)) (eql (array-rank %pos-x) 1)
+			      (not (equal (array-element-type %pos-x) 'single-float))
+			      (not (equal (array-element-type %pos-x) 'double-float)))
+			 (let ((%pos-acc "#(") (%pos-i 0) (%pos-n (length %pos-x)) (%pos-sep ""))
+			   (while (< %pos-i %pos-n)
+			     (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
+			                                 (%print-object-str (aref %pos-x %pos-i) %pos-esc)))
+			     (setq %pos-sep " ")
+			     (setq %pos-i (+ %pos-i 1)))
+			   (concatenate 'string %pos-acc ")")))
+			""";
+
+	/**
+	 * The generated renderer pair. {@code (%print-object-str x escape)} is the entry
+	 * point every printing operator is rewritten onto: a cons -- and, where the program
+	 * can hold one, a general rank-1 vector -- is WALKED element-wise through itself, so
+	 * a {@code print-object} method (and a condition's {@code :report}) is consulted for
+	 * a nested value exactly as CL does; every other value goes to
+	 * {@code (%print-object-leaf x escape)}, which is the routing half: an instance of a
+	 * type some method specializes on is rendered by calling the generic into a string
+	 * stream, and everything else falls back to the RAW ({@code print-object}-free)
+	 * conversions, which is what makes the recursion terminate.
+	 *
+	 * <p>
+	 * The walk is fixed Lisp SOURCE rather than a hand-assembled AST because it is the
+	 * same text for every program -- only the leaf depends on the registry.
 	 * @param closRegistry the class registry
 	 * @param printCase whether the program mentions {@code *print-case*}, in which case
 	 * the fallback is the case-applying renderer instead of the raw conversion
-	 * @return the {@code %print-object-str} defun
+	 * @param walkVectors whether to emit the vector arm; false for a program that can
+	 * hold no general array, which then pulls no array runtime in
+	 * @return the {@code %print-object-str} and {@code %print-object-leaf} defuns
 	 */
-	public static LispVal printObjectStrDefun(ClosRegistry closRegistry, boolean printCase) {
+	public static List<LispVal> printObjectStrDefuns(ClosRegistry closRegistry, boolean printCase,
+			boolean walkVectors) {
+		String source = "(defun %print-object-str (%pos-x %pos-esc) (cond " + PRINT_OBJECT_CONS_ARM
+				+ (walkVectors ? PRINT_OBJECT_VECTOR_ARM : "") + "(t (%print-object-leaf %pos-x %pos-esc))))";
+		List<LispVal> walker = LispReader.readAllFromString(source, Features.INTERPRETER);
 		LispSymbol value = new LispSymbol("__pox");
 		LispSymbol escape = new LispSymbol("__poe");
 		LispVal fallback = makeIf(escape, rawRendering(value, true, printCase),
 				princRendering(value, closRegistry.routesConditionReports(), printCase));
 		LispVal body = printObjectRouting(value, fallback, closRegistry, escape);
-		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL),
-				listToCons(List.of(value, escape)), body));
+		LispVal leaf = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.PRINT_OBJECT_LEAF_INTERNAL), listToCons(List.of(value, escape)), body));
+		List<LispVal> out = new java.util.ArrayList<>(walker);
+		out.add(leaf);
+		return out;
 	}
 
 	/**
@@ -23174,17 +23241,13 @@ public final class LispMacroExpander {
 	 * other, so a {@code print-object} method on a condition class still wins.
 	 * @param cons the printing-operator form
 	 * @param closRegistry the class registry
-	 * @param inline whether to inline the renderer instead of calling the generated defun
-	 * (the interpreter re-expands per call, so it always has the current registry; the
-	 * compile paths emit the defun once)
 	 * @param printCase whether {@code *print-case*} is in play (the compile paths: the
 	 * program mentions the variable; the interpreter: its current value is not
 	 * {@code :upcase}), which routes the same operators through {@code %print-cased}
 	 * @return the rewritten form, or null when the program neither defines a print-object
 	 * method nor can build a condition nor mentions {@code *print-case*}
 	 */
-	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean inline,
-			boolean printCase) {
+	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean printCase) {
 		if ((printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports() && !printCase)
 				|| !cons.isProperList()) {
 			return null;
@@ -23194,7 +23257,7 @@ public final class LispMacroExpander {
 		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op);
 		if (LispNames.PRINC_TO_STRING.equals(op) || LispNames.PRIN1_TO_STRING.equals(op)
 				|| LispNames.WRITE_TO_STRING.equals(op)) {
-			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, inline, closRegistry, printCase) : null;
+			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, closRegistry, printCase) : null;
 		}
 		if (parts.size() < 2 || parts.size() > 3) {
 			return null;
@@ -23202,7 +23265,7 @@ public final class LispMacroExpander {
 		LispSymbol valueVar = new LispSymbol("__po" + MV_COUNTER.getAndIncrement() + "_v");
 		List<LispVal> write = new java.util.ArrayList<>();
 		write.add(new LispSymbol(LispNames.WRITE_STRING));
-		write.add(printObjectStr(valueVar, escape, inline, closRegistry, printCase));
+		write.add(printObjectStr(valueVar, escape, closRegistry, printCase));
 		List<LispVal> terpri = new java.util.ArrayList<>();
 		terpri.add(new LispSymbol(LispNames.TERPRI));
 		if (parts.size() == 3) {
@@ -23219,29 +23282,23 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The renderer call (or its inlined body) for one value. The inlined form binds the
-	 * value to a temp first: it is tested before it is rendered, and the argument of a
-	 * {@code (princ-to-string (pop x))} must not be evaluated twice.
+	 * The renderer call for one value. Always a CALL to the generated
+	 * {@code %print-object-str} rather than an inlined body -- the walk it performs is
+	 * recursive, which an inlined form cannot be. The interpreter keeps up with a
+	 * {@code defmethod} that follows the first print by RE-EVALUATING the generated pair
+	 * whenever the method set moves
+	 * ({@code LispEvaluator.ensurePrintObjectRuntimeLoaded}), the same way it already
+	 * rebuilds the condition-report runtime.
 	 */
-	private static LispVal printObjectStr(LispVal value, boolean escape, boolean inline, ClosRegistry closRegistry,
-			boolean printCase) {
-		LispVal escapeArg = escape ? LispTrue.INSTANCE : LispNil.INSTANCE;
+	private static LispVal printObjectStr(LispVal value, boolean escape, ClosRegistry closRegistry, boolean printCase) {
 		// Nothing to route: the operator is here for *print-case* alone, so the
 		// case-applying renderer IS the rewrite (and the %print-object-str defun this
 		// would otherwise call is not generated for such a program).
 		if (printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports()) {
 			return rawRendering(value, escape, printCase);
 		}
-		if (!inline) {
-			return listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL), value, escapeArg));
-		}
-		if (!(value instanceof LispSymbol)) {
-			LispSymbol temp = new LispSymbol("__pos" + MV_COUNTER.getAndIncrement() + "_v");
-			return makeLet(temp.name(), value, printObjectStr(temp, escape, true, closRegistry, printCase));
-		}
-		LispVal fallback = escape ? rawRendering(value, true, printCase)
-				: princRendering(value, closRegistry.routesConditionReports(), printCase);
-		return printObjectRouting(value, fallback, closRegistry, escapeArg);
+		return listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL), value,
+				escape ? LispTrue.INSTANCE : LispNil.INSTANCE));
 	}
 
 	/**

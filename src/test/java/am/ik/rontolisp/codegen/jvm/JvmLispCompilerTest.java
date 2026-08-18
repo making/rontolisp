@@ -7383,6 +7383,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunPrintObjectForANestedObject() throws Exception {
+		// The method decides the text wherever the instance sits, and the walk that makes
+		// that true reproduces the raw renderer exactly for everything it does not route.
+		assertThat(compileAndRun("""
+				(defclass jpn-c () ((x :initarg :x)))
+				(defmethod print-object ((o jpn-c) s) (format s "#<C custom>"))
+				(let ((i (make-instance 'jpn-c :x 1)))
+				  (print i)
+				  (print (list i))
+				  (format t "~S~%" (list i))
+				  (print (vector i))
+				  (print (list 1 "s" (list i) 2))
+				  (print (cons 1 i))
+				  (print '(1 2 . 3))
+				  (princ (list 1 "s" 'sym))
+				  (terpri))
+				""")).isEqualTo("#<C custom>\n(#<C custom>)\n(#<C custom>)\n#(#<C custom>)\n(1 \"s\" (#<C custom>) 2)\n"
+				+ "(1 . #<C custom>)\n(1 2 . 3)\n(1 s SYM)");
+	}
+
+	@Test
 	void compileAndRunSlotBoundpAndSlotMakunbound() throws Exception {
 		// Real unboundness (todo-199): a slot written with no :initform starts UNBOUND,
 		// slot-makunbound puts it back, and a read of an unbound slot signals

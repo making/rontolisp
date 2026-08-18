@@ -12241,6 +12241,63 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void printObjectIsConsultedForANestedObjectToo() {
+		// The method decides the text wherever the instance SITS -- inside a list, a
+		// dotted tail, a nested list, a vector -- not only when it is handed to the
+		// operator directly.
+		assertThat(evalMulti("""
+				(defclass pn-c () ((x :initarg :x)))
+				(defmethod print-object ((o pn-c) s) (format s "#<C custom>"))
+				(let ((i (make-instance 'pn-c :x 1)))
+				  (list (princ-to-string i) (princ-to-string (list i)) (format nil "~S" (list i))
+				        (princ-to-string (vector i)) (princ-to-string (list 1 (list i) 2))
+				        (princ-to-string (cons 1 i))))
+				""").print()).isEqualTo("(\"#<C custom>\" \"(#<C custom>)\" \"(#<C custom>)\" \"#(#<C custom>)\""
+				+ " \"(1 (#<C custom>) 2)\" \"(1 . #<C custom>)\")");
+	}
+
+	@Test
+	void aNestedValueWithNoPrintObjectMethodRendersExactlyAsItDidBefore() {
+		// The walk the method route introduced has to reproduce the raw renderer byte for
+		// byte for everything it does NOT route: element separators, the dotted tail, the
+		// escape mode propagating into elements, and the containers it must NOT walk (a
+		// rank != 1 array, a packed float array -- neither of which it can spell).
+		assertThat(evalMulti("""
+				(defclass pn-unused () ())
+				(defmethod print-object ((o pn-unused) s) (format s "#<U>"))
+				(let ((m (make-array '(2 2) :initial-element 3))
+				      (d (make-array 2 :element-type 'double-float :initial-element 1.5d0))
+				      (u (make-array 2 :element-type '(unsigned-byte 8) :initial-element 7)))
+				  (list (prin1-to-string (list 1 "s" #\\a 'sym nil t))
+				        (princ-to-string (list 1 "s" #\\a 'sym nil t))
+				        (prin1-to-string '(1 2 . 3)) (prin1-to-string (vector))
+				        (prin1-to-string (list m d u)) (prin1-to-string (list (quote (quote x))))))
+				""").print())
+			.isEqualTo("(\"(1 \\\"s\\\" #\\\\a SYM NIL T)\" \"(1 s a SYM NIL T)\" \"(1 2 . 3)\" \"#()\""
+					+ " \"(#2A((3 3) (3 3)) #d(1.5 1.5) #(7 7))\" \"((QUOTE X))\")");
+	}
+
+	@Test
+	void aNestedConditionRendersItsReportUnderPrincToo() {
+		assertThat(evalMulti("""
+				(define-condition pn-err (error) () (:report "boom"))
+				(let ((c (make-condition 'pn-err)))
+				  (list (format nil "~A" (list c)) (format nil "~S" (list c))))
+				""").print()).isEqualTo("(\"(boom)\" \"(#<PN-ERR>)\")");
+	}
+
+	@Test
+	void printCaseWalksNeitherARankTwoArrayNorAPackedFloatArray() {
+		// The case renderer's container guard is the twin of the print-object walk's: a
+		// rank != 1 array used to reach its (length x) / (aref x i) loop and signal.
+		assertThat(evalMulti("""
+				(let ((*print-case* :downcase))
+				  (list (format nil "~A" (list 'ab (make-array '(2 2) :initial-element 1)))
+				        (format nil "~A" (make-array 2 :element-type 'double-float :initial-element 1.5d0))))
+				""").print()).isEqualTo("(\"(ab #2A((1 1) (1 1)))\" \"#d(1.5 1.5)\")");
+	}
+
+	@Test
 	void conditionReportRendersUnderPrincButNotUnderPrin1() {
 		assertThat(evalMulti("""
 				(define-condition cr-lam (error) ((msg :initarg :msg :reader cr-msg))

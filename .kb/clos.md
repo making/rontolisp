@@ -1033,10 +1033,46 @@ before and every existing artifact stays byte-identical.
   because the method route is tested first. The two share this seam rather than
   sitting beside each other -- there is exactly one place that decides what text a
   printing operator writes.
-- **LITE: the method is consulted for the value the operator is HANDED, not for one
-  nested inside a printed list/vector** -- `(print (list obj))` still shows the built-in
-  syntax. Making it recursive means hooking each backend's list renderer (hand-emitted
-  bytecode / wasm), not the shared expander; revisit only if a library needs it.
+- **The method is consulted for a NESTED value too** (todo-437, 2026-08-18): the
+  generated renderer is a PAIR -- `%print-object-str` walks a cons and a general rank-1
+  vector element-wise by recursing into itself, and `%print-object-leaf` is the routing
+  half above (method / condition report / raw fallback). One Lisp-level walk rather than
+  a hook in each backend's list renderer (hand-emitted bytecode / wasm): the same choice
+  `%print-cased` made, and the two guards are twins that have to be read together.
+  Consequences worth knowing:
+  - **The walk must reproduce the raw renderer byte for byte** for everything it does
+    NOT route -- that is what keeps a routed program's ordinary output unchanged. There
+    are exactly two shapes (`.kb/pretty-printer.md` has the full table): a cons, with one
+    space before every element but the first and `" . "` before a non-nil tail; and
+    `#(...)`. There is no `'x` / `#'f` abbreviation and no `#*` bit-vector syntax
+    anywhere in this implementation, which is why the walk needs neither.
+  - **The vector guard excludes what it cannot spell**: a string, an array of rank != 1
+    (`#nA(...)`, nested group parens) and a packed FLOAT array (`#d(...)`/`#f(...)`) --
+    none of which can hold an instance either. It is written as "the element type is not
+    `single-float`/`double-float`" and NOT as "the element type is `t`", because the
+    general answer is a `T` SYMBOL in the interpreter and the `t` VALUE on the JVM, which
+    no single `eq` spans. A packed INTEGER vector is deliberately walked: it renders
+    `#(...)` and holds integers, so the walk and the raw renderer agree.
+  - **The vector arm is emitted only for a program `programUsesGeneralArrayOp` answers
+    true for**, so a print-object / condition program with no array in it pulls no array
+    runtime (`array-rank`, `array-element-type`, `aref`). An under-approximation costs
+    the OLD behavior for a vector, never wrong output.
+  - **The interpreter stopped INLINING the renderer** (a recursive walk cannot be
+    inlined) and now (re)generates the defun pair whenever the routing moves --
+    `LispEvaluator.ensurePrintObjectRuntimeLoaded`, stamped on the tag set +
+    `routesConditionReports` + `*print-case*`, exactly like the condition-report runtime
+    beside it. That is what still lets a `defmethod print-object` evaluated AFTER the
+    first print take effect.
+  - **Still not walked, and the re-evaluation trigger**: a value in a STRUCTURE or class
+    SLOT, in a hash table, in an array of rank != 1. `#S(BOX :ITEM #S(NODE :VALUE 9))`
+    where CL prints `#S(BOX :ITEM #<NODE 9>)`. Closing that means rendering the
+    `#S(...)`/`#<...>` frame in Lisp too (per-backend today, and it has to keep the
+    pathname and condition arms); revisit when a library needs it -- the walk gains one
+    arm, nothing else moves.
+  - **Cost**: the walk is O(n^2) in string concatenation, the same as `%print-cased`'s,
+    and it is on the path of every print in a program that merely CAN build a condition.
+    Re-evaluate together with `.kb/pretty-printer.md`'s "stream with no column" trigger:
+    a stream that can be written incrementally is what turns both into one pass.
 - `print-unreadable-object`'s `:type t` prints the type NAME with the
   `%struct-`/`%class-` tag prefix stripped INLINE (`typeNameOf`), not by calling the
   prelude's `type-of`: this expansion runs inside the compilers, long after the prelude

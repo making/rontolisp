@@ -131,6 +131,14 @@ public final class LispEvaluator {
 	// compile path, where the registry is complete before the renderer is emitted.
 	private int conditionReportRuntimeStamp = -1;
 
+	// The routing shape (the print-object tag set, whether conditions report, whether
+	// *print-case* converts) the loaded %print-object-str / %print-object-leaf pair was
+	// generated from, or -1 before the first load. The pair is RE-generated whenever that
+	// moves, which is what lets a defmethod print-object evaluated after the first print
+	// still take effect -- the compile path emits it once because its registry is
+	// complete.
+	private int printObjectRuntimeStamp = -1;
+
 	// Forms already verified against the rontolisp:await placement rules, by identity:
 	// a lambda form evaluated repeatedly (a closure created in a loop) is walked once.
 	private final java.util.Set<LispVal> awaitCheckedForms = java.util.Collections
@@ -3968,8 +3976,8 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
 			if (!args.isEmpty() && args.size() <= 2 && printCaseInEffect()) {
 				LispVal form = new LispCons(new LispSymbol(name), quotedArguments(args));
-				LispVal hooked = LispMacroExpander.expandPrintObjectHook((LispCons) form, this.closRegistry, true,
-						true);
+				ensurePrintObjectRuntimeLoadedIfRouted(true);
+				LispVal hooked = LispMacroExpander.expandPrintObjectHook((LispCons) form, this.closRegistry, true);
 				if (hooked != null) {
 					return eval(hooked, this.globalEnv);
 				}
@@ -4670,8 +4678,9 @@ public final class LispEvaluator {
 					// defined between two prints renders through its report too.
 					ensureConditionReportRuntimeLoaded();
 				}
-				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, true,
-						printCaseInEffect());
+				boolean printCase = printCaseInEffect();
+				ensurePrintObjectRuntimeLoadedIfRouted(printCase);
+				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, printCase);
 				if (hooked != null) {
 					return eval(hooked, env);
 				}
@@ -6874,6 +6883,53 @@ public final class LispEvaluator {
 			for (LispVal form : LispMacroExpander.conditionReportDefuns(this.closRegistry)) {
 				eval(form, this.globalEnv);
 			}
+		}
+	}
+
+	/**
+	 * Evaluates the generated print-object runtime ({@code %print-object-str} and
+	 * {@code %print-object-leaf}) into the global environment, and re-evaluates it
+	 * whenever the routing has moved -- a later {@code defmethod print-object}, a later
+	 * {@code define-condition}, or {@code *print-case*} entering or leaving its
+	 * converting modes. The compile path emits the pair once because
+	 * {@code expandTopLevelDefinitions} runs with a complete registry, which the
+	 * interpreter never has.
+	 *
+	 * <p>
+	 * A generated DEFUN rather than a body inlined at the print site (which is what this
+	 * was before nested rendering): the renderer walks a list/vector by recursing into
+	 * itself, and an inlined form cannot recurse.
+	 * @param printCase whether {@code *print-case*} currently converts
+	 */
+	private void ensurePrintObjectRuntimeLoaded(boolean printCase) {
+		synchronized (this.libraryLoadLock) {
+			java.util.List<String> tags = LispMacroExpander.printObjectTags(this.closRegistry);
+			int stamp = tags.hashCode() * 4 + (this.closRegistry.routesConditionReports() ? 1 : 0)
+					+ (printCase ? 2 : 0);
+			if (stamp == this.printObjectRuntimeStamp) {
+				return;
+			}
+			this.printObjectRuntimeStamp = stamp;
+			// The interpreter always emits the vector arm: the gate the compile paths use
+			// exists to keep the array runtime out of an array-free ARTIFACT, and there
+			// is no artifact here.
+			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, printCase, true)) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * {@link #ensurePrintObjectRuntimeLoaded} guarded by the gate that decides whether
+	 * the pair is generated at all: a program with no {@code print-object} method and no
+	 * condition in reach is rewritten straight onto {@code %print-cased} (or not at all),
+	 * and must not carry a renderer it never calls.
+	 * @param printCase whether {@code *print-case*} currently converts
+	 */
+	private void ensurePrintObjectRuntimeLoadedIfRouted(boolean printCase) {
+		if (!LispMacroExpander.printObjectTags(this.closRegistry).isEmpty()
+				|| this.closRegistry.routesConditionReports()) {
+			ensurePrintObjectRuntimeLoaded(printCase);
 		}
 	}
 

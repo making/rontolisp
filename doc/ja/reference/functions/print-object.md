@@ -22,12 +22,16 @@
 ; => ("/x" "#<URI /x>")
 ```
 
-lite: メソッドが参照されるのは印字オペレータに直接渡された値だけで、印字されるリストやベクタの内部にネストした値には適用されません — `(print (list obj))` の `obj` は組み込みの構文のままです。
+メソッドはインスタンスが「どこにあるか」によらず参照されます。印字オペレータに直接渡された値だけでなく、印字されるリストやベクタの要素も — 深さを問わず、ドット対の末尾も含めて — メソッドを通ります。
 
 ```lisp
 (defstruct po-node value)
 (defmethod print-object ((n po-node) stream)
   (print-unreadable-object (n stream :type t)
     (princ (po-node-value n) stream)))
-(princ-to-string (make-po-node :value 42)) ; => "#<PO-NODE 42>"
+(list (princ-to-string (make-po-node :value 42))
+      (princ-to-string (list (make-po-node :value 7) (vector (make-po-node :value 8)))))
+; => ("#<PO-NODE 42>" "(#<PO-NODE 7> #(#<PO-NODE 8>))")
 ```
+
+lite: このように走査されるコンテナはリストと汎用の1次元ベクタです。構造体やクラスのスロット、ハッシュテーブル、1次元以外の配列、浮動小数点数専用ベクタに格納された値はそのコンテナ自身のプリンタが出力するため、その型のメソッドは適用されません。

@@ -22,12 +22,16 @@ The one built-in rendering that is not `#S(...)`/`#<...>` is a CONDITION's: `pri
 ; => ("/x" "#<URI /x>")
 ```
 
-Lite: the method is consulted for the value the printing operator is given, not for one nested inside a printed list or vector — `(print (list obj))` still shows the built-in syntax for `obj`.
+The method is consulted wherever the instance SITS, not only when the printing operator is handed it directly: an element of a printed list or vector — at any depth, and in a dotted tail — goes through the method too.
 
 ```lisp
 (defstruct po-node value)
 (defmethod print-object ((n po-node) stream)
   (print-unreadable-object (n stream :type t)
     (princ (po-node-value n) stream)))
-(princ-to-string (make-po-node :value 42)) ; => "#<PO-NODE 42>"
+(list (princ-to-string (make-po-node :value 42))
+      (princ-to-string (list (make-po-node :value 7) (vector (make-po-node :value 8)))))
+; => ("#<PO-NODE 42>" "(#<PO-NODE 7> #(#<PO-NODE 8>))")
 ```
+
+Lite: the containers walked that way are the list and the general one-dimensional vector. A value stored in a STRUCTURE or class slot, a hash table, an array of rank other than one or a specialized float vector is still rendered by the container's own printer, so a method on its type does not apply there.

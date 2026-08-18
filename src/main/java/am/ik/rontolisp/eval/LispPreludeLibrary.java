@@ -1598,9 +1598,13 @@ public final class LispPreludeLibrary {
 		// only SYMBOL spellings are cased -- a string element keeps its own characters,
 		// and a character prints as itself. What it does NOT walk is the containers whose
 		// rendering is a runtime form of its own (a structure, an instance, a hash table,
-		// an array of rank != 1): those delegate to the raw conversion, so a symbol
-		// nested in one keeps the stored (upper-case) spelling. .kb/pretty-printer.md
-		// carries the re-evaluation trigger.
+		// an array of rank != 1, a packed float array): those delegate to the raw
+		// conversion, so a symbol nested in one keeps the stored (upper-case) spelling.
+		// .kb/pretty-printer.md carries the re-evaluation trigger. The vector guard is
+		// the
+		// twin of the generated %print-object-str's -- the two walks are never both live
+		// in one program (a program with a print-object route walks THERE and hands this
+		// one leaves), so they have to be read together to stay in step.
 		SOURCES.put(LispNames.PRINT_CASED_INTERNAL, """
 				(defun %print-cased (%pc-x %pc-esc)
 				  (if (eq *print-case* :upcase)
@@ -1620,7 +1624,9 @@ public final class LispPreludeLibrary {
 				                 (setq %pc-acc (concatenate 'string %pc-acc " . "
 				                                            (%print-cased %pc-cur %pc-esc))))
 				               (concatenate 'string %pc-acc ")")))
-				            ((and (vectorp %pc-x) (not (stringp %pc-x)))
+				            ((and (vectorp %pc-x) (not (stringp %pc-x)) (eql (array-rank %pc-x) 1)
+				                  (not (equal (array-element-type %pc-x) 'single-float))
+				                  (not (equal (array-element-type %pc-x) 'double-float)))
 				             (let ((%pc-acc "#(") (%pc-i 0) (%pc-n (length %pc-x)) (%pc-sep ""))
 				               (while (< %pc-i %pc-n)
 				                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep

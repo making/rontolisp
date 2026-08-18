@@ -93,11 +93,14 @@ text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
   `A1B2-C3` -> `A1b2-C3`). `:downcase` IS `string-downcase` (`char-downcase` leaves a
   lower-case character alone).
 - **Known gap, and the re-evaluation trigger:** a symbol nested in a STRUCTURE, a CLOS
-  instance, a hash table or an array of rank != 1 keeps its stored spelling -- the walk
-  covers symbols, conses and vectors and delegates those containers to the raw
-  conversion, whose rendering is a runtime form of its own (SBCL prints `#S(pt :x a)`).
-  Re-evaluate when a container's rendering becomes reachable from Lisp: the walk gains a
-  branch, nothing else moves. The same gate would carry `write`'s `:case` keyword and
+  instance, a hash table or an array of rank != 1 (or a packed float vector) keeps its
+  stored spelling -- the walk covers symbols, conses and general rank-1 vectors and
+  delegates those containers to the raw conversion, whose rendering is a runtime form of
+  its own (SBCL prints `#S(pt :x a)`). Re-evaluate when a container's rendering becomes
+  reachable from Lisp: the walk gains a branch, nothing else moves. `%print-object-str`'s
+  walk (`.kb/clos.md`, todo-437) carries the SAME guard and the same gap; the two are
+  never both live in one program -- a program with a print-object route walks there and
+  hands `%print-cased` leaves only -- so they have to be read together to stay in step. The same gate would carry `write`'s `:case` keyword and
   `write-to-string`'s keyword set (below), which are deliberately still absent: adding
   `:case` to the prelude `write` would make every `write` user MENTION `*print-case*` and
   so pull the renderer into modules that never bind it.
@@ -123,9 +126,10 @@ report is designed to read the same unwrapped, which is why its expected text in
 **The ordinary printing operators do NOT consult `*print-pprint-dispatch*`.** `princ` /
 `prin1` / `print` / `~A` / `~S` are a per-backend primitive on the hottest path, and the
 one hook above them -- `%print-object-str`, the `print-object` seam (`.kb/clos.md`) -- is
-gated on the program defining a method and only sees the value the operator is HANDED,
-not one nested inside a printed list. A dispatch table entry therefore fires only where
-the program calls the entry function itself, which is what esrap does
+gated on the program defining a method (it DOES reach a value nested inside a printed
+list or vector since todo-437, but it is not this table). A dispatch table entry
+therefore fires only where the program calls the entry function itself, which is what
+esrap does
 (`(funcall (pprint-dispatch x) stream x)` under a rebound table). Re-evaluate together
 with the column: both want the same seam.
 
