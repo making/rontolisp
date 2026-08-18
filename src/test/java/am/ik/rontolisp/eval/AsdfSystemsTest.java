@@ -129,6 +129,24 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void aModuleComponentNameAcceptsASymbolLikeCoerceName() {
+		// cl-json/test's shape: (:module :t :components (...)). Real ASDF runs every
+		// component name through coerce-name, which accepts any string designator and
+		// downcases a symbol, so :t names the t/ directory.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib/test
+				  :components ((:module :t
+				                :components ((:file "package")))))""");
+		assertThat(system.files()).containsExactly("t/package.lisp");
+	}
+
+	@Test
+	void aFileComponentNameAcceptsASymbol() {
+		AsdfSystems.LispSystem system = parse("(asdf:defsystem :lib :components ((:file package)))");
+		assertThat(system.files()).containsExactly("package.lisp");
+	}
+
+	@Test
 	void staticFileContributesNoSource() {
 		AsdfSystems.LispSystem system = parse("""
 				(asdf:defsystem :lib
@@ -258,6 +276,46 @@ class AsdfSystemsTest {
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("lib.asd")
 			.hasMessageContaining("unsupported form in .asd file");
+	}
+
+	@Test
+	void aTopLevelPrognIsFlattened() {
+		// cl-json.asd's shape: the outer reader conditional survives (rontolisp declares
+		// no :no-cl-json-clos), the inner #+ drops every implementation keyword it lists,
+		// so what reaches the parser is the literal (PROGN) -- flattened to a no-op
+		// rather than rejected as an unrecognized form, and :cl-json-clos is NOT pushed
+		// (exactly as on an implementation outside that #+ list).
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				#-no-cl-json-clos
+				(progn
+				  #+(or mcl openmcl cmu sbcl clisp ecl scl lispworks allegro abcl genera)
+				  (pushnew :cl-json-clos *features*))
+				(defsystem :cl-json :components ((:file "package")))""", "cl-json.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		assertThat(systems.get(0).features()).doesNotContain("cl-json-clos");
+		assertThat(systems.get(0).files()).containsExactly("package.lisp");
+	}
+
+	@Test
+	void aNestedPrognFlattensRecursivelyAndAnEmptyOneIsANoOp() {
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(progn)
+				(progn
+				  (progn
+				    (defsystem :lib :components ((:file "main")))))""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		assertThat(systems.get(0).name()).isEqualTo("lib");
+		assertThat(systems.get(0).files()).containsExactly("main.lisp");
+	}
+
+	@Test
+	void anUnsupportedFormInsideAPrognErrorsByItsOwnNameNotPrognsName() {
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(progn (print 1))", "lib.asd", Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("lib.asd")
+			.hasMessageContaining("unsupported form in .asd file")
+			.hasMessageContaining("(PRINT 1)")
+			.satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("(PROGN"));
 	}
 
 	@Test
@@ -811,14 +869,27 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void asdDefparameterWithAnImpureValueIsAHardError() {
-		// Deny by default: the .asd is never really evaluated, so a defparameter value
-		// outside the pure-data mini evaluator fails the parse instead of guessing.
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(defparameter *when* (get-universal-time))", "lib.asd",
-				Features.INTERPRETER))
+	void asdDefparameterWithAnImpureValueParsesFineWhenNothingReadsIt() {
+		// cl-json/test's *cl-json-directory* shape: the binding exists for the test
+		// system's own runtime and no .asd form ever consumes it -- failing the whole
+		// file over a binding nothing asks for is the deny landing in the wrong place.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defparameter *when* (get-universal-time))
+				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems.get(0).files()).containsExactly("main.lisp");
+	}
+
+	@Test
+	void anImpureDefparameterErrorsNamingItselfOnlyWhenALaterFormReadsIt() {
+		// The denial moves to the USE site: the binding parses, and only the #. that
+		// actually reads it fails, naming the parameter -- the same "consumer decides"
+		// rule this file already applies to #. itself.
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
+				(defparameter *when* (get-universal-time))
+				(defsystem :lib :components ((:file #.*when*)))""", "lib.asd", Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("DEFPARAMETER")
+			.hasMessageContaining("*WHEN*")
 			.hasMessageContaining("pure data");
 	}
 

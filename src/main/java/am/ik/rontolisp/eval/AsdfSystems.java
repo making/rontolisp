@@ -241,13 +241,19 @@ public final class AsdfSystems {
 	 * resolve against the {@code .asd} file's directory, {@code in-package} and
 	 * {@code defpackage} forms are skipped (the file is never evaluated, so the
 	 * system-definition package header idiom does not matter), a top-level
-	 * {@code defparameter} of a pure literal/conditional value is evaluated into a
-	 * parse-time data environment (the cl-postgres {@code *string-file*} idiom), a
-	 * top-level {@code eval-when} announcing features with {@code pushnew} declares them
-	 * for the systems defined after it ({@link #collectFeaturePushes}), a
-	 * {@code (defmethod perform ...)} hook is tolerated and ignored
-	 * ({@link #checkToleratedPerformMethod}), a doc-file component-class {@code defclass}
-	 * declares an ordering-only component type ({@link #collectDocFileClass}), and any
+	 * {@code defparameter} is evaluated into a parse-time data environment when its value
+	 * is pure data (the cl-postgres {@code *string-file*} idiom); an IMPURE value does
+	 * not fail the file -- the name is recorded as unevaluable instead, and only a later
+	 * form that actually reads it fails, naming the parameter (the consumer-decides rule
+	 * {@code #.} already follows, below), a top-level {@code eval-when} announcing
+	 * features with {@code pushnew} declares them for the systems defined after it
+	 * ({@link #collectFeaturePushes}), a {@code (defmethod perform ...)} hook is
+	 * tolerated and ignored ({@link #checkToleratedPerformMethod}), a doc-file
+	 * component-class {@code defclass} declares an ordering-only component type
+	 * ({@link #collectDocFileClass}), a top-level {@code progn} is FLATTENED -- its body
+	 * forms are spliced back onto the form worklist and each hits this same recognizer,
+	 * so a nested {@code progn} recurses, an empty one is a no-op and an unsupported form
+	 * inside one still errors by its own name rather than by {@code PROGN} -- and any
 	 * other form is a hard error naming the file. A {@code #.} read-time-eval datum
 	 * (wrapped in a {@code %read-eval} marker by the tolerant reader) is resolved against
 	 * that environment WHERE ITS VALUE IS CONSUMED ({@link #resolveReadEval}); a
@@ -283,6 +289,13 @@ public final class AsdfSystems {
 		String baseDir = SourceLoader.parentDir(asdPath);
 		List<LispSystem> systems = new ArrayList<>();
 		Map<String, LispVal> parameters = new HashMap<>();
+		// Names an impure top-level defparameter bound, with the reason evalDataForm
+		// rejected the value, mapped to string(nameSym) -> reason. Recorded rather than
+		// failed at parse time: the "consumer decides" rule (#. below) applies here too
+		// --
+		// most such bindings exist for the .asd's own runtime and are never read by a
+		// later clause (see defineParameter).
+		Map<String, String> unevaluableParameters = new HashMap<>();
 		// Features the file pushes onto *features* ahead of a defsystem, accumulated in
 		// file order and merged into the declared features of every LATER system (see
 		// collectFeaturePushes).
@@ -290,10 +303,22 @@ public final class AsdfSystems {
 		// Component-class names a tolerated doc-file defclass declared, in file order
 		// like the feature pushes: they reach only the systems defined after them.
 		Set<String> docComponentTypes = new HashSet<>();
-		for (LispVal form : LispReader.readAllSkippingReadEval(source, features, asdPath)) {
+		// A top-level progn is flattened by splicing its body back onto the front of this
+		// worklist, so each subform hits the same recognizer below (nested progn
+		// recurses, an unsupported form inside one still names itself, not PROGN).
+		Deque<LispVal> pending = new ArrayDeque<>(LispReader.readAllSkippingReadEval(source, features, asdPath));
+		while (!pending.isEmpty()) {
+			LispVal form = pending.removeFirst();
 			if (isReadEvalMarker(form) || isUnreadableReadEvalMarker(form)) {
 				// A top-level #. form (an ASDF version guard) has side effects the data
 				// parse cannot perform; ignore it, re-lexable or not.
+				continue;
+			}
+			if (operatorMemberIs(form, LispNames.PROGN)) {
+				List<LispVal> body = ((LispCons) form).toList();
+				for (int i = body.size() - 1; i >= 1; i--) {
+					pending.addFirst(body.get(i));
+				}
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.IN_PACKAGE) || operatorMemberIs(form, LispNames.DEFPACKAGE)) {
@@ -304,7 +329,7 @@ public final class AsdfSystems {
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.DEFPARAMETER)) {
-				defineParameter(form, parameters, asdPath);
+				defineParameter(form, parameters, unevaluableParameters, asdPath);
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.EVAL_WHEN) || operatorMemberIs(form, LispNames.PUSHNEW)
@@ -322,37 +347,50 @@ public final class AsdfSystems {
 			}
 			if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
 				systems.add(parseDefsystem(form, baseDir, features, pushedFeatures, docComponentTypes,
-						new AsdContext(asdPath, parameters)));
+						new AsdContext(asdPath, parameters, unevaluableParameters)));
 				continue;
 			}
 			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
 					+ ", " + LispNames.DEFPACKAGE + ", " + LispNames.IN_PACKAGE + ", " + LispNames.DEFPARAMETER + ", "
 					+ LispNames.REGISTER_SYSTEM_PACKAGES + ", a " + LispNames.EVAL_WHEN + "/" + LispNames.PUSHNEW
-					+ " feature announcement, a (" + LispNames.DEFMETHOD + " PERFORM ...) hook and a doc-file "
-					+ LispNames.DEFCLASS + " are recognized): " + form.print());
+					+ " feature announcement, a (" + LispNames.DEFMETHOD + " PERFORM ...) hook, a doc-file "
+					+ LispNames.DEFCLASS + " and a top-level " + LispNames.PROGN + " are recognized): " + form.print());
 		}
 		return systems;
 	}
 
 	/**
 	 * Evaluates a top-level {@code (defparameter NAME VALUE [DOC])} in a {@code .asd}
-	 * file into the parse-time data environment. The value must be pure data the mini
-	 * evaluator supports ({@link #evalDataForm}); anything else is a hard error naming
-	 * the file, like any other unsupported {@code .asd} form.
+	 * file into the parse-time data environment. When the value is pure data the mini
+	 * evaluator supports ({@link #evalDataForm}) the name resolves to it; otherwise the
+	 * BINDING is not a parse error -- most such names exist for the {@code .asd}'s own
+	 * runtime and nothing here ever reads them (cl-json's {@code *cl-json-directory*}).
+	 * The name is instead recorded as unevaluable, with the reason, so it parses and then
+	 * fails NAMING ITSELF only where a later form actually reads it
+	 * ({@code evalDataForm}'s symbol case) -- the same "the consumer decides" rule this
+	 * file already applies to {@code #.} ({@link #resolveReadEval}). The shape of the
+	 * form itself (name, arity) is still checked eagerly: that is a syntax error, not a
+	 * purity question.
 	 */
-	private static void defineParameter(LispVal form, Map<String, LispVal> parameters, String asdPath) {
+	private static void defineParameter(LispVal form, Map<String, LispVal> parameters, Map<String, String> unevaluable,
+			String asdPath) {
 		List<LispVal> items = ((LispCons) form).toList();
 		if ((items.size() != 3 && items.size() != 4) || !(items.get(1) instanceof LispSymbol nameSym)) {
 			throw new IllegalStateException(asdPath + ": " + LispNames.DEFPARAMETER
 					+ " in a .asd file expects (defparameter NAME VALUE): " + form.print());
 		}
+		String name = symbolName(nameSym);
 		try {
-			parameters.put(symbolName(nameSym), evalDataForm(items.get(2), parameters));
+			LispVal value = evalDataForm(items.get(2), parameters, unevaluable);
+			parameters.put(name, value);
+			unevaluable.remove(name);
 		}
 		catch (IllegalStateException ex) {
-			throw new IllegalStateException(asdPath + ": " + LispNames.DEFPARAMETER + " " + nameSym.name() + ": "
-					+ ex.getMessage() + " (a .asd defparameter value must be pure data: literals, quote, if/or/and/not"
-					+ " over earlier defparameters)");
+			parameters.remove(name);
+			unevaluable.put(name,
+					(ex.getMessage() == null ? "unsupported form" : ex.getMessage())
+							+ " (a .asd defparameter value must be pure data: literals, quote, if/or/and/not over"
+							+ " earlier defparameters)");
 		}
 	}
 
@@ -589,15 +627,25 @@ public final class AsdfSystems {
 	 * self-evaluating), and {@code quote}/{@code if}/{@code or}/{@code and}/{@code not}
 	 * are supported -- exactly enough for the cl-postgres header
 	 * {@code (defparameter *string-file* (if *unicode* ...))} shape. Anything else throws
-	 * (deny by default; the {@code .asd} is never really evaluated).
+	 * (deny by default; the {@code .asd} is never really evaluated). A symbol naming a
+	 * defparameter that WAS bound but to an impure value raises a distinct error naming
+	 * the parameter ({@code unevaluable}) rather than "undefined variable" -- this is the
+	 * "the consumer decides" enforcement point for {@link #defineParameter}.
 	 */
-	private static LispVal evalDataForm(LispVal form, Map<String, LispVal> parameters) {
+	private static LispVal evalDataForm(LispVal form, Map<String, LispVal> parameters,
+			Map<String, String> unevaluable) {
 		if (form instanceof LispSymbol sym) {
 			if (sym.isKeyword()) {
 				return sym;
 			}
-			LispVal value = parameters.get(symbolName(sym));
+			String name = symbolName(sym);
+			LispVal value = parameters.get(name);
 			if (value == null) {
+				String reason = unevaluable.get(name);
+				if (reason != null) {
+					throw new IllegalStateException(
+							LispNames.DEFPARAMETER + " " + sym.name() + " is not pure data (" + reason + ")");
+				}
 				throw new IllegalStateException("undefined variable " + sym.name());
 			}
 			return value;
@@ -618,22 +666,23 @@ public final class AsdfSystems {
 				if (items.size() != 3 && items.size() != 4) {
 					throw new IllegalStateException("unsupported form " + form.print());
 				}
-				boolean test = !(evalDataForm(items.get(1), parameters) instanceof LispNil);
+				boolean test = !(evalDataForm(items.get(1), parameters, unevaluable) instanceof LispNil);
 				if (test) {
-					return evalDataForm(items.get(2), parameters);
+					return evalDataForm(items.get(2), parameters, unevaluable);
 				}
-				return items.size() == 4 ? evalDataForm(items.get(3), parameters) : LispNil.INSTANCE;
+				return items.size() == 4 ? evalDataForm(items.get(3), parameters, unevaluable) : LispNil.INSTANCE;
 			}
 			case LispNames.NOT -> {
 				if (items.size() != 2) {
 					throw new IllegalStateException("unsupported form " + form.print());
 				}
-				return evalDataForm(items.get(1), parameters) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				return evalDataForm(items.get(1), parameters, unevaluable) instanceof LispNil ? LispTrue.INSTANCE
+						: LispNil.INSTANCE;
 			}
 			case LispNames.OR -> {
 				LispVal result = LispNil.INSTANCE;
 				for (int i = 1; i < items.size(); i++) {
-					result = evalDataForm(items.get(i), parameters);
+					result = evalDataForm(items.get(i), parameters, unevaluable);
 					if (!(result instanceof LispNil)) {
 						return result;
 					}
@@ -643,7 +692,7 @@ public final class AsdfSystems {
 			case LispNames.AND -> {
 				LispVal result = LispTrue.INSTANCE;
 				for (int i = 1; i < items.size(); i++) {
-					result = evalDataForm(items.get(i), parameters);
+					result = evalDataForm(items.get(i), parameters, unevaluable);
 					if (result instanceof LispNil) {
 						return result;
 					}
@@ -662,10 +711,12 @@ public final class AsdfSystems {
 	 *
 	 * @param path the {@code .asd} path, or {@code null} when the form is not from one
 	 * @param parameters the parse-time {@code defparameter} bindings
+	 * @param unevaluable the names bound to an impure value, each mapped to the reason
+	 * {@link #evalDataForm} rejected it ({@link #defineParameter})
 	 */
-	private record AsdContext(@Nullable String path, Map<String, LispVal> parameters) {
+	private record AsdContext(@Nullable String path, Map<String, LispVal> parameters, Map<String, String> unevaluable) {
 
-		private static final AsdContext NONE = new AsdContext(null, Map.of());
+		private static final AsdContext NONE = new AsdContext(null, Map.of(), Map.of());
 
 		/** The {@code "<path>: "} prefix every error from this file carries. */
 		private String prefix() {
@@ -704,7 +755,7 @@ public final class AsdfSystems {
 				throw unresolvableReadEval(asd, context, cons.print(), "malformed read-time-eval marker");
 			}
 			try {
-				return evalDataForm(items.get(1), asd.parameters());
+				return evalDataForm(items.get(1), asd.parameters(), asd.unevaluable());
 			}
 			catch (IllegalStateException ex) {
 				throw unresolvableReadEval(asd, context, items.get(1).print(),
@@ -1636,6 +1687,25 @@ public final class AsdfSystems {
 		return List.copyOf(files);
 	}
 
+	/**
+	 * Parses a component's name (the second element of {@code (:file NAME ...)} etc.): a
+	 * string literal stays verbatim, and a symbol ({@code :t}, matching cl-json/test's
+	 * {@code (:module :t ...)}) is coerced like a system designator ({@link #symbolName}
+	 * -- strip a leading keyword colon, downcase) -- real ASDF runs every component name
+	 * through {@code coerce-name}, which accepts any string designator. Anything else is
+	 * a hard error naming the entry.
+	 */
+	private static String componentName(String systemName, LispVal val, LispVal entry) {
+		if (val instanceof LispString str) {
+			return str.value();
+		}
+		if (val instanceof LispSymbol sym) {
+			return symbolName(sym);
+		}
+		throw new IllegalStateException(
+				"system " + systemName + ": component name must be a string or symbol literal: " + entry.print());
+	}
+
 	private static Component parseComponent(String systemName, LispVal entry, String prefix, Features features,
 			Set<String> docComponentTypes) {
 		if (!(entry instanceof LispCons compCons) || !(compCons.car() instanceof LispSymbol type)
@@ -1645,11 +1715,11 @@ public final class AsdfSystems {
 							+ " (:static-file \"name\"), got " + entry.print());
 		}
 		List<LispVal> parts = compCons.toList();
-		if (parts.size() < 2 || !(parts.get(1) instanceof LispString nameStr)) {
+		if (parts.size() < 2) {
 			throw new IllegalStateException(
-					"system " + systemName + ": component name must be a string literal: " + entry.print());
+					"system " + systemName + ": component name must be a string or symbol literal: " + entry.print());
 		}
-		String name = nameStr.value();
+		String name = componentName(systemName, parts.get(1), entry);
 		if ((parts.size() - 2) % 2 != 0) {
 			throw new IllegalStateException(
 					"system " + systemName + ": component " + name + " expects :option value pairs: " + entry.print());
