@@ -7082,13 +7082,33 @@ cases:
         (print (peek-char nil gip-in nil :gip-done))
         (print (open-stream-p gip-in))
         (print (stream-element-type gip-in))
-        (print (stream-element-type (make-instance 'gip-bytes))))
-      ; The handle arm of unread-char is the same signal on every backend.
-      (print (handler-case
-                 (let ((gip-h (make-string-input-stream "abc")))
-                   (read-char gip-h)
-                   (unread-char #\a gip-h))
-               (error (gip-e) (princ-to-string gip-e))))
+        (print (stream-element-type (make-instance 'gip-bytes)))
+        ; input-stream-p / output-stream-p answer the DIRECTION base class the
+        ; instance extends -- a typep, not a predicate generic per class.
+        (print (list (input-stream-p gip-in) (output-stream-p gip-in)))
+        (print (list (input-stream-p (make-instance 'gip-bytes))
+                     (output-stream-p (make-instance 'gip-bytes)))))
+      ; todo-411: the handle arm of unread-char parks the character in the
+      ; handle-side pushback (unread-char.lisp) that read-char, peek-char and
+      ; read-line all drain -- a file, a string input stream and a socket alike.
+      ; A second unread with the cell still full signals, on every backend.
+      (let ((gip-h (make-string-input-stream (format nil "ab~%cd"))))
+        (print (read-char gip-h))
+        (print (unread-char #\a gip-h))
+        (print (peek-char nil gip-h))
+        (print (read-char gip-h))
+        (print (read-line gip-h))
+        (print (read-line gip-h)))
+      (let ((gip-h2 (make-string-input-stream "abc")))
+        (read-char gip-h2)
+        (unread-char #\a gip-h2)
+        (print (handler-case (unread-char #\a gip-h2)
+                 (error (gip-e) (princ-to-string gip-e))))
+        ; The cell is ONE slot for the whole program, and the cases that follow
+        ; share it: drain what the failed second unread left parked.
+        (read-char gip-h2))
+      (print (list (input-stream-p (make-string-input-stream "z"))
+                   (output-stream-p (make-string-input-stream "z"))))
     expected: |
       #\a
       #\a
@@ -7103,7 +7123,16 @@ cases:
       T
       CHARACTER
       (UNSIGNED-BYTE 8)
-      "UNREAD-CHAR is supported only on a Gray input stream"
+      (T NIL)
+      (T NIL)
+      #\a
+      NIL
+      #\a
+      #\a
+      "b"
+      "cd"
+      "UNREAD-CHAR without an intervening READ-CHAR"
+      (T T)
   - name: uiop-add-package-local-nickname
     source: |
       (defpackage #:com.example.apn.deep (:use #:cl) (:export #:apn-answer))

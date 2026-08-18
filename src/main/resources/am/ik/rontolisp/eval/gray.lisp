@@ -556,6 +556,26 @@
   (let ((stream (%synonym-target stream)))
     (if (%obj-p stream) t (open-stream-p stream))))
 
+;; input-stream-p / output-stream-p: the same rule, answered by a typep against
+;; the two direction base classes rather than by a direction generic per class.
+;; Full Gray gives every base class a predicate method; two of those and four
+;; methods would ride in EVERY program that touches the protocol, for a query
+;; the class hierarchy already answers -- and a class reaches this protocol by
+;; subclassing exactly those base classes, so the typep is not an
+;; approximation. A stream that is neither (a bare fundamental-stream
+;; subclass) answers nil for both, like CL.
+(defun rontolisp::%gray-input-stream-p-dispatch (stream)
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (if (typep stream 'rontolisp:fundamental-input-stream) t nil)
+        (input-stream-p stream))))
+
+(defun rontolisp::%gray-output-stream-p-dispatch (stream)
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (if (typep stream 'rontolisp:fundamental-output-stream) t nil)
+        (output-stream-p stream))))
+
 (defun rontolisp::%gray-stream-element-type-dispatch (stream)
   (let ((stream (%synonym-target stream)))
     (if (%obj-p stream)

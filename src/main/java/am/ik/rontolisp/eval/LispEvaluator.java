@@ -1306,6 +1306,12 @@ public final class LispEvaluator {
 		// only while the program registers no generic for the name, which is exactly the
 		// condition GrayStreamsLibrary.OWNABLE_OPERATORS checks on the compile path.
 		wrapGrayOwnableOperator(LispNames.OPEN_STREAM_P, GRAY_OPEN_STREAM_P_DISPATCH);
+		// input-stream-p / output-stream-p answer the DIRECTION a Gray instance was
+		// built with -- a typep against the two direction base classes, not a predicate
+		// generic per class. Ownable like the other three: a class may define a method
+		// on either name, and the Gray default steps aside for it.
+		wrapGrayOwnableOperator(LispNames.INPUT_STREAM_P, GRAY_INPUT_STREAM_P_DISPATCH);
+		wrapGrayOwnableOperator(LispNames.OUTPUT_STREAM_P, GRAY_OUTPUT_STREAM_P_DISPATCH);
 		wrapGrayOwnableOperator(LispNames.STREAM_ELEMENT_TYPE, GRAY_STREAM_ELEMENT_TYPE_DISPATCH);
 		LispVal baseWriteByte = this.globalEnv.lookupFunction(LispNames.WRITE_BYTE);
 		this.globalEnv.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, rawArgs -> {
@@ -3893,6 +3899,10 @@ public final class LispEvaluator {
 	private static final String GRAY_UNREAD_CHAR_DISPATCH = GrayStreamsLibrary.UNREAD_CHAR_DISPATCH;
 
 	private static final String GRAY_OPEN_STREAM_P_DISPATCH = GrayStreamsLibrary.OPEN_STREAM_P_DISPATCH;
+
+	private static final String GRAY_INPUT_STREAM_P_DISPATCH = GrayStreamsLibrary.INPUT_STREAM_P_DISPATCH;
+
+	private static final String GRAY_OUTPUT_STREAM_P_DISPATCH = GrayStreamsLibrary.OUTPUT_STREAM_P_DISPATCH;
 
 	private static final String GRAY_STREAM_ELEMENT_TYPE_DISPATCH = GrayStreamsLibrary.STREAM_ELEMENT_TYPE_DISPATCH;
 

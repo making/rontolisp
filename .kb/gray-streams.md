@@ -95,7 +95,7 @@ listen, read-sequence/write-sequence (normalize a missing end to
 `(length sequence)`), file-position get/set, (todo-252) terpri, fresh-line,
 write-line, princ/prin1/print, force-output/finish-output/clear-output, close,
 and (todo-400) read-char-no-hang, peek-char, unread-char, open-stream-p,
-stream-element-type.
+stream-element-type, and (todo-411) input-stream-p / output-stream-p.
 
 **`peek-char` carries its `peek-type` INTO the helper**, which loops the
 skipping forms itself (`%gray-whitespace-char-p` is the third copy of the
@@ -312,25 +312,94 @@ paths — is retired too (todo-252); what is left of that boundary is
 read-line/read-sequence/listen -- `peek-char` signalling "expects an input
 stream" on the interpreter and BLOCKING ON STDIN on the JVM, `unread-char` /
 `read-char-no-hang` not existing at all, `open-stream-p` answering nil on the
-interpreter and t on the JVM -- is retired too (todo-400). What is left of that
-boundary is `input-stream-p` / `output-stream-p`, which answer nil for a Gray
-instance on every backend: giving them the Gray answer needs a direction
-predicate per base class (two generics, four methods) spliced into every Gray
-program, and no consumer has asked yet.
+interpreter and t on the JVM -- is retired too (todo-400). So is what was left
+of it, `input-stream-p` / `output-stream-p` answering nil for an instance
+(todo-411): they now answer a `typep` against the two DIRECTION base classes
+(`%gray-input-stream-p-dispatch` / `%gray-output-stream-p-dispatch`, ownable
+like `open-stream-p`), which is not an approximation -- a class reaches this
+protocol by subclassing exactly those base classes. That is deliberately NOT
+full Gray's shape (a predicate generic per base class -- two generics and four
+methods -- spliced into every program that uses the protocol) for a query the
+class hierarchy already answers; the `SPLICE_ON_USE` helper was the cheaper half
+of the choice todo-400 recorded. Re-evaluation trigger: if a consumer ever needs
+a class to answer a direction its base classes do not imply, the generics are
+what that costs.
 
-**`unread-char` and `read-char-no-hang` are new built-ins, and only the second
-is complete for a stream HANDLE.** `read-char-no-hang` lowers to `read-char`
-(`LispMacroExpander.expandReadCharNoHang`, plus `Environment`'s own definition
-for the interpreter) -- no source rontolisp can open reports "would block"
-separately from "read one". `unread-char`'s handle arm SIGNALS
-(`LispMacroExpander.UNREAD_CHAR_ONLY_GRAY_MESSAGE`, shared verbatim by both
-seams): no backend keeps a pushback a handle-based read would drain, and adding
-one means a per-handle cell that `read-char`/`%peek-char`/`read-line` all consult
-in hand-written JVM bytecode and WASM as well as in `Environment` -- a feature of
-its own, not part of the Gray dispatch. Signalling is what keeps the four
-backends identical in the meantime; cl-json, local-time and chunga are the
-callers that would want the handle arm. Neither operator needed a per-backend
-compiler class: both are macro lowerings plus `BuiltinFunctionWrappers` entries.
+**`unread-char` and `read-char-no-hang` are new built-ins.** `read-char-no-hang`
+lowers to `read-char` (`LispMacroExpander.expandReadCharNoHang`, plus
+`Environment`'s own definition for the interpreter) -- no source rontolisp can
+open reports "would block" separately from "read one". `unread-char`'s handle arm
+is the pushback described in its own section below. Neither operator needed a
+per-backend compiler class.
+
+## The handle-side pushback of `unread-char` (todo-411)
+
+**A stream HANDLE has a pushback too, and it is ORDINARY LISP on the compile
+paths.** Nothing a runtime holds can be un-read -- a WASI fd, a socket, and the
+interpreter's `BufferedReader` (whose `mark` budget belongs to the peek, not to a
+cell) -- so the character is parked in a one-slot cell that the character reads
+consult:
+
+- **interpreter**: Java, in `Environment.createGlobal` (a `pushbackStream` /
+  `pushbackChar` pair the `read-char` / `%peek-char` / `read-line` /
+  `unread-char` definitions close over). Its built-ins are FUNCTION VALUES, not
+  call sites a pre-pass could rewrite, which is why this half is Java.
+- **both compile paths**: `unread-char.lisp`, spliced by `eval/UnreadCharLibrary`
+  (the `GrayStreamsLibrary.process` pattern), which also rewrites the
+  `read-char` / `read-char-no-hang` / `peek-char` / `read-line` / `unread-char`
+  call sites onto its defuns. The emitted runtimes know nothing, so the JVM and
+  both WASM backends agree by construction rather than by three hand-written
+  implementations.
+
+The trigger is "the program names `unread-char` at all"; a program that does not
+is returned unchanged and stays byte-identical. **It runs LAST in the pipeline,
+over `GrayStreamsLibrary.process`'s output**, because a Gray dispatch helper's
+non-instance FALLBACK (`(unread-char character stream)` in
+`%gray-unread-char-dispatch`) IS the handle arm and must reach the cell -- which
+is also why the trigger, scanning the post-Gray program, fires for a Gray program
+whose only `unread-char` is that fallback.
+
+Contract, identical on all four:
+
+- The KEY is the stream argument AS GIVEN, with an omitted stream and the nil
+  designator folded onto `t` (the value `*standard-input*` holds by default), so
+  the three spellings of standard input compare equal and every other designator
+  compares with `eql`.
+- `read-char` / `read-char-no-hang` DRAIN it; `%peek-char` reads it and LEAVES
+  it (a peek leaves the character in the stream), and `peek-char`'s skipping
+  peek-types drain it exactly when the character is one to skip -- which
+  `%unread-peek-stops-p` decides by running the built-in `peek-char` over a
+  one-character string input stream rather than adding a FOURTH copy of the
+  whitespace set.
+- `read-line` DRAINS it and prepends it to the line, rather than signalling. That
+  is a deliberate widening of what `.todo/411` proposed: `peek-char` is defined
+  as a read plus an unread, so a parked character before a line read is an
+  ordinary shape, and SBCL answers the same line. A pushed-back newline ends the
+  line right there (`""`).
+- A second `unread-char` with the cell still full SIGNALS
+  (`LispMacroExpander.UNREAD_CHAR_TWICE_MESSAGE`, shared verbatim with
+  `unread-char.lisp` and `Environment`). CL calls two unreads without an
+  intervening read an error, and one slot is all the Gray default keeps either.
+- `read-byte`, `read-sequence` and `read` do NOT consult it -- on every backend,
+  so they still agree. A character pushed back before a BYTE read has no meaning,
+  and `read-sequence` / `read` expand into their loops inside the expression
+  compilers, long after this pass could have walked them. (`read-sequence` into a
+  STRING is the near miss: it loops `read-char`, but the loop is generated after
+  the rewrite.)
+
+**A `#'unread-char` FUNCTION VALUE still signals on the compile backends**
+(`LispMacroExpander.UNREAD_CHAR_NOT_A_VALUE_MESSAGE` via `expandUnreadChar`,
+which is what `BuiltinFunctionWrappers`' synthesized wrapper body lowers to):
+the wrapper is built inside the compiler, after every pre-pass, so there is no
+call site to rewrite -- the same first-class limit `(funcall #'read-byte
+instance)` has. The interpreter has no such limit. Keeping the signal there is
+also what keeps a Gray/CLOS program that never calls `unread-char` free of an
+undefined-function warning: those programs get the wrapper anyway, and lowering
+it onto the pushback defun would name a defun the trigger never spliced.
+
+The callers this was for: cl-json's decoder (`.todo/419`'s jose blocker -- it
+cannot scan a number, `true`, `false`, `null` or a nested aggregate without
+`unread-char`), local-time's parser, and chunga's `unread-char*`.
 
 ## `make-broadcast-stream` is a Gray stream (todo-249)
 
@@ -366,16 +435,21 @@ Pinning tests: `LispEvaluatorTest#grayStreamInstanceReceivesWriteCharAndWriteStr
 `#grayInputStreamReadCharReadLineAndSequenceDefaults`,
 `#grayInputStreamPeekUnreadNoHangAndStreamQueries`,
 `#grayInputStreamUnreadCharMethodOwnsThePushback`,
-`#unreadCharOnAStreamHandleSignals`,
+`#unreadCharOnAStreamHandleRoundTrips`,
+`#unreadCharTwiceWithoutAReadSignals`,
+`#unreadCharBeforeAReadLineKeepsTheCharacterInTheLine`,
+`#grayStreamDirectionPredicatesAnswerTheBaseClass`,
 `#grayShimBinaryInputStreamWithMixinAndSetfFilePosition` (the circular-streams
 class shape), `JvmLispCompilerTest#compileAndRunGrayStreamInstanceDispatch`,
 `#compileAndRunGrayBinaryStreamDispatchAndFilePosition`,
 `#compileAndRunGrayInputStreamReadLineAndSequenceDefaults`,
 `#compileAndRunGrayInputStreamPeekUnreadAndStreamQueries`,
-`#compileAndRunUnreadCharOnAStreamHandleSignals`,
+`#compileAndRunUnreadCharOnAStreamHandleRoundTrips`,
+`#compileAndRunGrayStreamDirectionPredicates`,
 `WasmLispCompilerIntegrationTest#grayStreamInstanceDispatch`,
 `#grayBinaryStreamDispatchAndFilePosition`,
-`#grayInputStreamPeekUnreadAndStreamQueries`, ci-spec
+`#grayInputStreamPeekUnreadAndStreamQueries`,
+`#grayStreamDirectionPredicates`, `#unreadCharOnAStreamHandleRoundTrips`, ci-spec
 `gray-stream-instance-dispatch`,
 `gray-stream-binary-round-trip-and-file-position` and
 `gray-stream-input-protocol-widening`.

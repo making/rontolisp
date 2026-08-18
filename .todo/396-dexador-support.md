@@ -138,7 +138,8 @@ Then the feature work:
    `gray-stream-input-protocol-widening`). `:want-stream t` itself is worth
    re-probing against the spike tree: the spike's row above predates this, and
    dexador's `decoding-stream` defines exactly the three ownable operators and
-   `stream-unread-char`. Left behind: `.todo/411`.
+   `stream-unread-char`. `.todo/411`, left behind then, is done: a stream
+   HANDLE has its own one-slot pushback now.
 9. `.todo/405` -- WASM Preview 1 has no non-blocking input probe, so `listen`
    is a compile error and dexador cannot target it.
 

@@ -89,10 +89,11 @@ verification against the actual Quicklisp dist at probe time)
   `:package-inferred-system` and its deps load unpatched except cl-json, whose
   `.asd` wants three parse widenings (`.todo/420`). With those plus `logtest`
   (`.todo/421`), `jose:encode` runs byte-identically on all four backends
-  (HS256/384/512 cross-checked against Python's `hmac`); `jose:decode` is
-  blocked by `unread-char` on a handle (`.todo/411`) and, on the compiled
-  backends, by `progv` (`.todo/423`, which cl-json's decoder forces on every
-  program that loads it). RSA needs the ironclad slice widened
+  (HS256/384/512 cross-checked against Python's `hmac`); `jose:decode`'s JSON
+  half is unblocked now that `unread-char` works on a handle, and what is left
+  is `logtest` (`.todo/421`, which `jose/base64` reaches through
+  `trivial-utf-8`) and, on the compiled backends, `progv` (`.todo/423`, which
+  cl-json's decoder forces on every program that loads it). RSA needs the ironclad slice widened
   (`.todo/424`) — the real public-key sources were verified to load and
   round-trip.
 - **`salza2` (deflate) — verified loadable, deliberately not kept.** 2.1 gzips

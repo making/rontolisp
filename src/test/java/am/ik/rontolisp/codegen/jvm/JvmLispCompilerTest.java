@@ -54,6 +54,14 @@ class JvmLispCompilerTest {
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
 	}
 
+	// unread-char tests pre-process with UnreadCharLibrary.process, in the CLI
+	// pipeline's order: it runs LAST, over the Gray rewrite's output, because a Gray
+	// dispatch helper's handle FALLBACK is itself a call site that must reach the cell.
+	private String compileAndRunUnread(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UnreadCharLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)))));
+	}
+
 	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
 	// pre-pass run by RontoLispCli.
 	private String compileAndRunJson(String lispCode) throws Exception {
@@ -7598,17 +7606,55 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunUnreadCharOnAStreamHandleSignals() throws Exception {
-		// The handle arm of unread-char is the same signal on every backend --
-		// LispMacroExpander.expandUnreadChar keeps the arguments in front of it, so
-		// their effects still happen in CL's order.
-		assertThat(compileAndRun("""
-				(handler-case
-				    (let ((s (make-string-input-stream "abc")))
-				      (read-char s)
-				      (unread-char #\\a s))
-				  (error (e) (print (princ-to-string e))))
-				""")).isEqualTo("\"UNREAD-CHAR is supported only on a Gray input stream\"");
+	void compileAndRunGrayStreamDirectionPredicates() throws Exception {
+		// input-stream-p / output-stream-p reach a Gray instance on the compile path
+		// too, through the same typep-against-the-base-class helpers the interpreter
+		// wraps. A stream HANDLE keeps the bidirectional-lite answer.
+		assertThat(compileAndRunGray("""
+				(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+				(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+				(defmethod rontolisp:stream-write-string ((s gdp-out) str) str)
+				(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
+				      (handle (make-string-input-stream "z")))
+				  (print (list (input-stream-p in) (output-stream-p in)))
+				  (print (list (input-stream-p out) (output-stream-p out)))
+				  (print (list (input-stream-p handle) (output-stream-p handle))))
+				""")).isEqualTo("""
+				(T NIL)
+				(NIL T)
+				(T T)""");
+	}
+
+	@Test
+	void compileAndRunUnreadCharOnAStreamHandleRoundTrips() throws Exception {
+		// The handle-side pushback of unread-char is ordinary Lisp
+		// (unread-char.lisp), spliced and wired to the call sites by the
+		// eval/UnreadCharLibrary pre-pass the CLI pipeline runs -- so read-char,
+		// peek-char and read-line all drain the same one-slot cell, and a second
+		// unread with the cell still full signals.
+		assertThat(compileAndRunUnread("""
+				(let ((s (make-string-input-stream (format nil "ab~%cd"))))
+				  (print (read-char s))
+				  (print (unread-char #\\a s))
+				  (print (peek-char nil s))
+				  (print (read-char s))
+				  (print (read-line s))
+				  (print (read-line s)))
+				(print (handler-case
+				           (let ((s (make-string-input-stream "xy")))
+				             (read-char s)
+				             (unread-char #\\x s)
+				             (unread-char #\\x s))
+				         (error (e) (princ-to-string e))))
+				""")).isEqualTo("""
+				#\\a
+				NIL
+				#\\a
+				#\\a
+				"b"
+				"cd"
+				"UNREAD-CHAR without an intervening READ-CHAR\"""");
 	}
 
 	@Test

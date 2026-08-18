@@ -206,10 +206,16 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
   すべてこれを消費しますが、`stream-read-line` や `stream-read-sequence` を丸ごと
   オーバーライドしたクラスは押し戻しを読み飛ばすので、そうしたクラスは
   `stream-unread-char` も定義してください。
-- `input-stream-p` / `output-stream-p` はディスパッチしません。Gray インスタンスは
-  どちらにも `nil` を返します。
-- ストリーム**ハンドル**への `unread-char` は通知します — ハンドル経由の読み取りが
-  消費できる押し戻しは、どのバックエンドにもありません。
+- `input-stream-p` / `output-stream-p` は、クラスごとの述語メソッドではなく、
+  インスタンスが継承している方向の基底クラスを答えます。`fundamental-input-stream`
+  の子孫は前者に `t`、後者に `nil` を返し、`fundamental-stream` を直接継承した
+  クラスはどちらにも `nil` を返します。どちらの名前にもメソッドを定義して
+  答えを自分のものにできます。
+- ストリーム**ハンドル** — ファイル、文字列入力ストリーム、ソケット — への
+  `unread-char` は、ハンドル側の押し戻しに文字を保管し、`read-char` / `peek-char` /
+  `read-line` がそれを消費します。保持できるのはプロトコル側と同じく 1 ストリームに
+  つき 1 文字で、まだ埋まっている状態での 2 回目の `unread-char` は通知します。
+  `read-byte` / `read-sequence` / `read` はこのセルを参照しません。
 - 読み取り総称関数はプライマリ値のみを返します: `stream-read-line` に
   `(values line missing-newline-p)` のペアはなく、`:eof` が EOF の唯一のシグナルです。
 - Gray インスタンスへの `listen` はインタープリタと JVM で動作します。Preview 1 WASM

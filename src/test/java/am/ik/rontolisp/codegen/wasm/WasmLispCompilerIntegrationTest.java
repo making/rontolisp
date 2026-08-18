@@ -8454,6 +8454,56 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void grayStreamDirectionPredicates() throws Exception {
+		// input-stream-p / output-stream-p on a Gray instance answer the DIRECTION base
+		// class (a typep, not a predicate generic per class); a stream HANDLE keeps the
+		// bidirectional-lite answer. Same answers as the interpreter and the JVM.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+					(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+					(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+					(defmethod rontolisp:stream-write-string ((s gdp-out) str) str)
+					(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
+					      (handle (make-string-input-stream "z")))
+					  (print (list (input-stream-p in) (output-stream-p in)))
+					  (print (list (input-stream-p out) (output-stream-p out)))
+					  (print (list (input-stream-p handle) (output-stream-p handle))))
+					"""))))).isEqualTo("(T NIL)\n(NIL T)\n(T T)");
+	}
+
+	@Test
+	void unreadCharOnAStreamHandleRoundTrips() throws Exception {
+		// The handle-side pushback of unread-char is ordinary Lisp (unread-char.lisp),
+		// spliced and wired to the call sites by eval/UnreadCharLibrary -- so read-char,
+		// peek-char and read-line drain the same one-slot cell here too, and a second
+		// unread with the cell still full signals.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(let ((s (make-string-input-stream (format nil "ab~%cd"))))
+					  (print (read-char s))
+					  (print (unread-char #\\a s))
+					  (print (peek-char nil s))
+					  (print (read-char s))
+					  (print (read-line s))
+					  (print (read-line s)))
+					(print (handler-case
+					           (let ((s (make-string-input-stream "xy")))
+					             (read-char s)
+					             (unread-char #\\x s)
+					             (unread-char #\\x s))
+					         (error (e) (princ-to-string e))))
+					"""))))).isEqualTo("""
+					#\\a
+					NIL
+					#\\a
+					#\\a
+					"b"
+					"cd"
+					"UNREAD-CHAR without an intervening READ-CHAR\"""");
+	}
+
+	@Test
 	void grayBinaryStreamDispatchAndFilePosition() throws Exception {
 		// The read side of the Gray pre-pass (todo-235): read-byte/write-byte and
 		// file-position call sites with a non-literal stream rewrite onto the

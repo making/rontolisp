@@ -43,7 +43,7 @@ The tokens were checked against two independent oracles, not against ourselves:
 | --- | --- |
 | `jose:encode` HS256 / HS384 / HS512 / none | OK, all four backends |
 | `jose:decode`, string-valued claims | OK on the INTERPRETER; the compiled backends need `.todo/423` |
-| `jose:decode` / `inspect-token`, any number / boolean / null / nested claim (i.e. `exp`, `iat`, `nbf`) | BLOCKED on every backend by `.todo/411` |
+| `jose:decode` / `inspect-token`, any number / boolean / null / nested claim (i.e. `exp`, `iat`, `nbf`) | the `.todo/411` half is DONE (cl-json's decoder scans numbers / `true` / `false` / `null` / nested aggregates on a stream HANDLE now); re-probed 2026-08-18 and the remaining blocker is `.todo/421` -- `jose/base64`'s `base64url-decode` dies in `trivial-utf-8::logtest` |
 | wrong key -> `jws-verification-error` (through `cerror`) | OK |
 | malformed token -> `jws-invalid-format` | OK |
 | `exp` / `nbf` / `iat` / `jti` claim checks, `:issuer` / `:audience` / `:subject` | OK |
@@ -61,12 +61,12 @@ Blockers, in the order that unblocks the most:
    `(progn ...)`, a component name written as a symbol (`(:module :t ...)`),
    and a `defparameter` whose value is not pure data. Without these
    `(ql:quickload "jose")` never reaches a single Lisp file.
-2. `.todo/411` (existing) -- `unread-char` on a stream HANDLE signals, so
-   cl-json's decoder cannot scan a number, `true`, `false`, `null` or a nested
-   aggregate. This is THE blocker for `jose:decode`: a real JWT carries `exp` /
-   `iat` / `nbf` as integers. The spike confirmed the decoder is otherwise
-   complete by handing it a Gray input stream instead -- every JSON shape then
-   decoded correctly, so `unread-char` is the whole of it.
+2. ~~`.todo/411` -- `unread-char` on a stream HANDLE signals~~ DONE
+   (2026-08-18): a stream handle has its own one-slot pushback now, and
+   `(json:decode-json-from-string "{\"exp\":1700000000,\"ok\":true,\"n\":null,\"a\":[1,2,{\"b\":3}]}")`
+   answers `((:EXP . 1700000000) (:OK . T) (:N) (:A 1 2 ((:B . 3))))`. That was
+   the JSON half of `jose:decode`; the token half is blocked next by `logtest`
+   below.
 3. `.todo/421` -- `logtest` does not exist. `trivial-utf-8`'s
    `utf-8-bytes-to-string` calls it, so decoding a token's payload to a string
    fails even before the JSON layer.

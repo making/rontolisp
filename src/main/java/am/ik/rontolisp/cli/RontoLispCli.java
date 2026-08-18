@@ -51,6 +51,7 @@ import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.UnreadCharLibrary;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
@@ -711,9 +712,15 @@ public final class RontoLispCli {
 		// the Gray dispatch helpers when the program uses the protocol (and splices
 		// gray.lisp if no load already did), so a CLOS instance stream reaches the
 		// generics in compiled programs like it does on the interpreter.
-		List<LispVal> program = WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary
-			.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded)))),
-					features))));
+		// UnreadCharLibrary.process splices the handle-side pushback of unread-char and
+		// rewrites the character-read call sites onto it. LAST of the four, so a call
+		// site any of them introduced -- a Gray dispatch helper's handle FALLBACK above
+		// all -- reaches the cell too; a program that never names unread-char is
+		// returned unchanged.
+		List<LispVal> program = UnreadCharLibrary
+			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
+					UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded)))),
+					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
 		// sockets variants and as an appended user import under serve, whose service

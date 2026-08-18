@@ -381,6 +381,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UnreadCharLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/unread-char\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.UiopExports"
         },
         "pattern": "am/ik/rontolisp/uiop-exports\\.txt"

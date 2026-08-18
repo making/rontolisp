@@ -100,9 +100,12 @@ class JvmClassShakerCorpusTest {
 							.process(am.ik.rontolisp.eval.HttpReactorLibrary.process(inlined),
 									am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))),
 				am.ik.rontolisp.reader.Features.JVM);
-		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner
-			.prune(am.ik.rontolisp.eval.UsocketLibrary.process(
-					am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.VecLibrary.process(spliced))));
+		// UnreadCharLibrary runs LAST of the splices, over the Gray rewrite's output,
+		// exactly like the CLI: the corpus unreads a character on a stream HANDLE, and
+		// the pushback that carries it is spliced Lisp.
+		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner.prune(am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
+				.process(am.ik.rontolisp.eval.VecLibrary.process(spliced)))));
 
 		byte[] plain = new JvmLispCompiler("Test", false, OptimizeLevel.NONE).compile(program);
 		// The corpus class is the one that once crossed the JVM 65535 constant-pool

@@ -183,10 +183,10 @@ public final class RontoPlayground {
 	private static List<LispVal> frontend(String source, Features features, WitExportDirective.Backend backend) {
 		List<LispVal> read = WitImportInliner.inline(LispReader.readAllFromString(source, features), null, backend,
 				uploads);
-		List<LispVal> program = WitLibrary
-			.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(VecLibrary.process(
-					LispPreludeLibrary.process(
-							UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read))), features)))));
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(WitLibrary.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
+				.process(VecLibrary.process(LispPreludeLibrary.process(
+						UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read))), features))))));
 		// uiop:quit on the WASM button is exit.lisp's wasi_snapshot_preview1 proc_exit
 		// binding (eval/ExitLibrary), like the CLI's Preview 1 output; a no-op for the
 		// JVM button and for a program that never quits.

@@ -13682,15 +13682,67 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void unreadCharOnAStreamHandleSignals() {
-		// No backend keeps a pushback a handle-based read would drain, so the
-		// operator signals rather than dropping the character silently. Same
-		// message on the compiled backends (LispMacroExpander.expandUnreadChar).
+	void unreadCharOnAStreamHandleRoundTrips() {
+		// The handle-side pushback: a string input stream, a file stream and a socket
+		// all park the character in the same one-slot cell, and read-char / peek-char /
+		// read-line drain it. The compiled backends answer the same contract through
+		// unread-char.lisp (eval/UnreadCharLibrary rewrites their call sites).
+		assertThat(evalMulti("""
+				(let ((s (make-string-input-stream "abc")))
+				  (list (read-char s)
+				        (unread-char #\\a s)
+				        (peek-char nil s)
+				        (read-char s)
+				        (read-line s)))
+				""").print()).isEqualTo("(#\\a NIL #\\a #\\a \"bc\")");
+	}
+
+	@Test
+	void unreadCharTwiceWithoutAReadSignals() {
+		// One slot is all the cell has -- CL calls two unreads without an intervening
+		// read an error, and the Gray protocol's own default keeps no more either.
 		assertThatThrownBy(() -> evalMulti("""
 				(let ((s (make-string-input-stream "abc")))
 				  (read-char s)
+				  (unread-char #\\a s)
 				  (unread-char #\\a s))
-				""")).hasMessageContaining("UNREAD-CHAR is supported only on a Gray input stream");
+				""")).hasMessageContaining("UNREAD-CHAR without an intervening READ-CHAR");
+	}
+
+	@Test
+	void unreadCharBeforeAReadLineKeepsTheCharacterInTheLine() {
+		// read-line DRAINS the cell rather than signalling: peek-char is a read plus an
+		// unread, so a parked character before a line read is an ordinary shape. A
+		// pushed-back newline ends the line right there.
+		assertThat(evalMulti("""
+				(let ((s (make-string-input-stream (format nil "ab~%cd"))))
+				  (read-char s)
+				  (unread-char #\\a s)
+				  (list (read-line s) (read-line s)))
+				""").print()).isEqualTo("(\"ab\" \"cd\")");
+	}
+
+	@Test
+	void grayStreamDirectionPredicatesAnswerTheBaseClass() {
+		// input-stream-p / output-stream-p on a Gray instance answer the DIRECTION the
+		// class was built with -- a typep against the two direction base classes rather
+		// than a predicate generic per class. A bare fundamental-stream subclass is
+		// neither; a stream HANDLE stays bidirectional-lite.
+		assertThat(evalMulti("""
+				(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+				(defclass gdp-plain (rontolisp:fundamental-stream) ())
+				(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+				(defmethod rontolisp:stream-write-string ((s gdp-out) str) str)
+				(list (input-stream-p (make-instance 'gdp-in))
+				      (output-stream-p (make-instance 'gdp-in))
+				      (input-stream-p (make-instance 'gdp-out))
+				      (output-stream-p (make-instance 'gdp-out))
+				      (input-stream-p (make-instance 'gdp-plain))
+				      (output-stream-p (make-instance 'gdp-plain))
+				      (input-stream-p (make-string-input-stream "z"))
+				      (output-stream-p (make-string-input-stream "z")))
+				""").print()).isEqualTo("(T NIL NIL T NIL NIL T T)");
 	}
 
 	@Test

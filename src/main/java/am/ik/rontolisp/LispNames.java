@@ -2413,13 +2413,21 @@ public final class LispNames {
 
 	/**
 	 * The {@code unread-char} built-in function ({@code (unread-char character
-	 * [stream])}). Supported on a Gray instance stream only -- it dispatches to
+	 * [stream])}). On a Gray instance it dispatches to
 	 * {@code rontolisp:stream-unread-char}, whose default parks the character in the
-	 * protocol's one-slot pushback. A stream HANDLE has no pushback on any backend, so
-	 * the handle arm signals rather than silently dropping the character
+	 * protocol's one-slot pushback; on a stream HANDLE the character is parked in the
+	 * handle-side pushback the character reads drain -- Java in {@code Environment} for
+	 * the interpreter, {@code unread-char.lisp} on the compile paths
 	 * ({@code .kb/gray-streams.md}).
 	 */
 	public static final String UNREAD_CHAR = "UNREAD-CHAR";
+
+	/**
+	 * The internal {@code rontolisp::%unread-char-push} defun of
+	 * {@code unread-char.lisp}: the handle-side pushback the compile paths' rewrite
+	 * ({@code eval/UnreadCharLibrary}) sends every {@code unread-char} call site to.
+	 */
+	public static final String UNREAD_CHAR_PUSH_INTERNAL = "%UNREAD-CHAR-PUSH";
 
 	/**
 	 * The {@code peek-char} built-in function

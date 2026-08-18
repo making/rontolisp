@@ -2871,14 +2871,24 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The message {@code unread-char} answers for a stream HANDLE, on every backend. No
-	 * backend keeps a pushback a handle-based read would drain -- the one-slot pushback
-	 * is the Gray protocol's, held by {@code rontolisp:stream-unread-char}'s default
-	 * method -- so the operator signals here rather than dropping the character silently.
-	 * Shared with {@code Environment}'s interpreter definition so the two seams answer
+	 * The message a SECOND {@code unread-char} answers while the handle-side pushback
+	 * still holds a character. CL calls two unreads without an intervening read an error,
+	 * and one slot is all the Gray protocol's own default keeps either. Shared verbatim
+	 * with {@code Environment}'s interpreter definition and with
+	 * {@code unread-char.lisp}'s {@code %unread-char-push}, so the four backends answer
 	 * alike.
 	 */
-	public static final String UNREAD_CHAR_ONLY_GRAY_MESSAGE = "UNREAD-CHAR is supported only on a Gray input stream";
+	public static final String UNREAD_CHAR_TWICE_MESSAGE = "UNREAD-CHAR without an intervening READ-CHAR";
+
+	/**
+	 * The message a {@code #'unread-char} FUNCTION VALUE answers on the compile backends.
+	 * The handle-side pushback is a call-site rewrite ({@code eval/UnreadCharLibrary}),
+	 * and a function-value wrapper is synthesized inside the compiler, long after every
+	 * pre-pass -- so there is no call site to rewrite and the operator says so rather
+	 * than dropping the character. The interpreter, whose built-ins ARE function values,
+	 * has no such limit.
+	 */
+	public static final String UNREAD_CHAR_NOT_A_VALUE_MESSAGE = "UNREAD-CHAR is not supported as a function value";
 
 	/**
 	 * Expands {@code (read-char-no-hang [stream [eof-error-p [eof-value]]])} to the
@@ -2907,11 +2917,14 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (unread-char character [stream])} to its arguments followed by the
-	 * {@link #UNREAD_CHAR_ONLY_GRAY_MESSAGE} signal: a stream HANDLE has no pushback on
-	 * any backend. The arguments are kept in front of the {@code error} so their effects
-	 * still happen in CL's order. A Gray instance never reaches this expansion --
-	 * {@code GrayStreamsLibrary.process} has already routed the call to
-	 * {@code rontolisp:stream-unread-char}.
+	 * {@link #UNREAD_CHAR_NOT_A_VALUE_MESSAGE} signal. A CALL SITE never reaches this:
+	 * {@code eval/UnreadCharLibrary} has already rewritten it onto the handle-side
+	 * pushback defun (and {@code GrayStreamsLibrary.process} routes an instance to
+	 * {@code rontolisp:stream-unread-char} before that). What lands here is the
+	 * {@code #'unread-char} function-value wrapper the compilers synthesize, which no
+	 * pre-pass walks -- there is no call site to rewrite, the same first-class limit
+	 * {@code #'read-byte} has on a Gray instance. The arguments are kept in front of the
+	 * {@code error} so their effects still happen in CL's order.
 	 * @param cons the unread-char expression
 	 * @return the expanded expression
 	 */
@@ -2926,7 +2939,7 @@ public final class LispMacroExpander {
 		for (int i = 1; i < parts.size(); i++) {
 			body.add(parts.get(i));
 		}
-		body.add(listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(UNREAD_CHAR_ONLY_GRAY_MESSAGE))));
+		body.add(listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(UNREAD_CHAR_NOT_A_VALUE_MESSAGE))));
 		return listToCons(body);
 	}
 

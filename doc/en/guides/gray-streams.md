@@ -209,10 +209,16 @@ rontolisp protocol has, so a portable class that defines only
   through the protocol's own defaults; a class that overrides
   `stream-read-line` or `stream-read-sequence` outright reads past it, so such a
   class should define `stream-unread-char` too.
-- `input-stream-p` / `output-stream-p` do not dispatch: a Gray instance answers
-  `nil` to both.
-- `unread-char` on a stream HANDLE signals — no backend keeps a pushback a
-  handle-based read would drain.
+- `input-stream-p` / `output-stream-p` answer the DIRECTION base class the
+  instance extends, not a predicate method per class: a
+  `fundamental-input-stream` descendant answers `t` to the first and `nil` to
+  the second, and a subclass of the bare `fundamental-stream` answers `nil` to
+  both. A class may still define a method on either name and own the answer.
+- `unread-char` on a stream HANDLE — a file, a string input stream, a socket —
+  parks the character in a handle-side pushback of its own, which `read-char`,
+  `peek-char` and `read-line` drain. It holds one character for one stream, like
+  the protocol's; a second `unread-char` with the cell still full signals.
+  `read-byte`, `read-sequence` and `read` do not consult it.
 - The read generics return primary values only: `stream-read-line` has no
   `(values line missing-newline-p)` pair — `:eof` is the whole EOF signal.
 - `listen` on a Gray instance works on the interpreter and the JVM; the
