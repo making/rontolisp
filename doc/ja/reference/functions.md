@@ -134,6 +134,7 @@
 | `provide` | `(provide :util)` | モジュールをロード済みとして登録し、以後の `require` を no-op にします。モジュール名を返します。コンパイルパスではリテラルなトップレベルフォームである必要があります |
 | `gensym` | `(gensym)`, `(gensym "tmp")` | `#:g1`, `#:tmp2` -- マクロの一時変数のための新しいシンボル(カウンタはプログラム全体で共有) |
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- 新しいアンインターンドシンボル(gensym の `#:` 規約、カウンタなし) |
+| `copy-symbol` | `(copy-symbol 'foo)` | `#:FOO` -- 同名のアンインターンドシンボル。属性リスト引数は無視され、コピーは `make-symbol` の同一性差異を引き継ぐ |
 | `intern` | `(intern "foo")` | シンボル `foo`。インタプリタでは名前はカレントパッケージ(`in-package` の状態)にインターンされます。`(intern name :keyword)` はキーワードを作り、それ以外のパッケージ引数はエラー |
 | `find-symbol` | `(find-symbol "car")` | 名前が既知(cl シンボル・キーワード・ユーザー定義)なら `car`、なければ `nil`。存在しないパッケージを指定した場合も `nil`(コンパイラ: `nil` を返せるのはリテラル文字列のときだけ) |
 | `find-package` | `(find-package :cl)` | `:cl` -- lite 版: 大文字化されたパッケージ名のキーワード(パッケージオブジェクトはありません)。未知なら `nil`(コンパイラは計算された指定子をコンパイル時に埋め込んだ表から解決します) |
@@ -267,6 +268,9 @@
 | `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(すべてのバックエンドで整数) |
 | `sleep` | `(sleep 0.5)` | 非負の秒数だけブロックして `nil` を返します(WASM Preview 1 と `--no-wasi` 以外は本物のホストタイマー。Preview 1 はクロックをビジーウェイト、`--no-wasi` はシグナル) |
 | `lisp-implementation-type` `lisp-implementation-version` `software-type` `software-version` `machine-type` `machine-version` `machine-instance` `short-site-name` `long-site-name` | `(lisp-implementation-type)` | `"rontolisp"` — 環境問い合わせの定数群。バージョンはビルド固有、`software-type` は `"Unix"`、`machine-type` は対象 ABI(`"JVM"` / `"WASM32"`)、rontolisp が知り得ないものはすべて `nil` |
+| `user-homedir-pathname` | `(user-homedir-pathname)` | `HOME` を**ディレクトリ**パス名として返す(末尾は区切り文字)。変数が未設定なら `nil` |
+| `invoke-debugger` | `(invoke-debugger c)` | 条件を通知し決して戻らない -- 入り込めるデバッガはどのバックエンドにも無い |
+| `compile-file` `compile-file-pathname` `remove-method` | `(compile-file "x.lisp")` | 存在して通知する: rontolisp のプログラムは丸ごとコンパイルされ(fasl も、それを指すパス名も無い)、メソッドは第一級オブジェクトではない |
 | `exp` | `(exp 0)` | `1.0`(インタプリタ/JVMは `Math.exp` を使用。WASMはソフトウェア近似を使用) |
 | `log` | `(log 1)` | `0.0`(自然対数。インタプリタ/JVM は `Math.log`、WASM はソフトウェア近似) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(インタプリタ/JVM は `Math.sin`/`cos`/`tan`、WASM はソフトウェア近似) |

@@ -55,8 +55,8 @@ public final class PackageRegistry {
 			LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF,
 			LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND,
 			LispNames.SLOT_EXISTS_P, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR,
-			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART,
-			LispNames.PPRINT_LOGICAL_BLOCK);
+			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS, LispNames.WITH_COMPILATION_UNIT,
+			LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -170,21 +170,24 @@ public final class PackageRegistry {
 			LispNames.NSTRING_UPCASE, LispNames.NSTRING_DOWNCASE, LispNames.NSTRING_CAPITALIZE,
 			LispNames.LISP_IMPLEMENTATION_TYPE, LispNames.LISP_IMPLEMENTATION_VERSION, LispNames.SOFTWARE_TYPE,
 			LispNames.SOFTWARE_VERSION, LispNames.MACHINE_TYPE, LispNames.MACHINE_VERSION, LispNames.MACHINE_INSTANCE,
-			LispNames.SHORT_SITE_NAME, LispNames.LONG_SITE_NAME);
+			LispNames.SHORT_SITE_NAME, LispNames.LONG_SITE_NAME, LispNames.USER_HOMEDIR_PATHNAME, LispNames.COPY_SYMBOL,
+			LispNames.INVOKE_DEBUGGER, LispNames.REMOVE_METHOD, LispNames.COMPILE_FILE,
+			LispNames.COMPILE_FILE_PATHNAME);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
 			LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT,
-			LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.PRINT_CIRCLE_VAR, LispNames.PRINT_ESCAPE_VAR,
-			LispNames.PRINT_READABLY_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
-			LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR, LispNames.READTABLE_VAR,
-			LispNames.LAMBDA_LIST_KEYWORDS, LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
-			LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READ_EVAL_VAR,
-			LispNames.PRINT_PRETTY_VAR, LispNames.PRINT_RIGHT_MARGIN_VAR, LispNames.PRINT_MISER_WIDTH_VAR,
-			LispNames.PRINT_LINES_VAR, LispNames.PRINT_PPRINT_DISPATCH_VAR, LispNames.PRINT_LENGTH_VAR,
-			LispNames.PRINT_LEVEL_VAR, LispNames.PRINT_BASE_VAR, LispNames.PRINT_RADIX_VAR, LispNames.PRINT_CASE_VAR,
-			LispNames.PRINT_ARRAY_VAR, LispNames.PRINT_GENSYM_VAR, LispNames.MODULES_VAR, LispNames.TRACE_OUTPUT_VAR,
-			LispNames.DEBUG_IO_VAR, LispNames.QUERY_IO_VAR, LispNames.TERMINAL_IO_VAR,
+			LispNames.MOST_POSITIVE_FIXNUM, LispNames.MOST_NEGATIVE_FIXNUM, LispNames.INTERNAL_TIME_UNITS_PER_SECOND,
+			LispNames.PRINT_CIRCLE_VAR, LispNames.PRINT_ESCAPE_VAR, LispNames.PRINT_READABLY_VAR,
+			LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR,
+			LispNames.STANDARD_INPUT_VAR, LispNames.READTABLE_VAR, LispNames.LAMBDA_LIST_KEYWORDS,
+			LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR, LispNames.COMPILE_FILE_PATHNAME_VAR,
+			LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.LOAD_VERBOSE_VAR, LispNames.LOAD_PRINT_VAR,
+			LispNames.READ_EVAL_VAR, LispNames.PRINT_PRETTY_VAR, LispNames.PRINT_RIGHT_MARGIN_VAR,
+			LispNames.PRINT_MISER_WIDTH_VAR, LispNames.PRINT_LINES_VAR, LispNames.PRINT_PPRINT_DISPATCH_VAR,
+			LispNames.PRINT_LENGTH_VAR, LispNames.PRINT_LEVEL_VAR, LispNames.PRINT_BASE_VAR, LispNames.PRINT_RADIX_VAR,
+			LispNames.PRINT_CASE_VAR, LispNames.PRINT_ARRAY_VAR, LispNames.PRINT_GENSYM_VAR, LispNames.MODULES_VAR,
+			LispNames.TRACE_OUTPUT_VAR, LispNames.DEBUG_IO_VAR, LispNames.QUERY_IO_VAR, LispNames.TERMINAL_IO_VAR,
 			LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR);
 
 	/**
@@ -198,6 +201,12 @@ public final class PackageRegistry {
 			"BIGNUM", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "UNSIGNED-BYTE", "SIGNED-BYTE",
 			"BOOLEAN", "SEQUENCE", "ARRAY", "SIMPLE-ARRAY", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING",
 			"CHARACTER", "BASE-CHAR", "STANDARD-CHAR", "SATISFIES", "OTHERWISE", "STREAM",
+			// The stream SUBtypes and the readtable type. A stream is an opaque integer
+			// handle, so `file-stream` is as wide as `stream` minus the two values that
+			// are not handles; `synonym-stream` has an exact test (it is the one stream
+			// kind that is a value); a "readtable" is the nil token the non-readtable-
+			// driven reader hands out. See LispMacroExpander.makeTypeTest.
+			"FILE-STREAM", "SYNONYM-STREAM", "READTABLE",
 			// More empty types (nothing satisfies them, by the same must-not-become-
 			// pkg::name rule): no bit-vector value exists (the bit type is dead,
 			// .todo/180), a defgeneric's dispatcher is a plain function, a defstruct's

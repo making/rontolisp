@@ -38,7 +38,7 @@ a ready-made exerciser for all of it.
 | ~~`.todo/440`~~ | string designators | surface -- LANDED 2026-08-18 |
 | ~~`.todo/441`~~ | wild pathname components | surface -- LANDED 2026-08-18 |
 | ~~`.todo/442`~~ | the CLOS surface (`reinitialize-instance` &c) | surface -- LANDED 2026-08-18 |
-| `.todo/443` | the missing standard names | surface |
+| ~~`.todo/443`~~ | the missing standard names | surface -- LANDED 2026-08-18 |
 
 `437` and `438` are real BUGS -- a library hitting them is silently wrong or
 does not terminate. The rest is missing surface.
@@ -48,8 +48,9 @@ does not terminate. The rest is missing surface.
 - **Wave 1, parallel: `437`, `439`, `440`, `441`, `442`.** Independent of each
   other. All five are done; the printer now walks a list /
   general rank-1 vector, so `438` is unblocked.
-- **Wave 2: `443`.** Last, because it adds the most names and therefore collides
-  hardest on the shared counter below.
+- **Wave 2: `443`.** Done. It added the most names, so the shared counter below
+  moved with it: `list-functions` 430 -> 436, and the pinned `list-macros` STRING
+  gained `DO-SYMBOLS` and `WITH-COMPILATION-UNIT`.
 - **Wave 3: `438`.** After `437` -- a cyclic key stops being an unreadable stack
   trace once nested `print-object` works.
 

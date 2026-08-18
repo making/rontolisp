@@ -563,7 +563,7 @@ public final class ArgumentShapes {
 			LispNames.DESTRUCTURING_BIND, LispNames.DOLIST, LispNames.DOTIMES, LispNames.WITH_SLOTS,
 			LispNames.WITH_ACCESSORS, LispNames.PROG, LispNames.PROG_STAR, LispNames.WITH_OPEN_FILE,
 			LispNames.WITH_OPEN_STREAM, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
-			LispNames.PPRINT_LOGICAL_BLOCK, LispNames.DO_EXTERNAL_SYMBOLS, LispNames.MACROLET,
+			LispNames.PPRINT_LOGICAL_BLOCK, LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS, LispNames.MACROLET,
 			LispNames.SYMBOL_MACROLET);
 
 	/** {@code (head form (type (var) body...) ...)}: the clause variable binds. */

@@ -4,7 +4,15 @@
 
 プリンタが参照するジェネリック関数です。[`defclass`](../special-forms/defclass.md) クラスや [`defstruct`](../special-forms/defstruct.md) 型に対してこの関数の [`defmethod`](../special-forms/defmethod.md) を定義すると、`print`、`princ`、`prin1`、`princ-to-string`、`prin1-to-string`、および [`format`](../macros/format.md) の `~A`/`~S` が、その型のインスタンスを組み込みの `#S(...)` / `#<...>` 構文ではなくそのメソッドを通して出力するようになります。メソッドは渡されたストリームに書き込み、戻り値は無視されます。本体には通常 [`print-unreadable-object`](../macros/print-unreadable-object.md) を使います。
 
-システム提供のメソッドはありません: どのメソッドも特定化していない型は組み込みの表示のままで、`print-object` メソッドを定義していないプログラムの出力は従来どおりです。
+**プリンタ**がこのジェネリック関数を経由するのは、いずれかのメソッドが特定化している型に対してだけです。どのメソッドも対象としていない型は組み込みの表示のままで、`print-object` メソッドを定義していないプログラムの出力は従来どおりです。
+
+`(print-object object stream)` を**直接**呼ぶのは別の話で、対象にユーザーメソッドがあってもなくても常に動作します。Common Lisp はすべてのオブジェクトにシステムメソッドを用意しており、rontolisp も同様だからです。オブジェクトの生の表現を書き (`prin1` と `princ` のどちらの綴りかは `*print-escape*` が決めます)、そのオブジェクトを返します。したがって 1 つのクラスにメソッドを定義しても残りのプリンタが失われることはなく、最も特定的でないメソッドからの `(call-next-method)` もここへ到達します。
+
+```lisp
+(with-output-to-string (s) (print-object 42 s)) ; => "42"
+```
+
+直接呼び出しには制限が 1 つあります。システムメソッドは生の表現を書くため、渡された値の内側にあるインスタンスについてはそのメソッドが参照されません。`print`/`princ`/`prin1` 経由の印字であれば、後述のとおり内側までたどります。
 
 [`defstruct`](../special-forms/defstruct.md) の `(:print-object fn)` / `(:print-function fn)` オプションはこのジェネリック関数に対するメソッドそのものです。したがって両者は交換可能で、同じ型に後から `defmethod` を書けばオプションが定義したメソッドを置き換えます。
 

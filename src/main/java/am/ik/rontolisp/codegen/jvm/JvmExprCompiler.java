@@ -815,13 +815,13 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx, className);
 				case LispNames.WITH_PACKAGE_ITERATOR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx, className);
-				case LispNames.DO_EXTERNAL_SYMBOLS ->
+				case LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS ->
 					// Real on the interpreter (registry-backed); inside #. the macro-time
 					// evaluator resolves it before compilation. A runtime occurrence has
 					// no
 					// package registry behind it here.
-					throw new UnsupportedOperationException(LispNames.DO_EXTERNAL_SYMBOLS
-							+ " requires the interpreter (no runtime package registry in compiled mode)");
+					throw new UnsupportedOperationException(
+							sym.name() + " requires the interpreter (no runtime package registry in compiled mode)");
 				case LispNames.PROG ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx, className);
 				case LispNames.PROG_STAR ->
@@ -1387,6 +1387,8 @@ final class JvmExprCompiler {
 				case LispNames.THE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx, className);
 				case LispNames.EVAL_WHEN ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx, className);
+				case LispNames.WITH_COMPILATION_UNIT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithCompilationUnit(cons), ctx, className);
 				case LispNames.LOCALLY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx, className);
 				case LispNames.WITH_STANDARD_IO_SYNTAX ->

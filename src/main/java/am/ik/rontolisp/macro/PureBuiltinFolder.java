@@ -463,7 +463,7 @@ public final class PureBuiltinFolder {
 			// fold has no reason to reach; skipping it whole is the conservative answer
 			// for both.
 			case LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS,
-					LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK:
+					LispNames.DO_SYMBOLS, LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK:
 				return parts.size() >= 2 ? rebuilt(cons, foldFrom(parts, 2, blocked)) : form;
 			// -- binding lists ------------------------------------------------------
 			case LispNames.LET, LispNames.LET_STAR, LispNames.SYMBOL_MACROLET, LispNames.HANDLER_BIND,

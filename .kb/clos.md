@@ -1088,6 +1088,35 @@ generic. **Gated on the program defining a method**: with none -- and with no co
 in reach either, see the second gate below -- every printing operator compiles exactly as
 before and every existing artifact stays byte-identical.
 
+**The DIRECT call is a separate story, and it always works (todo-443).** The printer's
+route above is what a `defmethod` turns on; `(print-object x s)` written by hand resolves
+to the ordinary generated dispatcher defun named `PRINT-OBJECT`, exactly like any other
+generic. What was missing until todo-443 was CL's SYSTEM method, in both its shapes: with
+no generic at all the call was an undefined function, and with a user method on one class
+every other object hit `%no-applicable-method`. `synthesizePrintObjectDefault` now
+registers the default primary -- `(write-string (if *print-escape* (%prin1-to-string o)
+(%princ-to-string o)) s)`, answering the object -- from `expandDefmethod` when the FIRST
+method is defined (the same hook and the same `hasDefaultPrimary` condition the
+init-protocol generics use) and from `expandTopLevelDefinitions` /
+`LispEvaluator.resolveFunction` when the program only CALLS the name
+(`isCallableSystemGenericName` / `synthesizeCalledSystemGeneric`, shared with the init
+protocol). Two consequences worth knowing:
+
+- It renders through the RAW `%prin1-to-string` / `%princ-to-string`, not through
+  `%print-object-str`, and that is a correctness requirement rather than a shortcut:
+  `printObjectTags` collects specializers from EVERY parameter while a dispatcher
+  dispatches on the FIRST, so a method specialized on its STREAM parameter puts that
+  class in the routed set and a routed default would recurse forever. The visible cost
+  is that a nested instance inside a value handed to a DIRECT call gets the raw
+  rendering, where the printer's own walk consults the method (the todo-437 walk).
+- Two compile-path scans had to learn the name, because the synthesized defun does not
+  exist yet when they run: the `expandTopLevelDefinitions` fast path (which returns early
+  for a program with no definition to splice -- a program that only calls `print-object`
+  is exactly that), and `injectMvSpillGlobal`'s `*print-escape*` gate, which counts
+  `print-object` as a reference for the same reason it already counted
+  `print-unreadable-object`. Without the second the default read an unseeded global and
+  printed the `princ` spelling on the compile backends.
+
 - `printObjectTags(registry)` is ONE of the two gates and the routed tag set (class
   specializers and `defstruct` ones -- a struct name parses as a TYPE specializer
   carrying the struct name, so both descendant-tag families are collected).
@@ -1413,7 +1442,11 @@ before and every existing artifact stays byte-identical.
   `--optimize` DCE and the dispatch tables depend on it): runtime class
   construction (`ensure-class` from computed data, a non-top-level
   `defclass`), `add-method`, `compute-applicable-methods`,
-  `update-instance-for-*`. Class REdefinition of a statically-known name is IN
+  `update-instance-for-*`. `remove-method` (todo-443) EXISTS as a `cl` name and
+  signals when called: a method here is a registry row plus a generated defun,
+  never a first-class object, and without `find-method` no caller can even name
+  the method it means. Re-evaluate together with `add-method` if method
+  metaobjects ever land. Class REdefinition of a statically-known name is IN
   since todo-246 (the widening section above); redefinition from computed data
   remains out with the rest.
   Known static-model seam: on the compile paths `find-class`/`class-of` see the

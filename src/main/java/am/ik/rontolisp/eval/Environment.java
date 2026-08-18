@@ -675,6 +675,11 @@ public final class Environment implements Scope {
 		env.define(LispNames.LOAD_TRUENAME_VAR, LispNil.INSTANCE);
 		env.define(LispNames.COMPILE_FILE_PATHNAME_VAR, LispNil.INSTANCE);
 		env.define(LispNames.COMPILE_FILE_TRUENAME_VAR, LispNil.INSTANCE);
+		// The load-report switches, nil because nothing here reports: load prints no
+		// banner and echoes no form value, and its own :verbose / :print keywords are
+		// accepted and ignored for the same reason (see LispNames.LOAD_VERBOSE_VAR).
+		env.define(LispNames.LOAD_VERBOSE_VAR, LispNil.INSTANCE);
+		env.define(LispNames.LOAD_PRINT_VAR, LispNil.INSTANCE);
 		// *features*: an ordinary special holding the interpreter's feature list. The
 		// compile paths seed the same variable with their own target set
 		// (LispMacroExpander.injectMvSpillGlobal); see .kb/reader-features.md.

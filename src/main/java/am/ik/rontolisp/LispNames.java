@@ -281,6 +281,45 @@ public final class LispNames {
 	 */
 	public static final String LONG_SITE_NAME = "LONG-SITE-NAME";
 
+	/**
+	 * The {@code user-homedir-pathname} prelude function: the {@code HOME} the process
+	 * was started with, as a DIRECTORY pathname; nil when the variable is unset, which
+	 * CLHS allows and is the honest answer on a component given no environment.
+	 */
+	public static final String USER_HOMEDIR_PATHNAME = "USER-HOMEDIR-PATHNAME";
+
+	/**
+	 * The {@code copy-symbol} prelude function: a fresh uninterned symbol of the same
+	 * name, inheriting {@link #MAKE_SYMBOL}'s identity deviation (two uninterned symbols
+	 * of one name are eq -- a symbol IS its spelling and there is no intern table,
+	 * {@code .kb/symbol-runtime-api.md}).
+	 */
+	public static final String COPY_SYMBOL = "COPY-SYMBOL";
+
+	/**
+	 * The {@code invoke-debugger} prelude function: no backend has a debugger to enter
+	 * and CLHS says the call never returns, so it signals the condition unhandled.
+	 */
+	public static final String INVOKE_DEBUGGER = "INVOKE-DEBUGGER";
+
+	/**
+	 * The {@code remove-method} prelude function: exists and signals. A method is a
+	 * registry row plus a generated defun here, never a first-class object, and there is
+	 * no {@code find-method} to obtain one from ({@code .kb/clos.md}).
+	 */
+	public static final String REMOVE_METHOD = "REMOVE-METHOD";
+
+	/**
+	 * The {@code compile-file} prelude function: exists and signals. There is no file
+	 * compiler -- a whole PROGRAM is compiled in one pass and a loaded file is spliced
+	 * into it -- which is the same reason {@link #COMPILE_FILE_PATHNAME_VAR} is
+	 * permanently nil.
+	 */
+	public static final String COMPILE_FILE = "COMPILE-FILE";
+
+	/** The {@code compile-file-pathname} prelude function, the sibling of the above. */
+	public static final String COMPILE_FILE_PATHNAME = "COMPILE-FILE-PATHNAME";
+
 	/** The {@code sin} built-in function. */
 	public static final String SIN = "SIN";
 
@@ -698,11 +737,12 @@ public final class LispNames {
 	public static final String LOAD_TRUENAME_VAR = "*LOAD-TRUENAME*";
 
 	/**
-	 * The {@code *compile-file-pathname*} standard variable. Rontolisp has no
-	 * {@code compile-file} -- the compile backends compile a whole program, and a spliced
-	 * library file is LOADED into that program -- so this is permanently nil on every
-	 * backend, which is exactly its value in a real CL that is loading source. Defined
-	 * because the {@code (or *compile-file-truename* *load-truename*)} idiom reads it.
+	 * The {@code *compile-file-pathname*} standard variable. Rontolisp has no FILE
+	 * compiler -- the compile backends compile a whole program, and a spliced library
+	 * file is LOADED into that program; the {@link #COMPILE_FILE} name exists and signals
+	 * -- so this is permanently nil on every backend, which is exactly its value in a
+	 * real CL that is loading source. Defined because the
+	 * {@code (or *compile-file-truename* *load-truename*)} idiom reads it.
 	 */
 	public static final String COMPILE_FILE_PATHNAME_VAR = "*COMPILE-FILE-PATHNAME*";
 
@@ -711,6 +751,21 @@ public final class LispNames {
 	 * same reason as {@link #COMPILE_FILE_PATHNAME_VAR}.
 	 */
 	public static final String COMPILE_FILE_TRUENAME_VAR = "*COMPILE-FILE-TRUENAME*";
+
+	/**
+	 * The {@code *load-verbose*} standard variable: nil on every backend, which is what
+	 * {@code load} here actually does -- it prints no progress banner, and {@code load}'s
+	 * own {@code :verbose} keyword is accepted and ignored for the same reason. Defined
+	 * because the portable {@code (let ((*load-verbose* nil)) (load f))} idiom BINDS it,
+	 * and an unbound variable is a hard error there.
+	 */
+	public static final String LOAD_VERBOSE_VAR = "*LOAD-VERBOSE*";
+
+	/**
+	 * The {@code *load-print*} standard variable -- nil on every backend, for the same
+	 * reason as {@link #LOAD_VERBOSE_VAR}: nothing echoes the value of each loaded form.
+	 */
+	public static final String LOAD_PRINT_VAR = "*LOAD-PRINT*";
 
 	/**
 	 * The {@code remove} built-in function (return a copy without items eql to the given
@@ -3229,6 +3284,14 @@ public final class LispNames {
 	public static final String DO_EXTERNAL_SYMBOLS = "DO-EXTERNAL-SYMBOLS";
 
 	/**
+	 * The {@code do-symbols} macro: the sibling of {@link #DO_EXTERNAL_SYMBOLS} over
+	 * every symbol ACCESSIBLE in the package -- the ones it owns, internal and external
+	 * alike, plus the exports it inherits through its use list -- each spelled against
+	 * the package that owns it. Interpreter-only for the same reason.
+	 */
+	public static final String DO_SYMBOLS = "DO-SYMBOLS";
+
+	/**
 	 * The {@code lower-case-p} built-in function (true if the character is a lowercase
 	 * letter). Lowered to {@code (not (char= c (char-upcase c)))} so it follows the
 	 * platform's Unicode case tables.
@@ -3891,6 +3954,15 @@ public final class LispNames {
 	 * for when this has to stop being an identity.
 	 */
 	public static final String WITH_STANDARD_IO_SYNTAX = "WITH-STANDARD-IO-SYNTAX";
+
+	/**
+	 * The {@code with-compilation-unit} macro: a {@code progn} around the body, which is
+	 * the whole of it here. Its option list only controls how the deferred-warning report
+	 * of an enclosing unit is merged, and there is no {@code compile-file} to defer a
+	 * warning from -- the compile backends compile a whole program in one pass. Upstream
+	 * ASDF wraps every operation sequence in one.
+	 */
+	public static final String WITH_COMPILATION_UNIT = "WITH-COMPILATION-UNIT";
 
 	/** The internal {@code %make-string-output-stream} helper (string-builder stream). */
 	public static final String MAKE_STRING_OUTPUT_STREAM_INTERNAL = "%MAKE-STRING-OUTPUT-STREAM";
@@ -6629,6 +6701,16 @@ public final class LispNames {
 
 	/** The {@code array-total-size-limit} constant variable. */
 	public static final String ARRAY_TOTAL_SIZE_LIMIT = "ARRAY-TOTAL-SIZE-LIMIT";
+
+	/**
+	 * The {@code most-positive-fixnum} constant variable, substituted at read time
+	 * ({@code LispReader.readSymbol}) because its value is per-backend: the interpreter
+	 * and the JVM backend hold a Java long, a WASM fixnum is an unboxed i31 reference.
+	 */
+	public static final String MOST_POSITIVE_FIXNUM = "MOST-POSITIVE-FIXNUM";
+
+	/** The {@code most-negative-fixnum} constant variable, the sibling of the above. */
+	public static final String MOST_NEGATIVE_FIXNUM = "MOST-NEGATIVE-FIXNUM";
 
 	/** The {@code *print-circle*} variable (accepted and ignored by the printer). */
 	public static final String PRINT_CIRCLE_VAR = "*PRINT-CIRCLE*";

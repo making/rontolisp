@@ -1367,6 +1367,65 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.LONG_SITE_NAME, """
 				(defun long-site-name () nil)
 				""");
+		// user-homedir-pathname: the HOME the process was started with, as a DIRECTORY
+		// pathname (a trailing separator, per CLHS: the name and type components are
+		// nil). The host argument is accepted and ignored -- there is one host. Nil when
+		// the variable is unset, which CLHS allows and is the honest answer on a WASI
+		// component that was given no environment.
+		SOURCES.put(LispNames.USER_HOMEDIR_PATHNAME, """
+				(defun user-homedir-pathname (&optional %uh-host)
+				  (declare (ignore %uh-host))
+				  (let ((%uh-home (%host-getenv "HOME")))
+				    (if (and %uh-home (> (length %uh-home) 0))
+				        (pathname (concatenate 'string (string-right-trim "/" %uh-home) "/"))
+				        nil)))
+				""");
+		// copy-symbol: a fresh uninterned symbol of the same name. It inherits
+		// make-symbol's identity deviation exactly -- two uninterned symbols of one name
+		// are eq here, because a symbol IS its spelling and there is no intern table
+		// (.kb/symbol-runtime-api.md) -- so the copy is not distinguishable from the
+		// original's other copies. copy-props is accepted and ignored: there is no
+		// (setf symbol-plist) to carry a plist across.
+		SOURCES.put(LispNames.COPY_SYMBOL, """
+				(defun copy-symbol (%cs-symbol &optional %cs-copy-props)
+				  (declare (ignore %cs-copy-props))
+				  (make-symbol (symbol-name %cs-symbol)))
+				""");
+		// invoke-debugger: there is no debugger to enter on any backend, and CLHS says
+		// invoke-debugger never returns, so the honest implementation is to signal the
+		// condition unhandled -- which is what entering a debugger that the user then
+		// aborts amounts to here. Handlers established OUTSIDE the caller still see it,
+		// which is CL's behaviour for a condition the debugger is entered on.
+		SOURCES.put(LispNames.INVOKE_DEBUGGER, """
+				(defun invoke-debugger (%id-condition)
+				  (error %id-condition))
+				""");
+		// remove-method: a method is a registry row plus a generated defun here, never a
+		// first-class object -- there is no method metaobject and no find-method to
+		// obtain one from (.kb/clos.md), so no caller can name the method to remove. It
+		// exists (a program that loads may reference it) and signals if it is reached.
+		// RE-EVALUATE when method metaobjects land.
+		SOURCES.put(LispNames.REMOVE_METHOD, """
+				(defun remove-method (%rm-generic %rm-method)
+				  (declare (ignore %rm-generic %rm-method))
+				  (error "remove-method is not supported (no method metaobjects exist to name a method)"))
+				""");
+		// compile-file / compile-file-pathname: there is no file compiler. The compile
+		// backends compile a whole PROGRAM in one pass and a loaded file is spliced into
+		// it, so no fasl is ever produced and no pathname names one -- which is also why
+		// *compile-file-pathname* / *compile-file-truename* are permanently nil. Both
+		// signal rather than answering a fabricated pathname for a file that will never
+		// exist; nothing on any path calls them.
+		SOURCES.put(LispNames.COMPILE_FILE, """
+				(defun compile-file (%cf-input &rest %cf-options)
+				  (declare (ignore %cf-input %cf-options))
+				  (error "compile-file is not supported (no file compiler: a program is compiled whole)"))
+				""");
+		SOURCES.put(LispNames.COMPILE_FILE_PATHNAME, """
+				(defun compile-file-pathname (%cfp-input &rest %cfp-options)
+				  (declare (ignore %cfp-input %cfp-options))
+				  (error "compile-file-pathname is not supported (no file compiler: nothing names its output)"))
+				""");
 		// rontolisp:random-bytes -- the public cryptographic-entropy API, one Lisp
 		// definition over the per-backend %random-byte primitive (SecureRandom on the
 		// interpreter/JVM, WASI random_get on both WASM backends).

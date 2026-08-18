@@ -509,6 +509,29 @@ Pinned by `LispEvaluatorTest#withOpenFileComputedOptionsDispatchAtRunTime` /
 `WasmLispCompilerIntegrationTest#withOpenFileComputedOptionsDispatchAtRunTime` and the
 ci-spec case `computed-stream-options-439` (all four backends).
 
+**The stream TYPE names, and why `file-stream` is as wide as `stream`** (todo-443,
+2026-08-18): `synonym-stream` gets an exact test -- `(%obj-is x '%SYNONYM-STREAM)` -- because
+it is the one stream kind that is a VALUE rather than an opaque handle. `file-stream`
+cannot have one: a handle carries no kind, only the WASM backends could tell a string
+stream's from a file's (by its sign), and the interpreter/JVM `streamPaths` tables are
+Java-side. Rather than diverge per backend, `file-stream` lowers to `integerp` -- the same
+lite `streamp` already has, minus the two values that are not handles (`t` and a synonym
+stream) -- so it is over-broad by exactly the string-stream kinds and identically so
+everywhere. **Re-evaluate when** a per-backend `%file-stream-p` primitive exists, or when
+string streams take negative handles on every backend: either makes the narrow test
+available without a divergence. `readtable` lowers to `null`, because the nil token
+`*readtable*` holds is the only value that can be one (`.kb/reader-features.md`); the
+alternative -- an empty type -- would make `(typep *readtable* 'readtable)` answer nil,
+which is the worse of the two lies. All three are in `PackageRegistry.CL_TYPES` and
+`LispMacroExpander.makeTypeTest`; a name in the first without a case in the second is a
+hard expansion error in `typecase`, not a silent nil.
+
+**`*load-verbose*` / `*load-print*`** (todo-443) are bound and nil on every backend --
+`load` prints no banner and echoes no form value, which is the same reason its own
+`:verbose` / `:print` keywords are dropped below. They are proclaimed special
+(`LispEvaluator`'s `specialVars` seed on the interpreter, the injected `defvar` on the
+compile paths) so the portable `(let ((*load-verbose* nil)) (load f))` binds dynamically.
+
 **`load` takes CL's keyword options** (todo-439, same family): `:if-does-not-exist` is
 REAL -- a false value answers nil instead of signalling, which is the only reason a caller
 passes it -- and `:verbose` / `:print` / `:external-format` are accepted and dropped:

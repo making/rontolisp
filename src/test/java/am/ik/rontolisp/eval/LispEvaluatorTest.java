@@ -7034,7 +7034,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND CTYPECASE DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND CTYPECASE DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DO-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-COMPILATION-UNIT WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -7103,7 +7103,7 @@ class LispEvaluatorTest {
 					"MACHINE-TYPE", "MACHINE-VERSION", "MACHINE-INSTANCE", "SHORT-SITE-NAME", "LONG-SITE-NAME")
 			.doesNotContain("%nstring-replace", "%target-machine-type")
 			.isSorted()
-			.hasSize(430);
+			.hasSize(436);
 	}
 
 	@Test
@@ -12126,6 +12126,113 @@ class LispEvaluatorTest {
 				  (reinitialize-instance o :n 2)
 				  (list (ri-n o) (slot-value o 'm)))
 				""").print()).isEqualTo("(2 10)");
+	}
+
+	@Test
+	void withCompilationUnitIsAPrognAroundItsBody() {
+		assertThat(evalMulti("(with-compilation-unit (:override t) 1 2 3)").print()).isEqualTo("3");
+		assertThat(eval("(with-compilation-unit ())")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void loadReportSwitchesAreBoundAndNil() {
+		assertThat(eval("(list *load-verbose* *load-print*)").print()).isEqualTo("(NIL NIL)");
+		// Special, so a portable (let ((*load-verbose* t)) (load f)) binds dynamically.
+		assertThat(evalMulti("""
+				(defun lv-read () *load-verbose*)
+				(let ((*load-verbose* t)) (lv-read))
+				""")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void aClQualifiedReadTimeConstantAnswersTheConstant() {
+		// The substitutions run in the READER, before package resolution, so the
+		// qualified spelling has to be stripped there or it reaches the resolver as an
+		// ordinary symbol reference.
+		assertThat(eval("(> cl:most-positive-fixnum 1000000)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(< cl:most-negative-fixnum -1000000)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(list cl:t cl:nil cl:char-code-limit)").print()).isEqualTo("(T NIL 1114112)");
+	}
+
+	@Test
+	void doSymbolsIteratesEverySymbolAccessibleInThePackage() {
+		// Everything the package owns plus everything it inherits, each spelled against
+		// the package that owns it -- so cl-user's listing carries the bare cl names.
+		assertThat(evalMulti("""
+				(let ((n 0) (seen nil))
+				  (do-symbols (s :cl-user) (setq n (1+ n))
+				    (when (string= (symbol-name s) "CAR") (setq seen t)))
+				  (list (> n 400) seen))
+				""").print()).isEqualTo("(T T)");
+		// The result form is evaluated with the variable bound to nil, per CL.
+		assertThat(evalMulti("(do-symbols (s :cl-user (if s :bound :nil)) s)").print()).isEqualTo(":NIL");
+	}
+
+	@Test
+	void theStreamAndReadtableTypeNamesResolve() {
+		assertThat(evalMulti("""
+				(list (typep (make-synonym-stream '*standard-output*) 'synonym-stream)
+				      (typep 3 'synonym-stream)
+				      (typep *readtable* 'readtable)
+				      (typep 3 'file-stream)
+				      (typep "s" 'file-stream))
+				""").print()).isEqualTo("(T NIL T T NIL)");
+	}
+
+	@Test
+	void userHomedirPathnameIsADirectoryPathname() {
+		assertThat(evalMulti("""
+				(let ((h (user-homedir-pathname)))
+				  (or (null h)
+				      (and (pathnamep h)
+				           (char= (char (namestring h) (1- (length (namestring h)))) #\\/))))
+				""")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void copySymbolAnswersAnUninternedSymbolOfTheSameName() {
+		assertThat(eval("(symbol-name (copy-symbol 'cs-name))").print()).isEqualTo("\"CS-NAME\"");
+		assertThat(eval("(prin1-to-string (copy-symbol 'cs-name))").print()).isEqualTo("\"#:CS-NAME\"");
+	}
+
+	@Test
+	void theUnsupportedStandardNamesExistAndSignal() {
+		// They must EXIST -- a program that loads may reference them -- and say why
+		// rather than answering something fabricated.
+		assertThat(evalMulti("""
+				(list (handler-case (compile-file "x") (error (e) :cf))
+				      (handler-case (compile-file-pathname "x") (error (e) :cfp))
+				      (handler-case (remove-method 1 2) (error (e) :rm)))
+				""").print()).isEqualTo("(:CF :CFP :RM)");
+	}
+
+	@Test
+	void invokeDebuggerSignalsTheConditionToAnEnclosingHandler() {
+		assertThat(evalMulti("""
+				(handler-case (invoke-debugger (make-condition 'simple-error :format-control "boom"))
+				  (error (e) (princ-to-string e)))
+				""").print()).isEqualTo("\"boom\"");
+	}
+
+	@Test
+	void printObjectIsCallableDirectlyWithAndWithoutAUserMethod() {
+		// CL supplies a system method for every object, so a direct call works with no
+		// user method at all -- and defining one on a class must not lose the printer
+		// for every other class.
+		assertThat(evalMulti("""
+				(defclass po-p () ())
+				(defmethod print-object ((x po-p) s) (write-string "#<PO!>" s))
+				(list (with-output-to-string (s) (print-object 42 s))
+				      (with-output-to-string (s) (print-object "hi" s))
+				      (with-output-to-string (s) (print-object (make-instance 'po-p) s))
+				      (princ-to-string (make-instance 'po-p)))
+				""").print()).isEqualTo("(\"42\" \"\\\"hi\\\"\" \"#<PO!>\" \"#<PO!>\")");
+	}
+
+	@Test
+	void printObjectIsCallableWithNoMethodAnywhere() {
+		assertThat(eval("(with-output-to-string (s) (print-object 42 s))").print()).isEqualTo("\"42\"");
+		assertThat(eval("(functionp (symbol-function 'print-object))")).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test

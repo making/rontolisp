@@ -1640,6 +1640,52 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * The symbols ACCESSIBLE in a designated package -- the ones it owns (external and
+	 * internal alike) plus the external symbols of every package it uses -- as
+	 * canonically spelled symbols in a stable (sorted) order, the {@code do-symbols}
+	 * iteration source.
+	 *
+	 * <p>
+	 * An inherited symbol is spelled against the package that OWNS it, which is the whole
+	 * difference from {@link #externalSymbols}: the same symbol is accessible from many
+	 * packages and has one home, so a {@code (do-symbols (s :my-pkg))} over a package
+	 * that uses {@code cl} yields {@code CAR}, not {@code MY-PKG::CAR}. A name accessible
+	 * along two routes is therefore listed once, under its home spelling.
+	 * @param packageDesignator the package name as given (any case, nickname allowed)
+	 * @return the accessible symbols, canonically spelled
+	 * @throws LispPackageException when no such package exists
+	 */
+	public java.util.List<LispSymbol> accessibleSymbols(String packageDesignator) {
+		String pkg = findPackageName(packageDesignator);
+		if (pkg == null) {
+			throw new LispPackageException("No such package: " + packageDesignator);
+		}
+		LispPackage p = this.registry.get(pkg);
+		if (p == null) {
+			return java.util.List.of();
+		}
+		// Home package -> the names homed there, so an inherited name keeps its owner's
+		// spelling. A LinkedHashMap of sets keeps the collection deterministic before the
+		// final sort.
+		java.util.Map<String, java.util.Set<String>> byHome = new java.util.LinkedHashMap<>();
+		byHome.computeIfAbsent(pkg, k -> new java.util.LinkedHashSet<>()).addAll(p.symbols());
+		for (String used : p.useList()) {
+			LispPackage source = this.registry.get(used);
+			if (source != null) {
+				byHome.computeIfAbsent(used, k -> new java.util.LinkedHashSet<>()).addAll(source.externals());
+			}
+		}
+		java.util.List<LispSymbol> out = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<String, java.util.Set<String>> entry : byHome.entrySet()) {
+			for (String name : entry.getValue()) {
+				out.add(canonical(entry.getKey(), name));
+			}
+		}
+		out.sort(java.util.Comparator.comparing(LispSymbol::name));
+		return out;
+	}
+
+	/**
 	 * {@link #internSpelling(String)} against an EXPLICIT package instead of the current
 	 * one, backing the two-argument {@code (intern name package)}. The {@code keyword}
 	 * pseudo-package answers with the {@code :}-prefixed spelling directly, since it has

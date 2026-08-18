@@ -87,6 +87,8 @@ description and a runnable example you can evaluate in your browser.
 | `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | Writes `#<[type ]...>` around the body's output; returns nil (`:identity` accepted, prints no address) |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | Lite: binds the iterator name to a local FUNCTION always reporting no more symbols (no intern table) |
 | `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | Iterate a package's exported symbols (interpreter only: the compiled backends carry no package registry) |
+| `do-symbols` | `(do-symbols (s :cl-user) (print s))` | Iterate every symbol ACCESSIBLE in a package -- its own plus what it inherits (interpreter only, same reason) |
+| `with-compilation-unit` | `(with-compilation-unit (:override t) body...)` | A `progn` around the body: the options only merge a deferred-warning report, and there is no `compile-file` to defer one from |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,

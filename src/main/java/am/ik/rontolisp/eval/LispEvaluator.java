@@ -436,6 +436,11 @@ public final class LispEvaluator {
 		// upstream's parameter list invites -- binds dynamically there. Without this
 		// the interpreter would bind it lexically and answer differently.
 		this.specialVars.add(LispNames.FEATURES_VAR);
+		// The load-report switches join them: a portable loader binds them around a load
+		// ((let ((*load-verbose* nil)) (load f))), which is a dynamic binding or nothing.
+		// The compile paths get the same proclamation from the injected defvar.
+		this.specialVars.add(LispNames.LOAD_VERBOSE_VAR);
+		this.specialVars.add(LispNames.LOAD_PRINT_VAR);
 	}
 
 	/**
@@ -4884,6 +4889,8 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandThe(cons), env);
 			case LispNames.EVAL_WHEN:
 				return eval(LispMacroExpander.expandEvalWhen(cons), env);
+			case LispNames.WITH_COMPILATION_UNIT:
+				return eval(LispMacroExpander.expandWithCompilationUnit(cons), env);
 			case LispNames.WRITE_CHAR:
 				return evalWriteCharWithGrayDispatch(cons, env);
 			case LispNames.LOCALLY:
@@ -4923,7 +4930,8 @@ public final class LispEvaluator {
 			case LispNames.WITH_PACKAGE_ITERATOR:
 				return eval(LispMacroExpander.expandWithPackageIterator(cons), env);
 			case LispNames.DO_EXTERNAL_SYMBOLS:
-				return evalDoExternalSymbols(cons, env);
+			case LispNames.DO_SYMBOLS:
+				return evalDoSymbols(cons, env, name);
 			case LispNames.PROG:
 				return eval(LispMacroExpander.expandProg(cons, false), env);
 			case LispNames.PROG_STAR:
@@ -5451,23 +5459,30 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Evaluates {@code (do-external-symbols (var package [result]) body...)}: iterates
-	 * the designated package's external symbols (canonically spelled, in sorted order --
-	 * the registry records exports from {@code defpackage}, so this is the real listing,
-	 * unlike the empty {@code with-package-iterator} lite). The result form is evaluated
-	 * with the variable bound to nil, per CL.
+	 * Evaluates {@code (do-external-symbols (var package [result]) body...)} and its
+	 * {@code do-symbols} sibling: iterates the designated package's symbols (canonically
+	 * spelled, in sorted order -- the registry records exports from {@code defpackage},
+	 * so this is the real listing, unlike the empty {@code with-package-iterator} lite).
+	 * The result form is evaluated with the variable bound to nil, per CL.
+	 * @param cons the form
+	 * @param env the environment
+	 * @param operator the operator name, which also selects the symbol source:
+	 * {@code do-external-symbols} takes the exports, {@code do-symbols} everything
+	 * accessible
+	 * @return the result form's value, or nil
 	 */
-	private LispVal evalDoExternalSymbols(LispCons cons, Environment env) {
+	private LispVal evalDoSymbols(LispCons cons, Environment env, String operator) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons specCons) || specCons.toList().isEmpty()
 				|| !(specCons.toList().get(0) instanceof LispSymbol var)) {
-			throw new LispEvalException(
-					LispNames.DO_EXTERNAL_SYMBOLS + " expects ((var package [result]) body...): " + cons.print());
+			throw new LispEvalException(operator + " expects ((var package [result]) body...): " + cons.print());
 		}
 		List<LispVal> spec = specCons.toList();
-		String designator = spec.size() >= 2 ? packageDesignator(LispNames.DO_EXTERNAL_SYMBOLS, eval(spec.get(1), env))
+		String designator = spec.size() >= 2 ? packageDesignator(operator, eval(spec.get(1), env))
 				: this.packageResolver.currentPackageName();
-		for (LispSymbol sym : this.packageResolver.externalSymbols(designator)) {
+		List<LispSymbol> symbols = LispNames.DO_SYMBOLS.equals(operator)
+				? this.packageResolver.accessibleSymbols(designator) : this.packageResolver.externalSymbols(designator);
+		for (LispSymbol sym : symbols) {
 			Environment iterEnv = new Environment(env);
 			iterEnv.define(var.name(), sym);
 			for (LispVal bodyForm : parts.subList(2, parts.size())) {
@@ -6960,8 +6975,8 @@ public final class LispEvaluator {
 			// the system default, so synthesize the generic with it -- the same
 			// machinery the first user defmethod on one of these names runs -- and
 			// define the dispatchers it registered.
-			if (LispMacroExpander.isCallableInitProtocolName(name) && this.closRegistry.findGeneric(name) == null) {
-				for (LispVal form : LispMacroExpander.synthesizeCalledInitProtocolGeneric(name, this.closRegistry)) {
+			if (LispMacroExpander.isCallableSystemGenericName(name) && this.closRegistry.findGeneric(name) == null) {
+				for (LispVal form : LispMacroExpander.synthesizeCalledSystemGeneric(name, this.closRegistry)) {
 					eval(form, this.globalEnv);
 				}
 				for (ClosRegistry.GenericInfo info : this.closRegistry.generics().values()) {

@@ -87,6 +87,8 @@
 | `pprint-logical-block` | `(pprint-logical-block (s obj :prefix "<" :suffix ">") body...)` | プレフィックス、本体の出力、サフィックスを書きます。`obj` がリストでなければ `write` で印字し本体は評価しません。折り返しは起きません(桁位置を持たないため) |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | ライト版: イテレータ名を「もうシンボルはない」と常に返すローカル関数に束縛(intern テーブルなし) |
 | `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | パッケージのエクスポート済みシンボルを反復 (インタプリタ専用。コンパイル済みバックエンドはパッケージレジストリを持たない) |
+| `do-symbols` | `(do-symbols (s :cl-user) (print s))` | パッケージで**アクセス可能な**すべてのシンボルを反復 -- 自身のものと継承したもの (同じ理由でインタプリタ専用) |
+| `with-compilation-unit` | `(with-compilation-unit (:override t) body...)` | 本体を包む `progn`。オプションは遅延警告レポートの統合を指示するだけで、遅延させる元の `compile-file` が存在しない |
 
 マクロは関数値を持ちません。`#'cond` や `(funcall 'setf ...)`
 はエラーです。呼び出し位置でインライン展開される便利なアクセサや述語(`first`, `rest`, `nth`,

@@ -142,6 +142,7 @@ public final class LispMacroExpander {
 			case LispNames.PROCLAIM -> expandProclaim(cons);
 			case LispNames.THE -> expandThe(cons);
 			case LispNames.EVAL_WHEN -> expandEvalWhen(cons);
+			case LispNames.WITH_COMPILATION_UNIT -> expandWithCompilationUnit(cons);
 			case LispNames.WRITE_CHAR -> expandWriteChar(cons);
 			case LispNames.LOCALLY -> expandLocally(cons);
 			case LispNames.WITH_STANDARD_IO_SYNTAX -> expandWithStandardIoSyntax(cons);
@@ -16166,6 +16167,16 @@ public final class LispMacroExpander {
 			synthesized.add(methodDefun);
 			return makeProgn(synthesized);
 		}
+		// print-object is the same shape for the same reason: CL supplies a system
+		// method for EVERY object, so a program that specializes it on one class must
+		// not lose the printer for every other one -- and the dispatcher this defmethod
+		// creates is also what a DIRECT (print-object x s) call resolves to.
+		if (LispNames.PRINT_OBJECT.equals(plainName(generic.name())) && !hasDefaultPrimary(generic)) {
+			List<LispVal> synthesized = new java.util.ArrayList<>();
+			synthesizePrintObjectDefault(generic, synthesized);
+			synthesized.add(methodDefun);
+			return makeProgn(synthesized);
+		}
 		return methodDefun;
 	}
 
@@ -16194,10 +16205,10 @@ public final class LispMacroExpander {
 	 * system default, so {@code (reinitialize-instance obj :initarg v)} is ordinary CL
 	 * with no user method in sight (upstream ASDF's {@code parse-component-form}).
 	 * @param name the function name being resolved
-	 * @return whether {@link #synthesizeCalledInitProtocolGeneric} applies
+	 * @return whether {@link #synthesizeCalledSystemGeneric} applies
 	 */
-	public static boolean isCallableInitProtocolName(String name) {
-		return isInitProtocolGeneric(name);
+	public static boolean isCallableSystemGenericName(String name) {
+		return isInitProtocolGeneric(name) || LispNames.PRINT_OBJECT.equals(name);
 	}
 
 	/**
@@ -16207,13 +16218,20 @@ public final class LispMacroExpander {
 	 * caller evaluates/emits the returned defuns and a dispatcher for every generic this
 	 * registered ({@code addExpandedDefinition}'s completion loop on the compile path,
 	 * {@code defineDispatcher} on the interpreter).
-	 * @param name the plain generic name ({@link #isCallableInitProtocolName})
+	 * @param name the plain generic name ({@link #isCallableSystemGenericName})
 	 * @param closRegistry the registry
 	 * @return the synthesized default-method defuns, empty when the generic exists
 	 */
-	public static List<LispVal> synthesizeCalledInitProtocolGeneric(String name, ClosRegistry closRegistry) {
+	public static List<LispVal> synthesizeCalledSystemGeneric(String name, ClosRegistry closRegistry) {
 		List<LispVal> out = new java.util.ArrayList<>();
-		if (!isInitProtocolGeneric(name) || closRegistry.findGeneric(name) != null) {
+		if (!isCallableSystemGenericName(name) || closRegistry.findGeneric(name) != null) {
+			return out;
+		}
+		if (LispNames.PRINT_OBJECT.equals(name)) {
+			ClosRegistry.GenericInfo generic = new ClosRegistry.GenericInfo(name,
+					List.of(PRINT_OBJECT_VALUE_VAR, PRINT_OBJECT_STREAM_VAR));
+			closRegistry.registerGeneric(generic);
+			synthesizePrintObjectDefault(generic, out);
 			return out;
 		}
 		List<String> paramNames = "SHARED-INITIALIZE".equals(name) ? List.of("%obj", "%slot-names") : List.of("%obj");
@@ -16221,6 +16239,53 @@ public final class LispMacroExpander {
 		closRegistry.registerGeneric(generic);
 		synthesizeInitProtocolDefault(generic, closRegistry, out);
 		return out;
+	}
+
+	/** The parameter names of the synthesized {@code print-object} generic. */
+	private static final String PRINT_OBJECT_VALUE_VAR = "%po-object";
+
+	private static final String PRINT_OBJECT_STREAM_VAR = "%po-stream";
+
+	/**
+	 * Synthesizes {@code print-object}'s system default primary into {@code out} and
+	 * registers it on the generic: write the object's RAW rendering to the stream and
+	 * answer the object, which is what CL's system methods do for every class that has no
+	 * user method.
+	 *
+	 * <p>
+	 * It renders through {@link LispNames#PRIN1_TO_STRING_RAW} /
+	 * {@link LispNames#PRINC_TO_STRING_RAW} -- the unrouted printers every backend lowers
+	 * -- rather than through the routing {@code %print-object-str} walk, and that is not
+	 * an optimization: {@code printObjectTags} collects specializers from EVERY parameter
+	 * while the dispatcher dispatches on the first, so a method specialized on its STREAM
+	 * parameter puts that class in the routed set and a routed default would recurse
+	 * forever. The visible consequence is that a nested instance inside a value passed to
+	 * a DIRECT {@code print-object} call gets the raw rendering, where the printer's own
+	 * walk would consult the method (todo-437).
+	 * @param generic the print-object generic
+	 * @param out the forms to append the default method's defun to
+	 */
+	private static void synthesizePrintObjectDefault(ClosRegistry.GenericInfo generic, List<LispVal> out) {
+		List<ClosRegistry.Specializer> defaults = new java.util.ArrayList<>();
+		for (int i = 0; i < generic.paramNames().size(); i++) {
+			defaults.add(ClosRegistry.Specializer.DEFAULT);
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
+		String defaultName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
+				+ generic.nextMethodIndex();
+		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		List<LispVal> params = new java.util.ArrayList<>();
+		params.add(new LispSymbol(NEXT_METHOD_VAR));
+		generic.paramNames().stream().<LispVal>map(LispSymbol::new).forEach(params::add);
+		LispSymbol value = new LispSymbol(generic.paramNames().get(0));
+		LispVal stream = generic.paramNames().size() >= 2 ? new LispSymbol(generic.paramNames().get(1))
+				: LispTrue.INSTANCE;
+		LispVal rendered = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
+				callOf(LispNames.PRIN1_TO_STRING_RAW, value), callOf(LispNames.PRINC_TO_STRING_RAW, value));
+		LispVal body = makeProgn(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), rendered, stream)), value));
+		out.add(listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName), listToCons(params), body)));
 	}
 
 	/**
@@ -18023,10 +18088,17 @@ public final class LispMacroExpander {
 		closRegistry.setRoutesConditionReports(
 				conditionRoutingGate(program, closRegistry, lazyConditionMessages, dynamic, restartMode));
 		boolean symbolFunctionWrite = usesSymbolFunctionWrite(program);
+		// print-object NAMED but not specialized: CL supplies a system method for every
+		// object, so a program that only CALLS it (or takes #'print-object) still needs
+		// the generic, its default method and a dispatcher -- and a program can do that
+		// with no CLOS definition in it at all, which is exactly what the fast path
+		// below is for. The init-protocol generics need no such gate: calling one
+		// without a single class definition anywhere is meaningless.
+		boolean callsPrintObject = program.stream().anyMatch(f -> usesSymbol(f, LispNames.PRINT_OBJECT));
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !signalClauseMatch
-				&& !metaobjectRuntime && !allocateInstanceRuntime && !compileRuntime && !makeInstanceFunction
-				&& !classSlotDefsRuntime && !symbolFunctionWrite && !changeClassRuntime && !readsSlots(program)
-				&& !closRegistry.routesConditionReports()
+				&& !callsPrintObject && !metaobjectRuntime && !allocateInstanceRuntime && !compileRuntime
+				&& !makeInstanceFunction && !classSlotDefsRuntime && !symbolFunctionWrite && !changeClassRuntime
+				&& !readsSlots(program) && !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -18139,9 +18211,9 @@ public final class LispMacroExpander {
 		// method on it (upstream ASDF applies reinitialize-instance as a matter of
 		// course) still needs its system default and a dispatcher: CL supplies both.
 		for (String initName : List.of(LispNames.INITIALIZE_INSTANCE, LispNames.REINITIALIZE_INSTANCE,
-				LispNames.SHARED_INITIALIZE)) {
+				LispNames.SHARED_INITIALIZE, LispNames.PRINT_OBJECT)) {
 			if (closRegistry.findGeneric(initName) == null && program.stream().anyMatch(f -> usesSymbol(f, initName))) {
-				out.addAll(synthesizeCalledInitProtocolGeneric(initName, closRegistry));
+				out.addAll(synthesizeCalledSystemGeneric(initName, closRegistry));
 				for (ClosRegistry.GenericInfo info : closRegistry.generics().values()) {
 					String genericName = ClosRegistry.normalize(info.name());
 					if (placedDispatchers.add(genericName)) {
@@ -24760,6 +24832,30 @@ public final class LispMacroExpander {
 				// (structure-class ...) (built-in-class ...) (t ...)) to its t branch
 				// -- the slot-value accessor form, which works on struct instances.
 				return LispNil.INSTANCE;
+			case "SYNONYM-STREAM":
+				// The one stream kind that is a VALUE rather than an opaque handle
+				// (LispLayout.SYNONYM_STREAM), so the type has an exact test on every
+				// backend.
+				return objIs(value, List.of(LispLayout.SYNONYM_STREAM_TAG));
+			case "FILE-STREAM":
+				// Lite, and identically so on all four backends: a stream is an opaque
+				// integer handle here, and only the synonym stream carries a tag that
+				// tells its kind -- neither the interpreter nor the JVM can tell a
+				// string stream's handle from a file's (only the WASM backends can, by
+				// its sign), so the type is "an open handle stream" rather than "a
+				// stream open on a file". Over-broad by exactly the string-stream kinds.
+				// RE-EVALUATE when a per-backend %file-stream-p primitive exists, or
+				// when string streams take negative handles on every backend: either
+				// makes the narrower test available without a per-backend divergence.
+				return callOf(LispNames.INTEGERP, value);
+			case "READTABLE":
+				// A readtable is the opaque nil token: the reader is not
+				// readtable-driven,
+				// copy-readtable answers nil and *readtable* is seeded nil, so nil is the
+				// only value that can be one (see LispNames.COPY_READTABLE). The test is
+				// therefore `null`, which is what makes (typep *readtable* 'readtable)
+				// answer t rather than lying in the other direction.
+				return callOf(LispNames.NULL, value);
 			case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY":
 				// Strings are vectors (so arrays) in CL. The rank is NOT checked (a
 				// rank-n array passes a `vector` test too): the rank read would drag
@@ -27408,6 +27504,36 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
 			throw new IllegalArgumentException("eval-when expects a situation list, got: " + cons.print());
+		}
+		List<LispVal> body = parts.subList(2, parts.size());
+		if (body.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		if (body.size() == 1) {
+			return body.get(0);
+		}
+		return makeProgn(body);
+	}
+
+	/**
+	 * Expands {@code (with-compilation-unit (options...) body...)} to the body wrapped in
+	 * a {@code progn}, exactly like {@link #expandEvalWhen}.
+	 *
+	 * <p>
+	 * A {@code progn} is the whole implementation, and a legitimate one: the option list
+	 * ({@code :override}, and implementation extensions) only controls whether the
+	 * deferred-warning report of an ENCLOSING unit is merged into this one, and there is
+	 * no {@code compile-file} here to defer a warning from -- the compile backends
+	 * compile a whole program in one pass, and a loaded file is spliced into it. What the
+	 * form must do is establish the dynamic extent its body runs in, which nesting a
+	 * {@code progn} does. Upstream ASDF wraps every {@code perform} sequence in one.
+	 * @param cons the with-compilation-unit expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithCompilationUnit(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			throw new IllegalArgumentException("with-compilation-unit expects an option list, got: " + cons.print());
 		}
 		List<LispVal> body = parts.subList(2, parts.size());
 		if (body.isEmpty()) {
@@ -31769,9 +31895,13 @@ public final class LispMacroExpander {
 			// :type designator, and its expansion happens in Pass 2 -- long after this
 			// scan -- so the un-expanded operator has to count as the reference. Nothing
 			// else in a program that only prints its own #<...> forms mentions the name.
+			// print-object counts for the same reason: its SYNTHESIZED system default
+			// (expandTopLevelDefinitions) reads the variable to tell prin1 from princ,
+			// and that defun does not exist yet when this scan runs.
 			boolean escapeReader = LispNames.PRINT_ESCAPE_VAR.equals(name);
 			for (LispVal form : program) {
-				if (usesSymbol(form, name) || (escapeReader && usesSymbol(form, LispNames.PRINT_UNREADABLE_OBJECT))) {
+				if (usesSymbol(form, name) || (escapeReader && (usesSymbol(form, LispNames.PRINT_UNREADABLE_OBJECT)
+						|| usesSymbol(form, LispNames.PRINT_OBJECT)))) {
 					printerVars.add(name);
 					break;
 				}
@@ -31779,7 +31909,7 @@ public final class LispMacroExpander {
 		}
 		for (String name : List.of(LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
 				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READTABLE_VAR,
-				LispNames.MODULES_VAR)) {
+				LispNames.MODULES_VAR, LispNames.LOAD_VERBOSE_VAR, LispNames.LOAD_PRINT_VAR)) {
 			for (LispVal form : program) {
 				if (usesSymbol(form, name)) {
 					loadContextVars.add(name);

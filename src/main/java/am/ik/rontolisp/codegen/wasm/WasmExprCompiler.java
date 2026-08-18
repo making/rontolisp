@@ -1228,13 +1228,13 @@ final class WasmExprCompiler {
 				case LispNames.GO -> WasmTagbodyCompiler.compileGo(cons, ctx);
 				case LispNames.PRINT_UNREADABLE_OBJECT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx);
-				case LispNames.DO_EXTERNAL_SYMBOLS ->
+				case LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS ->
 					// Real on the interpreter (registry-backed); inside #. the macro-time
 					// evaluator resolves it before compilation. A runtime occurrence has
 					// no
 					// package registry behind it here.
-					throw new UnsupportedOperationException(LispNames.DO_EXTERNAL_SYMBOLS
-							+ " requires the interpreter (no runtime package registry in compiled mode)");
+					throw new UnsupportedOperationException(
+							sym.name() + " requires the interpreter (no runtime package registry in compiled mode)");
 				case LispNames.WITH_PACKAGE_ITERATOR ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx);
 				case LispNames.PROG -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx);
@@ -1685,6 +1685,8 @@ final class WasmExprCompiler {
 				case LispNames.PROCLAIM -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProclaim(cons), ctx);
 				case LispNames.THE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx);
 				case LispNames.EVAL_WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx);
+				case LispNames.WITH_COMPILATION_UNIT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithCompilationUnit(cons), ctx);
 				case LispNames.LOCALLY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx);
 				case LispNames.WITH_STANDARD_IO_SYNTAX ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx);

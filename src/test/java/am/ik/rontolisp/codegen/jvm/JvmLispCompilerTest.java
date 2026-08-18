@@ -8830,7 +8830,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND CTYPECASE DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND CTYPECASE DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DO-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-COMPILATION-UNIT WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -8841,12 +8841,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("430");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("436");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("430");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("436");
 	}
 
 	@Test
@@ -11282,6 +11282,47 @@ class JvmLispCompilerTest {
 				  (reinitialize-instance o :n 2)
 				  (print (list (jri-n o) (slot-value o 'm))))
 				""")).isEqualTo("(2 10)");
+	}
+
+	@Test
+	void compileAndRunTheMissingStandardNames() throws Exception {
+		// The todo-443 batch on the JVM: with-compilation-unit is a progn, the load
+		// switches are bound nil, a cl:-qualified read-time constant answers the
+		// constant, the three new type names resolve, and the prelude-backed names
+		// exist (the four unsupported ones signal rather than answering a fabrication).
+		assertThat(compileAndRun("""
+				(print (with-compilation-unit (:override t) 1 2 3))
+				(print (list *load-verbose* *load-print*))
+				(print (> cl:most-positive-fixnum 1000000))
+				(print (list (typep (make-synonym-stream '*standard-output*) 'synonym-stream)
+				             (typep *readtable* 'readtable)
+				             (typep 3 'file-stream)
+				             (typep "s" 'file-stream)))
+				(print (symbol-name (copy-symbol 'jcs-name)))
+				(print (let ((h (user-homedir-pathname))) (or (null h) (pathnamep h))))
+				(print (list (handler-case (compile-file "x") (error (e) :cf))
+				             (handler-case (compile-file-pathname "x") (error (e) :cfp))
+				             (handler-case (remove-method 1 2) (error (e) :rm))
+				             (handler-case (invoke-debugger (make-condition 'simple-error :format-control "b"))
+				               (error (e) :dbg))))
+				""")).isEqualTo("3\n(NIL NIL)\nT\n(T T T NIL)\n\"JCS-NAME\"\nT\n(:CF :CFP :RM :DBG)");
+	}
+
+	@Test
+	void compileAndRunPrintObjectCalledDirectly() throws Exception {
+		// print-object is callable directly with no user method anywhere (CL supplies a
+		// system method for every object), and defining one on a class must not lose
+		// the printer for every other class.
+		assertThat(compileAndRun("(print-object 42 *standard-output*)")).isEqualTo("42");
+		assertThat(compileAndRun("""
+				(defclass jpo-p () ())
+				(defmethod print-object ((x jpo-p) s) (write-string "#<JPO!>" s))
+				(print-object 42 *standard-output*)
+				(terpri)
+				(print-object (make-instance 'jpo-p) *standard-output*)
+				(terpri)
+				(print (make-instance 'jpo-p))
+				""")).isEqualTo("42\n#<JPO!>\n#<JPO!>");
 	}
 
 	@Test

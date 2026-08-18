@@ -104,3 +104,5 @@ categories:
       - { slug: pprint-logical-block, name: "pprint-logical-block" }
       - { slug: with-package-iterator, name: "with-package-iterator" }
       - { slug: do-external-symbols, name: "do-external-symbols" }
+      - { slug: do-symbols, name: "do-symbols" }
+      - { slug: with-compilation-unit, name: "with-compilation-unit" }

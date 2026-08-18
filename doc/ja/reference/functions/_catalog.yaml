@@ -329,6 +329,7 @@ categories:
     functions:
       - { slug: gensym, name: "gensym" }
       - { slug: make-symbol, name: "make-symbol" }
+      - { slug: copy-symbol, name: "copy-symbol" }
       - { slug: intern, name: "intern" }
       - { slug: find-symbol, name: "find-symbol" }
       - { slug: find-package, name: "find-package" }
@@ -408,6 +409,9 @@ categories:
       - { slug: get-internal-run-time, name: "get-internal-run-time" }
       - { slug: sleep, name: "sleep" }
       - { slug: environment-enquiry, name: "lisp-implementation-type lisp-implementation-version software-type software-version machine-type machine-version machine-instance short-site-name long-site-name" }
+      - { slug: user-homedir-pathname, name: "user-homedir-pathname" }
+      - { slug: invoke-debugger, name: "invoke-debugger" }
+      - { slug: compile-file, name: "compile-file compile-file-pathname remove-method" }
   - title: "rontolisp パッケージ"
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }

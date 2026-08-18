@@ -2,6 +2,7 @@ package am.ik.rontolisp.reader;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
@@ -442,7 +443,7 @@ public final class LispReader {
 	}
 
 	private LispVal readSymbol(Token.SymbolToken sym) {
-		String name = sym.name();
+		String name = unqualifyClConstant(sym.name());
 		if ("NIL".equals(name)) {
 			return LispNil.INSTANCE;
 		}
@@ -454,13 +455,13 @@ public final class LispReader {
 			// nil/t. This gives all three backends parity for free.
 			return new LispDouble(Math.PI);
 		}
-		if ("MOST-POSITIVE-FIXNUM".equals(name) || "MOST-NEGATIVE-FIXNUM".equals(name)) {
+		if (LispNames.MOST_POSITIVE_FIXNUM.equals(name) || LispNames.MOST_NEGATIVE_FIXNUM.equals(name)) {
 			// The fixnum range constants, read as self-evaluating integers like pi.
 			// The value is backend-dependent (fixed at read time like *features*):
 			// WASM fixnums are unboxed i31 references, the interpreter and the JVM
 			// backend use Java longs.
 			boolean wasm = this.features.contains("rontolisp-wasm");
-			long value = name.startsWith("MOST-POSITIVE") ? (wasm ? (1L << 30) - 1 : Long.MAX_VALUE)
+			long value = LispNames.MOST_POSITIVE_FIXNUM.equals(name) ? (wasm ? (1L << 30) - 1 : Long.MAX_VALUE)
 					: (wasm ? -(1L << 30) : Long.MIN_VALUE);
 			return new LispInteger(value);
 		}
@@ -508,6 +509,39 @@ public final class LispReader {
 			return sourceLiteral;
 		}
 		return new LispSymbol(name);
+	}
+
+	/**
+	 * The standard constants {@link #readSymbol} substitutes at READ time, before any
+	 * package resolution runs.
+	 */
+	private static final Set<String> CL_READ_TIME_CONSTANTS = Set.of("NIL", "T", "PI", LispNames.MOST_POSITIVE_FIXNUM,
+			LispNames.MOST_NEGATIVE_FIXNUM, LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT,
+			LispNames.CHAR_CODE_LIMIT, LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.LAMBDA_LIST_KEYWORDS);
+
+	/**
+	 * The member name of a {@code cl:}-qualified standard constant, or the name unchanged
+	 * when it is not one.
+	 *
+	 * <p>
+	 * The substitutions in {@link #readSymbol} run BEFORE {@code PackageResolver}, so
+	 * they only ever see the spelling as written: without this strip, {@code cl:pi} /
+	 * {@code cl:most-positive-fixnum} / {@code cl:char-code-limit} reach the resolver as
+	 * ordinary symbol references and end up as an unbound variable (or, for the names the
+	 * registry does not own, a "not external in the CL package" error) while the bare
+	 * spelling one line above answers the constant. A qualified spelling of a standard
+	 * name means the standard name, so it is stripped here rather than left for a
+	 * per-backend binding to reproduce.
+	 * @param name the symbol name as read (upcased, package prefix intact)
+	 * @return the unqualified constant name, or {@code name}
+	 */
+	private static String unqualifyClConstant(String name) {
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		if (qualified == null || !LispNames.CL_PKG.equals(PackageRegistry.canonicalBuiltinName(qualified.pkg()))
+				|| !CL_READ_TIME_CONSTANTS.contains(qualified.member())) {
+			return name;
+		}
+		return qualified.member();
 	}
 
 	/**

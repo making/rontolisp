@@ -137,6 +137,7 @@ page.
 | `provide` | `(provide :util)` | Mark a module as loaded so a later `require` of it is a no-op. Returns the module name. On the compile path it must be a literal, top-level form |
 | `gensym` | `(gensym)`, `(gensym "tmp")` | `#:g1`, `#:tmp2` -- a fresh symbol for macro temporaries (the counter is program-wide) |
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- a fresh uninterned symbol (the gensym `#:` convention, no counter) |
+| `copy-symbol` | `(copy-symbol 'foo)` | `#:FOO` -- an uninterned symbol of the same name; the property-list argument is ignored, and the copy inherits `make-symbol`'s identity deviation |
 | `intern` | `(intern "foo")` | The symbol `foo`. On the interpreter the name is interned into the current package (`in-package` state); `(intern name :keyword)` builds a keyword, any other package argument is an error |
 | `find-symbol` | `(find-symbol "car")` | `car` when the name is known (cl symbol, keyword, or user definition), else `nil`; a package that does not exist yields `nil` too (compilers: only a literal string can answer `nil`) |
 | `find-package` | `(find-package :cl)` | `:cl` -- lite: the upcased package name as a keyword (no package objects), `nil` when unknown (the compilers answer a computed designator from a table baked in at compile time) |
@@ -270,6 +271,9 @@ page.
 | `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (integer on every backend) |
 | `sleep` | `(sleep 0.5)` | block for a non-negative number of seconds and return `nil` (a real host timer everywhere but WASM Preview 1, which busy-waits on the clock, and `--no-wasi`, which signals) |
 | `lisp-implementation-type` `lisp-implementation-version` `software-type` `software-version` `machine-type` `machine-version` `machine-instance` `short-site-name` `long-site-name` | `(lisp-implementation-type)` | `"rontolisp"` — the environment enquiry constants: the version is the build's, `software-type` is `"Unix"`, `machine-type` is the ABI targeted (`"JVM"` / `"WASM32"`), and everything rontolisp cannot know is `nil` |
+| `user-homedir-pathname` | `(user-homedir-pathname)` | The `HOME` directory as a DIRECTORY pathname (trailing separator), or `nil` when the variable is unset |
+| `invoke-debugger` | `(invoke-debugger c)` | Signals the condition and never returns -- no backend has a debugger to enter |
+| `compile-file` `compile-file-pathname` `remove-method` | `(compile-file "x.lisp")` | Exist and signal: a rontolisp program is compiled whole (no fasl, no pathname naming one) and a method is not a first-class object |
 | `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM use `Math.log`, WASM a software approximation) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM use `Math.sin`/`cos`/`tan`, WASM a software approximation) |
