@@ -5164,8 +5164,44 @@ public final class LispMacroExpander {
 		}
 		LispVal folded = literalCharBagString(bag);
 		List<LispVal> rewritten = new java.util.ArrayList<>(parts);
-		rewritten.set(1, folded != null ? folded : fmtCall(LispNames.COERCE, bag, quoteOf(LispNames.STRING)));
+		rewritten.set(1, folded != null ? folded : computedCharBagForm(bag));
 		return (LispCons) listToCons(rewritten);
+	}
+
+	// (coerce bag 'string) behind a type test. The bag is a SEQUENCE of characters, and
+	// the compile paths' coerce is total where the interpreter's is not: a CHARACTER bag
+	// coerced to "" there, so (string-trim #\* "*x*") quietly trimmed nothing on the
+	// three compile backends where the interpreter (and SBCL) signal. Guarding here
+	// rather than in coerce keeps the change to the one position whose contract this
+	// pass owns.
+	private static LispVal computedCharBagForm(LispVal bag) {
+		LispSymbol b = new LispSymbol("__cb_x");
+		LispVal sequencep = fmtCall(LispNames.OR, callOf(LispNames.STRINGP, b), callOf(LispNames.LISTP, b),
+				callOf(LispNames.VECTORP, b));
+		LispVal coerced = fmtCall(LispNames.COERCE, b, quoteOf(LispNames.STRING));
+		LispVal signal = mvCall(LispNames.ERROR,
+				new LispString(LispNames.STRING_TRIM + " expects a sequence of characters as the bag, got: ~s"), b);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(b, bag)))),
+				makeIf(sequencep, coerced, signal)));
+	}
+
+	/**
+	 * Normalizes BOTH arguments of a {@code string-trim} / {@code string-left-trim} /
+	 * {@code string-right-trim} call for the per-backend trim compilers: the character
+	 * bag through {@link #normalizeCharBag(LispCons)}, and the trimmed value through the
+	 * string-designator coercion.
+	 *
+	 * <p>
+	 * The two positions are NOT the same kind and must not be widened alike. CL specifies
+	 * the trimmed value as a string DESIGNATOR -- {@code (string-trim "*" '*foo*)} is
+	 * {@code "FOO"} -- while the bag is a SEQUENCE of characters, so a character there is
+	 * a type error and not a one-character bag ({@code (string-trim #\* "*x*")} signals
+	 * in SBCL). Widening the bag too would lose that error.
+	 * @param cons the trim expression
+	 * @return the same expression with a string-valued bag and a string-valued target
+	 */
+	public static LispCons normalizeStringTrimArgs(LispCons cons) {
+		return normalizeStringDesignatorArg(normalizeCharBag(cons), 2);
 	}
 
 	/**
@@ -22275,6 +22311,106 @@ public final class LispMacroExpander {
 	private static boolean isStringDesignatorCoercion(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
 				&& LispNames.STRING.equals(op.name()) && cons.isProperList() && cons.toList().size() == 2;
+	}
+
+	/**
+	 * Wraps the argument at {@code index} of a call in the shared {@code (string ...)}
+	 * designator coercion, unless it is already a literal string or a hand-written
+	 * {@code (string ...)}.
+	 *
+	 * <p>
+	 * This is the one widening point for a CL <em>string designator</em> position: the
+	 * backends' string intrinsics take strings, so an argument that is a symbol or a
+	 * character has to become one before it reaches them. Routing through
+	 * {@code (string ...)} rather than teaching each intrinsic the designator rules keeps
+	 * ONE definition of the coercion -- and, since
+	 * {@link #strictStringDesignatorForm(LispVal)} makes that coercion type-check, one
+	 * definition of the type error a non-designator earns too.
+	 * @param cons the call
+	 * @param index the argument position CL specifies as a string designator
+	 * @return the call with that argument normalized
+	 */
+	public static LispCons normalizeStringDesignatorArg(LispCons cons, int index) {
+		List<LispVal> parts = cons.toList();
+		if (index >= parts.size()) {
+			return cons;
+		}
+		LispVal arg = parts.get(index);
+		if (arg instanceof LispString || isStringDesignatorCoercion(arg)) {
+			return cons;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(parts);
+		out.set(index, callOf(LispNames.STRING, arg));
+		return (LispCons) listToCons(out);
+	}
+
+	/**
+	 * The string a COMPILE-TIME-KNOWN designator names, or {@code null} when the argument
+	 * is computed. Folding these keeps the common {@code (string 'foo)} /
+	 * {@code (string-trim "*" '*foo*)} shape a constant instead of paying for
+	 * {@link #strictStringDesignatorForm(LispVal)}'s runtime guard.
+	 *
+	 * <p>
+	 * A literal symbol reaches an AST pass as {@code (quote name)} -- a BARE symbol is a
+	 * variable reference, not a designator -- and its spelling is the member name, so a
+	 * keyword's package colon and a package qualifier both come off here exactly as
+	 * {@code symbol-name} would leave them.
+	 * @param arg the argument expression of a (string ...) call
+	 * @return the constant string, or null
+	 */
+	public static @Nullable String literalStringDesignator(LispVal arg) {
+		return switch (arg) {
+			case LispString s -> s.value();
+			case LispChar c -> new String(Character.toChars(c.codePoint()));
+			case LispNil ignored -> "NIL";
+			case LispTrue ignored -> "T";
+			case LispSymbol sym when sym.isKeyword() -> LispSymbol.memberName(sym.name());
+			case LispCons cons when isQuoteForm(cons) && cons.toList().get(1) instanceof LispSymbol sym ->
+				LispSymbol.memberName(sym.name());
+			default -> null;
+		};
+	}
+
+	// Whether the form is (quote x) -- the shape a literal symbol has in the AST.
+	private static boolean isQuoteForm(LispCons cons) {
+		return cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name()) && cons.isProperList()
+				&& cons.toList().size() == 2;
+	}
+
+	/**
+	 * The type-checking lowering of a computed {@code (string x)} that the COMPILE paths
+	 * emit, so their designator coercion signals on a non-designator exactly as the
+	 * interpreter's does.
+	 *
+	 * <p>
+	 * Both compile backends render {@code (string x)} as the princ coercion, which is
+	 * total: {@code (string 42)} answered {@code "42"} where the interpreter signalled.
+	 * That leniency is not a harmless convenience -- every string-designator position
+	 * routes through this one call, so it silently turned a caller's type error into a
+	 * plausible-looking string in {@code string=}, in the {@code string<} family (whose
+	 * shared {@code %string-compare} walk opens with {@code (string a)}), and in every
+	 * position widened for todo-440. Losing a type error where one belongs is worse than
+	 * the designator gap it was covering.
+	 *
+	 * <p>
+	 * The guard admits exactly the three CL designator types. {@code stringp} is true of
+	 * a mutable character vector on every backend, so a fill-pointer buffer still
+	 * coerces; {@code symbolp} covers {@code nil} and {@code t}, which are symbols and
+	 * therefore designate {@code "NIL"} and {@code "T"}. The accepted branch is
+	 * {@code princ-to-string}, which is the emission {@code (string x)} already had --
+	 * including dropping a keyword's package colon.
+	 * @param arg the argument expression of a computed (string ...) call
+	 * @return the guarded coercion
+	 */
+	public static LispVal strictStringDesignatorForm(LispVal arg) {
+		LispSymbol g = new LispSymbol("__sd_x");
+		LispVal designatorp = fmtCall(LispNames.OR, callOf(LispNames.STRINGP, g), callOf(LispNames.SYMBOLP, g),
+				callOf(LispNames.CHARACTERP, g));
+		LispVal coerced = callOf(LispNames.PRINC_TO_STRING, g);
+		LispVal signal = mvCall(LispNames.ERROR,
+				new LispString(LispNames.STRING + " expects a string designator, got: ~s"), g);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(g, arg)))),
+				makeIf(designatorp, coerced, signal)));
 	}
 
 	/**

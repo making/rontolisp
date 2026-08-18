@@ -25,8 +25,6 @@ final class WasmStringRuntimeBuilder {
 
 	private static final int BACKSLASH = 0x5C;
 
-	private static final int COLON = 0x3A;
-
 	// Fold modes for the shared code-point build core.
 	private static final int UPCASE = 1;
 
@@ -1317,7 +1315,7 @@ final class WasmStringRuntimeBuilder {
 		declareI32AndStrArrayLocals(w, 7, 1);
 		int pos = 1, end = 2, start = 3, cur = 4, cp = 5, step = 6, k = 7, inArr = 8;
 		setStrArray(w, 0, inArr);
-		emitDesignatorContentRange(w, 0, inArr, pos, end, cp);
+		emitStringContentRange(w, 0, pos, end);
 		emitCaseFoldCore(w, inArr, pos, end, start, cur, cp, step, k, -1, upcase ? UPCASE : DOWNCASE);
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -1335,7 +1333,7 @@ final class WasmStringRuntimeBuilder {
 		declareI32AndStrArrayLocals(w, 8, 1);
 		int pos = 1, end = 2, start = 3, cur = 4, cp = 5, step = 6, k = 7, ws = 8, inArr = 9;
 		setStrArray(w, 0, inArr);
-		emitDesignatorContentRange(w, 0, inArr, pos, end, cp);
+		emitStringContentRange(w, 0, pos, end);
 		emitCaseFoldCore(w, inArr, pos, end, start, cur, cp, step, k, ws, CAPITALIZE);
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -2056,72 +2054,23 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 	}
 
-	// Sets posLocal/endLocal to the string-designator content byte range (as 0-based
-	// indices into arrLocal, the value's $str_bytes) of the value at the given param
-	// local, so the case functions accept a symbol/keyword as well as a string (CL
-	// string-designator coercion). A real string ({@code "abc"}) uses the range between
-	// its surrounding quotes ([1, len-1)); a symbol (a bare, RESOLVED spelling with no
-	// quotes) uses everything after its LAST colon, which is the same "princ spelling"
-	// rule symbol-name and string already use (_princ_to_str). Dropping only a LEADING
-	// colon was not enough: a package-qualified symbol kept its qualifier, so
-	// (string-downcase 'foo::test) answered "foo::test" on the compiled backends where
-	// the interpreter and SBCL answer "test" -- and sxql renders a column name with
-	// exactly that call, which put mito.type::test into mito's migration DDL. Either way
-	// the build core re-wraps the copied content in quotes, yielding a proper string.
-	// fbLocal is scratch: first the leading byte, then the scan index. The length is
-	// still read from the struct (field 1).
-	private static void emitDesignatorContentRange(WasmWriter w, int paramLocal, int arrLocal, int posLocal,
-			int endLocal, int fbLocal) {
-		// fbLocal := arr[0] (the first byte)
-		get(w, arrLocal);
-		i32(w, 0);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
-		set(w, fbLocal);
-		// A leading quote marks a real string; anything else is a symbol name.
-		get(w, fbLocal);
-		i32(w, QUOTE);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF, 0x40);
-		// String: pos = 1; end = len - 1 (strip the surrounding quotes).
+	// Sets posLocal/endLocal to the CONTENT byte range of a quoted runtime string (the
+	// range between its surrounding quotes, [1, len-1)), as 0-based indices into its
+	// $str_bytes. The case functions used to do a string-designator scan of their own
+	// here -- a leading quote meant a string, anything else was a symbol name taken from
+	// after its LAST colon. That is now the shared (string ...) coercion's job
+	// (LispMacroExpander.normalizeStringDesignatorArg), applied by the dispatcher to
+	// every designator position instead of to this one family, so a CHARACTER designator
+	// works too and a non-designator still signals. The build core re-wraps the copied
+	// content in quotes, yielding a proper string.
+	private static void emitStringContentRange(WasmWriter w, int paramLocal, int posLocal, int endLocal) {
+		// pos = 1; end = len - 1 (strip the surrounding quotes).
 		i32(w, 1);
 		set(w, posLocal);
 		emitStrLen(w, paramLocal);
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
 		set(w, endLocal);
-		w.write(Instruction.ELSE);
-		// Symbol: end = len; pos = (index of the LAST colon) + 1, i.e. 0 when the name
-		// carries no package qualifier and no keyword colon.
-		emitStrLen(w, paramLocal);
-		set(w, endLocal);
-		i32(w, 0);
-		set(w, posLocal);
-		i32(w, 0);
-		set(w, fbLocal);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		get(w, fbLocal);
-		get(w, endLocal);
-		w.write(Instruction.I32_GE_U);
-		w.write(Instruction.BR_IF, 1);
-		arrGetLocal(w, arrLocal, fbLocal);
-		i32(w, COLON);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF, 0x40);
-		get(w, fbLocal);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		set(w, posLocal);
-		w.write(Instruction.END);
-		get(w, fbLocal);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		set(w, fbLocal);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
 	}
 
 	// Copies bytes [posL, endL) of the input array inArrL (a $str_bytes, indexed 0-based)

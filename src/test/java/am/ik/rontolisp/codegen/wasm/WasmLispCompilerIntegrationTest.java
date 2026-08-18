@@ -5822,6 +5822,37 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void stringDesignators() throws Exception {
+		// CL coerces a string DESIGNATOR -- a string, a symbol (nil and t included) or a
+		// character -- wherever a string is expected. A LITERAL designator folds to a
+		// constant; a computed one goes through the shared, type-checking (string ...).
+		assertThat(compileAndRun("(princ (string-trim \"*\" '*foo*))")).isEqualTo("FOO");
+		assertThat(compileAndRun("(princ (string-left-trim \"F\" '|FOO|))")).isEqualTo("OO");
+		assertThat(compileAndRun("(princ (string-right-trim \"O\" '|FOO|))")).isEqualTo("F");
+		assertThat(compileAndRun("(princ (string-trim \"N\" nil))")).isEqualTo("IL");
+		assertThat(compileAndRun("(princ (string-trim \"K\" :key))")).isEqualTo("EY");
+		assertThat(compileAndRun("(princ (string-trim \"A\" #\\a))")).isEqualTo("a");
+		assertThat(compileAndRun("(defun id (x) x) (princ (string-trim \"*\" (id '*foo*)))")).isEqualTo("FOO");
+		assertThat(compileAndRun("(defun id (x) x) (princ (string-upcase (id #\\a)))")).isEqualTo("A");
+		assertThat(compileAndRun("(princ (string-capitalize nil))")).isEqualTo("Nil");
+		// A non-designator still signals: the widening is per POSITION, not "stringify
+		// anything". Before this, the compile paths took the symbol's runtime spelling
+		// for a quoted string and answered a silently wrong substring.
+		assertThat(compileAndRun(
+				"(defun id (x) x) (princ (handler-case (string-trim \"*\" (id 42)) (error () :signalled)))"))
+			.isEqualTo("SIGNALLED");
+		assertThat(
+				compileAndRun("(defun id (x) x) (princ (handler-case (string-upcase (id 42)) (error () :signalled)))"))
+			.isEqualTo("SIGNALLED");
+		assertThat(compileAndRun(
+				"(defun id (x) x) (princ (handler-case (string-trim (id #\\*) \"*x*\") (error () :signalled)))"))
+			.isEqualTo("SIGNALLED");
+		// ... but ANY sequence of characters is a bag, a general vector included.
+		assertThat(compileAndRun("(defun id (x) x) (princ (string-trim (id (vector #\\x)) \"xhellox\"))"))
+			.isEqualTo("hello");
+	}
+
+	@Test
 	void stringFunctionsAsValues() throws Exception {
 		assertThat(compileAndRun("(print (mapcar #'string-upcase (list \"ab\" \"cd\")))")).isEqualTo("(\"AB\" \"CD\")");
 		assertThat(compileAndRun("(print (funcall #'subseq \"hello\" 2))")).isEqualTo("\"llo\"");

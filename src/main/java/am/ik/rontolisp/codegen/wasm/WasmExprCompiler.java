@@ -1091,9 +1091,12 @@ final class WasmExprCompiler {
 					// template
 					// arrives here with its (already evaluated) argument.
 					WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
-				case LispNames.STRING_UPCASE -> WasmStringUpcaseCompiler.compileUpcase(cons, ctx);
-				case LispNames.STRING_DOWNCASE -> WasmStringUpcaseCompiler.compileDowncase(cons, ctx);
-				case LispNames.STRING_CAPITALIZE -> WasmStringCapitalizeCompiler.compile(cons, ctx);
+				case LispNames.STRING_UPCASE -> WasmStringUpcaseCompiler
+					.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
+				case LispNames.STRING_DOWNCASE -> WasmStringUpcaseCompiler
+					.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
+				case LispNames.STRING_CAPITALIZE ->
+					WasmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
 				case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> WasmSubseqCompiler.compile(cons, ctx);
 				case LispNames.CHAR, LispNames.SCHAR -> WasmCharCompiler.compileChar(cons, ctx);
 				case LispNames.CHAR_CODE -> WasmCharCompiler.compileCharCode(cons, ctx);
@@ -1146,11 +1149,11 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.STRING_TRIM ->
-					WasmStringTrimCompiler.compileTrim(LispMacroExpander.normalizeCharBag(cons), ctx);
+					WasmStringTrimCompiler.compileTrim(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
 				case LispNames.STRING_LEFT_TRIM ->
-					WasmStringTrimCompiler.compileLeft(LispMacroExpander.normalizeCharBag(cons), ctx);
+					WasmStringTrimCompiler.compileLeft(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
 				case LispNames.STRING_RIGHT_TRIM ->
-					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeCharBag(cons), ctx);
+					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx);
 				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
 				case LispNames.LOAD -> WasmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
 				// A literal top-level require/provide (and the asdf directives) was

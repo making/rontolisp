@@ -15,9 +15,11 @@ import am.ik.jvm.OperandStack;
  * final-sigma rule would change the length and diverge from the other backends.
  *
  * <p>
- * The argument is coerced to a QUOTED string designator ({@code "abc"}); the framing
- * quote bytes are neither cased nor alphanumeric, so they pass through the walk untouched
- * and the word boundaries fall on the content.
+ * The argument arrives as a QUOTED runtime string ({@code "abc"}) -- the dispatcher runs
+ * it through the shared {@code (string ...)} designator coercion first, so a symbol or a
+ * character reaches the walk already spelled out. The framing quote bytes are neither
+ * cased nor alphanumeric, so they pass through the walk untouched and the word boundaries
+ * fall on the content.
  */
 final class JvmStringCaseFold {
 
@@ -53,9 +55,13 @@ final class JvmStringCaseFold {
 		MethodrefConstant stringLength = JvmEmitHelper.stringMethod(ctx, "length", "()I");
 		MethodrefConstant stringCodePointAt = JvmEmitHelper.stringMethod(ctx, "codePointAt", "(I)I");
 
-		// s = the argument coerced to a quoted string designator (string / symbol /
-		// keyword)
-		JvmStringDesignatorHelper.emitCoerce(cons, ctx, className);
+		// s = the argument, already normalized to a quoted runtime string by the shared
+		// (string ...) designator coercion the dispatcher wraps it in. A mutable
+		// character vector still normalizes here.
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.stringClass.index());
 		int sSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(sSlot);

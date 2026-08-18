@@ -10313,6 +10313,59 @@ cases:
       111
       NIL
 
+  - name: string-designators-440
+    # CL coerces a string DESIGNATOR -- a string, a symbol (nil and t are
+    # symbols too) or a character -- wherever a string is expected. The trimmed
+    # value of the trim family and the argument of the case-fold family are
+    # such positions; the character BAG is NOT (it is a sequence of
+    # characters), and neither is anything that is not one of the three types.
+    # The computed forms are the interesting ones: a literal designator folds
+    # to a constant, while a computed one goes through the shared, type-
+    # checking (string ...) -- which the compile backends used to render as a
+    # total princ coercion, so a symbol reached the trim intrinsic as its bare
+    # runtime spelling and answered a silently wrong substring.
+    source: |
+      (defun ci440-id (x) x)
+      (print (string-trim "*" '*foo*))
+      (print (string-left-trim "F" '|FOO|))
+      (print (string-right-trim "O" '|FOO|))
+      (print (string-trim "N" nil))
+      (print (string-trim "T" t))
+      (print (string-trim "K" :key))
+      (print (string-trim "A" #\a))
+      (print (string-trim "*" (ci440-id '*foo*)))
+      (print (string-upcase (ci440-id #\a)))
+      (print (string-downcase (ci440-id '|FOO|)))
+      (print (string-capitalize (ci440-id nil)))
+      (print (string< (ci440-id 'abc) "abd"))
+      (print (string-lessp (ci440-id #\a) 'b))
+      (print (string= (ci440-id 'foo) "FOO"))
+      (print (handler-case (string-trim "*" (ci440-id 42)) (error () :signalled)))
+      (print (handler-case (string-upcase (ci440-id 42)) (error () :signalled)))
+      (print (handler-case (string< (ci440-id 'abc) (ci440-id 42)) (error () :signalled)))
+      (print (handler-case (string-trim (ci440-id #\*) "*x*") (error () :signalled)))
+      (print (string-trim (ci440-id (vector #\x)) "xhellox"))
+    expected: |
+      "FOO"
+      "OO"
+      "F"
+      "IL"
+      ""
+      "EY"
+      "a"
+      "FOO"
+      "A"
+      "foo"
+      "Nil"
+      0
+      0
+      T
+      :SIGNALLED
+      :SIGNALLED
+      :SIGNALLED
+      :SIGNALLED
+      "hello"
+
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report
 # plus a non-zero exit. `stderr` lines must APPEAR -- wasmtime wraps its own

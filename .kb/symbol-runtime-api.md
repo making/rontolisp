@@ -15,14 +15,67 @@ into `P::P:X-SUFFIX` (ironclad's `optimized-maker-name`).
 `string-downcase` / `string-capitalize` — and on the compiled backends they were
 NOT: their designator coercion dropped only a LEADING keyword colon, so
 `(string-downcase 'foo::test)` answered `"foo::test"` where `(string 'foo::test)`
-answered `"TEST"` and both the interpreter and SBCL answer `"test"`. Both
-compiled renderings now go through the same princ-spelling coercion the other
-designators use (`_lispToDisplayString` on the JVM, the last-colon scan in
-`WasmStringRuntimeBuilder.emitDesignatorContentRange` on WASM). The caller that
-surfaced it: sxql renders a column name with exactly that call, so mito's
+answered `"TEST"` and both the interpreter and SBCL answer `"test"`. The caller
+that surfaced it: sxql renders a column name with exactly that call, so mito's
 migration DDL came out as `CREATE TABLE t (mito.type::test ...)` on the compiled
-backends only. Pinned by the `symbol-runtime-api` ci-spec case (all four
+backends only. Each backend then grew its OWN coercion for that one family; both
+are gone, and the coercion is now `(string ...)` for every designator position —
+see the next section. Pinned by the `symbol-runtime-api` ci-spec case (all four
 backends, SBCL-checked).
+
+## String designators: `(string ...)` is the ONE coercion, and it type-checks (todo-440)
+
+**A CL string designator is a string, a symbol, or a character — and NOTHING
+else.** Every position specified that way reaches it through the shared
+`(string ...)` coercion, injected by
+`LispMacroExpander.normalizeStringDesignatorArg` on the compile paths and applied
+directly by `Environment.stringDesignator` in the interpreter. Do not teach an
+intrinsic the designator rules; widen the position to route through `string`.
+
+**Exactly how far it was widened** (nothing outside this list is a designator
+position):
+
+| position | designator? | notes |
+| --- | --- | --- |
+| `string`, `symbol-name` argument | yes | the coercion itself |
+| `string-upcase` / `-downcase` / `-capitalize` argument | yes | `normalizeStringDesignatorArg(cons, 1)` |
+| `string-trim` / `-left-trim` / `-right-trim` **trimmed value** | yes | `normalizeStringTrimArgs`, position 2 |
+| `string-trim` family **character bag** | **no** | a SEQUENCE of characters; `(string-trim #\* "*x*")` signals |
+| `string=` / `string-equal` operands | yes | `normalizeStringComparisonDesignators` |
+| `string<` and the nine other ordering predicates | yes | via `(string a)` inside the shared `%string-compare` prelude walk |
+| `concatenate` arguments | **no** | SEQUENCES; SBCL signals for `(concatenate 'string "a" 'foo)` |
+| `format` `~A` | n/a | `princ`, which is total by definition — not a designator position |
+
+**The coercion SIGNALS on a non-designator, on all four backends.** Both compile
+backends used to render `(string x)` as the bare princ coercion, which is total:
+`(string 42)` answered `"42"` where the interpreter signalled. That leniency was
+not a harmless convenience — because every designator position routes through
+this one call, it silently turned a caller's type error into a plausible-looking
+string in `string=`, in the whole `string<` family, and in every position widened
+here. A computed argument now compiles to
+`LispMacroExpander.strictStringDesignatorForm`: `(let ((g x)) (if (or (stringp g)
+(symbolp g) (characterp g)) (princ-to-string g) (error ...)))`. `stringp` is true
+of a mutable character vector on every backend, so a fill-pointer buffer still
+coerces, and `symbolp` covers `nil`/`t`, which designate `"NIL"`/`"T"`.
+
+**A compile-time-known designator costs nothing.** `literalStringDesignator`
+folds a literal string / character / `nil` / `t` / `(quote sym)` / keyword to its
+constant before the guard is ever emitted, so `(string-trim "*" '*foo*)` is the
+same constant-folded code it always was and only a computed argument pays.
+
+What the gap looked like before: the compile backends carry a string as a QUOTED
+runtime value (`"abc"`) and a symbol as its bare spelling, so `string-trim` took
+the symbol's first and last characters for the framing quotes and stripped them.
+`(string-trim "o" 'foo)` answered `"O"` instead of `"FOO"` — silently wrong, not
+an error — and `(string-upcase #\a)` was an uncatchable `cast failure` trap on
+WASM. Pinned by the `string-designators-440` ci-spec case and the
+`stringDesignators` tests on all three engines.
+
+**Re-evaluate when** a new operator names a string designator in its CLHS entry:
+the change is one `normalizeStringDesignatorArg` call at its dispatch site, not a
+new coercion. And if `string` ever needs to be lenient again for an internal
+lowering (the package-designator lowerings in `LispMacroExpander` all ride on
+it), give THAT caller its own form rather than reverting the guard.
 
 **A "package" at runtime is the UPCASED canonical package name as a keyword** —
 there are no package objects, and `eq` compares symbols by content, so

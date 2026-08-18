@@ -41,21 +41,25 @@ final class JvmSymbolApiCompiler {
 	}
 
 	/**
-	 * string: the CL string-designator coercion. On the compiled path this is
-	 * princ-to-string emission (like {@code symbol-name}); a string is returned
-	 * unchanged, a symbol yields its name, a character a one-character string. The
-	 * interpreter type- checks the argument; the compiled backend is lenient (the
-	 * {@code symbol-name} precedent).
+	 * string: the CL string-designator coercion, and the single definition of it every
+	 * designator POSITION routes through (the {@code string=} operands, the
+	 * {@code %string-compare} walk behind the {@code string<} family, the
+	 * {@code string-trim} / case-fold arguments). A compile-time-known designator folds
+	 * to its constant; a computed one gets
+	 * {@link LispMacroExpander#strictStringDesignatorForm} -- the guarded princ coercion,
+	 * which type-checks like the interpreter instead of stringifying anything handed to
+	 * it.
 	 */
 	static void compileString(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.STRING);
 		// A keyword's package colon is a marker, not part of its name: (string :html) is
-		// "html" (matches CL; cl-who relies on it to emit <html>, not <:html>).
-		if (parts.get(1) instanceof LispSymbol sym && sym.isKeyword()) {
-			JvmEmitHelper.compileStringLiteral(new LispString(sym.name().substring(1)).literal(), ctx);
+		// "HTML" (matches CL; cl-who relies on it to emit <html>, not <:html>).
+		String literal = LispMacroExpander.literalStringDesignator(parts.get(1));
+		if (literal != null) {
+			JvmEmitHelper.compileStringLiteral(new LispString(literal).literal(), ctx);
 			return;
 		}
-		JvmPrincToStringCompiler.emitToString(parts.get(1), ctx.lispToDisplayString.index(), ctx, className);
+		JvmExprCompiler.compileExpr(LispMacroExpander.strictStringDesignatorForm(parts.get(1)), ctx, className);
 	}
 
 	/** intern: strip the surrounding quotes from the runtime string. */

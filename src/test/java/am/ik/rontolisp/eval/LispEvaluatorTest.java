@@ -1697,6 +1697,39 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalStringFamilyAcceptsStringDesignators() {
+		// CL coerces a string DESIGNATOR -- a string, a symbol (nil and t included) or a
+		// character -- wherever a string is expected. The trimmed value of the trim
+		// family is such a position; its character BAG is not (that one is a sequence).
+		assertThat(eval("(string-trim \"*\" '*foo*)")).isEqualTo(new LispString("FOO"));
+		assertThat(eval("(string-left-trim \"F\" '|FOO|)")).isEqualTo(new LispString("OO"));
+		assertThat(eval("(string-right-trim \"O\" '|FOO|)")).isEqualTo(new LispString("F"));
+		assertThat(eval("(string-trim \"N\" nil)")).isEqualTo(new LispString("IL"));
+		assertThat(eval("(string-trim \"T\" t)")).isEqualTo(new LispString(""));
+		assertThat(eval("(string-trim \"K\" :key)")).isEqualTo(new LispString("EY"));
+		assertThat(eval("(string-trim \"A\" #\\a)")).isEqualTo(new LispString("a"));
+		assertThat(eval("(let ((s '*foo*)) (string-trim \"*\" s))")).isEqualTo(new LispString("FOO"));
+		assertThat(eval("(string-upcase #\\a)")).isEqualTo(new LispString("A"));
+		assertThat(eval("(string-downcase #\\A)")).isEqualTo(new LispString("a"));
+		assertThat(eval("(string-capitalize nil)")).isEqualTo(new LispString("Nil"));
+	}
+
+	@Test
+	void evalStringFamilyRejectsANonDesignator() {
+		// Widening the designator positions must not turn them into "stringify
+		// anything": losing a type error where one belongs is worse than the gap.
+		assertThatThrownBy(() -> evalMulti("(string-trim \"*\" 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string designator");
+		assertThatThrownBy(() -> evalMulti("(string-upcase 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string designator");
+		// The BAG stays a sequence of characters: a lone character is not a bag.
+		assertThatThrownBy(() -> evalMulti("(string-trim #\\* \"*x*\")")).isInstanceOf(LispEvalException.class);
+		// ... but ANY sequence is one, a general vector included (this used to be an
+		// interpreter-only refusal; the compile paths coerce it).
+		assertThat(eval("(string-trim (vector #\\x) \"xhellox\")")).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
 	void evalStringUpcaseAsFunctionValue() {
 		assertThat(eval("(mapcar #'string-upcase (list \"ab\" \"cd\"))"))
 			.isEqualTo(new LispCons(new LispString("AB"), new LispCons(new LispString("CD"), LispNil.INSTANCE)));
@@ -10177,9 +10210,9 @@ class LispEvaluatorTest {
 	@Test
 	void stringRejectsANonDesignator() {
 		assertThatThrownBy(() -> evalMulti("(string 1)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("cannot coerce");
+			.hasMessageContaining("expects a string designator");
 		assertThatThrownBy(() -> evalMulti("(string '(1 2))")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("cannot coerce");
+			.hasMessageContaining("expects a string designator");
 	}
 
 	@Test

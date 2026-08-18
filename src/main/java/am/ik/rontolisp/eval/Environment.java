@@ -3173,8 +3173,11 @@ public final class Environment implements Scope {
 				// interpreter used to answer "t"/"nil").
 				case LispTrue ignored -> new LispString("T");
 				case LispNil ignored -> new LispString("NIL");
+				// Same wording the compile backends' guarded coercion signals with
+				// (LispMacroExpander.strictStringDesignatorForm), so a non-designator
+				// reads the same on all four.
 				default -> throw new LispEvalException(
-						LispNames.STRING + " cannot coerce " + args.get(0).print() + " to a string");
+						LispNames.STRING + " expects a string designator, got: " + args.get(0).print());
 			};
 		}));
 		// make-symbol: rontolisp has no intern table (symbols compare by name), so
@@ -3676,10 +3679,14 @@ public final class Environment implements Scope {
 		return sb.toString();
 	}
 
-	// The characters of a trim CHARACTER BAG as a string. CL allows any sequence of
-	// characters, and a LIST bag is what libraries write (postmodern's execute-file lexer
-	// trims with '(#\Space #\Tab)); the compile paths fold the same widening in
-	// LispMacroExpander.normalizeCharBag.
+	// The characters of a trim CHARACTER BAG as a string. CL allows ANY sequence of
+	// characters: a LIST bag is what libraries write (postmodern's execute-file lexer
+	// trims with '(#\Space #\Tab)), and a general VECTOR of characters is a sequence
+	// too -- the compile paths reach both through (coerce bag 'string) in
+	// LispMacroExpander.normalizeCharBag, so rejecting the vector here was an
+	// interpreter-only refusal. What stays a type error on every backend is a bag that is
+	// no sequence at all, a lone CHARACTER above all: (string-trim #\* "*x*") signals in
+	// CL rather than trimming asterisks.
 	private static String charBagString(String name, LispVal bagVal) {
 		if (bagVal instanceof LispString s) {
 			return s.value();
@@ -3688,18 +3695,32 @@ public final class Environment implements Scope {
 			return "";
 		}
 		StringBuilder chars = new StringBuilder();
+		if (bagVal instanceof LispArray arr && arr.dimensions().length == 1) {
+			int n = arr.effectiveLength();
+			for (int i = 0; i < n; i++) {
+				if (!(arr.readFlat(i) instanceof LispChar ch)) {
+					throw new LispEvalException(charBagTypeError(name, bagVal));
+				}
+				chars.appendCodePoint(ch.codePoint());
+			}
+			return chars.toString();
+		}
 		LispVal cur = bagVal;
 		while (cur instanceof LispCons cell) {
 			if (!(cell.car() instanceof LispChar ch)) {
-				throw new LispEvalException(name + " expects a string or a list of characters, got: " + bagVal);
+				throw new LispEvalException(charBagTypeError(name, bagVal));
 			}
 			chars.appendCodePoint(ch.codePoint());
 			cur = cell.cdr();
 		}
 		if (!(cur instanceof LispNil)) {
-			throw new LispEvalException(name + " expects a string or a list of characters, got: " + bagVal);
+			throw new LispEvalException(charBagTypeError(name, bagVal));
 		}
 		return chars.toString();
+	}
+
+	private static String charBagTypeError(String name, LispVal bagVal) {
+		return name + " expects a sequence of characters as the bag, got: " + bagVal.print();
 	}
 
 	// Removes characters that appear in the bag string from the requested ends. Walks by
@@ -3708,7 +3729,12 @@ public final class Environment implements Scope {
 	// are not compared against the bag as individual characters.
 	private static String trimString(String name, LispVal bagVal, LispVal strVal, boolean left, boolean right) {
 		String bag = charBagString(name, bagVal);
-		String s = requireString(name, strVal);
+		// CL specifies the trimmed value as a string DESIGNATOR -- (string-trim "*"
+		// '*foo*) is "FOO". The BAG above is not one: it is a SEQUENCE of characters, so
+		// a lone character there stays a type error (SBCL signals for (string-trim #\*
+		// "*x*")). The compile paths widen the same one position through
+		// LispMacroExpander.normalizeStringTrimArgs.
+		String s = stringDesignator(name, strVal);
 		int start = 0;
 		int end = s.length();
 		if (left) {

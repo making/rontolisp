@@ -30,20 +30,25 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * string: the CL string-designator coercion. On the compiled path this reuses
-	 * {@code _princ_to_str} (like {@code symbol-name}); a string is identity, a symbol
-	 * yields its name, a character a one-character string. Lenient on non-designators
-	 * (the {@code symbol-name} precedent); the interpreter type-checks.
+	 * string: the CL string-designator coercion, and the single definition of it every
+	 * designator POSITION routes through (the {@code string=} operands, the
+	 * {@code %string-compare} walk behind the {@code string<} family, the
+	 * {@code string-trim} / case-fold arguments). A compile-time-known designator folds
+	 * to its constant; a computed one gets
+	 * {@link LispMacroExpander#strictStringDesignatorForm} -- the guarded
+	 * {@code _princ_to_str} coercion, which type-checks like the interpreter instead of
+	 * stringifying anything handed to it.
 	 */
 	static void compileString(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// A keyword's package colon is a marker, not part of its name: (string :html) is
-		// "html" (matches CL; cl-who relies on it to emit <html>, not <:html>).
+		// "HTML" (matches CL; cl-who relies on it to emit <html>, not <:html>).
 		List<LispVal> parts = requireArgs(cons, LispNames.STRING);
-		if (parts.get(1) instanceof LispSymbol sym && sym.isKeyword()) {
-			WasmEmitHelper.compileStringLiteral(new LispString(sym.name().substring(1)).literal(), ctx);
+		String literal = LispMacroExpander.literalStringDesignator(parts.get(1));
+		if (literal != null) {
+			WasmEmitHelper.compileStringLiteral(new LispString(literal).literal(), ctx);
 			return;
 		}
-		compileUnaryCall(cons, LispNames.STRING, WasmLispCompiler.FUNC_PRINC_TO_STR, ctx);
+		WasmExprCompiler.compileExpr(LispMacroExpander.strictStringDesignatorForm(parts.get(1)), ctx);
 	}
 
 	static void compileIntern(LispCons cons, WasmLispCompiler.Ctx ctx) {
