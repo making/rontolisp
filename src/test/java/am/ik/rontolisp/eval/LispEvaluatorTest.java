@@ -12116,6 +12116,86 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void reinitializeInstanceIsCallableWithNoUserMethod() {
+		// CL supplies the system default (chaining into shared-initialize's initarg
+		// fill), so a program may CALL reinitialize-instance without ever defining a
+		// method on it -- upstream ASDF's (apply 'reinitialize-instance system keys).
+		assertThat(evalMulti("""
+				(defclass ri-p () ((n :initarg :n :reader ri-n) (m :initarg :m :initform 10)))
+				(let ((o (make-instance 'ri-p :n 1)))
+				  (reinitialize-instance o :n 2)
+				  (list (ri-n o) (slot-value o 'm)))
+				""").print()).isEqualTo("(2 10)");
+	}
+
+	@Test
+	void changeClassAcceptsAComputedClassDesignator() {
+		// The class argument may be a runtime SYMBOL or a class METAOBJECT (upstream
+		// ASDF's (change-class ret class)); identity, shared slots and supplied
+		// initargs behave exactly like the literal spelling.
+		assertThat(evalMulti("""
+				(defclass cc-base () ((n :initarg :n)))
+				(defclass cc-sub (cc-base) ((extra :initform 42)))
+				(let ((o (make-instance 'cc-base :n 1)) (cls 'cc-sub))
+				  (change-class o cls)
+				  (let ((p (make-instance 'cc-base :n 5)))
+				    (change-class p (find-class 'cc-sub) :n 7)
+				    (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra)
+				          (slot-value p 'n))))
+				""").print()).isEqualTo("(CC-SUB 1 42 7)");
+	}
+
+	@Test
+	void defclassWriterSlotOptionDefinesTheWriterGeneric() {
+		// :writer (setf name) defines the setf function of name; :writer sym defines a
+		// two-argument new-value-first generic (CLHS 7.5.2) -- upstream ASDF declares
+		// (description :writer (setf system-description)) and friends.
+		assertThat(evalMulti("""
+				(defclass wr-q () ((a :writer (setf wr-q-a) :reader wr-q-a :initform 1)
+				                   (b :writer wr-set-b :reader wr-get-b :initform 0)))
+				(let ((o (make-instance 'wr-q)))
+				  (setf (wr-q-a o) 5)
+				  (wr-set-b 7 o)
+				  (list (wr-q-a o) (wr-get-b o)))
+				""").print()).isEqualTo("(5 7)");
+	}
+
+	@Test
+	void defclassClassAllocationSharesOneCellPerDeclaringClass() {
+		// :allocation :class stores the value in ONE shared cell per DECLARING class
+		// (CLHS 7.5.3): every instance and non-re-declaring subclass reads the same
+		// cell, a subclass re-declaring with :allocation :class owns a new one, and a
+		// write through any access path (accessor, slot-value, a runtime name) is
+		// visible to all -- upstream ASDF's operation classes are built on this.
+		assertThat(evalMulti("""
+				(defclass ca-op () ((selfward :initform 'base-op :allocation :class :reader ca-selfward)))
+				(defclass ca-load-op (ca-op) ((selfward :initform 'load-dep :allocation :class)))
+				(defclass ca-warm-op (ca-op) ())
+				(defclass ca-r () ((a :initform 1 :allocation :class :accessor ca-r-a)))
+				(let ((x (make-instance 'ca-r)) (y (make-instance 'ca-r)) (nm 'a))
+				  (setf (ca-r-a x) 9)
+				  (list (ca-selfward (make-instance 'ca-op))
+				        (ca-selfward (make-instance 'ca-load-op))
+				        (ca-selfward (make-instance 'ca-warm-op))
+				        (ca-r-a y) (slot-value y 'a) (slot-value y nm)
+				        (slot-boundp y 'a)))
+				""").print()).isEqualTo("(BASE-OP LOAD-DEP BASE-OP 9 9 9 T)");
+	}
+
+	@Test
+	void typecaseStandardClassMatchesAClassMetaobject() {
+		// standard-class in a type-specifier position is itself a MOP seeding trigger
+		// (the metaobject the clause is about is produced by the find-class in the
+		// scrutinee, AFTER the clause expands) -- upstream ASDF's class-for-type
+		// typecases over (find-class ...).
+		assertThat(evalMulti("""
+				(defclass tsc-s1 () ())
+				(list (typecase (find-class 'tsc-s1) (standard-class :meta) (t :other))
+				      (typecase 42 (standard-class :meta) (t :other)))
+				""").print()).isEqualTo("(:META :OTHER)");
+	}
+
+	@Test
 	void defclassMetaclassRunsTheClassDefinitionProtocol() {
 		// The postmodern dao-class shape end to end, WITHOUT the closer-mop shim (the
 		// protocol is self-contained): the metaclass instance is what find-class and
@@ -12651,9 +12731,15 @@ class LispEvaluatorTest {
 
 	@Test
 	void defclassUnsupportedSlotOptionSignals() {
-		assertThatThrownBy(() -> eval("(defclass a () ((x :allocation :class)))"))
+		// :allocation/:writer are supported since todo-442; a genuinely unknown slot
+		// option (and an :allocation value that is neither :instance nor :class)
+		// still signals without a :metaclass.
+		assertThatThrownBy(() -> eval("(defclass a () ((x :frobnicate 1)))"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("slot option :ALLOCATION is not supported");
+			.hasMessageContaining("slot option :FROBNICATE is not supported");
+		assertThatThrownBy(() -> eval("(defclass a () ((x :allocation :dynamic)))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":allocation expects :instance or :class");
 	}
 
 	@Test

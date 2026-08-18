@@ -3145,6 +3145,17 @@ public final class LispNames {
 	public static final String SLOT_VALUE_SET_RUNTIME = "%SLOT-VALUE-SET-RUNTIME";
 
 	/**
+	 * The shared runtime-class-designator {@code change-class} dispatch:
+	 * {@code (%change-class-runtime obj designator initarg-plist)} resolves a class
+	 * designator known only at run time (a symbol or a class metaobject -- upstream
+	 * ASDF's {@code (change-class ret class)}) onto one small per-class arm carrying the
+	 * static expansion's layout swap + initform fill, the initargs read out of the plist.
+	 * Generated on the compile paths gated on a non-literal class argument; the
+	 * interpreter resolves the designator natively and re-enters the static expansion.
+	 */
+	public static final String CHANGE_CLASS_RUNTIME = "%CHANGE-CLASS-RUNTIME";
+
+	/**
 	 * The slot-name fold every runtime-slot-name dispatch above applies to its name
 	 * argument first: {@code (%slot-name-key n)} is {@code (intern (symbol-name n))},
 	 * which re-spells a symbol arriving in the caller's package as the bare base name the

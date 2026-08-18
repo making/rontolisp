@@ -537,9 +537,37 @@ public final class ClosRegistry {
 	 * @param readers the {@code :reader} function names
 	 * @param accessors the {@code :accessor} function names (also setf places)
 	 * @param type the package-stripped {@code :type} option name ({@code "t"} if none)
+	 * @param writers the {@code :writer} generic names, internal form: a
+	 * {@code (setf place)} writer is stored as its mangled {@code %setf-place} name (and
+	 * registers the place as a setf function), a symbol writer as itself -- both take the
+	 * new value first, like an accessor's write half
+	 * @param sharedCellVar for a {@code :allocation :class} slot, the name of the global
+	 * variable holding the shared value (the class that DECLARED the slot owns the cell;
+	 * a subclass re-declaring with {@code :allocation :class} gets a cell of its own, per
+	 * CLHS 7.5.3); null for an ordinary {@code :instance} slot
 	 */
 	public record SlotSpec(String name, String baseName, LispVal initform, boolean initformSupplied,
-			String initargKeyword, boolean initargSupplied, List<String> readers, List<String> accessors, String type) {
+			String initargKeyword, boolean initargSupplied, List<String> readers, List<String> accessors, String type,
+			List<String> writers, @Nullable String sharedCellVar) {
+
+		/**
+		 * The pre-{@code :writer}/{@code :allocation} shape: no writer generics, instance
+		 * allocation.
+		 * @param name the slot name as spelled
+		 * @param baseName the package-stripped base name
+		 * @param initform the effective initform expression
+		 * @param initformSupplied whether the source wrote an {@code :initform}
+		 * @param initargKeyword the constructor keyword, with the colon
+		 * @param initargSupplied whether the source wrote an {@code :initarg}
+		 * @param readers the {@code :reader} function names
+		 * @param accessors the {@code :accessor} function names
+		 * @param type the package-stripped {@code :type} option name
+		 */
+		public SlotSpec(String name, String baseName, LispVal initform, boolean initformSupplied, String initargKeyword,
+				boolean initargSupplied, List<String> readers, List<String> accessors, String type) {
+			this(name, baseName, initform, initformSupplied, initargKeyword, initargSupplied, readers, accessors, type,
+					List.of(), null);
+		}
 	}
 
 	/**

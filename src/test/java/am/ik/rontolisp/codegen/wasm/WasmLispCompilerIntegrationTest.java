@@ -14438,6 +14438,54 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void reinitializeInstanceAndComputedChangeClass() throws Exception {
+		// The two runtime halves of the CLOS surface family: reinitialize-instance is
+		// callable with no user method (the system default fills the supplied
+		// initargs), and change-class takes a COMPUTED class designator -- a symbol or
+		// a class metaobject -- through the generated %change-class-runtime dispatch.
+		assertThat(compileAndRun("""
+				(defclass wri-p () ((n :initarg :n :reader wri-n) (m :initarg :m :initform 10)))
+				(let ((o (make-instance 'wri-p :n 1)))
+				  (reinitialize-instance o :n 2)
+				  (print (list (wri-n o) (slot-value o 'm))))
+				(defclass wcc-base () ((n :initarg :n)))
+				(defclass wcc-sub (wcc-base) ((extra :initform 42)))
+				(let ((o (make-instance 'wcc-base :n 1)) (cls 'wcc-sub))
+				  (change-class o cls)
+				  (let ((p (make-instance 'wcc-base :n 5)))
+				    (change-class p (find-class 'wcc-sub) :n 7)
+				    ;; class-name is a prelude defun and this harness splices no prelude,
+				    ;; so the class change reads back through typep.
+				    (print (list (typep o 'wcc-sub) (slot-value o 'n) (slot-value o 'extra)
+				                 (slot-value p 'n)))))
+				""")).isEqualTo("(2 10)\n(T 1 42 7)");
+	}
+
+	@Test
+	void defclassWriterClassAllocationAndStandardClassTypecase() throws Exception {
+		// :writer generics (both spellings), the shared cell of :allocation :class
+		// (subclass re-declaration owns a new cell; slot-value and a runtime name read
+		// the cell), and standard-class as a typecase specifier.
+		assertThat(compileAndRun("""
+				(defclass wwr-q () ((a :writer (setf wwr-q-a) :reader wwr-q-a :initform 1)
+				                    (b :writer wwr-set-b :reader wwr-get-b :initform 0)))
+				(let ((o (make-instance 'wwr-q)))
+				  (setf (wwr-q-a o) 5)
+				  (wwr-set-b 7 o)
+				  (print (list (wwr-q-a o) (wwr-get-b o))))
+				(defclass wca-op () ((selfward :initform 'base-op :allocation :class :reader wca-selfward)))
+				(defclass wca-load-op (wca-op) ((selfward :initform 'load-dep :allocation :class)))
+				(defclass wca-r () ((a :initform 1 :allocation :class :accessor wca-r-a)))
+				(let ((x (make-instance 'wca-r)) (y (make-instance 'wca-r)) (nm 'a))
+				  (setf (wca-r-a x) 9)
+				  (print (list (wca-selfward (make-instance 'wca-op))
+				               (wca-selfward (make-instance 'wca-load-op))
+				               (wca-r-a y) (slot-value y 'a) (slot-value y nm))))
+				(print (typecase (find-class 'wca-op) (standard-class :meta) (t :other)))
+				""")).isEqualTo("(5 7)\n(BASE-OP LOAD-DEP 9 9 9)\n:META");
+	}
+
+	@Test
 	void compileAndRunDefclassMultipleInheritance() throws Exception {
 		// Slot merge across supers (second super's accessor overridden for the shifted
 		// index), diamond slot dedup with the CPL-most-specific initform, and method

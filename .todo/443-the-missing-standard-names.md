@@ -20,6 +20,11 @@ Standard `cl` names upstream ASDF spells that are missing from
 - `most-positive-fixnum`
 - `compile-file` / `compile-file-pathname` -- a `not-implemented` stub is the
   right implementation, shaped so that nothing on any path actually calls it
+- `print-object` -- per the probe `.todo/442` ran (2026-08-18), the ONE
+  remaining registered-and-absent `CL_FUNCTIONS` name: every other entry
+  resolves through `symbol-function` on the interpreter. A direct call should
+  route into the printer's method dispatch (`.kb/clos.md`, the print-object
+  section), not mint a fresh generic
 
 The five-point recipe is CLAUDE.md's "Adding a New Built-in Function"
 (`LispNames` -> `PackageRegistry.CL_SYMBOLS` -> `Environment.createGlobal` ->

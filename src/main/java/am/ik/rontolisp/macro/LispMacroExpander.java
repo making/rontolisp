@@ -3602,6 +3602,16 @@ public final class LispMacroExpander {
 						// the READ's, never a compile-time one (see missingSlotStub).
 						yield missingSlotStub(slotBaseSpelling(litSlot), placeParts.get(1), value);
 					}
+					if (litSlot != null) {
+						String cellBase = resolveSlotBaseName(slotBaseSpelling(litSlot), closRegistry);
+						LispVal cellWrite = cellBase == null ? null
+								: classSlotCellWrite(placeParts.get(1), cellBase, value, closRegistry);
+						if (cellWrite != null) {
+							// A :allocation :class declaration somewhere: store into the
+							// shared cell, not the instance mirror.
+							yield cellWrite;
+						}
+					}
 					if (litSlot != null && ambiguousSlotPosition(litSlot, closRegistry)) {
 						// The name sits at different indexes in unrelated types, so no
 						// one
@@ -11912,7 +11922,7 @@ public final class LispMacroExpander {
 					slots.set(i,
 							new ClosRegistry.SlotSpec(slot.name(), slot.baseName(), override, true,
 									slot.initargKeyword(), slot.initargSupplied(), slot.readers(), slot.accessors(),
-									slot.type()));
+									slot.type(), slot.writers(), slot.sharedCellVar()));
 				}
 			}
 		}
@@ -11951,9 +11961,29 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> slotVars = new java.util.ArrayList<>();
 		for (ClosRegistry.SlotSpec slot : slots) {
-			slotVars.add(new LispSymbol(slot.name()));
+			if (slot.sharedCellVar() != null) {
+				// A :allocation :class slot: the keyword default READS the shared cell,
+				// and the store writes it back -- a no-op when the initarg is
+				// unsupplied, and CL's "an initarg fills the shared slot" when it is.
+				// The instance keeps a mirror copy at the reserved index (dead for
+				// reads, which all route to the cell).
+				slotVars.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(slot.sharedCellVar()),
+						new LispSymbol(slot.name()))));
+			}
+			else {
+				slotVars.add(new LispSymbol(slot.name()));
+			}
 		}
 		List<LispVal> forms = new java.util.ArrayList<>();
+		// The shared cells of this class's OWN :allocation :class slots, initialized
+		// once at class-definition time (CLHS 7.5.3) -- before the constructor, whose
+		// keyword defaults READ them.
+		for (ParsedSlot parsed : ownSlots) {
+			if (parsed.cellInitform() != null && parsed.spec().sharedCellVar() != null) {
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR),
+						new LispSymbol(parsed.spec().sharedCellVar()), parsed.cellInitform())));
+			}
+		}
 		forms.add(listToCons(
 				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + affixFor("%make-", base) + base),
 						lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList), objNew(classTag, slotVars))));
@@ -11972,9 +12002,19 @@ public final class LispMacroExpander {
 		LispVal specialized = listToCons(List.<LispVal>of(listToCons(List.of(obj, new LispSymbol(className)))));
 		for (java.util.Map.Entry<Integer, ClosRegistry.SlotSpec> entry : ownAt.entrySet()) {
 			int i = entry.getKey();
-			ClosRegistry.SlotSpec slot = entry.getValue();
-			LispVal body = checkedSlotRead(obj, i, slots.get(i).baseName());
-			LispVal writeBody = objSet(obj, i, newVal);
+			ClosRegistry.SlotSpec effective = slots.get(i);
+			String cellVar = effective.sharedCellVar();
+			// For a :allocation :class slot the methods to (re)emit are the EFFECTIVE
+			// merged set: a re-declaring subclass owns a NEW cell, and every inherited
+			// reader/accessor/writer method bakes the ancestor's, so subclass-specialized
+			// overrides must cover them all. An instance slot keeps the own set only
+			// (inherited methods stay valid -- positions are shared).
+			ClosRegistry.SlotSpec slot = cellVar != null ? effective : entry.getValue();
+			LispVal body = cellVar != null ? checkedCellRead(cellVar, obj, effective.baseName())
+					: checkedSlotRead(obj, i, effective.baseName());
+			LispVal writeBody = cellVar != null
+					? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cellVar), newVal))
+					: objSet(obj, i, newVal);
 			LispVal writerParams = listToCons(List.of(newVal, listToCons(List.of(obj, new LispSymbol(className)))));
 			for (String reader : slot.readers()) {
 				forms.add(listToCons(
@@ -11986,6 +12026,13 @@ public final class LispMacroExpander {
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFMETHOD),
 						new LispSymbol(setfFunctionName(accessor)), writerParams, writeBody)));
 				structAccessors.put(accessor, SETF_FUNCTION_MARKER);
+			}
+			for (String writer : slot.writers()) {
+				forms.add(listToCons(
+						List.of(new LispSymbol(LispNames.DEFMETHOD), new LispSymbol(writer), writerParams, writeBody)));
+				if (writer.startsWith("%setf-")) {
+					structAccessors.put(writer.substring("%setf-".length()), SETF_FUNCTION_MARKER);
+				}
 			}
 		}
 		if (superInfos.size() > 1) {
@@ -12000,10 +12047,16 @@ public final class LispMacroExpander {
 			for (ClosRegistry.SlotSpec own : ownAt.values()) {
 				ownEmitted.addAll(own.readers());
 				ownEmitted.addAll(own.accessors());
+				ownEmitted.addAll(own.writers());
 			}
 			for (int i = 0; i < slots.size(); i++) {
 				ClosRegistry.SlotSpec slot = slots.get(i);
-				if (slot.readers().isEmpty() && slot.accessors().isEmpty()) {
+				if (slot.sharedCellVar() != null) {
+					// A shared-cell slot's inherited methods read the CELL, not an
+					// index, so a shifted index changes nothing for them.
+					continue;
+				}
+				if (slot.readers().isEmpty() && slot.accessors().isEmpty() && slot.writers().isEmpty()) {
 					continue;
 				}
 				boolean shifted = false;
@@ -12040,6 +12093,16 @@ public final class LispMacroExpander {
 					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFMETHOD),
 							new LispSymbol(setfFunctionName(accessor)), writerParams, writeBody)));
 					structAccessors.put(accessor, SETF_FUNCTION_MARKER);
+				}
+				for (String writer : slot.writers()) {
+					if (ownEmitted.contains(writer)) {
+						continue;
+					}
+					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFMETHOD), new LispSymbol(writer),
+							writerParams, writeBody)));
+					if (writer.startsWith("%setf-")) {
+						structAccessors.put(writer.substring("%setf-".length()), SETF_FUNCTION_MARKER);
+					}
 				}
 			}
 		}
@@ -12392,7 +12455,12 @@ public final class LispMacroExpander {
 	 * to {@code direct-slot-definition-class} as initargs by the definition-time driver
 	 * (single occurrence per key, the AMOP canonicalization for one appearance).
 	 */
-	private record ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied, List<LispVal> extras) {
+	private record ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied, List<LispVal> extras,
+			@Nullable LispVal cellInitform) {
+
+		ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied, List<LispVal> extras) {
+			this(spec, initargSupplied, extras, null);
+		}
 	}
 
 	/**
@@ -12418,12 +12486,19 @@ public final class LispMacroExpander {
 		own.readers().stream().filter(r -> !readers.contains(r)).forEach(readers::add);
 		List<String> accessors = new java.util.ArrayList<>(inherited.accessors());
 		own.accessors().stream().filter(a -> !accessors.contains(a)).forEach(accessors::add);
+		List<String> writers = new java.util.ArrayList<>(inherited.writers());
+		own.writers().stream().filter(w -> !writers.contains(w)).forEach(writers::add);
+		// Allocation is controlled by the MOST SPECIFIC specifier (CLHS 7.5.3): a
+		// re-declaration with :allocation :class owns a fresh cell (parseDefclassSlot
+		// minted it), one without reverts the slot to :instance -- so the own spec's
+		// cell stands as-is, never the inherited one. The cell-reading initform rides
+		// the initform override above the same way.
 		return new ClosRegistry.SlotSpec(inherited.name(), inherited.baseName(),
 				own.initformSupplied() ? own.initform() : inherited.initform(),
 				own.initformSupplied() || inherited.initformSupplied(),
 				own.initargSupplied() ? own.initargKeyword() : inherited.initargKeyword(),
 				own.initargSupplied() || inherited.initargSupplied(), List.copyOf(readers), List.copyOf(accessors),
-				"T".equals(own.type()) ? inherited.type() : own.type());
+				"T".equals(own.type()) ? inherited.type() : own.type(), List.copyOf(writers), own.sharedCellVar());
 	}
 
 	/**
@@ -12454,6 +12529,17 @@ public final class LispMacroExpander {
 	 * spelled. A user-written {@code slot-value} keeps the plain quote
 	 * ({@link #slotReadCall}) -- there the user DID spell the name.
 	 */
+	/**
+	 * The {@code :allocation :class} twin of {@link #checkedSlotRead}: the boundness
+	 * check runs over the shared cell's value instead of an instance slot, with the same
+	 * {@code %unspelled-quote} name carrier (the spelling is compiler-synthesized).
+	 */
+	private static LispVal checkedCellRead(String cellVar, LispVal objVar, String baseName) {
+		return listToCons(List.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), new LispSymbol(cellVar), objVar,
+				listToCons(List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE),
+						new LispSymbol(baseName.toUpperCase(java.util.Locale.ROOT))))));
+	}
+
 	private static LispVal checkedSlotRead(LispVal objVar, int index, String baseName) {
 		return listToCons(List.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), objRef(objVar, index), objVar,
 				listToCons(List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE),
@@ -12516,6 +12602,8 @@ public final class LispMacroExpander {
 		String type = "T";
 		List<String> readers = new java.util.ArrayList<>();
 		List<String> accessors = new java.util.ArrayList<>();
+		List<String> writers = new java.util.ArrayList<>();
+		boolean classAllocated = false;
 		List<LispVal> extras = new java.util.ArrayList<>();
 		if (spec instanceof LispSymbol s) {
 			slotSym = s;
@@ -12547,6 +12635,19 @@ public final class LispMacroExpander {
 					}
 					case ":READER" -> readers.add(requireSlotFunctionName(optValue, spec));
 					case ":ACCESSOR" -> accessors.add(requireSlotFunctionName(optValue, spec));
+					case ":WRITER" -> writers.add(parseWriterFunctionName(optValue, spec));
+					case ":ALLOCATION" -> {
+						// :instance is the default (a no-op); :class makes the slot's
+						// value live in ONE shared global cell (declared by the emitted
+						// defvar) that every access routes through -- upstream ASDF's
+						// operation classes are built on it.
+						if (!(optValue instanceof LispSymbol allocSym)
+								|| (!":CLASS".equals(allocSym.name()) && !":INSTANCE".equals(allocSym.name()))) {
+							throw new UnsupportedOperationException(
+									LispNames.DEFCLASS + " :allocation expects :instance or :class: " + spec.print());
+						}
+						classAllocated = ":CLASS".equals(allocSym.name());
+					}
 					case ":DOCUMENTATION" -> {
 						// Accepted and dropped (docstrings are not stored anywhere).
 					}
@@ -12582,9 +12683,32 @@ public final class LispMacroExpander {
 		}
 		PackageRegistry.QualifiedName slotQn = PackageRegistry.splitQualified(slotSym.name());
 		String baseName = slotQn == null ? slotSym.name() : slotQn.member();
-		return new ParsedSlot(new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initformSupplied,
-				initarg == null ? ":" + baseName : initarg, initarg != null, List.copyOf(readers),
-				List.copyOf(accessors), type), initarg != null, List.copyOf(extras));
+		String cellVar = null;
+		LispVal cellInitform = null;
+		if (classAllocated) {
+			// The shared cell: a global variable owned by THIS class (a subclass that
+			// re-declares with :allocation :class gets its own). The effective initform
+			// becomes a READ of the cell, so the generated constructor and every
+			// initform-filling path (change-class, %mop-fill-slots) see the cell's
+			// CURRENT value; the written initform initializes the cell itself, once, at
+			// class-definition time (CLHS 7.5.3).
+			String className = defclassForm.cdr() instanceof LispCons nameCons
+					&& nameCons.car() instanceof LispSymbol classSym ? classSym.name() : "ANONYMOUS";
+			cellVar = classSlotCellName(className, baseName);
+			cellInitform = initformSupplied ? initform : unboundMarker();
+			initform = new LispSymbol(cellVar);
+			initformSupplied = true;
+		}
+		return new ParsedSlot(
+				new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initformSupplied,
+						initarg == null ? ":" + baseName : initarg, initarg != null, List.copyOf(readers),
+						List.copyOf(accessors), type, List.copyOf(writers), cellVar),
+				initarg != null, List.copyOf(extras), cellInitform);
+	}
+
+	/** The global cell variable of one class's {@code :allocation :class} slot. */
+	private static String classSlotCellName(String className, String baseName) {
+		return "%CLASS-CELL-" + className.replace(":", "-") + "-" + baseName + "%";
 	}
 
 	private static String requireSlotFunctionName(LispVal value, LispVal spec) {
@@ -12593,6 +12717,27 @@ public final class LispMacroExpander {
 					LispNames.DEFCLASS + " :reader/:accessor expects a function name: " + spec.print());
 		}
 		return sym.name();
+	}
+
+	/**
+	 * Parses one {@code :writer} function name: a symbol names a two-argument
+	 * new-value-first generic of that name; a {@code (setf place)} list names the setf
+	 * function of {@code place}, stored as the mangled {@code %setf-place} writer-generic
+	 * name the accessor write halves already use (the emission registers the place under
+	 * the setf-function marker, so {@code (setf (place obj) v)} funcalls it).
+	 */
+	private static String parseWriterFunctionName(LispVal value, LispVal spec) {
+		if (value instanceof LispSymbol sym && !sym.isKeyword()) {
+			return sym.name();
+		}
+		if (value instanceof LispCons setfCons && setfCons.car() instanceof LispSymbol setfSym
+				&& LispNames.SETF.equals(plainTypeName(setfSym)) && setfCons.cdr() instanceof LispCons placeCons
+				&& placeCons.car() instanceof LispSymbol placeSym && !placeSym.isKeyword()
+				&& placeCons.cdr() instanceof LispNil) {
+			return setfFunctionName(placeSym.name());
+		}
+		throw new IllegalArgumentException(
+				LispNames.DEFCLASS + " :writer expects a function name or (setf name): " + spec.print());
 	}
 
 	/**
@@ -12822,6 +12967,12 @@ public final class LispMacroExpander {
 		if (baseName == null) {
 			return missingSlotStub(qn == null ? slotSym.name() : qn.member(), parts.get(1));
 		}
+		LispVal cellRead = classSlotCellRead(parts.get(1), baseName, closRegistry);
+		if (cellRead != null) {
+			// A :allocation :class declaration somewhere: the value lives in the shared
+			// cell, not in the instance mirror the index below would read.
+			return cellRead;
+		}
 		Integer index = uniqueLayoutSlotIndex(baseName, closRegistry);
 		if (index == null) {
 			// Types disagree on the position: dispatch on the instance TAG and read the
@@ -12880,6 +13031,124 @@ public final class LispMacroExpander {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The per-tag access of a slot name at least one registered class declares
+	 * {@code :allocation :class}: instance tag to either the shared cell variable (a
+	 * String -- classes whose effective spec carries the cell, non-redeclaring
+	 * descendants included) or the instance slot index (an Integer -- layouts keeping it
+	 * an instance slot, struct layouts among them). Null when NO registered class
+	 * declares the name class-allocated, so every ordinary program keeps its historical
+	 * expansion byte for byte.
+	 */
+	private static java.util.@Nullable Map<String, Object> classSlotAccessByTag(String baseName,
+			ClosRegistry closRegistry) {
+		boolean anyCell = false;
+		java.util.Map<String, Object> byTag = new java.util.LinkedHashMap<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			List<ClosRegistry.SlotSpec> slots = info.slots();
+			for (int i = 0; i < slots.size(); i++) {
+				if (slots.get(i).baseName().equals(baseName)) {
+					String cell = slots.get(i).sharedCellVar();
+					byTag.put(LispLayout.CLASS_TAG_PREFIX + info.name(), cell != null ? cell : Integer.valueOf(i));
+					anyCell |= cell != null;
+					break;
+				}
+			}
+		}
+		if (!anyCell) {
+			return null;
+		}
+		for (LispLayout layout : closRegistry.layouts().values()) {
+			if (layout.kind() == LispLayout.Kind.STRUCT) {
+				int index = layout.slotIndex(baseName);
+				if (index >= 0) {
+					byTag.put(layout.tag(), index);
+				}
+			}
+		}
+		return byTag;
+	}
+
+	/**
+	 * The read of a slot name with a {@code :allocation :class} declaration somewhere: a
+	 * tag dispatch choosing the type-correct shared cell or instance index, collapsing to
+	 * the bare cell read when one cell serves every declaring type. Null when the name
+	 * has no class-allocated declaration ({@link #classSlotAccessByTag}).
+	 */
+	@Nullable private static LispVal classSlotCellRead(LispVal objExpr, String baseName, ClosRegistry closRegistry) {
+		java.util.Map<String, Object> byTag = classSlotAccessByTag(baseName, closRegistry);
+		if (byTag == null) {
+			return null;
+		}
+		java.util.Set<Object> accesses = new java.util.LinkedHashSet<>(byTag.values());
+		if (accesses.size() == 1 && accesses.iterator().next() instanceof String cell) {
+			// The instance expression still evaluates (it may carry effects), then the
+			// one shared cell answers.
+			return prognOf(List.of(objExpr, new LispSymbol(cell)));
+		}
+		String prefix = "__cs" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (Object access : accesses) {
+			List<String> tags = tagsWithAccess(byTag, access);
+			LispVal read = access instanceof String cell ? new LispSymbol(cell) : objRef(v, (Integer) access);
+			clauses.add(listToCons(List.of(objIs(v, tags), read)));
+		}
+		clauses.add(listToCons(
+				List.of(LispTrue.INSTANCE, callTimeUnsupportedStub("The slot " + baseName + " is missing"))));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return makeLet(v.name(), objExpr, listToCons(condParts));
+	}
+
+	/**
+	 * The write twin of {@link #classSlotCellRead}: {@code setq} into the shared cell or
+	 * {@code %obj-set} into the instance slot, evaluating the place subform before the
+	 * value (CL order) and answering the stored value. Null when the name has no
+	 * class-allocated declaration.
+	 */
+	@Nullable private static LispVal classSlotCellWrite(LispVal objExpr, String baseName, LispVal value,
+			ClosRegistry closRegistry) {
+		java.util.Map<String, Object> byTag = classSlotAccessByTag(baseName, closRegistry);
+		if (byTag == null) {
+			return null;
+		}
+		java.util.Set<Object> accesses = new java.util.LinkedHashSet<>(byTag.values());
+		if (accesses.size() == 1 && accesses.iterator().next() instanceof String cell) {
+			return prognOf(
+					List.of(objExpr, listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cell), value))));
+		}
+		String prefix = "__cs" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		LispSymbol nv = new LispSymbol(prefix + "_nv");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (Object access : accesses) {
+			List<String> tags = tagsWithAccess(byTag, access);
+			LispVal store = access instanceof String cell
+					? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cell), nv))
+					: objSet(v, (Integer) access, nv);
+			clauses.add(listToCons(List.of(objIs(v, tags), store)));
+		}
+		clauses.add(listToCons(
+				List.of(LispTrue.INSTANCE, callTimeUnsupportedStub("The slot " + baseName + " is missing"))));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return makeLet(v.name(), objExpr, makeLet(nv.name(), value, listToCons(condParts)));
+	}
+
+	/** The tags mapped to one access value, in registration order. */
+	private static List<String> tagsWithAccess(java.util.Map<String, Object> byTag, Object access) {
+		List<String> tags = new java.util.ArrayList<>();
+		byTag.forEach((tag, a) -> {
+			if (a.equals(access)) {
+				tags.add(tag);
+			}
+		});
+		return tags;
 	}
 
 	/**
@@ -13012,34 +13281,40 @@ public final class LispMacroExpander {
 		LispSymbol n = new LispSymbol("%svr_n");
 		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR),
 				new LispString(LispNames.SLOT_VALUE + ": unknown runtime slot name")));
-		// slot base name -> index -> the tags placing it there, in registration order.
-		java.util.Map<String, java.util.Map<Integer, List<String>>> byName = new java.util.LinkedHashMap<>();
+		// slot base name -> access (Integer index, or a shared-cell variable for a
+		// :allocation :class slot) -> the tags taking it, in registration order.
+		java.util.Map<String, java.util.Map<String, String>> cells = sharedCellsByTag(closRegistry);
+		java.util.Map<String, java.util.Map<Object, List<String>>> byName = new java.util.LinkedHashMap<>();
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			for (int i = 0; i < layout.slotCount(); i++) {
-				byName.computeIfAbsent(layout.slotNames().get(i), k -> new java.util.LinkedHashMap<>())
-					.computeIfAbsent(i, k -> new java.util.ArrayList<>())
+				String slotName = layout.slotNames().get(i);
+				Object access = slotAccessOf(cells, layout.tag(), slotName, i);
+				byName.computeIfAbsent(slotName, k -> new java.util.LinkedHashMap<>())
+					.computeIfAbsent(access, k -> new java.util.ArrayList<>())
 					.add(layout.tag());
 			}
 		}
-		java.util.Map<Integer, List<String>> unambiguousByIndex = new java.util.LinkedHashMap<>();
-		java.util.Map<String, java.util.Map<Integer, List<String>>> ambiguous = new java.util.LinkedHashMap<>();
-		byName.forEach((name, byIndex) -> {
-			if (byIndex.size() == 1) {
-				unambiguousByIndex.computeIfAbsent(byIndex.keySet().iterator().next(), k -> new java.util.ArrayList<>())
+		java.util.Map<Object, List<String>> unambiguousByAccess = new java.util.LinkedHashMap<>();
+		java.util.Map<String, java.util.Map<Object, List<String>>> ambiguous = new java.util.LinkedHashMap<>();
+		byName.forEach((name, byAccess) -> {
+			if (byAccess.size() == 1) {
+				unambiguousByAccess
+					.computeIfAbsent(byAccess.keySet().iterator().next(), k -> new java.util.ArrayList<>())
 					.add(name);
 			}
 			else {
-				ambiguous.put(name, byIndex);
+				ambiguous.put(name, byAccess);
 			}
 		});
 		List<LispVal> clauses = new java.util.ArrayList<>();
-		for (java.util.Map.Entry<Integer, List<String>> entry : unambiguousByIndex.entrySet()) {
+		for (java.util.Map.Entry<Object, List<String>> entry : unambiguousByAccess.entrySet()) {
 			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(entry.getValue())),
-					objRef(v, entry.getKey()))));
+					slotAccessRead(v, entry.getKey()))));
 		}
-		for (java.util.Map.Entry<String, java.util.Map<Integer, List<String>>> entry : ambiguous.entrySet()) {
+		for (java.util.Map.Entry<String, java.util.Map<Object, List<String>>> entry : ambiguous.entrySet()) {
 			List<LispVal> inner = new java.util.ArrayList<>();
-			entry.getValue().forEach((index, tags) -> inner.add(listToCons(List.of(objIs(v, tags), objRef(v, index)))));
+			entry.getValue()
+				.forEach((access, tags) -> inner.add(listToCons(List.of(objIs(v, tags), slotAccessRead(v, access)))));
 			inner.add(listToCons(List.of(LispTrue.INSTANCE, signal)));
 			List<LispVal> innerCond = new java.util.ArrayList<>();
 			innerCond.add(new LispSymbol(LispNames.COND));
@@ -13049,6 +13324,43 @@ public final class LispMacroExpander {
 		}
 		return slotNameNormalizedDispatchDefuns(LispNames.SLOT_VALUE_RUNTIME, "%SVR-", List.of(v, n), n, clauses,
 				signal);
+	}
+
+	/**
+	 * Instance tag to slot base name to shared cell variable, for every
+	 * {@code :allocation :class} slot any registered class declares (empty for the
+	 * ordinary program, keeping every generated dispatch byte-identical).
+	 */
+	private static java.util.Map<String, java.util.Map<String, String>> sharedCellsByTag(ClosRegistry closRegistry) {
+		java.util.Map<String, java.util.Map<String, String>> out = new java.util.LinkedHashMap<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			for (ClosRegistry.SlotSpec spec : info.slots()) {
+				if (spec.sharedCellVar() != null) {
+					out.computeIfAbsent(LispLayout.CLASS_TAG_PREFIX + info.name(), k -> new java.util.LinkedHashMap<>())
+						.put(spec.baseName(), spec.sharedCellVar());
+				}
+			}
+		}
+		return out;
+	}
+
+	/** The access of one layout slot: the shared cell variable, or the Integer index. */
+	private static Object slotAccessOf(java.util.Map<String, java.util.Map<String, String>> cells, String tag,
+			String slotName, int index) {
+		String cell = cells.getOrDefault(tag, java.util.Map.of()).get(slotName);
+		return cell != null ? cell : Integer.valueOf(index);
+	}
+
+	/** The read expression of one slot access ({@link #slotAccessOf}). */
+	private static LispVal slotAccessRead(LispSymbol v, Object access) {
+		return access instanceof String cell ? new LispSymbol(cell) : objRef(v, (Integer) access);
+	}
+
+	/** The store expression of one slot access, answering the stored value. */
+	private static LispVal slotAccessStore(LispSymbol v, Object access, LispSymbol nv) {
+		return access instanceof String cell
+				? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cell), nv))
+				: objSet(v, (Integer) access, nv);
 	}
 
 	/**
@@ -13108,35 +13420,39 @@ public final class LispMacroExpander {
 		LispSymbol nv = new LispSymbol("%svw_nv");
 		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR),
 				new LispString(LispNames.SLOT_VALUE + ": unknown runtime slot name")));
-		java.util.Map<String, java.util.Map<Integer, List<String>>> byName = new java.util.LinkedHashMap<>();
+		java.util.Map<String, java.util.Map<String, String>> cells = sharedCellsByTag(closRegistry);
+		java.util.Map<String, java.util.Map<Object, List<String>>> byName = new java.util.LinkedHashMap<>();
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			for (int i = 0; i < layout.slotCount(); i++) {
-				byName.computeIfAbsent(layout.slotNames().get(i), k -> new java.util.LinkedHashMap<>())
-					.computeIfAbsent(i, k -> new java.util.ArrayList<>())
+				String slotName = layout.slotNames().get(i);
+				Object access = slotAccessOf(cells, layout.tag(), slotName, i);
+				byName.computeIfAbsent(slotName, k -> new java.util.LinkedHashMap<>())
+					.computeIfAbsent(access, k -> new java.util.ArrayList<>())
 					.add(layout.tag());
 			}
 		}
-		java.util.Map<Integer, List<String>> unambiguousByIndex = new java.util.LinkedHashMap<>();
-		java.util.Map<String, java.util.Map<Integer, List<String>>> ambiguous = new java.util.LinkedHashMap<>();
-		byName.forEach((name, byIndex) -> {
-			if (byIndex.size() == 1) {
-				unambiguousByIndex.computeIfAbsent(byIndex.keySet().iterator().next(), k -> new java.util.ArrayList<>())
+		java.util.Map<Object, List<String>> unambiguousByAccess = new java.util.LinkedHashMap<>();
+		java.util.Map<String, java.util.Map<Object, List<String>>> ambiguous = new java.util.LinkedHashMap<>();
+		byName.forEach((name, byAccess) -> {
+			if (byAccess.size() == 1) {
+				unambiguousByAccess
+					.computeIfAbsent(byAccess.keySet().iterator().next(), k -> new java.util.ArrayList<>())
 					.add(name);
 			}
 			else {
-				ambiguous.put(name, byIndex);
+				ambiguous.put(name, byAccess);
 			}
 		});
 		List<LispVal> clauses = new java.util.ArrayList<>();
-		for (java.util.Map.Entry<Integer, List<String>> entry : unambiguousByIndex.entrySet()) {
+		for (java.util.Map.Entry<Object, List<String>> entry : unambiguousByAccess.entrySet()) {
 			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(entry.getValue())),
-					makeProgn(List.of(objSet(v, entry.getKey(), nv), nv)))));
+					makeProgn(List.of(slotAccessStore(v, entry.getKey(), nv), nv)))));
 		}
-		for (java.util.Map.Entry<String, java.util.Map<Integer, List<String>>> entry : ambiguous.entrySet()) {
+		for (java.util.Map.Entry<String, java.util.Map<Object, List<String>>> entry : ambiguous.entrySet()) {
 			List<LispVal> inner = new java.util.ArrayList<>();
 			entry.getValue()
-				.forEach((index, tags) -> inner
-					.add(listToCons(List.of(objIs(v, tags), makeProgn(List.of(objSet(v, index, nv), nv))))));
+				.forEach((access, tags) -> inner
+					.add(listToCons(List.of(objIs(v, tags), makeProgn(List.of(slotAccessStore(v, access, nv), nv))))));
 			inner.add(listToCons(List.of(LispTrue.INSTANCE, signal)));
 			List<LispVal> innerCond = new java.util.ArrayList<>();
 			innerCond.add(new LispSymbol(LispNames.COND));
@@ -13253,20 +13569,28 @@ public final class LispMacroExpander {
 		if (baseName == null) {
 			return expandConstantResult((LispCons) fmtCall(LispNames.SLOT_BOUNDP, parts.get(1)), LispNil.INSTANCE);
 		}
-		// One clause per distinct index, so a slot every type places at the same position
-		// (the common case) costs a single tag membership test.
-		java.util.Map<Integer, List<String>> byIndex = new java.util.LinkedHashMap<>();
-		for (LispLayout layout : closRegistry.layouts().values()) {
-			int index = layout.slotIndex(baseName);
-			if (index >= 0) {
-				byIndex.computeIfAbsent(index, k -> new java.util.ArrayList<>()).add(layout.tag());
+		// One clause per distinct access, so a slot every type places at the same
+		// position (the common case) costs a single tag membership test. A
+		// :allocation :class declarer's arm tests the shared CELL instead of an index.
+		java.util.Map<String, Object> cellAccess = classSlotAccessByTag(baseName, closRegistry);
+		java.util.Map<Object, List<String>> byAccess = new java.util.LinkedHashMap<>();
+		if (cellAccess != null) {
+			cellAccess
+				.forEach((tag, access) -> byAccess.computeIfAbsent(access, k -> new java.util.ArrayList<>()).add(tag));
+		}
+		else {
+			for (LispLayout layout : closRegistry.layouts().values()) {
+				int index = layout.slotIndex(baseName);
+				if (index >= 0) {
+					byAccess.computeIfAbsent(index, k -> new java.util.ArrayList<>()).add(layout.tag());
+				}
 			}
 		}
 		String prefix = "__sb" + MV_COUNTER.getAndIncrement();
 		LispSymbol v = new LispSymbol(prefix + "_v");
 		List<LispVal> clauses = new java.util.ArrayList<>();
-		byIndex.forEach(
-				(index, tags) -> clauses.add(listToCons(List.of(objIs(v, tags), boundValueTest(objRef(v, index))))));
+		byAccess.forEach((access, tags) -> clauses.add(listToCons(List.of(objIs(v, tags),
+				boundValueTest(access instanceof String cell ? new LispSymbol(cell) : objRef(v, (Integer) access))))));
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
@@ -13292,6 +13616,7 @@ public final class LispMacroExpander {
 	private static List<LispVal> runtimeSlotBoundpDefuns(ClosRegistry closRegistry) {
 		LispSymbol v = new LispSymbol("%sbr_v");
 		LispSymbol n = new LispSymbol("%sbr_n");
+		java.util.Map<String, java.util.Map<String, String>> cells = sharedCellsByTag(closRegistry);
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			if (layout.slotCount() == 0) {
@@ -13299,9 +13624,9 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> inner = new java.util.ArrayList<>();
 			for (int i = 0; i < layout.slotCount(); i++) {
-				inner.add(listToCons(
-						List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(List.of(layout.slotNames().get(i)))),
-								boundValueTest(objRef(v, i)))));
+				String slotName = layout.slotNames().get(i);
+				inner.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(List.of(slotName))),
+						boundValueTest(slotAccessRead(v, slotAccessOf(cells, layout.tag(), slotName, i))))));
 			}
 			inner.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
 			List<LispVal> innerCond = new java.util.ArrayList<>();
@@ -13755,6 +14080,120 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.OBJ_BECOME), obj, quoteOf(tag)));
 	}
 
+	/**
+	 * Whether the program contains a {@code change-class} whose class argument is not a
+	 * literal quoted symbol -- the gate for {@link #changeClassRuntimeDefuns}.
+	 */
+	private static boolean needsChangeClassRuntime(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsComputedChangeClass);
+	}
+
+	private static boolean containsComputedChangeClass(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.CHANGE_CLASS.equals(head.name())
+				&& cons.isProperList()) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() >= 3 && quotedSymbol(parts.get(2)) == null) {
+				return true;
+			}
+		}
+		for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (containsComputedChangeClass(cell.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The shared runtime-designator {@code change-class} dispatch
+	 * ({@link LispNames#CHANGE_CLASS_RUNTIME}): the public defun normalizes a class
+	 * METAOBJECT designator to its name, then dispatches the spelling onto one
+	 * {@code %CC-<n>} arm per registered non-seeded class -- each arm the static
+	 * expansion's shape (old-tag capture, layout swap, initform fill) with the initargs
+	 * read out of the runtime plist via {@code getf}. Chained-chunked like the
+	 * runtime-slot-name dispatches. Because ANY registered class can be the runtime
+	 * target, the caller has registered every class as a change-class capacity target
+	 * before this runs.
+	 */
+	private static List<LispVal> changeClassRuntimeDefuns(ClosRegistry closRegistry) {
+		LispSymbol obj = new LispSymbol("%ccr_o");
+		LispSymbol cls = new LispSymbol("%ccr_c");
+		LispSymbol args = new LispSymbol("%ccr_a");
+		List<LispVal> armDefuns = new java.util.ArrayList<>();
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		int n = 0;
+		for (ClosRegistry.ClassInfo target : closRegistry.classes().values()) {
+			if (closRegistry.isSeededClass(target.name())) {
+				// The seeded condition/MOP base classes are not change-class targets a
+				// program can mean: they have no keyword constructors and their
+				// instances are system-built. Keeping them out keeps the dispatch
+				// registry-bounded by USER classes.
+				continue;
+			}
+			String armName = "%CC-" + n++;
+			armDefuns.add(changeClassArmDefun(armName, target, closRegistry));
+			List<String> spellings = new java.util.ArrayList<>();
+			addDesignatorSpellings(spellings, target.name());
+			List<LispVal> tests = new java.util.ArrayList<>();
+			tests.add(new LispSymbol(LispNames.OR));
+			for (String spelling : spellings) {
+				tests.add(fmtCall(LispNames.EQUAL, cls, quoteOf(spelling)));
+			}
+			clauses.add(listToCons(List.of(listToCons(tests), mvCall(armName, obj, args))));
+		}
+		LispVal fallback = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(LispNames.CHANGE_CLASS + ": not a registered class")));
+		List<LispVal> defuns = new java.util.ArrayList<>(chainedDispatchDefuns(LispNames.CHANGE_CLASS_RUNTIME, "%CCR-",
+				List.of(obj, cls, args), clauses, fallback));
+		// The public defun first normalizes a class-metaobject designator to its NAME
+		// (the spelling the arms match), like every other runtime designator dispatch.
+		LispVal normalize = metaobjectNameNormalization(cls, closRegistry, false);
+		if (normalize != null) {
+			List<LispVal> first = ((LispCons) defuns.get(0)).toList();
+			defuns.set(0, listToCons(
+					List.of(first.get(0), first.get(1), first.get(2), makeProgn(List.of(normalize, first.get(3))))));
+		}
+		defuns.addAll(armDefuns);
+		return defuns;
+	}
+
+	/**
+	 * One runtime {@code change-class} arm: the static expansion over a plist of
+	 * initargs. An initarg is stored only when the plist SUPPLIES it (getf against a
+	 * private marker symbol), into the shared cell for a {@code :allocation :class} slot
+	 * and the instance slot otherwise.
+	 */
+	private static LispVal changeClassArmDefun(String name, ClosRegistry.ClassInfo target, ClosRegistry closRegistry) {
+		LispSymbol obj = new LispSymbol("%cca_o");
+		LispSymbol args = new LispSymbol("%cca_a");
+		LispSymbol tagVar = new LispSymbol("%cca_t");
+		LispSymbol val = new LispSymbol("%cca_v");
+		List<LispVal> body = new java.util.ArrayList<>();
+		body.add(objBecome(obj, LispLayout.CLASS_TAG_PREFIX + target.name()));
+		LispVal fill = changeClassInitformFill(obj, tagVar, target, closRegistry);
+		if (fill != null) {
+			body.add(fill);
+		}
+		List<ClosRegistry.SlotSpec> slots = target.slots();
+		for (int i = 0; i < slots.size(); i++) {
+			ClosRegistry.SlotSpec slot = slots.get(i);
+			String cell = slot.sharedCellVar();
+			LispVal store = cell != null
+					? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cell), val))
+					: objSet(obj, i, val);
+			LispVal supplied = mvCall(LispNames.GETF, args, new LispSymbol(slot.initargKeyword()),
+					quoteOf("%CCR-UNSUPPLIED"));
+			body.add(makeLet(val.name(), supplied,
+					makeIf(fmtCall(LispNames.EQUAL, val, quoteOf("%CCR-UNSUPPLIED")), LispNil.INSTANCE, store)));
+		}
+		body.add(obj);
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), listToCons(List.of(obj, args)),
+				makeLet(tagVar.name(), objTag(obj), makeProgn(body))));
+	}
+
 	/** The binding the path-argument coercion introduces; nesting shadows harmlessly. */
 	private static final String PATH_ARG_VAR = "__path-arg";
 
@@ -13812,8 +14251,17 @@ public final class LispMacroExpander {
 		}
 		LispSymbol classSym = quotedSymbol(parts.get(2));
 		if (classSym == null) {
-			throw new UnsupportedOperationException(
-					LispNames.CHANGE_CLASS + " requires a literal quoted class name: " + cons.print());
+			// A COMPUTED class designator (upstream ASDF's (change-class ret class)):
+			// lower onto the shared runtime dispatch, generated by
+			// expandTopLevelDefinitions when this shape is present. The interpreter
+			// never reaches here -- it resolves the designator natively
+			// (LispEvaluator.evalChangeClass) and re-enters this expansion with the
+			// literal spelling.
+			List<LispVal> argsList = new java.util.ArrayList<>();
+			argsList.add(new LispSymbol(LispNames.LIST));
+			argsList.addAll(parts.subList(3, parts.size()));
+			return listToCons(List.of(new LispSymbol(LispNames.CHANGE_CLASS_RUNTIME), parts.get(1), parts.get(2),
+					listToCons(argsList)));
 		}
 		ClosRegistry.ClassInfo target = closRegistry.findClass(classSym.name());
 		if (target == null) {
@@ -15740,6 +16188,42 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether the name (as spelled, no package qualifier expected -- the three are
+	 * {@code cl} symbols and resolve plainly) is an instance-initialization generic a
+	 * program may CALL without ever defining a method on it. CL supplies each with a
+	 * system default, so {@code (reinitialize-instance obj :initarg v)} is ordinary CL
+	 * with no user method in sight (upstream ASDF's {@code parse-component-form}).
+	 * @param name the function name being resolved
+	 * @return whether {@link #synthesizeCalledInitProtocolGeneric} applies
+	 */
+	public static boolean isCallableInitProtocolName(String name) {
+		return isInitProtocolGeneric(name);
+	}
+
+	/**
+	 * Creates the plainly-named instance-initialization generic with its system default
+	 * method (and, transitively, the {@code shared-initialize} generic the default chains
+	 * to) for a program that CALLS the generic without defining any method on it. The
+	 * caller evaluates/emits the returned defuns and a dispatcher for every generic this
+	 * registered ({@code addExpandedDefinition}'s completion loop on the compile path,
+	 * {@code defineDispatcher} on the interpreter).
+	 * @param name the plain generic name ({@link #isCallableInitProtocolName})
+	 * @param closRegistry the registry
+	 * @return the synthesized default-method defuns, empty when the generic exists
+	 */
+	public static List<LispVal> synthesizeCalledInitProtocolGeneric(String name, ClosRegistry closRegistry) {
+		List<LispVal> out = new java.util.ArrayList<>();
+		if (!isInitProtocolGeneric(name) || closRegistry.findGeneric(name) != null) {
+			return out;
+		}
+		List<String> paramNames = "SHARED-INITIALIZE".equals(name) ? List.of("%obj", "%slot-names") : List.of("%obj");
+		ClosRegistry.GenericInfo generic = new ClosRegistry.GenericInfo(name, paramNames);
+		closRegistry.registerGeneric(generic);
+		synthesizeInitProtocolDefault(generic, closRegistry, out);
+		return out;
+	}
+
+	/**
 	 * Synthesizes the system default primary of one instance-initialization generic into
 	 * {@code out} and registers it on the generic: shared-initialize's default returns
 	 * the instance; initialize-instance's / reinitialize-instance's defaults
@@ -17517,6 +18001,10 @@ public final class LispMacroExpander {
 		// Every change-class target, recorded BEFORE the walk so the capacity reservation
 		// below can widen its ancestors the moment the whole registry is known.
 		registerChangeClassTargets(program, closRegistry);
+		// A change-class with a COMPUTED class argument: any registered class can be
+		// the runtime target, so the shared dispatch is generated after the walk and
+		// every class joins the capacity reservation.
+		boolean changeClassRuntime = needsChangeClassRuntime(program);
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		boolean runtimeTypep = needsRuntimeTypep(program);
 		boolean runtimeError = needsRuntimeErrorDispatch(program);
@@ -17537,7 +18025,7 @@ public final class LispMacroExpander {
 		boolean symbolFunctionWrite = usesSymbolFunctionWrite(program);
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !signalClauseMatch
 				&& !metaobjectRuntime && !allocateInstanceRuntime && !compileRuntime && !makeInstanceFunction
-				&& !classSlotDefsRuntime && !symbolFunctionWrite && !readsSlots(program)
+				&& !classSlotDefsRuntime && !symbolFunctionWrite && !changeClassRuntime && !readsSlots(program)
 				&& !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
@@ -17647,6 +18135,22 @@ public final class LispMacroExpander {
 				out.add(form);
 			}
 		}
+		// An instance-initialization generic the program CALLS without defining a
+		// method on it (upstream ASDF applies reinitialize-instance as a matter of
+		// course) still needs its system default and a dispatcher: CL supplies both.
+		for (String initName : List.of(LispNames.INITIALIZE_INSTANCE, LispNames.REINITIALIZE_INSTANCE,
+				LispNames.SHARED_INITIALIZE)) {
+			if (closRegistry.findGeneric(initName) == null && program.stream().anyMatch(f -> usesSymbol(f, initName))) {
+				out.addAll(synthesizeCalledInitProtocolGeneric(initName, closRegistry));
+				for (ClosRegistry.GenericInfo info : closRegistry.generics().values()) {
+					String genericName = ClosRegistry.normalize(info.name());
+					if (placedDispatchers.add(genericName)) {
+						dispatcherSlots.put(out.size(), genericName);
+						out.add(LispNil.INSTANCE);
+					}
+				}
+			}
+		}
 		// The narrowing analysis must see every call site the emitted program will
 		// contain; the runtimes appended below this loop are registry-derived and can
 		// call the initialization/print generics, so their presence stands the narrower
@@ -17688,6 +18192,17 @@ public final class LispMacroExpander {
 			// Position-independent defuns, appended once the registry is complete so
 			// the per-class construction arms cover every class the program defines.
 			out.addAll(allocateInstanceDefuns(closRegistry));
+		}
+		if (changeClassRuntime) {
+			// Any registered class can be the runtime target: every one joins the
+			// capacity reservation (applied at the end of this pass) and gets a
+			// dispatch arm.
+			for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+				if (!closRegistry.isSeededClass(info.name())) {
+					closRegistry.registerChangeClassTarget(info.name());
+				}
+			}
+			out.addAll(changeClassRuntimeDefuns(closRegistry));
 		}
 		if (compileRuntime) {
 			// Position-independent defuns, appended: a compiled program's compile is a
@@ -24258,6 +24773,11 @@ public final class LispMacroExpander {
 		}
 		String pred = atomicTypePredicate(name);
 		if (pred == null) {
+			// A metaobject type specifier (standard-class, class) is itself a MOP
+			// seeding trigger, exactly like the interpreter's typep/subtypep: a
+			// typecase over (find-class 'c) expands BEFORE the find-class call that
+			// produces the very metaobject the clause is about had a chance to seed.
+			closRegistry.ensureMopClassesSeededFor(sym.name());
 			// A defclass/define-condition class (incl. the built-in condition
 			// hierarchy): instance-of by tag membership, like a class specializer. Use
 			// the REGISTERED class name for the tag enumeration -- findClass matches a

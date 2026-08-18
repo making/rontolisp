@@ -863,8 +863,27 @@ todo-317 one) was added. Pinned by
 `WasmLispCompilerIntegrationTest#runtimeClassDesignatorResolvesAnInternedNonExportedName`
 and ci-spec `runtime-class-designator-spellings`.
 
-**Still literal-only**: `change-class`'s class argument (`CHANGE-CLASS requires a
-literal quoted class name` on every backend -- there is no runtime arm to widen).
+**`change-class`'s class argument may be COMPUTED** (todo-442, 2026-08-18): a
+runtime symbol or a class metaobject -- upstream ASDF's `(change-class ret
+class)`. The interpreter resolves the designator natively
+(`LispEvaluator.resolveChangeClassDesignator`: evaluates instance then
+designator in CL order, folds a metaobject to its name slot, re-enters the
+static expansion with the literal spelling). The compile paths lower the site to
+`(%change-class-runtime obj cls (list initargs...))`; `expandTopLevelDefinitions`
+(gate `needsChangeClassRuntime`) generates the dispatch -- metaobject-name
+normalization preamble, then one spelling-matched `%CC-<n>` arm per registered
+NON-SEEDED class (`addDesignatorSpellings`, `equal` compares -- content-safe on
+WASM), each arm the static expansion's shape with the initargs read out of the
+plist via `getf` against a private marker. Because any class can be the runtime
+target, every non-seeded class joins the change-class CAPACITY reservation
+(`registerChangeClassTarget` over the whole registry) -- a program using the
+computed shape pays instance arrays sized to the widest reachable layout, which
+is the price of the JVM identity model; re-evaluate if that cost ever shows up
+in a real program. Pinned by
+`LispEvaluatorTest#changeClassAcceptsAComputedClassDesignator`,
+`JvmLispCompilerTest#compileAndRunChangeClassWithComputedDesignator`,
+`WasmLispCompilerIntegrationTest#reinitializeInstanceAndComputedChangeClass` and
+ci-spec `clos-computed-change-class-442`.
 
 ## Real slot unboundness (todo-199)
 
@@ -988,6 +1007,79 @@ instance is the value. postmodern's connection pool needs the identity to surviv
 - The interpreter needs no reservation at all (`LispInstance.becomeLayout` grows the
   array; the LispInstance, not the array, is the identity) -- the reservation is
   harmless there and keeps ONE expansion for all four backends.
+
+## The CLOS surface batch (todo-442, 2026-08-18)
+
+Five ordinary-CL gaps upstream ASDF tripped over, closed together. The computed
+`change-class` half is documented in the section above; the rest:
+
+- **The instance-initialization generics are CALLABLE with no user method.** CL
+  supplies each with a system default, so `(reinitialize-instance obj :k v)` is
+  legal with no `defmethod` in sight (ASDF's `(apply 'reinitialize-instance
+  system keys)`). `LispMacroExpander.synthesizeCalledInitProtocolGeneric` is the
+  one entry: it creates the plainly-named generic and runs the SAME default
+  synthesis the first user defmethod triggers (`synthesizeInitProtocolDefault`,
+  chain included). The compile path calls it from `expandTopLevelDefinitions`
+  for any of the three names the program references without a registered
+  generic, reserving dispatcher slots for everything it registers; the
+  interpreter calls it from `resolveFunction`'s tail (the `%slot-read` lazy
+  pattern) and defines the missing dispatchers. Consequence to know: a program
+  that merely CALLS `reinitialize-instance` now has a `shared-initialize`
+  generic, so `expandMakeInstance` routes construction through the protocol
+  chain there -- same values, different emitted shape.
+- **`:writer`** (`SlotSpec.writers`): both spellings -- a symbol defines a
+  two-argument new-value-first generic of that name; `(setf place)` is stored
+  pre-mangled as the `%setf-place` writer-generic name the `:accessor` write
+  halves already use, and the emission registers the place under
+  `SETF_FUNCTION_MARKER`. Writers merge on shadowing (`shadowSlotSpec`) and are
+  covered by the MI shifted-accessor synthesis.
+- **`:allocation :class`** (`SlotSpec.sharedCellVar`): the value lives in ONE
+  `defvar`'d global cell per DECLARING class
+  (`%CLASS-CELL-<class>-<slot>%`), initialized once at class-definition time;
+  a subclass re-declaring with `:allocation :class` mints a new cell, and one
+  re-declaring WITHOUT reverts the slot to `:instance` (allocation follows the
+  most specific specifier, CLHS 7.5.3). The slot KEEPS a layout index -- a dead
+  mirror -- so every index computation, `slot-exists-p` and `%class-slot-defs`
+  are untouched; what changed is that every ACCESS routes to the cell:
+  - the effective spec's `initform` IS the cell symbol (the written initform
+    moved to the `defvar`), so the constructor default, `change-class`'s fill
+    and `%mop-fill-slots` read the cell's current value for free;
+  - the constructor stores `(setq <cell> <var>)`, so a `make-instance` initarg
+    naming a shared slot writes the CELL (CL's fill), a no-op when unsupplied;
+  - generated reader/accessor/writer methods read/write the cell
+    (`checkedCellRead`); a re-declaring subclass re-emits the EFFECTIVE merged
+    method set specialized on itself, because the inherited methods bake the
+    ancestor's cell;
+  - literal-name `slot-value`/`setf`/`slot-boundp` route through
+    `classSlotAccessByTag` (null for every ordinary program, keeping the
+    historical expansion byte-identical; otherwise a tag dispatch over
+    cell-vs-index arms), and the runtime-name dispatches
+    (`%slot-value-runtime`/`-set-`/`%slot-boundp-runtime`) carry the same
+    cell arms via `sharedCellsByTag`; the interpreter's `instanceSlotRef`
+    answers a `CellSlotRef` over the global environment, which also covers
+    `slot-makunbound`.
+  Residual: the instance PRINTER shows the mirror (stale after a shared
+  write), and `equalp`/`%obj-slots` walk mirrors -- revisit if a real program
+  compares or prints class-slotted instances.
+- **`standard-class` as a type specifier** in `typep`/`typecase`:
+  `makeTypeTest` calls `ClosRegistry.ensureMopClassesSeededFor` on an
+  unrecognized symbol specifier before the registry lookup -- the same seeding
+  trigger the interpreter's `typep`/`subtypep` already had -- so
+  `(typecase (find-class 'c) (standard-class ...))` expands to the ordinary
+  descendant-tag test on every backend. (`structure-class`/`built-in-class`
+  keep their deliberate empty tests: a struct's metaobject IS a
+  standard-class here.)
+
+Pinned by `LispEvaluatorTest#reinitializeInstanceIsCallableWithNoUserMethod` /
+`#defclassWriterSlotOptionDefinesTheWriterGeneric` /
+`#defclassClassAllocationSharesOneCellPerDeclaringClass` /
+`#typecaseStandardClassMatchesAClassMetaobject`, the
+`compileAndRun{ReinitializeInstanceWithNoUserMethod,DefclassWriterAndClassAllocation}`
+JVM twins, the
+`reinitializeInstanceAndComputedChangeClass` /
+`defclassWriterClassAllocationAndStandardClassTypecase` WASM twins, and ci-spec
+`clos-reinitialize-442` / `clos-slot-options-and-metaobject-types-442`
+(all four backends).
 
 ## `print-object` -- the printer consults it (todo-199)
 
@@ -1346,8 +1438,9 @@ before and every existing artifact stays byte-identical.
   offending form (`JvmLispCompiler` chunk-loop wrapper).
   `change-class` is the ONE runtime exception and is not MOP: both classes are literal, so
   the whole change is a static expansion (see above).
-- `:allocation`/`:writer` slot options, eql specializers on strings.
-  (Multiple inheritance is IN since 2026-08-02 -- see the section above.)
+- eql specializers on strings.
+  (Multiple inheritance is IN since 2026-08-02; `:writer` and `:allocation
+  :class` are IN since 2026-08-18 -- see "The CLOS surface batch" below.)
   The `:type` slot option is RECORDED since 2026-07-18 (`SlotSpec.type`, plain
   name, `"t"` when omitted; still a checking no-op) so introspection can
   report it.

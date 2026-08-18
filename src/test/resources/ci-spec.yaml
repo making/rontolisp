@@ -10406,6 +10406,61 @@ cases:
       (#P"./wpc-a.txt" #P"./wpc-b.txt")
       NIL
 
+  - name: clos-reinitialize-442
+    source: |
+      ;; reinitialize-instance is callable with NO user method anywhere: CL
+      ;; supplies the system default, which chains into shared-initialize's
+      ;; supplied-initarg fill (upstream ASDF's (apply 'reinitialize-instance
+      ;; system keys)). An unsupplied slot keeps its value.
+      (defclass e442-p () ((n :initarg :n :reader e442-n) (m :initarg :m :initform 10)))
+      (let ((o (make-instance 'e442-p :n 1)))
+        (reinitialize-instance o :n 2)
+        (print (list (e442-n o) (slot-value o 'm))))
+    expected: |
+      (2 10)
+  - name: clos-computed-change-class-442
+    source: |
+      ;; change-class takes a COMPUTED class designator -- a runtime symbol or a
+      ;; class metaobject (upstream ASDF's (change-class ret class)) -- through
+      ;; the generated %change-class-runtime dispatch: identity, shared slots,
+      ;; the added slot's initform fill and supplied initargs all match the
+      ;; literal spelling.
+      (defclass e442-base () ((n :initarg :n)))
+      (defclass e442-sub (e442-base) ((extra :initform 42)))
+      (let ((o (make-instance 'e442-base :n 1)) (cls 'e442-sub))
+        (change-class o cls)
+        (let ((p (make-instance 'e442-base :n 5)))
+          (change-class p (find-class 'e442-sub) :n 7)
+          (print (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra)
+                       (slot-value p 'n)))))
+    expected: |
+      (E442-SUB 1 42 7)
+  - name: clos-slot-options-and-metaobject-types-442
+    source: |
+      ;; The rest of the todo-442 CLOS surface: :writer in both spellings, the
+      ;; shared cell of :allocation :class (per DECLARING class -- a re-declaring
+      ;; subclass owns a new cell; accessor, slot-value and a runtime name all
+      ;; read the cell), and standard-class as a typecase specifier.
+      (defclass e442-q () ((a :writer (setf e442-q-a) :reader e442-q-a :initform 1)
+                           (b :writer e442-set-b :reader e442-get-b :initform 0)))
+      (let ((o (make-instance 'e442-q)))
+        (setf (e442-q-a o) 5)
+        (e442-set-b 7 o)
+        (print (list (e442-q-a o) (e442-get-b o))))
+      (defclass e442-op () ((selfward :initform 'base-op :allocation :class :reader e442-selfward)))
+      (defclass e442-load-op (e442-op) ((selfward :initform 'load-dep :allocation :class)))
+      (defclass e442-r () ((a :initform 1 :allocation :class :accessor e442-r-a)))
+      (let ((x (make-instance 'e442-r)) (y (make-instance 'e442-r)) (nm 'a))
+        (setf (e442-r-a x) 9)
+        (print (list (e442-selfward (make-instance 'e442-op))
+                     (e442-selfward (make-instance 'e442-load-op))
+                     (e442-r-a y) (slot-value y 'a) (slot-value y nm))))
+      (print (typecase (find-class 'e442-op) (standard-class :meta) (t :other)))
+    expected: |
+      (5 7)
+      (BASE-OP LOAD-DEP 9 9 9)
+      :META
+
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report
 # plus a non-zero exit. `stderr` lines must APPEAR -- wasmtime wraps its own

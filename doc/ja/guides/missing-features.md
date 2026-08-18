@@ -138,9 +138,11 @@ CLOS は**静的なサブセット**です
 [`slot-boundp`](../reference/macros/slot-boundp.md) がそれを報告し、
 [`slot-makunbound`](../reference/macros/slot-makunbound.md) が元に戻し、
 読み取りは `unbound-slot` をシグナルします。
-[`change-class`](../reference/macros/change-class.md) は、両方のクラスが
-リテラルであれば、インスタンスのクラスをその場で変更します。**定義時 MOP
-サブセット**が入っています:
+[`change-class`](../reference/macros/change-class.md) はインスタンスのクラスを
+その場で変更し（対象は実行時のシンボルやクラスメタオブジェクトでも可）、
+`reinitialize-instance` / `shared-initialize` はユーザメソッドなしでも呼び出せ
+ます — CL と同様、システムデフォルトが指定された initarg を格納します。
+**定義時 MOP サブセット**が入っています:
 [`find-class`](../reference/functions/find-class.md) と
 [`class-of`](../reference/functions/class-of.md) は実物の `standard-class`
 メタオブジェクトを返し、

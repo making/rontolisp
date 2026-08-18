@@ -11272,6 +11272,61 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunReinitializeInstanceWithNoUserMethod() throws Exception {
+		// CL supplies the system default (chaining into shared-initialize's initarg
+		// fill), so a bare call compiles and fills the supplied initargs -- upstream
+		// ASDF's (apply 'reinitialize-instance system keys).
+		assertThat(compileAndRun("""
+				(defclass jri-p () ((n :initarg :n :reader jri-n) (m :initarg :m :initform 10)))
+				(let ((o (make-instance 'jri-p :n 1)))
+				  (reinitialize-instance o :n 2)
+				  (print (list (jri-n o) (slot-value o 'm))))
+				""")).isEqualTo("(2 10)");
+	}
+
+	@Test
+	void compileAndRunChangeClassWithComputedDesignator() throws Exception {
+		// A runtime class designator (symbol or metaobject) routes through the
+		// generated %change-class-runtime dispatch; identity, shared slots, initform
+		// fill and supplied initargs match the literal spelling.
+		assertThat(compileAndRun("""
+				(defclass jcc-base () ((n :initarg :n)))
+				(defclass jcc-sub (jcc-base) ((extra :initform 42)))
+				(let ((o (make-instance 'jcc-base :n 1)) (cls 'jcc-sub))
+				  (change-class o cls)
+				  (let ((p (make-instance 'jcc-base :n 5)))
+				    (change-class p (find-class 'jcc-sub) :n 7)
+				    (print (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra)
+				                 (slot-value p 'n)))))
+				""")).isEqualTo("(JCC-SUB 1 42 7)");
+	}
+
+	@Test
+	void compileAndRunDefclassWriterAndClassAllocation() throws Exception {
+		// :writer (setf name) / :writer sym define the write-side generics; a
+		// :allocation :class slot lives in one shared cell per declaring class, read
+		// and written through every access path, with a re-declaring subclass owning
+		// a cell of its own; standard-class works as a typecase specifier.
+		assertThat(compileAndRun("""
+				(defclass jwr-q () ((a :writer (setf jwr-q-a) :reader jwr-q-a :initform 1)
+				                    (b :writer jwr-set-b :reader jwr-get-b :initform 0)))
+				(let ((o (make-instance 'jwr-q)))
+				  (setf (jwr-q-a o) 5)
+				  (jwr-set-b 7 o)
+				  (print (list (jwr-q-a o) (jwr-get-b o))))
+				(defclass jca-op () ((selfward :initform 'base-op :allocation :class :reader jca-selfward)))
+				(defclass jca-load-op (jca-op) ((selfward :initform 'load-dep :allocation :class)))
+				(defclass jca-r () ((a :initform 1 :allocation :class :accessor jca-r-a)))
+				(let ((x (make-instance 'jca-r)) (y (make-instance 'jca-r)) (nm 'a))
+				  (setf (jca-r-a x) 9)
+				  (print (list (jca-selfward (make-instance 'jca-op))
+				               (jca-selfward (make-instance 'jca-load-op))
+				               (jca-r-a y) (slot-value y 'a) (slot-value y nm))))
+				(print (typecase (find-class 'jca-op) (standard-class :meta) (t :other)))
+				""")).isEqualTo("(5 7)\n(BASE-OP LOAD-DEP 9 9 9)\n:META");
+	}
+
+	@Test
 	void compileAndRunDefclassMultipleInheritance() throws Exception {
 		// Slots merge across supers; the second super's accessor (whose slot shifts
 		// from index 0 to 1) is overridden per class; a diamond keeps ONE copy of the

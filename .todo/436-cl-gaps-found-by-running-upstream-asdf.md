@@ -37,7 +37,7 @@ a ready-made exerciser for all of it.
 | ~~`.todo/439`~~ | `with-open-file` / `open` / `load` reject computed keywords | surface -- LANDED 2026-08-18 |
 | ~~`.todo/440`~~ | string designators | surface -- LANDED 2026-08-18 |
 | ~~`.todo/441`~~ | wild pathname components | surface -- LANDED 2026-08-18 |
-| `.todo/442` | the CLOS surface (`reinitialize-instance` &c) | surface |
+| ~~`.todo/442`~~ | the CLOS surface (`reinitialize-instance` &c) | surface -- LANDED 2026-08-18 |
 | `.todo/443` | the missing standard names | surface |
 
 `437` and `438` are real BUGS -- a library hitting them is silently wrong or
@@ -46,7 +46,7 @@ does not terminate. The rest is missing surface.
 ## Ordering
 
 - **Wave 1, parallel: `437`, `439`, `440`, `441`, `442`.** Independent of each
-  other. `437`, `439`, `440` and `441` are done; the printer now walks a list /
+  other. All five are done; the printer now walks a list /
   general rank-1 vector, so `438` is unblocked.
 - **Wave 2: `443`.** Last, because it adds the most names and therefore collides
   hardest on the shared counter below.
@@ -80,8 +80,10 @@ divergence underneath it. It is NOT in this family's wave -- it has a measured
 - Every child lands on **all four backends** with the usual ladder
   (interpreter -> JVM -> WASM -> ci-spec) unless its file says otherwise.
 - A name being in `PackageRegistry.CL_SYMBOLS` is **not** evidence it is
-  implemented (`reinitialize-instance`, `shared-initialize`, `slot-makunbound`
-  are all registered and absent). Grep before trusting the set.
+  implemented. `442`'s probe (2026-08-18) closed `reinitialize-instance` /
+  `shared-initialize` and found `print-object` to be the one remaining
+  registered-and-absent `CL_FUNCTIONS` name (recorded in `443`). Grep before
+  trusting the set.
 
 ## Re-running the finder
 

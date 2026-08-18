@@ -2948,6 +2948,41 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Resolves a {@code change-class} whose class argument is COMPUTED (upstream ASDF's
+	 * {@code (change-class ret class)}) into the literal-name form the shared expansion
+	 * takes: the instance and the designator evaluate here, in CL's left-to-right order
+	 * (the instance value is self-evaluating, so re-evaluating the rebuilt form is
+	 * effect-free), and a class-metaobject designator continues as its name. A form whose
+	 * class argument is already a literal quoted symbol passes through untouched.
+	 */
+	private LispCons resolveChangeClassDesignator(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			return cons;
+		}
+		if (parts.get(2) instanceof LispCons q && q.car() instanceof LispSymbol qs
+				&& LispNames.QUOTE.equals(qs.name())) {
+			return cons;
+		}
+		LispVal instance = eval(parts.get(1), env);
+		LispVal designator = eval(parts.get(2), env);
+		if (designator instanceof LispInstance meta && meta.slotCount() > 0
+				&& this.closRegistry.isClassMetaobject(meta)) {
+			designator = meta.slot(0);
+		}
+		if (!(designator instanceof LispSymbol nameSym)) {
+			throw new LispEvalException(
+					LispNames.CHANGE_CLASS + " expects a class designator, got " + designator.print());
+		}
+		List<LispVal> rebuilt = new java.util.ArrayList<>();
+		rebuilt.add(parts.get(0));
+		rebuilt.add(instance);
+		rebuilt.add(new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(nameSym, LispNil.INSTANCE)));
+		rebuilt.addAll(parts.subList(3, parts.size()));
+		return (LispCons) LispCons.rebuiltList(cons, rebuilt);
+	}
+
+	/**
 	 * Evaluates {@code (slot-value obj slot)}. A literal quoted slot name goes through
 	 * the shared macro expansion (positional {@code nth}, compile-path parity); a
 	 * computed name -- a variable or expression, e.g. a serializer walking
@@ -2977,15 +3012,44 @@ public final class LispEvaluator {
 		return slot == null ? LispNil.INSTANCE : slot.read();
 	}
 
-	/** An instance together with the 0-based index of one of its slots. */
-	private record SlotRef(LispInstance instance, int index) {
+	/** A readable/writable slot location: an instance slot or a shared class cell. */
+	private sealed interface SlotRef permits InstanceSlotRef, CellSlotRef {
 
-		LispVal read() {
+		LispVal read();
+
+		void write(LispVal value);
+
+	}
+
+	/** An instance together with the 0-based index of one of its slots. */
+	private record InstanceSlotRef(LispInstance instance, int index) implements SlotRef {
+
+		@Override
+		public LispVal read() {
 			return this.instance.slot(this.index);
 		}
 
-		void write(LispVal value) {
+		@Override
+		public void write(LispVal value) {
 			this.instance.setSlot(this.index, value);
+		}
+
+	}
+
+	/**
+	 * The shared global cell of a {@code :allocation :class} slot -- reads and writes go
+	 * to the {@code defvar}'d cell variable, never to the instance mirror.
+	 */
+	private record CellSlotRef(Environment env, String cellVar) implements SlotRef {
+
+		@Override
+		public LispVal read() {
+			return this.env.lookup(this.cellVar);
+		}
+
+		@Override
+		public void write(LispVal value) {
+			this.env.set(this.cellVar, value);
 		}
 
 	}
@@ -3009,11 +3073,26 @@ public final class LispEvaluator {
 	 * an instance or its layout has no slot of that name. The layout rides on the value,
 	 * so this resolves a {@code defstruct} instance as readily as a CLOS one.
 	 */
-	private static @Nullable SlotRef instanceSlotRef(LispVal instance, LispVal slotName) {
+	private @Nullable SlotRef instanceSlotRef(LispVal instance, LispVal slotName) {
 		if (!(instance instanceof LispInstance inst) || !(slotName instanceof LispSymbol slotSym)) {
 			return null;
 		}
 		String base = plainName(slotSym.name());
+		// A :allocation :class slot answers its shared cell, never the instance
+		// mirror -- the registry's effective spec (inherited or re-declared) names the
+		// cell the instance's own class shares.
+		String tag = inst.layout().tag();
+		if (tag.startsWith(LispLayout.CLASS_TAG_PREFIX)) {
+			ClosRegistry.ClassInfo info = this.closRegistry
+				.findClass(tag.substring(LispLayout.CLASS_TAG_PREFIX.length()));
+			if (info != null) {
+				for (ClosRegistry.SlotSpec spec : info.slots()) {
+					if (spec.baseName().equalsIgnoreCase(base) && spec.sharedCellVar() != null) {
+						return new CellSlotRef(this.globalEnv, spec.sharedCellVar());
+					}
+				}
+			}
+		}
 		List<String> slotNames = inst.layout().slotNames();
 		for (int i = 0; i < slotNames.size(); i++) {
 			// Case-insensitive: a Java-side caller (conditionSlotValue passes the
@@ -3021,7 +3100,7 @@ public final class LispEvaluator {
 			// while an upcase-read condition registers its slots upcased -- the same
 			// reconciliation LispMacroExpander.expandConditionSlotReader makes.
 			if (slotNames.get(i).equalsIgnoreCase(base)) {
-				return new SlotRef(inst, i);
+				return new InstanceSlotRef(inst, i);
 			}
 		}
 		return null;
@@ -4370,7 +4449,8 @@ public final class LispEvaluator {
 					ensureAsdfClassesFor(cons);
 					return eval(LispMacroExpander.expandMakeInstance(cons, this.closRegistry), env);
 				case LispNames.CHANGE_CLASS:
-					return eval(LispMacroExpander.expandChangeClass(cons, this.closRegistry, false), env);
+					return eval(LispMacroExpander.expandChangeClass(resolveChangeClassDesignator(cons, env),
+							this.closRegistry, false), env);
 				case LispNames.SLOT_VALUE:
 					return evalSlotValue(cons, env);
 				case LispNames.WITH_SLOTS:
@@ -6870,6 +6950,25 @@ public final class LispEvaluator {
 			// pattern. The prefix test keeps ordinary undefined names cheap.
 			if (!this.httpServerLoaded && name.startsWith("RONTOLISP::%HTTP-")) {
 				ensureHttpServerLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// An instance-initialization generic called with no user method anywhere
+			// (upstream ASDF's (apply 'reinitialize-instance system keys)): CL supplies
+			// the system default, so synthesize the generic with it -- the same
+			// machinery the first user defmethod on one of these names runs -- and
+			// define the dispatchers it registered.
+			if (LispMacroExpander.isCallableInitProtocolName(name) && this.closRegistry.findGeneric(name) == null) {
+				for (LispVal form : LispMacroExpander.synthesizeCalledInitProtocolGeneric(name, this.closRegistry)) {
+					eval(form, this.globalEnv);
+				}
+				for (ClosRegistry.GenericInfo info : this.closRegistry.generics().values()) {
+					if (this.globalEnv.lookupFunctionOrNull(info.name()) == null) {
+						defineDispatcher(info.name(), this.globalEnv);
+					}
+				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;
