@@ -2095,13 +2095,29 @@ public final class LispMacroExpander {
 		}
 
 		/**
-		 * Consumes an {@code of-type TYPE} declaration if one is next: the type spec
-		 * carries no information for this expansion and is discarded.
+		 * Consumes a type-spec declaration if one is next, in either ANSI spelling: the
+		 * explicit {@code of-type TYPE}, or the simple form -- a bare {@code fixnum},
+		 * {@code float}, {@code t} or {@code nil} written straight after the variable.
+		 * Either way the type spec carries no information for this expansion (rontolisp's
+		 * loop expansion is untyped) and is discarded.
 		 */
 		private void skipOfType() {
 			if ("of-type".equals(peekKeyword())) {
 				pos++;
 				nextForm();
+				return;
+			}
+			// The reader reads bare T/NIL as LispTrue/LispNil rather than a LispSymbol,
+			// so
+			// they cannot be matched via plainName like fixnum/float below.
+			LispVal next = peekToken();
+			if (next instanceof LispTrue || next instanceof LispNil) {
+				pos++;
+				return;
+			}
+			String simple = plainName(next);
+			if (peekKeyword() == null && ("fixnum".equals(simple) || "float".equals(simple))) {
+				pos++;
 			}
 		}
 

@@ -2831,6 +2831,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLoopTypeSpec() {
+		// ANSI's for-as-clause is `for var [type-spec] ...`; type-spec has two
+		// spellings -- explicit `of-type d-type-spec` and the simple bare
+		// fixnum/float/t/nil -- and both carry no semantics here, so both are skipped.
+		assertThat(eval("(loop for v fixnum = 0 then (1+ v) for i from 1 to 3 collect v)").print())
+			.isEqualTo("(0 1 2)");
+		assertThat(eval("(loop for v float = 0.0 then (+ v 1.0) for i from 1 to 3 collect v)").print())
+			.isEqualTo("(0.0 1.0 2.0)");
+		assertThat(eval("(loop for v t = 0 then (1+ v) for i from 1 to 3 collect v)").print()).isEqualTo("(0 1 2)");
+		assertThat(eval("(loop for v nil = 0 then (1+ v) for i from 1 to 3 collect v)").print()).isEqualTo("(0 1 2)");
+		assertThat(eval("(loop for v of-type fixnum = 0 then (1+ v) for i from 1 to 3 collect v)").print())
+			.isEqualTo("(0 1 2)");
+		// `with` has the same call and the same hole.
+		assertThat(eval("(loop with a fixnum = 10 for i from 1 to 3 collect (+ a i))").print()).isEqualTo("(11 12 13)");
+		// A fifth name is not a type-spec spelling: it must stay an error, or a typo'd
+		// subclause keyword becomes a silently ignored token.
+		assertThatThrownBy(() -> eval("(loop for v bogus = 0 then (1+ v) collect v)"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("incomplete for clause");
+	}
+
+	@Test
 	void evalLoopListStepping() {
 		assertThat(eval("(loop for x in '(a b c) collect x)").print()).isEqualTo("(A B C)");
 		assertThat(eval("(loop for x on '(1 2 3) collect x)").print()).isEqualTo("((1 2 3) (2 3) (3))");

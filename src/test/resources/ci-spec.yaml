@@ -2615,6 +2615,19 @@ cases:
       (1 4 9 16 25)
       (9 8 3)
       15
+  - name: loop-macro-type-spec
+    # ANSI's for-as-clause is `for var [type-spec] ...`, and type-spec has two
+    # spellings: explicit `of-type d-type-spec` and the simple bare
+    # fixnum/float/t/nil written straight after the variable. `with` takes the
+    # same type-spec. Neither carries semantics here, so both are just skipped.
+    source: |
+      (print (loop for v fixnum = 0 then (1+ v) for i from 1 to 3 collect v))
+      (print (loop for v of-type fixnum = 0 then (1+ v) for i from 1 to 3 collect v))
+      (print (loop with a fixnum = 10 for i from 1 to 3 collect (+ a i)))
+    expected: |
+      (0 1 2)
+      (0 1 2)
+      (11 12 13)
   - name: loop-being-symbols-lite
     source: |
       (print (loop for s being the external-symbols of :cl collect s))

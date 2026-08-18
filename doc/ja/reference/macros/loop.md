@@ -20,6 +20,7 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 - シーケンスステップ: `for VAR across SEQ` は `VAR` を文字列の各文字、またはベクタの各要素に順に束縛します。
 - 汎用ステップ: `for VAR = INIT [then STEP]` (`VAR` には分配束縛パターンも指定可能)。
 - ローカル変数: `with VAR [= INIT]` (`VAR` には分配束縛パターンも指定可能。`and` で連結した `with` の束縛は並行に行われます)。
+- 型宣言: `for`/`as`/`with` は `VAR` の直後、残りの節より前に、ANSI のいずれかの綴りによる型宣言を省略可能な要素として受け付けます — `of-type TYPE` の明示形式、または `fixnum`/`float`/`t`/`nil` の単純形式です。rontolisp の loop 展開は型を扱わないため、この宣言は解析されるだけで意味を持ちません。
 - 集約: `collect`、`append`、`nconc`、`sum`、`count`、`maximize`、`minimize`。それぞれ省略可能な `into VAR` を取れます。
 - 終了判定: `thereis EXPR`、`always EXPR`、`never EXPR`。
 - 制御: `while`/`until` (記述位置で判定)、`repeat N`、`do FORM...`、`return EXPR`、本体形式内の `(loop-finish)`、`initially FORM...`、`finally FORM...`、および条件節 `when`/`if`/`unless` (省略可能な `else` と `end` を伴い、選択された節では判定値を `it` で参照可能)。
@@ -123,6 +124,16 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 
 ```lisp
 (loop for s being the external-symbols of :cl collect s) ; => NIL
+```
+
+変数の後の型宣言は、どちらの綴りでも受け付けられ、無視されます。
+
+```lisp
+(loop for v fixnum = 0 then (1+ v) for i from 1 to 3 collect v) ; => (0 1 2)
+```
+
+```lisp
+(loop for v of-type fixnum = 0 then (1+ v) for i from 1 to 3 collect v) ; => (0 1 2)
 ```
 
 制限事項: `named`/`return-from` は未対応です。分配束縛パターンはラムダリストキーワードを認識しません (`&optional` などはエラーにはならず、通常の変数として束縛されます)。`(loop-finish)` は文の位置 (式の途中は不可) に置く必要があり、ネストした反復形式の内側では使えません。`thereis`/`always`/`never` はデフォルト結果への集約とは併用できません (`into` を使ってください)。`into` を伴わない集約節はすべて同種でなければならず、収集系の節は結果リストをソース順に構築します。

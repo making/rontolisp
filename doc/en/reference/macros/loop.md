@@ -20,6 +20,7 @@ Otherwise it is an **extended loop** built from clauses. The supported clauses a
 - Sequence stepping: `for VAR across SEQ` binds `VAR` to each character of a string or each element of a vector in turn.
 - General stepping: `for VAR = INIT [then STEP]` (`VAR` may be a destructuring pattern).
 - Local variables: `with VAR [= INIT]` (`VAR` may be a destructuring pattern; `and`-joined `with` bindings are parallel).
+- Type declaration: `for`/`as`/`with` accept an optional type spec right after `VAR`, in either ANSI spelling — `of-type TYPE` or the simple bare `fixnum`/`float`/`t`/`nil` — before the rest of the clause. It is parsed and discarded: rontolisp's loop expansion is untyped, so the declaration carries no semantics.
 - Accumulation: `collect`, `append`, `nconc`, `sum`, `count`, `maximize`, `minimize`, each with an optional `into VAR`.
 - Termination tests: `thereis EXPR`, `always EXPR`, `never EXPR`.
 - Control: `while`/`until` (honoring their textual position), `repeat N`, `do FORM...`, `return EXPR`, `(loop-finish)` inside body forms, `initially FORM...`, `finally FORM...`, and the conditionals `when`/`if`/`unless` with optional `else` and `end` (the tested value is available as `it` in the selected clauses).
@@ -123,6 +124,16 @@ The package form of `being` — `for VAR being {the|each} {symbols|present-symbo
 
 ```lisp
 (loop for s being the external-symbols of :cl collect s) ; => NIL
+```
+
+A type spec after the variable — either spelling — is accepted and ignored:
+
+```lisp
+(loop for v fixnum = 0 then (1+ v) for i from 1 to 3 collect v) ; => (0 1 2)
+```
+
+```lisp
+(loop for v of-type fixnum = 0 then (1+ v) for i from 1 to 3 collect v) ; => (0 1 2)
 ```
 
 Limitations: `named`/`return-from` is not supported. Destructuring patterns do not recognize lambda-list keywords (`&optional` and friends bind as ordinary variables rather than signalling). `(loop-finish)` must appear in statement position (not mid-expression) and not inside a nested iteration form. `thereis`/`always`/`never` cannot be combined with accumulation into the default result (use `into`). Accumulation clauses without `into` must all be of the same kind; collecting clauses build the result list in source order.
