@@ -8,6 +8,8 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Resolves the literal {@code open} arguments to a compile-time file mode shared by the
@@ -45,6 +47,39 @@ public final class OpenModes {
 	}
 
 	/**
+	 * Whether the form is written in the CL keyword shape ({@code (open path :direction
+	 * ...)}) rather than the internal positional one ({@code (open path :input
+	 * 'character)}), which the backends' mode resolution reads directly.
+	 */
+	private static boolean isKeywordForm(List<LispVal> parts) {
+		return parts.size() >= 3 && parts.get(2) instanceof LispSymbol first && first.name().startsWith(":")
+				&& !LispNames.INPUT_KEYWORD.equals(first.name()) && !LispNames.OUTPUT_KEYWORD.equals(first.name())
+				&& !LispNames.APPEND_KEYWORD.equals(first.name());
+	}
+
+	/**
+	 * Lowers an {@code open} carrying a COMPUTED option value onto the runtime dispatch
+	 * over the literal shapes ({@code LispMacroExpander.lowerRuntimeOpenOptions}), which
+	 * is what lets a portable wrapper pass {@code :element-type} / {@code :direction}
+	 * down as an argument. Returns null when every option value is literal -- then
+	 * {@link #normalizeKeywordForm} plus {@link #staticMode} pick the mode at compile
+	 * time exactly as before, and the emitted code is unchanged.
+	 * @param cons the open form as written
+	 * @return the lowered expression, or null when the form folds statically
+	 */
+	public static @Nullable LispVal lowerRuntimeOptions(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (!isKeywordForm(parts)) {
+			return null;
+		}
+		List<LispVal> options = parts.subList(2, parts.size());
+		if (!LispMacroExpander.hasRuntimeOpenOption(options)) {
+			return null;
+		}
+		return LispMacroExpander.lowerRuntimeOpenOptions(LispNames.OPEN, parts.get(1), options);
+	}
+
+	/**
 	 * Normalizes the CL keyword-argument {@code open} shape ({@code (open path :direction
 	 * :input :element-type 'character ...)}) into the positional form the backends
 	 * compile. {@code :external-format} (UTF-8 is the native format), {@code :if-exists}
@@ -56,9 +91,7 @@ public final class OpenModes {
 	 */
 	public static LispCons normalizeKeywordForm(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() < 3 || !(parts.get(2) instanceof LispSymbol first) || !first.name().startsWith(":")
-				|| LispNames.INPUT_KEYWORD.equals(first.name()) || LispNames.OUTPUT_KEYWORD.equals(first.name())
-				|| LispNames.APPEND_KEYWORD.equals(first.name())) {
+		if (!isKeywordForm(parts)) {
 			return cons;
 		}
 		LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
@@ -72,11 +105,10 @@ public final class OpenModes {
 				case ":DIRECTION" -> direction = parts.get(i + 1);
 				case ":ELEMENT-TYPE" -> elementType = parts.get(i + 1);
 				case ":EXTERNAL-FORMAT", ":IF-EXISTS", ":IF-DOES-NOT-EXIST" -> {
-					if (am.ik.rontolisp.macro.LispMacroExpander.isAppendIfExists(key.name(), parts.get(i + 1))) {
+					if (LispMacroExpander.isAppendIfExists(key.name(), parts.get(i + 1))) {
 						append = true;
 					}
-					else if (!am.ik.rontolisp.macro.LispMacroExpander.ignorableOpenOptionValue(key.name(),
-							parts.get(i + 1))) {
+					else if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), parts.get(i + 1))) {
 						throw new UnsupportedOperationException(
 								"open: " + key.name() + " supports only the native default value");
 					}

@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
  * Generates synthetic {@code (setq name (lambda ...))} wrapper defuns for built-in
@@ -1022,27 +1023,34 @@ public final class BuiltinFunctionWrappers {
 	 * The {@code #'open} wrapper: {@code (apply #'open path plist)} is the portable way
 	 * to build an option list at run time (alexandria's {@code with-input-from-file}),
 	 * but the compiled {@code open} needs its direction and element type as LITERALS (the
-	 * file mode is picked statically). The wrapper therefore dispatches the plist onto
-	 * the four literal shapes rather than forwarding the options.
+	 * file mode is picked statically). The wrapper therefore hands the plist to the SAME
+	 * runtime dispatch a computed {@code with-open-file} option lowers to
+	 * ({@code LispMacroExpander.lowerRuntimeOpenOptions}) instead of re-deriving one:
+	 * that is what gives the wrapper {@code :if-exists :append}, the unsized
+	 * {@code unsigned-byte} element type and the refusal of an option value the native
+	 * behavior does not implement, none of which its own two-way dispatch had.
 	 */
 	private static WrapperDef openWrapper() {
 		LispSymbol opts = new LispSymbol("o");
-		LispSymbol path = new LispSymbol("p");
-		LispVal binaryType = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
-				listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(8)))));
-		LispVal isOutput = callV(LispNames.EQ_GENERAL,
-				callV(LispNames.GETF, opts, new LispSymbol(LispNames.DIRECTION_KEYWORD)),
-				new LispSymbol(LispNames.OUTPUT_KEYWORD));
-		LispVal isBinary = callV(LispNames.EQUAL,
-				callV(LispNames.GETF, opts, new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD)), binaryType);
-		LispVal binaryBranch = listToCons(List.of(new LispSymbol(LispNames.IF), isOutput,
-				callV(LispNames.OPEN, path, new LispSymbol(LispNames.OUTPUT_KEYWORD), binaryType),
-				callV(LispNames.OPEN, path, new LispSymbol(LispNames.INPUT_KEYWORD), binaryType)));
-		LispVal textBranch = listToCons(List.of(new LispSymbol(LispNames.IF), isOutput,
-				callV(LispNames.OPEN, path, new LispSymbol(LispNames.OUTPUT_KEYWORD)),
-				callV(LispNames.OPEN, path, new LispSymbol(LispNames.INPUT_KEYWORD))));
-		return new WrapperDef(LispNames.OPEN, List.of("p", LispNames.LAMBDA_REST, "o"),
-				List.of(listToCons(List.of(new LispSymbol(LispNames.IF), isBinary, binaryBranch, textBranch))));
+		// getf's DEFAULT is what makes an absent option mean the CL default rather than
+		// nil -- the dispatch rejects nil like any other unsupported value.
+		List<LispVal> options = List.of(new LispSymbol(LispNames.DIRECTION_KEYWORD),
+				getfWithDefault(opts, LispNames.DIRECTION_KEYWORD, new LispSymbol(LispNames.INPUT_KEYWORD)),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD),
+				getfWithDefault(opts, LispNames.ELEMENT_TYPE_KEYWORD,
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.CHARACTER_TYPE)))),
+				new LispSymbol(":IF-EXISTS"), getfWithDefault(opts, ":IF-EXISTS", new LispSymbol(":SUPERSEDE")),
+				new LispSymbol(":IF-DOES-NOT-EXIST"),
+				getfWithDefault(opts, ":IF-DOES-NOT-EXIST", new LispSymbol(":ERROR")),
+				new LispSymbol(":EXTERNAL-FORMAT"),
+				getfWithDefault(opts, ":EXTERNAL-FORMAT", new LispSymbol(":UTF-8")));
+		LispVal body = LispMacroExpander.lowerRuntimeOpenOptions(LispNames.OPEN, new LispSymbol("p"), options);
+		return new WrapperDef(LispNames.OPEN, List.of("p", LispNames.LAMBDA_REST, "o"), List.of(body));
+	}
+
+	// (getf o :option <default>)
+	private static LispVal getfWithDefault(LispSymbol plist, String option, LispVal fallback) {
+		return listToCons(List.of(new LispSymbol(LispNames.GETF), plist, new LispSymbol(option), fallback));
 	}
 
 	// #'find-symbol: (lambda (n &rest p) (if (consp p) (find-symbol n (car p))

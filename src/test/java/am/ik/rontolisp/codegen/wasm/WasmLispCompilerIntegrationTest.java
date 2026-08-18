@@ -9795,6 +9795,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void withOpenFileComputedOptionsDispatchAtRunTime() throws Exception {
+		// The options arrive as ARGUMENTS (uiop's call-with-input-file shape), so the
+		// mode is not foldable: the compiled module dispatches onto the literal open
+		// shapes, one WASI path_open per leaf.
+		String code = """
+				(defun wr (path text dir ie)
+				  (with-open-file (out path :direction dir :if-exists ie) (write-string text out)))
+				(defun rd (path et)
+				  (with-open-file (in path :element-type et) (read-line in)))
+				(defun rd1 (path et)
+				  (with-open-file (in path :element-type et) (read-byte in)))
+				(wr "computed.txt" "one" :output :supersede)
+				(wr "computed.txt" "two" :output :append)
+				(print (rd "computed.txt" 'character))
+				(print (rd1 "computed.txt" (list 'unsigned-byte 8)))
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("\"onetwo\"\n111");
+	}
+
+	@Test
 	void readByteEofValueReturned() throws Exception {
 		String code = """
 				(with-open-file (out "eofv.dat" :direction :output :element-type '(unsigned-byte 8)))

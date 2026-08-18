@@ -12297,6 +12297,45 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunComputedOpenOptions(@TempDir Path tempDir) throws Exception {
+		String file = tempDir.resolve("computed.txt").toString().replace("\\", "\\\\");
+		// The options arrive as ARGUMENTS -- the shape a portable file wrapper has --
+		// so the mode cannot be folded; the compiled code dispatches onto the literal
+		// open shapes instead. Byte-identical output for a literal spec is what
+		// compileAndRunOpenAppend above pins.
+		assertThat(compileAndRun("""
+				(defun wr (path text dir ie)
+				  (with-open-file (out path :direction dir :if-exists ie) (write-string text out)))
+				(defun rd (path et)
+				  (with-open-file (in path :element-type et) (read-line in)))
+				(defun rd1 (path et)
+				  (with-open-file (in path :element-type et) (read-byte in)))
+				(wr "%s" "one" :output :supersede)
+				(wr "%s" "two" :output :append)
+				(print (rd "%s" 'character))
+				(print (rd1 "%s" (list 'unsigned-byte 8)))
+				""".formatted(file, file, file, file))).isEqualTo("\"onetwo\"\n111");
+	}
+
+	@Test
+	void aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore(@TempDir Path tempDir) {
+		// The runtime dispatch must cost a LITERAL spec nothing: the fold is what every
+		// existing program and every size-report number was measured on. A spec of
+		// literals and the positional open it folds to must therefore emit the same
+		// class.
+		List<LispVal> keyword = LispReader.readAllFromString("""
+				(with-open-file (s "f.txt" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 65 s))
+				""");
+		List<LispVal> positional = LispReader.readAllFromString("""
+				(let ((s (open "f.txt" :output '(unsigned-byte 8))))
+				  (unwind-protect (write-byte 65 s) (close s)))
+				""");
+		byte[] folded = new JvmLispCompiler("SameOpen", false, OptimizeLevel.DEFAULT).compile(keyword);
+		assertThat(folded).isEqualTo(new JvmLispCompiler("SameOpen", false, OptimizeLevel.DEFAULT).compile(positional));
+	}
+
+	@Test
 	void theSizeLevelIsADocumentedNoOpOnThisBackend() {
 		// --optimize=size is accepted everywhere so a build script need not be
 		// backend-specific, but the emissions it declines are wasm-GC ones (fused

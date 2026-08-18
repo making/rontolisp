@@ -6605,11 +6605,69 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void withOpenFileNonLiteralElementTypeThrows(@TempDir Path tempDir) {
+	void withOpenFileComputedOptionsDispatchAtRunTime(@TempDir Path tempDir) {
 		String file = tempDir.resolve("nl.dat").toString().replace("\\", "\\\\");
-		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :element-type (list 'unsigned-byte 8)) s)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining(":element-type must be the literal");
+		// A function taking the options as arguments and passing them down is how every
+		// portable file wrapper opens a file (uiop's call-with-input-file is exactly
+		// it), so a COMPUTED option value dispatches onto the literal open shapes at run
+		// time instead of refusing the whole program. The element type still classifies
+		// the way a literal one does (unsized spellings included, both byte streams) and
+		// a computed :if-exists keeps the append semantics of the literal :append.
+		assertThat(evalMulti("""
+				(defun wr (path content dir et)
+				  (with-open-file (s path :direction dir :element-type et)
+				    (write-line content s)))
+				(defun rd (path et)
+				  (with-open-file (s path :element-type et) (read-line s)))
+				(defun rd1 (path et)
+				  (with-open-file (s path :element-type et) (read-byte s)))
+				(defun app (path content ie)
+				  (with-open-file (s path :direction :output :if-exists ie) (write-line content s)))
+				(wr "%s" "computed" :output 'character)
+				(list (rd "%s" 'character)
+				      (rd1 "%s" (list 'unsigned-byte 8))
+				      (rd1 "%s" 'unsigned-byte)
+				      (progn (app "%s" "second" :append) (rd "%s" 'character))
+				      (progn (app "%s" "third" :supersede) (rd "%s" 'character)))
+				""".formatted(file, file, file, file, file, file, file, file)).print())
+			.isEqualTo("(\"computed\" 99 99 \"computed\" \"third\")");
+	}
+
+	@Test
+	void withOpenFileComputedOptionValueOutsideTheSupportedSetSignals(@TempDir Path tempDir) {
+		String file = tempDir.resolve("bad.dat").toString().replace("\\", "\\\\");
+		// The accepted value set is the literal path's, refused at the only time a
+		// computed value can be seen: call time.
+		assertThatThrownBy(() -> evalMulti("""
+				(defun rd (path et) (with-open-file (s path :element-type et) (read-line s)))
+				(rd "%s" 'bogus)
+				""".formatted(file))).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining(":element-type supports only");
+		assertThatThrownBy(() -> evalMulti("""
+				(defun rd (path ef) (with-open-file (s path :external-format ef) (read-line s)))
+				(rd "%s" :latin-1)
+				""".formatted(file))).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining(":external-format supports only");
+	}
+
+	@Test
+	void loadAcceptsTheKeywordOptions(@TempDir Path tempDir) throws Exception {
+		Path lib = tempDir.resolve("lib439.lisp");
+		java.nio.file.Files.writeString(lib, "(defun sq439 (x) (* x x))\n");
+		String file = lib.toString().replace("\\", "\\\\");
+		String missing = tempDir.resolve("gone439.lisp").toString().replace("\\", "\\\\");
+		// :verbose / :print / :external-format are accepted and ignored -- there is no
+		// progress output to produce and no second decoder to select.
+		assertThat(evalMulti("""
+				(load "%s" :verbose nil :print nil :external-format :utf-8)
+				(sq439 7)
+				""".formatted(file))).isEqualTo(new LispInteger(49));
+		// :if-does-not-exist is real: a false value answers nil instead of signalling.
+		assertThat(eval("(load \"%s\" :if-does-not-exist nil)".formatted(missing))).isEqualTo(LispNil.INSTANCE);
+		assertThatThrownBy(() -> eval("(load \"%s\")".formatted(missing))).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot read file");
+		assertThatThrownBy(() -> eval("(load \"%s\" :unknown t)".formatted(file))).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("unsupported option");
 	}
 
 	@Test

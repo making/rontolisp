@@ -34,7 +34,7 @@ a ready-made exerciser for all of it.
 | --- | --- | --- |
 | ~~`.todo/437`~~ | `print-object` is not dispatched for a NESTED object | bug -- LANDED 2026-08-18 |
 | `.todo/438` | hash tables key by the printed form | bug |
-| `.todo/439` | `with-open-file` / `open` / `load` reject computed keywords | surface |
+| ~~`.todo/439`~~ | `with-open-file` / `open` / `load` reject computed keywords | surface -- LANDED 2026-08-18 |
 | `.todo/440` | string designators | surface |
 | `.todo/441` | wild pathname components | surface |
 | `.todo/442` | the CLOS surface (`reinitialize-instance` &c) | surface |
@@ -46,8 +46,8 @@ does not terminate. The rest is missing surface.
 ## Ordering
 
 - **Wave 1, parallel: `437`, `439`, `440`, `441`, `442`.** Independent of each
-  other. `437` is done; the printer now walks a list / general rank-1 vector, so
-  `438` is unblocked.
+  other. `437` and `439` are done; the printer now walks a list / general rank-1
+  vector, so `438` is unblocked.
 - **Wave 2: `443`.** Last, because it adds the most names and therefore collides
   hardest on the shared counter below.
 - **Wave 3: `438`.** After `437` -- a cyclic key stops being an unreadable stack

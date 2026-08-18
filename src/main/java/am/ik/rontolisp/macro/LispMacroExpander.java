@@ -6260,6 +6260,17 @@ public final class LispMacroExpander {
 		}
 		LispVal var = specParts.get(0);
 		LispVal filename = specParts.get(1);
+		List<LispVal> options = specParts.subList(2, specParts.size());
+		if (hasRuntimeOpenOption(options)) {
+			// A COMPUTED option value -- a function taking the options as arguments and
+			// passing them down is how every portable file wrapper opens a file (uiop's
+			// call-with-input-file / call-with-output-file are exactly it) -- cannot be
+			// folded into the mode here, so the values are bound and dispatched onto the
+			// literal open shapes at run time. A spec whose values are all literal keeps
+			// the fold below, byte for byte.
+			return buildWithOpenFileFrom(var, lowerRuntimeOpenOptions(LispNames.WITH_OPEN_FILE, filename, options),
+					parts.subList(2, parts.size()), unwindProtect);
+		}
 		String direction = LispNames.INPUT_KEYWORD;
 		boolean binary = false;
 		boolean append = false;
@@ -6383,12 +6394,428 @@ public final class LispMacroExpander {
 		};
 	}
 
+	/**
+	 * The temporary the computed-option {@code open} lowering binds the PATH to. One
+	 * binding per option value follows it, so every value expression is evaluated exactly
+	 * once and in the order it was written -- the dispatch below may name the path in six
+	 * different leaves, and a path expression with a side effect (or a cost) must not run
+	 * six times.
+	 */
+	private static final String OPEN_PATH_VAR = "__open_path";
+
+	/** Prefix of the per-option temporaries of the same lowering. */
+	private static final String OPEN_OPTION_VAR_PREFIX = "__open_opt";
+
+	/**
+	 * One dimension of the {@code open} mode: either decided at expansion time (a literal
+	 * option value) or a test the compiled code runs.
+	 *
+	 * @param expr the runtime test, or null when the dimension is constant
+	 * @param constant the expansion-time answer, meaningful only when {@code expr} is
+	 * null
+	 */
+	private record OpenModeTest(@Nullable LispVal expr, boolean constant) {
+
+		static OpenModeTest of(boolean value) {
+			return new OpenModeTest(null, value);
+		}
+
+		static OpenModeTest of(LispVal test) {
+			return new OpenModeTest(test, false);
+		}
+
+		boolean isConstant() {
+			return this.expr == null;
+		}
+
+		LispVal test() {
+			return java.util.Objects.requireNonNull(this.expr);
+		}
+	}
+
+	/**
+	 * Whether an {@code open} / {@code with-open-file} option value is a LITERAL the
+	 * expansion folds, rather than an expression only the run time can answer. An
+	 * {@code :element-type} is literal when it is a {@code (quote ...)} form, every other
+	 * option when it is a keyword; a variable, a call and an unquoted list
+	 * ({@code (list 'unsigned-byte 8)}) are computed.
+	 * @param option the option keyword name
+	 * @param value the option value form as written
+	 * @return true when the value is known at expansion time
+	 */
+	public static boolean isLiteralOpenOptionValue(String option, LispVal value) {
+		if (LispNames.ELEMENT_TYPE_KEYWORD.equals(option)) {
+			return value instanceof LispCons cons && cons.car() instanceof LispSymbol quote
+					&& LispNames.QUOTE.equals(quote.name());
+		}
+		return value instanceof LispSymbol sym && sym.name().startsWith(":");
+	}
+
+	/**
+	 * Whether a flat {@code :option value} list carries any value the expansion cannot
+	 * fold. A list that carries none keeps the literal lowering -- and therefore the
+	 * byte-identical output every existing program and size-report number was measured
+	 * on.
+	 * @param optionPairs the flat option list
+	 * @return true when at least one value is computed
+	 */
+	public static boolean hasRuntimeOpenOption(List<LispVal> optionPairs) {
+		for (int i = 0; i + 1 < optionPairs.size(); i += 2) {
+			if (optionPairs.get(i) instanceof LispSymbol key && key.name().startsWith(":")
+					&& !isLiteralOpenOptionValue(key.name(), optionPairs.get(i + 1))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Lowers an {@code open} whose options are COMPUTED onto the literal shapes every
+	 * backend compiles: the option values are bound left to right, validated, and then
+	 * dispatched onto at most six {@code (open path :direction ['(unsigned-byte 8)])}
+	 * leaves.
+	 *
+	 * <pre>
+	 * (open p :direction d :element-type et) ->
+	 * (let* ((__open_path p) (__open_opt0 d) (__open_opt1 et))
+	 *   (unless (or (eq __open_opt0 :input) (eq __open_opt0 :output)) (error ...))
+	 *   (unless (or &lt;binary test&gt; (eq __open_opt1 'character)) (error ...))
+	 *   (if &lt;binary test&gt;
+	 *       (if (eq __open_opt0 :output)
+	 *           (open __open_path :output '(unsigned-byte 8))
+	 *           (open __open_path :input '(unsigned-byte 8)))
+	 *       ...))
+	 * </pre>
+	 *
+	 * This is the shape a portable file wrapper needs -- a function taking the options as
+	 * arguments and passing them down is how uiop's {@code call-with-input-file} and
+	 * every library over it opens a file. The mode is still picked from LITERALS at every
+	 * leaf, so no backend needed a runtime mode: the dispatch is the whole mechanism, and
+	 * it is shared by the interpreter (through {@code with-open-file}'s expansion), both
+	 * compile backends (through their {@code open} compilers) and the {@code #'open}
+	 * wrapper.
+	 *
+	 * <p>
+	 * The ACCEPTED value set is exactly the literal path's, decided at call time instead
+	 * of expansion time: {@code :direction} {@code :input}/{@code :output},
+	 * {@code :element-type} {@code character} or {@code (unsigned-byte 8)} (unsized
+	 * {@code unsigned-byte} / {@code (unsigned-byte *)} included, the one byte width
+	 * rontolisp has), {@code :if-exists} {@code :supersede} or {@code :append},
+	 * {@code :if-does-not-exist} {@code :create}/{@code :error}, {@code :external-format}
+	 * {@code :utf-8}/{@code :default}. Anything else signals a plain error naming the
+	 * value -- the same refusal the literal path makes, at the only time a computed value
+	 * can be seen.
+	 * @param operator the surface operator, for the error messages
+	 * @param pathExpr the file-name expression
+	 * @param optionPairs the flat option list as written
+	 * @return the lowered expression
+	 */
+	public static LispVal lowerRuntimeOpenOptions(String operator, LispVal pathExpr, List<LispVal> optionPairs) {
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(new LispSymbol(OPEN_PATH_VAR), pathExpr)));
+		List<LispVal> checks = new java.util.ArrayList<>();
+		OpenModeTest binary = OpenModeTest.of(false);
+		OpenModeTest output = OpenModeTest.of(false);
+		OpenModeTest append = OpenModeTest.of(false);
+		int temps = 0;
+		for (int i = 0; i + 1 < optionPairs.size(); i += 2) {
+			if (!(optionPairs.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
+				throw new UnsupportedOperationException(operator + " expects :option value pairs");
+			}
+			LispVal value = optionPairs.get(i + 1);
+			boolean literal = isLiteralOpenOptionValue(key.name(), value);
+			// The temporary is named up front and BOUND only for a computed value, so
+			// a literal option costs no binding.
+			LispSymbol var = new LispSymbol(OPEN_OPTION_VAR_PREFIX + temps);
+			if (!literal) {
+				temps++;
+				bindings.add(listToCons(List.of(var, value)));
+			}
+			switch (key.name()) {
+				case LispNames.DIRECTION_KEYWORD -> {
+					if (literal) {
+						String name = ((LispSymbol) value).name();
+						if (!LispNames.INPUT_KEYWORD.equals(name) && !LispNames.OUTPUT_KEYWORD.equals(name)) {
+							throw new UnsupportedOperationException(
+									operator + " :direction must be the literal :input or :output");
+						}
+						output = OpenModeTest.of(LispNames.OUTPUT_KEYWORD.equals(name));
+					}
+					else {
+						checks.add(unlessValueIn(var, operator + " :direction supports only :input and :output, got ~s",
+								List.of(eqKeyword(var, LispNames.INPUT_KEYWORD),
+										eqKeyword(var, LispNames.OUTPUT_KEYWORD))));
+						output = OpenModeTest.of(eqKeyword(var, LispNames.OUTPUT_KEYWORD));
+					}
+				}
+				case LispNames.ELEMENT_TYPE_KEYWORD -> {
+					if (literal) {
+						binary = OpenModeTest.of(isBinaryElementTypeLiteral(value));
+					}
+					else {
+						LispVal binaryTest = binaryElementTypeTest(var);
+						checks.add(unlessValueIn(var,
+								operator + " :element-type supports only 'character and '(unsigned-byte 8), got ~s",
+								List.of(binaryTest, eqQuotedSymbol(var, LispNames.CHARACTER_TYPE))));
+						binary = OpenModeTest.of(binaryTest);
+					}
+				}
+				case IF_EXISTS_KEYWORD -> {
+					if (literal) {
+						if (isAppendIfExists(key.name(), value)) {
+							append = OpenModeTest.of(true);
+						}
+						else if (!ignorableOpenOptionValue(key.name(), value)) {
+							return unsupportedOpenOptionValueStub(operator, key.name());
+						}
+					}
+					else {
+						checks.add(unlessValueIn(var,
+								operator + " :if-exists supports only :supersede and :append, got ~s",
+								List.of(eqKeyword(var, ":SUPERSEDE"), eqKeyword(var, LispNames.APPEND_KEYWORD))));
+						append = OpenModeTest.of(eqKeyword(var, LispNames.APPEND_KEYWORD));
+					}
+				}
+				case IF_DOES_NOT_EXIST_KEYWORD -> {
+					if (literal) {
+						if (!ignorableOpenOptionValue(key.name(), value)) {
+							return unsupportedOpenOptionValueStub(operator, key.name());
+						}
+					}
+					else {
+						checks.add(unlessValueIn(var,
+								operator + " :if-does-not-exist supports only :create and :error, got ~s",
+								List.of(eqKeyword(var, ":CREATE"), eqKeyword(var, ":ERROR"))));
+					}
+				}
+				case EXTERNAL_FORMAT_KEYWORD -> {
+					if (literal) {
+						if (!ignorableOpenOptionValue(key.name(), value)) {
+							return unsupportedOpenOptionValueStub(operator, key.name());
+						}
+					}
+					else {
+						checks.add(unlessValueIn(var,
+								operator + " :external-format supports only :utf-8 and :default, got ~s",
+								List.of(eqKeyword(var, ":UTF-8"), eqKeyword(var, ":DEFAULT"))));
+					}
+				}
+				default -> throw new UnsupportedOperationException(operator + ": unsupported option " + key.name());
+			}
+		}
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET_STAR));
+		letParts.add(listToCons(bindings));
+		letParts.addAll(checks);
+		letParts.add(dispatchOpenOnElementType(binary, output, append));
+		return listToCons(letParts);
+	}
+
+	/** The {@code :if-exists} option keyword. */
+	private static final String IF_EXISTS_KEYWORD = ":IF-EXISTS";
+
+	/** The {@code :if-does-not-exist} option keyword. */
+	private static final String IF_DOES_NOT_EXIST_KEYWORD = ":IF-DOES-NOT-EXIST";
+
+	/** The {@code :external-format} option keyword. */
+	private static final String EXTERNAL_FORMAT_KEYWORD = ":EXTERNAL-FORMAT";
+
+	/**
+	 * The call-time refusal of an ignorable option carrying a value the native behavior
+	 * does not implement -- the literal path's answer, kept identical here (it signals at
+	 * CALL time, not expansion time: the eager compile paths expand every branch of a
+	 * spliced library, and such a branch is often dead code).
+	 */
+	private static LispVal unsupportedOpenOptionValueStub(String operator, String option) {
+		return callTimeUnsupportedStub(operator + " " + option + " supports only the native default value ("
+				+ (EXTERNAL_FORMAT_KEYWORD.equals(option) ? ":utf-8"
+						: IF_EXISTS_KEYWORD.equals(option) ? ":supersede" : ":create or :error")
+				+ ")");
+	}
+
+	private static LispVal dispatchOpenOnElementType(OpenModeTest binary, OpenModeTest output, OpenModeTest append) {
+		if (binary.isConstant()) {
+			return dispatchOpenOnDirection(binary.constant(), output, append);
+		}
+		return makeIf(binary.test(), dispatchOpenOnDirection(true, output, append),
+				dispatchOpenOnDirection(false, output, append));
+	}
+
+	private static LispVal dispatchOpenOnDirection(boolean binary, OpenModeTest output, OpenModeTest append) {
+		LispVal input = openLeaf(LispNames.INPUT_KEYWORD, binary);
+		if (output.isConstant()) {
+			return output.constant() ? dispatchOpenOnAppend(binary, append) : input;
+		}
+		return makeIf(output.test(), dispatchOpenOnAppend(binary, append), input);
+	}
+
+	private static LispVal dispatchOpenOnAppend(boolean binary, OpenModeTest append) {
+		LispVal appending = openLeaf(LispNames.APPEND_KEYWORD, binary);
+		LispVal truncating = openLeaf(LispNames.OUTPUT_KEYWORD, binary);
+		if (append.isConstant()) {
+			return append.constant() ? appending : truncating;
+		}
+		return makeIf(append.test(), appending, truncating);
+	}
+
+	/** One leaf of the dispatch: the literal {@code open} shape the backends compile. */
+	private static LispVal openLeaf(String direction, boolean binary) {
+		List<LispVal> parts = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.OPEN), new LispSymbol(OPEN_PATH_VAR), new LispSymbol(direction)));
+		if (binary) {
+			parts.add(unsignedByte8Literal());
+		}
+		return listToCons(parts);
+	}
+
+	/**
+	 * The runtime binary-element-type test: the sized {@code (unsigned-byte 8)}, the
+	 * unsized {@code unsigned-byte} and {@code (unsigned-byte *)} spellings, matching
+	 * {@link #isBinaryElementTypeLiteral}.
+	 */
+	private static LispVal binaryElementTypeTest(LispVal var) {
+		LispVal unsized = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+				listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispSymbol("*")))));
+		return listToCons(List.of(new LispSymbol(LispNames.OR), eqQuotedSymbol(var, LispNames.UNSIGNED_BYTE),
+				listToCons(List.of(new LispSymbol(LispNames.EQUAL), var, unsignedByte8Literal())),
+				listToCons(List.of(new LispSymbol(LispNames.EQUAL), var, unsized))));
+	}
+
+	private static LispVal eqKeyword(LispVal var, String keyword) {
+		return listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), var, new LispSymbol(keyword)));
+	}
+
+	private static LispVal eqQuotedSymbol(LispVal var, String name) {
+		return listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), var,
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(name)))));
+	}
+
+	/**
+	 * {@code (unless (or test...) (error "<message>" var))} -- the call-time refusal of a
+	 * computed option value outside the accepted set.
+	 */
+	private static LispVal unlessValueIn(LispVal var, String message, List<LispVal> tests) {
+		List<LispVal> or = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.OR)));
+		or.addAll(tests);
+		return listToCons(List.of(new LispSymbol(LispNames.UNLESS), listToCons(or),
+				listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(message), var))));
+	}
+
+	/** The temporary the keyworded {@code load} lowering binds the pathname to. */
+	private static final String LOAD_PATH_VAR = "__load_path";
+
+	/** Prefix of the per-option temporaries of the same lowering. */
+	private static final String LOAD_OPTION_VAR_PREFIX = "__load_opt";
+
+	/**
+	 * Lowers {@code (load path :verbose v :print p :if-does-not-exist d :external-format
+	 * f)} onto the one-argument {@code load} every backend compiles. Returns null for a
+	 * plain {@code (load path)}, which is unchanged.
+	 *
+	 * <pre>
+	 * (load p :if-does-not-exist nil) ->
+	 * (let* ((__load_path p) (__load_opt0 nil))
+	 *   (if (or __load_opt0 (probe-file __load_path)) (load __load_path) nil))
+	 * </pre>
+	 *
+	 * Every option value is BOUND, in the order it was written, so an option this
+	 * implementation has nothing to do about is still evaluated exactly like an argument
+	 * of any other call. {@code :verbose} and {@code :print} are then dropped -- they ask
+	 * for progress output, and rontolisp's {@code load} produces none -- and so is
+	 * {@code :external-format}: every backend reads UTF-8 and there is no second decoder
+	 * to select. {@code :if-does-not-exist} is REAL: a false value turns the missing-file
+	 * signal into a nil answer, which is the whole point of passing it.
+	 * @param cons the load form
+	 * @return the lowered expression, or null when the form carries no options
+	 */
+	public static @Nullable LispVal lowerLoadOptions(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() <= 2) {
+			return null;
+		}
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(new LispSymbol(LOAD_PATH_VAR), parts.get(1))));
+		LispSymbol ifDoesNotExist = null;
+		int temps = 0;
+		for (int i = 2; i < parts.size(); i += 2) {
+			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
+				throw new UnsupportedOperationException(
+						LispNames.LOAD + " expects :option value pairs: " + cons.print());
+			}
+			LispSymbol var = new LispSymbol(LOAD_OPTION_VAR_PREFIX + temps++);
+			bindings.add(listToCons(List.of(var, parts.get(i + 1))));
+			switch (key.name()) {
+				case ":VERBOSE", ":PRINT", EXTERNAL_FORMAT_KEYWORD -> {
+					// Evaluated for effect, then dropped: there is nothing to do.
+				}
+				case IF_DOES_NOT_EXIST_KEYWORD -> ifDoesNotExist = var;
+				default ->
+					throw new UnsupportedOperationException(LispNames.LOAD + ": unsupported option " + key.name());
+			}
+		}
+		LispVal loadCall = callOf(LispNames.LOAD, new LispSymbol(LOAD_PATH_VAR));
+		LispVal body = loadCall;
+		if (ifDoesNotExist != null) {
+			body = makeIf(listToCons(List.of(new LispSymbol(LispNames.OR), ifDoesNotExist,
+					callOf(LispNames.PROBE_FILE, new LispSymbol(LOAD_PATH_VAR)))), loadCall, LispNil.INSTANCE);
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
+	}
+
+	/**
+	 * Whether the program calls {@code load} with an {@code :if-does-not-exist} option --
+	 * the surface fact {@code LispPreludeLibrary} keys the {@code probe-file} splice on,
+	 * because the call that needs it is produced by {@link #lowerLoadOptions(LispCons)}
+	 * inside the expression compilers, long after the prelude selection ran.
+	 * @param program the program forms
+	 * @return true when at least one such call occurs
+	 */
+	public static boolean callsLoadWithIfDoesNotExist(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (callsLoadWithIfDoesNotExist(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean callsLoadWithIfDoesNotExist(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol op
+				&& LispNames.LOAD.equals(unqualifiedClMember(op.name()))) {
+			for (int i = 2; i < parts.size(); i += 2) {
+				if (parts.get(i) instanceof LispSymbol key && IF_DOES_NOT_EXIST_KEYWORD.equals(key.name())) {
+					return true;
+				}
+			}
+		}
+		for (LispVal part : parts) {
+			if (callsLoadWithIfDoesNotExist(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static LispVal buildWithOpenFile(LispVal var, List<LispVal> openParts, boolean binary, List<LispVal> body,
 			boolean unwindProtect) {
 		if (binary) {
 			openParts.add(unsignedByte8Literal());
 		}
-		LispVal openCall = listToCons(openParts);
+		return buildWithOpenFileFrom(var, listToCons(openParts), body, unwindProtect);
+	}
+
+	/**
+	 * The {@code with-open-file} shape around an already-built {@code open} EXPRESSION --
+	 * the literal call above, or the runtime dispatch
+	 * {@link #lowerRuntimeOpenOptions(String, LispVal, List)} builds for a computed
+	 * option.
+	 */
+	private static LispVal buildWithOpenFileFrom(LispVal var, LispVal openCall, List<LispVal> body,
+			boolean unwindProtect) {
 		LispVal bodyExpr = prognOrNil(body);
 		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
 		if (unwindProtect) {

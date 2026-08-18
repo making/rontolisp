@@ -467,6 +467,65 @@ that loop are load-bearing rather than stylistic:
   **re-evaluation trigger** is the adapter learning to answer 0 bytes/EOF idempotently;
   until then, read-loops here must not read past EOF twice.
 
+**An option value may be COMPUTED, and the mode is still picked from a LITERAL**
+(todo-439): `(with-open-file (s path :element-type et) ...)` -- a function taking the
+options as arguments and passing them down, which is how uiop's `call-with-input-file` /
+`call-with-output-file` and every portable wrapper over them open a file -- lowers to
+`LispMacroExpander.lowerRuntimeOpenOptions`: the path and every computed option value are
+bound left to right in one `let*`, checked, and then dispatched by nested `if` onto at
+most SIX literal `(open path :direction ['(unsigned-byte 8)])` leaves (2 element types x
+input/output/append). No backend learned a runtime mode -- the dispatch IS the mechanism,
+which is why it works identically on all four. Properties worth knowing:
+
+- **A spec whose values are all literal never enters it.** `hasRuntimeOpenOption` decides
+  per FORM, and a literal `:element-type` is a `(quote ...)` form / a literal option value
+  a keyword; everything else (a variable, `(list 'unsigned-byte 8)`, `(stream-element-type
+  s)`) is computed. That is what keeps the existing output byte-identical, pinned by
+  `JvmLispCompilerTest#aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore` (the
+  keyword spec and the positional `open` it folds to must emit the same class).
+- **The path is bound once.** Six leaves name it; a path expression with a side effect or
+  a cost must not run six times.
+- **The accepted value SET is unchanged -- only the time of the refusal moves.**
+  `:direction` `:input`/`:output`, `:element-type` `character` / `(unsigned-byte 8)` (the
+  unsized `unsigned-byte` and `(unsigned-byte *)` too), `:if-exists` `:supersede`/`:append`,
+  `:if-does-not-exist` `:create`/`:error`, `:external-format` `:utf-8`/`:default`. A
+  literal outside the set still refuses at expansion time (or, for the three ignorable
+  options, through the existing call-time stub); a computed one is checked by an `unless`
+  emitted BEFORE the dispatch, so an unsupported value cannot be silently reinterpreted --
+  and the check runs whatever the direction, matching the literal path's refusal of an
+  `:if-exists` it cannot honour even on an input stream.
+- **Three entries, one lowering**: `LispMacroExpander.expandWithOpenFile` (all four
+  backends), `OpenModes.lowerRuntimeOptions` in front of `Jvm/WasmOpenCompiler` (a direct
+  `open` call), and `BuiltinFunctionWrappers.openWrapper`, which now hands its `getf`
+  plist to the same builder instead of its own two-way dispatch -- that is what gave
+  `(apply #'open p '(:direction :output :if-exists :append))` the append it used to drop
+  silently. The interpreter's own runtime `open` (`Environment`) is the fourth reading of
+  the same table, for a direct interpreted call; it was widened to the unsized
+  `unsigned-byte` in the same pass, and the two must be kept in step.
+
+Pinned by `LispEvaluatorTest#withOpenFileComputedOptionsDispatchAtRunTime` /
+`#withOpenFileComputedOptionValueOutsideTheSupportedSetSignals`,
+`JvmLispCompilerTest#compileAndRunComputedOpenOptions`,
+`WasmLispCompilerIntegrationTest#withOpenFileComputedOptionsDispatchAtRunTime` and the
+ci-spec case `computed-stream-options-439` (all four backends).
+
+**`load` takes CL's keyword options** (todo-439, same family): `:if-does-not-exist` is
+REAL -- a false value answers nil instead of signalling, which is the only reason a caller
+passes it -- and `:verbose` / `:print` / `:external-format` are accepted and dropped:
+`load` produces no progress output and every backend reads UTF-8, so there is nothing to
+do about them. Every option value is still BOUND, in written order, so it is evaluated
+like any other argument. The compile paths lower the form in
+`LispMacroExpander.lowerLoadOptions` (a `let*` plus, for `:if-does-not-exist`, an
+`(or <value> (probe-file path))` guard around the one-argument `load`), the interpreter
+reads the same four in its `load` builtin against a `sourceLoader` probe -- an
+UNREADABLE file, not merely a missing one, is what answers nil on both. Because the guard
+is built inside the expression compilers, long after prelude selection ran,
+`LispPreludeLibrary.referencedBySurfaceForm` splices `probe-file` on the SURFACE fact
+instead: the program writing `:if-does-not-exist` on a `load` at all
+(`LispMacroExpander.callsLoadWithIfDoesNotExist`). What a top-level literal `load` with
+options does is `.kb/load-inliner.md`. Pinned by
+`LispEvaluatorTest#loadAcceptsTheKeywordOptions` and the ci-spec case above.
+
 **`:if-exists :append` (todo-231, smart-buffer's disk spill)**: the ONE non-default
 value of the three otherwise-ignorable `open`/`with-open-file` options that is
 implemented rather than rejected. `:direction :output :if-exists :append`

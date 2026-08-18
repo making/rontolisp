@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 
 /**
@@ -17,6 +18,13 @@ final class WasmLoadCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispVal options = LispMacroExpander.lowerLoadOptions(cons);
+		if (options != null) {
+			// CL's keyword options: bound in order, then dropped except
+			// :if-does-not-exist, which becomes the probe-file guard.
+			WasmExprCompiler.compileExpr(options, ctx);
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new UnsupportedOperationException("load expects 1 argument, got " + (parts.size() - 1));

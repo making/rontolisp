@@ -293,7 +293,7 @@ public final class LoadInliner {
 				continue;
 			}
 			RequireForm require = requireForm(form);
-			String rawPath;
+			String rawPath = null;
 			if (require != null) {
 				if (ctx.provided().contains(require.name())) {
 					// Already provided: consume without loading (this is the whole point
@@ -307,11 +307,20 @@ public final class LoadInliner {
 				rawPath = require.path() != null ? require.path()
 						: require.name().toLowerCase(java.util.Locale.ROOT) + ".lisp";
 			}
-			else {
-				rawPath = loadPath(form);
+			LoadForm load = null;
+			if (require == null) {
+				load = loadForm(form);
+				rawPath = load == null ? null : load.path();
 			}
 			if (rawPath == null) {
 				out.add(form);
+				continue;
+			}
+			if (load != null && !load.errorIfMissing() && !readable(SourceLoader.resolve(baseDir, rawPath), ctx)) {
+				// (load "x.lisp" :if-does-not-exist nil) over a file that is not there:
+				// the path is literal, so the answer is decidable here, and it is the
+				// nil the runtime load would have returned.
+				out.add(LispNil.INSTANCE);
 				continue;
 			}
 			String operator = require != null ? LispNames.REQUIRE : LispNames.LOAD;
@@ -319,6 +328,17 @@ public final class LoadInliner {
 			// top level), the same rule the runtime load uses. *load-pathname* is the
 			// path load was CALLED with, so the raw spelling rides along beside it.
 			spliceFile(operator, SourceLoader.resolve(baseDir, rawPath), out, ctx, rawPath);
+		}
+	}
+
+	/** Whether the source at the resolved path can be read -- {@code load}'s probe. */
+	private static boolean readable(String path, Ctx ctx) {
+		try {
+			ctx.loader().load(path);
+			return true;
+		}
+		catch (IOException ex) {
+			return false;
 		}
 	}
 
@@ -657,22 +677,71 @@ public final class LoadInliner {
 	}
 
 	/**
-	 * If {@code form} is a top-level {@code (load "path")} with a string-literal
-	 * argument, returns the path; otherwise returns {@code null}.
+	 * A top-level {@code load} this pass can consume: a literal path plus, optionally,
+	 * CL's keyword options with LITERAL values.
+	 *
+	 * @param path the literal pathname
+	 * @param errorIfMissing the {@code :if-does-not-exist} answer -- false means a
+	 * missing file is nil rather than a failed compile
 	 */
-	@Nullable private static String loadPath(LispVal form) {
+	private record LoadForm(String path, boolean errorIfMissing) {
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (load "path" [:option value]...)} with a
+	 * string-literal path and literal option values, returns it; otherwise returns
+	 * {@code null}.
+	 *
+	 * <p>
+	 * A COMPUTED option value leaves the form alone, exactly like a computed path: the
+	 * runtime {@code load} understands the same four options
+	 * ({@code LispMacroExpander.lowerLoadOptions}), so there is no need to guess here
+	 * what an expression will answer. {@code :verbose} / {@code :print} /
+	 * {@code :external-format} are consumed with the value (a spliced file produces no
+	 * progress output and is read as UTF-8 either way); {@code :if-does-not-exist} is the
+	 * one that changes what this pass does.
+	 */
+	@Nullable private static LoadForm loadForm(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return null;
 		}
 		List<LispVal> items = cons.toList();
-		if (items.size() != 2) {
-			return null;
-		}
-		if (!(items.get(0) instanceof LispSymbol op) || !LispNames.LOAD.equals(op.name())) {
+		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol op) || !LispNames.LOAD.equals(op.name())) {
 			return null;
 		}
 		// A literal path is a string or a #P"..." pathname value.
-		return am.ik.rontolisp.eval.PathnameOps.designatorNamestring(items.get(1));
+		String path = am.ik.rontolisp.eval.PathnameOps.designatorNamestring(items.get(1));
+		if (path == null) {
+			return null;
+		}
+		boolean errorIfMissing = true;
+		for (int i = 2; i < items.size(); i += 2) {
+			if (i + 1 >= items.size() || !(items.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")
+					|| !isLiteralOptionValue(items.get(i + 1))) {
+				return null;
+			}
+			switch (key.name()) {
+				case ":VERBOSE", ":PRINT", ":EXTERNAL-FORMAT" -> {
+				}
+				case ":IF-DOES-NOT-EXIST" -> errorIfMissing = !(items.get(i + 1) instanceof LispNil);
+				default -> {
+					return null;
+				}
+			}
+		}
+		return new LoadForm(path, errorIfMissing);
+	}
+
+	/**
+	 * Whether an option value is a literal this pass can read: a keyword, {@code nil} /
+	 * {@code t}, a string or a number. A list is a call and a bare symbol a variable --
+	 * both are answers only the run time has.
+	 */
+	private static boolean isLiteralOptionValue(LispVal value) {
+		if (value instanceof LispCons) {
+			return false;
+		}
+		return !(value instanceof LispSymbol sym) || sym.name().startsWith(":");
 	}
 
 	/**

@@ -10287,6 +10287,31 @@ cases:
       (1 2 . 3)
       (1 s SYM)
       (#2A((3 3) (3 3)) #d(1.5 1.5))
+  - name: computed-stream-options-439
+    # A portable file wrapper takes the open options as ARGUMENTS and passes
+    # them down -- uiop's call-with-input-file / call-with-output-file are
+    # exactly that shape -- so a computed :direction / :element-type /
+    # :if-exists dispatches onto the literal open shapes at run time instead of
+    # refusing the program at expansion time. load's keyword options ride along:
+    # :if-does-not-exist is real (a false value answers nil), the rest are
+    # accepted and ignored. The load is written inside a call so it stays a
+    # RUNTIME load -- a top-level one is spliced by the compile-path inliner.
+    source: |
+      (defun ci439-wr (path text dir ie)
+        (with-open-file (out path :direction dir :if-exists ie) (write-string text out)))
+      (defun ci439-rd (path et)
+        (with-open-file (in path :element-type et) (read-line in)))
+      (defun ci439-rd1 (path et)
+        (with-open-file (in path :element-type et) (read-byte in)))
+      (ci439-wr "c439.dat" "one" :output :supersede)
+      (ci439-wr "c439.dat" "two" :output :append)
+      (print (ci439-rd "c439.dat" 'character))
+      (print (ci439-rd1 "c439.dat" (list 'unsigned-byte 8)))
+      (print (load "no-such-439.lisp" :if-does-not-exist nil))
+    expected: |
+      "onetwo"
+      111
+      NIL
 
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report

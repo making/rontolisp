@@ -6500,11 +6500,19 @@ public final class Environment implements Scope {
 		if (spec instanceof LispSymbol sym && LispNames.CHARACTER_TYPE.equals(sym.name())) {
 			return false;
 		}
+		// The UNSIZED spelling is the same byte stream: (unsigned-byte) reads as
+		// (unsigned-byte *), and rontolisp has exactly one byte width. Kept in step with
+		// LispMacroExpander.isBinaryElementTypeLiteral and the runtime dispatch it
+		// builds -- an evaluated designator must classify the way a literal one does.
+		if (spec instanceof LispSymbol sym && LispNames.UNSIGNED_BYTE.equals(sym.name())) {
+			return true;
+		}
 		if (spec instanceof LispCons cons) {
 			List<LispVal> parts = cons.toList();
 			if (parts.size() == 2 && parts.get(0) instanceof LispSymbol sym
-					&& LispNames.UNSIGNED_BYTE.equals(sym.name()) && parts.get(1) instanceof LispInteger bits
-					&& bits.value() == 8) {
+					&& LispNames.UNSIGNED_BYTE.equals(sym.name())
+					&& (parts.get(1) instanceof LispInteger bits && bits.value() == 8
+							|| parts.get(1) instanceof LispSymbol star && "*".equals(star.name()))) {
 				return true;
 			}
 		}

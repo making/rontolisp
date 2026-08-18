@@ -225,8 +225,12 @@ public final class LibraryDefunPruner {
 		// helpers -- which call it -- are spliced after this walk.
 		// %print-cased is reached from the printing operators, rewritten onto it inside
 		// the expression compilers as well.
+		// probe-file is reached from uiop:file-exists-p's lowering and from the
+		// :if-does-not-exist guard LispMacroExpander.lowerLoadOptions builds -- both
+		// inside the expression compilers, after this walk.
 		for (String synthesized : List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.TEMP_FILE_NAME,
-				LispNames.DELETE_FILE_IF_EXISTS, LispNames.SYNONYM_TARGET, LispNames.PRINT_CASED_INTERNAL)) {
+				LispNames.DELETE_FILE_IF_EXISTS, LispNames.SYNONYM_TARGET, LispNames.PRINT_CASED_INTERNAL,
+				LispNames.PROBE_FILE)) {
 			if (LispPreludeLibrary.referencedBySurfaceForm(synthesized, resolved, true)) {
 				roots.add(LispPreludeLibrary.definedName(synthesized));
 			}

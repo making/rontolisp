@@ -1952,7 +1952,12 @@ public final class LispPreludeLibrary {
 			return referencesName(program, LispNames.PRINT_CASE_VAR, canonical);
 		}
 		if (LispNames.PROBE_FILE.equals(entry)) {
-			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical);
+			// The second producer is load's :if-does-not-exist option: the guard that
+			// reads it is built by LispMacroExpander.lowerLoadOptions inside the
+			// expression compilers, after this pass, so the surface fact -- the option
+			// being written at all -- is what selection can see.
+			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical)
+					|| am.ik.rontolisp.macro.LispMacroExpander.callsLoadWithIfDoesNotExist(program);
 		}
 		if (LispNames.NAMESTRING_CL.equals(entry)) {
 			return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NAMESTRING), canonical)

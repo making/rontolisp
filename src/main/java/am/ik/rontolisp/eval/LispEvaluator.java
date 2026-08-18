@@ -2409,12 +2409,33 @@ public final class LispEvaluator {
 			return applyValues(args);
 		}));
 		this.globalEnv.defineFunction(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException(LispNames.LOAD + " expects 1 argument, got " + args.size());
+			if (args.isEmpty() || args.size() % 2 == 0) {
+				throw new LispEvalException(LispNames.LOAD + " expects a pathname and :option value pairs, got "
+						+ args.size() + " arguments");
 			}
 			String path = PathnameOps.designatorNamestring(args.get(0));
 			if (path == null) {
 				throw new LispEvalException(LispNames.LOAD + " expects a pathname designator");
+			}
+			// CL's keyword options. :verbose and :print ask for progress output this
+			// load does not produce and :external-format for a decoder that does not
+			// exist (every backend reads UTF-8), so those three are accepted and
+			// ignored; :if-does-not-exist is real. The compile paths lower the same
+			// four in LispMacroExpander.lowerLoadOptions -- keep the two in step.
+			boolean errorIfMissing = true;
+			for (int i = 1; i < args.size(); i += 2) {
+				if (!(args.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
+					throw new LispEvalException(LispNames.LOAD + " expects :option value pairs");
+				}
+				switch (key.name()) {
+					case ":VERBOSE", ":PRINT", ":EXTERNAL-FORMAT" -> {
+					}
+					case ":IF-DOES-NOT-EXIST" -> errorIfMissing = isTruthy(args.get(i + 1));
+					default -> throw new LispEvalException(LispNames.LOAD + ": unsupported option " + key.name());
+				}
+			}
+			if (!errorIfMissing && !sourceReadable(path)) {
+				return LispNil.INSTANCE;
 			}
 			loadFile(LispNames.LOAD, path);
 			return LispTrue.INSTANCE;
@@ -2649,6 +2670,22 @@ public final class LispEvaluator {
 	 * are processed; the loaded file's directory is pushed so a nested load resolves
 	 * relative to it.
 	 */
+	/**
+	 * Whether the source at {@code rawPath} can be read from where the current load
+	 * resolves it -- the {@code :if-does-not-exist} probe of {@code load}. It is the
+	 * interpreter's rendering of the {@code probe-file} guard the compile paths lower to,
+	 * so an unreadable file (not merely a missing one) answers false on both.
+	 */
+	private boolean sourceReadable(String rawPath) {
+		try {
+			this.sourceLoader.load(SourceLoader.resolve(this.loadDirStack.peekLast(), rawPath));
+			return true;
+		}
+		catch (IOException ex) {
+			return false;
+		}
+	}
+
 	private void loadFile(String operator, String rawPath) {
 		loadFile(operator, rawPath, null);
 	}

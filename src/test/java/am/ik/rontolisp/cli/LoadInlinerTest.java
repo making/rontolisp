@@ -48,6 +48,36 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void inlinesALoadCarryingLiteralKeywordOptions() {
+		// CL's load options do not change WHICH forms are loaded, so a keyworded load
+		// splices exactly like a bare one -- the options are consumed with the form.
+		List<LispVal> result = inline("(load \"core.lisp\" :verbose nil :print nil :external-format :utf-8)",
+				Map.of("core.lisp", "(defun f (x) (* x x))"));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-FILE \"core.lisp\" \"core.lisp\")",
+				"(DEFUN F (X) (* X X))", "(%END-FILE)");
+	}
+
+	@Test
+	void aMissingFileUnderIfDoesNotExistNilBecomesNil() {
+		// The path is literal, so the answer is decidable here: the nil the runtime load
+		// would have returned, instead of the failed compile a missing splice is.
+		List<LispVal> result = inline("(load \"gone.lisp\" :if-does-not-exist nil) (print 1)", Map.of());
+		assertThat(result.stream().map(LispVal::print)).containsExactly("NIL", "(PRINT 1)");
+		assertThatThrownBy(() -> inline("(load \"gone.lisp\")", Map.of())).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("cannot read file");
+	}
+
+	@Test
+	void aComputedLoadOptionIsLeftToTheRuntimeLoad() {
+		// Like a computed PATH: this pass does not guess what an expression answers, and
+		// the runtime load understands the same options.
+		List<LispVal> result = inline("(load \"core.lisp\" :if-does-not-exist (missingp))",
+				Map.of("core.lisp", "(defun f (x) (* x x))"));
+		assertThat(result.stream().map(LispVal::print))
+			.containsExactly("(LOAD \"core.lisp\" :IF-DOES-NOT-EXIST (MISSINGP))");
+	}
+
+	@Test
 	void inlineIsRecursive() {
 		List<LispVal> result = inline("(load \"a.lisp\")",
 				Map.of("a.lisp", "(load \"b.lisp\") (defun a () 1)", "b.lisp", "(defun b () 2)"));

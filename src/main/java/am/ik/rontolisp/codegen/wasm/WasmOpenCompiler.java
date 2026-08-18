@@ -33,6 +33,13 @@ final class WasmOpenCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispVal runtimeOptions = OpenModes.lowerRuntimeOptions(cons);
+		if (runtimeOptions != null) {
+			// A computed option value: the dispatch onto the literal shapes carries the
+			// mode instead, so this compiler still only ever sees literals.
+			WasmExprCompiler.compileExpr(runtimeOptions, ctx);
+			return;
+		}
 		cons = OpenModes.normalizeKeywordForm(cons);
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || parts.size() > 4) {

@@ -22,6 +22,13 @@ final class JvmOpenCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispVal runtimeOptions = OpenModes.lowerRuntimeOptions(cons);
+		if (runtimeOptions != null) {
+			// A computed option value: the dispatch onto the literal shapes carries the
+			// mode instead, so this compiler still only ever sees literals.
+			JvmExprCompiler.compileExpr(runtimeOptions, ctx, className);
+			return;
+		}
 		cons = OpenModes.normalizeKeywordForm(cons);
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || parts.size() > 4) {
