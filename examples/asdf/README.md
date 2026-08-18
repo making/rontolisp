@@ -12,7 +12,7 @@ identically on all four backends (interpreter, JVM, WASM Preview 1,
 | [`parse-number-demo.lisp`](parse-number-demo.lisp) | parse-number v1.8 (BSD 3-Clause) | <https://github.com/sharplispers/parse-number> |
 | [`cl-utilities-demo.lisp`](cl-utilities-demo.lisp) | cl-utilities v1.2.4 (public domain) | <https://common-lisp.net/project/cl-utilities/> |
 | [`cl-who-demo.lisp`](cl-who-demo.lisp) | cl-who v1.1.5 (BSD 2-Clause) | <https://github.com/edicl/cl-who> |
-| [`mustache-demo.lisp`](mustache-demo.lisp) | cl-mustache 0.12.3 (MIT) — Mustache templates. The missing-partial demo invokes a `use-value` restart, so both WASM runs need `-W exceptions=y` | <https://github.com/kanru/cl-mustache> |
+| [`mustache-demo.lisp`](mustache-demo.lisp) | cl-mustache 0.12.3 (MIT) — Mustache templates from strings AND from `greeting.mustache`, its only runtime file I/O (so its WASM runs need `--dir .`). The missing-partial demo invokes a `use-value` restart, so both WASM runs need `-W exceptions=y` | <https://github.com/kanru/cl-mustache> |
 | [`assoc-utils-demo.lisp`](assoc-utils-demo.lisp) | assoc-utils (public domain) | <https://github.com/fukamachi/assoc-utils> |
 | [`cl-base64-demo.lisp`](cl-base64-demo.lisp) | cl-base64 v3.4 (BSD-style) | <https://github.com/darabi/cl-base64> |
 | [`jzon-demo.lisp`](jzon-demo.lisp) | com.inuoe.jzon v1.1.4 (MIT) | <https://github.com/Zulu-Inuoe/jzon> |
@@ -91,9 +91,17 @@ run commands need `-W exceptions=y` (wasmtime 37+). `alexandria-demo.lisp` is
 one, and so is `tiny-routes-demo.lisp` (`with-input-from-string` expands to an
 `unwind-protect`).
 
+`mustache-demo.lisp` is the one demo that reads a file at run time — its
+`greeting.mustache` template, the path relative to the repository root — so
+its two WASM runs also preopen that root: add `--dir .` to both `wasmtime run`
+commands (which already carry `-W exceptions=y` for the missing-partial
+section).
+
 ## Expected output
 
-Each demo prints one line per API call it exercises; `split-sequence-demo.lisp`
+Each demo prints one line per API call it exercises
+(`mustache-demo.lisp`'s file rendering is the exception — it prints the
+rendered template, which spans several lines); `split-sequence-demo.lisp`
 starts:
 
 ```console
