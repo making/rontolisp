@@ -9154,17 +9154,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void hashTablePrintsAsOpaqueTag() {
-		// A hash table prints as one opaque tag, with no entry content and nothing that
-		// varies between runs, through every printer -- and identically on all four
-		// backends (todo 430; pinned end-to-end by the ci-spec case
-		// hash-table-print-syntax).
+	void hashTablePrintsAsUnreadableTagWithCount() {
+		// A hash table prints as SBCL's unreadable tag MINUS the identity hash -- the
+		// test (always EQUAL, the one lookup actually implements) and the live entry
+		// count, with no entry content and nothing that varies between runs -- through
+		// every printer, and identically on all four backends (pinned end-to-end by the
+		// ci-spec case hash-table-print-syntax).
 		LispVal result = evalMulti("""
 				(defparameter *h* (make-hash-table :test 'equal))
 				(setf (gethash "a" *h*) 1)
-				(list (princ-to-string *h*) (prin1-to-string *h*) (format nil "~a ~s" *h* *h*))
+				(setf (gethash "b" *h*) 2)
+				(list (princ-to-string *h*) (prin1-to-string *h*) (format nil "~a" *h*))
 				""");
-		assertThat(result.print()).isEqualTo("(\"#<HASH-TABLE>\" \"#<HASH-TABLE>\" \"#<HASH-TABLE> #<HASH-TABLE>\")");
+		assertThat(result.print()).isEqualTo(
+				"(\"#<HASH-TABLE :TEST EQUAL :COUNT 2>\" \"#<HASH-TABLE :TEST EQUAL :COUNT 2>\" \"#<HASH-TABLE :TEST EQUAL :COUNT 2>\")");
 	}
 
 	@Test

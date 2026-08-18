@@ -359,11 +359,16 @@ matches an equal list, and numbers, symbols, characters and strings match by
 value. `:test` is accepted for familiarity but does not change this -- an `eql`
 table also matches structurally-equal aggregate keys. Iteration order (`maphash`)
 is not guaranteed across backends, so portable code should not depend on it. A
-table itself prints as the opaque tag `#<HASH-TABLE>` -- the same text on every
-backend, with no entry content:
+table itself prints as SBCL's unreadable tag minus its trailing identity hash --
+`#<HASH-TABLE :TEST EQUAL :COUNT n>`, the same text on every backend, with no
+entry content. `:TEST` is always `EQUAL`, the test lookup actually implements and
+the one `hash-table-test` reports, whatever `:test` the table was made with;
+`:COUNT` is the live entry count, the same number `hash-table-count` returns:
 
 ```lisp
-(princ-to-string (make-hash-table)) ; => "#<HASH-TABLE>"
+(let ((h (make-hash-table)))
+  (setf (gethash 'a h) 1)
+  (princ-to-string h))                      ; => "#<HASH-TABLE :TEST EQUAL :COUNT 1>"
 ```
 
 They

@@ -9,18 +9,32 @@ and the JVM table keys by printed text, which agrees for free -- two separately
 constructed instances with equal slots therefore find each other in an `equal` table on
 all four backends (pinned by the ci-spec case `instance-print-syntax-and-identity`). `puthash` grows (doubles, `FUNC_HASH_RESIZE`) past load factor 0.75. `FUNC_HASH`/`FUNC_HASH_RESIZE` sit just before `FUNC_USER_BASE`; both are present in Preview 1 and `--component` (no import/`FUNC_START` index shift, so the component blobs are unaffected). `maphash` order is unspecified (README) -- interpreter and JVM both walk insertion order, WASM walks bucket order.
 
-**Printing**: a table is OPAQUE -- `#<HASH-TABLE>` on all four backends, through
+**Printing**: a table prints as SBCL's unreadable tag MINUS its trailing identity hash --
+`#<HASH-TABLE :TEST EQUAL :COUNT n>` on all four backends, through
 `print`/`princ`/`prin1`/`princ-to-string`/`format ~A`/`~S`, nested positions included
-(pinned by the ci-spec case `hash-table-print-syntax` plus one test per backend). No
-entry content and, deliberately, none of SBCL's `:TEST`/`:COUNT` detail: the count is
-O(1) everywhere, but the test is not stored at all on WASM (`make-hash-table` ignores
-`:test`, lookup is always structural), so printing it would be a divergence by
-construction -- widen the tag only if the WASM table first learns its test, and never
-with an identity hash, which is text that varies between runs of one program
-(`.kb/emitted-output-determinism.md`). Each backend reaches the tag its own way and each
-way was a defect before `.todo/430`:
+(pinned by the ci-spec case `hash-table-print-syntax` plus one test per backend). Still no
+entry content. The two fields are exactly the two SBCL details that can be printed here
+without lying or drifting:
 
-- interpreter: `LispHashTable.print()`.
+- `:TEST` is the CONSTANT `EQUAL`, not the `:test` the table was made with. Lookup is
+  structural on every backend (`make-hash-table` records `:test` on the interpreter and
+  ignores it entirely on WASM), so `EQUAL` is the test the table actually implements and
+  is what `hash-table-test` already reports on all four backends
+  (`LispMacroExpander.expandHashTableTest` compiles the accessor to a constant). Printing
+  the REQUESTED test would describe behavior that does not exist, and would diverge by
+  construction on WASM, which does not store it -- print it only if the WASM table first
+  learns its test AND lookup starts honoring it.
+- `:COUNT` is the live entry count, the same O(1) number `hash-table-count` reads, taken
+  from the same place on each backend so the two cannot disagree.
+
+SBCL's trailing `{1004F8E1C3}` is deliberately absent: an identity hash is text that
+varies between runs of one program (`.kb/emitted-output-determinism.md`).
+
+The prefix is one constant, `LispHashTable.HASH_TABLE_PREFIX`, which both compilers intern
+rather than re-spell. Each backend reaches the tag its own way and each way was a defect
+before `.todo/430`:
+
+- interpreter: `LispHashTable.print()`, counting `map.size()`.
 - JVM: a `_lispToString`/`_lispToDisplayString` arm keyed on
   `JvmHashRuntimeBuilder.MAP_CLASS` = `java.util.LinkedHashMap`, deliberately NOT the
   plain `HashMap` a `java:` call can hand back. That class is the discriminator `_hashP`
@@ -36,4 +50,8 @@ way was a defect before `.todo/430`:
   cons tail, which prints `" . "` and re-enters the printer on the SAME value: unbounded
   recursion, i.e. an unrecoverable `call stack exhausted` trap that also loses the stdout
   buffered before it. That is why the arm answers for any cell, not only for one that
-  passes the full `hash-table-p` test.
+  passes the full `hash-table-p` test. The count follows the same rule: it is emitted only
+  behind a `ref.test i31` on the header car, so a cell that is not a table prints the tag
+  with a `0` count instead of trapping on the `i31.get_s`. `FUNC_PRINT_I32_NO_NL` writes
+  the digits -- the function the same arm already calls for an array's rank, so no new
+  function index and no shift in the component blobs.

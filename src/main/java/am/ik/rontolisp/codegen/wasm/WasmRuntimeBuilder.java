@@ -3854,14 +3854,41 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // is-array if
 
 		// The other TYPE_CELL shape is a hash table (header car = the i31 entry count),
-		// and it prints as the opaque #<HASH-TABLE> tag -- the interpreter's answer, so
-		// all four backends agree. Without this arm the value left the cell branch
-		// unhandled and fell into the cons tail below, which prints " . " and re-enters
-		// the printer on the SAME value: unbounded recursion, i.e. an unrecoverable
-		// "call stack exhausted" trap that also lost the stdout buffered before it. Any
-		// other cell (an unexposed internal box) survives here for the same reason
-		// rather than trapping.
+		// and it prints as #<HASH-TABLE :TEST EQUAL :COUNT n> -- the interpreter's
+		// answer, so all four backends agree. Without this arm the value left the cell
+		// branch unhandled and fell into the cons tail below, which prints " . " and
+		// re-enters the printer on the SAME value: unbounded recursion, i.e. an
+		// unrecoverable "call stack exhausted" trap that also lost the stdout buffered
+		// before it. Any other cell (an unexposed internal box) survives here for the
+		// same reason rather than trapping: the count is emitted only when the header
+		// car really is an i31, and such a box prints the tag with a 0 count instead of
+		// trapping on the cast.
 		writeStr(w, st.hashTableStr);
+		cellHeader(w);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x7F); // (result i32)
+		cellHeader(w);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
+		writeStr(w, st.hashTableEnd);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // is-cell if
 	}

@@ -24,6 +24,7 @@ import am.ik.rontolisp.macro.LispAsync;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -1752,11 +1753,22 @@ public final class JvmLispCompiler implements LispCompiler {
 			javaPrint = null;
 		}
 
-		// A hash table prints as the opaque #<HASH-TABLE> tag, the same text the
-		// interpreter and both WASM backends emit; the branch is emitted only when the
-		// program uses hash tables.
-		final JvmRuntimeBuilder.@Nullable HashPrint hashPrint = usesHashTables ? new JvmRuntimeBuilder.HashPrint(
-				cp.addClass(cp.addUtf8(JvmHashRuntimeBuilder.MAP_CLASS)), cp.addString("#<HASH-TABLE>")) : null;
+		// A hash table prints as the unreadable #<HASH-TABLE :TEST EQUAL :COUNT n> tag,
+		// the same text the interpreter and both WASM backends emit; the branch is
+		// emitted only when the program uses hash tables.
+		final JvmRuntimeBuilder.@Nullable HashPrint hashPrint;
+		if (usesHashTables) {
+			ClassConstant mapClassForPrint = cp.addClass(cp.addUtf8(JvmHashRuntimeBuilder.MAP_CLASS));
+			MethodrefConstant mapSize = cp.addMethodref(mapClassForPrint,
+					cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
+			MethodrefConstant intToString = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Integer")),
+					cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
+			hashPrint = new JvmRuntimeBuilder.HashPrint(mapClassForPrint, cp.addString(LispHashTable.HASH_TABLE_PREFIX),
+					mapSize, intToString, stringConcat, cp.addString(">"));
+		}
+		else {
+			hashPrint = null;
+		}
 
 		// Futures (CompletableFutures / stream-read tokens at runtime) print as
 		// #<FUTURE> and streams as #<STREAM> (interpreter parity); the branches are

@@ -3042,6 +3042,7 @@ cases:
     source: |
       (defparameter *htp* (make-hash-table :test 'equal))
       (setf (gethash "a" *htp*) 1)
+      (setf (gethash "b" *htp*) 2)
       (princ *htp*)
       (terpri)
       (prin1 *htp*)
@@ -3049,12 +3050,18 @@ cases:
       (format t "~a ~s~%" *htp* *htp*)
       (print (list *htp*))
       (print (princ-to-string *htp*))
+      (remhash "a" *htp*)
+      (print *htp*)
+      (clrhash *htp*)
+      (print *htp*)
     expected: |
-      #<HASH-TABLE>
-      #<HASH-TABLE>
-      #<HASH-TABLE> #<HASH-TABLE>
-      (#<HASH-TABLE>)
-      "#<HASH-TABLE>"
+      #<HASH-TABLE :TEST EQUAL :COUNT 2>
+      #<HASH-TABLE :TEST EQUAL :COUNT 2>
+      #<HASH-TABLE :TEST EQUAL :COUNT 2> #<HASH-TABLE :TEST EQUAL :COUNT 2>
+      (#<HASH-TABLE :TEST EQUAL :COUNT 2>)
+      "#<HASH-TABLE :TEST EQUAL :COUNT 2>"
+      #<HASH-TABLE :TEST EQUAL :COUNT 1>
+      #<HASH-TABLE :TEST EQUAL :COUNT 0>
   - name: hash-table-functions-first-class
     source: |
       (defun ci-ht-fc ()

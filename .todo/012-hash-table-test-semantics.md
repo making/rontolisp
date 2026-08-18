@@ -1,5 +1,7 @@
 # Hash tables: honor :test (eql vs equal) instead of always equal
 
+Difficulty: High
+
 **Status:** not done. HARD-ish / deferred.
 
 All three backends currently compare hash-table keys structurally (as if by
@@ -28,6 +30,16 @@ backends:
   `.kb/hash-tables.md`), plus a test flag carried in the header.
 
 Keep `equal` the default-friendly behavior; only narrow `eql`/`eq` tables.
+
+## Also update when this lands
+
+A table prints as `#<HASH-TABLE :TEST EQUAL :COUNT n>` on all four backends, and
+the `EQUAL` there is a CONSTANT for exactly the reason above: it is the test
+lookup actually implements, and WASM does not store the requested one. Once the
+test is stored and honored, the printer must report the table's real test
+(`.kb/hash-tables.md` "Printing" -- the three print sites plus the ci-spec case
+`hash-table-print-syntax`), and `hash-table-test` must stop being folded to a
+constant (`LispMacroExpander.expandHashTableTest`).
 
 ## Definition of done
 

@@ -11,7 +11,7 @@ import org.jspecify.annotations.Nullable;
  * Upstream writes the tables as {@code (defvar *etlds* '#.(load-etld-data))}: a read-time
  * evaluation whose value is a list of two HASH TABLES. The interpreter can hold that, but
  * a compile backend has to emit the datum as a literal and there is no literal syntax for
- * a hash table -- {@code Cannot quote: #<HASH-TABLE>}. So the eager read-time build
+ * a hash table -- {@code Cannot quote: #<HASH-TABLE ...>}. So the eager read-time build
  * becomes a lazy load-time one: the global starts {@code nil} and the three reads inside
  * {@code parse-domain} force it.
  *

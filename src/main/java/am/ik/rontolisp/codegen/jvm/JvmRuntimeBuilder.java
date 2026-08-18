@@ -1306,10 +1306,10 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Constant-pool references for printing a hash table as the opaque
-	 * {@code #<HASH-TABLE>} tag the interpreter's {@code LispHashTable.print()} answers.
-	 * Threaded into the two lisp-to-string builders only when the program uses hash
-	 * tables.
+	 * Constant-pool references for printing a hash table as the unreadable
+	 * {@code #<HASH-TABLE :TEST EQUAL :COUNT n>} tag the interpreter's
+	 * {@code LispHashTable.print()} answers. Threaded into the two lisp-to-string
+	 * builders only when the program uses hash tables.
 	 *
 	 * <p>
 	 * {@code mapClass} is {@link JvmHashRuntimeBuilder#MAP_CLASS}, the runtime class a
@@ -1317,9 +1317,12 @@ final class JvmRuntimeBuilder {
 	 * own a table used to fall through to {@code toString()} and print Java's own map
 	 * syntax -- container braces, the raw {@code Object[]} entry pair, and an IDENTITY
 	 * HASH, which made the same program print different text on two runs
-	 * ({@code .kb/emitted-output-determinism.md}).
+	 * ({@code .kb/emitted-output-determinism.md}). The count comes from {@code mapSize},
+	 * the same {@code size()} call {@code _hashCount} makes, so the printed number and
+	 * {@code hash-table-count} cannot disagree.
 	 */
-	record HashPrint(ClassConstant mapClass, ConstantPool.StringConstant tag) {
+	record HashPrint(ClassConstant mapClass, ConstantPool.StringConstant tag, MethodrefConstant mapSize,
+			MethodrefConstant intToString, MethodrefConstant stringConcat, ConstantPool.StringConstant suffix) {
 	}
 
 	/**
@@ -1675,9 +1678,10 @@ final class JvmRuntimeBuilder {
 		}
 	}
 
-	// Emits "if (val is the compiled hash-table class) return "#<HASH-TABLE>"" -- the
-	// interpreter's LispHashTable.print() answer, so all four backends print one table
-	// identically. A no-op in a program that never makes a table.
+	// Emits "if (val is the compiled hash-table class) return "#<HASH-TABLE :TEST EQUAL
+	// :COUNT ".concat(Integer.toString(map.size())).concat(">")" -- the interpreter's
+	// LispHashTable.print() answer, so all four backends print one table identically. A
+	// no-op in a program that never makes a table.
 	private static void emitHashTableBranch(List<Integer> code,
 			@org.jspecify.annotations.Nullable HashPrint hashPrint) {
 		if (hashPrint == null) {
@@ -1690,6 +1694,18 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
 		emitLdc(code, hashPrint.tag().index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, hashPrint.mapClass().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, hashPrint.mapSize().index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, hashPrint.intToString().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, hashPrint.stringConcat().index());
+		emitLdc(code, hashPrint.suffix().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, hashPrint.stringConcat().index());
 		code.add(Opcode.ARETURN);
 		patchBranch(code, skip, code.size());
 	}

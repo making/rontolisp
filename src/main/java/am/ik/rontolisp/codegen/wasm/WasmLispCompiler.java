@@ -18,6 +18,7 @@ import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -8252,9 +8253,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		final StringEntry futureStr;
 
 		// A hash table is the OTHER shape of the TYPE_CELL box the array printer walks
-		// (see WasmRuntimeBuilder.emitPrintArray): it prints as this opaque tag, the same
-		// text LispHashTable.print() answers on the interpreter.
+		// (see WasmRuntimeBuilder.emitPrintArray): it prints as this unreadable tag with
+		// the header's entry count between the two halves, the same text
+		// LispHashTable.print() answers on the interpreter.
 		final StringEntry hashTableStr;
+
+		final StringEntry hashTableEnd;
 
 		// Vector/array literal printing: the "#(" prefix for rank-1; a rank-n array
 		// prints "#", the rank as an integer, then "A(". A packed float array
@@ -8323,7 +8327,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.newline = addBodyString("\n");
 			this.funcStr = addBodyString("#<function>");
 			this.futureStr = addBodyString("#<FUTURE>");
-			this.hashTableStr = addBodyString("#<HASH-TABLE>");
+			this.hashTableStr = addBodyString(LispHashTable.HASH_TABLE_PREFIX);
+			this.hashTableEnd = addBodyString(">");
 			this.vecPrefix = addBodyString("#(");
 			this.hashPrefix = addBodyString("#");
 			this.rankAOpen = addBodyString("A(");

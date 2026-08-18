@@ -31,6 +31,15 @@ public final class LispHashTable implements LispVal {
 	public record Entry(LispVal key, LispVal value) {
 	}
 
+	/**
+	 * The unreadable-object prefix every backend prints before a table's entry count. The
+	 * test is always {@code EQUAL} -- lookup is structural on every backend, so that is
+	 * the test the table actually implements and the one {@code hash-table-test} reports;
+	 * SBCL's trailing identity hash is deliberately absent (it would vary between runs of
+	 * one program).
+	 */
+	public static final String HASH_TABLE_PREFIX = "#<HASH-TABLE :TEST EQUAL :COUNT ";
+
 	private final boolean equalTest;
 
 	private final LinkedHashMap<String, Entry> map = new LinkedHashMap<>();
@@ -100,7 +109,7 @@ public final class LispHashTable implements LispVal {
 
 	@Override
 	public String print() {
-		return "#<HASH-TABLE>";
+		return HASH_TABLE_PREFIX + count() + ">";
 	}
 
 }
