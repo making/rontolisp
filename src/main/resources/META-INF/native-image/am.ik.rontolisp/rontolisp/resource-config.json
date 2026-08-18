@@ -323,12 +323,6 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
         },
-        "pattern": "am/ik/rontolisp/eval/ironclad-public-key\\.lisp"
-      },
-      {
-        "condition": {
-          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
-        },
         "pattern": "am/ik/rontolisp/eval/tiny-routes-lite-path-template\\.lisp"
       },
       {

@@ -20,6 +20,7 @@ identically on all four backends (interpreter, JVM, WASM Preview 1,
 | [`chipz-demo.lisp`](chipz-demo.lisp) | chipz 0.8 (BSD) — gzip/zlib/deflate decompression. Uses `catch`/`throw`, so both WASM runs need `-W exceptions=y` | <https://github.com/froydnj/chipz> |
 | [`cl-ppcre-demo.lisp`](cl-ppcre-demo.lisp) | cl-ppcre v2.1.2 (BSD 2-Clause) | <https://github.com/edicl/cl-ppcre> |
 | [`ironclad-demo.lisp`](ironclad-demo.lisp) | ironclad v0.61, SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice (BSD 3-Clause) | <https://github.com/sharplispers/ironclad> |
+| [`ironclad-rsa-demo.lisp`](ironclad-rsa-demo.lisp) | ironclad v0.61, the SHA-384/512 digests and the RSA public-key stack — `sign-message`/`verify-signature` with and without PSS, and `generate-key-pair` | <https://github.com/sharplispers/ironclad> |
 | [`uax-15-demo.lisp`](uax-15-demo.lisp) | uax-15 v0.1.3 (MIT) | <https://github.com/sabracrolleton/uax-15> |
 | [`tiny-routes-demo.lisp`](tiny-routes-demo.lisp) | tiny-routes v0.1.1 (BSD 3-Clause). For a size-constrained module load the opt-in `"tiny-routes/lite"`, which drops the cl-ppcre dependency — see the [asdf-systems guide](../../doc/en/guides/asdf-systems.md) | <https://github.com/jeko2000/tiny-routes> |
 | [`clack-hello.lisp`](clack-hello.lisp) | clack v2.1.0 + lack (MIT), served by the built-in `clack-handler-rontolisp` backend; loads via `ql:quickload` (network on the first run) | <https://github.com/fukamachi/clack> |
@@ -35,7 +36,7 @@ string.
 The sources are vendored under `src/test/resources/<library>/` for the test
 suite, so the demos run out of the box from the repository root. Two of them
 have a wrinkle: jzon's `.asd` lives in its `src/` subdirectory, and only the
-SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice of ironclad is vendored (its executable
+SHA-2/HMAC/PBKDF2/HKDF/SCRAM/RSA slice of ironclad is vendored (its executable
 `ironclad.asd` is kept for provenance, but a bundled replacement is what loads).
 
 Alternatively, download the same versions from upstream and point

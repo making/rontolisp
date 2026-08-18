@@ -42,16 +42,16 @@ import org.jspecify.annotations.Nullable;
  * eisel-lemire's exact rounding.
  *
  * <p>
- * ironclad's core carries two more leaves, for a different reason: the file is not
- * unportable, it is merely far too big to drag in for the handful of names the loadable
- * slice needs. {@code src/public-key/public-key.lisp} is 3,065 lines of RSA/DSA/ECC of
- * which the slice wants exactly the two integer/octet-vector converters cl-postgres'
- * SCRAM client proof calls, so the shim reproduces those two VERBATIM and nothing else;
- * {@code src/prng/prng.lisp} would pull in the Fortuna CSPRNG, and the slice needs only
- * {@code random-data} to EXIST (it is the never-taken default of
- * {@code pbkdf2-hash-password}'s {@code :salt}), so that shim signals rather than hand
- * out non-cryptographic bytes under a name that promises unpredictability. See
- * {@code .kb/asdf.md}.
+ * ironclad's core carries one more leaf, for a different reason: the file is not
+ * unportable, it is merely a CSPRNG the backends already provide. {@code
+ * src/prng/prng.lisp} is the Fortuna generator plus seed-file plumbing over
+ * {@code /dev/urandom}; the shim is real rather than a stub, drawing every byte from
+ * {@code rontolisp:random-bytes} (which exists on all four backends), which is exactly
+ * the entropy RSA key generation and the PSS salt consume. Its sibling {@code
+ * src/public-key/public-key.lisp} used to be shimmed too, for a third motive again --
+ * size of file -- and that shim was RETIRED when the real RSA stack came in: keeping a
+ * verbatim copy of two converters beside the file that defines them is a redefinition
+ * race, not a saving. See {@code .kb/asdf.md}.
  *
  * <p>
  * {@code swank} is the degenerate end of the same ladder: a shim system whose whole
@@ -118,10 +118,8 @@ public final class ShimLibraries {
 	private static final Map<String, Map<String, String>> LEAF_MODULES = Map.of("com.inuoe.jzon",
 			Map.of("eisel-lemire.lisp", "jzon-eisel-lemire.lisp", "ratio-to-double.lisp", "jzon-ratio-to-double.lisp",
 					"schubfach.lisp", "jzon-schubfach.lisp"),
-			"ironclad/core",
-			Map.of("src/prng/prng.lisp", "ironclad-prng.lisp", "src/public-key/public-key.lisp",
-					"ironclad-public-key.lisp"),
-			"tiny-routes/lite", Map.of("src/middleware/path-template.lisp", "tiny-routes-lite-path-template.lisp"));
+			"ironclad/core", Map.of("src/prng/prng.lisp", "ironclad-prng.lisp"), "tiny-routes/lite",
+			Map.of("src/middleware/path-template.lisp", "tiny-routes-lite-path-template.lisp"));
 
 	/**
 	 * System pairs that must not be loaded into one program: both define the same

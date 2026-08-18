@@ -5,8 +5,10 @@
 ;; Runs on all four backends. ironclad's own ironclad.asd is an executable
 ;; program (component classes, a defsystem-generating macro), so rontolisp
 ;; substitutes a bundled replacement .asd declaring the loadable slice -- the
-;; component files loaded are the library's real ones. Ciphers, public keys,
-;; PRNGs and the other digests are outside the slice.
+;; component files loaded are the library's real ones. The slice also carries
+;; SHA-384/512 and the RSA public-key stack -- see ironclad-rsa-demo.lisp;
+;; ciphers, AEAD modes, the Fortuna PRNG and the non-RSA public-key algorithms
+;; are outside it.
 
 (asdf:load-system :ironclad)
 

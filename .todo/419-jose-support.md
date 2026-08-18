@@ -47,11 +47,11 @@ The tokens were checked against two independent oracles, not against ourselves:
 | wrong key -> `jws-verification-error` (through `cerror`) | OK |
 | malformed token -> `jws-invalid-format` | OK |
 | `exp` / `nbf` / `iat` / `jti` claim checks, `:issuer` / `:audience` / `:subject` | OK |
-| RS256 / RS384 / RS512, PS256 / PS384 / PS512 | OK once ironclad carries the real public-key stack (`.todo/424`) |
+| RS256 / RS384 / RS512, PS256 / PS384 / PS512 | ironclad's side is DONE (`.todo/424`, 2026-08-18): the slice carries SHA-384/512 and the real RSA stack on all four backends |
 | `ironclad:generate-key-pair :rsa` | OK -- 2048 bits in ~3.2 s on the interpreter, sign ~0.28 s, verify ~0.23 s |
 
-HS384/HS512 need SHA-384/512, and every RS\*/PS\* algorithm needs RSA; both are
-`.todo/424`. HS256 and `:none` need neither.
+HS384/HS512 need SHA-384/512, and every RS\*/PS\* algorithm needs RSA; both
+landed with `.todo/424`. HS256 and `:none` need neither.
 
 ## The children
 
@@ -76,11 +76,14 @@ Blockers, in the order that unblocks the most:
 5. `.todo/423` -- `progv` is interpreter-only, and cl-json's decoder binds its
    scope variables with it. Every compiled backend refuses the whole program,
    so `jose:decode` is interpreter-only until this lands.
-6. `.todo/424` -- the ironclad slice carries SHA-256 only and stubs
-   `public-key.lisp`, so HS384/HS512 and the entire RS\*/PS\* family are
-   unavailable. The spike loaded the REAL `sha512.lisp`, `math.lisp`,
-   `public-key/{public-key,pkcs1,rsa}.lisp` on top of the slice and all of them
-   worked, the existing PRNG shim included.
+6. ~~`.todo/424` -- the ironclad slice carries SHA-256 only and stubs
+   `public-key.lisp`~~ DONE (2026-08-18): the slice now declares
+   `ironclad/digest/sha512` and `ironclad/public-key/rsa` over the REAL
+   `sha512.lisp`, `math.lisp` and `public-key/{public-key,pkcs1,rsa}.lisp`, the
+   `ironclad-public-key.lisp` shim is retired, and `IroncladE2eTest` pins
+   SHA-384/512, HMAC-SHA-384/512 and RSA sign/verify (PSS and OAEP included) on
+   all four backends. HS384/HS512 and the RS\*/PS\* family are unblocked from
+   ironclad's side.
 
 Not a rontolisp gap, recorded so it is not rediscovered: PS512 with a 1024-bit
 key fails ironclad's own `(>= num-bytes (+ (* 2 digest-len) 2))` assertion.
