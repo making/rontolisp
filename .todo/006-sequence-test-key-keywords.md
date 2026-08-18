@@ -1,63 +1,31 @@
-> **Update 2026-07-05:** the position family now supports
-> `:start`/`:end`/`:from-end` (+ `:test-not` on `position`) via the shared
-> `buildPositionScan`, and `position-if-not` exists. The other sequence
-> functions below still take :test/:key only.
->
-> **Update 2026-07-31 (local-time):** the FIND family joined the position family
-> on the shared `buildPositionScan` -- `find`/`find-if`/`find-if-not` now take
-> `:test`/`:test-not`/`:key`/`:start`/`:end`/`:from-end`, in call position AND as
-> first-class values (`positionScanValues` grew an `elementResult` flag), because
-> the two families are the same scan differing only in what a match yields. That
-> closes the "the `-if`/`-if-not` variants take no `:key`" follow-up for the find
-> half; `count-if`, `member-if`, `delete-if` &c still take none.
->
-> **Update 2026-07-06 (todo 65):** the position family's FIRST-CLASS values
-> now take the full keyword set too — variadic `BuiltinFunctionWrappers`
-> entries re-extract runtime keywords via getf and feed the call-position
-> expansion, and the interpreter registrations moved into `LispEvaluator`
-> (`positionScanValues`) so `(apply #'position item seq other-keys)` works
-> (cl-utilities' split-sequence). `reduce` gained `:start`/`:end` (subseq
-> lowering) and its `:key` now coerces a string sequence to a char list
-> before the mapcar. `stable-sort` (with `:key`) and `copy-seq` exist.
-
 # `:test` / `:key` keyword args for sequence & alist functions
 
-**Status: DONE (2026-07-04)** -- `:test` and `:key` are supported on
-`member`/`assoc`/`rassoc` and on `find`/`position`/`count`/`remove`/`delete`/
-`remove-duplicates`/`union`/`intersection`/`set-difference`/`adjoin`/
-`substitute`/`nsubstitute`, on all backends (interpreter / JVM / WASM Preview 1
-/ WASM component; native E2E case `sequence-and-alist-test-key-keywords`).
+**Status:** `:test`/`:test-not`/`:key` are supported on `member`/`assoc`/`rassoc`
+and on `find`/`position`/`count`/`remove`/`delete`/`remove-duplicates`/`union`/
+`intersection`/`set-difference`/`adjoin`/`substitute`/`nsubstitute`; the
+`find`/`position` families additionally take `:start`/`:end`/`:from-end`, and the
+predicate forms `find-if(-not)`/`position-if(-not)`/`remove-if(-not)`/
+`substitute-if(-not)` take `:key` — on all four backends. One shared expansion
+(`LispMacroExpander`'s `testMatchForm`/`keyedForm`/`buildPositionScan`, with the
+interpreter routing the same expansions in `LispEvaluator`), so keyword behavior
+is backend-identical by construction; unknown keywords are rejected loudly
+(`requireTestKeyKeywords`) instead of silently ignored. Tests: the
+`LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`
+sequence cases plus the `sequence-and-alist-test-key-keywords` ci-spec case.
 
-Implementation shape:
+## Remaining (not planned, note-only)
 
-- `LispMacroExpander` carries the whole compile path: each expander parses
-  `:test`/`:key` (`keywordValue`) and builds the match via the shared
-  `testMatchForm`/`keyedForm` helpers; the set-style functions
-  (`adjoin`/`union`/`intersection`/`set-difference`/`remove-duplicates`)
-  forward both keywords to their inner `member` (`memberCallForm`) with the
-  item side pre-keyed, so `:key` applies to both operands (CL semantics).
-- The interpreter routes the 12 sequence functions through the same expansions
-  in `LispEvaluator.evalCons` (the pattern `rassoc` already used), so keyword
-  behavior is backend-identical by construction; `member`/`assoc`/`rassoc`
-  keep their `LispEvaluator` registrations (needed for first-class use) with
-  `:key` applied via `apply`.
-- Unknown keywords (`:from-end`, `:start`, `:count`, ...) are rejected loudly
-  (`requireTestKeyKeywords`, both in the expander and the interpreter
-  registrations) instead of being silently ignored.
-
-## Remaining follow-ups (not planned, note-only)
-
-- **Runtime `eval` on the compiled backends ignores `:test`/`:key`** (the
-  emitted eval interpreter resolves these functions through the fixed-arity
-  compiled registry, so extra keyword args are dropped and the compare stays
-  `eql`). Pre-existing behavior -- it was already true for `member`/`assoc`
-  `:test` -- now documented in `doc/*/guides/eval-limitations.md`. Fixing it
-  means teaching `Jvm/WasmEvalRuntimeBuilder` keyword parsing per function.
-- The `-if`/`-if-not` variants other than `position-if`/`position-if-not`
-  (`find-if`, `remove-if`, `count-if`, `member-if`, `delete-if`, ...) take no
-  `:key` (CL allows one); add only if real code needs it. The position pair got
-  `:key` (plus `:start`/`:end`/`:from-end`) with the 2026-07-05 update above.
-- First-class values (`#'find` etc. via `BuiltinFunctionWrappers` and the
-  `Environment` registrations) stay fixed-arity -- keywords work in call
-  position only, except `member`/`assoc`/`rassoc` whose interpreter
-  registrations do parse them.
+- **`-if`/`-if-not` forms still without `:key`** (CL allows one):
+  `count-if(-not)`, `member-if(-not)`, `delete-if(-not)`. The find/position pair,
+  `remove-if(-not)` and `substitute-if(-not)` already take it. Add only if real
+  code needs it.
+- **First-class values outside the find/position family stay fixed-arity** —
+  `:test`/`:key` work in call position only. The find/position family
+  (`positionScanValues` grew an `elementResult` flag) and the
+  `member`/`assoc`/`rassoc` interpreter registrations do parse them, so
+  `(apply #'position item seq other-keys)` and friends work.
+- **Runtime `eval` on the compiled backends ignores `:test`/`:key`**: the emitted
+  eval interpreter resolves these through the fixed-arity compiled registry, so
+  the compare stays `eql`; only the interpreter applies them inside `eval`.
+  Documented in `doc/*/guides/eval-limitations.md`. Fixing it means teaching
+  `Jvm/WasmEvalRuntimeBuilder` keyword parsing per function.
