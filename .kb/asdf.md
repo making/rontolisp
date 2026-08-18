@@ -373,6 +373,76 @@ REAL engine's compiled share (`.todo/288`).
 
 Docs: `doc/*/guides/asdf-systems.md` + `reference/functions/asdf-{defsystem,load-system}.md` (+ catalog/nav/packages.md); phased roadmap in `.todo/054-asdf-support.md`.
 
+## Why this is a shim and not real ASDF (spike, 2026-08-18)
+
+The first line of this file says "not a port". This is the measurement behind
+that word, so the next visitor does not have to re-run it.
+
+Upstream ASDF 3.3.7 (`https://common-lisp.net/project/asdf/archives/asdf.lisp`,
+one file, 14,130 lines, 700 KB, MIT) was loaded into the INTERPRETER, with the
+built-in `uiop*`/`asdf` packages sidestepped (the spike renamed `UIOP`->`XIOP`,
+`ASDF`->`XSDF` textually; a real integration would delete them from
+`PackageRegistry` instead). With the patch set below it **loads end to end**,
+and `find-system` then really does walk `*central-registry*`, probe the
+filesystem, `load` a real `.asd` and run `defsystem` ->
+`register-system-definition` -> `parse-defsystem` -> `parse-component-form`.
+So the answer to "could we?" is yes-in-principle. Three things decided against it:
+
+1. **It is a PORT, not a drop-in.** Upstream refuses to load on an
+   implementation it does not know (`#-(or abcl allegro ... sbcl scl xcl)
+   (error "ASDF is not supported on your implementation")`), `detect-os` refuses
+   without `:unix`/`:windows`/`:genera`/`:os-macosx`, and there are 34
+   `not-implemented-error` call sites behind 230 implementation reader
+   conditionals. Every one is a `#+rontolisp` branch we would carry as a fork or
+   a replayed patch set forever. (The port itself is cheaper than the count
+   suggests — filling exactly ONE hole, `getcwd`, was enough to make
+   `probe-file*` / `ensure-pathname` / `sysdef-central-registry-search` work,
+   because `probe-file` / `truename` / `directory "*.*"` are all already real.)
+2. **Startup.** Loading it costs 2.85 s wall / 16.7 s CPU on the interpreter,
+   against a 0.40 s floor for `(print 1)` on the same jar — ~2.45 s is ASDF, ~7x
+   the whole current startup. Only "do not load it unless the program needs it"
+   makes that survivable, and the shim already gives that for free.
+3. **The real blocker is ours, not upstream's**: every hash table here is keyed
+   by `key.print()` with an `EQUAL` test and there is no `eq` table, while
+   ASDF's session cache keys are lists holding live components whose graph is
+   cyclic — a `StackOverflowError` in `LispHashTable.put`, out of the
+   `unwind-protect` cleanup of `find-system`. That, plus `print-object` being
+   dispatched only for a TOP-LEVEL object (so upstream's own component
+   `print-object`, which would cut the cycle, is never consulted), is where the
+   spike stopped. Both are recorded as plain CL defects in `.todo/436`.
+
+Also measured, and worth knowing when widening the shim: the compile paths
+resolve systems at COMPILE time (`cli/LoadInliner` splices component sources,
+`.kb/load-inliner.md`) and the browser playground has no filesystem at all, so a
+runtime facility like real ASDF could only ever run inside the compiler's own
+interpreter as a plan resolver -- never in the artifact.
+
+**Re-evaluate when** any of the three change: the hash-table/identity model
+gains `eq` tables (`.todo/436` item 1, and `.todo/156` Phase 5 is the neighbour),
+a per-library shim fix stops being the cheaper move (the count to watch is the
+open uiop todos, `.todo/355`--`.todo/365`), or upstream gains a portable
+no-`compile-file` mode that removes the port surface.
+
+### Reproducing it
+
+1. Fetch `asdf.lisp` from the URL above.
+2. `sed 's/UIOP/XIOP/g; s/uiop/xiop/g; s/ASDF/XSDF/g; s/asdf/xsdf/g'` — the
+   built-in packages are pre-seeded, so upstream's own `defpackage :uiop/package`
+   otherwise dies with `Package already exists`.
+3. Rewrite each of the 39 `uiop/package:define-package` forms to `defpackage`,
+   expanding `:use-reexport` transitively into an `:export` list and adding
+   `:common-lisp` to every `:use` (upstream inherits CL through
+   `uiop/common-lisp`'s reexport); drop `:recycle` / `:unintern` / `:intern`.
+   `PackageResolver` accepts only `:use-reexport` of the extra clauses today and
+   rejects `:intern` outright, and `defpackage` over an EXISTING package is a
+   hard error here where CL adjusts.
+4. Delete the port guard, `(pushnew :unix *features*)`, and make
+   `not-implemented-error` a no-op so the run measures what lies BEYOND the
+   missing port.
+5. Inject the missing `cl` names as per-package defuns (an unregistered name is
+   a package-INTERNAL symbol here, so one definition per `in-package`), and
+   patch the sites `.todo/436` items 3-10 name.
+
 ## Built-in systems have `:depends-on` edges of their own (todo-231)
 
 `BuiltinSystems.DEPENDENCIES` records the edges BETWEEN shim systems; both
