@@ -6382,6 +6382,21 @@ cases:
       (2 3 2)
       (5 5)
       (:HTML :XHTML :HTML)
+  - name: progv-compiles-on-every-backend
+    source: |
+      (defvar *pv-a* 1)
+      (defun pv-peek () *pv-a*)
+      (progv '(*pv-a* *pv-c*) '(10 7)
+        (print (list (pv-peek) (symbol-value '*pv-c*))))
+      (print (list (pv-peek) (boundp '*pv-c*)))
+      (print (handler-case (progv '(*pv-a*) '(:err) (error "boom"))
+               (error () *pv-a*)))
+      (print (progv '(*pv-a*) '() *pv-a*))
+    expected: |
+      (10 7)
+      (1 NIL)
+      1
+      NIL
   - name: assoc-utils-features
     source: |
       ;; mapl: apply to successive tails for effect, return the original list

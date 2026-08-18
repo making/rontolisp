@@ -793,10 +793,18 @@ final class JvmExprCompiler {
 				case LispNames.WHILE -> JvmWhileCompiler.compile(cons, ctx, className);
 				case LispNames.LET -> JvmLetCompiler.compile(cons, ctx, className);
 				case LispNames.PROGV ->
-					// progv binds a runtime-computed list of symbols; the compiler cannot
-					// name the static fields to save/restore. Interpreter only for now.
-					throw new UnsupportedOperationException(
-							LispNames.PROGV + " is not supported on the JVM backend (interpreter only)");
+					// The symbols are runtime-computed, but the candidate SPECIALS are
+					// static: lower to a loop dispatching each name over that set, with
+					// an unwind-protect carrying the restores (.kb/dynamic-special-
+					// variables.md).
+					JvmExprCompiler.compileExpr(
+							LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars, ctx.evalStoreRef != null),
+							ctx, className);
+				case LispNames.PROGV_DYN_BIND -> JvmProgvCompiler.compileDynBind(cons, ctx, className);
+				case LispNames.PROGV_DYN_UNBIND -> JvmProgvCompiler.compileDynUnbind(cons, ctx, className);
+				case LispNames.PROGV_GENV -> JvmProgvCompiler.compileGenvRead(ctx, className);
+				case LispNames.PROGV_GENV_SET -> JvmProgvCompiler.compileGenvWrite(cons, ctx, className);
+				case LispNames.SYMBOL_VALUE_RAW -> JvmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx, className);
 				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className);
 				case LispNames.TAGBODY -> JvmTagbodyCompiler.compile(cons, ctx, className);
 				case LispNames.GO -> JvmGoCompiler.compile(cons, ctx, className);

@@ -49,12 +49,15 @@ import org.jspecify.annotations.Nullable;
  * error text are pinned.
  *
  * <p>
- * <b>The soundness gate is free.</b> The fold is only unsound when a global can appear at
- * run time: {@code eval}, {@code load}, or {@code --dynamic} late binding. Each of those
- * already forces the eval runtime on its own, so the condition that makes the fold
- * unsound is the same one that makes it pointless -- gating on it loses nothing.
- * ({@code set} and {@code (setf (symbol-value ...))} would belong here too; this language
- * has neither.)
+ * <b>The soundness gate is nearly free.</b> The fold is only unsound when a global can
+ * appear at run time: {@code eval}, {@code load}, {@code --dynamic} late binding, or a
+ * {@code progv} (whose compile-path lowering can bind a runtime-named symbol in the eval
+ * env mirror). The first three each force the eval runtime on their own, so the condition
+ * that makes the fold unsound is the same one that makes it pointless -- gating on them
+ * loses nothing. {@code progv} alone does not force that runtime, so its gate entry does
+ * cost the fold in a progv-using program -- the price of the binding being genuinely
+ * runtime-created. ({@code set} and {@code (setf (symbol-value ...))} would belong here
+ * too; this language has neither.)
  *
  * @see GlobalVarCollector
  */
@@ -95,7 +98,12 @@ public final class CompileTimeBoundp {
 	 * @return the folded program, the same list when nothing was decidable
 	 */
 	public static List<LispVal> fold(List<LispVal> program, boolean dynamic, boolean packagesResolved) {
-		if (dynamic || callsAnywhere(program, LispNames.EVAL) || callsAnywhere(program, LispNames.LOAD)) {
+		// progv is in the gate because it CAN create a global at run time: its lowering
+		// binds a runtime-named symbol in the eval env mirror, so a literal probe of a
+		// name the program never defines statically may still answer t while a progv
+		// extent is active.
+		if (dynamic || callsAnywhere(program, LispNames.EVAL) || callsAnywhere(program, LispNames.LOAD)
+				|| callsAnywhere(program, LispNames.PROGV)) {
 			return program;
 		}
 		Names poisoned = new Names(packagesResolved);

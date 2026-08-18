@@ -33,10 +33,47 @@ public final class LispNames {
 
 	/**
 	 * The {@code progv} special form: establishes dynamic bindings for a runtime-computed
-	 * list of symbols to a runtime-computed list of values, restored on exit. Interpreter
-	 * only; the compilers reject it (the bound symbols are not known at compile time).
+	 * list of symbols to a runtime-computed list of values, restored on exit. The
+	 * interpreter evaluates it natively; the compilers lower it to a loop over the
+	 * statically known special set ({@code LispMacroExpander.expandProgvForCompile})
+	 * whose per-name arms are the four internal operators below.
 	 */
 	public static final String PROGV = "PROGV";
+
+	/**
+	 * Internal (compile-path only): pushes a dynamic binding of a statically named
+	 * special -- {@code (%progv-dyn-bind NAME value)}, where {@code NAME} is a literal
+	 * symbol -- and answers the opaque previous binding state ({@code %progv-dyn-unbind}
+	 * takes it back). One arm of the name-dispatch chain
+	 * {@code LispMacroExpander.expandProgvForCompile} builds; never produced by the
+	 * reader.
+	 */
+	public static final String PROGV_DYN_BIND = "%PROGV-DYN-BIND";
+
+	/**
+	 * Internal (compile-path only): restores a dynamic binding pushed by
+	 * {@link #PROGV_DYN_BIND} -- {@code (%progv-dyn-unbind NAME prev)}.
+	 */
+	public static final String PROGV_DYN_UNBIND = "%PROGV-DYN-UNBIND";
+
+	/**
+	 * Internal (compile-path only): reads the eval runtime's global environment mirror
+	 * ({@code _genv} / {@code GLOBAL_ENV}) as a Lisp assoc list, so the {@code progv}
+	 * lowering can maintain the mirror -- what {@code symbol-value}/{@code boundp}/
+	 * {@code eval} read -- in plain Lisp. Emitted only when the eval runtime is present.
+	 */
+	public static final String PROGV_GENV = "%PROGV-GENV";
+
+	/** Internal (compile-path only): writes the eval runtime's global env mirror. */
+	public static final String PROGV_GENV_SET = "%PROGV-GENV-SET";
+
+	/**
+	 * Internal (compile-path only): the raw runtime {@code symbol-value} emission (the
+	 * eval-mirror probe). {@code (symbol-value x)} in a program that uses {@code progv}
+	 * compiles to a dynamic-first dispatch over the special set whose fallback is this
+	 * operator, so the dispatch can delegate without recursing into itself.
+	 */
+	public static final String SYMBOL_VALUE_RAW = "%SYMBOL-VALUE-RAW";
 
 	/** The {@code progn} special form. */
 	public static final String PROGN = "PROGN";

@@ -22,7 +22,6 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `declare` / `declaim` / `proclaim` / `the` | 結果は変えない。WASM では配列の `type` 宣言が要素アクセサのエミットを誘導（モジュールが小さく速くなる）、それ以外では解析されるだけの no-op |
 | `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
 | `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow`（ランタイム） | 利用不可。`export` / `unexport` / `import` / `use-package` は `in-package` と同様の読み込み/コンパイル時ディレクティブとして利用可能。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
-| `progv` | インタプリタのみ（JVM/WASM ではコンパイルエラー） |
 | `eval-when` | `progn` として扱う（フェーズの区別なし） |
 | `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
 | `*modules*` | 利用不可（`require`/`provide` は利用可能） |
@@ -186,14 +185,14 @@ read/コンパイル時ディレクティブです（`:documentation`/`:size` �
 
 ## 動的（special）変数
 
-`let`/`let*` による動的束縛はサポートされていますが、**コンパイル済み**
-バックエンドには 2 つの制限があります（インタプリタには影響しません）。実行時に
-計算されるシンボルのリストを束縛する
-[`progv`](../reference/special-forms/progv.md) はコンパイルエラーになり、また
-通常の脱出と special な `let` の境界を**越えて**脱出する
-`return`/`return-from` は束縛を復元しますが、`let` の外側のハンドラで捕捉される
-エラー（および境界を越える `go`、WASM バックエンドで `unwind-protect` /
-`handler-case` も同時に越える `return`）では復元されません。
+`let`/`let*` および [`progv`](../reference/special-forms/progv.md) による
+動的束縛はサポートされていますが、**コンパイル済み**バックエンドには 1 つの
+制限があります（インタプリタには影響しません）。通常の脱出と special な `let`
+の境界を**越えて**脱出する `return`/`return-from` は束縛を復元しますが、`let`
+の外側のハンドラで捕捉されるエラー（および境界を越える `go`、WASM バックエンドで
+`unwind-protect` / `handler-case` も同時に越える `return`）では復元されません。
+`progv` は `unwind-protect` がカバーするすべての脱出（上記のケースを含む）で
+復元します。
 
 ## 数値タワー
 

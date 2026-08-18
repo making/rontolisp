@@ -169,15 +169,25 @@ abstract class AsdfLibraryE2eSupport {
 		// the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment (a no-op on the other backends), and rove's
 		// with-local-envs -- run's :env option -- reads it.
+		// UnreadCharLibrary comes after the Gray splice like in the CLI, so a
+		// character-read call site a Gray dispatch helper introduced reaches the
+		// pushback cell too (cl-json's decoder cannot scan a number or aggregate
+		// without unread-char).
 		return LibraryDefunPruner.prune(
-				EnvironmentLibrary.process(
-						UsocketLibrary.process(
-								am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispPreludeLibrary.process(
-										UserMacroExpander.expand(
-												LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
-														SourceLoader.fileSystem(), null, systemPath(), features)),
-										features))),
-						backend));
+				EnvironmentLibrary
+					.process(
+							am.ik.rontolisp.eval.UnreadCharLibrary.process(
+									UsocketLibrary.process(
+											am.ik.rontolisp.eval.GrayStreamsLibrary.process(
+													LispPreludeLibrary.process(
+															UserMacroExpander
+																.expand(LoadInliner.inline(
+																		LispReader.readAllFromString(exercise(),
+																				features),
+																		SourceLoader.fileSystem(), null, systemPath(),
+																		features)),
+															features)))),
+							backend));
 	}
 
 	// Defines the compiled class from its bytes and runs main, capturing UTF-8 stdout.

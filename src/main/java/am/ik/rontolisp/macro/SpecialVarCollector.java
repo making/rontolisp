@@ -125,7 +125,37 @@ public final class SpecialVarCollector {
 		for (LispVal expr : topLevelExprs) {
 			collectBoundForm(expr, specials, bound);
 		}
+		// progv binds a RUNTIME-computed list of symbols, so no static walk can name the
+		// specials it touches: every special of the program becomes dynamically bound
+		// (the make-thread rule -- over-collection is only a small read cost;
+		// under-collection here would be a silent process-global binding on the compile
+		// paths).
+		if (bound.size() < specials.size()) {
+			for (LispVal expr : topLevelExprs) {
+				if (usesProgv(expr)) {
+					bound.addAll(specials);
+					break;
+				}
+			}
+		}
 		return bound;
+	}
+
+	/** Whether the form contains a {@code progv} head anywhere outside quoted data. */
+	private static boolean usesProgv(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String h = head.name();
+			if (LispNames.QUOTE.equals(h)) {
+				return false;
+			}
+			if (LispNames.PROGV.equals(h)) {
+				return true;
+			}
+		}
+		return usesProgv(cons.car()) || usesProgv(cons.cdr());
 	}
 
 	private static void collectBoundForm(LispVal form, Set<String> specials, Set<String> out) {

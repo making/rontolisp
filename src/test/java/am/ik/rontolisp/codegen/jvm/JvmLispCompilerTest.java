@@ -11633,9 +11633,78 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void progvIsRejectedOnJvm() {
-		assertThatThrownBy(() -> compileAndRun("(progv '(a) '(1) a)")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("PROGV");
+	void progvBindsRestoresAndNests() throws Exception {
+		// Interpreter parity for the progv lowering (.kb/dynamic-special-variables.md):
+		// a declared special gets a true dynamic binding visible through a called defun,
+		// nested binds stack, an UNDECLARED name is readable via symbol-value for the
+		// extent (and unbound again after), and extra symbols bind to nil.
+		assertThat(compileAndRun("""
+				(defvar *a* 1)
+				(defvar *b* 2)
+				(defun peek () (list *a* *b*))
+				(progv '(*a* *b*) '(10 20) (print (peek)))
+				(print (peek))
+				(print (progv (list '*a*) (list 5)
+				         (progv (list '*a* '*c*) (list (* *a* 2) 7)
+				           (list *a* (symbol-value '*c*)))))
+				(print (list *a* (boundp '*c*)))
+				(print (progv '(*a*) '() *a*))
+				""")).isEqualTo("""
+				(10 20)
+				(1 2)
+				(10 7)
+				(1 NIL)
+				NIL""");
+	}
+
+	@Test
+	void progvRestoresOnEveryExit() throws Exception {
+		// The lowering rides the unwind-protect cleanup emitter, so a return-from, a go
+		// and an error caught OUTSIDE the progv all restore the binding -- the exits
+		// limitation 1 of .kb/dynamic-special-variables.md still leaves open for a
+		// special `let`.
+		assertThat(compileAndRun("""
+				(defvar *x* :top)
+				(defun f ()
+				  (progv '(*x*) '(:in)
+				    (return-from f *x*)))
+				(print (list (f) *x*))
+				(defun g ()
+				  (let ((r nil))
+				    (tagbody
+				       (progv '(*x*) '(:go)
+				         (setq r *x*)
+				         (go out))
+				     out)
+				    (list r *x*)))
+				(print (g))
+				(print (handler-case (progv '(*x*) '(:err) (error "boom"))
+				         (error () *x*)))
+				""")).isEqualTo("""
+				(:IN :TOP)
+				(:GO :TOP)
+				:TOP""");
+	}
+
+	@Test
+	void progvSymbolValueSeesTheSetqInsideTheExtent() throws Exception {
+		// The cl-json aggregate-scope shape: (progv vars (mapcar #'symbol-value vars))
+		// re-binds each scope variable to its CURRENT value, where "current" includes a
+		// setq made inside an enclosing progv extent -- symbol-value compiles
+		// dynamic-first in a progv-using program.
+		assertThat(compileAndRun("""
+				(defvar *acc* nil)
+				(progv '(*acc*) (list (symbol-value '*acc*))
+				  (setq *acc* (cons 1 *acc*))
+				  (progv '(*acc*) (list (symbol-value '*acc*))
+				    (setq *acc* (cons 2 *acc*))
+				    (print *acc*))
+				  (print *acc*))
+				(print *acc*)
+				""")).isEqualTo("""
+				(2 1)
+				(1)
+				NIL""");
 	}
 
 	@Test

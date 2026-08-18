@@ -21,7 +21,6 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | `declare` / `declaim` / `proclaim` / `the` | never change a result; on WASM an array `type` declaration directs the element-accessor emission (smaller, faster modules), everywhere else parsed no-ops |
 | `typep` / `subtypep` / `coerce` / `concatenate` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` (or a float type), `concatenate` builds those same three sequence families |
 | `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow` (runtime) | not available; `export` / `unexport` / `import` / `use-package` ARE, as read/compile-time directives like `in-package`; `defpackage` `:shadow` / `:shadowing-import-from` are errors |
-| `progv` | interpreter only (compile error on the JVM/WASM backends) |
 | `eval-when` | treated as `progn` (no phase distinction) |
 | `#:name` | reads as a plain symbol, without gensym-style freshness |
 | `*modules*` | not available (`require`/`provide` are) |
@@ -180,14 +179,14 @@ order wins instead of signaling a conflict.
 
 ## Dynamic (special) variables
 
-Dynamic binding through `let`/`let*` is supported, with two limitations on the
-**compiled** backends (the interpreter is unaffected):
-[`progv`](../reference/special-forms/progv.md) (runtime-computed lists of
-symbols) is a compile error, and while normal exit and a
-`return`/`return-from` that unwinds *across* a special `let` boundary both
-restore the binding, an error caught by a handler outside the `let` (a `go`
-across it, and on the WASM backends a `return` that also crosses an
-`unwind-protect`/`handler-case`) does not.
+Dynamic binding through `let`/`let*` and
+[`progv`](../reference/special-forms/progv.md) is supported, with one
+limitation on the **compiled** backends (the interpreter is unaffected): while
+normal exit and a `return`/`return-from` that unwinds *across* a special `let`
+boundary both restore the binding, an error caught by a handler outside the
+`let` (a `go` across it, and on the WASM backends a `return` that also crosses
+an `unwind-protect`/`handler-case`) does not. `progv` restores on every exit an
+`unwind-protect` covers, including those cases.
 
 ## Numeric tower
 

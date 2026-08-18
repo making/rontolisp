@@ -1233,6 +1233,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.warnedClRedefinitions(new HashSet<>())
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
+			.usesProgv(programUsesSymbol(program, LispNames.PROGV))
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
 			.globals(globals)
@@ -1242,10 +1243,23 @@ public final class JvmLispCompiler implements LispCompiler {
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry);
 
+		// When eval is present, a top-level global variable binding (setq/defvar/...) is
+		// mirrored into the eval runtime's global environment via _store, so an eval'd
+		// expression can resolve it. Created before Pass 2a because EVERY context gets
+		// the ref: the progv lowering maintains that same mirror from any position
+		// (its own consumers stay top-level-gated).
+		MethodrefConstant evalStoreRef = usesEval
+				? cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8("_store"),
+								cp.addUtf8(
+										"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")))
+				: null;
+
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
 		for (DefunDecl defun : defuns) {
 			Ctx funcCtx = ctxBuilder.build();
+			funcCtx.evalStoreRef = evalStoreRef;
 			funcCtx.nextLocal = defun.paramNames.size();
 			funcCtx.maxLocals = defun.paramNames.size();
 			for (int i = 0; i < defun.paramNames.size(); i++) {
@@ -1300,15 +1314,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (globals) and methods (defuns/lambdas), and any cross-form variable is a global
 		// field (see the global-promotion step above), so the split preserves the
 		// single-shared-runtime, in-order semantics of one straight-line main().
-		// When eval is present, a top-level global variable binding (setq/defvar/...) is
-		// mirrored into the eval runtime's global environment via _store, so an eval'd
-		// expression can resolve it.
-		MethodrefConstant evalStoreRef = usesEval
-				? cp.addMethodref(thisClass,
-						cp.addNameAndType(cp.addUtf8("_store"),
-								cp.addUtf8(
-										"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")))
-				: null;
 		// defvar idempotence ("bind only if not already bound") is tracked at compile
 		// time
 		// in definedGlobals; share one set across chunks so a defvar split into a later
@@ -1381,6 +1386,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// main() simply calls each top-level chunk in order, then returns.
 		Ctx mainCtx = ctxBuilder.build();
+		mainCtx.evalStoreRef = evalStoreRef;
 		for (MethodrefConstant ref : topChunkRefs) {
 			mainCtx.emit(Opcode.INVOKESTATIC);
 			mainCtx.emitU2(ref.index());
@@ -1427,6 +1433,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaFuncInfos.add(fi);
 
 			Ctx lambdaCtx = ctxBuilder.build();
+			lambdaCtx.evalStoreRef = evalStoreRef;
 			lambdaCtx.closureEnvSlot = 0; // slot 0 = env Object[]
 			// Lambda params start at slot 1
 			for (int i = 0; i < lambda.paramNames.size(); i++) {
@@ -4184,6 +4191,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesFmakunbound = false;
 
 		/**
+		 * Whether the program uses {@code progv}. Switches {@code symbol-value} to the
+		 * dynamic-first dispatch over the special set
+		 * ({@link JvmSymbolApiCompiler#compileSymbolValue}).
+		 */
+		boolean usesProgv = false;
+
+		/**
 		 * The package designators the program's {@code defpackage}s and the built-in
 		 * registry make resolvable, mapped to the canonical package name -- the table a
 		 * COMPUTED {@code (find-package x)} is answered from, since the compiled runtime
@@ -4341,6 +4355,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.userDefunNames = builder.userDefunNames;
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.usesFmakunbound = builder.usesFmakunbound;
+			this.usesProgv = builder.usesProgv;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
 			this.structAccessors = builder.structAccessors;
@@ -4604,6 +4619,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<String> warnedClRedefinitions = new HashSet<>();
 
 			private boolean usesFmakunbound = false;
+
+			private boolean usesProgv = false;
 
 			private Map<String, String> packageTable = Map.of();
 
@@ -5034,6 +5051,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder warnedClRedefinitions(Set<String> warnedClRedefinitions) {
 				this.warnedClRedefinitions = warnedClRedefinitions;
+				return this;
+			}
+
+			Builder usesProgv(boolean usesProgv) {
+				this.usesProgv = usesProgv;
 				return this;
 			}
 

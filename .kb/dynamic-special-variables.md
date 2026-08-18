@@ -200,14 +200,74 @@ module). `--no-gc`
 outright, so a special can never be declared there
 (`NoGcWasmCompilerTest.rejectsSpecialVariableDeclaration`).
 
+## progv on the compile paths (2026-08-18, todo-423)
+
+`progv` compiles on the JVM and both WASM backends. The bound symbols are
+runtime values, but the set of candidate SPECIALS in a compiled program is
+static -- that asymmetry is the whole design
+(`LispMacroExpander.expandProgvForCompile`, shared by both compilers; the
+interpreter keeps its native `evalProgv`):
+
+- The form lowers to a loop over the runtime symbol list whose body dispatches
+  each name through an `equal` chain over the program's special set; a matching
+  arm is `(%progv-dyn-bind NAME value)` -- a literal-name internal operator
+  (`Jvm/WasmProgvCompiler`) emitting exactly the save-and-set the `let` path
+  emits for that special (JVM: `_dbind` over the `_d$` ThreadLocal; WASM: the
+  module global, or the per-task slot under `--reentrant`,
+  `WasmDynVars.emitProgvBind`). The previous binding state flows as a VALUE
+  consed onto a save list (not a save slot: bind and restore sit in different
+  loop iterations).
+- Because no static walk can name the specials a `progv` touches,
+  `SpecialVarCollector.collectDynamicallyBound` returns EVERY special of a
+  progv-using program (the make-thread rule; over-collection is a read cost),
+  and `collectForm`'s stream-special probe therefore also marks the three
+  stream specials special there.
+- The restore loop is the cleanup form of an `unwind-protect`, so every exit
+  the compilers cover for unwind-protect -- normal completion, an error
+  unwinding past the form, a `return-from`/`go` out of the body -- restores
+  through the same emitter, and the `.todo/192` holes are neither widened nor
+  narrowed. On WASM this is why `progv` FORCES EH MODE (`usesEhForm` lists it;
+  run with `-W exceptions=y`).
+- A name in NO arm (CL lets `progv` bind an undeclared symbol) is bound in the
+  eval runtime's global env mirror (`_genv`/`GLOBAL_ENV`) -- what
+  `symbol-value`/`boundp` read on the compile paths -- via
+  `%progv-genv`/`%progv-genv-set`, which expose the mirror as a Lisp alist
+  (its nodes ARE cons cells on both backends), so the maintenance -- mutate an
+  existing binding and restore it, or prepend and unlink -- is plain Lisp in
+  the expansion. Mirror maintenance is included only when the eval runtime
+  exists (`Ctx.evalStoreRef != null` / `Ctx.usesEval` -- progv does NOT force
+  it; everything that can observe the mirror forces it by itself). Both flags
+  are carried by EVERY compile context, not just the top-level one, precisely
+  so a progv inside a defun still maintains the mirror (the top-level-only
+  consumers keep their own `ctx.topLevel` guard).
+- **`symbol-value` is DYNAMIC-FIRST in a progv-using program**
+  (`LispMacroExpander.dynamicFirstSymbolValue`, gated on `Ctx.usesProgv`): the
+  runtime name dispatches over the special set and a match reads the VARIABLE
+  (the `_dget`/global/per-task read), falling back to the raw mirror probe
+  (`%symbol-value-raw`). This is what makes cl-json's
+  `(progv vars (mapcar #'symbol-value vars) ...)` snapshot see the values its
+  decoder `setq`s inside the enclosing extent -- the mirror alone cannot,
+  because `setq` does not write it (limitation 2 below). Programs without
+  progv keep the raw emission byte-identically. `#'symbol-value` also has a
+  REFERENCE-GATED `BuiltinFunctionWrappers` entry now: the `(function
+  symbol-value)` spelling that injects the wrapper is a symbol occurrence the
+  `usesEval` scan counts, so the wrapper's body is always real.
+- The literal-`boundp` fold refuses progv programs
+  (`CompileTimeBoundp.fold` gate): the lowering can create a runtime-named
+  mirror binding, so a literal probe is no longer decidable there.
+
+Deliberate divergences from the interpreter (both narrow): a non-symbol in the
+symbols list is not detected (it matches no arm and binds a useless mirror
+entry instead of signalling), and a closure that CAPTURED a special reads its
+capture even under `symbol-value` (the dual-bind capture rule wins inside a
+closure). Consumer that drove this: cl-json's decoder
+(`aggregate-scope-progv` re-binds scope variables around every aggregate), so
+any program loading cl-json used to fail to compile whole; pinned by
+`ClJsonE2eTest` on all four backends.
+
 ## Compile-path limitations (interpreter is unaffected)
 
-1. **`progv` is interpreter-only** -- a clear compile error on JVM/WASM
-   (`JvmExprCompiler`/`WasmExprCompiler` PROGV case). The bound symbols are
-   runtime-computed, so the compiler cannot name the static fields / wasm globals
-   to save/restore. Would need the name-indexable `_genv`/`GLOBAL_ENV` runtime
-   store.
-2. **Exit restores are covered for `return`/`return-from`** since 2026-07-19
+1. **Exit restores are covered for `return`/`return-from`** since 2026-07-19
    (`Ctx.specialBindScopes`, see above) -- for exits compiled as a DIRECT branch
    inside the binding function. Remaining holes (all tracked in
    `.todo/192`): a WASM plain `return` that ALSO crosses an
@@ -226,8 +286,9 @@ outright, so a special can never be declared there
    register-regex loop -- are in `.todo/192`, which also records why the fix
    needs a save STACK, not catch-site slot restores: the slots live in the
    thrower's dead frames). The interpreter's `finally` covers every exit.
-3. **`symbol-value`/`boundp`/`eval` see the global default, not a dynamic binding,
-   on the compile path.** Those read the `_genv`/`GLOBAL_ENV` eval mirror, which
+2. **`symbol-value`/`boundp`/`eval` see the global default, not a dynamic binding,
+   on the compile path** -- EXCEPT `symbol-value` in a progv-using program,
+   which is dynamic-first (see above). Those read the `_genv`/`GLOBAL_ENV` eval mirror, which
    the shallow save/restore does not update (it touches only the JVM thread-local
    store / wasm global). Direct reads/`setq` of the special (the common case) are
    correct.
@@ -239,7 +300,7 @@ outright, so a special can never be declared there
    "unbound" instead of answering the seeded designator (todo-283,
    `.kb/symbol-runtime-api.md`). That was the global default being absent, not this
    dynamic-scope gap, which is unchanged.
-4. **A lambda/defun parameter named like a special is still lexical** (both
+3. **A lambda/defun parameter named like a special is still lexical** (both
    interpreter and compilers). Naming a parameter with a special name and expecting
    the parameter binding to be dynamic is unsupported (rare).
 
@@ -290,8 +351,13 @@ it on all backends (pinned in `ci-spec.yaml`, the three backend tests, and
 
 `LispEvaluatorTest` (the `specialVar*`/`progv*`/`defparameter`/`declaim`/`proclaim`
 /thread-scoped group), `JvmLispCompilerTest` + `WasmLispCompilerIntegrationTest`
-(the `specialVar*` group + `progvIsRejectedOn*`; the JVM group includes
+(the `specialVar*` group + the `progv*` group -- nested binds, an undeclared
+name via `symbol-value`, extra symbols to nil, restores after normal return /
+`return-from` / `go` / an error caught outside, and the setq-visible
+`symbol-value` snapshot; the JVM group includes
 `specialVarBindingIsThreadScoped` -- deterministic Thread.start/join via `java:`
 interop -- and `specialVarSetqOutsideAnyBindingReachesTheGlobal`),
-`NoGcWasmCompilerTest` (`rejectsSpecialVariableDeclaration`), and the
-`special-variable-dynamic-binding` ci-spec case (all four backends).
+`NoGcWasmCompilerTest` (`rejectsSpecialVariableDeclaration`), `ClJsonE2eTest`
+(the progv consumer, all four backends), and the
+`special-variable-dynamic-binding` + `progv-compiles-on-every-backend` ci-spec
+cases (all four backends).

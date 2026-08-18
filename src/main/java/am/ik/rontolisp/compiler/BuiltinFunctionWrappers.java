@@ -145,6 +145,14 @@ public final class BuiltinFunctionWrappers {
 		// whose string arm calls the gated %schar-set-runtime helper
 		// (LispMacroExpander's reachesScharSet scan, which names map-into).
 		gated.add(LispNames.MAP_INTO);
+		// #'symbol-value: the wrapper body is the raw eval-mirror probe (or, in a
+		// progv-using program, the dynamic-first dispatch), and the _genv/_env_lookup
+		// machinery it calls is real only under usesEval -- whose scan sees the source
+		// program, not the injected wrappers. The (function symbol-value) spelling that
+		// injects this wrapper is ALSO a symbol occurrence that scan counts, so gating
+		// on the reference puts both sides on one scan (cl-json's aggregate-scope
+		// (mapcar #'symbol-value scope-variables) is the consumer).
+		gated.add(LispNames.SYMBOL_VALUE);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
@@ -1264,12 +1272,16 @@ public final class BuiltinFunctionWrappers {
 			// prin1-to-string alias
 			unary(LispNames.WRITE_STRING),
 			new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"), List.of(call(LispNames.PRIN1_TO_STRING, "a"))),
-			// symbol runtime API: only the pure string<->symbol converters get wrappers.
-			// find-symbol folds at compile time (literal-only, like symbol-function) and
-			// boundp/fboundp/symbol-value need the eval runtime, which is only emitted
-			// when the program calls them directly -- so none of those four can be a
+			// symbol runtime API: the pure string<->symbol converters get plain
+			// wrappers. find-symbol folds at compile time (literal-only, like
+			// symbol-function) and boundp/fboundp need the eval runtime, which is only
+			// emitted when the program calls them directly -- so neither can be a
 			// first-class value in compiled output (macroexpand precedent).
 			unary(LispNames.SYMBOL_NAME), unary(LispNames.MAKE_SYMBOL), unary(LispNames.INTERN),
+			// symbol-value is the exception among those four since the progv work: its
+			// wrapper is REFERENCE-GATED (see above), and the #'symbol-value reference
+			// that injects it also fires the usesEval scan that makes its body real.
+			unary(LispNames.SYMBOL_VALUE),
 			// find-package IS one of them, because its wrapper body is a COMPUTED
 			// designator and that already has a real lowering: the per-expression
 			// compilers rewrite it to a lookup in the package table the backend bakes in

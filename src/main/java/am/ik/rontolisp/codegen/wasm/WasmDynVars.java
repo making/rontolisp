@@ -170,6 +170,51 @@ final class WasmDynVars {
 	}
 
 	/**
+	 * The {@code %progv-dyn-bind} spelling of {@link #emitBind}: installs a fresh cell
+	 * over the value in {@code valueSlot} and leaves the PREVIOUS slot value (a cell or
+	 * null) on the stack -- the progv lowering conses it into its save list instead of
+	 * parking it in a wrapper local, because the restore runs in a different loop
+	 * iteration ({@code WasmProgvCompiler}).
+	 * @param ctx the compilation context
+	 * @param name the special's name
+	 * @param valueSlot the local holding the init value
+	 */
+	static void emitProgvBind(WasmLispCompiler.Ctx ctx, String name, int valueSlot) {
+		emitTask(ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(slot(ctx, name));
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		emitTask(ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(slot(ctx, name));
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	/**
+	 * The {@code %progv-dyn-unbind} spelling of {@link #emitRestore}: writes the previous
+	 * slot value from {@code prevSlot} back into the special's per-task slot.
+	 * Stack-neutral.
+	 * @param ctx the compilation context
+	 * @param name the special's name
+	 * @param prevSlot the local holding the previous slot value
+	 */
+	static void emitProgvUnbind(WasmLispCompiler.Ctx ctx, String name, int prevSlot) {
+		emitTask(ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(slot(ctx, name));
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(prevSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	/**
 	 * Emits ONE binding restore -- the reentrant counterpart of
 	 * {@code local.get save; global.set g}, shared by the let epilogue and the
 	 * {@code return}/{@code return-from} exit paths. {@code bind} is a

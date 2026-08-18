@@ -83,11 +83,15 @@ member name and the `t` answer is withheld.
 ## The soundness gate is free
 
 The fold is unsound exactly when a global can appear at run time: `eval`, `load`,
-`--dynamic`. Each of those already forces the full eval runtime on its own, so the
-condition that makes the fold unsound is the same one that makes it pointless --
-`fold` returns the program untouched and loses nothing. (`set` and
-`(setf (symbol-value ...))` would belong in that list; this language has neither, and
-`progv` is interpreter-only. If any of the three is ever added, it goes in the gate.)
+`--dynamic`, and -- since progv landed on the compile paths (todo-423) -- `progv`,
+whose lowering can bind a runtime-named symbol in the eval env mirror. The first
+three each force the full eval runtime on their own, so for them the condition that
+makes the fold unsound is the same one that makes it pointless -- `fold` returns the
+program untouched and loses nothing. `progv` does NOT force that runtime, so its gate
+entry genuinely costs the fold in a progv-using program; that is the price of the
+binding being runtime-created. (`set` and `(setf (symbol-value ...))` would belong in
+the list too; this language has neither. If either is ever added, it goes in the
+gate.)
 
 This gate is also what retired todo-315's **forgery carve-out** -- that fold refused a
 guard whenever any earlier STRING literal contained the name, on the theory that a

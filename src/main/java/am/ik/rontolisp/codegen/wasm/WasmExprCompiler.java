@@ -1202,10 +1202,17 @@ final class WasmExprCompiler {
 				case LispNames.WHILE -> WasmWhileCompiler.compile(cons, ctx);
 				case LispNames.LET -> WasmLetCompiler.compile(cons, ctx);
 				case LispNames.PROGV ->
-					// progv binds a runtime-computed list of symbols; the compiler cannot
-					// name the wasm globals to save/restore. Interpreter only for now.
-					throw new UnsupportedOperationException(
-							LispNames.PROGV + " is not supported on the WASM backend (interpreter only)");
+					// The symbols are runtime-computed, but the candidate SPECIALS are
+					// static: lower to a loop dispatching each name over that set, with
+					// an unwind-protect carrying the restores (.kb/dynamic-special-
+					// variables.md). The unwind-protect is why progv forces EH mode.
+					WasmExprCompiler
+						.compileExpr(LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars, ctx.usesEval), ctx);
+				case LispNames.PROGV_DYN_BIND -> WasmProgvCompiler.compileDynBind(cons, ctx);
+				case LispNames.PROGV_DYN_UNBIND -> WasmProgvCompiler.compileDynUnbind(cons, ctx);
+				case LispNames.PROGV_GENV -> WasmProgvCompiler.compileGenvRead(ctx);
+				case LispNames.PROGV_GENV_SET -> WasmProgvCompiler.compileGenvWrite(cons, ctx);
+				case LispNames.SYMBOL_VALUE_RAW -> WasmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx);
 				case LispNames.UNWIND_PROTECT -> WasmUnwindProtectCompiler.compile(cons, ctx);
 				case LispNames.HANDLER_CASE -> WasmHandlerCaseCompiler.compile(cons, ctx);
 				case LispNames.HB_GUARD_INTERNAL -> WasmHandlerCaseCompiler.compileGuard(cons, ctx);

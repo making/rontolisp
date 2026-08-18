@@ -3111,6 +3111,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
+			.usesProgv(programUsesSymbol(program, LispNames.PROGV))
+			// Every context carries the flag (not just _start): the progv lowering
+			// maintains the eval env mirror from any position, while the top-level-only
+			// consumers keep their own ctx.topLevel guard.
+			.usesEval(usesEval)
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
 			.structAccessors(structAccessors)
@@ -3226,7 +3231,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		WasmWriter startWriter = new WasmWriter(startBody);
 		Ctx ctx = ctxBuilder.writer(startWriter).bodyStream(startBody).build();
 		ctx.topLevel = true;
-		ctx.usesEval = usesEval;
 
 		// The heap pointer (HEAP_PTR_ADDR) is seeded by an active data segment at
 		// instantiation (see writeDataSection below), not here: its value depends on
@@ -6595,7 +6599,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			switch (sym.name()) {
 				case LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.UNWIND_PROTECT,
 						LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
-						LispNames.CATCH, LispNames.THROW -> {
+						LispNames.CATCH, LispNames.THROW,
+						// progv's lowering rides unwind-protect for its restores
+						// (LispMacroExpander.expandProgvForCompile), so it needs the EH
+						// machinery -- and the `wasmtime -W exceptions=y` run flag --
+						// exactly like a written-out unwind-protect.
+						LispNames.PROGV -> {
 					return true;
 				}
 				default -> {
@@ -7268,6 +7277,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesFmakunbound = false;
 
 		/**
+		 * Whether the program uses {@code progv}. Switches {@code symbol-value} to the
+		 * dynamic-first dispatch over the special set
+		 * ({@code WasmSymbolApiCompiler.compileSymbolValue}).
+		 */
+		boolean usesProgv = false;
+
+		/**
 		 * The package designators the program's {@code defpackage}s and the built-in
 		 * registry make resolvable, mapped to the canonical package name -- the table a
 		 * COMPUTED {@code (find-package x)} is answered from, since the compiled runtime
@@ -7559,6 +7575,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.numDefuns = builder.numDefuns;
 			this.userDefunNames = builder.userDefunNames;
 			this.usesFmakunbound = builder.usesFmakunbound;
+			this.usesProgv = builder.usesProgv;
+			this.usesEval = builder.usesEval;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
 			this.structAccessors = builder.structAccessors;
@@ -7669,6 +7687,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> userDefunNames = Set.of();
 
 			private boolean usesFmakunbound = false;
+
+			private boolean usesProgv = false;
+
+			private boolean usesEval = false;
 
 			private Map<String, String> packageTable = Map.of();
 
@@ -7901,6 +7923,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder usesProgv(boolean usesProgv) {
+				this.usesProgv = usesProgv;
+				return this;
+			}
+
+			Builder usesEval(boolean usesEval) {
+				this.usesEval = usesEval;
 				return this;
 			}
 

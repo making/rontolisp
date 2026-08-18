@@ -4096,6 +4096,216 @@ public final class LispMacroExpander {
 		return expandIncfDecf(cons, LispNames.SUB);
 	}
 
+	// --- progv (compile paths) -------------------------------------------------------
+
+	/**
+	 * Compile-path lowering of {@code (progv symbols values body...)}. The bound symbols
+	 * are runtime values, but the set of candidate SPECIALS in a compiled program is
+	 * static -- that asymmetry is what makes the form compilable at all: the expansion
+	 * loops over the runtime symbol list and dispatches each name through an
+	 * {@code equal} chain over the statically known special set, whose per-name arm
+	 * ({@code %progv-dyn-bind}/{@code %progv-dyn-unbind}) performs exactly the
+	 * save-and-set the {@code let} path performs for that one special (JVM: the
+	 * {@code _d$} ThreadLocal cell; WASM: the module global, or the per-task slot under
+	 * {@code --reentrant}). A name in NO arm -- CL lets {@code progv} bind an undeclared
+	 * symbol -- is bound in the eval runtime's global env mirror only
+	 * ({@code %progv-genv}/{@code %progv-genv-set}), which is also what
+	 * {@code symbol-value}/{@code boundp} read on the compile paths; when the program
+	 * carries no eval runtime ({@code mirror} false) that store does not exist, and
+	 * neither does anything that could observe it, so the mirror maintenance is omitted.
+	 *
+	 * <p>
+	 * The restore loop is the cleanup form of an {@code unwind-protect}, so every exit
+	 * the compilers cover for unwind-protect -- normal completion, an error unwinding
+	 * past the form, a {@code return-from}/{@code go} out of the body -- restores the
+	 * bindings through the same emitter, and the known {@code .todo/192} unwind holes are
+	 * neither widened nor narrowed by this construct.
+	 *
+	 * <p>
+	 * Divergences from the interpreter's native {@code evalProgv} (both deliberate): a
+	 * non-symbol in the symbols list is not detected (its name simply matches no arm and
+	 * binds a useless mirror entry instead of signalling), and binding a standard stream
+	 * special redirects output only when the collector saw the {@code progv} (it forces
+	 * the stream specials into the special set exactly like {@code make-thread}).
+	 * @param cons the progv form
+	 * @param specials the program's special-variable names, in declaration order
+	 * @param mirror whether the eval runtime's global env mirror exists in this program
+	 * (JVM: {@code evalStoreRef != null}; WASM: {@code usesEval})
+	 * @return the expansion
+	 */
+	public static LispVal expandProgvForCompile(LispCons cons, java.util.Collection<String> specials, boolean mirror) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(LispNames.PROGV + " expects a symbols list, a values list, and a body");
+		}
+		LispSymbol syms = new LispSymbol("__PROGV_SYMS");
+		LispSymbol vals = new LispSymbol("__PROGV_VALS");
+		LispSymbol saved = new LispSymbol("__PROGV_SAVED");
+		LispSymbol name = new LispSymbol("__PROGV_NAME");
+		LispSymbol val = new LispSymbol("__PROGV_VAL");
+		LispSymbol prev = new LispSymbol("__PROGV_PREV");
+		LispSymbol entry = new LispSymbol("__PROGV_ENTRY");
+		LispSymbol env = new LispSymbol("__PROGV_ENV");
+		LispSymbol e = new LispSymbol("__PROGV_E");
+		List<String> names = new ArrayList<>(specials);
+		// The bind arm chain: (if (equal name 'S) (%progv-dyn-bind S val) ...), last arm
+		// nil (an unknown name has no dynamic store; the mirror below still records it).
+		LispVal bindChain = LispNil.INSTANCE;
+		LispVal unbindChain = LispNil.INSTANCE;
+		for (int i = names.size() - 1; i >= 0; i--) {
+			LispSymbol s = new LispSymbol(names.get(i));
+			LispVal test = listToCons(List.of(new LispSymbol(LispNames.EQUAL), name, quotedData(s)));
+			bindChain = listToCons(List.of(new LispSymbol(LispNames.IF), test,
+					listToCons(List.of(new LispSymbol(LispNames.PROGV_DYN_BIND), s, val)), bindChain));
+			unbindChain = listToCons(List.of(new LispSymbol(LispNames.IF), test,
+					listToCons(List.of(new LispSymbol(LispNames.PROGV_DYN_UNBIND), s, prev)), unbindChain));
+		}
+		// (setq saved (cons RECORD saved)) -- the record is (name prev) without the
+		// mirror, (name prev entry old) with it (entry nil = this progv ADDED the
+		// mirror binding and the restore removes it again).
+		LispVal genvRead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV)));
+		List<LispVal> iterBody = new ArrayList<>();
+		if (mirror) {
+			// Find the mirror binding for name (an assoc over the env alist, written as
+			// a plain loop so the expansion depends only on core operators).
+			LispVal lookupLoop = listToCons(List
+				.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, env), listToCons(List.of(
+						new LispSymbol(LispNames.IF),
+						listToCons(List.of(new LispSymbol(LispNames.EQUAL),
+								callOf(LispNames.CAR, callOf(LispNames.CAR, env)), name)),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN),
+								listToCons(List.of(new LispSymbol(LispNames.SETQ), entry, callOf(LispNames.CAR, env))),
+								listToCons(List.of(new LispSymbol(LispNames.SETQ), env, LispNil.INSTANCE)))),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), env, callOf(LispNames.CDR, env)))))));
+			LispVal recordWithEntry = cons2(name,
+					cons2(prev, cons2(entry, cons2(callOf(LispNames.CDR, entry), LispNil.INSTANCE))));
+			LispVal recordAdded = cons2(name,
+					cons2(prev, cons2(LispNil.INSTANCE, cons2(LispNil.INSTANCE, LispNil.INSTANCE))));
+			LispVal mirrorStep = listToCons(List.of(new LispSymbol(LispNames.IF), entry,
+					listToCons(List.of(new LispSymbol(LispNames.PROGN),
+							listToCons(List.of(new LispSymbol(LispNames.SETQ), saved, cons2(recordWithEntry, saved))),
+							listToCons(List.of(new LispSymbol(LispNames.RPLACD), entry, val)))),
+					listToCons(List.of(new LispSymbol(LispNames.PROGN),
+							listToCons(List.of(new LispSymbol(LispNames.SETQ), saved, cons2(recordAdded, saved))),
+							listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV_SET),
+									cons2(cons2(name, val), genvRead)))))));
+			iterBody.add(listToCons(List.of(new LispSymbol(LispNames.LET),
+					listToCons(
+							List.of(listToCons(List.of(entry, LispNil.INSTANCE)), listToCons(List.of(env, genvRead)))),
+					lookupLoop, mirrorStep)));
+		}
+		else {
+			iterBody.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), saved,
+					cons2(cons2(name, cons2(prev, LispNil.INSTANCE)), saved))));
+		}
+		LispVal iterLet = listToCons(concat(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(name, callOf(LispNames.CAR, syms))),
+						listToCons(List.of(val,
+								listToCons(List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, vals),
+										callOf(LispNames.CAR, vals), LispNil.INSTANCE)))),
+						listToCons(List.of(prev, bindChain))))),
+				iterBody));
+		LispVal bindLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, syms), iterLet,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), syms, callOf(LispNames.CDR, syms))),
+				listToCons(
+						List.of(new LispSymbol(LispNames.SETQ), vals, listToCons(List.of(new LispSymbol(LispNames.IF),
+								callOf(LispNames.CONSP, vals), callOf(LispNames.CDR, vals), LispNil.INSTANCE))))));
+		// The cleanup: unwind the saved records (innermost first -- the list was built
+		// by consing).
+		List<LispVal> cleanupLetBody = new ArrayList<>();
+		cleanupLetBody.add(unbindChain);
+		if (mirror) {
+			LispVal old = callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CDR, callOf(LispNames.CDR, e))));
+			LispVal removeHead = listToCons(
+					List.of(new LispSymbol(LispNames.PROGV_GENV_SET), callOf(LispNames.CDR, env)));
+			LispVal headMatches = listToCons(List.of(
+					new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, env), listToCons(List
+						.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.CAR, callOf(LispNames.CAR, env)), name)),
+					LispNil.INSTANCE));
+			LispVal nextMatches = listToCons(
+					List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, callOf(LispNames.CDR, env)),
+							listToCons(List.of(new LispSymbol(LispNames.EQUAL),
+									callOf(LispNames.CAR, callOf(LispNames.CAR, callOf(LispNames.CDR, env))), name)),
+							LispNil.INSTANCE));
+			LispVal unlinkLoop = listToCons(List
+				.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, env), listToCons(List.of(
+						new LispSymbol(LispNames.IF), nextMatches,
+						listToCons(List.of(new LispSymbol(LispNames.PROGN),
+								listToCons(List.of(new LispSymbol(LispNames.RPLACD), env,
+										callOf(LispNames.CDR, callOf(LispNames.CDR, env)))),
+								listToCons(List.of(new LispSymbol(LispNames.SETQ), env, LispNil.INSTANCE)))),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), env, callOf(LispNames.CDR, env)))))));
+			cleanupLetBody.add(listToCons(List.of(new LispSymbol(LispNames.LET),
+					listToCons(List.of(listToCons(
+							List.of(entry, callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CDR, e))))))),
+					listToCons(List.of(new LispSymbol(LispNames.IF), entry,
+							listToCons(List.of(new LispSymbol(LispNames.RPLACD), entry, old)),
+							listToCons(List.of(new LispSymbol(LispNames.LET),
+									listToCons(List.of(listToCons(List.of(env, genvRead)))), listToCons(List
+										.of(new LispSymbol(LispNames.IF), headMatches, removeHead, unlinkLoop)))))))));
+		}
+		LispVal cleanupLet = listToCons(concat(
+				List.of(new LispSymbol(LispNames.LET_STAR),
+						listToCons(List.of(listToCons(List.of(e, callOf(LispNames.CAR, saved))),
+								listToCons(List.of(name, callOf(LispNames.CAR, e))),
+								listToCons(List.of(prev, callOf(LispNames.CAR, callOf(LispNames.CDR, e))))))),
+				cleanupLetBody));
+		LispVal cleanupLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, saved),
+				cleanupLet, listToCons(List.of(new LispSymbol(LispNames.SETQ), saved, callOf(LispNames.CDR, saved)))));
+		List<LispVal> protectedForm = new ArrayList<>();
+		protectedForm.add(new LispSymbol(LispNames.PROGN));
+		protectedForm.add(bindLoop);
+		protectedForm.addAll(parts.subList(3, parts.size()));
+		if (parts.size() == 3) {
+			protectedForm.add(LispNil.INSTANCE);
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(syms, parts.get(1))), listToCons(List.of(vals, parts.get(2))),
+						listToCons(List.of(saved, LispNil.INSTANCE)))),
+				listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), listToCons(protectedForm), cleanupLoop))));
+	}
+
+	/**
+	 * Dynamic-first {@code symbol-value} for a program that uses {@code progv}: the
+	 * runtime name is dispatched through an {@code equal} chain over the special set, and
+	 * a match reads the VARIABLE -- the dynamic-first read the compilers emit for a
+	 * special -- so an active {@code progv}/{@code let} binding (and a {@code setq}
+	 * inside its extent) is answered instead of the eval mirror's global default. The
+	 * fallback is the raw mirror probe ({@code %symbol-value-raw}), which also serves
+	 * names {@code progv} bound without any special declaration. This is what makes
+	 * cl-json's {@code (mapcar #'symbol-value scope-variables)} snapshot see the values
+	 * its decoder {@code setq}s inside the enclosing scope extent.
+	 * @param cons the {@code (symbol-value x)} form
+	 * @param specials the program's special-variable names
+	 * @return the expansion
+	 */
+	public static LispVal dynamicFirstSymbolValue(LispCons cons, java.util.Collection<String> specials) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol n = new LispSymbol("__PROGV_SVNAME");
+		LispVal chain = listToCons(List.of(new LispSymbol(LispNames.SYMBOL_VALUE_RAW), n));
+		List<String> names = new ArrayList<>(specials);
+		for (int i = names.size() - 1; i >= 0; i--) {
+			LispSymbol s = new LispSymbol(names.get(i));
+			chain = listToCons(List.of(new LispSymbol(LispNames.IF),
+					listToCons(List.of(new LispSymbol(LispNames.EQUAL), n, quotedData(s))), s, chain));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(n, parts.get(1))))), chain));
+	}
+
+	/** {@code (cons a b)} -- the pair-building call the progv lowering leans on. */
+	private static LispVal cons2(LispVal car, LispVal cdr) {
+		return listToCons(List.of(new LispSymbol(LispNames.CONS), car, cdr));
+	}
+
+	/** Concatenates two form lists (head forms + body forms) for {@code listToCons}. */
+	private static List<LispVal> concat(List<LispVal> head, List<LispVal> tail) {
+		List<LispVal> out = new ArrayList<>(head.size() + tail.size());
+		out.addAll(head);
+		out.addAll(tail);
+		return out;
+	}
+
 	private static LispVal expandIncfDecf(LispCons cons, String op) {
 		List<LispVal> parts = cons.toList();
 		LispVal place = parts.get(1);
