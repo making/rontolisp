@@ -171,7 +171,20 @@ public final class FormatReader {
 		if (this.pos >= this.source.length() || this.source.charAt(this.pos) == ')') {
 			throw error(start, "'" + prefix.strip() + "' is not followed by a form");
 		}
-		return new CstNode.Prefix(prefix, readDatum(Trivia.SAME_LINE), trivia);
+		return new CstNode.Prefix(separatedPrefix(prefix), readDatum(Trivia.SAME_LINE), trivia);
+	}
+
+	// A prefix is printed GLUED to its datum, which for ',' can change what the result
+	// reads as: `(, @section)` -- a comma whose datum happens to start with '@' -- would
+	// come back out as `,@section`, unquote-SPLICING. `,.` is the same reader macro's
+	// other spelling. Both are legal spellings upstream uses (trivial-utf-8's pax-pages),
+	// so the separating space is part of the token stream and has to survive.
+	private String separatedPrefix(String prefix) {
+		if (!",".equals(prefix)) {
+			return prefix;
+		}
+		char next = this.source.charAt(this.pos);
+		return (next == '@' || next == '.') ? ", " : prefix;
 	}
 
 	private CstNode readListing(String open, Trivia trivia) {

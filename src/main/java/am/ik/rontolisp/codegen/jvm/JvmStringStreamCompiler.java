@@ -120,6 +120,13 @@ final class JvmStringStreamCompiler {
 	static void compileMakeInputStream(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// The source may be a MUTABLE character vector -- trivial-utf-8 builds every
+		// string it decodes with make-string + (setf char) -- and the runtime helper
+		// casts to String, so it goes through the shared normalizer first, exactly like
+		// write-string above.
+		if (!StringValuedForms.certainlyString(parts.get(1))) {
+			JvmArrayCompiler.emitStrvNormalize(ctx, className);
+		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(methodRef(ctx, className, JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_METHOD,
 				JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_DESC)

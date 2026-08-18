@@ -71,7 +71,11 @@ case/trim/concat, write-string, string designator, read-from-string,
 make-string-input-stream, intern, make-symbol — the last four were WASM-only
 until todo-208 made a plain `make-string` result reach them on the JVM too,
 where `_readFromString` and `intern`/`make-symbol`'s quote strip both
-`checkcast String` and so threw `ClassCastException` on a char vector), plus
+`checkcast String` and so threw `ClassCastException` on a char vector;
+`%make-string-input-stream` was the one todo-208 named but did NOT wire on the
+JVM, found in 2026-08 by jose, whose every string comes out of trivial-utf-8's
+`make-string` + `(setf char)` loop and went straight into cl-json's
+`decode-json-from-string`), plus
 the shared runtime bodies — JVM `emitArrayBranch` of
 `_lispToString`/`_lispToDisplayString` (which also covers equal-hash-table
 keys, keyed by rendered string) and `_eqv`'s equals fallback; WASM the

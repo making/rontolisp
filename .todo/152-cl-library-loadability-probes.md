@@ -85,17 +85,17 @@ verification against the actual Quicklisp dist at probe time)
     stream built-in as if it were a call** (`.kb/gray-streams.md`), and **a
     `funcall` past `MAX_CALLABLE_ARITY` compiled to a call-time signal** instead
     of routing through `apply`'s spread dispatcher.
-- **`jose` (JWT/JOSE) + `cl-json` — probed 2026-08-16, `.todo/419`.** jose is a
-  `:package-inferred-system` and its deps load unpatched except cl-json, whose
-  `.asd` wants three parse widenings (`.todo/420`). With those plus `logtest`
-  (`.todo/421`), `jose:encode` runs byte-identically on all four backends
-  (HS256/384/512 cross-checked against Python's `hmac`); `jose:decode`'s JSON
-  half is unblocked now that `unread-char` works on a handle, and what is left
-  is `logtest` (`.todo/421`, which `jose/base64` reaches through
-  `trivial-utf-8`) and, on the compiled backends, `progv` (`.todo/423`, which
-  cl-json's decoder forces on every program that loads it). RSA needs the ironclad slice widened
-  (`.todo/424`) — the real public-key sources were verified to load and
-  round-trip.
+- **`jose` (JWT/JOSE) + `cl-json` + `trivial-utf-8` — DONE (2026-08-18,
+  `.todo/419`).** All three are vendored and load UNPATCHED; `encode` / `decode`
+  / `inspect-token` over HS256/384/512, RS*/PS* and `none` answer identically on
+  all four backends and identically to SBCL on the same sources, and upstream's
+  own `jose/tests/jwt` suite runs green under `rontolisp test`. The six blockers
+  the probe found each closed on their own child todo (420 `.asd` widenings, 411
+  `unread-char` on a handle, 421 `logtest`, 422 `loop for VAR fixnum =`, 423
+  `progv` on the compile paths, 424 the ironclad SHA-384/512 + RSA slice); the
+  two found while finishing were general too — `with-input-from-string` over a
+  mutable character vector on the JVM, and a multi-pair `setq` whose later value
+  form builds a closure. See the jose section of `.kb/asdf.md`.
 - **`salza2` (deflate) — verified loadable, deliberately not kept.** 2.1 gzips
   correctly on all four backends once the `deftype`-alias fix above is in (it was
   the library that surfaced it). It is not vendored: nothing in the repo consumes

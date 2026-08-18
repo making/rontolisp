@@ -5144,6 +5144,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void multiPairSetqBuildsAClosureInALaterPair() throws Exception {
+		// setq takes place/value PAIRS, and a lambda in a pair after the first is a
+		// closure like any other. The free-variable walk used to look at the first pair
+		// only, so this failed to compile at all here ("Cannot find variable for
+		// closure: G") while the JVM silently printed 0. cl-json's set-custom-vars
+		// expands to a multi-pair setq whose values ARE lambdas.
+		assertThat(compileAndRun("""
+				(defvar *a* nil)
+				(defvar *b* nil)
+				(defun f ()
+				  (let ((g 0))
+				    (setq *a* 1 *b* (lambda (v) (setq g v) nil))
+				    (funcall *b* 42)
+				    g))
+				(print (f))
+				""")).isEqualTo("42");
+	}
+
+	@Test
 	void setqReassign() throws Exception {
 		assertThat(compileAndRun("(print (progn (setq x 10) (setq x 20) x))")).isEqualTo("20");
 	}

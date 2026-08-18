@@ -70,6 +70,24 @@ Cons cells and function references are both `Object[]`, distinguished by
 Pass 1 collects defuns; 2a compiles defun bodies, 2b top-level, 2c iteratively
 compiles lambda bodies (top-level must compile before lambda iteration).
 
+### A closure's captures come from `compiler/FreeVarAnalyzer`, and it must walk EVERY subform
+
+Both compile backends decide what a lambda captures with
+`FreeVarAnalyzer.findFreeVars` / `collectCapturedVars`; the interpreter captures
+its whole `Environment` and so never consults it. That asymmetry is why a
+subform the analyzer skips is not a compile error but a THREE-WAY divergence:
+the interpreter answers correctly, the JVM emits a lambda that reads a fresh
+copy of the variable (a silently wrong value), and WASM refuses with
+`Cannot find variable for closure: <NAME>`. The one found in 2026-08 (jose,
+`.kb/asdf.md`) was `setq`: it takes place/value PAIRS and the analyzer looked at
+the first pair only, so a closure built by a later value form lost every capture
+— cl-json's `set-custom-vars` expands to exactly `(setq v1 (lambda ...) v2
+(lambda ...) ...)`. The rule for any new head added to either walk: consume the
+form's FULL argument list, not the shape its commonest spelling has. Pinned by
+`JvmLispCompilerTest#compileAndRunMultiPairSetqBuildsAClosureInALaterPair` and
+`WasmLispCompilerIntegrationTest#multiPairSetqBuildsAClosureInALaterPair`, which
+must move together.
+
 ## A redefined defun binds every call to its LAST definition (todo-256)
 
 Both compile backends resolve a defun call site through the per-NAME map built

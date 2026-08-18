@@ -13,6 +13,15 @@ uphold, and the only one that may never bend:
 `--check` / `--stdout` / `--width=N`, exit codes 0/1/2. Everything below is the
 `format` package.
 
+**Whitespace is not always removable, and that is where the invariant bites.** A
+`CstNode.Prefix` prints GLUED to its datum, which is right for `'`/`` ` ``/`#'`
+and wrong for exactly one case: a `,` whose datum starts with `@` or `.`, because
+`, @x` glued is `,@x` -- the unquote-SPLICING macro, a different token. So
+`FormatReader.separatedPrefix` keeps a single space there, and only there. Found
+in 2026-08 by vendoring trivial-utf-8, whose `pax-pages` is written `(, @manual)`;
+the general rule for any future prefix is that the space may be dropped only when
+gluing cannot make a longer reader macro.
+
 ## Why it does not use the reader
 
 `LispReader` is the wrong front end for a formatter, and not by a little. It

@@ -380,13 +380,23 @@ public final class FreeVarAnalyzer {
 							}
 						}
 						case LispNames.SETQ -> {
+							// setq takes place/value PAIRS. Walking only the first one
+							// hides every closure a later value form builds, so its
+							// captures are never emitted -- a silently wrong answer on
+							// the JVM and a "Cannot find variable for closure" on WASM
+							// (cl-json's set-custom-vars expands to exactly this shape).
 							List<LispVal> parts = cons.toList();
-							String name = ((LispSymbol) parts.get(1)).name();
-							if (!specialNames.contains(name) && !boundVars.contains(name)
-									&& !knownFunctions.contains(name) && !globals.contains(name)) {
-								freeVars.add(name);
+							for (int i = 1; i + 1 < parts.size(); i += 2) {
+								if (parts.get(i) instanceof LispSymbol place) {
+									String name = place.name();
+									if (!specialNames.contains(name) && !boundVars.contains(name)
+											&& !knownFunctions.contains(name) && !globals.contains(name)) {
+										freeVars.add(name);
+									}
+								}
+								collectFreeVars(parts.get(i + 1), boundVars, knownFunctions, globals, specialNames,
+										freeVars);
 							}
-							collectFreeVars(parts.get(2), boundVars, knownFunctions, globals, specialNames, freeVars);
 						}
 						case LispNames.DEFVAR -> {
 							// defvar names a global variable, not a lexical reference;
@@ -637,12 +647,17 @@ public final class FreeVarAnalyzer {
 							}
 						}
 						case LispNames.SETQ -> {
+							// Every place/value pair, for the reason spelled out in the
+							// free-variable walk above.
 							List<LispVal> parts = cons.toList();
-							String name = ((LispSymbol) parts.get(1)).name();
-							if (insideLambda && localVars.contains(name)) {
-								captured.add(name);
+							for (int i = 1; i + 1 < parts.size(); i += 2) {
+								if (parts.get(i) instanceof LispSymbol place && insideLambda
+										&& localVars.contains(place.name())) {
+									captured.add(place.name());
+								}
+								collectCapturedVars(parts.get(i + 1), localVars, knownFunctions, captured,
+										insideLambda);
 							}
-							collectCapturedVars(parts.get(2), localVars, knownFunctions, captured, insideLambda);
 						}
 						case LispNames.DEFVAR -> {
 							// defvar names a global variable; only the optional init form

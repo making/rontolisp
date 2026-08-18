@@ -580,6 +580,17 @@ class LispFormatterTest {
 	}
 
 	@Test
+	void keepsTheSpaceThatSeparatesACommaFromAnAtOrDotDatum() {
+		// A prefix prints glued to its datum, but `(, @x)` glued is `,@x` -- a DIFFERENT
+		// reader macro (unquote-splicing), so the space is a token-stream fact and not
+		// formatting. trivial-utf-8's pax-pages is written that way.
+		assertThat(LispFormatter.format("`(:objects (, @manual))\n")).isEqualTo("`(:objects (, @manual))\n");
+		assertThat(LispFormatter.format("`(a , .5)\n")).isEqualTo("`(a , .5)\n");
+		// An ordinary datum still glues, and a real ,@ is untouched.
+		assertThat(LispFormatter.format("`(a , b ,@c)\n")).isEqualTo("`(a ,b ,@c)\n");
+	}
+
+	@Test
 	void keepsAFeatureGuardButGivesALongOneItsOwnLine() {
 		assertThat(LispFormatter.format("#+sbcl (declaim (optimize speed))\n"))
 			.isEqualTo("#+sbcl (declaim (optimize speed))\n");

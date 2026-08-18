@@ -2640,6 +2640,23 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("(3 \"xyz\")");
 	}
 
+	@Test
+	void compileAndRunWithInputFromStringOverAMutableCharacterVector() throws Exception {
+		// The string handed to with-input-from-string may be a MUTABLE character vector
+		// (make-string + setf char), which is a different runtime representation here --
+		// trivial-utf-8's utf-8-bytes-to-string builds every string that way, so jose
+		// fed one straight into cl-json's decode-json-from-string.
+		assertThat(compileAndRun("""
+				(defun mk ()
+				  (let ((s (make-string 3 :element-type 'character)))
+				    (setf (char s 0) #\\a)
+				    (setf (char s 1) #\\b)
+				    (setf (char s 2) #\\c)
+				    s))
+				(print (with-input-from-string (in (mk)) (read-line in)))
+				""")).isEqualTo("\"abc\"");
+	}
+
 	// The REST of the family over more than one list. Until .todo/218 only mapcar walked
 	// N lists here: mapc/mapcan/maplist/mapcon/mapl compiled the first two arguments and
 	// dropped the rest, so the answer was a silently wrong list (the interpreter
@@ -4135,6 +4152,25 @@ class JvmLispCompilerTest {
 		// with an empty body -- cl-postgres' message-case CloseComplete arm --
 		// expands to exactly this shape).
 		assertThat(compileAndRun("(print (if (= 1 1) (progn) :else))")).isEqualTo("NIL");
+	}
+
+	@Test
+	void compileAndRunMultiPairSetqBuildsAClosureInALaterPair() throws Exception {
+		// setq takes place/value PAIRS, and a lambda in a pair after the first is a
+		// closure like any other. The free-variable walk used to look at the first pair
+		// only, so every later pair's captures went unrecorded: this printed 0 (the
+		// closure wrote a copy) instead of 42. cl-json's set-custom-vars expands to a
+		// multi-pair setq whose values ARE lambdas, which is how json-rpc found it.
+		assertThat(compileAndRun("""
+				(defvar *a* nil)
+				(defvar *b* nil)
+				(defun f ()
+				  (let ((g 0))
+				    (setq *a* 1 *b* (lambda (v) (setq g v) nil))
+				    (funcall *b* 42)
+				    g))
+				(print (f))
+				""")).isEqualTo("42");
 	}
 
 	@Test
