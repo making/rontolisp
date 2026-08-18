@@ -3370,14 +3370,25 @@ public final class LispNames {
 	public static final String DIR_NAMESTRING = "%DIR-NAMESTRING";
 
 	/**
-	 * The {@code %wild-match} internal helper: glob matching of ONE pathname component,
-	 * {@code *} standing for any sequence of characters and {@code ?} for exactly one --
-	 * the wild-component matching {@link #DIRECTORY} needs to be ANSI's {@code directory}
-	 * rather than a bare listing. Deliberately one component only: a wild DIRECTORY
-	 * component ({@code "src/**} + {@code /*.lisp"}) is not matched, because rontolisp
-	 * has no structured pathname to walk with.
+	 * The {@code %wild-match} internal helper: glob matching over a namestring, {@code *}
+	 * standing for any sequence of characters, {@code ?} for exactly one, and
+	 * {@code **}{@code /} ({@link #WILD_INFERIORS_AT}) for zero or more whole directory
+	 * levels -- the wild-component matching {@link #DIRECTORY} needs to be ANSI's
+	 * {@code directory} rather than a bare listing.
 	 */
 	public static final String WILD_MATCH = "%WILD-MATCH";
+
+	/**
+	 * The {@code %wild-inferiors-at} internal helper: whether a pattern carries the
+	 * {@code **}{@code /} (CL's {@code :wild-inferiors}) token at an index. The ONE
+	 * spelling of "this is a wild-inferiors segment", read by {@link #WILD_MATCH}, its
+	 * capturing twin {@link #WILD_CAPTURES} and {@link #TRANSLATE_PATHNAME}'s
+	 * substitution scan, so the three cannot disagree about where one starts. Three
+	 * characters, not two: the trailing {@code /} is part of the token because the token
+	 * matches ZERO levels as well as many, and only swallowing the separator lets
+	 * {@code "/a/**}{@code /*.lisp"} match {@code "/a/c.lisp"} the way CL does.
+	 */
+	public static final String WILD_INFERIORS_AT = "%WILD-INFERIORS-AT";
 
 	/**
 	 * The {@code %pathname-typed-p} internal helper: whether a pathname's NAME component
@@ -3395,9 +3406,21 @@ public final class LispNames {
 	 * when the namestring has no directory part. Prelude Lisp over the primitives every
 	 * backend has, like {@link #DIRECTORY}. The consumer that asked for it is a directory
 	 * WALK deciding what to do per entry -- local-time's timezone reader skips the
-	 * {@code Etc} subtree with it.
+	 * {@code Etc} subtree with it. Component-for-component the INVERSE of
+	 * {@link #PATHNAME_DIRECTORY_STRING} ({@link #PATHNAME_DIRECTORY_COMPONENT}), so a
+	 * {@code *} comes back as {@code :wild}, a {@code **} as {@code :wild-inferiors} and
+	 * a {@code ..} as {@code :up}.
 	 */
 	public static final String PATHNAME_DIRECTORY = "PATHNAME-DIRECTORY";
+
+	/**
+	 * The {@code %pathname-directory-component} internal helper: one directory component
+	 * of a namestring as the keyword CL names it by, or the string itself when it is an
+	 * ordinary name. The inverse of the rendering {@link #PATHNAME_DIRECTORY_STRING}
+	 * performs, written as its own defun so the two halves of the round trip sit next to
+	 * each other.
+	 */
+	public static final String PATHNAME_DIRECTORY_COMPONENT = "%PATHNAME-DIRECTORY-COMPONENT";
 
 	/**
 	 * The {@code pathname-name} built-in: the file-name component of a namestring without
@@ -3407,14 +3430,16 @@ public final class LispNames {
 	 * when the namestring names no file (it ends in {@code /}), which is what CL answers.
 	 * Prelude Lisp over the shared {@code %pathname-split} rule, so it cannot drift from
 	 * {@link #PATHNAME_TYPE} or from {@link #MAKE_PATHNAME}'s {@code :defaults}
-	 * component-wise defaulting.
+	 * component-wise defaulting. A component that is exactly {@code "*"} answers
+	 * {@code :wild}, the keyword {@link #MAKE_PATHNAME} builds it from -- decomposition
+	 * is the inverse of construction here as it is for the directory list.
 	 */
 	public static final String PATHNAME_NAME = "PATHNAME-NAME";
 
 	/**
 	 * The {@code pathname-type} built-in: the type (extension) component of a namestring
 	 * without its dot, or {@code nil} when there is none. The sibling of
-	 * {@link #PATHNAME_NAME} and the same split rule.
+	 * {@link #PATHNAME_NAME}, the same split rule and the same {@code :wild} answer.
 	 */
 	public static final String PATHNAME_TYPE = "PATHNAME-TYPE";
 
@@ -3505,10 +3530,12 @@ public final class LispNames {
 	 * The {@code translate-pathname} built-in: matches {@code source} against
 	 * {@code from-wildcard} and substitutes the pieces its wildcards captured into
 	 * {@code to-wildcard}, in order. Wildcards are the ones the rest of the pathname
-	 * family understands -- {@code *} (any run of characters) and {@code ?} (one
-	 * character) over the FLAT namestring, so a {@code *} may span {@code /} where a
-	 * structured implementation would stop at a directory boundary. A source that does
-	 * not match {@code from-wildcard} is an error, as it is in CL.
+	 * family understands -- {@code *} (any run of characters), {@code ?} (one character)
+	 * and {@code **}{@code /} (zero or more whole directory levels) over the FLAT
+	 * namestring, so a plain {@code *} may span {@code /} where a structured
+	 * implementation would stop at a directory boundary. A {@code **}{@code /} in the
+	 * to-wildcard consumes ONE capture and writes it back verbatim, separator included. A
+	 * source that does not match {@code from-wildcard} is an error, as it is in CL.
 	 */
 	public static final String TRANSLATE_PATHNAME = "TRANSLATE-PATHNAME";
 
@@ -3563,15 +3590,17 @@ public final class LispNames {
 	 * The {@code %pathname-directory-string} internal helper: {@link #MAKE_PATHNAME}'s
 	 * {@code :directory} argument (a {@code (:relative "a" "b")} / {@code (:absolute
 	 * ...)} list, a bare list of components, or a directory namestring) as a directory
-	 * prefix with its trailing {@code /}. The Lisp twin of
-	 * {@code PathnameOps.formatDirectory}.
+	 * prefix with its trailing {@code /}. {@code :up} / {@code :back} render as
+	 * {@code ..}, {@code :wild} as {@code *} and {@code :wild-inferiors} as {@code **}.
+	 * The Lisp twin of {@code PathnameOps.formatDirectory}.
 	 */
 	public static final String PATHNAME_DIRECTORY_STRING = "%PATHNAME-DIRECTORY-STRING";
 
 	/**
 	 * The {@code %pathname-component-string} internal helper: {@link #MAKE_PATHNAME}'s
 	 * {@code :name} / {@code :type} argument as a string -- a string passes through, nil
-	 * is the empty component, a symbol or keyword contributes its name.
+	 * is the empty component, {@code :wild} is the {@code *} it names, and any other
+	 * symbol or keyword contributes its name.
 	 */
 	public static final String PATHNAME_COMPONENT_STRING = "%PATHNAME-COMPONENT-STRING";
 
@@ -3649,11 +3678,45 @@ public final class LispNames {
 	 * {@code ("src/f.lisp")} when the file exists, and a directory answers itself in
 	 * directory form ({@code "src"} and {@code "src/"} both give {@code ("src/")}) --
 	 * listing it is {@code "src/*.*"}, not {@code "src/"}.</li>
+	 * <li>A wild DIRECTORY component expands the prefix before the name is matched
+	 * ({@link #WILD_DIRS}): {@code "src/*}{@code /f.lisp"} walks one level, and
+	 * {@code "src/**}{@code /*.lisp"} walks the whole subtree including {@code src/}
+	 * itself, because {@code :wild-inferiors} matches zero levels as well as many.</li>
 	 * </ul>
-	 * The DIRECTORY components are never wild: rontolisp has no structured pathname to
-	 * walk, so {@code "src/*}{@code /f.lisp"} matches nothing.
 	 */
 	public static final String DIRECTORY = "DIRECTORY";
+
+	/**
+	 * The {@code %directory-in} internal helper: {@link #DIRECTORY}'s per-directory half
+	 * -- the entries of ONE directory prefix that a final (name) component matches, or
+	 * the pathspec itself when that component is not wild. Split out so the wild-
+	 * directory walk can run the identical name matching in every directory
+	 * {@link #WILD_DIRS} expanded to.
+	 */
+	public static final String DIRECTORY_IN = "%DIRECTORY-IN";
+
+	/**
+	 * The {@code %directory-subdirs} internal helper: the SUBDIRECTORY entries of one
+	 * directory prefix (each with its trailing {@code /}), sorted. The one step
+	 * {@link #WILD_DIRS} descends by.
+	 */
+	public static final String DIRECTORY_SUBDIRS = "%DIRECTORY-SUBDIRS";
+
+	/**
+	 * The {@code %wild-dirs} internal helper: a directory prefix plus the remaining
+	 * directory components, expanded to every existing directory namestring they match. A
+	 * {@code **} component contributes the base itself AND every subtree below it, in
+	 * that order, which is what makes {@code :wild-inferiors} match zero levels; a
+	 * {@code *} (or any other wild component) descends exactly one level.
+	 */
+	public static final String WILD_DIRS = "%WILD-DIRS";
+
+	/**
+	 * The {@code %path-dir-parts} internal helper: a directory namestring split into its
+	 * components, the leading {@code /} of an absolute path dropped (the caller carries
+	 * it as the starting base).
+	 */
+	public static final String PATH_DIR_PARTS = "%PATH-DIR-PARTS";
 
 	/** The {@code write-line} built-in function. */
 	public static final String WRITE_LINE = "WRITE-LINE";

@@ -10366,6 +10366,46 @@ cases:
       :SIGNALLED
       "hello"
 
+  - name: wild-pathnames
+    source: |
+      ;; :wild / :wild-inferiors are the DIRECTORY components CL names * and ** by,
+      ;; and :wild is the * of a name or type. Construction, decomposition,
+      ;; wild-pathname-p and translate-pathname all read the one rule, and every
+      ;; expectation was checked against SBCL. **/ is ONE token: it matches zero
+      ;; directory levels as well as many, which is why the second translate answers
+      ;; at all. The walk half is filesystem work and cannot build a tree here
+      ;; (neither WASM backend can create a directory), so what is exercised on disk
+      ;; is the zero-level branch over files this case writes itself.
+      (print (namestring (make-pathname :directory '(:absolute "a" :wild-inferiors)
+                                        :name :wild :type "lisp")))
+      (print (namestring (make-pathname :directory '(:relative :wild) :name "f" :type "lisp")))
+      (print (namestring (make-pathname :name :wild :type :wild)))
+      (print (list (pathname-directory "/a/**/x.lisp") (pathname-directory "/a/*/x.lisp")
+                   (pathname-directory "../a/")))
+      (print (list (pathname-name "/a/**/*.lisp") (pathname-type "/a/**/*.lisp")))
+      (print (list (wild-pathname-p "/a/**/x.lisp") (wild-pathname-p "/a/**/x.lisp" :directory)
+                   (wild-pathname-p "/a/**/x.lisp" :name) (wild-pathname-p "/a/b.c")))
+      (print (namestring (translate-pathname "/a/b/d/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
+      (print (namestring (translate-pathname "/a/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
+      (with-open-file (out "wpc-b.txt" :direction :output) (write-line "b" out))
+      (with-open-file (out "wpc-a.txt" :direction :output) (write-line "a" out))
+      (print (remove-if-not (lambda (p)
+                              (let ((n (namestring p)))
+                                (and (> (length n) 6) (string= (subseq n 0 6) "./wpc-"))))
+                            (directory "./**/*.txt")))
+      (print (directory "./no-such-directory/**/*.lisp"))
+    expected: |
+      "/a/**/*.lisp"
+      "*/f.lisp"
+      "*.*"
+      ((:ABSOLUTE "a" :WILD-INFERIORS) (:ABSOLUTE "a" :WILD) (:RELATIVE :UP "a"))
+      (:WILD "lisp")
+      (T T NIL NIL)
+      "/x/b/d/c.fasl"
+      "/x/c.fasl"
+      (#P"./wpc-a.txt" #P"./wpc-b.txt")
+      NIL
+
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report
 # plus a non-zero exit. `stderr` lines must APPEAR -- wasmtime wraps its own

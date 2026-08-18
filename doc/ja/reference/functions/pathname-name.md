@@ -18,6 +18,9 @@
 `(pathname-name "d/a")` は `"a"`、`(pathname-name "d/.a")` は `".a"`、
 `(pathname-name "d/a.b.c")` は `"a.b"`、`(pathname-name "d/")` は `NIL` です。
 
+名前がちょうど `*` の場合は `:WILD` を返します。[`make-pathname`](make-pathname.md) が
+それを組み立てるときのキーワードそのもので、ここでも分解は組み立ての逆になっています。
+
 ## バックエンドサポート
 
 4 バックエンドすべてです。どのバックエンドにもあるプリミティブの上に、rontolisp ソースで

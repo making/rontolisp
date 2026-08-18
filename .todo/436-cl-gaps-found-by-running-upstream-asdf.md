@@ -36,7 +36,7 @@ a ready-made exerciser for all of it.
 | `.todo/438` | hash tables key by the printed form | bug |
 | ~~`.todo/439`~~ | `with-open-file` / `open` / `load` reject computed keywords | surface -- LANDED 2026-08-18 |
 | ~~`.todo/440`~~ | string designators | surface -- LANDED 2026-08-18 |
-| `.todo/441` | wild pathname components | surface |
+| ~~`.todo/441`~~ | wild pathname components | surface -- LANDED 2026-08-18 |
 | `.todo/442` | the CLOS surface (`reinitialize-instance` &c) | surface |
 | `.todo/443` | the missing standard names | surface |
 
@@ -46,8 +46,8 @@ does not terminate. The rest is missing surface.
 ## Ordering
 
 - **Wave 1, parallel: `437`, `439`, `440`, `441`, `442`.** Independent of each
-  other. `437`, `439` and `440` are done; the printer now walks a list / general
-  rank-1 vector, so `438` is unblocked.
+  other. `437`, `439`, `440` and `441` are done; the printer now walks a list /
+  general rank-1 vector, so `438` is unblocked.
 - **Wave 2: `443`.** Last, because it adds the most names and therefore collides
   hardest on the shared counter below.
 - **Wave 3: `438`.** After `437` -- a cyclic key stops being an unreadable stack
@@ -56,6 +56,10 @@ does not terminate. The rest is missing surface.
 `.todo/445` came OUT of `437` rather than out of the spike: a `defmethod
 print-object` below its first use crashes the JVM backend, and it predates this
 family.
+
+`.todo/447` came OUT of `441` the same way `445` came out of `437`:
+`translate-pathname` substitutes its captures positionally rather than component
+by component, which `441` measured against SBCL but did not set out to close.
 
 `.todo/444` is the deferred half of `438`: making `:test` real, and the `eq`
 divergence underneath it. It is NOT in this family's wave -- it has a measured

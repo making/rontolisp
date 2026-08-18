@@ -238,6 +238,10 @@ public final class PathnameOps {
 			return str.value();
 		}
 		if (value instanceof LispSymbol sym) {
+			// :wild is CL's name for the * component, not a component spelled "WILD".
+			if (":WILD".equals(sym.name())) {
+				return "*";
+			}
 			return sym.isKeyword() ? sym.name().substring(1) : sym.name();
 		}
 		throw new LispEvalException(
@@ -287,6 +291,7 @@ public final class PathnameOps {
 				switch (sym.name()) {
 					case ":UP", ":BACK" -> sb.append("../");
 					case ":WILD" -> sb.append("*/");
+					case ":WILD-INFERIORS" -> sb.append("**/");
 					default -> throw new LispEvalException(
 							LispNames.MAKE_PATHNAME + ": unsupported :directory component " + sym.name());
 				}

@@ -3,9 +3,23 @@
 `(make-pathname &key directory name type defaults)`
 
 Builds a pathname from its components: `:directory` (Common Lisp's list -- `:absolute` or
-`:relative` followed by one string per level -- or a directory namestring),
+`:relative` followed by one component per level -- or a directory namestring),
 `:name` (the file name without its type) and `:type` (the extension without its
-dot). `:host`, `:device`, `:version` and `:case` are accepted and dropped, as is
+dot).
+
+A directory component is a string or one of the keywords Common Lisp names the
+special levels by: `:up` / `:back` (`..`), `:wild` (`*`, one level) and
+`:wild-inferiors` (`**`, any number of levels). `:wild` is also what `:name` and
+`:type` take for their `*`:
+
+```lisp
+(namestring (make-pathname :directory (list :absolute "a" :wild-inferiors)
+                           :name :wild :type "lisp"))   ; => "/a/**/*.lisp"
+```
+
+That is the pathspec [`directory`](directory.md) walks a whole subtree with and
+the from-wildcard [`translate-pathname`](translate-pathname.md) rewrites against.
+ `:host`, `:device`, `:version` and `:case` are accepted and dropped, as is
 any other keyword: a namestring models no such component, and a portability
 layer's call still works.
 

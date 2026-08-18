@@ -3,8 +3,13 @@
 `(pathname-directory pathname)`
 
 The directory component of a namestring, as Common Lisp's list: `:absolute` or
-`:relative` followed by one string per directory level. A namestring with no
+`:relative` followed by one component per directory level. A namestring with no
 directory part answers `nil`.
+
+It is component-for-component the INVERSE of what
+[`make-pathname`](make-pathname.md) builds, so the special levels come back as
+the keywords they were given as: `..` is `:up`, `*` is `:wild` and `**` is
+`:wild-inferiors`.
 
 Takes a pathname or a namestring; the split is pure string work on the
 namestring -- nothing is
@@ -17,8 +22,9 @@ entry it was handed.
 ```
 
 `(pathname-directory "a/b/c.txt")` is `(:RELATIVE "a" "b")`,
-`(pathname-directory "c.txt")` is `NIL`, and `(pathname-directory "/")` is
-`(:ABSOLUTE)`.
+`(pathname-directory "c.txt")` is `NIL`, `(pathname-directory "/")` is
+`(:ABSOLUTE)`, and `(pathname-directory "/a/**/x.lisp")` is
+`(:ABSOLUTE "a" :WILD-INFERIORS)`.
 
 ## Backend support
 

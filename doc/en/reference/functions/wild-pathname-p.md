@@ -9,8 +9,9 @@ always `nil` because those components do not exist
 ([`pathname-host`](pathname-host.md)).
 
 A component is wild when it holds a `*` (any run of characters) or a `?` (one
-character) -- the same two wildcards [`directory`](directory.md) matches with, so
-this predicate and that matcher cannot disagree.
+character) -- the same wildcards [`directory`](directory.md) matches with, so
+this predicate and that matcher cannot disagree. A `**` directory component
+(`:wild-inferiors`, any number of levels) is wild by that same rule.
 
 ```lisp
 (list (wild-pathname-p "d/*.txt")

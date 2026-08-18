@@ -17,7 +17,8 @@ rule.
 ```
 
 `(pathname-type "d/a")` is `NIL`, `(pathname-type "d/.a")` is `NIL`, and
-`(pathname-type "d/a.b.c")` is `"c"`.
+`(pathname-type "d/a.b.c")` is `"c"`. A type that is exactly `*` answers
+`:WILD`, the keyword [`make-pathname`](make-pathname.md) builds it from.
 
 ## Backend support
 

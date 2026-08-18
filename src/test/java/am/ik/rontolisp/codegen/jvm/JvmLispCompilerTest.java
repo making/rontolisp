@@ -3255,6 +3255,41 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void wildPathnameComponentsBuildMatchTranslateAndWalk() throws Exception {
+		// Same shape and the same SBCL-checked expectations as the interpreter test.
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("tree"));
+		java.nio.file.Files.createDirectories(root.resolve("a/b/c"));
+		java.nio.file.Files.createDirectories(root.resolve("a/d"));
+		java.nio.file.Files.writeString(root.resolve("a/top.lisp"), "1\n");
+		java.nio.file.Files.writeString(root.resolve("a/b/mid.lisp"), "2\n");
+		java.nio.file.Files.writeString(root.resolve("a/b/c/deep.lisp"), "3\n");
+		java.nio.file.Files.writeString(root.resolve("a/d/x.txt"), "4\n");
+		String dir = root.toString().replace("\\", "\\\\");
+		String d = root + "/";
+		assertThat(compileAndRun("""
+				(print (namestring (make-pathname :directory '(:absolute "a" :wild-inferiors)
+				                                  :name :wild :type "lisp")))
+				(print (namestring (make-pathname :name :wild :type :wild)))
+				(print (list (pathname-directory "/a/**/x.lisp") (pathname-directory "/a/*/x.lisp")
+				             (pathname-directory "../a/")))
+				(print (list (pathname-name "/a/**/*.lisp") (pathname-type "/a/**/*.lisp")))
+				(print (list (wild-pathname-p "/a/**/x.lisp" :directory)
+				             (wild-pathname-p "/a/**/x.lisp" :name)))
+				(print (namestring (translate-pathname "/a/b/d/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
+				(print (namestring (translate-pathname "/a/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
+				(print (directory "%s/a/**/*.lisp"))
+				(print (directory "%s/a/*/*.lisp"))
+				(print (directory "%s/a/**/"))
+				(print (directory "%s/nope/**/*.lisp"))
+				""".formatted(dir, dir, dir, dir))).isEqualTo(("\"/a/**/*.lisp\"\n" + "\"*.*\"\n"
+				+ "((:ABSOLUTE \"a\" :WILD-INFERIORS)" + " (:ABSOLUTE \"a\" :WILD) (:RELATIVE :UP \"a\"))\n"
+				+ "(:WILD \"lisp\")\n" + "(T NIL)\n" + "\"/x/b/d/c.fasl\"\n" + "\"/x/c.fasl\"\n"
+				+ "(#P\"%sa/b/c/deep.lisp\" #P\"%sa/b/mid.lisp\" #P\"%sa/top.lisp\")\n" + "(#P\"%sa/b/mid.lisp\")\n"
+				+ "(#P\"%sa/\" #P\"%sa/b/\" #P\"%sa/b/c/\" #P\"%sa/d/\")\n" + "NIL")
+			.formatted(d, d, d, d, d, d, d, d));
+	}
+
+	@Test
 	void pathnameAlgebraOverTheFlatNamestring() throws Exception {
 		// The pathname operators that are pure computation over the namestring: the
 		// three components rontolisp does not model, wild-pathname-p per field,

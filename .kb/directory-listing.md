@@ -9,8 +9,11 @@ spelling means adding a prelude entry, never touching a backend.
 ```
 %list-directory  (per backend: interpreter / JVM / WASM P1 / WASM component)
   %dir-namestring        pathname -> DIRECTORY form (trailing /), the one rule
-  %wild-match            glob over ONE component (* any run, ? one char)
+  %wild-match            glob (* any run, ? one char, **/ any depth)
   %pathname-typed-p      does the name carry a type (a dot past position 0)
+  %directory-subdirs     the subdirectory entries of one prefix, sorted
+    %wild-dirs           a wild directory prefix -> every directory it matches
+  %directory-in          the entries of ONE prefix a name component matches
   directory              ANSI pathname MATCHING, sorted, prefixed
     uiop:directory-files       (directory "d/*.*") minus the subdirectories
     uiop:subdirectories        (directory "d/*.*") minus the files
@@ -130,11 +133,26 @@ only fall out of the type rule:
 - A non-wild pathspec designates ITSELF: `"d"` and `"d/"` both answer `("d/")`,
   a file answers itself, a missing name answers nil.
 
-Two limits remain, and both are consequences of the pathname VALUE carrying a
-FLAT namestring (`.kb/pathnames.md`), not of this operator:
+**DIRECTORY components ARE wild** since todo-441. The pathspec splits at its
+last `/` into a directory prefix and a name component; when the prefix holds a
+wildcard, `%wild-dirs` expands it to every existing directory namestring it
+matches and `%directory-in` -- the per-directory half factored out of
+`directory`, so the wild and non-wild paths run the IDENTICAL name matching --
+runs in each. A `**` component contributes the base itself BEFORE descending,
+which is what makes `:wild-inferiors` match zero levels: `"d/**/*.lisp"` answers
+the `.lisp` files directly in `d/` as well as those below it. Any other wild
+component descends exactly one level, matched by the same `%wild-match` the name
+uses (no `%pathname-typed-p` rule -- a directory has no type). All seven shapes
+were diffed against SBCL on the same tree.
 
-**DIRECTORY components are never wild** (`"src/*/f.lisp"` matches nothing) --
-there is no structured directory list to walk.
+The walk terminates because `%directory-subdirs` only ever answers what the host
+reports below the base; a symlink cycle would spin it, exactly as it would spin
+`uiop:collect-sub*directories`.
+
+One limit remains, a consequence of the pathname VALUE carrying a FLAT
+namestring (`.kb/pathnames.md`) rather than of this operator:
+`translate-pathname` substitutes its captures POSITIONALLY, so an asymmetric
+wildcard pair diverges from SBCL (`.kb/pathnames.md`, `.todo/447`).
 
 **`uiop:directory-files` takes UIOP's optional PATTERN** (todo-249) -- as the
 NAMESTRING of a wildcard rather than a wildcard pathname object, appended to the
@@ -193,13 +211,21 @@ coerce/wrap pattern: `.kb/pathnames.md`.
   `#thePreludePathnameSplitAgreesWithPathnameOps`
 - `LispEvaluatorTest#directoryMatchesPathnamesTheWayAnsiDoes` (the SBCL-checked
   table), `#uiopDirectoryWalkersRunOverTheSamePrimitive`,
-  `#directoryGoesThroughTheInstalledSourceLoader`
-- `JvmLispCompilerTest#directoryMatchesPathnamesAndDrivesTheUiopWalkers`
+  `#directoryGoesThroughTheInstalledSourceLoader`,
+  `#wildPathnameComponentsBuildMatchTranslateAndWalk` (the wild-directory walk,
+  seven shapes diffed against SBCL on the same tree)
+- `JvmLispCompilerTest#directoryMatchesPathnamesAndDrivesTheUiopWalkers`,
+  `#wildPathnameComponentsBuildMatchTranslateAndWalk`
 - `WasmLispCompilerIntegrationTest#directoryListsEntriesOverFdReaddir`,
   `#directoryListingResumesPastOneReaddirRound` (400 files = several rounds),
   `#componentDirectoryListing`,
-  `#componentDirectoryListingWithoutAPreopenAnswersNil`
-- the `directory-listing-and-uiop-walkers` ci-spec case (all four backends)
+  `#componentDirectoryListingWithoutAPreopenAnswersNil`,
+  `#wildDirectoryComponentsDriveTheRecursiveWalk` + its component twin (the tree
+  is built with `mkdir` in the CONTAINER -- neither WASM backend can create a
+  directory, `.todo/257`)
+- the `directory-listing-and-uiop-walkers` and `wild-pathnames` ci-spec cases
+  (all four backends; the latter's walk half is limited to the zero-level branch
+  for the same mkdir reason)
 - the driver that asked for it: `(ql:quickload "local-time")` +
   `reread-timezone-repository` + `find-timezone-by-location-name`, verified by
   hand on all four backends (`.kb/asdf.md`)

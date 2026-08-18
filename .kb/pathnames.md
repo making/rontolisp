@@ -65,7 +65,8 @@ anything else unchanged, preserving the "non-string coerces to the empty
 namestring" tolerance) or the strict `namestring`, computes on namestrings,
 and wraps its answer with `(pathname ...)`. Internals (`%pathname-split`,
 `%dir-namestring`, `%wild-match`, `%wild-captures`, `%wild-component-p`,
-`%temp-file-name`, the `%probe-file` / `%list-directory` / `%delete-file` /
+`%wild-inferiors-at`, `%pathname-directory-component`, `%path-dir-parts`,
+`%wild-dirs`, `%directory-subdirs`, `%directory-in`, `%temp-file-name`, the `%probe-file` / `%list-directory` / `%delete-file` /
 `%make-directories` / `%rename-file` primitives) stay string-typed on every
 backend.
 
@@ -133,6 +134,44 @@ the gate by itself.
 - `.todo/222` folded in: `make-pathname` has a runtime form AND a distinct
   value on all four backends.
 
+## Wild components: `:wild` / `:wild-inferiors` (todo-441)
+
+CL's directory list carries KEYWORDS for the special levels, and the flat model
+renders each one as the namestring text CL prints for it -- `:up`/`:back` ->
+`..`, `:wild` -> `*`, `:wild-inferiors` -> `**` (`%pathname-directory-string`,
+and its Java twin `PathnameOps.formatDirectory` for the compile-time fold).
+`:wild` is also `:name`/`:type`'s `*` (`%pathname-component-string`); it used to
+render as the string `"WILD"`, which is the half of this the todo assumed was
+already working.
+
+**The round trip is the namestring, and it is total.** A wild pathname prints as
+`#P"/a/**/*.lisp"`, which the reader reads straight back -- there is no separate
+"wild pathname" representation to lose, because there is no structured pathname
+at all. Decomposition is therefore defined as the exact INVERSE of construction:
+`pathname-directory` maps `..`/`*`/`**` back to `:up`/`:wild`/`:wild-inferiors`
+(`%pathname-directory-component`) and `pathname-name`/`pathname-type` answer
+`:wild` for a component that is exactly `*`. Only an EXACT match is a keyword --
+`"a*"` stays the string it is, which is what SBCL answers too. `%pathname-split`
+itself stays string-typed: it is what `directory`'s matcher and
+`make-pathname`'s `:defaults` defaulting read.
+
+**`**/` is ONE matcher token, separator included.** `%wild-inferiors-at` is the
+single spelling of "a wild-inferiors segment starts here", read by
+`%wild-match`, `%wild-captures` AND `translate-pathname`'s substitution scan, so
+the three cannot disagree about where one begins. The trailing `/` is part of
+the token because the token matches ZERO levels as well as many -- only
+swallowing the separator lets `"/a/**/*.lisp"` match `"/a/c.lisp"`, which is
+what CL does and what two plain `*`s could not express. It contributes ONE
+capture (the whole run of levels, `""` when it took none) and a `**/` in the
+to-wildcard writes that capture back verbatim.
+
+Building a wild pathname is filesystem-INDEPENDENT and stays working where there
+is no filesystem (browser playground, `--no-wasi`): everything above is string
+work. Only `directory`'s WALK touches `%list-directory`
+(`.kb/directory-listing.md`). `cli/CompileTimePathnameFolder` needed nothing
+beyond the `PathnameOps` component rules -- a folded wild pathname is just a
+`#P` literal like any other.
+
 ## Known lite edges (deliberate)
 
 - `(eql #P"a" #P"a")` is T on the interpreter (structural `LispInstance.equals`)
@@ -164,9 +203,10 @@ drift:
   after validating the designator through the strict `namestring`.
 - `wild-pathname-p` -- `%wild-component-p` (holds a `*` or a `?`) applied to the
   component the optional field key names, or to all of them. It reads the SAME
-  `%pathname-split` the rest of the family does and the same two wildcards
+  `%pathname-split` the rest of the family does and the same wildcards
   `%wild-match` matches with, so the predicate and `directory`'s matcher cannot
-  disagree.
+  disagree. A `**` directory component is wild by that one rule, with nothing
+  added for it.
 - `enough-namestring` -- the INVERSE of `merge-pathnames`: the merge prefixes a
   relative namestring with the defaults' directory, so the shortest namestring
   is the path with that prefix removed, and the whole namestring when it does
@@ -176,6 +216,17 @@ drift:
   list can collide with, and `*` is tried SHORTEST first so `"*/*.*"` splits at
   the first `/`), then substitution into the to-wildcard left to right. Matching
   runs over the FLAT namestring, so a `*` may span a `/`.
+
+  **Substitution is POSITIONAL, not component-wise, and that is a measured
+  divergence.** CL maps directory to directory, name to name, type to type, so
+  a to-wildcard holding FEWER wildcards than the from-wildcard takes the ones
+  that correspond -- SBCL answers `"x/b-y.c"` for `(translate-pathname "a/b.c"
+  "*/*.*" "x/*-y.*")` where this answers `"x/a-y.b"`, because the literal `x`
+  consumes nothing and every later capture is off by one. Closing it means a
+  component-wise translate over the split, which is `.todo/447`; what makes the
+  gap survivable is that the shapes libraries actually write have the SAME
+  wildcard sequence on both sides, where positional and component-wise agree.
+  Re-evaluate when a caller writes an asymmetric pair.
 - `rename-file` -- prelude Lisp over the new `%rename-file` primitive, the third
   write-side sibling of `%list-directory` / `%make-directories` /
   `%delete-file`: interpreter (`Files.move`) and JVM (`_renameFile`, a
@@ -238,3 +289,10 @@ verbatim), `lite-builtins-residue`, `probe-file-existing-and-missing`,
 add `Jvm/WasmLispCompilerTest#namestringHalvesNstringCaseAndEnvironmentEnquiry`
 (plus the component twin) and the ci-spec case
 `namestring-halves-nstring-case-and-environment-enquiry`.
+
+The wild components add `LispEvaluatorTest` /
+`JvmLispCompilerTest#wildPathnameComponentsBuildMatchTranslateAndWalk`,
+`WasmLispCompilerIntegrationTest#wildDirectoryComponentsDriveTheRecursiveWalk`
+plus its component twin, and the `wild-pathnames` ci-spec case. Every
+expectation in them was diffed against SBCL -- the `directory` shapes on the
+same tree.

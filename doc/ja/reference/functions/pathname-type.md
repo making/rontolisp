@@ -15,7 +15,8 @@
 ```
 
 `(pathname-type "d/a")` は `NIL`、`(pathname-type "d/.a")` は `NIL`、
-`(pathname-type "d/a.b.c")` は `"c"` です。
+`(pathname-type "d/a.b.c")` は `"c"` です。型がちょうど `*` の場合は `:WILD` を
+返します。[`make-pathname`](make-pathname.md) がそれを組み立てるときのキーワードです。
 
 ## バックエンドサポート
 

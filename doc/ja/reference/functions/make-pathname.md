@@ -3,8 +3,21 @@
 `(make-pathname &key directory name type defaults)`
 
 構成要素からパス名を組み立てます。`:directory` (Common Lisp のリスト形式 — `:absolute` または
-`:relative` に続けて階層ごとに 1 つの文字列 — かディレクトリのパス名文字列)、`:name`
-(型を除いたファイル名)、`:type` (ドットを除いた拡張子) を指定します。`:host`、
+`:relative` に続けて階層ごとに 1 つの構成要素 — かディレクトリのパス名文字列)、`:name`
+(型を除いたファイル名)、`:type` (ドットを除いた拡張子) を指定します。
+
+ディレクトリの構成要素には文字列のほか、Common Lisp が特別な階層に付けている
+キーワードを書けます。`:up` / `:back` (`..`)、`:wild` (`*`、1 階層)、
+`:wild-inferiors` (`**`、任意の階層数) です。`:name` と `:type` の `*` も `:wild` です。
+
+```lisp
+(namestring (make-pathname :directory (list :absolute "a" :wild-inferiors)
+                           :name :wild :type "lisp"))   ; => "/a/**/*.lisp"
+```
+
+これは [`directory`](directory.md) がサブツリー全体を辿るときの pathspec であり、
+[`translate-pathname`](translate-pathname.md) が変換元に取るワイルドカードでもあります。
+`:host`、
 `:device`、`:version`、`:case` は受け付けて捨てられ、それ以外のキーワードも同様です。
 パス名文字列にはそうした構成要素がなく、また移植性レイヤからの呼び出しがそのまま
 動くようにするためです。

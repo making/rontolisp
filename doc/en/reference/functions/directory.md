@@ -31,9 +31,16 @@ A **non-wild pathspec designates itself**, as in Common Lisp: `"d/a.txt"` answer
 form -- both `"d"` and `"d/"` give `(#P"d/")`. **Listing a directory is
 `"d/*.*"`, not `"d/"`.**
 
-The DIRECTORY components are never wild: a rontolisp pathname carries a flat
-namestring, with no structured directory list to walk, so `"src/*/f.lisp"`
-matches nothing.
+A **wild directory component** expands the prefix before the name is matched.
+`*` walks exactly one level and `**` walks the whole subtree -- and, as in Common
+Lisp, `**` matches ZERO levels as well as many, so the base directory's own files
+come back too:
+
+| pathspec | answer |
+|---|---|
+| `"d/*/*.lisp"` | the `.lisp` files one level below `d/` |
+| `"d/**/*.lisp"` | every `.lisp` file in `d/` and anywhere below it |
+| `"d/**/"` | `d/` itself and every directory below it |
 
 Every expectation above is the same answer SBCL gives for the same tree.
 

@@ -9438,6 +9438,67 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunComponentWithDir(DIRECTORY_LISTING_PROGRAM)).isEqualTo(DIRECTORY_LISTING_EXPECTED);
 	}
 
+	// The wild-DIRECTORY walk. The tree is built with mkdir in the container because
+	// neither WASM backend has a directory-creating primitive (.todo/257), and it is
+	// removed again so the scratch dir stays flat for the next case.
+	private static final String WILD_TREE_PROGRAM = """
+			(print (namestring (make-pathname :directory '(:absolute "a" :wild-inferiors)
+			                                  :name :wild :type "lisp")))
+			(print (list (pathname-directory "/a/**/x.lisp") (pathname-name "/a/**/*.lisp")))
+			(print (list (wild-pathname-p "/a/**/x.lisp" :directory)
+			             (wild-pathname-p "/a/**/x.lisp" :name)))
+			(print (namestring (translate-pathname "/a/b/d/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
+			(print (namestring (translate-pathname "/a/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
+			(print (directory "./wt/**/*.lisp"))
+			(print (directory "./wt/*/*.lisp"))
+			(print (directory "./wt/**/"))
+			(print (directory "./nope/**/*.lisp"))
+			""";
+
+	private static final String WILD_TREE_EXPECTED = """
+			"/a/**/*.lisp"
+			((:ABSOLUTE "a" :WILD-INFERIORS) :WILD)
+			(T NIL)
+			"/x/b/d/c.fasl"
+			"/x/c.fasl"
+			(#P"./wt/b/c/deep.lisp" #P"./wt/b/mid.lisp" #P"./wt/top.lisp")
+			(#P"./wt/b/mid.lisp")
+			(#P"./wt/" #P"./wt/b/" #P"./wt/b/c/" #P"./wt/d/")
+			NIL""";
+
+	private static final String WILD_TREE_MKDIR = "mkdir -p wt/b/c wt/d && echo 1 > wt/top.lisp"
+			+ " && echo 2 > wt/b/mid.lisp && echo 3 > wt/b/c/deep.lisp && echo 4 > wt/d/x.txt";
+
+	@Test
+	void wildDirectoryComponentsDriveTheRecursiveWalk() throws Exception {
+		assertThat(compileAndRunWildTree(false)).isEqualTo(WILD_TREE_EXPECTED);
+	}
+
+	@Test
+	void componentWildDirectoryComponentsDriveTheRecursiveWalk() throws Exception {
+		assertThat(compileAndRunWildTree(true)).isEqualTo(WILD_TREE_EXPECTED);
+	}
+
+	private static String compileAndRunWildTree(boolean component) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(WILD_TREE_PROGRAM));
+		String module = component ? "wildtree.component.wasm" : "wildtree.wasm";
+		byte[] bytes = component ? new WasmLispCompiler(false, true).compile(program)
+				: new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(bytes), path(module));
+		String run = component ? "wasmtime run -W gc=y -W exceptions=y --dir . " + module
+				: "wasmtime --wasm gc --wasm exceptions=y --dir . " + module;
+		try {
+			ExecResult result = wasmtime.execInContainer("bash", "-c",
+					"cd " + workDir() + " && " + WILD_TREE_MKDIR + " && " + run);
+			assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+			return result.getStdout().trim();
+		}
+		finally {
+			wasmtime.execInContainer("bash", "-c", "rm -rf " + workDir() + "/wt " + path(module));
+		}
+	}
+
 	@Test
 	void componentDirectoryListingWithoutAPreopenAnswersNil() throws Exception {
 		// No --dir at all: path_open cannot even name a directory, and the answer must

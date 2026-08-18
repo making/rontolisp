@@ -440,13 +440,19 @@ public final class LispPreludeLibrary {
 				        (list %ps-d (if (string= %ps-f "") nil %ps-f) nil)
 				        (list %ps-d (subseq %ps-f 0 %ps-dot) (subseq %ps-f (+ %ps-dot 1))))))
 				""");
+		// A component that is exactly "*" answers :wild -- the keyword make-pathname
+		// builds it from, so decomposition is the inverse of construction here as it is
+		// for the directory list. %pathname-split itself stays string-typed: it is what
+		// directory's matcher and make-pathname's :defaults defaulting read.
 		SOURCES.put(LispNames.PATHNAME_NAME, """
 				(defun pathname-name (%pn-path)
-				  (second (%pathname-split %pn-path)))
+				  (let ((%pn-n (second (%pathname-split %pn-path))))
+				    (if (equal %pn-n "*") :wild %pn-n)))
 				""");
 		SOURCES.put(LispNames.PATHNAME_TYPE, """
 				(defun pathname-type (%pt-path)
-				  (third (%pathname-split %pt-path)))
+				  (let ((%pt-t (third (%pathname-split %pt-path))))
+				    (if (equal %pt-t "*") :wild %pt-t)))
 				""");
 		// The three components a rontolisp namestring does not model. Every one answers
 		// nil -- the answer CL prescribes for a component that is not present, and the
@@ -534,17 +540,42 @@ public final class LispPreludeLibrary {
 				(defun host-namestring (%hns-path)
 				  (progn (namestring %hns-path) ""))
 				""");
+		// %wild-inferiors-at: the ONE spelling of "a wild-inferiors segment starts here",
+		// read by %wild-match, %wild-captures and translate-pathname's substitution scan.
+		// The token is THREE characters -- ** plus the separator -- because it matches
+		// ZERO levels as well as many, and only swallowing the separator lets
+		// "/a/**/*.lisp" match "/a/c.lisp" the way CL does.
+		SOURCES.put(LispNames.WILD_INFERIORS_AT, """
+				(defun %wild-inferiors-at (%wia-pat %wia-p)
+				  (and (< (+ %wia-p 2) (length %wia-pat))
+				       (char= (char %wia-pat %wia-p) #\\*)
+				       (char= (char %wia-pat (+ %wia-p 1)) #\\*)
+				       (char= (char %wia-pat (+ %wia-p 2)) #\\/)
+				       t))
+				""");
 		// %wild-captures: the CAPTURING twin of %wild-match -- one matcher rule, two
 		// answers. Each wildcard contributes the substring it consumed (one character
-		// for a ?), left to right; :no-match is the failure answer, which no capture
-		// list can collide with. * is tried SHORTEST first, so (translate-pathname
-		// "a/b.c" "*/*.*" "x/*.*") substitutes "b" and "c" rather than letting the
-		// first star swallow the rest.
+		// for a ?, the whole run of directory levels for a **/), left to right;
+		// :no-match is the failure answer, which no capture list can collide with. * is
+		// tried SHORTEST first, so (translate-pathname "a/b.c" "*/*.*" "x/*.*")
+		// substitutes "b" and "c" rather than letting the first star swallow the rest,
+		// and a **/ likewise tries zero levels before one.
 		SOURCES.put(LispNames.WILD_CAPTURES, """
 				(defun %wild-captures (%wcp-pat %wcp-str)
 				  (let ((%wcp-pn (length %wcp-pat)) (%wcp-sn (length %wcp-str)))
 				    (labels ((m (p s acc)
 				               (cond ((>= p %wcp-pn) (if (>= s %wcp-sn) (reverse acc) :no-match))
+				                     ((%wild-inferiors-at %wcp-pat p)
+				                      (let ((%wcp-r :no-match) (%wcp-e s) (%wcp-done nil))
+				                        (do () ((or (not (eq %wcp-r :no-match)) %wcp-done) %wcp-r)
+				                          (setq %wcp-r
+				                                (m (+ p 3) %wcp-e
+				                                   (cons (subseq %wcp-str s %wcp-e) acc)))
+				                          (when (eq %wcp-r :no-match)
+				                            (let ((%wcp-k (position #\\/ %wcp-str :start %wcp-e)))
+				                              (if %wcp-k
+				                                  (setq %wcp-e (+ %wcp-k 1))
+				                                  (setq %wcp-done t)))))))
 				                     ((char= (char %wcp-pat p) #\\*)
 				                      (let ((r :no-match) (e s))
 				                        (do () ((or (not (eq r :no-match)) (> e %wcp-sn)) r)
@@ -570,14 +601,20 @@ public final class LispPreludeLibrary {
 				               (%tp-i 0))
 				          (do () ((>= %tp-i %tp-n) (pathname %tp-acc))
 				            (let ((%tp-c (char %tp-t %tp-i)))
-				              (if (or (char= %tp-c #\\*) (char= %tp-c #\\?))
-				                  (progn
-				                    (setq %tp-acc (concatenate 'string %tp-acc
-				                                               (if %tp-caps (car %tp-caps) "")))
-				                    (setq %tp-caps (cdr %tp-caps)))
-				                  (setq %tp-acc (concatenate 'string %tp-acc
-				                                             (subseq %tp-t %tp-i (+ %tp-i 1)))))
-				              (setq %tp-i (+ %tp-i 1))))))))
+				              (cond ((%wild-inferiors-at %tp-t %tp-i)
+				                     (setq %tp-acc (concatenate 'string %tp-acc
+				                                                (if %tp-caps (car %tp-caps) "")))
+				                     (setq %tp-caps (cdr %tp-caps))
+				                     (setq %tp-i (+ %tp-i 3)))
+				                    ((or (char= %tp-c #\\*) (char= %tp-c #\\?))
+				                     (setq %tp-acc (concatenate 'string %tp-acc
+				                                                (if %tp-caps (car %tp-caps) "")))
+				                     (setq %tp-caps (cdr %tp-caps))
+				                     (setq %tp-i (+ %tp-i 1)))
+				                    (t
+				                     (setq %tp-acc (concatenate 'string %tp-acc
+				                                                (subseq %tp-t %tp-i (+ %tp-i 1))))
+				                     (setq %tp-i (+ %tp-i 1))))))))))
 				""");
 		// Every rontolisp pathname is PHYSICAL: there are no logical hosts, so no
 		// translation table exists to consult and the translation is the identity --
@@ -616,6 +653,7 @@ public final class LispPreludeLibrary {
 				                                      ((eq %pds-c :up) "..")
 				                                      ((eq %pds-c :back) "..")
 				                                      ((eq %pds-c :wild) "*")
+				                                      ((eq %pds-c :wild-inferiors) "**")
 				                                      (t (error "MAKE-PATHNAME: unsupported :directory component ~S"
 				                                                %pds-c)))
 				                                "/")))
@@ -653,6 +691,7 @@ public final class LispPreludeLibrary {
 				(defun %pathname-component-string (%pcs-v)
 				  (cond ((null %pcs-v) "")
 				        ((stringp %pcs-v) %pcs-v)
+				        ((eq %pcs-v :wild) "*")
 				        ((symbolp %pcs-v) (string %pcs-v))
 				        (t (error "MAKE-PATHNAME: :name and :type must be a string or nil, got ~S" %pcs-v))))
 				""");
@@ -797,6 +836,19 @@ public final class LispPreludeLibrary {
 		// otherwise -- the leading t is what tells an EMPTY directory from a missing
 		// one, which a bare list cannot. Names come back in the host's order and are
 		// sorted here, so the same program prints the same listing everywhere.
+		// %pathname-directory-component: the INVERSE of the per-component rendering
+		// %pathname-directory-string performs, so (make-pathname :directory
+		// (pathname-directory p)) reproduces p's directory for every shape, wild
+		// components included. Only an EXACT * / ** / .. is a keyword -- "a*" is an
+		// ordinary (wild-matching) name, which is what CL calls a :wild component's
+		// pattern form and what SBCL answers as a string here too.
+		SOURCES.put(LispNames.PATHNAME_DIRECTORY_COMPONENT, """
+				(defun %pathname-directory-component (%pdc-s)
+				  (cond ((string= %pdc-s "*") :wild)
+				        ((string= %pdc-s "**") :wild-inferiors)
+				        ((string= %pdc-s "..") :up)
+				        (t %pdc-s)))
+				""");
 		SOURCES.put(LispNames.PATHNAME_DIRECTORY, """
 				(defun pathname-directory (%pd-path)
 				  (let* ((%pd-x (%path-ns %pd-path))
@@ -808,7 +860,10 @@ public final class LispPreludeLibrary {
 				          (dotimes (%pd-i (+ %pd-s 1))
 				            (when (char= (char %pd-p %pd-i) #\\/)
 				              (when (> %pd-i %pd-start)
-				                (setq %pd-acc (cons (subseq %pd-p %pd-start %pd-i) %pd-acc)))
+				                (setq %pd-acc
+				                      (cons (%pathname-directory-component
+				                              (subseq %pd-p %pd-start %pd-i))
+				                            %pd-acc)))
 				              (setq %pd-start (+ %pd-i 1))))
 				          (cons (if (char= (char %pd-p 0) #\\/) :absolute :relative)
 				                (reverse %pd-acc))))))
@@ -823,6 +878,15 @@ public final class LispPreludeLibrary {
 				  (let ((%wm-pn (length %wm-pat)) (%wm-sn (length %wm-str)))
 				    (labels ((m (p s)
 				               (cond ((>= p %wm-pn) (>= s %wm-sn))
+				                     ((%wild-inferiors-at %wm-pat p)
+				                      (let ((%wm-r nil) (%wm-e s) (%wm-done nil))
+				                        (do () ((or %wm-r %wm-done) %wm-r)
+				                          (if (m (+ p 3) %wm-e)
+				                              (setq %wm-r t)
+				                              (let ((%wm-k (position #\\/ %wm-str :start %wm-e)))
+				                                (if %wm-k
+				                                    (setq %wm-e (+ %wm-k 1))
+				                                    (setq %wm-done t)))))))
 				                     ((char= (char %wm-pat p) #\\*)
 				                      (or (m (+ p 1) s)
 				                          (and (< s %wm-sn) (m p (+ s 1)))))
@@ -856,6 +920,81 @@ public final class LispPreludeLibrary {
 				         (%ede-d (if %ede-s (subseq %ede-p 0 (+ %ede-s 1)) "")))
 				    (if (string= %ede-d "") %ede-path (progn (%make-directories %ede-d) %ede-path))))
 				""");
+		// %directory-in: directory's per-directory half -- the entries of ONE directory
+		// prefix that the final (name) component matches, or the pathspec itself when
+		// that component is not wild. Split out of directory so the wild-DIRECTORY walk
+		// below runs the identical name matching in every directory it expanded to.
+		SOURCES.put(LispNames.DIRECTORY_IN, """
+				(defun %directory-in (%din-d %din-n)
+				  (if (or (position #\\* %din-n) (position #\\? %din-n))
+				      (let ((%din-e (%list-directory (if (string= %din-d "") "." %din-d)))
+				            (%din-acc nil))
+				        (dolist (%din-x (cdr %din-e))
+				          (let ((%din-b (if (char= (char %din-x (- (length %din-x) 1)) #\\/)
+				                            (subseq %din-x 0 (- (length %din-x) 1))
+				                            %din-x)))
+				            (when (or (string= %din-n "*.*")
+				                      (and (%wild-match %din-n %din-b)
+				                           (or (%pathname-typed-p %din-n)
+				                               (not (%pathname-typed-p %din-b)))))
+				              (setq %din-acc (cons (concatenate 'string %din-d %din-x) %din-acc)))))
+				        %din-acc)
+				      (let* ((%din-p (concatenate 'string %din-d %din-n))
+				             (%din-f (%dir-namestring %din-p)))
+				        (cond ((%list-directory (if (string= %din-f "") "." %din-f)) (list %din-f))
+				              ((and (string/= %din-n "") (probe-file %din-p)) (list %din-p))
+				              (t nil)))))
+				""");
+		SOURCES.put(LispNames.DIRECTORY_SUBDIRS, """
+				(defun %directory-subdirs (%dsd-base)
+				  (let ((%dsd-e (%list-directory (if (string= %dsd-base "") "." %dsd-base)))
+				        (%dsd-acc nil))
+				    (dolist (%dsd-x (cdr %dsd-e))
+				      (when (char= (char %dsd-x (- (length %dsd-x) 1)) #\\/)
+				        (setq %dsd-acc (cons %dsd-x %dsd-acc))))
+				    (sort %dsd-acc #'string<)))
+				""");
+		SOURCES.put(LispNames.PATH_DIR_PARTS, """
+				(defun %path-dir-parts (%pdp-d)
+				  (let ((%pdp-acc nil) (%pdp-start 0))
+				    (dotimes (%pdp-i (length %pdp-d))
+				      (when (char= (char %pdp-d %pdp-i) #\\/)
+				        (when (> %pdp-i %pdp-start)
+				          (setq %pdp-acc (cons (subseq %pdp-d %pdp-start %pdp-i) %pdp-acc)))
+				        (setq %pdp-start (+ %pdp-i 1))))
+				    (reverse %pdp-acc)))
+				""");
+		// %wild-dirs: the directory-component half of the walk. ** contributes the base
+		// ITSELF before descending, which is what makes :wild-inferiors match zero levels
+		// -- (directory "a/**/*.lisp") answers the files directly in a/ as well as those
+		// below it, exactly as SBCL does. Any other wild component descends exactly one
+		// level, matched by the same %wild-match the name component uses. The recursion
+		// terminates because %directory-subdirs only ever answers entries the host
+		// reports below the base.
+		SOURCES.put(LispNames.WILD_DIRS, """
+				(defun %wild-dirs (%wd-base %wd-comps)
+				  (if (null %wd-comps)
+				      (list %wd-base)
+				      (let ((%wd-c (car %wd-comps)) (%wd-rest (cdr %wd-comps)))
+				        (cond ((string= %wd-c "**")
+				               (let ((%wd-acc (%wild-dirs %wd-base %wd-rest)))
+				                 (dolist (%wd-s (%directory-subdirs %wd-base))
+				                   (setq %wd-acc
+				                         (append %wd-acc
+				                                 (%wild-dirs (concatenate 'string %wd-base %wd-s)
+				                                             %wd-comps))))
+				                 %wd-acc))
+				              ((%wild-component-p %wd-c)
+				               (let ((%wd-acc nil))
+				                 (dolist (%wd-s (%directory-subdirs %wd-base))
+				                   (when (%wild-match %wd-c (subseq %wd-s 0 (- (length %wd-s) 1)))
+				                     (setq %wd-acc
+				                           (append %wd-acc
+				                                   (%wild-dirs (concatenate 'string %wd-base %wd-s)
+				                                               %wd-rest)))))
+				                 %wd-acc))
+				              (t (%wild-dirs (concatenate 'string %wd-base %wd-c "/") %wd-rest))))))
+				""");
 		SOURCES.put(LispNames.DIRECTORY, """
 				(defun directory (%dir-spec)
 				  (let* ((%dir-x (%path-ns %dir-spec))
@@ -863,23 +1002,17 @@ public final class LispPreludeLibrary {
 				         (%dir-s (position #\\/ %dir-p :from-end t))
 				         (%dir-d (if %dir-s (subseq %dir-p 0 (+ %dir-s 1)) ""))
 				         (%dir-n (if %dir-s (subseq %dir-p (+ %dir-s 1)) %dir-p)))
-				    (if (or (position #\\* %dir-n) (position #\\? %dir-n))
-				        (let ((%dir-e (%list-directory (if (string= %dir-d "") "." %dir-d)))
-				              (%dir-acc nil))
-				          (dolist (%dir-x (cdr %dir-e))
-				            (let ((%dir-b (if (char= (char %dir-x (- (length %dir-x) 1)) #\\/)
-				                              (subseq %dir-x 0 (- (length %dir-x) 1))
-				                              %dir-x)))
-				              (when (or (string= %dir-n "*.*")
-				                        (and (%wild-match %dir-n %dir-b)
-				                             (or (%pathname-typed-p %dir-n)
-				                                 (not (%pathname-typed-p %dir-b)))))
-				                (setq %dir-acc (cons (concatenate 'string %dir-d %dir-x) %dir-acc)))))
-				          (mapcar #'pathname (sort %dir-acc #'string<)))
-				        (let ((%dir-f (%dir-namestring %dir-p)))
-				          (cond ((%list-directory (if (string= %dir-f "") "." %dir-f)) (list (pathname %dir-f)))
-				                ((and (string/= %dir-n "") (probe-file %dir-p)) (list (pathname %dir-p)))
-				                (t nil))))))
+				    (mapcar #'pathname
+				            (sort (if (%wild-component-p %dir-d)
+				                      (let ((%dir-acc nil))
+				                        (dolist (%dir-b (%wild-dirs
+				                                          (if (char= (char %dir-d 0) #\\/) "/" "")
+				                                          (%path-dir-parts %dir-d)))
+				                          (setq %dir-acc
+				                                (append %dir-acc (%directory-in %dir-b %dir-n))))
+				                        %dir-acc)
+				                      (%directory-in %dir-d %dir-n))
+				                  #'string<))))
 				""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from

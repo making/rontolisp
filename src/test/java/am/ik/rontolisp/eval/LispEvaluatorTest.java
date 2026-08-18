@@ -6290,6 +6290,56 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void wildPathnameComponentsBuildMatchTranslateAndWalk(@TempDir Path tempDir) throws Exception {
+		// Every expectation here was checked against SBCL 2.6.5 -- the directory forms on
+		// this very tree. :wild / :wild-inferiors are the DIRECTORY components CL names
+		// * and ** by, and :wild is the * of a name or type; construction, decomposition,
+		// wild-pathname-p, translate-pathname and the walk all read the one rule.
+		assertThat(eval("(namestring (make-pathname :directory '(:absolute \"a\" :wild-inferiors)"
+				+ " :name :wild :type \"lisp\"))"))
+			.isEqualTo(new LispString("/a/**/*.lisp"));
+		assertThat(eval("(namestring (make-pathname :directory '(:relative :wild) :name \"f\" :type \"lisp\"))"))
+			.isEqualTo(new LispString("*/f.lisp"));
+		assertThat(eval("(namestring (make-pathname :name :wild :type :wild))")).isEqualTo(new LispString("*.*"));
+		// Decomposition is the INVERSE of construction, keyword for keyword.
+		assertThat(eval("(list (pathname-directory \"/a/**/x.lisp\") (pathname-directory \"/a/*/x.lisp\")"
+				+ " (pathname-directory \"../a/\"))")
+			.print()).isEqualTo("((:ABSOLUTE \"a\" :WILD-INFERIORS) (:ABSOLUTE \"a\" :WILD) (:RELATIVE :UP \"a\"))");
+		assertThat(eval("(list (pathname-name \"/a/**/*.lisp\") (pathname-type \"/a/**/*.lisp\")"
+				+ " (pathname-name \"/a/b.c\"))")
+			.print()).isEqualTo("(:WILD \"lisp\" \"b\")");
+		assertThat(eval("(list (wild-pathname-p \"/a/**/x.lisp\") (wild-pathname-p \"/a/**/x.lisp\" :directory)"
+				+ " (wild-pathname-p \"/a/**/x.lisp\" :name) (wild-pathname-p \"/a/b.c\"))")
+			.print()).isEqualTo("(T T NIL NIL)");
+		// **/ is ONE token: it matches zero directory levels as well as many, which is
+		// what lets the second form translate a source with no inferiors at all.
+		assertThat(eval("(namestring (translate-pathname \"/a/b/d/c.lisp\" \"/a/**/*.lisp\" \"/x/**/*.fasl\"))"))
+			.isEqualTo(new LispString("/x/b/d/c.fasl"));
+		assertThat(eval("(namestring (translate-pathname \"/a/c.lisp\" \"/a/**/*.lisp\" \"/x/**/*.fasl\"))"))
+			.isEqualTo(new LispString("/x/c.fasl"));
+		// The recursive walk. tree/a holds top.lisp, b/mid.lisp, b/c/deep.lisp and
+		// d/x.txt; ** answers the base directory itself before descending, so
+		// "a/**/*.lisp" reaches top.lisp too.
+		Files.createDirectories(tempDir.resolve("a/b/c"));
+		Files.createDirectories(tempDir.resolve("a/d"));
+		Files.writeString(tempDir.resolve("a/top.lisp"), "1\n");
+		Files.writeString(tempDir.resolve("a/b/mid.lisp"), "2\n");
+		Files.writeString(tempDir.resolve("a/b/c/deep.lisp"), "3\n");
+		Files.writeString(tempDir.resolve("a/d/x.txt"), "4\n");
+		String dir = tempDir.toString().replace("\\", "\\\\");
+		assertThat(eval("(directory \"" + dir + "/a/**/*.lisp\")").print()).isEqualTo("(#P\"" + tempDir
+				+ "/a/b/c/deep.lisp\" #P\"" + tempDir + "/a/b/mid.lisp\" #P\"" + tempDir + "/a/top.lisp\")");
+		assertThat(eval("(directory \"" + dir + "/a/*/*.lisp\")").print())
+			.isEqualTo("(#P\"" + tempDir + "/a/b/mid.lisp\")");
+		assertThat(eval("(directory \"" + dir + "/**/*.txt\")").print()).isEqualTo("(#P\"" + tempDir + "/a/d/x.txt\")");
+		assertThat(eval("(directory \"" + dir + "/a/**/\")").print()).isEqualTo("(#P\"" + tempDir + "/a/\" #P\""
+				+ tempDir + "/a/b/\" #P\"" + tempDir + "/a/b/c/\" #P\"" + tempDir + "/a/d/\")");
+		assertThat(eval("(directory \"" + dir + "/a/*/\")").print())
+			.isEqualTo("(#P\"" + tempDir + "/a/b/\" #P\"" + tempDir + "/a/d/\")");
+		assertThat(eval("(directory \"" + dir + "/nope/**/*.lisp\")")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void uiopDirectoryWalkersRunOverTheSamePrimitive(@TempDir Path tempDir) throws Exception {
 		Files.writeString(tempDir.resolve("a.txt"), "a\n");
 		Files.createDirectory(tempDir.resolve("sub"));

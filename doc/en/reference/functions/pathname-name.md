@@ -21,6 +21,10 @@ three can never disagree.
 `(pathname-name "d/a")` is `"a"`, `(pathname-name "d/.a")` is `".a"`,
 `(pathname-name "d/a.b.c")` is `"a.b"`, and `(pathname-name "d/")` is `NIL`.
 
+A name that is exactly `*` answers `:WILD` -- the keyword
+[`make-pathname`](make-pathname.md) builds it from, so decomposition is the
+inverse of construction here too.
+
 ## Backend support
 
 All four backends -- one definition in rontolisp source over primitives every
