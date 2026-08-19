@@ -34,7 +34,7 @@ rontolisp の WASM ビルドをブラウザへ届ける経路は 2 つありま�
 **`--no-gc --component` は何も必要としません。** その world はインポートを持たないため、jco は自己完結した単一の ES モジュール(コア WASM が base64 で内部に埋め込まれ、`count-vowels` の例で約 90 KB)を、それ自身の `import` 文なしで出力します。ページ側が供給するものは何もありません — シムも、import map も、ポリフィルも不要です:
 
 ```bash
-rontolisp count-vowels.lisp --no-gc --component --optimize -o cv.wasm
+rontolisp count-vowels.lisp --no-gc --component -o cv.wasm
 npx @bytecodealliance/jco transpile cv.wasm -o dist
 ```
 
@@ -68,10 +68,10 @@ npx @bytecodealliance/jco transpile cv.wasm -o dist
 (rontolisp:wasm-export 'in-range :params '(:int :int :int) :returns :bool)
 ```
 
-`--no-gc`(任意のエンジンで動く)と `--optimize`(エクスポートから到達不能なものをすべて落とす — ここではモジュール全体が約 200 バイト)でコンパイルします:
+任意のエンジンで動くように `--no-gc` でコンパイルします。エクスポートから到達不能なものは指定しなくてもすべて落ちるため、ここではモジュール全体が約 200 バイトになります:
 
 ```bash
-rontolisp mathkit.lisp --no-gc --optimize -o mathkit.wasm
+rontolisp mathkit.lisp --no-gc -o mathkit.wasm
 ```
 
 Node 18+ では、これを `run.mjs` として保存して `node run.mjs` を実行します:
@@ -117,7 +117,7 @@ false
 言葉だけでなく、実際に確かめます — 同じソースを `--no-wasi` で再コンパイルし、`run.mjs` はそのまま変更せずに実行します:
 
 ```bash
-rontolisp mathkit.lisp --no-wasi --optimize -o mathkit.wasm
+rontolisp mathkit.lisp --no-wasi -o mathkit.wasm
 node run.mjs
 ```
 
@@ -143,7 +143,7 @@ false
 ```
 
 ```bash
-rontolisp greetkit.lisp --no-gc --optimize -o greetkit.wasm
+rontolisp greetkit.lisp --no-gc -o greetkit.wasm
 ```
 
 ```js
@@ -189,7 +189,7 @@ Hello, rontolisp!
 ```
 
 ```bash
-rontolisp textkit.lisp --no-wasi --optimize -o textkit.wasm
+rontolisp textkit.lisp --no-wasi -o textkit.wasm
 ```
 
 ```js

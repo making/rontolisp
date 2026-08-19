@@ -361,7 +361,7 @@ Two consequences worth knowing:
   `ql:quickload "clack"` program and a bare `rontolisp:http-handler` one serve
   at nearly the same rate under wasmtime for exactly this reason, and at
   visibly different rates under wasmCloud.
-- **`--optimize` is about size, not speed here.** It tree-shakes the compiled
+- **Tree shaking is about size, not speed here.** It shakes the compiled
   core module (a serve component loses a few percent; a non-serve component can
   lose 90%), which shortens instantiation slightly, but it does not change the
   steady-state per-request cost.

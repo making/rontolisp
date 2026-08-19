@@ -38,7 +38,7 @@ wasmtime run -W gc=y --dir . fileio.wasm
 - TCP ソケット(`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`)はコンポーネントモードで `wasi:sockets@0.3.0` の上で動作します(ネイティブに WASI 0.3 — 0.2 ハイブリッドではありません)。ソケットは双方向ストリームハンドルなので、`read-line` / `write-line` / `write-string` / `read-byte` / `write-byte` / `close` が直接使えます。ソケットコンポーネントは通常のフラグに加えて `-W exceptions=y -S tcp=y -S inherit-network=y` で実行してください(tcp コンポーネントは常に exception-handling モードでコンパイルされます)。`-S` フラグがなくてもコンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` を返します。ホストは IPv4 リテラルでなければなりません(ホスト名解決はまだありません)。`rontolisp:fetch` と tcp 関数は 1 つのコンポーネントで組み合わせられ、tcp は `rontolisp:http-handler`(serve)コンポーネントの中でも使えます。async 本体では、保留中の `tcp-accept` やソケット読み取りはそのタスクだけをサスペンドします — 他のタスク(`rontolisp:wait-for` タイマーや別のリクエスト)は動き続けます。API 全体は [TCP ソケットガイド](tcp-sockets.md)を参照してください。
 - それ以外の点では、コンパイルされた Lisp はサポートされる機能について Preview 1 出力と同一に振る舞います。受信 HTTP のサービング(`rontolisp:http-handler`)もコンポーネントにコンパイルされますが、別種のコンポーネント(`wasi:http/handler@0.3.0` をエクスポート)で、`wasmtime serve` のもとで動きます — [HTTP ハンドラーガイド](http-handler.md)を参照してください。
 
-`--optimize` なしでビルドしたコンポーネントは、プログラムがそれらを使うかどうかに関わらず上記すべてを宣言するため、インポート表面はどのプログラムでも同じです。[`--optimize`](../compiling/wasm.md#optimize-tree-shaking) を付けると表面はプログラムに追随します: 表示だけを行うコンポーネントは `wasi:cli/{types,stdout}` だけをインポートし、それ以外はありません — `wasi:cli/stderr` が加わるのは、プログラムが実際にそこへ書ける場合([`warn`](../reference/macros/warn.md)、`*error-output*`、または捕捉されなかったコンディションが出す報告)だけです。これは `wasm-tools component wit` の出力にも、後述の `--emit-wit` の出力にも現れます。実行時のフラグは何も変わりません — ホストが提供すべきものが減るだけです。
+インポート表面は[ツリーシェイキング](../compiling/wasm.md#optimize-tree-shaking)によって狭められ、プログラムに追随します: 表示だけを行うコンポーネントは `wasi:cli/{types,stdout}` だけをインポートし、それ以外はありません — `wasi:cli/stderr` が加わるのは、プログラムが実際にそこへ書ける場合([`warn`](../reference/macros/warn.md)、`*error-output*`、または捕捉されなかったコンディションが出す報告)だけです。これは `wasm-tools component wit` の出力にも、後述の `--emit-wit` の出力にも現れます。実行時のフラグは何も変わりません — ホストが提供すべきものが減るだけです。`--optimize=off` でビルドしたコンポーネントは、代わりにプログラムがそれらを使うかどうかに関わらず上記すべてを宣言するため、インポート表面はどのプログラムでも同じになります。
 
 ## コンポーネントモデル関数エクスポート(`wasm-export`)
 
@@ -108,7 +108,7 @@ wasmtime run -W gc=y -W exceptions=y -S http=y \
 
 ## リアクターコンポーネント(`--component --no-wasi`)
 
-`--no-wasi` を追加すると**リアクターコンポーネント**が出力されます: **何もインポートしない**コンポーネントです。WASI 表面が一切なく — `wasm-tools component wit` は `--optimize` の有無に関わらず `import` 行を 1 行も表示しません — 任意のコンポーネントホストが空のインポートオブジェクトでインスタンス化でき、エクスポートはリフトされた `wasm-export` 関数だけです(`wasi:cli/run` エントリはありません):
+`--no-wasi` を追加すると**リアクターコンポーネント**が出力されます: **何もインポートしない**コンポーネントです。WASI 表面が一切なく — `wasm-tools component wit` はどの `--optimize` レベルでも `import` 行を 1 行も表示しません — 任意のコンポーネントホストが空のインポートオブジェクトでインスタンス化でき、エクスポートはリフトされた `wasm-export` 関数だけです(`wasi:cli/run` エントリはありません):
 
 ```lisp
 ;; greet-reactor.lisp

@@ -10,8 +10,8 @@ see [below](#strings) — and the single `fd_write` import only when it
 with no import object and runs on any MVP-class runtime with **no `-W gc`**:
 
 ```bash
-rontolisp fact.lisp --no-gc --optimize -o fact.wasm
-wasmtime run --invoke fact fact.wasm 5      # => 120, ~76 bytes, no -W gc needed
+rontolisp fact.lisp --no-gc -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no -W gc needed
 ```
 
 It achieves this by lowering each value directly onto an unboxed wasm
@@ -152,7 +152,7 @@ keeps the floating-point escape-time loop but returns the rendered grid as
 one string instead of printing it:
 
 ```console
-$ rontolisp examples/console/mandelbrot-nogc.lisp --no-gc --optimize -o mandelbrot.wasm
+$ rontolisp examples/console/mandelbrot-nogc.lisp --no-gc -o mandelbrot.wasm
 $ node -e '(async () => {
   const ex = (await WebAssembly.instantiate(
     require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;
@@ -409,7 +409,7 @@ Trade-offs against the plain `--no-gc` output, and current limits:
 - The export name must be a lower-kebab-case component-model name; for a
   Lisp name outside that grammar the compiler asks you to rename it with
   `:as`.
-- `--optimize` composes: the core module is tree-shaken before the wrap.
+- Tree shaking composes: the core module is shaken before the wrap.
 - [`--emit-wit`](wit-contracts.md#emitting-the-wit-world---emit-wit)
   composes too, and writes a tiny import-free world of just the typed
   exports (plus the `wasi:cli/stdout@0.3.0` import — and `async func`

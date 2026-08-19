@@ -1058,7 +1058,7 @@ public final class RontoLispCli {
 		this.out.println("                     JVM: drop methods unreachable from main + compact the constant pool");
 		this.out.println("                     A function the program never takes as a value gets no funcall");
 		this.out.println("                     dispatch case, so library code goes too -- unless the program");
-		this.out.println("                     can name a function at run time (eval/read/intern/...), which");
+		this.out.println("                     can name a function out of data (eval/read/load/~/name/), which");
 		this.out.println("                     keeps everything. -Drontolisp.debug.dispatchgate=true says which");
 		this.out.println("                     LEVEL says what to optimize FOR (no flag = bare flag = default)");
 		this.out.println("                       off      drop nothing: what the backends emit on their own,");

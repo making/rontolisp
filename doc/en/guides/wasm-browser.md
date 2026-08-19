@@ -51,7 +51,7 @@ inside it, about 90 KB for `count-vowels` — with no `import` statements of
 its own. The page supplies no shim, no import map and no polyfill:
 
 ```bash
-rontolisp count-vowels.lisp --no-gc --component --optimize -o cv.wasm
+rontolisp count-vowels.lisp --no-gc --component -o cv.wasm
 npx @bytecodealliance/jco transpile cv.wasm -o dist
 ```
 
@@ -116,12 +116,12 @@ Start with a small kit of three exports:
 (rontolisp:wasm-export 'in-range :params '(:int :int :int) :returns :bool)
 ```
 
-Compile it with `--no-gc` (runs on any engine) and `--optimize` (drops
-everything unreachable from the exports — here the whole module is ~200
-bytes):
+Compile it with `--no-gc` so it runs on any engine; everything unreachable from
+the exports is dropped without asking, which here leaves a whole module of ~200
+bytes:
 
 ```bash
-rontolisp mathkit.lisp --no-gc --optimize -o mathkit.wasm
+rontolisp mathkit.lisp --no-gc -o mathkit.wasm
 ```
 
 On Node 18+, save this as `run.mjs` and run `node run.mjs`:
@@ -174,7 +174,7 @@ Proof, not just assertion — recompile the same source with `--no-wasi` and
 run the unchanged `run.mjs`:
 
 ```bash
-rontolisp mathkit.lisp --no-wasi --optimize -o mathkit.wasm
+rontolisp mathkit.lisp --no-wasi -o mathkit.wasm
 node run.mjs
 ```
 
@@ -213,7 +213,7 @@ enough to show the protocol:
 ```
 
 ```bash
-rontolisp greetkit.lisp --no-gc --optimize -o greetkit.wasm
+rontolisp greetkit.lisp --no-gc -o greetkit.wasm
 ```
 
 ```js
@@ -271,7 +271,7 @@ current browser):
 ```
 
 ```bash
-rontolisp textkit.lisp --no-wasi --optimize -o textkit.wasm
+rontolisp textkit.lisp --no-wasi -o textkit.wasm
 ```
 
 ```js

@@ -149,7 +149,7 @@ npx @bytecodealliance/jco types sumsq.wit -o types/
 # types/sumsq.d.ts: export function sumsquared(p0: number, p1: number): number;
 ```
 
-world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは `wasi:cli/stdout@0.3.0` のインポート — と `async func` のエクスポート — を持ちます)。さらに [`--optimize`](../compiling/wasm.md#optimize-tree-shaking) を付けると、そのバリアントのうちプログラムが実際に到達できる部分だけになります: 上の world は本当に必要な 2 つの `wasi:cli` インポートまで縮みます。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/handler@0.3.0` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
+world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは `wasi:cli/stdout@0.3.0` のインポート — と `async func` のエクスポート — を持ちます)。さらに、[ツリーシェイキング](../compiling/wasm.md#optimize-tree-shaking)は `--optimize=off` を渡さない限り有効なので、そのバリアントのうちプログラムが実際に到達できる部分だけになります: 上の world はビルドバリアントの固定表面すべてではなく、本当に必要な 2 つの `wasi:cli` インポートです。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/handler@0.3.0` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
 
 ### `--emit-wit` は何のためにあるか
 
@@ -157,7 +157,7 @@ world のインポートはビルドのバリアントに従います(プレー�
 
 **world を持たないプログラム** — `rontolisp:wasm-export` で手書きしたエクスポート、あるいは WIT の綴り自体が存在しない `:s-expr` エクスポート — には `.wit` がどこにもありません。上のとおり、`--emit-wit` がそれを得る唯一の手段です。
 
-**world を持つプログラム**([`wit-export`](#implementing-a-wit-world-wit-export))は、エクスポートについてはすでに書き下しています。書き下していないのはコンポーネントの**インポート**であり、そしてそちらの方が大きな半分です: `wit-export` が読むのは world の `export` 項目だけです。コンポーネントの WASI 表面は world からではなく、ビルドから来るからです。[前節](#implementing-a-wit-world-wit-export)の 6 行の `wit/greeter.wit` は、実際の型が **149 行**あるコンポーネントにコンパイルされます — 宣言したただ 1 つの `greet` のまわりに、10 個の `wasi:*` インポートと `export wasi:cli/run@0.3.0` が付きます。([`--optimize`](../compiling/wasm.md#optimize-tree-shaking) を付けるとこの表面はプログラムが到達できる範囲まで狭まります。world を仮定するのではなく、生成されたものを読むべき理由がもう 1 つ増えるわけです。)その `greet` から `rontolisp:fetch` を呼べば、ビルドはさらに 2 つのインポート(`wasi:http/types`、`wasi:http/client`)を黙って追加し、**216 行**になります。`rontolisp:tcp-*` も同様に `wasi:sockets` を引き込みます。`wasm-tools` を入れてバイナリを内省するのでない限り、自分が実際に何をビルドしたのかを見る手段は `--emit-wit` だけです — そしてそれこそが、ホストや `jco` がそれらのインポートを*供給する*ために必要とするものです。
+**world を持つプログラム**([`wit-export`](#implementing-a-wit-world-wit-export))は、エクスポートについてはすでに書き下しています。書き下していないのはコンポーネントの**インポート**であり、そしてそちらの方が大きな半分です: `wit-export` が読むのは world の `export` 項目だけです。コンポーネントの WASI 表面は world からではなく、ビルドから来るからです。[前節](#implementing-a-wit-world-wit-export)の 6 行の `wit/greeter.wit` は、実際の型が **26 行**あるコンポーネントにコンパイルされます — 宣言したただ 1 つの `greet` のまわりに、2 つの `wasi:cli` インポートと `export wasi:cli/run@0.3.0` が付きます。これは[ツリーシェイキング](../compiling/wasm.md#optimize-tree-shaking)が到達できる限界まで狭めた結果です。(同じソースを `--optimize=off` でビルドすると、代わりにビルドバリアントの固定表面すべて — **174 行**、11 個の `wasi:*` インポート — が得られます。world を仮定するのではなく、生成されたものを読むべき理由がもう 1 つ増えるわけです。)その `greet` から `rontolisp:fetch` を呼べば、ビルドはさらに 4 つのインポート(`wasi:http/types` と `wasi:http/client`、加えて HTTP 経路が到達しうる `wasi:filesystem/types` と `wasi:cli/stderr`)を黙って追加し、**190 行**になります。`rontolisp:tcp-*` も同様に `wasi:sockets` を引き込みます。`wasm-tools` を入れてバイナリを内省するのでない限り、自分が実際に何をビルドしたのかを見る手段は `--emit-wit` だけです — そしてそれこそが、ホストや `jco` がそれらのインポートを*供給する*ために必要とするものです。
 
 一方、world を持つプログラムにとって `--emit-wit` が**そうではない**もの、それはそのプログラムの乖離チェックです。エクスポート行は構成上の不動点です: world が `rontolisp:wasm-export` ディレクティブを生み、それがコンポーネントの関数型を生み、それがそのまま印字されて戻ってくる — 双方向に 1 対 1 で対応する境界型の集合(固定幅整数すべてと `f64`、`bool`、`string`)の上での話です。渡した world と食い違って出てくることはありえません。したがって `.wit` を再出力して CI で差分を取るのは、*rontolisp 側の*型マッピングに対するリグレッションテストであって(安価であり、続ける価値もあります)、あなたのソースに対するチェックではありません。乖離したプログラムを捕まえるのは `wit-export` 自身であり、それはすでにすべてのバックエンド(素のインタプリタ実行を含む)で走っています。これは過渡的な状態です: world がプログラムの束縛するインポートも宣言できるようになれば、出力される WIT は真に双方向の契約になります。
 
@@ -201,7 +201,7 @@ wasmtime run -W gc --preload math=host.wasm --invoke add10 main.wasm 32
 
 生成されるモジュールは、手書きの
 `(rontolisp:wasm-import 'add-ints :from "math" :as "addInts" :params '(:int :int) :returns :int)`
-が生成するものと**バイト単位で同一**です — このディレクティブは第 2 のインポート経路ではなく、その機構への型付きフロントエンドです。また [`--optimize`](../compiling/wasm.md#optimize-tree-shaking) はプログラムが呼び出さないインポートを従来どおり削ぎ落とすため、29 関数のインターフェースを束縛して 3 つだけ使ってもコストはかかりません。
+が生成するものと**バイト単位で同一**です — このディレクティブは第 2 のインポート経路ではなく、その機構への型付きフロントエンドです。また[ツリーシェイカー](../compiling/wasm.md#optimize-tree-shaking)はプログラムが呼び出さないインポートを従来どおり削ぎ落とすため、29 関数のインターフェースを束縛して 3 つだけ使ってもコストはかかりません。
 
 ### プロバイダ: インタプリタと JVM でも同じソース
 

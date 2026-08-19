@@ -29,47 +29,65 @@ Example (`hello.lisp`):
 
 ## Optimize (Dead-Code Elimination)
 
-By default a compiled class embeds the **entire** runtime (printer, numeric, reader
-and `eval` helper methods, plus a first-class wrapper for every built-in) regardless
-of what the program actually uses. Add `--optimize` to drop every method unreachable
-from `main`, along with any static field only they referenced, and compact the
-constant pool accordingly:
+Compilation drops every method unreachable from `main`, along with any static field
+only they referenced, and compacts the constant pool accordingly. You get that
+without asking:
 
 ```bash
 echo '(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 (print (fact 10))' > fact.lisp
-rontolisp fact.lisp --optimize -o Fact.class
+rontolisp fact.lisp -o Fact.class
 java Fact
 ```
 
-For a small program like `fact` the class shrinks from ~46 KB to ~4.6 KB. The flag is
-opt-in and behavior-preserving: reachability follows the actual `invoke` instructions
+For a small program like `fact` the class is ~6.5 KB. Pass `--optimize=off` and the
+class instead embeds the **entire** runtime (printer, numeric, reader and `eval`
+helper methods, plus a first-class wrapper for every built-in) regardless of what the
+program actually uses, which for the same `fact` is ~190 KB. The elimination is
+behavior-preserving: reachability follows the actual `invoke` instructions
 in the bytecode, so anything a first-class function value, `funcall`, or an embedded
 `eval`/`load` can dispatch to is kept, and the `java:` interop bridge's reflective
-entry point survives as an explicit root. The same flag also tree-shakes the
+entry point survives as an explicit root. The same levels also tree-shake the
 [WASM output](wasm.md).
 
 The dispatch methods `funcall` goes through list only the functions your program
 can actually obtain as a value — `#'name`, a quoted `'name` designator, a
-`lambda` — so everything else becomes ordinary dead code the flag removes. That
-listing switches off, and every function stays reachable, as soon as the program
-can name a function at run time: any use of `eval`, `read`, `read-from-string`, a
-runtime `load`, `intern`, `find-symbol`, `make-symbol`, `symbol-function`,
-`fdefinition`, `fboundp` or `uiop:symbol-call` — including one inside a library
-you loaded — as does `--dynamic`. `(intern name :keyword)` is exempt: it only
-ever builds a keyword, which can never name a function. Compile with
+`lambda`, or (while the program holds a symbol builder such as `intern` or
+`find-symbol`) a string or keyword constant spelling the name — so everything
+else becomes ordinary dead code the shaker removes. That listing switches off,
+and every function stays reachable, only when the program can name a function
+out of data this compile never sees: any use of `eval`, `read`,
+`read-from-string`, a runtime `load` or a `~/name/`
+[`format`](../reference/macros/format.md) directive — including one inside a
+library you loaded — as does `--dynamic`. Compile with
 `-Drontolisp.debug.dispatchgate=true` to have the compiler name the operator
 responsible.
 
-`--optimize` takes an optional level, shared with the [WASM backend](wasm.md):
-`--optimize=default` is the bare flag written out, and `--optimize=size` asks
-for the smallest output a backend can give. This backend accepts it and emits a
-byte-for-byte identical class, because what that level declines are the wasm-GC
-emissions that spend bytes on speed and there is no counterpart here -- the same
-program's JVM bytecode is about a third the size of its WASM to begin with. So
-one build script can pass `--optimize=size` for every target.
+One carve-out follows from that: a designator assembled at run time out of
+**computed** pieces — `(funcall (intern (concatenate 'string "gre" suffix)))` —
+is no constant the compiler can read, so the call signals the ordinary
+"undefined function" error. `--dynamic` is the way back. `--optimize=off` is
+not: the listing is not part of what the level switches, so declining the
+optimizer does not bring such a name back.
 
-Independently of `--optimize`, compilation always tree-shakes the libraries it
+`--optimize` takes an optional level, shared with the [WASM backend](wasm.md).
+`--optimize` and `--optimize=default` both spell what an absent flag already
+selects — everything above — for a build script that wants it written down.
+`--optimize=off` declines it, and emits what a build before the flag was on by
+default emitted. `--optimize=size` asks for the smallest output a backend can
+give; this backend accepts it and emits a byte-for-byte identical class, because
+what that level declines are the wasm-GC emissions that spend bytes on speed and
+there is no counterpart here -- the same program's JVM bytecode is about a third
+the size of its WASM to begin with. So one build script can pass
+`--optimize=size` for every target.
+
+`--optimize=off` exists for two jobs, and neither of them is making a program
+work: comparing an artifact against one built before a compiler change, and
+bisecting a suspected shaker bug by asking whether the unshaken class behaves
+differently. A program whose functions are reached only through a name the
+compiler cannot read needs `--dynamic`, as above.
+
+Independently of the level, compilation always tree-shakes the libraries it
 splices in: the bundled Lisp-source ones (`linalg:`, `vec:`, JSON, URL,
 `equalp`/`string<`) and every system loaded with
 [`asdf:load-system` / `ql:quickload`](../guides/asdf-systems.md). A function,

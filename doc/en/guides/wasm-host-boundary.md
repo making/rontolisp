@@ -103,7 +103,7 @@ the `--no-gc` / `--component` flags:
 | I/O inside the export | works (real WASI imports; under `--no-wasi` output is discarded, `random` runs on a built-in generator, `getenv`/file lookups answer nothing, the clock is the one the host wrote through `__ronto_set_time` and input traps) | usually works even in a sync export; [`:async t`](wasm-component.md#component-model-function-exports-wasm-export) removes the residual trap risk | `print` only (one `fd_write` import) | `print` only (built-in WASI 0.3 stdout bridge; the exports become async lifts) |
 | Program top level | runs as `_start` | co-exists as `wasi:cli/run` | `defun` + directives only | `defun` + directives only |
 | Per-call string memory | host-managed (`__ronto_alloc` + the [arena API](wasm-gc-module.md#reclaiming-the-hosts-buffer-the-arena-api); the Lisp side is the engine's) | freed by the canonical post-return | host-managed (`__ronto_alloc` + the [arena API](wasm-nogc.md#reclaiming-memory-the-arena-api); automatic for scalar returns) | freed by the canonical post-return |
-| Typical size | ~100 KB (~2 KB with [`--optimize`](../compiling/wasm.md#optimize-tree-shaking)) | ~110 KB | tens of bytes to a few KB | hundreds of bytes to a few KB |
+| Typical size | ~2 KB ([tree-shaken](../compiling/wasm.md#optimize-tree-shaking); ~100 KB at `--optimize=off`) | ~110 KB | tens of bytes to a few KB | hundreds of bytes to a few KB |
 
 Each shape's own guide details how its exports are called, what runs inside
 them, and what each host must provide:

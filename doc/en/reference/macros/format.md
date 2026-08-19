@@ -174,8 +174,8 @@ internal symbol too.
 
 **Compiled output carries `~/name/` only when the compiler can see the
 directive.** Resolving a function out of a control string at run time means any
-function in the program can be reached by name, which is exactly what stops
-`--optimize` from removing unused code -- so the compiler includes that part of
+function in the program can be reached by name, which is exactly what stops the
+compiler from removing unused code -- so it includes that part of
 the renderer only when some string literal in the program spells a `~/name/`
 directive (anywhere: the control at the call site, a control bound to a variable,
 a control inside a spliced library). That covers every ordinary use. A control

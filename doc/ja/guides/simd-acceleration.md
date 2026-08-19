@@ -153,7 +153,7 @@ wasm-GC にも線形メモリはありますが、パックド配列がそこに
 - **JVM `--simd`**: `rontolisp prog.lisp -o Prog.class --simd` はカーネルを、埋め込みの `jdk.incubator.vector` ブリッジに振り向けます(`#d` には `DoubleVector`、`#f` には `FloatVector`。`vec:matvec` はそのベクトル化された内積を行列の行ごとに 1 回実行します)。そのクラスの実行には JVM にインキュベータモジュールが必要です: `java --add-modules jdk.incubator.vector Prog`。`--simd` なしのクラスは任意の JVM でスカラー基準を実行します。**ブリッジが CPU のベクトル命令になるかどうかは、そのクラスを実行する JVM 次第です。** Vector API は普通のライブラリであり、JVM がそれをベクトル命令へ落とすかどうかは演算ごとに決まります。落とさない箇所ではレーンを 1 つずつエミュレートするため、`--simd` が置き換えたはずのスカラーループよりはるかに遅くなります。したがって JVM バックエンドでは `--simd` が自動的に得になるとは限らず、同じクラスが 2 つの JVM でまったく違う挙動を示しえます。デプロイ先の JVM で、自分のデータで計測してください。
 
 JVM バックエンドが読みにくい理由はもうひとつあり、そちらは SIMD とは無関係です。コンパイルされた Lisp の数値ループは中間値をすべてボックス化します。配列要素の読み出しごと、積ごと、累算ごとに `Double` が 1 個、さらにループカウンタごとに `Long` が 1 個。つまりスカラーの `vec:` カーネルの律速は演算ではなく確保とディスパッチです。そのボックス化をどれだけ消去できるか(エスケープ解析とインライン化による)は JVM によって大きく異なり、まったく同じスカラーループが JVM を替えるだけで数倍速くなることもあります。`--simd` はこの問いを迂回します。カーネルを、そもそもボックス化しないプリミティブな `double[]` / `float[]` のループに置き換えるからです。
-- **wasm-GC `--simd` ネイティブ `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` は `vec:` カーネルを WebAssembly 固定幅 SIMD(`f64x2.*`、単精度では `f32x4.*`)にロワリングします。パックド浮動小数点配列はレーングループの `(array (mut v128))` になりますが、これも通常の GC オブジェクトであり、エンジンの GC で回収されます。メモリの挙動はスカラーの wasm-GC とまったく同じです。`vec:` API 全体(`vec:matvec` や `vec:from-list` / `vec:to-list` を含む)はそのまま動き、結果も変わりません。`--component` や `--optimize` とも併用できます。実行はこれまでどおり `wasmtime run -W gc` です(wasmtime は SIMD 提案を既定で有効にしています)。
+- **wasm-GC `--simd` ネイティブ `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` は `vec:` カーネルを WebAssembly 固定幅 SIMD(`f64x2.*`、単精度では `f32x4.*`)にロワリングします。パックド浮動小数点配列はレーングループの `(array (mut v128))` になりますが、これも通常の GC オブジェクトであり、エンジンの GC で回収されます。メモリの挙動はスカラーの wasm-GC とまったく同じです。`vec:` API 全体(`vec:matvec` や `vec:from-list` / `vec:to-list` を含む)はそのまま動き、結果も変わりません。`--component` やすべての `--optimize` レベルとも併用できます。実行はこれまでどおり `wasmtime run -W gc` です(wasmtime は SIMD 提案を既定で有効にしています)。
 - **`--no-gc --simd` ネイティブ `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` は同じカーネルを、パックドな線形メモリブロック上にロワリングします。**`--simd` なしの `--no-gc` は同じブロック上に素のスカラーループを出力します** — SIMD 提案を持たない WebAssembly ランタイムでも動く v128 非依存の MVP モジュールで、その移植性と引き換えにベクトル化による高速化を手放します。`vec:matvec` / `vec:matvec-into` は階数 2 のパックド行列ブロック(`[rows][cols][data]`、階数 2 の `make-array` が構築)上で動きます。行ごとの内積は `--simd` では `f64x2` / `f32x4` の内積ループ、なしではスカラーループです。`--no-gc` で利用できないまま残るのは `vec:from-list` / `vec:to-list`(Lisp リストが必要)だけです。`vec:exp` / `vec:log` / `vec:tanh` / `vec:sin` / `vec:cos` / `vec:tan` / `vec:asin` / `vec:acos` / `vec:atan` / `vec:sinh` / `vec:cosh` / `vec:sign` にはベクトル命令が存在しないため、どちらのモードでも同じ要素ごとのループで実行されます。`vec:clip` も同様です(境界は完全な double なので、各要素は拡張して比較されます)。`vec:maximum` / `vec:minimum` / `vec:relu` は `--simd` では比較マスクのセレクトとしてベクトル化され、なしではスカラーの比較 + セレクトのループになります。
 
 wasm-GC で速度差が大きいのは、`--simd` が 2 つのものを同時に置き換えるからです。ボックス化の多いスカラー `vec.lisp` の defun と、1 要素ずつ回すループの両方です。8192 要素のベクトルに対する `vec:dot` を 20000 回反復すると、`wasmtime run -W gc` でスカラーは約 10.1 秒、`--simd` では約 0.10 秒です。
@@ -206,7 +206,7 @@ rontolisp examples/ml/simd-gemv.lisp --simd
 [`examples/ml/simd-gemv-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-gemv-nogc.lisp) は同じ内側のループを `--no-gc` でコンパイルしたものです。純粋な計算のリアクターモジュールで、ホストがエクスポートされた `fingerprint` 関数を呼び出し、`argmax` の整数を読み取ります。`--simd` の有無で両方ビルドして呼び出してみてください:
 
 ```bash
-rontolisp examples/ml/simd-gemv-nogc.lisp -o gemv.wasm --no-gc --simd --optimize
+rontolisp examples/ml/simd-gemv-nogc.lisp -o gemv.wasm --no-gc --simd
 wasmtime run --invoke fingerprint gemv.wasm 100
 ```
 

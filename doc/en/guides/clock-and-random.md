@@ -166,8 +166,8 @@ Because the entropy really is the host's, `rontolisp:random-bytes` works here. N
 them has a module-local generator to make redundant.
 
 The zero-import default is unchanged; this is the opt-in, and the module now has an
-import the host **must** provide. `--optimize` still drops it if the program never
-draws. The flag is core-module only: a reactor component imports nothing by
+import the host **must** provide. The tree shaker still drops it if the program
+never draws. The flag is core-module only: a reactor component imports nothing by
 contract, and a plain `--component` build already has `wasi:random`.
 
 There is no `--host-clock` counterpart, because the export answers the same

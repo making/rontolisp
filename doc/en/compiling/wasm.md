@@ -87,27 +87,27 @@ walkthrough for calling a `--no-wasi` / `--no-gc` reactor module by hand.
 
 ### Optimize (Tree Shaking)
 
-By default a compiled module embeds the **entire** runtime (printer, rational,
-string, reader and `eval` helpers, the WASI import slots, …) regardless of what
-the program actually uses, because function indices are held fixed. Add
-`--optimize` to drop every function unreachable from the module's roots (its
-exports and the `_start`/`_initialize` entry) and renumber the survivors.
-Unused WASI imports are removed too, so a pure-compute reactor module shrinks
-to a handful of functions:
+Compilation drops every function unreachable from the module's roots (its
+exports and the `_start`/`_initialize` entry) and renumbers the survivors.
+Unused WASI imports are removed too, so a pure-compute reactor module is a
+handful of functions:
 
 ```bash
 echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 (rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
-rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~4 KB module
+rontolisp fact.lisp --no-wasi -o fact.wasm
+wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~2.5 KB module
 ```
 
-For the `fact` example the module drops from ~320 KB to ~4 KB.
-`--optimize` is opt-in and behavior-preserving: it walks the call graph from
+Pass `--optimize=off` and the module instead embeds the **entire** runtime
+(printer, rational, string, reader and `eval` helpers, the WASI import slots, …)
+regardless of what the program actually uses, because function indices are then
+held fixed: the same `fact` module is ~155 KB rather than ~2.5 KB.
+The shaking is behavior-preserving: it walks the call graph from
 the actual `call` instructions, so anything reachable (including code an
 embedded `eval`/`load` dispatches to) is kept. It applies on **every** output
 shape, `--component` included. The
-same flag also dead-code-eliminates the [JVM output](jvm.md).
+same levels also dead-code-eliminate the [JVM output](jvm.md).
 
 The dead functions take their baggage with them: the WASI imports only they used,
 the type definitions nothing left names, and the static string data no surviving
@@ -174,39 +174,39 @@ the emitted `.wit` shrinks with it.
 
 ```bash
 echo '(print "Hello World!")' > hello.lisp
-rontolisp hello.lisp --component --optimize -o hello.wasm    # ~2 KB
-rontolisp hello.lisp --component -o hello-full.wasm          # ~325 KB
+rontolisp hello.lisp --component -o hello.wasm                       # ~1.7 KB
+rontolisp hello.lisp --component --optimize=off -o hello-full.wasm   # ~165 KB
 ```
 
-Without `--optimize` a component always declares the full fixed WASI surface, which
+At `--optimize=off` a component always declares the full fixed WASI surface, which
 is what makes the two builds comparable byte-for-byte across releases.
 
-`--optimize` also decides how much of a **loaded library** it can reach. A
+Tree shaking also decides how much of a **loaded library** it can reach. A
 compiled program calls most functions directly, but a `funcall` needs a dispatch
 table, and a function listed there counts as reachable whether or not anything
 ever calls it that way. So a function is listed only when your program can
 actually obtain it as a value — `#'name`, a quoted `'name` designator, a
-`lambda` — and everything else becomes ordinary dead code that `--optimize`
+`lambda` — and everything else becomes ordinary dead code the shaker
 removes. On a program that loads `md5` and calls one function, that is the
 difference between about 1.1 MB and 582 KB.
 
-The listing is all-or-nothing, and one thing switches it off: if the program can
-name a function at run time, every function has to stay reachable. That is any
-use of `eval`, `read`, `read-from-string`, a runtime `load`, `intern`,
-`find-symbol`, `make-symbol`, `symbol-function`, `fdefinition`, `fboundp` or
-`uiop:symbol-call` — including one inside a library you loaded. When
-`--optimize` does not shrink a program as much as you expected, ask the compiler
+A program that holds a symbol **builder** — `intern`, `find-symbol`,
+`make-symbol`, `uiop:symbol-call` — keeps the listing, and instead widens it: a
+string or keyword constant the module carries can become a designator at run
+time, so the compiler probes those spellings of each function's name as well.
+That is what lets a Worker whose handler discovery is `(find-symbol "RUN" pkg)`
+still shake out everything it calls only directly.
+
+The listing is all-or-nothing, and what switches it off is a program that can
+name a function out of data this compile never sees: any use of `eval`, `read`,
+`read-from-string` or a runtime `load` — including one inside a library you
+loaded. When the build does not shrink as much as you expected, ask the compiler
 which operator it was:
 
 ```bash
-rontolisp -Drontolisp.debug.dispatchgate=true app.lisp -o app.wasm --optimize
-# => [dispatch-gate] every function stays dispatchable because of: INTERN
+rontolisp -Drontolisp.debug.dispatchgate=true app.lisp -o app.wasm
+# => [dispatch-gate] every function stays dispatchable because of: EVAL
 ```
-
-One `intern` shape is exempt: `(intern name :keyword)` only ever builds a
-keyword, and a keyword can never name a function, so it leaves the listing on —
-a handler upcasing a request method into `:GET`/`:POST` does not cost you the
-optimization.
 
 A `~/name/` directive in a format control string counts as well, because it
 names its function at run time — but only a control string the compiler can see
@@ -216,20 +216,27 @@ brings it in, so a program that spells no such directive is unaffected (see
 `--dynamic` switches it off too, by design: late binding resolves any name at
 run time.
 
+One carve-out follows from that: a designator assembled at run time
+out of **computed** pieces — `(funcall (intern (concatenate 'string "gre"
+suffix)))` — is no constant the compiler can read, so the call signals the
+ordinary "undefined function" error. `--dynamic` is the way back, and
+`--optimize=off` is not: the listing is not part of what the level switches, so
+declining the optimizer does not bring such a name back.
+
 For a much smaller module still, the same `fact.lisp` compiled with
 [`--no-gc`](../guides/wasm-nogc.md) lowers `fact` to unboxed `i32` and drops
-the whole GC runtime that made the 5 KB (the condition hierarchy, cons cells,
+the whole GC runtime that made the 2.5 KB (the condition hierarchy, cons cells,
 the printer):
 
 ```bash
-rontolisp fact.lisp --no-gc --optimize -o fact.wasm
-wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~76 byte module (no -W gc)
+rontolisp fact.lisp --no-gc -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~108 byte module (no -W gc)
 ```
 
 The source is unchanged — `wasm-export` works identically on both value models
 — and the resulting module also drops the `-W gc` runtime requirement.
 
-Independently of `--optimize` (and on every output mode, `--component`
+Independently of the level (and on every output mode, `--component`
 included), compilation always tree-shakes the libraries it splices in: the
 bundled Lisp-source ones (`linalg:`, `vec:`, JSON, URL, `equalp`/`string<`) and
 every system loaded with
@@ -252,13 +259,23 @@ from computed strings and called through `eval`/`apply` signals the usual
 every library definition in that case.
 
 The flag takes an optional level. `--optimize` and `--optimize=default` are the
-same thing — everything above — and the bare spelling keeps that meaning
-permanently; `--optimize=size` is that plus the trades in the next section.
+same thing — everything above, and what an absent flag already selects — and the
+bare spelling keeps that meaning permanently; `--optimize=size` is that plus the
+trades in the next section; `--optimize=off` is none of it, and emits what a
+build before the flag was on by default emitted.
+
+`--optimize=off` exists for two jobs, and neither of them is making a program
+work: comparing a module against one built before a compiler change, and
+bisecting a suspected tree-shaker bug by asking whether the unshaken module
+behaves differently. A program whose functions are reached only through a name
+the compiler cannot read needs `--dynamic` — the funcall dispatch listing above
+is not part of what the level switches, so `off` does not bring such a name
+back.
 
 ### Optimizing for Size (`--optimize=size`)
 
-Two wasm-GC emissions deliberately spend bytes to gain speed, and both are on
-whether or not you pass `--optimize`:
+Two wasm-GC emissions deliberately spend bytes to gain speed, and both are on at
+`--optimize=off` and `--optimize=default` alike:
 
 - an integer expression tree like `(logand (+ (ash x 7) i) #xFFFFFFFF)` compiles
   **twice** — once as a single unboxed `i64` computation, and once through the
@@ -272,7 +289,7 @@ fast path only ever existed as an alternative to the fallback, which stays —
 but the arithmetic now runs through the generic helpers, so the price is real,
 and how much you pay depends on how integer-heavy the program is:
 
-| program | `--optimize` | `--optimize=size` | run time |
+| program | `--optimize=default` | `--optimize=size` | run time |
 | --- | --- | --- | --- |
 | ironclad SHA-256/HMAC/PBKDF2, 4096 rounds | 2,078,195 B | 1,562,816 B (**-24.8%**) | 1.4 s -> 5.2 s (**3.8x**) |
 | a `vec:`-kernel neural-net training loop | 271,233 B | 214,169 B (-21.0%) | 1.07 s -> 1.26 s (+18%) |
@@ -291,7 +308,7 @@ several times the run time.
 The level is accepted on every backend, so a build script need not know which
 one it targets, but only wasm-GC (Preview 1 and `--component`) has anything to
 trade: the [JVM](jvm.md) and [`--no-gc`](../guides/wasm-nogc.md) outputs are
-byte-for-byte what `--optimize` produces.
+byte-for-byte what `--optimize=default` produces.
 
 ### SIMD Acceleration (`--simd`)
 
@@ -302,7 +319,7 @@ real vector instructions. On WASM it is orthogonal to the value model:
 - **wasm-GC + `--simd`** lowers the kernels to native fixed-width SIMD
   (`f64x2`/`f32x4`) over GC-managed lane-group arrays — packed float arrays
   stay ordinary GC objects, and memory behaves exactly as without the flag.
-  Composes with `--component` and `--optimize`; run as usual with
+  Composes with `--component` and every `--optimize` level; run as usual with
   `wasmtime run -W gc` (wasmtime enables the SIMD proposal by default).
 - **`--no-gc` + `--simd`** lowers the same kernels to `v128` over the packed
   linear-memory blocks. Without `--simd`, `--no-gc` emits plain scalar loops

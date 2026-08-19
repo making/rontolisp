@@ -148,7 +148,7 @@ rontolisp が与えた綴りです。
 | `--no-gc` | a compile error (its MVP module imports nothing) |
 
 Preview 1 では、生成されるモジュールは手書きの等価物と**バイト単位で同一**であり、
-[`--optimize`](../../compiling/wasm.md#optimize-tree-shaking)
+[ツリーシェイキング](../../compiling/wasm.md#optimize-tree-shaking)
 はプログラムが呼び出さないインポートを従来どおり削ぎ落とします。
 
 ```console

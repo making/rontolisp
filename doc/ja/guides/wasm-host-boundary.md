@@ -81,7 +81,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 | エクスポート内の I/O | 動作する(実 WASI インポート。`--no-wasi` では出力は破棄、`random` は組み込み生成器、`getenv`/ファイル検索は「無い」と答え、時計はホストが `__ronto_set_time` で書き込んだ値、入力はトラップ) | 同期エクスポートでも通常は動作する。[`:async t`](wasm-component.md#component-model-function-exports-wasm-export) で残余のトラップリスクを除去 | `print` のみ(単一の `fd_write` インポート) | `print` のみ(組み込み WASI 0.3 stdout ブリッジ。エクスポートは async リフトになる) |
 | プログラムのトップレベル | `_start` として実行 | `wasi:cli/run` として共存 | `defun` + ディレクティブのみ | `defun` + ディレクティブのみ |
 | 呼び出しごとの文字列メモリ | ホスト管理(`__ronto_alloc` + [アリーナ API](wasm-gc-module.md#reclaiming-the-hosts-buffer-the-arena-api)。Lisp 側はエンジンが回収) | 正準 post-return が解放 | ホスト管理(`__ronto_alloc` + [アリーナ API](wasm-nogc.md#reclaiming-memory-the-arena-api)。スカラー戻り値では自動) | 正準 post-return が解放 |
-| 典型的なサイズ | 約 100 KB([`--optimize`](../compiling/wasm.md#optimize-tree-shaking) で約 2 KB) | 約 110 KB | 数十バイト〜数 KB | 数百バイト〜数 KB |
+| 典型的なサイズ | 約 2 KB（[ツリーシェイキング](../compiling/wasm.md#optimize-tree-shaking)済み。`--optimize=off` では約 100 KB) | 約 110 KB | 数十バイト〜数 KB | 数百バイト〜数 KB |
 
 各形状の詳細 — エクスポートの呼び出し方、その中で動くもの、各ホストが提供すべきもの — はそれぞれのガイドを参照してください:
 [wasm-GC コアモジュール](wasm-gc-module.md)、

@@ -149,7 +149,7 @@ WIT does not name as a function. See
 | `--no-gc` | a compile error (its MVP module imports nothing) |
 
 On Preview 1 the module is **byte-identical** to the hand-written equivalent, and
-[`--optimize`](../../compiling/wasm.md#optimize-tree-shaking) still shakes out the
+[tree shaking](../../compiling/wasm.md#optimize-tree-shaking) still shakes out the
 imports the program never calls:
 
 ```console

@@ -3,8 +3,8 @@
 GC 値モデルの出力は — 最適化されたリアクターであっても — すべての値が GC ヒープ型(`i31ref`、float 構造体、`(ref eq)`)であるため、依然として **wasm-GC 対応**ランタイムを必要とします。`--no-gc` を追加すると、代わりに素の **MVP** モジュールが出力されます: rec グループなし、`struct`/`array`/`i31` 型なし、`eqref` なし、インポートなしです(素のリニアメモリはプログラムが文字列を使うときのみ追加され — [後述](#strings) — 単一の `fd_write` インポートは[印字](#printing-print--princ--terpri)するときのみ追加されます)。印字しないモジュールはインポートオブジェクトなしでインスタンス化でき、**`-W gc` なし**で任意の MVP クラスのランタイムで動作します:
 
 ```bash
-rontolisp fact.lisp --no-gc --optimize -o fact.wasm
-wasmtime run --invoke fact fact.wasm 5      # => 120, ~76 bytes, no -W gc needed
+rontolisp fact.lisp --no-gc -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no -W gc needed
 ```
 
 これは、各値をアンボックスな wasm スカラーへ直接ローワリングし、文字列には小さなリニアメモリ表現を加えることで達成されます — そのため対象サブセットは言語の制限であって、別の言語ではありません。プログラムの形も制限されます: トップレベルには `defun` と `rontolisp:wasm-export` ディレクティブ**のみ**を置けます(純粋計算リアクターであり、`_start` はありません)。境界指定子は `:int`、`:long`、`:float`、`:bool`、`:string`(および `:void`/省略)です。`:s-expr` は**非対応**です — このバックエンドが意図的に省いている cons/リーダー/プリンターのランタイムを必要とするためです。
@@ -71,7 +71,7 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, ~76 bytes, no -W gc needed
 これが ASCII アートのマンデルブロレンダラーを wasm-GC なしで動かせる理由です: [`examples/console/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/console/mandelbrot-nogc.lisp) は浮動小数点の脱出時間ループを保ちながら、描画したグリッドを印字する代わりに 1 つの文字列として返します:
 
 ```console
-$ rontolisp examples/console/mandelbrot-nogc.lisp --no-gc --optimize -o mandelbrot.wasm
+$ rontolisp examples/console/mandelbrot-nogc.lisp --no-gc -o mandelbrot.wasm
 $ node -e '(async () => {
   const ex = (await WebAssembly.instantiate(
     require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;
@@ -216,5 +216,5 @@ wasmtime run --invoke 'show(4)' show.wasm
 - コンポーネントはコンポーネントモデル対応のホストを必要とします。生のコアモジュールは素の埋め込み API を通じて**任意の** WebAssembly エンジンで動きます。両方の出力が使えます — ホストごとに選んでください。コンポーネントは `--no-gc` のデフォルトでは*ありません*。(`--component` なしでは、`:string` は代わりに手動の `(ptr,len)` コア ABI で境界を渡ります。)
 - コンポーネントは純粋なリアクターです: `wasi:cli/run` エントリはありません(トップレベルでは何も実行されません)。エクスポート内の印字は上記のマイクロアダプタで動作します。それ以外の I/O は通常どおり `--no-gc` サブセットの外です。`:async t` は拒否されます — 印字するプログラムのエクスポートは自動的に async リフトされ、それ以外にエクスポートがサスペンドし得るものは存在しません。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
-- `--optimize` は組み合わせられます: コアモジュールはラップの前にツリーシェイキングされます。
+- ツリーシェイキングは組み合わせられます: コアモジュールはラップの前にシェイクされます。
 - [`--emit-wit`](wit-contracts.md#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートだけの小さなインポートなし world(プログラムが印字するときは `wasi:cli/stdout@0.3.0` インポートと `async func` のエクスポート署名付き)を書き出します。
