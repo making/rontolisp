@@ -322,9 +322,12 @@ does not need rebuilding unless Java sources changed).
 - WASM integration tests skipped if Docker unavailable. They run `wasmtime` from a
   prebuilt image (`WasmtimeSupport.IMAGE`, a pinned wasmtime on Debian, tracked as
   `:latest` and always re-pulled) that `.github/workflows/wasmtime-image.yaml` builds from
-  `.github/docker/wasmtime/Dockerfile` and pushes to GHCR. Bump the wasmtime version in the
-  Dockerfile ARG and the workflow `WASMTIME_VERSION` together, then re-run the workflow --
-  no test change needed. Keep it >= 47: 46 still runs the `--component` tests, but only
+  `.github/docker/wasmtime/Dockerfile` and pushes to GHCR. THREE pins carry the version and
+  they move together: the Dockerfile ARG default, the workflow's `WASMTIME_VERSION` (passed
+  as the build-arg, so it overrides that default -- bumping the Dockerfile alone republishes
+  the OLD wasmtime as `:latest`), and the `version:` the `ci.yaml` test job installs on the
+  host for `WasmLispCompilerIntegrationTest`. Then re-run the image workflow -- no test
+  change needed. Keep it >= 47: 46 still runs the `--component` tests, but only
   47+ inlines final-type casts, without which serve throughput collapses under
   concurrency (`.kb/wasm-gc-final-types.md`).
 

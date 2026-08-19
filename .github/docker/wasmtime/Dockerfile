@@ -7,7 +7,10 @@
 # The pin must stay >= 47: the `--component` (WASI 0.3) tests need wasmtime 46+ to
 # run at all, and 47+ additionally inlines final-type casts, without which serve
 # throughput collapses under concurrency (.kb/wasm-gc-final-types.md).
-# Bump WASMTIME_VERSION here and the tag in WasmtimeSupport.IMAGE together.
+# Bump WASMTIME_VERSION here, the env of the same name in
+# .github/workflows/wasmtime-image.yaml (which overrides this default), and the `version:`
+# .github/workflows/ci.yaml installs on the host -- all three, then re-run the image
+# workflow. WasmtimeSupport.IMAGE tracks :latest and is not one of them.
 FROM debian:bookworm-slim
 
 # Keep in step with WASMTIME_VERSION in .github/workflows/wasmtime-image.yaml, which

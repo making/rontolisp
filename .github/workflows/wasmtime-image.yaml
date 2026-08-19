@@ -3,7 +3,9 @@ name: Build wasmtime test image
 # Builds the Debian + pinned-wasmtime image the WASM integration tests run against
 # and pushes it to GHCR, so the test job pulls a ready image instead of installing
 # wasmtime on every run. Rebuilds only when the Dockerfile or this workflow change;
-# also runnable on demand. Keep the pushed tag in sync with WasmtimeSupport.IMAGE.
+# also runnable on demand. WasmtimeSupport.IMAGE tracks :latest, so it needs no edit
+# when the version moves -- but this workflow must be RE-RUN, or :latest keeps serving
+# the old wasmtime.
 on:
   push:
     branches:
@@ -15,9 +17,12 @@ on:
   workflow_dispatch: {}
 
 env:
-  # The image tag = the wasmtime version (with its leading 'v'). Bump this, the
-  # Dockerfile ARG default and WasmtimeSupport.IMAGE together.
-  WASMTIME_VERSION: v47.0.2
+  # The image tag = the wasmtime version (with its leading 'v'). This is passed as the
+  # build-arg below, so it OVERRIDES the Dockerfile ARG default: bumping the Dockerfile
+  # alone publishes the OLD wasmtime under the new :latest. The three pins that must move
+  # together are this one, the Dockerfile ARG default, and the `version:` the ci.yaml test
+  # job installs on the host for WasmLispCompilerIntegrationTest.
+  WASMTIME_VERSION: v47.0.3
 
 jobs:
   build:
