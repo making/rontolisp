@@ -78,6 +78,11 @@ mkdir -p "$out" "$results"
 # Group digits the way the tables do: 124307 -> 124,307
 commas() { printf '%s' "$1" | rev | sed 's/.\{3\}/&,/g' | rev | sed 's/^,//'; }
 # A flag list as a table cell: `--optimize`, or (none) when there are no flags.
+# No row in wasm_builds omits flags any more -- the unoptimized baseline rows
+# now spell themselves `--optimize=off` rather than an empty cell, since
+# --optimize is on by default and an empty cell would render as the OPTIMIZED
+# build. The (none) branch is dead for now; keep it rather than assume the
+# next row added here will remember to state its flags too.
 flag_cell() {
   if [[ -n "$1" ]]; then printf '`%s`' "$1"; else printf '(none)'; fi
 }
@@ -142,17 +147,17 @@ pi_expected='pi = 3.141591653589774'
 pi_nogc_expected='3.1415916535897743'
 
 wasm_builds=(
-  "hello_world_plain|programs/hello_world/hello_world.lisp||-W gc|$hello_expected"
+  "hello_world_plain|programs/hello_world/hello_world.lisp|--optimize=off|-W gc|$hello_expected"
   "hello_world_optimize|programs/hello_world/hello_world.lisp|--optimize|-W gc|$hello_expected"
   "hello_world_size|programs/hello_world/hello_world.lisp|--optimize=size|-W gc|$hello_expected"
   "hello_world_component|programs/hello_world/hello_world.lisp|--component --optimize=size|-W gc=y|$hello_expected"
   "hello_world_nogc|programs/hello_world/hello_world-nogc.lisp|--no-gc --optimize=size|--invoke say-hello|$hello_expected"
-  "pi_approx_plain|programs/pi_approx/pi_approx.lisp||-W gc|$pi_expected"
+  "pi_approx_plain|programs/pi_approx/pi_approx.lisp|--optimize=off|-W gc|$pi_expected"
   "pi_approx_optimize|programs/pi_approx/pi_approx.lisp|--optimize|-W gc|$pi_expected"
   "pi_approx_size|programs/pi_approx/pi_approx.lisp|--optimize=size|-W gc|$pi_expected"
   "pi_approx_component|programs/pi_approx/pi_approx.lisp|--component --optimize=size|-W gc=y|$pi_expected"
   "pi_approx_nogc|programs/pi_approx/pi_approx-nogc.lisp|--no-gc --optimize=size|--invoke approx-pi|$pi_nogc_expected"
-  "zlib_plain|programs/zlib/zlib.lisp||-W gc -W exceptions=y|filter"
+  "zlib_plain|programs/zlib/zlib.lisp|--optimize=off|-W gc -W exceptions=y|filter"
   "zlib_optimize|programs/zlib/zlib.lisp|--optimize|-W gc -W exceptions=y|filter"
   "zlib_size|programs/zlib/zlib.lisp|--optimize=size|-W gc -W exceptions=y|filter"
   "zlib_component|programs/zlib/zlib.lisp|--component --optimize=size|-W gc=y -W exceptions=y|filter"

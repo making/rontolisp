@@ -57,10 +57,14 @@ adapter; the column reports what it imports from outside, not that.
 import module `wasi_snapshot_preview1`; later generations version each interface
 (`wasi:cli/stdout@0.3.0`). The tables fold those back: WASI 0.3 is Preview 3.
 
-**`--optimize` is not optional.** Without it a module carries the whole prelude
--- ~124 KB for `hello_world`, 99.6% of which nothing in the program reaches.
-`--optimize` is the dead-code tree-shaker; it is what turns 124 KB into a few
-hundred bytes. Only tree-shaken numbers are worth comparing.
+**`--optimize` is on by default; the baseline opts OUT with `--optimize=off`.**
+Without it a module carries the whole prelude -- ~124 KB for `hello_world`,
+99.6% of which nothing in the program reaches. `--optimize` is the dead-code
+tree-shaker; it is what turns 124 KB into a few hundred bytes. Only
+tree-shaken numbers are worth comparing, which is why the `_plain` rows below
+spell their baseline explicitly as `--optimize=off` rather than as an empty
+flag cell -- an empty cell now means "default", which since the flip is the
+optimized build.
 
 **`--optimize=size` only shows up on a big program.** On both micro programs it
 measures the same as plain `--optimize` -- there is nothing left to trade once

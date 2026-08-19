@@ -21,9 +21,11 @@
 #     no-gc           <driver> FILE -o prog.wasm --no-gc --optimize
 #     no-gc-simd      <driver> FILE -o prog.wasm --no-gc --simd --optimize
 #
-# Every WASM compile passes --optimize (the dead-code tree-shaker); it is a
-# no-op under --component. The `wasm` (run) backend is skipped when wasmtime is
-# not on PATH; the compile backends need no runtime.
+# Every WASM compile passes --optimize (the dead-code tree-shaker) explicitly,
+# for the record -- it has been the CLI default since todo-448, so the flag no
+# longer changes what gets built here; it is also a no-op under --component.
+# The `wasm` (run) backend is skipped when wasmtime is not on PATH; the compile
+# backends need no runtime.
 #
 # per-example fields (all optional except path/backends)
 # ------------------------------------------------------
