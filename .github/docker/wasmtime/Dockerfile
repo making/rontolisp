@@ -14,7 +14,7 @@ FROM debian:bookworm-slim
 # overrides this default when the published image is built, and with the pin the CI test
 # job installs on the host for WasmLispCompilerIntegrationTest. This default had drifted
 # to a v46.0.2 that was never released, so a local `docker build` of this file 404'd.
-ARG WASMTIME_VERSION=v47.0.2
+ARG WASMTIME_VERSION=v47.0.3
 
 # curl and ca-certificates stay installed at run time: an http-handler test curls
 # the served component under `wasmtime serve`.
