@@ -587,8 +587,10 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 (パッケージは `cl` を使用しません)。すべての演算はテンソル、数値、配列、リストを
 オペランドに取り、`linalg` カーネルを通じて計算するため `--simd` は torch プログ
 ラムもそのまま加速します。テンソル自体は生のレコードとして印字されるので、結果は
-`torch:data` / `torch:item` / `torch:grad` で読み戻してください。唯一のマクロ
-`torch:no-grad` は[マクロのページ](macros/torch-no-grad.md)にあります。
+`torch:data` / `torch:item` / `torch:grad` で読み戻してください。表の後半は `nn`
+スタイルのモジュール層です。モジュールはフィールドのプロパティリストにパラメータ
+を持ち、合成でき、`torch:forward` で実行します。唯一のマクロ `torch:no-grad` は
+[マクロのページ](macros/torch-no-grad.md)にあります。
 
 | Function | Example | Result |
 |----------|---------|--------|
@@ -633,6 +635,25 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `torch:cat` | `(torch:cat (list a b) :axis 1)` | 既存の軸に沿った微分可能な連結 |
 | `torch:stack` | `(torch:stack (list a b))` | 新しい軸に沿った微分可能な結合 |
 | `torch:slice` | `(torch:slice a '(nil (0 2)))` | 微分可能な numpy 基本スライス |
+| `torch:set-data` | `(torch:set-data tn v)` | テンソルのデータを破壊的に置き換える (パラメータ更新) |
+| `torch:module` | `(torch:module :k fields fn)` | ユーザーレイヤー。kind、フィールドのプロパティリスト、forward 関数 |
+| `torch:modulep` | `(torch:modulep x)` | モジュールなら `T`、そうでなければ `NIL` |
+| `torch:module-kind` | `(torch:module-kind m)` | モジュールの kind キーワード |
+| `torch:field` | `(torch:field m :weight)` | モジュールの指定フィールドの値 (なければエラー) |
+| `torch:set-field` | `(torch:set-field m :weight p)` | モジュールの指定フィールドを設定しモジュールを返す |
+| `torch:forward` | `(torch:forward m x)` | モジュール (または素の関数) の順伝播を実行 |
+| `torch:parameter` | `(torch:parameter '(1.0))` | `requires-grad` を持つ葉テンソル、すなわち学習可能パラメータ |
+| `torch:parameters` | `(torch:parameters m)` | モジュールから到達できる全パラメータ (重複排除済み) |
+| `torch:train` | `(torch:train m)` | モジュールとサブモジュールを学習モードにする |
+| `torch:eval` | `(torch:eval m)` | モジュールとサブモジュールを評価モードにする |
+| `torch:training-p` | `(torch:training-p m)` | モジュールが学習モードかどうか |
+| `torch:linear` | `(torch:linear 4 8)` | 全結合レイヤー (`:weight`、`:bias`) |
+| `torch:embedding` | `(torch:embedding 100 8)` | 埋め込みテーブル (`:weight`)。任意の形のインデックス |
+| `torch:sequential` | `(torch:sequential a #'torch:relu b)` | レイヤーおよび素の関数の連鎖 |
+| `torch:layer-norm` | `(torch:layer-norm 8)` | 最終軸に対する層正規化 (`ddof` 0) |
+| `torch:dropout` | `(torch:dropout 0.1)` | inverted dropout。評価モードでは恒等写像 |
+| `torch:mse-loss` | `(torch:mse-loss y target)` | 平均二乗誤差 (`:reduction :mean` / `:sum` / `:none`) |
+| `torch:cross-entropy-loss` | `(torch:cross-entropy-loss logits idx)` | ロジットに対する交差エントロピー (`:ignore-index` でパディングを除外) |
 
 ## java パッケージの関数
 

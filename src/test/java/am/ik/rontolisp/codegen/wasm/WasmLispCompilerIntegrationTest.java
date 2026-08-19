@@ -13392,6 +13392,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileTorchModuleTrainingLoop() throws Exception {
+		// The nn acceptance program (TorchGradcheck.NN_TRAINING_PROGRAM) on the
+		// wasm-GC backend: the module records, the forward closures reached through
+		// torch:forward, the parameter walk and the in-place torch:set-data update
+		// inside torch:no-grad all have to agree with the other backends.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.NN_TRAINING_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.NN_TRAINING_EXPECTED);
+	}
+
+	@Test
 	void compileRankThreeArrayRefSetAndPrint() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))

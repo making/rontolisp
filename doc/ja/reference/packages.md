@@ -6,7 +6,7 @@ rontolispには、一連の組み込みパッケージと[`defpackage` による
 - **`cl-user`** — デフォルトの作業パッケージ。`cl` を *使用* するため、標準シンボルを修飾なしで利用できます。プログラム開始時のカレントパッケージです。ユーザ定義はここに置かれます。
 - **`rontolisp`** — 実装固有のシンボルのためのパッケージ。`rl` は組み込みのニックネームです。`cl` を **使用しません**。`version`、`list-functions`、`list-macros`、`list-special-forms` の各関数を所有します。
 - **`linalg`** — numpy スタイルのベクトル・行列演算(`linalg:zeros`、`linalg:matmul`、`linalg:solve` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`la` は組み込みのニックネームです。`cl` を **使用しません**。[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
-- **`torch`** — `linalg` カーネル上の、逆方向自動微分を備えた PyTorch スタイルのテンソル (`torch:tensor`、`torch:matmul`、`torch:backward` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`cl` を **使用しません**。[ニューラルネットワークガイド](../guides/neural-networks.md)を参照してください。
+- **`torch`** — `linalg` カーネル上の、逆方向自動微分と `nn` スタイルのモジュール層を備えた PyTorch スタイルのテンソル (`torch:tensor`、`torch:matmul`、`torch:backward`、`torch:linear`、`torch:cross-entropy-loss` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`cl` を **使用しません**。[ニューラルネットワークガイド](../guides/neural-networks.md)を参照してください。
 - **`java`** — リフレクションによる Java 連携。JVM インタプリタ (`java -jar rontolisp.jar`) でのみ使え、コンパイラやネイティブバイナリでは使えません。`cl` を **使用しません**。`new`、`call`、`static`、`field`、`proxy` を所有します。[Java 連携ガイド](../guides/java-interop.md)を参照してください。
 - **`asdf`** — ASDF の限定的な API 互換サブセット(システム定義): `defsystem` と `load-system`。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md)を参照してください。
 - **`ql`** — Quicklisp の限定的な API 互換サブセット: `quickload` は本物の Quicklisp ディストリビューションからシステムをダウンロードし、`asdf` サブセットを経由してロードします。`update-dist` は dist の index を更新します。`quicklisp` は組み込みのニックネームです。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#downloading-with-quickload)を参照してください。

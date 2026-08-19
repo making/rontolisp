@@ -102,7 +102,7 @@ share `torch::%t-grad-reshape`.
 
 Acceptance is the shared table-driven gradient check
 (`testsupport/TorchGradcheck`, one `gc-check` row per differentiable op --
-extend it with one row per new 461 op): analytic vs central differences at
+extend it with one row per new op, as 461 did for every layer and loss): analytic vs central differences at
 relative tolerance 1e-3, run VERBATIM on the interpreter
 (`LispEvaluatorTest.torchGradcheckTable`), the JVM
 (`JvmLispCompilerTest.compileAndRunTorchGradcheckTable`) and wasm-GC
@@ -143,6 +143,85 @@ sound:
 The formatter needs an explicit `IndentRules` entry (`"no-grad"`,
 `Style.body(0, 2)`): no `with-`/`do-`/`def` prefix, so the naming-convention
 guess would lay its body out as call arguments (`.kb/formatter.md`).
+
+## The module layer (todo-461): a second record, walked for its parameters
+
+The `nn` half is the SAME defun-only decision applied again -- a module is a
+five-slot general vector (so it never collides with the six-slot tensor),
+`torch:modulep` discriminating on the `torch::%module` tag in slot 0:
+
+| slot | field | contents |
+| --- | --- | --- |
+| 0 | tag | the symbol `torch::%module` |
+| 1 | kind | a KEYWORD naming the layer (`:linear`, `:sequential`, ...) |
+| 2 | fields | a plist, KEYWORD value ..., holding every parameter, buffer, submodule, list of submodules and hyper-parameter |
+| 3 | forward-fn | applied by `torch:forward` as `(funcall fn module args...)` |
+| 4 | training | the train/eval flag, `t` at construction |
+
+**The fields plist IS the parameter registration** -- the defun-only stand-in
+for walking a CLOS instance's slots, which is what the todo asked for. A
+layer's forward reads its parameters back with `torch:field`, never from a
+closed-over variable: with the plist as the single place the tensors live, a
+parameter that exists cannot be absent from `torch:parameters`, which is the
+failure mode ("a layer that forgets to declare one trains silently wrong") the
+layout removes. `TorchGradcheck`'s layer rows exercise exactly that seam: they
+`torch:set-field` the checked inputs over a freshly built layer's parameters,
+so a forward reading a closure copy would fail the check.
+
+Field names and kinds are KEYWORDS, not symbols: rontolisp symbols are
+package-distinct (`(eq 'weight 'torch::weight)` is NIL), so a plain symbol
+would be `cl-user::weight` in a user program and never `eq` to what the library
+wrote.
+
+`torch:parameters` (`%m-collect` / `%m-collect-fields`) walks the field VALUES:
+a leaf tensor with slot 3 set is collected once by IDENTITY (`member`, so a
+shared weight appears once), a module recurses into its own fields, a LIST
+recurses element-wise, everything else contributes nothing. Consequences worth
+knowing:
+
+- a tensor field WITHOUT `requires-grad` is a buffer -- collected by nothing,
+  cleared by nothing;
+- a plain LIST of modules is a `ModuleList`, so no such type exists here;
+- `torch:train`/`torch:eval` (`%m-set-mode`) walk the same shape, and
+  `torch:zero-grad` accepts a module (clearing every parameter's grad) as well
+  as a tensor -- one spelling, at the price of a `zero-grad` reference edge to
+  `torch:parameters` (the walker only; no layer, no loss).
+
+Two surface decisions the todo's text does not get:
+
+- **no `torch:call`, no funcallable module.** A record cannot be funcallable in
+  this Lisp-2, and two names for one operation is worse than one; `torch:forward`
+  is the single spelling, and it also accepts a plain FUNCTION, which is why
+  there is no `torch:relu` MODULE either -- an activation goes into a
+  `torch:sequential` as `(function torch:relu)`.
+- **`torch:set-data`** was added with the layer, not before it: an optimizer (and
+  the 461 acceptance training loop) must write the new value into the very tensor
+  a module's fields point at. Rebuilding the tensor, the pre-461 idiom in the
+  `torch-fit-cross-backend` case, cannot reach a nested parameter.
+
+`torch:linear` stores its weight `(in out)`, NOT PyTorch's transposed
+`(out in)`, so the forward is a plain `torch:matmul` and the bias broadcasts
+over every leading axis; PyTorch's default
+`U(-1/sqrt(in), 1/sqrt(in))` init is kept for both, `torch:embedding` keeps
+`N(0, 1)`, and `torch:layer-norm` normalizes over the LAST axis with the biased
+(`ddof` 0) variance -- composed from torch ops, so the normalization itself is
+differentiable. `torch:dropout` is inverted dropout reading slot 4, and the
+losses are plain functions: `torch:mse-loss` and a `torch:cross-entropy-loss`
+that flattens all but the last axis, picks `-log-softmax` at the target class,
+and under `:ignore-index` drops the position from BOTH the sum and the mean's
+denominator (the padding case) -- the ignored index is also clamped to 0 before
+the `torch:gather` so a sentinel target cannot index out of range.
+
+Acceptance beyond the gradcheck rows: `TorchGradcheck.NN_TRAINING_PROGRAM`, a
+2-8-1 ReLU MLP trained on XOR for 200 SGD steps over `torch:parameters`, run on
+the interpreter, the JVM and wasm-GC; the `--component` leg is the ci-spec
+`torch-nn-cross-backend` case, which also pins the exact-dyadic module
+forward/backward, the parameter walk and the mode switch. Both programs use only
+`+ - * /` and `max` (ReLU, MSE, the seeded Wichmann-Hill generator), so every
+backend follows the same trajectory.
+
+461 adds no body-taking operator, so the formatter needs no new `IndentRules`
+entry: every module and loss name is a plain function, laid out as a call.
 
 ## `--simd`, and what is deliberately NOT accelerated
 

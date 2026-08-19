@@ -91,6 +91,16 @@
   (torch::%t-check tn)
   (aref tn 1))
 
+(defun torch:set-data (tn value)
+  ;; Replaces the tensor's data IN PLACE with value (a linalg array or a number)
+  ;; and returns the tensor: the parameter update of a training loop, applied to
+  ;; the very tensor a module's fields already point at, so the layer keeps
+  ;; using it. The tape is untouched -- call it inside torch:no-grad, like
+  ;; torch.no_grad() around an optimizer step.
+  (torch::%t-check tn)
+  (setf (aref tn 1) value)
+  tn)
+
 (defun torch:grad (tn)
   ;; The accumulated gradient (data's shape), or nil before torch:backward has
   ;; reached this tensor. A raw linalg value, not a tensor.
@@ -114,11 +124,18 @@
   (torch::%t-check tn)
   (torch::%t-new (aref tn 1) nil nil nil nil))
 
-(defun torch:zero-grad (tn)
-  ;; Clears the accumulated gradient (sets it back to nil); returns the tensor.
-  (torch::%t-check tn)
-  (setf (aref tn 2) nil)
-  tn)
+(defun torch:zero-grad (x)
+  ;; Clears accumulated gradients and returns the argument: for a TENSOR its own
+  ;; grad slot, for a MODULE the grad slot of every parameter torch:parameters
+  ;; reaches -- the between-steps call of a training loop.
+  (cond ((torch:tensorp x)
+         (setf (aref x 2) nil)
+         x)
+        ((torch:modulep x)
+         (do ((p (torch:parameters x) (cdr p)))
+             ((null p) x)
+           (setf (aref (car p) 2) nil)))
+        (t (error "torch: zero-grad expects a tensor or a module"))))
 
 (defun torch:requires-grad-p (tn)
   ;; Whether the tensor participates in autograd: a leaf marked
@@ -823,3 +840,331 @@
                                       (+ (row-major-aref z (+ dst k))
                                          (row-major-aref g (+ src k)))))))
                           (list z))))))
+
+;; --- the module protocol -----------------------------------------------------
+;; A module is the second fixed-layout record of this package (five slots, so it
+;; never collides with the six-slot tensor): a named bag of FIELDS plus a forward
+;; function. Like the tensor it is built from plain defuns -- no defclass, no
+;; defmethod -- so LibraryDefunPruner keeps pruning every definition here (see
+;; the header and .kb/torch.md), and torch:forward dispatches through the
+;; module's own closure rather than through generic-function dispatch.
+;;
+;;   slot 0  tag         the symbol torch::%module (torch:modulep discriminates)
+;;   slot 1  kind        a keyword naming the layer (:linear, :sequential, ...)
+;;   slot 2  fields      a plist -- KEYWORD value keyword value ... -- holding
+;;                       EVERY parameter, buffer, submodule and hyper-parameter
+;;                       of the layer; this is what torch:parameters walks
+;;   slot 3  forward-fn  (lambda (self args...) ...) -> the output tensor
+;;   slot 4  training    the train/eval flag (t = training, nil = eval)
+;;
+;; The fields plist is the module's parameter registration -- the defun-only
+;; equivalent of walking a CLOS instance's slots: a layer's forward reads its
+;; parameters back out of it with torch:field (never from a closed-over
+;; variable), so a parameter that exists cannot be missing from the plist. A
+;; forward reading a parameter from its closure while the plist did not list it
+;; would train silently wrong, which is the failure mode this layout removes.
+;; Field names and kinds are KEYWORDS so they read identically from any package
+;; (a plain symbol would be cl-user::weight in a user program and never eq to
+;; the torch::weight the library wrote).
+
+(defun torch::%m-new (kind fields forward-fn training)
+  ;; The one constructor of the five-slot record described above.
+  (let ((m (make-array 5 :initial-element nil)))
+    (setf (aref m 0) 'torch::%module)
+    (setf (aref m 1) kind)
+    (setf (aref m 2) fields)
+    (setf (aref m 3) forward-fn)
+    (setf (aref m 4) training)
+    m))
+
+(defun torch:module (kind fields forward-fn)
+  ;; A fresh module of the given kind (a keyword), fields (a plist of
+  ;; KEYWORD/value pairs: parameters, buffers, submodules, lists of submodules
+  ;; and plain hyper-parameters) and forward function -- called as
+  ;; (funcall forward-fn module args...) by torch:forward. Starts in training
+  ;; mode. This is how a user layer is written; the built-in layers below are
+  ;; ordinary callers of it.
+  (torch::%m-new kind fields forward-fn t))
+
+(defun torch:modulep (x)
+  ;; Whether x is a torch module: the fixed-layout five-slot general vector
+  ;; whose first slot is the tag symbol.
+  (if (and (arrayp x) (not (stringp x)) (equal (array-dimensions x) '(5))
+           (eq (row-major-aref x 0) 'torch::%module))
+      t
+      nil))
+
+(defun torch::%m-check (x)
+  ;; Signals unless x is a module; returns it.
+  (unless (torch:modulep x) (error "torch: expected a module"))
+  x)
+
+(defun torch:module-kind (m)
+  ;; The module's kind symbol, as given to torch:module.
+  (torch::%m-check m)
+  (aref m 1))
+
+(defun torch::%m-cell (m name)
+  ;; The plist cell whose car is name, or nil when the module has no such
+  ;; field -- so a present-but-nil field is distinguishable from a missing one.
+  (do ((p (aref m 2) (cddr p)))
+      ((null p) nil)
+    (when (eq (car p) name) (return p))))
+
+(defun torch:field (m name)
+  ;; The value of the module's named field (a parameter, a submodule, a list of
+  ;; submodules or a hyper-parameter), name being the field's KEYWORD. Signals
+  ;; when the module has no such field, so a misspelled name is loud rather than
+  ;; silently nil.
+  (torch::%m-check m)
+  (let ((c (torch::%m-cell m name)))
+    (if (null c) (error "torch: no such module field") (cadr c))))
+
+(defun torch:set-field (m name value)
+  ;; Sets the module's named field, adding it when it is new; returns the
+  ;; module. Replacing a parameter this way is what re-binds a layer to a given
+  ;; set of weights (the gradient check does exactly that).
+  (torch::%m-check m)
+  (let ((c (torch::%m-cell m name)))
+    (if (null c)
+        (setf (aref m 2) (append (aref m 2) (list name value)))
+        (rplaca (cdr c) value)))
+  m)
+
+(defun torch:forward (m &rest args)
+  ;; Runs a module's forward pass -- (funcall its forward-fn module args...) --
+  ;; and returns the output tensor. A plain FUNCTION is also accepted and simply
+  ;; applied, so a stateless step (an activation, a reshape) can sit in a
+  ;; torch:sequential without a wrapper layer existing for it.
+  (cond ((torch:modulep m) (apply (aref m 3) m args))
+        ((functionp m) (apply m args))
+        (t (error "torch: forward expects a module or a function"))))
+
+(defun torch:parameter (x &key element-type)
+  ;; A leaf tensor with :requires-grad t -- the spelling that marks a value as a
+  ;; trainable parameter of a module. A field holding a tensor WITHOUT
+  ;; requires-grad is a buffer instead: torch:parameters skips it.
+  (torch:tensor x :requires-grad t :element-type element-type))
+
+(defun torch::%m-collect (v acc)
+  ;; The parameter walk over one field value, prepending onto acc: a parameter
+  ;; tensor (a leaf with requires-grad) is collected once by IDENTITY -- a weight
+  ;; shared by two layers appears a single time -- a module recurses into its own
+  ;; fields, a list recurses element-wise, and anything else contributes nothing.
+  (cond ((torch:tensorp v)
+         (if (and (aref v 3) (not (member v acc))) (cons v acc) acc))
+        ((torch:modulep v) (torch::%m-collect-fields (aref v 2) acc))
+        ((consp v)
+         (do ((p v (cdr p)) (a acc (torch::%m-collect (car p) a)))
+             ((null p) a)))
+        (t acc)))
+
+(defun torch::%m-collect-fields (plist acc)
+  ;; torch::%m-collect over the VALUES of a fields plist (the names are skipped).
+  (do ((p plist (cddr p)) (a acc (torch::%m-collect (cadr p) a))) ((null p) a)))
+
+(defun torch:parameters (m)
+  ;; Every parameter reachable from the module, in registration order and
+  ;; deduplicated by identity: its own parameter fields, then those of its
+  ;; submodules and of any list of submodules it holds, recursively. This is the
+  ;; list an optimizer is built over. Reaching a parameter needs no declaration
+  ;; beyond putting it in the fields plist.
+  (torch::%m-check m)
+  (reverse (torch::%m-collect-fields (aref m 2) nil)))
+
+(defun torch::%m-set-mode (v mode)
+  ;; Sets the training flag on every module reachable from a field value.
+  (cond ((torch:modulep v)
+         (setf (aref v 4) mode)
+         (do ((p (aref v 2) (cddr p)))
+             ((null p))
+           (torch::%m-set-mode (cadr p) mode)))
+        ((torch:tensorp v) nil)
+        ((consp v)
+         (do ((p v (cdr p)))
+             ((null p))
+           (torch::%m-set-mode (car p) mode)))
+        (t nil)))
+
+(defun torch:train (m &optional (mode t))
+  ;; Puts the module and every submodule into TRAINING mode (nn.Module.train);
+  ;; an explicit nil mode is the same as torch:eval. Returns the module. Only
+  ;; torch:dropout reads the flag.
+  (torch::%m-check m)
+  (torch::%m-set-mode m mode)
+  m)
+
+(defun torch:eval (m)
+  ;; Puts the module and every submodule into EVALUATION mode
+  ;; (nn.Module.eval): dropout becomes the identity. Returns the module.
+  (torch::%m-check m)
+  (torch::%m-set-mode m nil)
+  m)
+
+(defun torch:training-p (m)
+  ;; Whether the module is in training mode.
+  (torch::%m-check m)
+  (if (aref m 4) t nil))
+
+;; --- the layers --------------------------------------------------------------
+
+(defun torch::%m-linear-forward (self x)
+  ;; y = x . W (+ b), with W stored as (in-features out-features) so the forward
+  ;; is a plain torch:matmul and the bias broadcasts over every leading axis.
+  (let ((y (torch:matmul x (torch:field self :weight)))
+        (b (torch:field self :bias)))
+    (if (null b) y (torch:add y b))))
+
+(defun torch:linear (in-features out-features &key (bias t))
+  ;; A fully connected layer (nn.Linear): fields weight, an
+  ;; (in-features out-features) parameter, and bias, an (out-features) parameter
+  ;; or nil under :bias nil. Both are drawn from PyTorch's default
+  ;; U(-1/sqrt(in-features), 1/sqrt(in-features)) using the seeded linalg
+  ;; generator, so linalg:seed reproduces a run on every backend. The weight is
+  ;; stored (in out) -- not PyTorch's transposed (out in) -- so the forward is a
+  ;; plain matmul.
+  (let* ((bound (/ 1.0 (sqrt (* 1.0 in-features))))
+         (w
+          (torch:parameter
+           (linalg:uniform (- bound) bound (list in-features out-features))))
+         (b
+          (if bias
+              (torch:parameter
+               (linalg:uniform (- bound) bound (list out-features)))
+              nil)))
+    (torch:module :linear (list :weight w :bias b)
+                  (function torch::%m-linear-forward))))
+
+(defun torch::%m-embedding-forward (self idx)
+  ;; Row lookup: indices of any shape (d...) select rows of the
+  ;; (num-embeddings embedding-dim) table into (d... embedding-dim).
+  (let* ((w (torch:field self :weight))
+         (iv (torch::%t-indices idx))
+         (d (array-dimensions iv))
+         (dim (cadr (torch:shape w))))
+    (if (= (length d) 1)
+        (torch:index-select w iv)
+        (torch:reshape
+         (torch:index-select w (linalg:reshape iv (list (array-total-size iv))))
+         (append d (list dim))))))
+
+(defun torch:embedding (num-embeddings embedding-dim)
+  ;; An embedding table (nn.Embedding): the single field weight, a
+  ;; (num-embeddings embedding-dim) parameter drawn from the standard normal
+  ;; like PyTorch's default. The forward takes integer indices of any shape and
+  ;; returns them with the embedding axis appended; a row selected twice
+  ;; accumulates both gradients (torch:index-select's adjoint).
+  (let ((w
+         (torch:parameter (linalg:randn (list num-embeddings embedding-dim)))))
+    (torch:module :embedding (list :weight w)
+                  (function torch::%m-embedding-forward))))
+
+(defun torch::%m-sequential-forward (self x)
+  ;; Threads the input through each element in order.
+  (let ((out x))
+    (do ((p (torch:field self :layers) (cdr p)))
+        ((null p) out)
+      (setq out (torch:forward (car p) out)))))
+
+(defun torch:sequential (&rest layers)
+  ;; A chain of layers (nn.Sequential): the forward threads its argument through
+  ;; each element in order. An element may be a module OR a plain function, so an
+  ;; activation goes in as (function torch:relu) -- there is no separate
+  ;; activation-module type in this package. The elements live in the single
+  ;; field layers, and torch:parameters walks that list, so every nested
+  ;; parameter is reachable.
+  (torch:module :sequential (list :layers layers)
+                (function torch::%m-sequential-forward)))
+
+(defun torch::%m-layer-norm-forward (self x)
+  ;; (x - mean) / sqrt(var + eps) * weight + bias over the LAST axis, with the
+  ;; biased (ddof 0) variance -- PyTorch's unbiased=False.
+  (let* ((tx (torch::%t-wrap x))
+         (mu (torch:mean tx :axis -1 :keepdims t))
+         (dev (torch:sub tx mu))
+         (v (torch:var tx :axis -1 :keepdims t :ddof 0))
+         (norm
+          (torch:div dev (torch:sqrt (torch:add v (torch:field self :eps))))))
+    (torch:add (torch:mul norm (torch:field self :weight))
+               (torch:field self :bias))))
+
+(defun torch:layer-norm (d-model &key (eps 1.0e-5))
+  ;; Layer normalization over the last axis (nn.LayerNorm): fields weight (a
+  ;; (d-model) parameter of ones), bias (a (d-model) parameter of zeros) and the
+  ;; eps hyper-parameter. The variance uses the (n - 0) divisor, and the whole
+  ;; expression is composed from torch ops, so the normalization itself is
+  ;; differentiable -- the gradient flows through the mean and the variance too.
+  (let ((g (torch:parameter (linalg:ones (list d-model))))
+        (b (torch:parameter (linalg:zeros (list d-model)))))
+    (torch:module :layer-norm (list :weight g :bias b :eps eps)
+                  (function torch::%m-layer-norm-forward))))
+
+(defun torch::%m-dropout-forward (self x)
+  ;; INVERTED dropout, like PyTorch: in training mode each element survives with
+  ;; probability 1 - p and the survivors are scaled by 1 / (1 - p), so the
+  ;; expectation is unchanged and evaluation needs no rescaling at all.
+  (let ((p (torch:field self :p)) (tx (torch::%t-wrap x)))
+    (if (or (null (aref self 4)) (<= p 0))
+        tx
+        (torch:mul tx
+                   (linalg:div (linalg:greater (linalg:rand (torch:shape tx)) p)
+                               (- 1.0 p))))))
+
+(defun torch:dropout (p)
+  ;; A dropout layer (nn.Dropout) with drop probability p, in the single field
+  ;; p. In TRAINING mode it zeroes each element with probability p and scales
+  ;; the survivors by 1 / (1 - p); in EVALUATION mode (torch:eval) it is the
+  ;; identity. The mask comes from the seeded linalg generator, so linalg:seed
+  ;; reproduces a training run on every backend.
+  (torch:module :dropout (list :p p) (function torch::%m-dropout-forward)))
+
+;; --- the losses --------------------------------------------------------------
+
+(defun torch::%m-reduce-loss (v reduction)
+  ;; The :reduction keyword shared by the losses: :none keeps the per-element
+  ;; tensor, :sum adds it up, and anything else (the :mean default) is handled
+  ;; by the caller, which knows the right denominator.
+  (if (eq reduction :none) v (torch:sum v)))
+
+(defun torch:mse-loss (input target &key (reduction :mean))
+  ;; Mean squared error (nn.MSELoss): the mean of (input - target)^2 as a scalar
+  ;; tensor. :reduction :sum adds instead of averaging, :none returns the
+  ;; per-element tensor. target is a constant unless it is itself a tensor
+  ;; requiring gradients.
+  (let* ((diff (torch:sub input target)) (sq (torch:mul diff diff)))
+    (if (eq reduction :mean)
+        (torch:mean sq)
+        (torch::%m-reduce-loss sq reduction))))
+
+(defun torch::%m-ce-indices (targets n)
+  ;; The class-index operand of the cross entropy as a flat n-element vector: a
+  ;; number, a list, an array or a tensor of any shape.
+  (let ((iv (torch::%t-indices targets)))
+    (cond ((numberp iv) (linalg:from-list (list iv)))
+          ((= (length (array-dimensions iv)) 1) iv)
+          (t (linalg:reshape iv (list n))))))
+
+(defun torch:cross-entropy-loss
+    (logits targets &key ignore-index (reduction :mean))
+  ;; Cross entropy over raw LOGITS and integer class targets
+  ;; (nn.CrossEntropyLoss): logits of shape (... num-classes) -- the leading axes
+  ;; are flattened, so (batch seq vocab) works directly -- and targets of the
+  ;; matching leading shape. Computed as -log-softmax picked at the target class,
+  ;; which is the numerically stable form. :ignore-index k drops every position
+  ;; whose target is k from BOTH the sum and the mean's denominator (the padding
+  ;; positions of a batch must not contribute); :reduction :sum adds instead of
+  ;; averaging, :none returns the per-position tensor.
+  (let* ((tl (torch::%t-wrap logits))
+         (d (torch:shape tl))
+         (c (car (last d)))
+         (n (linalg::%la-head-size d (- (length d) 1)))
+         (x (if (= (length d) 2) tl (torch:reshape tl (list n c))))
+         (iv (torch::%m-ce-indices targets n))
+         (drop (if (null ignore-index) nil (linalg:equal iv ignore-index)))
+         (keep (if (null drop) nil (linalg:sub 1.0 drop)))
+         (safe (if (null drop) iv (linalg:where drop 0.0 iv)))
+         (picked (torch:neg (torch:gather (torch:log-softmax x :axis 1) safe)))
+         (masked (if (null keep) picked (torch:mul picked keep))))
+    (if (eq reduction :mean)
+        (torch:div (torch:sum masked) (if (null keep) n (linalg:sum keep)))
+        (torch::%m-reduce-loss masked reduction))))

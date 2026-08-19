@@ -10148,6 +10148,80 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void torchModuleProtocolWalksItsFieldsForParametersAndModes() {
+		// A user layer is an ordinary torch:module: the fields plist IS the parameter
+		// registration (the defun-only stand-in for walking CLOS slots) and the
+		// forward reads its parameters back out of it. torch:parameters walks
+		// submodules and lists of submodules, deduplicates by identity (the shared
+		// gain is reached twice) and skips a tensor without requires-grad (a buffer);
+		// the mode switch reaches every submodule.
+		LispVal result = evalMulti("""
+				(defun scale-layer (n)
+				  (torch:module :scale (list :gain (torch:parameter (linalg:ones (list n))))
+				                (lambda (self x) (torch:mul x (torch:field self :gain)))))
+				(defparameter *inner* (scale-layer 2))
+				(defparameter *outer*
+				  (torch:module :outer
+				                (list :inner *inner*
+				                      :stack (list *inner* (scale-layer 2))
+				                      :buffer (torch:tensor '(9.0 9.0))
+				                      :shared (torch:parameter '(3.0 4.0)) :eps 1.0e-5)
+				                (lambda (self x) (torch:forward (torch:field self :inner) x))))
+				(defparameter *modes* nil)
+				(torch:eval *outer*)
+				(setq *modes* (list (torch:training-p *outer*) (torch:training-p *inner*)))
+				(torch:train *outer*)
+				(list (torch:modulep *outer*) (torch:modulep (torch:tensor 1.0))
+				      (torch:module-kind *outer*) (length (torch:parameters *outer*))
+				      (torch:data (torch:forward *outer* (torch:tensor '(2.0 5.0))))
+				      *modes* (torch:training-p *inner*)
+				      (torch:data (torch:forward (function torch:relu) (torch:tensor '(-1.0 2.0)))))
+				""");
+		assertThat(result.print()).isEqualTo("(T NIL :OUTER 3 #d(2.0 5.0) (NIL NIL) T #d(0.0 2.0))");
+		assertThatThrownBy(() -> eval("(torch:field (torch:sequential) :nope)"))
+			.hasMessageContaining("torch: no such module field");
+		assertThatThrownBy(() -> eval("(torch:parameters (torch:tensor 1.0))"))
+			.hasMessageContaining("torch: expected a module");
+		assertThatThrownBy(() -> eval("(torch:forward 5 1)")).hasMessageContaining("torch: forward expects a module");
+		assertThatThrownBy(() -> eval("(torch:zero-grad 5)"))
+			.hasMessageContaining("torch: zero-grad expects a tensor or a module");
+	}
+
+	@Test
+	void torchLayersAndLossesComputeTheirForwardPass() {
+		// The built-in layers with their parameters replaced by exact values
+		// (torch:set-field), so the printed forward is exact on every backend:
+		// linear at rank 2 and batched at rank 3, the embedding lookup at index
+		// rank 1 and 2, layer-norm over the last axis (eps 0 keeps it exact),
+		// dropout as the identity in eval mode and at p 0, and the two losses --
+		// including :ignore-index, which drops the position from the mean's
+		// denominator as well as from the sum.
+		LispVal result = evalMulti("""
+				(defparameter *lin* (torch:linear 3 2))
+				(torch:set-field *lin* :weight (torch:parameter '((1.0 0.0) (0.0 1.0) (1.0 1.0))))
+				(torch:set-field *lin* :bias (torch:parameter '(0.5 -0.5)))
+				(defparameter *emb* (torch:embedding 4 2))
+				(torch:set-field *emb* :weight (torch:parameter '((0.0 1.0) (2.0 3.0) (4.0 5.0) (6.0 7.0))))
+				(list (torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0)))))
+				      (torch:shape (torch:forward *lin* (torch:tensor (linalg:ones '(2 4 3)))))
+				      (torch:data (torch:forward *emb* #(2 0)))
+				      (torch:shape (torch:forward *emb* #2A((1 2) (3 0))))
+				      (torch:data (torch:forward (torch:layer-norm 2 :eps 0.0)
+				                                 (torch:tensor '((1.0 3.0)))))
+				      (torch:data (torch:forward (torch:eval (torch:dropout 0.5))
+				                                 (torch:tensor '(1.0 2.0))))
+				      (torch:data (torch:forward (torch:dropout 0) (torch:tensor '(1.0 2.0))))
+				      (torch:item (torch:mse-loss (torch:tensor '(1.0 2.0)) '(0.0 0.0)))
+				      (torch:item (torch:mse-loss (torch:tensor '(1.0 2.0)) '(0.0 0.0) :reduction :sum))
+				      (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0))) #(0)))
+				      (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0) (0.0 0.0)))
+				                                            #(0 1) :ignore-index 1)))
+				""");
+		assertThat(result.print()).isEqualTo("(#d((4.5 4.5)) (2 4 2) #d((4.0 5.0) (0.0 1.0)) (2 2 2) #d((-1.0 1.0))"
+				+ " #d(1.0 2.0) #d(1.0 2.0) 2.5 5.0 0.6931471805599453 0.6931471805599453)");
+	}
+
+	@Test
 	void torchGradcheckTable() {
 		// The acceptance test of the autograd layer: for every differentiable op the
 		// analytic gradient matches central-difference numerical differentiation
@@ -10155,6 +10229,15 @@ class LispEvaluatorTest {
 		// and WASM backends). A failing row prints its diagnosis instead of ALL-OK.
 		LispVal result = evalMulti(am.ik.rontolisp.testsupport.TorchGradcheck.PROGRAM);
 		assertThat(result.print()).isEqualTo("ALL-OK");
+	}
+
+	@Test
+	void torchModuleTrainingLoopConverges() {
+		// The nn acceptance program (TorchGradcheck.NN_TRAINING_PROGRAM), shared
+		// verbatim with the JVM and WASM backends: a torch:sequential MLP whose loss
+		// collapses over 200 SGD steps driven by torch:parameters.
+		LispVal result = evalMulti(am.ik.rontolisp.testsupport.TorchGradcheck.NN_TRAINING_PROGRAM);
+		assertThat(result.print()).isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.NN_TRAINING_EXPECTED);
 	}
 
 	@Test

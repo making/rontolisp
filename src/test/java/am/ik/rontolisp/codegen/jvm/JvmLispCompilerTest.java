@@ -10994,6 +10994,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTorchModuleTrainingLoop() throws Exception {
+		// The nn acceptance program (TorchGradcheck.NN_TRAINING_PROGRAM): a
+		// torch:sequential MLP trained for 200 SGD steps over torch:parameters. It
+		// exercises the whole module layer compiled -- the fields walk, the forward
+		// closures, torch:zero-grad on a module and the in-place torch:set-data
+		// update inside torch:no-grad.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.NN_TRAINING_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.NN_TRAINING_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunJsonParseReturnsHashTablesAndVectors() throws Exception {
 		assertThat(compileAndRunJson("""
 				(let ((h (rontolisp:json-parse "{\\"name\\": \\"rontolisp\\", \\"n\\": 2}")))

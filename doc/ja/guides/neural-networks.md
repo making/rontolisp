@@ -83,6 +83,84 @@
 (torch:data *wf*) ; => #d(1.999890012666583)
 ```
 
+## モジュール
+
+**モジュール**はパラメータを保持し、合成でき、順伝播を持ちます。`torch:module` は kind キーワード、**フィールド**のプロパティリスト、forward 関数からモジュールを作り、`torch:forward` がそれを実行します。フィールドのプロパティリストがパラメータ登録そのもので (`torch:parameters` がこれを走査します)、レイヤーの forward はクロージャに閉じ込めた変数ではなく `torch:field` でパラメータを読み戻します。存在するパラメータが走査から漏れることはありません:
+
+```lisp
+(defun scale-layer (n)
+  (torch:module :scale (list :gain (torch:parameter (linalg:ones (list n))))
+                (lambda (self x) (torch:mul x (torch:field self :gain)))))
+(defparameter *scale* (scale-layer 2))
+(torch:data (torch:forward *scale* (torch:tensor '(3.0 4.0)))) ; => #d(3.0 4.0)
+(length (torch:parameters *scale*))                            ; => 1
+```
+
+走査はサブモジュール**およびそのリスト**へ降りていき、同一性で重複を排除します。2 つのレイヤーで共有された重みはパラメータ 1 個であり、N 段のブロックのリストに `ModuleList` 型は要りません。`requires-grad` を持たないテンソルのフィールドはバッファ扱いで飛ばされます:
+
+```lisp
+(defparameter *stack*
+  (torch:module :stack (list :blocks (list *scale* (scale-layer 2))
+                             :buffer (torch:tensor '(9.0 9.0)))
+                (lambda (self x) x)))
+(length (torch:parameters *stack*)) ; => 2
+```
+
+`torch:train` と `torch:eval` は同じ走査で学習フラグを切り替え、`torch:zero-grad` はモジュールも受け取ってすべてのパラメータの勾配をクリアします。
+
+## 組み込みレイヤー
+
+`torch:linear`、`torch:embedding`、`torch:layer-norm`、`torch:dropout`、`torch:sequential` は `torch:module` の普通の呼び出し元です。パラメータの初期化は PyTorch とまったく同じ方式で、シード可能な `linalg:seed` の生成器から引かれるため、シードを固定した実行はどのバックエンドでも再現します。`torch:set-field` でパラメータを差し替えると、レイヤーを特定の重みに固定できます:
+
+```lisp
+(defparameter *lin* (torch:linear 3 2))
+(torch:set-field *lin* :weight (torch:parameter '((1.0 0.0) (0.0 1.0) (1.0 1.0))))
+(torch:set-field *lin* :bias (torch:parameter '(0.5 -0.5)))
+(torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0))))) ; => #d((4.5 4.5))
+```
+
+`torch:sequential` は引数を各要素に順番に通します。要素はモジュールでも**素の関数**でもよく、これが活性化関数専用のモジュール型を持たない理由であり、reshape を連鎖の中に置ける理由でもあります:
+
+```lisp
+(defparameter *net*
+  (torch:sequential (torch:linear 4 8) (function torch:relu) (torch:linear 8 2)))
+(torch:shape (torch:forward *net* (torch:tensor (linalg:zeros '(3 4))))) ; => (3 2)
+(length (torch:parameters *net*))                                       ; => 4
+```
+
+## 損失関数
+
+`torch:mse-loss` と `torch:cross-entropy-loss` はスカラーテンソルを返す普通の関数です。交差エントロピーは生の**ロジット**と整数のクラスターゲットを取り (one-hot ベクトルではなく、softmax の出力でもありません。数値的に安定な形であるターゲットクラス位置の `-log-softmax` として計算します)、最終軸以外を平坦化するので `(batch seq vocab)` がそのまま使えます。`:ignore-index` はパディング位置を総和からも平均の分母からも除きます:
+
+```lisp
+(torch:item (torch:mse-loss (torch:tensor '(1.0 2.0)) '(0.0 0.0))) ; => 2.5
+(torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0))) #(0)))
+; => 0.6931471805599453
+```
+
+## ネットワークを学習させる
+
+以上を組み合わせると学習ループになります。順伝播、損失、モデルに対する `torch:zero-grad`、`torch:backward`、そして `torch:no-grad` の中で `torch:parameters` を回るパラメータ更新です。`torch:set-data` はレイヤーのフィールドが指しているテンソルそのものに新しい値を書き込むため、モデルは同じテンソルを使い続けます:
+
+```lisp
+(defun sgd-step (model lr)
+  (torch:no-grad
+    (dolist (p (torch:parameters model))
+      (torch:set-data p (linalg:sub (torch:data p)
+                                    (linalg:mul lr (torch:grad p)))))))
+(linalg:seed 3)
+(defparameter *mlp*
+  (torch:sequential (torch:linear 2 8) (function torch:relu) (torch:linear 8 1)))
+(defparameter *xs* (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
+(defparameter *ys* (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
+(dotimes (i 200)
+  (let ((loss (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)))
+    (torch:zero-grad *mlp*)
+    (torch:backward loss)
+    (sgd-step *mlp* 0.2)))
+(< (torch:item (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)) 1.0e-6) ; => T
+```
+
 ## マスク付きアテンションスコア
 
 `torch:masked-fill` はマスクが非ゼロの位置に定数を書き込みます。`torch:softmax` の前に `-infinity` で埋めるのがマスク付きアテンションのイディオムで、マスクされた重みは backward パスを含めてちょうど `0.0` になります:

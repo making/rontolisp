@@ -624,7 +624,9 @@ with the `torch:` qualifier (the package does not use `cl`). Every operation
 accepts tensors, numbers, arrays or lists as operands, computes through the
 `linalg` kernels (so `--simd` accelerates torch programs for free), and a
 tensor prints as its raw record -- read results back with `torch:data` /
-`torch:item` / `torch:grad`. The one macro, `torch:no-grad`, is on the
+`torch:item` / `torch:grad`. The second half of the table is the `nn`-style
+module layer: a module owns its parameters in a fields plist, composes, and is
+run with `torch:forward`. The one macro, `torch:no-grad`, is on the
 [Macros page](macros/torch-no-grad.md).
 
 | Function | Example | Result |
@@ -670,6 +672,25 @@ tensor prints as its raw record -- read results back with `torch:data` /
 | `torch:cat` | `(torch:cat (list a b) :axis 1)` | differentiable concatenation along an existing axis |
 | `torch:stack` | `(torch:stack (list a b))` | differentiable join along a new axis |
 | `torch:slice` | `(torch:slice a '(nil (0 2)))` | differentiable numpy basic slicing |
+| `torch:set-data` | `(torch:set-data tn v)` | replaces a tensor's data in place (the parameter update) |
+| `torch:module` | `(torch:module :k fields fn)` | a user layer: a kind, a fields plist and a forward function |
+| `torch:modulep` | `(torch:modulep x)` | `T` for a module, `NIL` otherwise |
+| `torch:module-kind` | `(torch:module-kind m)` | the module's kind keyword |
+| `torch:field` | `(torch:field m :weight)` | the value of a module's named field (signals when absent) |
+| `torch:set-field` | `(torch:set-field m :weight p)` | sets a module's named field; returns the module |
+| `torch:forward` | `(torch:forward m x)` | runs a module's (or a plain function's) forward pass |
+| `torch:parameter` | `(torch:parameter '(1.0))` | a leaf tensor with `requires-grad` -- a trainable parameter |
+| `torch:parameters` | `(torch:parameters m)` | every parameter reachable from a module, deduplicated |
+| `torch:train` | `(torch:train m)` | puts the module and its submodules into training mode |
+| `torch:eval` | `(torch:eval m)` | puts the module and its submodules into evaluation mode |
+| `torch:training-p` | `(torch:training-p m)` | whether the module is in training mode |
+| `torch:linear` | `(torch:linear 4 8)` | a fully connected layer (`:weight`, `:bias`) |
+| `torch:embedding` | `(torch:embedding 100 8)` | an embedding table (`:weight`), indices of any shape |
+| `torch:sequential` | `(torch:sequential a #'torch:relu b)` | a chain of layers and/or plain functions |
+| `torch:layer-norm` | `(torch:layer-norm 8)` | layer normalization over the last axis (`ddof` 0) |
+| `torch:dropout` | `(torch:dropout 0.1)` | inverted dropout; the identity in evaluation mode |
+| `torch:mse-loss` | `(torch:mse-loss y target)` | mean squared error (`:reduction :mean` / `:sum` / `:none`) |
+| `torch:cross-entropy-loss` | `(torch:cross-entropy-loss logits idx)` | cross entropy over logits (`:ignore-index` skips padding) |
 
 ## java Package Functions
 

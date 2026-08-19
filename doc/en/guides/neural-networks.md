@@ -83,6 +83,84 @@ Gradient descent needs nothing beyond what is above: a forward pass building the
 (torch:data *wf*) ; => #d(1.999890012666583)
 ```
 
+## Modules
+
+A **module** owns parameters, composes, and has a forward pass. `torch:module` builds one from a kind keyword, a plist of **fields** and a forward function; `torch:forward` runs it. The fields plist is the parameter registration -- `torch:parameters` walks it -- so a layer's forward reads its parameters back with `torch:field` rather than from a closed-over variable, and a parameter that exists cannot be missing from the walk:
+
+```lisp
+(defun scale-layer (n)
+  (torch:module :scale (list :gain (torch:parameter (linalg:ones (list n))))
+                (lambda (self x) (torch:mul x (torch:field self :gain)))))
+(defparameter *scale* (scale-layer 2))
+(torch:data (torch:forward *scale* (torch:tensor '(3.0 4.0)))) ; => #d(3.0 4.0)
+(length (torch:parameters *scale*))                            ; => 1
+```
+
+The walk descends into submodules **and into lists of them**, and deduplicates by identity -- a weight shared by two layers is one parameter, and a list of N blocks needs no `ModuleList` type. A tensor field without `requires-grad` is a buffer and is skipped:
+
+```lisp
+(defparameter *stack*
+  (torch:module :stack (list :blocks (list *scale* (scale-layer 2))
+                             :buffer (torch:tensor '(9.0 9.0)))
+                (lambda (self x) x)))
+(length (torch:parameters *stack*)) ; => 2
+```
+
+`torch:train` and `torch:eval` switch the training flag through the same walk, and `torch:zero-grad` accepts a module -- it clears every parameter's gradient.
+
+## The built-in layers
+
+`torch:linear`, `torch:embedding`, `torch:layer-norm`, `torch:dropout` and `torch:sequential` are ordinary callers of `torch:module`. Their parameters are initialized exactly as PyTorch's are, from the seeded `linalg:seed` generator, so a seeded run reproduces on every backend. Replacing a parameter with `torch:set-field` pins a layer to given weights:
+
+```lisp
+(defparameter *lin* (torch:linear 3 2))
+(torch:set-field *lin* :weight (torch:parameter '((1.0 0.0) (0.0 1.0) (1.0 1.0))))
+(torch:set-field *lin* :bias (torch:parameter '(0.5 -0.5)))
+(torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0))))) ; => #d((4.5 4.5))
+```
+
+`torch:sequential` threads its argument through each element, and an element may be a module **or a plain function** -- which is why there is no activation-module type, and why a reshape can sit in a chain:
+
+```lisp
+(defparameter *net*
+  (torch:sequential (torch:linear 4 8) (function torch:relu) (torch:linear 8 2)))
+(torch:shape (torch:forward *net* (torch:tensor (linalg:zeros '(3 4))))) ; => (3 2)
+(length (torch:parameters *net*))                                       ; => 4
+```
+
+## Losses
+
+`torch:mse-loss` and `torch:cross-entropy-loss` are plain functions returning a scalar tensor. Cross entropy takes raw **logits** and integer class targets (not one-hot vectors, and never softmax outputs -- it is computed as `-log-softmax` at the target class, the numerically stable form), flattens all but the last axis so `(batch seq vocab)` works directly, and `:ignore-index` drops padding positions from both the sum and the mean's denominator:
+
+```lisp
+(torch:item (torch:mse-loss (torch:tensor '(1.0 2.0)) '(0.0 0.0))) ; => 2.5
+(torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0))) #(0)))
+; => 0.6931471805599453
+```
+
+## Training a network
+
+Everything above composes into a training loop: forward, loss, `torch:zero-grad` on the model, `torch:backward`, then a parameter update over `torch:parameters` inside `torch:no-grad`. `torch:set-data` writes the new value into the very tensor the layer's fields point at, so the model keeps using it:
+
+```lisp
+(defun sgd-step (model lr)
+  (torch:no-grad
+    (dolist (p (torch:parameters model))
+      (torch:set-data p (linalg:sub (torch:data p)
+                                    (linalg:mul lr (torch:grad p)))))))
+(linalg:seed 3)
+(defparameter *mlp*
+  (torch:sequential (torch:linear 2 8) (function torch:relu) (torch:linear 8 1)))
+(defparameter *xs* (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
+(defparameter *ys* (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
+(dotimes (i 200)
+  (let ((loss (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)))
+    (torch:zero-grad *mlp*)
+    (torch:backward loss)
+    (sgd-step *mlp* 0.2)))
+(< (torch:item (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)) 1.0e-6) ; => T
+```
+
 ## Masked attention scores
 
 `torch:masked-fill` writes a constant where a mask is non-zero; filling with `-infinity` before `torch:softmax` is the masked-attention idiom, and the masked weight comes out as exactly `0.0` -- including through the backward pass:

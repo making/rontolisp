@@ -4370,6 +4370,78 @@ cases:
       3.0
       #d((1.0 0.0) (0.5 0.5))
       #d((0.0 0.0) (-0.25 0.25))
+  # The torch nn module layer: a torch:linear with its parameters replaced by exact
+  # values (torch:set-field), the parameter walk over a torch:sequential holding a
+  # plain function and a dropout, mode switching (eval-mode dropout is the
+  # identity) and torch:mse-loss -- every printed value an exact dyadic rational.
+  # The tail trains a 2-8-1 ReLU MLP on XOR for 200 SGD steps over
+  # torch:parameters with the update inside torch:no-grad: only + - * / and max
+  # are involved, so all four backends follow the same trajectory, and the two
+  # predicates say the loss collapsed rather than pinning its last digit.
+  - name: torch-nn-cross-backend
+    source: |
+      (defun ci-torch-sgd (m lr)
+        (torch:no-grad
+          (do ((p (torch:parameters m) (cdr p)))
+              ((null p))
+            (let ((tn (car p)))
+              (torch:set-data tn
+                              (linalg:sub (torch:data tn)
+                                          (linalg:mul lr (torch:grad tn))))))))
+      (defun ci-torch-nn ()
+        (let ((lin (torch:linear 2 2)))
+          (torch:set-field lin :weight (torch:parameter '((1.0 2.0) (0.5 -1.0))))
+          (torch:set-field lin :bias (torch:parameter '(0.25 -0.5)))
+          (print (torch:module-kind lin))
+          (print (length (torch:parameters lin)))
+          (let ((y (torch:forward lin (torch:tensor '((1.0 2.0) (0.5 1.0))))))
+            (print (torch:data y))
+            (torch:backward (torch:sum y))
+            (print (torch:grad (torch:field lin :weight)))
+            (print (torch:grad (torch:field lin :bias)))
+            (torch:zero-grad lin)
+            (print (torch:grad (torch:field lin :bias)))))
+        (let* ((head (torch:linear 2 2))
+               (net (torch:sequential head (function torch:relu) (torch:dropout 0.5))))
+          (torch:set-field head :weight (torch:parameter '((1.0 0.0) (0.0 -1.0))))
+          (torch:set-field head :bias (torch:parameter '(0.0 0.0)))
+          (torch:eval net)
+          (print (list (torch:training-p net) (torch:training-p head)))
+          (print (torch:data (torch:forward net (torch:tensor '((2.0 3.0) (-1.0 4.0))))))
+          (print (length (torch:parameters net))))
+        (print (torch:item (torch:mse-loss (torch:tensor '(1.0 2.0 3.0))
+                                           (torch:tensor '(0.0 0.0 1.0)))))
+        (linalg:seed 3)
+        (let ((net
+               (torch:sequential (torch:linear 2 8) (function torch:relu)
+                                 (torch:linear 8 1)))
+              (x (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
+              (y (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
+              (first 0.0)
+              (last 0.0))
+          (dotimes (i 200)
+            (let ((loss (torch:mse-loss (torch:forward net x) y)))
+              (when (= i 0) (setq first (torch:item loss)))
+              (setq last (torch:item loss))
+              (torch:zero-grad net)
+              (torch:backward loss)
+              (ci-torch-sgd net 0.2)))
+          (print (length (torch:parameters net)))
+          (print (list (< last (* 1.0e-3 first)) (< last 1.0e-6)))))
+      (ci-torch-nn)
+    expected: |
+      :LINEAR
+      2
+      #d((2.25 -0.5) (1.25 -0.5))
+      #d((1.5 1.5) (3.0 3.0))
+      #d(2.0 2.0)
+      NIL
+      (NIL NIL)
+      #d((2.0 0.0) (0.0 0.0))
+      2
+      3.0
+      4
+      (T T)
   # Regression: uiop:getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline

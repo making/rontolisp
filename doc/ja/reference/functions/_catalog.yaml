@@ -607,6 +607,25 @@ categories:
       - { slug: torch-cat, name: "torch:cat" }
       - { slug: torch-stack, name: "torch:stack" }
       - { slug: torch-slice, name: "torch:slice" }
+      - { slug: torch-set-data, name: "torch:set-data" }
+      - { slug: torch-module, name: "torch:module" }
+      - { slug: torch-modulep, name: "torch:modulep" }
+      - { slug: torch-module-kind, name: "torch:module-kind" }
+      - { slug: torch-field, name: "torch:field" }
+      - { slug: torch-set-field, name: "torch:set-field" }
+      - { slug: torch-forward, name: "torch:forward" }
+      - { slug: torch-parameter, name: "torch:parameter" }
+      - { slug: torch-parameters, name: "torch:parameters" }
+      - { slug: torch-train, name: "torch:train" }
+      - { slug: torch-eval, name: "torch:eval" }
+      - { slug: torch-training-p, name: "torch:training-p" }
+      - { slug: torch-linear, name: "torch:linear" }
+      - { slug: torch-embedding, name: "torch:embedding" }
+      - { slug: torch-sequential, name: "torch:sequential" }
+      - { slug: torch-layer-norm, name: "torch:layer-norm" }
+      - { slug: torch-dropout, name: "torch:dropout" }
+      - { slug: torch-mse-loss, name: "torch:mse-loss" }
+      - { slug: torch-cross-entropy-loss, name: "torch:cross-entropy-loss" }
   - title: "java パッケージ (JVM 専用)"
     functions:
       - { slug: java-new, name: "java:new" }

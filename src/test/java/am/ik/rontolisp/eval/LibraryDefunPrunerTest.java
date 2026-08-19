@@ -116,6 +116,19 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void keepsOnlyTheModuleLayerTheProgramReaches() {
+		// The 461 module layer is defun-only for exactly this reason: a program that
+		// builds one layer carries that layer's forward and the field accessors, and
+		// none of the other layers, losses or the parameter walk.
+		List<String> names = definedNames(
+				spliceAndPrune("(print (torch:shape (torch:field (torch:linear 2 2) :weight)))"));
+		assertThat(names).contains("TORCH:LINEAR", "TORCH:FIELD", "TORCH:MODULE", "TORCH:PARAMETER")
+			.contains("TORCH::%M-LINEAR-FORWARD", "TORCH::%M-CELL")
+			.doesNotContain("TORCH:EMBEDDING", "TORCH:LAYER-NORM", "TORCH:DROPOUT", "TORCH:SEQUENTIAL",
+					"TORCH:MSE-LOSS", "TORCH:CROSS-ENTROPY-LOSS", "TORCH:PARAMETERS", "TORCH::%M-SET-MODE");
+	}
+
+	@Test
 	void torchNoGradKeepsTheSynthesizedGradEnabledVariable() {
 		// (torch:no-grad ...) expands to a let over torch::*grad-enabled* AFTER the
 		// pruner runs (LispMacroExpander.expandTorchNoGrad), so the variable is a
