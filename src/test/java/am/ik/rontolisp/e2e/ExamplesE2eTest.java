@@ -493,18 +493,28 @@ class ExamplesE2eTest {
 	}
 
 	/**
-	 * The classpath a compiled {@code Prog.class} runs on: the workspace, plus the exec
-	 * jar when there is one. Most compiled programs are self-contained and only need the
+	 * The classpath a compiled {@code Prog.class} runs on: the workspace, plus the
+	 * rontolisp runtime. Most compiled programs are self-contained and only need the
 	 * workspace, but one that reaches a runtime support class -- an HTTP server (which
 	 * quickloading clack pulls in whether or not the program starts a server), a socket,
-	 * a Gray stream -- needs the jar, which is exactly what those examples' own READMEs
-	 * tell a reader to put on the classpath.
+	 * a Gray stream -- needs the runtime, which is exactly what those examples' own
+	 * READMEs tell a reader to put on the classpath.
+	 * <p>
+	 * The runtime is the exec jar when one was built, and {@code target/classes}
+	 * otherwise: driven by {@code -Drontolisp.binary} (how CI runs this suite) nothing
+	 * ever packages a jar, and a missing runtime does not degrade -- it fails those legs
+	 * with {@code NoClassDefFoundError}. The two are interchangeable here because the
+	 * exec jar is a shade of {@code target/classes} with no external dependencies.
 	 * @param runDir the workspace the leg runs in
 	 * @return the {@code -cp} value
 	 */
 	private static String jvmClasspath(Path runDir) {
-		Path jar = newestExecJar();
-		return jar == null ? runDir.toString() : runDir + File.pathSeparator + jar.toAbsolutePath();
+		Path runtime = newestExecJar();
+		if (runtime == null) {
+			Path classes = PROJECT_DIR.resolve("target").resolve("classes");
+			runtime = Files.isDirectory(classes) ? classes : null;
+		}
+		return runtime == null ? runDir.toString() : runDir + File.pathSeparator + runtime.toAbsolutePath();
 	}
 
 	private static @Nullable Path newestExecJar() {
