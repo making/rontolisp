@@ -5108,8 +5108,29 @@ public final class LispNames {
 	/** {@code vec:mul}: element-wise (Hadamard) {@code a * b} into a fresh vector. */
 	public static final String VEC_MUL = "MUL";
 
+	/** {@code vec:div}: element-wise {@code a / b} into a fresh vector. */
+	public static final String VEC_DIV = "DIV";
+
 	/** {@code vec:scale}: {@code v * s} (scalar broadcast) into a fresh vector. */
 	public static final String VEC_SCALE = "SCALE";
+
+	/**
+	 * {@code vec:+}: the CL operator spelling of {@link #VEC_ADD}. The four operator
+	 * names are STRICTLY BINARY aliases, unlike their n-ary {@code linalg:} siblings:
+	 * every {@code vec:} kernel is fixed-arity and allocation-explicit (that is why the
+	 * {@code -into} family exists at all), so an n-ary spelling that silently allocated
+	 * one intermediate vector per extra operand would contradict the package's contract.
+	 */
+	public static final String VEC_PLUS = "+";
+
+	/** {@code vec:-}: the CL operator spelling of {@link #VEC_SUB} (binary). */
+	public static final String VEC_MINUS = "-";
+
+	/** {@code vec:*}: the CL operator spelling of {@link #VEC_MUL} (binary). */
+	public static final String VEC_STAR = "*";
+
+	/** {@code vec:/}: the CL operator spelling of {@link #VEC_DIV} (binary). */
+	public static final String VEC_SLASH = "/";
 
 	/** {@code vec:sum}: horizontal sum of a vector, a scalar. */
 	public static final String VEC_SUM = "SUM";
@@ -5144,6 +5165,9 @@ public final class LispNames {
 
 	/** {@code vec:mul-into}: element-wise {@code a * b} into {@code out}. */
 	public static final String VEC_MUL_INTO = "MUL-INTO";
+
+	/** {@code vec:div-into}: element-wise {@code a / b} into {@code out}. */
+	public static final String VEC_DIV_INTO = "DIV-INTO";
 
 	/** {@code vec:scale-into}: {@code v * s} (scalar broadcast) into {@code out}. */
 	public static final String VEC_SCALE_INTO = "SCALE-INTO";

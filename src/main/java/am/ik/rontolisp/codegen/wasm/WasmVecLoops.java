@@ -126,6 +126,7 @@ final class WasmVecLoops {
 			case Instruction.F64_ADD -> Instruction.F32_ADD;
 			case Instruction.F64_SUB -> Instruction.F32_SUB;
 			case Instruction.F64_MUL -> Instruction.F32_MUL;
+			case Instruction.F64_DIV -> Instruction.F32_DIV;
 			default -> throw new IllegalArgumentException("no f32 sibling for f64 op 0x" + Integer.toHexString(f64Op));
 		};
 	}

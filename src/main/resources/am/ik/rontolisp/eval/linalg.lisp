@@ -707,6 +707,47 @@
   ;; Elementwise a / b; either operand may be a scalar.
   (linalg::%la-bcast #'/ a b))
 
+;; The CL operator spellings of the four elementwise kernels above. They are
+;; n-ary exactly like cl:+ / cl:- / cl:* / cl:/ -- left-folded over add/sub/mul/
+;; div -- so (linalg:+ a b c) reads the way arithmetic reads and the degenerate
+;; arities keep their CL meaning: no argument is the identity (0 / 1), a single
+;; argument to + and * is itself, and a single argument to - and / is the
+;; negation / reciprocal. Each fold step is a literal linalg:add/sub/mul/div
+;; call, so the --simd interceptors still see the kernel they match.
+
+(defun linalg:+ (&rest args)
+  ;; n-ary elementwise sum: (linalg:+) is 0, otherwise a left fold of linalg:add.
+  (if (null args)
+      0
+      (do ((acc (car args) (linalg:add acc (car rest)))
+           (rest (cdr args) (cdr rest)))
+          ((null rest) acc))))
+
+(defun linalg:- (a &rest args)
+  ;; n-ary elementwise difference: one argument negates, otherwise a left fold
+  ;; of linalg:sub.
+  (if (null args)
+      (linalg:sub 0 a)
+      (do ((acc a (linalg:sub acc (car rest))) (rest args (cdr rest)))
+          ((null rest) acc))))
+
+(defun linalg:* (&rest args)
+  ;; n-ary elementwise (Hadamard) product: (linalg:*) is 1, otherwise a left
+  ;; fold of linalg:mul. NOT the matrix product -- that is linalg:matmul.
+  (if (null args)
+      1
+      (do ((acc (car args) (linalg:mul acc (car rest)))
+           (rest (cdr args) (cdr rest)))
+          ((null rest) acc))))
+
+(defun linalg:/ (a &rest args)
+  ;; n-ary elementwise quotient: one argument is the reciprocal, otherwise a
+  ;; left fold of linalg:div.
+  (if (null args)
+      (linalg:div 1 a)
+      (do ((acc a (linalg:div acc (car rest))) (rest args (cdr rest)))
+          ((null rest) acc))))
+
 (defun linalg:emap (f a)
   ;; A fresh array with f applied to every element of a.
   (let ((n (array-total-size a)) (out (linalg::%la-like a)))

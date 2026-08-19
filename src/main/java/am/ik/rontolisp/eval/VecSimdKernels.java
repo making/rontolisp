@@ -126,6 +126,22 @@ final class VecSimdKernels {
 		return r;
 	}
 
+	static double[] div(double[] x, double[] y) {
+		int n = Math.min(x.length, y.length);
+		double[] r = new double[n];
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).div(DoubleVector.fromArray(SPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] / y[i];
+		}
+		return r;
+	}
+
 	static double[] scale(double[] x, double s) {
 		int n = x.length;
 		double[] r = new double[n];
@@ -619,6 +635,20 @@ final class VecSimdKernels {
 		}
 	}
 
+	static void divInto(double[] r, double[] x, double[] y) {
+		int n = Math.min(x.length, y.length);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).div(DoubleVector.fromArray(SPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] / y[i];
+		}
+	}
+
 	static void scaleInto(double[] r, double[] x, double s) {
 		int n = x.length;
 		int i = 0;
@@ -693,6 +723,20 @@ final class VecSimdKernels {
 		}
 		for (; i < n; i++) {
 			r[i] = x[i] * y[i];
+		}
+	}
+
+	static void divIntoF(float[] r, float[] x, float[] y) {
+		int n = Math.min(x.length, y.length);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, i).div(FloatVector.fromArray(FSPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] / y[i];
 		}
 	}
 
@@ -776,6 +820,22 @@ final class VecSimdKernels {
 		}
 		for (; i < n; i++) {
 			r[i] = x[i] * y[i];
+		}
+		return r;
+	}
+
+	static float[] divF(float[] x, float[] y) {
+		int n = Math.min(x.length, y.length);
+		float[] r = new float[n];
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, i).div(FloatVector.fromArray(FSPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] / y[i];
 		}
 		return r;
 	}

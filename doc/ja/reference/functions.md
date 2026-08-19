@@ -506,6 +506,10 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#d(4.0 4.0)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | アダマール積(要素ごとの積)。行列積ではありません |
 | `linalg:div` | `(linalg:div #(1 2 3) 2)` | `#d(0.5 1.0 1.5)`(packed double-float 配列) |
+| `linalg:+` | `(linalg:+ #(1 2) #(3 4) #(10 10))` | `#d(14.0 16.0)`(可変長引数の `add`。CL 演算子スペル) |
+| `linalg:-` | `(linalg:- #(10 10) 1 2)` | `#d(7.0 7.0)`(可変長引数の `sub`。引数 1 つで符号反転) |
+| `linalg:*` | `(linalg:* #(1 2) #(3 4))` | `#d(3.0 8.0)`(可変長引数の `mul`。アダマール積であって行列積ではありません) |
+| `linalg:/` | `(linalg:/ #(1 2 3) 2)` | `#d(0.5 1.0 1.5)`(可変長引数の `div`。引数 1 つで逆数) |
 | `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#d(0.0 1.0 4.0 9.0)`(全要素に関数を適用) |
 | `linalg:exp` | `(linalg:exp (linalg:zeros 3))` | `#d(1.0 1.0 1.0)`(要素ごとの `e^x`) |
 | `linalg:log` | `(linalg:log #(1 1 1))` | `#d(0.0 0.0 0.0)`(要素ごとの自然対数) |

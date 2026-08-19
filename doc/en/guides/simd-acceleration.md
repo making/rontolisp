@@ -40,7 +40,9 @@ Construction: `vec:zeros` / `vec:ones` build a filled vector of length *n*, `vec
 
 Access: `vec:aref` reads an element (a `setf` place via `vec:aset`), and `vec:length` returns the element count. These are thin wrappers over the generic packed-array operators, so plain `aref` / `length` work too.
 
-Element-wise (a fresh vector): `vec:add`, `vec:sub`, `vec:mul` (Hadamard product) and `vec:scale` (multiply by a scalar).
+Element-wise (a fresh vector): `vec:add`, `vec:sub`, `vec:mul` (Hadamard product), `vec:div` and `vec:scale` (multiply by a scalar).
+
+The first four also answer to their CL operator spellings -- `vec:+`, `vec:-`, `vec:*` and `vec:/` -- which are exact aliases and compile to the same code, accelerated paths included. Unlike their n-ary [`linalg:`](linear-algebra.md) counterparts they are **strictly binary**: every `vec:` kernel is fixed-arity and allocation-explicit (the reason the `-into` family below exists), so an n-ary spelling that silently allocated one intermediate vector per extra operand would work against the point of the package. Write `(vec:+ (vec:+ a b) c)`, or better, an `-into` loop.
 
 Element-wise unary, under their numpy ufunc names (a fresh vector): `vec:exp`, `vec:log`, `vec:tanh`, `vec:sin`, `vec:cos`, `vec:tan`, `vec:asin`, `vec:acos`, `vec:atan`, `vec:sinh`, `vec:cosh`, `vec:sqrt`, `vec:abs`, `vec:square`, `vec:negative`, `vec:sign` and `vec:reciprocal` (`1 / x`). Each applies the backend's own scalar operation per element, so the transcendental members (`vec:exp` / `vec:log` / `vec:tanh` / `vec:sin` / `vec:cos` / `vec:tan` / `vec:asin` / `vec:acos` / `vec:atan` / `vec:sinh` / `vec:cosh`) on the WASM backends use their software approximations (whose low-order digits differ from the JVM's), and the `-0.0` edges of `vec:abs` / `vec:negative` / `vec:sign` / `vec:tanh` / `vec:sin` / `vec:tan` follow each backend's own scalar operation. On `--no-gc`, the transcendental members and `vec:sign` run the same software sequences as the other WASM backends, so all seventeen work everywhere.
 
@@ -95,6 +97,7 @@ Every kernel above that returns a vector returns a **fresh** one, so a loop over
 | `(vec:add a b)` | `(vec:add-into out a b)` |
 | `(vec:sub a b)` | `(vec:sub-into out a b)` |
 | `(vec:mul a b)` | `(vec:mul-into out a b)` |
+| `(vec:div a b)` | `(vec:div-into out a b)` |
 | `(vec:scale v s)` | `(vec:scale-into out v s)` |
 | `(vec:matvec w x)` | `(vec:matvec-into out w x)` |
 | `(vec:exp v)` | `(vec:exp-into out v)` |
@@ -138,7 +141,7 @@ On `--no-gc`, `vec:matvec-into`'s aliasing guard is a WebAssembly trap (an `unre
 
 ## Hardware acceleration (optional)
 
-The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section.
+The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` and the four operator aliases, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section.
 
 Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wasm`) and whether you pass `--simd` are **orthogonal** axes:
 

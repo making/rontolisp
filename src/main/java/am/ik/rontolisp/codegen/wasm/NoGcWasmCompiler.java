@@ -3533,7 +3533,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.VEC_ASIN_INTO, LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO,
 			LispNames.VEC_COSH_INTO, LispNames.VEC_SIGN_INTO, LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM,
 			LispNames.VEC_RELU, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO,
-			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO, LispNames.VEC_MATVEC, LispNames.VEC_MATVEC_INTO);
+			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO, LispNames.VEC_MATVEC, LispNames.VEC_MATVEC_INTO,
+			LispNames.VEC_DIV, LispNames.VEC_DIV_INTO, LispNames.VEC_PLUS, LispNames.VEC_MINUS, LispNames.VEC_STAR,
+			LispNames.VEC_SLASH);
 
 	// simd members that exist in the package but need cons lists (which --no-gc lacks),
 	// so
@@ -3604,7 +3606,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO, LispNames.VEC_SIGN_INTO,
 					LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM, LispNames.VEC_RELU, LispNames.VEC_CLIP,
 					LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO, LispNames.VEC_RELU_INTO,
-					LispNames.VEC_CLIP_INTO ->
+					LispNames.VEC_CLIP_INTO, LispNames.VEC_DIV, LispNames.VEC_DIV_INTO, LispNames.VEC_PLUS,
+					LispNames.VEC_MINUS, LispNames.VEC_STAR, LispNames.VEC_SLASH ->
 				operandWidth;
 			// matvec's result is a rank-1 vector following x's width (W is a matrix, so
 			// firstVecWidth would miss it); matvec-into returns its destination (arg 1).
@@ -3637,7 +3640,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB, false);
 			case LispNames.VEC_MUL ->
 				compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL, false);
+			case LispNames.VEC_DIV ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_DIV, Instruction.F64_DIV, false);
 			case LispNames.VEC_SCALE -> compileSimdScale(args, fn, false);
+			// The CL operator spellings: the same kernels under their alias names, so
+			// --no-gc (which never sees the vec.lisp aliases) lowers (vec:+ a b) to the
+			// very instructions (vec:add a b) lowers to, with no extra call.
+			case LispNames.VEC_PLUS ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_ADD, Instruction.F64_ADD, false);
+			case LispNames.VEC_MINUS ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB, false);
+			case LispNames.VEC_STAR ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL, false);
+			case LispNames.VEC_SLASH ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_DIV, Instruction.F64_DIV, false);
 			// The destination-passing kernels: same loops, but the destination is the
 			// caller's vector instead of a fresh allocVec block -- so a loop over them
 			// never advances the bump allocator.
@@ -3647,6 +3663,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB, true);
 			case LispNames.VEC_MUL_INTO ->
 				compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL, true);
+			case LispNames.VEC_DIV_INTO ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_DIV, Instruction.F64_DIV, true);
 			case LispNames.VEC_SCALE_INTO -> compileSimdScale(args, fn, true);
 			// The arithmetic unary ufuncs: NATIVE IEEE per-element semantics (this
 			// backend has no vec.lisp defun to mirror; see WasmVecLoops.simdMap1). The

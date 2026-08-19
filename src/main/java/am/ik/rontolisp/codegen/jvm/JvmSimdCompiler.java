@@ -56,7 +56,11 @@ final class JvmSimdCompiler {
 			Map.entry(LispNames.VEC_MAXIMUM, 2), Map.entry(LispNames.VEC_MINIMUM, 2), Map.entry(LispNames.VEC_RELU, 1),
 			Map.entry(LispNames.VEC_CLIP, 3), Map.entry(LispNames.VEC_MAXIMUM_INTO, 3),
 			Map.entry(LispNames.VEC_MINIMUM_INTO, 3), Map.entry(LispNames.VEC_RELU_INTO, 2),
-			Map.entry(LispNames.VEC_CLIP_INTO, 4));
+			Map.entry(LispNames.VEC_CLIP_INTO, 4),
+			// The element-wise quotient and the four CL operator spellings, which map to
+			// the same bridge methods as their named siblings.
+			Map.entry(LispNames.VEC_DIV, 2), Map.entry(LispNames.VEC_DIV_INTO, 3), Map.entry(LispNames.VEC_PLUS, 2),
+			Map.entry(LispNames.VEC_MINUS, 2), Map.entry(LispNames.VEC_STAR, 2), Map.entry(LispNames.VEC_SLASH, 2));
 
 	/**
 	 * Returns whether the given {@code simd} package member is one of the vectorizable
@@ -80,7 +84,8 @@ final class JvmSimdCompiler {
 				LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_SIGN_INTO,
 				LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM, LispNames.VEC_RELU,
 				LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO, LispNames.VEC_RELU_INTO,
-				LispNames.VEC_CLIP_INTO);
+				LispNames.VEC_CLIP_INTO, LispNames.VEC_DIV, LispNames.VEC_DIV_INTO, LispNames.VEC_PLUS,
+				LispNames.VEC_MINUS, LispNames.VEC_STAR, LispNames.VEC_SLASH);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

@@ -963,6 +963,30 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void theQuotientKernelAndTheOperatorAliasesLowerNativelyOnBothNoGcModes() {
+		// --no-gc never splices vec.lisp: every vec: name is intercepted here, so an
+		// un-wired name is a hard compile error rather than a slow fallback. vec:div,
+		// vec:div-into and the four CL operator spellings must therefore lower like the
+		// kernels they alias, in the scalar AND the v128 lowering alike.
+		String source = """
+				(defun go (n)
+				  (let* ((a (vec:arange n))
+				         (b (vec:ones n))
+				         (c (vec:div-into (vec:zeros n) (vec:div a b) b)))
+				    (vec:sum (vec:/ (vec:* (vec:+ a b) b) (vec:- c b)))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] scalar = compile(source);
+		assertThat(containsSequence(Objects.requireNonNull(sections(scalar).get(10)), 0xA3))
+			.as("f64.div (0xA3) in the scalar lowering")
+			.isTrue();
+		byte[] simd = compileSimd(source);
+		assertThat(containsSequence(Objects.requireNonNull(sections(simd).get(10)), 0xFD, 0xF3))
+			.as("f64x2.div (0xFD 0xF3) in the v128 lowering")
+			.isTrue();
+	}
+
+	@Test
 	void noSimdVecKernelsLowerToScalarLoopsWithNoV128() {
 		// Without --simd (the default --no-gc), the SAME vec: program lowers to plain
 		// scalar

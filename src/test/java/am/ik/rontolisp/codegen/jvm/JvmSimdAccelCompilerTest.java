@@ -90,6 +90,27 @@ class JvmSimdAccelCompilerTest {
 	}
 
 	@Test
+	void theQuotientKernelAndTheOperatorAliasesMatchTheScalarReference() throws Exception {
+		// vec:div is the fourth element-wise kernel; the four CL operator spellings are
+		// its strictly-binary alias family, compiled to the very same bridge methods, so
+		// the accelerated output must still equal the spliced vec.lisp reference.
+		for (String expr : List.of("(print (vec:div #d(8.0 12.0 20.0) #d(2.0 4.0 5.0)))",
+				"(print (vec:+ #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))", "(print (vec:- #d(10.0 20.0 30.0) #d(1.0 2.0 3.0)))",
+				"(print (vec:* #d(2.0 3.0 4.0) #d(5.0 6.0 7.0)))", "(print (vec:/ #d(8.0 12.0) #d(2.0 4.0)))",
+				"(print (vec:div-into (vec:zeros 3) #d(8.0 12.0 20.0) #d(2.0 4.0 5.0)))",
+				"(print (vec:div #f(8.0 12.0) #f(2.0 4.0)))", "(print (vec:/ #f(8.0 12.0) #f(2.0 4.0)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+		// The vector loop, not just the scalar tail.
+		String big = """
+				(let ((a (vec:arange 200)) (b (vec:ones 200)))
+				  (print (vec:aref (vec:/ a b) 199))
+				  (print (vec:sum (vec:div a b))))
+				""";
+		assertThat(accel(big)).isEqualTo(scalar(big));
+	}
+
+	@Test
 	void acceleratedResultVectorsInteroperateWithThePackedArraySurface() throws Exception {
 		// A bridge result is a plain rank-1 packed double[]: vec:aref / vec:length and
 		// the

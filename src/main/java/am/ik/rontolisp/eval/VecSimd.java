@@ -68,6 +68,13 @@ public final class VecSimd {
 		define(globalEnv, LispNames.VEC_ADD, VecSimdKernels::add, VecSimdKernels::addF);
 		define(globalEnv, LispNames.VEC_SUB, VecSimdKernels::sub, VecSimdKernels::subF);
 		define(globalEnv, LispNames.VEC_MUL, VecSimdKernels::mul, VecSimdKernels::mulF);
+		define(globalEnv, LispNames.VEC_DIV, VecSimdKernels::div, VecSimdKernels::divF);
+		// The CL operator spellings bind the very kernels their named siblings bind, so
+		// an accelerated build never runs the one-line alias defun from vec.lisp.
+		define(globalEnv, LispNames.VEC_PLUS, VecSimdKernels::add, VecSimdKernels::addF);
+		define(globalEnv, LispNames.VEC_MINUS, VecSimdKernels::sub, VecSimdKernels::subF);
+		define(globalEnv, LispNames.VEC_STAR, VecSimdKernels::mul, VecSimdKernels::mulF);
+		define(globalEnv, LispNames.VEC_SLASH, VecSimdKernels::div, VecSimdKernels::divF);
 		defineFn(globalEnv, LispNames.VEC_SCALE, 2, (name, args) -> {
 			LispFloatArray v = array(name, args.get(0));
 			double s = scalar(name, args.get(1));
@@ -228,6 +235,7 @@ public final class VecSimd {
 		defineInto(globalEnv, LispNames.VEC_ADD_INTO, VecSimdKernels::addInto, VecSimdKernels::addIntoF);
 		defineInto(globalEnv, LispNames.VEC_SUB_INTO, VecSimdKernels::subInto, VecSimdKernels::subIntoF);
 		defineInto(globalEnv, LispNames.VEC_MUL_INTO, VecSimdKernels::mulInto, VecSimdKernels::mulIntoF);
+		defineInto(globalEnv, LispNames.VEC_DIV_INTO, VecSimdKernels::divInto, VecSimdKernels::divIntoF);
 		defineFn(globalEnv, LispNames.VEC_SCALE_INTO, 3, (name, args) -> {
 			LispFloatArray out = array(name, args.get(0));
 			LispFloatArray v = array(name, args.get(1));

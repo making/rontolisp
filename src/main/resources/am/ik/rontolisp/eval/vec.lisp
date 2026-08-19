@@ -96,9 +96,26 @@
 
 (defun vec:mul (a b) (vec::%map2 #'* a b))
 
+(defun vec:div (a b) (vec::%map2 #'/ a b))
+
 (defun vec:scale (v s)
   (let ((out (vec::%make-like v (length v))))
     (dotimes (i (length v) out) (setf (aref out i) (* (aref v i) s)))))
+
+;; The CL operator spellings of the four element-wise kernels above. Unlike their
+;; linalg: siblings they are STRICTLY BINARY: every vec: kernel is fixed-arity and
+;; allocation-explicit (the reason the -into family exists), so an n-ary spelling
+;; that silently allocated one intermediate vector per extra operand would
+;; contradict the package's contract -- and --no-gc, which intercepts every vec:
+;; name natively instead of splicing these defuns, has no cons list to fold over.
+
+(defun vec:+ (a b) (vec:add a b))
+
+(defun vec:- (a b) (vec:sub a b))
+
+(defun vec:* (a b) (vec:mul a b))
+
+(defun vec:/ (a b) (vec:div a b))
 
 ;; --- element-wise unary ufuncs (numpy parity) ---------------------------------
 
@@ -200,6 +217,8 @@
 (defun vec:sub-into (out a b) (vec::%map2-into out #'- a b))
 
 (defun vec:mul-into (out a b) (vec::%map2-into out #'* a b))
+
+(defun vec:div-into (out a b) (vec::%map2-into out #'/ a b))
 
 (defun vec:scale-into (out v s)
   (dotimes (i (length v) out) (setf (aref out i) (* (aref v i) s))))

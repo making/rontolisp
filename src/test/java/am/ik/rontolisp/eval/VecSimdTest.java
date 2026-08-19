@@ -166,6 +166,24 @@ class VecSimdTest {
 	}
 
 	@Test
+	void theElementWiseQuotientAndTheOperatorAliasesMatchTheScalarOracle() {
+		// vec:div is the fourth element-wise kernel; vec:+ / vec:- / vec:* / vec:/ are
+		// its strictly-binary alias family, installed onto the very same natives, so an
+		// accelerated run never falls back to the one-line alias defun.
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarOracle("(vec:div (vec:arange %s) (vec:ones %s))".formatted(n, n));
+			assertMatchesScalarOracle("(vec:+ (vec:arange %s) (vec:ones %s))".formatted(n, n));
+			assertMatchesScalarOracle("(vec:- (vec:arange %s) (vec:ones %s))".formatted(n, n));
+			assertMatchesScalarOracle("(vec:* (vec:arange %s) (vec:arange %s))".formatted(n, n));
+			assertMatchesScalarOracle("(vec:/ (vec:arange %s) (vec:ones %s))".formatted(n, n));
+		}
+		assertMatchesScalarOracle(
+				"(vec:div (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float))");
+		assertThat(eval("(vec:/ #d(8.0 12.0 20.0) #d(2.0 4.0 5.0))", true).print()).isEqualTo("#d(4.0 3.0 4.0)");
+		assertThat(eval("(vec:/ #f(8.0 12.0) #f(2.0 4.0))", true)).isInstanceOf(LispSingleFloatArray.class);
+	}
+
+	@Test
 	void elementWiseKernelsPreserveTheOperandWidth() {
 		assertThat(eval("(vec:add #d(1.0 2.0) #d(3.0 4.0))", true)).isInstanceOf(LispDoubleFloatArray.class);
 		assertThat(eval("(vec:add #f(1.0 2.0) #f(3.0 4.0))", true)).isInstanceOf(LispSingleFloatArray.class);
@@ -221,6 +239,8 @@ class VecSimdTest {
 					"(vec:sub (vec:arange %s) (vec:ones %s))", n);
 			assertIntoMatchesAllocating("(vec:mul-into (vec:zeros %s) (vec:arange %s) (vec:arange %s))",
 					"(vec:mul (vec:arange %s) (vec:arange %s))", n);
+			assertIntoMatchesAllocating("(vec:div-into (vec:zeros %s) (vec:arange %s) (vec:ones %s))",
+					"(vec:div (vec:arange %s) (vec:ones %s))", n);
 		}
 		// scale-into takes a scalar third argument, so it does not fit the pattern above.
 		for (String n : new String[] { "7", "200" }) {

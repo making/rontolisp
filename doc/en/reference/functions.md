@@ -542,6 +542,10 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#d(4.0 4.0)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | The Hadamard (elementwise) product -- not the matrix product |
 | `linalg:div` | `(linalg:div #(1 2 3) 2)` | `#d(0.5 1.0 1.5)` (a packed double-float array) |
+| `linalg:+` | `(linalg:+ #(1 2) #(3 4) #(10 10))` | `#d(14.0 16.0)` (n-ary `add`; the CL operator spelling) |
+| `linalg:-` | `(linalg:- #(10 10) 1 2)` | `#d(7.0 7.0)` (n-ary `sub`; one argument negates) |
+| `linalg:*` | `(linalg:* #(1 2) #(3 4))` | `#d(3.0 8.0)` (n-ary `mul`, Hadamard -- not the matrix product) |
+| `linalg:/` | `(linalg:/ #(1 2 3) 2)` | `#d(0.5 1.0 1.5)` (n-ary `div`; one argument gives the reciprocal) |
 | `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#d(0.0 1.0 4.0 9.0)` (apply a function to every element) |
 | `linalg:exp` | `(linalg:exp (linalg:zeros 3))` | `#d(1.0 1.0 1.0)` (elementwise `e^x`) |
 | `linalg:log` | `(linalg:log #(1 1 1))` | `#d(0.0 0.0 0.0)` (elementwise natural log) |

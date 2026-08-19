@@ -493,6 +493,10 @@ categories:
       - { slug: linalg-sub, name: "linalg:sub" }
       - { slug: linalg-mul, name: "linalg:mul" }
       - { slug: linalg-div, name: "linalg:div" }
+      - { slug: linalg-plus, name: "linalg:+" }
+      - { slug: linalg-minus, name: "linalg:-" }
+      - { slug: linalg-star, name: "linalg:*" }
+      - { slug: linalg-slash, name: "linalg:/" }
       - { slug: linalg-emap, name: "linalg:emap" }
       - { slug: linalg-exp, name: "linalg:exp" }
       - { slug: linalg-log, name: "linalg:log" }

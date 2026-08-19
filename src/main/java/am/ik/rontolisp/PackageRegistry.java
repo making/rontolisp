@@ -310,7 +310,7 @@ public final class PackageRegistry {
 			"ATAN", "SINH", "COSH", "SQRT", "ABS", "SQUARE", "NEGATIVE", "SIGN", "RECIPROCAL", "MAXIMUM", "MINIMUM",
 			"CLIP", "RELU", "DIFF", "GRADIENT", "ZEROS-LIKE", "SEED", "RAND", "RANDN", "UNIFORM", "CHOICE",
 			"PERMUTATION", "TAKE-ROWS", "ROW", "GATHER", "ONE-HOT", "EQUAL", "GREATER", "GREATER-EQUAL", "LESS",
-			"LESS-EQUAL");
+			"LESS-EQUAL", "+", "-", "*", "/");
 
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 
@@ -337,7 +337,8 @@ public final class PackageRegistry {
 			LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO,
 			LispNames.VEC_SIGN_INTO, LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM,
 			LispNames.VEC_RELU, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO,
-			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO);
+			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO, LispNames.VEC_DIV, LispNames.VEC_DIV_INTO,
+			LispNames.VEC_PLUS, LispNames.VEC_MINUS, LispNames.VEC_STAR, LispNames.VEC_SLASH);
 
 	private static final List<String> VEC_FUNCTION_NAMES = sorted(VEC_FUNCTIONS);
 

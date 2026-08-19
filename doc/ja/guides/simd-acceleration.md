@@ -40,7 +40,9 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 
 アクセス: `vec:aref` は要素を読み(`vec:aset` を介した `setf` の場所)、`vec:length` は要素数を返します。これらは汎用のパックド配列演算子への薄いラッパーなので、素の `aref` / `length` も使えます。
 
-要素ごと(新しいベクトル): `vec:add`・`vec:sub`・`vec:mul`(アダマール積)・`vec:scale`(スカラー倍)。
+要素ごと(新しいベクトル): `vec:add`・`vec:sub`・`vec:mul`(アダマール積)・`vec:div`・`vec:scale`(スカラー倍)。
+
+最初の 4 つには CL 演算子スペル `vec:+`・`vec:-`・`vec:*`・`vec:/` もあります。これらは完全な別名で、加速パスも含めて同じコードにコンパイルされます。可変長引数の [`linalg:`](linear-algebra.md) 版と違い**厳密に 2 引数**です: `vec:` のカーネルはどれも固定アリティでアロケーションが明示的であり(下の `-into` ファミリが存在する理由がこれです)、被演算子が増えるたびに中間ベクトルを黙って確保する可変長スペルはこのパッケージの狙いに反します。`(vec:+ (vec:+ a b) c)` と書くか、より良いのは `-into` のループにすることです。
 
 要素ごとの単項、numpy の ufunc 名で(新しいベクトル): `vec:exp`・`vec:log`・`vec:tanh`・`vec:sin`・`vec:cos`・`vec:tan`・`vec:asin`・`vec:acos`・`vec:atan`・`vec:sinh`・`vec:cosh`・`vec:sqrt`・`vec:abs`・`vec:square`・`vec:negative`・`vec:sign`・`vec:reciprocal`(`1 / x`)。それぞれ各バックエンド自身のスカラー演算を要素ごとに適用します。そのため超越関数のメンバー(`vec:exp` / `vec:log` / `vec:tanh` / `vec:sin` / `vec:cos` / `vec:tan` / `vec:asin` / `vec:acos` / `vec:atan` / `vec:sinh` / `vec:cosh`)は WASM バックエンドではソフトウェア近似を使い(下位桁が JVM と異なります)、`vec:abs` / `vec:negative` / `vec:sign` / `vec:tanh` / `vec:sin` / `vec:tan` の `-0.0` の端値は各バックエンド自身のスカラー演算に従います。`--no-gc` でも超越関数のメンバーと `vec:sign` は他の WASM バックエンドと同じソフトウェアの命令列で動くので、17 個すべてがどこでも動きます。
 
@@ -95,6 +97,7 @@ wasm-GC にも線形メモリはありますが、パックド配列がそこに
 | `(vec:add a b)` | `(vec:add-into out a b)` |
 | `(vec:sub a b)` | `(vec:sub-into out a b)` |
 | `(vec:mul a b)` | `(vec:mul-into out a b)` |
+| `(vec:div a b)` | `(vec:div-into out a b)` |
 | `(vec:scale v s)` | `(vec:scale-into out v s)` |
 | `(vec:matvec w x)` | `(vec:matvec-into out w x)` |
 | `(vec:exp v)` | `(vec:exp-into out v)` |
@@ -138,7 +141,7 @@ wasm-GC にも線形メモリはありますが、パックド配列がそこに
 
 ## ハードウェアアクセラレーション(任意)
 
-スカラーの `vec.lisp` 基準はすべてのバックエンドで正しく動きます。`--simd` は、ベクトル化可能なカーネル(`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`、単項 ufunc の `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`、比較セレクトの `maximum` / `minimum` / `relu` / `clip`、およびそれらすべての `-into` 版、さらに波及的に `mean` / `norm` / `square`)を実際の CPU ベクトル命令または脱ボックス化されたループに追加でロワリングする、バックエンド非依存の唯一のスイッチです。オプトインです。要素ごとのカーネルはスカラー基準とバイト単位で同一のままですが、リダクションは加算順序が異なり、単精度のリダクションはさらに単精度で累算します。したがってリダクションはスカラー基準と食い違うことがあります。後述の精度に関する 2 つの段落を参照してください。同じフラグは `linalg` の一群の関数も加速します。それらは次節に挙げます。
+スカラーの `vec.lisp` 基準はすべてのバックエンドで正しく動きます。`--simd` は、ベクトル化可能なカーネル(`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` と 4 つの演算子別名、単項 ufunc の `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`、比較セレクトの `maximum` / `minimum` / `relu` / `clip`、およびそれらすべての `-into` 版、さらに波及的に `mean` / `norm` / `square`)を実際の CPU ベクトル命令または脱ボックス化されたループに追加でロワリングする、バックエンド非依存の唯一のスイッチです。オプトインです。要素ごとのカーネルはスカラー基準とバイト単位で同一のままですが、リダクションは加算順序が異なり、単精度のリダクションはさらに単精度で累算します。したがってリダクションはスカラー基準と食い違うことがあります。後述の精度に関する 2 つの段落を参照してください。同じフラグは `linalg` の一群の関数も加速します。それらは次節に挙げます。
 
 どのメモリモデル向けにコンパイルするか(`.class`・wasm-GC `.wasm`・`--no-gc` `.wasm`)と、`--simd` を渡すかどうかは**直交する**軸です。
 

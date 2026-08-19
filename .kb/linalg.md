@@ -2,7 +2,7 @@
 
 One hand-written Lisp-source library, `src/main/resources/am/ik/rontolisp/eval/linalg.lisp`,
 following the `json.lisp` pattern (see `json.md`) so a single implementation
-runs identically on all backends. 57 exported functions (constructors `zeros`/
+runs identically on all backends. 78 exported functions (constructors `zeros`/
 `ones`/`full`/`eye`/`arange`/`linspace`/`from-list`, shape ops, broadcasting
 `add`/`sub`/`mul`/`div`/`emap` + named ufuncs, products `dot`/`matmul`/`outer`,
 reductions, calculus `diff`/`gradient`, and floating-point Gaussian-elimination
@@ -57,6 +57,7 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:transpose a &optional axes)` | matrix transpose; a vector is returned unchanged. With an axes list (numpy `x.transpose(0 3 1 2)`): the rank-n axis permutation, out-dims[k] = dims[axes[k]] (each axis named exactly once); only the 1-arg matrix form is `--simd`-intercepted |
 | `(linalg:pad a pads)` | constant-0 padding (numpy np.pad's default mode): pads = one `(before after)` pair per axis, or a single non-negative integer for both sides of every axis; keeps a's width |
 | `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise with numpy broadcasting: a scalar operand on either side, and two arrays of different shapes along their trailing axes (extents equal or 1, missing leading axis = 1; anything else = the shape-mismatch error); result keeps the first array operand's width; `mul` is Hadamard (NOT matrix product) |
+| `(linalg:+ &rest a)` / `(linalg:- a &rest r)` / `(linalg:* &rest a)` / `(linalg:/ a &rest r)` | the CL operator spellings: n-ary LEFT FOLDS of add/sub/mul/div (plain defuns, so `#'linalg:+` works). Degenerate arities follow CL: no argument is 0 / 1, one argument to `+`/`*` is itself, one argument to `-`/`/` is the negation / reciprocal (via `(sub 0 a)` / `(div 1 a)`, so a scalar operand works too). Each fold step is a LITERAL `linalg:add`/... call, so `--simd` still intercepts the kernel inside the alias; only the `&rest` list is extra |
 | `(linalg:emap f a)` | fresh array with f applied to every element |
 | `(linalg:exp a)` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` | named elementwise unary ufuncs (numpy parity, todo 109): `emap` of the obvious scalar op (`square` = `mul a a`, `reciprocal` = `div 1 a`); unlike `emap` they are `--simd`-interceptable |
 | `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise |

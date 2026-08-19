@@ -188,6 +188,34 @@ final class JvmSimdVectorTemplate {
 		return r;
 	}
 
+	static @Nullable Object simdDiv(@Nullable Object a, @Nullable Object b) {
+		if (a instanceof float[] fx) {
+			return divF(fx, asFloat(b));
+		}
+		if (b instanceof float[]) {
+			throw mixedWidth();
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		double[] r = newVec(n);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, ox + i)
+					.div(DoubleVector.fromArray(SPECIES, y, oy + i))
+					.intoArray(r, 2 + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[2 + i] = x[ox + i] / y[oy + i];
+		}
+		return r;
+	}
+
 	// --- comparison-select ufuncs ---------------------------------------------------
 	// maximum / minimum / relu / clip mirror the vec.lisp comparison selects
 	// ((if (> x y) x y) and its mirrors), never Math.max / Math.min (different NaN /
@@ -529,6 +557,34 @@ final class JvmSimdVectorTemplate {
 		}
 		for (; i < n; i++) {
 			r[or + i] = x[ox + i] * y[oy + i];
+		}
+		return out;
+	}
+
+	static @Nullable Object simdDivInto(@Nullable Object out, @Nullable Object a, @Nullable Object b) {
+		if (out instanceof float[] fr) {
+			divIntoF(fr, asFloat(a), asFloat(b));
+			return out;
+		}
+		requireDouble(a, b);
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, ox + i)
+					.div(DoubleVector.fromArray(SPECIES, y, oy + i))
+					.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] / y[oy + i];
 		}
 		return out;
 	}
@@ -2622,6 +2678,25 @@ final class JvmSimdVectorTemplate {
 		}
 	}
 
+	private static void divIntoF(float[] r, float[] x, float[] y) {
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, ox + i)
+					.div(FloatVector.fromArray(FSPECIES, y, oy + i))
+					.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] / y[oy + i];
+		}
+	}
+
 	/**
 	 * Scalar, like {@link #scaleF}: the f64 intermediate defeats a native f32 lane mul.
 	 */
@@ -2721,6 +2796,26 @@ final class JvmSimdVectorTemplate {
 		}
 		for (; i < n; i++) {
 			r[2 + i] = x[ox + i] * y[oy + i];
+		}
+		return r;
+	}
+
+	private static float[] divF(float[] x, float[] y) {
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		float[] r = newVecF(n);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, ox + i)
+					.div(FloatVector.fromArray(FSPECIES, y, oy + i))
+					.intoArray(r, 2 + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[2 + i] = x[ox + i] / y[oy + i];
 		}
 		return r;
 	}

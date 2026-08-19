@@ -3830,6 +3830,46 @@ cases:
       #d((3.0 5.0) (4.0 3.0))
       #f((10.0 40.0) (30.0 80.0))
       #d(((1.0 1.0) (3.0 2.0)))
+  # The CL operator spellings of the four linalg elementwise kernels (see
+  # .kb/linalg.md): n-ary LEFT FOLDS of add/sub/mul/div, so they broadcast exactly
+  # like the named siblings. The degenerate arities follow CL: no argument is the
+  # identity, one argument to +/* is itself and one argument to -// is the negation
+  # / reciprocal. They are plain defuns, so #'linalg:+ is a first-class value.
+  - name: linalg-operator-aliases-cross-backend
+    source: |
+      (defun ci-linalg-ops ()
+        (print (linalg:+ #(1 2 3) 10))
+        (print (linalg:+ #(1 2) #(3 4) #(10 10)))
+        (print (linalg:+))
+        (print (linalg:+ 5))
+        (print (linalg:- #(5 5) 1))
+        (print (linalg:- #(10 10) 1 2))
+        (print (linalg:- #(5 5)))
+        (print (linalg:* #(1 2) #(3 4)))
+        (print (linalg:* #(1 2 3) 2 10))
+        (print (linalg:*))
+        (print (linalg:/ #(1 2 3) 2))
+        (print (linalg:/ #(12 12) 2 3))
+        (print (linalg:/ #(1.0 2.0 4.0)))
+        (print (funcall #'linalg:+ #2A((1 2) (3 4)) #2A((100) (200))))
+        (print (reduce #'linalg:* (list #(1 2) #(3 4) #(2 2)))))
+      (ci-linalg-ops)
+    expected: |
+      #d(11.0 12.0 13.0)
+      #d(14.0 16.0)
+      0
+      5
+      #d(4.0 4.0)
+      #d(7.0 7.0)
+      #d(-5.0 -5.0)
+      #d(3.0 8.0)
+      #d(20.0 40.0 60.0)
+      1
+      #d(0.5 1.0 1.5)
+      #d(2.0 2.0)
+      #d(1.0 0.5 0.25)
+      #d((101.0 102.0) (203.0 204.0))
+      #d(6.0 16.0)
   # linalg calculus (numpy diff/gradient parity): diff is the n-th discrete
   # difference along the last axis; gradient is second-order central differences
   # with first-order one-sided ends over a uniform scalar spacing or a non-uniform
@@ -4085,6 +4125,32 @@ cases:
       #f(4.0 6.0)
       #d(17.0 39.0)
       #d(14.0 32.0)
+  # The vec: element-wise quotient plus the four CL operator spellings (see
+  # .kb/vec.md): vec:+ / vec:- / vec:* / vec:/ are STRICTLY BINARY aliases of
+  # vec:add / vec:sub / vec:mul / vec:div, and every acceleration layer maps them
+  # onto the same kernel, so an accelerated build never runs the alias defun. The
+  # values divide exactly, so they print byte-for-byte on all four backends.
+  - name: vec-operator-aliases-cross-backend
+    source: |
+      (defun ci-vec-ops ()
+        (let ((a #d(8.0 12.0 20.0))
+              (b #d(2.0 4.0 5.0)))
+          (print (vec:+ a b))
+          (print (vec:- a b))
+          (print (vec:* a b))
+          (print (vec:/ a b))
+          (print (vec:div a b))
+          (print (vec:div-into (vec:zeros 3) a b))
+          (print (vec:to-list (vec:div-into a a b)))))
+      (ci-vec-ops)
+    expected: |
+      #d(10.0 16.0 25.0)
+      #d(6.0 8.0 15.0)
+      #d(16.0 48.0 100.0)
+      #d(4.0 3.0 4.0)
+      #d(4.0 3.0 4.0)
+      #d(4.0 3.0 4.0)
+      (4.0 3.0 4.0)
   # Packed single-float arrays (see .kb/vec.md): the #f(...) / :element-type 'single-float
   # counterpart of packed-float-arrays-cross-backend, storing elements unboxed as f32
   # (half the memory, 2x the SIMD lanes) on every backend (interpreter float[]/int[];

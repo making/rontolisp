@@ -38,7 +38,7 @@ block, keyed off the `#d`/`#f` literal or the `:element-type` (todo-95 Phase 5).
 plain `defun` over `make-array :element-type 'double-float` / `aref` / `length`. It is the
 implementation on the interpreter (unless `--simd` — see acceleration layer 0), the JVM
 compiler and the wasm-GC compiler (they run the scalar defuns over the packed repr,
-unboxed; a `--simd` build of either intercepts the seven vectorizable kernels at their
+unboxed; a `--simd` build of either intercepts the eight vectorizable kernels at their
 call sites and leaves the rest of the defuns in place), and the correctness oracle for the
 accelerated paths. `VecLibrary` splices/loads
 it exactly like `LinalgLibrary`:
@@ -54,7 +54,15 @@ Members: `zeros`/`ones`/`arange`/`from-list`/`to-list` (construction; `zeros`/`o
 `arange` take an `:element-type` keyword — a literal `'single-float` builds `#f`,
 else the double default — through the `vec::%make` funnel, mirroring the linalg constructors),
 `aref`/`aset`/
-`length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), the
+`length` (thin wrappers), `add`/`sub`/`mul`/`div`/`scale` (element-wise, fresh vector) plus
+their CL operator spellings `+`/`-`/`*`/`/` (**strictly binary** aliases of
+add/sub/mul/div, unlike the n-ary `linalg:` siblings: every `vec:` kernel is
+fixed-arity and allocation-explicit -- the reason `-into` exists -- so an n-ary
+spelling silently allocating one intermediate per extra operand would fight the
+package's contract, and `--no-gc`, which intercepts every `vec:` name natively
+instead of splicing the defuns, has no cons list to fold over anyway; every
+acceleration layer maps the alias onto the SAME kernel as its named sibling, so
+the one-line defun never runs on an accelerated build), the
 unary ufuncs `exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`sinh`/`cosh`/
 `sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (element-wise, fresh vector, numpy
 names -- todo 109; see "Element-wise unary ufuncs" below), the comparison selects
@@ -73,7 +81,7 @@ lists, so they are portable-backends-only (a `--no-gc` compile error); `matvec` 
 ## Destination-passing `-into` kernels (todo-103)
 
 Each vector-returning kernel has an `-into` sibling — `add-into`/`sub-into`/`mul-into`/
-`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (incl. `sin-into`/`cos-into`/`tan-into` and `asin-into`..`cosh-into`; todo 109) and the comparison-select
+`div-into`/`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (incl. `sin-into`/`cos-into`/`tan-into` and `asin-into`..`cosh-into`; todo 109) and the comparison-select
 `maximum-into`/`minimum-into`/`relu-into`/`clip-into` (todo 109 Phase 3) —
 that writes into a caller-supplied destination (argument 1, CL's `map-into` order) and
 RETURNS that very value. A unary `-into` destination MAY alias the operand (element i
@@ -265,7 +273,7 @@ approximation precision).
 
 ## Acceleration layer 0 — interpreter `--simd` (jdk.incubator.vector), opt-in
 
-`rontolisp prog.lisp --simd` (interpret, no `-o`) runs the same seven vectorizable kernels
+`rontolisp prog.lisp --simd` (interpret, no `-o`) runs the same eight vectorizable kernels
 on the Vector API instead of the scalar defuns. The DEFAULT interpreter is unchanged — it
 is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--simd`.
 
@@ -341,8 +349,9 @@ is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--si
 
 ## Acceleration layer 1 — JVM `--simd` (jdk.incubator.vector)
 
-`--simd` routes the **seven vectorizable kernels** (`add`/`sub`/`mul`/`scale`/`dot`/`sum`/
-`matvec`) at their call sites to an embedded `jdk.incubator.vector` bridge, replacing the
+`--simd` routes the **eight vectorizable kernels** (`add`/`sub`/`mul`/`div`/`scale`/`dot`/
+`sum`/`matvec`, plus the operator aliases `+`/`-`/`*`/`/` onto the same four bridges) at
+their call sites to an embedded `jdk.incubator.vector` bridge, replacing the
 scalar defun. `mean`/`norm` are accelerated transitively (their spliced bodies call
 `sum`/`dot`).
 
@@ -476,9 +485,10 @@ fresh rank-1 vector of length `rows` in W's width; x (and out) must match W's wi
 
 ## Acceleration layer 3 — wasm-GC `--simd` native v128 over `(array (mut v128))` (todo-105)
 
-`--simd` on the DEFAULT `.wasm` backend routes the same fifty-two kernels (the seven
+`--simd` on the DEFAULT `.wasm` backend routes the same fifty-four kernels (the eight
 vectorizable ones, the sixteen todo-109 unary ufuncs, the four todo-109-Phase-3
-comparison selects, and their twenty-five `-into` siblings)
+comparison selects, and their twenty-six `-into` siblings; the four operator aliases
+reuse the `add`/`sub`/`mul`/`div` helpers rather than adding their own)
 to emitted v128 runtime helpers.
 
 The apparent blocker — "`v128.load`/`store` address LINEAR memory, so a packed array must

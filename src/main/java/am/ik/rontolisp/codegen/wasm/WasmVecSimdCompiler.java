@@ -90,7 +90,15 @@ final class WasmVecSimdCompiler {
 			Map.entry(LispNames.VEC_MAXIMUM_INTO, WasmVecSimdRuntimeBuilder.MAXIMUM_INTO),
 			Map.entry(LispNames.VEC_MINIMUM_INTO, WasmVecSimdRuntimeBuilder.MINIMUM_INTO),
 			Map.entry(LispNames.VEC_RELU_INTO, WasmVecSimdRuntimeBuilder.RELU_INTO),
-			Map.entry(LispNames.VEC_CLIP_INTO, WasmVecSimdRuntimeBuilder.CLIP_INTO));
+			Map.entry(LispNames.VEC_CLIP_INTO, WasmVecSimdRuntimeBuilder.CLIP_INTO),
+			// The element-wise quotient and the four CL operator spellings, which reuse
+			// the very helpers their named siblings call.
+			Map.entry(LispNames.VEC_DIV, WasmVecSimdRuntimeBuilder.DIV),
+			Map.entry(LispNames.VEC_DIV_INTO, WasmVecSimdRuntimeBuilder.DIV_INTO),
+			Map.entry(LispNames.VEC_PLUS, WasmVecSimdRuntimeBuilder.ADD),
+			Map.entry(LispNames.VEC_MINUS, WasmVecSimdRuntimeBuilder.SUB),
+			Map.entry(LispNames.VEC_STAR, WasmVecSimdRuntimeBuilder.MUL),
+			Map.entry(LispNames.VEC_SLASH, WasmVecSimdRuntimeBuilder.DIV));
 
 	/** The argument count of each accelerated member's Lisp call form. */
 	private static int arity(String member) {
@@ -100,8 +108,8 @@ final class WasmVecSimdCompiler {
 					LispNames.VEC_SINH, LispNames.VEC_COSH, LispNames.VEC_SQRT, LispNames.VEC_ABS,
 					LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL, LispNames.VEC_RELU ->
 				1;
-			case LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO,
-					LispNames.VEC_MATVEC_INTO, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO,
+			case LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_DIV_INTO,
+					LispNames.VEC_SCALE_INTO, LispNames.VEC_MATVEC_INTO, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO,
 					LispNames.VEC_MINIMUM_INTO ->
 				3;
 			case LispNames.VEC_CLIP_INTO -> 4;

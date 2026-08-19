@@ -35,6 +35,8 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 
 [`linalg:add`](../reference/functions/linalg-add.md)、[`linalg:sub`](../reference/functions/linalg-sub.md)、[`linalg:mul`](../reference/functions/linalg-mul.md)、[`linalg:div`](../reference/functions/linalg-div.md) は要素ごとに演算し、numpy の規則でブロードキャストします: どちらか一方のスカラーのオペランドはもう一方のオペランドの形状にブロードキャストされ、形状の異なる 2 つの配列は末尾の軸から揃えられます -- 揃えた各軸の長さは等しいか、どちらかが 1 でなければならず（先頭側の欠けている軸は 1 と見なされます）、長さ 1 の軸がもう一方の長さに引き伸ばされます。どちらにも当てはまらないペアは shape mismatch エラーを通知します。結果は最初の配列オペランドの要素型を保持します（混合幅の規則と同じ）。`mul` はアダマール積（要素ごとの積）であることに注意してください。行列積は [`linalg:matmul`](../reference/functions/linalg-matmul.md)（またはランクに応じてディスパッチする [`linalg:dot`](../reference/functions/linalg-dot.md)）です。要素ごとの任意の変換には [`linalg:emap`](../reference/functions/linalg-emap.md) を使います。
 
+この 4 つには CL 演算子スペル [`linalg:+`](../reference/functions/linalg-plus.md)・[`linalg:-`](../reference/functions/linalg-minus.md)・[`linalg:*`](../reference/functions/linalg-star.md)・[`linalg:/`](../reference/functions/linalg-slash.md) もあります。これらは `add` / `sub` / `mul` / `div` の可変長引数の左畳み込みなので、`(linalg:+ a b c)` は段階的にブロードキャストし、各段階は加速されたカーネルのままです。引数が退化した場合は CL に従います: 引数なしは単位元(`0` / `1`)、`+` と `*` の引数 1 つはその引数自身、`-` と `/` の引数 1 つは符号反転 / 逆数です。([`vec:`](simd-acceleration.md) パッケージの演算子別名は代わりに厳密に 2 引数です。あちらのカーネルは設計上すべて固定アリティだからです。)
+
 よく使う要素ごとの演算は、numpy の ufunc 名でも用意されています: [`linalg:exp`](../reference/functions/linalg-exp.md)・[`linalg:log`](../reference/functions/linalg-log.md)・[`linalg:tanh`](../reference/functions/linalg-tanh.md)・[`linalg:sin`](../reference/functions/linalg-sin.md)・[`linalg:cos`](../reference/functions/linalg-cos.md)・[`linalg:tan`](../reference/functions/linalg-tan.md)・[`linalg:asin`](../reference/functions/linalg-asin.md)・[`linalg:acos`](../reference/functions/linalg-acos.md)・[`linalg:atan`](../reference/functions/linalg-atan.md)・[`linalg:sinh`](../reference/functions/linalg-sinh.md)・[`linalg:cosh`](../reference/functions/linalg-cosh.md)・[`linalg:sqrt`](../reference/functions/linalg-sqrt.md)・[`linalg:abs`](../reference/functions/linalg-abs.md)・[`linalg:square`](../reference/functions/linalg-square.md)・[`linalg:negative`](../reference/functions/linalg-negative.md)・[`linalg:sign`](../reference/functions/linalg-sign.md)・[`linalg:reciprocal`](../reference/functions/linalg-reciprocal.md)、さらに比較セレクトの [`linalg:maximum`](../reference/functions/linalg-maximum.md)・[`linalg:minimum`](../reference/functions/linalg-minimum.md)・[`linalg:clip`](../reference/functions/linalg-clip.md)・[`linalg:relu`](../reference/functions/linalg-relu.md)(厳密比較 `(if (> x y) x y)` とその鏡像で定義され、比較が偽なら第 2 被演算子または境界が選ばれます — タイや `NaN` を含め、すべてのバックエンドで同一の規則です)。いずれも対応する `emap`(または `mul` / `div` / `maximum` / `minimum` の呼び出し)と等価ですが、名前付き関数なので [`--simd`](simd-acceleration.md#accelerating-linalg) で加速されます。任意のコールバックを取る `emap` は決して加速されません。
 
 ```lisp
@@ -45,6 +47,8 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 (linalg:square #2A((1 2) (3 4))) ; => #d((1.0 4.0) (9.0 16.0))
 (linalg:mul #2A((1 2) (3 4)) #(10 20))       ; => #d((10.0 40.0) (30.0 80.0))
 (linalg:add #2A((1 2) (3 4)) #2A((100) (200))) ; => #d((101.0 102.0) (203.0 204.0))
+(linalg:+ #(1 2) #(3 4) #(10 10))            ; => #d(14.0 16.0)
+(linalg:- #(5 5))                            ; => #d(-5.0 -5.0)
 ```
 
 ## 軸に沿った還元

@@ -109,8 +109,21 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSub"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_MUL,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMul"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_DIV,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdDiv"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_SCALE,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdScale"), cp.addUtf8(binaryDesc))));
+		// The CL operator spellings share the very bridge methods their named siblings
+		// use, so (vec:+ a b) is compiled to the same call as (vec:add a b) -- the alias
+		// defun never runs on an accelerated build.
+		ops.put(LispNames.VEC_PLUS,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAdd"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_MINUS,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSub"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_STAR,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMul"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_SLASH,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdDiv"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_DOT,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdDot"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_MATVEC,
@@ -123,6 +136,8 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSubInto"), cp.addUtf8(ternaryDesc))));
 		ops.put(LispNames.VEC_MUL_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMulInto"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_DIV_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdDivInto"), cp.addUtf8(ternaryDesc))));
 		ops.put(LispNames.VEC_SCALE_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdScaleInto"), cp.addUtf8(ternaryDesc))));
 		ops.put(LispNames.VEC_MATVEC_INTO,

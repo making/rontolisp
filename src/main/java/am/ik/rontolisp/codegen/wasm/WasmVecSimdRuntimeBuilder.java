@@ -225,10 +225,19 @@ final class WasmVecSimdRuntimeBuilder {
 
 	static final int CLIP_INTO = 54;
 
+	// The element-wise quotient, appended after the comparison-select block so no
+	// existing helper index moves. The four CL operator spellings (vec:+ / vec:- /
+	// vec:* / vec:/) need no helper of their own -- WasmVecSimdCompiler maps them onto
+	// ADD / SUB / MUL / DIV.
+
+	static final int DIV = 55;
+
+	static final int DIV_INTO = 56;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 55;
+	static final int FUNC_COUNT = 57;
 
 	/**
 	 * Emits the type index of each function, in emission order (for the function
@@ -245,7 +254,7 @@ final class WasmVecSimdRuntimeBuilder {
 					RECIPROCAL, RELU ->
 				WasmLispCompiler.TYPE_CALLABLE_BASE;
 			// Three eq params -> eq (the binary -into kernels + clip's two bounds).
-			case ADD_INTO, SUB_INTO, MUL_INTO, SCALE_INTO, MATVEC_INTO, CLIP, MAXIMUM_INTO, MINIMUM_INTO ->
+			case ADD_INTO, SUB_INTO, MUL_INTO, DIV_INTO, SCALE_INTO, MATVEC_INTO, CLIP, MAXIMUM_INTO, MINIMUM_INTO ->
 				WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
 			// Four eq params -> eq (clip-into: out, v, lo, hi).
 			case CLIP_INTO -> WasmLispCompiler.TYPE_CALLABLE_BASE + 3;
@@ -270,6 +279,8 @@ final class WasmVecSimdRuntimeBuilder {
 			case ADD_INTO -> buildElementwise(Instruction.F64X2_ADD, true, vecBase);
 			case SUB_INTO -> buildElementwise(Instruction.F64X2_SUB, true, vecBase);
 			case MUL_INTO -> buildElementwise(Instruction.F64X2_MUL, true, vecBase);
+			case DIV -> buildElementwise(Instruction.F64X2_DIV, false, vecBase);
+			case DIV_INTO -> buildElementwise(Instruction.F64X2_DIV, true, vecBase);
 			case SCALE_INTO -> buildScale(true, vecBase);
 			case MATVEC_INTO -> buildMatvec(true, vecBase);
 			case EXP -> buildUnaryElement(SCALAR_OP_EXP, false, vecBase);
