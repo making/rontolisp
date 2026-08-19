@@ -131,7 +131,7 @@ class JvmLinalgSimdAccelCompilerTest {
 	/** A 1024-element {@code #f} vector of ones with {@code elem0} in element 0. */
 	private String probe32(String elem0, String reduction) {
 		return """
-				(defparameter *v* (linalg:ones 1024 'single-float))
+				(defparameter *v* (linalg:ones 1024 :element-type 'single-float))
 				(setf (aref *v* 0) %s)
 				(print (round %s))
 				""".formatted(elem0, reduction);
@@ -174,7 +174,8 @@ class JvmLinalgSimdAccelCompilerTest {
 			// The reason the #f broadcast kernels compute in double and narrow once:
 			// 0.1 is not representable, so an f32 lane multiply would diverge here.
 			// examples/ml/nn-vec.lisp is exactly this shape -- (linalg:mul grad 0.1).
-			assertMatchesScalarReference("(print (linalg:%s (linalg:arange 1 201 1 'single-float) 0.1))".formatted(op));
+			assertMatchesScalarReference(
+					"(print (linalg:%s (linalg:arange 1 201 1 :element-type 'single-float) 0.1))".formatted(op));
 		}
 	}
 
@@ -221,9 +222,11 @@ class JvmLinalgSimdAccelCompilerTest {
 			.isEqualTo("#d((10.0 40.0) (30.0 80.0))");
 		assertMatchesScalarReference(
 				"(print (linalg:add (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:arange 3)))");
-		assertMatchesScalarReference("(print (linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
-				+ " (linalg:arange 0 2 'single-float)))");
-		assertThat(accel("(print (array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0))))"))
+		assertMatchesScalarReference(
+				"(print (linalg:sub (linalg:reshape (linalg:arange 0 4 :element-type 'single-float) '(2 2))"
+						+ " (linalg:arange 0 2 :element-type 'single-float)))");
+		assertThat(accel(
+				"(print (array-element-type (linalg:div (linalg:ones '(2 2) :element-type 'single-float) #d(1.0 2.0))))"))
 			.isEqualTo("SINGLE-FLOAT");
 		// The row and column shapes of the CNN layers, a rank-3 pair, and the strict
 		// comparison selects through the same kernel.
@@ -231,8 +234,9 @@ class JvmLinalgSimdAccelCompilerTest {
 				+ " (linalg:reshape (linalg:from-list '(5.0 6.0 7.0 8.0)) '(4 1))))");
 		assertMatchesScalarReference("(print (linalg:div (linalg:reshape (linalg:arange 24) '(2 3 4))"
 				+ " (linalg:add (linalg:reshape (linalg:arange 12) '(3 4)) 1)))");
-		assertMatchesScalarReference("(print (linalg:add (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
-				+ " (linalg:reshape (linalg:arange 0 2 'single-float) '(2 1))))");
+		assertMatchesScalarReference(
+				"(print (linalg:add (linalg:reshape (linalg:arange 0 4 :element-type 'single-float) '(2 2))"
+						+ " (linalg:reshape (linalg:arange 0 2 :element-type 'single-float) '(2 1))))");
 		assertMatchesScalarReference("(print (linalg:maximum (linalg:reshape (linalg:arange 6) '(2 3))"
 				+ " (linalg:from-list '(2.0 4.0 1.0))))");
 		assertThat(accel("(print (linalg:maximum #d((0.0 -0.0)) #d(-0.0 0.0)))")).isEqualTo("#d((-0.0 0.0))");
@@ -240,26 +244,37 @@ class JvmLinalgSimdAccelCompilerTest {
 
 	@Test
 	void axisFormsRunTheAxisKernelsAndMatchTheScalarReference() throws Exception {
-		// The axis forms are intercepted as call SHAPES: an axis call
-		// routes to the extended bridge kernel (laSumAxis &c, a 2-argument call padded
-		// with null for the missing keepdims), whose folds mirror %la-fold-axis /
+		// The axis forms are intercepted as call SHAPES: a literal :axis / :keepdims
+		// tail routes to the extended bridge kernel (laSumAxis &c; an option not
+		// supplied is padded with null), whose folds mirror %la-fold-axis /
 		// %la-argfold-axis exactly; a 1-arg call still hits the base kernel whose
 		// decline branch passes an empty rest list to the variadic defun.
-		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 0))")).isEqualTo("#d(5.0 7.0 9.0)");
-		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 1 t))")).isEqualTo("#d((6.0) (15.0))");
-		assertMatchesScalarReference("(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
-		assertMatchesScalarReference("(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
-		assertMatchesScalarReference("(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
-		assertMatchesScalarReference("(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) -1))");
-		assertMatchesScalarReference("(print (linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t))");
+		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) :axis 0))")).isEqualTo("#d(5.0 7.0 9.0)");
+		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) :axis 1 :keepdims t))"))
+			.isEqualTo("#d((6.0) (15.0))");
+		// The keywords are matched by name, not position: any order, each optional.
+		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) :keepdims t :axis 1))"))
+			.isEqualTo("#d((6.0) (15.0))");
+		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) :keepdims t))")).isEqualTo("#d((21.0))");
 		assertMatchesScalarReference(
-				"(print (linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 0))");
+				"(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) :keepdims t :axis -1))");
+		// An unknown keyword is not a kernel call; the defun's &key prologue signals.
+		assertThatThrownBy(() -> accel("(print (linalg:sum #d((1.0 2.0)) :axes 0))")).rootCause()
+			.hasMessageContaining("Unknown keyword argument");
+		assertMatchesScalarReference("(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0))");
+		assertMatchesScalarReference("(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1))");
+		assertMatchesScalarReference("(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1))");
+		assertMatchesScalarReference("(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) :axis -1))");
 		assertMatchesScalarReference(
-				"(print (linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 1))");
-		assertMatchesScalarReference("(print (linalg:argmin (linalg:from-list '(3.0 9.0 2.0)) 0))");
+				"(print (linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0 :keepdims t))");
+		assertMatchesScalarReference(
+				"(print (linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) :element-type 'single-float) :axis 0))");
+		assertMatchesScalarReference(
+				"(print (linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) :element-type 'single-float) :axis 1))");
+		assertMatchesScalarReference("(print (linalg:argmin (linalg:from-list '(3.0 9.0 2.0)) :axis 0))");
 		// The fold's strict comparison: the accumulator wins ties (first element).
-		assertThat(accel("(print (linalg:amax #d((-0.0 0.0)) 1))")).isEqualTo("#d(-0.0)");
-		assertThat(accel("(print (linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) 1))")).isEqualTo("#d(-1.0 -2.0)");
+		assertThat(accel("(print (linalg:amax #d((-0.0 0.0)) :axis 1))")).isEqualTo("#d(-0.0)");
+		assertThat(accel("(print (linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) :axis 1))")).isEqualTo("#d(-1.0 -2.0)");
 		// 1-arg calls over a general (boxed) array exercise the decline branch itself.
 		assertThat(accel("(print (linalg:sum #(1 2 3)))")).isEqualTo("6");
 		assertThat(accel("(print (linalg:argmax #(1 9 3)))")).isEqualTo("1");
@@ -281,7 +296,7 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertMatchesScalarReference("(print (linalg:transpose (linalg:arange 3) '(0)))");
 		assertMatchesScalarReference(
 				"(print (linalg:transpose (linalg:reshape (linalg:from-list '(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0)"
-						+ " 'single-float) '(2 2 2)) '(2 0 1)))");
+						+ " :element-type 'single-float) '(2 2 2)) '(2 0 1)))");
 		assertMatchesScalarReference("(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) nil))");
 		assertThatThrownBy(() -> accel("(print (linalg:transpose #d((1.0 2.0)) '(0 0)))")).rootCause()
 			.hasMessageContaining("permutation");
@@ -295,14 +310,14 @@ class JvmLinalgSimdAccelCompilerTest {
 		String declined = """
 				(defparameter *n* 0)
 				(defun bump () (setq *n* (+ *n* 1)) 0)
-				(print (linalg:sum #2A((1 2) (3 4)) (bump)))
+				(print (linalg:sum #2A((1 2) (3 4)) :axis (bump)))
 				(print *n*)
 				""";
 		assertThat(accel(declined)).isEqualTo(scalar(declined));
 		String accepted = """
 				(defparameter *n* 0)
 				(defun bump () (setq *n* (+ *n* 1)) 1)
-				(print (linalg:amax #d((1.0 9.0) (7.0 2.0)) (bump)))
+				(print (linalg:amax #d((1.0 9.0) (7.0 2.0)) :axis (bump)))
 				(print *n*)
 				""";
 		assertThat(accel(accepted)).isEqualTo(scalar(accepted));
@@ -333,7 +348,7 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertMatchesScalarReference("(print (linalg:sum #d((1.0 2.0) (3.0 4.0))))");
 		assertMatchesScalarReference("(print (linalg:amin (linalg:reshape (linalg:arange 200) '(10 20))))");
 		assertMatchesScalarReference("(print (linalg:trace (linalg:reshape (linalg:arange 100) '(10 10))))");
-		assertMatchesScalarReference("(print (linalg:trace (linalg:eye 5 'single-float)))");
+		assertMatchesScalarReference("(print (linalg:trace (linalg:eye 5 :element-type 'single-float)))");
 		// An all-negative array is the trap a max-reduce over zero-padded lanes falls
 		// into.
 		assertThat(accel("(print (linalg:amax (linalg:mul (linalg:arange 1 201) -1.0)))")).isEqualTo("-1.0");
@@ -373,7 +388,8 @@ class JvmLinalgSimdAccelCompilerTest {
 	@Test
 	void outerAndProductsPreserveTheOperandWidth() throws Exception {
 		assertThat(accel("(print (linalg:outer #f(1.0 2.0) #f(3.0 4.0)))")).isEqualTo("#f((3.0 4.0) (6.0 8.0))");
-		assertThat(accel("(print (linalg:dot (linalg:eye 2 'single-float) (linalg:ones 2 'single-float)))"))
+		assertThat(accel(
+				"(print (linalg:dot (linalg:eye 2 :element-type 'single-float) (linalg:ones 2 :element-type 'single-float)))"))
 			.isEqualTo("#f(1.0 1.0)");
 		assertMatchesScalarReference("(print (linalg:outer (linalg:arange 200) (linalg:arange 200)))");
 		assertMatchesScalarReference("(print (linalg:outer (linalg:reshape (linalg:arange 6) '(2 3)) #d(1.0 2.0)))");
@@ -387,7 +403,7 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertMatchesScalarReference("(print (linalg:transpose #f((1.0 2.0) (3.0 4.0))))");
 		assertMatchesScalarReference("(print (linalg:reshape (linalg:arange 12) '(3 4)))");
 		assertMatchesScalarReference("(print (linalg:reshape (linalg:arange 12) '(2 3 2)))");
-		assertMatchesScalarReference("(print (linalg:reshape (linalg:arange 0 12 'single-float) 12))");
+		assertMatchesScalarReference("(print (linalg:reshape (linalg:arange 0 12 :element-type 'single-float) 12))");
 		assertMatchesScalarReference("(print (linalg:flatten #d((1.0 2.0) (3.0 4.0))))");
 		// A vector transposes to itself, the very same object.
 		assertThat(accel("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))")).isEqualTo("T");
@@ -405,7 +421,7 @@ class JvmLinalgSimdAccelCompilerTest {
 					"(print (linalg:" + op + " " + inner.replace("%v", "(linalg:arange 200)") + "))");
 			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4))))");
 			assertMatchesScalarReference(
-					"(print (linalg:" + op + " (linalg:add (linalg:arange 0 200 'single-float) 1)))");
+					"(print (linalg:" + op + " (linalg:add (linalg:arange 0 200 :element-type 'single-float) 1)))");
 		}
 		// exp over reciprocal's (0, 1] range so the values stay bounded; round because
 		// exp's low digits are not print-stable across sizes.
@@ -421,8 +437,9 @@ class JvmLinalgSimdAccelCompilerTest {
 					"(print (linalg:tanh (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.03)))");
 		}
 		assertMatchesScalarReference("(print (linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4))))");
-		assertMatchesScalarReference("(print (linalg:log (linalg:add (linalg:arange 0 200 'single-float) 1)))");
-		assertMatchesScalarReference("(print (linalg:tanh (linalg:arange 0 200 'single-float)))");
+		assertMatchesScalarReference(
+				"(print (linalg:log (linalg:add (linalg:arange 0 200 :element-type 'single-float) 1)))");
+		assertMatchesScalarReference("(print (linalg:tanh (linalg:arange 0 200 :element-type 'single-float)))");
 		// sin / cos / tan over a sign-mixed range (Math.sin / Math.cos / Math.tan
 		// scalar loops on this backend).
 		for (String op : new String[] { "sin", "cos", "tan" }) {
@@ -430,7 +447,8 @@ class JvmLinalgSimdAccelCompilerTest {
 				assertMatchesScalarReference("(print (linalg:" + op + " (linalg:sub (linalg:arange " + n + ") 100)))");
 			}
 			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4))))");
-			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:arange 0 200 'single-float)))");
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " (linalg:arange 0 200 :element-type 'single-float)))");
 		}
 		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
 		// sign-mixed range.
@@ -438,7 +456,7 @@ class JvmLinalgSimdAccelCompilerTest {
 			assertMatchesScalarReference(
 					"(print (linalg:" + op + " (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.005)))");
 			assertMatchesScalarReference(
-					"(print (linalg:" + op + " (linalg:mul (linalg:arange 0 200 'single-float) 0.005)))");
+					"(print (linalg:" + op + " (linalg:mul (linalg:arange 0 200 :element-type 'single-float) 0.005)))");
 		}
 		for (String op : new String[] { "atan", "sinh", "cosh" }) {
 			assertMatchesScalarReference(
@@ -446,7 +464,7 @@ class JvmLinalgSimdAccelCompilerTest {
 			assertMatchesScalarReference(
 					"(print (linalg:" + op + " (linalg:reshape (linalg:mul (linalg:arange 12) 0.05) '(3 4))))");
 			assertMatchesScalarReference(
-					"(print (linalg:" + op + " (linalg:mul (linalg:arange 0 200 'single-float) 0.05)))");
+					"(print (linalg:" + op + " (linalg:mul (linalg:arange 0 200 :element-type 'single-float) 0.05)))");
 		}
 		assertMatchesScalarReference("(print (linalg:asin #d(0.0 -0.0 1.0 -1.0 0.5)))");
 		assertMatchesScalarReference("(print (linalg:acos #d(1.0 -1.0 0.0 0.5)))");
@@ -481,7 +499,7 @@ class JvmLinalgSimdAccelCompilerTest {
 							.formatted(n, op));
 			}
 			assertMatchesScalarReference(
-					"(let ((a (linalg:arange 1 201 1 'single-float))) (print (linalg:%s a (linalg:negative a))))"
+					"(let ((a (linalg:arange 1 201 1 :element-type 'single-float))) (print (linalg:%s a (linalg:negative a))))"
 						.formatted(op));
 			assertMatchesScalarReference(
 					"(print (linalg:%s (linalg:reshape (linalg:arange 12) '(3 4)) (linalg:negative (linalg:reshape (linalg:arange 12) '(3 4)))))"
@@ -493,9 +511,9 @@ class JvmLinalgSimdAccelCompilerTest {
 			// The f32-vs-scalar broadcast compares the widened element against the
 			// FULL double scalar (an inexact bound), like the arithmetic broadcasts.
 			assertMatchesScalarReference(
-					"(print (linalg:%s (linalg:arange 1 201 1 'single-float) 100.3))".formatted(op));
+					"(print (linalg:%s (linalg:arange 1 201 1 :element-type 'single-float) 100.3))".formatted(op));
 			assertMatchesScalarReference(
-					"(print (linalg:%s 100.3 (linalg:arange 1 201 1 'single-float)))".formatted(op));
+					"(print (linalg:%s 100.3 (linalg:arange 1 201 1 :element-type 'single-float)))".formatted(op));
 		}
 		// clip / relu ride the maximum/minimum call sites inside their own spliced
 		// defuns (the square/reciprocal pattern -- no laClip/laRelu bridge entry).
@@ -551,7 +569,7 @@ class JvmLinalgSimdAccelCompilerTest {
 		// col2im's overlapping windows (stride < filter) accumulate exactly as the
 		// defun's widen-add-narrow round trip does, at both widths.
 		String x = "(linalg:reshape (linalg:arange 96) '(2 3 4 4))";
-		String xf = "(linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4))";
+		String xf = "(linalg:reshape (linalg:arange 0 96 1 :element-type 'single-float) '(2 3 4 4))";
 		assertMatchesScalarReference("(print (linalg::%la-im2col " + x + " 2 2 1 0))");
 		assertMatchesScalarReference("(print (linalg::%la-im2col " + x + " 3 3 2 1))");
 		assertMatchesScalarReference("(print (linalg::%la-im2col " + xf + " 3 3 2 1))");

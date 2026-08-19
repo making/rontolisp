@@ -49,14 +49,14 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 
 ## 軸に沿った還元
 
-還元関数 [`linalg:sum`](../reference/functions/linalg-sum.md)、[`linalg:mean`](../reference/functions/linalg-mean.md)、[`linalg:amax`](../reference/functions/linalg-amax.md)、[`linalg:amin`](../reference/functions/linalg-amin.md) は省略可能な整数 `axis`(負は numpy 流に末尾から数える)を取り、配列全体ではなくその軸に沿って還元します。結果からその軸は除去されますが、省略可能な `keepdims` フラグが非 nil のときは長さ 1 の軸として保持されます — 入力にそのままブロードキャストで戻せる形状で、バッチ softmax が行ごとの最大値を引くのに使うのはこの形です。[`linalg:argmax`](../reference/functions/linalg-argmax.md) と [`linalg:argmin`](../reference/functions/linalg-argmin.md) も同じ axis 引数を取り、スライスごとの index を返します(行列に対しては packed double 配列 — linalg 配列に整数幅はありません)。[`linalg:reshape`](../reference/functions/linalg-reshape.md) は 1 つの `-1` extent を受け付け、要素数から推論します。
+還元関数 [`linalg:sum`](../reference/functions/linalg-sum.md)、[`linalg:mean`](../reference/functions/linalg-mean.md)、[`linalg:amax`](../reference/functions/linalg-amax.md)、[`linalg:amin`](../reference/functions/linalg-amin.md) は numpy と同じキーワード引数を取ります。整数の `:axis`(負は numpy 流に末尾から数える)を渡すと配列全体ではなくその軸に沿って還元し、結果からその軸は除去されますが、`:keepdims` が非 nil のときは長さ 1 の軸として保持されます — 入力にそのままブロードキャストで戻せる形状で、バッチ softmax が行ごとの最大値を引くのに使うのはこの形です。[`linalg:argmax`](../reference/functions/linalg-argmax.md) と [`linalg:argmin`](../reference/functions/linalg-argmin.md) も同じ `:axis` キーワードを取り、スライスごとの index を返します(行列に対しては packed double 配列 — linalg 配列に整数幅はありません)。[`linalg:reshape`](../reference/functions/linalg-reshape.md) は 1 つの `-1` extent を受け付け、要素数から推論します。
 
 ```lisp
-(linalg:sum #2A((1 2 3) (4 5 6)) 0)    ; => #d(5.0 7.0 9.0)
-(linalg:sum #2A((1 2 3) (4 5 6)) 1)    ; => #d(6.0 15.0)
-(linalg:sum #2A((1 2 3) (4 5 6)) -1 t) ; => #d((6.0) (15.0))
-(linalg:mean #2A((1 2 3) (4 5 6)) 0)   ; => #d(2.5 3.5 4.5)
-(linalg:argmax #2A((1 9 3) (7 5 6)) 1) ; => #d(1.0 0.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) :axis 0)                  ; => #d(5.0 7.0 9.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) :axis 1)                  ; => #d(6.0 15.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) :axis -1 :keepdims t)     ; => #d((6.0) (15.0))
+(linalg:mean #2A((1 2 3) (4 5 6)) :axis 0)                 ; => #d(2.5 3.5 4.5)
+(linalg:argmax #2A((1 9 3) (7 5 6)) :axis 1)               ; => #d(1.0 0.0)
 (linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1))) ; => (3 4)
 ```
 
@@ -84,11 +84,11 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 
 ## 離散微積分
 
-[`linalg:diff`](../reference/functions/linalg-diff.md) と [`linalg:gradient`](../reference/functions/linalg-gradient.md) は numpy の離散微積分ペア(`np.diff` / `np.gradient`)です。`diff` は最後の軸に沿った n 階の離散差分(デフォルト 1)を取ります。1 ステップごとにその軸が 1 つ短くなり、行列は各行内で差分されます。`gradient` はサンプル値のベクタの微分を、2 次精度の中心差分(両端は 1 次精度の片側差分)で推定するため、結果は入力と同じ長さになります。省略可能な第 2 引数には、一様なサンプル間隔(数値、デフォルト 1)か、非一様なサンプルのための同じ長さの座標ベクタを渡せます。どちらも他の linalg 変換と同様に入力の幅を保持します。算術は通常どおり浮動小数点ですが、厳密に微分できるサンプル値 — 以下の例のような、整数座標で読んだ多項式 — はすべてのバックエンドで同一に印字されます。
+[`linalg:diff`](../reference/functions/linalg-diff.md) と [`linalg:gradient`](../reference/functions/linalg-gradient.md) は numpy の離散微積分ペア(`np.diff` / `np.gradient`)です。`diff` は `:axis`(デフォルトは最後の軸)に沿った `:n` 階の離散差分(デフォルト 1)を取ります。1 ステップごとにその軸が 1 つ短くなり、行列はデフォルトでは各行内で、`:axis 0` では各列に沿って差分されます。`gradient` はサンプル値のベクタの微分を、2 次精度の中心差分(両端は 1 次精度の片側差分)で推定するため、結果は入力と同じ長さになります。省略可能な第 2 引数には、一様なサンプル間隔(数値、デフォルト 1)か、非一様なサンプルのための同じ長さの座標ベクタを渡せます。どちらも他の linalg 変換と同様に入力の幅を保持します。算術は通常どおり浮動小数点ですが、厳密に微分できるサンプル値 — 以下の例のような、整数座標で読んだ多項式 — はすべてのバックエンドで同一に印字されます。
 
 ```lisp
 (linalg:diff #(1 2 4 7 0))          ; => #d(1.0 2.0 3.0 -7.0)
-(linalg:diff #(1 2 4 7 0) 2)        ; => #d(1.0 1.0 -10.0)
+(linalg:diff #(1 2 4 7 0) :n 2)     ; => #d(1.0 1.0 -10.0)
 (linalg:diff #2A((1 3 6) (0 5 6)))  ; => #d((2.0 3.0) (5.0 1.0))
 (linalg:gradient #(0 1 4 9 16))     ; => #d(1.0 2.0 4.0 6.0 7.0)
 (linalg:gradient #(0 1 4 9 16) 2)   ; => #d(0.5 1.0 2.0 3.0 3.5)
@@ -99,14 +99,14 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 
 ## 単精度浮動小数点
 
-linalg はデフォルトで `double-float` で計算しますが、**幅多相 (width-polymorphic)** です。メモリが半分で SIMD レーン数が倍になる packed **単精度浮動小数点** (`#f`) 配列を受け付け、その幅を保持します。すべてのコンストラクタは末尾に省略可能な `element-type` を取り（デフォルトは `'double-float`。`#f` の結果が欲しければ `'single-float` を渡します）、すべての変換 -- `add`/`sub`/`mul`/`div`/`emap`、`transpose`/`reshape`、`dot`/`matmul`/`outer`、`inv`/`solve` -- は入力の幅を保持します。したがって単精度の値は最後まで単精度のまま流れます。関数的な重み更新 `(linalg:sub W grad)` は `W` の幅を保持し、暗黙に double へ戻す（JVM の [`--simd`](simd-acceleration.md) パスでは、続く `vec:matvec` で幅不一致エラーを強制する）ことはありません。`f32` の速度とメモリが欲しく精度の低下を許容できるときは単精度を使い、`det`/`inv`/`solve` のような精度が重要な処理にはデフォルトの倍精度を使ってください。
+linalg はデフォルトで `double-float` で計算しますが、**幅多相 (width-polymorphic)** です。メモリが半分で SIMD レーン数が倍になる packed **単精度浮動小数点** (`#f`) 配列を受け付け、その幅を保持します。すべてのコンストラクタは `:element-type` キーワードを取り（デフォルトは `'double-float`。`#f` の結果が欲しければ `:element-type 'single-float` を渡します）、すべての変換 -- `add`/`sub`/`mul`/`div`/`emap`、`transpose`/`reshape`、`dot`/`matmul`/`outer`、`inv`/`solve` -- は入力の幅を保持します。したがって単精度の値は最後まで単精度のまま流れます。関数的な重み更新 `(linalg:sub W grad)` は `W` の幅を保持し、暗黙に double へ戻す（JVM の [`--simd`](simd-acceleration.md) パスでは、続く `vec:matvec` で幅不一致エラーを強制する）ことはありません。`f32` の速度とメモリが欲しく精度の低下を許容できるときは単精度を使い、`det`/`inv`/`solve` のような精度が重要な処理にはデフォルトの倍精度を使ってください。
 
 ```lisp
-(linalg:zeros 3 'single-float)                   ; => #f(0.0 0.0 0.0)
-(linalg:from-list '((1 2) (3 4)) 'single-float)  ; => #f((1.0 2.0) (3.0 4.0))
-(linalg:add (linalg:from-list '(1 2 3) 'single-float) 10) ; => #f(11.0 12.0 13.0)
+(linalg:zeros 3 :element-type 'single-float)                   ; => #f(0.0 0.0 0.0)
+(linalg:from-list '((1 2) (3 4)) :element-type 'single-float)  ; => #f((1.0 2.0) (3.0 4.0))
+(linalg:add (linalg:from-list '(1 2 3) :element-type 'single-float) 10) ; => #f(11.0 12.0 13.0)
 (array-element-type
-  (linalg:transpose (linalg:eye 2 'single-float)))        ; => SINGLE-FLOAT
+  (linalg:transpose (linalg:eye 2 :element-type 'single-float)))        ; => SINGLE-FLOAT
 ```
 
 ## SIMD アクセラレーション

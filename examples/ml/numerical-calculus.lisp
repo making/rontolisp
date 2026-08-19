@@ -21,7 +21,7 @@
   ;; analogue of d^2/dx^2 x^2 = 2.
   (let ((squares (linalg:square (linalg:arange 8))))
     (format t "squares:        ~a~%" squares)
-    (format t "2nd difference: ~a~%" (linalg:diff squares 2)))
+    (format t "2nd difference: ~a~%" (linalg:diff squares :n 2)))
   ;; A matrix differences within each row (the last axis, like numpy).
   (format t "row diffs:      ~a~%" (linalg:diff #2A((1 3 6 10) (0 2 6 12))))
   (terpri)

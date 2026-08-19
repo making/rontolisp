@@ -2427,7 +2427,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 		return withLocals(b.toByteArray(), 9, 0, 0, 0, 11, 0);
 	}
 
-	// (linalg:sum/amax/amin a axis keepdims), the axis form (%la-fold-axis) over the
+	// (linalg:sum/amax/amin a :axis ax :keepdims k), the axis form (%la-fold-axis) over
+	// the
 	// flat index (o * axlen + j) * inner + i. BOP_ADD folds from the defun's 0 seed
 	// with j from 0; BOP_MAX / BOP_MIN seed from the first element along the axis and
 	// fold the defun's (if (> x acc) x acc) -- the ACCUMULATOR wins ties/NaN, the
@@ -2588,7 +2589,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.END); // block
 	}
 
-	// (linalg:argmax/argmin v axis), the axis form (%la-argfold-axis): the per-slice
+	// (linalg:argmax/argmin v :axis ax), the axis form (%la-argfold-axis): the per-slice
 	// index of the first element winning the strict comparison, the axis always
 	// dropped. A vector reduces to the i31 index itself; a higher rank fills a packed
 	// DOUBLE array of index values at any input width (indices are exact in f64).

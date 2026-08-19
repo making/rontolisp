@@ -10,9 +10,9 @@
 ;; - Arrays are packed float arrays, DOUBLE by default: every allocation flows
 ;;   through the one linalg::%la-make funnel (make-array :element-type, an unboxed
 ;;   (array double-float) / (array single-float)), and element reads coerce to
-;;   double. linalg is width-polymorphic: a constructor takes an
-;;   optional element-type (default 'double-float; opt in with 'single-float for
-;;   half the memory / 2x the SIMD lanes), and every transform PRESERVES its input
+;;   double. linalg is width-polymorphic: a constructor takes an :element-type
+;;   keyword (default 'double-float; opt in with 'single-float for half the
+;;   memory / 2x the SIMD lanes), and every transform PRESERVES its input
 ;;   width -- a #f (single-float) array stays #f through add/sub/mul/emap/transpose/
 ;;   dot/matmul/... (via linalg::%la-etype), so a #f value flowing in from vec: is
 ;;   never silently widened back to double (which would force a mixed-width --simd
@@ -29,6 +29,12 @@
 ;; (add/sub/mul/div/emap/reductions/reshape/array-equal) and diff work for any
 ;; rank; dot/matmul/outer/det/inv/solve/trace/transpose stay defined for
 ;; rank <= 2, and gradient for vectors only.
+;;
+;; Options are numpy-style KEYWORD arguments (&key), never trailing positionals:
+;; :element-type on every constructor, :axis / :keepdims on the reductions,
+;; :n / :axis on diff. A compiled call site with literal keywords is what the
+;; --simd interceptors (Jvm/WasmLinalgSimdCompiler, LinalgSimd) pattern-match,
+;; so a spliced body that forwards an option must spell the keyword literally.
 
 ;; --- internal helpers --------------------------------------------------------
 
@@ -200,8 +206,8 @@
   ;; The keepdims wrapping of a full (no-axis) reduction: the scalar itself,
   ;; or under a non-nil keepdims an all-ones-shape array holding it (numpy).
   (if keepdims
-      (linalg:full (linalg::%la-ones-shape (array-dimensions a)) val
-                   (linalg::%la-etype a))
+      (linalg::%la-make (linalg::%la-ones-shape (array-dimensions a)) val
+                        (linalg::%la-etype a))
       val))
 
 (defun linalg::%la-fold-axis (a ax f init keepdims)
@@ -367,76 +373,107 @@
               (setq acc (+ acc (* (aref a i k) (aref b k j)))))
             (setf (aref out i j) acc)))))))
 
-(defun linalg::%la-diff-1 (a)
-  ;; One first-difference step along the last axis: out[..., i] =
-  ;; a[..., i+1] - a[..., i]. The last axis is row-major-contiguous, so one
-  ;; flat double loop (rows x within-row) handles every rank. An axis of
-  ;; length 0 or 1 differences to length 0 (numpy's clamp, not an error).
+(defun linalg::%la-diff-1 (a ax)
+  ;; One first-difference step along axis ax (already normalized): out[o, j, i]
+  ;; = a[o, j+1, i] - a[o, j, i] over the row-major outer x axis x inner walk
+  ;; (flat index (o * axlen + j) * inner + i), so every rank and every axis is
+  ;; one triple loop. An axis of length 0 or 1 differences to length 0
+  ;; (numpy's clamp, not an error).
   (let* ((d (array-dimensions a))
-         (rd (reverse d))
-         (c (car rd))
-         (w (max 0 (- c 1)))
-         (out
-          (linalg::%la-make (reverse (cons w (cdr rd))) 0.0
-                            (linalg::%la-etype a)))
-         (rows (if (= c 0) 0 (/ (array-total-size a) c))))
-    (do ((i 0 (+ i 1)))
-        ((>= i rows) out)
-      (do ((j 0 (+ j 1)))
-          ((>= j w))
-        (setf (row-major-aref out (+ (* i w) j))
-              (- (row-major-aref a (+ (* i c) j 1))
-                 (row-major-aref a (+ (* i c) j))))))))
+         (axlen (nth ax d))
+         (w (max 0 (- axlen 1)))
+         (inner (linalg::%la-tail-size d ax))
+         (outer (linalg::%la-head-size d ax))
+         (od
+          (let ((acc nil))
+            (do ((p d (cdr p)) (k 0 (+ k 1)))
+                ((null p) (reverse acc))
+              (setq acc (cons (if (= k ax) w (car p)) acc)))))
+         (out (linalg::%la-make od 0.0 (linalg::%la-etype a))))
+    (do ((o 0 (+ o 1)))
+        ((>= o outer) out)
+      (do ((i 0 (+ i 1)))
+          ((>= i inner))
+        (let ((src (+ (* o axlen inner) i)) (dst (+ (* o w inner) i)))
+          (do ((j 0 (+ j 1)))
+              ((>= j w))
+            (setf (row-major-aref out (+ dst (* j inner)))
+                  (- (row-major-aref a (+ src (* (+ j 1) inner)))
+                     (row-major-aref a (+ src (* j inner)))))))))))
 
 ;; --- constructors ------------------------------------------------------------
 
-(defun linalg:zeros (shape &optional element-type)
+(defun linalg:zeros (shape &key element-type)
   ;; A zero-filled vector (integer shape) or matrix (list shape). Double-float by
-  ;; default; pass 'single-float to build a packed single-float (#f) result.
+  ;; default; :element-type 'single-float builds a packed single-float (#f) result.
   (linalg::%la-make shape 0.0 element-type))
 
-(defun linalg:ones (shape &optional element-type)
-  ;; A one-filled vector or matrix (double by default; 'single-float for #f).
+(defun linalg:ones (shape &key element-type)
+  ;; A one-filled vector or matrix (double by default; :element-type
+  ;; 'single-float for #f).
   (linalg::%la-make shape 1.0 element-type))
 
-(defun linalg:full (shape value &optional element-type)
+(defun linalg:full (shape value &key element-type)
   ;; A vector or matrix with every element set to value (double by default;
-  ;; 'single-float for #f).
+  ;; :element-type 'single-float for #f).
   (linalg::%la-make shape value element-type))
 
 (defun linalg:zeros-like (a)
   ;; A zero-filled array with a's shape AND width (numpy np.zeros_like).
   (linalg::%la-like a))
 
-(defun linalg:eye (n &optional element-type)
-  ;; The n-by-n identity matrix (double by default; 'single-float for #f).
+(defun linalg:eye (n &key element-type)
+  ;; The n-by-n identity matrix (double by default; :element-type 'single-float
+  ;; for #f).
   (let ((m (linalg::%la-make (list n n) 0.0 element-type)))
     (do ((i 0 (+ i 1)))
         ((>= i n) m)
       (setf (aref m i i) 1))))
 
-(defun linalg:arange (a &optional b step element-type)
-  ;; (arange stop), (arange start stop), or (arange start stop step): the vector
-  ;; of numbers from start (default 0) up to but excluding stop, advancing by step
-  ;; (default 1; may be negative). Double-float by default; pass 'single-float for
-  ;; a packed single-float (#f) result. step is always a number and an element-type
-  ;; a (non-nil) symbol, so (arange 0 10 'single-float) reads the symbol as the
-  ;; element-type (step defaulting to 1) and (arange 0 10 2 'single-float) keeps both.
-  (let* ((et (if (and (symbolp step) step) step element-type))
-         (stp (if (and (symbolp step) step) nil step))
-         (start (if b a 0))
-         (stop (if b b a))
-         (d (if stp stp 1))
-         (count (ceiling (/ (- stop start) d)))
-         (n (max 0 count))
-         (out (linalg::%la-make n 0.0 et)))
-    (do ((i 0 (+ i 1)) (x start (+ x d)))
-        ((>= i n) out)
-      (setf (aref out i) x))))
+(defun linalg::%la-split-element-type (args)
+  ;; Splits a positional-plus-keyword argument list into (positionals . element-type)
+  ;; for the one numpy signature whose positional count varies (arange): the
+  ;; :element-type pair may sit anywhere after the positionals; any other keyword
+  ;; signals like an &key lambda list would.
+  (let ((pos nil) (et nil))
+    (do ((a args))
+        ((null a) (cons (reverse pos) et))
+      (cond ((eq (car a) :element-type)
+             (when (null (cdr a)) (error "Odd number of keyword arguments"))
+             (setq et (cadr a))
+             (setq a (cddr a)))
+            ((keywordp (car a)) (error "Unknown keyword argument: ~a" (car a)))
+            ((not (numberp (car a)))
+             (error
+              "linalg: arange expects numbers (the element type is :element-type 'single-float)"))
+            (t
+             (setq pos (cons (car a) pos))
+             (setq a (cdr a)))))))
 
-(defun linalg:linspace (start stop n &optional element-type)
+(defun linalg:arange (&rest args)
+  ;; (arange stop), (arange start stop), or (arange start stop step) -- plus an
+  ;; optional :element-type keyword, numpy's arange([start,] stop[, step], dtype):
+  ;; the vector of numbers from start (default 0) up to but excluding stop,
+  ;; advancing by step (default 1; may be negative). Double-float by default;
+  ;; :element-type 'single-float builds a packed single-float (#f) result.
+  (let* ((split (linalg::%la-split-element-type args))
+         (pos (car split))
+         (k (length pos)))
+    (when (or (< k 1) (> k 3))
+      (error "linalg: arange takes 1 to 3 positional arguments"))
+    (let* ((start (if (cdr pos) (car pos) 0))
+           (stop (if (cdr pos) (cadr pos) (car pos)))
+           (d (if (cddr pos) (caddr pos) 1))
+           (count (ceiling (/ (- stop start) d)))
+           (n (max 0 count))
+           (out (linalg::%la-make n 0.0 (cdr split))))
+      (do ((i 0 (+ i 1)) (x start (+ x d)))
+          ((>= i n) out)
+        (setf (aref out i) x)))))
+
+(defun linalg:linspace (start stop n &key element-type)
   ;; The vector of n evenly spaced numbers from start to stop inclusive (double by
-  ;; default; pass 'single-float for a packed single-float (#f) result).
+  ;; default; :element-type 'single-float for a packed single-float (#f) result).
   (let ((out (linalg::%la-make n 0.0 element-type)))
     (if (= n 1)
         (progn
@@ -447,9 +484,10 @@
               ((>= i n) out)
             (setf (aref out i) (+ start (* step i))))))))
 
-(defun linalg:from-list (lst &optional element-type)
+(defun linalg:from-list (lst &key element-type)
   ;; A vector from a flat list, or a matrix from a list of equal-length rows
-  ;; (double by default; pass 'single-float for a packed single-float (#f) result).
+  ;; (double by default; :element-type 'single-float for a packed single-float
+  ;; (#f) result).
   (if (consp (car lst))
       (let* ((r (length lst))
              (c (length (car lst)))
@@ -809,10 +847,10 @@
 
 ;; --- reductions --------------------------------------------------------------
 
-(defun linalg:sum (a &optional axis keepdims)
-  ;; With no axis, the sum of every element: a scalar, or under a non-nil
-  ;; keepdims an all-ones-shape array holding it (numpy). With an integer
-  ;; axis (negative counts from the end), the sums along that axis: the axis
+(defun linalg:sum (a &key axis keepdims)
+  ;; With no :axis, the sum of every element: a scalar, or under a non-nil
+  ;; :keepdims an all-ones-shape array holding it (numpy). With an integer
+  ;; :axis (negative counts from the end), the sums along that axis: the axis
   ;; is dropped from the result -- kept with extent 1 under keepdims -- and a
   ;; vector without keepdims reduces to the scalar itself.
   (if (null axis)
@@ -820,18 +858,20 @@
       (linalg::%la-fold-axis a (linalg::%la-norm-axis (array-dimensions a) axis)
                              #'+ 0 keepdims)))
 
-(defun linalg:mean (a &optional axis keepdims)
-  ;; The arithmetic mean, of every element (no axis) or along an axis (the
-  ;; same axis/keepdims rules as linalg:sum). The no-axis total stays a
-  ;; 1-argument linalg:sum call so that call site keeps its --simd kernel.
+(defun linalg:mean (a &key axis keepdims)
+  ;; The arithmetic mean, of every element (no :axis) or along an axis (the
+  ;; same :axis/:keepdims rules as linalg:sum). The no-axis total stays a
+  ;; 1-argument linalg:sum call so that call site keeps its --simd kernel, and
+  ;; the axis total spells its keywords literally for the same reason.
   (if (null axis)
       (linalg::%la-wrap-scalar a (/ (linalg:sum a) (linalg:size a)) keepdims)
       (let ((ax (linalg::%la-norm-axis (array-dimensions a) axis)))
-        (linalg:div (linalg:sum a ax keepdims) (nth ax (array-dimensions a))))))
+        (linalg:div (linalg:sum a :axis ax :keepdims keepdims)
+                    (nth ax (array-dimensions a))))))
 
-(defun linalg:amax (a &optional axis keepdims)
-  ;; The largest element, of the whole array (no axis) or along an integer
-  ;; axis (the same axis/keepdims rules as linalg:sum; strict-comparison
+(defun linalg:amax (a &key axis keepdims)
+  ;; The largest element, of the whole array (no :axis) or along an integer
+  ;; :axis (the same :axis/:keepdims rules as linalg:sum; strict-comparison
   ;; fold, so the first element wins ties and a NaN never replaces the seed).
   ;; Errors on an empty array or axis.
   (if (null axis)
@@ -845,9 +885,9 @@
                              (lambda (acc x) (if (> x acc) x acc)) nil
                              keepdims)))
 
-(defun linalg:amin (a &optional axis keepdims)
-  ;; The smallest element, of the whole array (no axis) or along an integer
-  ;; axis; the linalg:amax rules with the comparison flipped.
+(defun linalg:amin (a &key axis keepdims)
+  ;; The smallest element, of the whole array (no :axis) or along an integer
+  ;; :axis; the linalg:amax rules with the comparison flipped.
   (if (null axis)
       (let ((n (array-total-size a)))
         (when (= n 0) (error "linalg: amin of an empty array"))
@@ -859,9 +899,9 @@
                              (lambda (acc x) (if (< x acc) x acc)) nil
                              keepdims)))
 
-(defun linalg:argmax (v &optional axis)
-  ;; With no axis: the index of the largest element of a vector (first on
-  ;; ties). With an integer axis (negative counts from the end): the
+(defun linalg:argmax (v &key axis)
+  ;; With no :axis: the index of the largest element of a vector (first on
+  ;; ties). With an integer :axis (negative counts from the end): the
   ;; per-slice indices along that axis, the axis dropped; a rank >= 2 result
   ;; is a packed DOUBLE array of index values (linalg arrays have no integer
   ;; width; (= 3.0 3) still holds for comparisons), a vector reduces to the
@@ -878,7 +918,7 @@
       (linalg::%la-argfold-axis v
        (linalg::%la-norm-axis (array-dimensions v) axis) (function >))))
 
-(defun linalg:argmin (v &optional axis)
+(defun linalg:argmin (v &key axis)
   ;; The index of the smallest element; the linalg:argmax rules with the
   ;; comparison flipped.
   (if (null axis)
@@ -906,20 +946,21 @@
 
 ;; --- calculus (numpy diff / gradient) -----------------------------------------
 
-(defun linalg:diff (a &optional n)
-  ;; The n-th discrete difference along the last axis (numpy np.diff):
-  ;; out[..., i] = a[..., i+1] - a[..., i], applied n times (default 1); each
-  ;; step shortens the last axis by one (clamped at 0, like numpy). Works for
-  ;; any rank; the result is a fresh packed array of a's width (so n = 0
-  ;; returns a packed COPY, where numpy returns the input itself).
-  (let ((times (if n n 1)))
-    (when (< times 0) (error "linalg: diff order must be non-negative"))
-    (if (= times 0)
+(defun linalg:diff (a &key (n 1) (axis -1))
+  ;; The n-th discrete difference along :axis (numpy np.diff, default the last
+  ;; axis; negative counts from the end): out[..., i, ...] = a[..., i+1, ...]
+  ;; - a[..., i, ...], applied :n times (default 1); each step shortens the
+  ;; axis by one (clamped at 0, like numpy). Works for any rank; the result is
+  ;; a fresh packed array of a's width (so :n 0 returns a packed COPY, where
+  ;; numpy returns the input itself).
+  (let ((ax (linalg::%la-norm-axis (array-dimensions a) axis)))
+    (when (< n 0) (error "linalg: diff order must be non-negative"))
+    (if (= n 0)
         (linalg::%la-copy a)
-        (let ((out (linalg::%la-diff-1 a)))
+        (let ((out (linalg::%la-diff-1 a ax)))
           (do ((k 1 (+ k 1)))
-              ((>= k times) out)
-            (setq out (linalg::%la-diff-1 out)))))))
+              ((>= k n) out)
+            (setq out (linalg::%la-diff-1 out ax)))))))
 
 (defun linalg:gradient (f &optional x)
   ;; The numerical derivative of a vector of samples (numpy np.gradient):
@@ -1125,10 +1166,10 @@
             ((>= i n) out)
           (setf (aref out i) (aref a i (truncate (aref idx i)))))))))
 
-(defun linalg:one-hot (idx n &optional element-type)
+(defun linalg:one-hot (idx n &key element-type)
   ;; The (length idx) x n one-hot matrix: row i holds 1.0 in column idx[i]
   ;; (truncated to an integer) and 0.0 elsewhere (double by default;
-  ;; 'single-float for #f).
+  ;; :element-type 'single-float for #f).
   (let* ((m (length idx)) (out (linalg::%la-make (list m n) 0.0 element-type)))
     (do ((i 0 (+ i 1)))
         ((>= i m) out)
@@ -1263,16 +1304,17 @@
     (linalg::%la-rng-next))
   n)
 
-(defun linalg:rand (shape &optional element-type)
+(defun linalg:rand (shape &key element-type)
   ;; An array of uniform [0, 1) draws (np.random.rand, but with a shape
-  ;; designator like linalg:zeros; double by default, 'single-float for #f).
+  ;; designator like linalg:zeros; double by default, :element-type
+  ;; 'single-float for #f).
   (let* ((out (linalg::%la-make shape 0.0 element-type))
          (n (array-total-size out)))
     (do ((k 0 (+ k 1)))
         ((>= k n) out)
       (setf (row-major-aref out k) (linalg::%la-rng-next)))))
 
-(defun linalg:randn (shape &optional element-type)
+(defun linalg:randn (shape &key element-type)
   ;; An array of standard-normal draws via Irwin-Hall (np.random.randn, but
   ;; with a shape designator; see the section comment for the distribution
   ;; caveat).
@@ -1286,7 +1328,7 @@
           (setq acc (+ acc (linalg::%la-rng-next))))
         (setf (row-major-aref out k) (- acc 6.0))))))
 
-(defun linalg:uniform (lo hi shape &optional element-type)
+(defun linalg:uniform (lo hi shape &key element-type)
   ;; An array of uniform draws in [lo, hi) (np.random.uniform, but with a
   ;; required shape designator).
   (let* ((out (linalg::%la-make shape 0.0 element-type))

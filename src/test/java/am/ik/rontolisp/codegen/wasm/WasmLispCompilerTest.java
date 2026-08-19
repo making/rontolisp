@@ -886,8 +886,8 @@ class WasmLispCompilerTest {
 		// wasm-GC backend picks the TYPE_F32ARR/F64ARR repr statically (no reader
 		// conditional needed -- unlike the earlier vec::%make-like assumption, wasm-GC
 		// produces #f directly).
-		String source = "(print (linalg:sub (linalg:ones '(2 2) 'single-float) "
-				+ "(linalg:full '(2 2) 0.5 'single-float)))";
+		String source = "(print (linalg:sub (linalg:ones '(2 2) :element-type 'single-float) "
+				+ "(linalg:full '(2 2) 0.5 :element-type 'single-float)))";
 		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.LinalgLibrary
 			.process(LispReader.readAllFromString(source));
 		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();

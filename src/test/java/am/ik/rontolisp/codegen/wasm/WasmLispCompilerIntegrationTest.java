@@ -2290,8 +2290,8 @@ class WasmLispCompilerIntegrationTest {
 				    (dotimes (i n) (setf (aref v i) (float (* i i))))
 				    (dotimes (i n) (setq acc (+ acc (truncate (aref v i)))))
 				    acc))
-				(defun consf (i) (truncate (vec:sum (vec:ones 5 'single-float))))
-				(defun aranf (i) (truncate (vec:sum (vec:arange 4 'single-float))))
+				(defun consf (i) (truncate (vec:sum (vec:ones 5 :element-type 'single-float))))
+				(defun aranf (i) (truncate (vec:sum (vec:arange 4 :element-type 'single-float))))
 				(rontolisp:wasm-export 'dot55 :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'sum280 :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'addref :params '(:int) :returns :int)
@@ -2394,10 +2394,10 @@ class WasmLispCompilerIntegrationTest {
 		// count.
 		String singles = """
 				(defun addinto (i)
-				  (let* ((o (vec:zeros 3 'single-float)) (a #f(1.0 2.0 3.0)) (b #f(10.0 20.0 30.0)))
+				  (let* ((o (vec:zeros 3 :element-type 'single-float)) (a #f(1.0 2.0 3.0)) (b #f(10.0 20.0 30.0)))
 				    (truncate (aref (vec:add-into o a b) i))))
 				(defun mulinto (i)
-				  (let* ((o (vec:zeros 8 'single-float)) (a (vec:arange 8 'single-float)))
+				  (let* ((o (vec:zeros 8 :element-type 'single-float)) (a (vec:arange 8 :element-type 'single-float)))
 				    (truncate (vec:sum (vec:mul-into o a a)))))
 				(rontolisp:wasm-export 'addinto :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'mulinto :params '(:int) :returns :int)
@@ -2443,7 +2443,7 @@ class WasmLispCompilerIntegrationTest {
 		}
 		String singles = """
 				(defun ufuncs (i)
-				  (let* ((v (vec:negative (vec:arange 6 'single-float)))
+				  (let* ((v (vec:negative (vec:arange 6 :element-type 'single-float)))
 				         (a (vec:abs v))
 				         (s (vec:sqrt (vec:square v)))
 				         (r (vec:reciprocal #f(2.0 4.0 8.0))))
@@ -2477,7 +2477,7 @@ class WasmLispCompilerIntegrationTest {
 				    (vec:sign-into o o)
 				    (truncate (+ (* 100 (vec:aref o 0)) (* 10 (vec:aref o 1)) (vec:aref o 2)))))
 				(defun sgnf (i)
-				  (truncate (vec:sum (vec:sign (vec:negative (vec:arange 4 'single-float))))))
+				  (truncate (vec:sum (vec:sign (vec:negative (vec:arange 4 :element-type 'single-float))))))
 				(rontolisp:wasm-export 'expd :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'expf :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'expzero :params '(:int) :returns :int)
@@ -2682,8 +2682,8 @@ class WasmLispCompilerIntegrationTest {
 				              (* 10000 (vec:sum (vec:relu a)))
 				              (* 1000000 (vec:sum (vec:clip a -1.0 1.0)))))))
 				(defun probef (i)
-				  (let ((a (vec:zeros 5 'single-float))
-				        (out (vec:zeros 5 'single-float)))
+				  (let ((a (vec:zeros 5 :element-type 'single-float))
+				        (out (vec:zeros 5 :element-type 'single-float)))
 				    (dotimes (i 5)
 				      (vec:aset a i (- (float i) 2.0)))
 				    (vec:relu-into out a)
@@ -13248,14 +13248,14 @@ class WasmLispCompilerIntegrationTest {
 		// expectation as the JVM compileAndRunLinalgAxisReductionsAndRandom case.
 		assertThat(compileAndRunLinalg("""
 				(defparameter *m* (linalg:from-list '((1 2 3) (4 5 6))))
-				(print (linalg:sum *m* 0))
-				(print (linalg:sum *m* -1 t))
-				(print (linalg:mean *m* 0))
-				(print (linalg:amax *m* 1))
-				(print (linalg:amin *m* 0 t))
-				(print (linalg:argmax *m* 1))
-				(print (linalg:argmin *m* 0))
-				(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) 1))
+				(print (linalg:sum *m* :axis 0))
+				(print (linalg:sum *m* :axis -1 :keepdims t))
+				(print (linalg:mean *m* :axis 0))
+				(print (linalg:amax *m* :axis 1))
+				(print (linalg:amin *m* :axis 0 :keepdims t))
+				(print (linalg:argmax *m* :axis 1))
+				(print (linalg:argmin *m* :axis 0))
+				(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) :axis 1))
 				(print (linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1))))
 				(linalg:seed 42)
 				(print (linalg:choice 60000 4))
@@ -13270,8 +13270,8 @@ class WasmLispCompilerIntegrationTest {
 				(print (linalg:gather *m* #(2 0)))
 				(print (linalg:one-hot #(1 0 2) 3))
 				(print (linalg:greater *m* 3))
-				(print (linalg:equal (linalg:argmax *m* 1) #(2 2)))
-				(print (linalg:zeros-like (linalg:ones 2 'single-float)))
+				(print (linalg:equal (linalg:argmax *m* :axis 1) #(2 2)))
+				(print (linalg:zeros-like (linalg:ones 2 :element-type 'single-float)))
 				""")).isEqualTo("#d(5.0 7.0 9.0)\n#d((6.0) (15.0))\n#d(2.5 3.5 4.5)\n#d(3.0 6.0)\n#d((1.0 2.0 3.0))\n"
 				+ "#d(2.0 2.0)\n#d(0.0 0.0 0.0)\n#d((12.0 15.0 18.0 21.0) (48.0 51.0 54.0 57.0))\n(3 4)\n"
 				+ "#d(26833.0 11120.0 29256.0 22347.0)\n#d(4.0 5.0 6.0 2.0 9.0 7.0 1.0 0.0 8.0 3.0)\n"
@@ -14080,12 +14080,12 @@ class WasmLispCompilerIntegrationTest {
 		// values differentiate exactly, so the printed doubles match every backend.
 		assertThat(compileAndRunLinalg("""
 				(print (linalg:diff #(1 2 4 7 0)))
-				(print (linalg:diff #(1 2 4 7 0) 2))
+				(print (linalg:diff #(1 2 4 7 0) :n 2))
 				(print (linalg:diff #2A((1 3 6) (0 5 6))))
 				(print (linalg:gradient #(0 1 4 9 16)))
 				(print (linalg:gradient #(0 1 4 9 16) 2))
 				(print (linalg:gradient #(0 1 9) #(0 1 3)))
-				(print (array-element-type (linalg:gradient (linalg:arange 0 4 'single-float))))
+				(print (array-element-type (linalg:gradient (linalg:arange 0 4 :element-type 'single-float))))
 				""")).isEqualTo("#d(1.0 2.0 3.0 -7.0)\n#d(1.0 1.0 -10.0)\n#d((2.0 3.0) (5.0 1.0))\n"
 				+ "#d(1.0 2.0 4.0 6.0 7.0)\n#d(0.5 1.0 2.0 3.0 3.5)\n#d(1.0 2.0 4.0)\nSINGLE-FLOAT");
 	}
@@ -14100,7 +14100,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (linalg:add #2A((1 2) (3 4)) #2A((100) (200))))
 				(print (linalg:sub #(1 2) #d(1.0)))
 				(print (linalg:maximum #2A((1 5) (4 2)) #(3 3)))
-				(print (linalg:mul (linalg:from-list '((1 2) (3 4)) 'single-float) #(10 20)))
+				(print (linalg:mul (linalg:from-list '((1 2) (3 4)) :element-type 'single-float) #(10 20)))
 				(print (linalg:div #3A(((2.0 4.0) (6.0 8.0))) #(2 4)))
 				""")).isEqualTo("#d((10.0 40.0) (30.0 80.0))\n#d((101.0 102.0) (203.0 204.0))\n#d(0.0 1.0)\n"
 				+ "#d((3.0 5.0) (4.0 3.0))\n#f((10.0 40.0) (30.0 80.0))\n#d(((1.0 1.0) (3.0 2.0)))");
@@ -14111,25 +14111,27 @@ class WasmLispCompilerIntegrationTest {
 		// Same program as the JVM compileAndRunLinalgTransposeAxesPadIm2col case:
 		// the ch07 CNN additions -- transpose with an axes list, np.pad's
 		// constant-0 mode, and the internal rank-4 %la-im2col/%la-col2im pair.
-		assertThat(compileAndRunLinalg("""
-				(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
-				(print (linalg:shape (linalg:transpose *x* '(1 0 2))))
-				(print (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0)))
-				(print (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*))
-				(print (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2))))
-				(print (linalg:pad #(1 2) 1))
-				(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
-				(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
-				(print *col*)
-				(print (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*))
-				(print (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0))
-				(print (array-element-type (linalg:transpose (linalg:ones '(2 2 2) 'single-float) '(2 1 0))))
-				(print (array-element-type (linalg:pad (linalg:ones 2 'single-float) 1)))
-				""")).isEqualTo("(3 2 4)\n#d((1.0 3.0) (2.0 4.0))\nT\n"
-				+ "#d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
-				+ " (0.0 0.0 0.0 0.0 0.0 0.0))\n#d(0.0 1.0 2.0 0.0)\n"
-				+ "#d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0))\nT\n"
-				+ "#d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0))))\nSINGLE-FLOAT\nSINGLE-FLOAT");
+		assertThat(compileAndRunLinalg(
+				"""
+						(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
+						(print (linalg:shape (linalg:transpose *x* '(1 0 2))))
+						(print (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0)))
+						(print (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*))
+						(print (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2))))
+						(print (linalg:pad #(1 2) 1))
+						(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
+						(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
+						(print *col*)
+						(print (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*))
+						(print (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0))
+						(print (array-element-type (linalg:transpose (linalg:ones '(2 2 2) :element-type 'single-float) '(2 1 0))))
+						(print (array-element-type (linalg:pad (linalg:ones 2 :element-type 'single-float) 1)))
+						"""))
+			.isEqualTo("(3 2 4)\n#d((1.0 3.0) (2.0 4.0))\nT\n"
+					+ "#d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
+					+ " (0.0 0.0 0.0 0.0 0.0 0.0))\n#d(0.0 1.0 2.0 0.0)\n"
+					+ "#d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0))\nT\n"
+					+ "#d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0))))\nSINGLE-FLOAT\nSINGLE-FLOAT");
 	}
 
 	@Test
@@ -14969,7 +14971,7 @@ class WasmLispCompilerIntegrationTest {
 			    (print (list n (vec:dot a b) (vec:sum a) (vec:add a b) (vec:sub a b)
 			                 (vec:mul a a) (vec:scale a 2.5) (vec:mean a)))))
 			(dolist (n '(1 2 3 4 5 7 8))
-			  (let ((a (vec:arange n 'single-float)) (b (vec:ones n 'single-float)))
+			  (let ((a (vec:arange n :element-type 'single-float)) (b (vec:ones n :element-type 'single-float)))
 			    (print (list n (vec:dot a b) (vec:sum a) (vec:add a b) (vec:scale a 2.0)))))
 			(let ((o (vec:zeros 5)) (d (vec:ones 5)))
 			  (print (eq o (vec:add-into o o d)))
@@ -14998,8 +15000,8 @@ class WasmLispCompilerIntegrationTest {
 	// window immediate. The row sums of consecutive integers make a wrong window obvious.
 	private static final String GEMV_LANE_OFFSETS = """
 			(dolist (n '(1 2 3 5))
-			  (let* ((w (linalg:reshape (linalg:arange 0 (* 3 n) 'single-float) (list 3 n)))
-			         (x (vec:ones n 'single-float)))
+			  (let* ((w (linalg:reshape (linalg:arange 0 (* 3 n) :element-type 'single-float) (list 3 n)))
+			         (x (vec:ones n :element-type 'single-float)))
 			    (print (list n (vec:matvec w x)))))
 			(dolist (n '(1 2 3 5 7))
 			  (let* ((w (linalg:reshape (linalg:arange 0 (* 4 n)) (list 4 n)))
@@ -15069,18 +15071,19 @@ class WasmLispCompilerIntegrationTest {
 		// spacing is 2, so the lane holding it swallows its 1.0s and the other three
 		// lanes fold 256 each -> 2^24 + 768. matvec's scalar path narrows an f64 16778239
 		// on store, which ties to even -> 16778240.
-		String dot = "(let ((v (vec:ones 1024 'single-float))) (setf (aref v 0) 4096.0)"
+		String dot = "(let ((v (vec:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
 				+ " (print (round (vec:dot v v))))";
 		assertThat(compileAndRunVec(dot, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(dot, false)).isEqualTo("16778239");
 
-		String sum = "(let ((v (vec:ones 1024 'single-float))) (setf (aref v 0) 16777216.0)"
+		String sum = "(let ((v (vec:ones 1024 :element-type 'single-float))) (setf (aref v 0) 16777216.0)"
 				+ " (print (round (vec:sum v))))";
 		assertThat(compileAndRunVec(sum, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(sum, false)).isEqualTo("16778239");
 
 		String gemv = "(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))"
-				+ " (v (vec:ones 1024 'single-float)))" + " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
+				+ " (v (vec:ones 1024 :element-type 'single-float)))"
+				+ " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (vec:matvec m v) 0))))";
 		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(gemv, false)).isEqualTo("16778240");
@@ -15097,7 +15100,7 @@ class WasmLispCompilerIntegrationTest {
 		// the
 		// v128 bodies; the tree shaker's 0xFD decoder is what makes that safe.
 		String source = "(print (vec:dot (vec:arange 9) (vec:ones 9)))"
-				+ "(print (vec:sum (vec:add (vec:arange 7 'single-float) (vec:ones 7 'single-float))))"
+				+ "(print (vec:sum (vec:add (vec:arange 7 :element-type 'single-float) (vec:ones 7 :element-type 'single-float))))"
 				+ "(print (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)))";
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
 		byte[] optimized = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT, false, true)
@@ -15178,7 +15181,7 @@ class WasmLispCompilerIntegrationTest {
 			  (vec:add-into o a b)
 			  (print o))
 			(let ((o (make-array 8 :element-type 'single-float :initial-element 9.0))
-			      (a (vec:ones 5 'single-float)) (b (vec:ones 5 'single-float)))
+			      (a (vec:ones 5 :element-type 'single-float)) (b (vec:ones 5 :element-type 'single-float)))
 			  (vec:sub-into o a b)
 			  (print o))
 			(let ((o (make-array 6 :element-type 'double-float :initial-element 9.0))
@@ -15186,7 +15189,7 @@ class WasmLispCompilerIntegrationTest {
 			  (vec:scale-into o v 2.0)
 			  (print o))
 			(let ((o (make-array 7 :element-type 'single-float :initial-element 9.0))
-			      (v (vec:ones 3 'single-float)))
+			      (v (vec:ones 3 :element-type 'single-float)))
 			  (vec:mul-into o v v)
 			  (print o))
 			""";
@@ -15210,16 +15213,16 @@ class WasmLispCompilerIntegrationTest {
 	private static final String UNARY_UFUNCS = """
 			(dolist (n '(1 4 5 8 200))
 			  (let ((v (vec:sub (vec:arange n) (vec:scale (vec:ones n) 2.0)))
-			        (f (vec:sub (vec:arange n 'single-float) (vec:scale (vec:ones n 'single-float) 2.0))))
+			        (f (vec:sub (vec:arange n :element-type 'single-float) (vec:scale (vec:ones n :element-type 'single-float) 2.0))))
 			    (print (list n (vec:abs v) (vec:negative v) (vec:sign v) (vec:square v)))
 			    (print (list (vec:abs f) (vec:negative f) (vec:sign f) (vec:square f)))
 			    (print (list (vec:sqrt (vec:square v)) (vec:sqrt (vec:square f))))
 			    (print (vec:reciprocal (vec:add (vec:arange n) (vec:ones n))))
-			    (print (vec:reciprocal (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float))))
+			    (print (vec:reciprocal (vec:add (vec:arange n :element-type 'single-float) (vec:ones n :element-type 'single-float))))
 			    (print (vec:exp (vec:reciprocal (vec:add (vec:arange n) (vec:ones n)))))
-			    (print (vec:exp (vec:reciprocal (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float)))))
+			    (print (vec:exp (vec:reciprocal (vec:add (vec:arange n :element-type 'single-float) (vec:ones n :element-type 'single-float)))))
 			    (print (vec:log (vec:add (vec:arange n) (vec:ones n))))
-			    (print (vec:log (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float))))
+			    (print (vec:log (vec:add (vec:arange n :element-type 'single-float) (vec:ones n :element-type 'single-float))))
 			    (print (vec:tanh v))
 			    (print (vec:tanh f))
 			    (print (list (vec:sin v) (vec:cos v) (vec:tan v)))
@@ -15264,7 +15267,7 @@ class WasmLispCompilerIntegrationTest {
 			  (print (vec:sqrt-into long #d(4.0 9.0 16.0)))
 			  (print (vec:reciprocal-into long #d(2.0 4.0)))
 			  (print long))
-			(let ((flong (vec:scale (vec:ones 6 'single-float) 9.0)))
+			(let ((flong (vec:scale (vec:ones 6 :element-type 'single-float) 9.0)))
 			  (print (vec:abs-into flong #f(-1.0 -2.0 -3.0)))
 			  (print flong))
 			""";
@@ -15287,7 +15290,7 @@ class WasmLispCompilerIntegrationTest {
 	private static final String COMPARISON_SELECTS = """
 			(dolist (n '(1 4 5 8 200))
 			  (let ((v (vec:sub (vec:arange n) (vec:scale (vec:ones n) 2.0)))
-			        (f (vec:sub (vec:arange n 'single-float) (vec:scale (vec:ones n 'single-float) 2.0))))
+			        (f (vec:sub (vec:arange n :element-type 'single-float) (vec:scale (vec:ones n :element-type 'single-float) 2.0))))
 			    (print (list n (vec:maximum v (vec:negative v)) (vec:minimum v (vec:negative v))))
 			    (print (list (vec:maximum f (vec:negative f)) (vec:minimum f (vec:negative f))))
 			    (print (list (vec:relu v) (vec:relu f)))
@@ -15315,7 +15318,7 @@ class WasmLispCompilerIntegrationTest {
 			  (print (vec:relu-into long #d(-1.0 3.0)))
 			  (print (vec:clip-into long #d(-9.0 0.5 9.0) -1.0 1.0))
 			  (print long))
-			(let ((flong (vec:scale (vec:ones 6 'single-float) 9.0)))
+			(let ((flong (vec:scale (vec:ones 6 :element-type 'single-float) 9.0)))
 			  (print (vec:minimum-into flong #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))
 			  (print flong))
 			""";
@@ -15400,14 +15403,15 @@ class WasmLispCompilerIntegrationTest {
 			// must
 			// not leak into the result (0 - s = -s, s / 0 = inf).
 			sources.add("(print (linalg:sum (linalg:%s (linalg:ones 5) 3.0)))".formatted(op));
-			sources.add("(print (linalg:sum (linalg:%s 3.0 (linalg:ones 5 'single-float))))".formatted(op));
+			sources
+				.add("(print (linalg:sum (linalg:%s 3.0 (linalg:ones 5 :element-type 'single-float))))".formatted(op));
 		}
 		sources.add("(print (linalg:transpose #d((1.0 2.0 3.0) (4.0 5.0 6.0))))");
 		sources.add("(print (linalg:transpose #f((1.0 2.0) (3.0 4.0))))");
 		sources.add("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))");
 		sources.add("(print (linalg:reshape (linalg:arange 12) '(3 4)))");
 		sources.add("(print (linalg:reshape (linalg:arange 12) '(2 3 2)))");
-		sources.add("(print (linalg:reshape (linalg:arange 0 12 'single-float) 12))");
+		sources.add("(print (linalg:reshape (linalg:arange 0 12 :element-type 'single-float) 12))");
 		sources.add("(print (linalg:flatten #d((1.0 2.0) (3.0 4.0))))");
 		return sources;
 	}
@@ -15418,28 +15422,32 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
-	// The axis forms are intercepted call shapes: an axis call
-	// routes to the SUM_AXIS/AMAX_AXIS/ARGMAX_AXIS kernels (a 2-argument call
-	// padded with a null keepdims), whose folds mirror %la-fold-axis /
-	// %la-argfold-axis exactly; a 1-arg call still hits the base kernel whose
-	// decline branch passes an extra null rest to the variadic defun, and a
-	// declined AXIS call links the surplus locals into the rest list.
+	// The axis forms are intercepted call shapes: a literal :axis / :keepdims tail
+	// (any order, each at most once) routes to the SUM_AXIS/AMAX_AXIS/ARGMAX_AXIS
+	// kernels (an option not supplied padded with a null ref), whose folds mirror
+	// %la-fold-axis / %la-argfold-axis exactly; a 1-arg call still hits the base
+	// kernel whose decline branch passes an extra null rest to the variadic defun,
+	// and a declined AXIS call links the surplus locals -- keyword literals included
+	// -- into the rest list.
 	static List<String> axisFormSources() {
-		return List.of("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 0))",
-				"(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 1 t))",
-				"(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) -1))",
-				"(print (linalg:sum (linalg:arange 5) 0))",
-				"(print (linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 0))",
-				"(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0))",
-				"(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1))",
-				"(print (linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t))",
-				"(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1))",
-				"(print (linalg:argmin (linalg:from-list '(3.0 9.0 2.0)) 0))",
-				"(print (linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 1))",
+		return List.of("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0))",
+				"(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1 :keepdims t))",
+				"(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) :keepdims t :axis 1))",
+				"(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) :keepdims t))",
+				"(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) :keepdims t :axis -1))",
+				"(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) :axis -1))",
+				"(print (linalg:sum (linalg:arange 5) :axis 0))",
+				"(print (linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) :element-type 'single-float) :axis 0))",
+				"(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0))",
+				"(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1))",
+				"(print (linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0 :keepdims t))",
+				"(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1))",
+				"(print (linalg:argmin (linalg:from-list '(3.0 9.0 2.0)) :axis 0))",
+				"(print (linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) :element-type 'single-float) :axis 1))",
 				// 1-arg over a general (boxed) array exercises the decline branch itself;
 				// an axis call over one exercises the extended decline's rest packaging.
 				"(print (linalg:sum #(1 2 3)))", "(print (linalg:argmax #(1 9 3)))",
-				"(print (linalg:sum #2A((1 2) (3 4)) 0))", "(print (linalg:sum #d((1.0 2.0)) nil))",
+				"(print (linalg:sum #2A((1 2) (3 4)) :axis 0))", "(print (linalg:sum #d((1.0 2.0))))",
 				// reshape keeps its fixed arity 2; a -1 extent declines inside the
 				// kernel.
 				"(print (linalg:reshape (linalg:arange 12) '(3 -1)))");
@@ -15455,8 +15463,8 @@ class WasmLispCompilerIntegrationTest {
 	void wasmGcSimdLinalgAxisFoldComparesStrictly() throws Exception {
 		// The fold's strict comparison: the accumulator (first element) wins ties, and
 		// an all-negative axis never answers 0.
-		assertThat(compileAndRunVec("(print (linalg:amax #d((-0.0 0.0)) 1))", true)).isEqualTo("#d(-0.0)");
-		assertThat(compileAndRunVec("(print (linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) 1))", true))
+		assertThat(compileAndRunVec("(print (linalg:amax #d((-0.0 0.0)) :axis 1))", true)).isEqualTo("#d(-0.0)");
+		assertThat(compileAndRunVec("(print (linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) :axis 1))", true))
 			.isEqualTo("#d(-1.0 -2.0)");
 	}
 
@@ -15470,16 +15478,16 @@ class WasmLispCompilerIntegrationTest {
 						+ " (linalg:reshape (linalg:from-list '(5.0 6.0 7.0 8.0)) '(4 1))))",
 				"(print (linalg:div (linalg:reshape (linalg:arange 24) '(2 3 4))"
 						+ " (linalg:add (linalg:reshape (linalg:arange 12) '(3 4)) 1)))",
-				"(print (linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
-						+ " (linalg:arange 0 2 'single-float)))",
+				"(print (linalg:sub (linalg:reshape (linalg:arange 0 4 :element-type 'single-float) '(2 2))"
+						+ " (linalg:arange 0 2 :element-type 'single-float)))",
 				"(print (linalg:maximum (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:from-list '(2.0 4.0 1.0))))",
 				// A mixed-width broadcast still declines to the defun (first operand's
 				// width).
-				"(print (array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0))))",
+				"(print (array-element-type (linalg:div (linalg:ones '(2 2) :element-type 'single-float) #d(1.0 2.0))))",
 				"(print (linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 2 2)) '(0 3 1 2)))",
 				"(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) '(1 0)))",
 				"(print (linalg:transpose (linalg:reshape (linalg:from-list '(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0)"
-						+ " 'single-float) '(2 2 2)) '(2 0 1)))",
+						+ " :element-type 'single-float) '(2 2 2)) '(2 0 1)))",
 				"(print (linalg:transpose (linalg:arange 3) '(0)))",
 				"(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) nil))");
 	}
@@ -15504,7 +15512,7 @@ class WasmLispCompilerIntegrationTest {
 		}
 		sources.add("(print (linalg:sum #d((1.0 2.0) (3.0 4.0))))");
 		sources.add("(print (linalg:trace #d((1.0 2.0) (3.0 4.0))))");
-		sources.add("(print (linalg:trace (linalg:eye 5 'single-float)))");
+		sources.add("(print (linalg:trace (linalg:eye 5 :element-type 'single-float)))");
 		// dot's four rank combinations, plus matmul and outer.
 		sources.add("(print (linalg:dot #d(1.0 2.0) #d(3.0 4.0)))");
 		sources.add("(print (linalg:dot #d((1.0 2.0) (3.0 4.0)) #d(1.0 1.0)))");
@@ -15543,8 +15551,8 @@ class WasmLispCompilerIntegrationTest {
 	// accumulator into the scratch row's sentinel group; the #d sibling covers both
 	// f64 offsets. arange values make any misplaced lane visible.
 	private static final String LANE_PRODUCT_MATRICES = """
-			(defun mk (r c et) (linalg:reshape (linalg:add (linalg:arange 0 (* r c) et) 0.5) (list r c)))
-			(defun mkv (n et) (linalg:add (linalg:arange 0 n et) 0.25))
+			(defun mk (r c et) (linalg:reshape (linalg:add (linalg:arange 0 (* r c) :element-type et) 0.5) (list r c)))
+			(defun mkv (n et) (linalg:add (linalg:arange 0 n :element-type et) 0.25))
 			""";
 
 	static List<String> laneProductSources() {
@@ -15627,11 +15635,11 @@ class WasmLispCompilerIntegrationTest {
 		return List.of("(print (linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 2 2 1 0))",
 				"(print (linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 2 1))",
 				"(print (linalg::%la-im2col"
-						+ " (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 2 1))",
+						+ " (linalg:reshape (linalg:arange 0 96 1 :element-type 'single-float) '(2 3 4 4)) 3 3 2 1))",
 				"(print (linalg::%la-col2im (linalg::%la-im2col"
 						+ " (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))",
 				"(print (linalg::%la-col2im (linalg::%la-im2col"
-						+ " (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))",
+						+ " (linalg:reshape (linalg:arange 0 96 1 :element-type 'single-float) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))",
 				// A general boxed rank-4 operand declines to the defun on both paths.
 				"(print (linalg::%la-im2col (make-array '(1 1 2 2) :initial-element 1) 2 2 1 0))");
 	}
@@ -15648,27 +15656,27 @@ class WasmLispCompilerIntegrationTest {
 		// proves the KERNEL ran rather than the defun -- a dead interception would print
 		// the scalar 16778239. The same numbers as eval/LinalgSimdTest and
 		// JvmLinalgSimdAccelCompilerTest, so the three --simd backends pin each other.
-		String dot = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 4096.0)"
+		String dot = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
 				+ " (print (round (linalg:dot v v))))";
 		assertThat(compileAndRunVec(dot, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(dot, false)).isEqualTo("16778239");
-		String sum = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 16777216.0)"
+		String sum = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 16777216.0)"
 				+ " (print (round (linalg:sum v))))";
 		assertThat(compileAndRunVec(sum, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(sum, false)).isEqualTo("16778239");
 		// mean rides on sum, matrix . vector on the vec: GEMV kernel (a dot per row).
-		String mean = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 16777216.0)"
+		String mean = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 16777216.0)"
 				+ " (print (round (* 1024 (linalg:mean v)))))";
 		assertThat(compileAndRunVec(mean, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(mean, false)).isEqualTo("16778239");
-		String gemv = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 4096.0)"
+		String gemv = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (linalg:dot (linalg:reshape v '(1 1024)) v) 0))))";
 		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(gemv, false)).isEqualTo("16778240");
 		// The MATRIX PRODUCT is exempt: its lanes run across the output row, not along
 		// the
 		// summation axis, so its accumulator stays f64 and it matches the oracle exactly.
-		String vm = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 4096.0)"
+		String vm = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (linalg:dot v (linalg:reshape v '(1024 1))) 0))))";
 		assertThat(compileAndRunVec(vm, true)).isEqualTo("16778240");
 		assertThat(compileAndRunVec(vm, false)).isEqualTo("16778240");
@@ -15695,29 +15703,29 @@ class WasmLispCompilerIntegrationTest {
 	static List<String> unaryUfuncSources() {
 		return List.of("(print (linalg:sqrt (linalg:reshape (linalg:arange 12) '(3 4))))",
 				"(print (linalg:abs (linalg:sub (linalg:arange 7) 3)))",
-				"(print (linalg:negative (linalg:reshape (linalg:arange 0 6 'single-float) '(2 3))))",
-				"(print (linalg:sign (linalg:sub (linalg:arange 0 9 'single-float) 4)))",
+				"(print (linalg:negative (linalg:reshape (linalg:arange 0 6 :element-type 'single-float) '(2 3))))",
+				"(print (linalg:sign (linalg:sub (linalg:arange 0 9 :element-type 'single-float) 4)))",
 				"(print (linalg:square (linalg:sub (linalg:arange 5) 2)))",
-				"(print (linalg:square (linalg:arange 0 5 'single-float)))",
+				"(print (linalg:square (linalg:arange 0 5 :element-type 'single-float)))",
 				"(print (linalg:reciprocal (linalg:add (linalg:arange 6) 1)))",
 				"(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1))))",
-				"(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 8 'single-float) 1))))",
+				"(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 8 :element-type 'single-float) 1))))",
 				"(print (linalg:log (linalg:add (linalg:arange 200) 1)))",
 				"(print (linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4))))",
-				"(print (linalg:log (linalg:add (linalg:arange 0 8 'single-float) 1)))",
+				"(print (linalg:log (linalg:add (linalg:arange 0 8 :element-type 'single-float) 1)))",
 				"(print (linalg:tanh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.03)))",
-				"(print (linalg:tanh (linalg:arange 0 8 'single-float)))",
+				"(print (linalg:tanh (linalg:arange 0 8 :element-type 'single-float)))",
 				"(print (linalg:tanh #d(-25.0 -0.0 0.0 25.0)))",
 				"(print (linalg:sin (linalg:sub (linalg:arange 200) 100)))",
 				"(print (linalg:cos (linalg:reshape (linalg:arange 12) '(3 4))))",
-				"(print (linalg:tan (linalg:sub (linalg:arange 0 8 'single-float) 4)))",
+				"(print (linalg:tan (linalg:sub (linalg:arange 0 8 :element-type 'single-float) 4)))",
 				"(print (linalg:sin #d(0.0 -0.0 1.0 -2.5 100.0)))",
 				"(print (linalg:asin (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.005)))",
-				"(print (linalg:acos (linalg:mul (linalg:arange 0 8 'single-float) 0.005)))",
+				"(print (linalg:acos (linalg:mul (linalg:arange 0 8 :element-type 'single-float) 0.005)))",
 				"(print (linalg:atan (linalg:sub (linalg:arange 200) 100)))",
-				"(print (linalg:atan (linalg:reshape (linalg:arange 0 12 'single-float) '(3 4))))",
+				"(print (linalg:atan (linalg:reshape (linalg:arange 0 12 :element-type 'single-float) '(3 4))))",
 				"(print (linalg:sinh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.05)))",
-				"(print (linalg:cosh (linalg:mul (linalg:arange 0 8 'single-float) 0.05)))",
+				"(print (linalg:cosh (linalg:mul (linalg:arange 0 8 :element-type 'single-float) 0.05)))",
 				"(print (linalg:asin #d(0.0 -0.0 1.0 -1.0 0.5)))", "(print (linalg:acos #d(1.0 -1.0 0.0 0.5)))",
 				"(print (linalg:sinh #d(0.0 -0.0 0.25 -0.25 0.3)))", "(print (linalg:cosh #d(0.0 -0.0 1.0)))",
 				"(print (linalg:negative #d(0.0 -0.0 1.5)))", "(print (linalg:abs #d(-0.0 0.0 -2.5)))",
@@ -15741,20 +15749,20 @@ class WasmLispCompilerIntegrationTest {
 	static List<String> comparisonSelectSources() {
 		return List.of(
 				"(let ((a (linalg:sub (linalg:arange 200) 100))) (print (linalg:maximum a (linalg:negative a))))",
-				"(let ((a (linalg:sub (linalg:arange 0 8 'single-float) 4))) (print (linalg:minimum a (linalg:negative a))))",
+				"(let ((a (linalg:sub (linalg:arange 0 8 :element-type 'single-float) 4))) (print (linalg:minimum a (linalg:negative a))))",
 				"(print (linalg:maximum (linalg:reshape (linalg:arange 12) '(3 4)) (linalg:negative (linalg:reshape (linalg:arange 12) '(3 4)))))",
 				"(print (linalg:maximum (linalg:sub (linalg:arange 200) 100) 3.0))",
 				"(print (linalg:minimum 3.0 (linalg:sub (linalg:arange 200) 100)))",
-				"(print (linalg:maximum (linalg:arange 0 8 'single-float) 4.3))",
-				"(print (linalg:minimum 4.3 (linalg:arange 0 8 'single-float)))",
+				"(print (linalg:maximum (linalg:arange 0 8 :element-type 'single-float) 4.3))",
+				"(print (linalg:minimum 4.3 (linalg:arange 0 8 :element-type 'single-float)))",
 				"(print (linalg:maximum #d(-0.0 0.0) #d(0.0 -0.0)))",
 				"(print (linalg:minimum #d(-0.0 0.0) #d(0.0 -0.0)))", "(print (linalg:maximum #d(-0.0) 0.0))",
 				"(print (linalg:maximum (linalg:mul (linalg:ones 2) (/ 0.0 0.0)) #d(1.0 2.0)))",
 				"(print (linalg:maximum #d(1.0 2.0) (linalg:mul (linalg:ones 2) (/ 0.0 0.0))))",
 				"(print (linalg:clip (linalg:sub (linalg:arange 200) 100) -50.0 50.0))",
-				"(print (linalg:clip (linalg:arange 0 8 'single-float) 1.3 5.3))",
+				"(print (linalg:clip (linalg:arange 0 8 :element-type 'single-float) 1.3 5.3))",
 				"(print (linalg:relu (linalg:sub (linalg:arange 200) 100)))",
-				"(print (linalg:relu (linalg:reshape (linalg:sub (linalg:arange 0 12 'single-float) 6) '(3 4))))",
+				"(print (linalg:relu (linalg:reshape (linalg:sub (linalg:arange 0 12 :element-type 'single-float) 6) '(3 4))))",
 				"(print (linalg:relu #d(-0.0 0.0)))",
 				"(print (linalg:clip (linalg:mul (linalg:ones 1) (/ 0.0 0.0)) -1.0 1.0))",
 				"(print (linalg:maximum #(1 5 3) #(4 2 3)))", "(print (linalg:minimum #d(1.0 5.0) #f(4.0 2.0)))",

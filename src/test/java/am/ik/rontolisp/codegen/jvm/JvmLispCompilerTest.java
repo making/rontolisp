@@ -10747,14 +10747,14 @@ class JvmLispCompilerTest {
 		// backend), and the indexing/selection/comparison helpers.
 		assertThat(compileAndRunLinalg("""
 				(defparameter *m* (linalg:from-list '((1 2 3) (4 5 6))))
-				(print (linalg:sum *m* 0))
-				(print (linalg:sum *m* -1 t))
-				(print (linalg:mean *m* 0))
-				(print (linalg:amax *m* 1))
-				(print (linalg:amin *m* 0 t))
-				(print (linalg:argmax *m* 1))
-				(print (linalg:argmin *m* 0))
-				(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) 1))
+				(print (linalg:sum *m* :axis 0))
+				(print (linalg:sum *m* :axis -1 :keepdims t))
+				(print (linalg:mean *m* :axis 0))
+				(print (linalg:amax *m* :axis 1))
+				(print (linalg:amin *m* :axis 0 :keepdims t))
+				(print (linalg:argmax *m* :axis 1))
+				(print (linalg:argmin *m* :axis 0))
+				(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) :axis 1))
 				(print (linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1))))
 				(linalg:seed 42)
 				(print (linalg:choice 60000 4))
@@ -10769,8 +10769,8 @@ class JvmLispCompilerTest {
 				(print (linalg:gather *m* #(2 0)))
 				(print (linalg:one-hot #(1 0 2) 3))
 				(print (linalg:greater *m* 3))
-				(print (linalg:equal (linalg:argmax *m* 1) #(2 2)))
-				(print (linalg:zeros-like (linalg:ones 2 'single-float)))
+				(print (linalg:equal (linalg:argmax *m* :axis 1) #(2 2)))
+				(print (linalg:zeros-like (linalg:ones 2 :element-type 'single-float)))
 				""")).isEqualTo("#d(5.0 7.0 9.0)\n#d((6.0) (15.0))\n#d(2.5 3.5 4.5)\n#d(3.0 6.0)\n#d((1.0 2.0 3.0))\n"
 				+ "#d(2.0 2.0)\n#d(0.0 0.0 0.0)\n#d((12.0 15.0 18.0 21.0) (48.0 51.0 54.0 57.0))\n(3 4)\n"
 				+ "#d(26833.0 11120.0 29256.0 22347.0)\n#d(4.0 5.0 6.0 2.0 9.0 7.0 1.0 0.0 8.0 3.0)\n"
@@ -10786,25 +10786,27 @@ class JvmLispCompilerTest {
 		// permutation; the 2-argument call declines the --simd transpose kernel),
 		// np.pad's constant-0 mode, and the internal rank-4 %la-im2col/%la-col2im
 		// pair behind the convolution examples.
-		assertThat(compileAndRunLinalg("""
-				(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
-				(print (linalg:shape (linalg:transpose *x* '(1 0 2))))
-				(print (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0)))
-				(print (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*))
-				(print (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2))))
-				(print (linalg:pad #(1 2) 1))
-				(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
-				(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
-				(print *col*)
-				(print (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*))
-				(print (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0))
-				(print (array-element-type (linalg:transpose (linalg:ones '(2 2 2) 'single-float) '(2 1 0))))
-				(print (array-element-type (linalg:pad (linalg:ones 2 'single-float) 1)))
-				""")).isEqualTo("(3 2 4)\n#d((1.0 3.0) (2.0 4.0))\nT\n"
-				+ "#d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
-				+ " (0.0 0.0 0.0 0.0 0.0 0.0))\n#d(0.0 1.0 2.0 0.0)\n"
-				+ "#d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0))\nT\n"
-				+ "#d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0))))\nSINGLE-FLOAT\nSINGLE-FLOAT");
+		assertThat(compileAndRunLinalg(
+				"""
+						(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
+						(print (linalg:shape (linalg:transpose *x* '(1 0 2))))
+						(print (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0)))
+						(print (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*))
+						(print (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2))))
+						(print (linalg:pad #(1 2) 1))
+						(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
+						(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
+						(print *col*)
+						(print (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*))
+						(print (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0))
+						(print (array-element-type (linalg:transpose (linalg:ones '(2 2 2) :element-type 'single-float) '(2 1 0))))
+						(print (array-element-type (linalg:pad (linalg:ones 2 :element-type 'single-float) 1)))
+						"""))
+			.isEqualTo("(3 2 4)\n#d((1.0 3.0) (2.0 4.0))\nT\n"
+					+ "#d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
+					+ " (0.0 0.0 0.0 0.0 0.0 0.0))\n#d(0.0 1.0 2.0 0.0)\n"
+					+ "#d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0))\nT\n"
+					+ "#d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0))))\nSINGLE-FLOAT\nSINGLE-FLOAT");
 	}
 
 	@Test
@@ -10836,7 +10838,7 @@ class JvmLispCompilerTest {
 				(print (linalg:add #2A((1 2) (3 4)) #2A((100) (200))))
 				(print (linalg:sub #(1 2) #d(1.0)))
 				(print (linalg:maximum #2A((1 5) (4 2)) #(3 3)))
-				(print (linalg:mul (linalg:from-list '((1 2) (3 4)) 'single-float) #(10 20)))
+				(print (linalg:mul (linalg:from-list '((1 2) (3 4)) :element-type 'single-float) #(10 20)))
 				(print (linalg:div #3A(((2.0 4.0) (6.0 8.0))) #(2 4)))
 				""")).isEqualTo("#d((10.0 40.0) (30.0 80.0))\n#d((101.0 102.0) (203.0 204.0))\n#d(0.0 1.0)\n"
 				+ "#d((3.0 5.0) (4.0 3.0))\n#f((10.0 40.0) (30.0 80.0))\n#d(((1.0 1.0) (3.0 2.0)))");
@@ -10851,12 +10853,12 @@ class JvmLispCompilerTest {
 		// so the printed doubles are identical on every backend.
 		assertThat(compileAndRunLinalg("""
 				(print (linalg:diff #(1 2 4 7 0)))
-				(print (linalg:diff #(1 2 4 7 0) 2))
+				(print (linalg:diff #(1 2 4 7 0) :n 2))
 				(print (linalg:diff #2A((1 3 6) (0 5 6))))
 				(print (linalg:gradient #(0 1 4 9 16)))
 				(print (linalg:gradient #(0 1 4 9 16) 2))
 				(print (linalg:gradient #(0 1 9) #(0 1 3)))
-				(print (array-element-type (linalg:gradient (linalg:arange 0 4 'single-float))))
+				(print (array-element-type (linalg:gradient (linalg:arange 0 4 :element-type 'single-float))))
 				""")).isEqualTo("#d(1.0 2.0 3.0 -7.0)\n#d(1.0 1.0 -10.0)\n#d((2.0 3.0) (5.0 1.0))\n"
 				+ "#d(1.0 2.0 4.0 6.0 7.0)\n#d(0.5 1.0 2.0 3.0 3.5)\n#d(1.0 2.0 4.0)\nSINGLE-FLOAT");
 	}
@@ -10864,23 +10866,23 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunLinalgSingleFloatWidthPolymorphism() throws Exception {
 		// linalg is width-polymorphic -- a constructor opts into single-float
-		// (#f) with a trailing element-type, and every transform PRESERVES the input
+		// (#f) with an :element-type keyword, and every transform PRESERVES the input
 		// width, so a #f value is never silently widened to double (which would force a
 		// mixed-width --simd error on a following vec:matvec). Double stays the default.
 		// f32-exact values (integers / halves) so the printed form is byte-identical to
 		// the interpreter and WASM.
 		assertThat(compileAndRunLinalg("""
-				(print (linalg:zeros '(2 2) 'single-float))
+				(print (linalg:zeros '(2 2) :element-type 'single-float))
 				(print (linalg:zeros '(2 2)))
-				(print (linalg:arange 0 8 2 'single-float))
-				(print (linalg:from-list '((1 2) (3 4)) 'single-float))
-				(let ((w (linalg:from-list '((1 2) (3 4)) 'single-float)))
-				  (print (linalg:sub w (linalg:mul (linalg:ones '(2 2) 'single-float) 0.5)))
+				(print (linalg:arange 0 8 2 :element-type 'single-float))
+				(print (linalg:from-list '((1 2) (3 4)) :element-type 'single-float))
+				(let ((w (linalg:from-list '((1 2) (3 4)) :element-type 'single-float)))
+				  (print (linalg:sub w (linalg:mul (linalg:ones '(2 2) :element-type 'single-float) 0.5)))
 				  (print (array-element-type (linalg:transpose w)))
-				  (print (linalg:matmul w (linalg:eye 2 'single-float))))
+				  (print (linalg:matmul w (linalg:eye 2 :element-type 'single-float))))
 				(print (array-element-type (linalg:add (linalg:from-list '(1 2 3)) 10)))
-				(print (linalg:dot (linalg:from-list '(1 2 3) 'single-float)
-				                   (linalg:from-list '(1 2 3) 'single-float)))
+				(print (linalg:dot (linalg:from-list '(1 2 3) :element-type 'single-float)
+				                   (linalg:from-list '(1 2 3) :element-type 'single-float)))
 				""")).isEqualTo("#f((0.0 0.0) (0.0 0.0))\n#d((0.0 0.0) (0.0 0.0))\n#f(0.0 2.0 4.0 6.0)\n"
 				+ "#f((1.0 2.0) (3.0 4.0))\n#f((0.5 1.5) (2.5 3.5))\nSINGLE-FLOAT\n"
 				+ "#f((1.0 2.0) (3.0 4.0))\nDOUBLE-FLOAT\n14.0");

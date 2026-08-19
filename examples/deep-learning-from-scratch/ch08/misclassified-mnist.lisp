@@ -60,7 +60,7 @@
       (let* ((idx (linalg:arange start (+ start *batch-size*)))
              (tx (linalg:take-rows x-test idx))
              (y (let ((*train-p* nil)) (predict net tx)))
-             (yl (linalg:argmax y 1)))
+             (yl (linalg:argmax y :axis 1)))
         (dotimes (k *batch-size*)
           (setf (aref classified (+ start k)) (aref yl k))
           (when (= (aref yl k) (aref t-test (+ start k)))

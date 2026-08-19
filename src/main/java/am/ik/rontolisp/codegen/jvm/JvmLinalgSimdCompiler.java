@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.LinalgKernelCallLayout;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
@@ -124,12 +125,12 @@ final class JvmLinalgSimdCompiler {
 	}
 
 	/**
-	 * The members whose &optional axis forms have their own bridge kernel: transpose
-	 * takes an axes permutation, sum/amax/amin an axis plus keepdims, argmax/argmin an
-	 * axis. A call supplying MORE arguments than {@link #arity} but at most
-	 * {@code params} routes to this bridge method (missing trailing optionals padded with
-	 * null = nil); on decline the surplus temps are packaged into the variadic defun's
-	 * rest list.
+	 * The members whose option forms have their own bridge kernel: transpose takes a
+	 * positional axes permutation, sum/amax/amin the {@code :axis} / {@code :keepdims}
+	 * keywords, argmax/argmin {@code :axis}. A call whose argument forms fit the member's
+	 * {@link LinalgKernelCallLayout.Extended shape} routes to this bridge method (an
+	 * option not supplied is padded with null = nil); on decline the surplus temps --
+	 * keyword literals included -- are packaged into the variadic defun's rest list.
 	 */
 	record Extended(String bridgeMethod, int params) {
 	}
@@ -140,7 +141,7 @@ final class JvmLinalgSimdCompiler {
 			LispNames.LINALG_ARGMAX, new Extended("laArgmaxAxis", 2), LispNames.LINALG_ARGMIN,
 			new Extended("laArgminAxis", 2));
 
-	/** The extended (axis-form) kernel of the given member, or {@code null}. */
+	/** The extended (option-form) kernel of the given member, or {@code null}. */
 	static @org.jspecify.annotations.Nullable Extended extended(String member) {
 		return EXTENDED.get(member);
 	}
@@ -172,13 +173,15 @@ final class JvmLinalgSimdCompiler {
 		int arity = arity(member);
 		int supplied = args.size() - 1;
 		Extended ext = supplied > arity ? EXTENDED.get(member) : null;
-		boolean extendedCall = ext != null && supplied <= ext.params();
+		LinalgKernelCallLayout.Extended shape = ext != null ? LinalgKernelCallLayout.extended(member) : null;
+		int[] layout = shape != null ? LinalgKernelCallLayout.layout(shape, arity, args.subList(1, args.size())) : null;
+		boolean extendedCall = layout != null;
 		if (defun == null || (supplied != arity && !extendedCall)
 				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity
 				|| (extendedCall && !defun.variadic())) {
-			// No spliced linalg.lisp to fall back to, a call with more arguments than
-			// any kernel handles, or a defun whose required count no longer matches:
-			// the ordinary direct-call path handles all three.
+			// No spliced linalg.lisp to fall back to, a call whose option forms no kernel
+			// handles, or a defun whose required count no longer matches: the ordinary
+			// direct-call path handles all three.
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
@@ -193,12 +196,21 @@ final class JvmLinalgSimdCompiler {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slots[i]);
 		}
-		loadAll(ctx, slots);
-		if (extendedCall && ext != null) {
-			// A missing trailing &optional (e.g. keepdims) is padded with null = nil.
-			for (int i = supplied; i < ext.params(); i++) {
-				ctx.emit(Opcode.ACONST_NULL);
+		if (layout != null) {
+			// The kernel's parameters in its own order: the temp of the form supplying
+			// each one, or null = nil for an option the call leaves out.
+			for (int i : layout) {
+				if (i < 0) {
+					ctx.emit(Opcode.ACONST_NULL);
+				}
+				else {
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(slots[i]);
+				}
 			}
+		}
+		else {
+			loadAll(ctx, slots);
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get(extendedCall ? extendedKey(member) : qualified)).index());

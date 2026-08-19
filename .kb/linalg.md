@@ -8,12 +8,22 @@ runs identically on all backends. 57 exported functions (constructors `zeros`/
 reductions, calculus `diff`/`gradient`, and floating-point Gaussian-elimination
 `det`/`inv`/`solve`) over the built-in arrays. The library computes in packed float (speed over exactness), **double by
 default** but **width-polymorphic** (todo-097): a constructor opts into packed
-single-float (`#f`) with a trailing `element-type` argument, and every transform
+single-float (`#f`) with an `:element-type` keyword, and every transform
 PRESERVES its input width (see "Single-float / width polymorphism" below).
 Elementwise ops, reductions, `reshape`/`flatten` and `array-equal`
 walk elements via `row-major-aref`, so they work for any rank (`diff` too);
 `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay defined for
 rank <= 2, and `gradient` for vectors only.
+
+**Options are numpy-style `&key` arguments, never trailing positionals** (the
+2026-08-19 redesign; the library predates `&key` support): `:element-type` on every
+constructor, `:axis` / `:keepdims` on the reductions, `:n` / `:axis` on `diff`. The
+only positional options left are the ones numpy itself takes positionally:
+`arange`'s start/stop/step, `transpose`'s axes list, `gradient`'s spacing. The
+`--simd` interceptors pattern-match the LITERAL keywords at a call site
+(`compiler.LinalgKernelCallLayout`, shared by both codegens; `LinalgSimd.options`
+on the interpreter), so a spliced body that forwards an option (`mean` -> `sum`)
+must spell the keyword literally.
 
 ## API quick reference (enough to write linalg programs)
 
@@ -34,9 +44,9 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 
 | Function | Semantics |
 | --- | --- |
-| `(linalg:zeros shape)` / `(linalg:ones shape)` / `(linalg:full shape v)` | new array filled with 0 / 1 / v |
+| `(linalg:zeros shape &key element-type)` / `(linalg:ones shape ...)` / `(linalg:full shape v ...)` | new array filled with 0 / 1 / v; `:element-type 'single-float` for `#f` (every constructor) |
 | `(linalg:eye n)` | n x n identity matrix |
-| `(linalg:arange stop)` / `(arange start stop)` / `(arange start stop step)` | vector, stop exclusive, step may be negative |
+| `(linalg:arange stop)` / `(arange start stop)` / `(arange start stop step)` (+ `:element-type`) | vector, stop exclusive, step may be negative; `&rest`-parsed so the keyword may follow any positional count |
 | `(linalg:linspace start stop n)` | n evenly spaced values inclusive (packed double-float) |
 | `(linalg:from-list lst)` | flat list -> vector; list of equal-length rows -> matrix |
 | `(linalg:to-list a)` | inverse of from-list |
@@ -52,12 +62,12 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise |
 | `(linalg:matmul a b)` | matrix product (also mat.vec); rejects scalar operands |
 | `(linalg:outer u v)` | outer product (inputs flattened first) |
-| `(linalg:sum a &optional axis keepdims)` / `(linalg:mean ...)` | no axis: over all elements (a reduction follows the element type: a packed/float array reduces to a double, a plain integer array to an integer/ratio; non-nil keepdims wraps the scalar in an all-ones-shape array). Integer axis (negative counts from the end): reduce along that axis, axis dropped -- kept as extent 1 under keepdims; a vector without keepdims reduces to the scalar itself. Any rank (row-major outer x axis x inner fold) |
-| `(linalg:amax a &optional axis keepdims)` / `(linalg:amin ...)` | largest / smallest element, whole-array or along an axis (same rules as sum); strict-comparison fold (first wins ties, NaN never replaces the seed); error on an empty array or axis |
-| `(linalg:argmax v &optional axis)` / `(linalg:argmin ...)` | no axis: index in a VECTOR (first on ties). With an axis: per-slice indices, axis dropped; rank >= 2 results are a packed DOUBLE array of index values (no integer arrays in linalg; `(= 3.0 3)` holds), a vector reduces to the integer index |
+| `(linalg:sum a &key axis keepdims)` / `(linalg:mean ...)` | no axis: over all elements (a reduction follows the element type: a packed/float array reduces to a double, a plain integer array to an integer/ratio; non-nil keepdims wraps the scalar in an all-ones-shape array). Integer axis (negative counts from the end): reduce along that axis, axis dropped -- kept as extent 1 under keepdims; a vector without keepdims reduces to the scalar itself. Any rank (row-major outer x axis x inner fold) |
+| `(linalg:amax a &key axis keepdims)` / `(linalg:amin ...)` | largest / smallest element, whole-array or along an axis (same rules as sum); strict-comparison fold (first wins ties, NaN never replaces the seed); error on an empty array or axis |
+| `(linalg:argmax v &key axis)` / `(linalg:argmin ...)` | no axis: index in a VECTOR (first on ties). With an axis: per-slice indices, axis dropped; rank >= 2 results are a packed DOUBLE array of index values (no integer arrays in linalg; `(= 3.0 3)` holds), a vector reduces to the integer index |
 | `(linalg:norm a)` | Euclidean / Frobenius norm (a float, via sqrt) |
 | `(linalg:trace a)` | main-diagonal sum; square matrices only |
-| `(linalg:diff a)` / `(diff a n)` | n-th discrete difference along the last axis (numpy np.diff; default n = 1, each step shortens the last axis by one, clamped at 0); any rank; n = 0 returns a packed copy |
+| `(linalg:diff a &key n axis)` | n-th discrete difference along `:axis` (numpy np.diff; default n = 1, default axis -1 = last, negative counts from the end; each step shortens that axis by one, clamped at 0); any rank (outer x axis x inner walk); n = 0 returns a packed copy |
 | `(linalg:gradient f)` / `(gradient f spacing)` | numerical derivative of a VECTOR of samples (numpy np.gradient): second-order central differences inside, first-order one-sided at the ends, same length as f; spacing = a uniform scalar (default 1) or a same-length coordinate vector (non-uniform, numpy's exact interior formula); needs >= 2 samples |
 | `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting in floating point (double); a singular matrix's `det` may be a small epsilon rather than exactly 0; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
 | `(linalg:array-equal a b)` | same shape + numerically equal elements (1 = 1.0); needed because arrays themselves are `eq`-compared only |
@@ -65,9 +75,9 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:take-rows a idx)` | axis-0 slices selected by an index vector (numpy `x[mask]` / `np.take(a, idx, axis=0)`); ANY rank >= 1 (whole-slab copies, so rank-4 batches work); indices truncate, may repeat; axis 0 is KEPT (one index -> a `(1 n)` matrix, numpy `x[[i]]`) |
 | `(linalg:row a i)` | ONE axis-0 slice with axis 0 DROPPED (numpy `x[i]`): a matrix -> the row vector, a rank-4 batch -> the rank-3 sample. Rank >= 2 only (a vector errors -- `aref` already returns the element). The reason a per-sample forward pass reads `(linalg:row x i)` and not `(linalg:flatten (linalg:take-rows x (linalg:from-list (list i))))` |
 | `(linalg:gather a idx)` | per-row elements `a[i, idx[i]]` of a matrix (numpy `y[np.arange(n), t]`) as a vector |
-| `(linalg:one-hot idx n &optional element-type)` | `(length idx) x n` matrix, row i = 1.0 at column `idx[i]` |
+| `(linalg:one-hot idx n &key element-type)` | `(length idx) x n` matrix, row i = 1.0 at column `idx[i]` |
 | `(linalg:seed n)` | reset the shared RNG deterministically; returns n |
-| `(linalg:rand shape &optional element-type)` / `(linalg:randn ...)` / `(linalg:uniform lo hi shape ...)` | uniform [0,1) / standard normal / uniform [lo,hi) arrays from the seeded generator |
+| `(linalg:rand shape &key element-type)` / `(linalg:randn ...)` / `(linalg:uniform lo hi shape ...)` | uniform [0,1) / standard normal / uniform [lo,hi) arrays from the seeded generator |
 | `(linalg:choice n size)` / `(linalg:permutation n)` | size indices in [0,n) with replacement (np.random.choice default) / Fisher-Yates shuffle of 0..n-1; both packed double vectors of integer values |
 
 ## Seeded RNG (the np.random analog; deep-learning-from-scratch port)
@@ -119,18 +129,19 @@ single-float (`#f`) so a `#f` value flowing in from `vec:` is never silently
 widened back to double -- the widening would force a mixed-width `--simd` error on
 the next `vec:matvec` (a `#d` matrix x a `#f` vector). Two orthogonal mechanisms:
 
-- **Constructor opt-in.** Every constructor takes a trailing optional
-  `element-type` (positional symbol, default `'double-float`):
-  `(linalg:zeros '(3 4) 'single-float)`, `(linalg:ones n 'single-float)`,
-  `(linalg:full shape v 'single-float)`, `(linalg:eye n 'single-float)`,
-  `(linalg:linspace a b n 'single-float)`, `(linalg:from-list lst 'single-float)`,
-  and `(linalg:arange ... 'single-float)`. `arange` is variadic (`&optional b
-  step`), so it disambiguates by type -- `step` is always a number and an
-  `element-type` a non-nil symbol, so `(linalg:arange 0 10 'single-float)` reads
-  the symbol as the type (step defaulting) and `(linalg:arange 0 10 2 'single-float)`
-  keeps both. It is a **positional** symbol, NOT a `:element-type` keyword: a `&key`
-  cannot follow `arange`'s `&optional` (the optional greedily eats the keyword), so
-  the whole family uses a trailing optional for uniformity.
+- **Constructor opt-in.** Every constructor takes an `:element-type` keyword
+  (default `'double-float`): `(linalg:zeros '(3 4) :element-type 'single-float)`,
+  `(linalg:ones n :element-type 'single-float)`, `(linalg:full shape v :element-type
+  'single-float)`, `(linalg:eye n :element-type 'single-float)`, `(linalg:linspace a b n
+  :element-type 'single-float)`, `(linalg:from-list lst :element-type 'single-float)`,
+  `(linalg:one-hot idx n ...)`, `(linalg:rand shape ...)` / `randn` / `uniform`, and
+  `(linalg:arange ... :element-type 'single-float)`. `arange` is the one signature whose
+  POSITIONAL count varies (`stop` / `start stop` / `start stop step`), and CL's
+  `&optional` greedily eats a following keyword, so it is `(&rest args)` split by
+  `linalg::%la-split-element-type`: the `:element-type` pair may follow any positional
+  count, any other keyword signals `Unknown keyword argument`, 0 or > 3 positionals
+  signal. (Before 2026-08-19 the whole family took a trailing positional symbol, a
+  relic of the pre-`&key` era; the interceptors and `--no-gc` read the keyword now.)
 - **Width-following transforms.** `add`/`sub`/`mul`/`div`/`emap` (via
   `%la-like`), `transpose`/`reshape`/`flatten`, `dot`/`matmul`/`outer` and
   `inv`/`solve` all PRESERVE the (first) array input's width -- a `#f` stays `#f`,
@@ -189,7 +200,7 @@ benchmarks and the `-0.0` cross-backend footgun: **`.kb/linalg-simd.md`**.
   there + a defun in `linalg.lisp` (+ per-operator doc pages, en and ja).
 - **Driver**: `am.ik.rontolisp.eval.LinalgLibrary`, a simplified `JsonLibrary`
   mirror. Unlike JSON there is **no call-site rewriting**: every entry point is
-  a plain defun (`&optional` desugars through `LambdaLists`), so
+  a plain defun (`&key`/`&optional`/`&rest` desugar through `LambdaLists`), so
   `process(program)` only detects usage (any `linalg:`/`linalg::` qualified
   symbol anywhere, or a bare exported name while `(in-package linalg)` is in
   effect) and prepends `forms()`.

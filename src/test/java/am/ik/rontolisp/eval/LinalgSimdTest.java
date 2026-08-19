@@ -90,28 +90,32 @@ class LinalgSimdTest {
 		// and the fold kernels mirror %la-fold-axis / %la-argfold-axis exactly (double
 		// accumulation, the defun's seeds and strict comparisons), so every axis result
 		// is bit-identical to the oracle at both widths.
-		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
-		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 1 t)");
-		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) 1)");
-		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) -1)");
-		assertMatchesScalarOracle("(linalg:sum (linalg:arange 5) 0)");
-		assertMatchesScalarOracle("(linalg:sum (linalg:arange 5) 0 t)");
-		assertMatchesScalarOracle("(linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 0)");
-		assertMatchesScalarOracle("(linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
-		assertMatchesScalarOracle("(linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 1 t)");
-		assertMatchesScalarOracle("(linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1)");
-		assertMatchesScalarOracle("(linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t)");
-		assertMatchesScalarOracle("(linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 1)");
-		assertMatchesScalarOracle("(linalg:amax (linalg:arange 5) 0)");
-		assertMatchesScalarOracle("(linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1)");
-		assertMatchesScalarOracle("(linalg:argmin (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
-		assertMatchesScalarOracle("(linalg:argmax (linalg:from-list '(3.0 9.0 2.0)) 0)");
-		assertMatchesScalarOracle("(linalg:argmin (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) -1)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1 :keepdims t)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) :axis 1)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) :axis -1)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:arange 5) :axis 0)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:arange 5) :axis 0 :keepdims t)");
+		assertMatchesScalarOracle(
+				"(linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) :element-type 'single-float) :axis 0)");
+		assertMatchesScalarOracle("(linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0)");
+		assertMatchesScalarOracle("(linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1 :keepdims t)");
+		assertMatchesScalarOracle("(linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1)");
+		assertMatchesScalarOracle("(linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0 :keepdims t)");
+		assertMatchesScalarOracle(
+				"(linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) :element-type 'single-float) :axis 1)");
+		assertMatchesScalarOracle("(linalg:amax (linalg:arange 5) :axis 0)");
+		assertMatchesScalarOracle("(linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) :axis 1)");
+		assertMatchesScalarOracle("(linalg:argmin (linalg:reshape (linalg:arange 6) '(2 3)) :axis 0)");
+		assertMatchesScalarOracle("(linalg:argmax (linalg:from-list '(3.0 9.0 2.0)) :axis 0)");
+		assertMatchesScalarOracle(
+				"(linalg:argmin (linalg:from-list '((0.5 0.25) (0.125 2.0)) :element-type 'single-float) :axis -1)");
 		assertMatchesScalarOracle("(linalg:reshape (linalg:arange 12) '(3 -1))");
-		assertThat(eval("(linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 0)", true).print()).isEqualTo("#d(5.0 7.0 9.0)");
+		assertThat(eval("(linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) :axis 0)", true).print())
+			.isEqualTo("#d(5.0 7.0 9.0)");
 		// A vector without keepdims reduces to the scalar itself; argmax to the index.
-		assertThat(eval("(linalg:sum #f(0.5 0.25) 0)", true).print()).isEqualTo("0.75");
-		assertThat(eval("(linalg:argmax #d(3.0 9.0 2.0) 0)", true).print()).isEqualTo("1");
+		assertThat(eval("(linalg:sum #f(0.5 0.25) :axis 0)", true).print()).isEqualTo("0.75");
+		assertThat(eval("(linalg:argmax #d(3.0 9.0 2.0) :axis 0)", true).print()).isEqualTo("1");
 	}
 
 	@Test
@@ -119,12 +123,12 @@ class LinalgSimdTest {
 		// The fold's (if (> x acc) x acc) lets the ACCUMULATOR win ties and NaN -- the
 		// opposite of the element-wise select -- and the seed is the first element
 		// along the axis, so an all-negative axis never answers 0.
-		assertThat(eval("(linalg:amax #d((-0.0 0.0)) 1)", true).print()).isEqualTo("#d(-0.0)");
-		assertThat(eval("(linalg:amin #d((0.0 -0.0)) 1)", true).print()).isEqualTo("#d(0.0)");
-		assertThat(eval("(linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) 1)", true).print()).isEqualTo("#d(-1.0 -2.0)");
-		assertThat(eval("(linalg:argmax #d((-0.0 0.0) (0.0 -0.0)) 1)", true).print()).isEqualTo("#d(0.0 0.0)");
-		assertMatchesScalarOracle("(linalg:amax #d((-0.0 0.0)) 1)");
-		assertMatchesScalarOracle("(linalg:amin #d((0.0 -0.0)) 1)");
+		assertThat(eval("(linalg:amax #d((-0.0 0.0)) :axis 1)", true).print()).isEqualTo("#d(-0.0)");
+		assertThat(eval("(linalg:amin #d((0.0 -0.0)) :axis 1)", true).print()).isEqualTo("#d(0.0)");
+		assertThat(eval("(linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) :axis 1)", true).print()).isEqualTo("#d(-1.0 -2.0)");
+		assertThat(eval("(linalg:argmax #d((-0.0 0.0) (0.0 -0.0)) :axis 1)", true).print()).isEqualTo("#d(0.0 0.0)");
+		assertMatchesScalarOracle("(linalg:amax #d((-0.0 0.0)) :axis 1)");
+		assertMatchesScalarOracle("(linalg:amin #d((0.0 -0.0)) :axis 1)");
 	}
 
 	@Test
@@ -132,11 +136,12 @@ class LinalgSimdTest {
 		// A nil axis is the defun's no-axis path; a general boxed array, an
 		// out-of-range axis and an empty axis decline too (the defun signals its own
 		// errors for the latter two).
-		assertMatchesScalarOracle("(linalg:sum #d((1.0 2.0)) nil)");
-		assertMatchesScalarOracle("(linalg:sum #2A((1 2) (3 4)) 0)");
-		assertMatchesScalarOracle("(linalg:argmax #(1 9 2) 0)");
-		assertThatThrownBy(() -> eval("(linalg:sum #d((1.0 2.0)) 2)", true)).hasMessageContaining("axis out of range");
-		assertThatThrownBy(() -> eval("(linalg:amax (linalg:zeros '(2 0)) 1)", true))
+		assertMatchesScalarOracle("(linalg:sum #d((1.0 2.0)))");
+		assertMatchesScalarOracle("(linalg:sum #2A((1 2) (3 4)) :axis 0)");
+		assertMatchesScalarOracle("(linalg:argmax #(1 9 2) :axis 0)");
+		assertThatThrownBy(() -> eval("(linalg:sum #d((1.0 2.0)) :axis 2)", true))
+			.hasMessageContaining("axis out of range");
+		assertThatThrownBy(() -> eval("(linalg:amax (linalg:zeros '(2 0)) :axis 1)", true))
 			.hasMessageContaining("reduction of an empty axis");
 	}
 
@@ -149,7 +154,7 @@ class LinalgSimdTest {
 		assertMatchesScalarOracle("(linalg:transpose (linalg:arange 3) '(0))");
 		assertMatchesScalarOracle(
 				"(linalg:transpose (linalg:reshape (linalg:from-list '(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0)"
-						+ " 'single-float) '(2 2 2)) '(2 0 1))");
+						+ " :element-type 'single-float) '(2 2 2)) '(2 0 1))");
 		// A bad permutation declines, so the defun's own error still signals.
 		assertThatThrownBy(() -> eval("(linalg:transpose #d((1.0 2.0)) '(0 0))", true))
 			.hasMessageContaining("permutation");
@@ -166,7 +171,7 @@ class LinalgSimdTest {
 			assertMatchesScalarOracle("(linalg:%s (linalg:arange 1 8) (linalg:arange 2 9))".formatted(op));
 			assertMatchesScalarOracle("(linalg:%s (linalg:arange 1 201) (linalg:arange 2 202))".formatted(op));
 			assertMatchesScalarOracle(
-					"(linalg:%s (linalg:arange 1 201 1 'single-float) (linalg:arange 2 202 1 'single-float))"
+					"(linalg:%s (linalg:arange 1 201 1 :element-type 'single-float) (linalg:arange 2 202 1 :element-type 'single-float))"
 						.formatted(op));
 		}
 	}
@@ -185,8 +190,10 @@ class LinalgSimdTest {
 
 	@Test
 	void elementWiseKernelsPreserveTheOperandWidth() {
-		assertThat(eval("(linalg:add (linalg:ones 3 'single-float) (linalg:ones 3 'single-float))", true).print())
-			.isEqualTo("#f(2.0 2.0 2.0)");
+		assertThat(eval(
+				"(linalg:add (linalg:ones 3 :element-type 'single-float) (linalg:ones 3 :element-type 'single-float))",
+				true)
+			.print()).isEqualTo("#f(2.0 2.0 2.0)");
 		assertThat(eval("(linalg:add (linalg:ones 3) (linalg:ones 3))", true).print()).isEqualTo("#d(2.0 2.0 2.0)");
 	}
 
@@ -210,8 +217,10 @@ class LinalgSimdTest {
 		// examples/ml/nn-vec.lisp is exactly this shape -- (linalg:mul grad 0.1) over an
 		// #f gradient -- and its printed output must not move under --simd.
 		for (String op : new String[] { "add", "sub", "mul", "div" }) {
-			assertMatchesScalarOracle("(linalg:%s (linalg:arange 1 201 1 'single-float) 0.1)".formatted(op));
-			assertMatchesScalarOracle("(linalg:%s 0.1 (linalg:arange 1 201 1 'single-float))".formatted(op));
+			assertMatchesScalarOracle(
+					"(linalg:%s (linalg:arange 1 201 1 :element-type 'single-float) 0.1)".formatted(op));
+			assertMatchesScalarOracle(
+					"(linalg:%s 0.1 (linalg:arange 1 201 1 :element-type 'single-float))".formatted(op));
 		}
 	}
 
@@ -244,7 +253,7 @@ class LinalgSimdTest {
 							.formatted(n, op));
 			}
 			assertMatchesScalarOracle(
-					"(let ((a (linalg:arange 1 201 1 'single-float))) (linalg:%s a (linalg:negative a)))"
+					"(let ((a (linalg:arange 1 201 1 :element-type 'single-float))) (linalg:%s a (linalg:negative a)))"
 						.formatted(op));
 			assertMatchesScalarOracle(
 					"(linalg:%s (linalg:reshape (linalg:arange 200) '(10 20)) (linalg:negative (linalg:reshape (linalg:arange 200) '(10 20))))"
@@ -253,8 +262,10 @@ class LinalgSimdTest {
 			assertMatchesScalarOracle("(linalg:%s 3.0 (linalg:sub (linalg:arange 1 201) 100.0))".formatted(op));
 			// The f32-vs-scalar broadcast must compare the widened element against the
 			// FULL double scalar (an inexact bound), like the arithmetic broadcasts.
-			assertMatchesScalarOracle("(linalg:%s (linalg:arange 1 201 1 'single-float) 100.3)".formatted(op));
-			assertMatchesScalarOracle("(linalg:%s 100.3 (linalg:arange 1 201 1 'single-float))".formatted(op));
+			assertMatchesScalarOracle(
+					"(linalg:%s (linalg:arange 1 201 1 :element-type 'single-float) 100.3)".formatted(op));
+			assertMatchesScalarOracle(
+					"(linalg:%s 100.3 (linalg:arange 1 201 1 :element-type 'single-float))".formatted(op));
 		}
 		// clip / relu ride the maximum/minimum kernels transitively.
 		assertMatchesScalarOracle("(linalg:clip (linalg:sub (linalg:arange 1 201) 100.0) -50.0 50.0)");
@@ -332,10 +343,12 @@ class LinalgSimdTest {
 				eval("(linalg:mul (linalg:reshape (linalg:from-list '(1 2 3 4)) '(2 2)) #d(10.0 20.0))", true).print())
 			.isEqualTo("#d((10.0 40.0) (30.0 80.0))");
 		assertMatchesScalarOracle("(linalg:add (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:arange 3))");
-		assertMatchesScalarOracle("(linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
-				+ " (linalg:arange 0 2 'single-float))");
+		assertMatchesScalarOracle("(linalg:sub (linalg:reshape (linalg:arange 0 4 :element-type 'single-float) '(2 2))"
+				+ " (linalg:arange 0 2 :element-type 'single-float))");
 		assertThat(
-				eval("(array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0)))", true).print())
+				eval("(array-element-type (linalg:div (linalg:ones '(2 2) :element-type 'single-float) #d(1.0 2.0)))",
+						true)
+					.print())
 			.isEqualTo("SINGLE-FLOAT");
 		// The row and column shapes of the CNN layers, and a rank-3 vs rank-2 pair.
 		assertMatchesScalarOracle("(linalg:sub (linalg:reshape (linalg:arange 6) '(2 3))"
@@ -345,8 +358,8 @@ class LinalgSimdTest {
 		assertMatchesScalarOracle("(linalg:div (linalg:reshape (linalg:arange 24) '(2 3 4))"
 				+ " (linalg:add (linalg:reshape (linalg:arange 12) '(3 4)) 1))");
 		assertMatchesScalarOracle("(linalg:mul (linalg:reshape (linalg:arange 3) '(3 1)) (linalg:arange 1 3))");
-		assertMatchesScalarOracle("(linalg:add (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
-				+ " (linalg:reshape (linalg:arange 0 2 'single-float) '(2 1)))");
+		assertMatchesScalarOracle("(linalg:add (linalg:reshape (linalg:arange 0 4 :element-type 'single-float) '(2 2))"
+				+ " (linalg:reshape (linalg:arange 0 2 :element-type 'single-float) '(2 1)))");
 		// The comparison selects broadcast through the same kernel: the strict select,
 		// second operand wins the -0.0/0.0 tie.
 		assertMatchesScalarOracle("(linalg:maximum (linalg:reshape (linalg:from-list '(1.0 5.0 3.0 2.0)) '(2 2))"
@@ -383,14 +396,14 @@ class LinalgSimdTest {
 			assertMatchesScalarOracle("(linalg:argmax (linalg:arange %s))".formatted(size));
 			assertMatchesScalarOracle("(linalg:argmin (linalg:arange %s))".formatted(size));
 			assertMatchesScalarOracle("(linalg:norm (linalg:arange %s))".formatted(size));
-			assertMatchesScalarOracle("(linalg:sum (linalg:arange 0 %s 'single-float))".formatted(size));
-			assertMatchesScalarOracle("(linalg:amax (linalg:arange 0 %s 'single-float))".formatted(size));
+			assertMatchesScalarOracle("(linalg:sum (linalg:arange 0 %s :element-type 'single-float))".formatted(size));
+			assertMatchesScalarOracle("(linalg:amax (linalg:arange 0 %s :element-type 'single-float))".formatted(size));
 		}
 		// A rank-2 reduction walks the flat store, like the defun.
 		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 200) '(10 20)))");
 		assertMatchesScalarOracle("(linalg:amin (linalg:reshape (linalg:arange 200) '(10 20)))");
 		assertMatchesScalarOracle("(linalg:trace (linalg:reshape (linalg:arange 100) '(10 10)))");
-		assertMatchesScalarOracle("(linalg:trace (linalg:eye 5 'single-float))");
+		assertMatchesScalarOracle("(linalg:trace (linalg:eye 5 :element-type 'single-float))");
 	}
 
 	@Test
@@ -443,7 +456,7 @@ class LinalgSimdTest {
 	/** A 1024-element {@code #f} vector of ones with {@code elem0} in element 0. */
 	private String probe32(String elem0, String reduction) {
 		return """
-				(let ((v (linalg:ones 1024 'single-float)))
+				(let ((v (linalg:ones 1024 :element-type 'single-float)))
 				  (setf (aref v 0) %s)
 				  (round %s))
 				""".formatted(elem0, reduction);
@@ -482,10 +495,14 @@ class LinalgSimdTest {
 
 	@Test
 	void productsPreserveTheOperandWidth() {
-		assertThat(eval("(linalg:dot (linalg:eye 2 'single-float) (linalg:ones 2 'single-float))", true).print())
-			.isEqualTo("#f(1.0 1.0)");
-		assertThat(eval("(linalg:outer (linalg:ones 2 'single-float) (linalg:ones 3 'single-float))", true).print())
-			.isEqualTo("#f((1.0 1.0 1.0) (1.0 1.0 1.0))");
+		assertThat(eval(
+				"(linalg:dot (linalg:eye 2 :element-type 'single-float) (linalg:ones 2 :element-type 'single-float))",
+				true)
+			.print()).isEqualTo("#f(1.0 1.0)");
+		assertThat(eval(
+				"(linalg:outer (linalg:ones 2 :element-type 'single-float) (linalg:ones 3 :element-type 'single-float))",
+				true)
+			.print()).isEqualTo("#f((1.0 1.0 1.0) (1.0 1.0 1.0))");
 	}
 
 	@Test
@@ -493,7 +510,8 @@ class LinalgSimdTest {
 		assertMatchesScalarOracle("(linalg:outer (linalg:arange 1 5) (linalg:arange 1 4))");
 		assertMatchesScalarOracle("(linalg:outer (linalg:arange 200) (linalg:arange 200))");
 		assertMatchesScalarOracle("(linalg:outer (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:arange 4))");
-		assertMatchesScalarOracle("(linalg:outer (linalg:arange 0 4 'single-float) (linalg:arange 0 3 'single-float))");
+		assertMatchesScalarOracle(
+				"(linalg:outer (linalg:arange 0 4 :element-type 'single-float) (linalg:arange 0 3 :element-type 'single-float))");
 	}
 
 	// --- shape ------------------------------------------------------------------------
@@ -502,9 +520,9 @@ class LinalgSimdTest {
 	void transposeReshapeAndFlattenMatchTheScalarOracle() {
 		assertMatchesScalarOracle("(linalg:transpose (linalg:reshape (linalg:arange 200) '(10 20)))");
 		assertMatchesScalarOracle("(linalg:transpose (linalg:reshape (linalg:arange 12) '(3 4) ))");
-		assertMatchesScalarOracle("(linalg:transpose (linalg:arange 0 5 'single-float))");
+		assertMatchesScalarOracle("(linalg:transpose (linalg:arange 0 5 :element-type 'single-float))");
 		assertMatchesScalarOracle("(linalg:reshape (linalg:arange 200) '(4 5 10))");
-		assertMatchesScalarOracle("(linalg:reshape (linalg:arange 0 12 'single-float) 12)");
+		assertMatchesScalarOracle("(linalg:reshape (linalg:arange 0 12 :element-type 'single-float) 12)");
 		assertMatchesScalarOracle("(linalg:flatten (linalg:reshape (linalg:arange 200) '(10 20)))");
 	}
 
@@ -542,7 +560,8 @@ class LinalgSimdTest {
 						"(linalg:" + op + " " + inner.replace("%v", "(linalg:arange " + n + ")") + ")");
 			}
 			assertMatchesScalarOracle("(linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4)))");
-			assertMatchesScalarOracle("(linalg:" + op + " (linalg:add (linalg:arange 0 200 'single-float) 1))");
+			assertMatchesScalarOracle(
+					"(linalg:" + op + " (linalg:add (linalg:arange 0 200 :element-type 'single-float) 1))");
 		}
 		// exp over reciprocal's (0, 1] range so the values stay bounded.
 		assertMatchesScalarOracle("(linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1)))");
@@ -550,7 +569,7 @@ class LinalgSimdTest {
 		assertMatchesScalarOracle(
 				"(linalg:exp (linalg:reshape (linalg:reciprocal (linalg:add (linalg:arange 12) 1)) '(3 4)))");
 		assertMatchesScalarOracle(
-				"(linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 200 'single-float) 1)))");
+				"(linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 200 :element-type 'single-float) 1)))");
 		// log over strictly positive inputs, tanh over a sign-mixed range (both are
 		// Math.log / Math.tanh scalar loops on this backend).
 		for (String n : new String[] { "7", "200" }) {
@@ -558,9 +577,9 @@ class LinalgSimdTest {
 			assertMatchesScalarOracle("(linalg:tanh (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.03))");
 		}
 		assertMatchesScalarOracle("(linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4)))");
-		assertMatchesScalarOracle("(linalg:log (linalg:add (linalg:arange 0 200 'single-float) 1))");
+		assertMatchesScalarOracle("(linalg:log (linalg:add (linalg:arange 0 200 :element-type 'single-float) 1))");
 		assertMatchesScalarOracle("(linalg:tanh (linalg:reshape (linalg:arange 12) '(3 4)))");
-		assertMatchesScalarOracle("(linalg:tanh (linalg:arange 0 200 'single-float))");
+		assertMatchesScalarOracle("(linalg:tanh (linalg:arange 0 200 :element-type 'single-float))");
 		// sin / cos / tan over a sign-mixed range (Math.sin / Math.cos / Math.tan
 		// scalar loops on this backend).
 		for (String op : new String[] { "sin", "cos", "tan" }) {
@@ -568,7 +587,7 @@ class LinalgSimdTest {
 				assertMatchesScalarOracle("(linalg:" + op + " (linalg:sub (linalg:arange " + n + ") 100))");
 			}
 			assertMatchesScalarOracle("(linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4)))");
-			assertMatchesScalarOracle("(linalg:" + op + " (linalg:arange 0 200 'single-float))");
+			assertMatchesScalarOracle("(linalg:" + op + " (linalg:arange 0 200 :element-type 'single-float))");
 		}
 		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
 		// sign-mixed range.
@@ -577,7 +596,8 @@ class LinalgSimdTest {
 				assertMatchesScalarOracle(
 						"(linalg:" + op + " (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.005))");
 			}
-			assertMatchesScalarOracle("(linalg:" + op + " (linalg:mul (linalg:arange 0 200 'single-float) 0.005))");
+			assertMatchesScalarOracle(
+					"(linalg:" + op + " (linalg:mul (linalg:arange 0 200 :element-type 'single-float) 0.005))");
 		}
 		for (String op : new String[] { "atan", "sinh", "cosh" }) {
 			for (String n : new String[] { "7", "200" }) {
@@ -586,7 +606,8 @@ class LinalgSimdTest {
 			}
 			assertMatchesScalarOracle(
 					"(linalg:" + op + " (linalg:reshape (linalg:mul (linalg:arange 12) 0.05) '(3 4)))");
-			assertMatchesScalarOracle("(linalg:" + op + " (linalg:mul (linalg:arange 0 200 'single-float) 0.05))");
+			assertMatchesScalarOracle(
+					"(linalg:" + op + " (linalg:mul (linalg:arange 0 200 :element-type 'single-float) 0.05))");
 		}
 		assertMatchesScalarOracle("(linalg:asin #d(0.0 -0.0 1.0 -1.0 0.5))");
 		assertMatchesScalarOracle("(linalg:acos #d(1.0 -1.0 0.0 0.5))");
@@ -651,7 +672,7 @@ class LinalgSimdTest {
 		// branch (skipped padding rows, partially clipped filter columns) is exercised;
 		// im2col only copies elements, so this is exact by construction.
 		String x = "(linalg:reshape (linalg:arange 96) '(2 3 4 4))";
-		String xf = "(linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4))";
+		String xf = "(linalg:reshape (linalg:arange 0 96 1 :element-type 'single-float) '(2 3 4 4))";
 		assertMatchesScalarOracle("(linalg::%la-im2col " + x + " 2 2 1 0)");
 		assertMatchesScalarOracle("(linalg::%la-im2col " + x + " 3 3 2 1)");
 		assertMatchesScalarOracle("(linalg::%la-im2col " + x + " 4 4 1 2)");
@@ -665,7 +686,7 @@ class LinalgSimdTest {
 		// Overlapping windows (stride < filter) accumulate; the float path narrows each
 		// accumulation exactly as the defun's widen-add-narrow round trip does.
 		String col = "(linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 1 1)";
-		String colF = "(linalg::%la-im2col (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 1 1)";
+		String colF = "(linalg::%la-im2col (linalg:reshape (linalg:arange 0 96 1 :element-type 'single-float) '(2 3 4 4)) 3 3 1 1)";
 		assertMatchesScalarOracle("(linalg::%la-col2im " + col + " '(2 3 4 4) 3 3 1 1)");
 		assertMatchesScalarOracle("(linalg::%la-col2im " + colF + " '(2 3 4 4) 3 3 1 1)");
 		assertMatchesScalarOracle(

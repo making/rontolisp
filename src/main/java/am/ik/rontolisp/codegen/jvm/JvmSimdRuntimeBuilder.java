@@ -222,7 +222,8 @@ final class JvmSimdRuntimeBuilder {
 					+ ")Ljava/lang/Object;";
 			ops.put(JvmLinalgSimdCompiler.qualifiedName(member), cp.addMethodref(bridgeClass,
 					cp.addNameAndType(cp.addUtf8(JvmLinalgSimdCompiler.bridgeMethod(member)), cp.addUtf8(desc))));
-			// The &optional axis-form kernels ride the same bridge under a distinct
+			// The option-form (:axis / axes) kernels ride the same bridge under a
+			// distinct
 			// ops key, one extra methodref per extended member.
 			JvmLinalgSimdCompiler.Extended ext = JvmLinalgSimdCompiler.extended(member);
 			if (ext != null) {

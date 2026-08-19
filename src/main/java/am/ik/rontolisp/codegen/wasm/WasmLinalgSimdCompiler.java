@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.LinalgKernelCallLayout;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -138,11 +139,12 @@ final class WasmLinalgSimdCompiler {
 	}
 
 	/**
-	 * The members whose &optional axis forms have their own kernel: transpose takes an
-	 * axes permutation, sum/amax/amin an axis plus keepdims, argmax/argmin an axis. A
-	 * call supplying MORE arguments than {@link #arity} but at most {@code params} routes
-	 * to this kernel (missing trailing optionals padded with a null ref = nil); on
-	 * decline the surplus locals are linked into the variadic defun's rest list.
+	 * The members whose option forms have their own kernel: transpose takes a positional
+	 * axes permutation, sum/amax/amin the {@code :axis} / {@code :keepdims} keywords,
+	 * argmax/argmin {@code :axis}. A call whose argument forms fit the member's
+	 * {@link LinalgKernelCallLayout.Extended shape} routes to this kernel (an option not
+	 * supplied is padded with a null ref = nil); on decline the surplus locals -- keyword
+	 * literals included -- are linked into the variadic defun's rest list.
 	 */
 	private record Extended(int offset, int params) {
 	}
@@ -171,17 +173,18 @@ final class WasmLinalgSimdCompiler {
 		List<LispVal> args = cons.toList();
 		int supplied = args.size() - 1;
 		Extended ext = supplied > arity ? EXTENDED.get(member) : null;
-		boolean extendedCall = ext != null && supplied <= ext.params();
+		LinalgKernelCallLayout.Extended shape = ext != null ? LinalgKernelCallLayout.extended(member) : null;
+		int[] layout = shape != null ? LinalgKernelCallLayout.layout(shape, arity, args.subList(1, args.size())) : null;
+		boolean extendedCall = layout != null;
 		int offset = ext != null && extendedCall ? ext.offset() : Objects.requireNonNull(KERNELS.get(member));
-		int kernelParams = ext != null && extendedCall ? ext.params() : arity;
 		String qualified = qualifiedName(member);
 		WasmLispCompiler.WasmFunctionInfo defun = ctx.functions.get(qualified);
 		if (defun == null || (supplied != arity && !extendedCall)
 				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity
 				|| (extendedCall && !defun.variadic())) {
-			// No spliced linalg.lisp to fall back to, a call with more arguments than
-			// any kernel handles, or a defun whose required count no longer matches:
-			// the ordinary direct-call path handles all three.
+			// No spliced linalg.lisp to fall back to, a call whose option forms no kernel
+			// handles, or a defun whose required count no longer matches: the ordinary
+			// direct-call path handles all three.
 			WasmFunctionCallCompiler.compileDefault(qualified, cons, ctx);
 			return;
 		}
@@ -194,11 +197,22 @@ final class WasmLinalgSimdCompiler {
 			ctx.writer.writeUnsignedLeb128(slots[i]);
 		}
 		int result = ctx.allocTemp();
-		loadAll(ctx, slots);
-		// A missing trailing &optional (e.g. keepdims) is padded with null = nil.
-		for (int i = supplied; i < kernelParams; i++) {
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
+		if (layout != null) {
+			// The kernel's parameters in its own order: the local of the form supplying
+			// each one, or a null ref = nil for an option the call leaves out.
+			for (int i : layout) {
+				if (i < 0) {
+					ctx.writer.write(Instruction.REF_NULL);
+					ctx.writer.writeHeapType(Type.EQ.code());
+				}
+				else {
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(slots[i]);
+				}
+			}
+		}
+		else {
+			loadAll(ctx, slots);
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.linalgFuncBase() + offset);

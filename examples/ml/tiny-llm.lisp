@@ -85,7 +85,7 @@
 (defun lcg-uniform (scale) (* scale (- (/ (mod (lcg-next) 2048) 1024.0) 1.0)))
 
 (defun random-matrix (rows cols scale)
-  (let ((m (linalg:zeros (list rows cols) 'single-float)))
+  (let ((m (linalg:zeros (list rows cols) :element-type 'single-float)))
     (dotimes (i rows m)
       (dotimes (j cols) (setf (aref m i j) (lcg-uniform scale))))))
 
@@ -100,10 +100,10 @@
         :w1 (random-matrix *hidden* *dim* 0.06)
         :w3 (random-matrix *hidden* *dim* 0.06)
         :w2 (random-matrix *dim* *hidden* 0.06)
-        :ng1 (vec:ones *dim* 'single-float)
-        :ng2 (vec:ones *dim* 'single-float)
-        :kc (linalg:zeros (list *n-ctx* *dim*) 'single-float)   ; keys, row-major
-        :vt (linalg:zeros (list *dim* *n-ctx*) 'single-float))) ; values, TRANSPOSED
+        :ng1 (vec:ones *dim* :element-type 'single-float)
+        :ng2 (vec:ones *dim* :element-type 'single-float)
+        :kc (linalg:zeros (list *n-ctx* *dim*) :element-type 'single-float)   ; keys, row-major
+        :vt (linalg:zeros (list *dim* *n-ctx*) :element-type 'single-float))) ; values, TRANSPOSED
 
 ;;; --- RMSNorm: x / rms(x) * g ------------------------------------------------
 ;;; vec:dot is the sum of squares -- one accelerated reduction, no loop.
@@ -127,7 +127,7 @@
       (setf (aref vt j pos) (aref v j)))
     ;; every attention score at once: scores = (K q) / sqrt(dim)
     (let ((scores (vec:scale (vec:matvec kc q) (/ 1.0 (sqrt *dim*))))
-          (w (vec:zeros *n-ctx* 'single-float))
+          (w (vec:zeros *n-ctx* :element-type 'single-float))
           (top -1000000.0)
           (z 0.0))
       ;; softmax over positions 0..pos, shifted by the max for stability
@@ -159,12 +159,12 @@
     (dotimes (i *layers* (reverse ls)) (setq ls (cons (make-layer) ls)))))
 (defparameter *emb* (random-matrix *vocab* *dim* 0.5))
 (defparameter *pos-emb* (random-matrix *n-ctx* *dim* 0.1))
-(defparameter *ng-final* (vec:ones *dim* 'single-float))
+(defparameter *ng-final* (vec:ones *dim* :element-type 'single-float))
 (defparameter *w-cls* (random-matrix *vocab* *dim* 0.08))
 
 ;;; token embedding + learned position embedding
 (defun embed (tok pos)
-  (let ((x (vec:zeros *dim* 'single-float)))
+  (let ((x (vec:zeros *dim* :element-type 'single-float)))
     (dotimes (j *dim* x)
       (setf (aref x j) (+ (aref *emb* tok j) (aref *pos-emb* pos j))))))
 

@@ -531,15 +531,15 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
 | `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))`(行列積) |
 | `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))`(外積) |
-| `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10`(リダクションは要素の型に従う。省略可能な axis / keepdims で軸ごとの還元) |
-| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2`(リダクションは要素の型に従う。省略可能な axis / keepdims) |
-| `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9`(最大の要素。省略可能な axis / keepdims) |
-| `linalg:amin` | `(linalg:amin #(5 2 8))` | `2`(最小の要素。省略可能な axis / keepdims) |
-| `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1`(同値の場合は最初のインデックス。省略可能な axis で軸ごとのインデックス) |
-| `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1`(省略可能な axis) |
+| `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10`(リダクションは要素の型に従う。`:axis` / `:keepdims` キーワードで軸ごとの還元) |
+| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2`(リダクションは要素の型に従う。`:axis` / `:keepdims` キーワード) |
+| `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9`(最大の要素。`:axis` / `:keepdims` キーワード) |
+| `linalg:amin` | `(linalg:amin #(5 2 8))` | `2`(最小の要素。`:axis` / `:keepdims` キーワード) |
+| `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1`(同値の場合は最初のインデックス。`:axis` で軸ごとのインデックス) |
+| `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1`(同値の場合は最初のインデックス。`:axis` で軸ごとのインデックス) |
 | `linalg:norm` | `(linalg:norm #(3 4))` | `5.0`(ユークリッド / フロベニウスノルム) |
 | `linalg:trace` | `(linalg:trace #2A((1 2) (3 4)))` | `5`(正方行列のみ) |
-| `linalg:diff` | `(linalg:diff #(1 2 4 7 0))` | `#d(1.0 2.0 3.0 -7.0)`(最後の軸に沿った n 階の離散差分。省略可能な階数、デフォルト 1) |
+| `linalg:diff` | `(linalg:diff #(1 2 4 7 0))` | `#d(1.0 2.0 3.0 -7.0)`(`:axis` に沿った `:n` 階の離散差分。デフォルトは 1 と最後の軸) |
 | `linalg:gradient` | `(linalg:gradient #(0 1 4 9 16))` | `#d(1.0 2.0 4.0 6.0 7.0)`(中心差分。入力と同じ長さ。省略可能なスカラー間隔または座標ベクタ) |
 | `linalg:det` | `(linalg:det #2A((1 2) (3 4)))` | `-2.0`(浮動小数点。特異行列は微小値になることがある) |
 | `linalg:inv` | `(linalg:inv #2A((4 0) (2 4)))` | `#d((0.25 0.0) (-0.125 0.25))`(特異行列ではエラーを通知します) |

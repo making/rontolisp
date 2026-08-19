@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSingleFloatArray;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
 
@@ -115,16 +116,18 @@ public final class LinalgSimd {
 		define(globalEnv, evaluator, LispNames.LINALG_DIV, 2, args -> elementwise(div, args));
 		define(globalEnv, evaluator, LispNames.LINALG_MAXIMUM, 2, args -> elementwise(maximum, args));
 		define(globalEnv, evaluator, LispNames.LINALG_MINIMUM, 2, args -> elementwise(minimum, args));
-		// The axis forms: sum/amax/amin also take (a axis
-		// keepdims), argmax/argmin (v axis), transpose (a axes) -- each handled by a
-		// scalar fold/permutation kernel when the axis argument is an exact integer
-		// (a permutation list for transpose), declined to the defun otherwise.
-		define(globalEnv, evaluator, LispNames.LINALG_SUM, 1, 3, LinalgSimd::sum);
+		// The option forms: sum/amax/amin also take (a :axis ax :keepdims k),
+		// argmax/argmin (v :axis ax), transpose (a axes) -- each handled by a scalar
+		// fold/permutation kernel when the axis argument is an exact integer (a
+		// permutation list for transpose), declined to the defun otherwise. The arity
+		// range spans the full keyword tail; a malformed tail declines too, so the
+		// defun's &key prologue signals its own error.
+		define(globalEnv, evaluator, LispNames.LINALG_SUM, 1, 5, LinalgSimd::sum);
 		define(globalEnv, evaluator, LispNames.LINALG_NORM, 1, LinalgSimd::norm);
-		define(globalEnv, evaluator, LispNames.LINALG_AMAX, 1, 3, args -> extremum(args, true));
-		define(globalEnv, evaluator, LispNames.LINALG_AMIN, 1, 3, args -> extremum(args, false));
-		define(globalEnv, evaluator, LispNames.LINALG_ARGMAX, 1, 2, args -> argExtremum(args, true));
-		define(globalEnv, evaluator, LispNames.LINALG_ARGMIN, 1, 2, args -> argExtremum(args, false));
+		define(globalEnv, evaluator, LispNames.LINALG_AMAX, 1, 5, args -> extremum(args, true));
+		define(globalEnv, evaluator, LispNames.LINALG_AMIN, 1, 5, args -> extremum(args, false));
+		define(globalEnv, evaluator, LispNames.LINALG_ARGMAX, 1, 3, args -> argExtremum(args, true));
+		define(globalEnv, evaluator, LispNames.LINALG_ARGMIN, 1, 3, args -> argExtremum(args, false));
 		define(globalEnv, evaluator, LispNames.LINALG_TRACE, 1, LinalgSimd::trace);
 		define(globalEnv, evaluator, LispNames.LINALG_TRANSPOSE, 1, 2, LinalgSimd::transpose);
 		define(globalEnv, evaluator, LispNames.LINALG_RESHAPE, 2, LinalgSimd::reshape);
@@ -311,6 +314,33 @@ public final class LinalgSimd {
 
 	// --- reductions -------------------------------------------------------------------
 
+	/**
+	 * The keyword tail of a call, {@code args[required..]}, read against the declared
+	 * keyword names: one value per name, {@code LispNil} when absent. A tail that is not
+	 * literal {@code :keyword value} pairs over those names (odd, unknown, repeated)
+	 * yields {@code null}, and the kernel declines so the defun signals.
+	 */
+	private static LispVal @Nullable [] options(List<LispVal> args, int required, String... keywords) {
+		LispVal[] out = new LispVal[keywords.length];
+		Arrays.fill(out, LispNil.INSTANCE);
+		boolean[] seen = new boolean[keywords.length];
+		if ((args.size() - required) % 2 != 0) {
+			return null;
+		}
+		for (int i = required; i < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol sym) || !sym.isKeyword()) {
+				return null;
+			}
+			int k = Arrays.asList(keywords).indexOf(sym.name().substring(1));
+			if (k < 0 || seen[k]) {
+				return null;
+			}
+			seen[k] = true;
+			out[k] = args.get(i + 1);
+		}
+		return out;
+	}
+
 	private static @Nullable LispVal sum(List<LispVal> args) {
 		if (args.size() > 1) {
 			return foldAxis(LinalgSimdKernels.BOP_ADD, args);
@@ -351,14 +381,15 @@ public final class LinalgSimd {
 	 */
 	private static @Nullable LispVal foldAxis(int op, List<LispVal> args) {
 		LispFloatArray a = packed(args.get(0));
-		if (a == null) {
+		LispVal[] opts = options(args, 1, "AXIS", "KEEPDIMS");
+		if (a == null || opts == null) {
 			return null;
 		}
-		Integer axis = normAxis(args.get(1), a.rank());
+		Integer axis = normAxis(opts[0], a.rank());
 		if (axis == null) {
 			return null;
 		}
-		boolean keep = args.size() == 3 && !(args.get(2) instanceof LispNil);
+		boolean keep = !(opts[1] instanceof LispNil);
 		int[] d = a.dims();
 		int axlen = d[axis];
 		if (axlen == 0) {
@@ -394,7 +425,7 @@ public final class LinalgSimd {
 
 	/** {@code argmax}/{@code argmin} are vector-only in linalg.lisp (they use length). */
 	private static @Nullable LispVal argExtremum(List<LispVal> args, boolean max) {
-		if (args.size() == 2) {
+		if (args.size() > 1) {
 			return argFoldAxis(args, max);
 		}
 		LispFloatArray a = nonEmpty(args.get(0));
@@ -416,10 +447,11 @@ public final class LinalgSimd {
 	 */
 	private static @Nullable LispVal argFoldAxis(List<LispVal> args, boolean max) {
 		LispFloatArray a = packed(args.get(0));
-		if (a == null) {
+		LispVal[] opts = options(args, 1, "AXIS");
+		if (a == null || opts == null) {
 			return null;
 		}
-		Integer axis = normAxis(args.get(1), a.rank());
+		Integer axis = normAxis(opts[0], a.rank());
 		if (axis == null) {
 			return null;
 		}

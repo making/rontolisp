@@ -567,15 +567,15 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpy-style dispatch: vec.vec scalar, mat.vec / vec.mat vector, mat.mat matrix product |
 | `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))` (the matrix product) |
 | `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))` (the outer product) |
-| `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10` (a reduction follows the element type; optional axis/keepdims) |
-| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2` (a reduction follows the element type; optional axis/keepdims) |
-| `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9` (the largest element; optional axis/keepdims) |
-| `linalg:amin` | `(linalg:amin #(5 2 8))` | `2` (the smallest element; optional axis/keepdims) |
-| `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1` (first index on ties; an optional axis gives per-slice indices) |
-| `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1` (first index on ties; an optional axis gives per-slice indices) |
+| `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10` (a reduction follows the element type; `:axis` / `:keepdims` keywords) |
+| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2` (a reduction follows the element type; `:axis` / `:keepdims` keywords) |
+| `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9` (the largest element; `:axis` / `:keepdims` keywords) |
+| `linalg:amin` | `(linalg:amin #(5 2 8))` | `2` (the smallest element; `:axis` / `:keepdims` keywords) |
+| `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1` (first index on ties; `:axis` gives per-slice indices) |
+| `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1` (first index on ties; `:axis` gives per-slice indices) |
 | `linalg:norm` | `(linalg:norm #(3 4))` | `5.0` (the Euclidean / Frobenius norm) |
 | `linalg:trace` | `(linalg:trace #2A((1 2) (3 4)))` | `5` (square matrices only) |
-| `linalg:diff` | `(linalg:diff #(1 2 4 7 0))` | `#d(1.0 2.0 3.0 -7.0)` (the n-th discrete difference along the last axis; optional order, default 1) |
+| `linalg:diff` | `(linalg:diff #(1 2 4 7 0))` | `#d(1.0 2.0 3.0 -7.0)` (the `:n`-th discrete difference along `:axis`; defaults 1 and the last axis) |
 | `linalg:gradient` | `(linalg:gradient #(0 1 4 9 16))` | `#d(1.0 2.0 4.0 6.0 7.0)` (central differences, same length as the input; optional scalar spacing or coordinate vector) |
 | `linalg:det` | `(linalg:det #2A((1 2) (3 4)))` | `-2.0` (floating point; a singular matrix may give a small epsilon) |
 | `linalg:inv` | `(linalg:inv #2A((4 0) (2 4)))` | `#d((0.25 0.0) (-0.125 0.25))` (signals an error for a singular matrix) |

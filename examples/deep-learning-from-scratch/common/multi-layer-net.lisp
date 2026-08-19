@@ -101,8 +101,11 @@
 
 (defmethod net-accuracy-count ((net multi-layer-net) x target)
   (let* ((y (let ((*train-p* nil)) (predict net x)))
-         (yl (linalg:argmax y 1))
-         (tl (if (= (linalg:ndim target) 1) target (linalg:argmax target 1))))
+         (yl (linalg:argmax y :axis 1))
+         (tl
+          (if (= (linalg:ndim target) 1)
+              target
+              (linalg:argmax target :axis 1))))
     (truncate (linalg:sum (linalg:equal yl tl)))))
 
 (defmethod net-gradient ((net multi-layer-net) x target)

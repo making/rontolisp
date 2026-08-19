@@ -20,7 +20,7 @@
 ;;;; produces a NEW plist each step rather than mutating in place -- a functional
 ;;;; SGD loop. Everything is single-float (#f): linalg is width-polymorphic and
 ;;;; PRESERVES the packed #f width through every op (a constructor opts in with a
-;;;; trailing 'single-float; the transforms follow their input), so a weight update
+;;;; :element-type 'single-float; the transforms follow their input), so a weight update
 ;;;; (linalg:sub W ...) never widens back to double -- on the JVM --simd path the
 ;;;; forward and backward pass stay f32 end to end. The same source runs on every
 ;;;; backend (on wasm-GC the vec: kernels still compute in f64, but the values match).
@@ -33,10 +33,10 @@
 
 ;;; --- array construction (packed single-float #f, shared by vec and linalg) ---
 ;;; A weight matrix is a rank-2 linalg array; a bias vector is a rank-1 array. Both
-;;; opt into single-float: linalg:zeros takes a trailing 'single-float, and a bias
+;;; opt into single-float: linalg:zeros takes :element-type 'single-float, and a bias
 ;;; is a bare single-float make-array (the packed type vec: and linalg: both ride on).
 (defun random-matrix (rows cols)
-  (let ((m (linalg:zeros (list rows cols) 'single-float)))
+  (let ((m (linalg:zeros (list rows cols) :element-type 'single-float)))
     (dotimes (i rows m)
       (dotimes (j cols) (setf (aref m i j) (random-weight))))))
 (defun random-vector (n)

@@ -96,20 +96,29 @@ Two consequences worth remembering:
   both the kernel and the scalar defun, so the defun stays reachable wherever a kernel can
   decline.
 - **An intercepted member may be VARIADIC** (the deep-learning-from-scratch port gave
-  `sum`/`mean`/`amax`/`amin`/`argmax`/`argmin` `&optional axis` lambda lists, which
+  `sum`/`mean`/`amax`/`amin`/`argmax`/`argmin` `&key axis keepdims` lambda lists, which
   `LambdaLists` desugars to a trailing `&rest` parameter), and since the todo-117
-  declined-shape follow-up six of them have EXTENDED (multi-arity) call sites:
-  `transpose` at 2 args (`laTransposeAxes` / `TRANSPOSE_AXES`), `sum`/`amax`/`amin` at
-  2-3 args (`laSumAxis` &c / `SUM_AXIS` &c; a missing keepdims is padded with
-  null = nil at the call site), `argmax`/`argmin` at 2 args. A call beyond a member's
-  maximum arity still routes to the ordinary direct-call path. The decline branches
-  package the rest list from the SAME temps: the base arity pushes an EMPTY rest
+  declined-shape follow-up six of them have EXTENDED (option-form) call sites:
+  `transpose` with a positional axes list (`laTransposeAxes` / `TRANSPOSE_AXES`),
+  `sum`/`amax`/`amin` with `:axis` / `:keepdims` (`laSumAxis` &c / `SUM_AXIS` &c),
+  `argmax`/`argmin` with `:axis`. The kernels stay POSITIONAL (`laSumAxis(a, axis,
+  keepdims)`); `compiler.LinalgKernelCallLayout.layout` -- shared by both codegens so
+  they pattern-match identically -- maps the call's argument forms onto the kernel
+  parameters: literal `:keyword value` pairs over the member's declared keywords, each
+  at most once, in any order, a missing option padded with null = nil at the call site.
+  Anything else (a non-literal keyword, an unknown or repeated one, an odd tail, a
+  positional count beyond the shape) is NOT a kernel call and routes to the ordinary
+  direct-call path, where the defun's `&key` prologue signals. The decline branches
+  package the rest list from the SAME temps -- keyword literals included, so the defun
+  sees `(:axis 0 :keepdims t)` exactly: the base arity pushes an EMPTY rest
   (`ACONST_NULL` on the JVM, `ref.null eq` on wasm), an extended call links the surplus
   temps into a cons chain (`Object[2]` cells on the JVM, `struct.new $cons` on wasm) --
   both compilers also verify the defun's required count still matches the base arity
   (and, for an extended call, that the defun is variadic) and bail to `compileDefault`
-  otherwise. The interpreter needs only the arity-RANGE guard in `LinalgSimd.define`;
-  a declined call falls through to `applyGlobal`, which binds the rest list normally.
+  otherwise. The interpreter needs the arity-RANGE guard in `LinalgSimd.define` (1..5
+  for sum/amax/amin, 1..3 for argmax/argmin) plus `LinalgSimd.options`, the runtime
+  twin of the layout (a malformed tail declines); a declined call falls through to
+  `applyGlobal`, which binds the rest list normally.
   Pinned by `axisFormsRunTheAxisKernelsAndMatchTheScalarReference` +
   `anAxisArgumentFormIsEvaluatedExactlyOnceEvenWhenTheExtendedKernelDeclines` (JVM),
   `wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath` (wasm) and
@@ -268,11 +277,11 @@ Only reductions move, and exactly as todo-106 already specified for `vec:`.
 - **The declined-shape follow-up kernels are ALL bit-identical at both widths.** The
   broadcast and the axes transpose read widened, compute in double and narrow only on a
   single-float store (`%la-bcast-loop`'s own rule; the transpose is a pure copy). The
-  AXIS folds do NOT follow the lane-reduction contract: `(linalg:sum a 0)` accumulates
+  AXIS folds do NOT follow the lane-reduction contract: `(linalg:sum a :axis 0)` accumulates
   in f64 from the defun's `0` seed in the defun's own order (an axis fold is a scalar
   loop, not a lane reduction -- only the no-axis `sum`/`dot`/`matvec` lanes reduce), and
   the `amax`/`amin` folds mirror `(if (> x acc) x acc)` -- the ACCUMULATOR wins
-  ties/NaN, the opposite of the element-wise select, so `(linalg:amax #d((-0.0 0.0)) 1)`
+  ties/NaN, the opposite of the element-wise select, so `(linalg:amax #d((-0.0 0.0)) :axis 1)`
   is `#d(-0.0)` while `(linalg:maximum #d(-0.0) #d(0.0))` is `#d(0.0)`. A vector
   reduced without keepdims returns the boxed f64 accumulator itself (never narrowed,
   even for an `#f` input), and the axis `argmax`/`argmin` results are packed DOUBLE

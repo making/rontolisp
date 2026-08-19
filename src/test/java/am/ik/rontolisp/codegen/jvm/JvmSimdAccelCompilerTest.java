@@ -257,11 +257,11 @@ class JvmSimdAccelCompilerTest {
 		// swallows its 1.0s; the other three lanes fold 256 each -> 2^24 + 768.
 		// FloatVector.SPECIES_128 is what makes 16777984 the answer on every host (8
 		// lanes would give 16778112, 16 lanes 16778176).
-		String v = "(let ((v (vec:ones 1024 'single-float))) (setf (aref v 0) 4096.0) ";
+		String v = "(let ((v (vec:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0) ";
 		assertThat(accel(v + "(print (round (vec:dot v v))))")).isEqualTo("16777984");
 		assertThat(scalar(v + "(print (round (vec:dot v v))))")).isEqualTo("16778239");
 
-		String s = "(let ((v (vec:ones 1024 'single-float))) (setf (aref v 0) 16777216.0) ";
+		String s = "(let ((v (vec:ones 1024 :element-type 'single-float))) (setf (aref v 0) 16777216.0) ";
 		assertThat(accel(s + "(print (round (vec:sum v))))")).isEqualTo("16777984");
 		assertThat(scalar(s + "(print (round (vec:sum v))))")).isEqualTo("16778239");
 
@@ -269,7 +269,8 @@ class JvmSimdAccelCompilerTest {
 		// narrows on store; that is an odd multiple of the f32 spacing at 2^24, so it
 		// ties to even -> 16778240.
 		String gemv = "(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))"
-				+ " (v (vec:ones 1024 'single-float)))" + " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
+				+ " (v (vec:ones 1024 :element-type 'single-float)))"
+				+ " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (vec:matvec m v) 0))))";
 		assertThat(accel(gemv)).isEqualTo("16777984");
 		assertThat(scalar(gemv)).isEqualTo("16778240");
@@ -414,13 +415,14 @@ class JvmSimdAccelCompilerTest {
 						"(print (vec:scale #d(1.0 2.0 3.0) 10.0))"),
 				new Pair("(print (vec:sum (vec:add-into (vec:zeros 1000) (vec:arange 1000) (vec:arange 1000))))",
 						"(print (vec:sum (vec:add (vec:arange 1000) (vec:arange 1000))))"),
-				new Pair("(print (vec:add-into (vec:zeros 3 'single-float) #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
+				new Pair(
+						"(print (vec:add-into (vec:zeros 3 :element-type 'single-float) #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
 						"(print (vec:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))"),
-				new Pair("(print (vec:scale-into (vec:zeros 3 'single-float) #f(1.0 2.0 3.0) 10.0))",
+				new Pair("(print (vec:scale-into (vec:zeros 3 :element-type 'single-float) #f(1.0 2.0 3.0) 10.0))",
 						"(print (vec:scale #f(1.0 2.0 3.0) 10.0))"),
 				new Pair(
-						"(print (vec:sum (vec:mul-into (vec:zeros 1000 'single-float) (vec:arange 1000 'single-float) (vec:ones 1000 'single-float))))",
-						"(print (vec:sum (vec:mul (vec:arange 1000 'single-float) (vec:ones 1000 'single-float))))"))) {
+						"(print (vec:sum (vec:mul-into (vec:zeros 1000 :element-type 'single-float) (vec:arange 1000 :element-type 'single-float) (vec:ones 1000 :element-type 'single-float))))",
+						"(print (vec:sum (vec:mul (vec:arange 1000 :element-type 'single-float) (vec:ones 1000 :element-type 'single-float))))"))) {
 			assertThat(accel(p.into())).as(p.into()).isEqualTo(scalar(p.alloc()));
 			assertThat(accel(p.into())).as(p.into()).isEqualTo(scalar(p.into()));
 		}
@@ -448,7 +450,7 @@ class JvmSimdAccelCompilerTest {
 	@Test
 	void acceleratedMatvecIntoMatchesTheAllocatingSibling() throws Exception {
 		assertThat(accel("(print (vec:matvec-into (vec:zeros 2) #d((1 2) (3 4)) #d(5 6)))")).isEqualTo("#d(17.0 39.0)");
-		assertThat(accel("(print (vec:matvec-into (vec:zeros 2 'single-float) #f((1 2) (3 4)) #f(5 6)))"))
+		assertThat(accel("(print (vec:matvec-into (vec:zeros 2 :element-type 'single-float) #f((1 2) (3 4)) #f(5 6)))"))
 			.isEqualTo(scalar("(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))"));
 		String wide = """
 				(let ((w (make-array '(3 200) :element-type 'double-float :initial-element 0.0))
@@ -472,9 +474,11 @@ class JvmSimdAccelCompilerTest {
 	void mixedWidthIntoOperandsAreAHardErrorUnderTheSimdFlag() {
 		assertThatThrownBy(() -> accel("(print (vec:add-into (vec:zeros 1) #d(1.0) #f(1.0)))"))
 			.hasStackTraceContaining("share an element type");
-		assertThatThrownBy(() -> accel("(print (vec:add-into (vec:zeros 1 'single-float) #d(1.0) #d(1.0)))"))
+		assertThatThrownBy(
+				() -> accel("(print (vec:add-into (vec:zeros 1 :element-type 'single-float) #d(1.0) #d(1.0)))"))
 			.hasStackTraceContaining("share an element type");
-		assertThatThrownBy(() -> accel("(print (vec:scale-into (vec:zeros 1 'single-float) #d(1.0) 2.0))"))
+		assertThatThrownBy(
+				() -> accel("(print (vec:scale-into (vec:zeros 1 :element-type 'single-float) #d(1.0) 2.0))"))
 			.hasStackTraceContaining("share an element type");
 	}
 
@@ -489,8 +493,8 @@ class JvmSimdAccelCompilerTest {
 				assertMatchesScalarReference("(print (vec:" + op + " "
 						+ inner.replace("%v", "(vec:arange " + n + ")").replace("%n", n) + "))");
 			}
-			assertMatchesScalarReference(
-					"(print (vec:" + op + " (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
+			assertMatchesScalarReference("(print (vec:" + op
+					+ " (vec:add (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float))))");
 		}
 		// exp over reciprocal's (0, 1] range so the values stay bounded.
 		assertMatchesScalarReference(
@@ -505,8 +509,8 @@ class JvmSimdAccelCompilerTest {
 						.formatted(n, n));
 		}
 		assertMatchesScalarReference(
-				"(print (vec:log (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
-		assertMatchesScalarReference("(print (vec:tanh (vec:arange 200 'single-float)))");
+				"(print (vec:log (vec:add (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float))))");
+		assertMatchesScalarReference("(print (vec:tanh (vec:arange 200 :element-type 'single-float)))");
 		// sin / cos / tan over a sign-mixed range (Math.sin / Math.cos / Math.tan
 		// scalar loops on this backend).
 		for (String op : new String[] { "sin", "cos", "tan" }) {
@@ -515,7 +519,7 @@ class JvmSimdAccelCompilerTest {
 						"(print (vec:%s (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0))))".formatted(op, n,
 								n));
 			}
-			assertMatchesScalarReference("(print (vec:%s (vec:arange 200 'single-float)))".formatted(op));
+			assertMatchesScalarReference("(print (vec:%s (vec:arange 200 :element-type 'single-float)))".formatted(op));
 		}
 		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
 		// sign-mixed range.
@@ -524,14 +528,14 @@ class JvmSimdAccelCompilerTest {
 					"(print (vec:%s (vec:scale (vec:sub (vec:arange 200) (vec:scale (vec:ones 200) 100.0)) 0.005)))"
 						.formatted(op));
 			assertMatchesScalarReference(
-					"(print (vec:%s (vec:scale (vec:arange 200 'single-float) 0.005)))".formatted(op));
+					"(print (vec:%s (vec:scale (vec:arange 200 :element-type 'single-float) 0.005)))".formatted(op));
 		}
 		for (String op : new String[] { "atan", "sinh", "cosh" }) {
 			assertMatchesScalarReference(
 					"(print (vec:%s (vec:scale (vec:sub (vec:arange 200) (vec:scale (vec:ones 200) 100.0)) 0.05)))"
 						.formatted(op));
 			assertMatchesScalarReference(
-					"(print (vec:%s (vec:scale (vec:arange 200 'single-float) 0.05)))".formatted(op));
+					"(print (vec:%s (vec:scale (vec:arange 200 :element-type 'single-float) 0.05)))".formatted(op));
 		}
 		assertMatchesScalarReference("(print (vec:asin #d(0.0 -0.0 1.0 -1.0 0.5)))");
 		assertMatchesScalarReference("(print (vec:acos #d(1.0 -1.0 0.0 0.5)))");
@@ -550,11 +554,12 @@ class JvmSimdAccelCompilerTest {
 				  (vec:sqrt-into v v)
 				  (print v))
 				""");
-		assertMatchesScalarReference("""
-				(let ((v (vec:sub (vec:arange 7 'single-float) (vec:scale (vec:ones 7 'single-float) 3.0))))
-				  (vec:abs-into v v)
-				  (print v))
-				""");
+		assertMatchesScalarReference(
+				"""
+						(let ((v (vec:sub (vec:arange 7 :element-type 'single-float) (vec:scale (vec:ones 7 :element-type 'single-float) 3.0))))
+						  (vec:abs-into v v)
+						  (print v))
+						""");
 		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square", "tanh", "sin", "cos", "tan",
 				"atan", "sinh", "cosh" }) {
 			assertMatchesScalarReference(
@@ -567,7 +572,7 @@ class JvmSimdAccelCompilerTest {
 	void mixedWidthUnaryIntoOperandsAreAHardErrorUnderTheSimdFlag() {
 		assertThatThrownBy(() -> accel("(print (vec:sqrt-into (vec:zeros 1) #f(1.0)))"))
 			.hasStackTraceContaining("share an element type");
-		assertThatThrownBy(() -> accel("(print (vec:abs-into (vec:zeros 1 'single-float) #d(1.0)))"))
+		assertThatThrownBy(() -> accel("(print (vec:abs-into (vec:zeros 1 :element-type 'single-float) #d(1.0)))"))
 			.hasStackTraceContaining("share an element type");
 	}
 
@@ -585,7 +590,7 @@ class JvmSimdAccelCompilerTest {
 							.formatted(n, op));
 			}
 			assertMatchesScalarReference(
-					"(let ((a (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)))) (print (vec:%s a (vec:negative a))))"
+					"(let ((a (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0)))) (print (vec:%s a (vec:negative a))))"
 						.formatted(op));
 		}
 		for (String n : new String[] { "7", "200" }) {
@@ -596,11 +601,11 @@ class JvmSimdAccelCompilerTest {
 						.formatted(n));
 		}
 		assertMatchesScalarReference(
-				"(print (vec:relu (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0))))");
+				"(print (vec:relu (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0))))");
 		// f32 clip bounds deliberately NOT f32-representable: the bridge compares the
 		// widened element against the full double bound, like the spliced defun.
 		assertMatchesScalarReference(
-				"(print (vec:clip (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)) -50.3 50.3))");
+				"(print (vec:clip (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0)) -50.3 50.3))");
 	}
 
 	@Test
@@ -624,7 +629,8 @@ class JvmSimdAccelCompilerTest {
 	void comparisonSelectIntoKernelsMatchTheirAllocatingSiblings() throws Exception {
 		assertThat(accel("(print (vec:maximum-into (vec:zeros 3) #d(1.0 5.0 3.0) #d(4.0 2.0 3.0)))"))
 			.isEqualTo(scalar("(print (vec:maximum #d(1.0 5.0 3.0) #d(4.0 2.0 3.0)))"));
-		assertThat(accel("(print (vec:minimum-into (vec:zeros 3 'single-float) #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))"))
+		assertThat(accel(
+				"(print (vec:minimum-into (vec:zeros 3 :element-type 'single-float) #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))"))
 			.isEqualTo(scalar("(print (vec:minimum #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))"));
 		assertThat(accel("(print (vec:relu-into (vec:zeros 3) #d(-1.0 0.0 2.0)))"))
 			.isEqualTo(scalar("(print (vec:relu #d(-1.0 0.0 2.0)))"));

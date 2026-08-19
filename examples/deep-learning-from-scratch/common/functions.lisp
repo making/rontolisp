@@ -29,8 +29,9 @@
   ;; exp(x - rowmax) / rowsum, stabilized along the last axis exactly like
   ;; the book: x - np.max(x, axis=-1, keepdims=True), then the keepdims sum
   ;; broadcasts back over each row. Works for a vector and an (N x D) batch.
-  (let* ((shifted (linalg:sub x (linalg:amax x -1 t))) (e (linalg:exp shifted)))
-    (linalg:div e (linalg:sum e -1 t))))
+  (let* ((shifted (linalg:sub x (linalg:amax x :axis -1 :keepdims t)))
+         (e (linalg:exp shifted)))
+    (linalg:div e (linalg:sum e :axis -1 :keepdims t))))
 
 (defun sum-squared-error (y target)
   ;; 0.5 * sum((y - t)^2)
@@ -54,7 +55,7 @@
               target))
          (tl
           (if (= (linalg:size tb) (linalg:size yb))
-              (linalg:argmax tb 1)
+              (linalg:argmax tb :axis 1)
               (linalg:flatten tb)))
          (batch (car (linalg:shape yb))))
     (- 0

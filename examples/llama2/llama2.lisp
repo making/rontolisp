@@ -315,8 +315,10 @@
                       :initial-element 0.0)))
     (dotimes (l n-layers)
       (dotimes (h n-kv)
-        (setf (aref kc l h) (linalg:zeros (list seq-len hs) 'single-float))
-        (setf (aref vt l h) (linalg:zeros (list hs seq-len) 'single-float))))
+        (setf (aref kc l h)
+              (linalg:zeros (list seq-len hs) :element-type 'single-float))
+        (setf (aref vt l h)
+              (linalg:zeros (list hs seq-len) :element-type 'single-float))))
     ;; RoPE: freq_i = 1 / 10000^(2i/hs), angle = pos * freq_i
     (dotimes (pos seq-len)
       (dotimes (i half)
@@ -327,7 +329,7 @@
           :vt vt
           :rope-cos rope-cos
           :rope-sin rope-sin
-          :att (vec:zeros seq-len 'single-float))))
+          :att (vec:zeros seq-len :element-type 'single-float))))
 
 (defun rmsnorm (x g)
   ;; x / rms(x) * g, the sum of squares being one vec:dot
@@ -358,8 +360,8 @@
          (kc (getf state :kc))
          (vt (getf state :vt))
          (att (getf state :att))
-         (out (vec:zeros dim 'single-float))
-         (qh (vec:zeros hs 'single-float))
+         (out (vec:zeros dim :element-type 'single-float))
+         (qh (vec:zeros hs :element-type 'single-float))
          (inv-sqrt-hs (/ 1.0 (sqrt hs))))
     ;; append this position's keys and values to the cache
     (dotimes (h n-kv)
@@ -394,7 +396,7 @@
   ;; funcall per element
   (vec:mul h
            (vec:reciprocal
-            (vec:add (vec:ones (length h) 'single-float)
+            (vec:add (vec:ones (length h) :element-type 'single-float)
                      (vec:exp (vec:negative h))))))
 
 (defun forward (model state token pos)

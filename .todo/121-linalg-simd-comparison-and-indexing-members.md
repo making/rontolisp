@@ -44,7 +44,8 @@ over the same temps), three touch points -- `eval.LinalgSimd` +
 functions after the linalg block -- FUNC_COUNT grows, `userFuncBase()`
 shifts; read bases via the accessors, never hardcode). Broadcast shapes of
 the mask family should reuse the todo-117 BCAST walk. Interpreter natives
-take arity ranges (`one-hot` has the optional element-type,
+take arity ranges (`one-hot` has the `:element-type` keyword -- read it through the
+`LinalgSimd.options` twin of `compiler.LinalgKernelCallLayout`,
 `take-rows`/`gather` are fixed). `eval` may not depend on `codegen.jvm`
 (LinalgSimdKernels is a lane-for-lane mirror, keep them in lockstep).
 

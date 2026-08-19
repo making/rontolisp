@@ -65,8 +65,9 @@
 
 (defmethod net-accuracy-count ((net two-layer-net) x target)
   ;; Correctly classified rows; target may be one-hot or a label vector.
-  (let ((y (linalg:argmax (predict net x) 1))
-        (tl (if (= (linalg:ndim target) 1) target (linalg:argmax target 1))))
+  (let ((y (linalg:argmax (predict net x) :axis 1))
+        (tl
+         (if (= (linalg:ndim target) 1) target (linalg:argmax target :axis 1))))
     (truncate (linalg:sum (linalg:equal y tl)))))
 
 (defmethod net-gradient ((net two-layer-net) x target)

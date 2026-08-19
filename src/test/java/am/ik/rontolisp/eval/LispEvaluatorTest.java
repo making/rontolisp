@@ -9648,8 +9648,8 @@ class LispEvaluatorTest {
 	@Test
 	void linalgBroadcastingPreservesTheFirstOperandWidth() {
 		LispVal result = evalMulti("""
-				(list (linalg:mul (linalg:from-list '((1 2) (3 4)) 'single-float) #(10 20))
-				      (array-element-type (linalg:mul #(10 20) (linalg:ones '(2 2) 'single-float))))
+				(list (linalg:mul (linalg:from-list '((1 2) (3 4)) :element-type 'single-float) #(10 20))
+				      (array-element-type (linalg:mul #(10 20) (linalg:ones '(2 2) :element-type 'single-float))))
 				""");
 		assertThat(result.print()).isEqualTo("(#f((10.0 40.0) (30.0 80.0)) DOUBLE-FLOAT)");
 	}
@@ -9677,16 +9677,16 @@ class LispEvaluatorTest {
 
 	@Test
 	void linalgSingleFloatWidthPolymorphism() {
-		// A linalg constructor opts into single-float (#f) with a trailing
-		// element-type (double stays the default), and every transform PRESERVES the
+		// A linalg constructor opts into single-float (#f) with an :element-type
+		// keyword (double stays the default), and every transform PRESERVES the
 		// input width, so a #f array is never silently widened back to double.
 		LispVal result = evalMulti("""
-				(let ((w (linalg:from-list '((1 2) (3 4)) 'single-float)))
-				  (list (array-element-type (linalg:zeros 3 'single-float))
+				(let ((w (linalg:from-list '((1 2) (3 4)) :element-type 'single-float)))
+				  (list (array-element-type (linalg:zeros 3 :element-type 'single-float))
 				        (array-element-type (linalg:zeros 3))
-				        (linalg:sub w (linalg:mul (linalg:ones '(2 2) 'single-float) 0.5))
+				        (linalg:sub w (linalg:mul (linalg:ones '(2 2) :element-type 'single-float) 0.5))
 				        (array-element-type (linalg:transpose w))
-				        (array-element-type (linalg:dot w (linalg:from-list '(1 1) 'single-float)))
+				        (array-element-type (linalg:dot w (linalg:from-list '(1 1) :element-type 'single-float)))
 				        (array-element-type (linalg:add (linalg:from-list '(1 2 3)) 10))))
 				""");
 		assertThat(result.print())
@@ -9703,14 +9703,14 @@ class LispEvaluatorTest {
 		// preserve the input width like every other linalg transform.
 		LispVal result = evalMulti("""
 				(list (linalg:diff #(1 2 4 7 0))
-				      (linalg:diff #(1 2 4 7 0) 2)
+				      (linalg:diff #(1 2 4 7 0) :n 2)
 				      (linalg:diff #2A((1 3 6) (0 5 6)))
 				      (linalg:diff #(5))
 				      (linalg:gradient #(0 1 4 9 16))
 				      (linalg:gradient #(0 1 4 9 16) 2)
 				      (linalg:gradient #(0 1 9) #(0 1 3))
-				      (array-element-type (linalg:diff (linalg:arange 0 4 'single-float)))
-				      (array-element-type (linalg:gradient (linalg:arange 0 4 'single-float))))
+				      (array-element-type (linalg:diff (linalg:arange 0 4 :element-type 'single-float)))
+				      (array-element-type (linalg:gradient (linalg:arange 0 4 :element-type 'single-float))))
 				""");
 		assertThat(result.print()).isEqualTo("(#d(1.0 2.0 3.0 -7.0) #d(1.0 1.0 -10.0) #d((2.0 3.0) (5.0 1.0)) #d()"
 				+ " #d(1.0 2.0 4.0 6.0 7.0) #d(0.5 1.0 2.0 3.0 3.5) #d(1.0 2.0 4.0) SINGLE-FLOAT SINGLE-FLOAT)");
@@ -9720,7 +9720,7 @@ class LispEvaluatorTest {
 			.hasMessageContaining("linalg: gradient expects a vector");
 		assertThatThrownBy(() -> eval("(linalg:gradient #(0 2 6) #(0 1))"))
 			.hasMessageContaining("linalg: gradient coordinates must match the sample length");
-		assertThatThrownBy(() -> eval("(linalg:diff #(1 2) -1)"))
+		assertThatThrownBy(() -> eval("(linalg:diff #(1 2) :n -1)"))
 			.hasMessageContaining("linalg: diff order must be non-negative");
 	}
 
@@ -9733,11 +9733,11 @@ class LispEvaluatorTest {
 		// scalar in an all-ones-shape array.
 		LispVal result = evalMulti("""
 				(defparameter *m* (linalg:from-list '((1 2 3) (4 5 6))))
-				(list (linalg:sum *m* 0) (linalg:sum *m* 1) (linalg:sum *m* -1)
-				      (linalg:sum *m* 1 t) (linalg:sum *m* nil t)
-				      (linalg:mean *m* 0) (linalg:amax *m* 1) (linalg:amin *m* 0 t)
-				      (linalg:sum #(1 2 3) 0) (linalg:sum #(1 2 3) 0 t)
-				      (array-element-type (linalg:sum (linalg:ones '(2 2) 'single-float) 0)))
+				(list (linalg:sum *m* :axis 0) (linalg:sum *m* :axis 1) (linalg:sum *m* :axis -1)
+				      (linalg:sum *m* :axis 1 :keepdims t) (linalg:sum *m* :keepdims t)
+				      (linalg:mean *m* :axis 0) (linalg:amax *m* :axis 1) (linalg:amin *m* :axis 0 :keepdims t)
+				      (linalg:sum #(1 2 3) :axis 0) (linalg:sum #(1 2 3) :axis 0 :keepdims t)
+				      (array-element-type (linalg:sum (linalg:ones '(2 2) :element-type 'single-float) :axis 0)))
 				""");
 		assertThat(result.print()).isEqualTo("(#d(5.0 7.0 9.0) #d(6.0 15.0) #d(6.0 15.0)"
 				+ " #d((6.0) (15.0)) #d((21.0)) #d(2.5 3.5 4.5) #d(3.0 6.0) #d((1.0 2.0 3.0))"
@@ -9745,13 +9745,53 @@ class LispEvaluatorTest {
 		// Rank-3 middle axis: out[o, i] folds over a[o, j, i].
 		LispVal rank3 = evalMulti("""
 				(defparameter *c* (linalg:reshape (linalg:arange 24) '(2 3 4)))
-				(list (linalg:shape (linalg:sum *c* 1)) (linalg:shape (linalg:sum *c* 1 t))
-				      (linalg:sum *c* 1))
+				(list (linalg:shape (linalg:sum *c* :axis 1)) (linalg:shape (linalg:sum *c* :axis 1 :keepdims t))
+				      (linalg:sum *c* :axis 1))
 				""");
 		assertThat(rank3.print()).isEqualTo("((2 4) (2 1 4) #d((12.0 15.0 18.0 21.0) (48.0 51.0 54.0 57.0)))");
-		assertThatThrownBy(() -> eval("(linalg:sum #(1 2 3) 1)")).hasMessageContaining("linalg: axis out of range");
-		assertThatThrownBy(() -> eval("(linalg:amax (linalg:zeros '(0 3)) 0)"))
+		assertThatThrownBy(() -> eval("(linalg:sum #(1 2 3) :axis 1)"))
+			.hasMessageContaining("linalg: axis out of range");
+		assertThatThrownBy(() -> eval("(linalg:amax (linalg:zeros '(0 3)) :axis 0)"))
 			.hasMessageContaining("linalg: reduction of an empty axis");
+	}
+
+	@Test
+	void linalgOptionsAreNumpyKeywordArguments() {
+		// Every option is a numpy-style keyword (the library predates &key support and
+		// used trailing positionals): :element-type on the constructors, :axis /
+		// :keepdims on the reductions, :n / :axis on diff. Keywords compose in any
+		// order, arange's keyword may follow any positional count, and the old
+		// positional spellings signal instead of silently doing something else.
+		LispVal result = evalMulti("""
+				(defparameter *m* (linalg:from-list '((1 2) (3 4))))
+				(list (linalg:sum *m* :keepdims t :axis 1)
+				      (linalg:sum *m* :keepdims t)
+				      (linalg:argmax *m* :axis 0)
+				      (linalg:arange 3 :element-type 'single-float)
+				      (linalg:arange :element-type 'single-float 1 3)
+				      (linalg:arange 0 8 2 :element-type 'single-float)
+				      (linalg:full 2 7 :element-type 'single-float)
+				      (linalg:eye 2 :element-type 'single-float)
+				      (linalg:linspace 0 1 3 :element-type 'single-float)
+				      (linalg:one-hot #(1) 2 :element-type 'single-float)
+				      (vec:arange 2 :element-type 'single-float)
+				      (linalg:diff (linalg:reshape (linalg:arange 24) '(2 3 4)) :axis 1 :n 2)
+				      (linalg:diff (linalg:reshape (linalg:arange 8) '(2 2 2)) :axis 0))
+				""");
+		assertThat(result.print()).isEqualTo("(#d((3.0) (7.0)) #d((10.0)) #d(1.0 1.0) #f(0.0 1.0 2.0) #f(1.0 2.0)"
+				+ " #f(0.0 2.0 4.0 6.0) #f(7.0 7.0) #f((1.0 0.0) (0.0 1.0)) #f(0.0 0.5 1.0) #f((0.0 1.0))"
+				+ " #f(0.0 1.0) #d(((0.0 0.0 0.0 0.0)) ((0.0 0.0 0.0 0.0))) #d(((4.0 4.0) (4.0 4.0))))");
+		assertThatThrownBy(() -> eval("(linalg:sum #2A((1 2) (3 4)) 0)"))
+			.hasMessageContaining("Unknown keyword argument");
+		assertThatThrownBy(() -> eval("(linalg:zeros 3 'single-float)"))
+			.hasMessageContaining("Unknown keyword argument");
+		assertThatThrownBy(() -> eval("(vec:zeros 3 'single-float)")).hasMessageContaining("Unknown keyword argument");
+		assertThatThrownBy(() -> eval("(linalg:arange 0 10 'single-float)"))
+			.hasMessageContaining("linalg: arange expects numbers");
+		assertThatThrownBy(() -> eval("(linalg:arange 1 2 3 4)"))
+			.hasMessageContaining("linalg: arange takes 1 to 3 positional arguments");
+		assertThatThrownBy(() -> eval("(linalg:arange 3 :dtype 'single-float)"))
+			.hasMessageContaining("Unknown keyword argument");
 	}
 
 	@Test
@@ -9761,9 +9801,9 @@ class LispEvaluatorTest {
 		// index itself for a vector; first wins ties, like the no-axis form.
 		LispVal result = evalMulti("""
 				(defparameter *m* (linalg:from-list '((1 9 3) (7 5 6))))
-				(list (linalg:argmax *m* 1) (linalg:argmax *m* 0) (linalg:argmax *m* -1)
-				      (linalg:argmin *m* 1) (linalg:argmax #(3 1 2) 0)
-				      (linalg:argmax (linalg:from-list '((2 2) (1 1))) 1))
+				(list (linalg:argmax *m* :axis 1) (linalg:argmax *m* :axis 0) (linalg:argmax *m* :axis -1)
+				      (linalg:argmin *m* :axis 1) (linalg:argmax #(3 1 2) :axis 0)
+				      (linalg:argmax (linalg:from-list '((2 2) (1 1))) :axis 1))
 				""");
 		assertThat(result.print()).isEqualTo("(#d(1.0 0.0) #d(1.0 0.0 1.0) #d(1.0 0.0) #d(0.0 1.0) 0 #d(0.0 0.0))");
 	}
@@ -9807,7 +9847,7 @@ class LispEvaluatorTest {
 				      (linalg:emap (lambda (x) (truncate (* 1024 x))) *r*)
 				      (linalg:emap (lambda (x) (truncate (* 1024 x))) *g*)
 				      (and (>= (linalg:amin *u*) -2.0) (< (linalg:amax *u*) 2.0))
-				      (array-element-type (linalg:rand 3 'single-float))
+				      (array-element-type (linalg:rand 3 :element-type 'single-float))
 				      (linalg:shape (linalg:randn '(2 3))))
 				""");
 		assertThat(result.print()).isEqualTo("(T #d(26833.0 11120.0 29256.0 22347.0) 45.0"
@@ -9828,9 +9868,9 @@ class LispEvaluatorTest {
 				      (linalg:shape (linalg:row (linalg:reshape (linalg:arange 24) '(4 3 2)) 1))
 				      (linalg:gather *m* #(2 0 1))
 				      (linalg:one-hot #(1 0 2) 3)
-				      (array-element-type (linalg:one-hot #(0) 2 'single-float))
-				      (array-element-type (linalg:take-rows (linalg:ones '(2 2) 'single-float) #(0)))
-				      (array-element-type (linalg:row (linalg:ones '(2 2) 'single-float) 0)))
+				      (array-element-type (linalg:one-hot #(0) 2 :element-type 'single-float))
+				      (array-element-type (linalg:take-rows (linalg:ones '(2 2) :element-type 'single-float) #(0)))
+				      (array-element-type (linalg:row (linalg:ones '(2 2) :element-type 'single-float) 0)))
 				""");
 		assertThat(result.print()).isEqualTo("(#d((30.0 31.0 32.0) (10.0 11.0 12.0) (30.0 31.0 32.0))"
 				+ " #d(4.0 0.0) (2 3 2) #d(30.0 31.0 32.0) (3 2) #d(12.0 20.0 31.0)"
@@ -9848,21 +9888,22 @@ class LispEvaluatorTest {
 		// x.transpose(1 0 2) (rank-n permutation), pad = np.pad's constant-0 mode,
 		// and the internal rank-4 %la-im2col / %la-col2im pair (window unfold and
 		// its scatter-add adjoint) behind the convolution examples.
-		LispVal result = evalMulti("""
-				(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
-				(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
-				(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
-				(list (linalg:shape (linalg:transpose *x* '(1 0 2)))
-				      (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0))
-				      (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*)
-				      (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2)))
-				      (linalg:pad #(1 2) 1)
-				      *col*
-				      (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*)
-				      (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0)
-				      (array-element-type (linalg:transpose (linalg:ones '(2 2 2) 'single-float) '(2 1 0)))
-				      (array-element-type (linalg:pad (linalg:ones 2 'single-float) 1)))
-				""");
+		LispVal result = evalMulti(
+				"""
+						(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
+						(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
+						(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
+						(list (linalg:shape (linalg:transpose *x* '(1 0 2)))
+						      (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0))
+						      (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*)
+						      (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2)))
+						      (linalg:pad #(1 2) 1)
+						      *col*
+						      (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*)
+						      (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0)
+						      (array-element-type (linalg:transpose (linalg:ones '(2 2 2) :element-type 'single-float) '(2 1 0)))
+						      (array-element-type (linalg:pad (linalg:ones 2 :element-type 'single-float) 1)))
+						""");
 		assertThat(result.print()).isEqualTo("((3 2 4) #d((1.0 3.0) (2.0 4.0)) T"
 				+ " #d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
 				+ " (0.0 0.0 0.0 0.0 0.0 0.0)) #d(0.0 1.0 2.0 0.0)"
@@ -9882,18 +9923,19 @@ class LispEvaluatorTest {
 	void linalgElementwiseComparisonsAndZerosLike() {
 		// The comparison masks are 0.0/1.0 arrays over %la-bcast, so scalars and
 		// numpy broadcasting come for free; zeros-like preserves shape AND width.
-		LispVal result = evalMulti("""
-				(list (linalg:equal #(1 5 3) #(2 5 1))
-				      (linalg:greater #(1 5 3) #(2 5 1))
-				      (linalg:greater-equal #(1 5 3) #(2 5 1))
-				      (linalg:less #(1 5 3) #(2 5 1))
-				      (linalg:less-equal #(1 5 3) #(2 5 1))
-				      (linalg:greater #(1 5 3) 2)
-				      (linalg:equal #2A((1 2) (3 4)) #(1 4))
-				      (linalg:zeros-like #2A((1 2) (3 4)))
-				      (array-element-type (linalg:zeros-like (linalg:ones 2 'single-float)))
-				      (linalg:sum (linalg:equal (linalg:argmax (linalg:from-list '((0.1 0.8) (0.9 0.1))) 1) #(1 1))))
-				""");
+		LispVal result = evalMulti(
+				"""
+						(list (linalg:equal #(1 5 3) #(2 5 1))
+						      (linalg:greater #(1 5 3) #(2 5 1))
+						      (linalg:greater-equal #(1 5 3) #(2 5 1))
+						      (linalg:less #(1 5 3) #(2 5 1))
+						      (linalg:less-equal #(1 5 3) #(2 5 1))
+						      (linalg:greater #(1 5 3) 2)
+						      (linalg:equal #2A((1 2) (3 4)) #(1 4))
+						      (linalg:zeros-like #2A((1 2) (3 4)))
+						      (array-element-type (linalg:zeros-like (linalg:ones 2 :element-type 'single-float)))
+						      (linalg:sum (linalg:equal (linalg:argmax (linalg:from-list '((0.1 0.8) (0.9 0.1))) :axis 1) #(1 1))))
+						""");
 		assertThat(result.print()).isEqualTo("(#d(0.0 1.0 0.0) #d(0.0 0.0 1.0) #d(0.0 1.0 1.0)"
 				+ " #d(1.0 0.0 0.0) #d(1.0 1.0 0.0) #d(0.0 1.0 1.0) #d((1.0 0.0) (0.0 1.0))"
 				+ " #d((0.0 0.0) (0.0 0.0)) SINGLE-FLOAT 1.0)");

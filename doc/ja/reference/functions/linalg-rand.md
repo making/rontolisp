@@ -1,8 +1,8 @@
 # linalg:rand
 
-`(linalg:rand shape &optional element-type)`
+`(linalg:rand shape &key element-type)`
 
-一様 [0, 1) の乱数で埋めた配列を返します (numpy の `np.random.rand` 相当ですが、`shape` は [`linalg:zeros`](linalg-zeros.md) と同じ shape designator で渡します。ベクタは整数、行列はリスト `(rows cols)`)。`element-type` に `'single-float` を渡すと packed single-float (`#f`) の結果になります。再現可能な列にするには、先に [`linalg:seed`](linalg-seed.md) を呼んでください -- シード済みの列はすべてのバックエンドで bit-identical です。
+一様 [0, 1) の乱数で埋めた配列を返します (numpy の `np.random.rand` 相当ですが、`shape` は [`linalg:zeros`](linalg-zeros.md) と同じ shape designator で渡します。ベクタは整数、行列はリスト `(rows cols)`)。`:element-type 'single-float` を渡すと packed single-float (`#f`) の結果になります。再現可能な列にするには、先に [`linalg:seed`](linalg-seed.md) を呼んでください -- シード済みの列はすべてのバックエンドで bit-identical です。
 
 ```lisp
 (linalg:seed 42) ; => 42

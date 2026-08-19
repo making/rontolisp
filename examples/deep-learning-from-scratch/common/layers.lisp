@@ -69,7 +69,7 @@
   (let ((dx (linalg:matmul dout (linalg:transpose (affine-w layer)))))
     (setf (affine-dw layer)
           (linalg:matmul (linalg:transpose (affine-x layer)) dout))
-    (setf (affine-db layer) (linalg:sum dout 0))
+    (setf (affine-db layer) (linalg:sum dout :axis 0))
     (linalg:reshape dx (affine-original-shape layer))))
 
 ;; --- SoftmaxWithLoss -----------------------------------------------------------
@@ -164,7 +164,7 @@
          (fw (nth 3 wd))
          (dout2
           (linalg:reshape (linalg:transpose dout '(0 2 3 1)) (list -1 fn))))
-    (setf (conv-db layer) (linalg:sum dout2 0))
+    (setf (conv-db layer) (linalg:sum dout2 :axis 0))
     (setf (conv-dw layer)
           (linalg:reshape (linalg:transpose
                            (linalg:matmul (linalg:transpose (conv-col layer))
@@ -200,8 +200,8 @@
          (col
           (linalg:reshape (im2col x ph pw stride (pool-pad layer))
                           (list -1 (* ph pw))))
-         (am (linalg:argmax col 1))
-         (out (linalg:amax col 1)))
+         (am (linalg:argmax col :axis 1))
+         (out (linalg:amax col :axis 1)))
     (setf (pool-x layer) x)
     (setf (pool-arg-max layer) am)
     (linalg:transpose (linalg:reshape out (list n out-h out-w c)) '(0 3 1 2))))
@@ -250,9 +250,9 @@
       (setf (bn-running-var layer) (linalg:zeros d)))
     (let ((out
            (if *train-p*
-               (let* ((mu (linalg:mean x2 0))
+               (let* ((mu (linalg:mean x2 :axis 0))
                       (xc (linalg:sub x2 mu))
-                      (var (linalg:mean (linalg:square xc) 0))
+                      (var (linalg:mean (linalg:square xc) :axis 0))
                       (std (linalg:sqrt (linalg:add var 10.0e-7)))
                       (xn (linalg:div xc std))
                       (m (bn-momentum layer)))
@@ -282,17 +282,17 @@
          (xc (bn-xc layer))
          (std (bn-std layer))
          (batch (bn-batch-size layer))
-         (dbeta (linalg:sum dout2 0))
-         (dgamma (linalg:sum (linalg:mul xn dout2) 0))
+         (dbeta (linalg:sum dout2 :axis 0))
+         (dgamma (linalg:sum (linalg:mul xn dout2) :axis 0))
          (dxn (linalg:mul (bn-gamma layer) dout2))
          (dxc (linalg:div dxn std))
          (dstd
           (linalg:negative
            (linalg:sum (linalg:div (linalg:mul dxn xc) (linalg:mul std std))
-                       0)))
+                       :axis 0)))
          (dvar (linalg:div (linalg:mul 0.5 dstd) std))
          (dxc2 (linalg:add dxc (linalg:mul (/ 2.0 batch) (linalg:mul xc dvar))))
-         (dmu (linalg:sum dxc2 0))
+         (dmu (linalg:sum dxc2 :axis 0))
          (dx (linalg:sub dxc2 (linalg:div dmu batch))))
     (setf (bn-dgamma layer) dgamma)
     (setf (bn-dbeta layer) dbeta)

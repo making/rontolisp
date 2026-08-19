@@ -278,10 +278,11 @@ void main() {
 
 (defun update-aim ()
   (setq *aimf*
-   (linalg:from-list (list (cos *cam-yaw*) 0.0 (sin *cam-yaw*)) 'single-float))
+        (linalg:from-list (list (cos *cam-yaw*) 0.0 (sin *cam-yaw*))
+                          :element-type 'single-float))
   (setq *aimr*
         (linalg:from-list (list (- 0.0 (sin *cam-yaw*)) 0.0 (cos *cam-yaw*))
-                          'single-float)))
+                          :element-type 'single-float)))
 
 (defun orbit (dx dy)
   ;; Exported: mouse-look deltas, normalized by the canvas height.
@@ -306,10 +307,11 @@ void main() {
                       (linalg:from-list (list (- 0.0 (* *cam-dist* cp cy))
                                               (+ 1.1 (* *cam-dist* sp))
                                               (- 0.0 (* *cam-dist* cp sy)))
-                                        'single-float)))
+                                        :element-type 'single-float)))
     (let ((target
            (linalg:add *cam*
-            (linalg:from-list (list (* 2.0 cy) 1.1 (* 2.0 sy)) 'single-float))))
+                       (linalg:from-list (list (* 2.0 cy) 1.1 (* 2.0 sy))
+                                         :element-type 'single-float))))
       (setq *vp*
             (linalg:matmul (mat4-perspective *aspect* 0.1 160.0)
                            (build-view *eye* target))))))
@@ -427,7 +429,7 @@ void main() {
 ;; algebra below is the SAME rotation, written out: yaw only mixes x and z, so
 ;; the rotation's two interesting columns are the local +x and +z edge vectors,
 ;; and each corner is the centre plus or minus each of them.
-(defvar *corners* (linalg:full '(3 8) 0.0 'single-float))
+(defvar *corners* (linalg:full '(3 8) 0.0 :element-type 'single-float))
 
 (defun emit-box (cx cy cz hx hy hz yaw)
   (setq *ccx* cx *ccy* cy *ccz* cz)
@@ -1319,7 +1321,7 @@ void main() {
                 (linalg:from-list (list (* (- (rand01) 0.5) 2.0 spd)
                                         (* (- (rand01) 0.35) 2.0 spd)
                                         (* (- (rand01) 0.5) 2.0 spd))
-                                  'single-float))
+                                  :element-type 'single-float))
           (setf (aref *fwt* slot) life)
           (setf (aref *fwmax* slot) life)
           (setf (aref *fwr* slot) r)
@@ -1333,7 +1335,7 @@ void main() {
          (linalg:from-list (list (+ (aref *ppos* 0) (rand-range -9.0 9.0))
                                  (rand-range 3.5 7.5)
                                  (+ (aref *ppos* 2) (rand-range -9.0 9.0)))
-                           'single-float))
+                           :element-type 'single-float))
         (c (floor (* 6.0 (rand01)))))
     (cond ((= c 0) (spawn-firework center 1.0 0.28 0.28)) ; red
           ((= c 1) (spawn-firework center 1.0 0.78 0.20)) ; gold
@@ -1343,7 +1345,9 @@ void main() {
           (t (spawn-firework center 1.0 1.0 0.9)))))      ; white
 
 (defun update-fireworks (dt)
-  (let ((g (linalg:from-list (list 0.0 (* -3.2 dt) 0.0) 'single-float))) ; one gravity impulse, reused
+  (let ((g
+         (linalg:from-list (list 0.0 (* -3.2 dt) 0.0)
+                           :element-type 'single-float))) ; one gravity impulse, reused
     (dotimes (i +nfw+)
       (when (> (aref *fwt* i) 0.0)
         (setf (aref *fwvel* i) (linalg:add (aref *fwvel* i) g))
@@ -1383,7 +1387,8 @@ void main() {
   (let ((i 0))
     (dolist (e +trooper-list+)
       (setf (aref *tpos* i)
-            (linalg:from-list (list (nth 0 e) 0.0 (nth 1 e)) 'single-float))
+            (linalg:from-list (list (nth 0 e) 0.0 (nth 1 e))
+                              :element-type 'single-float))
       (setf (aref *thp* i) +trooper-hp+)
       (setf (aref *tyaw* i) 0.0)
       (setf (aref *tfire* i) (rand-range 1.4 3.4))
@@ -1400,7 +1405,8 @@ void main() {
 ;; Your ground position (y = 0), shared by the enemy AI: distances and
 ;; headings on the snow ignore his jump height.
 (defun player-ground ()
-  (linalg:from-list (list (aref *ppos* 0) 0.0 (aref *ppos* 2)) 'single-float))
+  (linalg:from-list (list (aref *ppos* 0) 0.0 (aref *ppos* 2))
+                    :element-type 'single-float))
 
 (defun update-troopers (dt)
   (let ((pg (player-ground)))
@@ -1424,17 +1430,16 @@ void main() {
             (setf (aref *tfire* i) (rand-range 1.9 3.6))
             (let ((muzzle
                    (linalg:from-list (list (aref p 0) 1.02 (aref p 2))
-                                     'single-float)))
+                                     :element-type 'single-float)))
               (spawn-bolt muzzle
-                          (linalg:sub (linalg:from-list (list
-                                                         (+ (aref *ppos* 0)
-                                                          (rand-range -0.5 0.5))
-                                                         (+ (aref *ppos* 1) 1.0)
-                                                         (+ (aref *ppos* 2)
-                                                            (rand-range -0.5
-                                                                        0.5)))
-                                                        'single-float) muzzle)
-                          24.0 1 4.0 1.0 1.0 0.28 0.20)
+                          (linalg:sub (linalg:from-list
+                                       (list (+ (aref *ppos* 0)
+                                                (rand-range -0.5 0.5))
+                                             (+ (aref *ppos* 1) 1.0)
+                                             (+ (aref *ppos* 2)
+                                                (rand-range -0.5 0.5)))
+                                       :element-type 'single-float) muzzle) 24.0
+                          1 4.0 1.0 1.0 0.28 0.20)
               (spawn-flash muzzle 0.08 0.35 1.0 0.4 0.25))))))))
 
 ;; --- AT-AT walkers ------------------------------------------------------------
@@ -1467,7 +1472,8 @@ void main() {
   (let ((i 0))
     (dolist (e +atat-list+)
       (setf (aref *apos* i)
-            (linalg:from-list (list (nth 0 e) 0.0 (nth 1 e)) 'single-float))
+            (linalg:from-list (list (nth 0 e) 0.0 (nth 1 e))
+                              :element-type 'single-float))
       (setf (aref *ahp* i) +atat-hp+)
       (setf (aref *ayaw* i) 0.0)
       (setf (aref *afire* i) (rand-range 1.0 2.5))
@@ -1502,20 +1508,15 @@ void main() {
                                              3.04
                                              (- (aref p 2)
                                                 (* (sin (aref *ayaw* i)) 3.4)))
-                                       'single-float)))
+                                       :element-type 'single-float)))
                 (spawn-bolt muzzle
-                            (linalg:sub (linalg:from-list (list (+
-                                                                 (aref *ppos* 0)
-                                                                 (rand-range
-                                                                  -0.7 0.7))
-                                                                (+
-                                                                 (aref *ppos* 1)
-                                                                 1.0)
-                                                                (+
-                                                                 (aref *ppos* 2)
-                                                                 (rand-range
-                                                                  -0.7 0.7)))
-                                                          'single-float) muzzle)
+                            (linalg:sub (linalg:from-list
+                                         (list (+ (aref *ppos* 0)
+                                                  (rand-range -0.7 0.7))
+                                               (+ (aref *ppos* 1) 1.0)
+                                               (+ (aref *ppos* 2)
+                                                  (rand-range -0.7 0.7)))
+                                         :element-type 'single-float) muzzle)
                             26.0 1 9.0 1.8 1.0 0.32 0.16)
                 (spawn-flash muzzle 0.14 0.7 1.0 0.5 0.2))))
           (when (< (aref *awreck* i) 3.0)
@@ -1571,13 +1572,13 @@ void main() {
               (linalg:add (player-ground)
                           (linalg:from-list (list (* (cos *cam-yaw*) 15.0) 0.0
                                                   (* (sin *cam-yaw*) 15.0))
-                                            'single-float)))
+                                            :element-type 'single-float)))
         (spawn-flash (linalg:from-list
-                      (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float)
-                     1.1 3.8 1.0 0.2 0.18)
+                      (list (aref *vpos* 0) 1.4 (aref *vpos* 2))
+                      :element-type 'single-float) 1.1 3.8 1.0 0.2 0.18)
         (spawn-flash (linalg:from-list
-                      (list (aref *vpos* 0) 0.5 (aref *vpos* 2)) 'single-float)
-                     0.9 3.0 0.9 0.15 0.15)))
+                      (list (aref *vpos* 0) 0.5 (aref *vpos* 2))
+                      :element-type 'single-float) 0.9 3.0 0.9 0.15 0.15)))
     (when *vactive*
       (let* ((to (linalg:sub (player-ground) *vpos*)) (d (linalg:norm to)))
         (setq *vyaw* (atan2 (- 0.0 (aref to 2)) (aref to 0)))
@@ -1615,9 +1616,9 @@ void main() {
   (when (<= (aref *thp* i) 0.0)
     (setf (aref *talive* i) nil)
     (let ((p (aref *tpos* i)))
-      (spawn-flash
-       (linalg:from-list (list (aref p 0) 0.7 (aref p 2)) 'single-float) 0.4 1.1
-       1.0 0.7 0.4))))
+      (spawn-flash (linalg:from-list (list (aref p 0) 0.7 (aref p 2))
+                                     :element-type 'single-float) 0.4 1.1 1.0
+                   0.7 0.4))))
 
 (defun hit-atat (i dmg)
   (setf (aref *ahp* i) (- (aref *ahp* i) dmg))
@@ -1626,25 +1627,25 @@ void main() {
     (setf (aref *aalive* i) nil)
     (setf (aref *awreck* i) 0.0)
     (let ((p (aref *apos* i)))
-      (spawn-flash
-       (linalg:from-list (list (aref p 0) 3.0 (aref p 2)) 'single-float) 0.7 3.2
-       1.0 0.7 0.3)
-      (spawn-flash
-       (linalg:from-list (list (aref p 0) 5.0 (aref p 2)) 'single-float) 0.6 2.2
-       1.0 0.5 0.2))))
+      (spawn-flash (linalg:from-list (list (aref p 0) 3.0 (aref p 2))
+                                     :element-type 'single-float) 0.7 3.2 1.0
+                   0.7 0.3)
+      (spawn-flash (linalg:from-list (list (aref p 0) 5.0 (aref p 2))
+                                     :element-type 'single-float) 0.6 2.2 1.0
+                   0.5 0.2))))
 
 (defun hit-vader (dmg)
   (setq *vhp* (- *vhp* dmg))
   (setq *vhitf* 0.16) ; flash red
-  (spawn-flash
-   (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float)
-   0.25 0.8 1.0 0.4 0.3)
+  (spawn-flash (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2))
+                                 :element-type 'single-float) 0.25 0.8 1.0 0.4
+               0.3)
   (when (<= *vhp* 0.0)
     (setq *vhp* 0.0)
     (setq *valive* nil)
-    (spawn-flash
-     (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float)
-     0.9 3.0 1.0 0.6 0.3)
+    (spawn-flash (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2))
+                                   :element-type 'single-float) 0.9 3.0 1.0 0.6
+                 0.3)
     (launch-firework)
     (launch-firework)
     (launch-firework) ; an instant volley
@@ -1665,7 +1666,7 @@ void main() {
                (diff
                 (linalg:sub bp
                             (linalg:from-list (list (aref tp 0) 1.0 (aref tp 2))
-                                              'single-float))))
+                                              :element-type 'single-float))))
           (when (< (linalg:dot diff diff) 0.45)
             (hit-trooper j (aref *bdmg* i))
             (spawn-flash bp 0.16 0.45 1.0 0.7 0.4)
@@ -1687,7 +1688,7 @@ void main() {
              (linalg:sub bp
                          (linalg:from-list
                           (list (aref *vpos* 0) 1.3 (aref *vpos* 2))
-                          'single-float))))
+                          :element-type 'single-float))))
         (when (< (linalg:dot diff diff) 1.3)
           (spawn-flash bp 0.2 0.5 1.0 0.3 0.25)
           (setq hit t))))
@@ -1696,7 +1697,7 @@ void main() {
 (defun player-chest ()
   (linalg:from-list
    (list (aref *ppos* 0) (+ (aref *ppos* 1) 1.0) (aref *ppos* 2))
-   'single-float))
+   :element-type 'single-float))
 
 (defun bolt-hits-player (i)
   (let ((diff (linalg:sub (aref *bpos* i) (player-chest))))
@@ -1795,7 +1796,7 @@ void main() {
                                   (+ (aref *pvel* 2)
                                      (max (- 0.0 acc)
                                           (min acc (- tz (aref *pvel* 2))))))
-                            'single-float))))
+                            :element-type 'single-float))))
 
 (defun jump-control (dt)
   ;; Space jumps off the ground; a real hop, gravity does the rest
@@ -1803,7 +1804,7 @@ void main() {
     (when (and held (not *jump-prev*) *grounded*)
       (setq *pvel*
             (linalg:from-list (list (aref *pvel* 0) +jump-v+ (aref *pvel* 2))
-                              'single-float))
+                              :element-type 'single-float))
       (setq *grounded* nil))
     (setq *jump-prev* held)))
 
@@ -1822,8 +1823,10 @@ void main() {
       (setq vy 0.0)
       (setq *grounded* t))
     (setq *pvel*
-     (linalg:from-list (list (aref *pvel* 0) vy (aref *pvel* 2)) 'single-float))
-    (setq *ppos* (linalg:from-list (list nx ny nz) 'single-float))))
+          (linalg:from-list (list (aref *pvel* 0) vy (aref *pvel* 2))
+                            :element-type 'single-float))
+    (setq *ppos*
+          (linalg:from-list (list nx ny nz) :element-type 'single-float))))
 
 (defun step-playing (dt)
   (when (> *inv-t* 0.0) (setq *inv-t* (- *inv-t* dt)))

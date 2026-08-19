@@ -49,14 +49,14 @@ The frequent per-element operations also exist under their numpy ufunc names: [`
 
 ## Reductions along an axis
 
-The reductions [`linalg:sum`](../reference/functions/linalg-sum.md), [`linalg:mean`](../reference/functions/linalg-mean.md), [`linalg:amax`](../reference/functions/linalg-amax.md) and [`linalg:amin`](../reference/functions/linalg-amin.md) take an optional integer `axis` (negative counts from the end, numpy style) and reduce along that axis instead of over the whole array: the axis is dropped from the result, or kept as extent 1 when the optional `keepdims` flag is non-nil -- the shape that broadcasts back over the input, which is how a batch softmax subtracts its row maxima. [`linalg:argmax`](../reference/functions/linalg-argmax.md) and [`linalg:argmin`](../reference/functions/linalg-argmin.md) take the same axis argument and return per-slice indices (a packed double array for matrices, since linalg arrays have no integer width). [`linalg:reshape`](../reference/functions/linalg-reshape.md) accepts one `-1` extent and infers it from the element count.
+The reductions [`linalg:sum`](../reference/functions/linalg-sum.md), [`linalg:mean`](../reference/functions/linalg-mean.md), [`linalg:amax`](../reference/functions/linalg-amax.md) and [`linalg:amin`](../reference/functions/linalg-amin.md) take numpy's keyword arguments: an integer `:axis` (negative counts from the end) reduces along that axis instead of over the whole array -- the axis is dropped from the result, or kept as extent 1 when `:keepdims` is non-nil -- the shape that broadcasts back over the input, which is how a batch softmax subtracts its row maxima. [`linalg:argmax`](../reference/functions/linalg-argmax.md) and [`linalg:argmin`](../reference/functions/linalg-argmin.md) take the same `:axis` keyword and return per-slice indices (a packed double array for matrices, since linalg arrays have no integer width). [`linalg:reshape`](../reference/functions/linalg-reshape.md) accepts one `-1` extent and infers it from the element count.
 
 ```lisp
-(linalg:sum #2A((1 2 3) (4 5 6)) 0)    ; => #d(5.0 7.0 9.0)
-(linalg:sum #2A((1 2 3) (4 5 6)) 1)    ; => #d(6.0 15.0)
-(linalg:sum #2A((1 2 3) (4 5 6)) -1 t) ; => #d((6.0) (15.0))
-(linalg:mean #2A((1 2 3) (4 5 6)) 0)   ; => #d(2.5 3.5 4.5)
-(linalg:argmax #2A((1 9 3) (7 5 6)) 1) ; => #d(1.0 0.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) :axis 0)                  ; => #d(5.0 7.0 9.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) :axis 1)                  ; => #d(6.0 15.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) :axis -1 :keepdims t)     ; => #d((6.0) (15.0))
+(linalg:mean #2A((1 2 3) (4 5 6)) :axis 0)                 ; => #d(2.5 3.5 4.5)
+(linalg:argmax #2A((1 9 3) (7 5 6)) :axis 1)               ; => #d(1.0 0.0)
 (linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1))) ; => (3 4)
 ```
 
@@ -84,11 +84,11 @@ The `np.random` analog is seeded and cross-backend deterministic: [`linalg:seed`
 
 ## Discrete calculus
 
-[`linalg:diff`](../reference/functions/linalg-diff.md) and [`linalg:gradient`](../reference/functions/linalg-gradient.md) are numpy's discrete-calculus pair (`np.diff` / `np.gradient`). `diff` takes the n-th discrete difference along the last axis (default 1): each step shortens that axis by one, and a matrix differences within each row. `gradient` estimates the derivative of a vector of samples with second-order central differences (first-order one-sided at the two ends), so the result keeps the input's length; the optional second argument is either a uniform sample spacing (a number, default 1) or a coordinate vector of the same length for non-uniformly spaced samples. Both preserve the input's width like every other linalg transform. The arithmetic is floating point as usual, but sample values that differentiate exactly -- polynomials read at integer coordinates, like every example below -- print identically on every backend.
+[`linalg:diff`](../reference/functions/linalg-diff.md) and [`linalg:gradient`](../reference/functions/linalg-gradient.md) are numpy's discrete-calculus pair (`np.diff` / `np.gradient`). `diff` takes the `:n`-th discrete difference (default 1) along `:axis` (default the last axis): each step shortens that axis by one, so a matrix differences within each row by default and down each column with `:axis 0`. `gradient` estimates the derivative of a vector of samples with second-order central differences (first-order one-sided at the two ends), so the result keeps the input's length; the optional second argument is either a uniform sample spacing (a number, default 1) or a coordinate vector of the same length for non-uniformly spaced samples. Both preserve the input's width like every other linalg transform. The arithmetic is floating point as usual, but sample values that differentiate exactly -- polynomials read at integer coordinates, like every example below -- print identically on every backend.
 
 ```lisp
 (linalg:diff #(1 2 4 7 0))          ; => #d(1.0 2.0 3.0 -7.0)
-(linalg:diff #(1 2 4 7 0) 2)        ; => #d(1.0 1.0 -10.0)
+(linalg:diff #(1 2 4 7 0) :n 2)     ; => #d(1.0 1.0 -10.0)
 (linalg:diff #2A((1 3 6) (0 5 6)))  ; => #d((2.0 3.0) (5.0 1.0))
 (linalg:gradient #(0 1 4 9 16))     ; => #d(1.0 2.0 4.0 6.0 7.0)
 (linalg:gradient #(0 1 4 9 16) 2)   ; => #d(0.5 1.0 2.0 3.0 3.5)
@@ -99,14 +99,14 @@ The gradient of `#(0 1 4 9 16)` -- the parabola `y = x^2` sampled at `x = 0..4` 
 
 ## Single-float precision
 
-linalg computes in `double-float` by default, but it is **width-polymorphic**: it accepts and preserves packed **single-float** (`#f`) arrays, which use half the memory and twice the SIMD lane count. Every constructor takes an optional trailing `element-type` (the default is `'double-float`; pass `'single-float` for a `#f` result), and every transform -- `add`/`sub`/`mul`/`div`/`emap`, `transpose`/`reshape`, `dot`/`matmul`/`outer`, `inv`/`solve` -- preserves its input's width. A single-float value therefore stays single-float all the way through: a functional weight update `(linalg:sub W grad)` keeps `W`'s width rather than silently widening it back to double (which, on the JVM [`--simd`](simd-acceleration.md) path, would force a mixed-width error on the following `vec:matvec`). Reach for single-float when you want the speed and memory of `f32` and can accept its lower precision, and keep the double-float default for precision-critical work such as `det`/`inv`/`solve`.
+linalg computes in `double-float` by default, but it is **width-polymorphic**: it accepts and preserves packed **single-float** (`#f`) arrays, which use half the memory and twice the SIMD lane count. Every constructor takes an `:element-type` keyword (the default is `'double-float`; pass `:element-type 'single-float` for a `#f` result), and every transform -- `add`/`sub`/`mul`/`div`/`emap`, `transpose`/`reshape`, `dot`/`matmul`/`outer`, `inv`/`solve` -- preserves its input's width. A single-float value therefore stays single-float all the way through: a functional weight update `(linalg:sub W grad)` keeps `W`'s width rather than silently widening it back to double (which, on the JVM [`--simd`](simd-acceleration.md) path, would force a mixed-width error on the following `vec:matvec`). Reach for single-float when you want the speed and memory of `f32` and can accept its lower precision, and keep the double-float default for precision-critical work such as `det`/`inv`/`solve`.
 
 ```lisp
-(linalg:zeros 3 'single-float)                   ; => #f(0.0 0.0 0.0)
-(linalg:from-list '((1 2) (3 4)) 'single-float)  ; => #f((1.0 2.0) (3.0 4.0))
-(linalg:add (linalg:from-list '(1 2 3) 'single-float) 10) ; => #f(11.0 12.0 13.0)
+(linalg:zeros 3 :element-type 'single-float)                   ; => #f(0.0 0.0 0.0)
+(linalg:from-list '((1 2) (3 4)) :element-type 'single-float)  ; => #f((1.0 2.0) (3.0 4.0))
+(linalg:add (linalg:from-list '(1 2 3) :element-type 'single-float) 10) ; => #f(11.0 12.0 13.0)
 (array-element-type
-  (linalg:transpose (linalg:eye 2 'single-float)))        ; => SINGLE-FLOAT
+  (linalg:transpose (linalg:eye 2 :element-type 'single-float)))        ; => SINGLE-FLOAT
 ```
 
 ## SIMD acceleration

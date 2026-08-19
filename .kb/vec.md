@@ -51,7 +51,7 @@ it exactly like `LinalgLibrary`:
   noGc)`): it has no general array type and intercepts the whole `vec:` surface natively.
 
 Members: `zeros`/`ones`/`arange`/`from-list`/`to-list` (construction; `zeros`/`ones`/
-`arange` take an optional trailing `element-type` — a literal `'single-float` builds `#f`,
+`arange` take an `:element-type` keyword — a literal `'single-float` builds `#f`,
 else the double default — through the `vec::%make` funnel, mirroring the linalg constructors),
 `aref`/`aset`/
 `length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), the
@@ -453,9 +453,9 @@ fresh rank-1 vector of length `rows` in W's width; x (and out) must match W's wi
   tests use f32-exact (integer / power-of-two) inputs. The `f64x2` path is left
   byte-identical — only an `#f` / single-float operand reaches the f32 branch.
 - `zeros`/`ones`/`arange`: scalar fill loops building the block (no SIMD); a literal
-  `'single-float` second argument builds an `F32VEC` (f32 stride + a narrowing store,
+  `:element-type 'single-float` keyword pair builds an `F32VEC` (f32 stride + a narrowing store,
   `constructorVecType`), else `F64VEC` (the double default, byte-identical to before). The
-  `collectCalls` arg-walk skips the quoted element-type designator, like `collectMakeArray`.
+  `collectCalls` arg-walk skips the keyword and the quoted element-type designator, like `collectMakeArray`.
 - `aref`/`aset`/`length`: delegate to the shared packed helpers (`compileAref`/`compileAset`/
   `compileLength`), width-aware via `elemShift(vecTy)` (f64 `<<3`, f32 `<<2`) and the
   load/store opcode (`f64.load`/`f64.store` vs `f32.load`+promote / demote+`f32.store`).
@@ -756,7 +756,7 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
 ## Not done / follow-ups
 
 - `linalg:` is now packed-float and **width-polymorphic** (todo-097): double by default,
-  `#f` opt-in via a trailing constructor `element-type`, and every transform preserves the
+  `#f` opt-in via a constructor `:element-type` keyword, and every transform preserves the
   input width (so a `#f` from `vec:` is never force-widened to `#d`). See `.kb/linalg.md`.
 - `linalg:` acceleration is **DONE** (todo-107, 2026-07-10): fifteen `linalg:` members are
   intercepted on the interpreter, the JVM and wasm-GC, reusing these lane loops. It is a separate

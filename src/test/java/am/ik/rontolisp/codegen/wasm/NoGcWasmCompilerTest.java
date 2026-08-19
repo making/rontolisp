@@ -1057,7 +1057,7 @@ class NoGcWasmCompilerTest {
 	void singleFloatIntoKernelsUseTheF32StrideAndOpcodes() {
 		String source = """
 				(defun go (n)
-				  (let ((o (vec:zeros n 'single-float)) (a (vec:arange n 'single-float)))
+				  (let ((o (vec:zeros n :element-type 'single-float)) (a (vec:arange n :element-type 'single-float)))
 				    (vec:sum (vec:add-into o a a))))
 				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
 				""";
@@ -1099,7 +1099,7 @@ class NoGcWasmCompilerTest {
 	void singleFloatUnaryUfuncsUseTheF32Opcodes() {
 		String source = """
 				(defun go (n)
-				  (let ((v (vec:arange n 'single-float)))
+				  (let ((v (vec:arange n :element-type 'single-float)))
 				    (vec:sum (vec:sqrt (vec:abs (vec:negative v))))))
 				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
 				""";
@@ -1384,7 +1384,7 @@ class NoGcWasmCompilerTest {
 		String singles = """
 				(defun f (n)
 				  (let ((w (make-array (list n n) :element-type 'single-float :initial-element 1.0))
-				        (x (vec:ones n 'single-float)))
+				        (x (vec:ones n :element-type 'single-float)))
 				    (vec:aref (vec:matvec w x) 0)))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
 				""";

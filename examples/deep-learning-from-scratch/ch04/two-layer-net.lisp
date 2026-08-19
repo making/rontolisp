@@ -41,8 +41,8 @@
   ;; The number of correctly classified rows (one-hot target). An integer
   ;; count prints identically on every backend, where the book's float
   ;; accuracy would not; callers show it as count/total.
-  (let ((y (linalg:argmax (tln-predict params x) 1))
-        (tl (linalg:argmax target 1)))
+  (let ((y (linalg:argmax (tln-predict params x) :axis 1))
+        (tl (linalg:argmax target :axis 1)))
     (truncate (linalg:sum (linalg:equal y tl)))))
 
 (defun tln-numerical-gradient (params x target)
@@ -71,9 +71,9 @@
          (da1 (linalg:mul (sigmoid-grad a1) dz1))
          (grads (make-hash-table :test 'equal)))
     (setf (gethash "W2" grads) (linalg:matmul (linalg:transpose z1) dy))
-    (setf (gethash "b2" grads) (linalg:sum dy 0))
+    (setf (gethash "b2" grads) (linalg:sum dy :axis 0))
     (setf (gethash "W1" grads) (linalg:matmul (linalg:transpose x) da1))
-    (setf (gethash "b1" grads) (linalg:sum da1 0))
+    (setf (gethash "b1" grads) (linalg:sum da1 :axis 0))
     grads))
 
 (defun tln-update! (params grads lr)

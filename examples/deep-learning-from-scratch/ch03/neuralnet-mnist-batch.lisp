@@ -37,7 +37,7 @@
     (let* ((idx (linalg:arange i (+ i *batch-size*)))
            (x-batch (linalg:take-rows x idx))
            (t-batch (linalg:take-rows target idx))
-           (p (linalg:argmax (predict network x-batch) 1)))
+           (p (linalg:argmax (predict network x-batch) :axis 1)))
       (setq accuracy-cnt
             (+ accuracy-cnt (truncate (linalg:sum (linalg:equal p t-batch)))))))
   (format t "Accuracy: ~a/~a~%" accuracy-cnt *test-limit*))

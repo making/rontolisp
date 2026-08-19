@@ -3574,7 +3574,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// the width of the first vector operand -- an element-wise / scale result
 		// preserves
 		// the operand width (a f32 vector in yields a f32 vector out), while a
-		// constructor's width comes from its optional literal element-type
+		// constructor's width comes from its literal :element-type option
 		// (constructorVecType: 'single-float -> F32VEC, else F64VEC).
 		Ty firstVecWidth = null;
 		Ty[] argTys = new Ty[args.size()];
@@ -3820,20 +3820,27 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// The width a vec:zeros/ones/arange call constructs: F32VEC when a literal
-	// 'single-float is passed as the optional second argument, else F64VEC (the double
-	// default). Mirrors make-array's :element-type keying and vec::%make in vec.lisp.
+	// :element-type 'single-float keyword pair follows the count, else F64VEC (the
+	// double default). Mirrors make-array's :element-type keying and vec::%make in
+	// vec.lisp (whose &key prologue reads the same pair on the other backends).
 	private static Ty constructorVecType(List<LispVal> args) {
-		return args.size() >= 3 && isSingleFloatElementType(args.get(2)) ? Ty.F32VEC : Ty.F64VEC;
+		return args.size() == 4 && isElementTypeKeyword(args.get(2)) && isSingleFloatElementType(args.get(3))
+				? Ty.F32VEC : Ty.F64VEC;
 	}
 
-	// (vec:zeros n [et]) / (vec:ones n [et]) -> a fresh constant-filled vector;
-	// (vec:arange n [et]) -> [0.0, 1.0, ..., n-1]. A literal 'single-float second
-	// argument builds an F32VEC (f32 stride + a narrowing store); the default F64VEC path
-	// is byte-identical to before.
+	// Whether a constructor argument is the literal :element-type keyword.
+	private static boolean isElementTypeKeyword(LispVal v) {
+		return v instanceof LispSymbol sym && sym.isKeyword() && sym.name().substring(1).equals("ELEMENT-TYPE");
+	}
+
+	// (vec:zeros n [:element-type et]) / (vec:ones n [:element-type et]) -> a fresh
+	// constant-filled vector; (vec:arange n [:element-type et]) -> [0.0, 1.0, ..., n-1].
+	// A literal :element-type 'single-float builds an F32VEC (f32 stride + a narrowing
+	// store); the default F64VEC path is byte-identical to before.
 	private Ty compileSimdConstruct(List<LispVal> args, Fn fn, int fillMode) {
-		if (args.size() != 2 && args.size() != 3) {
-			throw new UnsupportedOperationException(
-					"--no-gc: vec:" + fillModeName(fillMode) + " takes 1 or 2 arguments in '" + fn.fnName + "'");
+		if (args.size() != 2 && !(args.size() == 4 && isElementTypeKeyword(args.get(2)))) {
+			throw new UnsupportedOperationException("--no-gc: vec:" + fillModeName(fillMode)
+					+ " takes a count plus an optional :element-type keyword in '" + fn.fnName + "'");
 		}
 		Ty vecTy = constructorVecType(args);
 		boolean single = vecTy == Ty.F32VEC;
@@ -5181,12 +5188,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// one
 			// this backend supports, then walk the argument expressions.
 			requireKnownSimd(name, fnName);
-			// A vec constructor's optional element-type is a literal quoted symbol
-			// ('single-float / 'double-float) -- a compile-time designator, not a runtime
-			// value -- so skip a quote form, as collectMakeArray does for :element-type.
+			// A vec constructor's :element-type option is a keyword plus a literal
+			// quoted symbol ('single-float / 'double-float) -- a compile-time designator,
+			// not a runtime value -- so skip the keyword and the quote form, as
+			// collectMakeArray does for :element-type.
 			for (int i = 1; i < args.size(); i++) {
 				LispVal a = args.get(i);
 				if (a instanceof LispCons c && c.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())) {
+					continue;
+				}
+				if (a instanceof LispSymbol sym && sym.isKeyword()) {
 					continue;
 				}
 				collectCalls(a, bound, defuns, callees, fnName);

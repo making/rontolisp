@@ -87,9 +87,11 @@ class VecSimdTest {
 		// These inputs stay below 2^24, so a single-precision accumulator is exact and
 		// they match the scalar oracle. They do NOT pin the accumulator width -- that is
 		// what singleFloatReductionsAccumulateInSinglePrecisionUnderSimd below is for.
-		assertMatchesScalarOracle("(vec:dot (vec:arange 200 'single-float) (vec:arange 200 'single-float))");
-		assertMatchesScalarOracle("(vec:sum (vec:arange 200 'single-float))");
-		assertMatchesScalarOracle("(vec:dot (vec:arange 7 'single-float) (vec:arange 7 'single-float))");
+		assertMatchesScalarOracle(
+				"(vec:dot (vec:arange 200 :element-type 'single-float) (vec:arange 200 :element-type 'single-float))");
+		assertMatchesScalarOracle("(vec:sum (vec:arange 200 :element-type 'single-float))");
+		assertMatchesScalarOracle(
+				"(vec:dot (vec:arange 7 :element-type 'single-float) (vec:arange 7 :element-type 'single-float))");
 	}
 
 	@Test
@@ -115,7 +117,7 @@ class VecSimdTest {
 		// spacing at 2^24, so it ties to even -> 16778240, not 16778239.
 		String gemv = """
 				(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))
-				      (v (vec:ones 1024 'single-float)))
+				      (v (vec:ones 1024 :element-type 'single-float)))
 				  (setf (aref m 0 0) 4096.0)
 				  (setf (aref v 0) 4096.0)
 				  (round (aref (vec:matvec m v) 0)))
@@ -135,7 +137,7 @@ class VecSimdTest {
 	/** A 1024-element {@code #f} vector of ones with {@code elem0} in element 0. */
 	private String probe32(String elem0, String reduction) {
 		return """
-				(let ((v (vec:ones 1024 'single-float)))
+				(let ((v (vec:ones 1024 :element-type 'single-float)))
 				  (setf (aref v 0) %s)
 				  (round %s))
 				""".formatted(elem0, reduction);
@@ -168,7 +170,8 @@ class VecSimdTest {
 		assertThat(eval("(vec:add #d(1.0 2.0) #d(3.0 4.0))", true)).isInstanceOf(LispDoubleFloatArray.class);
 		assertThat(eval("(vec:add #f(1.0 2.0) #f(3.0 4.0))", true)).isInstanceOf(LispSingleFloatArray.class);
 		assertThat(eval("(vec:scale #f(1.0 2.0) 2)", true).print()).isEqualTo("#f(2.0 4.0)");
-		assertMatchesScalarOracle("(vec:mul (vec:arange 200 'single-float) (vec:arange 200 'single-float))");
+		assertMatchesScalarOracle(
+				"(vec:mul (vec:arange 200 :element-type 'single-float) (vec:arange 200 :element-type 'single-float))");
 	}
 
 	// --- matvec (GEMV) -----------------------------------------------------------
@@ -230,11 +233,13 @@ class VecSimdTest {
 
 	@Test
 	void intoKernelsPreserveTheDestinationWidth() {
-		assertThat(eval("(vec:add-into (vec:zeros 2 'single-float) #f(1.0 2.0) #f(3.0 4.0))", true).print())
+		assertThat(
+				eval("(vec:add-into (vec:zeros 2 :element-type 'single-float) #f(1.0 2.0) #f(3.0 4.0))", true).print())
 			.isEqualTo("#f(4.0 6.0)");
 		assertMatchesScalarOracle(
-				"(vec:mul-into (vec:zeros 200 'single-float) (vec:arange 200 'single-float) (vec:arange 200 'single-float))");
-		assertMatchesScalarOracle("(vec:scale-into (vec:zeros 200 'single-float) (vec:arange 200 'single-float) 0.5)");
+				"(vec:mul-into (vec:zeros 200 :element-type 'single-float) (vec:arange 200 :element-type 'single-float) (vec:arange 200 :element-type 'single-float))");
+		assertMatchesScalarOracle(
+				"(vec:scale-into (vec:zeros 200 :element-type 'single-float) (vec:arange 200 :element-type 'single-float) 0.5)");
 	}
 
 	@Test
@@ -271,7 +276,8 @@ class VecSimdTest {
 	void matvecIntoMatchesTheScalarOracleAtBothSizes() {
 		assertThat(eval("(vec:matvec-into (vec:zeros 2) #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0))", true).print())
 			.isEqualTo("#d(17.0 39.0)");
-		assertMatchesScalarOracle("(vec:matvec-into (vec:zeros 2 'single-float) #f((1.0 2.0) (3.0 4.0)) #f(5.0 6.0))");
+		assertMatchesScalarOracle(
+				"(vec:matvec-into (vec:zeros 2 :element-type 'single-float) #f((1.0 2.0) (3.0 4.0)) #f(5.0 6.0))");
 		String wideRows = """
 				(let ((w (make-array '(3 200) :element-type 'double-float :initial-element 0.0))
 				      (x (vec:arange 200))
@@ -302,7 +308,7 @@ class VecSimdTest {
 		assertThatThrownBy(() -> eval("(vec:add-into (vec:zeros 1) #d(1.0) #f(1.0))", true))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("must share an element type");
-		assertThatThrownBy(() -> eval("(vec:add-into (vec:zeros 1 'single-float) #d(1.0) #d(1.0))", true))
+		assertThatThrownBy(() -> eval("(vec:add-into (vec:zeros 1 :element-type 'single-float) #d(1.0) #d(1.0))", true))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("must share an element type");
 	}
@@ -337,7 +343,8 @@ class VecSimdTest {
 		assertThat(eval("(vec:zeros 1) #'vec:square", true).print()).isEqualTo("#<lambda>");
 		assertThat(eval("(vec:zeros 1) #'vec:square-into", true).print()).isEqualTo("#<lambda>");
 		assertMatchesScalarOracle("(vec:square (vec:arange 200))");
-		assertMatchesScalarOracle("(vec:square-into (vec:zeros 200 'single-float) (vec:arange 200 'single-float))");
+		assertMatchesScalarOracle(
+				"(vec:square-into (vec:zeros 200 :element-type 'single-float) (vec:arange 200 :element-type 'single-float))");
 	}
 
 	@Test
@@ -354,12 +361,13 @@ class VecSimdTest {
 				assertMatchesScalarOracle("(vec:%s (vec:add (vec:arange %s) (vec:ones %s)))".formatted(op, n, n));
 			}
 			assertMatchesScalarOracle(
-					"(vec:%s (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))".formatted(op));
+					"(vec:%s (vec:add (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float)))"
+						.formatted(op));
 		}
 		assertMatchesScalarOracle("(vec:exp (vec:reciprocal (vec:add (vec:arange 200) (vec:ones 200))))");
 		assertMatchesScalarOracle("(vec:exp (vec:reciprocal (vec:add (vec:arange 7) (vec:ones 7))))");
 		assertMatchesScalarOracle(
-				"(vec:exp (vec:reciprocal (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
+				"(vec:exp (vec:reciprocal (vec:add (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float))))");
 		// log over strictly positive inputs, tanh over the signed range (both are
 		// Math.log / Math.tanh scalar loops on this backend).
 		for (String n : new String[] { "7", "200" }) {
@@ -368,8 +376,9 @@ class VecSimdTest {
 					"(vec:tanh (vec:scale (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)) 0.03))".formatted(n,
 							n));
 		}
-		assertMatchesScalarOracle("(vec:log (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))");
-		assertMatchesScalarOracle("(vec:tanh (vec:arange 200 'single-float))");
+		assertMatchesScalarOracle(
+				"(vec:log (vec:add (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float)))");
+		assertMatchesScalarOracle("(vec:tanh (vec:arange 200 :element-type 'single-float))");
 		// sin / cos / tan over the signed range (Math.sin / Math.cos / Math.tan
 		// scalar loops on this backend).
 		for (String op : new String[] { "sin", "cos", "tan" }) {
@@ -377,7 +386,7 @@ class VecSimdTest {
 				assertMatchesScalarOracle(
 						"(vec:%s (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)))".formatted(op, n, n));
 			}
-			assertMatchesScalarOracle("(vec:%s (vec:arange 200 'single-float))".formatted(op));
+			assertMatchesScalarOracle("(vec:%s (vec:arange 200 :element-type 'single-float))".formatted(op));
 		}
 		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
 		// sign-mixed range (Math.asin / Math.acos / Math.atan / Math.sinh / Math.cosh
@@ -388,7 +397,8 @@ class VecSimdTest {
 						"(vec:%s (vec:scale (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)) 0.005))"
 							.formatted(op, n, n));
 			}
-			assertMatchesScalarOracle("(vec:%s (vec:scale (vec:arange 200 'single-float) 0.005))".formatted(op));
+			assertMatchesScalarOracle(
+					"(vec:%s (vec:scale (vec:arange 200 :element-type 'single-float) 0.005))".formatted(op));
 		}
 		for (String op : new String[] { "atan", "sinh", "cosh" }) {
 			for (String n : new String[] { "7", "200" }) {
@@ -396,7 +406,8 @@ class VecSimdTest {
 						"(vec:%s (vec:scale (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)) 0.05))"
 							.formatted(op, n, n));
 			}
-			assertMatchesScalarOracle("(vec:%s (vec:scale (vec:arange 200 'single-float) 0.05))".formatted(op));
+			assertMatchesScalarOracle(
+					"(vec:%s (vec:scale (vec:arange 200 :element-type 'single-float) 0.05))".formatted(op));
 		}
 		assertMatchesScalarOracle("(vec:asin #d(0.0 -0.0 1.0 -1.0 0.5))");
 		assertMatchesScalarOracle("(vec:acos #d(1.0 -1.0 0.0 0.5))");
@@ -431,7 +442,7 @@ class VecSimdTest {
 				.isEqualTo("T");
 		}
 		assertMatchesScalarOracle(
-				"(vec:sqrt-into (vec:zeros 200 'single-float) (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))");
+				"(vec:sqrt-into (vec:zeros 200 :element-type 'single-float) (vec:add (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float)))");
 	}
 
 	@Test
@@ -481,7 +492,7 @@ class VecSimdTest {
 							.formatted(n, op));
 			}
 			assertMatchesScalarOracle(
-					"(let ((a (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)))) (vec:%s a (vec:negative a)))"
+					"(let ((a (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0)))) (vec:%s a (vec:negative a)))"
 						.formatted(op));
 		}
 		for (String n : new String[] { "7", "200" }) {
@@ -491,11 +502,11 @@ class VecSimdTest {
 					"(vec:clip (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0)) -50.0 50.0)".formatted(n));
 		}
 		assertMatchesScalarOracle(
-				"(vec:relu (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)))");
+				"(vec:relu (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0)))");
 		// The f32 clip bounds are deliberately NOT f32-representable: the kernel must
 		// compare the widened element against the full double bound, like the defun.
 		assertMatchesScalarOracle(
-				"(vec:clip (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)) -50.3 50.3)");
+				"(vec:clip (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0)) -50.3 50.3)");
 	}
 
 	@Test

@@ -79,7 +79,7 @@
     (dotimes (i rows m) (dotimes (j cols) (setf (aref m i j) (lcg-uniform))))))
 
 (defun random-vector (n)
-  (let ((v (vec:zeros n 'single-float)))
+  (let ((v (vec:zeros n :element-type 'single-float)))
     (dotimes (i n v) (setf (aref v i) (lcg-uniform)))))
 
 ;;; --- the two kernels ---------------------------------------------------------

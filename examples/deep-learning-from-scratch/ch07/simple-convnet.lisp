@@ -93,8 +93,9 @@
 
 (defmethod net-accuracy-count ((net simple-convnet) x target)
   ;; Correctly classified batch rows; target may be one-hot or labels.
-  (let ((y (linalg:argmax (predict net x) 1))
-        (tl (if (= (linalg:ndim target) 1) target (linalg:argmax target 1))))
+  (let ((y (linalg:argmax (predict net x) :axis 1))
+        (tl
+         (if (= (linalg:ndim target) 1) target (linalg:argmax target :axis 1))))
     (truncate (linalg:sum (linalg:equal y tl)))))
 
 (defmethod net-gradient ((net simple-convnet) x target)
