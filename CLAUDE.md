@@ -311,15 +311,13 @@ A failure prints `[case '<name>' on <BACKEND>` with the offending lines; fix the
 `ci-spec.yaml` `expected` (or the backend) and re-run step 2 only (the binary
 does not need rebuilding unless Java sources changed).
 
-### The Examples Suite Is Daily, Not Per Push
+### The Examples Suite
 
 `ExamplesE2eTest` runs every example in `examples/examples.yaml` on every backend
-it declares. It needs an exec jar AND `-Drontolisp.examples=true`, so `./mvnw
-test` skips it -- which is why a Clack change once left a Worker example
-answering 500 unnoticed. `.github/workflows/examples.yaml` now runs it daily and
-on a push that edits `examples/**`, so a compiler change that breaks an example
-surfaces at the next scheduled run. Run it locally after touching an example or
-a surface the examples exercise:
+it declares. `./mvnw test` skips it (it needs an exec jar AND
+`-Drontolisp.examples=true`), so CI owns it: the `examples` job in `ci.yaml`,
+which runs AFTER `release` so a red example never delays the binary. Run it
+locally after touching an example or a surface the examples exercise:
 
 ```bash
 ./mvnw clean package -DskipTests

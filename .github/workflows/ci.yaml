@@ -7,6 +7,7 @@ on:
     - main
     paths:
     - src/**
+    - examples/**
     - pom.xml
     - .github/workflows/ci.yaml
   pull_request:
@@ -194,6 +195,73 @@ jobs:
           artifacts/rontolisp-linux-arm64/rontolisp-linux-arm64
           artifacts/rontolisp-darwin-arm64/rontolisp-darwin-arm64
           target/rontolisp-${{ steps.version.outputs.version }}-exec.jar
+  # Every example in examples/examples.yaml, on every backend it declares. It runs
+  # AFTER `release` on purpose: the suite is long and a red example must not hold the
+  # binary back -- by the time this starts, the release assets are already published.
+  # `release` is itself guarded on `event_name != 'pull_request'`, so this is skipped
+  # on PRs, which is the accepted trade for that ordering.
+  #
+  # Nothing ran this suite before: the `test` job runs `clean test`, where no exec jar
+  # exists so the class aborts, and `native-image` runs only CiSpecE2eTest -- which is
+  # why a Clack :raw-body change left a Worker example answering 500 unnoticed.
+  examples:
+    needs: release
+    runs-on: ubuntu-latest
+    # The slowest legs compile WASM modules, and wasmtime spreads that across every
+    # core -- so a 4 vCPU runner is far off the ~26 min this takes on a big machine.
+    # Bound it rather than let a hang bill the 6-hour default.
+    timeout-minutes: 180
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # The `wasm` RUN backend executes the compiled module; the compile-only backends do
+    # not need it. Same pin as the test job, so a failure here means the example rather
+    # than the runtime.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v47.0.3"
+    # Same reasoning as the test job's cache: the module compile, not the codegen, is
+    # where the time goes, and the corpus is stable between runs.
+    - name: Cache the wasmtime compiled modules
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/wasmtime
+        key: wasmtime-examples-${{ runner.os }}-${{ hashFiles('src/main/**', 'examples/**') }}
+        restore-keys: |
+          wasmtime-examples-${{ runner.os }}-
+    # 34 examples ql:quickload their systems (clack, lack, tiny-routes, ningle, ...).
+    # Carrying the dist keeps the run off the network, so a red job means an example
+    # broke rather than that a dist moved under it.
+    - name: Cache the Quicklisp dist
+      uses: actions/cache@v6
+      with:
+        path: ~/.rontolisp/quicklisp
+        key: quicklisp-${{ runner.os }}-${{ hashFiles('examples/examples.yaml') }}
+        restore-keys: |
+          quicklisp-${{ runner.os }}-
+    # Drive the suite with the binary that was just PUBLISHED, not a fresh build: it
+    # needs no native-image run here, each of the 253 legs starts in milliseconds
+    # instead of paying JVM startup, and a green run is then a statement about the
+    # artifact users are downloading.
+    - name: Download the released binary
+      uses: actions/download-artifact@v8
+      with:
+        name: rontolisp-linux-amd64
+        path: bin
+    - name: Run every example
+      run: |
+        set -e
+        chmod +x bin/rontolisp-linux-amd64
+        ./mvnw -V --no-transfer-progress \
+          -Dtest=ExamplesE2eTest -DfailIfNoTests=false \
+          -Drontolisp.binary="$PWD/bin/rontolisp-linux-amd64" \
+          test
   deploy:
     needs: test
     if: github.event_name != 'pull_request'
