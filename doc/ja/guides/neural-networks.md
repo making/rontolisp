@@ -130,13 +130,18 @@
 
 ## 損失関数
 
-`torch:mse-loss` と `torch:cross-entropy-loss` はスカラーテンソルを返す普通の関数です。交差エントロピーは生の**ロジット**と整数のクラスターゲットを取り (one-hot ベクトルではなく、softmax の出力でもありません。数値的に安定な形であるターゲットクラス位置の `-log-softmax` として計算します)、最終軸以外を平坦化するので `(batch seq vocab)` がそのまま使えます。`:ignore-index` はパディング位置を総和からも平均の分母からも除きます:
+`torch:mse-loss` と `torch:cross-entropy-loss` はスカラーテンソルを返す普通の関数です。交差エントロピーは生の**ロジット**を取り (softmax の出力ではありません。数値的に安定な形である `-log-softmax` から計算します)、最終軸以外を平坦化するので `(batch seq vocab)` がそのまま使えます。ターゲットは整数のクラスインデックス (`:ignore-index` がパディング位置を総和からも平均の分母からも除きます) か、ロジットと同じ形の確率分布 (PyTorch のソフトラベル形式、`-sum(target * log-softmax(logits))`) のどちらかです:
 
 ```lisp
 (torch:item (torch:mse-loss (torch:tensor '(1.0 2.0)) '(0.0 0.0))) ; => 2.5
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0))) #(0)))
 ; => 0.6931471805599453
+(torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0)))
+                                      (torch:tensor '((0.5 0.5)))))
+; => 0.6931471805599453
 ```
+
+リストのターゲットは常にクラスインデックスとして読むため、確率で渡すにはテンソルか配列が必要です。one-hot の分布と対応するインデックスは同じ損失になります。
 
 ## オプティマイザ
 
@@ -226,6 +231,10 @@
                      :axis 1))
 (torch:data *att*) ; => #d((1.0 0.0) (0.5 0.5))
 ```
+
+## 実例
+
+[`examples/llm-from-scratch/`](https://github.com/making/rontolisp/blob/develop/examples/llm-from-scratch/README.md) は『作ってわかる大規模言語モデルの仕組み』第2章をこのパッケージで書き直したものです。スケール内積注意とマルチヘッド注意、正弦波位置エンコーディング、パディングマスクと因果マスクを備えたエンコーダ・デコーダ Transformer、そして日英の学習ループと貪欲デコードまでが入っています。PyTorch と `torch` の対応表は同ディレクトリの README にあります。
 
 ## パッケージ
 

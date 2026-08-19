@@ -1,0 +1,42 @@
+cross entropy against (0.7 0.2 0.1): 0.8514
+cross entropy against (0.1 0.2 0.7): 1.4514
+tokens:  (5 3 3 0 0)
+padding mask (3 1 5)
+  0 0 0 1 1
+subsequent mask (1 5 5)
+  0 1 1 1 1
+  0 0 1 1 1
+  0 0 0 1 1
+  0 0 0 0 1
+  0 0 0 0 0
+causal attention weights:
+  1.00 0.00 0.00 0.00 0.00
+  0.50 0.50 0.00 0.00 0.00
+  0.33 0.33 0.33 0.00 0.00
+  0.25 0.25 0.25 0.25 0.00
+  0.20 0.20 0.20 0.20 0.20
+source vocabulary: 26 tokens
+target vocabulary: 26 tokens
+<unk> id: 0, <pad> id: 1, <bos> id: 2, <eos> id: 3
+first source sentence: (2 9 10 11 5 15 6 4 3)
+first target sentence: (2 5 8 6 12 9 4 3)
+model parameters:  63 tensors
+training (cross entropy, ignore-index = <pad>):
+  epoch 00: 3.348
+  epoch 05: 2.068
+  epoch 10: 1.215
+  epoch 15: 0.737
+  epoch 20: 0.434
+  epoch 25: 0.256
+  epoch 30: 0.163
+  epoch 35: 0.109
+greedy decode:
+  今日 の 天気 は 晴れ です 。 -> <bos> the weather is fine today . <eos>
+  明日 の 天気 は 雨 です 。 -> <bos> the weather is rainy tomorrow . <eos>
+  今日 は 寒い です 。 -> <bos> it is cold today . <eos>
+  私 は 猫 が 好き です 。 -> <bos> i like cats . <eos>
+  私 は 犬 が 好き です 。 -> <bos> i like dogs . <eos>
+  彼 は 本 を 読み ます 。 -> <bos> he reads a book . <eos>
+  私 は 学生 です 。 -> <bos> i am a student . <eos>
+  猫 が 走り ます 。 -> <bos> the cat runs . <eos>
+sentences reproduced exactly: 8 / 8

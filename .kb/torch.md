@@ -213,6 +213,22 @@ and under `:ignore-index` drops the position from BOTH the sum and the mean's
 denominator (the padding case) -- the ignored index is also clamped to 0 before
 the `torch:gather` so a sentinel target cannot index out of range.
 
+`torch:cross-entropy-loss` also takes PyTorch's **probability (soft-label)
+target** -- added by todo-463, because the book's chapter-2 notebooks call
+`nn.CrossEntropyLoss` that way and an example that hand-rolls
+`-sum(p * log-softmax(x))` around the library is the signal the library is
+missing it. The two forms are told apart by SHAPE ALONE
+(`torch::%m-ce-soft-p`): a target whose `array-dimensions` equal the logits'
+is a distribution, everything else is class indices. A LIST is therefore
+always indices -- a list as long as the class count would otherwise be
+ambiguous with an unbatched distribution -- so the probability spelling needs
+a tensor or an array, and `:ignore-index` does not apply to it (there is no
+single class to drop), exactly like PyTorch. The soft branch
+(`torch::%m-ce-soft`) is composed from `torch:mul`/`torch:sum` over
+`torch:log-softmax`, so the gradient reaches the TARGET too when it requires
+one; the `cross-entropy-soft` and `cross-entropy-soft-rank1` gradcheck rows
+check both operands.
+
 Acceptance beyond the gradcheck rows: `TorchGradcheck.NN_TRAINING_PROGRAM`, a
 2-8-1 ReLU MLP trained on XOR for 200 SGD steps over `torch:parameters`, run on
 the interpreter, the JVM and wasm-GC; the `--component` leg is the ci-spec
@@ -312,6 +328,39 @@ started and finished lower. It runs on the interpreter, the JVM and wasm-GC; the
 values are exact dyadic rationals (lr `0.125`) while Adam, which takes a square
 root, is pinned as a tolerance predicate. 462 adds no body-taking operator
 either, so again no new `IndentRules` entry.
+
+## The whole-package acceptance (todo-463): `examples/llm-from-scratch/`
+
+The parent item's coverage target was a BOOK, and its port is the acceptance
+test the unit tables cannot be: `examples/llm-from-scratch/` is chapter 2 of
+『作ってわかる大規模言語モデルの仕組み』 (the `book-llm-from-scratch`
+repository) rewritten on this package -- `transformer/{attention,utils,
+transformer}.lisp` for the library half, `chapter02/section{2,3,4,5}.lisp` for
+the notebooks, all declared in `examples/examples.yaml` with `.expected` files.
+Three things it pins that nothing else does:
+
+- **a module tree several levels deep really walks.** `torch:parameters` over
+  the section-5 Transformer finds all 63 of its tensors through
+  module -> list-of-modules -> module -> parameter (195 for the two-block one
+  in `transformer/shapes.lisp`), and every one of them moves under one
+  `torch:adam`.
+- **the output is ONE text on all four backends**, training loop included: the
+  seeded generator is integer arithmetic, and the example rounds its printed
+  floats, so the WASM `exp`/`log`/`sin` approximations cannot show through --
+  the interpreter, the JVM, wasm-GC and `--component` legs were diffed
+  byte-for-byte, including the 40-epoch training losses and the greedy decode.
+- **speed is the binding constraint, not correctness.** A `d_model` 8 /
+  1-block / 2-head model over an 8-pair corpus for 40 epochs is ~2 min on the
+  plain interpreter and ~4 s on the JVM; the interpreter cost is dominated by
+  the rank-3 `%la-matmul-nd` the `--simd` section below still lists as the
+  standing interceptor candidate. Anything larger does not fit the examples
+  harness's 240 s per-leg cap, which is why the example documents the book's
+  shapes and tests shrunken ones.
+
+The one library gap the port surfaced was PyTorch's PROBABILITY target for
+`torch:cross-entropy-loss` (see the module-layer section above); it was closed
+in torch.lisp rather than worked around in the example, which is the rule the
+todo set for this port.
 
 ## `--simd`, and what is deliberately NOT accelerated
 

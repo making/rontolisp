@@ -130,13 +130,18 @@ The walk descends into submodules **and into lists of them**, and deduplicates b
 
 ## Losses
 
-`torch:mse-loss` and `torch:cross-entropy-loss` are plain functions returning a scalar tensor. Cross entropy takes raw **logits** and integer class targets (not one-hot vectors, and never softmax outputs -- it is computed as `-log-softmax` at the target class, the numerically stable form), flattens all but the last axis so `(batch seq vocab)` works directly, and `:ignore-index` drops padding positions from both the sum and the mean's denominator:
+`torch:mse-loss` and `torch:cross-entropy-loss` are plain functions returning a scalar tensor. Cross entropy takes raw **logits** (never softmax outputs -- it is computed from `-log-softmax`, the numerically stable form) and flattens all but the last axis, so `(batch seq vocab)` works directly. Its target is either integer class indices, with `:ignore-index` dropping padding positions from both the sum and the mean's denominator, or a full probability distribution of the logits' own shape -- PyTorch's soft-label form, `-sum(target * log-softmax(logits))`:
 
 ```lisp
 (torch:item (torch:mse-loss (torch:tensor '(1.0 2.0)) '(0.0 0.0))) ; => 2.5
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0))) #(0)))
 ; => 0.6931471805599453
+(torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0)))
+                                      (torch:tensor '((0.5 0.5)))))
+; => 0.6931471805599453
 ```
+
+A LIST target is always class indices, so the probability spelling needs a tensor or an array; a one-hot distribution and the matching index give the same loss.
 
 ## Optimizers
 
@@ -226,6 +231,10 @@ Both masks are **raw linalg arrays** -- a mask carries no gradient -- shaped to 
                      :axis 1))
 (torch:data *att*) ; => #d((1.0 0.0) (0.5 0.5))
 ```
+
+## A worked example
+
+[`examples/llm-from-scratch/`](https://github.com/making/rontolisp/blob/develop/examples/llm-from-scratch/README.md) is chapter 2 of 『作ってわかる大規模言語モデルの仕組み』 rewritten on this package: scaled dot-product and multi-head attention, sinusoidal positional encoding, the encoder/decoder Transformer with its padding and causal masks, and a Japanese-English training loop with greedy decoding. Its README carries the PyTorch-to-`torch` mapping table.
 
 ## Packages
 

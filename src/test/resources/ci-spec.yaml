@@ -4411,6 +4411,20 @@ cases:
           (print (length (torch:parameters net))))
         (print (torch:item (torch:mse-loss (torch:tensor '(1.0 2.0 3.0))
                                            (torch:tensor '(0.0 0.0 1.0)))))
+        (print
+         (list
+          (= (torch:item
+              (torch:cross-entropy-loss (torch:tensor '((0.5 1.0 -0.5)))
+                                        (torch:tensor '((0.0 1.0 0.0)))))
+             (torch:item
+              (torch:cross-entropy-loss (torch:tensor '((0.5 1.0 -0.5)))
+                                        #(1))))
+          (< (abs
+              (- (torch:item
+                  (torch:cross-entropy-loss (torch:tensor '((0.0 0.0)))
+                                            (torch:tensor '((0.5 0.5)))))
+                 0.6931471805599453))
+             1.0e-6)))
         (linalg:seed 3)
         (let ((net
                (torch:sequential (torch:linear 2 8) (function torch:relu)
@@ -4440,6 +4454,7 @@ cases:
       #d((2.0 0.0) (0.0 0.0))
       2
       3.0
+      (T T)
       4
       (T T)
   # The torch optimizers and the training-loop plumbing: one SGD step, two

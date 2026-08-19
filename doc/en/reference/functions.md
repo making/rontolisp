@@ -693,7 +693,7 @@ batching / padding / mask helpers, which are plain functions rather than a
 | `torch:layer-norm` | `(torch:layer-norm 8)` | layer normalization over the last axis (`ddof` 0) |
 | `torch:dropout` | `(torch:dropout 0.1)` | inverted dropout; the identity in evaluation mode |
 | `torch:mse-loss` | `(torch:mse-loss y target)` | mean squared error (`:reduction :mean` / `:sum` / `:none`) |
-| `torch:cross-entropy-loss` | `(torch:cross-entropy-loss logits idx)` | cross entropy over logits (`:ignore-index` skips padding) |
+| `torch:cross-entropy-loss` | `(torch:cross-entropy-loss logits target)` | cross entropy over logits; target is class indices (`:ignore-index` skips padding) or a probability distribution |
 | `torch:optimizer` | `(torch:optimizer :k ps fields fn)` | a user optimizer: a kind, parameters, a fields plist and a step function |
 | `torch:optimizerp` | `(torch:optimizerp x)` | `T` for an optimizer, `NIL` otherwise |
 | `torch:optimizer-kind` | `(torch:optimizer-kind o)` | the optimizer's kind keyword |

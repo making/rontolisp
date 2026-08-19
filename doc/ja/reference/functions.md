@@ -656,7 +656,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `torch:layer-norm` | `(torch:layer-norm 8)` | 最終軸に対する層正規化 (`ddof` 0) |
 | `torch:dropout` | `(torch:dropout 0.1)` | inverted dropout。評価モードでは恒等写像 |
 | `torch:mse-loss` | `(torch:mse-loss y target)` | 平均二乗誤差 (`:reduction :mean` / `:sum` / `:none`) |
-| `torch:cross-entropy-loss` | `(torch:cross-entropy-loss logits idx)` | ロジットに対する交差エントロピー (`:ignore-index` でパディングを除外) |
+| `torch:cross-entropy-loss` | `(torch:cross-entropy-loss logits target)` | ロジットに対する交差エントロピー。target はクラスインデックス (`:ignore-index` でパディングを除外) か確率分布 |
 | `torch:optimizer` | `(torch:optimizer :k ps fields fn)` | ユーザー定義オプティマイザ。種別、パラメータ、fields plist、ステップ関数 |
 | `torch:optimizerp` | `(torch:optimizerp x)` | オプティマイザなら `T`、それ以外は `NIL` |
 | `torch:optimizer-kind` | `(torch:optimizer-kind o)` | オプティマイザの種別キーワード |

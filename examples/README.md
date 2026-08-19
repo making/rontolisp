@@ -9,6 +9,7 @@ runs identically on the interpreter, the JVM and WASM.
 | [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`) |
 | [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02-ch08, ported |
 | [`llama2/`](llama2) | llama2.c's `run.c` ported whole: a Llama 2 inference engine over the real TinyStories checkpoints, and the example `--simd` is for |
+| [`llm-from-scratch/`](llm-from-scratch) | 『作ってわかる大規模言語モデルの仕組み』 chapter 2, ported: attention, an encoder/decoder Transformer and its training loop on the `torch` package |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API on top |
 | [`jvm/`](jvm) | `java:` interop and Swing GUIs (JVM only) |
@@ -80,6 +81,19 @@ from the checked-in 1 MB `stories260K.bin` or the downloadable `stories15M.bin`.
 Its 15 million weights load through `read-sequence` over packed single-float
 arrays; its decode is all `vec:matvec`, which is why `--simd` takes wasm-GC from
 0.4 to 46 tokens/s. Setup, knobs and numbers in [its README](llama2/README.md).
+
+## LLM from Scratch — `llm-from-scratch/`
+
+The Transformer chapter of 『作ってわかる大規模言語モデルの仕組み』 (Elith
+Inc., Nikkei BP), rewritten on the [`torch`
+package](../doc/en/guides/neural-networks.md): scaled dot-product and
+multi-head attention, sinusoidal positional encoding, LayerNorm, the
+encoder/decoder Transformer with its padding and causal masks, and a
+Japanese-English training loop with greedy decoding over a twelve-pair corpus
+that lives in the file. `nn.Module` becomes `torch:module` plus a `forward`
+defun, `nn.ModuleList` a plain list, `DataLoader` `torch:shuffled-batches`.
+Mapping table and the book-vs-tested shapes in
+[its README](llm-from-scratch/README.md).
 
 ## Networking, HTTP & services — `net/`
 

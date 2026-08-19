@@ -1,0 +1,14 @@
+output vector: (0.316 0.316)
+weights shape: (10)
+weights sum:   1.000
+weights: 0.160 0.212 0.193 0.124 0.068 0.039 0.029 0.032 0.050 0.092
+argmax weight: v2
+weights (v4 x5): 0.098 0.129 0.117 0.466 0.041 0.024 0.018 0.020 0.031 0.056
+argmax weight: v4
+largest weight: 0.212 -> 0.466
+output shape:  (3 2)
+weights shape: (3 10)
+row sums     : 1.000 1.000 1.000
+1 dim: score spread 0.65, largest weight 0.069 -> 0.069
+100 dim: score spread 46.78, largest weight 0.985 -> 0.258
+scaled weights: 0.146 0.178 0.166 0.122 0.079 0.054 0.044 0.047 0.064 0.099

@@ -171,6 +171,15 @@ public final class TorchGradcheck {
 			          (list (linalg:reshape (linalg:mul 0.125 (linalg:arange 12)) '(2 2 3))))
 			(gc-check "cross-entropy-sum"
 			          (lambda (x) (torch:cross-entropy-loss x #(1 0 2) :reduction :sum)) (list *l33*))
+			;; probability (soft-label) targets: a target of the LOGITS' own shape. The
+			;; gradient is checked on both operands, so the row also pins that the target
+			;; is differentiated through rather than treated as a constant.
+			(gc-check "cross-entropy-soft"
+			          (lambda (x p) (torch:cross-entropy-loss x p))
+			          (list *l33* (linalg:from-list '((0.7 0.2 0.1) (0.1 0.6 0.3) (0.25 0.25 0.5)))))
+			(gc-check "cross-entropy-soft-rank1"
+			          (lambda (x p) (torch:cross-entropy-loss x p))
+			          (list *v3* (linalg:from-list '(0.7 0.2 0.1))))
 			(if (null *gc-failures*)
 			    (print 'all-ok)
 			    (print (reverse *gc-failures*)))
@@ -269,6 +278,8 @@ public final class TorchGradcheck {
 			cross-entropy-ignore: ok
 			cross-entropy-rank3: ok
 			cross-entropy-sum: ok
+			cross-entropy-soft: ok
+			cross-entropy-soft-rank1: ok
 			ALL-OK""";
 
 	/**

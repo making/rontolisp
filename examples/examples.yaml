@@ -427,6 +427,40 @@ examples:
     backends: [jvm-compile, wasm-component]
     note: reads dataset/t10k-*-ubyte + ch08/deep-convnet-params.bin
 
+  # --- llm-from-scratch: the book's Transformer chapter, ported (README.md) ---
+  # Deterministic on every backend: every weight, dropout mask and epoch shuffle
+  # comes from the seeded linalg generator (integer arithmetic, bit-identical
+  # everywhere), and every printed float is rounded to a few decimals so the
+  # low-order digits of the WASM exp/log/sin approximations cannot show through.
+  # section5 is the training program -- it is the slow one, ~2 min on the plain
+  # interpreter, which is why its shapes are the shrunken ones its README
+  # documents next to the book's.
+  - path: llm-from-scratch/transformer/shapes.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: attention.py's __main__ plus the same shape check for the whole model -- shapes and counts only, so nothing float-sensitive is printed
+    expect:
+      file: .expected/llm-shapes.txt
+  - path: llm-from-scratch/chapter02/section2.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: notebook 2.2 -- attention as pure linalg, no autograd and no modules
+    expect:
+      file: .expected/llm-section2.txt
+  - path: llm-from-scratch/chapter02/section3.lisp
+    backends: [interpreter, jvm, wasm]
+    note: notebook 2.3 -- embedding shapes, the positional encoding and its dot products, the feed-forward block, the FFN-vs-SkipConnection identity training, LayerNorm
+    expect:
+      file: .expected/llm-section3.txt
+  - path: llm-from-scratch/chapter02/section4.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: notebook 2.4 -- cross entropy between discretised Gaussians, against a uniform, the one-hot case and a probability target
+    expect:
+      file: .expected/llm-section4.txt
+  - path: llm-from-scratch/chapter02/section5.lisp
+    backends: [interpreter, jvm, wasm]
+    note: notebook 2.5 -- the masks, the vocabulary, and a Transformer trained on the in-file 12-pair ja->en corpus then decoded greedily
+    expect:
+      file: .expected/llm-section5.txt
+
   # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
   - path: console/mandelbrot-nogc.lisp
     backends: [no-gc, wasm-component]

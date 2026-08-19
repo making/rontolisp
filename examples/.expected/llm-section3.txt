@@ -1,0 +1,29 @@
+embedding table:  (100 512)
+embedded tokens:  (3 512)
+embedded batch:   (2 3 512)
+encoding shape:   (100 128)
+first four dimensions of the first four positions:
+  pos 0: 0.0000 1.0000 0.0000 1.0000
+  pos 1: 0.8415 0.5403 0.7617 0.6479
+  pos 2: 0.9093 -0.4161 0.9870 -0.1604
+  pos 3: 0.1411 -0.9900 0.5173 -0.8558
+row norms equal:  yes
+dot product by position difference (theory vs measured):
+  offset 00:   64.00  max deviation < 1e-6: yes
+  offset 01:   62.09  max deviation < 1e-6: yes
+  offset 02:   57.38  max deviation < 1e-6: yes
+  offset 05:   47.19  max deviation < 1e-6: yes
+  offset 20:   38.93  max deviation < 1e-6: yes
+  offset 50:   34.96  max deviation < 1e-6: yes
+feed-forward in:  (1 10 64)
+feed-forward out: (1 10 64)
+identity training (mean squared error):
+  epoch 00: FFN 1.1258  SkipConnection 0.0736
+  epoch 10: FFN 0.4507  SkipConnection 0.0058
+  epoch 20: FFN 0.1539  SkipConnection 0.0023
+  epoch 30: FFN 0.0778  SkipConnection 0.0008
+  final:   FFN 0.0397  SkipConnection 0.0004
+  the residual block starts and finishes lower: yes
+normalized shape: (20 5 10)
+feature mean:     0.000000
+feature std:      1.000000

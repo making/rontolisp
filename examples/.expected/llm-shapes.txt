@@ -1,0 +1,7 @@
+dot-product-attention:        (2 3 16)
+scaled-dot-product-attention: (2 3 16)
+multi-head-attention:         (2 3 16)
+multi-head parameters:        26 tensors
+transformer logits:           (2 5 13)
+transformer parameters:       195 tensors
+greedy decode length:         7 tokens

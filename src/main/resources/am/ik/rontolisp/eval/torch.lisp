@@ -1157,22 +1157,62 @@
           ((= (length (array-dimensions iv)) 1) iv)
           (t (linalg:reshape iv (list n))))))
 
+(defun torch::%m-ce-soft-p (shape targets)
+  ;; Whether the target operand is a full probability DISTRIBUTION rather than
+  ;; class indices: a tensor or a raw array whose shape equals the logits'.
+  ;; A number, a list and an index vector are always class indices -- a list of
+  ;; the class count would otherwise be ambiguous with an unbatched
+  ;; distribution, so the probability spelling requires a tensor or an array.
+  (let ((v
+         (cond ((torch:tensorp targets) (aref targets 1))
+               ((and (arrayp targets) (not (stringp targets))) targets)
+               (t nil))))
+    (if (or (null v) (numberp v)) nil (equal (array-dimensions v) shape))))
+
+(defun torch::%m-ce-soft (x p n reduction)
+  ;; The probability-target cross entropy of the flattened (n classes) logits x
+  ;; against the matching distribution p: -sum(p * log-softmax(x)) per position.
+  (let ((per
+         (torch:neg
+          (torch:sum (torch:mul p (torch:log-softmax x :axis 1)) :axis 1))))
+    (if (eq reduction :mean)
+        (torch:div (torch:sum per) n)
+        (torch::%m-reduce-loss per reduction))))
+
 (defun torch:cross-entropy-loss
     (logits targets &key ignore-index (reduction :mean))
-  ;; Cross entropy over raw LOGITS and integer class targets
-  ;; (nn.CrossEntropyLoss): logits of shape (... num-classes) -- the leading axes
-  ;; are flattened, so (batch seq vocab) works directly -- and targets of the
-  ;; matching leading shape. Computed as -log-softmax picked at the target class,
-  ;; which is the numerically stable form. :ignore-index k drops every position
-  ;; whose target is k from BOTH the sum and the mean's denominator (the padding
-  ;; positions of a batch must not contribute); :reduction :sum adds instead of
-  ;; averaging, :none returns the per-position tensor.
+  ;; Cross entropy over raw LOGITS (nn.CrossEntropyLoss): logits of shape
+  ;; (... num-classes) -- the leading axes are flattened, so (batch seq vocab)
+  ;; works directly. The target is either
+  ;;
+  ;;   * integer CLASS INDICES of the matching leading shape (a number, a list,
+  ;;     an index vector or a tensor): computed as -log-softmax picked at the
+  ;;     target class, which is the numerically stable form. :ignore-index k
+  ;;     drops every position whose target is k from BOTH the sum and the mean's
+  ;;     denominator (the padding positions of a batch must not contribute);
+  ;;
+  ;;   * or class PROBABILITIES -- a tensor or array of the logits' own shape,
+  ;;     PyTorch's soft-label form: -sum(target * log-softmax(logits)) per
+  ;;     position. :ignore-index does not apply to it (there is no single class
+  ;;     to drop), exactly like PyTorch.
+  ;;
+  ;; :reduction :sum adds instead of averaging, :none returns the per-position
+  ;; tensor.
   (let* ((tl (torch::%t-wrap logits))
          (d (torch:shape tl))
          (c (car (last d)))
          (n (linalg::%la-head-size d (- (length d) 1)))
-         (x (if (= (length d) 2) tl (torch:reshape tl (list n c))))
-         (iv (torch::%m-ce-indices targets n))
+         (x (if (= (length d) 2) tl (torch:reshape tl (list n c)))))
+    (if (torch::%m-ce-soft-p d targets)
+        (let ((tp (torch::%t-wrap targets)))
+          (torch::%m-ce-soft x
+           (if (= (length d) 2) tp (torch:reshape tp (list n c))) n reduction))
+        (torch::%m-ce-hard x n targets ignore-index reduction))))
+
+(defun torch::%m-ce-hard (x n targets ignore-index reduction)
+  ;; The class-index cross entropy: -log-softmax gathered at the target class,
+  ;; with the :ignore-index positions dropped from the sum and the denominator.
+  (let* ((iv (torch::%m-ce-indices targets n))
          (drop (if (null ignore-index) nil (linalg:equal iv ignore-index)))
          (keep (if (null drop) nil (linalg:sub 1.0 drop)))
          (safe (if (null drop) iv (linalg:where drop 0.0 iv)))
