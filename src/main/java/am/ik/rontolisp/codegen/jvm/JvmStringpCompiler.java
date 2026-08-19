@@ -26,6 +26,20 @@ final class JvmStringpCompiler {
 		int tempSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(tempSlot);
+		emitStringpCheck(ctx, tempSlot);
+	}
+
+	/**
+	 * Pushes the {@code stringp} result (the {@code t} symbol, or {@code null} for nil)
+	 * for the value held in {@code tempSlot}: a quote-framed {@code java.lang.String}, or
+	 * -- when the array runtime helpers are emitted -- a mutable character vector. Split
+	 * out from {@link #compile} so the packed {@code array-element-type} lowering can
+	 * branch on the same check and answer {@code character} for a string without re-doing
+	 * it.
+	 * @param ctx the compilation context
+	 * @param tempSlot the local holding the value to test
+	 */
+	static void emitStringpCheck(JvmLispCompiler.Ctx ctx, int tempSlot) {
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(tempSlot);
 		ctx.emit(Opcode.INSTANCEOF);

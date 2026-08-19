@@ -3293,6 +3293,22 @@ cases:
       (4 4)
       (1 5 T)
       (#(99 8 5) #(5 8 5) 3 T)
+  # A string IS a vector (and a vector IS an array), so array-element-type answers the one
+  # character type for it -- the same arm vectorp/length/aref/elt already take. The general
+  # vector keeps the lite element type t and the packed integer vector its (unsigned-byte N)
+  # answer, so the #8@ literal in the same program also pins the packed (runtime-helper) path
+  # on the JVM. The related array-dimensions/array-rank/array-total-size/adjustable-array-p/
+  # array-has-fill-pointer-p still reject a string on the compile paths (.todo/369) and are
+  # deliberately not covered here.
+  - name: array-element-type-on-a-string-cross-backend
+    source: |
+      (defun ci-aet-string ()
+        (print (list (array-element-type "abc")
+                     (array-element-type #(1 2 3))
+                     (array-element-type #8@(1 2 3)))))
+      (ci-aet-string)
+    expected: |
+      (CHARACTER T (UNSIGNED-BYTE 8))
   - name: adjust-displaced-arrays-cross-backend
     source: |
       (defun ci-adjust-displaced ()

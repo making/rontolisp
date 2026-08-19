@@ -728,6 +728,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void arrayElementTypeOnAStringAnswersCharacter() throws Exception {
+		// A string is a vector of characters, so it answers the one character type,
+		// before
+		// the packed/general dispatch. A general vector still answers t; a packed integer
+		// vector keeps its (unsigned-byte N) answer. The quote-framed string and the
+		// mutable character vector (a make-string result) must both answer character.
+		assertThat(compileAndRun("""
+				(print (array-element-type "abc"))
+				(print (array-element-type #(1 2 3)))
+				(print (array-element-type #8@(1 2)))
+				(print (array-element-type (make-string 3)))
+				""")).isEqualTo("""
+				CHARACTER
+				T
+				(UNSIGNED-BYTE 8)
+				CHARACTER""");
+	}
+
+	@Test
 	void theLoweredOnlyBuiltinsAreFirstClassFunctionValues() throws Exception {
 		// The sweep: every CL FUNCTION this compiler lowers in operator position must
 		// also have a wrapper, or #'name is undefined here while the interpreter

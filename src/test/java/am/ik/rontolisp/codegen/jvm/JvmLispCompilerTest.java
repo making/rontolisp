@@ -4752,6 +4752,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunArrayElementTypeOnAStringAnswersCharacter() throws Exception {
+		// A string is a vector of characters, so it answers the one character type -- the
+		// general (macro) path and the packed (runtime-helper) path must agree, and both
+		// must match the interpreter. A general vector still answers t.
+		assertThat(compileAndRun("""
+				(print (array-element-type "abc"))
+				(print (array-element-type #(1 2 3)))
+				""")).isEqualTo("""
+				CHARACTER
+				T""");
+		// With a packed representation in play the same call goes through the runtime
+		// helper; a string still answers character there.
+		assertThat(compileAndRun("""
+				(print (array-element-type (make-array 3 :element-type '(unsigned-byte 8))))
+				(print (array-element-type "abc"))
+				""")).isEqualTo("""
+				(UNSIGNED-BYTE 8)
+				CHARACTER""");
+	}
+
+	@Test
 	void compileAndRunCoerceKeepsThePackedElementType() throws Exception {
 		// coerce reads the SAME result-type designator concatenate does, so a packed
 		// element type means a packed vector there too. Both routes are exercised: a

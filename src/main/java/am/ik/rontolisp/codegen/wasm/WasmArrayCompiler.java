@@ -1624,16 +1624,25 @@ final class WasmArrayCompiler {
 	}
 
 	static void compileElementType(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		// (array-element-type array): the symbol single-float / double-float for a packed
-		// farray (by the data array's width), else t (the general array's lite element
-		// type, matching the (progn arr t) expansion). Emitted unconditionally -- the
-		// farray types always exist on the GC backend.
+		// (array-element-type array): character for a string (a string is a vector of
+		// characters, the one character type); the symbol single-float / double-float for
+		// a packed farray (by the data array's width); the list (unsigned-byte 8|16|32)
+		// for a packed integer vector; else t (the general array's lite element type,
+		// matching the (if (stringp arr) 'character t) expansion). Emitted
+		// unconditionally
+		// -- the farray types always exist on the GC backend.
 		List<LispVal> args = cons.toList();
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("array-element-type expects 1 argument, got " + (args.size() - 1));
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		// A string answers character before the packed/general dispatch: the synthesized
+		// name is unspelled (real run-time data, and character is also a function name).
+		WasmStringpCompiler.emitStringpI32(ctx, arrSlot);
+		emitIfEq(ctx);
+		WasmEmitHelper.compileUnspelledLiteral(LispNames.CHARACTER_TYPE, ctx);
+		ctx.writer.write(Instruction.ELSE);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
 		// packed: single-float when the data array is a TYPE_F32ARR (--simd: when the
@@ -1680,6 +1689,7 @@ final class WasmArrayCompiler {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.ELSE);
 		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}

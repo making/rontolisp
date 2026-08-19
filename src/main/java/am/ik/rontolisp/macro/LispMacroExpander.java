@@ -22013,16 +22013,21 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (array-element-type array) into {@code (progn array t)} on the compile
-	 * path: element types are not tracked, so the answer is always the symbol {@code t}
-	 * (matching the interpreter built-in), and the array expression is kept only for its
-	 * evaluation.
+	 * Expands (array-element-type array) into {@code (if (stringp array) 'character t)}
+	 * on the compile path: a string is a vector of characters, so it answers
+	 * {@code character} (the one character type), and a general array answers {@code t}
+	 * because element types are not tracked. The array expression is evaluated once, as
+	 * the {@code stringp} argument, and the synthesized {@code character} name is an
+	 * unspelled quote -- real run-time data, not a spelling the program wrote
+	 * ({@code character} is also a function name, which a plain quote would arm in the
+	 * funcall-dispatch gate).
 	 * @param cons the array-element-type expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandArrayElementType(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		return listToCons(List.of(new LispSymbol(LispNames.PROGN), parts.get(1), LispTrue.INSTANCE));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), fmtCall(LispNames.STRINGP, parts.get(1)),
+				unspelledQuoteOf(LispNames.CHARACTER_TYPE), LispTrue.INSTANCE));
 	}
 
 	/**

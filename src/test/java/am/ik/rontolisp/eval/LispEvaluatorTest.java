@@ -1365,6 +1365,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalArrayElementTypeOnAStringAnswersCharacter() {
+		// A string IS a vector (and a vector IS an array), so its element type is the one
+		// character type -- the same answer vectorp/length/aref give for a string, and
+		// the
+		// CL answer. A general vector still answers t (element types are not tracked).
+		assertThat(eval("(array-element-type \"abc\")").print()).isEqualTo("CHARACTER");
+		// A mutable character vector (a fill-pointered string) is a string too.
+		assertThat(eval("(array-element-type (make-array 3 :element-type 'character :fill-pointer 2))").print())
+			.isEqualTo("CHARACTER");
+		// A general vector is not a string: it keeps the lite element type.
+		assertThat(eval("(array-element-type #(1 2 3))").print()).isEqualTo("T");
+	}
+
+	@Test
 	void evalCoerceKeepsThePackedElementType() {
 		// The same result-type designator means the same thing whichever operator reads
 		// it: (coerce seq '(vector (unsigned-byte 8))) is the packed vector concatenate
