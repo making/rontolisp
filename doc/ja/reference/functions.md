@@ -587,9 +587,12 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 (パッケージは `cl` を使用しません)。すべての演算はテンソル、数値、配列、リストを
 オペランドに取り、`linalg` カーネルを通じて計算するため `--simd` は torch プログ
 ラムもそのまま加速します。テンソル自体は生のレコードとして印字されるので、結果は
-`torch:data` / `torch:item` / `torch:grad` で読み戻してください。表の後半は `nn`
-スタイルのモジュール層です。モジュールはフィールドのプロパティリストにパラメータ
-を持ち、合成でき、`torch:forward` で実行します。唯一のマクロ `torch:no-grad` は
+`torch:data` / `torch:item` / `torch:grad` で読み戻してください。表の中ほどは
+`nn` スタイルのモジュール層です。モジュールはフィールドのプロパティリストにパラ
+メータを持ち、合成でき、`torch:forward` で実行します。最後の部分はモデルを学習
+実行に変えるためのもので、`torch:step` が全パラメータをその場で更新するオプティ
+マイザと、`Dataset`/`DataLoader` の階層ではなく素の関数として提供されるバッチ
+化・パディング・マスクの補助関数です。唯一のマクロ `torch:no-grad` は
 [マクロのページ](macros/torch-no-grad.md)にあります。
 
 | Function | Example | Result |
@@ -654,6 +657,18 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `torch:dropout` | `(torch:dropout 0.1)` | inverted dropout。評価モードでは恒等写像 |
 | `torch:mse-loss` | `(torch:mse-loss y target)` | 平均二乗誤差 (`:reduction :mean` / `:sum` / `:none`) |
 | `torch:cross-entropy-loss` | `(torch:cross-entropy-loss logits idx)` | ロジットに対する交差エントロピー (`:ignore-index` でパディングを除外) |
+| `torch:optimizer` | `(torch:optimizer :k ps fields fn)` | ユーザー定義オプティマイザ。種別、パラメータ、fields plist、ステップ関数 |
+| `torch:optimizerp` | `(torch:optimizerp x)` | オプティマイザなら `T`、それ以外は `NIL` |
+| `torch:optimizer-kind` | `(torch:optimizer-kind o)` | オプティマイザの種別キーワード |
+| `torch:optimizer-params` | `(torch:optimizer-params o)` | オプティマイザが更新するパラメータテンソル |
+| `torch:step` | `(torch:step o)` | 更新則を全パラメータに適用 (その場で更新、テープ外) |
+| `torch:step-count` | `(torch:step-count o)` | `torch:step` の実行回数 (Adam の `t`) |
+| `torch:sgd` | `(torch:sgd model :lr 0.1)` | SGD。`:momentum` / `:weight-decay` も指定可 |
+| `torch:adam` | `(torch:adam model :lr 0.001)` | Adam (`:betas`、`:eps`)。初回からバイアス補正済み |
+| `torch:pad-sequence` | `(torch:pad-sequence seqs)` | 可変長シーケンスをバッチ先頭のパディング済みテンソルに |
+| `torch:shuffled-batches` | `(torch:shuffled-batches n 32)` | シード付き生成器によるミニバッチ (`:shuffle`、`:drop-last`) |
+| `torch:padding-mask` | `(torch:padding-mask tokens)` | パディング位置の `(batch 1 length)` マスク (生の配列) |
+| `torch:subsequent-mask` | `(torch:subsequent-mask 8)` | 対角より上が `1.0` の `(1 n n)` 因果マスク (生の配列) |
 
 ## java パッケージの関数
 

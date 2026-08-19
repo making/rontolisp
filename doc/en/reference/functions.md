@@ -624,9 +624,12 @@ with the `torch:` qualifier (the package does not use `cl`). Every operation
 accepts tensors, numbers, arrays or lists as operands, computes through the
 `linalg` kernels (so `--simd` accelerates torch programs for free), and a
 tensor prints as its raw record -- read results back with `torch:data` /
-`torch:item` / `torch:grad`. The second half of the table is the `nn`-style
-module layer: a module owns its parameters in a fields plist, composes, and is
-run with `torch:forward`. The one macro, `torch:no-grad`, is on the
+`torch:item` / `torch:grad`. The middle of the table is the `nn`-style module
+layer: a module owns its parameters in a fields plist, composes, and is run with
+`torch:forward`. The last part is what turns a model into a training run: the
+optimizers, whose `torch:step` updates every parameter in place, and the
+batching / padding / mask helpers, which are plain functions rather than a
+`Dataset`/`DataLoader` hierarchy. The one macro, `torch:no-grad`, is on the
 [Macros page](macros/torch-no-grad.md).
 
 | Function | Example | Result |
@@ -691,6 +694,18 @@ run with `torch:forward`. The one macro, `torch:no-grad`, is on the
 | `torch:dropout` | `(torch:dropout 0.1)` | inverted dropout; the identity in evaluation mode |
 | `torch:mse-loss` | `(torch:mse-loss y target)` | mean squared error (`:reduction :mean` / `:sum` / `:none`) |
 | `torch:cross-entropy-loss` | `(torch:cross-entropy-loss logits idx)` | cross entropy over logits (`:ignore-index` skips padding) |
+| `torch:optimizer` | `(torch:optimizer :k ps fields fn)` | a user optimizer: a kind, parameters, a fields plist and a step function |
+| `torch:optimizerp` | `(torch:optimizerp x)` | `T` for an optimizer, `NIL` otherwise |
+| `torch:optimizer-kind` | `(torch:optimizer-kind o)` | the optimizer's kind keyword |
+| `torch:optimizer-params` | `(torch:optimizer-params o)` | the parameter tensors the optimizer updates |
+| `torch:step` | `(torch:step o)` | applies the update rule to every parameter (in place, off the tape) |
+| `torch:step-count` | `(torch:step-count o)` | how many times `torch:step` has run (Adam's `t`) |
+| `torch:sgd` | `(torch:sgd model :lr 0.1)` | SGD, optionally with `:momentum` / `:weight-decay` |
+| `torch:adam` | `(torch:adam model :lr 0.001)` | Adam (`:betas`, `:eps`), bias-corrected from the first step |
+| `torch:pad-sequence` | `(torch:pad-sequence seqs)` | variable-length sequences as one padded batch-first tensor |
+| `torch:shuffled-batches` | `(torch:shuffled-batches n 32)` | mini-batches from the seeded generator (`:shuffle`, `:drop-last`) |
+| `torch:padding-mask` | `(torch:padding-mask tokens)` | `(batch 1 length)` mask of the padding positions (a raw array) |
+| `torch:subsequent-mask` | `(torch:subsequent-mask 8)` | `(1 n n)` causal mask, `1.0` above the diagonal (a raw array) |
 
 ## java Package Functions
 

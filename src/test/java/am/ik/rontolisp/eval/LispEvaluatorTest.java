@@ -10179,12 +10179,12 @@ class LispEvaluatorTest {
 				""");
 		assertThat(result.print()).isEqualTo("(T NIL :OUTER 3 #d(2.0 5.0) (NIL NIL) T #d(0.0 2.0))");
 		assertThatThrownBy(() -> eval("(torch:field (torch:sequential) :nope)"))
-			.hasMessageContaining("torch: no such module field");
+			.hasMessageContaining("torch: no such field");
 		assertThatThrownBy(() -> eval("(torch:parameters (torch:tensor 1.0))"))
 			.hasMessageContaining("torch: expected a module");
 		assertThatThrownBy(() -> eval("(torch:forward 5 1)")).hasMessageContaining("torch: forward expects a module");
 		assertThatThrownBy(() -> eval("(torch:zero-grad 5)"))
-			.hasMessageContaining("torch: zero-grad expects a tensor or a module");
+			.hasMessageContaining("torch: zero-grad expects a tensor, a module or an optimizer");
 	}
 
 	@Test
@@ -10228,6 +10228,16 @@ class LispEvaluatorTest {
 		// (am.ik.rontolisp.testsupport.TorchGradcheck, shared verbatim with the JVM
 		// and WASM backends). A failing row prints its diagnosis instead of ALL-OK.
 		LispVal result = evalMulti(am.ik.rontolisp.testsupport.TorchGradcheck.PROGRAM);
+		assertThat(result.print()).isEqualTo("ALL-OK");
+	}
+
+	@Test
+	void torchOptimizerRulesAndTrainingPlumbing() {
+		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM), shared
+		// verbatim with the JVM and WASM backends: the SGD/Adam update rules against
+		// hand-computed values, the batching and mask helpers, and the
+		// residual-vs-plain identity-learning experiment.
+		LispVal result = evalMulti(am.ik.rontolisp.testsupport.TorchGradcheck.OPTIMIZER_PROGRAM);
 		assertThat(result.print()).isEqualTo("ALL-OK");
 	}
 

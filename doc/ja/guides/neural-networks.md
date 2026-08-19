@@ -138,9 +138,51 @@
 ; => 0.6931471805599453
 ```
 
+## オプティマイザ
+
+**オプティマイザ**は更新則とその状態を持ちます。`torch:sgd` と `torch:adam` はモデル (またはパラメータのリスト) を受け取り、ハイパーパラメータとバッファをモジュールとまったく同じ fields plist に保持し、`torch:step` ですべてのパラメータに更新則を適用します:
+
+```lisp
+(defparameter *p* (torch:parameter '(1.0 2.0)))
+(defparameter *opt* (torch:sgd (list *p*) :lr 0.125 :momentum 0.5))
+(torch:backward (torch:sum (torch:mul *p* *p*)))
+(torch:step *opt*)
+(torch:data *p*)         ; => #d(0.75 1.5)
+(torch:step-count *opt*) ; => 1
+```
+
+更新は各パラメータのデータを**その場で**書き換え、torch の演算を一切使いません。したがってテープには何も記録されず、`torch:set-data` で手書きした更新と違って `torch:no-grad` で囲む必要がありません。状態 (モーメンタムバッファ、Adam の 2 つのモーメント、バイアス補正が割るステップ数) はパラメータではなくオプティマイザが持つので、同じ重みに対する 2 つのオプティマイザは別々の状態を保ちます。
+
+ハイパーパラメータは普通のフィールドで、学習率スケジュールに必要なのはそれだけです。`torch:zero-grad` はモデルだけでなくオプティマイザも受け取ります:
+
+```lisp
+(defparameter *adam* (torch:adam (torch:linear 2 2) :lr 0.001))
+(torch:field *adam* :lr)                              ; => 0.001
+(torch:field (torch:set-field *adam* :lr 0.0005) :lr) ; => 5.0e-4
+```
+
+両者が乗っているコンストラクタが `torch:optimizer` です。種別キーワード、パラメータ、fields plist、ステップ関数からなるので、このパッケージが用意していない更新則も同じレコードの上の素の defun として書けます。
+
 ## ネットワークを学習させる
 
-以上を組み合わせると学習ループになります。順伝播、損失、モデルに対する `torch:zero-grad`、`torch:backward`、そして `torch:no-grad` の中で `torch:parameters` を回るパラメータ更新です。`torch:set-data` はレイヤーのフィールドが指しているテンソルそのものに新しい値を書き込むため、モデルは同じテンソルを使い続けます:
+以上を組み合わせると、PyTorch が書くのと同じループになります。順伝播、損失、`torch:zero-grad`、`torch:backward`、`torch:step` です:
+
+```lisp
+(linalg:seed 3)
+(defparameter *mlp*
+  (torch:sequential (torch:linear 2 8) (function torch:relu) (torch:linear 8 1)))
+(defparameter *xs* (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
+(defparameter *ys* (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
+(defparameter *sgd* (torch:sgd *mlp* :lr 0.2))
+(dotimes (i 200)
+  (let ((loss (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)))
+    (torch:zero-grad *sgd*)
+    (torch:backward loss)
+    (torch:step *sgd*)))
+(< (torch:item (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)) 1.0e-6) ; => T
+```
+
+更新を手書きする場合は `torch:no-grad` で囲む必要があります。パラメータに対する `torch:sub` はテープに記録されてしまうからです。`torch:set-data` はレイヤーのフィールドが指しているテンソルそのものに新しい値を書き込むため、モデルは同じテンソルを使い続けます:
 
 ```lisp
 (defun sgd-step (model lr)
@@ -148,18 +190,30 @@
     (dolist (p (torch:parameters model))
       (torch:set-data p (linalg:sub (torch:data p)
                                     (linalg:mul lr (torch:grad p)))))))
-(linalg:seed 3)
-(defparameter *mlp*
-  (torch:sequential (torch:linear 2 8) (function torch:relu) (torch:linear 8 1)))
-(defparameter *xs* (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
-(defparameter *ys* (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
-(dotimes (i 200)
-  (let ((loss (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)))
-    (torch:zero-grad *mlp*)
-    (torch:backward loss)
-    (sgd-step *mlp* 0.2)))
-(< (torch:item (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)) 1.0e-6) ; => T
+(sgd-step *mlp* 0.2)
+(torch:training-p *mlp*) ; => T
 ```
+
+## バッチ化、パディング、マスク
+
+`Dataset`/`DataLoader` の階層はありません。バッチは普通のリストです。`torch:shuffled-batches` は例のリスト (または整数 `n`。インデックスリスト `0..n-1` を表し、複数の並行した配列を同時にバッチ化するときの書き方です) をミニバッチに切り分けます。順序はシード付き生成器から得られるので、エポックはどのバックエンドでも再現します:
+
+```lisp
+(linalg:seed 1)
+(torch:shuffled-batches 7 3)                       ; => ((6 0 5) (1 4 3) (2))
+(torch:shuffled-batches '(a b c d) 2 :shuffle nil) ; => ((A B) (C D))
+```
+
+`torch:pad-sequence` は可変長のインデックス列のバッチを、バッチ先頭のパディング済みランク 2 テンソル 1 つにまとめます。2 つのマスク構築関数は、アテンションが `-infinity` で埋める定数を作ります:
+
+```lisp
+(defparameter *tokens* (torch:pad-sequence '((1 2 3) (4 5))))
+(torch:data *tokens*)         ; => #d((1.0 2.0 3.0) (4.0 5.0 0.0))
+(torch:padding-mask *tokens*) ; => #d(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
+(torch:subsequent-mask 3)     ; => #d(((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0)))
+```
+
+どちらのマスクも**生の linalg 配列**です (マスクは勾配を運びません)。形は `(batch query-length key-length)` のスコアにブロードキャストするよう決めてあり、パディングマスクは `(batch 1 length)`、因果マスクは `(1 n n)` です。`torch:masked-fill` は 0 でない値をすべてマスク扱いするので、2 つは `linalg:add` で合成できます。ここで選んだパディング値は、そのまま `torch:cross-entropy-loss` の `:ignore-index` に渡す値でもあり、パディング位置は損失に寄与しなくなります。
 
 ## マスク付きアテンションスコア
 

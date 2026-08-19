@@ -1,10 +1,11 @@
 package am.ik.rontolisp.testsupport;
 
 /**
- * The two shared {@code torch} acceptance programs, run verbatim by the interpreter, JVM
- * and WASM test classes so all backends execute the identical source: {@link #PROGRAM},
- * the table-driven gradient check, and {@link #NN_TRAINING_PROGRAM}, the nn-module
- * training loop.
+ * The three shared {@code torch} acceptance programs, run verbatim by the interpreter,
+ * JVM and WASM test classes so all backends execute the identical source:
+ * {@link #PROGRAM}, the table-driven gradient check, {@link #NN_TRAINING_PROGRAM}, the
+ * nn-module training loop, and {@link #OPTIMIZER_PROGRAM}, the optimizer update rules
+ * plus the training-loop plumbing.
  *
  * <p>
  * The gradient check: for every differentiable operation, the analytic gradient
@@ -268,6 +269,210 @@ public final class TorchGradcheck {
 			cross-entropy-ignore: ok
 			cross-entropy-rank3: ok
 			cross-entropy-sum: ok
+			ALL-OK""";
+
+	/**
+	 * The optimizer acceptance program: the {@code torch:sgd} / {@code torch:adam} update
+	 * rules checked against hand-computed PyTorch values (one step, an L2 term, a
+	 * momentum sequence, and Adam's fully bias-corrected first step -- the classic
+	 * off-by-one), the batching and mask helpers, and the identity-learning experiment
+	 * from the book's chapter 2.3.4: the same two-layer feed-forward block trained by
+	 * Adam with and without a skip connection around it. Prints one {@code name: ok} line
+	 * per row and {@code ALL-OK} at the end, like {@link #PROGRAM}; the numeric rows
+	 * compare to a relative 1e-9, so a backend's last-ulp difference in {@code expt} is
+	 * not a failure while a wrong rule is.
+	 */
+	public static final String OPTIMIZER_PROGRAM = """
+			;; The optimizer rules against hand-computed PyTorch values, the batching and
+			;; mask helpers, and the residual-vs-plain identity-learning experiment.
+			(defparameter *oc-failures* nil)
+			(defun oc-flat (v)
+			  ;; A tensor, a linalg array or a number as a flat list of numbers.
+			  (let ((x (if (torch:tensorp v) (torch:data v) v)))
+			    (cond ((numberp x) (list x))
+			          ((consp x) x)
+			          (t (linalg:to-list (linalg:flatten x))))))
+			(defun oc-report (name ok got)
+			  (unless ok
+			    (setq *oc-failures* (cons (format nil "~a: got ~a" name got) *oc-failures*)))
+			  (format t "~a: ~a~%" name (if ok "ok" "FAIL")))
+			(defun oc-num (name v want)
+			  ;; Every element of v within a relative 1e-9 of the hand-computed want.
+			  (let ((got (oc-flat v)) (ok t))
+			    (do ((p got (cdr p)) (q want (cdr q)))
+			        ((null q))
+			      (when (or (null p)
+			                (>= (abs (- (car p) (car q))) (* 1.0e-9 (max 1.0 (abs (car q))))))
+			        (setq ok nil)))
+			    (unless (= (length got) (length want)) (setq ok nil))
+			    (oc-report name ok got)))
+			(defun oc-eq (name got want) (oc-report name (equal got want) got))
+			(defun oc-sq (p) (torch:sum (torch:mul p p)))
+
+			;; --- SGD ---------------------------------------------------------------------
+			;; p = (1 2), grad of sum(p*p) = (2 4); lr 0.1 -> p - 0.1 * grad.
+			(defparameter *p* (torch:parameter '(1.0 2.0)))
+			(defparameter *o* (torch:sgd (list *p*) :lr 0.1))
+			(oc-eq "sgd-kind" (torch:optimizer-kind *o*) :sgd)
+			(oc-eq "sgd-params" (length (torch:optimizer-params *o*)) 1)
+			(oc-eq "step-count-0" (torch:step-count *o*) 0)
+			(torch:backward (oc-sq *p*))
+			(torch:step *o*)
+			(oc-num "sgd-1step" *p* '(0.8 1.6))
+			(oc-eq "step-count-1" (torch:step-count *o*) 1)
+			(torch:zero-grad *o*)
+			(oc-eq "zero-grad-optimizer" (torch:grad *p*) nil)
+			;; the same step with an L2 term: g = grad + 0.5 * p = (2.5 5.0) at p = (1 2).
+			(defparameter *pw* (torch:parameter '(1.0 2.0)))
+			(defparameter *ow* (torch:sgd (list *pw*) :lr 0.1 :weight-decay 0.5))
+			(torch:backward (oc-sq *pw*))
+			(torch:step *ow*)
+			(oc-num "sgd-weight-decay" *pw* '(0.75 1.5))
+			;; momentum 0.5 on q = 1, loss q*q: buf 2, 2.6, 2.38 -> q 0.8, 0.54, 0.302.
+			(defparameter *q* (torch:parameter '(1.0)))
+			(defparameter *om* (torch:sgd (list *q*) :lr 0.1 :momentum 0.5))
+			(defparameter *qs* nil)
+			(dotimes (i 3)
+			  (torch:zero-grad *om*)
+			  (torch:backward (oc-sq *q*))
+			  (torch:step *om*)
+			  (setq *qs* (cons (torch:item *q*) *qs*)))
+			(oc-num "sgd-momentum" (reverse *qs*) '(0.8 0.54 0.302))
+			;; a scalar parameter (data is a plain number, not an array)
+			(defparameter *s* (torch:parameter 3.0))
+			(defparameter *os* (torch:sgd (list *s*) :lr 0.5))
+			(torch:backward (torch:mul *s* *s*))
+			(torch:step *os*)
+			(oc-num "sgd-scalar" *s* '(0.0))
+			;; a parameter no gradient reached is left alone
+			(defparameter *pu* (torch:parameter '(5.0)))
+			(defparameter *ou* (torch:sgd (list *pu*) :lr 1.0))
+			(torch:step *ou*)
+			(oc-num "sgd-no-grad" *pu* '(5.0))
+
+			;; --- Adam --------------------------------------------------------------------
+			;; r = 1, loss r*r. t = 1: m = 0.2, v = 0.004, m/(1-b1) = 2, v/(1-b2) = 4,
+			;; step = lr * 2 / (2 + 1e-8) -- the fully bias-corrected first step, which is
+			;; what pins t = 1 rather than 0 or 2.
+			(defparameter *r* (torch:parameter '(1.0)))
+			(defparameter *oa* (torch:adam (list *r*) :lr 0.1))
+			(defparameter *rs* nil)
+			(dotimes (i 3)
+			  (torch:zero-grad *oa*)
+			  (torch:backward (oc-sq *r*))
+			  (torch:step *oa*)
+			  (setq *rs* (cons (torch:item *r*) *rs*)))
+			(oc-num "adam-3steps" (reverse *rs*)
+			        '(0.9000000005 0.8004122286917928 0.7015862729460303))
+			(oc-eq "adam-step-count" (torch:step-count *oa*) 3)
+			(oc-eq "adam-betas" (torch:field *oa* :betas) '(0.9 0.999))
+			;; the learning rate is an ordinary field, so a schedule is torch:set-field
+			(defparameter *r2* (torch:parameter '(1.0)))
+			(defparameter *oa2* (torch:adam (list *r2*) :lr 0.1))
+			(torch:set-field *oa2* :lr 0.2)
+			(torch:backward (oc-sq *r2*))
+			(torch:step *oa2*)
+			(oc-num "adam-set-lr" *r2* '(0.800000001))
+
+			;; --- batching and the masks --------------------------------------------------
+			(oc-num "pad-sequence" (torch:pad-sequence '((1 2 3) (4 5) (6)) :padding-value 9)
+			        '(1.0 2.0 3.0 4.0 5.0 9.0 6.0 9.0 9.0))
+			(oc-eq "pad-sequence-shape" (torch:shape (torch:pad-sequence '((1 2) (3)))) '(2 2))
+			(oc-num "padding-mask"
+			        (torch:padding-mask (torch:pad-sequence '((1 2 3) (4 5))) :pad-id 0)
+			        '(0.0 0.0 0.0 0.0 0.0 1.0))
+			(oc-num "subsequent-mask" (torch:subsequent-mask 3)
+			        '(0.0 1.0 1.0 0.0 0.0 1.0 0.0 0.0 0.0))
+			(linalg:seed 1)
+			(oc-eq "shuffled-batches" (torch:shuffled-batches 7 3) '((6 0 5) (1 4 3) (2)))
+			(oc-eq "shuffled-batches-order" (torch:shuffled-batches '(a b c d e) 2 :shuffle nil)
+			       '((a b) (c d) (e)))
+			(oc-eq "shuffled-batches-drop-last"
+			       (torch:shuffled-batches '(a b c d e) 2 :shuffle nil :drop-last t)
+			       '((a b) (c d)))
+
+			;; --- the residual experiment (book chapter 2.3.4) ----------------------------
+			;; Learning the identity with a two-layer feed-forward block, with and without
+			;; the skip connection around it, trained by Adam on the same data.
+			(defun ffn-forward (self x)
+			  (torch:forward (torch:field self :linear2)
+			                 (torch:relu (torch:forward (torch:field self :linear1) x))))
+			(defun make-ffn (d-model d-ff)
+			  (torch:module :ffn
+			                (list :linear1 (torch:linear d-model d-ff)
+			                      :linear2 (torch:linear d-ff d-model))
+			                (function ffn-forward)))
+			(defun skip-forward (self x)
+			  (torch:add x (torch:forward (torch:field self :sublayer) x)))
+			(defun make-skip (d-model d-ff)
+			  (torch:module :skip (list :sublayer (make-ffn d-model d-ff))
+			                (function skip-forward)))
+			(linalg:seed 7)
+			(defparameter *data* (torch:tensor (linalg:randn '(32 4))))
+			(defparameter *plain* (make-ffn 4 8))
+			(defparameter *res* (make-skip 4 8))
+			(defparameter *op* (torch:adam *plain* :lr 0.01))
+			(defparameter *or* (torch:adam *res* :lr 0.01))
+			(defparameter *first-plain* 0.0)
+			(defparameter *first-res* 0.0)
+			(defparameter *last-plain* 0.0)
+			(defparameter *last-res* 0.0)
+			(dotimes (i 40)
+			  (let ((lp (torch:mse-loss (torch:forward *plain* *data*) *data*))
+			        (lr (torch:mse-loss (torch:forward *res* *data*) *data*)))
+			    (when (= i 0)
+			      (setq *first-plain* (torch:item lp))
+			      (setq *first-res* (torch:item lr)))
+			    (setq *last-plain* (torch:item lp))
+			    (setq *last-res* (torch:item lr))
+			    (torch:zero-grad *op*)
+			    (torch:zero-grad *or*)
+			    (torch:backward lp)
+			    (torch:backward lr)
+			    (torch:step *op*)
+			    (torch:step *or*)))
+			(oc-eq "identity-parameters"
+			       (list (length (torch:parameters *plain*)) (length (torch:parameters *res*)))
+			       '(4 4))
+			(oc-eq "identity-learned"
+			       (list (< *last-plain* (* 0.5 *first-plain*))
+			             (< *last-res* (* 0.5 *first-res*))
+			             (< *first-res* *first-plain*)
+			             (< *last-res* *last-plain*))
+			       '(t t t t))
+			(if (null *oc-failures*)
+			    (print 'all-ok)
+			    (print (reverse *oc-failures*)))
+			""";
+
+	/**
+	 * The expected stdout of {@link #OPTIMIZER_PROGRAM}: one ok line per row, then
+	 * ALL-OK.
+	 */
+	public static final String OPTIMIZER_EXPECTED = """
+			sgd-kind: ok
+			sgd-params: ok
+			step-count-0: ok
+			sgd-1step: ok
+			step-count-1: ok
+			zero-grad-optimizer: ok
+			sgd-weight-decay: ok
+			sgd-momentum: ok
+			sgd-scalar: ok
+			sgd-no-grad: ok
+			adam-3steps: ok
+			adam-step-count: ok
+			adam-betas: ok
+			adam-set-lr: ok
+			pad-sequence: ok
+			pad-sequence-shape: ok
+			padding-mask: ok
+			subsequent-mask: ok
+			shuffled-batches: ok
+			shuffled-batches-order: ok
+			shuffled-batches-drop-last: ok
+			identity-parameters: ok
+			identity-learned: ok
 			ALL-OK""";
 
 }

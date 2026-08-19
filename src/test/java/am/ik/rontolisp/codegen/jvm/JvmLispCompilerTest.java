@@ -11005,6 +11005,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTorchOptimizerRules() throws Exception {
+		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM): the
+		// SGD/Adam rules against hand-computed values, the batching and mask helpers,
+		// and the residual-vs-plain identity-learning experiment -- the in-place
+		// element-wise parameter update compiled, plus the step-fn closure the
+		// optimizer record dispatches through.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.OPTIMIZER_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.OPTIMIZER_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunJsonParseReturnsHashTablesAndVectors() throws Exception {
 		assertThat(compileAndRunJson("""
 				(let ((h (rontolisp:json-parse "{\\"name\\": \\"rontolisp\\", \\"n\\": 2}")))

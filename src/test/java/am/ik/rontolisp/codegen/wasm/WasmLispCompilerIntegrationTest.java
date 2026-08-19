@@ -13402,6 +13402,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileTorchOptimizerRules() throws Exception {
+		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM) on the
+		// wasm-GC backend: the element-wise in-place parameter update, the optimizer
+		// record's step-fn closure, the seeded batch shuffle and the
+		// residual-vs-plain identity-learning experiment must all match the other
+		// backends.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.OPTIMIZER_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.OPTIMIZER_EXPECTED);
+	}
+
+	@Test
 	void compileRankThreeArrayRefSetAndPrint() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))

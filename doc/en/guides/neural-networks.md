@@ -138,9 +138,51 @@ The walk descends into submodules **and into lists of them**, and deduplicates b
 ; => 0.6931471805599453
 ```
 
+## Optimizers
+
+An **optimizer** owns the update rule and its state. `torch:sgd` and `torch:adam` take a model (or a plain list of parameters), keep their hyper-parameters and buffers in a fields plist exactly as a module does, and apply the rule to every parameter when `torch:step` runs:
+
+```lisp
+(defparameter *p* (torch:parameter '(1.0 2.0)))
+(defparameter *opt* (torch:sgd (list *p*) :lr 0.125 :momentum 0.5))
+(torch:backward (torch:sum (torch:mul *p* *p*)))
+(torch:step *opt*)
+(torch:data *p*)         ; => #d(0.75 1.5)
+(torch:step-count *opt*) ; => 1
+```
+
+The update writes each parameter's data **in place** and uses no torch operation, so it records nothing on the tape and needs no `torch:no-grad` around it -- unlike a hand-written update built from `torch:set-data`. The state (a momentum buffer, Adam's two moments, the step count its bias correction divides by) lives in the optimizer and never on the parameter, so two optimizers over the same weights keep separate state.
+
+Hyper-parameters are ordinary fields, which is all a learning-rate schedule needs, and `torch:zero-grad` accepts an optimizer as well as a model:
+
+```lisp
+(defparameter *adam* (torch:adam (torch:linear 2 2) :lr 0.001))
+(torch:field *adam* :lr)                              ; => 0.001
+(torch:field (torch:set-field *adam* :lr 0.0005) :lr) ; => 5.0e-4
+```
+
+`torch:optimizer` is the constructor both are built on -- a kind keyword, the parameters, a fields plist and a step function -- so a rule this package does not ship is a plain defun over the same record.
+
 ## Training a network
 
-Everything above composes into a training loop: forward, loss, `torch:zero-grad` on the model, `torch:backward`, then a parameter update over `torch:parameters` inside `torch:no-grad`. `torch:set-data` writes the new value into the very tensor the layer's fields point at, so the model keeps using it:
+Everything above composes into the loop PyTorch writes: forward, loss, `torch:zero-grad`, `torch:backward`, `torch:step`.
+
+```lisp
+(linalg:seed 3)
+(defparameter *mlp*
+  (torch:sequential (torch:linear 2 8) (function torch:relu) (torch:linear 8 1)))
+(defparameter *xs* (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
+(defparameter *ys* (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
+(defparameter *sgd* (torch:sgd *mlp* :lr 0.2))
+(dotimes (i 200)
+  (let ((loss (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)))
+    (torch:zero-grad *sgd*)
+    (torch:backward loss)
+    (torch:step *sgd*)))
+(< (torch:item (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)) 1.0e-6) ; => T
+```
+
+Writing the update by hand instead needs `torch:no-grad` around it, because `torch:sub` on a parameter would record on the tape; `torch:set-data` then writes the new value into the very tensor the layer's fields point at, so the model keeps using it:
 
 ```lisp
 (defun sgd-step (model lr)
@@ -148,18 +190,30 @@ Everything above composes into a training loop: forward, loss, `torch:zero-grad`
     (dolist (p (torch:parameters model))
       (torch:set-data p (linalg:sub (torch:data p)
                                     (linalg:mul lr (torch:grad p)))))))
-(linalg:seed 3)
-(defparameter *mlp*
-  (torch:sequential (torch:linear 2 8) (function torch:relu) (torch:linear 8 1)))
-(defparameter *xs* (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
-(defparameter *ys* (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
-(dotimes (i 200)
-  (let ((loss (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)))
-    (torch:zero-grad *mlp*)
-    (torch:backward loss)
-    (sgd-step *mlp* 0.2)))
-(< (torch:item (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)) 1.0e-6) ; => T
+(sgd-step *mlp* 0.2)
+(torch:training-p *mlp*) ; => T
 ```
+
+## Batching, padding and masks
+
+There is no `Dataset`/`DataLoader` hierarchy: a batch is an ordinary list. `torch:shuffled-batches` cuts a list of examples -- or an integer `n`, standing for the index list `0..n-1`, which is how several parallel arrays get batched at once -- into mini-batches ordered by the seeded generator, so an epoch reproduces on every backend:
+
+```lisp
+(linalg:seed 1)
+(torch:shuffled-batches 7 3)                       ; => ((6 0 5) (1 4 3) (2))
+(torch:shuffled-batches '(a b c d) 2 :shuffle nil) ; => ((A B) (C D))
+```
+
+`torch:pad-sequence` turns a batch of variable-length index sequences into one padded rank-2 tensor, batch first, and the two mask constructors build the constants an attention layer fills with `-infinity`:
+
+```lisp
+(defparameter *tokens* (torch:pad-sequence '((1 2 3) (4 5))))
+(torch:data *tokens*)         ; => #d((1.0 2.0 3.0) (4.0 5.0 0.0))
+(torch:padding-mask *tokens*) ; => #d(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
+(torch:subsequent-mask 3)     ; => #d(((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0)))
+```
+
+Both masks are **raw linalg arrays** -- a mask carries no gradient -- shaped to broadcast over a `(batch query-length key-length)` score: `(batch 1 length)` for the padding mask, `(1 n n)` for the causal one. They combine with `linalg:add`, since `torch:masked-fill` treats every non-zero as masked. The padding value chosen here is also the `:ignore-index` to pass to `torch:cross-entropy-loss`, so the padded positions leave the loss alone.
 
 ## Masked attention scores
 

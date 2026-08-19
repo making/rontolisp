@@ -4442,6 +4442,104 @@ cases:
       3.0
       4
       (T T)
+  # The torch optimizers and the training-loop plumbing: one SGD step, two
+  # momentum steps and Adam's first (fully bias-corrected) step over parameters
+  # whose values keep every SGD quantity an exact dyadic rational -- the learning
+  # rate is 0.125, so the printed doubles are byte-identical on all four backends;
+  # Adam's step involves a square root, so it is pinned as a tolerance predicate
+  # instead. Then the batching helpers (a padded batch, a padding mask, a causal
+  # mask, and the seeded shuffle, whose order is integer arithmetic and therefore
+  # identical everywhere) and the book's chapter-2 experiment: the same
+  # feed-forward block learning the identity with and without a skip connection
+  # around it, trained by torch:adam. The four predicates say both losses at least
+  # halved and the residual one both started and finished lower -- the point of the
+  # experiment -- rather than pinning a last digit.
+  - name: torch-optim-cross-backend
+    source: |
+      (defun ci-torch-ffn (self x)
+        (torch:forward (torch:field self :linear2)
+                       (torch:relu (torch:forward (torch:field self :linear1) x))))
+      (defun ci-torch-make-ffn (d-model d-ff)
+        (torch:module :ffn
+                      (list :linear1 (torch:linear d-model d-ff)
+                            :linear2 (torch:linear d-ff d-model))
+                      (function ci-torch-ffn)))
+      (defun ci-torch-skip (self x)
+        (torch:add x (torch:forward (torch:field self :sublayer) x)))
+      (defun ci-torch-make-skip (d-model d-ff)
+        (torch:module :skip (list :sublayer (ci-torch-make-ffn d-model d-ff))
+                      (function ci-torch-skip)))
+      (defun ci-torch-optim ()
+        (let* ((p (torch:parameter '(1.0 2.0))) (o (torch:sgd (list p) :lr 0.125)))
+          (print (list (torch:optimizer-kind o) (torch:optimizerp o)
+                       (length (torch:optimizer-params o)) (torch:step-count o)))
+          (torch:backward (torch:sum (torch:mul p p)))
+          (torch:step o)
+          (print (torch:data p))
+          (print (torch:step-count o))
+          (torch:zero-grad o)
+          (print (torch:grad p)))
+        (let* ((q (torch:parameter '(1.0)))
+               (o (torch:sgd (list q) :lr 0.125 :momentum 0.5)))
+          (dotimes (i 2)
+            (torch:zero-grad o)
+            (torch:backward (torch:sum (torch:mul q q)))
+            (torch:step o))
+          (print (torch:data q)))
+        (let* ((r (torch:parameter '(1.0))) (o (torch:adam (list r) :lr 0.125)))
+          (torch:backward (torch:sum (torch:mul r r)))
+          (torch:step o)
+          (print (list (torch:optimizer-kind o) (torch:step-count o)
+                       (torch:field o :betas)
+                       (< (abs (- (torch:item r) 0.875)) 1.0e-8))))
+        (print (torch:data (torch:pad-sequence '((1 2 3) (4 5)) :padding-value 7)))
+        (print (torch:padding-mask (torch:pad-sequence '((1 2 3) (4 5))) :pad-id 0))
+        (print (torch:subsequent-mask 3))
+        (linalg:seed 1)
+        (print (torch:shuffled-batches 7 3))
+        (print (torch:shuffled-batches '(a b c d e) 2 :shuffle nil))
+        (linalg:seed 7)
+        (let* ((data (torch:tensor (linalg:randn '(16 4))))
+               (plain (ci-torch-make-ffn 4 8))
+               (res (ci-torch-make-skip 4 8))
+               (opt-p (torch:adam plain :lr 0.01))
+               (opt-r (torch:adam res :lr 0.01))
+               (first-p 0.0)
+               (first-r 0.0)
+               (last-p 0.0)
+               (last-r 0.0))
+          (dotimes (i 20)
+            (let ((loss-p (torch:mse-loss (torch:forward plain data) data))
+                  (loss-r (torch:mse-loss (torch:forward res data) data)))
+              (when (= i 0)
+                (setq first-p (torch:item loss-p))
+                (setq first-r (torch:item loss-r)))
+              (setq last-p (torch:item loss-p))
+              (setq last-r (torch:item loss-r))
+              (torch:zero-grad opt-p)
+              (torch:zero-grad opt-r)
+              (torch:backward loss-p)
+              (torch:backward loss-r)
+              (torch:step opt-p)
+              (torch:step opt-r)))
+          (print (list (length (torch:parameters plain)) (length (torch:parameters res))))
+          (print (list (< last-p (* 0.5 first-p)) (< last-r (* 0.5 first-r))
+                       (< first-r first-p) (< last-r last-p)))))
+      (ci-torch-optim)
+    expected: |
+      (:SGD T 1 0)
+      #d(0.75 1.5)
+      1
+      NIL
+      #d(0.4375)
+      (:ADAM 1 (0.9 0.999) T)
+      #d((1.0 2.0 3.0) (4.0 5.0 7.0))
+      #d(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
+      #d(((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0)))
+      ((6 0 5) (1 4 3) (2))
+      ((A B) (C D) (E))
+      (4 4)
+      (T T T T)
   # Regression: uiop:getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline

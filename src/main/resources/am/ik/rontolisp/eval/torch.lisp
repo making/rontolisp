@@ -127,15 +127,21 @@
 (defun torch:zero-grad (x)
   ;; Clears accumulated gradients and returns the argument: for a TENSOR its own
   ;; grad slot, for a MODULE the grad slot of every parameter torch:parameters
-  ;; reaches -- the between-steps call of a training loop.
+  ;; reaches, for an OPTIMIZER the grad slot of every parameter it was built
+  ;; over -- the between-steps call of a training loop, under any of the three
+  ;; spellings PyTorch has for it.
   (cond ((torch:tensorp x)
          (setf (aref x 2) nil)
          x)
-        ((torch:modulep x)
-         (do ((p (torch:parameters x) (cdr p)))
-             ((null p) x)
-           (setf (aref (car p) 2) nil)))
-        (t (error "torch: zero-grad expects a tensor or a module"))))
+   ((torch:modulep x)
+    (do ((p (torch:parameters x) (cdr p)))
+        ((null p) x)
+      (setf (aref (car p) 2) nil)))
+   ((torch:optimizerp x)
+    (do ((p (aref x 2) (cdr p)))
+        ((null p) x)
+      (setf (aref (car p) 2) nil)))
+   (t (error "torch: zero-grad expects a tensor, a module or an optimizer"))))
 
 (defun torch:requires-grad-p (tn)
   ;; Whether the tensor participates in autograd: a leaf marked
@@ -904,30 +910,37 @@
   (torch::%m-check m)
   (aref m 1))
 
-(defun torch::%m-cell (m name)
-  ;; The plist cell whose car is name, or nil when the module has no such
-  ;; field -- so a present-but-nil field is distinguishable from a missing one.
-  (do ((p (aref m 2) (cddr p)))
+(defun torch::%m-fields-slot (x)
+  ;; The slot holding the fields plist -- 2 for a module, 3 for an optimizer,
+  ;; the two records built around one. Signals for anything else.
+  (cond ((torch:modulep x) 2)
+        ((torch:optimizerp x) 3)
+        (t (error "torch: expected a module or an optimizer"))))
+
+(defun torch::%m-cell (plist name)
+  ;; The plist cell whose car is name, or nil when there is no such field -- so
+  ;; a present-but-nil field is distinguishable from a missing one.
+  (do ((p plist (cddr p)))
       ((null p) nil)
     (when (eq (car p) name) (return p))))
 
 (defun torch:field (m name)
-  ;; The value of the module's named field (a parameter, a submodule, a list of
-  ;; submodules or a hyper-parameter), name being the field's KEYWORD. Signals
-  ;; when the module has no such field, so a misspelled name is loud rather than
+  ;; The value of the named field of a MODULE (a parameter, a submodule, a list
+  ;; of submodules or a hyper-parameter) or of an OPTIMIZER (a hyper-parameter
+  ;; such as :lr, or a state buffer), name being the field's KEYWORD. Signals
+  ;; when there is no such field, so a misspelled name is loud rather than
   ;; silently nil.
-  (torch::%m-check m)
-  (let ((c (torch::%m-cell m name)))
-    (if (null c) (error "torch: no such module field") (cadr c))))
+  (let* ((s (torch::%m-fields-slot m)) (c (torch::%m-cell (aref m s) name)))
+    (if (null c) (error "torch: no such field") (cadr c))))
 
 (defun torch:set-field (m name value)
-  ;; Sets the module's named field, adding it when it is new; returns the
-  ;; module. Replacing a parameter this way is what re-binds a layer to a given
-  ;; set of weights (the gradient check does exactly that).
-  (torch::%m-check m)
-  (let ((c (torch::%m-cell m name)))
+  ;; Sets the named field of a module or an optimizer, adding it when it is
+  ;; new; returns the record. Replacing a parameter this way is what re-binds a
+  ;; layer to a given set of weights (the gradient check does exactly that);
+  ;; on an optimizer it is the learning-rate knob a schedule turns.
+  (let* ((s (torch::%m-fields-slot m)) (c (torch::%m-cell (aref m s) name)))
     (if (null c)
-        (setf (aref m 2) (append (aref m 2) (list name value)))
+        (setf (aref m s) (append (aref m s) (list name value)))
         (rplaca (cdr c) value)))
   m)
 
@@ -1168,3 +1181,315 @@
     (if (eq reduction :mean)
         (torch:div (torch:sum masked) (if (null keep) n (linalg:sum keep)))
         (torch::%m-reduce-loss masked reduction))))
+
+;; --- the optimizers ----------------------------------------------------------
+;; The THIRD fixed-layout record of this package, and the same defun-only
+;; decision applied once more: an optimizer is a named bag of FIELDS plus a step
+;; function, so LibraryDefunPruner keeps pruning it and a program that only
+;; wants torch:sgd does not carry Adam's moments.
+;;
+;;   slot 0  tag         the symbol torch::%optimizer (torch:optimizerp
+;;                       discriminates on it -- the LENGTH is only a shape
+;;                       pre-check, and here it is six like a tensor's, so the
+;;                       tag is what separates the two)
+;;   slot 1  kind        a keyword naming the rule (:sgd, :adam, ...)
+;;   slot 2  params      the list of parameter tensors this optimizer updates
+;;   slot 3  fields      a plist -- KEYWORD value ... -- holding every
+;;                       hyper-parameter AND every state buffer of the rule,
+;;                       read and written with torch:field / torch:set-field
+;;   slot 4  step-count  the optimizer's OWN step counter, incremented by
+;;                       torch:step before the rule runs (Adam's bias
+;;                       correction reads it, and must see 1 on the first step)
+;;   slot 5  step-fn     (lambda (self) ...), applied by torch:step
+;;
+;; Like the module's fields, this plist is the single place the state lives:
+;; the momentum buffer of an SGD and the m/v moments of an Adam are fields, so
+;; nothing hangs off the parameter tensor and two optimizers over the same
+;; parameters keep separate state. The rules update the parameter's data array
+;; ELEMENT-WISE AND IN PLACE (see torch::%o-sgd-step): allocating a fresh array
+;; per parameter per step is the allocation that dominates a small training
+;; loop, and the optimizer runs outside the tape -- it uses no torch op, so no
+;; adjoint is lost and no torch:no-grad is needed around torch:step.
+
+(defun torch::%o-new (kind params fields step-fn)
+  ;; The one constructor of the six-slot record described above.
+  (let ((o (make-array 6 :initial-element nil)))
+    (setf (aref o 0) 'torch::%optimizer)
+    (setf (aref o 1) kind)
+    (setf (aref o 2) params)
+    (setf (aref o 3) fields)
+    (setf (aref o 4) 0)
+    (setf (aref o 5) step-fn)
+    o))
+
+(defun torch::%o-params (params)
+  ;; The parameter list an optimizer is built over: a MODULE is walked with
+  ;; torch:parameters, a list of tensors is taken as given.
+  (if (torch:modulep params) (torch:parameters params) params))
+
+(defun torch:optimizer (kind params fields step-fn)
+  ;; A fresh optimizer of the given kind (a keyword) over params (a module,
+  ;; whose torch:parameters are walked, or a plain list of parameter tensors),
+  ;; with fields (a plist of KEYWORD/value hyper-parameters and state buffers)
+  ;; and a step function called as (funcall step-fn optimizer) by torch:step.
+  ;; The step counter starts at 0. This is how a user optimizer is written; the
+  ;; built-in rules below are ordinary callers of it.
+  (torch::%o-new kind (torch::%o-params params) fields step-fn))
+
+(defun torch:optimizerp (x)
+  ;; Whether x is a torch optimizer: the fixed-layout six-slot general vector
+  ;; whose first slot is the optimizer tag.
+  (if (and (arrayp x) (not (stringp x)) (equal (array-dimensions x) '(6))
+           (eq (row-major-aref x 0) 'torch::%optimizer))
+      t
+      nil))
+
+(defun torch::%o-check (x)
+  ;; Signals unless x is an optimizer; returns it.
+  (unless (torch:optimizerp x) (error "torch: expected an optimizer"))
+  x)
+
+(defun torch:optimizer-kind (o)
+  ;; The optimizer's kind keyword, as given to torch:optimizer.
+  (torch::%o-check o)
+  (aref o 1))
+
+(defun torch:optimizer-params (o)
+  ;; The list of parameter tensors the optimizer updates -- what a step
+  ;; function walks.
+  (torch::%o-check o)
+  (aref o 2))
+
+(defun torch:step-count (o)
+  ;; How many times torch:step has run: 0 before the first step, and the t of
+  ;; Adam's bias correction during the step itself.
+  (torch::%o-check o)
+  (aref o 4))
+
+(defun torch:step (o)
+  ;; Applies the optimizer's rule to every parameter and returns the optimizer
+  ;; (torch.optim.Optimizer.step). The step COUNTER is incremented FIRST, so a
+  ;; bias correction reading torch:step-count sees 1 during the first step. The
+  ;; update itself writes the parameter data in place with no torch op, so it
+  ;; records nothing on the tape and needs no torch:no-grad around it.
+  (torch::%o-check o)
+  (setf (aref o 4) (+ (aref o 4) 1))
+  (funcall (aref o 5) o)
+  o)
+
+(defun torch::%o-buffers (params)
+  ;; One zero buffer per parameter, shaped like that parameter's data (a
+  ;; one-element vector for a scalar parameter, whose data is a plain number):
+  ;; SGD's momentum buffer and Adam's two moments. A general vector indexed by
+  ;; the parameter's position in the optimizer's list, allocated on the first
+  ;; step like PyTorch's lazily created state.
+  (let* ((n (length params)) (v (make-array n :initial-element nil)))
+    (do ((p params (cdr p)) (i 0 (+ i 1)))
+        ((null p) v)
+      (let ((x (aref (car p) 1)))
+        (setf (aref v i)
+         (if (numberp x) (linalg:zeros (list 1)) (linalg:zeros-like x)))))))
+
+(defun torch::%o-buffer-field (self name)
+  ;; The named state field, allocating it on first use from the optimizer's
+  ;; parameter list.
+  (let ((b (torch:field self name)))
+    (if (null b)
+        (let ((fresh (torch::%o-buffers (aref self 2))))
+          (torch:set-field self name fresh)
+          fresh)
+        b)))
+
+(defun torch::%o-sgd-step (self)
+  ;; PyTorch's SGD rule, element-wise and IN PLACE over each parameter's data:
+  ;;   g <- grad + weight-decay * param
+  ;;   buf <- momentum * buf + g          (momentum /= 0; buf starts at zero,
+  ;;                                       which is PyTorch's clone-on-first-
+  ;;                                       step with dampening 0)
+  ;;   param <- param - lr * (momentum /= 0 ? buf : g)
+  ;; A parameter whose gradient is still nil (nothing reached it) is skipped,
+  ;; like PyTorch's `if p.grad is None: continue`.
+  (let ((lr (torch:field self :lr))
+        (mu (torch:field self :momentum))
+        (wd (torch:field self :weight-decay))
+        (bufs nil))
+    (unless (= mu 0) (setq bufs (torch::%o-buffer-field self :buffers)))
+    (do ((ps (aref self 2) (cdr ps)) (i 0 (+ i 1)))
+        ((null ps) self)
+      (let* ((p (car ps)) (g (aref p 2)))
+        (unless (null g)
+          (let* ((x (aref p 1))
+                 (sx (numberp x))
+                 (sg (numberp g))
+                 (n (if sx 1 (array-total-size x)))
+                 (buf (if (null bufs) nil (aref bufs i))))
+            (do ((k 0 (+ k 1)))
+                ((>= k n))
+              (let* ((xv (if sx x (row-major-aref x k)))
+                     (gv (if sg g (row-major-aref g k)))
+                     (d (if (= wd 0) gv (+ gv (* wd xv)))))
+                (unless (null buf)
+                  (setq d (+ (* mu (row-major-aref buf k)) d))
+                  (setf (row-major-aref buf k) d))
+                (let ((nv (- xv (* lr d))))
+                  (if sx
+                      (setf (aref p 1) nv)
+                      (setf (row-major-aref x k) nv)))))))))))
+
+(defun torch::%o-adam-step (self)
+  ;; PyTorch's Adam rule, element-wise and IN PLACE:
+  ;;   m <- b1 * m + (1 - b1) * g,  v <- b2 * v + (1 - b2) * g^2
+  ;;   param <- param - lr * (m / (1 - b1^t)) / (sqrt(v / (1 - b2^t)) + eps)
+  ;; t being the OPTIMIZER's own step count (torch:step-count), which is 1 on
+  ;; the first step -- the classic off-by-one, pinned by the optimizer table.
+  (let* ((lr (torch:field self :lr))
+         (betas (torch:field self :betas))
+         (b1 (car betas))
+         (b2 (car (cdr betas)))
+         (eps (torch:field self :eps))
+         (it (aref self 4))
+         (c1 (- 1.0 (expt b1 it)))
+         (c2 (- 1.0 (expt b2 it)))
+         (ms (torch::%o-buffer-field self :m))
+         (vs (torch::%o-buffer-field self :v)))
+    (do ((ps (aref self 2) (cdr ps)) (i 0 (+ i 1)))
+        ((null ps) self)
+      (let* ((p (car ps)) (g (aref p 2)))
+        (unless (null g)
+          (let* ((x (aref p 1))
+                 (sx (numberp x))
+                 (sg (numberp g))
+                 (n (if sx 1 (array-total-size x)))
+                 (m (aref ms i))
+                 (v (aref vs i)))
+            (do ((k 0 (+ k 1)))
+                ((>= k n))
+              (let* ((xv (if sx x (row-major-aref x k)))
+                     (gv (if sg g (row-major-aref g k)))
+                     (mk (+ (* b1 (row-major-aref m k)) (* (- 1.0 b1) gv)))
+                     (vk (+ (* b2 (row-major-aref v k)) (* (- 1.0 b2) gv gv))))
+                (setf (row-major-aref m k) mk)
+                (setf (row-major-aref v k) vk)
+                (let ((nv (- xv (/ (* lr (/ mk c1)) (+ (sqrt (/ vk c2)) eps)))))
+                  (if sx
+                      (setf (aref p 1) nv)
+                      (setf (row-major-aref x k) nv)))))))))))
+
+(defun torch:sgd (params &key (lr 0.01) (momentum 0.0) (weight-decay 0.0))
+  ;; Stochastic gradient descent (torch.optim.SGD) over params (a module or a
+  ;; list of parameter tensors): fields lr, momentum, weight-decay and the
+  ;; momentum buffers. With :momentum 0 (the default) the update is plain
+  ;; param -= lr * grad; :weight-decay adds the L2 term wd * param to the
+  ;; gradient. Change a hyper-parameter mid-run with torch:set-field.
+  (torch:optimizer :sgd params
+   (list :lr lr :momentum momentum :weight-decay weight-decay :buffers nil)
+   (function torch::%o-sgd-step)))
+
+(defun torch:adam (params &key (lr 0.001) (betas '(0.9 0.999)) (eps 1.0e-8))
+  ;; The Adam optimizer (torch.optim.Adam) over params (a module or a list of
+  ;; parameter tensors): fields lr, betas (the two exponential decay rates, as
+  ;; a list, PyTorch's (beta1, beta2) tuple), eps and the two moment buffers.
+  ;; The bias correction divides by 1 - beta^t with the OPTIMIZER's own step
+  ;; count, so the first step is fully corrected.
+  (torch:optimizer :adam params
+                   (list :lr lr :betas betas :eps eps :m nil :v nil)
+                   (function torch::%o-adam-step)))
+
+;; --- batching, padding and the attention masks -------------------------------
+;; Plain functions rather than a Dataset/DataLoader hierarchy: a batch here is
+;; an ordinary LIST, so the caller keeps its own pairing of parallel sequences
+;; (a source and a target list) instead of a collate protocol.
+
+(defun torch::%b-elements (s)
+  ;; One sequence of a batch as a LIST of numbers: a list passes through, a
+  ;; tensor or a raw array is read out element-wise.
+  (cond ((consp s) s)
+        ((null s) nil)
+        ((torch:tensorp s) (torch::%b-elements (aref s 1)))
+        ((and (arrayp s) (not (stringp s))) (linalg:to-list s))
+        (t (error "torch: expected a list, an array or a tensor"))))
+
+(defun torch:pad-sequence (sequences &key (padding-value 0))
+  ;; A list of variable-length sequences (lists, index vectors or tensors) as
+  ;; ONE padded rank-2 tensor, BATCH FIRST: (batch longest), every row filled
+  ;; up to the longest one with padding-value (torch.nn.utils.rnn.pad_sequence
+  ;; with batch_first=True). The result is a constant tensor -- token indices,
+  ;; ready for torch:embedding and torch:padding-mask.
+  (let* ((rows (mapcar (function torch::%b-elements) sequences))
+         (b (length rows))
+         (w 0))
+    (do ((p rows (cdr p)))
+        ((null p))
+      (let ((n (length (car p)))) (when (> n w) (setq w n))))
+    (let ((out (linalg:full (list b w) (* 1.0 padding-value))))
+      (do ((p rows (cdr p)) (i 0 (+ i 1)))
+          ((null p))
+        (do ((q (car p) (cdr q)) (j 0 (+ j 1)))
+            ((null q))
+          (setf (aref out i j) (* 1.0 (car q)))))
+      (torch::%t-new out nil nil nil nil))))
+
+(defun torch::%b-index-list (n)
+  ;; The integers 0..n-1 as a list.
+  (let ((acc nil))
+    (do ((i (- n 1) (- i 1)))
+        ((< i 0) acc)
+      (setq acc (cons i acc)))))
+
+(defun torch::%b-shuffle (items n)
+  ;; items reordered by a draw of the SEEDED linalg generator
+  ;; (linalg:permutation, Fisher-Yates), so linalg:seed reproduces the epoch on
+  ;; every backend.
+  (let ((v (make-array n :initial-element nil))
+        (perm (linalg:permutation n))
+        (acc nil))
+    (do ((p items (cdr p)) (i 0 (+ i 1)))
+        ((null p))
+      (setf (aref v i) (car p)))
+    (do ((i (- n 1) (- i 1)))
+        ((< i 0) acc)
+      (setq acc (cons (aref v (truncate (aref perm i))) acc)))))
+
+(defun torch:shuffled-batches (data batch-size &key (shuffle t) drop-last)
+  ;; data cut into mini-batches: a list of LISTS, each of batch-size elements
+  ;; except possibly the last (dropped under :drop-last t, like a DataLoader's
+  ;; drop_last). data is a LIST of examples, or a non-negative INTEGER n
+  ;; standing for the index list 0..n-1 -- the spelling that batches several
+  ;; parallel arrays at once, since the caller can select the same rows out of
+  ;; each. The order comes from the seeded linalg generator, so linalg:seed
+  ;; reproduces the epoch on every backend; :shuffle nil keeps data's own order
+  ;; (an evaluation pass uses the same function).
+  (let* ((items (if (numberp data) (torch::%b-index-list data) data))
+         (n (length items))
+         (order (if shuffle (torch::%b-shuffle items n) items))
+         (batches nil)
+         (cur nil)
+         (k 0))
+    (do ((p order (cdr p)))
+        ((null p))
+      (setq cur (cons (car p) cur))
+      (setq k (+ k 1))
+      (when (>= k batch-size)
+        (setq batches (cons (reverse cur) batches))
+        (setq cur nil)
+        (setq k 0)))
+    (when (and cur (null drop-last))
+      (setq batches (cons (reverse cur) batches)))
+    (reverse batches)))
+
+(defun torch:padding-mask (tokens &key (pad-id 0))
+  ;; The padding mask of a (batch length) token matrix: 1.0 at every position
+  ;; holding pad-id and 0.0 elsewhere, with a query axis inserted --
+  ;; (batch 1 length) -- so it broadcasts over an attention score's
+  ;; (batch query-length key-length). A RAW linalg array, not a tensor: a mask
+  ;; is a constant, and torch:masked-fill takes it as one.
+  (linalg:expand-dims (linalg:equal (torch::%t-indices tokens) pad-id) 1))
+
+(defun torch:subsequent-mask (sequence-length)
+  ;; The causal (look-ahead) mask of a sequence: 1.0 strictly ABOVE the
+  ;; diagonal, shaped (1 sequence-length sequence-length) so it broadcasts over
+  ;; the batch -- position i may not attend to any j > i. A RAW linalg array,
+  ;; like torch:padding-mask; the two combine with linalg:add or
+  ;; linalg:maximum, since torch:masked-fill treats every non-zero as masked.
+  (linalg:expand-dims
+   (linalg:triu (linalg:ones (list sequence-length sequence-length)) :k 1) 0))

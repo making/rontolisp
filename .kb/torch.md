@@ -30,7 +30,8 @@ library scope to the CLOS kinds first -- do not add a `defclass` to torch.lisp
 without that.
 
 The record is a six-slot general vector (`(make-array 6)`), discriminated by
-`torch:tensorp` on the tag symbol in slot 0:
+`torch:tensorp` on the tag symbol in slot 0 (the optimizer record of todo-462 is
+six slots too, which is why the TAG, not the length, is the discriminator):
 
 | slot | field | contents |
 | --- | --- | --- |
@@ -222,6 +223,95 @@ backend follows the same trajectory.
 
 461 adds no body-taking operator, so the formatter needs no new `IndentRules`
 entry: every module and loss name is a plain function, laid out as a call.
+
+## The optimizers (todo-462): a third record, and the in-place update
+
+The same defun-only decision a third time. An optimizer is a SIX-slot general
+vector -- the same length as a tensor, and deliberately so: the LENGTH is only a
+shape pre-check, the TAG in slot 0 is what all three predicates actually
+discriminate on, and a fourth distinct length would have been a fiction. Slots:
+
+| slot | field | contents |
+| --- | --- | --- |
+| 0 | tag | the symbol `torch::%optimizer` |
+| 1 | kind | a KEYWORD naming the rule (`:sgd`, `:adam`, ...) |
+| 2 | params | the list of parameter tensors it updates |
+| 3 | fields | a plist, KEYWORD value ..., holding every hyper-parameter AND every state buffer |
+| 4 | step-count | the optimizer's OWN counter, incremented by `torch:step` BEFORE the rule runs |
+| 5 | step-fn | `(lambda (self) ...)`, applied by `torch:step` |
+
+Four decisions worth keeping:
+
+- **The fields plist is the state, again.** `torch:field`/`torch:set-field` now
+  read slot 2 of a module or slot 3 of an optimizer (`torch::%m-fields-slot`),
+  so there is ONE accessor pair for both records and no `torch:state` /
+  `torch:set-state` surface at all. The momentum buffer and Adam's `m`/`v` are
+  fields (`:buffers`, `:m`, `:v`) holding a general vector indexed by the
+  parameter's position, allocated on the first step; the learning rate is a
+  field too, which is the whole of what an LR schedule needs
+  (`(torch:set-field opt :lr new)`) without a scheduler type existing.
+- **The update is ELEMENT-WISE and IN PLACE**, `setf row-major-aref` over the
+  parameter's packed array with no temporary: a fresh array per parameter per
+  step is the allocation that dominates a small training loop. Because the rule
+  uses no torch op it records nothing on the tape, so -- unlike the hand-written
+  `torch:set-data` update the 461 acceptance loop uses -- `torch:step` needs NO
+  `torch:no-grad` around it. A scalar parameter (data is a plain NUMBER) is the
+  one branch inside the element loop; a parameter whose grad is still nil is
+  skipped, like PyTorch's `if p.grad is None: continue`.
+- **`torch:step` increments the counter FIRST.** Adam's bias correction divides
+  by `1 - beta^t` with `t` = the optimizer's own `torch:step-count`, so the
+  first step is fully corrected and has magnitude `lr`. That is the classic
+  off-by-one; the `adam-3steps` row of the optimizer table pins the exact
+  three-step sequence and the ci-spec case pins `t = 1` as a predicate.
+- **`torch:optimizer` is public**, like `torch:module`: a rule this package does
+  not ship (AdamW, a gradient clip) is a plain defun over the same record, and
+  the built-in `torch:sgd`/`torch:adam` are ordinary callers. Both accept a
+  MODULE or a parameter list (`torch::%o-params`), and `torch:zero-grad` gained
+  an optimizer branch -- the three PyTorch spellings of "clear the gradients"
+  are one function here.
+
+The rules follow **PyTorch's**, not the `examples/deep-learning-from-scratch/`
+book's (whose Adam folds the bias correction into a step size and leaves `eps`
+outside it, a different sequence): the coverage target is a book written against
+`torch.optim`. That example keeps its own hand-written optimizers on purpose --
+its point is that the reader writes them -- and must not be made to depend on
+this package.
+
+## Batching and the masks (todo-462): plain functions, no `DataLoader`
+
+`torch:pad-sequence` (list of sequences -> one padded rank-2 tensor, BATCH
+FIRST), `torch:shuffled-batches` (a list of examples, or an integer `n` standing
+for `0..n-1`, -> a list of LISTS), `torch:padding-mask` and
+`torch:subsequent-mask`. Three things this shape buys:
+
+- a batch is an ordinary list, so the caller keeps its own pairing of parallel
+  sequences (source and target) instead of a collate protocol -- and the integer
+  form batches several parallel arrays at once by handing back index lists;
+- the shuffle draws from the SEEDED `linalg` generator (`linalg:permutation`,
+  integer arithmetic), so an epoch reproduces on every backend, and
+  `:shuffle nil` makes the same function the evaluation pass;
+- the two masks are RAW linalg arrays, not tensors: a mask carries no gradient,
+  `torch:masked-fill` takes it as a constant, and any NON-ZERO counts as masked
+  so `linalg:add` combines a padding mask with a causal one. They are shaped to
+  broadcast over a `(batch query-length key-length)` score -- `(batch 1 length)`
+  and `(1 n n)`.
+
+`torch:inference-mode` was NOT added: it would be a second name for
+`torch:no-grad` here (there is no version counter to invalidate), so the todo's
+"only if it turns out to differ" resolved to no.
+
+Acceptance beyond the earlier two programs: `TorchGradcheck.OPTIMIZER_PROGRAM`,
+a table of `ok` rows -- one SGD step, the L2 term, a three-step momentum
+sequence, a scalar parameter, a skipped gradient-less parameter, Adam's three
+steps and its `:lr` field, and every batching/mask helper -- followed by the
+book's chapter-2.3.4 experiment: the same feed-forward block learning the
+identity with and without a skip connection around it, trained by `torch:adam`,
+asserting that both losses at least halved and that the residual one both
+started and finished lower. It runs on the interpreter, the JVM and wasm-GC; the
+`--component` leg is the ci-spec `torch-optim-cross-backend` case, whose SGD
+values are exact dyadic rationals (lr `0.125`) while Adam, which takes a square
+root, is pinned as a tolerance predicate. 462 adds no body-taking operator
+either, so again no new `IndentRules` entry.
 
 ## `--simd`, and what is deliberately NOT accelerated
 

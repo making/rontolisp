@@ -626,6 +626,18 @@ categories:
       - { slug: torch-dropout, name: "torch:dropout" }
       - { slug: torch-mse-loss, name: "torch:mse-loss" }
       - { slug: torch-cross-entropy-loss, name: "torch:cross-entropy-loss" }
+      - { slug: torch-optimizer, name: "torch:optimizer" }
+      - { slug: torch-optimizerp, name: "torch:optimizerp" }
+      - { slug: torch-optimizer-kind, name: "torch:optimizer-kind" }
+      - { slug: torch-optimizer-params, name: "torch:optimizer-params" }
+      - { slug: torch-step, name: "torch:step" }
+      - { slug: torch-step-count, name: "torch:step-count" }
+      - { slug: torch-sgd, name: "torch:sgd" }
+      - { slug: torch-adam, name: "torch:adam" }
+      - { slug: torch-pad-sequence, name: "torch:pad-sequence" }
+      - { slug: torch-shuffled-batches, name: "torch:shuffled-batches" }
+      - { slug: torch-padding-mask, name: "torch:padding-mask" }
+      - { slug: torch-subsequent-mask, name: "torch:subsequent-mask" }
   - title: "java Package (JVM only)"
     functions:
       - { slug: java-new, name: "java:new" }
