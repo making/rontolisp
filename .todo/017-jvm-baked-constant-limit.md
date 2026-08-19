@@ -95,6 +95,36 @@ old-verifier failover, so large/complex v50 classes get pushed onto the split
    recognition). It does not help a program that genuinely wants to be one
    self-contained class/module, which is what 1-3 are for.
 
+## A third ceiling, measured 2026-08-19: the 65,534-entry constant pool
+
+Not the verifier limit above -- the plain class-format one, and the compiler
+already refuses cleanly rather than emitting a bad class:
+
+```
+error: constant pool overflow: this class needs more than 65534 constant pool
+entries, the JVM class-format limit; split the program
+```
+
+Binary-searched with a synthetic rove suite of `n` tests x 3 assertions (an
+assertion-heavy rather than data-heavy program: `ok` quotes its own form and
+step-expansion so the reporter can print `(+ 1 1) = 2`, so every assertion bakes
+its source as DATA on top of the code that evaluates it):
+
+| n tests | assertions | result |
+| --- | --- | --- |
+| 400 | 1,200 | 8.9 MB class, runs |
+| 550 | 1,650 | 11.4 MB class, runs |
+| 700 | 2,100 | 13.9 MB class, runs |
+| 900 | 2,700 | **constant pool overflow** |
+
+Ceiling ~750-850 tests / ~2,300-2,600 assertions. Nothing in the repo is blocked
+on it (the rove-migration idea that found it was cancelled), but it belongs
+here: same class file, third distinct resource exhausted, and if the answer to
+this file ever becomes "emit auxiliary classes", it is the one fix that clears
+all three. Before optimizing, dump the pool by tag for the n=700 class -- if it
+is dominated by duplicated symbol-name strings, interning at emit time is cheap
+and helps every large program.
+
 ## Recommended next step
 Decide whether we care. There is no in-repo program left that wants to bake this
 much data, so the honest options are (a) close this as "load your data instead",
