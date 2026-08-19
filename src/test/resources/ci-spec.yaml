@@ -4330,6 +4330,46 @@ cases:
       DOUBLE-FLOAT
       10.0
       14.0
+  # The torch package (reverse-mode autograd over linalg): fit y = 2x by gradient
+  # descent on the MSE -- ten forward/backward/update steps, the update inside
+  # torch:no-grad (which rebinds the torch::*grad-enabled* special). Every quantity
+  # stays an exact dyadic rational in double (x/y are small integers, the mean
+  # divides by 2, the learning rate is 0.125), so the printed doubles are
+  # byte-identical on all four backends. The last two lines pin the broadcasting
+  # adjoint (a scalar bias against a vector activation) and the masked-softmax
+  # backward at exactly-representable values.
+  - name: torch-fit-cross-backend
+    source: |
+      (defun ci-torch-fit ()
+        (let ((w (torch:tensor '(0.0) :requires-grad t))
+              (x (torch:tensor '(1.0 2.0)))
+              (y (torch:tensor '(2.0 4.0))))
+          (dotimes (i 10)
+            (let* ((diff (torch:sub (torch:mul x w) y))
+                   (loss (torch:mean (torch:mul diff diff))))
+              (torch:backward loss)
+              (torch:no-grad
+                (setq w (torch:tensor (linalg:sub (torch:data w)
+                                                  (linalg:mul 0.125 (torch:grad w)))
+                                      :requires-grad t)))))
+          (print (torch:data w))
+          (print (torch:requires-grad-p w)))
+        (let ((b (torch:tensor 0.5 :requires-grad t))
+              (s (torch:tensor '((1.0 2.0) (3.0 3.0)) :requires-grad t)))
+          (torch:backward (torch:sum (torch:add (torch:tensor '(1.0 2.0 3.0)) b)))
+          (print (torch:grad b))
+          (let ((a (torch:softmax (torch:masked-fill s #2A((0 1) (0 0)) (/ -1.0 0.0))
+                                  :axis 1)))
+            (print (torch:data a))
+            (torch:backward (torch:sum (torch:mul a #2A((1.0 0.0) (0.0 1.0)))))
+            (print (torch:grad s)))))
+      (ci-torch-fit)
+    expected: |
+      #d(1.999890012666583)
+      T
+      3.0
+      #d((1.0 0.0) (0.5 0.5))
+      #d((0.0 0.0) (-0.25 0.25))
   # Regression: uiop:getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline

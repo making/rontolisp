@@ -174,6 +174,11 @@ public final class LispMacroExpander {
 			case LispNames.IGNORE_ERRORS -> expandIgnoreErrors(cons);
 			case LispNames.DOCUMENTATION -> expandDocumentation(cons);
 			case LispNames.COMPLEMENT -> expandComplement(cons);
+			// torch:no-grad expands to a let over torch::*grad-enabled*; listed here so
+			// SpecialVarCollector.collectDynamicallyBound sees the binding it
+			// synthesizes (the compilers and the evaluator dispatch it by qualified
+			// name themselves).
+			case LispNames.TORCH_NO_GRAD_QUALIFIED -> expandTorchNoGrad(cons);
 			default -> null;
 		};
 	}
@@ -7634,6 +7639,31 @@ public final class LispMacroExpander {
 	 * {@code (let ((__usocket_result (progn body...))) (usocket:socket-close var)
 	 * __usocket_result)}.
 	 */
+	/**
+	 * Expands {@code (torch:no-grad body...)} into a {@code let} that dynamically rebinds
+	 * {@code torch::*grad-enabled*} to {@code nil} around the body, so no torch operation
+	 * inside records the autograd tape. The variable is the {@code defparameter} the
+	 * spliced {@code torch.lisp} declares, so the binding is DYNAMIC on every backend
+	 * (each backend's ordinary special-binding save/restore); the interpreter loads the
+	 * library before evaluating the expansion ({@code LispEvaluator#ensureTorchLoaded})
+	 * so the special declaration exists by the time the {@code let} binds. Because this
+	 * expansion synthesizes the variable name AFTER {@code LibraryDefunPruner} runs, the
+	 * pruner counts a {@code torch:no-grad} occurrence as a reference to it (the
+	 * {@code vec:aset} synthetic-edge pattern).
+	 * @param cons the no-grad expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandTorchNoGrad(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new java.util.ArrayList<>();
+		out.add(new LispSymbol(LispNames.LET));
+		out.add(new LispCons(
+				listToCons(List.of(new LispSymbol(LispNames.TORCH_GRAD_ENABLED_QUALIFIED), LispNil.INSTANCE)),
+				LispNil.INSTANCE));
+		out.addAll(parts.subList(1, parts.size()));
+		return listToCons(out);
+	}
+
 	private static LispVal usocketCloseBody(LispSymbol var, List<LispVal> body, boolean unwindProtect) {
 		if (unwindProtect) {
 			return unwindProtectAround(prognOrNil(body), callOf(USOCKET_SOCKET_CLOSE_QUALIFIED, var));

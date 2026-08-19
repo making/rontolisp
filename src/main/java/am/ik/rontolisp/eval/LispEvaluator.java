@@ -97,6 +97,8 @@ public final class LispEvaluator {
 
 	private boolean linalgLibraryLoaded = false;
 
+	private boolean torchLibraryLoaded = false;
+
 	private boolean vecLibraryLoaded = false;
 
 	private boolean ironcladNativeInstalled = false;
@@ -3937,6 +3939,25 @@ public final class LispEvaluator {
 	 * environment once; shared by the function/variable lazy-load hooks and the built-in
 	 * ASDF system {@code "usocket"} ({@code asdf:load-system}/{@code ql:quickload}).
 	 */
+	/**
+	 * Evaluates the torch library definitions ({@code torch.lisp}) into the global
+	 * environment once; shared by the function lazy-load hook in {@code resolveFunction}
+	 * and the {@code torch:no-grad} macro case (whose expansion dynamically rebinds
+	 * {@code torch::*grad-enabled*}, so the {@code defparameter} must exist -- and be
+	 * declared special -- BEFORE the {@code let} binds it).
+	 */
+	private void ensureTorchLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.torchLibraryLoaded) {
+				return;
+			}
+			this.torchLibraryLoaded = true;
+			for (LispVal form : TorchLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
 	private void ensureUsocketLoaded() {
 		synchronized (this.libraryLoadLock) {
 			if (this.usocketLibraryLoaded) {
@@ -4656,6 +4677,11 @@ public final class LispEvaluator {
 					return evalWitExport(cons);
 				case LispNames.WIT_IMPORT_QUALIFIED:
 					return evalWitImport(cons);
+				case LispNames.TORCH_NO_GRAD_QUALIFIED:
+					// The expansion let-binds torch::*grad-enabled*, so the library's
+					// defparameter must have declared it special BEFORE the let binds.
+					ensureTorchLoaded();
+					return eval(LispMacroExpander.expandTorchNoGrad(cons), env);
 				case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
 					return eval(LispMacroExpander.expandUsocketWithClientSocket(cons), env);
 				case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
@@ -6801,6 +6827,17 @@ public final class LispEvaluator {
 				if (this.simd) {
 					LinalgSimd.install(this.globalEnv, this);
 				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The torch package is a Lisp-source library (torch.lisp) over linalg: load
+			// it the same way on the first resolution of a torch:-qualified function
+			// (the linalg definitions its bodies call load through this same hook on
+			// their first call).
+			if (!this.torchLibraryLoaded && TorchLibrary.isTorchQualified(name)) {
+				ensureTorchLoaded();
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;

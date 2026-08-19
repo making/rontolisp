@@ -312,6 +312,18 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void torchLibraryFormsAreAResolverFixedPoint() {
+		// TorchLibrary splices its forms both before resolution (the compile-path
+		// pre-pass) and after it (the interpreter's lazy load), which is only sound
+		// while torch.lisp is written in canonical shape: resolving it must be a
+		// no-op.
+		PackageResolver resolver = new PackageResolver();
+		for (LispVal form : am.ik.rontolisp.eval.TorchLibrary.forms()) {
+			assertThat(resolver.resolve(form).print()).isEqualTo(form.print());
+		}
+	}
+
+	@Test
 	void linalgLibraryFormsAreAResolverFixedPoint() {
 		// LinalgLibrary splices its forms into programs both before resolution (the
 		// compile-path pre-pass) and after it (the interpreter's lazy load), which is

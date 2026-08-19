@@ -56,6 +56,8 @@ sections:
         title: Vectors & Matrices (linalg)
       - file: guides/simd-acceleration.md
         title: Vector Kernels & SIMD (vec, linalg)
+      - file: guides/neural-networks.md
+        title: Neural Networks (torch)
       - file: guides/java-interop.md
         title: Java Interop
       - file: guides/async.md

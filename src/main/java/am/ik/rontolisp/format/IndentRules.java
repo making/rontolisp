@@ -95,7 +95,11 @@ public final class IndentRules {
 		for (String name : List.of("progn", "locally", "tagbody", "ignore-errors", "time", "with-standard-io-syntax",
 				"nest",
 				// rove's per-suite (setup body...) / (teardown body...).
-				"setup", "teardown")) {
+				"setup", "teardown",
+				// (torch:no-grad body...): every subform is a body form. It has no
+				// with-/do- prefix, so the naming convention would read it as a call
+				// and align the whole body under its first form.
+				"no-grad")) {
 			rules.put(name, Style.body(0, 2));
 		}
 		// Operator plus operands or options -- no body, so a short one stays on one line

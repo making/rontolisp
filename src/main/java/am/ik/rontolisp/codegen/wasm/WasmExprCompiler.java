@@ -690,6 +690,15 @@ final class WasmExprCompiler {
 				compileExpr(LispMacroExpander.expandWithMutex(cons, ctx.ehMode), ctx);
 				return;
 			}
+			// torch:no-grad is a built-in LispMacroExpander expansion (the usocket with-*
+			// pattern): a let that dynamically rebinds the spliced torch.lisp
+			// defparameter torch::*grad-enabled* (ordinary special-binding
+			// save/restore, so no EH mode is forced). The other torch: members are the
+			// torch.lisp defuns and fall through to the ordinary qualified-call path.
+			if (qn != null && LispNames.TORCH_PKG.equals(qn.pkg()) && LispNames.TORCH_NO_GRAD.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandTorchNoGrad(cons), ctx);
+				return;
+			}
 			// sleep: on Preview 1 a spin on the clock, the only wait its nine imports
 			// can express. Under --component it is the SPLICED wait.lisp defun instead
 			// (eval/WaitForLibrary), which awaits the real wasi:clocks timer and so

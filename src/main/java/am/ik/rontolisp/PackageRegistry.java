@@ -316,6 +316,22 @@ public final class PackageRegistry {
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 
 	/**
+	 * The names exported by the {@code torch} package (a PyTorch-style tensor with
+	 * reverse-mode autograd over the {@code linalg} kernels), implemented in
+	 * {@code torch.lisp} (see {@code TorchLibrary}). Plain strings like the linalg names
+	 * -- they exist only as Lisp-source defuns -- except {@code no-grad}, the one macro,
+	 * which is a built-in {@code LispMacroExpander} expansion and is dispatched on by
+	 * name ({@link LispNames#TORCH_NO_GRAD}).
+	 */
+	private static final Set<String> TORCH_FUNCTIONS = Set.of("TENSOR", "TENSORP", "DATA", "GRAD", "SHAPE", "ITEM",
+			"DETACH", "ZERO-GRAD", "REQUIRES-GRAD-P", "BACKWARD", LispNames.TORCH_NO_GRAD, "RESHAPE", "VIEW",
+			"TRANSPOSE", "UNSQUEEZE", "SQUEEZE", "CAT", "STACK", "SLICE", "ADD", "SUB", "MUL", "DIV", "NEG", "POWER",
+			"EXP", "LOG", "SQRT", "TANH", "MATMUL", "SUM", "MEAN", "VAR", "STD", "AMAX", "ARGMAX", "SOFTMAX",
+			"LOG-SOFTMAX", "RELU", "MASKED-FILL", "GATHER", "INDEX-SELECT");
+
+	private static final List<String> TORCH_FUNCTION_NAMES = sorted(TORCH_FUNCTIONS);
+
+	/**
 	 * The functions exported by the {@code vec} package (portable packed-{@code f64}
 	 * vector kernels over the packed {@code double-float} array type). Implemented once
 	 * in rontolisp itself ({@code vec.lisp}, see {@code VecLibrary}) as the scalar
@@ -475,15 +491,14 @@ public final class PackageRegistry {
 	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
 	 * which must not depend on a registry instance.
 	 */
-	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
-			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
-					LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
-					LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
-					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
-					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
-					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
-			Set.copyOf(UiopExports.subPackages()));
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
+			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
+			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG,
+			LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG,
+			LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG,
+			LispNames.BT2_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG,
+			LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG,
+			"KEYWORD"), Set.copyOf(UiopExports.subPackages()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -541,6 +556,10 @@ public final class PackageRegistry {
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
 		// is external. Its canonical spelling is linalg; la is a built-in nickname.
 		define(new LispPackage(LispNames.LINALG_PKG, List.of(), new HashSet<>(LINALG_FUNCTIONS)));
+		// A PyTorch-style tensor with reverse-mode autograd over the linalg kernels,
+		// implemented once in torch.lisp and spliced/loaded on demand (TorchLibrary).
+		// Does not use cl; every registered name is external.
+		define(new LispPackage(LispNames.TORCH_PKG, List.of(), new HashSet<>(TORCH_FUNCTIONS)));
 		// Portable packed-f64 vector kernels, implemented once in vec.lisp (VecLibrary)
 		// as the scalar reference and spliced/loaded on demand like linalg. The JVM
 		// --simd
@@ -892,6 +911,14 @@ public final class PackageRegistry {
 	 */
 	public static List<String> linalgFunctionNames() {
 		return LINALG_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code torch} package, sorted alphabetically.
+	 * @return the sorted names
+	 */
+	public static List<String> torchFunctionNames() {
+		return TORCH_FUNCTION_NAMES;
 	}
 
 	/**

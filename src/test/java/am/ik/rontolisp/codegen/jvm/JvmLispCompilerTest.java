@@ -74,6 +74,14 @@ class JvmLispCompilerTest {
 		return compileAndRun(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
 	}
 
+	// torch tests pre-process with TorchLibrary.process then LinalgLibrary.process,
+	// mirroring the compile-path pre-pass order run by RontoLispCli (torch first, so
+	// the linalg references inside the spliced torch defuns pull linalg in too).
+	private String compileAndRunTorch(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.LinalgLibrary
+			.process(am.ik.rontolisp.eval.TorchLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
 	// URL tests pre-process with UrlLibrary.process, mirroring the compile-path
 	// pre-pass run by RontoLispCli.
 	private String compileAndRunUrl(String lispCode) throws Exception {
@@ -10928,6 +10936,61 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("#f((0.0 0.0) (0.0 0.0))\n#d((0.0 0.0) (0.0 0.0))\n#f(0.0 2.0 4.0 6.0)\n"
 				+ "#f((1.0 2.0) (3.0 4.0))\n#f((0.5 1.5) (2.5 3.5))\nSINGLE-FLOAT\n"
 				+ "#f((1.0 2.0) (3.0 4.0))\nDOUBLE-FLOAT\n14.0");
+	}
+
+	@Test
+	void compileAndRunTorchAutogradSmallGraph() throws Exception {
+		// A multi-step graph (matmul -> broadcasting add -> mul -> sum) with backward:
+		// the broadcast bias gets its unbroadcast (summed) gradient, and torch:no-grad
+		// keeps a result off the tape. All values exact, so the output is
+		// byte-identical on every backend.
+		assertThat(compileAndRunTorch("""
+				(defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))
+				(defparameter *b* (torch:tensor 0.5 :requires-grad t))
+				(defparameter *x* (torch:tensor #2A((1.0 2.0) (3.0 4.0))))
+				(defparameter *y* (torch:add (torch:matmul *x* *w*) *b*))
+				(print (torch:data *y*))
+				(defparameter *loss* (torch:sum (torch:mul *y* *y*)))
+				(print (torch:item *loss*))
+				(torch:backward *loss*)
+				(print (torch:grad *w*))
+				(print (torch:grad *b*))
+				(torch:no-grad
+				  (print (torch:requires-grad-p (torch:mul *w* 2))))
+				(print (torch:requires-grad-p (torch:mul *w* 2)))
+				""")).isEqualTo("#d(5.5 11.5)\n162.5\n#d(80.0 114.0)\n34.0\nNIL\nT");
+	}
+
+	@Test
+	void compileAndRunTorchTrainingLoopWithNoGrad() throws Exception {
+		// Fit y = 2x by gradient descent on the MSE: ten forward/backward/update
+		// steps, the update inside torch:no-grad. Every quantity stays an exact
+		// dyadic rational in double, so the printed result is byte-identical on
+		// every backend (also the ci-spec torch-fit-cross-backend case).
+		assertThat(compileAndRunTorch("""
+				(defparameter *w* (torch:tensor '(0.0) :requires-grad t))
+				(defparameter *x* (torch:tensor '(1.0 2.0)))
+				(defparameter *y* (torch:tensor '(2.0 4.0)))
+				(dotimes (i 10)
+				  (let* ((diff (torch:sub (torch:mul *x* *w*) *y*))
+				         (loss (torch:mean (torch:mul diff diff))))
+				    (torch:backward loss)
+				    (torch:no-grad
+				      (setq *w* (torch:tensor (linalg:sub (torch:data *w*)
+				                                          (linalg:mul 0.125 (torch:grad *w*)))
+				                              :requires-grad t)))))
+				(print (torch:data *w*))
+				""")).isEqualTo("#d(1.999890012666583)");
+	}
+
+	@Test
+	void compileAndRunTorchGradcheckTable() throws Exception {
+		// The shared table-driven gradient check (TorchGradcheck): the analytic
+		// gradient of every differentiable op matches central differences. The
+		// closures the tape is made of are the part most likely to diverge between
+		// backends, so the whole table runs compiled too.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.EXPECTED);
 	}
 
 	@Test

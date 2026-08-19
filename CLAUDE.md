@@ -82,7 +82,7 @@ the "grep before you change behavior" rule:
   `defstruct`, `defmacro`/backquote, dynamic (special) variables, multiple values, packages,
   reader features, conditions / `handler-case`, `eval`, the jzon-driven CL additions, ...
 - Loading, libraries, I/O -- `load`/ASDF/`ql:quickload`, the Lisp-source libraries
-  (`json`/`url`/`linalg`/`vec`/`usocket`/`uiop`/prelude), the dependency shim systems,
+  (`json`/`url`/`linalg`/`torch`/`vec`/`usocket`/`uiop`/prelude), the dependency shim systems,
   `read`/streams, `fetch`/`http-handler`, TCP/TLS sockets, `java:` interop, time/environment.
 - Frontend source positions -- `file:line:column` in reader AND post-read errors, the
   cons-identity rule an AST pass must honour to keep them, and the position-inheriting

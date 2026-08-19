@@ -44,6 +44,7 @@ import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
+import am.ik.rontolisp.eval.TorchLibrary;
 import am.ik.rontolisp.eval.LispEvalException;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
@@ -717,9 +718,12 @@ public final class RontoLispCli {
 		// site any of them introduced -- a Gray dispatch helper's handle FALLBACK above
 		// all -- reaches the cell too; a program that never names unread-char is
 		// returned unchanged.
+		// TorchLibrary runs BEFORE LinalgLibrary so the linalg: references inside the
+		// spliced torch definitions pull the linalg library in too.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded)))),
+					UrlLibrary.process(LinalgLibrary
+						.process(TorchLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /

@@ -5048,6 +5048,35 @@ public final class LispNames {
 	public static final String LINALG_COL2IM = "%LA-COL2IM";
 
 	/**
+	 * The {@code torch} package name (a PyTorch-style tensor with reverse-mode autograd
+	 * over the {@code linalg} kernels). Like {@code linalg}, the package is implemented
+	 * once in rontolisp itself ({@code torch.lisp}, see {@code TorchLibrary}); the
+	 * exported function names live in {@code PackageRegistry#torchFunctionNames()}. The
+	 * one macro, {@code torch:no-grad}, is a built-in {@code LispMacroExpander}
+	 * expansion, so its member name gets a constant here.
+	 */
+	public static final String TORCH_PKG = "TORCH";
+
+	/**
+	 * {@code torch:no-grad}: the gradient-mode macro -- runs its body with
+	 * {@code torch::*grad-enabled*} dynamically bound to {@code nil}, so no operation
+	 * inside records the autograd tape. Expanded by
+	 * {@code LispMacroExpander#expandTorchNoGrad}.
+	 */
+	public static final String TORCH_NO_GRAD = "NO-GRAD";
+
+	/** {@code torch:no-grad} spelled with its package qualifier. */
+	public static final String TORCH_NO_GRAD_QUALIFIED = TORCH_PKG + ":" + TORCH_NO_GRAD;
+
+	/**
+	 * {@code torch::*grad-enabled*} (INTERNAL): the dynamic gradient-mode variable
+	 * {@code torch:no-grad}'s expansion rebinds. The expansion synthesizes this name
+	 * AFTER {@code LibraryDefunPruner} runs, so the pruner treats a {@code torch:no-grad}
+	 * occurrence as a reference to it (the {@code vec:aset} synthetic-edge pattern).
+	 */
+	public static final String TORCH_GRAD_ENABLED_QUALIFIED = TORCH_PKG + "::*GRAD-ENABLED*";
+
+	/**
 	 * The {@code vec} package name: portable packed-{@code f64} vector kernels over the
 	 * packed {@code (array double-float)} type. Implemented once in rontolisp itself
 	 * ({@code vec.lisp}, see {@code VecLibrary}) as the scalar reference / cross-backend

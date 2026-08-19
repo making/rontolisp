@@ -70,6 +70,7 @@
 | `change-class` | `(change-class obj 'class :initarg v)` | インスタンスのクラスをその場で変更して返します(同一性と共通スロットは保たれ、新しいスロットは `:initform` で埋まります) |
 | `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | ボディを実行してその値を返し、非 GC WASM バックエンド(`--no-gc`)のメモリ再利用境界を名付けます。内部で確保されたものは終端でポップされ、ボディの値だけが残ります。他のバックエンドでは実際の GC が回収するため、単なる `progn` です |
 | `rontolisp:with-mutex` | `(rontolisp:with-mutex (mutex-form) body...)` | mutex を獲得し、ボディを実行し、あらゆる脱出時(シグナルされたエラーを含む)に解放します。サーブされるハンドラがリクエストごとに 1 つの仮想スレッドで動くインタプリタと JVM バックエンドでは実際の相互排他になり、単一スレッドの WASM バックエンドでは no-op です |
+| `torch:no-grad` | `(torch:no-grad body...)` | 勾配の記録を無効にして本体を実行します。内側の `torch` 演算は値を計算しますが自動微分テープには何も記録しません (学習ループの更新や推論のイディオム) |
 | `uiop:if-let` | `(uiop:if-let ((a x) (b y)) then else)` | `let` と同じく変数を並列に束縛し、**すべての**変数が非 nil のときだけ `then` 側を取ります。入れ子でない単一束縛 (`(uiop:if-let (x form) ...)`) も受け付けます |
 | `uiop:when-let` | `(uiop:when-let ((a x)) body...)` | 暗黙の `progn` ボディを持ち else 分岐のない `uiop:if-let`: すべての変数が非 nil のときだけボディを評価し、そうでなければ nil です |
 | `uiop:when-let*` | `(uiop:when-let* ((a x) (b (f a))) body...)` | 逐次版の `uiop:when-let`: 各フォームは先行する束縛を参照でき、最初に nil になった時点で残りを評価せず nil になります |

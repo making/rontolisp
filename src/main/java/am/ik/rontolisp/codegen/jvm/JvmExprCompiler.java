@@ -402,6 +402,14 @@ final class JvmExprCompiler {
 				compileExpr(LispMacroExpander.expandWithMutex(cons), ctx, className);
 				return;
 			}
+			// torch:no-grad is a built-in LispMacroExpander expansion (the usocket with-*
+			// pattern): a let that dynamically rebinds the spliced torch.lisp
+			// defparameter torch::*grad-enabled*. The other torch: members are the
+			// torch.lisp defuns and fall through to the ordinary qualified-call path.
+			if (qn != null && LispNames.TORCH_PKG.equals(qn.pkg()) && LispNames.TORCH_NO_GRAD.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandTorchNoGrad(cons), ctx, className);
+				return;
+			}
 			// --vec: route the six vectorizable vec: kernels to the embedded Vector API
 			// bridge instead of the scalar vec.lisp defun. Only when the runtime was
 			// emitted (ctx.simdOps != null); otherwise this falls through to the ordinary

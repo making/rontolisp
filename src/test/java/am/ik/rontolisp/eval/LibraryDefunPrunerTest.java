@@ -22,8 +22,8 @@ class LibraryDefunPrunerTest {
 	}
 
 	private static List<LispVal> splice(String source) {
-		return UsocketLibrary.process(VecLibrary.process(LispPreludeLibrary.process(
-				UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source)))))));
+		return UsocketLibrary.process(VecLibrary.process(LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary
+			.process(TorchLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source))))))));
 	}
 
 	private static List<String> definedNames(List<LispVal> program) {
@@ -101,6 +101,27 @@ class LibraryDefunPrunerTest {
 				spliceAndPrune("(linalg:seed 42) (print (linalg:to-list (linalg:randn '(2))))"));
 		assertThat(names).contains("LINALG:SEED", "LINALG:RANDN", "LINALG::%LA-RNG-NEXT", "LINALG::%LA-RNG-S1",
 				"LINALG::%LA-RNG-S2", "LINALG::%LA-RNG-S3");
+	}
+
+	@Test
+	void keepsOnlyTheTransitiveClosureOfTheCalledTorchFunction() {
+		List<String> names = definedNames(spliceAndPrune("(print (torch:data (torch:tensor '(1.0 2.0))))"));
+		assertThat(names).contains("TORCH:TENSOR", "TORCH:DATA")
+			// the record constructor and the data coercion funnel tensor goes through
+			.contains("TORCH::%T-NEW", "TORCH::%T-AS-DATA")
+			// the linalg defuns the kept torch bodies reference stay too
+			.contains("LINALG:FROM-LIST")
+			// unrelated members of both libraries are dropped
+			.doesNotContain("TORCH:BACKWARD", "TORCH:MATMUL", "TORCH:SOFTMAX", "LINALG:DET", "LINALG:MATMUL");
+	}
+
+	@Test
+	void torchNoGradKeepsTheSynthesizedGradEnabledVariable() {
+		// (torch:no-grad ...) expands to a let over torch::*grad-enabled* AFTER the
+		// pruner runs (LispMacroExpander.expandTorchNoGrad), so the variable is a
+		// hardcoded edge of the macro name -- the vec:aref -> vec:aset pattern.
+		List<String> names = definedNames(spliceAndPrune("(torch:no-grad (print (torch:data (torch:tensor 1.0))))"));
+		assertThat(names).contains("TORCH::*GRAD-ENABLED*");
 	}
 
 	@Test

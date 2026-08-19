@@ -99,6 +99,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.TorchLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/torch\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/url\\.lisp"

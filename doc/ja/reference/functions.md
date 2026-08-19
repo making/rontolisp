@@ -578,6 +578,62 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:choice` | `(linalg:choice 60000 4)` | `[0, n)` の一様インデックスを size 個(復元抽出。ミニバッチ抽出向け) |
 | `linalg:permutation` | `(linalg:permutation 10)` | 0..n-1 のシャッフル(Fisher-Yates) |
 
+## torch パッケージの関数
+
+`torch` パッケージは `linalg` の上に載る PyTorch スタイルの微分可能レイヤーです
+([ニューラルネットワークガイド](../guides/neural-networks.md)を参照)。どう計算さ
+れたかを記録するテンソルと、その履歴を辿って勾配を書き込む `torch:backward` から
+なります。**Common Lisp の一部ではなく**、関数は `torch:` 修飾子付きで参照します
+(パッケージは `cl` を使用しません)。すべての演算はテンソル、数値、配列、リストを
+オペランドに取り、`linalg` カーネルを通じて計算するため `--simd` は torch プログ
+ラムもそのまま加速します。テンソル自体は生のレコードとして印字されるので、結果は
+`torch:data` / `torch:item` / `torch:grad` で読み戻してください。唯一のマクロ
+`torch:no-grad` は[マクロのページ](macros/torch-no-grad.md)にあります。
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `torch:tensor` | `(torch:tensor '(1 2) :requires-grad t)` | パックドデータ上の葉テンソル (`:element-type 'single-float` で `#f`) |
+| `torch:tensorp` | `(torch:tensorp x)` | テンソルなら `T`、それ以外は `NIL` |
+| `torch:data` | `(torch:data tn)` | linalg 配列 (スカラーテンソルなら数値) |
+| `torch:grad` | `(torch:grad tn)` | 蓄積された勾配。backward 前は `NIL` |
+| `torch:shape` | `(torch:shape tn)` | 次元リスト。スカラーテンソルは `NIL` |
+| `torch:item` | `(torch:item tn)` | 要素 1 個のテンソルの中の数値 |
+| `torch:detach` | `(torch:detach tn)` | データを共有しテープから切り離した葉 |
+| `torch:zero-grad` | `(torch:zero-grad tn)` | 勾配スロットをクリアしてテンソルを返す |
+| `torch:requires-grad-p` | `(torch:requires-grad-p tn)` | テンソルが自動微分に参加するか |
+| `torch:backward` | `(torch:backward loss)` | スカラーテンソルからの逆方向自動微分 (`torch:grad` に蓄積) |
+| `torch:add` | `(torch:add a b)` | ブロードキャスト付きの微分可能な要素ごとの `+` |
+| `torch:sub` | `(torch:sub a b)` | 微分可能な要素ごとの `-` |
+| `torch:mul` | `(torch:mul a b)` | 微分可能な要素ごとの (アダマール) `*` |
+| `torch:div` | `(torch:div a b)` | 微分可能な要素ごとの `/` |
+| `torch:neg` | `(torch:neg a)` | 微分可能な符号反転 |
+| `torch:power` | `(torch:power a 2)` | 微分可能な要素ごとの `a ** b` |
+| `torch:exp` | `(torch:exp a)` | 微分可能な `e^x` |
+| `torch:log` | `(torch:log a)` | 微分可能な自然対数 |
+| `torch:sqrt` | `(torch:sqrt a)` | 微分可能な平方根 |
+| `torch:tanh` | `(torch:tanh a)` | 微分可能な双曲線正接 |
+| `torch:relu` | `(torch:relu a)` | 微分可能な `max(x, 0.0)` |
+| `torch:matmul` | `(torch:matmul a b)` | 微分可能な行列積 (ランク 3 以上はバッチ積) |
+| `torch:sum` | `(torch:sum a :axis 0)` | 微分可能な合計 (全体または軸に沿って) |
+| `torch:mean` | `(torch:mean a)` | 微分可能な平均 |
+| `torch:var` | `(torch:var a :ddof 1)` | 微分可能な分散 (除数 `(n - ddof)`) |
+| `torch:std` | `(torch:std a)` | 微分可能な標準偏差 |
+| `torch:amax` | `(torch:amax a :axis 0)` | 微分可能な最大値 (同値には勾配を均等分配) |
+| `torch:argmax` | `(torch:argmax a)` | 最大要素のインデックス (微分不可能、生の値) |
+| `torch:softmax` | `(torch:softmax a :axis 1)` | 微分可能な最大値差し引き softmax |
+| `torch:log-softmax` | `(torch:log-softmax a :axis 1)` | 微分可能な log-softmax (交差エントロピーの半分) |
+| `torch:masked-fill` | `(torch:masked-fill a mask v)` | マスクが非ゼロの位置を `v` で埋める微分可能な演算 |
+| `torch:gather` | `(torch:gather a idx)` | 行列の微分可能な行ごとの要素選択 |
+| `torch:index-select` | `(torch:index-select a idx)` | 微分可能な行選択 (埋め込み参照。重複は蓄積) |
+| `torch:reshape` | `(torch:reshape a '(2 3))` | 微分可能な行優先 reshape |
+| `torch:view` | `(torch:view a '(2 3))` | PyTorch のもう 1 つの名前での `torch:reshape` |
+| `torch:transpose` | `(torch:transpose a '(1 0 2))` | 微分可能な転置 / 軸の並べ替え |
+| `torch:unsqueeze` | `(torch:unsqueeze a 0)` | 微分可能な広がり 1 の軸の挿入 |
+| `torch:squeeze` | `(torch:squeeze a)` | 微分可能な広がり 1 の軸の除去 |
+| `torch:cat` | `(torch:cat (list a b) :axis 1)` | 既存の軸に沿った微分可能な連結 |
+| `torch:stack` | `(torch:stack (list a b))` | 新しい軸に沿った微分可能な結合 |
+| `torch:slice` | `(torch:slice a '(nil (0 2)))` | 微分可能な numpy 基本スライス |
+
 ## java パッケージの関数
 
 `java` パッケージはリフレクションで任意の Java API を操作します。**JVM 専用**であり、インタプリタ (`java -jar rontolisp.jar`) と JVM コンパイル済みクラス (コンパイラがリフレクションブリッジを生成 `.class` に埋め込みます) で動作します (WASM バックエンドでは動作せず、GraalVM ネイティブバイナリはリフレクションメタデータを持たないためインタプリタ実行もできません)。また **Common Lisp の一部ではありません**。関数は `java:` 修飾子付きで参照します。各名前は個別のページにリンクしています。マーシャリング、オーバーロード解決、制限については [Java 連携ガイド](../guides/java-interop.md)を参照してください。

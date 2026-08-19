@@ -26,16 +26,17 @@ import org.jspecify.annotations.Nullable;
  * The compile-path library tree-shaker: an AST-level pre-pass that drops spliced
  * definitions ({@code defun}/{@code defparameter}/{@code defvar}/{@code defconstant})
  * unreachable from the user program. Two sources are in scope -- the bundled Lisp
- * libraries ({@link LinalgLibrary}, {@link VecLibrary}, {@link JsonLibrary},
- * {@link UrlLibrary}, {@link LispPreludeLibrary}) and any third-party ASDF system
- * {@code LoadInliner} spliced, which it marks with {@code %begin-system} brackets. The
- * splices are <em>whole</em> (linalg.lisp alone is ~100 defuns of which a typical program
- * calls a handful; cl-ppcre is ~300 definitions), and the {@code --optimize} bytecode
- * shakers can only trim after the complete class/module has been serialized once -- and
- * cannot reach a dead Lisp defun at all, since every one of them is reachable from the
- * funcall dispatcher. That is how the ci-spec corpus class approached the JVM 65535
- * constant-pool ceiling ({@code .kb/library-defun-pruning.md}). Pruning before Pass 1
- * keeps the pool (and the un-optimized artifact) small for every program.
+ * libraries ({@link LinalgLibrary}, {@link TorchLibrary}, {@link VecLibrary},
+ * {@link JsonLibrary}, {@link UrlLibrary}, {@link LispPreludeLibrary}) and any
+ * third-party ASDF system {@code LoadInliner} spliced, which it marks with
+ * {@code %begin-system} brackets. The splices are <em>whole</em> (linalg.lisp alone is
+ * ~100 defuns of which a typical program calls a handful; cl-ppcre is ~300 definitions),
+ * and the {@code --optimize} bytecode shakers can only trim after the complete
+ * class/module has been serialized once -- and cannot reach a dead Lisp defun at all,
+ * since every one of them is reachable from the funcall dispatcher. That is how the
+ * ci-spec corpus class approached the JVM 65535 constant-pool ceiling
+ * ({@code .kb/library-defun-pruning.md}). Pruning before Pass 1 keeps the pool (and the
+ * un-optimized artifact) small for every program.
  *
  * <p>
  * Reachability is deliberately over-approximate ("carve-out" semantics):
@@ -896,10 +897,12 @@ public final class LibraryDefunPruner {
 	}
 
 	/**
-	 * The union of every definition name in the prunable libraries (linalg, vec, json +
-	 * its {@code #'} wrappers, url, prelude). usocket is deliberately absent: its
+	 * The union of every definition name in the prunable libraries (linalg, torch, vec,
+	 * json + its {@code #'} wrappers, url, prelude). usocket is deliberately absent: its
 	 * {@code with-*} built-in macros synthesize calls not textually present in the
-	 * pre-expansion AST.
+	 * pre-expansion AST; torch's one built-in macro ({@code torch:no-grad}) synthesizes
+	 * only {@code torch::*grad-enabled*}, which is a hardcoded edge of the macro name
+	 * (see {@code collectReferences}), so the rest of the library stays prunable.
 	 */
 	private static Set<String> prunableNames() {
 		Set<String> cached = prunableNames;
@@ -909,6 +912,7 @@ public final class LibraryDefunPruner {
 				if (cached == null) {
 					Set<String> names = new HashSet<>();
 					collectDefinitionNames(LinalgLibrary.forms(), names);
+					collectDefinitionNames(TorchLibrary.forms(), names);
 					collectDefinitionNames(VecLibrary.forms(), names);
 					collectDefinitionNames(JsonLibrary.forms(), names);
 					collectDefinitionNames(JsonLibrary.wrapperForms(), names);
@@ -1009,6 +1013,13 @@ public final class LibraryDefunPruner {
 				}
 				if (LispNames.VEC_QUALIFIED_AREF.equals(name)) {
 					out.add(LispNames.VEC_QUALIFIED_ASET);
+				}
+				if (LispNames.TORCH_NO_GRAD_QUALIFIED.equals(name)) {
+					// (torch:no-grad ...) expands to a let over torch::*grad-enabled*
+					// AFTER the pruner runs (LispMacroExpander.expandTorchNoGrad), so
+					// the variable is a hardcoded edge of the macro name -- the
+					// vec:aref -> vec:aset pattern.
+					out.add(LispNames.TORCH_GRAD_ENABLED_QUALIFIED);
 				}
 			}
 			case LispString str -> {

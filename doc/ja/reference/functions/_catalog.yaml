@@ -564,6 +564,49 @@ categories:
       - { slug: linalg-uniform, name: "linalg:uniform" }
       - { slug: linalg-choice, name: "linalg:choice" }
       - { slug: linalg-permutation, name: "linalg:permutation" }
+  - title: "torch パッケージ"
+    functions:
+      - { slug: torch-tensor, name: "torch:tensor" }
+      - { slug: torch-tensorp, name: "torch:tensorp" }
+      - { slug: torch-data, name: "torch:data" }
+      - { slug: torch-grad, name: "torch:grad" }
+      - { slug: torch-shape, name: "torch:shape" }
+      - { slug: torch-item, name: "torch:item" }
+      - { slug: torch-detach, name: "torch:detach" }
+      - { slug: torch-zero-grad, name: "torch:zero-grad" }
+      - { slug: torch-requires-grad-p, name: "torch:requires-grad-p" }
+      - { slug: torch-backward, name: "torch:backward" }
+      - { slug: torch-add, name: "torch:add" }
+      - { slug: torch-sub, name: "torch:sub" }
+      - { slug: torch-mul, name: "torch:mul" }
+      - { slug: torch-div, name: "torch:div" }
+      - { slug: torch-neg, name: "torch:neg" }
+      - { slug: torch-power, name: "torch:power" }
+      - { slug: torch-exp, name: "torch:exp" }
+      - { slug: torch-log, name: "torch:log" }
+      - { slug: torch-sqrt, name: "torch:sqrt" }
+      - { slug: torch-tanh, name: "torch:tanh" }
+      - { slug: torch-relu, name: "torch:relu" }
+      - { slug: torch-matmul, name: "torch:matmul" }
+      - { slug: torch-sum, name: "torch:sum" }
+      - { slug: torch-mean, name: "torch:mean" }
+      - { slug: torch-var, name: "torch:var" }
+      - { slug: torch-std, name: "torch:std" }
+      - { slug: torch-amax, name: "torch:amax" }
+      - { slug: torch-argmax, name: "torch:argmax" }
+      - { slug: torch-softmax, name: "torch:softmax" }
+      - { slug: torch-log-softmax, name: "torch:log-softmax" }
+      - { slug: torch-masked-fill, name: "torch:masked-fill" }
+      - { slug: torch-gather, name: "torch:gather" }
+      - { slug: torch-index-select, name: "torch:index-select" }
+      - { slug: torch-reshape, name: "torch:reshape" }
+      - { slug: torch-view, name: "torch:view" }
+      - { slug: torch-transpose, name: "torch:transpose" }
+      - { slug: torch-unsqueeze, name: "torch:unsqueeze" }
+      - { slug: torch-squeeze, name: "torch:squeeze" }
+      - { slug: torch-cat, name: "torch:cat" }
+      - { slug: torch-stack, name: "torch:stack" }
+      - { slug: torch-slice, name: "torch:slice" }
   - title: "java パッケージ (JVM 専用)"
     functions:
       - { slug: java-new, name: "java:new" }

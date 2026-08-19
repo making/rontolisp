@@ -360,6 +360,20 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// torch tests pre-process with TorchLibrary.process then LinalgLibrary.process,
+	// mirroring the compile-path pre-pass order run by RontoLispCli (torch first, so
+	// the linalg references inside the spliced torch defuns pull linalg in too).
+	private static String compileAndRunTorch(String lispCode) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LinalgLibrary
+			.process(am.ik.rontolisp.eval.TorchLibrary.process(LispReader.readAllFromString(lispCode)));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
+				path("test.wasm"));
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
 	// URL tests pre-process with UrlLibrary.process, mirroring the compile-path
 	// pre-pass run by RontoLispCli.
 	private static String compileAndRunUrl(String lispCode) throws Exception {
@@ -13321,6 +13335,60 @@ class WasmLispCompilerIntegrationTest {
 				+ "#d((4.0 5.0 6.0) (1.0 2.0 3.0))\n#d(4.0 5.0 6.0)\n#d(3.0 4.0)\n"
 				+ "#d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0))\n#d((0.0 0.0 0.0) (1.0 1.0 1.0))\n"
 				+ "#d(1.0 1.0)\n#f(0.0 0.0)");
+	}
+
+	@Test
+	void compileTorchAutogradSmallGraph() throws Exception {
+		// Same program and expectation as the JVM compileAndRunTorchAutogradSmallGraph
+		// case: a multi-step graph (matmul -> broadcasting add -> mul -> sum) with
+		// backward, plus torch:no-grad keeping a result off the tape.
+		assertThat(compileAndRunTorch("""
+				(defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))
+				(defparameter *b* (torch:tensor 0.5 :requires-grad t))
+				(defparameter *x* (torch:tensor #2A((1.0 2.0) (3.0 4.0))))
+				(defparameter *y* (torch:add (torch:matmul *x* *w*) *b*))
+				(print (torch:data *y*))
+				(defparameter *loss* (torch:sum (torch:mul *y* *y*)))
+				(print (torch:item *loss*))
+				(torch:backward *loss*)
+				(print (torch:grad *w*))
+				(print (torch:grad *b*))
+				(torch:no-grad
+				  (print (torch:requires-grad-p (torch:mul *w* 2))))
+				(print (torch:requires-grad-p (torch:mul *w* 2)))
+				""")).isEqualTo("#d(5.5 11.5)\n162.5\n#d(80.0 114.0)\n34.0\nNIL\nT");
+	}
+
+	@Test
+	void compileTorchTrainingLoopWithNoGrad() throws Exception {
+		// Same program and expectation as the JVM
+		// compileAndRunTorchTrainingLoopWithNoGrad
+		// case: ten exact-dyadic gradient-descent steps, the update inside
+		// torch:no-grad (the special-variable rebinding on the wasm backend).
+		assertThat(compileAndRunTorch("""
+				(defparameter *w* (torch:tensor '(0.0) :requires-grad t))
+				(defparameter *x* (torch:tensor '(1.0 2.0)))
+				(defparameter *y* (torch:tensor '(2.0 4.0)))
+				(dotimes (i 10)
+				  (let* ((diff (torch:sub (torch:mul *x* *w*) *y*))
+				         (loss (torch:mean (torch:mul diff diff))))
+				    (torch:backward loss)
+				    (torch:no-grad
+				      (setq *w* (torch:tensor (linalg:sub (torch:data *w*)
+				                                          (linalg:mul 0.125 (torch:grad *w*)))
+				                              :requires-grad t)))))
+				(print (torch:data *w*))
+				""")).isEqualTo("#d(1.999890012666583)");
+	}
+
+	@Test
+	void compileTorchGradcheckTable() throws Exception {
+		// The shared table-driven gradient check (TorchGradcheck), on the wasm-GC
+		// backend: the tape's closures and the polynomial exp/log/tanh must stay
+		// CONSISTENT between the analytic backward and the numeric forward
+		// differences, which is exactly what the relative tolerance verifies.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.EXPECTED);
 	}
 
 	@Test

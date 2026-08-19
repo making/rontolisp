@@ -10089,6 +10089,75 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void torchTensorConstructionAndAccessors() {
+		LispVal result = evalMulti("""
+				(defparameter *t* (torch:tensor '((1.0 2.0) (3.0 4.0)) :requires-grad t))
+				(list (torch:shape *t*) (torch:data *t*) (torch:requires-grad-p *t*)
+				      (torch:tensorp *t*) (torch:tensorp #(1 2 3))
+				      (torch:item (torch:tensor 2.5)) (torch:shape (torch:tensor 2.5))
+				      (torch:grad *t*)
+				      (torch:data (torch:tensor #(1 2) :element-type 'single-float)))
+				""");
+		assertThat(result.print()).isEqualTo("((2 2) #d((1.0 2.0) (3.0 4.0)) T T NIL 2.5 NIL NIL #f(1.0 2.0))");
+		assertThatThrownBy(() -> eval("(torch:data 5)")).hasMessageContaining("torch: expected a tensor");
+		assertThatThrownBy(() -> eval("(torch:item (torch:tensor '(1.0 2.0)))"))
+			.hasMessageContaining("torch: item expects a one-element tensor");
+	}
+
+	@Test
+	void torchBackwardAccumulatesAndNoGradSuppressesTheTape() {
+		// backward accumulates (+=) across calls; zero-grad clears; torch:no-grad
+		// keeps an operation off the tape while detach cuts an existing result off.
+		LispVal result = evalMulti("""
+				(defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))
+				(defparameter *y* (torch:no-grad (torch:mul *w* 3.0)))
+				(defparameter *z* (torch:mul *w* 3.0))
+				(defparameter *d* (torch:detach *z*))
+				(torch:backward (torch:sum *z*))
+				(defparameter *g1* (torch:grad *w*))
+				(torch:backward (torch:sum (torch:mul *w* *w*)))
+				(defparameter *g2* (torch:grad *w*))
+				(torch:zero-grad *w*)
+				(list (torch:requires-grad-p *y*) (torch:requires-grad-p *z*)
+				      (torch:requires-grad-p *d*) *g1* *g2* (torch:grad *w*))
+				""");
+		assertThat(result.print()).isEqualTo("(NIL T NIL #d(3.0 3.0) #d(5.0 7.0) NIL)");
+		assertThatThrownBy(() -> eval("(torch:backward (torch:tensor '(1.0 2.0)))"))
+			.hasMessageContaining("torch: backward expects a scalar (one-element) tensor");
+	}
+
+	@Test
+	void torchSharedPathsAccumulateAndMaskedSoftmaxBackpropagates() {
+		// index-select with a repeated row is the shared-embedding case: the row's
+		// gradient must be the SUM of both selections. The second half is the
+		// masked-attention idiom: -infinity through masked-fill -> softmax is a
+		// weight of exactly 0.0, and the backward pass stays finite (values chosen
+		// so every printed double is exact on every backend).
+		LispVal result = evalMulti("""
+				(defparameter *e* (torch:tensor '((1.0 0.0) (0.0 1.0)) :requires-grad t))
+				(torch:backward (torch:sum (torch:index-select *e* #(0 1 0))))
+				(defparameter *sc* (torch:tensor '((1.0 2.0) (3.0 3.0)) :requires-grad t))
+				(defparameter *att* (torch:softmax
+				                     (torch:masked-fill *sc* #2A((0 1) (0 0)) (/ -1.0 0.0))
+				                     :axis 1))
+				(torch:backward (torch:sum (torch:mul *att* #2A((1.0 0.0) (0.0 1.0)))))
+				(list (torch:grad *e*) (torch:data *att*) (torch:grad *sc*))
+				""");
+		assertThat(result.print())
+			.isEqualTo("(#d((2.0 2.0) (1.0 1.0)) #d((1.0 0.0) (0.5 0.5))" + " #d((0.0 0.0) (-0.25 0.25)))");
+	}
+
+	@Test
+	void torchGradcheckTable() {
+		// The acceptance test of the autograd layer: for every differentiable op the
+		// analytic gradient matches central-difference numerical differentiation
+		// (am.ik.rontolisp.testsupport.TorchGradcheck, shared verbatim with the JVM
+		// and WASM backends). A failing row prints its diagnosis instead of ALL-OK.
+		LispVal result = evalMulti(am.ik.rontolisp.testsupport.TorchGradcheck.PROGRAM);
+		assertThat(result.print()).isEqualTo("ALL-OK");
+	}
+
+	@Test
 	void rowMajorArefReadsAndWritesFlat() {
 		LispVal result = evalMulti("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

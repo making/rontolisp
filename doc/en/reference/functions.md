@@ -614,6 +614,63 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:choice` | `(linalg:choice 60000 4)` | 4 uniform indices in `[0, 60000)`, with replacement (a packed double vector) |
 | `linalg:permutation` | `(linalg:permutation 10)` | The integers `0..9` in a Fisher-Yates shuffle (a packed double vector) |
 
+## torch Package Functions
+
+The `torch` package is the PyTorch-style differentiable layer over `linalg`
+(see the [Neural Networks guide](../guides/neural-networks.md)): a tensor that
+records how it was computed, and a `torch:backward` that walks that history to
+fill in gradients. It is **not part of Common Lisp**; reference its functions
+with the `torch:` qualifier (the package does not use `cl`). Every operation
+accepts tensors, numbers, arrays or lists as operands, computes through the
+`linalg` kernels (so `--simd` accelerates torch programs for free), and a
+tensor prints as its raw record -- read results back with `torch:data` /
+`torch:item` / `torch:grad`. The one macro, `torch:no-grad`, is on the
+[Macros page](macros/torch-no-grad.md).
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `torch:tensor` | `(torch:tensor '(1 2) :requires-grad t)` | a leaf tensor over packed data (`:element-type 'single-float` for `#f`) |
+| `torch:tensorp` | `(torch:tensorp x)` | `T` for a tensor, `NIL` otherwise |
+| `torch:data` | `(torch:data tn)` | the linalg array (or number, for a scalar tensor) |
+| `torch:grad` | `(torch:grad tn)` | the accumulated gradient, or `NIL` before backward |
+| `torch:shape` | `(torch:shape tn)` | the dims list; `NIL` for a scalar tensor |
+| `torch:item` | `(torch:item tn)` | the number in a one-element tensor |
+| `torch:detach` | `(torch:detach tn)` | a leaf sharing the data, cut off from the tape |
+| `torch:zero-grad` | `(torch:zero-grad tn)` | clears the gradient slot; returns the tensor |
+| `torch:requires-grad-p` | `(torch:requires-grad-p tn)` | whether the tensor participates in autograd |
+| `torch:backward` | `(torch:backward loss)` | reverse-mode autograd from a scalar tensor (accumulates into `torch:grad`) |
+| `torch:add` | `(torch:add a b)` | differentiable elementwise `+` with broadcasting |
+| `torch:sub` | `(torch:sub a b)` | differentiable elementwise `-` |
+| `torch:mul` | `(torch:mul a b)` | differentiable elementwise (Hadamard) `*` |
+| `torch:div` | `(torch:div a b)` | differentiable elementwise `/` |
+| `torch:neg` | `(torch:neg a)` | differentiable negation |
+| `torch:power` | `(torch:power a 2)` | differentiable elementwise `a ** b` |
+| `torch:exp` | `(torch:exp a)` | differentiable `e^x` |
+| `torch:log` | `(torch:log a)` | differentiable natural log |
+| `torch:sqrt` | `(torch:sqrt a)` | differentiable square root |
+| `torch:tanh` | `(torch:tanh a)` | differentiable hyperbolic tangent |
+| `torch:relu` | `(torch:relu a)` | differentiable `max(x, 0.0)` |
+| `torch:matmul` | `(torch:matmul a b)` | differentiable matrix product (batched at rank >= 3) |
+| `torch:sum` | `(torch:sum a :axis 0)` | differentiable sum (whole tensor or along an axis) |
+| `torch:mean` | `(torch:mean a)` | differentiable mean |
+| `torch:var` | `(torch:var a :ddof 1)` | differentiable variance (`(n - ddof)` divisor) |
+| `torch:std` | `(torch:std a)` | differentiable standard deviation |
+| `torch:amax` | `(torch:amax a :axis 0)` | differentiable maximum (gradient split among ties) |
+| `torch:argmax` | `(torch:argmax a)` | index of the largest element (non-differentiable, raw value) |
+| `torch:softmax` | `(torch:softmax a :axis 1)` | differentiable max-subtracted softmax |
+| `torch:log-softmax` | `(torch:log-softmax a :axis 1)` | differentiable log-softmax (cross-entropy half) |
+| `torch:masked-fill` | `(torch:masked-fill a mask v)` | differentiable fill of `v` where the mask is non-zero |
+| `torch:gather` | `(torch:gather a idx)` | differentiable per-row element pick of a matrix |
+| `torch:index-select` | `(torch:index-select a idx)` | differentiable row selection (the embedding lookup; repeats accumulate) |
+| `torch:reshape` | `(torch:reshape a '(2 3))` | differentiable row-major reshape |
+| `torch:view` | `(torch:view a '(2 3))` | `torch:reshape` under PyTorch's other name |
+| `torch:transpose` | `(torch:transpose a '(1 0 2))` | differentiable transpose / axes permutation |
+| `torch:unsqueeze` | `(torch:unsqueeze a 0)` | differentiable extent-1 axis insertion |
+| `torch:squeeze` | `(torch:squeeze a)` | differentiable extent-1 axis removal |
+| `torch:cat` | `(torch:cat (list a b) :axis 1)` | differentiable concatenation along an existing axis |
+| `torch:stack` | `(torch:stack (list a b))` | differentiable join along a new axis |
+| `torch:slice` | `(torch:slice a '(nil (0 2)))` | differentiable numpy basic slicing |
+
 ## java Package Functions
 
 The `java` package drives arbitrary Java APIs by reflection. It is

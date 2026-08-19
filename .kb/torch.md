@@ -1,0 +1,171 @@
+# The `torch` package (tensor + reverse-mode autograd over linalg)
+
+One hand-written Lisp-source library,
+`src/main/resources/am/ik/rontolisp/eval/torch.lisp`, following the
+`linalg.lisp` pattern (driver `eval.TorchLibrary`, a `LinalgLibrary` mirror) so a
+single implementation runs identically on all four backends. It is the
+differentiable layer of the PyTorch-style stack (todo-458): a tensor that
+records how it was computed, and a `torch:backward` that walks that history to
+fill in gradients. The stateless array math it runs on stays in `linalg`
+(`.kb/linalg.md`) -- torch NEVER reimplements a kernel, it wraps one and adds
+its adjoint.
+
+## The tensor: a fixed-layout record, and the pruning decision
+
+**Decision (todo-460, binding for the whole torch package including the 461
+module layer and the 462 optimizers): torch is defun-only BY DESIGN -- no
+`defclass`/`defmethod`/`defstruct`, ever.** `LibraryDefunPruner` prunes only
+`defun`/`defparameter`/`defvar`/`defconstant` for rontolisp's OWN libraries
+(`.kb/library-defun-pruning.md`; the CLOS `Candidates` machinery applies to
+third-party provenance only), so a CLOS-based tensor would have made the whole
+library non-prunable: every program touching `torch:softmax` would carry every
+op and (later) every module and optimizer. Building on plain defuns over a
+fixed-layout record keeps every torch definition inside the pruner's existing,
+audited mechanism -- `LibraryDefunPrunerTest.keepsOnlyTheTransitiveClosureOfTheCalledTorchFunction`
+pins that a `torch:tensor`-only program drops `torch:backward`/`torch:matmul`
+AND the unused linalg members. CLOS dispatch buys the tensor nothing: values
+flow through closures on the tape, not through generic functions. If 461 ever
+finds a genuine need for CLOS in torch, the price is widening the pruner's own-
+library scope to the CLOS kinds first -- do not add a `defclass` to torch.lisp
+without that.
+
+The record is a six-slot general vector (`(make-array 6)`), discriminated by
+`torch:tensorp` on the tag symbol in slot 0:
+
+| slot | field | contents |
+| --- | --- | --- |
+| 0 | tag | the symbol `torch::%tensor` |
+| 1 | data | a linalg array (packed float, any rank; `:element-type` honoured) or a NUMBER -- a plain number is the rank-0 scalar tensor (`torch:shape` nil, like `linalg:ndim` 0) |
+| 2 | grad | nil, or a value of data's shape -- a RAW linalg value, not a tensor |
+| 3 | requires-grad | the LEAF flag from `(torch:tensor x :requires-grad t)` |
+| 4 | parents | the input tensors this one was computed from |
+| 5 | backward-fn | nil, or `(lambda (grad-out) ...)` -> the per-parent gradient list (nil entries for untracked parents) |
+
+A tensor "tracks" when slot 3 or 5 is set (`torch:requires-grad-p`). Every op
+routes operands through `torch::%t-wrap` (tensor passes through; number / raw
+array / list becomes a constant leaf) and results through `torch::%t-result`,
+which records the tape edge only while `torch::*grad-enabled*` is true AND some
+parent tracks -- otherwise the result is a plain leaf and the inputs stay
+collectable. Reductions of a whole tensor produce scalar (number) data;
+`linalg`'s binary kernels accept numbers on both sides, and the emap-based
+unary ufuncs get number branches in the `torch::%t-r*` helpers, so scalar
+tensors flow through every op.
+
+Printing a tensor prints the raw record (slot 5 is a closure, whose printed
+form is backend-dependent) -- examples and cross-backend pins must print
+`torch:data`/`torch:grad`/`torch:item`, never the tensor itself.
+
+## The two invariants of `backward`, and the adjoint table
+
+1. **Reverse topological order, computed explicitly.** `torch::%t-topo` is a
+   DFS over the parents with identity (`member`/`eql`) visited marking; the
+   reverse finish order it builds has every consumer before the tensors it
+   consumed, so when a node's `backward-fn` runs its grad slot is complete.
+   Tape order would be wrong for any reconvergent graph.
+2. **Accumulate, never assign.** `torch::%t-accum` does `grad += g`
+   (`linalg:add` into the slot). A tensor reached over more than one path -- a
+   residual `x + f(x)`, an embedding row selected twice -- collects the SUM;
+   the gradcheck `residual` and `index-select-repeat` rows pin both. `backward`
+   requires a scalar (one-element) tensor and seeds 1.0; grads are RETAINED on
+   intermediates too (torch's `retain_grad`, for free).
+
+Broadcasting adjoints all route through ONE helper, **`torch::%t-unbroadcast`**
+(the todo's `%grad-unbroadcast`): the incoming gradient summed over every
+broadcast axis -- each leading axis the operand lacks (`linalg:sum :axis 0`
+repeatedly) and each axis where the operand's extent is 1 (`:axis i :keepdims
+t`) -- so a `(d)` bias against a `(b s d)` activation gets a `(d)` gradient.
+The reduction adjoints share `torch::%t-keepdims` (reduced value normalized to
+the keepdims shape so it broadcasts) and `torch::%t-grad-bcast` (materialize at
+the input's shape via `zeros-like` + broadcast add); the pure rearrangements
+share `torch::%t-grad-reshape`.
+
+| op | forward (linalg) | adjoint |
+| --- | --- | --- |
+| `add`/`sub` | `linalg:add`/`sub` | `g` / `-g`, unbroadcast per operand |
+| `mul`/`div` | `mul`/`div` | `g*b`, `g*a` / `g/b`, `-g*a/b^2`, unbroadcast |
+| `neg` | `negative` | `-g` |
+| `power` | `power` | `g*b*a^(b-1)`; exponent `g*out*ln a` -- computed ONLY when the exponent tracks (ln of a non-positive base would signal) |
+| `exp`/`log`/`sqrt`/`tanh` | ufuncs (number branch for scalars) | `g*out` / `g/a` / `g/(2 out)` / `g*(1-out^2)` |
+| `relu` | `relu` | `g * (a > 0)` mask (0 at 0, like PyTorch) |
+| `matmul` | `dot` (vec.vec) / `matmul` | rank-cased in `%t-mm-grad-a/-b`: general `g.b^T` / `a^T.g` with the last two axes swapped (`%t-swap-last`), vector sides via expand-dims products; batch axes unbroadcast |
+| `sum`/`mean` | `sum`/`mean` | broadcast back (`%t-grad-bcast`); mean divides by the reduced count |
+| `var`/`std` | COMPOSED from mean/sub/mul/sum/div (+ sqrt) | from the tape -- no bespoke adjoint; keeps the `(n - ddof)` divisor differentiable |
+| `amax` | `amax` | mask `(= a out)`, gradient split EVENLY among ties (PyTorch's amax rule) |
+| `argmax` | `argmax` | none -- returns the RAW index value/array, not a tensor |
+| `softmax`/`log-softmax` | `softmax`/`log-softmax` | `s*(g - sum(g*s))` / `g - exp(out)*sum(g)`, per `:axis` distribution |
+| `masked-fill` | `where` | `g` where the mask is zero, 0 where filled; mask and fill value are constants. `-inf` fills are safe through softmax (the `exp` underflow clamp, `.kb/linalg.md`) |
+| `reshape`/`view`/`unsqueeze`/`squeeze` | `reshape`/`expand-dims`/`squeeze` | `%t-grad-reshape` (row-major order is shared). `view` IS `reshape` here -- linalg results are fresh copies, nothing aliases |
+| `transpose` | `transpose` (axes normalized non-negative) | transpose by the INVERSE permutation |
+| `cat`/`stack` | `concatenate`/`stack` | slice the gradient back per input (`%t-axis-spec`); stack drops the new axis again |
+| `slice` | the `linalg:slice` plan | `%t-slice-scatter`: the same `%la-slice-bound` normalization and odometer, adding into `zeros-like` at the source positions |
+| `gather`/`index-select` | `gather`/`take-rows` | scatter-ADD into `zeros-like` (repeated indices accumulate -- the shared-embedding case) |
+
+Acceptance is the shared table-driven gradient check
+(`testsupport/TorchGradcheck`, one `gc-check` row per differentiable op --
+extend it with one row per new 461 op): analytic vs central differences at
+relative tolerance 1e-3, run VERBATIM on the interpreter
+(`LispEvaluatorTest.torchGradcheckTable`), the JVM
+(`JvmLispCompilerTest.compileAndRunTorchGradcheckTable`) and wasm-GC
+(`WasmLispCompilerIntegrationTest.compileTorchGradcheckTable`); the
+`--component` leg plus the "fit y = 2x" training loop is the byte-identical
+ci-spec case `torch-fit-cross-backend` (exact dyadic values, like the linalg
+cases). On WASM the polynomial `exp`/`log`/`tanh` differ from `Math.*`, but the
+check compares the backward against differences of the SAME forward, which is
+exactly the consistency that matters.
+
+## `torch:no-grad`: the one macro, and its three seams
+
+`torch:no-grad` is a BUILT-IN `LispMacroExpander` expansion (the usocket
+`with-*` pattern -- a `defmacro` in torch.lisp could not work: the compile path
+runs `UserMacroExpander` BEFORE the library splice, so a spliced defmacro would
+never expand). `expandTorchNoGrad` produces
+`(let ((torch::*grad-enabled* nil)) body...)` -- a DYNAMIC rebinding of the
+library's `defparameter`, so each backend's ordinary special-binding
+save/restore applies and no EH mode is forced on wasm. Three seams keep that
+sound:
+
+- **Interpreter ordering**: the `TORCH:NO-GRAD` case in `evalCons` calls
+  `ensureTorchLoaded()` BEFORE evaluating the expansion, so the `defparameter`
+  has declared the variable special by the time the `let` binds (otherwise the
+  binding would be lexical and the ops would read the global).
+- **`SpecialVarCollector`**: the JVM compiler gives a special a thread-local
+  store only when it sees a binding form; the `let` here is synthesized during
+  codegen, after the scan. `TORCH:NO-GRAD` is therefore listed in
+  `LispMacroExpander.expandBuiltinMacro` (which the collector -- and
+  `macroexpand-1` -- expand through). Missing this is a LOUD compile error
+  ("dynamically bound here but has no thread-local store"), never silence.
+- **`LibraryDefunPruner`**: the expansion synthesizes `torch::*grad-enabled*`
+  AFTER the pruner runs, so a `torch:no-grad` occurrence is a hardcoded
+  reference edge to it -- the second such edge beside `vec:aref` ->
+  `vec:aset` (`.kb/library-defun-pruning.md`);
+  `LibraryDefunPrunerTest.torchNoGradKeepsTheSynthesizedGradEnabledVariable`.
+
+The formatter needs an explicit `IndentRules` entry (`"no-grad"`,
+`Style.body(0, 2)`): no `with-`/`do-`/`def` prefix, so the naming-convention
+guess would lay its body out as call arguments (`.kb/formatter.md`).
+
+## `--simd`, and what is deliberately NOT accelerated
+
+torch bottoms out in LITERAL `linalg:` calls with literal keywords (the
+`compiler.LinalgKernelCallLayout` pattern-match contract), so a torch program is
+accelerated under `--simd` exactly where linalg is -- for free, with no torch-
+specific interceptor. The standing candidate remains the one `.kb/linalg.md`
+records: the rank->=3 stacked `%la-matmul-nd` (what a transformer forward pass
+spends its time in) is not intercepted on any path; measure before adding an
+interceptor, and if one lands, torch inherits it without change. `--no-gc` is
+unsupported (torch needs arrays, like linalg).
+
+## Wiring (the LinalgLibrary pattern, plus the ordering rule)
+
+Package `torch` in `PackageRegistry` (`TORCH_FUNCTIONS` /
+`torchFunctionNames()`; does not use `cl`, no nickname). Interpreter: lazy load
+in `LispEvaluator.resolveFunction` + `ensureTorchLoaded`. Compile paths
+(`RontoLispCli`, `RontoPlayground`, the corpus tests, the per-backend test
+helpers): **`TorchLibrary.process` runs BEFORE `LinalgLibrary.process`**, so
+the `linalg:` references inside the spliced torch defuns are seen by the linalg
+detection -- get the order wrong and a torch-only program fails to compile with
+undefined `linalg:` functions. torch.lisp is written in canonical package shape
+(resolver fixed-point,
+`PackageResolverTest.torchLibraryFormsAreAResolverFixedPoint`), registered in
+the native-image `resource-config.json` (typeReachable `TorchLibrary`), and
+formatter-pinned like every checked-in `.lisp`.

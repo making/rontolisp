@@ -58,7 +58,7 @@ per-library compiler unit tests (they deliberately compile the full splice).
 
 **Prunable set, part 1 -- rontolisp's own libraries**: top-level
 `defun`/`defparameter`/`defvar`/`defconstant` forms whose name is
-defined by linalg, vec, json (+ its `#'` wrapper defuns), url, or the prelude
+defined by linalg, torch, vec, json (+ its `#'` wrapper defuns), url, or the prelude
 (`equalp`/`string<`/... -- note `LispPreludeLibrary.process` selects the entries
 to splice to a fixpoint, so a prelude defun pulled in only by ANOTHER prelude
 defun, like the string comparison family's `%string-compare`, is present here
@@ -80,12 +80,14 @@ argument position, quoted data, `(function ...)` -- PLUS any string literal
 containing a prunable name as a substring (keeps `(intern "linalg:norm")` /
 `read-from-string` idioms working). Fixpoint from the roots = every top-level
 form that is not a prunable library definition (the user program is never
-pruned). One synthetic edge is hardcoded: `vec:aref` also references
+pruned). Two synthetic edges are hardcoded: `vec:aref` also references
 `vec:aset`, because `(setf (vec:aref ...))` expands to `vec:aset`
-(`LispMacroExpander.expandSetf`) AFTER the pruner runs -- the only place in the
-whole codebase where a library-qualified name is synthesized rather than
+(`LispMacroExpander.expandSetf`) AFTER the pruner runs, and `torch:no-grad`
+references `torch::*grad-enabled*`, because `expandTorchNoGrad` synthesizes the
+`let` over it after the pruner too (`.kb/torch.md`). These are the only places
+in the whole codebase where a library-qualified name is synthesized rather than
 written (verified by grep; re-verify if a new built-in macro expansion ever
-emits a `linalg:`/`vec:`/`rontolisp::%json`/url/prelude name).
+emits a `linalg:`/`torch:`/`vec:`/`rontolisp::%json`/url/prelude name).
 
 Two spellings widen this, for THIRD-PARTY names only (see "Third-party
 provenance" for why the substring rule does not): an uninterned `'#:foo`

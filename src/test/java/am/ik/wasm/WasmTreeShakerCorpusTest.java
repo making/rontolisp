@@ -88,10 +88,10 @@ class WasmTreeShakerCorpusTest {
 		// reaches -- is written over *features*, a symbol the compile backends have no
 		// runtime binding for (.kb/uiop.md).
 		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary.process(
-				am.ik.rontolisp.eval.UrlLibrary
-					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.JsonLibrary
+				am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.LinalgLibrary
+					.process(am.ik.rontolisp.eval.TorchLibrary.process(am.ik.rontolisp.eval.JsonLibrary
 						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
-							.process(inlined, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))),
+							.process(inlined, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined))))))),
 				am.ik.rontolisp.reader.Features.WASM);
 		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner
 			.prune(am.ik.rontolisp.eval.UsocketLibrary.process(
