@@ -52,6 +52,7 @@ examples/browser/hiragana/data/
 /app.dat
 /dls-a.txt
 /dls-b.txt
+/pk.dat
 
 ### Compiled-program scratch: the docs' `rontolisp prog.lisp -o Prog.class` writes to the CWD ###
 /*.class

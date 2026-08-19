@@ -3950,6 +3950,45 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void readWriteSequencePackedBuffersMoveRawLittleEndianElements() throws Exception {
+		// The _readSeqPacked / _writeSeqPacked helpers (.kb/binary-sequence-io.md): a
+		// packed float array of any rank and a packed (unsigned-byte 8|16|32) vector move
+		// as raw little-endian elements in one bulk transfer; a general vector still
+		// receives one byte per element.
+		String file = tempDir.resolve("pk.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"""
+						(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+						  (write-sequence #f(1.5 -2.25 3.0e10) out)
+						  (write-sequence #d((0.5 -0.0) (0.1 42.0)) out)
+						  (write-sequence (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 65535 258)) out)
+						  (write-sequence (make-array 2 :element-type '(unsigned-byte 32) :initial-contents '(65536 4294967295)) out))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((f (make-array 3 :element-type 'single-float :initial-element 0.0))
+						        (d (make-array '(2 2) :element-type 'double-float :initial-element 0.0))
+						        (u16 (make-array 3 :element-type '(unsigned-byte 16)))
+						        (u32 (make-array 2 :element-type '(unsigned-byte 32))))
+						    (print (list (read-sequence f in) (read-sequence d in) (read-sequence u16 in) (read-sequence u32 in)))
+						    (print f) (print d) (print u16) (print u32)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((b (make-array 4 :element-type '(unsigned-byte 8))))
+						    (read-sequence b in)
+						    (print b)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((f (make-array 6 :element-type 'single-float :initial-element 9.0)))
+						    (print (read-sequence f in :start 1 :end 3))
+						    (print f)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((g (make-array 4)))
+						    (print (read-sequence g in))
+						    (print g)))
+						"""
+					.formatted(file, file, file, file, file)))
+			.isEqualTo(
+					"(3 4 3 2)\n#f(1.5 -2.25 3.0e10)\n#d((0.5 -0.0) (0.1 42.0))\n#(1 65535 258)\n#(65536 4294967295)\n#(0 0 192 63)\n3\n#f(9.0 1.5 -2.25 9.0 9.0 9.0)\n4\n#(0 0 192 63)");
+	}
+
+	@Test
 	void openNonLiteralElementTypeThrows() {
 		String file = tempDir.resolve("nl.dat").toString().replace("\\", "\\\\");
 		assertThatThrownBy(() -> compileAndRun("(open \"" + file + "\" :input (list 'unsigned-byte 8))"))
@@ -10653,6 +10692,26 @@ class JvmLispCompilerTest {
 				(print (expt *ib* 10))
 				(print (expt *ib* -1))
 				""")).isEqualTo("0.999\n0.997002999\n0.25\n1024\n1/2");
+	}
+
+	@Test
+	void compileExptWithRuntimeFloatOrRatioExponent() throws Exception {
+		// hasDoubleLiteral only sees literals: a float or ratio EXPONENT arriving
+		// through a variable or a call used to be unboxed as a Long and die
+		// (ClassCastException, .todo/435). _pow now dispatches on the run-time
+		// exponent: a non-Long takes Math.pow over the float contagion, exactly the
+		// interpreter's answers.
+		assertThat(compileAndRun("""
+				(defun give (x) x)
+				(print (expt 4 (give 1/2)))
+				(print (expt 2 (give 0.5)))
+				(print (expt (give 10000.0) (give 0.75)))
+				(print (expt 2 (give 3.0)))
+				(print (expt (give -2.0) (give 0.5)))
+				(print (expt (give 0.0) (give -1.0)))
+				(print (* 1.5 (expt 10 (give 0.0))))
+				(print (expt (give 2) (give 10)))
+				""")).isEqualTo("2.0\n1.4142135623730951\n1000.0\n8.0\nNaN\nInfinity\n1.5\n1024");
 	}
 
 	@Test

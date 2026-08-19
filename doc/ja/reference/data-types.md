@@ -292,7 +292,9 @@ f64 -> f32)。非実数を格納すると型エラーです(一般配列は任�
 らには一般配列が必要です)。`double-float` の幅が既定で、`linalg` が生成するのもこの
 幅です。パックド配列上の高速なベクトルカーネル(および任意のハードウェアアクセラレー
 ション)については [`vec` パッケージ](../guides/simd-acceleration.md)を参照してくだ
-さい。
+さい。パックド配列はバイナリ I/O のバッファでもあります。[`read-sequence`](functions/read-sequence.md) /
+[`write-sequence`](functions/write-sequence.md) はその要素を生のリトルエンディアン IEEE-754 として
+一括転送します(任意ランク、行優先順)。重みファイルや numpy のダンプはこうして読み込みます。
 
 ```lisp
 (aref #d(1.0 2.0 3.0) 1)                   ; => 2.0

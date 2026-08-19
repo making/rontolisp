@@ -66,7 +66,7 @@ class JvmClassShakerCorpusTest {
 	// working directory (the corpus main runs in-process, so relative paths resolve
 	// against the project dir, not the @TempDir). Keep in sync with the file names
 	// used by the ci-spec.yaml binary/stream cases.
-	private static final List<String> CORPUS_SCRATCH_FILES = List.of("bin.dat", "seq.dat", "crlf.dat");
+	private static final List<String> CORPUS_SCRATCH_FILES = List.of("bin.dat", "seq.dat", "crlf.dat", "pk.dat");
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically() throws Exception {

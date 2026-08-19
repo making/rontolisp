@@ -6823,6 +6823,49 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readWriteSequencePackedBuffersMoveRawLittleEndianElements(@TempDir Path tempDir) {
+		// A packed buffer -- a packed float array of any rank, a packed
+		// (unsigned-byte 8|16|32) vector -- moves as raw little-endian elements in
+		// one bulk transfer; a general vector still receives one byte per element
+		// (.kb/binary-sequence-io.md).
+		String file = tempDir.resolve("pk.dat").toString().replace("\\", "\\\\");
+		java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(captured, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(
+				"""
+						(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+						  (write-sequence #f(1.5 -2.25 3.0e10) out)
+						  (write-sequence #d((0.5 -0.0) (0.1 42.0)) out)
+						  (write-sequence (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 65535 258)) out)
+						  (write-sequence (make-array 2 :element-type '(unsigned-byte 32) :initial-contents '(65536 4294967295)) out))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((f (make-array 3 :element-type 'single-float :initial-element 0.0))
+						        (d (make-array '(2 2) :element-type 'double-float :initial-element 0.0))
+						        (u16 (make-array 3 :element-type '(unsigned-byte 16)))
+						        (u32 (make-array 2 :element-type '(unsigned-byte 32))))
+						    (print (list (read-sequence f in) (read-sequence d in) (read-sequence u16 in) (read-sequence u32 in)))
+						    (print f) (print d) (print u16) (print u32)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((b (make-array 4 :element-type '(unsigned-byte 8))))
+						    (read-sequence b in)
+						    (print b)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((f (make-array 6 :element-type 'single-float :initial-element 9.0)))
+						    (print (read-sequence f in :start 1 :end 3))
+						    (print f)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((g (make-array 4)))
+						    (print (read-sequence g in))
+						    (print g)))
+						"""
+					.formatted(file, file, file, file, file))) {
+			evaluator.eval(expr);
+		}
+		assertThat(captured.toString(StandardCharsets.UTF_8).trim()).isEqualTo(
+				"(3 4 3 2)\n#f(1.5 -2.25 3.0e10)\n#d((0.5 -0.0) (0.1 42.0))\n#(1 65535 258)\n#(65536 4294967295)\n#(0 0 192 63)\n3\n#f(9.0 1.5 -2.25 9.0 9.0 9.0)\n4\n#(0 0 192 63)");
+	}
+
+	@Test
 	void evalBinaryStandardStreamsAreByteTransparent() {
 		// stdin -> stdout as octets: the bytes below are a NUL, a high byte and a
 		// newline plus one UTF-8 lead byte, none of which may be decoded, re-encoded or

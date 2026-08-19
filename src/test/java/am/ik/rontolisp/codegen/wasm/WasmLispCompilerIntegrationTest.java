@@ -9093,10 +9093,15 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static String compileAndRunWithDir(String lispCode) throws Exception {
+		return compileAndRunWithDir(lispCode, false, false);
+	}
+
+	private static String compileAndRunWithDir(String lispCode, boolean simd, boolean component) throws Exception {
 		// The prelude splice mirrors the CLI pipeline; it emits nothing for a program
 		// that references no prelude name, so every pre-existing case is unaffected.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		byte[] wasmBytes = new WasmLispCompiler(false, component, false, OptimizeLevel.NONE, false, simd)
+			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"cd " + workDir() + " && wasmtime --wasm gc --wasm exceptions=y --dir . test.wasm");
@@ -10061,6 +10066,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void readWriteSequencePackedBuffersMoveRawLittleEndianElements() throws Exception {
+		// The _read_packed / _write_packed runtime helpers (.kb/binary-sequence-io.md):
+		// a packed float array of any rank and a packed (unsigned-byte 8|16|32) vector
+		// move as raw little-endian elements through the 64 KiB HEAP_PTR chunk; a general
+		// vector still receives one byte per element. Both the scalar farray and the
+		// --simd vblock representation, and the --component adapter's fd_read/fd_write.
+		String code = """
+				(with-open-file (out "pk.dat" :direction :output :element-type '(unsigned-byte 8))
+				  (write-sequence #f(1.5 -2.25 3.0e10) out)
+				  (write-sequence #d((0.5 -0.0) (0.1 42.0)) out)
+				  (write-sequence (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 65535 258)) out)
+				  (write-sequence (make-array 2 :element-type '(unsigned-byte 32) :initial-contents '(65536 4294967295)) out))
+				(with-open-file (in "pk.dat" :element-type '(unsigned-byte 8))
+				  (let ((f (make-array 3 :element-type 'single-float :initial-element 0.0))
+				        (d (make-array '(2 2) :element-type 'double-float :initial-element 0.0))
+				        (u16 (make-array 3 :element-type '(unsigned-byte 16)))
+				        (u32 (make-array 2 :element-type '(unsigned-byte 32))))
+				    (print (list (read-sequence f in) (read-sequence d in) (read-sequence u16 in) (read-sequence u32 in)))
+				    (print f) (print d) (print u16) (print u32)))
+				(with-open-file (in "pk.dat" :element-type '(unsigned-byte 8))
+				  (let ((b (make-array 4 :element-type '(unsigned-byte 8))))
+				    (read-sequence b in)
+				    (print b)))
+				(with-open-file (in "pk.dat" :element-type '(unsigned-byte 8))
+				  (let ((f (make-array 6 :element-type 'single-float :initial-element 9.0)))
+				    (print (read-sequence f in :start 1 :end 3))
+				    (print f)))
+				(with-open-file (in "pk.dat" :element-type '(unsigned-byte 8))
+				  (let ((g (make-array 4)))
+				    (print (read-sequence g in))
+				    (print g)))
+				""";
+		String expected = "(3 4 3 2)\n#f(1.5 -2.25 3.0e10)\n#d((0.5 -0.0) (0.1 42.0))\n#(1 65535 258)\n#(65536 4294967295)\n#(0 0 192 63)\n3\n#f(9.0 1.5 -2.25 9.0 9.0 9.0)\n4\n#(0 0 192 63)";
+		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
+		assertThat(compileAndRunWithDir(code, true, false)).isEqualTo(expected);
+		assertThat(compileAndRunWithDir(code, false, true)).isEqualTo(expected);
+	}
+
+	@Test
 	void loadDefunAndUseViaEval() throws Exception {
 		// Definitions from the loaded file live in the eval runtime's global env.
 		// The embedded runtime reader is case-preserving while compiled references
@@ -10768,6 +10812,34 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (expt 2 10))")).isEqualTo("1024");
 		assertThat(compileAndRun("(print (expt 3 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (expt 5 3))")).isEqualTo("125");
+	}
+
+	@Test
+	void exptWithFloatOrRatioExponent() throws Exception {
+		// A float or ratio exponent used to trap (the exact loop cast it to an i31,
+		// .todo/435): WasmExptCompiler now dispatches on the run-time exponent. An
+		// integer-valued float exponent takes the exact multiplication path (8.0, not
+		// 7.999...); a fractional one is exp(y * log(x)) over the software exp/log --
+		// so its low-order digits differ from Math.pow's and are rounded here -- with
+		// the Math.pow edges: x^0.0 = 1.0, 0^y = 0.0 / +inf by the sign of y, a
+		// negative base to a fractional power is NaN, +inf^y follows the sign of y.
+		assertThat(compileAndRun("""
+				(defun give (x) x)
+				(print (expt 2 (give 3.0)))
+				(print (expt (give 2.0) (give 0.0)))
+				(print (expt (give 0.0) (give 0.5)))
+				(print (expt (give 0.0) (give -0.5)))
+				(print (expt (give -2.0) (give 0.5)))
+				(print (expt (give -2.0) (give 3.0)))
+				(print (round (* 1000 (expt 4 (give 1/2)))))
+				(print (round (* 1000 (expt (give 10000.0) (give 0.75)))))
+				(print (round (* 1000000 (expt 2 (give 0.5)))))
+				(print (* 1.5 (expt 10 (give 0.0))))
+				(print (expt (/ 1.0 0.0) (give 0.5)))
+				(print (expt (/ 1.0 0.0) (give -0.5)))
+				""")).isEqualTo("8.0\n1.0\n0.0\nInfinity\nNaN\n-8.0\n2000\n1000000\n1414214\n1.5\nInfinity\n0.0");
+		// A literal float exponent, the shape the RoPE table of examples/llama2 needs.
+		assertThat(compileAndRun("(print (round (* 1000 (expt 10000.0 0.75))))")).isEqualTo("1000000");
 	}
 
 	@Test

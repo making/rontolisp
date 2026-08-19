@@ -7750,18 +7750,31 @@ public final class LispMacroExpander {
 	 * allocates it from {@code (stream-element-type stream)}, so no expansion-time
 	 * inspection could see it ({@code .todo/219}).
 	 *
+	 * <p>
+	 * A PACKED buffer -- a packed float array of any rank, or a packed
+	 * {@code (unsigned-byte 8|16|32)} vector -- is filled in bulk by the
+	 * {@code %read-sequence-packed} primitive first: raw little-endian IEEE-754 /
+	 * two's-complement elements straight off the byte stream, one native read per call
+	 * instead of one {@code read-byte} per byte (a llama2 checkpoint is 15 million
+	 * floats; see {@code .kb/binary-sequence-io.md}). The primitive answers the fill
+	 * position, or NIL when the buffer or the stream is not one it handles, in which case
+	 * the loop below runs exactly as before -- so the string / general-vector contract is
+	 * untouched.
+	 *
 	 * <pre>
 	 * (read-sequence seq stream) ->
 	 * (let ((__rseq_seq seq) (__rseq_st stream))
-	 *   (let ((__rseq_i 0) (__rseq_end (length __rseq_seq)) (__rseq_b nil) (__rseq_eof nil)
-	 *         (__rseq_ch (stringp __rseq_seq)))
-	 *     (while (if __rseq_eof nil (&lt; __rseq_i __rseq_end))
-	 *       (setq __rseq_b (if __rseq_ch (read-char __rseq_st nil nil)
-	 *                                    (read-byte __rseq_st nil nil)))
-	 *       (if __rseq_b
-	 *           (progn (%aset __rseq_seq __rseq_i __rseq_b) (setq __rseq_i (+ __rseq_i 1)))
-	 *           (setq __rseq_eof t)))
-	 *     __rseq_i))
+	 *   (let ((__rseq_i 0) (__rseq_end nil))     ; nil = the whole buffer
+	 *     (or (%read-sequence-packed __rseq_seq __rseq_st __rseq_i __rseq_end)
+	 *         (let ((__rseq_end (if __rseq_end __rseq_end (length __rseq_seq)))
+	 *               (__rseq_b nil) (__rseq_eof nil) (__rseq_ch (stringp __rseq_seq)))
+	 *           (while (if __rseq_eof nil (&lt; __rseq_i __rseq_end))
+	 *             (setq __rseq_b (if __rseq_ch (read-char __rseq_st nil nil)
+	 *                                          (read-byte __rseq_st nil nil)))
+	 *             (if __rseq_b
+	 *                 (progn (%aset __rseq_seq __rseq_i __rseq_b) (setq __rseq_i (+ __rseq_i 1)))
+	 *                 (setq __rseq_eof t)))
+	 *           __rseq_i))))
 	 * </pre>
 	 * @param cons the read-sequence expression
 	 * @return the expanded expression
@@ -7790,11 +7803,16 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), b, readElement)),
 				listToCons(List.of(new LispSymbol(LispNames.IF), b, store,
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), eof, LispTrue.INSTANCE))))));
-		LispVal innerBindings = listToCons(
-				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end())),
+		LispVal loopBindings = listToCons(
+				List.of(listToCons(List.of(end, makeIf(end, end, callOf(LispNames.LENGTH, seq)))),
 						listToCons(List.of(b, LispNil.INSTANCE)), listToCons(List.of(eof, LispNil.INSTANCE)),
 						listToCons(List.of(chars, callOf(LispNames.STRINGP, seq)))));
-		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, loop, i));
+		LispVal loopLet = listToCons(List.of(new LispSymbol(LispNames.LET), loopBindings, loop, i));
+		LispVal packed = listToCons(List.of(new LispSymbol(LispNames.READ_SEQUENCE_PACKED), seq, st, i, end));
+		LispVal innerBindings = listToCons(
+				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end()))));
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings,
+				listToCons(List.of(new LispSymbol(LispNames.OR), packed, loopLet))));
 		LispVal outerBindings = listToCons(
 				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
@@ -7806,14 +7824,29 @@ public final class LispMacroExpander {
 	 * be literal; their values are arbitrary expressions. The sequence must be a rank-1
 	 * array.
 	 *
+	 * <p>
+	 * A PACKED buffer (a packed float array of any rank, a packed
+	 * {@code (unsigned-byte 8|16|32)} vector) goes out in bulk through
+	 * {@code %write-sequence-packed} first -- raw little-endian elements, the exact bytes
+	 * {@code read-sequence} reads back ({@code .kb/binary-sequence-io.md}); it answers
+	 * the sequence, or NIL to hand a buffer or stream it does not handle to the branches
+	 * below.
+	 *
 	 * <pre>
 	 * (write-sequence seq stream) ->
 	 * (let ((__wseq_seq seq) (__wseq_st stream))
-	 *   (let ((__wseq_i 0) (__wseq_end (length __wseq_seq)))
-	 *     (while (&lt; __wseq_i __wseq_end)
-	 *       (write-byte (aref __wseq_seq __wseq_i) __wseq_st)
-	 *       (setq __wseq_i (+ __wseq_i 1)))
-	 *     __wseq_seq))
+	 *   (let ((__wseq_i 0) (__wseq_end nil))     ; nil = the whole buffer
+	 *     (or (%write-sequence-packed __wseq_seq __wseq_st __wseq_i __wseq_end)
+	 *         (if (stringp __wseq_seq)
+	 *             (progn (write-string (subseq __wseq_seq __wseq_i
+	 *                                          (if __wseq_end __wseq_end (length __wseq_seq)))
+	 *                                  __wseq_st)
+	 *                    __wseq_seq)
+	 *             (let ((__wseq_end (if __wseq_end __wseq_end (length __wseq_seq))))
+	 *               (while (&lt; __wseq_i __wseq_end)
+	 *                 (write-byte (aref __wseq_seq __wseq_i) __wseq_st)
+	 *                 (setq __wseq_i (+ __wseq_i 1)))
+	 *               __wseq_seq)))))
 	 * </pre>
 	 * @param cons the write-sequence expression
 	 * @return the expanded expression
@@ -7824,9 +7857,10 @@ public final class LispMacroExpander {
 		LispSymbol st = new LispSymbol("__wseq_st");
 		LispSymbol i = new LispSymbol("__wseq_i");
 		LispSymbol end = new LispSymbol("__wseq_end");
+		LispVal wholeEnd = makeIf(end, end, callOf(LispNames.LENGTH, seq));
 		// String branch: write the (start,end) slice as one write-string, yielding seq.
 		LispVal writeStr = listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING),
-				listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), seq, args.start(), args.end())), st));
+				listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), seq, i, wholeEnd)), st));
 		LispVal stringBranch = makeProgn(List.of(writeStr, seq));
 		// Array branch: the write-byte loop over the (start,end) range.
 		LispVal test = listToCons(List.of(new LispSymbol(LispNames.LT), i, end));
@@ -7835,13 +7869,17 @@ public final class LispMacroExpander {
 		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), i,
 				listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))));
 		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, writeByte, step));
+		LispVal loopBindings = listToCons(List.of(listToCons(List.of(end, wholeEnd))));
+		LispVal arrayBranch = listToCons(List.of(new LispSymbol(LispNames.LET), loopBindings, loop, seq));
+		LispVal dispatch = makeIf(callOf(LispNames.STRINGP, seq), stringBranch, arrayBranch);
+		LispVal packed = listToCons(List.of(new LispSymbol(LispNames.WRITE_SEQUENCE_PACKED), seq, st, i, end));
 		LispVal innerBindings = listToCons(
 				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end()))));
-		LispVal arrayBranch = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, loop, seq));
-		LispVal dispatch = makeIf(callOf(LispNames.STRINGP, seq), stringBranch, arrayBranch);
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings,
+				listToCons(List.of(new LispSymbol(LispNames.OR), packed, dispatch))));
 		LispVal outerBindings = listToCons(
 				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, dispatch));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
 	}
 
 	/**
@@ -10478,8 +10516,9 @@ public final class LispMacroExpander {
 
 	/**
 	 * The parsed {@code (op seq stream [:start s] [:end e])} arguments. {@code start}
-	 * defaults to {@code 0} and {@code end} to {@code (length <seq-temp>)} over the
-	 * expander's own sequence temp binding.
+	 * defaults to {@code 0} and {@code end} to {@code nil}, which the expansions resolve
+	 * to the whole buffer AFTER the packed primitive has had its look (a rank-n packed
+	 * array has no {@code length}, and the primitive takes nil as "the total size").
 	 */
 	private record SequenceArgs(LispVal seq, LispVal stream, LispVal start, LispVal end) {
 	}
@@ -10490,8 +10529,7 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(op + " expects (sequence stream [:start s] [:end e])");
 		}
 		LispVal start = new LispInteger(0);
-		String seqVar = LispNames.READ_SEQUENCE.equals(op) ? "__rseq_seq" : "__wseq_seq";
-		LispVal end = callOf(LispNames.LENGTH, new LispSymbol(seqVar));
+		LispVal end = LispNil.INSTANCE;
 		for (int i = 3; i < parts.size(); i += 2) {
 			if (parts.get(i) instanceof LispSymbol key && LispNames.START_KEYWORD.equals(key.name())) {
 				start = parts.get(i + 1);

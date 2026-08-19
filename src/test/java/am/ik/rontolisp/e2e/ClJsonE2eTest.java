@@ -21,11 +21,14 @@ import java.util.List;
  * rule). The expected alists are pinned against SBCL running the same vendored sources.
  *
  * <p>
- * Decoding floats is deliberately absent: cl-json's {@code parse-number} computes
- * {@code (expt 10 exponent)} with a runtime float exponent, which the compile backends'
- * integer-only {@code expt} fast path cannot take yet -- a pre-existing numeric gap this
- * library merely exposes (recorded in {@code .todo/}, the expt runtime-float-exponent
- * item), unrelated to progv.
+ * The float line is the {@code expt} regression guard: cl-json's {@code parse-number}
+ * computes {@code (expt 10 (floatify exponent))} with a RUNTIME float exponent, which the
+ * compile backends' integer-only {@code expt} path used to cast and die on (a
+ * ClassCastException on the JVM, a trap on WASM), so decoding any float crashed there
+ * until {@code expt} learned to dispatch on the run-time exponent (2026-08-19). The
+ * exponents that reach it here are integer-valued floats ({@code 0.0}, {@code 2.0}), so
+ * the products are exact on every backend, the WASM software {@code exp}/{@code log}
+ * included.
  */
 class ClJsonE2eTest extends AsdfLibraryE2eSupport {
 
@@ -36,10 +39,11 @@ class ClJsonE2eTest extends AsdfLibraryE2eSupport {
 			(print (json:decode-json-from-string "{\\"a\\":[1,{\\"b\\":2}]}"))
 			(print (json:decode-json-from-string "[\\"two\\",true,false,null,{\\"k\\":[]},[3,[4]]]"))
 			(print (json:decode-json-from-string "{\\"camelCase\\":{\\"x\\":10},\\"list\\":[{\\"y\\":20},30]}"))
+			(print (json:decode-json-from-string "[1.5, 2.25e2, -0.5, 100.0]"))
 			""";
 
 	private static final List<String> EXPECTED = List.of("((:A 1 ((:B . 2))))", "(\"two\" T NIL NIL ((:K)) (3 (4)))",
-			"((:CAMEL-CASE (:X . 10)) (:LIST ((:Y . 20)) 30))");
+			"((:CAMEL-CASE (:X . 10)) (:LIST ((:Y . 20)) 30))", "(1.5 225.0 -0.5 100.0)");
 
 	@Override
 	protected String systemDir() {

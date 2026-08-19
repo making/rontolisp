@@ -6502,6 +6502,38 @@ cases:
       -Infinity
       -Infinity
       NaN
+  # expt dispatches on the RUN-TIME exponent on every backend: a float or ratio
+  # exponent that no literal scan can see (a variable, a call) gives a float, an
+  # integer-valued float exponent takes the exact multiplication path (8.0, not
+  # 7.999...), and the Math.pow edges agree. A fractional power's low-order digits
+  # differ on WASM (exp(y*log(x)) over the software exp/log), so it is printed
+  # rounded.
+  - name: expt-with-a-runtime-float-or-ratio-exponent
+    source: |
+      (defun give (x) x)
+      (print (expt 2 (give 3.0)))
+      (print (expt (give 2.0) 3))
+      (print (expt (give 2.0) (give 0.0)))
+      (print (expt (give 0.0) (give 0.5)))
+      (print (expt (give 0.0) (give -0.5)))
+      (print (expt (give -2.0) (give 0.5)))
+      (print (expt (give -2.0) (give 3.0)))
+      (print (round (* 1000 (expt 4 (give 1/2)))))
+      (print (round (* 1000 (expt (give 10000.0) (give 0.75)))))
+      (print (round (* 1000000 (expt 2 (give 0.5)))))
+      (print (* 1.5 (expt 10 (give 0.0))))
+    expected: |
+      8.0
+      8.0
+      1.0
+      0.0
+      Infinity
+      NaN
+      -8.0
+      2000
+      1000000
+      1414214
+      1.5
   # One expected value on every backend since todo-431: the WASM float printer
   # selects the same Schubfach shortest decimal as the interpreter and the JVM,
   # and every backend spells the exponent marker lowercase as CL prints it.
@@ -8420,6 +8452,50 @@ cases:
       #(1 2)
       (1 2)
       3.0
+
+  - name: read-sequence-and-write-sequence-over-packed-buffers-move-raw-little-endian-elements
+    source: |
+      ;; A PACKED buffer -- a packed float array of any rank, a packed
+      ;; (unsigned-byte 8|16|32) vector -- moves as raw little-endian elements in
+      ;; one bulk transfer, the same bytes on every backend (.kb/binary-sequence-io.md).
+      (with-open-file (out "pk.dat" :direction :output :element-type '(unsigned-byte 8))
+        (write-sequence #f(1.5 -2.25 3.0e10) out)
+        (write-sequence #d((0.5 -0.0) (0.1 42.0)) out)
+        (write-sequence (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 65535 258)) out)
+        (write-sequence (make-array 2 :element-type '(unsigned-byte 32) :initial-contents '(65536 4294967295)) out))
+      (with-open-file (in "pk.dat" :element-type '(unsigned-byte 8))
+        (let ((f (make-array 3 :element-type 'single-float :initial-element 0.0))
+              (d (make-array '(2 2) :element-type 'double-float :initial-element 0.0))
+              (u16 (make-array 3 :element-type '(unsigned-byte 16)))
+              (u32 (make-array 2 :element-type '(unsigned-byte 32))))
+          (print (list (read-sequence f in) (read-sequence d in) (read-sequence u16 in) (read-sequence u32 in)))
+          (print f) (print d) (print u16) (print u32)))
+      ;; the wire bytes of 1.5f are 00 00 C0 3F -- little-endian IEEE-754
+      (with-open-file (in "pk.dat" :element-type '(unsigned-byte 8))
+        (let ((b (make-array 4 :element-type '(unsigned-byte 8))))
+          (read-sequence b in)
+          (print b)))
+      ;; :start/:end count elements; a short read leaves the tail untouched
+      (with-open-file (in "pk.dat" :element-type '(unsigned-byte 8))
+        (let ((f (make-array 6 :element-type 'single-float :initial-element 9.0)))
+          (print (read-sequence f in :start 1 :end 3))
+          (print f)))
+      ;; a general vector still receives one byte per element
+      (with-open-file (in "pk.dat" :element-type '(unsigned-byte 8))
+        (let ((g (make-array 4)))
+          (print (read-sequence g in))
+          (print g)))
+    expected: |
+      (3 4 3 2)
+      #f(1.5 -2.25 3.0e10)
+      #d((0.5 -0.0) (0.1 42.0))
+      #(1 65535 258)
+      #(65536 4294967295)
+      #(0 0 192 63)
+      3
+      #f(9.0 1.5 -2.25 9.0 9.0 9.0)
+      4
+      #(0 0 192 63)
 
   - name: read-sequence-into-a-character-buffer
     source: |

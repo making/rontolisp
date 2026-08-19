@@ -23,3 +23,12 @@ Because it touches the filesystem, `write-sequence` is shown here statically rat
 ```
 
 This writes the four bytes `DE AD BE EF` to `data.bin`. Use `:start`/`:end` to write only a slice of the array.
+
+## Packed buffers: raw binary elements in bulk
+
+When `sequence` is a **packed** array -- a packed float array of any rank (`single-float` / `double-float`, `#f(...)` / `#d(...)`) or a packed integer vector (`(unsigned-byte 8|16|32)`) -- its elements go out as **raw little-endian binary** in one bulk transfer, exactly the bytes [`read-sequence`](read-sequence.md) reads back into the same kind of buffer: 4 bytes per single-float, 8 per double-float, 2 per `(unsigned-byte 16)`, and so on, a rank-n float array in row-major order (`:end` defaults to the total size). A `#f` matrix written this way is a `float32` file numpy or C reads directly.
+
+```console
+(with-open-file (out "weights.bin" :direction :output :element-type '(unsigned-byte 8))
+  (write-sequence #f((1.0 2.0) (3.0 4.0)) out))  ; => the array; 16 bytes written
+```

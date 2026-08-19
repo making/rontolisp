@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -45,6 +46,15 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * Per-example manifest fields (all optional except {@code path}/{@code backends}):
  * <ul>
  * <li>{@code args} -- command-line arguments appended when the program is run.</li>
+ * <li>{@code env} -- environment variables (a map) the program sees: exported to the
+ * interpreter / JVM process, passed to wasmtime as {@code --env NAME=VALUE}. This is how
+ * an example takes its knobs today (a rontolisp program has no argv, so it reads
+ * {@code uiop:getenv}).</li>
+ * <li>{@code simd} -- {@code true} runs every leg under {@code --simd}: the interpreter
+ * and every compile get the flag, the JVM leg runs with
+ * {@code --add-modules jdk.incubator.vector} (as does the interpreter when the driver is
+ * the exec jar). For an example whose scalar interpretation is minutes per token (llama2
+ * over a real checkpoint), this is the difference between a leg and no leg.</li>
  * <li>{@code stdin} / {@code stdinFile} -- text fed to the program's standard input
  * (inline, or from a file resolved under {@code examples/}).</li>
  * <li>{@code expect} -- how to check RUN output; exactly one of:
@@ -152,10 +162,24 @@ class ExamplesE2eTest {
 
 	record Example(String path, List<String> backends, @Nullable List<String> args, @Nullable String stdin,
 			@Nullable String stdinFile, @Nullable Expect expect, @Nullable List<String> systemPath,
-			@Nullable String workDir, @Nullable List<String> workFiles, @Nullable String note) {
+			@Nullable String workDir, @Nullable List<String> workFiles, @Nullable Map<String, String> env,
+			@Nullable Boolean simd, @Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
+		}
+
+		Map<String, String> envOrEmpty() {
+			return this.env == null ? Map.of() : this.env;
+		}
+
+		boolean simdOn() {
+			return Boolean.TRUE.equals(this.simd);
+		}
+
+		/** The {@code --simd} flag when the example asks for it, else nothing. */
+		List<String> simdFlag() {
+			return simdOn() ? List.of("--simd") : List.of();
 		}
 	}
 
@@ -293,8 +317,11 @@ class ExamplesE2eTest {
 		Path runDir = stageWorkspace(example, work, backend);
 		String src = source.toString();
 		List<String> args = example.argsOrEmpty();
+		Map<String, String> env = example.envOrEmpty();
 		byte @Nullable [] stdin = resolveStdin(example);
-		List<String> flags = systemPathFlags(example);
+		// --simd is a compile-time flag on every path, the interpreter's included; the
+		// --system-path flags come with it.
+		List<String> flags = concat(example.simdFlag(), systemPathFlags(example));
 		switch (backend) {
 			case INTERPRETER -> {
 				// The flags come BEFORE the program's own arguments: the CLI takes one
@@ -302,48 +329,79 @@ class ExamplesE2eTest {
 				// read as a second one. An interpreted example needs --system-path just
 				// as much as a compiled one -- asdf:load-system resolves the .asd at run
 				// time here.
-				Result run = exec(runDir, concat(driver, concat(concat(List.of(src), flags), args)), stdin);
+				Result run = exec(runDir,
+						concat(vectorApiDriver(driver, example), concat(concat(List.of(src), flags), args)), stdin,
+						env);
 				assertRan(run, example, "interpreter");
 			}
 			case JVM -> {
-				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null);
+				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null,
+						Map.of());
 				assertCompiled(compile, example, "jvm (compile)");
-				Result run = exec(runDir, concat(List.of("java", "-cp", jvmClasspath(runDir), "Prog"), args), stdin);
+				List<String> java = example.simdOn() ? List.of("java", "--add-modules", "jdk.incubator.vector")
+						: List.of("java");
+				Result run = exec(runDir, concat(java, concat(List.of("-cp", jvmClasspath(runDir), "Prog"), args)),
+						stdin, env);
 				assertRan(run, example, "jvm (run)");
 			}
 			case WASM -> {
 				Result compile = exec(runDir,
-						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--optimize"), flags)), null);
+						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--optimize"), flags)), null, Map.of());
 				assertCompiled(compile, example, "wasm (compile)");
 				Result run = exec(runDir,
-						concat(List.of("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "--dir", ".", "prog.wasm"),
-								args),
-						stdin);
+						concat(concat(List.of("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "--dir", "."),
+								concat(wasmtimeEnvFlags(env), List.of("prog.wasm"))), args),
+						stdin, Map.of());
 				assertRan(run, example, "wasm (run)");
 			}
 			case JVM_COMPILE -> {
-				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null);
+				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null,
+						Map.of());
 				assertCompiled(compile, example, "jvm-compile");
 			}
 			case WASM_COMPONENT -> {
 				Result compile = exec(runDir,
 						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--component", "--optimize"), flags)),
-						null);
+						null, Map.of());
 				assertCompiled(compile, example, "wasm-component");
 			}
 			case NO_GC -> {
 				Result compile = exec(runDir,
-						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--optimize"), flags)), null);
+						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--optimize"), flags)), null,
+						Map.of());
 				assertCompiled(compile, example, "no-gc");
 			}
 			case NO_GC_SIMD -> {
 				Result compile = exec(runDir,
 						concat(driver,
 								concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--simd", "--optimize"), flags)),
-						null);
+						null, Map.of());
 				assertCompiled(compile, example, "no-gc-simd");
 			}
 		}
+	}
+
+	/**
+	 * The interpreter driver for a {@code simd: true} example: the exec-jar driver gains
+	 * {@code --add-modules jdk.incubator.vector} (without it {@code --simd} warns and
+	 * runs the scalar kernels -- correct, but minutes per llama2 token); the native
+	 * binary needs nothing.
+	 */
+	private static List<String> vectorApiDriver(List<String> driver, Example example) {
+		if (!example.simdOn() || driver.isEmpty() || !"java".equals(driver.get(0))) {
+			return driver;
+		}
+		return concat(List.of("java", "--add-modules", "jdk.incubator.vector"), driver.subList(1, driver.size()));
+	}
+
+	/** {@code --env NAME=VALUE} for every manifest {@code env} entry. */
+	private static List<String> wasmtimeEnvFlags(Map<String, String> env) {
+		List<String> flags = new ArrayList<>();
+		for (Map.Entry<String, String> e : env.entrySet()) {
+			flags.add("--env");
+			flags.add(e.getKey() + "=" + e.getValue());
+		}
+		return flags;
 	}
 
 	/**
@@ -382,7 +440,8 @@ class ExamplesE2eTest {
 			Path src = anchor.resolve(rel);
 			if (!Files.isRegularFile(src)) {
 				abort("required work file is missing: " + rel + " (looked in " + src
-						+ ") -- run examples/deep-learning-from-scratch/download-mnist.sh if it is a dataset/*-ubyte file");
+						+ ") -- run the example directory's download script (deep-learning-from-scratch/download-mnist.sh"
+						+ " for a dataset/*-ubyte file, llama2/download-stories15M.sh for stories15M.bin)");
 			}
 			Path dst = runDir.resolve(rel);
 			Path parent = dst.getParent();
@@ -454,9 +513,11 @@ class ExamplesE2eTest {
 		}
 	}
 
-	private static Result exec(Path work, List<String> command, byte @Nullable [] stdin)
+	private static Result exec(Path work, List<String> command, byte @Nullable [] stdin, Map<String, String> env)
 			throws IOException, InterruptedException {
-		Process process = new ProcessBuilder(command).directory(work.toFile()).start();
+		ProcessBuilder builder = new ProcessBuilder(command).directory(work.toFile());
+		builder.environment().putAll(env);
+		Process process = builder.start();
 		try (OutputStream in = process.getOutputStream()) {
 			if (stdin != null) {
 				in.write(stdin);

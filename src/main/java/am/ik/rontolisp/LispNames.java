@@ -4604,6 +4604,23 @@ public final class LispNames {
 	public static final String WRITE_SEQUENCE_RAW_INTERNAL = "%WRITE-SEQUENCE-RAW";
 
 	/**
+	 * The bulk binary-I/O primitives behind {@code read-sequence} /
+	 * {@code write-sequence} over a PACKED buffer (a packed float array of any rank, a
+	 * packed {@code (unsigned-byte 8|16|32)} vector):
+	 * {@code (%read-sequence-packed seq stream
+	 * start end)} fills elements {@code [start, end)} (row-major; {@code end} nil = the
+	 * total size) with raw little-endian elements off a binary stream and answers the
+	 * fill position, {@code (%write-sequence-packed seq stream start end)} writes them
+	 * out the same way and answers {@code seq}. Both answer NIL -- "declined" -- for a
+	 * buffer or a stream they do not handle, and the expansion then runs its element loop
+	 * ({@code .kb/binary-sequence-io.md}).
+	 */
+	public static final String READ_SEQUENCE_PACKED = "%READ-SEQUENCE-PACKED";
+
+	/** See {@link #READ_SEQUENCE_PACKED}. */
+	public static final String WRITE_SEQUENCE_PACKED = "%WRITE-SEQUENCE-PACKED";
+
+	/**
 	 * The internal {@code rontolisp::%str-byte-length} accessor of the
 	 * {@code --component} socket layer: the content BYTE count of a string (its
 	 * {@code $str_bytes} length minus the two surrounding quotes). A socket chunk's bytes

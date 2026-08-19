@@ -1,0 +1,5 @@
+# fetched by ./download-stories15M.sh (and any larger sibling checkpoint)
+stories15M.bin
+stories42M.bin
+stories110M.bin
+tokenizer.bin

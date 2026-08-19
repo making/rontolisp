@@ -8,6 +8,7 @@ runs identically on the interpreter, the JVM and WASM.
 | [`console/`](console) | Algorithms and console I/O — pure, cross-backend |
 | [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`) |
 | [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02-ch08, ported |
+| [`llama2/`](llama2) | llama2.c's `run.c` ported whole: a Llama 2 inference engine over the real TinyStories checkpoints, and the example `--simd` is for |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API on top |
 | [`jvm/`](jvm) | `java:` interop and Swing GUIs (JVM only) |
@@ -54,7 +55,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`simd-dot.lisp`](ml/simd-dot.lisp) | The smallest thing `--simd` speeds up: one `vec:dot` over 1024 doubles, 4000 times. The answer is an exact integer, so only the elapsed time moves |
 | [`simd-gemv.lisp`](ml/simd-gemv.lisp) | `vec:matvec` (GEMV) + `vec:dot` — the two kernels LLM inference lives in. Prints `argmax` indices, so acceleration cannot change the output. See the [SIMD guide](../doc/en/guides/simd-acceleration.md) |
 | [`simd-gemv-nogc.lisp`](ml/simd-gemv-nogc.lisp) | The same inner loop as a `--no-gc` reactor: the host calls the exported `fingerprint`. The `-into` kernels keep the never-freed bump heap at three blocks |
-| [`tiny-llm.lisp`](ml/tiny-llm.lisp) | A 2-layer transformer decoder — llama2's `forward()` without the tokenizer or weight loader: RMSNorm, causal attention over a KV cache, SwiGLU, greedy decode. Thirteen GEMVs per pass. The KV cache stores **V transposed**, which keeps the attention sum one `vec:matvec` |
+| [`tiny-llm.lisp`](ml/tiny-llm.lisp) | A 2-layer transformer decoder — llama2's `forward()` without the tokenizer or weight loader: RMSNorm, causal attention over a KV cache, SwiGLU, greedy decode. Thirteen GEMVs per pass. The KV cache stores **V transposed**, which keeps the attention sum one `vec:matvec`. The whole engine, over real checkpoints, is [`llama2/`](llama2) |
 | [`mlp.lisp`](ml/mlp.lisp) | A generalized multi-layer perceptron for 2-D circle classification |
 | [`maze-rl.lisp`](ml/maze-rl.lisp) | Tabular Q-learning on a grid maze. **Non-deterministic:** `random` is unseeded and per-backend |
 | [`linear-regression.lisp`](ml/linear-regression.lisp) | Least-squares polynomial fitting through the normal equations, in exact rationals |
@@ -69,6 +70,16 @@ A chapter-by-chapter port of the sample code of *Deep Learning from Scratch*
 `common/` library rebuilt on `linalg:` and CLOS layer classes. MNIST scripts
 need a one-time `./download-mnist.sh`. Per-program table in
 [its README](deep-learning-from-scratch/README.md).
+
+## llama2.c — `llama2/`
+
+[`llama2.lisp`](llama2/llama2.lisp) is Andrej Karpathy's `run.c` in one Lisp
+file -- checkpoint loader, tokenizer + BPE encoder, forward pass, sampler,
+generate loop -- and tells the same stories as the C program, token for token,
+from the checked-in 1 MB `stories260K.bin` or the downloadable `stories15M.bin`.
+Its 15 million weights load through `read-sequence` over packed single-float
+arrays; its decode is all `vec:matvec`, which is why `--simd` takes wasm-GC from
+0.4 to 46 tokens/s. Setup, knobs and numbers in [its README](llama2/README.md).
 
 ## Networking, HTTP & services — `net/`
 

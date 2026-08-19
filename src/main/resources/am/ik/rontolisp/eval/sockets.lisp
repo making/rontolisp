@@ -518,29 +518,35 @@
 ;;; The sequence ops carry :start / :end all the way down: the bounds are NOT a
 ;;; caller convenience here, they are the shape the Gray-streams fall-through arm
 ;;; emits, and an unbounded-only dispatch left that arm on the native built-in.
+;;; Only the SOCKET arm resolves a nil :end to (length seq) -- a socket buffer is
+;;; a rank-1 vector; the native arm takes nil as "the whole buffer" itself, which
+;;; is what lets a rank-2 packed float array be read in bulk
+;;; (.kb/binary-sequence-io.md).
 (rontolisp:async-defun rontolisp::%read-sequence-future
     (seq s &optional start end)
-  (let ((a (if start start 0)) (b (if end end (length seq))))
+  (let ((a (if start start 0)))
     (let ((e (rontolisp::%sock-entry s)))
       (if e
-          (rontolisp:await (rontolisp::%sock-read-seq-f e seq a b))
-          (rontolisp::%read-sequence-raw seq s :start a :end b)))))
+          (rontolisp:await
+           (rontolisp::%sock-read-seq-f e seq a (if end end (length seq))))
+          (rontolisp::%read-sequence-raw seq s :start a :end end)))))
 
 (defun rontolisp::%io-read-sequence (seq s &optional start end)
-  (let ((a (if start start 0)) (b (if end end (length seq))))
+  (let ((a (if start start 0)))
     (if (rontolisp::%sock-entry s)
-        (rontolisp::%future-force (rontolisp::%read-sequence-future seq s a b))
-        (rontolisp::%read-sequence-raw seq s :start a :end b))))
+        (rontolisp::%future-force
+         (rontolisp::%read-sequence-future seq s a (if end end (length seq))))
+        (rontolisp::%read-sequence-raw seq s :start a :end end))))
 
 (defun rontolisp::%io-write-sequence (seq s &optional start end)
-  (let ((a (if start start 0)) (b (if end end (length seq))))
+  (let ((a (if start start 0)))
     (let ((e (rontolisp::%sock-entry s)))
       (if e
           (progn
             (rontolisp::%sock-write-string e
-             (rontolisp::%sock-seq-string seq a b))
+             (rontolisp::%sock-seq-string seq a (if end end (length seq))))
             seq)
-          (rontolisp::%write-sequence-raw seq s :start a :end b)))))
+          (rontolisp::%write-sequence-raw seq s :start a :end end)))))
 
 ;;; --- writes (the synchronous stream.write built-in blocks until the peer has
 ;;; taken the bytes; FIN = dropping the write end at close) ---

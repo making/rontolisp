@@ -8,10 +8,10 @@ import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code expt} built-in. When a floating-point literal is involved it
- * delegates to {@code Math.pow} (returning a double); otherwise it raises the base
- * {@code BigInteger} to the integer power, keeping an exact integer result. The integer
- * path requires a non-negative exponent (a negative one throws at runtime); use a float
- * base or exponent for fractional or negative powers.
+ * delegates to {@code Math.pow} (returning a double); otherwise it calls the {@code _pow}
+ * runtime helper, which keeps an exact rational result for an integer exponent (a
+ * negative one yields the reciprocal) and falls over to {@code Math.pow} when the
+ * exponent turns out at run time to be a float or a ratio.
  */
 final class JvmExptCompiler {
 
@@ -30,13 +30,13 @@ final class JvmExptCompiler {
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
-			// _pow keeps an exact rational result for any integer exponent: a ratio base
+			// _pow keeps an exact rational result for an integer exponent: a ratio base
 			// raises numerator and denominator, and a negative exponent yields the
-			// reciprocal (e.g. (expt 2 -1) -> 1/2).
+			// reciprocal (e.g. (expt 2 -1) -> 1/2). It dispatches on the RUNTIME
+			// exponent: a double or ratio that the literal scan above could not see
+			// (a variable, a call, a float coercion) takes Math.pow there.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			JvmEmitHelper.unboxLong(ctx);
-			ctx.emit(Opcode.L2I);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.POW).index());
 		}

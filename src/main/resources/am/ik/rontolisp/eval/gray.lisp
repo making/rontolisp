@@ -618,9 +618,10 @@
     (if (%obj-p stream)
         (rontolisp:stream-read-sequence stream sequence start
                                         (if end end (length sequence)))
-        (read-sequence sequence stream
-                       :start start
-                       :end (if end end (length sequence))))))
+        ;; :end stays nil for the built-in: a rank-2 packed buffer has no length,
+        ;; and the expansion resolves nil to the whole buffer itself
+        ;; (.kb/binary-sequence-io.md).
+        (read-sequence sequence stream :start start :end end))))
 
 (defun rontolisp::%gray-write-sequence-dispatch (sequence stream start end)
   (let ((stream (%synonym-target stream)))
@@ -629,9 +630,7 @@
           (rontolisp:stream-write-sequence stream sequence start
                                            (if end end (length sequence)))
           sequence)
-        (write-sequence sequence stream
-                        :start start
-                        :end (if end end (length sequence))))))
+        (write-sequence sequence stream :start start :end end))))
 
 (defun rontolisp::%gray-file-position-dispatch (stream)
   (let ((stream (%synonym-target stream)))

@@ -1347,7 +1347,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// entry; appended after the last fixed helper so no index above shifts.
 	static final int FUNC_PATH_DIRFD = FUNC_IV_UTF8_STR + 1;
 
-	static final int FX_FUNC_LAST = FUNC_PATH_DIRFD;
+	// _read_packed / _write_packed (seq, stream, start, end) -> value: the bulk binary
+	// transfer behind read-sequence / write-sequence over a packed buffer
+	// (WasmPackedIoRuntimeBuilder, .kb/binary-sequence-io.md). The 4-parameter callable
+	// signature (TYPE_CALLABLE_BASE + 3), so no new type entry; appended after the last
+	// fixed helper so no index above shifts.
+	static final int FUNC_READ_PACKED = FUNC_PATH_DIRFD + 1;
+
+	static final int FUNC_WRITE_PACKED = FUNC_READ_PACKED + 1;
+
+	static final int FX_FUNC_LAST = FUNC_WRITE_PACKED;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -5303,6 +5312,10 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_IV_UTF8_STR)
 				fnDef.addFunction(TYPE_INTERN); // _path_dirfd (ptr, len) -> dirfd
 												// (FUNC_PATH_DIRFD)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _read_packed (seq, stream,
+															// start, end) -> value
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _write_packed (seq, stream,
+															// start, end) -> value
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6002,6 +6015,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildIvUtf8StrBody());
 				// preopen-resolving path front end body (FUNC_PATH_DIRFD)
 				code.addFunction(WasmIoRuntimeBuilder.buildPathDirFdBody());
+				// bulk packed-buffer binary I/O bodies (FUNC_READ_PACKED,
+				// FUNC_WRITE_PACKED)
+				code.addFunction(WasmPackedIoRuntimeBuilder.buildReadPackedBody(this.simd));
+				code.addFunction(WasmPackedIoRuntimeBuilder.buildWritePackedBody(this.simd));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

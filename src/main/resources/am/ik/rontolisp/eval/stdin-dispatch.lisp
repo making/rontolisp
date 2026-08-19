@@ -92,17 +92,13 @@
 (defun rontolisp::%read-line-eof-future (s eof-error-p &optional eof-value)
   (rontolisp::%read-line-raw s eof-error-p eof-value))
 
+;; :end stays nil for the native built-in: it takes nil as "the whole buffer",
+;; and a rank-2 packed float array has no length (.kb/binary-sequence-io.md).
 (defun rontolisp::%io-read-sequence (seq s &optional start end)
-  (rontolisp::%read-sequence-raw seq s
-                                 :start (if start start 0)
-                                 :end (if end end (length seq))))
+  (rontolisp::%read-sequence-raw seq s :start (if start start 0) :end end))
 
 (defun rontolisp::%read-sequence-future (seq s &optional start end)
-  (rontolisp::%read-sequence-raw seq s
-                                 :start (if start start 0)
-                                 :end (if end end (length seq))))
+  (rontolisp::%read-sequence-raw seq s :start (if start start 0) :end end))
 
 (defun rontolisp::%io-write-sequence (seq s &optional start end)
-  (rontolisp::%write-sequence-raw seq s
-                                  :start (if start start 0)
-                                  :end (if end end (length seq))))
+  (rontolisp::%write-sequence-raw seq s :start (if start start 0) :end end))

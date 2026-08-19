@@ -4950,6 +4950,87 @@ public final class Environment implements Scope {
 			}
 			return value;
 		}));
+		// The bulk binary-I/O primitives behind read-sequence / write-sequence over a
+		// PACKED buffer (.kb/binary-sequence-io.md): raw little-endian elements moved in
+		// one native transfer instead of one read-byte/write-byte per byte. Handled: a
+		// binary file stream (an InputStream / OutputStream table entry) and the
+		// standard-stream designators; anything else -- a Gray instance, a text stream, a
+		// socket, a general array -- answers nil and the expansion's element loop runs.
+		env.defineFunction(LispNames.READ_SEQUENCE_PACKED, new LispFunction(LispNames.READ_SEQUENCE_PACKED, args -> {
+			requireArgCount(LispNames.READ_SEQUENCE_PACKED, args, 4);
+			PackedBuffer buf = PackedBuffer.of(args.get(0));
+			if (buf == null) {
+				return LispNil.INSTANCE;
+			}
+			LispVal src = resolveInputSrc.apply(args.get(1));
+			InputStream in2;
+			if (src == null || src instanceof LispNil || src instanceof LispTrue) {
+				in2 = in;
+			}
+			else if (src instanceof LispInteger handle && streams.get(handle.value()) instanceof InputStream entry) {
+				in2 = entry;
+			}
+			else {
+				return LispNil.INSTANCE;
+			}
+			int start = PackedBuffer.bound(LispNames.READ_SEQUENCE, args.get(2), 0);
+			int end = PackedBuffer.bound(LispNames.READ_SEQUENCE, args.get(3), buf.size());
+			if (start < 0 || end > buf.size() || start > end) {
+				throw new LispEvalException(LispNames.READ_SEQUENCE + ": bounds " + start + ".." + end
+						+ " exceed the buffer size " + buf.size());
+			}
+			try {
+				byte[] bytes = in2.readNBytes((end - start) * buf.width());
+				int n = bytes.length / buf.width();
+				buf.load(ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN), start, n);
+				return new LispInteger(start + n);
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		}));
+		env.defineFunction(LispNames.WRITE_SEQUENCE_PACKED, new LispFunction(LispNames.WRITE_SEQUENCE_PACKED, args -> {
+			requireArgCount(LispNames.WRITE_SEQUENCE_PACKED, args, 4);
+			PackedBuffer buf = PackedBuffer.of(args.get(0));
+			if (buf == null) {
+				return LispNil.INSTANCE;
+			}
+			LispVal dest = resolveOutputDest.apply(args.get(1));
+			OutputStream out2;
+			if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
+				out2 = out;
+			}
+			else if (dest instanceof LispInteger err && err.value() == StreamDesignators.STANDARD_ERROR_HANDLE) {
+				out2 = System.err;
+			}
+			else if (dest instanceof LispInteger handle && streams.get(handle.value()) instanceof OutputStream entry) {
+				out2 = entry;
+			}
+			else {
+				return LispNil.INSTANCE;
+			}
+			int start = PackedBuffer.bound(LispNames.WRITE_SEQUENCE, args.get(2), 0);
+			int end = PackedBuffer.bound(LispNames.WRITE_SEQUENCE, args.get(3), buf.size());
+			if (start < 0 || end > buf.size() || start > end) {
+				throw new LispEvalException(LispNames.WRITE_SEQUENCE + ": bounds " + start + ".." + end
+						+ " exceed the buffer size " + buf.size());
+			}
+			byte[] bytes = new byte[(end - start) * buf.width()];
+			buf.store(ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN), start, end - start);
+			try {
+				out2.write(bytes);
+				if (out2 == out && bytes.length > 0) {
+					atLineStart[0] = bytes[bytes.length - 1] == '\n';
+				}
+				else if (out2 == System.err) {
+					out2.flush();
+				}
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+			return args.get(0);
+		}));
 		// TCP sockets (rontolisp package). A socket or listener handle lives in the same
 		// stream table as file streams: read-line/write-line/read-byte/write-byte
 		// dispatch on the entry type above, and close works unchanged (Socket and
@@ -6712,6 +6793,76 @@ public final class Environment implements Scope {
 		}
 		catch (CharacterCodingException ex) {
 			return null;
+		}
+	}
+
+	/**
+	 * The packed buffers {@code %read-sequence-packed} / {@code %write-sequence-packed}
+	 * move in bulk, viewed as a flat row-major element sequence of a fixed byte width: a
+	 * packed float array of any rank (f32 = 4 bytes, f64 = 8 bytes) or a packed
+	 * {@code (unsigned-byte 8|16|32)} vector (1 / 2 / 4 bytes). Elements are
+	 * little-endian on the wire.
+	 */
+	private record PackedBuffer(LispVal value, int width, int size) {
+
+		static @Nullable PackedBuffer of(LispVal value) {
+			if (value instanceof LispSingleFloatArray f) {
+				return new PackedBuffer(f, 4, f.totalSize());
+			}
+			if (value instanceof LispDoubleFloatArray d) {
+				return new PackedBuffer(d, 8, d.totalSize());
+			}
+			if (value instanceof LispIntVector iv) {
+				return new PackedBuffer(iv, iv.width() / 8, iv.length());
+			}
+			return null;
+		}
+
+		static int bound(String op, LispVal v, int dflt) {
+			if (v instanceof LispNil) {
+				return dflt;
+			}
+			if (v instanceof LispInteger i) {
+				return (int) i.value();
+			}
+			throw new LispEvalException(op + ": :start/:end must be an integer or nil");
+		}
+
+		void load(ByteBuffer bytes, int start, int n) {
+			switch (this.value) {
+				case LispSingleFloatArray f -> bytes.asFloatBuffer().get(f.data(), start, n);
+				case LispDoubleFloatArray d -> bytes.asDoubleBuffer().get(d.data(), start, n);
+				case LispIntVector iv -> {
+					long[] data = iv.data();
+					for (int k = 0; k < n; k++) {
+						data[start + k] = switch (iv.width()) {
+							case 8 -> bytes.get() & 0xFFL;
+							case 16 -> bytes.getShort() & 0xFFFFL;
+							default -> bytes.getInt() & 0xFFFF_FFFFL;
+						};
+					}
+				}
+				default -> throw new IllegalStateException();
+			}
+		}
+
+		void store(ByteBuffer bytes, int start, int n) {
+			switch (this.value) {
+				case LispSingleFloatArray f -> bytes.asFloatBuffer().put(f.data(), start, n);
+				case LispDoubleFloatArray d -> bytes.asDoubleBuffer().put(d.data(), start, n);
+				case LispIntVector iv -> {
+					long[] data = iv.data();
+					for (int k = 0; k < n; k++) {
+						long e = data[start + k];
+						switch (iv.width()) {
+							case 8 -> bytes.put((byte) e);
+							case 16 -> bytes.putShort((short) e);
+							default -> bytes.putInt((int) e);
+						}
+					}
+				}
+				default -> throw new IllegalStateException();
+			}
 		}
 	}
 

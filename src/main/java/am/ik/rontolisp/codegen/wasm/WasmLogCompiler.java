@@ -74,6 +74,20 @@ final class WasmLogCompiler {
 
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmEmitHelper.castFloatGetF64(ctx);
+		emitLogCore(ctx, xSlot, mSlot, eSlot);
+	}
+
+	/**
+	 * Consumes an f64 {@code x} on the stack and leaves the boxed {@code TYPE_FLOAT}
+	 * {@code ln(x)} -- the whole approximation including the IEEE edges. Package-private
+	 * so {@link WasmExptCompiler} derives a fractional power from {@code exp(y * ln(x))}
+	 * with the same arithmetic as the {@code log} built-in.
+	 * @param ctx the compile context
+	 * @param xSlot a ref temp for x (reused for s)
+	 * @param mSlot a ref temp for the mantissa (reused for u = s^2)
+	 * @param eSlot a ref temp for the accumulated exponent
+	 */
+	static void emitLogCore(WasmLispCompiler.Ctx ctx, int xSlot, int mSlot, int eSlot) {
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(xSlot);

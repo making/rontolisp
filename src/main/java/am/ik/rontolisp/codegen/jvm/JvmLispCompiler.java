@@ -1126,6 +1126,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// _iv* dispatch on.
 		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector || usesFetch
 				|| usesHttpHandler;
+		// The bulk binary transfer behind read-sequence / write-sequence over a packed
+		// buffer (.kb/binary-sequence-io.md): emitted for a program that has both a
+		// packed buffer to move and a sequence-I/O call to move it with -- the primitive
+		// its expansion calls compiles to a declining nil otherwise, so an artifact
+		// without either keeps its bytes.
+		final boolean usesPackedSequenceIo = (usesFloatArray || usesIntArray)
+				&& (programUsesSymbol(program, LispNames.READ_SEQUENCE)
+						|| programUsesSymbol(program, LispNames.WRITE_SEQUENCE)
+						|| programUsesSymbol(program, LispNames.READ_SEQUENCE_RAW_INTERNAL)
+						|| programUsesSymbol(program, LispNames.WRITE_SEQUENCE_RAW_INTERNAL));
 
 		// Whether the array runtime helper group is emitted (the same test that gates
 		// its emission below). The mutable-character-vector consumers -- the _eqv
@@ -1233,6 +1243,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.printCase(printCase)
 			.usesFloatArray(usesFloatArray)
 			.usesIntArray(usesIntArray)
+			.usesPackedSequenceIo(usesPackedSequenceIo)
 			.usesArrays(usesArrays)
 			.usesHashTables(usesHashTables)
 			.usesSeqString(usesSeqString)
@@ -1910,7 +1921,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
-					usesErrorOutput, usesListDirectory, fileMeta)
+					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo)
 			.methods();
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
@@ -4105,6 +4116,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesIntArray = false;
 
 		/**
+		 * True when the {@code _readSeqPacked} / {@code _writeSeqPacked} helpers are
+		 * emitted ({@code .kb/binary-sequence-io.md}); when they are not, the
+		 * {@code %read-sequence-packed} / {@code %write-sequence-packed} primitives
+		 * compile to a declining nil. Shared across every context.
+		 */
+		boolean usesPackedSequenceIo = false;
+
+		/**
 		 * True when the array runtime helper group ({@link JvmArrayRuntimeBuilder}) is
 		 * emitted for this program. Gates the mutable-character-vector consumers (the
 		 * {@code stringp} extension and the per-site {@code _strv} normalization), so an
@@ -4362,6 +4381,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.printCase = builder.printCase;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesIntArray = builder.usesIntArray;
+			this.usesPackedSequenceIo = builder.usesPackedSequenceIo;
 			this.usesArrays = builder.usesArrays;
 			this.usesHashTables = builder.usesHashTables;
 			this.usesSeqString = builder.usesSeqString;
@@ -4616,6 +4636,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesFloatArray = false;
 
 			private boolean usesIntArray = false;
+
+			private boolean usesPackedSequenceIo = false;
 
 			private boolean usesArrays = false;
 
@@ -5023,6 +5045,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesIntArray(boolean usesIntArray) {
 				this.usesIntArray = usesIntArray;
+				return this;
+			}
+
+			Builder usesPackedSequenceIo(boolean usesPackedSequenceIo) {
+				this.usesPackedSequenceIo = usesPackedSequenceIo;
 				return this;
 			}
 

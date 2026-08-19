@@ -9,6 +9,7 @@ import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.StreamDesignators;
@@ -157,6 +158,14 @@ final class JvmIoRuntimeBuilder {
 	static final String PEEK_CHAR_METHOD = "_peekChar";
 
 	static final String PEEK_CHAR_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String READ_SEQ_PACKED_METHOD = "_readSeqPacked";
+
+	static final String READ_SEQ_PACKED_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String WRITE_SEQ_PACKED_METHOD = "_writeSeqPacked";
+
+	static final String WRITE_SEQ_PACKED_DESC = READ_SEQ_PACKED_DESC;
 
 	static final String WRITE_BYTE_METHOD = "_writeByte";
 
@@ -393,6 +402,8 @@ final class JvmIoRuntimeBuilder {
 	/** Which file-metadata helpers to emit; see {@link FileMeta}. */
 	private final FileMeta fileMeta;
 
+	private final @Nullable PackedSequenceIo packedSequenceIo;
+
 	@Nullable private final MethodrefConstant fileLastModified;
 
 	@Nullable private final MethodrefConstant fileMkdirs;
@@ -437,11 +448,12 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput, boolean listDirectory, FileMeta fileMeta) {
+			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo) {
 		this.sockets = sockets;
 		this.errorOutput = errorOutput;
 		this.listDirectory = listDirectory;
 		this.fileMeta = fileMeta;
+		this.packedSequenceIo = packedSequenceIo ? PackedSequenceIo.mint(cp) : null;
 		this.systemErr = errorOutput ? cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
 				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;"))) : null;
 		this.cp = cp;
@@ -640,10 +652,68 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput, boolean listDirectory, FileMeta fileMeta) {
+			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
-				errorOutput, listDirectory, fileMeta);
+				errorOutput, listDirectory, fileMeta, packedSequenceIo);
+	}
+
+	/**
+	 * The constant-pool entries of the bulk binary-I/O helpers {@code _readSeqPacked} /
+	 * {@code _writeSeqPacked} ({@code .kb/binary-sequence-io.md}), minted only for a
+	 * program that calls {@code read-sequence} / {@code write-sequence} over a packed
+	 * buffer, so every other artifact keeps its original bytes.
+	 */
+	private record PackedSequenceIo(ClassConstant floatArrayClass, ClassConstant doubleArrayClass,
+			ClassConstant longArrayClass, ClassConstant byteBufferClass, MethodrefConstant readNBytes,
+			MethodrefConstant byteBufferWrap, MethodrefConstant byteBufferOrder, FieldrefConstant littleEndian,
+			MethodrefConstant asFloatBuffer, MethodrefConstant asDoubleBuffer, MethodrefConstant floatBufferGet,
+			MethodrefConstant doubleBufferGet, MethodrefConstant floatBufferPut, MethodrefConstant doubleBufferPut,
+			MethodrefConstant bbGet, MethodrefConstant bbGetShort, MethodrefConstant bbGetInt, MethodrefConstant bbPut,
+			MethodrefConstant bbPutShort, MethodrefConstant bbPutInt, MethodrefConstant outputStreamWriteBytes,
+			StringConstant boundsMessage) {
+
+		static PackedSequenceIo mint(ConstantPool cp) {
+			ClassConstant byteBuffer = cp.addClass(cp.addUtf8("java/nio/ByteBuffer"));
+			ClassConstant floatBuffer = cp.addClass(cp.addUtf8("java/nio/FloatBuffer"));
+			ClassConstant doubleBuffer = cp.addClass(cp.addUtf8("java/nio/DoubleBuffer"));
+			ClassConstant byteOrder = cp.addClass(cp.addUtf8("java/nio/ByteOrder"));
+			return new PackedSequenceIo(cp.addClass(cp.addUtf8("[F")), cp.addClass(cp.addUtf8("[D")),
+					cp.addClass(cp.addUtf8("[J")), byteBuffer,
+					cp.addMethodref(cp.addClass(cp.addUtf8("java/io/InputStream")),
+							cp.addNameAndType(cp.addUtf8("readNBytes"), cp.addUtf8("(I)[B"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("wrap"), cp.addUtf8("([B)Ljava/nio/ByteBuffer;"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("order"),
+									cp.addUtf8("(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;"))),
+					cp.addFieldref(byteOrder,
+							cp.addNameAndType(cp.addUtf8("LITTLE_ENDIAN"), cp.addUtf8("Ljava/nio/ByteOrder;"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("asFloatBuffer"), cp.addUtf8("()Ljava/nio/FloatBuffer;"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("asDoubleBuffer"), cp.addUtf8("()Ljava/nio/DoubleBuffer;"))),
+					cp.addMethodref(floatBuffer,
+							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([FII)Ljava/nio/FloatBuffer;"))),
+					cp.addMethodref(doubleBuffer,
+							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([DII)Ljava/nio/DoubleBuffer;"))),
+					cp.addMethodref(floatBuffer,
+							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([FII)Ljava/nio/FloatBuffer;"))),
+					cp.addMethodref(doubleBuffer,
+							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([DII)Ljava/nio/DoubleBuffer;"))),
+					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()B"))),
+					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("getShort"), cp.addUtf8("()S"))),
+					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("getInt"), cp.addUtf8("()I"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("(B)Ljava/nio/ByteBuffer;"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("putShort"), cp.addUtf8("(S)Ljava/nio/ByteBuffer;"))),
+					cp.addMethodref(byteBuffer,
+							cp.addNameAndType(cp.addUtf8("putInt"), cp.addUtf8("(I)Ljava/nio/ByteBuffer;"))),
+					cp.addMethodref(cp.addClass(cp.addUtf8("java/io/OutputStream")),
+							cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("([B)V"))),
+					cp.addString("read-sequence/write-sequence: :start/:end exceed the buffer size"));
+		}
 	}
 
 	/**
@@ -731,6 +801,12 @@ final class JvmIoRuntimeBuilder {
 		ms.add(new IoMethod(this.cp.addUtf8(PEEK_CHAR_METHOD), this.cp.addUtf8(PEEK_CHAR_DESC), 5, 6, buildPeekChar()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), 4, 3,
 				buildWriteByte()));
+		if (this.packedSequenceIo != null) {
+			ms.add(new IoMethod(this.cp.addUtf8(READ_SEQ_PACKED_METHOD), this.cp.addUtf8(READ_SEQ_PACKED_DESC), 6, 14,
+					buildSeqPacked(true)));
+			ms.add(new IoMethod(this.cp.addUtf8(WRITE_SEQ_PACKED_METHOD), this.cp.addUtf8(WRITE_SEQ_PACKED_DESC), 6, 14,
+					buildSeqPacked(false)));
+		}
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), 4, 3, buildWriteStr()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STRING_METHOD), this.cp.addUtf8(WRITE_STRING_DESC), 4,
 				this.sockets != null ? 4 : 3, buildWriteString()));
@@ -2657,6 +2733,552 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
+	}
+
+	/**
+	 * {@code _readSeqPacked(Object seq, Object handle, Object start, Object end) -> Object}
+	 * and its mirror {@code _writeSeqPacked}: the bulk binary transfer behind
+	 * {@code read-sequence} / {@code write-sequence} over a PACKED buffer
+	 * ({@code .kb/binary-sequence-io.md}). The buffer is a packed float array of any rank
+	 * ({@code float[]} / {@code double[]} with the {@code [rank, dims..., data...]}
+	 * header, 4 / 8 bytes per element) or a packed integer vector ({@code long[]} with
+	 * its width header, width/8 bytes per element), moved as raw little-endian elements
+	 * in ONE {@code readNBytes} / {@code write} through a {@code ByteBuffer} view. The
+	 * stream is a binary table entry ({@code InputStream} / {@code OutputStream}) or the
+	 * standard-stream designator (a non-handle: {@code System.in} / {@code System.out});
+	 * a buffer or stream of any other shape answers {@code null} -- "declined" -- and the
+	 * expansion's element loop takes over, so nothing here changes what those cases did.
+	 * {@code start} / {@code end} are boxed {@code Long}s or {@code null} (0 / the total
+	 * size); a range outside the buffer throws. Read answers the boxed fill position,
+	 * write answers {@code seq}.
+	 */
+	private List<Integer> buildSeqPacked(boolean read) {
+		PackedSequenceIo io = java.util.Objects.requireNonNull(this.packedSequenceIo);
+		// Slots: 0=seq, 1=handle, 2=start, 3=end, 4=width, 5=size, 6=base (the data
+		// offset), 7=stream, 8=s, 9=e, 10=bytes, 11=n, 12=bb, 13=k
+		final int WIDTH = 4, SIZE = 5, BASE = 6, STREAM = 7, S = 8, E = 9, BYTES = 10, N = 11, BB = 12, K = 13;
+		List<Integer> code = new ArrayList<>();
+		// --- the buffer shape ---------------------------------------------------
+		// if (seq instanceof float[]) { base = 1 + (int) seq[0]; width = 4; size = len -
+		// base }
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.floatArrayClass().index());
+		int ifNotFloat = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.floatArrayClass().index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.FALOAD);
+		code.add(Opcode.F2I);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.IADD);
+		code.add(Opcode.ISTORE);
+		code.add(BASE);
+		code.add(Opcode.ICONST_4);
+		code.add(Opcode.ISTORE);
+		code.add(WIDTH);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.floatArrayClass().index());
+		code.add(Opcode.ARRAYLENGTH);
+		code.add(Opcode.ILOAD);
+		code.add(BASE);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.ISTORE);
+		code.add(SIZE);
+		int gotoShaped1 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotFloat, code.size());
+		// else if (seq instanceof double[]) { base = 1 + (int) seq[0]; width = 8; ... }
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.doubleArrayClass().index());
+		int ifNotDouble = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.doubleArrayClass().index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.DALOAD);
+		code.add(Opcode.D2I);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.IADD);
+		code.add(Opcode.ISTORE);
+		code.add(BASE);
+		code.add(Opcode.BIPUSH);
+		code.add(8);
+		code.add(Opcode.ISTORE);
+		code.add(WIDTH);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.doubleArrayClass().index());
+		code.add(Opcode.ARRAYLENGTH);
+		code.add(Opcode.ILOAD);
+		code.add(BASE);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.ISTORE);
+		code.add(SIZE);
+		int gotoShaped2 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotDouble, code.size());
+		// else if (seq instanceof long[]) { base = 1; width = (int) seq[0] / 8; size =
+		// len - 1 }
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.longArrayClass().index());
+		int ifNotLong = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISTORE);
+		code.add(BASE);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.longArrayClass().index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.LALOAD);
+		code.add(Opcode.L2I);
+		code.add(Opcode.ICONST_3);
+		code.add(Opcode.ISHR);
+		code.add(Opcode.ISTORE);
+		code.add(WIDTH);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.longArrayClass().index());
+		code.add(Opcode.ARRAYLENGTH);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.ISTORE);
+		code.add(SIZE);
+		int gotoShaped3 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotLong, code.size());
+		// else return null (not a packed buffer -- declined)
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, gotoShaped1, code.size());
+		patchBranch(code, gotoShaped2, code.size());
+		patchBranch(code, gotoShaped3, code.size());
+		// --- the stream --------------------------------------------------------
+		// if (handle instanceof Long) { entry = _streams[idx]; if (!(entry instanceof
+		// InputStream/OutputStream)) return null; stream = entry } else stream =
+		// System.in/out
+		ClassConstant streamClass = read ? this.inputStreamClass : this.outputStreamClass;
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifNotHandle = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE);
+		code.add(STREAM);
+		code.add(Opcode.ALOAD);
+		code.add(STREAM);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, streamClass.index());
+		int ifStreamOk = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifStreamOk, code.size());
+		code.add(Opcode.ALOAD);
+		code.add(STREAM);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, streamClass.index());
+		code.add(Opcode.ASTORE);
+		code.add(STREAM);
+		int gotoStreamed = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotHandle, code.size());
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, read ? this.systemIn.index() : this.systemOut.index());
+		// The cast is what makes the two paths MERGE as the stream class (a PrintStream
+		// joined with an OutputStream would meet at Object and fail the verifier).
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, streamClass.index());
+		code.add(Opcode.ASTORE);
+		code.add(STREAM);
+		patchBranch(code, gotoStreamed, code.size());
+		// --- the bounds ---------------------------------------------------------
+		// s = start == null ? 0 : (int) start ; e = end == null ? size : (int) end
+		emitBoundOrDefault(code, 2, () -> code.add(Opcode.ICONST_0), S);
+		emitBoundOrDefault(code, 3, () -> {
+			code.add(Opcode.ILOAD);
+			code.add(SIZE);
+		}, E);
+		// if (s < 0 || e > size || s > e) throw new RuntimeException(bounds message)
+		code.add(Opcode.ILOAD);
+		code.add(S);
+		int ifSNeg = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		code.add(Opcode.ILOAD);
+		code.add(E);
+		code.add(Opcode.ILOAD);
+		code.add(SIZE);
+		int ifEBig = code.size();
+		code.add(Opcode.IF_ICMPGT);
+		emitU2(code, 0);
+		code.add(Opcode.ILOAD);
+		code.add(S);
+		code.add(Opcode.ILOAD);
+		code.add(E);
+		int ifBoundsOk = code.size();
+		code.add(Opcode.IF_ICMPLE);
+		emitU2(code, 0);
+		patchBranch(code, ifSNeg, code.size());
+		patchBranch(code, ifEBig, code.size());
+		code.add(Opcode.NEW);
+		emitU2(code, this.runtimeExceptionClass.index());
+		code.add(Opcode.DUP);
+		emitLdc(code, io.boundsMessage().index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.runtimeExceptionInit.index());
+		code.add(Opcode.ATHROW);
+		patchBranch(code, ifBoundsOk, code.size());
+		// --- the byte buffer ----------------------------------------------------
+		if (read) {
+			// bytes = in.readNBytes((e - s) * width); n = bytes.length / width
+			code.add(Opcode.ALOAD);
+			code.add(STREAM);
+			code.add(Opcode.ILOAD);
+			code.add(E);
+			code.add(Opcode.ILOAD);
+			code.add(S);
+			code.add(Opcode.ISUB);
+			code.add(Opcode.ILOAD);
+			code.add(WIDTH);
+			code.add(Opcode.IMUL);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, io.readNBytes().index());
+			code.add(Opcode.ASTORE);
+			code.add(BYTES);
+			code.add(Opcode.ALOAD);
+			code.add(BYTES);
+			code.add(Opcode.ARRAYLENGTH);
+			code.add(Opcode.ILOAD);
+			code.add(WIDTH);
+			code.add(Opcode.IDIV);
+			code.add(Opcode.ISTORE);
+			code.add(N);
+		}
+		else {
+			// n = e - s; bytes = new byte[n * width]
+			code.add(Opcode.ILOAD);
+			code.add(E);
+			code.add(Opcode.ILOAD);
+			code.add(S);
+			code.add(Opcode.ISUB);
+			code.add(Opcode.ISTORE);
+			code.add(N);
+			code.add(Opcode.ILOAD);
+			code.add(N);
+			code.add(Opcode.ILOAD);
+			code.add(WIDTH);
+			code.add(Opcode.IMUL);
+			code.add(Opcode.NEWARRAY);
+			code.add(8); // T_BYTE
+			code.add(Opcode.ASTORE);
+			code.add(BYTES);
+		}
+		// bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+		code.add(Opcode.ALOAD);
+		code.add(BYTES);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, io.byteBufferWrap().index());
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, io.littleEndian().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, io.byteBufferOrder().index());
+		code.add(Opcode.ASTORE);
+		code.add(BB);
+		// --- the transfer, by buffer shape --------------------------------------
+		// if (seq instanceof float[]) bb.asFloatBuffer().get/put((float[]) seq, base + s,
+		// n)
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.floatArrayClass().index());
+		int ifNotFloat2 = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(BB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, io.asFloatBuffer().index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.floatArrayClass().index());
+		emitBasePlusS(code, BASE, S);
+		code.add(Opcode.ILOAD);
+		code.add(N);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, (read ? io.floatBufferGet() : io.floatBufferPut()).index());
+		code.add(Opcode.POP);
+		int gotoMoved1 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotFloat2, code.size());
+		// else if (seq instanceof double[]) bb.asDoubleBuffer().get/put(...)
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.doubleArrayClass().index());
+		int ifNotDouble2 = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(BB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, io.asDoubleBuffer().index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.doubleArrayClass().index());
+		emitBasePlusS(code, BASE, S);
+		code.add(Opcode.ILOAD);
+		code.add(N);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, (read ? io.doubleBufferGet() : io.doubleBufferPut()).index());
+		code.add(Opcode.POP);
+		int gotoMoved2 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotDouble2, code.size());
+		// else (long[]): for (k = 0; k < n; k++) one element of the width
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.ISTORE);
+		code.add(K);
+		int loopTop = code.size();
+		code.add(Opcode.ILOAD);
+		code.add(K);
+		code.add(Opcode.ILOAD);
+		code.add(N);
+		int ifLoopDone = code.size();
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		if (read) {
+			// seq[base + s + k] = (width == 1 ? bb.get() & 0xFF : width == 2 ?
+			// bb.getShort() &
+			// 0xFFFF : bb.getInt() & 0xFFFFFFFFL)
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, io.longArrayClass().index());
+			emitBasePlusS(code, BASE, S);
+			code.add(Opcode.ILOAD);
+			code.add(K);
+			code.add(Opcode.IADD);
+			emitWidthSwitch(code, WIDTH, () -> {
+				code.add(Opcode.ALOAD);
+				code.add(BB);
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, io.bbGet().index());
+				code.add(Opcode.SIPUSH);
+				emitU2(code, 0xFF);
+				code.add(Opcode.IAND);
+				code.add(Opcode.I2L);
+			}, () -> {
+				code.add(Opcode.ALOAD);
+				code.add(BB);
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, io.bbGetShort().index());
+				emitLdc(code, this.cp.addInteger(0xFFFF).index());
+				code.add(Opcode.IAND);
+				code.add(Opcode.I2L);
+			}, () -> {
+				code.add(Opcode.ALOAD);
+				code.add(BB);
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, io.bbGetInt().index());
+				code.add(Opcode.I2L);
+				code.add(Opcode.LDC2_W);
+				emitU2(code, this.cp.addLong(0xFFFF_FFFFL).index());
+				code.add(Opcode.LAND);
+			});
+			code.add(Opcode.LASTORE);
+		}
+		else {
+			// e = seq[base + s + k]; width == 1 ? bb.put((byte) e) : width == 2 ?
+			// bb.putShort((short) e) : bb.putInt((int) e)
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, io.longArrayClass().index());
+			emitBasePlusS(code, BASE, S);
+			code.add(Opcode.ILOAD);
+			code.add(K);
+			code.add(Opcode.IADD);
+			code.add(Opcode.LALOAD);
+			code.add(Opcode.L2I);
+			code.add(Opcode.ISTORE);
+			code.add(SIZE); // scratch: size is not read past the bounds check
+			emitWidthSwitch(code, WIDTH, () -> {
+				code.add(Opcode.ALOAD);
+				code.add(BB);
+				code.add(Opcode.ILOAD);
+				code.add(SIZE);
+				code.add(Opcode.I2B);
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, io.bbPut().index());
+				code.add(Opcode.POP);
+			}, () -> {
+				code.add(Opcode.ALOAD);
+				code.add(BB);
+				code.add(Opcode.ILOAD);
+				code.add(SIZE);
+				code.add(Opcode.I2S);
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, io.bbPutShort().index());
+				code.add(Opcode.POP);
+			}, () -> {
+				code.add(Opcode.ALOAD);
+				code.add(BB);
+				code.add(Opcode.ILOAD);
+				code.add(SIZE);
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, io.bbPutInt().index());
+				code.add(Opcode.POP);
+			});
+		}
+		code.add(Opcode.IINC);
+		code.add(K);
+		code.add(1);
+		int gotoLoop = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, gotoLoop, loopTop);
+		patchBranch(code, ifLoopDone, code.size());
+		patchBranch(code, gotoMoved1, code.size());
+		patchBranch(code, gotoMoved2, code.size());
+		if (read) {
+			// return Long.valueOf(s + n)
+			code.add(Opcode.ILOAD);
+			code.add(S);
+			code.add(Opcode.ILOAD);
+			code.add(N);
+			code.add(Opcode.IADD);
+			code.add(Opcode.I2L);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.longValueOf.index());
+			code.add(Opcode.ARETURN);
+		}
+		else {
+			// out.write(bytes); standard output tracks the fresh-line column off the
+			// last byte (_col = b ^ '\n', as _writeByte does); return seq
+			code.add(Opcode.ALOAD);
+			code.add(STREAM);
+			code.add(Opcode.ALOAD);
+			code.add(BYTES);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, io.outputStreamWriteBytes().index());
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.longClass.index());
+			int ifHandleOut = code.size();
+			code.add(Opcode.IFNE);
+			emitU2(code, 0);
+			code.add(Opcode.ILOAD);
+			code.add(N);
+			int ifEmpty = code.size();
+			code.add(Opcode.IFLE);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD);
+			code.add(BYTES);
+			code.add(Opcode.ALOAD);
+			code.add(BYTES);
+			code.add(Opcode.ARRAYLENGTH);
+			code.add(Opcode.ICONST_1);
+			code.add(Opcode.ISUB);
+			code.add(Opcode.BALOAD);
+			code.add(Opcode.BIPUSH);
+			code.add(10);
+			code.add(Opcode.IXOR);
+			code.add(Opcode.PUTSTATIC);
+			emitU2(code, this.colField.index());
+			patchBranch(code, ifHandleOut, code.size());
+			patchBranch(code, ifEmpty, code.size());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ARETURN);
+		}
+		return code;
+	}
+
+	// slot[target] = (arg == null ? <dflt> : (int) ((Long) arg).longValue())
+	private void emitBoundOrDefault(List<Integer> code, int argSlot, Runnable dflt, int target) {
+		code.add(Opcode.ALOAD);
+		code.add(argSlot);
+		int ifGiven = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		dflt.run();
+		code.add(Opcode.ISTORE);
+		code.add(target);
+		int gotoDone = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifGiven, code.size());
+		code.add(Opcode.ALOAD);
+		code.add(argSlot);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.ISTORE);
+		code.add(target);
+		patchBranch(code, gotoDone, code.size());
+	}
+
+	// Pushes base + s.
+	private static void emitBasePlusS(List<Integer> code, int base, int s) {
+		code.add(Opcode.ILOAD);
+		code.add(base);
+		code.add(Opcode.ILOAD);
+		code.add(s);
+		code.add(Opcode.IADD);
+	}
+
+	// if (width == 1) one() else if (width == 2) two() else four()
+	private static void emitWidthSwitch(List<Integer> code, int widthSlot, Runnable one, Runnable two, Runnable four) {
+		code.add(Opcode.ILOAD);
+		code.add(widthSlot);
+		code.add(Opcode.ICONST_1);
+		int ifNotOne = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		one.run();
+		int gotoDone1 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotOne, code.size());
+		code.add(Opcode.ILOAD);
+		code.add(widthSlot);
+		code.add(Opcode.ICONST_2);
+		int ifNotTwo = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		two.run();
+		int gotoDone2 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotTwo, code.size());
+		four.run();
+		patchBranch(code, gotoDone1, code.size());
+		patchBranch(code, gotoDone2, code.size());
 	}
 
 	/**

@@ -212,6 +212,8 @@ wasmtime run --invoke fingerprint gemv.wasm 100
 
 Both builds print `85` -- the same dominant direction as every other backend -- and the `-into` kernels keep the never-freed `--no-gc` bump heap at exactly three blocks however many steps run. At 20000 steps the scalar module takes ~600 ms and the `--simd` one ~120 ms.
 
+The whole engine is [`examples/llama2/llama2.lisp`](https://github.com/making/rontolisp/blob/develop/examples/llama2/llama2.lisp): llama2.c's `run.c` ported to one file -- checkpoint loader, tokenizer, forward pass, sampler -- over the real TinyStories checkpoints, telling the same stories as the C program token for token. Its 15 million weights load through `read-sequence` over packed single-float arrays, and its decode is over a hundred `vec:matvec`s per token; on stories15M, `--simd` takes the JVM from 23 to 87 tokens/s and wasm-GC from 0.4 to 46 (`run.c -O2`: 65). See [its README](https://github.com/making/rontolisp/blob/develop/examples/llama2/README.md).
+
 A row must hold at least 128 elements before the interpreter and JVM kernels vectorize it; below that they run the scalar loop, because filling the vector registers would cost more than it saves. The two WASM backends have no such threshold.
 
 ## Packages
