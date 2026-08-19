@@ -1,6 +1,5 @@
 package am.ik.rontolisp.compiler;
 
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -13,13 +12,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@link OptimizeLevel} parsing and the two questions the backends ask it. The
  * backward-compatibility pin is {@link #theBareFlagIsTheDefaultLevel()}:
  * {@code --optimize} with no value reaches here as the empty string and must keep meaning
- * what it has always meant, since it is in every doc page, CI job and example.
+ * what it has always meant, since it is in every doc page, CI job and example. The absent
+ * flag now means the same thing, and the unoptimized shape is {@code --optimize=off}.
  */
 class OptimizeLevelTest {
 
 	@Test
-	void theAbsentFlagIsNoOptimizationAtAll() {
-		assertThat(OptimizeLevel.parse(null)).isEqualTo(OptimizeLevel.NONE);
+	void theAbsentFlagIsTheDefaultLevel() {
+		assertThat(OptimizeLevel.parse(null)).isEqualTo(OptimizeLevel.DEFAULT);
+	}
+
+	@Test
+	void theOffSpellingIsNoOptimizationAtAll() {
+		assertThat(OptimizeLevel.parse("off")).isEqualTo(OptimizeLevel.NONE);
 		assertThat(OptimizeLevel.NONE.eliminatesDeadCode()).isFalse();
 		assertThat(OptimizeLevel.NONE.prefersSizeOverSpeed()).isFalse();
 	}
@@ -45,13 +50,17 @@ class OptimizeLevelTest {
 		// content of its own would be a synonym of default, and a synonym teaches a
 		// reader that levels are decoration.
 		assertThatThrownBy(() -> OptimizeLevel.parse("high")).isInstanceOf(IllegalArgumentException.class)
-			.hasMessage("unknown --optimize level 'high' (accepted: default, size)");
+			.hasMessage("unknown --optimize level 'high' (accepted: off, default, size)");
 		assertThatThrownBy(() -> OptimizeLevel.parse("SIZE")).isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> OptimizeLevel.parse("2")).isInstanceOf(IllegalArgumentException.class);
+		// A near-miss for the off switch is an error, not a silent DEFAULT: the level
+		// that declines the optimizer is worth spelling exactly.
+		assertThatThrownBy(() -> OptimizeLevel.parse("none")).isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> OptimizeLevel.parse("no")).isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
-	void everyLevelIsDistinguishableAndOnlyNoneHasNoSpelling() {
+	void everyLevelIsDistinguishableAndSpellable() {
 		// A level that answers both questions the same way as another IS that other
 		// level under a second name; the answers are the whole of what a level is.
 		Set<String> answers = new HashSet<>();
@@ -60,9 +69,7 @@ class OptimizeLevelTest {
 				.as("%s duplicates another level's behavior", level)
 				.isTrue();
 		}
-		assertThat(Arrays.stream(OptimizeLevel.values()).filter(l -> l.spelling() == null).toList())
-			.containsExactly(OptimizeLevel.NONE);
-		assertThat(OptimizeLevel.spellings()).isEqualTo("default, size");
+		assertThat(OptimizeLevel.spellings()).isEqualTo("off, default, size");
 	}
 
 }

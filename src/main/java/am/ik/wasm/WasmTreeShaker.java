@@ -29,8 +29,10 @@ import org.jspecify.annotations.Nullable;
  * dropped atomically: its members occupy consecutive indices and its structural identity
  * under wasm-GC canonicalization is a property of the whole group.
  * <p>
- * The pass is purely additive and opt-in ({@code --optimize}); it never runs on the
- * default deterministic output. The module's section order is preserved.
+ * The pass is purely additive: it is a separate call over a finished module, so emission
+ * itself never runs it and a caller that does not ask keeps the deterministic output byte
+ * for byte (rontolisp asks at every {@code --optimize} level but {@code off}). The
+ * module's section order is preserved.
  * <p>
  * Correctness rests on two properties of the rontolisp output that this class verifies by
  * construction: the only function references are {@code call} immediates (the backend

@@ -36,8 +36,10 @@ import org.jspecify.annotations.Nullable;
  * instruction's index immediates in place (sizes never change: a u2 stays a u2, and an
  * {@code ldc} u1 index only ever shrinks because compaction preserves order).
  * <p>
- * The pass is purely additive and opt-in ({@code --optimize}); it never runs on the
- * default deterministic output.
+ * The pass is purely additive: it is a separate call over a finished class file, so
+ * emission itself never runs it and a caller that does not ask keeps the deterministic
+ * output byte for byte (rontolisp asks at every {@code --optimize} level but
+ * {@code off}).
  * <p>
  * Correctness rests on properties of the rontolisp output that this class verifies by
  * construction: methods carry exactly one {@code Code} attribute whose only permitted
@@ -54,8 +56,8 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * The same class-file walk answers the opposite question, and
  * {@link #unresolvedSelfMethods(byte[])} exposes it: which own-class methods does the
- * emitted bytecode call that the class never declares? That one runs on every build, not
- * just under {@code --optimize}.
+ * emitted bytecode call that the class never declares? That one runs on every build,
+ * including one that declined the shake with {@code --optimize=off}.
  */
 public final class JvmClassShaker {
 

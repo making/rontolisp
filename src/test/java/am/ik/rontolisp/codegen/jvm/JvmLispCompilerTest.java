@@ -12535,4 +12535,24 @@ class JvmLispCompilerTest {
 		assertThat(small).isEqualTo(fast);
 	}
 
+	@Test
+	void theFlaglessBuildIsTheOptimizedOneAndOffIsTheWayBack() {
+		// The whole promise of --optimize being on by default: a build that passes no
+		// flag compiles what --optimize compiles, and the unoptimized shape has to be
+		// asked for by name. One half is OptimizeLevel.parse(null) -> DEFAULT (pinned
+		// in OptimizeLevelTest); the other half is here, because "the levels agree"
+		// would satisfy the first half just as well and would mean the flip changed
+		// nothing.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun never-called (x) (* x x))
+				(print (+ 1 2))
+				""");
+		byte[] flagless = new JvmLispCompiler("Same", false, OptimizeLevel.parse(null)).compile(program);
+		byte[] optimized = new JvmLispCompiler("Same", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] off = new JvmLispCompiler("Same", false, OptimizeLevel.parse("off")).compile(program);
+		assertThat(flagless).isEqualTo(optimized);
+		assertThat(off).isNotEqualTo(optimized);
+		assertThat(off.length).isGreaterThan(optimized.length);
+	}
+
 }

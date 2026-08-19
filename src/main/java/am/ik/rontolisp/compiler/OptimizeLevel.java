@@ -11,13 +11,18 @@ import org.jspecify.annotations.Nullable;
  * documented no-op where it has nothing to trade).
  *
  * <p>
- * <strong>The bare {@code --optimize} is {@link #DEFAULT} and always will be.</strong>
- * The flag carries a value ({@code --optimize=size}) rather than growing a second flag
- * next to it, because two flags whose names differ by one word do not say how they
- * relate: a reader hitting {@code --optimize-size} in a build script cannot tell whether
- * it replaces {@code --optimize}, adds to it, or contradicts it. A value cannot be read
- * that way, and it leaves every existing invocation — in the docs, the CI jobs, the
- * examples — meaning exactly what it meant.
+ * <strong>{@link #DEFAULT} is what an absent flag means, and the bare {@code --optimize}
+ * is {@link #DEFAULT} and always will be.</strong> Optimizing is the shape worth
+ * shipping, so it is what you get without asking; declining it is {@code --optimize=off}.
+ *
+ * <p>
+ * The flag carries a value ({@code --optimize=size}, {@code --optimize=off}) rather than
+ * growing a second flag next to it, because two flags whose names differ by one word do
+ * not say how they relate: a reader hitting {@code --optimize-size} or
+ * {@code --no-optimize} in a build script cannot tell whether it replaces
+ * {@code --optimize}, adds to it, or contradicts it. A value cannot be read that way, and
+ * it leaves every existing invocation — in the docs, the CI jobs, the examples — meaning
+ * exactly what it meant.
  *
  * <p>
  * <strong>Levels differ in what they are willing to PAY, not in how hard they
@@ -43,17 +48,17 @@ import org.jspecify.annotations.Nullable;
 public enum OptimizeLevel {
 
 	/**
-	 * No {@code --optimize} at all: nothing is dropped and the backends emit what they
-	 * emit. This is not "level 0 of an optimizer" — it is the shape the compiler has
-	 * always had without the flag, and every module compiled without it stays
-	 * byte-identical.
+	 * {@code --optimize=off}: nothing is dropped and the backends emit what they emit.
+	 * This is not "level 0 of an optimizer" — it is the shape the compiler emitted before
+	 * the flag was on by default, and every module compiled at {@code off} stays
+	 * byte-identical to what the flagless build used to produce.
 	 */
-	NONE(null),
+	NONE("off"),
 
 	/**
-	 * The bare {@code --optimize}, spellable as {@code --optimize=default} for a build
-	 * script that wants the level written down: dead-code elimination on both backends
-	 * and nothing traded away for it.
+	 * The level an absent flag selects, also spelled by the bare {@code --optimize} and
+	 * by {@code --optimize=default} for a build script that wants it written down:
+	 * dead-code elimination on both backends and nothing traded away for it.
 	 */
 	DEFAULT("default"),
 
@@ -65,18 +70,18 @@ public enum OptimizeLevel {
 	 */
 	SIZE("size");
 
-	private final @Nullable String spelling;
+	private final String spelling;
 
-	OptimizeLevel(@Nullable String spelling) {
+	OptimizeLevel(String spelling) {
 		this.spelling = spelling;
 	}
 
 	/**
-	 * The {@code --optimize=} value that selects this level, or {@code null} for
-	 * {@link #NONE}, which is spelled by leaving the flag off entirely.
-	 * @return the level's spelling, or {@code null}
+	 * The {@code --optimize=} value that selects this level. Every level has one:
+	 * declining the optimizer is {@code --optimize=off}, not the absence of the flag.
+	 * @return the level's spelling
 	 */
-	public @Nullable String spelling() {
+	public String spelling() {
 		return this.spelling;
 	}
 
@@ -101,17 +106,15 @@ public enum OptimizeLevel {
 
 	/**
 	 * Resolves a {@code --optimize} option value to a level: {@code null} (the flag is
-	 * absent) is {@link #NONE} and the empty string (the bare flag, which cannot take a
-	 * following-argument value without swallowing the next option) is {@link #DEFAULT}.
+	 * absent) is {@link #DEFAULT}, and so is the empty string (the bare flag, which
+	 * cannot take a following-argument value without swallowing the next option). The
+	 * optimizer is declined by asking for it — {@code --optimize=off}.
 	 * @param value the option value as the CLI parsed it
 	 * @return the level
 	 * @throws IllegalArgumentException if the value names no level
 	 */
 	public static OptimizeLevel parse(@Nullable String value) {
-		if (value == null) {
-			return NONE;
-		}
-		if (value.isEmpty()) {
+		if (value == null || value.isEmpty()) {
 			return DEFAULT;
 		}
 		for (OptimizeLevel level : values()) {
@@ -125,13 +128,10 @@ public enum OptimizeLevel {
 	/**
 	 * The accepted {@code --optimize=} values, comma-separated, for a help text or an
 	 * error message.
-	 * @return the spellings of every level but {@link #NONE}
+	 * @return the spelling of every level
 	 */
 	public static String spellings() {
-		return Arrays.stream(values())
-			.map(OptimizeLevel::spelling)
-			.filter(java.util.Objects::nonNull)
-			.collect(Collectors.joining(", "));
+		return Arrays.stream(values()).map(OptimizeLevel::spelling).collect(Collectors.joining(", "));
 	}
 
 }

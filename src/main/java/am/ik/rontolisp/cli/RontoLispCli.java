@@ -1050,7 +1050,9 @@ public final class RontoLispCli {
 		this.out.println("                     then lead with an :int call id (the envelope's \"call-id\" key,");
 		this.out.println("                     the fetch reply's \"body-id\"), so each pull names its call.");
 		this.out.println("                     Not combinable with --dynamic or --component");
-		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
+		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output -- ON BY DEFAULT.");
+		this.out.println("                     Pass nothing and you get --optimize=default; the way to");
+		this.out.println("                     decline it is --optimize=off, not the absence of the flag");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");
 		this.out.println("                     JVM: drop methods unreachable from main + compact the constant pool");
@@ -1058,9 +1060,12 @@ public final class RontoLispCli {
 		this.out.println("                     dispatch case, so library code goes too -- unless the program");
 		this.out.println("                     can name a function at run time (eval/read/intern/...), which");
 		this.out.println("                     keeps everything. -Drontolisp.debug.dispatchgate=true says which");
-		this.out.println("                     LEVEL says what to optimize FOR (default: the bare flag above)");
-		this.out.println("                       default  the above, and nothing traded away for it");
-		this.out.println("                       size     the above, plus: give up speed for size. On wasm-GC");
+		this.out.println("                     LEVEL says what to optimize FOR (no flag = bare flag = default)");
+		this.out.println("                       off      drop nothing: what the backends emit on their own,");
+		this.out.println("                                which is what a flagless build used to produce --");
+		this.out.println("                                and ~300x the bytes of the default on a hello world");
+		this.out.println("                       default  the elimination described above, nothing traded for it");
+		this.out.println("                       size     default, plus: give up speed for size. On wasm-GC");
 		this.out.println("                                that drops the two emissions that spend bytes on");
 		this.out.println("                                speed (fused integer trees, unboxed locals): about");
 		this.out.println("                                -20% of any module, but only integer arithmetic");
