@@ -2,38 +2,38 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**8,307 / 17,908 tests pass (46.4%)** -- 3,005 fail, 6,596 signal an error.
+**8,423 / 17,992 tests pass (46.8%)** -- 3,015 fail, 6,554 signal an error.
 
-7 top-level forms could not be read, 2,081 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 1,952 could not be evaluated, 1 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
 | arrays | 1,283 | 389 | 214 | 680 | 30.3% | 25 |
 | characters | 255 | 144 | 18 | 93 | 56.5% | 21 |
-| conditions | 665 | 370 | 223 | 72 | 55.6% | 25 |
+| conditions | 665 | 370 | 226 | 69 | 55.6% | 25 |
 | cons | 1,809 | 723 | 137 | 949 | 40.0% | 77 |
 | data-and-control-flow | 1,387 | 875 | 209 | 303 | 63.1% | 59 |
-| environment | 209 | 90 | 10 | 109 | 43.1% | 18 |
+| environment | 209 | 96 | 11 | 102 | 45.9% | 18 |
 | eval-and-compile | 295 | 187 | 54 | 54 | 63.4% | 28 |
-| files | 87 | 13 | 7 | 67 | 14.9% | 17 |
+| files | 87 | 12 | 8 | 67 | 13.8% | 17 |
 | hash-tables | 156 | 78 | 27 | 51 | 50.0% | 20 |
 | iteration | 780 | 510 | 203 | 67 | 65.4% | 82 |
 | misc | 738 | 556 | 17 | 165 | 75.3% | 19 |
 | numbers | 1,379 | 511 | 74 | 794 | 37.1% | 96 |
-| objects | 695 | 239 | 163 | 293 | 34.4% | 238 |
-| packages | 455 | 24 | 43 | 388 | 5.3% | 72 |
-| pathnames | 215 | 74 | 29 | 112 | 34.4% | 17 |
+| objects | 776 | 284 | 181 | 311 | 36.6% | 113 |
+| packages | 448 | 25 | 47 | 376 | 5.6% | 79 |
+| pathnames | 214 | 79 | 26 | 109 | 36.9% | 18 |
 | printer | 504 | 99 | 74 | 331 | 19.6% | 93 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 19 |
-| reader | 568 | 50 | 290 | 228 | 8.8% | 32 |
-| sequences | 2,455 | 1,691 | 218 | 546 | 68.9% | 849 |
-| streams | 709 | 157 | 89 | 463 | 22.1% | 112 |
-| strings | 495 | 213 | 100 | 182 | 43.0% | 32 |
+| reader | 568 | 53 | 287 | 228 | 9.3% | 32 |
+| sequences | 2,454 | 1,691 | 218 | 545 | 68.9% | 850 |
+| streams | 723 | 175 | 89 | 459 | 24.2% | 98 |
+| strings | 495 | 228 | 100 | 167 | 46.1% | 32 |
 | structures | 960 | 311 | 241 | 408 | 32.4% | 46 |
-| symbols | 1,138 | 729 | 325 | 84 | 64.1% | 24 |
-| system-construction | 58 | 12 | 3 | 43 | 20.7% | 36 |
+| symbols | 1,136 | 745 | 313 | 78 | 65.6% | 26 |
+| system-construction | 58 | 20 | 4 | 34 | 34.5% | 36 |
 | types-and-classes | 613 | 262 | 237 | 114 | 42.7% | 31 |
-| **total** | **17,908** | **8,307** | **3,005** | **6,596** | **46.4%** | **2,088** |
+| **total** | **17,992** | **8,423** | **3,015** | **6,554** | **46.8%** | **1,960** |
 
 ## Most frequent failure reasons
 
@@ -42,16 +42,16 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 370 | `IllegalArgumentException: X expects keyword arguments :X, got: :X` |
 | 290 | `IllegalArgumentException: X expects keyword arguments :test/:test-not/:key, got: :X` |
 | 233 | `The variable *MINI-UNIVERSE* is unbound` |
-| 224 | `Function expects 1 argument, got 2` |
+| 228 | `Function expects 1 argument, got 2` |
 | 200 | `The variable *UNIVERSE* is unbound` |
 | 181 | `The function MAKE-PACKAGE is undefined` |
-| 163 | `X: there is no class named X` |
 | 151 | `X expects 1 arguments, got 2` |
-| 144 | `Function expects 1 argument, got 0` |
+| 147 | `Function expects 1 argument, got 0` |
 | 139 | `X expects at least one dimension` |
-| 105 | `UnsupportedOperationException: setf does not support place: X` |
+| 138 | `X: there is no class named X` |
+| 103 | `UnsupportedOperationException: setf does not support place: X` |
+| 92 | `X expects 2 arguments, got 1` |
 | 92 | `X expects 2 arguments, got 4` |
-| 90 | `X expects 2 arguments, got 1` |
 | 86 | `X expects 1 arguments, got 0` |
 | 80 | `The variable *NUMBERS* is unbound` |
 | 71 | `complex numbers are not supported (imaginary part X)` |
@@ -61,10 +61,11 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 64 | `X expects 1 arguments, got 5` |
 | 63 | `The function CLASS-PRECEDENCE-LIST-FOO is undefined` |
 | 62 | `Index 1 out of bounds for length 1` |
+| 59 | `X is a macro or special operator, not a function` |
 | 55 | `The variable #C is unbound` |
 | 54 | `The function NUNION is undefined` |
 | 54 | `X: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element` |
-| 52 | `The function MAKE-TWO-WAY-STREAM is undefined` |
+| 53 | `The function MAKE-TWO-WAY-STREAM is undefined` |
 | 52 | `The function SET-UP-PACKAGES is undefined` |
 | 51 | `X expects 1 arguments, got 7` |
 | 51 | `X expects an array, got "X"` |
@@ -73,10 +74,9 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 50 | `X supports :input and :output directions` |
 | 49 | `The function NSET-EXCLUSIVE-OR is undefined` |
 | 48 | `X: :X supports only the native default value` |
+| 47 | `a macro function expects 1 or 2 arguments, got 0` |
 | 46 | `IllegalArgumentException: Unsupported type specifier: X` |
 | 46 | `The function FIND-METHOD is undefined` |
 | 46 | `The function NINTERSECTION is undefined` |
-| 46 | `a macro function expects 1 or 2 arguments, got 0` |
 | 44 | `The function SUBLIS is undefined` |
-| 44 | `UnsupportedOperationException: X :element-type must be the literal 'character or '(unsigned-byte 8)` |
 
