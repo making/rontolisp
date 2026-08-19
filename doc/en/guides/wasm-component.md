@@ -107,8 +107,8 @@ not the program uses them, so its imported surface is the same for every
 program. With [`--optimize`](../compiling/wasm.md#optimize-tree-shaking) the
 surface follows the program: a component that only prints imports
 `wasi:cli/{types,stdout}` and nothing else — `wasi:cli/stderr` joins only when
-the program can actually write there ([`warn`](../reference/macros/warn.md), or
-`*error-output*`) — which is what a `wasm-tools component wit` on it, and the
+the program can actually write there ([`warn`](../reference/macros/warn.md),
+`*error-output*`, or the report an uncaught condition prints) — which is what a `wasm-tools component wit` on it, and the
 `--emit-wit` output below, will show. Nothing about the flags you run it with
 changes; a host simply has less to provide.
 

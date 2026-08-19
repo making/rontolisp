@@ -707,9 +707,10 @@ Two things the todo-270 chain could not reach, because neither is an edge in any
 reaches `stderr-write` from *any* printing program and the whole interface — its 69-byte
 instance type, its import, its `error-code` alias, its `write-via-stream` alias, its
 `canon lower` and its `"w"` entry — rode along. But fd 2 is the RESERVED `*error-output*`
-handle (`.kb/standard-output-redirect.md`), and the compiled core materializes it in exactly
-three places, all of them `StreamDesignators.STANDARD_ERROR_HANDLE`: a read of that
-variable, `warn`'s report, and the `_start` seed a binding of the variable installs. So
+handle (`.kb/standard-output-redirect.md`), and the compiled core materializes it in
+`StreamDesignators.STANDARD_ERROR_HANDLE` alone: a read of that variable, `warn`'s report,
+the `_start` seed a binding of the variable installs -- and the EH-mode entry landing pad,
+which the COMPILER injects (below). So for everything the user writes,
 "can this program present fd 2" is a question about the SOURCE, and `WasmLispCompiler`
 answers it (`programUsesSymbol` over `*ERROR-OUTPUT*` / `WARN` / `%WARN`, plus `--dynamic`,
 where any symbol is reachable at run time) and hands the answer to the wrapper as
@@ -723,7 +724,17 @@ would buy those bytes back on a component already orders of magnitude past this 
 
 *This is a dependency on a list being complete.* Anything new that can put handle 2 into a
 stream designator must join that gate, which is why the producer list lives in
-`.kb/standard-output-redirect.md` and says so there.
+`.kb/standard-output-redirect.md` and says so there. **A producer the compiler INJECTS
+cannot join a scan of the user's text** -- the EH-mode landing pad
+(`WasmUncaughtReportCompiler`, added later, synthesizing its `%warn` in pass 2) did not, and
+`--component --optimize` pruned `wasi:cli/stderr` out from under the uncaught-condition
+report at both levels while every other backend kept it (todo-452, fixed 2026-08-19). Such a
+producer contributes its own emission fact instead: `emittedFor(ehMode)` is read by the
+pad's emission AND OR-ed into `reachesStandardError`, one predicate for both. Pinned at the
+import level by `WasmLispCompilerTest.anOptimizedComponentWithAnUncaughtReportLandingPadKeepsTheStderrSurface`
+(which also re-asserts that a print-only component still DROPS the interface, at
+`--optimize=size` too) and at run time by
+`WasmLispCompilerIntegrationTest.anOptimizedComponentStillReportsAnUncaughtCondition`.
 
 **The shared `cabi_realloc`, 142 B measured.** The mem module exists for its MEMORY: the `"w"`
 lowerings' canonical options name a core memory, and that memory must belong to an instance

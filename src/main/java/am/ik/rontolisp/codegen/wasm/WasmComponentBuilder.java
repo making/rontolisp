@@ -146,8 +146,9 @@ public final class WasmComponentBuilder {
 	 * <p>
 	 * {@code fd_write} narrows once more. fd&nbsp;2 is the RESERVED
 	 * {@code *error-output*} handle ({@code .kb/standard-output-redirect.md}),
-	 * materialized by nothing but that variable and {@code warn} -- so whether a program
-	 * can write it is a question about its SOURCE, which
+	 * materialized by nothing but that variable, {@code warn} and the entry function's
+	 * uncaught-condition landing pad -- so whether a program can write it is a question
+	 * about its SOURCE plus what the compiler injects into it, which
 	 * {@link Narrowing#reachesStandardError()} answers. When it cannot,
 	 * {@code fd_write_stdout} is retained instead and the whole {@code wasi:cli/stderr}
 	 * interface leaves the component.
@@ -184,8 +185,10 @@ public final class WasmComponentBuilder {
 	 * whole surface, which is what every pre-{@code --optimize} component had
 	 * @param reachesStandardError whether the program can materialize the reserved
 	 * {@code *error-output*} handle 2 -- it mentions {@code *error-output*}, calls
-	 * {@code warn}, or is compiled in {@code --dynamic} mode, where any symbol is
-	 * reachable at run time
+	 * {@code warn}, carries the EH-mode entry landing pad whose uncaught-condition report
+	 * writes fd 2 ({@code WasmUncaughtReportCompiler#emittedFor}, the producer the
+	 * compiler INJECTS rather than one a source scan can find), or is compiled in
+	 * {@code --dynamic} mode, where any symbol is reachable at run time
 	 */
 	record Narrowing(boolean shake, boolean reachesStandardError) {
 

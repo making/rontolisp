@@ -2520,6 +2520,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// a
 		// catching form. A program without one stays byte-identical and flag-free.
 		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag;
+		// Whether the entry function gets the uncaught-condition landing pad. It writes
+		// fd 2 through a %warn call the compiler SYNTHESIZES in pass 2, so it is a
+		// producer of the reserved *error-output* handle that no scan of the user's text
+		// can find -- and the --component narrowing below reads this same fact rather
+		// than re-deriving one, so the two cannot drift apart.
+		boolean uncaughtReportPad = WasmUncaughtReportCompiler.emittedFor(ehMode);
 		// The rontolisp:tcp-* built-ins are component-only the same way: they are the
 		// spliced sockets.lisp defuns over a wit-imported wasi:sockets@0.3.0 (an
 		// ordinary user import -- the base variant; the dedicated sockets blob variant
@@ -3309,7 +3315,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// landing pad catches the tag, writes the condition's report to fd 2 and only
 		// then falls into the unreachable. The normal path returns from inside the
 		// try_table, which sidesteps needing a result blocktype.
-		if (ehMode) {
+		if (uncaughtReportPad) {
 			WasmUncaughtReportCompiler.emitPrologue(ctx);
 		}
 		int topLevelAwaits = 0;
@@ -3342,7 +3348,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			startWriter.write(Instruction.I32_CONST);
 			startWriter.writeSignedLeb128(0);
 		}
-		if (ehMode) {
+		if (uncaughtReportPad) {
 			WasmUncaughtReportCompiler.emitEpilogue(ctx);
 		}
 		startWriter.write(Instruction.END);
@@ -6203,15 +6209,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			// the same set the builder prunes the import block to.
 			// One narrowing question the core module's bytes cannot answer: a file
 			// descriptor is a VALUE there, so "can this program write fd 2" is decided
-			// here, from the source. The reserved *error-output* handle is materialized
-			// by exactly three things -- a read of that variable, warn's report, and the
-			// _start seed the variable's own binding installs (all three go through
-			// StreamDesignators.STANDARD_ERROR_HANDLE) -- so naming the two source
-			// spellings covers them. --dynamic makes every symbol reachable at run time,
-			// which no source scan can bound, so it keeps the wider surface.
+			// here. The reserved *error-output* handle is materialized by a read of that
+			// variable, by warn's report, by the _start seed the variable's own binding
+			// installs, and by the entry function's uncaught-condition landing pad (all
+			// go through StreamDesignators.STANDARD_ERROR_HANDLE) -- so naming the two
+			// source spellings covers the first three, and the fourth ANSWERS FOR
+			// ITSELF: it is injected by the compiler, its text is never in the program,
+			// and it contributes the same uncaughtReportPad the emission is gated on
+			// rather than a scan that would have to remember it exists. --dynamic makes
+			// every symbol reachable at run time, which no source scan can bound, so it
+			// keeps the wider surface.
 			WasmComponentBuilder.Narrowing narrowing = new WasmComponentBuilder.Narrowing(
 					this.optimize.eliminatesDeadCode(),
-					this.dynamic || programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)
+					this.dynamic || uncaughtReportPad || programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)
 							|| programUsesSymbol(program, LispNames.WARN)
 							|| programUsesSymbol(program, LispNames.WARN_INTERNAL));
 			this.componentWit = WitEmitter.emit(WitEmitter.VARIANT_BASE, componentExportDecls,

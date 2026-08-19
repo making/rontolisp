@@ -48,6 +48,28 @@ final class WasmUncaughtReportCompiler {
 	}
 
 	/**
+	 * Whether an entry function carries this landing pad, given the module's EH mode --
+	 * and with it, whether the compiled program can WRITE file descriptor 2 whatever its
+	 * source spells.
+	 *
+	 * <p>
+	 * The pad is a producer of the reserved {@code *error-output*} handle that the
+	 * compiler SYNTHESIZES ({@link #reportForm} builds a {@code %warn} call during pass
+	 * 2), so the source scan that answers the same question for the user's own text --
+	 * {@code WasmComponentBuilder.Narrowing}'s {@code reachesStandardError}, which under
+	 * {@code --optimize} decides whether the component keeps {@code wasi:cli/stderr} and
+	 * the adapter its fd 2 arm -- cannot see it. Both the emission and the narrowing read
+	 * THIS predicate so they cannot drift apart again: a program whose report the
+	 * narrowing did not expect would trap exactly where it is supposed to diagnose
+	 * ({@code .kb/standard-output-redirect.md}).
+	 * @param ehMode whether the module is in EH mode
+	 * @return whether the entry function gets the reporting landing pad
+	 */
+	static boolean emittedFor(boolean ehMode) {
+		return ehMode;
+	}
+
+	/**
 	 * Opens the reporting wrapper of an entry function: {@code block $trap} +
 	 * {@code block $cond (result (ref null eq))} + {@code try_table (catch $lisp-cond
 	 * $cond) (catch_all $trap)}. Catch labels are resolved without the try_table's own

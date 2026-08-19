@@ -74,7 +74,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~4 KB module
 
 リテラルのルックアップテーブルも同じ仕組みで畳み込まれ、こちらはテーブルそのものが節約になります: `(coerce '(0 #x77073096 …) '(vector (unsigned-byte 32)))` や `(make-array n :element-type '(unsigned-byte 8) :initial-contents '(…))` は、それが構築する特殊化ベクタになり、モジュールは起動時にボックス化された整数のリストを組み立てる代わりに、要素幅そのままの静的データとして持ちます — 32 ビットのテーブルなら 1 要素あたり約 12 バイトではなく約 4 バイトです。フォームを評価するたびに新しい独立した可変ベクタが得られる点は、呼び出しのときとまったく同じです。宣言された幅に収まらない要素は畳み込まれず、従来どおり実行時の構築側がマスクします。
 
-`--component` では、コアだけでなく**ラッパーもプログラムに合わせて縮みます**。コンポーネントがどの WASI 0.3 インターフェースをインポートするかは、プログラムが実際に到達できる範囲から決まります: `(print "Hello World!")` は `wasi:cli/types` と `wasi:cli/stdout` だけをインポートするコンポーネントになり — `wasi:filesystem` も `wasi:clocks` も `wasi:random` もなく、そのプログラムには標準エラーへ書く手段がないので `wasi:cli/stderr` すらありません — 一方でファイルを開き、時計を読み、乱数を引くプログラムはそれらをすべて保持し、[`warn`](../reference/macros/warn.md) を呼ぶか `*error-output*` へ書くプログラムでは `wasi:cli/stderr` が戻ります。`--emit-wit` はコンポーネントが実際に持つワールドを出力するので、生成される `.wit` も一緒に縮みます。
+`--component` では、コアだけでなく**ラッパーもプログラムに合わせて縮みます**。コンポーネントがどの WASI 0.3 インターフェースをインポートするかは、プログラムが実際に到達できる範囲から決まります: `(print "Hello World!")` は `wasi:cli/types` と `wasi:cli/stdout` だけをインポートするコンポーネントになり — `wasi:filesystem` も `wasi:clocks` も `wasi:random` もなく、そのプログラムには標準エラーへ書く手段がないので `wasi:cli/stderr` すらありません — 一方でファイルを開き、時計を読み、乱数を引くプログラムはそれらをすべて保持し、[`warn`](../reference/macros/warn.md) を呼ぶか `*error-output*` へ書くプログラムでは `wasi:cli/stderr` が戻ります。コンディション処理フォーム([`handler-case`](../reference/macros/handler-case.md) など)を使うプログラムでも同様です。捕捉されなかったコンディションがトラップする前に出す報告も、そこへ書かれるからです。`--emit-wit` はコンポーネントが実際に持つワールドを出力するので、生成される `.wit` も一緒に縮みます。
 
 ```bash
 echo '(print "Hello World!")' > hello.lisp

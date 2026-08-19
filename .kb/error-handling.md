@@ -729,8 +729,15 @@ for the condition, so the pinned example is byte-identical everywhere:
   `(%warn (%string-concat "Unhandled condition: " (if cond (%condition-report-str cond)
   msg)))`, each half guarded by a `(let ((v ...)) (if v v ""))` so a nil never renders as
   `NIL`. `%warn` is the existing fd-2 writer (already exempt from the lazy-message
-  narrowing), so nothing new reaches the module. Then `unreachable`, unchanged: the exit
-  CLASS every host and test expects is the trap.
+  narrowing), so no new RUNTIME reaches the module. It is, however, a fifth producer of
+  the reserved `*error-output*` handle -- one the compiler SYNTHESIZES in pass 2, which
+  no scan of the user's source can find -- so `--component --optimize` pruned
+  `wasi:cli/stderr` out from under it and the report became the trap it is meant to
+  precede (todo-452, fixed 2026-08-19). `WasmUncaughtReportCompiler.emittedFor(ehMode)`
+  is now the ONE predicate: `WasmLispCompiler` gates the pad's emission on it and ORs the
+  same value into `WasmComponentBuilder.Narrowing`'s `reachesStandardError`, so the two
+  cannot drift (`.kb/standard-output-redirect.md`). Then `unreachable`, unchanged: the
+  exit CLASS every host and test expects is the trap.
   - The try_table's own `end` restores a reachable, empty stack while `block $cond` owes
     an `eqref`, so an `unreachable` sits between them -- the normal path already left
     through the `return` inside.

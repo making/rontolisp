@@ -4095,6 +4095,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anOptimizedComponentStillReportsAnUncaughtCondition() throws Exception {
+		// The stderr producer the source scan cannot see: the entry function's EH-mode
+		// landing pad writes the uncaught condition's report to fd 2 through a %warn
+		// call the compiler SYNTHESIZES, while this program's text names none of the
+		// three stderr spellings. Its emission fact now feeds the narrowing directly
+		// (WasmUncaughtReportCompiler.emittedFor); before that --optimize dropped
+		// wasi:cli/stderr here and the whole diagnosis vanished into the trap. The
+		// import-level pin is WasmLispCompilerTest, this is the run.
+		String program = """
+				(print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))
+				(error "boom: ~a" 42)
+				""";
+		List<LispVal> parsed = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(program));
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			byte[] componentBytes = new WasmLispCompiler(false, true, false, level).compile(parsed);
+			wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("uncaught.optcomp.wasm"));
+			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+					path("uncaught.optcomp.wasm"));
+			// An uncaught condition still exits as a trap -- the report precedes it.
+			assertThat(result.getExitCode()).as("%s", level).isNotZero();
+			assertThat(result.getStdout().trim()).as("%s", level).isEqualTo("\"caught: 2\"");
+			assertThat(result.getStderr()).as("%s", level).contains("Unhandled condition: boom: 42");
+		}
+	}
+
+	@Test
 	void componentCoreIsTreeShakenUnderOptimize() throws Exception {
 		// --optimize shakes the core module on the --component path too: every core
 		// <-> component linkage is by NAME (alias core func "name"; core:instantiate

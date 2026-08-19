@@ -52,6 +52,10 @@ class WasmLispCompilerTest {
 	}
 
 	private byte[] compileComponentOptimized(String lispCode) {
+		return compileComponentOptimized(lispCode, OptimizeLevel.DEFAULT);
+	}
+
+	private byte[] compileComponentOptimized(String lispCode, OptimizeLevel level) {
 		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
 				WitExportDirective.Backend.WASM_COMPONENT, false);
 		program = TlsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
@@ -59,7 +63,7 @@ class WasmLispCompilerTest {
 		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
 		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = WitLibrary.process(program);
-		return new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT).compile(program);
+		return new WasmLispCompiler(false, true, false, level).compile(program);
 	}
 
 	/** The names of every instance the component imports, in declaration order. */
@@ -137,6 +141,27 @@ class WasmLispCompilerTest {
 		assertThat(componentImportNames(compileComponentOptimized("""
 				(with-open-file (s "x.txt" :direction :output) (format s "hi~%"))
 				"""))).contains("wasi:cli/stderr@0.3.0");
+	}
+
+	@Test
+	void anOptimizedComponentWithAnUncaughtReportLandingPadKeepsTheStderrSurface() {
+		// The producer no source scan can see: the entry function's EH-mode landing pad
+		// is SYNTHESIZED by the compiler and writes the uncaught condition's report to
+		// fd 2, while the program's own text names none of the stderr spellings. EH
+		// mode -- the very fact that decides the pad is emitted -- has to answer here
+		// too, at every optimize level, or --optimize turns the report into the trap it
+		// is meant to precede.
+		String reports = """
+				(print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))
+				(error "boom: ~a" 42)
+				""";
+		assertThat(componentImportNames(compileComponentOptimized(reports))).contains("wasi:cli/stderr@0.3.0");
+		assertThat(componentImportNames(compileComponentOptimized(reports, OptimizeLevel.SIZE)))
+			.contains("wasi:cli/stderr@0.3.0");
+		// ...and the widening stays keyed to that fact: a program with no landing pad
+		// still drops the surface at both levels.
+		assertThat(componentImportNames(compileComponentOptimized("(print 1)", OptimizeLevel.SIZE)))
+			.doesNotContain("wasi:cli/stderr@0.3.0");
 	}
 
 	@Test

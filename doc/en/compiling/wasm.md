@@ -167,7 +167,9 @@ can actually reach: `(print "Hello World!")` compiles to a component importing
 that program can write to standard error — while a program that opens a file, reads
 the clock and draws random bytes keeps them all, and one that calls
 [`warn`](../reference/macros/warn.md) or writes to `*error-output*` gets
-`wasi:cli/stderr` back. `--emit-wit` prints the world the component really has, so
+`wasi:cli/stderr` back — and so does one that uses a condition-handling form
+([`handler-case`](../reference/macros/handler-case.md) and friends), because the
+report an uncaught condition prints before it traps goes there too. `--emit-wit` prints the world the component really has, so
 the emitted `.wit` shrinks with it.
 
 ```bash
