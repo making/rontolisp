@@ -310,7 +310,8 @@ public final class PackageRegistry {
 			"ATAN", "SINH", "COSH", "SQRT", "ABS", "SQUARE", "NEGATIVE", "SIGN", "RECIPROCAL", "MAXIMUM", "MINIMUM",
 			"CLIP", "RELU", "DIFF", "GRADIENT", "ZEROS-LIKE", "SEED", "RAND", "RANDN", "UNIFORM", "CHOICE",
 			"PERMUTATION", "TAKE-ROWS", "ROW", "GATHER", "ONE-HOT", "EQUAL", "GREATER", "GREATER-EQUAL", "LESS",
-			"LESS-EQUAL", "+", "-", "*", "/");
+			"LESS-EQUAL", "+", "-", "*", "/", "CONCATENATE", "STACK", "EXPAND-DIMS", "SQUEEZE", "SLICE", "TRIU", "TRIL",
+			"VAR", "STD", "WHERE", "POWER", "SOFTMAX", "LOG-SOFTMAX");
 
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 

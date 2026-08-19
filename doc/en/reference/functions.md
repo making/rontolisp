@@ -538,6 +538,13 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#d(1.0 0.0 0.0 1.0)` |
 | `linalg:transpose` | `(linalg:transpose #2A((1 2 3) (4 5 6)))` | `#d((1.0 4.0) (2.0 5.0) (3.0 6.0))` (a vector is returned unchanged) |
 | `linalg:pad` | `(linalg:pad #(1 2) 1)` | `#d(0.0 1.0 2.0 0.0)` (constant-0 padding; a list gives per-axis `(before after)` pairs) |
+| `linalg:expand-dims` | `(linalg:expand-dims #(1 2 3) 0)` | `#d((1.0 2.0 3.0))` (a new extent-1 axis; numpy's `expand_dims` / torch's `unsqueeze`) |
+| `linalg:squeeze` | `(linalg:squeeze #2A((1 2 3)))` | `#d(1.0 2.0 3.0)` (drops extent-1 axes; `:axis` picks which) |
+| `linalg:concatenate` | `(linalg:concatenate (list #(1 2) #(3)))` | `#d(1.0 2.0 3.0)` (join a LIST of arrays along an existing `:axis`) |
+| `linalg:stack` | `(linalg:stack (list #(1 2) #(3 4)))` | `#d((1.0 2.0) (3.0 4.0))` (join along a NEW `:axis`) |
+| `linalg:slice` | `(linalg:slice #(0 1 2 3 4 5) '((nil nil 2)))` | `#d(0.0 2.0 4.0)` (basic numpy slicing; one `nil` / `(start end [step])` spec per axis) |
+| `linalg:triu` | `(linalg:triu (linalg:ones '(3 3)) :k 1)` | `#d((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0))` (upper triangle; the causal mask) |
+| `linalg:tril` | `(linalg:tril #2A((1 2) (3 4)))` | `#d((1.0 0.0) (3.0 4.0))` (lower triangle) |
 | `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#d(11.0 12.0 13.0)` (elementwise; a scalar operand broadcasts) |
 | `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#d(4.0 4.0)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | The Hadamard (elementwise) product -- not the matrix product |
@@ -564,15 +571,20 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:negative` | `(linalg:negative #(1 -2 3))` | `#d(-1.0 2.0 -3.0)` (elementwise negation) |
 | `linalg:sign` | `(linalg:sign #(-5 0 7))` | `#d(-1.0 0.0 1.0)` (elementwise sign) |
 | `linalg:reciprocal` | `(linalg:reciprocal #(2 4 8))` | `#d(0.5 0.25 0.125)` (elementwise `1 / x`, in float) |
+| `linalg:power` | `(linalg:power #(1 2 3) 2)` | `#d(1.0 4.0 9.0)` (elementwise `a ** b`; either operand may be a scalar) |
 | `linalg:maximum` | `(linalg:maximum #(1 5 3) #(4 2 3))` | `#d(4.0 5.0 3.0)` (elementwise larger; either operand may be a scalar) |
 | `linalg:minimum` | `(linalg:minimum #(1 5 3) 4)` | `#d(1.0 4.0 3.0)` (elementwise smaller; either operand may be a scalar) |
 | `linalg:clip` | `(linalg:clip #(-2 0 3) -1.0 1.0)` | `#d(-1.0 0.0 1.0)` (elementwise `min(max(x, lo), hi)`) |
 | `linalg:relu` | `(linalg:relu #(-2 0 3))` | `#d(0.0 0.0 3.0)` (elementwise `max(x, 0.0)`) |
+| `linalg:softmax` | `(linalg:softmax #(1 1 1 1))` | `#d(0.25 0.25 0.25 0.25)` (max-subtracted softmax; `:axis` normalizes per slice) |
+| `linalg:log-softmax` | `(linalg:log-softmax #(0 0))` | `#d(-0.6931471805599453 -0.6931471805599453)` (the stable log of `softmax`) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpy-style dispatch: vec.vec scalar, mat.vec / vec.mat vector, mat.mat matrix product |
-| `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))` (the matrix product) |
+| `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))` (the matrix product; rank >= 3 stacks on the last two axes) |
 | `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))` (the outer product) |
 | `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10` (a reduction follows the element type; `:axis` / `:keepdims` keywords) |
 | `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2` (a reduction follows the element type; `:axis` / `:keepdims` keywords) |
+| `linalg:var` | `(linalg:var #(1 2 3 4))` | `1.25` (variance; `:axis` / `:keepdims` / `:ddof` keywords) |
+| `linalg:std` | `(linalg:std #(2 4 4 4 5 5 7 9))` | `2.0` (the square root of `linalg:var`, same keywords) |
 | `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9` (the largest element; `:axis` / `:keepdims` keywords) |
 | `linalg:amin` | `(linalg:amin #(5 2 8))` | `2` (the smallest element; `:axis` / `:keepdims` keywords) |
 | `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1` (first index on ties; `:axis` gives per-slice indices) |
@@ -590,6 +602,7 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:greater-equal` | `(linalg:greater-equal #(1 5 3) #(1 6 2))` | `#d(1.0 0.0 1.0)` (elementwise `>=` as a 0/1 mask) |
 | `linalg:less` | `(linalg:less #(1 5 3) 3)` | `#d(1.0 0.0 0.0)` (elementwise `<` as a 0/1 mask) |
 | `linalg:less-equal` | `(linalg:less-equal #(1 5 3) 3)` | `#d(1.0 0.0 1.0)` (elementwise `<=` as a 0/1 mask) |
+| `linalg:where` | `(linalg:where #(1 0 1) 10 20)` | `#d(10.0 20.0 10.0)` (elementwise select on a non-zero mask; broadcasts) |
 | `linalg:take-rows` | `(linalg:take-rows #2A((1 2 3) (4 5 6) (7 8 9)) #(2 0))` | `#d((7.0 8.0 9.0) (1.0 2.0 3.0))` (the axis-0 slices selected by an index vector) |
 | `linalg:row` | `(linalg:row #2A((1 2 3) (4 5 6) (7 8 9)) 1)` | `#d(4.0 5.0 6.0)` (one axis-0 slice, axis dropped -- numpy's `x[i]`) |
 | `linalg:gather` | `(linalg:gather #2A((10 11 12) (20 21 22)) #(2 0))` | `#d(12.0 20.0)` (the per-row elements `a[i, idx[i]]` of a matrix) |

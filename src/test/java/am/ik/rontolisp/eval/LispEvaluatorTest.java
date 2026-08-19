@@ -9942,6 +9942,153 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void linalgRankNShapeOps() {
+		// numpy's shape surgery: expand_dims / squeeze (torch's unsqueeze / squeeze),
+		// concatenate along an EXISTING axis and stack along a NEW one. Each is a
+		// row-major copy, so the width follows the (first) input.
+		LispVal result = evalMulti("""
+				(defparameter *m* (linalg:reshape (linalg:arange 6) '(2 3)))
+				(list (linalg:expand-dims #(1 2 3) 0)
+				      (linalg:expand-dims #(1 2 3) -1)
+				      (linalg:shape (linalg:expand-dims *m* 1))
+				      (linalg:squeeze #2A((1 2 3)))
+				      (linalg:squeeze (linalg:reshape (linalg:arange 3) '(1 3 1)) :axis 0)
+				      (linalg:squeeze (linalg:reshape (linalg:arange 1) '(1 1)))
+				      (linalg:concatenate (list *m* *m*))
+				      (linalg:concatenate (list *m* *m*) :axis 1)
+				      (linalg:concatenate (list #(1 2) #(3)))
+				      (linalg:stack (list #(1 2) #(3 4)))
+				      (linalg:stack (list #(1 2) #(3 4)) :axis 1)
+				      (linalg:shape (linalg:stack (list *m* *m*) :axis -1))
+				      (array-element-type (linalg:stack (list (linalg:ones 2 :element-type 'single-float)))))
+				""");
+		assertThat(result.print()).isEqualTo("(#d((1.0 2.0 3.0)) #d((1.0) (2.0) (3.0)) (2 1 3) #d(1.0 2.0 3.0)"
+				+ " #d((0.0) (1.0) (2.0)) 0.0 #d((0.0 1.0 2.0) (3.0 4.0 5.0) (0.0 1.0 2.0) (3.0 4.0 5.0))"
+				+ " #d((0.0 1.0 2.0 0.0 1.0 2.0) (3.0 4.0 5.0 3.0 4.0 5.0)) #d(1.0 2.0 3.0)"
+				+ " #d((1.0 2.0) (3.0 4.0)) #d((1.0 3.0) (2.0 4.0)) (2 3 2) SINGLE-FLOAT)");
+		// Squeezing away EVERY axis yields the element itself: linalg has no rank-0
+		// array.
+		assertThatThrownBy(() -> eval("(linalg:squeeze #(1 2 3) :axis 0)"))
+			.hasMessageContaining("linalg: squeeze axis is not of extent 1");
+		assertThatThrownBy(() -> eval("(linalg:expand-dims #(1 2) 3)"))
+			.hasMessageContaining("linalg: axis out of range");
+		assertThatThrownBy(() -> eval("(linalg:concatenate (list #(1 2) #2A((1 2))))"))
+			.hasMessageContaining("linalg: concatenate expects arrays of equal rank");
+		assertThatThrownBy(
+				() -> eval("(linalg:concatenate (list (linalg:zeros '(2 2)) (linalg:zeros '(3 2))) :axis 1)"))
+			.hasMessageContaining("linalg: concatenate shapes differ off the axis");
+		assertThatThrownBy(() -> eval("(linalg:stack (list #(1 2) #(1 2 3)))"))
+			.hasMessageContaining("linalg: stack expects arrays of equal shape");
+		assertThatThrownBy(() -> eval("(linalg:stack nil)"))
+			.hasMessageContaining("linalg: stack needs at least one array");
+	}
+
+	@Test
+	void linalgSliceAndTriangles() {
+		// Basic numpy slicing spelled as one spec per axis (nil = whole axis,
+		// (start end [step]), negative indices and a negative step), plus the
+		// triu/tril triangles -- the last two axes of any rank >= 2.
+		LispVal result = evalMulti("""
+				(defparameter *m* (linalg:reshape (linalg:arange 6) '(2 3)))
+				(list (linalg:slice *m* '(nil (0 2)))
+				      (linalg:slice *m* '((1 2)))
+				      (linalg:slice #(0 1 2 3 4 5) '((nil nil 2)))
+				      (linalg:slice #(0 1 2 3 4 5) '((nil nil -1)))
+				      (linalg:slice #(0 1 2 3 4 5) '((-2 nil)))
+				      (linalg:slice *m* '(nil (0 -1)))
+				      (linalg:slice *m* nil)
+				      (linalg:triu #2A((1 2 3) (4 5 6) (7 8 9)))
+				      (linalg:triu (linalg:ones '(3 3)) :k 1)
+				      (linalg:tril #2A((1 2 3) (4 5 6) (7 8 9)))
+				      (linalg:tril #2A((1 2 3) (4 5 6) (7 8 9)) :k -1)
+				      (linalg:triu (linalg:reshape (linalg:arange 8) '(2 2 2)))
+				      (array-element-type (linalg:slice (linalg:ones 4 :element-type 'single-float) '((0 2))))
+				      (array-element-type (linalg:triu (linalg:ones '(2 2) :element-type 'single-float))))
+				""");
+		assertThat(result.print()).isEqualTo("(#d((0.0 1.0) (3.0 4.0)) #d((3.0 4.0 5.0)) #d(0.0 2.0 4.0)"
+				+ " #d(5.0 4.0 3.0 2.0 1.0 0.0) #d(4.0 5.0) #d((0.0 1.0) (3.0 4.0)) #d((0.0 1.0 2.0) (3.0 4.0 5.0))"
+				+ " #d((1.0 2.0 3.0) (0.0 5.0 6.0) (0.0 0.0 9.0)) #d((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0))"
+				+ " #d((1.0 0.0 0.0) (4.0 5.0 0.0) (7.0 8.0 9.0)) #d((0.0 0.0 0.0) (4.0 0.0 0.0) (7.0 8.0 0.0))"
+				+ " #d(((0.0 1.0) (0.0 3.0)) ((4.0 5.0) (0.0 7.0))) SINGLE-FLOAT SINGLE-FLOAT)");
+		assertThatThrownBy(() -> eval("(linalg:slice #(1 2) '((0 1) (0 1)))"))
+			.hasMessageContaining("linalg: slice expects at most one spec per axis");
+		assertThatThrownBy(() -> eval("(linalg:slice #(1 2) '((0 1 0)))"))
+			.hasMessageContaining("linalg: slice step must not be zero");
+		assertThatThrownBy(() -> eval("(linalg:triu #(1 2))"))
+			.hasMessageContaining("linalg: triu and tril expect rank >= 2");
+	}
+
+	@Test
+	void linalgStackedMatmul() {
+		// numpy np.matmul at rank >= 3 (= torch.bmm / torch.matmul): the last two axes
+		// are the matrix, every leading axis broadcasts, and a rank-1 operand is
+		// promoted for the product and dropped again from the result.
+		LispVal result = evalMulti("""
+				(defparameter *a3* (linalg:reshape (linalg:arange 12) '(2 2 3)))
+				(defparameter *b3* (linalg:reshape (linalg:arange 12) '(2 3 2)))
+				(list (linalg:matmul *a3* *b3*)
+				      (linalg:matmul *a3* (linalg:reshape (linalg:arange 6) '(3 2)))
+				      (linalg:matmul *a3* #(1 1 1))
+				      (linalg:matmul #(1 1) *a3*)
+				      (linalg:shape (linalg:matmul (linalg:zeros '(2 1 3 4)) (linalg:zeros '(5 4 2))))
+				      (linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))
+				      (array-element-type (linalg:matmul (linalg:ones '(2 2 2) :element-type 'single-float)
+				                                        (linalg:ones '(2 2 2) :element-type 'single-float))))
+				""");
+		assertThat(result.print()).isEqualTo("(#d(((10.0 13.0) (28.0 40.0)) ((172.0 193.0) (244.0 274.0)))"
+				+ " #d(((10.0 13.0) (28.0 40.0)) ((46.0 67.0) (64.0 94.0))) #d((3.0 12.0) (21.0 30.0))"
+				+ " #d((3.0 5.0 7.0) (15.0 17.0 19.0)) (2 5 3 2) #d((19.0 22.0) (43.0 50.0)) SINGLE-FLOAT)");
+		assertThatThrownBy(() -> eval("(linalg:matmul (linalg:zeros '(2 2 3)) (linalg:zeros '(2 2 2)))"))
+			.hasMessageContaining("linalg: matmul inner dimensions differ");
+		assertThatThrownBy(() -> eval("(linalg:matmul (linalg:zeros '(2 2 2)) (linalg:zeros '(3 2 2)))"))
+			.hasMessageContaining("linalg: matmul batch dimensions do not broadcast");
+		// dot stays rank <= 2 and says so, instead of reading a rank-3 operand as a
+		// matrix.
+		assertThatThrownBy(() -> eval("(linalg:dot (linalg:zeros '(2 2 2)) (linalg:zeros '(2 2)))"))
+			.hasMessageContaining("linalg: dot expects rank <= 2");
+	}
+
+	@Test
+	void linalgVarStdPowerWhereSoftmax() {
+		// The statistics (:ddof divisor), np.power, np.where's SELECT and the
+		// max-subtracted softmax pair. The last entry is the masked-attention idiom:
+		// -infinity through where -> amax -> exp -> div must be a weight of exactly 0.0
+		// on every backend.
+		LispVal result = evalMulti("""
+				(defparameter *m* (linalg:reshape (linalg:arange 6) '(2 3)))
+				(list (linalg:var #(1 2 3 4))
+				      (linalg:var #(1 2 3 4) :ddof 1)
+				      (linalg:var #(1 2 3 4) :keepdims t)
+				      (linalg:var *m* :axis 1)
+				      (linalg:std *m* :axis 0 :keepdims t)
+				      (linalg:std #(2 4 4 4 5 5 7 9))
+				      (linalg:power #(1 2 3) 2)
+				      (linalg:power 2 #(1 2 3))
+				      (linalg:power #2A((1 2) (3 4)) #(2 0))
+				      (linalg:where (linalg:greater #(1 5 3) 2) #(1 5 3) 0)
+				      (linalg:where #(1 0 1) 10 20)
+				      (linalg:where #2A((1 0 1) (0 1 0)) *m* -1)
+				      (linalg:where 1 5 9)
+				      (linalg:softmax #(1 1 1 1))
+				      (linalg:softmax #2A((0 0) (1 1)) :axis 1)
+				      (linalg:log-softmax #(0 0))
+				      (linalg:softmax (linalg:where (linalg:from-list '((1 0) (0 1)))
+				                                    (linalg:from-list '((1.0 2.0) (3.0 4.0)))
+				                                    (/ -1.0 0.0))
+				                      :axis 1)
+				      (array-element-type (linalg:where (linalg:ones 2)
+				                                       (linalg:ones 2 :element-type 'single-float) 0)))
+				""");
+		assertThat(result.print()).isEqualTo("(1.25 1.6666666666666667 #d(1.25)"
+				+ " #d(0.6666666666666666 0.6666666666666666) #d((1.5 1.5 1.5)) 2.0 #d(1.0 4.0 9.0)"
+				+ " #d(2.0 4.0 8.0) #d((1.0 1.0) (9.0 1.0)) #d(0.0 5.0 3.0) #d(10.0 20.0 10.0)"
+				+ " #d((0.0 -1.0 2.0) (-1.0 4.0 -1.0)) 5 #d(0.25 0.25 0.25 0.25) #d((0.5 0.5) (0.5 0.5))"
+				+ " #d(-0.6931471805599453 -0.6931471805599453) #d((1.0 0.0) (0.0 1.0)) SINGLE-FLOAT)");
+		assertThatThrownBy(() -> eval("(linalg:var #(1) :ddof 1)"))
+			.hasMessageContaining("linalg: var needs more elements than ddof");
+	}
+
+	@Test
 	void rowMajorArefReadsAndWritesFlat() {
 		LispVal result = evalMulti("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

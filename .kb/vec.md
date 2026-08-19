@@ -209,7 +209,15 @@ on wasm like `signum`'s edge). The design decisions, per backend:
   minus is `0 - x` (`(- 0.0)` is `0.0`), its `signum` maps `-0.0`/NaN to `0.0`, and its
   `exp`/`log`/`tanh`/`sin`/`cos`/`tan` are the `WasmExpCompiler`/`WasmLogCompiler`/
   `WasmTanhCompiler`/`WasmSinCosCompiler` software approximations (todo-108
-  residuals). So each
+  residuals). The one edge where wasm's `exp` is EXACTLY the JVM's is underflow:
+  `WasmExpCompiler.UNDERFLOW_CLAMP` clamps the reduced Horner polynomial at
+  `f64.max(p(t), 0.0)` before the squarings, because `p` goes negative below its real
+  root (`t = -2.18`, `x = -558`) and the even squaring count turned that into a huge
+  POSITIVE value -- `(exp -1000)` was `2.4e125` and `(exp -inf)` was `+inf`. The clamp
+  is a no-op wherever `p(t) >= 0`, so it changed no value the approximation already
+  got right, and it is what makes a `-infinity` mask reach `linalg:softmax` as `0.0`
+  on every backend (`.kb/linalg.md`). `emitExpF64` carries the same instruction so the
+  `--simd` / `--no-gc` kernels stay bit-identical to the defun. So each
   `--simd` kernel mirrors ITS backend's defun, per-backend bit-identity holds, and
   cross-backend `-0.0`/NaN/low-digit output stays out of ci-spec (only the exact probes
   `(log 1)`/`(tanh 0)`/`(tanh +/-25.0)` in `log-tanh-exact-cross-backend-cases` and

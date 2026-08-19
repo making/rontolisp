@@ -489,6 +489,13 @@ categories:
       - { slug: linalg-flatten, name: "linalg:flatten" }
       - { slug: linalg-transpose, name: "linalg:transpose" }
       - { slug: linalg-pad, name: "linalg:pad" }
+      - { slug: linalg-expand-dims, name: "linalg:expand-dims" }
+      - { slug: linalg-squeeze, name: "linalg:squeeze" }
+      - { slug: linalg-concatenate, name: "linalg:concatenate" }
+      - { slug: linalg-stack, name: "linalg:stack" }
+      - { slug: linalg-slice, name: "linalg:slice" }
+      - { slug: linalg-triu, name: "linalg:triu" }
+      - { slug: linalg-tril, name: "linalg:tril" }
       - { slug: linalg-add, name: "linalg:add" }
       - { slug: linalg-sub, name: "linalg:sub" }
       - { slug: linalg-mul, name: "linalg:mul" }
@@ -515,15 +522,20 @@ categories:
       - { slug: linalg-negative, name: "linalg:negative" }
       - { slug: linalg-sign, name: "linalg:sign" }
       - { slug: linalg-reciprocal, name: "linalg:reciprocal" }
+      - { slug: linalg-power, name: "linalg:power" }
       - { slug: linalg-maximum, name: "linalg:maximum" }
       - { slug: linalg-minimum, name: "linalg:minimum" }
       - { slug: linalg-clip, name: "linalg:clip" }
       - { slug: linalg-relu, name: "linalg:relu" }
+      - { slug: linalg-softmax, name: "linalg:softmax" }
+      - { slug: linalg-log-softmax, name: "linalg:log-softmax" }
       - { slug: linalg-dot, name: "linalg:dot" }
       - { slug: linalg-matmul, name: "linalg:matmul" }
       - { slug: linalg-outer, name: "linalg:outer" }
       - { slug: linalg-sum, name: "linalg:sum" }
       - { slug: linalg-mean, name: "linalg:mean" }
+      - { slug: linalg-var, name: "linalg:var" }
+      - { slug: linalg-std, name: "linalg:std" }
       - { slug: linalg-amax, name: "linalg:amax" }
       - { slug: linalg-amin, name: "linalg:amin" }
       - { slug: linalg-argmax, name: "linalg:argmax" }
@@ -541,6 +553,7 @@ categories:
       - { slug: linalg-greater-equal, name: "linalg:greater-equal" }
       - { slug: linalg-less, name: "linalg:less" }
       - { slug: linalg-less-equal, name: "linalg:less-equal" }
+      - { slug: linalg-where, name: "linalg:where" }
       - { slug: linalg-take-rows, name: "linalg:take-rows" }
       - { slug: linalg-row, name: "linalg:row" }
       - { slug: linalg-gather, name: "linalg:gather" }

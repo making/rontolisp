@@ -40,6 +40,22 @@ final class WasmExpCompiler {
 	// 1/120, 1/24, 1/6, 1/2, 1, 1.
 	static final double[] HORNER_COEFFS = { 1.0 / 120.0, 1.0 / 24.0, 1.0 / 6.0, 0.5, 1.0, 1.0 };
 
+	/**
+	 * The underflow clamp {@code f64.max(p(t), 0.0)} applied to the reduced polynomial
+	 * before the squarings. The odd-degree Taylor polynomial {@code p} has one real root
+	 * (around {@code t = -2.18}, i.e. {@code x = -558}), and below it {@code p(t)} is
+	 * NEGATIVE - so the even number of squarings turned every sufficiently negative
+	 * argument into a huge POSITIVE value ({@code (exp -1000)} was {@code 2.4e125}, and
+	 * {@code (exp -inf)} was {@code +inf}, because {@code p(-inf) = -inf}). Clamping the
+	 * polynomial at zero maps that whole region to {@code 0.0} - what {@code Math.exp}
+	 * returns there to within {@code 1e-217} - and is a no-op wherever {@code p(t) >= 0},
+	 * so every value the approximation already got right stays BIT-IDENTICAL. NaN
+	 * propagates ({@code f64.max} returns NaN if either operand is NaN) and {@code +inf}
+	 * is unaffected. This is what lets a {@code -infinity} attention mask reach
+	 * {@code linalg:softmax} as a weight of exactly {@code 0.0} on every backend.
+	 */
+	static final double UNDERFLOW_CLAMP = 0.0;
+
 	private WasmExpCompiler() {
 	}
 
@@ -80,6 +96,10 @@ final class WasmExpCompiler {
 			ctx.writer.writeF64(HORNER_COEFFS[i]);
 			ctx.writer.write(Instruction.F64_ADD);
 		}
+		// The underflow clamp: see UNDERFLOW_CLAMP.
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(UNDERFLOW_CLAMP);
+		ctx.writer.write(Instruction.F64_MAX);
 		boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(accSlot);

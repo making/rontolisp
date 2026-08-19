@@ -502,6 +502,13 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#d(1.0 0.0 0.0 1.0)` |
 | `linalg:transpose` | `(linalg:transpose #2A((1 2 3) (4 5 6)))` | `#d((1.0 4.0) (2.0 5.0) (3.0 6.0))`(ベクタはそのまま返します) |
 | `linalg:pad` | `(linalg:pad #(1 2) 1)` | `#d(0.0 1.0 2.0 0.0)`(定数 0 のパディング。リストで軸ごとの `(before after)` ペアを指定) |
+| `linalg:expand-dims` | `(linalg:expand-dims #(1 2 3) 0)` | `#d((1.0 2.0 3.0))` (extent 1 の軸を挿入。numpy の `expand_dims` / torch の `unsqueeze`) |
+| `linalg:squeeze` | `(linalg:squeeze #2A((1 2 3)))` | `#d(1.0 2.0 3.0)` (extent 1 の軸を除去。`:axis` で対象を指定) |
+| `linalg:concatenate` | `(linalg:concatenate (list #(1 2) #(3)))` | `#d(1.0 2.0 3.0)` (配列の**リスト**を既存の `:axis` に沿って連結) |
+| `linalg:stack` | `(linalg:stack (list #(1 2) #(3 4)))` | `#d((1.0 2.0) (3.0 4.0))` (**新しい** `:axis` に沿って連結) |
+| `linalg:slice` | `(linalg:slice #(0 1 2 3 4 5) '((nil nil 2)))` | `#d(0.0 2.0 4.0)` (numpy の基本スライシング。軸ごとに `nil` / `(start end [step])`) |
+| `linalg:triu` | `(linalg:triu (linalg:ones '(3 3)) :k 1)` | `#d((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0))` (上三角。causal マスク) |
+| `linalg:tril` | `(linalg:tril #2A((1 2) (3 4)))` | `#d((1.0 0.0) (3.0 4.0))` (下三角) |
 | `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#d(11.0 12.0 13.0)`(要素ごと。スカラーのオペランドはブロードキャスト) |
 | `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#d(4.0 4.0)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | アダマール積(要素ごとの積)。行列積ではありません |
@@ -528,15 +535,20 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:negative` | `(linalg:negative #(1 -2 3))` | `#d(-1.0 2.0 -3.0)`(要素ごとの符号反転) |
 | `linalg:sign` | `(linalg:sign #(-5 0 7))` | `#d(-1.0 0.0 1.0)`(要素ごとの符号) |
 | `linalg:reciprocal` | `(linalg:reciprocal #(2 4 8))` | `#d(0.5 0.25 0.125)`(要素ごとの `1 / x`、float で計算) |
+| `linalg:power` | `(linalg:power #(1 2 3) 2)` | `#d(1.0 4.0 9.0)` (要素ごとの `a ** b`。どちらのオペランドもスカラー可) |
 | `linalg:maximum` | `(linalg:maximum #(1 5 3) #(4 2 3))` | `#d(4.0 5.0 3.0)`(要素ごとに大きい方。どちらかの被演算子はスカラー可) |
 | `linalg:minimum` | `(linalg:minimum #(1 5 3) 4)` | `#d(1.0 4.0 3.0)`(要素ごとに小さい方。どちらかの被演算子はスカラー可) |
 | `linalg:clip` | `(linalg:clip #(-2 0 3) -1.0 1.0)` | `#d(-1.0 0.0 1.0)`(要素ごとの `min(max(x, lo), hi)`) |
 | `linalg:relu` | `(linalg:relu #(-2 0 3))` | `#d(0.0 0.0 3.0)`(要素ごとの `max(x, 0.0)`) |
+| `linalg:softmax` | `(linalg:softmax #(1 1 1 1))` | `#d(0.25 0.25 0.25 0.25)` (最大値を引いた softmax。`:axis` でスライスごとに正規化) |
+| `linalg:log-softmax` | `(linalg:log-softmax #(0 0))` | `#d(-0.6931471805599453 -0.6931471805599453)` (`softmax` の安定な対数) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
-| `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))`(行列積) |
+| `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))`(行列積。rank 3 以上は最後の 2 軸でスタック) |
 | `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))`(外積) |
 | `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10`(リダクションは要素の型に従う。`:axis` / `:keepdims` キーワードで軸ごとの還元) |
 | `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2`(リダクションは要素の型に従う。`:axis` / `:keepdims` キーワード) |
+| `linalg:var` | `(linalg:var #(1 2 3 4))` | `1.25` (分散。`:axis` / `:keepdims` / `:ddof` キーワード) |
+| `linalg:std` | `(linalg:std #(2 4 4 4 5 5 7 9))` | `2.0` (`linalg:var` の平方根。キーワードは同じ) |
 | `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9`(最大の要素。`:axis` / `:keepdims` キーワード) |
 | `linalg:amin` | `(linalg:amin #(5 2 8))` | `2`(最小の要素。`:axis` / `:keepdims` キーワード) |
 | `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1`(同値の場合は最初のインデックス。`:axis` で軸ごとのインデックス) |
@@ -554,6 +566,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:greater-equal` | `(linalg:greater-equal #(1 5 3) #(2 5 1))` | `#d(0.0 1.0 1.0)`(要素ごとの `a >= b` マスク) |
 | `linalg:less` | `(linalg:less #(1 5 3) #(2 5 1))` | `#d(1.0 0.0 0.0)`(要素ごとの `a < b` マスク) |
 | `linalg:less-equal` | `(linalg:less-equal #(1 5 3) #(2 5 1))` | `#d(1.0 1.0 0.0)`(要素ごとの `a <= b` マスク) |
+| `linalg:where` | `(linalg:where #(1 0 1) 10 20)` | `#d(10.0 20.0 10.0)` (非ゼロマスクによる要素ごとの選択。ブロードキャストあり) |
 | `linalg:take-rows` | `(linalg:take-rows #2A((10 11 12) (20 21 22) (30 31 32)) #(2 0))` | `#d((30.0 31.0 32.0) (10.0 11.0 12.0))`(インデックスベクタで選んだ axis-0 スライス) |
 | `linalg:row` | `(linalg:row #2A((10 11 12) (20 21 22) (30 31 32)) 1)` | `#d(20.0 21.0 22.0)`(axis-0 スライス 1 つ。axis が落ちる。numpy の `x[i]`) |
 | `linalg:gather` | `(linalg:gather #2A((10 11 12) (20 21 22)) #(2 0))` | `#d(12.0 20.0)`(行ごとの `a[i, idx[i]]`) |

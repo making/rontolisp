@@ -2,7 +2,7 @@
 
 One hand-written Lisp-source library, `src/main/resources/am/ik/rontolisp/eval/linalg.lisp`,
 following the `json.lisp` pattern (see `json.md`) so a single implementation
-runs identically on all backends. 78 exported functions (constructors `zeros`/
+runs identically on all backends. 91 exported functions (constructors `zeros`/
 `ones`/`full`/`eye`/`arange`/`linspace`/`from-list`, shape ops, broadcasting
 `add`/`sub`/`mul`/`div`/`emap` + named ufuncs, products `dot`/`matmul`/`outer`,
 reductions, calculus `diff`/`gradient`, and floating-point Gaussian-elimination
@@ -12,8 +12,9 @@ single-float (`#f`) with an `:element-type` keyword, and every transform
 PRESERVES its input width (see "Single-float / width polymorphism" below).
 Elementwise ops, reductions, `reshape`/`flatten` and `array-equal`
 walk elements via `row-major-aref`, so they work for any rank (`diff` too);
-`dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay defined for
-rank <= 2, and `gradient` for vectors only.
+**`matmul` is rank-generic since todo-459** (rank >= 3 = the numpy stacked
+product, below); `dot`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay
+defined for rank <= 2, and `gradient` for vectors only.
 
 **Options are numpy-style `&key` arguments, never trailing positionals** (the
 2026-08-19 redesign; the library predates `&key` support): `:element-type` on every
@@ -56,14 +57,23 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:flatten a)` | rank-1 row-major copy |
 | `(linalg:transpose a &optional axes)` | matrix transpose; a vector is returned unchanged. With an axes list (numpy `x.transpose(0 3 1 2)`): the rank-n axis permutation, out-dims[k] = dims[axes[k]] (each axis named exactly once); only the 1-arg matrix form is `--simd`-intercepted |
 | `(linalg:pad a pads)` | constant-0 padding (numpy np.pad's default mode): pads = one `(before after)` pair per axis, or a single non-negative integer for both sides of every axis; keeps a's width |
+| `(linalg:expand-dims a axis)` | a copy with an extent-1 axis inserted at `axis` (numpy np.expand_dims, torch unsqueeze); a negative axis counts from the end of the RESULT, so -1 appends. Row-major order is unchanged, so it is a `reshape` |
+| `(linalg:squeeze a &key axis)` | extent-1 axes removed (numpy np.squeeze): all of them with no `:axis`, else only the integer (or list of) axes named -- a named axis whose extent is not 1 signals. Squeezing away EVERY axis returns the ELEMENT itself (linalg has no rank-0 arrays; a plain number is ndim 0) |
+| `(linalg:concatenate arrays &key axis)` | the LIST `arrays` joined along an EXISTING axis (numpy np.concatenate / torch.cat; default 0, negative from the end). Equal ranks, equal extents off the axis; the axis extent is their sum. Width of the first input |
+| `(linalg:stack arrays &key axis)` | the LIST `arrays` joined along a NEW axis (numpy np.stack): equal shapes, result rank + 1, the new axis of extent `(length arrays)` at `:axis` -- negative counts from the end of the RESULT, so -1 appends |
+| `(linalg:slice a specs)` | numpy BASIC slicing, one spec per axis: `nil` = whole axis, or `(start end)` / `(start end step)`. Negative index = from the end, `nil` in the start/end position = from the beginning / to the end, negative step walks backwards, a MISSING trailing spec leaves that axis whole. Axes are KEPT (numpy `x[:, 0:3]`); dropping one is `row`. Runs on `%la-gather-strided` |
+| `(linalg:triu a &key k)` / `(linalg:tril ...)` | the upper / lower triangle: a copy with everything below / above the k-th diagonal zeroed (numpy np.triu/np.tril, default k = 0). Rank >= 2, and a stack is masked on its LAST TWO axes. `(triu (ones '(n n)) :k 1)` is the causal / subsequent attention mask |
 | `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise with numpy broadcasting: a scalar operand on either side, and two arrays of different shapes along their trailing axes (extents equal or 1, missing leading axis = 1; anything else = the shape-mismatch error); result keeps the first array operand's width; `mul` is Hadamard (NOT matrix product) |
 | `(linalg:+ &rest a)` / `(linalg:- a &rest r)` / `(linalg:* &rest a)` / `(linalg:/ a &rest r)` | the CL operator spellings: n-ary LEFT FOLDS of add/sub/mul/div (plain defuns, so `#'linalg:+` works). Degenerate arities follow CL: no argument is 0 / 1, one argument to `+`/`*` is itself, one argument to `-`/`/` is the negation / reciprocal (via `(sub 0 a)` / `(div 1 a)`, so a scalar operand works too). Each fold step is a LITERAL `linalg:add`/... call, so `--simd` still intercepts the kernel inside the alias; only the `&rest` list is extra |
 | `(linalg:emap f a)` | fresh array with f applied to every element |
 | `(linalg:exp a)` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` | named elementwise unary ufuncs (numpy parity, todo 109): `emap` of the obvious scalar op (`square` = `mul a a`, `reciprocal` = `div 1 a`); unlike `emap` they are `--simd`-interceptable |
-| `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise |
-| `(linalg:matmul a b)` | matrix product (also mat.vec); rejects scalar operands |
+| `(linalg:power a b)` | elementwise `a ** b` (numpy np.power), through `%la-bcast` like `mul` -- either operand may be a scalar, two arrays broadcast. Not `--simd`-intercepted (no `expt` kernel) |
+| `(linalg:softmax a &key axis)` / `(linalg:log-softmax ...)` | the max-subtracted softmax and its log: no `:axis` = the whole array is one distribution (scipy's default), an integer `:axis` = one distribution per slice (torch's `softmax(x, dim)`). `log-softmax` is `(x - m) - log(sum(exp(x - m)))`, NOT `(log (softmax x))`, so a zero weight gives -inf and not NaN. Not in numpy proper -- see "Why softmax lives here" below |
+| `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise. Rank >= 3 on either side SIGNALS (`linalg: dot expects rank <= 2 ...`) -- numpy's np.dot contracts against the other operand's second-to-last axis there, which is not the stacked product, and the old code silently read a rank-3 operand as a matrix |
+| `(linalg:matmul a b)` | matrix product (also mat.vec) at rank <= 2, via `dot`; at rank >= 3 on EITHER side the numpy STACKED product (`%la-matmul-nd`, = torch.bmm / torch.matmul): the last two axes are the matrix, every leading axis broadcasts, and a rank-1 operand is promoted (row on the left, column on the right) with its axis dropped again. Rejects scalar operands at every rank |
 | `(linalg:outer u v)` | outer product (inputs flattened first) |
 | `(linalg:sum a &key axis keepdims)` / `(linalg:mean ...)` | no axis: over all elements (a reduction follows the element type: a packed/float array reduces to a double, a plain integer array to an integer/ratio; non-nil keepdims wraps the scalar in an all-ones-shape array). Integer axis (negative counts from the end): reduce along that axis, axis dropped -- kept as extent 1 under keepdims; a vector without keepdims reduces to the scalar itself. Any rank (row-major outer x axis x inner fold) |
+| `(linalg:var a &key axis keepdims ddof)` / `(linalg:std ...)` | the variance / standard deviation, whole-array or along an axis (the `sum` rules), divided by `n - ddof`: `:ddof 0` (the default) is numpy np.var and torch's `unbiased=False`, `:ddof 1` the sample variance. `std` is `sqrt` of `var` -- `cl:sqrt` on the scalar result, `linalg:sqrt` on the array one. `mean` + `std` along one axis is LayerNorm |
 | `(linalg:amax a &key axis keepdims)` / `(linalg:amin ...)` | largest / smallest element, whole-array or along an axis (same rules as sum); strict-comparison fold (first wins ties, NaN never replaces the seed); error on an empty array or axis |
 | `(linalg:argmax v &key axis)` / `(linalg:argmin ...)` | no axis: index in a VECTOR (first on ties). With an axis: per-slice indices, axis dropped; rank >= 2 results are a packed DOUBLE array of index values (no integer arrays in linalg; `(= 3.0 3)` holds), a vector reduces to the integer index |
 | `(linalg:norm a)` | Euclidean / Frobenius norm (a float, via sqrt) |
@@ -73,6 +83,7 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting in floating point (double); a singular matrix's `det` may be a small epsilon rather than exactly 0; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
 | `(linalg:array-equal a b)` | same shape + numerically equal elements (1 = 1.0); needed because arrays themselves are `eq`-compared only |
 | `(linalg:equal a b)` / `greater` / `greater-equal` / `less` / `less-equal` | elementwise comparison as a 0.0/1.0 MASK of the first array operand's width (numpy `==`/`>`/`>=`/`<`/`<=`); scalars and broadcasting via `%la-bcast`; multiply by the mask where numpy would boolean-index (relu grad, dropout) |
+| `(linalg:where mask x y)` | elementwise SELECT (numpy np.where): x's element where mask is non-zero, y's where it is zero, so the 0.0/1.0 masks above drive it directly. All three may be scalars or arrays and broadcast together (each array operand is materialized at the broadcast shape by `%la-broadcast-to`); the width follows x, else y, else double. Selecting rather than multiplying is what keeps an infinite operand from becoming NaN -- see "-inf through where -> softmax" below |
 | `(linalg:take-rows a idx)` | axis-0 slices selected by an index vector (numpy `x[mask]` / `np.take(a, idx, axis=0)`); ANY rank >= 1 (whole-slab copies, so rank-4 batches work); indices truncate, may repeat; axis 0 is KEPT (one index -> a `(1 n)` matrix, numpy `x[[i]]`) |
 | `(linalg:row a i)` | ONE axis-0 slice with axis 0 DROPPED (numpy `x[i]`): a matrix -> the row vector, a rank-4 batch -> the rank-3 sample. Rank >= 2 only (a vector errors -- `aref` already returns the element). The reason a per-sample forward pass reads `(linalg:row x i)` and not `(linalg:flatten (linalg:take-rows x (linalg:from-list (list i))))` |
 | `(linalg:gather a idx)` | per-row elements `a[i, idx[i]]` of a matrix (numpy `y[np.arange(n), t]`) as a vector |
@@ -80,6 +91,74 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:seed n)` | reset the shared RNG deterministically; returns n |
 | `(linalg:rand shape &key element-type)` / `(linalg:randn ...)` / `(linalg:uniform lo hi shape ...)` | uniform [0,1) / standard normal / uniform [lo,hi) arrays from the seeded generator |
 | `(linalg:choice n size)` / `(linalg:permutation n)` | size indices in [0,n) with replacement (np.random.choice default) / Fisher-Yates shuffle of 0..n-1; both packed double vectors of integer values |
+
+## Rank-N (todo-459): the stacked matmul, the joins, and one odometer
+
+Everything the rank-N round added is numpy parity, and all of it bottoms out in two
+internal walks so there is exactly one place where a strided read can be wrong:
+
+- **`%la-gather-strided (a od rs base etype)`** -- fill a fresh `od`-shaped array by
+  walking `a`'s flat row-major index from `base`, advancing by the INNERMOST-FIRST
+  strides `rs` through the `%la-bcast-loop` odometer carry. `linalg:slice` builds
+  `rs` from `step * axis-stride` and `base` from the start indices;
+  `%la-broadcast-to` builds it from `%la-bcast-strides` (stride 0 on a stretched
+  axis) with `base` 0. Nothing else needs a per-element division.
+- **`%la-matmul-nd`** -- the batched product. `%la-batch-strides d od base` is
+  `%la-bcast-strides` with a non-1 innermost stride (`base` = the trailing matrix's
+  size), which is the whole difference between "broadcast an element" and "broadcast
+  a MATRIX". The batch shape comes from `%la-batch-shape` (the `%la-bcast-shape` rule
+  with matmul's own message), the M x K x N triple loop runs on flat indices, and the
+  two batch offsets advance through the same odometer. The rank-2 `%la-matmul` stays
+  the fast path -- `linalg:matmul` only reaches `%la-matmul-nd` when a side has rank
+  >= 3.
+
+Consequences worth knowing:
+
+- **`linalg:dot` now SIGNALS on rank >= 3** instead of reading a rank-3 operand's
+  first two dims as a matrix. That was silently wrong output, not an error, and the
+  `--simd` `dot` kernel already declined `rank > 2` (`LinalgSimd.dot`), so the
+  interpreter, JVM and both WASM backends agree on the new message.
+- **Neither `%la-matmul-nd` nor any other rank-N addition is `--simd`-intercepted.**
+  The rank <= 2 path still rides the `dot` kernel; the stacked path runs the scalar
+  defun. Batched matmul is the kernel a transformer forward pass spends its time in,
+  so it is the first candidate to measure for its own interceptor
+  (`.kb/linalg-simd.md`) -- measure before adding one.
+- `linalg:squeeze` returning the ELEMENT when every axis goes is deliberate: linalg
+  has no rank-0 array, `%la-fold-axis` already reduces a vector to the scalar itself,
+  and `make-array` with a nil dims list is not a shape the backends build.
+
+## Why softmax lives here, and -inf through `where` -> `softmax`
+
+`softmax` / `log-softmax` are not numpy (they are `scipy.special.softmax` /
+`torch.softmax`), and they are in `linalg` for the same reason `relu` is: they are the
+array-level primitive an activation layer needs, they are one composition of kernels
+the interceptors already know, and a second copy in the differentiable layer above
+would fork the array math. Both are max-subtracted, so a large logit cannot overflow.
+
+The masked-attention idiom is `(linalg:where mask score -inf)` then `softmax`, and it
+only works because `where` SELECTS: the older "multiply by a 0.0/1.0 mask" spelling
+turns `0.0 * -inf` into `NaN`. What the four backends do with the infinity that then
+flows through `amax` -> `sub` -> `exp` -> `div` (the question todo-459 was asked to
+settle before todo-460 commits `masked-fill` to `-inf` rather than a large finite
+negative):
+
+- The answer is now **`0.0` on all four**, and `-inf` is the right choice for
+  `masked-fill`. A large finite negative would NOT have been safer -- see why.
+- It was not free. `WasmExpCompiler`'s software `exp` is a degree-5 Taylor polynomial
+  on `t = x / 256` followed by 8 squarings, and that polynomial has a real root near
+  `t = -2.18` (`x = -558`): below it `p(t)` is NEGATIVE, and an even number of
+  squarings turned it into a huge POSITIVE number. `(exp -1000)` was `2.4e125` and
+  `(exp -inf)` was `+inf` on both WASM backends, so a masked softmax returned `NaN`
+  there while the interpreter and JVM returned `0.0`. That is also why a "large finite
+  negative" mask would not have rescued it: `exp` of it was equally wrong.
+- The fix is one instruction, `f64.max(p(t), 0.0)` before the squarings
+  (`WasmExpCompiler.UNDERFLOW_CLAMP`, mirrored in
+  `WasmVecSimdRuntimeBuilder.emitExpF64` so the `--simd` and `--no-gc` kernels stay
+  bit-identical to the defun). It is a NO-OP wherever `p(t) >= 0`, so every value the
+  approximation already got right is unchanged bit-for-bit; NaN still propagates
+  (`f64.max` is NaN-propagating) and `+inf` is untouched. `Math.exp` returns
+  `< 1e-217` over the whole clamped region, so the clamp is also the more accurate
+  answer. See `.kb/vec.md` for the rest of the WASM transcendental contract.
 
 ## Seeded RNG (the np.random analog; deep-learning-from-scratch port)
 

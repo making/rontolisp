@@ -401,6 +401,192 @@
                   (- (row-major-aref a (+ src (* (+ j 1) inner)))
                      (row-major-aref a (+ src (* j inner)))))))))))
 
+;; --- rank-N helpers (batched matmul, joins, strided gathers) ------------------
+
+(defun linalg::%la-drop-last (d n)
+  ;; The dims list d without its last n entries.
+  (let ((keep (- (length d) n)) (out nil))
+    (do ((p d (cdr p)) (k 0 (+ k 1)))
+        ((>= k keep) (reverse out))
+      (setq out (cons (car p) out)))))
+
+(defun linalg::%la-from-size (d ax)
+  ;; The product of the dims-list entries from index ax ONWARD (the complement
+  ;; of %la-head-size, which stops before ax); 1 for an empty list.
+  (let ((acc 1))
+    (do ((p d (cdr p)) (k 0 (+ k 1)))
+        ((null p) acc)
+      (when (>= k ax) (setq acc (* acc (car p)))))))
+
+(defun linalg::%la-insert-axis (d ax n)
+  ;; The dims list d with a new axis of extent n inserted at index ax; an ax of
+  ;; (length d) appends it.
+  (let ((out nil))
+    (do ((p d (cdr p)) (k 0 (+ k 1)))
+        ((null p) (reverse (if (= k ax) (cons n out) out)))
+      (when (= k ax) (setq out (cons n out)))
+      (setq out (cons (car p) out)))))
+
+(defun linalg::%la-replace-axis (d ax n)
+  ;; The dims list d with the extent at index ax replaced by n.
+  (let ((out nil))
+    (do ((p d (cdr p)) (k 0 (+ k 1)))
+        ((null p) (reverse out))
+      (setq out (cons (if (= k ax) n (car p)) out)))))
+
+(defun linalg::%la-gather-strided (a od rs base etype)
+  ;; A fresh od-shaped array of width etype filled by walking a's flat row-major
+  ;; index from base, advancing by the INNERMOST-FIRST strides rs through the
+  ;; same odometer carry %la-bcast-loop uses -- O(1) amortized per element, no
+  ;; per-element division. Every strided read in the library (broadcast-to,
+  ;; slice) is this one walk.
+  (let* ((out (linalg::%la-make od 0.0 etype))
+         (n (array-total-size out))
+         (rdims (reverse od))
+         (idx (linalg::%la-zero-counters (length od)))
+         (src base))
+    (do ((k 0 (+ k 1)))
+        ((>= k n) out)
+      (setf (row-major-aref out k) (row-major-aref a src))
+      (do ((pc idx (cdr pc)) (pd rdims (cdr pd)) (ps rs (cdr ps)) (carry t))
+          ((or (null pc) (not carry)))
+        (rplaca pc (+ (car pc) 1))
+        (setq src (+ src (car ps)))
+        (if (< (car pc) (car pd))
+            (setq carry nil)
+            (progn
+              (rplaca pc 0)
+              (setq src (- src (* (car pd) (car ps))))))))))
+
+(defun linalg::%la-broadcast-to (a od)
+  ;; a materialized at the broadcast shape od (numpy np.broadcast_to, but a
+  ;; COPY -- every linalg result is a fresh array): a stretched axis re-reads
+  ;; the same element through its stride-0 entry. a's shape must already
+  ;; broadcast to od (the caller computed od from it).
+  (linalg::%la-gather-strided a od
+   (linalg::%la-bcast-strides (array-dimensions a) od) 0 (linalg::%la-etype a)))
+
+(defun linalg::%la-batch-shape (dx dy)
+  ;; The broadcast shape of two BATCH dims lists (a stacked matmul's leading
+  ;; axes): the %la-bcast-shape rule with matmul's own error message.
+  (let ((out nil))
+    (do ((px (reverse dx) (cdr px)) (py (reverse dy) (cdr py)))
+        ((and (null px) (null py)) out)
+      (let ((a (if px (car px) 1)) (b (if py (car py) 1)))
+        (unless (or (= a b) (= a 1) (= b 1))
+          (error "linalg: matmul batch dimensions do not broadcast"))
+        (setq out (cons (max a b) out))))))
+
+(defun linalg::%la-batch-strides (d od base)
+  ;; Row-major strides of the batch dims d aligned to the broadcast batch shape
+  ;; od, INNERMOST-FIRST, with 0 on every stretched axis (extent 1 or missing).
+  ;; base is the size of the trailing matrix -- the stride of the innermost
+  ;; batch axis -- which is what separates this from %la-bcast-strides.
+  (let ((acc base) (out nil))
+    (do ((pd (reverse d) (cdr pd)) (po (reverse od) (cdr po)))
+        ((null po) (reverse out))
+      (let ((n (if pd (car pd) 1)))
+        (setq out (cons (if (= n 1) 0 acc) out))
+        (setq acc (* acc n))))))
+
+(defun linalg::%la-matmul-nd (a b)
+  ;; The STACKED matrix product (numpy np.matmul at rank >= 3, torch.bmm /
+  ;; torch.matmul): the LAST TWO axes are the matrix and every leading axis
+  ;; broadcasts. A rank-1 operand is promoted for the product -- a row on the
+  ;; left, a column on the right -- and its axis is dropped again from the
+  ;; result, exactly like numpy. One outer x M x K x N walk over the flat
+  ;; row-major index; the batch offsets advance through the %la-gather-strided
+  ;; odometer. Width follows a, like every other transform.
+  (let* ((da (array-dimensions a))
+         (db (array-dimensions b))
+         (avec (null (cdr da)))
+         (bvec (null (cdr db)))
+         (pa (if avec (cons 1 da) da))
+         (pb (if bvec (append db (list 1)) db))
+         (ra (length pa))
+         (rb (length pb))
+         (m (nth (- ra 2) pa))
+         (k (nth (- ra 1) pa))
+         (n (nth (- rb 1) pb))
+         (ba (linalg::%la-drop-last pa 2))
+         (bb (linalg::%la-drop-last pb 2))
+         (bd (linalg::%la-batch-shape ba bb)))
+    (unless (= k (nth (- rb 2) pb))
+      (error "linalg: matmul inner dimensions differ"))
+    (let* ((od
+            (append bd (append (if avec nil (list m)) (if bvec nil (list n)))))
+           (out (linalg::%la-make od 0.0 (linalg::%la-etype a)))
+           (rsa (linalg::%la-batch-strides ba bd (* m k)))
+           (rsb (linalg::%la-batch-strides bb bd (* k n)))
+           (rbd (reverse bd))
+           (idx (linalg::%la-zero-counters (length bd)))
+           (batches (linalg::%la-from-size bd 0))
+           (oa 0)
+           (ob 0)
+           (oo 0))
+      (do ((z 0 (+ z 1)))
+          ((>= z batches) out)
+        (do ((i 0 (+ i 1)))
+            ((>= i m))
+          (do ((j 0 (+ j 1)))
+              ((>= j n))
+            (let ((acc 0))
+              (do ((q 0 (+ q 1)))
+                  ((>= q k))
+                (setq acc
+                      (+ acc
+                         (* (row-major-aref a (+ oa (* i k) q))
+                            (row-major-aref b (+ ob (* q n) j))))))
+              (setf (row-major-aref out (+ oo (* i n) j)) acc))))
+        (setq oo (+ oo (* m n)))
+        (do ((pc idx (cdr pc))
+             (pd rbd (cdr pd))
+             (psa rsa (cdr psa))
+             (psb rsb (cdr psb))
+             (carry t))
+            ((or (null pc) (not carry)))
+          (rplaca pc (+ (car pc) 1))
+          (setq oa (+ oa (car psa)))
+          (setq ob (+ ob (car psb)))
+          (if (< (car pc) (car pd))
+              (setq carry nil)
+              (progn
+                (rplaca pc 0)
+                (setq oa (- oa (* (car pd) (car psa))))
+                (setq ob (- ob (* (car pd) (car psb)))))))))))
+
+(defun linalg::%la-slice-bound (v n step startp)
+  ;; One end of a slice spec normalized against an axis of extent n (numpy's
+  ;; rule): nil takes the natural end for the step's direction, a negative
+  ;; index counts from the end, and the result is clamped -- to [0, n] for a
+  ;; positive step, to [-1, n-1] for a negative one.
+  (let ((x
+         (cond ((not (null v)) (if (< v 0) (+ v n) v))
+               (startp (if (> step 0) 0 (- n 1)))
+               (t (if (> step 0) n -1)))))
+    (if (> step 0) (max 0 (min x n)) (max -1 (min x (- n 1))))))
+
+(defun linalg::%la-tri (a k upper)
+  ;; The shared triu/tril body: a copy of a with the elements outside the
+  ;; k-th diagonal zeroed, applied to the LAST TWO axes of any rank >= 2
+  ;; (numpy triu/tril broadcast over the leading axes the same way).
+  (let ((d (array-dimensions a)))
+    (unless (cdr d) (error "linalg: triu and tril expect rank >= 2"))
+    (let* ((rank (length d))
+           (rows (nth (- rank 2) d))
+           (cols (nth (- rank 1) d))
+           (outer (linalg::%la-head-size d (- rank 2)))
+           (out (linalg::%la-like a)))
+      (do ((o 0 (+ o 1)))
+          ((>= o outer) out)
+        (do ((i 0 (+ i 1)))
+            ((>= i rows))
+          (do ((j 0 (+ j 1)))
+              ((>= j cols))
+            (when (if upper (>= (- j i) k) (<= (- j i) k))
+              (let ((f (+ (* o rows cols) (* i cols) j)))
+                (setf (row-major-aref out f) (row-major-aref a f))))))))))
+
 ;; --- constructors ------------------------------------------------------------
 
 (defun linalg:zeros (shape &key element-type)
@@ -689,6 +875,155 @@
                   (rplaca pc 0)
                   (setq dst (- dst (* (car pd) (car ps))))))))))))
 
+(defun linalg:expand-dims (a axis)
+  ;; A copy of a with a new axis of extent 1 inserted at axis (numpy
+  ;; np.expand_dims, torch's unsqueeze): a negative axis counts from the end of
+  ;; the RESULT, so -1 appends. The row-major order is unchanged, so this is a
+  ;; reshape; the width follows a.
+  (let* ((d (array-dimensions a))
+         (rank (length d))
+         (ax (if (< axis 0) (+ axis rank 1) axis)))
+    (unless (and (>= ax 0) (<= ax rank)) (error "linalg: axis out of range"))
+    (linalg:reshape a (linalg::%la-insert-axis d ax 1))))
+
+(defun linalg:squeeze (a &key axis)
+  ;; A copy of a with extent-1 axes removed (numpy np.squeeze): with no :axis
+  ;; every one of them, with an integer :axis (or a list of them, negative
+  ;; counting from the end) only those -- and an axis whose extent is not 1
+  ;; signals. Squeezing away EVERY axis returns the single element itself,
+  ;; because linalg has no rank-0 arrays (a plain number is what ndim 0 means).
+  (let* ((d (array-dimensions a))
+         (rank (length d))
+         (drop (linalg::%la-zero-counters rank)))
+    (if (null axis)
+        (do ((p d (cdr p)) (c drop (cdr c)))
+            ((null p))
+          (when (= (car p) 1) (rplaca c 1)))
+        (do ((p (if (consp axis) axis (list axis)) (cdr p)))
+            ((null p))
+          (let ((ax (linalg::%la-norm-axis d (car p))))
+            (unless (= (nth ax d) 1)
+              (error "linalg: squeeze axis is not of extent 1"))
+            (rplaca (nthcdr ax drop) 1))))
+    (let ((od nil))
+      (do ((p (reverse d) (cdr p)) (c (reverse drop) (cdr c)))
+          ((null p))
+        (when (= (car c) 0) (setq od (cons (car p) od))))
+      (if (null od) (row-major-aref a 0) (linalg:reshape a od)))))
+
+(defun linalg:concatenate (arrays &key (axis 0))
+  ;; The arrays in the LIST arrays joined along an EXISTING axis (numpy
+  ;; np.concatenate, torch.cat; default axis 0, negative counts from the end).
+  ;; Every input needs the same rank and the same extents off that axis; the
+  ;; joined axis's extent is their sum. Fresh array, width of the first input.
+  (when (null arrays) (error "linalg: concatenate needs at least one array"))
+  (let* ((d0 (array-dimensions (car arrays)))
+         (rank (length d0))
+         (ax (linalg::%la-norm-axis d0 axis))
+         (inner (linalg::%la-tail-size d0 ax))
+         (outer (linalg::%la-head-size d0 ax))
+         (total 0))
+    (do ((p arrays (cdr p)))
+        ((null p))
+      (let ((d (array-dimensions (car p))))
+        (unless (= (length d) rank)
+          (error "linalg: concatenate expects arrays of equal rank"))
+        (do ((pd d (cdr pd)) (p0 d0 (cdr p0)) (k 0 (+ k 1)))
+            ((null pd))
+          (unless (or (= k ax) (= (car pd) (car p0)))
+            (error "linalg: concatenate shapes differ off the axis")))
+        (setq total (+ total (nth ax d)))))
+    (let ((out
+           (linalg::%la-make (linalg::%la-replace-axis d0 ax total) 0.0
+                             (linalg::%la-etype (car arrays)))))
+      (do ((o 0 (+ o 1)))
+          ((>= o outer) out)
+        (let ((dst (* o total inner)))
+          (do ((p arrays (cdr p)))
+              ((null p))
+            (let* ((s (car p))
+                   (blk (* (nth ax (array-dimensions s)) inner))
+                   (src (* o blk)))
+              (do ((k 0 (+ k 1)))
+                  ((>= k blk))
+                (setf (row-major-aref out (+ dst k))
+                      (row-major-aref s (+ src k))))
+              (setq dst (+ dst blk)))))))))
+
+(defun linalg:stack (arrays &key (axis 0))
+  ;; The arrays in the LIST arrays joined along a NEW axis (numpy np.stack):
+  ;; every input must have the SAME shape, and the result has one more axis,
+  ;; of extent (length arrays), at axis -- negative counting from the end of
+  ;; the RESULT, so -1 appends it. Fresh array, width of the first input.
+  (when (null arrays) (error "linalg: stack needs at least one array"))
+  (let* ((d (array-dimensions (car arrays)))
+         (rank (length d))
+         (ax (if (< axis 0) (+ axis rank 1) axis)))
+    (unless (and (>= ax 0) (<= ax rank)) (error "linalg: axis out of range"))
+    (let* ((n (length arrays))
+           (inner (linalg::%la-from-size d ax))
+           (outer (linalg::%la-head-size d ax))
+           (out
+            (linalg::%la-make (linalg::%la-insert-axis d ax n) 0.0
+                              (linalg::%la-etype (car arrays)))))
+      (do ((p arrays (cdr p)) (i 0 (+ i 1)))
+          ((null p) out)
+        (let ((s (car p)))
+          (unless (equal (array-dimensions s) d)
+            (error "linalg: stack expects arrays of equal shape"))
+          (do ((o 0 (+ o 1)))
+              ((>= o outer))
+            (let ((src (* o inner)) (dst (* (+ (* o n) i) inner)))
+              (do ((q 0 (+ q 1)))
+                  ((>= q inner))
+                (setf (row-major-aref out (+ dst q))
+                      (row-major-aref s (+ src q)))))))))))
+
+(defun linalg:slice (a specs)
+  ;; numpy BASIC slicing -- x[i0:j0:k0, i1:j1, ...] -- spelled as a LIST of one
+  ;; spec per axis: nil leaves the axis whole, or (start end) / (start end step)
+  ;; selects along it. A negative index counts from the end, nil in the start or
+  ;; end position means "from the beginning" / "to the end", a negative step
+  ;; walks the axis backwards, and a MISSING trailing spec leaves that axis
+  ;; whole. Every axis is KEPT, extent 0 included (numpy's x[:, 0:3]); dropping
+  ;; an axis is what linalg:row does. Fresh array of a's width.
+  (let* ((d (array-dimensions a))
+         (rank (length d))
+         (sx (linalg::%la-strides d))
+         (od nil)
+         (os nil)
+         (base 0))
+    (when (> (length specs) rank)
+      (error "linalg: slice expects at most one spec per axis"))
+    (do ((pd d (cdr pd)) (ps specs (cdr ps)) (pt sx (cdr pt)))
+        ((null pd))
+      (let ((n (car pd)) (spec (if ps (car ps) nil)))
+        (if (null spec)
+            (progn
+              (setq od (cons n od))
+              (setq os (cons (car pt) os)))
+            (let ((step (if (cddr spec) (caddr spec) 1)))
+              (when (= step 0) (error "linalg: slice step must not be zero"))
+              (let* ((s0 (linalg::%la-slice-bound (car spec) n step t))
+                     (e0 (linalg::%la-slice-bound (cadr spec) n step nil)))
+                (setq od (cons (max 0 (ceiling (/ (- e0 s0) step))) od))
+                (setq os (cons (* step (car pt)) os))
+                (setq base (+ base (* s0 (car pt)))))))))
+    (linalg::%la-gather-strided a (reverse od) os base (linalg::%la-etype a))))
+
+(defun linalg:triu (a &key (k 0))
+  ;; The upper triangle of a: a copy with everything BELOW the k-th diagonal
+  ;; zeroed (numpy np.triu; k = 0 keeps the main diagonal, a positive k moves
+  ;; the boundary up and to the right). Rank >= 2; for a stack of matrices the
+  ;; last two axes are the matrix. This is the causal / subsequent attention
+  ;; mask when applied to an all-ones matrix.
+  (linalg::%la-tri a k t))
+
+(defun linalg:tril (a &key (k 0))
+  ;; The lower triangle of a: a copy with everything ABOVE the k-th diagonal
+  ;; zeroed (numpy np.tril); the linalg:triu rules with the comparison flipped.
+  (linalg::%la-tri a k nil))
+
 ;; --- elementwise arithmetic (scalar broadcasting) ----------------------------
 
 (defun linalg:add (a b)
@@ -828,6 +1163,13 @@
   ;; Elementwise 1 / x (numpy np.reciprocal, float semantics).
   (linalg:div 1 a))
 
+(defun linalg:power (a b)
+  ;; Elementwise a raised to b (numpy np.power / the ** operator); either
+  ;; operand may be a scalar and two arrays broadcast, like linalg:mul. Both
+  ;; operands go through the same float element model as the rest of linalg,
+  ;; so a fractional exponent is the ordinary float power.
+  (linalg::%la-bcast (function expt) a b))
+
 ;; --- comparison-select ufuncs (numpy parity) ----------------------------------
 ;; Defined by the strict comparison select, NOT a min/max primitive: the second
 ;; operand wins whenever the comparison is false -- ties (a -0.0 / 0.0 pair takes
@@ -854,24 +1196,72 @@
   ;; becomes 0.0. Rides the maximum kernel under --simd.
   (linalg:maximum a 0.0))
 
+;; --- activations (softmax) ------------------------------------------------------
+;; softmax is not in numpy proper (it is scipy.special.softmax / torch.softmax),
+;; but it lives here for the same reason relu does: it is the array-level
+;; primitive an activation layer needs, and one implementation keeps every
+;; backend identical. Both are the max-subtracted (numerically stable) forms.
+
+(defun linalg:softmax (a &key axis)
+  ;; The softmax of a: exp(a - max(a)) normalized to sum to 1. With no :axis
+  ;; the whole array is one distribution (scipy's default); with an integer
+  ;; :axis (negative counts from the end) every slice along that axis is
+  ;; normalized on its own, which is the attention-weight form
+  ;; (torch.softmax(x, dim)). The maximum is subtracted first, so a large
+  ;; logit cannot overflow.
+  (if (null axis)
+      (let ((e (linalg:exp (linalg:sub a (linalg:amax a)))))
+        (linalg:div e (linalg:sum e)))
+      (let* ((ax (linalg::%la-norm-axis (array-dimensions a) axis))
+             (e
+              (linalg:exp (linalg:sub a (linalg:amax a :axis ax :keepdims t)))))
+        (linalg:div e (linalg:sum e :axis ax :keepdims t)))))
+
+(defun linalg:log-softmax (a &key axis)
+  ;; The logarithm of linalg:softmax, computed as (a - max) - log(sum(exp(a -
+  ;; max))) rather than as (log (softmax a)) so an exactly-zero weight gives
+  ;; -infinity instead of a NaN. The :axis rules are linalg:softmax's. This is
+  ;; the numerically stable half of a cross-entropy loss.
+  (if (null axis)
+      (let ((s (linalg:sub a (linalg:amax a))))
+        (linalg:sub s (log (linalg:sum (linalg:exp s)))))
+      (let* ((ax (linalg::%la-norm-axis (array-dimensions a) axis))
+             (s (linalg:sub a (linalg:amax a :axis ax :keepdims t))))
+        (linalg:sub s
+         (linalg:log (linalg:sum (linalg:exp s) :axis ax :keepdims t))))))
+
 ;; --- products ----------------------------------------------------------------
 
 (defun linalg:dot (a b)
   ;; numpy-style dot: vector . vector -> scalar, matrix . vector -> vector,
   ;; vector . matrix -> vector, matrix . matrix -> matrix; a scalar operand
-  ;; multiplies elementwise.
+  ;; multiplies elementwise. Rank >= 2 only on both sides -- numpy's np.dot
+  ;; contracts a rank-n operand against the SECOND-TO-LAST axis of the other,
+  ;; which is not what a stacked matrix product means, so that shape is an
+  ;; error pointing at linalg:matmul rather than a silently wrong answer.
   (cond ((or (numberp a) (numberp b)) (linalg:mul a b))
         (t
          (let ((ra (cdr (array-dimensions a))) (rb (cdr (array-dimensions b))))
+           (when (or (cdr ra) (cdr rb))
+             (error
+              "linalg: dot expects rank <= 2 (linalg:matmul stacks rank >= 3)"))
            (cond ((and (null ra) (null rb)) (linalg::%la-dot-vv a b))
                  ((and ra (null rb)) (linalg::%la-dot-mv a b))
                  ((and (null ra) rb) (linalg::%la-dot-vm a b))
                  (t (linalg::%la-matmul a b)))))))
 
 (defun linalg:matmul (a b)
-  ;; Matrix product (also matrix . vector); rejects scalar operands.
+  ;; The matrix product (numpy np.matmul, the @ operator). At rank <= 2 it is
+  ;; the plain product (matrix . vector included), the linalg:dot path. At rank
+  ;; >= 3 on either side it is the STACKED product (torch.bmm / torch.matmul):
+  ;; the last two axes are the matrix and every leading axis broadcasts, so a
+  ;; (b h n d) query times a (b h d n) key gives (b h n n) attention scores.
+  ;; Scalar operands are rejected at every rank.
   (when (or (numberp a) (numberp b)) (error "linalg: matmul expects arrays"))
-  (linalg:dot a b))
+  (if (or (> (length (array-dimensions a)) 2)
+          (> (length (array-dimensions b)) 2))
+      (linalg::%la-matmul-nd a b)
+      (linalg:dot a b)))
 
 (defun linalg:outer (u v)
   ;; The outer product of two vectors (inputs are flattened first, like numpy).
@@ -909,6 +1299,33 @@
       (let ((ax (linalg::%la-norm-axis (array-dimensions a) axis)))
         (linalg:div (linalg:sum a :axis ax :keepdims keepdims)
                     (nth ax (array-dimensions a))))))
+
+(defun linalg:var (a &key axis keepdims (ddof 0))
+  ;; The variance -- the mean of the squared deviations from the mean -- of
+  ;; every element (no :axis) or along an axis (the :axis/:keepdims rules of
+  ;; linalg:sum). The divisor is (n - :ddof): the default ddof 0 is numpy's
+  ;; np.var and torch's unbiased=False, ddof 1 is the sample variance
+  ;; (Bessel's correction).
+  (if (null axis)
+      (let ((d (linalg:sub a (linalg:mean a))) (n (linalg:size a)))
+        (when (<= (- n ddof) 0)
+          (error "linalg: var needs more elements than ddof"))
+        (linalg::%la-wrap-scalar a (/ (linalg:sum (linalg:mul d d)) (- n ddof))
+                                 keepdims))
+      (let* ((ax (linalg::%la-norm-axis (array-dimensions a) axis))
+             (n (nth ax (array-dimensions a)))
+             (d (linalg:sub a (linalg:mean a :axis ax :keepdims t))))
+        (when (<= (- n ddof) 0)
+          (error "linalg: var needs more elements than ddof"))
+        (linalg:div (linalg:sum (linalg:mul d d) :axis ax :keepdims keepdims)
+                    (- n ddof)))))
+
+(defun linalg:std (a &key axis keepdims (ddof 0))
+  ;; The standard deviation: the square root of linalg:var, with the same
+  ;; :axis / :keepdims / :ddof rules (numpy np.std). This is the LayerNorm
+  ;; denominator.
+  (let ((v (linalg:var a :axis axis :keepdims keepdims :ddof ddof)))
+    (if (numberp v) (sqrt v) (linalg:sqrt v))))
 
 (defun linalg:amax (a &key axis keepdims)
   ;; The largest element, of the whole array (no :axis) or along an integer
@@ -1158,6 +1575,46 @@
   (linalg::%la-bcast (lambda (x y) (if (<= x y) 1 0)) a b))
 
 ;; --- indexing / selection ------------------------------------------------------
+
+(defun linalg:where (mask x y)
+  ;; Elementwise selection (numpy np.where): the element of x where mask is
+  ;; NON-ZERO, the element of y where it is zero -- so the 0.0/1.0 masks
+  ;; linalg:greater and friends return select directly, and no multiply-by-mask
+  ;; detour is needed (that detour turns an infinite operand into a NaN; this
+  ;; does not, which is what makes a -infinity attention mask work). All three
+  ;; operands may be scalars or arrays and broadcast together by the numpy
+  ;; rules; the result keeps x's width when x is an array, else y's.
+  (let ((od nil))
+    (unless (numberp mask) (setq od (array-dimensions mask)))
+    (unless (numberp x)
+      (setq od
+            (if od
+                (linalg::%la-bcast-shape od (array-dimensions x))
+                (array-dimensions x))))
+    (unless (numberp y)
+      (setq od
+            (if od
+                (linalg::%la-bcast-shape od (array-dimensions y))
+                (array-dimensions y))))
+    (if (null od)
+        (if (= mask 0) y x)
+        (let* ((mm (if (numberp mask) nil (linalg::%la-broadcast-to mask od)))
+               (xx (if (numberp x) nil (linalg::%la-broadcast-to x od)))
+               (yy (if (numberp y) nil (linalg::%la-broadcast-to y od)))
+               (out
+                (linalg::%la-make od 0.0
+                                  (if xx
+                                      (linalg::%la-etype xx)
+                                      (if yy
+                                          (linalg::%la-etype yy)
+                                          'double-float))))
+               (n (array-total-size out)))
+          (do ((k 0 (+ k 1)))
+              ((>= k n) out)
+            (setf (row-major-aref out k)
+                  (if (= (if mm (row-major-aref mm k) mask) 0)
+                      (if yy (row-major-aref yy k) y)
+                      (if xx (row-major-aref xx k) x))))))))
 
 (defun linalg:take-rows (a idx)
   ;; The axis-0 slices of a selected by the index vector idx (numpy's

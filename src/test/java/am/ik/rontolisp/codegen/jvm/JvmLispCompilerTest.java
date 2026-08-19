@@ -10810,6 +10810,48 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLinalgRankNShapesAndStackedMatmul() throws Exception {
+		// The rank-N round: expand-dims / squeeze / concatenate / stack / slice /
+		// triu / tril, the stacked (rank >= 3) matmul, var / std / power / where and
+		// the softmax pair. The last softmax is the masked-attention idiom -- an
+		// -infinity through where -> amax -> exp -> div must weigh exactly 0.0.
+		assertThat(compileAndRunLinalg("""
+				(defparameter *m* (linalg:reshape (linalg:arange 6) '(2 3)))
+				(print (linalg:expand-dims #(1 2 3) 0))
+				(print (linalg:squeeze #2A((1 2 3))))
+				(print (linalg:concatenate (list *m* *m*) :axis 1))
+				(print (linalg:stack (list #(1 2) #(3 4)) :axis 1))
+				(print (linalg:slice *m* '(nil (0 2))))
+				(print (linalg:slice #(0 1 2 3 4 5) '((nil nil -1))))
+				(print (linalg:triu (linalg:ones '(3 3)) :k 1))
+				(print (linalg:tril #2A((1 2 3) (4 5 6) (7 8 9)) :k -1))
+				(print (linalg:matmul (linalg:reshape (linalg:arange 12) '(2 2 3))
+				                      (linalg:reshape (linalg:arange 12) '(2 3 2))))
+				(print (linalg:matmul (linalg:reshape (linalg:arange 12) '(2 2 3)) #(1 1 1)))
+				(print (linalg:shape (linalg:matmul (linalg:zeros '(2 1 3 4)) (linalg:zeros '(5 4 2)))))
+				(print (linalg:var #(1 2 3 4)))
+				(print (linalg:std *m* :axis 0 :keepdims t))
+				(print (linalg:power 2 #(1 2 3)))
+				(print (linalg:where #(1 0 1) 10 20))
+				(print (linalg:softmax #(1 1 1 1)))
+				(print (linalg:softmax #2A((0 0) (1 1)) :axis 1))
+				(print (linalg:log-softmax #(0 0)))
+				(print (linalg:softmax (linalg:where (linalg:from-list '((1 0) (0 1)))
+				                                     (linalg:from-list '((1.0 2.0) (3.0 4.0)))
+				                                     (/ -1.0 0.0))
+				                       :axis 1))
+				(print (array-element-type (linalg:slice (linalg:ones 4 :element-type 'single-float) '((0 2)))))
+				"""))
+			.isEqualTo("#d((1.0 2.0 3.0))\n#d(1.0 2.0 3.0)\n#d((0.0 1.0 2.0 0.0 1.0 2.0) (3.0 4.0 5.0 3.0 4.0 5.0))\n"
+					+ "#d((1.0 3.0) (2.0 4.0))\n#d((0.0 1.0) (3.0 4.0))\n#d(5.0 4.0 3.0 2.0 1.0 0.0)\n"
+					+ "#d((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0))\n#d((0.0 0.0 0.0) (4.0 0.0 0.0) (7.0 8.0 0.0))\n"
+					+ "#d(((10.0 13.0) (28.0 40.0)) ((172.0 193.0) (244.0 274.0)))\n#d((3.0 12.0) (21.0 30.0))\n"
+					+ "(2 5 3 2)\n1.25\n#d((1.5 1.5 1.5))\n#d(2.0 4.0 8.0)\n#d(10.0 20.0 10.0)\n"
+					+ "#d(0.25 0.25 0.25 0.25)\n#d((0.5 0.5) (0.5 0.5))\n#d(-0.6931471805599453 -0.6931471805599453)\n"
+					+ "#d((1.0 0.0) (0.0 1.0))\nSINGLE-FLOAT");
+	}
+
+	@Test
 	void compileAndRunLinalgRankThreeElementwise() throws Exception {
 		assertThat(compileAndRunLinalg("""
 				(defparameter *c* (linalg:reshape (linalg:arange 8) '(2 2 2)))

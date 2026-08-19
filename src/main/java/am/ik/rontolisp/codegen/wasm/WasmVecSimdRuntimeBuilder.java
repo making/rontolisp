@@ -823,6 +823,10 @@ final class WasmVecSimdRuntimeBuilder {
 			w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.HORNER_COEFFS[i]);
 			w.write(Instruction.F64_ADD);
 		}
+		// The underflow clamp (WasmExpCompiler.UNDERFLOW_CLAMP): p(t) < 0 below the
+		// polynomial's real root, and the even squaring count would turn it huge.
+		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.UNDERFLOW_CLAMP);
+		w.write(Instruction.F64_MAX);
 		WasmVecLoops.set(w, accLocal);
 		// Square SQUARINGS times: acc = acc * acc.
 		for (int s = 0; s < WasmExpCompiler.SQUARINGS; s++) {

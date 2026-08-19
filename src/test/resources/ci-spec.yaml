@@ -3894,6 +3894,69 @@ cases:
       #d(0.5 1.0 2.0 3.0 3.5)
       #d(1.0 2.0 4.0)
       SINGLE-FLOAT
+  # The rank-N round (numpy parity): expand-dims / squeeze, concatenate / stack,
+  # basic slicing, triu / tril, the STACKED (rank >= 3) matmul, var / std, power,
+  # where and the softmax pair. Every value is exact -- integers, halves and
+  # equal-logit softmaxes -- so the printed doubles are byte-identical on all four
+  # backends. The last softmax is the masked-attention idiom: an -infinity from
+  # linalg:where must reach the weights as exactly 0.0, which on WASM needs
+  # WasmExpCompiler's underflow clamp (its Horner polynomial used to map -inf to
+  # +inf, and the mask came back NaN).
+  - name: linalg-rank-n-shapes-cross-backend
+    source: |
+      (defun ci-linalg-rank-n-shapes ()
+        (print (linalg:expand-dims #(1 2 3) 0))
+        (print (linalg:expand-dims #(1 2 3) -1))
+        (print (linalg:squeeze #2A((1 2 3))))
+        (print (linalg:concatenate (list #(1 2) #(3))))
+        (print (linalg:concatenate (list #2A((1 2)) #2A((3 4))) :axis 1))
+        (print (linalg:stack (list #(1 2) #(3 4)) :axis 1))
+        (print (linalg:slice #2A((0 1 2) (3 4 5)) '(nil (0 2))))
+        (print (linalg:slice #(0 1 2 3 4 5) '((nil nil 2))))
+        (print (linalg:slice #(0 1 2 3 4 5) '((nil nil -1))))
+        (print (linalg:triu (linalg:ones '(3 3)) :k 1))
+        (print (linalg:tril #2A((1 2 3) (4 5 6) (7 8 9)) :k -1))
+        (print (linalg:matmul (linalg:reshape (linalg:arange 12) '(2 2 3))
+                              (linalg:reshape (linalg:arange 12) '(2 3 2))))
+        (print (linalg:matmul (linalg:reshape (linalg:arange 12) '(2 2 3)) #(1 1 1)))
+        (print (linalg:shape (linalg:matmul (linalg:zeros '(2 1 3 4)) (linalg:zeros '(5 4 2)))))
+        (print (linalg:var #(1 2 3 4)))
+        (print (linalg:std #2A((0 1 2) (3 4 5)) :axis 0))
+        (print (linalg:power 2 #(1 2 3)))
+        (print (linalg:where #(1 0 1) 10 20))
+        (print (linalg:softmax #(1 1 1 1)))
+        (print (linalg:softmax #2A((0 0) (1 1)) :axis 1))
+        (print (linalg:log-softmax #(3)))
+        (print (linalg:softmax (linalg:where (linalg:from-list '((1 0) (0 1)))
+                                             (linalg:from-list '((1.0 2.0) (3.0 4.0)))
+                                             (/ -1.0 0.0))
+                               :axis 1))
+        (print (array-element-type (linalg:slice (linalg:ones 4 :element-type 'single-float) '((0 2))))))
+      (ci-linalg-rank-n-shapes)
+    expected: |
+      #d((1.0 2.0 3.0))
+      #d((1.0) (2.0) (3.0))
+      #d(1.0 2.0 3.0)
+      #d(1.0 2.0 3.0)
+      #d((1.0 2.0 3.0 4.0))
+      #d((1.0 3.0) (2.0 4.0))
+      #d((0.0 1.0) (3.0 4.0))
+      #d(0.0 2.0 4.0)
+      #d(5.0 4.0 3.0 2.0 1.0 0.0)
+      #d((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0))
+      #d((0.0 0.0 0.0) (4.0 0.0 0.0) (7.0 8.0 0.0))
+      #d(((10.0 13.0) (28.0 40.0)) ((172.0 193.0) (244.0 274.0)))
+      #d((3.0 12.0) (21.0 30.0))
+      (2 5 3 2)
+      1.25
+      #d(1.5 1.5 1.5)
+      #d(2.0 4.0 8.0)
+      #d(10.0 20.0 10.0)
+      #d(0.25 0.25 0.25 0.25)
+      #d((0.5 0.5) (0.5 0.5))
+      #d(0.0)
+      #d((1.0 0.0) (0.0 1.0))
+      SINGLE-FLOAT
   # The deep-learning-from-scratch additions: numpy axis/keepdims reductions,
   # reshape -1 inference, the seeded Wichmann-Hill RNG (exact integer + IEEE
   # double arithmetic, so a seeded sequence is bit-identical on every backend;
