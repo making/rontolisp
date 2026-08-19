@@ -14073,7 +14073,10 @@ class LispEvaluatorTest {
 		// through the protocol's own pushback, read-char-no-hang, and the two
 		// stream queries a program did NOT take over -- open-stream-p (an instance
 		// is open) and stream-element-type (character here, octets for a binary
-		// base class).
+		// base class, and character again for a BIVALENT one: a stream that
+		// subclasses both serves both read families out of one cursor, so the
+		// character buffer is the one a text sink can also take -- the answer
+		// upstream's flexi-stream :raw-body gives).
 		assertThat(evalMulti("""
 				(defclass gin-source (rontolisp:fundamental-character-input-stream)
 				  ((text :initarg :text) (pos :initform 0)))
@@ -14083,6 +14086,9 @@ class LispEvaluatorTest {
 				        :eof
 				        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
 				(defclass gin-bytes (rontolisp:fundamental-binary-input-stream) ())
+				(defclass gin-both (rontolisp:fundamental-binary-input-stream
+				                    rontolisp:fundamental-character-input-stream)
+				  ())
 				(let ((in (make-instance 'gin-source :text (format nil "ab~%  cd"))))
 				  (list (peek-char nil in)
 				        (read-char in)
@@ -14096,9 +14102,10 @@ class LispEvaluatorTest {
 				        (peek-char nil in nil :done)
 				        (open-stream-p in)
 				        (stream-element-type in)
-				        (stream-element-type (make-instance 'gin-bytes))))
+				        (stream-element-type (make-instance 'gin-bytes))
+				        (stream-element-type (make-instance 'gin-both))))
 				""").print())
-			.isEqualTo("(#\\a #\\a NIL #\\a #\\b \"\" #\\c #\\d \"d\" :DONE T CHARACTER (UNSIGNED-BYTE 8))");
+			.isEqualTo("(#\\a #\\a NIL #\\a #\\b \"\" #\\c #\\d \"d\" :DONE T CHARACTER (UNSIGNED-BYTE 8) CHARACTER)");
 	}
 
 	@Test

@@ -415,6 +415,37 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void aBufferedRawBodyAnswersACharacterElementType() {
+		// The buffered :raw-body is BIVALENT, and what a portable library asks it is
+		// which buffer to allocate. tiny-routes' read-stream-to-string is the shape:
+		// (make-array content-length :element-type (stream-element-type input-stream)),
+		// read-sequence into it, write-sequence out to a string stream. Answering the
+		// binary type hands that library an octet buffer it then writes to a CHARACTER
+		// sink -- which signals here and on SBCL alike. Upstream a Clack :raw-body is a
+		// flexi-stream, and a flexi-stream answers the CHARACTER type, so that is the
+		// answer a bivalent stream owes: the byte reads stay available either way,
+		// while the character one is the buffer a text sink can take.
+		String output = run("""
+				(ql:quickload "clack-handler-reactor")
+				(defun app (env)
+				  (let ((body (getf env :raw-body)))
+				    (list 200 nil
+				          (list (format nil "~a|~a"
+				                        (stream-element-type body)
+				                        (with-output-to-string (out)
+				                          (let* ((buf (make-array 8 :element-type
+				                                                  (stream-element-type body)))
+				                                 (n (read-sequence buf body)))
+				                            (write-sequence buf out :end n))))))))
+				(print (clack.handler.reactor:handle
+				        #'app
+				        "{\\"method\\":\\"POST\\",\\"target\\":\\"/\\",\\"body\\":\\"あい\\"}"
+				        nil))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"body\\\":\\\"CHARACTER|あい\\\"");
+	}
+
+	@Test
 	void aReactorSourceThatIsEmptyIsNoBodyAndFallsBackToTheEnvelope() {
 		// Once the body stops riding the envelope, "is there a body at all" is a
 		// question only the host can answer -- a reader answers 0 for a bodiless GET

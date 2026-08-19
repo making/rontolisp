@@ -111,7 +111,27 @@ methods directly -- dexador's `decoding-stream` defines exactly these three --
 so the protocol deliberately grows no competing `rontolisp:stream-*` generic for
 them, and both seams stand down for a program that defines one. The Gray answers
 otherwise are `t` (an instance holds nothing that could be shut) and `character`
-/ `(unsigned-byte 8)` off a `typep` against the two binary base classes.
+/ `(unsigned-byte 8)` off a `typep` against the base classes.
+
+**A BIVALENT class -- one subclassing a character base class AND a binary one --
+answers `character`**, and the order of the two `typep`s in
+`%gray-stream-element-type-dispatch` is what says so. The answer is not a
+description of the stream, it is the buffer a caller should allocate:
+`(make-array n :element-type (stream-element-type s))`, which is how a portable
+middleware sizes one (tiny-routes' `read-stream-to-string`, alexandria's
+`read-stream-content-into-string`). Both buffers READ from a bivalent stream --
+`read-sequence` / `write-sequence` choose bytes vs. characters off the SEQUENCE
+(`stringp`), never off the stream -- so the tie is broken by what happens NEXT,
+and only the character buffer can then be written to a text sink. Upstream
+agrees: a Clack `:raw-body` is a flexi-stream, whose `stream-element-type` is the
+character type even though `read-byte` works on it, while a pure
+`flex:make-in-memory-input-stream` answers the octet type (both measured on
+SBCL). Answering the binary type for a bivalent stream signals on SBCL exactly
+as it did here (`.kb/http-server.md`, the `:raw-body` element type).
+**Re-evaluation trigger**: this holds as long as the answer's job is buffer
+allocation and `read-sequence` keeps dispatching on the sequence. Give the
+protocol a `stream-element-type` generic a class can specialize per direction and
+the tie stops needing a rule.
 `Environment`'s `open-stream-p` also answers `t` for ANY instance now: without
 that, a program that OWNS the name -- the one case the dispatch stands down for
 -- had the interpreter answer nil where the compile paths' lite lowering

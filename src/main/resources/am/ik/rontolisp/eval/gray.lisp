@@ -577,12 +577,27 @@
         (output-stream-p stream))))
 
 (defun rontolisp::%gray-stream-element-type-dispatch (stream)
+  ;; A stream that subclasses a CHARACTER base class answers `character`, even
+  ;; when it subclasses a binary one too. That order is the BIVALENT rule, and
+  ;; it is what the answer is FOR: a caller asks so it knows which buffer to
+  ;; allocate -- (make-array n :element-type (stream-element-type s)) -- and a
+  ;; bivalent stream serves both read families out of one cursor, so the two
+  ;; buffers are equally readable while only the character one can then be
+  ;; written to a text sink. Upstream agrees: a Clack :raw-body is a
+  ;; flexi-stream, whose stream-element-type is the CHARACTER type even though
+  ;; read-byte works on it, and a portable library that sizes its buffer this
+  ;; way (tiny-routes' read-stream-to-string) writes the result into a string
+  ;; stream. Answering the binary type there signals on SBCL exactly as it does
+  ;; here, so it is a divergence rather than a stricter reading.
   (let ((stream (%synonym-target stream)))
     (if (%obj-p stream)
-        (if (or (typep stream 'rontolisp:fundamental-binary-input-stream)
-                (typep stream 'rontolisp:fundamental-binary-output-stream))
-            '(unsigned-byte 8)
-            'character)
+        (if (or (typep stream 'rontolisp:fundamental-character-input-stream)
+                (typep stream 'rontolisp:fundamental-character-output-stream))
+            'character
+            (if (or (typep stream 'rontolisp:fundamental-binary-input-stream)
+                    (typep stream 'rontolisp:fundamental-binary-output-stream))
+                '(unsigned-byte 8)
+                'character))
         (stream-element-type stream))))
 
 (defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)

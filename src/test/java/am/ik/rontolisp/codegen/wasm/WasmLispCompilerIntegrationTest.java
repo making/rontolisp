@@ -8507,7 +8507,9 @@ class WasmLispCompilerIntegrationTest {
 		// peek-type forms, looped inside the dispatch helper -- expandPeekChar runs
 		// after the rewrite and could not see the instance), unread-char through the
 		// protocol's pushback, read-char-no-hang, open-stream-p and
-		// stream-element-type. Same answers as the interpreter and the JVM.
+		// stream-element-type (character, octets for a binary base class, and
+		// character again for a BIVALENT class subclassing both). Same answers as
+		// the interpreter and the JVM.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 					(defclass gin-source (rontolisp:fundamental-character-input-stream)
@@ -8518,6 +8520,9 @@ class WasmLispCompilerIntegrationTest {
 					        :eof
 					        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
 					(defclass gin-bytes (rontolisp:fundamental-binary-input-stream) ())
+					(defclass gin-both (rontolisp:fundamental-binary-input-stream
+					                    rontolisp:fundamental-character-input-stream)
+					  ())
 					(let ((in (make-instance 'gin-source :text (format nil "ab~%  cd"))))
 					  (print (peek-char nil in))
 					  (print (read-char in))
@@ -8531,9 +8536,10 @@ class WasmLispCompilerIntegrationTest {
 					  (print (peek-char nil in nil :done))
 					  (print (open-stream-p in))
 					  (print (stream-element-type in))
-					  (print (stream-element-type (make-instance 'gin-bytes))))
-					""")))))
-			.isEqualTo("#\\a\n#\\a\nNIL\n#\\a\n#\\b\n\"\"\n#\\c\n#\\d\n\"d\"\n:DONE\nT\nCHARACTER\n(UNSIGNED-BYTE 8)");
+					  (print (stream-element-type (make-instance 'gin-bytes)))
+					  (print (stream-element-type (make-instance 'gin-both))))
+					"""))))).isEqualTo(
+					"#\\a\n#\\a\nNIL\n#\\a\n#\\b\n\"\"\n#\\c\n#\\d\n\"d\"\n:DONE\nT\nCHARACTER\n(UNSIGNED-BYTE 8)\nCHARACTER");
 	}
 
 	@Test

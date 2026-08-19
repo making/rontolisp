@@ -9639,6 +9639,19 @@ cases:
       (file-position *ci-body* 0)
       (print (read-line *ci-body* nil nil))
       (print (rontolisp::%http-body-stream ""))
+      ;; Bivalent means the ELEMENT TYPE is the character one: what a portable
+      ;; middleware asks the stream is which buffer to allocate, and only a
+      ;; character buffer can then be written to a text sink. This is
+      ;; tiny-routes' read-stream-to-string, the shape that answered 500 while
+      ;; the class called itself binary-only.
+      (defvar *ci-body-text* (rontolisp::%http-body-stream "あい"))
+      (print (stream-element-type *ci-body-text*))
+      (print (with-output-to-string (out)
+               (let* ((buf (make-array 8
+                                       :element-type
+                                       (stream-element-type *ci-body-text*)))
+                      (n (read-sequence buf *ci-body-text*)))
+                 (write-sequence buf out :end n))))
     expected: |
       "line1"
       #\あ
@@ -9648,6 +9661,8 @@ cases:
       :EOF
       "line1"
       NIL
+      CHARACTER
+      "あい"
   - name: source-position-literals
     source: |
       ;; rontolisp:current-file / rontolisp:current-line are substituted by the

@@ -32,7 +32,7 @@ leaves (all in the `rontolisp` package).
 | `read-line` | `rontolisp:stream-read-line` (default method loops `stream-read-char`) |
 | `listen` | `rontolisp:stream-listen` (default method answers `nil`) |
 | `open-stream-p` | answers `t` -- like `close`, a name a program may own |
-| `stream-element-type` | `character`, or `(unsigned-byte 8)` for a binary base class -- a name a program may own |
+| `stream-element-type` | `character`, or `(unsigned-byte 8)` for a binary base class -- a class subclassing BOTH (a bivalent stream) answers `character`, because the answer is which buffer to allocate. A name a program may own |
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (default methods loop the element generics) |
 | `file-position` | `rontolisp:stream-file-position`; the two-argument form calls the `(setf rontolisp:stream-file-position)` writer generic |
 

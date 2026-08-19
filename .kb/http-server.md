@@ -154,6 +154,27 @@ decoded to text and encoded again comes back doubled (`ff fe 41` →
 stopped inflicting on the way out, and it is why a reactor's `:buffered` drain
 answers octets (`.kb/clack.md`).
 
+**The `:raw-body` element type is `character`, on every construction.** The Gray
+class subclasses BOTH input base classes, which is what makes its bivalence
+declared rather than merely implemented, and the bivalent rule
+(`.kb/gray-streams.md`) then answers `character`; the interpreter's Java-backed
+twin, a stream HANDLE, answers `character` through the lite built-in. The two
+constructions are meant to be observably identical and this is the one place they
+were not: the Gray class was binary-only, so `stream-element-type` answered
+`(unsigned-byte 8)` there and `character` on the JDK-served interpreter path.
+Why `character` and not the octet type the body IS: the answer's job is to size a
+buffer -- `(make-array content-length :element-type (stream-element-type
+stream))` is how tiny-routes' `read-stream-to-string` allocates one -- and the
+octet buffer it produced was then handed to `write-sequence` on a
+`with-output-to-string` sink, which signals here and on SBCL alike. Upstream's
+`:raw-body` is a flexi-stream, which answers the character type for the same
+reason. **This costs the byte-exact relay nothing**: nothing on the read or drain
+path consults `stream-element-type` (`read-sequence` picks bytes vs. characters
+off the SEQUENCE), the octets are still stored and still handed over unchanged,
+and `read-byte` / `file-position` are untouched. Pinned by ci-spec
+`http-buffered-body-stream` (all four backends) and, on the reactor path a Clack
+app actually takes, `LispEvaluatorAsdfTest.aBufferedRawBodyAnswersACharacterElementType`.
+
 **Module-size filter**: `HttpServerLibrary.process(program, bufferBody)` drops
 the buffered-body half (the Gray class + `%http-body-stream` +
 `%http-utf8-encode`) from a default-mode program — on a WASM serve component

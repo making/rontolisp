@@ -240,8 +240,17 @@
 ;; lack-request has already parsed. Nothing here is a stream HANDLE, so a
 ;; request costs no entry in any backend's stream table and the object is
 ;; simply collected when the request ends.
-(defclass rontolisp::http-request-body-stream
-    (rontolisp:fundamental-binary-input-stream)
+;;
+;; It subclasses BOTH input base classes, and that is what makes the bivalence
+;; declared rather than merely implemented: the character base is what has
+;; stream-element-type answer `character` (the bivalent rule in gray.lisp), the
+;; answer upstream's flexi-stream :raw-body gives and the one a portable
+;; middleware can size a buffer with -- tiny-routes' read-stream-to-string
+;; allocates (stream-element-type stream) and writes the result to a STRING
+;; stream. The binary base stays first because the octets are what the stream
+;; IS; nothing about the byte reads or the byte-exact relay changes.
+(defclass rontolisp::http-request-body-stream (rontolisp:fundamental-binary-input-stream
+                                               rontolisp:fundamental-character-input-stream)
   ((rontolisp::octets :initarg :octets
                       :initform nil
                       :accessor rontolisp::%http-body-octets)
