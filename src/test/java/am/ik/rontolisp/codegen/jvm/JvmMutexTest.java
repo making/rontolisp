@@ -11,6 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,7 +35,11 @@ class JvmMutexTest {
 	void concurrentIncrementsUnderTheLockAgreeWithTheSequentialResult() throws Exception {
 		int threads = 4;
 		int perThread = 2000;
-		JvmLispCompiler compiler = new JvmLispCompiler("MutexProg");
+		// OptimizeLevel.NONE: the threads below invoke MT-BUMP/MT-REPORT REFLECTIVELY,
+		// an edge no bytecode shows, and the JVM class shaker roots at main -- so a
+		// shaken class would drop both methods. The property under test is the mutex,
+		// not the shaker's root set.
+		JvmLispCompiler compiler = new JvmLispCompiler("MutexProg", false, OptimizeLevel.NONE);
 		byte[] classBytes = compiler.compile(LispReader.readAllFromString("""
 				(defvar *mt-lock* (rontolisp:make-mutex))
 				(defvar *mt-counter* 0)

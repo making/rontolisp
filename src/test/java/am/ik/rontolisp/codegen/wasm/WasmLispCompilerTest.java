@@ -24,6 +24,14 @@ class WasmLispCompilerTest {
 		return new WasmLispCompiler().compile(program);
 	}
 
+	// The UNOPTIMIZED core module, for the tests that count type-section or function
+	// entries: the tree shaker drops what the program cannot reach and renumbers the
+	// survivors, so those counts belong to a build that declined the optimizer.
+	private byte[] compileUnshaken(String lispCode) {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		return new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
+	}
+
 	private byte[] compileComponent(String lispCode) {
 		// Splice fetch.lisp when the program references rontolisp:fetch, mirroring the
 		// CLI:
@@ -52,10 +60,12 @@ class WasmLispCompilerTest {
 	}
 
 	private byte[] compileComponentOptimized(String lispCode) {
-		return compileComponentOptimized(lispCode, OptimizeLevel.DEFAULT);
+		return compileComponentAt(lispCode, OptimizeLevel.DEFAULT);
 	}
 
-	private byte[] compileComponentOptimized(String lispCode, OptimizeLevel level) {
+	// The component pipeline at an explicitly named level. compileComponent above names
+	// none, so it compiles at OptimizeLevel.DEFAULT like every other frontend.
+	private byte[] compileComponentAt(String lispCode, OptimizeLevel level) {
 		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
 				WitExportDirective.Backend.WASM_COMPONENT, false);
 		program = TlsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
@@ -105,12 +115,12 @@ class WasmLispCompilerTest {
 
 	@Test
 	void aComponentAlwaysDeclaresTheWholeFixedWasiSurface() {
-		// Without --optimize the core keeps all nine preview1 imports, so the adapter
-		// keeps
-		// every branch and the block keeps every interface -- the shape this builder has
-		// always emitted.
-		assertThat(componentImportNames(compileComponent("(print 1)"))).containsExactly("wasi:cli/types@0.3.0",
-				"wasi:cli/stdout@0.3.0", "wasi:cli/stdin@0.3.0", "wasi:cli/environment@0.3.0",
+		// At --optimize=off the core keeps all nine preview1 imports, so the adapter
+		// keeps every branch and the block keeps every interface -- the shape this
+		// builder has always emitted, and the "before" of the narrowing the next test
+		// pins.
+		assertThat(componentImportNames(compileComponentAt("(print 1)", OptimizeLevel.NONE))).containsExactly(
+				"wasi:cli/types@0.3.0", "wasi:cli/stdout@0.3.0", "wasi:cli/stdin@0.3.0", "wasi:cli/environment@0.3.0",
 				"wasi:clocks/types@0.3.0", "wasi:clocks/system-clock@0.3.0", "wasi:clocks/monotonic-clock@0.3.0",
 				"wasi:filesystem/types@0.3.0", "wasi:filesystem/preopens@0.3.0", "wasi:random/random@0.3.0",
 				"wasi:cli/stderr@0.3.0");
@@ -156,11 +166,11 @@ class WasmLispCompilerTest {
 				(error "boom: ~a" 42)
 				""";
 		assertThat(componentImportNames(compileComponentOptimized(reports))).contains("wasi:cli/stderr@0.3.0");
-		assertThat(componentImportNames(compileComponentOptimized(reports, OptimizeLevel.SIZE)))
+		assertThat(componentImportNames(compileComponentAt(reports, OptimizeLevel.SIZE)))
 			.contains("wasi:cli/stderr@0.3.0");
 		// ...and the widening stays keyed to that fact: a program with no landing pad
 		// still drops the surface at both levels.
-		assertThat(componentImportNames(compileComponentOptimized("(print 1)", OptimizeLevel.SIZE)))
+		assertThat(componentImportNames(compileComponentAt("(print 1)", OptimizeLevel.SIZE)))
 			.doesNotContain("wasi:cli/stderr@0.3.0");
 	}
 
@@ -987,8 +997,8 @@ class WasmLispCompilerTest {
 				(defvar *s* (rontolisp::%stream-new #'rd #'cl))
 				(print (rontolisp:streamp *s*))
 				""";
-		byte[] plain = compile(withoutStream);
-		byte[] stream = compile(withStream);
+		byte[] plain = compileUnshaken(withoutStream);
+		byte[] stream = compileUnshaken(withStream);
 		assertThat(typeSectionCount(stream) - typeSectionCount(plain)).as("TYPE_P1_STREAM, and nothing else")
 			.isEqualTo(1);
 		assertThat(typeSectionEntries(stream)).as("the plain types are a prefix of the stream module's")

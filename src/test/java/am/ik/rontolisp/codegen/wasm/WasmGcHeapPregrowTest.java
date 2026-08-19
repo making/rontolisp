@@ -18,6 +18,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * environment occupies a sizable share of wasmtime's default GC heap pays a
  * whole-live-set copy every few hundred KB of allocation, so every hot loop slows down in
  * proportion to how much code is merely loaded (.kb/wasm-gc-heap-pregrow.md).
+ *
+ * <p>
+ * Every compile here names {@link OptimizeLevel#NONE}: the prologue is matched as a byte
+ * subsequence carrying the literal {@code TYPE_STR_BYTES} type index, and the tree shaker
+ * renumbers the type section, so the pattern is the UNOPTIMIZED module's spelling of it.
+ * The absence assertions below would otherwise pass for that reason instead of the one
+ * they name.
  */
 class WasmGcHeapPregrowTest {
 
@@ -51,7 +58,7 @@ class WasmGcHeapPregrowTest {
 	@Test
 	void startBodyBeginsWithGcHeapPregrowAllocation() {
 		List<LispVal> program = LispReader.readAllFromString("(print 1)");
-		byte[] module = new WasmLispCompiler().compile(program);
+		byte[] module = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
 		assertThat(containsSubsequence(module, pregrowPrologue()))
 			.as("emitted module should contain the GC-heap pre-grow prologue")
 			.isTrue();
@@ -60,7 +67,7 @@ class WasmGcHeapPregrowTest {
 	@Test
 	void componentCoreAlsoCarriesThePregrowPrologue() {
 		List<LispVal> program = LispReader.readAllFromString("(print 1)");
-		byte[] module = new WasmLispCompiler(false, true).compile(program);
+		byte[] module = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE).compile(program);
 		assertThat(containsSubsequence(module, pregrowPrologue()))
 			.as("component core module should contain the GC-heap pre-grow prologue")
 			.isTrue();
@@ -95,7 +102,8 @@ class WasmGcHeapPregrowTest {
 	 */
 	@Test
 	void aProgramCarryingMuchCodePregrowsMoreThanTheFloor() {
-		byte[] module = new WasmLispCompiler().compile(LispReader.readAllFromString(manyDefuns(900)));
+		byte[] module = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE)
+			.compile(LispReader.readAllFromString(manyDefuns(900)));
 		assertThat(containsSubsequence(module, pregrowPrologue(WasmLispCompiler.GC_HEAP_PREGROW_BYTES)))
 			.as("a program with a library stack's worth of code must not pre-grow only the floor")
 			.isFalse();

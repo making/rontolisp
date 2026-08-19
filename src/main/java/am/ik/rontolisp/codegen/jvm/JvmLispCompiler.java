@@ -144,6 +144,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * Create a new JVM compiler targeting the given class name.
 	 * @param className the fully qualified class name for the generated class
+	 * <p>
+	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
+	 * selects, so an embedder that names no level gets what this project's own frontend
+	 * gives. Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
 	 */
 	public JvmLispCompiler(String className) {
 		this(className, false);
@@ -157,9 +161,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@code eval} global environment (late binding), so a program that defines functions
 	 * via {@code load} can compile without changes. This forces the {@code eval} runtime
 	 * to be emitted.
+	 * <p>
+	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
+	 * selects, so an embedder that names no level gets what this project's own frontend
+	 * gives. Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
 	 */
 	public JvmLispCompiler(String className, boolean dynamic) {
-		this(className, dynamic, OptimizeLevel.NONE);
+		this(className, dynamic, OptimizeLevel.DEFAULT);
 	}
 
 	/**

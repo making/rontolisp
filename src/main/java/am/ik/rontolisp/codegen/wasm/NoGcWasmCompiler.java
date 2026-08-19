@@ -243,9 +243,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private final boolean noWasi;
 
-	/** Creates a new non-GC WASM compiler (no optimize, scalar {@code vec:} kernels). */
+	/**
+	 * Creates a new non-GC WASM compiler with scalar {@code vec:} kernels, at
+	 * {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize} selects, so
+	 * an embedder that names no level gets what this project's own frontend gives.
+	 * Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
+	 */
 	public NoGcWasmCompiler() {
-		this(OptimizeLevel.NONE, false);
+		this(OptimizeLevel.DEFAULT, false);
 	}
 
 	/**

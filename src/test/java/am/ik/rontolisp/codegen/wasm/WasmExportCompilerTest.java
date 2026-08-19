@@ -386,7 +386,10 @@ class WasmExportCompilerTest {
 		// bare `unreachable`.
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun f (n) n)(rontolisp:wasm-export 'f :params '(:int) :returns :int)");
-		byte[][] bodies = noWasiStubBodies(new WasmLispCompiler(false, false, true).compile(program));
+		// OptimizeLevel.NONE: the bodies are read off the fixed FUNC_* indices, which the
+		// tree shaker renumbers.
+		byte[][] bodies = noWasiStubBodies(
+				new WasmLispCompiler(false, false, true, OptimizeLevel.NONE).compile(program));
 
 		byte[] trap = { 0x00, 0x00, 0x0b };
 		assertThat(bodies[WasmLispCompiler.FUNC_FD_READ]).as("fd_read: answering EOF would invent input")
@@ -553,8 +556,12 @@ class WasmExportCompilerTest {
 
 	@Test
 	void defaultModeKeepsWasiImports() {
-		byte[] bytes = compile("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
-				+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)");
+		// OptimizeLevel.NONE: the assertion is that the import is THERE, and a shaken
+		// module keeps only the WASI functions its program can reach -- this one prints
+		// nothing.
+		byte[] bytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE)
+			.compile(LispReader.readAllFromString("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
+					+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)"));
 		assertThat(containsAscii(bytes, "wasi_snapshot_preview1")).isTrue();
 	}
 
@@ -992,8 +999,11 @@ class WasmExportCompilerTest {
 			.doesNotContain("http-dispatch");
 	}
 
+	// OptimizeLevel.NONE: its one caller matches `call FUNC_P1_FUTURE_AWAIT` as literal
+	// bytes, and the tree shaker renumbers functions.
 	private static byte[] compileNoWasi(String source) {
-		return new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(source));
+		return new WasmLispCompiler(false, false, true, OptimizeLevel.NONE)
+			.compile(LispReader.readAllFromString(source));
 	}
 
 	// The LAST body of the code section, which on the core-module path is the export

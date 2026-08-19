@@ -33,6 +33,15 @@ class WasmImportCompilerTest {
 		return new WasmLispCompiler().compile(program);
 	}
 
+	// The UNOPTIMIZED module, for the tests that count import entries or read a function
+	// index off the fixed layout: the tree shaker drops an import the program cannot
+	// reach and renumbers what survives, so those counts and indices are the shape a
+	// build that declined the optimizer has.
+	private static byte[] compileUnshaken(String source) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
+	}
+
 	private static byte[] compileNoWasi(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
 		return new WasmLispCompiler(false, false, true).compile(program);
@@ -161,7 +170,8 @@ class WasmImportCompilerTest {
 				""";
 		// The :bytes module adds exactly its own import wrapper (one function) plus the
 		// three helpers.
-		assertThat(functionCount(compile(withBytes))).isEqualTo(functionCount(compile(withoutBytes)) + 4);
+		assertThat(functionCount(compileUnshaken(withBytes)))
+			.isEqualTo(functionCount(compileUnshaken(withoutBytes)) + 4);
 	}
 
 	// The number of entries in the function section (defined functions, imports
@@ -178,7 +188,7 @@ class WasmImportCompilerTest {
 
 	@Test
 	void injectedImportsComeFirstInTheImportSection() {
-		byte[] module = compile("""
+		byte[] module = compileUnshaken("""
 				(rontolisp:wasm-import 'begin-frame :from "gl" :as "beginFrame" :params '(:int))
 				(rontolisp:wasm-import 'draw :from "gl" :params '(:float :float) :returns :int)
 				(print (draw 1.0 2.0))
@@ -195,8 +205,8 @@ class WasmImportCompilerTest {
 	@Test
 	void functionExportIndicesShiftPastTheInjectedImports() {
 		String source = "(rontolisp:wasm-import 'ping :params '())" + "(print 1)";
-		byte[] withImport = compile(source);
-		byte[] without = compile("(print 1)");
+		byte[] withImport = compileUnshaken(source);
+		byte[] without = compileUnshaken("(print 1)");
 		// _start sits at the fixed FUNC_START index; injecting one import shifts the
 		// exported index up by exactly one.
 		assertThat(exportedFunctionIndex(withImport, "_start")).isEqualTo(exportedFunctionIndex(without, "_start") + 1);

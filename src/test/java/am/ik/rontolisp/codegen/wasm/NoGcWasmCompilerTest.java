@@ -1724,7 +1724,9 @@ class NoGcWasmCompilerTest {
 				(defun f (n) (print n) n)
 				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
 				""";
-		byte[] plain = compile(program);
+		// Both sides at OptimizeLevel.NONE: the assertion below is a byte-identity pair,
+		// so the two compiles must agree on the level.
+		byte[] plain = new NoGcWasmCompiler(OptimizeLevel.NONE, false).compile(LispReader.readAllFromString(program));
 		byte[] component = compileComponent(program);
 		assertThat(component[6]).as("component layer byte").isEqualTo((byte) 0x01);
 		String text = new String(component, StandardCharsets.ISO_8859_1);

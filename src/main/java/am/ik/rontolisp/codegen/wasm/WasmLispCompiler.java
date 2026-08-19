@@ -107,7 +107,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	/** The import field name of the {@code --host-random} entropy source. */
 	static final String HOST_RANDOM_FIELD = "random_get";
 
-	/** Creates a new WASM compiler. */
+	/**
+	 * Creates a new WASM compiler.
+	 * <p>
+	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
+	 * selects, so an embedder that names no level gets what this project's own frontend
+	 * gives. Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
+	 */
 	public WasmLispCompiler() {
 		this(false);
 	}
@@ -154,9 +160,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * section at instantiation (there is no {@code wasi:cli/run} export), and only the
 	 * {@code (rontolisp:wasm-export ...)} functions are lifted as typed component-model
 	 * exports.
+	 * <p>
+	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
+	 * selects, so an embedder that names no level gets what this project's own frontend
+	 * gives. Declining the optimizer is asked for by name: {@link OptimizeLevel#NONE}.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi) {
-		this(dynamic, component, noWasi, OptimizeLevel.NONE);
+		this(dynamic, component, noWasi, OptimizeLevel.DEFAULT);
 	}
 
 	/**
@@ -7097,7 +7107,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * unboxed-local eligibility. Dead-code elimination is not decided here; it is a
 		 * post-pass over the finished module.
 		 */
-		OptimizeLevel optimize = OptimizeLevel.NONE;
+		OptimizeLevel optimize = OptimizeLevel.DEFAULT;
 
 		/**
 		 * True when the wasi:*-binding library splices back this build's I/O primitives
@@ -7670,7 +7680,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean dynamic = false;
 
-			private OptimizeLevel optimize = OptimizeLevel.NONE;
+			private OptimizeLevel optimize = OptimizeLevel.DEFAULT;
 
 			private boolean component = false;
 
