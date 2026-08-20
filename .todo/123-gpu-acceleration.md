@@ -34,7 +34,8 @@ both came out better than feared.
    and that an array which LIVES on the device was mandatory before anything could pay.
    Measured, it is not: a plain per-call intercept with both copies already beats the
    fastest CPU path rontolisp has (`--simd` on the JVM) from about n=64 upward, and by
-   23x (f64) / 124x (f32) at n=512. Residency then buys a further 2.0-3.7x. That
+   24x (f64) / 34x (f32) at n=512 -- both figures re-measured after todo-469. Residency
+   then buys a further 2.0-3.7x. That
    reorders the plan: phase 1 is the `--simd` protocol again, copies and all, and
    residency is phase 3.
 4. **The honest limits.** `--gpu` reaches **two of the four backends** (interpreter,
@@ -69,29 +70,30 @@ shapes, ms per call:
 
 | n | `--simd` f64 | `--simd` f32 | gpu f64 w/copy | gpu f64 kernel | gpu f32 w/copy | gpu f32 kernel |
 | --- | --- | --- | --- | --- | --- | --- |
-| 32 | 0.150 | 0.050 | ~0.017 | -- | -- | -- |
+| 32 | 0.100 | 0.100 | ~0.017 | -- | -- | -- |
 | 64 | 0.450 | 0.400 | **0.043** | 0.025 | 0.036 | 0.020 |
-| 128 | 0.500 | 0.750 | **0.072** | 0.029 | 0.037 | 0.016 |
-| 256 | 2.800 | 5.200 | **0.198** | 0.088 | 0.088 | 0.026 |
-| 512 | 21.200 | 39.800 | **0.906** | 0.576 | 0.320 | 0.120 |
+| 128 | 1.400 | 0.850 | **0.072** | 0.029 | 0.037 | 0.016 |
+| 256 | 2.800 | 1.450 | **0.198** | 0.088 | 0.088 | 0.026 |
+| 512 | 21.400 | 10.900 | **0.906** | 0.576 | 0.320 | 0.120 |
 | 1024 | -- | -- | 5.720 | 4.432 | 1.625 | 0.859 |
 | 2048 | -- | -- | 40.541 | 35.238 | 9.360 | 6.740 |
 
 For scale, the plain Java triple loop (the shape of the scalar `%la-matmul` defun,
 JIT-warm only at the small end): n=512 142 ms, n=1024 1246 ms, n=2048 16.3 s.
 
-Two things to read out of that table. The f32 column is where the GPU actually is --
-`--simd` was SLOWER at f32 than f64 (39.8 vs 21.2 ms at n=512) while the GPU is 2.8x
-FASTER, so the width that cost the CPU path was the one the device wants. And the
-crossover is far lower than the draft guessed, because what `--gpu` has to beat at
-small n is not raw CPU FLOPs but rontolisp's own per-call overhead.
+**The `--simd` columns are POST-todo-469**, re-measured on the GB10 after `5a3e8f16` gave
+the f32 matmul kernel its lanes; the GPU columns are unchanged, since nothing about them
+depends on rontolisp. That landing moved the f32 column by 3.7x at n=512 (39.8 -> 10.9 ms)
+and inverted the widths, so the two things this table used to say have to be restated:
 
-**Both `--simd` columns are PRE-todo-469 and the f32 one is now roughly 2x optimistic.**
-`5a3e8f16` gave the f32 matmul kernel its lanes, and on the Apple machine that halved the
-same column (n=512 f32: 41.6 -> 11.4 ms). Nobody has re-run `matmul-baseline.lisp` on the
-GB10 since, so the CUDA crossover above is a lower bound on where the GPU starts winning,
-not a measurement -- re-run it there before quoting the f32 comparison. The GPU columns
-are unaffected; nothing about them depends on rontolisp.
+- The f32 column is still where the GPU is, but no longer because f32 costs the CPU path
+  more. `--simd` is now 2x FASTER at f32 than at f64, exactly as a narrower width should
+  be; the GPU's f32 advantage over it at n=512 is **34x**, not the 124x the pre-469
+  numbers implied. The CUDA conclusion is unaffected -- 34x is not a close call -- but
+  quote the new figure.
+- The crossover is still far lower than the draft guessed, and for the same reason: what
+  `--gpu` has to beat at small n is not raw CPU FLOPs but rontolisp's own per-call
+  overhead. At n=64 the GPU is 11x the CPU path at f32 and the floor still dominates.
 
 ### The fixed cost of an intercepted call
 
@@ -219,9 +221,17 @@ the copies are on the clock too. Both kernels, both phases, both widths, ms per 
 - **At f32 under phase 1 the 7x collapses to 1.2-3.0x**, because the copies it does not
   eliminate become the bulk of the call. The full 7x only exists in the phase-3 world
   where data is already resident AND n >= 1024.
-- **The price is 660 MB**: `libcublas.so.13` is 59 MB but links `libcublasLt.so.13`,
-  which is 601 MB. That is the whole CUDA-toolkit-on-the-user's-machine requirement,
-  reintroduced, in exchange for a factor that is negative at the default width.
+- **The price is 660 MB, but only where it is not already paid.** `libcublas.so.13` is
+  59 MB and links `libcublasLt.so.13` at 601 MB. Requiring that is the whole
+  CUDA-toolkit-on-the-user's-machine problem reintroduced -- for a factor that is
+  negative at the default width. Two qualifications, since the first draft of this bullet
+  overstated it: cuBLAS is NOT part of the driver (on the spike machine it comes from
+  `libcublas-13-0`, pulled by `cuda-libraries-13-0`, i.e. the toolkit's runtime metapackage
+  and not the driver package), so "has a working GPU" still does not imply it; but on any
+  machine that has the CUDA stack at all -- every DGX, every ML dev box -- it is already
+  installed AND already on the `ldconfig` path, so a bare `dlopen("libcublas.so.13")`
+  finds it and the marginal cost there is zero. The size argument is therefore an argument
+  against REQUIRING it, not against using it opportunistically.
 
 So: the built-in PTX is not a stopgap, it is the answer. Closing the f32 gap is a
 self-contained kernel-tuning exercise (register tiling, vectorized loads, bigger tiles)
@@ -230,7 +240,9 @@ that needs no dependency and recovers most of it. In ROI order the real wins are
 and cuBLAS is a strictly worse way to buy the last of those. Revisit only if phase 3
 lands, f32 workloads dominate in practice, and someone still wants the last 2-3x on a
 machine that already has the toolkit -- as an opportunistic `dlopen`, never a
-requirement.
+requirement. That is the same shape the CPU-BLAS item lands in on Linux
+(`.todo/470`): on both, the OS-shipped-or-nothing rule decides what may be REQUIRED,
+and anything richer is a bonus taken only when a `dlopen` happens to succeed.
 
 The f64 tiled kernel is NOT bit-identical to the scalar defun (max abs difference 1.5
 to 2.7 on the spike's inputs): the tile walk reorders the reduction. That is expected

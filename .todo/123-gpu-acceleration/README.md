@@ -286,18 +286,23 @@ one intercepted linalg:matmul, host->device->kernel->host, f64:
 
 ```
 $ java --add-modules jdk.incubator.vector Mm2     # matmul-baseline.lisp, JVM --simd
-n=32 f64 0.150 ms/call      n=32 f32 0.050 ms/call
-n=64 f64 0.450 ms/call      n=64 f32 0.400 ms/call
-n=128 f64 0.500 ms/call     n=128 f32 0.750 ms/call
-n=256 f64 2.800 ms/call     n=256 f32 5.200 ms/call
-n=512 f64 21.200 ms/call    n=512 f32 39.800 ms/call
+                            BEFORE todo-469          AFTER todo-469 (5a3e8f16)
+n=32   f64 / f32            0.150 / 0.050            0.100 / 0.100
+n=64   f64 / f32            0.450 / 0.400            0.450 / 0.400
+n=128  f64 / f32            0.500 / 0.750            1.400 / 0.850
+n=256  f64 / f32            2.800 / 5.200            2.800 / 1.450
+n=512  f64 / f32           21.200 / 39.800          21.400 / 10.900
 ```
 
+The f32 column moved 3.7x at n=512 and the widths inverted, so the todo quotes the AFTER
+column and the GPU's f32 margin there is 34x rather than the 124x the BEFORE column
+implied. `#d` did not move, as designed.
+
 Note what the last two blocks say together: the GPU's ~16-18 us floor is flat, and
-`--simd` costs 0.15 ms at n=32 -- so below n~64 the GPU is not beating CPU arithmetic,
-it is beating rontolisp's own per-call overhead. That win is real but fragile, and it is
-why the size threshold must be measured on the target machine rather than hardcoded from
-FLOP counts.
+`--simd` costs 0.1-0.45 ms at n=32-64 -- so below n~64 the GPU is not beating CPU
+arithmetic, it is beating rontolisp's own per-call overhead. That win is real but
+fragile, and it is why the size threshold must be measured on the target machine rather
+than hardcoded from FLOP counts.
 
 ```
 $ java --add-modules jdk.incubator.vector MatmulFProbe.java     # random zero-mean inputs
@@ -498,8 +503,11 @@ n=512  scalarAcc  35.86 ms | laneF2D 4473.65 ms (bit-identical) | laneF32   9.71
 
 Same ranking as the GB10 run recorded above -- `laneF32` wins, `laneF2D` is catastrophic,
 and the relative error against the oracle is identical to five digits because that is a
-property of the arithmetic and not of the machine -- but the magnitudes differ, `laneF2D`
-by 1.7x (4474 vs 7477 ms). The `.kb` table now carries both rows.
+property of the arithmetic and not of the machine -- but the magnitudes differ. Re-running
+the probe on the GB10 to check that the `.kb` row really was that machine's confirms it:
+`n=512  scalarAcc 38.97 | laneF2D 7325.79 | laneF32 10.53 | f64 19.98`, against the M4's
+35.86 / 4473.65 / 9.71 / 18.07. The two aarch64 machines differ by 1.6x on `laneF2D`, so
+the row that was labelled "M4" was the GB10's; the `.kb` table now carries both, named.
 
 ### The same probe on the GB10, which is why it now prints a verdict
 
@@ -508,6 +516,7 @@ found something -- and that turned out to be the trap:
 
 ```
 bound CBLAS: libblas.so.3
+identifies as: no tuned-implementation marker found -- possibly the netlib reference; read the verdict
 cblas, ms per n x n gemm (single thread of control, library may thread):
 n         dgemm f64    sgemm f32 java f64 loop
 64         0.070 ms     0.071 ms      79.7 ms   (7 / 7 GFLOP/s)
@@ -520,7 +529,9 @@ n         dgemm f64    sgemm f32 java f64 loop
 
 7-8 GFLOP/s against Accelerate's 800, flat across every size, and f32 no faster than f64:
 that is the **netlib reference implementation**, which is a specification written in
-Fortran and not a tuned kernel. Read it against the same machine's `--simd` column below
+Fortran and not a tuned kernel. Confirmed rather than inferred -- `dpkg -S` answers
+`libblas3:arm64`, Debian's reference package, and `update-alternatives` shows it as the
+only provider at priority 10. Read it against the same machine's `--simd` column below
 -- n=256 2.800 ms and n=512 21.200 ms -- and the result is that **the BLAS is 1.6x SLOWER
 than the kernel rontolisp already has**. It beats only the naive triple loop.
 
@@ -537,10 +548,21 @@ Three things follow, and they are why the probe gained an `identify()` and a ver
 - **A `--blas` that bound whatever it found would be a silent 1.6x regression** on this
   machine, at `linalg`'s default width. That is a much worse failure than declining.
 
-What this run does NOT say is that Linux is hopeless -- only that this machine has no
-tuned CPU BLAS installed. Installing OpenBLAS (or NVPL, which the probe tries first and
-did not find) and re-running is the measurement that would settle the Linux case; Grace's
-Neoverse cores should be far above 8 GFLOP/s.
+And the tempting next step -- install OpenBLAS and re-measure -- is the wrong experiment,
+which is worth writing down because it looks so obviously right. The whole item exists
+under this spike's founding rule: **the runtime requirement is what the OS or the driver
+already provides, and nothing the user installs.** That rule is what let `--gpu` keep the
+no-dependencies constraint, and it is the rule cuBLAS was rejected for breaking. A machine
+with `libopenblas-dev` apt-installed is a configuration that rule forbids REQUIRING, so
+measuring it would answer a question this item is not allowed to ask. macOS satisfies the
+rule and Linux does not; that is the finding, not a gap in it.
+
+An opportunistic tier -- bind a tuned library the user happens to have -- is a separate and
+legitimate want, and it is where cuBLAS already sits in the todo. Note that cuBLAS is NOT
+part of the driver (here it comes from `libcublas-13-0`, pulled by `cuda-libraries-13-0`),
+but it IS preinstalled and on the `ldconfig` path on any machine with the CUDA stack, so
+its marginal cost on such a box is zero. If that tier is ever built it should be built once
+for both CPU and GPU, not twice.
 
 ### The CPU baseline, same machine
 

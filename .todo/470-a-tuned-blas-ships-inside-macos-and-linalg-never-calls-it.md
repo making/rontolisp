@@ -57,6 +57,16 @@ its lanes and roughly halved that column. Measure it that way or the gap is over
 
 ## What has to be decided before building it
 
+0. **The opportunistic tier is a separate question from this item, and should stay
+   separate.** "Bind a tuned library the user happens to have installed" is a legitimate
+   thing to want -- it is what todo-123 already says about cuBLAS ("an opportunistic
+   `dlopen`, never a requirement"), and cuBLAS turns out to be preinstalled on every DGX
+   and ML dev box AND on the `ldconfig` path, so the marginal cost there really is zero.
+   The same sentence would cover OpenBLAS, MKL and NVPL for the CPU. But that is a
+   BONUS tier with no guarantees, no test machine that represents it, and results that
+   vary by installed version; this item is about the tier that is guaranteed. Do not let
+   the two merge: decide and ship the guaranteed one first, and if the bonus tier is ever
+   built, build it once for both CPU and GPU rather than twice.
 1. **Is it a flag, or is it what `--simd` means on a machine that has it?** A third
    spelling next to `--simd` and `--gpu` is a cost in itself. The honest framing may be
    that `--simd` is "use the best CPU kernel available" and Accelerate is simply what that
@@ -95,10 +105,17 @@ its lanes and roughly halved that column. Measure it that way or the gap is over
      the measurement is what actually decides, and a startup micro-benchmark costs time
      the availability probe should not spend -- so how to combine them is an open design
      question, not a solved one.
-   - **The Linux case is UNSETTLED, not negative.** That machine simply has no tuned CPU
-     BLAS installed (NVPL is tried first and was absent). Install OpenBLAS or NVPL and
-     re-run: Grace's Neoverse cores should be far above 8 GFLOP/s. Until someone does, the
-     only measured platform where this item pays is macOS.
+   - **The Linux case is SETTLED, and the answer is "decline".** It is tempting to read
+     the DGX result as "install OpenBLAS and re-measure", and that would be the wrong
+     experiment. This item inherits todo-123's founding rule -- **the runtime requirement
+     is what the OS or the driver already provides, and nothing the user has to install**
+     -- which is the rule that made `--gpu` compatible with the no-dependencies
+     constraint and the rule cuBLAS was rejected for breaking. Measuring a
+     `sudo apt install libopenblas-dev` machine would measure a configuration that rule
+     forbids requiring, and would re-make the mistake already rejected one file over.
+     So: macOS satisfies the rule (Accelerate, always, in the OS), Linux does not (the
+     only BLAS present is the reference, which is slower than what we already have), and
+     that IS the finding. The title of this item is accurate rather than parochial.
 4. **Which members.** GEMM is the whole win; `dot` / `axpy` / `nrm2` are memory-bound and
    probably not worth the call. `cblas_dgemm` also covers the transposed and scaled forms
    that `linalg` currently expands into separate passes.
