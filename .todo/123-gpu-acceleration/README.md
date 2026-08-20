@@ -59,7 +59,7 @@ warm-up, and the sub-millisecond rows still move by ~20% run to run.
 | `MtlMpsDiff.java` | verifies the surprising half of that answer -- MPS and the naive tiled kernel are bit-identical, which a silent no-op would also look like. |
 | `MtlCompileCost.java` | the PTX question restated: what does getting a kernel onto the device cost at startup, and does the OS cache it between processes? |
 | `MtlNiProbe.java` | does an `objc_msgSend` downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
-| `AccelerateProbe.java` | no GPU at all: Apple ships a tuned BLAS in the OS, it is plain C, it costs no dependency, and unlike Metal it has a double. How fast is it? This is the probe that reframes the whole Apple plan. |
+| `AccelerateProbe.java` | no GPU at all: a tuned BLAS is plain C, costs no dependency, and unlike Metal it has a double. How fast is it, and is one PRESENT? Walks a candidate list (Accelerate, NVPL, OpenBLAS, MKL, distro `libblas`) and prints which it bound, so it runs on either machine -- the probe that reframes the Apple plan, and the one that says whether the same argument reaches Linux. |
 
 ## Running them
 

@@ -1,5 +1,7 @@
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 /**
@@ -7,13 +9,25 @@ import java.util.Random;
  * FFM reaches it in four lines, it costs no dependency and no toolchain -- and unlike Metal it
  * has a double. If it is fast, then on this platform the answer for linalg's DEFAULT width is
  * not the GPU at all, and --gpu's f32-only reach stops being the whole story.
+ *
+ * The binding is NOT Apple-specific and neither is the question. CBLAS is one ABI, so the same
+ * two downcall handles reach OpenBLAS, NVPL, MKL or a distro's libblas -- what differs per
+ * platform is only whether one is THERE. macOS always has one; Linux has whichever the machine
+ * happens to carry. So this walks a candidate list and reports which it bound, which is how
+ * `.todo/470`'s portability question gets answered by measurement rather than by assumption:
+ * run it on the other machine and read the first line.
  */
 public class AccelerateProbe {
 
-	static final Linker L = Linker.nativeLinker();
+	/** In preference order. First one that loads AND exports cblas_dgemm wins. */
+	static final String[] CANDIDATES = { "/System/Library/Frameworks/Accelerate.framework/Accelerate", // macOS
+			"libnvpl_blas_lp64_gomp.so.0", "libnvpl_blas_lp64_seq.so.0", // NVIDIA Performance Libraries (Grace)
+			"libopenblas.so.0", "libopenblas.so", // the usual Linux one
+			"libmkl_rt.so.2", "libmkl_rt.so", // Intel
+			"libblas.so.3", "libcblas.so.3", "libblas.so", // distro alternatives
+			"libaccelerate.so" };
 
-	static final SymbolLookup ACC = SymbolLookup
-		.libraryLookup("/System/Library/Frameworks/Accelerate.framework/Accelerate", Arena.global());
+	static final Linker L = Linker.nativeLinker();
 
 	static final ValueLayout.OfInt I = ValueLayout.JAVA_INT;
 
@@ -23,16 +37,42 @@ public class AccelerateProbe {
 
 	static final AddressLayout P = ValueLayout.ADDRESS;
 
-	static final MethodHandle sgemm = L.downcallHandle(ACC.find("cblas_sgemm").orElseThrow(),
-			FunctionDescriptor.ofVoid(I, I, I, I, I, I, F, P, I, P, I, F, P, I));
+	static final String found;
 
-	static final MethodHandle dgemm = L.downcallHandle(ACC.find("cblas_dgemm").orElseThrow(),
-			FunctionDescriptor.ofVoid(I, I, I, I, I, I, D, P, I, P, I, D, P, I));
+	static final MethodHandle sgemm, dgemm;
+
+	static {
+		String name = null;
+		MethodHandle s = null, d = null;
+		List<String> tried = new ArrayList<>();
+		for (String cand : CANDIDATES) {
+			try {
+				SymbolLookup lk = SymbolLookup.libraryLookup(cand, Arena.global());
+				d = L.downcallHandle(lk.find("cblas_dgemm").orElseThrow(),
+						FunctionDescriptor.ofVoid(I, I, I, I, I, I, D, P, I, P, I, D, P, I));
+				s = L.downcallHandle(lk.find("cblas_sgemm").orElseThrow(),
+						FunctionDescriptor.ofVoid(I, I, I, I, I, I, F, P, I, P, I, F, P, I));
+				name = cand;
+				break;
+			}
+			catch (Throwable t) {
+				tried.add(cand);
+			}
+		}
+		if (name == null) {
+			throw new IllegalStateException("no CBLAS found. Tried: " + tried
+					+ "\nThat is itself the answer for this platform: nothing to intercept into.");
+		}
+		found = name;
+		sgemm = s;
+		dgemm = d;
+	}
 
 	static final int ROW_MAJOR = 101, NO_TRANS = 111;
 
 	public static void main(String[] a) throws Throwable {
-		System.out.println("Accelerate cblas, ms per n x n gemm (single thread of control, library may thread):");
+		System.out.println("bound CBLAS: " + found);
+		System.out.println("cblas, ms per n x n gemm (single thread of control, library may thread):");
 		System.out.printf("%-6s %12s %12s %12s%n", "n", "dgemm f64", "sgemm f32", "java f64 loop");
 		for (int n : new int[] { 64, 128, 256, 512, 1024, 2048 }) {
 			bench(n);

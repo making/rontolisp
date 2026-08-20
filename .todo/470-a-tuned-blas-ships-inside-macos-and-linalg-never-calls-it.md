@@ -60,15 +60,31 @@ its lanes and roughly halved that column. Measure it that way or the gap is over
    that `--simd` is "use the best CPU kernel available" and Accelerate is simply what that
    resolves to on macOS -- but that silently changes what an existing `--simd` build does,
    so it is a decision, not a detail.
-2. **The precision contract.** A tuned BLAS blocks and reorders its reduction, so it is
-   not bit-identical to the scalar defun. `--simd`'s matrix product is currently EXEMPT
-   from the f32-reduction contract precisely because it IS bit-identical; this would end
-   that, at the default width, on one platform only. `.kb/linalg-simd.md`'s opt-in
-   precision contract is the precedent, and this must be measured before anything ships.
-3. **Portability, and what happens off macOS.** Accelerate is macOS-only. Linux has no
-   BLAS that ships with the OS, so a `dlopen`-if-present design would accelerate one
-   platform and not another -- acceptable (it is exactly `--gpu`'s situation) but it must
-   be stated, and the availability probe must decline silently.
+2. **The precision contract, and it is a bigger break than `--gpu`'s.** A tuned BLAS
+   blocks and reorders its reduction, so it is not bit-identical to the scalar defun --
+   that much is the same trade todo-469 already made for `#f`, and `.kb/linalg-simd.md`
+   has the language for it. The new part is WHOSE reduction order it is. Today the three
+   `--simd` backends agree bit for bit with each other, because we wrote all three
+   kernels; a vendor BLAS makes the answer depend on which library and which VERSION is
+   installed on the machine, at `linalg`'s default width. `--gpu` has the same property
+   (a different device gives different bits) and is opt-in for exactly that reason, so
+   the precedent exists -- but it must be decided deliberately, not inherited by
+   accident, and it argues for a distinct flag rather than folding this into `--simd`.
+3. **Portability, and what happens off macOS -- less Apple-specific than the title.**
+   CBLAS is ONE ABI. `cblas_dgemm` has the same signature in Accelerate, OpenBLAS, NVPL
+   and MKL, so the binding is two `downcallHandle`s that are not Apple-specific at all;
+   what differs per platform is only whether a library is THERE. macOS always has one, in
+   the OS, at a fixed path. Linux ships none with the base system but very often carries
+   one anyway (OpenBLAS pulled in by almost any scientific package; NVPL on Grace; the
+   distro `libblas.so.3` alternative). So the design is a candidate-list `dlopen` with a
+   silent decline -- exactly `--gpu`'s availability probe, one library list instead of a
+   driver -- and macOS is where the win is GUARANTEED rather than where it is possible.
+   `AccelerateProbe.java` walks that list and prints which library it bound, so this is
+   answerable by running it on the target rather than by assuming; on Linux the answer
+   "no CBLAS found" is a real result and means there is nothing to intercept into there.
+
+   Note what this does NOT settle: whether a machine-dependent library is acceptable at
+   all. See the contract point below.
 4. **Which members.** GEMM is the whole win; `dot` / `axpy` / `nrm2` are memory-bound and
    probably not worth the call. `cblas_dgemm` also covers the transposed and scaled forms
    that `linalg` currently expands into separate passes.
