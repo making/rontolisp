@@ -51,6 +51,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.gpu.CudaGemm"
+        },
+        "pattern": "am/ik/gpu/gemm\\.ptx"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
         },
         "pattern": "am/ik/rontolisp/macro/format-render\\.lisp"

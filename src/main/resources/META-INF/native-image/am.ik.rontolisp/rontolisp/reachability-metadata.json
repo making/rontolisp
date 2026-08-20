@@ -1,12 +1,39 @@
 {
   "comment": [
-    "The --blas CBLAS downcalls (.kb/linalg-blas.md). Native Image needs every downcall",
-    "stub registered ahead of time: without these the binary binds the library, then",
-    "throws MissingForeignRegistrationError on the first product and declines to the",
-    "unaccelerated kernel -- correct output, silently no acceleration.",
-    "Two shapes, each at both widths: gemm (14 parameters) and gemv (12). gemm is",
-    "registered twice, because a product above the critical flop ceiling is issued",
-    "through the plain (thread-transitioning) handle instead."
+    "Foreign downcalls, for the two accelerations that have them. Native Image needs every",
+    "downcall stub registered ahead of time: without these the binary binds the library, then",
+    "throws MissingForeignRegistrationError on the first call and declines to the",
+    "unaccelerated kernel -- correct output, silently no acceleration. A downcall entry takes",
+    "returnType, parameterTypes and options ONLY; a per-entry \"comment\" key is rejected by the",
+    "schema, which is why the two groups are described here instead.",
+    "",
+    "The --blas CBLAS downcalls (.kb/linalg-blas.md) are the first six: two shapes, each at",
+    "both widths -- gemm (14 parameters) and gemv (12). gemm is registered twice, because a",
+    "product above the critical flop ceiling is issued through the plain",
+    "(thread-transitioning) handle instead.",
+    "",
+    "The rest are the CUDA driver API downcalls behind am.ik.gpu (.kb/gpu.md), one entry per",
+    "distinct SHAPE rather than per entry point -- 22 handles collapse to 15 signatures, in",
+    "the order below:",
+    "  ()                       cuCtxSynchronize",
+    "  (int)                    cuInit, cuDevicePrimaryCtxRelease_v2",
+    "  (long)                   cuMemFree_v2",
+    "  (void*)                  cuCtxSetCurrent, cuDriverGetVersion, cuDeviceGetCount, cuModuleUnload",
+    "  (void*, int)             cuDeviceGet, cuDevicePrimaryCtxRetain",
+    "  (int, void*)             cuGetErrorString",
+    "  (void*, long)            cuMemAlloc_v2",
+    "  (long, void*)            cuMemFreeAsync",
+    "  (void*, void*)           cuModuleLoadData, cuMemGetInfo_v2",
+    "  (void*, int, int)        cuDeviceGetName, cuDeviceGetAttribute",
+    "  (void*, void*, void*)    cuModuleGetFunction",
+    "  (void*, long, void*)     cuMemAllocAsync",
+    "  (long, void*, long)      cuMemcpyHtoD_v2, critical",
+    "  (void*, long, long)      cuMemcpyDtoH_v2, critical",
+    "  (void*, int x7, void* x3) cuLaunchKernel",
+    "Both copies are critical: they take a heap segment, so an operand never needs a staging",
+    "copy, and one too big for a single critical window is split rather than staged.",
+    "Regenerate with the tracing agent over a program that opens the binding and runs a",
+    "product -- the agent traces Linker.downcallHandle, so constructing CudaDriver is enough."
   ],
   "foreign": {
     "downcalls": [
@@ -37,6 +64,68 @@
         "returnType": "void",
         "parameterTypes": ["int", "int", "int", "int", "float", "void*", "int", "void*", "int", "float", "void*", "int"],
         "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["int"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "int"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["int", "void*"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "long"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long", "void*"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "int", "int"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "long", "void*"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long", "void*", "long"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "long", "long"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "int", "int", "int", "int", "int", "int", "int", "void*", "void*", "void*"]
       }
     ]
   }
