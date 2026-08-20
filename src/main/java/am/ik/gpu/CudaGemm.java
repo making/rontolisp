@@ -88,15 +88,31 @@ final class CudaGemm {
 	private static final long CRITICAL_CHUNK_BYTES = 1L << 26;
 
 	/**
-	 * Above this many flops ({@code 2*n*m*p}) the kernel is awaited by an explicit
-	 * {@code cuCtxSynchronize} before the result is copied back. A device-to-host copy on
-	 * the null stream waits for the kernel by itself, which is free -- until the copy is
-	 * a CRITICAL call, when the kernel's whole runtime would sit inside the window in
-	 * which the thread cannot reach a safepoint (36 ms at n=2048, measured). 2^28 flops
-	 * is ~0.6 ms of kernel at double precision, and the extra synchronize costs ~5 us, so
-	 * it is paid only where it is noise.
+	 * At or above this many flops ({@code 2*n*m*p}) PER MULTIPROCESSOR the kernel is
+	 * awaited by an explicit {@code cuCtxSynchronize} before the result is copied back. A
+	 * device-to-host copy on the null stream waits for the kernel by itself, which is
+	 * free -- until the copy is a CRITICAL call, when the kernel's whole runtime would
+	 * sit inside the window in which the thread cannot reach a safepoint (36 ms at
+	 * n=2048, measured).
+	 *
+	 * <p>
+	 * A flop count is not a duration, so it cannot be a fixed number: the same product
+	 * that runs for 0.6 ms on a 48-SM device runs for several ms on a small one. Scaling
+	 * by {@code CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT} makes the ceiling a duration
+	 * budget instead, and the constant is calibrated on a device whose fp64 units already
+	 * run at 1/44 of its fp32 rate -- the bad case -- so the width does not need a second
+	 * factor. 2^22 flops per SM is 2^28 on the 48-SM machine this was measured on, which
+	 * is the ~0.6 ms the budget is meant to be; the extra synchronize costs 0.26 us idle,
+	 * so it is paid only where it is noise.
 	 */
-	private static final long SYNC_FLOP_CEILING = 1L << 28;
+	private static final long SYNC_FLOPS_PER_MULTIPROCESSOR = 1L << 22;
+
+	/**
+	 * How much free device memory a product leaves untouched. The device is shared --
+	 * with the display, with other CUDA processes, and with whatever the driver itself
+	 * wants -- so a product that would fit only by taking the last byte declines instead.
+	 */
+	private static final long ALLOCATION_HEADROOM = 64L << 20;
 
 	private final CudaDriver driver;
 
@@ -112,12 +128,27 @@ final class CudaGemm {
 
 	private final String description;
 
-	private final boolean pooled;
+	/**
+	 * The device's default memory pool, or {@link MemorySegment#NULL} when this driver
+	 * has none. Held only so that an out-of-memory decline can hand back what the failed
+	 * allocation grew the pool by.
+	 */
+	private final MemorySegment memoryPool;
+
+	private final long syncFlopCeiling;
+
+	/**
+	 * Whether per-call memory comes from the driver's pool. Not final: the fallback path
+	 * is otherwise unreachable on a machine whose driver has a pool, and it is a path
+	 * that has to keep computing the same answers. Flipped only by
+	 * {@code GpuTest.withPooledAllocation}.
+	 */
+	private volatile boolean pooled;
 
 	private volatile boolean usable = true;
 
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
-			MemorySegment gemmF32, boolean pooled, String description) {
+			MemorySegment gemmF32, boolean pooled, MemorySegment memoryPool, long syncFlopCeiling, String description) {
 		this.driver = driver;
 		this.device = device;
 		this.context = context;
@@ -125,6 +156,8 @@ final class CudaGemm {
 		this.gemmF64 = gemmF64;
 		this.gemmF32 = gemmF32;
 		this.pooled = pooled;
+		this.memoryPool = memoryPool;
+		this.syncFlopCeiling = syncFlopCeiling;
 		this.description = description;
 	}
 
@@ -146,7 +179,16 @@ final class CudaGemm {
 	 * @return the device, or the reason there is none
 	 */
 	static Probe probe() {
-		CudaDriver driver = CudaDriver.open();
+		CudaDriver driver;
+		try {
+			// Inside the try because binding the linker itself can fail: this method
+			// promises an answer, and "the class that holds the handles would not
+			// initialize" is one.
+			driver = CudaDriver.open();
+		}
+		catch (Throwable ex) {
+			return new Probe(null, "the CUDA driver could not be bound: " + describeThrowable(ex));
+		}
 		if (driver == null) {
 			return new Probe(null, CudaDriver.LIBRARY + " is not present: this machine has no NVIDIA driver");
 		}
@@ -214,14 +256,27 @@ final class CudaGemm {
 						"cuModuleGetFunction " + KERNEL_F32 + ": " + driver.errorString(status));
 			}
 			MemorySegment f32 = functionOut.get(P, 0);
+			MemorySegment pool = MemorySegment.NULL;
 			boolean pooled = pooledAllocationWorks(driver, arena);
+			if (pooled) {
+				MemorySegment poolOut = arena.allocate(P);
+				pooled = driver.deviceGetDefaultMemPool(poolOut, device) == CuResult.SUCCESS;
+				if (pooled) {
+					pool = poolOut.get(P, 0);
+				}
+			}
+			int multiprocessors = attribute(driver, arena, CudaDriver.ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
+			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
-			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, pooled, description), description);
+			return new Probe(
+					new CudaGemm(driver, device, context, module, f64, f32, pooled, pool, ceiling, description),
+					description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
 			// driver that returned something impossible. The flag is a no-op either way.
-			return unwind(driver, device, contextRetained, module, "the CUDA driver could not be used: " + ex);
+			return unwind(driver, device, contextRetained, module,
+					"the CUDA driver could not be used: " + describeThrowable(ex));
 		}
 	}
 
@@ -236,6 +291,12 @@ final class CudaGemm {
 				driver.moduleUnload(module);
 			}
 			if (contextRetained && device >= 0) {
+				// Order matters, and it is not the obvious one: unlike cuCtxDestroy,
+				// cuDevicePrimaryCtxRelease does NOT clear the calling thread's current
+				// context. Releasing without this leaves the probing thread -- usually
+				// main -- holding a dangling CUcontext that any co-resident CUDA consumer
+				// would then fail against with CUDA_ERROR_INVALID_CONTEXT.
+				driver.ctxSetCurrent(MemorySegment.NULL);
 				driver.devicePrimaryCtxRelease(device);
 			}
 		}
@@ -243,6 +304,20 @@ final class CudaGemm {
 			// Nothing to do about a failed release on a path that is already declining.
 		}
 		return new Probe(null, reason);
+	}
+
+	/**
+	 * A throwable's text, defensively: this is only ever reached on a path that is
+	 * already declining, and a {@code toString} that throws must not turn a decline into
+	 * a failed class initialization.
+	 */
+	private static String describeThrowable(Throwable ex) {
+		try {
+			return String.valueOf(ex);
+		}
+		catch (Throwable nested) {
+			return ex.getClass().getName();
+		}
 	}
 
 	/**
@@ -267,7 +342,15 @@ final class CudaGemm {
 		if (driver.memAllocAsync(out, 1024) != CuResult.SUCCESS) {
 			return false;
 		}
-		return driver.memFreeAsync(out.get(L, 0)) == CuResult.SUCCESS;
+		long trial = out.get(L, 0);
+		if (driver.memFreeAsync(trial) == CuResult.SUCCESS) {
+			return true;
+		}
+		// The pool would not take it back. Hand it to the plain allocator's free rather
+		// than leaking the trial buffer for the life of the process, and use the
+		// fallback route from here on.
+		driver.memFree(trial);
+		return false;
 	}
 
 	private static int attribute(CudaDriver driver, Arena arena, int attribute, int device) throws Throwable {
@@ -318,22 +401,44 @@ final class CudaGemm {
 	}
 
 	/**
+	 * Switches the allocator and answers what it was. Package-private and for the tests:
+	 * the fallback route is unreachable on a machine whose driver HAS a pool, and it is a
+	 * route that still has to compute the same answers, free its buffers and honour the
+	 * threshold. Production never calls this -- {@link #probe()} decides once.
+	 * @param wanted whether to allocate from the driver's pool
+	 * @return the setting that was in force before this call
+	 */
+	boolean setPooledAllocation(boolean wanted) {
+		boolean previous = this.pooled;
+		this.pooled = wanted && !this.memoryPool.equals(MemorySegment.NULL);
+		return previous;
+	}
+
+	/**
 	 * Free device memory in bytes, or {@code -1} when the driver would not say. Exists
 	 * for the leak test: a run of products must not move it, because every buffer a
 	 * product allocates it also frees.
 	 */
 	long freeDeviceMemory() {
 		try (Arena arena = Arena.ofConfined()) {
-			MemorySegment free = arena.allocate(L), total = arena.allocate(L);
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS
-					|| this.driver.memGetInfo(free, total) != CuResult.SUCCESS) {
+			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
 				return -1;
 			}
-			return free.get(L, 0);
+			return freeDeviceMemory(arena);
 		}
 		catch (Throwable ex) {
 			return -1;
 		}
+	}
+
+	/**
+	 * The same, on a context that is already current and an arena that already exists --
+	 * the form the per-call pre-flight uses, where it costs 0.6 us. A driver that will
+	 * not answer returns {@code -1}, and the pre-flight then simply does not happen.
+	 */
+	private long freeDeviceMemory(Arena arena) throws Throwable {
+		MemorySegment free = arena.allocate(L), total = arena.allocate(L);
+		return this.driver.memGetInfo(free, total) == CuResult.SUCCESS ? free.get(L, 0) : -1;
 	}
 
 	/**
@@ -342,7 +447,7 @@ final class CudaGemm {
 	 * @return {@code true} when {@code c} was filled, {@code false} when the product
 	 * declined or the device failed -- in which case {@code c} is untouched
 	 */
-	boolean gemm(double[] a, int oa, double[] b, int ob, double[] c, int n, int m, int p) {
+	boolean gemm(double[] a, int oa, double[] b, int ob, double[] c, int oc, int n, int m, int p) {
 		if (!this.usable) {
 			return false;
 		}
@@ -356,13 +461,13 @@ final class CudaGemm {
 			if (!allocate(arena, buffers, aBytes, bBytes, cBytes)) {
 				return false;
 			}
-			boolean sync = 2L * n * m * p > SYNC_FLOP_CEILING;
+			boolean sync = 2L * n * m * p >= this.syncFlopCeiling;
 			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Double.BYTES, aBytes)
 					|| !upload(buffers[1], MemorySegment.ofArray(b), (long) ob * Double.BYTES, bBytes)
 					|| !launch(arena, this.gemmF64, buffers, n, m, p, sync)) {
 				return false;
 			}
-			return download(MemorySegment.ofArray(c), buffers[2], cBytes);
+			return download(MemorySegment.ofArray(c), (long) oc * Double.BYTES, buffers[2], cBytes);
 		}
 		catch (Throwable ex) {
 			return false;
@@ -377,7 +482,7 @@ final class CudaGemm {
 	 * at, by a factor of 44 on the hardware this was measured on.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean gemmF(float[] a, int oa, float[] b, int ob, float[] c, int n, int m, int p) {
+	boolean gemmF(float[] a, int oa, float[] b, int ob, float[] c, int oc, int n, int m, int p) {
 		if (!this.usable) {
 			return false;
 		}
@@ -391,13 +496,13 @@ final class CudaGemm {
 			if (!allocate(arena, buffers, aBytes, bBytes, cBytes)) {
 				return false;
 			}
-			boolean sync = 2L * n * m * p > SYNC_FLOP_CEILING;
+			boolean sync = 2L * n * m * p >= this.syncFlopCeiling;
 			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Float.BYTES, aBytes)
 					|| !upload(buffers[1], MemorySegment.ofArray(b), (long) ob * Float.BYTES, bBytes)
 					|| !launch(arena, this.gemmF32, buffers, n, m, p, sync)) {
 				return false;
 			}
-			return download(MemorySegment.ofArray(c), buffers[2], cBytes);
+			return download(MemorySegment.ofArray(c), (long) oc * Float.BYTES, buffers[2], cBytes);
 		}
 		catch (Throwable ex) {
 			return false;
@@ -413,16 +518,73 @@ final class CudaGemm {
 				&& n * p <= Integer.MAX_VALUE && (n + TILE - 1) / TILE <= MAX_GRID_Y;
 	}
 
+	/**
+	 * The three device buffers, or a decline that costs the device NOTHING.
+	 *
+	 * <h4>Why a failed allocation needs more care than a successful one</h4>
+	 *
+	 * A pooled allocation that fails grows the driver's pool as far as it can on the way
+	 * to failing, and returns no pointer -- so there is nothing for {@link #release} to
+	 * give back, and the pool keeps the high-water mark for the life of the PROCESS and
+	 * against every other CUDA process on the card. Measured before this was handled: one
+	 * declined 80 GB product took a 128 GB device from 69 GB free to 1 GB free, and it
+	 * never came back. A decline that costs 68 GB is the exact opposite of the invariant
+	 * this library is sold on, so two things guard it: the total is checked against free
+	 * memory FIRST, which stops the pool ever growing for a product that cannot fit, and
+	 * a failure trims the pool back afterwards, which covers the race between the check
+	 * and the allocation.
+	 */
 	private boolean allocate(Arena arena, long[] buffers, long... sizes) throws Throwable {
 		MemorySegment out = arena.allocate(L);
+		long total = 0;
+		for (long size : sizes) {
+			total += size;
+		}
+		long free = freeDeviceMemory(arena);
+		if (free >= 0 && total > free - ALLOCATION_HEADROOM) {
+			return false;
+		}
 		for (int i = 0; i < sizes.length; i++) {
 			int status = this.pooled ? this.driver.memAllocAsync(out, sizes[i]) : this.driver.memAlloc(out, sizes[i]);
 			if (status != CuResult.SUCCESS) {
+				// Order matters, and getting it wrong is silent: the buffers that DID
+				// allocate have to go back to the pool before the pool is trimmed, or the
+				// trim finds them still in use and keeps their memory. Measured with the
+				// two swapped, a declined product held 78 GB of a 128 GB device.
+				release(buffers);
+				trimMemoryPool();
 				return fail(status);
 			}
 			buffers[i] = out.get(L, 0);
 		}
 		return true;
+	}
+
+	/**
+	 * Hands the driver's pool back everything it is holding and nothing is using. Called
+	 * only after a failed allocation -- on the success path the pool is exactly the
+	 * optimization that makes a per-call intercept affordable, and trimming it would
+	 * throw that away.
+	 *
+	 * <p>
+	 * The {@code cuCtxSynchronize} is load-bearing and its absence is silent.
+	 * {@code cuMemFreeAsync} is STREAM-ordered: the buffers this call is trying to give
+	 * back are not in the pool yet, only queued to be, so a trim issued before the stream
+	 * has reached that point finds them still in use and keeps their memory. Measured
+	 * without it, a declined product held 78 GB of a 128 GB device; with it, the same
+	 * product costs nothing.
+	 */
+	private void trimMemoryPool() {
+		if (!this.pooled || this.memoryPool.equals(MemorySegment.NULL)) {
+			return;
+		}
+		try {
+			this.driver.ctxSynchronize();
+			this.driver.memPoolTrimTo(this.memoryPool, 0);
+		}
+		catch (Throwable ex) {
+			// Already declining; there is nothing further to try.
+		}
 	}
 
 	/**
@@ -443,10 +605,10 @@ final class CudaGemm {
 	}
 
 	/** The mirror of {@link #upload}, for the result. */
-	private boolean download(MemorySegment heap, long source, long bytes) throws Throwable {
+	private boolean download(MemorySegment heap, long offset, long source, long bytes) throws Throwable {
 		for (long done = 0; done < bytes; done += CRITICAL_CHUNK_BYTES) {
 			long chunk = Math.min(CRITICAL_CHUNK_BYTES, bytes - done);
-			int status = this.driver.memcpyDtoH(heap.asSlice(done, chunk), source + done, chunk);
+			int status = this.driver.memcpyDtoH(heap.asSlice(offset + done, chunk), source + done, chunk);
 			if (status != CuResult.SUCCESS) {
 				return fail(status);
 			}

@@ -43,6 +43,11 @@ warm-up, and the sub-millisecond rows still move by ~20% run to run.
 | `NiProbe.java` | does a CUDA downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
 | `MatmulFProbe.java` | no GPU at all: why was `#f` matmul SLOWER than `#d` under `--simd`, and what would fix it? Drove todo-469 (landed `5a3e8f16`, 2026-08-20 -- the kernel now takes f32 lanes); kept because `.kb/linalg-simd.md` cites it and it answers differently per architecture. |
 | `matmul-baseline.lisp` | the CPU side of the comparison -- `linalg:matmul` under `--simd`, warm, 20 reps. Not a GPU program. |
+| `CuLib.java` | the DRIVER-ONLY binding the three `am.ik.gpu` probes below share: no NVRTC, no toolkit, the checked-in `src/main/resources/am/ik/gpu/gemm.ptx` loaded straight from the repository. `Cu.java` one design generation on -- deliberately the shape the shipped library has, so its numbers are the library's numbers. |
+| `AllocatorCost.java` | what does PER-CALL device memory cost, and what does that do to the floor? The question the spike probes above never asked, because every one of them allocated once and then looped. Also: what a FAILED pooled allocation costs the device, and the two calls needed to give it back. |
+| `CopyRoute.java` | does `Linker.Option.critical` remove the host copy here as it did for `--blas`, and what bounds the window in which the thread cannot reach a safepoint? Includes the GPU-only half of that question -- a device-to-host copy on the null stream also waits for the KERNEL. |
+| `WorthCrossover.java` | the GPU half of `am.ik.gpu`'s `worth()` threshold, in the shipped route. The CPU half is `matmul-baseline-warm.lisp`. |
+| `matmul-baseline-warm.lisp` | the same CPU baseline as `matmul-baseline.lisp`, JIT-warm (200 warm-ups, 4000 reps) and down to n=16. The original's 3 warm-ups over-report n<=64 by ~10x, which is exactly the range the size threshold is decided in. Not a GPU program. |
 | `width-baseline.lisp` | `#f` against `#d` across matmul / add / dot / exp / sum, which is how the matmul anomaly surfaced. Not a GPU program. |
 
 ### The Metal files (macOS)
@@ -86,6 +91,23 @@ java -jar $JAR width-baseline.lisp -o W.class --simd && java --add-modules jdk.i
 java --enable-native-access=ALL-UNNAMED DumpPtx.java 75
 java --enable-native-access=ALL-UNNAMED PtxSpike.java
 ```
+
+The three `am.ik.gpu` probes need the driver and nothing else -- no toolkit, because they
+load the kernels the library ships rather than compiling any. They are the ones whose
+numbers `.kb/gpu.md` quotes, so they are the ones to re-run on new hardware:
+
+```bash
+java --enable-native-access=ALL-UNNAMED AllocatorCost.java
+java --enable-native-access=ALL-UNNAMED CopyRoute.java
+java --enable-native-access=ALL-UNNAMED WorthCrossover.java
+
+# the CPU column WorthCrossover has to be read against, JIT-warm
+JAR=../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar
+java -jar $JAR matmul-baseline-warm.lisp -o Mm3.class --simd
+java --add-modules jdk.incubator.vector Mm3
+```
+
+`CuLib.java` is picked up automatically by the source launcher, the same rule as `Cu.java`.
 
 `Cu.java` and `MatmulSpike.java` are picked up automatically by the source launcher --
 do not pass them as arguments, or they land in `args` instead (that mistake is why
@@ -170,6 +192,108 @@ fight. Without the metadata the binary fails at the FIRST downcall with
 ```
 NiProbe OK on NVIDIA GB10: n=512 f64 gemm 0.585 ms, C[0]=638.000
 ```
+
+## What the `am.ik.gpu` probes printed (2026-08-20, GB10)
+
+These three are the evidence behind `.kb/gpu.md`, and each of them corrects something the
+CUDA spike above got wrong.
+
+```
+$ java AllocatorCost.java
+NVIDIA GB10, 48 SMs, checked-in compute_75 PTX loaded in 8.87 ms
+
+-- one allocate + free pair, in isolation --
+         4096 B   cuMemAllocAsync   2.26 us | cuMemAlloc   138.82 us  (62x)
+      1048576 B   cuMemAllocAsync   0.67 us | cuMemAlloc   136.24 us  (203x)
+      8388608 B   cuMemAllocAsync   0.66 us | cuMemAlloc   336.24 us  (513x)
+
+-- a whole f64 product, both allocators, three buffers a call --
+    n           pooled us    unpooled us      ratio    per pair us
+    64               26.4          181.5        6.9           51.7
+    128              42.5          209.4        4.9           55.6
+    256             125.7          302.7        2.4           59.0
+    512             692.2         1203.2        1.7          170.3
+
+-- what a FAILED pooled allocation costs the device --
+    free before                              117774 MB
+    two 67079 MB requests: second -> CUresult 2
+    free with the first still held            49350 MB
+    free after cuMemFreeAsync, no trim        49350 MB
+    free after cuMemPoolTrimTo, NO sync       49350 MB
+    free after cuCtxSynchronize + trim       117787 MB
+```
+
+Three separate results. **The allocator is the floor**: `cuMemAlloc` is 62-513x a pooled
+allocation in isolation, and three of them per product is the difference between a 26 us
+call and a 181 us one -- so the spike's "16-18 us floor" was only ever true of a loop that
+allocated once, and a real per-call intercept has to use `cuMemAllocAsync`. Note that the
+isolated 137 us pair and the ~52-59 us the same pair costs inside a steady product loop are
+DIFFERENT measurements; the floor comes from the product column, not from multiplying the
+isolated one by three. **And a failed pooled allocation is not free**: it grows the pool on
+the way to failing, `cuMemFreeAsync` is stream-ordered so the buffers are not back yet, and
+a trim issued before `cuCtxSynchronize` finds them still in use and returns success having
+done nothing. All three lines are needed, in that order, or a declined product silently
+holds 68 GB for the life of the process.
+
+```
+$ java CopyRoute.java
+-- one f64 product end to end, allocation included --
+    n             staged us      critical us    ratio
+    8                  26.1             21.0     1.24
+    32                 23.3             19.6     1.19
+    64                 31.3             20.9     1.49
+    128                72.1             40.9     1.76
+    256               228.2            128.1     1.78
+    512              1055.3            693.4     1.52
+    1024            15462.5           4856.6     3.18
+    2048            75286.9          36878.7     2.04
+
+-- how long one CRITICAL call holds the thread off a safepoint --
+    n           MB/op     HtoD crit us    DtoH after launch    DtoH after sync
+    128           0.1              7.7                 21.6                7.5
+    256           0.5             14.5                 93.2               13.4
+    512           2.1             41.4                608.0               40.7
+    1024          8.4            141.8               4564.9              141.7
+    2048         33.6            569.9              35721.6              547.8
+    4096        134.2           2261.3             283241.9             2243.1
+```
+
+The first table kills todo-123's "the heap copy is unavoidable in every row": a critical
+downcall takes the heap array directly, and the gap WIDENS with size rather than closing,
+because the staging buffer is a native allocation of the operand's size on every call. The
+second table is the GPU-only hazard: compare the last two columns. A device-to-host copy
+issued straight after a launch is not a copy, it is a wait -- 283 ms of it at n=4096 --
+and putting `cuCtxSynchronize` in front of it costs 0.26 us and gives back a window bounded
+by bytes.
+
+```
+$ java WorthCrossover.java
+n           f64 us/call    f32 us/call     n*m*p
+16                 18.3           17.6     4096
+32                 18.2           16.1     32768
+40                 19.0           15.8     64000
+48                 19.2           16.5     110592
+56                 20.3           18.2     175616
+64                 21.3           16.7     262144
+96                 36.8           19.3     884736
+128                42.8           21.9     2097152
+256               123.9           51.0     16777216
+512               692.1          183.3     134217728
+
+$ java --add-modules jdk.incubator.vector Mm3   # matmul-baseline-warm.lisp
+n=32 f64 9.50 us   n=32 f32 6.25 us
+n=40 f64 11.75 us  n=40 f32 7.50 us
+n=48 f64 23.00 us  n=48 f32 14.00 us
+n=56 f64 34.50 us  n=56 f32 20.25 us
+n=64 f64 49.00 us  n=64 f32 28.50 us
+n=96 f64 131.00 us n=96 f32 73.50 us
+n=128 f64 383.75 us n=128 f32 191.00 us
+```
+
+Read the two together: the crossover is n~45 at f64 and n~51 at f32, so `am.ik.gpu` sets
+`worth()` at `n*m*p >= 2^17`. The `--simd` column in `../123-gpu-acceleration.md` is the
+same program with 3 warm-ups and 20 reps, which reports 100 us at n=32 where a warm run
+costs 9.5 -- about 10x, and all of it at exactly the sizes the threshold is decided by.
 
 ## What they printed
 

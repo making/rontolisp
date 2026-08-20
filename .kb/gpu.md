@@ -6,6 +6,13 @@ There is no flag yet, no `linalg:` interception and no user-facing documentation
 file is the whole record of the library, and the interceptors that will sit on top of it
 are phase 1B (interpreter) and phase 2 (JVM).
 
+**Every number below is re-derivable.** The probes are
+`.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover}.java` over the shared
+driver-only binding `CuLib.java`, plus `matmul-baseline-warm.lisp` for the CPU column;
+that directory's README says which answers which and records what they printed. They need
+the driver and nothing else -- they load the kernels this library ships rather than
+compiling any -- so they run wherever the feature does.
+
 Read `.kb/linalg-simd.md` first for the declined-input protocol this is shaped for, and
 `.kb/linalg-blas.md` for the flag whose posture it copies: **recommended, never required;
 a machine without the hardware runs the same programs to the same output.** Everything
@@ -22,6 +29,14 @@ runs whatever it would have run anyway. That is what lets a future `--gpu` be a 
 no-op on a machine without a GPU, exactly as `--simd` is on a JDK without
 `jdk.incubator.vector`.
 
+**Two things are deliberately NOT declines.** A `null` operand array throws
+`NullPointerException`: the package is `@NullMarked`, so a null there is a contract
+violation rather than an input, and swallowing it would hide a caller's bug behind a silent
+CPU fallback forever. And the array-returning `multiply` overloads allocate the result, so
+they can throw `OutOfMemoryError` exactly as `new double[n * p]` can -- the `out`-taking
+overloads, which is what an interceptor should call, allocate nothing. Both are in the
+class javadoc's contract.
+
 Package rule, per CLAUDE.md's rule for `am.ik.jvm` / `am.ik.wasm` / `am.ik.wit`:
 **language-independent -- it imports no rontolisp package and no external dependency.**
 Nothing outside it is needed to talk to a GPU. The direction the interceptors will take is
@@ -31,7 +46,7 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 |---|---|
 | `am.ik.gpu.Gpu` | the whole public surface: `available`, `description`, `worth`, two `multiply` overloads |
 | `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, and the per-call product |
-| `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 22 downcall handles |
+| `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 24 downcall handles |
 | `am.ik.gpu.CuResult` | every CUDA 13 status code, and which of them leave the context dead |
 | `src/main/resources/am/ik/gpu/gemm.cu` / `gemm.ptx` | the kernels, source and checked-in artifact |
 
@@ -132,8 +147,11 @@ whole binding declines rather than half-binding.
   a machine that declines at step 5 does not leave a retained primary context or a loaded
   module behind. This is the leak the decline path would otherwise have.
 - **Per call, three device buffers, freed on every path** -- success, decline and failure
-  alike, in a `finally`. `GpuTest.aRunOfProductsFreesEveryBufferItAllocates` pins it by
-  running 500 products and asserting free device memory has not moved.
+  alike, in a `finally`. Two tests pin it and they are not the same test:
+  `aRunOfSuccessfulProductsFreesEveryBufferItAllocates` runs 500 products that WORK, and
+  `aDeclinedProductCostsTheDeviceNothing` runs twelve that FAIL, which is the path the
+  first one never enters and the one that was wrong. Both assertions are two-sided --
+  free memory that GREW would mean the test is measuring the rest of the machine.
 - **Nothing is cached between calls.** Phase 3 (residency) is where that changes, and it
   needs the invalidation rule todo-123 describes before it can exist.
 - **Threads.** The driver API is thread-safe and every call owns its buffers, so concurrent
@@ -143,27 +161,68 @@ whole binding declines rather than half-binding.
   it, and waits for it INSIDE the critical window. Per-thread streams are the fix and phase
   3 is where they would land.
 
-### `cuMemAlloc` is 126 us, and that is the thing the spike measured around
+### Per-call allocation is the floor, and it is what the spike measured around
 
 The biggest correction this work makes to todo-123. Every spike probe allocated its device
 buffers ONCE and then looped, so its "~16-18 us floor" excluded allocation. A per-call
-intercept cannot do that. Measured on the GB10:
+intercept cannot do that, and it needs three buffers a call. Measured on the GB10
+(`AllocatorCost.java`):
 
-| | |
-|---|---|
-| `cuMemAlloc` + `cuMemFree`, one pair | **126 us** |
-| `cuMemAllocAsync` + `cuMemFreeAsync`, one pair | **0.7-1.6 us** |
-| `cuCtxSetCurrent` | 0.34 us |
-| `Arena.ofConfined` + allocate | 0.94 us |
-| `cuCtxSynchronize`, nothing outstanding | 0.26 us |
+| in isolation | | |
+|---|---|---|
+| `cuMemAllocAsync` + `cuMemFreeAsync`, one pair | **0.7-2.3 us** | flat in the size |
+| `cuMemAlloc` + `cuMemFree`, one pair | **136-336 us** | 62-513x the pooled pair |
+| `cuCtxSetCurrent` | 0.34 us | |
+| `Arena.ofConfined` + allocate | 0.94 us | |
+| `cuCtxSynchronize`, nothing outstanding | 0.26 us | |
 
-Three pairs are needed per product. With `cuMemAlloc` the whole round trip floors at
-**170 us**; with the driver's stream-ordered allocator it floors at **15 us**, which is
-where the spike's number actually belongs. So the products allocate through
-`cuMemAllocAsync` on the null stream and fall back to `cuMemAlloc` only where the trial in
-the probe failed -- and when they fall back, the size threshold moves with the floor (see
-`worth` below). The pool is the DRIVER's; this library owns no device memory once a call
-returns.
+| a whole f64 product, allocation included | pooled | unpooled |
+|---|---|---|
+| n=64 | **26 us** | 181 us |
+| n=128 | **43 us** | 209 us |
+| n=256 | **126 us** | 303 us |
+| n=512 | **692 us** | 1203 us |
+
+**The two tables are two measurements, not one derivation.** An isolated `cuMemAlloc` pair
+costs 136 us; the same pair inside a steady product loop costs 52-59 us, because the
+driver is not being asked cold. So the unpooled floor is ~180 us because that is what a
+product MEASURES, not because 3 x 136 = 408. (An earlier draft of this file wrote "three
+pairs are needed per product... floors at 170 us", which is a derivation that does not
+close and was never how the figure was obtained.) Either way the conclusion holds and the
+factor is large: the products allocate through `cuMemAllocAsync` on the null stream, fall
+back to `cuMemAlloc` only where the trial in the probe failed, and the size threshold moves
+with the floor when they do (see `worth` below). The pool is the DRIVER's; this library
+owns no device memory once a call returns.
+
+### A DECLINE MUST COST THE DEVICE NOTHING, and that takes three calls in order
+
+The invariant's sharpest edge, and the one place the first version of this library broke
+it outright. A pooled allocation that FAILS still grows the pool as far as it can on the
+way to failing, and hands back no pointer -- so there is nothing to free, and the pool
+keeps the high-water mark for the life of the process AND against every other CUDA process
+on the card. Measured before it was handled: one declined 80 GB product took a 128 GB
+device from 69 GB free to 1 GB free, permanently, while returning `null` exactly as
+designed and letting the CPU compute the right answer.
+
+Two guards, and the second one has an ordering trap in it (`AllocatorCost.java`'s third
+block walks the whole sequence):
+
+1. **A pre-flight.** The three buffers' total is checked against `cuMemGetInfo` less
+   64 MB of headroom before anything is allocated, so a product that cannot fit never
+   grows the pool at all. It costs 0.6 us on a call that is going to succeed.
+2. **A trim after a failed allocation** -- for the case the pre-flight cannot see coming,
+   where free memory changed underneath it. Three calls, in this order, or it silently
+   does nothing:
+   - `release()` the buffers that DID allocate (a trim finds them in use otherwise --
+     measured, a declined product held 78 GB with the two swapped);
+   - `cuCtxSynchronize`, because `cuMemFreeAsync` is STREAM-ordered and the buffers are
+     only QUEUED to return to the pool (measured, a trim before the sync returns
+     `CUDA_SUCCESS` having freed nothing);
+   - `cuMemPoolTrimTo(pool, 0)`.
+
+With all three, twelve consecutive declined 80 GB products move free device memory by
+0 MB. `GpuTest.aDeclinedProductCostsTheDeviceNothing` is the pin, and it asserts the
+memory rather than the return value, because the return value was always right.
 
 ## `Linker.Option.critical` takes heap segments here too -- with a different bound
 
@@ -207,21 +266,38 @@ it".**
 2. **A device-to-host copy on the null stream also WAITS for the kernel.** This has no CPU
    analogue and it is the trap: a critical `cuMemcpyDtoH` issued straight after a launch
    holds the thread off a safepoint for the kernel's whole runtime -- measured 36 ms at
-   n=2048 f64, 286 ms at n=4096. Chunking cannot help, because the wait is on the first
-   chunk. So `SYNC_FLOP_CEILING = 1 << 28`: above 2^28 flops (`2*n*m*p`) the kernel is
-   awaited by an explicit `cuCtxSynchronize`, a plain thread-transitioning downcall, and
-   only then is the result copied back. 2^28 flops is ~0.6 ms of f64 kernel, the
-   synchronize costs 0.26 us when there is nothing to wait for and ~5 us in the round
-   trip, so it is paid only where it is noise.
+   n=2048 f64, 283 ms at n=4096, against 548 us and 2.2 ms for the same copy issued after
+   an explicit wait. Chunking cannot help, because the wait lands on the first chunk. So
+   the kernel is awaited by a plain, thread-transitioning `cuCtxSynchronize` before the
+   result comes back, whenever the launch is big enough for that to matter.
+
+   **The threshold is per-device, because a flop count is not a duration.**
+   `SYNC_FLOPS_PER_MULTIPROCESSOR = 1 << 22`, multiplied by
+   `CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT` (which the probe was already reading for the
+   description string). On the 48-SM machine this was calibrated on that is 2^28 flops,
+   which is the ~0.6 ms the budget is meant to be; on a device with a quarter of the SMs
+   the same duration is a quarter of the flops, and a fixed count would have put several
+   unsafepointable milliseconds inside a critical copy there. The comparison is `>=`, not
+   `>`: n=m=p=512 at f64 lands exactly ON 2^28 and has to be on the syncing side of it.
+   The width needs no second factor -- the calibration device already runs fp64 at 1/44 of
+   its fp32 rate, which is the bad case.
 
 Below both ceilings a product is three critical copies, a launch, and nothing else. The
 plain (non-critical) copy handles do not exist: there is no route that wants them.
 
 ## Declining on error, and the sticky rule
 
-`CuResult` is the full CUDA 13 table -- 103 statuses -- with one property this library
-reasons about: `sticky()`. The human sentence is not duplicated; the driver supplies it
-through `cuGetErrorString`, and `CudaDriver.errorString` asks.
+`CuResult` is the full CUDA 13 table -- **101 statuses, diffed against `cuda.h` at
+`CUDA_VERSION 13000`** -- with one property this library reasons about: `sticky()`. The
+human sentence is not duplicated; the driver supplies it through `cuGetErrorString`, and
+`CudaDriver.errorString` asks.
+
+**Re-diff the table against the header when it is extended.** An invented constant is
+worse than a missing one, and not merely as bookkeeping: an unknown code is treated as
+sticky and retires the feature, so a constant that does not exist but IS in the table --
+and therefore has a `sticky` flag someone guessed -- can leave a dead context paying full
+round trips to fail. The first draft of this table carried two such (`917`, `918`, both
+marked non-sticky, in no CUDA 13 header); they are gone.
 
 - **Any non-zero status declines**, after freeing every buffer. `CUDA_ERROR_OUT_OF_MEMORY`
   is an ordinary decline: this product was too big, the next may fit.
@@ -272,9 +348,18 @@ crossover is around n=64" survived; the individual figures did not.
 a CPU library floors at 30 ns and a GPU round trip at 15 us. Three orders of magnitude of
 fixed cost, three orders of magnitude of threshold.
 
-When the probe could not use the stream-ordered allocator the floor is 170 us and the
+When the probe could not use the stream-ordered allocator the floor is ~180 us and the
 threshold is `1 << 21` instead, which is the crossover against the same CPU column between
 n=96 (131 us) and n=128 (384 us).
+
+**`Gpu.worth` applies the POOLED threshold on every machine, and `Gpu.multiply` applies the
+one actually in force.** That is deliberate and it is what keeps `worth` honest as the
+cheap pre-check it is documented to be: knowing which threshold this machine uses requires
+the probe -- a `dlopen`, a `cuInit`, a retained primary context and a PTX JIT -- and an
+interceptor asks `worth` on a path that may then never touch the device at all. So the
+probe sits behind a holder class that `worth` does not touch, `worth` means "big enough to
+be worth unwrapping the operands for", and `multiply` answers the real question. A test
+pins that 100k `worth` calls stay under 200 ms on a machine with no probe run.
 
 ## Precision
 
@@ -309,7 +394,7 @@ Two build inputs, both already in
   beside the `--simd` and `--blas` template entries. Without it the binary probes, finds a
   GPU, and then fails to find its own kernels.
 - **`reachability-metadata.json`**: a `foreign.downcalls` entry per distinct SIGNATURE --
-  22 handles collapse to 15 shapes, added to the six `--blas` ones. Without them the
+  24 handles collapse to 15 shapes, added to the six `--blas` ones. Without them the
   binary binds the driver and then throws `MissingForeignRegistrationError` on the first
   call. Generate them with the tracing agent
   (`-agentlib:native-image-agent=config-output-dir=...`) over a program that opens the

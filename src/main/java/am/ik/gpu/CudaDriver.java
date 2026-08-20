@@ -89,6 +89,10 @@ final class CudaDriver {
 
 	private final @Nullable MethodHandle cuMemFreeAsync;
 
+	private final @Nullable MethodHandle cuDeviceGetDefaultMemPool;
+
+	private final @Nullable MethodHandle cuMemPoolTrimTo;
+
 	private final MethodHandle cuMemcpyHtoD;
 
 	private final MethodHandle cuMemcpyDtoH;
@@ -123,6 +127,8 @@ final class CudaDriver {
 		this.cuMemFree = handle(lookup, "cuMemFree_v2", FunctionDescriptor.of(I, L));
 		this.cuMemAllocAsync = optional(lookup, "cuMemAllocAsync", FunctionDescriptor.of(I, P, L, P));
 		this.cuMemFreeAsync = optional(lookup, "cuMemFreeAsync", FunctionDescriptor.of(I, L, P));
+		this.cuDeviceGetDefaultMemPool = optional(lookup, "cuDeviceGetDefaultMemPool", FunctionDescriptor.of(I, P, I));
+		this.cuMemPoolTrimTo = optional(lookup, "cuMemPoolTrimTo", FunctionDescriptor.of(I, P, L));
 		this.cuMemcpyHtoD = handle(lookup, "cuMemcpyHtoD_v2", htod, critical);
 		this.cuMemcpyDtoH = handle(lookup, "cuMemcpyDtoH_v2", dtoh, critical);
 		this.cuModuleLoadData = handle(lookup, "cuModuleLoadData", FunctionDescriptor.of(I, P, P));
@@ -250,9 +256,41 @@ final class CudaDriver {
 		return (int) this.cuMemGetInfo.invokeExact(free, total);
 	}
 
-	/** Whether this driver exports the stream-ordered allocator at all. */
+	/**
+	 * The device's default memory pool -- the one {@link #memAllocAsync} draws from, and
+	 * the only handle by which its high-water mark can be given back.
+	 */
+	int deviceGetDefaultMemPool(MemorySegment out, int device) throws Throwable {
+		MethodHandle handle = this.cuDeviceGetDefaultMemPool;
+		if (handle == null) {
+			return CuResult.CUDA_ERROR_NOT_SUPPORTED.code();
+		}
+		return (int) handle.invokeExact(out, device);
+	}
+
+	/**
+	 * Releases everything the pool is holding above {@code keepBytes} back to the device.
+	 * A pooled allocation that FAILS still grows the pool as far as it can on the way to
+	 * failing, and hands back no pointer to free, so this is the only way an
+	 * out-of-memory decline can give the memory back -- to this process and to every
+	 * other one on the card.
+	 */
+	int memPoolTrimTo(MemorySegment pool, long keepBytes) throws Throwable {
+		MethodHandle handle = this.cuMemPoolTrimTo;
+		if (handle == null) {
+			return CuResult.CUDA_ERROR_NOT_SUPPORTED.code();
+		}
+		return (int) handle.invokeExact(pool, keepBytes);
+	}
+
+	/**
+	 * Whether this driver exports the stream-ordered allocator AND the two calls that
+	 * make its failure mode survivable. All four go together: a pool that cannot be
+	 * trimmed is worse than no pool at all.
+	 */
 	boolean hasPooledAllocation() {
-		return this.cuMemAllocAsync != null && this.cuMemFreeAsync != null;
+		return this.cuMemAllocAsync != null && this.cuMemFreeAsync != null && this.cuDeviceGetDefaultMemPool != null
+				&& this.cuMemPoolTrimTo != null;
 	}
 
 	/**

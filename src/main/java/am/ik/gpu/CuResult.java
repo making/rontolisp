@@ -6,9 +6,11 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Every {@code CUresult} the CUDA driver API can return, as of CUDA 13.0, with the one
- * property this library actually reasons about: whether the status leaves the context
- * UNUSABLE.
+ * Every {@code CUresult} the CUDA driver API can return, with the one property this
+ * library actually reasons about: whether the status leaves the context UNUSABLE. The 101
+ * constants below are diffed against {@code cuda.h} at {@code CUDA_VERSION 13000} and
+ * agree with it exactly -- which is a thing to RE-CHECK when the table is extended,
+ * because an invented constant is worse than a missing one (see {@link #isSticky(int)}).
  *
  * <h2>Why the whole table and not just "non-zero"</h2>
  *
@@ -244,10 +246,6 @@ public enum CuResult {
 	CUDA_ERROR_INVALID_RESOURCE_CONFIGURATION(915),
 
 	CUDA_ERROR_KEY_ROTATION(916),
-
-	CUDA_ERROR_STREAM_DETACHED(917),
-
-	CUDA_ERROR_GRAPH_RECAPTURE_FAILURE(918),
 
 	/** An unspecified internal error. Treated as sticky: nothing here can recover it. */
 	CUDA_ERROR_UNKNOWN(999, true);

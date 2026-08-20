@@ -13,16 +13,26 @@ import static org.assertj.core.api.Assertions.assertThat;
  * covers what every machine must do; nothing here is allowed to be a requirement.
  *
  * <p>
- * Four things are pinned. (1) The CHECKED-IN PTX loads on this device and computes the
+ * Five things are pinned. (1) The CHECKED-IN PTX loads on this device and computes the
  * reference values: it is a generated artifact with no other test of its validity, and a
  * regeneration that silently produced the wrong kernel would pass every decline test. (2)
  * The products agree with a scalar Java reference -- exactly, on inputs that are exact at
  * the operand width, and to a tight relative tolerance on inputs that are not, which is
- * the precision contract. (3) Every decline condition still declines with a device
- * present, so the size threshold and the bounds checks are not accidentally bypassed by
- * having hardware. (4) A run of products does not move free device memory, which is the
- * leak assertion: three buffers are allocated per call and three are freed, on the
- * failure path too.
+ * the precision contract. (3) BOTH allocator routes compute, because the fallback one is
+ * unreachable on a machine whose driver has a memory pool and is otherwise never executed
+ * anywhere. (4) Every decline condition still declines with a device present, so the size
+ * threshold and the bounds checks are not accidentally bypassed by having hardware. (5)
+ * Neither a run of successful products NOR a run of failing ones moves free device
+ * memory, which is the leak assertion -- and the failing half is the one that was wrong
+ * first, so it is asserted rather than assumed.
+ *
+ * <h2>Every shape here is sized off {@link Gpu#minWork()}</h2>
+ *
+ * The size threshold is a property of the MACHINE, not of the build: a driver without a
+ * usable stream-ordered allocator has an eleven-times-higher floor and declines up to 16x
+ * further up. A test that hard-codes a shape chosen for one of those thresholds turns the
+ * whole class red on a machine with the other, and reads as a kernel regression when it
+ * is nothing of the sort.
  */
 @EnabledIf("am.ik.gpu.GpuTest#gpuIsAvailable")
 class GpuTest {
@@ -31,10 +41,23 @@ class GpuTest {
 		return Gpu.available();
 	}
 
+	/**
+	 * The smallest square product this machine will actually accept, times a safety
+	 * factor so that a shape derived from it is not sitting on the threshold.
+	 */
+	private static int square() {
+		int n = (int) Math.ceil(Math.cbrt((double) Gpu.minWork()));
+		return Math.max(64, roundUpToTile(n + n / 4));
+	}
+
+	private static int roundUpToTile(int n) {
+		return (n + 15) / 16 * 16;
+	}
+
 	@Test
 	void theCheckedInPtxLoadsAndTheKernelComputes() {
 		assertThat(Gpu.description()).contains("sm_");
-		int n = 64;
+		int n = square();
 		double[] a = new double[n * n], b = new double[n * n];
 		for (int i = 0; i < a.length; i++) {
 			a[i] = (i % 7) - 3;
@@ -42,14 +65,14 @@ class GpuTest {
 		}
 		double[] c = Gpu.multiply(a, 0, b, 0, n, n, n);
 		assertThat(c).isNotNull().hasSize(n * n);
-		// Small integers through a 64-long reduction are exact at both widths, so the
-		// tiled kernel's reordering is invisible and this is an EQUALITY.
+		// Small integers through the reduction are exact at both widths, so the tiled
+		// kernel's reordering is invisible and this is an EQUALITY.
 		assertThat(c).containsExactly(reference(a, 0, b, 0, n, n, n));
 	}
 
 	@Test
 	void theSingleFloatKernelComputesTheSameExactValues() {
-		int n = 64;
+		int n = square();
 		float[] a = new float[n * n], b = new float[n * n];
 		double[] ad = new double[n * n], bd = new double[n * n];
 		for (int i = 0; i < a.length; i++) {
@@ -67,10 +90,53 @@ class GpuTest {
 	}
 
 	@Test
+	void bothAllocatorRoutesComputeTheSameProduct() {
+		// cuMemAllocAsync is 0.7 us a pair and cuMemAlloc is 126, which is why the pooled
+		// route exists -- but a driver older than CUDA 11.2, or a device without memory
+		// pools, takes the other one, and on this machine it would otherwise never run at
+		// all. Same shapes, same answers, and the threshold in force is the pooled one
+		// either way because the switch is below Gpu.
+		CudaGemm gemm = Gpu.device();
+		assertThat(gemm).isNotNull();
+		int n = square();
+		double[] a = new double[n * n], b = new double[n * n];
+		float[] af = new float[n * n], bf = new float[n * n];
+		for (int i = 0; i < a.length; i++) {
+			a[i] = (i % 7) - 3;
+			b[i] = (i % 5) - 2;
+			af[i] = (float) a[i];
+			bf[i] = (float) b[i];
+		}
+		double[] asProbed = new double[n * n], flipped = new double[n * n];
+		float[] asProbedF = new float[n * n], flippedF = new float[n * n];
+		boolean probed = gemm.pooled();
+		assertThat(gemm.gemm(a, 0, b, 0, asProbed, 0, n, n, n)).isTrue();
+		assertThat(gemm.gemmF(af, 0, bf, 0, asProbedF, 0, n, n, n)).isTrue();
+		boolean previous = gemm.setPooledAllocation(!probed);
+		try {
+			assertThat(previous).isEqualTo(probed);
+			// False either way, and for two different reasons: a machine whose driver HAS
+			// a pool has just been switched off it, and one whose driver has none cannot
+			// be switched ONTO it. The second runs the same route twice, which is still
+			// the right assertion for that machine.
+			assertThat(gemm.pooled()).isFalse();
+			assertThat(gemm.gemm(a, 0, b, 0, flipped, 0, n, n, n)).isTrue();
+			assertThat(gemm.gemmF(af, 0, bf, 0, flippedF, 0, n, n, n)).isTrue();
+		}
+		finally {
+			gemm.setPooledAllocation(previous);
+		}
+		assertThat(gemm.pooled()).isEqualTo(probed);
+		assertThat(flipped).containsExactly(asProbed);
+		assertThat(flippedF).containsExactly(asProbedF);
+		assertThat(asProbed).containsExactly(reference(a, 0, b, 0, n, n, n));
+	}
+
+	@Test
 	void anInexactProductAgreesWithTheScalarOracleToTheWidthsOwnTolerance() {
 		// The tiled walk reorders the reduction, so this is a tolerance and not an
 		// equality -- and the tolerance is the WIDTH's, not the device's.
-		int n = 128;
+		int n = 2 * square();
 		Random random = new Random(20260820L);
 		double[] a = new double[n * n], b = new double[n * n];
 		float[] af = new float[n * n], bf = new float[n * n];
@@ -99,33 +165,46 @@ class GpuTest {
 	}
 
 	@Test
-	void eachOperandIsReadFromItsOwnOffset() {
+	void everyOperandIncludingTheResultIsReadFromItsOwnOffset() {
 		// The compiled backends keep a [rank, dim..., data...] header inside the same
-		// array as the data, so an intercepted product hands over an offset per operand.
-		int n = 64;
-		int headerA = 3, headerB = 7;
+		// array as the data, so an intercepted product hands over an offset per operand
+		// AND writes into the array the caller has already shaped.
+		int n = square();
+		int headerA = 3, headerB = 7, headerOut = 4;
 		double[] a = new double[headerA + n * n], b = new double[headerB + n * n];
+		double[] out = new double[headerOut + n * n];
 		for (int i = 0; i < headerA; i++) {
 			a[i] = Double.NaN;
 		}
 		for (int i = 0; i < headerB; i++) {
 			b[i] = Double.NaN;
 		}
+		for (int i = 0; i < headerOut; i++) {
+			out[i] = i + 0.5;
+		}
 		for (int i = 0; i < n * n; i++) {
 			a[headerA + i] = (i % 7) - 3;
 			b[headerB + i] = (i % 5) - 2;
 		}
-		double[] c = Gpu.multiply(a, headerA, b, headerB, n, n, n);
-		assertThat(c).isNotNull().hasSize(n * n);
-		// A NaN anywhere in the result would mean the header was read as data.
-		assertThat(c).containsExactly(reference(a, headerA, b, headerB, n, n, n));
+		assertThat(Gpu.multiply(a, headerA, b, headerB, out, headerOut, n, n, n)).isTrue();
+		double[] expected = reference(a, headerA, b, headerB, n, n, n);
+		// A NaN anywhere in the result would mean an operand's header was read as data.
+		for (int i = 0; i < n * n; i++) {
+			assertThat(out[headerOut + i]).isEqualTo(expected[i]);
+		}
+		// And the result's own header is where the caller left it.
+		for (int i = 0; i < headerOut; i++) {
+			assertThat(out[i]).isEqualTo(i + 0.5);
+		}
 	}
 
 	@Test
 	void aRectangularProductUsesAllThreeDimensions() {
-		// n, m and p distinct, and none a multiple of the 16x16 tile, so the kernel's
-		// bounds guards are exercised rather than its happy path.
-		int n = 70, m = 37, p = 101;
+		// n, m and p distinct, none a multiple of the 16x16 tile so the kernel's bounds
+		// guards are exercised rather than its happy path, and all three above whatever
+		// threshold is in force on this machine.
+		int base = square();
+		int n = base + 6, m = base - 11, p = base + 37;
 		double[] a = new double[n * m], b = new double[m * p];
 		for (int i = 0; i < a.length; i++) {
 			a[i] = (i % 9) - 4;
@@ -165,37 +244,72 @@ class GpuTest {
 
 	@Test
 	void everyDeclineConditionStillDeclinesWithADevicePresent() {
-		double[] a = new double[64 * 64], b = new double[64 * 64];
+		int n = square();
+		double[] a = new double[n * n], b = new double[n * n], out = new double[n * n];
 		assertThat(Gpu.worth(8, 8, 8)).isFalse();
 		assertThat(Gpu.multiply(a, 0, b, 0, 8, 8, 8)).isNull();
-		assertThat(Gpu.multiply(a, 0, b, 0, 128, 128, 128)).isNull();
-		assertThat(Gpu.multiply(a, 1, b, 0, 64, 64, 64)).isNull();
-		assertThat(Gpu.multiply(a, 0, b, 0, 64, 64, 0)).isNull();
+		assertThat(Gpu.multiply(a, 0, b, 0, 4 * n, 4 * n, 4 * n)).isNull();
+		assertThat(Gpu.multiply(a, 1, b, 0, n, n, n)).isNull();
+		assertThat(Gpu.multiply(a, 0, b, 0, n, n, 0)).isNull();
+		// The out-taking form declines on the same conditions, plus its own.
+		assertThat(Gpu.multiply(a, 0, b, 0, out, 1, n, n, n)).isFalse();
+		assertThat(Gpu.multiply(a, 0, b, 0, out, -1, n, n, n)).isFalse();
+		assertThat(Gpu.multiply(a, 0, b, 0, new double[n], 0, n, n, n)).isFalse();
 	}
 
 	@Test
-	void aRunOfProductsFreesEveryBufferItAllocates() {
+	void aRunOfSuccessfulProductsFreesEveryBufferItAllocates() {
 		CudaGemm gemm = Gpu.device();
 		assertThat(gemm).isNotNull();
 		int n = 256;
 		double[] a = new double[n * n], b = new double[n * n], c = new double[n * n];
 		// One call first, so the driver's pool has reached its working size and the
 		// baseline is the steady state rather than the cold one.
-		assertThat(gemm.gemm(a, 0, b, 0, c, n, n, n)).isTrue();
+		assertThat(gemm.gemm(a, 0, b, 0, c, 0, n, n, n)).isTrue();
 		long before = gemm.freeDeviceMemory();
 		assertThat(before).isGreaterThan(0);
 		for (int i = 0; i < 500; i++) {
-			assertThat(gemm.gemm(a, 0, b, 0, c, n, n, n)).isTrue();
+			assertThat(gemm.gemm(a, 0, b, 0, c, 0, n, n, n)).isTrue();
 		}
 		long after = gemm.freeDeviceMemory();
-		// 500 products of three 512 KB buffers leak 750 MB if they leak at all; the slack
-		// is for the rest of the machine, which is also using this device.
-		assertThat(before - after).isLessThan(64L << 20);
+		// 500 products of three 512 KB buffers leak 750 MB if they leak at all. The
+		// assertion is two-sided on purpose: free memory that GREW would mean this is
+		// measuring the rest of the machine rather than the buffers.
+		assertThat(Math.abs(before - after)).isLessThan(64L << 20);
+	}
+
+	@Test
+	void aDeclinedProductCostsTheDeviceNothing() {
+		// The failure path, which the successful run above never enters, and the one that
+		// was wrong first: a pooled allocation that FAILS grows the driver's pool as far
+		// as it can on the way to failing and hands back no pointer to free. Measured
+		// before this was handled, ONE declined product took this 128 GB device from
+		// 69 GB free to 1 GB free and never gave it back -- to this process or to any
+		// other one on the card. An 80 GB operand is refused by the pre-flight; the pool
+		// trim covers the same case when the pre-flight cannot see it coming.
+		CudaGemm gemm = Gpu.device();
+		assertThat(gemm).isNotNull();
+		long before = gemm.freeDeviceMemory();
+		assertThat(before).isGreaterThan(0);
+		int huge = 100_000;
+		double[] tiny = new double[1];
+		for (int i = 0; i < 12; i++) {
+			assertThat(gemm.gemm(tiny, 0, tiny, 0, tiny, 0, huge, huge, huge))
+				.as("an %d x %d product must decline", huge, huge)
+				.isFalse();
+			assertThat(gemm.usable()).as("running out of device memory is not a sticky error").isTrue();
+		}
+		long after = gemm.freeDeviceMemory();
+		assertThat(before - after).as("free device memory after twelve declined products").isLessThan(64L << 20);
+		// And the device still works afterwards.
+		int n = square();
+		double[] a = new double[n * n], b = new double[n * n], c = new double[n * n];
+		assertThat(gemm.gemm(a, 0, b, 0, c, 0, n, n, n)).isTrue();
 	}
 
 	@Test
 	void theSameProductRepeatedIsTheSameAnswer() {
-		int n = 96;
+		int n = square();
 		Random random = new Random(7L);
 		double[] a = new double[n * n], b = new double[n * n];
 		for (int i = 0; i < a.length; i++) {

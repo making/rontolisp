@@ -3,38 +3,48 @@ package am.ik.gpu;
 import org.jspecify.annotations.Nullable;
 
 /**
- * A matrix product on the GPU, or {@code null} because this call declines. That is the
- * whole public surface of this library, and it is deliberately the shape of a PARTIAL
- * function: a caller offers a product, gets a fresh result array when the device took it,
- * and gets {@code null} -- never an exception -- when it did not.
+ * A matrix product on the GPU, or a decline. That is the whole public surface of this
+ * library, and it is deliberately the shape of a PARTIAL function: a caller offers a
+ * product and either the device took it or it did not, said with {@code false} or
+ * {@code null} and never with an exception.
  *
  * <h2>What "declines" covers</h2>
  *
  * Everything. No NVIDIA driver, no device, a card older than the PTX this library
  * carries, a JVM that forbids native access, a platform with no {@code libcuda.so.1} (so
  * far, anything but Linux), a shape too big for the launch grid, a product too small to
- * be worth a round trip, device memory exhausted, a failed {@code CUresult} of any kind,
- * or a context that a previous failure left unusable. All of them answer {@code null}
+ * be worth a round trip, one too big for free device memory, a failed {@code CUresult} of
+ * any kind, or a context that a previous failure left unusable. All of them answer
  * quietly, and the caller runs whatever it would have run anyway. This is the same
  * posture {@code --simd} has toward a JDK without {@code jdk.incubator.vector} and
  * {@code --blas} has toward a machine with no tuned CBLAS ({@code .kb/linalg-simd.md},
  * {@code .kb/linalg-blas.md}).
  *
- * <h2>The probe runs once</h2>
+ * <p>
+ * Two things are NOT declines, because neither is this library's to swallow. A
+ * {@code null} operand array is a defect in the caller and throws
+ * {@link NullPointerException}; and the array-returning overloads allocate the result, so
+ * they can throw {@link OutOfMemoryError} exactly as {@code new double[n * p]} can. The
+ * {@code out}-taking overloads allocate nothing.
  *
- * Binding the driver, retaining the primary context and JIT-compiling the kernels is done
- * on first use and cached for the life of the process, failure included: a machine
- * without a GPU pays one failed {@code dlopen} and never touches the driver again.
+ * <h2>The probe runs once, and only when something needs it</h2>
+ *
+ * Binding the driver, retaining the primary context and JIT-compiling the kernels happens
+ * on the first call that needs a device, and is cached for the life of the process,
+ * failure included: a machine without a GPU pays one failed {@code dlopen} and never
+ * touches the driver again. {@link #worth} deliberately does not need it, so an
+ * interceptor can ask that on a path that then never touches the device.
  * {@link #description()} says what was found or why nothing was, and is what a caller
  * should print when it was asked for a GPU and cannot have one.
  *
  * <h2>Offsets, because the arrays have headers</h2>
  *
- * Both products take an element offset per operand. rontolisp's compiled backends carry a
- * {@code [rank, dim..., data...]} header inside the same array as the data, so a caller
- * must be able to say where the elements start; an interpreter whose arrays hold data
- * alone passes 0. The result is a fresh array of exactly {@code n * p} elements with no
- * header, which the caller wraps as it likes.
+ * Every operand -- the result included -- takes an element offset. rontolisp's compiled
+ * backends carry a {@code [rank, dim..., data...]} header inside the same array as the
+ * data, so a caller must be able to say where the elements start AND to have the product
+ * written straight into the array it has already shaped; an interpreter whose arrays hold
+ * data alone passes 0. The array-returning overloads are the convenience form for a
+ * caller that wants a bare {@code n * p} result, and they delegate.
  *
  * @see CuResult
  */
@@ -63,57 +73,83 @@ public final class Gpu {
 	private static final long POOLED_MIN_WORK = 1L << 17;
 
 	/**
-	 * The threshold for a driver whose stream-ordered allocator this library could not
-	 * use: {@code cuMemAlloc} and {@code cuMemFree} cost 126 us a pair, three pairs are
-	 * needed, and the floor is 170 us rather than 15. The crossover moves with it, to
-	 * between n=96 and n=128 (131 us and 384 us on the CPU).
+	 * The threshold {@link #multiply} applies instead on a machine whose driver has no
+	 * usable stream-ordered allocator. Allocating the three buffers per call raises the
+	 * floor from 15 us to 170, which moves the crossover against the same CPU column to
+	 * between n=96 (131 us) and n=128 (384 us). {@link #worth} does NOT apply it, and
+	 * says why.
 	 */
 	private static final long UNPOOLED_MIN_WORK = 1L << 21;
-
-	private static final @Nullable CudaGemm DEVICE;
-
-	private static final String DESCRIPTION;
-
-	private static final long MIN_WORK;
-
-	static {
-		CudaGemm device;
-		String description;
-		try {
-			CudaGemm.Probe probe = CudaGemm.probe();
-			device = probe.gemm();
-			description = probe.description();
-		}
-		catch (Throwable ex) {
-			// The probe is written not to throw; if it ever does, the answer is still no.
-			device = null;
-			description = "the CUDA driver could not be probed: " + ex;
-		}
-		DEVICE = device;
-		DESCRIPTION = description;
-		MIN_WORK = device == null || device.pooled() ? POOLED_MIN_WORK : UNPOOLED_MIN_WORK;
-	}
 
 	private Gpu() {
 	}
 
 	/**
+	 * The probe, and everything that depends on having run it, behind a holder so that it
+	 * happens on the first question that NEEDS a device rather than on any mention of
+	 * {@link Gpu}. It is not a cheap static initializer: a {@code dlopen}, a
+	 * {@code cuInit}, a retained primary context (which reserves device memory of its
+	 * own) and a PTX JIT.
+	 */
+	private static final class Probe {
+
+		private static final @Nullable CudaGemm DEVICE;
+
+		private static final String DESCRIPTION;
+
+		private static final long MIN_WORK;
+
+		static {
+			CudaGemm device;
+			String description;
+			try {
+				CudaGemm.Probe probe = CudaGemm.probe();
+				device = probe.gemm();
+				description = probe.description();
+			}
+			catch (Throwable ex) {
+				// The probe is written not to throw; if it ever does, the answer is still
+				// no. The nested try is not paranoia for its own sake: an exception
+				// escaping HERE would fail this class's initialization, and every later
+				// call would get a NoClassDefFoundError instead of a decline, for the
+				// life of the process.
+				device = null;
+				description = "the CUDA driver could not be probed";
+				try {
+					description = description + ": " + ex;
+				}
+				catch (Throwable nested) {
+					description = description + ": " + ex.getClass().getName();
+				}
+			}
+			DEVICE = device;
+			DESCRIPTION = description;
+			MIN_WORK = device == null || device.pooled() ? POOLED_MIN_WORK : UNPOOLED_MIN_WORK;
+		}
+
+		private Probe() {
+		}
+
+	}
+
+	/**
 	 * Whether this machine has a GPU these kernels can run on. {@code false} is an
-	 * ordinary answer, not an error, and it is the answer on most machines.
+	 * ordinary answer, not an error, and it is the answer on most machines. The first
+	 * call runs the probe.
 	 * @return {@code true} when a product may be offered to {@link #multiply}
 	 */
 	public static boolean available() {
-		CudaGemm device = DEVICE;
+		CudaGemm device = Probe.DEVICE;
 		return device != null && device.usable();
 	}
 
 	/**
 	 * What was found -- device model, architecture, driver version -- or why nothing was.
-	 * Always a printable one-liner, on every machine.
+	 * Always a printable one-liner, on every machine. The first call runs the probe.
 	 * @return a one-line description of the probe's outcome
 	 */
 	public static String description() {
-		return DESCRIPTION;
+		return Probe.DESCRIPTION;
 	}
 
 	/**
@@ -123,25 +159,47 @@ public final class Gpu {
 	 * @return the probed device, or {@code null} when there is none
 	 */
 	static @Nullable CudaGemm device() {
-		return DEVICE;
+		return Probe.DEVICE;
+	}
+
+	/**
+	 * The threshold {@link #multiply} is applying on this machine, which is
+	 * {@link #worth}'s only when the driver's pooled allocator is in use. Package-private
+	 * and for the tests, which must size their shapes off the threshold actually in force
+	 * rather than off the one that was true when they were written.
+	 * @return the minimum {@code n * m * p} a product is accepted at
+	 */
+	static long minWork() {
+		return Probe.MIN_WORK;
 	}
 
 	/**
 	 * Whether an {@code n x m} by {@code m x p} product is big enough to be worth a round
-	 * trip to the device at all. A caller should ask this BEFORE it goes to the trouble
-	 * of unwrapping its operands; {@link #multiply} asks it again anyway.
+	 * trip to the device at all -- a pure size predicate over the three dimensions, so a
+	 * caller can ask it BEFORE it goes to the trouble of unwrapping its operands, and
+	 * before anything has touched the driver.
+	 *
+	 * <p>
+	 * It is deliberately the LOWER of the two thresholds this library uses: a machine
+	 * whose driver has no pooled allocator has a floor eleven times higher and declines
+	 * up to 16x further up, but discovering that costs a probe, and this predicate's
+	 * whole value is that it costs nothing. So {@code true} means "worth unwrapping for",
+	 * not "will be accepted"; {@link #multiply} asks the real question.
 	 * @param n rows of the left operand and of the result
 	 * @param m the inner dimension
 	 * @param p columns of the right operand and of the result
 	 * @return {@code true} when the product is above the size threshold
 	 */
 	public static boolean worth(long n, long m, long p) {
-		return n > 0 && m > 0 && p > 0 && n * m * p >= MIN_WORK;
+		return n > 0 && m > 0 && p > 0 && n * m * p >= POOLED_MIN_WORK;
 	}
 
 	/**
-	 * {@code a x b} for a row-major {@code n x m} by {@code m x p} pair of double-float
-	 * arrays.
+	 * {@code out = a x b} for a row-major {@code n x m} by {@code m x p} pair of
+	 * double-float arrays, written straight into the caller's array at its own offset.
+	 * This is the form an interceptor wants: rontolisp's compiled arrays carry a
+	 * dimension header in front of their data, and a fresh array would have to be copied
+	 * into one.
 	 *
 	 * <p>
 	 * Double is the width this device class is WORST at -- a tenth to a fortieth of its
@@ -156,24 +214,66 @@ public final class Gpu {
 	 * @param offsetA the index of {@code a}'s first element
 	 * @param b the right operand, row-major, elements starting at {@code offsetB}
 	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param n rows of {@code a} and of the result
+	 * @param m columns of {@code a} and rows of {@code b}
+	 * @param p columns of {@code b} and of the result
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean multiply(double[] a, int offsetA, double[] b, int offsetB, double[] out, int offsetOut, int n,
+			int m, int p) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offered(a.length, offsetA, b.length, offsetB, out.length, offsetOut, n, m, p)
+				&& device.gemm(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #multiply(double[], int, double[], int, double[], int, int, int, int)}, and
+	 * the one the hardware is for.
+	 * @param a the left operand, row-major, elements starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand, row-major, elements starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param n rows of {@code a} and of the result
+	 * @param m columns of {@code a} and rows of {@code b}
+	 * @param p columns of {@code b} and of the result
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean multiply(float[] a, int offsetA, float[] b, int offsetB, float[] out, int offsetOut, int n,
+			int m, int p) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offered(a.length, offsetA, b.length, offsetB, out.length, offsetOut, n, m, p)
+				&& device.gemmF(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
+	}
+
+	/**
+	 * {@code a x b} into a fresh array -- the convenience form, for a caller that wants a
+	 * bare {@code n * p} result with no header of its own.
+	 * @param a the left operand, row-major, elements starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand, row-major, elements starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
 	 * @param n rows of {@code a} and of the result
 	 * @param m columns of {@code a} and rows of {@code b}
 	 * @param p columns of {@code b} and of the result
 	 * @return a fresh {@code n * p} array, or {@code null} when this call declines
 	 */
 	public static double @Nullable [] multiply(double[] a, int offsetA, double[] b, int offsetB, int n, int m, int p) {
-		CudaGemm device = DEVICE;
-		if (device == null || !offered(a.length, offsetA, b.length, offsetB, n, m, p)) {
+		if (Probe.DEVICE == null || !offered(a.length, offsetA, b.length, offsetB, (long) n * p, 0, n, m, p)) {
 			return null;
 		}
-		double[] c = new double[n * p];
-		return device.gemm(a, offsetA, b, offsetB, c, n, m, p) ? c : null;
+		double[] out = new double[n * p];
+		return multiply(a, offsetA, b, offsetB, out, 0, n, m, p) ? out : null;
 	}
 
 	/**
 	 * The single-float sibling of
-	 * {@link #multiply(double[], int, double[], int, int, int, int)}, and the one the
-	 * hardware is for.
+	 * {@link #multiply(double[], int, double[], int, int, int, int)}.
 	 * @param a the left operand, row-major, elements starting at {@code offsetA}
 	 * @param offsetA the index of {@code a}'s first element
 	 * @param b the right operand, row-major, elements starting at {@code offsetB}
@@ -184,23 +284,25 @@ public final class Gpu {
 	 * @return a fresh {@code n * p} array, or {@code null} when this call declines
 	 */
 	public static float @Nullable [] multiply(float[] a, int offsetA, float[] b, int offsetB, int n, int m, int p) {
-		CudaGemm device = DEVICE;
-		if (device == null || !offered(a.length, offsetA, b.length, offsetB, n, m, p)) {
+		if (Probe.DEVICE == null || !offered(a.length, offsetA, b.length, offsetB, (long) n * p, 0, n, m, p)) {
 			return null;
 		}
-		float[] c = new float[n * p];
-		return device.gemmF(a, offsetA, b, offsetB, c, n, m, p) ? c : null;
+		float[] out = new float[n * p];
+		return multiply(a, offsetA, b, offsetB, out, 0, n, m, p) ? out : null;
 	}
 
 	/**
-	 * Whether a product is one this library will attempt: worth the trip, launchable in
-	 * one grid, and actually present in the arrays it was handed. A caller that gets its
-	 * own offsets wrong is declined rather than signalled -- the point of the whole
-	 * mechanism is that it never changes what a program computes.
+	 * Whether a product is one this library will attempt: big enough for the threshold
+	 * actually in force on this machine, launchable in one grid, and actually present in
+	 * the three arrays it was handed. A caller that gets its own offsets wrong is
+	 * declined rather than signalled -- the point of the whole mechanism is that it never
+	 * changes what a program computes.
 	 */
-	private static boolean offered(int lengthA, int offsetA, int lengthB, int offsetB, int n, int m, int p) {
-		return worth(n, m, p) && CudaGemm.launchable(n, m, p) && offsetA >= 0 && offsetB >= 0
-				&& (long) offsetA + (long) n * m <= lengthA && (long) offsetB + (long) m * p <= lengthB;
+	private static boolean offered(long lengthA, int offsetA, long lengthB, int offsetB, long lengthOut, int offsetOut,
+			int n, int m, int p) {
+		return n > 0 && m > 0 && p > 0 && (long) n * m * p >= Probe.MIN_WORK && CudaGemm.launchable(n, m, p)
+				&& offsetA >= 0 && offsetB >= 0 && offsetOut >= 0 && (long) offsetA + (long) n * m <= lengthA
+				&& (long) offsetB + (long) m * p <= lengthB && (long) offsetOut + (long) n * p <= lengthOut;
 	}
 
 }

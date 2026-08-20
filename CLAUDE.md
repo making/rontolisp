@@ -26,20 +26,22 @@ Source string
     -> WasmLispCompiler (codegen.wasm) -> byte[] (.wasm)
 ```
 
-`am.ik.jvm`, `am.ik.wasm` and `am.ik.wit` are **language-independent** libraries; none may
-import rontolisp packages or external dependencies.
+`am.ik.jvm`, `am.ik.wasm`, `am.ik.wit` and `am.ik.gpu` are **language-independent**
+libraries; none may import rontolisp packages or external dependencies. `am.ik.gpu` is the
+CUDA half of `--gpu` and imports nothing at all (`.kb/gpu.md`); no interceptor uses it yet.
 
 Package dependency direction (no cycles allowed):
 
 ```
 cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit
-codegen.jvm -> compiler, macro, am.ik.jvm
+codegen.jvm -> compiler, macro, am.ik.jvm, am.ik.gpu
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, rontolisp (AST types only)
+eval -> macro, compiler, reader, rontolisp (AST types only), am.ik.gpu
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 format -> (nothing)
+am.ik.gpu -> (nothing)
 ```
 
 - `format` depends on nothing, not even `reader`: it needs the source verbatim and has its

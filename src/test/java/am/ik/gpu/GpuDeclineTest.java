@@ -37,6 +37,25 @@ class GpuDeclineTest {
 	}
 
 	@Test
+	void worthIsAPureSizePredicateThatCostsNothing() {
+		// It is documented as the pre-check a caller makes BEFORE unwrapping its
+		// operands,
+		// so it must not be the thing that runs the probe: on a machine with a GPU that
+		// is
+		// a dlopen, a cuInit, a retained primary context and a PTX JIT, on a path that
+		// may
+		// then never touch the device. Asking it many times must stay free.
+		long start = System.nanoTime();
+		boolean any = false;
+		for (int i = 0; i < 100_000; i++) {
+			any |= Gpu.worth(i % 97, 64, 64);
+		}
+		long elapsed = System.nanoTime() - start;
+		assertThat(any).isTrue();
+		assertThat(elapsed).as("100k worth() calls in nanoseconds").isLessThan(200_000_000L);
+	}
+
+	@Test
 	void aProductBelowTheSizeThresholdIsNeverOffered() {
 		// The threshold is the whole reason an intercepted call is allowed to be
 		// unconditional: a small product declines and the caller's own kernel runs.
@@ -67,6 +86,28 @@ class GpuDeclineTest {
 		assertThat(Gpu.multiply(a, 0, b, 0, 64, 64, -64)).isNull();
 		// A row count past the 16-bit grid axis, on arrays that could never hold it.
 		assertThat(Gpu.multiply(a, 0, b, 0, Integer.MAX_VALUE, 64, 64)).isNull();
+		// A product bigger than any device's memory: declined by the size check on a
+		// machine without a GPU, and by the pre-flight against free device memory on one
+		// with. Neither may throw, and on a real device neither may cost the device
+		// anything (GpuTest.aDeclinedProductCostsTheDeviceNothing).
+		double[] tiny = new double[1];
+		assertThat(Gpu.multiply(tiny, 0, tiny, 0, 100_000, 100_000, 100_000)).isNull();
+	}
+
+	@Test
+	void theDestinationTakingFormDeclinesOnTheSameConditions() {
+		// The form an interceptor will actually call: it writes into the caller's array
+		// at the caller's offset, so it has a third set of bounds to refuse.
+		double[] a = new double[64 * 64], b = new double[64 * 64], out = new double[64 * 64];
+		float[] af = new float[64 * 64], bf = new float[64 * 64], outF = new float[64 * 64];
+		assertThat(Gpu.multiply(a, 0, b, 0, out, 0, 4, 4, 4)).isFalse();
+		assertThat(Gpu.multiply(af, 0, bf, 0, outF, 0, 4, 4, 4)).isFalse();
+		// The result would not fit: one element short, and a negative offset.
+		assertThat(Gpu.multiply(a, 0, b, 0, out, 1, 64, 64, 64)).isFalse();
+		assertThat(Gpu.multiply(a, 0, b, 0, out, -1, 64, 64, 64)).isFalse();
+		assertThat(Gpu.multiply(af, 0, bf, 0, new float[64], 0, 64, 64, 64)).isFalse();
+		// And a declined call leaves the destination alone.
+		assertThat(out).containsOnly(0.0);
 	}
 
 	@Test
