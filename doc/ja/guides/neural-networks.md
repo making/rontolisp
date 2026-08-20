@@ -128,6 +128,10 @@
 (length (torch:parameters *net*))                                       ; => 4
 ```
 
+活性化関数は [`torch:relu`](../reference/functions/torch-relu.md)、[`torch:tanh`](../reference/functions/torch-tanh.md)、[`torch:gelu`](../reference/functions/torch-gelu.md) で、いずれもテンソルを受け取る普通の関数です。`torch:gelu` の既定は厳密形 `x * (1 + erf(x / sqrt(2))) / 2` (`nn.GELU` 自身の既定) で、微分可能な [`torch:erf`](../reference/functions/torch-erf.md) の上に構築されています。`:approximate :tanh` を指定すると GPT/BERT の定式化になります。
+
+[`torch:fields`](../reference/functions/torch-fields.md) はモジュールのフィールド plist 全体を返します。これがツリーをパッケージの外から走査可能にするものです。`nn.Module.apply` と `nn.Module.named_parameters` に対応するものがないのは、走査をこの plist と [`torch:module-kind`](../reference/functions/torch-module-kind.md) — ドット区切りのパラメータ名の部分文字列ではなく、レイヤーが「何であるか」 — で書くためです。
+
 ## 損失関数
 
 `torch:mse-loss` と `torch:cross-entropy-loss` はスカラーテンソルを返す普通の関数です。交差エントロピーは生の**ロジット**を取り (softmax の出力ではありません。数値的に安定な形である `-log-softmax` から計算します)、最終軸以外を平坦化するので `(batch seq vocab)` がそのまま使えます。ターゲットは整数のクラスインデックス (`:ignore-index` がパディング位置を総和からも平均の分母からも除きます) か、ロジットと同じ形の確率分布 (PyTorch のソフトラベル形式、`-sum(target * log-softmax(logits))`) のどちらかです:
@@ -145,7 +149,7 @@
 
 ## オプティマイザ
 
-**オプティマイザ**は更新則とその状態を持ちます。`torch:sgd` と `torch:adam` はモデル (またはパラメータのリスト) を受け取り、ハイパーパラメータとバッファをモジュールとまったく同じ fields plist に保持し、`torch:step` ですべてのパラメータに更新則を適用します:
+**オプティマイザ**は更新則とその状態を持ちます。`torch:sgd`、`torch:adam`、`torch:adamw` はモデル (またはパラメータのリスト) を受け取り、ハイパーパラメータとバッファをモジュールとまったく同じ fields plist に保持し、`torch:step` ですべてのパラメータに更新則を適用します:
 
 ```lisp
 (defparameter *p* (torch:parameter '(1.0 2.0)))
@@ -166,7 +170,11 @@
 (torch:field (torch:set-field *adam* :lr 0.0005) :lr) ; => 5.0e-4
 ```
 
-両者が乗っているコンストラクタが `torch:optimizer` です。種別キーワード、パラメータ、fields plist、ステップ関数からなるので、このパッケージが用意していない更新則も同じレコードの上の素の defun として書けます。
+3 つが乗っているコンストラクタが `torch:optimizer` です。種別キーワード、パラメータ、fields plist、ステップ関数からなるので、このパッケージが用意していない更新則も同じレコードの上の素の defun として書けます。
+
+[`torch:adam`](../reference/functions/torch-adam.md) と [`torch:adamw`](../reference/functions/torch-adamw.md) は同じ規則で、減衰の位置だけが違います。Adam の `:weight-decay` は勾配に `wd * param` を加え、AdamW はパラメータを直接縮めるので適応的な分母で再スケールされません。パラメータ**グループ**というオブジェクトはありません。互いに素なパラメータリストに対する 2 つのオプティマイザがここでのグループであり、Transformer が重み行列だけを減衰させ、バイアス・LayerNorm のゲイン・埋め込みテーブルには手を付けないのはこの方法です。
+
+[`torch:clip-grad-norm`](../reference/functions/torch-clip-grad-norm.md) は `torch:backward` と `torch:step` の間に置きます。全勾配の L2 ノルム (測定値なので、そのままログに出せます) を返し、それが上限を超えていればその場でスケールします。
 
 ## ネットワークを学習させる
 

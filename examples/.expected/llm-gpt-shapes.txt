@@ -1,0 +1,12 @@
+vocabulary:                   28 characters
+encode/decode round trip:     T
+configured model size:        0.0073 M parameters
+model parameters:             49 tensors
+decay / no-decay split:       19 / 30 tensors
+dataset size: 45 tokens
+batch inputs / targets:       (4 8) / (4 8)
+gpt logits:                   (4 8 28)
+loss is a scalar:             T
+causal mask holds:            T
+generated length:             9 tokens
+top-k 1 is deterministic:     T

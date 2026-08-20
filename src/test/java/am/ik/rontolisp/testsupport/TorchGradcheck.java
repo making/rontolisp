@@ -77,6 +77,10 @@ public final class TorchGradcheck {
 			(gc-check "sqrt" (lambda (a) (sq-loss (torch:sqrt a))) (list *p23*))
 			(gc-check "tanh" (lambda (a) (sq-loss (torch:tanh a))) (list *a23*))
 			(gc-check "relu" (lambda (a) (sq-loss (torch:relu a))) (list *a23*))
+			(gc-check "erf" (lambda (a) (sq-loss (torch:erf a))) (list *a23*))
+			(gc-check "gelu" (lambda (a) (sq-loss (torch:gelu a))) (list *a23*))
+			(gc-check "gelu-tanh"
+			          (lambda (a) (sq-loss (torch:gelu a :approximate :tanh))) (list *a23*))
 			(gc-check "matmul-vv" (lambda (a b) (sq-loss (torch:matmul a b))) (list *v3* (linalg:add *v3* 0.25)))
 			(gc-check "matmul-mv" (lambda (a b) (sq-loss (torch:matmul a b))) (list *m23* *v3*))
 			(gc-check "matmul-vm" (lambda (a b) (sq-loss (torch:matmul a b))) (list *v2* *m23*))
@@ -282,6 +286,9 @@ public final class TorchGradcheck {
 			sqrt: ok
 			tanh: ok
 			relu: ok
+			erf: ok
+			gelu: ok
+			gelu-tanh: ok
 			matmul-vv: ok
 			matmul-mv: ok
 			matmul-vm: ok
@@ -427,6 +434,73 @@ public final class TorchGradcheck {
 			(torch:backward (oc-sq *r2*))
 			(torch:step *oa2*)
 			(oc-num "adam-set-lr" *r2* '(0.800000001))
+			;; the L2 term rides the gradient: g = 2 + 0.5 * 1 = 2.5 at p = 1 (torch.optim.Adam)
+			(defparameter *r3* (torch:parameter '(1.0)))
+			(defparameter *oa3* (torch:adam (list *r3*) :lr 0.1 :weight-decay 0.5))
+			(torch:backward (oc-sq *r3*))
+			(torch:step *oa3*)
+			(oc-num "adam-weight-decay" *r3* '(0.9000000003999999))
+
+			;; --- AdamW -------------------------------------------------------------------
+			;; the SAME rule with the decay decoupled: p first shrinks to 1 - 0.1*0.5 = 0.95,
+			;; then takes the unmodified g = 2 Adam step (torch.optim.AdamW).
+			(defparameter *rw* (torch:parameter '(1.0)))
+			(defparameter *ow2* (torch:adamw (list *rw*) :lr 0.1 :weight-decay 0.5))
+			(torch:backward (oc-sq *rw*))
+			(torch:step *ow2*)
+			(oc-num "adamw-1step" *rw* '(0.8500000004999999))
+			(oc-eq "adamw-kind" (torch:optimizer-kind *ow2*) :adamw)
+			(oc-eq "adamw-default-decay" (torch:field (torch:adamw (list *rw*)) :weight-decay) 0.01)
+
+			;; --- gradient-norm clipping --------------------------------------------------
+			;; two parameters, grads (2) and (2 4): total norm sqrt(4 + 4 + 16) = sqrt(24).
+			(defparameter *c1* (torch:parameter '(1.0)))
+			(defparameter *c2* (torch:parameter '(1.0 2.0)))
+			(torch:backward (torch:add (oc-sq *c1*) (oc-sq *c2*)))
+			(defparameter *cn* (torch:clip-grad-norm (list *c1* *c2*) 1.0))
+			(oc-num "clip-grad-norm-returns" (list *cn*) '(4.898979485566356))
+			;; every gradient scaled by 1 / (sqrt(24) + 1e-6), PyTorch's denominator
+			(oc-num "clip-grad-norm-scaled"
+			        (append (oc-flat (torch:grad *c1*)) (oc-flat (torch:grad *c2*)))
+			        '(0.4082482071305467 0.4082482071305467 0.8164964142610934))
+			;; below max-norm nothing is touched, and the measured norm is still returned
+			(defparameter *c3* (torch:parameter '(1.0)))
+			(torch:backward (oc-sq *c3*))
+			(oc-num "clip-grad-norm-under" (list (torch:clip-grad-norm (list *c3*) 10.0)) '(2.0))
+			(oc-num "clip-grad-norm-unscaled" (torch:grad *c3*) '(2.0))
+
+			;; --- the sampling and walking helpers ----------------------------------------
+			(oc-num "topk" (torch:topk (linalg:from-list '((1.0 5.0 3.0) (9.0 2.0 8.0))) 2)
+			        '(5.0 3.0 9.0 8.0))
+			(oc-num "topk-indices"
+			        (torch:topk (linalg:from-list '((1.0 5.0 3.0) (9.0 2.0 8.0))) 2 :indices t)
+			        '(1.0 2.0 0.0 2.0))
+			(oc-num "topk-axis"
+			        (torch:topk (linalg:from-list '((1.0 5.0 3.0) (9.0 2.0 8.0))) 1 :axis 0)
+			        '(9.0 5.0 8.0))
+			;; a one-hot distribution can only draw its own index, whatever the seed
+			(linalg:seed 3)
+			(oc-num "multinomial-degenerate"
+			        (torch:multinomial (linalg:from-list '((0.0 1.0 0.0) (0.0 0.0 1.0))))
+			        '(1.0 2.0))
+			;; without replacement four draws from four equal weights are a permutation
+			(oc-eq "multinomial-permutation"
+			       (sort (car (linalg:to-list
+			                   (torch:multinomial (linalg:from-list '((1.0 1.0 1.0 1.0)))
+			                                      :num-samples 4)))
+			             (function <))
+			       '(0.0 1.0 2.0 3.0))
+			;; the fields plist is the module walk: names in registration order, live values
+			(defparameter *ln* (torch:layer-norm 2))
+			(oc-eq "fields-names"
+			       (do ((p (torch:fields *ln*) (cddr p)) (acc nil (cons (car p) acc)))
+			           ((null p) (reverse acc)))
+			       '(:weight :bias :eps))
+			(oc-eq "fields-values"
+			       (list (eq (nth 1 (torch:fields *ln*)) (torch:field *ln* :weight))
+			             (eq (nth 3 (torch:fields *ln*)) (torch:field *ln* :bias))
+			             (nth 5 (torch:fields *ln*)))
+			       '(t t 1.0e-5))
 
 			;; --- batching and the masks --------------------------------------------------
 			(oc-num "pad-sequence" (torch:pad-sequence '((1 2 3) (4 5) (6)) :padding-value 9)
@@ -518,6 +592,21 @@ public final class TorchGradcheck {
 			adam-step-count: ok
 			adam-betas: ok
 			adam-set-lr: ok
+			adam-weight-decay: ok
+			adamw-1step: ok
+			adamw-kind: ok
+			adamw-default-decay: ok
+			clip-grad-norm-returns: ok
+			clip-grad-norm-scaled: ok
+			clip-grad-norm-under: ok
+			clip-grad-norm-unscaled: ok
+			topk: ok
+			topk-indices: ok
+			topk-axis: ok
+			multinomial-degenerate: ok
+			multinomial-permutation: ok
+			fields-names: ok
+			fields-values: ok
 			pad-sequence: ok
 			pad-sequence-shape: ok
 			padding-mask: ok

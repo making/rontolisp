@@ -576,6 +576,7 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:minimum` | `(linalg:minimum #(1 5 3) 4)` | `#d(1.0 4.0 3.0)` (elementwise smaller; either operand may be a scalar) |
 | `linalg:clip` | `(linalg:clip #(-2 0 3) -1.0 1.0)` | `#d(-1.0 0.0 1.0)` (elementwise `min(max(x, lo), hi)`) |
 | `linalg:relu` | `(linalg:relu #(-2 0 3))` | `#d(0.0 0.0 3.0)` (elementwise `max(x, 0.0)`) |
+| `linalg:erf` | `(linalg:erf #(0 1))` | `#d(0.0 0.842700792949715)` (elementwise Gauss error function) |
 | `linalg:softmax` | `(linalg:softmax #(1 1 1 1))` | `#d(0.25 0.25 0.25 0.25)` (max-subtracted softmax; `:axis` normalizes per slice) |
 | `linalg:log-softmax` | `(linalg:log-softmax #(0 0))` | `#d(-0.6931471805599453 -0.6931471805599453)` (the stable log of `softmax`) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpy-style dispatch: vec.vec scalar, mat.vec / vec.mat vector, mat.mat matrix product |
@@ -655,6 +656,8 @@ batching / padding / mask helpers, which are plain functions rather than a
 | `torch:sqrt` | `(torch:sqrt a)` | differentiable square root |
 | `torch:tanh` | `(torch:tanh a)` | differentiable hyperbolic tangent |
 | `torch:relu` | `(torch:relu a)` | differentiable `max(x, 0.0)` |
+| `torch:erf` | `(torch:erf a)` | differentiable Gauss error function |
+| `torch:gelu` | `(torch:gelu a)` | differentiable GELU (`:approximate :none` / `:tanh`) |
 | `torch:matmul` | `(torch:matmul a b)` | differentiable matrix product (batched at rank >= 3) |
 | `torch:sum` | `(torch:sum a :axis 0)` | differentiable sum (whole tensor or along an axis) |
 | `torch:mean` | `(torch:mean a)` | differentiable mean |
@@ -662,6 +665,8 @@ batching / padding / mask helpers, which are plain functions rather than a
 | `torch:std` | `(torch:std a)` | differentiable standard deviation |
 | `torch:amax` | `(torch:amax a :axis 0)` | differentiable maximum (gradient split among ties) |
 | `torch:argmax` | `(torch:argmax a)` | index of the largest element (non-differentiable, raw value) |
+| `torch:topk` | `(torch:topk a 5)` | the `k` largest values along an axis, largest first (`:indices t` for their positions) |
+| `torch:multinomial` | `(torch:multinomial probs)` | indices drawn per row from the seeded generator (`:num-samples`, `:replacement`) |
 | `torch:softmax` | `(torch:softmax a :axis 1)` | differentiable max-subtracted softmax |
 | `torch:log-softmax` | `(torch:log-softmax a :axis 1)` | differentiable log-softmax (cross-entropy half) |
 | `torch:masked-fill` | `(torch:masked-fill a mask v)` | differentiable fill of `v` where the mask is non-zero |
@@ -680,6 +685,7 @@ batching / padding / mask helpers, which are plain functions rather than a
 | `torch:modulep` | `(torch:modulep x)` | `T` for a module, `NIL` otherwise |
 | `torch:module-kind` | `(torch:module-kind m)` | the module's kind keyword |
 | `torch:field` | `(torch:field m :weight)` | the value of a module's named field (signals when absent) |
+| `torch:fields` | `(torch:fields m)` | the whole fields plist, as a fresh list -- the module walk |
 | `torch:set-field` | `(torch:set-field m :weight p)` | sets a module's named field; returns the module |
 | `torch:forward` | `(torch:forward m x)` | runs a module's (or a plain function's) forward pass |
 | `torch:parameter` | `(torch:parameter '(1.0))` | a leaf tensor with `requires-grad` -- a trainable parameter |
@@ -701,7 +707,9 @@ batching / padding / mask helpers, which are plain functions rather than a
 | `torch:step` | `(torch:step o)` | applies the update rule to every parameter (in place, off the tape) |
 | `torch:step-count` | `(torch:step-count o)` | how many times `torch:step` has run (Adam's `t`) |
 | `torch:sgd` | `(torch:sgd model :lr 0.1)` | SGD, optionally with `:momentum` / `:weight-decay` |
-| `torch:adam` | `(torch:adam model :lr 0.001)` | Adam (`:betas`, `:eps`), bias-corrected from the first step |
+| `torch:adam` | `(torch:adam model :lr 0.001)` | Adam (`:betas`, `:eps`, `:weight-decay`), bias-corrected from the first step |
+| `torch:adamw` | `(torch:adamw model :lr 0.001)` | AdamW: the same rule with DECOUPLED `:weight-decay` (default `0.01`) |
+| `torch:clip-grad-norm` | `(torch:clip-grad-norm model 1.0)` | scales every gradient in place when their total L2 norm exceeds the bound; returns that norm |
 | `torch:pad-sequence` | `(torch:pad-sequence seqs)` | variable-length sequences as one padded batch-first tensor |
 | `torch:shuffled-batches` | `(torch:shuffled-batches n 32)` | mini-batches from the seeded generator (`:shuffle`, `:drop-last`) |
 | `torch:padding-mask` | `(torch:padding-mask tokens)` | `(batch 1 length)` mask of the padding positions (a raw array) |

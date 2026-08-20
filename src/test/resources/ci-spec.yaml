@@ -4571,6 +4571,66 @@ cases:
       ((A B) (C D) (E))
       (4 4)
       (T T T T)
+  # The GPT increment: the activation, the module walk, the two sampling
+  # primitives and the AdamW / clipping plumbing the chapter-3 port needed. The
+  # float rows are tolerance PREDICATES, like the Adam row above -- erf and gelu
+  # ride exp, whose last digits differ on the WASM backends -- while the shapes,
+  # the drawn indices and the field names are exact on all four, which is what
+  # makes a SAMPLED text reproducible across backends at all.
+  - name: torch-gpt-cross-backend
+    source: |
+      (defun ci-torch-near (a b) (< (abs (- a b)) 1.0e-9))
+      (defun ci-torch-gpt ()
+        (print (list (ci-torch-near (aref (linalg:erf #(1.0)) 0) 0.842700792949715)
+                     (ci-torch-near (aref (linalg:erf #(-6.5)) 0) -1.0)))
+        (let ((g (torch:gelu (torch:tensor '(-1.0 0.0 1.0)))))
+          (print (list (ci-torch-near (aref (torch:data g) 0) -0.15865525393145702)
+                       (ci-torch-near (aref (torch:data g) 1) 0.0)
+                       (ci-torch-near (aref (torch:data g) 2) 0.841344746068543))))
+        (let ((x (torch:tensor '(0.0) :requires-grad t)))
+          (torch:backward (torch:sum (torch:erf x)))
+          (print (ci-torch-near (aref (torch:grad x) 0) 1.1283791670955126)))
+        (let ((ln (torch:layer-norm 2)))
+          (print (do ((p (torch:fields ln) (cddr p)) (acc nil (cons (car p) acc)))
+                     ((null p) (reverse acc))))
+          (print (list (eq (nth 1 (torch:fields ln)) (torch:field ln :weight))
+                       (nth 5 (torch:fields ln)))))
+        (print (torch:topk (linalg:from-list '((1.0 5.0 3.0) (9.0 2.0 8.0))) 2))
+        (print (torch:topk (linalg:from-list '((1.0 5.0 3.0) (9.0 2.0 8.0))) 2 :indices t))
+        (linalg:seed 3)
+        (print (torch:multinomial (linalg:from-list '((0.0 1.0 0.0) (0.0 0.0 1.0)))))
+        (print (sort (car (linalg:to-list
+                           (torch:multinomial (linalg:from-list '((1.0 1.0 1.0 1.0)))
+                                              :num-samples 4)))
+                     (function <)))
+        (let* ((a (torch:parameter '(3.0 4.0)))
+               (o (torch:adamw (list a) :lr 0.1 :weight-decay 0.5)))
+          (torch:backward (torch:sum (torch:mul a a)))
+          (print (list (torch:optimizer-kind o)
+                       (ci-torch-near (torch:clip-grad-norm (list a) 1.0) 10.0)
+                       (ci-torch-near (aref (torch:grad a) 0) 0.599999940000006)))
+          (torch:step o)
+          (print (list (ci-torch-near (aref (torch:data a) 0) 2.750000001666667)
+                       (ci-torch-near (aref (torch:data a) 1) 3.70000000125))))
+        (let* ((b (torch:parameter '(1.0)))
+               (o (torch:adam (list b) :lr 0.1 :weight-decay 0.5)))
+          (torch:backward (torch:sum (torch:mul b b)))
+          (torch:step o)
+          (print (ci-torch-near (aref (torch:data b) 0) 0.9000000003999999))))
+      (ci-torch-gpt)
+    expected: |
+      (T T)
+      (T T T)
+      T
+      (:WEIGHT :BIAS :EPS)
+      (T 1.0e-5)
+      #d((5.0 3.0) (9.0 8.0))
+      #d((1.0 2.0) (0.0 2.0))
+      #d((1.0) (2.0))
+      (0.0 1.0 2.0 3.0)
+      (:ADAMW T T)
+      (T T)
+      T
   # The torch records are defstructs carrying a (:print-object ...), so a tensor,
   # a module and an optimizer render identically on every backend -- the
   # hand-rolled tagged vectors they replaced printed their raw slots, one of which

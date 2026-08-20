@@ -9,7 +9,7 @@ runs identically on the interpreter, the JVM and WASM.
 | [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`) |
 | [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02-ch08, ported |
 | [`llama2/`](llama2) | llama2.c's `run.c` ported whole: a Llama 2 inference engine over the real TinyStories checkpoints, and the example `--simd` is for |
-| [`llm-from-scratch/`](llm-from-scratch) | 『作ってわかる大規模言語モデルの仕組み』 chapter 2, ported: attention, an encoder/decoder Transformer and its training loop on the `torch` package |
+| [`llm-from-scratch/`](llm-from-scratch) | 『作ってわかる大規模言語モデルの仕組み』 chapters 2 and 3, ported: attention, an encoder/decoder Transformer, then a GPT trained on 漱石 and sampled from — all on the `torch` package |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API on top |
 | [`jvm/`](jvm) | `java:` interop and Swing GUIs (JVM only) |
@@ -92,8 +92,16 @@ encoder/decoder Transformer with its padding and causal masks, and a
 Japanese-English training loop with greedy decoding over a twelve-pair corpus
 that lives in the file. `nn.Module` becomes `torch:module` plus a `forward`
 defun, `nn.ModuleList` a plain list, `DataLoader` `torch:shuffled-batches`.
-Mapping table and the book-vs-tested shapes in
-[its README](llm-from-scratch/README.md).
+
+Chapter 3 continues into GPT: a character-level tokenizer, a decoder-only stack
+with learned positions, pre-LayerNorm blocks and a causal mask, AdamW over two
+parameter groups with gradient clipping and a warmup-then-cosine schedule, and
+temperature / top-k sampling. It trains on the public-domain opening of
+『吾輩は猫である』, inlined — nothing is downloaded — and because the sampler
+draws from the same seeded generator, the generated passages are byte-identical
+on every backend. Section 3.2's byte-pair encoder needs no `torch` at all, and
+its hundred merges come out in the book's exact order. Mapping table and the
+book-vs-tested shapes in [its README](llm-from-scratch/README.md).
 
 ## Networking, HTTP & services — `net/`
 

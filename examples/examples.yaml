@@ -461,6 +461,28 @@ examples:
     expect:
       file: .expected/llm-section5.txt
 
+  # --- llm-from-scratch: the book's GPT chapter, ported (README.md) -----------
+  # Same determinism rule as chapter 2 above, and it now also covers a SAMPLED
+  # text: torch:multinomial draws from the same seeded generator, so the two
+  # generated passages are byte-identical on every backend. train-gpt-soseki is
+  # the slow one (~2.5 min on the plain interpreter) -- its corpus is the public
+  # domain opening of 『吾輩は猫である』, inlined, since nothing here downloads.
+  - path: llm-from-scratch/gpt/shapes.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: the gpt package's own shape check -- shapes, counts and two exact predicates (the causal mask really blinds a position to its future; :top-k 1 makes sampling deterministic), so nothing float-sensitive is printed
+    expect:
+      file: .expected/llm-gpt-shapes.txt
+  - path: llm-from-scratch/chapter03/section2.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: section 3.2 -- word-level tokenization and its normalizer, the special tokens, the two embedding tables, and a BPE learner whose 100 merges come out in the book's exact order
+    expect:
+      file: .expected/llm-section3-2.txt
+  - path: llm-from-scratch/chapter03/train-gpt-soseki.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: the train_gpt_soseki notebook -- a character-level GPT trained by AdamW over two parameter groups on the inlined 漱石 corpus, then sampled with temperature and top-k
+    expect:
+      file: .expected/llm-train-gpt-soseki.txt
+
   # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
   - path: console/mandelbrot-nogc.lisp
     backends: [no-gc, wasm-component]

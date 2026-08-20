@@ -1,11 +1,12 @@
-# LLM from Scratch — the Transformer chapter, in rontolisp
+# LLM from Scratch — the Transformer and GPT chapters, in rontolisp
 
-A rontolisp port of chapter 2 of [**『作ってわかる大規模言語モデルの仕組み』**
+A rontolisp port of chapters 2 and 3 of [**『作ってわかる大規模言語モデルの仕組み』**
 (Elith Inc., Nikkei BP, 2026) — its sample
 repository](https://github.com/elith-co-jp/book-llm-from-scratch): the reusable
-`llm_from_scratch/transformer/` package and the chapter 2 notebooks (sections
-2.2 - 2.5). Nothing from that repository is vendored here; this is a rewrite of
-its PyTorch code, which maps onto the [`torch`
+`llm_from_scratch/transformer/` and `llm_from_scratch/gpt/` packages, the
+chapter 2 notebooks (sections 2.2 - 2.5) and the chapter 3 ones (section 3.2 and
+the 漱石 training notebook). Nothing from that repository is vendored here; this
+is a rewrite of its PyTorch code, which maps onto the [`torch`
 package](../../doc/en/guides/neural-networks.md) almost line for line, and onto
 [`linalg`](../../doc/en/guides/linear-algebra.md) for the array math underneath
 it.
@@ -27,6 +28,13 @@ testable.
 | `notebooks/chapter02/section3.ipynb` | [`chapter02/section3.lisp`](chapter02/section3.lisp) |
 | `notebooks/chapter02/section4.ipynb` | [`chapter02/section4.lisp`](chapter02/section4.lisp) |
 | `notebooks/chapter02/section5.ipynb` | [`chapter02/section5.lisp`](chapter02/section5.lisp) |
+| `gpt/tokenizer.py` | [`gpt/tokenizer.lisp`](gpt/tokenizer.lisp) |
+| `gpt/dataset.py` | [`gpt/dataset.lisp`](gpt/dataset.lisp) |
+| `gpt/model.py` | [`gpt/model.lisp`](gpt/model.lisp) |
+| `gpt/trainer.py` | [`gpt/trainer.lisp`](gpt/trainer.lisp) |
+| — (the same idea, for `gpt/`) | [`gpt/shapes.lisp`](gpt/shapes.lisp) |
+| `notebooks/chapter03/section03_tokenizer.py` | [`chapter03/section2.lisp`](chapter03/section2.lisp) |
+| `notebooks/chapter03/train_gpt_soseki.ipynb` | [`chapter03/train-gpt-soseki.lisp`](chapter03/train-gpt-soseki.lisp) |
 
 And, inside the code:
 
@@ -43,6 +51,13 @@ And, inside the code:
 | `torch.nn.utils.rnn.pad_sequence` | `torch:pad-sequence` (always batch-first) |
 | `DataLoader(..., shuffle=True)` | `torch:shuffled-batches` — a batch is an ordinary list |
 | `@torch.inference_mode` | `torch:no-grad` |
+| `nn.GELU()` | `(function torch:gelu)` — exact by default, `:approximate :tanh` for the GPT form |
+| `torch.triu(ones(T, T), diagonal=1).bool()` | `(torch:subsequent-mask T)` — already `(1 T T)`, so it broadcasts over the batch |
+| `self.apply(self._init_weights)` | a walk over `torch:fields`, dispatching on `torch:module-kind` |
+| `AdamW(groups, betas=(0.9, 0.95))` | two `torch:adamw` optimizers over disjoint parameter lists |
+| `clip_grad_norm_(params, 1.0)` | `torch:clip-grad-norm` — returns the norm it measured |
+| `torch.topk(logits, k)` | `torch:topk` (values, or `:indices t` — one of the pair) |
+| `torch.multinomial(probs, 1)` | `torch:multinomial` — the seeded generator, so a SAMPLE reproduces |
 
 ## Running
 
@@ -57,11 +72,15 @@ rontolisp section2.lisp -o prog.wasm && wasmtime run -W gc prog.wasm
 rontolisp section2.lisp -o comp.wasm --component && wasmtime run -W gc=y comp.wasm
 ```
 
-The output is identical on every backend. Weight initialization, dropout masks
-and the epoch shuffle all draw from the seeded `linalg` generator, whose
-arithmetic is integer and therefore bit-identical everywhere; the printed
-floats are rounded to a few decimals so the low-order digits of the WASM
-`exp`/`log` approximations cannot show through.
+Chapter 3 is the same, from `chapter03/` (or `gpt/` for `shapes.lisp`).
+
+The output is identical on every backend. Weight initialization, dropout masks,
+the epoch shuffle **and the top-k sampling of chapter 3** all draw from the
+seeded `linalg` generator, whose arithmetic is integer and therefore
+bit-identical everywhere; the printed floats are rounded to a few decimals so
+the low-order digits of the WASM `exp`/`log` approximations cannot show
+through. That is why the two generated 漱石 passages are the same text on the
+interpreter, the JVM and wasm-GC rather than merely the same kind of text.
 
 ## The shapes: the book's, and the ones that are tested
 
@@ -85,6 +104,48 @@ add data) to walk back toward the book's run. The trained model **memorises**
 its eight pairs — it reproduces all eight target sentences exactly, and it does
 not generalise beyond them. That is what a corpus this small can do, and saying
 so is more useful than pretending otherwise.
+
+Chapter 3's notebook trains a `n_embd` = 384, 6-layer, 6-head GPT for 5000
+steps over the whole of 『吾輩は猫である』 on a T4, and the same applies:
+
+| | book | tested here |
+| --- | --- | --- |
+| corpus | the novel, downloaded from 青空文庫 | its opening (448 characters), in `train-gpt-soseki.lisp` itself |
+| `block_size` | 256 | 8 |
+| `n_embd` | 384 | 8 |
+| layers / heads | 6 / 6 | 1 / 2 |
+| batch size | 64 | 4 |
+| steps | 5000 | 100 |
+| generated tokens | 200 | 30 |
+
+100 steps over 448 characters is enough to make the point and no more: the
+training loss falls from `4.93` — which is `log(138)`, the uniform guess over
+the 138 distinct characters — to about `2.99`, and the samples come out as
+recognisable 漱石 fragments (`である。`, `というもの`, `の顔`) strung together
+without sentences. Raise the numbers above and the same program keeps going.
+
+## The two places this port deliberately differs from the book
+
+Both are in [`gpt/trainer.lisp`](gpt/trainer.lisp), and both would otherwise
+carry a defect across rather than a design:
+
+- **The warmup is applied, not merely printed.** The book's `get_lr` returns
+  `base * step / warmup_steps` for the log line, but nothing writes it back —
+  its `CosineAnnealingLR` only starts stepping after the warmup, so the
+  optimizer runs the whole warmup at the base rate and the schedule it prints is
+  not the schedule it trains with. Here `gpt-trainer-lr` is the single answer
+  and the loop writes it into both optimizers.
+- **`forward(idx, targets=None)` splits in two.** It returns the
+  `(logits, loss)` tuple in Python; here `gpt-forward` answers the logits and
+  `gpt-loss` the loss, because a forward whose result shape depends on whether
+  an optional argument was passed is a tuple only Python's caller destructures
+  cheaply.
+
+Two more differences are the port's, not the book's, and are noted where they
+happen: `nn.Module.apply` becomes a walk over `torch:fields` dispatching on
+`torch:module-kind` (what a layer *is*, rather than a substring of its dotted
+parameter name), and the elapsed-time column of the training log is dropped —
+it is the one number that cannot come out the same on four backends.
 
 ## Sizes
 

@@ -69,6 +69,7 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:exp a)` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` | named elementwise unary ufuncs (numpy parity, todo 109): `emap` of the obvious scalar op (`square` = `mul a a`, `reciprocal` = `div 1 a`); unlike `emap` they are `--simd`-interceptable |
 | `(linalg:power a b)` | elementwise `a ** b` (numpy np.power), through `%la-bcast` like `mul` -- either operand may be a scalar, two arrays broadcast. Not `--simd`-intercepted (no `expt` kernel) |
 | `(linalg:softmax a &key axis)` / `(linalg:log-softmax ...)` | the max-subtracted softmax and its log: no `:axis` = the whole array is one distribution (scipy's default), an integer `:axis` = one distribution per slice (torch's `softmax(x, dim)`). `log-softmax` is `(x - m) - log(sum(exp(x - m)))`, NOT `(log (softmax x))`, so a zero weight gives -inf and not NaN. Not in numpy proper -- see "Why softmax lives here" below |
+| `(linalg:erf a)` | elementwise Gauss error function (`scipy.special.erf`, not numpy) -- see "Why softmax lives here" below. Accurate to a double's last ulps over the WHOLE range: the all-positive-term series A&S 7.1.6 (`%la-erf-1`), NOT the alternating Maclaurin series, whose cancellation loses every digit by \|x\| ~ 3; exactly +-1 beyond \|x\| = 6, which also bounds the loop. No `erfc` member: `(sub 1.0 (erf a))` is it, and the far tail where a real `erfc` would win is where `erf` is already 1 |
 | `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise. Rank >= 3 on either side SIGNALS (`linalg: dot expects rank <= 2 ...`) -- numpy's np.dot contracts against the other operand's second-to-last axis there, which is not the stacked product, and the old code silently read a rank-3 operand as a matrix |
 | `(linalg:matmul a b)` | matrix product (also mat.vec) at rank <= 2, via `dot`; at rank >= 3 on EITHER side the numpy STACKED product (`%la-matmul-nd`, = torch.bmm / torch.matmul): the last two axes are the matrix, every leading axis broadcasts, and a rank-1 operand is promoted (row on the left, column on the right) with its axis dropped again. Rejects scalar operands at every rank |
 | `(linalg:outer u v)` | outer product (inputs flattened first) |
@@ -134,6 +135,15 @@ Consequences worth knowing:
 array-level primitive an activation layer needs, they are one composition of kernels
 the interceptors already know, and a second copy in the differentiable layer above
 would fork the array math. Both are max-subtracted, so a large logit cannot overflow.
+
+`erf` is here on the same rule and for one caller: the EXACT GELU is
+`x * (1 + erf(x / sqrt(2))) / 2`, which is `nn.GELU`'s own default, and `torch.gelu`
+wraps a kernel rather than reimplementing one (`.kb/torch.md`'s standing rule). The
+alternative was to ship only the `tanh` approximation and call the difference a
+documented divergence -- rejected, because the "why" would have been "we did not add
+erf", which is not a reason that can ever stop holding. What its accuracy DOES depend
+on is `exp`, so on the WASM backends it inherits that backend's software `exp`, the
+same way `tanh` and `softmax` already do.
 
 The masked-attention idiom is `(linalg:where mask score -inf)` then `softmax`, and it
 only works because `where` SELECTS: the older "multiply by a 0.0/1.0 mask" spelling

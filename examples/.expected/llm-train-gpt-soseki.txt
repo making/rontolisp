@@ -1,0 +1,17 @@
+corpus size: 448 characters
+vocabulary: 138 distinct characters
+first ten: (#\。 #\々 #\あ #\い #\う #\え #\か #\が #\き #\く)
+dataset size: 448 tokens
+train batches: 99 | validation batches: 11
+configured size: 0.0031 M parameters
+model parameters: 27 tensors
+step 0/100 | loss 4.9310 | lr 0.005000
+step 25/100 | loss 4.5616 | lr 0.036724
+step 50/100 | loss 3.9982 | lr 0.022723
+validation loss 3.6479
+step 75/100 | loss 3.5947 | lr 0.006856
+first loss 4.9310 -> last loss 2.9859
+loss fell: T
+beats a uniform guess: T
+prompt 吾輩は -> 吾輩は時載ていうというもが人間と。っていうる。どいうるうる。ののが
+prompt この書生 -> この書生かでないうでもの々ぷうる。このがある。ど。のが思いうる。時は

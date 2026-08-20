@@ -128,6 +128,10 @@ The walk descends into submodules **and into lists of them**, and deduplicates b
 (length (torch:parameters *net*))                                       ; => 4
 ```
 
+The activations are [`torch:relu`](../reference/functions/torch-relu.md), [`torch:tanh`](../reference/functions/torch-tanh.md) and [`torch:gelu`](../reference/functions/torch-gelu.md), each an ordinary function of a tensor. `torch:gelu` is the exact `x * (1 + erf(x / sqrt(2))) / 2` by default (`nn.GELU`'s own default), over the differentiable [`torch:erf`](../reference/functions/torch-erf.md); `:approximate :tanh` selects the GPT/BERT formulation instead.
+
+[`torch:fields`](../reference/functions/torch-fields.md) answers a module's whole fields plist, which is what makes the tree WALKABLE from outside: `nn.Module.apply` and `nn.Module.named_parameters` have no counterpart here because a walk is written over that plist plus [`torch:module-kind`](../reference/functions/torch-module-kind.md) -- what a layer IS, rather than a substring of a dotted parameter name.
+
 ## Losses
 
 `torch:mse-loss` and `torch:cross-entropy-loss` are plain functions returning a scalar tensor. Cross entropy takes raw **logits** (never softmax outputs -- it is computed from `-log-softmax`, the numerically stable form) and flattens all but the last axis, so `(batch seq vocab)` works directly. Its target is either integer class indices, with `:ignore-index` dropping padding positions from both the sum and the mean's denominator, or a full probability distribution of the logits' own shape -- PyTorch's soft-label form, `-sum(target * log-softmax(logits))`:
@@ -145,7 +149,7 @@ A LIST target is always class indices, so the probability spelling needs a tenso
 
 ## Optimizers
 
-An **optimizer** owns the update rule and its state. `torch:sgd` and `torch:adam` take a model (or a plain list of parameters), keep their hyper-parameters and buffers in a fields plist exactly as a module does, and apply the rule to every parameter when `torch:step` runs:
+An **optimizer** owns the update rule and its state. `torch:sgd`, `torch:adam` and `torch:adamw` take a model (or a plain list of parameters), keep their hyper-parameters and buffers in a fields plist exactly as a module does, and apply the rule to every parameter when `torch:step` runs:
 
 ```lisp
 (defparameter *p* (torch:parameter '(1.0 2.0)))
@@ -166,7 +170,11 @@ Hyper-parameters are ordinary fields, which is all a learning-rate schedule need
 (torch:field (torch:set-field *adam* :lr 0.0005) :lr) ; => 5.0e-4
 ```
 
-`torch:optimizer` is the constructor both are built on -- a kind keyword, the parameters, a fields plist and a step function -- so a rule this package does not ship is a plain defun over the same record.
+`torch:optimizer` is the constructor all three are built on -- a kind keyword, the parameters, a fields plist and a step function -- so a rule this package does not ship is a plain defun over the same record.
+
+[`torch:adam`](../reference/functions/torch-adam.md) and [`torch:adamw`](../reference/functions/torch-adamw.md) are the SAME rule with the decay in a different place: Adam's `:weight-decay` adds `wd * param` to the gradient, AdamW's shrinks the parameter directly so the adaptive denominator never rescales it. There is no parameter-GROUP object; two optimizers over disjoint parameter lists are what a group is here, which is how a transformer decays its weight matrices and leaves its biases, LayerNorm gains and embedding tables alone.
+
+[`torch:clip-grad-norm`](../reference/functions/torch-clip-grad-norm.md) goes between `torch:backward` and `torch:step`: it returns the total L2 norm of every gradient -- as measured, so the loop can log it -- and scales them in place when that exceeds the bound.
 
 ## Training a network
 

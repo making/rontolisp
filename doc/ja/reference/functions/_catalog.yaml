@@ -527,6 +527,7 @@ categories:
       - { slug: linalg-minimum, name: "linalg:minimum" }
       - { slug: linalg-clip, name: "linalg:clip" }
       - { slug: linalg-relu, name: "linalg:relu" }
+      - { slug: linalg-erf, name: "linalg:erf" }
       - { slug: linalg-softmax, name: "linalg:softmax" }
       - { slug: linalg-log-softmax, name: "linalg:log-softmax" }
       - { slug: linalg-dot, name: "linalg:dot" }
@@ -587,6 +588,8 @@ categories:
       - { slug: torch-sqrt, name: "torch:sqrt" }
       - { slug: torch-tanh, name: "torch:tanh" }
       - { slug: torch-relu, name: "torch:relu" }
+      - { slug: torch-erf, name: "torch:erf" }
+      - { slug: torch-gelu, name: "torch:gelu" }
       - { slug: torch-matmul, name: "torch:matmul" }
       - { slug: torch-sum, name: "torch:sum" }
       - { slug: torch-mean, name: "torch:mean" }
@@ -594,6 +597,8 @@ categories:
       - { slug: torch-std, name: "torch:std" }
       - { slug: torch-amax, name: "torch:amax" }
       - { slug: torch-argmax, name: "torch:argmax" }
+      - { slug: torch-topk, name: "torch:topk" }
+      - { slug: torch-multinomial, name: "torch:multinomial" }
       - { slug: torch-softmax, name: "torch:softmax" }
       - { slug: torch-log-softmax, name: "torch:log-softmax" }
       - { slug: torch-masked-fill, name: "torch:masked-fill" }
@@ -612,6 +617,7 @@ categories:
       - { slug: torch-modulep, name: "torch:modulep" }
       - { slug: torch-module-kind, name: "torch:module-kind" }
       - { slug: torch-field, name: "torch:field" }
+      - { slug: torch-fields, name: "torch:fields" }
       - { slug: torch-set-field, name: "torch:set-field" }
       - { slug: torch-forward, name: "torch:forward" }
       - { slug: torch-parameter, name: "torch:parameter" }
@@ -634,6 +640,8 @@ categories:
       - { slug: torch-step-count, name: "torch:step-count" }
       - { slug: torch-sgd, name: "torch:sgd" }
       - { slug: torch-adam, name: "torch:adam" }
+      - { slug: torch-adamw, name: "torch:adamw" }
+      - { slug: torch-clip-grad-norm, name: "torch:clip-grad-norm" }
       - { slug: torch-pad-sequence, name: "torch:pad-sequence" }
       - { slug: torch-shuffled-batches, name: "torch:shuffled-batches" }
       - { slug: torch-padding-mask, name: "torch:padding-mask" }

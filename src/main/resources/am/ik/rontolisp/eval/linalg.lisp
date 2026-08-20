@@ -1196,6 +1196,43 @@
   ;; becomes 0.0. Rides the maximum kernel under --simd.
   (linalg:maximum a 0.0))
 
+;; --- the error function -------------------------------------------------------
+;; Not in numpy proper (it is scipy.special.erf), and here for the same reason
+;; softmax is: it is the array-level primitive an activation needs -- the EXACT
+;; Gaussian error linear unit is x * (1 + erf(x / sqrt(2))) / 2, which is
+;; nn.GELU's default -- and one implementation keeps every backend identical.
+
+(defun linalg::%la-erf-1 (x)
+  ;; erf of one number, by the all-positive-term series (A&S 7.1.6)
+  ;;
+  ;;   erf(x) = 2x / sqrt(pi) * e^(-x^2) * sum_{n>=0} (2 x^2)^n / (1.3.5...(2n+1))
+  ;;
+  ;; rather than the alternating Maclaurin series, whose cancellation loses every
+  ;; significant digit by |x| ~ 3. Every term is positive, so the sum is accurate
+  ;; to the last ulp wherever it is used, and the ratio 2x^2 / (2n + 3) drives it
+  ;; down once n passes x^2. Beyond |x| = 6 the result is +-1 to within a double's
+  ;; resolution (1 - erf(6) is about 2e-17), which also bounds the loop.
+  (let ((ax (abs x)))
+    (if (>= ax 6.0)
+        (if (< x 0.0) -1.0 1.0)
+        (let ((term 1.0) (total 1.0) (xx (* 2.0 ax ax)))
+          (do ((n 1 (+ n 1)))
+              ((> n 200))
+            (setq term (/ (* term xx) (+ (* 2.0 n) 1.0)))
+            (setq total (+ total term))
+            (when (< term (* 1.0e-17 total)) (return)))
+          (let ((v (* 1.1283791670955126 ax (exp (- (* ax ax))) total)))
+            (if (< x 0.0) (- v) v))))))
+
+(defun linalg:erf (a)
+  ;; Elementwise Gauss error function (scipy.special.erf):
+  ;; erf(x) = 2 / sqrt(pi) * integral from 0 to x of e^(-t^2) dt, an odd function
+  ;; rising from -1 to 1. Accurate to a double's last ulps over the whole range
+  ;; (see linalg::%la-erf-1); the complementary erfc is (- 1.0 (linalg:erf a)),
+  ;; which loses precision in the far tail and is therefore not a member of its
+  ;; own.
+  (linalg:emap (function linalg::%la-erf-1) a))
+
 ;; --- activations (softmax) ------------------------------------------------------
 ;; softmax is not in numpy proper (it is scipy.special.softmax / torch.softmax),
 ;; but it lives here for the same reason relu does: it is the array-level

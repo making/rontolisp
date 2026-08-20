@@ -204,6 +204,8 @@
 
 (defun torch::%t-rtanh (x) (if (numberp x) (tanh x) (linalg:tanh x)))
 
+(defun torch::%t-rerf (x) (if (numberp x) (linalg::%la-erf-1 x) (linalg:erf x)))
+
 ;; --- the broadcasting adjoints -----------------------------------------------
 
 (defun torch::%t-unbroadcast (g x)
@@ -425,6 +427,50 @@
   (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (torch::%t-result (linalg:relu xa) (list ta)
      (lambda (g) (list (linalg:mul g (linalg:greater xa 0.0)))))))
+
+(defun torch:erf (a)
+  ;; Differentiable elementwise Gauss error function (torch.erf, over
+  ;; linalg:erf); the adjoint is the Gaussian 2 / sqrt(pi) * e^(-x^2).
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
+    (torch::%t-result (torch::%t-rerf xa) (list ta)
+                      (lambda (g)
+                        (list
+                         (linalg:mul g
+                                     (linalg:mul 1.1283791670955126
+                                                 (torch::%t-rexp
+                                                  (torch::%t-rneg
+                                                   (linalg:mul xa xa))))))))))
+
+(defun torch:gelu (a &key (approximate :none))
+  ;; The Gaussian error linear unit (nn.GELU / torch.nn.functional.gelu),
+  ;; composed from torch ops, so it is differentiable with no adjoint of its
+  ;; own:
+  ;;
+  ;;   :none (the default, PyTorch's approximate='none')
+  ;;       x * (1 + erf(x / sqrt(2))) / 2 -- the EXACT x * P(X <= x) for a
+  ;;       standard normal X, over torch:erf
+  ;;   :tanh (PyTorch's approximate='tanh')
+  ;;       x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 x^3))) / 2 -- the GPT/BERT
+  ;;       formulation, which agrees with the exact form to about 1e-3
+  ;;
+  ;; Unlike relu it is smooth everywhere and passes a small negative gradient,
+  ;; which is why a transformer feed-forward block uses it.
+  (let ((tx (torch::%t-wrap a)))
+    (cond ((eq approximate :none)
+           (torch:mul (torch:mul tx 0.5)
+            (torch:add 1.0 (torch:erf (torch:div tx 1.4142135623730951)))))
+          ((eq approximate :tanh)
+           (torch:mul (torch:mul tx 0.5)
+                      (torch:add 1.0
+                                 (torch:tanh
+                                  (torch:mul 0.7978845608028654
+                                             (torch:add tx
+                                                        (torch:mul 0.044715
+                                                                   (torch:mul tx
+                                                                    (torch:mul
+                                                                     tx
+                                                                     tx)))))))))
+          (t (error "torch: gelu :approximate must be :none or :tanh")))))
 
 ;; --- the matrix product ------------------------------------------------------
 
@@ -756,6 +802,94 @@
   (let ((xa (torch::%t-data (torch::%t-wrap a))))
     (if (null axis) (linalg:argmax xa) (linalg:argmax xa :axis axis))))
 
+(defun torch:topk (a k &key (axis -1) indices)
+  ;; NON-differentiable, like torch:argmax, and a RAW linalg array rather than a
+  ;; tensor: the k largest elements along axis, ORDERED LARGEST FIRST, in an
+  ;; array shaped like a with that axis narrowed to k. torch.topk returns the
+  ;; values and their indices as a pair; this returns ONE of them -- the values,
+  ;; or under :indices t the positions they came from -- because a single-valued
+  ;; function is what the rest of this package is (torch:argmax answers indices
+  ;; alone for the same reason). Ties keep the LOWEST index, so a run is
+  ;; reproducible on every backend where torch.topk's is not specified at all.
+  (let* ((xa (torch::%t-data (torch::%t-wrap a)))
+         (d (array-dimensions xa))
+         (ax (linalg::%la-norm-axis d axis))
+         (axlen (nth ax d))
+         (inner (linalg::%la-tail-size d ax))
+         (outer (linalg::%la-head-size d ax))
+         (out
+          (linalg::%la-make (linalg::%la-replace-axis d ax k) 0.0
+                            (linalg::%la-etype xa)))
+         (taken (make-array axlen :initial-element nil)))
+    (unless (and (>= k 1) (<= k axlen)) (error "torch: topk k out of range"))
+    (do ((o 0 (+ o 1)))
+        ((>= o outer) out)
+      (do ((i 0 (+ i 1)))
+          ((>= i inner))
+        (let ((base (+ (* o axlen inner) i)) (obase (+ (* o k inner) i)))
+          (do ((j 0 (+ j 1)))
+              ((>= j axlen))
+            (setf (aref taken j) nil))
+          (do ((r 0 (+ r 1)))
+              ((>= r k))
+            (let ((best -1) (bv 0.0))
+              (do ((j 0 (+ j 1)))
+                  ((>= j axlen))
+                (unless (aref taken j)
+                  (let ((v (row-major-aref xa (+ base (* j inner)))))
+                    (when (or (< best 0) (> v bv))
+                      (setq best j)
+                      (setq bv v)))))
+              (setf (aref taken best) t)
+              (setf (row-major-aref out (+ obase (* r inner)))
+                    (if indices (* 1.0 best) bv)))))))))
+
+(defun torch:multinomial (probs &key (num-samples 1) replacement)
+  ;; NON-differentiable: num-samples indices drawn from each row of probs, whose
+  ;; LAST axis holds the weights (torch.multinomial). The weights need not sum
+  ;; to 1 -- they are normalized per row, like PyTorch -- and must be
+  ;; non-negative. A rank-1 input answers a (num-samples) index array, a rank-n
+  ;; input its own shape with the last axis replaced by num-samples. Without
+  ;; :replacement t a drawn index cannot be drawn again in the same row
+  ;; (PyTorch's default), which is why the row's remaining weight is tracked.
+  ;; The draw comes from the SEEDED linalg generator, so linalg:seed reproduces
+  ;; a sampling run on every backend.
+  (let* ((xa (torch::%t-data (torch::%t-wrap probs)))
+         (d (array-dimensions xa))
+         (rank (length d))
+         (n (nth (- rank 1) d))
+         (rows (linalg::%la-head-size d (- rank 1)))
+         (out
+          (linalg::%la-make (linalg::%la-replace-axis d (- rank 1) num-samples)
+                            0.0 (linalg::%la-etype xa)))
+         (us (linalg:rand (list rows num-samples)))
+         (w (make-array n :initial-element 0.0)))
+    (unless (and (>= num-samples 1) (or replacement (<= num-samples n)))
+      (error "torch: multinomial num-samples out of range"))
+    (do ((r 0 (+ r 1)))
+        ((>= r rows) out)
+      (let ((base (* r n)) (total 0.0))
+        (do ((j 0 (+ j 1)))
+            ((>= j n))
+          (let ((v (row-major-aref xa (+ base j))))
+            (when (< v 0.0) (error "torch: multinomial expects weights >= 0"))
+            (setf (aref w j) v)
+            (setq total (+ total v))))
+        (do ((sp 0 (+ sp 1)))
+            ((>= sp num-samples))
+          (unless (> total 0.0) (error "torch: multinomial has no weight left"))
+          (let ((u (* (aref us r sp) total)) (acc 0.0) (pick 0))
+            (do ((j 0 (+ j 1)))
+                ((>= j n))
+              (when (> (aref w j) 0.0)
+                (setq pick j)
+                (setq acc (+ acc (aref w j)))
+                (when (< u acc) (return))))
+            (setf (row-major-aref out (+ (* r num-samples) sp)) (* 1.0 pick))
+            (unless replacement
+              (setq total (- total (aref w pick)))
+              (setf (aref w pick) 0.0))))))))
+
 ;; --- softmax -----------------------------------------------------------------
 
 (defun torch:softmax (a &key axis)
@@ -952,6 +1086,20 @@
   ;; silently nil.
   (let ((c (torch::%m-cell (torch::%mo-fields m) name)))
     (if (null c) (error "torch: no such field") (cadr c))))
+
+(defun torch:fields (m)
+  ;; The whole fields plist of a module or an optimizer, as a FRESH list -- the
+  ;; field names in registration order, each followed by its value. This is what
+  ;; makes a module tree WALKABLE from outside the package: nn.Module.apply and
+  ;; nn.Module.named_parameters have no counterpart here because a walk is
+  ;; written over this plist plus torch:module-kind, which says what each layer
+  ;; IS. The spine is fresh, so consing onto it cannot corrupt the module; the
+  ;; VALUES are the live parameters and submodules, and the way to replace one
+  ;; is still torch:set-field.
+  (let ((acc nil))
+    (do ((p (torch::%mo-fields m) (cddr p)))
+        ((null p) (reverse acc))
+      (setq acc (cons (cadr p) (cons (car p) acc))))))
 
 (defun torch:set-field (m name value)
   ;; Sets the named field of a module or an optimizer, adding it when it is
@@ -1398,16 +1546,29 @@
                       (setf (row-major-aref x k) nv)))))))))))
 
 (defun torch::%o-adam-step (self)
-  ;; PyTorch's Adam rule, element-wise and IN PLACE:
+  ;; PyTorch's Adam rule, element-wise and IN PLACE, and -- through the two
+  ;; weight-decay fields -- AdamW's as well, which is the SAME rule with the
+  ;; decay moved out of the gradient:
+  ;;   g     <- grad + weight-decay * param        (:decoupled nil, torch.optim.Adam:
+  ;;                                                the L2 term rides the moments)
+  ;;   param <- param - lr * weight-decay * param  (:decoupled t, torch.optim.AdamW:
+  ;;                                                the decay is applied straight to
+  ;;                                                the parameter, so the adaptive
+  ;;                                                denominator never rescales it)
   ;;   m <- b1 * m + (1 - b1) * g,  v <- b2 * v + (1 - b2) * g^2
   ;;   param <- param - lr * (m / (1 - b1^t)) / (sqrt(v / (1 - b2^t)) + eps)
   ;; t being the OPTIMIZER's own step count (torch:step-count), which is 1 on
   ;; the first step -- the classic off-by-one, pinned by the optimizer table.
+  ;; ONE step function rather than an adamw twin: the two rules differ in where
+  ;; a single term is added, and a second copy of the inner loop would be a
+  ;; second place for the bias correction to drift.
   (let* ((lr (torch:field self :lr))
          (betas (torch:field self :betas))
          (b1 (car betas))
          (b2 (car (cdr betas)))
          (eps (torch:field self :eps))
+         (wd (torch:field self :weight-decay))
+         (decoupled (torch:field self :decoupled))
          (it (torch::%o-step-count self))
          (c1 (- 1.0 (expt b1 it)))
          (c2 (- 1.0 (expt b2 it)))
@@ -1425,8 +1586,10 @@
                  (v (aref vs i)))
             (do ((k 0 (+ k 1)))
                 ((>= k n))
-              (let* ((xv (if sx x (row-major-aref x k)))
-                     (gv (if sg g (row-major-aref g k)))
+              (let* ((x0 (if sx x (row-major-aref x k)))
+                     (xv (if (and decoupled (/= wd 0)) (- x0 (* lr wd x0)) x0))
+                     (g0 (if sg g (row-major-aref g k)))
+                     (gv (if (or decoupled (= wd 0)) g0 (+ g0 (* wd x0))))
                      (mk (+ (* b1 (row-major-aref m k)) (* (- 1.0 b1) gv)))
                      (vk (+ (* b2 (row-major-aref v k)) (* (- 1.0 b2) gv gv))))
                 (setf (row-major-aref m k) mk)
@@ -1446,15 +1609,78 @@
    (list :lr lr :momentum momentum :weight-decay weight-decay :buffers nil)
    (function torch::%o-sgd-step)))
 
-(defun torch:adam (params &key (lr 0.001) (betas '(0.9 0.999)) (eps 1.0e-8))
+(defun torch:adam (params &key (lr 0.001) (betas '(0.9 0.999)) (eps 1.0e-8)
+                          (weight-decay 0.0))
   ;; The Adam optimizer (torch.optim.Adam) over params (a module or a list of
   ;; parameter tensors): fields lr, betas (the two exponential decay rates, as
-  ;; a list, PyTorch's (beta1, beta2) tuple), eps and the two moment buffers.
-  ;; The bias correction divides by 1 - beta^t with the OPTIMIZER's own step
-  ;; count, so the first step is fully corrected.
+  ;; a list, PyTorch's (beta1, beta2) tuple), eps, weight-decay, the decoupled
+  ;; flag (nil here) and the two moment buffers. The bias correction divides by
+  ;; 1 - beta^t with the OPTIMIZER's own step count, so the first step is fully
+  ;; corrected. :weight-decay adds the L2 term wd * param to the GRADIENT, like
+  ;; torch.optim.Adam -- torch:adamw is the decoupled form of the same rule.
   (torch:optimizer :adam params
-                   (list :lr lr :betas betas :eps eps :m nil :v nil)
-                   (function torch::%o-adam-step)))
+                   (list :lr lr
+                         :betas betas
+                         :eps eps
+                         :weight-decay weight-decay
+                         :decoupled nil
+                         :m nil
+                         :v nil) (function torch::%o-adam-step)))
+
+(defun torch:adamw (params &key (lr 0.001) (betas '(0.9 0.999)) (eps 1.0e-8)
+                           (weight-decay 0.01))
+  ;; AdamW (torch.optim.AdamW): torch:adam's rule with DECOUPLED weight decay --
+  ;; the parameter shrinks by lr * weight-decay * param on its own, instead of
+  ;; the decay entering the gradient and being rescaled by the adaptive
+  ;; denominator. Same fields, with decoupled t; PyTorch's 0.01 default
+  ;; weight-decay, against Adam's 0. This is the rule a transformer is trained
+  ;; with, and a parameter that must NOT decay (a bias, a LayerNorm gain, an
+  ;; embedding table) belongs in a second optimizer built with :weight-decay 0
+  ;; -- the split torch.optim's parameter GROUPS express.
+  (torch:optimizer :adamw params
+                   (list :lr lr
+                         :betas betas
+                         :eps eps
+                         :weight-decay weight-decay
+                         :decoupled t
+                         :m nil
+                         :v nil) (function torch::%o-adam-step)))
+
+(defun torch:clip-grad-norm (params max-norm)
+  ;; Gradient-norm clipping (torch.nn.utils.clip_grad_norm_) over params (a
+  ;; module, an optimizer's parameter list, or a plain list of tensors): the
+  ;; TOTAL L2 norm of every gradient, taken over all of them at once as if they
+  ;; were one long vector, is returned -- and when it exceeds max-norm every
+  ;; gradient is scaled IN PLACE by max-norm / (norm + 1e-6), PyTorch's
+  ;; denominator. The returned norm is the one MEASURED, before any clipping,
+  ;; so a training loop can log it. A parameter no gradient reached is skipped.
+  ;; Call it between torch:backward and torch:step: it rewrites the gradients
+  ;; the optimizer is about to read, and touches no tape.
+  (let ((ps (torch::%o-param-list params)) (total 0.0))
+    (do ((q ps (cdr q)))
+        ((null q))
+      (let ((g (torch::%t-grad (car q))))
+        (unless (null g)
+          (if (numberp g)
+              (setq total (+ total (* g g)))
+              (do ((k 0 (+ k 1)) (n (array-total-size g) n))
+                  ((>= k n))
+                (let ((v (row-major-aref g k)))
+                  (setq total (+ total (* v v)))))))))
+    (let ((norm (sqrt total)))
+      (when (> norm max-norm)
+        (let ((scale (/ max-norm (+ norm 1.0e-6))))
+          (do ((q ps (cdr q)))
+              ((null q))
+            (let ((g (torch::%t-grad (car q))))
+              (unless (null g)
+                (if (numberp g)
+                    (setf (torch::%t-grad (car q)) (* g scale))
+                    (do ((k 0 (+ k 1)) (n (array-total-size g) n))
+                        ((>= k n))
+                      (setf (row-major-aref g k)
+                            (* (row-major-aref g k) scale)))))))))
+      norm)))
 
 ;; --- batching, padding and the attention masks -------------------------------
 ;; Plain functions rather than a Dataset/DataLoader hierarchy: a batch here is

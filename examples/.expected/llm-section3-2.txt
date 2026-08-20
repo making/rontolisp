@@ -1,0 +1,20 @@
+=== 3.2.1 word-level tokenization ===
+original text:      I like apples. You like oranges, not apples.
+tokens:             ("I" "like" "apples" "." "You" "like" "oranges" "," "not" "apples" ".")
+preprocessed:       ("i" "like" "apples" "." "you" "like" "oranges" "," "not" "apples" ".")
+token ids:          (2 3 4 5 6 3 7 8 9 4 5)
+built vocabulary:   (("<PAD>" . 0) ("<UNK>" . 1) ("like" . 2) ("apples" . 3) ("." . 4) ("i" . 5) ("you" . 6) ("oranges" . 7) ("," . 8) ("not" . 9))
+
+=== 3.2.2 special tokens and truncation ===
+with special:       ("[CLS]" "i" "like" "apples" "." "[SEP]" "[PAD]" "[PAD]" "[PAD]" "[PAD]")
+truncated:          ("[CLS]" "i" "like" "apples" "." "you" "like" "oranges" "," "[SEP]")
+
+=== 3.2.3 the embedding tables ===
+input embeddings:   (2 5 128)
+position embeddings:(1 5 128)
+
+=== 3.2.4 byte-pair encoding ===
+vocabulary:         ("" "," "-" "." "A" "B" "E" "L" "M" "P" "T" "U" "a" "b" "c" "d" "e" "f" "g" "h" "i" "k" "l" "m" "n" "o" "p" "q" "r" "s" "t" "u" "v" "w" "x" "y" "z" "an" "en" "in" "es" "and" "ti" "ing" "er" "ok" "oken" "el" "od" "or" "token" "on" "th" "ca" "mod" "model" "pr" "ati" "ation" "te" "ar" "models" "tr" "for" "of" "iz" "ch" "ce" "ge" "ua" "form" "the" "ur" "pro" "tokeniz" "is" "ci" "ff" "it" "ct" "un" "ang" "angua" "anguage" "al" "ces" "ers" "tokenization" "ter" "ance" "se" "ies" "me" "tex" "text" "le" "language" "are" "cap" "at" "proces" "process" "ders" "derst" "derstand" "bu" "il" "eff" "effi" "effici" "efficien" "models." "Th" "ap" "pl" "its" "im" "LL" "LLM" "per" "perform" "performance" "performance." "qu" "yo" "ab" "ach" "tic" "mean" "meaning" "wor" "word" "s." "ed" "cy" "Token" "re")
+merges:             (("a" "n" "an") ("e" "n" "en") ("i" "n" "in") ("e" "s" "es") ("an" "d" "and") ("t" "i" "ti") ("in" "g" "ing") ("e" "r" "er") ("o" "k" "ok") ("ok" "en" "oken") ("e" "l" "el") ("o" "d" "od") ("o" "r" "or") ("t" "oken" "token") ("o" "n" "on") ("t" "h" "th") ("c" "a" "ca") ("m" "od" "mod") ("mod" "el" "model") ("p" "r" "pr") ("a" "ti" "ati") ("ati" "on" "ation") ("t" "e" "te") ("a" "r" "ar") ("model" "s" "models") ("t" "r" "tr") ("f" "or" "for") ("o" "f" "of") ("i" "z" "iz") ("c" "h" "ch") ("c" "e" "ce") ("g" "e" "ge") ("u" "a" "ua") ("for" "m" "form") ("th" "e" "the") ("u" "r" "ur") ("pr" "o" "pro") ("token" "iz" "tokeniz") ("i" "s" "is") ("c" "i" "ci") ("f" "f" "ff") ("i" "t" "it") ("c" "t" "ct") ("u" "n" "un") ("an" "g" "ang") ("ang" "ua" "angua") ("angua" "ge" "anguage") ("a" "l" "al") ("c" "es" "ces") ("er" "s" "ers") ("tokeniz" "ation" "tokenization") ("t" "er" "ter") ("an" "ce" "ance") ("s" "e" "se") ("i" "es" "ies") ("m" "e" "me") ("te" "x" "tex") ("tex" "t" "text") ("l" "e" "le") ("l" "anguage" "language") ("ar" "e" "are") ("ca" "p" "cap") ("a" "t" "at") ("pro" "ces" "proces") ("proces" "s" "process") ("d" "ers" "ders") ("ders" "t" "derst") ("derst" "and" "derstand") ("b" "u" "bu") ("i" "l" "il") ("e" "ff" "eff") ("eff" "i" "effi") ("effi" "ci" "effici") ("effici" "en" "efficien") ("models" "." "models.") ("T" "h" "Th") ("a" "p" "ap") ("p" "l" "pl") ("it" "s" "its") ("i" "m" "im") ("L" "L" "LL") ("LL" "M" "LLM") ("p" "er" "per") ("per" "form" "perform") ("perform" "ance" "performance") ("performance" "." "performance.") ("q" "u" "qu") ("y" "o" "yo") ("a" "b" "ab") ("a" "ch" "ach") ("ti" "c" "tic") ("me" "an" "mean") ("mean" "ing" "meaning") ("w" "or" "wor") ("wor" "d" "word") ("s" "." "s.") ("e" "d" "ed") ("c" "y" "cy") ("T" "oken" "Token") ("r" "e" "re"))
+original text:      Tokenization improves LLMs.
+bpe tokens:         ("Token" "iz" "ation" "im" "pro" "v" "es" "LLM" "s.")

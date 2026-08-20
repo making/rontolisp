@@ -540,6 +540,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:minimum` | `(linalg:minimum #(1 5 3) 4)` | `#d(1.0 4.0 3.0)`(要素ごとに小さい方。どちらかの被演算子はスカラー可) |
 | `linalg:clip` | `(linalg:clip #(-2 0 3) -1.0 1.0)` | `#d(-1.0 0.0 1.0)`(要素ごとの `min(max(x, lo), hi)`) |
 | `linalg:relu` | `(linalg:relu #(-2 0 3))` | `#d(0.0 0.0 3.0)`(要素ごとの `max(x, 0.0)`) |
+| `linalg:erf` | `(linalg:erf #(0 1))` | `#d(0.0 0.842700792949715)`(要素ごとのガウス誤差関数) |
 | `linalg:softmax` | `(linalg:softmax #(1 1 1 1))` | `#d(0.25 0.25 0.25 0.25)` (最大値を引いた softmax。`:axis` でスライスごとに正規化) |
 | `linalg:log-softmax` | `(linalg:log-softmax #(0 0))` | `#d(-0.6931471805599453 -0.6931471805599453)` (`softmax` の安定な対数) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
@@ -618,6 +619,8 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `torch:sqrt` | `(torch:sqrt a)` | 微分可能な平方根 |
 | `torch:tanh` | `(torch:tanh a)` | 微分可能な双曲線正接 |
 | `torch:relu` | `(torch:relu a)` | 微分可能な `max(x, 0.0)` |
+| `torch:erf` | `(torch:erf a)` | 微分可能なガウス誤差関数 |
+| `torch:gelu` | `(torch:gelu a)` | 微分可能な GELU (`:approximate :none` / `:tanh`) |
 | `torch:matmul` | `(torch:matmul a b)` | 微分可能な行列積 (ランク 3 以上はバッチ積) |
 | `torch:sum` | `(torch:sum a :axis 0)` | 微分可能な合計 (全体または軸に沿って) |
 | `torch:mean` | `(torch:mean a)` | 微分可能な平均 |
@@ -625,6 +628,8 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `torch:std` | `(torch:std a)` | 微分可能な標準偏差 |
 | `torch:amax` | `(torch:amax a :axis 0)` | 微分可能な最大値 (同値には勾配を均等分配) |
 | `torch:argmax` | `(torch:argmax a)` | 最大要素のインデックス (微分不可能、生の値) |
+| `torch:topk` | `(torch:topk a 5)` | 軸に沿った上位 `k` 個の値を大きい順に (`:indices t` でその位置) |
+| `torch:multinomial` | `(torch:multinomial probs)` | シード付き生成器による行ごとのインデックス抽出 (`:num-samples`、`:replacement`) |
 | `torch:softmax` | `(torch:softmax a :axis 1)` | 微分可能な最大値差し引き softmax |
 | `torch:log-softmax` | `(torch:log-softmax a :axis 1)` | 微分可能な log-softmax (交差エントロピーの半分) |
 | `torch:masked-fill` | `(torch:masked-fill a mask v)` | マスクが非ゼロの位置を `v` で埋める微分可能な演算 |
@@ -643,6 +648,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `torch:modulep` | `(torch:modulep x)` | モジュールなら `T`、そうでなければ `NIL` |
 | `torch:module-kind` | `(torch:module-kind m)` | モジュールの kind キーワード |
 | `torch:field` | `(torch:field m :weight)` | モジュールの指定フィールドの値 (なければエラー) |
+| `torch:fields` | `(torch:fields m)` | フィールド plist 全体を新しいリストで (モジュール走査用) |
 | `torch:set-field` | `(torch:set-field m :weight p)` | モジュールの指定フィールドを設定しモジュールを返す |
 | `torch:forward` | `(torch:forward m x)` | モジュール (または素の関数) の順伝播を実行 |
 | `torch:parameter` | `(torch:parameter '(1.0))` | `requires-grad` を持つ葉テンソル、すなわち学習可能パラメータ |
@@ -664,7 +670,9 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `torch:step` | `(torch:step o)` | 更新則を全パラメータに適用 (その場で更新、テープ外) |
 | `torch:step-count` | `(torch:step-count o)` | `torch:step` の実行回数 (Adam の `t`) |
 | `torch:sgd` | `(torch:sgd model :lr 0.1)` | SGD。`:momentum` / `:weight-decay` も指定可 |
-| `torch:adam` | `(torch:adam model :lr 0.001)` | Adam (`:betas`、`:eps`)。初回からバイアス補正済み |
+| `torch:adam` | `(torch:adam model :lr 0.001)` | Adam (`:betas`、`:eps`、`:weight-decay`)。初回からバイアス補正済み |
+| `torch:adamw` | `(torch:adamw model :lr 0.001)` | AdamW。同じ規則で `:weight-decay` を分離 (既定 `0.01`) |
+| `torch:clip-grad-norm` | `(torch:clip-grad-norm model 1.0)` | 勾配全体の L2 ノルムが上限を超えたらその場でスケール。そのノルムを返す |
 | `torch:pad-sequence` | `(torch:pad-sequence seqs)` | 可変長シーケンスをバッチ先頭のパディング済みテンソルに |
 | `torch:shuffled-batches` | `(torch:shuffled-batches n 32)` | シード付き生成器によるミニバッチ (`:shuffle`、`:drop-last`) |
 | `torch:padding-mask` | `(torch:padding-mask tokens)` | パディング位置の `(batch 1 length)` マスク (生の配列) |

@@ -267,7 +267,23 @@ Two surface decisions the todo's text does not get:
   this Lisp-2, and two names for one operation is worse than one; `torch:forward`
   is the single spelling, and it also accepts a plain FUNCTION, which is why
   there is no `torch:relu` MODULE either -- an activation goes into a
-  `torch:sequential` as `(function torch:relu)`.
+  `torch:sequential` as `(function torch:relu)`. `torch:gelu` joined it the
+  same way with the chapter-3 port, and is a pure COMPOSITION of torch ops -- no adjoint of
+  its own -- over `torch:erf`, whose kernel is `linalg:erf`. Its
+  `:approximate` defaults to `:none`, the exact
+  `x * (1 + erf(x / sqrt(2))) / 2`, matching `nn.GELU`'s own default; `:tanh`
+  is the GPT/BERT form. Shipping only the `tanh` form would have been a
+  divergence whose "why" was "we did not add erf" -- see `.kb/linalg.md`.
+- **`torch:fields` is what makes a module tree walkable from
+  OUTSIDE.** `torch:field` reads one field by name, which is all a forward
+  needs; a WALK -- `nn.Module.apply`, `nn.Module.named_parameters` -- needs the
+  whole plist, and gets it as a fresh spine over live values. That is why
+  neither of those two PyTorch methods has a counterpart here: a walk is
+  `torch:fields` plus `torch:module-kind`, and dispatching on what a layer IS
+  beats PyTorch's substring test over dotted names (`'ln' in name` also
+  selects a layer someone called `blend`). `examples/llm-from-scratch/gpt/`
+  writes both walks -- the weight init and the weight-decay split -- in eight
+  lines each.
 - **`torch:set-data`** was added with the layer, not before it: an optimizer (and
   the 461 acceptance training loop) must write the new value into the very tensor
   a module's fields point at. Rebuilding the tensor, the pre-461 idiom in the
@@ -341,6 +357,22 @@ Four decisions worth keeping:
   parameter's position, allocated on the first step; the learning rate is a
   field too, which is the whole of what an LR schedule needs
   (`(torch:set-field opt :lr new)`) without a scheduler type existing.
+- **`torch:adamw` is the SAME step function, not a twin.**
+  `torch::%o-adam-step` reads two more fields, `:weight-decay` and
+  `:decoupled`: nil-decoupled adds `wd * param` to the GRADIENT
+  (`torch.optim.Adam`), t-decoupled shrinks the parameter directly before the
+  moments are touched (`torch.optim.AdamW`), and `wd` 0 is neither. A second
+  copy of the inner loop would have been a second place for the bias
+  correction to drift. There is no parameter-GROUP object either: two
+  optimizers over disjoint parameter LISTS are what a group is here, which is
+  how a transformer decays its weight matrices and leaves its biases,
+  LayerNorm gains and embedding tables alone.
+- **`torch:clip-grad-norm` lives here because nothing else can write a grad.**
+  `torch:set-data` writes a parameter's DATA; there is no `torch:set-grad`, so
+  `torch.nn.utils.clip_grad_norm_` cannot be a user-level defun. It returns
+  the norm as MEASURED (before clipping, so a loop can log it) and scales in
+  place by `max-norm / (norm + 1e-6)`, PyTorch's denominator, only when the
+  bound is exceeded.
 - **The update is ELEMENT-WISE and IN PLACE**, `setf row-major-aref` over the
   parameter's packed array with no temporary: a fresh array per parameter per
   step is the allocation that dominates a small training loop. Because the rule
@@ -436,6 +468,43 @@ The one library gap the port surfaced was PyTorch's PROBABILITY target for
 `torch:cross-entropy-loss` (see the module-layer section above); it was closed
 in torch.lisp rather than worked around in the example, which is the rule the
 todo set for this port.
+
+## The GPT increment: `examples/llm-from-scratch/{gpt,chapter03}/`
+
+Chapter 3 of the same book -- the reusable `llm_from_scratch/gpt/` package and
+its two notebooks -- ported on the same rule, and it surfaced SEVEN library
+gaps rather than one. All seven were closed in `linalg.lisp` / `torch.lisp`:
+`linalg:erf`, `torch:erf`, `torch:gelu`, `torch:fields`, `torch:topk`,
+`torch:multinomial`, `torch:adamw` and `torch:clip-grad-norm` (plus
+`torch:adam`'s missing `:weight-decay`, which `torch:sgd` always had). Each is
+described in its own section above; what the port adds beyond them:
+
+- **the two sampling primitives are the first NON-differentiable tensor
+  functions after `torch:argmax`, and they follow its shape**: a RAW linalg
+  array, never a tensor. `torch:topk` answers the VALUES, or the indices under
+  `:indices t` -- ONE of `torch.topk`'s pair, because every function in this
+  package is single-valued -- with ties going to the lowest index, so a run
+  reproduces where `torch.topk`'s tie order is not specified at all.
+  `torch:multinomial` draws from the seeded `linalg` generator, which is what
+  keeps a SAMPLED text identical on four backends; without-replacement is the
+  default, like PyTorch.
+- **the example carries two deliberate DIVERGENCES from the book, both
+  because porting the code as written would carry a defect across**, and both
+  named in the file that makes them (`gpt/trainer.lisp`): the book's `get_lr`
+  computes a warmup for the LOG LINE only and never writes it back, so its
+  optimizer runs the whole warmup at the base rate; and `forward(idx, targets)`
+  returns a `(logits, loss)` tuple, which splits into `gpt-forward` and
+  `gpt-loss` here.
+- **the corpus is INLINE, and public domain.** The notebook downloads
+  『吾輩は猫である』 from 青空文庫 with requests + BeautifulSoup; nothing is
+  downloaded or vendored here, so the opening of the novel is in the source --
+  the same choice `chapter02/section5.lisp` made for its parallel corpus.
+- **`chapter03/section2.lisp` needs no torch at all** for three of its four
+  parts: it is the book's `section03_tokenizer.py`, whose BPE learner depends
+  on Python `dict` INSERTION order (`max(pair_freqs, key=...)` breaks a tie by
+  taking the pair seen first). Every table there is an ordered association
+  list and the tie rule is a strict `>`, which is what makes the port's 100
+  merges come out in the book's exact order -- diffed against the Python.
 
 ## `--simd`, and what is deliberately NOT accelerated
 
