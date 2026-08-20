@@ -148,13 +148,6 @@ exercise:
 # narrow it while iterating: -Drontolisp.examples.only=cloudflare
 ```
 
-### Measured Numbers
-
-Artifact byte counts live in `size-report/` and ANSI conformance in `ansi-test/`; each has
-its own README and a daily workflow that owns the checked-in report. No `examples/**/README.md`
-quotes a byte count. Do not run the whole ANSI suite in a session -- measure one chapter
-(`ansi-test/measure.sh cons`) and dispatch the workflow for the baseline.
-
 ## Requirements
 
 - Java 25+
