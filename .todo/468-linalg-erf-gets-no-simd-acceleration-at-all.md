@@ -74,12 +74,16 @@ member is simpler (fixed arity 1, no batch odometer, no broadcast).
 - `TorchGradcheck`'s `erf` / `gelu` rows and the ci-spec `torch-gpt-cross-backend`
   case stay byte-identical with and without `--simd`.
 
-## Follow-up that belongs with this landing
+## Follow-ups that belong with this landing
 
-`doc/{en,ja}/guides/linear-algebra.md` currently lists `linalg:softmax`,
-`linalg:log-softmax` and `linalg:erf` immediately after the sentence "as named
-functions they are accelerated under `--simd`, which `emap` with an arbitrary
-callback never is", saying they "sit here for the same reason `relu` does". For
-the two softmaxes that is true (they are composed of intercepted members); for
-`erf` it is not, today. Either fix the sentence now as a standalone one-liner, or
-land this todo and let it become true -- but do not leave both undone.
+Three places now state this gap outright, so landing the fix means DELETING
+them:
+
+- `doc/{en,ja}/guides/linear-algebra.md`: the caveat sentence at the end of the
+  ufunc paragraph ("`erf` is an `emap` over a scalar series and is the one name
+  here the flag does not accelerate at all").
+- `doc/{en,ja}/guides/simd-acceleration.md`, "Accelerating linalg": the
+  `linalg:erf` half of the "Two shapes fall outside the accelerated set today"
+  paragraph (its batched-matmul half belongs to todo-467).
+- `doc/{en,ja}/reference/functions/torch-gelu.md`: the "Accuracy is not the only
+  axis" paragraph, which tells a reader to pick `:approximate :tanh` for speed.

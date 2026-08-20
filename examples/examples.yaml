@@ -432,9 +432,9 @@ examples:
   # comes from the seeded linalg generator (integer arithmetic, bit-identical
   # everywhere), and every printed float is rounded to a few decimals so the
   # low-order digits of the WASM exp/log/sin approximations cannot show through.
-  # section5 is the training program -- it is the slow one, ~2 min on the plain
-  # interpreter, which is why its shapes are the shrunken ones its README
-  # documents next to the book's.
+  # section5 is the training program -- it is the slow one, which is why its
+  # shapes are the shrunken ones its README documents next to the book's, and
+  # why it is one of the two entries here that run under --simd.
   - path: llm-from-scratch/transformer/shapes.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     note: attention.py's __main__ plus the same shape check for the whole model -- shapes and counts only, so nothing float-sensitive is printed
@@ -457,7 +457,8 @@ examples:
       file: .expected/llm-section4.txt
   - path: llm-from-scratch/chapter02/section5.lisp
     backends: [interpreter, jvm, wasm]
-    note: notebook 2.5 -- the masks, the vocabulary, and a Transformer trained on the in-file 12-pair ja->en corpus then decoded greedily
+    simd: true
+    note: notebook 2.5 -- the masks, the vocabulary, and a Transformer trained on the in-file 12-pair ja->en corpus then decoded greedily. Under --simd for the margin - the interpreter leg is 2:06 scalar against the 240 s cap and 1:19 with the flag, and every leg prints the same bytes either way (verified on all three)
     expect:
       file: .expected/llm-section5.txt
 
@@ -465,8 +466,10 @@ examples:
   # Same determinism rule as chapter 2 above, and it now also covers a SAMPLED
   # text: torch:multinomial draws from the same seeded generator, so the two
   # generated passages are byte-identical on every backend. train-gpt-soseki is
-  # the slow one (~2.5 min on the plain interpreter) -- its corpus is the public
-  # domain opening of 『吾輩は猫である』, inlined, since nothing here downloads.
+  # the slow one -- its corpus is the public domain opening of 『吾輩は猫である』,
+  # inlined, since nothing here downloads. It and chapter02/section5 are the only
+  # two llm-from-scratch entries under --simd; the six shape/notebook entries
+  # around them stay scalar, so both paths keep their coverage.
   - path: llm-from-scratch/gpt/shapes.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     note: the gpt package's own shape check -- shapes, counts and two exact predicates (the causal mask really blinds a position to its future; :top-k 1 makes sampling deterministic), so nothing float-sensitive is printed
@@ -479,7 +482,8 @@ examples:
       file: .expected/llm-section3-2.txt
   - path: llm-from-scratch/chapter03/train-gpt-soseki.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
-    note: the train_gpt_soseki notebook -- a character-level GPT trained by AdamW over two parameter groups on the inlined 漱石 corpus, then sampled with temperature and top-k
+    simd: true
+    note: the train_gpt_soseki notebook -- a character-level GPT trained by AdamW over two parameter groups on the inlined 漱石 corpus, then sampled with temperature and top-k. Under --simd for the margin - the interpreter leg is 2:43 scalar against the 240 s cap and 1:39 with the flag, and every leg prints the same bytes either way (verified on all four). Most of what is left is the un-intercepted rank-3 matmul, not the flag's fault
     expect:
       file: .expected/llm-train-gpt-soseki.txt
 

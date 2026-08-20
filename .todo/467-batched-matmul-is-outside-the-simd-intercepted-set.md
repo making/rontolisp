@@ -108,9 +108,14 @@ since the decline branch re-reads it.
 
 ## Follow-ups that belong with this landing
 
-- `examples/llm-from-scratch/README.md` has no `--simd` section (the
-  `deep-learning-from-scratch` and `llama2` READMEs do). Write it once the
-  numbers are worth quoting, with the measured table.
-- `doc/{en,ja}/guides/neural-networks.md` says a torch program "is accelerated
-  under `--simd` for free". True only once this lands; until then it oversells
-  the transformer case.
+Documentation now states this gap explicitly, so landing the fix means DELETING
+those statements, not just adding one:
+
+- `doc/{en,ja}/guides/simd-acceleration.md`, "Accelerating linalg": the "Two
+  shapes fall outside the accelerated set today" paragraph -- drop its batched-
+  matmul half (its `linalg:erf` half stays until todo-468).
+- `doc/{en,ja}/guides/neural-networks.md`: the sentence saying a transformer
+  gains far less from the flag than an MLP does.
+- `examples/llm-from-scratch/README.md`, the `--simd` section: its table and its
+  "a single gap ... not in the accelerated set yet" paragraph both need
+  re-measuring and rewriting.

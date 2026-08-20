@@ -2,7 +2,7 @@
 
 The `torch` package is a PyTorch-style layer over [linalg](linear-algebra.md): a **tensor** that remembers how it was computed, and a `torch:backward` that walks that history in reverse to fill in gradients. Everything a hand-written backpropagation pass used to do -- tracking which arrays fed which, deriving each operation's adjoint, summing gradients over broadcast axes -- happens automatically, one operation at a time.
 
-The package is implemented once in Lisp source and behaves identically on every backend. Every operation computes through the `linalg` kernels, so a torch program is accelerated under [`--simd`](simd-acceleration.md) for free, and the numerical results are the linalg results.
+The package is implemented once in Lisp source and behaves identically on every backend. Every operation computes through the `linalg` kernels, so a torch program is accelerated under [`--simd`](simd-acceleration.md) for free, and the numerical results are the linalg results. How much the flag buys depends on which kernels a model leans on: batched (rank 3 or more) matmul is not in the accelerated set yet, so a transformer -- whose attention layers are almost entirely that call -- gains far less from it than a plain multilayer perceptron does. See [Accelerating linalg](simd-acceleration.md#accelerating-linalg).
 
 ## Tensors
 

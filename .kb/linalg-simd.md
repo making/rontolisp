@@ -171,13 +171,30 @@ bit-identical (below). Declines: a nil/non-integer/out-of-range axis, an empty a
 axes list, a mixed-width or non-broadcastable pair, any general boxed operand.
 
 Accelerated **transitively**, so they are not intercepted directly: `mean` (calls `sum`),
-`matmul` (calls `dot`), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
+`matmul` **at rank <= 2 only** (calls `dot` -- read the gap note below before assuming
+matmul is covered), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
 `square` (calls `mul`), `reciprocal` (calls `div`), `clip` (calls `maximum` then
 `minimum`), `relu` (calls `maximum` with the 0.0 bound).
 
 **Never** intercepted: `emap` (an arbitrary Lisp callback), `det` / `inv` / `solve`'s
 pivoting elimination (data-dependent pivots, sequential column dependency), `array-equal`
 (the nil-return sentinel collision), and the constructors.
+
+**Not intercepted YET** -- gaps, not decisions, each with an open todo. Both were found by
+the `examples/llm-from-scratch/` GPT port (2026-08-20), and both are on the hot path of any
+transformer, so do not read the member list above as "linalg is covered":
+
+- `linalg::%la-matmul-nd`, the rank >= 3 stacked matrix product (`torch.bmm`, hence every
+  attention layer and every `torch:linear` over a `(B T C)` activation). It is a boxed
+  `outer x M x K x N` walk built from no intercepted member, so `--simd` does nothing for
+  it on the interpreter and the JVM and makes it ~11% SLOWER on wasm-GC -- it pays the
+  `TYPE_VBLOCK` `_v_get`/`_v_set` cost this file opens with and gets nothing back. todo-467.
+- `linalg:erf` -- `(linalg:emap #'%la-erf-1 a)`, and `emap` is never intercepted, so the
+  exact `torch:gelu` is unaccelerated while its `:approximate :tanh` form is. todo-468.
+
+The user-facing statement of both lives in the "Accelerating linalg" section of
+`doc/{en,ja}/guides/simd-acceleration.md`; closing either todo means deleting its half of
+that paragraph.
 
 `#'linalg:dot` still names the scalar defun on the compiled backends -- the interception is
 at the *call site* there, while the interpreter overrides the *function binding*. So a

@@ -18,6 +18,10 @@ agrees with it to about `1e-3`. Unlike [`torch:relu`](torch-relu.md) it is
 smooth everywhere and passes a small negative gradient, which is why a
 transformer feed-forward block uses it.
 
+Accuracy is not the only axis: under [`--simd`](../../guides/simd-acceleration.md#accelerating-linalg)
+the `:tanh` form is accelerated (it is `mul` / `add` / `tanh`) and the default is
+not, because [`linalg:erf`](linalg-erf.md) is not among the intercepted kernels.
+
 ```lisp
 (torch:data (torch:gelu (torch:tensor '(-1.0 0.0 1.0))))
 ; => #d(-0.15865525393145702 0.0 0.841344746068543)

@@ -82,6 +82,26 @@ the low-order digits of the WASM `exp`/`log` approximations cannot show
 through. That is why the two generated 漱石 passages are the same text on the
 interpreter, the JVM and wasm-GC rather than merely the same kind of text.
 
+## `--simd`
+
+Every operation here computes through `linalg`, so
+[`--simd`](../../doc/en/guides/simd-acceleration.md) applies with nothing to
+change in the source, and it leaves the output byte-identical. The two training
+programs are tested with the flag for that reason — it buys back the margin
+their interpreter leg needs:
+
+| | scalar | `--simd` |
+| --- | --- | --- |
+| `chapter02/section5.lisp`, interpreter | 2m06 | 1m19 |
+| `chapter03/train-gpt-soseki.lisp`, interpreter | 2m43 | 1m39 |
+
+That is a far smaller win than the flag usually gives — `examples/llama2/` goes
+from 11.3 s to 20 ms on the same backend — and the reason is a single gap:
+batched (rank >= 3) matrix multiplication, which is what an attention layer
+almost entirely *is*, is not in the accelerated set yet. Until it is, a
+transformer gains less from `--simd` than a plain MLP does. See
+[Accelerating linalg](../../doc/en/guides/simd-acceleration.md#accelerating-linalg).
+
 ## The shapes: the book's, and the ones that are tested
 
 The notebook trains a `d_model` = 512, 6-block, 8-head Transformer for 20
