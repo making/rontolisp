@@ -1,0 +1,12 @@
+(defun bench (n etype label reps)
+  (let* ((a (linalg:add (linalg:ones (list n n) :element-type etype) 0.5))
+         (b (linalg:add (linalg:ones (list n n) :element-type etype) 0.25)))
+    (dotimes (i 3) (linalg:matmul a b))
+    (let ((t0 (get-internal-real-time)))
+      (dotimes (i reps) (linalg:matmul a b))
+      (format t "n=~d ~a ~,3f ms/call~%" n label
+              (/ (* 1000.0 (- (get-internal-real-time) t0))
+                 (* reps internal-time-units-per-second))))))
+(dolist (n '(32 64 128 256 512))
+  (bench n nil "f64" 20)
+  (bench n 'single-float "f32" 20))

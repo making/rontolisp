@@ -44,8 +44,12 @@ both came out better than feared.
 
 ## What was measured
 
-Spike sources: `/tmp/.../gpuspike/{Cu,MatmulSpike,PtxSpike,ResidencySpike,TinySpike,
-NiProbe}.java` (scratch, not checked in -- the numbers below are the artifact).
+Spike sources: **`.todo/123-gpu-acceleration/`**, kept beside this file so every number
+below can be re-derived on other hardware. Throwaway probes, not project code -- outside
+`src/`, not in the reactor, not formatted, nothing builds them; each is a single-class
+JDK source-launcher program with no dependency beyond the FFM API. That directory's
+`README.md` says which probe answers which question, how to run it (including the
+native-image leg) and what it printed verbatim.
 Machine: NVIDIA GB10 (Grace Blackwell, `sm_121`, 48 SMs, unified addressing + managed
 memory), aarch64, driver 580.173.02 / CUDA 13.0, Oracle GraalVM 25.0.4.
 
@@ -136,7 +140,15 @@ The heap `double[]` -> native copy is unavoidable in every row: FFM cannot hand 
 heap array to a native call, and `linalg`'s arrays are `double[]`/`float[]`. Managed
 memory removes the second copy, not the first.
 
-### Precision, and how far a hand-written kernel is from cuBLAS
+### The f64 penalty, and how far a hand-written kernel is from a tuned one
+
+**cuBLAS appears here as a measuring stick, not as a candidate dependency.** It is
+NVIDIA's tuned BLAS, it ships only inside the CUDA toolkit (`libcublas.so.13`, found on
+the spike machine at `/usr/local/cuda/lib64/`), and requiring it would undo the whole
+point of section 1 -- so the design does not use it. It was bound with FFM for one
+afternoon to answer two questions the built-in PTX cannot answer about itself: *how
+much of this hardware is a naive kernel leaving on the floor*, and *what does this
+hardware actually do at each width*.
 
 | n, width | cuBLAS | tiled PTX kernel | ratio |
 | --- | --- | --- | --- |
@@ -145,12 +157,32 @@ memory removes the second copy, not the first.
 | 1024 f64 | 5.116 ms (420 GFLOP/s) | 4.432 ms | 0.9x |
 | 2048 f64 | 40.866 ms (420 GFLOP/s) | 35.183 ms | 0.9x |
 
-Read it twice. **f32 is 44x f64 on this device** -- that gap, not the kernel quality, is
-the dominant fact for a `linalg` whose default is double-float. And a naive 16x16 tiled
-kernel already MATCHES cuBLAS at f64 (both are bound by the fp64 units) while leaving
-7x on the table at f32. So the built-in PTX is entirely adequate to land the feature,
-and using `libcublas.so` when it happens to be present is a later, optional
-optimization -- never a requirement, since it would drag the toolkit back in.
+Two separate readings, and they answer different questions:
+
+- **Down the cuBLAS column: the hardware's own width penalty.** Same library, same
+  shape, only the element width differs -- 18.7 TFLOP/s at f32 against 420 GFLOP/s at
+  f64, a **44x** gap. That is an architectural property of this class of device (fp64
+  units at ~1/64 of the fp32 rate), not a software artifact, and it is the dominant
+  fact for a `linalg` whose default element type is double-float: **a `--gpu` that only
+  ever sees `#d` arrays is throwing away 44/45ths of the device.** Hence "this is an f32
+  feature": either the flag drives programs toward `:element-type 'single-float`, or
+  most of the win never arrives.
+  Ruled out as an explanation: the f32 row is genuine FP32, not TF32 tensor cores
+  silently truncating the mantissa. `cublasGetMathMode` returns `CUBLAS_DEFAULT_MATH`
+  (0), and a diagonal SGEMM carrying `1 + 2^-20` -- representable in fp32's 24-bit
+  mantissa, NOT in tf32's 11-bit one -- came back bit-exact (`3f800008`). So the two
+  numbers are comparable and the 44x is real (`Tf32Check.java`).
+- **Across each row: how good the naive kernel is.** At f64 a plain 16x16 tiled kernel
+  already MATCHES cuBLAS (0.9x -- both are pinned by the same scarce fp64 units, so
+  there is nothing for tuning to win). At f32 it leaves 7x on the table, because that is
+  where blocking, vectorized loads and tensor cores actually pay.
+
+The conclusion for the design: the built-in PTX is entirely adequate to land the
+feature -- 2.4 TFLOP/s of f32 is still hundreds of times the scalar defun -- and closing
+the remaining 7x is a later, self-contained kernel-tuning exercise. Opportunistically
+`dlopen`ing `libcublas.so` when a machine happens to have the toolkit is a possible
+optimization for exactly that gap, but it can never be a requirement, and the feature
+must be complete without it.
 
 The f64 tiled kernel is NOT bit-identical to the scalar defun (max abs difference 1.5
 to 2.7 on the spike's inputs): the tile walk reorders the reduction. That is expected
@@ -191,8 +223,10 @@ decline path must be the SIMD path, not the scalar one, when both are on.
 
 Generate the PTX at build time with `nvcc -arch=compute_75 -ptx` (or NVRTC) and check
 the resulting text in as a resource. At runtime `cuModuleLoadData` hands it to the
-driver, which JITs it for whatever card is present (25.9 ms, once per process; cacheable
-via `cuModuleLoadDataEx` JIT-cache options if that ever matters). Consequences:
+driver, which JITs it for whatever card is present -- 25.9 ms cold, and **1.3 ms** on
+every later run, because the driver keeps its own on-disk compute cache
+(`~/.nv/ComputeCache`) and the resource is a fixed text. So the load cost is a startup
+non-issue and needs no `cuModuleLoadDataEx` cache plumbing of our own. Consequences:
 
 - **Runtime requirement is `libcuda.so.1` alone.** No toolkit, no `libnvrtc`, no
   `libcudart`, no `libcublas`.
