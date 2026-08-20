@@ -106,6 +106,15 @@ since the decline branch re-reads it.
   rank-3 microbenchmark above; the wasm-GC rank-3 row must stop being slower
   than scalar.
 
+## The `--blas` neighbour
+
+`--blas` landed 2026-08-20 (`.kb/linalg-blas.md`) and intercepts `linalg:dot` only, so it
+does not touch this member either -- but a stacked product IS a batch of gemms, and a
+`cblas_dgemm` per matrix over the same seam is a second implementation this member could
+have on the interpreter and the JVM, worth 35-121x there rather than the lane kernel's few.
+Decide that when this item is designed: the two are not alternatives, since `--blas`
+reaches neither WASM backend and this one must.
+
 ## Follow-ups that belong with this landing
 
 Documentation now states this gap explicitly, so landing the fix means DELETING

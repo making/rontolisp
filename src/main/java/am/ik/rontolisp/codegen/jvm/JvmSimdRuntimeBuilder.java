@@ -232,18 +232,18 @@ final class JvmSimdRuntimeBuilder {
 		// the
 		// one resource-config entry). Their ops keys carry the package prefix because
 		// vec:add and linalg:add have the same member name.
-		for (String member : JvmLinalgSimdCompiler.members()) {
-			String desc = "(" + "Ljava/lang/Object;".repeat(JvmLinalgSimdCompiler.arity(member))
+		for (String member : JvmLinalgKernelCompiler.members()) {
+			String desc = "(" + "Ljava/lang/Object;".repeat(JvmLinalgKernelCompiler.arity(member))
 					+ ")Ljava/lang/Object;";
-			ops.put(JvmLinalgSimdCompiler.qualifiedName(member), cp.addMethodref(bridgeClass,
-					cp.addNameAndType(cp.addUtf8(JvmLinalgSimdCompiler.bridgeMethod(member)), cp.addUtf8(desc))));
+			ops.put(JvmLinalgKernelCompiler.qualifiedName(member), cp.addMethodref(bridgeClass,
+					cp.addNameAndType(cp.addUtf8(JvmLinalgKernelCompiler.bridgeMethod(member)), cp.addUtf8(desc))));
 			// The option-form (:axis / axes) kernels ride the same bridge under a
 			// distinct
 			// ops key, one extra methodref per extended member.
-			JvmLinalgSimdCompiler.Extended ext = JvmLinalgSimdCompiler.extended(member);
+			JvmLinalgKernelCompiler.Extended ext = JvmLinalgKernelCompiler.extended(member);
 			if (ext != null) {
 				String extDesc = "(" + "Ljava/lang/Object;".repeat(ext.params()) + ")Ljava/lang/Object;";
-				ops.put(JvmLinalgSimdCompiler.extendedKey(member), cp.addMethodref(bridgeClass,
+				ops.put(JvmLinalgKernelCompiler.extendedKey(member), cp.addMethodref(bridgeClass,
 						cp.addNameAndType(cp.addUtf8(ext.bridgeMethod()), cp.addUtf8(extDesc))));
 			}
 		}

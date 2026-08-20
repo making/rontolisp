@@ -419,13 +419,14 @@ final class JvmExprCompiler {
 				JvmSimdCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
-			// --simd: the fifteen accelerated linalg: kernels. Unlike vec:, each bridge
+			// --simd / --blas: the accelerated linalg: kernels. Unlike vec:, each bridge
 			// call is guarded -- a kernel that declines the operands (a general array, a
-			// mixed width, a shape error) returns null and the emitted call site runs the
-			// scalar linalg.lisp defun over the same temps.
-			if (qn != null && LispNames.LINALG_PKG.equals(qn.pkg()) && ctx.simdOps != null
-					&& JvmLinalgSimdCompiler.handles(qn.member())) {
-				JvmLinalgSimdCompiler.compile(qn.member(), cons, ctx, className);
+			// mixed width, a shape error) returns null and the emitted call site tries
+			// the next attempt, ending at the scalar linalg.lisp defun over the same
+			// temps.
+			if (qn != null && LispNames.LINALG_PKG.equals(qn.pkg())
+					&& JvmLinalgKernelCompiler.claims(qn.member(), ctx)) {
+				JvmLinalgKernelCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
 			// A program that defines its own function on a cl name loses every call site

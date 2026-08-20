@@ -43,6 +43,7 @@ import am.ik.rontolisp.eval.HttpServerLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
+import am.ik.rontolisp.eval.LinalgBlas;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.TorchLibrary;
 import am.ik.rontolisp.eval.LispEvalException;
@@ -171,7 +172,7 @@ public final class RontoLispCli {
 					+ "': give the program either inline or in a file");
 		}
 		if (!test && inline == null && !options.containsNoKey()) {
-			repl(systemPath, dists, options.contains("--simd"));
+			repl(systemPath, dists, options.contains("--simd"), options.contains("--blas"));
 			return;
 		}
 
@@ -218,9 +219,10 @@ public final class RontoLispCli {
 			compileToFile(source, baseDir, systemPath, dists, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
-					options.contains("--simd"), options.contains("--no-prune"), options.contains("--emit-wit"),
-					options.contains("--emit-js-glue"), options.contains("--host-random"),
-					options.contains("--host-fetch"), options.contains("--reentrant"),
+					options.contains("--simd"), options.contains("--blas"), options.contains("--no-prune"),
+					options.contains("--emit-wit"), options.contains("--emit-js-glue"),
+					options.contains("--host-random"), options.contains("--host-fetch"),
+					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
 					inputFile);
 		}
@@ -239,7 +241,8 @@ public final class RontoLispCli {
 				throw new UnsupportedOperationException(
 						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
 			}
-			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), inputFile);
+			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), options.contains("--blas"),
+					inputFile);
 		}
 	}
 
@@ -294,12 +297,15 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void repl(List<String> systemPath, DistClient dists, boolean simd) {
+	private void repl(List<String> systemPath, DistClient dists, boolean simd, boolean blas) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDistClient(dists);
 		if (simd) {
 			enableSimd(evaluator);
+		}
+		if (blas) {
+			enableBlas(evaluator);
 		}
 		StringBuilder buffer = new StringBuilder();
 		if (System.console() != null && isJLineAvailable()) {
@@ -388,14 +394,30 @@ public final class RontoLispCli {
 		}
 	}
 
+	// --blas routes the linalg: matrix product to a tuned CBLAS found in the OS. Unlike
+	// --simd there is nothing to bake in: whether one is there is a property of the
+	// machine, so a decline is an ordinary outcome and says which library was rejected
+	// and why (.kb/linalg-blas.md).
+	private static void enableBlas(LispEvaluator evaluator) {
+		if (LinalgBlas.available()) {
+			evaluator.setBlas(true);
+		}
+		else {
+			warn("--blas: " + LinalgBlas.description() + "; running the linalg: matrix product unaccelerated.");
+		}
+	}
+
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
-			boolean simd, @Nullable String entryFile) {
+			boolean simd, boolean blas, @Nullable String entryFile) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDistClient(dists);
 		if (simd) {
 			enableSimd(evaluator);
+		}
+		if (blas) {
+			enableBlas(evaluator);
 		}
 		// #. read-time eval: only sources textually containing #. pay for the marker
 		// read; each top-level form's markers resolve just before it evaluates, the
@@ -419,8 +441,8 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
-			boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
+			boolean simd, boolean blas, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom,
+			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -430,7 +452,7 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, dists, outputFile, dynamic, component, noWasi, optimize, noGc,
-					simd, noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary, entryFile);
+					simd, blas, noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -461,14 +483,23 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
-			boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
+			boolean simd, boolean blas, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom,
+			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
 		if (wit && !(component && outputFile.endsWith(".wasm"))) {
 			throw new UnsupportedOperationException(
 					"--emit-wit requires --component and a .wasm output (e.g. -o out.wasm --component --emit-wit)");
+		}
+		// --blas binds a native library through the foreign function API, which the
+		// interpreter and the JVM backend have and WASM does not: a .wasm output could
+		// only ignore the flag, and silently running unaccelerated is exactly what the
+		// flag exists to make visible.
+		if (blas && !outputFile.endsWith(".class")) {
+			throw new UnsupportedOperationException("--blas reaches the interpreter and the JVM class output only:"
+					+ " a tuned CBLAS is called through the foreign function API, which WASM does not have."
+					+ " Use --simd for the linalg: kernels on a .wasm output");
 		}
 		// --emit-js-glue writes the host half of a boundary only a --no-wasi core module
 		// has: a component is instantiated through its own bindings (jco), and --no-gc
@@ -847,7 +878,7 @@ public final class RontoLispCli {
 			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic, optimize, simd).runtimeFeatures(features.names())
+			bytes = new JvmLispCompiler(className, dynamic, optimize, simd, blas).runtimeFeatures(features.names())
 				.compile(TlsPemInliner.inline(program, baseDir));
 		}
 		try {
@@ -1092,6 +1123,14 @@ public final class RontoLispCli {
 		this.out.println("                     behaves as without --simd. Interpreter/REPL: run the vec: kernels");
 		this.out.println("                     on the Vector API (baked into the native binary; on java -jar add");
 		this.out.println("                     --add-modules jdk.incubator.vector, else it falls back to scalar).");
+		this.out.println("  --blas             Route the linalg: matrix product to a tuned CBLAS from the OS");
+		this.out.println("                     Interpreter (incl. the native binary) and JVM (.class) only --");
+		this.out.println("                     WASM has no foreign function interface. macOS finds Accelerate");
+		this.out.println("                     with no setup; on Linux install one (e.g. libopenblas0-pthread).");
+		this.out.println("                     A machine with none runs the same programs, unaccelerated. The");
+		this.out.println("                     library reorders its reduction, so results are close to but not");
+		this.out.println("                     bit-identical to the other backends. RONTOLISP_BLAS names a");
+		this.out.println("                     library outright; RONTOLISP_BLAS_VERBOSE=1 prints what was bound.");
 		this.out.println("  --no-prune         Keep every spliced library function in the compiled output");
 		this.out.println("                     By default unreachable library definitions (linalg:/vec:/...)");
 		this.out.println("                     are dropped at compile time; names forged at runtime from");

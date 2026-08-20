@@ -1053,8 +1053,8 @@ final class JvmSimdVectorTemplate {
 	// PARTIAL. linalg.lisp also accepts general (boxed) arrays, mixed widths, a scalar
 	// operand on either side, plain numbers, and mismatched shapes (which it turns into a
 	// specific error), so every kernel here returns NULL for an input it does not handle,
-	// and the call site JvmLinalgSimdCompiler emitted then invokes the scalar defun. The
-	// library stays the single source of truth for every edge case, error messages
+	// and the call site JvmLinalgKernelCompiler emitted then invokes the scalar defun.
+	// The library stays the single source of truth for every edge case, error messages
 	// included, and nothing is duplicated. Nil is ACONST_NULL in compiled code, but none
 	// of these fifteen ever returns nil, so null is an unambiguous "declined".
 	//

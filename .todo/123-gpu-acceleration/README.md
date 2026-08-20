@@ -484,7 +484,7 @@ MTLCreateSystemDefaultDevice   14.7 ms | newLibraryWithSource    2.9 ms | same s
    GFLOP/s at f32, which is faster than our Metal kernel at every size measured. It is
    plain C, in the OS, reachable in four lines of FFM. Still 35-121x `--simd` AFTER
    todo-469 gave the f32 kernel its lanes, so that landing does not dent it. See
-   `../123-gpu-acceleration.md` for what it does to the plan, and `../470-linalg-never-calls-a-tuned-blas.md` for the
+   `../123-gpu-acceleration.md` for what it does to the plan, and `../../.kb/linalg-blas.md` for the
    item it became.
 
 ### The width probe, same machine

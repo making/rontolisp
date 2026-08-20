@@ -83,6 +83,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final boolean simdAccel;
 
+	private final boolean blasAccel;
+
 	/**
 	 * The names the compiled program's {@code *features*} starts out holding. The JVM
 	 * backend's own set unless the frontend {@link #runtimeFeatures(List) says otherwise}
@@ -205,10 +207,33 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * Running such a class requires {@code java --add-modules jdk.incubator.vector}.
 	 */
 	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel) {
+		this(className, dynamic, optimize, simdAccel, false);
+	}
+
+	/**
+	 * Create a new JVM compiler targeting the given class name.
+	 * @param className the fully qualified class name for the generated class
+	 * @param dynamic when {@code true}, unresolved function calls and variable references
+	 * are resolved at runtime against the embedded {@code eval} global environment (late
+	 * binding); see {@link #JvmLispCompiler(String, boolean)}
+	 * @param optimize dead-code elimination and what the class is optimized FOR; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel)}
+	 * @param simdAccel the {@code --simd} lowering; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean)}
+	 * @param blasAccel when {@code true} ({@code --blas}), the {@code linalg:} matrix
+	 * product is lowered at its call sites to an embedded CBLAS bridge
+	 * ({@link JvmBlasTemplate}), which binds a tuned library out of the OS at run time
+	 * and declines to whatever is below it -- the {@code --simd} kernel or the scalar
+	 * defun -- when there is none. Orthogonal to {@code simdAccel}: either, both or
+	 * neither.
+	 */
+	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel,
+			boolean blasAccel) {
 		this.className = className;
 		this.dynamic = dynamic;
 		this.optimize = optimize;
 		this.simdAccel = simdAccel;
+		this.blasAccel = blasAccel;
 	}
 
 	/**
@@ -1166,6 +1191,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmSimdRuntimeBuilder.@Nullable SimdRuntime simdRuntime = usesSimd
 				? JvmSimdRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
 
+		// --blas: emit the CBLAS bridge only when the program actually reaches the
+		// linalg: matrix product -- directly, or through the spliced linalg:matmul /
+		// linalg:solve bodies, which call linalg:dot themselves and are part of the
+		// program by the time this scan runs. Orthogonal to --simd: neither implies the
+		// other, and a build with both emits both bridges.
+		boolean usesBlas = this.blasAccel && programUsesSymbol(program, JvmLinalgBlas.QUALIFIED_DOT);
+		final JvmBlasRuntimeBuilder.@Nullable BlasRuntime blasRuntime = usesBlas
+				? JvmBlasRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
+
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.cp(cp)
@@ -1251,6 +1285,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
 			.mayUseAsyncValues(usesAsyncRuntime)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
+			.blasOps(blasRuntime != null ? blasRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.warnedClRedefinitions(new HashSet<>())
@@ -2242,6 +2277,12 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(simdRuntime.initedFieldDesc())
 						.writeU2(0));
 				}
+				if (blasRuntime != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(blasRuntime.initedFieldName())
+						.writeU2(blasRuntime.initedFieldDesc())
+						.writeU2(0));
+				}
 				if (usesEval) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(genvName)
@@ -2599,6 +2640,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(simdRuntime.maxStack())
 									.writeU2(simdRuntime.maxLocals())
 									.writeCode((Object[]) simdRuntime.initCode().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (blasRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, blasRuntime.initName(),
+							blasRuntime.initDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(blasRuntime.maxStack())
+									.writeU2(blasRuntime.maxLocals())
+									.writeCode((Object[]) blasRuntime.initCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -3161,8 +3213,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				return true;
 			}
 		}
-		for (String member : JvmLinalgSimdCompiler.members()) {
-			if (programUsesSymbol(program, JvmLinalgSimdCompiler.qualifiedName(member))) {
+		for (String member : JvmLinalgKernelCompiler.members()) {
+			if (programUsesSymbol(program, JvmLinalgKernelCompiler.qualifiedName(member))) {
 				return true;
 			}
 		}
@@ -3992,6 +4044,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final @Nullable Map<String, MethodrefConstant> simdOps;
 
+		/**
+		 * The CBLAS bridge references ({@code init} and the one product kernel); null
+		 * unless {@code --blas} emitted the bridge for a program that reaches
+		 * {@code linalg:dot}.
+		 */
+		final @Nullable Map<String, MethodrefConstant> blasOps;
+
 		Map<String, MethodrefConstant> numOps = Map.of();
 
 		Map<String, MethodrefConstant> mathOps = Map.of();
@@ -4462,6 +4521,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.httpHandlerRuntime = builder.httpHandlerRuntime;
 			this.javaOps = builder.javaOps;
 			this.simdOps = builder.simdOps;
+			this.blasOps = builder.blasOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -4610,6 +4670,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable Map<String, MethodrefConstant> javaOps;
 
 			private @Nullable Map<String, MethodrefConstant> simdOps;
+
+			private @Nullable Map<String, MethodrefConstant> blasOps;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -4980,6 +5042,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder simdOps(@Nullable Map<String, MethodrefConstant> simdOps) {
 				this.simdOps = simdOps;
+				return this;
+			}
+
+			Builder blasOps(@Nullable Map<String, MethodrefConstant> blasOps) {
+				this.blasOps = blasOps;
 				return this;
 			}
 

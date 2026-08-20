@@ -45,6 +45,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmBlasRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmBlasTemplate\\.class"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
         },
         "pattern": "am/ik/rontolisp/macro/format-render\\.lisp"

@@ -74,7 +74,7 @@ commands when the program uses `handler-case` / `ignore-errors` /
 `unwind-protect` / `catch` / `throw`, any async form, or a `return-from` or `go`
 that crosses a `lambda`; a fetch component also needs `-S http=y`. Other flags
 that change the emitted artifact -- `--dynamic`, `--optimize=off`/`=size`, `--no-gc`,
-`--simd`, `--no-prune`, `--emit-wit` -- are described under
+`--simd`, `--blas`, `--no-prune`, `--emit-wit` -- are described under
 `references/compiling/`.
 
 ## Guides

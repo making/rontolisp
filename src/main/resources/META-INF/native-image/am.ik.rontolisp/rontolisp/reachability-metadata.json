@@ -1,0 +1,43 @@
+{
+  "comment": [
+    "The --blas CBLAS downcalls (.kb/linalg-blas.md). Native Image needs every downcall",
+    "stub registered ahead of time: without these the binary binds the library, then",
+    "throws MissingForeignRegistrationError on the first product and declines to the",
+    "unaccelerated kernel -- correct output, silently no acceleration.",
+    "Two shapes, each at both widths: gemm (14 parameters) and gemv (12). gemm is",
+    "registered twice, because a product above the critical flop ceiling is issued",
+    "through the plain (thread-transitioning) handle instead."
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "void",
+        "parameterTypes": ["int", "int", "int", "int", "int", "int", "double", "void*", "int", "void*", "int", "double", "void*", "int"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["int", "int", "int", "int", "int", "int", "double", "void*", "int", "void*", "int", "double", "void*", "int"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["int", "int", "int", "int", "int", "int", "float", "void*", "int", "void*", "int", "float", "void*", "int"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["int", "int", "int", "int", "int", "int", "float", "void*", "int", "void*", "int", "float", "void*", "int"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["int", "int", "int", "int", "double", "void*", "int", "void*", "int", "double", "void*", "int"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["int", "int", "int", "int", "float", "void*", "int", "void*", "int", "float", "void*", "int"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      }
+    ]
+  }
+}

@@ -108,6 +108,22 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void replWithBlasInterceptsTheLinalgProductWhenTheMachineHasATunedLibrary() {
+		// Conditional on the machine, not on the build: with a tuned CBLAS the
+		// linalg.lisp
+		// defun (#<lambda>) is replaced by the library kernel, and without one the REPL
+		// says so on stderr and keeps running the defun. Both are correct outcomes, so
+		// this pins the pair rather than one of them.
+		String output = runCli("(linalg:zeros 1) #'linalg:dot\n", "--blas");
+		if (am.ik.rontolisp.eval.LinalgBlas.available()) {
+			assertThat(output).contains("#<function LINALG:DOT>");
+		}
+		else {
+			assertThat(output).contains("#<lambda>").doesNotContain("#<function LINALG:DOT>");
+		}
+	}
+
+	@Test
 	void replWithoutSimdKeepsScalarVecKernels() {
 		String output = runCli("(vec:dot #d(1.0) #d(1.0)) #'vec:dot\n");
 		assertThat(output).contains("#<lambda>").doesNotContain("#<function VEC:DOT>");

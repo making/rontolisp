@@ -14,7 +14,7 @@ public class CliOptions {
 
 	private static final Set<String> noValueKeys = Set.of("-h", "--help", //
 			"-v", "--version", "--dynamic", "--buffered-output", "--component", "--no-wasi", "--host-random",
-			"--host-fetch", "--reentrant", "--optimize", "--no-gc", "--simd", "--no-prune", "--emit-wit",
+			"--host-fetch", "--reentrant", "--optimize", "--no-gc", "--simd", "--blas", "--no-prune", "--emit-wit",
 			"--emit-js-glue", "--color", "--no-color", "--disable-colors");
 
 	// A key that may be REPEATED: every occurrence appends to the same value, joined with

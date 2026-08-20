@@ -4914,7 +4914,7 @@ public final class LispNames {
 	// The linalg members an --simd build intercepts (see .kb/linalg-simd.md). The other
 	// exported names exist only as linalg.lisp defuns, so PackageRegistry keeps them as
 	// bare strings; these fifteen are dispatched on by name in three interceptors
-	// (eval.LinalgSimd, codegen.jvm.JvmLinalgSimdCompiler,
+	// (eval.LinalgSimd, codegen.jvm.JvmLinalgKernelCompiler,
 	// codegen.wasm.WasmLinalgSimdCompiler) and so need constants.
 
 	/** {@code linalg:add}: element-wise {@code a + b}; either operand may be a scalar. */

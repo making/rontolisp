@@ -141,7 +141,7 @@ On `--no-gc`, `vec:matvec-into`'s aliasing guard is a WebAssembly trap (an `unre
 
 ## Hardware acceleration (optional)
 
-The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` and the four operator aliases, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section.
+The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` and the four operator aliases, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section. A second, orthogonal flag -- `--blas` -- routes `linalg`'s matrix product to a tuned BLAS out of the operating system, and is covered two sections below.
 
 Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wasm`) and whether you pass `--simd` are **orthogonal** axes:
 
@@ -194,6 +194,56 @@ The precision rules above carry over, with one exception in linalg's favor:
 - **The full matrix product follows the `vec` rule too.** `(linalg:dot A B)` and `linalg:matmul` over two matrices accumulate in the width of their operands: over `#d` they stay bit-identical to the portable definition, and over `#f` they fold each output cell in single precision -- in the portable definition's own order, but rounding at every step, so the two can differ. This is the ordinary behavior of a single-precision matrix multiply; every mainstream library does the same. It is also what makes `#f` faster than `#d` here rather than twice as slow, because a single-precision accumulator is what lets the kernel run single-precision lanes at all. Which lanes ran cannot move the result -- the lanes go across the output row, not along the axis being summed -- so all three `--simd` backends agree with one another exactly. If a single-float matrix product has to match the portable definition, use `#d` for it, or leave `--simd` off for that computation.
 
 `linalg` does not compile under `--no-gc` at all, with or without `--simd`. The `--no-gc` row of the target table above therefore concerns `vec` only.
+
+## Accelerating the matrix product with a tuned BLAS (`--blas`)
+
+`--simd` gives the matrix product a hand-written lane kernel. Every desktop and server operating system can do far better than that, because a **tuned BLAS** -- a library whose matrix multiply is blocked for the machine's cache hierarchy and written against its matrix instructions -- is either already in the OS or one package away. `--blas` finds one and routes `linalg`'s matrix product to it. It is a second acceleration flag, orthogonal to `--simd`: either, both or neither.
+
+```bash
+rontolisp prog.lisp --blas                  # interpreter
+rontolisp prog.lisp -o Prog.class --blas    # JVM
+```
+
+**A tuned BLAS is recommended, never required.** Nothing is bundled and nothing is downloaded. A machine without one runs the same programs to the same output, only slower, and the interpreter says so on standard error rather than failing.
+
+- **macOS**: nothing to install. `Accelerate.framework` is part of the system, and `--blas` finds it.
+- **Linux**: install one, for example `sudo apt install libopenblas0-pthread` (Debian / Ubuntu) or `sudo dnf install openblas` (Fedora / RHEL). NVIDIA NVPL, Intel MKL, BLIS, ATLAS and Arm Performance Libraries are recognized too.
+- **Windows / anything else**: name the library yourself with `RONTOLISP_BLAS`, or run without the flag.
+
+What it is worth, for one `#d` matrix product (Apple M4 Max, macOS, Accelerate; your machine and library will differ, so measure):
+
+| n x n | portable definition | `--simd` | `--blas` |
+|---|---|---|---|
+| 128 | 1150 ms | 0.55 ms | 0.04 ms |
+| 512 | -- | 21 ms | 0.4 ms |
+| 1024 | -- | 180 ms | 3.1 ms |
+
+On Linux the same measurement against OpenBLAS 0.3.26 on a 20-core Arm machine gives 20x `--simd` across all cores, and 5.2x pinned to one thread.
+
+### What is accelerated, and what declines
+
+The matrix product and nothing else: `linalg:dot` for matrix-by-matrix, matrix-by-vector and vector-by-matrix, and therefore `linalg:matmul` at rank <= 2 and `linalg:solve`, which are written over it. That is where the whole win is; the memory-bound members (`sum`, a vector-by-vector `dot`, element-wise arithmetic) would gain nothing from a library call, and `--simd` already covers them.
+
+Everything else **declines** and runs exactly what it ran before -- the `--simd` kernel when that flag is on too, and the portable `linalg.lisp` definition otherwise. That includes general boxed arrays, mixed widths, a scalar operand, the batched rank-3 product, a shape mismatch (which signals the same error), and any product too small to pay for a library call. So `--blas` never changes what a program accepts or rejects.
+
+### Reach, threads and precision
+
+`--blas` reaches the **interpreter** (including the native binary) and the **JVM class output**. A tuned BLAS is called through the foreign function API, which WASM does not have, so `--blas` with a `.wasm` output is an error rather than a silent no-op. A compiled class calls a restricted method, so run it as `java --enable-native-access=ALL-UNNAMED Prog` to keep the JVM's warning off standard error.
+
+A tuned BLAS is **multi-threaded**, which nothing else in rontolisp is: a single `linalg:matmul` may occupy every core of the machine. That is most of the Linux figure above. Cap it with the library's own environment variable -- `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, or `VECLIB_MAXIMUM_THREADS` for Accelerate -- when a program shares the machine.
+
+The library blocks and reorders its reduction, so **an accelerated product is close to the portable definition rather than equal to it**, at `linalg`'s default `#d` width. Over exact inputs (integers, powers of two) the results still match exactly; over inexact ones they differ in the last few ulps. This flag is the one acceleration in rontolisp whose numerical answer depends on **which library and which version is installed on the machine**, which is exactly why it is its own flag: an existing `--simd` build computes what it always computed.
+
+### Which library was bound
+
+A library being present does not make it tuned: the netlib **reference** implementation exports the same symbols and is slower than the kernel rontolisp already has, and on Debian `libblas.so.3` is an alternatives symlink that points at either one. `--blas` therefore accepts a candidate only when it identifies itself as a tuned implementation, and declines otherwise -- being slower than the unaccelerated build is the one thing this feature must never do.
+
+```bash
+RONTOLISP_BLAS_VERBOSE=1 rontolisp prog.lisp --blas   # print what was bound, or why nothing was
+RONTOLISP_BLAS=/path/to/libopenblas.so.0 rontolisp prog.lisp --blas   # name one outright
+```
+
+`RONTOLISP_BLAS` skips both the search and the identification check, so it is also the way to use a tuned build this list cannot name. Both variables are read by a compiled class too, which is how you check a `.class` on the machine that runs it.
 
 ## Runnable examples
 

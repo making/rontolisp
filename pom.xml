@@ -197,8 +197,11 @@ gitBranch=${git.branch}
 				<configuration>
 					<!-- The JVM simd acceleration test defines the embedded Vector API
 					     bridge (Lookup.defineClass) and invokes it in-process, so the test
-					     JVM must have jdk.incubator.vector in its module graph. -->
-					<argLine>--add-modules jdk.incubator.vector</argLine>
+					     JVM must have jdk.incubator.vector in its module graph. The blas
+					     tests bind a tuned CBLAS through the foreign function API, which
+					     is a restricted method: without the second flag every such test
+					     prints a multi-line warning to stderr. -->
+					<argLine>--add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED</argLine>
 					<!-- Two forked JVMs run different test classes in parallel. The wall
 					     clock is bounded by WasmLispCompilerIntegrationTest, which is
 					     longer than every other class combined even after it was made

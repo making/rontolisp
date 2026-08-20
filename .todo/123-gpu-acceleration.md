@@ -240,7 +240,7 @@ that needs no dependency and recovers most of it. In ROI order the real wins are
 and cuBLAS is a strictly worse way to buy the last of those. Revisit only if phase 3
 lands, f32 workloads dominate in practice, and someone still wants the last 2-3x on a
 machine that already has the toolkit -- as an opportunistic `dlopen`, never a
-requirement. That is the same shape todo-470 settled on for the CPU: a tuned library is
+requirement. That is the same shape `--blas` settled on for the CPU (`.kb/linalg-blas.md`): a tuned library is
 RECOMMENDED and never required, so nothing is bundled or downloaded, a machine without one
 runs the same programs to the same output, and the only rule that binds is that we may not
 REQUIRE what the OS or the driver does not already provide.
@@ -268,7 +268,7 @@ This is the same conclusion Apple reached by a completely different route -- the
 no double at all, so f64 cannot even be attempted -- and it is the strongest argument yet
 for **phase 0**: `--gpu`'s reason to exist is f32, residency and the batched rank-3 shape,
 and a `--gpu` that mostly sees `#d` arrays is competing with the CPU rather than beating
-it. The CPU-BLAS side is `.todo/470`; what belongs here is that the f64 half of `--gpu` has
+it. The CPU-BLAS side is `--blas` (`.kb/linalg-blas.md`); what belongs here is that the f64 half of `--gpu` has
 a credible CPU competitor on both platforms, and should stop being quoted as the headline.
 
 The f64 tiled kernel is NOT bit-identical to the scalar defun (max abs difference 1.5
@@ -699,9 +699,13 @@ already says are a one-line change -- stops being out of reach.
 - `../silicon/` -- `silicon-cuda` (pure-FFM driver-API binding, the prototype-string
   `Bindings.java`), `silicon-metal` (the Swift-shim approach we are NOT taking, and did
   not need to: `Mtl.java` reaches the same API through `objc_msgSend`).
-- `.todo/470-linalg-never-calls-a-tuned-blas.md` -- the tuned-BLAS finding above, as its
-  own feature: a CPU item, covering `linalg`'s DEFAULT width, recommended-never-required.
-  On Apple Silicon it beats everything in this file below n~1024, and on the GB10 with
-  OpenBLAS installed it draws level with `--gpu` at f64 outright.
+- `.kb/linalg-blas.md` -- the tuned-BLAS finding above, LANDED 2026-08-20 as the `--blas`
+  flag (todo-470): a CPU item, covering `linalg`'s DEFAULT width,
+  recommended-never-required. On Apple Silicon it beats everything in this file below
+  n~1024, and on the GB10 with OpenBLAS installed it draws level with `--gpu` at f64
+  outright. Two findings there change this file's plan: `Linker.Option.critical` takes
+  HEAP segments, so the host-side copy phase 3 wants to remove is already gone on the CPU
+  path; and the marker-symbol rule for refusing an untuned library is the same shape a
+  `dlopen` of cuBLAS would need.
 - `examples/llm-from-scratch/`, `examples/ml/tiny-llm.lisp`,
   `examples/deep-learning-from-scratch/` -- the workloads this is for.

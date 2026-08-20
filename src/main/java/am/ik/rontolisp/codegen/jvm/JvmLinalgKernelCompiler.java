@@ -52,9 +52,9 @@ import am.ik.jvm.Opcode;
  * {@code INVOKESTATIC} edge to both the bridge init and the scalar defun, so the defun
  * stays reachable (and therefore un-shaken) wherever a kernel can decline.
  */
-final class JvmLinalgSimdCompiler {
+final class JvmLinalgKernelCompiler {
 
-	private JvmLinalgSimdCompiler() {
+	private JvmLinalgKernelCompiler() {
 	}
 
 	/** The accelerated members, in a stable order, mapped to their bridge method. */
@@ -162,17 +162,27 @@ final class JvmLinalgSimdCompiler {
 				: PackageRegistry.qualify(LispNames.LINALG_PKG, member);
 	}
 
+	/**
+	 * Whether this compiler claims the call site of the given member -- because a bridge
+	 * that accelerates it was emitted. Either bridge is enough: the two flags are
+	 * orthogonal, and the emitted chain simply has one attempt instead of two.
+	 */
+	static boolean claims(String member, JvmLispCompiler.Ctx ctx) {
+		return (ctx.simdOps != null && handles(member)) || (ctx.blasOps != null && JvmLinalgBlas.handles(member));
+	}
+
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Map<String, MethodrefConstant> ops = ctx.simdOps;
-		if (ops == null) {
-			throw new IllegalStateException("simd acceleration runtime was not emitted");
+		Map<String, MethodrefConstant> simd = ctx.simdOps != null && handles(member) ? ctx.simdOps : null;
+		Map<String, MethodrefConstant> blas = ctx.blasOps != null && JvmLinalgBlas.handles(member) ? ctx.blasOps : null;
+		if (simd == null && blas == null) {
+			throw new IllegalStateException("no linalg: acceleration runtime was emitted for " + member);
 		}
 		String qualified = qualifiedName(member);
 		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
 		List<LispVal> args = cons.toList();
 		int arity = arity(member);
 		int supplied = args.size() - 1;
-		Extended ext = supplied > arity ? EXTENDED.get(member) : null;
+		Extended ext = simd != null && supplied > arity ? EXTENDED.get(member) : null;
 		LinalgKernelCallLayout.Extended shape = ext != null ? LinalgKernelCallLayout.extended(member) : null;
 		int[] layout = shape != null ? LinalgKernelCallLayout.layout(shape, arity, args.subList(1, args.size())) : null;
 		boolean extendedCall = layout != null;
@@ -185,10 +195,17 @@ final class JvmLinalgSimdCompiler {
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
-		// The bridge class must be defined before its method reference resolves.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
-		// Evaluate each argument exactly once, into a temp both branches read.
+		// The bridge classes must be defined before their method references resolve, and
+		// ahead of the temps: with only the --simd attempt this is byte for byte the
+		// sequence emitted before --blas existed.
+		Map<String, MethodrefConstant> blasAttempt = extendedCall ? null : blas;
+		if (blasAttempt != null) {
+			emitInit(ctx, blasAttempt);
+		}
+		if (simd != null) {
+			emitInit(ctx, simd);
+		}
+		// Evaluate each argument exactly once, into a temp every branch reads.
 		int[] slots = new int[supplied];
 		for (int i = 0; i < supplied; i++) {
 			JvmExprCompiler.compileExpr(args.get(i + 1), ctx, className);
@@ -196,30 +213,17 @@ final class JvmLinalgSimdCompiler {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slots[i]);
 		}
-		if (layout != null) {
-			// The kernel's parameters in its own order: the temp of the form supplying
-			// each one, or null = nil for an option the call leaves out.
-			for (int i : layout) {
-				if (i < 0) {
-					ctx.emit(Opcode.ACONST_NULL);
-				}
-				else {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(slots[i]);
-				}
-			}
+		// The attempts, outermost first: the library product when --blas emitted its
+		// bridge, then the lane kernel when --simd emitted its own, then the scalar
+		// defun. Each returns null for an input it declines, and control falls into the
+		// next attempt over the SAME temps.
+		List<Integer> takenBranches = new ArrayList<>();
+		if (blas != null && !extendedCall) {
+			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, takenBranches);
 		}
-		else {
-			loadAll(ctx, slots);
+		if (simd != null) {
+			emitAttempt(ctx, simd, extendedCall ? extendedKey(member) : qualified, layout, slots, arity, takenBranches);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(extendedCall ? extendedKey(member) : qualified)).index());
-		// if (result != null) goto end; else run the scalar defun over the same temps.
-		ctx.emit(Opcode.DUP);
-		int branchPos = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.POP);
 		for (int i = 0; i < arity; i++) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(slots[i]);
@@ -254,7 +258,47 @@ final class JvmLinalgSimdCompiler {
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(defun.methodref().index());
-		JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+		for (int branchPos : takenBranches) {
+			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+		}
+	}
+
+	/**
+	 * One link of the chain: call the kernel over the temps and jump to the common end
+	 * when it answered. A declined kernel leaves the stack as it found it, so the next
+	 * attempt (or the scalar defun) starts from the same shape.
+	 */
+	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+	}
+
+	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String kernelKey,
+			int @org.jspecify.annotations.Nullable [] layout, int[] slots, int arity, List<Integer> takenBranches) {
+		if (layout != null) {
+			// The kernel's parameters in its own order: the temp of the form supplying
+			// each one, or null = nil for an option the call leaves out.
+			for (int i : layout) {
+				if (i < 0) {
+					ctx.emit(Opcode.ACONST_NULL);
+				}
+				else {
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(slots[i]);
+				}
+			}
+		}
+		else {
+			loadAll(ctx, java.util.Arrays.copyOf(slots, arity));
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(ops.get(kernelKey)).index());
+		// if (result != null) goto end; else fall through to the next attempt.
+		ctx.emit(Opcode.DUP);
+		takenBranches.add(ctx.code.size());
+		ctx.emit(Opcode.IFNONNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.POP);
 	}
 
 	private static void loadAll(JvmLispCompiler.Ctx ctx, int[] slots) {

@@ -16,7 +16,7 @@ import am.ik.wasm.Type;
 /**
  * Compiles the accelerated {@code linalg:} kernels to calls into the emitted v128 runtime
  * helpers ({@link WasmLinalgSimdRuntimeBuilder}), the wasm-GC counterpart of
- * {@code JvmLinalgSimdCompiler} and the {@code linalg:} sibling of
+ * {@code JvmLinalgKernelCompiler} and the {@code linalg:} sibling of
  * {@link WasmVecSimdCompiler}. Only wired in when {@code --simd} emitted the helpers
  * ({@link WasmLispCompiler.Ctx#simd}); otherwise the qualified call falls through to the
  * ordinary spliced {@code linalg.lisp} defun.

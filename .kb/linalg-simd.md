@@ -10,11 +10,18 @@ Three backends, one per interception mechanism:
 | backend | interceptor | kernels |
 |---|---|---|
 | interpreter (`prog.lisp --simd`) | `eval/LinalgSimd` (re-`defineFunction`) | `eval/LinalgSimdKernels` (jdk.incubator.vector) |
-| JVM (`-o Prog.class --simd`) | `codegen/jvm/JvmLinalgSimdCompiler` (call site) | `JvmSimdVectorTemplate.la*` (the one embedded bridge) |
+| JVM (`-o Prog.class --simd`) | `codegen/jvm/JvmLinalgKernelCompiler` (call site) | `JvmSimdVectorTemplate.la*` (the one embedded bridge) |
 | wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (41 emitted functions) |
 
 `--no-gc` is out of scope: `linalg:` cannot compile there at all (`linalg::%la-make` uses
 `&optional`, and `--no-gc` has no general array type).
+
+`--blas` (`.kb/linalg-blas.md`) is a SECOND flag over this same seam, on the interpreter and
+the JVM only: it puts a tuned CBLAS's `gemm` ahead of the lane kernel for `linalg:dot`. That
+is why the JVM interceptor is named `JvmLinalgKernelCompiler` rather than
+`JvmLinalgSimdCompiler` -- it emits a CHAIN of attempts over one set of temps, ending at the
+scalar defun. Nothing below changes: with `--blas` off, a `--simd` build emits and computes
+exactly what it did before.
 
 The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md` (the `--simd`
 guide, shared with `vec:`). Keep the intercepted set, the declined-input fallback and the
@@ -434,7 +441,7 @@ The compiled packed array carries an **in-array header** `[rank, dim..., data...
 `off = 1 + rank`. So an element-wise linalg kernel is the `vec:` one at a different offset,
 and the fresh result must copy the whole header (`laNewLike`) rather than write `[1, n]`.
 
-`JvmLinalgSimdCompiler.compile` emits:
+`JvmLinalgKernelCompiler.compile` emits:
 
 ```
 _simdInit(); a = <arg1>; b = <arg2>;          // ASTORE into temps

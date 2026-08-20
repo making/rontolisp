@@ -105,6 +105,8 @@ public final class LispEvaluator {
 
 	private boolean simd = false;
 
+	private boolean blas = false;
+
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
 
 	// The uiop definitions already evaluated into the global environment, keyed by their
@@ -633,6 +635,19 @@ public final class LispEvaluator {
 	 */
 	public void setSimd(boolean simd) {
 		this.simd = simd;
+	}
+
+	/**
+	 * Enables the opt-in {@code --blas} acceleration of the {@code linalg:} matrix
+	 * product: when the linalg library is loaded, {@code linalg:dot} is overridden with
+	 * the {@code gemm} / {@code gemv} of a tuned CBLAS found in the operating system
+	 * ({@link LinalgBlas}). Off by default, and orthogonal to {@link #setSimd}: with both
+	 * on, a product the library declines falls through to the Vector API kernel. The
+	 * caller must have checked {@link LinalgBlas#available()}.
+	 * @param blas whether to route the linalg: matrix product to a tuned CBLAS
+	 */
+	public void setBlas(boolean blas) {
+		this.blas = blas;
 	}
 
 	/**
@@ -6853,6 +6868,11 @@ public final class LispEvaluator {
 				// widths, shape errors), so linalg.lisp stays the single source of truth.
 				if (this.simd) {
 					LinalgSimd.install(this.globalEnv, this);
+				}
+				// Opt-in --blas, installed LAST so that what it declines to is the
+				// simd native when there is one and the scalar defun otherwise.
+				if (this.blas) {
+					LinalgBlas.install(this.globalEnv, this);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
