@@ -141,7 +141,7 @@ On `--no-gc`, `vec:matvec-into`'s aliasing guard is a WebAssembly trap (an `unre
 
 ## Hardware acceleration (optional)
 
-The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` and the four operator aliases, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section. A second, orthogonal flag -- `--blas` -- routes `linalg`'s matrix product to a tuned BLAS out of the operating system, and is covered two sections below.
+The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `div` / `scale` / `dot` / `sum` / `matvec` and the four operator aliases, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section. Two further orthogonal flags follow it: `--blas` routes `linalg`'s matrix product to a tuned BLAS out of the operating system, and `--gpu` routes it to an NVIDIA device. Both are covered below.
 
 Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wasm`) and whether you pass `--simd` are **orthogonal** axes:
 
@@ -244,6 +244,56 @@ RONTOLISP_BLAS=/path/to/libopenblas.so.0 rontolisp prog.lisp --blas   # name one
 ```
 
 `RONTOLISP_BLAS` skips both the search and the identification check, so it is also the way to use a tuned build this list cannot name. Both variables are read by a compiled class too, which is how you check a `.class` on the machine that runs it.
+
+## Accelerating the matrix product on a GPU (`--gpu`)
+
+`--blas` puts the matrix product on the fastest thing the CPU has. `--gpu` puts it on a different machine altogether: an NVIDIA device, driven straight through the CUDA driver. It is a third acceleration flag, orthogonal to the other two -- any combination of the three, or none.
+
+```bash
+rontolisp prog.lisp --gpu                 # interpreter
+rontolisp prog.lisp --simd --blas --gpu   # all three, chained; the device is asked first
+```
+
+**A GPU is recommended, never required**, exactly as a tuned BLAS is. Nothing is bundled and nothing is downloaded, and there is no CUDA toolkit to install: `libcuda.so.1`, which ships with the NVIDIA driver, is the entire runtime requirement, and the kernels travel inside rontolisp as a text that the driver compiles for whatever card it finds. A machine with no device, no driver, or a card older than Turing (compute capability 7.5) runs the same programs to the same output, only slower, and the interpreter says so on standard error rather than failing.
+
+### What is accelerated, and what declines
+
+The matrix-by-matrix product and nothing else: `linalg:dot` over two rank-2 arrays, and therefore `linalg:matmul` at rank 2 and `linalg:solve`, which are written over it. Everything else declines and runs exactly what it ran before -- the tuned library when `--blas` is on too, the lane kernel when `--simd` is, the portable `linalg.lisp` definition otherwise. That includes the two matrix-by-vector shapes `--blas` does take (they are memory-bound, so the trip cannot pay for itself), the batched rank-3 product, general boxed arrays, mixed widths, a scalar operand, and a shape mismatch, which signals the same error as ever.
+
+It also includes **everything small**. A round trip to a device costs about 15 microseconds however little data rides on it, so a product below roughly 51x51x51 (`n * m * p` under 131072) declines and stays on the CPU. That threshold is not a mechanism of its own, it is one more decline -- which is why every example in this repository, all of which run shapes far below it, prints byte-identical output with the flag and without it. **`--gpu` exists to bring a scale you cannot train today within reach, not to make today's programs faster.**
+
+### How the three flags compose
+
+Each flag adds one attempt in front of the others, and every attempt that declines hands the same arguments to the next:
+
+```text
+--gpu --blas --simd   ->   device -> library gemm -> lane kernel -> portable definition
+--gpu --simd          ->   device ->                 lane kernel -> portable definition
+--gpu                 ->   device ->                                portable definition
+```
+
+The device is asked first because its size threshold is three orders of magnitude above the tuned library's: it turns down everything small before touching the driver at all, and from about n=256 up it is ahead of a threaded CPU BLAS at both widths. So what the device declines lands on the fastest CPU path the invocation asked for, never back on the portable definition. The exception is a narrow band just above the threshold -- roughly n=64 to n=96 -- where `--gpu --blas` together accept a product the library alone would have finished sooner. Both sides are far under a millisecond there, and asking the library first instead would give away the several-fold win at the sizes the flag exists for.
+
+### Reach and precision
+
+`--gpu` reaches the **interpreter**, the native binary included. The CUDA driver is called through the foreign function API, which WASM does not have, so `--gpu` with a `.wasm` output is an error rather than a silent no-op; the JVM class output cannot do it yet and is an error for the same reason. Compiled programs have `--simd`, and a `.class` has `--blas` as well. The figures below are from `java -jar`: in the native binary each device call currently costs several times more (one n=512 double-float product measured 18.5 ms against the JVM's 0.7), enough that on that build `--gpu --blas` is slower than `--blas` alone at every size measured. `--gpu` still beats `--simd` there by more than 2x, and the portable definition by four orders of magnitude.
+
+An accelerated product is **close to the portable definition rather than equal to it**, at both widths. The device kernel folds each output cell in the portable definition's own order, but it fuses every multiply and add into a single instruction, so each term is rounded once where the portable definition rounds twice. Over inputs that are exact at the operand width (integers, powers of two) that cannot show and the results match exactly; over inexact ones they differ -- measured on an NVIDIA GB10 over operands of magnitude 1, by up to 5e-15 at `#d` and 3e-6 at `#f`. That is a real break with `--simd`, whose `#d` matrix product is bit-identical to the portable definition, and it is one of the reasons `--gpu` is a flag of its own. The portable definition remains the cross-backend oracle.
+
+### What it is worth
+
+One `n x n` `linalg:matmul` on the interpreter, microseconds per call, warm. The machine is an NVIDIA GB10 (Grace Blackwell, 20 CPU cores), and the `--blas` column is the best this machine has: OpenBLAS across all twenty of them. Your device, driver and library will all differ, so measure.
+
+| n x n | `--simd` f64 | `--blas` f64 | `--gpu` f64 | `--simd` f32 | `--blas` f32 | `--gpu` f32 |
+|---|---|---|---|---|---|---|
+| 64 | 46 | 21 | 139 | 27 | 11 | 42 |
+| 128 | 359 | 42 | 53 | 195 | 26 | 36 |
+| 256 | 2647 | 164 | 156 | 1453 | 85 | 71 |
+| 512 | 20267 | 1160 | 735 | 10567 | 510 | 215 |
+| 1024 | -- | 6450 | 5150 | -- | 3083 | 1183 |
+| 2048 | -- | 89200 | 38000 | -- | 44600 | 8067 |
+
+Read it in two directions. Against the lane kernel the device is 7x at n=128 and 28x at n=512, and 49x at n=512 in single float -- a different order of magnitude, which is the point of the flag. Against a tuned BLAS on twenty cores it is a wash until about n=256 and then 1.6x to 2.3x at double width, 2.4x to 5.5x at single: double-float is the width this class of device is worst at, so **`--gpu` pays most for `single-float` data**, which is what `torch:` builds by default.
 
 ## Runnable examples
 

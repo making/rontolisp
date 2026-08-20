@@ -30,8 +30,8 @@ class CliOptionsTest {
 
 	@Test
 	void everyValueLessFlagIsRecognizedTrailing() {
-		for (String flag : new String[] { "--simd", "--blas", "--optimize", "--no-gc", "--component", "--no-wasi",
-				"--dynamic", "--buffered-output", "--emit-wit" }) {
+		for (String flag : new String[] { "--simd", "--blas", "--gpu", "--optimize", "--no-gc", "--component",
+				"--no-wasi", "--dynamic", "--buffered-output", "--emit-wit" }) {
 			CliOptions options = CliOptions.build(new String[] { "prog.lisp", "-o", "Out.class", flag });
 			assertThat(options.contains(flag)).as(flag).isTrue();
 			assertThat(options.get("-o")).as(flag).isEqualTo("Out.class");

@@ -124,6 +124,37 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void replWithGpuInterceptsTheLinalgProductWhenTheMachineHasADevice() {
+		// The same pair --blas pins, one layer up and conditional on the machine rather
+		// than on the build: with a device the linalg.lisp defun (#<lambda>) is replaced
+		// by the interceptor, and without one the REPL says so on stderr and keeps
+		// running the defun. Both are correct outcomes.
+		String output = runCli("(linalg:zeros 1) #'linalg:dot\n", "--gpu");
+		if (am.ik.rontolisp.eval.LinalgGpu.available()) {
+			assertThat(output).contains("#<function LINALG:DOT>");
+		}
+		else {
+			assertThat(output).contains("#<lambda>").doesNotContain("#<function LINALG:DOT>");
+		}
+	}
+
+	@Test
+	void gpuOnACompiledOutputIsAHardErrorRatherThanASilentNoOp() throws Exception {
+		// WASM has no foreign function API, so a .wasm build could only IGNORE the flag
+		// -- and silently running unaccelerated is exactly what an acceleration flag
+		// exists to make visible. The JVM class output is todo-123 phase 2 and refuses
+		// for the same reason until it lands.
+		Path file = tempDir.resolve("prog.lisp");
+		Files.writeString(file, "(print (linalg:sum (linalg:ones 4)))\n");
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", tempDir.resolve("p.wasm").toString(), "--gpu"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--gpu reaches the interpreter only");
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", tempDir.resolve("P.class").toString(), "--gpu"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--gpu does not reach the JVM class output yet");
+	}
+
+	@Test
 	void replWithoutSimdKeepsScalarVecKernels() {
 		String output = runCli("(vec:dot #d(1.0) #d(1.0)) #'vec:dot\n");
 		assertThat(output).contains("#<lambda>").doesNotContain("#<function VEC:DOT>");

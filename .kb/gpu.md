@@ -1,10 +1,11 @@
-# `am.ik.gpu`: a matrix product on the GPU, or a decline
+# `--gpu`: a matrix product on the GPU, or a decline
 
-The foundation of `--gpu` (todo-123 phase 1), landed on its own: a language-independent
-library that takes a matrix product and either runs it on an NVIDIA GPU or answers `null`.
-There is no flag yet, no `linalg:` interception and no user-facing documentation -- this
-file is the whole record of the library, and the interceptors that will sit on top of it
-are phase 1B (interpreter) and phase 2 (JVM).
+Two layers, in one file. `am.ik.gpu` is the foundation (todo-123 phase 1, landed on its
+own): a language-independent library that takes a matrix product and either runs it on an
+NVIDIA GPU or answers `null`. **The `--gpu` flag on the INTERPRETER** (phase 1B) is the
+first interceptor over it, and "The interception layer" below is its whole record -- the
+per-backend touch points, the chain order, the precision contract and the test map. The
+JVM backend (phase 2) is still not built and the flag refuses a `.class` output outright.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover}.java` over the shared
@@ -44,6 +45,8 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 
 | class | what it owns |
 |---|---|
+| `am.ik.rontolisp.eval.LinalgGpu` | the interpreter's `--gpu` interceptor: `available`, `description`, `install` |
+| `am.ik.rontolisp.eval.LinalgGpuKernels` | the ONE reference to `am.ik.gpu` from rontolisp, so `-Pweb` can cut it |
 | `am.ik.gpu.Gpu` | the whole public surface: `available`, `description`, `worth`, two `multiply` overloads |
 | `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, and the per-call product |
 | `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 24 downcall handles |
@@ -363,12 +366,23 @@ pins that 100k `worth` calls stay under 200 ms on a machine with no probe run.
 
 ## Precision
 
-The tiled kernel walks its reduction in 16-wide tiles, so an accelerated product is CLOSE
-to a scalar row-by-column product, not equal to it. Over inputs that are exact at the
-operand width -- small integers, powers of two -- the results still match EXACTLY, which is
-what `GpuTest` asserts; over inexact ones they differ. Measured over random zero-mean
-inputs (dyadic test data round-trips exactly and hides the whole question), as a fraction
-of the largest cell of the f64 oracle:
+An accelerated product is CLOSE to a scalar row-by-column product, not equal to it. Over
+inputs that are exact at the operand width -- small integers, powers of two -- the results
+still match EXACTLY, which is what `GpuTest` asserts; over inexact ones they differ.
+
+**The mechanism is FUSED multiply-add, not a reordered reduction, and todo-123 has this
+wrong.** That file (and an earlier draft of this one) says "the tile walk reorders the
+reduction". It does not: `gemm.cu` keeps ONE accumulator per output cell and walks `k`
+ascending across tiles and within each tile, which is exactly the scalar defun's order.
+What differs is that `acc += As[ty][k] * Bs[k][tx]` compiles to `fma.rn.f64` /
+`fma.rn.f32` -- 16 of each per tile in the checked-in PTX -- so every term is rounded ONCE
+where the defun rounds twice. That is why the f64 divergence is a few ulps rather than the
+`sqrt(n)`-ish growth a reordering would give, and it is why the figure to quote is an ulp
+count and not todo-123's "max abs difference 1.5 to 2.7" (which was measured on operands
+of a completely different magnitude and is not a scale-free number).
+
+Measured over random zero-mean inputs (dyadic test data round-trips exactly and hides the
+whole question), as a fraction of the largest cell of the f64 oracle:
 
 | n | gpu f64 | gpu f32 | the same product accumulated in f32 on the CPU |
 |---|---|---|---|
@@ -384,6 +398,188 @@ which is the reading the Metal spike reached on completely different hardware.
 the tiled kernel lands within 6e-16 relative, which is close but is still a break with the
 bit-identity `#d` has under `--simd` -- and that is a decision the interceptor must make
 when it lands, not this library.
+
+## The interception layer: `--gpu` on the interpreter
+
+The flag over the same `linalg:` seam `--simd` opened and `--blas` widened. Read
+`.kb/linalg-simd.md` for the declined-input protocol (the null sentinel, the captured
+binding, `LispEvaluator.applyGlobal`) and `.kb/linalg-blas.md` for the flag whose shape
+this copies verbatim -- **only what is DIFFERENT about a GPU is written here.**
+
+| backend | interceptor | kernels |
+|---|---|---|
+| interpreter (`prog.lisp --gpu`, native binary included) | `eval/LinalgGpu` (re-`defineFunction`) | `eval/LinalgGpuKernels` -> `am.ik.gpu` |
+| JVM (`-o Prog.class --gpu`) | NOT BUILT (todo-123 phase 2) -- a hard error | -- |
+| wasm-GC / `--no-gc` (`-o prog.wasm --gpu`) | out of scope, no FFM -- a hard error | -- |
+
+**Both compiled outputs REFUSE rather than ignore** (`RontoLispCli.compileRecorded`, beside
+the `--blas` guard, and the reason each gives is its own): silently running unaccelerated
+is exactly what an acceleration flag exists to make visible. When phase 2 lands, the
+`.class` arm of that guard is what it deletes.
+
+The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md`
+("Accelerating the matrix product on a GPU (`--gpu`)"). Keep the intercepted set, the size
+threshold, the chain order and the precision contract in sync with it.
+
+### The intercepted set is ONE shape, and it is narrower than `--blas`'s
+
+`linalg:dot` over two packed rank-2 operands of the same width, and therefore
+`linalg:matmul` at rank 2 and `linalg:solve` transitively -- nothing else is
+`defineFunction`ed and `#'linalg:add` still prints `#<lambda>` under the flag. Two members
+`--blas` DOES take are deliberately absent:
+
+- **The gemv shapes** (M.v and v.M). A matrix-by-vector product is memory-bound, so its
+  whole cost is one pass over an operand the device would have to be handed anyway. A
+  library call on the same core cannot lose that race; a round trip can.
+- **The batched rank-3 product** (`linalg::%la-matmul-nd`). todo-123's phase 4 wants it
+  FIRST of the member tier, and a batch axis is free on a GPU -- but it is a second
+  interception, not a wider `if` in this one.
+
+The size threshold is `Gpu.worth`'s and nothing else: below `n*m*p = 2^17` the kernel
+returns the null sentinel and the CPU path runs, which is why every example in the
+repository is byte-identical with the flag on.
+
+### The chain order, and why the device goes on top
+
+On the interpreter a chain is INSTALL ORDER -- each `install` captures whatever
+`linalg:dot` was bound to and declines back to it -- so where `LinalgGpu.install` sits in
+`LispEvaluator.resolveFunction`'s lazy-load hook IS the decision. It goes LAST, after
+`LinalgSimd` and `LinalgBlas`:
+
+```
+--gpu --blas --simd  ->  device -> library gemm -> lane kernel -> scalar linalg.lisp defun
+```
+
+and every prefix of that works the same way. Three reasons, in the order they bind:
+
+1. **`worth()` is probe-free and three orders of magnitude above `--blas`'s** (`2^17`
+   against 64). The device turns down everything small before anything touches the driver,
+   so being on top costs a declined call nothing. Underneath `--blas` it would never SEE a
+   product: the library accepts from 4x4x4 up.
+2. **Where it accepts it is at worst level with a threaded CPU BLAS and clearly ahead at
+   f32.** Measured below.
+3. **A declined product then lands on the best CPU path the invocation asked for**, never
+   back on the scalar defun -- which is the composition rule todo-123 asks for, stated for
+   three layers instead of two. Pinned by
+   `whatTheDeviceDeclinesFallsOnTheBestCpuPathEnabledAndNotOnTheDefun`, which uses
+   `.kb/linalg-simd.md`'s own f32 v.M probe: the fallback target is legible because the
+   defun prints 16778240 and the lane kernel 16777216.
+
+**The wart, measured and accepted:** at n=64-96 with `--gpu --blas` both on, the device
+accepts a product a 20-core OpenBLAS would have finished sooner (139 us against 21 at
+n=64, f64). `worth()` is calibrated against `--simd`, which is what a machine without a
+tuned library has, and it cannot be calibrated against `--blas` without `am.ik.gpu`
+learning whether a CBLAS is loaded -- which would make a language-independent library
+depend on one. The band is narrow, both sides are far under a millisecond, and the
+alternative (asking the library first) gives away the 2-5x at the sizes the flag exists
+for. Revisit if phase 3 changes the floor.
+
+**And the same wart is much wider on the NATIVE BINARY, for a reason that is not the
+interceptor's.** Measured on the same machine, `-Pnative` binary against `java -jar`, one
+n=512 f64 product: `--gpu` 18500 us against the JVM's 735, and `--blas` 7800 against 1160.
+Both flags lose several-fold in the native image -- the BLAS half is explicable
+(single-threaded there), the GPU half is 25-60x with no threading involved, so the FFM
+downcall path in the image is the suspect and neither `am.ik.gpu` nor `eval/LinalgGpu`
+changes between the two. The consequence for the chain: on the native binary today
+`--gpu --blas` is SLOWER than `--blas` alone at every size measured, where on the JVM it is
+faster from n=256 up. `--gpu` still beats `--simd` there (18.5 ms against 41.5) and the
+scalar defun by four orders of magnitude (132 SECONDS at n=512), so the flag is worth
+having in the binary -- but the per-call native-image cost is an open item and it is the
+first thing to measure before phase 3 quotes any residency figure.
+
+### The precision contract
+
+`--gpu` **stays out of `ci-spec.yaml`** and the scalar `linalg.lisp` defun remains the
+cross-backend oracle, exactly as for `--blas`. What is new is the size of the break and
+its cause: the device fuses (above), so at `#d` -- where `--simd` is bit-identical to the
+defun -- `--gpu` is not. Over inputs exact at the operand width the results still match
+EXACTLY, which is what the exact-input tests assert; over inexact ones they do not, and
+the pin is a RELATIVE tolerance.
+
+Measured through the interpreter on the GB10, `--gpu` against the scalar defun AT THE SAME
+WIDTH, over `sin`/`cos` of an index ramp (zero-mean and inexact; dyadic data hides the
+question), worst absolute difference over the whole `n x n` result:
+
+| n | `#d` | `#f` | ... as a fraction of the largest cell of the oracle, `#d` / `#f` |
+|---|---|---|---|
+| 64 | 4.0e-15 | 2.6e-6 | 8.3e-16 / 5.4e-7 |
+| 128 | 2.2e-15 | 8.0e-7 | 3.8e-15 / 1.4e-6 |
+| 256 | 4.9e-15 | 2.0e-6 | 4.5e-15 / 1.8e-6 |
+| 512 | 4.5e-15 | 1.4e-6 | 9.1e-14 / 2.8e-5 |
+
+The absolute column is flat and the normalized one is not, because at n=512 the largest
+cell of THIS product has itself cancelled to 0.049 while the operands are O(1). Normalize
+by the largest cell (as the library's own table above does) and never per cell: the worst
+cell is always one whose true value cancelled to near zero, the same caveat
+`.kb/linalg-simd.md` records for the `--simd` f32 product.
+
+**A tuned BLAS fuses too, and that has a testing consequence.** On this machine OpenBLAS
+and the device agree BIT FOR BIT up to n=128 (0 of 16384 cells differ at f64) and only
+separate from n=192, where the library starts blocking its `k` loop. So an order pin
+written at n=64 would be a tautology; `theDeviceIsAskedAheadOfATunedBlas` uses n=192 and
+says why.
+
+### `-Pweb`
+
+`LinalgGpu.available` / `description` / `install` are the only entry points into
+`LinalgGpuKernels`, which holds the only reference to `am.ik.gpu` from any rontolisp
+package. `src/web/java/.../Target_LinalgGpu.java` substitutes those three, exactly as
+`Target_LinalgBlas` does, and the whole CUDA binding drops out of the browser Web Image.
+**A new public method on `LinalgGpu` that touches the kernels would break it, and only the
+Pages workflow's Web Image build would notice** ([[web-playground-native-image-gotcha]]).
+`./mvnw -Pweb compile` is the local check.
+
+### The CLI
+
+`--gpu` is value-less (`CliOptions.noValueKeys`) and `RontoLispCli.enableGpu` is
+`enableBlas` one layer up: `LinalgGpu.available()` or a `warn` carrying
+`LinalgGpu.description()`, and nothing else. **Nothing may ask `LinalgGpu.available()` on a
+path that did not pass the flag** -- it runs the probe, which is a `dlopen`, a `cuInit`, a
+retained primary context and a PTX JIT (~26 ms cold). That is the one way this flag is not
+like `--blas`, whose availability check is nearly free.
+
+### Tests: the interceptor
+
+| what | where |
+|---|---|
+| interpreter, needs a device (`@EnabledIf` on the probe) | `eval/LinalgGpuTest` |
+| interpreter, must hold on EVERY machine | `eval/LinalgGpuDeclineTest` |
+| the flag is value-less, the REPL pair, the two compiled-output refusals | `cli/CliOptionsTest`, `cli/RontoLispCliTest` |
+
+The dead-flag guard is the load-bearing one, as it is for `--blas`: every numeric assertion
+in `LinalgGpuTest` would pass just as well on the scalar defun, so `#'linalg:dot` printing
+`#<function LINALG:DOT>` under the flag and `#<lambda>` without it is the assertion that
+fails when the flag is DEAD.
+
+`LinalgGpuTest` also pins the two order claims above, the fallback target, and the eight
+combinations of the three flags over one exact program. `LinalgGpuDeclineTest` is the half
+a CI runner runs, and it pins that the flag changes nothing observable -- at a shape above
+the threshold as well as below it.
+
+### What it is worth
+
+Interpreter, one `n x n` `linalg:matmul`, us per call, warm (`matmul-baseline-warm.lisp`'s
+bench at larger sizes; 200-warm-up rounds, best of 2-3 rounds). Same GB10, 20 Grace cores,
+OpenBLAS 0.3.26 for the `--blas` column:
+
+| n | `--simd` f64 | `--blas` f64 | `--gpu` f64 | `--simd` f32 | `--blas` f32 | `--gpu` f32 |
+|---|---|---|---|---|---|---|
+| 64 | 46 | **21** | 139 | 27 | **11** | 42 |
+| 128 | 359 | **42** | 53 | 195 | **26** | 36 |
+| 256 | 2647 | 164 | **156** | 1453 | 85 | **71** |
+| 512 | 20267 | 1160 | **735** | 10567 | 510 | **215** |
+| 1024 | -- | 6450 | **5150** | -- | 3083 | **1183** |
+| 2048 | -- | 89200 | **38000** | -- | 44600 | **8067** |
+
+Against the lane kernel: 7x at n=128, 28x at n=512, and 49x at n=512 in single float.
+Against twenty cores of tuned BLAS: a wash to n=256, then 1.6-2.3x at f64 and 2.4-5.5x at
+f32 -- which restates todo-123's own conclusion that the f64 half of `--gpu` has a credible
+CPU competitor and the f32 half does not.
+
+**These are MEANS over a rep loop; `WorthCrossover.java`'s figures above are BESTS
+(`CuLib.best`).** The library at n=64 f64 is 21 us at its best and ~60 us on average
+through the same route, because per-call pool allocation and the driver's own jitter are
+real. Do not compare a row of this table with a row of that one.
 
 ## Native image
 
@@ -411,9 +607,9 @@ multi-chunk copy route at n=3072 and printed exactly what the JVM printed. So CU
 not re-enter todo-102's `VectorAPISupport` / `SharedArenaSupport` fight; nothing here
 needs `Arena.ofShared`.
 
-## Tests
+## Tests: the library
 
-Mirrors `--blas`'s split exactly.
+Mirrors `--blas`'s split exactly; the interceptor's own tests are listed above.
 
 | what | where |
 |---|---|
@@ -435,7 +631,6 @@ that must never regress.
 
 ## What is deliberately NOT here
 
-No `linalg:` interception, no `--gpu` flag, no CLI wiring, no interpreter or JVM
-interceptor, no residency, no batched rank-3 product, no element-wise tier, no Metal. Those
-are todo-123's phases 1B through 5, and each of them needs this file's numbers before it
-starts.
+No JVM interceptor, no residency, no batched rank-3 product, no element-wise tier, no
+Metal. Those are todo-123's phases 2 through 5, and each of them needs this file's numbers
+before it starts.

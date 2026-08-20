@@ -16,8 +16,9 @@ Three backends, one per interception mechanism:
 `--no-gc` is out of scope: `linalg:` cannot compile there at all (`linalg::%la-make` uses
 `&optional`, and `--no-gc` has no general array type).
 
-`--blas` (`.kb/linalg-blas.md`) is a SECOND flag over this same seam, on the interpreter and
-the JVM only: it puts a tuned CBLAS's `gemm` ahead of the lane kernel for `linalg:dot`. That
+`--blas` (`.kb/linalg-blas.md`) is a SECOND flag over this same seam, and `--gpu`
+(`.kb/gpu.md`) a THIRD -- on the interpreter and
+the JVM only (`--gpu` reaches only the interpreter so far): it puts a tuned CBLAS's `gemm` ahead of the lane kernel for `linalg:dot`. That
 is why the JVM interceptor is named `JvmLinalgKernelCompiler` rather than
 `JvmLinalgSimdCompiler` -- it emits a CHAIN of attempts over one set of temps, ending at the
 scalar defun. Nothing below changes: with `--blas` off, a `--simd` build emits and computes

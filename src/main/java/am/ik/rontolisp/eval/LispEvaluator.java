@@ -107,6 +107,8 @@ public final class LispEvaluator {
 
 	private boolean blas = false;
 
+	private boolean gpu = false;
+
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
 
 	// The uiop definitions already evaluated into the global environment, keyed by their
@@ -648,6 +650,21 @@ public final class LispEvaluator {
 	 */
 	public void setBlas(boolean blas) {
 		this.blas = blas;
+	}
+
+	/**
+	 * Enables the opt-in {@code --gpu} acceleration of the {@code linalg:} matrix
+	 * product: when the linalg library is loaded, {@code linalg:dot} is overridden with a
+	 * device product ({@link LinalgGpu}). Off by default, and orthogonal to
+	 * {@link #setSimd} and {@link #setBlas}: it is installed LAST of the three, so a
+	 * product the device declines -- and at the shapes rontolisp examples run today that
+	 * is nearly all of them -- falls through to the tuned CBLAS if one was asked for,
+	 * then to the Vector API kernel, then to the scalar defun. The caller must have
+	 * checked {@link LinalgGpu#available()}.
+	 * @param gpu whether to route the linalg: matrix product to a GPU
+	 */
+	public void setGpu(boolean gpu) {
+		this.gpu = gpu;
 	}
 
 	/**
@@ -6873,6 +6890,12 @@ public final class LispEvaluator {
 				// simd native when there is one and the scalar defun otherwise.
 				if (this.blas) {
 					LinalgBlas.install(this.globalEnv, this);
+				}
+				// Opt-in --gpu, installed after --blas so that the device is asked
+				// FIRST and what it declines to is the best CPU path this invocation
+				// enabled (.kb/gpu.md).
+				if (this.gpu) {
+					LinalgGpu.install(this.globalEnv, this);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {

@@ -44,6 +44,7 @@ import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgBlas;
+import am.ik.rontolisp.eval.LinalgGpu;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.TorchLibrary;
 import am.ik.rontolisp.eval.LispEvalException;
@@ -172,7 +173,7 @@ public final class RontoLispCli {
 					+ "': give the program either inline or in a file");
 		}
 		if (!test && inline == null && !options.containsNoKey()) {
-			repl(systemPath, dists, options.contains("--simd"), options.contains("--blas"));
+			repl(systemPath, dists, options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"));
 			return;
 		}
 
@@ -219,8 +220,8 @@ public final class RontoLispCli {
 			compileToFile(source, baseDir, systemPath, dists, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
-					options.contains("--simd"), options.contains("--blas"), options.contains("--no-prune"),
-					options.contains("--emit-wit"), options.contains("--emit-js-glue"),
+					options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
+					options.contains("--no-prune"), options.contains("--emit-wit"), options.contains("--emit-js-glue"),
 					options.contains("--host-random"), options.contains("--host-fetch"),
 					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
@@ -242,7 +243,7 @@ public final class RontoLispCli {
 						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
 			}
 			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), options.contains("--blas"),
-					inputFile);
+					options.contains("--gpu"), inputFile);
 		}
 	}
 
@@ -297,7 +298,7 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void repl(List<String> systemPath, DistClient dists, boolean simd, boolean blas) {
+	private void repl(List<String> systemPath, DistClient dists, boolean simd, boolean blas, boolean gpu) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDistClient(dists);
@@ -306,6 +307,9 @@ public final class RontoLispCli {
 		}
 		if (blas) {
 			enableBlas(evaluator);
+		}
+		if (gpu) {
+			enableGpu(evaluator);
 		}
 		StringBuilder buffer = new StringBuilder();
 		if (System.console() != null && isJLineAvailable()) {
@@ -407,8 +411,22 @@ public final class RontoLispCli {
 		}
 	}
 
+	// --gpu routes the linalg: matrix product to an NVIDIA GPU. Like --blas the answer is
+	// a property of the machine rather than of the build, so a decline is an ordinary
+	// outcome; unlike --blas the probe itself costs something (a dlopen, a cuInit, a
+	// retained primary context and a PTX JIT), which is why nothing asks unless the flag
+	// was given (.kb/gpu.md).
+	private static void enableGpu(LispEvaluator evaluator) {
+		if (LinalgGpu.available()) {
+			evaluator.setGpu(true);
+		}
+		else {
+			warn("--gpu: " + LinalgGpu.description() + "; running the linalg: matrix product unaccelerated.");
+		}
+	}
+
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
-			boolean simd, boolean blas, @Nullable String entryFile) {
+			boolean simd, boolean blas, boolean gpu, @Nullable String entryFile) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
@@ -418,6 +436,9 @@ public final class RontoLispCli {
 		}
 		if (blas) {
 			enableBlas(evaluator);
+		}
+		if (gpu) {
+			enableGpu(evaluator);
 		}
 		// #. read-time eval: only sources textually containing #. pay for the marker
 		// read; each top-level form's markers resolve just before it evaluates, the
@@ -441,7 +462,7 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean blas, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom,
+			boolean simd, boolean blas, boolean gpu, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom,
 			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
@@ -452,7 +473,7 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, dists, outputFile, dynamic, component, noWasi, optimize, noGc,
-					simd, blas, noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary, entryFile);
+					simd, blas, gpu, noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -483,7 +504,7 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean blas, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom,
+			boolean simd, boolean blas, boolean gpu, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom,
 			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
@@ -500,6 +521,20 @@ public final class RontoLispCli {
 			throw new UnsupportedOperationException("--blas reaches the interpreter and the JVM class output only:"
 					+ " a tuned CBLAS is called through the foreign function API, which WASM does not have."
 					+ " Use --simd for the linalg: kernels on a .wasm output");
+		}
+		// --gpu is the same story one layer out: the CUDA driver is reached through the
+		// foreign function API, so WASM cannot have it. The JVM class output is todo-123
+		// phase 2 and is not built yet -- also an error rather than a silent no-op, so a
+		// build script that asks for it finds out now instead of measuring an
+		// unaccelerated class and believing the device was slow.
+		if (gpu) {
+			if (!outputFile.endsWith(".class")) {
+				throw new UnsupportedOperationException("--gpu reaches the interpreter only:"
+						+ " a GPU is driven through the foreign function API, which WASM does not have."
+						+ " Use --simd for the linalg: kernels on a .wasm output");
+			}
+			throw new UnsupportedOperationException("--gpu does not reach the JVM class output yet:"
+					+ " run the program on the interpreter with --gpu, or compile with --simd and/or --blas");
 		}
 		// --emit-js-glue writes the host half of a boundary only a --no-wasi core module
 		// has: a component is instantiated through its own bindings (jco), and --no-gc
@@ -1131,6 +1166,15 @@ public final class RontoLispCli {
 		this.out.println("                     library reorders its reduction, so results are close to but not");
 		this.out.println("                     bit-identical to the other backends. RONTOLISP_BLAS names a");
 		this.out.println("                     library outright; RONTOLISP_BLAS_VERBOSE=1 prints what was bound.");
+		this.out.println("  --gpu              Route the linalg: matrix product to an NVIDIA GPU");
+		this.out.println("                     Interpreter (incl. the native binary) only for now -- the CUDA");
+		this.out.println("                     driver is reached through the foreign function API, which WASM");
+		this.out.println("                     does not have. Needs libcuda.so.1 (the driver) and nothing else:");
+		this.out.println("                     no CUDA toolkit. A machine without a device runs the same");
+		this.out.println("                     programs, unaccelerated. Only products above ~51x51x51 are");
+		this.out.println("                     offered; everything smaller stays on the CPU. The device kernel");
+		this.out.println("                     fuses each multiply-add, so results are close to but not");
+		this.out.println("                     bit-identical to the other backends.");
 		this.out.println("  --no-prune         Keep every spliced library function in the compiled output");
 		this.out.println("                     By default unreachable library definitions (linalg:/vec:/...)");
 		this.out.println("                     are dropped at compile time; names forged at runtime from");

@@ -28,7 +28,8 @@ Source string
 
 `am.ik.jvm`, `am.ik.wasm`, `am.ik.wit` and `am.ik.gpu` are **language-independent**
 libraries; none may import rontolisp packages or external dependencies. `am.ik.gpu` is the
-CUDA half of `--gpu` and imports nothing at all (`.kb/gpu.md`); no interceptor uses it yet.
+CUDA half of `--gpu` and imports nothing at all (`.kb/gpu.md`); the interpreter reaches it
+through `eval/LinalgGpu` -> `eval/LinalgGpuKernels`, and the JVM backend does not yet.
 
 Package dependency direction (no cycles allowed):
 

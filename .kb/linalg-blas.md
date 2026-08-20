@@ -6,7 +6,8 @@ and only adds an attempt ahead of it. `.kb/linalg.md` has the semantics of the l
 being accelerated.
 
 Two backends, one per interception mechanism -- the same two `--gpu` can reach, and for the
-same reason (the foreign function API):
+same reason (the foreign function API). `--gpu` (`.kb/gpu.md`) has since landed on the
+interpreter and installs AFTER this one, so the device is asked first and declines here:
 
 | backend | interceptor | binding |
 |---|---|---|
