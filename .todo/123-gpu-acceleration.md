@@ -177,12 +177,45 @@ Two separate readings, and they answer different questions:
   there is nothing for tuning to win). At f32 it leaves 7x on the table, because that is
   where blocking, vectorized loads and tensor cores actually pay.
 
-The conclusion for the design: the built-in PTX is entirely adequate to land the
-feature -- 2.4 TFLOP/s of f32 is still hundreds of times the scalar defun -- and closing
-the remaining 7x is a later, self-contained kernel-tuning exercise. Opportunistically
-`dlopen`ing `libcublas.so` when a machine happens to have the toolkit is a possible
-optimization for exactly that gap, but it can never be a requirement, and the feature
-must be complete without it.
+### So is cuBLAS worth having, where it exists?
+
+The 6.8x / 7.3x above is a KERNEL ratio, which is the wrong question for phase 1 -- there
+the copies are on the clock too. Both kernels, both phases, both widths, ms per call
+(`CublasEndToEnd.java`):
+
+| width, n | ours + copy | cuBLAS + copy | | ours resident | cuBLAS resident | |
+| --- | --- | --- | --- | --- | --- | --- |
+| f32 256 | 0.080 | 0.067 | 1.2x | 0.030 | 0.017 | 1.8x |
+| f32 512 | 0.269 | 0.184 | 1.5x | 0.121 | 0.034 | 3.6x |
+| f32 1024 | 1.404 | 0.672 | 2.1x | 0.861 | 0.127 | 6.8x |
+| f32 2048 | 8.799 | 2.970 | 3.0x | 6.752 | 0.927 | 7.3x |
+| f64 256 | 0.167 | 0.206 | **0.8x** | 0.087 | 0.125 | **0.7x** |
+| f64 512 | 0.858 | 0.990 | **0.9x** | 0.576 | 0.707 | **0.8x** |
+| f64 1024 | 5.433 | 6.143 | **0.9x** | 4.433 | 5.116 | **0.9x** |
+| f64 2048 | 39.579 | 44.922 | **0.9x** | 35.243 | 40.875 | **0.9x** |
+
+**The answer is no, and it is not close.**
+
+- **At f64 -- `linalg`'s DEFAULT width -- cuBLAS is a regression**, 10-25% SLOWER than
+  the naive tiled kernel at every size. Nothing about DGEMM is tunable here: both are
+  pinned by the same scarce fp64 units, and cuBLAS's heuristics and setup are pure
+  overhead on top. So for the width most rontolisp programs actually use, the dependency
+  buys negative performance.
+- **At f32 under phase 1 the 7x collapses to 1.2-3.0x**, because the copies it does not
+  eliminate become the bulk of the call. The full 7x only exists in the phase-3 world
+  where data is already resident AND n >= 1024.
+- **The price is 660 MB**: `libcublas.so.13` is 59 MB but links `libcublasLt.so.13`,
+  which is 601 MB. That is the whole CUDA-toolkit-on-the-user's-machine requirement,
+  reintroduced, in exchange for a factor that is negative at the default width.
+
+So: the built-in PTX is not a stopgap, it is the answer. Closing the f32 gap is a
+self-contained kernel-tuning exercise (register tiling, vectorized loads, bigger tiles)
+that needs no dependency and recovers most of it. In ROI order the real wins are
+**single-float adoption (44x) > residency (2-4x) > kernel tuning (up to 7x, f32 only)**,
+and cuBLAS is a strictly worse way to buy the last of those. Revisit only if phase 3
+lands, f32 workloads dominate in practice, and someone still wants the last 2-3x on a
+machine that already has the toolkit -- as an opportunistic `dlopen`, never a
+requirement.
 
 The f64 tiled kernel is NOT bit-identical to the scalar defun (max abs difference 1.5
 to 2.7 on the spike's inputs): the tile walk reorders the reduction. That is expected

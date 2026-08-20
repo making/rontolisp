@@ -28,6 +28,7 @@ survive is the SHAPE of each result.
 | `ResidencySpike.java` | the 2026-07-13 draft's crux: must arrays LIVE on the device, or does a per-call intercept pay? Plus the batched rank-3 product (todo-467's member). |
 | `TinySpike.java` | the fixed per-call floor, which is what the size threshold is built on. |
 | `Tf32Check.java` | rules out the obvious objection to the 44x f32/f64 gap: is cuBLAS's f32 row secretly TF32? |
+| `CublasEndToEnd.java` | and is cuBLAS worth the toolkit at all? Both kernels, both phases (with copies / resident), both widths. |
 | `NiProbe.java` | does a CUDA downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
 | `matmul-baseline.lisp` | the CPU side of the comparison -- `linalg:matmul` under `--simd`, warm, 20 reps. Not a GPU program. |
 
@@ -46,6 +47,7 @@ java --enable-native-access=ALL-UNNAMED MatmulSpike.java
 java --enable-native-access=ALL-UNNAMED TinySpike.java
 java --enable-native-access=ALL-UNNAMED ResidencySpike.java
 java --enable-native-access=ALL-UNNAMED Tf32Check.java      # needs libcublas (toolkit)
+java --enable-native-access=ALL-UNNAMED CublasEndToEnd.java # needs libcublas (toolkit)
 
 # PtxSpike needs the PTX first; 75 is CUDA 13's oldest accepted virtual arch
 java --enable-native-access=ALL-UNNAMED DumpPtx.java 75
@@ -147,6 +149,28 @@ input   1+2^-20 = 1.000000954 (bits 3f800008)
 cuBLAS  C[0]    = 1.000000954 (bits 3f800008)
 => low bit SURVIVED: genuine FP32, not TF32
 ```
+
+```
+$ java CublasEndToEnd.java
+f32  (ms/call)
+    n     ours+copy  cuBLAS+copy  ratio |  ours res.  cuBLAS res.  ratio
+    256       0.080        0.067    1.2x |     0.030        0.017    1.8x
+    512       0.269        0.184    1.5x |     0.121        0.034    3.6x
+    1024      1.404        0.672    2.1x |     0.861        0.127    6.8x
+    2048      8.799        2.970    3.0x |     6.752        0.927    7.3x
+f64  (ms/call)
+    n     ours+copy  cuBLAS+copy  ratio |  ours res.  cuBLAS res.  ratio
+    256       0.167        0.206    0.8x |     0.087        0.125    0.7x
+    512       0.858        0.990    0.9x |     0.576        0.707    0.8x
+    1024      5.433        6.143    0.9x |     4.433        5.116    0.9x
+    2048     39.579       44.922    0.9x |    35.243       40.875    0.9x
+```
+
+This is the probe that settles the cuBLAS question, and it settles it against cuBLAS:
+at f64 -- the default `linalg` width -- the naive tiled kernel is 10-25% FASTER, and at
+f32 the famous 7x shrinks to 1.2-3.0x once the copies phase 1 cannot avoid are on the
+clock. Against that: `libcublas.so.13` is 59 MB and links `libcublasLt.so.13` at 601 MB
+(`ldd` confirms the link), so the price is a 660 MB toolkit requirement.
 
 ```
 $ java ResidencySpike.java
