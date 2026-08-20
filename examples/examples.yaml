@@ -231,6 +231,14 @@ examples:
         - "simd-gemv: 100 steps of (vec:matvec w x) on a 256x256 single-float matrix"
         - "argmax after steps 1-10: (0 14 82 126 14 140 126 79 134 175)"
         - "argmax after step 100:   85"
+  - path: ml/blas-matmul.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the --simd AND --blas showcase -- one 128x128 double-float linalg:matmul, linalg's default width. Deterministic (fixed-seed LCG entries are small integers, so every product and sum is exact at double and no reordering can move a printed digit; integers printed, not floats). The elapsed-time line is not checked. Run it again with --simd, with --blas and with both - per product, interpreter 1848 -> 0.62 -> 0.034 ms, JVM 0.37 -> 0.043 ms, wasm-GC 60 -> 1.4 ms (--blas needs the FFM API, so not on wasm). ~2 s on the interpreter leg, which runs the portable definition
+    expect:
+      contains:
+        - "blas-matmul: 128x128 double-float (linalg:matmul a b), 1 time(s)"
+        - "corners: (141404 143849 140073 127438)"
+        - "trace:   16222272"
   - path: ml/simd-gemv-nogc.lisp
     backends: [no-gc, no-gc-simd]
     note: simd-gemv's inner loop as a --no-gc reactor (the rank-2 packed matrix layout + vec:matvec GEMV) -- the host invokes the fingerprint export (wasmtime run --invoke fingerprint prog.wasm 100 -> 85, matching simd-gemv.lisp's step-100 argmax on both lowerings; verified manually, the harness only compiles). matvec-into/scale-into keep the never-freed bump heap at exactly three blocks

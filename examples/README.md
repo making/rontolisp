@@ -55,6 +55,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`nn-vec.lisp`](ml/nn-vec.lisp) | The same net over the `vec`/`linalg` packages and single-float (`#f`) packed arrays |
 | [`simd-dot.lisp`](ml/simd-dot.lisp) | The smallest thing `--simd` speeds up: one `vec:dot` over 1024 doubles, 4000 times. The answer is an exact integer, so only the elapsed time moves |
 | [`simd-gemv.lisp`](ml/simd-gemv.lisp) | `vec:matvec` (GEMV) + `vec:dot` — the two kernels LLM inference lives in. Prints `argmax` indices, so acceleration cannot change the output. See the [SIMD guide](../doc/en/guides/simd-acceleration.md) |
+| [`blas-matmul.lisp`](ml/blas-matmul.lisp) | One `linalg:matmul` at linalg's default `double-float` width — the example both acceleration flags reach. Its entries are small integers, so the printed numbers are exact and neither `--simd` nor `--blas` can move them |
 | [`simd-gemv-nogc.lisp`](ml/simd-gemv-nogc.lisp) | The same inner loop as a `--no-gc` reactor: the host calls the exported `fingerprint`. The `-into` kernels keep the never-freed bump heap at three blocks |
 | [`tiny-llm.lisp`](ml/tiny-llm.lisp) | A 2-layer transformer decoder — llama2's `forward()` without the tokenizer or weight loader: RMSNorm, causal attention over a KV cache, SwiGLU, greedy decode. Thirteen GEMVs per pass. The KV cache stores **V transposed**, which keeps the attention sum one `vec:matvec`. The whole engine, over real checkpoints, is [`llama2/`](llama2) |
 | [`mlp.lisp`](ml/mlp.lisp) | A generalized multi-layer perceptron for 2-D circle classification |

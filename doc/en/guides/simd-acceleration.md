@@ -247,7 +247,20 @@ RONTOLISP_BLAS=/path/to/libopenblas.so.0 rontolisp prog.lisp --blas   # name one
 
 ## Runnable examples
 
-The smallest one is [`examples/ml/simd-dot.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-dot.lisp): one `vec:dot` over 1024 doubles, four thousand times, and nothing else. Its vector holds `0.0 .. 1023.0`, so the answer is an exact integer that no amount of lane reordering can change -- run it with and without `--simd` and only the elapsed time moves (interpreter 2.59 s -> 2.3 ms; wasm-GC 273 ms -> 2.4 ms).
+[`examples/ml/blas-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/blas-matmul.lisp) is the one example both acceleration flags reach, because it is one `linalg:matmul` at linalg's default `double-float` width and nothing else. Its entries are small integers, so every product and every sum is exact and no reordering -- lanes or library blocking -- can move a printed digit. Run it up to four ways:
+
+```bash
+rontolisp examples/ml/blas-matmul.lisp
+rontolisp examples/ml/blas-matmul.lisp --simd
+rontolisp examples/ml/blas-matmul.lisp --blas
+rontolisp examples/ml/blas-matmul.lisp --simd --blas
+```
+
+Per 128x128 product on an Apple M4 Max: the interpreter goes 1848 ms -> 0.62 ms with `--simd` -> 0.034 ms with `--blas`, and the JVM 0.37 ms -> 0.043 ms. Compiled to wasm-GC, where there is no foreign function API and so no `--blas`, it goes 60 ms -> 1.4 ms with `--simd`. Raise `*reps*` in the source to time the accelerated runs: one product finishes well inside the millisecond tick the clock can see.
+
+The `vec:` examples below are not affected by `--blas` at all: it intercepts the `linalg:` matrix product, which no `vec:` program calls.
+
+The smallest of them is [`examples/ml/simd-dot.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-dot.lisp): one `vec:dot` over 1024 doubles, four thousand times, and nothing else. Its vector holds `0.0 .. 1023.0`, so the answer is an exact integer that no amount of lane reordering can change -- run it with and without `--simd` and only the elapsed time moves (interpreter 2.59 s -> 2.3 ms; wasm-GC 273 ms -> 2.4 ms).
 
 [`examples/ml/simd-gemv.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-gemv.lisp) does nothing but the two kernels acceleration exists for -- `vec:matvec` and `vec:dot` -- a hundred times over: project a vector through a 256x256 single-float matrix, rescale it to unit root-mean-square, repeat. That pair is a transformer's projection plus its RMSNorm, and it is where an LLM inference engine spends nearly all of its time. Run it twice:
 

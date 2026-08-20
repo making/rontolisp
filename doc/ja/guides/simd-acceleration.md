@@ -247,7 +247,20 @@ RONTOLISP_BLAS=/path/to/libopenblas.so.0 rontolisp prog.lisp --blas   # ライ�
 
 ## 実行できる例
 
-最小のものは [`examples/ml/simd-dot.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-dot.lisp) です。1024 個の double に対する `vec:dot` を 4000 回、それだけ。ベクトルは `0.0 .. 1023.0` を保持するので答えは厳密な整数であり、レーンをどう並べ替えても変わりません。`--simd` の有無で実行すると、動くのは経過時間だけです(インタプリタ 2.59 秒 -> 2.3 ms、wasm-GC 273 ms -> 2.4 ms)。
+[`examples/ml/blas-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/blas-matmul.lisp) は、2 つのアクセラレーションフラグが両方とも届く唯一の例です。linalg の既定の `double-float` 幅での `linalg:matmul` 1 回だけ、それ以外に何もしないからです。要素はすべて小さい整数なので、積も和もすべて正確で、レーンであれライブラリのブロック化であれ、並べ替えが表示される桁を動かすことはありません。最大 4 通りで実行してください。
+
+```bash
+rontolisp examples/ml/blas-matmul.lisp
+rontolisp examples/ml/blas-matmul.lisp --simd
+rontolisp examples/ml/blas-matmul.lisp --blas
+rontolisp examples/ml/blas-matmul.lisp --simd --blas
+```
+
+Apple M4 Max で 128x128 の積 1 回あたり、インタプリタは 1848 ms が `--simd` で 0.62 ms、`--blas` で 0.034 ms になり、JVM は 0.37 ms が 0.043 ms になります。foreign function API がなく `--blas` も使えない wasm-GC にコンパイルした場合は、60 ms が `--simd` で 1.4 ms です。加速した実行の時間を測るときはソース中の `*reps*` を上げてください。積 1 回はこの時計が見える 1 ms の刻みよりずっと速く終わります。
+
+以下の `vec:` の例は `--blas` の影響をまったく受けません。`--blas` が横取りするのは `linalg:` の行列積で、`vec:` のプログラムはそれを呼ばないからです。
+
+この中で最小のものは [`examples/ml/simd-dot.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-dot.lisp) です。1024 個の double に対する `vec:dot` を 4000 回、それだけ。ベクトルは `0.0 .. 1023.0` を保持するので答えは厳密な整数であり、レーンをどう並べ替えても変わりません。`--simd` の有無で実行すると、動くのは経過時間だけです(インタプリタ 2.59 秒 -> 2.3 ms、wasm-GC 273 ms -> 2.4 ms)。
 
 [`examples/ml/simd-gemv.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-gemv.lisp) は、アクセラレーションが存在する理由そのものである 2 つのカーネル -- `vec:matvec` と `vec:dot` -- だけを 100 回繰り返します。256x256 の単精度行列にベクトルを通し、二乗平均平方根が 1 になるようスケールし直し、また通す。この組は Transformer の射影と RMSNorm そのものであり、LLM の推論エンジンが時間のほとんどを費やす場所です。2 回実行してみてください:
 
