@@ -1736,8 +1736,8 @@ final class JvmSimdVectorTemplate {
 	 * <p>
 	 * The rewrite is not merely faster, it is bit-identical: {@code ikj} visits {@code k}
 	 * in increasing order into the same accumulator cell, which is the oracle's own
-	 * summation order. See {@link #laMatmulF} for why the single-float sibling
-	 * accumulates in {@code double} rather than following the reduction contract.
+	 * summation order. The single-float sibling ({@link #laMatmulF}) keeps the same
+	 * {@code k} order, but folds it at single precision.
 	 */
 	private static double[] laMatmul(double[] a, double[] b, int n, int m, int p) {
 		int oa = 1 + (int) a[0];
@@ -1767,31 +1767,39 @@ final class JvmSimdVectorTemplate {
 	}
 
 	/**
-	 * The single-float matrix product, accumulated in {@code double} and narrowed once
-	 * per output element, so it is bit-identical to the oracle. The reduction contract
-	 * (an {@code #f} reduction accumulates in single precision) applies where the LANES
-	 * ARE the summation axis -- {@code dot}, {@code sum}, GEMV's per-row dot. Here the
-	 * lanes run across the output row, which carries no summation, so the accumulator's
-	 * width is free and the oracle's {@code double} costs nothing.
+	 * The single-float matrix product: the same {@code ikj} loop at {@code float} lane
+	 * width, accumulating straight into the {@code float[]} result row. This is a
+	 * REDUCTION-CONTRACT kernel -- every output cell folds {@code k} in the oracle's
+	 * ascending order but at single precision, so it is close to the scalar defun rather
+	 * than equal to it, and the defun cannot follow because rontolisp has one float type
+	 * and it is {@code f64}. A {@code double[]} accumulator row would be bit-identical
+	 * and is what this kernel held before it had lanes, but it forbids them: it can only
+	 * be fed by widening each f32 lane group through {@code FloatVector.convert(F2D)},
+	 * which loses on every architecture measured and has no intrinsic at all on aarch64
+	 * ({@code .kb/linalg-simd.md}).
 	 */
 	private static float[] laMatmulF(float[] a, float[] b, int n, int m, int p) {
 		int oa = 1 + (int) a[0];
 		int ob = 1 + (int) b[0];
 		float[] r = laNewMatF(n, p);
-		double[] acc = new double[p];
 		for (int i = 0; i < n; i++) {
-			java.util.Arrays.fill(acc, 0.0);
+			int ro = 3 + i * p;
 			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
-				double s = a[ao + k];
+				float s = a[ao + k];
 				int bo = ob + k * p;
-				for (int j = 0; j < p; j++) {
-					acc[j] += b[bo + j] * s;
+				int j = 0;
+				if (p >= THRESHOLD) {
+					int bound = FSPECIES.loopBound(p);
+					for (; j < bound; j += FSPECIES.length()) {
+						FloatVector.fromArray(FSPECIES, r, ro + j)
+							.add(FloatVector.fromArray(FSPECIES, b, bo + j).mul(s))
+							.intoArray(r, ro + j);
+					}
 				}
-			}
-			int ro = 3 + i * p;
-			for (int j = 0; j < p; j++) {
-				r[ro + j] = (float) acc[j];
+				for (; j < p; j++) {
+					r[ro + j] += b[bo + j] * s;
+				}
 			}
 		}
 		return r;

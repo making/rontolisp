@@ -1293,16 +1293,18 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// v.M and M.M are the ikj LANE loop over the output row: for each (i, k) the row k of
 	// b is read through the same i8x16.shuffle window matvec uses (rows are not group
 	// aligned in general) and multiply-accumulated, whole groups at a time, into a
-	// lane-aligned f64 scratch row (`_v_new(p, 0)`, reused and re-zeroed per output row),
-	// which is then written out element-wise through _v_set -- O(n*p) writes against
-	// O(n*m*p) flops. The f64 accumulator is NOT optional at #f width: the lanes of a
-	// matrix product run across the output row, not along the summation axis, so the
-	// single-precision `#f` reduction contract does not apply, and accumulating in
-	// f64 in k-ascending order (the defun's own ijk summation order per output cell)
-	// keeps the result bit-identical to the oracle at BOTH widths -- see
-	// JvmSimdVectorTemplate.laMatmulF, which keeps a double[] accumulator row for the
-	// same reason. At #f width a b-row window group is widened exactly via
-	// f64x2.promote_low_f32x4 (low half, then the high half swapped down by a shuffle).
+	// scratch row of the OPERAND width (`_v_new(p, kind)`, reused and re-zeroed per
+	// output row), which is then written out element-wise through _v_set -- O(n*p)
+	// writes against O(n*m*p) flops.
+	//
+	// The accumulator matches the operands, so an #f product folds each output cell in
+	// f32: the `#f` reduction contract, in the defun's own k-ascending order. It is NOT
+	// bit-identical to the oracle (which has only f64 to accumulate in), and the two
+	// scalar backends make the same trade for a much sharper reason -- there, an f64
+	// accumulator costs the lane loop outright. Lanes run across the output row, not
+	// along the summation axis, so the lane count never enters the answer: every backend
+	// folds each cell over k in the same order and produces the same bits.
+	//
 	// The window's overhang past the row end and the accumulator's padding lanes may
 	// hold garbage (the overhang lanes are REAL next-row elements here, unlike matvec's
 	// zero-padded x), but lanes are independent and the write-out reads only the p real
@@ -1310,21 +1312,21 @@ final class WasmLinalgSimdRuntimeBuilder {
 	//
 	// params: 0 = a, 1 = b.
 	// i32: ra 2, rb 3, n 4, m 5, p 6, i 7, j 8, k 9, kind 10, t 11, base 12, off 13,
-	// pg 14, qc 15, rowD 16, q2 17.
-	// f64: aik 18.
-	// v128: vs 19, wg 20.
-	// eq: res 21, vbA 22, vbB 23, vbD 24, nd 25, acc 26.
-	// $v128arr: gb 27, gacc 28.
+	// pg 14, rowD 15, shift 16.
+	// f64: aik 17.
+	// v128: vs 18.
+	// eq: res 19, vbA 20, vbB 21, vbD 22, nd 23, acc 24.
+	// $v128arr: gb 25, gacc 26.
 	private static byte[] buildDot(int vecBase) {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, bArg = 1;
 		int ra = 2, rb = 3, n = 4, m = 5, p = 6, i = 7, j = 8, k = 9, kind = 10, t = 11, base = 12, off = 13, pg = 14,
-				qc = 15, rowD = 16, q2 = 17;
-		int aik = 18;
-		int vs = 19, wg = 20;
-		int res = 21, vbA = 22, vbB = 23, vbD = 24, nd = 25, acc = 26;
-		int gb = 27, gacc = 28;
+				rowD = 15, shift = 16;
+		int aik = 17;
+		int vs = 18;
+		int res = 19, vbA = 20, vbB = 21, vbD = 22, nd = 23, acc = 24;
+		int gb = 25, gacc = 26;
 
 		block(w); // B0 declined
 		isFarray(w, a);
@@ -1424,16 +1426,15 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.I32_MUL);
 		set(w, t);
 		newVblock(w, t, kind, vbD, vecBase);
-		// pg = ceil(p / 2): the f64 scratch row's group count
-		get(w, p);
+		// pg = ceil(p / lanes): the scratch row's group count at the operand width
+		get(w, kind);
 		i32Const(w, 1);
 		w.write(Instruction.I32_ADD);
-		i32Const(w, 1);
-		w.write(Instruction.I32_SHR_U);
-		set(w, pg);
-		// acc = _v_new(p, 0): one f64 accumulator row, reused across output rows
+		set(w, shift);
+		WasmVecSimdRuntimeBuilder.ceilShift(w, p, shift, pg);
+		// acc = _v_new(p, kind): one accumulator row, reused across output rows
 		get(w, p);
-		i32Const(w, 0);
+		get(w, kind);
 		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_NEW);
 		set(w, acc);
 		vblockGroups(w, acc, gacc);
@@ -1453,7 +1454,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 		WasmVecLoops.arraySet(w);
 		closeCountLoop(w, j);
 		openCountLoop(w, k, m);
-		// vs = f64x2.splat(a[i*m + k], widened)
+		// aik = a[i*m + k]; b row k starts at flat k*p, at the INPUT width's lane
+		// geometry
 		get(w, i);
 		get(w, m);
 		w.write(Instruction.I32_MUL);
@@ -1462,16 +1464,17 @@ final class WasmLinalgSimdRuntimeBuilder {
 		set(w, t);
 		vget(w, vbA, t, vecBase);
 		set(w, aik);
-		get(w, aik);
-		WasmVecLoops.simd(w, Instruction.F64X2_SPLAT);
-		set(w, vs);
-		// b row k starts at flat k*p, at the INPUT width's lane geometry
 		get(w, k);
 		get(w, p);
 		w.write(Instruction.I32_MUL);
 		set(w, t);
 		get(w, kind);
 		w.write(Instruction.IF, 0x40);
+		// vs = f32x4.splat(aik), demoted back to the width it was stored at
+		get(w, aik);
+		w.write(Instruction.F32_DEMOTE_F64);
+		WasmVecLoops.simd(w, Instruction.F32X4_SPLAT);
+		set(w, vs);
 		get(w, t);
 		i32Const(w, 2);
 		w.write(Instruction.I32_SHR_U);
@@ -1480,15 +1483,12 @@ final class WasmLinalgSimdRuntimeBuilder {
 		i32Const(w, 3);
 		w.write(Instruction.I32_AND);
 		set(w, off);
-		get(w, p);
-		i32Const(w, 3);
-		w.write(Instruction.I32_ADD);
-		i32Const(w, 2);
-		w.write(Instruction.I32_SHR_U);
-		set(w, qc);
 		WasmVecSimdRuntimeBuilder.emitLaneChain(w, off, 4, 0x40,
-				o -> emitGemmRowSingle(w, qc, j, q2, base, o, vs, wg, gb, gacc));
+				o -> emitGemmRow(w, pg, j, base, o, vs, gb, gacc, true));
 		w.write(Instruction.ELSE);
+		get(w, aik);
+		WasmVecLoops.simd(w, Instruction.F64X2_SPLAT);
+		set(w, vs);
 		get(w, t);
 		i32Const(w, 1);
 		w.write(Instruction.I32_SHR_U);
@@ -1497,17 +1497,12 @@ final class WasmLinalgSimdRuntimeBuilder {
 		i32Const(w, 1);
 		w.write(Instruction.I32_AND);
 		set(w, off);
-		get(w, p);
-		i32Const(w, 1);
-		w.write(Instruction.I32_ADD);
-		i32Const(w, 1);
-		w.write(Instruction.I32_SHR_U);
-		set(w, qc);
 		WasmVecSimdRuntimeBuilder.emitLaneChain(w, off, 2, 0x40,
-				o -> emitGemmRowDouble(w, qc, j, base, o, vs, gb, gacc));
+				o -> emitGemmRow(w, pg, j, base, o, vs, gb, gacc, false));
 		w.write(Instruction.END);
 		closeCountLoop(w, k);
-		// write the row out: dst[rowD + j] = acc[j], narrowed once at #f width by _v_set
+		// write the row out: dst[rowD + j] = acc[j], an exact round trip -- _v_get
+		// promotes the f32 lane and _v_set narrows it back
 		openCountLoop(w, j, p);
 		get(w, vbD);
 		get(w, rowD);
@@ -1532,68 +1527,23 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 		get(w, res);
 		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 16, 1, 0, 2, 6, 2);
+		return withLocals(b.toByteArray(), 15, 1, 0, 1, 6, 2);
 	}
 
-	// acc[q] += vs * window(b row, q), whole f64x2 groups, for one (i, k) at #d width.
-	// `off` is a compile-time lane offset (an i8x16.shuffle immediate cannot be
-	// computed).
-	private static void emitGemmRowDouble(WasmWriter w, int qc, int q, int base, int off, int vs, int gb, int gacc) {
-		openCountLoop(w, q, qc);
+	// acc[q] += vs * window(b row, q), whole lane groups, for one (i, k). The
+	// accumulator and the operands share a width, so one loop serves both: the group
+	// count is the scratch row's own, and every group index is its own. `off` is a
+	// compile-time lane offset (an i8x16.shuffle immediate cannot be computed).
+	private static void emitGemmRow(WasmWriter w, int pg, int q, int base, int off, int vs, int gb, int gacc,
+			boolean single) {
+		openCountLoop(w, q, pg);
 		get(w, gacc);
 		get(w, q);
 		WasmVecLoops.groupGet(w, gacc, q);
 		get(w, vs);
-		WasmVecSimdRuntimeBuilder.emitRowGroup(w, gb, base, q, off, false);
-		WasmVecLoops.simd(w, Instruction.F64X2_MUL);
-		WasmVecLoops.simd(w, Instruction.F64X2_ADD);
-		WasmVecLoops.arraySet(w);
-		closeCountLoop(w, q);
-	}
-
-	// The #f-width sibling: each f32x4 window group feeds TWO f64x2 accumulator groups
-	// (2q and 2q + 1), each half widened exactly via f64x2.promote_low_f32x4 -- the high
-	// half is first swapped down by an i8x16.shuffle. When p % 4 is 1 or 2 the high
-	// half's accumulator index reaches the scratch row's sentinel group; that group
-	// exists (a valid array slot) and is never read back.
-	private static void emitGemmRowSingle(WasmWriter w, int qc, int q, int q2, int base, int off, int vs, int wg,
-			int gb, int gacc) {
-		openCountLoop(w, q, qc);
-		WasmVecSimdRuntimeBuilder.emitRowGroup(w, gb, base, q, off, true);
-		set(w, wg);
-		get(w, q);
-		i32Const(w, 1);
-		w.write(Instruction.I32_SHL);
-		set(w, q2);
-		get(w, gacc);
-		get(w, q2);
-		WasmVecLoops.groupGet(w, gacc, q2);
-		get(w, vs);
-		get(w, wg);
-		WasmVecLoops.simd(w, Instruction.F64X2_PROMOTE_LOW_F32X4);
-		WasmVecLoops.simd(w, Instruction.F64X2_MUL);
-		WasmVecLoops.simd(w, Instruction.F64X2_ADD);
-		WasmVecLoops.arraySet(w);
-		get(w, q2);
-		i32Const(w, 1);
-		w.write(Instruction.I32_ADD);
-		set(w, q2);
-		get(w, gacc);
-		get(w, q2);
-		WasmVecLoops.groupGet(w, gacc, q2);
-		get(w, vs);
-		get(w, wg);
-		get(w, wg);
-		WasmVecLoops.simd(w, Instruction.I8X16_SHUFFLE);
-		for (int lane = 8; lane < 16; lane++) {
-			w.write(lane);
-		}
-		for (int lane = 0; lane < 8; lane++) {
-			w.write(lane);
-		}
-		WasmVecLoops.simd(w, Instruction.F64X2_PROMOTE_LOW_F32X4);
-		WasmVecLoops.simd(w, Instruction.F64X2_MUL);
-		WasmVecLoops.simd(w, Instruction.F64X2_ADD);
+		WasmVecSimdRuntimeBuilder.emitRowGroup(w, gb, base, q, off, single);
+		WasmVecLoops.simd(w, single ? Instruction.F32X4_MUL : Instruction.F64X2_MUL);
+		WasmVecLoops.simd(w, single ? Instruction.F32X4_ADD : Instruction.F64X2_ADD);
 		WasmVecLoops.arraySet(w);
 		closeCountLoop(w, q);
 	}

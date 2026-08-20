@@ -785,7 +785,8 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
 - Full matrix×matrix **GEMM** (`matmul`): NOT `vec:` (it produces a matrix) — it lives in
   `linalg:`, where todo-107 accelerated it. It needs no transpose after all: rewriting the oracle's
   `ijk` triple loop as **`ikj`** makes `b`'s rows contiguous AND preserves the summation order, so
-  the result is bit-identical rather than merely close. See `.kb/linalg-simd.md`. `vec:matvec`
+  at `#d` width the result is bit-identical rather than merely close. At `#f` width it follows the
+  single-precision reduction contract, like every other `#f` fold. See `.kb/linalg-simd.md`. `vec:matvec`
   (GEMV) is still the mat×vec case llama2's single-token decode needs.
 - `--no-gc` GEMV is **DONE** (todo-099, 2026-07-10): the rank-2 packed matrix block
   (`F64MAT`/`F32MAT`, `[rows][cols][data]`) + `compileSimdMatvec` driving

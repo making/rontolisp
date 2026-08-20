@@ -442,6 +442,28 @@ class LinalgSimdTest {
 		String gemv = probe32("4096.0", "(aref (linalg:dot (linalg:reshape v '(1 1024)) v) 0)");
 		assertThat(eval(gemv, true).print()).isEqualTo("16777984");
 		assertThat(eval(gemv, false).print()).isEqualTo("16778240");
+		// The MATRIX PRODUCT follows the contract too, since it gained f32 lanes: an
+		// #f cell folds k in the oracle's own ascending order but at single precision.
+		// p = 1 here, so the fold runs in the scalar tail.
+		String vm = """
+				(let ((v (linalg:ones 1024 :element-type 'single-float)))
+				  (setf (aref v 0) 4096.0)
+				  (round (aref (linalg:dot v (linalg:reshape v '(1024 1))) 0)))
+				""";
+		assertThat(eval(vm, true).print()).isEqualTo("16777216");
+		assertThat(eval(vm, false).print()).isEqualTo("16778240");
+		// A 200-column b runs the same fold in the LANE loop (200 crosses THRESHOLD) and
+		// in the tail behind it, for every cell of the row. The lanes run across j, which
+		// carries no summation, so the lane count cannot move the answer -- which is why
+		// all three --simd backends agree on it.
+		String mm = """
+				(let ((v (linalg:ones 1024 :element-type 'single-float)))
+				  (setf (aref v 0) 4096.0)
+				  (let ((r (linalg:dot v (linalg:outer v (linalg:ones 200 :element-type 'single-float)))))
+				    (list (round (aref r 0)) (round (aref r 199)))))
+				""";
+		assertThat(eval(mm, true).print()).isEqualTo("(16777216 16777216)");
+		assertThat(eval(mm, false).print()).isEqualTo("(16778240 16778240)");
 		// The #d control: double-float reductions are untouched by the contract, and
 		// exact on both paths for these inputs.
 		String probe64 = """

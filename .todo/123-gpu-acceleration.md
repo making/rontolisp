@@ -390,11 +390,13 @@ statically. `%la-make`'s own parameter is already a runtime value.
 
 ### Prerequisite and risks
 
-- **`.todo/469` first, without exception.** Today `#f` matmul under `--simd` is 2.0x
-  SLOWER than `#d` (the kernel runs without lanes). Flip the default before fixing that
-  and every torch program gets ~2x slower on the JVM and the interpreter -- a regression
-  for every user who does not own a GPU, which is most of them. 469 also forces the
-  precision-contract decision that phase 0 depends on.
+- **The `#f` matmul prerequisite is DONE (2026-08-20), so phase 0 is unblocked.** The
+  `--simd` matrix product runs f32 lanes with an f32 accumulator on all three backends
+  now, and `#f` matmul is FASTER than `#d` rather than 2.0x slower (x86-64, n=512:
+  interpreter 25.8 vs 51.6 ms, JVM 28.9 vs 53.5). It also settled the precision decision
+  phase 0 depended on: an `#f` matrix product follows the single-precision reduction
+  contract instead of being bit-identical to the scalar defun, and is deterministic
+  across all three `--simd` backends (`.kb/linalg-simd.md`).
 - **Pin `TorchGradcheck` to double-float explicitly.** It central-differences at
   `eps 1e-4` against `tol 1e-3` relative; at f32 the subtraction leaves roughly three
   significant digits, which is at or past the tolerance. The gradcheck exists to verify
@@ -417,9 +419,11 @@ statically. `%la-make`'s own parameter is already a runtime value.
   forward/backward, so a single missed origination site fails loudly instead of silently
   declining every kernel.
 - `train-gpt-soseki.lisp` and `tiny-llm.lisp` get FASTER on all three `--simd` backends,
-  not just non-slower. If they do not, 469 did not land properly.
+  not just non-slower.
 - The gradcheck table still passes at its current `tol`, running in double.
-- Byte-identical output with and without `--simd`, on all four backends, as today.
+- Byte-identical output with and without `--simd`, on all four backends, as today -- the
+  examples round their printed floats, which is what absorbs the `#f` reduction contract
+  (the matrix product included, since it joined that contract).
 
 ## Phases
 

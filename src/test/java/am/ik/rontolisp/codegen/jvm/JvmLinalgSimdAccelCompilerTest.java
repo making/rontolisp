@@ -118,6 +118,23 @@ class JvmLinalgSimdAccelCompilerTest {
 		String mean = probe32("16777216.0", "(* 1024 (linalg:mean *v*))");
 		assertThat(accel(mean)).isEqualTo("16777984");
 		assertThat(scalar(mean)).isEqualTo("16778239");
+		// The MATRIX PRODUCT follows the contract too, since it gained f32 lanes: an #f
+		// cell folds k in the oracle's own ascending order but at single precision. p = 1
+		// here, so the fold runs in the scalar tail; the 200-column b below runs it in
+		// the LANE loop (200 crosses THRESHOLD) and in the tail behind it. The lanes run
+		// across j, which carries no summation, so the lane count cannot move the answer.
+		String vm = probe32("4096.0", "(aref (linalg:dot *v* (linalg:reshape *v* '(1024 1))) 0)");
+		assertThat(accel(vm)).isEqualTo("16777216");
+		assertThat(scalar(vm)).isEqualTo("16778240");
+		String mm = """
+				(defparameter *v* (linalg:ones 1024 :element-type 'single-float))
+				(setf (aref *v* 0) 4096.0)
+				(defparameter *r*
+				  (linalg:dot *v* (linalg:outer *v* (linalg:ones 200 :element-type 'single-float))))
+				(print (list (round (aref *r* 0)) (round (aref *r* 199))))
+				""";
+		assertThat(accel(mm)).isEqualTo("(16777216 16777216)");
+		assertThat(scalar(mm)).isEqualTo("(16778240 16778240)");
 		// #d is untouched by the contract.
 		String probe64 = """
 				(defparameter *v* (linalg:ones 1024))

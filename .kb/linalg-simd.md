@@ -213,7 +213,7 @@ compiled defun pays, and on the interpreter it removes the whole tree-walking lo
 | the same, array with a **double** scalar | lane loop | `gcBroadcastF64` lane loop |
 | the same, array with a **single** scalar | scalar loop (see below) | `_v_get`/`_v_set` element loop |
 | `sum`, `norm`, `dot` (v.v), `dot` (M.v = GEMV) | lane loop (reuses `VecSimdKernels`) | calls the `vec:` kernels |
-| `dot` (v.M), `dot` (M.M) | `ikj` lane loop over the output row | `ikj` lane loop: shuffle-window b rows into an f64 scratch row, `_v_set` write-out (see below) |
+| `dot` (v.M), `dot` (M.M) | `ikj` lane loop over the output row | `ikj` lane loop: shuffle-window b rows into a scratch row of the operand width, `_v_set` write-out (see below) |
 | `outer` | lane loop over the row | whole destination groups when `m % lanes == 0`, else `_v_get`/`_v_set` |
 | `amax`/`amin`/`argmax`/`argmin`/`trace` | scalar loop | `_v_get` element loop |
 | `sqrt`/`abs`/`negative` (unary, todo 109) | lane loop | `gcMap1` lane loop (defun-mirroring forms) |
@@ -230,15 +230,20 @@ compiled defun pays, and on the interpreter it removes the whole tree-walking lo
 The wasm-GC lane forms for `dot` (v.M / M.M) / `outer` / `transpose` shipped as the todo-107
 follow-up (2026-07-10). The GEMM loop reads each `b` row through the same `i8x16.shuffle`
 window as `vec:matvec` (`WasmVecSimdRuntimeBuilder.emitRowGroup`, promoted package-private)
-and multiply-accumulates whole groups into a lane-aligned **f64 scratch row** (`_v_new(p, 0)`,
-reused and re-zeroed per output row), written out element-wise through `_v_set` -- O(n·p)
-writes against O(n·m·p) flops. At `#f` width each f32x4 window group is widened exactly via
-the new `f64x2.promote_low_f32x4` (`am.ik.wasm.Instruction` 0xFD 0x5F, also added to
-`WasmTreeShaker.skipSimd`), low half directly and high half swapped down by a shuffle; when
-`p % 4` is 1 or 2 the high half's accumulator index reaches the scratch row's sentinel group,
-which exists and is never read back. The window's overhang past a row's end reads REAL
-next-row elements (unlike matvec's zero-padded x) but lands only in accumulator lanes past
-`p`, which the write-out never reads. `transpose` uses two shuffles per 2x2 f64 block and the
+and multiply-accumulates whole groups into a **scratch row of the operand width**
+(`_v_new(p, kind)`, reused and re-zeroed per output row), written out element-wise through
+`_v_set` -- O(n·p) writes against O(n·m·p) flops. One loop serves both widths: the group
+count is the scratch row's own and every window group maps to the accumulator group of the
+same index, so the only per-width difference is `f32x4`/`f64x2` and the splat of `a[i][k]`
+(demoted through `f32.demote_f64` at `#f` width, back to the width it was stored at). The
+window's overhang past a row's end reads REAL next-row elements (unlike matvec's zero-padded
+x) but lands only in accumulator lanes past `p`, which the write-out never reads.
+
+An `#f` scratch row is what makes the matrix product a reduction-contract kernel (below)
+rather than a bit-identical one, and all three `--simd` backends had to move together or
+they would stop agreeing. wasm accumulated in f64 until then, widening each window group
+through `f64x2.promote_low_f32x4` into two accumulator groups; that instruction is no longer
+emitted by anything (its `WasmTreeShaker.skipSimd` case stays, harmless). `transpose` uses two shuffles per 2x2 f64 block and the
 classic eight-shuffle butterfly per 4x4 f32 block. No new function indices: the same 15
 linalg kernels got new bodies, so `userFuncBase()` and every structural pin are untouched.
 
@@ -282,13 +287,45 @@ Only reductions move, and exactly as todo-106 already specified for `vec:`.
 - **Reductions follow todo-106**: an `#f` reduction accumulates in single precision and
   promotes to f64 once, at the value boundary. That covers `sum`, `mean`, `norm`,
   `dot` (v.v) and `dot` (M.v), whose per-row dot is `vec:matvec`'s.
-- **The matrix product is exempt, and this is the principle:** you accumulate in the lane
-  element type only when the **lanes ARE the reduction axis**. In `ikj` the lanes run across
-  the output row (the `j` axis), which carries no summation, so the accumulator's width is
-  free -- and the oracle's `double` is both more accurate and free of `convert(F2D)`. So
-  `dot` (v.M) and `dot` (M.M) accumulate in `double` at both widths and are bit-identical to
-  the oracle. (`JvmSimdVectorTemplate.laMatmulF` keeps a `double[]` accumulator row and
-  narrows once per output element.)
+- **The matrix product follows the reduction contract as well.** `dot` (v.M) and `dot` (M.M)
+  accumulate in the OPERAND width: an `#f` product folds each output cell over `k` in f32,
+  in the oracle's own ascending order, so it is close to the scalar defun but not equal to
+  it. The defun cannot follow -- rontolisp has one float type and it is f64 (`LispNames`:
+  "Every float shares the one double") -- so there is no version of this in which the oracle
+  and the kernel agree, exactly as for `sum`/`dot`/GEMV. Measured worst case against the
+  oracle on zero-mean random operands: max ~3-4% RELATIVE error, always on a cell whose true
+  value has cancelled to near zero; that is what every f32 GEMM in the industry does,
+  PyTorch's CPU `sgemm` included. **Which lanes ran cannot move the answer**: the lanes go
+  across the output row (the `j` axis), which carries no summation, so the lane loop, the
+  scalar tail and the wasm f32x4 loop fold every cell identically, and the three `--simd`
+  backends agree bit for bit. At `#d` width nothing changed: still bit-identical.
+- **Why not keep the f64 accumulator, which WAS bit-identical?** Because it forbids lanes:
+  an f64 accumulator can only be fed by widening each f32 lane group through
+  `FloatVector.convert(F2D)`, and where that intrinsic is missing the widening is
+  catastrophic. `.todo/123-gpu-acceleration/MatmulFProbe.java` measures all four kernels
+  head to head and is rerunnable; **it answers differently per architecture, so rerun it
+  before quoting it**:
+
+  | n=512, ms/call | scalar + f64 acc (the old kernel) | F2D lanes + f64 acc (wasm's old way) | f32 lanes + f32 acc (today) | the f64 kernel |
+  |---|---|---|---|---|
+  | aarch64 / NEON (M4; f32 4 lanes, f64 2) | 39 | **7477** | **10.4** | 19.5 |
+  | x86-64 / AVX (f32 8 lanes, f64 4) | 33.3 | 52.1 | **22.8** | 47.1 |
+
+  On NEON `convert(F2D)` has no intrinsic at all -- 190x slower than the scalar loop it
+  would replace -- and the scalar f64-accumulator kernel left `#f` matmul **2x slower than
+  `#d`**, the one member where the narrower width lost. On x86-64 the conversion IS
+  intrinsified and the old kernel was already ahead of `#d`, so the symptom does not
+  reproduce there. What holds on BOTH is the ranking: f32 lanes with an f32 accumulator
+  wins, and the F2D widening never does. Do not port it to the JVM, and do not spend time
+  on `convertShape` variants.
+
+  At the rontolisp level (x86-64, warm, 20 reps, ms/call) `#f` is now the faster width on
+  both scalar backends, which is what a narrower element type is for:
+
+  | `linalg:matmul` | interpreter `#d` | interpreter `#f` | JVM `#d` | JVM `#f` |
+  |---|---|---|---|---|
+  | n=256 | 8.00 | **4.90** | 7.75 | **4.30** |
+  | n=512 | 51.55 | **25.75** | 53.45 | **28.85** |
 - **`trace`, `amax`, `amin`, `argmax`, `argmin`** are bit-identical: they read elements
   widened to `double`, exactly as the defun does.
 - **The declined-shape follow-up kernels are ALL bit-identical at both widths.** The
@@ -321,7 +358,7 @@ added to it while the other three fold 256 ones each -> `2^24 + 768 = 16777984`.
 | `(round (linalg:sum v))`, `v[0] = 2^24` | 16778239 | **16777984** |
 | `(round (* 1024 (linalg:mean v)))`, `v[0] = 2^24` | 16778239 | **16777984** |
 | `(round (aref (linalg:dot (reshape v '(1 1024)) v) 0))` -- GEMV | 16778240 | **16777984** |
-| `(round (aref (linalg:dot v (reshape v '(1024 1))) 0))` -- **v.M** | 16778240 | 16778240 |
+| `(round (aref (linalg:dot v (reshape v '(1024 1))) 0))` -- **v.M** | 16778240 | **16777216** |
 | any of the above at `#d` width | 16778239 | 16778239 |
 
 **Nothing else catches a regression here**: every other `#f` test input stays under `2^24`,

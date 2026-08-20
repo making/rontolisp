@@ -15850,13 +15850,21 @@ class WasmLispCompilerIntegrationTest {
 				+ " (print (round (aref (linalg:dot (linalg:reshape v '(1 1024)) v) 0))))";
 		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(gemv, false)).isEqualTo("16778240");
-		// The MATRIX PRODUCT is exempt: its lanes run across the output row, not along
-		// the
-		// summation axis, so its accumulator stays f64 and it matches the oracle exactly.
+		// The MATRIX PRODUCT follows the contract too: its scratch row is now the
+		// operand width, so an #f cell folds k in the oracle's own ascending order but
+		// at single precision. p = 1 here, so only lane 0 of the group is real; the
+		// 200-column b below fills whole f32x4 groups. The lanes run across j, which
+		// carries no summation, so the lane count cannot move the answer -- which is how
+		// this agrees with the interpreter and the JVM.
 		String vm = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (linalg:dot v (linalg:reshape v '(1024 1))) 0))))";
-		assertThat(compileAndRunVec(vm, true)).isEqualTo("16778240");
+		assertThat(compileAndRunVec(vm, true)).isEqualTo("16777216");
 		assertThat(compileAndRunVec(vm, false)).isEqualTo("16778240");
+		String mm = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
+				+ " (let ((r (linalg:dot v (linalg:outer v (linalg:ones 200 :element-type 'single-float)))))"
+				+ " (print (list (round (aref r 0)) (round (aref r 199))))))";
+		assertThat(compileAndRunVec(mm, true)).isEqualTo("(16777216 16777216)");
+		assertThat(compileAndRunVec(mm, false)).isEqualTo("(16778240 16778240)");
 		// The #d control: double-float reductions are exact on both paths here.
 		String d = "(let ((v (linalg:ones 1024))) (setf (aref v 0) 4096.0) (print (round (linalg:dot v v))))";
 		assertThat(compileAndRunVec(d, true)).isEqualTo("16778239");

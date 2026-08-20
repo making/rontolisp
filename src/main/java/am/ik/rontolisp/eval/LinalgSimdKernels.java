@@ -728,8 +728,8 @@ final class LinalgSimdKernels {
 	 * <p>
 	 * The rewrite is not just faster, it is bit-identical: {@code ikj} visits {@code k}
 	 * in increasing order into the same accumulator cell, which is the oracle's own
-	 * summation order. See {@link #matmulF} for why the single-float sibling accumulates
-	 * in {@code double} rather than following the reduction contract.
+	 * summation order. The single-float sibling ({@link #matmulF}) keeps the same
+	 * {@code k} order, but folds it at single precision.
 	 *
 	 * <p>
 	 * {@code vector . matrix} is this kernel with {@code n = 1}.
@@ -760,35 +760,46 @@ final class LinalgSimdKernels {
 	}
 
 	/**
-	 * The single-float matrix product, accumulated in {@code double} and narrowed once
-	 * per output element -- so it is bit-identical to the oracle, not merely close.
+	 * The single-float matrix product: the same {@code ikj} loop at {@code float} lane
+	 * width, accumulating straight into the {@code float[]} result row.
 	 *
 	 * <p>
-	 * This is where the reduction contract stops applying. An {@code #f} reduction
-	 * accumulates in single precision under {@code --simd} because its LANES ARE the
-	 * summation axis ({@code dot}, {@code sum}, and GEMV's per-row dot). Here the lanes
-	 * run across the output row (the {@code j} axis of {@code ikj}), which carries no
-	 * summation, so the accumulator's width is free -- and the oracle's {@code double} is
-	 * both more accurate and free of the {@code convert(F2D)} widening these kernels
-	 * otherwise avoid. Only the accumulator row is {@code double}; the operands and the
-	 * result stay {@code float}.
+	 * This is a REDUCTION-CONTRACT kernel, not a bit-identical one. Every output cell
+	 * still folds {@code k} in the oracle's ascending order, but at single precision, so
+	 * the result is close to the scalar defun rather than equal to it -- and the defun
+	 * cannot follow, because rontolisp has exactly one float type and it is {@code f64}.
+	 * The lane count does not enter into it: the lanes run across {@code j}, which
+	 * carries no summation, so the lane loop, the scalar tail and the wasm kernel all
+	 * fold each cell identically.
+	 *
+	 * <p>
+	 * A {@code double[]} accumulator row would be bit-identical -- it is what this kernel
+	 * held before it had lanes -- but it forbids them: an f64 accumulator can only be fed
+	 * by widening each f32 lane group through {@code FloatVector.convert(F2D)}, which
+	 * loses on every architecture measured and has no intrinsic at all on aarch64, where
+	 * it runs 190x slower than the scalar loop it would replace. The numbers, and the
+	 * rerunnable probe behind them, are in {@code .kb/linalg-simd.md}.
 	 */
 	static float[] matmulF(float[] a, float[] b, int n, int m, int p) {
 		float[] r = new float[n * p];
-		double[] acc = new double[p];
 		for (int i = 0; i < n; i++) {
-			java.util.Arrays.fill(acc, 0.0);
+			int ro = i * p;
 			int ao = i * m;
 			for (int k = 0; k < m; k++) {
-				double s = a[ao + k];
+				float s = a[ao + k];
 				int bo = k * p;
-				for (int j = 0; j < p; j++) {
-					acc[j] += b[bo + j] * s;
+				int j = 0;
+				if (p >= THRESHOLD) {
+					int bound = FSPECIES.loopBound(p);
+					for (; j < bound; j += FSPECIES.length()) {
+						FloatVector.fromArray(FSPECIES, r, ro + j)
+							.add(FloatVector.fromArray(FSPECIES, b, bo + j).mul(s))
+							.intoArray(r, ro + j);
+					}
 				}
-			}
-			int ro = i * p;
-			for (int j = 0; j < p; j++) {
-				r[ro + j] = (float) acc[j];
+				for (; j < p; j++) {
+					r[ro + j] += b[bo + j] * s;
+				}
 			}
 		}
 		return r;
