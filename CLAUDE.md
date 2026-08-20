@@ -153,31 +153,17 @@ exercise:
 - Java 25+
 - No external dependencies in the core libraries (reader, eval, codegen, `am.ik.*`).
   `docs-tool/` is a separate Maven project and may use flexmark/snakeyaml.
-- Spring Java Format enforced by the Maven plugin; modern Java (records, pattern matching,
-  sealed types, text blocks); no circular references between classes or packages.
+- Modern Java (records, pattern matching, sealed types, text blocks); no circular references between classes or packages.
 - `src/test/resources/ci-spec.yaml` is the single source of truth for `CiSpecE2eTest`. Cases
   share global state and run IN ORDER: the driver concatenates them into one program, runs
   the binary once per backend, and slices the output back per case.
-- WASM integration tests are skipped without Docker. They run `wasmtime` from
-  `WasmtimeSupport.IMAGE`, built by `.github/workflows/wasmtime-image.yaml`; bump the
-  Dockerfile ARG and the workflow `WASMTIME_VERSION` together. Keep it >= 47 --
-  47+ inlines final-type casts, without which serve throughput collapses under concurrency
-  (`.kb/wasm-gc-final-types.md`).
 
 ## After Task Completion
 
-- Format Java: `./mvnw spring-javaformat:apply`, plus
-  `./mvnw -f docs-tool/pom.xml spring-javaformat:apply` if `docs-tool/` changed. Wrap a
-  block the formatter mangles in `// @formatter:off` / `// @formatter:on` rather than
-  skipping it.
 - Format Lisp: `java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar format examples/ src/main/resources/ size-report/programs/`
-- Test: `./mvnw test`
 - Web profile: `./mvnw -Pweb compile` whenever `src/web/java` or a signature it overrides
   changed -- `./mvnw test` does not compile it. Run it AFTER the test suite (or `clean` in
   between): it leaves the web source set in `target/classes`, and a later `./mvnw test`
   without `clean` then fails with `NoClassDefFoundError` on excluded classes, which looks
   like a regression and is not one.
 - Native E2E (above) whenever `ci-spec.yaml` or cross-backend output changed.
-- Javadoc: `./mvnw clean javadoc:jar` -- must stay at 0 warnings. The goal does not fork
-  `generate-sources`, so nothing in `src/main/java` may depend on a generated source.
-- Notify: `osascript -e 'display notification "<Body>" with title "<Title>"'`
