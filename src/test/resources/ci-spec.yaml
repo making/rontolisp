@@ -4349,9 +4349,10 @@ cases:
   # The torch package (reverse-mode autograd over linalg): fit y = 2x by gradient
   # descent on the MSE -- ten forward/backward/update steps, the update inside
   # torch:no-grad (which rebinds the torch::*grad-enabled* special). Every quantity
-  # stays an exact dyadic rational in double (x/y are small integers, the mean
-  # divides by 2, the learning rate is 0.125), so the printed doubles are
-  # byte-identical on all four backends. The last two lines pin the broadcasting
+  # stays an exact dyadic rational (x/y are small integers, the mean divides by 2,
+  # the learning rate is 0.125), and a tensor is SINGLE-float by default
+  # (torch::*default-element-type*, .kb/torch.md) and prints at its stored width,
+  # so the printed arrays are byte-identical on all four backends. The last two lines pin the broadcasting
   # adjoint (a scalar bias against a vector activation) and the masked-softmax
   # backward at exactly-representable values.
   - name: torch-fit-cross-backend
@@ -4381,11 +4382,11 @@ cases:
             (print (torch:grad s)))))
       (ci-torch-fit)
     expected: |
-      #d(1.999890012666583)
+      #f(1.9998901)
       T
       3.0
-      #d((1.0 0.0) (0.5 0.5))
-      #d((0.0 0.0) (-0.25 0.25))
+      #f((1.0 0.0) (0.5 0.5))
+      #f((0.0 0.0) (-0.25 0.25))
   # The torch nn module layer: a torch:linear with its parameters replaced by exact
   # values (torch:set-field), the parameter walk over a torch:sequential holding a
   # plain function and a dropout, mode switching (eval-mode dropout is the
@@ -4462,12 +4463,12 @@ cases:
     expected: |
       :LINEAR
       2
-      #d((2.25 -0.5) (1.25 -0.5))
-      #d((1.5 1.5) (3.0 3.0))
-      #d(2.0 2.0)
+      #f((2.25 -0.5) (1.25 -0.5))
+      #f((1.5 1.5) (3.0 3.0))
+      #f(2.0 2.0)
       NIL
       (NIL NIL)
-      #d((2.0 0.0) (0.0 0.0))
+      #f((2.0 0.0) (0.0 0.0))
       2
       3.0
       (T T)
@@ -4559,13 +4560,13 @@ cases:
       (ci-torch-optim)
     expected: |
       (:SGD T 1 0)
-      #d(0.75 1.5)
+      #f(0.75 1.5)
       1
       NIL
-      #d(0.4375)
+      #f(0.4375)
       (:ADAM 1 (0.9 0.999) T)
-      #d((1.0 2.0 3.0) (4.0 5.0 7.0))
-      #d(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
+      #f((1.0 2.0 3.0) (4.0 5.0 7.0))
+      #f(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
       #d(((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0)))
       ((6 0 5) (1 4 3) (2))
       ((A B) (C D) (E))
@@ -4576,18 +4577,23 @@ cases:
   # float rows are tolerance PREDICATES, like the Adam row above -- erf and gelu
   # ride exp, whose last digits differ on the WASM backends -- while the shapes,
   # the drawn indices and the field names are exact on all four, which is what
-  # makes a SAMPLED text reproducible across backends at all.
+  # makes a SAMPLED text reproducible across backends at all. Their tensors say
+  # :element-type 'double-float: the 1e-9 bound is inside single-float's own
+  # resolution, and these rows check the ARITHMETIC, not the default width -- the
+  # three cases above print it. TorchGradcheck pins itself the same way.
   - name: torch-gpt-cross-backend
     source: |
       (defun ci-torch-near (a b) (< (abs (- a b)) 1.0e-9))
       (defun ci-torch-gpt ()
         (print (list (ci-torch-near (aref (linalg:erf #(1.0)) 0) 0.842700792949715)
                      (ci-torch-near (aref (linalg:erf #(-6.5)) 0) -1.0)))
-        (let ((g (torch:gelu (torch:tensor '(-1.0 0.0 1.0)))))
+        (let ((g (torch:gelu (torch:tensor '(-1.0 0.0 1.0)
+                                           :element-type 'double-float))))
           (print (list (ci-torch-near (aref (torch:data g) 0) -0.15865525393145702)
                        (ci-torch-near (aref (torch:data g) 1) 0.0)
                        (ci-torch-near (aref (torch:data g) 2) 0.841344746068543))))
-        (let ((x (torch:tensor '(0.0) :requires-grad t)))
+        (let ((x (torch:tensor '(0.0) :requires-grad t
+                               :element-type 'double-float)))
           (torch:backward (torch:sum (torch:erf x)))
           (print (ci-torch-near (aref (torch:grad x) 0) 1.1283791670955126)))
         (let ((ln (torch:layer-norm 2)))
@@ -4603,7 +4609,7 @@ cases:
                            (torch:multinomial (linalg:from-list '((1.0 1.0 1.0 1.0)))
                                               :num-samples 4)))
                      (function <)))
-        (let* ((a (torch:parameter '(3.0 4.0)))
+        (let* ((a (torch:parameter '(3.0 4.0) :element-type 'double-float))
                (o (torch:adamw (list a) :lr 0.1 :weight-decay 0.5)))
           (torch:backward (torch:sum (torch:mul a a)))
           (print (list (torch:optimizer-kind o)
@@ -4612,7 +4618,7 @@ cases:
           (torch:step o)
           (print (list (ci-torch-near (aref (torch:data a) 0) 2.750000001666667)
                        (ci-torch-near (aref (torch:data a) 1) 3.70000000125))))
-        (let* ((b (torch:parameter '(1.0)))
+        (let* ((b (torch:parameter '(1.0) :element-type 'double-float))
                (o (torch:adam (list b) :lr 0.1 :weight-decay 0.5)))
           (torch:backward (torch:sum (torch:mul b b)))
           (torch:step o)
@@ -4655,7 +4661,7 @@ cases:
                        (if (member s (list s)) t nil)))))
       (ci-torch-records)
     expected: |
-      #<TENSOR #d(1.0 2.0) :REQUIRES-GRAD T>
+      #<TENSOR #f(1.0 2.0) :REQUIRES-GRAD T>
       #<TENSOR 0.5>
       #<TENSOR 0.5>|#<TENSOR 0.5>
       (#<TENSOR 0.5>)

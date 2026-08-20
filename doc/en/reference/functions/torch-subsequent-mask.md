@@ -11,5 +11,5 @@ Like [`torch:padding-mask`](torch-padding-mask.md) it is a raw linalg array. Fil
 (defparameter *scores* (torch:tensor (linalg:ones '(1 2 2))))
 (torch:data (torch:softmax (torch:masked-fill *scores* (torch:subsequent-mask 2) (/ -1.0 0.0))
                            :axis -1))
-; => #d(((1.0 0.0) (0.5 0.5)))
+; => #f(((1.0 0.0) (0.5 0.5)))
 ```

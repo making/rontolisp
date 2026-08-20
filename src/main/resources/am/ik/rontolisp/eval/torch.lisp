@@ -39,6 +39,16 @@
 
 (defparameter torch::*grad-enabled* t)
 
+;; The packed-array width every torch value is ORIGINATED at: single-float (#f),
+;; PyTorch's own default dtype (torch.float32). linalg:'s default stays double
+;; (#d, numpy's float64) -- only torch: flips, and only where a width is minted
+;; from nothing: the nine call sites listed in .kb/torch.md read this variable,
+;; and every other torch value INHERITS its width from an operand, because the
+;; linalg transforms are width-polymorphic. Never assigned, only read (and
+;; let-rebindable, the way torch:no-grad rebinds *grad-enabled*), so a whole
+;; model can be built in double by binding it to 'double-float.
+(defparameter torch::*default-element-type* 'single-float)
+
 ;; --- the tensor record -------------------------------------------------------
 
 (defun torch::%t-print (tn stream)
@@ -71,8 +81,8 @@
 (defun torch::%t-as-data (x element-type)
   ;; x coerced to tensor data: a number becomes the double scalar, a list goes
   ;; through linalg:from-list (a flat list or a list of equal-length rows), and
-  ;; an array becomes a fresh packed copy -- preserving its width by default,
-  ;; converted when :element-type is given.
+  ;; an array becomes a fresh packed copy -- converted to element-type, or
+  ;; preserving its own width when element-type is nil.
   (cond ((numberp x) (* x 1.0))
         ((consp x) (linalg:from-list x :element-type element-type))
         ((and (arrayp x) (not (stringp x)))
@@ -83,11 +93,15 @@
              (linalg:add x 0.0)))
         (t (error "torch: tensor expects a number, a list or an array"))))
 
-(defun torch:tensor (x &key requires-grad element-type)
+(defun torch:tensor
+    (x &key requires-grad (element-type torch::*default-element-type*))
   ;; A fresh LEAF tensor from a number, a list, an array, a linalg array or
   ;; another tensor (whose data is copied). :requires-grad t marks it as a
-  ;; parameter whose gradient torch:backward should fill in; :element-type
-  ;; 'single-float builds packed single-float (#f) data.
+  ;; parameter whose gradient torch:backward should fill in. The data is built
+  ;; at torch::*default-element-type* -- single-float (#f), like torch.float32
+  ;; -- whatever width the source array had; :element-type 'double-float builds
+  ;; #d instead, and an explicit :element-type nil PRESERVES a source array's
+  ;; own width.
   (let ((src (if (torch:tensorp x) (torch::%t-data x) x)))
     (torch::%t-new (torch::%t-as-data src element-type) nil
                    (if requires-grad t nil) nil nil)))
@@ -1121,10 +1135,12 @@
         ((functionp m) (apply m args))
         (t (error "torch: forward expects a module or a function"))))
 
-(defun torch:parameter (x &key element-type)
+(defun torch:parameter (x &key (element-type torch::*default-element-type*))
   ;; A leaf tensor with :requires-grad t -- the spelling that marks a value as a
   ;; trainable parameter of a module. A field holding a tensor WITHOUT
-  ;; requires-grad is a buffer instead: torch:parameters skips it.
+  ;; requires-grad is a buffer instead: torch:parameters skips it. Its width is
+  ;; torch:tensor's: torch::*default-element-type* unless :element-type says
+  ;; otherwise.
   (torch:tensor x :requires-grad t :element-type element-type))
 
 (defun torch::%m-collect (v acc)
@@ -1209,11 +1225,13 @@
   (let* ((bound (/ 1.0 (sqrt (* 1.0 in-features))))
          (w
           (torch:parameter
-           (linalg:uniform (- bound) bound (list in-features out-features))))
+           (linalg:uniform (- bound) bound (list in-features out-features)
+                           :element-type torch::*default-element-type*)))
          (b
           (if bias
               (torch:parameter
-               (linalg:uniform (- bound) bound (list out-features)))
+               (linalg:uniform (- bound) bound (list out-features)
+                               :element-type torch::*default-element-type*))
               nil)))
     (torch:module :linear (list :weight w :bias b)
                   (function torch::%m-linear-forward))))
@@ -1238,7 +1256,9 @@
   ;; returns them with the embedding axis appended; a row selected twice
   ;; accumulates both gradients (torch:index-select's adjoint).
   (let ((w
-         (torch:parameter (linalg:randn (list num-embeddings embedding-dim)))))
+         (torch:parameter
+          (linalg:randn (list num-embeddings embedding-dim)
+                        :element-type torch::*default-element-type*))))
     (torch:module :embedding (list :weight w)
                   (function torch::%m-embedding-forward))))
 
@@ -1277,8 +1297,14 @@
   ;; eps hyper-parameter. The variance uses the (n - 0) divisor, and the whole
   ;; expression is composed from torch ops, so the normalization itself is
   ;; differentiable -- the gradient flows through the mean and the variance too.
-  (let ((g (torch:parameter (linalg:ones (list d-model))))
-        (b (torch:parameter (linalg:zeros (list d-model)))))
+  (let ((g
+         (torch:parameter
+          (linalg:ones (list d-model)
+                       :element-type torch::*default-element-type*)))
+        (b
+         (torch:parameter
+          (linalg:zeros (list d-model)
+                        :element-type torch::*default-element-type*))))
     (torch:module :layer-norm (list :weight g :bias b :eps eps)
                   (function torch::%m-layer-norm-forward))))
 
@@ -1289,9 +1315,13 @@
   (let ((p (torch:field self :p)) (tx (torch::%t-wrap x)))
     (if (or (null (torch::%m-training self)) (<= p 0))
         tx
-        (torch:mul tx
-                   (linalg:div (linalg:greater (linalg:rand (torch:shape tx)) p)
-                               (- 1.0 p))))))
+        (let ((mask
+               (linalg:rand (torch:shape tx)
+                            :element-type torch::*default-element-type*)))
+          ;; The mask is built at torch's own width: paired with the activations
+          ;; at a DIFFERENT width the multiply below declines every --simd
+          ;; kernel (.kb/torch.md).
+          (torch:mul tx (linalg:div (linalg:greater mask p) (- 1.0 p)))))))
 
 (defun torch:dropout (p)
   ;; A dropout layer (nn.Dropout) with drop probability p, in the single field
@@ -1708,7 +1738,9 @@
     (do ((p rows (cdr p)))
         ((null p))
       (let ((n (length (car p)))) (when (> n w) (setq w n))))
-    (let ((out (linalg:full (list b w) (* 1.0 padding-value))))
+    (let ((out
+           (linalg:full (list b w) (* 1.0 padding-value)
+                        :element-type torch::*default-element-type*)))
       (do ((p rows (cdr p)) (i 0 (+ i 1)))
           ((null p))
         (do ((q (car p) (cdr q)) (j 0 (+ j 1)))

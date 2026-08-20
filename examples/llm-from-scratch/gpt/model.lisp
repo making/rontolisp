@@ -138,8 +138,14 @@
 
 (defun gpt-normal-init (parameter)
   ;; torch.nn.init.normal_(w, mean=0.0, std=0.02) over a parameter's own shape.
+  ;; :element-type 'single-float because torch: builds its tensors single-float
+  ;; (torch.float32): a raw linalg array handed to torch:set-data keeps its OWN
+  ;; width, and a double one here would leave every later kernel a mixed-width
+  ;; pair, which --simd declines.
   (torch:set-data parameter
-   (linalg:mul *init-std* (linalg:randn (torch:shape parameter)))))
+                  (linalg:mul *init-std*
+                              (linalg:randn (torch:shape parameter)
+                                            :element-type 'single-float))))
 
 (defun gpt-init-module (m)
   ;; The book's _init_weights, dispatched on torch:module-kind rather than on
@@ -152,13 +158,16 @@
            (gpt-normal-init (torch:field m :weight))
            (let ((b (torch:field m :bias)))
              (unless (null b)
-               (torch:set-data b (linalg:zeros (torch:shape b))))))
+               (torch:set-data b
+                (linalg:zeros (torch:shape b) :element-type 'single-float)))))
           ((eq kind :embedding) (gpt-normal-init (torch:field m :weight)))
           ((eq kind :layer-norm)
            (torch:set-data (torch:field m :weight)
-                           (linalg:ones (torch:shape (torch:field m :weight))))
+                           (linalg:ones (torch:shape (torch:field m :weight))
+                                        :element-type 'single-float))
            (torch:set-data (torch:field m :bias)
-            (linalg:zeros (torch:shape (torch:field m :bias))))))))
+                           (linalg:zeros (torch:shape (torch:field m :bias))
+                                         :element-type 'single-float))))))
 
 ;; --- generation --------------------------------------------------------------
 

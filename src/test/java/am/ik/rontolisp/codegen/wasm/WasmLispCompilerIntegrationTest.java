@@ -13375,7 +13375,7 @@ class WasmLispCompilerIntegrationTest {
 				(torch:no-grad
 				  (print (torch:requires-grad-p (torch:mul *w* 2))))
 				(print (torch:requires-grad-p (torch:mul *w* 2)))
-				""")).isEqualTo("#d(5.5 11.5)\n162.5\n#d(80.0 114.0)\n34.0\nNIL\nT");
+				""")).isEqualTo("#f(5.5 11.5)\n162.5\n#f(80.0 114.0)\n34.0\nNIL\nT");
 	}
 
 	@Test
@@ -13397,7 +13397,7 @@ class WasmLispCompilerIntegrationTest {
 				                                          (linalg:mul 0.125 (torch:grad *w*)))
 				                              :requires-grad t)))))
 				(print (torch:data *w*))
-				""")).isEqualTo("#d(1.999890012666583)");
+				""")).isEqualTo("#f(1.9998901)");
 	}
 
 	@Test
@@ -13428,6 +13428,16 @@ class WasmLispCompilerIntegrationTest {
 		// backends byte for byte.
 		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_EXPECTED);
+	}
+
+	@Test
+	void compileTorchElementTypes() throws Exception {
+		// TorchGradcheck.ELEMENT_TYPE_PROGRAM on the wasm-GC backend: the torch layers
+		// originate single-float arrays (TYPE_F32ARR) and every derived value keeps
+		// that width through forward and backward, while linalg stays double -- the
+		// same lines the interpreter and the JVM print.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_EXPECTED);
 	}
 
 	@Test

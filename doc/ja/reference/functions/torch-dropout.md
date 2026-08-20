@@ -6,6 +6,6 @@
 
 ```lisp
 (defparameter *drop* (torch:dropout 0.5))
-(torch:data (torch:forward (torch:eval *drop*) (torch:tensor '(1.0 2.0)))) ; => #d(1.0 2.0)
-(torch:data (torch:forward (torch:dropout 0) (torch:tensor '(1.0 2.0))))   ; => #d(1.0 2.0)
+(torch:data (torch:forward (torch:eval *drop*) (torch:tensor '(1.0 2.0)))) ; => #f(1.0 2.0)
+(torch:data (torch:forward (torch:dropout 0) (torch:tensor '(1.0 2.0))))   ; => #f(1.0 2.0)
 ```

@@ -10,6 +10,6 @@
 (defparameter *lin* (torch:linear 3 2))
 (torch:set-field *lin* :weight (torch:parameter '((1.0 0.0) (0.0 1.0) (1.0 1.0))))
 (torch:set-field *lin* :bias (torch:parameter '(0.5 -0.5)))
-(torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0)))))  ; => #d((4.5 4.5))
+(torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0)))))  ; => #f((4.5 4.5))
 (torch:shape (torch:forward *lin* (torch:tensor (linalg:ones '(2 4 3))))) ; => (2 4 2)
 ```

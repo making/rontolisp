@@ -6,5 +6,5 @@ Differentiable log-softmax (`linalg:log-softmax`, the numerically stable half of
 
 ```lisp
 (torch:data (torch:log-softmax (torch:tensor '(0.0 0.0))))
-; => #d(-0.6931471805599453 -0.6931471805599453)
+; => #f(-0.6931472 -0.6931472)
 ```

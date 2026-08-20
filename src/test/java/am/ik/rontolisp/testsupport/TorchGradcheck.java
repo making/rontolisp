@@ -1,19 +1,26 @@
 package am.ik.rontolisp.testsupport;
 
 /**
- * The three shared {@code torch} acceptance programs, run verbatim by the interpreter,
- * JVM and WASM test classes so all backends execute the identical source:
- * {@link #PROGRAM}, the table-driven gradient check, {@link #NN_TRAINING_PROGRAM}, the
- * nn-module training loop, and {@link #OPTIMIZER_PROGRAM}, the optimizer update rules
- * plus the training-loop plumbing.
+ * The shared {@code torch} acceptance programs, run verbatim by the interpreter, JVM and
+ * WASM test classes so all backends execute the identical source: {@link #PROGRAM}, the
+ * table-driven gradient check; {@link #NN_TRAINING_PROGRAM}, the nn-module training loop;
+ * {@link #OPTIMIZER_PROGRAM}, the optimizer update rules plus the training-loop plumbing;
+ * {@link #RECORD_PRINT_PROGRAM}, the records' printed form and identity semantics; and
+ * {@link #ELEMENT_TYPE_PROGRAM}, the single-float element width torch originates every
+ * array at.
  *
  * <p>
  * The gradient check: for every differentiable operation, the analytic gradient
  * {@code torch:backward} fills in must match central-difference numerical differentiation
  * of the forward pass to a relative tolerance. Each new differentiable op extends the
- * table with one {@code gc-check} row. The program prints one {@code name: ok} line per
- * row and {@code ALL-OK} at the end; a failing row prints the offending element's
- * analytic and numeric values instead, so the assertion error carries the diagnosis.
+ * table with one {@code gc-check} row. Every tensor the check builds says
+ * {@code :element-type 'double-float}, PINNING it to the wide type against
+ * {@code torch::*default-element-type*}'s single-float default: it central-differences at
+ * {@code eps 1e-4} against a {@code tol 1e-3} relative bound, and at f32 the subtraction
+ * would leave about three significant digits -- at or past that bound. The check verifies
+ * ADJOINTS, not the default dtype. The program prints one {@code name: ok} line per row
+ * and {@code ALL-OK} at the end; a failing row prints the offending element's analytic
+ * and numeric values instead, so the assertion error carries the diagnosis.
  */
 public final class TorchGradcheck {
 
@@ -25,11 +32,20 @@ public final class TorchGradcheck {
 			(defparameter *gc-failures* nil)
 			(defun gc-gref (g k)
 			  (if (numberp g) g (row-major-aref g k)))
+			(defun gc-wide (inputs)
+			  ;; The inputs as tensors of the WIDE type: this check central-differences
+			  ;; at eps 1e-4 against a 1e-3 relative bound, which is at or past what f32
+			  ;; leaves after the subtraction, and it verifies ADJOINTS rather than
+			  ;; torch::*default-element-type* (.kb/torch.md).
+			  (mapcar (lambda (x) (torch:tensor x :element-type 'double-float)) inputs))
 			(defun gc-check (name f inputs)
 			  ;; f: tensors -> a scalar tensor; inputs: raw linalg arrays.
 			  (let* ((eps 1.0e-4)
 			         (tol 1.0e-3)
-			         (ts (mapcar (lambda (x) (torch:tensor x :requires-grad t)) inputs))
+			         (ts (mapcar (lambda (x)
+			                       (torch:tensor x :requires-grad t
+			                                     :element-type 'double-float))
+			                     inputs))
 			         (out (apply f ts))
 			         (ok t))
 			    (torch:backward out)
@@ -42,9 +58,9 @@ public final class TorchGradcheck {
 			            ((>= k n))
 			          (let ((orig (row-major-aref x k)))
 			            (setf (row-major-aref x k) (+ orig eps))
-			            (let ((fp (torch:item (apply f (mapcar (function torch:tensor) inputs)))))
+			            (let ((fp (torch:item (apply f (gc-wide inputs)))))
 			              (setf (row-major-aref x k) (- orig eps))
-			              (let ((fm (torch:item (apply f (mapcar (function torch:tensor) inputs)))))
+			              (let ((fm (torch:item (apply f (gc-wide inputs)))))
 			                (setf (row-major-aref x k) orig)
 			                (let ((num (/ (- fp fm) (* 2 eps)))
 			                      (ana (if (null g) 0.0 (gc-gref g k))))
@@ -262,15 +278,64 @@ public final class TorchGradcheck {
 
 	/** The expected stdout of {@link #RECORD_PRINT_PROGRAM}. */
 	public static final String RECORD_PRINT_EXPECTED = """
-			#<TENSOR #d(1.0 2.0) :REQUIRES-GRAD T>
+			#<TENSOR #f(1.0 2.0) :REQUIRES-GRAD T>
 			#<TENSOR 0.5>
-			#<TENSOR #d(1.0 2.0) :REQUIRES-GRAD T>
+			#<TENSOR #f(1.0 2.0) :REQUIRES-GRAD T>
 			#<TENSOR 0.5>|#<TENSOR 0.5>
 			"#<TENSOR 0.5>"
 			(#<TENSOR 0.5>)
 			#<MODULE :LINEAR>
 			#<OPTIMIZER :SGD :STEP-COUNT 0>
 			(T T NIL NIL T)""";
+
+	/**
+	 * The element-width acceptance (todo-123 phase 0): a model built from
+	 * {@code torch:tensor} + {@code torch:embedding} + {@code torch:linear} +
+	 * {@code torch:layer-norm} + {@code torch:dropout} + {@code torch:pad-sequence}, run
+	 * through a full forward AND backward pass, printing the {@code array-element-type}
+	 * of every intermediate and every gradient. All of them must be {@code SINGLE-FLOAT}:
+	 * torch originates its arrays at {@code torch::*default-element-type*} and every
+	 * derived value inherits that width (`.kb/torch.md`). A missed origination site
+	 * prints one {@code DOUBLE-FLOAT} here instead of silently pairing two widths, which
+	 * every {@code --simd} kernel declines. The last line pins the other half of the
+	 * split: {@code linalg:}'s own default is still double.
+	 */
+	public static final String ELEMENT_TYPE_PROGRAM = """
+			(defun et (x) (if (arrayp x) (array-element-type x) 'number))
+			(linalg:seed 7)
+			(defparameter *et-emb* (torch:embedding 4 3))
+			(defparameter *et-lin* (torch:linear 3 2))
+			(defparameter *et-ln* (torch:layer-norm 2))
+			(defparameter *et-drop* (torch:dropout 0.5))
+			(defparameter *et-idx* (torch:pad-sequence '((0 1 2) (2 3))))
+			(defparameter *et-h1* (torch:forward *et-emb* *et-idx*))
+			(defparameter *et-h2* (torch:forward *et-lin* *et-h1*))
+			(defparameter *et-h3* (torch:forward *et-ln* *et-h2*))
+			(defparameter *et-h4* (torch:forward *et-drop* *et-h3*))
+			(defparameter *et-loss* (torch:sum (torch:mul *et-h4* *et-h4*)))
+			(torch:backward *et-loss*)
+			(print (list (et (torch:data (torch:tensor '(1.0 2.0))))
+			             (et (torch:data (torch:parameter '((1.0) (2.0)))))
+			             (et (torch:data (torch:tensor (linalg:zeros 2))))
+			             (et (torch:data *et-idx*))))
+			(print (list (et (torch:data *et-h1*)) (et (torch:data *et-h2*))
+			             (et (torch:data *et-h3*)) (et (torch:data *et-h4*))))
+			(print (list (et (torch:grad (torch:field *et-emb* :weight)))
+			             (et (torch:grad (torch:field *et-lin* :weight)))
+			             (et (torch:grad (torch:field *et-lin* :bias)))
+			             (et (torch:grad (torch:field *et-ln* :weight)))
+			             (et (torch:grad (torch:field *et-ln* :bias)))))
+			(print (list (et (linalg:zeros 2)) (et (linalg:randn '(2)))
+			             (et (torch:data (torch:tensor '(1.0)
+			                                           :element-type 'double-float)))))
+			""";
+
+	/** The expected stdout of {@link #ELEMENT_TYPE_PROGRAM}. */
+	public static final String ELEMENT_TYPE_EXPECTED = """
+			(SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT)
+			(SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT)
+			(SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT)
+			(DOUBLE-FLOAT DOUBLE-FLOAT DOUBLE-FLOAT)""";
 
 	/** The expected stdout of {@link #PROGRAM}: one ok line per row, then ALL-OK. */
 	public static final String EXPECTED = """
@@ -368,11 +433,19 @@ public final class TorchGradcheck {
 			    (unless (= (length got) (length want)) (setq ok nil))
 			    (oc-report name ok got)))
 			(defun oc-eq (name got want) (oc-report name (equal got want) got))
+			(defun oc-param (x)
+			  ;; A parameter of the WIDE type: the update rules below are checked against
+			  ;; hand-computed PyTorch values at a relative 1e-9, which is inside f32's
+			  ;; own resolution, so the rows that verify an optimizer's arithmetic pin the
+			  ;; width rather than loosen the tolerance (TorchGradcheck.PROGRAM does the
+			  ;; same). Everything after them -- topk, multinomial, pad-sequence, the
+			  ;; masks, the residual experiment -- keeps torch's single-float default.
+			  (torch:parameter x :element-type 'double-float))
 			(defun oc-sq (p) (torch:sum (torch:mul p p)))
 
 			;; --- SGD ---------------------------------------------------------------------
 			;; p = (1 2), grad of sum(p*p) = (2 4); lr 0.1 -> p - 0.1 * grad.
-			(defparameter *p* (torch:parameter '(1.0 2.0)))
+			(defparameter *p* (oc-param '(1.0 2.0)))
 			(defparameter *o* (torch:sgd (list *p*) :lr 0.1))
 			(oc-eq "sgd-kind" (torch:optimizer-kind *o*) :sgd)
 			(oc-eq "sgd-params" (length (torch:optimizer-params *o*)) 1)
@@ -384,13 +457,13 @@ public final class TorchGradcheck {
 			(torch:zero-grad *o*)
 			(oc-eq "zero-grad-optimizer" (torch:grad *p*) nil)
 			;; the same step with an L2 term: g = grad + 0.5 * p = (2.5 5.0) at p = (1 2).
-			(defparameter *pw* (torch:parameter '(1.0 2.0)))
+			(defparameter *pw* (oc-param '(1.0 2.0)))
 			(defparameter *ow* (torch:sgd (list *pw*) :lr 0.1 :weight-decay 0.5))
 			(torch:backward (oc-sq *pw*))
 			(torch:step *ow*)
 			(oc-num "sgd-weight-decay" *pw* '(0.75 1.5))
 			;; momentum 0.5 on q = 1, loss q*q: buf 2, 2.6, 2.38 -> q 0.8, 0.54, 0.302.
-			(defparameter *q* (torch:parameter '(1.0)))
+			(defparameter *q* (oc-param '(1.0)))
 			(defparameter *om* (torch:sgd (list *q*) :lr 0.1 :momentum 0.5))
 			(defparameter *qs* nil)
 			(dotimes (i 3)
@@ -400,13 +473,13 @@ public final class TorchGradcheck {
 			  (setq *qs* (cons (torch:item *q*) *qs*)))
 			(oc-num "sgd-momentum" (reverse *qs*) '(0.8 0.54 0.302))
 			;; a scalar parameter (data is a plain number, not an array)
-			(defparameter *s* (torch:parameter 3.0))
+			(defparameter *s* (oc-param 3.0))
 			(defparameter *os* (torch:sgd (list *s*) :lr 0.5))
 			(torch:backward (torch:mul *s* *s*))
 			(torch:step *os*)
 			(oc-num "sgd-scalar" *s* '(0.0))
 			;; a parameter no gradient reached is left alone
-			(defparameter *pu* (torch:parameter '(5.0)))
+			(defparameter *pu* (oc-param '(5.0)))
 			(defparameter *ou* (torch:sgd (list *pu*) :lr 1.0))
 			(torch:step *ou*)
 			(oc-num "sgd-no-grad" *pu* '(5.0))
@@ -415,7 +488,7 @@ public final class TorchGradcheck {
 			;; r = 1, loss r*r. t = 1: m = 0.2, v = 0.004, m/(1-b1) = 2, v/(1-b2) = 4,
 			;; step = lr * 2 / (2 + 1e-8) -- the fully bias-corrected first step, which is
 			;; what pins t = 1 rather than 0 or 2.
-			(defparameter *r* (torch:parameter '(1.0)))
+			(defparameter *r* (oc-param '(1.0)))
 			(defparameter *oa* (torch:adam (list *r*) :lr 0.1))
 			(defparameter *rs* nil)
 			(dotimes (i 3)
@@ -428,14 +501,14 @@ public final class TorchGradcheck {
 			(oc-eq "adam-step-count" (torch:step-count *oa*) 3)
 			(oc-eq "adam-betas" (torch:field *oa* :betas) '(0.9 0.999))
 			;; the learning rate is an ordinary field, so a schedule is torch:set-field
-			(defparameter *r2* (torch:parameter '(1.0)))
+			(defparameter *r2* (oc-param '(1.0)))
 			(defparameter *oa2* (torch:adam (list *r2*) :lr 0.1))
 			(torch:set-field *oa2* :lr 0.2)
 			(torch:backward (oc-sq *r2*))
 			(torch:step *oa2*)
 			(oc-num "adam-set-lr" *r2* '(0.800000001))
 			;; the L2 term rides the gradient: g = 2 + 0.5 * 1 = 2.5 at p = 1 (torch.optim.Adam)
-			(defparameter *r3* (torch:parameter '(1.0)))
+			(defparameter *r3* (oc-param '(1.0)))
 			(defparameter *oa3* (torch:adam (list *r3*) :lr 0.1 :weight-decay 0.5))
 			(torch:backward (oc-sq *r3*))
 			(torch:step *oa3*)
@@ -444,7 +517,7 @@ public final class TorchGradcheck {
 			;; --- AdamW -------------------------------------------------------------------
 			;; the SAME rule with the decay decoupled: p first shrinks to 1 - 0.1*0.5 = 0.95,
 			;; then takes the unmodified g = 2 Adam step (torch.optim.AdamW).
-			(defparameter *rw* (torch:parameter '(1.0)))
+			(defparameter *rw* (oc-param '(1.0)))
 			(defparameter *ow2* (torch:adamw (list *rw*) :lr 0.1 :weight-decay 0.5))
 			(torch:backward (oc-sq *rw*))
 			(torch:step *ow2*)
@@ -454,8 +527,8 @@ public final class TorchGradcheck {
 
 			;; --- gradient-norm clipping --------------------------------------------------
 			;; two parameters, grads (2) and (2 4): total norm sqrt(4 + 4 + 16) = sqrt(24).
-			(defparameter *c1* (torch:parameter '(1.0)))
-			(defparameter *c2* (torch:parameter '(1.0 2.0)))
+			(defparameter *c1* (oc-param '(1.0)))
+			(defparameter *c2* (oc-param '(1.0 2.0)))
 			(torch:backward (torch:add (oc-sq *c1*) (oc-sq *c2*)))
 			(defparameter *cn* (torch:clip-grad-norm (list *c1* *c2*) 1.0))
 			(oc-num "clip-grad-norm-returns" (list *cn*) '(4.898979485566356))
@@ -464,7 +537,7 @@ public final class TorchGradcheck {
 			        (append (oc-flat (torch:grad *c1*)) (oc-flat (torch:grad *c2*)))
 			        '(0.4082482071305467 0.4082482071305467 0.8164964142610934))
 			;; below max-norm nothing is touched, and the measured norm is still returned
-			(defparameter *c3* (torch:parameter '(1.0)))
+			(defparameter *c3* (oc-param '(1.0)))
 			(torch:backward (oc-sq *c3*))
 			(oc-num "clip-grad-norm-under" (list (torch:clip-grad-norm (list *c3*) 10.0)) '(2.0))
 			(oc-num "clip-grad-norm-unscaled" (torch:grad *c3*) '(2.0))

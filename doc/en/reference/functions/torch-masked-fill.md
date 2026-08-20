@@ -7,5 +7,5 @@ Differentiable masked fill (`torch.masked_fill` over `linalg:where`): the scalar
 ```lisp
 (torch:data (torch:masked-fill (torch:tensor '((1.0 2.0) (3.0 4.0)))
                                #2A((0 1) (0 0)) -1.0))
-; => #d((1.0 -1.0) (3.0 4.0))
+; => #f((1.0 -1.0) (3.0 4.0))
 ```

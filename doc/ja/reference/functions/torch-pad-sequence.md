@@ -8,6 +8,6 @@
 
 ```lisp
 (torch:data (torch:pad-sequence '((1 2 3) (4 5) (6))))
-; => #d((1.0 2.0 3.0) (4.0 5.0 0.0) (6.0 0.0 0.0))
+; => #f((1.0 2.0 3.0) (4.0 5.0 0.0) (6.0 0.0 0.0))
 (torch:shape (torch:pad-sequence '((1 2) (3)) :padding-value 9)) ; => (2 2)
 ```

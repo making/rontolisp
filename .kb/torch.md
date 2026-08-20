@@ -122,6 +122,120 @@ method -- so a tensor typed at the REPL echoes `#S(TORCH::%TENSOR ...)` while
 predates this change, and is why the doc pages show a `print` call plus its
 output block rather than a `; =>` value.
 
+## The element width: `torch::*default-element-type*` (todo-123 phase 0)
+
+**Invariant: every torch value is ORIGINATED at single-float (`#f`), and
+`linalg`'s own default stays double-float (`#d`).** PyTorch's default dtype is
+`torch.float32` and numpy's is `float64`, so each package mirrors the library it
+follows; `linalg::%la-make`'s `nil` -> double default is untouched.
+
+The width is carried by a `defparameter` in torch.lisp, read (never assigned) at
+each origination site, exactly as `torch::*grad-enabled*` carries gradient mode:
+
+```lisp
+(defparameter torch::*default-element-type* 'single-float)
+```
+
+This does not violate `%la-make`'s "literal `:element-type`" rule
+(`.kb/linalg.md`): that rule is about the two `make-array` calls INSIDE
+`%la-make`, which stay literal so every backend still picks `double[]`/`float[]`
+statically. `%la-make`'s own parameter has always been a runtime value.
+
+### Why a package default and not a literal per site
+
+A torch value gets its width in one of two ways. **Inherited** -- every
+`linalg:` transform is width-polymorphic (todo-097: `%la-etype` threads the
+input's width into `%la-make`), so a `#f` tensor stays `#f` through the whole
+forward AND backward pass, and `zeros-like`/`from-list`/`full`/`reshape` inside
+torch.lisp need no change at all. Or **originated** -- minted from nothing by a
+constructor that names no width. Only the second kind had to move, and if ONE of
+them is missed the model runs at MIXED widths, which is a decline condition for
+every `--simd` kernel (`.kb/linalg-simd.md`): the program silently falls back to
+the scalar defun everywhere, worse than either width consistently. The nine
+sites, all reading the variable:
+
+| function | what it originates |
+| --- | --- |
+| `torch:tensor` | the `:element-type` DEFAULT, applied by `torch::%t-as-data` to a number, a list, a general array or a packed one -- so `(torch:tensor (linalg:from-list ...))` CONVERTS a `#d` source instead of preserving it. An explicit `:element-type nil` restores the old preserve-the-source rule; `'double-float` builds `#d` |
+| `torch:parameter` | the same default, spelled again: it forwards `:element-type` to `torch:tensor`, so leaving it `nil` would defeat the default |
+| `torch:linear` | weight + bias, `linalg:uniform` (2 sites) |
+| `torch:embedding` | the table, `linalg:randn` |
+| `torch:layer-norm` | gain (`linalg:ones`) + bias (`linalg:zeros`) (2 sites) |
+| `torch:dropout` | the inverted-dropout MASK, `linalg:rand` -- multiplied element-wise against the activations, so a `#d` mask declines the hottest kernel in a training step |
+| `torch:pad-sequence` | the padded batch, `linalg:full` -- it builds tensor data directly through `torch::%t-new`, bypassing `%t-as-data` |
+
+The last two are NOT in todo-123's list of six; they are origination sites all
+the same, and dropout's is on the hot path. What deliberately stays `#d`:
+`torch::%t-indices` / `torch::%m-ce-indices` (`linalg:from-list` of INDEX
+vectors -- raw arrays, never an arithmetic operand, and `#d` holds every integer
+exactly), `torch:topk` / `torch:multinomial` (their results thread `%la-etype` of the
+input, so they already inherit; multinomial's internal `linalg:rand` draws are
+read one scalar at a time and never pair with anything), `torch:padding-mask` / `torch:subsequent-mask` (raw masks, reaching
+the data only through `linalg:where`, which is not intercepted and takes its
+result width from the value operands), and `torch::%o-buffers`' one-element
+buffer for a SCALAR parameter (whose data is a plain number, so nothing pairs
+with it).
+
+### The hazards
+
+- **Mixed widths in user code.** `(torch:add tn (linalg:ones ...))` now pairs
+  `#f` with `#d`: correct (the defun widens and keeps the first operand's width)
+  but slow. So does handing `torch:set-data` a raw `#d` array -- the in-place
+  replacement keeps whatever width it is given, which is exactly how
+  `examples/llm-from-scratch/gpt/model.lisp`'s `nn.init.normal_` port re-widened
+  a whole GPT until it said `:element-type 'single-float`. This is the
+  user-facing rule in `doc/{en,ja}/guides/neural-networks.md`.
+- **Sometimes the right answer is to KEEP the buffer double**, and the sinusoidal
+  positional encoding in `examples/llm-from-scratch/transformer/utils.lisp` is
+  the worked case: `chapter02/section3.lisp` asserts that two encoding rows' dot
+  product depends only on their offset to within 1e-6, which at d_model 128
+  (products near 64) is inside f32's own resolution -- built `#f` the example
+  printed `no` on three offsets. It stays `#d` and pays one declined broadcast
+  add per forward. Decide per buffer: an accuracy claim the example PRINTS beats
+  a kernel it does not measure.
+- **`TorchGradcheck` is pinned to `'double-float`** (`src/test/java/.../
+  testsupport/TorchGradcheck.java`): it central-differences at `eps 1e-4`
+  against `tol 1e-3` relative, and at f32 the subtraction leaves about three
+  significant digits, at or past the bound. It verifies ADJOINTS, not the
+  default dtype, so it says the width rather than loosening the tolerance.
+- **It became a speedup only once the stacked matmul was intercepted
+  (todo-467).** Measured on a DGX Spark (aarch64, 20 Grace cores, GraalVM 25)
+  with `train-gpt-soseki.lisp` under `--simd`, `#d` -> `#f`:
+
+  | | before todo-467 | after todo-467 |
+  |---|---|---|
+  | interpreter (median of 3) | 31.63 -> 31.63 s | 6.71 -> **6.53** s |
+  | JVM (min of 5, mostly startup) | 1.67 -> 1.81 s | 0.74 -> **0.70** s |
+  | JVM, `*max-steps*` 5000 (min of 5) | 7.26 -> 7.57 s | 4.59 -> **3.92** s |
+
+  Phase 0 ALONE was flat to a few percent worse, never faster, and the reason
+  was the one this file already named: a batched transformer spends its time in
+  the rank->=3 `%la-matmul-nd`, which no `--simd` path intercepted, and that
+  boxed defun is ~1.7x SLOWER at `#f` (warm, `(16 64 64)`: 6.15 vs 10.4 ms/call
+  on the JVM backend) because it widens on every read and narrows on every
+  store. Where a kernel IS intercepted the narrower width wins as advertised
+  (JVM `--simd`, n=256 `dot`: 2.50 -> 1.38 ms/call; the same `(16 64 64)` shape
+  once intercepted: 0.833 `#d` vs 0.500 `#f`). **Intercepting the stacked matmul
+  was the prerequisite for a torch workload to profit from `#f`, not the other
+  way round** -- phase 0 bought the right BASELINE for a `--gpu` measurement,
+  and todo-467 turned it into the speedup.
+- **Byte-identical output survives.** `train-gpt-soseki.lisp` prints the same
+  bytes at `#f` as at `#d` on all four backends and with/without `--simd` --
+  the losses are printed to four decimals, which absorbs the width. The width
+  IS visible underneath: the same forward pass answers `3.669992446899` at `#f`
+  against `3.669992437386` at `#d`.
+
+### Rebinding it
+
+`(let ((torch::*default-element-type* 'double-float)) ...)` around the model
+CONSTRUCTION builds the whole model in `#d`; there is no `with-dtype` macro and
+none is needed. VERIFIED on all three backends, including as the very first form
+of a program -- unlike `torch:no-grad`, which needed an `ensureTorchLoaded` seam
+before its expansion's `let` could bind `*grad-enabled*`, a hand-written `let`
+over this name reaches the library through the ordinary lazy load. The rebinding
+covers only what is ORIGINATED inside it, since everything else inherits, so it
+belongs around the model's construction, not around one forward pass.
+
 ## The two invariants of `backward`, and the adjoint table
 
 1. **Reverse topological order, computed explicitly.** `torch::%t-topo` is a
@@ -459,8 +573,8 @@ Three things it pins that nothing else does:
 - **speed is the binding constraint, not correctness.** A `d_model` 8 /
   1-block / 2-head model over an 8-pair corpus for 40 epochs is ~2 min on the
   plain interpreter and ~4 s on the JVM; the interpreter cost is dominated by
-  the rank-3 `%la-matmul-nd` the `--simd` section below still lists as the
-  standing interceptor candidate. Anything larger does not fit the examples
+  the rank-3 `%la-matmul-nd`, which `--simd` intercepts since todo-467 (the
+  `--simd` interpreter leg of `chapter02/section5.lisp` is 40.9 -> 5.4 s). Anything larger does not fit the examples
   harness's 240 s per-leg cap, which is why the example documents the book's
   shapes and tests shrunken ones.
 
@@ -511,10 +625,12 @@ described in its own section above; what the port adds beyond them:
 torch bottoms out in LITERAL `linalg:` calls with literal keywords (the
 `compiler.LinalgKernelCallLayout` pattern-match contract), so a torch program is
 accelerated under `--simd` exactly where linalg is -- for free, with no torch-
-specific interceptor. The standing candidate remains the one `.kb/linalg.md`
-records: the rank->=3 stacked `%la-matmul-nd` (what a transformer forward pass
-spends its time in) is not intercepted on any path; measure before adding an
-interceptor, and if one lands, torch inherits it without change. `--no-gc` is
+specific interceptor. That now includes the shape a transformer forward pass
+spends its time in: the rank->=3 stacked `%la-matmul-nd` is intercepted on all
+three `--simd` backends since todo-467, and torch inherited it without a line
+of torch-side change, which is the point of bottoming out in literal `linalg:`
+calls. `linalg:erf` (behind the exact `torch:gelu`) is the one remaining gap,
+todo-468. `--no-gc` is
 unsupported (torch needs arrays, like linalg): a torch program is rejected
 there long before any `defstruct` is reached -- measured, the error is
 `LINALG::%LA-MAKE: lambda-list keywords ... are not supported with --no-gc` --

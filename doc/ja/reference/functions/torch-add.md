@@ -6,6 +6,6 @@ numpy スタイルのブロードキャストを伴う、微分可能な要素�
 
 ```lisp
 (torch:data (torch:add (torch:tensor '((1.0 2.0) (3.0 4.0))) (torch:tensor '(10.0 20.0))))
-; => #d((11.0 22.0) (13.0 24.0))
-(torch:data (torch:add (torch:tensor '(1.0 2.0)) 0.5)) ; => #d(1.5 2.5)
+; => #f((11.0 22.0) (13.0 24.0))
+(torch:data (torch:add (torch:tensor '(1.0 2.0)) 0.5)) ; => #f(1.5 2.5)
 ```

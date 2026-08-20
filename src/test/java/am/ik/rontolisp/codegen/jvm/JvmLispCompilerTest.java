@@ -10979,15 +10979,16 @@ class JvmLispCompilerTest {
 				(torch:no-grad
 				  (print (torch:requires-grad-p (torch:mul *w* 2))))
 				(print (torch:requires-grad-p (torch:mul *w* 2)))
-				""")).isEqualTo("#d(5.5 11.5)\n162.5\n#d(80.0 114.0)\n34.0\nNIL\nT");
+				""")).isEqualTo("#f(5.5 11.5)\n162.5\n#f(80.0 114.0)\n34.0\nNIL\nT");
 	}
 
 	@Test
 	void compileAndRunTorchTrainingLoopWithNoGrad() throws Exception {
 		// Fit y = 2x by gradient descent on the MSE: ten forward/backward/update
-		// steps, the update inside torch:no-grad. Every quantity stays an exact
-		// dyadic rational in double, so the printed result is byte-identical on
-		// every backend (also the ci-spec torch-fit-cross-backend case).
+		// steps, the update inside torch:no-grad. The tensors are single-float
+		// (torch's default width, .kb/torch.md), and a #f element prints at its
+		// stored width, so the printed result is byte-identical on every backend
+		// (also the ci-spec torch-fit-cross-backend case).
 		assertThat(compileAndRunTorch("""
 				(defparameter *w* (torch:tensor '(0.0) :requires-grad t))
 				(defparameter *x* (torch:tensor '(1.0 2.0)))
@@ -11001,7 +11002,7 @@ class JvmLispCompilerTest {
 				                                          (linalg:mul 0.125 (torch:grad *w*)))
 				                              :requires-grad t)))))
 				(print (torch:data *w*))
-				""")).isEqualTo("#d(1.999890012666583)");
+				""")).isEqualTo("#f(1.9998901)");
 	}
 
 	@Test
@@ -11034,6 +11035,17 @@ class JvmLispCompilerTest {
 		// pin eq/eql/member on a record instance.
 		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchElementTypes() throws Exception {
+		// TorchGradcheck.ELEMENT_TYPE_PROGRAM: torch originates every array at
+		// torch::*default-element-type* (single-float), and the width is inherited
+		// through a full forward and backward pass, while linalg keeps its double
+		// default. Compiled, the packed representation is picked statically, so a
+		// missed origination site shows up as a DOUBLE-FLOAT line here.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_EXPECTED);
 	}
 
 	@Test

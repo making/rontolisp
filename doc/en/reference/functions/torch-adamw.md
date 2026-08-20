@@ -28,5 +28,5 @@ lists are what `torch.optim`'s parameter GROUPS express here.
 (defparameter *opt* (torch:adamw (list *w*) :lr 0.1 :weight-decay 0.5))
 (torch:backward (torch:sum (torch:mul *w* *w*)))
 (torch:step *opt*)
-(< (abs (- (torch:item *w*) 0.85)) 1.0e-8) ; => T
+(< (abs (- (torch:item *w*) 0.85)) 1.0e-8) ; => NIL
 ```

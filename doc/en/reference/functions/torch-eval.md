@@ -7,5 +7,5 @@ Puts the module and every submodule into **evaluation** mode (PyTorch's `nn.Modu
 ```lisp
 (defparameter *drop* (torch:dropout 0.5))
 (torch:training-p (torch:eval *drop*))                          ; => NIL
-(torch:data (torch:forward *drop* (torch:tensor '(1.0 2.0))))   ; => #d(1.0 2.0)
+(torch:data (torch:forward *drop* (torch:tensor '(1.0 2.0))))   ; => #f(1.0 2.0)
 ```

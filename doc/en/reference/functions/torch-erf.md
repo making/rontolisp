@@ -11,5 +11,5 @@ approximation of the forward approximation.
 (defparameter *x* (torch:tensor '(0.0) :requires-grad t))
 (torch:backward (torch:sum (torch:erf *x*)))
 (< (abs (- (torch:item (torch:tensor (torch:grad *x*))) 1.1283791670955126))
-   1.0e-12)                              ; => T
+   1.0e-12)                              ; => NIL
 ```

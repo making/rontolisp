@@ -10112,7 +10112,7 @@ class LispEvaluatorTest {
 				      (torch:grad *t*)
 				      (torch:data (torch:tensor #(1 2) :element-type 'single-float)))
 				""");
-		assertThat(result.print()).isEqualTo("((2 2) #d((1.0 2.0) (3.0 4.0)) T T NIL 2.5 NIL NIL #f(1.0 2.0))");
+		assertThat(result.print()).isEqualTo("((2 2) #f((1.0 2.0) (3.0 4.0)) T T NIL 2.5 NIL NIL #f(1.0 2.0))");
 		assertThatThrownBy(() -> eval("(torch:data 5)")).hasMessageContaining("torch: expected a tensor");
 		assertThatThrownBy(() -> eval("(torch:item (torch:tensor '(1.0 2.0)))"))
 			.hasMessageContaining("torch: item expects a one-element tensor");
@@ -10135,7 +10135,7 @@ class LispEvaluatorTest {
 				(list (torch:requires-grad-p *y*) (torch:requires-grad-p *z*)
 				      (torch:requires-grad-p *d*) *g1* *g2* (torch:grad *w*))
 				""");
-		assertThat(result.print()).isEqualTo("(NIL T NIL #d(3.0 3.0) #d(5.0 7.0) NIL)");
+		assertThat(result.print()).isEqualTo("(NIL T NIL #f(3.0 3.0) #f(5.0 7.0) NIL)");
 		assertThatThrownBy(() -> eval("(torch:backward (torch:tensor '(1.0 2.0)))"))
 			.hasMessageContaining("torch: backward expects a scalar (one-element) tensor");
 	}
@@ -10158,7 +10158,7 @@ class LispEvaluatorTest {
 				(list (torch:grad *e*) (torch:data *att*) (torch:grad *sc*))
 				""");
 		assertThat(result.print())
-			.isEqualTo("(#d((2.0 2.0) (1.0 1.0)) #d((1.0 0.0) (0.5 0.5))" + " #d((0.0 0.0) (-0.25 0.25)))");
+			.isEqualTo("(#f((2.0 2.0) (1.0 1.0)) #f((1.0 0.0) (0.5 0.5))" + " #f((0.0 0.0) (-0.25 0.25)))");
 	}
 
 	@Test
@@ -10191,7 +10191,7 @@ class LispEvaluatorTest {
 				      *modes* (torch:training-p *inner*)
 				      (torch:data (torch:forward (function torch:relu) (torch:tensor '(-1.0 2.0)))))
 				""");
-		assertThat(result.print()).isEqualTo("(T NIL :OUTER 3 #d(2.0 5.0) (NIL NIL) T #d(0.0 2.0))");
+		assertThat(result.print()).isEqualTo("(T NIL :OUTER 3 #f(2.0 5.0) (NIL NIL) T #f(0.0 2.0))");
 		assertThatThrownBy(() -> eval("(torch:field (torch:sequential) :nope)"))
 			.hasMessageContaining("torch: no such field");
 		assertThatThrownBy(() -> eval("(torch:parameters (torch:tensor 1.0))"))
@@ -10231,8 +10231,8 @@ class LispEvaluatorTest {
 				      (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0) (0.0 0.0)))
 				                                            #(0 1) :ignore-index 1)))
 				""");
-		assertThat(result.print()).isEqualTo("(#d((4.5 4.5)) (2 4 2) #d((4.0 5.0) (0.0 1.0)) (2 2 2) #d((-1.0 1.0))"
-				+ " #d(1.0 2.0) #d(1.0 2.0) 2.5 5.0 0.6931471805599453 0.6931471805599453)");
+		assertThat(result.print()).isEqualTo("(#f((4.5 4.5)) (2 4 2) #f((4.0 5.0) (0.0 1.0)) (2 2 2) #f((-1.0 1.0))"
+				+ " #f(1.0 2.0) #f(1.0 2.0) 2.5 5.0 0.6931471824645996 0.6931471824645996)");
 	}
 
 	@Test
@@ -10254,7 +10254,7 @@ class LispEvaluatorTest {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
 		evaluator.eval(LispReader.readFromString("(print (torch:tensor '(1.0 2.0)))"));
-		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo("#<TENSOR #d(1.0 2.0)>");
+		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo("#<TENSOR #f(1.0 2.0)>");
 	}
 
 	@Test
@@ -10270,6 +10270,24 @@ class LispEvaluatorTest {
 		}
 		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_EXPECTED);
+	}
+
+	@Test
+	void torchOriginatesEverySingleFloatWhileLinalgStaysDouble() {
+		// TorchGradcheck.ELEMENT_TYPE_PROGRAM, shared verbatim with the JVM and WASM
+		// backends: a model built from torch:tensor + torch:embedding + torch:linear +
+		// torch:layer-norm + torch:dropout + torch:pad-sequence is single-float after a
+		// full forward AND backward pass, and linalg's own default is still double. One
+		// missed origination site (.kb/torch.md) would print a DOUBLE-FLOAT here rather
+		// than quietly pairing two widths, which every --simd kernel declines.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_EXPECTED);
 	}
 
 	@Test

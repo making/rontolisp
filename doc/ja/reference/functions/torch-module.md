@@ -10,6 +10,6 @@ fields プロパティリストがモジュールのパラメータ登録その�
 (defparameter *scale*
   (torch:module :scale (list :gain (torch:parameter '(2.0 3.0)))
                 (lambda (self x) (torch:mul x (torch:field self :gain)))))
-(torch:data (torch:forward *scale* (torch:tensor '(1.0 10.0)))) ; => #d(2.0 30.0)
+(torch:data (torch:forward *scale* (torch:tensor '(1.0 10.0)))) ; => #f(2.0 30.0)
 (length (torch:parameters *scale*))                             ; => 1
 ```

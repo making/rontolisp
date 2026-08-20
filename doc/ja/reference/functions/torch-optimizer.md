@@ -16,6 +16,6 @@
 (defparameter *opt* (torch:optimizer :my-sgd (list *p*) (list :lr 0.5) (function scaled-step)))
 (torch:backward (torch:sum (torch:mul *p* *p*)))
 (torch:step *opt*)
-(torch:data *p*)             ; => #d(0.0 0.0)
+(torch:data *p*)             ; => #f(0.0 0.0)
 (torch:optimizer-kind *opt*) ; => :MY-SGD
 ```

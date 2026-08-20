@@ -17,6 +17,6 @@ param <- param - lr * (momentum が 0 でなければ buf、そうでなけれ�
 (defparameter *opt* (torch:sgd (list *p*) :lr 0.125))
 (torch:backward (torch:sum (torch:mul *p* *p*)))
 (torch:step *opt*)
-(torch:data *p*)        ; => #d(0.75 1.5)
+(torch:data *p*)        ; => #f(0.75 1.5)
 (torch:field *opt* :lr) ; => 0.125
 ```

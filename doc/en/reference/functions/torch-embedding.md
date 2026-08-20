@@ -8,6 +8,6 @@ Returns an embedding table (PyTorch's `nn.Embedding`): the single field `:weight
 (defparameter *emb* (torch:embedding 4 2))
 (torch:set-field *emb* :weight
                  (torch:parameter '((0.0 1.0) (2.0 3.0) (4.0 5.0) (6.0 7.0))))
-(torch:data (torch:forward *emb* #(2 0)))            ; => #d((4.0 5.0) (0.0 1.0))
+(torch:data (torch:forward *emb* #(2 0)))            ; => #f((4.0 5.0) (0.0 1.0))
 (torch:shape (torch:forward *emb* #2A((1 2) (3 0)))) ; => (2 2 2)
 ```

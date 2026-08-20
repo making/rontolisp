@@ -2,7 +2,7 @@
 
 `torch` パッケージは [linalg](linear-algebra.md) の上に載る PyTorch スタイルのレイヤーです。どう計算されたかを記憶する**テンソル**と、その履歴を逆向きに辿って勾配を書き込む `torch:backward` からなります。手書きの誤差逆伝播が行っていたこと -- どの配列がどこに流れたかの追跡、演算ごとの随伴の導出、ブロードキャスト軸での勾配の合計 -- が、演算ひとつずつ自動で行われます。
 
-パッケージは Lisp ソースで一度だけ実装され、すべてのバックエンドで同一に動作します。各演算は `linalg` カーネルを通じて計算するため、torch プログラムは [`--simd`](simd-acceleration.md) でそのまま加速され、数値結果も linalg の結果そのものです。どれだけ速くなるかはモデルがどのカーネルに依存するかで変わります。ランク 3 以上のバッチ行列積はまだ加速対象に入っていないため、attention 層がほぼその呼び出しで占められる Transformer は、素の多層パーセプトロンに比べて恩恵がかなり小さくなります。[linalg の加速](simd-acceleration.md#accelerating-linalg) を参照してください。
+パッケージは Lisp ソースで一度だけ実装され、すべてのバックエンドで同一に動作します。各演算は `linalg` カーネルを通じて計算するため、torch プログラムは [`--simd`](simd-acceleration.md) でそのまま加速され、数値結果も linalg の結果そのものです。ランク 3 以上のバッチ行列積も加速対象に入っているため、attention 層がほぼその呼び出しで占められる Transformer も、素の多層パーセプトロンと同じだけ恩恵を受けます。[linalg の加速](simd-acceleration.md#accelerating-linalg) を参照してください。
 
 ## テンソル
 
@@ -10,18 +10,32 @@
 
 ```lisp
 (defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))
-(torch:data *w*)             ; => #d(1.0 2.0)
+(torch:data *w*)             ; => #f(1.0 2.0)
 (torch:shape *w*)            ; => (2)
 (torch:requires-grad-p *w*)  ; => T
 (torch:item (torch:tensor 2.5)) ; => 2.5
 ```
 
-演算はテンソル、数値、生の配列、リストを区別なく受け取ります。テンソル以外は勾配の流れない定数になります:
+演算はテンソル、数値、生の配列、リストを区別なく受け取ります。テンソル以外は勾配の流れない定数になります。生の配列はそのまま使われ、要素幅も元のままです。上のテンソルが `#f` なのに下の積が `#d` になるのはそのためです ([要素幅](#element-width-single-float) を参照):
 
 ```lisp
-(torch:data (torch:add *w* 10))                        ; => #d(11.0 12.0)
+(torch:data (torch:add *w* 10))                        ; => #f(11.0 12.0)
 (torch:data (torch:matmul #2A((1.0 2.0) (3.0 4.0)) *w*)) ; => #d(5.0 11.0)
 ```
+
+## 要素幅: single-float
+
+テンソルのデータはパックされた **single-float** (`#f`) です。PyTorch の既定 dtype である `torch.float32` に合わせています。一方 `linalg` 自身のコンストラクタは numpy に合わせて double-float (`#d`) のままです。torch が何もないところから作る値はすべてこの幅になり (`torch:tensor`、`torch:parameter`、および `torch:linear`、`torch:embedding`、`torch:layer-norm` が持つ重み)、テンソルから計算された値は計算元の幅を引き継ぎます。したがって forward と backward のパス全体が single のまま流れます。桁が必要な場面では `torch:tensor` や `torch:parameter` に `:element-type 'double-float` を渡せば広い型になり、`:element-type nil` は元の配列の幅をそのまま保ちます。
+
+**テンソルと出会う linalg 配列は `:element-type 'single-float` で作ってください。** 幅が混ざった組でも答えは正しく出ます (演算は広い方に合わせ、第 1 オペランドの幅を保ちます) が、[`--simd`](simd-acceleration.md) のカーネルはそれをすべて辞退するため、演算はスカラーループに落ち、モデル全体が加速を失います:
+
+```lisp
+(defparameter *t* (torch:tensor '(1.0 2.0)))
+(torch:data (torch:mul *t* (linalg:ones '(2) :element-type 'single-float))) ; => #f(1.0 2.0)
+(array-element-type (torch:data *t*))                                       ; => SINGLE-FLOAT
+```
+
+同じことが `torch:set-data` に渡す生の配列にも当てはまります (パラメータのデータをそのまま置き換えるので、渡された幅がそのまま残ります。`torch.nn.init` 風の初期化はこの形です)。activation に後から足す生のバッファ (位置エンコーディングやマスク表) も同様です。狭い幅の数値的な代償については [single-float の精度](linear-algebra.md#single-float-precision) を参照してください。
 
 ## 記録と backward パス
 
@@ -31,14 +45,14 @@
 (defparameter *loss* (torch:sum (torch:mul *w* *w*)))
 (torch:item *loss*)  ; => 5.0
 (torch:backward *loss*)
-(torch:grad *w*)     ; => #d(2.0 4.0)
+(torch:grad *w*)     ; => #f(2.0 4.0)
 ```
 
 勾配は backward の呼び出しをまたいで蓄積 (`+=`) されます。これはミニバッチのループが求める動作で、ステップの間は `torch:zero-grad` でスロットをクリアします:
 
 ```lisp
 (torch:backward (torch:sum (torch:mul *w* 3.0)))
-(torch:grad *w*)                    ; => #d(5.0 7.0)
+(torch:grad *w*)                    ; => #f(5.0 7.0)
 (torch:grad (torch:zero-grad *w*))  ; => NIL
 ```
 
@@ -50,7 +64,7 @@
 (defparameter *b* (torch:tensor '(0.5 0.5) :requires-grad t))
 (defparameter *y* (torch:add (torch:tensor '((1.0 2.0) (3.0 4.0))) *b*))
 (torch:backward (torch:sum *y*))
-(torch:grad *b*) ; => #d(2.0 2.0)
+(torch:grad *b*) ; => #f(2.0 2.0)
 ```
 
 ## テープの外に出る
@@ -80,7 +94,7 @@
       (setq *wf* (torch:tensor (linalg:sub (torch:data *wf*)
                                            (linalg:mul 0.125 (torch:grad *wf*)))
                                :requires-grad t)))))
-(torch:data *wf*) ; => #d(1.999890012666583)
+(torch:data *wf*) ; => #f(1.9998901)
 ```
 
 ## モジュール
@@ -92,7 +106,7 @@
   (torch:module :scale (list :gain (torch:parameter (linalg:ones (list n))))
                 (lambda (self x) (torch:mul x (torch:field self :gain)))))
 (defparameter *scale* (scale-layer 2))
-(torch:data (torch:forward *scale* (torch:tensor '(3.0 4.0)))) ; => #d(3.0 4.0)
+(torch:data (torch:forward *scale* (torch:tensor '(3.0 4.0)))) ; => #f(3.0 4.0)
 (length (torch:parameters *scale*))                            ; => 1
 ```
 
@@ -116,7 +130,7 @@
 (defparameter *lin* (torch:linear 3 2))
 (torch:set-field *lin* :weight (torch:parameter '((1.0 0.0) (0.0 1.0) (1.0 1.0))))
 (torch:set-field *lin* :bias (torch:parameter '(0.5 -0.5)))
-(torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0))))) ; => #d((4.5 4.5))
+(torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0))))) ; => #f((4.5 4.5))
 ```
 
 `torch:sequential` は引数を各要素に順番に通します。要素はモジュールでも**素の関数**でもよく、これが活性化関数専用のモジュール型を持たない理由であり、reshape を連鎖の中に置ける理由でもあります:
@@ -139,10 +153,10 @@
 ```lisp
 (torch:item (torch:mse-loss (torch:tensor '(1.0 2.0)) '(0.0 0.0))) ; => 2.5
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0))) #(0)))
-; => 0.6931471805599453
+; => 0.6931471824645996
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0)))
                                       (torch:tensor '((0.5 0.5)))))
-; => 0.6931471805599453
+; => 0.6931471824645996
 ```
 
 リストのターゲットは常にクラスインデックスとして読むため、確率で渡すにはテンソルか配列が必要です。one-hot の分布と対応するインデックスは同じ損失になります。
@@ -156,7 +170,7 @@
 (defparameter *opt* (torch:sgd (list *p*) :lr 0.125 :momentum 0.5))
 (torch:backward (torch:sum (torch:mul *p* *p*)))
 (torch:step *opt*)
-(torch:data *p*)         ; => #d(0.75 1.5)
+(torch:data *p*)         ; => #f(0.75 1.5)
 (torch:step-count *opt*) ; => 1
 ```
 
@@ -221,8 +235,8 @@
 
 ```lisp
 (defparameter *tokens* (torch:pad-sequence '((1 2 3) (4 5))))
-(torch:data *tokens*)         ; => #d((1.0 2.0 3.0) (4.0 5.0 0.0))
-(torch:padding-mask *tokens*) ; => #d(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
+(torch:data *tokens*)         ; => #f((1.0 2.0 3.0) (4.0 5.0 0.0))
+(torch:padding-mask *tokens*) ; => #f(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
 (torch:subsequent-mask 3)     ; => #d(((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0)))
 ```
 
@@ -237,7 +251,7 @@
 (defparameter *att* (torch:softmax
                      (torch:masked-fill *sc* #2A((0 1) (0 0)) (/ -1.0 0.0))
                      :axis 1))
-(torch:data *att*) ; => #d((1.0 0.0) (0.5 0.5))
+(torch:data *att*) ; => #f((1.0 0.0) (0.5 0.5))
 ```
 
 ## 実例

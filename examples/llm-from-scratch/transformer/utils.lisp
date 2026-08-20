@@ -23,6 +23,14 @@
   ;;
   ;;   pe[pos, 2i]     = sin(pos / 10000^(2i / d_model))
   ;;   pe[pos, 2i + 1] = cos(pos / 10000^(2i / d_model))
+  ;;
+  ;; The table stays DOUBLE (linalg's default) deliberately, where a torch
+  ;; tensor would be single-float: chapter02/section3.lisp checks that two rows'
+  ;; dot product depends only on their offset to within 1e-6, and at this width
+  ;; (d_model 128, dot products near 64) that bound is inside f32's own
+  ;; resolution. The cost is that adding this buffer to single-float activations
+  ;; is a MIXED-width pair, which --simd declines -- one broadcast add per
+  ;; forward, which is the trade this example makes for the book's claim.
   (let ((pe (linalg:zeros (list sequence-length d-model))))
     (dotimes (pos sequence-length)
       (do ((i 0 (+ i 2)))

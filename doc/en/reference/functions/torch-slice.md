@@ -6,5 +6,5 @@ Differentiable numpy basic slicing (`linalg:slice`: one spec per axis -- `nil` l
 
 ```lisp
 (torch:data (torch:slice (torch:tensor '((0.0 1.0 2.0) (3.0 4.0 5.0))) '(nil (0 2))))
-; => #d((0.0 1.0) (3.0 4.0))
+; => #f((0.0 1.0) (3.0 4.0))
 ```

@@ -13,11 +13,11 @@
 
 ```lisp
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0))) #(0)))
-; => 0.6931471805599453
+; => 0.6931471824645996
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0) (0.0 0.0)))
                                       #(0 1) :ignore-index 1))
-; => 0.6931471805599453
+; => 0.6931471824645996
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0)))
                                       (torch:tensor '((0.5 0.5)))))
-; => 0.6931471805599453
+; => 0.6931471824645996
 ```

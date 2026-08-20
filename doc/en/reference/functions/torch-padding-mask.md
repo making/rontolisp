@@ -8,6 +8,6 @@ The result is a **raw linalg array**, not a tensor: a mask is a constant, and [`
 
 ```lisp
 (defparameter *tokens* (torch:pad-sequence '((1 2 3) (4 5))))
-(torch:padding-mask *tokens*)                ; => #d(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
+(torch:padding-mask *tokens*)                ; => #f(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
 (linalg:shape (torch:padding-mask *tokens*)) ; => (2 1 3)
 ```

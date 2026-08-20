@@ -6,5 +6,5 @@ Differentiable axis-0 slice selection (`linalg:take-rows`) -- the embedding look
 
 ```lisp
 (torch:data (torch:index-select (torch:tensor '((1.0 2.0) (3.0 4.0))) #(1 0 1)))
-; => #d((3.0 4.0) (1.0 2.0) (3.0 4.0))
+; => #f((3.0 4.0) (1.0 2.0) (3.0 4.0))
 ```

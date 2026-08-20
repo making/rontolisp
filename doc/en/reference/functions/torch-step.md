@@ -11,6 +11,6 @@ The update writes each parameter's data in place with no torch operation, so it 
 (defparameter *opt* (torch:sgd (list *p*) :lr 0.5))
 (torch:backward (torch:sum (torch:mul *p* *p*)))
 (torch:step *opt*)
-(torch:data *p*)         ; => #d(0.0)
+(torch:data *p*)         ; => #f(0.0)
 (torch:step-count *opt*) ; => 1
 ```

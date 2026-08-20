@@ -6,5 +6,5 @@
 
 ```lisp
 (torch:data (torch:stack (list (torch:tensor '(1.0 2.0)) (torch:tensor '(3.0 4.0)))))
-; => #d((1.0 2.0) (3.0 4.0))
+; => #f((1.0 2.0) (3.0 4.0))
 ```

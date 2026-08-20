@@ -7,6 +7,6 @@ Differentiable matrix product with `torch.matmul`'s rank rules: two vectors give
 ```lisp
 (torch:data (torch:matmul (torch:tensor '((1.0 2.0) (3.0 4.0)))
                           (torch:tensor '((5.0 6.0) (7.0 8.0)))))
-; => #d((19.0 22.0) (43.0 50.0))
+; => #f((19.0 22.0) (43.0 50.0))
 (torch:item (torch:matmul (torch:tensor '(1.0 2.0)) (torch:tensor '(3.0 4.0)))) ; => 11.0
 ```

@@ -7,7 +7,7 @@
 ```lisp
 (defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))
 (torch:backward (torch:sum (torch:mul *w* *w*)))
-(torch:grad *w*)              ; => #d(2.0 4.0)
+(torch:grad *w*)              ; => #f(2.0 4.0)
 (torch:grad (torch:zero-grad *w*)) ; => NIL
 
 (defparameter *lin* (torch:linear 2 2))

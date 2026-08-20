@@ -8,5 +8,5 @@
 
 ```lisp
 (torch:data (torch:forward (torch:layer-norm 2 :eps 0.0)
-                           (torch:tensor '((1.0 3.0)))))  ; => #d((-1.0 1.0))
+                           (torch:tensor '((1.0 3.0)))))  ; => #f((-1.0 1.0))
 ```

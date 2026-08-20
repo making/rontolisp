@@ -8,6 +8,6 @@
 (defparameter *p* (torch:parameter '(1.0 2.0)))
 (torch:no-grad
   (torch:set-data *p* (linalg:mul 2.0 (torch:data *p*))))
-(torch:data *p*)             ; => #d(2.0 4.0)
+(torch:data *p*)             ; => #f(2.0 4.0)
 (torch:requires-grad-p *p*)  ; => T
 ```

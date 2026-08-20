@@ -2,7 +2,7 @@
 
 The `torch` package is a PyTorch-style layer over [linalg](linear-algebra.md): a **tensor** that remembers how it was computed, and a `torch:backward` that walks that history in reverse to fill in gradients. Everything a hand-written backpropagation pass used to do -- tracking which arrays fed which, deriving each operation's adjoint, summing gradients over broadcast axes -- happens automatically, one operation at a time.
 
-The package is implemented once in Lisp source and behaves identically on every backend. Every operation computes through the `linalg` kernels, so a torch program is accelerated under [`--simd`](simd-acceleration.md) for free, and the numerical results are the linalg results. How much the flag buys depends on which kernels a model leans on: batched (rank 3 or more) matmul is not in the accelerated set yet, so a transformer -- whose attention layers are almost entirely that call -- gains far less from it than a plain multilayer perceptron does. See [Accelerating linalg](simd-acceleration.md#accelerating-linalg).
+The package is implemented once in Lisp source and behaves identically on every backend. Every operation computes through the `linalg` kernels, so a torch program is accelerated under [`--simd`](simd-acceleration.md) for free, and the numerical results are the linalg results. Batched (rank 3 or more) matmul is in the accelerated set, so a transformer -- whose attention layers are almost entirely that call -- gains from the flag as much as a plain multilayer perceptron does. See [Accelerating linalg](simd-acceleration.md#accelerating-linalg).
 
 ## Tensors
 
@@ -10,18 +10,32 @@ The package is implemented once in Lisp source and behaves identically on every 
 
 ```lisp
 (defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))
-(torch:data *w*)             ; => #d(1.0 2.0)
+(torch:data *w*)             ; => #f(1.0 2.0)
 (torch:shape *w*)            ; => (2)
 (torch:requires-grad-p *w*)  ; => T
 (torch:item (torch:tensor 2.5)) ; => 2.5
 ```
 
-Operations accept tensors, numbers, raw arrays and lists interchangeably; non-tensors become constants that no gradient flows to:
+Operations accept tensors, numbers, raw arrays and lists interchangeably; non-tensors become constants that no gradient flows to. A raw array is used as it stands, keeping its own element width -- which is why the product below comes out `#d` while the tensor above is `#f` (see [Element width](#element-width-single-float)):
 
 ```lisp
-(torch:data (torch:add *w* 10))                        ; => #d(11.0 12.0)
+(torch:data (torch:add *w* 10))                        ; => #f(11.0 12.0)
 (torch:data (torch:matmul #2A((1.0 2.0) (3.0 4.0)) *w*)) ; => #d(5.0 11.0)
 ```
+
+## Element width: single-float
+
+Tensor data is packed **single-float** (`#f`), mirroring PyTorch's `torch.float32` default -- while `linalg`'s own constructors stay double-float (`#d`), mirroring numpy. Everything torch builds from nothing takes that width (`torch:tensor`, `torch:parameter`, and the weights inside `torch:linear`, `torch:embedding` and `torch:layer-norm`), and every value computed from a tensor inherits the width it was computed from, so a whole forward and backward pass stays single. `:element-type 'double-float` on `torch:tensor` or `torch:parameter` builds the wide type where the extra digits matter; `:element-type nil` keeps a source array's own width.
+
+**Build any linalg array that is going to meet a tensor with `:element-type 'single-float`.** A mixed-width pair still computes the right answer -- the operation widens and keeps the first operand's width -- but every [`--simd`](simd-acceleration.md) kernel declines it, so the operation falls back to the scalar loop and the whole model loses the acceleration:
+
+```lisp
+(defparameter *t* (torch:tensor '(1.0 2.0)))
+(torch:data (torch:mul *t* (linalg:ones '(2) :element-type 'single-float))) ; => #f(1.0 2.0)
+(array-element-type (torch:data *t*))                                       ; => SINGLE-FLOAT
+```
+
+The same applies to a raw array handed to `torch:set-data`, which replaces a parameter's data verbatim and keeps whatever width it is given -- the way a `torch.nn.init`-style initializer is written -- and to a raw buffer (a positional encoding, a mask table) that is later added to activations. See [Single-float precision](linear-algebra.md#single-float-precision) for what the narrower width costs numerically.
 
 ## Recording and the backward pass
 
@@ -31,14 +45,14 @@ An operation whose operand participates in autograd records the operation on a t
 (defparameter *loss* (torch:sum (torch:mul *w* *w*)))
 (torch:item *loss*)  ; => 5.0
 (torch:backward *loss*)
-(torch:grad *w*)     ; => #d(2.0 4.0)
+(torch:grad *w*)     ; => #f(2.0 4.0)
 ```
 
 Gradients accumulate across backward calls (`+=`), which is what a mini-batch loop wants; `torch:zero-grad` clears a tensor's slot between steps:
 
 ```lisp
 (torch:backward (torch:sum (torch:mul *w* 3.0)))
-(torch:grad *w*)                    ; => #d(5.0 7.0)
+(torch:grad *w*)                    ; => #f(5.0 7.0)
 (torch:grad (torch:zero-grad *w*))  ; => NIL
 ```
 
@@ -50,7 +64,7 @@ Elementwise operations broadcast like numpy, and the backward pass reduces each 
 (defparameter *b* (torch:tensor '(0.5 0.5) :requires-grad t))
 (defparameter *y* (torch:add (torch:tensor '((1.0 2.0) (3.0 4.0))) *b*))
 (torch:backward (torch:sum *y*))
-(torch:grad *b*) ; => #d(2.0 2.0)
+(torch:grad *b*) ; => #f(2.0 2.0)
 ```
 
 ## Staying off the tape
@@ -80,7 +94,7 @@ Gradient descent needs nothing beyond what is above: a forward pass building the
       (setq *wf* (torch:tensor (linalg:sub (torch:data *wf*)
                                            (linalg:mul 0.125 (torch:grad *wf*)))
                                :requires-grad t)))))
-(torch:data *wf*) ; => #d(1.999890012666583)
+(torch:data *wf*) ; => #f(1.9998901)
 ```
 
 ## Modules
@@ -92,7 +106,7 @@ A **module** owns parameters, composes, and has a forward pass. `torch:module` b
   (torch:module :scale (list :gain (torch:parameter (linalg:ones (list n))))
                 (lambda (self x) (torch:mul x (torch:field self :gain)))))
 (defparameter *scale* (scale-layer 2))
-(torch:data (torch:forward *scale* (torch:tensor '(3.0 4.0)))) ; => #d(3.0 4.0)
+(torch:data (torch:forward *scale* (torch:tensor '(3.0 4.0)))) ; => #f(3.0 4.0)
 (length (torch:parameters *scale*))                            ; => 1
 ```
 
@@ -116,7 +130,7 @@ The walk descends into submodules **and into lists of them**, and deduplicates b
 (defparameter *lin* (torch:linear 3 2))
 (torch:set-field *lin* :weight (torch:parameter '((1.0 0.0) (0.0 1.0) (1.0 1.0))))
 (torch:set-field *lin* :bias (torch:parameter '(0.5 -0.5)))
-(torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0))))) ; => #d((4.5 4.5))
+(torch:data (torch:forward *lin* (torch:tensor '((1.0 2.0 3.0))))) ; => #f((4.5 4.5))
 ```
 
 `torch:sequential` threads its argument through each element, and an element may be a module **or a plain function** -- which is why there is no activation-module type, and why a reshape can sit in a chain:
@@ -139,10 +153,10 @@ The activations are [`torch:relu`](../reference/functions/torch-relu.md), [`torc
 ```lisp
 (torch:item (torch:mse-loss (torch:tensor '(1.0 2.0)) '(0.0 0.0))) ; => 2.5
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0))) #(0)))
-; => 0.6931471805599453
+; => 0.6931471824645996
 (torch:item (torch:cross-entropy-loss (torch:tensor '((0.0 0.0)))
                                       (torch:tensor '((0.5 0.5)))))
-; => 0.6931471805599453
+; => 0.6931471824645996
 ```
 
 A LIST target is always class indices, so the probability spelling needs a tensor or an array; a one-hot distribution and the matching index give the same loss.
@@ -156,7 +170,7 @@ An **optimizer** owns the update rule and its state. `torch:sgd`, `torch:adam` a
 (defparameter *opt* (torch:sgd (list *p*) :lr 0.125 :momentum 0.5))
 (torch:backward (torch:sum (torch:mul *p* *p*)))
 (torch:step *opt*)
-(torch:data *p*)         ; => #d(0.75 1.5)
+(torch:data *p*)         ; => #f(0.75 1.5)
 (torch:step-count *opt*) ; => 1
 ```
 
@@ -221,8 +235,8 @@ There is no `Dataset`/`DataLoader` hierarchy: a batch is an ordinary list. `torc
 
 ```lisp
 (defparameter *tokens* (torch:pad-sequence '((1 2 3) (4 5))))
-(torch:data *tokens*)         ; => #d((1.0 2.0 3.0) (4.0 5.0 0.0))
-(torch:padding-mask *tokens*) ; => #d(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
+(torch:data *tokens*)         ; => #f((1.0 2.0 3.0) (4.0 5.0 0.0))
+(torch:padding-mask *tokens*) ; => #f(((0.0 0.0 0.0)) ((0.0 0.0 1.0)))
 (torch:subsequent-mask 3)     ; => #d(((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0)))
 ```
 
@@ -237,7 +251,7 @@ Both masks are **raw linalg arrays** -- a mask carries no gradient -- shaped to 
 (defparameter *att* (torch:softmax
                      (torch:masked-fill *sc* #2A((0 1) (0 0)) (/ -1.0 0.0))
                      :axis 1))
-(torch:data *att*) ; => #d((1.0 0.0) (0.5 0.5))
+(torch:data *att*) ; => #f((1.0 0.0) (0.5 0.5))
 ```
 
 ## A worked example
