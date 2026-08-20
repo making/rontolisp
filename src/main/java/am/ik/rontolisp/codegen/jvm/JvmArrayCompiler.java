@@ -342,16 +342,34 @@ final class JvmArrayCompiler {
 	}
 
 	static void compileElementType(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		// (array-element-type array): the list (unsigned-byte n) for a packed integer
-		// vector, double-float/single-float for a packed float array, else t. Only used
-		// when the program uses a packed representation; otherwise array-element-type
-		// expands to the lite (progn array t). _ivElementType delegates the non-long[]
-		// case to _fvElementType when both gates are on.
+		// (array-element-type array): a string answers character (a string is a vector of
+		// characters, the one character type); otherwise the list (unsigned-byte n) for a
+		// packed integer vector, double-float/single-float for a packed float array, else
+		// t.
+		// Only used when the program uses a packed representation; otherwise
+		// array-element-type
+		// expands to the lite (if (stringp array) 'character t). The string check runs
+		// before
+		// the helper so a string never reaches the packed dispatch; _ivElementType
+		// delegates
+		// the non-long[] case to _fvElementType when both gates are on.
 		List<LispVal> args = cons.toList();
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("array-element-type expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		int tempSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(tempSlot);
+		// a string answers character; the synthesized name is unspelled (real run-time
+		// data, and character is also a function name)
+		JvmStringpCompiler.emitStringpCheck(ctx, tempSlot);
+		int branchPos = ctx.code.size();
+		ctx.emit(Opcode.IFNONNULL);
+		ctx.emitU2(0);
+		// not a string: the packed/general dispatch
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
 		if (ctx.usesIntArray) {
 			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.ELEMENT_TYPE,
 					JvmIntArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
@@ -360,6 +378,14 @@ final class JvmArrayCompiler {
 			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE,
 					JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
 		}
+		int gotoPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		int characterPos = ctx.code.size();
+		JvmEmitHelper.compileUnspelledLiteral(LispNames.CHARACTER_TYPE, ctx);
+		int endPos = ctx.code.size();
+		JvmEmitHelper.patchBranch(ctx, branchPos, characterPos);
+		JvmEmitHelper.patchBranch(ctx, gotoPos, endPos);
 	}
 
 	static void compileArrayAlike(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

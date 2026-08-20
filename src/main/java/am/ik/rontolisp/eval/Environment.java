@@ -1169,6 +1169,12 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispIntVector iv) {
 				return iv.elementTypeSpec();
 			}
+			// A string is a vector of characters, so its element type is the one
+			// character type (the same answer vectorp/length/aref give for a string);
+			// without this arm requireArray below would reject the string.
+			if (args.get(0) instanceof LispString) {
+				return new LispSymbol(LispNames.CHARACTER_TYPE);
+			}
 			requireArray(LispNames.ARRAY_ELEMENT_TYPE, args.get(0));
 			return new LispSymbol("T");
 		}));

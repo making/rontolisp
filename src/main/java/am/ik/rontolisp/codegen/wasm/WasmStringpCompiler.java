@@ -36,16 +36,30 @@ final class WasmStringpCompiler {
 		int tmpSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		emitStringpI32(ctx, tmpSlot);
+		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	/**
+	 * Pushes an i32: 1 when the value in {@code slot} is a string -- a quote-framed
+	 * {@code TYPE_STRING} (a symbol's name shares the struct without the frame) or a
+	 * charvec {@code TYPE_CELL} (the mutable character vector) -- 0 otherwise. The same
+	 * shape decision {@link #compile} renders as a bool, split out so the
+	 * {@code array-element-type} lowering can branch on it and answer {@code character}
+	 * for a string without re-rendering the value into a fresh immutable string.
+	 * @param ctx the compilation context
+	 * @param slot the local holding the value to test
+	 */
+	static void emitStringpI32(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.IF, Type.I32.code());
 		// A string struct is a string only when quote-framed (a symbol's name shares
 		// TYPE_STRING without the frame).
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		WasmEmitHelper.emitStrBytesArray(ctx);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
@@ -54,21 +68,18 @@ final class WasmStringpCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(34); // '"'
 		ctx.writer.write(Instruction.I32_EQ);
-		WasmEmitHelper.emitBoolFromI32(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.IF, Type.I32.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		WasmEmitHelper.emitCharvecPCall(ctx);
-		WasmEmitHelper.emitBoolFromI32(ctx);
 		ctx.writer.write(Instruction.ELSE);
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
