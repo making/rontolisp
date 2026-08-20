@@ -308,10 +308,11 @@ Only reductions move, and exactly as todo-106 already specified for `vec:`.
 
   | n=512, ms/call | scalar + f64 acc (the old kernel) | F2D lanes + f64 acc (wasm's old way) | f32 lanes + f32 acc (today) | the f64 kernel |
   |---|---|---|---|---|
-  | aarch64 / NEON (M4; f32 4 lanes, f64 2) | 39 | **7477** | **10.4** | 19.5 |
+  | aarch64 / NEON, NVIDIA GB10 Grace (f32 4 lanes, f64 2) | 39.0 | **7477** | **10.4** | 19.5 |
+  | aarch64 / NEON, Apple M4 Max (f32 4 lanes, f64 2) | 35.9 | **4474** | **9.7** | 18.1 |
   | x86-64 / AVX (f32 8 lanes, f64 4) | 33.3 | 52.1 | **22.8** | 47.1 |
 
-  On NEON `convert(F2D)` has no intrinsic at all -- 190x slower than the scalar loop it
+  On NEON `convert(F2D)` has no intrinsic at all -- 125-190x slower than the scalar loop it
   would replace -- and the scalar f64-accumulator kernel left `#f` matmul **2x slower than
   `#d`**, the one member where the narrower width lost. On x86-64 the conversion IS
   intrinsified and the old kernel was already ahead of `#d`, so the symptom does not
