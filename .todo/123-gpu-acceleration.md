@@ -1,6 +1,7 @@
 # `--gpu`: a second orthogonal acceleration flag, over the same call sites as `--simd`
 
-**Status:** spiked 2026-08-20 on an NVIDIA GB10 and it works. This file replaces the
+**Status:** spiked 2026-08-20 on an NVIDIA GB10 and it works; spiked the same day on an
+Apple M4 Max, where it works too but says something different. This file replaces the
 2026-07-13 draft, which was written before `torch:` existed and before anything had
 been measured on real hardware. Difficulty: High.
 
@@ -41,6 +42,13 @@ both came out better than feared.
    this flag cannot claim near-parity. And the win is an **f32** win: on this device
    fp64 runs at 1/44 of fp32 throughput, while `linalg`'s default width is
    double-float.
+5. **The same three answers hold on Apple, and a fourth one lands on top.** Metal is
+   reachable by pure FFM too (`objc_msgSend`, no Swift shim), it survives native-image,
+   and its runtime MSL compiler needs no toolchain at all -- so sections 1 and 2 carry
+   over unchanged. What does NOT carry over is the kernel: MSL has no `double`, the
+   per-call floor is 5x higher, and Apple ships two tuned libraries in the OS that beat
+   a hand-written kernel outright. The Metal section below is the whole story, and it
+   is the section that changes what phases 1-4 should build on that platform.
 
 ## What was measured
 
@@ -73,10 +81,17 @@ For scale, the plain Java triple loop (the shape of the scalar `%la-matmul` defu
 JIT-warm only at the small end): n=512 142 ms, n=1024 1246 ms, n=2048 16.3 s.
 
 Two things to read out of that table. The f32 column is where the GPU actually is --
-`--simd` is SLOWER at f32 than f64 (39.8 vs 21.2 ms at n=512) while the GPU is 2.8x
-FASTER, so the width that costs the CPU path is the one the device wants. And the
+`--simd` was SLOWER at f32 than f64 (39.8 vs 21.2 ms at n=512) while the GPU is 2.8x
+FASTER, so the width that cost the CPU path was the one the device wants. And the
 crossover is far lower than the draft guessed, because what `--gpu` has to beat at
 small n is not raw CPU FLOPs but rontolisp's own per-call overhead.
+
+**Both `--simd` columns are PRE-todo-469 and the f32 one is now roughly 2x optimistic.**
+`5a3e8f16` gave the f32 matmul kernel its lanes, and on the Apple machine that halved the
+same column (n=512 f32: 41.6 -> 11.4 ms). Nobody has re-run `matmul-baseline.lisp` on the
+GB10 since, so the CUDA crossover above is a lower bound on where the GPU starts winning,
+not a measurement -- re-run it there before quoting the f32 comparison. The GPU columns
+are unaffected; nothing about them depends on rontolisp.
 
 ### The fixed cost of an intercepted call
 
@@ -283,6 +298,12 @@ the `--simd` trio exactly:
 | JVM (`-o Prog.class --gpu`) | `codegen/jvm/JvmLinalgGpuCompiler` (call site) | an embedded bridge template |
 | wasm-GC / `--no-gc` | **out of scope** -- no FFM | -- |
 
+The interceptors are platform-agnostic; `am.ik.gpu` is where the platform split lives, and
+it has two of them (CUDA driver API on Linux/Windows, Metal + MPS through `objc_msgSend` on
+macOS) behind one availability probe that must answer "no device" without throwing on
+either. Neither half is a dependency: `libcuda.so.1` comes with the NVIDIA driver, and
+`Metal.framework` / `MetalPerformanceShaders.framework` come with macOS.
+
 Dependency direction stays legal: `eval -> am.ik.gpu`, `codegen.jvm -> am.ik.gpu`, and
 `am.ik.gpu -> nothing`.
 
@@ -299,33 +320,187 @@ accept that `-o Prog.class --gpu` produces output that is no longer standalone. 
 a real departure from how every other flag behaves, so the default assumption is the
 template -- but decide it deliberately, in phase 2, with the blob size measured.
 
-### Metal: designed, NOT spiked
+### Metal: spiked 2026-08-20 on an Apple M4 Max
 
-No Apple Silicon was available, so everything here is a sketch with its risks named,
-and phase 5 starts by validating it -- do not treat it as settled.
+The 2026-07-13 sketch has now been run. Machine: Apple M4 Max (40 GPU cores, Metal 4,
+unified memory), macOS 26.3.1, Oracle GraalVM 25.0.3, **no Xcode installed**. Probes are
+the `Mtl*` files in `.todo/123-gpu-acceleration/`; the README there has every number
+verbatim. Three of the sketch's four claims survived, one was wrong in our favour, and the
+measurements then found two things the sketch had no way to anticipate.
 
-- **Runtime compilation is built into the OS.** `newLibraryWithSource:options:error:`
-  compiles MSL at runtime, so Metal needs no shipped binary blob and no toolchain --
-  the equivalent of the PTX story, and arguably simpler.
-- **Everything else is Objective-C.** `MTLCreateSystemDefaultDevice()` is a plain C
-  entry point in `Metal.framework`, but from there it is `objc_msgSend` on
-  `libobjc.A.dylib`, one FFM downcall handle per distinct signature. Feasible; more
-  fiddly than CUDA by a wide margin.
-- **The reference library in `../silicon/` does NOT do this** -- `silicon-metal` calls
-  into a Swift shim (`silicon-metal/native/src/*.swift`) built per platform. That is
-  exactly the bundled-native-artifact we cannot have, which is why `--gpu` must go the
-  `objc_msgSend` route rather than port silicon's Metal backend.
-- Read `../silicon/` for the CUDA side too: `silicon-cuda` is pure FFM against
-  `libcuda.so.1` and its `Bindings.java` (a C-prototype-string -> `FunctionDescriptor`
-  parser) is a genuinely nice idea worth stealing. Its NVRTC-at-runtime and Slang
-  cross-compilation choices are the ones we are deliberately not taking.
+**What the sketch got right.**
+
+- **Pure FFM reaches Metal, and the Swift shim really is avoidable.** `Mtl.java` is 11
+  distinct `objc_msgSend` signatures plus `MTLCreateSystemDefaultDevice`, and that is the
+  whole binding -- device, runtime compile, pipelines, buffers, encoders, dispatch. No
+  bundled dylib, no toolchain, no dependency, so section 1 of the verdict holds on Apple
+  exactly as it does on CUDA. Two mechanical rules make it work and both bite immediately
+  if broken: call `objc_msgSend` through a NON-variadic descriptor matching the selector
+  (Apple's own arm64 rule), and give any selector returning `MTLSize` the 24-byte struct
+  descriptor -- calling `maxThreadsPerThreadgroup` as a long is an instant SIGBUS.
+- **Runtime compilation is better than the PTX story, not merely equal to it.**
+  `newLibraryWithSource:options:error:` compiled MSL on a machine with no Xcode and no
+  `xcrun metal`, because the compiler is in the OS. 32 ms the first time ever, **2.3-3.0
+  ms on every later process** (the OS caches across processes, the way the NVIDIA driver
+  caches PTX), 0.1 ms for the same source twice in one process. So there is no build-time
+  artifact to generate, check in, or pin to a virtual architecture -- the MSL text is just
+  a string constant. The real startup cost is `MTLCreateSystemDefaultDevice` at 12-15 ms,
+  which is what the availability probe pays.
+- **It survives native-image.** `MtlNiProbe` built with `-H:+VectorAPISupport` and ran the
+  kernel with the same result as the JVM, so Metal does not re-enter todo-102's
+  `VectorAPISupport` / `SharedArenaSupport` fight either. The recipe is identical to the
+  CUDA one; the agent-generated `foreign.downcalls` just gains a two-`MTLSize`-by-value
+  entry for `dispatchThreadgroups:threadsPerThreadgroup:`.
+
+**What was wrong: `--gpu` on Apple is f32 by LANGUAGE, not by economics.**
+
+MSL rejects `double` outright -- `error: 'double' is not supported in Metal` -- while
+`half`, `bfloat` and 64-bit int all compile. On CUDA, fp64 is 44x slower than fp32 and the
+argument for phase 0 is that a `--gpu` seeing only `#d` arrays wastes 44/45ths of the
+device. On Apple there is no fp64 path to waste: an `#d` array can only DECLINE. That
+promotes phase 0 from "do this so the measurements are honest" to "do this or the flag is
+inert on Apple Silicon" -- and phase 0's own prerequisite landed on 2026-08-20, so nothing
+blocks it now. It also means the decline protocol -- already load-bearing -- is the only
+thing standing between a double-float `linalg` program and a compile error.
+
+**What the measurements added: the floor is per COMMAND BUFFER.**
+
+| | |
+| --- | --- |
+| encode a dispatch (no commit) | 4.0 us |
+| encode + `commit` + `waitUntilCompleted` | 81.1 us |
+| encode + `commit` + spin on `[cb status]` | 83.1 us |
+| full round trip, heap -> buffer -> kernel -> heap, 8x8 @ 8x8 | 105.0 us |
+| same, 32x32 @ 32x32 | 85.1 us |
+| same, 128x128 @ 128x128 | 87.5 us |
+
+~85 us, flat with size, **five times CUDA's 16-18 us**. Spinning on the status instead of
+blocking changes nothing, so there is no cheaper wait to go find: that is the round trip.
+But the cost is paid per command buffer, not per dispatch --
+
+| dispatches in ONE command buffer | 1 | 2 | 5 | 10 | 50 |
+| --- | --- | --- | --- | --- | --- |
+| us per dispatch | 98.8 | 52.2 | 24.5 | 16.9 | 8.8 |
+
+-- so batching is worth up to 10x and is the same mechanism residency needs. This is the
+one structural difference in the plan: on CUDA, residency is a memory optimization worth
+2-4x; on Apple it is ALSO how the submission floor gets amortized, and the residency probe
+separates the two:
+
+| n | resident, 1 cmdbuf | resident, 5 cmdbufs | per-op round trip |
+| --- | --- | --- | --- |
+| 128 | 0.169 ms | 0.615 ms (3.6x) | 0.596 ms (3.5x) |
+| 512 | 0.405 ms | 0.850 ms (2.1x) | 1.118 ms (2.8x) |
+| 1024 | 2.271 ms | 2.766 ms (1.2x) | 3.697 ms (1.6x) |
+
+Read the middle column: at n=128 five separate submissions cost as much as five full
+round trips WITH their host copies. On unified memory the copies are nearly free and the
+submissions are the whole cost. A phase-3 design for Apple should therefore batch
+submissions even when it cannot keep data resident.
+
+**Where the crossover lands.** `--simd` on the JVM on the same machine, warm, 20 reps,
+against the Metal path including both copies:
+
+| n | `--simd` f64 | `--simd` f32 | metal f32 w/copy | metal f32 kernel |
+| --- | --- | --- | --- | --- |
+| 64 | 0.150 | **0.050** | 0.191 | 0.179 |
+| 128 | 0.550 | 0.300 | **0.217** | 0.201 |
+| 256 | 2.600 | 1.450 | **0.270** | 0.260 |
+| 512 | 22.100 | 11.350 | **0.836** | 0.792 |
+| 1024 | -- | -- | 1.378 | 1.180 |
+| 2048 | -- | -- | 8.832 | 8.070 |
+
+The `--simd` columns are POST-todo-469, re-measured on this machine after `5a3e8f16` gave
+the f32 kernel its lanes; the GPU columns are unchanged, since nothing about them depends
+on rontolisp. That landing matters here because f32 is the only width Metal can serve, so
+it moved the exact column `--gpu` has to beat -- `#f` matmul went from 2x slower than `#d`
+to 2x faster, which cut the GPU's margin at n=128 from 3.2x to 1.4x. The crossover is
+still between n=64 and n=128, but it is now a genuinely marginal win there rather than a
+comfortable one, and the honest reading is that Metal only clearly pays from n=256.
+
+Same shape as CUDA's table otherwise, shifted right by the higher floor. The batched
+rank-3 product behaves the same way it does on CUDA -- 0.355 ms at 48 x (256 x 64), 3.684
+ms at 192 x (512 x 64), 1749 GFLOP/s -- so phase 4's ordering does not change.
+
+**Precision is a BETTER story here, with one exception.** The CUDA f64 tiled kernel differs
+from the scalar oracle by max abs 1.5-2.7 because the tile walk reorders the reduction. At
+f32 on Metal the GPU lands within 8.5e-7 relative of the f64 oracle at n=512 -- and a CPU
+f32 accumulation of the same product lands at 8.7e-7, i.e. **the divergence is "f32 is
+f32", not "the GPU reordered something"**. Measured on random zero-mean inputs, because
+dyadic test data round-trips exactly and hides the whole question (the same artifact
+`MatmulFProbe` hit). The exception is the ufunc tier: MSL's `tanh` differs from
+`Math.tanh` in 2002 of 4096 cells, up to 4.87e-5 relative. `MTLCompileOptions` defaults to
+`mathMode` 2 (relaxed) / `fastMathEnabled` YES, but setting it to safe or fast changes
+neither result -- so this is simply what the device's transcendental is, and phase 4 must
+state a tolerance rather than hope for identity.
+
+### The two OS libraries, and what they do to the plan on Apple
+
+The cuBLAS question has a different answer here, and then a second library shows up that
+has no CUDA counterpart at all. Both ship inside macOS: no toolkit, no download, no
+dependency, no size cost.
+
+**MPS (`MPSMatrixMultiplication`) is worth taking, unlike cuBLAS.** f32, ms per call:
+
+| n | ours resident | MPS resident | ours + copy | MPS + copy |
+| --- | --- | --- | --- | --- |
+| 128 | 0.174 | 0.191 | 0.184 | 0.186 |
+| 256 | 0.242 | 0.200 | 0.247 | 0.214 |
+| 512 | 0.752 | 0.296 | 0.305 | 0.214 |
+| 1024 | 1.119 | 0.321 | 1.327 | 0.548 |
+| 2048 | 9.949 | 1.825 | 10.718 | 2.649 |
+
+Every argument that killed cuBLAS is absent: there is no 660 MB toolkit (it is in the OS),
+there is no f64 regression to weigh (there is no f64), and -- the surprise --
+**MPS and the naive tiled kernel are bit-identical**, 0 differing cells out of 1,048,576
+at n=1024, both 1.28e-6 from the f64 oracle, verified against a poisoned output buffer so
+it is agreement rather than a silent no-op. So adopting MPS costs nothing in the precision
+contract and buys 5.5x at n=2048. It is still `objc_msgSend` over FFM, four more
+signatures.
+
+**Accelerate's CPU BLAS beats both of them at the sizes rontolisp actually runs, and it
+has a double.** `cblas_dgemm` / `cblas_sgemm` out of `Accelerate.framework`: plain C, four
+lines of FFM, in the OS since forever.
+
+| n | dgemm f64 | sgemm f32 | vs `--simd` f64 | vs metal f32 + copy |
+| --- | --- | --- | --- | --- |
+| 128 | 0.012 ms | 0.005 ms | 50x | 18x |
+| 256 | 0.074 ms | 0.025 ms | 39x | 4x |
+| 512 | 0.341 ms | 0.094 ms | 74x | 2.4x |
+| 1024 | 2.645 ms | 0.743 ms | -- | 1.9x |
+| 2048 | 21.504 ms | 5.296 ms | -- | 1.7x |
+
+800 GFLOP/s at f64 -- nearly TWICE the GB10's cuBLAS DGEMM (420) -- and 3200 GFLOP/s at
+f32. It beats the hand-written Metal kernel at every size measured, beats MPS below
+n~1024, has no 85 us floor (n=64 costs 4 us), and is the only one of the three that can
+touch `linalg`'s default width at all.
+
+**So the Apple conclusion is not the CUDA conclusion.** On the GB10 the built-in PTX is the
+answer and a tuned library is a bad trade. On Apple Silicon a hand-written MSL kernel is
+the WORST of the three options at every size a rontolisp program plausibly runs, and it is
+the one that costs the most to write and maintain. If `--gpu` ships on Apple it should
+dispatch through MPS, not through our own `gemm_f32`; and the flag it most wants next to
+it is not a GPU flag at all. That is a separate feature over the same interception seam,
+and it is recorded as its own item rather than smuggled in here.
 
 ## The two contracts this breaks, and what to write down instead
 
-1. **Bit-identity across backends.** A GPU product reorders its reductions
-   (measured: max abs diff 1.5-2.7 at n<=2048 f64). The matrix product is today EXEMPT
-   from the f32-reduction contract -- it is bit-identical under `--simd` -- and `--gpu`
-   cannot keep that. Precedent exists (todo-106's opt-in precision contract in
+1. **Bit-identity across backends.** This got easier while the spike was being written.
+   todo-469 (`5a3e8f16`) moved the `#f` matrix product OFF bit-identity and into the
+   single-precision reduction contract that `sum`/`dot`/GEMV already followed, so at f32
+   the seat `--gpu` needs is already occupied and `.kb/linalg-simd.md` already states the
+   terms. What is left to write down is narrower than it was:
+   - At **f32** the Metal product lands 8.5e-7 from the f64 oracle, while a CPU f32
+     accumulation of the same product lands 8.7e-7 -- the divergence is the WIDTH, not the
+     GPU, and it is the same order as the kernel `--simd` now ships. MPS is bit-identical
+     to our own tiled kernel, so which kernel is dispatched is not a contract question
+     either.
+   - At **f64** it is still a real break: the CUDA tiled kernel reorders its reduction
+     (max abs diff 1.5-2.7 at n<=2048), where `#d` under `--simd` remains bit-identical to
+     the oracle. This is the CUDA-only case, since Metal has no f64 to diverge in.
+   - The **ufunc tier** is the genuine new exception: the device's own transcendental
+     differs from `Math.tanh` in half the cells (up to 4.87e-5 relative), unaffected by
+     `MTLCompileOptions.mathMode`. Precedent exists (todo-106's opt-in precision contract in
    `.kb/linalg-simd.md`): state it as opt-in, keep the scalar defun as the cross-backend
    oracle, keep `--gpu` out of `ci-spec.yaml`, and pin the GPU path against the scalar
    path at a RELATIVE tolerance, the way `TorchGradcheck` already compares analytic
@@ -449,7 +624,14 @@ without the previous one's numbers. Phase 0 above comes first.
    `--simd` does not intercept it (todo-467), and a batch axis is free on a GPU. Then
    the element-wise tier and the ufuncs, which are memory-bound and therefore only pay
    under phase 3.
-5. **Metal**, starting by validating the `objc_msgSend` sketch on real hardware.
+5. **Metal.** The `objc_msgSend` route is validated, so this phase is no longer a
+   feasibility question -- it is a port of phases 1-3 with three deliberate differences:
+   dispatch through **MPS**, not through our own kernel (the naive MSL kernel loses to
+   every alternative and is not worth maintaining); treat an `#d` operand as a hard
+   decline, since MSL has no double; and make phase 3 batch SUBMISSIONS as well as keep
+   data resident, because on Apple the ~85 us floor is per command buffer. Do not port
+   the checked-in-kernel-text machinery: MSL compiles at run time from a string, with no
+   toolchain and no build-time artifact.
 
 Out of scope, permanently or for now: wasm-GC and the browser (no FFM; a WebGPU path
 would be host imports through `rontolisp:wasm-import` with the page's JS owning the
@@ -476,6 +658,10 @@ already says are a one-line change -- stops being out of reach.
   scalar side of the comparison honest, and its kernel shape is the one the GPU batch
   kernel mirrors. `.todo/121` and `.todo/468` are the other open member-tier items.
 - `../silicon/` -- `silicon-cuda` (pure-FFM driver-API binding, the prototype-string
-  `Bindings.java`), `silicon-metal` (the Swift-shim approach we are NOT taking).
+  `Bindings.java`), `silicon-metal` (the Swift-shim approach we are NOT taking, and did
+  not need to: `Mtl.java` reaches the same API through `objc_msgSend`).
+- `.todo/470-a-tuned-blas-ships-inside-macos-and-linalg-never-calls-it.md` -- the
+  Accelerate finding above, as its own feature. It is a CPU item, it covers `linalg`'s
+  DEFAULT width, and on Apple Silicon it beats everything in this file below n~1024.
 - `examples/llm-from-scratch/`, `examples/ml/tiny-llm.lisp`,
   `examples/deep-learning-from-scratch/` -- the workloads this is for.

@@ -1,0 +1,79 @@
+import java.lang.foreign.*;
+import java.lang.invoke.MethodHandle;
+import java.util.Random;
+
+/**
+ * Not a GPU probe. Apple ships a tuned BLAS in the OS (Accelerate.framework), it is plain C so
+ * FFM reaches it in four lines, it costs no dependency and no toolchain -- and unlike Metal it
+ * has a double. If it is fast, then on this platform the answer for linalg's DEFAULT width is
+ * not the GPU at all, and --gpu's f32-only reach stops being the whole story.
+ */
+public class AccelerateProbe {
+
+	static final Linker L = Linker.nativeLinker();
+
+	static final SymbolLookup ACC = SymbolLookup
+		.libraryLookup("/System/Library/Frameworks/Accelerate.framework/Accelerate", Arena.global());
+
+	static final ValueLayout.OfInt I = ValueLayout.JAVA_INT;
+
+	static final ValueLayout.OfFloat F = ValueLayout.JAVA_FLOAT;
+
+	static final ValueLayout.OfDouble D = ValueLayout.JAVA_DOUBLE;
+
+	static final AddressLayout P = ValueLayout.ADDRESS;
+
+	static final MethodHandle sgemm = L.downcallHandle(ACC.find("cblas_sgemm").orElseThrow(),
+			FunctionDescriptor.ofVoid(I, I, I, I, I, I, F, P, I, P, I, F, P, I));
+
+	static final MethodHandle dgemm = L.downcallHandle(ACC.find("cblas_dgemm").orElseThrow(),
+			FunctionDescriptor.ofVoid(I, I, I, I, I, I, D, P, I, P, I, D, P, I));
+
+	static final int ROW_MAJOR = 101, NO_TRANS = 111;
+
+	public static void main(String[] a) throws Throwable {
+		System.out.println("Accelerate cblas, ms per n x n gemm (single thread of control, library may thread):");
+		System.out.printf("%-6s %12s %12s %12s%n", "n", "dgemm f64", "sgemm f32", "java f64 loop");
+		for (int n : new int[] { 64, 128, 256, 512, 1024, 2048 }) {
+			bench(n);
+		}
+	}
+
+	static void bench(int n) throws Throwable {
+		Random rnd = new Random(7);
+		try (Arena ar = Arena.ofConfined()) {
+			MemorySegment A = ar.allocate(D, (long) n * n), B = ar.allocate(D, (long) n * n),
+					C = ar.allocate(D, (long) n * n);
+			MemorySegment Af = ar.allocate(F, (long) n * n), Bf = ar.allocate(F, (long) n * n),
+					Cf = ar.allocate(F, (long) n * n);
+			double[] ha = new double[n * n], hb = new double[n * n];
+			for (int i = 0; i < n * n; i++) {
+				ha[i] = rnd.nextGaussian();
+				hb[i] = rnd.nextGaussian();
+				A.setAtIndex(D, i, ha[i]);
+				B.setAtIndex(D, i, hb[i]);
+				Af.setAtIndex(F, i, (float) ha[i]);
+				Bf.setAtIndex(F, i, (float) hb[i]);
+			}
+			int reps = n <= 512 ? 20 : 5;
+			double d = Double.MAX_VALUE, s = Double.MAX_VALUE;
+			for (int r = 0; r < reps + 3; r++) {
+				long t = System.nanoTime();
+				dgemm.invokeExact(ROW_MAJOR, NO_TRANS, NO_TRANS, n, n, n, 1.0, A, n, B, n, 0.0, C, n);
+				if (r >= 3) d = Math.min(d, (System.nanoTime() - t) / 1e6);
+				t = System.nanoTime();
+				sgemm.invokeExact(ROW_MAJOR, NO_TRANS, NO_TRANS, n, n, n, 1.0f, Af, n, Bf, n, 0.0f, Cf, n);
+				if (r >= 3) s = Math.min(s, (System.nanoTime() - t) / 1e6);
+			}
+			double javaMs = Double.NaN;
+			if (n <= 1024) {
+				double[] hc = new double[n * n];
+				long t = System.nanoTime();
+				MtlSpike.naive(ha, hb, hc, n, n, n);
+				javaMs = (System.nanoTime() - t) / 1e6;
+			}
+			System.out.printf("%-6d %9.3f ms %9.3f ms %9.1f ms   (%.0f / %.0f GFLOP/s)%n", n, d, s, javaMs,
+					2.0 * n * n * n / (d / 1e3) / 1e9, 2.0 * n * n * n / (s / 1e3) / 1e9);
+		}
+	}
+}

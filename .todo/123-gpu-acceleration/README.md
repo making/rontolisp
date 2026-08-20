@@ -1,21 +1,32 @@
-# The `--gpu` feasibility spike (2026-08-20)
+# The `--gpu` feasibility spike (CUDA 2026-08-20, Metal 2026-08-20)
 
 Throwaway probes kept for reproducibility, NOT project code: they are outside `src/`, are
 not in the reactor, are not formatted by `spring-javaformat:apply`, and nothing builds or
 tests them. They exist so that the numbers in `../123-gpu-acceleration.md` can be
-re-derived on other hardware -- especially the two decisions those numbers drove
-(per-call intercept before residency; PTX-in-the-jar instead of a runtime toolkit).
+re-derived on other hardware -- especially the decisions those numbers drove (per-call
+intercept before residency; PTX-in-the-jar instead of a runtime toolkit; and, on Apple,
+that the naive kernel is the wrong thing to ship at all).
 
 Every file is a single-class JDK source-launcher program: no build step, no dependency,
 Java 22+ for the FFM API. `--enable-native-access=ALL-UNNAMED` silences the restricted-
-method warning.
+method warning. `Cu*`/`*Spike`/`Ptx*`/`Ni*`/`Tf32*` are the CUDA side and run only on a
+machine with an NVIDIA driver; `Mtl*` and `AccelerateProbe` are the Apple side and run
+only on macOS. Nothing here runs on both.
 
-## The machine these numbers came from
+## The two machines these numbers came from
 
-NVIDIA GB10 (Grace Blackwell, `sm_121`, 48 SMs, unified addressing + managed memory),
-aarch64, driver 580.173.02 / CUDA 13.0, Oracle GraalVM 25.0.4. `nvidia-smi` and
-`/usr/local/cuda` present. A different device changes every number below; what should
-survive is the SHAPE of each result.
+- **CUDA:** NVIDIA GB10 (Grace Blackwell, `sm_121`, 48 SMs, unified addressing + managed
+  memory), aarch64, driver 580.173.02 / CUDA 13.0, Oracle GraalVM 25.0.4. `nvidia-smi`
+  and `/usr/local/cuda` present.
+- **Metal:** Apple M4 Max (40 GPU cores, Metal 4, unified memory, 110 GB recommended
+  working set), macOS 26.3.1, Oracle GraalVM 25.0.3. **No Xcode**: `xcrun metal` is
+  absent, which is itself a result -- see `MtlCompileCost`.
+
+A different device changes every number below; what should survive is the SHAPE of each
+result. One Apple-specific caveat before reading any of it: Apple GPUs ramp their clocks,
+so a short warm-up under-reports, and a kernel that runs for well under a millisecond can
+flap by 2-3x between runs. Every `Mtl*` probe reports a min over many reps after a
+warm-up, and the sub-millisecond rows still move by ~20% run to run.
 
 ## The files
 
@@ -30,9 +41,25 @@ survive is the SHAPE of each result.
 | `Tf32Check.java` | rules out the obvious objection to the 44x f32/f64 gap: is cuBLAS's f32 row secretly TF32? |
 | `CublasEndToEnd.java` | and is cuBLAS worth the toolkit at all? Both kernels, both phases (with copies / resident), both widths. |
 | `NiProbe.java` | does a CUDA downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
-| `MatmulFProbe.java` | no GPU at all: why is `#f` matmul SLOWER than `#d` under `--simd`, and what would fix it? Drives `.todo/469`, phase 0's prerequisite. |
+| `MatmulFProbe.java` | no GPU at all: why was `#f` matmul SLOWER than `#d` under `--simd`, and what would fix it? Drove todo-469 (landed `5a3e8f16`, 2026-08-20 -- the kernel now takes f32 lanes); kept because `.kb/linalg-simd.md` cites it and it answers differently per architecture. |
 | `matmul-baseline.lisp` | the CPU side of the comparison -- `linalg:matmul` under `--simd`, warm, 20 reps. Not a GPU program. |
 | `width-baseline.lisp` | `#f` against `#d` across matmul / add / dot / exp / sum, which is how the matmul anomaly surfaced. Not a GPU program. |
+
+### The Metal files (macOS)
+
+| file | question it answers |
+| --- | --- |
+| `Mtl.java` | the binding itself: Metal through `objc_msgSend` over pure FFM, no Swift shim and no bundled dylib. Every `Mtl*` file uses it. The CUDA side's `Cu.java`, one platform over. |
+| `MtlF64Probe.java` | the decisive one, and it is not about speed: does MSL have a `double`? Also `half` / `bfloat` / 64-bit int. |
+| `MtlSpike.java` | does a Metal matmul beat the CPU, and where is the crossover? Holds `SRC`, the MSL the other probes compile. |
+| `MtlTiny.java` | the fixed per-call floor -- and, because Metal's floor is 5x CUDA's, whether spinning on the command buffer's status beats `waitUntilCompleted`, and how much batching several dispatches into ONE command buffer amortizes. |
+| `MtlResidency.java` | must arrays LIVE on the device? Measures three ways, not two, because Metal has two separate costs to remove. Plus the batched rank-3 product. |
+| `MtlPrecision.java` | the precision contract: how far f32 lands from the f64 scalar oracle on inputs that do NOT round-trip exactly, and whether MSL's default compile options are doing fast-math behind our back. |
+| `MtlMps.java` | the cuBLAS question, re-asked where the tuned library is IN THE OS: is `MPSMatrixMultiplication` worth using? |
+| `MtlMpsDiff.java` | verifies the surprising half of that answer -- MPS and the naive tiled kernel are bit-identical, which a silent no-op would also look like. |
+| `MtlCompileCost.java` | the PTX question restated: what does getting a kernel onto the device cost at startup, and does the OS cache it between processes? |
+| `MtlNiProbe.java` | does an `objc_msgSend` downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
+| `AccelerateProbe.java` | no GPU at all: Apple ships a tuned BLAS in the OS, it is plain C, it costs no dependency, and unlike Metal it has a double. How fast is it? This is the probe that reframes the whole Apple plan. |
 
 ## Running them
 
@@ -63,6 +90,58 @@ java --enable-native-access=ALL-UNNAMED PtxSpike.java
 `Cu.java` and `MatmulSpike.java` are picked up automatically by the source launcher --
 do not pass them as arguments, or they land in `args` instead (that mistake is why
 `DumpPtx` first appeared to reject every `--gpu-architecture`).
+
+### The Metal probes (macOS)
+
+```bash
+cd .todo/123-gpu-acceleration
+
+# the CPU baseline to beat, same two programs as the CUDA side
+JAR=../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar
+java -jar $JAR matmul-baseline.lisp -o Mm2.class --simd   # keep the -o name path-free
+java --add-modules jdk.incubator.vector Mm2
+
+java --enable-native-access=ALL-UNNAMED MtlF64Probe.java
+java --enable-native-access=ALL-UNNAMED MtlSpike.java
+java --enable-native-access=ALL-UNNAMED MtlTiny.java
+java --enable-native-access=ALL-UNNAMED MtlResidency.java
+java --enable-native-access=ALL-UNNAMED MtlPrecision.java
+java --enable-native-access=ALL-UNNAMED MtlMps.java
+java --enable-native-access=ALL-UNNAMED MtlMpsDiff.java
+java --enable-native-access=ALL-UNNAMED AccelerateProbe.java
+java --enable-native-access=ALL-UNNAMED MtlCompileCost.java   # run it three times
+```
+
+`Mtl.java` and `MtlSpike.java` are picked up automatically, same rule as above. None of
+these needs Xcode, a toolchain, or a build step -- which is the point of
+`MtlCompileCost`.
+
+The native-image leg is the same recipe with the Apple classes:
+
+```bash
+javac -d classes MtlNiProbe.java Mtl.java MtlSpike.java
+java --enable-native-access=ALL-UNNAMED \
+     -agentlib:native-image-agent=config-output-dir=ni-config-mtl -cp classes MtlNiProbe
+mkdir -p classes/META-INF/native-image/spike-mtl
+cp ni-config-mtl/reachability-metadata.json classes/META-INF/native-image/spike-mtl/
+native-image --no-fallback --enable-native-access=ALL-UNNAMED \
+             --add-modules jdk.incubator.vector \
+             -H:+UnlockExperimentalVMOptions -H:+VectorAPISupport \
+             -cp classes MtlNiProbe mtlniprobe
+./mtlniprobe
+```
+
+The agent's `foreign.downcalls` section here carries an entry the CUDA side never needed:
+`{"returnType": "void", "parameterTypes": ["void*", "void*", "struct(jlong,jlong,jlong)",
+"struct(jlong,jlong,jlong)"]}` -- `dispatchThreadgroups:threadsPerThreadgroup:` taking two
+`MTLSize`s by value. It built in 19.3 s and ran:
+
+```
+MtlNiProbe OK on Apple M4 Max: n=512 f32 gemm 0.864 ms, C[0]=-0.938
+```
+
+Same answer as the JVM, so Metal does not re-enter the `VectorAPISupport` /
+`SharedArenaSupport` fight either.
 
 ### The native-image leg
 
@@ -238,7 +317,7 @@ sum   1d f64 0.280       f32 0.280
 ```
 
 `scalarAcc` is today's kernel, `laneF2D` is the wasm backend's approach ported to the
-JVM, `laneF32` is f32 lanes with an f32 accumulator. Two results decide `.todo/469`:
+JVM, `laneF32` is f32 lanes with an f32 accumulator. Two results decided todo-469:
 `convert(F2D)` is **190x** slower than the scalar loop it would replace, so wasm's
 bit-identical trick cannot come to the JVM; and `laneF32` is 2.8x faster than the f64
 kernel but differs from the oracle by up to 3-4% relative on the worst (near-zero,
@@ -247,12 +326,232 @@ it is measuring the right kernel. Run it with the DYADIC inputs it originally ha
 `laneF32` reports "bit-identical" -- an artifact of test data that round-trips exactly,
 which is why the committed version uses zero-mean random values.
 
+## What the Metal probes printed
+
+Same rule: verbatim, so a later run can be diffed against it. Apple M4 Max, macOS 26.3.1.
+The rontolisp `--simd` baseline these are measured against, on the SAME machine, is at the
+bottom.
+
+```
+$ java MtlF64Probe.java
+device: Apple M4 Max
+  supportsFamily 1001 (Apple1) = yes
+  supportsFamily 1002 (Apple2) = yes
+  supportsFamily 1003 (Apple3) = yes
+  supportsFamily 1004 (Apple4) = yes
+  supportsFamily 1005 (Apple5) = yes
+  supportsFamily 1006 (Apple6) = yes
+  supportsFamily 1007 (Apple7) = yes
+  supportsFamily 1008 (Apple8) = yes
+  supportsFamily 1009 (Apple9) = yes
+  double             REJECTED: MSL compile failed: program_source:3:28: error: 'double' is not supported in Metal kernel void k(device const double* a, device double* b, uint i [[thread_position_in_grid]]) {                            ^ program_source:3:46: error: 'double' is not supported in Metal kernel void k(device const doub...
+  float              COMPILES
+  half               COMPILES
+  bfloat             COMPILES
+  long (64-bit int)  COMPILES
+
+$ java MtlSpike.java
+device: Apple M4 Max  unified=1  workingSet=110100 MB  maxTG=1024
+MSL compile (newLibraryWithSource): 2.3 ms | pipeline: 1.1 ms
+n=64    cpu(java f64)     0.60 ms | gpu f32   0.191 ms w/copy,   0.179 ms kernel | dyadic-input check: matches f64 oracle exactly
+n=128   cpu(java f64)     2.46 ms | gpu f32   0.217 ms w/copy,   0.201 ms kernel | dyadic-input check: matches f64 oracle exactly
+n=256   cpu(java f64)    10.17 ms | gpu f32   0.270 ms w/copy,   0.260 ms kernel | dyadic-input check: matches f64 oracle exactly
+n=512   cpu(java f64)   111.76 ms | gpu f32   0.836 ms w/copy,   0.792 ms kernel | dyadic-input check: matches f64 oracle exactly
+n=1024  cpu(java f64)   984.71 ms | gpu f32   1.378 ms w/copy,   1.180 ms kernel | dyadic-input check: matches f64 oracle exactly
+n=2048  cpu(java f64) 19435.25 ms | gpu f32   8.832 ms w/copy,   8.070 ms kernel | dyadic-input check: matches f64 oracle exactly
+
+-- element-wise add (memory bound), f32 --
+n=4096       cpu   0.027 ms | gpu   0.125 ms w/copy |   0.121 ms kernel
+n=65536      cpu   0.421 ms | gpu   0.145 ms w/copy |   0.127 ms kernel
+n=1048576    cpu   1.500 ms | gpu   0.369 ms w/copy |   0.149 ms kernel
+n=16777216   cpu  13.501 ms | gpu   4.175 ms w/copy |   0.775 ms kernel
+
+-- pure launch overhead (16x16 gemm) --
+encode+commit+wait 69.5 us | encode+commit only (async) 6.0 us
+
+$ java MtlTiny.java
+one intercepted linalg:matmul, heap->buffer->kernel->heap, f32:
+      8x8   @   8x8     113.9 us
+     32x8   @   8x8      89.8 us
+     32x32  @  32x32     91.7 us
+     64x64  @  64x64     84.7 us
+    128x128 @ 128x128    84.6 us
+    256x256 @ 256x256   119.7 us
+
+wait strategy, empty-ish 16x16 dispatch:
+    encode only                   4.4 us
+    encode + waitUntilCompleted   81.4 us
+    encode + spin on status       79.1 us
+
+N dispatches inside ONE command buffer (16x16 each), us per dispatch:
+      1 dispatches:    92.4 us total,  92.38 us each
+      2 dispatches:   105.4 us total,  52.69 us each
+      5 dispatches:   129.5 us total,  25.89 us each
+     10 dispatches:   157.6 us total,  15.76 us each
+     50 dispatches:   435.1 us total,   8.70 us each
+
+$ java MtlResidency.java
+-- batched rank-3 matmul, the shape --simd never intercepts --
+    b*h=24   n=64   d=32   gpu    0.169 ms (37 GFLOP/s)
+    b*h=48   n=256  d=64   gpu    0.355 ms (1133 GFLOP/s)
+    b*h=192  n=512  d=64   gpu    3.684 ms (1749 GFLOP/s)
+
+-- the residency question: (x@w1 + b) -> tanh -> (@w2 + b2), f32 --
+    n=128   resident 1 cmdbuf   0.169 ms | resident, 5 cmdbufs   0.615 ms (3.6x) | per-op round trip   0.596 ms (3.5x)
+    n=512   resident 1 cmdbuf   0.405 ms | resident, 5 cmdbufs   0.850 ms (2.1x) | per-op round trip   1.118 ms (2.8x)
+    n=1024  resident 1 cmdbuf   2.271 ms | resident, 5 cmdbufs   2.766 ms (1.2x) | per-op round trip   3.697 ms (1.6x)
+
+$ java MtlPrecision.java
+MTLCompileOptions defaults: mathMode=2  (0=?, 1=safe, 2=relaxed, 3=fast)  fastMathEnabled=1
+  default options  n=128   gpu-f32 vs f64 oracle: maxrel 4.54e-07 | cpu-f32 vs f64 oracle: maxrel 3.72e-07 | gpu-f32 vs cpu-f32: maxrel 2.44e-07
+  default options  n=512   gpu-f32 vs f64 oracle: maxrel 8.52e-07 | cpu-f32 vs f64 oracle: maxrel 8.65e-07 | gpu-f32 vs cpu-f32: maxrel 2.81e-07
+  default options  tanh vs Math.tanh over 4096 gaussians: max abs 1.19e-07, max rel 4.87e-05, 2002/4096 cells differ
+  mathMode=1       n=128   gpu-f32 vs f64 oracle: maxrel 4.54e-07 | cpu-f32 vs f64 oracle: maxrel 3.72e-07 | gpu-f32 vs cpu-f32: maxrel 2.44e-07
+  mathMode=1       n=512   gpu-f32 vs f64 oracle: maxrel 8.52e-07 | cpu-f32 vs f64 oracle: maxrel 8.65e-07 | gpu-f32 vs cpu-f32: maxrel 2.81e-07
+  mathMode=1       tanh vs Math.tanh over 4096 gaussians: max abs 1.19e-07, max rel 4.87e-05, 2002/4096 cells differ
+  mathMode=3       n=128   gpu-f32 vs f64 oracle: maxrel 4.54e-07 | cpu-f32 vs f64 oracle: maxrel 3.72e-07 | gpu-f32 vs cpu-f32: maxrel 2.44e-07
+  mathMode=3       n=512   gpu-f32 vs f64 oracle: maxrel 8.52e-07 | cpu-f32 vs f64 oracle: maxrel 8.65e-07 | gpu-f32 vs cpu-f32: maxrel 2.81e-07
+  mathMode=3       tanh vs Math.tanh over 4096 gaussians: max abs 1.19e-07, max rel 4.87e-05, 2002/4096 cells differ
+
+$ java MtlMps.java
+MPSMatrixMultiplication class = true
+
+f32 n x n gemm, ms per call
+n       ours resident   MPS resident    ours + copy     MPS + copy
+128          0.156 ms       0.192 ms       0.165 ms       0.199 ms   (MPS 0.8x ours; agree to 0.0)
+256          0.236 ms       0.213 ms       0.264 ms       0.208 ms   (MPS 1.1x ours; agree to 0.0)
+512          0.741 ms       0.287 ms       0.304 ms       0.228 ms   (MPS 2.6x ours; agree to 0.0)
+1024         1.129 ms       0.335 ms       1.387 ms       0.586 ms   (MPS 3.4x ours; agree to 0.0)
+2048         9.363 ms       1.717 ms      10.179 ms       2.486 ms   (MPS 5.5x ours; agree to 0.0)
+
+$ java MtlMpsDiff.java
+n=256   differing cells 0/65536 | ours vs oracle 6.31e-07 | MPS vs oracle 6.31e-07 | ours vs MPS 0.00
+n=1024  differing cells 0/1048576 | ours vs oracle 1.28e-06 | MPS vs oracle 1.28e-06 | ours vs MPS 0.00
+
+$ java AccelerateProbe.java
+Accelerate cblas, ms per n x n gemm (single thread of control, library may thread):
+n         dgemm f64    sgemm f32 java f64 loop
+64         0.004 ms     0.002 ms      60.7 ms   (146 / 242 GFLOP/s)
+128        0.012 ms     0.005 ms       1.7 ms   (350 / 839 GFLOP/s)
+256        0.073 ms     0.025 ms      10.6 ms   (458 / 1340 GFLOP/s)
+512        0.331 ms     0.096 ms     111.0 ms   (811 / 2795 GFLOP/s)
+1024       2.833 ms     0.819 ms     962.4 ms   (758 / 2623 GFLOP/s)
+2048      21.852 ms     5.446 ms       NaN ms   (786 / 3155 GFLOP/s)
+
+$ java MtlCompileCost.java   # three consecutive runs
+MTLCreateSystemDefaultDevice   13.9 ms | newLibraryWithSource    2.6 ms | same source again    0.1 ms | 1st pipeline   0.9 ms | 2nd pipeline   0.1 ms
+MTLCreateSystemDefaultDevice   12.2 ms | newLibraryWithSource    2.7 ms | same source again    0.1 ms | 1st pipeline   0.9 ms | 2nd pipeline   0.1 ms
+MTLCreateSystemDefaultDevice   14.7 ms | newLibraryWithSource    2.9 ms | same source again    0.1 ms | 1st pipeline   0.9 ms | 2nd pipeline   0.1 ms
+```
+
+### The five lines that matter
+
+1. **`'double' is not supported in Metal`** -- from the compiler, not from a benchmark.
+   CUDA's fp64 is 44x slower than its fp32 but it exists; MSL has no double at all, and
+   `half` / `bfloat` / 64-bit int all compile fine, so this is a deliberate omission in the
+   language. `linalg`'s default element type is double-float, so on Apple a `--gpu` is not
+   "f32 is where the win is" -- it is "f32 or nothing".
+
+2. **`newLibraryWithSource` costs 2.3 ms warm and needs no toolchain.** There is no Xcode
+   on this machine (`xcrun metal` is absent) and MSL still compiled at run time, because
+   the compiler lives in the OS. That is strictly better than the PTX story -- no
+   build-time artifact to generate, check in or version against a virtual architecture.
+   32 ms on the first ever run, ~2.5 ms afterwards (the OS caches across processes, like
+   `~/.nv/ComputeCache`), and 0.1 ms for the same source a second time in-process. The
+   real startup cost is `MTLCreateSystemDefaultDevice` at 12-15 ms, which is what the
+   availability probe would pay.
+
+3. **The per-call floor is ~85 us, five times CUDA's 16-18 us**, and it is flat from 8x8
+   to 128x128 exactly as CUDA's was. Spinning on `[cb status]` instead of blocking in
+   `waitUntilCompleted` changes nothing (83.1 vs 81.1 us), so this is the round trip
+   itself, not the blocking primitive -- there is no cheaper wait to find. But the cost is
+   per COMMAND BUFFER, not per dispatch: 50 dispatches in one command buffer cost 8.8 us
+   each. Batching is worth 10x, and it is the same mechanism residency needs.
+
+4. **MPS is 5.5x the naive kernel at n=2048, and bit-identical to it.** Zero differing
+   cells out of 1,048,576 at n=1024, both landing 1.28e-6 from the f64 oracle -- verified
+   with a poisoned output buffer so this is agreement, not a silent no-op. Unlike cuBLAS
+   it ships in the OS, so it costs no dependency and no toolkit. Both halves of the cuBLAS
+   verdict invert here.
+
+5. **Accelerate's CPU BLAS beats both of them below n~1024, has a double, and has no 85 us
+   floor.** 800 GFLOP/s at f64 -- nearly twice the GB10's cuBLAS DGEMM (420) -- and 3200
+   GFLOP/s at f32, which is faster than our Metal kernel at every size measured. It is
+   plain C, in the OS, reachable in four lines of FFM. Still 35-121x `--simd` AFTER
+   todo-469 gave the f32 kernel its lanes, so that landing does not dent it. See
+   `../123-gpu-acceleration.md` for what it does to the plan, and `../470-*.md` for the
+   item it became.
+
+### The width probe, same machine
+
+`.kb/linalg-simd.md` cites `MatmulFProbe` and warns that it answers differently per
+architecture. It does, and the two aarch64 machines are not interchangeable either:
+
+```
+$ java --add-modules jdk.incubator.vector MatmulFProbe.java     # Apple M4 Max
+f32 lanes=4, f64 lanes=2
+      laneF32 vs oracle: max 701460 ulp, max rel 0.0428
+n=256  scalarAcc   4.82 ms | laneF2D  557.52 ms (bit-identical) | laneF32   1.26 ms (DIFFERS) | f64   2.34 ms
+      laneF32 vs oracle: max 440342 ulp, max rel 0.0310
+n=512  scalarAcc  35.86 ms | laneF2D 4473.65 ms (bit-identical) | laneF32   9.71 ms (DIFFERS) | f64  18.07 ms
+```
+
+Same ranking as the GB10 run recorded above -- `laneF32` wins, `laneF2D` is catastrophic,
+and the relative error against the oracle is identical to five digits because that is a
+property of the arithmetic and not of the machine -- but the magnitudes differ, `laneF2D`
+by 1.7x (4474 vs 7477 ms). The `.kb` table now carries both rows.
+
+### The CPU baseline, same machine
+
+Measured twice, because todo-469 landed between the two runs and it moves the f32 column
+the GPU is compared against.
+
+```
+$ java --add-modules jdk.incubator.vector Mm2     # matmul-baseline.lisp, JVM --simd
+                            BEFORE todo-469          AFTER todo-469 (5a3e8f16)
+n=32   f64 / f32            0.100 / 0.050            0.050 / 0.100
+n=64   f64 / f32            0.150 / 0.150            0.150 / 0.050
+n=128  f64 / f32            0.600 / 0.700            0.550 / 0.300
+n=256  f64 / f32            2.900 / 5.650            2.600 / 1.450
+n=512  f64 / f32           25.100 / 41.600          22.100 / 11.350
+
+$ java --add-modules jdk.incubator.vector W       # width-baseline.lisp, JVM --simd
+                            BEFORE                   AFTER
+matmul n=256  f64 / f32     5.100 / 24.650           2.500 / 1.500
+matmul n=512  f64 / f32    68.300 / 86.850          20.050 / 11.350
+add   1d      f64 / f32     0.540 / 0.300            0.300 / 0.200
+dot   1d      f64 / f32     0.220 / 0.280            0.180 / 0.060
+exp   1d      f64 / f32     7.660 / 2.180            1.360 / 1.240
+sum   1d      f64 / f32     0.100 / 0.140            0.140 / 0.140
+```
+
+`matmul-baseline` is the honest CPU number and the one the todo quotes; `width-baseline`
+drives its matmuls through a `funcall`ed lambda with a shorter warm-up, which is why its
+BEFORE numbers are so much higher (its AFTER numbers agree with `matmul-baseline`, which
+is itself worth noticing -- the old kernel was the thing that made the lambda path look
+pathological). The `#f` anomaly the BEFORE column shows was not GB10-specific and was in
+fact worse here -- 4.8x slower than `#d` at n=256 against 2x there -- and todo-469 has
+since inverted it on this machine too: `#f` is now about 2x FASTER than `#d`. Every
+Apple-side comparison below quotes the AFTER column.
+
 ## What is deliberately missing
 
-- **No Metal probe.** No Apple Silicon was available. The Metal section of the todo is a
-  sketch, and phase 5 begins by validating it -- `silicon-metal` in `../../../silicon/`
-  is the reference, but it reaches Metal through a Swift shim we cannot ship, so the
-  `objc_msgSend`-over-FFM route is untested by anything here.
+- **No cross-platform probe.** The CUDA files need an NVIDIA driver, the Metal files need
+  macOS, and neither set is guarded -- running the wrong half fails at the first
+  `libraryLookup`. A real `am.ik.gpu` needs one availability probe that answers "no
+  device" without throwing on either platform.
+- **No Metal batched MPS.** `MPSMatrixMultiplication` has a batched descriptor
+  (`matrixDescriptorWithRows:columns:matrices:rowBytes:matrixBytes:dataType:`) that would
+  be the tuned counterpart to `gemm3_f32`; only the naive batched kernel was measured.
+- **No Metal object lifetime worth the name.** `Mtl.release` exists and is called on
+  buffers; every other `new*`/`alloc` result -- libraries, pipelines, queues, MPS objects,
+  the `NSString`s built for every selector argument -- leaks, and there is one
+  `autoreleasePoolPush`/`Pop` around each `main`. Real code needs the ownership rules
+  (`new`/`alloc`/`copy` are +1, everything else is autoreleased) applied deliberately.
+- **No Metal error path.** A failed `newLibraryWithSource:` is turned into an exception
+  with the compiler's diagnostics, which is right for a probe and wrong for `--gpu`, which
+  must decline to the CPU instead of signalling. Nothing checks
+  `[commandBuffer error]` at all.
 - **No error handling worth the name.** `Cu.check` exists; most call sites ignore the
   status. Real code needs a `CUresult` table (`silicon-cuda`'s `CUResult.java` is 685
   lines of exactly that) and a decline-on-error path, since `--gpu` must degrade to the
