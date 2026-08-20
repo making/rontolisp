@@ -484,7 +484,7 @@ MTLCreateSystemDefaultDevice   14.7 ms | newLibraryWithSource    2.9 ms | same s
    GFLOP/s at f32, which is faster than our Metal kernel at every size measured. It is
    plain C, in the OS, reachable in four lines of FFM. Still 35-121x `--simd` AFTER
    todo-469 gave the f32 kernel its lanes, so that landing does not dent it. See
-   `../123-gpu-acceleration.md` for what it does to the plan, and `../470-*.md` for the
+   `../123-gpu-acceleration.md` for what it does to the plan, and `../470-linalg-never-calls-a-tuned-blas.md` for the
    item it became.
 
 ### The width probe, same machine
@@ -548,21 +548,75 @@ Three things follow, and they are why the probe gained an `identify()` and a ver
 - **A `--blas` that bound whatever it found would be a silent 1.6x regression** on this
   machine, at `linalg`'s default width. That is a much worse failure than declining.
 
-And the tempting next step -- install OpenBLAS and re-measure -- is the wrong experiment,
-which is worth writing down because it looks so obviously right. The whole item exists
-under this spike's founding rule: **the runtime requirement is what the OS or the driver
-already provides, and nothing the user installs.** That rule is what let `--gpu` keep the
-no-dependencies constraint, and it is the rule cuBLAS was rejected for breaking. A machine
-with `libopenblas-dev` apt-installed is a configuration that rule forbids REQUIRING, so
-measuring it would answer a question this item is not allowed to ask. macOS satisfies the
-rule and Linux does not; that is the finding, not a gap in it.
+This is where an earlier draft of this file went wrong, and the mistake is worth keeping
+visible because it is easy to make. It argued that installing OpenBLAS and re-measuring
+was "the wrong experiment", on the grounds that the spike's founding rule -- **the runtime
+requirement is what the OS or the driver already provides, and nothing the user installs**
+-- forbids requiring such a machine. The rule is real and still governs what may be
+REQUIRED. It says nothing about what may be MEASURED. Refusing to measure the
+tuned-BLAS-on-Linux case meant leaving the size of the opportunistic tier unknown while
+simultaneously complaining that it had no representative machine.
 
-An opportunistic tier -- bind a tuned library the user happens to have -- is a separate and
-legitimate want, and it is where cuBLAS already sits in the todo. Note that cuBLAS is NOT
+So it was measured.
+
+### With a tuned BLAS installed: what the opportunistic tier is actually worth
+
+`libopenblas0-pthread` 0.3.26 installed on the Spark (see the machine-changes log at the
+end of this file). The probe tries `libopenblas.so.0` before `libblas.so.3`, so it binds
+OpenBLAS directly regardless of what `update-alternatives` points at:
+
+```
+=== all threads (nproc=20) ===
+bound CBLAS: libopenblas.so.0
+identifies as: OpenBLAS (exports openblas_get_config)
+n         dgemm f64    sgemm f32
+64         0.010 ms     0.006 ms   (52 / 89 GFLOP/s)
+128        0.028 ms     0.017 ms   (148 / 247 GFLOP/s)
+256        0.245 ms     0.134 ms   (137 / 250 GFLOP/s)
+512        1.073 ms     0.514 ms   (250 / 522 GFLOP/s)
+1024       5.942 ms     2.943 ms   (361 / 730 GFLOP/s)
+2048      43.921 ms    21.492 ms   (391 / 799 GFLOP/s)
+verdict: 361 GFLOP/s f64 at n=1024 -- TUNED.
+
+=== OPENBLAS_NUM_THREADS=1 ===
+64         0.015 ms     0.009 ms   (34 / 61 GFLOP/s)
+128        0.068 ms     0.034 ms   (62 / 122 GFLOP/s)
+256        0.523 ms     0.258 ms   (64 / 130 GFLOP/s)
+512        4.137 ms     2.030 ms   (65 / 132 GFLOP/s)
+1024      33.002 ms    16.227 ms   (65 / 132 GFLOP/s)
+2048     265.831 ms   128.435 ms   (65 / 134 GFLOP/s)
+verdict: 65 GFLOP/s f64 at n=1024 -- TUNED.
+```
+
+Three readings, and the third is the uncomfortable one.
+
+- **Against `--simd` on the same machine** (n=512: f64 21.4 ms, f32 10.9 ms), OpenBLAS is
+  **20x threaded / 5.2x on one thread** at f64, and 21x / 5.4x at f32. So the
+  opportunistic tier is worth having -- this is not the marginal case that would have let
+  the BLAS item stay macOS-shaped. But note which number is which: 20x is 20 CORES, and
+  rontolisp is single-threaded today, so binding a threaded BLAS silently makes
+  `linalg:matmul` multi-threaded. 5.2x is the honest no-surprises figure and 20x is the
+  one that comes with a semantic change.
+- **Against Accelerate**, Grace's 391 GFLOP/s f64 across 20 cores is half the M4 Max's
+  800. Apple's advantage is not merely that the library is guaranteed present.
+- **Against the GPU on the same box, at f64, it is a TIE.** `--gpu` with copies does
+  n=512 in 0.906 ms, n=1024 in 5.720, n=2048 in 40.541; threaded OpenBLAS does 1.073,
+  5.942, 43.921. Within 20%, 4% and 8%. The GB10's fp64 is weak enough (420 GFLOP/s even
+  from cuBLAS) that 20 Grace cores catch it. At f32 the GPU keeps a real but modest
+  phase-1 lead: 1.6x at n=512, 2.3x at n=2048.
+
+That last point belongs to todo-123 rather than to the BLAS item, and it sharpens what
+`--gpu` is for on THIS class of machine: not f64 -- where a CPU BLAS the user may already
+have is level with it -- but f32, residency, and the batched rank-3 shape. It is the same
+conclusion Apple reached by a different route (there, MSL simply has no double), and it is
+further evidence for phase 0.
+
+The opportunistic tier now has one measured member on each side. Note that cuBLAS is NOT
 part of the driver (here it comes from `libcublas-13-0`, pulled by `cuda-libraries-13-0`),
 but it IS preinstalled and on the `ldconfig` path on any machine with the CUDA stack, so
-its marginal cost on such a box is zero. If that tier is ever built it should be built once
-for both CPU and GPU, not twice.
+its marginal cost on such a box is zero -- exactly like OpenBLAS on a machine that already
+has numpy. If that tier is ever built it should be built once for both CPU and GPU, not
+twice.
 
 ### The CPU baseline, same machine
 
@@ -624,3 +678,69 @@ Apple-side comparison below quotes the AFTER column.
 - **No `linalg` integration at all.** Nothing here touches a `LispFloatArray`, a decline
   sentinel or a call site. That is phase 1, and it is the point at which this directory
   stops being useful.
+
+## Changes made to the spike machines
+
+The probes here are read-only with one exception, recorded so the machines can be put
+back and so a later reader knows which numbers came from a modified system.
+
+### DGX Spark (`gx10-c90e`, GB10, Ubuntu 24.04 aarch64) -- 2026-08-20
+
+**One package installed**, to measure what a tuned CPU BLAS is worth on Linux (the
+"With a tuned BLAS installed" section above). Nothing else was changed; no dependency was
+pulled and nothing was removed.
+
+```bash
+sudo apt-get install -y libopenblas0-pthread     # 0.3.26+ds-1ubuntu0.1
+```
+
+State before, as recorded by the probes themselves earlier that day:
+
+```
+libblas3:arm64        3.12.0-3build1.1     <- Debian's netlib reference, the ONLY provider
+liblapack3:arm64      3.12.0-3build1.1
+libopenblas0-pthread  not installed
+update-alternatives:  libblas.so.3 -> /usr/lib/aarch64-linux-gnu/blas/libblas.so.3 (priority 10)
+AccelerateProbe:      bound libblas.so.3, 7-8 GFLOP/s, no tuned marker
+```
+
+State after:
+
+```
+libopenblas0-pthread:arm64  0.3.26+ds-1ubuntu0.1
+update-alternatives:  libblas.so.3 -> .../openblas-pthread/libblas.so.3 (priority 100, auto)
+AccelerateProbe:      bound libopenblas.so.0, 361 GFLOP/s f64 threaded / 65 single
+```
+
+**The side effect is the alternatives switch**, not the package: `libblas.so.3` now
+resolves to OpenBLAS for everything on the machine that links BLAS by that soname (numpy,
+scipy, R, ...). That is normally an improvement -- they go from the reference
+implementation to a tuned one -- but it IS a system-wide behaviour change and it was not
+asked for by anything in this directory. The probe itself does not depend on it: its
+candidate list tries `libopenblas.so.0` before `libblas.so.3`.
+
+To revert completely:
+
+```bash
+sudo apt-get remove libopenblas0-pthread     # alternatives falls back to priority 10
+update-alternatives --display libblas.so.3-aarch64-linux-gnu   # verify
+```
+
+To keep OpenBLAS installed but restore the reference as the system default:
+
+```bash
+sudo update-alternatives --set libblas.so.3-aarch64-linux-gnu \
+     /usr/lib/aarch64-linux-gnu/blas/libblas.so.3
+```
+
+Two things that were NOT changed and are worth knowing: the CUDA stack was already
+present (`libcublas-13-0` via `cuda-libraries-13-0`, on the `ldconfig` path) and no NVPL
+is installed. `git pull` was run in `/home/maki/git/rontolisp` and the tree is otherwise
+clean.
+
+### Apple M4 Max (macOS 26.3.1) -- 2026-08-20
+
+**Nothing installed.** That is the point of the Metal result: `newLibraryWithSource`
+compiled MSL on a machine with no Xcode and no `xcrun metal`, and Accelerate and
+MetalPerformanceShaders are part of the OS. The only files produced were the
+`Mm2.class` / `W.class` baselines and a `native-image` build directory, all deleted.

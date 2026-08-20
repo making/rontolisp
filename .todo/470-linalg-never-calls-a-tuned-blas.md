@@ -1,4 +1,4 @@
-# A tuned BLAS ships inside macOS and `linalg` never calls it
+# `linalg` never calls a tuned BLAS, and one is free on every platform we measured
 
 Difficulty: Medium.
 
@@ -6,6 +6,16 @@ Found while spiking Metal for `.todo/123`. It is not a GPU item and does not bel
 that file: it is a CPU acceleration path, it covers `linalg`'s DEFAULT element width, and
 on Apple Silicon it beats every GPU option in todo-123 at the sizes rontolisp programs
 actually run.
+
+**DECIDED (user, 2026-08-20): a tuned BLAS is RECOMMENDED, never required. rontolisp must
+run identically without one.** That settles the item's shape and removes a question this
+file previously spent two sections on. There is ONE mechanism -- find a tuned CBLAS,
+verify it is tuned, use it, otherwise decline to the kernel we already have -- and the
+platforms differ only in what that search finds. macOS finds Accelerate with the user
+doing nothing; a Linux user is TOLD, in the docs, to `apt install libopenblas0-pthread`
+and gets 5-20x for it. Neither is a dependency: nothing is bundled, nothing is
+downloaded, and a machine with no tuned BLAS runs the same programs to the same output,
+only slower. This is exactly `--gpu`'s posture toward a GPU, one layer down.
 
 ## The measurement
 
@@ -51,28 +61,44 @@ its lanes and roughly halved that column. Measure it that way or the gap is over
   kernel that returns the null sentinel for anything it declines, with the scalar defun
   staying the oracle. Nothing new has to be invented to plug it in -- except the
   availability predicate, which is genuinely new and is the item's real difficulty
-  (point 3 below).
+  (point 6 below).
 - **It reaches the same two backends as `--gpu`** (interpreter incl. the native binary,
   and JVM) for the same reason -- FFM -- so it inherits todo-123's native-image answer.
 
-## What has to be decided before building it
+## What has to be built, and what is still open
 
-0. **The opportunistic tier is a separate question from this item, and should stay
-   separate.** "Bind a tuned library the user happens to have installed" is a legitimate
-   thing to want -- it is what todo-123 already says about cuBLAS ("an opportunistic
-   `dlopen`, never a requirement"), and cuBLAS turns out to be preinstalled on every DGX
-   and ML dev box AND on the `ldconfig` path, so the marginal cost there really is zero.
-   The same sentence would cover OpenBLAS, MKL and NVPL for the CPU. But that is a
-   BONUS tier with no guarantees, no test machine that represents it, and results that
-   vary by installed version; this item is about the tier that is guaranteed. Do not let
-   the two merge: decide and ship the guaranteed one first, and if the bonus tier is ever
-   built, build it once for both CPU and GPU rather than twice.
-1. **Is it a flag, or is it what `--simd` means on a machine that has it?** A third
+Points 1-3 follow from the decision above rather than being open questions; 4-8 are
+genuinely undecided.
+
+1. **The decline path is the BASELINE, not a fallback, and it has to reject a BLAS that
+   is present.** "Works without one" is not free: the DGX Spark ships the netlib reference
+   at `libblas.so.3`, which is 1.6x SLOWER than the kernel rontolisp already has, so
+   "found a CBLAS" must not mean "use it". The identification work in point 3 is therefore
+   load-bearing rather than a nicety -- without it, recommending a BLAS would make the
+   machines that ignored the recommendation slower than they are today. That is the one
+   way this feature can do harm, and the only one.
+
+2. **Recommending it makes threading a documented behaviour rather than an open
+   question.** OpenBLAS's 20x is 20 CORES; single-threaded it is 5.2x. rontolisp is
+   single-threaded today, so binding a threaded BLAS turns `linalg:matmul` into a
+   multi-core operation, which is not something `--simd` has ever done and is invisible
+   from the program's text. Accelerate threads too, so this is not Linux-specific. Since
+   we are now telling people to install the thing, the docs have to say what it does to
+   the machine, and `OPENBLAS_NUM_THREADS` / `VECLIB_MAXIMUM_THREADS` should be
+   acknowledged rather than fought.
+
+3. **The recommendation is a docs deliverable, mirrored en/ja.** A guide section --
+   `doc/{en,ja}/guides/simd-acceleration.md` is the natural home -- saying: macOS needs
+   nothing; on Linux install OpenBLAS for N x faster `linalg:matmul`; here is how to check
+   which library was bound; here is what it does to precision and to thread usage. Without
+   that page the feature is invisible to exactly the users it is for.
+
+4. **Is it a flag, or is it what `--simd` means on a machine that has it?** A third
    spelling next to `--simd` and `--gpu` is a cost in itself. The honest framing may be
    that `--simd` is "use the best CPU kernel available" and Accelerate is simply what that
    resolves to on macOS -- but that silently changes what an existing `--simd` build does,
    so it is a decision, not a detail.
-2. **The precision contract, and it is a bigger break than `--gpu`'s.** A tuned BLAS
+5. **The precision contract, and it is a bigger break than `--gpu`'s.** A tuned BLAS
    blocks and reorders its reduction, so it is not bit-identical to the scalar defun --
    that much is the same trade todo-469 already made for `#f`, and `.kb/linalg-simd.md`
    has the language for it. The new part is WHOSE reduction order it is. Today the three
@@ -82,7 +108,7 @@ its lanes and roughly halved that column. Measure it that way or the gap is over
    (a different device gives different bits) and is opt-in for exactly that reason, so
    the precedent exists -- but it must be decided deliberately, not inherited by
    accident, and it argues for a distinct flag rather than folding this into `--simd`.
-3. **The availability probe must find a TUNED BLAS, not a BLAS. Measured, this is the
+6. **The availability probe must find a TUNED BLAS, not a BLAS. Measured, this is the
    hardest part of the item.** CBLAS is one ABI -- `cblas_dgemm` has the same signature in
    Accelerate, OpenBLAS, NVPL and MKL -- so the binding itself is two `downcallHandle`s
    and is not Apple-specific at all. What differs per platform is whether a library is
@@ -105,21 +131,20 @@ its lanes and roughly halved that column. Measure it that way or the gap is over
      the measurement is what actually decides, and a startup micro-benchmark costs time
      the availability probe should not spend -- so how to combine them is an open design
      question, not a solved one.
-   - **The Linux case is SETTLED, and the answer is "decline".** It is tempting to read
-     the DGX result as "install OpenBLAS and re-measure", and that would be the wrong
-     experiment. This item inherits todo-123's founding rule -- **the runtime requirement
-     is what the OS or the driver already provides, and nothing the user has to install**
-     -- which is the rule that made `--gpu` compatible with the no-dependencies
-     constraint and the rule cuBLAS was rejected for breaking. Measuring a
-     `sudo apt install libopenblas-dev` machine would measure a configuration that rule
-     forbids requiring, and would re-make the mistake already rejected one file over.
-     So: macOS satisfies the rule (Accelerate, always, in the OS), Linux does not (the
-     only BLAS present is the reference, which is slower than what we already have), and
-     that IS the finding. The title of this item is accurate rather than parochial.
-4. **Which members.** GEMM is the whole win; `dot` / `axpy` / `nrm2` are memory-bound and
+   - **What Linux is worth, measured.** todo-123's founding rule -- the runtime
+     requirement is what the OS or the driver already provides, and nothing the user
+     installs -- governs what may be REQUIRED, and by it macOS qualifies and stock Linux
+     does not. It says nothing about what may be MEASURED, and an earlier draft of this
+     item confused the two and declined to measure at all, which left the opportunistic
+     tier's size unknown for no reason. With OpenBLAS 0.3.26 installed on the Spark it is
+     **20x `--simd` threaded across 20 cores, and 5.2x on a single thread** (f64, n=512:
+     21.4 ms against 1.073 / 4.137). So the tier is worth building; this item is not
+     macOS-shaped after all, even though macOS is the only platform where it needs no
+     precondition.
+7. **Which members.** GEMM is the whole win; `dot` / `axpy` / `nrm2` are memory-bound and
    probably not worth the call. `cblas_dgemm` also covers the transposed and scaled forms
    that `linalg` currently expands into separate passes.
-5. **The copy.** `linalg`'s arrays are Java heap `double[]`/`float[]` and FFM cannot hand
+8. **The copy.** `linalg`'s arrays are Java heap `double[]`/`float[]` and FFM cannot hand
    a heap array to a native call, so every call copies heap -> native. It is already in
    the numbers above and it still wins by 39x, but it is the same structural problem
    todo-123 phase 3 wants to solve, and the two should not solve it twice.

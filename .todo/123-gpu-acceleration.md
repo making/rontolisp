@@ -240,9 +240,36 @@ that needs no dependency and recovers most of it. In ROI order the real wins are
 and cuBLAS is a strictly worse way to buy the last of those. Revisit only if phase 3
 lands, f32 workloads dominate in practice, and someone still wants the last 2-3x on a
 machine that already has the toolkit -- as an opportunistic `dlopen`, never a
-requirement. That is the same shape the CPU-BLAS item lands in on Linux
-(`.todo/470`): on both, the OS-shipped-or-nothing rule decides what may be REQUIRED,
-and anything richer is a bonus taken only when a `dlopen` happens to succeed.
+requirement. That is the same shape todo-470 settled on for the CPU: a tuned library is
+RECOMMENDED and never required, so nothing is bundled or downloaded, a machine without one
+runs the same programs to the same output, and the only rule that binds is that we may not
+REQUIRE what the OS or the driver does not already provide.
+
+### And the other thing that competes with `--gpu` at f64: 20 CPU cores
+
+Measured after the fact, with OpenBLAS 0.3.26 installed on this same machine (it is not
+there by default -- stock, the only BLAS present is the netlib reference, which is 1.6x
+SLOWER than `--simd`). Threaded across the GB10's 20 Grace cores, ms per call:
+
+| n | `--gpu` f64 w/copy | OpenBLAS f64 | | `--gpu` f32 w/copy | OpenBLAS f32 |
+| --- | --- | --- | --- | --- | --- |
+| 512 | 0.906 | 1.073 | 1.2x | 0.320 | 0.514 | 1.6x |
+| 1024 | 5.720 | 5.942 | 1.04x | 1.625 | 2.943 | 1.8x |
+| 2048 | 40.541 | 43.921 | 1.08x | 9.360 | 21.492 | 2.3x |
+
+**At f64 it is a tie.** The GB10's fp64 is weak enough -- 420 GFLOP/s even from cuBLAS,
+one forty-fourth of its f32 -- that 20 Grace cores at 391 GFLOP/s catch a whole GPU. So on
+this class of machine `--gpu`'s f64 case is not "faster than the CPU"; it is "the same as
+a CPU library the user may already have installed, with a device dependency attached". At
+f32 the GPU keeps a real but modest phase-1 lead of 1.6-2.3x, which residency and kernel
+tuning would widen.
+
+This is the same conclusion Apple reached by a completely different route -- there MSL has
+no double at all, so f64 cannot even be attempted -- and it is the strongest argument yet
+for **phase 0**: `--gpu`'s reason to exist is f32, residency and the batched rank-3 shape,
+and a `--gpu` that mostly sees `#d` arrays is competing with the CPU rather than beating
+it. The CPU-BLAS side is `.todo/470`; what belongs here is that the f64 half of `--gpu` has
+a credible CPU competitor on both platforms, and should stop being quoted as the headline.
 
 The f64 tiled kernel is NOT bit-identical to the scalar defun (max abs difference 1.5
 to 2.7 on the spike's inputs): the tile walk reorders the reduction. That is expected
@@ -672,8 +699,9 @@ already says are a one-line change -- stops being out of reach.
 - `../silicon/` -- `silicon-cuda` (pure-FFM driver-API binding, the prototype-string
   `Bindings.java`), `silicon-metal` (the Swift-shim approach we are NOT taking, and did
   not need to: `Mtl.java` reaches the same API through `objc_msgSend`).
-- `.todo/470-a-tuned-blas-ships-inside-macos-and-linalg-never-calls-it.md` -- the
-  Accelerate finding above, as its own feature. It is a CPU item, it covers `linalg`'s
-  DEFAULT width, and on Apple Silicon it beats everything in this file below n~1024.
+- `.todo/470-linalg-never-calls-a-tuned-blas.md` -- the tuned-BLAS finding above, as its
+  own feature: a CPU item, covering `linalg`'s DEFAULT width, recommended-never-required.
+  On Apple Silicon it beats everything in this file below n~1024, and on the GB10 with
+  OpenBLAS installed it draws level with `--gpu` at f64 outright.
 - `examples/llm-from-scratch/`, `examples/ml/tiny-llm.lisp`,
   `examples/deep-learning-from-scratch/` -- the workloads this is for.
