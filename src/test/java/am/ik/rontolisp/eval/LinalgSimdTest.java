@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of {@code linalg:}
- * ({@link LinalgSimd}), the sibling of {@link VecSimdTest}. Thirty-four
+ * ({@link LinalgSimd}), the sibling of {@link VecSimdTest}. Thirty-five
  * {@code linalg.lisp} defuns run on {@code jdk.incubator.vector} instead of their boxed
  * element loops, while the default interpreter keeps the scalar reference (the
  * cross-backend byte-identity oracle).
@@ -464,6 +464,17 @@ class LinalgSimdTest {
 				""";
 		assertThat(eval(mm, true).print()).isEqualTo("(16777216 16777216)");
 		assertThat(eval(mm, false).print()).isEqualTo("(16778240 16778240)");
+		// The STACKED product folds each cell exactly as a per-batch linalg:dot does --
+		// that is its precision contract, and it puts %la-matmul-nd on the same
+		// 16777216 the v.M probe above lands on, at rank 3 and on every --simd backend.
+		String nd = """
+				(let ((v (linalg:ones 1024 :element-type 'single-float)))
+				  (setf (aref v 0) 4096.0)
+				  (round (row-major-aref
+				          (linalg:matmul (linalg:reshape v '(1 1 1024)) (linalg:reshape v '(1 1024 1))) 0)))
+				""";
+		assertThat(eval(nd, true).print()).isEqualTo("16777216");
+		assertThat(eval(nd, false).print()).isEqualTo("16778240");
 		// The #d control: double-float reductions are untouched by the contract, and
 		// exact on both paths for these inputs.
 		String probe64 = """
@@ -714,6 +725,58 @@ class LinalgSimdTest {
 		assertMatchesScalarOracle(
 				"(linalg::%la-col2im (linalg::%la-im2col (linalg:reshape (linalg:arange 32) '(2 1 4 4)) 2 2 2 0)"
 						+ " '(2 1 4 4) 2 2 2 0)");
+	}
+
+	// --- the stacked matrix product: %la-matmul-nd ---------------------------------
+
+	@Test
+	void matmulNdIsInterceptedUnderSimd() {
+		// The dead-flag guard for this member: a --simd run that silently fell back
+		// would still pass every value test below.
+		String form = "(linalg:zeros 1) #'linalg::%la-matmul-nd";
+		assertThat(eval(form, true).print()).isEqualTo("#<function LINALG::%LA-MATMUL-ND>");
+		assertThat(eval(form, false).print()).isEqualTo("#<lambda>");
+	}
+
+	@Test
+	void matmulNdMatchesTheScalarOracleAtBothWidthsAndEveryBatchShape() {
+		// Plain rank 3, a BROADCAST leading axis on either side (stride 0), a rank-2
+		// operand against a rank-3 one, and rank 4 with two leading axes -- every shape
+		// the %la-batch-strides odometer has to walk. Integer-valued operands, so the
+		// f32 fold is exact and the oracle comparison is an equality.
+		String a3 = "(linalg:reshape (linalg:arange 24) '(2 3 4))";
+		String b3 = "(linalg:reshape (linalg:arange 32) '(2 4 4))";
+		assertMatchesScalarOracle("(linalg:matmul " + a3 + " " + b3 + ")");
+		assertMatchesScalarOracle("(linalg:matmul (linalg:reshape (linalg:arange 12) '(1 3 4)) " + b3 + ")");
+		assertMatchesScalarOracle("(linalg:matmul " + a3 + " (linalg:reshape (linalg:arange 8) '(1 4 2)))");
+		assertMatchesScalarOracle("(linalg:matmul " + b3 + " (linalg:reshape (linalg:arange 8) '(4 2)))");
+		assertMatchesScalarOracle("(linalg:matmul (linalg:reshape (linalg:arange 8) '(2 4)) " + b3 + ")");
+		assertMatchesScalarOracle("(linalg:matmul (linalg:reshape (linalg:arange 48) '(2 3 2 4))"
+				+ " (linalg:reshape (linalg:arange 24) '(1 3 4 2)))");
+		// Single width, and a p wide enough to cross the THRESHOLD = 128 lane gate.
+		assertMatchesScalarOracle(
+				"(linalg:matmul (linalg:reshape (linalg:arange 0 24 1 :element-type 'single-float) '(2 3 4))"
+						+ " (linalg:reshape (linalg:arange 0 32 1 :element-type 'single-float) '(2 4 4)))");
+		assertMatchesScalarOracle("(linalg:sum (linalg:matmul (linalg:reshape (linalg:arange 512) '(2 2 128))"
+				+ " (linalg:reshape (linalg:arange 512) '(2 128 2))))");
+	}
+
+	@Test
+	void matmulNdDeclinedInputsRunTheScalarDefun() {
+		// A general boxed operand, a rank-1 side (the numpy promote-then-drop rule the
+		// kernel leaves in the defun), and a mixed-width pair: all answer identically.
+		assertMatchesScalarOracle("(linalg:matmul (make-array '(2 2 2) :initial-element 1) (linalg:zeros '(2 2)))");
+		assertMatchesScalarOracle("(linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4)) (linalg:arange 4))");
+		assertMatchesScalarOracle("(linalg:matmul (linalg:arange 4) (linalg:reshape (linalg:arange 32) '(2 4 4)))");
+		assertMatchesScalarOracle("(linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4))"
+				+ " (linalg:reshape (linalg:arange 0 32 1 :element-type 'single-float) '(2 4 4)))");
+		// The library errors still come from the library, with its own messages.
+		assertThatThrownBy(() -> eval("(linalg:matmul (linalg:reshape (linalg:arange 24) '(3 2 4))"
+				+ " (linalg:reshape (linalg:arange 32) '(2 4 4)))", true))
+			.hasMessageContaining("batch dimensions do not broadcast");
+		assertThatThrownBy(() -> eval("(linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4))"
+				+ " (linalg:reshape (linalg:arange 24) '(2 3 4)))", true))
+			.hasMessageContaining("inner dimensions differ");
 	}
 
 	@Test

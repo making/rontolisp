@@ -736,12 +736,23 @@ final class LinalgSimdKernels {
 	 */
 	static double[] matmul(double[] a, double[] b, int n, int m, int p) {
 		double[] r = new double[n * p];
+		matmulInto(a, 0, b, 0, r, 0, n, m, p);
+		return r;
+	}
+
+	/**
+	 * One {@code n x m} by {@code m x p} slab of the {@code ikj} loop, reading {@code a}
+	 * at {@code oa}, {@code b} at {@code ob} and accumulating into {@code r} at
+	 * {@code or}. The rank-2 product is the {@code oa = ob = or = 0} case and every batch
+	 * of {@link #matmulNd} is one call, so there is exactly one lane loop.
+	 */
+	private static void matmulInto(double[] a, int oa, double[] b, int ob, double[] r, int or, int n, int m, int p) {
 		for (int i = 0; i < n; i++) {
-			int ro = i * p;
-			int ao = i * m;
+			int ro = or + i * p;
+			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
 				double s = a[ao + k];
-				int bo = k * p;
+				int bo = ob + k * p;
 				int j = 0;
 				if (p >= THRESHOLD) {
 					int bound = SPECIES.loopBound(p);
@@ -756,7 +767,6 @@ final class LinalgSimdKernels {
 				}
 			}
 		}
-		return r;
 	}
 
 	/**
@@ -782,12 +792,17 @@ final class LinalgSimdKernels {
 	 */
 	static float[] matmulF(float[] a, float[] b, int n, int m, int p) {
 		float[] r = new float[n * p];
+		matmulIntoF(a, 0, b, 0, r, 0, n, m, p);
+		return r;
+	}
+
+	private static void matmulIntoF(float[] a, int oa, float[] b, int ob, float[] r, int or, int n, int m, int p) {
 		for (int i = 0; i < n; i++) {
-			int ro = i * p;
-			int ao = i * m;
+			int ro = or + i * p;
+			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
 				float s = a[ao + k];
-				int bo = k * p;
+				int bo = ob + k * p;
 				int j = 0;
 				if (p >= THRESHOLD) {
 					int bound = FSPECIES.loopBound(p);
@@ -800,6 +815,60 @@ final class LinalgSimdKernels {
 				for (; j < p; j++) {
 					r[ro + j] += b[bo + j] * s;
 				}
+			}
+		}
+	}
+
+	/**
+	 * The STACKED matrix product ({@code linalg::%la-matmul-nd}): one {@link #matmulInto}
+	 * slab per batch, the batch offsets advancing through the {@code %la-batch-strides}
+	 * odometer (a broadcast leading axis has stride 0, so it simply re-reads the same
+	 * slab). Every output cell therefore folds {@code k} exactly as a per-batch
+	 * {@code linalg:dot} does -- the precision contract is {@code dot}'s, not the
+	 * defun's.
+	 * @param bd the broadcast batch shape, outermost first
+	 * @param sa {@code a}'s batch strides, aligned to {@code bd}
+	 * @param sb {@code b}'s batch strides, aligned to {@code bd}
+	 */
+	static double[] matmulNd(double[] a, double[] b, int[] bd, int[] sa, int[] sb, int n, int m, int p, int batches) {
+		double[] r = new double[batches * n * p];
+		int[] idx = new int[bd.length];
+		int oa = 0;
+		int ob = 0;
+		for (int z = 0; z < batches; z++) {
+			matmulInto(a, oa, b, ob, r, z * n * p, n, m, p);
+			for (int ax = bd.length - 1; ax >= 0; ax--) {
+				idx[ax]++;
+				oa += sa[ax];
+				ob += sb[ax];
+				if (idx[ax] < bd[ax]) {
+					break;
+				}
+				idx[ax] = 0;
+				oa -= bd[ax] * sa[ax];
+				ob -= bd[ax] * sb[ax];
+			}
+		}
+		return r;
+	}
+
+	static float[] matmulNdF(float[] a, float[] b, int[] bd, int[] sa, int[] sb, int n, int m, int p, int batches) {
+		float[] r = new float[batches * n * p];
+		int[] idx = new int[bd.length];
+		int oa = 0;
+		int ob = 0;
+		for (int z = 0; z < batches; z++) {
+			matmulIntoF(a, oa, b, ob, r, z * n * p, n, m, p);
+			for (int ax = bd.length - 1; ax >= 0; ax--) {
+				idx[ax]++;
+				oa += sa[ax];
+				ob += sb[ax];
+				if (idx[ax] < bd[ax]) {
+					break;
+				}
+				idx[ax] = 0;
+				oa -= bd[ax] * sa[ax];
+				ob -= bd[ax] * sb[ax];
 			}
 		}
 		return r;

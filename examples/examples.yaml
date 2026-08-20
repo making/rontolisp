@@ -466,7 +466,7 @@ examples:
   - path: llm-from-scratch/chapter02/section5.lisp
     backends: [interpreter, jvm, wasm]
     simd: true
-    note: notebook 2.5 -- the masks, the vocabulary, and a Transformer trained on the in-file 12-pair ja->en corpus then decoded greedily. Under --simd for the margin - the interpreter leg is 2:06 scalar against the 240 s cap and 1:19 with the flag, and every leg prints the same bytes either way (verified on all three)
+    note: notebook 2.5 -- the masks, the vocabulary, and a Transformer trained on the in-file 12-pair ja->en corpus then decoded greedily. Under --simd for the margin - the interpreter leg is 40.9 s scalar against the 240 s cap and 5.4 s with the flag, and every leg prints the same bytes either way (verified on all three)
     expect:
       file: .expected/llm-section5.txt
 
@@ -491,7 +491,7 @@ examples:
   - path: llm-from-scratch/chapter03/train-gpt-soseki.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     simd: true
-    note: the train_gpt_soseki notebook -- a character-level GPT trained by AdamW over two parameter groups on the inlined 漱石 corpus, then sampled with temperature and top-k. Under --simd for the margin - the interpreter leg is 2:43 scalar against the 240 s cap and 1:39 with the flag, and every leg prints the same bytes either way (verified on all four). Most of what is left is the un-intercepted rank-3 matmul, not the flag's fault
+    note: the train_gpt_soseki notebook -- a character-level GPT trained by AdamW over two parameter groups on the inlined 漱石 corpus, then sampled with temperature and top-k. Under --simd for the margin - the interpreter leg is 52.4 s scalar against the 240 s cap and 6.5 s with the flag, and every leg prints the same bytes either way (verified on all four). The rank-3 matmul an attention layer almost entirely is joined the accelerated set in todo-467, which is where most of that margin came from
     expect:
       file: .expected/llm-train-gpt-soseki.txt
 

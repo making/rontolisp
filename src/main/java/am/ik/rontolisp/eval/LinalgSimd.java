@@ -19,7 +19,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of the {@code linalg:} kernels: it
- * replaces thirty-four of the {@code linalg.lisp} defuns with native
+ * replaces thirty-five of the {@code linalg.lisp} defuns with native
  * {@link LispFunction}s driving the lane loops in {@link LinalgSimdKernels}. The
  * {@code linalg:} sibling of {@link VecSimd}, deliberately a separate class --
  * {@code vec.lisp} and {@code linalg.lisp} never call each other, so their interceptors
@@ -171,6 +171,11 @@ public final class LinalgSimd {
 		// convolution runs (~97% of ch07 train time under --simd was im2col/col2im).
 		define(globalEnv, evaluator, LispNames.LINALG_IM2COL, 5, LinalgSimd::im2col);
 		define(globalEnv, evaluator, LispNames.LINALG_COL2IM, 6, LinalgSimd::col2im);
+		// The internal STACKED matrix product behind linalg:matmul at rank >= 3
+		// (torch.bmm): the rank <= 2 dispatch stays in the library, this is the batched
+		// walk it routes to -- every attention layer and every torch:linear over a
+		// (B T C) activation.
+		define(globalEnv, evaluator, LispNames.LINALG_MATMUL_ND, 2, LinalgSimd::matmulNd);
 	}
 
 	/**
@@ -679,6 +684,78 @@ public final class LinalgSimd {
 		return u instanceof LispSingleFloatArray
 				? new LispSingleFloatArray(LinalgSimdKernels.outerF(floats(u), floats(v)), dims)
 				: new LispDoubleFloatArray(LinalgSimdKernels.outer(doubles(u), doubles(v)), dims);
+	}
+
+	/**
+	 * {@code (linalg::%la-matmul-nd a b)}, the STACKED matrix product: the last two axes
+	 * are the matrix and every leading axis broadcasts. One {@code ikj} slab per batch --
+	 * the same kernel {@code dot}'s M.M case runs -- over the {@code %la-batch-strides}
+	 * offsets.
+	 *
+	 * <p>
+	 * Declined (the defun handles it, and signals its own errors): a general boxed
+	 * operand, mixed widths, a RANK-1 operand on either side (the numpy
+	 * promote-then-drop-the-axis rule, which is not the hot shape), non-broadcastable
+	 * batch shapes, mismatched inner dimensions, and any empty extent (the defun's
+	 * zero-length {@code k} fold answers the INTEGER 0 it seeds with).
+	 */
+	private static @Nullable LispVal matmulNd(List<LispVal> args) {
+		LispFloatArray a = packed(args.get(0));
+		LispFloatArray b = packed(args.get(1));
+		if (a == null || b == null || a.getClass() != b.getClass() || a.rank() < 2 || b.rank() < 2) {
+			return null;
+		}
+		int[] da = a.dims();
+		int[] db = b.dims();
+		int n = da[da.length - 2];
+		int m = da[da.length - 1];
+		int p = db[db.length - 1];
+		if (m != db[db.length - 2] || n < 1 || m < 1 || p < 1) {
+			return null;
+		}
+		int[] ba = Arrays.copyOf(da, da.length - 2);
+		int[] bb = Arrays.copyOf(db, db.length - 2);
+		int[] bd = bcastShape(ba, bb);
+		if (bd == null) {
+			return null;
+		}
+		long batches = 1;
+		for (int d : bd) {
+			batches *= d;
+		}
+		long total = batches * n * p;
+		if (batches < 1 || !sizeFits(total)) {
+			return null;
+		}
+		int[] sa = batchStrides(ba, bd, n * m);
+		int[] sb = batchStrides(bb, bd, m * p);
+		int[] od = Arrays.copyOf(bd, bd.length + 2);
+		od[bd.length] = n;
+		od[bd.length + 1] = p;
+		return switch (a) {
+			case LispDoubleFloatArray x -> new LispDoubleFloatArray(LinalgSimdKernels.matmulNd(x.data(),
+					((LispDoubleFloatArray) b).data(), bd, sa, sb, n, m, p, (int) batches), od);
+			case LispSingleFloatArray x -> new LispSingleFloatArray(LinalgSimdKernels.matmulNdF(x.data(),
+					((LispSingleFloatArray) b).data(), bd, sa, sb, n, m, p, (int) batches), od);
+		};
+	}
+
+	/**
+	 * {@code %la-batch-strides}: the row-major strides of the batch dims {@code d}
+	 * aligned to the broadcast batch shape {@code od}, with 0 on every stretched axis,
+	 * and the trailing matrix size as the innermost stride. That is
+	 * {@code %la-bcast-strides} scaled by {@code base}, which is why a broadcast leading
+	 * axis needs no special case.
+	 */
+	private static int[] batchStrides(int[] d, int[] od, long base) {
+		int[] s = new int[od.length];
+		long acc = base;
+		for (int k = od.length - 1, i = d.length - 1; k >= 0; k--, i--) {
+			int n = i >= 0 ? d[i] : 1;
+			s[k] = n == 1 ? 0 : (int) acc;
+			acc *= n;
+		}
+		return s;
 	}
 
 	// --- CNN window unfolding: %la-im2col / %la-col2im ---------------------------------

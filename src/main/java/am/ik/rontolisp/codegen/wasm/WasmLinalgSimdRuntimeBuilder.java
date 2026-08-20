@@ -22,7 +22,7 @@ import static am.ik.rontolisp.codegen.wasm.WasmVecSimdRuntimeBuilder.withLocals;
 
 /**
  * The wasm-GC {@code --simd} runtime for the {@code linalg:} kernels, the sibling of
- * {@link WasmVecSimdRuntimeBuilder}. Forty-one hand-assembled functions that
+ * {@link WasmVecSimdRuntimeBuilder}. Forty-two hand-assembled functions that
  * {@link WasmLinalgSimdCompiler} calls at an intercepted {@code linalg:} call site (the
  * last seven cover the declined call shapes: the general numpy broadcast, the axes
  * transpose and the axis folds).
@@ -214,10 +214,16 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int ARGMIN_AXIS = 40;
 
+	// The internal STACKED matrix product behind linalg:matmul at rank >= 3 (torch.bmm,
+	// hence every attention layer and every torch:linear over a (B T C) activation): the
+	// ikj LANE loop of the DOT kernel's M.M case, called once per batch offset.
+
+	static final int MATMUL_ND = 41;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 41;
+	static final int FUNC_COUNT = 42;
 
 	// The BCAST op selector, passed as an i31 by the element-wise kernels. BOP_MAX /
 	// BOP_MIN are the strict selects ((if (> x y) x y)): the SECOND operand wins any
@@ -303,6 +309,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case AMIN_AXIS -> buildFoldAxis(BOP_MIN, vecBase);
 			case ARGMAX_AXIS -> buildArgFoldAxis(true, vecBase);
 			case ARGMIN_AXIS -> buildArgFoldAxis(false, vecBase);
+			case MATMUL_ND -> buildMatmulNd(vecBase);
 			default -> throw new IllegalArgumentException("no linalg: simd helper " + fn);
 		};
 	}
@@ -1548,6 +1555,307 @@ final class WasmLinalgSimdRuntimeBuilder {
 		closeCountLoop(w, q);
 	}
 
+	// (linalg::%la-matmul-nd a b), the STACKED matrix product (numpy np.matmul at rank
+	// >= 3, torch.bmm / torch.matmul): the LAST TWO axes are the matrix and every leading
+	// axis broadcasts. For each batch it runs the SAME ikj lane loop buildDot's M.M case
+	// runs -- emitGemmRow over a scratch accumulator row of the operand width -- at the
+	// batch's own flat offsets, which advance through the %la-batch-strides odometer. A
+	// broadcast leading axis has stride 0 there and needs no special case, and the batch
+	// strides are %la-bcast-strides scaled by the trailing matrix size, which is what the
+	// extra `base` of emitAlignedStrides supplies.
+	//
+	// Precision follows a per-batch linalg:dot, NOT the scalar defun: an #f product folds
+	// each output cell in f32, in the defun's own k-ascending order (the reduction
+	// contract buildDot's comment states in full).
+	//
+	// Declined: a general boxed operand, mixed widths, a RANK-1 operand on either side
+	// (the numpy promote-then-drop-the-axis rule -- not the hot shape, and keeping it in
+	// the defun keeps this kernel one shape), non-broadcastable batch shapes, mismatched
+	// inner dimensions, any empty extent (the defun's zero-length k fold answers the
+	// INTEGER 0 it seeds with), and an output too large for one i32 index.
+	//
+	// params: 0 = a, 1 = b.
+	// i32: ra 2, rb 3, n 4, m 5, p 6, i 7, j 8, k 9, kind 10, t 11, base 12, off 13,
+	// pg 14, rowD 15, shift 16, rank 17, raB 18, rbB 19, batches 20, oa 21, ob 22, oo 23,
+	// ax 24, ai 25, dxa 26, dxb 27, tmp 28, acc 29, z 30, total 31.
+	// f64: aik 32, tf 33.
+	// v128: vs 34.
+	// eq: res 35, vbA 36, vbB 37, vbD 38, nd 39, accRow 40, da 41, db 42, bd 43, sa 44,
+	// sb 45, idx 46.
+	// $v128arr: gb 47, gacc 48.
+	private static byte[] buildMatmulNd(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int a = 0, bArg = 1;
+		int ra = 2, rb = 3, n = 4, m = 5, p = 6, i = 7, j = 8, k = 9, kind = 10, t = 11, base = 12, off = 13, pg = 14,
+				rowD = 15, shift = 16, rank = 17, raB = 18, rbB = 19, batches = 20, oa = 21, ob = 22, oo = 23, ax = 24,
+				ai = 25, dxa = 26, dxb = 27, tmp = 28, acc = 29, z = 30, total = 31;
+		int aik = 32, tf = 33;
+		int vs = 34;
+		int res = 35, vbA = 36, vbB = 37, vbD = 38, nd = 39, accRow = 40, da = 41, db = 42, bd = 43, sa = 44, sb = 45,
+				idx = 46;
+		int gb = 47, gacc = 48;
+
+		block(w); // B0 declined
+		isFarray(w, a);
+		isFarray(w, bArg);
+		w.write(Instruction.I32_AND);
+		brIfFalse(w, 0);
+		farrayKind(w, a);
+		set(w, kind);
+		get(w, kind);
+		farrayKind(w, bArg);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0); // mixed widths -> the defun widens both
+		farrayRank(w, a);
+		set(w, ra);
+		farrayRank(w, bArg);
+		set(w, rb);
+		get(w, ra);
+		i32Const(w, 2);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0); // a rank-1 operand -> the defun promotes it
+		get(w, rb);
+		i32Const(w, 2);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		farrayField(w, a, 0);
+		set(w, da);
+		farrayField(w, bArg, 0);
+		set(w, db);
+		// The trailing matrix: n x m by m x p, with the inner dimensions agreeing.
+		get(w, ra);
+		i32Const(w, 2);
+		w.write(Instruction.I32_SUB);
+		set(w, raB);
+		get(w, rb);
+		i32Const(w, 2);
+		w.write(Instruction.I32_SUB);
+		set(w, rbB);
+		bucketAt(w, da, raB);
+		set(w, n);
+		get(w, ra);
+		i32Const(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, ai);
+		bucketAt(w, da, ai);
+		set(w, m);
+		get(w, rb);
+		i32Const(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, ai);
+		bucketAt(w, db, ai);
+		set(w, p);
+		bucketAt(w, db, rbB);
+		get(w, m);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0); // inner dimensions differ -> the defun signals
+		get(w, n);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		get(w, m);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.I32_OR);
+		get(w, p);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.BR_IF, 0); // an empty extent -> the defun's integer-0 fold
+		// The broadcast BATCH shape, over the leading axes only.
+		get(w, raB);
+		get(w, rbB);
+		get(w, raB);
+		get(w, rbB);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.SELECT);
+		set(w, rank);
+		emitBcastShape(w, da, raB, db, rbB, rank, bd, k, ai, dxa, dxb, tmp, tf);
+		i32Const(w, 1);
+		set(w, batches);
+		openCountLoop(w, k, rank);
+		get(w, batches);
+		bucketAt(w, bd, k);
+		w.write(Instruction.I32_MUL);
+		set(w, batches);
+		closeCountLoop(w, k);
+		get(w, batches);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0); // an empty batch axis -> the defun
+		// total = batches * n * p, guarded through the f64 product the shape walk
+		// started.
+		get(w, tf);
+		get(w, n);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_MUL);
+		get(w, p);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(2147483000.0);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.BR_IF, 0); // output too large -> decline
+		get(w, batches);
+		get(w, n);
+		w.write(Instruction.I32_MUL);
+		get(w, p);
+		w.write(Instruction.I32_MUL);
+		set(w, total);
+		// %la-batch-strides: the bcast strides of the leading axes, scaled by the size of
+		// the trailing matrix (0 stays 0, so a stretched axis re-reads the same slab).
+		get(w, n);
+		get(w, m);
+		w.write(Instruction.I32_MUL);
+		set(w, t);
+		emitAlignedStrides(w, da, raB, rank, sa, ax, ai, dxa, acc, t, true);
+		get(w, m);
+		get(w, p);
+		w.write(Instruction.I32_MUL);
+		set(w, t);
+		emitAlignedStrides(w, db, rbB, rank, sb, ax, ai, dxa, acc, t, true);
+		newBucketsFilled(w, rank, idx);
+		farrayField(w, a, 1);
+		set(w, vbA);
+		farrayField(w, bArg, 1);
+		set(w, vbB);
+		newVblock(w, total, kind, vbD, vecBase);
+		// pg = ceil(p / lanes): the scratch row's group count at the operand width
+		get(w, kind);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, shift);
+		WasmVecSimdRuntimeBuilder.ceilShift(w, p, shift, pg);
+		// acc = _v_new(p, kind): one accumulator row, reused across every output row of
+		// every batch
+		get(w, p);
+		get(w, kind);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_NEW);
+		set(w, accRow);
+		vblockGroups(w, accRow, gacc);
+		farrayGroups(w, bArg, gb);
+		i32Const(w, 0);
+		set(w, oa);
+		i32Const(w, 0);
+		set(w, ob);
+		i32Const(w, 0);
+		set(w, oo);
+		openCountLoop(w, z, batches);
+		openCountLoop(w, i, n);
+		get(w, oo);
+		get(w, i);
+		get(w, p);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		set(w, rowD);
+		// re-zero the accumulator row
+		openCountLoop(w, j, pg);
+		get(w, gacc);
+		get(w, j);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0);
+		WasmVecLoops.simd(w, Instruction.F64X2_SPLAT);
+		WasmVecLoops.arraySet(w);
+		closeCountLoop(w, j);
+		openCountLoop(w, k, m);
+		// aik = a[oa + i*m + k]; b row k starts at flat ob + k*p, at the INPUT width's
+		// lane geometry
+		get(w, oa);
+		get(w, i);
+		get(w, m);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		set(w, t);
+		vget(w, vbA, t, vecBase);
+		set(w, aik);
+		get(w, ob);
+		get(w, k);
+		get(w, p);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		set(w, t);
+		get(w, kind);
+		w.write(Instruction.IF, 0x40);
+		get(w, aik);
+		w.write(Instruction.F32_DEMOTE_F64);
+		WasmVecLoops.simd(w, Instruction.F32X4_SPLAT);
+		set(w, vs);
+		get(w, t);
+		i32Const(w, 2);
+		w.write(Instruction.I32_SHR_U);
+		set(w, base);
+		get(w, t);
+		i32Const(w, 3);
+		w.write(Instruction.I32_AND);
+		set(w, off);
+		WasmVecSimdRuntimeBuilder.emitLaneChain(w, off, 4, 0x40,
+				o -> emitGemmRow(w, pg, j, base, o, vs, gb, gacc, true));
+		w.write(Instruction.ELSE);
+		get(w, aik);
+		WasmVecLoops.simd(w, Instruction.F64X2_SPLAT);
+		set(w, vs);
+		get(w, t);
+		i32Const(w, 1);
+		w.write(Instruction.I32_SHR_U);
+		set(w, base);
+		get(w, t);
+		i32Const(w, 1);
+		w.write(Instruction.I32_AND);
+		set(w, off);
+		WasmVecSimdRuntimeBuilder.emitLaneChain(w, off, 2, 0x40,
+				o -> emitGemmRow(w, pg, j, base, o, vs, gb, gacc, false));
+		w.write(Instruction.END);
+		closeCountLoop(w, k);
+		// write the row out: dst[rowD + j] = acc[j], an exact round trip -- _v_get
+		// promotes the f32 lane and _v_set narrows it back
+		openCountLoop(w, j, p);
+		get(w, vbD);
+		get(w, rowD);
+		get(w, j);
+		w.write(Instruction.I32_ADD);
+		vget(w, accRow, j, vecBase);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, j);
+		closeCountLoop(w, i);
+		get(w, oo);
+		get(w, n);
+		get(w, p);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		set(w, oo);
+		emitOdometer(w, rank, ax, tmp, idx, bd, sa, oa, sb, ob);
+		closeCountLoop(w, z);
+		// The result dims: the batch shape with the trailing matrix appended.
+		get(w, rank);
+		i32Const(w, 2);
+		w.write(Instruction.I32_ADD);
+		set(w, t);
+		newBucketsFilled(w, t, nd);
+		openCountLoop(w, k, rank);
+		bucketAt(w, bd, k);
+		set(w, tmp);
+		bucketSet(w, nd, k, tmp);
+		closeCountLoop(w, k);
+		get(w, rank);
+		set(w, ax);
+		bucketSet(w, nd, ax, n);
+		get(w, rank);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, ax);
+		bucketSet(w, nd, ax, p);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 30, 2, 0, 1, 12, 2);
+	}
+
 	// (linalg:outer u v): out[i][j] = uf[i] * vf[j], the operands flattened first -- and
 	// a packed backing IS the flattened data at any rank.
 	//
@@ -2087,75 +2395,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		set(w, da);
 		farrayField(w, bArg, 0);
 		set(w, db);
-		newBucketsFilled(w, rank, od);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(1.0);
-		set(w, tf);
-		// The broadcast shape (%la-bcast-shape): trailing axes align, a pair agrees
-		// when equal or either is 1, the output extent is the larger; the running f64
-		// product guards the output size (exact for any int below 2^53).
-		openCountLoop(w, k, rank);
-		get(w, ra);
-		get(w, rank);
-		w.write(Instruction.I32_SUB);
-		get(w, k);
-		w.write(Instruction.I32_ADD);
-		set(w, ai);
-		get(w, ai);
-		i32Const(w, 0);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, 0x7F);
-		bucketAt(w, da, ai);
-		w.write(Instruction.ELSE);
-		i32Const(w, 1);
-		w.write(Instruction.END);
-		set(w, dxa);
-		get(w, rb);
-		get(w, rank);
-		w.write(Instruction.I32_SUB);
-		get(w, k);
-		w.write(Instruction.I32_ADD);
-		set(w, ai);
-		get(w, ai);
-		i32Const(w, 0);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, 0x7F);
-		bucketAt(w, db, ai);
-		w.write(Instruction.ELSE);
-		i32Const(w, 1);
-		w.write(Instruction.END);
-		set(w, dxb);
-		get(w, dxa);
-		get(w, dxb);
-		w.write(Instruction.I32_NE);
-		get(w, dxa);
-		i32Const(w, 1);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.I32_AND);
-		get(w, dxb);
-		i32Const(w, 1);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.BR_IF, 2); // incompatible -> B0
-		get(w, dxa);
-		get(w, dxb);
-		get(w, dxa);
-		get(w, dxb);
-		w.write(Instruction.I32_GT_S);
-		w.write(Instruction.SELECT);
-		set(w, tmp);
-		bucketSet(w, od, k, tmp);
-		get(w, tf);
-		get(w, tmp);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_MUL);
-		set(w, tf);
-		get(w, tf);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(2147483000.0);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.BR_IF, 2); // output too large -> decline
-		closeCountLoop(w, k);
+		emitBcastShape(w, da, ra, db, rb, rank, od, k, ai, dxa, dxb, tmp, tf);
 		i32Const(w, 1);
 		set(w, total);
 		openCountLoop(w, k, rank);
@@ -2164,8 +2404,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.I32_MUL);
 		set(w, total);
 		closeCountLoop(w, k);
-		emitAlignedStrides(w, da, ra, rank, sx, ax, ai, dxa, acc, true);
-		emitAlignedStrides(w, db, rb, rank, sy, ax, ai, dxa, acc, true);
+		emitAlignedStrides(w, da, ra, rank, sx, ax, ai, dxa, acc, -1, true);
+		emitAlignedStrides(w, db, rb, rank, sy, ax, ai, dxa, acc, -1, true);
 		newBucketsFilled(w, rank, idx);
 		farrayField(w, a, 1);
 		set(w, vbA);
@@ -2338,7 +2578,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, rank);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.BR_IF, 0); // not a full permutation -> B0
-		emitAlignedStrides(w, da, rank, rank, st, ax, axv, tmp, acc, false);
+		emitAlignedStrides(w, da, rank, rank, st, ax, axv, tmp, acc, -1, false);
 		newBucketsFilled(w, rank, od);
 		newBucketsFilled(w, rank, os);
 		openCountLoop(w, k, rank);
@@ -2799,6 +3039,89 @@ final class WasmLinalgSimdRuntimeBuilder {
 	}
 
 	/**
+	 * The numpy broadcast shape of two dims bucket arrays ({@code %la-bcast-shape}):
+	 * trailing axes align, a pair agrees when equal or either is 1, the output extent is
+	 * the larger. Fills a fresh {@code odLocal} of {@code rankLocal} entries; an
+	 * incompatible pair or an output too large for one i32 index branches to depth 2 (the
+	 * caller's declined-exit block, which must be exactly two levels out).
+	 *
+	 * <p>
+	 * {@code raLocal} / {@code rbLocal} are the operands' EFFECTIVE ranks -- the full
+	 * rank for the element-wise broadcast, the leading-axis count for the stacked
+	 * product's batch shape, which is the same rule with matmul's own error message.
+	 */
+	private static void emitBcastShape(WasmWriter w, int daLocal, int raLocal, int dbLocal, int rbLocal, int rankLocal,
+			int odLocal, int kLocal, int aiLocal, int dxaLocal, int dxbLocal, int tmpLocal, int tfLocal) {
+		newBucketsFilled(w, rankLocal, odLocal);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(1.0);
+		set(w, tfLocal);
+		// The running f64 product guards the output size (exact for any int below 2^53).
+		openCountLoop(w, kLocal, rankLocal);
+		get(w, raLocal);
+		get(w, rankLocal);
+		w.write(Instruction.I32_SUB);
+		get(w, kLocal);
+		w.write(Instruction.I32_ADD);
+		set(w, aiLocal);
+		get(w, aiLocal);
+		i32Const(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x7F);
+		bucketAt(w, daLocal, aiLocal);
+		w.write(Instruction.ELSE);
+		i32Const(w, 1);
+		w.write(Instruction.END);
+		set(w, dxaLocal);
+		get(w, rbLocal);
+		get(w, rankLocal);
+		w.write(Instruction.I32_SUB);
+		get(w, kLocal);
+		w.write(Instruction.I32_ADD);
+		set(w, aiLocal);
+		get(w, aiLocal);
+		i32Const(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x7F);
+		bucketAt(w, dbLocal, aiLocal);
+		w.write(Instruction.ELSE);
+		i32Const(w, 1);
+		w.write(Instruction.END);
+		set(w, dxbLocal);
+		get(w, dxaLocal);
+		get(w, dxbLocal);
+		w.write(Instruction.I32_NE);
+		get(w, dxaLocal);
+		i32Const(w, 1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
+		get(w, dxbLocal);
+		i32Const(w, 1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.BR_IF, 2); // incompatible -> the declined exit
+		get(w, dxaLocal);
+		get(w, dxbLocal);
+		get(w, dxaLocal);
+		get(w, dxbLocal);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.SELECT);
+		set(w, tmpLocal);
+		bucketSet(w, odLocal, kLocal, tmpLocal);
+		get(w, tfLocal);
+		get(w, tmpLocal);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_MUL);
+		set(w, tfLocal);
+		get(w, tfLocal);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(2147483000.0);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.BR_IF, 2); // output too large -> decline
+		closeCountLoop(w, kLocal);
+	}
+
+	/**
 	 * Row-major strides of the {@code opRankLocal}-dim operand whose dims buckets are in
 	 * {@code dimsLocal}, aligned to a broadcast rank of {@code rankLocal} entries, into a
 	 * fresh buckets array ({@code outLocal}). With {@code zeroStretched} every stretched
@@ -2807,9 +3130,14 @@ final class WasmLinalgSimdRuntimeBuilder {
 	 * {@code opRankLocal == rankLocal}).
 	 */
 	private static void emitAlignedStrides(WasmWriter w, int dimsLocal, int opRankLocal, int rankLocal, int outLocal,
-			int axLocal, int aiLocal, int nLocal, int accLocal, boolean zeroStretched) {
+			int axLocal, int aiLocal, int nLocal, int accLocal, int baseLocal, boolean zeroStretched) {
 		newBucketsFilled(w, rankLocal, outLocal);
-		i32Const(w, 1);
+		if (baseLocal >= 0) {
+			get(w, baseLocal);
+		}
+		else {
+			i32Const(w, 1);
+		}
 		set(w, accLocal);
 		get(w, rankLocal);
 		i32Const(w, 1);

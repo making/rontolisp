@@ -15801,6 +15801,54 @@ class WasmLispCompilerIntegrationTest {
 				(linalg:add (bump) #(1 1 1))
 				(print *n*)
 				""", true)).isEqualTo("1");
+		// The same, for the stacked matrix product: a boxed rank-3 operand declines.
+		assertThat(compileAndRunVec("""
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) (make-array '(2 2 2) :initial-element 1))
+				(linalg::%la-matmul-nd (bump) (linalg:zeros '(2 2)))
+				(print *n*)
+				""", true)).isEqualTo("1");
+	}
+
+	// The internal STACKED matrix product (%la-matmul-nd, torch.bmm). Plain rank 3, a
+	// BROADCAST leading axis on either side (stride 0 in the batch odometer), a rank-2
+	// operand against a rank-3 one, rank 4 with two leading axes, both widths, and a p
+	// wide enough to fill whole lane groups inside each batch's slab. Integer-valued
+	// operands, so the f32 fold is exact and this stays a byte-identity check. The last
+	// three DECLINE (a general boxed operand, a rank-1 side, a mixed-width pair) and must
+	// answer through the defun instead.
+	static List<String> matmulNdSources() {
+		return List.of(
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4))"
+						+ " (linalg:reshape (linalg:arange 32) '(2 4 4))))",
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 12) '(1 3 4))"
+						+ " (linalg:reshape (linalg:arange 32) '(2 4 4))))",
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4))"
+						+ " (linalg:reshape (linalg:arange 8) '(1 4 2))))",
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 32) '(2 4 4))"
+						+ " (linalg:reshape (linalg:arange 8) '(4 2))))",
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 8) '(2 4))"
+						+ " (linalg:reshape (linalg:arange 32) '(2 4 4))))",
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 48) '(2 3 2 4))"
+						+ " (linalg:reshape (linalg:arange 24) '(1 3 4 2))))",
+				"(print (linalg:matmul"
+						+ " (linalg:reshape (linalg:arange 0 24 1 :element-type 'single-float) '(2 3 4))"
+						+ " (linalg:reshape (linalg:arange 0 32 1 :element-type 'single-float) '(2 4 4))))",
+				"(print (linalg:matmul"
+						+ " (linalg:reshape (linalg:arange 0 70 1 :element-type 'single-float) '(2 5 7))"
+						+ " (linalg:reshape (linalg:arange 0 70 1 :element-type 'single-float) '(2 7 5))))",
+				"(print (linalg:sum (linalg:matmul (linalg:reshape (linalg:arange 512) '(2 2 128))"
+						+ " (linalg:reshape (linalg:arange 512) '(2 128 2)))))",
+				"(print (linalg:matmul (make-array '(2 2 2) :initial-element 1) (linalg:zeros '(2 2))))",
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4)) (linalg:arange 4)))",
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4))"
+						+ " (linalg:reshape (linalg:arange 0 32 1 :element-type 'single-float) '(2 4 4))))");
+	}
+
+	@ParameterizedTest
+	@MethodSource("matmulNdSources")
+	void wasmGcSimdLinalgMatmulNdIsByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
 	// The internal CNN window unfolding pair. Batch > 1, channels > 1,
@@ -15865,6 +15913,13 @@ class WasmLispCompilerIntegrationTest {
 				+ " (print (list (round (aref r 0)) (round (aref r 199))))))";
 		assertThat(compileAndRunVec(mm, true)).isEqualTo("(16777216 16777216)");
 		assertThat(compileAndRunVec(mm, false)).isEqualTo("(16778240 16778240)");
+		// The STACKED product folds each cell exactly as a per-batch linalg:dot does --
+		// its precision contract -- so it lands on the same 16777216 at rank 3.
+		String nd = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
+				+ " (print (round (row-major-aref (linalg:matmul (linalg:reshape v '(1 1 1024))"
+				+ " (linalg:reshape v '(1 1024 1))) 0))))";
+		assertThat(compileAndRunVec(nd, true)).isEqualTo("16777216");
+		assertThat(compileAndRunVec(nd, false)).isEqualTo("16778240");
 		// The #d control: double-float reductions are exact on both paths here.
 		String d = "(let ((v (linalg:ones 1024))) (setf (aref v 0) 4096.0) (print (round (linalg:dot v v))))";
 		assertThat(compileAndRunVec(d, true)).isEqualTo("16778239");

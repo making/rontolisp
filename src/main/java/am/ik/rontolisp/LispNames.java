@@ -5060,6 +5060,15 @@ public final class LispNames {
 	public static final String LINALG_COL2IM = "%LA-COL2IM";
 
 	/**
+	 * {@code linalg::%la-matmul-nd} (INTERNAL): the STACKED matrix product behind
+	 * {@code linalg:matmul} at rank {@code >= 3} ({@code torch.bmm} /
+	 * {@code torch.matmul}) -- the last two axes are the matrix, every leading axis
+	 * broadcasts. Intercepted under {@code --simd} because it is every attention layer
+	 * and every {@code torch:linear} over a {@code (B T C)} activation.
+	 */
+	public static final String LINALG_MATMUL_ND = "%LA-MATMUL-ND";
+
+	/**
 	 * The {@code torch} package name (a PyTorch-style tensor with reverse-mode autograd
 	 * over the {@code linalg} kernels). Like {@code linalg}, the package is implemented
 	 * once in rontolisp itself ({@code torch.lisp}, see {@code TorchLibrary}); the

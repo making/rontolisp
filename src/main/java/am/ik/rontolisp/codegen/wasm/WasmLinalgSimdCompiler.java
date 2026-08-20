@@ -100,7 +100,11 @@ final class WasmLinalgSimdCompiler {
 			// The internal CNN window unfolding pair: %-prefixed members are internal
 			// symbols, qualified with the double colon (see qualifiedName).
 			Map.entry(LispNames.LINALG_IM2COL, WasmLinalgSimdRuntimeBuilder.IM2COL),
-			Map.entry(LispNames.LINALG_COL2IM, WasmLinalgSimdRuntimeBuilder.COL2IM));
+			Map.entry(LispNames.LINALG_COL2IM, WasmLinalgSimdRuntimeBuilder.COL2IM),
+			// The internal STACKED matrix product behind linalg:matmul at rank >= 3
+			// (torch.bmm): the ikj lane loop of the DOT kernel's M.M case, once per
+			// batch.
+			Map.entry(LispNames.LINALG_MATMUL_ND, WasmLinalgSimdRuntimeBuilder.MATMUL_ND));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,

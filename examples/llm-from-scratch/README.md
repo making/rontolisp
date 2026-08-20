@@ -92,14 +92,16 @@ their interpreter leg needs:
 
 | | scalar | `--simd` |
 | --- | --- | --- |
-| `chapter02/section5.lisp`, interpreter | 2m06 | 1m19 |
-| `chapter03/train-gpt-soseki.lisp`, interpreter | 2m43 | 1m39 |
+| `chapter02/section5.lisp`, interpreter | 40.9 s | 5.4 s |
+| `chapter03/train-gpt-soseki.lisp`, interpreter | 52.4 s | 6.5 s |
+| `chapter03/train-gpt-soseki.lisp`, JVM | 2.11 s | 0.70 s |
+| `chapter03/train-gpt-soseki.lisp`, wasm-GC | 1.83 s | 0.41 s |
 
-That is a far smaller win than the flag usually gives — `examples/llama2/` goes
-from 11.3 s to 20 ms on the same backend — and the reason is a single gap:
-batched (rank >= 3) matrix multiplication, which is what an attention layer
-almost entirely *is*, is not in the accelerated set yet. Until it is, a
-transformer gains less from `--simd` than a plain MLP does. See
+(Median of 3 / min of 5 on an aarch64 DGX Spark, GraalVM 25, wasmtime 47.)
+The batched (rank >= 3) matrix product an attention layer almost entirely *is*
+became part of the accelerated set on 2026-08-20; before that it was the one
+gap that held these programs to a ~1.6x flag, well under what `--simd` gives an
+MLP. See
 [Accelerating linalg](../../doc/en/guides/simd-acceleration.md#accelerating-linalg).
 
 ## The shapes: the book's, and the ones that are tested

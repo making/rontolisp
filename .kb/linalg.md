@@ -119,11 +119,14 @@ Consequences worth knowing:
   first two dims as a matrix. That was silently wrong output, not an error, and the
   `--simd` `dot` kernel already declined `rank > 2` (`LinalgSimd.dot`), so the
   interpreter, JVM and both WASM backends agree on the new message.
-- **Neither `%la-matmul-nd` nor any other rank-N addition is `--simd`-intercepted.**
-  The rank <= 2 path still rides the `dot` kernel; the stacked path runs the scalar
-  defun. Batched matmul is the kernel a transformer forward pass spends its time in,
-  so it is the first candidate to measure for its own interceptor
-  (`.kb/linalg-simd.md`) -- measure before adding one.
+- **`%la-matmul-nd` IS `--simd`-intercepted since todo-467 (2026-08-20).** The rank
+  <= 2 path rides the `dot` kernel and the stacked path has its own, which runs
+  `dot`'s M.M lane loop once per batch offset over the `%la-batch-strides` odometer
+  above -- so its precision contract is a per-batch `linalg:dot`, not this defun
+  (`.kb/linalg-simd.md`). The DISPATCH, the scalar rejection and both error messages
+  stay here, in the library: the kernel declines a rank-1 operand, mixed widths, a
+  boxed operand, a non-broadcastable batch shape and a mismatched inner dimension,
+  and the defun answers those. No other rank-N addition is intercepted.
 - `linalg:squeeze` returning the ELEMENT when every axis goes is deliberate: linalg
   has no rank-0 array, `%la-fold-axis` already reduces a vector to the scalar itself,
   and `make-array` with a nil dims list is not a shape the backends build.

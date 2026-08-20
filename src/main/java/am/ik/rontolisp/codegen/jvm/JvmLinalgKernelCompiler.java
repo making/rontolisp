@@ -85,7 +85,10 @@ final class JvmLinalgKernelCompiler {
 			// intercepted because the boxed defun dominates the accelerated convolution
 			// runs. %-prefixed members are internal symbols, qualified with the double
 			// colon (see qualifiedName).
-			Map.entry(LispNames.LINALG_IM2COL, "laIm2col"), Map.entry(LispNames.LINALG_COL2IM, "laCol2im"));
+			Map.entry(LispNames.LINALG_IM2COL, "laIm2col"), Map.entry(LispNames.LINALG_COL2IM, "laCol2im"),
+			// The internal STACKED matrix product behind linalg:matmul at rank >= 3
+			// (torch.bmm): one ikj slab per batch, the same kernel dot's M.M case runs.
+			Map.entry(LispNames.LINALG_MATMUL_ND, "laMatmulNd"));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,

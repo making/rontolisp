@@ -11,7 +11,7 @@ Three backends, one per interception mechanism:
 |---|---|---|
 | interpreter (`prog.lisp --simd`) | `eval/LinalgSimd` (re-`defineFunction`) | `eval/LinalgSimdKernels` (jdk.incubator.vector) |
 | JVM (`-o Prog.class --simd`) | `codegen/jvm/JvmLinalgKernelCompiler` (call site) | `JvmSimdVectorTemplate.la*` (the one embedded bridge) |
-| wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (41 emitted functions) |
+| wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (42 emitted functions) |
 
 `--no-gc` is out of scope: `linalg:` cannot compile there at all (`linalg::%la-make` uses
 `&optional`, and `--no-gc` has no general array type).
@@ -131,7 +131,7 @@ Two consequences worth remembering:
   `wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath` (wasm) and
   `axisFormsRunTheFoldKernelsAndMatchTheScalarOracle` (interpreter).
 
-## The intercepted set (34 members)
+## The intercepted set (35 members)
 
 `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin` `trace` `transpose`
 `reshape` `dot` `outer`, plus the todo-109 unary ufuncs `exp` `log` `tanh` `sin` `cos`
@@ -145,7 +145,8 @@ min/max -- the SECOND operand wins any false comparison, ties and NaN included, 
 unlike the transcendentals the values are CROSS-BACKEND-identical; see the Phase 3
 section of `.kb/vec.md`), plus the todo-117 INTERNAL pair `%la-im2col` (arity 5) /
 `%la-col2im` (arity 6) -- the CNN window unfolding behind the Deep Learning from
-Scratch convolution examples. Those two are the first intercepted internal members: a
+Scratch convolution examples -- and the todo-467 INTERNAL `%la-matmul-nd` (arity 2),
+the stacked rank->=3 matrix product (below). Those are the intercepted internal members: a
 `%`-prefixed member's canonical qualified spelling carries the DOUBLE colon
 (`linalg::%la-im2col`), which is how the interpreter's function binding, the compilers'
 `ctx.functions` keys and the emit-gate symbol scan must compose it --
@@ -178,8 +179,8 @@ bit-identical (below). Declines: a nil/non-integer/out-of-range axis, an empty a
 axes list, a mixed-width or non-broadcastable pair, any general boxed operand.
 
 Accelerated **transitively**, so they are not intercepted directly: `mean` (calls `sum`),
-`matmul` **at rank <= 2 only** (calls `dot` -- read the gap note below before assuming
-matmul is covered), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
+`matmul` at EVERY rank (rank <= 2 calls `dot`; rank >= 3 calls
+`%la-matmul-nd`, itself intercepted since todo-467), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
 `square` (calls `mul`), `reciprocal` (calls `div`), `clip` (calls `maximum` then
 `minimum`), `relu` (calls `maximum` with the 0.0 bound).
 
@@ -187,21 +188,74 @@ matmul is covered), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`
 pivoting elimination (data-dependent pivots, sequential column dependency), `array-equal`
 (the nil-return sentinel collision), and the constructors.
 
-**Not intercepted YET** -- gaps, not decisions, each with an open todo. Both were found by
-the `examples/llm-from-scratch/` GPT port (2026-08-20), and both are on the hot path of any
-transformer, so do not read the member list above as "linalg is covered":
+### The stacked matrix product (`%la-matmul-nd`, todo-467, 2026-08-20)
 
-- `linalg::%la-matmul-nd`, the rank >= 3 stacked matrix product (`torch.bmm`, hence every
-  attention layer and every `torch:linear` over a `(B T C)` activation). It is a boxed
-  `outer x M x K x N` walk built from no intercepted member, so `--simd` does nothing for
-  it on the interpreter and the JVM and makes it ~11% SLOWER on wasm-GC -- it pays the
-  `TYPE_VBLOCK` `_v_get`/`_v_set` cost this file opens with and gets nothing back. todo-467.
+`linalg:matmul` routes rank <= 2 to `dot` and rank >= 3 to `linalg::%la-matmul-nd` --
+`torch.bmm`, hence every attention layer and every `torch:linear` over a `(B T C)`
+activation, which for a transformer is essentially the whole forward and backward pass.
+Until todo-467 that member was a boxed `outer x M x K x N` walk built from no intercepted
+member, so `--simd` did nothing for it on the interpreter and the JVM and made it ~11%
+SLOWER on wasm-GC (it paid the `TYPE_VBLOCK` `_v_get`/`_v_set` cost this file opens with
+and got nothing back).
+
+**The kernel is `dot`'s M.M lane loop, once per batch offset** -- not a second lane loop.
+All three backends factored the rank-2 product into an offset-taking slab
+(`LinalgSimdKernels.matmulInto`, `JvmSimdVectorTemplate.laMatmulInto`, and on wasm the
+already-shared `emitGemmRow` over a scratch accumulator row) and the batched kernel calls
+it per batch. The offsets come from the `%la-batch-strides` odometer, which is
+`%la-bcast-strides` scaled by the trailing matrix size -- so a BROADCAST leading axis has
+stride 0 and needs no special case at all (on wasm that scaling is the `baseLocal`
+parameter `emitAlignedStrides` gained; `emitBcastShape` was factored out of `buildBcast`
+so the batch shape reuses the element-wise broadcast rule over the leading axes only).
+
+Declines, all of which the defun then answers -- keeping the dispatch, the scalar
+rejection and both error messages in the library, where they were: a general boxed
+operand, mixed widths, a RANK-1 operand on either side (the numpy
+promote-then-drop-the-axis rule -- cheap to add later, but it is not the hot shape and
+keeping it in the defun keeps the kernel one shape), a non-broadcastable batch shape, a
+mismatched inner dimension, and any empty extent (a zero-length `k` fold answers the
+defun's INTEGER `0` seed).
+
+**Precision is a per-batch `linalg:dot`, not the defun.** Each cell folds `k` in the
+defun's ascending order at the OPERAND width, so `#d` is bit-identical and `#f` follows
+the reduction contract below. Pinned by the rank-3 line of the f32 probe in all three
+suites: `(linalg:matmul (reshape v '(1 1 1024)) (reshape v '(1 1024 1)))` prints
+**16777216** on every `--simd` backend against the scalar 16778240 -- the same number the
+v.M `dot` probe lands on, which is exactly the claim.
+
+Measured (aarch64 DGX Spark / GB10 Grace, GraalVM 25, wasmtime 47; six rounds with every
+round printed, the stable median quoted; `n = 64`):
+
+| ms/call | scalar `#d` | `--simd` `#d` | scalar `#f` | `--simd` `#f` |
+|---|---|---|---|---|
+| interpreter, rank 2, 4 x 64x64 | 789 | 0.21 | -- | -- |
+| interpreter, rank 3, (4 64 64) | 1197 | 0.19 | -- | -- |
+| interpreter, rank 3, (16 64 64) | 4820 | 0.85 | 4794 | **0.50** |
+| JVM, rank 2, 4 x 64x64 | 1.045 | 0.18 | -- | -- |
+| JVM, rank 3, (4 64 64) | 1.535 | 0.21 | -- | -- |
+| JVM, rank 3, (16 64 64) | 6.15 | 0.833 | 10.40 | **0.500** |
+| wasm-GC, rank 2, 4 x 64x64 | 36.99 | 0.945 | -- | -- |
+| wasm-GC, rank 3, (4 64 64) | 36.56 | 0.945 | -- | -- |
+| wasm-GC, rank 3, (16 64 64) | 147.4 | 3.78 | 146.9 | **2.24** |
+
+Two things to read out of it. The wasm-GC rank-3 row **stopped being slower than scalar**
+(the regression this file opens with -- `emap` / `inv` still pay it, see "Not done"), and
+`#f` is now the FASTER width on the batched shape everywhere -- the ranking was inverted
+(6.15 `#d` vs 10.40 `#f` on the JVM) for exactly as long as the member was un-intercepted,
+because the boxed walk widened on every read and narrowed on every store. **Intercepting
+this member is what let todo-123 phase 0 pay off**: `train-gpt-soseki.lisp` under `--simd`
+went `#d` 1.67 / `#f` 1.81 s (phase 0's failed acceptance) to `#d` 0.74 / `#f` **0.70** s
+on the JVM, and with `*max-steps*` 5000 so the run is training-dominated, `#d` 7.26 /
+`#f` 7.57 -> `#d` 4.59 / `#f` **3.92**. Interpreter `--simd`: 31.63 -> **6.53** s.
+
+**Not intercepted YET** -- a gap, not a decision, with an open todo:
+
 - `linalg:erf` -- `(linalg:emap #'%la-erf-1 a)`, and `emap` is never intercepted, so the
   exact `torch:gelu` is unaccelerated while its `:approximate :tanh` form is. todo-468.
 
-The user-facing statement of both lives in the "Accelerating linalg" section of
-`doc/{en,ja}/guides/simd-acceleration.md`; closing either todo means deleting its half of
-that paragraph.
+The user-facing statement of it lives in the "Accelerating linalg" section of
+`doc/{en,ja}/guides/simd-acceleration.md`; closing that todo means deleting the paragraph
+(todo-467's half of it is already gone).
 
 `#'linalg:dot` still names the scalar defun on the compiled backends -- the interception is
 at the *call site* there, while the interpreter overrides the *function binding*. So a
@@ -211,7 +265,7 @@ behavior as `vec:`, deliberately.
 ## What is vectorized, and what is merely de-boxed
 
 Not every member has a lane form worth writing. The interception is still worth it for all
-thirty-two: it removes the per-element box allocation and the generic numeric dispatch that the
+thirty-five: it removes the per-element box allocation and the generic numeric dispatch that the
 compiled defun pays, and on the interpreter it removes the whole tree-walking loop.
 
 | member | interpreter / JVM | wasm-GC |
@@ -233,6 +287,7 @@ compiled defun pays, and on the interpreter it removes the whole tree-walking lo
 | same-width broadcast pair (any op) | scalar odometer walk | `BCAST` `_v_get`/`_v_set` odometer walk (op as an i31 selector) |
 | `transpose` with axes | scalar odometer copy | `TRANSPOSE_AXES` `_v_get`/`_v_set` odometer copy |
 | `sum`/`amax`/`amin`/`argmax`/`argmin` with axis | scalar fold loops | `*_AXIS` `_v_get`/`_v_set` fold loops |
+| `%la-matmul-nd` (stacked product) | the `dot` M.M lane loop per batch offset | the `MATMUL_ND` kernel: `dot`'s `emitGemmRow` per batch offset |
 
 The wasm-GC lane forms for `dot` (v.M / M.M) / `outer` / `transpose` shipped as the todo-107
 follow-up (2026-07-10). The GEMM loop reads each `b` row through the same `i8x16.shuffle`
@@ -456,10 +511,11 @@ call sites) -- exactly as any `vec:` program does. `(print (+ 1 2))` does not.
 
 ### wasm-GC
 
-Forty-one standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
+Forty-two standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
 + 55` (the vec: block is 55 with the todo-109 kernels and `-into` siblings), emitted only
-under `--simd`; `userFuncBase()` now shifts by 96. The last seven are the declined-shape
-follow-up helpers (`BCAST` .. `ARGMIN_AXIS`); `BCAST` takes its op as an i31 (the
+under `--simd`; `userFuncBase()` now shifts by 97. The LAST is todo-467's `MATMUL_ND`
+(index 41, an ordinary two-eq-param type, so no new type entry); the seven before it are
+the declined-shape follow-up helpers (`BCAST` .. `ARGMIN_AXIS`); `BCAST` takes its op as an i31 (the
 3-eq-param `TYPE_CALLABLE_BASE + 2` type, always present) and is called from the six
 element-wise kernels' unequal-dims branch, the others from the extended call sites. The
 odometer/fold scratch (dims copies, strides, counters, permutations) lives in fresh
@@ -500,16 +556,18 @@ i31s. Anything else declines. `flatten` rides on it.
 
 ## Verification
 
-- `eval/LinalgSimdTest` (39) -- interception guard (`#'linalg:add` is `#<function
+- `eval/LinalgSimdTest` (42) -- interception guard (`#'linalg:add` is `#<function
   linalg:add>` under `--simd`, `#<lambda>` without; `emap`/`inv`/`det`/`solve`/`array-equal`/
   `mean`/`matmul`/`flatten` stay `#<lambda>`), byte-identity vs the oracle at both widths and
   both ranks, scalar broadcast on both sides, the declined inputs, the f32 probe, and the
   declined-shape follow-up (broadcast pairs, transpose axes, axis folds incl. the strict
   tie/seed semantics and the declined axis inputs).
-- `codegen/jvm/JvmLinalgSimdAccelCompilerTest` (25) -- the bridge-embedded dead-flag guard,
+- `codegen/jvm/JvmLinalgSimdAccelCompilerTest` (29) -- the bridge-embedded dead-flag guard,
   the same byte-identity set, the evaluate-once guards (base AND extended call sites), the
   library errors still signalling, the axis/broadcast/transpose-axes shapes.
-- `codegen/wasm/WasmLispCompilerIntegrationTest` (Docker + wasmtime), eight cases:
+- `codegen/wasm/WasmLispCompilerIntegrationTest` (Docker + wasmtime), nine cases (the
+  ninth is `...MatmulNdIsByteIdenticalToTheScalarPath`, every batch shape the odometer
+  walks plus the three declines):
   `wasmGcSimdLinalg{ElementWiseAndShapeKernels,ReductionsAndProducts}AreByteIdenticalToThe
   ScalarPath`, `...LaneProductsMatchTheScalarPathAtEveryRowLaneOffset` (the GEMM / outer /
   transpose lane forms: every shuffle-offset variant via a 7-column `#f` matrix, the odd-`p`
@@ -525,6 +583,10 @@ i31s. Anything else declines. `flatten` rides on it.
 - `examples/ml/{tiny-llm,linear-regression,heat3d,deep-digits}.lisp` print byte-identical
   output with and without `--simd` on all three backends. (`nn-vec.lisp` has a random init,
   so only its headings are stable -- `examples.yaml` checks only those.)
+- `examples/llm-from-scratch/chapter03/train-gpt-soseki.lisp` prints byte-identical output
+  with and without `--simd` on ALL FOUR backends (re-verified for todo-467, the
+  `--component` leg included), and `examples/ml/tiny-llm.lisp` on all three (its one
+  elapsed-time line aside -- interpreter 7061 -> 96 ms with the flag).
 
 ## Not done
 

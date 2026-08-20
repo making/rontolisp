@@ -1740,11 +1740,21 @@ final class JvmSimdVectorTemplate {
 	 * {@code k} order, but folds it at single precision.
 	 */
 	private static double[] laMatmul(double[] a, double[] b, int n, int m, int p) {
-		int oa = 1 + (int) a[0];
-		int ob = 1 + (int) b[0];
 		double[] r = laNewMat(n, p);
+		laMatmulInto(a, 1 + (int) a[0], b, 1 + (int) b[0], r, 3, n, m, p);
+		return r;
+	}
+
+	/**
+	 * One {@code n x m} by {@code m x p} slab of the {@code ikj} loop, reading {@code a}
+	 * at {@code oa}, {@code b} at {@code ob} and accumulating into {@code r} at
+	 * {@code or} -- all three already past their dimension headers. The rank-2 product is
+	 * one call and every batch of {@link #laMatmulNd} is one call, so there is exactly
+	 * one lane loop.
+	 */
+	private static void laMatmulInto(double[] a, int oa, double[] b, int ob, double[] r, int or, int n, int m, int p) {
 		for (int i = 0; i < n; i++) {
-			int ro = 3 + i * p;
+			int ro = or + i * p;
 			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
 				double s = a[ao + k];
@@ -1763,7 +1773,6 @@ final class JvmSimdVectorTemplate {
 				}
 			}
 		}
-		return r;
 	}
 
 	/**
@@ -1779,11 +1788,14 @@ final class JvmSimdVectorTemplate {
 	 * ({@code .kb/linalg-simd.md}).
 	 */
 	private static float[] laMatmulF(float[] a, float[] b, int n, int m, int p) {
-		int oa = 1 + (int) a[0];
-		int ob = 1 + (int) b[0];
 		float[] r = laNewMatF(n, p);
+		laMatmulIntoF(a, 1 + (int) a[0], b, 1 + (int) b[0], r, 3, n, m, p);
+		return r;
+	}
+
+	private static void laMatmulIntoF(float[] a, int oa, float[] b, int ob, float[] r, int or, int n, int m, int p) {
 		for (int i = 0; i < n; i++) {
-			int ro = 3 + i * p;
+			int ro = or + i * p;
 			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
 				float s = a[ao + k];
@@ -1802,7 +1814,126 @@ final class JvmSimdVectorTemplate {
 				}
 			}
 		}
+	}
+
+	/**
+	 * {@code (linalg::%la-matmul-nd a b)}, the STACKED matrix product
+	 * ({@code torch.bmm}): the last two axes are the matrix and every leading axis
+	 * broadcasts. One {@link #laMatmulInto} slab per batch over the
+	 * {@code %la-batch-strides} offsets, so every output cell folds {@code k} exactly as
+	 * a per-batch {@code linalg:dot} does -- the precision contract is {@code dot}'s, not
+	 * the scalar defun's.
+	 *
+	 * <p>
+	 * Declined: a general boxed operand, mixed widths, a RANK-1 operand on either side
+	 * (the numpy promote-then-drop-the-axis rule, which is not the hot shape),
+	 * non-broadcastable batch shapes, mismatched inner dimensions, any empty extent.
+	 */
+	static @Nullable Object laMatmulNd(@Nullable Object a, @Nullable Object b) {
+		if (!laPacked(a) || !laPacked(b) || laRank(a) < 2 || laRank(b) < 2) {
+			return null;
+		}
+		boolean single = a instanceof float[];
+		if (single != (b instanceof float[])) {
+			return null;
+		}
+		int[] da = laDims(a);
+		int[] db = laDims(b);
+		int n = da[da.length - 2];
+		int m = da[da.length - 1];
+		int p = db[db.length - 1];
+		if (m != db[db.length - 2] || n < 1 || m < 1 || p < 1) {
+			return null;
+		}
+		int[] ba = java.util.Arrays.copyOf(da, da.length - 2);
+		int[] bb = java.util.Arrays.copyOf(db, db.length - 2);
+		int[] bd = laBcastShape(ba, bb);
+		if (bd == null) {
+			return null;
+		}
+		long batches = 1;
+		for (int d : bd) {
+			batches *= d;
+		}
+		long total = batches * n * p;
+		int rank = bd.length + 2;
+		if (batches < 1 || !laSizeFits(total + 1 + rank)) {
+			return null;
+		}
+		int[] sa = laBatchStrides(ba, bd, n * m);
+		int[] sb = laBatchStrides(bb, bd, m * p);
+		int[] idx = new int[bd.length];
+		int off = 1 + rank;
+		int oa = 1 + da.length;
+		int ob = 1 + db.length;
+		int count = (int) batches;
+		if (single) {
+			float[] x = laFloats(a);
+			float[] y = laFloats(b);
+			float[] r = new float[off + (int) total];
+			r[0] = rank;
+			for (int i = 0; i < bd.length; i++) {
+				r[1 + i] = bd[i];
+			}
+			r[rank - 1] = n;
+			r[rank] = p;
+			for (int z = 0; z < count; z++) {
+				laMatmulIntoF(x, oa, y, ob, r, off + z * n * p, n, m, p);
+				for (int ax = bd.length - 1; ax >= 0; ax--) {
+					idx[ax]++;
+					oa += sa[ax];
+					ob += sb[ax];
+					if (idx[ax] < bd[ax]) {
+						break;
+					}
+					idx[ax] = 0;
+					oa -= bd[ax] * sa[ax];
+					ob -= bd[ax] * sb[ax];
+				}
+			}
+			return r;
+		}
+		double[] x = laDoubles(a);
+		double[] y = laDoubles(b);
+		double[] r = new double[off + (int) total];
+		r[0] = rank;
+		for (int i = 0; i < bd.length; i++) {
+			r[1 + i] = bd[i];
+		}
+		r[rank - 1] = n;
+		r[rank] = p;
+		for (int z = 0; z < count; z++) {
+			laMatmulInto(x, oa, y, ob, r, off + z * n * p, n, m, p);
+			for (int ax = bd.length - 1; ax >= 0; ax--) {
+				idx[ax]++;
+				oa += sa[ax];
+				ob += sb[ax];
+				if (idx[ax] < bd[ax]) {
+					break;
+				}
+				idx[ax] = 0;
+				oa -= bd[ax] * sa[ax];
+				ob -= bd[ax] * sb[ax];
+			}
+		}
 		return r;
+	}
+
+	/**
+	 * {@code %la-batch-strides}: the row-major strides of the batch dims {@code d}
+	 * aligned to the broadcast batch shape {@code od}, 0 on every stretched axis, with
+	 * the trailing matrix size as the innermost stride -- {@code laBcastStrides} scaled
+	 * by {@code base}.
+	 */
+	private static int[] laBatchStrides(int[] d, int[] od, long base) {
+		int[] s = new int[od.length];
+		long acc = base;
+		for (int k = od.length - 1, i = d.length - 1; k >= 0; k--, i--) {
+			int n = i >= 0 ? d[i] : 1;
+			s[k] = n == 1 ? 0 : (int) acc;
+			acc *= n;
+		}
+		return s;
 	}
 
 	/** {@code out[i][j] = u[i] * v[j]}; the operands are flattened first, like numpy. */

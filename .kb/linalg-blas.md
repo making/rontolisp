@@ -69,12 +69,42 @@ Everything else declines, by measurement rather than by staging:
 - **The memory-bound members would gain nothing.** `sum`, a vector-vector `dot`, `axpy`:
   the library call cannot beat a lane loop over the same bytes, and `--simd` already covers
   them.
-- **The stacked rank-3 product (`%la-matmul-nd`) is a separate interception** that `--simd`
-  does not have either (todo-467). It is a batch of gemms and would be a natural second
-  member; it is not in scope here.
+- **The stacked rank-3 product (`%la-matmul-nd`) is a separate interception.** `--simd`
+  gained one in todo-467 (2026-08-20); `--blas` deliberately did NOT, and the reasoning was
+  written down there rather than deferred again -- see "Why `--blas` stopped at `dot`"
+  below.
 - **`worth(n, m, p)` = `n*m*p >= 64`.** Measured on an M4 Max, a critical downcall floors at
   ~30 ns and the crossover against a plain JIT-warm `ikj` triple loop is at about 4x4x4
   (n=4: 0.039 us against 0.046; n=8: 0.071 against 0.289; n=32: 0.44 against 16.9).
+
+## Why `--blas` stopped at `dot` (todo-467, 2026-08-20)
+
+todo-467 intercepted `linalg::%la-matmul-nd` for `--simd` and asked whether the same member
+should get a `cblas_?gemm` per matrix over this seam. It should, eventually -- a stacked
+product IS a batch of gemms, the `gemm`/`gemmF` entry points here already take element
+OFFSETS, and on a transformer that is where the time is. It was NOT done, on a budget, and
+this is what the next person needs:
+
+- **It is not "a handful of lines over the bridge that already exists".** `--blas` is built
+  around exactly one member: `JvmLinalgBlas.handles` compares against one name,
+  `JvmBlasRuntimeBuilder` registers one `ops` key (`DOT`), and
+  `JvmLinalgKernelCompiler.compile` emits the blas attempt with that key hardcoded. A
+  second member means a member->key map on all three, plus the emit-gate scan.
+- **The template cannot borrow the batch walk.** `JvmBlasTemplate`'s bytes must stand
+  alone once embedded (no reference to any other rontolisp class), so it would need its own
+  copy of `laDims` / `laBcastShape` / `laBatchStrides` / the odometer -- ~120 lines
+  duplicated from `JvmSimdVectorTemplate`, kept in lockstep by hand, in a file whose whole
+  discipline is already "mirrored, change them together".
+- **`worth(n, m, p)` has to be re-decided per batch.** The existing threshold is one
+  product's flops; for a batch the right predicate is the PER-MATRIX work (a downcall per
+  matrix, `batches` of them), and whether `batches` small enough to lose to the lane kernel
+  should decline the whole call. That is a measurement, not a transcription.
+- **The precision contract grows a case.** `--simd`'s batched kernel is a per-batch
+  `linalg:dot` exactly; a library gemm per batch is "close to", the same way this file
+  already says for rank 2 -- and the docs section here names `linalg:dot` specifically.
+
+None of that is hard. It is simply a second item, and the `--simd` interception is the one
+that had to land (it reaches the WASM backends, which `--blas` never will).
 
 ## Identifying a TUNED library is the load-bearing part
 

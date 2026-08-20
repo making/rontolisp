@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The {@code --simd} JVM acceleration of the {@code linalg:} kernels, the sibling of
- * {@link JvmSimdAccelCompilerTest}. Thirty-four {@code linalg:} call sites are routed to
+ * {@link JvmSimdAccelCompilerTest}. Thirty-five {@code linalg:} call sites are routed to
  * the embedded {@link JvmSimdVectorTemplate} bridge instead of the scalar
  * {@code linalg.lisp} defun, and must produce byte-identical output at both widths, at
  * rank 1 AND rank 2.
@@ -146,6 +146,22 @@ class JvmLinalgSimdAccelCompilerTest {
 	}
 
 	/** A 1024-element {@code #f} vector of ones with {@code elem0} in element 0. */
+	@Test
+	void theStackedProductFollowsThePerBatchDotReductionContract() throws Exception {
+		// %la-matmul-nd folds each cell exactly as a per-batch linalg:dot does, which
+		// puts it on the same 16777216 the v.M probe lands on -- at rank 3, and equal on
+		// all three --simd backends.
+		String nd = """
+				(let ((v (linalg:ones 1024 :element-type 'single-float)))
+				  (setf (aref v 0) 4096.0)
+				  (print (round (row-major-aref
+				                 (linalg:matmul (linalg:reshape v '(1 1 1024))
+				                                (linalg:reshape v '(1 1024 1))) 0))))
+				""";
+		assertThat(accel(nd)).isEqualTo("16777216");
+		assertThat(scalar(nd)).isEqualTo("16778240");
+	}
+
 	private String probe32(String elem0, String reduction) {
 		return """
 				(defparameter *v* (linalg:ones 1024 :element-type 'single-float))
@@ -575,6 +591,78 @@ class JvmLinalgSimdAccelCompilerTest {
 				(setf (aref *m* 0 0) 99.0)
 				(print *m*)
 				""");
+	}
+
+	// --- the stacked matrix product: %la-matmul-nd -------------------------------------
+
+	@Test
+	void matmulNdMatchesTheScalarReferenceAtEveryBatchShapeAndBothWidths() throws Exception {
+		// Plain rank 3, a BROADCAST leading axis on either side (stride 0), a rank-2
+		// operand against a rank-3 one, and rank 4 with two leading axes -- every shape
+		// the %la-batch-strides odometer walks. Integer-valued operands, so the f32 fold
+		// is exact and this is an equality rather than a tolerance.
+		String a3 = "(linalg:reshape (linalg:arange 24) '(2 3 4))";
+		String b3 = "(linalg:reshape (linalg:arange 32) '(2 4 4))";
+		assertMatchesScalarReference("(print (linalg:matmul " + a3 + " " + b3 + "))");
+		assertMatchesScalarReference("(print (linalg:matmul (linalg:reshape (linalg:arange 12) '(1 3 4)) " + b3 + "))");
+		assertMatchesScalarReference("(print (linalg:matmul " + a3 + " (linalg:reshape (linalg:arange 8) '(1 4 2))))");
+		assertMatchesScalarReference("(print (linalg:matmul " + b3 + " (linalg:reshape (linalg:arange 8) '(4 2))))");
+		assertMatchesScalarReference("(print (linalg:matmul (linalg:reshape (linalg:arange 8) '(2 4)) " + b3 + "))");
+		assertMatchesScalarReference("(print (linalg:matmul (linalg:reshape (linalg:arange 48) '(2 3 2 4))"
+				+ " (linalg:reshape (linalg:arange 24) '(1 3 4 2))))");
+		assertMatchesScalarReference(
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 0 24 1 :element-type 'single-float) '(2 3 4))"
+						+ " (linalg:reshape (linalg:arange 0 32 1 :element-type 'single-float) '(2 4 4))))");
+		// p = 128 crosses the THRESHOLD lane gate inside each batch's slab.
+		assertMatchesScalarReference("(print (linalg:sum (linalg:matmul (linalg:reshape (linalg:arange 512) '(2 2 128))"
+				+ " (linalg:reshape (linalg:arange 512) '(2 128 2)))))");
+	}
+
+	@Test
+	void matmulNdDeclinedInputsRunTheScalarDefunExactlyOnce() throws Exception {
+		// A general boxed operand, a rank-1 side (the numpy promote-then-drop rule the
+		// kernel leaves in the defun) and a mixed-width pair all answer identically...
+		assertMatchesScalarReference(
+				"(print (linalg:matmul (make-array '(2 2 2) :initial-element 1) (linalg:zeros '(2 2))))");
+		assertMatchesScalarReference(
+				"(print (linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4)) (linalg:arange 4)))");
+		assertMatchesScalarReference(
+				"(print (linalg:matmul (linalg:arange 4) (linalg:reshape (linalg:arange 32) '(2 4 4))))");
+		assertMatchesScalarReference("(print (linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4))"
+				+ " (linalg:reshape (linalg:arange 0 32 1 :element-type 'single-float) '(2 4 4))))");
+		// ... and the fallback reloads the temps rather than recompiling the forms.
+		String declined = """
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) (make-array '(2 2 2) :initial-element 1))
+				(linalg::%la-matmul-nd (bump) (linalg:zeros '(2 2)))
+				(print *n*)
+				""";
+		assertThat(accel(declined)).isEqualTo("1");
+		String accepted = """
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) (linalg:reshape (linalg:arange 8) '(2 2 2)))
+				(linalg::%la-matmul-nd (bump) (linalg:zeros '(2 2)))
+				(print *n*)
+				""";
+		assertThat(accel(accepted)).isEqualTo("1");
+	}
+
+	@Test
+	void matmulNdShapeErrorsStillSignalTheLibraryMessages() throws Exception {
+		// Non-broadcastable batch dims and mismatched inner dims decline, so the defun
+		// signals -- the library stays the single source of the message.
+		String batch = """
+				(handler-case (linalg:matmul (linalg:reshape (linalg:arange 24) '(3 2 4))
+											 (linalg:reshape (linalg:arange 32) '(2 4 4)))
+				  (error (e) (print (format nil "~a" e))))
+				""";
+		assertThat(accel(batch)).contains("batch dimensions do not broadcast");
+		String inner = """
+				(handler-case (linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4))
+											 (linalg:reshape (linalg:arange 24) '(2 3 4)))
+				  (error (e) (print (format nil "~a" e))))
+				""";
+		assertThat(accel(inner)).contains("inner dimensions differ");
 	}
 
 	// --- CNN window unfolding: %la-im2col / %la-col2im ---------------------------------
