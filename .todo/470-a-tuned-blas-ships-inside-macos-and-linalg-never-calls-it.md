@@ -49,7 +49,9 @@ its lanes and roughly halved that column. Measure it that way or the gap is over
   threshold sits far lower and far more of the existing example corpus is above it.
 - **It is the same seam.** `.kb/linalg-simd.md`'s protocol applies unchanged: a partial
   kernel that returns the null sentinel for anything it declines, with the scalar defun
-  staying the oracle. Nothing new has to be invented to plug it in.
+  staying the oracle. Nothing new has to be invented to plug it in -- except the
+  availability predicate, which is genuinely new and is the item's real difficulty
+  (point 3 below).
 - **It reaches the same two backends as `--gpu`** (interpreter incl. the native binary,
   and JVM) for the same reason -- FFM -- so it inherits todo-123's native-image answer.
 
@@ -70,21 +72,33 @@ its lanes and roughly halved that column. Measure it that way or the gap is over
    (a different device gives different bits) and is opt-in for exactly that reason, so
    the precedent exists -- but it must be decided deliberately, not inherited by
    accident, and it argues for a distinct flag rather than folding this into `--simd`.
-3. **Portability, and what happens off macOS -- less Apple-specific than the title.**
-   CBLAS is ONE ABI. `cblas_dgemm` has the same signature in Accelerate, OpenBLAS, NVPL
-   and MKL, so the binding is two `downcallHandle`s that are not Apple-specific at all;
-   what differs per platform is only whether a library is THERE. macOS always has one, in
-   the OS, at a fixed path. Linux ships none with the base system but very often carries
-   one anyway (OpenBLAS pulled in by almost any scientific package; NVPL on Grace; the
-   distro `libblas.so.3` alternative). So the design is a candidate-list `dlopen` with a
-   silent decline -- exactly `--gpu`'s availability probe, one library list instead of a
-   driver -- and macOS is where the win is GUARANTEED rather than where it is possible.
-   `AccelerateProbe.java` walks that list and prints which library it bound, so this is
-   answerable by running it on the target rather than by assuming; on Linux the answer
-   "no CBLAS found" is a real result and means there is nothing to intercept into there.
+3. **The availability probe must find a TUNED BLAS, not a BLAS. Measured, this is the
+   hardest part of the item.** CBLAS is one ABI -- `cblas_dgemm` has the same signature in
+   Accelerate, OpenBLAS, NVPL and MKL -- so the binding itself is two `downcallHandle`s
+   and is not Apple-specific at all. What differs per platform is whether a library is
+   there, and macOS is where the win is GUARANTEED rather than where it is possible.
 
-   Note what this does NOT settle: whether a machine-dependent library is acceptable at
-   all. See the contract point below.
+   But "there" is not the useful predicate. Run on a DGX Spark, the probe bound
+   `libblas.so.3` and measured **7-8 GFLOP/s** at both widths, flat across every size:
+   the netlib reference implementation. The same machine's `--simd` matmul does n=512 f64
+   in 21.2 ms against the reference BLAS's 35.3, so **binding what was found would have
+   been a silent 1.6x REGRESSION at `linalg`'s default width** -- far worse than
+   declining. Consequences:
+
+   - **The soname proves nothing.** Debian's `libblas.so.3` is an `update-alternatives`
+     symlink pointing at OpenBLAS when one is installed and at the reference when not, so
+     ordering the candidate list by name is not a safety mechanism.
+   - **Identify, then verify.** `AccelerateProbe.java` now probes for the marker symbols
+     tuned implementations export (`openblas_get_config`, `mkl_get_version`,
+     `bli_info_get_version_str`, `nvpl_blas_get_version`, ...) and prints a verdict against
+     measured throughput. A real feature needs both: the marker is cheap and deterministic,
+     the measurement is what actually decides, and a startup micro-benchmark costs time
+     the availability probe should not spend -- so how to combine them is an open design
+     question, not a solved one.
+   - **The Linux case is UNSETTLED, not negative.** That machine simply has no tuned CPU
+     BLAS installed (NVPL is tried first and was absent). Install OpenBLAS or NVPL and
+     re-run: Grace's Neoverse cores should be far above 8 GFLOP/s. Until someone does, the
+     only measured platform where this item pays is macOS.
 4. **Which members.** GEMM is the whole win; `dot` / `axpy` / `nrm2` are memory-bound and
    probably not worth the call. `cblas_dgemm` also covers the transposed and scaled forms
    that `linalg` currently expands into separate passes.

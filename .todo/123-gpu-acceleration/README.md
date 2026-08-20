@@ -59,7 +59,7 @@ warm-up, and the sub-millisecond rows still move by ~20% run to run.
 | `MtlMpsDiff.java` | verifies the surprising half of that answer -- MPS and the naive tiled kernel are bit-identical, which a silent no-op would also look like. |
 | `MtlCompileCost.java` | the PTX question restated: what does getting a kernel onto the device cost at startup, and does the OS cache it between processes? |
 | `MtlNiProbe.java` | does an `objc_msgSend` downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
-| `AccelerateProbe.java` | no GPU at all: a tuned BLAS is plain C, costs no dependency, and unlike Metal it has a double. How fast is it, and is one PRESENT? Walks a candidate list (Accelerate, NVPL, OpenBLAS, MKL, distro `libblas`) and prints which it bound, so it runs on either machine -- the probe that reframes the Apple plan, and the one that says whether the same argument reaches Linux. |
+| `AccelerateProbe.java` | no GPU at all: a tuned BLAS is plain C, costs no dependency, and unlike Metal it has a double. How fast is it, is one PRESENT, and is the one that is present actually TUNED? Walks a candidate list (Accelerate, NVPL, OpenBLAS, MKL, distro `libblas`), identifies what it bound and prints a verdict against measured throughput. Runs on either machine -- the probe that reframes the Apple plan, and the one that stopped it being reframed the same way on Linux. |
 
 ## Running them
 
@@ -500,6 +500,47 @@ Same ranking as the GB10 run recorded above -- `laneF32` wins, `laneF2D` is cata
 and the relative error against the oracle is identical to five digits because that is a
 property of the arithmetic and not of the machine -- but the magnitudes differ, `laneF2D`
 by 1.7x (4474 vs 7477 ms). The `.kb` table now carries both rows.
+
+### The same probe on the GB10, which is why it now prints a verdict
+
+`AccelerateProbe` walks a candidate list so it runs on both machines. On the DGX Spark it
+found something -- and that turned out to be the trap:
+
+```
+bound CBLAS: libblas.so.3
+cblas, ms per n x n gemm (single thread of control, library may thread):
+n         dgemm f64    sgemm f32 java f64 loop
+64         0.070 ms     0.071 ms      79.7 ms   (7 / 7 GFLOP/s)
+128        0.621 ms     0.541 ms       1.3 ms   (7 / 8 GFLOP/s)
+256        4.517 ms     4.786 ms      11.1 ms   (7 / 7 GFLOP/s)
+512       35.285 ms    36.125 ms     142.1 ms   (8 / 7 GFLOP/s)
+1024     283.099 ms   354.779 ms    1236.5 ms   (8 / 6 GFLOP/s)
+2048    2478.494 ms  2506.586 ms       NaN ms   (7 / 7 GFLOP/s)
+```
+
+7-8 GFLOP/s against Accelerate's 800, flat across every size, and f32 no faster than f64:
+that is the **netlib reference implementation**, which is a specification written in
+Fortran and not a tuned kernel. Read it against the same machine's `--simd` column below
+-- n=256 2.800 ms and n=512 21.200 ms -- and the result is that **the BLAS is 1.6x SLOWER
+than the kernel rontolisp already has**. It beats only the naive triple loop.
+
+Three things follow, and they are why the probe gained an `identify()` and a verdict line:
+
+- **Finding a CBLAS is not finding a tuned BLAS**, and the earlier framing ("Linux ships
+  none with the base system but very often carries one anyway") was too generous: carrying
+  one very often means carrying the reference.
+- **The soname cannot tell them apart.** Debian's `libblas.so.3` is an `update-alternatives`
+  symlink that points at OpenBLAS when one is installed and at the reference when not, so
+  a name-ordered candidate list is not a safety mechanism. The probe now looks for the
+  marker symbols tuned implementations export (`openblas_get_config`, `mkl_get_version`,
+  `bli_info_get_version_str`, ...) and measures anyway.
+- **A `--blas` that bound whatever it found would be a silent 1.6x regression** on this
+  machine, at `linalg`'s default width. That is a much worse failure than declining.
+
+What this run does NOT say is that Linux is hopeless -- only that this machine has no
+tuned CPU BLAS installed. Installing OpenBLAS (or NVPL, which the probe tries first and
+did not find) and re-running is the measurement that would settle the Linux case; Grace's
+Neoverse cores should be far above 8 GFLOP/s.
 
 ### The CPU baseline, same machine
 

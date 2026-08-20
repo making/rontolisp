@@ -16,6 +16,14 @@ import java.util.Random;
  * happens to carry. So this walks a candidate list and reports which it bound, which is how
  * `.todo/470`'s portability question gets answered by measurement rather than by assumption:
  * run it on the other machine and read the first line.
+ *
+ * And then read the LAST line, because the first one is not enough. Binding a CBLAS says
+ * nothing about whether it is a tuned one: a DGX Spark bound `libblas.so.3` and got 7 GFLOP/s,
+ * the netlib reference implementation, which is SLOWER than rontolisp's own `--simd` kernel.
+ * A soname cannot tell the two apart either -- Debian's `libblas.so.3` is an alternatives
+ * symlink that points at OpenBLAS when one is installed and at the reference when not. So this
+ * also probes for the marker symbols tuned implementations export, and prints a verdict against
+ * measured throughput. Any real feature needs that verdict, not just the binding.
  */
 public class AccelerateProbe {
 
@@ -70,13 +78,41 @@ public class AccelerateProbe {
 
 	static final int ROW_MAJOR = 101, NO_TRANS = 111;
 
+	/** Marker symbols a tuned implementation exports and the reference implementation does not. */
+	static final String[][] MARKERS = { { "openblas_get_config", "OpenBLAS" }, { "mkl_get_version", "Intel MKL" },
+			{ "MKL_Get_Version", "Intel MKL" }, { "bli_info_get_version_str", "BLIS" },
+			{ "ATL_buildinfo", "ATLAS" }, { "nvpl_blas_get_version", "NVIDIA NVPL" },
+			{ "armpl_get_version", "Arm Performance Libraries" } };
+
+	/** Below this at f64, it is the reference implementation and rontolisp's --simd beats it. */
+	static final double TUNED_GFLOPS = 50;
+
 	public static void main(String[] a) throws Throwable {
 		System.out.println("bound CBLAS: " + found);
+		System.out.println("identifies as: " + identify());
 		System.out.println("cblas, ms per n x n gemm (single thread of control, library may thread):");
 		System.out.printf("%-6s %12s %12s %12s%n", "n", "dgemm f64", "sgemm f32", "java f64 loop");
 		for (int n : new int[] { 64, 128, 256, 512, 1024, 2048 }) {
 			bench(n);
 		}
+		System.out.printf("%nverdict: %.0f GFLOP/s f64 at n=1024 -- %s%n", peakF64, peakF64 >= TUNED_GFLOPS ? "TUNED."
+				: "REFERENCE-implementation territory. rontolisp's own --simd matmul is FASTER than"
+						+ " this, so binding it would be a REGRESSION. Decline.");
+	}
+
+	static double peakF64;
+
+	static String identify() {
+		if (found.contains("Accelerate.framework")) return "Apple Accelerate (by path)";
+		try {
+			SymbolLookup lk = SymbolLookup.libraryLookup(found, Arena.global());
+			for (String[] m : MARKERS) {
+				if (lk.find(m[0]).isPresent()) return m[1] + " (exports " + m[0] + ")";
+			}
+		}
+		catch (Throwable t) {
+		}
+		return "no tuned-implementation marker found -- possibly the netlib reference; read the verdict";
 	}
 
 	static void bench(int n) throws Throwable {
@@ -112,8 +148,10 @@ public class AccelerateProbe {
 				MtlSpike.naive(ha, hb, hc, n, n, n);
 				javaMs = (System.nanoTime() - t) / 1e6;
 			}
-			System.out.printf("%-6d %9.3f ms %9.3f ms %9.1f ms   (%.0f / %.0f GFLOP/s)%n", n, d, s, javaMs,
-					2.0 * n * n * n / (d / 1e3) / 1e9, 2.0 * n * n * n / (s / 1e3) / 1e9);
+			double gf = 2.0 * n * n * n / (d / 1e3) / 1e9;
+			if (n == 1024) peakF64 = gf;
+			System.out.printf("%-6d %9.3f ms %9.3f ms %9.1f ms   (%.0f / %.0f GFLOP/s)%n", n, d, s, javaMs, gf,
+					2.0 * n * n * n / (s / 1e3) / 1e9);
 		}
 	}
 }
