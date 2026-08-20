@@ -17,6 +17,7 @@ on:
     paths:
     - src/**
     - pom.xml
+    - .github/workflows/ci.yaml
   # On demand, so the suite can be re-run against an unchanged tree. Timing work needs
   # that: runner speed varies by up to 1.4x between runs, which is larger than most of
   # the effects being measured, and `gh run rerun` refuses these runs.
