@@ -30,7 +30,9 @@ survive is the SHAPE of each result.
 | `Tf32Check.java` | rules out the obvious objection to the 44x f32/f64 gap: is cuBLAS's f32 row secretly TF32? |
 | `CublasEndToEnd.java` | and is cuBLAS worth the toolkit at all? Both kernels, both phases (with copies / resident), both widths. |
 | `NiProbe.java` | does a CUDA downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
+| `MatmulFProbe.java` | no GPU at all: why is `#f` matmul SLOWER than `#d` under `--simd`, and what would fix it? Drives `.todo/469`, phase 0's prerequisite. |
 | `matmul-baseline.lisp` | the CPU side of the comparison -- `linalg:matmul` under `--simd`, warm, 20 reps. Not a GPU program. |
+| `width-baseline.lisp` | `#f` against `#d` across matmul / add / dot / exp / sum, which is how the matmul anomaly surfaced. Not a GPU program. |
 
 ## Running them
 
@@ -48,6 +50,10 @@ java --enable-native-access=ALL-UNNAMED TinySpike.java
 java --enable-native-access=ALL-UNNAMED ResidencySpike.java
 java --enable-native-access=ALL-UNNAMED Tf32Check.java      # needs libcublas (toolkit)
 java --enable-native-access=ALL-UNNAMED CublasEndToEnd.java # needs libcublas (toolkit)
+
+# the width probes -- no GPU involved, Vector API only
+java --add-modules jdk.incubator.vector MatmulFProbe.java
+java -jar $JAR width-baseline.lisp -o W.class --simd && java --add-modules jdk.incubator.vector W
 
 # PtxSpike needs the PTX first; 75 is CUDA 13's oldest accepted virtual arch
 java --enable-native-access=ALL-UNNAMED DumpPtx.java 75
@@ -213,6 +219,33 @@ Note what the last two blocks say together: the GPU's ~16-18 us floor is flat, a
 it is beating rontolisp's own per-call overhead. That win is real but fragile, and it is
 why the size threshold must be measured on the target machine rather than hardcoded from
 FLOP counts.
+
+```
+$ java --add-modules jdk.incubator.vector MatmulFProbe.java     # random zero-mean inputs
+f32 lanes=4, f64 lanes=2
+      laneF32 vs oracle: max 701460 ulp, max rel 0.0428
+n=256  scalarAcc   5.06 ms | laneF2D  930.74 ms (bit-identical) | laneF32   1.37 ms (DIFFERS) | f64   2.49 ms
+      laneF32 vs oracle: max 440342 ulp, max rel 0.0310
+n=512  scalarAcc  39.01 ms | laneF2D 7477.00 ms (bit-identical) | laneF32  10.38 ms (DIFFERS) | f64  19.52 ms
+
+$ java --add-modules jdk.incubator.vector W                     # width-baseline.lisp, JVM --simd
+matmul n=256 f64 2.550   f32 5.100      <- the anomaly: f32 2x SLOWER
+matmul n=512 f64 20.250  f32 39.850
+add   1d f64 1.100       f32 0.620      <- everything else behaves
+exp   1d f64 2.420       f32 2.100
+dot   1d f64 0.240       f32 0.280
+sum   1d f64 0.280       f32 0.280
+```
+
+`scalarAcc` is today's kernel, `laneF2D` is the wasm backend's approach ported to the
+JVM, `laneF32` is f32 lanes with an f32 accumulator. Two results decide `.todo/469`:
+`convert(F2D)` is **190x** slower than the scalar loop it would replace, so wasm's
+bit-identical trick cannot come to the JVM; and `laneF32` is 2.8x faster than the f64
+kernel but differs from the oracle by up to 3-4% relative on the worst (near-zero,
+post-cancellation) cell. The probe's f64 column reproduces rontolisp's own 20.25 ms, so
+it is measuring the right kernel. Run it with the DYADIC inputs it originally had and
+`laneF32` reports "bit-identical" -- an artifact of test data that round-trips exactly,
+which is why the committed version uses zero-mean random values.
 
 ## What is deliberately missing
 

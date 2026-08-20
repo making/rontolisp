@@ -338,10 +338,93 @@ and phase 5 starts by validating it -- do not treat it as settled.
    `torch:set-data` replaces a tensor's data in place. Do not design the cache before
    enumerating every in-place write on a packed array.
 
+## Phase 0: `torch:` defaults to single-float (do this BEFORE any GPU work)
+
+Decided 2026-08-20 after the 44x measurement above. It is listed as phase 0 rather than
+as a nice-to-have because **without it every `--gpu` measurement is contaminated**: an
+f32 speedup measured against an f64 CPU baseline confuses "the GPU is fast" with "the
+default width was wrong", and the flag would ship tuned against the wrong reference.
+
+### Scope, which is narrower than it sounds
+
+This is NOT about scalar floats or the reader. rontolisp has exactly ONE float type and
+it is f64 -- `(type-of 1.0)` answers `FLOAT`, `LispNames` records that "every float
+shares the one double", and `*read-default-float-format*` has nothing to bind. Only the
+PACKED ARRAY element type is in question, i.e. `linalg::%la-make`'s default and who
+threads an `:element-type` into it.
+
+### The split: torch flips, linalg does not
+
+- **`torch:` -> single-float.** PyTorch's own default dtype IS `torch.float32`, so the
+  current `#d` default is a deviation from the library `.kb/torch.md` says this package
+  mirrors. Its workloads (`examples/llm-from-scratch/`,
+  `examples/deep-learning-from-scratch/`, `examples/ml/tiny-llm.lisp`) are exactly the
+  ones the device is for, its numerics are trained-network numerics where f32 is the
+  industry norm, and it is where the 44x lands.
+- **`linalg:` -> stays double-float.** numpy's default is float64 too; `inv`/`solve`/
+  `det` and the numerical-calculus / `heat3d` examples lose real accuracy at f32; and
+  linalg is the cross-backend byte-identity oracle. Nothing needs to change here: the
+  width polymorphism of todo-097 already PRESERVES an input's width through every
+  transform, so an `#f` tensor entering linalg comes out `#f` all the way through the
+  forward and backward pass. **That existing mechanism is what makes phase 0 a small
+  change instead of an architectural one.**
+
+### It is not enough to change `torch:tensor`
+
+The trap: `torch:linear` builds its weights with `linalg:uniform` and passes no
+`:element-type`, so they would stay `#d` while activations went `#f`. Mixed widths are a
+DECLINE condition for every `--simd` kernel, so the program would fall back to the scalar
+defun everywhere -- far worse than either width consistently. Every site that ORIGINATES
+a width must move together. There are only six: `torch:linear` (weight + bias),
+`torch:embedding` (table), `torch:layer-norm` (gain + bias) and `torch:tensor`'s own
+`%t-as-data`; everything else in torch.lisp goes through `zeros-like` / `from-list` /
+`full` and inherits its width already.
+
+Give them a package default rather than six literals -- `torch::*default-element-type*`,
+a `defparameter` read at each origination site, following `torch::*grad-enabled*`'s
+precedent (`.kb/torch.md`, and `torch:no-grad` shows the dynamic-rebinding pattern if a
+`with-dtype` form is ever wanted). This is legal despite `%la-make`'s "literal
+`:element-type`" rule: that rule is about the two `make-array` calls INSIDE `%la-make`,
+each of which stays literal so every backend still picks `double[]` / `float[]`
+statically. `%la-make`'s own parameter is already a runtime value.
+
+### Prerequisite and risks
+
+- **`.todo/469` first, without exception.** Today `#f` matmul under `--simd` is 2.0x
+  SLOWER than `#d` (the kernel runs without lanes). Flip the default before fixing that
+  and every torch program gets ~2x slower on the JVM and the interpreter -- a regression
+  for every user who does not own a GPU, which is most of them. 469 also forces the
+  precision-contract decision that phase 0 depends on.
+- **Pin `TorchGradcheck` to double-float explicitly.** It central-differences at
+  `eps 1e-4` against `tol 1e-3` relative; at f32 the subtraction leaves roughly three
+  significant digits, which is at or past the tolerance. The gradcheck exists to verify
+  ADJOINTS, not the default dtype, so it should say `:element-type 'double-float` and
+  keep its current sensitivity rather than have its tolerance loosened.
+- **Churn, not danger.** Every `.expected` file and every doc example's `; =>` changes,
+  mirrored across `doc/en/**` and `doc/ja/**` with byte-identical fences. `#f` itself is
+  already proven cross-backend -- the `linalg-single-float-cross-backend` ci-spec case
+  pins it -- so this is volume, not risk. `DocExamplesTest#fixShownResults` does most of
+  it mechanically.
+- **Mixed-width regressions in user code.** `(torch:add tensor (linalg:ones ...))` now
+  mixes `#f` and `#d` and declines to the scalar defun. Correct, just slow. Worth a
+  sentence in `doc/{en,ja}/guides/neural-networks.md` telling people to build linalg
+  operands for a tensor with `:element-type 'single-float`.
+
+### Acceptance
+
+- A `torch:` program built from `torch:tensor` + `torch:linear` + `torch:embedding` +
+  `torch:layer-norm` is `#f` end to end -- assert the element type after a full
+  forward/backward, so a single missed origination site fails loudly instead of silently
+  declining every kernel.
+- `train-gpt-soseki.lisp` and `tiny-llm.lisp` get FASTER on all three `--simd` backends,
+  not just non-slower. If they do not, 469 did not land properly.
+- The gradcheck table still passes at its current `tol`, running in double.
+- Byte-identical output with and without `--simd`, on all four backends, as today.
+
 ## Phases
 
 Each phase is separately shippable and separately measurable. Do not start a phase
-without the previous one's numbers.
+without the previous one's numbers. Phase 0 above comes first.
 
 1. **`--gpu` on the interpreter, one member: `linalg:dot`'s M.M case.** `am.ik.gpu` +
    `eval/LinalgGpu` + `eval/LinalgGpuKernels` + the checked-in PTX + the availability
