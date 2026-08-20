@@ -74,6 +74,71 @@ definition kinds, for every form `LoadInliner` spliced for a system. See
 "Third-party provenance" below for how the pass knows, and for the definition
 kinds that stay roots.
 
+**A BUNDLED library's `defstruct` is expanded BEFORE reachability (todo-465)** --
+`BundledStructs.expand` inside `prune()`, right after resolution -- into exactly
+the defuns the compilers would generate (`LispMacroExpander.expandDefstruct`; a
+defstruct has no backend codegen, `.kb/defstruct.md`), so every constructor,
+predicate, copier and accessor prunes INDIVIDUALLY instead of the whole form
+being a root that also anchors every name its body spells. This is deliberately
+NOT the third-party `Candidates` keyed-unit rule (kept-iff-any-name-referenced
+would make one accessor keep the whole surface -- a size regression for a
+defun-only record like torch's). Mechanics:
+
+- A bundled defstruct is recognized by its struct name's PACKAGE
+  (`BUNDLED_STRUCT_PACKAGES`: torch/linalg/vec -- the libraries' reserved
+  namespaces), the same name-not-origin philosophy as the defun rule (a user
+  defun named `linalg:norm` is prunable today). json/url/prelude define their
+  helpers in `rontolisp::`/`cl` and have no defstruct; extend the set (never
+  widen to `RONTOLISP`) if one ever gains both. Third-party
+  (`%begin-system`-bracketed, builtin brackets included) and user defstructs
+  stay on the compilers' expansion path.
+- The expansion is not free-standing: it populates compiler-owned state
+  (`structAccessors` -- `expandSetf`'s place registry, incl. the
+  `TYPED_VECTOR_SLOT_BASE` encoding -- and the `ClosRegistry`
+  layout/predicate/slot-type registrations). A
+  `(%struct-definition (defstruct ...))` marker (`LispNames.STRUCT_DEFINITION`)
+  therefore takes the original form's place in the stream -- in-stream for the
+  same reason the `%begin-system` brackets are -- and
+  `expandTopLevelDefinitions` consumes it: it re-runs `expandDefstruct` against
+  the compilation's own registries and DISCARDS the regenerated forms (the
+  stream carries the kept subset; a `(:print-object ...)` struct's synthesized
+  defmethod rides the stream as a raw defmethod and registers through the
+  normal arm; `refreshStructPredicates` still rebuilds a kept predicate once
+  the whole registry is known). Unlike the system brackets the marker SURVIVES
+  `PackageResolver` (an explicit branch resolves its payload and keeps the
+  head), and the pruner's reference scan SKIPS it -- the payload spells custom
+  option names and slot initforms, which would otherwise anchor exactly the
+  defuns the expansion made prunable.
+- The generated names join the bundled prunable set for that run; a generated
+  `%setf-` writer (typed-vector structs) is keyed under its ACCESSOR too,
+  because `(setf (acc x) v)` / `#'(setf acc)` spell only the accessor and the
+  writer call is synthesized after this pass (the vec:aset pattern, as a keying
+  rule instead of a hardcoded edge).
+- Name spelling agrees on both sides because both expansions run with a
+  post-resolution resolver's export oracle over the same program
+  (`spellsAsExternal`; bundled packages are builtin, so their export sets are
+  static). The struct tag `'%struct-PKG::NAME` baked into generated bodies now
+  meets the compilers' re-resolution, so `resolveSymbolName` passes any
+  `%struct-`-prefixed symbol through (its embedded `::` is not a package
+  qualifier).
+- A defstruct the expansion cannot take (malformed, an `:include` parent
+  outside the expanded set) stays an unexpanded root; `--dynamic`/`--no-prune`
+  run `stripSystemMarkers` instead, so those paths never see the expansion and
+  emit what they emitted before. `--no-gc` stays carved out (it rejects
+  defstruct either way). Documented carve-out: a `#S(NAME ...)` literal is not
+  a reference source, so a program whose ONLY use of a slot initform's callee
+  is through a `#S` literal fails loudly at compile ("Cannot compile:
+  undefined"); `--no-prune` restores everything.
+- No bundled library carries a defstruct yet (todo-466, the torch records, is
+  the consumer), so production output is byte-identical today. Pinned by
+  `LibraryDefunPrunerTest#aBundledDefstructsGeneratedDefunsPruneIndividually` /
+  `#theStructDefinitionMarkerAnchorsNothingItSpells` /
+  `#aBundledDefstructIncludeChainPrunesInheritedAccessorsIndividually` /
+  `#aTypedVectorStructsSetfWriterRidesItsAccessor` /
+  `#aUserDefstructIsNeverExpandedOrPruned` /
+  `#withoutPruningABundledDefstructStaysUntouched`, and end-to-end by
+  `Jvm/WasmLispCompiler*Test#compileAndRunAPrunedBundledDefstructThroughTheRegistrationMarker`.
+
 **Reachability (carve-out semantics, user-confirmed 2026-07-12)**: a reference
 is ANY occurrence of the name anywhere in a kept form -- operator position,
 argument position, quoted data, `(function ...)` -- PLUS any string literal

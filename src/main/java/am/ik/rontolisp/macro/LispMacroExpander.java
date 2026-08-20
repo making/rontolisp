@@ -11121,6 +11121,38 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Builds the {@code (%struct-definition (defstruct ...))} bookkeeping marker
+	 * {@code LibraryDefunPruner} leaves in the form stream when it splices a bundled
+	 * library defstruct's generated defuns ahead of pruning. The marker has to ride IN
+	 * the form list (the {@code %begin-system} lesson: passes between the pruner and the
+	 * compilers rebuild conses, so an identity or index side table dies), and it is what
+	 * {@link #expandTopLevelDefinitions} re-runs the expansion's REGISTRATION side
+	 * effects from -- the setf-place registry and the struct layout/predicate/slot-type
+	 * registrations -- while the generated defuns it would emit are discarded there: the
+	 * stream already carries the kept subset.
+	 * @param defstruct the original top-level {@code defstruct} form
+	 * @return the marker form
+	 */
+	public static LispVal structDefinitionMarker(LispCons defstruct) {
+		return new LispCons(new LispSymbol(LispNames.STRUCT_DEFINITION), new LispCons(defstruct, LispNil.INSTANCE));
+	}
+
+	/**
+	 * The {@code defstruct} payload of a {@link #structDefinitionMarker} form, or
+	 * {@code null} when the form is not that marker.
+	 * @param form a top-level form
+	 * @return the carried {@code defstruct} form, or {@code null}
+	 */
+	public static @Nullable LispCons structDefinitionPayload(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.STRUCT_DEFINITION.equals(LispSymbol.memberName(op.name()))
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispCons payload) {
+			return payload;
+		}
+		return null;
+	}
+
+	/**
 	 * The parameter names of the {@code print-object} method a struct printer generates.
 	 */
 	private static final String STRUCT_PRINT_OBJ_VAR = "__struct_pobj";
@@ -18168,8 +18200,9 @@ public final class LispMacroExpander {
 				&& !makeInstanceFunction && !classSlotDefsRuntime && !symbolFunctionWrite && !changeClassRuntime
 				&& !readsSlots(program) && !closRegistry.routesConditionReports()
 				&& program.stream()
-					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
-							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
+					.noneMatch(f -> isDefstructForm(f) || structDefinitionPayload(f) != null || isClosDefinitionForm(f)
+							|| isSetfFunctionDefun(f) || isLetWithNestedDefmethod(f)
+							|| isNamedForm(f, LispNames.DEFTYPE))) {
 			// No definitions to splice, so the registry stays as seeded: a #S(...)
 			// literal
 			// here can only name an unregistered structure type and the fold says so. It
@@ -18207,6 +18240,16 @@ public final class LispMacroExpander {
 				for (LispVal generated : expandDefstruct((LispCons) form, structAccessors, closRegistry, exported)) {
 					addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
 				}
+			}
+			else if (structDefinitionPayload(form) instanceof LispCons structPayload) {
+				// A bundled-library defstruct the CLI expanded AHEAD of its tree-shaker
+				// (LibraryDefunPruner): the generated defuns already ride in the program
+				// -- each pruned individually -- so only the expansion's REGISTRATION
+				// side effects are re-run here, against THIS compilation's registries.
+				// The regenerated forms are discarded (the stream carries the kept
+				// subset; a (:print-object ...) struct's synthesized defmethod rides the
+				// stream too and registers through the defmethod arm above).
+				expandDefstruct(structPayload, structAccessors, closRegistry, exported);
 			}
 			else if (isNamedForm(form, LispNames.DEFCLASS)) {
 				// The expansion mixes plain defuns (constructor) with synthesized

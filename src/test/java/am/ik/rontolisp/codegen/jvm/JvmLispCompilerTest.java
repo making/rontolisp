@@ -11405,6 +11405,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAPrunedBundledDefstructThroughTheRegistrationMarker() throws Exception {
+		// The pruner expands a bundled-library defstruct into its defuns ahead of
+		// pruning and leaves a %struct-definition marker in the stream; this pass
+		// re-runs the registration from the marker, so setf places, the predicate and
+		// construction still compile with the unreferenced accessors pruned.
+		java.util.List<LispVal> pruned = am.ik.rontolisp.eval.LibraryDefunPruner.prune(LispReader.readAllFromString("""
+				(defstruct torch::rec a b c)
+				(setq r (torch::make-rec :a 1 :b 2 :c 3))
+				(setf (torch::rec-a r) 10)
+				(print (torch::rec-a r))
+				(print (torch::rec-p r))
+				"""));
+		assertThat(compileAndRun(pruned)).isEqualTo("10\nT");
+	}
+
+	@Test
 	void compileAndRunDefstructSetfPlacesAndFirstClassAccessors() throws Exception {
 		assertThat(compileAndRun("""
 				(defstruct point x y)

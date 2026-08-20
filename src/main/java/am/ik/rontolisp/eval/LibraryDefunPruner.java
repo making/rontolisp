@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.FormatRenderer;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -106,7 +107,7 @@ public final class LibraryDefunPruner {
 		List<LispVal> forms = LispMacroExpander.flattenTopLevel(program);
 		Provenance provenance = Provenance.scan(forms);
 		Set<String> bundled = prunableNames();
-		if (!provenance.hasSystems() && !hasBundledDefinition(forms, bundled)) {
+		if (!provenance.hasSystems() && !hasBundledDefinition(forms, bundled) && !hasBundledDefstruct(forms)) {
 			// Nothing this pass could remove (the common case: a program that splices no
 			// library at all). Return the caller's list, not the flattened copy.
 			return program;
@@ -120,12 +121,32 @@ public final class LibraryDefunPruner {
 		// Analyze a resolved copy (index-aligned 1:1 with the original) so user-source
 		// spellings match the definitions' canonical names. A resolution error is not
 		// this pass's to report: the compiler runs the identical resolution first thing.
+		PackageResolver resolver = new PackageResolver();
 		List<LispVal> resolved;
 		try {
-			resolved = new PackageResolver().resolveProgram(forms);
+			resolved = resolver.resolveProgram(forms);
 		}
 		catch (LispPackageException ex) {
 			return provenance.withoutMarkers(forms);
+		}
+		// A BUNDLED library's defstruct is expanded into its generated defuns HERE,
+		// before reachability, so each one prunes individually -- as a whole form it
+		// would be a root, and a root that spells every accessor. A %struct-definition
+		// marker rides in the stream in its place: the compilers consume it to re-run
+		// the expansion's registration side effects (setf places, the struct
+		// layout/predicate registrations) against their own state. Third-party
+		// defstructs stay on the Candidates keyed-unit path (their defmethod
+		// specializer gate reads the un-expanded form), and user defstructs stay on the
+		// compilers' expansion (which alone has the program's export oracle at the
+		// right time).
+		BundledStructs structs = BundledStructs.expand(forms, resolved, provenance, resolver);
+		if (structs != null) {
+			forms = structs.forms();
+			resolved = structs.resolved();
+			provenance = Provenance.scan(forms);
+			Set<String> widened = new HashSet<>(bundled);
+			widened.addAll(structs.definedNames());
+			bundled = Set.copyOf(widened);
 		}
 		// Stage A of the bzip2-tree elimination: fold case/ecase arms no possible
 		// subject value can reach OUT of third-party definitions, BEFORE reference
@@ -160,7 +181,10 @@ public final class LibraryDefunPruner {
 					}
 					thirdParty.add(name);
 				}
-				keys = List.of(name);
+				// A generated %setf- writer of a bundled typed-vector struct is also
+				// keyed under its accessor: (setf (acc x) v) and #'(setf acc) spell only
+				// ACC textually -- the %setf-acc call is synthesized after this pass.
+				keys = structs != null ? structs.keysFor(name) : List.of(name);
 			}
 			else {
 				keys = closCandidates.keysAt(i);
@@ -204,8 +228,13 @@ public final class LibraryDefunPruner {
 		Map<String, List<String>> instantiatorGates = closCandidates.instantiatorGates();
 		List<GatedArm> rootArms = new ArrayList<>();
 		for (int i = 0; i < resolved.size(); i++) {
+			// A %struct-definition marker is this pass's own bookkeeping: it spells the
+			// struct's slot names and initforms, and scanning it would anchor exactly
+			// the generated defuns the expansion made prunable. It is kept in the
+			// output (the compilers consume it) but contributes no references.
 			if (!keysByIndex.containsKey(i) && !closCandidates.methodGates().containsKey(i) && !provenance.isMarker(i)
-					&& !isDeclamation(resolved.get(i))) {
+					&& !isDeclamation(resolved.get(i))
+					&& LispMacroExpander.structDefinitionPayload(resolved.get(i)) == null) {
 				GateContext ctx = gateContext(i, provenance, instantiatorGates);
 				collectReferences(resolved.get(i), prunable, roots, ctx);
 				if (ctx != null) {
@@ -410,6 +439,141 @@ public final class LibraryDefunPruner {
 	}
 
 	/**
+	 * The packages whose top-level {@code defstruct}s this pass expands ahead of pruning
+	 * (see {@link BundledStructs}) -- the bundled prunable libraries that own a package
+	 * of their own. Membership is decided by the STRUCT NAME's package, the same
+	 * name-not-origin philosophy the defun rule already has (a user defun named
+	 * {@code linalg:norm} is prunable today); these packages are the libraries' reserved
+	 * namespaces, so a user definition inside one is already library-space.
+	 * json/url/prelude define their helpers in {@code rontolisp::}/{@code cl} and have no
+	 * defstruct -- extend this set (never widen to {@code RONTOLISP}) if one ever gains a
+	 * package and a record.
+	 */
+	private static final Set<String> BUNDLED_STRUCT_PACKAGES = Set.of(LispNames.TORCH_PKG, LispNames.LINALG_PKG,
+			LispNames.VEC_PKG);
+
+	/**
+	 * Whether any top-level form is a bundled-library {@code defstruct} (a defstruct
+	 * whose struct name lives in one of {@link #BUNDLED_STRUCT_PACKAGES}). Bundled
+	 * library sources are canonical, so like {@link #hasBundledDefinition} this pre-check
+	 * needs no resolution.
+	 */
+	private static boolean hasBundledDefstruct(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (isBundledDefstruct(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean isBundledDefstruct(LispVal form) {
+		LispMacroExpander.StructDefinedNames summary = LispMacroExpander.defstructDefinedNames(form);
+		if (summary == null) {
+			return false;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(summary.structName());
+		return qn != null && BUNDLED_STRUCT_PACKAGES.contains(PackageRegistry.canonicalBuiltinName(qn.pkg()));
+	}
+
+	/**
+	 * The early splice of the BUNDLED libraries' {@code defstruct}s: each one is expanded
+	 * into the generated defuns the compilers would produce anyway
+	 * ({@code LispMacroExpander.expandDefstruct} -- a defstruct has no backend codegen at
+	 * all, {@code .kb/defstruct.md}), so every constructor, predicate, copier and
+	 * accessor becomes an individually prunable definition instead of one unprunable
+	 * root. A {@code (%struct-definition (defstruct ...))} marker takes the original
+	 * form's place in BOTH the pre-resolution and the resolved list (index-aligned),
+	 * because the expansion is not free-standing: the compilers must re-run its
+	 * registration side effects against their own {@code structAccessors}/
+	 * {@link ClosRegistry} state, and the marker is the bookkeeping that survives the
+	 * cons-rebuilding passes in between ({@code expandTopLevelDefinitions} consumes it).
+	 * The export oracle is this pass's resolver, which agrees with the compilers' (both
+	 * are post-resolution resolvers of the same program), so the regenerated names match
+	 * the spliced defuns exactly.
+	 *
+	 * <p>
+	 * A defstruct the expansion cannot take (a malformed form, an {@code :include} parent
+	 * outside the expanded set) stays an unexpanded root and the compilers report the
+	 * real error. Third-party ({@code %begin-system}-bracketed) defstructs are never
+	 * expanded here.
+	 *
+	 * @param forms the pre-resolution list with each bundled defstruct replaced by marker
+	 * + generated defuns
+	 * @param resolved the resolved twin, index-aligned
+	 * @param definedNames every generated definition name (joins the bundled prunable set
+	 * for this run)
+	 * @param keyAliases generated {@code %setf-} writer name -> its keep-keys (the
+	 * writer's own name plus the accessor whose synthesized call sites spell only the
+	 * accessor)
+	 */
+	private record BundledStructs(List<LispVal> forms, List<LispVal> resolved, Set<String> definedNames,
+			Map<String, List<String>> keyAliases) {
+
+		List<String> keysFor(String name) {
+			List<String> aliased = this.keyAliases.get(name);
+			return aliased != null ? aliased : List.of(name);
+		}
+
+		@Nullable static BundledStructs expand(List<LispVal> forms, List<LispVal> resolved, Provenance provenance,
+				PackageResolver resolver) {
+			Set<Integer> targets = new HashSet<>();
+			for (int i = 0; i < resolved.size(); i++) {
+				if (!provenance.isMarker(i) && !provenance.insideSystem(i) && isBundledDefstruct(resolved.get(i))) {
+					targets.add(i);
+				}
+			}
+			if (targets.isEmpty()) {
+				return null;
+			}
+			List<LispVal> outForms = new ArrayList<>(forms.size());
+			List<LispVal> outResolved = new ArrayList<>(forms.size());
+			Set<String> defined = new HashSet<>();
+			Map<String, List<String>> aliases = new HashMap<>();
+			Map<String, Integer> accessors = new HashMap<>();
+			ClosRegistry registry = new ClosRegistry();
+			for (int i = 0; i < forms.size(); i++) {
+				if (!targets.contains(i) || !(resolved.get(i) instanceof LispCons resolvedCons)
+						|| !(forms.get(i) instanceof LispCons original)) {
+					outForms.add(forms.get(i));
+					outResolved.add(resolved.get(i));
+					continue;
+				}
+				List<LispVal> generated;
+				try {
+					generated = LispMacroExpander.expandDefstruct(resolvedCons, accessors, registry,
+							resolver::spellsAsExternal);
+				}
+				catch (RuntimeException ex) {
+					// Not expandable here (e.g. an :include parent this pass has not
+					// registered): keep the form as a root; the compilers -- which run
+					// the same expansion -- report the real error.
+					outForms.add(forms.get(i));
+					outResolved.add(resolved.get(i));
+					continue;
+				}
+				outForms.add(LispMacroExpander.structDefinitionMarker(original));
+				outResolved.add(LispMacroExpander.structDefinitionMarker(resolvedCons));
+				for (LispVal g : generated) {
+					// The generated forms are canonical, so the same object serves both
+					// lists (the resolver is a fixed point on them). A generated
+					// print-object defmethod has no definitionName and stays a root.
+					outForms.add(g);
+					outResolved.add(g);
+					String name = definitionName(g);
+					if (name != null) {
+						defined.add(name);
+						if (name.startsWith("%setf-")) {
+							aliases.put(name, List.of(name, name.substring("%setf-".length())));
+						}
+					}
+				}
+			}
+			return new BundledStructs(outForms, outResolved, Set.copyOf(defined), Map.copyOf(aliases));
+		}
+	}
+
+	/**
 	 * Whether a third-party definition may be dropped on the strength of its own body. A
 	 * {@code defun} always may -- removing it can only ever produce the loud "undefined
 	 * function" error the carve-out documents. A {@code defvar}/{@code defparameter}/
@@ -558,6 +722,15 @@ public final class LibraryDefunPruner {
 		boolean isPrunableSystem(int index) {
 			String system = this.systemAt[index];
 			return this.balanced && system != null && !BuiltinSystems.isBuiltin(system);
+		}
+
+		/**
+		 * Whether the form sits inside ANY system bracket, built-in ones included -- the
+		 * guard that keeps the bundled-defstruct early splice off every spliced system's
+		 * forms.
+		 */
+		boolean insideSystem(int index) {
+			return this.systemAt[index] != null;
 		}
 
 		List<LispVal> withoutMarkers(List<LispVal> forms) {

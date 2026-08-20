@@ -4214,6 +4214,18 @@ public final class LispNames {
 	 */
 	public static final String END_FILE = "%END-FILE";
 
+	/**
+	 * Internal marker {@code (%struct-definition (defstruct ...))} left in the form
+	 * stream by {@code LibraryDefunPruner} when it expands a BUNDLED library's
+	 * {@code defstruct} into its generated defuns AHEAD of pruning (so each defun prunes
+	 * individually). Unlike the {@link #BEGIN_SYSTEM} brackets it SURVIVES resolution:
+	 * the payload is what {@code LispMacroExpander.expandTopLevelDefinitions} re-runs the
+	 * expansion's registration side effects from (the setf-place registry, the struct
+	 * layout/predicate/slot-type registrations) -- the regenerated defuns themselves are
+	 * discarded there, because the stream already carries the kept subset.
+	 */
+	public static final String STRUCT_DEFINITION = "%STRUCT-DEFINITION";
+
 	/** The {@code :use} clause keyword of {@code defpackage}. */
 	public static final String USE_KEYWORD = ":USE";
 

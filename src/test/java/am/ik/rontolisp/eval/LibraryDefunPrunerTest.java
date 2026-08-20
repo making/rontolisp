@@ -962,4 +962,100 @@ class LibraryDefunPrunerTest {
 		assertThat(survivingPrintOf(program, "PICK")).contains("SLOW-STATE");
 	}
 
+	// ------------------------------------------------------------------
+	// Bundled-library defstructs: expanded into their generated defuns AHEAD of the
+	// reachability pass (each prunes individually), with a %struct-definition marker
+	// left in the stream for the compilers' registration side effects. A bundled
+	// defstruct is recognized by its struct name's package (torch/linalg/vec -- the
+	// libraries' reserved namespaces), which is also what lets these fixtures write
+	// one directly.
+
+	private static boolean isStructDefinitionMarker(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& "%STRUCT-DEFINITION".equals(op.name());
+	}
+
+	@Test
+	void aBundledDefstructsGeneratedDefunsPruneIndividually() {
+		// One accessor referenced: the other accessors, the constructor, the predicate
+		// and the copier all go, and the bookkeeping marker survives for the compilers.
+		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
+				(defstruct torch::rec a b c d e f)
+				(print (torch::rec-b (car (list 1))))
+				"""));
+		assertThat(definedNames(program)).contains("TORCH::REC-B")
+			.doesNotContain("TORCH::MAKE-REC", "TORCH::REC-P", "TORCH::COPY-REC", "TORCH::REC-A", "TORCH::REC-C",
+					"TORCH::REC-D", "TORCH::REC-E", "TORCH::REC-F");
+		assertThat(program.stream().filter(LibraryDefunPrunerTest::isStructDefinitionMarker)).hasSize(1);
+	}
+
+	@Test
+	void theStructDefinitionMarkerAnchorsNothingItSpells() {
+		// The marker carries the whole defstruct form -- custom option names included --
+		// and is this pass's own bookkeeping: it must not count as a reference to what
+		// it spells, or the expansion would anchor exactly the defuns it made prunable
+		// (a custom predicate/copier name is spelled verbatim in the payload).
+		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
+				(defstruct (torch::rec (:predicate torch::recp) (:copier torch::clone-rec)) a)
+				(print (torch::rec-a (car (list 1))))
+				"""));
+		assertThat(definedNames(program)).contains("TORCH::REC-A")
+			.doesNotContain("TORCH::RECP", "TORCH::CLONE-REC", "TORCH::MAKE-REC");
+	}
+
+	@Test
+	void aBundledDefstructIncludeChainPrunesInheritedAccessorsIndividually() {
+		// The child re-generates accessors over inherited slots; referencing one keeps
+		// only it -- the parent's own accessor over the same slot goes.
+		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
+				(defstruct torch::base x y)
+				(defstruct (torch::child (:include torch::base)) z)
+				(print (torch::child-x (car (list 1))))
+				"""));
+		assertThat(definedNames(program)).contains("TORCH::CHILD-X")
+			.doesNotContain("TORCH::BASE-X", "TORCH::BASE-Y", "TORCH::CHILD-Y", "TORCH::CHILD-Z", "TORCH::MAKE-BASE",
+					"TORCH::MAKE-CHILD", "TORCH::BASE-P", "TORCH::CHILD-P");
+		assertThat(program.stream().filter(LibraryDefunPrunerTest::isStructDefinitionMarker)).hasSize(2);
+	}
+
+	@Test
+	void aTypedVectorStructsSetfWriterRidesItsAccessor() {
+		// (setf (acc x) v) and #'(setf acc) spell only the accessor textually -- the
+		// %setf- writer call is synthesized AFTER this pass -- so the generated writer
+		// defun is keyed under the accessor too. The untouched slot's accessor and
+		// writer still go.
+		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
+				(defstruct (torch::regs (:type (vector (unsigned-byte 32)))) a b)
+				(let ((r (torch::make-regs :a 1 :b 2)))
+				  (setf (torch::regs-a r) 3)
+				  (print (torch::regs-a r)))
+				"""));
+		assertThat(definedNames(program)).contains("TORCH::MAKE-REGS", "TORCH::REGS-A", "%setf-TORCH::REGS-A")
+			.doesNotContain("TORCH::REGS-B", "%setf-TORCH::REGS-B", "TORCH::COPY-REGS");
+	}
+
+	@Test
+	void aUserDefstructIsNeverExpandedOrPruned() {
+		// A user (or third-party) defstruct stays on the compilers' expansion path,
+		// which alone has the program's export oracle at the right time; here it rides
+		// through verbatim as a root.
+		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
+				(defstruct point x y)
+				(defstruct torch::rec a)
+				(print (point-x (make-point :x 1 :y 2)))
+				"""));
+		assertThat(survivingHeads(program)).contains("DEFSTRUCT POINT");
+		assertThat(program.stream().filter(LibraryDefunPrunerTest::isStructDefinitionMarker)).hasSize(1);
+	}
+
+	@Test
+	void withoutPruningABundledDefstructStaysUntouched() {
+		// The --dynamic/--no-prune escape hatches run stripSystemMarkers instead of
+		// prune: no expansion, no marker -- the compilers expand the defstruct
+		// themselves, exactly as before this pass existed.
+		List<LispVal> program = LispReader
+			.readAllFromString("(defstruct torch::rec a)\n(print (torch::rec-a (car (list 1))))");
+		assertThat(LibraryDefunPruner.stripSystemMarkers(program)).isSameAs(program);
+	}
+
 }

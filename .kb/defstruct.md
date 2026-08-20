@@ -52,6 +52,16 @@ structures are never `equal` -- see `.kb/instance-syntax.md`).
   1-form macro expansion) is load-bearing. `--no-gc`
   (`NoGcWasmCompiler`) rejects defstruct via its generic "supports only
   (defun ...)" top-level error.
+- **A BUNDLED library's defstruct (torch/linalg/vec packages) is expanded
+  EARLIER on the pruning compile path**: `LibraryDefunPruner.prune` splices the
+  generated defuns ahead of reachability (so each prunes individually) and
+  leaves a `(%struct-definition (defstruct ...))` marker that
+  `expandTopLevelDefinitions` consumes for the registration side effects alone
+  -- full mechanics and constraints in `.kb/library-defun-pruning.md`. A
+  bundled defstruct relying on default-generated names gets the export
+  oracle's spelling on both paths; explicit option names
+  (`(:predicate torch:tensorp)`) are used verbatim and are the robust spelling
+  for an exported API.
 - **`UserMacroExpander`** has a defstruct case in its structure-aware walker:
   the struct/slot names are preserved, slot defaults are expanded as
   expressions. A user macro may expand INTO a top-level defstruct (the splice

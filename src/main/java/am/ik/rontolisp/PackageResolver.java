@@ -235,6 +235,15 @@ public final class PackageResolver {
 					|| LispNames.BEGIN_FILE.equals(member) || LispNames.END_FILE.equals(member)) {
 				return quotedSymbol(this.currentPackage);
 			}
+			// The bundled-defstruct bookkeeping marker SURVIVES resolution -- unlike the
+			// system brackets it carries a payload a later pass still needs: the pruner
+			// splices the generated defuns ahead of its pruning, and
+			// LispMacroExpander.expandTopLevelDefinitions consumes the marker to re-run
+			// the expansion's registration side effects. The head stays verbatim; the
+			// payload resolves like the top-level defstruct it stands for.
+			if (LispNames.STRUCT_DEFINITION.equals(member) && cons.cdr() instanceof LispCons payloadCell) {
+				return new LispCons(cons.car(), new LispCons(resolve(payloadCell.car()), LispNil.INSTANCE));
+			}
 			// A literal top-level (uiop:add-package-local-nickname 'nick 'pkg) is
 			// consumed like a defpackage clause: the nickname registers here (so it
 			// works on every backend -- the compiled runtimes have no uiop function)
@@ -1267,6 +1276,14 @@ public final class PackageResolver {
 		// An uninterned symbol (#:foo, or a gensym-produced #:g1) belongs to no
 		// package; it passes through like a keyword.
 		if (sym.name().startsWith("#:")) {
+			return sym;
+		}
+		// A struct instance tag ('%struct-PKG::NAME, baked into defstruct-generated
+		// defun bodies) is an internal token over an ALREADY-canonical struct name, not
+		// a package-scoped symbol -- its embedded :: must not read as a package
+		// qualifier. It reaches this pass only when generated defuns ride through a
+		// re-resolution, i.e. the pruner's bundled-defstruct early splice.
+		if (sym.name().startsWith(LispLayout.STRUCT_TAG_PREFIX)) {
 			return sym;
 		}
 		String name = sym.name();
