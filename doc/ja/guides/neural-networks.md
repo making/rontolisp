@@ -6,7 +6,7 @@
 
 ## テンソル
 
-`torch:tensor` は数値、リスト、配列、linalg 配列から葉テンソルを作ります。`:requires-grad t` はパラメータ、すなわち backward が勾配を書き込むべきテンソルの印です。テンソル自体は生のレコードとして印字されるため、値は `torch:data` (配列)、`torch:item` (要素 1 個のテンソルの中の数値)、`torch:shape` で読み戻します:
+`torch:tensor` は数値、リスト、配列、linalg 配列から葉テンソルを作ります。`:requires-grad t` はパラメータ、すなわち backward が勾配を書き込むべきテンソルの印です。テンソルは `#<TENSOR データ>` (パラメータなら ` :REQUIRES-GRAD T` 付き) と印字されます。印字するのはデータだけなので、どのバックエンドでも同じテキストです。値は `torch:data` (配列)、`torch:item` (要素 1 個のテンソルの中の数値)、`torch:shape` で読み戻します:
 
 ```lisp
 (defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))

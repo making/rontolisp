@@ -43,7 +43,18 @@ being hosted (`.kb/asdf.md`).
 symptom is not an error -- it is two objects sharing one entry, so it reads as a
 logic bug in the library.
 
-## Gap 2: `eq` on instances disagrees between backends
+## Gap 2: `eq` on instances disagrees between backends -- CLOSED 2026-08-20
+
+Closed by todo-466, which forced it: torch's tape (`torch::%t-topo`'s visited
+set) and its parameter walk are `member` over record instances and both mean
+IDENTITY, so the structural interpreter answer conflated two records with equal
+slots -- a wrong gradient on one backend only. `Environment.isIdentityAggregate`
+now puts an instance beside a cons for `eq`/`eql`, which is CL's rule and what
+the other three backends always did; `equal` stays structural.
+`.kb/instance-syntax.md` carries it. **Gap 1 below is still open** -- this was
+the predicate, not the table.
+
+The original text, kept for the reasoning:
 
 Found while measuring the above, and undocumented. For two separately
 constructed instances with equal slots:
@@ -62,6 +73,10 @@ structural everywhere and that is deliberate (`.kb/instance-syntax.md`).
 The interpreter is the wrong one. Fixing it is small, but it belongs HERE rather
 than in a drive-by: what identity MEANS has to be settled before a table can key
 on it, and settling it is most of this todo.
+
+(Settled as above: reference identity, matching CL and the three compile
+backends. A `:test 'eq` table keying on instances therefore has a well-defined
+meaning now, which is what Gap 1 still has to implement.)
 
 ## The WASM design, already worked out
 

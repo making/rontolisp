@@ -4571,6 +4571,37 @@ cases:
       ((A B) (C D) (E))
       (4 4)
       (T T T T)
+  # The torch records are defstructs carrying a (:print-object ...), so a tensor,
+  # a module and an optimizer render identically on every backend -- the
+  # hand-rolled tagged vectors they replaced printed their raw slots, one of which
+  # is a backward closure with no portable printed form, which is why nothing
+  # could print a tensor before. The identity lines pin what eq/eql/member answer
+  # for a record instance: reference identity, which is what the tape's visited
+  # set and the parameter walk's dedup both rest on.
+  - name: torch-record-print-cross-backend
+    source: |
+      (defun ci-torch-records ()
+        (let ((tn (torch:tensor '(1.0 2.0) :requires-grad t))
+              (s (torch:tensor 0.5)))
+          (print tn)
+          (princ s)
+          (terpri)
+          (format t "~a|~s~%" s s)
+          (print (list s))
+          (print (torch:linear 2 2))
+          (print (torch:sgd (list tn) :lr 0.5))
+          (print (list (eq tn tn) (eq s (torch:tensor 0.5))
+                       (if (member (torch:tensor 0.5) (list s)) t nil)
+                       (if (member s (list s)) t nil)))))
+      (ci-torch-records)
+    expected: |
+      #<TENSOR #d(1.0 2.0) :REQUIRES-GRAD T>
+      #<TENSOR 0.5>
+      #<TENSOR 0.5>|#<TENSOR 0.5>
+      (#<TENSOR 0.5>)
+      #<MODULE :LINEAR>
+      #<OPTIMIZER :SGD :STEP-COUNT 0>
+      (T NIL NIL T)
   # Regression: uiop:getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline

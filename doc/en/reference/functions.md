@@ -623,7 +623,7 @@ fill in gradients. It is **not part of Common Lisp**; reference its functions
 with the `torch:` qualifier (the package does not use `cl`). Every operation
 accepts tensors, numbers, arrays or lists as operands, computes through the
 `linalg` kernels (so `--simd` accelerates torch programs for free), and a
-tensor prints as its raw record -- read results back with `torch:data` /
+tensor prints as `#<TENSOR data>` -- read the values back with `torch:data` /
 `torch:item` / `torch:grad`. The middle of the table is the `nn`-style module
 layer: a module owns its parameters in a fields plist, composes, and is run with
 `torch:forward`. The last part is what turns a model into a training run: the

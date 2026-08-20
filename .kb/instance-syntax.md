@@ -107,6 +107,19 @@ slot-walking serializer works against structs and CLOS instances alike
 (`.kb/clos.md`), and `%class-slot-defs` accepts that too (through its name
 slot).
 
+**`eq` and `eql` on two instances are REFERENCE identity, on all four backends**
+(CL's rule). The JVM (`Object[]` identity) and both WASM backends (`ref.eq`)
+always were; the interpreter fell through to `LispInstance.equals` -- which is
+structural, because that is `equal`'s contract below -- until todo-466 put
+instances beside conses in `Environment.isIdentityAggregate`. The divergence was
+filed as todo-444's Gap 2 and closed there: it stopped being theoretical when
+torch's records became defstructs, because `torch::%t-topo`'s visited set and
+`torch::%m-collect`'s parameter dedup are `member` (i.e. `eql`) over records and
+BOTH mean identity -- two scalar tensors holding the same number were `eql` in
+the interpreter, and the tape conflated them (`.kb/torch.md`). Gap 1 of that
+todo -- `make-hash-table :test` being ignored, so every table is `EQUAL` -- is
+untouched: this is the predicate, not the table.
+
 `equal` on two instances is STRUCTURAL: same layout, every slot recursively
 `equal`. **This is a deliberate deviation from CL**, where distinct structures
 are never `equal`. Reason for the divergence: before the object model landed an

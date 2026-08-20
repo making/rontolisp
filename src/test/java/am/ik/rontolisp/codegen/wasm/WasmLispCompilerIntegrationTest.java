@@ -13421,6 +13421,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileTorchRecordPrinting() throws Exception {
+		// TorchGradcheck.RECORD_PRINT_PROGRAM on the wasm-GC backend: the
+		// (:print-object ...) renderings of the three records and the identity
+		// semantics of eq/eql/member on a record instance have to match the other
+		// backends byte for byte.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_EXPECTED);
+	}
+
+	@Test
 	void compileTorchOptimizerRules() throws Exception {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM) on the
 		// wasm-GC backend: the element-wise in-place parameter update, the optimizer

@@ -10246,6 +10246,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theVeryFirstPrintOfATensorAlreadyRoutesThroughItsPrinter() {
+		// The printing operators decide their routing BEFORE the argument is evaluated,
+		// and the argument here is what lazily loads torch -- whose records carry the
+		// (:print-object ...) methods. Without the pre-load seam this one-liner printed
+		// the raw #S(TORCH::%TENSOR ...) while every later print routed.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(print (torch:tensor '(1.0 2.0)))"));
+		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo("#<TENSOR #d(1.0 2.0)>");
+	}
+
+	@Test
+	void torchRecordsPrintAndCompareByIdentity() {
+		// TorchGradcheck.RECORD_PRINT_PROGRAM, shared verbatim with the JVM and WASM
+		// backends: the three records' (:print-object ...) renderings, and the identity
+		// (not slot-wise) semantics of eq/eql/member on a record instance.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_EXPECTED);
+	}
+
+	@Test
 	void torchOptimizerRulesAndTrainingPlumbing() {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM), shared
 		// verbatim with the JVM and WASM backends: the SGD/Adam update rules against

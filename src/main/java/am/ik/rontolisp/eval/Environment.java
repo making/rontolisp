@@ -2657,7 +2657,7 @@ public final class Environment implements Scope {
 	// eql: like eq, but numbers of the same type and value are eql. Cons cells (and other
 	// aggregates) compare by reference identity.
 	private static LispVal eqlValue(LispVal a, LispVal b) {
-		if (a instanceof LispCons || b instanceof LispCons) {
+		if (isIdentityAggregate(a) || isIdentityAggregate(b)) {
 			return a == b ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}
 		if (a instanceof LispNil && b instanceof LispNil) {
@@ -2678,8 +2678,22 @@ public final class Environment implements Scope {
 		return LispEquality.equal(a, b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 	}
 
+	/**
+	 * The aggregates {@code eq}/{@code eql} compare by REFERENCE, never by contents: a
+	 * cons and an instance (a struct, a CLOS object, a condition, a pathname). The
+	 * instance arm is what keeps the interpreter in step with the JVM and both WASM
+	 * backends, which compare instances with {@code ref.eq} / Java identity --
+	 * {@code LispInstance.equals} is structural (that is {@code equal}'s contract,
+	 * .kb/instance-syntax.md) and letting it decide {@code eql} made every identity-keyed
+	 * walk in the interpreter conflate two records with equal slots. The torch tape is
+	 * exactly such a walk (.kb/torch.md).
+	 */
+	private static boolean isIdentityAggregate(LispVal v) {
+		return v instanceof LispCons || v instanceof LispInstance;
+	}
+
 	private static boolean isEq(LispVal a, LispVal b) {
-		if (a instanceof LispCons || b instanceof LispCons) {
+		if (isIdentityAggregate(a) || isIdentityAggregate(b)) {
 			return a == b;
 		}
 		if (a instanceof LispNil && b instanceof LispNil) {

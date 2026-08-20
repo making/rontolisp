@@ -6,7 +6,7 @@ The package is implemented once in Lisp source and behaves identically on every 
 
 ## Tensors
 
-`torch:tensor` builds a leaf tensor from a number, a list, an array or a linalg array. `:requires-grad t` marks a parameter -- a tensor whose gradient the backward pass should fill in. A tensor prints as its raw record, so read values back with `torch:data` (the array), `torch:item` (the number inside a one-element tensor) and `torch:shape`:
+`torch:tensor` builds a leaf tensor from a number, a list, an array or a linalg array. `:requires-grad t` marks a parameter -- a tensor whose gradient the backward pass should fill in. A tensor prints as `#<TENSOR data>` (` :REQUIRES-GRAD T` appended for a parameter) -- the same text on every backend, since the printer shows only the data. Read values back with `torch:data` (the array), `torch:item` (the number inside a one-element tensor) and `torch:shape`:
 
 ```lisp
 (defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))

@@ -11026,6 +11026,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTorchRecordPrinting() throws Exception {
+		// TorchGradcheck.RECORD_PRINT_PROGRAM, shared verbatim with the interpreter and
+		// the WASM backends: the records are defstructs carrying a (:print-object ...),
+		// so a tensor renders identically everywhere -- which the tagged vectors they
+		// replaced could not do (one slot is a backward closure). The identity lines
+		// pin eq/eql/member on a record instance.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunTorchOptimizerRules() throws Exception {
 		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM): the
 		// SGD/Adam rules against hand-computed values, the batching and mask helpers,

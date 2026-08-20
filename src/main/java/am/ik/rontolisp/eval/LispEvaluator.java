@@ -3958,6 +3958,21 @@ public final class LispEvaluator {
 		}
 	}
 
+	/**
+	 * Whether the form spells a {@code torch:}/{@code torch::} qualified symbol anywhere
+	 * -- the trigger for pre-loading the library in the printing-operator case, where the
+	 * routing decision precedes the argument evaluation that would otherwise load it.
+	 * @param form the form to scan
+	 * @return whether a torch-qualified symbol occurs in it
+	 */
+	private static boolean referencesTorch(LispVal form) {
+		return switch (form) {
+			case LispSymbol sym -> TorchLibrary.isTorchQualified(sym.name());
+			case LispCons cons -> referencesTorch(cons.car()) || referencesTorch(cons.cdr());
+			default -> false;
+		};
+	}
+
 	private void ensureUsocketLoaded() {
 		synchronized (this.libraryLoadLock) {
 			if (this.usocketLibraryLoaded) {
@@ -4825,6 +4840,18 @@ public final class LispEvaluator {
 					// Already routing: only the freshness check, so a condition class
 					// defined between two prints renders through its report too.
 					ensureConditionReportRuntimeLoaded();
+				}
+				// The routing decision is taken BEFORE the argument is evaluated, and the
+				// torch library -- whose records carry (:print-object ...) methods -- is
+				// loaded lazily by that very evaluation. Without this the FIRST
+				// (print (torch:tensor ...)) of a session decides against a registry the
+				// method has not reached yet and renders the raw #S(...) form, while
+				// every
+				// later print routes. The same ordering seam as the torch:no-grad case
+				// above (.kb/torch.md); torch is the only lazily loaded library that
+				// defines a print-object method.
+				if (!this.torchLibraryLoaded && referencesTorch(cons)) {
+					ensureTorchLoaded();
 				}
 				boolean printCase = printCaseInEffect();
 				ensurePrintObjectRuntimeLoadedIfRouted(printCase);

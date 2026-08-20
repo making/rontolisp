@@ -170,7 +170,16 @@ public final class LibraryDefunPruner {
 		for (int i = 0; i < resolved.size(); i++) {
 			List<String> keys;
 			String name = definitionName(resolved.get(i));
-			if (name != null) {
+			List<String> printerKeys = structs == null ? null : structs.printerKeysAt(i);
+			if (printerKeys != null) {
+				// A bundled struct's generated print-object method: keyed under the
+				// struct's CONSTRUCTORS, so it lives exactly when an instance of that
+				// struct can exist. Without it the method is a nameless root and anchors
+				// its printer defun -- and through it the accessors it reads -- in every
+				// program that splices the library, whether or not it ever builds one.
+				keys = printerKeys;
+			}
+			else if (name != null) {
 				boolean fromSystem = provenance.isPrunableSystem(i);
 				if (!fromSystem && !bundled.contains(name)) {
 					continue;
@@ -506,13 +515,32 @@ public final class LibraryDefunPruner {
 	 * @param keyAliases generated {@code %setf-} writer name -> its keep-keys (the
 	 * writer's own name plus the accessor whose synthesized call sites spell only the
 	 * accessor)
+	 * @param printerKeys index into {@code forms} of a generated {@code print-object}
+	 * method -> the keep-keys gating it (its struct's constructors)
 	 */
 	private record BundledStructs(List<LispVal> forms, List<LispVal> resolved, Set<String> definedNames,
-			Map<String, List<String>> keyAliases) {
+			Map<String, List<String>> keyAliases, Map<Integer, List<String>> printerKeys) {
 
 		List<String> keysFor(String name) {
 			List<String> aliased = this.keyAliases.get(name);
 			return aliased != null ? aliased : List.of(name);
+		}
+
+		/**
+		 * The keep-keys of the generated {@code print-object} method at this index, or
+		 * null when the form is not one. A {@code (:print-object ...)} struct's method
+		 * has no definition name of its own, so without this it would be a ROOT -- kept
+		 * unconditionally, anchoring the printer defun and every accessor it reads. It is
+		 * keyed under the struct's CONSTRUCTORS instead: the method can only ever apply
+		 * to an instance, an instance can only come from a constructor call the reference
+		 * scan sees, so a struct nothing builds takes its printer with it. Same soundness
+		 * argument as {@code Candidates}' defmethod specializer gate, expressed with the
+		 * keyed mechanism the bundled path already has.
+		 * @param index the index into {@link #forms}
+		 * @return the keep-keys, or null
+		 */
+		@Nullable List<String> printerKeysAt(int index) {
+			return this.printerKeys.get(index);
 		}
 
 		@Nullable static BundledStructs expand(List<LispVal> forms, List<LispVal> resolved, Provenance provenance,
@@ -530,6 +558,7 @@ public final class LibraryDefunPruner {
 			List<LispVal> outResolved = new ArrayList<>(forms.size());
 			Set<String> defined = new HashSet<>();
 			Map<String, List<String>> aliases = new HashMap<>();
+			Map<Integer, List<String>> printers = new HashMap<>();
 			Map<String, Integer> accessors = new HashMap<>();
 			ClosRegistry registry = new ClosRegistry();
 			for (int i = 0; i < forms.size(); i++) {
@@ -554,10 +583,11 @@ public final class LibraryDefunPruner {
 				}
 				outForms.add(LispMacroExpander.structDefinitionMarker(original));
 				outResolved.add(LispMacroExpander.structDefinitionMarker(resolvedCons));
+				List<String> ctors = constructorNames(resolvedCons, generated);
 				for (LispVal g : generated) {
 					// The generated forms are canonical, so the same object serves both
-					// lists (the resolver is a fixed point on them). A generated
-					// print-object defmethod has no definitionName and stays a root.
+					// lists (the resolver is a fixed point on them).
+					int index = outForms.size();
 					outForms.add(g);
 					outResolved.add(g);
 					String name = definitionName(g);
@@ -567,9 +597,38 @@ public final class LibraryDefunPruner {
 							aliases.put(name, List.of(name, name.substring("%setf-".length())));
 						}
 					}
+					else if (!ctors.isEmpty()) {
+						// The generated print-object method -- the one nameless form the
+						// expansion emits. Gated on the struct's constructors instead of
+						// standing as a root; see printerKeysAt.
+						printers.put(index, ctors);
+					}
 				}
 			}
-			return new BundledStructs(outForms, outResolved, Set.copyOf(defined), Map.copyOf(aliases));
+			return new BundledStructs(outForms, outResolved, Set.copyOf(defined), Map.copyOf(aliases),
+					Map.copyOf(printers));
+		}
+
+		/**
+		 * The struct's constructor names, in the canonical spelling the expansion just
+		 * defined them under: the instantiator summary intersected with the names the
+		 * expansion actually generated (which drops the struct name itself -- no defun is
+		 * defined under it -- and the spelling the export oracle did not pick).
+		 */
+		private static List<String> constructorNames(LispCons defstruct, List<LispVal> generated) {
+			LispMacroExpander.StructDefinedNames summary = LispMacroExpander.defstructDefinedNames(defstruct);
+			if (summary == null) {
+				return List.of();
+			}
+			Set<String> instantiators = Set.copyOf(summary.instantiatorNames());
+			List<String> ctors = new ArrayList<>();
+			for (LispVal g : generated) {
+				String name = definitionName(g);
+				if (name != null && instantiators.contains(name)) {
+					ctors.add(name);
+				}
+			}
+			return List.copyOf(ctors);
 		}
 	}
 

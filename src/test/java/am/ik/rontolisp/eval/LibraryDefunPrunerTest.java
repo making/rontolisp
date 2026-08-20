@@ -112,7 +112,13 @@ class LibraryDefunPrunerTest {
 			// the linalg defuns the kept torch bodies reference stay too
 			.contains("LINALG:FROM-LIST")
 			// unrelated members of both libraries are dropped
-			.doesNotContain("TORCH:BACKWARD", "TORCH:MATMUL", "TORCH:SOFTMAX", "LINALG:DET", "LINALG:MATMUL");
+			.doesNotContain("TORCH:BACKWARD", "TORCH:MATMUL", "TORCH:SOFTMAX", "LINALG:DET", "LINALG:MATMUL")
+			// the tensor record's own accessors prune with them: only the two the kept
+			// bodies (and the tensor's printer) read survive, and the module and
+			// optimizer records leave whole -- printer method included
+			.contains("TORCH::%T-DATA", "TORCH::%T-REQUIRES-GRAD")
+			.doesNotContain("TORCH::%T-PARENTS", "TORCH::%T-BACKWARD-FN", "TORCH::%M-NEW", "TORCH::%M-KIND",
+					"TORCH::%M-PRINT", "TORCH::%O-NEW", "TORCH::%O-KIND", "TORCH::%O-PRINT");
 	}
 
 	@Test
@@ -1032,6 +1038,27 @@ class LibraryDefunPrunerTest {
 				"""));
 		assertThat(definedNames(program)).contains("TORCH::MAKE-REGS", "TORCH::REGS-A", "%setf-TORCH::REGS-A")
 			.doesNotContain("TORCH::REGS-B", "%setf-TORCH::REGS-B", "TORCH::COPY-REGS");
+	}
+
+	@Test
+	void aBundledDefstructsPrinterMethodLeavesWithItsConstructor() {
+		// The (:print-object ...) method is the one generated form with no definition
+		// name of its own. Keyed under the struct's CONSTRUCTORS rather than standing as
+		// a root: the struct nothing builds takes its printer -- and the accessors only
+		// the printer reads -- with it, while the one a program does build keeps both.
+		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
+				(defstruct (torch::kept
+					     (:print-object (lambda (r s) (write-string (torch::kept-a r) s))))
+				  a)
+				(defstruct (torch::gone
+					     (:print-object (lambda (r s) (write-string (torch::gone-a r) s))))
+				  a)
+				(print (torch::make-kept :a 1))
+				"""));
+		assertThat(definedNames(program)).contains("TORCH::MAKE-KEPT", "TORCH::KEPT-A")
+			.doesNotContain("TORCH::MAKE-GONE", "TORCH::GONE-A");
+		assertThat(survivingHeads(program)).contains("DEFMETHOD PRINT-OBJECT");
+		assertThat(survivingPrintOf(program, "PRINT-OBJECT")).contains("TORCH::KEPT").doesNotContain("TORCH::GONE");
 	}
 
 	@Test

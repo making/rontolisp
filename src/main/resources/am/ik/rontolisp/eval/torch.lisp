@@ -13,49 +13,55 @@
 ;; keywords literally so the --simd interceptors can pattern-match the call
 ;; sites (a torch program is accelerated for free wherever linalg is).
 ;;
-;; DESIGN (recorded in .kb/torch.md): the package is defun-only BY DESIGN --
-;; no defclass/defmethod/defstruct, ever -- so LibraryDefunPruner's existing
-;; defun/defparameter pruning covers every definition here and a program that
-;; only calls torch:softmax does not carry the whole autograd surface. The
-;; tensor is a fixed-layout six-slot general vector:
+;; DESIGN (recorded in .kb/torch.md): the three records here are defstructs and
+;; every other definition a plain defun -- no defclass/defmethod, ever: nothing
+;; in this package dispatches (values flow through closures on the tape, not
+;; through generic functions), so CLOS would buy the records nothing. defstruct
+;; is allowed since todo-465 taught LibraryDefunPruner to expand a bundled
+;; library's defstruct ahead of reachability, so every generated constructor,
+;; predicate and accessor prunes INDIVIDUALLY and a program that only calls
+;; torch:softmax still does not carry the whole autograd surface. The tensor
+;; record (torch::%tensor, built by torch::%t-new):
 ;;
-;;   slot 0  the tag symbol torch::%tensor (torch:tensorp discriminates on it)
-;;   slot 1  data          a linalg array (packed float, any rank) or a number
-;;                         (a plain number is the rank-0 scalar tensor)
-;;   slot 2  grad          nil, or a value of data's shape (accumulated by
-;;                         torch:backward; a raw linalg value, not a tensor)
-;;   slot 3  requires-grad the LEAF flag set by (torch:tensor x :requires-grad t)
-;;   slot 4  parents       the input tensors this one was computed from
-;;   slot 5  backward-fn   nil, or (lambda (grad-out) ...) -> the list of
-;;                         per-parent gradients (nil for an untracked parent)
+;;   data          a linalg array (packed float, any rank) or a number
+;;                 (a plain number is the rank-0 scalar tensor)
+;;   grad          nil, or a value of data's shape (accumulated by
+;;                 torch:backward; a raw linalg value, not a tensor)
+;;   requires-grad the LEAF flag set by (torch:tensor x :requires-grad t)
+;;   parents       the input tensors this one was computed from
+;;   backward-fn   nil, or (lambda (grad-out) ...) -> the list of
+;;                 per-parent gradients (nil for an untracked parent)
 ;;
-;; A tensor "tracks" gradients when slot 3 or slot 5 is set. An operation
-;; records slots 4/5 only while torch::*grad-enabled* is true (the torch:no-grad
-;; macro rebinds it) AND some operand tracks; otherwise the result is a plain
-;; constant leaf and the inputs stay collectable.
+;; A tensor "tracks" gradients when requires-grad or backward-fn is set. An
+;; operation records parents/backward-fn only while torch::*grad-enabled* is
+;; true (the torch:no-grad macro rebinds it) AND some operand tracks; otherwise
+;; the result is a plain constant leaf and the inputs stay collectable.
 
 (defparameter torch::*grad-enabled* t)
 
 ;; --- the tensor record -------------------------------------------------------
 
-(defun torch::%t-new (data grad requires-grad parents backward-fn)
-  ;; The one constructor of the six-slot record described in the header.
-  (let ((tn (make-array 6 :initial-element nil)))
-    (setf (aref tn 0) 'torch::%tensor)
-    (setf (aref tn 1) data)
-    (setf (aref tn 2) grad)
-    (setf (aref tn 3) requires-grad)
-    (setf (aref tn 4) parents)
-    (setf (aref tn 5) backward-fn)
-    tn))
+(defun torch::%t-print (tn stream)
+  ;; The tensor's (:print-object ...) printer: the data (and the leaf flag),
+  ;; never the tape slots -- backward-fn holds a closure, whose printed form
+  ;; would be backend-dependent. #<TENSOR ...> is identical on all four
+  ;; backends, prin1 and princ alike.
+  (write-string "#<TENSOR " stream)
+  (write-string (prin1-to-string (torch::%t-data tn)) stream)
+  (when (torch::%t-requires-grad tn) (write-string " :REQUIRES-GRAD T" stream))
+  (write-string ">" stream))
 
-(defun torch:tensorp (x)
-  ;; Whether x is a torch tensor: the fixed-layout six-slot general vector
-  ;; whose first slot is the tag symbol.
-  (if (and (arrayp x) (not (stringp x)) (equal (array-dimensions x) '(6))
-           (eq (row-major-aref x 0) 'torch::%tensor))
-      t
-      nil))
+(defstruct (torch::%tensor (:constructor torch::%t-new
+                            (data grad requires-grad parents backward-fn))
+                           (:conc-name torch::%t-) (:predicate torch:tensorp)
+                           (:copier nil) (:print-object torch::%t-print))
+  ;; The record described in the header. torch:tensorp is the generated tag
+  ;; test, and torch::%t-new the one (positional) constructor.
+  data
+  grad
+  requires-grad
+  parents
+  backward-fn)
 
 (defun torch::%t-check (x)
   ;; Signals unless x is a tensor; returns it.
@@ -82,14 +88,14 @@
   ;; another tensor (whose data is copied). :requires-grad t marks it as a
   ;; parameter whose gradient torch:backward should fill in; :element-type
   ;; 'single-float builds packed single-float (#f) data.
-  (let ((src (if (torch:tensorp x) (aref x 1) x)))
+  (let ((src (if (torch:tensorp x) (torch::%t-data x) x)))
     (torch::%t-new (torch::%t-as-data src element-type) nil
                    (if requires-grad t nil) nil nil)))
 
 (defun torch:data (tn)
   ;; The tensor's data: a linalg array, or a number for a scalar tensor.
   (torch::%t-check tn)
-  (aref tn 1))
+  (torch::%t-data tn))
 
 (defun torch:set-data (tn value)
   ;; Replaces the tensor's data IN PLACE with value (a linalg array or a number)
@@ -98,14 +104,14 @@
   ;; using it. The tape is untouched -- call it inside torch:no-grad, like
   ;; torch.no_grad() around an optimizer step.
   (torch::%t-check tn)
-  (setf (aref tn 1) value)
+  (setf (torch::%t-data tn) value)
   tn)
 
 (defun torch:grad (tn)
   ;; The accumulated gradient (data's shape), or nil before torch:backward has
   ;; reached this tensor. A raw linalg value, not a tensor.
   (torch::%t-check tn)
-  (aref tn 2))
+  (torch::%t-grad tn))
 
 (defun torch:shape (tn)
   ;; The dims list of the tensor's data; nil for a scalar tensor (rank 0).
@@ -122,7 +128,7 @@
   ;; A new leaf tensor SHARING tn's data, cut off from the tape: no
   ;; requires-grad, no parents, no backward-fn.
   (torch::%t-check tn)
-  (torch::%t-new (aref tn 1) nil nil nil nil))
+  (torch::%t-new (torch::%t-data tn) nil nil nil nil))
 
 (defun torch:zero-grad (x)
   ;; Clears accumulated gradients and returns the argument: for a TENSOR its own
@@ -131,27 +137,27 @@
   ;; over -- the between-steps call of a training loop, under any of the three
   ;; spellings PyTorch has for it.
   (cond ((torch:tensorp x)
-         (setf (aref x 2) nil)
+         (setf (torch::%t-grad x) nil)
          x)
    ((torch:modulep x)
     (do ((p (torch:parameters x) (cdr p)))
         ((null p) x)
-      (setf (aref (car p) 2) nil)))
+      (setf (torch::%t-grad (car p)) nil)))
    ((torch:optimizerp x)
-    (do ((p (aref x 2) (cdr p)))
+    (do ((p (torch::%o-params x) (cdr p)))
         ((null p) x)
-      (setf (aref (car p) 2) nil)))
+      (setf (torch::%t-grad (car p)) nil)))
    (t (error "torch: zero-grad expects a tensor, a module or an optimizer"))))
 
 (defun torch:requires-grad-p (tn)
   ;; Whether the tensor participates in autograd: a leaf marked
   ;; :requires-grad, or any result recorded on the tape.
   (torch::%t-check tn)
-  (if (or (aref tn 3) (aref tn 5)) t nil))
+  (if (or (torch::%t-requires-grad tn) (torch::%t-backward-fn tn)) t nil))
 
 (defun torch::%t-track-p (tn)
   ;; The internal (unchecked) spelling of torch:requires-grad-p.
-  (or (aref tn 3) (aref tn 5)))
+  (or (torch::%t-requires-grad tn) (torch::%t-backward-fn tn)))
 
 (defun torch::%t-wrap (x)
   ;; The operand rule of every operation: a tensor passes through; a number, a
@@ -251,11 +257,11 @@
   ;; pair mutated in place, and order ends up in REVERSE TOPOLOGICAL order --
   ;; every tensor after all of its consumers (reverse DFS finish order) -- so
   ;; torch:backward can process it front to back. Visited membership is
-  ;; identity (member's eql on the record vectors), so a diamond -- a residual
-  ;; connection x + f(x) -- is visited once.
+  ;; identity (member's eql on the record instances), so a diamond -- a
+  ;; residual connection x + f(x) -- is visited once.
   (unless (member node (car state))
     (rplaca state (cons node (car state)))
-    (do ((p (aref node 4) (cdr p)))
+    (do ((p (torch::%t-parents node) (cdr p)))
         ((null p))
       (torch::%t-topo (car p) state))
     (rplacd state (cons node (cdr state))))
@@ -265,8 +271,8 @@
   ;; += accumulation into the grad slot: a tensor reached by more than one
   ;; path (a residual connection, a reused embedding row) collects the SUM of
   ;; its path gradients, never the last one.
-  (let ((old (aref tn 2)))
-    (setf (aref tn 2) (if (null old) g (linalg:add old g)))))
+  (let ((old (torch::%t-grad tn)))
+    (setf (torch::%t-grad tn) (if (null old) g (linalg:add old g)))))
 
 (defun torch:backward (tn)
   ;; Reverse-mode gradient of a SCALAR (one-element) tensor: seeds its grad
@@ -275,7 +281,7 @@
   ;; are retained on intermediate tensors too (read them with torch:grad);
   ;; returns nil.
   (torch::%t-check tn)
-  (let ((d (aref tn 1)))
+  (let ((d (torch::%t-data tn)))
     (unless (or (numberp d) (= (array-total-size d) 1))
       (error "torch: backward expects a scalar (one-element) tensor"))
     (torch::%t-accum tn
@@ -283,10 +289,12 @@
     (let ((order (cdr (torch::%t-topo tn (cons nil nil)))))
       (do ((p order (cdr p)))
           ((null p))
-        (let* ((node (car p)) (bf (aref node 5)) (g (aref node 2)))
+        (let* ((node (car p))
+               (bf (torch::%t-backward-fn node))
+               (g (torch::%t-grad node)))
           (when (and bf g)
             (let ((gs (funcall bf g)))
-              (do ((pp (aref node 4) (cdr pp)) (gg gs (cdr gg)))
+              (do ((pp (torch::%t-parents node) (cdr pp)) (gg gs (cdr gg)))
                   ((null pp))
                 (let ((par (car pp)) (pg (car gg)))
                   (when (and pg (torch::%t-track-p par))
@@ -300,8 +308,8 @@
   ;; either operand may be a tensor, a number, an array or a list.
   (let* ((ta (torch::%t-wrap a))
          (tb (torch::%t-wrap b))
-         (xa (aref ta 1))
-         (xb (aref tb 1)))
+         (xa (torch::%t-data ta))
+         (xb (torch::%t-data tb)))
     (torch::%t-result (linalg:add xa xb) (list ta tb)
                       (lambda (g)
                         (list (when (torch::%t-track-p ta)
@@ -313,8 +321,8 @@
   ;; Differentiable elementwise a - b with numpy broadcasting (linalg:sub).
   (let* ((ta (torch::%t-wrap a))
          (tb (torch::%t-wrap b))
-         (xa (aref ta 1))
-         (xb (aref tb 1)))
+         (xa (torch::%t-data ta))
+         (xb (torch::%t-data tb)))
     (torch::%t-result (linalg:sub xa xb) (list ta tb)
                       (lambda (g)
                         (list (when (torch::%t-track-p ta)
@@ -328,8 +336,8 @@
   ;; (linalg:mul; the matrix product is torch:matmul).
   (let* ((ta (torch::%t-wrap a))
          (tb (torch::%t-wrap b))
-         (xa (aref ta 1))
-         (xb (aref tb 1)))
+         (xa (torch::%t-data ta))
+         (xb (torch::%t-data tb)))
     (torch::%t-result (linalg:mul xa xb) (list ta tb)
                       (lambda (g)
                         (list (when (torch::%t-track-p ta)
@@ -342,8 +350,8 @@
   ;; Differentiable elementwise a / b with numpy broadcasting (linalg:div).
   (let* ((ta (torch::%t-wrap a))
          (tb (torch::%t-wrap b))
-         (xa (aref ta 1))
-         (xb (aref tb 1)))
+         (xa (torch::%t-data ta))
+         (xb (torch::%t-data tb)))
     (torch::%t-result (linalg:div xa xb) (list ta tb)
                       (lambda (g)
                         (list (when (torch::%t-track-p ta)
@@ -358,7 +366,7 @@
 (defun torch:neg (a)
   ;; Differentiable elementwise negation.
   (let ((ta (torch::%t-wrap a)))
-    (torch::%t-result (torch::%t-rneg (aref ta 1)) (list ta)
+    (torch::%t-result (torch::%t-rneg (torch::%t-data ta)) (list ta)
                       (lambda (g) (list (torch::%t-rneg g))))))
 
 (defun torch:power (a b)
@@ -368,8 +376,8 @@
   ;; meaningful for a positive base.
   (let* ((ta (torch::%t-wrap a))
          (tb (torch::%t-wrap b))
-         (xa (aref ta 1))
-         (xb (aref tb 1))
+         (xa (torch::%t-data ta))
+         (xb (torch::%t-data tb))
          (out (linalg:power xa xb)))
     (torch::%t-result out (list ta tb)
                       (lambda (g)
@@ -390,31 +398,31 @@
 (defun torch:exp (a)
   ;; Differentiable elementwise e^x; the adjoint reuses the forward result
   ;; (d/dx e^x = e^x).
-  (let* ((ta (torch::%t-wrap a)) (out (torch::%t-rexp (aref ta 1))))
+  (let* ((ta (torch::%t-wrap a)) (out (torch::%t-rexp (torch::%t-data ta))))
     (torch::%t-result out (list ta) (lambda (g) (list (linalg:mul g out))))))
 
 (defun torch:log (a)
   ;; Differentiable elementwise natural log (d/dx ln x = 1/x).
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (torch::%t-result (torch::%t-rlog xa) (list ta)
                       (lambda (g) (list (linalg:div g xa))))))
 
 (defun torch:sqrt (a)
   ;; Differentiable elementwise square root (d/dx sqrt x = 1 / (2 sqrt x)).
-  (let* ((ta (torch::%t-wrap a)) (out (torch::%t-rsqrt (aref ta 1))))
+  (let* ((ta (torch::%t-wrap a)) (out (torch::%t-rsqrt (torch::%t-data ta))))
     (torch::%t-result out (list ta)
                       (lambda (g) (list (linalg:div g (linalg:mul 2.0 out)))))))
 
 (defun torch:tanh (a)
   ;; Differentiable elementwise hyperbolic tangent (d/dx tanh x = 1 - tanh^2).
-  (let* ((ta (torch::%t-wrap a)) (out (torch::%t-rtanh (aref ta 1))))
+  (let* ((ta (torch::%t-wrap a)) (out (torch::%t-rtanh (torch::%t-data ta))))
     (torch::%t-result out (list ta)
      (lambda (g) (list (linalg:mul g (linalg:sub 1.0 (linalg:mul out out))))))))
 
 (defun torch:relu (a)
   ;; Differentiable elementwise max(x, 0.0); the gradient passes where x > 0
   ;; and is 0 elsewhere (0 at x = 0, like PyTorch).
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (torch::%t-result (linalg:relu xa) (list ta)
      (lambda (g) (list (linalg:mul g (linalg:greater xa 0.0)))))))
 
@@ -466,8 +474,8 @@
   ;; unbroadcast like every other adjoint.
   (let* ((ta (torch::%t-wrap a))
          (tb (torch::%t-wrap b))
-         (xa (aref ta 1))
-         (xb (aref tb 1))
+         (xa (torch::%t-data ta))
+         (xb (torch::%t-data tb))
          (ra (length (array-dimensions xa)))
          (rb (length (array-dimensions xb)))
          (out
@@ -486,7 +494,7 @@
 (defun torch:reshape (a shape)
   ;; Differentiable reshape (row-major, one extent may be -1: linalg:reshape);
   ;; the adjoint reshapes the gradient back.
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (torch::%t-result (linalg:reshape xa shape) (list ta)
                       (lambda (g) (list (torch::%t-grad-reshape g xa))))))
 
@@ -502,7 +510,7 @@
   ;; permutation (out-dims[k] = dims[axes[k]], a negative axis counting from
   ;; the end). The adjoint applies the INVERSE permutation to the gradient.
   (let* ((ta (torch::%t-wrap a))
-         (xa (aref ta 1))
+         (xa (torch::%t-data ta))
          (rank (length (array-dimensions xa)))
          (nx
           (if (null axes)
@@ -530,7 +538,7 @@
 (defun torch:unsqueeze (a axis)
   ;; Differentiable extent-1 axis insertion (linalg:expand-dims; a negative
   ;; axis counts from the end of the result, so -1 appends).
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (torch::%t-result (linalg:expand-dims xa axis) (list ta)
                       (lambda (g) (list (torch::%t-grad-reshape g xa))))))
 
@@ -538,7 +546,7 @@
   ;; Differentiable extent-1 axis removal (linalg:squeeze: all of them with no
   ;; :axis, else the named one(s); squeezing every axis away yields the SCALAR
   ;; tensor).
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (torch::%t-result (linalg:squeeze xa :axis axis) (list ta)
                       (lambda (g) (list (torch::%t-grad-reshape g xa))))))
 
@@ -555,7 +563,7 @@
   ;; (linalg:concatenate, torch.cat). The adjoint slices the gradient back
   ;; into each input's extent along that axis.
   (let* ((ts (torch::%t-wrap-all tensors))
-         (xs (mapcar (lambda (tn) (aref tn 1)) ts))
+         (xs (mapcar (lambda (tn) (torch::%t-data tn)) ts))
          (ax (linalg::%la-norm-axis (array-dimensions (car xs)) axis)))
     (torch::%t-result (linalg:concatenate xs :axis ax) ts
                       (lambda (g)
@@ -575,7 +583,7 @@
   ;; The adjoint slices the gradient at each input's index along the new axis
   ;; and drops that axis again.
   (let* ((ts (torch::%t-wrap-all tensors))
-         (xs (mapcar (lambda (tn) (aref tn 1)) ts))
+         (xs (mapcar (lambda (tn) (torch::%t-data tn)) ts))
          (d (array-dimensions (car xs)))
          (rank (length d))
          (ax (if (< axis 0) (+ axis rank 1) axis)))
@@ -596,7 +604,7 @@
   ;; = whole axis, (start end) / (start end step), negative indexing). The
   ;; adjoint scatters the gradient back into zeros at the positions the slice
   ;; read from.
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (torch::%t-result (linalg:slice xa specs) (list ta)
      (lambda (g) (list (torch::%t-slice-scatter g xa specs))))))
 
@@ -643,7 +651,7 @@
   ;; Differentiable sum, whole-tensor or along an axis (linalg:sum's
   ;; :axis/:keepdims rules). The adjoint broadcasts the gradient back over the
   ;; reduced extent.
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (if (numberp xa)
         ta
         (let* ((ax
@@ -662,7 +670,7 @@
 (defun torch:mean (a &key axis keepdims)
   ;; Differentiable arithmetic mean (linalg:mean); the adjoint is the sum
   ;; adjoint divided by the reduced element count.
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (if (numberp xa)
         ta
         (let* ((d (array-dimensions xa))
@@ -686,7 +694,7 @@
   ;; from torch:mean/sub/mul/sum/div, so its backward comes from the tape
   ;; rather than a bespoke adjoint.
   (let* ((ta (torch::%t-wrap a))
-         (xa (aref ta 1))
+         (xa (torch::%t-data ta))
          (n
           (cond ((numberp xa) 1)
                 ((null axis) (linalg:size xa))
@@ -712,7 +720,7 @@
   ;; Differentiable maximum, whole-tensor or along an axis (linalg:amax). The
   ;; gradient flows to every element equal to the maximum, split EVENLY among
   ;; ties (PyTorch's amax rule).
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (if (numberp xa)
         ta
         (let* ((ax
@@ -745,7 +753,7 @@
   ;; NON-differentiable: the index of the largest element (linalg:argmax) --
   ;; the integer index for a vector, the per-slice index array with :axis --
   ;; returned as a raw linalg value, not a tensor.
-  (let ((xa (aref (torch::%t-wrap a) 1)))
+  (let ((xa (torch::%t-data (torch::%t-wrap a))))
     (if (null axis) (linalg:argmax xa) (linalg:argmax xa :axis axis))))
 
 ;; --- softmax -----------------------------------------------------------------
@@ -755,7 +763,7 @@
   ;; is one distribution with no :axis, one distribution per slice with an
   ;; integer :axis -- torch's softmax(x, dim)). The adjoint is
   ;; s * (g - sum(g * s)) over each distribution.
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (let* ((ax (if axis (linalg::%la-norm-axis (array-dimensions xa) axis) nil))
            (out
             (if (null axis) (linalg:softmax xa) (linalg:softmax xa :axis ax))))
@@ -773,7 +781,7 @@
   ;; Differentiable log-softmax (linalg:log-softmax, the numerically stable
   ;; half of a cross-entropy loss). The adjoint is g - softmax(x) * sum(g),
   ;; with softmax(x) recovered as exp of the forward result.
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)))
+  (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (let* ((ax (if axis (linalg::%la-norm-axis (array-dimensions xa) axis) nil))
            (out
             (if (null axis)
@@ -797,16 +805,16 @@
   ;; attention scores with -infinity before torch:softmax is safe). mask and
   ;; value are constants -- no gradient flows to them.
   (let* ((ta (torch::%t-wrap a))
-         (xa (aref ta 1))
-         (m (if (torch:tensorp mask) (aref mask 1) mask))
-         (v (if (torch:tensorp value) (aref value 1) value)))
+         (xa (torch::%t-data ta))
+         (m (if (torch:tensorp mask) (torch::%t-data mask) mask))
+         (v (if (torch:tensorp value) (torch::%t-data value) value)))
     (torch::%t-result (linalg:where m v xa) (list ta)
      (lambda (g) (list (torch::%t-unbroadcast (linalg:where m 0.0 g) xa))))))
 
 (defun torch::%t-indices (idx)
   ;; An index operand -- a tensor, an index vector or a list -- as the raw
   ;; vector linalg's index functions read.
-  (cond ((torch:tensorp idx) (aref idx 1))
+  (cond ((torch:tensorp idx) (torch::%t-data idx))
         ((consp idx) (linalg:from-list idx))
         (t idx)))
 
@@ -814,7 +822,9 @@
   ;; Differentiable per-row selection of a matrix: element a[i, idx[i]] as a
   ;; vector (linalg:gather -- the cross-entropy "pick the target logit"
   ;; idiom). The adjoint scatters the gradient back to the picked cells.
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)) (iv (torch::%t-indices idx)))
+  (let* ((ta (torch::%t-wrap a))
+         (xa (torch::%t-data ta))
+         (iv (torch::%t-indices idx)))
     (torch::%t-result (linalg:gather xa iv) (list ta)
                       (lambda (g)
                         (let ((z (linalg::%la-like xa)) (n (length iv)))
@@ -829,7 +839,9 @@
   ;; lookup: row idx[i] of the table for each i, any rank >= 1, indices may
   ;; repeat. The adjoint scatter-ADDS each output slab's gradient back into
   ;; its source row, so a row selected twice accumulates both contributions.
-  (let* ((ta (torch::%t-wrap a)) (xa (aref ta 1)) (iv (torch::%t-indices idx)))
+  (let* ((ta (torch::%t-wrap a))
+         (xa (torch::%t-data ta))
+         (iv (torch::%t-indices idx)))
     (torch::%t-result (linalg:take-rows xa iv) (list ta)
                       (lambda (g)
                         (let* ((z (linalg::%la-like xa))
@@ -848,22 +860,21 @@
                           (list z))))))
 
 ;; --- the module protocol -----------------------------------------------------
-;; A module is the second fixed-layout record of this package (five slots, so it
-;; never collides with the six-slot tensor): a named bag of FIELDS plus a forward
-;; function. Like the tensor it is built from plain defuns -- no defclass, no
-;; defmethod -- so LibraryDefunPruner keeps pruning every definition here (see
-;; the header and .kb/torch.md), and torch:forward dispatches through the
-;; module's own closure rather than through generic-function dispatch.
+;; A module is the second record of this package: a named bag of FIELDS plus a
+;; forward function. Like the tensor it is a defstruct over plain defuns -- no
+;; defclass, no defmethod -- so LibraryDefunPruner keeps pruning every
+;; definition here (see the header and .kb/torch.md), and torch:forward
+;; dispatches through the module's own closure rather than through
+;; generic-function dispatch.
 ;;
-;;   slot 0  tag         the symbol torch::%module (torch:modulep discriminates)
-;;   slot 1  kind        a keyword naming the layer (:linear, :sequential, ...)
-;;   slot 2  fields      a plist -- KEYWORD value keyword value ... -- holding
-;;                       EVERY parameter, buffer, submodule and hyper-parameter
-;;                       of the layer; this is what torch:parameters walks
-;;   slot 3  forward-fn  (lambda (self args...) ...) -> the output tensor
-;;   slot 4  training    the train/eval flag (t = training, nil = eval)
+;;   kind        a keyword naming the layer (:linear, :sequential, ...)
+;;   fields      a plist -- KEYWORD value keyword value ... -- holding
+;;               EVERY parameter, buffer, submodule and hyper-parameter
+;;               of the layer; this is what torch:parameters walks
+;;   forward-fn  (lambda (self args...) ...) -> the output tensor
+;;   training    the train/eval flag (t = training, nil = eval)
 ;;
-;; The fields plist is the module's parameter registration -- the defun-only
+;; The fields plist is the module's parameter registration -- the record-level
 ;; equivalent of walking a CLOS instance's slots: a layer's forward reads its
 ;; parameters back out of it with torch:field (never from a closed-over
 ;; variable), so a parameter that exists cannot be missing from the plist. A
@@ -873,15 +884,23 @@
 ;; (a plain symbol would be cl-user::weight in a user program and never eq to
 ;; the torch::weight the library wrote).
 
-(defun torch::%m-new (kind fields forward-fn training)
-  ;; The one constructor of the five-slot record described above.
-  (let ((m (make-array 5 :initial-element nil)))
-    (setf (aref m 0) 'torch::%module)
-    (setf (aref m 1) kind)
-    (setf (aref m 2) fields)
-    (setf (aref m 3) forward-fn)
-    (setf (aref m 4) training)
-    m))
+(defun torch::%m-print (m stream)
+  ;; The module's (:print-object ...) printer: the kind only -- the fields may
+  ;; hold plain functions (a torch:sequential's activations) and forward-fn is
+  ;; a closure, neither of which prints portably.
+  (write-string "#<MODULE " stream)
+  (write-string (prin1-to-string (torch::%m-kind m)) stream)
+  (write-string ">" stream))
+
+(defstruct (torch::%module
+            (:constructor torch::%m-new (kind fields forward-fn training))
+            (:conc-name torch::%m-) (:predicate torch:modulep) (:copier nil)
+            (:print-object torch::%m-print))
+  ;; The record described above. torch:modulep is the generated tag test.
+  kind
+  fields
+  forward-fn
+  training)
 
 (defun torch:module (kind fields forward-fn)
   ;; A fresh module of the given kind (a keyword), fields (a plist of
@@ -892,14 +911,6 @@
   ;; ordinary callers of it.
   (torch::%m-new kind fields forward-fn t))
 
-(defun torch:modulep (x)
-  ;; Whether x is a torch module: the fixed-layout five-slot general vector
-  ;; whose first slot is the tag symbol.
-  (if (and (arrayp x) (not (stringp x)) (equal (array-dimensions x) '(5))
-           (eq (row-major-aref x 0) 'torch::%module))
-      t
-      nil))
-
 (defun torch::%m-check (x)
   ;; Signals unless x is a module; returns it.
   (unless (torch:modulep x) (error "torch: expected a module"))
@@ -908,14 +919,23 @@
 (defun torch:module-kind (m)
   ;; The module's kind symbol, as given to torch:module.
   (torch::%m-check m)
-  (aref m 1))
+  (torch::%m-kind m))
 
-(defun torch::%m-fields-slot (x)
-  ;; The slot holding the fields plist -- 2 for a module, 3 for an optimizer,
-  ;; the two records built around one. Signals for anything else.
-  (cond ((torch:modulep x) 2)
-        ((torch:optimizerp x) 3)
+(defun torch::%mo-fields (x)
+  ;; The fields plist of a MODULE or an OPTIMIZER -- the two records built
+  ;; around one plist, which is what lets torch:field / torch:set-field serve
+  ;; both. Signals for anything else.
+  (cond ((torch:modulep x) (torch::%m-fields x))
+        ((torch:optimizerp x) (torch::%o-fields x))
         (t (error "torch: expected a module or an optimizer"))))
+
+(defun torch::%mo-set-fields (x fields)
+  ;; Replaces the fields plist of a module or an optimizer (the append case of
+  ;; torch:set-field); returns the record.
+  (cond ((torch:modulep x) (setf (torch::%m-fields x) fields))
+        ((torch:optimizerp x) (setf (torch::%o-fields x) fields))
+        (t (error "torch: expected a module or an optimizer")))
+  x)
 
 (defun torch::%m-cell (plist name)
   ;; The plist cell whose car is name, or nil when there is no such field -- so
@@ -930,7 +950,7 @@
   ;; such as :lr, or a state buffer), name being the field's KEYWORD. Signals
   ;; when there is no such field, so a misspelled name is loud rather than
   ;; silently nil.
-  (let* ((s (torch::%m-fields-slot m)) (c (torch::%m-cell (aref m s) name)))
+  (let ((c (torch::%m-cell (torch::%mo-fields m) name)))
     (if (null c) (error "torch: no such field") (cadr c))))
 
 (defun torch:set-field (m name value)
@@ -938,9 +958,9 @@
   ;; new; returns the record. Replacing a parameter this way is what re-binds a
   ;; layer to a given set of weights (the gradient check does exactly that);
   ;; on an optimizer it is the learning-rate knob a schedule turns.
-  (let* ((s (torch::%m-fields-slot m)) (c (torch::%m-cell (aref m s) name)))
+  (let* ((fields (torch::%mo-fields m)) (c (torch::%m-cell fields name)))
     (if (null c)
-        (setf (aref m s) (append (aref m s) (list name value)))
+        (torch::%mo-set-fields m (append fields (list name value)))
         (rplaca (cdr c) value)))
   m)
 
@@ -949,7 +969,7 @@
   ;; and returns the output tensor. A plain FUNCTION is also accepted and simply
   ;; applied, so a stateless step (an activation, a reshape) can sit in a
   ;; torch:sequential without a wrapper layer existing for it.
-  (cond ((torch:modulep m) (apply (aref m 3) m args))
+  (cond ((torch:modulep m) (apply (torch::%m-forward-fn m) m args))
         ((functionp m) (apply m args))
         (t (error "torch: forward expects a module or a function"))))
 
@@ -965,8 +985,10 @@
   ;; shared by two layers appears a single time -- a module recurses into its own
   ;; fields, a list recurses element-wise, and anything else contributes nothing.
   (cond ((torch:tensorp v)
-         (if (and (aref v 3) (not (member v acc))) (cons v acc) acc))
-        ((torch:modulep v) (torch::%m-collect-fields (aref v 2) acc))
+         (if (and (torch::%t-requires-grad v) (not (member v acc)))
+             (cons v acc)
+             acc))
+        ((torch:modulep v) (torch::%m-collect-fields (torch::%m-fields v) acc))
         ((consp v)
          (do ((p v (cdr p)) (a acc (torch::%m-collect (car p) a)))
              ((null p) a)))
@@ -983,13 +1005,13 @@
   ;; list an optimizer is built over. Reaching a parameter needs no declaration
   ;; beyond putting it in the fields plist.
   (torch::%m-check m)
-  (reverse (torch::%m-collect-fields (aref m 2) nil)))
+  (reverse (torch::%m-collect-fields (torch::%m-fields m) nil)))
 
 (defun torch::%m-set-mode (v mode)
   ;; Sets the training flag on every module reachable from a field value.
   (cond ((torch:modulep v)
-         (setf (aref v 4) mode)
-         (do ((p (aref v 2) (cddr p)))
+         (setf (torch::%m-training v) mode)
+         (do ((p (torch::%m-fields v) (cddr p)))
              ((null p))
            (torch::%m-set-mode (cadr p) mode)))
         ((torch:tensorp v) nil)
@@ -1017,7 +1039,7 @@
 (defun torch:training-p (m)
   ;; Whether the module is in training mode.
   (torch::%m-check m)
-  (if (aref m 4) t nil))
+  (if (torch::%m-training m) t nil))
 
 ;; --- the layers --------------------------------------------------------------
 
@@ -1117,7 +1139,7 @@
   ;; probability 1 - p and the survivors are scaled by 1 / (1 - p), so the
   ;; expectation is unchanged and evaluation needs no rescaling at all.
   (let ((p (torch:field self :p)) (tx (torch::%t-wrap x)))
-    (if (or (null (aref self 4)) (<= p 0))
+    (if (or (null (torch::%m-training self)) (<= p 0))
         tx
         (torch:mul tx
                    (linalg:div (linalg:greater (linalg:rand (torch:shape tx)) p)
@@ -1164,7 +1186,7 @@
   ;; the class count would otherwise be ambiguous with an unbatched
   ;; distribution, so the probability spelling requires a tensor or an array.
   (let ((v
-         (cond ((torch:tensorp targets) (aref targets 1))
+         (cond ((torch:tensorp targets) (torch::%t-data targets))
                ((and (arrayp targets) (not (stringp targets))) targets)
                (t nil))))
     (if (or (null v) (numberp v)) nil (equal (array-dimensions v) shape))))
@@ -1223,24 +1245,20 @@
         (torch::%m-reduce-loss masked reduction))))
 
 ;; --- the optimizers ----------------------------------------------------------
-;; The THIRD fixed-layout record of this package, and the same defun-only
-;; decision applied once more: an optimizer is a named bag of FIELDS plus a step
-;; function, so LibraryDefunPruner keeps pruning it and a program that only
+;; The THIRD record of this package, and the same decision applied once more: an
+;; optimizer is a named bag of FIELDS plus a step function, so
+;; LibraryDefunPruner keeps pruning it per accessor and a program that only
 ;; wants torch:sgd does not carry Adam's moments.
 ;;
-;;   slot 0  tag         the symbol torch::%optimizer (torch:optimizerp
-;;                       discriminates on it -- the LENGTH is only a shape
-;;                       pre-check, and here it is six like a tensor's, so the
-;;                       tag is what separates the two)
-;;   slot 1  kind        a keyword naming the rule (:sgd, :adam, ...)
-;;   slot 2  params      the list of parameter tensors this optimizer updates
-;;   slot 3  fields      a plist -- KEYWORD value ... -- holding every
-;;                       hyper-parameter AND every state buffer of the rule,
-;;                       read and written with torch:field / torch:set-field
-;;   slot 4  step-count  the optimizer's OWN step counter, incremented by
-;;                       torch:step before the rule runs (Adam's bias
-;;                       correction reads it, and must see 1 on the first step)
-;;   slot 5  step-fn     (lambda (self) ...), applied by torch:step
+;;   kind        a keyword naming the rule (:sgd, :adam, ...)
+;;   params      the list of parameter tensors this optimizer updates
+;;   fields      a plist -- KEYWORD value ... -- holding every
+;;               hyper-parameter AND every state buffer of the rule,
+;;               read and written with torch:field / torch:set-field
+;;   step-count  the optimizer's OWN step counter, incremented by
+;;               torch:step before the rule runs (Adam's bias
+;;               correction reads it, and must see 1 on the first step)
+;;   step-fn     (lambda (self) ...), applied by torch:step
 ;;
 ;; Like the module's fields, this plist is the single place the state lives:
 ;; the momentum buffer of an SGD and the m/v moments of an Adam are fields, so
@@ -1251,18 +1269,29 @@
 ;; loop, and the optimizer runs outside the tape -- it uses no torch op, so no
 ;; adjoint is lost and no torch:no-grad is needed around torch:step.
 
-(defun torch::%o-new (kind params fields step-fn)
-  ;; The one constructor of the six-slot record described above.
-  (let ((o (make-array 6 :initial-element nil)))
-    (setf (aref o 0) 'torch::%optimizer)
-    (setf (aref o 1) kind)
-    (setf (aref o 2) params)
-    (setf (aref o 3) fields)
-    (setf (aref o 4) 0)
-    (setf (aref o 5) step-fn)
-    o))
+(defun torch::%o-print (o stream)
+  ;; The optimizer's (:print-object ...) printer: the kind and the step count.
+  ;; The parameters are tensors and the fields hold state buffers, neither of
+  ;; which belongs in a one-line rendering.
+  (write-string "#<OPTIMIZER " stream)
+  (write-string (prin1-to-string (torch::%o-kind o)) stream)
+  (write-string " :STEP-COUNT " stream)
+  (write-string (prin1-to-string (torch::%o-step-count o)) stream)
+  (write-string ">" stream))
 
-(defun torch::%o-params (params)
+(defstruct (torch::%optimizer
+            (:constructor torch::%o-new (kind params fields step-fn))
+            (:conc-name torch::%o-) (:predicate torch:optimizerp) (:copier nil)
+            (:print-object torch::%o-print))
+  ;; The record described above. torch:optimizerp is the generated tag test;
+  ;; step-count starts at 0 and torch:step increments it.
+  kind
+  params
+  fields
+  (step-count 0)
+  step-fn)
+
+(defun torch::%o-param-list (params)
   ;; The parameter list an optimizer is built over: a MODULE is walked with
   ;; torch:parameters, a list of tensors is taken as given.
   (if (torch:modulep params) (torch:parameters params) params))
@@ -1274,15 +1303,7 @@
   ;; and a step function called as (funcall step-fn optimizer) by torch:step.
   ;; The step counter starts at 0. This is how a user optimizer is written; the
   ;; built-in rules below are ordinary callers of it.
-  (torch::%o-new kind (torch::%o-params params) fields step-fn))
-
-(defun torch:optimizerp (x)
-  ;; Whether x is a torch optimizer: the fixed-layout six-slot general vector
-  ;; whose first slot is the optimizer tag.
-  (if (and (arrayp x) (not (stringp x)) (equal (array-dimensions x) '(6))
-           (eq (row-major-aref x 0) 'torch::%optimizer))
-      t
-      nil))
+  (torch::%o-new kind (torch::%o-param-list params) fields step-fn))
 
 (defun torch::%o-check (x)
   ;; Signals unless x is an optimizer; returns it.
@@ -1292,19 +1313,19 @@
 (defun torch:optimizer-kind (o)
   ;; The optimizer's kind keyword, as given to torch:optimizer.
   (torch::%o-check o)
-  (aref o 1))
+  (torch::%o-kind o))
 
 (defun torch:optimizer-params (o)
   ;; The list of parameter tensors the optimizer updates -- what a step
   ;; function walks.
   (torch::%o-check o)
-  (aref o 2))
+  (torch::%o-params o))
 
 (defun torch:step-count (o)
   ;; How many times torch:step has run: 0 before the first step, and the t of
   ;; Adam's bias correction during the step itself.
   (torch::%o-check o)
-  (aref o 4))
+  (torch::%o-step-count o))
 
 (defun torch:step (o)
   ;; Applies the optimizer's rule to every parameter and returns the optimizer
@@ -1313,8 +1334,8 @@
   ;; update itself writes the parameter data in place with no torch op, so it
   ;; records nothing on the tape and needs no torch:no-grad around it.
   (torch::%o-check o)
-  (setf (aref o 4) (+ (aref o 4) 1))
-  (funcall (aref o 5) o)
+  (setf (torch::%o-step-count o) (+ (torch::%o-step-count o) 1))
+  (funcall (torch::%o-step-fn o) o)
   o)
 
 (defun torch::%o-buffers (params)
@@ -1326,7 +1347,7 @@
   (let* ((n (length params)) (v (make-array n :initial-element nil)))
     (do ((p params (cdr p)) (i 0 (+ i 1)))
         ((null p) v)
-      (let ((x (aref (car p) 1)))
+      (let ((x (torch::%t-data (car p))))
         (setf (aref v i)
          (if (numberp x) (linalg:zeros (list 1)) (linalg:zeros-like x)))))))
 
@@ -1335,7 +1356,7 @@
   ;; parameter list.
   (let ((b (torch:field self name)))
     (if (null b)
-        (let ((fresh (torch::%o-buffers (aref self 2))))
+        (let ((fresh (torch::%o-buffers (torch::%o-params self))))
           (torch:set-field self name fresh)
           fresh)
         b)))
@@ -1354,11 +1375,11 @@
         (wd (torch:field self :weight-decay))
         (bufs nil))
     (unless (= mu 0) (setq bufs (torch::%o-buffer-field self :buffers)))
-    (do ((ps (aref self 2) (cdr ps)) (i 0 (+ i 1)))
+    (do ((ps (torch::%o-params self) (cdr ps)) (i 0 (+ i 1)))
         ((null ps) self)
-      (let* ((p (car ps)) (g (aref p 2)))
+      (let* ((p (car ps)) (g (torch::%t-grad p)))
         (unless (null g)
-          (let* ((x (aref p 1))
+          (let* ((x (torch::%t-data p))
                  (sx (numberp x))
                  (sg (numberp g))
                  (n (if sx 1 (array-total-size x)))
@@ -1373,7 +1394,7 @@
                   (setf (row-major-aref buf k) d))
                 (let ((nv (- xv (* lr d))))
                   (if sx
-                      (setf (aref p 1) nv)
+                      (setf (torch::%t-data p) nv)
                       (setf (row-major-aref x k) nv)))))))))))
 
 (defun torch::%o-adam-step (self)
@@ -1387,16 +1408,16 @@
          (b1 (car betas))
          (b2 (car (cdr betas)))
          (eps (torch:field self :eps))
-         (it (aref self 4))
+         (it (torch::%o-step-count self))
          (c1 (- 1.0 (expt b1 it)))
          (c2 (- 1.0 (expt b2 it)))
          (ms (torch::%o-buffer-field self :m))
          (vs (torch::%o-buffer-field self :v)))
-    (do ((ps (aref self 2) (cdr ps)) (i 0 (+ i 1)))
+    (do ((ps (torch::%o-params self) (cdr ps)) (i 0 (+ i 1)))
         ((null ps) self)
-      (let* ((p (car ps)) (g (aref p 2)))
+      (let* ((p (car ps)) (g (torch::%t-grad p)))
         (unless (null g)
-          (let* ((x (aref p 1))
+          (let* ((x (torch::%t-data p))
                  (sx (numberp x))
                  (sg (numberp g))
                  (n (if sx 1 (array-total-size x)))
@@ -1412,7 +1433,7 @@
                 (setf (row-major-aref v k) vk)
                 (let ((nv (- xv (/ (* lr (/ mk c1)) (+ (sqrt (/ vk c2)) eps)))))
                   (if sx
-                      (setf (aref p 1) nv)
+                      (setf (torch::%t-data p) nv)
                       (setf (row-major-aref x k) nv)))))))))))
 
 (defun torch:sgd (params &key (lr 0.01) (momentum 0.0) (weight-decay 0.0))
@@ -1445,7 +1466,7 @@
   ;; tensor or a raw array is read out element-wise.
   (cond ((consp s) s)
         ((null s) nil)
-        ((torch:tensorp s) (torch::%b-elements (aref s 1)))
+        ((torch:tensorp s) (torch::%b-elements (torch::%t-data s)))
         ((and (arrayp s) (not (stringp s))) (linalg:to-list s))
         (t (error "torch: expected a list, an array or a tensor"))))
 

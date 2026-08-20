@@ -10,39 +10,78 @@ fill in gradients. The stateless array math it runs on stays in `linalg`
 (`.kb/linalg.md`) -- torch NEVER reimplements a kernel, it wraps one and adds
 its adjoint.
 
-## The tensor: a fixed-layout record, and the pruning decision
+## The tensor: a `defstruct` record, and the pruning decision
 
-**Decision (todo-460, binding for the whole torch package including the 461
-module layer and the 462 optimizers): torch is defun-only BY DESIGN -- no
-`defclass`/`defmethod`/`defstruct`, ever.** `LibraryDefunPruner` prunes only
-`defun`/`defparameter`/`defvar`/`defconstant` for rontolisp's OWN libraries
-(`.kb/library-defun-pruning.md`; the CLOS `Candidates` machinery applies to
-third-party provenance only), so a CLOS-based tensor would have made the whole
-library non-prunable: every program touching `torch:softmax` would carry every
-op and (later) every module and optimizer. Building on plain defuns over a
-fixed-layout record keeps every torch definition inside the pruner's existing,
-audited mechanism -- `LibraryDefunPrunerTest.keepsOnlyTheTransitiveClosureOfTheCalledTorchFunction`
+**Decision (todo-466, superseding todo-460's "defun-only, no `defstruct`
+either"): the three records are `defstruct`s; everything else is a plain defun;
+`defclass`/`defmethod` stay out, ever.** The original rule existed for ONE
+reason -- `LibraryDefunPruner` could not prune a bundled library's `defstruct`,
+so one would have been an unprunable root that also anchored every name its body
+spells, and every program touching `torch:softmax` would carry the whole
+package. **todo-465 removed that reason**: a bundled defstruct is now expanded
+into its generated defuns AHEAD of reachability (`BundledStructs` in the pruner,
+`.kb/library-defun-pruning.md`), so each constructor, predicate and accessor
+prunes INDIVIDUALLY --
+`LibraryDefunPrunerTest.keepsOnlyTheTransitiveClosureOfTheCalledTorchFunction`
 pins that a `torch:tensor`-only program drops `torch:backward`/`torch:matmul`
-AND the unused linalg members. CLOS dispatch buys the tensor nothing: values
-flow through closures on the tape, not through generic functions. If 461 ever
-finds a genuine need for CLOS in torch, the price is widening the pruner's own-
-library scope to the CLOS kinds first -- do not add a `defclass` to torch.lisp
-without that.
+and the unused linalg members AND the record's own unread accessors
+(`%t-parents`, `%t-backward-fn`) and the whole module and optimizer records with
+their printers.
 
-The record is a six-slot general vector (`(make-array 6)`), discriminated by
-`torch:tensorp` on the tag symbol in slot 0 (the optimizer record of todo-462 is
-six slots too, which is why the TAG, not the length, is the discriminator):
+**CLOS is still excluded, and now for the DISPATCH reason alone, not the pruning
+one**: nothing in this package dispatches -- the binary ops normalize
+tensor/number/raw-array through `torch::%t-wrap` instead of a method matrix, and
+`torch:forward` goes through the module's own closure precisely so a
+`torch:sequential` can hold a bare `lambda` with no wrapper type existing. A
+`defclass` would buy the records nothing and cost the CLOS surface. That is the
+re-evaluation trigger: only a genuine dispatch need justifies revisiting it.
 
-| slot | field | contents |
-| --- | --- | --- |
-| 0 | tag | the symbol `torch::%tensor` |
-| 1 | data | a linalg array (packed float, any rank; `:element-type` honoured) or a NUMBER -- a plain number is the rank-0 scalar tensor (`torch:shape` nil, like `linalg:ndim` 0) |
-| 2 | grad | nil, or a value of data's shape -- a RAW linalg value, not a tensor |
-| 3 | requires-grad | the LEAF flag from `(torch:tensor x :requires-grad t)` |
-| 4 | parents | the input tensors this one was computed from |
-| 5 | backward-fn | nil, or `(lambda (grad-out) ...)` -> the per-parent gradient list (nil entries for untracked parents) |
+What the swap bought, beyond the accessors pruning:
 
-A tensor "tracks" when slot 3 or 5 is set (`torch:requires-grad-p`). Every op
+- **A printed record.** Each record carries `(:print-object ...)`
+  (`.kb/defstruct.md`), so a tensor is `#<TENSOR #d(1.0 2.0) :REQUIRES-GRAD T>`,
+  a module `#<MODULE :LINEAR>` and an optimizer
+  `#<OPTIMIZER :SGD :STEP-COUNT 0>` -- identical on all four backends, `prin1`
+  and `princ` alike. The printers spell only what every backend agrees on and
+  NEVER the tape slots: `backward-fn` holds a closure whose printed form is
+  backend-dependent, which is why the pre-466 representation could not be
+  printed at all and this file used to forbid examples and cross-backend pins
+  from printing a tensor. That rule is retired.
+- **`torch:tensorp` stopped allocating.** It was
+  `(and (arrayp x) ... (equal (array-dimensions x) '(6)) (eq (row-major-aref x 0) 'torch::%tensor))`
+  -- a fresh list per call, on the hottest predicate in the package (every op
+  entry runs it through `%t-wrap`). It is the generated tag test now.
+- **`torch::%m-fields-slot` is gone.** It returned a slot NUMBER recovered by
+  type test (2 for a module, 3 for an optimizer) so that `torch:field` /
+  `torch:set-field` could serve both records. The pair is
+  `torch::%mo-fields` / `torch::%mo-set-fields` over named accessors now -- same
+  one-accessor-pair-for-both-records surface, no slot arithmetic.
+- **The tag-vs-length discrimination note is gone**: a `defstruct` tag test
+  cannot confuse two records, so the optimizer's "six slots like a tensor, which
+  is why the TAG is the discriminator" bookkeeping has nothing to say.
+
+The public API did NOT change: `torch:tensorp`/`torch:data`/`torch:grad`/
+`torch:shape`/`torch:item`/`torch:field`/`torch:parameters`/... are the same
+names with the same behavior; only their bodies moved. Nothing outside
+torch.lisp learns the accessor names.
+
+`torch::%tensor` (constructor `torch::%t-new`, conc-name `torch::%t-`,
+predicate `torch:tensorp`, no copier):
+
+| field | contents |
+| --- | --- |
+| data | a linalg array (packed float, any rank; `:element-type` honoured) or a NUMBER -- a plain number is the rank-0 scalar tensor (`torch:shape` nil, like `linalg:ndim` 0) |
+| grad | nil, or a value of data's shape -- a RAW linalg value, not a tensor |
+| requires-grad | the LEAF flag from `(torch:tensor x :requires-grad t)` |
+| parents | the input tensors this one was computed from |
+| backward-fn | nil, or `(lambda (grad-out) ...)` -> the per-parent gradient list (nil entries for untracked parents) |
+
+No `:type (vector ...)`: the fields are heterogeneous (a linalg array, a
+closure, a list, a flag), so the packed-integer arm of `.kb/defstruct.md` does
+not apply and the instance is an ordinary object.
+
+A tensor "tracks" when `requires-grad` or `backward-fn` is set
+(`torch:requires-grad-p`). Every op
 routes operands through `torch::%t-wrap` (tensor passes through; number / raw
 array / list becomes a constant leaf) and results through `torch::%t-result`,
 which records the tape edge only while `torch::*grad-enabled*` is true AND some
@@ -52,9 +91,36 @@ collectable. Reductions of a whole tensor produce scalar (number) data;
 unary ufuncs get number branches in the `torch::%t-r*` helpers, so scalar
 tensors flow through every op.
 
-Printing a tensor prints the raw record (slot 5 is a closure, whose printed
-form is backend-dependent) -- examples and cross-backend pins must print
-`torch:data`/`torch:grad`/`torch:item`, never the tensor itself.
+### Two seams the record swap made load-bearing
+
+- **`eq`/`eql` on a record instance is REFERENCE identity, on every backend.**
+  `torch::%t-topo`'s visited marking and `torch::%m-collect`'s parameter dedup
+  are `member` (i.e. `eql`) over records, and both mean IDENTITY. The JVM and
+  both WASM backends always compared instances by reference; the INTERPRETER
+  compared them with `LispInstance.equals`, which is structural -- so two
+  distinct scalar tensors holding the same number (an untracked `1.0` constant
+  leaf, two `(torch:tensor 0.5 :requires-grad t)` parameters) were `eql` there
+  and the tape conflated them. `Environment.isIdentityAggregate` puts instances
+  beside conses now, which is what CL specifies and what closes todo-444's Gap 2.
+  `equal` on instances stays structural, deliberately (`.kb/instance-syntax.md`).
+- **The interpreter must load torch BEFORE it decides a print's routing.** The
+  printing operators pick the `print-object` route from the registry as it
+  stands when the FORM is expanded, which is before its argument is evaluated --
+  and evaluating the argument is what lazily loads torch. Without a pre-load the
+  very first `(print (torch:tensor '(1.0 2.0)))` of a session rendered the raw
+  `#S(TORCH::%TENSOR ...)` while every later print routed.
+  `LispEvaluator.referencesTorch` triggers `ensureTorchLoaded()` in the printing
+  case for exactly this, the same ordering seam the `torch:no-grad` case below
+  has. Torch is the only lazily loaded library that defines a `print-object`
+  method; a second one needs the same treatment.
+  Pinned by `LispEvaluatorTest#theVeryFirstPrintOfATensorAlreadyRoutesThroughItsPrinter`.
+
+**Still raw, and NOT a defect of this layer**: the REPL's (and `DocExamplesTest`'s)
+value ECHO renders with the internal printer, which consults no `print-object`
+method -- so a tensor typed at the REPL echoes `#S(TORCH::%TENSOR ...)` while
+`(print it)` gives `#<TENSOR ...>`. That is true of every `print-object` struct,
+predates this change, and is why the doc pages show a `print` call plus its
+output block rather than a `; =>` value.
 
 ## The two invariants of `backward`, and the adjoint table
 
@@ -114,6 +180,14 @@ cases). On WASM the polynomial `exp`/`log`/`tanh` differ from `Math.*`, but the
 check compares the backward against differences of the SAME forward, which is
 exactly the consistency that matters.
 
+The records' own acceptance is `TorchGradcheck.RECORD_PRINT_PROGRAM` -- the
+three printed renderings plus the `eq`/`eql`/`member` identity lines -- run
+verbatim on the interpreter
+(`LispEvaluatorTest.torchRecordsPrintAndCompareByIdentity`), the JVM
+(`JvmLispCompilerTest.compileAndRunTorchRecordPrinting`) and wasm-GC
+(`WasmLispCompilerIntegrationTest.compileTorchRecordPrinting`), with the
+`--component` leg in the ci-spec case `torch-record-print-cross-backend`.
+
 ## `torch:no-grad`: the one macro, and its three seams
 
 `torch:no-grad` is a BUILT-IN `LispMacroExpander` expansion (the usocket
@@ -147,20 +221,19 @@ guess would lay its body out as call arguments (`.kb/formatter.md`).
 
 ## The module layer (todo-461): a second record, walked for its parameters
 
-The `nn` half is the SAME defun-only decision applied again -- a module is a
-five-slot general vector (so it never collides with the six-slot tensor),
-`torch:modulep` discriminating on the `torch::%module` tag in slot 0:
+The `nn` half is the SAME record decision applied again -- `torch::%module`
+(constructor `torch::%m-new`, conc-name `torch::%m-`, predicate
+`torch:modulep`):
 
-| slot | field | contents |
-| --- | --- | --- |
-| 0 | tag | the symbol `torch::%module` |
-| 1 | kind | a KEYWORD naming the layer (`:linear`, `:sequential`, ...) |
-| 2 | fields | a plist, KEYWORD value ..., holding every parameter, buffer, submodule, list of submodules and hyper-parameter |
-| 3 | forward-fn | applied by `torch:forward` as `(funcall fn module args...)` |
-| 4 | training | the train/eval flag, `t` at construction |
+| field | contents |
+| --- | --- |
+| kind | a KEYWORD naming the layer (`:linear`, `:sequential`, ...) |
+| fields | a plist, KEYWORD value ..., holding every parameter, buffer, submodule, list of submodules and hyper-parameter |
+| forward-fn | applied by `torch:forward` as `(funcall fn module args...)` |
+| training | the train/eval flag, `t` at construction |
 
-**The fields plist IS the parameter registration** -- the defun-only stand-in
-for walking a CLOS instance's slots, which is what the todo asked for. A
+**The fields plist IS the parameter registration** -- the stand-in for walking a
+CLOS instance's slots, which is what the todo asked for. A
 layer's forward reads its parameters back with `torch:field`, never from a
 closed-over variable: with the plist as the single place the tensors live, a
 parameter that exists cannot be absent from `torch:parameters`, which is the
@@ -242,26 +315,28 @@ entry: every module and loss name is a plain function, laid out as a call.
 
 ## The optimizers (todo-462): a third record, and the in-place update
 
-The same defun-only decision a third time. An optimizer is a SIX-slot general
-vector -- the same length as a tensor, and deliberately so: the LENGTH is only a
-shape pre-check, the TAG in slot 0 is what all three predicates actually
-discriminate on, and a fourth distinct length would have been a fiction. Slots:
+The same record decision a third time -- `torch::%optimizer` (constructor
+`torch::%o-new`, conc-name `torch::%o-`, predicate `torch:optimizerp`):
 
-| slot | field | contents |
-| --- | --- | --- |
-| 0 | tag | the symbol `torch::%optimizer` |
-| 1 | kind | a KEYWORD naming the rule (`:sgd`, `:adam`, ...) |
-| 2 | params | the list of parameter tensors it updates |
-| 3 | fields | a plist, KEYWORD value ..., holding every hyper-parameter AND every state buffer |
-| 4 | step-count | the optimizer's OWN counter, incremented by `torch:step` BEFORE the rule runs |
-| 5 | step-fn | `(lambda (self) ...)`, applied by `torch:step` |
+| field | contents |
+| --- | --- |
+| kind | a KEYWORD naming the rule (`:sgd`, `:adam`, ...) |
+| params | the list of parameter tensors it updates |
+| fields | a plist, KEYWORD value ..., holding every hyper-parameter AND every state buffer |
+| step-count | the optimizer's OWN counter (initform 0), incremented by `torch:step` BEFORE the rule runs |
+| step-fn | `(lambda (self) ...)`, applied by `torch:step` |
+
+Note the name split the conc-name forces: `torch::%o-params` is the generated
+ACCESSOR, and the module-or-list coercion an optimizer is built from is
+`torch::%o-param-list`.
 
 Four decisions worth keeping:
 
-- **The fields plist is the state, again.** `torch:field`/`torch:set-field` now
-  read slot 2 of a module or slot 3 of an optimizer (`torch::%m-fields-slot`),
-  so there is ONE accessor pair for both records and no `torch:state` /
-  `torch:set-state` surface at all. The momentum buffer and Adam's `m`/`v` are
+- **The fields plist is the state, again.** `torch:field`/`torch:set-field` read
+  the fields of a module or of an optimizer through `torch::%mo-fields` /
+  `torch::%mo-set-fields`, so there is ONE accessor pair for both records and no
+  `torch:state` / `torch:set-state` surface at all. The momentum buffer and
+  Adam's `m`/`v` are
   fields (`:buffers`, `:m`, `:v`) holding a general vector indexed by the
   parameter's position, allocated on the first step; the learning rate is a
   field too, which is the whole of what an LR schedule needs
@@ -371,7 +446,10 @@ specific interceptor. The standing candidate remains the one `.kb/linalg.md`
 records: the rank->=3 stacked `%la-matmul-nd` (what a transformer forward pass
 spends its time in) is not intercepted on any path; measure before adding an
 interceptor, and if one lands, torch inherits it without change. `--no-gc` is
-unsupported (torch needs arrays, like linalg).
+unsupported (torch needs arrays, like linalg): a torch program is rejected
+there long before any `defstruct` is reached -- measured, the error is
+`LINALG::%LA-MAKE: lambda-list keywords ... are not supported with --no-gc` --
+so the backend's own defstruct rejection never comes into play.
 
 ## Wiring (the LinalgLibrary pattern, plus the ordering rule)
 

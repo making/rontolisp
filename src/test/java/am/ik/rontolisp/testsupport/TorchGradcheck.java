@@ -225,6 +225,49 @@ public final class TorchGradcheck {
 	/** The expected stdout (and last value) of {@link #NN_TRAINING_PROGRAM}. */
 	public static final String NN_TRAINING_EXPECTED = "(4 T T)";
 
+	/**
+	 * The printed form of the three records, which only exists because they are
+	 * {@code defstruct}s carrying a {@code (:print-object ...)}: the hand-rolled tagged
+	 * vectors they were before printed their raw slots, one of which is a backward
+	 * closure with no portable rendering -- so a printed tensor could not be pinned at
+	 * all. The printers spell only data the four backends agree on, and the identity
+	 * lines pin what {@code eq}/{@code eql} answer for record instances (reference
+	 * identity, which is what the tape's visited set and the parameter walk's dedup both
+	 * rest on -- see .kb/torch.md).
+	 */
+	public static final String RECORD_PRINT_PROGRAM = """
+			(defparameter *rp-t* (torch:tensor '(1.0 2.0) :requires-grad t))
+			(defparameter *rp-s* (torch:tensor 0.5))
+			(print *rp-t*)
+			(print *rp-s*)
+			(princ *rp-t*)
+			(terpri)
+			(format t "~a|~s~%" *rp-s* *rp-s*)
+			(print (princ-to-string *rp-s*))
+			(print (list *rp-s*))
+			(print (torch:linear 2 2))
+			(print (torch:sgd (list *rp-t*) :lr 0.5))
+			;; A record is compared by IDENTITY, never by its slots: two tensors built
+			;; from the same value are distinct, and member finds only the one that is
+			;; there. Getting this wrong silently conflates two tape nodes.
+			(print (list (eq *rp-t* *rp-t*) (eql *rp-t* *rp-t*)
+			             (eq *rp-s* (torch:tensor 0.5))
+			             (if (member (torch:tensor 0.5) (list *rp-s*)) t nil)
+			             (if (member *rp-s* (list *rp-s*)) t nil)))
+			""";
+
+	/** The expected stdout of {@link #RECORD_PRINT_PROGRAM}. */
+	public static final String RECORD_PRINT_EXPECTED = """
+			#<TENSOR #d(1.0 2.0) :REQUIRES-GRAD T>
+			#<TENSOR 0.5>
+			#<TENSOR #d(1.0 2.0) :REQUIRES-GRAD T>
+			#<TENSOR 0.5>|#<TENSOR 0.5>
+			"#<TENSOR 0.5>"
+			(#<TENSOR 0.5>)
+			#<MODULE :LINEAR>
+			#<OPTIMIZER :SGD :STEP-COUNT 0>
+			(T T NIL NIL T)""";
+
 	/** The expected stdout of {@link #PROGRAM}: one ok line per row, then ALL-OK. */
 	public static final String EXPECTED = """
 			add-broadcast: ok

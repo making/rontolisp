@@ -114,6 +114,18 @@ defun-only record like torch's). Mechanics:
   because `(setf (acc x) v)` / `#'(setf acc)` spell only the accessor and the
   writer call is synthesized after this pass (the vec:aset pattern, as a keying
   rule instead of a hardcoded edge).
+- **A `(:print-object ...)` struct's generated `print-object` method is keyed
+  under the struct's CONSTRUCTORS** (`BundledStructs.printerKeysAt`), which is
+  the one generated form with no definition name of its own. As a nameless root
+  it would be kept unconditionally and would anchor its printer defun -- and
+  through it every accessor the printer reads -- in every program that splices
+  the library: measured on torch (todo-466), a `torch:tensor`-only program was
+  carrying the module and optimizer printers and their `kind`/`step-count`
+  accessors. The gate is the `Candidates` defmethod specializer argument
+  expressed with the keyed mechanism: the method can only apply to an instance,
+  an instance can only come from a constructor call the scan sees, so a record
+  nothing builds takes its printer with it. `#S(...)` literals are the same
+  documented carve-out as everywhere else in this pass.
 - Name spelling agrees on both sides because both expansions run with a
   post-resolution resolver's export oracle over the same program
   (`spellsAsExternal`; bundled packages are builtin, so their export sets are
@@ -129,9 +141,17 @@ defun-only record like torch's). Mechanics:
   a reference source, so a program whose ONLY use of a slot initform's callee
   is through a `#S` literal fails loudly at compile ("Cannot compile:
   undefined"); `--no-prune` restores everything.
-- No bundled library carries a defstruct yet (todo-466, the torch records, is
-  the consumer), so production output is byte-identical today. Pinned by
+- The consumer is torch, whose three records became defstructs in todo-466
+  (`.kb/torch.md`); linalg and vec carry none. What the per-accessor rule is
+  worth there, measured against the same program compiled before the swap: a
+  20-step `torch:adam` training loop went 163,148 -> 152,405 B of wasm
+  (-6.6%) and 131,331 -> 124,008 under `--optimize=size` (-5.6%). A
+  tensor-only one-liner moves the other way -- +996 B of wasm, +4.5 KB of
+  `.class` -- because a `(:print-object ...)` struct turns the `print-object`
+  seam on for the whole program (`.kb/clos.md`), which is a fixed cost the
+  printing is worth and the pruner cannot collect. Pinned by
   `LibraryDefunPrunerTest#aBundledDefstructsGeneratedDefunsPruneIndividually` /
+  `#aBundledDefstructsPrinterMethodLeavesWithItsConstructor` /
   `#theStructDefinitionMarkerAnchorsNothingItSpells` /
   `#aBundledDefstructIncludeChainPrunesInheritedAccessorsIndividually` /
   `#aTypedVectorStructsSetfWriterRidesItsAccessor` /
