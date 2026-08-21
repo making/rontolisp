@@ -2,6 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
 import am.ik.rontolisp.LispDoubleFloatArray;
@@ -13,15 +14,20 @@ import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The interpreter's opt-in {@code --gpu} acceleration: the {@code linalg:} matrix product
- * runs on an NVIDIA GPU ({@code am.ik.gpu}, via {@link LinalgGpuKernels}) --
- * {@code linalg:dot}'s MATRIX-BY-MATRIX case, and {@code linalg::%la-matmul-nd}, the
- * STACKED product behind {@code linalg:matmul} at rank &gt;= 3 ({@code torch.bmm}, hence
- * every attention layer and every {@code torch:linear} over a {@code (B T C)}
- * activation). Everything else declines, so the whole rest of {@code linalg:} is
- * untouched.
+ * The interpreter's opt-in {@code --gpu} acceleration: part of {@code linalg:} runs on an
+ * NVIDIA GPU ({@code am.ik.gpu}, via {@link LinalgGpuKernels}) -- {@code linalg:dot}'s
+ * MATRIX-BY-MATRIX case, {@code linalg::%la-matmul-nd}, the STACKED product behind
+ * {@code linalg:matmul} at rank &gt;= 3 ({@code torch.bmm}, hence every attention layer
+ * and every {@code torch:linear} over a {@code (B T C)} activation), and the twelve
+ * ELEMENT-WISE members whose scalar cost is a libm call ({@code exp} {@code log}
+ * {@code tanh} {@code sin} {@code cos} {@code tan} {@code asin} {@code acos} {@code atan}
+ * {@code sinh} {@code cosh} {@code erf}). Everything else declines, so the whole rest of
+ * {@code linalg:} is untouched -- including {@code sqrt}, {@code abs}, {@code negative},
+ * {@code sign} and the binary {@code add} / {@code sub} / {@code mul} / {@code div},
+ * which are one machine instruction per element and cannot pay for a round trip. That is
+ * a measurement ({@code .kb/gpu.md}), not a staging decision.
  *
- * <h2>Only the matrix product, and only when it is big</h2>
+ * <h2>Only the big shapes, and there are two size rules</h2>
  *
  * A round trip to a device has a floor -- context, allocation, launch, copy back --
  * measured at ~15 us and flat in the operand size, so what a GPU has to beat on a small
@@ -38,6 +44,13 @@ import org.jspecify.annotations.Nullable;
  * threshold applies to the TOTAL work, {@code batch * n * m * p}. That is what makes the
  * batched shape the one this flag pays on: a batch of sixteen 64x64 products is sixteen
  * times the work behind one 15 us floor, while the CPU pays for all of it.
+ *
+ * <p>
+ * An element-wise call is measured in ELEMENTS instead -- one library call each, not
+ * {@code n} of them per output -- and declines below 16384 of them. Above that the device
+ * wins by 8-11x at {@code #d} and 20-30x at {@code #f}, and by 100-300x for {@code erf},
+ * which is the member the CPU is slowest at and the one the exact {@code torch:gelu} is
+ * written over.
  *
  * <h2>The protocol is {@code --simd}'s, one layer further up</h2>
  *
@@ -61,6 +74,15 @@ import org.jspecify.annotations.Nullable;
  *
  * <h2>The precision contract</h2>
  *
+ * An accelerated ELEMENT-WISE call is close to the scalar defun and can never be equal to
+ * it: the device carries its own libm, and at {@code #f} it evaluates AT the operand
+ * width where the defun evaluates in double and narrows on the store. Measured, one to
+ * two ulps of the width ({@code .kb/gpu.md} has the per-member table). This is the first
+ * thing in rontolisp whose results a user should not expect to match the other backends
+ * elementwise, and it is why the tests pin a RELATIVE tolerance rather than the
+ * byte-identity every other flag keeps.
+ *
+ * <p>
  * An accelerated product is CLOSE to the scalar defun rather than equal to it, at both
  * widths. The cause is not the tile walk -- the kernel folds {@code k} in the defun's own
  * ascending order -- it is that every one of its multiply-adds is FUSED
@@ -121,26 +143,53 @@ public final class LinalgGpu {
 	 * @param evaluator the evaluator used to apply the captured binding on decline
 	 */
 	public static void install(Environment globalEnv, LispEvaluator evaluator) {
-		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_DOT, LinalgGpu::dot);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_DOT, 2, LinalgGpu::dot);
 		// The stacked product behind linalg:matmul at rank >= 3. A %-prefixed member is
 		// an internal symbol, whose canonical qualified spelling carries the double colon
 		// (.kb/linalg-simd.md).
-		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_MATMUL_ND, LinalgGpu::matmulNd);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_MATMUL_ND, 2, LinalgGpu::matmulNd);
+		// The ELEMENT-WISE tier: the twelve unary ufuncs whose scalar cost is a libm
+		// call. linalg:sqrt / abs / negative / sign and the binary add / sub / mul / div
+		// are NOT here -- they move one or three streams for one machine instruction, so
+		// a round trip cannot pay for them, and that is a measurement (.kb/gpu.md) rather
+		// than an assumption.
+		for (Map.Entry<String, Integer> member : MAP_MEMBERS.entrySet()) {
+			int op = member.getValue();
+			define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + member.getKey(), 1, args -> map(op, args));
+		}
 	}
+
+	/**
+	 * The element-wise members the device takes, each with the op code its kernel
+	 * switches on. The order is the op codes' own, which is {@code gemm.cu}'s.
+	 */
+	private static final Map<String, Integer> MAP_MEMBERS = Map.ofEntries(
+			Map.entry(LispNames.LINALG_EXP, LinalgGpuKernels.MAP_EXP),
+			Map.entry(LispNames.LINALG_LOG, LinalgGpuKernels.MAP_LOG),
+			Map.entry(LispNames.LINALG_TANH, LinalgGpuKernels.MAP_TANH),
+			Map.entry(LispNames.LINALG_SIN, LinalgGpuKernels.MAP_SIN),
+			Map.entry(LispNames.LINALG_COS, LinalgGpuKernels.MAP_COS),
+			Map.entry(LispNames.LINALG_TAN, LinalgGpuKernels.MAP_TAN),
+			Map.entry(LispNames.LINALG_ASIN, LinalgGpuKernels.MAP_ASIN),
+			Map.entry(LispNames.LINALG_ACOS, LinalgGpuKernels.MAP_ACOS),
+			Map.entry(LispNames.LINALG_ATAN, LinalgGpuKernels.MAP_ATAN),
+			Map.entry(LispNames.LINALG_SINH, LinalgGpuKernels.MAP_SINH),
+			Map.entry(LispNames.LINALG_COSH, LinalgGpuKernels.MAP_COSH),
+			Map.entry(LispNames.LINALG_ERF, LinalgGpuKernels.MAP_ERF));
 
 	/**
 	 * Overrides one member with a kernel that declines back to whatever the member was
 	 * bound to before -- the {@code --simd} lane kernel, the {@code --blas} library
 	 * product or the scalar defun, whichever this invocation installed.
 	 */
-	private static void define(Environment globalEnv, LispEvaluator evaluator, String qualified,
+	private static void define(Environment globalEnv, LispEvaluator evaluator, String qualified, int arity,
 			Function<List<LispVal>, @Nullable LispVal> kernel) {
 		LispVal declined = globalEnv.lookupFunctionOrNull(qualified);
 		if (declined == null) {
 			throw new IllegalStateException("linalg.lisp must be loaded before " + qualified + " can be accelerated");
 		}
 		globalEnv.defineFunction(qualified, new LispFunction(qualified, args -> {
-			if (args.size() == 2) {
+			if (args.size() == arity) {
 				LispVal fast = kernel.apply(args);
 				if (fast != null) {
 					return fast;
@@ -148,6 +197,36 @@ public final class LinalgGpu {
 			}
 			return evaluator.applyGlobal(declined, args);
 		}));
+	}
+
+	/**
+	 * One element-wise unary ufunc over a packed operand of either width and any rank:
+	 * {@code out[i] = op(a[i])}, one round trip for the whole array. Anything else -- a
+	 * general boxed array, a plain number, an array below the element threshold --
+	 * answers {@code null} and the captured binding runs.
+	 *
+	 * <p>
+	 * The result is NOT bit-identical to the scalar defun, and here the break is bigger
+	 * than the fused multiply-add that separates an accelerated product from a scalar
+	 * one: the device has its own libm, and at {@code #f} it evaluates at the operand
+	 * width where the defun evaluates in double and narrows. That is the one contract
+	 * {@code --gpu} breaks that no other flag does, and it is stated in the guide as well
+	 * as in {@code .kb/gpu.md}.
+	 */
+	private static @Nullable LispVal map(int op, List<LispVal> args) {
+		if (!(args.get(0) instanceof LispFloatArray a)) {
+			return null;
+		}
+		int n = a.totalSize();
+		if (!LinalgGpuKernels.worthMap(n)) {
+			return null;
+		}
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.map(op, single.data(), n);
+			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
+		}
+		double[] c = LinalgGpuKernels.map(op, ((LispDoubleFloatArray) a).data(), n);
+		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
 	}
 
 	/**

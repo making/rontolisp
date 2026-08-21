@@ -3,10 +3,10 @@ package am.ik.gpu;
 import org.jspecify.annotations.Nullable;
 
 /**
- * A matrix product on the GPU, or a decline. That is the whole public surface of this
- * library, and it is deliberately the shape of a PARTIAL function: a caller offers a
- * product and either the device took it or it did not, said with {@code false} or
- * {@code null} and never with an exception.
+ * A matrix product -- or an element-wise map -- on the GPU, or a decline. That is the
+ * whole public surface of this library, and it is deliberately the shape of a PARTIAL
+ * function: a caller offers a computation and either the device took it or it did not,
+ * said with {@code false} or {@code null} and never with an exception.
  *
  * <h2>What "declines" covers</h2>
  *
@@ -81,6 +81,53 @@ public final class Gpu {
 	 */
 	private static final long UNPOOLED_MIN_WORK = 1L << 21;
 
+	/**
+	 * Below this many elements an {@linkplain #map element-wise map} declines and the
+	 * caller's own kernel wins.
+	 *
+	 * <p>
+	 * It is four orders of magnitude below the product's threshold because it counts
+	 * ELEMENTS and not multiply-adds: a map is one libm call per element, so 2^14 of them
+	 * is 2^14 calls where a 2^17-multiply-add product is a 51-cubed matrix. Measured
+	 * against the fastest CPU path rontolisp has ({@code --simd}, JIT-warm) on the
+	 * machine this was tuned on, the crossover for the cheapest member offered here is
+	 * between 2000 and 4000 elements and for the dearest it is below 1000; the threshold
+	 * sits at 16384, where the cheapest of them is already 2.6x ahead and the rest 5-9x.
+	 * Below it the CPU wins outright and declining costs nothing. See {@code .kb/gpu.md}.
+	 */
+	private static final long MAP_POOLED_MIN_ELEMENTS = 1L << 14;
+
+	/**
+	 * The element-wise threshold on a machine whose driver has no usable stream-ordered
+	 * allocator, where the per-call floor is ~170 us rather than ~15. That floor is above
+	 * the CPU's cost for 16384 elements of any member here, so the threshold moves up to
+	 * where the CPU column passes it: 65536 elements, where the cheapest member measures
+	 * 360 us on the CPU.
+	 */
+	private static final long MAP_UNPOOLED_MIN_ELEMENTS = 1L << 16;
+
+	/**
+	 * The op codes {@link #map} takes, mirrored by the {@code switch} in {@code gemm.cu}
+	 * -- the two are changed together and nothing links them, so a new member is one case
+	 * there, one constant here and one regeneration of the PTX.
+	 *
+	 * <p>
+	 * Every one of them is a member whose scalar cost is a libm CALL, and that is the
+	 * whole selection rule: measured on this project's machine the device beats a
+	 * JIT-warm SIMD CPU loop by 9-124x at f64 and by up to 394x at f32 on these, while
+	 * {@code sqrt} (1.4-2x), {@code abs}, {@code negative} and {@code sign} are one
+	 * machine instruction over one stream and the binary {@code add} / {@code sub} /
+	 * {@code mul} / {@code div} are one over three. Those are declines, and they are
+	 * declines by measurement rather than by assumption.
+	 */
+	public static final int MAP_EXP = 0, MAP_LOG = 1, MAP_TANH = 2, MAP_SIN = 3, MAP_COS = 4, MAP_TAN = 5, MAP_ASIN = 6,
+			MAP_ACOS = 7, MAP_ATAN = 8, MAP_SINH = 9, MAP_COSH = 10, MAP_ERF = 11;
+
+	/**
+	 * How many op codes {@link #map} knows; an op outside {@code [0, MAP_OPS)} declines.
+	 */
+	public static final int MAP_OPS = 12;
+
 	private Gpu() {
 	}
 
@@ -98,6 +145,8 @@ public final class Gpu {
 		private static final String DESCRIPTION;
 
 		private static final long MIN_WORK;
+
+		private static final long MAP_MIN_ELEMENTS;
 
 		static {
 			CudaGemm device;
@@ -125,6 +174,7 @@ public final class Gpu {
 			DEVICE = device;
 			DESCRIPTION = description;
 			MIN_WORK = device == null || device.pooled() ? POOLED_MIN_WORK : UNPOOLED_MIN_WORK;
+			MAP_MIN_ELEMENTS = device == null || device.pooled() ? MAP_POOLED_MIN_ELEMENTS : MAP_UNPOOLED_MIN_ELEMENTS;
 		}
 
 		private Probe() {
@@ -193,6 +243,16 @@ public final class Gpu {
 	 */
 	static long minWork() {
 		return Probe.MIN_WORK;
+	}
+
+	/**
+	 * The element-wise threshold in force on this machine, which is
+	 * {@link #worthMap(long)}'s only when the driver's pooled allocator is in use.
+	 * Package-private and for the tests.
+	 * @return the minimum element count a map is accepted at
+	 */
+	static long mapMinElements() {
+		return Probe.MAP_MIN_ELEMENTS;
 	}
 
 	/**
@@ -403,6 +463,85 @@ public final class Gpu {
 		}
 		float[] out = new float[n * p];
 		return multiply(a, offsetA, b, offsetB, out, 0, n, m, p) ? out : null;
+	}
+
+	/**
+	 * Whether an element-wise map over {@code n} elements is big enough to be worth a
+	 * round trip at all -- the {@link #worth(long, long, long) worth} of the element-wise
+	 * tier, and the same kind of predicate: a pure size test that touches no driver, so a
+	 * caller can ask it before it unwraps its operand, and {@link #map} re-asks the real
+	 * question.
+	 *
+	 * <p>
+	 * It does not take the op code. Every member {@link #map} accepts costs the CPU a
+	 * libm call per element, and the spread between the cheapest of them and the dearest
+	 * (measured, 5x) is far smaller than the margin at the threshold, so one number
+	 * serves them all and a per-op table would be precision this measurement does not
+	 * support.
+	 * @param n how many elements the map covers
+	 * @return {@code true} when the map is above the size threshold
+	 */
+	public static boolean worthMap(long n) {
+		return n >= MAP_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * {@code out[i] = op(a[i])} for {@code n} elements of a double-float array, written
+	 * straight into the caller's array at its own offset -- the ELEMENT-WISE tier.
+	 *
+	 * <p>
+	 * {@code op} is one of the {@link #MAP_EXP} constants; anything else declines, and so
+	 * does a map below the size threshold, one whose elements are not inside the arrays
+	 * it was handed, and everything the {@linkplain Gpu class contract} already covers.
+	 *
+	 * <p>
+	 * The result is NOT bit-identical to {@code java.lang.Math}'s answer for the same
+	 * member, and the break is far bigger than the fused multiply-add that separates an
+	 * accelerated product from a scalar one: two correctly-implemented libms simply
+	 * differ in their last ulps, and the device has its own. A caller that needs identity
+	 * must not offer the map. {@code .kb/gpu.md} carries the measured divergence per
+	 * member and per width.
+	 * @param op which member to apply, one of the {@code MAP_*} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements to map
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean map(int op, double[] a, int offsetA, double[] out, int offsetOut, int n) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
+				&& device.map(op, a, offsetA, out, offsetOut, n);
+	}
+
+	/**
+	 * The single-float sibling of {@link #map(int, double[], int, double[], int, int)},
+	 * and the one the hardware is for -- measured at 15-18x this width's kernel time on
+	 * the machine this was tuned on.
+	 * @param op which member to apply, one of the {@code MAP_*} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements to map
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean map(int op, float[] a, int offsetA, float[] out, int offsetOut, int n) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
+				&& device.mapF(op, a, offsetA, out, offsetOut, n);
+	}
+
+	/**
+	 * Whether an element-wise map is one this library will attempt: a member it names, at
+	 * or above the threshold actually in force on this machine, and actually present in
+	 * the two arrays it was handed.
+	 */
+	private static boolean offeredMap(int op, long lengthA, int offsetA, long lengthOut, int offsetOut, int n) {
+		return op >= 0 && op < MAP_OPS && n > 0 && n >= Probe.MAP_MIN_ELEMENTS && offsetA >= 0 && offsetOut >= 0
+				&& (long) offsetA + n <= lengthA && (long) offsetOut + n <= lengthOut;
 	}
 
 	/**

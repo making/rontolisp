@@ -23,6 +23,8 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -123,6 +125,12 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(embedsGpuBridge(
 				compile("(print (linalg::%la-matmul-nd (linalg:zeros '(1 1 1))" + " (linalg:zeros '(1 1 1))))", true)))
 			.isTrue();
+		// And over every ELEMENT-WISE member, for the same reason one step further: a
+		// program whose only linalg call is a transcendental now reaches the device, and
+		// a gate that named only the two products would emit no bridge for it.
+		assertThat(embedsGpuBridge(compile("(print (linalg:erf #d(1.0)))", true))).isTrue();
+		assertThat(embedsGpuBridge(compile("(print (linalg:erf #d(1.0)))", false))).isFalse();
+		assertThat(embedsGpuBridge(compile("(print (linalg:tanh #d(1.0)))", true))).isTrue();
 	}
 
 	@Test
@@ -166,7 +174,9 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(bytes).contains(".visible .entry gemm_f64")
 			.contains(".visible .entry gemm_f32")
 			.contains(".visible .entry gemm_batched_f64")
-			.contains(".visible .entry gemm_batched_f32");
+			.contains(".visible .entry gemm_batched_f32")
+			.contains(".visible .entry map_f64")
+			.contains(".visible .entry map_f32");
 	}
 
 	@Test
@@ -176,6 +186,21 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertMatchesScalarReference("""
 				(defparameter *a* (linalg:reshape (linalg:arange 1 65) '(8 8)))
 				(print (linalg:matmul *a* *a*))
+				""");
+	}
+
+	@Test
+	void aDeclinedElementWiseCallRunsTheSameProgramToTheSameOutputOnAnyMachine() throws Exception {
+		// Below the element threshold, which no device is ever offered -- and above it
+		// for the tier's DECLINED half, which no device is offered at any size.
+		assertMatchesScalarReference("""
+				(defparameter *a* (linalg:linspace -3.0 3.0 16383))
+				(print (linalg:sum (linalg:erf *a*)))
+				""");
+		assertMatchesScalarReference("""
+				(defparameter *a* (linalg:linspace 0.01 9.0 200000))
+				(print (list (linalg:sum (linalg:sqrt *a*)) (linalg:sum (linalg:abs *a*))
+				             (linalg:sum (linalg:negative *a*)) (linalg:sum (linalg:add *a* *a*))))
 				""");
 	}
 
@@ -346,6 +371,66 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(run(compile(probe, true, false, false))).isEqualTo("16778240");
 		assertThat(run(compile(probe, true, false, true))).isEqualTo("16777216");
 		assertThat(run(compile(probe, false, false, true))).isEqualTo("16777216");
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void everyElementWiseMemberAgreesWithTheScalarReferenceToARelativeTolerance() throws Exception {
+		// The compiled half of the precision contract. Not an equality: the device has
+		// its own libm, and at #f it evaluates AT the operand width where the defun
+		// evaluates in double and narrows. The reference is the same program compiled
+		// without the flag, so this pins the SEAM -- the library's own per-member
+		// accuracy is am/ik/gpu/GpuTest's.
+		// The sum is of the ABSOLUTE values: over a symmetric domain sin's own sum
+		// cancels to 1e-16 and a relative tolerance on it would compare two roundings of
+		// zero.
+		String[][] members = { { "exp", "-5.0", "5.0" }, { "log", "0.01", "100.0" }, { "tanh", "-5.0", "5.0" },
+				{ "sin", "-5.0", "5.0" }, { "cos", "-5.0", "5.0" }, { "tan", "-1.4", "1.4" },
+				{ "asin", "-0.999", "0.999" }, { "acos", "-0.999", "0.999" }, { "atan", "-5.0", "5.0" },
+				{ "sinh", "-5.0", "5.0" }, { "cosh", "-5.0", "5.0" }, { "erf", "-3.0", "3.0" } };
+		for (String[] member : members) {
+			String program = """
+					(defparameter *a* (linalg:linspace %s %s 20000%s))
+					(print (linalg:sum (linalg:abs (linalg:%s *a*))))
+					""";
+			for (String width : new String[] { "", " :element-type 'single-float" }) {
+				String source = program.formatted(member[1], member[2], width, member[0]);
+				double accelerated = Double.parseDouble(accel(source));
+				double reference = Double.parseDouble(scalar(source));
+				assertThat(accelerated).as("linalg:%s%s", member[0], width)
+					.isCloseTo(reference, within(1e-6 * Math.abs(reference)));
+			}
+		}
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void anAcceleratedElementWiseCallReallyRanOnTheDevice() {
+		// The guard on the tolerance above: over 20000 inexact elements the device and
+		// the CPU cannot land on the same bits everywhere, so a dead interception would
+		// show here and only here.
+		String program = """
+				(defparameter *a* (linalg:linspace -5.0 5.0 20000))
+				(print (linalg:to-list (linalg:erf *a*)))
+				""";
+		assertThatCode(() -> assertThat(accel(program)).isNotEqualTo(scalar(program))).doesNotThrowAnyException();
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void anElementWiseArgumentFormIsEvaluatedExactlyOnceEvenWhenTheKernelDeclines() throws Exception {
+		// The temps, at a UNARY call site: every decline branch re-reads the operand
+		// temp, so recompiling the argument form would run its side effects again. The
+		// operand is below the threshold, so the kernel really does decline and the
+		// defun really does run.
+		String program = """
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) (linalg:linspace -1.0 1.0 100))
+				(linalg:erf (bump))
+				(print *n*)
+				""";
+		assertThat(accel(program)).isEqualTo("1");
+		assertThat(scalar(program)).isEqualTo("1");
 	}
 
 	@Test

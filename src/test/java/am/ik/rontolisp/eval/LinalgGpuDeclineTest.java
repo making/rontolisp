@@ -91,6 +91,67 @@ class LinalgGpuDeclineTest {
 	}
 
 	@Test
+	void anElementWiseCallBelowTheThresholdIsUntouchedEverywhere() {
+		// 16383 elements is one short of the element-wise threshold, so the device is
+		// never asked and the answer is the CPU's on every machine -- which is what keeps
+		// every example in the repository byte-identical with the flag on.
+		String program = """
+				(defparameter *a* (linalg:linspace -3.0 3.0 16383))
+				(list (linalg:sum (linalg:erf *a*)) (linalg:sum (linalg:exp *a*))
+				      (linalg:sum (linalg:tanh *a*)) (linalg:sum (linalg:sin *a*)))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
+	void theDeclinedHalfOfTheElementWiseTierIsUntouchedAtAnySize() {
+		// sqrt / abs / negative / sign and the binary add / sub / mul / div are not
+		// members: measured, a round trip wins them by 1.4-2x at best and loses them at
+		// #f, so they stay on the CPU however big the array is. Unlike the transcendental
+		// half this IS a byte-identity claim, and it holds on every machine.
+		String program = """
+				(defparameter *a* (linalg:linspace 0.01 9.0 200000))
+				(defparameter *b* (linalg:linspace 0.02 3.0 200000))
+				(list (linalg:sum (linalg:sqrt *a*)) (linalg:sum (linalg:abs *a*))
+				      (linalg:sum (linalg:negative *a*)) (linalg:sum (linalg:sign *a*))
+				      (linalg:sum (linalg:add *a* *b*)) (linalg:sum (linalg:mul *a* *b*)))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
+	void anAcceleratedElementWiseCallStaysWithinARelativeToleranceOfTheOracle() {
+		// The one place this file cannot assert byte-identity, and the reason is the
+		// feature's: above the threshold a transcendental runs on the DEVICE's libm, so
+		// on a machine with a GPU the last digits differ. What must hold everywhere is
+		// the tolerance -- 1e-12 relative at #d, against a measured worst case of 1.0e-15
+		// -- and on a machine without a device the difference is exactly zero.
+		String program = """
+				(defparameter *a* (linalg:linspace -3.0 3.0 20000))
+				(linalg:to-list (linalg:erf *a*))
+				""";
+		double[] accelerated = doubles(eval(program, true));
+		double[] oracle = doubles(eval(program, false));
+		assertThat(accelerated).hasSameSizeAs(oracle);
+		for (int i = 0; i < oracle.length; i++) {
+			if (oracle[i] != 0) {
+				assertThat(Math.abs(accelerated[i] - oracle[i]) / Math.abs(oracle[i])).as("element %d", i)
+					.isLessThan(1e-12);
+			}
+		}
+	}
+
+	/** The elements of a printed {@code (a b c)} list of doubles. */
+	private static double[] doubles(String printed) {
+		String[] parts = printed.substring(1, printed.length() - 1).split(" ");
+		double[] values = new double[parts.length];
+		for (int i = 0; i < parts.length; i++) {
+			values[i] = Double.parseDouble(parts[i]);
+		}
+		return values;
+	}
+
+	@Test
 	void availabilityIsAPropertyOfTheMachineAndIsAlwaysDescribed() {
 		// The CLI prints description() when the flag cannot be honoured, so it must say
 		// something on every machine rather than throw on one with no driver at all.

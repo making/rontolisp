@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * The half of {@code am.ik.gpu} that needs a GPU on the machine, and therefore runs only
@@ -255,6 +256,164 @@ class GpuTest {
 		assertThat(Gpu.multiply(a, 0, b, 0, out, 1, n, n, n)).isFalse();
 		assertThat(Gpu.multiply(a, 0, b, 0, out, -1, n, n, n)).isFalse();
 		assertThat(Gpu.multiply(a, 0, b, 0, new double[n], 0, n, n, n)).isFalse();
+	}
+
+	@Test
+	void everyElementWiseMemberComputesItsOwnFunction() {
+		// The op code is a PARAMETER of one kernel, so a mis-numbered constant would
+		// silently compute a different member -- and every value would still look
+		// plausible. Each op is checked against java.lang.Math over a domain the member
+		// is defined on, which is the only assertion that catches that.
+		int n = (int) Gpu.mapMinElements() * 2;
+		int[] ops = { Gpu.MAP_EXP, Gpu.MAP_LOG, Gpu.MAP_TANH, Gpu.MAP_SIN, Gpu.MAP_COS, Gpu.MAP_TAN, Gpu.MAP_ASIN,
+				Gpu.MAP_ACOS, Gpu.MAP_ATAN, Gpu.MAP_SINH, Gpu.MAP_COSH, Gpu.MAP_ERF };
+		assertThat(ops).hasSize(Gpu.MAP_OPS);
+		for (int op : ops) {
+			double[] a = new double[n], out = new double[n];
+			float[] af = new float[n], outF = new float[n];
+			for (int i = 0; i < n; i++) {
+				a[i] = domain(op, i, n);
+				af[i] = (float) a[i];
+			}
+			assertThat(Gpu.map(op, a, 0, out, 0, n)).as("op %d", op).isTrue();
+			assertThat(Gpu.map(op, af, 0, outF, 0, n)).as("op %d f32", op).isTrue();
+			for (int i = 0; i < n; i += 97) {
+				double expected = scalar(op, a[i]);
+				// Two libms differ in their last ulps and the device has its own; the
+				// contract is a relative tolerance, not equality, and this is where the
+				// number in .kb/gpu.md's precision table is defended. Measured worst
+				// case on the machine this was written on: 1.0e-15 at f64 (erf, whose
+				// rontolisp oracle is a series rather than a correctly-rounded erf) and
+				// 1.7e-7 at f32, where the device evaluates AT the operand width.
+				assertThat(Math.abs(out[i] - expected) / Math.abs(expected)).as("op %d at %f", op, a[i])
+					.isLessThan(1e-12);
+				assertThat(Math.abs(outF[i] - expected) / Math.abs(expected)).as("op %d at %f f32", op, a[i])
+					.isLessThan(1e-5);
+			}
+		}
+	}
+
+	/** An input the given member is defined on, spread over its interesting range. */
+	private static double domain(int op, int i, int n) {
+		double t = (i + 0.5) / n;
+		if (op == Gpu.MAP_LOG) {
+			return 0.01 + t * 100;
+		}
+		if (op == Gpu.MAP_ASIN || op == Gpu.MAP_ACOS) {
+			return -0.9 + 1.8 * t;
+		}
+		if (op == Gpu.MAP_TAN) {
+			return -1.4 + 2.8 * t;
+		}
+		return -3.0 + 6.0 * t;
+	}
+
+	private static double scalar(int op, double x) {
+		if (op == Gpu.MAP_EXP) {
+			return Math.exp(x);
+		}
+		if (op == Gpu.MAP_LOG) {
+			return Math.log(x);
+		}
+		if (op == Gpu.MAP_TANH) {
+			return Math.tanh(x);
+		}
+		if (op == Gpu.MAP_SIN) {
+			return Math.sin(x);
+		}
+		if (op == Gpu.MAP_COS) {
+			return Math.cos(x);
+		}
+		if (op == Gpu.MAP_TAN) {
+			return Math.tan(x);
+		}
+		if (op == Gpu.MAP_ASIN) {
+			return Math.asin(x);
+		}
+		if (op == Gpu.MAP_ACOS) {
+			return Math.acos(x);
+		}
+		if (op == Gpu.MAP_ATAN) {
+			return Math.atan(x);
+		}
+		if (op == Gpu.MAP_SINH) {
+			return Math.sinh(x);
+		}
+		if (op == Gpu.MAP_COSH) {
+			return Math.cosh(x);
+		}
+		return erf(x);
+	}
+
+	/**
+	 * {@code linalg.lisp}'s own A&S 7.1.6 series, which is the oracle {@code erf} has.
+	 */
+	private static double erf(double x) {
+		double ax = Math.abs(x);
+		if (ax >= 6) {
+			return Math.signum(x);
+		}
+		double term = 1, total = 1;
+		for (int k = 1; k <= 200; k++) {
+			term = term * 2 * ax * ax / (2 * k + 1);
+			total += term;
+			if (term < 1e-17 * total) {
+				break;
+			}
+		}
+		return Math.signum(x) * 1.1283791670955126 * ax * Math.exp(-ax * ax) * total;
+	}
+
+	@Test
+	void anElementWiseMapReadsAndWritesFromItsOwnOffset() {
+		// The compiled backend's arrays carry a [rank, dim..., data...] header, so a map
+		// is handed an offset on the operand AND on the destination -- and the
+		// destination's header must survive, since the result keeps the operand's shape.
+		int n = (int) Gpu.mapMinElements() * 2;
+		double[] a = new double[n + 3], out = new double[n + 3];
+		for (int i = 0; i < n; i++) {
+			a[3 + i] = 0.5 + i * 0.001;
+		}
+		out[0] = 2;
+		out[1] = 7;
+		out[2] = 11;
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 3, out, 3, n)).isTrue();
+		assertThat(out[0]).isEqualTo(2);
+		assertThat(out[1]).isEqualTo(7);
+		assertThat(out[2]).isEqualTo(11);
+		for (int i = 0; i < n; i += 89) {
+			assertThat(out[3 + i]).isCloseTo(Math.exp(a[3 + i]), within(1e-12 * Math.exp(a[3 + i])));
+		}
+	}
+
+	@Test
+	void everyElementWiseDeclineConditionStillDeclinesWithADevicePresent() {
+		int n = (int) Gpu.mapMinElements() * 2;
+		double[] a = new double[n], out = new double[n];
+		assertThat(Gpu.worthMap(8)).isFalse();
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 0, 8)).isFalse();
+		assertThat(Gpu.map(Gpu.MAP_OPS, a, 0, out, 0, n)).isFalse();
+		assertThat(Gpu.map(-1, a, 0, out, 0, n)).isFalse();
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 1, out, 0, n)).isFalse();
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 1, n)).isFalse();
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
+	void aRunOfElementWiseMapsFreesEveryBufferItAllocates() {
+		// The map path allocates TWO buffers rather than three and frees them in its own
+		// finally; the product's leak test cannot cover it.
+		CudaGemm gemm = Gpu.device();
+		assertThat(gemm).isNotNull();
+		int n = 1 << 18;
+		double[] a = new double[n], c = new double[n];
+		assertThat(gemm.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
+		long before = gemm.freeDeviceMemory();
+		assertThat(before).isGreaterThan(0);
+		for (int i = 0; i < 1000; i++) {
+			assertThat(gemm.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
+		}
+		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(256L << 20);
 	}
 
 	@Test

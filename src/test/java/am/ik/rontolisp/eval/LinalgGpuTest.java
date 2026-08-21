@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
@@ -130,9 +131,20 @@ class LinalgGpuTest {
 		assertThat(eval("(linalg:zeros 1) #'linalg::%la-matmul-nd", true).print())
 			.isEqualTo("#<function LINALG::%LA-MATMUL-ND>");
 		assertThat(eval("(linalg:zeros 1) #'linalg::%la-matmul-nd", false).print()).isEqualTo("#<lambda>");
-		// Two members and no others: matmul is accelerated through them, not instead of
-		// them.
-		for (String member : new String[] { "matmul", "add", "sum", "outer", "transpose" }) {
+		// And every element-wise member the device takes.
+		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
+				"cosh", "erf" }) {
+			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member)
+				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
+			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+		// Fourteen members and no others. matmul, square, relu and the exact torch:gelu
+		// are accelerated THROUGH them, not instead of them; and sqrt / abs / negative /
+		// sign are the element-wise tier's DECLINED half -- one machine instruction per
+		// element, which a round trip cannot pay for -- so they must still be the
+		// library's own lambdas under the flag.
+		for (String member : new String[] { "matmul", "add", "sub", "mul", "div", "sum", "outer", "transpose", "sqrt",
+				"abs", "negative", "sign", "maximum", "minimum" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member).isEqualTo("#<lambda>");
 		}
 	}
@@ -242,6 +254,145 @@ class LinalgGpuTest {
 		assertThat(stacked).isEqualTo(flat);
 		double[] oracle = elements(eval(slab + "(linalg:matmul *a* *b*)", false));
 		assertThat(divergence(stacked, oracle)).isLessThan(1e-13).isGreaterThan(0);
+	}
+
+	// --- the element-wise tier -------------------------------------------------------
+
+	/** The twelve members the device takes, with a domain each is defined on. */
+	private static String[][] elementWiseMembers() {
+		return new String[][] { { "exp", "-5.0", "5.0" }, { "log", "0.01", "100.0" }, { "tanh", "-5.0", "5.0" },
+				{ "sin", "-5.0", "5.0" }, { "cos", "-5.0", "5.0" }, { "tan", "-1.4", "1.4" },
+				{ "asin", "-0.999", "0.999" }, { "acos", "-0.999", "0.999" }, { "atan", "-5.0", "5.0" },
+				{ "sinh", "-5.0", "5.0" }, { "cosh", "-5.0", "5.0" }, { "erf", "-3.0", "3.0" } };
+	}
+
+	/** The worst PER-ELEMENT relative difference. */
+	private static double worstRelative(double[] accelerated, double[] reference) {
+		double worst = 0;
+		for (int i = 0; i < reference.length; i++) {
+			if (reference[i] != 0) {
+				worst = Math.max(worst, Math.abs(accelerated[i] - reference[i]) / Math.abs(reference[i]));
+			}
+		}
+		return worst;
+	}
+
+	@Test
+	void everyElementWiseMemberAgreesWithTheOracleOnlyToARelativeTolerance() {
+		// The NEW half of the precision contract, and the sharpest break --gpu makes with
+		// the other backends: an accelerated transcendental is not the scalar defun's
+		// answer rounded differently in one place, it is a DIFFERENT libm. Measured on an
+		// NVIDIA GB10 over 400 samples per member: worst 2.0e-16 to 1.0e-15 relative at
+		// #d (~1 ulp, except erf's ~4.5 -- its CPU oracle is an A&S series rather than a
+		// correctly-rounded erf) and 1.1e-7 to 1.7e-7 at #f, where the device evaluates
+		// AT the operand width while the defun evaluates in double and narrows. The
+		// spike's feared 4.87e-5 on tanh does not reproduce anywhere here.
+		for (String[] member : elementWiseMembers()) {
+			String program = """
+					(defparameter *a* (linalg:linspace %s %s 20000%s))
+					(linalg:%s *a*)
+					""";
+			String doubles = program.formatted(member[1], member[2], "", member[0]);
+			assertThat(worstRelative(elements(eval(doubles, true)), elements(eval(doubles, false))))
+				.as("#d linalg:%s", member[0])
+				.isLessThan(1e-12);
+			String singles = program.formatted(member[1], member[2], " :element-type 'single-float", member[0]);
+			assertThat(worstRelative(elements(eval(singles, true)), elements(eval(singles, false))))
+				.as("#f linalg:%s", member[0])
+				.isLessThan(1e-5);
+		}
+	}
+
+	@Test
+	void anAcceleratedElementWiseCallReallyRanOnTheDevice() {
+		// The tolerance above would pass on a dead flag, so this is its guard: over
+		// 20000 inexact elements the device and the CPU cannot land on the same bits for
+		// every one of them, and the difference must appear at BOTH widths.
+		String program = """
+				(defparameter *a* (linalg:linspace -5.0 5.0 20000%s))
+				(linalg:erf *a*)
+				""";
+		assertThat(elements(eval(program.formatted(""), true)))
+			.isNotEqualTo(elements(eval(program.formatted(""), false)));
+		assertThat(elements(eval(program.formatted(" :element-type 'single-float"), true)))
+			.isNotEqualTo(elements(eval(program.formatted(" :element-type 'single-float"), false)));
+	}
+
+	@Test
+	void theExactGeluIsAcceleratedThroughErf() {
+		// torch:gelu's default (:approximate :none) is built on linalg:erf, which is the
+		// member the CPU is slowest at by an order of magnitude -- so the tier's whole
+		// case is that this call moves. It is reached transitively, exactly as
+		// linalg:matmul reaches the product.
+		String program = """
+				(defparameter *x* (torch:tensor (linalg:linspace -3.0 3.0 20000)))
+				(linalg:sum (torch:data (torch:gelu *x*)))
+				""";
+		double accelerated = ((am.ik.rontolisp.LispDouble) eval(program, true)).value();
+		double oracle = ((am.ik.rontolisp.LispDouble) eval(program, false)).value();
+		// A SUM of 20000 device-computed elements, so the tolerance is looser than the
+		// per-element one above by about the count: measured 2.0e-9 relative here.
+		assertThat(accelerated).isNotEqualTo(oracle).isCloseTo(oracle, within(1e-7 * Math.abs(oracle)));
+	}
+
+	@Test
+	void anElementWiseCallBelowTheThresholdIsByteIdenticalToTheOracle() {
+		// The threshold is one more decline, so everything under it is untouched -- and
+		// that is what keeps a program whose arrays are small byte-identical with the
+		// flag on. 16383 elements is one short of it.
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:linspace -3.0 3.0 16383))
+				(list (linalg:sum (linalg:erf *a*)) (linalg:sum (linalg:exp *a*))
+				      (linalg:sum (linalg:tanh *a*)))
+				""");
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:linspace -3.0 3.0 16383 :element-type 'single-float))
+				(linalg:to-list (linalg:erf *a*))
+				""");
+	}
+
+	@Test
+	void theDeclinedHalfOfTheTierIsByteIdenticalAtAnySize() {
+		// sqrt / abs / negative / sign and the binary add / sub / mul / div are NOT
+		// offered -- measured, the device wins them by 1.4-2x at best and loses them
+		// outright at #f -- so they must stay bit-identical however large the array is.
+		// This is the assertion that fails if someone widens the member set without
+		// measuring it.
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:linspace 0.01 9.0 1000000))
+				(defparameter *b* (linalg:linspace 0.02 3.0 1000000))
+				(list (linalg:sum (linalg:sqrt *a*)) (linalg:sum (linalg:abs *a*))
+				      (linalg:sum (linalg:negative *a*)) (linalg:sum (linalg:sign *a*))
+				      (linalg:sum (linalg:add *a* *b*)) (linalg:sum (linalg:mul *a* *b*))
+				      (linalg:sum (linalg:div *a* *b*)) (linalg:sum (linalg:sub *a* *b*)))
+				""");
+	}
+
+	@Test
+	void aDeclinedElementWiseOperandRunsTheScalarDefunUnchanged() {
+		// A general (boxed) array and a plain number: the defun's own dispatch, above
+		// the threshold as well as below it.
+		assertMatchesScalarOracle("(linalg:to-list (linalg:exp #(1 2 3)))");
+		assertMatchesScalarOracle("(linalg:to-list (linalg:erf #(0.5 1.5)))");
+	}
+
+	@Test
+	void anElementWiseCallComposesWithTheOtherFlagsWithoutChangingItsAnswer() {
+		// --blas has no rung in the element-wise chain (it takes only linalg:dot), and
+		// the --simd lane kernel is bit-identical to the defun for these members, so
+		// there is no legible fallback probe of the kind the product has. What CAN be
+		// pinned is the composition: whichever CPU flags are also on, the answer is the
+		// DEVICE's, and it is the same one every time.
+		String program = """
+				(defparameter *a* (linalg:linspace -3.0 3.0 20000))
+				(linalg:to-list (linalg:erf *a*))
+				""";
+		String device = eval(program, true, false, false).print();
+		assertThat(eval(program, true, false, true).print()).isEqualTo(device);
+		if (LinalgBlas.available()) {
+			assertThat(eval(program, true, true, true).print()).isEqualTo(device);
+		}
+		assertThat(eval(program, false, false, true).print()).isNotEqualTo(device);
 	}
 
 	// --- what it declines ------------------------------------------------------------

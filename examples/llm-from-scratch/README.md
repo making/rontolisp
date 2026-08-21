@@ -107,20 +107,31 @@ MLP. See
 ## `--gpu`
 
 The same batched product is what
-[`--gpu`](../../doc/en/guides/simd-acceleration.md#accelerating-the-matrix-product-on-a-gpu---gpu)
-routes to an NVIDIA device. **At the shapes tested here it changes nothing**,
-and that is the intended answer: a stack of `4 x 8x8` products is a few thousand
-multiply-adds, far under the threshold a 15 us round trip has to clear, so every
-one of them declines and the output stays byte-identical with the flag and
-without it.
+[`--gpu`](../../doc/en/guides/simd-acceleration.md#accelerating-the-matrix-product-and-the-transcendentals-on-a-gpu---gpu)
+routes to an NVIDIA device, along with the element-wise transcendentals
+(`exp`, `tanh`, `erf` and nine more) that `gelu`, `softmax` and `log-softmax`
+are built from. **At the shapes tested here it changes nothing**, and that is
+the intended answer: a stack of `4 x 8x8` products is a few thousand
+multiply-adds and an activation is a few hundred elements, both far under the
+thresholds a 15 us round trip has to clear, so every call declines and the
+output stays byte-identical with the flag and without it.
 
 It is the shapes in the next section that the flag is for. With
 `chapter03/train-gpt-soseki.lisp` raised to the notebook's own `*n-embd*` 384 and
 `*block-size*` 256 -- the one-line change the file describes -- a training step
-on the JVM class output runs 1.9x faster with `--gpu --simd` than with `--simd`
-alone (0.79 s -> 0.43 s per step, same machine as above). The remaining half of
-the step is the element-wise tier, the softmax, the layer norms and the exact
-`gelu`, none of which is on the device yet.
+on the JVM class output runs **2.3x faster** with `--gpu --simd` than with
+`--simd` alone (0.82 s -> 0.36 s per step, same machine as above; it was 0.43 s
+before the transcendentals joined the device set). What is left is `softmax`,
+`layer-norm` and the AdamW update, each a CHAIN of cheap element-wise members
+that individually lose a round trip -- so what would move them is keeping the
+array on the device between calls, not accelerating more members.
+
+Note that once a transcendental runs on the device, a program that touches one
+is no longer byte-identical with the flag and without it: the device carries its
+own `exp` and `erf`, which differ from the CPU's in the last digit or two, and
+over 20 training steps that is enough to move the sampled text. The guide's
+precision section has the measured divergence; `CUDA_VISIBLE_DEVICES=` makes any
+flagged run identical to an unflagged one again.
 
 ## The shapes: the book's, and the ones that are tested
 

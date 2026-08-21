@@ -20,12 +20,23 @@ Three backends, one per interception mechanism:
 (`.kb/gpu.md`) a THIRD -- both on the interpreter and the JVM only, since both call out
 through the foreign function API: they put a tuned CBLAS's `gemm`, and a device product
 ahead of that, in front of the lane kernel for `linalg:dot` -- and since 2026-08-21 `--gpu`
-also takes `%la-matmul-nd`, where it has no `--blas` neighbour (the stacked chain is
-device -> lane kernel -> defun). That is why the JVM
+also takes `%la-matmul-nd` and the twelve element-wise members whose scalar cost is a libm
+call (`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`),
+where it has no `--blas` neighbour (those chains are device -> lane kernel -> defun). That
+is why the JVM
 interceptor is named `JvmLinalgKernelCompiler` rather than `JvmLinalgSimdCompiler` -- it
 emits a CHAIN of up to three attempts over one set of temps, ending at the scalar defun.
 Nothing below changes: with `--blas` and `--gpu` off, a `--simd` build emits and computes
 exactly what it did before.
+
+**`--gpu` is the one flag over this seam whose element-wise results are NOT bit-identical
+to the defun**, which is the contract this file states for every member of its own set:
+the device has its own libm, and at `#f` it evaluates AT the operand width where these
+kernels evaluate in double and narrow. `.kb/gpu.md` carries the per-member divergence
+table and the tolerance its tests pin. Nothing in the precision contract BELOW moves --
+a call the device declines is still the lane kernel's, and the lane kernel is still
+bit-identical -- but a program run under `--gpu` is no longer comparable byte for byte
+with one run under `--simd`, and `.kb/gpu.md` says what replaced that check.
 
 The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md` (the `--simd`
 guide, shared with `vec:`). Keep the intercepted set, the declined-input fallback and the
@@ -205,7 +216,8 @@ SLOWER on wasm-GC (it paid the `TYPE_VBLOCK` `_v_get`/`_v_set` cost this file op
 and got nothing back).
 
 **`--gpu` intercepts this member too** (2026-08-21, `.kb/gpu.md`'s "The stacked matrix
-product"), and the batch odometer is exactly where the two differ: the device walks the
+product"; it took the todo-109 unary ufuncs and `erf` the same day, `.kb/gpu.md`'s "The
+element-wise tier"), and the batch odometer is exactly where the two differ: the device walks the
 batch with ONE stride per operand, so a broadcast leading axis is stride 0 as it is here,
 but a broadcast axis sitting UNDER a non-broadcast one is a decline there and lands back
 on this kernel. The threshold there is the TOTAL work, `batch*n*m*p`, since a stack is one

@@ -411,7 +411,8 @@ public final class RontoLispCli {
 		}
 	}
 
-	// --gpu routes the linalg: matrix product to an NVIDIA GPU. Like --blas the answer is
+	// --gpu routes the linalg: matrix product and the element-wise transcendentals to an
+	// NVIDIA GPU. Like --blas the answer is
 	// a property of the machine rather than of the build, so a decline is an ordinary
 	// outcome; unlike --blas the probe itself costs something (a dlopen, a cuInit, a
 	// retained primary context and a PTX JIT), which is why nothing asks unless the flag
@@ -421,7 +422,7 @@ public final class RontoLispCli {
 			evaluator.setGpu(true);
 		}
 		else {
-			warn("--gpu: " + LinalgGpu.description() + "; running the linalg: matrix product unaccelerated.");
+			warn("--gpu: " + LinalgGpu.description() + "; running the linalg: kernels unaccelerated.");
 		}
 	}
 
@@ -1160,9 +1161,14 @@ public final class RontoLispCli {
 		this.out.println("                     library reorders its reduction, so results are close to but not");
 		this.out.println("                     bit-identical to the other backends. RONTOLISP_BLAS names a");
 		this.out.println("                     library outright; RONTOLISP_BLAS_VERBOSE=1 prints what was bound.");
-		this.out.println("  --gpu              Route the linalg: matrix product to an NVIDIA GPU");
-		this.out.println("                     Both shapes: the rank-2 product and the stacked rank >= 3 one");
-		this.out.println("                     (torch.bmm), which is a transformer's whole hot path.");
+		this.out.println("  --gpu              Route the linalg: matrix product and the transcendentals to");
+		this.out.println("                     an NVIDIA GPU");
+		this.out.println("                     Both product shapes: the rank-2 one and the stacked rank >= 3");
+		this.out.println("                     one (torch.bmm), which is a transformer's whole hot path; plus");
+		this.out.println("                     the element-wise exp/log/tanh/sin/cos/tan/asin/acos/atan/");
+		this.out.println("                     sinh/cosh/erf. sqrt/abs/negative/sign and add/sub/mul/div stay");
+		this.out.println("                     on the CPU: they are one instruction per element and a round");
+		this.out.println("                     trip cannot pay for them.");
 		this.out.println("                     Interpreter (incl. the native binary) and JVM (.class) only --");
 		this.out.println("                     the CUDA driver is reached through the foreign function API,");
 		this.out.println("                     which WASM does not have. A compiled .class carries the whole");
@@ -1172,10 +1178,12 @@ public final class RontoLispCli {
 		this.out.println("                     no CUDA toolkit. A machine without a device runs the same");
 		this.out.println("                     programs, unaccelerated. Only products above ~51x51x51 are");
 		this.out.println("                     offered -- for a rank >= 3 stack that bound is on the TOTAL");
-		this.out.println("                     work, since the whole stack is one round trip; everything");
-		this.out.println("                     smaller stays on the CPU. The device kernel");
-		this.out.println("                     fuses each multiply-add, so results are close to but not");
-		this.out.println("                     bit-identical to the other backends.");
+		this.out.println("                     work, since the whole stack is one round trip -- and only");
+		this.out.println("                     element-wise calls over 16384 elements; everything smaller");
+		this.out.println("                     stays on the CPU. THE ONLY FLAG WHOSE RESULTS DO NOT MATCH THE");
+		this.out.println("                     OTHER BACKENDS ELEMENTWISE: the product fuses each multiply-add");
+		this.out.println("                     and the device has its own libm, so an accelerated exp/erf/...");
+		this.out.println("                     differs in the last few digits (and more at single float).");
 		this.out.println("  --no-prune         Keep every spliced library function in the compiled output");
 		this.out.println("                     By default unreachable library definitions (linalg:/vec:/...)");
 		this.out.println("                     are dropped at compile time; names forged at runtime from");

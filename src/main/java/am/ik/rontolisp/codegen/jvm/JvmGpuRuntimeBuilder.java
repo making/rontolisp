@@ -38,11 +38,13 @@ import am.ik.jvm.Opcode;
  * {@code am.ik.gpu} and type-checked by javac.
  *
  * <p>
- * It costs no more than the mechanism it generalizes: the six class files and the PTX
- * text come to ~58 KB, base64 ~78 KB, against the {@code --simd} template's 62 KB class
- * (~83 KB base64) that any {@code linalg} program under that flag already carries. See
- * {@code .kb/gpu.md} for the decision and {@code .kb/template-class-embedding.md} for the
- * demerits every template shares.
+ * It costs no more than the mechanism it generalizes: the six class files come to 48 KB
+ * (base64 65 KB) and the PTX to 85 KB, against the {@code --simd} template's 62 KB class
+ * (~83 KB base64) that any {@code linalg} program under that flag already carries. Two
+ * thirds of the PTX is the element-wise tier and half of THAT is {@code sin} /
+ * {@code cos} / {@code tan}, whose argument reduction is enormous; the measurement that
+ * says they earn it anyway is in {@code .kb/gpu.md}, beside
+ * {@code .kb/template-class-embedding.md} for the demerits every template shares.
  *
  * <h2>The kernels cannot be a resource on the other side</h2>
  *
@@ -85,6 +87,14 @@ final class JvmGpuRuntimeBuilder {
 
 	/** The {@code ops} key of the STACKED (rank &gt;= 3) kernel. */
 	static final String MATMUL_ND = "matmulNd";
+
+	/**
+	 * The {@code ops} keys of the ELEMENT-WISE kernels, one per bridge method. The key is
+	 * the method name, which is what {@link JvmLinalgGpu#kernelKey} composes from the
+	 * member, so the two need no table between them.
+	 */
+	private static final List<String> MAP_KERNELS = List.of("gpuExp", "gpuLog", "gpuTanh", "gpuSin", "gpuCos", "gpuTan",
+			"gpuAsin", "gpuAcos", "gpuAtan", "gpuSinh", "gpuCosh", "gpuErf");
 
 	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
 	private static final int CHUNK_SIZE = 40000;
@@ -147,6 +157,10 @@ final class JvmGpuRuntimeBuilder {
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(MATMUL_ND, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNd"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		for (String kernel : MAP_KERNELS) {
+			ops.put(kernel, cp.addMethodref(bridgeClass,
+					cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"))));
+		}
 
 		// --- _gpuInit body ---------------------------------------------------------
 		// if (_gpuInited != 0) return;

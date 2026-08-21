@@ -111,6 +111,49 @@ class GpuDeclineTest {
 	}
 
 	@Test
+	void anElementWiseMapBelowTheSizeThresholdIsNeverOffered() {
+		// The element-wise threshold counts ELEMENTS, not multiply-adds, so it is four
+		// orders of magnitude below the product's: a map is one libm call per element.
+		assertThat(Gpu.worthMap(1)).isFalse();
+		assertThat(Gpu.worthMap(4096)).isFalse();
+		assertThat(Gpu.worthMap(16383)).isFalse();
+		assertThat(Gpu.worthMap(16384)).isTrue();
+		assertThat(Gpu.worthMap(0)).isFalse();
+		assertThat(Gpu.worthMap(-1)).isFalse();
+	}
+
+	@Test
+	void everyElementWiseDeclineConditionDeclinesRatherThanThrows() {
+		int n = (int) Gpu.mapMinElements() * 2;
+		double[] a = new double[n], out = new double[n];
+		float[] af = new float[n], outF = new float[n];
+		assertThatCode(() -> {
+			// Below the threshold, at every width.
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 0, 8)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, af, 0, outF, 0, 8)).isFalse();
+			// An op code this library does not name. It must NOT quietly compute some
+			// other member: the kernel's default case is the identity and this is the
+			// guard in front of it.
+			assertThat(Gpu.map(-1, a, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_OPS, a, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Integer.MAX_VALUE, af, 0, outF, 0, n)).isFalse();
+			// Elements that are not inside the arrays they were promised in.
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 1, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 1, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, -1, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, new double[8], 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, af, 0, new float[8], 0, n)).isFalse();
+			// A degenerate count.
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 0, 0)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 0, -1)).isFalse();
+		}).doesNotThrowAnyException();
+		// A declined map leaves the destination alone, on a machine with a device and on
+		// one without.
+		assertThat(out).containsOnly(0.0);
+		assertThat(outF).containsOnly(0.0f);
+	}
+
+	@Test
 	void aStackBelowTheSizeThresholdIsNeverOffered() {
 		// A batch is ONE round trip and one launch, so the threshold is over the TOTAL
 		// work: what the device has to beat is the CPU's cost for the whole stack, and
@@ -217,6 +260,11 @@ class GpuDeclineTest {
 		// dropped them would leave a build whose probe declines on every machine.
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F64);
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F32);
+		// And the element-wise pair, whose op codes are the other half of a mirror
+		// nothing links: Gpu.MAP_* names them and gemm.cu switches on them.
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_MAP_F64);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_MAP_F32);
+		assertThat(resource("gemm.cu")).contains("case " + Gpu.MAP_ERF + ": return erf(x);");
 		// The regeneration command travels with the artifact: without it the .ptx is an
 		// unreproducible blob.
 		assertThat(ptx).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");

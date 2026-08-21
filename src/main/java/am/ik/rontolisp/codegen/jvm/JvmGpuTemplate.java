@@ -8,8 +8,10 @@ import org.jspecify.annotations.Nullable;
  * passed: {@code linalg:dot} over two packed rank-2 operands -- and through it
  * {@code linalg:matmul} at rank 2 and {@code linalg:solve} -- is lowered to a call on
  * {@link #gpuDot}, and {@code linalg::%la-matmul-nd}, the STACKED product behind
- * {@code linalg:matmul} at rank &gt;= 3, onto {@link #gpuMatmulNd}. Both offer their
- * product to an NVIDIA device and decline everything else.
+ * {@code linalg:matmul} at rank &gt;= 3, onto {@link #gpuMatmulNd}. The ELEMENT-WISE tier
+ * is the twelve {@link #gpuExp} siblings, one per {@code linalg:} unary ufunc whose
+ * scalar cost is a libm call. All of them offer their work to an NVIDIA device and
+ * decline everything else.
  *
  * <p>
  * The compiled sibling of {@code eval/LinalgGpuKernels}, and unlike
@@ -182,6 +184,161 @@ final class JvmGpuTemplate {
 		c[rank] = p;
 		return Gpu.multiply(doubles(a), 1 + ra, (int) sa, doubles(b), 1 + rb, (int) sb, c, off, batch, n, m, p) ? c
 				: null;
+	}
+
+	/**
+	 * {@code (linalg:exp a)} and its eleven siblings over a packed operand of either
+	 * width and any rank -- the ELEMENT-WISE tier. One method per member, because the
+	 * emitted call site names its kernel by an {@code ops} key and loads the member's own
+	 * arguments; they all reach the same {@link #map}.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuExp(@Nullable Object a) {
+		return map(Gpu.MAP_EXP, a);
+	}
+
+	/**
+	 * {@code (linalg:log a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuLog(@Nullable Object a) {
+		return map(Gpu.MAP_LOG, a);
+	}
+
+	/**
+	 * {@code (linalg:tanh a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuTanh(@Nullable Object a) {
+		return map(Gpu.MAP_TANH, a);
+	}
+
+	/**
+	 * {@code (linalg:sin a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSin(@Nullable Object a) {
+		return map(Gpu.MAP_SIN, a);
+	}
+
+	/**
+	 * {@code (linalg:cos a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuCos(@Nullable Object a) {
+		return map(Gpu.MAP_COS, a);
+	}
+
+	/**
+	 * {@code (linalg:tan a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuTan(@Nullable Object a) {
+		return map(Gpu.MAP_TAN, a);
+	}
+
+	/**
+	 * {@code (linalg:asin a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuAsin(@Nullable Object a) {
+		return map(Gpu.MAP_ASIN, a);
+	}
+
+	/**
+	 * {@code (linalg:acos a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuAcos(@Nullable Object a) {
+		return map(Gpu.MAP_ACOS, a);
+	}
+
+	/**
+	 * {@code (linalg:atan a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuAtan(@Nullable Object a) {
+		return map(Gpu.MAP_ATAN, a);
+	}
+
+	/**
+	 * {@code (linalg:sinh a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSinh(@Nullable Object a) {
+		return map(Gpu.MAP_SINH, a);
+	}
+
+	/**
+	 * {@code (linalg:cosh a)} on the device.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuCosh(@Nullable Object a) {
+		return map(Gpu.MAP_COSH, a);
+	}
+
+	/**
+	 * {@code (linalg:erf a)} on the device -- the exact {@code torch:gelu}'s inner
+	 * member, and the one the CPU is slowest at by an order of magnitude.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuErf(@Nullable Object a) {
+		return map(Gpu.MAP_ERF, a);
+	}
+
+	/**
+	 * One element-wise unary ufunc: {@code out[i] = op(a[i])} over the whole packed
+	 * operand, one round trip, the result carrying the operand's own header. Declines a
+	 * general (boxed) array, a plain number, and an array below the element threshold --
+	 * and, as every kernel over this seam does, everything else it does not handle.
+	 */
+	private static @Nullable Object map(int op, @Nullable Object a) {
+		if (!(a instanceof double[]) && !(a instanceof float[])) {
+			return null;
+		}
+		boolean single = a instanceof float[];
+		int rank = rank(a);
+		if (rank < 1) {
+			return null;
+		}
+		int off = 1 + rank;
+		long count = 1;
+		for (int i = 0; i < rank; i++) {
+			count *= dim(a, i);
+		}
+		int length = single ? floats(a).length : doubles(a).length;
+		if (count < 1 || count != length - off || !Gpu.worthMap(count)) {
+			return null;
+		}
+		// Asked before the result is allocated, and cached from then on: on a machine
+		// with no device this is what keeps a big map from allocating a result it is
+		// about to throw away on every call.
+		if (!Gpu.available()) {
+			return null;
+		}
+		int n = (int) count;
+		if (single) {
+			float[] source = floats(a);
+			float[] c = new float[length];
+			System.arraycopy(source, 0, c, 0, off);
+			return Gpu.map(op, source, off, c, off, n) ? c : null;
+		}
+		double[] source = doubles(a);
+		double[] c = new double[length];
+		System.arraycopy(source, 0, c, 0, off);
+		return Gpu.map(op, source, off, c, off, n) ? c : null;
 	}
 
 	/**

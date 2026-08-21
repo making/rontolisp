@@ -15,9 +15,9 @@ import static am.ik.gpu.CudaDriver.P;
 
 /**
  * The device side of {@code --gpu}: one primary context, one module JIT-compiled from the
- * checked-in PTX, and the four tiled GEMM kernels it exports -- one product and one STACK
- * of products, at each width. Everything that can fail fails into a decline; nothing here
- * throws.
+ * checked-in PTX, and the six kernels it exports -- a tiled matrix product, a STACK of
+ * them and an element-wise map, at each width. Everything that can fail fails into a
+ * decline; nothing here throws.
  *
  * <h2>The kernel comes from a PTX text, not from a toolkit</h2>
  *
@@ -78,6 +78,31 @@ final class CudaGemm {
 	 * ({@code .kb/linalg-simd.md}).
 	 */
 	static final String KERNEL_BATCHED_F64 = "gemm_batched_f64", KERNEL_BATCHED_F32 = "gemm_batched_f32";
+
+	/**
+	 * The ELEMENT-WISE map kernels, one per width. The member is an op-code PARAMETER
+	 * rather than an entry point of its own ({@link Gpu#MAP_EXP} and its siblings, which
+	 * {@code gemm.cu} switches on), so the module lookup is fixed however the member set
+	 * grows and the branch is uniform across the grid.
+	 */
+	static final String KERNEL_MAP_F64 = "map_f64", KERNEL_MAP_F32 = "map_f32";
+
+	/**
+	 * Threads per block for the element-wise maps. They are one-dimensional and each
+	 * thread does one element, so the only requirement is a multiple of the warp; 256 is
+	 * the usual answer and the kernel is bandwidth-bound at f32 either way.
+	 */
+	private static final int MAP_BLOCK = 256;
+
+	/**
+	 * What one element of an element-wise map is charged as, for the safepoint threshold
+	 * {@link #SYNC_FLOPS_PER_MULTIPROCESSOR} sets. A libm call is dozens of operations
+	 * and 64 is the order of the slowest of them; on the 48-SM machine this was
+	 * calibrated on it puts the explicit wait at n = 2^22, where the f64 {@code erf}
+	 * kernel measures ~0.9 ms and is therefore past the ~0.6 ms budget (at 1.5 M elements
+	 * it is 0.34 ms and no wait is paid). See {@code .kb/gpu.md}.
+	 */
+	private static final long MAP_FLOPS_PER_ELEMENT = 64;
 
 	/**
 	 * The tile the kernel is written around, and therefore its block shape: 16x16
@@ -148,6 +173,10 @@ final class CudaGemm {
 
 	private final MemorySegment gemmBatchedF32;
 
+	private final MemorySegment mapF64;
+
+	private final MemorySegment mapF32;
+
 	private final String description;
 
 	/**
@@ -170,8 +199,8 @@ final class CudaGemm {
 	private volatile boolean usable = true;
 
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
-			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32, boolean pooled,
-			MemorySegment memoryPool, long syncFlopCeiling, String description) {
+			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32, MemorySegment mapF64,
+			MemorySegment mapF32, boolean pooled, MemorySegment memoryPool, long syncFlopCeiling, String description) {
 		this.driver = driver;
 		this.device = device;
 		this.context = context;
@@ -180,6 +209,8 @@ final class CudaGemm {
 		this.gemmF32 = gemmF32;
 		this.gemmBatchedF64 = gemmBatchedF64;
 		this.gemmBatchedF32 = gemmBatchedF32;
+		this.mapF64 = mapF64;
+		this.mapF32 = mapF32;
 		this.pooled = pooled;
 		this.memoryPool = memoryPool;
 		this.syncFlopCeiling = syncFlopCeiling;
@@ -293,6 +324,18 @@ final class CudaGemm {
 						"cuModuleGetFunction " + KERNEL_BATCHED_F32 + ": " + driver.errorString(status));
 			}
 			MemorySegment batchedF32 = functionOut.get(P, 0);
+			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_MAP_F64));
+			if (status != CuResult.SUCCESS) {
+				return unwind(driver, device, true, module,
+						"cuModuleGetFunction " + KERNEL_MAP_F64 + ": " + driver.errorString(status));
+			}
+			MemorySegment mapF64 = functionOut.get(P, 0);
+			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_MAP_F32));
+			if (status != CuResult.SUCCESS) {
+				return unwind(driver, device, true, module,
+						"cuModuleGetFunction " + KERNEL_MAP_F32 + ": " + driver.errorString(status));
+			}
+			MemorySegment mapF32 = functionOut.get(P, 0);
 			MemorySegment pool = MemorySegment.NULL;
 			boolean pooled = pooledAllocationWorks(driver, arena);
 			if (pooled) {
@@ -305,8 +348,8 @@ final class CudaGemm {
 			int multiprocessors = attribute(driver, arena, CudaDriver.ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
 			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
-			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32, pooled,
-					pool, ceiling, description), description);
+			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32, mapF64,
+					mapF32, pooled, pool, ceiling, description), description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
@@ -597,6 +640,85 @@ final class CudaGemm {
 	}
 
 	/**
+	 * {@code c[i] = op(a[i])} over {@code n} elements of a packed double-float array,
+	 * each read from its own element offset -- the ELEMENT-WISE tier, where the member is
+	 * the op code rather than the kernel.
+	 *
+	 * <p>
+	 * Two buffers, not three, and no fold: the whole cost is one pass up, one libm call
+	 * per element and one pass back. That is why only the members whose scalar cost IS a
+	 * libm call are offered here ({@link Gpu#MAP_EXP} and its siblings) -- an op the CPU
+	 * does in one instruction cannot pay for the two copies.
+	 * @return {@code true} when {@code c} was filled, {@code false} when the call
+	 * declined or the device failed -- in which case {@code c} is untouched
+	 */
+	boolean map(int op, double[] a, int oa, double[] c, int oc, int n) {
+		if (!this.usable) {
+			return false;
+		}
+		long bytes = (long) n * Double.BYTES;
+		long[] buffers = { 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+				return false;
+			}
+			if (!allocate(arena, buffers, bytes, bytes)) {
+				return false;
+			}
+			boolean sync = (long) n * MAP_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Double.BYTES, bytes)
+					|| !launchMap(arena, this.mapF64, buffers, n, op, sync)) {
+				return false;
+			}
+			return download(MemorySegment.ofArray(c), (long) oc * Double.BYTES, buffers[1], bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(buffers);
+		}
+	}
+
+	/**
+	 * The single-float sibling of {@link #map(int, double[], int, double[], int, int)}.
+	 * The kernel computes at the OPERAND width -- {@code expf} and not
+	 * {@code (float) exp((double) x)} -- which is the one place it deliberately does not
+	 * follow the CPU kernels' widen-compute-narrow rule: an f64 transcendental costs a
+	 * consumer card 32-64x an f32 one, so following the rule would turn the width the
+	 * hardware is for into the slower of the two. The divergence that buys is measured in
+	 * {@code .kb/gpu.md}'s precision table.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean mapF(int op, float[] a, int oa, float[] c, int oc, int n) {
+		if (!this.usable) {
+			return false;
+		}
+		long bytes = (long) n * Float.BYTES;
+		long[] buffers = { 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+				return false;
+			}
+			if (!allocate(arena, buffers, bytes, bytes)) {
+				return false;
+			}
+			boolean sync = (long) n * MAP_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Float.BYTES, bytes)
+					|| !launchMap(arena, this.mapF32, buffers, n, op, sync)) {
+				return false;
+			}
+			return download(MemorySegment.ofArray(c), (long) oc * Float.BYTES, buffers[1], bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(buffers);
+		}
+	}
+
+	/**
 	 * How many elements of an operand one launch spans: the last batch's slab plus
 	 * everything the stride skipped over on the way to it. A broadcast operand (stride 0)
 	 * spans ONE slab however long the batch is, which is why only that slab is copied.
@@ -753,6 +875,38 @@ final class CudaGemm {
 		}
 		int status = this.driver.launchKernel(function, (p + TILE - 1) / TILE, (n + TILE - 1) / TILE, batch, TILE, TILE,
 				1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);
+		if (status != CuResult.SUCCESS) {
+			return fail(status);
+		}
+		if (sync) {
+			status = this.driver.ctxSynchronize();
+			if (status != CuResult.SUCCESS) {
+				return fail(status);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * One flat launch over {@code n} elements, one thread each, plus the explicit wait
+	 * where the kernel is long enough for it to matter. The op code rides in the
+	 * parameter block exactly as the dimensions do.
+	 */
+	private boolean launchMap(Arena arena, MemorySegment function, long[] buffers, int n, int op, boolean sync)
+			throws Throwable {
+		MemorySegment a = arena.allocate(L), c = arena.allocate(L);
+		a.set(L, 0, buffers[0]);
+		c.set(L, 0, buffers[1]);
+		MemorySegment count = arena.allocate(I), which = arena.allocate(I);
+		count.set(I, 0, n);
+		which.set(I, 0, op);
+		MemorySegment parameters = arena.allocate(P, 4);
+		parameters.setAtIndex(P, 0, a);
+		parameters.setAtIndex(P, 1, c);
+		parameters.setAtIndex(P, 2, count);
+		parameters.setAtIndex(P, 3, which);
+		int status = this.driver.launchKernel(function, (n + MAP_BLOCK - 1) / MAP_BLOCK, 1, 1, MAP_BLOCK, 1, 1, 0,
+				MemorySegment.NULL, parameters, MemorySegment.NULL);
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}

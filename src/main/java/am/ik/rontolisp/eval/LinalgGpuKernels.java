@@ -36,6 +36,17 @@ import org.jspecify.annotations.Nullable;
  */
 final class LinalgGpuKernels {
 
+	/**
+	 * The op codes {@link #map} takes, re-exported from the library so that
+	 * {@link LinalgGpu} -- which must not name {@code am.ik.gpu} at all, or the Web Image
+	 * substitution would not cut it -- can still say which member it is asking for. They
+	 * are compile-time constants, so they inline into the caller and leave no reference
+	 * behind.
+	 */
+	static final int MAP_EXP = Gpu.MAP_EXP, MAP_LOG = Gpu.MAP_LOG, MAP_TANH = Gpu.MAP_TANH, MAP_SIN = Gpu.MAP_SIN,
+			MAP_COS = Gpu.MAP_COS, MAP_TAN = Gpu.MAP_TAN, MAP_ASIN = Gpu.MAP_ASIN, MAP_ACOS = Gpu.MAP_ACOS,
+			MAP_ATAN = Gpu.MAP_ATAN, MAP_SINH = Gpu.MAP_SINH, MAP_COSH = Gpu.MAP_COSH, MAP_ERF = Gpu.MAP_ERF;
+
 	private LinalgGpuKernels() {
 	}
 
@@ -85,6 +96,41 @@ final class LinalgGpuKernels {
 	 */
 	static boolean worth(long batch, long n, long m, long p) {
 		return Gpu.worth(batch, n, m, p);
+	}
+
+	/**
+	 * Whether an element-wise map over {@code n} elements is worth a round trip -- the
+	 * element-wise tier's size predicate, which touches no driver.
+	 * @param n how many elements the map covers
+	 * @return {@code true} when the map is worth unwrapping for
+	 */
+	static boolean worthMap(long n) {
+		return Gpu.worthMap(n);
+	}
+
+	/**
+	 * {@code op} applied to every element of a double-float array, or {@code null} when
+	 * the device declined it.
+	 * @param op one of {@code am.ik.gpu.Gpu}'s {@code MAP_*} constants
+	 * @param a the operand
+	 * @param n how many elements it holds
+	 * @return a fresh {@code n} result, or {@code null}
+	 */
+	static double @Nullable [] map(int op, double[] a, int n) {
+		double[] out = new double[n];
+		return Gpu.map(op, a, 0, out, 0, n) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of {@link #map(int, double[], int)}.
+	 * @param op one of {@code am.ik.gpu.Gpu}'s {@code MAP_*} constants
+	 * @param a the operand
+	 * @param n how many elements it holds
+	 * @return a fresh {@code n} result, or {@code null}
+	 */
+	static float @Nullable [] map(int op, float[] a, int n) {
+		float[] out = new float[n];
+		return Gpu.map(op, a, 0, out, 0, n) ? out : null;
 	}
 
 	/**
