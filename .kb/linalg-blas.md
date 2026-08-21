@@ -5,9 +5,9 @@ Read `.kb/linalg-simd.md` first: this reuses that file's declined-input protocol
 and only adds an attempt ahead of it. `.kb/linalg.md` has the semantics of the library
 being accelerated.
 
-Two backends, one per interception mechanism -- the same two `--gpu` can reach, and for the
-same reason (the foreign function API). `--gpu` (`.kb/gpu.md`) has since landed on the
-interpreter and installs AFTER this one, so the device is asked first and declines here:
+Two backends, one per interception mechanism -- the same two `--gpu` reaches, and for the
+same reason (the foreign function API). `--gpu` (`.kb/gpu.md`) has since landed on BOTH of
+them and goes AHEAD of this one, so the device is asked first and declines here:
 
 | backend | interceptor | binding |
 |---|---|---|
@@ -95,7 +95,11 @@ this is what the next person needs:
   alone once embedded (no reference to any other rontolisp class), so it would need its own
   copy of `laDims` / `laBcastShape` / `laBatchStrides` / the odometer -- ~120 lines
   duplicated from `JvmSimdVectorTemplate`, kept in lockstep by hand, in a file whose whole
-  discipline is already "mirrored, change them together".
+  discipline is already "mirrored, change them together". (todo-123 phase 2 found the way
+  out of that for `--gpu`: the blob can carry a CLOSURE of classes, renamed by one prefix
+  rule, so the compiled backend runs the library's own bytes instead of a copy --
+  `.kb/gpu.md`, "The JVM backend". Nothing here has been rebuilt on it; if this member set
+  ever grows, that is the mechanism to grow it on.)
 - **`worth(n, m, p)` has to be re-decided per batch.** The existing threshold is one
   product's flops; for a batch the right predicate is the PER-MATRIX work (a downcall per
   matrix, `batches` of them), and whether `batches` small enough to lose to the lane kernel
@@ -129,7 +133,9 @@ the check (the user has asserted it); `RONTOLISP_BLAS_VERBOSE=1` prints what was
 
 The candidate list, the marker list, `MIN_WORK` and `CRITICAL_FLOP_CEILING` are MIRRORED in
 `eval/LinalgBlasKernels` and `codegen/jvm/JvmBlasTemplate` -- the JVM template's bytes must
-stand alone once embedded, so it cannot call the eval class. Change them together.
+stand alone once embedded, so it cannot call the eval class. Change them together. This is
+the duplication `--gpu`'s JVM half was built to avoid (`.kb/gpu.md`); the same treatment
+would fit here, and has not been applied.
 
 ## No copy: `Linker.Option.critical` takes heap segments
 

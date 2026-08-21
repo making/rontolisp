@@ -85,6 +85,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final boolean blasAccel;
 
+	private final boolean gpuAccel;
+
 	/**
 	 * The names the compiled program's {@code *features*} starts out holding. The JVM
 	 * backend's own set unless the frontend {@link #runtimeFeatures(List) says otherwise}
@@ -229,11 +231,36 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel,
 			boolean blasAccel) {
+		this(className, dynamic, optimize, simdAccel, blasAccel, false);
+	}
+
+	/**
+	 * Create a new JVM compiler targeting the given class name.
+	 * @param className the fully qualified class name for the generated class
+	 * @param dynamic when {@code true}, unresolved function calls and variable references
+	 * are resolved at runtime against the embedded {@code eval} global environment (late
+	 * binding); see {@link #JvmLispCompiler(String, boolean)}
+	 * @param optimize dead-code elimination and what the class is optimized FOR; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel)}
+	 * @param simdAccel the {@code --simd} lowering; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean)}
+	 * @param blasAccel the {@code --blas} lowering; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean, boolean)}
+	 * @param gpuAccel when {@code true} ({@code --gpu}), the matrix-by-matrix case of the
+	 * {@code linalg:} product is lowered at its call sites to an embedded device bridge
+	 * ({@link JvmGpuTemplate} over the injected {@code am.ik.gpu}), which offers the
+	 * product to an NVIDIA GPU and declines to whatever is below it -- the CBLAS bridge,
+	 * the {@code --simd} kernel or the scalar defun -- when there is no device or the
+	 * product is one it does not take. Orthogonal to both flags above: any combination.
+	 */
+	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel,
+			boolean blasAccel, boolean gpuAccel) {
 		this.className = className;
 		this.dynamic = dynamic;
 		this.optimize = optimize;
 		this.simdAccel = simdAccel;
 		this.blasAccel = blasAccel;
+		this.gpuAccel = gpuAccel;
 	}
 
 	/**
@@ -1200,6 +1227,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmBlasRuntimeBuilder.@Nullable BlasRuntime blasRuntime = usesBlas
 				? JvmBlasRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
 
+		// --gpu: the same gate over the same member -- the device takes the matrix by
+		// matrix case of linalg:dot and nothing else -- and the same orthogonality. What
+		// it embeds is not one template but am.ik.gpu itself, renamed into this class's
+		// package (JvmGpuRuntimeBuilder).
+		boolean usesGpu = this.gpuAccel && programUsesSymbol(program, JvmLinalgBlas.QUALIFIED_DOT);
+		final JvmGpuRuntimeBuilder.@Nullable GpuRuntime gpuRuntime = usesGpu
+				? JvmGpuRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
+
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.cp(cp)
@@ -1286,6 +1321,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.mayUseAsyncValues(usesAsyncRuntime)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.blasOps(blasRuntime != null ? blasRuntime.ops() : null)
+			.gpuOps(gpuRuntime != null ? gpuRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.warnedClRedefinitions(new HashSet<>())
@@ -2283,6 +2319,12 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(blasRuntime.initedFieldDesc())
 						.writeU2(0));
 				}
+				if (gpuRuntime != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(gpuRuntime.initedFieldName())
+						.writeU2(gpuRuntime.initedFieldDesc())
+						.writeU2(0));
+				}
 				if (usesEval) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(genvName)
@@ -2651,6 +2693,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(blasRuntime.maxStack())
 									.writeU2(blasRuntime.maxLocals())
 									.writeCode((Object[]) blasRuntime.initCode().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (gpuRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.initName(),
+							gpuRuntime.initDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(gpuRuntime.maxStack())
+									.writeU2(gpuRuntime.maxLocals())
+									.writeCode((Object[]) gpuRuntime.initCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -4051,6 +4104,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final @Nullable Map<String, MethodrefConstant> blasOps;
 
+		/**
+		 * The device bridge references ({@code init} and the one product kernel); null
+		 * unless {@code --gpu} emitted the bridge for a program that reaches
+		 * {@code linalg:dot}.
+		 */
+		final @Nullable Map<String, MethodrefConstant> gpuOps;
+
 		Map<String, MethodrefConstant> numOps = Map.of();
 
 		Map<String, MethodrefConstant> mathOps = Map.of();
@@ -4522,6 +4582,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.javaOps = builder.javaOps;
 			this.simdOps = builder.simdOps;
 			this.blasOps = builder.blasOps;
+			this.gpuOps = builder.gpuOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -4672,6 +4733,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable Map<String, MethodrefConstant> simdOps;
 
 			private @Nullable Map<String, MethodrefConstant> blasOps;
+
+			private @Nullable Map<String, MethodrefConstant> gpuOps;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -5047,6 +5110,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder blasOps(@Nullable Map<String, MethodrefConstant> blasOps) {
 				this.blasOps = blasOps;
+				return this;
+			}
+
+			Builder gpuOps(@Nullable Map<String, MethodrefConstant> gpuOps) {
+				this.gpuOps = gpuOps;
 				return this;
 			}
 

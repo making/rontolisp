@@ -523,18 +523,12 @@ public final class RontoLispCli {
 					+ " Use --simd for the linalg: kernels on a .wasm output");
 		}
 		// --gpu is the same story one layer out: the CUDA driver is reached through the
-		// foreign function API, so WASM cannot have it. The JVM class output is todo-123
-		// phase 2 and is not built yet -- also an error rather than a silent no-op, so a
-		// build script that asks for it finds out now instead of measuring an
-		// unaccelerated class and believing the device was slow.
-		if (gpu) {
-			if (!outputFile.endsWith(".class")) {
-				throw new UnsupportedOperationException("--gpu reaches the interpreter only:"
-						+ " a GPU is driven through the foreign function API, which WASM does not have."
-						+ " Use --simd for the linalg: kernels on a .wasm output");
-			}
-			throw new UnsupportedOperationException("--gpu does not reach the JVM class output yet:"
-					+ " run the program on the interpreter with --gpu, or compile with --simd and/or --blas");
+		// foreign function API, so WASM cannot have it, and a silent no-op is exactly
+		// what the flag exists to prevent.
+		if (gpu && !outputFile.endsWith(".class")) {
+			throw new UnsupportedOperationException("--gpu reaches the interpreter and the JVM class output only:"
+					+ " a GPU is driven through the foreign function API, which WASM does not have."
+					+ " Use --simd for the linalg: kernels on a .wasm output");
 		}
 		// --emit-js-glue writes the host half of a boundary only a --no-wasi core module
 		// has: a component is instantiated through its own bindings (jco), and --no-gc
@@ -913,7 +907,7 @@ public final class RontoLispCli {
 			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic, optimize, simd, blas).runtimeFeatures(features.names())
+			bytes = new JvmLispCompiler(className, dynamic, optimize, simd, blas, gpu).runtimeFeatures(features.names())
 				.compile(TlsPemInliner.inline(program, baseDir));
 		}
 		try {
@@ -1167,9 +1161,12 @@ public final class RontoLispCli {
 		this.out.println("                     bit-identical to the other backends. RONTOLISP_BLAS names a");
 		this.out.println("                     library outright; RONTOLISP_BLAS_VERBOSE=1 prints what was bound.");
 		this.out.println("  --gpu              Route the linalg: matrix product to an NVIDIA GPU");
-		this.out.println("                     Interpreter (incl. the native binary) only for now -- the CUDA");
-		this.out.println("                     driver is reached through the foreign function API, which WASM");
-		this.out.println("                     does not have. Needs libcuda.so.1 (the driver) and nothing else:");
+		this.out.println("                     Interpreter (incl. the native binary) and JVM (.class) only --");
+		this.out.println("                     the CUDA driver is reached through the foreign function API,");
+		this.out.println("                     which WASM does not have. A compiled .class carries the whole");
+		this.out.println("                     binding and still runs with a plain `java Prog` (add");
+		this.out.println("                     --enable-native-access=ALL-UNNAMED to silence the JVM warning).");
+		this.out.println("                     Needs libcuda.so.1 (the driver) and nothing else:");
 		this.out.println("                     no CUDA toolkit. A machine without a device runs the same");
 		this.out.println("                     programs, unaccelerated. Only products above ~51x51x51 are");
 		this.out.println("                     offered; everything smaller stays on the CPU. The device kernel");

@@ -153,6 +153,28 @@ public final class Gpu {
 	}
 
 	/**
+	 * Supplies the PTX kernel text, for an embedder that carries this library's CLASSES
+	 * but not its resources.
+	 *
+	 * <p>
+	 * Normally the kernels are read from {@code am/ik/gpu/gemm.ptx} beside
+	 * {@link CudaGemm}, and nothing needs this. rontolisp's JVM backend injects the
+	 * library's class files into the standalone {@code .class} it emits, renamed into
+	 * that program's own package, where a classpath resource of ours cannot follow -- so
+	 * it hands the text in instead ({@code .kb/gpu.md}). The text supplied wins over the
+	 * resource when both are present.
+	 *
+	 * <p>
+	 * Must be called BEFORE the first {@link #available()} / {@link #description()} /
+	 * {@link #multiply} on this process, which is when the module is loaded; afterwards
+	 * it changes nothing and is not an error. It never throws and it never probes.
+	 * @param ptx the PTX text the driver is to JIT-compile
+	 */
+	public static void useKernels(String ptx) {
+		CudaGemm.embeddedPtx(ptx);
+	}
+
+	/**
 	 * The one device this process has probed, or {@code null}. Package-private and for
 	 * the tests: probing again would retain a second reference to the primary context and
 	 * JIT the module a second time, so nothing may call {@code CudaGemm.probe()} twice.
@@ -208,8 +230,10 @@ public final class Gpu {
 	 * with it. It is still the width {@code linalg} defaults to, so it is here.
 	 *
 	 * <p>
-	 * The result is NOT bit-identical to a scalar row-by-column product: the tiled kernel
-	 * reorders the reduction. Callers that need identity must not offer the product.
+	 * The result is NOT bit-identical to a scalar row-by-column product: the kernel folds
+	 * {@code k} in the same ascending order, but every one of its multiply-adds is FUSED
+	 * ({@code fma.rn.f64}), so each term is rounded once where a scalar loop rounds
+	 * twice. Callers that need identity must not offer the product.
 	 * @param a the left operand, row-major, elements starting at {@code offsetA}
 	 * @param offsetA the index of {@code a}'s first element
 	 * @param b the right operand, row-major, elements starting at {@code offsetB}

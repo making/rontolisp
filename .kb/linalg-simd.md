@@ -17,11 +17,12 @@ Three backends, one per interception mechanism:
 `&optional`, and `--no-gc` has no general array type).
 
 `--blas` (`.kb/linalg-blas.md`) is a SECOND flag over this same seam, and `--gpu`
-(`.kb/gpu.md`) a THIRD -- on the interpreter and
-the JVM only (`--gpu` reaches only the interpreter so far): it puts a tuned CBLAS's `gemm` ahead of the lane kernel for `linalg:dot`. That
-is why the JVM interceptor is named `JvmLinalgKernelCompiler` rather than
-`JvmLinalgSimdCompiler` -- it emits a CHAIN of attempts over one set of temps, ending at the
-scalar defun. Nothing below changes: with `--blas` off, a `--simd` build emits and computes
+(`.kb/gpu.md`) a THIRD -- both on the interpreter and the JVM only, since both call out
+through the foreign function API: they put a tuned CBLAS's `gemm`, and a device product
+ahead of that, in front of the lane kernel for `linalg:dot`. That is why the JVM
+interceptor is named `JvmLinalgKernelCompiler` rather than `JvmLinalgSimdCompiler` -- it
+emits a CHAIN of up to three attempts over one set of temps, ending at the scalar defun.
+Nothing below changes: with `--blas` and `--gpu` off, a `--simd` build emits and computes
 exactly what it did before.
 
 The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md` (the `--simd`

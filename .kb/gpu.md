@@ -4,8 +4,10 @@ Two layers, in one file. `am.ik.gpu` is the foundation (todo-123 phase 1, landed
 own): a language-independent library that takes a matrix product and either runs it on an
 NVIDIA GPU or answers `null`. **The `--gpu` flag on the INTERPRETER** (phase 1B) is the
 first interceptor over it, and "The interception layer" below is its whole record -- the
-per-backend touch points, the chain order, the precision contract and the test map. The
-JVM backend (phase 2) is still not built and the flag refuses a `.class` output outright.
+per-backend touch points, the chain order, the precision contract and the test map. **The
+JVM class output** (phase 2) is the second, and "The JVM backend" below is where its one
+genuinely new decision lives: what the emitted `.class` carries. A `.wasm` output still
+refuses the flag outright and always will.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover}.java` over the shared
@@ -46,7 +48,10 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 | class | what it owns |
 |---|---|
 | `am.ik.rontolisp.eval.LinalgGpu` | the interpreter's `--gpu` interceptor: `available`, `description`, `install` |
-| `am.ik.rontolisp.eval.LinalgGpuKernels` | the ONE reference to `am.ik.gpu` from rontolisp, so `-Pweb` can cut it |
+| `am.ik.rontolisp.eval.LinalgGpuKernels` | the ONE reference to `am.ik.gpu` from `eval`, so `-Pweb` can cut it |
+| `am.ik.rontolisp.codegen.jvm.JvmGpuTemplate` | the compiled call site's glue: the packed representation and the null sentinel |
+| `am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder` | the blob: `am.ik.gpu`'s class files + the PTX, renamed and embedded |
+| `am.ik.rontolisp.codegen.jvm.JvmLinalgGpu` | which member the device bridge claims (one) |
 | `am.ik.gpu.Gpu` | the whole public surface: `available`, `description`, `worth`, two `multiply` overloads |
 | `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, and the per-call product |
 | `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 24 downcall handles |
@@ -59,6 +64,7 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 static boolean available()                       // does this machine have one
 static String  description()                     // what was found, or why nothing was
 static boolean worth(long n, long m, long p)     // is this product big enough to offer
+static void    useKernels(String ptx)            // for an embedder that has no resources
 static double[] multiply(double[] a, int offsetA, double[] b, int offsetB, int n, int m, int p)
 static float[]  multiply(float[]  a, int offsetA, float[]  b, int offsetB, int n, int m, int p)
 ```
@@ -116,6 +122,11 @@ the artifact instead of only living here. `GpuDeclineTest` asserts it is still t
   opens `libcublas`.
 - Nothing else is in the PTX yet. The batched rank-3 product and the element-wise tier are
   later phases, and the PTX regenerates then.
+- **`Gpu.useKernels(String)` supplies the text for an embedder that carries the library's
+  CLASSES but not its resources**, and is read by the probe ahead of the resource. It
+  exists for exactly one caller -- the JVM backend, whose emitted class renames these
+  classes into its own package where a classpath resource of ours cannot follow (below).
+  A call after the probe has run changes nothing and is not an error.
 
 ## The availability probe
 
@@ -151,10 +162,15 @@ whole binding declines rather than half-binding.
   module behind. This is the leak the decline path would otherwise have.
 - **Per call, three device buffers, freed on every path** -- success, decline and failure
   alike, in a `finally`. Two tests pin it and they are not the same test:
-  `aRunOfSuccessfulProductsFreesEveryBufferItAllocates` runs 500 products that WORK, and
+  `aRunOfSuccessfulProductsFreesEveryBufferItAllocates` runs 1000 products that WORK, and
   `aDeclinedProductCostsTheDeviceNothing` runs twelve that FAIL, which is the path the
   first one never enters and the one that was wrong. Both assertions are two-sided --
-  free memory that GREW would mean the test is measuring the rest of the machine.
+  free memory that GREW would mean the test is measuring the rest of the machine. The
+  first one's bound is deliberately LOOSE (256 MB against the 1.5 GB a leak costs):
+  `cuMemGetInfo` is a property of the device, not of the thread, and since phase 2 the
+  JVM backend's tests run in a second surefire fork where every compiled class defines
+  its own copy of this binding and loads its own module. It was 64 MB over 500 products
+  and that is too tight to survive a parallel fork -- measured, 159 MB of drift.
 - **Nothing is cached between calls.** Phase 3 (residency) is where that changes, and it
   needs the invalidation rule todo-123 describes before it can exist.
 - **Threads.** The driver API is thread-safe and every call owns its buffers, so concurrent
@@ -409,13 +425,13 @@ this copies verbatim -- **only what is DIFFERENT about a GPU is written here.**
 | backend | interceptor | kernels |
 |---|---|---|
 | interpreter (`prog.lisp --gpu`, native binary included) | `eval/LinalgGpu` (re-`defineFunction`) | `eval/LinalgGpuKernels` -> `am.ik.gpu` |
-| JVM (`-o Prog.class --gpu`) | NOT BUILT (todo-123 phase 2) -- a hard error | -- |
+| JVM (`-o Prog.class --gpu`) | `codegen/jvm/JvmLinalgKernelCompiler` (call site) | `JvmGpuTemplate` -> the EMBEDDED `am.ik.gpu` |
 | wasm-GC / `--no-gc` (`-o prog.wasm --gpu`) | out of scope, no FFM -- a hard error | -- |
 
-**Both compiled outputs REFUSE rather than ignore** (`RontoLispCli.compileRecorded`, beside
-the `--blas` guard, and the reason each gives is its own): silently running unaccelerated
-is exactly what an acceleration flag exists to make visible. When phase 2 lands, the
-`.class` arm of that guard is what it deletes.
+**A `.wasm` output REFUSES rather than ignores** (`RontoLispCli.compileRecorded`, beside
+the `--blas` guard, and the reason it gives is its own): silently running unaccelerated is
+exactly what an acceleration flag exists to make visible. The `.class` arm of that guard
+was phase 1's placeholder and phase 2 deleted it.
 
 The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md`
 ("Accelerating the matrix product on a GPU (`--gpu`)"). Keep the intercepted set, the size
@@ -487,6 +503,99 @@ scalar defun by four orders of magnitude (132 SECONDS at n=512), so the flag is 
 having in the binary -- but the per-call native-image cost is an open item and it is the
 first thing to measure before phase 3 quotes any residency figure.
 
+### The JVM backend: the whole library travels in the class
+
+The decision phase 2 existed to make, and it went the OTHER way from `--blas`'s.
+
+`--blas` embeds one flat template class (`JvmBlasTemplate`, 375 lines) that is a hand-kept
+COPY of `eval/LinalgBlasKernels` -- `.kb/linalg-blas.md` has to say "MIRRORED... change
+them together" about the candidate list, the marker rule and two constants.
+`.kb/template-class-embedding.md` says a template may carry no second class file, so the
+default assumption was a flattened copy of `am.ik.gpu` too. **It is not what landed.** A
+GPU binding is ~1700 lines across four classes (six class files) plus a PTX resource, and
+the parts a copy would fork are exactly the parts phase 1 spent its time on: the decline
+that must cost the device nothing (three calls, in one order), the 101-entry `CUresult`
+table and which seventeen statuses are sticky, the per-device safepoint threshold, the
+chunked critical copies. Two hand-synced copies of THAT is a standing bug.
+
+So `JvmGpuRuntimeBuilder` generalizes the template mechanism from one class to a CLOSURE
+of them plus one data resource:
+
+- every class file of `am.ik.gpu` is read from the compiler's classpath and renamed by ONE
+  prefix rule, `am/ik/gpu/` -> `RontoLispGpu`, so `Gpu` becomes `RontoLispGpuGpu` and a
+  nested `Gpu$Probe` follows its outer class without being named;
+- `JvmGpuTemplate` -- the call site's glue, ~130 lines: the packed `[rank, dim..., data]`
+  header, the null sentinel, nothing else -- is renamed to `RontoLispGpuBridge` by the
+  same pass, which is what lets it be WRITTEN against `am.ik.gpu` and type-checked by
+  javac while resolving to the embedded copies at run time;
+- each is base64'd into its own chunked string constant, and the emitted `_gpuInit` runs
+  one `MethodHandles.lookup().defineClass` per blob. Definition order is free: a class
+  file's references to its siblings resolve lazily, on the first instruction that uses
+  one, long after all of them exist.
+
+**The size objection does not survive measurement.** The six class files are 47.4 KB and
+the PTX 10.4 KB; base64 comes to ~78 KB of constant pool, against the 62 KB
+`JvmSimdVectorTemplate` (83 KB base64) that every `linalg` program under `--simd` already
+embeds. It is the same order as a mechanism this project uses routinely -- so the blob
+bought the elimination of a 1700-line fork for no more than the bridge beside it costs.
+
+Two routes were weighed and rejected, and the reasons are worth keeping:
+
+- **A `--gpu`-only support jar on the classpath.** Cheapest blob of all, and it makes
+  `-o Prog.class --gpu` non-standalone -- a real departure, since every other flag emits a
+  class that runs with a bare `java Prog`. Rejected on that alone.
+- **A thin template that reaches `am.ik.gpu` REFLECTIVELY when the rontolisp jar happens
+  to be on the classpath, and declines otherwise.** Also cheap, and it is a SILENT
+  degradation of a kind this feature does not otherwise have. "No device" declining
+  quietly is a property of the MACHINE, which `--gpu` on the interpreter reports on
+  stderr; "you forgot a jar" is a property of the INVOCATION, and an acceleration flag
+  exists to make exactly that visible. Not acceptable here.
+
+**The kernels cannot be a resource on the other side.** `CudaGemm` reads `gemm.ptx` from
+beside itself; renamed into a compiled program's default package there is no such resource
+and there never can be, so the PTX rides in the same blob as an ordinary string constant
+(verbatim, not base64 -- it is ASCII text) and `_gpuInit` hands it to `Gpu.useKernels`
+before anything can probe. That one public method is the entire cost this route imposed on
+the language-independent library, and it is a legitimate embedder API rather than a
+rontolisp hook.
+
+**What it is NOT.** The renamed classes are defined into the emitted class's own loader,
+so two `--gpu` classes loaded by ONE classloader would collide on `defineClass` -- the
+same property `--simd` and `--blas` bridges already have, and the reason the compiled-
+backend tests give each program a fresh `URLClassLoader`. Each such loader also probes and
+JIT-loads the module again (~1.4 ms warm, and its own device memory); a real program has
+one.
+
+#### The call site: one chain over one set of temps
+
+`JvmLinalgKernelCompiler.compile` -- the one `linalg:` call-site compiler -- now emits up
+to THREE attempts, and the order it chains them in IS the interpreter's install order:
+
+```
+_gpuInit(); _blasInit(); _simdInit();          // the bridges, before their methodrefs
+a = <arg1>; b = <arg2>;                        // each argument form evaluated ONCE
+r = RontoLispGpuBridge.gpuDot(a, b);   if (r != null) goto end;   // --gpu
+r = RontoLispBlasBridge.blasDot(a, b); if (r != null) goto end;   // --blas
+r = RontoLispSimdBridge.laDot(a, b);   if (r != null) goto end;   // --simd
+r = linalg$colondot(a, b);                                        // the scalar defun
+```
+
+Every prefix works the same way, and a declined product lands on the best CPU path the
+invocation enabled rather than back on the defun. The temps are what make a chain of any
+length safe: every decline branch RE-READS them, and recompiling the argument forms would
+repeat their side effects
+(`anArgumentFormIsEvaluatedExactlyOnceEvenWhenTheKernelDeclines`, now pinned in the
+`--gpu` suite as well as the `--blas` and `--simd` ones).
+
+The emit gate is `programUsesSymbol(program, JvmLinalgBlas.QUALIFIED_DOT)` -- the same
+member, so `--gpu` and `--blas` embed on exactly the same programs, and neither embeds on
+one that never reaches the product. `--gpu` must NOT drag in the `--simd` bridge: a class
+that did would need `java --add-modules jdk.incubator.vector` to run
+(`theThreeFlagsAreOrthogonalAndEmbedTheirOwnBridges`).
+
+The extended (option-form) call sites are `--simd`-only, as before: `dot` has no keyword
+form, so the device and library attempts are simply not emitted there.
+
 ### The precision contract
 
 `--gpu` **stays out of `ci-spec.yaml`** and the scalar `linalg.lisp` defun remains the
@@ -522,8 +631,9 @@ says why.
 ### `-Pweb`
 
 `LinalgGpu.available` / `description` / `install` are the only entry points into
-`LinalgGpuKernels`, which holds the only reference to `am.ik.gpu` from any rontolisp
-package. `src/web/java/.../Target_LinalgGpu.java` substitutes those three, exactly as
+`LinalgGpuKernels`, which holds the only reference to `am.ik.gpu` from the `eval` half.
+(`codegen.jvm` has one too since phase 2 -- `JvmGpuTemplate` -- but the web build compiles
+no `codegen.jvm` template: those classes are read as RESOURCES, never linked.) `src/web/java/.../Target_LinalgGpu.java` substitutes those three, exactly as
 `Target_LinalgBlas` does, and the whole CUDA binding drops out of the browser Web Image.
 **A new public method on `LinalgGpu` that touches the kernels would break it, and only the
 Pages workflow's Web Image build would notice** ([[web-playground-native-image-gotcha]]).
@@ -544,7 +654,9 @@ like `--blas`, whose availability check is nearly free.
 |---|---|
 | interpreter, needs a device (`@EnabledIf` on the probe) | `eval/LinalgGpuTest` |
 | interpreter, must hold on EVERY machine | `eval/LinalgGpuDeclineTest` |
-| the flag is value-less, the REPL pair, the two compiled-output refusals | `cli/CliOptionsTest`, `cli/RontoLispCliTest` |
+| JVM: the emit gate, the blob's class list, the declined product -- on EVERY machine | `codegen/jvm/JvmLinalgGpuAccelCompilerTest` |
+| JVM: the accepted product, the declines, evaluate-once, the chain, the order against `--blas` -- needs a device | the same file, `@EnabledIf` |
+| the flag is value-less, the REPL pair, the `.wasm` refusal, the `.class` blob | `cli/CliOptionsTest`, `cli/RontoLispCliTest` |
 
 The dead-flag guard is the load-bearing one, as it is for `--blas`: every numeric assertion
 in `LinalgGpuTest` would pass just as well on the scalar defun, so `#'linalg:dot` printing
@@ -555,6 +667,18 @@ fails when the flag is DEAD.
 combinations of the three flags over one exact program. `LinalgGpuDeclineTest` is the half
 a CI runner runs, and it pins that the flag changes nothing observable -- at a shape above
 the threshold as well as below it.
+
+`JvmLinalgGpuAccelCompilerTest` mirrors that split for the compiled backend, and its
+dead-flag guard is the bridge NAME in the class bytes (the renamed library classes are
+base64 in the blob and do not appear as text; the PTX does, which is what pins that the
+kernels travel). Its unconditional half also pins `JvmGpuRuntimeBuilder.embeddedGpuClasses()`
+against the class files the build actually produced -- **the guard that a class added to
+`am.ik.gpu` is added to the list that travels**, since nothing can enumerate a package
+from a classpath, let alone from inside a native image. Two of its device-half cases are
+worth knowing about before editing them: exact-input operands must be exact IN THE FOLD
+too (a 64-long sum of products of 1..4096 is not, at f32 -- the defun accumulates in f64
+and no f32 kernel can follow, which is `.kb/linalg-simd.md`'s reduction contract and not
+this seam), and the order pin against `--blas` uses n=192 for the reason below.
 
 ### What it is worth
 
@@ -581,6 +705,38 @@ CPU competitor and the f32 half does not.
 through the same route, because per-call pool allocation and the driver's own jitter are
 real. Do not compare a row of this table with a row of that one.
 
+### What it is worth on the JVM class output (phase 2)
+
+The same products through `-o Prog.class`, run as `java Prog`, same machine, us per call.
+**Best of three timed rounds after 400 warm-up products**, which the interpreter table
+above is not -- and the difference matters at the small end: a single round at n=128 f64
+measured 350-580 us where the best of three measures 50, because the device drops to its
+IDLE CLOCK (208 MHz against 3003) between small calls and a cold round times the ramp.
+That is a property of the machine, not of the backend -- the interpreter under the same
+one-round harness reports the same inflated figures.
+
+| n | `--simd` f64 | `--blas` f64 | `--gpu` f64 | `--simd` f32 | `--blas` f32 | `--gpu` f32 |
+|---|---|---|---|---|---|---|
+| 64 | 50 | **17** | 107 | 32 | **8** | 106 |
+| 128 | 345 | 30 | **50** | 206 | 34 | **34** |
+| 256 | 2613 | 170 | **145** | 1380 | 95 | **65** |
+| 512 | 20760 | 1140 | **740** | 10480 | 530 | **210** |
+| 1024 | -- | 6933 | **5367** | -- | 4433 | **2233** |
+| 2048 | -- | 91750 | **39000** | -- | 44625 | **8375** |
+
+**It is the interpreter's table, which is the finding.** Once the product is one device
+call, the backend around it contributes nothing measurable -- exactly what `--blas` found
+when its interpreter column landed on its JVM column. The `--gpu` crossover against a
+20-core OpenBLAS sits between n=128 and n=256 at both widths, and the documented wart at
+n=64 is if anything wider here (107 against 17) than the interpreter's.
+
+**And the native binary's open item now has a workaround.** Measured with the same
+harness: the native binary INTERPRETING `--gpu` costs 17440 us at n=512 f64 and 3795 at
+n=256, against the compiled class's 740 and 145 -- 24x and 26x, 47x at n=512 f32. The
+class the native binary EMITS is byte-for-byte the class `java -jar` emits and runs at the
+JVM figures above. So on a `-Pnative` build, compiling the program is the way around the
+per-call cost, and the item stays open only for the interpreter.
+
 ## Native image
 
 Two build inputs, both already in
@@ -588,7 +744,13 @@ Two build inputs, both already in
 
 - **`resource-config.json`**: `am/ik/gpu/gemm\.ptx`, conditional on `am.ik.gpu.CudaGemm`,
   beside the `--simd` and `--blas` template entries. Without it the binary probes, finds a
-  GPU, and then fails to find its own kernels.
+  GPU, and then fails to find its own kernels. Phase 2 added three more, conditional on
+  `am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder`: the template's own
+  `JvmGpuTemplate\.class`, `am/ik/gpu/.*\.class` (the CLASS FILES, which the compiler
+  reads as resources to embed them -- a native image carries none of that by default), and
+  the PTX again under the compiler's condition, because a binary that only ever COMPILES
+  never makes `CudaGemm` reachable. Verified: the native binary compiles a `--gpu` class
+  and the class runs the device.
 - **`reachability-metadata.json`**: a `foreign.downcalls` entry per distinct SIGNATURE --
   24 handles collapse to 15 shapes, added to the six `--blas` ones. Without them the
   binary binds the driver and then throws `MissingForeignRegistrationError` on the first
@@ -622,8 +784,12 @@ product over exact inputs at both widths, the tolerance over inexact ones, the o
 offsets, a rectangular shape that is not a multiple of the tile, the multi-chunk copy at
 n=3072, and the no-leak assertion. `GpuDeclineTest` pins that the probe answers without
 throwing, that every decline condition declines rather than throws, that the status table
-is total, that only the context-destroying statuses are sticky, and that the PTX is the
-artifact the loader expects with its regeneration command still attached.
+is total, that only the context-destroying statuses are sticky, that the PTX is the
+artifact the loader expects with its regeneration command still attached, and that
+`useKernels` is accepted without probing. **That last test hands it the REAL checked-in
+text and no test anywhere may hand it anything else**: the override is process-wide and
+read at probe time, so a placeholder would decide what the whole suite's device compiles,
+whichever class happened to run first.
 
 Everything here is skipped on a machine without a GPU, which is every CI runner this
 project has -- so `GpuDeclineTest` is the half that actually runs there, and it is the half
@@ -631,6 +797,8 @@ that must never regress.
 
 ## What is deliberately NOT here
 
-No JVM interceptor, no residency, no batched rank-3 product, no element-wise tier, no
-Metal. Those are todo-123's phases 2 through 5, and each of them needs this file's numbers
-before it starts.
+No residency, no batched rank-3 product, no element-wise tier, no Metal. Those are
+todo-123's phases 3 through 5, and each of them needs this file's numbers before it
+starts. The per-call cost of an FFM downcall inside a native image is still unexplained
+(above), and phase 3 must not quote a residency figure from that build without measuring
+it first.

@@ -57,6 +57,24 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmGpuTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/gpu/.*\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/gpu/gemm\\.ptx"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
         },
         "pattern": "am/ik/rontolisp/macro/format-render\\.lisp"

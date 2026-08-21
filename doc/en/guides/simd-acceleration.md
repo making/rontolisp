@@ -251,6 +251,7 @@ RONTOLISP_BLAS=/path/to/libopenblas.so.0 rontolisp prog.lisp --blas   # name one
 
 ```bash
 rontolisp prog.lisp --gpu                 # interpreter
+rontolisp prog.lisp -o Prog.class --gpu   # JVM class output
 rontolisp prog.lisp --simd --blas --gpu   # all three, chained; the device is asked first
 ```
 
@@ -276,7 +277,9 @@ The device is asked first because its size threshold is three orders of magnitud
 
 ### Reach and precision
 
-`--gpu` reaches the **interpreter**, the native binary included. The CUDA driver is called through the foreign function API, which WASM does not have, so `--gpu` with a `.wasm` output is an error rather than a silent no-op; the JVM class output cannot do it yet and is an error for the same reason. Compiled programs have `--simd`, and a `.class` has `--blas` as well. The figures below are from `java -jar`: in the native binary each device call currently costs several times more (one n=512 double-float product measured 18.5 ms against the JVM's 0.7), enough that on that build `--gpu --blas` is slower than `--blas` alone at every size measured. `--gpu` still beats `--simd` there by more than 2x, and the portable definition by four orders of magnitude.
+`--gpu` reaches the **interpreter** (including the native binary) and the **JVM class output**. The CUDA driver is called through the foreign function API, which WASM does not have, so `--gpu` with a `.wasm` output is an error rather than a silent no-op; a WASM program has `--simd`.
+
+A class compiled with `--gpu` is still standalone -- the whole CUDA binding travels inside it, so there is nothing to put on the classpath and `java Prog` is the whole command. It does call a restricted method, so run it as `java --enable-native-access=ALL-UNNAMED Prog` to keep the JVM's warning off standard error. In the native **binary** each device call currently costs 20 to 50 times more than on the JVM (one n=512 double-float product measured 17.4 ms against 0.74), enough that on that build `--gpu --blas` is slower than `--blas` alone at every size measured; `--gpu` still beats `--simd` there by more than 2x, and the portable definition by four orders of magnitude. Compiling the program to a class is the way around that cost -- the class the native binary emits is the one `java -jar` emits, and it runs at the speeds in the second table below.
 
 An accelerated product is **close to the portable definition rather than equal to it**, at both widths. The device kernel folds each output cell in the portable definition's own order, but it fuses every multiply and add into a single instruction, so each term is rounded once where the portable definition rounds twice. Over inputs that are exact at the operand width (integers, powers of two) that cannot show and the results match exactly; over inexact ones they differ -- measured on an NVIDIA GB10 over operands of magnitude 1, by up to 5e-15 at `#d` and 3e-6 at `#f`. That is a real break with `--simd`, whose `#d` matrix product is bit-identical to the portable definition, and it is one of the reasons `--gpu` is a flag of its own. The portable definition remains the cross-backend oracle.
 
@@ -294,6 +297,19 @@ One `n x n` `linalg:matmul` on the interpreter, microseconds per call, warm. The
 | 2048 | -- | 89200 | 38000 | -- | 44600 | 8067 |
 
 Read it in two directions. Against the lane kernel the device is 7x at n=128 and 28x at n=512, and 49x at n=512 in single float -- a different order of magnitude, which is the point of the flag. Against a tuned BLAS on twenty cores it is a wash until about n=256 and then 1.6x to 2.3x at double width, 2.4x to 5.5x at single: double-float is the width this class of device is worst at, so **`--gpu` pays most for `single-float` data**, which is what `torch:` builds by default.
+
+The same products compiled to a `.class` and run on the JVM, best of three timed rounds after 400 warm-up calls:
+
+| n x n | `--simd` f64 | `--blas` f64 | `--gpu` f64 | `--simd` f32 | `--blas` f32 | `--gpu` f32 |
+|---|---|---|---|---|---|---|
+| 64 | 50 | 17 | 107 | 32 | 8 | 106 |
+| 128 | 345 | 30 | 50 | 206 | 34 | 34 |
+| 256 | 2613 | 170 | 145 | 1380 | 95 | 65 |
+| 512 | 20760 | 1140 | 740 | 10480 | 530 | 210 |
+| 1024 | -- | 6933 | 5367 | -- | 4433 | 2233 |
+| 2048 | -- | 91750 | 39000 | -- | 44625 | 8375 |
+
+It is the same table, which is the point: once the product is one device call, the backend around it no longer matters. Warm carefully before you compare anything near the threshold -- at n=64 and n=128 the device drops back to its idle clock between calls, and a single cold round there can measure several times these figures.
 
 ## Runnable examples
 

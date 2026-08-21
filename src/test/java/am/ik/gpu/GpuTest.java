@@ -268,14 +268,20 @@ class GpuTest {
 		assertThat(gemm.gemm(a, 0, b, 0, c, 0, n, n, n)).isTrue();
 		long before = gemm.freeDeviceMemory();
 		assertThat(before).isGreaterThan(0);
-		for (int i = 0; i < 500; i++) {
+		for (int i = 0; i < 1000; i++) {
 			assertThat(gemm.gemm(a, 0, b, 0, c, 0, n, n, n)).isTrue();
 		}
 		long after = gemm.freeDeviceMemory();
-		// 500 products of three 512 KB buffers leak 750 MB if they leak at all. The
-		// assertion is two-sided on purpose: free memory that GREW would mean this is
-		// measuring the rest of the machine rather than the buffers.
-		assertThat(Math.abs(before - after)).isLessThan(64L << 20);
+		// 1000 products of three 512 KB buffers leak 1.5 GB if they leak at all, and
+		// leaking ONE of the three still costs 500 MB -- so the bound separates the two
+		// outcomes by a wide margin rather than measuring precisely. It cannot be tight:
+		// cuMemGetInfo is a property of the DEVICE, not of this thread, and the JVM
+		// backend's tests run in a second surefire fork where every compiled class
+		// defines its own copy of this binding and loads its own module (~10 MB of
+		// device memory each). The assertion stays two-sided on purpose: free memory
+		// that GREW would mean this is measuring the rest of the machine rather than
+		// the buffers.
+		assertThat(Math.abs(before - after)).isLessThan(256L << 20);
 	}
 
 	@Test

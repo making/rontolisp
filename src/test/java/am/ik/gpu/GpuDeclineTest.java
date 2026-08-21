@@ -176,6 +176,18 @@ class GpuDeclineTest {
 		assertThat(resource("gemm.cu")).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");
 	}
 
+	@Test
+	void suppliedKernelsAreAcceptedWithoutProbingAndWithoutThrowing() throws IOException {
+		// The seam an embedder that carries the CLASSES but not the resources needs:
+		// rontolisp's JVM backend renames these classes into a compiled program's own
+		// package, where getResourceAsStream can never find gemm.ptx again
+		// (.kb/gpu.md). It is deliberately handed the REAL checked-in text here and
+		// nowhere else -- a test that poisoned it with a placeholder would decide what
+		// the whole suite's probe compiles, whichever class ran first.
+		Gpu.useKernels(resource(CudaGemm.PTX_RESOURCE));
+		assertThat(Gpu.description()).isNotBlank();
+	}
+
 	private String resource(String name) throws IOException {
 		try (InputStream in = CudaGemm.class.getResourceAsStream(name)) {
 			assertThat(in).as("resource %s", name).isNotNull();

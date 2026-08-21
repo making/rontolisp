@@ -139,19 +139,25 @@ class RontoLispCliTest {
 	}
 
 	@Test
-	void gpuOnACompiledOutputIsAHardErrorRatherThanASilentNoOp() throws Exception {
+	void gpuOnAWasmOutputIsAHardErrorWhileTheClassOutputEmbedsTheBridge() throws Exception {
 		// WASM has no foreign function API, so a .wasm build could only IGNORE the flag
 		// -- and silently running unaccelerated is exactly what an acceleration flag
-		// exists to make visible. The JVM class output is todo-123 phase 2 and refuses
-		// for the same reason until it lands.
+		// exists to make visible. The JVM class output HAS one, and since todo-123
+		// phase 2 it carries the whole CUDA binding into the emitted class instead.
 		Path file = tempDir.resolve("prog.lisp");
-		Files.writeString(file, "(print (linalg:sum (linalg:ones 4)))\n");
+		// A program that reaches the matrix product: the bridge is embedded only for one
+		// that does, exactly as --blas's and --simd's are.
+		Files.writeString(file, "(print (linalg:matmul (linalg:eye 2) (linalg:eye 2)))\n");
 		assertThatThrownBy(() -> runCli("", file.toString(), "-o", tempDir.resolve("p.wasm").toString(), "--gpu"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--gpu reaches the interpreter only");
-		assertThatThrownBy(() -> runCli("", file.toString(), "-o", tempDir.resolve("P.class").toString(), "--gpu"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--gpu does not reach the JVM class output yet");
+			.hasMessageContaining("--gpu reaches the interpreter and the JVM class output only");
+		Path classFile = tempDir.resolve("P.class");
+		runCli("", file.toString(), "-o", classFile.toString(), "--gpu");
+		// The bridge's own name is an ordinary class constant; the CUDA binding it calls
+		// is base64 in the blob beside it, and the PTX kernels are there verbatim.
+		assertThat(Files.readString(classFile, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.contains("RontoLispGpuBridge")
+			.contains(".visible .entry gemm_f64");
 	}
 
 	@Test

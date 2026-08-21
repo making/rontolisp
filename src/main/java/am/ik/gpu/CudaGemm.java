@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.charset.StandardCharsets;
 
 import org.jspecify.annotations.Nullable;
 
@@ -58,6 +59,13 @@ final class CudaGemm {
 
 	/** The checked-in PTX, beside this class in the resources. */
 	static final String PTX_RESOURCE = "gemm.ptx";
+
+	/**
+	 * The kernels an EMBEDDER supplied, when this library's classes travel without its
+	 * resources -- see {@link Gpu#useKernels(String)}. Read once, by {@link #probe()},
+	 * ahead of {@link #PTX_RESOURCE}.
+	 */
+	private static volatile byte @Nullable [] embeddedPtx;
 
 	/** The kernels {@link #PTX_RESOURCE} must export. */
 	static final String KERNEL_F64 = "gemm_f64", KERNEL_F32 = "gemm_f32";
@@ -370,8 +378,26 @@ final class CudaGemm {
 				+ version % 1000 / 10 + ")";
 	}
 
-	/** The checked-in PTX text, or {@code null} when this build does not carry it. */
+	/**
+	 * Records the kernels an embedder carries in place of the resource. Taking effect
+	 * requires only that this runs before the probe does, which is the contract
+	 * {@link Gpu#useKernels(String)} states; a call afterwards changes nothing, because
+	 * the module is already loaded.
+	 * @param ptx the PTX text
+	 */
+	static void embeddedPtx(String ptx) {
+		embeddedPtx = ptx.getBytes(StandardCharsets.ISO_8859_1);
+	}
+
+	/**
+	 * The PTX text this build carries: what an embedder supplied, else the checked-in
+	 * resource, else {@code null} when there is neither.
+	 */
 	private static byte @Nullable [] readPtx() {
+		byte[] embedded = embeddedPtx;
+		if (embedded != null) {
+			return embedded;
+		}
 		try (InputStream in = CudaGemm.class.getResourceAsStream(PTX_RESOURCE)) {
 			return in == null ? null : in.readAllBytes();
 		}

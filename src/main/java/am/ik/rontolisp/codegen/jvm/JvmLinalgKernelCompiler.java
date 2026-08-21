@@ -15,11 +15,16 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the accelerated {@code linalg:} kernels to calls into the embedded
- * {@link JvmSimdVectorTemplate bridge}, the {@code linalg:} sibling of
- * {@link JvmSimdCompiler}. Only wired in when the {@code --simd} flag emitted the runtime
- * ({@link JvmLispCompiler.Ctx#simdOps} is non-null); otherwise the qualified call falls
- * through to the ordinary spliced {@code linalg.lisp} defun.
+ * Compiles the accelerated {@code linalg:} kernels to calls into the embedded bridges,
+ * the {@code linalg:} sibling of {@link JvmSimdCompiler}. It is the ONE {@code linalg:}
+ * call-site compiler, and it emits a CHAIN of up to three attempts over one set of temps:
+ * the device ({@code --gpu}, {@link JvmGpuTemplate}), then a tuned CBLAS ({@code --blas},
+ * {@link JvmBlasTemplate}), then the lane kernel ({@code --simd},
+ * {@link JvmSimdVectorTemplate}), then the scalar {@code linalg.lisp} defun -- which is
+ * the interpreter's install order written as a chain ({@code .kb/gpu.md}). Only wired in
+ * when at least one of the three flags emitted its runtime ({@link JvmLispCompiler.Ctx}'s
+ * {@code simdOps} / {@code blasOps} / {@code gpuOps}); otherwise the qualified call falls
+ * through to the ordinary spliced defun.
  *
  * <h2>Why this call site is not simply a bridge call</h2>
  *
@@ -171,13 +176,15 @@ final class JvmLinalgKernelCompiler {
 	 * orthogonal, and the emitted chain simply has one attempt instead of two.
 	 */
 	static boolean claims(String member, JvmLispCompiler.Ctx ctx) {
-		return (ctx.simdOps != null && handles(member)) || (ctx.blasOps != null && JvmLinalgBlas.handles(member));
+		return (ctx.simdOps != null && handles(member)) || (ctx.blasOps != null && JvmLinalgBlas.handles(member))
+				|| (ctx.gpuOps != null && JvmLinalgGpu.handles(member));
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		Map<String, MethodrefConstant> simd = ctx.simdOps != null && handles(member) ? ctx.simdOps : null;
 		Map<String, MethodrefConstant> blas = ctx.blasOps != null && JvmLinalgBlas.handles(member) ? ctx.blasOps : null;
-		if (simd == null && blas == null) {
+		Map<String, MethodrefConstant> gpu = ctx.gpuOps != null && JvmLinalgGpu.handles(member) ? ctx.gpuOps : null;
+		if (simd == null && blas == null && gpu == null) {
 			throw new IllegalStateException("no linalg: acceleration runtime was emitted for " + member);
 		}
 		String qualified = qualifiedName(member);
@@ -201,6 +208,9 @@ final class JvmLinalgKernelCompiler {
 		// The bridge classes must be defined before their method references resolve, and
 		// ahead of the temps: with only the --simd attempt this is byte for byte the
 		// sequence emitted before --blas existed.
+		if (!extendedCall && gpu != null) {
+			emitInit(ctx, gpu);
+		}
 		Map<String, MethodrefConstant> blasAttempt = extendedCall ? null : blas;
 		if (blasAttempt != null) {
 			emitInit(ctx, blasAttempt);
@@ -216,11 +226,17 @@ final class JvmLinalgKernelCompiler {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slots[i]);
 		}
-		// The attempts, outermost first: the library product when --blas emitted its
-		// bridge, then the lane kernel when --simd emitted its own, then the scalar
-		// defun. Each returns null for an input it declines, and control falls into the
-		// next attempt over the SAME temps.
+		// The attempts, outermost first: the device when --gpu emitted its bridge, then
+		// the library product when --blas emitted its own, then the lane kernel when
+		// --simd did, then the scalar defun. That is the interpreter's install order
+		// (.kb/gpu.md) written as a chain, and every prefix of it works the same way:
+		// each attempt returns null for an input it declines, and control falls into the
+		// next one over the SAME temps -- so a declined product always lands on the best
+		// CPU path this invocation enabled, never back on the defun.
 		List<Integer> takenBranches = new ArrayList<>();
+		if (gpu != null && !extendedCall) {
+			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.DOT, null, slots, arity, takenBranches);
+		}
 		if (blas != null && !extendedCall) {
 			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, takenBranches);
 		}
