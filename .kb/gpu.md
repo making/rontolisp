@@ -1408,8 +1408,8 @@ which boxes a double per element and is on NO acceleration seam -- not `--simd`,
 `--blas`, not `--gpu`. Second is `linalg:rand` / `linalg:randn`, the dropout masks, which
 are the same shape of loop. **Between them they are about half of what a `--gpu --simd`
 training step now costs, and neither is a `linalg:` member.** That is a `torch:`-level
-item and not this one; it is recorded here because it is the reason no further work on
-this seam will move this program much.
+item and not this one -- todo-473, filed off this profile -- and it is recorded here
+because it is the reason no further work on this seam will move this program much.
 
 #### The residency design that was weighed, and the enumeration it would need
 
@@ -2021,8 +2021,8 @@ decline, not an omission, and each needs this file's numbers before it is revisi
 - **The optimizer update and the RNG are the bottleneck now, and they are not on this
   seam.** `torch::%o-adam-step` is ~31% of a training step and `linalg:rand`/`randn`
   another ~14%, both per-element boxed Lisp loops that no acceleration flag reaches. That
-  is a `torch:`-level item; it is named here because it is why no further work on the
-  `linalg:` seam will move `train-gpt-soseki.lisp` much.
+  is todo-473 rather than anything on this seam; it is named here because it is why no
+  further work on the `linalg:` seam will move `train-gpt-soseki.lisp` much.
 - **The per-call cost of an FFM downcall inside a native image is still unexplained**
   (above), and nothing may quote a device figure from that build without measuring it
   first.
