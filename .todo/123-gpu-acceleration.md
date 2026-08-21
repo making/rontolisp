@@ -653,7 +653,16 @@ a flattened copy would fork exactly the parts phase 1 was spent on. The design, 
 measurements and the open items now live in `.kb/gpu.md`; where that file and this one
 disagree, `.kb/gpu.md` was measured second and wins -- in particular the precision break
 is FUSED multiply-add, not a reordered reduction, and the native image's per-call cost
-is an INTERPRETER problem that compiling to a class walks around. Phase 3 is next.
+is an INTERPRETER problem that compiling to a class walks around.
+
+**Phase 4's first item runs BEFORE phase 3, deliberately.** Phase 3's own measurement
+above is a five-op chain of which only the two products are intercepted members, so
+residency has almost nothing to hold until more of the chain is on the device -- while
+`%la-matmul-nd` is compute-bound and pays with no residency at all. It is also the shape
+that matters: `--gpu` declines every rank >= 3 product today, so a transformer gains
+nothing from the flag, which is the workload this file exists for. Doing it first also
+gives phase 3 a real chain to measure. Order is therefore 0, 1, 2, 4a
+(`%la-matmul-nd`), 3, 4b (the element-wise tier and the ufuncs).
 
 1. **`--gpu` on the interpreter, one member: `linalg:dot`'s M.M case.** `am.ik.gpu` +
    `eval/LinalgGpu` + `eval/LinalgGpuKernels` + the checked-in PTX + the availability
