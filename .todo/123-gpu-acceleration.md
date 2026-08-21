@@ -661,8 +661,10 @@ residency has almost nothing to hold until more of the chain is on the device --
 `%la-matmul-nd` is compute-bound and pays with no residency at all. It is also the shape
 that matters: `--gpu` declines every rank >= 3 product today, so a transformer gains
 nothing from the flag, which is the workload this file exists for. Doing it first also
-gives phase 3 a real chain to measure. Order is therefore 0, 1, 2, 4a
-(`%la-matmul-nd`), 3, 4b (the element-wise tier and the ufuncs).
+gives phase 3 a real chain to measure. Order was therefore 0, 1, 2, 4a
+(`%la-matmul-nd`), 4b (the element-wise tier and the ufuncs), 3 -- 4b moved ahead of 3
+as well, once todo-468 had made the CPU side of its comparison honest, and phase 3 is
+now the only phase left before Metal.
 
 **Phase 4a LANDED 2026-08-21** (`a671f569`), on both backends, and it measured what
 phase 3 and phase 4b now have to answer to. At the notebook's own shapes a training
@@ -672,6 +674,18 @@ callback in no accelerated set -- costing 21.1 seconds per call against 0.007 fo
 matmul the device just took. **Todo-468 and the element-wise tier are now the whole
 remaining cost, not a nice-to-have**, and that chain is what phase 3 should measure
 residency against.
+
+**Phase 4b LANDED 2026-08-21** (`061039da`), on both backends, and it settled the
+member question by MEASUREMENT rather than by this file's list: twelve members taken
+(`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`) and
+eight of the same tier REFUSED with their numbers recorded (`sqrt` `abs` `negative`
+`sign` and the binary `add` `sub` `mul` `div`). The rule: a member pays for a round
+trip when its scalar cost is a libm CALL, not when it is one machine instruction --
+so this file's "memory-bound and therefore only pay under phase 3" was half right, and
+`.kb/gpu.md` carries both halves. It also broke this file's byte-identity contract on
+purpose (a device libm is not our libm; the measured divergence is 1-2 ulps, and the
+feared 4.87e-5 on `tanh` does NOT reproduce -- do not quote it again), and it handed
+phase 3 the real residency measurement: 2.2-6.4x at f64, 15.6-17.9x at f32.
 
 1. **`--gpu` on the interpreter, one member: `linalg:dot`'s M.M case.** `am.ik.gpu` +
    `eval/LinalgGpu` + `eval/LinalgGpuKernels` + the checked-in PTX + the availability
@@ -688,10 +702,12 @@ residency against.
    identity-keyed device cache with an explicit invalidation rule (contract 2 above), or
    a device handle inside the packed array. Measure the 5-op chain again through the
    real `torch:` stack, not a synthetic one.
-4. **The member set.** `%la-matmul-nd` FIRST -- it is the transformer's whole hot path,
-   `--simd` does not intercept it (todo-467), and a batch axis is free on a GPU. Then
-   the element-wise tier and the ufuncs, which are memory-bound and therefore only pay
-   under phase 3.
+4. **The member set.** DONE, both halves. `%la-matmul-nd` FIRST (4a) -- it is the
+   transformer's whole hot path, `--simd` does not intercept it (todo-467), and a batch
+   axis is free on a GPU. Then the element-wise tier (4b), where the prediction here --
+   "memory-bound and therefore only pay under phase 3" -- turned out to hold for the
+   eight members whose scalar cost is one instruction and to be wrong for the twelve
+   whose cost is a libm call, which win by 9-394x with both copies on the clock.
 5. **Metal.** The `objc_msgSend` route is validated, so this phase is no longer a
    feasibility question -- it is a port of phases 1-3 with three deliberate differences:
    dispatch through **MPS**, not through our own kernel (the naive MSL kernel loses to
