@@ -457,9 +457,9 @@ final class JvmGpuTemplate {
 	/**
 	 * One BROADCAST binary element-wise op. Equal shapes are declined ON PURPOSE: there
 	 * the {@code --simd} rung below runs a lane loop that a round trip cannot beat, which
-	 * is the measurement phase 4b made and this does not reverse. A scalar operand, a
-	 * boxed array and a mixed-width pair decline for the reasons the lane kernel declines
-	 * them.
+	 * is the measurement the element-wise tier made and this does not reverse. A scalar
+	 * operand, a boxed array and a mixed-width pair decline for the reasons the lane
+	 * kernel declines them.
 	 */
 	private static @Nullable Object bcast(int op, @Nullable Object a, @Nullable Object b) {
 		if (!(a instanceof double[]) && !(a instanceof float[])) {

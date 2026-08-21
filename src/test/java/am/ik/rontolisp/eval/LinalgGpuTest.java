@@ -465,7 +465,9 @@ class LinalgGpuTest {
 		// is that the device was ASKED, which the interceptor's own binding shows.
 		assertThat(eval("(linalg:zeros 1) #'linalg:sub", true).print()).isEqualTo("#<function LINALG:SUB>");
 		// A shape the device takes, and one it refuses: an EQUAL-shaped pair stays the
-		// CPU's however big it is, which is phase 4b's measurement and is what stops this
+		// CPU's however big it is, which is the element-wise tier's measurement and is
+		// what
+		// stops this
 		// tier quietly widening.
 		assertMatchesScalarOracle("""
 				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))

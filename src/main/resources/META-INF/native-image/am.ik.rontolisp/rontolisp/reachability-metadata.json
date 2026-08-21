@@ -37,7 +37,7 @@
     "MetalDriver is enough. The type names are the agent's own (jlong, jint, jboolean);",
     "the un-prefixed aliases parse too, but keeping one spelling keeps a re-run's diff empty.",
     "",
-    "The LAST 21 are Metal (.kb/gpu.md's phase 5), and all but one of them are objc_msgSend:",
+    "The LAST 21 are the Metal ones (.kb/gpu.md), and all but one is an objc_msgSend:",
     "one entry per selector SHAPE, since Apple's arm64 rule is that objc_msgSend must be",
     "called through a prototype matching the selector rather than as the variadic it is",
     "declared as. The two-MTLSize-by-value entry is dispatchThreadgroups:threadsPerThreadgroup:,",

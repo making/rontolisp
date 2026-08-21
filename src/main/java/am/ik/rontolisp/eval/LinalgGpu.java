@@ -277,14 +277,14 @@ public final class LinalgGpu {
 	 * walk. One round trip for the whole output.
 	 *
 	 * <p>
-	 * <strong>Equal shapes are declined on purpose.</strong> That is the case phase 4b
-	 * measured and refused -- there the CPU runs a lane loop and a round trip loses
-	 * outright (measured 65 us against 112 at {@code #f}, and this member set is the same
-	 * one that refusal names). The BROADCAST case is a different comparison: the CPU
-	 * walks an odometer element by element, which costs it 5.5-8.5x the same round trip
-	 * at the shapes {@code torch:softmax} and {@code torch:layer-norm} produce. So is a
-	 * scalar operand, a boxed array and a mixed-width pair, each for the reason the
-	 * {@code --simd} kernel declines it.
+	 * <strong>Equal shapes are declined on purpose.</strong> That is the case the
+	 * element-wise tier measured and refused -- there the CPU runs a lane loop and a
+	 * round trip loses outright (measured 65 us against 112 at {@code #f}, and this
+	 * member set is the same one that refusal names). The BROADCAST case is a different
+	 * comparison: the CPU walks an odometer element by element, which costs it 5.5-8.5x
+	 * the same round trip at the shapes {@code torch:softmax} and
+	 * {@code torch:layer-norm} produce. So is a scalar operand, a boxed array and a
+	 * mixed-width pair, each for the reason the {@code --simd} kernel declines it.
 	 *
 	 * <p>
 	 * Unlike the element-wise tier this is BIT-IDENTICAL to the defun at both widths: the

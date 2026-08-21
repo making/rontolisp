@@ -40,14 +40,14 @@ import static org.assertj.core.api.Assertions.within;
 class GpuTest {
 
 	/**
-	 * A device that has a {@code double}, which since phase 5 means the CUDA backend and
-	 * not merely "a GPU". Every assertion below is written at {@code #d} -- the oracle,
-	 * the offsets, the leak runs, the batch shapes -- because that was the only backend
-	 * there was; the Metal one has no {@code double} at all and answers the same claims
-	 * at {@code #f} in {@link MetalGpuTest}. Splitting them beat widening this file: the
-	 * two devices do not have the same member set, the same thresholds or the same
-	 * precision story, so a single width-generic suite would have had to branch on the
-	 * backend in nearly every test.
+	 * A device that has a {@code double}, which means the CUDA backend and not merely "a
+	 * GPU". Every assertion below is written at {@code #d} -- the oracle, the offsets,
+	 * the leak runs, the batch shapes -- because that was the only backend there was; the
+	 * Metal one has no {@code double} at all and answers the same claims at {@code #f} in
+	 * {@link MetalGpuTest}. Splitting them beat widening this file: the two devices do
+	 * not have the same member set, the same thresholds or the same precision story, so a
+	 * single width-generic suite would have had to branch on the backend in nearly every
+	 * test.
 	 * @return {@code true} when a double-capable device is present
 	 */
 	static boolean aDoubleCapableGpuIsAvailable() {

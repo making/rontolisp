@@ -34,10 +34,10 @@ import org.jspecify.annotations.Nullable;
  * implementation has and the reference does not ({@code openblas_get_config},
  * {@code mkl_get_version}, ...), or when it is Accelerate, identified by its framework
  * path. The marker is cheap, deterministic and needs no startup benchmark; the throughput
- * measurement that established the rule lives in
- * {@code .todo/123-gpu-acceleration/AccelerateProbe.java}, which stays runnable so the
- * rule can be re-checked on new hardware. {@code RONTOLISP_BLAS} overrides both the
- * search and the marker check for a tuned build this list cannot name.
+ * measurement that established the rule is recorded in {@code .kb/linalg-blas.md}, which
+ * also names the standalone probe it came from -- kept runnable so the rule can be
+ * re-checked on new hardware. {@code RONTOLISP_BLAS} overrides both the search and the
+ * marker check for a tuned build this list cannot name.
  *
  * <h2>No copy</h2>
  *

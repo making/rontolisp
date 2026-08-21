@@ -147,7 +147,9 @@ class LinalgGpuDeclineTest {
 	@Test
 	void anEqualShapedBinaryOpIsUntouchedAtAnySize() {
 		// The guard on the measurement, and the reason the strided tier is not a
-		// reversal of phase 4b's refusal: at EQUAL shapes the CPU runs a lane loop and a
+		// reversal of the element-wise tier's refusal: at EQUAL shapes the CPU runs a
+		// lane
+		// loop and a
 		// round trip loses (measured 65 us against 112 at #f), so the device must not be
 		// offered them however big the arrays are. It is the BROADCAST shape -- where the
 		// CPU walks an odometer element by element -- that is taken.

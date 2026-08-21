@@ -62,10 +62,10 @@ extern "C" __global__ void gemm_batched_f64(const double* A, const double* B, do
   gemm_batched<double>(A, B, C, M, N, K, strideA, strideB);
 }
 
-// The ELEMENT-WISE tier (phase 4b): one unary map per width, with the member selected by
-// an OP CODE parameter rather than by an entry point of its own. One entry point per
-// width keeps the module lookup fixed however the member set grows, and the branch is
-// uniform across the whole grid, so it costs nothing measurable next to a libm call.
+// The ELEMENT-WISE tier: one unary map per width, with the member selected by an OP CODE
+// parameter rather than by an entry point of its own. One entry point per width keeps the
+// module lookup fixed however the member set grows, and the branch is uniform across the
+// whole grid, so it costs nothing measurable next to a libm call.
 //
 // The op codes below are mirrored by Gpu.MAP_* and the two must be changed together --
 // the Java side names them, this side switches on them, and nothing links the pair. Only
@@ -109,10 +109,10 @@ extern "C" __global__ void map_f64(const double* A, double* C, int n, int op) {
   map<double>(A, C, n, op);
 }
 
-// The STRIDED tier (phase 3): the three shapes whose CPU twin is a SCALAR ODOMETER walk
-// rather than a lane loop -- a BROADCAST binary op, an AXIS fold, and an axes TRANSPOSE.
-// Phase 4b refused the binary ops because it measured them at EQUAL shapes, where the CPU
-// runs a lane loop and a round trip cannot win; at unequal shapes the CPU walks an
+// The STRIDED tier: the three shapes whose CPU twin is a SCALAR ODOMETER walk rather than
+// a lane loop -- a BROADCAST binary op, an AXIS fold, and an axes TRANSPOSE. The
+// element-wise tier refused the binary ops because it measured them at EQUAL shapes, where
+// the CPU runs a lane loop and a round trip cannot win; at unequal shapes the CPU walks an
 // odometer element by element and the same round trip wins by 3-8x (.kb/gpu.md).
 //
 // All three compute in DOUBLE at both widths and narrow only on the store, which is the

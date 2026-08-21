@@ -62,9 +62,9 @@ final class JvmLinalgGpu {
 
 	/**
 	 * The STRIDED tier's BASE call shapes: the binary element-wise members, taken only at
-	 * a BROADCAST shape (the bridge declines an equal-shaped pair, which is the case
-	 * phase 4b measured and refused). Same convention: the value is the bridge method and
-	 * the {@code ops} key at once.
+	 * a BROADCAST shape (the bridge declines an equal-shaped pair, which is the case the
+	 * element-wise tier measured and refused). Same convention: the value is the bridge
+	 * method and the {@code ops} key at once.
 	 */
 	private static final Map<String, String> BIN_KERNELS = Map.of(LispNames.LINALG_ADD, "gpuAdd", LispNames.LINALG_SUB,
 			"gpuSub", LispNames.LINALG_MUL, "gpuMul", LispNames.LINALG_DIV, "gpuDiv", LispNames.LINALG_MAXIMUM,

@@ -470,7 +470,7 @@ public final class RontoLispCli {
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
 		// file:line:column instead of leaving the user a bare message about a program
-		// that may be a hundred spliced files (.todo/151 phase 2). Compile path only:
+		// that may be a hundred spliced files. Compile path only:
 		// see SourceProvenance for why the interpreter deliberately does not record.
 		SourceProvenance.startRecording();
 		try {
