@@ -7357,14 +7357,26 @@ public final class LispEvaluator {
 		return UserMacroExpander.expandAll(cons, this) instanceof LispCons expanded ? expanded : cons;
 	}
 
+	// Iterative on purpose: a Java-recursive walk adds a frame per cons visited, and this
+	// runs on every flet/labels entry -- inside a recursive Lisp function, that overhead
+	// compounds once per recursion level and can exhaust the JVM stack well before the
+	// interpreter's own recursion would (cl-mustache's recursive renderer hit this).
+	// An explicit, heap-backed stack keeps this check's own footprint at O(1) frames.
 	private static boolean treeContainsMacrolet(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		ArrayDeque<LispVal> pending = new ArrayDeque<>();
+		pending.push(form);
+		while (!pending.isEmpty()) {
+			LispVal current = pending.pop();
+			if (!(current instanceof LispCons cons)) {
+				continue;
+			}
+			if (cons.car() instanceof LispSymbol sym && LispNames.MACROLET.equals(sym.name())) {
+				return true;
+			}
+			pending.push(cons.car());
+			pending.push(cons.cdr());
 		}
-		if (cons.car() instanceof LispSymbol sym && LispNames.MACROLET.equals(sym.name())) {
-			return true;
-		}
-		return treeContainsMacrolet(cons.car()) || treeContainsMacrolet(cons.cdr());
+		return false;
 	}
 
 	/** Builds a proper list from the given elements. */
