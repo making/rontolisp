@@ -61,6 +61,26 @@ final class JvmLinalgGpu {
 			Map.entry(LispNames.LINALG_ERF, "gpuErf"));
 
 	/**
+	 * The STRIDED tier's BASE call shapes: the binary element-wise members, taken only at
+	 * a BROADCAST shape (the bridge declines an equal-shaped pair, which is the case
+	 * phase 4b measured and refused). Same convention: the value is the bridge method and
+	 * the {@code ops} key at once.
+	 */
+	private static final Map<String, String> BIN_KERNELS = Map.of(LispNames.LINALG_ADD, "gpuAdd", LispNames.LINALG_SUB,
+			"gpuSub", LispNames.LINALG_MUL, "gpuMul", LispNames.LINALG_DIV, "gpuDiv", LispNames.LINALG_MAXIMUM,
+			"gpuMaximum", LispNames.LINALG_MINIMUM, "gpuMinimum");
+
+	/**
+	 * The STRIDED tier's EXTENDED (option-form) call shapes -- the axis folds and the
+	 * axes transpose. These members have NO base-shape kernel: a whole-array fold is one
+	 * output cell, which on a device is a single-threaded loop, and a plain rank-2
+	 * transpose is the {@code --simd} lane form's own shape.
+	 */
+	private static final Map<String, String> EXT_KERNELS = Map.of(LispNames.LINALG_SUM, "gpuSumAxis",
+			LispNames.LINALG_AMAX, "gpuAmaxAxis", LispNames.LINALG_AMIN, "gpuAminAxis", LispNames.LINALG_TRANSPOSE,
+			"gpuTransposeAxes");
+
+	/**
 	 * Every qualified name the emit gate scans for. A program that reaches none of them
 	 * embeds no bridge, which is why a transformer -- whose only product is the stacked
 	 * one -- had to put more than {@code dot} in here.
@@ -71,23 +91,45 @@ final class JvmLinalgGpu {
 		for (String member : MAP_KERNELS.keySet()) {
 			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
 		}
+		for (String member : BIN_KERNELS.keySet()) {
+			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
+		}
+		for (String member : EXT_KERNELS.keySet()) {
+			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
+		}
 		names.sort(String::compareTo);
 		return names;
 	}
 
-	/** Whether the device bridge accelerates the given {@code linalg:} member. */
+	/** Whether the device bridge accelerates the given {@code linalg:} member at all. */
 	static boolean handles(String member) {
-		return LispNames.LINALG_DOT.equals(member) || LispNames.LINALG_MATMUL_ND.equals(member)
-				|| MAP_KERNELS.containsKey(member);
+		return kernelKey(member) != null || EXT_KERNELS.containsKey(member);
 	}
 
-	/** The {@code ops} key of the bridge kernel backing the given member. */
-	static String kernelKey(String member) {
+	/**
+	 * The {@code ops} key of the bridge kernel backing the member's BASE call shape, or
+	 * {@code null} when it has none -- which is the case for every member the device
+	 * takes only in its option form.
+	 */
+	static @org.jspecify.annotations.Nullable String kernelKey(String member) {
+		if (LispNames.LINALG_DOT.equals(member)) {
+			return JvmGpuRuntimeBuilder.DOT;
+		}
 		if (LispNames.LINALG_MATMUL_ND.equals(member)) {
 			return JvmGpuRuntimeBuilder.MATMUL_ND;
 		}
 		String map = MAP_KERNELS.get(member);
-		return map != null ? map : JvmGpuRuntimeBuilder.DOT;
+		return map != null ? map : BIN_KERNELS.get(member);
+	}
+
+	/**
+	 * The {@code ops} key of the bridge kernel backing the member's EXTENDED (option
+	 * form) call shape, or {@code null} when the device does not take that shape. The
+	 * parameters are the {@code --simd} extended kernel's, in the same order, so one
+	 * {@link am.ik.rontolisp.compiler.LinalgKernelCallLayout} serves both attempts.
+	 */
+	static @org.jspecify.annotations.Nullable String extendedKernelKey(String member) {
+		return EXT_KERNELS.get(member);
 	}
 
 }

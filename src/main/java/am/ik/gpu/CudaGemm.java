@@ -88,11 +88,40 @@ final class CudaGemm {
 	static final String KERNEL_MAP_F64 = "map_f64", KERNEL_MAP_F32 = "map_f32";
 
 	/**
+	 * The STRIDED tier's kernels, in the order {@link #strided} holds them: a BROADCAST
+	 * binary op, a strided GATHER (an axes transpose, and any other permuted copy) and an
+	 * AXIS fold, at each width. Their op codes are parameters exactly as the map's are.
+	 *
+	 * <p>
+	 * They exist because the CPU twins of these three shapes are scalar ODOMETER walks
+	 * rather than lane loops, which is a different comparison from the one the
+	 * element-wise tier lost at equal shapes ({@code .kb/gpu.md}).
+	 */
+	static final String[] KERNELS_STRIDED = { "bcast_f64", "bcast_f32", "gather_f64", "gather_f32", "fold_f64",
+			"fold_f32" };
+
+	private static final int BCAST_F64 = 0, BCAST_F32 = 1, GATHER_F64 = 2, GATHER_F32 = 3, FOLD_F64 = 4, FOLD_F32 = 5;
+
+	/**
 	 * Threads per block for the element-wise maps. They are one-dimensional and each
 	 * thread does one element, so the only requirement is a multiple of the warp; 256 is
 	 * the usual answer and the kernel is bandwidth-bound at f32 either way.
 	 */
 	private static final int MAP_BLOCK = 256;
+
+	/**
+	 * Threads per block for the strided tier. One thread per OUTPUT element (per output
+	 * CELL, for a fold), so the same warp-multiple rule the maps follow applies.
+	 */
+	private static final int STRIDED_BLOCK = 256;
+
+	/**
+	 * What one output element of the strided tier is charged as, for the safepoint
+	 * threshold. A broadcast index is one integer division and one multiply-add per axis
+	 * and the op itself is one instruction, so 16 is the order of it; a fold's own charge
+	 * multiplies this by the axis length, because that is what the thread walks.
+	 */
+	private static final long STRIDED_FLOPS_PER_ELEMENT = 16;
 
 	/**
 	 * What one element of an element-wise map is charged as, for the safepoint threshold
@@ -177,6 +206,9 @@ final class CudaGemm {
 
 	private final MemorySegment mapF32;
 
+	/** The strided tier's six kernels, indexed by {@link #BCAST_F64} and its siblings. */
+	private final MemorySegment[] strided;
+
 	private final String description;
 
 	/**
@@ -200,7 +232,8 @@ final class CudaGemm {
 
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
 			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32, MemorySegment mapF64,
-			MemorySegment mapF32, boolean pooled, MemorySegment memoryPool, long syncFlopCeiling, String description) {
+			MemorySegment mapF32, MemorySegment[] strided, boolean pooled, MemorySegment memoryPool,
+			long syncFlopCeiling, String description) {
 		this.driver = driver;
 		this.device = device;
 		this.context = context;
@@ -211,6 +244,7 @@ final class CudaGemm {
 		this.gemmBatchedF32 = gemmBatchedF32;
 		this.mapF64 = mapF64;
 		this.mapF32 = mapF32;
+		this.strided = strided;
 		this.pooled = pooled;
 		this.memoryPool = memoryPool;
 		this.syncFlopCeiling = syncFlopCeiling;
@@ -336,6 +370,15 @@ final class CudaGemm {
 						"cuModuleGetFunction " + KERNEL_MAP_F32 + ": " + driver.errorString(status));
 			}
 			MemorySegment mapF32 = functionOut.get(P, 0);
+			MemorySegment[] strided = new MemorySegment[KERNELS_STRIDED.length];
+			for (int i = 0; i < KERNELS_STRIDED.length; i++) {
+				status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNELS_STRIDED[i]));
+				if (status != CuResult.SUCCESS) {
+					return unwind(driver, device, true, module,
+							"cuModuleGetFunction " + KERNELS_STRIDED[i] + ": " + driver.errorString(status));
+				}
+				strided[i] = functionOut.get(P, 0);
+			}
 			MemorySegment pool = MemorySegment.NULL;
 			boolean pooled = pooledAllocationWorks(driver, arena);
 			if (pooled) {
@@ -349,7 +392,7 @@ final class CudaGemm {
 			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
 			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32, mapF64,
-					mapF32, pooled, pool, ceiling, description), description);
+					mapF32, strided, pooled, pool, ceiling, description), description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
@@ -716,6 +759,252 @@ final class CudaGemm {
 		finally {
 			release(buffers);
 		}
+	}
+
+	// --- the strided tier ------------------------------------------------------------
+	// Four buffers for a broadcast binary op, three for a gather, two for a fold: the
+	// operands, the result, and -- for the first two -- a small int buffer holding the
+	// output dims followed by one source stride per output axis per operand. That fourth
+	// buffer is 3 * rank ints, so it costs one pooled allocation (0.7-2.3 us) and a copy
+	// of at most 192 bytes; passing the layout as a by-value kernel parameter would save
+	// that and cost a second parameter-packing shape, which is not a trade worth making
+	// at these sizes.
+
+	/**
+	 * {@code out[i] = op(a[ia(i)], b[ib(i)])} over a BROADCAST binary element-wise op:
+	 * the output is {@code dims} row-major and each operand follows its own per-axis
+	 * stride, 0 where it is stretched. Bit-identical to a scalar widen-compute-narrow
+	 * walk at both widths -- the kernel computes in double and narrows only on the store.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean bcast(int op, double[] a, int oa, int[] sa, double[] b, int ob, int[] sb, double[] c, int oc, int[] dims) {
+		return bcast(op, MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(b), ob, sb, MemorySegment.ofArray(c),
+				oc, dims, Double.BYTES, this.strided[BCAST_F64]);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #bcast(int, double[], int, int[], double[], int, int[], double[], int, int[])}.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean bcastF(int op, float[] a, int oa, int[] sa, float[] b, int ob, int[] sb, float[] c, int oc, int[] dims) {
+		return bcast(op, MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(b), ob, sb, MemorySegment.ofArray(c),
+				oc, dims, Float.BYTES, this.strided[BCAST_F32]);
+	}
+
+	/**
+	 * One width-independent broadcast round trip; the two public forms differ only in it.
+	 */
+	private boolean bcast(int op, MemorySegment a, int oa, int[] sa, MemorySegment b, int ob, int[] sb, MemorySegment c,
+			int oc, int[] dims, int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		int rank = dims.length;
+		int n = count(dims);
+		long aBytes = (span(dims, sa) + 1L) * width, bBytes = (span(dims, sb) + 1L) * width, cBytes = (long) n * width,
+				metaBytes = 3L * rank * Integer.BYTES;
+		long[] buffers = { 0, 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+				return false;
+			}
+			if (!allocate(arena, buffers, aBytes, bBytes, cBytes, metaBytes)) {
+				return false;
+			}
+			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!upload(buffers[0], a, (long) oa * width, aBytes) || !upload(buffers[1], b, (long) ob * width, bBytes)
+					|| !uploadLayout(arena, buffers[3], dims, sa, sb)
+					|| !launchStrided(arena, kernel, n,
+							new long[] { op, buffers[0], buffers[1], buffers[2], n, rank, buffers[3] },
+							new boolean[] { false, true, true, true, false, false, true }, sync)) {
+				return false;
+			}
+			return download(c, (long) oc * width, buffers[2], cBytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(buffers);
+		}
+	}
+
+	/**
+	 * {@code out[i] = a[ia(i)]}: the permuted COPY behind an axes transpose, one source
+	 * stride per output axis. A copy, so trivially bit-identical.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean gather(double[] a, int oa, int[] sa, double[] c, int oc, int[] dims) {
+		return gather(MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(c), oc, dims, Double.BYTES,
+				this.strided[GATHER_F64]);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #gather(double[], int, int[], double[], int, int[])}.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean gatherF(float[] a, int oa, int[] sa, float[] c, int oc, int[] dims) {
+		return gather(MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(c), oc, dims, Float.BYTES,
+				this.strided[GATHER_F32]);
+	}
+
+	private boolean gather(MemorySegment a, int oa, int[] sa, MemorySegment c, int oc, int[] dims, int width,
+			MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		int rank = dims.length;
+		int n = count(dims);
+		long aBytes = (span(dims, sa) + 1L) * width, cBytes = (long) n * width, metaBytes = 2L * rank * Integer.BYTES;
+		long[] buffers = { 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+				return false;
+			}
+			if (!allocate(arena, buffers, aBytes, cBytes, metaBytes)) {
+				return false;
+			}
+			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!upload(buffers[0], a, (long) oa * width, aBytes) || !uploadLayout(arena, buffers[2], dims, sa, null)
+					|| !launchStrided(arena, kernel, n, new long[] { buffers[0], buffers[1], n, rank, buffers[2] },
+							new boolean[] { true, true, false, false, true }, sync)) {
+				return false;
+			}
+			return download(c, (long) oc * width, buffers[1], cBytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(buffers);
+		}
+	}
+
+	/**
+	 * The fold of one axis: {@code outer * inner} output cells, each walking its own
+	 * {@code len} elements in ASCENDING order in a double accumulator. Sequential per
+	 * cell on purpose -- a tree reduction would be faster and would not be the caller's
+	 * sum.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean fold(int op, double[] a, int oa, double[] c, int oc, int outer, int len, int inner) {
+		return fold(op, MemorySegment.ofArray(a), oa, MemorySegment.ofArray(c), oc, outer, len, inner, Double.BYTES,
+				this.strided[FOLD_F64]);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #fold(int, double[], int, double[], int, int, int, int)}.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean foldF(int op, float[] a, int oa, float[] c, int oc, int outer, int len, int inner) {
+		return fold(op, MemorySegment.ofArray(a), oa, MemorySegment.ofArray(c), oc, outer, len, inner, Float.BYTES,
+				this.strided[FOLD_F32]);
+	}
+
+	private boolean fold(int op, MemorySegment a, int oa, MemorySegment c, int oc, int outer, int len, int inner,
+			int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		int cells = outer * inner;
+		long aBytes = (long) cells * len * width, cBytes = (long) cells * width;
+		long[] buffers = { 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+				return false;
+			}
+			if (!allocate(arena, buffers, aBytes, cBytes)) {
+				return false;
+			}
+			boolean sync = (long) cells * len * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!upload(buffers[0], a, (long) oa * width, aBytes) || !launchStrided(arena, kernel, cells,
+					new long[] { op, buffers[0], buffers[1], outer, len, inner },
+					new boolean[] { false, true, true, false, false, false }, sync)) {
+				return false;
+			}
+			return download(c, (long) oc * width, buffers[1], cBytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(buffers);
+		}
+	}
+
+	/** The output element count of a strided shape; the caller has already bounded it. */
+	private static int count(int[] dims) {
+		int n = 1;
+		for (int d : dims) {
+			n *= d;
+		}
+		return n;
+	}
+
+	/** The highest element index a stride vector reaches over {@code dims}. */
+	private static long span(int[] dims, int[] stride) {
+		long span = 0;
+		for (int k = 0; k < dims.length; k++) {
+			span += (long) (dims[k] - 1) * stride[k];
+		}
+		return span;
+	}
+
+	/**
+	 * Copies the layout -- the output dims, then one source stride per output axis per
+	 * operand -- into the small device buffer the strided kernels index it out of. Plain
+	 * ints, so a rank-8 broadcast is 96 bytes.
+	 */
+	private boolean uploadLayout(Arena arena, long destination, int[] dims, int[] sa, int @Nullable [] sb)
+			throws Throwable {
+		int rank = dims.length;
+		int words = rank * (sb == null ? 2 : 3);
+		MemorySegment host = arena.allocate(I, words);
+		for (int k = 0; k < rank; k++) {
+			host.setAtIndex(I, k, dims[k]);
+			host.setAtIndex(I, rank + k, sa[k]);
+			if (sb != null) {
+				host.setAtIndex(I, 2 * rank + k, sb[k]);
+			}
+		}
+		int status = this.driver.memcpyHtoD(destination, host, (long) words * Integer.BYTES);
+		return status == CuResult.SUCCESS || fail(status);
+	}
+
+	/**
+	 * One flat launch over {@code n} output cells, one thread each. The parameter block
+	 * is described by two parallel arrays -- the values, and whether each is a device
+	 * POINTER (8 bytes) or an {@code int} (4) -- because the three strided kernels take
+	 * three different mixtures of the two.
+	 */
+	private boolean launchStrided(Arena arena, MemorySegment function, int n, long[] values, boolean[] pointer,
+			boolean sync) throws Throwable {
+		MemorySegment parameters = arena.allocate(P, values.length);
+		for (int i = 0; i < values.length; i++) {
+			MemorySegment slot = arena.allocate(pointer[i] ? L : I);
+			if (pointer[i]) {
+				slot.set(L, 0, values[i]);
+			}
+			else {
+				slot.set(I, 0, (int) values[i]);
+			}
+			parameters.setAtIndex(P, i, slot);
+		}
+		int status = this.driver.launchKernel(function, (n + STRIDED_BLOCK - 1) / STRIDED_BLOCK, 1, 1, STRIDED_BLOCK, 1,
+				1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);
+		if (status != CuResult.SUCCESS) {
+			return fail(status);
+		}
+		if (sync) {
+			status = this.driver.ctxSynchronize();
+			if (status != CuResult.SUCCESS) {
+				return fail(status);
+			}
+		}
+		return true;
 	}
 
 	/**

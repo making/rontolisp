@@ -131,6 +131,12 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(embedsGpuBridge(compile("(print (linalg:erf #d(1.0)))", true))).isTrue();
 		assertThat(embedsGpuBridge(compile("(print (linalg:erf #d(1.0)))", false))).isFalse();
 		assertThat(embedsGpuBridge(compile("(print (linalg:tanh #d(1.0)))", true))).isTrue();
+		// And over the STRIDED tier, whose members reach the device at their BROADCAST
+		// and OPTION-FORM call shapes -- the axis folds and the axes transpose have no
+		// base-shape kernel at all, so the gate is the only thing that puts them in.
+		assertThat(embedsGpuBridge(compile("(print (linalg:sub #d((1.0)) #d(2.0)))", true))).isTrue();
+		assertThat(embedsGpuBridge(compile("(print (linalg:sum #d((1.0)) :axis 0))", true))).isTrue();
+		assertThat(embedsGpuBridge(compile("(print (linalg:transpose #d((1.0)) '(1 0)))", true))).isTrue();
 	}
 
 	@Test
@@ -176,7 +182,13 @@ class JvmLinalgGpuAccelCompilerTest {
 			.contains(".visible .entry gemm_batched_f64")
 			.contains(".visible .entry gemm_batched_f32")
 			.contains(".visible .entry map_f64")
-			.contains(".visible .entry map_f32");
+			.contains(".visible .entry map_f32")
+			.contains(".visible .entry bcast_f64")
+			.contains(".visible .entry bcast_f32")
+			.contains(".visible .entry gather_f64")
+			.contains(".visible .entry gather_f32")
+			.contains(".visible .entry fold_f64")
+			.contains(".visible .entry fold_f32");
 	}
 
 	@Test
@@ -201,6 +213,74 @@ class JvmLinalgGpuAccelCompilerTest {
 				(defparameter *a* (linalg:linspace 0.01 9.0 200000))
 				(print (list (linalg:sum (linalg:sqrt *a*)) (linalg:sum (linalg:abs *a*))
 				             (linalg:sum (linalg:negative *a*)) (linalg:sum (linalg:add *a* *a*))))
+				""");
+	}
+
+	@Test
+	void aDeclinedStridedCallRunsTheSameProgramToTheSameOutputOnAnyMachine() throws Exception {
+		// An EQUAL-shaped binary pair is not a member at any size (the CPU lane loop wins
+		// it), and every strided shape below its threshold is untouched.
+		assertMatchesScalarReference("""
+				(defparameter *a* (linalg:reshape (linalg:linspace 0.01 9.0 262144) '(64 4096)))
+				(defparameter *b* (linalg:reshape (linalg:linspace 0.02 3.0 262144) '(64 4096)))
+				(print (list (linalg:sum (linalg:add *a* *b*)) (linalg:sum (linalg:sub *a* *b*))
+				             (linalg:sum (linalg:mul *a* *b*)) (linalg:sum (linalg:div *a* *b*))))
+				""");
+		assertMatchesScalarReference("""
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 32000) '(50 640)))
+				(defparameter *m* (linalg:amax *x* :axis 1 :keepdims t))
+				(print (list (linalg:sum (linalg:sub *x* *m*))
+				             (linalg:sum (linalg:sum *x* :axis 1 :keepdims t))
+				             (linalg:sum (linalg:transpose *x* '(1 0)))))
+				""");
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void theStridedTierIsBitIdenticalToTheScalarReference() throws Exception {
+		// The tier's whole claim, on the compiled backend: a BROADCAST binary op, an AXIS
+		// fold and an axes TRANSPOSE are bit-identical to the defun at both widths, over
+		// INEXACT data, above the thresholds. Unlike the element-wise tier there is no
+		// libm in them and nothing to diverge.
+		assertMatchesScalarReference("""
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
+				(defparameter *m* (linalg:amax *x* :axis 1 :keepdims t))
+				(defparameter *s* (linalg:sub *x* *m*))
+				(print (list (linalg:sum *s*)
+				             (linalg:sum (linalg:div *s* (linalg:sum *s* :axis 1 :keepdims t)))
+				             (linalg:sum (linalg:mul *x* *m*)) (linalg:sum (linalg:add *x* *m*))
+				             (linalg:sum (linalg:maximum *x* *m*)) (linalg:sum (linalg:minimum *x* *m*))
+				             (linalg:sum (linalg:amin *x* :axis 1))
+				             (linalg:sum (linalg:sum *x* :axis 0))
+				             (linalg:sum (linalg:transpose *x* '(1 0)))))
+				""");
+		assertMatchesScalarReference("""
+				(defparameter *y* (linalg:reshape
+				                   (linalg:linspace 0.013 3.7 262144 :element-type 'single-float)
+				                   '(4 64 1024)))
+				(defparameter *r* (linalg:mean *y* :axis 2 :keepdims t))
+				(print (list (linalg:sum (linalg:sub *y* *r*)) (linalg:sum (linalg:div *y* *r*))
+				             (linalg:sum (linalg:var *y* :axis 2 :keepdims t))
+				             (linalg:sum (linalg:transpose *y* '(0 2 1)))
+				             (linalg:shape (linalg:transpose *y* '(2 0 1)))))
+				""");
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void anOptionFormArgumentIsEvaluatedExactlyOnceEvenWhenTheDeviceDeclines() throws Exception {
+		// The device rung now sits at the EXTENDED call sites too, so the evaluate-once
+		// guard has to hold there: every decline branch re-reads the temps, and
+		// recompiling the argument forms would repeat their side effects.
+		assertMatchesScalarReference("""
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) (linalg:reshape (linalg:arange 1 65) '(8 8)))
+				(print (linalg:sum (bump) :axis 0))
+				(print *n*)
+				(defparameter *m* 0)
+				(defun bump2 () (setq *m* (+ *m* 1)) (linalg:reshape (linalg:arange 1 65) '(8 8)))
+				(print (linalg:transpose (bump2) '(1 0)))
+				(print *m*)
 				""");
 	}
 

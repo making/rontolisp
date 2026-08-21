@@ -331,7 +331,7 @@ public final class LinalgSimd {
 	 * literal {@code :keyword value} pairs over those names (odd, unknown, repeated)
 	 * yields {@code null}, and the kernel declines so the defun signals.
 	 */
-	private static LispVal @Nullable [] options(List<LispVal> args, int required, String... keywords) {
+	static LispVal @Nullable [] options(List<LispVal> args, int required, String... keywords) {
 		LispVal[] out = new LispVal[keywords.length];
 		Arrays.fill(out, LispNil.INSTANCE);
 		boolean[] seen = new boolean[keywords.length];
@@ -494,7 +494,7 @@ public final class LinalgSimd {
 	 * Normalizes a possibly negative integer axis against the rank
 	 * ({@code %la-norm-axis}); a non-integer or out-of-range axis declines.
 	 */
-	private static @Nullable Integer normAxis(LispVal v, int rank) {
+	static @Nullable Integer normAxis(LispVal v, int rank) {
 		Integer i = smallInt(v);
 		if (i == null) {
 			return null;
@@ -504,7 +504,7 @@ public final class LinalgSimd {
 	}
 
 	/** The dims with the axis dropped -- or kept as extent 1 ({@code %la-axis-shape}). */
-	private static int[] axisShape(int[] d, int ax, boolean keep) {
+	static int[] axisShape(int[] d, int ax, boolean keep) {
 		int[] od = new int[keep ? d.length : d.length - 1];
 		int k = 0;
 		for (int i = 0; i < d.length; i++) {
@@ -583,7 +583,7 @@ public final class LinalgSimd {
 	}
 
 	/** A proper list of exact integers forming a permutation of {@code 0..rank-1}. */
-	private static int @Nullable [] permutation(LispVal value, int rank) {
+	static int @Nullable [] permutation(LispVal value, int rank) {
 		int[] axes = new int[rank];
 		boolean[] seen = new boolean[rank];
 		int count = 0;
@@ -879,7 +879,7 @@ public final class LinalgSimd {
 
 	// --- marshalling ------------------------------------------------------------------
 
-	private static @Nullable LispFloatArray packed(LispVal value) {
+	static @Nullable LispFloatArray packed(LispVal value) {
 		return value instanceof LispFloatArray a ? a : null;
 	}
 

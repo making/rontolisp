@@ -20,17 +20,28 @@ Three backends, one per interception mechanism:
 (`.kb/gpu.md`) a THIRD -- both on the interpreter and the JVM only, since both call out
 through the foreign function API: they put a tuned CBLAS's `gemm`, and a device product
 ahead of that, in front of the lane kernel for `linalg:dot` -- and since 2026-08-21 `--gpu`
-also takes `%la-matmul-nd` and the twelve element-wise members whose scalar cost is a libm
-call (`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`),
-where it has no `--blas` neighbour (those chains are device -> lane kernel -> defun). That
+also takes `%la-matmul-nd`, the twelve element-wise members whose scalar cost is a libm
+call (`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`), and
+the ten members whose CPU kernel BELOW is a scalar odometer walk rather than a lane loop
+(`add` `sub` `mul` `div` `maximum` `minimum` at a BROADCAST shape, `sum` `amax` `amin`
+with `:axis`, `transpose` with an axes list), where it has no `--blas` neighbour (those
+chains are device -> lane kernel -> defun). **That last set is chosen against the CPU
+column in THIS file**: the same `linalg:sub` is a device member against a `(4 256 1)`
+operand and a decline against a same-shaped one, because the first takes the odometer
+branch below and the second the lane loop. That
 is why the JVM
 interceptor is named `JvmLinalgKernelCompiler` rather than `JvmLinalgSimdCompiler` -- it
-emits a CHAIN of up to three attempts over one set of temps, ending at the scalar defun.
+emits a CHAIN of up to three attempts over one set of temps, ending at the scalar defun,
+and since 2026-08-21 it emits that chain at the EXTENDED (option-form) call sites too.
 Nothing below changes: with `--blas` and `--gpu` off, a `--simd` build emits and computes
 exactly what it did before.
 
 **`--gpu` is the one flag over this seam whose element-wise results are NOT bit-identical
-to the defun**, which is the contract this file states for every member of its own set:
+to the defun** -- for its TRANSCENDENTAL tier only; its strided tier (the broadcast pairs,
+the axis folds and the axes transpose) widens to double, computes in double and narrows on
+the store exactly as the kernels below do, and is bit-identical at both widths. For the
+transcendentals the break is real, and this file states the opposite contract for every
+member of its own set:
 the device has its own libm, and at `#f` it evaluates AT the operand width where these
 kernels evaluate in double and narrow. `.kb/gpu.md` carries the per-member divergence
 table and the tolerance its tests pin. Nothing in the precision contract BELOW moves --
@@ -191,7 +202,14 @@ call sites above) and the wasm function block (34 -> 41: `BCAST`, `TRANSPOSE_AXE
 `SUM_AXIS`, `AMAX_AXIS`, `AMIN_AXIS`, `ARGMAX_AXIS`, `ARGMIN_AXIS`). All of them are
 deliberately SCALAR walks (odometer copies and folds, `_v_get`/`_v_set` element loops
 on wasm): the win is de-boxing, and scalar double arithmetic is what makes them
-bit-identical (below). Declines: a nil/non-integer/out-of-range axis, an empty axis
+bit-identical (below). **Being scalar walks is also what made them `--gpu`'s phase-3
+member set** (`.kb/gpu.md`): a shape that costs the CPU an odometer step per element
+rather than a lane's worth pays for a round trip 3-8x over at a transformer's shapes,
+where the same member at an equal shape does not pay at all. If a lane form is ever
+written for the row-broadcast case -- `(n m p) op (n m 1)` is a splat per row and is the
+single hottest kernel in a `--gpu --simd` training step -- re-run
+`.todo/123-gpu-acceleration/{shaped-baseline.lisp,StridedCrossover.java}`, because it
+would move that member's crossover. Declines: a nil/non-integer/out-of-range axis, an empty axis
 (the vector `sum` of an empty axis would need the defun's INTEGER 0), a non-permutation
 axes list, a mixed-width or non-broadcastable pair, any general boxed operand.
 

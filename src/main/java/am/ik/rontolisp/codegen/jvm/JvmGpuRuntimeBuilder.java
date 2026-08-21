@@ -96,6 +96,20 @@ final class JvmGpuRuntimeBuilder {
 	private static final List<String> MAP_KERNELS = List.of("gpuExp", "gpuLog", "gpuTanh", "gpuSin", "gpuCos", "gpuTan",
 			"gpuAsin", "gpuAcos", "gpuAtan", "gpuSinh", "gpuCosh", "gpuErf");
 
+	/**
+	 * The {@code ops} keys of the STRIDED tier's two-argument kernels: the broadcast
+	 * binary ops and the axes transpose. Same convention as {@link #MAP_KERNELS} -- the
+	 * key IS the bridge method name.
+	 */
+	private static final List<String> BINARY_KERNELS = List.of("gpuAdd", "gpuSub", "gpuMul", "gpuDiv", "gpuMaximum",
+			"gpuMinimum", "gpuTransposeAxes");
+
+	/**
+	 * The strided tier's three-argument kernels: the axis folds
+	 * ({@code a, axis, keepdims}).
+	 */
+	private static final List<String> FOLD_KERNELS = List.of("gpuSumAxis", "gpuAmaxAxis", "gpuAminAxis");
+
 	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
 	private static final int CHUNK_SIZE = 40000;
 
@@ -160,6 +174,14 @@ final class JvmGpuRuntimeBuilder {
 		for (String kernel : MAP_KERNELS) {
 			ops.put(kernel, cp.addMethodref(bridgeClass,
 					cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"))));
+		}
+		for (String kernel : BINARY_KERNELS) {
+			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel),
+					cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		}
+		for (String kernel : FOLD_KERNELS) {
+			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel),
+					cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		}
 
 		// --- _gpuInit body ---------------------------------------------------------

@@ -4,6 +4,7 @@ import java.util.Random;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
@@ -41,6 +42,30 @@ class GpuTest {
 	static boolean gpuIsAvailable() {
 		return Gpu.available();
 	}
+
+	/**
+	 * The four tests that ASSERT ON FREE DEVICE MEMORY hold this, so they never overlap
+	 * each other. {@code cuMemGetInfo} is a property of the device rather than of the
+	 * thread: two leak tests running at once each see the other's pool churn as their own
+	 * drift, and with the strided tier's four-buffer path in the set that drift reached
+	 * 800 MB against a 256 MB bound. Serializing them is the fix; widening the bound
+	 * would throw away what the assertion is for. (The bound is still loose, because this
+	 * suite also runs beside a SECOND surefire fork whose compiled classes each define
+	 * their own copy of the binding -- see {@code .kb/gpu.md}.)
+	 */
+	private static final String DEVICE_MEMORY = "am.ik.gpu.device-memory";
+
+	/**
+	 * How far free device memory may drift across a leak test before it is called a leak.
+	 * It is deliberately LOOSE, and it had to be widened twice: {@code cuMemGetInfo}
+	 * reports the whole DEVICE, and the rest of the suite runs beside this one -- the JVM
+	 * backend's fork loads a separate copy of this binding, with its own primary context
+	 * and its own PTX module, for every compiled {@code --gpu} class it defines, and
+	 * there are now enough of those to move free memory by ~800 MB on their own. Every
+	 * leak test below is sized so that a real leak is 2-8x this, so widening the bound
+	 * costs the assertion nothing.
+	 */
+	private static final long DRIFT_BOUND = 1536L << 20;
 
 	/**
 	 * The smallest square product this machine will actually accept, times a safety
@@ -400,12 +425,13 @@ class GpuTest {
 	}
 
 	@Test
+	@ResourceLock(DEVICE_MEMORY)
 	void aRunOfElementWiseMapsFreesEveryBufferItAllocates() {
 		// The map path allocates TWO buffers rather than three and frees them in its own
 		// finally; the product's leak test cannot cover it.
 		CudaGemm gemm = Gpu.device();
 		assertThat(gemm).isNotNull();
-		int n = 1 << 18;
+		int n = 1 << 19;
 		double[] a = new double[n], c = new double[n];
 		assertThat(gemm.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
 		long before = gemm.freeDeviceMemory();
@@ -413,14 +439,229 @@ class GpuTest {
 		for (int i = 0; i < 1000; i++) {
 			assertThat(gemm.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
 		}
-		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(256L << 20);
+		// 1000 maps of two 4 MB buffers leak 8 GB if they leak at all. See the bound's
+		// reasoning under aRunOfSuccessfulProductsFreesEveryBufferItAllocates.
+		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
 	}
 
 	@Test
+	void aBroadcastBinaryOpMatchesTheScalarOdometerWalk() {
+		// Every op, both widths, over a (rows x cols) output against a (rows x 1) operand
+		// -- the shape torch:softmax and torch:layer-norm produce, and the one the CPU
+		// walks with an odometer. INEXACT data, because the whole claim is that the
+		// device
+		// is bit-identical here rather than merely close: it widens to double, computes
+		// in
+		// double and narrows on the store, which is %la-bcast-loop's own rule.
+		int cols = 64;
+		int rows = (int) Math.max(Gpu.stridedMinElements() / cols * 2, 512);
+		int n = rows * cols;
+		Random random = new Random(4242);
+		double[] x = new double[n], y = new double[rows], out = new double[n];
+		float[] xf = new float[n], yf = new float[n == 0 ? 0 : rows], outf = new float[n];
+		for (int i = 0; i < n; i++) {
+			x[i] = random.nextDouble() * 4 - 2;
+			xf[i] = (float) x[i];
+		}
+		for (int i = 0; i < rows; i++) {
+			y[i] = random.nextDouble() * 4 - 2 + 3;
+			yf[i] = (float) y[i];
+		}
+		int[] dims = { rows, cols };
+		int[] sx = { cols, 1 };
+		int[] sy = { 1, 0 };
+		for (int op = 0; op < Gpu.BIN_OPS; op++) {
+			assertThat(Gpu.bcast(op, x, 0, sx, y, 0, sy, out, 0, dims)).isTrue();
+			assertThat(Gpu.bcast(op, xf, 0, sx, yf, 0, sy, outf, 0, dims)).isTrue();
+			for (int r = 0; r < rows; r++) {
+				for (int c = 0; c < cols; c++) {
+					double expected = binary(op, x[r * cols + c], y[r]);
+					assertThat(out[r * cols + c]).isEqualTo(expected);
+					assertThat(outf[r * cols + c]).isEqualTo((float) binary(op, xf[r * cols + c], yf[r]));
+				}
+			}
+		}
+	}
+
+	/**
+	 * The oracle {@code bin_op} mirrors: the strict selects put the SECOND operand first.
+	 */
+	private static double binary(int op, double a, double b) {
+		return switch (op) {
+			case Gpu.BIN_ADD -> a + b;
+			case Gpu.BIN_SUB -> a - b;
+			case Gpu.BIN_MUL -> a * b;
+			case Gpu.BIN_DIV -> a / b;
+			case Gpu.BIN_MAX -> a > b ? a : b;
+			default -> a < b ? a : b;
+		};
+	}
+
+	@Test
+	void aStridedGatherIsThePermutedCopy() {
+		// A rank-3 axes transpose (0 2 1), which is what every attention head asks for.
+		int d0 = 4, d1 = 64;
+		int d2 = (int) Math.max(Gpu.stridedMinElements() / (d0 * d1) * 2, 64);
+		int n = d0 * d1 * d2;
+		Random random = new Random(99);
+		double[] a = new double[n], out = new double[n];
+		float[] af = new float[n], outf = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = random.nextDouble();
+			af[i] = (float) a[i];
+		}
+		int[] od = { d0, d2, d1 };
+		int[] strides = { d1 * d2, 1, d2 };
+		assertThat(Gpu.gather(a, 0, strides, out, 0, od)).isTrue();
+		assertThat(Gpu.gather(af, 0, strides, outf, 0, od)).isTrue();
+		for (int i = 0; i < d0; i++) {
+			for (int j = 0; j < d2; j++) {
+				for (int k = 0; k < d1; k++) {
+					double expected = a[i * d1 * d2 + k * d2 + j];
+					assertThat(out[(i * d2 + j) * d1 + k]).isEqualTo(expected);
+					assertThat(outf[(i * d2 + j) * d1 + k]).isEqualTo((float) expected);
+				}
+			}
+		}
+	}
+
+	@Test
+	void anAxisFoldIsTheDefunsOwnSequentialFold() {
+		// outer x len x inner, folded over the middle axis. The accumulator is a double
+		// at
+		// BOTH widths and the walk is ascending, so this is bit-identical to a scalar
+		// fold
+		// -- asserted over inexact data, and asserted for the two seeds separately: sum
+		// starts from 0, amax/amin from the first element with a STRICT comparison, so
+		// the
+		// accumulator wins a tie.
+		int outer = 8, inner = 32;
+		int len = (int) Math.max(Gpu.foldMinElements() / (outer * inner) * 2, 16);
+		int n = outer * len * inner, cells = outer * inner;
+		Random random = new Random(7);
+		double[] a = new double[n], out = new double[cells];
+		float[] af = new float[n], outf = new float[cells];
+		for (int i = 0; i < n; i++) {
+			a[i] = random.nextDouble() * 6 - 3;
+			af[i] = (float) a[i];
+		}
+		for (int op = 0; op < Gpu.FOLD_OPS; op++) {
+			assertThat(Gpu.fold(op, a, 0, out, 0, outer, len, inner)).isTrue();
+			assertThat(Gpu.fold(op, af, 0, outf, 0, outer, len, inner)).isTrue();
+			for (int o = 0; o < outer; o++) {
+				for (int i = 0; i < inner; i++) {
+					int base = o * len * inner + i;
+					double acc = op == Gpu.FOLD_SUM ? 0.0 : a[base];
+					double accf = op == Gpu.FOLD_SUM ? 0.0 : af[base];
+					for (int k = op == Gpu.FOLD_SUM ? 0 : 1; k < len; k++) {
+						double v = a[base + k * inner], vf = af[base + k * inner];
+						if (op == Gpu.FOLD_SUM) {
+							acc += v;
+							accf += vf;
+						}
+						else if (op == Gpu.FOLD_AMAX ? v > acc : v < acc) {
+							acc = v;
+						}
+						if (op != Gpu.FOLD_SUM && (op == Gpu.FOLD_AMAX ? vf > accf : vf < accf)) {
+							accf = vf;
+						}
+					}
+					assertThat(out[o * inner + i]).isEqualTo(acc);
+					assertThat(outf[o * inner + i]).isEqualTo((float) accf);
+				}
+			}
+		}
+	}
+
+	@Test
+	void everyStridedOperandIncludingTheResultIsReadFromItsOwnOffset() {
+		// The compiled backends keep a [rank, dim..., data] header inside the same array,
+		// so all three calls have to honour an element offset -- and must not touch the
+		// header they are offset past.
+		int cols = 64;
+		// Sized off the FOLD threshold, which is the higher of the two: one shape has to
+		// clear both.
+		int rows = (int) Math.max(Gpu.foldMinElements() / cols * 2, 512);
+		int n = rows * cols, off = 3;
+		double[] x = new double[off + n], y = new double[off + rows], out = new double[off + n];
+		for (int i = 0; i < n; i++) {
+			x[off + i] = i % 17;
+		}
+		for (int i = 0; i < rows; i++) {
+			y[off + i] = i % 5 + 1;
+		}
+		int[] dims = { rows, cols };
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, off, new int[] { cols, 1 }, y, off, new int[] { 1, 0 }, out, off, dims))
+			.isTrue();
+		assertThat(out[0]).isEqualTo(0.0);
+		assertThat(out[off]).isEqualTo(x[off] + y[off]);
+		assertThat(out[off + n - 1]).isEqualTo(x[off + n - 1] + y[off + rows - 1]);
+		double[] folded = new double[off + rows];
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, off, folded, off, rows, cols, 1)).isTrue();
+		assertThat(folded[0]).isEqualTo(0.0);
+		double first = 0;
+		for (int c = 0; c < cols; c++) {
+			first += x[off + c];
+		}
+		assertThat(folded[off]).isEqualTo(first);
+		double[] moved = new double[off + n];
+		assertThat(Gpu.gather(x, off, new int[] { 1, cols }, moved, off, new int[] { cols, rows })).isTrue();
+		assertThat(moved[0]).isEqualTo(0.0);
+		assertThat(moved[off + 1]).isEqualTo(x[off + cols]);
+	}
+
+	@Test
+	void everyStridedDeclineConditionStillDeclinesWithADevicePresent() {
+		int cols = 64;
+		int rows = (int) Math.max(Gpu.stridedMinElements() / cols * 2, 512);
+		int n = rows * cols;
+		double[] x = new double[n], y = new double[rows], out = new double[n];
+		int[] dims = { rows, cols };
+		int[] sx = { cols, 1 };
+		int[] sy = { 1, 0 };
+		assertThat(Gpu.bcast(Gpu.BIN_OPS, x, 0, sx, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(-1, x, 0, sx, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, sx, y, 0, sy, out, 1, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols }, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, -1 }, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, sx, y, 0, sy, out, 0, new int[] { 2, 2 })).isFalse();
+		assertThat(Gpu.gather(x, 0, sx, out, 0, new int[] { 2, 2 })).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_OPS, x, 0, out, 0, rows, cols, 1)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, 0, out, 0, 1, n, 1)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, 0, out, 0, rows, cols, 0)).isFalse();
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aRunOfStridedCallsFreesEveryBufferItAllocates() {
+		// The broadcast path allocates FOUR buffers -- the fourth is the layout -- and
+		// the
+		// fold two; neither is reached by the product's or the map's leak test.
+		CudaGemm gemm = Gpu.device();
+		assertThat(gemm).isNotNull();
+		int cols = 64, rows = 1 << 12, n = rows * cols;
+		double[] x = new double[n], y = new double[rows], out = new double[n];
+		int[] dims = { rows, cols };
+		assertThat(gemm.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, 1 }, y, 0, new int[] { 1, 0 }, out, 0, dims))
+			.isTrue();
+		long before = gemm.freeDeviceMemory();
+		assertThat(before).isGreaterThan(0);
+		for (int i = 0; i < 800; i++) {
+			assertThat(gemm.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, 1 }, y, 0, new int[] { 1, 0 }, out, 0, dims))
+				.isTrue();
+			assertThat(gemm.fold(Gpu.FOLD_SUM, x, 0, y, 0, rows, cols, 1)).isTrue();
+			assertThat(gemm.gather(x, 0, new int[] { 1, cols }, out, 0, new int[] { cols, rows })).isTrue();
+		}
+		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
 	void aRunOfSuccessfulProductsFreesEveryBufferItAllocates() {
 		CudaGemm gemm = Gpu.device();
 		assertThat(gemm).isNotNull();
-		int n = 256;
+		int n = 384;
 		double[] a = new double[n * n], b = new double[n * n], c = new double[n * n];
 		// One call first, so the driver's pool has reached its working size and the
 		// baseline is the steady state rather than the cold one.
@@ -431,19 +672,19 @@ class GpuTest {
 			assertThat(gemm.gemm(a, 0, b, 0, c, 0, n, n, n)).isTrue();
 		}
 		long after = gemm.freeDeviceMemory();
-		// 1000 products of three 512 KB buffers leak 1.5 GB if they leak at all, and
-		// leaking ONE of the three still costs 500 MB -- so the bound separates the two
+		// 1000 products of three 1.2 MB buffers leak 3.5 GB if they leak at all, and
+		// leaking ONE of the three still costs 1.2 GB -- so the bound separates the two
 		// outcomes by a wide margin rather than measuring precisely. It cannot be tight:
 		// cuMemGetInfo is a property of the DEVICE, not of this thread, and the JVM
 		// backend's tests run in a second surefire fork where every compiled class
-		// defines its own copy of this binding and loads its own module (~10 MB of
-		// device memory each). The assertion stays two-sided on purpose: free memory
-		// that GREW would mean this is measuring the rest of the machine rather than
-		// the buffers.
-		assertThat(Math.abs(before - after)).isLessThan(256L << 20);
+		// defines its own copy of this binding and loads its own module. The assertion
+		// stays two-sided on purpose: free memory that GREW would mean this is measuring
+		// the rest of the machine rather than the buffers.
+		assertThat(Math.abs(before - after)).isLessThan(DRIFT_BOUND);
 	}
 
 	@Test
+	@ResourceLock(DEVICE_MEMORY)
 	void aDeclinedProductCostsTheDeviceNothing() {
 		// The failure path, which the successful run above never enters, and the one that
 		// was wrong first: a pooled allocation that FAILS grows the driver's pool as far

@@ -265,10 +265,66 @@ class GpuDeclineTest {
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_MAP_F64);
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_MAP_F32);
 		assertThat(resource("gemm.cu")).contains("case " + Gpu.MAP_ERF + ": return erf(x);");
+		// The strided tier's six, whose op codes are a THREE-way mirror -- Gpu.BIN_* /
+		// Gpu.FOLD_* here, the switches in gemm.cu, and LinalgSimdKernels.BOP_* as the
+		// oracle they must agree with.
+		for (String kernel : CudaGemm.KERNELS_STRIDED) {
+			assertThat(ptx).contains(".visible .entry " + kernel);
+		}
+		assertThat(resource("gemm.cu")).contains("case " + Gpu.BIN_DIV + ": return x / y;");
 		// The regeneration command travels with the artifact: without it the .ptx is an
 		// unreproducible blob.
 		assertThat(ptx).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");
 		assertThat(resource("gemm.cu")).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");
+	}
+
+	@Test
+	void aStridedCallBelowTheSizeThresholdIsNeverOffered() {
+		// The pure size predicates, which must answer without touching a driver.
+		assertThat(Gpu.worthStrided(1L << 15)).isTrue();
+		assertThat(Gpu.worthStrided((1L << 15) - 1)).isFalse();
+		assertThat(Gpu.worthFold(1L << 17)).isTrue();
+		assertThat(Gpu.worthFold((1L << 17) - 1)).isFalse();
+		double[] small = new double[64], out = new double[64];
+		int[] dims = { 8, 8 };
+		int[] strides = { 8, 1 };
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, small, 0, strides, small, 0, strides, out, 0, dims)).isFalse();
+		assertThat(Gpu.gather(small, 0, strides, out, 0, dims)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, small, 0, out, 0, 8, 8, 1)).isFalse();
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
+	void everyStridedDeclineConditionDeclinesRatherThanThrows() {
+		// The bounds are what stop a kernel indexing outside the caller's array: the
+		// kernel walks strides freely, so the library has to bound the whole reachable
+		// span rather than the element count.
+		int rows = 1 << 12, cols = 64, n = rows * cols;
+		double[] x = new double[n], y = new double[rows], out = new double[n];
+		int[] dims = { rows, cols };
+		int[] sx = { cols, 1 };
+		int[] sy = { 1, 0 };
+		assertThat(Gpu.bcast(Gpu.BIN_OPS, x, 0, sx, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(-1, x, 0, sx, y, 0, sy, out, 0, dims)).isFalse();
+		// An operand whose span runs past its array, a negative stride, a mismatched
+		// stride vector, an empty or absurdly deep shape, an offset that does not fit.
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 1, sx, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, -1 }, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols }, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, sx, y, 0, sy, out, 0, new int[0])).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, sx, y, 0, sy, out, 0, new int[] { rows, 0 })).isFalse();
+		assertThat(Gpu.gather(x, 0, sx, out, 1, dims)).isFalse();
+		assertThat(Gpu.gather(x, -1, sx, out, 0, dims)).isFalse();
+		// A fold with too few OUTPUT cells is a single-threaded device loop and declines
+		// however big its input is; so does an empty extent and an unnamed op.
+		assertThat(Gpu.fold(Gpu.FOLD_OPS, x, 0, out, 0, rows, cols, 1)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, 0, out, 0, 1, n, 1)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, 0, out, 0, rows, 0, 1)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, 0, out, 0, rows, cols, 1) && out[0] == 0.0).isIn(true, false);
+		float[] xf = new float[n], yf = new float[rows], outf = new float[n];
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, xf, 0, new int[] { cols, -1 }, yf, 0, sy, outf, 0, dims)).isFalse();
+		assertThat(Gpu.gather(xf, 0, sx, outf, 1, dims)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, xf, 0, outf, 0, 1, n, 1)).isFalse();
 	}
 
 	@Test

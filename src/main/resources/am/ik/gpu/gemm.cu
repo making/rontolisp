@@ -108,3 +108,121 @@ extern "C" __global__ void map_f32(const float* A, float* C, int n, int op) {
 extern "C" __global__ void map_f64(const double* A, double* C, int n, int op) {
   map<double>(A, C, n, op);
 }
+
+// The STRIDED tier (phase 3): the three shapes whose CPU twin is a SCALAR ODOMETER walk
+// rather than a lane loop -- a BROADCAST binary op, an AXIS fold, and an axes TRANSPOSE.
+// Phase 4b refused the binary ops because it measured them at EQUAL shapes, where the CPU
+// runs a lane loop and a round trip cannot win; at unequal shapes the CPU walks an
+// odometer element by element and the same round trip wins by 3-8x (.kb/gpu.md).
+//
+// All three compute in DOUBLE at both widths and narrow only on the store, which is the
+// `%la-bcast-loop` / `%la-fold-axis` rule verbatim -- so unlike the element-wise tier
+// above they are BIT-IDENTICAL to the scalar defun. `meta` carries the layout: the output
+// dims, then one per-axis source stride per operand, all in ELEMENTS.
+
+#define STRIDED_BLOCK 256
+
+// Mirrored by Gpu.BIN_* and by LinalgSimdKernels.BOP_* -- three copies of one table, and
+// the last is the oracle. MAX/MIN are the strict selects `(if (> x y) x y)`, so the
+// SECOND operand wins a tie and a NaN.
+__device__ double bin_op(int op, double x, double y) {
+  switch (op) {
+    case 0: return x + y;
+    case 1: return x - y;
+    case 2: return x * y;
+    case 3: return x / y;
+    case 4: return x > y ? x : y;
+    case 5: return x < y ? x : y;
+    // Unreachable: Gpu declines an op code it does not name. Not a member, deliberately.
+    default: return x;
+  }
+}
+
+template <typename T>
+__device__ void bcast(int op, const T* A, const T* B, T* C, int n, int rank, const int* meta) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  int ia = 0, ib = 0, rem = i;
+  for (int k = rank - 1; k >= 0; --k) {
+    int d = meta[k];
+    int c = rem % d;
+    rem /= d;
+    ia += c * meta[rank + k];
+    ib += c * meta[2 * rank + k];
+  }
+  C[i] = (T) bin_op(op, (double) A[ia], (double) B[ib]);
+}
+
+extern "C" __global__ void bcast_f32(int op, const float* A, const float* B, float* C, int n, int rank,
+                                     const int* meta) {
+  bcast<float>(op, A, B, C, n, rank, meta);
+}
+
+extern "C" __global__ void bcast_f64(int op, const double* A, const double* B, double* C, int n, int rank,
+                                     const int* meta) {
+  bcast<double>(op, A, B, C, n, rank, meta);
+}
+
+// The axes transpose, and any other pure permuted copy: one source stride per OUTPUT axis.
+template <typename T>
+__device__ void gather(const T* A, T* C, int n, int rank, const int* meta) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  int ia = 0, rem = i;
+  for (int k = rank - 1; k >= 0; --k) {
+    int d = meta[k];
+    int c = rem % d;
+    rem /= d;
+    ia += c * meta[rank + k];
+  }
+  C[i] = A[ia];
+}
+
+extern "C" __global__ void gather_f32(const float* A, float* C, int n, int rank, const int* meta) {
+  gather<float>(A, C, n, rank, meta);
+}
+
+extern "C" __global__ void gather_f64(const double* A, double* C, int n, int rank, const int* meta) {
+  gather<double>(A, C, n, rank, meta);
+}
+
+// The axis fold: out[o * inner + j] folds A[(o * len + k) * inner + j] over k ASCENDING,
+// which is `%la-fold-axis`'s own order. Op 0 (sum) seeds with the defun's 0; ops 1 and 2
+// (amax / amin) seed with the FIRST element and compare strictly, so the accumulator wins
+// a tie and a NaN -- the defun's `(if (> x acc) x acc)`. The caller declines len == 0,
+// which the defun answers with an error.
+template <typename T>
+__device__ void fold(int op, const T* A, T* C, int outer, int len, int inner) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  int total = outer * inner;
+  if (i >= total) return;
+  int base = (i / inner) * len * inner + (i % inner);
+  double acc;
+  int k;
+  if (op == 0) {
+    acc = 0.0;
+    k = 0;
+  } else {
+    acc = (double) A[base];
+    k = 1;
+  }
+  for (; k < len; ++k) {
+    double x = (double) A[base + k * inner];
+    if (op == 0) {
+      acc += x;
+    } else if (op == 1) {
+      if (x > acc) acc = x;
+    } else {
+      if (x < acc) acc = x;
+    }
+  }
+  C[i] = (T) acc;
+}
+
+extern "C" __global__ void fold_f32(int op, const float* A, float* C, int outer, int len, int inner) {
+  fold<float>(op, A, C, outer, len, inner);
+}
+
+extern "C" __global__ void fold_f64(int op, const double* A, double* C, int outer, int len, int inner) {
+  fold<double>(op, A, C, outer, len, inner);
+}

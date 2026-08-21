@@ -197,10 +197,22 @@ final class JvmLinalgKernelCompiler {
 		List<LispVal> args = cons.toList();
 		int arity = arity(member);
 		int supplied = args.size() - 1;
-		Extended ext = simd != null && supplied > arity ? EXTENDED.get(member) : null;
+		// The option form is claimed when EITHER the lane bridge or the device bridge has
+		// a kernel for it: --gpu takes the axis folds and the axes transpose only in this
+		// shape, so a --gpu-only build must still reach it.
+		String gpuExtendedKey = gpu != null ? JvmLinalgGpu.extendedKernelKey(member) : null;
+		Extended ext = (simd != null || gpuExtendedKey != null) && supplied > arity ? EXTENDED.get(member) : null;
 		LinalgKernelCallLayout.Extended shape = ext != null ? LinalgKernelCallLayout.extended(member) : null;
 		int[] layout = shape != null ? LinalgKernelCallLayout.layout(shape, arity, args.subList(1, args.size())) : null;
 		boolean extendedCall = layout != null;
+		String gpuKey = extendedCall ? gpuExtendedKey : (gpu != null ? JvmLinalgGpu.kernelKey(member) : null);
+		if (gpuKey == null && simd == null && (blas == null || extendedCall)) {
+			// Nothing would be attempted at this call shape -- a member the device takes
+			// only in its option form, reached in its base form under --gpu alone. The
+			// ordinary direct-call path is what that is.
+			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
+			return;
+		}
 		if (defun == null || (supplied != arity && !extendedCall)
 				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity
 				|| (extendedCall && !defun.variadic())) {
@@ -213,7 +225,7 @@ final class JvmLinalgKernelCompiler {
 		// The bridge classes must be defined before their method references resolve, and
 		// ahead of the temps: with only the --simd attempt this is byte for byte the
 		// sequence emitted before --blas existed.
-		if (!extendedCall && gpu != null) {
+		if (gpuKey != null && gpu != null) {
 			emitInit(ctx, gpu);
 		}
 		Map<String, MethodrefConstant> blasAttempt = extendedCall ? null : blas;
@@ -239,8 +251,8 @@ final class JvmLinalgKernelCompiler {
 		// next one over the SAME temps -- so a declined product always lands on the best
 		// CPU path this invocation enabled, never back on the defun.
 		List<Integer> takenBranches = new ArrayList<>();
-		if (gpu != null && !extendedCall) {
-			emitAttempt(ctx, gpu, JvmLinalgGpu.kernelKey(member), null, slots, arity, takenBranches);
+		if (gpuKey != null && gpu != null) {
+			emitAttempt(ctx, gpu, gpuKey, extendedCall ? layout : null, slots, arity, takenBranches);
 		}
 		if (blas != null && !extendedCall) {
 			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, takenBranches);

@@ -110,7 +110,9 @@ The same batched product is what
 [`--gpu`](../../doc/en/guides/simd-acceleration.md#accelerating-the-matrix-product-and-the-transcendentals-on-a-gpu---gpu)
 routes to an NVIDIA device, along with the element-wise transcendentals
 (`exp`, `tanh`, `erf` and nine more) that `gelu`, `softmax` and `log-softmax`
-are built from. **At the shapes tested here it changes nothing**, and that is
+are built from, and -- since 2026-08-21 -- the broadcast `sub` / `div` / `mul`,
+the `:axis` reductions and the axes `transpose` that the rest of `softmax` and
+`layer-norm` are made of. **At the shapes tested here it changes nothing**, and that is
 the intended answer: a stack of `4 x 8x8` products is a few thousand
 multiply-adds and an activation is a few hundred elements, both far under the
 thresholds a 15 us round trip has to clear, so every call declines and the
@@ -119,12 +121,16 @@ output stays byte-identical with the flag and without it.
 It is the shapes in the next section that the flag is for. With
 `chapter03/train-gpt-soseki.lisp` raised to the notebook's own `*n-embd*` 384 and
 `*block-size*` 256 -- the one-line change the file describes -- a training step
-on the JVM class output runs **2.3x faster** with `--gpu --simd` than with
-`--simd` alone (0.82 s -> 0.36 s per step, same machine as above; it was 0.43 s
-before the transcendentals joined the device set). What is left is `softmax`,
-`layer-norm` and the AdamW update, each a CHAIN of cheap element-wise members
-that individually lose a round trip -- so what would move them is keeping the
-array on the device between calls, not accelerating more members.
+on the JVM class output runs **three to four times faster** with `--gpu --simd`
+than with `--simd` alone (0.89 s -> 0.21 s per step, same machine as above, from
+a 5-step and a 40-step run so setup and sampling fall out of the slope; the same
+program varies by ~15% run to run, so read the ratio rather than the digits).
+**What is left of that step is no longer `linalg`**: about a third of it is the
+AdamW parameter update and another seventh the dropout random numbers, both
+per-element loops written in Lisp inside `torch:` and on no acceleration seam.
+Keeping arrays resident on the device between calls -- the obvious next idea --
+was measured against this program and declined: every device copy in the step is
+under 2% of it.
 
 Note that once a transcendental runs on the device, a program that touches one
 is no longer byte-identical with the flag and without it: the device carries its

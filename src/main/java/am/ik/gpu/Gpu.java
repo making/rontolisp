@@ -107,6 +107,64 @@ public final class Gpu {
 	private static final long MAP_UNPOOLED_MIN_ELEMENTS = 1L << 16;
 
 	/**
+	 * Below this many OUTPUT elements a {@linkplain #bcast broadcast binary op} or a
+	 * {@linkplain #gather strided gather} declines.
+	 *
+	 * <p>
+	 * It is one power of two above the element-wise map's, and the reason is the CPU
+	 * column rather than this side: a map's CPU twin is a libm call per element, while
+	 * these two are one arithmetic op or one load per element -- but walked by an
+	 * ODOMETER rather than by a lane loop, which is what makes them worth offering at
+	 * all. Measured against a JIT-warm {@code --simd} CPU on the machine this was tuned
+	 * on, the crossover for both is between 4096 and 16384 elements; at 16384 the margin
+	 * is 1.2x at f64 (26.5 us against 21.8), which is inside the measurement, and at
+	 * 32768 it is 2.1x (53.0 against 25.7) at f64 and 2.3x at f32. The threshold sits at
+	 * the second, for the reason the product's does: where the win is unambiguous, not
+	 * where it first appears. See {@code .kb/gpu.md}.
+	 */
+	private static final long STRIDED_POOLED_MIN_ELEMENTS = 1L << 15;
+
+	/**
+	 * The strided threshold on a machine whose driver has no usable stream-ordered
+	 * allocator, where the per-call floor is ~170 us rather than ~15 -- which is above
+	 * the CPU's cost for 32768 elements of either member, so it moves up to where the CPU
+	 * column passes it (2^17, ~200 us).
+	 */
+	private static final long STRIDED_UNPOOLED_MIN_ELEMENTS = 1L << 17;
+
+	/**
+	 * Below this many INPUT elements an {@linkplain #fold axis fold} declines. It counts
+	 * the input rather than the output because that is what the fold reads and what the
+	 * copy up costs; the way back is {@code outer * inner} elements and is usually
+	 * nothing.
+	 *
+	 * <p>
+	 * Four times the strided threshold, and measured the same way: a fold moves ONE array
+	 * over the link where a broadcast binary moves three, so its device side is cheaper
+	 * -- but its CPU twin is cheaper by more, because a fold's odometer is one counter
+	 * rather than three. The two columns are level at 65536 (29.5 us against 30.6 at f64)
+	 * and the device is 1.7x/2.1x ahead at 131072. See {@code .kb/gpu.md}.
+	 */
+	private static final long FOLD_POOLED_MIN_ELEMENTS = 1L << 17;
+
+	/**
+	 * The fold threshold with no stream-ordered allocator; see the two siblings above.
+	 */
+	private static final long FOLD_UNPOOLED_MIN_ELEMENTS = 1L << 19;
+
+	/**
+	 * How many OUTPUT cells an axis fold needs before it is offered at all, whatever its
+	 * input size. Each output cell is one thread walking the axis sequentially -- which
+	 * is what keeps the fold in the defun's own order and therefore bit-identical -- so a
+	 * fold with one output cell is a single-threaded device loop and loses to any CPU.
+	 * One block's worth is the floor.
+	 */
+	private static final long FOLD_MIN_CELLS = 256;
+
+	/** The deepest rank {@link #bcast} and {@link #gather} will walk; deeper declines. */
+	private static final int MAX_STRIDED_RANK = 16;
+
+	/**
 	 * The op codes {@link #map} takes, mirrored by the {@code switch} in {@code gemm.cu}
 	 * -- the two are changed together and nothing links them, so a new member is one case
 	 * there, one constant here and one regeneration of the PTX.
@@ -128,6 +186,43 @@ public final class Gpu {
 	 */
 	public static final int MAP_OPS = 12;
 
+	/**
+	 * The op codes {@link #bcast} takes, mirrored by the {@code bin_op} switch in
+	 * {@code gemm.cu} -- the same arrangement {@link #MAP_EXP} has, and the same rule: a
+	 * new member is one case there, one constant here and one regeneration of the PTX.
+	 *
+	 * <p>
+	 * These are the four arithmetic ops and the two strict selects, and offering them is
+	 * NOT a reversal of the element-wise tier's refusal of the same names. That refusal
+	 * was measured at EQUAL shapes, where the caller's own kernel is a lane loop and a
+	 * round trip cannot win (and still cannot: 65 us against 112 at f32, measured). This
+	 * entry point is for the BROADCAST shape, where the caller walks an odometer element
+	 * by element instead and the same round trip is 5.5-8.5x faster. {@code .kb/gpu.md}
+	 * has both halves.
+	 *
+	 * <p>
+	 * {@link #BIN_MAX} and {@link #BIN_MIN} are the STRICT selects {@code x > y ? x : y}
+	 * and {@code x < y ? x : y}, so the second operand wins a tie and a NaN.
+	 */
+	public static final int BIN_ADD = 0, BIN_SUB = 1, BIN_MUL = 2, BIN_DIV = 3, BIN_MAX = 4, BIN_MIN = 5;
+
+	/**
+	 * How many op codes {@link #bcast} knows; an op outside {@code [0, BIN_OPS)}
+	 * declines.
+	 */
+	public static final int BIN_OPS = 6;
+
+	/**
+	 * The op codes {@link #fold} takes, mirrored by the {@code fold} switch in
+	 * {@code gemm.cu}. {@link #FOLD_SUM} seeds with 0 and adds; {@link #FOLD_AMAX} and
+	 * {@link #FOLD_AMIN} seed with the FIRST element along the axis and compare strictly,
+	 * so the accumulator wins a tie and a NaN.
+	 */
+	public static final int FOLD_SUM = 0, FOLD_AMAX = 1, FOLD_AMIN = 2;
+
+	/** How many op codes {@link #fold} knows; anything else declines. */
+	public static final int FOLD_OPS = 3;
+
 	private Gpu() {
 	}
 
@@ -147,6 +242,10 @@ public final class Gpu {
 		private static final long MIN_WORK;
 
 		private static final long MAP_MIN_ELEMENTS;
+
+		private static final long STRIDED_MIN_ELEMENTS;
+
+		private static final long FOLD_MIN_ELEMENTS;
 
 		static {
 			CudaGemm device;
@@ -175,6 +274,10 @@ public final class Gpu {
 			DESCRIPTION = description;
 			MIN_WORK = device == null || device.pooled() ? POOLED_MIN_WORK : UNPOOLED_MIN_WORK;
 			MAP_MIN_ELEMENTS = device == null || device.pooled() ? MAP_POOLED_MIN_ELEMENTS : MAP_UNPOOLED_MIN_ELEMENTS;
+			STRIDED_MIN_ELEMENTS = device == null || device.pooled() ? STRIDED_POOLED_MIN_ELEMENTS
+					: STRIDED_UNPOOLED_MIN_ELEMENTS;
+			FOLD_MIN_ELEMENTS = device == null || device.pooled() ? FOLD_POOLED_MIN_ELEMENTS
+					: FOLD_UNPOOLED_MIN_ELEMENTS;
 		}
 
 		private Probe() {
@@ -253,6 +356,31 @@ public final class Gpu {
 	 */
 	static long mapMinElements() {
 		return Probe.MAP_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The strided-tier threshold actually in force on this machine. Package-private and
+	 * for the tests, exactly as {@link #mapMinElements} is.
+	 * @return the minimum output element count a broadcast or gather is offered at
+	 */
+	static long stridedMinElements() {
+		return Probe.STRIDED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The axis-fold threshold actually in force on this machine, in INPUT elements.
+	 * @return the minimum input element count a fold is offered at
+	 */
+	static long foldMinElements() {
+		return Probe.FOLD_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The minimum number of output cells a fold needs. Package-private and for the tests.
+	 * @return the fold's parallelism floor
+	 */
+	static long foldMinCells() {
+		return FOLD_MIN_CELLS;
 	}
 
 	/**
@@ -532,6 +660,266 @@ public final class Gpu {
 		CudaGemm device = Probe.DEVICE;
 		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
 				&& device.mapF(op, a, offsetA, out, offsetOut, n);
+	}
+
+	/**
+	 * Whether a {@linkplain #bcast broadcast binary op} or a {@linkplain #gather strided
+	 * gather} over {@code n} OUTPUT elements is worth a round trip at all -- the same
+	 * kind of driver-free size predicate {@link #worthMap} is, and re-asked by the calls
+	 * themselves.
+	 * @param n how many elements the result holds
+	 * @return {@code true} when the call is above the size threshold
+	 */
+	public static boolean worthStrided(long n) {
+		return n >= STRIDED_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * Whether an {@linkplain #fold axis fold} over {@code n} INPUT elements is worth a
+	 * round trip at all. It counts the input, which is what the fold reads and what the
+	 * copy up costs.
+	 * @param n how many elements the operand holds
+	 * @return {@code true} when the fold is above the size threshold
+	 */
+	public static boolean worthFold(long n) {
+		return n >= FOLD_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * {@code out[i] = op(a[ia(i)], b[ib(i)])} over the whole of a BROADCAST binary
+	 * element-wise op: the output is {@code dims}, row-major, and each operand's flat
+	 * index follows its own per-axis stride, 0 on an axis it is stretched across. That is
+	 * numpy's broadcast rule expressed as two stride vectors, and it is what an
+	 * {@code (n m 1)} operand against an {@code (n m p)} one needs.
+	 *
+	 * <p>
+	 * Every element is read WIDENED to double, the op runs in double, and only the store
+	 * narrows -- so this is BIT-IDENTICAL to a scalar widen-compute-narrow walk at both
+	 * widths, unlike {@link #map}. The four arithmetic ops are correctly rounded in IEEE
+	 * 754 and the two selects are comparisons, so there is nothing left for a libm to
+	 * disagree about.
+	 * @param op which op to apply, one of the {@link #BIN_ADD} constants
+	 * @param a the left operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA {@code a}'s stride along each output axis, in elements
+	 * @param b the right operand
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB {@code b}'s stride along each output axis, in elements
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean bcast(int op, double[] a, int offsetA, int[] strideA, double[] b, int offsetB, int[] strideB,
+			double[] out, int offsetOut, int[] dims) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null
+				&& offeredBcast(op, a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, dims)
+				&& device.bcast(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #bcast(int, double[], int, int[], double[], int, int[], double[], int, int[])},
+	 * and the width the hardware is for. It widens to double, computes in double and
+	 * narrows on the store exactly as the double form does, which is what keeps it
+	 * bit-identical to the caller's own scalar walk.
+	 * @param op which op to apply, one of the {@link #BIN_ADD} constants
+	 * @param a the left operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA {@code a}'s stride along each output axis, in elements
+	 * @param b the right operand
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB {@code b}'s stride along each output axis, in elements
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean bcast(int op, float[] a, int offsetA, int[] strideA, float[] b, int offsetB, int[] strideB,
+			float[] out, int offsetOut, int[] dims) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null
+				&& offeredBcast(op, a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, dims)
+				&& device.bcastF(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
+	}
+
+	/**
+	 * {@code out[i] = a[ia(i)]}: a pure permuted COPY, where the output is {@code dims},
+	 * row-major, and the source index follows one stride per output axis. An axes
+	 * transpose is exactly this with the source's own strides permuted; so is any other
+	 * strided view materialization. Being a copy it is trivially bit-identical.
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA {@code a}'s stride along each output axis, in elements
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean gather(double[] a, int offsetA, int[] strideA, double[] out, int offsetOut, int[] dims) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offeredGather(a.length, offsetA, strideA, out.length, offsetOut, dims)
+				&& device.gather(a, offsetA, strideA, out, offsetOut, dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #gather(double[], int, int[], double[], int, int[])}.
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA {@code a}'s stride along each output axis, in elements
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean gather(float[] a, int offsetA, int[] strideA, float[] out, int offsetOut, int[] dims) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offeredGather(a.length, offsetA, strideA, out.length, offsetOut, dims)
+				&& device.gatherF(a, offsetA, strideA, out, offsetOut, dims);
+	}
+
+	/**
+	 * The fold of ONE axis of a row-major array: for each of the {@code outer * inner}
+	 * output cells, {@code out[o * inner + j]} folds {@code a[(o * len + k) * inner + j]}
+	 * over {@code k} ASCENDING. {@code outer} is the product of the axes before the
+	 * folded one and {@code inner} the product of those after it, so any rank reduces to
+	 * those three numbers.
+	 *
+	 * <p>
+	 * The accumulator is a {@code double} at BOTH widths and only the store narrows,
+	 * which is the same widen-compute-narrow rule {@link #bcast} follows -- and it is
+	 * deliberately NOT a parallel tree reduction: one thread walks each output cell's
+	 * whole axis in order, so the sum is the caller's own sequential sum and the fold is
+	 * bit-identical. That is also why a fold with too few output cells declines: it would
+	 * be a single-threaded device loop.
+	 * @param op which fold, one of the {@link #FOLD_SUM} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code outer * inner} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param outer the product of the axes before the folded one
+	 * @param len the folded axis's own extent
+	 * @param inner the product of the axes after the folded one
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean fold(int op, double[] a, int offsetA, double[] out, int offsetOut, int outer, int len,
+			int inner) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner)
+				&& device.fold(op, a, offsetA, out, offsetOut, outer, len, inner);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #fold(int, double[], int, double[], int, int, int, int)}. The accumulator is
+	 * still a {@code double} -- narrowing it per term would be a different sum from the
+	 * caller's.
+	 * @param op which fold, one of the {@link #FOLD_SUM} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code outer * inner} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param outer the product of the axes before the folded one
+	 * @param len the folded axis's own extent
+	 * @param inner the product of the axes after the folded one
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean fold(int op, float[] a, int offsetA, float[] out, int offsetOut, int outer, int len,
+			int inner) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner)
+				&& device.foldF(op, a, offsetA, out, offsetOut, outer, len, inner);
+	}
+
+	/**
+	 * The output element count of a strided shape, or -1 when the shape is one this
+	 * library will not walk -- an empty, over-deep or over-large one.
+	 */
+	private static long stridedCount(int[] dims) {
+		if (dims.length < 1 || dims.length > MAX_STRIDED_RANK) {
+			return -1;
+		}
+		long total = 1;
+		for (int d : dims) {
+			if (d < 1) {
+				return -1;
+			}
+			total *= d;
+			if (total > Integer.MAX_VALUE) {
+				return -1;
+			}
+		}
+		return total;
+	}
+
+	/**
+	 * The highest element index a stride vector can reach over {@code dims}, or -1 when
+	 * one of the strides is negative. The kernel indexes freely, so this is what bounds
+	 * it inside the caller's array.
+	 */
+	private static long stridedSpan(int[] dims, int[] stride) {
+		if (stride.length != dims.length) {
+			return -1;
+		}
+		long span = 0;
+		for (int k = 0; k < dims.length; k++) {
+			if (stride[k] < 0) {
+				return -1;
+			}
+			span += (long) (dims[k] - 1) * stride[k];
+		}
+		return span;
+	}
+
+	/**
+	 * Whether a broadcast binary op is one this library will attempt: an op it names, a
+	 * shape it will walk, above the threshold in force on this machine, and with both
+	 * operands' whole reachable span inside the arrays it was handed.
+	 */
+	private static boolean offeredBcast(int op, long lengthA, int offsetA, int[] strideA, long lengthB, int offsetB,
+			int[] strideB, long lengthOut, int offsetOut, int[] dims) {
+		long total = stridedCount(dims);
+		if (op < 0 || op >= BIN_OPS || total < 0 || total < Probe.STRIDED_MIN_ELEMENTS) {
+			return false;
+		}
+		long spanA = stridedSpan(dims, strideA);
+		long spanB = stridedSpan(dims, strideB);
+		return spanA >= 0 && spanB >= 0 && offsetA >= 0 && offsetB >= 0 && offsetOut >= 0 && offsetA + spanA < lengthA
+				&& offsetB + spanB < lengthB && offsetOut + total <= lengthOut;
+	}
+
+	/** {@link #offeredBcast} for the one-operand form. */
+	private static boolean offeredGather(long lengthA, int offsetA, int[] strideA, long lengthOut, int offsetOut,
+			int[] dims) {
+		long total = stridedCount(dims);
+		if (total < 0 || total < Probe.STRIDED_MIN_ELEMENTS) {
+			return false;
+		}
+		long spanA = stridedSpan(dims, strideA);
+		return spanA >= 0 && offsetA >= 0 && offsetOut >= 0 && offsetA + spanA < lengthA
+				&& offsetOut + total <= lengthOut;
+	}
+
+	/**
+	 * Whether an axis fold is one this library will attempt: an op it names, enough
+	 * output cells to be worth a grid, above the threshold in force on this machine, and
+	 * inside both arrays.
+	 */
+	private static boolean offeredFold(int op, long lengthA, int offsetA, long lengthOut, int offsetOut, int outer,
+			int len, int inner) {
+		if (op < 0 || op >= FOLD_OPS || outer < 1 || len < 1 || inner < 1) {
+			return false;
+		}
+		long cells = (long) outer * inner;
+		long total = cells * len;
+		return cells >= FOLD_MIN_CELLS && cells <= Integer.MAX_VALUE && total <= Integer.MAX_VALUE
+				&& total >= Probe.FOLD_MIN_ELEMENTS && offsetA >= 0 && offsetOut >= 0 && offsetA + total <= lengthA
+				&& offsetOut + cells <= lengthOut;
 	}
 
 	/**

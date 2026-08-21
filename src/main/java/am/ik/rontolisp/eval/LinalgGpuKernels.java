@@ -47,6 +47,16 @@ final class LinalgGpuKernels {
 			MAP_COS = Gpu.MAP_COS, MAP_TAN = Gpu.MAP_TAN, MAP_ASIN = Gpu.MAP_ASIN, MAP_ACOS = Gpu.MAP_ACOS,
 			MAP_ATAN = Gpu.MAP_ATAN, MAP_SINH = Gpu.MAP_SINH, MAP_COSH = Gpu.MAP_COSH, MAP_ERF = Gpu.MAP_ERF;
 
+	/**
+	 * The op codes {@link #bcast} and {@link #fold} take, re-exported for the same reason
+	 * the {@code MAP_*} ones are. {@code BIN_MAX} / {@code BIN_MIN} are the strict
+	 * selects, so the SECOND operand wins a tie, exactly as
+	 * {@code LinalgSimdKernels.BOP_MAX} does.
+	 */
+	static final int BIN_ADD = Gpu.BIN_ADD, BIN_SUB = Gpu.BIN_SUB, BIN_MUL = Gpu.BIN_MUL, BIN_DIV = Gpu.BIN_DIV,
+			BIN_MAX = Gpu.BIN_MAX, BIN_MIN = Gpu.BIN_MIN, FOLD_SUM = Gpu.FOLD_SUM, FOLD_AMAX = Gpu.FOLD_AMAX,
+			FOLD_AMIN = Gpu.FOLD_AMIN;
+
 	private LinalgGpuKernels() {
 	}
 
@@ -131,6 +141,125 @@ final class LinalgGpuKernels {
 	static float @Nullable [] map(int op, float[] a, int n) {
 		float[] out = new float[n];
 		return Gpu.map(op, a, 0, out, 0, n) ? out : null;
+	}
+
+	/**
+	 * Whether a broadcast binary op or an axes transpose over {@code n} OUTPUT elements
+	 * is worth a round trip -- the strided tier's size predicate, which touches no
+	 * driver.
+	 * @param n how many elements the result holds
+	 * @return {@code true} when the call is worth unwrapping for
+	 */
+	static boolean worthStrided(long n) {
+		return Gpu.worthStrided(n);
+	}
+
+	/**
+	 * Whether an axis fold over {@code n} INPUT elements is worth a round trip.
+	 * @param n how many elements the operand holds
+	 * @return {@code true} when the fold is worth unwrapping for
+	 */
+	static boolean worthFold(long n) {
+		return Gpu.worthFold(n);
+	}
+
+	/**
+	 * A BROADCAST binary element-wise op over two double-float operands, or {@code null}
+	 * when the device declined it. Each operand follows its own per-axis stride over the
+	 * output shape, 0 on an axis it is stretched across.
+	 * @param op one of the {@code BIN_*} constants
+	 * @param a the left operand
+	 * @param sa {@code a}'s stride along each output axis
+	 * @param b the right operand
+	 * @param sb {@code b}'s stride along each output axis
+	 * @param dims the output shape
+	 * @return a fresh result of {@code dims} elements, or {@code null}
+	 */
+	static double @Nullable [] bcast(int op, double[] a, int[] sa, double[] b, int[] sb, int[] dims) {
+		double[] out = new double[count(dims)];
+		return Gpu.bcast(op, a, 0, sa, b, 0, sb, out, 0, dims) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #bcast(int, double[], int[], double[], int[], int[])}.
+	 * @param op one of the {@code BIN_*} constants
+	 * @param a the left operand
+	 * @param sa {@code a}'s stride along each output axis
+	 * @param b the right operand
+	 * @param sb {@code b}'s stride along each output axis
+	 * @param dims the output shape
+	 * @return a fresh result of {@code dims} elements, or {@code null}
+	 */
+	static float @Nullable [] bcast(int op, float[] a, int[] sa, float[] b, int[] sb, int[] dims) {
+		float[] out = new float[count(dims)];
+		return Gpu.bcast(op, a, 0, sa, b, 0, sb, out, 0, dims) ? out : null;
+	}
+
+	/**
+	 * The permuted copy behind an axes transpose, or {@code null} when the device
+	 * declined it.
+	 * @param a the operand
+	 * @param sa the source stride along each output axis
+	 * @param dims the output shape
+	 * @return a fresh result of {@code dims} elements, or {@code null}
+	 */
+	static double @Nullable [] gather(double[] a, int[] sa, int[] dims) {
+		double[] out = new double[count(dims)];
+		return Gpu.gather(a, 0, sa, out, 0, dims) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of {@link #gather(double[], int[], int[])}.
+	 * @param a the operand
+	 * @param sa the source stride along each output axis
+	 * @param dims the output shape
+	 * @return a fresh result of {@code dims} elements, or {@code null}
+	 */
+	static float @Nullable [] gather(float[] a, int[] sa, int[] dims) {
+		float[] out = new float[count(dims)];
+		return Gpu.gather(a, 0, sa, out, 0, dims) ? out : null;
+	}
+
+	/**
+	 * The fold of one axis of a double-float array, or {@code null} when the device
+	 * declined it: {@code outer * inner} cells, each folding {@code len} elements in
+	 * ascending order in a double accumulator.
+	 * @param op one of the {@code FOLD_*} constants
+	 * @param a the operand
+	 * @param outer the product of the axes before the folded one
+	 * @param len the folded axis's extent
+	 * @param inner the product of the axes after it
+	 * @return a fresh {@code outer * inner} result, or {@code null}
+	 */
+	static double @Nullable [] fold(int op, double[] a, int outer, int len, int inner) {
+		double[] out = new double[outer * inner];
+		return Gpu.fold(op, a, 0, out, 0, outer, len, inner) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of {@link #fold(int, double[], int, int, int)}. The
+	 * accumulator is still a double and only the store narrows, which is the defun's own
+	 * rule.
+	 * @param op one of the {@code FOLD_*} constants
+	 * @param a the operand
+	 * @param outer the product of the axes before the folded one
+	 * @param len the folded axis's extent
+	 * @param inner the product of the axes after it
+	 * @return a fresh {@code outer * inner} result, or {@code null}
+	 */
+	static float @Nullable [] fold(int op, float[] a, int outer, int len, int inner) {
+		float[] out = new float[outer * inner];
+		return Gpu.fold(op, a, 0, out, 0, outer, len, inner) ? out : null;
+	}
+
+	/** The element count of a shape. The caller has already bounded it to an int. */
+	private static int count(int[] dims) {
+		int n = 1;
+		for (int d : dims) {
+			n *= d;
+		}
+		return n;
 	}
 
 	/**

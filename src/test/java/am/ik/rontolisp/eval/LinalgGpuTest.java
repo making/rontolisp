@@ -138,13 +138,22 @@ class LinalgGpuTest {
 				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
 		}
-		// Fourteen members and no others. matmul, square, relu and the exact torch:gelu
-		// are accelerated THROUGH them, not instead of them; and sqrt / abs / negative /
-		// sign are the element-wise tier's DECLINED half -- one machine instruction per
-		// element, which a round trip cannot pay for -- so they must still be the
-		// library's own lambdas under the flag.
-		for (String member : new String[] { "matmul", "add", "sub", "mul", "div", "sum", "outer", "transpose", "sqrt",
-				"abs", "negative", "sign", "maximum", "minimum" }) {
+		// And every member of the STRIDED tier: the six binary ops (taken only at a
+		// BROADCAST shape -- the override is installed unconditionally, the SHAPE is what
+		// the kernel declines), the three axis folds and the axes transpose.
+		for (String member : new String[] { "add", "sub", "mul", "div", "maximum", "minimum", "sum", "amax", "amin",
+				"transpose" }) {
+			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member)
+				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
+			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+		// Twenty-four members and no others. matmul, mean, var, softmax, square, relu and
+		// the exact torch:gelu are accelerated THROUGH them, not instead of them; and
+		// sqrt / abs / negative / sign are the element-wise tier's DECLINED half -- one
+		// machine instruction per element, which a round trip cannot pay for -- so they
+		// must still be the library's own lambdas under the flag.
+		for (String member : new String[] { "matmul", "outer", "sqrt", "abs", "negative", "sign", "norm", "reshape",
+				"trace", "argmax", "argmin", "softmax", "mean", "var" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member).isEqualTo("#<lambda>");
 		}
 	}
@@ -365,6 +374,91 @@ class LinalgGpuTest {
 				      (linalg:sum (linalg:negative *a*)) (linalg:sum (linalg:sign *a*))
 				      (linalg:sum (linalg:add *a* *b*)) (linalg:sum (linalg:mul *a* *b*))
 				      (linalg:sum (linalg:div *a* *b*)) (linalg:sum (linalg:sub *a* *b*)))
+				""");
+	}
+
+	@Test
+	void theStridedTierIsBitIdenticalToTheScalarOracle() {
+		// The claim that separates this tier from the element-wise one: a broadcast
+		// binary op, an axis fold and an axes transpose are BIT-IDENTICAL to the defun at
+		// both widths, because the kernel widens to double, computes in double and
+		// narrows only on the store -- %la-bcast-loop's and %la-fold-axis's own rule --
+		// and there is no libm anywhere in them. Asserted over INEXACT data, above the
+		// thresholds, so the device really is asked.
+		assertMatchesScalarOracle("""
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
+				(defparameter *m* (linalg:amax *x* :axis 1 :keepdims t))
+				(defparameter *s* (linalg:sub *x* *m*))
+				(list (linalg:to-list (linalg:flatten *m*))
+				      (linalg:to-list (linalg:flatten (linalg:sum *x* :axis 1 :keepdims t)))
+				      (linalg:to-list (linalg:flatten (linalg:amin *x* :axis 1)))
+				      (linalg:sum *s*)
+				      (linalg:sum (linalg:div *s* (linalg:sum *s* :axis 1 :keepdims t)))
+				      (linalg:sum (linalg:mul *x* *m*))
+				      (linalg:sum (linalg:add *x* *m*))
+				      (linalg:sum (linalg:maximum *x* *m*))
+				      (linalg:sum (linalg:minimum *x* *m*))
+				      (linalg:sum (linalg:transpose *x* '(1 0))))
+				""");
+		assertMatchesScalarOracle("""
+				(defparameter *y* (linalg:reshape
+				                   (linalg:linspace 0.013 3.7 262144 :element-type 'single-float)
+				                   '(4 64 1024)))
+				(defparameter *r* (linalg:mean *y* :axis 2 :keepdims t))
+				(list (linalg:sum (linalg:sub *y* *r*))
+				      (linalg:sum (linalg:div *y* *r*))
+				      (linalg:to-list (linalg:flatten (linalg:sum *y* :axis 0)))
+				      (linalg:sum (linalg:var *y* :axis 2 :keepdims t))
+				      (linalg:sum (linalg:transpose *y* '(0 2 1)))
+				      (linalg:shape (linalg:transpose *y* '(2 0 1))))
+				""");
+	}
+
+	@Test
+	void aStridedCallReallyRanOnTheDevice() {
+		// The numeric assertions above would pass on the defun, so this is the one that
+		// fails if the strided tier is dead: with the flag on, a broadcast subtraction
+		// above the threshold must not be the CPU's -- and the only observable difference
+		// is that the device was ASKED, which the interceptor's own binding shows.
+		assertThat(eval("(linalg:zeros 1) #'linalg:sub", true).print()).isEqualTo("#<function LINALG:SUB>");
+		// A shape the device takes, and one it refuses: an EQUAL-shaped pair stays the
+		// CPU's however big it is, which is phase 4b's measurement and is what stops this
+		// tier quietly widening.
+		assertMatchesScalarOracle("""
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
+				(linalg:sum (linalg:sub *x* *x*))
+				""");
+	}
+
+	@Test
+	void everyStridedDeclineRunsTheScalarDefunUnchanged() {
+		// The shapes the kernel refuses, each answered by the captured binding: an equal
+		// -shaped pair, a mixed-width pair, a scalar operand, a boxed array, a
+		// non-broadcastable pair (the defun's error), a whole-array fold, a nil axis, a
+		// bad permutation (the defun's error) and the plain no-axes transpose.
+		assertMatchesScalarOracle("""
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
+				(list (linalg:sum (linalg:mul *x* 2.5)) (linalg:sum (linalg:sub 1.0 *x*))
+				      (linalg:sum *x*) (linalg:amax *x*) (linalg:amin *x*)
+				      (linalg:sum *x* :keepdims t)
+				      (linalg:shape (linalg:transpose *x*))
+				      (linalg:to-list (linalg:add #(1 2 3) #(10 20 30))))
+				""");
+		assertThatThrownBy(() -> eval("""
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
+				(linalg:add *x* (linalg:zeros '(3 5)))
+				""", true)).hasMessageContaining("linalg");
+		assertThatThrownBy(() -> eval("""
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
+				(linalg:transpose *x* '(0 0))
+				""", true)).hasMessageContaining("linalg");
+		// A mixed-width pair: the defun widens and keeps the FIRST operand's width, which
+		// no kernel over this seam reproduces.
+		assertMatchesScalarOracle("""
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
+				(defparameter *f* (linalg:reshape
+				                   (linalg:linspace 0.5 1.5 64 :element-type 'single-float) '(64 1)))
+				(linalg:sum (linalg:mul *x* *f*))
 				""");
 	}
 

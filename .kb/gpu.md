@@ -14,11 +14,18 @@ and why it was landed BEFORE residency. **The ELEMENT-WISE tier** (phase 4b, 202
 is the third and it is twelve members, not one: "The element-wise tier" below is its whole
 record -- which members the measurement chose, which it REFUSED and by what number, the
 precision exception it forced (the first one a user can see with the naked eye), and the
-residency measurement it hands to phase 3.
+residency measurement it hands to phase 3. **The STRIDED tier** (phase 3, 2026-08-21) is
+the fourth and last, and it is what phase 3 turned into: residency was measured and
+DECLINED, and the ten members whose CPU twin is a scalar ODOMETER walk rather than a lane
+loop were taken instead. "The strided tier, and why residency was NOT built" below is its
+whole record -- including the profile that says what a `--gpu` training step is now made
+of, which is no longer `linalg:` at all.
 
 **Every number below is re-derivable.** The probes are
-`.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover}.java` over the shared
-driver-only binding `CuLib.java`, plus `matmul-baseline-warm.lisp` for the CPU column;
+`.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover,ElementwiseCrossover,
+StridedCrossover}.java` over the shared driver-only binding `CuLib.java`, plus
+`matmul-baseline-warm.lisp`, `elementwise-baseline.lisp` and `shaped-baseline.lisp` for
+the CPU columns;
 that directory's README says which answers which and records what they printed. They need
 the driver and nothing else -- they load the kernels this library ships rather than
 compiling any -- so they run wherever the feature does.
@@ -81,6 +88,13 @@ static boolean  multiply(double[] a, int oA, int strideA, double[] b, int oB, in
                          double[] out, int oOut, int batch, int n, int m, int p)
 static boolean  map(int op, double[] a, int oA, double[] out, int oOut, int n)
 static boolean  map(int op, float[]  a, int oA, float[]  out, int oOut, int n)
+static boolean  worthStrided(long n)             // ... is this BROADCAST or GATHER
+static boolean  worthFold(long n)                // ... is this AXIS FOLD
+static boolean  bcast(int op, double[] a, int oA, int[] sA, double[] b, int oB, int[] sB,
+                      double[] out, int oOut, int[] dims)
+static boolean  gather(double[] a, int oA, int[] sA, double[] out, int oOut, int[] dims)
+static boolean  fold(int op, double[] a, int oA, double[] out, int oOut,
+                     int outer, int len, int inner)
 ```
 
 Row-major `n x m` by `m x p`, a fresh `n * p` array back or `null`; the `out`-taking forms
@@ -147,7 +161,7 @@ the artifact instead of only living here. `GpuDeclineTest` asserts it is still t
   fp64 units), and at f32 the 7x cuBLAS wins on kernel time collapses to 1.2-3.0x once the
   copies are on the clock. todo-123 has the full table and the reasoning; nothing here
   opens `libcublas`.
-- **Six entry points since phase 4b**: `gemm_f64` / `gemm_f32`, the stacked siblings
+- **Twelve entry points since phase 3**: `gemm_f64` / `gemm_f32`, the stacked siblings
   `gemm_batched_f64` / `gemm_batched_f32`, and the element-wise `map_f64` / `map_f32`. A batched kernel is six lines -- it offsets the
   three pointers by `blockIdx.z` times the strides and calls the SAME `gemm<T>` device
   function -- which is why a batched cell folds `k` bit-identically to an unbatched one
@@ -156,7 +170,9 @@ the artifact instead of only living here. `GpuDeclineTest` asserts it is still t
   entries after the plain ones. **Phase 4b then grew the PTX from 20.3 KB to 86.9 KB**
   (716 lines to 2950), which is the element-wise tier's whole cost and is discussed with
   the blob below -- the map kernels are two entry points but twelve inlined libm bodies
-  per width.
+  per width -- **and phase 3's strided tier from 86.9 KB to 113 KB** (2950 lines to 4124)
+  for its six, which is cheap per entry point by comparison: they are integer index
+  arithmetic and one arithmetic op.
 - **`Gpu.useKernels(String)` supplies the text for an embedder that carries the library's
   CLASSES but not its resources**, and is read by the probe ahead of the resource. It
   exists for exactly one caller -- the JVM backend, whose emitted class renames these
@@ -196,7 +212,8 @@ whole binding declines rather than half-binding.
   a machine that declines at step 5 does not leave a retained primary context or a loaded
   module behind. This is the leak the decline path would otherwise have.
 - **Per call, three device buffers, freed on every path** -- two for an element-wise map,
-  which has one operand -- success, decline and failure alike, in a `finally`. Two tests pin it and they are not the same test:
+  which has one operand; FOUR for a broadcast binary op and three for a gather, whose
+  extra one carries the layout -- success, decline and failure alike, in a `finally`. Two tests pin it and they are not the same test:
   `aRunOfSuccessfulProductsFreesEveryBufferItAllocates` runs 1000 products that WORK, and
   `aDeclinedProductCostsTheDeviceNothing` runs twelve that FAIL, which is the path the
   first one never enters and the one that was wrong. Both assertions are two-sided --
@@ -206,14 +223,16 @@ whole binding declines rather than half-binding.
   JVM backend's tests run in a second surefire fork where every compiled class defines
   its own copy of this binding and loads its own module. It was 64 MB over 500 products
   and that is too tight to survive a parallel fork -- measured, 159 MB of drift.
-- **Nothing is cached between calls.** Phase 3 (residency) is where that changes, and it
-  needs the invalidation rule todo-123 describes before it can exist.
+- **Nothing is cached between calls, and phase 3 decided it stays that way.** Residency
+  was measured against the real chain and declined; the ceiling, the design that was
+  weighed and the invalidation enumeration it would have needed are all in "The strided
+  tier, and why residency was NOT built" below.
 - **Threads.** The driver API is thread-safe and every call owns its buffers, so concurrent
   products are correct without a lock; they serialize on the device anyway, because
   everything goes to the null stream. The one caveat a future interceptor should know: a
   copy issued while ANOTHER thread's kernel is still queued on the null stream waits for
-  it, and waits for it INSIDE the critical window. Per-thread streams are the fix and phase
-  3 is where they would land.
+  it, and waits for it INSIDE the critical window. Per-thread streams are the fix; nothing
+  in the feature is threaded today, so it stays open.
 
 ### Per-call allocation is the floor, and it is what the spike measured around
 
@@ -484,14 +503,18 @@ The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md`
 intercepted set, the size threshold, the chain order and the precision contract in sync
 with it.
 
-### The intercepted set is TWO product shapes and TWELVE element-wise members
+### The intercepted set is TWO product shapes, TWELVE element-wise members and TEN strided ones
 
 `linalg:dot` over two packed rank-2 operands of the same width (hence `linalg:matmul` at
 rank 2 and `linalg:solve` transitively); since phase 4a `linalg::%la-matmul-nd`, the
-STACKED product behind `linalg:matmul` at rank >= 3; and since phase 4b the element-wise
-`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`. Nothing
-else is `defineFunction`ed: `#'linalg:add` and `#'linalg:sqrt` still print `#<lambda>`
-under the flag, and that they do is an assertion rather than a remark (below).
+STACKED product behind `linalg:matmul` at rank >= 3; since phase 4b the element-wise
+`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`; and since
+phase 3 the STRIDED tier -- `add` `sub` `mul` `div` `maximum` `minimum` at a BROADCAST
+shape only, `sum` `amax` `amin` in their `:axis` form only, and `transpose` in its axes
+form only. Twenty-four members. Nothing else is `defineFunction`ed: `#'linalg:sqrt` and
+`#'linalg:outer` still print `#<lambda>` under the flag, and that they do is an assertion
+rather than a remark (below) -- as is that `#'linalg:sub` now does NOT, which is the
+strided tier's own dead-flag guard.
 
 The set is narrower than `--blas`'s in one direction and wider in the other, and both
 differences are measurements rather than staging:
@@ -507,11 +530,17 @@ differences are measurements rather than staging:
   transformer's whole hot path.
 - **The transcendentals** are here and are not a product at all, which is the phase-4b
   finding: measured, they are the members with the highest ratio in the whole feature.
+- **The strided tier** is here at ONE call shape per member and declined at the others,
+  which is the phase-3 finding: the same `linalg:sub` is a device member against a
+  `(4 256 1)` operand and a decline against a `(4 256 384)` one, because `--simd` walks
+  the first with an odometer and the second with lanes.
 
 The size threshold is `Gpu.worth`'s and nothing else: below `n*m*p = 2^17` -- for a stack,
-below `batch*n*m*p = 2^17`, for an element-wise map below `n = 2^14` ELEMENTS -- the
-kernel returns the null sentinel and the CPU path runs, which is why every example in the
-repository is byte-identical with the flag on.
+below `batch*n*m*p = 2^17`, for an element-wise map below `n = 2^14` ELEMENTS, for a
+broadcast or an axes transpose below `2^15` OUTPUT elements, for an axis fold below `2^17`
+INPUT elements or 256 output cells -- the kernel returns the null sentinel and the CPU
+path runs, which is why every example in the repository is byte-identical with the flag
+on.
 
 ### The stacked matrix product (`%la-matmul-nd`, phase 4a, 2026-08-21)
 
@@ -780,6 +809,285 @@ per op:
    TRIP, not of the device. Phase 3 does not merely speed up the twelve members here; it
    changes which members exist. That is the strongest argument in this file for doing it.
 
+**And phase 3 then measured the other half of that argument, which is what settles it**
+(the section after next). This table is a per-OP ceiling; what decides is the share of a
+real program those ops' copies are, and on `train-gpt-soseki.lisp` under `--gpu --simd`
+they are 1.5% of a training step. Point 3 also turned out to be answerable without
+residency at all for the members that mattered: it is the CPU column of a BROADCAST
+`add`/`sub` that phase 4b never measured, not the copies, that decides those.
+
+### The strided tier, and why residency was NOT built (phase 3, 2026-08-21)
+
+Phase 3 was written as "device residency": keep an array on the device across a chain of
+accelerated calls so the copies are paid once for the chain. It was not built, and the
+reason is a measurement rather than a difficulty. **The premise 4b handed it is wrong in
+the one way that matters**, and correcting it produced a different member set instead --
+six binary ops at a BROADCAST shape, three axis folds and the axes transpose, all of them
+bit-identical to the defun, all of them 3-8x on a plain round trip with no cache anywhere.
+
+**The premise, and what refutes it.** 4b's case for residency was that `softmax`
+(`amax`->`sub`->`exp`->`sum`->`div`) and `layer-norm` are chains in which "exactly one
+link is a device member and every other link is a member 4b measured and REFUSED", so
+intercepting more links would MOVE copies rather than remove them. The refusal is real
+but it is a refusal of a different call: **4b measured `add`/`sub`/`mul`/`div` at EQUAL
+shapes, where `--simd` runs a lane loop**. Every one of those links in a real `softmax`
+or `layer-norm` is a BROADCAST -- `(4 256 256) - (4 256 1)`, an array against its own row
+reduction -- and `.kb/linalg-simd.md` says in as many words that the broadcast path is a
+SCALAR ODOMETER walk in every `--simd` backend, "no lanes". The same is true of the axis
+folds and of `transpose` with an axes list. So the CPU column 4b measured is not the CPU
+column these calls take, and the crossover is nowhere near where 4b put it.
+
+Measured on the GB10, us per call, JVM class output, `--simd` against `--gpu --simd`, at
+the shapes `train-gpt-soseki.lisp` produces at the notebook's own (batch 4, block 256,
+n-embd 384, 2 heads). CPU column `.todo/123-gpu-acceleration/shaped-baseline.lisp`,
+device column the same file under `--gpu --simd`:
+
+| f32, us/call | `--simd` | `--gpu --simd` | |
+|---|---|---|---|
+| `sub` (4 256 256) - (4 256 1) | 442.5 | **87.5** | 5.1x |
+| `sub` (4 256 384) - (4 256 1) | 660.0 | **117.5** | 5.6x |
+| `mul` (4 256 384) * (384) | 665.0 | **115.0** | 5.8x |
+| `sum :axis 2` (4 256 256) | 202.5 | **75.0** | 2.7x |
+| `sum :axis 0` (4 256 384) | 297.5 | **70.0** | 4.3x |
+| `mean :axis 2` (4 256 384) | 320.0 | **97.5** | 3.3x |
+| `var :axis 2` (4 256 384) | 1387.5 | **475.0** | 2.9x |
+| `transpose '(0 2 1)` (4 256 192) | 335.0 | **75.0** | 4.5x |
+| `softmax :axis -1` (4 256 256) | 1915.0 | **402.5** | 4.8x |
+| `log-softmax :axis -1` (4 256 256) | 1920.0 | **407.5** | 4.7x |
+| `amax :axis 2` (4 256 256) | 92.5 | **75.0** | 1.2x -- the weakest taken |
+| `sub` (4 256 384) - (4 256 384), SAME shape | 85.0 | 87.5 | DECLINED: both columns are the CPU |
+
+| f64, us/call | `--simd` | `--gpu --simd` | |
+|---|---|---|---|
+| `sub` (4 256 256) - (4 256 1) | 452.5 | **130.0** | 3.5x |
+| `sub` (4 256 384) - (4 256 1) | 672.5 | **180.0** | 3.7x |
+| `sum :axis 0` (4 256 384) | 277.5 | **112.5** | 2.5x |
+| `transpose '(0 2 1)` (4 256 192) | 340.0 | **110.0** | 3.1x |
+| `softmax :axis -1` (4 256 256) | 1805.0 | **595.0** | 3.0x |
+| `var :axis 2` (4 256 384) | 1262.5 | **747.5** | 1.7x |
+| `sub` (4 256 384) - (4 256 384), SAME shape | 172.5 | 150.0 | DECLINED: both columns are the CPU |
+
+**The last row of each table is the whole reason this is not a reversal of 4b**, and it
+reads differently from the others on purpose: the tier declines it, so the two columns are
+the same call and the pair measures nothing but the harness. The number that refuses it is
+`StridedCrossover.java`'s raw round trip for the SAME shape -- **112.3 us at f32 against
+85.0 on the CPU, and 184.0 at f64 against 172.5** -- which is 4b's refusal re-measured
+through this tier's own kernel and reaching the same answer.
+
+`softmax` and `log-softmax` are not members and never touch the device directly; they are `amax` -> `sub` -> `exp` -> `sum` -> `div` and every link of that is
+now one, so they are accelerated TRANSITIVELY -- five round trips where residency would
+have made one, and still 4.7x.
+
+#### The members, the kernels and the thresholds
+
+Three shapes, two kernel families and six entry points (`bcast_f64/f32`,
+`gather_f64/f32`, `fold_f64/f32`), taking their member as an op-code PARAMETER exactly as
+`map` does:
+
+- **`add` `sub` `mul` `div` `maximum` `minimum` at a BROADCAST shape** (`Gpu.bcast`,
+  op codes `Gpu.BIN_*`). Each operand carries one stride per OUTPUT axis, 0 on an axis it
+  is stretched across -- `%la-bcast-strides` verbatim, so the device reproduces
+  `%la-bcast-loop`'s odometer with an integer division per axis instead of a carry. An
+  EQUAL-shaped pair is declined by the interceptor before the library is asked.
+- **`sum` `amax` `amin` with `:axis`** (`Gpu.fold`, op codes `Gpu.FOLD_*`). Any rank
+  reduces to `outer x len x inner`, which is what `%la-fold-axis` already computes. One
+  thread per OUTPUT cell, walking its axis SEQUENTIALLY and ascending -- deliberately not
+  a tree reduction, because a tree reduction would not be the defun's sum. `mean`, `var`
+  and `std` ride on it transitively, as they do on the CPU.
+- **`transpose` with an axes list** (`Gpu.gather`): a permuted copy, one source stride per
+  output axis. The plain rank-2 form is NOT a member -- that one has a `--simd` lane form
+  (a shuffle butterfly), which is the same distinction the tier is built on.
+
+**These are BIT-IDENTICAL to the scalar defun at both widths, and that is a new thing for
+this flag.** The kernels read every element widened to `double`, compute in `double` and
+narrow only on the store, which is `%la-bcast-loop`'s and `%la-fold-axis`'s own rule; the
+four arithmetic ops and the two strict selects are correctly rounded in IEEE 754 and a
+copy is a copy, so there is no libm anywhere in the tier to disagree about. **Residency
+would not have changed this either way, but it is worth stating plainly: the element-wise
+tier's precision break did NOT widen, and the members added here can be checked by
+byte-identity rather than by tolerance.** `LinalgGpuDeclineTest.theStridedTierIsByte
+IdenticalWithTheFlagOnEveryMachine` and its compiled twin assert exactly that, over
+inexact data, above the thresholds.
+
+**Two thresholds, both re-derived rather than inherited.** A broadcast or a gather
+declines below **2^15 = 32768 OUTPUT elements**; an axis fold below **2^17 = 131072 INPUT
+elements**, and additionally below **256 output cells** whatever its input size -- a fold
+with one output cell is a single-threaded device loop and loses to any CPU, which is
+exactly what a whole-array `(linalg:sum a)` or a keepdims-less vector reduction is. The
+unpooled floors are 2^17 and 2^19. The sweep both columns come from
+(`shaped-baseline.lisp` and `StridedCrossover.java`, same shapes row for row):
+
+| n | CPU bcast f64 / f32 | dev bcast f64 / f32 | CPU fold f64 / f32 | dev fold f64 / f32 | CPU transpose f64 / f32 | dev transpose f64 / f32 |
+|---|---|---|---|---|---|---|
+| 4096 | **7.0 / 6.5** | 20.1 / 17.8 | **2.0 / 2.0** | 12.5 / 12.9 | **6.5 / 6.0** | 14.6 / 13.6 |
+| 16384 | 27.0 / 25.5 | **21.8 / 21.1** | **8.5 / 9.5** | 27.4 / 21.5 | 30.0 / 28.0 | **20.3 / 16.3** |
+| 32768 | 53.0 / 50.5 | **25.7 / 22.2** | **16.5 / 18.5** | 26.7 / 27.1 | 59.5 / 56.5 | **25.2 / 21.1** |
+| 65536 | 104.5 / 101 | **36.0 / 27.2** | 33.5 / 37.0 | 30.6 / 29.4 | 118.5 / 114 | **34.6 / 25.6** |
+| 131072 | 210 / 200 | **54.9 / 37.5** | 70.0 / 70.0 | **40.8 / 33.5** | 235 / 225 | **55.2 / 36.3** |
+| 262144 | 420 / 400 | **90.5 / 59.0** | 140 / 145 | **61.2 / 43.1** | 470 / 450 | **93.2 / 59.0** |
+| 1048576 | 1735 / 1615 | **340 / 179** | 575 / 585 | **166 / 101** | 2200 / 1830 | **339 / 182** |
+
+The device column here is the RAW round trip (`StridedCrossover.java`, one kernel over
+buffers it allocates and frees itself); the shaped table above is the whole rontolisp call
+path, which at these sizes adds a further 10-40 us of header copy and wrapper. Compare a
+row with a row and never a table with a table.
+
+The broadcast and the gather cross over between 4096 and 16384 at both widths; at 16384
+the f64 margin is 1.2x, which is inside the measurement, so the threshold sits at 32768
+where it is 2.1x -- the same "where the win is unambiguous, not where it first appears"
+rule the product's threshold follows. The fold is level at 65536 and 1.7-2.1x at 131072,
+which is where its own threshold sits. **`amax`/`amin` with an axis are the weakest
+members in the whole feature** (1.2-1.4x at the transformer's shape, because the CPU's
+`amax` fold is ~25% cheaper than its `sum` fold); they are taken because the fold kernel
+is the same one and because `softmax`'s first link is an `amax`, and the number is
+recorded here so a future measurement can drop them without re-deriving it.
+
+**A DECLINED strided call must allocate nothing, and that is an ORDERING rule inside the
+interceptor.** Unlike the product and the map, whose members are rare in an ordinary
+program, this tier sits on `linalg:add` / `sub` / `mul` / `div` -- call sites a program
+runs constantly and which mostly decline. So the size test comes FIRST, over a bound that
+costs nothing (a broadcast output is at least as big as either operand; a transpose's
+output is the operand's own element count), ahead of the broadcast-shape derivation and
+the permutation check, both of which allocate an `int[]` the decline would throw away.
+The first draft did it the other way round and its declined path allocated two arrays per
+call. Keep the cheap bound first.
+
+**The layout rides in a fourth device buffer.** A broadcast needs the output dims plus one
+stride per axis per operand -- `3 * rank` ints, at most 192 bytes -- and a gather two
+thirds of that. It is one more pooled allocation (0.7-2.3 us) and one more tiny copy per
+call, and it goes through the same pre-flight and the same `finally` as the operands, so
+`aRunOfStridedCallsFreesEveryBufferItAllocates` is the leak pin for the FOUR-buffer path
+that neither the product's nor the map's leak test reaches. Passing the layout as a
+by-value kernel parameter would save the allocation and cost a second parameter-packing
+shape; at these sizes that is not a trade worth making.
+
+**The JVM backend gained one genuinely new thing: a device rung at the EXTENDED call
+sites.** Until now `.kb/linalg-simd.md`'s option-form machinery
+(`LinalgKernelCallLayout`, `laSumAxis` and friends) was `--simd`-only, and `.kb/gpu.md`
+said so. The axis folds and the axes transpose have NO base-shape kernel on the device, so
+`JvmLinalgKernelCompiler` now claims the option form when EITHER bridge has a kernel for
+it and emits the device attempt with the SAME layout the lane attempt uses -- the two
+kernels take the same parameters in the same order, so no second table sits between them.
+`JvmLinalgGpu.kernelKey` answers `null` for a member with no base kernel and
+`extendedKernelKey` for the option form; a call shape at which nothing would be attempted
+routes to `compileDefault`, which is what a `--gpu`-only build reaching `(linalg:sum a)`
+does. Pinned by `anOptionFormArgumentIsEvaluatedExactlyOnceEvenWhenTheDeviceDeclines`,
+because a chain of any length is only safe if the temps are read rather than recompiled.
+
+**The blob grew and the class with it.** `am.ik.gpu`'s class files are 68.7 KB (from
+55.7), the bridge 13.3 KB (from 7.3) and the PTX 113 KB (from 86.9): base64 and the
+verbatim PTX come to ~222 KB against phase 4b's 171. Measured end to end on
+`train-gpt-soseki.lisp`, a `--simd` class is 417 KB and a `--gpu --simd` class 627 KB
+(from 589). The strided kernels are 28.8 KB of PTX for six entry points, which is cheap
+per member next to `sin`/`cos`/`tan`'s 38 KB for three.
+
+#### What a training step is actually made of, and why residency cannot pay
+
+The end-to-end number first, and it is the smallest in this file.
+`train-gpt-soseki.lisp` at the notebook's shapes, JVM class output, per training step
+from a 5-step and a 40-step run (best of seven interleaved runs each; the medians are in
+brackets, and the spread is why both are quoted):
+
+| | per training step |
+|---|---|
+| `--simd` | 0.89 s [0.93] |
+| `--gpu --simd`, phase 4b | 0.25 s [0.29] |
+| `--gpu --simd`, with the strided tier | **0.21 s** [0.27] |
+
+**3.4-4.3x against the CPU, and 1.1-1.2x against phase 4b** -- against 3-6x for every
+member the tier took. The gap between those two numbers is the finding, and it is the one
+phase 3 should be remembered for.
+
+**A JFR execution profile of the `--gpu --simd` step says where the time goes, and it is
+not `linalg:` any more.** Top frames over a 40-step run, 1159 samples, phase 4b build
+(`jfr print --events ExecutionSample --stack-depth 1`; the compiled Lisp functions carry
+no line-number table, so a filter on `line:` sees only the Java half -- an earlier draft
+of this section was measured that way and reported the CPU kernels as 63% of the step
+when they are 11%):
+
+| frame | samples | what it is |
+|---|---|---|
+| `TORCH::%O-ADAM-STEP` | 356 (31%) | the AdamW update, a per-element BOXED Lisp loop |
+| `_dbl` | 167 (14%) | boxing a double -- mostly that loop's and the RNG's |
+| `_fvAset1` | 91 (8%) | `(setf (row-major-aref ...))`, same loop |
+| `LINALG:RAND` / `RANDN` / `%LA-RNG-NEXT` | 159 (14%) | the dropout masks, boxed RNG loops |
+| `laBcastFF` + `laFoldAxis` + `laTransposeAxes` | 124 (11%) | the three kernels this tier took |
+| `%LA-GATHER-STRIDED` | 56 (5%) | slicing and indexing |
+| `memcpyHtoD` + `memcpyDtoH` | 17 (1.5%) | every device copy in the step |
+
+After the tier: the three kernels fall to 9 samples of 1042 and the copies rise to 37.
+**So residency's whole ceiling on this program -- removing every device copy there is --
+is 3.5% of a step**, and phase 4b's own residency table (2.2-6.4x at f64, 15.6-17.9x at
+f32 per op) is measuring an op whose copies are 1.5% of the program that op runs in. That
+is the answer to "does residency pay": **not here, not by a factor that could survive the
+15% run-to-run spread of the same program on this machine.**
+
+What actually dominates is `torch::%o-adam-step`: PyTorch's Adam rule written as a
+`do` loop over `row-major-aref` / `(setf (row-major-aref ...))` per element per parameter,
+which boxes a double per element and is on NO acceleration seam -- not `--simd`, not
+`--blas`, not `--gpu`. Second is `linalg:rand` / `linalg:randn`, the dropout masks, which
+are the same shape of loop. **Between them they are about half of what a `--gpu --simd`
+training step now costs, and neither is a `linalg:` member.** That is a `torch:`-level
+item and not this one; it is recorded here because it is the reason no further work on
+this seam will move this program much.
+
+#### The residency design that was weighed, and the enumeration it would need
+
+Recorded so that whoever revisits it starts from here rather than from todo-123's two
+sentences.
+
+**Where the handle would live.** The todo offers an identity-keyed device cache or a
+device handle inside the packed array. **The handle cannot go in the array**: on the
+interpreter a packed array is a `LispDoubleFloatArray(double[] data, int[] dims)` record
+and a field could be added, but on the JVM class output the array IS a bare `double[]`
+with a `[rank, dim..., data...]` header inside it and there is nowhere to put one. So the
+only mechanism that works on both backends is a cache keyed on the IDENTITY of the
+primitive `double[]`/`float[]` -- which exists on both, and is the same object the
+interceptors already unwrap. That is the shape to build if it is ever built, and the two
+backends would NOT need different mechanisms.
+
+**What makes it a cache and not an ownership transfer.** A resident buffer whose host
+array is not also written is only sound if every host READ can be intercepted, and on the
+JVM class output an element read is a raw `daload` -- there is no seam. So the host array
+must stay authoritative, the device copy is a cache of it, and residency removes the
+HOST-TO-DEVICE half of the round trip only. That halves the ceiling above again.
+
+**The invalidation rule it would need, and the write paths it must cover.** Every
+in-place write to a packed float array, enumerated:
+
+- the interpreter: `Environment`'s `aset` / `row-major-aset` (`LispFloatArray.setElement`,
+  `Environment.java:1096` and `:1102`) and `replace` (`:5867`). Those three are the whole
+  set -- every other producer allocates.
+- the JVM class output: `_fvAset1` / `_fvAset2` / `_fvAsetN` (`JvmFloatArrayRuntimeBuilder`),
+  reached by `(setf (aref ...))` and `(setf (row-major-aref ...))`, plus the general
+  `_aset*` chain they delegate from.
+- `linalg::%la-make` fills a FRESH array through those same setters, so it needs no rule
+  of its own: an array the cache has never seen cannot be stale.
+- `vec:`'s `-into` siblings (`vec:add-into` and friends, `VecSimdKernels`' destination-
+  passing kernels) write into a caller-supplied packed array and WOULD need the hook;
+  `linalg:` has no `-into` member.
+- `torch:set-data` REBINDS a tensor's data field rather than writing into the old array,
+  so it invalidates nothing; the optimizers are the opposite case and are the reason to
+  check -- `torch::%o-adam-step` writes the parameter, the two moments and nothing else
+  through `(setf (row-major-aref ...))`, i.e. through the enumerated setters.
+- **there are no aliasing views to worry about**: `make-array :displaced-to` requires a
+  general (boxed) array and rejects a packed one outright (`Environment.requireArray`),
+  so no second object can write another's storage. That is what makes IDENTITY
+  invalidation sound rather than merely likely.
+
+The rule would then be: **a device copy is valid only while its host array has not been
+written, and every enumerated setter drops the entry for the array it writes** -- a
+reference compare against a small resident set, so an `aset`-heavy program pays a few
+nanoseconds. And the buffers would need a release policy (an LRU against a byte budget
+read from `cuMemGetInfo`, since a training run that never releases is an OOM), pinned the
+way `GpuTest`'s leak tests are.
+
+None of that is hard. It is simply not worth 3.5% of a step, and it is worth re-deriving
+before anyone spends the complexity: re-run `ElementwiseCrossover.java`'s third table for
+the per-op ceiling and the JFR profile above for the share of the program that ceiling
+applies to. **The first number is the one todo-123 quotes and the second is the one that
+decides.**
+
 ### The chain order, and why the device goes on top
 
 On the interpreter a chain is INSTALL ORDER -- each `install` captures whatever
@@ -875,9 +1183,9 @@ of them plus one data resource:
 **The size objection does not survive measurement, and phase 4b is where it came closest
 to.** At phase 2 the six class files were 47.4 KB and the PTX 10.4 KB, ~78 KB of constant
 pool, against the 62 KB `JvmSimdVectorTemplate` (83 KB base64) that every `linalg` program
-under `--simd` already embeds. **Today it is 171 KB**: 55.7 KB of library classes plus the
-7.3 KB bridge, base64 84 KB, plus the PTX at 86.9 KB verbatim. Measured end to end on
-`train-gpt-soseki.lisp`, a `--simd` class is 417 KB and a `--gpu --simd` class 589 KB.
+under `--simd` already embeds. **Today it is ~222 KB**: 68.7 KB of library classes plus
+the 13.3 KB bridge, base64 109 KB, plus the PTX at 113 KB verbatim. Measured end to end on
+`train-gpt-soseki.lisp`, a `--simd` class is 417 KB and a `--gpu --simd` class 627 KB.
 
 Two thirds of the growth is the PTX and it is worth knowing WHERE, because it is one
 decision away from being halved. Marginal PTX per element-wise member, measured by
@@ -965,8 +1273,16 @@ a product. `--gpu` must NOT drag in the `--simd` bridge: a class that did would 
 `java --add-modules jdk.incubator.vector` to run
 (`theThreeFlagsAreOrthogonalAndEmbedTheirOwnBridges`).
 
-The extended (option-form) call sites are `--simd`-only, as before: `dot` has no keyword
-form, so the device and library attempts are simply not emitted there.
+**The extended (option-form) call sites carry a device rung since phase 3**, which they
+did not before: the axis folds and the axes transpose are device members ONLY in that
+shape. `JvmLinalgKernelCompiler` claims the option form when EITHER bridge has a kernel
+for it, and emits the device attempt with the same `LinalgKernelCallLayout` the lane
+attempt uses -- the two kernels take the same parameters in the same order, so no third
+table sits between them. `JvmLinalgGpu.kernelKey` answers `null` for a member with no
+BASE-shape kernel and `extendedKernelKey` for the option form; a call shape at which no
+attempt would be emitted routes to `compileDefault` instead of emitting an empty chain,
+which is what a `--gpu`-only build reaching `(linalg:sum a)` does. `--blas` is still
+absent there: `dot` has no keyword form.
 
 ### The precision contract
 
@@ -976,6 +1292,14 @@ its cause: the device fuses (above), so at `#d` -- where `--simd` is bit-identic
 defun -- `--gpu` is not. Over inputs exact at the operand width the results still match
 EXACTLY, which is what the exact-input tests assert; over inexact ones they do not, and
 the pin is a RELATIVE tolerance.
+
+**Phase 3's strided tier does NOT widen the break, and is the one tier that keeps
+byte-identity.** Its kernels read widened to double, compute in double and narrow only on
+the store -- `%la-bcast-loop`'s and `%la-fold-axis`'s own rule -- and hold no libm at all,
+so a broadcast `sub`, an axis `sum` and an axes `transpose` are bit-identical to the
+scalar defun at both widths. That is asserted rather than assumed, on every machine, by
+`LinalgGpuDeclineTest.theStridedTierIsByteIdenticalWithTheFlagOnEveryMachine` and its
+compiled twin.
 
 **Phase 4b makes that break VISIBLE, and it is a genuinely new exception.** For the
 product there exists a class of inputs (exact at the operand width) on which the flag
@@ -1038,10 +1362,15 @@ they replace:
 
 1. **Byte-identity still holds, and is still asserted, everywhere the device is not
    asked**: below the element threshold (`LinalgGpuDeclineTest.anElementWiseCallBelowThe
-   ThresholdIsUntouchedEverywhere`), and for the eight REFUSED members at any size
-   (`theDeclinedHalfOfTheElementWiseTierIsUntouchedAtAnySize`, over a million elements).
-   That second one is the guard on the measurement: it fails the moment someone widens
-   the member set without measuring it.
+   ThresholdIsUntouchedEverywhere`), below the two STRIDED thresholds
+   (`aStridedCallBelowTheThresholdIsUntouchedEverywhere`), for the eight REFUSED members
+   at any size (`theDeclinedHalfOfTheElementWiseTierIsUntouchedAtAnySize`, over a million
+   elements) and for an EQUAL-shaped binary pair at any size
+   (`anEqualShapedBinaryOpIsUntouchedAtAnySize`). Those last two are the guard on the
+   measurement: they fail the moment someone widens the member set without measuring it.
+   **And byte-identity holds where the device IS asked, for the whole strided tier**
+   (`theStridedTierIsByteIdenticalWithTheFlagOnEveryMachine`) -- that is a stronger claim
+   than the one it replaces, not a weaker one.
 2. **Above the threshold the pin is the relative tolerance above**, asserted per element
    rather than per array, and asserted on EVERY machine -- on one without a device the
    difference is exactly zero, so the same test carries both worlds.
@@ -1100,16 +1429,20 @@ like `--blas`, whose availability check is nearly free.
 | interpreter, needs a device (`@EnabledIf` on the probe) | `eval/LinalgGpuTest` |
 | interpreter, must hold on EVERY machine | `eval/LinalgGpuDeclineTest` |
 | JVM: the emit gate, the blob's class list, the declined product -- on EVERY machine | `codegen/jvm/JvmLinalgGpuAccelCompilerTest` |
-| JVM: the accepted product, the declines, evaluate-once, the chain, the order against `--blas` -- needs a device | the same file, `@EnabledIf` |
+| JVM: the accepted product, the declines, evaluate-once (base AND option forms), the chain, the order against `--blas` -- needs a device | the same file, `@EnabledIf` |
 | the flag is value-less, the REPL pair, the `.wasm` refusal, the `.class` blob | `cli/CliOptionsTest`, `cli/RontoLispCliTest` |
 
 The dead-flag guard is the load-bearing one, as it is for `--blas`: every numeric assertion
 in `LinalgGpuTest` would pass just as well on the scalar defun, so `#'linalg:dot` printing
 `#<function LINALG:DOT>` under the flag and `#<lambda>` without it is the assertion that
 fails when the flag is DEAD. Since phase 4a it is TWO assertions -- `#'linalg::%la-matmul-nd`
-has its own, with the double colon its qualified spelling carries -- and the compiled
-half's gate assertion has a third case, a program whose ONLY linalg call is the stacked
-member.
+has its own, with the double colon its qualified spelling carries -- and since phase 3 it
+is TWENTY-FOUR, one per member, plus the complementary list of members that must still be
+`#<lambda>` under the flag (`matmul`, `outer`, `sqrt`, `abs`, `negative`, `sign`, `norm`,
+`reshape`, `trace`, `argmax`, `argmin`, `softmax`, `mean`, `var`). The compiled half's
+gate assertion has cases for the stacked member, for a program whose ONLY linalg call is a
+transcendental, and for the three strided call shapes -- the axis folds and the axes
+transpose have no base-shape kernel, so the emit gate is the only thing that puts them in.
 
 `LinalgGpuTest` also pins the two order claims above, the fallback target, and the eight
 combinations of the three flags over one exact program (which now includes two rank-3
@@ -1117,10 +1450,18 @@ legs). The stacked member adds, in both suites: every batch shape the odometer c
 the device (plain rank 3, a broadcast right operand, a broadcast left one, rank 4, a
 rectangular non-tile-multiple slab, both widths), the three declines that are its own (a
 rank-1 operand, a non-affine batch, a stack under the threshold), and the chain pin that a
-declined stack lands on the LANE kernel rather than the defun. In `am.ik.gpu` the load-
-bearing new one is `aBatchIsBitIdenticalToTheSameSlabsRunOneAtATime`: it states the
-precision contract as an assertion instead of trusting that the batched kernel calls the
-same device function. `LinalgGpuDeclineTest` is the half
+declined stack lands on the LANE kernel rather than the defun. The strided tier adds, in
+both suites: `theStridedTierIsBitIdenticalToTheScalarOracle` over every member at both
+widths and ranks 2 and 3 (the claim that separates this tier from the element-wise one),
+`everyStridedDeclineRunsTheScalarDefunUnchanged` over the nine shapes it refuses, and on
+the compiled side `anOptionFormArgumentIsEvaluatedExactlyOnceEvenWhenTheDeviceDeclines`,
+which is the guard the new device rung at the EXTENDED call sites needs. In `am.ik.gpu`
+the load-bearing new one is `aBatchIsBitIdenticalToTheSameSlabsRunOneAtATime`: it states
+the precision contract as an assertion instead of trusting that the batched kernel calls
+the same device function. Phase 3's are `aBroadcastBinaryOpMatchesTheScalarOdometerWalk`,
+`anAxisFoldIsTheDefunsOwnSequentialFold` and `aStridedGatherIsThePermutedCopy`, each
+against a Java oracle written out longhand -- the op is a kernel PARAMETER there too, so
+nothing else catches a swapped constant. `LinalgGpuDeclineTest` is the half
 a CI runner runs, and it pins that the flag changes nothing observable -- at a shape above
 the threshold as well as below it.
 
@@ -1247,14 +1588,26 @@ since the map path allocates TWO buffers in its own `finally` and the product's 
 cannot reach it. `GpuDeclineTest` pins that the probe answers without
 throwing, that every decline condition declines rather than throws, that the status table
 is total, that only the context-destroying statuses are sticky, that the PTX is the
-artifact the loader expects with its regeneration command still attached (all SIX entry
-points, and the `erf` case in `gemm.cu`, which is the only thing anywhere that checks the
-op-code mirror), and that `useKernels` is accepted without probing. Its element-wise half
-pins the threshold, the bounds, and -- the one that matters -- that an op code the library
-does not name DECLINES rather than quietly computing something. **That last test hands it the REAL checked-in
+artifact the loader expects with its regeneration command still attached (all TWELVE entry
+points, and the `erf` and `div` cases in `gemm.cu`, which are the only things anywhere
+that check the op-code mirrors), and that `useKernels` is accepted without probing. Its
+element-wise and strided halves pin the thresholds, the bounds -- for the strided tier the
+bound is over the whole reachable SPAN of a stride vector, not the element count, which is
+what stops a kernel indexing outside the caller's array -- and, the one that matters, that
+an op code the library does not name DECLINES rather than quietly computing something. **That last test hands it the REAL checked-in
 text and no test anywhere may hand it anything else**: the override is process-wide and
 read at probe time, so a placeholder would decide what the whole suite's device compiles,
 whichever class happened to run first.
+
+**The four tests that assert on FREE DEVICE MEMORY hold a `@ResourceLock` and their bound
+was widened to 1.5 GB in phase 3.** `cuMemGetInfo` reports the DEVICE, not the thread:
+two leak tests running at once each read the other's pool churn as their own drift, and
+the JVM backend's fork loads a separate copy of the binding -- its own primary context,
+its own PTX module -- for every compiled `--gpu` class it defines. With the strided tier's
+tests in the set that drift reached 808 MB against the old 256 MB bound. The lock
+serializes them against each other and every leak run is sized so a real leak is 2-8x the
+bound (1000 products of three 1.2 MB buffers is 3.5 GB), so the wider bound costs the
+assertion nothing. Do not tighten it back without re-measuring the drift.
 
 Everything here is skipped on a machine without a GPU, which is every CI runner this
 project has -- so `GpuDeclineTest` is the half that actually runs there, and it is the half
@@ -1262,20 +1615,33 @@ that must never regress.
 
 ## What is deliberately NOT here
 
-No residency, no Metal, and no element-wise member whose scalar cost is one machine
-instruction. Those are todo-123's phases 3 and 5 and phase 4b's own measured
-declines, and each needs this file's numbers before it is revisited:
+No residency, no Metal, no element-wise member whose scalar cost is one machine
+instruction AT AN EQUAL SHAPE, and nothing at all outside `linalg:`. Each is a measured
+decline, not an omission, and each needs this file's numbers before it is revisited:
 
-- **Phase 3 (residency)** now has a real measurement rather than a synthetic one (above):
-  2.2-6.4x at f64 and 15-18x at f32 per element-wise op, growing with the array; and the
-  three chains that dominate what is left of a training step (`softmax`, `log-softmax`,
-  `layer-norm`) are chains of members that individually LOSE a round trip, so residency is
-  the only thing that can take them. It would also turn eight of phase 4b's declines into
-  members.
+- **Residency (todo-123's phase 3) was measured and DECLINED**, and the section above is
+  the whole record: the per-op ceiling is real (2.2-6.4x at f64, 15-18x at f32) but the
+  copies it would remove were 1.5% of a `--gpu --simd` training step before the strided
+  tier and are 3.5% after it, so removing ALL of them is the flag's whole remaining
+  headroom on the program it exists for. The design it would take, and the
+  enumeration of every in-place write on a packed array that its invalidation rule would
+  need, are written down there so a future attempt starts from them. **Re-derive BOTH
+  numbers before spending the complexity**: the per-op one from
+  `ElementwiseCrossover.java`'s third table, and the share-of-program one from a JFR
+  execution profile with FULL stacks (the compiled Lisp functions have no line-number
+  table, so a profile filtered on `line:` sees only the Java half and reports the wrong
+  answer by 6x).
+- **The optimizer update and the RNG are the bottleneck now, and they are not on this
+  seam.** `torch::%o-adam-step` is ~31% of a training step and `linalg:rand`/`randn`
+  another ~14%, both per-element boxed Lisp loops that no acceleration flag reaches. That
+  is a `torch:`-level item; it is named here because it is why no further work on the
+  `linalg:` seam will move `train-gpt-soseki.lisp` much.
 - **The per-call cost of an FFM downcall inside a native image is still unexplained**
-  (above), and phase 3 must not quote a residency figure from that build without measuring
-  it first.
-- **`sqrt`, `abs`, `negative`, `sign` and the binary `add` / `sub` / `mul` / `div`** are
-  refusals with numbers attached, not omissions. Re-open them only with residency, or on a
-  machine whose measured table looks different -- and re-run `ElementwiseCrossover.java`
-  plus `elementwise-baseline.lisp` before believing either.
+  (above), and nothing may quote a device figure from that build without measuring it
+  first.
+- **`sqrt`, `abs`, `negative`, `sign` and the binary `add` / `sub` / `mul` / `div` AT AN
+  EQUAL SHAPE** are refusals with numbers attached. The binary four are members at a
+  BROADCAST shape since phase 3, which is not a reversal: it is a different CPU column.
+  Re-open the rest only with residency, or on a machine whose measured table looks
+  different -- and re-run `ElementwiseCrossover.java` plus `elementwise-baseline.lisp`
+  before believing either.

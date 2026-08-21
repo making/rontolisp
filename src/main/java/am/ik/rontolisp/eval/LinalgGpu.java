@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
@@ -157,7 +158,42 @@ public final class LinalgGpu {
 			int op = member.getValue();
 			define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + member.getKey(), 1, args -> map(op, args));
 		}
+		// The STRIDED tier: the three shapes whose CPU twin is a scalar ODOMETER walk.
+		// The binary ops are the same names the element-wise tier refuses -- and this is
+		// not a reversal of that refusal: it declines an EQUAL-shaped pair, where the CPU
+		// runs a lane loop, and takes only a genuine BROADCAST (see bcast).
+		for (Map.Entry<String, Integer> member : BIN_MEMBERS.entrySet()) {
+			int op = member.getValue();
+			define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + member.getKey(), 2, args -> bcast(op, args));
+		}
+		// The axis folds and the axes transpose live at the EXTENDED call shapes, so
+		// their
+		// arity is a range: `(linalg:sum a :axis 0 :keepdims t)` is five arguments and
+		// `(linalg:transpose a '(0 2 1))` is two. The base shapes are not offered -- a
+		// whole-array sum is one output cell, which is a single-threaded device loop.
+		for (Map.Entry<String, Integer> member : FOLD_MEMBERS.entrySet()) {
+			int op = member.getValue();
+			define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + member.getKey(), 3, 5,
+					args -> foldAxis(op, args));
+		}
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_TRANSPOSE, 2, 2,
+				LinalgGpu::transposeAxes);
 	}
+
+	/**
+	 * The binary members the device takes AT A BROADCAST SHAPE, each with the op code its
+	 * kernel switches on. {@code maximum} / {@code minimum} are the strict selects, so
+	 * the SECOND operand wins a tie -- {@code LinalgSimdKernels.BOP_MAX}'s rule, and the
+	 * defun's.
+	 */
+	private static final Map<String, Integer> BIN_MEMBERS = Map.of(LispNames.LINALG_ADD, LinalgGpuKernels.BIN_ADD,
+			LispNames.LINALG_SUB, LinalgGpuKernels.BIN_SUB, LispNames.LINALG_MUL, LinalgGpuKernels.BIN_MUL,
+			LispNames.LINALG_DIV, LinalgGpuKernels.BIN_DIV, LispNames.LINALG_MAXIMUM, LinalgGpuKernels.BIN_MAX,
+			LispNames.LINALG_MINIMUM, LinalgGpuKernels.BIN_MIN);
+
+	/** The axis folds the device takes, each with its own op code. */
+	private static final Map<String, Integer> FOLD_MEMBERS = Map.of(LispNames.LINALG_SUM, LinalgGpuKernels.FOLD_SUM,
+			LispNames.LINALG_AMAX, LinalgGpuKernels.FOLD_AMAX, LispNames.LINALG_AMIN, LinalgGpuKernels.FOLD_AMIN);
 
 	/**
 	 * The element-wise members the device takes, each with the op code its kernel
@@ -184,12 +220,17 @@ public final class LinalgGpu {
 	 */
 	private static void define(Environment globalEnv, LispEvaluator evaluator, String qualified, int arity,
 			Function<List<LispVal>, @Nullable LispVal> kernel) {
+		define(globalEnv, evaluator, qualified, arity, arity, kernel);
+	}
+
+	private static void define(Environment globalEnv, LispEvaluator evaluator, String qualified, int minArity,
+			int maxArity, Function<List<LispVal>, @Nullable LispVal> kernel) {
 		LispVal declined = globalEnv.lookupFunctionOrNull(qualified);
 		if (declined == null) {
 			throw new IllegalStateException("linalg.lisp must be loaded before " + qualified + " can be accelerated");
 		}
 		globalEnv.defineFunction(qualified, new LispFunction(qualified, args -> {
-			if (args.size() == arity) {
+			if (args.size() >= minArity && args.size() <= maxArity) {
 				LispVal fast = kernel.apply(args);
 				if (fast != null) {
 					return fast;
@@ -227,6 +268,185 @@ public final class LinalgGpu {
 		}
 		double[] c = LinalgGpuKernels.map(op, ((LispDoubleFloatArray) a).data(), n);
 		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+	}
+
+	/**
+	 * One BROADCAST binary element-wise op over two packed operands of the same width and
+	 * DIFFERENT shapes: {@code out[i] = op(a[ia(i)], b[ib(i)])} with each operand
+	 * following its own stride-0-padded strides, which is {@code %la-bcast-loop}'s own
+	 * walk. One round trip for the whole output.
+	 *
+	 * <p>
+	 * <strong>Equal shapes are declined on purpose.</strong> That is the case phase 4b
+	 * measured and refused -- there the CPU runs a lane loop and a round trip loses
+	 * outright (measured 65 us against 112 at {@code #f}, and this member set is the same
+	 * one that refusal names). The BROADCAST case is a different comparison: the CPU
+	 * walks an odometer element by element, which costs it 5.5-8.5x the same round trip
+	 * at the shapes {@code torch:softmax} and {@code torch:layer-norm} produce. So is a
+	 * scalar operand, a boxed array and a mixed-width pair, each for the reason the
+	 * {@code --simd} kernel declines it.
+	 *
+	 * <p>
+	 * Unlike the element-wise tier this is BIT-IDENTICAL to the defun at both widths: the
+	 * kernel widens every element to double, computes in double and narrows only on the
+	 * store, which is {@code %la-bcast-loop}'s rule, and the four arithmetic ops and two
+	 * selects leave no libm to disagree about.
+	 */
+	private static @Nullable LispVal bcast(int op, List<LispVal> args) {
+		if (!(args.get(0) instanceof LispFloatArray a) || !(args.get(1) instanceof LispFloatArray b)
+				|| a.getClass() != b.getClass()) {
+			return null;
+		}
+		int[] da = a.dims();
+		int[] db = b.dims();
+		if (Arrays.equals(da, db)) {
+			return null;
+		}
+		// The size test FIRST, over a bound that costs nothing: a broadcast output is at
+		// least as big as either operand. Every linalg:add in a program pays this method,
+		// so a declined call must not allocate a shape it is about to throw away.
+		if (!LinalgGpuKernels.worthStrided(Math.max(a.totalSize(), b.totalSize()))) {
+			return null;
+		}
+		int[] od = bcastShape(da, db);
+		if (od == null) {
+			return null;
+		}
+		long total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		if (!LinalgGpuKernels.worthStrided(total)) {
+			return null;
+		}
+		int[] sa = bcastStrides(da, od);
+		int[] sb = bcastStrides(db, od);
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.bcast(op, single.data(), sa, ((LispSingleFloatArray) b).data(), sb, od);
+			return c == null ? null : new LispSingleFloatArray(c, od);
+		}
+		double[] c = LinalgGpuKernels.bcast(op, ((LispDoubleFloatArray) a).data(), sa,
+				((LispDoubleFloatArray) b).data(), sb, od);
+		return c == null ? null : new LispDoubleFloatArray(c, od);
+	}
+
+	/**
+	 * The AXIS form of {@code sum} / {@code amax} / {@code amin} ({@code %la-fold-axis}):
+	 * every slice along one axis folded on its own, the axis dropped from the result or
+	 * kept at extent 1 under {@code :keepdims}. One thread per output cell, walking its
+	 * axis in the defun's ascending order in a {@code double} accumulator, so this is
+	 * BIT-IDENTICAL to the defun at both widths.
+	 *
+	 * <p>
+	 * Declined, and the captured binding then answers: the whole-array form (no
+	 * {@code :axis}), a nil / non-integer / out-of-range axis, an empty axis, a malformed
+	 * keyword tail, a boxed operand, a fold below the size threshold -- and one shape of
+	 * its own, a fold with fewer than a few hundred OUTPUT cells, which on a device is a
+	 * single-threaded loop and loses to any CPU. A vector reduced without
+	 * {@code :keepdims} is exactly that shape.
+	 */
+	private static @Nullable LispVal foldAxis(int op, List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		LispVal[] opts = LinalgSimd.options(args, 1, "AXIS", "KEEPDIMS");
+		if (a == null || opts == null) {
+			return null;
+		}
+		Integer axis = LinalgSimd.normAxis(opts[0], a.rank());
+		if (axis == null) {
+			return null;
+		}
+		int[] d = a.dims();
+		int len = d[axis];
+		if (len == 0) {
+			return null;
+		}
+		int outer = 1;
+		int inner = 1;
+		for (int i = 0; i < axis; i++) {
+			outer *= d[i];
+		}
+		for (int i = axis + 1; i < d.length; i++) {
+			inner *= d[i];
+		}
+		if (!LinalgGpuKernels.worthFold((long) outer * inner * len) || (long) outer * inner < 2) {
+			return null;
+		}
+		int[] od = LinalgSimd.axisShape(d, axis, !(opts[1] instanceof LispNil));
+		if (od.length == 0) {
+			return null;
+		}
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.fold(op, single.data(), outer, len, inner);
+			return c == null ? null : new LispSingleFloatArray(c, od);
+		}
+		double[] c = LinalgGpuKernels.fold(op, ((LispDoubleFloatArray) a).data(), outer, len, inner);
+		return c == null ? null : new LispDoubleFloatArray(c, od);
+	}
+
+	/**
+	 * The AXES form of {@code linalg:transpose} ({@code %la-transpose-axes}): a rank-n
+	 * permutation, which is a pure permuted COPY and therefore trivially bit-identical.
+	 * The device reads it as one source stride per output axis.
+	 *
+	 * <p>
+	 * Declined: the plain (no-axes) form, a bad permutation, a boxed operand, and
+	 * anything below the size threshold.
+	 */
+	private static @Nullable LispVal transposeAxes(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		if (a == null) {
+			return null;
+		}
+		int rank = a.rank();
+		// The size test first, for the reason bcast's is first: a transpose's output is
+		// its operand's own element count, so this costs nothing and allocates nothing.
+		if (!LinalgGpuKernels.worthStrided(a.totalSize())) {
+			return null;
+		}
+		int[] axes = LinalgSimd.permutation(args.get(1), rank);
+		if (axes == null) {
+			return null;
+		}
+		int[] d = a.dims();
+		int[] source = new int[rank];
+		int acc = 1;
+		for (int i = rank - 1; i >= 0; i--) {
+			source[i] = acc;
+			acc *= d[i];
+		}
+		int[] od = new int[rank];
+		int[] sa = new int[rank];
+		long total = 1;
+		for (int k = 0; k < rank; k++) {
+			od[k] = d[axes[k]];
+			sa[k] = source[axes[k]];
+			total *= od[k];
+		}
+		if (!LinalgGpuKernels.worthStrided(total)) {
+			return null;
+		}
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.gather(single.data(), sa, od);
+			return c == null ? null : new LispSingleFloatArray(c, od);
+		}
+		double[] c = LinalgGpuKernels.gather(((LispDoubleFloatArray) a).data(), sa, od);
+		return c == null ? null : new LispDoubleFloatArray(c, od);
+	}
+
+	/**
+	 * Row-major strides of the dims-{@code d} operand aligned to the broadcast shape
+	 * {@code od}, with 0 on every stretched axis -- {@code %la-bcast-strides} verbatim,
+	 * and the same code {@code LinalgSimdKernels} walks its odometer with.
+	 */
+	private static int[] bcastStrides(int[] d, int[] od) {
+		int[] s = new int[od.length];
+		int acc = 1;
+		for (int k = od.length - 1, i = d.length - 1; k >= 0; k--, i--) {
+			int n = i >= 0 ? d[i] : 1;
+			s[k] = n == 1 ? 0 : acc;
+			acc *= n;
+		}
+		return s;
 	}
 
 	/**

@@ -120,6 +120,63 @@ class LinalgGpuDeclineTest {
 	}
 
 	@Test
+	void theStridedTierIsByteIdenticalWithTheFlagOnEveryMachine() {
+		// The STRIDED tier -- a BROADCAST binary op, an AXIS fold, an axes TRANSPOSE --
+		// is the one part of --gpu that keeps byte-identity, and this is where that claim
+		// is pinned on a machine with no device as well as on one with. The kernels widen
+		// to double, compute in double and narrow only on the store, which is
+		// %la-bcast-loop's and %la-fold-axis's rule; there is no libm in them to
+		// disagree about. The shapes are above the thresholds and the data is INEXACT, so
+		// on a GPU machine the device really is asked.
+		String program = """
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 262144) '(64 4096)))
+				(defparameter *m* (linalg:amax *x* :axis 1 :keepdims t))
+				(defparameter *s* (linalg:sub *x* *m*))
+				(list (linalg:sum *s*)
+				      (linalg:sum (linalg:div *s* (linalg:sum *s* :axis 1 :keepdims t)))
+				      (linalg:sum (linalg:mul *x* *m*)) (linalg:sum (linalg:add *x* *m*))
+				      (linalg:sum (linalg:maximum *x* *m*)) (linalg:sum (linalg:minimum *x* *m*))
+				      (linalg:to-list (linalg:flatten (linalg:amin *x* :axis 1)))
+				      (linalg:to-list (linalg:flatten (linalg:sum *x* :axis 0)))
+				      (linalg:sum (linalg:transpose *x* '(1 0)))
+				      (linalg:sum (linalg:var *x* :axis 1 :keepdims t)))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
+	void anEqualShapedBinaryOpIsUntouchedAtAnySize() {
+		// The guard on the measurement, and the reason the strided tier is not a
+		// reversal of phase 4b's refusal: at EQUAL shapes the CPU runs a lane loop and a
+		// round trip loses (measured 65 us against 112 at #f), so the device must not be
+		// offered them however big the arrays are. It is the BROADCAST shape -- where the
+		// CPU walks an odometer element by element -- that is taken.
+		String program = """
+				(defparameter *a* (linalg:reshape (linalg:linspace 0.01 9.0 262144) '(64 4096)))
+				(defparameter *b* (linalg:reshape (linalg:linspace 0.02 3.0 262144) '(64 4096)))
+				(list (linalg:sum (linalg:add *a* *b*)) (linalg:sum (linalg:sub *a* *b*))
+				      (linalg:sum (linalg:mul *a* *b*)) (linalg:sum (linalg:div *a* *b*))
+				      (linalg:sum (linalg:maximum *a* *b*)) (linalg:sum (linalg:minimum *a* *b*)))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
+	void aStridedCallBelowTheThresholdIsUntouchedEverywhere() {
+		// 2^15 output elements for a broadcast or a transpose and 2^17 input elements for
+		// a fold; below either the device is never asked, which is what keeps every
+		// example in the repository byte-identical with the flag on.
+		String program = """
+				(defparameter *x* (linalg:reshape (linalg:linspace 0.013 3.7 32000) '(50 640)))
+				(defparameter *m* (linalg:amax *x* :axis 1 :keepdims t))
+				(list (linalg:sum (linalg:sub *x* *m*))
+				      (linalg:to-list (linalg:flatten (linalg:sum *x* :axis 1 :keepdims t)))
+				      (linalg:sum (linalg:transpose *x* '(1 0))))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
 	void anAcceleratedElementWiseCallStaysWithinARelativeToleranceOfTheOracle() {
 		// The one place this file cannot assert byte-identity, and the reason is the
 		// feature's: above the threshold a transcendental runs on the DEVICE's libm, so

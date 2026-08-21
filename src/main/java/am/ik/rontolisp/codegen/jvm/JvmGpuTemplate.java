@@ -299,6 +299,336 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * {@code (linalg:add a b)} at a BROADCAST shape on the device.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuAdd(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_ADD, a, b);
+	}
+
+	/**
+	 * {@code (linalg:sub a b)} at a BROADCAST shape on the device.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSub(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_SUB, a, b);
+	}
+
+	/**
+	 * {@code (linalg:mul a b)} at a BROADCAST shape on the device.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuMul(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_MUL, a, b);
+	}
+
+	/**
+	 * {@code (linalg:div a b)} at a BROADCAST shape on the device.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuDiv(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_DIV, a, b);
+	}
+
+	/**
+	 * {@code (linalg:maximum a b)} at a BROADCAST shape: the STRICT select, so the second
+	 * operand wins a tie and a NaN, exactly as the defun's does.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuMaximum(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_MAX, a, b);
+	}
+
+	/**
+	 * {@code (linalg:minimum a b)} at a BROADCAST shape.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuMinimum(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_MIN, a, b);
+	}
+
+	/**
+	 * {@code (linalg:sum a :axis ax :keepdims k)} on the device.
+	 * @param a the operand
+	 * @param axis the axis argument, or {@code null} for a missing one
+	 * @param keepdims the keepdims argument, or {@code null} for a missing one
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSumAxis(@Nullable Object a, @Nullable Object axis, @Nullable Object keepdims) {
+		return foldAxis(Gpu.FOLD_SUM, a, axis, keepdims);
+	}
+
+	/**
+	 * {@code (linalg:amax a :axis ax :keepdims k)} on the device.
+	 * @param a the operand
+	 * @param axis the axis argument, or {@code null} for a missing one
+	 * @param keepdims the keepdims argument, or {@code null} for a missing one
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuAmaxAxis(@Nullable Object a, @Nullable Object axis, @Nullable Object keepdims) {
+		return foldAxis(Gpu.FOLD_AMAX, a, axis, keepdims);
+	}
+
+	/**
+	 * {@code (linalg:amin a :axis ax :keepdims k)} on the device.
+	 * @param a the operand
+	 * @param axis the axis argument, or {@code null} for a missing one
+	 * @param keepdims the keepdims argument, or {@code null} for a missing one
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuAminAxis(@Nullable Object a, @Nullable Object axis, @Nullable Object keepdims) {
+		return foldAxis(Gpu.FOLD_AMIN, a, axis, keepdims);
+	}
+
+	/**
+	 * {@code (linalg:transpose a axes)}, the rank-n axis permutation, on the device: one
+	 * source stride per output axis, a pure permuted copy.
+	 * @param a the operand
+	 * @param axes the permutation, as a compiled proper list
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuTransposeAxes(@Nullable Object a, @Nullable Object axes) {
+		if (!(a instanceof double[]) && !(a instanceof float[])) {
+			return null;
+		}
+		int rank = rank(a);
+		if (rank < 1) {
+			return null;
+		}
+		int[] d = dims(a, rank);
+		// The size test first, for the reason bcast's is first.
+		if (!Gpu.worthStrided(count(d))) {
+			return null;
+		}
+		int[] perm = permutation(axes, rank);
+		if (perm == null) {
+			return null;
+		}
+		int[] source = new int[rank];
+		int acc = 1;
+		for (int i = rank - 1; i >= 0; i--) {
+			source[i] = acc;
+			acc *= d[i];
+		}
+		int[] od = new int[rank];
+		int[] sa = new int[rank];
+		long total = 1;
+		for (int k = 0; k < rank; k++) {
+			od[k] = d[perm[k]];
+			sa[k] = source[perm[k]];
+			total *= od[k];
+		}
+		int off = 1 + rank;
+		if (!Gpu.worthStrided(total) || !Gpu.available()) {
+			return null;
+		}
+		if (a instanceof float[] x) {
+			float[] c = newLike(od, off + (int) total);
+			return Gpu.gather(x, off, sa, c, off, od) ? c : null;
+		}
+		double[] x = doubles(a);
+		double[] c = newLikeD(od, off + (int) total);
+		return Gpu.gather(x, off, sa, c, off, od) ? c : null;
+	}
+
+	/**
+	 * One BROADCAST binary element-wise op. Equal shapes are declined ON PURPOSE: there
+	 * the {@code --simd} rung below runs a lane loop that a round trip cannot beat, which
+	 * is the measurement phase 4b made and this does not reverse. A scalar operand, a
+	 * boxed array and a mixed-width pair decline for the reasons the lane kernel declines
+	 * them.
+	 */
+	private static @Nullable Object bcast(int op, @Nullable Object a, @Nullable Object b) {
+		if (!(a instanceof double[]) && !(a instanceof float[])) {
+			return null;
+		}
+		boolean single = a instanceof float[];
+		if (single != (b instanceof float[]) || (!single && !(b instanceof double[]))) {
+			return null;
+		}
+		int ra = rank(a);
+		int rb = rank(b);
+		if (ra < 1 || rb < 1) {
+			return null;
+		}
+		int[] da = dims(a, ra);
+		int[] db = dims(b, rb);
+		if (java.util.Arrays.equals(da, db)) {
+			return null;
+		}
+		// The size test FIRST, over a bound that costs nothing: a broadcast output is at
+		// least as big as either operand. Every linalg:add call site in the program runs
+		// this method, so a declined call must not allocate a shape it will throw away.
+		if (!Gpu.worthStrided(Math.max(count(da), count(db)))) {
+			return null;
+		}
+		int[] od = bcastShape(da, db);
+		if (od == null) {
+			return null;
+		}
+		long total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		int rank = od.length;
+		if (total + 1 + rank > Integer.MAX_VALUE - 8 || !Gpu.worthStrided(total) || !Gpu.available()) {
+			return null;
+		}
+		int[] sa = bcastStrides(da, od);
+		int[] sb = bcastStrides(db, od);
+		int off = 1 + rank;
+		if (single) {
+			float[] c = newLike(od, off + (int) total);
+			return Gpu.bcast(op, floats(a), 1 + ra, sa, floats(b), 1 + rb, sb, c, off, od) ? c : null;
+		}
+		double[] c = newLikeD(od, off + (int) total);
+		return Gpu.bcast(op, doubles(a), 1 + ra, sa, doubles(b), 1 + rb, sb, c, off, od) ? c : null;
+	}
+
+	/**
+	 * One AXIS fold. Declines the whole-array form, a nil / non-integer / out-of-range
+	 * axis, an empty axis, a boxed operand, a fold below the size threshold and one with
+	 * too few OUTPUT cells to be worth a grid -- which is what a vector reduced without
+	 * {@code :keepdims} is.
+	 */
+	private static @Nullable Object foldAxis(int op, @Nullable Object a, @Nullable Object axisv,
+			@Nullable Object keepdims) {
+		if (!(a instanceof double[]) && !(a instanceof float[])) {
+			return null;
+		}
+		int rank = rank(a);
+		if (rank < 1 || !(axisv instanceof Long axl)) {
+			return null;
+		}
+		long axis = axl < 0 ? axl + rank : axl;
+		if (axis < 0 || axis >= rank) {
+			return null;
+		}
+		int ax = (int) axis;
+		int[] d = dims(a, rank);
+		int len = d[ax];
+		if (len == 0) {
+			return null;
+		}
+		int outer = 1;
+		int inner = 1;
+		for (int i = 0; i < ax; i++) {
+			outer *= d[i];
+		}
+		for (int i = ax + 1; i < d.length; i++) {
+			inner *= d[i];
+		}
+		if (!Gpu.worthFold((long) outer * inner * len) || (long) outer * inner < 2) {
+			return null;
+		}
+		int[] od = axisShape(d, ax, keepdims != null);
+		if (od.length == 0 || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + od.length;
+		int cells = outer * inner;
+		if (a instanceof float[] x) {
+			float[] c = newLike(od, off + cells);
+			return Gpu.fold(op, x, 1 + rank, c, off, outer, len, inner) ? c : null;
+		}
+		double[] x = doubles(a);
+		double[] c = newLikeD(od, off + cells);
+		return Gpu.fold(op, x, 1 + rank, c, off, outer, len, inner) ? c : null;
+	}
+
+	/**
+	 * Row-major strides of the dims-{@code d} operand aligned to the broadcast shape
+	 * {@code od}, 0 on every stretched axis -- {@code %la-bcast-strides} verbatim.
+	 */
+	private static int[] bcastStrides(int[] d, int[] od) {
+		int[] s = new int[od.length];
+		int acc = 1;
+		for (int k = od.length - 1, i = d.length - 1; k >= 0; k--, i--) {
+			int n = i >= 0 ? d[i] : 1;
+			s[k] = n == 1 ? 0 : acc;
+			acc *= n;
+		}
+		return s;
+	}
+
+	/** The element count of a shape. */
+	private static long count(int[] d) {
+		long n = 1;
+		for (int x : d) {
+			n *= x;
+		}
+		return n;
+	}
+
+	/** The dims with the axis dropped -- or kept as extent 1 ({@code %la-axis-shape}). */
+	private static int[] axisShape(int[] d, int ax, boolean keep) {
+		int[] od = new int[keep ? d.length : d.length - 1];
+		int k = 0;
+		for (int i = 0; i < d.length; i++) {
+			if (i != ax) {
+				od[k++] = d[i];
+			}
+			else if (keep) {
+				od[k++] = 1;
+			}
+		}
+		return od;
+	}
+
+	/** A compiled proper list of integers forming a permutation of {@code 0..rank-1}. */
+	private static int @Nullable [] permutation(@Nullable Object axes, int rank) {
+		int[] out = new int[rank];
+		boolean[] seen = new boolean[rank];
+		int count = 0;
+		Object cursor = axes;
+		while (cursor instanceof Object[] cell && cell.length == 2) {
+			if (count >= rank || !(cell[0] instanceof Long l)) {
+				return null;
+			}
+			long v = l;
+			if (v < 0 || v >= rank || seen[(int) v]) {
+				return null;
+			}
+			seen[(int) v] = true;
+			out[count++] = (int) v;
+			cursor = cell[1];
+		}
+		return cursor == null && count == rank ? out : null;
+	}
+
+	/** A fresh single-float result of the given shape, header written, elements zero. */
+	private static float[] newLike(int[] od, int length) {
+		float[] c = new float[length];
+		c[0] = od.length;
+		for (int k = 0; k < od.length; k++) {
+			c[1 + k] = od[k];
+		}
+		return c;
+	}
+
+	/** The double-float sibling of {@link #newLike}. */
+	private static double[] newLikeD(int[] od, int length) {
+		double[] c = new double[length];
+		c[0] = od.length;
+		for (int k = 0; k < od.length; k++) {
+			c[1 + k] = od[k];
+		}
+		return c;
+	}
+
+	/**
 	 * One element-wise unary ufunc: {@code out[i] = op(a[i])} over the whole packed
 	 * operand, one round trip, the result carrying the operand's own header. Declines a
 	 * general (boxed) array, a plain number, and an array below the element threshold --
