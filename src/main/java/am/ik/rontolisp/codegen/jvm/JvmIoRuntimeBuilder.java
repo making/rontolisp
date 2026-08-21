@@ -66,7 +66,7 @@ final class JvmIoRuntimeBuilder {
 	 * it is emitted {@code synchronized}, because {@code http-handler} serves one virtual
 	 * thread per request: a non-atomic "reserve a slot, then store" handed two concurrent
 	 * requests the same handle, dropping one stream and crossing the two conversations on
-	 * the survivor (.todo/193).
+	 * the survivor.
 	 */
 	static final String ADD_STREAM_METHOD = "_addStream";
 
@@ -3436,10 +3436,10 @@ final class JvmIoRuntimeBuilder {
 	 * {@code _addStream(Object stream) -> Long handle}. The ONE allocator of the stream
 	 * table (lazily created, growable): it appends the entry and returns its index. It is
 	 * emitted {@code synchronized} -- reserving a slot and filling it must be one atomic
-	 * step, or two concurrent request threads take the same index and one stream is lost
-	 * (.todo/193). The {@code _streams} field is written back on EVERY call, not just on
-	 * a growth, and is volatile: that store is what publishes the new element to a reader
-	 * thread, which reaches the table through the same volatile field.
+	 * step, or two concurrent request threads take the same index and one stream is lost.
+	 * The {@code _streams} field is written back on EVERY call, not just on a growth, and
+	 * is volatile: that store is what publishes the new element to a reader thread, which
+	 * reaches the table through the same volatile field.
 	 */
 	private List<Integer> buildAddStream() {
 		// Slots: 0=stream, 1=arr, 2=count

@@ -115,7 +115,7 @@ final class WasmEmitHelper {
 	 * The program's own entry ({@code _start}/{@code run}) uses
 	 * {@link WasmUncaughtReportCompiler} instead, which catches the {@code $lisp-cond}
 	 * tag as well and reports the condition before the same trap. A host call's failure
-	 * is the host's to report, and a served handler's is {@code .todo/191}'s, so these
+	 * is the host's to report, and a served handler's is the serve loop's, so these
 	 * wrappers keep the silent landing.
 	 * @param ctx the compilation context (its wasmCtrlDepth is raised by the two opened
 	 * control structures)

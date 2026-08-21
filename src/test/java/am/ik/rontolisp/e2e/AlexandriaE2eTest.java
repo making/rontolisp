@@ -8,9 +8,8 @@ import java.util.List;
  * sources (vendored unmodified under {@code src/test/resources/alexandria}, public domain
  * / 0-clause MIT) load via {@code asdf:load-system} and the public API of BOTH its
  * packages runs on ALL FOUR backends via {@link AsdfLibraryE2eSupport}. Alexandria is the
- * most-depended-on library in the Quicklisp ecosystem ({@code .todo/152}), so it is the
- * one already reached indirectly by cl-postgres, s-sql, postmodern and quri -- this test
- * pins it directly.
+ * most-depended-on library in the Quicklisp ecosystem, so it is the one already reached
+ * indirectly by cl-postgres, s-sql, postmodern and quri -- this test pins it directly.
  *
  * <p>
  * What the exercise covers, and why each part is here: the binding and control-flow
@@ -34,7 +33,7 @@ import java.util.List;
  * dotted {@code #.} read-time-eval form).
  *
  * <p>
- * The members {@code .todo/219} lit up are here too, one per primitive it widened:
+ * The members those four primitives lit up are here too, one each:
  * {@code copy-sequence}/{@code coercef}/{@code median} ({@code coerce} to a COMPUTED
  * result type), {@code rotate} ({@code (last list n)}), alexandria-2's
  * {@code dim-in-bounds-p}/{@code row-major-index}/{@code rmajor-to-indices}
@@ -46,10 +45,9 @@ import java.util.List;
  * The exercise is {@code examples/asdf/alexandria-demo.lisp} verbatim (minus its header
  * comment); keep the two in sync. Deliberately absent -- each one a gap owned elsewhere,
  * listed in {@code doc/*&#47;guides/asdf-systems.md}: {@code type=} ({@code subtypep}'s
- * secondary value, {@code .todo/214}), {@code format-symbol}/{@code ensure-symbol}
- * ({@code intern} with a runtime package) and {@code read-file-into-string} (it works,
- * but it wants a work file this harness has no place for -- its stream half is covered
- * above).
+ * secondary value), {@code format-symbol}/{@code ensure-symbol} ({@code intern} with a
+ * runtime package) and {@code read-file-into-string} (it works, but it wants a work file
+ * this harness has no place for -- its stream half is covered above).
  */
 class AlexandriaE2eTest extends AsdfLibraryE2eSupport {
 

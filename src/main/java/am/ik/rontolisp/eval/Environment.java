@@ -141,7 +141,7 @@ public final class Environment implements Scope {
 			if (this.size == LINEAR_MAX) {
 				// ConcurrentHashMap, not HashMap: the scope that outgrows the linear
 				// arrays is above all the GLOBAL environment, which concurrently served
-				// requests read while a lazy library load writes into it (.todo/193). A
+				// requests read while a lazy library load writes into it. A
 				// binding's value is never null, so the map's no-null rule costs
 				// nothing. Local scopes are thread-confined and rarely reach the
 				// promotion at all.
@@ -3816,7 +3816,7 @@ public final class Environment implements Scope {
 		// CONCURRENT: http-handler serves one virtual thread per request, so several
 		// requests allocate handles at the same time. A plain map plus a `long[]`
 		// counter handed two of them the SAME handle -- one stream was dropped and the
-		// two conversations crossed on the survivor (.todo/193). The table and the
+		// two conversations crossed on the survivor. The table and the
 		// counter must therefore stay thread-safe; see .kb/tcp-sockets.md.
 		Map<Long, Closeable> streams = new ConcurrentHashMap<>();
 		// The namestring each FILE stream was opened on, keyed by the same handle. It is

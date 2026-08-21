@@ -87,9 +87,8 @@ public final class LispEvaluator {
 	 * SHARED across concurrently served requests (one virtual thread per request, see
 	 * {@link HttpHandlerSupport}), and the flags are set before the definitions are
 	 * installed -- so without this a request arriving mid-load skips the loader and then
-	 * fails to resolve the very function that is being defined (.todo/193). Reentrant:
-	 * loading a library evaluates its forms, which resolve further names through the same
-	 * gates.
+	 * fails to resolve the very function that is being defined. Reentrant: loading a
+	 * library evaluates its forms, which resolve further names through the same gates.
 	 */
 	private final Object libraryLoadLock = new Object();
 
@@ -1221,7 +1220,7 @@ public final class LispEvaluator {
 		}));
 		// The runtime-slot-name dispatch pair the compile paths generate as defuns:
 		// the shared setf/with-slots expansions emit calls to them for an AMBIGUOUS
-		// literal slot name too (outlined since todo-247), and those expansions serve
+		// literal slot name too (they are outlined), and those expansions serve
 		// the interpreter as well -- here they are the registry-backed reads/writes.
 		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_RUNTIME,
 				new LispFunction(LispNames.SLOT_VALUE_RUNTIME, args -> {
@@ -1389,7 +1388,7 @@ public final class LispEvaluator {
 			}
 			return apply(baseFilePosition, args, this.globalEnv);
 		}));
-		// The line-oriented and print-family output operators (todo-252): the same
+		// The line-oriented and print-family output operators: the same
 		// instance test, the same helpers the compile-path rewrite targets. Without
 		// these, exactly the two write generics reached a Gray instance and everything
 		// else -- terpri, fresh-line, write-line, princ/prin1/print,
@@ -2601,8 +2600,8 @@ public final class LispEvaluator {
 		// with non-literal arguments was "The function UIOP:MERGE-PATHNAMES* is
 		// undefined"
 		// on all three. The interpreter lazy-loads them like any other uiop definition.
-		// uiop:get-pathname-defaults retired its Java built-in the same way with
-		// .todo/357: it is Lisp source in uiop-filesystem.lisp now, reading the
+		// uiop:get-pathname-defaults retired its Java built-in the same way: it is
+		// Lisp source in uiop-filesystem.lisp now, reading the
 		// *default-pathname-defaults* special instead of answering the literal ""
 		// that predated it.
 		// uiop:symbol-call -- real UIOP's late-binding call: look NAME up in PACKAGE at
@@ -6863,7 +6862,7 @@ public final class LispEvaluator {
 		// Everything below LOADS something into the shared global environment, so it runs
 		// under the library lock: a concurrently served request must either see the load
 		// finished or wait for it, never fall through a gate whose flag is already set
-		// while the definitions it guards are still being evaluated (.todo/193).
+		// while the definitions it guards are still being evaluated.
 		synchronized (this.libraryLoadLock) {
 			// Another thread may have finished the load while this one waited.
 			LispVal loadedElsewhere = this.globalEnv.lookupFunctionOrNull(name);

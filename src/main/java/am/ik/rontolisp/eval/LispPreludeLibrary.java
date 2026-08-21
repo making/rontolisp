@@ -458,9 +458,9 @@ public final class LispPreludeLibrary {
 		// nil -- the answer CL prescribes for a component that is not present, and the
 		// one SBCL gives on Unix for :device and :version -- after validating the
 		// argument through the strict namestring, so a non-designator signals exactly
-		// where the rest of the family does. rove's resolve-file is the caller
-		// (.todo/372 row 13): it pops a directory component only for a device that is
-		// neither nil nor :unspecific.
+		// where the rest of the family does. rove's resolve-file is the caller: it
+		// pops a directory component only for a device that is neither nil nor
+		// :unspecific.
 		SOURCES.put(LispNames.PATHNAME_HOST, """
 				(defun pathname-host (%phost-path &rest %phost-args)
 				  (progn (namestring %phost-path) nil))
@@ -660,7 +660,7 @@ public final class LispPreludeLibrary {
 				           %pds-acc))
 				        (t (error "MAKE-PATHNAME: :directory must be a list or string, got ~S" %pds-dir))))
 				""");
-		// make-pathname at RUN time (.todo/222): the shapes cli/CompileTimePathnameFolder
+		// make-pathname at RUN time: the shapes cli/CompileTimePathnameFolder
 		// declines -- a computed :defaults or :name -- used to compile to a call-time
 		// error on all three compiled backends. One Lisp definition serves all four, and
 		// it implements the SAME rule as PathnameOps.makePathname (which the folder still
@@ -1544,7 +1544,7 @@ public final class LispPreludeLibrary {
 				        (when ok (setq result pos))))))
 				""");
 		// count-if-not takes the full CL keyword set, unlike count-if (whose two-argument
-		// expansion is inlined per site; .todo/006 records that gap). :from-end only
+		// expansion is inlined per site, which is a known gap). :from-end only
 		// reorders the predicate calls, which cannot change a count, so it is accepted
 		// and the scan stays forward. A LIST is walked with a cursor rather than indexed
 		// with elt -- elt on a list is an nth walk from the head, so the obvious loop

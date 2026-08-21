@@ -25,7 +25,7 @@
 ;; program; a user method (postmodern returns (find-class 'direct-column-slot))
 ;; may answer the metaobject.
 ;;
-;; Definition entry point (todo-246): the driver routes through
+;; Definition entry point: the driver routes through
 ;; closer-mop:ensure-class-using-class, dispatching on the EXISTING driver-built
 ;; metaobject (nil for a first definition) -- so a user :around specialized on a
 ;; metaclass (mito's dao-table-class superclass injection) fires on

@@ -255,7 +255,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileRuntimeErrorDispatchScalesPastTheBranchLimit() throws Exception {
-		// todo-211: %error-runtime used to be ONE cond over every condition class, and
+		// %error-runtime used to be ONE cond over every condition class, and
 		// past ~140 the outermost arm's else-branch overflowed the signed-16-bit
 		// branch encoding. The dispatch is chained now (%error-runtime -> %er-1 ->
 		// ...); 200 classes leave headroom past the old threshold, and the computed
@@ -531,7 +531,7 @@ class JvmLispCompilerTest {
 	void compileDefclassMetaclassEnsureClassUsingClassAndInitargMunging() throws Exception {
 		// Mirrors
 		// LispEvaluatorTest#defclassMetaclassEnsureClassUsingClassAndInitargMunging
-		// on the compile path (the mito shape, todo-246): e-c-u-c routing +
+		// on the compile path (the mito shape): e-c-u-c routing +
 		// chain-fill initarg munging + initfunction + same-name redefinition (the
 		// second defclass reinitializes the SAME metaobject at runtime while the
 		// static tables keep the last definition).
@@ -768,7 +768,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunHandlerBindSeesTheErrorABuiltInRaises() throws Exception {
-		// The rove shape (.todo/379): a raw runtime failure (a bad car, an index out
+		// The rove shape: a raw runtime failure (a bad car, an index out
 		// of bounds) lands in the handler-bind expansion's %hb-guard pad, which runs
 		// the cluster stack and rethrows.
 		assertThat(compileAndRun(
@@ -814,7 +814,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunStandardConditionTypeNamesAreClSymbols() throws Exception {
-		// .todo/380: cl owns the condition type names, so a (:use #:cl) package
+		// cl owns the condition type names, so a (:use #:cl) package
 		// spells them bare -- which is also what makes the RUNTIME type test below
 		// match the registry's plain class name.
 		assertThat(compileAndRun("""
@@ -1847,7 +1847,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunInternIntoALiteralPackage() throws Exception {
 		// 2-arg intern with a literal package designator lowers to the canonical-
-		// spelling build the 2-arg find-symbol lowering already uses (todo-229): an
+		// spelling build the 2-arg find-symbol lowering already uses: an
 		// exported name gets the single-colon external spelling (eq to the
 		// source-quoted symbol) and resolves through the function registry; an
 		// internal name resolves through the registry's single-colon alias row.
@@ -1900,7 +1900,7 @@ class JvmLispCompilerTest {
 	void compileAndRunComputedSymbolFunctionResolvesLate() throws Exception {
 		// the jzon :key-fn shape: (funcall (symbol-function sym) x) with a runtime
 		// symbol. The computed designator lowers to the symbol itself, which the
-		// dispatchers resolve through the _lookup registry (todo-229).
+		// dispatchers resolve through the _lookup registry.
 		assertThat(compileAndRun("(defun sf-f (x) (* x 2)) (setq s (intern \"SF-F\"))"
 				+ "(print (funcall (symbol-function s) 21)) (print (funcall (fdefinition s) 5))"))
 			.isEqualTo("42\n10");
@@ -1908,7 +1908,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunUiopSymbolCall() throws Exception {
-		// REAL on the compile paths since todo-229 (used to be a call-time error, see
+		// REAL on the compile paths (used to be a call-time error, see
 		// .kb/asdf.md): lowers to (funcall (intern (string name) (find-package pkg))
 		// args...), late-bound through the registry like the interpreter's
 		// resolveFunction.
@@ -1925,7 +1925,7 @@ class JvmLispCompilerTest {
 		// are uninterned symbols. The value needs uiop's own definition of symbol-call
 		// (the fold only covers call position); the '#:name designator needs the
 		// dispatch gate to probe the "#:member" spelling, or the registry has no row
-		// for the target and the call dies undefined (.todo/404).
+		// for the target and the call dies undefined.
 		assertThat(compileAndRun("(defpackage :dex-usocket (:use :cl) (:export :request))"
 				+ "(in-package :dex-usocket) (defun request (uri &rest args) (list uri args))"
 				+ "(in-package :cl-user) (defvar *backend* :usocket)"
@@ -2591,7 +2591,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (mapcar #'cons '(1 2 3) '(a b)))")).isEqualTo("((1 . A) (2 . B))");
 	}
 
-	// The four primitives .todo/219 widened, each one a CL conformance gap that failed
+	// The four primitives alexandria forced, each one a CL conformance gap that failed
 	// identically on all four backends (so none was a backend divergence). They are
 	// grouped because one library -- alexandria -- is the first caller of all four.
 	@Test
@@ -2665,7 +2665,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("\"abc\"");
 	}
 
-	// The REST of the family over more than one list. Until .todo/218 only mapcar walked
+	// The REST of the family over more than one list. Originally only mapcar walked
 	// N lists here: mapc/mapcan/maplist/mapcon/mapl compiled the first two arguments and
 	// dropped the rest, so the answer was a silently wrong list (the interpreter
 	// signalled
@@ -2700,7 +2700,7 @@ class JvmLispCompilerTest {
 	}
 
 	// The same wrapper shape for the rest of the family, so no member of it answers a
-	// one-list result for a list-of-lists (.todo/218).
+	// one-list result for a list-of-lists.
 	@Test
 	void compileAndRunMapFamilyAsValuesOverMultipleLists() throws Exception {
 		assertThat(compileAndRun("(print (apply #'mapcan #'list '((1 2) (3 4))))")).isEqualTo("(1 3 2 4)");
@@ -3332,7 +3332,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void namestringHalvesNstringCaseAndEnvironmentEnquiry() throws Exception {
-		// The three families of .todo/402, all prelude Lisp: the string-valued halves of
+		// The three prelude-Lisp families: the string-valued halves of
 		// a namestring, the destructive case family, and the environment-enquiry
 		// constants. Same expectations as the interpreter suite except the two noted
 		// below, which are the machine-type target name and the compile-path-only
@@ -4725,7 +4725,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunConcatenateKeepsThePackedElementType() throws Exception {
 		// An (unsigned-byte 8|16|32) result element type builds the PACKED vector, on the
-		// compile paths through the injected %seq-int-vector helper (.todo/262). The
+		// compile paths through the injected %seq-int-vector helper. The
 		// deftype alias carries the element type through as well, and any other element
 		// type -- or a spelling whose second element is a SIZE -- stays general.
 		// The zero-parameter deftype shape, like
@@ -7539,7 +7539,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunSlotBoundpAndSlotMakunbound() throws Exception {
-		// Real unboundness (todo-199): a slot written with no :initform starts UNBOUND,
+		// Real unboundness: a slot written with no :initform starts UNBOUND,
 		// slot-makunbound puts it back, and a read of an unbound slot signals
 		// unbound-slot.
 		assertThat(compileAndRun("(defclass sb-pt () ((x :initarg :x) (y :initform 9)))"
@@ -7626,7 +7626,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunGrayOutputProtocolWidening() throws Exception {
-		// todo-252: the line-oriented and print-family operators reach a Gray
+		// the line-oriented and print-family operators reach a Gray
 		// instance on the compile path too. A class defining ONLY stream-write-char
 		// (rove's indent-stream shape) answers all of them, and its column protocol
 		// is what fresh-line consults.
@@ -7705,7 +7705,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunGrayBinaryStreamDispatchAndFilePosition() throws Exception {
-		// The read side of the Gray pre-pass (todo-235): read-byte/write-byte and
+		// The read side of the Gray pre-pass: read-byte/write-byte and
 		// file-position call sites with a non-literal stream rewrite onto the
 		// %gray-*-dispatch helpers; only the helpers a rewrite produced are spliced.
 		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
@@ -9769,7 +9769,7 @@ class JvmLispCompilerTest {
 	// Builds a 1,024-character string and the 131,072-character string that IS that
 	// string 128 times over, scans each, and prints the two elapsed times in ms. Both
 	// grow from the same literal rather than the shorter (defvar *long* *short*), which
-	// the compile paths get wrong (.todo/345).
+	// the compile paths get wrong.
 	private static final String SCAN_PROGRAM = """
 			(defun scan-sum (s)
 			  (let ((total 0))
@@ -10116,7 +10116,7 @@ class JvmLispCompilerTest {
 		// Common Lisp evaluates argument forms left to right. list (and everything that
 		// lowers onto it -- backquote, make-array :initial-contents) LINKS its cons
 		// chain from the last element backwards, and emitting the arguments in that
-		// consumption order used to run the side effects right to left (.todo/014):
+		// consumption order used to run the side effects right to left:
 		// a `(:a ,(read-a) :b ,(read-b)) plist off a byte stream read its fields in
 		// reverse. compiler.ArgumentOrder decides which arguments need the temp.
 		assertThat(compileAndRun("""
@@ -10462,7 +10462,7 @@ class JvmLispCompilerTest {
 		// (setf (elt seq i) v) dispatches at run time over all three sequence
 		// representations: rplaca for a list, the schar-set rebuild for a string,
 		// %aset for a vector. The string arm is what makes this the worked example of
-		// .todo/209: NOTHING in the source is an array operator, yet the expansion
+		// NOTHING in the source is an array operator, yet the expansion
 		// reaches the array runtime (%arrayp / %row-major-aset inside the schar-set
 		// rebuild). With the gate still a source scan the class called _aset1 without
 		// declaring it and died with NoSuchMethodError; the gate is now a consequence
@@ -10483,7 +10483,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void anArrayFreeProgramReferencesNoArrayRuntimeHelper() {
-		// .todo/210: the injected built-in wrappers used to carry an array arm each
+		// the injected built-in wrappers used to carry an array arm each
 		// (#'+ / #'reverse / #'sort / #'subseq / #'string= ... all fold or scan through
 		// the sequence dispatch), so a class as small as this one named _aref1 /
 		// _arrayMake / _aset1 without declaring them -- harmless at run time, but it
@@ -10727,7 +10727,7 @@ class JvmLispCompilerTest {
 	void compileExptWithRuntimeFloatOrRatioExponent() throws Exception {
 		// hasDoubleLiteral only sees literals: a float or ratio EXPONENT arriving
 		// through a variable or a call used to be unboxed as a Long and die
-		// (ClassCastException, .todo/435). _pow now dispatches on the run-time
+		// (ClassCastException). _pow now dispatches on the run-time
 		// exponent: a non-Long takes Math.pow over the float contagion, exactly the
 		// interpreter's answers.
 		assertThat(compileAndRun("""
@@ -11560,7 +11560,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunTheMissingStandardNames() throws Exception {
-		// The todo-443 batch on the JVM: with-compilation-unit is a progn, the load
+		// The batch on the JVM: with-compilation-unit is a progn, the load
 		// switches are bound nil, a cl:-qualified read-time constant answers the
 		// constant, the three new type names resolve, and the prelude-backed names
 		// exist (the four unsupported ones signal rather than answering a fabrication).
@@ -12583,7 +12583,7 @@ class JvmLispCompilerTest {
 		// .kb/packed-integer-vectors.md: stores mask to the width, reads widen
 		// unsigned, setf returns the value AS STORED -- matching the interpreter.
 		// let* sequencing, not (list (setf ...) (aref ...)): compiled list arguments
-		// evaluate right-to-left (.todo/014), so the store must be ordered explicitly.
+		// evaluate right-to-left, so the store must be ordered explicitly.
 		assertThat(compileAndRun("""
 				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
 				       (stored (setf (aref a 1) 300))

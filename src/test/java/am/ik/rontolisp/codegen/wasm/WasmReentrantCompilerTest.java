@@ -16,9 +16,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * relaxes the re-entry guard by making the module own its per-call state. What is pinned:
  *
  * <ul>
- * <li>the guard is RETIRED on a reentrant module and kept on every other -- the todo-337
- * refusal stays the default, and a module that keeps it is byte-identical to one built
- * before the flag existed (all of the machinery below is reentrant-gated);</li>
+ * <li>the guard is RETIRED on a reentrant module and kept on every other -- the refusal
+ * stays the default, and a module that keeps it is byte-identical to one built before the
+ * flag existed (all of the machinery below is reentrant-gated);</li>
  * <li>the park-block allocator ({@code __ronto_park_alloc}/{@code __ronto_park_free})
  * rides exactly the reentrant modules with a memory-typed boundary;</li>
  * <li>the refusals: a program nothing can suspend, {@code --component},

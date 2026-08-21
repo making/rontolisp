@@ -48,9 +48,9 @@ public final class ReactorEnvelope {
 	 * names the call its bodies belong to and the imports take that id as a leading
 	 * {@code :int} argument. A host that sends this key declares that the out-of-band
 	 * body thunks it passed take the id as their leading argument; every other host
-	 * leaves it out and nothing changes shape ({@code .todo/341} finding 3's no-handle
-	 * argument still holds wherever the id-less protocol exists, because there the
-	 * re-entry guard or the serialising queue still does).
+	 * leaves it out and nothing changes shape (the no-handle argument still holds
+	 * wherever the id-less protocol exists, because there the re-entry guard or the
+	 * serialising queue still does).
 	 */
 	public static final String CALL_ID_KEY = "call-id";
 

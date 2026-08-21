@@ -118,7 +118,7 @@ class SourceProvenanceTest {
 	@Test
 	void aReadWithNoOriginFileRecordsAPositionButNoPrefix() {
 		// A REPL buffer has line/column but nothing worth naming, so the message stays
-		// bare -- the same rule reader errors follow (phase 1).
+		// bare -- the same rule reader errors follow.
 		SourceProvenance.startRecording();
 		List<LispVal> forms = LispReader.readAllFromString("(print 1)", Features.JVM);
 		assertThat(SourceProvenance.locate(forms.get(0))).isEqualTo(new SourceLocation(null, 1, 1));

@@ -964,7 +964,7 @@ public final class UserMacroExpander {
 			// A macro body that signals, or a malformed call the expansion casts and
 			// fails on, has no position of its own: the exception comes from the
 			// macro-time evaluator, whose forms were built by the macro. The innermost
-			// frame here that IS a read cons names the call site (.todo/151 phase 2).
+			// frame here that IS a read cons names the call site.
 			throw SourceProvenance.noteFailure(form, ex);
 		}
 	}

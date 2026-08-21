@@ -296,7 +296,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		while (true) {
 			// A retried attempt's bytecode is thrown away, and so are its warnings: a
 			// warning printed as it was emitted said the same thing twice for one compile
-			// (.todo/151 phase 2 follow-up). CompileWarnings buffers this attempt's and
+			// once. CompileWarnings buffers this attempt's and
 			// only the attempt that SHIPS gets to print.
 			CompileWarnings.startAttempt();
 			try {
@@ -2223,7 +2223,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 				// VOLATILE: the synchronized _addStream writes the table back on every
 				// call, and that store is what publishes a new entry to the reader
-				// threads (one virtual thread per served request) -- see .todo/193.
+				// threads (one virtual thread per served request).
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
 					.writeU2(streamsFieldName)
 					.writeU2(streamsFieldDesc)

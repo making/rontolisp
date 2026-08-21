@@ -218,7 +218,7 @@ abstract class AsdfLibraryE2eSupport {
 	// The run gets /tmp as its preopened working directory (with a target/ subdirectory,
 	// so an exercise can write "target/..." like the in-process interpreter/JVM runs do
 	// from the project root): a file round-trip after a library load is part of what
-	// these tests pin (todo-237's close methods).
+	// these tests pin (the close methods).
 	private String runWasm(byte[] wasmBytes, boolean component) throws Exception {
 		String path = "/tmp/" + artifactName() + (component ? "-component.wasm" : "-p1.wasm");
 		GenericContainer<?> wasmtime = WasmtimeSupport.container();

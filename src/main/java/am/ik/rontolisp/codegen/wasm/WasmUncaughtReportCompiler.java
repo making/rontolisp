@@ -30,7 +30,7 @@ import am.ik.wasm.Type;
  * <p>
  * <b>Entry functions only.</b> {@code _start} / {@code run} is where a PROGRAM ends; an
  * export wrapper is a host call whose failure is the host's to report, and a served
- * handler's is {@code .todo/191}'s. Those keep {@link WasmEmitHelper}'s catch_all-only
+ * handler's is the serve loop's. Those keep {@link WasmEmitHelper}'s catch_all-only
  * landing, so their artifacts are unchanged.
  *
  * <p>
@@ -128,8 +128,8 @@ final class WasmUncaughtReportCompiler {
 	 * the {@code __hc_cond$<slot>} trick {@code WasmHandlerCaseCompiler} uses, so the
 	 * whole line is an ordinary Lisp form: the instance renders through
 	 * {@code %condition-report-str} -- ONE call site for the whole program, which is what
-	 * lets the per-signal message renders stay deleted ({@code .kb/error-handling.md},
-	 * todo-324) -- and a plain message is already the rendered text.
+	 * lets the per-signal message renders stay deleted ({@code .kb/error-handling.md}) --
+	 * and a plain message is already the rendered text.
 	 */
 	private static void emitReport(WasmLispCompiler.Ctx ctx) {
 		int payloadSlot = ctx.allocTemp();

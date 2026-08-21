@@ -38,9 +38,9 @@ final class WasmLiteralPrint {
 	 * The text a literal argument prints as.
 	 *
 	 * <p>
-	 * A FLOAT literal folds too since todo-431: the emitted printer selects the same
-	 * Schubfach shortest decimal {@code LispDouble.print()} (i.e. {@code FloatText})
-	 * answers, so the literal's spelling and the computed one's are identical.
+	 * A FLOAT literal folds too: the emitted printer selects the same Schubfach shortest
+	 * decimal {@code LispDouble.print()} (i.e. {@code FloatText}) answers, so the
+	 * literal's spelling and the computed one's are identical.
 	 * @param obj the argument expression
 	 * @param readably {@code *print-escape*}: the {@code prin1} rendering rather than the
 	 * {@code princ} one

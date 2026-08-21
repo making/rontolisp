@@ -326,7 +326,7 @@ class AsyncEvalTest {
 
 	@Test
 	void octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes() {
-		// The interpreter arm of the .todo/371 gate (JvmAsyncCompilerTest and
+		// The interpreter arm of the gate (JvmAsyncCompilerTest and
 		// WasmLispCompilerIntegrationTest are the other three): read-all's decoder is
 		// the native %octets-to-string-strict FIRST -- a well-formed body is a platform
 		// decode, not a per-byte walk -- with the lenient loop for what it refuses. The

@@ -253,8 +253,7 @@ final class WasmExprCompiler {
 		}
 		catch (RuntimeException ex) {
 			// The innermost cons that came from source names the position; the exception
-			// itself is rethrown untouched, since passes above catch it by type
-			// (.todo/151 phase 2).
+			// itself is rethrown untouched, since passes above catch it by type.
 			throw SourceProvenance.noteFailure(cons, ex);
 		}
 	}
@@ -325,7 +324,7 @@ final class WasmExprCompiler {
 					// the %serve-handle export before compilation, so it never reaches
 					// here; reaching here means Preview 1 (no --component), which has
 					// no incoming TCP by design (.kb/tcp-sockets.md). A CALL-TIME error
-					// (the todo-195 socket policy), not a compile error: the call may be
+					// (the socket policy), not a compile error: the call may be
 					// dead code -- the clack-handler-rontolisp shim's run defun is
 					// compiled whenever clack is loaded, reached only by an actual
 					// clackup.
@@ -536,8 +535,7 @@ final class WasmExprCompiler {
 					// ... but reading or closing one really is a bug to report. The SITE
 					// may still be dead code (the clack-handler-rontolisp bridge drains a
 					// request body it can never receive on Preview 1), so it signals at
-					// CALL time and never rejects the program (the todo-195 socket
-					// policy).
+					// CALL time and never rejects the program (the socket policy).
 					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub("rontolisp:" + qn.member()
 							+ " requires a stream value, and this module can hold none (they come from"
 							+ " rontolisp:fetch / rontolisp:http-handler bodies on an asynchronous --component"
@@ -1007,8 +1005,9 @@ final class WasmExprCompiler {
 					// Under --component with sockets spliced, listen is rewritten to the
 					// %io-listen dispatch defun before compilation (WasmSocketsRewrite);
 					// one reaching this compiler has no non-blocking probe behind it. A
-					// CALL-time error rather than a compile error (the todo-195 socket
-					// policy): the usocket shim's wait-for-input polls through listen,
+					// CALL-time error rather than a compile error (the socket policy):
+					// the
+					// usocket shim's wait-for-input polls through listen,
 					// so every spliced usocket program carries a listen call site that
 					// is dead code on Preview 1 -- it must compile, and a program that
 					// actually calls it gets this message.

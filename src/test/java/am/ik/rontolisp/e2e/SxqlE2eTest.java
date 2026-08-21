@@ -9,21 +9,19 @@ import java.util.List;
  * dist sxql-20260101-git) load via {@code asdf:load-system} over the vendored trivia (the
  * {@code trivia.trivial} route), alexandria, lisp-namespace and cl-package-locks
  * (vendored with it, BSD), and {@code sxql:yield} produces the PINNED SQL text of the
- * shapes mito emits ({@code .todo/238}) on ALL FOUR backends via
- * {@link AsdfLibraryE2eSupport}. Every expected line was verified against the same
- * sources on SBCL 2.2.9 (byte-identical), so the pin is upstream's own answer, not a
- * rontolisp-flavored one.
+ * shapes mito emits on ALL FOUR backends via {@link AsdfLibraryE2eSupport}. Every
+ * expected line was verified against the same sources on SBCL 2.2.9 (byte-identical), so
+ * the pin is upstream's own answer, not a rontolisp-flavored one.
  *
  * <p>
- * The exercise walks the acceptance list of {@code .todo/244}: {@code select} with
- * {@code from}/{@code where} (incl. {@code :and}/{@code :or}/{@code :in}/{@code :like}),
- * {@code order-by} with {@code :desc}, {@code limit}/{@code offset}, {@code left-join}
- * with {@code :on}, {@code insert-into} with {@code set=}, {@code update},
- * {@code delete-from}, {@code create-table} with column options (the mito
- * {@code deftable} output shape), {@code drop-table}, {@code alter-table} with
- * {@code add-column}, and placeholder binding -- every {@code yield} goes through
- * {@code multiple-value-bind}, pinning the SQL string plus the bind-value list as
- * multiple values at the call sites.
+ * The exercise walks the acceptance list: {@code select} with {@code from}/{@code where}
+ * (incl. {@code :and}/{@code :or}/{@code :in}/{@code :like}), {@code order-by} with
+ * {@code :desc}, {@code limit}/{@code offset}, {@code left-join} with {@code :on},
+ * {@code insert-into} with {@code set=}, {@code update}, {@code delete-from},
+ * {@code create-table} with column options (the mito {@code deftable} output shape),
+ * {@code drop-table}, {@code alter-table} with {@code add-column}, and placeholder
+ * binding -- every {@code yield} goes through {@code multiple-value-bind}, pinning the
+ * SQL string plus the bind-value list as multiple values at the call sites.
  *
  * <p>
  * Substrate the load exercises, each landed for this milestone: the {@code package} type

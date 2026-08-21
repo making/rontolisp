@@ -12,16 +12,15 @@ import java.util.List;
  * backends via {@link AsdfLibraryE2eSupport}.
  *
  * <p>
- * Two general mechanisms had to land before {@code fast-io.asd} could even be read
- * ({@code .todo/236}). (1) The {@code .asd} parser accepts the feature-announcement idiom
- * -- a top-level {@code eval-when} pushing onto {@code *features*} -- and records the
- * push as a declared feature of the systems defined after it; fast-io's second,
- * {@code #+}-gated push is off here, so its {@code #+fast-io-sv :static-vectors}
- * dependency correctly drops. (2) {@code with-slots} binds a slot variable through a
- * boundness-guarded read, so a body that only WRITES an {@code :initform}-less slot no
- * longer signals {@code unbound-slot} on entry -- fast-io's {@code initialize-instance}
- * fills its {@code buffer} slot exactly that way, and
- * {@code (make-instance 'fast-io:fast-input-stream ...)} died on it.
+ * Two general mechanisms had to land before {@code fast-io.asd} could even be read. (1)
+ * The {@code .asd} parser accepts the feature-announcement idiom -- a top-level
+ * {@code eval-when} pushing onto {@code *features*} -- and records the push as a declared
+ * feature of the systems defined after it; fast-io's second, {@code #+}-gated push is off
+ * here, so its {@code #+fast-io-sv :static-vectors} dependency correctly drops. (2)
+ * {@code with-slots} binds a slot variable through a boundness-guarded read, so a body
+ * that only WRITES an {@code :initform}-less slot no longer signals {@code unbound-slot}
+ * on entry -- fast-io's {@code initialize-instance} fills its {@code buffer} slot exactly
+ * that way, and {@code (make-instance 'fast-io:fast-input-stream ...)} died on it.
  *
  * <p>
  * A third one is exercised here only because fast-io carries a typo: its
@@ -89,7 +88,7 @@ class FastIoCircularStreamsE2eTest extends AsdfLibraryE2eSupport {
 			  (format t "~a~%" (file-position cs))
 			  (format t "~a~%" (list (read-byte cs) (read-byte cs))))
 
-			;; todo-237: fast-io's gray.lisp defines close/open-stream-p/... methods, which
+			;; fast-io's gray.lisp defines close/open-stream-p/... methods, which
 			;; used to poison the built-ins for real stream handles -- any later
 			;; with-open-file died with "No applicable method: CLOSE on INTEGER" (and the
 			;; compile paths silently ignored the methods instead). The built-in must stay

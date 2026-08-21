@@ -46,18 +46,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the compile-time query machinery as of the wire protocol;</li>
  * <li><b>the run-time SQL</b> -- the other half of that: {@code :insert-rows-into} and a
  * computed column value, which s-sql can only assemble while the program RUNS. It is
- * exactly what the milestone's all-literal forms cannot reach, and it is why
- * {@code .todo/208} went unnoticed until an example was written;</li>
- * <li><b>the reconnect</b> -- the only honest end-to-end exercise of the restart system
- * ({@code .todo/196}), because postmodern is where it is load-bearing rather than
- * decorative. The server terminates the connection under a {@code defprepared} function;
- * the nested {@code handler-bind}s of {@code generate-prepared} must invoke the
- * {@code :reconnect} restart and the SAME call must then answer;</li>
+ * exactly what the milestone's all-literal forms cannot reach, and it is why the run-time
+ * SQL gap went unnoticed until an example was written;</li>
+ * <li><b>the reconnect</b> -- the only honest end-to-end exercise of the restart system,
+ * because postmodern is where it is load-bearing rather than decorative. The server
+ * terminates the connection under a {@code defprepared} function; the nested
+ * {@code handler-bind}s of {@code generate-prepared} must invoke the {@code :reconnect}
+ * restart and the SAME call must then answer;</li>
  * <li><b>the retry</b> ({@code INTERPRETER ONLY}) -- a {@code with-transaction} body
  * inserts a row and calls {@code retry-transaction}: the insert has to be rolled back and
  * replayed, which the row's presence (rather than a duplicate-key error) proves. Both
- * compile backends throw out of {@code invoke-restart} here, which is {@code .todo/207};
- * widen this leg to all three when that lands;</li>
+ * compile backends throw out of {@code invoke-restart} here, which is a known gap; widen
+ * this leg to all three when it closes;</li>
  * <li><b>the DAO round trip</b> -- the object-mapping layer the MOP build exists for: a
  * {@code dao-class} class definition runs the metaclass protocol at definition time,
  * {@code deftable}/{@code create-table} derive the table from it, and
@@ -224,7 +224,7 @@ class PostmodernE2eTest {
 	@Test
 	void retryTransactionOnTheInterpreter(@TempDir Path workDir) throws Exception {
 		// Interpreter ONLY: the same program throws "THROW: no enclosing catch for the
-		// tag" out of invoke-restart on both compile backends (.todo/207). Widen this
+		// tag" out of invoke-restart on both compile backends. Widen this
 		// back to all three the way the reconnect leg above is when that lands.
 		assertThat(runOn(Backend.INTERPRETER, workDir, retryTransaction(Backend.INTERPRETER)))
 			.isEqualToNormalizingWhitespace(RETRY_EXPECTED);
@@ -251,7 +251,7 @@ class PostmodernE2eTest {
 	void preview1ModuleCompilesAndFailsLoudlyAtTheFirstSocketCall(@TempDir Path workDir) throws Exception {
 		// The documented fourth-backend gap: Preview 1 has no host socket API. Since
 		// the usocket shim grew wait-for-input, `listen` joined the tcp built-ins on
-		// the todo-195 CALL-time policy (the shim's listen call site is spliced
+		// the CALL-time policy (the shim's listen call site is spliced
 		// unpruned into every usocket program and must build as dead code), so the
 		// driver underneath postmodern now COMPILES here and the refusal moved to run
 		// time: the first socket call raises the message naming the backends that
@@ -266,7 +266,7 @@ class PostmodernE2eTest {
 			.containsPattern("(TCP-CONNECT|listen) requires the interpreter, the JVM backend or");
 	}
 
-	// The .todo/202 program verbatim, except for the per-backend table name (the three
+	// The milestone program verbatim, except for the per-backend table name (the three
 	// legs share one database, so a shared name would make them depend on each other's
 	// cleanup) and the leading drop that makes a re-run idempotent.
 	private static Exercise milestone(Backend backend) {
@@ -285,7 +285,7 @@ class PostmodernE2eTest {
 				""".formatted(DATABASE, USER, PASSWORD, host, port, table, table, table, table, table, table);
 	}
 
-	// The RUN-TIME SQL leg (.todo/208). Every S-SQL form in the milestone above carries
+	// The RUN-TIME SQL leg. Every S-SQL form in the milestone above carries
 	// literal values only, so s-sql resolves it entirely at macroexpansion time and the
 	// statement reaches the wire as a constant. The two forms here do not:
 	// :insert-rows-into and a computed (* 3 100) both make s-sql assemble the string at
@@ -405,12 +405,12 @@ class PostmodernE2eTest {
 	/**
 	 * The program's own output, with postmodern's reconnect DIAGNOSTIC dropped. That line
 	 * is {@code (format *error-output* "~%Database-connection-error ~a~%" condition)} and
-	 * now goes to the error stream on every backend ({@code .todo/149} landed --
+	 * now goes to the error stream on every backend (that landed --
 	 * {@code .kb/standard-output-redirect.md}), so this filter should no longer match
 	 * anything on stdout; it stays as a guard until the OTHER half is owned: the
-	 * condition renders as a slot dump rather than through its {@code :report}
-	 * ({@code .todo/206}), with one slot ({@code :QUERY}) that the interpreter and the
-	 * compile paths fill differently. Delete it when that lands.
+	 * condition renders as a slot dump rather than through its {@code :report}, with one
+	 * slot ({@code :QUERY}) that the interpreter and the compile paths fill differently.
+	 * Delete it when that lands.
 	 */
 	private static String programOutput(String stdout) {
 		return stdout.lines()

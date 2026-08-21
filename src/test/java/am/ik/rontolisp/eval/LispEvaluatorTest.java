@@ -1341,7 +1341,7 @@ class LispEvaluatorTest {
 		// make-array builds, not a general vector: ANSI requires the result to BE of the
 		// requested type, and md5:md5sum-sequence's etypecase has a
 		// (simple-array (unsigned-byte 8) (*)) arm and no general-vector one, which is
-		// what cl-postgres' md5 authentication rides on (.todo/262).
+		// what cl-postgres' md5 authentication rides on.
 		assertThat(eval("""
 				(let ((v (concatenate '(vector (unsigned-byte 8)) #(1) '(2 3))))
 				  (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*)))))""").print())
@@ -1544,7 +1544,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalSetfEltDispatchesOverListStringAndVector() {
 		// (setf (elt seq i) v) reaches all three sequence representations; the string
-		// arm is the one the compile backends were missing (.todo/209).
+		// arm is the one the compile backends were missing.
 		assertThat(evalMulti("(let ((s \"abc\")) (setf (elt s 0) #\\z) s)")).isEqualTo(new LispString("zbc"));
 		assertThat(evalMulti("(let ((l (list 1 2 3))) (setf (elt l 0) 8) l)").print()).isEqualTo("(8 2 3)");
 		assertThat(evalMulti("(let ((v (vector 1 2 3))) (setf (elt v 0) 9) v)").print()).isEqualTo("#(9 2 3)");
@@ -3798,7 +3798,7 @@ class LispEvaluatorTest {
 	void mapFamilyOverMultipleLists() {
 		// Every member of the map* family takes N lists in Common Lisp, not just mapcar:
 		// the function is called with one argument per list and the walk stops at the
-		// SHORTEST list. Until .todo/218 mapcar was the only one -- the interpreter
+		// SHORTEST list. Originally mapcar was the only one -- the interpreter
 		// signalled an arity error here and the compile backends silently dropped every
 		// list but the first.
 		assertThat(eval("(mapcan #'list '(1 2) '(3 4))").print()).isEqualTo("(1 3 2 4)");
@@ -3831,7 +3831,7 @@ class LispEvaluatorTest {
 		// used
 		// to have no function object for them at all ("The function MAPLIST is
 		// undefined")
-		// while both compile backends wrapped a one-list version: .todo/218.
+		// while both compile backends wrapped a one-list version.
 		assertThat(eval("(apply #'mapcan #'list '((1 2) (3 4)))").print()).isEqualTo("(1 3 2 4)");
 		assertThat(eval("(apply #'maplist #'list '((1 2) (3 4)))").print()).isEqualTo("(((1 2) (3 4)) ((2) (4)))");
 		assertThat(eval("(apply #'mapcon #'list '((1 2) (3 4)))").print()).isEqualTo("((1 2) (3 4) (2) (4))");
@@ -4384,7 +4384,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalConsCompoundTypeSpecifier() {
-		// (cons CAR-TYPE CDR-TYPE) tests each half. Before todo-248 the arguments fell
+		// (cons CAR-TYPE CDR-TYPE) tests each half. Originally the arguments fell
 		// through to the ranged-NUMERIC default and were compiled as bounds, so
 		// esrap's expression-kind table -- (cons (eql function) (cons symbol null)) --
 		// evaluated the symbol `function` as a variable.
@@ -4777,7 +4777,7 @@ class LispEvaluatorTest {
 	@Test
 	void macroexpand1AnswersTheExpandedPFlag() {
 		// CL's second value: t when the operator was a macro, nil when the form came
-		// back unchanged (the .todo/214 inventory row).
+		// back unchanged.
 		assertThat(evalMulti("""
 				(defmacro mxp-mac (x) `(list ,x))
 				(list (multiple-value-list (macroexpand-1 '(mxp-mac 1)))
@@ -6649,7 +6649,7 @@ class LispEvaluatorTest {
 				""")).isEqualTo(new LispInteger(42));
 		// dexador's shape: the operator as a VALUE, over uninterned designators. The
 		// interpreter's Java built-in is a first-class function already -- the compile
-		// paths get uiop's own definition of it (.todo/404).
+		// paths get uiop's own definition of it.
 		assertThat(evalMulti("""
 				(defpackage :sc-uninterned (:use :cl) (:export :thrice))
 				(in-package :sc-uninterned)
@@ -8175,7 +8175,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void handlerBindSeesTheErrorABuiltInRaises() {
-		// The rove shape (.todo/379): a broken test body -- a bad car, an index out
+		// The rove shape: a broken test body -- a bad car, an index out
 		// of bounds, a bad argument type -- must run the handler-bind handler, not
 		// abort the run. The built-in seam runs the cluster stack at the signal
 		// point.
@@ -8315,7 +8315,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void standardConditionTypeNamesAreClSymbols() {
-		// .todo/380: inside a (:use #:cl) package they must NOT read as
+		// inside a (:use #:cl) package they must NOT read as
 		// MY-PKG::TYPE-ERROR -- two packages naming one condition would hold two
 		// symbols, and the runtime type test (which matches the registry's plain
 		// class name by spelling) would answer nil.
@@ -8344,7 +8344,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void aBuiltInErrorCarriesItsConditionClass() {
-		// .todo/380: the rove acceptance shape, (ok (signals (car 1) 'type-error)).
+		// the rove acceptance shape, (ok (signals (car 1) 'type-error)).
 		assertThat(eval("(handler-case (car 1) (type-error (e) :type-error) (error (e) :plain))").print())
 			.isEqualTo(":TYPE-ERROR");
 		assertThat(eval("(handler-case (/ 1 0) (division-by-zero (e) :dbz) (error (e) :plain))").print())
@@ -12870,7 +12870,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void defclassMetaclassEnsureClassUsingClassAndInitargMunging() {
-		// The mito metaclass shape WITHOUT mito (todo-246): the driver routes through
+		// The mito metaclass shape WITHOUT mito: the driver routes through
 		// ensure-class-using-class, so the user :around on it fires on REdefinition
 		// only (0 then 1); an initialize-instance :around's MUNGED initargs take
 		// effect because the fill runs INSIDE the chain (the injected dao-class
@@ -13313,7 +13313,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void defclassUnsupportedSlotOptionSignals() {
-		// :allocation/:writer are supported since todo-442; a genuinely unknown slot
+		// :allocation/:writer are supported; a genuinely unknown slot
 		// option (and an :allocation value that is neither :instance nor :class)
 		// still signals without a :metaclass.
 		assertThatThrownBy(() -> eval("(defclass a () ((x :frobnicate 1)))"))
@@ -14323,7 +14323,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void grayCharacterOutputStreamTakesTheWholeOutputProtocol() {
-		// todo-252: a class defining ONLY stream-write-char -- full Gray's one
+		// a class defining ONLY stream-write-char -- full Gray's one
 		// required method, and rove's indent-stream shape -- answers every output
 		// operator, and the column protocol is what lets fresh-line decide.
 		assertThat(evalMulti("""
@@ -14351,7 +14351,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void grayStreamWriteStringOnlyClassStillAnswersWriteCharAndTerpri() {
-		// The other half of the todo-252 pair: the default stream-write-char hands
+		// The other half of the pair: the default stream-write-char hands
 		// the one-character string to stream-write-string, so the shape every
 		// existing program wrote (rontolisp's own broadcast stream, jzon's writer)
 		// keeps working and gains the line operators.
@@ -14448,7 +14448,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void grayBinaryStreamReadWriteBytesAndFilePosition() {
-		// The read side of the Gray protocol (todo-235): the read-byte/write-byte
+		// The read side of the Gray protocol: the read-byte/write-byte
 		// built-ins dispatch an INSTANCE stream to rontolisp:stream-read-byte /
 		// -write-byte, the :eof answer translates through the eof-error-p/eof-value
 		// contract, and file-position routes through the stream-file-position
@@ -14770,7 +14770,7 @@ class LispEvaluatorTest {
 		// .kb/packed-integer-vectors.md: stores mask to the width, reads widen
 		// unsigned, setf returns the value AS STORED.
 		// let* sequencing keeps the program order-independent, matching the wasm test
-		// (compiled list arguments evaluate right-to-left, .todo/014).
+		// (compiled list arguments evaluate right-to-left).
 		assertThat(eval("""
 				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
 				       (stored (setf (aref a 1) 300))
@@ -14900,7 +14900,7 @@ class LispEvaluatorTest {
 		// of
 		// requests resolves the same library from many threads at once. The loader must
 		// not publish "loaded" before the definitions are installed, or the threads that
-		// arrive in between see "The function ... is undefined" (.todo/193: what a 12-way
+		// arrive in between see "The function ... is undefined" (what a 12-way
 		// POST burst against examples/db/postgres-web.lisp lost requests to). Several
 		// rounds with a FRESH evaluator each: the load is a cold library exactly once per
 		// evaluator, and the window only opens once the JIT has warmed the loader up.
@@ -15213,7 +15213,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalUiopPathnameDefaultsMacrosAndGetPathnameDefaults() {
 		// get-pathname-defaults reads the *default-pathname-defaults* special (the
-		// .todo/036-era "" Java built-in is retired); the two macros expand into a
+		// Java built-in that answered "" is retired); the two macros expand into a
 		// dynamic rebinding / call-with-enough-pathname.
 		assertThat(evalMulti("""
 				(list (uiop:get-pathname-defaults)

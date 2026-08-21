@@ -16,7 +16,7 @@
 ;; Two values, as CL's find-symbol: the symbol and its status. The status the
 ;; compiled backends report is the one .kb/symbol-runtime-api.md describes -- a
 ;; compiled find-symbol BUILDS the qualified spelling, so a name the package does
-;; not own still answers a symbol where the interpreter answers nil (.todo/254),
+;; not own still answers a symbol where the interpreter answers nil,
 ;; and with :error true that difference is the difference between returning and
 ;; signalling.
 (defun uiop/package:find-symbol*

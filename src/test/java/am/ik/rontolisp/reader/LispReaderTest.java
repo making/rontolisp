@@ -858,7 +858,7 @@ class LispReaderTest {
 			.isEqualTo(new LispSymbol("MY-PKG:FROB"));
 	}
 
-	// -- source position literals (.todo/151 phase 3) -------------------------
+	// -- source position literals -------------------------
 
 	@Test
 	void currentFileAndCurrentLineReadAsTheirOwnPosition() {

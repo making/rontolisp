@@ -16,10 +16,9 @@ import org.jspecify.annotations.Nullable;
  * runtime helper GROUPS on a scan of the source program, checks the prediction against
  * the emitted bytecode, and re-runs the whole compile with the mispredicted group forced
  * on. Every warning of the discarded attempt had already been printed, so one
- * undefined-function call site warned TWICE for one compile ({@code .todo/151} phase 2
- * left this as a follow-up). A warning belongs to the attempt that SHIPS, which is only
- * known once the attempt finishes -- so an attempt buffers its warnings here and flushes
- * them when it is the one that produced the output.
+ * undefined-function call site warned TWICE for one compile. A warning belongs to the
+ * attempt that SHIPS, which is only known once the attempt finishes -- so an attempt
+ * buffers its warnings here and flushes them when it is the one that produced the output.
  *
  * <p>
  * <b>Buffering is opt-in, per thread.</b> Without an open attempt {@link #warn} prints

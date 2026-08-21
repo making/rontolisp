@@ -1813,7 +1813,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.ELSE);
 		// A symbol that resolves in neither $fenv nor the registry is an undefined
 		// function: fail LOUDLY like the funcall dispatchers' miss arm (returning
-		// nil here silently swallowed (apply (intern "NOSUCH") ...) -- todo-229).
+		// nil here silently swallowed (apply (intern "NOSUCH") ...)).
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 		if (usesEval) {

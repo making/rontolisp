@@ -116,7 +116,7 @@ class HttpHandlerTest {
 
 	@Test
 	void directiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt() throws Exception {
-		// The gate of .todo/370: a fetched reply's :body relayed as the response body
+		// The byte-exactness gate: a fetched reply's :body relayed as the response body
 		// crosses byte-exact (it used to be decoded chunk by chunk and re-encoded, so a
 		// JPEG's ff d8 ff came out c3 bf d8), while read-all on the same kind of reply
 		// still answers the decoded text.
@@ -485,7 +485,7 @@ class HttpHandlerTest {
 		// One virtual thread per request means the global stream table is allocated from
 		// concurrently: a non-atomic handle counter (and an unsynchronized map) hands two
 		// requests the same handle, so one socket is dropped and the two conversations
-		// cross -- the shape that lost PostgreSQL connections inside auth (.todo/193).
+		// cross -- the shape that lost PostgreSQL connections inside auth.
 		try (ServerSocket echo = StreamHandleConcurrencySupport.startEchoServer()) {
 			int port = freePort();
 			serveInBackground(StreamHandleConcurrencySupport.echoingHandlerProgram(echo.getLocalPort(), port), port);

@@ -2181,7 +2181,7 @@ cases:
       "s"|A|NIL|s
   # A STRING datum is a format control and the rest are its format arguments
   # whatever the datum's shape in the source, so a control computed at run time
-  # renders exactly like a literal one (todo-220).
+  # renders exactly like a literal one.
   - name: signal-runtime-control-string
     source: |
       (print (handler-case (error "lit ~a-~a" 1 2) (error (e) (princ-to-string e))))
@@ -2227,7 +2227,7 @@ cases:
       1  4  3
       000042 [   3.14159e+000] [********]
       0.5 1.2345e-4 0.0
-  # The s-sql enablement group (todo-195): the ~^ iteration escape, the
+  # The s-sql enablement group: the ~^ iteration escape, the
   # *standard-output* redirect of the stream-argument-less print family, the
   # readtable-case :upcase stub, intern into a found package, the sequential
   # loop `= then` referencing a LATER in-driver (strcat's position loop), and
@@ -3298,7 +3298,7 @@ cases:
   # vector keeps the lite element type t and the packed integer vector its (unsigned-byte N)
   # answer, so the #8@ literal in the same program also pins the packed (runtime-helper) path
   # on the JVM. The related array-dimensions/array-rank/array-total-size/adjustable-array-p/
-  # array-has-fill-pointer-p still reject a string on the compile paths (.todo/369) and are
+  # array-has-fill-pointer-p still reject a string on the compile paths and are
   # deliberately not covered here.
   - name: array-element-type-on-a-string-cross-backend
     source: |
@@ -3403,7 +3403,7 @@ cases:
       QXYz
   # A PLAIN (make-string n) -- no :fill-pointer, no :adjustable -- is mutable too:
   # it lowers to the same character vector (.kb/adjustable-arrays.md). The first
-  # four lines are the .todo/208 table; before that fix the compile backends
+  # four lines are the mutability table; before that was fixed the compile backends
   # printed "[    ]" for the subseq / replace / alias rows because make-string
   # built an IMMUTABLE string and every write took its functional branch. The
   # rest walks what a make-string buffer is actually passed to.
@@ -3586,7 +3586,7 @@ cases:
   # to the family (fast-http's simple-byte-vector alias of the packed octet
   # vector; the parameterized shape is folded to a zero-parameter deftype by the
   # interpreter's foldDeftype / the compile paths' UserMacroExpander).
-  # .kb/concatenate-result-families.md, todo-256.
+  # .kb/concatenate-result-families.md.
   - name: concatenate-deftype-alias-result-type
     source: |
       (deftype ci-octet-vector (&optional (len '*))
@@ -3601,7 +3601,7 @@ cases:
   # general-vector one -- cl-postgres' md5 authentication rides on it. The
   # #'concatenate wrapper's designator is a runtime value, so it re-does the
   # width dispatch; the deftype alias carries the element type through too.
-  # .kb/concatenate-result-families.md, todo-262.
+  # See .kb/concatenate-result-families.md.
   - name: concatenate-packed-element-type
     source: |
       (deftype ci-byte-vector (&optional (len '*))
@@ -3735,7 +3735,7 @@ cases:
   # backends (whole-program static resolution through the per-name map); the
   # JVM emits only that definition (a class cannot hold duplicate methods), the
   # WASM backends emit every body but reserve chunk/lambda indices off the
-  # defuns LIST, not the deduplicating map. .kb/core-representation.md, todo-256.
+  # defuns LIST, not the deduplicating map. .kb/core-representation.md.
   - name: redefined-defun-keeps-the-last-definition
     source: |
       (defun ci-redefined (x) x)
@@ -4236,7 +4236,7 @@ cases:
   # JVM a bare float[] with a dims header; wasm-GC the shared TYPE_FARRAY struct whose data
   # is a distinct (array (mut f32)) told apart by ref.test; the component path reuses the
   # same core module). Reads widen f32 -> double, writes narrow double -> f32. A
-  # single-float ELEMENT prints at its f32 width on every backend since todo-431
+  # single-float ELEMENT prints at its f32 width on every backend
   # (the shortest f32 round-trip decimal, so #f(0.1) prints #f(0.1) and reads back
   # to the same array); the non-exact narrowing is additionally proven by the boolean
   # (= (aref w 0) 0.1) => nil (f32(0.1) widened differs from double 0.1 identically on every
@@ -5245,7 +5245,7 @@ cases:
       ;; pathname-name, pathname-type AND make-pathname's :defaults defaulting.
       (print (mapcar #'pathname-name (list "d/a.sql" "d/a" "d/.a" "d/a.b.c" "a.sql" ".sql" "d/")))
       (print (mapcar #'pathname-type (list "d/a.sql" "d/a" "d/.a" "d/a.b.c" "a.sql" ".sql" "d/")))
-      ;; make-pathname at RUN time (.todo/222): a computed :name and :defaults is
+      ;; make-pathname at RUN time: a computed :name and :defaults is
       ;; the shape the compile-time folder declines. :defaults defaults
       ;; COMPONENT-WISE, so the "sql" type survives a :name-only call; the value
       ;; is a pathname, printing as #P"..." under prin1.
@@ -5540,7 +5540,7 @@ cases:
       "onetwo"
       "onetwo!"
   - name: defgeneric-short-form-method-combination
-    # yason's encode-slots hook (the .todo/234 blocker in front of http-body):
+    # yason's encode-slots hook (the blocker that stood in front of http-body):
     # the operator applied to EVERY applicable method carrying the combination
     # name as its qualifier, most specific first unless :most-specific-last.
     source: |
@@ -6655,7 +6655,7 @@ cases:
       NIL
   - name: runtime-intern-funcall
     source: |
-      ;; the clack handler-protocol shapes (todo-229): funcall/apply of a
+      ;; the clack handler-protocol shapes: funcall/apply of a
       ;; runtime-interned symbol, 2-arg intern into a literal / computed
       ;; package, symbol-value/boundp of an interned special, builtins
       ;; through runtime designators
@@ -7001,7 +7001,7 @@ cases:
       1000000
       1414214
       1.5
-  # One expected value on every backend since todo-431: the WASM float printer
+  # One expected value on every backend: the WASM float printer
   # selects the same Schubfach shortest decimal as the interpreter and the JVM,
   # and every backend spells the exponent marker lowercase as CL prints it.
   - name: ieee-float-large-magnitude-printing
@@ -7009,7 +7009,7 @@ cases:
       (print (* 1.5 (expt 10.0 12)))
     expected: |
       1.5e12
-  # The shared float-printing corpus (todo-431): shortest round-trip decimals,
+  # The shared float-printing corpus: shortest round-trip decimals,
   # byte-identical on all four backends, over the awkward spots -- literals the
   # old digit extraction misrendered, tiny/huge magnitudes, denormals, signed
   # zero, infinities, NaN, and the single-float array element width.
@@ -7184,7 +7184,7 @@ cases:
       (:OUTER :INNER)
       NIL
       42
-  # The restart system (todo-196): handler-bind handlers run at the SIGNAL POINT
+  # The restart system: handler-bind handlers run at the SIGNAL POINT
   # (before unwinding) and can invoke a restart established in another function;
   # the transfer lands back in the restart-case frame and runs the clause inline
   # (so a (go start) clause re-enters the enclosing tagbody). This case's presence
@@ -7226,7 +7226,7 @@ cases:
                (ci-bbb () nil)))
       (print (restart-case (progn (abort) :not-reached) (abort () :aborted)))
       (print (find-restart 'ci-retry-me))
-      ;; .todo/379: the handlers run ONCE per condition (the %hb-guard landing
+      ;; The handlers run ONCE per condition (the %hb-guard landing
       ;; pad recognizes the signal hook's walk by identity), handler-case
       ;; dispatches on the IDENTICAL instance the handlers saw, and declining
       ;; clusters run innermost-first exactly once each.
@@ -7494,7 +7494,7 @@ cases:
       "HELLO!"
   - name: gray-stream-output-protocol-widening
     source: |
-      ; todo-252: the whole OUTPUT protocol reaches a Gray instance, not just the
+      ; The whole OUTPUT protocol reaches a Gray instance, not just the
       ; two write generics. This class defines only stream-write-char -- full
       ; Gray's one required method, and rove's indent-stream shape -- plus the
       ; column protocol fresh-line consults.
@@ -7551,7 +7551,7 @@ cases:
       gow-past
   - name: gray-stream-binary-round-trip-and-file-position
     source: |
-      ; The read side of the Gray protocol (todo-235): write-byte/read-byte through
+      ; The read side of the Gray protocol: write-byte/read-byte through
       ; a user binary stream class, the :eof -> eof-value translation, and the
       ; file-position protocol (the read generic + the (setf ...) writer generic).
       (defclass gbt-sink (rontolisp:fundamental-binary-output-stream)
@@ -7592,7 +7592,7 @@ cases:
       :GBT-DONE
   - name: gray-stream-input-protocol-widening
     source: |
-      ; todo-400: the whole INPUT protocol reaches a Gray instance. This class
+      ; The whole INPUT protocol reaches a Gray instance. This class
       ; defines only stream-read-char -- the ONE method a character input stream
       ; must supply -- and answers peek-char (all three peek-type forms),
       ; unread-char (through the protocol's own one-slot pushback, since the class
@@ -7628,7 +7628,7 @@ cases:
         (print (list (input-stream-p gip-in) (output-stream-p gip-in)))
         (print (list (input-stream-p (make-instance 'gip-bytes))
                      (output-stream-p (make-instance 'gip-bytes)))))
-      ; todo-411: the handle arm of unread-char parks the character in the
+      ; The handle arm of unread-char parks the character in the
       ; handle-side pushback (unread-char.lisp) that read-char, peek-char and
       ; read-line all drain -- a file, a string input stream and a socket alike.
       ; A second unread with the cell still full signals, on every backend.
@@ -8095,8 +8095,7 @@ cases:
           total))
       ;; Both strings are the same 16 characters repeated, so the long one IS the
       ;; short one 128 times. Each is grown from the literal rather than the shorter
-      ;; (defvar *scan-long* *scan-short*), which the compile paths get wrong
-      ;; (.todo/345).
+      ;; (defvar *scan-long* *scan-short*), which the compile paths get wrong.
       (defvar *scan-short* "0123456789abcdef")
       (dotimes (i 6) (setq *scan-short* (concatenate 'string *scan-short* *scan-short*)))
       (defvar *scan-long* "0123456789abcdef")
@@ -8373,7 +8372,7 @@ cases:
 
   - name: postmodern-language-incidentals
     source: |
-      ;; .todo/200 -- the language incidentals postmodern proper needs, all of
+      ;; The language incidentals postmodern proper needs, all of
       ;; which must answer identically on every backend.
       ;; A ~:[ nested INSIDE another ~:[ clause, whose two clauses consume a
       ;; different number of arguments: the argument position after the
@@ -8561,7 +8560,7 @@ cases:
 
   - name: error-output-designator
     source: |
-      ;; .todo/149 -- *error-output* is the process standard ERROR designator
+      ;; *error-output* is the process standard ERROR designator
       ;; (the reserved handle 2), NOT the t designator: a diagnostic written
       ;; through it stays off the program's standard output on every backend,
       ;; so none of the three lines below may appear in the expected stdout.
@@ -8620,8 +8619,8 @@ cases:
 
   - name: postmodern-non-mop-milestone
     source: |
-      ;; .todo/202 -- the four language mechanics the non-MOP postmodern build
-      ;; needed on top of .todo/195-200, each in the shape the library uses it.
+      ;; The four language mechanics the non-MOP postmodern build needed on top of
+      ;; the earlier ones, each in the shape the library uses it.
       ;; 1. A quoted DATA TABLE resolves against the package that read it, so a
       ;; symbol it holds names the macro/function of that package. postmodern's
       ;; config.lisp defines *result-styles* as a defparameter of triples and
@@ -9076,7 +9075,7 @@ cases:
                    (find-if #'evenp '(1 3 4 6 7) :from-end t)))
       ;; 4. make-array :initial-contents accepts ANY sequence, including a
       ;;    packed (unsigned-byte 8) buffer filled by read-sequence. (An
-      ;;    :element-type 'bit array is a general vector here -- .todo/180.)
+      ;;    :element-type 'bit array is a general vector here.)
       (print (let ((buf (make-array 4 :element-type '(unsigned-byte 8)
                                       :initial-contents '(1 0 1 1))))
                (list (make-array 4 :element-type 'bit :initial-contents buf)
@@ -9240,7 +9239,7 @@ cases:
       ((ID INTEGER) (NOTE :PLAIN))
   - name: mop-widening-for-mito
     source: |
-      ;; The mito metaclass shape WITHOUT mito (todo-246): the defclass driver
+      ;; The mito metaclass shape WITHOUT mito: the defclass driver
       ;; routes through ensure-class-using-class (the user :around fires on
       ;; REdefinition only -- 0 then 1); an initialize-instance :around's MUNGED
       ;; initargs take effect because the initarg fill runs INSIDE the generic
@@ -9370,7 +9369,7 @@ cases:
       "users:k7"
   - name: defmethod-on-a-builtin-name-keeps-the-builtin
     source: |
-      ;; todo-237: a built-in whose name a program defines a method on becomes
+      ;; A built-in whose name a program defines a method on becomes
       ;; that generic's DEFAULT METHOD. The user method dispatches on instances;
       ;; every other argument -- with-open-file's implicit close included --
       ;; still reaches the built-in, identically on all four backends. Being
@@ -9394,7 +9393,7 @@ cases:
       T
   - name: trivia-enablement-language-group
     source: |
-      ;; The language features (ql:quickload "trivia") needs (todo-243),
+      ;; The language features (ql:quickload "trivia") needs,
       ;; exercised without the asdf load -- trivia's own tree lives in the
       ;; quicklisp cache, so the end-to-end run is TriviaE2eTest (vendored
       ;; sources, all four backends).
@@ -9457,7 +9456,7 @@ cases:
       (NIL :FN :VEC :OTHER)
   - name: sxql-enablement-language-group
     source: |
-      ;; the sxql (.todo/244) enablement batch: general language features the
+      ;; the sxql enablement batch: general language features the
       ;; verbatim sxql-20260101-git load forced, none sxql-specific. The real
       ;; (asdf:load-system "sxql") + pinned yield outputs run in SxqlE2eTest
       ;; (all four backends; the .asd cannot ride the concatenated driver).
@@ -9544,10 +9543,10 @@ cases:
       (T NIL T T NIL T)
   - name: mito-core-enablement-language-group
     source: |
-      ;; the mito-core (.todo/247) enablement batch: general language features
+      ;; the mito-core enablement batch: general language features
       ;; the verbatim mito-20260101-git core load forced, none mito-specific.
       ;; The real (ql:quickload '("mito-core" "dbd-postgres")) + DAO CRUD run is
-      ;; manual against PostgreSQL (the automated milestone E2E is .todo/250).
+      ;; manual against PostgreSQL; the milestone E2E is automated separately.
       ;; slot-exists-p: an unbound slot EXISTS (slot-boundp is the boundness
       ;; test), an undeclared one does not, a non-instance answers nil, and a
       ;; runtime name rides the shared dispatch (mito's col-type probe)
@@ -9631,7 +9630,7 @@ cases:
       (1 NIL NIL)
   - name: esrap-enablement-language-group
     source: |
-      ;; the esrap (.todo/248) enablement batch: general language features the
+      ;; the esrap enablement batch: general language features the
       ;; verbatim esrap-20260101-git load and run forced, none esrap-specific.
       ;; The real (asdf:load-system "esrap") + mito's migration grammar run in
       ;; EsrapE2eTest (all four backends; the .asd cannot ride the concatenated
@@ -10210,7 +10209,7 @@ cases:
     source: |
       ;; rontolisp:current-file / rontolisp:current-line are substituted by the
       ;; READER, so every backend receives a plain string and a plain integer and
-      ;; must agree by construction (.todo/151 phase 3). The concrete values are
+      ;; must agree by construction. The concrete values are
       ;; this driver's temp file and the case's own offset in the concatenated
       ;; program, so the case asserts their TYPES -- and that two occurrences one
       ;; line apart differ by exactly one.
@@ -10816,7 +10815,7 @@ cases:
       #(9 8 7)
       #(8 7 6)
 
-  - name: print-object-nested-437
+  - name: print-object-nested
     source: |
       ;; The method decides the text wherever the instance SITS -- alone, in a
       ;; list, in a dotted tail, in a vector -- and the walk that makes that true
@@ -10845,7 +10844,7 @@ cases:
       (1 2 . 3)
       (1 s SYM)
       (#2A((3 3) (3 3)) #d(1.5 1.5))
-  - name: computed-stream-options-439
+  - name: computed-stream-options
     # A portable file wrapper takes the open options as ARGUMENTS and passes
     # them down -- uiop's call-with-input-file / call-with-output-file are
     # exactly that shape -- so a computed :direction / :element-type /
@@ -10871,7 +10870,7 @@ cases:
       111
       NIL
 
-  - name: string-designators-440
+  - name: string-designators
     # CL coerces a string DESIGNATOR -- a string, a symbol (nil and t are
     # symbols too) or a character -- wherever a string is expected. The trimmed
     # value of the trim family and the argument of the case-fold family are
@@ -10964,7 +10963,7 @@ cases:
       (#P"./wpc-a.txt" #P"./wpc-b.txt")
       NIL
 
-  - name: clos-reinitialize-442
+  - name: clos-reinitialize
     source: |
       ;; reinitialize-instance is callable with NO user method anywhere: CL
       ;; supplies the system default, which chains into shared-initialize's
@@ -10976,7 +10975,7 @@ cases:
         (print (list (e442-n o) (slot-value o 'm))))
     expected: |
       (2 10)
-  - name: clos-computed-change-class-442
+  - name: clos-computed-change-class
     source: |
       ;; change-class takes a COMPUTED class designator -- a runtime symbol or a
       ;; class metaobject (upstream ASDF's (change-class ret class)) -- through
@@ -10993,9 +10992,9 @@ cases:
                        (slot-value p 'n)))))
     expected: |
       (E442-SUB 1 42 7)
-  - name: clos-slot-options-and-metaobject-types-442
+  - name: clos-slot-options-and-metaobject-types
     source: |
-      ;; The rest of the todo-442 CLOS surface: :writer in both spellings, the
+      ;; The rest of that CLOS surface: :writer in both spellings, the
       ;; shared cell of :allocation :class (per DECLARING class -- a re-declaring
       ;; subclass owns a new cell; accessor, slot-value and a runtime name all
       ;; read the cell), and standard-class as a typecase specifier.
@@ -11019,9 +11018,9 @@ cases:
       (BASE-OP LOAD-DEP 9 9 9)
       :META
 
-  - name: missing-cl-names-443
+  - name: missing-cl-names
     source: |
-      ;; The standard cl names todo-443 filled in one batch. with-compilation-unit
+      ;; The standard cl names filled in one batch. with-compilation-unit
       ;; is a progn around its body; *load-verbose* / *load-print* are nil on every
       ;; backend; most-positive-fixnum answers under a cl: qualifier too; the three
       ;; new type names resolve; user-homedir-pathname is a pathname or nil (a WASI
@@ -11061,7 +11060,7 @@ cases:
       #<E443!>
       #<E443!>
 
-  - name: cyclic-hash-key-438
+  - name: cyclic-hash-key
     source: |
       ;; A hash table places a key by a DEPTH-CAPPED structural hash and decides it
       ;; with equal, instead of keying on the key's printed text. Three consequences

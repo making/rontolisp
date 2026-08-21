@@ -36,7 +36,7 @@ import org.jspecify.annotations.Nullable;
  * {@code Response} off it is transport work. Both are DEFAULTS, never replacements -- a
  * host still supplies its own {@code env.fetch}, or drives {@code instantiate} directly,
  * and the generated {@code worker} lays whatever it is given over the derived entries one
- * at a time. Since todo-351 both halves are written on the STREAMING boundary too: inside
+ * at a time. Both halves are written on the STREAMING boundary too: inside
  * {@code worker()} the reader the octets come from is the platform {@code Request} it is
  * already holding and the {@code Response} it is already building, so the body imports
  * are per-call state {@code worker()} owns rather than something to ask for; only a host

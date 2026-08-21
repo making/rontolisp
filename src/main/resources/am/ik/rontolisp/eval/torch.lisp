@@ -17,7 +17,7 @@
 ;; every other definition a plain defun -- no defclass/defmethod, ever: nothing
 ;; in this package dispatches (values flow through closures on the tape, not
 ;; through generic functions), so CLOS would buy the records nothing. defstruct
-;; is allowed since todo-465 taught LibraryDefunPruner to expand a bundled
+;; is allowed because LibraryDefunPruner expands a bundled
 ;; library's defstruct ahead of reachability, so every generated constructor,
 ;; predicate and accessor prunes INDIVIDUALLY and a program that only calls
 ;; torch:softmax still does not carry the whole autograd surface. The tensor

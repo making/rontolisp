@@ -615,8 +615,7 @@ final class Uax15Tables {
 			  table)
 
 			;; let* throughout, never let: consecutive pops must run left to right, and
-			;; a parallel let's init order is not something to lean on
-			;; (.todo/014-compiler-argument-evaluation-order.md).
+			;; a parallel let's init order is not something to lean on.
 			(defun %lite-fill-decomp (ints table)
 			  "INTS is length/codepoint/mapped-codepoints records."
 			  (loop while ints

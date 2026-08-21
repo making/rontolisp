@@ -4043,7 +4043,7 @@ final class WasmRuntimeBuilder {
 	/**
 	 * Builds the print_f64 helper function body: the IEEE specials and the sign, then the
 	 * Schubfach shortest decimal (_f64_dec) rendered by _write_dec -- the same text
-	 * FloatText.doubleText answers on the interpreter and the JVM (todo-431).
+	 * FloatText.doubleText answers on the interpreter and the JVM.
 	 */
 	static byte[] buildPrintF64Core(boolean appendNewline, WasmLispCompiler.StringTable st) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();

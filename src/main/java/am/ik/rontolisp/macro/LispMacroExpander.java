@@ -4136,8 +4136,8 @@ public final class LispMacroExpander {
 	 * The restore loop is the cleanup form of an {@code unwind-protect}, so every exit
 	 * the compilers cover for unwind-protect -- normal completion, an error unwinding
 	 * past the form, a {@code return-from}/{@code go} out of the body -- restores the
-	 * bindings through the same emitter, and the known {@code .todo/192} unwind holes are
-	 * neither widened nor narrowed by this construct.
+	 * bindings through the same emitter, and the known unwind holes are neither widened
+	 * nor narrowed by this construct.
 	 *
 	 * <p>
 	 * Divergences from the interpreter's native {@code evalProgv} (both deliberate): a
@@ -7778,7 +7778,7 @@ public final class LispMacroExpander {
 	 * reads characters, anything else reads bytes. The test is a runtime one because the
 	 * buffer arrives in a variable: {@code alexandria:read-stream-content-into-string}
 	 * allocates it from {@code (stream-element-type stream)}, so no expansion-time
-	 * inspection could see it ({@code .todo/219}).
+	 * inspection could see it.
 	 *
 	 * <p>
 	 * A PACKED buffer -- a packed float array of any rank, or a packed
@@ -8693,8 +8693,8 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.SYMBOL_CALL) && parts.size() >= 3) {
-			// REAL since todo-229 (retiring the "no runtime name table" divergence
-			// recorded in .kb/asdf.md): late-bind the name through the runtime 2-arg
+			// REAL now that the "no runtime name table" divergence recorded in
+			// .kb/asdf.md has been retired: late-bind the name through the runtime 2-arg
 			// intern and the _lookup registry. The two fixed temps keep the
 			// package-before-name evaluation order (.kb/argument-evaluation-order.md);
 			// they are un-capturable in practice (no real program names a variable
@@ -9579,9 +9579,9 @@ public final class LispMacroExpander {
 	 * a computed package designator) reports the status of the SPELLING the lowering
 	 * builds, which is the only symbol identity a compiled program has: a {@code PKG:}
 	 * spelling is external, an unqualified one is internal to the current package. The
-	 * residual divergence is the one {@code .todo/254} already owns -- a compiled
-	 * {@code find-symbol} answers a symbol where the interpreter answers nil -- and it
-	 * retires with the symbol-identity model {@code .todo/156} describes.
+	 * residual divergence is a known one -- a compiled {@code find-symbol} answers a
+	 * symbol where the interpreter answers nil -- and it retires with the planned
+	 * symbol-identity model.
 	 * @param cons the find-symbol / intern call
 	 * @param packageTable the backend's baked package table
 	 * @param userDefunNames the Pass-1 user definition names
@@ -9836,8 +9836,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * The runtime form of {@code (intern NAME PKG)} for a COMPUTED package designator
-	 * (todo-229; clack's handler protocol passes the {@code find-handler} package value
-	 * through {@code (apply (intern (string '#:run) handler-package) ...)}): the same
+	 * (clack's handler protocol passes the {@code find-handler} package value through
+	 * {@code (apply (intern (string '#:run) handler-package) ...)}): the same
 	 * qualified-spelling build as {@link #computedPackageFindSymbol}, except that a nil
 	 * designator SIGNALS -- intern's contract has no "package does not exist -> nil"
 	 * escape ({@code PackageResolver.internSpellingIn} throws on the interpreter).
@@ -9888,14 +9888,14 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The compile-path lowering of a two-argument {@code (intern NAME PKG)} (todo-229):
-	 * the same canonical-spelling build as {@link #expandFindSymbolInPackage} -- a symbol
-	 * IS its canonical spelling on the compiled backends, so building the spelling IS the
-	 * intern -- with intern's two contract differences: the {@code keyword} designator
-	 * keeps the existing (byte-identical) keyword lowering, and a package that does not
-	 * exist SIGNALS {@code No such package: X} instead of folding to nil (interpreter
-	 * parity; the signal is a call-time stub, so a library merely CONTAINING the form
-	 * still compiles -- lack/builder.lisp's old-Clack branch interns into
+	 * The compile-path lowering of a two-argument {@code (intern NAME PKG)}: the same
+	 * canonical-spelling build as {@link #expandFindSymbolInPackage} -- a symbol IS its
+	 * canonical spelling on the compiled backends, so building the spelling IS the intern
+	 * -- with intern's two contract differences: the {@code keyword} designator keeps the
+	 * existing (byte-identical) keyword lowering, and a package that does not exist
+	 * SIGNALS {@code No such package: X} instead of folding to nil (interpreter parity;
+	 * the signal is a call-time stub, so a library merely CONTAINING the form still
+	 * compiles -- lack/builder.lisp's old-Clack branch interns into
 	 * {@code :clack.middleware}, a package that never exists here).
 	 * @param cons the intern call (must be the three-part shape)
 	 * @param packageTable the backend's baked package table
@@ -10354,7 +10354,7 @@ public final class LispMacroExpander {
 	 * The general-representation fallback of {@code %array-alike}: {@code (progn seq
 	 * (make-array n))} -- a fresh general (boxed) vector, evaluation order preserved.
 	 * Used by a backend that has no packed integer-vector representation (currently the
-	 * JVM, pending its todo-194 stage-2 half).
+	 * JVM).
 	 * @param cons the {@code (%array-alike seq n)} call
 	 * @return the lowered expression
 	 */
@@ -10470,16 +10470,15 @@ public final class LispMacroExpander {
 
 	/**
 	 * The compiled-backend lowering of {@code (symbol-function s)} on a symbol that is
-	 * not a compile-time literal: the IDENTITY (todo-229; it used to be a call-time
-	 * signal, whose "no runtime symbol-to-function table" reason died with the
-	 * {@code _lookup} registry). On the compiled backends a symbol IS a function
-	 * designator wherever a function value is consumed -- {@code funcall}/{@code apply}
-	 * and the dispatchers resolve it through the registry late, exactly like the
-	 * interpreter's live lookup -- so the symbol itself is the most faithful value (the
-	 * jzon {@code :key-fn} shape, {@code (funcall (symbol-function sym) str)}). Two
-	 * deviations from the interpreter, both documented in
-	 * {@code .kb/symbol-runtime-api.md}: {@code functionp} of the result answers nil, and
-	 * an undefined name signals at the CALL, not here.
+	 * not a compile-time literal: the IDENTITY (it used to be a call-time signal, whose
+	 * "no runtime symbol-to-function table" reason died with the {@code _lookup}
+	 * registry). On the compiled backends a symbol IS a function designator wherever a
+	 * function value is consumed -- {@code funcall}/{@code apply} and the dispatchers
+	 * resolve it through the registry late, exactly like the interpreter's live lookup --
+	 * so the symbol itself is the most faithful value (the jzon {@code :key-fn} shape,
+	 * {@code (funcall (symbol-function sym) str)}). Two deviations from the interpreter,
+	 * both documented in {@code .kb/symbol-runtime-api.md}: {@code functionp} of the
+	 * result answers nil, and an undefined name signals at the CALL, not here.
 	 * @param cons the symbol-function expression
 	 * @return the expanded expression
 	 */
@@ -13280,10 +13279,10 @@ public final class LispMacroExpander {
 	 * types place at different indexes -- into a call of the shared
 	 * {@code %slot-value-runtime} dispatch (the same defun a runtime slot name uses): the
 	 * read-side twin of {@link #expandAmbiguousSlotSet}. Outlined rather than inlined per
-	 * site since todo-247 -- an inline per-layout dispatch is registry-proportional, and
-	 * the metaclass protocol's finalize-inheritance (six such reads in one defun) crossed
-	 * the JVM's 64 KB method limit at mito scale. An instance of a type that does not
-	 * declare the slot signals at run time.
+	 * site -- an inline per-layout dispatch is registry-proportional, and the metaclass
+	 * protocol's finalize-inheritance (six such reads in one defun) crossed the JVM's 64
+	 * KB method limit at mito scale. An instance of a type that does not declare the slot
+	 * signals at run time.
 	 */
 	private static LispVal expandAmbiguousSlotRead(LispVal objExpr, String baseName, ClosRegistry closRegistry) {
 		return mvCall(LispNames.SLOT_VALUE_RUNTIME, objExpr, quoteOf(baseName));
@@ -13303,7 +13302,7 @@ public final class LispMacroExpander {
 	 * Expands {@code (setf (slot-value obj 'AMBIGUOUS) val)} into a call of the shared
 	 * {@code %slot-value-set-runtime} dispatch (the same defun a runtime slot name uses):
 	 * the write-side twin of the ambiguous read. Outlined rather than inlined per site
-	 * since todo-247 (see {@link #expandAmbiguousSlotRead}).
+	 * (see {@link #expandAmbiguousSlotRead}).
 	 */
 	private static LispVal expandAmbiguousSlotSet(LispVal objExpr, LispSymbol slotSym, LispVal value,
 			ClosRegistry closRegistry) {
@@ -13646,8 +13645,8 @@ public final class LispMacroExpander {
 	/**
 	 * Expands {@code (slot-boundp obj 'slot)} (literal slot name) into "the instance's
 	 * type declares the slot AND the slot does not hold the unbound marker" -- the real
-	 * CL semantics since todo-199 (a slot written without an {@code :initform}, or
-	 * emptied by {@code slot-makunbound}, answers nil).
+	 * CL semantics (a slot written without an {@code :initform}, or emptied by
+	 * {@code slot-makunbound}, answers nil).
 	 * @param cons the slot-boundp expression
 	 * @param closRegistry the class registry
 	 * @return the expanded expression
@@ -16361,7 +16360,7 @@ public final class LispMacroExpander {
 	 * parameter puts that class in the routed set and a routed default would recurse
 	 * forever. The visible consequence is that a nested instance inside a value passed to
 	 * a DIRECT {@code print-object} call gets the raw rendering, where the printer's own
-	 * walk would consult the method (todo-437).
+	 * walk would consult the method.
 	 * @param generic the print-object generic
 	 * @param out the forms to append the default method's defun to
 	 */
@@ -21582,7 +21581,7 @@ public final class LispMacroExpander {
 	 * the datum's shape in the source -- so when the datum turns out to be a string at
 	 * runtime, the message is the control RENDERED over those arguments
 	 * ({@code %fmt-render}, the same renderer a computed {@code (format nil ctrl args)}
-	 * uses) instead of the raw control with its directives standing (todo-220).
+	 * uses) instead of the raw control with its directives standing.
 	 * <p>
 	 * The rendering is EAGER, exactly as the literal-control designator
 	 * ({@link #expandStringSignal}) renders at expansion time: the instance a handler
@@ -22422,9 +22421,9 @@ public final class LispMacroExpander {
 	 * <p>
 	 * The float-only restriction this replaced is what kept
 	 * {@code alexandria:copy-sequence} / {@code median} / {@code coercef} dark: they are
-	 * all {@code (coerce sequence type)} with the type in a variable ({@code .todo/219}).
-	 * With the {@link #seqConversionWrappers()} trio present each conversion arm is a
-	 * call to it, the same routing as the literal path.
+	 * all {@code (coerce sequence type)} with the type in a variable. With the
+	 * {@link #seqConversionWrappers()} trio present each conversion arm is a call to it,
+	 * the same routing as the literal path.
 	 * @param valueForm the value expression
 	 * @param typeForm the result-type expression
 	 * @param arraysExist whether a general array can exist in this program
@@ -22888,8 +22887,8 @@ public final class LispMacroExpander {
 	 * <p>
 	 * The three differ only in the two axes this method takes, so they share one
 	 * expansion rather than three hand-written ones -- widening a single walk is what let
-	 * the N-list case land on all four backends at once ({@code .todo/218}; before it,
-	 * every list but the first was silently dropped on the compile backends).
+	 * the N-list case land on all four backends at once (before that, every list but the
+	 * first was silently dropped on the compile backends).
 	 *
 	 * <pre>
 	 * (let ((#fn F) (#l0 L0) (#l1 L1))            ; left-to-right: function, then lists
@@ -23092,8 +23091,8 @@ public final class LispMacroExpander {
 	 * routes through this one call, so it silently turned a caller's type error into a
 	 * plausible-looking string in {@code string=}, in the {@code string<} family (whose
 	 * shared {@code %string-compare} walk opens with {@code (string a)}), and in every
-	 * position widened for todo-440. Losing a type error where one belongs is worse than
-	 * the designator gap it was covering.
+	 * position the designator was later widened to. Losing a type error where one belongs
+	 * is worse than the designator gap it was covering.
 	 *
 	 * <p>
 	 * The guard admits exactly the three CL designator types. {@code stringp} is true of
@@ -24928,8 +24927,8 @@ public final class LispMacroExpander {
 						callOf(LispNames.FIND_PACKAGE, value)));
 			case "BIT-VECTOR", "SIMPLE-BIT-VECTOR":
 				// No bit-vector type exists either (the bit type is dead in the
-				// lattice, .todo/180: a (make-array n :element-type 'bit) is a plain
-				// vector). The empty test lets a typecase's bit-vector clause fall
+				// lattice: a (make-array n :element-type 'bit) is a plain vector). The
+				// empty test lets a typecase's bit-vector clause fall
 				// through to its vector clause (trivia level2's constant-pattern
 				// decomposition orders exactly that way).
 				return LispNil.INSTANCE;
@@ -25953,13 +25952,13 @@ public final class LispMacroExpander {
 	 * deliberate limit rather than an oversight: this stub is produced during BODY
 	 * compilation, long after {@code mayCreateInstances} fixed whether the artifact has
 	 * an instance representation at all and after the wasm layout scan chose which
-	 * layouts to bake, so a construction here would be a gate/expansion disagreement
-	 * (todo-380 tried it: `%OBJ-NEW reached the compiler with no instance
-	 * representation`). The JVM recovers the class at its landing pad from this very
-	 * text; the wasm backends catch it as a {@code simple-error}, one more entry in the
-	 * error-fidelity spectrum their raw traps already occupy. **Re-evaluation trigger**:
-	 * teach the two gates about undefined calls (the wasm scan's `read`-family precedent)
-	 * and the stub can carry its class on every backend.
+	 * layouts to bake, so a construction here would be a gate/expansion disagreement (it
+	 * was tried: `%OBJ-NEW reached the compiler with no instance representation`). The
+	 * JVM recovers the class at its landing pad from this very text; the wasm backends
+	 * catch it as a {@code simple-error}, one more entry in the error-fidelity spectrum
+	 * their raw traps already occupy. **Re-evaluation trigger**: teach the two gates
+	 * about undefined calls (the wasm scan's `read`-family precedent) and the stub can
+	 * carry its class on every backend.
 	 * @param name the undefined function's name
 	 * @return the signaling expression
 	 */
@@ -26093,13 +26092,13 @@ public final class LispMacroExpander {
 	}
 
 	// ------------------------------------------------------------------
-	// The restart system (todo-196): handler-bind + the dynamic restart stack +
+	// The restart system: handler-bind + the dynamic restart stack +
 	// find-restart/invoke-restart, shared by the interpreter and both compilers.
 	//
 	// Both stacks are TOP-LEVEL GLOBALS mutated with plain setq and restored
 	// through unwind-protect over a lexically saved value -- deliberately NOT
 	// special-let rebindings, because the compile paths skip the special-binding
-	// restore on the error/throw unwind channels (.todo/192) while unwind-protect
+	// restore on the error/throw unwind channels while unwind-protect
 	// cleanups run on every channel on every backend. The non-local transfer of an
 	// invoked restart-case clause rides catch/throw (runtime cons tag, eq
 	// identity), so it crosses functions, runs intervening unwind-protect cleanups
@@ -26644,9 +26643,9 @@ public final class LispMacroExpander {
 	 * {@code %signal-cond} throws only when an armed clause matches. A program missing
 	 * either half keeps the historical depth-counter emission and stays byte-identical.
 	 * The walk applies the same operator-position discipline as
-	 * {@link #usesRestartSystem} (todo-315: quoted data and non-operator spellings do not
-	 * count). The interpreter needs none of this -- its per-thread clause-type stack
-	 * already matches at the signal point.
+	 * {@link #usesRestartSystem} (quoted data and non-operator spellings do not count).
+	 * The interpreter needs none of this -- its per-thread clause-type stack already
+	 * matches at the signal point.
 	 * @param program the top-level forms (post library splice)
 	 * @return whether the signal-point clause match is needed
 	 */
@@ -27348,8 +27347,8 @@ public final class LispMacroExpander {
 	 * {@code alexandria:read-stream-content-into-string} allocates its buffer as
 	 * {@code (make-array size :element-type (stream-element-type stream))}, so without
 	 * this the buffer was a general vector on the compile backends and the read fell to
-	 * {@code read-byte} against a character stream ({@code .todo/219}). The interpreter
-	 * needs no lowering: its {@code make-array} already reads the designator at run time.
+	 * {@code read-byte} against a character stream. The interpreter needs no lowering:
+	 * its {@code make-array} already reads the designator at run time.
 	 *
 	 * <p>
 	 * A non-character runtime designator drops the keyword entirely rather than guessing
@@ -29874,7 +29873,7 @@ public final class LispMacroExpander {
 			}
 			// uiop:symbol-call lowers to (funcall (intern ...) ...) INSIDE the
 			// per-expression compilers, after this scan ran -- so the pre-lowering
-			// spelling must count as a runtime-designator use itself (todo-229).
+			// spelling must count as a runtime-designator use itself.
 			if (qn != null && UiopExports.denotes(qn.pkg(), member, LispNames.SYMBOL_CALL) && cons.isProperList()
 					&& cons.toList().size() >= 3) {
 				return true;
@@ -30059,12 +30058,12 @@ public final class LispMacroExpander {
 		}
 		// The fallthrough: a datum that names no condition class. A STRING one is a
 		// format control, and then the second argument is its format-argument list
-		// rather than an initarg plist, so the object designator renders it (todo-220);
+		// rather than an initarg plist, so the object designator renders it;
 		// every other value keeps the plain object shape, which ignores the list.
 		// The dispatch is CHAINED (%error-runtime -> %er-1 -> ...) rather than one
 		// cond: a cond lowers to nested ifs on the JVM, so past ~140 condition
 		// classes the outermost arm's else-branch overflowed the signed-16-bit
-		// branch encoding (todo-211; mito's tree is past the threshold). One shared
+		// branch encoding (mito's tree is past the threshold). One shared
 		// shape on all four backends -- only the JVM has the hard limit, but a
 		// per-backend split here would be a divergence with no reason behind it.
 		LispVal fallback = expandObjectSignal(LispNames.ERROR_INTERNAL, d, closRegistry, signalHook, a);

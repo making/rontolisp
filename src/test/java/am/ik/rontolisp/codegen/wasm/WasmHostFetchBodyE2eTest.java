@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the transport holds nothing across a 64-chunk pull either, four drains of the same body
  * ending where the first left it (the reused receive buffer plus the import wrapper's
  * heap mark). What one drain PEAKS at is not this boundary: the chunk decode's string
- * output stream is {@code .todo/350};</li>
+ * output stream, which is its own open item;</li>
  * <li>a host may still answer in band: the head's own {@code "body"} key is the
  * already-buffered case of the same source;</li>
  * <li><strong>a transfer that fails MID-BODY signals at the DRAIN</strong>, which is the

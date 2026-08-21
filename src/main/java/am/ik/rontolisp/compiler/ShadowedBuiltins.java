@@ -83,7 +83,7 @@ public final class ShadowedBuiltins {
 	 * expansion, or an evaluator-side registration ({@code LispEvaluator.registerEval},
 	 * which needs the resolver's live registry -- {@code find-package} and the three
 	 * package-registry queries) rather than a global {@code LispFunction} binding. Its
-	 * half of todo-237 stashes only a Java-backed {@code LispFunction}
+	 * half of the stash mechanism keeps only a Java-backed {@code LispFunction}
 	 * ({@code LispEvaluator.builtinDefaultMethodFor}), so it stashes nothing for these --
 	 * dispatching a user method on them HERE would diverge from the interpreter in the
 	 * opposite direction. Pinned by {@code ShadowedBuiltinsTest}: every name the set

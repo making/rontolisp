@@ -856,10 +856,10 @@ final class WasmExportRuntimeBuilder {
 	 * park block instead of at the un-advanced {@code HEAP_PTR} scratch. The scratch is
 	 * trampled by whatever wasm runs next, and under overlap something else CAN run
 	 * between this export's return and the host's decode (the promising promise settles a
-	 * microtask later) -- todo-337's measured second corruption. The host decodes the
-	 * {@code (ptr, len)} and then frees it with {@code __ronto_park_free(ptr)}. Content
-	 * pointer and length, quotes stripped, so the pointer the host frees is exactly the
-	 * one it was answered.
+	 * microtask later) -- the second corruption this boundary was measured to have. The
+	 * host decodes the {@code (ptr, len)} and then frees it with
+	 * {@code __ronto_park_free(ptr)}. Content pointer and length, quotes stripped, so the
+	 * pointer the host frees is exactly the one it was answered.
 	 * @param parkAllocFuncIndex the function index of {@code _park_alloc}
 	 * @return the function body bytes (signature {@code ((ref null eq)) -> (i32,i32)})
 	 */

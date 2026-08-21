@@ -208,8 +208,8 @@ public final class PackageRegistry {
 			// driven reader hands out. See LispMacroExpander.makeTypeTest.
 			"FILE-STREAM", "SYNONYM-STREAM", "READTABLE",
 			// More empty types (nothing satisfies them, by the same must-not-become-
-			// pkg::name rule): no bit-vector value exists (the bit type is dead,
-			// .todo/180), a defgeneric's dispatcher is a plain function, a defstruct's
+			// pkg::name rule): no bit-vector value exists (the bit type is dead), a
+			// defgeneric's dispatcher is a plain function, a defstruct's
 			// class metaobject is a standard-class and built-in types have no
 			// metaobjects -- trivia level2 dispatches typecase/etypecase over all six.
 			"BIT-VECTOR", "SIMPLE-BIT-VECTOR", "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION", "STRUCTURE-CLASS",
@@ -415,7 +415,7 @@ public final class PackageRegistry {
 			LispNames.EFFECTIVE_SLOT_DEFINITION_CLASS, LispNames.COMPUTE_EFFECTIVE_SLOT_DEFINITION,
 			LispNames.FINALIZE_INHERITANCE, LispNames.ENSURE_CLASS_USING_CLASS,
 			ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME, ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-			// The mito-era accessors (todo-246): readers/initfunction on slot
+			// The mito-era accessors: readers/initfunction on slot
 			// definitions, direct slots/subclasses on class metaobjects.
 			LispNames.SLOT_DEFINITION_READERS, LispNames.SLOT_DEFINITION_INITFUNCTION, LispNames.CLASS_DIRECT_SLOTS,
 			LispNames.CLASS_DIRECT_SUBCLASSES);

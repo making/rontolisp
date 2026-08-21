@@ -43,10 +43,10 @@ import java.util.List;
  * comparison); (4) an accessible symbol prints package-qualified here
  * ({@code MY-APP/MAIN:ADD} where SBCL prints {@code ADD}) -- the printer spells a
  * symbol's canonical qualified name instead of consulting the runtime {@code *package*}
- * accessibility, the one text-level divergence this pin carries ({@code .todo/391}; flip
- * these lines to the unqualified SBCL spellings when it lands). The exercise sets
- * {@code *print-pretty*} to nil so SBCL's line-wrapping of long {@code ~W} forms does not
- * manufacture a fifth difference.
+ * accessibility, the one text-level divergence this pin carries (flip these lines to the
+ * unqualified SBCL spellings when it lands). The exercise sets {@code *print-pretty*} to
+ * nil so SBCL's line-wrapping of long {@code ~W} forms does not manufacture a fifth
+ * difference.
  */
 class RoveE2eTest extends AsdfLibraryE2eSupport {
 

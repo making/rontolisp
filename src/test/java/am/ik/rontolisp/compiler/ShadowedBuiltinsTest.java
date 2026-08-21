@@ -13,7 +13,7 @@ class ShadowedBuiltinsTest {
 
 	@Test
 	void everyLoweredNameIsAJavaBackedBuiltinOnTheInterpreter() {
-		// Parity pin with the interpreter half of todo-237: the interpreter stashes a
+		// Parity pin with the interpreter half: the interpreter stashes a
 		// shadowed built-in only when the global binding is a Java-backed LispFunction
 		// (LispEvaluator.builtinDefaultMethodFor), so every name this pass treats as
 		// shadowable on the compile paths must be one -- otherwise a defmethod on it
@@ -33,7 +33,7 @@ class ShadowedBuiltinsTest {
 
 	@Test
 	void theFastIoGrayMethodNamesAreAllShadowable() {
-		// The measured trigger of todo-237: fast-io's gray.lisp defines methods on
+		// The measured trigger: fast-io's gray.lisp defines methods on
 		// these five CL built-ins. Each must be in the computed set, or loading
 		// fast-io silently loses the user methods on the compile paths again.
 		assertThat(ShadowedBuiltins.loweredBuiltinFunctions()).contains("CLOSE", "OPEN-STREAM-P", "INPUT-STREAM-P",

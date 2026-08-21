@@ -142,8 +142,8 @@ class RontoLispCliTest {
 	void gpuOnAWasmOutputIsAHardErrorWhileTheClassOutputEmbedsTheBridge() throws Exception {
 		// WASM has no foreign function API, so a .wasm build could only IGNORE the flag
 		// -- and silently running unaccelerated is exactly what an acceleration flag
-		// exists to make visible. The JVM class output HAS one, and since todo-123
-		// phase 2 it carries the whole CUDA binding into the emitted class instead.
+		// exists to make visible. The JVM class output HAS one: it carries the whole
+		// device binding into the emitted class instead.
 		Path file = tempDir.resolve("prog.lisp");
 		// A program that reaches the matrix product: the bridge is embedded only for one
 		// that does, exactly as --blas's and --simd's are.
@@ -656,7 +656,7 @@ class RontoLispCliTest {
 		assertThat(output).contains("CL-USER").contains(":VERSION");
 	}
 
-	// -- frontend source positions (.todo/151 phase 2) ------------------------
+	// -- frontend source positions ------------------------
 
 	@Test
 	void aMacroThatSignalsWhileExpandingNamesItsCallSiteInTheLoadedFile() throws Exception {
@@ -856,7 +856,7 @@ class RontoLispCliTest {
 
 	@Test
 	void theSourcePositionLiteralsNameTheLoadedFileNotTheEntryFile() throws Exception {
-		// .todo/151 phase 3. A file pulled in by load names ITSELF -- the reason these
+		// A file pulled in by load names ITSELF -- the reason these
 		// exist at all is a program assembled from many files -- and the interpreter and
 		// the compile path must agree, which they do by construction (one reader).
 		Files.writeString(this.tempDir.resolve("lib.lisp"), """

@@ -300,7 +300,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void rejectsSexprExportType() {
-		// :string is supported (Phase 2a), but :s-expr still needs a cons/reader/printer
+		// :string is supported, but :s-expr still needs a cons/reader/printer
 		// runtime and is rejected.
 		assertThatThrownBy(() -> compile("""
 				(defun id (s) s)

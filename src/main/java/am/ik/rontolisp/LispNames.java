@@ -4518,8 +4518,8 @@ public final class LispNames {
 	 * The internal {@code rontolisp::%future-new} test primitive of the
 	 * {@code --component} async state machines: a fresh PENDING first-class future.
 	 * Undocumented; it exists so the suspension machinery (spill/restore, waiter cascade)
-	 * is exercisable end-to-end before the Phase-8 import layer produces pending futures
-	 * of its own.
+	 * is exercisable end-to-end before the import layer produces pending futures of its
+	 * own.
 	 */
 	public static final String FUTURE_NEW_INTERNAL = "%FUTURE-NEW";
 
@@ -6164,8 +6164,7 @@ public final class LispNames {
 	 * {@code :defaults} or {@code :name}, which is what a library writes when it builds a
 	 * path from something it just looked up (mito's {@code generate-migrations} names its
 	 * {@code .up.sql} / {@code .down.sql} files that way). Before that runtime form
-	 * existed those calls compiled to a call-time error on all three compiled backends
-	 * ({@code .todo/222}).
+	 * existed those calls compiled to a call-time error on all three compiled backends.
 	 */
 	public static final String MAKE_PATHNAME = "MAKE-PATHNAME";
 
@@ -7800,11 +7799,11 @@ public final class LispNames {
 	 * mgl-pax-bootstrap is its tiny package-definition core, which trivial-utf-8 (a uuid
 	 * dependency) hard-depends on -- and whose own {@code .asd} declares
 	 * {@code :around-compile "mgl-pax.asdf:compile-pax"}, a compile hook outside the
-	 * defsystem-as-data subset (its {@code :defsystem-depends-on} is readable since
-	 * {@code .todo/401}; the hook is what still stops it). The stub defines only what
-	 * trivial-utf-8's source calls: {@code define-package} (consumed by the resolver as
-	 * {@code defpackage}), {@code defsection} (defines the section name as a nil
-	 * variable), and nil no-ops for the PAX-World registration helpers.
+	 * defsystem-as-data subset (its {@code :defsystem-depends-on} is readable now; the
+	 * hook is what still stops it). The stub defines only what trivial-utf-8's source
+	 * calls: {@code define-package} (consumed by the resolver as {@code defpackage}),
+	 * {@code defsection} (defines the section name as a nil variable), and nil no-ops for
+	 * the PAX-World registration helpers.
 	 */
 	public static final String MGL_PAX_PKG = "MGL-PAX";
 

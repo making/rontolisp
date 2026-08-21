@@ -314,7 +314,7 @@ class HttpHandlerJvmTest {
 		// One virtual thread per request means the generated class' _streams table is
 		// allocated from concurrently: a non-atomic slot reservation hands two requests
 		// the same handle, so one socket is dropped and the two conversations cross
-		// (.todo/193).
+		// .
 		try (ServerSocket echo = StreamHandleConcurrencySupport.startEchoServer()) {
 			int port = freePort();
 			compileAndServeInBackground(StreamHandleConcurrencySupport.echoingHandlerProgram(echo.getLocalPort(), port),

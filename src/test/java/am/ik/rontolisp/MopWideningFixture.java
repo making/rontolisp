@@ -2,11 +2,11 @@ package am.ik.rontolisp;
 
 /**
  * The synthetic mito-shape program shared by the three backend suites and mirrored by the
- * {@code mop-widening-for-mito} ci-spec case (todo-246): e-c-u-c :around superclass
- * injection + initialize-instance :around initarg munging (on the metaclass AND on a
- * slot-definition class) + custom slot-definition classes with an extra col-type slot +
- * initfunction readback + same-name redefinition. The print/read tail differs per
- * harness; the answer is identical on all four backends.
+ * {@code mop-widening-for-mito} ci-spec case: e-c-u-c :around superclass injection +
+ * initialize-instance :around initarg munging (on the metaclass AND on a slot-definition
+ * class) + custom slot-definition classes with an extra col-type slot + initfunction
+ * readback + same-name redefinition. The print/read tail differs per harness; the answer
+ * is identical on all four backends.
  */
 public final class MopWideningFixture {
 

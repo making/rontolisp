@@ -221,7 +221,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	static final int MATMUL_ND = 41;
 
 	// linalg:erf: the one activation primitive whose defun is an emap over a scalar
-	// series, and emap is never intercepted -- so the member itself is (todo-468). An
+	// series, and emap is never intercepted -- so the member itself is. An
 	// element loop like the transcendental ufuncs, but with the series inline rather
 	// than an emitScalarUnaryF64 sequence: the iteration count is data-dependent.
 

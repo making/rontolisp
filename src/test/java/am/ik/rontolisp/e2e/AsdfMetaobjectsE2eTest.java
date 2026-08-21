@@ -16,8 +16,8 @@ import java.util.List;
  * {@code :perform} body. Fixture: {@code src/test/resources/asdf-metaobjects-demo}.
  *
  * <p>
- * It also pins the three ASDF gaps of {@code .todo/401}: {@code asdf:component-version}
- * answers the declared {@code :version} (and nil for a system that declares none), the
+ * It also pins three ASDF gaps: {@code asdf:component-version} answers the declared
+ * {@code :version} (and nil for a system that declares none), the
  * {@code :defsystem-depends-on} entry on the built-in trivial-features shim is loaded
  * ahead of everything and its announced {@code :unix} is in force while the component
  * file is READ (the {@code platform} defun) without ever becoming a sideway dependency,

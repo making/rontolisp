@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The REAL Clack (Eitaro Fukamachi's web application environment, quickloaded verbatim
  * from the live Quicklisp dist) runs a Clack application through {@code clack:clackup} on
- * the {@code clack-handler-rontolisp} backend -- the {@code .todo/223} milestone.
+ * the {@code clack-handler-rontolisp} backend.
  *
  * <p>
  * Three live legs assert the same HTTP round trip:
@@ -49,8 +49,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * WASM Preview 1 is the fourth backend and has no incoming TCP by design
  * ({@code .kb/tcp-sockets.md}): the program COMPILES (the directive inside the shim's
- * {@code run} is a call-time-error stub, the todo-195 socket policy) and {@code clackup}
- * signals the standard message at run time, which
+ * {@code run} is a call-time-error stub, the socket policy) and {@code clackup} signals
+ * the standard message at run time, which
  * {@link #clackupSignalsTheStandardErrorOnWasmPreview1} pins through
  * {@code handler-case}.
  *

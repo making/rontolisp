@@ -130,8 +130,7 @@ public final class FreeVarAnalyzer {
 			// The twin of collectCapturedVars' hook: this walk EXPANDS the macros whose
 			// raw shape it would misread (check-type/assert/do/loop/...), so a malformed
 			// one signals here -- for a TOP-LEVEL such form, before any hooked pass has
-			// seen it, which used to leave the message with no position at all
-			// (.todo/151 phase 2 follow-up).
+			// seen it, which used to leave the message with no position at all.
 			throw SourceProvenance.noteFailure(expr, ex);
 		}
 	}
@@ -479,8 +478,7 @@ public final class FreeVarAnalyzer {
 		catch (RuntimeException ex) {
 			// This walk casts binding lists and parameter lists to their expected shapes,
 			// so a malformed form surfaces here as a ClassCastException long before any
-			// backend gets to reject it by name -- worth a position more than most
-			// (.todo/151 phase 2).
+			// backend gets to reject it by name -- worth a position more than most.
 			throw SourceProvenance.noteFailure(expr, ex);
 		}
 	}

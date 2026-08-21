@@ -59,7 +59,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * WASM Preview 1 is the fourth backend and is deliberately absent from all three: TCP is
  * a CALL-time error there by design ({@code .kb/tcp-sockets.md} -- the module compiles,
- * per the todo-195 spliced-dead-code policy, and the first socket call raises), which
+ * per the spliced-dead-code policy, and the first socket call raises), which
  * {@link #preview1ModuleCompilesAndFailsLoudlyAtTheFirstSocketCall(Path)} pins so the gap
  * stays a checked statement rather than an untested claim.
  *
@@ -75,11 +75,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * This class runs by DEFAULT (unlike its {@code RONTOLISP_POSTGRES_E2E} siblings
  * {@code MitoE2eTest} / {@code PostmodernE2eTest}): the driver it exercises is the one
  * every higher layer sits on, and the defects it catches are shared-frontend ones rather
- * than library-specific ones -- the packed {@code concatenate} result type of todo-262
- * broke 7 of its 13 legs while {@code ./mvnw test} stayed green. It needs Docker (the
- * class is skipped without it) and, on the first run, network access
- * ({@code ql:quickload} downloads cl-postgres and its seven dependencies into
- * {@code ~/.rontolisp/quicklisp}).
+ * than library-specific ones -- the packed {@code concatenate} result type once broke 7
+ * of its 13 legs while {@code ./mvnw test} stayed green. It needs Docker (the class is
+ * skipped without it) and, on the first run, network access ({@code ql:quickload}
+ * downloads cl-postgres and its seven dependencies into {@code ~/.rontolisp/quicklisp}).
  *
  * <pre>{@code
  * ./mvnw -Dtest=ClPostgresE2eTest -DfailIfNoTests=false test
@@ -207,7 +206,7 @@ class ClPostgresE2eTest {
 		// hba_file rather than an edit of the generated one: the entrypoint passes these
 		// args to the bootstrap server too, so the ladder is in force from the start.
 		//
-		// authentication_timeout is RAISED (todo-262, when this class stopped being
+		// authentication_timeout is RAISED (when this class stopped being
 		// opt-in). A leg that outruns it dies as "Database error: end of file" while the
 		// server logs "canceling authentication due to timeout", and the slowest leg --
 		// the interpreter's 4096-round PBKDF2 -- takes ~50 s of the DEFAULT 60 s with the
@@ -306,7 +305,7 @@ class ClPostgresE2eTest {
 		// The documented fourth-backend gap: Preview 1 has no host socket API. Since
 		// the usocket shim grew wait-for-input (a listen-based poll spliced unpruned
 		// into every usocket program), `listen` joined the tcp built-ins on the
-		// todo-195 CALL-time policy -- so the driver now COMPILES here like any other
+		// CALL-time policy -- so the driver now COMPILES here like any other
 		// spliced-socket program and the refusal moved to run time: the first socket
 		// call raises the message naming the built-in and the backends that do work.
 		// The real Preview 1 probe decision stays with its own todo.

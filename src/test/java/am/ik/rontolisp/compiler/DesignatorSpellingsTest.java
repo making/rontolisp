@@ -31,7 +31,7 @@ class DesignatorSpellingsTest {
 	void theUninternedSpellingArmsTheName() {
 		// (uiop:symbol-call '#:pkg '#:fn ...) -- dexador's spelling -- reaches the
 		// function through (string '#:FN), exactly as the keyword one does, so it has
-		// to probe the same way (.todo/404). Before this, the '#: form compiled and
+		// to probe the same way. Before this, the '#: form compiled and
 		// then died undefined at run time.
 		assertThat(DesignatorSpellings.matched("PKG:FN", Set.of("#:FN"), true)).isEqualTo("#:FN");
 		assertThat(DesignatorSpellings.anySpelled("PKG:FN", Set.of("#:FN"), false)).isFalse();

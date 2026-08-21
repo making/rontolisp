@@ -21,8 +21,8 @@ import am.ik.wasm.Type;
  * in a wrapper-local ({@code specialBindScopes}), exactly the save/restore discipline the
  * shallow path uses over the global -- so the exit-restore machinery
  * ({@code WasmReturnCompiler}/{@code WasmReturnFromCompiler}) needs only a second restore
- * spelling, and the documented unwind limitations ({@code .todo/192}) carry over
- * unchanged, neither widened nor narrowed.
+ * spelling, and the documented unwind limitations carry over unchanged, neither widened
+ * nor narrowed.
  *
  * <p>
  * Only the specials {@code SpecialVarCollector.collectDynamicallyBound} names get a slot;

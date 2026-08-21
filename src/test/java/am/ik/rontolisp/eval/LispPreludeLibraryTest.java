@@ -203,7 +203,7 @@ class LispPreludeLibraryTest {
 
 	@Test
 	void thePreludeMakePathnameAgreesWithPathnameOps() {
-		// Same pinning as merge-pathnames above, for the pair that replaced .todo/222's
+		// Same pinning as merge-pathnames above, for the pair that replaced the
 		// compile-time-only make-pathname: the RUNTIME form is prelude Lisp (one
 		// definition, all four backends) and cli/CompileTimePathnameFolder still folds
 		// the literal shapes with PathnameOps.makePathname. Every case below was also

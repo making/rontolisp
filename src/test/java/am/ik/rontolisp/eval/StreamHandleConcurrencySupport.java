@@ -27,7 +27,7 @@ import java.util.concurrent.Future;
  * process-wide table ({@code Environment}'s stream map / the generated class'
  * {@code _streams} array), and {@code http-handler} runs one virtual thread per request,
  * so the allocation is genuinely concurrent -- this is the shape that lost connections
- * inside the PostgreSQL auth handshake (.todo/193).
+ * inside the PostgreSQL auth handshake.
  */
 final class StreamHandleConcurrencySupport {
 

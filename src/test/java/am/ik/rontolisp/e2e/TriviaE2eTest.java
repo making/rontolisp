@@ -13,16 +13,15 @@ import java.util.List;
  * {@code AsdOverrides} replacement {@code trivia-trivial.asd} -- upstream's own
  * sanctioned base system; the balland2006 optimizer needs iterate + type-i and buys only
  * optimization, zero semantics (divergence record: {@code .kb/asdf.md}). trivia is THE
- * gate for both sxql ({@code match} throughout) and mito ({@code .todo/238}).
+ * gate for both sxql ({@code match} throughout) and mito.
  *
  * <p>
- * The smoke matrix follows {@code .todo/243}: constant / variable / cons / list* / vector
- * patterns, {@code guard}, {@code or}/{@code and} patterns, {@code ematch} failure
- * signaling {@code match-error}, {@code defpattern}, a struct pattern (keyword AND
- * conc-name shapes), a class pattern (keyword and {@code (class name (slot var))}
- * shapes), and the shapes sxql/mito actually use -- sxql's
- * {@code (list* (type keyword) _)} (sxql.lisp) and mito's cons/guard/eql nest (dao.lisp's
- * expand-op).
+ * The smoke matrix is: constant / variable / cons / list* / vector patterns,
+ * {@code guard}, {@code or}/{@code and} patterns, {@code ematch} failure signaling
+ * {@code match-error}, {@code defpattern}, a struct pattern (keyword AND conc-name
+ * shapes), a class pattern (keyword and {@code (class name (slot var))} shapes), and the
+ * shapes sxql/mito actually use -- sxql's {@code (list* (type keyword) _)} (sxql.lisp)
+ * and mito's cons/guard/eql nest (dao.lisp's expand-op).
  *
  * <p>
  * Substrate the load exercises, each landed for this milestone: the reader's

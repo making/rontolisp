@@ -16,8 +16,8 @@ import java.util.List;
  * vector, counted with {@code max-chars} 1 to find where that character ends and then
  * decoded into a one-character buffer -- because that is the shape a consumer needs the
  * mapping layer for at all: dexador's {@code src/decoding-stream.lisp} has no whole octet
- * vector to hand to {@code octets-to-string} and drives exactly these five names
- * (todo-398, found by the dexador spike). A driver-only shim answered
+ * vector to hand to {@code octets-to-string} and drives exactly these five names (found
+ * by the dexador spike). A driver-only shim answered
  * {@code The symbol UNICODE-CHAR is not external in the BABEL package} at that file's
  * {@code defpackage}, before any of the library's code ran.
  *

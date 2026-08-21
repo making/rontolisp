@@ -28,21 +28,21 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The {@code --reentrant} gates ({@code .todo/348}), on node 24 JSPI -- each one the
- * INVERSE of a corruption the re-entry guard was refusing:
+ * The {@code --reentrant} gates, on node 24 JSPI -- each one the INVERSE of a corruption
+ * the re-entry guard was refusing:
  *
  * <ul>
- * <li>the todo-337 reproduction with its expectation inverted: two overlapped calls each
- * binding the same special across a suspend each read their OWN binding back, and the
- * global default survives untouched -- the test that proved the bug proves the per-task
+ * <li>the reproduction with its expectation inverted: two overlapped calls each binding
+ * the same special across a suspend each read their OWN binding back, and the global
+ * default survives untouched -- the test that proved the bug proves the per-task
  * store;</li>
  * <li>overlapped {@code :string} boundaries cross exactly: an export's result survives
  * the microtask gap between its return and the host's decode (a park block the host
- * frees), and an import's result crosses in a park block the module frees -- todo-337's
- * second measured corruption, inverted;</li>
- * <li>TWO interleaved {@code :bytes} pull loops keep linear memory flat -- the todo-341
- * finding-2 pin applied to two callers instead of one (the absolute mark-and-restore they
- * could not share is now a recycled park block each);</li>
+ * frees), and an import's result crosses in a park block the module frees -- the second
+ * measured corruption, inverted;</li>
+ * <li>TWO interleaved {@code :bytes} pull loops keep linear memory flat -- the
+ * flat-memory pin applied to two callers instead of one (the absolute mark-and-restore
+ * they could not share is now a recycled park block each);</li>
  * <li>the width the whole item buys: 8 concurrent upstream round trips through ONE
  * envelope-boundary worker instance take about one round trip, not eight -- the
  * dog-fetcher measurement, re-taken against a local upstream.</li>

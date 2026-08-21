@@ -57,7 +57,7 @@ final class WasmFunctionFormCompiler {
 			compileNamed(sym.name(), ctx);
 			return;
 		}
-		// A non-literal designator lowers to the symbol itself (todo-229): funcall /
+		// A non-literal designator lowers to the symbol itself: funcall /
 		// apply / the dispatchers resolve a symbol late through the _lookup registry,
 		// so the designator IS the function value here.
 		WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeSymbolFunction(cons), ctx);

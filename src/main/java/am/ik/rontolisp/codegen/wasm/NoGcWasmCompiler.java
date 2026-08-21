@@ -90,7 +90,7 @@ import org.jspecify.annotations.Nullable;
  * Only scalar boundary designators are supported: {@code :int} ({@code i32}),
  * {@code :float} ({@code f64}), {@code :bool} ({@code i32}, 0 = false) and {@code :void}
  * / omitted. Memory-backed {@code :string}/{@code :s-expr} would need a second
- * linear-memory string runtime and are deferred (Phase 2).
+ * linear-memory string runtime and are deferred.
  */
 public final class NoGcWasmCompiler implements LispCompiler {
 
@@ -995,7 +995,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex, int markIndex, int resetIndex,
 			int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed) {
 
-		// The five Schubfach helpers behind __ftoa (todo-431), appended right after it
+		// The five Schubfach helpers behind __ftoa, appended right after it
 		// in this order; bodies come from WasmSchubfachRuntimeBuilder.
 		int schubUmulhiIndex() {
 			return this.ftoaIndex + 1;
@@ -1089,7 +1089,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			data.write(bytes, 0, bytes.length);
 			cursor += 4 + bytes.length;
 		}
-		// The Schubfach tables behind __ftoa (todo-431): raw bytes after the literals.
+		// The Schubfach tables behind __ftoa: raw bytes after the literals.
 		int schubBase = 0;
 		if (ftoaUsed) {
 			while ((cursor & 3) != 0) {
@@ -1814,7 +1814,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// __ftoa(v f64) -> i32: render the float as a fresh [len][bytes] string carrying
 	// the FloatText spelling -- the Schubfach shortest decimal (__schub_f64_dec) laid
 	// out by __schub_dec_fmt -- so print/princ-to-string output matches the other
-	// three backends byte for byte (todo-431). The IEEE specials return their static
+	// three backends byte for byte. The IEEE specials return their static
 	// literal header directly and the sign comes from the sign BIT so -0.0 prints
 	// "-0.0". Param 0=v; locals 1=p (i32 result), 2=c (i32 write cursor),
 	// 3=len (i32), 4=digits (i64), 5=k (i32).

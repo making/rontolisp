@@ -996,7 +996,7 @@ final class JvmEvalRuntimeBuilder {
 			.filter(e -> e.getValue().paramCount() <= MAX_CALLABLE_ARITY)
 			.filter(e -> dispatchable == null || dispatchable.contains(e.getValue().funcId()))
 			.toList());
-		// Alias rows for INTERNAL names (todo-229): a runtime-interned symbol carries
+		// Alias rows for INTERNAL names: a runtime-interned symbol carries
 		// the single-colon external spelling (the 2-arg intern/find-symbol lowerings
 		// build it -- exportedness is registry knowledge the run time does not have),
 		// so an unexported PKG::NAME defun also answers to PKG:NAME. Collision-free:
@@ -1157,7 +1157,7 @@ final class JvmEvalRuntimeBuilder {
 		a.bind(desMiss);
 		// A symbol that resolves in neither _fenv nor the registry is an undefined
 		// function: fail LOUDLY like the funcall dispatcher (returning nil here
-		// silently swallowed (apply (intern "NOSUCH") ...) -- todo-229).
+		// silently swallowed (apply (intern "NOSUCH") ...)).
 		emitUndefinedFunctionThrow(a, FN);
 		a.bind(resolved);
 		a.bind(notSym);

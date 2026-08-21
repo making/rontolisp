@@ -96,7 +96,7 @@ class JvmAsyncCompilerTest {
 
 	@Test
 	void octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes() throws Exception {
-		// The JVM arm of the .todo/371 gate (the compiled twin of AsyncEvalTest's): the
+		// The JVM arm of the gate (the compiled twin of AsyncEvalTest's): the
 		// emitted _utf8Strict answers a well-formed body from the JDK decoder, and the
 		// compiled per-byte loop takes only what it refuses -- the same answers the loop
 		// alone gave, including the four-byte form past U+10FFFF, which used to reach

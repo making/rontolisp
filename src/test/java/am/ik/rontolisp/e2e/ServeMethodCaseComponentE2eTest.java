@@ -26,9 +26,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * {@code request.get-method} lifts and {@code http.lisp}'s {@code %serve-method-string}
  * inspects. Under the reader's upcase premise that lifted case name reads upcased
  * ({@code :POST}), so a lowercase-only comparison ({@code (eq m :post)}) silently misses
- * and every non-GET method collapses to {@code GET} (todo-155 item 2). This pins the fix
- * end-to-end: compile {@code examples/net/http-handler.lisp} to a component, serve it
- * with {@code wasmtime serve}, and confirm each HTTP method round-trips as itself.
+ * and every non-GET method collapses to {@code GET}. This pins the fix end-to-end:
+ * compile {@code examples/net/http-handler.lisp} to a component, serve it with
+ * {@code wasmtime serve}, and confirm each HTTP method round-trips as itself.
  * <p>
  * The interpreter and JVM serve through a Java-backed server whose method never passes
  * through {@code %serve-method-string} (they are covered by {@code HttpHandlerJvmTest} /

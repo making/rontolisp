@@ -65,8 +65,8 @@
 ;; the defaults themselves -- *default-pathname-defaults* unless overridden,
 ;; whose initial #P"" designates exactly the host working directory, keeping
 ;; (merge-pathnames x (uiop:get-pathname-defaults)) = x. This retired the
-;; pre-.todo/036 Java built-in that answered the literal "" before the special
-;; existed.
+;; Java built-in that predated it and answered the literal "" before the
+;; special existed.
 (defun uiop/filesystem:get-pathname-defaults
     (&optional (%gpd-defaults *default-pathname-defaults*))
   (or (uiop/pathname:absolute-pathname-p %gpd-defaults)

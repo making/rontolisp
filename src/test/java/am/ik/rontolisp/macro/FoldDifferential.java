@@ -154,7 +154,7 @@ public final class FoldDifferential {
 		add(probes, "char-upcase", "#\\1");
 		add(probes, "char-downcase", "#\\Z");
 		// Case conversion is NOT restricted to ASCII: every backend routes it through
-		// the same Character.toUpperCase/toLowerCase mapping (todo-267's generated
+		// the same Character.toUpperCase/toLowerCase mapping (the generated
 		// wasm table included). Latin-1, Greek, Cyrillic and a supplementary-plane
 		// pair (Deseret, U+10428) each exercise a different arm of it.
 		add(probes, "char-upcase", "(code-char 233)");
@@ -192,7 +192,7 @@ public final class FoldDifferential {
 		add(probes, "princ-to-string", "#\\a");
 		add(probes, "princ-to-string", "nil");
 		add(probes, "princ-to-string", "t");
-		// Floats fold since todo-431: every backend prints the same Schubfach
+		// Floats fold: every backend prints the same Schubfach
 		// shortest round-trip decimal, lowercase exponent marker included.
 		add(probes, "princ-to-string", "1.21");
 		add(probes, "princ-to-string", "1.0e10");

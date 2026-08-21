@@ -553,7 +553,7 @@ class WasmTreeShakerTest {
 		byte[] interning = compile("(print (intern (string-upcase \"foo\")))", false, OptimizeLevel.DEFAULT);
 		Module.parse(interning).assertWellFormed();
 		// The generic printer keeps its own data: the printer prologue strings plus
-		// the ~755-byte Schubfach float table (todo-431).
+		// the ~755-byte Schubfach float table.
 		assertThat(dataSectionSize(interning)).isLessThan(2048);
 		byte[] data = dataSectionPayload(interning);
 		for (String dead : new String[] { ":FROM-END", "\"ASDF\"", "keyword" }) {

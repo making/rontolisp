@@ -10,8 +10,8 @@ import java.util.List;
  * via {@link AsdfLibraryE2eSupport}.
  *
  * <p>
- * cl-json is the consumer that drove {@code progv} onto the compile paths (todo-423,
- * {@code .kb/dynamic-special-variables.md}): its decoder's {@code aggregate-scope-progv}
+ * cl-json is the consumer that drove {@code progv} onto the compile paths
+ * ({@code .kb/dynamic-special-variables.md}): its decoder's {@code aggregate-scope-progv}
  * macro expands to {@code (progv variables (mapcar #'symbol-value variables) ...)} around
  * every array, object and string it decodes, so before the lowering any program loading
  * cl-json failed to compile whole on all three compiled backends. The exercise therefore

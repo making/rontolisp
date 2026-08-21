@@ -329,7 +329,7 @@ class WasmLispCompilerTest {
 	@Test
 	void httpHandlerInPreview1ModeCompilesToACallTimeError() {
 		// In Preview 1 (no --component) the http-handler directive compiles to a
-		// CALL-time error stub since todo-228 (the todo-195 socket policy: the
+		// CALL-time error stub (the socket policy: the
 		// clack-handler-rontolisp shim carries the directive as dead code there,
 		// and rejecting it would fail the whole clack graph). The "requires
 		// --component" message is pinned end to end by ClackE2eTest's Preview 1
@@ -370,7 +370,7 @@ class WasmLispCompilerTest {
 		// listen was a COMPILE error on Preview 1 until the usocket shim grew
 		// wait-for-input (a listen-based poll): the shim is spliced unpruned into
 		// every usocket program, so its listen call site is dead code that must
-		// still build -- the same todo-195 policy as the tcp built-ins above. A
+		// still build -- the same policy as the tcp built-ins above. A
 		// program that actually calls it gets the old message at CALL time
 		// (catchable under EH mode); the real Preview 1 probe decision stays with
 		// its own todo.
@@ -531,7 +531,7 @@ class WasmLispCompilerTest {
 	@Test
 	void tlsConnectIsCompileErrorOnPreview1() {
 		// Preview 1 only: --component compiles the client tls built-ins against the
-		// spliced tls.lisp (over wit-imported wasi:tls@0.3.0-draft) since todo-410;
+		// spliced tls.lisp (over wit-imported wasi:tls@0.3.0-draft);
 		// Preview 1 has no wasi:tls host API, so there the compile error stays.
 		assertThatThrownBy(() -> compile("(rontolisp:tls-connect \"example.com\" 443)"))
 			.isInstanceOf(UnsupportedOperationException.class)

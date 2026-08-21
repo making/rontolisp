@@ -187,8 +187,7 @@ final class JvmExprCompiler {
 		}
 		catch (RuntimeException ex) {
 			// The innermost cons that came from source names the position; the exception
-			// itself is rethrown untouched, since passes above catch it by type
-			// (.todo/151 phase 2).
+			// itself is rethrown untouched, since passes above catch it by type.
 			throw SourceProvenance.noteFailure(cons, ex);
 		}
 	}

@@ -30,9 +30,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code mito-migration} + {@code lack-middleware-mito}, over the real sxql and
  * {@code dbd-postgres}) talks to a live PostgreSQL 17 on every backend that can open a
  * TCP socket: the interpreter, the JVM compiler and the WASM component. This is the
- * acceptance test for the mito milestone ({@code .todo/238}); {@link ClPostgresE2eTest}
- * covers the driver underneath and {@link PostmodernE2eTest} the other PostgreSQL stack.
- * The topic file is {@code .kb/mito.md}.
+ * acceptance test for the mito milestone; {@link ClPostgresE2eTest} covers the driver
+ * underneath and {@link PostmodernE2eTest} the other PostgreSQL stack. The topic file is
+ * {@code .kb/mito.md}.
  *
  * <p>
  * The exercises, each run on all three backends and asserted to produce byte-identical
@@ -66,7 +66,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The container takes {@code POSTGRES_HOST_AUTH_METHOD=trust} deliberately: a
  * scram-sha-256 handshake costs ~60 s here (PBKDF2 x4096 in interpreted ironclad) and
  * races PostgreSQL's own 60 s {@code authentication_timeout}, surfacing as the misleading
- * {@code Database error: end of file}. Reason and the fix path: {@code .todo/253}.
+ * {@code Database error: end of file}.
  *
  * <p>
  * Like {@link PostmodernE2eTest} this drives the real CLI in a subprocess: the
@@ -143,7 +143,7 @@ class MitoE2eTest {
 			DockerImageName.parse("postgres:17-alpine"))
 		.withNetwork(NETWORK)
 		.withExposedPorts(5432)
-		// trust, not a password: see the class javadoc and .todo/253.
+		// trust, not a password: see the class javadoc.
 		.withEnv("POSTGRES_HOST_AUTH_METHOD", "trust")
 		.withEnv("POSTGRES_PASSWORD", PASSWORD)
 		.waitingFor(Wait.forLogMessage(".*database system is ready to accept connections.*\\s", 2));
@@ -208,8 +208,8 @@ class MitoE2eTest {
 		// compiled backends answer a SYMBOL for an unknown name instead
 		// (.kb/symbol-runtime-api.md), so the fallback never runs and symbol-function
 		// signals. That hits every sxql SQL FUNCTION call (:count / :sum / :max / ...),
-		// not just count-dao. Filed as .todo/254; delete this test and widen
-		// countDaoOnTheInterpreter to all three legs when it lands.
+		// not just count-dao. Delete this test and widen countDaoOnTheInterpreter to
+		// all three legs when that closes.
 		Path program = writeExercise(workDir,
 				count(Backend.JVM).source(POSTGRES.getHost(), POSTGRES.getMappedPort(5432)));
 		runCli(workDir, program.getFileName().toString(), "-o", "Probe.class");
@@ -222,7 +222,7 @@ class MitoE2eTest {
 	void preview1ModuleCompilesAndFailsLoudlyAtTheFirstSocketCall(@TempDir Path workDir) throws Exception {
 		// The documented fourth-backend gap: Preview 1 has no host socket API. Since
 		// the usocket shim grew wait-for-input, `listen` joined the tcp built-ins on
-		// the todo-195 CALL-time policy (the shim's listen call site is spliced
+		// the CALL-time policy (the shim's listen call site is spliced
 		// unpruned into every usocket program and must build as dead code), so the
 		// cl-postgres driver under mito now COMPILES here and the refusal moved to
 		// run time: the first socket call raises the message naming the backends that

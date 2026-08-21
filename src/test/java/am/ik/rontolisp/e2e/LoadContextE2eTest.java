@@ -15,13 +15,13 @@ import java.util.List;
  * suite-to-file map is built on.
  *
  * <p>
- * The context is established at READ time as well ({@code .todo/428}): a {@code #.} datum
- * runs before any top-level form of its own file, so the interpreter's binding and the
- * compile paths' lowered assignments are both too late for it --
- * {@code UserMacroExpander} establishes the {@code %begin-file} bracket's two values
- * around the file's forms instead, which is what makes the portable
- * {@code (or *compile-file-pathname* *load-truename*)} idiom find a data file shipping
- * beside the source that reads it. Fixture: {@code src/test/resources/load-context-demo}.
+ * The context is established at READ time as well: a {@code #.} datum runs before any
+ * top-level form of its own file, so the interpreter's binding and the compile paths'
+ * lowered assignments are both too late for it -- {@code UserMacroExpander} establishes
+ * the {@code %begin-file} bracket's two values around the file's forms instead, which is
+ * what makes the portable {@code (or *compile-file-pathname* *load-truename*)} idiom find
+ * a data file shipping beside the source that reads it. Fixture:
+ * {@code src/test/resources/load-context-demo}.
  */
 class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 

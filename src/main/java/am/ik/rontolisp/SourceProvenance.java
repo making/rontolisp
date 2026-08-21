@@ -8,9 +8,9 @@ import org.jspecify.annotations.Nullable;
 /**
  * Where each cons of the program was read from, so a FRONTEND pass can name a file and a
  * line in an error the reader never saw -- a macro that signals while expanding, an
- * unknown operator, a malformed binding list a compiler pass casts and fails on. Phase 1
- * of {@code .todo/151} gave every read error a {@code file:line:column:} prefix; this is
- * the same answer for every error raised AFTER the read.
+ * unknown operator, a malformed binding list a compiler pass casts and fails on. Giving
+ * every READ error a {@code file:line:column:} prefix came first; this is the same answer
+ * for every error raised AFTER the read.
  *
  * <p>
  * <b>A side table, never a field on the AST.</b> {@link LispVal} is sealed and its leaf

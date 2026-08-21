@@ -44,10 +44,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>a BINARY body crosses exactly -- the whole reason the boundary is {@code :bytes};
  * the {@code :string} decoder corrupts arbitrary octets into garbage code points;</li>
  * <li><strong>the boundary costs no linear memory</strong>: a 256 KiB body a handler
- * never reads leaves {@code memory.buffer.byteLength} where it was. That is the todo-341
- * finding-2 column -- the envelope used to hold the body about 17 times over. What a
- * handler then does with the body (this one's {@code read-all} builds it as one string)
- * is the handler's cost, not the transport's.</li>
+ * never reads leaves {@code memory.buffer.byteLength} where it was -- the envelope used
+ * to hold the body about 17 times over. What a handler then does with the body (this
+ * one's {@code read-all} builds it as one string) is the handler's cost, not the
+ * transport's.</li>
  * </ul>
  */
 @EnabledIf("am.ik.rontolisp.codegen.wasm.WasmReactorBodyE2eTest#nodeIsAvailable")

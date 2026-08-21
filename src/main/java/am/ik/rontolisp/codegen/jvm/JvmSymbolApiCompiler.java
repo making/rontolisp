@@ -67,7 +67,7 @@ final class JvmSymbolApiCompiler {
 		List<LispVal> full = cons.toList();
 		if (full.size() == 3) {
 			// (intern name pkg): the canonical-spelling lowering shared with the 2-arg
-			// find-symbol (todo-229; an unknown package is a call-time signal).
+			// find-symbol (an unknown package is a call-time signal).
 			JvmExprCompiler.compileExpr(LispMacroExpander.expandInternInPackage(cons, ctx.packageTable), ctx,
 					className);
 			return;

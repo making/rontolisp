@@ -99,8 +99,8 @@ class LispMacroExpanderTest {
 		assertThat(
 				LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString("(ignore-errors (signal 'x))")))
 			.isTrue();
-		// A #'signal reference counts; quoted data does not (the todo-315
-		// operator-position discipline).
+		// A #'signal reference counts; quoted data does not (the operator-position
+		// discipline).
 		assertThat(LispMacroExpander.needsSignalClauseMatch(
 				LispReader.readAllFromString("(handler-case (funcall #'signal \"s\") (error (e) 1))")))
 			.isTrue();
@@ -573,7 +573,7 @@ class LispMacroExpanderTest {
 	void conditionNarrowingCollectsLiteralTagsAndDeclinesTheRenderer() {
 		// Literal datums only: the constructible set is exactly what is named, plus the
 		// two families no site names but a landing pad can still build -- the
-		// synthesized simple-* three and the raw-failure classes (.todo/380) -- and
+		// synthesized simple-* three and the raw-failure classes -- and
 		// with no unrendered control in sight the runtime renderer is declined.
 		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
 				(define-condition my-error (error) ())

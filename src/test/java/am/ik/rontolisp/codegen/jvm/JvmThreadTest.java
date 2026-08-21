@@ -21,8 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The thread primitives on the JVM backend ({@code JvmThreadRuntimeBuilder}): spawn /
  * join / threadp / thread-alive-p / destroy-thread, the runtime name-to-ThreadLocal
  * dynamic binding of {@code make-thread}'s bindings alist (the clack.handler shape:
- * {@code *standard-output*} rebound in the spawned thread through the todo-189
- * thread-scoped store), the cross-thread error payload rethrown at join, and the
+ * {@code *standard-output*} rebound in the spawned thread through the thread-scoped
+ * store), the cross-thread error payload rethrown at join, and the
  * {@code bordeaux-threads}/{@code bt2} shim compiled through the {@code LoadInliner}
  * splice. Each case mirrors its interpreter twin in {@code ThreadTest}.
  */

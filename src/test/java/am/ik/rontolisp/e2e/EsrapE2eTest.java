@@ -12,10 +12,10 @@ import java.util.List;
  * too.
  *
  * <p>
- * The exercise is {@code .todo/248}'s acceptance list, in two halves. First esrap's own
- * README smoke example -- an inline {@code (or "foo" "bar")} expression, a {@code rule}
- * instance registered with {@code add-rule}, a {@code defrule} with a {@code :lambda}
- * transform, and a semantic predicate ({@code (oddp decimal)}) with and without
+ * The exercise is the acceptance list, in two halves. First esrap's own README smoke
+ * example -- an inline {@code (or "foo" "bar")} expression, a {@code rule} instance
+ * registered with {@code add-rule}, a {@code defrule} with a {@code :lambda} transform,
+ * and a semantic predicate ({@code (oddp decimal)}) with and without
  * {@code :junk-allowed}. Then mito's OWN grammar: {@code migration/sql-parse.lisp}
  * verbatim from mito-20260101-git, which {@code mito.migration:migrate} uses to split a
  * migration file into statements -- case-insensitive {@code (~ "END")} terminals, nested

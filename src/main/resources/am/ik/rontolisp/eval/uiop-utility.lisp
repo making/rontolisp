@@ -256,8 +256,8 @@
        (uiop/utility:string-suffix-p %sep-string %sep-suffix)))
 
 ;; Each built from character literals alone: a defvar whose initializer READS
-;; another global is exactly the shape .todo/345 records as reading the wrong
-;; value, and the splice order here (inventory order: +cr+, +crlf+, +lf+) would
+;; another global is exactly the shape that has been recorded as reading the
+;; wrong value, and the splice order here (inventory order: +cr+, +crlf+, +lf+) would
 ;; not put +cr+ and +lf+ before +crlf+ anyway.
 (defvar uiop/utility:+cr+ (string #\Return))
 

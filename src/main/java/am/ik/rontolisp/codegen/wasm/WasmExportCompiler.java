@@ -776,7 +776,8 @@ final class WasmExportCompiler {
 			// --reentrant: a memory-typed result cannot sit at the un-advanced HEAP_PTR
 			// scratch -- the promising promise settles a microtask AFTER the wrapper
 			// returns, and another overlapped call's wasm can run in between and trample
-			// it (todo-337's second measured corruption). It goes out in a park block
+			// it -- the second corruption this boundary was measured to have. It goes
+			// out in a park block
 			// the host frees after decoding (__ronto_park_free(ptr)).
 			case STRING -> {
 				if (ctx.reentrant) {

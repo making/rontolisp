@@ -18,7 +18,7 @@
 ;;;; .kb/clos.md). The closer-mop dependency is carried in upstream's own
 ;;;; (:feature ...) shape so the whole decision stays a feature flip.
 ;;;;
-;;;; :postmodern-thread-safe -- ON (.todo/204). rontolisp DOES run concurrent
+;;;; :postmodern-thread-safe -- ON. rontolisp DOES run concurrent
 ;;;; handlers (one virtual thread per request under `serve`), so postmodern's
 ;;;; three locks guard state that can really be raced here: the connection pool
 ;;;; (connect.lisp), the prepared-statement id counter (prepare.lisp) and class

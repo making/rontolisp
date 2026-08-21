@@ -50,7 +50,7 @@
 ;; finish-output is upstream's obligation and matters most where the output is
 ;; buffered: without it the last lines of a program that quits are simply lost. It is
 ;; spelled over the CL streams rather than over uiop/stream's *stdout* / *stderr*,
-;; which are not implemented yet (.todo/360) -- when they are, this becomes
+;; which are not implemented yet -- when they are, this becomes
 ;; (finish-outputs).
 ;;
 ;; quit does NOT unwind: System.exit, proc_exit and exit-with-code all end the process

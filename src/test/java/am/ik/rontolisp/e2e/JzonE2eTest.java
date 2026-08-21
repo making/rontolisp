@@ -136,7 +136,7 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 				// a |...|-escaped symbol hash key (verbatim case)
 				"{", "\"noChange\": \"when used\"", "}",
 				// CLOS instance serialized as an object. The never-initialized alias slot
-				// is UNBOUND (todo-199), so jzon's coerced-fields skips it -- exactly
+				// is UNBOUND, so jzon's coerced-fields skips it -- exactly
 				// what
 				// the README shows on a real CL.
 				"{", "\"name\": \"Anya\",", "\"job\": null,", "\"married\": false,", "\"children\": []", "}",

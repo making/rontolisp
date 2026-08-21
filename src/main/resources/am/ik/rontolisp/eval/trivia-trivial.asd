@@ -14,8 +14,8 @@
 ;;;;
 ;;;; Re-evaluation trigger (recorded in .kb/asdf.md): if a real consumer needs
 ;;;; iterate itself, or interpreter match performance becomes the bottleneck
-;;;; (.todo/182 -- the interpreter re-expands user macros every evaluation,
-;;;; multiplying unoptimized match cost), do iterate + type-i + balland2006 as
+;;;; (the interpreter re-expands user macros every evaluation, multiplying
+;;;; unoptimized match cost), do iterate + type-i + balland2006 as
 ;;;; their own milestone and delete this override.
 ;;;;
 ;;;; No components: the trivia.trivial dependency chain (level2 -> level1 ->

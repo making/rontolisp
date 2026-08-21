@@ -711,7 +711,7 @@ class WasmComponentImportCompilerTest {
 	// inner envelope is not unwrapped -- only a top-level result is). Under the reader's
 	// upcase premise a user writes (eq (kv:get-color) :red) / (:ok . v), which reads
 	// upcased, so the lift MUST spell the case names / the (:ok . v) envelope UPCASED or
-	// every such comparison silently misses (todo-155 item 2; the wasi:http `method`
+	// every such comparison silently misses (the wasi:http `method`
 	// variant is the real-host instance of the same lift, pinned end-to-end by
 	// ServeMethodCaseComponentE2eTest).
 	private static final String RAW_TAG_RESULT_WIT = """
@@ -1094,7 +1094,7 @@ class WasmComponentImportCompilerTest {
 	void theComponentWithAsyncBuiltInsValidates(@TempDir Path tempDir) throws Exception {
 		// The index arithmetic (async canons are core funcs with no component function,
 		// async types are a data-dependent slice of the type space) is only worth what a
-		// real validator says of it. This is the Phase-1 golden gate: the derived
+		// real validator says of it. This is the golden gate: the derived
 		// stream/future types, the projected resource, the canon encodings and every
 		// shifted downstream index must all hold together for the component to validate.
 		Path file = tempDir.resolve("async-http.wasm");

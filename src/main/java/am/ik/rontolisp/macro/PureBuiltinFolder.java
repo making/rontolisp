@@ -190,7 +190,7 @@ public final class PureBuiltinFolder {
 				return form;
 			}
 			case LispDouble ignored -> {
-				// A float literal is self-evaluating. Since todo-431 its printed text
+				// A float literal is self-evaluating, and its printed text
 				// is identical on every backend (FloatText), so the print-family
 				// entries may fold it; every arithmetic entry still declines a float
 				// itself (the integer guards), keeping the contagion / zero-divisor /
@@ -743,18 +743,17 @@ public final class PureBuiltinFolder {
 	 * <li><b>Characters</b> -- a character is a Unicode CODE POINT on all four backends
 	 * ({@code .kb/characters-code-points.md}), so code/char conversion and ordering are
 	 * code-point arithmetic. Case conversion is restricted to ASCII: the WASM case-fold
-	 * table is not Java's {@code Character} table outside it ({@code .todo/269} is the
-	 * fix, and folding is widened when it lands).</li>
+	 * table is not Java's {@code Character} table outside it, and folding widens only
+	 * when that is fixed).</li>
 	 * <li><b>String and list measurement</b> -- a string is indexed by code point
 	 * everywhere, and an out-of-range index DECLINES rather than folds, because the
-	 * compile backends do not bounds-check one ({@code .todo/186}) and a fold must not
-	 * invent an answer the program would not have got.</li>
+	 * compile backends do not bounds-check one and a fold must not invent an answer the
+	 * program would not have got.</li>
 	 * <li><b>String production</b> -- the result is a fresh string on both compile
 	 * backends, exactly as the call it replaces was. {@code princ-to-string} /
 	 * {@code prin1-to-string} render only the types whose emitted renderer reproduces
 	 * {@code LispVal.print()} / {@code display()} exactly -- the same list
-	 * {@code WasmLiteralPrint} folds, FLOAT excluded for the same reason
-	 * ({@code .todo/046}).</li>
+	 * {@code WasmLiteralPrint} folds, FLOAT excluded for the same reason.</li>
 	 * </ul>
 	 */
 	private static final Map<String, Fold> TABLE = table();
@@ -1248,12 +1247,11 @@ public final class PureBuiltinFolder {
 	 * Case conversion over the FULL Unicode range. Every backend's
 	 * {@code char-upcase}/{@code char-downcase} is
 	 * {@code Character.toUpperCase(int)}/{@code toLowerCase(int)} -- the WASM one through
-	 * the compressed case-fold table todo-267 generated FROM those methods -- and that
-	 * was checked here rather than assumed: a checksum of both mappings over every code
-	 * point in {@code [0, 0x10FFFF]} minus the surrogates is identical on the
-	 * interpreter, the JVM, both WASM backends and plain Java. (The case-insensitive
-	 * COMPARE operators are a different story and are not in the table at all --
-	 * {@code .todo/269}.)
+	 * a compressed case-fold table generated FROM those methods -- and that was checked
+	 * here rather than assumed: a checksum of both mappings over every code point in
+	 * {@code [0, 0x10FFFF]} minus the surrogates is identical on the interpreter, the
+	 * JVM, both WASM backends and plain Java. (The case-insensitive COMPARE operators are
+	 * a different story and are not in the table at all.)
 	 */
 	private static @Nullable LispVal caseFoldChar(List<LispVal> args, boolean upcase) {
 		if (args.size() != 1 || !(args.get(0) instanceof LispChar c)) {
@@ -1333,9 +1331,9 @@ public final class PureBuiltinFolder {
 	/**
 	 * The text a value renders as, for the types whose emitted renderer reproduces
 	 * {@link LispVal#print()} / {@code display()} exactly -- the same set
-	 * {@code WasmLiteralPrint} folds. A FLOAT folds too since todo-431: every backend's
-	 * printer now selects the same Schubfach shortest decimal as
-	 * {@code LispDouble.print()} ({@code FloatText}), so one spelling exists.
+	 * {@code WasmLiteralPrint} folds. A FLOAT folds too: every backend's printer now
+	 * selects the same Schubfach shortest decimal as {@code LispDouble.print()}
+	 * ({@code FloatText}), so one spelling exists.
 	 */
 	private static @Nullable LispVal renderedLiteral(LispVal value, boolean readably) {
 		String text = switch (value) {

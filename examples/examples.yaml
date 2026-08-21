@@ -22,7 +22,7 @@
 #     no-gc-simd      <driver> FILE -o prog.wasm --no-gc --simd --optimize
 #
 # Every WASM compile passes --optimize (the dead-code tree-shaker) explicitly,
-# for the record -- it has been the CLI default since todo-448, so the flag no
+# for the record -- it has been the CLI default for a while, so the flag no
 # longer changes what gets built here; it is also a no-op under --component.
 # The `wasm` (run) backend is skipped when wasmtime is not on PATH; the compile
 # backends need no runtime.
@@ -133,8 +133,8 @@ examples:
       (uiop:quit (if (run-suite *package*) 0 1)) -- so a broken encoder exits
       non-zero and fails this leg instead of printing a line nobody reads. The
       needles are the demo tables and rove's summary only; the per-assertion
-      lines print the forms, which spell symbols package-qualified until
-      .todo/391 lands, and rove appends a "(Nms)" duration to any assertion
+      lines print the forms, which still spell symbols package-qualified, and
+      rove appends a "(Nms)" duration to any assertion
       slower than 37ms.
     expect:
       contains:
@@ -491,7 +491,7 @@ examples:
   - path: llm-from-scratch/chapter03/train-gpt-soseki.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     simd: true
-    note: the train_gpt_soseki notebook -- a character-level GPT trained by AdamW over two parameter groups on the inlined 漱石 corpus, then sampled with temperature and top-k. Under --simd for the margin - the interpreter leg is 52.4 s scalar against the 240 s cap and 6.5 s with the flag, and every leg prints the same bytes either way (verified on all four). The rank-3 matmul an attention layer almost entirely is joined the accelerated set in todo-467, which is where most of that margin came from
+    note: the train_gpt_soseki notebook -- a character-level GPT trained by AdamW over two parameter groups on the inlined 漱石 corpus, then sampled with temperature and top-k. Under --simd for the margin - the interpreter leg is 52.4 s scalar against the 240 s cap and 6.5 s with the flag, and every leg prints the same bytes either way (verified on all four). The rank-3 matmul an attention layer almost entirely is joined the accelerated set later, which is where most of that margin came from
     expect:
       file: .expected/llm-train-gpt-soseki.txt
 
@@ -516,7 +516,7 @@ examples:
       the placement rule that keeps the first click safe), ending with
       (uiop:quit (if (run-suite *package*) 0 1)). Nothing verified that core
       before. The needles are rove's summary only; the per-assertion lines print
-      forms, which spell symbols package-qualified until .todo/391 lands.
+      forms, which still spell symbols package-qualified.
     expect:
       contains:
         - "✓ 7 tests completed"
@@ -786,7 +786,7 @@ examples:
       covers). The needles left here are rove's summary only -- the exchange is
       still printed, but its key ORDER inside a JSON object follows hash-table
       iteration order and differs per backend, and the per-assertion lines print
-      forms, which spell symbols package-qualified until .todo/391 lands.
+      forms, which still spell symbols package-qualified.
     expect:
       contains:
         - "✓ 6 tests completed"

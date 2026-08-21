@@ -289,16 +289,16 @@ public final class TorchGradcheck {
 			(T T NIL NIL T)""";
 
 	/**
-	 * The element-width acceptance (todo-123 phase 0): a model built from
-	 * {@code torch:tensor} + {@code torch:embedding} + {@code torch:linear} +
-	 * {@code torch:layer-norm} + {@code torch:dropout} + {@code torch:pad-sequence}, run
-	 * through a full forward AND backward pass, printing the {@code array-element-type}
-	 * of every intermediate and every gradient. All of them must be {@code SINGLE-FLOAT}:
-	 * torch originates its arrays at {@code torch::*default-element-type*} and every
-	 * derived value inherits that width (`.kb/torch.md`). A missed origination site
-	 * prints one {@code DOUBLE-FLOAT} here instead of silently pairing two widths, which
-	 * every {@code --simd} kernel declines. The last line pins the other half of the
-	 * split: {@code linalg:}'s own default is still double.
+	 * The element-width acceptance : a model built from {@code torch:tensor} +
+	 * {@code torch:embedding} + {@code torch:linear} + {@code torch:layer-norm} +
+	 * {@code torch:dropout} + {@code torch:pad-sequence}, run through a full forward AND
+	 * backward pass, printing the {@code array-element-type} of every intermediate and
+	 * every gradient. All of them must be {@code SINGLE-FLOAT}: torch originates its
+	 * arrays at {@code torch::*default-element-type*} and every derived value inherits
+	 * that width (`.kb/torch.md`). A missed origination site prints one
+	 * {@code DOUBLE-FLOAT} here instead of silently pairing two widths, which every
+	 * {@code --simd} kernel declines. The last line pins the other half of the split:
+	 * {@code linalg:}'s own default is still double.
 	 */
 	public static final String ELEMENT_TYPE_PROGRAM = """
 			(defun et (x) (if (arrayp x) (array-element-type x) 'number))

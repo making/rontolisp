@@ -19,9 +19,9 @@ import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
 
 /**
- * The shared emission machinery of the {@code --component} async state machines (Phase 7
- * of the callback-async cutover). An {@code rontolisp:async-defun}/ {@code async-lambda}
- * (and a top level that awaits) compiles into an <strong>entry + resume</strong> pair:
+ * The shared emission machinery of the {@code --component} async state machines. An
+ * {@code rontolisp:async-defun}/ {@code async-lambda} (and a top level that awaits)
+ * compiles into an <strong>entry + resume</strong> pair:
  *
  * <ul>
  * <li>The <em>entry</em> keeps the function's public signature. It allocates the spill
