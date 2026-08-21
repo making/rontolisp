@@ -48,10 +48,14 @@ import am.ik.jvm.Opcode;
  *
  * <h2>The kernels cannot be a resource on the other side</h2>
  *
- * {@code CudaGemm} normally reads {@code gemm.ptx} from beside itself on the classpath.
- * Renamed into a compiled program's default package there is no such resource and never
- * can be, so the PTX text is embedded as an ordinary string constant and handed to
- * {@code Gpu.useKernels} by the emitted {@code _gpuInit}, before anything can probe.
+ * {@code CudaGemm} normally reads {@code gemm.ptx} from beside itself on the classpath,
+ * and {@code MetalGemm} reads {@code gemm.metal}. Renamed into a compiled program's
+ * default package there is no such resource and never can be, so both texts are embedded
+ * as ordinary string constants and handed to {@code Gpu.useKernels} /
+ * {@code useMetalKernels} by the emitted {@code _gpuInit}, before anything can probe.
+ * BOTH travel in every class: the machine that compiled the program is not necessarily
+ * the machine that runs it, and a standalone class that accelerated only on its
+ * birthplace would not be one.
  */
 final class JvmGpuRuntimeBuilder {
 
@@ -76,7 +80,8 @@ final class JvmGpuRuntimeBuilder {
 	 * {@code JvmLinalgGpuAccelCompilerTest} pins it against what the build actually
 	 * produced. {@code package-info} carries only annotations and is left behind.
 	 */
-	private static final List<String> GPU_CLASSES = List.of("CudaDriver", "CuResult", "CudaGemm", "CudaGemm$Probe",
+	private static final List<String> GPU_CLASSES = List.of("GpuDevice", "GpuDevice$Thresholds", "CudaDriver",
+			"CuResult", "CudaGemm", "CudaGemm$Probe", "MetalDriver", "MetalGemm", "MetalGemm$Probe", "MetalGemm$Slab",
 			"Gpu", "Gpu$Probe");
 
 	/** The emitted init helper method name. */
@@ -142,6 +147,10 @@ final class JvmGpuRuntimeBuilder {
 		// and goes to Gpu.useKernels instead of to defineClass.
 		List<ConstantPool.StringConstant> ptx = chunks(cp,
 				new String(loadResource(GPU_INTERNAL_PREFIX + "gemm.ptx"), StandardCharsets.ISO_8859_1));
+		// ... and the MSL beside it, for the same reason: a class emitted on one machine
+		// has to accelerate on the other kind. Both texts travel in every --gpu class.
+		List<ConstantPool.StringConstant> msl = chunks(cp,
+				new String(loadResource(GPU_INTERNAL_PREFIX + "gemm.metal"), StandardCharsets.ISO_8859_1));
 
 		Utf8Constant initedFieldName = cp.addUtf8("_gpuInited");
 		Utf8Constant initedFieldDesc = cp.addUtf8("I");
@@ -163,6 +172,8 @@ final class JvmGpuRuntimeBuilder {
 		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(BRIDGE_NAME));
 		MethodrefConstant kernels = cp.addMethodref(bridgeClass,
 				cp.addNameAndType(cp.addUtf8("gpuKernels"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant metalKernels = cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("gpuMetalKernels"), cp.addUtf8("(Ljava/lang/String;)V")));
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
 		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
 		Utf8Constant initDesc = cp.addUtf8("()V");
@@ -212,6 +223,9 @@ final class JvmGpuRuntimeBuilder {
 		emitConcatenated(code, ptx, stringConcat);
 		code.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(code, kernels.index());
+		emitConcatenated(code, msl, stringConcat);
+		code.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(code, metalKernels.index());
 		code.add(Opcode.ICONST_1);
 		code.add(Opcode.PUTSTATIC);
 		JvmRuntimeBuilder.emitU2(code, initedField.index());

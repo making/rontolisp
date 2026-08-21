@@ -47,6 +47,40 @@ class LinalgGpuTest {
 		return LinalgGpu.available();
 	}
 
+	/**
+	 * Whether this machine's device has a {@code double} at all. It does on CUDA and does
+	 * NOT on Metal, where MSL rejects the type outright -- so every {@code #d} assertion
+	 * below that needs the device to ACCEPT is written at {@link #TYPE} instead, and the
+	 * ones that need it to DECLINE hold on both.
+	 */
+	private static final boolean DOUBLES = am.ik.gpu.GpuThresholds.supportsDouble();
+
+	/** The element type an ACCEPTED call has to be written at on this machine. */
+	private static final String TYPE = DOUBLES ? "" : "single-float";
+
+	/**
+	 * The side of the smallest square product this machine will actually accept, with a
+	 * safety factor so nothing sits on the threshold. 64 on CUDA and 208 on Metal, whose
+	 * floor is five times higher; a hard-coded 64 would make every accepted-product
+	 * assertion below vacuous on the second one.
+	 */
+	private static final int SIDE = squareSide();
+
+	/** Comfortably above the element-wise threshold in force: 32768 or 262144. */
+	private static final int MAP_N = (int) am.ik.gpu.GpuThresholds.mapMinElements() * 2;
+
+	private static int squareSide() {
+		int n = (int) Math.ceil(Math.cbrt((double) am.ik.gpu.GpuThresholds.minWork()));
+		return Math.max(64, (n + n / 4 + 15) / 16 * 16);
+	}
+
+	/**
+	 * {@code :element-type} for {@link #TYPE}, or nothing when the width is the default.
+	 */
+	private static String option() {
+		return TYPE.isEmpty() ? "" : " :element-type '" + TYPE;
+	}
+
 	private LispVal eval(String input, boolean gpu, boolean blas, boolean simd) {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		evaluator.setSimd(simd);
@@ -114,7 +148,7 @@ class LinalgGpuTest {
 	}
 
 	private static String inexactProduct(String elementType) {
-		return inexactProduct(64, elementType);
+		return inexactProduct(SIDE, elementType);
 	}
 
 	// --- the dead-flag guard ---------------------------------------------------------
@@ -200,10 +234,14 @@ class LinalgGpuTest {
 		// and 8.0e-7 to 2.6e-6 at #f, flat from n=64 to n=512 (the #f figure is simply
 		// what f32 costs -- the same product accumulated in f32 on a CPU lands the same
 		// distance from an f64 oracle). The tolerances below are the n=64 figures with
-		// room, because the exact number is the device's and not ours.
-		double[] doubles = elements(eval(inexactProduct(""), true));
-		double[] doubleOracle = elements(eval(inexactProduct(""), false));
-		assertThat(divergence(doubles, doubleOracle)).isLessThan(1e-13).isGreaterThan(0);
+		// room, because the exact number is the device's and not ours. The #d half runs
+		// only where the device has a double: on Metal it always declines, and asserting
+		// a divergence there would be asserting that the decline protocol is broken.
+		if (DOUBLES) {
+			double[] doubles = elements(eval(inexactProduct(""), true));
+			double[] doubleOracle = elements(eval(inexactProduct(""), false));
+			assertThat(divergence(doubles, doubleOracle)).isLessThan(1e-13).isGreaterThan(0);
+		}
 		double[] singles = elements(eval(inexactProduct("single-float"), true));
 		double[] singleOracle = elements(eval(inexactProduct("single-float"), false));
 		assertThat(divergence(singles, singleOracle)).isLessThan(1e-5).isGreaterThan(0);
@@ -253,16 +291,16 @@ class LinalgGpuTest {
 		// DEVICE". So an inexact stack must equal the device's own rank-2 answer for the
 		// same slab, bit for bit, while differing from the scalar oracle.
 		String slab = """
-				(defparameter *a* (linalg:reshape (linalg:sin (linalg:arange 0 4096)) '(64 64)))
-				(defparameter *b* (linalg:reshape (linalg:cos (linalg:arange 0 4096)) '(64 64)))
-				""";
+				(defparameter *a* (linalg:reshape (linalg:sin (linalg:arange 0 %d%s)) '(%d %d)))
+				(defparameter *b* (linalg:reshape (linalg:cos (linalg:arange 0 %d%s)) '(%d %d)))
+				""".formatted(SIDE * SIDE, option(), SIDE, SIDE, SIDE * SIDE, option(), SIDE, SIDE);
 		double[] flat = elements(eval(slab + "(linalg:matmul *a* *b*)", true));
 		double[] stacked = elements(eval(slab + """
-				(linalg:matmul (linalg:reshape *a* '(1 64 64)) (linalg:reshape *b* '(1 64 64)))
-				""", true));
+				(linalg:matmul (linalg:reshape *a* '(1 %d %d)) (linalg:reshape *b* '(1 %d %d)))
+				""".formatted(SIDE, SIDE, SIDE, SIDE), true));
 		assertThat(stacked).isEqualTo(flat);
 		double[] oracle = elements(eval(slab + "(linalg:matmul *a* *b*)", false));
-		assertThat(divergence(stacked, oracle)).isLessThan(1e-13).isGreaterThan(0);
+		assertThat(divergence(stacked, oracle)).isLessThan(DOUBLES ? 1e-13 : 1e-5).isGreaterThan(0);
 	}
 
 	// --- the element-wise tier -------------------------------------------------------
@@ -298,13 +336,15 @@ class LinalgGpuTest {
 		// spike's feared 4.87e-5 on tanh does not reproduce anywhere here.
 		for (String[] member : elementWiseMembers()) {
 			String program = """
-					(defparameter *a* (linalg:linspace %s %s 20000%s))
+					(defparameter *a* (linalg:linspace %s %s %d%s))
 					(linalg:%s *a*)
-					""";
-			String doubles = program.formatted(member[1], member[2], "", member[0]);
-			assertThat(worstRelative(elements(eval(doubles, true)), elements(eval(doubles, false))))
-				.as("#d linalg:%s", member[0])
-				.isLessThan(1e-12);
+					""".replace("%d", Integer.toString(MAP_N));
+			if (DOUBLES) {
+				String doubles = program.formatted(member[1], member[2], "", member[0]);
+				assertThat(worstRelative(elements(eval(doubles, true)), elements(eval(doubles, false))))
+					.as("#d linalg:%s", member[0])
+					.isLessThan(1e-12);
+			}
 			String singles = program.formatted(member[1], member[2], " :element-type 'single-float", member[0]);
 			assertThat(worstRelative(elements(eval(singles, true)), elements(eval(singles, false))))
 				.as("#f linalg:%s", member[0])
@@ -314,15 +354,17 @@ class LinalgGpuTest {
 
 	@Test
 	void anAcceleratedElementWiseCallReallyRanOnTheDevice() {
-		// The tolerance above would pass on a dead flag, so this is its guard: over
-		// 20000 inexact elements the device and the CPU cannot land on the same bits for
-		// every one of them, and the difference must appear at BOTH widths.
+		// The tolerance above would pass on a dead flag, so this is its guard: over an
+		// array the device accepts, it and the CPU cannot land on the same bits for every
+		// inexact element -- at every width the device HAS.
 		String program = """
-				(defparameter *a* (linalg:linspace -5.0 5.0 20000%s))
+				(defparameter *a* (linalg:linspace -5.0 5.0 %d%s))
 				(linalg:erf *a*)
-				""";
-		assertThat(elements(eval(program.formatted(""), true)))
-			.isNotEqualTo(elements(eval(program.formatted(""), false)));
+				""".replace("%d", Integer.toString(MAP_N));
+		if (DOUBLES) {
+			assertThat(elements(eval(program.formatted(""), true)))
+				.isNotEqualTo(elements(eval(program.formatted(""), false)));
+		}
 		assertThat(elements(eval(program.formatted(" :element-type 'single-float"), true)))
 			.isNotEqualTo(elements(eval(program.formatted(" :element-type 'single-float"), false)));
 	}
@@ -334,14 +376,15 @@ class LinalgGpuTest {
 		// case is that this call moves. It is reached transitively, exactly as
 		// linalg:matmul reaches the product.
 		String program = """
-				(defparameter *x* (torch:tensor (linalg:linspace -3.0 3.0 20000)))
+				(defparameter *x* (torch:tensor (linalg:linspace -3.0 3.0 %d%s)))
 				(linalg:sum (torch:data (torch:gelu *x*)))
-				""";
+				""".formatted(MAP_N, option());
 		double accelerated = ((am.ik.rontolisp.LispDouble) eval(program, true)).value();
 		double oracle = ((am.ik.rontolisp.LispDouble) eval(program, false)).value();
-		// A SUM of 20000 device-computed elements, so the tolerance is looser than the
-		// per-element one above by about the count: measured 2.0e-9 relative here.
-		assertThat(accelerated).isNotEqualTo(oracle).isCloseTo(oracle, within(1e-7 * Math.abs(oracle)));
+		// A SUM of every device-computed element, so the tolerance is looser than the
+		// per-element one above by about the count: measured 2.0e-9 relative at #d.
+		assertThat(accelerated).isNotEqualTo(oracle)
+			.isCloseTo(oracle, within((DOUBLES ? 1e-7 : 1e-3) * Math.abs(oracle)));
 	}
 
 	@Test
@@ -478,9 +521,9 @@ class LinalgGpuTest {
 		// pinned is the composition: whichever CPU flags are also on, the answer is the
 		// DEVICE's, and it is the same one every time.
 		String program = """
-				(defparameter *a* (linalg:linspace -3.0 3.0 20000))
+				(defparameter *a* (linalg:linspace -3.0 3.0 %d%s))
 				(linalg:to-list (linalg:erf *a*))
-				""";
+				""".formatted(MAP_N, option());
 		String device = eval(program, true, false, false).print();
 		assertThat(eval(program, true, false, true).print()).isEqualTo(device);
 		if (LinalgBlas.available()) {
@@ -574,7 +617,7 @@ class LinalgGpuTest {
 		// machine lands on the device's bits EXACTLY, which would make the assertion
 		// below a tautology instead of an order pin. From n=192 the library blocks its k
 		// loop and the two answers separate.
-		String product = inexactProduct(192, "");
+		String product = inexactProduct(Math.max(192, SIDE), TYPE);
 		double[] gpuOnly = elements(eval(product, true, false, false));
 		double[] blasOnly = elements(eval(product, false, true, false));
 		assumeThat(blasOnly).as("the library and the device round differently").isNotEqualTo(gpuOnly);
@@ -583,13 +626,16 @@ class LinalgGpuTest {
 
 	@Test
 	void theDeviceIsAskedAheadOfTheLaneKernel() {
-		double[] gpuOnly = elements(eval(inexactProduct(""), true, false, false));
-		double[] simdOnly = elements(eval(inexactProduct(""), false, false, true));
-		// At #d the lane kernel is bit-identical to the scalar defun and the device is
-		// not, so these two differ by construction.
+		String product = inexactProduct(TYPE);
+		double[] gpuOnly = elements(eval(product, true, false, false));
+		double[] simdOnly = elements(eval(product, false, false, true));
+		// The lane kernel and the device round differently -- at #d because the lanes are
+		// bit-identical to the scalar defun and the device fuses, at #f because two f32
+		// reductions in different orders are two different answers -- so these differ by
+		// construction and the order pin below is not a tautology.
 		assertThat(simdOnly).isNotEqualTo(gpuOnly);
-		assertThat(elements(eval(inexactProduct(""), true, false, true))).isEqualTo(gpuOnly);
-		assertThat(elements(eval(inexactProduct(""), true, true, true))).isEqualTo(gpuOnly);
+		assertThat(elements(eval(product, true, false, true))).isEqualTo(gpuOnly);
+		assertThat(elements(eval(product, true, true, true))).isEqualTo(gpuOnly);
 	}
 
 	@Test
@@ -604,12 +650,25 @@ class LinalgGpuTest {
 				  (setf (aref v 0) 4096.0)
 				  (round (aref (linalg:dot v (linalg:reshape v '(1024 1))) 0)))
 				""";
-		assertThat(eval(probe, false, false, false).print()).isEqualTo("16778240");
-		assertThat(eval(probe, false, false, true).print()).isEqualTo("16777216");
+		// The two legible answers are READ rather than written down: which integer the
+		// lane kernel prints depends on the machine's lane count (16777216 on a GB10,
+		// 16777728 on an M4 Max), and hard-coding one of them pins the CPU backend's
+		// vector width in a --gpu test, which is not what this is about.
+		String defun = eval(probe, false, false, false).print();
+		String lanes = eval(probe, false, false, true).print();
+		assumeThat(lanes).as("the lane kernel and the defun answer differently here").isNotEqualTo(defun);
 		// --gpu alone declines it to the defun; --gpu --simd declines it to the lanes.
-		assertThat(eval(probe, true, false, false).print()).isEqualTo("16778240");
-		assertThat(eval(probe, true, false, true).print()).isEqualTo("16777216");
-		assertThat(eval(probe, true, true, true).print()).isEqualTo("16777216");
+		assertThat(eval(probe, true, false, false).print()).isEqualTo(defun);
+		assertThat(eval(probe, true, false, true).print()).isEqualTo(lanes);
+		if (LinalgBlas.available()) {
+			// With --blas on the best CPU path for this shape is the LIBRARY's, not the
+			// lane kernel's: unlike --gpu, --blas does take the gemv shapes. So the claim
+			// is "the same answer the CPU flags alone would have given", which is what
+			// composition means -- comparing against the lane kernel here would be
+			// asserting that a tuned sgemv sums the way our lanes do, and on Apple's
+			// Accelerate it does not.
+			assertThat(eval(probe, true, true, true).print()).isEqualTo(eval(probe, false, true, true).print());
+		}
 	}
 
 	@Test
@@ -617,8 +676,10 @@ class LinalgGpuTest {
 		// --blas does NOT take this member, so for a stacked product the chain is
 		// device -> lane kernel -> defun, with no library rung. The probe is the rank-3
 		// line of .kb/linalg-simd.md's f32 fold: the lane kernel accumulates in single
-		// precision and prints 16777216, the boxed defun widens and prints 16778240, so
-		// the fallback target is legible. The shape is well under the size threshold, so
+		// precision and the boxed defun widens, so the two print different integers and
+		// the fallback target is legible. Which integers is the machine's lane count and
+		// is read rather than written down. The shape is well under the size threshold,
+		// so
 		// the device declines it however the flags are set.
 		String probe = """
 				(let ((v (linalg:ones 1024 :element-type 'single-float)))
@@ -626,24 +687,26 @@ class LinalgGpuTest {
 				  (round (row-major-aref
 				          (linalg:matmul (linalg:reshape v '(1 1 1024)) (linalg:reshape v '(1 1024 1))) 0)))
 				""";
-		assertThat(eval(probe, false, false, false).print()).isEqualTo("16778240");
-		assertThat(eval(probe, true, false, false).print()).isEqualTo("16778240");
-		assertThat(eval(probe, true, true, false).print()).isEqualTo("16778240");
-		assertThat(eval(probe, true, false, true).print()).isEqualTo("16777216");
-		assertThat(eval(probe, true, true, true).print()).isEqualTo("16777216");
+		String defun = eval(probe, false, false, false).print();
+		String lanes = eval(probe, false, false, true).print();
+		assumeThat(lanes).as("the lane kernel and the defun answer differently here").isNotEqualTo(defun);
+		assertThat(eval(probe, true, false, false).print()).isEqualTo(defun);
+		assertThat(eval(probe, true, true, false).print()).isEqualTo(defun);
+		assertThat(eval(probe, true, false, true).print()).isEqualTo(lanes);
+		assertThat(eval(probe, true, true, true).print()).isEqualTo(lanes);
 	}
 
 	@Test
 	void theDeviceIsAskedAheadOfTheLaneKernelForTheStackedProductToo() {
 		String stack = """
-				(defparameter *a* (linalg:reshape (linalg:sin (linalg:arange 0 8192)) '(2 64 64)))
-				(defparameter *b* (linalg:reshape (linalg:cos (linalg:arange 0 8192)) '(2 64 64)))
+				(defparameter *a* (linalg:reshape (linalg:sin (linalg:arange 0 %d%s)) '(2 %d %d)))
+				(defparameter *b* (linalg:reshape (linalg:cos (linalg:arange 0 %d%s)) '(2 %d %d)))
 				(linalg:matmul *a* *b*)
-				""";
+				""".formatted(2 * SIDE * SIDE, option(), SIDE, SIDE, 2 * SIDE * SIDE, option(), SIDE, SIDE);
 		double[] gpuOnly = elements(eval(stack, true, false, false));
 		double[] simdOnly = elements(eval(stack, false, false, true));
-		// At #d the lane kernel is bit-identical to the scalar defun and the device
-		// fuses, so these differ by construction.
+		// The lane kernel and the device round differently at either width, so these
+		// differ by construction.
 		assertThat(simdOnly).isNotEqualTo(gpuOnly);
 		assertThat(elements(eval(stack, true, false, true))).isEqualTo(gpuOnly);
 		assertThat(elements(eval(stack, true, true, true))).isEqualTo(gpuOnly);

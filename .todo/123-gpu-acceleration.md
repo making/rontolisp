@@ -42,7 +42,8 @@ both came out better than feared.
    incl. the native binary, and JVM). WASM has no FFM and is out, so unlike `--simd`
    this flag cannot claim near-parity. And the win is an **f32** win: on this device
    fp64 runs at 1/44 of fp32 throughput, while `linalg`'s default width is
-   double-float.
+   double-float. On Apple (phase 5) that is not a preference: f32 is the only width
+   there is.
 5. **The same three answers hold on Apple, and a fourth one lands on top.** Metal is
    reachable by pure FFM too (`objc_msgSend`, no Swift shim), it survives native-image,
    and its runtime MSL compiler needs no toolchain at all -- so sections 1 and 2 carry
@@ -644,7 +645,8 @@ statically. `%la-make`'s own parameter is already a runtime value.
 Each phase is separately shippable and separately measurable. Do not start a phase
 without the previous one's numbers. Phase 0 above comes first.
 
-**Status.** Phase 0 LANDED 2026-08-20 (`a9a5b2e4`, behind todo-467's `3511d10f`).
+**Status. EVERY PHASE IS NOW CLOSED.** Phase 0 LANDED 2026-08-20 (`a9a5b2e4`, behind
+todo-467's `3511d10f`).
 Phase 1 LANDED 2026-08-21: `am.ik.gpu` in `51b872b3` + `d0b54738`, the interceptor and
 the flag in `02dfd287`. Phase 2 LANDED the same day (`ce1787f8`), and settled the
 bridge question below the other way: the emitted `.class` carries `am.ik.gpu`'s own
@@ -663,8 +665,12 @@ that matters: `--gpu` declines every rank >= 3 product today, so a transformer g
 nothing from the flag, which is the workload this file exists for. Doing it first also
 gives phase 3 a real chain to measure. Order was therefore 0, 1, 2, 4a
 (`%la-matmul-nd`), 4b (the element-wise tier and the ufuncs), 3 -- 4b moved ahead of 3
-as well, once todo-468 had made the CPU side of its comparison honest, and phase 3 is
-now the only phase left before Metal.
+as well, once todo-468 had made the CPU side of its comparison honest, and phase 3 was
+then the only phase left before Metal.
+
+**Phase 5 LANDED 2026-08-21** and closed the file. Its record is item 5 below and
+`.kb/gpu.md`'s "The Metal backend"; where this file's Metal section and that one disagree,
+that one was measured second and wins.
 
 **Phase 4a LANDED 2026-08-21** (`a671f569`), on both backends, and it measured what
 phase 3 and phase 4b now have to answer to. At the notebook's own shapes a training
@@ -723,14 +729,25 @@ phase 3 the real residency measurement: 2.2-6.4x at f64, 15.6-17.9x at f32.
    "memory-bound and therefore only pay under phase 3" -- turned out to hold for the
    eight members whose scalar cost is one instruction and to be wrong for the twelve
    whose cost is a libm call, which win by 9-394x with both copies on the clock.
-5. **Metal.** The `objc_msgSend` route is validated, so this phase is no longer a
-   feasibility question -- it is a port of phases 1-3 with three deliberate differences:
-   dispatch through **MPS**, not through our own kernel (the naive MSL kernel loses to
-   every alternative and is not worth maintaining); treat an `#d` operand as a hard
-   decline, since MSL has no double; and make phase 3 batch SUBMISSIONS as well as keep
-   data resident, because on Apple the ~85 us floor is per command buffer. Do not port
-   the checked-in-kernel-text machinery: MSL compiles at run time from a string, with no
-   toolchain and no build-time artifact.
+5. **Metal. LANDED 2026-08-21**, on both backends, and it is the last phase. The three
+   differences this item predicted all held, and one of them held only halfway: MPS is
+   dispatched to for a rank-2 product at or above `2^27` per matrix and OUR tiled kernel
+   below it and for every STACK, because a batched `MPSMatrixDescriptor` cannot be handed
+   the zero stride a broadcast operand passes -- so the kernel had to be written anyway,
+   and having written it, measurement put it AHEAD of MPS below n~448. `#d` is a hard
+   decline as predicted. Submissions are batched where a stacked product needs it (one
+   command buffer, one encode per slab) and residency is still not built.
+   What this item did NOT predict is the size of the rest: the floor made every threshold
+   move (`2^22` product, `2^17` element-wise, `2^18` strided), the axis fold stopped being
+   a member at all -- twice over, since `%la-fold-axis` accumulates in double and the
+   amax/amin half ties the CPU anyway -- and Metal's lack of an allocator pool made a
+   size-classed buffer pool of our own mandatory rather than an optimization. The full
+   record, with every number, is in `.kb/gpu.md`'s "The Metal backend".
+   Two findings worth carrying: the spike's feared 4.87e-5 on `tanh` DOES reproduce here
+   (unlike on CUDA) and was fixed rather than tolerated -- MSL's `tanh` and `sinh` carry
+   an absolute error floor near zero, so `gemm.metal` takes a Maclaurin series below
+   |x| = 1/4 -- and MSL has no `erf` at all, so it runs `%la-erf-1`'s own series, which
+   makes the Metal `erf` closer to the oracle than the CUDA one.
 
 Out of scope, permanently or for now: wasm-GC and the browser (no FFM; a WebGPU path
 would be host imports through `rontolisp:wasm-import` with the page's JS owning the

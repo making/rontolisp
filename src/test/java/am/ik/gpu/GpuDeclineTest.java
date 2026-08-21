@@ -328,6 +328,39 @@ class GpuDeclineTest {
 	}
 
 	@Test
+	void theCheckedInMetalSourceIsTheArtifactTheLoaderExpects() throws IOException {
+		// gemm.metal's counterpart of the PTX assertion above, and it has to hold on a
+		// Linux CI runner too: the MSL text travels in every --gpu class whichever
+		// machine
+		// emitted it, so a source that named the wrong kernels would break Apple users of
+		// a class compiled anywhere.
+		String msl = resource(MetalGemm.KERNEL_RESOURCE);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_BATCHED_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_MAP_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_BCAST_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GATHER_F32);
+		// The op-code mirrors, the third copy of the table gemm.cu and Gpu.MAP_* /
+		// Gpu.BIN_* hold the other two of.
+		assertThat(msl).contains("case " + Gpu.MAP_ERF + ": return erf1(x);");
+		assertThat(msl).contains("case " + Gpu.BIN_DIV + ": return x / y;");
+		// MSL rejects `double` outright, so a `double` in the CODE is a source that
+		// cannot
+		// compile on any Mac -- which no machine without one would notice. The comments
+		// discuss the word at length and are stripped first.
+		assertThat(msl.lines().filter(line -> !line.strip().startsWith("//")).toList())
+			.as("no declared double survives the comments")
+			.noneMatch(line -> line.contains("double"));
+	}
+
+	@Test
+	void suppliedMetalKernelsAreAcceptedWithoutProbingAndWithoutThrowing() throws IOException {
+		// useKernels' Apple sibling, and the same rule applies: the REAL checked-in text
+		// and nothing else, because the override is process-wide and read at probe time.
+		Gpu.useMetalKernels(resource(MetalGemm.KERNEL_RESOURCE));
+		assertThat(Gpu.description()).isNotBlank();
+	}
+
+	@Test
 	void suppliedKernelsAreAcceptedWithoutProbingAndWithoutThrowing() throws IOException {
 		// The seam an embedder that carries the CLASSES but not the resources needs:
 		// rontolisp's JVM backend renames these classes into a compiled program's own

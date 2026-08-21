@@ -16,17 +16,17 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's opt-in {@code --gpu} acceleration: part of {@code linalg:} runs on an
- * NVIDIA GPU ({@code am.ik.gpu}, via {@link LinalgGpuKernels}) -- {@code linalg:dot}'s
- * MATRIX-BY-MATRIX case, {@code linalg::%la-matmul-nd}, the STACKED product behind
- * {@code linalg:matmul} at rank &gt;= 3 ({@code torch.bmm}, hence every attention layer
- * and every {@code torch:linear} over a {@code (B T C)} activation), and the twelve
- * ELEMENT-WISE members whose scalar cost is a libm call ({@code exp} {@code log}
- * {@code tanh} {@code sin} {@code cos} {@code tan} {@code asin} {@code acos} {@code atan}
- * {@code sinh} {@code cosh} {@code erf}). Everything else declines, so the whole rest of
- * {@code linalg:} is untouched -- including {@code sqrt}, {@code abs}, {@code negative},
- * {@code sign} and the binary {@code add} / {@code sub} / {@code mul} / {@code div},
- * which are one machine instruction per element and cannot pay for a round trip. That is
- * a measurement ({@code .kb/gpu.md}), not a staging decision.
+ * NVIDIA GPU or on Apple Silicon ({@code am.ik.gpu}, via {@link LinalgGpuKernels}) --
+ * {@code linalg:dot}'s MATRIX-BY-MATRIX case, {@code linalg::%la-matmul-nd}, the STACKED
+ * product behind {@code linalg:matmul} at rank &gt;= 3 ({@code torch.bmm}, hence every
+ * attention layer and every {@code torch:linear} over a {@code (B T C)} activation), and
+ * the twelve ELEMENT-WISE members whose scalar cost is a libm call ({@code exp}
+ * {@code log} {@code tanh} {@code sin} {@code cos} {@code tan} {@code asin} {@code acos}
+ * {@code atan} {@code sinh} {@code cosh} {@code erf}). Everything else declines, so the
+ * whole rest of {@code linalg:} is untouched -- including {@code sqrt}, {@code abs},
+ * {@code negative}, {@code sign} and the binary {@code add} / {@code sub} / {@code mul} /
+ * {@code div}, which are one machine instruction per element and cannot pay for a round
+ * trip. That is a measurement ({@code .kb/gpu.md}), not a staging decision.
  *
  * <h2>Only the big shapes, and there are two size rules</h2>
  *
@@ -106,9 +106,9 @@ public final class LinalgGpu {
 	/**
 	 * Returns whether this machine has a GPU the matrix product can run on. False is the
 	 * ordinary answer -- no driver, no device, a card older than the kernels, a platform
-	 * without {@code libcuda.so.1} -- and the caller then runs unaccelerated. The first
-	 * call runs the probe, which is why nothing may ask this on a path that did not
-	 * request the flag.
+	 * with neither {@code libcuda.so.1} nor Metal -- and the caller then runs
+	 * unaccelerated. The first call runs the probe, which is why nothing may ask this on
+	 * a path that did not request the flag.
 	 * @return {@code true} when {@code linalg:dot} can be routed to a device
 	 */
 	public static boolean available() {
@@ -130,7 +130,7 @@ public final class LinalgGpu {
 			return LinalgGpuKernels.description();
 		}
 		catch (Throwable ex) {
-			return "the CUDA driver is unavailable: " + ex;
+			return "no GPU is available: " + ex;
 		}
 	}
 

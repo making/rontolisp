@@ -10,15 +10,15 @@ import org.jspecify.annotations.Nullable;
  *
  * <h2>What "declines" covers</h2>
  *
- * Everything. No NVIDIA driver, no device, a card older than the PTX this library
- * carries, a JVM that forbids native access, a platform with no {@code libcuda.so.1} (so
- * far, anything but Linux), a shape too big for the launch grid, a product too small to
- * be worth a round trip, one too big for free device memory, a failed {@code CUresult} of
- * any kind, or a context that a previous failure left unusable. All of them answer
- * quietly, and the caller runs whatever it would have run anyway. This is the same
- * posture {@code --simd} has toward a JDK without {@code jdk.incubator.vector} and
- * {@code --blas} has toward a machine with no tuned CBLAS ({@code .kb/linalg-simd.md},
- * {@code .kb/linalg-blas.md}).
+ * Everything. No NVIDIA driver and no Metal, no device, a card older than the PTX this
+ * library carries, a JVM that forbids native access, a shape too big for the launch grid,
+ * a product too small to be worth a round trip, one too big for free device memory, a
+ * failed {@code CUresult} of any kind, a command buffer that did not complete, a
+ * {@code double} operand on a backend that has no {@code double}, or a context that a
+ * previous failure left unusable. All of them answer quietly, and the caller runs
+ * whatever it would have run anyway. This is the same posture {@code --simd} has toward a
+ * JDK without {@code jdk.incubator.vector} and {@code --blas} has toward a machine with
+ * no tuned CBLAS ({@code .kb/linalg-simd.md}, {@code .kb/linalg-blas.md}).
  *
  * <p>
  * Two things are NOT declines, because neither is this library's to swallow. A
@@ -36,6 +36,16 @@ import org.jspecify.annotations.Nullable;
  * interceptor can ask that on a path that then never touches the device.
  * {@link #description()} says what was found or why nothing was, and is what a caller
  * should print when it was asked for a GPU and cannot have one.
+ *
+ * <h2>Two kinds of device, one surface</h2>
+ *
+ * An NVIDIA card through the CUDA driver, or an Apple GPU through Metal, chosen by
+ * whichever one this machine has. Nothing above this class needs to know which, but two
+ * differences are visible through the decline protocol and are worth expecting: the Metal
+ * backend has no {@code double} at all, so every {@code double}-taking method below
+ * declines there whatever the size; and its per-call floor is five times CUDA's, so its
+ * size thresholds are higher and it does not take the {@linkplain #fold axis fold} at
+ * all. {@code .kb/gpu.md} has the measurements behind each of those.
  *
  * <h2>Offsets, because the arrays have headers</h2>
  *
@@ -70,7 +80,7 @@ public final class Gpu {
 	 * orders of magnitude of fixed cost, and hence three orders of magnitude of
 	 * threshold. See {@code .kb/gpu.md} for the measurement.
 	 */
-	private static final long POOLED_MIN_WORK = 1L << 17;
+	static final long POOLED_MIN_WORK = 1L << 17;
 
 	/**
 	 * The threshold {@link #multiply} applies instead on a machine whose driver has no
@@ -79,7 +89,7 @@ public final class Gpu {
 	 * between n=96 (131 us) and n=128 (384 us). {@link #worth} does NOT apply it, and
 	 * says why.
 	 */
-	private static final long UNPOOLED_MIN_WORK = 1L << 21;
+	static final long UNPOOLED_MIN_WORK = 1L << 21;
 
 	/**
 	 * Below this many elements an {@linkplain #map element-wise map} declines and the
@@ -95,7 +105,7 @@ public final class Gpu {
 	 * sits at 16384, where the cheapest of them is already 2.6x ahead and the rest 5-9x.
 	 * Below it the CPU wins outright and declining costs nothing. See {@code .kb/gpu.md}.
 	 */
-	private static final long MAP_POOLED_MIN_ELEMENTS = 1L << 14;
+	static final long MAP_POOLED_MIN_ELEMENTS = 1L << 14;
 
 	/**
 	 * The element-wise threshold on a machine whose driver has no usable stream-ordered
@@ -104,7 +114,7 @@ public final class Gpu {
 	 * where the CPU column passes it: 65536 elements, where the cheapest member measures
 	 * 360 us on the CPU.
 	 */
-	private static final long MAP_UNPOOLED_MIN_ELEMENTS = 1L << 16;
+	static final long MAP_UNPOOLED_MIN_ELEMENTS = 1L << 16;
 
 	/**
 	 * Below this many OUTPUT elements a {@linkplain #bcast broadcast binary op} or a
@@ -122,7 +132,7 @@ public final class Gpu {
 	 * the second, for the reason the product's does: where the win is unambiguous, not
 	 * where it first appears. See {@code .kb/gpu.md}.
 	 */
-	private static final long STRIDED_POOLED_MIN_ELEMENTS = 1L << 15;
+	static final long STRIDED_POOLED_MIN_ELEMENTS = 1L << 15;
 
 	/**
 	 * The strided threshold on a machine whose driver has no usable stream-ordered
@@ -130,7 +140,7 @@ public final class Gpu {
 	 * the CPU's cost for 32768 elements of either member, so it moves up to where the CPU
 	 * column passes it (2^17, ~200 us).
 	 */
-	private static final long STRIDED_UNPOOLED_MIN_ELEMENTS = 1L << 17;
+	static final long STRIDED_UNPOOLED_MIN_ELEMENTS = 1L << 17;
 
 	/**
 	 * Below this many INPUT elements an {@linkplain #fold axis fold} declines. It counts
@@ -145,12 +155,12 @@ public final class Gpu {
 	 * rather than three. The two columns are level at 65536 (29.5 us against 30.6 at f64)
 	 * and the device is 1.7x/2.1x ahead at 131072. See {@code .kb/gpu.md}.
 	 */
-	private static final long FOLD_POOLED_MIN_ELEMENTS = 1L << 17;
+	static final long FOLD_POOLED_MIN_ELEMENTS = 1L << 17;
 
 	/**
 	 * The fold threshold with no stream-ordered allocator; see the two siblings above.
 	 */
-	private static final long FOLD_UNPOOLED_MIN_ELEMENTS = 1L << 19;
+	static final long FOLD_UNPOOLED_MIN_ELEMENTS = 1L << 19;
 
 	/**
 	 * How many OUTPUT cells an axis fold needs before it is offered at all, whatever its
@@ -235,7 +245,7 @@ public final class Gpu {
 	 */
 	private static final class Probe {
 
-		private static final @Nullable CudaGemm DEVICE;
+		private static final @Nullable GpuDevice DEVICE;
 
 		private static final String DESCRIPTION;
 
@@ -248,21 +258,34 @@ public final class Gpu {
 		private static final long FOLD_MIN_ELEMENTS;
 
 		static {
-			CudaGemm device;
+			GpuDevice device;
 			String description;
 			try {
-				CudaGemm.Probe probe = CudaGemm.probe();
-				device = probe.gemm();
-				description = probe.description();
+				// CUDA first and Metal second, which is not a preference: the two are
+				// mutually exclusive in practice (no machine has both libcuda.so.1 and
+				// Metal.framework) and each declines in a failed library lookup on the
+				// other's platform, so the order costs a dlopen that was going to fail
+				// anyway. What it does decide is which SENTENCE a machine with neither
+				// gets, and that is the platform's own -- see #describe.
+				CudaGemm.Probe cuda = CudaGemm.probe();
+				if (cuda.gemm() != null) {
+					device = cuda.gemm();
+					description = cuda.description();
+				}
+				else {
+					MetalGemm.Probe metal = MetalGemm.probe();
+					device = metal.gemm();
+					description = device != null ? metal.description() : describe(cuda, metal);
+				}
 			}
 			catch (Throwable ex) {
-				// The probe is written not to throw; if it ever does, the answer is still
-				// no. The nested try is not paranoia for its own sake: an exception
+				// The probes are written not to throw; if one ever does, the answer is
+				// still no. The nested try is not paranoia for its own sake: an exception
 				// escaping HERE would fail this class's initialization, and every later
 				// call would get a NoClassDefFoundError instead of a decline, for the
 				// life of the process.
 				device = null;
-				description = "the CUDA driver could not be probed";
+				description = "no GPU could be probed";
 				try {
 					description = description + ": " + ex;
 				}
@@ -272,12 +295,29 @@ public final class Gpu {
 			}
 			DEVICE = device;
 			DESCRIPTION = description;
-			MIN_WORK = device == null || device.pooled() ? POOLED_MIN_WORK : UNPOOLED_MIN_WORK;
-			MAP_MIN_ELEMENTS = device == null || device.pooled() ? MAP_POOLED_MIN_ELEMENTS : MAP_UNPOOLED_MIN_ELEMENTS;
-			STRIDED_MIN_ELEMENTS = device == null || device.pooled() ? STRIDED_POOLED_MIN_ELEMENTS
-					: STRIDED_UNPOOLED_MIN_ELEMENTS;
-			FOLD_MIN_ELEMENTS = device == null || device.pooled() ? FOLD_POOLED_MIN_ELEMENTS
-					: FOLD_UNPOOLED_MIN_ELEMENTS;
+			GpuDevice.Thresholds thresholds = device == null ? new GpuDevice.Thresholds(POOLED_MIN_WORK,
+					MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS, FOLD_POOLED_MIN_ELEMENTS)
+					: device.thresholds();
+			MIN_WORK = thresholds.work();
+			MAP_MIN_ELEMENTS = thresholds.map();
+			STRIDED_MIN_ELEMENTS = thresholds.strided();
+			FOLD_MIN_ELEMENTS = thresholds.fold();
+		}
+
+		/**
+		 * What to say when NEITHER backend found a device. Both have a reason and only
+		 * one of them is about this machine -- "libcuda.so.1 is not present" is noise on
+		 * a Mac and "this is not a Mac" is noise on a Linux box -- so the platform picks.
+		 */
+		private static String describe(CudaGemm.Probe cuda, MetalGemm.Probe metal) {
+			String os;
+			try {
+				os = String.valueOf(System.getProperty("os.name"));
+			}
+			catch (Throwable ex) {
+				os = "";
+			}
+			return os.startsWith("Mac") ? metal.description() : cuda.description();
 		}
 
 		private Probe() {
@@ -292,7 +332,7 @@ public final class Gpu {
 	 * @return {@code true} when a product may be offered to {@link #multiply}
 	 */
 	public static boolean available() {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && device.usable();
 	}
 
@@ -328,12 +368,29 @@ public final class Gpu {
 	}
 
 	/**
+	 * Supplies the Metal Shading Language kernel text, for an embedder that carries this
+	 * library's CLASSES but not its resources -- {@link #useKernels(String)}'s Apple
+	 * sibling, and needed for the same reason and by the same one caller.
+	 *
+	 * <p>
+	 * Unlike the PTX this is the SOURCE rather than a compiled artifact: Metal's compiler
+	 * is in the OS, so there is nothing generated to carry. Must be called BEFORE the
+	 * first {@link #available()} / {@link #description()} / {@link #multiply} on this
+	 * process; afterwards it changes nothing and is not an error. It never throws and it
+	 * never probes.
+	 * @param msl the MSL text the OS is to compile
+	 */
+	public static void useMetalKernels(String msl) {
+		MetalGemm.embeddedSource(msl);
+	}
+
+	/**
 	 * The one device this process has probed, or {@code null}. Package-private and for
 	 * the tests: probing again would retain a second reference to the primary context and
 	 * JIT the module a second time, so nothing may call {@code CudaGemm.probe()} twice.
 	 * @return the probed device, or {@code null} when there is none
 	 */
-	static @Nullable CudaGemm device() {
+	static @Nullable GpuDevice device() {
 		return Probe.DEVICE;
 	}
 
@@ -458,7 +515,7 @@ public final class Gpu {
 	 */
 	public static boolean multiply(double[] a, int offsetA, double[] b, int offsetB, double[] out, int offsetOut, int n,
 			int m, int p) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offered(a.length, offsetA, b.length, offsetB, out.length, offsetOut, n, m, p)
 				&& device.gemm(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
 	}
@@ -480,7 +537,7 @@ public final class Gpu {
 	 */
 	public static boolean multiply(float[] a, int offsetA, float[] b, int offsetB, float[] out, int offsetOut, int n,
 			int m, int p) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offered(a.length, offsetA, b.length, offsetB, out.length, offsetOut, n, m, p)
 				&& device.gemmF(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
 	}
@@ -521,7 +578,7 @@ public final class Gpu {
 	 */
 	public static boolean multiply(double[] a, int offsetA, int strideA, double[] b, int offsetB, int strideB,
 			double[] out, int offsetOut, int batch, int n, int m, int p) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut,
 				batch, n, m, p)
 				&& device.gemm(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
@@ -547,7 +604,7 @@ public final class Gpu {
 	 */
 	public static boolean multiply(float[] a, int offsetA, int strideA, float[] b, int offsetB, int strideB,
 			float[] out, int offsetOut, int batch, int n, int m, int p) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut,
 				batch, n, m, p)
 				&& device.gemmF(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
@@ -639,7 +696,7 @@ public final class Gpu {
 	 * declined, in which case {@code out} is untouched
 	 */
 	public static boolean map(int op, double[] a, int offsetA, double[] out, int offsetOut, int n) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
 				&& device.map(op, a, offsetA, out, offsetOut, n);
 	}
@@ -657,7 +714,7 @@ public final class Gpu {
 	 * @return {@code true} when {@code out} was filled
 	 */
 	public static boolean map(int op, float[] a, int offsetA, float[] out, int offsetOut, int n) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
 				&& device.mapF(op, a, offsetA, out, offsetOut, n);
 	}
@@ -713,7 +770,7 @@ public final class Gpu {
 	 */
 	public static boolean bcast(int op, double[] a, int offsetA, int[] strideA, double[] b, int offsetB, int[] strideB,
 			double[] out, int offsetOut, int[] dims) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null
 				&& offeredBcast(op, a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, dims)
 				&& device.bcast(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
@@ -739,7 +796,7 @@ public final class Gpu {
 	 */
 	public static boolean bcast(int op, float[] a, int offsetA, int[] strideA, float[] b, int offsetB, int[] strideB,
 			float[] out, int offsetOut, int[] dims) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null
 				&& offeredBcast(op, a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, dims)
 				&& device.bcastF(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
@@ -760,7 +817,7 @@ public final class Gpu {
 	 * declined, in which case {@code out} is untouched
 	 */
 	public static boolean gather(double[] a, int offsetA, int[] strideA, double[] out, int offsetOut, int[] dims) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredGather(a.length, offsetA, strideA, out.length, offsetOut, dims)
 				&& device.gather(a, offsetA, strideA, out, offsetOut, dims);
 	}
@@ -777,7 +834,7 @@ public final class Gpu {
 	 * @return {@code true} when {@code out} was filled
 	 */
 	public static boolean gather(float[] a, int offsetA, int[] strideA, float[] out, int offsetOut, int[] dims) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredGather(a.length, offsetA, strideA, out.length, offsetOut, dims)
 				&& device.gatherF(a, offsetA, strideA, out, offsetOut, dims);
 	}
@@ -809,7 +866,7 @@ public final class Gpu {
 	 */
 	public static boolean fold(int op, double[] a, int offsetA, double[] out, int offsetOut, int outer, int len,
 			int inner) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner)
 				&& device.fold(op, a, offsetA, out, offsetOut, outer, len, inner);
 	}
@@ -831,7 +888,7 @@ public final class Gpu {
 	 */
 	public static boolean fold(int op, float[] a, int offsetA, float[] out, int offsetOut, int outer, int len,
 			int inner) {
-		CudaGemm device = Probe.DEVICE;
+		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner)
 				&& device.foldF(op, a, offsetA, out, offsetOut, outer, len, inner);
 	}
@@ -949,6 +1006,13 @@ public final class Gpu {
 	 * clear the threshold, and each operand's SPAN -- the last slab plus everything its
 	 * stride skipped on the way there, so a 0 stride spans one slab however long the
 	 * batch -- has to be inside the array it was handed.
+	 *
+	 * <p>
+	 * The launch bound asked here is the CUDA one on BOTH backends. Metal's grid axes are
+	 * 32-bit where CUDA's row axis is 16, so the CUDA bound is the stricter of the two
+	 * and a shape it refuses is one no backend has ever been offered -- one predicate is
+	 * worth more than the handful of enormous stacks the looser bound would add on one
+	 * platform.
 	 */
 	private static boolean offered(long lengthA, int offsetA, int strideA, long lengthB, int offsetB, int strideB,
 			long lengthOut, int offsetOut, int batch, int n, int m, int p) {

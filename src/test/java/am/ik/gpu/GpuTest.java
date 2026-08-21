@@ -36,11 +36,23 @@ import static org.assertj.core.api.Assertions.within;
  * whole class red on a machine with the other, and reads as a kernel regression when it
  * is nothing of the sort.
  */
-@EnabledIf("am.ik.gpu.GpuTest#gpuIsAvailable")
+@EnabledIf("am.ik.gpu.GpuTest#aDoubleCapableGpuIsAvailable")
 class GpuTest {
 
-	static boolean gpuIsAvailable() {
-		return Gpu.available();
+	/**
+	 * A device that has a {@code double}, which since phase 5 means the CUDA backend and
+	 * not merely "a GPU". Every assertion below is written at {@code #d} -- the oracle,
+	 * the offsets, the leak runs, the batch shapes -- because that was the only backend
+	 * there was; the Metal one has no {@code double} at all and answers the same claims
+	 * at {@code #f} in {@link MetalGpuTest}. Splitting them beat widening this file: the
+	 * two devices do not have the same member set, the same thresholds or the same
+	 * precision story, so a single width-generic suite would have had to branch on the
+	 * backend in nearly every test.
+	 * @return {@code true} when a double-capable device is present
+	 */
+	static boolean aDoubleCapableGpuIsAvailable() {
+		GpuDevice device = Gpu.device();
+		return Gpu.available() && device != null && device.supportsDouble();
 	}
 
 	/**
@@ -121,8 +133,10 @@ class GpuTest {
 		// route exists -- but a driver older than CUDA 11.2, or a device without memory
 		// pools, takes the other one, and on this machine it would otherwise never run at
 		// all. Same shapes, same answers, and the threshold in force is the pooled one
-		// either way because the switch is below Gpu.
-		CudaGemm gemm = Gpu.device();
+		// either way because the switch is below Gpu. The cast is the one place this file
+		// names the backend: the allocator route is the CUDA driver's, and there is no
+		// second route on Metal to compare against.
+		CudaGemm gemm = (CudaGemm) Gpu.device();
 		assertThat(gemm).isNotNull();
 		int n = square();
 		double[] a = new double[n * n], b = new double[n * n];
@@ -429,7 +443,7 @@ class GpuTest {
 	void aRunOfElementWiseMapsFreesEveryBufferItAllocates() {
 		// The map path allocates TWO buffers rather than three and frees them in its own
 		// finally; the product's leak test cannot cover it.
-		CudaGemm gemm = Gpu.device();
+		GpuDevice gemm = Gpu.device();
 		assertThat(gemm).isNotNull();
 		int n = 1 << 19;
 		double[] a = new double[n], c = new double[n];
@@ -638,7 +652,7 @@ class GpuTest {
 		// The broadcast path allocates FOUR buffers -- the fourth is the layout -- and
 		// the
 		// fold two; neither is reached by the product's or the map's leak test.
-		CudaGemm gemm = Gpu.device();
+		GpuDevice gemm = Gpu.device();
 		assertThat(gemm).isNotNull();
 		int cols = 64, rows = 1 << 12, n = rows * cols;
 		double[] x = new double[n], y = new double[rows], out = new double[n];
@@ -659,7 +673,7 @@ class GpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void aRunOfSuccessfulProductsFreesEveryBufferItAllocates() {
-		CudaGemm gemm = Gpu.device();
+		GpuDevice gemm = Gpu.device();
 		assertThat(gemm).isNotNull();
 		int n = 384;
 		double[] a = new double[n * n], b = new double[n * n], c = new double[n * n];
@@ -693,7 +707,7 @@ class GpuTest {
 		// 69 GB free to 1 GB free and never gave it back -- to this process or to any
 		// other one on the card. An 80 GB operand is refused by the pre-flight; the pool
 		// trim covers the same case when the pre-flight cannot see it coming.
-		CudaGemm gemm = Gpu.device();
+		GpuDevice gemm = Gpu.device();
 		assertThat(gemm).isNotNull();
 		long before = gemm.freeDeviceMemory();
 		assertThat(before).isGreaterThan(0);

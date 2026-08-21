@@ -1,4 +1,4 @@
-# The `--gpu` feasibility spike (CUDA 2026-08-20, Metal 2026-08-20)
+# The `--gpu` feasibility spike (CUDA 2026-08-20, Metal 2026-08-20; phase 5's own probes 2026-08-21)
 
 Throwaway probes kept for reproducibility, NOT project code: they are outside `src/`, are
 not in the reactor, are not formatted by `spring-javaformat:apply`, and nothing builds or
@@ -70,6 +70,8 @@ warm-up, and the sub-millisecond rows still move by ~20% run to run.
 | `MtlMpsDiff.java` | verifies the surprising half of that answer -- MPS and the naive tiled kernel are bit-identical, which a silent no-op would also look like. |
 | `MtlCompileCost.java` | the PTX question restated: what does getting a kernel onto the device cost at startup, and does the OS cache it between processes? |
 | `MtlNiProbe.java` | does an `objc_msgSend` downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
+| `MtlPhase5.java` | PHASE 5's own probe, and the only Metal file that compiles the CHECKED-IN `src/main/resources/am/ik/gpu/gemm.metal` rather than a string of its own: a syntax error or a missing MSL builtin fails here rather than at run time. Also checks every kernel against a Java oracle and measures the crossovers that set this backend's thresholds. |
+| `MtlBreakdown.java` | where the per-call microseconds GO, which is the question phase 5's design turned on: MPS object creation against a cached one, and a fresh `MTLBuffer` against a pooled one -- the measurement that made a buffer pool mandatory. Also checks that `rowBytes = columns * 4` is accepted by MPS on a shape whose `rowBytesFromColumns:` pads. |
 | `AccelerateProbe.java` | no GPU at all: a tuned BLAS is plain C, costs no dependency, and unlike Metal it has a double. How fast is it, is one PRESENT, and is the one that is present actually TUNED? Walks a candidate list (Accelerate, NVPL, OpenBLAS, MKL, distro `libblas`), identifies what it bound and prints a verdict against measured throughput. Runs on either machine -- the probe that reframes the Apple plan, and the one that stopped it being reframed the same way on Linux. |
 
 ## Running them
@@ -131,6 +133,9 @@ java --add-modules jdk.incubator.vector Mm2
 
 java --enable-native-access=ALL-UNNAMED MtlF64Probe.java
 java --enable-native-access=ALL-UNNAMED MtlSpike.java
+# the two phase-5 probes read the checked-in kernels, so run them from the REPO ROOT:
+#   java --enable-native-access=ALL-UNNAMED .todo/123-gpu-acceleration/MtlPhase5.java
+#   java --enable-native-access=ALL-UNNAMED .todo/123-gpu-acceleration/MtlBreakdown.java
 java --enable-native-access=ALL-UNNAMED MtlTiny.java
 java --enable-native-access=ALL-UNNAMED MtlResidency.java
 java --enable-native-access=ALL-UNNAMED MtlPrecision.java

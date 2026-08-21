@@ -1,8 +1,8 @@
 # `--gpu`: a matrix product on the GPU, or a decline
 
 Two layers, in one file. `am.ik.gpu` is the foundation (todo-123 phase 1, landed on its
-own): a language-independent library that takes a matrix product and either runs it on an
-NVIDIA GPU or answers `null`. **The `--gpu` flag on the INTERPRETER** (phase 1B) is the
+own): a language-independent library that takes a matrix product and either runs it on a
+GPU or answers `null`. **The `--gpu` flag on the INTERPRETER** (phase 1B) is the
 first interceptor over it, and "The interception layer" below is its whole record -- the
 per-backend touch points, the chain order, the precision contract and the test map. **The
 JVM class output** (phase 2) is the second, and "The JVM backend" below is where its one
@@ -19,7 +19,11 @@ the fourth and last, and it is what phase 3 turned into: residency was measured 
 DECLINED, and the ten members whose CPU twin is a scalar ODOMETER walk rather than a lane
 loop were taken instead. "The strided tier, and why residency was NOT built" below is its
 whole record -- including the profile that says what a `--gpu` training step is now made
-of, which is no longer `linalg:` at all.
+of, which is no longer `linalg:` at all. **METAL** (phase 5, 2026-08-21) is the second
+DEVICE rather than a fifth tier: "The Metal backend" below is its whole record, and the
+one thing to know before reading anything above it is that everything above it is CUDA.
+Where the two disagree -- the width, three thresholds, one whole tier -- that section
+says so and is the one that applies on a Mac.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover,ElementwiseCrossover,
@@ -40,8 +44,9 @@ trip and the fact that the accelerator is a separate machine with its own memory
 
 **`am.ik.gpu` never throws and never signals.** Every failure -- no driver, no device, an
 old card, a shape it cannot launch, a product too small to be worth the trip, device
-memory exhausted, any `CUresult`, a JVM that forbids native access, a platform with no
-`libcuda.so.1` (so far, anything but Linux) -- is the same answer: `null`, and the caller
+memory exhausted, any `CUresult`, a command buffer that did not complete, an operand at a
+width this device has no type for, a JVM that forbids native access, a platform with
+neither `libcuda.so.1` nor `Metal.framework` -- is the same answer: `null`, and the caller
 runs whatever it would have run anyway. That is what lets a future `--gpu` be a silent
 no-op on a machine without a GPU, exactly as `--simd` is on a JDK without
 `jdk.incubator.vector`.
@@ -67,10 +72,14 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 | `am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder` | the blob: `am.ik.gpu`'s class files + the PTX, renamed and embedded |
 | `am.ik.rontolisp.codegen.jvm.JvmLinalgGpu` | which members the device bridge claims (fourteen), and each one's `ops` key |
 | `am.ik.gpu.Gpu` | the whole public surface: `available`, `description`, `worth` (a product or a stack), `worthMap`, the `multiply` and `map` overloads, the `MAP_*` op codes |
+| `am.ik.gpu.GpuDevice` | the sealed seam between the two backends: `supportsDouble`, `thresholds`, and the members |
 | `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, the per-call product and the per-call map |
 | `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 24 downcall handles |
 | `am.ik.gpu.CuResult` | every CUDA 13 status code, and which of them leave the context dead |
-| `src/main/resources/am/ik/gpu/gemm.cu` / `gemm.ptx` | the kernels, source and checked-in artifact |
+| `am.ik.gpu.MetalGemm` | the Apple half: the probe, the MSL library, MPS, the buffer pool, the per-call members |
+| `am.ik.gpu.MetalDriver` | the FFM binding: `libobjc` + Metal + MetalPerformanceShaders, one handle per selector SHAPE |
+| `src/main/resources/am/ik/gpu/gemm.cu` / `gemm.ptx` | the CUDA kernels, source and checked-in artifact |
+| `src/main/resources/am/ik/gpu/gemm.metal` | the Metal kernels -- the whole artifact, compiled at run time |
 
 ## The API
 
@@ -81,6 +90,7 @@ static boolean worth(long n, long m, long p)              // is this product big
 static boolean worth(long batch, long n, long m, long p)  // ... is this STACK of them
 static boolean worthMap(long n)                  // ... is this ELEMENT-WISE map
 static void    useKernels(String ptx)            // for an embedder that has no resources
+static void    useMetalKernels(String msl)       // ... the same, for the Apple half
 static double[] multiply(double[] a, int offsetA, double[] b, int offsetB, int n, int m, int p)
 static float[]  multiply(float[]  a, int offsetA, float[]  b, int offsetB, int n, int m, int p)
 static boolean  multiply(double[] a, int oA, double[] b, int oB, double[] out, int oOut, int n, int m, int p)
@@ -119,7 +129,7 @@ that ever slipped cannot silently answer some other function.
 the JVM must be able to say where the elements start; the interpreter passes 0. The result
 carries no header, so the caller wraps it.
 
-## The runtime requirement is `libcuda.so.1`, and nothing else
+## The runtime requirement is `libcuda.so.1`, and nothing else (on Apple, nothing at all)
 
 `SymbolLookup.libraryLookup("libcuda.so.1", Arena.global())` plus a `downcallHandle` per
 entry point. No JNI, no bundled shim, no Java library, and **no CUDA toolkit**: no
@@ -129,6 +139,10 @@ compatible with the no-external-dependencies rule rather than a compromise on it
 
 The spike bound NVRTC to compile CUDA C at run time. This does not, and must not: NVRTC is
 in the toolkit.
+
+The Apple half's answer to the same question is one step shorter and is in "The Metal
+backend" below: the frameworks and the MSL compiler are both in the OS, so there is no
+driver to require either.
 
 ## The kernels: PTX checked in, JIT-compiled by the driver
 
@@ -182,7 +196,8 @@ the artifact instead of only living here. `GpuDeclineTest` asserts it is still t
 ## The availability probe
 
 One probe per process, cached, in `Gpu`'s static initializer, and it answers on every
-machine without throwing:
+machine without throwing. CUDA is tried first and Metal second (see "The dispatch seam"
+below); this is the CUDA one:
 
 1. `CudaDriver.open()` -- the library lookup. Absent driver, wrong platform, forbidden
    native access, or a driver too old to export an entry point: `null`, and the answer is
@@ -479,6 +494,365 @@ which is the reading the Metal spike reached on completely different hardware.
 the tiled kernel lands within 6e-16 relative, which is close but is still a break with the
 bit-identity `#d` has under `--simd` -- and that is a decision the interceptor must make
 when it lands, not this library.
+
+## The Metal backend: the same flag on Apple Silicon (phase 5, 2026-08-21)
+
+Everything above this line is CUDA. `--gpu` reaches a second kind of device since phase 5,
+and the honest summary is that it is the same feature with a different member set: the
+flag, the CLI, the interception layer, the decline protocol and the tests are shared, and
+what is NOT shared is the width, three of the thresholds and one whole tier.
+
+| | CUDA | Metal |
+|---|---|---|
+| widths | `#d` and `#f` | **`#f` only** -- MSL rejects `double` outright |
+| rank-2 product | our tiled kernel | **MPS** above `2^27` per matrix, our tiled kernel below |
+| stacked product | our batched kernel | our batched kernel |
+| element-wise tier | twelve members | the same twelve |
+| broadcast + axes transpose | yes | yes |
+| axis fold (`sum`/`amax`/`amin` `:axis`) | yes | **no, measured** |
+| product threshold | `2^17` | `2^22` |
+| element-wise threshold | `2^14` elements | `2^17` |
+| broadcast / gather threshold | `2^15` output elements | `2^18` |
+| per-call floor | 16-18 us | **77 us**, per COMMAND BUFFER |
+| per-call memory | the driver's pool | **our own** size-classed buffer pool |
+| kernels | PTX generated at build time, checked in | MSL compiled at RUN time, from a string |
+
+### The dispatch seam
+
+`GpuDevice` is a package-private sealed interface over `CudaGemm` and `MetalGemm`, and
+`Gpu` is unchanged above it. Two questions cross it that did not exist before:
+`supportsDouble()` -- so a `#d` operand is a decline rather than a slower path -- and
+`thresholds()`, because a 16 us floor and a 77 us floor do not accept the same shapes and
+a single constant would have been wrong on one of the two.
+
+`Gpu.Probe` asks CUDA first and Metal second. That is not a preference: no machine has
+both `libcuda.so.1` and `Metal.framework`, and each declines in a failed library lookup on
+the other's platform, so the order costs a `dlopen` that was going to fail anyway. What it
+does decide is which SENTENCE a machine with NEITHER gets, and there the platform picks --
+"`libcuda.so.1` is not present" is noise on a Mac.
+
+### The runtime requirement is the OS, and there is nothing else at all
+
+`SymbolLookup.libraryLookup` on `/usr/lib/libobjc.A.dylib`, `Metal.framework` and
+`MetalPerformanceShaders.framework`, and one `downcallHandle` per distinct C SIGNATURE.
+No JNI, no Swift shim, no bundled artifact, and -- the Apple counterpart of "no CUDA
+toolkit" -- **no Xcode**: the frameworks and the MSL compiler both ship with macOS. So the
+CUDA half's "a working GPU is the entire runtime requirement" is, here, "a Mac".
+
+`MTLCreateSystemDefaultDevice` is the only C entry point in Metal; everything else is
+`objc_msgSend`. Apple's own arm64 rule is that it must be CALLED through a prototype
+matching the selector rather than as the variadic it is declared as, which is what a
+`FunctionDescriptor` without `firstVariadicArg` produces -- so `MetalDriver` holds one
+handle per SHAPE and a selector is never sent through the wrong one. A selector taking an
+`MTLSize` needs the struct layout, and sending it through a `long` shape is an immediate
+SIGBUS rather than a wrong answer.
+
+**The kernels compile at run time, from a string, and that is better than the PTX story
+rather than merely equal to it.** `newLibraryWithSource:options:error:` takes
+`gemm.metal` verbatim: no generated sibling to check in, no toolchain to run, nothing
+pinned to a virtual architecture. Measured ~35 ms the first time a given text is ever seen
+on a machine and 2-3 ms on every later process, because the OS caches it the way the
+NVIDIA driver caches PTX. `MTLCreateSystemDefaultDevice` (12-15 ms) is the real cost of
+the probe.
+
+**`MTLMathModeSafe` is set explicitly**, falling back to `setFastMathEnabled:NO` on an OS
+whose `MTLCompileOptions` predates it. That is not a preference: the relaxed default
+flushes denormals and reassociates, and the strided tier below claims BIT-IDENTITY with
+the scalar defun, which neither survives.
+
+**Every call pushes an autorelease pool.** A command buffer, an encoder and every
+`MPSMatrixDescriptor` are autoreleased objects; without a pool per call they accumulate
+for the life of the process. `objc_autoreleasePoolPush`/`Pop` measures 0.0 us, so this
+costs nothing and its absence would be a slow leak rather than a failure.
+
+### Single float, or nothing
+
+MSL rejects `double` outright -- `error: 'double' is not supported in Metal` -- so
+`MetalGemm.supportsDouble()` is `false` and every double-taking method answers `false`
+without touching the device. There is no fp64 on this hardware to fill the gap with later.
+
+Two consequences worth stating plainly. **The decline protocol is load-bearing in a way it
+is not on CUDA**: `linalg`'s default width is double, so on Apple the flag is inert until
+a program reaches `#f` data -- which `torch:` does by default since phase 0, and which a
+`linalg`-only program has to ask for. And **`GpuTest` no longer describes both backends**:
+it is gated on a double-capable device now, and `MetalGpuTest` answers the same claims at
+`#f`. The two are separate files because the two devices do not have the same member set,
+the same thresholds or the same precision story, so one width-generic suite would have had
+to branch on the backend in nearly every test.
+
+### The rank-2 product goes through MPS, and the stack does not
+
+`MPSMatrixMultiplication` is in the OS, so every argument that killed cuBLAS is absent
+here: no toolkit to require, no f64 regression to weigh, and -- measured -- no precision
+cost either. It is four more `objc_msgSend` signatures.
+
+Which route runs is a pure SIZE decision, `n * m * p >= 2^27` for ONE matrix of the
+product. Measured on an M4 Max, f32, us per call, both with their host copies and with the
+buffer pool warm (`.todo/123-gpu-acceleration/MtlBreakdown.java`):
+
+| n | our tiled kernel | MPS |
+|---|---|---|
+| 128 | **144** | 172 |
+| 256 | **166** | 180 |
+| 384 | 201 | **198** |
+| 448 | **245** | 265 |
+| 512 | 308 | **202** |
+| 768 | 824 | **337** |
+| 1024 | 1545 | **523** |
+| 2048 | 10183 | **2264** |
+
+MPS carries ~35 us of object churn a call (a descriptor is 2.4 us, an `MPSMatrix` 0.25, an
+`MPSMatrixMultiplication` 4.0), which is why it loses below n≈448 and wins by 1.5-4.5x
+above it. The threshold sits at `2^27` (n=512), where the win is 1.5x and unambiguous.
+
+**The STACK stays on our kernel whatever its size, and the reason is the zero stride.** A
+broadcast operand -- the rank-2 weight matrix under a `(B T C)` activation, which is every
+`torch:linear` -- passes a per-batch element stride of 0, and a batched
+`MPSMatrixDescriptor` cannot be handed that. What MPS CAN serve is one encode per slab
+into one command buffer, and above `2^27` per matrix that is what `multiplyThroughMps`
+does: Metal's floor is per command buffer rather than per dispatch, so the encodes share
+the one wait, and `MPSMatrix` takes a byte offset so each slab addresses itself.
+
+**The two routes agree BIT FOR BIT**, which is what lets the choice be invisible: 0 of 703
+cells differ on a rectangular 37x23x19 product and 0 of 262144 at n=512
+(`MetalGpuTest.bothProductRoutesComputeTheSameProduct`, which flips the route with a test
+hook because MPS otherwise makes the tiled kernel unreachable above the threshold on every
+machine that has Metal). It also means `rowBytes` may be passed as `columns * 4` rather
+than through `rowBytesFromColumns:dataType:`, which PADS (80 bytes for 19 columns) and
+would not describe our contiguous row-major data.
+
+### THE AXIS FOLD IS NOT A MEMBER HERE, and that is two measurements
+
+`Gpu.fold` declines on this backend at every width and every size, and either half of the
+reason would be enough on its own.
+
+1. **`%la-fold-axis` accumulates in `double` at BOTH widths** (`JvmSimdVectorTemplate`
+   says so in as many words, and `gemm.cu`'s fold kernel mirrors it). No float accumulator
+   reproduces that, so a Metal `sum :axis` could not be bit-identical the way the
+   broadcast and the gather are -- and over a 256-long axis the divergence would be
+   ~n*eps, which is 1e-5 relative, not a last-ulp difference.
+2. **The amax/amin half, which needs no accumulator and WOULD have been exact, does not
+   pay.** Measured on an M4 Max at f32, us per call: the CPU fold is 85 over 262144
+   elements and 410 over 1048576, against this backend's ~150 and ~380 for the same
+   shapes. A tie at best, and a tie is a decline.
+
+`mean`, `var`, `std`, `linalg:softmax` and `linalg:log-softmax` therefore reach the device
+on Apple through their broadcast and element-wise links only -- and still by 1.5-2.9x, per
+the table below. `MetalGpuTest.theAxisFoldIsDeclinedAtEveryWidthAndSize` is the guard, and
+`gemm.metal` has no `fold_f32` entry point at all, so a mirror cannot silently reappear.
+
+### This backend owns a buffer pool, and the CUDA one does not
+
+`CudaGemm` allocates per call because the DRIVER has a stream-ordered pool behind
+`cuMemAllocAsync`. **Metal has none**, and the cost is not what a microbenchmark of
+`newBufferWithLength:options:` says. Measured on an M4 Max: the allocate/release pair
+itself is 1.2 us at 4 KB, 2.7 at 1 MB and 7.7 at 16 MB -- cheap -- but the pages fault in
+on the FIRST WRITE, and a whole product pays for that:
+
+| n, f32 square product | fresh buffers | pooled buffers |
+|---|---|---|
+| 128 | 186 us | **144** |
+| 256 | 303 | **166** |
+| 512 | 506 | **308** |
+| 1024 | 2496 | **1545** |
+| 2048 | 13664 | **10183** |
+
+So the buffers are size-classed by power of two (floor 4 KB), reused, and bounded by a
+quarter of `recommendedMaxWorkingSetSize`. **This is sound with no invalidation rule of
+any kind, which is what separates it from residency**: they are SCRATCH -- fully
+overwritten on the way in, fully read on the way out -- and no host array's device copy
+outlives the call. Residency, which WOULD need the invalidation rule enumerated above, is
+still not built on either backend.
+
+The leak question changes shape with it: not "is every buffer freed" but "does the pool
+reach a steady state", which `MetalGpuTest.aRunOfCallsSettlesTheBufferPoolRatherThanGrowingIt`
+asserts over 400 products after a warm-up. `freeDeviceMemory()` is
+`recommendedMaxWorkingSetSize` less `currentAllocatedSize`, since Metal reports what this
+process holds rather than what the device has left.
+
+### The three thresholds, re-derived rather than inherited
+
+Every one of them is measured against `--simd` on this machine at f32, because that is the
+column the device has to beat and the CUDA constants were derived against a different CPU
+and a five-times-lower floor.
+
+**The product: `2^22`** (a 166x166x166 product). Interpreter, us per call, warm, best of
+three:
+
+| n | `--simd` | `--gpu --simd` | |
+|---|---|---|---|
+| 48 | 16.0 | 16.0 | declined |
+| 64 | 30.0 | 33.0 | declined |
+| 96 | 85.0 | 88.5 | declined |
+| 128 | 178.0 | 183.0 | declined (`2^21`, one power under) |
+| 192 | 571.0 | **130.5** | 4.4x |
+| 256 | 1287.5 | **141.0** | 9.1x |
+| 384 | 4190.0 | **210.0** | 20x |
+| 512 | 9975.0 | **220.0** | **45x** |
+
+Read the declined rows too: the flag costs 3-5 us on a call it turns down, which is the
+`worth` check and the operand unwrap, and is the same order the CUDA half pays.
+
+**The element-wise tier: `2^17` ELEMENTS.** JVM class output, f32, us per call:
+
+| n | `exp` CPU / device | `erf` CPU / device | `sin` CPU / device |
+|---|---|---|---|
+| 16384 | **70** / 75 | **565** / 695 | **45** / 55 |
+| 65536 | **270** / 300 | 2760 / 2760 | **210** / 210 |
+| 262144 | 1095 / **200** | 9040 / **245** | 760 / **200** |
+| 1048576 | 4450 / **500** | 36650 / **650** | 3050 / **550** |
+
+(The rows at and below 65536 are the device DECLINING, so both columns are the CPU and the
+difference is the flag's own per-call cost.) At 262144 the cheapest member taken is 3.8x
+and the dearest 37x; at the threshold itself the cheapest is ~2.5x, which is where
+"unambiguous" lands with this floor.
+
+**The broadcast and the axes transpose: `2^18` OUTPUT elements.** Below it the CPU wins or
+draws: a broadcast `sub` is 455 us against ~260 at 262144 (1.75x) and 235 against ~165 at
+131072, which is inside the noise.
+
+### What it is worth, at a transformer's own shapes
+
+JVM class output, f32, us per call, `--simd` against `--gpu --simd`, at the shapes
+`train-gpt-soseki.lisp` produces at the notebook's own settings (batch 4, block 256,
+n-embd 384, 2 heads). `shaped-baseline.lisp` and `elementwise-baseline.lisp`, same file
+under each flag:
+
+| f32, us/call | `--simd` | `--gpu --simd` | |
+|---|---|---|---|
+| `erf` (4 256 1536) -- the exact `gelu` | 56700 | **950** | **60x** |
+| `exp` (4 256 256) | 752 | **152** | 4.9x |
+| `bcast sub` (4 256 256) - (4 256 1) | 475 | **155** | 3.1x |
+| `bcast div` (4 256 256) / (4 256 1) | 470 | **157** | 3.0x |
+| `bcast mul` (4 256 384) * (384) | 720 | **245** | 2.9x |
+| `bcast sub` (4 256 384) - (4 256 1) | 727 | **262** | 2.8x |
+| `softmax :axis -1` (4 256 256) | 1982 | **685** | 2.9x |
+| `log-softmax :axis -1` (4 256 256) | 1980 | **812** | 2.4x |
+| `var :axis 2` (4 256 384) | 1315 | **852** | 1.5x |
+| `amax :axis` / `sum :axis` (4 256 256) | 85 / 150 | 82 / 152 | DECLINED: not a member here |
+| `mean :axis 2` / `sum :axis 0` (4 256 384) | 260 / 225 | 265 / 242 | DECLINED: a fold |
+| `transpose '(0 2 1)` (4 256 192) | 357 | 397 | DECLINED: 196608 < `2^18` |
+| same-shape `sub` (4 256 384), `mul` (4 256 1536) | 55 / 190 | 57 / 200 | DECLINED, as on CUDA |
+
+Two things to read out of it. **`erf` is where this flag lives on Apple** -- 60x, and it is
+the exact `torch:gelu`, so a transformer's slowest single member. And **`softmax` is 2.9x
+with its `amax` and its `sum` still on the CPU**, which is what the fold's absence costs:
+on CUDA the same chain is 4.8x with every link on the device.
+
+**A declined call costs a little more here than on CUDA, and the reason is `worth`.**
+`Gpu.worthStrided` is the probe-free pre-check and answers with the CUDA constant
+(`2^15`), so between `2^15` and this backend's `2^18` an interceptor derives the broadcast
+strides or the permutation -- two `int[]` -- and then the library declines the call
+anyway. That is the band the `transpose` row above sits in, and it is what its +40 us is.
+It could be removed by letting `worth` consult the threshold IN FORCE once the probe has
+run (which on the `--gpu` path it always has), and that was weighed and not taken: it
+would make a documented, deliberately probe-free predicate answer differently depending on
+whether something else had touched the driver first, and `GpuDeclineTest` pins its answer
+against the constant on every machine. Revisit with a measurement, not with this
+paragraph.
+
+The axes transpose at the notebook's own `(4 256 192)` falls just under the threshold
+(196608 against 262144) and declines. That is the threshold doing its job -- at that size
+the margin is ~1.6x, inside what the rule this file follows calls noise -- but it is the
+one member whose Apple threshold most nearly excludes the shape it was taken for, and it
+is the first thing to re-measure if the floor ever moves.
+
+### Precision on this backend, and one bug that was fixed rather than tolerated
+
+**The strided tier is still bit-identical to the scalar defun, and here that is an
+ARGUMENT rather than an inheritance.** `gemm.cu` computes in `double` and narrows on the
+store, which is `%la-bcast-loop`'s rule; MSL has no double to do that with, so
+`gemm.metal` computes in `float` and the claim has to be earned:
+
+- `+`, `-` and `*` over two floats are EXACT in binary64, so rounding the exact result
+  once to float -- which is what a float operation does -- is exactly what
+  compute-in-double-then-narrow produces.
+- `/` is the double-rounding case and it is innocuous at these widths: binary64 carries 53
+  bits and 53 >= 2 * 24 + 2, which is the classical bound under which rounding to the
+  intermediate width and then to the target agrees with rounding once.
+- The two strict selects and the gather move values, so nothing rounds at all.
+
+`MetalGpuTest.theStridedTierIsBitIdenticalToTheScalarOracle` asserts it over inexact data
+at every op, and the interpreter's and the compiled suite's own strided tests do it
+through the language.
+
+**The element-wise tier diverges, as it does on CUDA, and by about the same amount --
+after two members were FIXED.** Measured over 262144 samples per member across each
+member's own domain, against the f64 oracle narrowed to float:
+
+| member | worst relative | member | worst relative | member | worst relative |
+|---|---|---|---|---|---|
+| `exp` | 3.2e-7 | `tan` | 3.3e-7 | `atan` | 2.2e-7 |
+| `log` | 2.3e-7 | `sin` | 1.8e-7 | `sinh` | 3.0e-7 |
+| `tanh` | 2.7e-7 | `cos` | 1.7e-7 | `cosh` | 2.8e-7 |
+| `erf` | 9.7e-7 | `asin` | 2.3e-7 | `acos` | 2.8e-7 |
+
+**`tanh` and `sinh` measured 1.8e-4 and 3.1e-4 before the fix, and THAT is the 4.87e-5 the
+spike feared** -- this file's "does not reproduce, do not quote it again" was a CUDA
+finding and does not carry here. Both of MSL's own carry an absolute error floor of
+~3.4e-8 near zero, which is what an exp-based formula cancelling looks like, and the
+relative error grows without bound as x -> 0. Both are odd with an `x + O(x^3)` expansion,
+so `gemm.metal` takes the Maclaurin series to `x^9` below |x| = 1/4 (exact to ~1e-11
+relative there) and the builtin above it, where its absolute floor is already under 1.4e-7
+relative. The other ten needed nothing.
+
+**`erf` has no builtin at all on this device** -- MSL does not define it -- so
+`gemm.metal` runs `linalg::%la-erf-1`'s OWN series (A&S 7.1.6) at float width. That makes
+the Metal `erf` CLOSER to the oracle than the CUDA one, which calls a device libm that is
+a different algorithm and lands ~4.5 ulps away at f64.
+
+**The product is the f32 story and nothing new**: 3.2e-7 relative from the f64 oracle at
+n=208, which is what f32 costs and what a CPU f32 accumulation of the same product also
+costs. `.kb/linalg-simd.md`'s single-precision reduction contract already covers it.
+
+### The JVM class carries BOTH kernel texts
+
+`JvmGpuRuntimeBuilder` embeds the Metal classes beside the CUDA ones (`GpuDevice`,
+`GpuDevice$Thresholds`, `MetalDriver`, `MetalGemm`, `MetalGemm$Probe`, `MetalGemm$Slab`)
+and the MSL text beside the PTX, and `_gpuInit` hands each to its own `Gpu.useKernels` /
+`Gpu.useMetalKernels`. **Both travel in every `--gpu` class whichever machine emitted it**,
+because the machine that compiles a program is not the machine that runs it and a
+standalone class that accelerated only on its birthplace would not be one.
+
+The cost, measured end to end: `am.ik.gpu`'s class files are 118.4 KB (from 68.7), the
+bridge 13.4, the PTX 113 and the MSL 9.4, so a `--gpu --simd` class is ~300 KB bigger than
+a `--simd` one (`shaped-baseline.lisp`: 226 KB against 530). The MSL is 3% of that and the
+PTX 38%; the rest is base64. If the blob ever has to shrink, the PTX's `sin`/`cos`/`tan`
+argument-reduction tables are still the place.
+
+### Tests, and the native image
+
+| what | where |
+|---|---|
+| needs a METAL device | `am/ik/gpu/MetalGpuTest` |
+| needs a DOUBLE-capable (CUDA) device | `am/ik/gpu/GpuTest` |
+| must hold on EVERY machine, the MSL source's own shape included | `am/ik/gpu/GpuDeclineTest` |
+| the interceptor, both backends, shapes sized off the threshold IN FORCE | `eval/LinalgGpuTest`, `codegen/jvm/JvmLinalgGpuAccelCompilerTest` |
+
+`GpuDeclineTest` asserts the checked-in MSL on every machine -- it names its four kernels,
+its op-code mirrors match `Gpu.MAP_*` / `Gpu.BIN_*`, and no `double` survives outside the
+comments -- because that text travels in a class compiled on a Linux box, and a source
+that could not compile would break only Apple users of it.
+
+**The interceptor's suites now derive their shapes and their width from the device in
+force**, through the test-scope `am.ik.gpu.GpuThresholds` shim: `SIDE` is the smallest
+accepted square (64 on CUDA, 208 on Metal), `MAP_N` twice the element threshold, and
+`TYPE` is `single-float` where the device has no double. A hard-coded 64 would have made
+every accepted-product assertion in them vacuous on the second backend. Two of them also
+stopped hard-coding a lane-kernel integer: `.kb/linalg-simd.md`'s f32 v.M probe prints
+16777216 on a GB10 and 16777728 on an M4 Max, so the fallback target is now READ from an
+unflagged run rather than written down -- and the `--blas` rung of that chain is compared
+against `--blas --simd` rather than against the lanes, because unlike `--gpu`, `--blas`
+DOES take the gemv shapes and Apple's Accelerate does not sum the way our lanes do.
+
+Native image needs two things beyond the CUDA ones, both already in
+`src/main/resources/META-INF/native-image/am.ik.rontolisp/rontolisp/`: `gemm.metal` in
+`resource-config.json` (twice, under `am.ik.gpu.MetalGemm` and under the compiler's
+condition), and 21 more `foreign.downcalls` shapes -- one per selector shape, plus the
+two-`MTLSize`-by-value entry for `dispatchThreadgroups:threadsPerThreadgroup:`. **The type
+names in that file are now the tracing agent's own** (`jlong`, `jint`, `jboolean`): the
+un-prefixed aliases parse too, but `boolean` does NOT -- `Unknown value layout: boolean` --
+so one spelling throughout is what keeps a re-run's diff empty.
 
 ## The interception layer: `--gpu` on the interpreter
 
@@ -1405,7 +1779,9 @@ says why.
 ### `-Pweb`
 
 `LinalgGpu.available` / `description` / `install` are the only entry points into
-`LinalgGpuKernels`, which holds the only reference to `am.ik.gpu` from the `eval` half.
+`LinalgGpuKernels`, which holds the only reference to `am.ik.gpu` from the `eval` half --
+so BOTH bindings, the CUDA one and the Metal one, drop out behind the same three
+substitutions.
 (`codegen.jvm` has one too since phase 2 -- `JvmGpuTemplate` -- but the web build compiles
 no `codegen.jvm` template: those classes are read as RESOURCES, never linked.) `src/web/java/.../Target_LinalgGpu.java` substitutes those three, exactly as
 `Target_LinalgBlas` does, and the whole CUDA binding drops out of the browser Web Image.
@@ -1419,7 +1795,8 @@ Pages workflow's Web Image build would notice** ([[web-playground-native-image-g
 `enableBlas` one layer up: `LinalgGpu.available()` or a `warn` carrying
 `LinalgGpu.description()`, and nothing else. **Nothing may ask `LinalgGpu.available()` on a
 path that did not pass the flag** -- it runs the probe, which is a `dlopen`, a `cuInit`, a
-retained primary context and a PTX JIT (~26 ms cold). That is the one way this flag is not
+retained primary context and a PTX JIT (~26 ms cold), or on a Mac
+`MTLCreateSystemDefaultDevice` plus an MSL compile (~15 ms warm, ~45 cold). That is the one way this flag is not
 like `--blas`, whose availability check is nearly free.
 
 ### Tests: the interceptor
@@ -1572,7 +1949,8 @@ Mirrors `--blas`'s split exactly; the interceptor's own tests are listed above.
 
 | what | where |
 |---|---|
-| needs a GPU on the machine (`@EnabledIf` on the probe) | `am/ik/gpu/GpuTest` |
+| needs a DOUBLE-capable GPU on the machine (`@EnabledIf` on the probe) | `am/ik/gpu/GpuTest` |
+| needs a METAL device | `am/ik/gpu/MetalGpuTest` |
 | must hold on EVERY machine, GPU or not | `am/ik/gpu/GpuDeclineTest` |
 
 `GpuTest` pins the checked-in PTX (it is a generated artifact with no other test of its
@@ -1615,10 +1993,13 @@ that must never regress.
 
 ## What is deliberately NOT here
 
-No residency, no Metal, no element-wise member whose scalar cost is one machine
-instruction AT AN EQUAL SHAPE, and nothing at all outside `linalg:`. Each is a measured
+No residency, no axis fold ON METAL, no element-wise member whose scalar cost is one
+machine instruction AT AN EQUAL SHAPE, and nothing at all outside `linalg:`. Each is a measured
 decline, not an omission, and each needs this file's numbers before it is revisited:
 
+- **The axis fold on METAL** is a refusal with two numbers attached (above), and the
+  amax/amin half of it is the one to revisit first if that backend's floor ever drops:
+  the sum half cannot come back at all while `%la-fold-axis` accumulates in double.
 - **Residency (todo-123's phase 3) was measured and DECLINED**, and the section above is
   the whole record: the per-op ceiling is real (2.2-6.4x at f64, 15-18x at f32) but the
   copies it would remove were 1.5% of a `--gpu --simd` training step before the strided

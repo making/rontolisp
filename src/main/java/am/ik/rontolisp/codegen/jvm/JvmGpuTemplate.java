@@ -58,6 +58,17 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * The Apple sibling of {@link #gpuKernels(String)}: the Metal Shading Language
+	 * SOURCE, which the OS compiles at run time. Both texts travel in every {@code --gpu}
+	 * class, whichever machine emitted it, because the class is standalone and the
+	 * machine that runs it is not the machine that wrote it.
+	 * @param msl the MSL text
+	 */
+	static void gpuMetalKernels(String msl) {
+		Gpu.useMetalKernels(msl);
+	}
+
+	/**
 	 * {@code (linalg:dot a b)} over two packed rank-2 operands of the same width: the
 	 * matrix-by-matrix product, and nothing else. The matrix-by-vector shapes
 	 * {@code --blas} takes are memory-bound, so a round trip cannot win them and they are

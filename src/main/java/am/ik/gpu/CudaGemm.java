@@ -53,7 +53,7 @@ import static am.ik.gpu.CudaDriver.P;
  * @see Gpu
  * @see CudaDriver
  */
-final class CudaGemm {
+final class CudaGemm implements GpuDevice {
 
 	/** The virtual architecture {@code gemm.ptx} was generated for. */
 	static final int PTX_COMPUTE_CAPABILITY = 75;
@@ -523,12 +523,14 @@ final class CudaGemm {
 	/**
 	 * What was found: the device model, its architecture and the driver's API version.
 	 */
-	String description() {
+	@Override
+	public String description() {
 		return this.description;
 	}
 
 	/** Whether the context is still usable -- see the sticky-error rule on the class. */
-	boolean usable() {
+	@Override
+	public boolean usable() {
 		return this.usable;
 	}
 
@@ -536,6 +538,33 @@ final class CudaGemm {
 	 * Whether per-call device memory comes from the driver's pool. It decides the size
 	 * threshold, because it decides the floor: 15 us a call pooled, 170 us unpooled.
 	 */
+	/**
+	 * Always {@code true}: fp64 is a tenth to a fortieth of this hardware's single-float
+	 * throughput, which is a reason to prefer {@code #f} and not a reason to decline.
+	 * Metal is the backend where the answer is {@code false}.
+	 * @return {@code true}
+	 */
+	@Override
+	public boolean supportsDouble() {
+		return true;
+	}
+
+	/**
+	 * {@link Gpu}'s own constants, in whichever of the two sets this driver's allocator
+	 * put in force -- the unpooled floor is ~180 us against ~16, so every threshold moves
+	 * with it. Read once, by the probe: {@link #setPooledAllocation} flips the path a
+	 * later call takes but not the size the feature is documented to accept.
+	 * @return the thresholds in force on this device
+	 */
+	@Override
+	public Thresholds thresholds() {
+		return this.pooled
+				? new Thresholds(Gpu.POOLED_MIN_WORK, Gpu.MAP_POOLED_MIN_ELEMENTS, Gpu.STRIDED_POOLED_MIN_ELEMENTS,
+						Gpu.FOLD_POOLED_MIN_ELEMENTS)
+				: new Thresholds(Gpu.UNPOOLED_MIN_WORK, Gpu.MAP_UNPOOLED_MIN_ELEMENTS,
+						Gpu.STRIDED_UNPOOLED_MIN_ELEMENTS, Gpu.FOLD_UNPOOLED_MIN_ELEMENTS);
+	}
+
 	boolean pooled() {
 		return this.pooled;
 	}
@@ -559,7 +588,8 @@ final class CudaGemm {
 	 * for the leak test: a run of products must not move it, because every buffer a
 	 * product allocates it also frees.
 	 */
-	long freeDeviceMemory() {
+	@Override
+	public long freeDeviceMemory() {
 		try (Arena arena = Arena.ofConfined()) {
 			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
 				return -1;
@@ -587,7 +617,8 @@ final class CudaGemm {
 	 * @return {@code true} when {@code c} was filled, {@code false} when the product
 	 * declined or the device failed -- in which case {@code c} is untouched
 	 */
-	boolean gemm(double[] a, int oa, double[] b, int ob, double[] c, int oc, int n, int m, int p) {
+	@Override
+	public boolean gemm(double[] a, int oa, double[] b, int ob, double[] c, int oc, int n, int m, int p) {
 		return gemm(a, oa, 0, b, ob, 0, c, oc, 1, n, m, p);
 	}
 
@@ -605,8 +636,9 @@ final class CudaGemm {
 	 * @return {@code true} when {@code c} was filled, {@code false} when the product
 	 * declined or the device failed -- in which case {@code c} is untouched
 	 */
-	boolean gemm(double[] a, int oa, int sa, double[] b, int ob, int sb, double[] c, int oc, int batch, int n, int m,
-			int p) {
+	@Override
+	public boolean gemm(double[] a, int oa, int sa, double[] b, int ob, int sb, double[] c, int oc, int batch, int n,
+			int m, int p) {
 		if (!this.usable) {
 			return false;
 		}
@@ -641,7 +673,8 @@ final class CudaGemm {
 	 * at, by a factor of 44 on the hardware this was measured on.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean gemmF(float[] a, int oa, float[] b, int ob, float[] c, int oc, int n, int m, int p) {
+	@Override
+	public boolean gemmF(float[] a, int oa, float[] b, int ob, float[] c, int oc, int n, int m, int p) {
 		return gemmF(a, oa, 0, b, ob, 0, c, oc, 1, n, m, p);
 	}
 
@@ -651,8 +684,9 @@ final class CudaGemm {
 	 * -- the stacked product at the width the device is actually good at.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n, int m,
-			int p) {
+	@Override
+	public boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n,
+			int m, int p) {
 		if (!this.usable) {
 			return false;
 		}
@@ -695,7 +729,8 @@ final class CudaGemm {
 	 * @return {@code true} when {@code c} was filled, {@code false} when the call
 	 * declined or the device failed -- in which case {@code c} is untouched
 	 */
-	boolean map(int op, double[] a, int oa, double[] c, int oc, int n) {
+	@Override
+	public boolean map(int op, double[] a, int oa, double[] c, int oc, int n) {
 		if (!this.usable) {
 			return false;
 		}
@@ -733,7 +768,8 @@ final class CudaGemm {
 	 * {@code .kb/gpu.md}'s precision table.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean mapF(int op, float[] a, int oa, float[] c, int oc, int n) {
+	@Override
+	public boolean mapF(int op, float[] a, int oa, float[] c, int oc, int n) {
 		if (!this.usable) {
 			return false;
 		}
@@ -777,7 +813,9 @@ final class CudaGemm {
 	 * walk at both widths -- the kernel computes in double and narrows only on the store.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean bcast(int op, double[] a, int oa, int[] sa, double[] b, int ob, int[] sb, double[] c, int oc, int[] dims) {
+	@Override
+	public boolean bcast(int op, double[] a, int oa, int[] sa, double[] b, int ob, int[] sb, double[] c, int oc,
+			int[] dims) {
 		return bcast(op, MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(b), ob, sb, MemorySegment.ofArray(c),
 				oc, dims, Double.BYTES, this.strided[BCAST_F64]);
 	}
@@ -787,7 +825,9 @@ final class CudaGemm {
 	 * {@link #bcast(int, double[], int, int[], double[], int, int[], double[], int, int[])}.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean bcastF(int op, float[] a, int oa, int[] sa, float[] b, int ob, int[] sb, float[] c, int oc, int[] dims) {
+	@Override
+	public boolean bcastF(int op, float[] a, int oa, int[] sa, float[] b, int ob, int[] sb, float[] c, int oc,
+			int[] dims) {
 		return bcast(op, MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(b), ob, sb, MemorySegment.ofArray(c),
 				oc, dims, Float.BYTES, this.strided[BCAST_F32]);
 	}
@@ -835,7 +875,8 @@ final class CudaGemm {
 	 * stride per output axis. A copy, so trivially bit-identical.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean gather(double[] a, int oa, int[] sa, double[] c, int oc, int[] dims) {
+	@Override
+	public boolean gather(double[] a, int oa, int[] sa, double[] c, int oc, int[] dims) {
 		return gather(MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(c), oc, dims, Double.BYTES,
 				this.strided[GATHER_F64]);
 	}
@@ -845,7 +886,8 @@ final class CudaGemm {
 	 * {@link #gather(double[], int, int[], double[], int, int[])}.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean gatherF(float[] a, int oa, int[] sa, float[] c, int oc, int[] dims) {
+	@Override
+	public boolean gatherF(float[] a, int oa, int[] sa, float[] c, int oc, int[] dims) {
 		return gather(MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(c), oc, dims, Float.BYTES,
 				this.strided[GATHER_F32]);
 	}
@@ -889,7 +931,8 @@ final class CudaGemm {
 	 * sum.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean fold(int op, double[] a, int oa, double[] c, int oc, int outer, int len, int inner) {
+	@Override
+	public boolean fold(int op, double[] a, int oa, double[] c, int oc, int outer, int len, int inner) {
 		return fold(op, MemorySegment.ofArray(a), oa, MemorySegment.ofArray(c), oc, outer, len, inner, Double.BYTES,
 				this.strided[FOLD_F64]);
 	}
@@ -899,7 +942,8 @@ final class CudaGemm {
 	 * {@link #fold(int, double[], int, double[], int, int, int, int)}.
 	 * @return {@code true} when {@code c} was filled
 	 */
-	boolean foldF(int op, float[] a, int oa, float[] c, int oc, int outer, int len, int inner) {
+	@Override
+	public boolean foldF(int op, float[] a, int oa, float[] c, int oc, int outer, int len, int inner) {
 		return fold(op, MemorySegment.ofArray(a), oa, MemorySegment.ofArray(c), oc, outer, len, inner, Float.BYTES,
 				this.strided[FOLD_F32]);
 	}

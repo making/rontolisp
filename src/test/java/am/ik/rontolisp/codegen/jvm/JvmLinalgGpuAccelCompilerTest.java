@@ -50,6 +50,30 @@ class JvmLinalgGpuAccelCompilerTest {
 		return LinalgGpu.available() && LinalgBlas.available();
 	}
 
+	/**
+	 * Whether this machine's device has a {@code double}. It does on CUDA and does not on
+	 * Metal, so every assertion below that needs the device to ACCEPT is written at
+	 * {@link #TYPE}; the ones that need it to DECLINE hold at either width.
+	 */
+	private static final boolean DOUBLES = am.ik.gpu.GpuThresholds.supportsDouble();
+
+	/** The element type an ACCEPTED call has to be written at on this machine. */
+	private static final String TYPE = DOUBLES ? "" : " :element-type 'single-float";
+
+	/** Comfortably above the element-wise threshold in force: 32768 or 262144. */
+	private static final int MAP_N = (int) am.ik.gpu.GpuThresholds.mapMinElements() * 2;
+
+	/**
+	 * The side of the smallest square product this machine accepts, with a safety factor.
+	 * 64 on CUDA and 208 on Metal, whose floor is five times higher.
+	 */
+	private static final int SIDE = squareSide();
+
+	private static int squareSide() {
+		int n = (int) Math.ceil(Math.cbrt((double) am.ik.gpu.GpuThresholds.minWork()));
+		return Math.max(64, (n + n / 4 + 15) / 16 * 16);
+	}
+
 	@TempDir
 	Path tempDir;
 
@@ -189,6 +213,13 @@ class JvmLinalgGpuAccelCompilerTest {
 			.contains(".visible .entry gather_f32")
 			.contains(".visible .entry fold_f64")
 			.contains(".visible .entry fold_f32");
+		// ... and the MSL beside it, for the same reason and one more: the machine that
+		// COMPILES a program is not the machine that runs it, so both texts travel in
+		// every --gpu class and a Linux build has to carry the Apple half too.
+		assertThat(bytes).contains("kernel void gemm_batched_f32")
+			.contains("kernel void map_f32")
+			.contains("kernel void bcast_f32")
+			.contains("kernel void gather_f32");
 	}
 
 	@Test
@@ -470,10 +501,11 @@ class JvmLinalgGpuAccelCompilerTest {
 				{ "sinh", "-5.0", "5.0" }, { "cosh", "-5.0", "5.0" }, { "erf", "-3.0", "3.0" } };
 		for (String[] member : members) {
 			String program = """
-					(defparameter *a* (linalg:linspace %s %s 20000%s))
+					(defparameter *a* (linalg:linspace %s %s %d%s))
 					(print (linalg:sum (linalg:abs (linalg:%s *a*))))
-					""";
-			for (String width : new String[] { "", " :element-type 'single-float" }) {
+					""".replace("%d", Integer.toString(MAP_N));
+			for (String width : DOUBLES ? new String[] { "", " :element-type 'single-float" }
+					: new String[] { " :element-type 'single-float" }) {
 				String source = program.formatted(member[1], member[2], width, member[0]);
 				double accelerated = Double.parseDouble(accel(source));
 				double reference = Double.parseDouble(scalar(source));
@@ -486,13 +518,13 @@ class JvmLinalgGpuAccelCompilerTest {
 	@Test
 	@EnabledIf("aDeviceIsAvailable")
 	void anAcceleratedElementWiseCallReallyRanOnTheDevice() {
-		// The guard on the tolerance above: over 20000 inexact elements the device and
-		// the CPU cannot land on the same bits everywhere, so a dead interception would
-		// show here and only here.
+		// The guard on the tolerance above: over an array the device accepts, it and the
+		// CPU cannot land on the same bits everywhere, so a dead interception would show
+		// here and only here.
 		String program = """
-				(defparameter *a* (linalg:linspace -5.0 5.0 20000))
+				(defparameter *a* (linalg:linspace -5.0 5.0 %d%s))
 				(print (linalg:to-list (linalg:erf *a*)))
-				""";
+				""".formatted(MAP_N, TYPE);
 		assertThatCode(() -> assertThat(accel(program)).isNotEqualTo(scalar(program))).doesNotThrowAnyException();
 	}
 
@@ -521,15 +553,20 @@ class JvmLinalgGpuAccelCompilerTest {
 		// be a tautology (.kb/gpu.md). From n=192 the library blocks its k loop and the
 		// two separate, so "--gpu --blas answers what --gpu answers, not what --blas
 		// does" is a real assertion about which one ran.
+		int n = Math.max(192, SIDE);
 		String inexact = """
-				(defparameter *a* (linalg:reshape (linalg:emap #'sin (linalg:arange 0 36864)) '(192 192)))
-				(defparameter *b* (linalg:reshape (linalg:emap #'cos (linalg:arange 0 36864)) '(192 192)))
+				(defparameter *a* (linalg:reshape (linalg:emap #'sin (linalg:arange 0 %d%s)) '(%d %d)))
+				(defparameter *b* (linalg:reshape (linalg:emap #'cos (linalg:arange 0 %d%s)) '(%d %d)))
 				(defparameter *c* (linalg:matmul *a* *b*))
 				(print (aref *c* 5 7))
-				""";
+				""".formatted(n * n, TYPE, n, n, n * n, TYPE, n, n);
 		String device = run(compile(inexact, true, false, false));
 		String library = run(compile(inexact, false, true, false));
-		assertThat(device).isNotEqualTo(library);
+		// A tolerance-free order pin needs the two to round differently, and whether they
+		// do is the machine's answer: on some pairings a tuned library and the device
+		// agree bit for bit at this size, and then the assertion below would be a
+		// tautology rather than a statement about which one ran.
+		assumeTrue(!device.equals(library), "the library and the device round differently here");
 		assertThat(run(compile(inexact, true, true, false))).isEqualTo(device);
 		assertThat(run(compile(inexact, true, true, true))).isEqualTo(device);
 	}

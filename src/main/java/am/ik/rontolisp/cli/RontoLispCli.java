@@ -412,11 +412,12 @@ public final class RontoLispCli {
 	}
 
 	// --gpu routes the linalg: matrix product and the element-wise transcendentals to an
-	// NVIDIA GPU. Like --blas the answer is
+	// NVIDIA GPU, or on a Mac to Apple Silicon through Metal. Like --blas the answer is
 	// a property of the machine rather than of the build, so a decline is an ordinary
 	// outcome; unlike --blas the probe itself costs something (a dlopen, a cuInit, a
-	// retained primary context and a PTX JIT), which is why nothing asks unless the flag
-	// was given (.kb/gpu.md).
+	// retained primary context and a PTX JIT -- on Apple, MTLCreateSystemDefaultDevice
+	// and an MSL compile), which is why nothing asks unless the flag was given
+	// (.kb/gpu.md).
 	private static void enableGpu(LispEvaluator evaluator) {
 		if (LinalgGpu.available()) {
 			evaluator.setGpu(true);
@@ -523,9 +524,9 @@ public final class RontoLispCli {
 					+ " a tuned CBLAS is called through the foreign function API, which WASM does not have."
 					+ " Use --simd for the linalg: kernels on a .wasm output");
 		}
-		// --gpu is the same story one layer out: the CUDA driver is reached through the
-		// foreign function API, so WASM cannot have it, and a silent no-op is exactly
-		// what the flag exists to prevent.
+		// --gpu is the same story one layer out: the CUDA driver and Metal are both
+		// reached through the foreign function API, so WASM cannot have either, and a
+		// silent no-op is exactly what the flag exists to prevent.
 		if (gpu && !outputFile.endsWith(".class")) {
 			throw new UnsupportedOperationException("--gpu reaches the interpreter and the JVM class output only:"
 					+ " a GPU is driven through the foreign function API, which WASM does not have."
@@ -1162,7 +1163,7 @@ public final class RontoLispCli {
 		this.out.println("                     bit-identical to the other backends. RONTOLISP_BLAS names a");
 		this.out.println("                     library outright; RONTOLISP_BLAS_VERBOSE=1 prints what was bound.");
 		this.out.println("  --gpu              Route the linalg: matrix product and the transcendentals to");
-		this.out.println("                     an NVIDIA GPU");
+		this.out.println("                     an NVIDIA GPU, or to Apple Silicon through Metal");
 		this.out.println("                     Both product shapes: the rank-2 one and the stacked rank >= 3");
 		this.out.println("                     one (torch.bmm), which is a transformer's whole hot path; plus");
 		this.out.println("                     the element-wise exp/log/tanh/sin/cos/tan/asin/acos/atan/");
@@ -1170,20 +1171,26 @@ public final class RontoLispCli {
 		this.out.println("                     on the CPU: they are one instruction per element and a round");
 		this.out.println("                     trip cannot pay for them.");
 		this.out.println("                     Interpreter (incl. the native binary) and JVM (.class) only --");
-		this.out.println("                     the CUDA driver is reached through the foreign function API,");
-		this.out.println("                     which WASM does not have. A compiled .class carries the whole");
-		this.out.println("                     binding and still runs with a plain `java Prog` (add");
-		this.out.println("                     --enable-native-access=ALL-UNNAMED to silence the JVM warning).");
-		this.out.println("                     Needs libcuda.so.1 (the driver) and nothing else:");
-		this.out.println("                     no CUDA toolkit. A machine without a device runs the same");
-		this.out.println("                     programs, unaccelerated. Only products above ~51x51x51 are");
-		this.out.println("                     offered -- for a rank >= 3 stack that bound is on the TOTAL");
-		this.out.println("                     work, since the whole stack is one round trip -- and only");
-		this.out.println("                     element-wise calls over 16384 elements; everything smaller");
-		this.out.println("                     stays on the CPU. THE ONLY FLAG WHOSE RESULTS DO NOT MATCH THE");
-		this.out.println("                     OTHER BACKENDS ELEMENTWISE: the product fuses each multiply-add");
-		this.out.println("                     and the device has its own libm, so an accelerated exp/erf/...");
-		this.out.println("                     differs in the last few digits (and more at single float).");
+		this.out.println("                     the device is reached through the foreign function API, which");
+		this.out.println("                     WASM does not have. A compiled .class carries the whole");
+		this.out.println("                     binding for BOTH platforms and still runs with a plain");
+		this.out.println("                     `java Prog` (add --enable-native-access=ALL-UNNAMED to silence");
+		this.out.println("                     the JVM warning).");
+		this.out.println("                     Needs libcuda.so.1 (the NVIDIA driver) and nothing else, or on");
+		this.out.println("                     a Mac nothing at all: no CUDA toolkit, no Xcode. A machine");
+		this.out.println("                     without a device runs the same programs, unaccelerated.");
+		this.out.println("                     ON APPLE SILICON THE FLAG IS SINGLE-FLOAT ONLY: Metal has no");
+		this.out.println("                     double, so a #d array always stays on the CPU -- use #f arrays");
+		this.out.println("                     (torch: already defaults to them). Its floor is five times");
+		this.out.println("                     CUDA's, so it accepts from ~166x166x166 rather than ~51 cubed,");
+		this.out.println("                     from 131072 element-wise rather than 16384, and it declines");
+		this.out.println("                     the axis folds outright; the CUDA thresholds and member set");
+		this.out.println("                     are unchanged. For a rank >= 3 stack the product bound is on");
+		this.out.println("                     the TOTAL work, since the whole stack is one round trip.");
+		this.out.println("                     THE ONLY FLAG WHOSE RESULTS DO NOT MATCH THE OTHER BACKENDS");
+		this.out.println("                     ELEMENTWISE: the product fuses each multiply-add and the device");
+		this.out.println("                     has its own libm, so an accelerated exp/erf/... differs in the");
+		this.out.println("                     last few digits (and more at single float).");
 		this.out.println("  --no-prune         Keep every spliced library function in the compiled output");
 		this.out.println("                     By default unreachable library definitions (linalg:/vec:/...)");
 		this.out.println("                     are dropped at compile time; names forged at runtime from");

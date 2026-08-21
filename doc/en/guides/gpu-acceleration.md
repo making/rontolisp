@@ -1,6 +1,6 @@
 # GPU Acceleration (`--gpu`)
 
-`--gpu` routes [`linalg`](linear-algebra.md)'s matrix product, its element-wise transcendentals and its broadcast / axis-fold / axes-transpose shapes to an NVIDIA device, driven straight through the CUDA driver. It is one of three orthogonal acceleration flags: [`--simd`](simd-acceleration.md) lowers the vectorizable `vec:` and `linalg:` kernels to CPU vector instructions, [`--blas`](blas-acceleration.md) replaces the matrix product with a tuned library call, and `--gpu` moves the work off the CPU entirely. Any combination of the three, or none -- [How the three flags compose](#how-the-three-flags-compose) covers what happens when more than one is on.
+`--gpu` routes [`linalg`](linear-algebra.md)'s matrix product, its element-wise transcendentals and its broadcast / axis-fold / axes-transpose shapes to a GPU: an NVIDIA device driven straight through the CUDA driver, or a Mac's own through Metal. It is one of three orthogonal acceleration flags: [`--simd`](simd-acceleration.md) lowers the vectorizable `vec:` and `linalg:` kernels to CPU vector instructions, [`--blas`](blas-acceleration.md) replaces the matrix product with a tuned library call, and `--gpu` moves the work off the CPU entirely. Any combination of the three, or none -- [How the three flags compose](#how-the-three-flags-compose) covers what happens when more than one is on.
 
 [`--blas`](blas-acceleration.md) puts the matrix product on the fastest thing the CPU has. `--gpu` puts it on a different machine altogether.
 
@@ -10,7 +10,9 @@ rontolisp prog.lisp -o Prog.class --gpu   # JVM class output
 rontolisp prog.lisp --simd --blas --gpu   # all three, chained; the device is asked first
 ```
 
-**A GPU is recommended, never required**, exactly as a tuned BLAS is. Nothing is bundled and nothing is downloaded, and there is no CUDA toolkit to install: `libcuda.so.1`, which ships with the NVIDIA driver, is the entire runtime requirement, and the kernels travel inside rontolisp as a text that the driver compiles for whatever card it finds. A machine with no device, no driver, or a card older than Turing (compute capability 7.5) runs the same programs to the same output, only slower, and the interpreter says so on standard error rather than failing.
+**A GPU is recommended, never required**, exactly as a tuned BLAS is. Nothing is bundled and nothing is downloaded, and there is no CUDA toolkit to install: `libcuda.so.1`, which ships with the NVIDIA driver, is the entire runtime requirement, and the kernels travel inside rontolisp as a text that the driver compiles for whatever card it finds. On a Mac there is nothing to install at all -- the frameworks and the shader compiler are part of macOS. A machine with no device, no driver, or a card older than Turing (compute capability 7.5) runs the same programs to the same output, only slower, and the interpreter says so on standard error rather than failing.
+
+Everything in the next section is written for an NVIDIA card; [On Apple Silicon](#on-apple-silicon) is where the same flag differs, and the differences are large enough to plan around.
 
 ## What is accelerated, and what declines
 
@@ -26,6 +28,44 @@ Everything else declines and runs exactly what it ran before -- the tuned librar
 
 It also includes **everything small**, and there are two thresholds because there are two kinds of work. A round trip to a device costs about 15 microseconds however little data rides on it, so a product below roughly 51x51x51 (`n * m * p` under 131072) declines and stays on the CPU; for a stack the same threshold applies to the TOTAL work, `batch * n * m * p`, because the round trip is paid once for the whole stack rather than once per matrix. An element-wise call is measured in **elements** instead -- one library call each -- and declines below **16384** of them; a broadcast or an axes transpose declines below **32768** result elements, and an axis fold below **131072** input elements or 256 output slices (a fold with one output slice is a single-threaded loop on a device, and loses to any CPU). Every threshold is one more decline rather than a mechanism of its own, which is why every example in this repository, all of which run shapes far below them, prints byte-identical output with the flag and without it.
 
+## On Apple Silicon
+
+The flag is the same flag and the programs are the same programs. What differs is which calls the device accepts.
+
+**It is single-float only.** Metal's shading language has no `double` at all, so a double-float array -- which is what `linalg` builds by default -- always stays on the CPU. `torch:` builds single-float tensors by default and needs nothing; a `linalg` program has to ask, with `:element-type 'single-float` or the `#f` reader syntax. Without that the flag is inert on a Mac, and it says nothing about it, because a decline is an ordinary outcome rather than an error.
+
+**Everything small stays on the CPU for longer.** A round trip costs about 77 microseconds here against about 16 on an NVIDIA card, because on Metal that cost is paid once per command buffer rather than per launch. The thresholds move up with it: a product is offered from about 166x166x166 (`n * m * p` at 4194304) rather than 51 cubed, an element-wise call from 131072 elements rather than 16384, and a broadcast or an axes transpose from 262144 result elements rather than 32768.
+
+**The axis folds are not members at all here.** `sum`, `amax` and `amin` in their `:axis` form stay on the CPU at every size, for two independent reasons: the portable definition accumulates them in double, which no single-float kernel can reproduce bit for bit, and the half that would not have needed to -- `amax` and `amin`, which only compare -- measures a tie against the CPU rather than a win. `mean`, `var`, `std`, `linalg:softmax` and `linalg:log-softmax` still reach the device through their other links.
+
+Everything else is the same member set: both product shapes, the twelve transcendentals, and the broadcast binary ops and the axes transpose. A rank-2 product above about 512x512x512 is handed to MetalPerformanceShaders, which is in the OS and is one and a half to four times faster than a hand-written kernel at those sizes; below that, and for every stacked product, the kernel rontolisp carries runs it. The two agree bit for bit, so which one ran is not observable in the results.
+
+What it is worth, single-float, at a transformer's own shapes on an Apple M4 Max -- microseconds per call on the JVM class output, best of three timed rounds:
+
+| single-float, per call | `--simd` | `--gpu --simd` |
+|---|---|---|
+| `erf`, (4 256 1536) -- the exact `gelu` | 56700 | 950 |
+| `exp`, (4 256 256) | 752 | 152 |
+| `sub`, (4 256 256) against (4 256 1) | 475 | 155 |
+| `mul`, (4 256 384) against (384) | 720 | 245 |
+| `softmax :axis -1`, (4 256 256) | 1982 | 685 |
+| `sum :axis 0`, (4 256 384) | 225 | 242 |
+| `transpose '(0 2 1)`, (4 256 192) | 357 | 397 |
+
+The last two rows are declines: an axis fold is never offered here, and that transpose is 196608 elements, just under the threshold. A declined call costs a little more than it does without the flag -- a few microseconds for the size check, and for a shape between the two thresholds the work of describing it as well, which is the 40 microseconds on the transpose row.
+
+And one `n x n` `linalg:matmul` on the interpreter, single-float, microseconds per call, warm:
+
+| n x n | `--simd` | `--gpu --simd` |
+|---|---|---|
+| 128 | 178 | 183 |
+| 192 | 571 | 130 |
+| 256 | 1287 | 141 |
+| 384 | 4190 | 210 |
+| 512 | 9975 | 220 |
+
+n=128 is below the threshold and declines. From n=192 the device is four times the CPU, and by n=512 it is forty-five. Your machine, and the shapes your program actually runs, will differ; measure.
+
 ## How the three flags compose
 
 Each flag adds one attempt in front of the others, and every attempt that declines hands the same arguments to the next:
@@ -40,9 +80,9 @@ Each flag adds one attempt in front of the others, and every attempt that declin
 
 ## Reach and precision
 
-`--gpu` reaches the **interpreter** (including the native binary) and the **JVM class output**. The CUDA driver is called through the foreign function API, which WASM does not have, so `--gpu` with a `.wasm` output is an error rather than a silent no-op; a WASM program has `--simd`.
+`--gpu` reaches the **interpreter** (including the native binary) and the **JVM class output**. The device is called through the foreign function API, which WASM does not have, so `--gpu` with a `.wasm` output is an error rather than a silent no-op; a WASM program has `--simd`.
 
-A class compiled with `--gpu` is still standalone -- the whole CUDA binding travels inside it, so there is nothing to put on the classpath and `java Prog` is the whole command. It does call a restricted method, so run it as `java --enable-native-access=ALL-UNNAMED Prog` to keep the JVM's warning off standard error. In the native **binary** each device call currently costs 20 to 50 times more than on the JVM (one n=512 double-float product measured 17.4 ms against 0.74), enough that on that build `--gpu --blas` is slower than `--blas` alone at every size measured; `--gpu` still beats `--simd` there by more than 2x, and the portable definition by four orders of magnitude. Compiling the program to a class is the way around that cost -- the class the native binary emits is the one `java -jar` emits, and it runs at the speeds in the second table below.
+A class compiled with `--gpu` is still standalone -- both bindings travel inside it, whichever kind of machine compiled it, so there is nothing to put on the classpath and `java Prog` is the whole command on either kind of machine. It does call a restricted method, so run it as `java --enable-native-access=ALL-UNNAMED Prog` to keep the JVM's warning off standard error. In the native **binary** each device call currently costs 20 to 50 times more than on the JVM (one n=512 double-float product measured 17.4 ms against 0.74), enough that on that build `--gpu --blas` is slower than `--blas` alone at every size measured; `--gpu` still beats `--simd` there by more than 2x, and the portable definition by four orders of magnitude. Compiling the program to a class is the way around that cost -- the class the native binary emits is the one `java -jar` emits, and it runs at the speeds in the second table below.
 
 **`--gpu` is the first flag whose results you should not expect to match the other backends digit for digit.** Two separate reasons, and the second is the new one:
 
@@ -51,7 +91,7 @@ A class compiled with `--gpu` is still standalone -- the whole CUDA binding trav
 
 - The **broadcast**, **axis fold** and **axes transpose** members are the exception: they stay byte-for-byte identical to the portable definition at both widths. Their kernels read every element widened to double, compute in double and narrow only on the store, which is the portable definition's own rule, and there is no library function anywhere in them for two implementations to disagree about. A program whose accelerated calls are only those prints exactly what it prints without the flag.
 
-So a program that sums a million accelerated `erf` values will print a slightly different number with the flag on -- and a training run will diverge from the CPU one after enough steps, exactly as it would between two GPUs. The portable definition remains the cross-backend oracle, and `--gpu` is deliberately absent from the cross-backend test suite. If you need identity, do not pass the flag; if you want to check that a program is unchanged in every other respect, run it with `CUDA_VISIBLE_DEVICES=` set, which makes every device call decline and the output byte-identical.
+So a program that sums a million accelerated `erf` values will print a slightly different number with the flag on -- and a training run will diverge from the CPU one after enough steps, exactly as it would between two GPUs. The portable definition remains the cross-backend oracle, and `--gpu` is deliberately absent from the cross-backend test suite. If you need identity, do not pass the flag; if you want to check that a program is unchanged in every other respect, run it with `CUDA_VISIBLE_DEVICES=` set, which makes every device call decline and the output byte-identical. On a Mac, running without the flag is the same check, since there is no environment variable that hides the GPU.
 
 ## What it is worth
 

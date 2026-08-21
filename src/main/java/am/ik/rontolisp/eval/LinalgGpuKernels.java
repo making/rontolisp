@@ -76,7 +76,7 @@ final class LinalgGpuKernels {
 			return Gpu.description();
 		}
 		catch (Throwable ex) {
-			return "the CUDA driver could not be probed: " + ex;
+			return "no GPU could be probed: " + ex;
 		}
 	}
 

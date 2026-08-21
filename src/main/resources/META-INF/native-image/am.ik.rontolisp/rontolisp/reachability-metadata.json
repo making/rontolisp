@@ -1,6 +1,6 @@
 {
   "comment": [
-    "Foreign downcalls, for the two accelerations that have them. Native Image needs every",
+    "Foreign downcalls, for the accelerations that have them. Native Image needs every",
     "downcall stub registered ahead of time: without these the binary binds the library, then",
     "throws MissingForeignRegistrationError on the first call and declines to the",
     "unaccelerated kernel -- correct output, silently no acceleration. A downcall entry takes",
@@ -33,99 +33,192 @@
     "Both copies are critical: they take a heap segment, so an operand never needs a staging",
     "copy, and one too big for a single critical window is split rather than staged.",
     "Regenerate with the tracing agent over a program that opens the binding and runs a",
-    "product -- the agent traces Linker.downcallHandle, so constructing CudaDriver is enough."
+    "product -- the agent traces Linker.downcallHandle, so constructing CudaDriver or",
+    "MetalDriver is enough. The type names are the agent's own (jlong, jint, jboolean);",
+    "the un-prefixed aliases parse too, but keeping one spelling keeps a re-run's diff empty.",
+    "",
+    "The LAST 21 are Metal (.kb/gpu.md's phase 5), and all but one of them are objc_msgSend:",
+    "one entry per selector SHAPE, since Apple's arm64 rule is that objc_msgSend must be",
+    "called through a prototype matching the selector rather than as the variadic it is",
+    "declared as. The two-MTLSize-by-value entry is dispatchThreadgroups:threadsPerThreadgroup:,",
+    "the widest one is MPSMatrixMultiplication's initWithDevice:..., and the empty one is",
+    "MTLCreateSystemDefaultDevice, the only C function in the whole binding."
   ],
   "foreign": {
     "downcalls": [
       {
         "returnType": "void",
-        "parameterTypes": ["int", "int", "int", "int", "int", "int", "double", "void*", "int", "void*", "int", "double", "void*", "int"],
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"],
         "options": { "critical": { "allowHeapAccess": true } }
       },
       {
         "returnType": "void",
-        "parameterTypes": ["int", "int", "int", "int", "int", "int", "double", "void*", "int", "void*", "int", "double", "void*", "int"]
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"]
       },
       {
         "returnType": "void",
-        "parameterTypes": ["int", "int", "int", "int", "int", "int", "float", "void*", "int", "void*", "int", "float", "void*", "int"],
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"],
         "options": { "critical": { "allowHeapAccess": true } }
       },
       {
         "returnType": "void",
-        "parameterTypes": ["int", "int", "int", "int", "int", "int", "float", "void*", "int", "void*", "int", "float", "void*", "int"]
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"]
       },
       {
         "returnType": "void",
-        "parameterTypes": ["int", "int", "int", "int", "double", "void*", "int", "void*", "int", "double", "void*", "int"],
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"],
         "options": { "critical": { "allowHeapAccess": true } }
       },
       {
         "returnType": "void",
-        "parameterTypes": ["int", "int", "int", "int", "float", "void*", "int", "void*", "int", "float", "void*", "int"],
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"],
         "options": { "critical": { "allowHeapAccess": true } }
       },
       {
-        "returnType": "int",
+        "returnType": "jint",
         "parameterTypes": []
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["int"]
+        "returnType": "jint",
+        "parameterTypes": ["jint"]
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["long"]
+        "returnType": "jint",
+        "parameterTypes": ["jlong"]
       },
       {
-        "returnType": "int",
+        "returnType": "jint",
         "parameterTypes": ["void*"]
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["void*", "int"]
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint"]
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["int", "void*"]
+        "returnType": "jint",
+        "parameterTypes": ["jint", "void*"]
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["void*", "long"]
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong"]
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["long", "void*"]
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*"]
       },
       {
-        "returnType": "int",
+        "returnType": "jint",
         "parameterTypes": ["void*", "void*"]
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["void*", "int", "int"]
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint"]
       },
       {
-        "returnType": "int",
+        "returnType": "jint",
         "parameterTypes": ["void*", "void*", "void*"]
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["void*", "long", "void*"]
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "void*"]
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["long", "void*", "long"],
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*", "jlong"],
         "options": { "critical": { "allowHeapAccess": true } }
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["void*", "long", "long"],
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jlong"],
         "options": { "critical": { "allowHeapAccess": true } }
       },
       {
-        "returnType": "int",
-        "parameterTypes": ["void*", "int", "int", "int", "int", "int", "int", "int", "void*", "void*", "void*"]
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint", "jint", "jint", "jint", "jint", "jint", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "struct(jlong,jlong,jlong)", "struct(jlong,jlong,jlong)"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong", "jint"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jboolean", "jboolean", "jlong", "jlong", "jlong", "jdouble", "jdouble"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*"]
       }
     ]
   }

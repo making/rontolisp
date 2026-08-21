@@ -1,6 +1,6 @@
 # Tuned BLAS Acceleration (`--blas`)
 
-`--blas` routes [`linalg`](linear-algebra.md)'s matrix product to a tuned BLAS out of the operating system. It is one of three orthogonal acceleration flags: [`--simd`](simd-acceleration.md) lowers the vectorizable `vec:` and `linalg:` kernels to CPU vector instructions, `--blas` replaces the matrix product with a library call, and [`--gpu`](gpu-acceleration.md) puts that product and the element-wise transcendentals on an NVIDIA device. Any combination of the three, or none.
+`--blas` routes [`linalg`](linear-algebra.md)'s matrix product to a tuned BLAS out of the operating system. It is one of three orthogonal acceleration flags: [`--simd`](simd-acceleration.md) lowers the vectorizable `vec:` and `linalg:` kernels to CPU vector instructions, `--blas` replaces the matrix product with a library call, and [`--gpu`](gpu-acceleration.md) puts that product and the element-wise transcendentals on a GPU. Any combination of the three, or none.
 
 `--simd` gives the matrix product a hand-written lane kernel. Every desktop and server operating system can do far better than that, because a **tuned BLAS** -- a library whose matrix multiply is blocked for the machine's cache hierarchy and written against its matrix instructions -- is either already in the OS or one package away. `--blas` finds one and routes `linalg`'s matrix product to it.
 

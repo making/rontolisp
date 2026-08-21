@@ -57,6 +57,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.gpu.MetalGemm"
+        },
+        "pattern": "am/ik/gpu/gemm\\.metal"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
         },
         "pattern": "am/ik/rontolisp/codegen/jvm/JvmGpuTemplate\\.class"
@@ -72,6 +78,12 @@
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
         },
         "pattern": "am/ik/gpu/gemm\\.ptx"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/gpu/gemm\\.metal"
       },
       {
         "condition": {
