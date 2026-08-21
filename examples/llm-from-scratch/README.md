@@ -107,7 +107,7 @@ MLP. See
 ## `--gpu`
 
 The same batched product is what
-[`--gpu`](../../doc/en/guides/simd-acceleration.md#accelerating-the-matrix-product-and-the-transcendentals-on-a-gpu---gpu)
+[`--gpu`](../../doc/en/guides/gpu-acceleration.md)
 routes to an NVIDIA device, along with the element-wise transcendentals
 (`exp`, `tanh`, `erf` and nine more) that `gelu`, `softmax` and `log-softmax`
 are built from, and -- since 2026-08-21 -- the broadcast `sub` / `div` / `mul`,

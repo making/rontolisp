@@ -17,8 +17,8 @@ them and goes AHEAD of this one, so the device is asked first and declines here:
 WASM has no FFM, so `--blas` with a `.wasm` output is a hard error rather than a silent
 no-op (`RontoLispCli.compileRecorded`). The two WASM backends keep `--simd`.
 
-The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md` ("Accelerating
-the matrix product with a tuned BLAS"). Keep the intercepted set, the install
+The user-facing description lives in `doc/{en,ja}/guides/blas-acceleration.md` (its own
+page, split out of the `--simd` guide). Keep the intercepted set, the install
 recommendation, the thread note and the precision contract in sync with it.
 
 ## The decision this item is built on

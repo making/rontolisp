@@ -56,6 +56,10 @@ sections:
         title: ベクトルと行列（linalg）
       - file: guides/simd-acceleration.md
         title: ベクトルカーネルと SIMD（vec, linalg）
+      - file: guides/blas-acceleration.md
+        title: チューニング済み BLAS による高速化（--blas）
+      - file: guides/gpu-acceleration.md
+        title: GPU による高速化（--gpu）
       - file: guides/neural-networks.md
         title: ニューラルネットワーク（torch）
       - file: guides/java-interop.md

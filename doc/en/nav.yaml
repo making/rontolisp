@@ -56,6 +56,10 @@ sections:
         title: Vectors & Matrices (linalg)
       - file: guides/simd-acceleration.md
         title: Vector Kernels & SIMD (vec, linalg)
+      - file: guides/blas-acceleration.md
+        title: Tuned BLAS Acceleration (--blas)
+      - file: guides/gpu-acceleration.md
+        title: GPU Acceleration (--gpu)
       - file: guides/neural-networks.md
         title: Neural Networks (torch)
       - file: guides/java-interop.md

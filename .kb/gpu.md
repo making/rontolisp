@@ -498,8 +498,8 @@ the `--blas` guard, and the reason it gives is its own): silently running unacce
 exactly what an acceleration flag exists to make visible. The `.class` arm of that guard
 was phase 1's placeholder and phase 2 deleted it.
 
-The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md`
-("Accelerating the matrix product and the transcendentals on a GPU (`--gpu`)"). Keep the
+The user-facing description lives in `doc/{en,ja}/guides/gpu-acceleration.md` (its own
+page, split out of the `--simd` guide). Keep the
 intercepted set, the size threshold, the chain order and the precision contract in sync
 with it.
 

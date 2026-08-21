@@ -13,8 +13,9 @@ level down: a shape the acceleration seam does not reach.
 this project ships is touched by it**: `simd-dot`, `simd-gemv`, `tiny-llm` and `llama2`
 are all `vec:` programs, and an LLM decode is GEMV from end to end -- one weight matrix
 times one activation vector, over and over. The documentation now says so in as many words
-(`doc/{en,ja}/guides/simd-acceleration.md`, "Runnable examples"), which is an honest
-statement of a gap rather than a design.
+(`doc/{en,ja}/guides/simd-acceleration.md`, "Runnable examples"; the `--blas` half moved
+to `doc/{en,ja}/guides/blas-acceleration.md`), which is an honest statement of a gap
+rather than a design.
 
 `cblas_?gemv` is the same C ABI, the same two downcall handles, and the same heap-segment
 critical call the matrix product already uses. Measured on an Apple M4 Max against the
@@ -90,9 +91,10 @@ item.
 - Tests in the shape of `LinalgBlasTest` / `LinalgBlasDeclineTest`: `@EnabledIf` on
   `LinalgBlas.available()` for the accelerated half, unconditional for the declined half,
   and a dead-flag guard that fails if the interception never fires.
-- Docs: delete the "The `vec:` examples below are not affected by `--blas` at all" sentence
-  from `doc/{en,ja}/guides/simd-acceleration.md`, extend that guide's `--blas` section from
-  "the matrix product and nothing else" to name the GEMV, and re-measure the header tables
+- Docs: drop the "The `vec:` examples here are untouched by `--blas` and `--gpu` alike"
+  sentence from `doc/{en,ja}/guides/simd-acceleration.md`, extend
+  `doc/{en,ja}/guides/blas-acceleration.md` from "the matrix product and nothing else"
+  to name the GEMV, and re-measure the header tables
   of `examples/ml/simd-gemv.lisp` and `examples/llama2/README.md`.
 - `.kb/linalg-blas.md`'s "The intercepted set: the product, and nothing else" section is
   the file to rewrite, and its "the memory-bound members would gain nothing" claim is the
