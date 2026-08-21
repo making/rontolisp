@@ -646,11 +646,14 @@ without the previous one's numbers. Phase 0 above comes first.
 
 **Status.** Phase 0 LANDED 2026-08-20 (`a9a5b2e4`, behind todo-467's `3511d10f`).
 Phase 1 LANDED 2026-08-21: `am.ik.gpu` in `51b872b3` + `d0b54738`, the interceptor and
-the flag in `02dfd287`. The design, the measurements and the two open items (the
-`--gpu --blas` band at n=64-96, and the native image's 25-60x per-call cost) now live in
-`.kb/gpu.md`; where that file and this one disagree, `.kb/gpu.md` was measured second and
-wins -- in particular the precision break is FUSED multiply-add, not a reordered
-reduction. Phase 2 is next.
+the flag in `02dfd287`. Phase 2 LANDED the same day (`ce1787f8`), and settled the
+bridge question below the other way: the emitted `.class` carries `am.ik.gpu`'s own
+class files, because the blob costs no more than the `--simd` template already does and
+a flattened copy would fork exactly the parts phase 1 was spent on. The design, the
+measurements and the open items now live in `.kb/gpu.md`; where that file and this one
+disagree, `.kb/gpu.md` was measured second and wins -- in particular the precision break
+is FUSED multiply-add, not a reordered reduction, and the native image's per-call cost
+is an INTERPRETER problem that compiling to a class walks around. Phase 3 is next.
 
 1. **`--gpu` on the interpreter, one member: `linalg:dot`'s M.M case.** `am.ik.gpu` +
    `eval/LinalgGpu` + `eval/LinalgGpuKernels` + the checked-in PTX + the availability
