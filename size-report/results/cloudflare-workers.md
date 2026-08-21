@@ -5,8 +5,8 @@ the prose below it is [`../notes/cloudflare-workers.md`](../notes/cloudflare-wor
 What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-workers/).
 How the report is built and run: [../README.md](../README.md).
 
-- measured: 2026-08-20
-- rontolisp: 0.1.0-SNAPSHOT (`d105fd4`)
+- measured: 2026-08-21
+- rontolisp: 0.1.0-SNAPSHOT (`7ad7d34`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
@@ -29,7 +29,7 @@ How the report is built and run: [../README.md](../README.md).
 | httpbin-component (core module) | `--component --no-wasi --optimize=size` | 178,515 | 57,177 | 1.8% |
 
 The component row is the core module alone. Reached through `jco transpile`
-a Worker also imports the generated JavaScript: **76,187 B** of it.
+a Worker also imports the generated JavaScript: **76,872 B** of it.
 
 ## What is measured
 
