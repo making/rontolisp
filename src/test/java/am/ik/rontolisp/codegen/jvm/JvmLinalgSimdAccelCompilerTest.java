@@ -506,9 +506,32 @@ class JvmLinalgSimdAccelCompilerTest {
 	}
 
 	@Test
+	void erfMatchesTheScalarReferenceOverTheWholeRangeAtBothWidths() throws Exception {
+		// linalg:erf's defun is an emap, which is never intercepted, so the member is.
+		// The kernel keeps %la-erf-1's order of operations, so it is bit-identical --
+		// checked where that could break: x = 0 and -0.0, negatives, the |x| >= 6 short
+		// circuit on both sides of the cutoff, and the |x| ~ 3 region where the
+		// alternating Maclaurin series would have lost every digit.
+		String range = "#d(0.0 -0.0 1.0e-8 -1.0e-8 0.5 -0.5 1.0 -1.0 2.0 -2.0 2.9 -2.9 3.0 -3.0 3.1 -3.1 "
+				+ "4.0 -4.0 5.0 -5.0 5.999999 -5.999999 6.0 -6.0 6.0000001 -6.0000001 7.0 -7.0 12.5 -12.5)";
+		assertMatchesScalarReference("(print (linalg:erf " + range + "))");
+		assertMatchesScalarReference("(print (linalg:erf " + range.replace("#d", "#f") + "))");
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarReference(
+					"(print (linalg:erf (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.07)))");
+		}
+		assertMatchesScalarReference(
+				"(print (linalg:erf (linalg:reshape (linalg:mul (linalg:arange 12) 0.5) '(3 4))))");
+		assertMatchesScalarReference(
+				"(print (linalg:erf (linalg:mul (linalg:arange 0 200 :element-type 'single-float) 0.07)))");
+		// (torch:gelu rides on it, but this harness splices only vec.lisp / linalg.lisp;
+		// the gelu leg is verified by hand and by the interpreter suite.)
+	}
+
+	@Test
 	void unaryUfuncsDeclineGeneralBoxedArraysToTheScalarDefun() throws Exception {
 		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "square", "negative",
-				"sign", "reciprocal" }) {
+				"sign", "reciprocal", "erf" }) {
 			assertMatchesScalarReference("(print (linalg:" + op + " #(1 4 9)))");
 		}
 		for (String op : new String[] { "asin", "acos", "atan", "sinh", "cosh" }) {

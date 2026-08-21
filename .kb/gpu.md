@@ -601,6 +601,11 @@ notice. **The lesson for phase 4b and for todo-468: an acceleration only moves a
 if the program is spending its time on the member being accelerated, and on the
 interpreter today it is not.**
 
+**todo-468 closed that half on 2026-08-21**: `linalg:erf` is intercepted now, the 21.14 s
+call above is 0.155 s, and the five-step interpreter run went 332.3 -> 172.1 s under
+`--simd` (329.9 -> 171.5 with `--gpu`) -- the device still buys nothing there, so the
+lesson stands unchanged and only the member that dominates has moved.
+
 ### The chain order, and why the device goes on top
 
 On the interpreter a chain is INSTALL ORDER -- each `install` captures whatever

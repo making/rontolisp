@@ -629,8 +629,10 @@ specific interceptor. That now includes the shape a transformer forward pass
 spends its time in: the rank->=3 stacked `%la-matmul-nd` is intercepted on all
 three `--simd` backends since todo-467, and torch inherited it without a line
 of torch-side change, which is the point of bottoming out in literal `linalg:`
-calls. `linalg:erf` (behind the exact `torch:gelu`) is the one remaining gap,
-todo-468. `--no-gc` is
+calls. Since todo-468 that includes `linalg:erf` as well, so the EXACT
+`torch:gelu` (`:approximate :none`, `nn.GELU`'s default) is accelerated too --
+it used to be the slower of the two formulations, which was backwards.
+`--no-gc` is
 unsupported (torch needs arrays, like linalg): a torch program is rejected
 there long before any `defstruct` is reached -- measured, the error is
 `LINALG::%LA-MAKE: lambda-list keywords ... are not supported with --no-gc` --

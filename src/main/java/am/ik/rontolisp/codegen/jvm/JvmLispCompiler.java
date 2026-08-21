@@ -3259,7 +3259,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * Whether the program references any of the seven vectorizable {@code vec:} kernels
 	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}/
-	 * {@code matvec}) or any of the thirty-five accelerated {@code linalg:} ones, so that
+	 * {@code matvec}) or any of the thirty-six accelerated {@code linalg:} ones, so that
 	 * {@code --simd} actually emits the Vector API bridge (one bridge class serves both
 	 * packages). {@code vec:mean}/{@code norm} and {@code linalg:mean}/{@code matmul}/
 	 * {@code flatten}/{@code solve} are intercepted transitively via their spliced

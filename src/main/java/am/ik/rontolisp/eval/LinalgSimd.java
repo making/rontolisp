@@ -19,11 +19,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of the {@code linalg:} kernels: it
- * replaces thirty-five of the {@code linalg.lisp} defuns with native
- * {@link LispFunction}s driving the lane loops in {@link LinalgSimdKernels}. The
- * {@code linalg:} sibling of {@link VecSimd}, deliberately a separate class --
- * {@code vec.lisp} and {@code linalg.lisp} never call each other, so their interceptors
- * do not either. Only the KERNELS are shared.
+ * replaces thirty-six of the {@code linalg.lisp} defuns with native {@link LispFunction}s
+ * driving the lane loops in {@link LinalgSimdKernels}. The {@code linalg:} sibling of
+ * {@link VecSimd}, deliberately a separate class -- {@code vec.lisp} and
+ * {@code linalg.lisp} never call each other, so their interceptors do not either. Only
+ * the KERNELS are shared.
  *
  * <h2>The fallback protocol</h2>
  *
@@ -166,6 +166,12 @@ public final class LinalgSimd {
 				args -> unary(args, LinalgSimdKernels::negative, LinalgSimdKernels::negativeF));
 		define(globalEnv, evaluator, LispNames.LINALG_SIGN, 1,
 				args -> unary(args, LinalgSimdKernels::sign, LinalgSimdKernels::signF));
+		// linalg:erf: the one activation primitive whose defun is an emap, so the
+		// member is intercepted rather than reached transitively. The kernel is
+		// %la-erf-1's own series in the defun's order -- bit-identical, and scalar by
+		// decision (the iteration count is data-dependent).
+		define(globalEnv, evaluator, LispNames.LINALG_ERF, 1,
+				args -> unary(args, LinalgSimdKernels::erf, LinalgSimdKernels::erfF));
 		// The internal CNN window unfolding pair: pure index arithmetic, no
 		// lanes -- intercepted because the boxed do-loop dominates the accelerated
 		// convolution runs (~97% of ch07 train time under --simd was im2col/col2im).

@@ -15991,6 +15991,33 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
+	// linalg:erf: the defun is (linalg:emap #'%la-erf-1 a) and emap is never
+	// intercepted, so the member is (the exact torch:gelu rides on it). The kernel
+	// keeps %la-erf-1's order of operations AND this backend's own spellings of abs
+	// and unary minus, so it is bit-identical -- checked where that could break:
+	// x = 0 and -0.0 (which the wasm defun does NOT fold, unlike Math.abs), negatives,
+	// both sides of the |x| >= 6 short circuit, the |x| ~ 3 region where the
+	// alternating Maclaurin series would have lost every digit, both widths, rank 2,
+	// and the declined inputs running the defun. (torch:gelu rides on it, but this
+	// harness splices only vec.lisp / linalg.lisp; the gelu leg is verified by hand
+	// and by the interpreter / JVM suites.)
+	static List<String> erfSources() {
+		return List.of(
+				"(print (linalg:erf #d(0.0 -0.0 1.0e-8 -1.0e-8 0.5 -0.5 1.0 -1.0 2.0 -2.0 2.9 -2.9 3.0 -3.0 3.1 -3.1)))",
+				"(print (linalg:erf #d(4.0 -4.0 5.0 -5.0 5.999999 -5.999999 6.0 -6.0 6.0000001 -6.0000001 7.0 -7.0 12.5 -12.5)))",
+				"(print (linalg:erf #f(0.0 -0.0 0.5 -0.5 2.9 -2.9 3.1 -3.1 5.999999 -5.999999 6.0 -6.0 12.5 -12.5)))",
+				"(print (linalg:erf (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.07)))",
+				"(print (linalg:erf (linalg:mul (linalg:arange 0 200 :element-type 'single-float) 0.07)))",
+				"(print (linalg:erf (linalg:reshape (linalg:mul (linalg:arange 12) 0.5) '(3 4))))",
+				"(print (linalg:erf #(0 1 -1)))", "(print (linalg:erf #(0.0 1.0 -1.0)))");
+	}
+
+	@ParameterizedTest
+	@MethodSource("erfSources")
+	void wasmGcSimdLinalgErfIsByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
+	}
+
 	// The comparison-select ufuncs: array-array at both widths
 	// and rank 2 (lane gt/lt + bitselect), the f64 scalar broadcast on either side
 	// (the lane select), the f32 scalar broadcast against a NOT-f32-representable

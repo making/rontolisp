@@ -22,10 +22,10 @@ import static am.ik.rontolisp.codegen.wasm.WasmVecSimdRuntimeBuilder.withLocals;
 
 /**
  * The wasm-GC {@code --simd} runtime for the {@code linalg:} kernels, the sibling of
- * {@link WasmVecSimdRuntimeBuilder}. Forty-two hand-assembled functions that
- * {@link WasmLinalgSimdCompiler} calls at an intercepted {@code linalg:} call site (the
- * last seven cover the declined call shapes: the general numpy broadcast, the axes
- * transpose and the axis folds).
+ * {@link WasmVecSimdRuntimeBuilder}. Forty-three hand-assembled functions that
+ * {@link WasmLinalgSimdCompiler} calls at an intercepted {@code linalg:} call site (seven
+ * of them cover the declined call shapes: the general numpy broadcast, the axes transpose
+ * and the axis folds).
  *
  * <h2>Why this exists: {@code --simd} used to make {@code linalg:} SLOWER here</h2>
  *
@@ -220,10 +220,17 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int MATMUL_ND = 41;
 
+	// linalg:erf: the one activation primitive whose defun is an emap over a scalar
+	// series, and emap is never intercepted -- so the member itself is (todo-468). An
+	// element loop like the transcendental ufuncs, but with the series inline rather
+	// than an emitScalarUnaryF64 sequence: the iteration count is data-dependent.
+
+	static final int ERF = 42;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 42;
+	static final int FUNC_COUNT = 43;
 
 	// The BCAST op selector, passed as an i31 by the element-wise kernels. BOP_MAX /
 	// BOP_MIN are the strict selects ((if (> x y) x y)): the SECOND operand wins any
@@ -246,7 +253,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		return switch (fn) {
 			// One eq param -> eq.
 			case SUM, NORM, AMAX, AMIN, ARGMAX, ARGMIN, TRACE, TRANSPOSE, EXP, LOG, TANH, SIN, COS, TAN, ASIN, ACOS,
-					ATAN, SINH, COSH, SQRT, ABS, NEGATIVE, SIGN ->
+					ATAN, SINH, COSH, SQRT, ABS, NEGATIVE, SIGN, ERF ->
 				WasmLispCompiler.TYPE_CALLABLE_BASE;
 			// Three eq params -> eq.
 			case BCAST, SUM_AXIS, AMAX_AXIS, AMIN_AXIS -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
@@ -310,6 +317,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case ARGMAX_AXIS -> buildArgFoldAxis(true, vecBase);
 			case ARGMIN_AXIS -> buildArgFoldAxis(false, vecBase);
 			case MATMUL_ND -> buildMatmulNd(vecBase);
+			case ERF -> buildErf(vecBase);
 			default -> throw new IllegalArgumentException("no linalg: simd helper " + fn);
 		};
 	}
@@ -684,6 +692,179 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, res);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), 8, 5, 0, 2, 5, 2);
+	}
+
+	// --- the error function ------------------------------------------------------------
+
+	// (linalg:erf a): the defun is (linalg:emap #'%la-erf-1 a) and emap is never
+	// intercepted, so this member is -- the exact torch:gelu is built on it, hence every
+	// transformer feed-forward block. A _v_get / _v_set element loop with %la-erf-1's own
+	// arithmetic inline, in the DEFUN'S ORDER, which is what makes it bit-identical at
+	// both widths (every element is read widened to f64, computed in f64 and narrowed
+	// only by the store into a single-float result -- emap's own rule, so the series must
+	// NOT be accumulated in single).
+	//
+	// No lane form, and not because no v128 instruction exists: the per-element iteration
+	// count is DATA-DEPENDENT (it grows with x^2), so a lane loop would have to run every
+	// lane to the maximum of its group's counts. The win here is escaping the boxed emap
+	// walk, exactly as for %la-im2col.
+	//
+	// Two spellings mirror THIS backend's compiled defun rather than the interpreter's:
+	// (abs x) has no double literal among its argument forms, so it compiles to
+	// _rat_cmp's float path -- x < 0 ? 0 - x : x, which leaves -0.0 alone where
+	// Math.abs would not -- and (- (* ax ax)) / (- v) are the generic unary minus,
+	// which is _rat_sub(0, x), i.e. 0 - x. exp is WasmExpCompiler's Horner
+	// approximation, emitted here by emitExpF64 from the same constants.
+	//
+	// params: 0 = a
+	// i32: count 1, kind 2, shift 3, ng 4, i 5, len 6, n 7
+	// f64: x 8, ax 9, term 10, total 11, xx 12, expT 13, expAcc 14
+	// eq: res 15, vbD 16, vbA 17, nd 18, da 19
+	private static byte[] buildErf(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int a = 0;
+		int count = 1, kind = 2, shift = 3, ng = 4, i = 5, len = 6, n = 7;
+		int x = 8, ax = 9, term = 10, total = 11, xx = 12, expT = 13, expAcc = 14;
+		int res = 15, vbD = 16, vbA = 17, nd = 18, da = 19;
+
+		block(w); // B0: the declined exit -- res stays null
+		isFarray(w, a);
+		brIfFalse(w, 0);
+		loadHeader(w, a, count, kind, shift, ng);
+		newVblock(w, count, kind, vbD, vecBase);
+		farrayField(w, a, 1);
+		set(w, vbA);
+		WasmVecLoops.openIndexLoop(w, i, count);
+		get(w, vbD);
+		get(w, i);
+		vget(w, vbA, i, vecBase);
+		emitErf1F64(w, x, ax, term, total, xx, expT, expAcc, n);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		WasmVecLoops.closeIndexLoop(w, i);
+		copyDims(w, a, nd, len, i, da);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 7, 7, 0, 0, 5, 0);
+	}
+
+	/**
+	 * Consumes an f64 {@code x} on the stack and leaves {@code linalg::%la-erf-1(x)},
+	 * step for step as the compiled defun computes it.
+	 */
+	private static void emitErf1F64(WasmWriter w, int x, int ax, int term, int total, int xx, int expT, int expAcc,
+			int n) {
+		set(w, x);
+		// ax = (abs x), which on this backend is x < 0 ? 0 - x : x (_rat_cmp's float
+		// path). -0.0 is NOT folded to 0.0 here, unlike Math.abs.
+		get(w, x);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.IF, 0x7C); // (result f64)
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		get(w, x);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.ELSE);
+		get(w, x);
+		w.write(Instruction.END);
+		set(w, ax);
+		// (if (>= ax 6.0) (if (< x 0.0) -1.0 1.0) <the series>)
+		get(w, ax);
+		w.write(Instruction.F64_CONST).writeF64(6.0);
+		w.write(Instruction.F64_GE);
+		w.write(Instruction.IF, 0x7C);
+		get(w, x);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.IF, 0x7C);
+		w.write(Instruction.F64_CONST).writeF64(-1.0);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// term = 1.0, total = 1.0, xx = (* 2.0 ax ax) -- the f64 literal path's left fold
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		set(w, term);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		set(w, total);
+		w.write(Instruction.F64_CONST).writeF64(2.0);
+		get(w, ax);
+		w.write(Instruction.F64_MUL);
+		get(w, ax);
+		w.write(Instruction.F64_MUL);
+		set(w, xx);
+		// (do ((n 1 (+ n 1))) ((> n 200)) ...): the end test runs BEFORE the body, so
+		// the body runs for n = 1..200.
+		i32Const(w, 1);
+		set(w, n);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, n);
+		i32Const(w, 200);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.BR_IF, 1);
+		// term = (/ (* term xx) (+ (* 2.0 n) 1.0))
+		get(w, term);
+		get(w, xx);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_CONST).writeF64(2.0);
+		get(w, n);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.F64_DIV);
+		set(w, term);
+		// total = (+ total term)
+		get(w, total);
+		get(w, term);
+		w.write(Instruction.F64_ADD);
+		set(w, total);
+		// (when (< term (* 1.0e-17 total)) (return))
+		get(w, term);
+		w.write(Instruction.F64_CONST).writeF64(1.0e-17);
+		get(w, total);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.BR_IF, 1);
+		get(w, n);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, n);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// v = (* 1.1283791670955126 ax (exp (- (* ax ax))) total), left fold
+		w.write(Instruction.F64_CONST).writeF64(1.1283791670955126);
+		get(w, ax);
+		w.write(Instruction.F64_MUL);
+		// (- (* ax ax)) is the generic unary minus: 0 - (ax * ax).
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		get(w, ax);
+		get(w, ax);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_SUB);
+		WasmVecSimdRuntimeBuilder.emitExpF64(w, expT, expAcc);
+		w.write(Instruction.F64_MUL);
+		get(w, total);
+		w.write(Instruction.F64_MUL);
+		// (if (< x 0.0) (- v) v), the negation again 0 - v. term is free here.
+		set(w, term);
+		get(w, x);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.IF, 0x7C);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		get(w, term);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.ELSE);
+		get(w, term);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // the |x| >= 6 if
 	}
 
 	// --- sum / norm --------------------------------------------------------------------

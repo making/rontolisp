@@ -5044,6 +5044,16 @@ public final class LispNames {
 	public static final String LINALG_RELU = "RELU";
 
 	/**
+	 * {@code linalg:erf}: element-wise Gauss error function ({@code scipy.special.erf}),
+	 * the all-positive-term A&amp;S 7.1.6 series of {@code linalg::%la-erf-1} applied to
+	 * every element. The exact {@code torch:gelu} ({@code nn.GELU}'s default) is built on
+	 * it, so it is every transformer feed-forward block. Its defun is an {@code emap},
+	 * which is never intercepted, so the member is intercepted itself under
+	 * {@code --simd}.
+	 */
+	public static final String LINALG_ERF = "ERF";
+
+	/**
 	 * {@code linalg::%la-im2col} (INTERNAL, note the double colon): unfolds a rank-4 NCHW
 	 * array into the {@code (N*out-h*out-w, C*fh*fw)} window matrix behind the CNN
 	 * examples (Deep Learning from Scratch {@code common/util.py}). Pure index

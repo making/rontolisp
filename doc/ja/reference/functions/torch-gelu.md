@@ -17,11 +17,6 @@ torch の演算だけで組み立てているため、専用の随伴なしで�
 違ってどこでも滑らかで、負側にもわずかな勾配を通します。Transformer の
 フィードフォワードブロックがこれを使うのはそのためです。
 
-軸は精度だけではありません。[`--simd`](../../guides/simd-acceleration.md#accelerating-linalg)
-では `:tanh` 形式は加速されますが (`mul` / `add` / `tanh` だけで構成されるため)、
-既定の形式は加速されません。[`linalg:erf`](linalg-erf.md) が intercept 対象の
-カーネルに入っていないためです。
-
 ```lisp
 (torch:data (torch:gelu (torch:tensor '(-1.0 0.0 1.0))))
 ; => #f(-0.15865526 0.0 0.8413447)

@@ -83,6 +83,10 @@ final class JvmLinalgKernelCompiler {
 			Map.entry(LispNames.LINALG_COSH, "laCosh"), Map.entry(LispNames.LINALG_SQRT, "laSqrt"),
 			Map.entry(LispNames.LINALG_ABS, "laAbs"), Map.entry(LispNames.LINALG_NEGATIVE, "laNegative"),
 			Map.entry(LispNames.LINALG_SIGN, "laSign"),
+			// linalg:erf: the one activation primitive whose defun is an emap (never
+			// intercepted), so the member itself is. A scalar series loop -- the
+			// iteration count is data-dependent, so there is no lane form.
+			Map.entry(LispNames.LINALG_ERF, "laErf"),
 			// The comparison-select ufuncs. linalg:clip / linalg:relu
 			// are not here: their spliced defuns compose linalg:maximum / linalg:minimum,
 			// so they are accelerated transitively, like square/reciprocal.
@@ -103,7 +107,7 @@ final class JvmLinalgKernelCompiler {
 			LispNames.LINALG_TANH, LispNames.LINALG_SIN, LispNames.LINALG_COS, LispNames.LINALG_TAN,
 			LispNames.LINALG_ASIN, LispNames.LINALG_ACOS, LispNames.LINALG_ATAN, LispNames.LINALG_SINH,
 			LispNames.LINALG_COSH, LispNames.LINALG_SQRT, LispNames.LINALG_ABS, LispNames.LINALG_NEGATIVE,
-			LispNames.LINALG_SIGN);
+			LispNames.LINALG_SIGN, LispNames.LINALG_ERF);
 
 	/**
 	 * Returns whether the given {@code linalg:} member is one this compiler accelerates.

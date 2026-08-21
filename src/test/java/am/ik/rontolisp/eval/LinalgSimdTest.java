@@ -571,7 +571,7 @@ class LinalgSimdTest {
 	@Test
 	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
 		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
-				"cosh", "sqrt", "abs", "negative", "sign" }) {
+				"cosh", "sqrt", "abs", "negative", "sign", "erf" }) {
 			String form = "(linalg:zeros 1) #'linalg:" + member;
 			assertThat(eval(form, true).print()).as(member)
 				.isEqualTo("#<function LINALG:" + member.toUpperCase(java.util.Locale.ROOT) + ">");
@@ -660,11 +660,32 @@ class LinalgSimdTest {
 	}
 
 	@Test
+	void erfMatchesTheScalarOracleOverTheWholeRangeAtBothWidths() {
+		// linalg:erf is the one activation primitive whose defun is an emap, so the
+		// member is intercepted. The kernel keeps %la-erf-1's order of operations, so it
+		// is bit-identical -- checked where that could break: x = 0 and -0.0, negatives,
+		// the |x| >= 6 short circuit on both sides of the cutoff, and the |x| ~ 3 region
+		// where the alternating Maclaurin series would have lost every digit.
+		String range = "#d(0.0 -0.0 1.0e-8 -1.0e-8 0.5 -0.5 1.0 -1.0 2.0 -2.0 2.9 -2.9 3.0 -3.0 3.1 -3.1 "
+				+ "4.0 -4.0 5.0 -5.0 5.999999 -5.999999 6.0 -6.0 6.0000001 -6.0000001 7.0 -7.0 12.5 -12.5)";
+		assertMatchesScalarOracle("(linalg:erf " + range + ")");
+		assertMatchesScalarOracle("(linalg:erf " + range.replace("#d", "#f") + ")");
+		// Both ranks and both lengths, over a sign-mixed sweep.
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarOracle("(linalg:erf (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.07))");
+		}
+		assertMatchesScalarOracle("(linalg:erf (linalg:reshape (linalg:mul (linalg:arange 12) 0.5) '(3 4)))");
+		assertMatchesScalarOracle("(linalg:erf (linalg:mul (linalg:arange 0 200 :element-type 'single-float) 0.07))");
+		// The exact torch:gelu rides on it, and must not move either.
+		assertMatchesScalarOracle("(torch:data (torch:gelu (torch:tensor '(-3.0 -1.0 0.0 1.0 3.0))))");
+	}
+
+	@Test
 	void aGeneralBoxedArrayDeclinesToTheScalarDefunForTheUnaryUfuncs() {
 		// A general #(...) array is not packed, so every unary kernel declines and the
 		// defun answers -- identically on both paths.
 		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "square", "negative",
-				"sign", "reciprocal" }) {
+				"sign", "reciprocal", "erf" }) {
 			assertMatchesScalarOracle("(linalg:" + op + " #(1 4 9))");
 		}
 		for (String op : new String[] { "asin", "acos", "atan", "sinh", "cosh" }) {

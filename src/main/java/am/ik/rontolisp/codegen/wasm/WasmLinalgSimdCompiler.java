@@ -92,6 +92,10 @@ final class WasmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_ABS, WasmLinalgSimdRuntimeBuilder.ABS),
 			Map.entry(LispNames.LINALG_NEGATIVE, WasmLinalgSimdRuntimeBuilder.NEGATIVE),
 			Map.entry(LispNames.LINALG_SIGN, WasmLinalgSimdRuntimeBuilder.SIGN),
+			// linalg:erf: the one activation primitive whose defun is an emap (never
+			// intercepted), so the member itself is. The series is inline, not a lane
+			// loop -- its iteration count is data-dependent.
+			Map.entry(LispNames.LINALG_ERF, WasmLinalgSimdRuntimeBuilder.ERF),
 			// The comparison-select ufuncs. linalg:clip / linalg:relu are not here:
 			// their spliced defuns compose linalg:maximum / linalg:minimum, so they are
 			// accelerated transitively, like square/reciprocal.
@@ -113,7 +117,7 @@ final class WasmLinalgSimdCompiler {
 			LispNames.LINALG_TANH, LispNames.LINALG_SIN, LispNames.LINALG_COS, LispNames.LINALG_TAN,
 			LispNames.LINALG_ASIN, LispNames.LINALG_ACOS, LispNames.LINALG_ATAN, LispNames.LINALG_SINH,
 			LispNames.LINALG_COSH, LispNames.LINALG_SQRT, LispNames.LINALG_ABS, LispNames.LINALG_NEGATIVE,
-			LispNames.LINALG_SIGN);
+			LispNames.LINALG_SIGN, LispNames.LINALG_ERF);
 
 	/** Returns whether the given qualified name is a kernel this compiler accelerates. */
 	static boolean handles(String qualifiedName) {

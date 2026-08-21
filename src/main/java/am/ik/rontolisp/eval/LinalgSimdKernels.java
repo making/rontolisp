@@ -559,6 +559,62 @@ final class LinalgSimdKernels {
 		return r;
 	}
 
+	// --- the error function ----------------------------------------------------------
+	//
+	// linalg:erf is (linalg:emap #'%la-erf-1 a) and emap is never intercepted, so the
+	// member itself is. The kernel is %la-erf-1's own arithmetic in the defun's exact
+	// order, so it is BIT-IDENTICAL at both widths -- and deliberately SCALAR: the
+	// per-element iteration count is data-dependent (it grows with x^2), so a lane loop
+	// would have to run every lane to the maximum of its group's counts, and the win
+	// here is escaping the tree-walk and the boxing, exactly as for %la-im2col. See
+	// .kb/linalg-simd.md.
+
+	/**
+	 * {@code linalg::%la-erf-1} of one number, keeping the defun's order of operations
+	 * (which is what makes the kernel bit-identical to it): the {@code |x| >= 6} short
+	 * circuit, then the all-positive-term A&amp;S 7.1.6 series
+	 * {@code term = term * 2x^2 / (2n+1)} broken at {@code term < 1e-17 * total} and
+	 * capped at {@code n = 200}, then
+	 * {@code 1.1283791670955126 * |x| * exp(-x^2) * total} with the sign applied last.
+	 */
+	static double erf1(double x) {
+		double ax = Math.abs(x);
+		if (ax >= 6.0) {
+			return x < 0.0 ? -1.0 : 1.0;
+		}
+		double term = 1.0;
+		double total = 1.0;
+		double xx = 2.0 * ax * ax;
+		for (int n = 1; n <= 200; n++) {
+			term = term * xx / (2.0 * n + 1.0);
+			total = total + term;
+			if (term < 1.0e-17 * total) {
+				break;
+			}
+		}
+		double v = 1.1283791670955126 * ax * Math.exp(-(ax * ax)) * total;
+		return x < 0.0 ? -v : v;
+	}
+
+	static double[] erf(double[] x) {
+		double[] r = new double[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = erf1(x[i]);
+		}
+		return r;
+	}
+
+	static float[] erfF(float[] x) {
+		float[] r = new float[x.length];
+		for (int i = 0; i < x.length; i++) {
+			// emap's rule (which the defun follows): read widened to double, compute in
+			// DOUBLE, narrow only on the store. Accumulating the series in single would
+			// be a silent cross-backend divergence.
+			r[i] = (float) erf1(x[i]);
+		}
+		return r;
+	}
+
 	// --- reductions ----------------------------------------------------------------
 
 	static double sum(double[] x) {

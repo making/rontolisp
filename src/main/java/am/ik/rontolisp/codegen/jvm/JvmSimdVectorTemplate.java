@@ -761,6 +761,13 @@ final class JvmSimdVectorTemplate {
 	 */
 	private static final int UOP_RELU = 16;
 
+	/**
+	 * {@code linalg::%la-erf-1}: the all-positive-term A&amp;S 7.1.6 series, kept in the
+	 * defun's exact order so the kernel is bit-identical to it. Data-dependent iteration
+	 * count, hence no lane form (see {@link #hasLaneForm}).
+	 */
+	private static final int UOP_ERF = 17;
+
 	static @Nullable Object simdExp(@Nullable Object v) {
 		return simdUnary(UOP_EXP, v);
 	}
@@ -1041,7 +1048,37 @@ final class JvmSimdVectorTemplate {
 		if (op == UOP_RELU) {
 			return x > 0.0 ? x : 0.0;
 		}
+		if (op == UOP_ERF) {
+			return erf1(x);
+		}
 		return 1.0 / x;
+	}
+
+	/**
+	 * {@code linalg::%la-erf-1} of one number, in the defun's own order of operations --
+	 * the {@code |x| >= 6} short circuit, then the all-positive-term A&amp;S 7.1.6 series
+	 * {@code term = term * 2x^2 / (2n+1)} broken at {@code term < 1e-17 * total} and
+	 * capped at {@code n = 200}, then {@code 1.1283791670955126 * |x| * exp(-x^2) *
+	 * total} with the sign applied last. Computed in DOUBLE at both widths ({@code emap}
+	 * narrows only on the store), so it is bit-identical to the scalar defun.
+	 */
+	private static double erf1(double x) {
+		double ax = Math.abs(x);
+		if (ax >= 6.0) {
+			return x < 0.0 ? -1.0 : 1.0;
+		}
+		double term = 1.0;
+		double total = 1.0;
+		double xx = 2.0 * ax * ax;
+		for (int n = 1; n <= 200; n++) {
+			term = term * xx / (2.0 * n + 1.0);
+			total = total + term;
+			if (term < 1.0e-17 * total) {
+				break;
+			}
+		}
+		double v = 1.1283791670955126 * ax * Math.exp(-(ax * ax)) * total;
+		return x < 0.0 ? -v : v;
 	}
 
 	// ================================================================================
@@ -1176,6 +1213,10 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object laSign(@Nullable Object a) {
 		return laUnary(UOP_SIGN, a);
+	}
+
+	static @Nullable Object laErf(@Nullable Object a) {
+		return laUnary(UOP_ERF, a);
 	}
 
 	private static @Nullable Object laUnary(int op, @Nullable Object a) {
