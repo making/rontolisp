@@ -675,6 +675,15 @@ matmul the device just took. **Todo-468 and the element-wise tier are now the wh
 remaining cost, not a nice-to-have**, and that chain is what phase 3 should measure
 residency against.
 
+**Phase 3 CLOSED 2026-08-21** (`90dd1c28`) by declining to build it, and the same
+commit landed what the profile said WAS worth building: a strided tier of ten members
+(the binary ops at BROADCAST shapes only, the axis folds, the axes transpose) whose CPU
+twin is a scalar odometer walk rather than a lane loop. Phase 4b had refused the binary
+ops after measuring them at EQUAL shapes; every such call inside a real `softmax` or
+`layer-norm` is a broadcast, where the CPU column is 5-8x higher and a plain round trip
+wins with no cache. That tier is bit-identical to the defun at both widths, so it does
+not widen 4b's precision break.
+
 **Phase 4b LANDED 2026-08-21** (`061039da`), on both backends, and it settled the
 member question by MEASUREMENT rather than by this file's list: twelve members taken
 (`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`) and
@@ -698,10 +707,16 @@ phase 3 the real residency measurement: 2.2-6.4x at f64, 15.6-17.9x at f32.
 2. **The JVM backend**, via `JvmLinalgGpuCompiler` + the embedded template decision
    above. Same member, same acceptance, plus the argument-evaluated-exactly-once pin
    that both existing `--simd` compilers carry.
-3. **Device residency.** The 2-4x. This is where the design work is: an
-   identity-keyed device cache with an explicit invalidation rule (contract 2 above), or
-   a device handle inside the packed array. Measure the 5-op chain again through the
-   real `torch:` stack, not a synthetic one.
+3. **Device residency.** NOT BUILT, and that is a measured decision (`90dd1c28`,
+   2026-08-21). Profiled on the real `torch:` stack as this item asked, every device
+   copy in a training step under `--gpu --simd` is **1.5% of it** (3.5% after the
+   strided tier landed), against a 15% run-to-run spread -- so the 2-4x above is the
+   per-op ratio and not the program's. The design is written down in full in
+   `.kb/gpu.md` (identity-keyed cache, host authoritative, the invalidation rule and
+   every in-place write path enumerated, and why the handle CANNOT live in the packed
+   array) so it can be built if the ceiling ever moves. What dominates the step
+   instead is `torch::%o-adam-step`, `_dbl` boxing and `linalg:rand`/`randn`: boxed
+   per-element Lisp loops on no acceleration seam, which is a `torch:` item.
 4. **The member set.** DONE, both halves. `%la-matmul-nd` FIRST (4a) -- it is the
    transformer's whole hot path, `--simd` does not intercept it (todo-467), and a batch
    axis is free on a GPU. Then the element-wise tier (4b), where the prediction here --
