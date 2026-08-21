@@ -34,6 +34,12 @@ that directory's README says which answers which and records what they printed. 
 the driver and nothing else -- they load the kernels this library ships rather than
 compiling any -- so they run wherever the feature does.
 
+**The item itself is gone; that directory is not.** `.todo/123-gpu-acceleration.md` was
+deleted when the last phase landed, so every `todo-123` citation below is to a text that
+is now read back through `.todo/.history.md`'s row for it
+(`git show <commit>~:.todo/123-gpu-acceleration.md`). The probes stay checked in where
+they are, because this file's numbers are re-derived from them and its paths name them.
+
 Read `.kb/linalg-simd.md` first for the declined-input protocol this is shaped for, and
 `.kb/linalg-blas.md` for the flag whose posture it copies: **recommended, never required;
 a machine without the hardware runs the same programs to the same output.** Everything

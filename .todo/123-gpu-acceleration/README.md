@@ -2,10 +2,16 @@
 
 Throwaway probes kept for reproducibility, NOT project code: they are outside `src/`, are
 not in the reactor, are not formatted by `spring-javaformat:apply`, and nothing builds or
-tests them. They exist so that the numbers in `../123-gpu-acceleration.md` can be
-re-derived on other hardware -- especially the decisions those numbers drove (per-call
-intercept before residency; PTX-in-the-jar instead of a runtime toolkit; and, on Apple,
-that the naive kernel is the wrong thing to ship at all).
+tests them. They exist so that the numbers in `../../.kb/gpu.md` can be re-derived on
+other hardware -- especially the decisions those numbers drove (per-call intercept before
+residency; PTX-in-the-jar instead of a runtime toolkit; and, on Apple, that the naive
+kernel is the wrong thing to ship at all).
+
+The item these were written for, `../123-gpu-acceleration.md`, is closed and deleted --
+this directory outlived it deliberately, because `.kb/gpu.md` cites these files by path.
+Where the text below still says "that file", it means the deleted item, which
+`../.history.md`'s row reads back: `git show <commit>~:.todo/123-gpu-acceleration.md`.
+`.kb/gpu.md` is the live authority and was measured second wherever the two disagree.
 
 Every file is a single-class JDK source-launcher program: no build step, no dependency,
 Java 22+ for the FFM API. `--enable-native-access=ALL-UNNAMED` silences the restricted-
@@ -302,14 +308,14 @@ n=128 f64 383.75 us n=128 f32 191.00 us
 ```
 
 Read the two together: the crossover is n~45 at f64 and n~51 at f32, so `am.ik.gpu` sets
-`worth()` at `n*m*p >= 2^17`. The `--simd` column in `../123-gpu-acceleration.md` is the
+`worth()` at `n*m*p >= 2^17`. The `--simd` column in the deleted item is the
 same program with 3 warm-ups and 20 reps, which reports 100 us at n=32 where a warm run
 costs 9.5 -- about 10x, and all of it at exactly the sizes the threshold is decided by.
 
 ## What they printed
 
 Recorded verbatim so a later run can be diffed against them. The interpretation of each
-table is in `../123-gpu-acceleration.md`; this is only the raw evidence.
+table is in `../../.kb/gpu.md`; this is only the raw evidence.
 
 ```
 $ java MatmulSpike.java
@@ -619,7 +625,7 @@ MTLCreateSystemDefaultDevice   14.7 ms | newLibraryWithSource    2.9 ms | same s
    GFLOP/s at f32, which is faster than our Metal kernel at every size measured. It is
    plain C, in the OS, reachable in four lines of FFM. Still 35-121x `--simd` AFTER
    todo-469 gave the f32 kernel its lanes, so that landing does not dent it. See
-   `../123-gpu-acceleration.md` for what it does to the plan, and `../../.kb/linalg-blas.md` for the
+   `../../.kb/gpu.md` for what it does to the plan, and `../../.kb/linalg-blas.md` for the
    item it became.
 
 ### The width probe, same machine

@@ -6,10 +6,11 @@ import java.lang.foreign.*;
  *
  * <p>
  * This is the GPU half only. The CPU half is `matmul-baseline.lisp` under `--simd` on the
- * JVM, and it has to be JIT-WARM to be honest -- the table in ../123-gpu-acceleration.md
- * was taken with 3 warm-up iterations and 20 reps, which over-reports the small end by
- * about 10x and is why that file's crossover is in the wrong place. Run the CPU side with
- * many more reps:
+ * JVM, and it has to be JIT-WARM to be honest -- the table in the spike's own write-up
+ * (the deleted `.todo/123-gpu-acceleration.md`; see this directory's README) was taken with
+ * 3 warm-up iterations and 20 reps, which over-reports the small end by about 10x and is
+ * why that table's crossover is in the wrong place. `../../.kb/gpu.md` carries the number
+ * that replaced it. Run the CPU side with many more reps:
  *
  * <pre>
  * JAR=../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar
