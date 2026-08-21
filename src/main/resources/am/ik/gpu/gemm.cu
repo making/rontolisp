@@ -39,3 +39,25 @@ extern "C" __global__ void gemm_f32(const float* A, const float* B, float* C, in
 extern "C" __global__ void gemm_f64(const double* A, const double* B, double* C, int M, int N, int K) {
   gemm<double>(A, B, C, M, N, K);
 }
+
+// The BATCHED siblings: gridDim.z is the batch axis and each block does the same tile
+// walk over one slab, so a stacked product is one launch rather than one per matrix. The
+// strides are in ELEMENTS and a broadcast operand simply passes 0 -- the whole batch then
+// reads the same slab, which is what linalg::%la-matmul-nd's zero batch stride means.
+// C is always contiguous (M * N per batch). The gemm<T> above is called unchanged, so a
+// batched cell folds k exactly as the unbatched kernel's does.
+template <typename T>
+__device__ void gemm_batched(const T* A, const T* B, T* C, int M, int N, int K, long long strideA, long long strideB) {
+  long long z = blockIdx.z;
+  gemm<T>(A + z * strideA, B + z * strideB, C + z * (long long) M * N, M, N, K);
+}
+
+extern "C" __global__ void gemm_batched_f32(const float* A, const float* B, float* C, int M, int N, int K,
+                                            long long strideA, long long strideB) {
+  gemm_batched<float>(A, B, C, M, N, K, strideA, strideB);
+}
+
+extern "C" __global__ void gemm_batched_f64(const double* A, const double* B, double* C, int M, int N, int K,
+                                            long long strideA, long long strideB) {
+  gemm_batched<double>(A, B, C, M, N, K, strideA, strideB);
+}

@@ -19,7 +19,9 @@ Three backends, one per interception mechanism:
 `--blas` (`.kb/linalg-blas.md`) is a SECOND flag over this same seam, and `--gpu`
 (`.kb/gpu.md`) a THIRD -- both on the interpreter and the JVM only, since both call out
 through the foreign function API: they put a tuned CBLAS's `gemm`, and a device product
-ahead of that, in front of the lane kernel for `linalg:dot`. That is why the JVM
+ahead of that, in front of the lane kernel for `linalg:dot` -- and since 2026-08-21 `--gpu`
+also takes `%la-matmul-nd`, where it has no `--blas` neighbour (the stacked chain is
+device -> lane kernel -> defun). That is why the JVM
 interceptor is named `JvmLinalgKernelCompiler` rather than `JvmLinalgSimdCompiler` -- it
 emits a CHAIN of up to three attempts over one set of temps, ending at the scalar defun.
 Nothing below changes: with `--blas` and `--gpu` off, a `--simd` build emits and computes
@@ -199,6 +201,13 @@ Until todo-467 that member was a boxed `outer x M x K x N` walk built from no in
 member, so `--simd` did nothing for it on the interpreter and the JVM and made it ~11%
 SLOWER on wasm-GC (it paid the `TYPE_VBLOCK` `_v_get`/`_v_set` cost this file opens with
 and got nothing back).
+
+**`--gpu` intercepts this member too** (2026-08-21, `.kb/gpu.md`'s "The stacked matrix
+product"), and the batch odometer is exactly where the two differ: the device walks the
+batch with ONE stride per operand, so a broadcast leading axis is stride 0 as it is here,
+but a broadcast axis sitting UNDER a non-broadcast one is a decline there and lands back
+on this kernel. The threshold there is the TOTAL work, `batch*n*m*p`, since a stack is one
+round trip.
 
 **The kernel is `dot`'s M.M lane loop, once per batch offset** -- not a second lane loop.
 All three backends factored the rank-2 product into an offset-taking slab

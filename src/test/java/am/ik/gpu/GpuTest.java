@@ -329,6 +329,151 @@ class GpuTest {
 		}
 	}
 
+	@Test
+	void aBatchedProductIsThePerBatchProductOfEachSlab() {
+		// The stacked shape (torch.bmm): every slab is its own product, and small
+		// integers through the fold are exact at both widths, so this is an EQUALITY.
+		int n = square();
+		int batch = 3;
+		double[] a = new double[batch * n * n], b = new double[batch * n * n];
+		float[] af = new float[a.length], bf = new float[b.length];
+		for (int i = 0; i < a.length; i++) {
+			a[i] = (i % 7) - 3;
+			b[i] = (i % 5) - 2;
+			af[i] = (float) a[i];
+			bf[i] = (float) b[i];
+		}
+		double[] c = new double[batch * n * n];
+		float[] cf = new float[batch * n * n];
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, c, 0, batch, n, n, n)).isTrue();
+		assertThat(Gpu.multiply(af, 0, n * n, bf, 0, n * n, cf, 0, batch, n, n, n)).isTrue();
+		for (int z = 0; z < batch; z++) {
+			double[] expected = reference(a, z * n * n, b, z * n * n, n, n, n);
+			for (int i = 0; i < n * n; i++) {
+				assertThat(c[z * n * n + i]).isEqualTo(expected[i]);
+				assertThat((double) cf[z * n * n + i]).isEqualTo(expected[i]);
+			}
+		}
+	}
+
+	@Test
+	void aBatchIsBitIdenticalToTheSameSlabsRunOneAtATime() {
+		// The precision contract of the stacked member, stated as an assertion: a batched
+		// cell is a per-batch device product, not something the batch axis rounds
+		// differently. INEXACT operands, so a difference would show.
+		int n = square();
+		int batch = 4;
+		Random random = new Random(4242L);
+		double[] a = new double[batch * n * n], b = new double[batch * n * n];
+		for (int i = 0; i < a.length; i++) {
+			a[i] = random.nextDouble() - 0.5;
+			b[i] = random.nextDouble() - 0.5;
+		}
+		double[] batched = new double[batch * n * n];
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, batched, 0, batch, n, n, n)).isTrue();
+		for (int z = 0; z < batch; z++) {
+			double[] alone = new double[n * n];
+			assertThat(Gpu.multiply(a, z * n * n, b, z * n * n, alone, 0, n, n, n)).isTrue();
+			for (int i = 0; i < n * n; i++) {
+				assertThat(batched[z * n * n + i]).isEqualTo(alone[i]);
+			}
+		}
+	}
+
+	@Test
+	void aBroadcastOperandIsAZeroStrideAndReadsTheSameSlabEveryBatch() {
+		// What linalg::%la-matmul-nd's broadcast leading axis passes -- and every
+		// torch:linear over a (B T C) activation, whose right operand is one matrix. The
+		// operand array holds exactly ONE slab however long the batch is, which is also
+		// the assertion that only that slab is copied to the device.
+		int n = square();
+		int batch = 5;
+		double[] a = new double[batch * n * n], b = new double[n * n];
+		for (int i = 0; i < a.length; i++) {
+			a[i] = (i % 7) - 3;
+		}
+		for (int i = 0; i < b.length; i++) {
+			b[i] = (i % 5) - 2;
+		}
+		double[] c = new double[batch * n * n];
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, 0, c, 0, batch, n, n, n)).isTrue();
+		for (int z = 0; z < batch; z++) {
+			double[] expected = reference(a, z * n * n, b, 0, n, n, n);
+			for (int i = 0; i < n * n; i++) {
+				assertThat(c[z * n * n + i]).isEqualTo(expected[i]);
+			}
+		}
+		// And the other way round: one left operand against a stack of right ones.
+		double[] left = new double[n * n], stack = new double[batch * n * n], out = new double[batch * n * n];
+		for (int i = 0; i < left.length; i++) {
+			left[i] = (i % 3) - 1;
+		}
+		for (int i = 0; i < stack.length; i++) {
+			stack[i] = (i % 4) - 2;
+		}
+		assertThat(Gpu.multiply(left, 0, 0, stack, 0, n * n, out, 0, batch, n, n, n)).isTrue();
+		for (int z = 0; z < batch; z++) {
+			double[] expected = reference(left, 0, stack, z * n * n, n, n, n);
+			for (int i = 0; i < n * n; i++) {
+				assertThat(out[z * n * n + i]).isEqualTo(expected[i]);
+			}
+		}
+	}
+
+	@Test
+	void aBatchedProductReadsEveryOperandFromItsOwnOffset() {
+		int n = square();
+		int batch = 3, headerA = 4, headerB = 3, headerOut = 5;
+		double[] a = new double[headerA + batch * n * n], b = new double[headerB + batch * n * n];
+		double[] out = new double[headerOut + batch * n * n];
+		for (int i = 0; i < headerA; i++) {
+			a[i] = Double.NaN;
+		}
+		for (int i = 0; i < headerB; i++) {
+			b[i] = Double.NaN;
+		}
+		for (int i = 0; i < headerOut; i++) {
+			out[i] = i + 0.25;
+		}
+		for (int i = 0; i < batch * n * n; i++) {
+			a[headerA + i] = (i % 7) - 3;
+			b[headerB + i] = (i % 5) - 2;
+		}
+		assertThat(Gpu.multiply(a, headerA, n * n, b, headerB, n * n, out, headerOut, batch, n, n, n)).isTrue();
+		for (int z = 0; z < batch; z++) {
+			double[] expected = reference(a, headerA + z * n * n, b, headerB + z * n * n, n, n, n);
+			for (int i = 0; i < n * n; i++) {
+				assertThat(out[headerOut + z * n * n + i]).isEqualTo(expected[i]);
+			}
+		}
+		for (int i = 0; i < headerOut; i++) {
+			assertThat(out[i]).isEqualTo(i + 0.25);
+		}
+	}
+
+	@Test
+	void everyBatchedDeclineConditionStillDeclinesWithADevicePresent() {
+		int n = square();
+		int batch = 3;
+		double[] a = new double[batch * n * n], b = new double[batch * n * n], out = new double[batch * n * n];
+		// Below the threshold, which for a stack is the TOTAL work: one 8x8x8 product
+		// stays below it however the batch is spelled, and 64 of them still do.
+		assertThat(Gpu.worth(64, 8, 8, 8)).isFalse();
+		assertThat(Gpu.multiply(a, 0, 512, b, 0, 512, out, 0, 64, 8, 8, 8)).isFalse();
+		// An empty batch, and one past the 16-bit gridDim.z.
+		assertThat(Gpu.worth(0, n, n, n)).isFalse();
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, out, 0, 0, n, n, n)).isFalse();
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, out, 0, 70_000, n, n, n)).isFalse();
+		// A stride that walks off the end of an operand, and a negative one.
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, out, 0, batch + 1, n, n, n)).isFalse();
+		assertThat(Gpu.multiply(a, 0, -(n * n), b, 0, n * n, out, 0, batch, n, n, n)).isFalse();
+		// A result array that cannot hold the whole stack.
+		assertThat(Gpu.multiply(a, 0, n * n, b, 0, n * n, new double[n * n], 0, batch, n, n, n)).isFalse();
+		// And a batch above the threshold still costs the device nothing when it is too
+		// big for device memory.
+		assertThat(Gpu.multiply(a, 0, 0, b, 0, 0, out, 0, 60_000, 20_000, 20_000, 20_000)).isFalse();
+	}
+
 	/** The scalar row-by-column product the accelerated one has to agree with. */
 	private static double[] reference(double[] a, int offsetA, double[] b, int offsetB, int n, int m, int p) {
 		double[] c = new double[n * p];

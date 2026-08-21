@@ -213,7 +213,29 @@ public final class Gpu {
 	 * @return {@code true} when the product is above the size threshold
 	 */
 	public static boolean worth(long n, long m, long p) {
-		return n > 0 && m > 0 && p > 0 && n * m * p >= POOLED_MIN_WORK;
+		return worth(1, n, m, p);
+	}
+
+	/**
+	 * The same predicate for a STACK of {@code batch} such products, which is what a
+	 * batched matrix product ({@code torch.bmm}, and hence every attention layer) offers.
+	 *
+	 * <p>
+	 * The measure is the TOTAL multiply-adds, {@code batch * n * m * p}, against the same
+	 * threshold -- a batch is one round trip and one launch, so the floor this threshold
+	 * exists to clear is paid once for the whole stack, not once per matrix. That is also
+	 * why the batched shape is the one this feature pays on: the CPU's cost grows with
+	 * the total work while the device's fixed cost does not, and a batch of 16 small
+	 * matrices is 16x the work behind one 15 us floor. Measured, a batch of 64x64
+	 * products crosses over at batch 1 and stays ahead from there ({@code .kb/gpu.md}).
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m the inner dimension
+	 * @param p columns of each right operand and of each result
+	 * @return {@code true} when the stack is above the size threshold
+	 */
+	public static boolean worth(long batch, long n, long m, long p) {
+		return batch > 0 && n > 0 && m > 0 && p > 0 && batch * n * m * p >= POOLED_MIN_WORK;
 	}
 
 	/**
@@ -276,6 +298,74 @@ public final class Gpu {
 	}
 
 	/**
+	 * {@code out = a x b} for a STACK of {@code batch} row-major {@code n x m} by
+	 * {@code m x p} double-float products, written straight into the caller's array at
+	 * its own offset -- one round trip and one launch for the whole stack, because the
+	 * device carries the batch on {@code blockIdx.z}.
+	 *
+	 * <p>
+	 * {@code strideA} and {@code strideB} are per-batch ELEMENT strides, and either may
+	 * be 0: that is what a BROADCAST operand passes (a rank-2 right operand under a
+	 * rank-3 left one, which is every {@code torch:linear} over a {@code (B T C)}
+	 * activation), and the whole batch then reads the same slab -- so only that slab is
+	 * copied to the device. The result is contiguous, {@code n * p} per batch.
+	 *
+	 * <p>
+	 * The precision contract is the unbatched one's, and it is exactly the same code: a
+	 * batched cell is a per-batch
+	 * {@link #multiply(double[], int, double[], int, double[], int, int, int, int)
+	 * multiply} of the same slab, folding {@code k} in ascending order with a FUSED
+	 * multiply-add per term.
+	 * @param a the left operands, row-major, the first starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA elements from one left operand to the next, or 0 to broadcast
+	 * @param b the right operands, row-major, the first starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB elements from one right operand to the next, or 0 to broadcast
+	 * @param out the array the {@code batch * n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean multiply(double[] a, int offsetA, int strideA, double[] b, int offsetB, int strideB,
+			double[] out, int offsetOut, int batch, int n, int m, int p) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut,
+				batch, n, m, p)
+				&& device.gemm(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #multiply(double[], int, int, double[], int, int, double[], int, int, int, int, int)},
+	 * and the one the hardware is for.
+	 * @param a the left operands, row-major, the first starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA elements from one left operand to the next, or 0 to broadcast
+	 * @param b the right operands, row-major, the first starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB elements from one right operand to the next, or 0 to broadcast
+	 * @param out the array the {@code batch * n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean multiply(float[] a, int offsetA, int strideA, float[] b, int offsetB, int strideB,
+			float[] out, int offsetOut, int batch, int n, int m, int p) {
+		CudaGemm device = Probe.DEVICE;
+		return device != null && offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut,
+				batch, n, m, p)
+				&& device.gemmF(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
+	}
+
+	/**
 	 * {@code a x b} into a fresh array -- the convenience form, for a caller that wants a
 	 * bare {@code n * p} result with no header of its own.
 	 * @param a the left operand, row-major, elements starting at {@code offsetA}
@@ -324,9 +414,22 @@ public final class Gpu {
 	 */
 	private static boolean offered(long lengthA, int offsetA, long lengthB, int offsetB, long lengthOut, int offsetOut,
 			int n, int m, int p) {
-		return n > 0 && m > 0 && p > 0 && (long) n * m * p >= Probe.MIN_WORK && CudaGemm.launchable(n, m, p)
-				&& offsetA >= 0 && offsetB >= 0 && offsetOut >= 0 && (long) offsetA + (long) n * m <= lengthA
-				&& (long) offsetB + (long) m * p <= lengthB && (long) offsetOut + (long) n * p <= lengthOut;
+		return offered(lengthA, offsetA, 0, lengthB, offsetB, 0, lengthOut, offsetOut, 1, n, m, p);
+	}
+
+	/**
+	 * The same for a STACK: every matrix has to be launchable, the whole stack has to
+	 * clear the threshold, and each operand's SPAN -- the last slab plus everything its
+	 * stride skipped on the way there, so a 0 stride spans one slab however long the
+	 * batch -- has to be inside the array it was handed.
+	 */
+	private static boolean offered(long lengthA, int offsetA, int strideA, long lengthB, int offsetB, int strideB,
+			long lengthOut, int offsetOut, int batch, int n, int m, int p) {
+		return batch > 0 && n > 0 && m > 0 && p > 0 && (long) batch * n * m * p >= Probe.MIN_WORK
+				&& CudaGemm.launchable(batch, n, m, p) && offsetA >= 0 && offsetB >= 0 && offsetOut >= 0 && strideA >= 0
+				&& strideB >= 0 && (long) offsetA + (long) (batch - 1) * strideA + (long) n * m <= lengthA
+				&& (long) offsetB + (long) (batch - 1) * strideB + (long) m * p <= lengthB
+				&& (long) offsetOut + (long) batch * n * p <= lengthOut;
 	}
 
 }

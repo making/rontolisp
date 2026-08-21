@@ -18,13 +18,14 @@ import am.ik.jvm.Opcode;
  * Compiles the accelerated {@code linalg:} kernels to calls into the embedded bridges,
  * the {@code linalg:} sibling of {@link JvmSimdCompiler}. It is the ONE {@code linalg:}
  * call-site compiler, and it emits a CHAIN of up to three attempts over one set of temps:
- * the device ({@code --gpu}, {@link JvmGpuTemplate}), then a tuned CBLAS ({@code --blas},
- * {@link JvmBlasTemplate}), then the lane kernel ({@code --simd},
- * {@link JvmSimdVectorTemplate}), then the scalar {@code linalg.lisp} defun -- which is
- * the interpreter's install order written as a chain ({@code .kb/gpu.md}). Only wired in
- * when at least one of the three flags emitted its runtime ({@link JvmLispCompiler.Ctx}'s
- * {@code simdOps} / {@code blasOps} / {@code gpuOps}); otherwise the qualified call falls
- * through to the ordinary spliced defun.
+ * the device ({@code --gpu}, {@link JvmGpuTemplate}: the rank-2 product and the stacked
+ * one), then a tuned CBLAS ({@code --blas}, {@link JvmBlasTemplate}), then the lane
+ * kernel ({@code --simd}, {@link JvmSimdVectorTemplate}), then the scalar
+ * {@code linalg.lisp} defun -- which is the interpreter's install order written as a
+ * chain ({@code .kb/gpu.md}). Only wired in when at least one of the three flags emitted
+ * its runtime ({@link JvmLispCompiler.Ctx}'s {@code simdOps} / {@code blasOps} /
+ * {@code gpuOps}); otherwise the qualified call falls through to the ordinary spliced
+ * defun.
  *
  * <h2>Why this call site is not simply a bridge call</h2>
  *
@@ -235,7 +236,7 @@ final class JvmLinalgKernelCompiler {
 		// CPU path this invocation enabled, never back on the defun.
 		List<Integer> takenBranches = new ArrayList<>();
 		if (gpu != null && !extendedCall) {
-			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.DOT, null, slots, arity, takenBranches);
+			emitAttempt(ctx, gpu, JvmLinalgGpu.kernelKey(member), null, slots, arity, takenBranches);
 		}
 		if (blas != null && !extendedCall) {
 			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, takenBranches);

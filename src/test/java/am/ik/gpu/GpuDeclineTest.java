@@ -111,6 +111,43 @@ class GpuDeclineTest {
 	}
 
 	@Test
+	void aStackBelowTheSizeThresholdIsNeverOffered() {
+		// A batch is ONE round trip and one launch, so the threshold is over the TOTAL
+		// work: what the device has to beat is the CPU's cost for the whole stack, and
+		// the floor it has to clear is paid once. Measured, that is the same crossover
+		// the unbatched product has (.kb/gpu.md).
+		assertThat(Gpu.worth(1, 32, 32, 32)).isFalse();
+		assertThat(Gpu.worth(3, 32, 32, 32)).isFalse();
+		assertThat(Gpu.worth(4, 32, 32, 32)).isTrue();
+		assertThat(Gpu.worth(256, 8, 8, 8)).isTrue();
+		assertThat(Gpu.worth(64, 64, 64, 64)).isTrue();
+		// A batch and a single product of the same total work agree, and the unbatched
+		// predicate is the batch-of-one.
+		assertThat(Gpu.worth(1, 64, 64, 64)).isEqualTo(Gpu.worth(64, 64, 64));
+		// A degenerate batch is not small work, it is not a product at all.
+		assertThat(Gpu.worth(0, 1024, 1024, 1024)).isFalse();
+		assertThat(Gpu.worth(-1, 1024, 1024, 1024)).isFalse();
+	}
+
+	@Test
+	void everyBatchedDeclineConditionDeclinesRatherThanThrows() {
+		double[] a = new double[8 * 64 * 64], b = new double[8 * 64 * 64], out = new double[8 * 64 * 64];
+		float[] af = new float[8 * 64 * 64], bf = new float[8 * 64 * 64], outF = new float[8 * 64 * 64];
+		// Below the threshold, an empty batch, and one past the 16-bit gridDim.z.
+		assertThat(Gpu.multiply(a, 0, 16, b, 0, 16, out, 0, 8, 4, 4, 4)).isFalse();
+		assertThat(Gpu.multiply(a, 0, 4096, b, 0, 4096, out, 0, 0, 64, 64, 64)).isFalse();
+		assertThat(Gpu.multiply(a, 0, 0, b, 0, 0, out, 0, 70_000, 64, 64, 64)).isFalse();
+		// Strides that walk off the end of an operand, and negative ones.
+		assertThat(Gpu.multiply(a, 0, 4096, b, 0, 4096, out, 0, 9, 64, 64, 64)).isFalse();
+		assertThat(Gpu.multiply(af, 0, -4096, bf, 0, 4096, outF, 0, 8, 64, 64, 64)).isFalse();
+		// A destination that cannot hold the whole stack.
+		assertThat(Gpu.multiply(a, 0, 4096, b, 0, 4096, new double[4096], 0, 8, 64, 64, 64)).isFalse();
+		// And a declined call leaves the destination alone, on a machine with a device
+		// as much as on one without.
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
 	void anUnaskableShapeIsNotLaunchable() {
 		assertThat(CudaGemm.launchable(64, 64, 64)).isTrue();
 		assertThat(CudaGemm.launchable(0, 64, 64)).isFalse();
@@ -120,6 +157,12 @@ class GpuDeclineTest {
 		assertThat(CudaGemm.launchable(65536L * 16, 1, 1)).isFalse();
 		// The result has to be indexable as a Java array.
 		assertThat(CudaGemm.launchable(1 << 20, 1, 1 << 20)).isFalse();
+		// A stack rides on gridDim.z, which is 16 bits too, and the whole stack has to be
+		// one Java array.
+		assertThat(CudaGemm.launchable(65535, 64, 64, 64)).isTrue();
+		assertThat(CudaGemm.launchable(65536, 64, 64, 64)).isFalse();
+		assertThat(CudaGemm.launchable(0, 64, 64, 64)).isFalse();
+		assertThat(CudaGemm.launchable(1 << 16, 1 << 16, 1, 1 << 16)).isFalse();
 	}
 
 	@Test
@@ -170,6 +213,10 @@ class GpuDeclineTest {
 		assertThat(ptx).contains(".target sm_" + CudaGemm.PTX_COMPUTE_CAPABILITY);
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_F64);
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_F32);
+		// The stacked siblings regenerate from the same source, so a regeneration that
+		// dropped them would leave a build whose probe declines on every machine.
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F64);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F32);
 		// The regeneration command travels with the artifact: without it the .ptx is an
 		// unreproducible blob.
 		assertThat(ptx).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");

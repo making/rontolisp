@@ -17,7 +17,9 @@ import static org.assertj.core.api.Assumptions.assumeThat;
 
 /**
  * The interpreter's opt-in {@code --gpu} acceleration of the {@code linalg:} matrix
- * product ({@link LinalgGpu}), the sibling of {@link LinalgBlasTest}.
+ * product ({@link LinalgGpu}) -- {@code linalg:dot}'s M.M case and the STACKED
+ * {@code linalg::%la-matmul-nd} behind {@code linalg:matmul} at rank &gt;= 3 -- the
+ * sibling of {@link LinalgBlasTest}.
  *
  * <p>
  * Whether a device exists is a property of the MACHINE, not of the build, so the whole
@@ -124,7 +126,12 @@ class LinalgGpuTest {
 		// just as well on a dead flag.
 		assertThat(eval("(linalg:zeros 1) #'linalg:dot", true).print()).isEqualTo("#<function LINALG:DOT>");
 		assertThat(eval("(linalg:zeros 1) #'linalg:dot", false).print()).isEqualTo("#<lambda>");
-		// One member and no other: matmul is accelerated through dot, not instead of it.
+		// And the stacked member, whose qualified spelling carries the double colon.
+		assertThat(eval("(linalg:zeros 1) #'linalg::%la-matmul-nd", true).print())
+			.isEqualTo("#<function LINALG::%LA-MATMUL-ND>");
+		assertThat(eval("(linalg:zeros 1) #'linalg::%la-matmul-nd", false).print()).isEqualTo("#<lambda>");
+		// Two members and no others: matmul is accelerated through them, not instead of
+		// them.
 		for (String member : new String[] { "matmul", "add", "sum", "outer", "transpose" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member).isEqualTo("#<lambda>");
 		}
@@ -181,6 +188,62 @@ class LinalgGpuTest {
 		assertThat(divergence(singles, singleOracle)).isLessThan(1e-5).isGreaterThan(0);
 	}
 
+	@Test
+	void theStackedProductMatchesTheScalarOracleAtEveryBatchShape() {
+		// The shape this member exists for, and every shape the batch odometer can hand
+		// the device: a plain rank-3 stack, a BROADCAST right operand (the rank-2 matrix
+		// under a rank-3 activation, which is every torch:linear), a broadcast LEFT one,
+		// and rank 4 with two leading axes. Integer-valued operands whose partial sums
+		// stay under 2^24, so the fold is exact at both widths and this is an equality.
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(defparameter *b* (linalg:add (linalg:ones '(2 64 64)) 2.0))
+				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
+				""");
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(defparameter *b* (linalg:add (linalg:ones '(64 64)) 2.0))
+				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
+				""");
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:add (linalg:ones '(1 64 64)) 2.0))
+				(defparameter *b* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
+				""");
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 12289) '(2 3 32 64)))
+				(defparameter *b* (linalg:add (linalg:ones '(2 3 64 32)) 1.0))
+				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
+				""");
+		// Single-float, and a rectangular slab that is not a multiple of the 16x16 tile.
+		assertMatchesScalarOracle("""
+				(defparameter *a*
+				  (linalg:reshape (linalg:arange 1 8401 :element-type 'single-float) '(4 60 35)))
+				(defparameter *b*
+				  (linalg:add (linalg:ones '(4 35 50) :element-type 'single-float) 2.0))
+				(linalg:to-list (linalg:flatten (linalg:matmul *a* *b*)))
+				""");
+	}
+
+	@Test
+	void aStackedCellIsAPerBatchDeviceProductAndNotTheDefunsFold() {
+		// The precision contract of this member, stated the way the --simd one is: not
+		// "identical to the defun" but "identical to a per-batch linalg:dot ON THE
+		// DEVICE". So an inexact stack must equal the device's own rank-2 answer for the
+		// same slab, bit for bit, while differing from the scalar oracle.
+		String slab = """
+				(defparameter *a* (linalg:reshape (linalg:sin (linalg:arange 0 4096)) '(64 64)))
+				(defparameter *b* (linalg:reshape (linalg:cos (linalg:arange 0 4096)) '(64 64)))
+				""";
+		double[] flat = elements(eval(slab + "(linalg:matmul *a* *b*)", true));
+		double[] stacked = elements(eval(slab + """
+				(linalg:matmul (linalg:reshape *a* '(1 64 64)) (linalg:reshape *b* '(1 64 64)))
+				""", true));
+		assertThat(stacked).isEqualTo(flat);
+		double[] oracle = elements(eval(slab + "(linalg:matmul *a* *b*)", false));
+		assertThat(divergence(stacked, oracle)).isLessThan(1e-13).isGreaterThan(0);
+	}
+
 	// --- what it declines ------------------------------------------------------------
 
 	@Test
@@ -210,11 +273,32 @@ class LinalgGpuTest {
 				""");
 		// A vector-by-vector dot.
 		assertMatchesScalarOracle("(linalg:dot (linalg:arange 1 100) (linalg:arange 1 100))");
-		// Rank 3: the STACKED product, which goes through %la-matmul-nd.
+		// A rank-3 stack whose TOTAL work is under the threshold: %la-matmul-nd is
+		// intercepted, but 2 x 4x4x4 is 128 multiply-adds and declines like any other
+		// small product.
 		assertMatchesScalarOracle("""
 				(defparameter *a* (linalg:reshape (linalg:arange 1 33) '(2 4 4)))
 				(linalg:matmul *a* *a*)
 				""");
+		// A rank-1 operand on either side of the stacked member: the numpy
+		// promote-then-drop-the-axis rule stays in the defun.
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(linalg:to-list (linalg:flatten (linalg:matmul *a* (linalg:arange 1 65))))
+				""");
+		// A batch shape whose offsets are not AFFINE in the batch index -- a broadcast
+		// axis UNDER a non-broadcast one. Above the threshold, and still the CPU's.
+		assertMatchesScalarOracle("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 3201) '(2 1 40 40)))
+				(defparameter *b* (linalg:reshape (linalg:arange 1 9601) '(2 3 40 40)))
+				(linalg:sum (linalg:matmul *a* *b*))
+				""");
+		// A non-broadcastable batch shape and a mismatched inner dimension are the
+		// defun's errors to signal, at rank 3 as at rank 2.
+		assertThatThrownBy(() -> eval("""
+				(linalg:matmul (linalg:reshape (linalg:arange 1 8193) '(2 64 64))
+				               (linalg:reshape (linalg:arange 1 12289) '(3 64 64)))
+				""", true)).hasMessageContaining("matmul");
 		// Below the size threshold, where a round trip cannot pay for itself. This is the
 		// shape every example in the repository actually runs.
 		assertMatchesScalarOracle("(linalg:matmul #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0)))");
@@ -284,15 +368,55 @@ class LinalgGpuTest {
 	}
 
 	@Test
+	void aDeclinedStackFallsOnTheLaneKernelWhenSimdIsOnAndOnTheDefunOtherwise() {
+		// --blas does NOT take this member, so for a stacked product the chain is
+		// device -> lane kernel -> defun, with no library rung. The probe is the rank-3
+		// line of .kb/linalg-simd.md's f32 fold: the lane kernel accumulates in single
+		// precision and prints 16777216, the boxed defun widens and prints 16778240, so
+		// the fallback target is legible. The shape is well under the size threshold, so
+		// the device declines it however the flags are set.
+		String probe = """
+				(let ((v (linalg:ones 1024 :element-type 'single-float)))
+				  (setf (aref v 0) 4096.0)
+				  (round (row-major-aref
+				          (linalg:matmul (linalg:reshape v '(1 1 1024)) (linalg:reshape v '(1 1024 1))) 0)))
+				""";
+		assertThat(eval(probe, false, false, false).print()).isEqualTo("16778240");
+		assertThat(eval(probe, true, false, false).print()).isEqualTo("16778240");
+		assertThat(eval(probe, true, true, false).print()).isEqualTo("16778240");
+		assertThat(eval(probe, true, false, true).print()).isEqualTo("16777216");
+		assertThat(eval(probe, true, true, true).print()).isEqualTo("16777216");
+	}
+
+	@Test
+	void theDeviceIsAskedAheadOfTheLaneKernelForTheStackedProductToo() {
+		String stack = """
+				(defparameter *a* (linalg:reshape (linalg:sin (linalg:arange 0 8192)) '(2 64 64)))
+				(defparameter *b* (linalg:reshape (linalg:cos (linalg:arange 0 8192)) '(2 64 64)))
+				(linalg:matmul *a* *b*)
+				""";
+		double[] gpuOnly = elements(eval(stack, true, false, false));
+		double[] simdOnly = elements(eval(stack, false, false, true));
+		// At #d the lane kernel is bit-identical to the scalar defun and the device
+		// fuses, so these differ by construction.
+		assertThat(simdOnly).isNotEqualTo(gpuOnly);
+		assertThat(elements(eval(stack, true, false, true))).isEqualTo(gpuOnly);
+		assertThat(elements(eval(stack, true, true, true))).isEqualTo(gpuOnly);
+	}
+
+	@Test
 	void everyCombinationOfTheThreeFlagsRunsAnExactProgramToTheSameOutput() {
 		// Eight invocations, one program, one answer: the composition is only worth
 		// having if it cannot change what an exact program prints.
 		String program = """
 				(defparameter *a* (linalg:add (linalg:ones '(64 64)) 2.0))
 				(defparameter *b* (linalg:reshape (linalg:arange 1 4097) '(64 64)))
+				(defparameter *s* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
 				(list (linalg:to-list (linalg:matmul *a* *b*))
 				      (linalg:to-list (linalg:dot *a* (linalg:arange 1 65)))
-				      (linalg:sum (linalg:matmul *b* *a*)))
+				      (linalg:sum (linalg:matmul *b* *a*))
+				      (linalg:to-list (linalg:flatten (linalg:matmul *s* *a*)))
+				      (linalg:to-list (linalg:flatten (linalg:matmul *s* (linalg:reshape *s* '(2 64 64))))))
 				""";
 		String oracle = eval(program, false, false, false).print();
 		for (boolean gpu : new boolean[] { false, true }) {

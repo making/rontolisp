@@ -29,9 +29,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * The {@code --gpu} JVM acceleration of the {@code linalg:} matrix product, the sibling
  * of {@link JvmLinalgBlasAccelCompilerTest} and the compiled half of
  * {@code eval/LinalgGpuTest} / {@code eval/LinalgGpuDeclineTest}. The {@code linalg:dot}
- * call site is routed to the embedded {@link JvmGpuTemplate} bridge over an injected copy
- * of {@code am.ik.gpu}, which offers the product to an NVIDIA device and declines to
- * whatever is below it.
+ * and {@code linalg::%la-matmul-nd} call sites are routed to the embedded
+ * {@link JvmGpuTemplate} bridge over an injected copy of {@code am.ik.gpu}, which offers
+ * the product to an NVIDIA device and declines to whatever is below it.
  *
  * <p>
  * Two halves, as everywhere over this seam: the half that must hold on EVERY machine --
@@ -117,6 +117,12 @@ class JvmLinalgGpuAccelCompilerTest {
 		// program pulls it in, because the spliced linalg.lisp holds the dot call site.
 		assertThat(embedsGpuBridge(compile("(print (+ 1 2))", true))).isFalse();
 		assertThat(embedsGpuBridge(compile("(print (linalg:eye 2))", true))).isTrue();
+		// The gate is over BOTH members. A transformer reaches only the stacked one, so
+		// a gate on dot alone would embed no bridge for exactly the program this flag is
+		// for -- pinned here by asking for the stacked call site by its own name.
+		assertThat(embedsGpuBridge(
+				compile("(print (linalg::%la-matmul-nd (linalg:zeros '(1 1 1))" + " (linalg:zeros '(1 1 1))))", true)))
+			.isTrue();
 	}
 
 	@Test
@@ -157,7 +163,10 @@ class JvmLinalgGpuAccelCompilerTest {
 		// base64'd like the class files -- and is handed to Gpu.useKernels by _gpuInit.
 		String bytes = new String(compile("(print (linalg:matmul #d((1.0)) #d((2.0))))", true),
 				StandardCharsets.ISO_8859_1);
-		assertThat(bytes).contains(".visible .entry gemm_f64").contains(".visible .entry gemm_f32");
+		assertThat(bytes).contains(".visible .entry gemm_f64")
+			.contains(".visible .entry gemm_f32")
+			.contains(".visible .entry gemm_batched_f64")
+			.contains(".visible .entry gemm_batched_f32");
 	}
 
 	@Test
@@ -212,9 +221,23 @@ class JvmLinalgGpuAccelCompilerTest {
 				(defparameter *f* (linalg:reshape (linalg:arange 1 4097 :element-type 'single-float) '(64 64)))
 				(print (linalg:matmul *d* *f*))
 				""");
+		// A stack whose TOTAL work is under the threshold -- the shape every example in
+		// the repository actually runs -- and a rank-1 operand against a stack, which
+		// stays in the defun.
+		assertMatchesScalarReference("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 257) '(4 8 8)))
+				(print (linalg:matmul *a* *a*))
+				""");
 		assertMatchesScalarReference("""
 				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
-				(print (linalg:matmul *a* *a*))
+				(print (linalg:matmul *a* (linalg:arange 1 65)))
+				""");
+		// A batch whose offsets are not affine in the batch index: a broadcast axis
+		// UNDER a non-broadcast one, which one stride cannot express.
+		assertMatchesScalarReference("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 3201) '(2 1 40 40)))
+				(defparameter *b* (linalg:reshape (linalg:arange 1 9601) '(2 3 40 40)))
+				(print (linalg:sum (linalg:matmul *a* *b*)))
 				""");
 		assertMatchesScalarReference("(print (linalg:dot (linalg:arange 1 100) (linalg:arange 1 100)))");
 		assertMatchesScalarReference("""
@@ -223,6 +246,32 @@ class JvmLinalgGpuAccelCompilerTest {
 				(print (linalg:dot (linalg:arange 1 65) *a*))
 				""");
 		assertMatchesScalarReference("(print (linalg:matmul #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0))))");
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void theStackedProductMatchesTheScalarReferenceAtEveryBatchShape() throws Exception {
+		// The shape the flag exists for: torch.bmm, every attention layer, every
+		// torch:linear over a (B T C) activation. Exact at the operand width, so the
+		// device's fused multiply-adds cannot show and the answer must be the defun's.
+		assertMatchesScalarReference("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(defparameter *b* (linalg:add (linalg:ones '(2 64 64)) 2.0))
+				(print (linalg:sum (linalg:matmul *a* *b*)))
+				""");
+		// A BROADCAST right operand, which is a 0 batch stride on the device.
+		assertMatchesScalarReference("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(defparameter *b* (linalg:add (linalg:ones '(64 64)) 2.0))
+				(print (linalg:sum (linalg:matmul *a* *b*)))
+				""");
+		// Rank 4 with two leading axes, and single width.
+		assertMatchesScalarReference("""
+				(defparameter *a*
+				  (linalg:reshape (linalg:arange 1 12289 :element-type 'single-float) '(2 3 32 64)))
+				(defparameter *b* (linalg:add (linalg:ones '(2 3 64 32) :element-type 'single-float) 1.0))
+				(print (linalg:sum (linalg:matmul *a* *b*)))
+				""");
 	}
 
 	@Test
@@ -246,6 +295,37 @@ class JvmLinalgGpuAccelCompilerTest {
 				(print *n*)
 				""";
 		assertThat(accel(accepted)).isEqualTo("1");
+		// And the stacked call site, which is a second chain over its own temps.
+		String stacked = """
+				(defparameter *n* 0)
+				(defparameter *m* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(defun bump () (setq *n* (+ *n* 1)) *m*)
+				(linalg:matmul (bump) *m*)
+				(print *n*)
+				""";
+		assertThat(accel(stacked)).isEqualTo("1");
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void aDeclinedStackFallsOnTheLaneKernelWhenSimdIsOnAndOnTheDefunOtherwise() throws Exception {
+		// --blas does not take this member, so the stacked chain is device -> lane
+		// kernel -> defun. The probe is .kb/linalg-simd.md's f32 fold at rank 3: the lane
+		// kernel accumulates in single precision and prints 16777216, the boxed defun
+		// widens and prints 16778240. The stack is far below the size threshold, so the
+		// device declines it whatever the flags are.
+		String probe = """
+				(defparameter *v*
+				  (linalg:reshape (linalg:emap (lambda (x) (if (= x 0) 4096.0 1.0))
+				                               (linalg:arange 0 1024 :element-type 'single-float))
+				                  '(1 1 1024)))
+				(print (round (row-major-aref
+				               (linalg:matmul *v* (linalg:reshape *v* '(1 1024 1))) 0)))
+				""";
+		assertThat(run(compile(probe, true, false, false))).isEqualTo("16778240");
+		assertThat(run(compile(probe, true, true, false))).isEqualTo("16778240");
+		assertThat(run(compile(probe, true, false, true))).isEqualTo("16777216");
+		assertThat(run(compile(probe, true, true, true))).isEqualTo("16777216");
 	}
 
 	@Test

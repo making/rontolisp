@@ -2,7 +2,7 @@
 
 `torch` パッケージは [linalg](linear-algebra.md) の上に載る PyTorch スタイルのレイヤーです。どう計算されたかを記憶する**テンソル**と、その履歴を逆向きに辿って勾配を書き込む `torch:backward` からなります。手書きの誤差逆伝播が行っていたこと -- どの配列がどこに流れたかの追跡、演算ごとの随伴の導出、ブロードキャスト軸での勾配の合計 -- が、演算ひとつずつ自動で行われます。
 
-パッケージは Lisp ソースで一度だけ実装され、すべてのバックエンドで同一に動作します。各演算は `linalg` カーネルを通じて計算するため、torch プログラムは [`--simd`](simd-acceleration.md) でそのまま加速され、数値結果も linalg の結果そのものです。ランク 3 以上のバッチ行列積も加速対象に入っているため、attention 層がほぼその呼び出しで占められる Transformer も、素の多層パーセプトロンと同じだけ恩恵を受けます。[linalg の加速](simd-acceleration.md#accelerating-linalg) を参照してください。
+パッケージは Lisp ソースで一度だけ実装され、すべてのバックエンドで同一に動作します。各演算は `linalg` カーネルを通じて計算するため、torch プログラムは [`--simd`](simd-acceleration.md) でそのまま加速され、数値結果も linalg の結果そのものです。ランク 3 以上のバッチ行列積も加速対象に入っているため、attention 層がほぼその呼び出しで占められる Transformer も、素の多層パーセプトロンと同じだけ恩恵を受けます。同じ呼び出しは、形状が往復に見合う大きさになれば [`--gpu`](simd-acceleration.md#accelerating-the-matrix-product-on-a-gpu---gpu) が NVIDIA のデバイスへ載せるものでもあります。デバイス上ではスタックされた行列の往復は行列ごとにではなく 1 回で済みます。[linalg の加速](simd-acceleration.md#accelerating-linalg) を参照してください。
 
 ## テンソル
 

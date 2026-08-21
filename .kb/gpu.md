@@ -7,7 +7,10 @@ first interceptor over it, and "The interception layer" below is its whole recor
 per-backend touch points, the chain order, the precision contract and the test map. **The
 JVM class output** (phase 2) is the second, and "The JVM backend" below is where its one
 genuinely new decision lives: what the emitted `.class` carries. A `.wasm` output still
-refuses the flag outright and always will.
+refuses the flag outright and always will. **The STACKED product** (phase 4a, 2026-08-21)
+is the second intercepted member on both of those backends, and "The stacked matrix
+product" below is its whole record: the batch kernel, the threshold decision it forced,
+and why it was landed BEFORE residency.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover}.java` over the shared
@@ -51,8 +54,8 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 | `am.ik.rontolisp.eval.LinalgGpuKernels` | the ONE reference to `am.ik.gpu` from `eval`, so `-Pweb` can cut it |
 | `am.ik.rontolisp.codegen.jvm.JvmGpuTemplate` | the compiled call site's glue: the packed representation and the null sentinel |
 | `am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder` | the blob: `am.ik.gpu`'s class files + the PTX, renamed and embedded |
-| `am.ik.rontolisp.codegen.jvm.JvmLinalgGpu` | which member the device bridge claims (one) |
-| `am.ik.gpu.Gpu` | the whole public surface: `available`, `description`, `worth`, two `multiply` overloads |
+| `am.ik.rontolisp.codegen.jvm.JvmLinalgGpu` | which members the device bridge claims (two), and each one's `ops` key |
+| `am.ik.gpu.Gpu` | the whole public surface: `available`, `description`, `worth` (a product or a stack), the `multiply` overloads |
 | `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, and the per-call product |
 | `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 24 downcall handles |
 | `am.ik.gpu.CuResult` | every CUDA 13 status code, and which of them leave the context dead |
@@ -63,15 +66,26 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 ```java
 static boolean available()                       // does this machine have one
 static String  description()                     // what was found, or why nothing was
-static boolean worth(long n, long m, long p)     // is this product big enough to offer
+static boolean worth(long n, long m, long p)              // is this product big enough to offer
+static boolean worth(long batch, long n, long m, long p)  // ... is this STACK of them
 static void    useKernels(String ptx)            // for an embedder that has no resources
 static double[] multiply(double[] a, int offsetA, double[] b, int offsetB, int n, int m, int p)
 static float[]  multiply(float[]  a, int offsetA, float[]  b, int offsetB, int n, int m, int p)
+static boolean  multiply(double[] a, int oA, double[] b, int oB, double[] out, int oOut, int n, int m, int p)
+static boolean  multiply(double[] a, int oA, int strideA, double[] b, int oB, int strideB,
+                         double[] out, int oOut, int batch, int n, int m, int p)
 ```
 
-Row-major `n x m` by `m x p`, a fresh `n * p` array back or `null`. Two shapes of the same
-decision are deliberate: `worth` so a caller can refuse before it unwraps its operands,
-and `multiply` re-asking anyway so it cannot be bypassed.
+Row-major `n x m` by `m x p`, a fresh `n * p` array back or `null`; the `out`-taking forms
+answer `true` / `false` and allocate nothing, and each has a `float[]` sibling. Two shapes
+of the same decision are deliberate: `worth` so a caller can refuse before it unwraps its
+operands, and `multiply` re-asking anyway so it cannot be bypassed.
+
+**The batched pair is the same call plus a per-batch ELEMENT STRIDE on each operand** --
+one launch for the whole stack. A stride may be 0, which is what a BROADCAST operand
+passes, and then only ONE slab of that operand is copied: the span a launch reads is
+`(batch - 1) * stride + n * m`, not `batch * n * m`. That is not a micro-optimization, it
+is the shape every `torch:linear` over a `(B T C)` activation has.
 
 **The offsets are mandatory, not a convenience.** The compiled backends keep a
 `[rank, dim..., data...]` header inside the same array as the data, so an interceptor on
@@ -120,8 +134,14 @@ the artifact instead of only living here. `GpuDeclineTest` asserts it is still t
   fp64 units), and at f32 the 7x cuBLAS wins on kernel time collapses to 1.2-3.0x once the
   copies are on the clock. todo-123 has the full table and the reasoning; nothing here
   opens `libcublas`.
-- Nothing else is in the PTX yet. The batched rank-3 product and the element-wise tier are
-  later phases, and the PTX regenerates then.
+- **Four entry points since phase 4a**: `gemm_f64` / `gemm_f32` and the stacked siblings
+  `gemm_batched_f64` / `gemm_batched_f32`. A batched kernel is six lines -- it offsets the
+  three pointers by `blockIdx.z` times the strides and calls the SAME `gemm<T>` device
+  function -- which is why a batched cell folds `k` bit-identically to an unbatched one
+  and the precision contract below needed no second sentence. `gemm.cu` grew by 22 lines
+  and the PTX by 354; the regeneration command is unchanged, and `nvcc` emits the batched
+  entries after the plain ones. The element-wise tier is a later phase and the PTX
+  regenerates again then.
 - **`Gpu.useKernels(String)` supplies the text for an embedder that carries the library's
   CLASSES but not its resources**, and is read by the probe ahead of the resource. It
   exists for exactly one caller -- the JVM backend, whose emitted class renames these
@@ -437,23 +457,149 @@ The user-facing description lives in `doc/{en,ja}/guides/simd-acceleration.md`
 ("Accelerating the matrix product on a GPU (`--gpu`)"). Keep the intercepted set, the size
 threshold, the chain order and the precision contract in sync with it.
 
-### The intercepted set is ONE shape, and it is narrower than `--blas`'s
+### The intercepted set is TWO shapes, and it is not `--blas`'s
 
-`linalg:dot` over two packed rank-2 operands of the same width, and therefore
-`linalg:matmul` at rank 2 and `linalg:solve` transitively -- nothing else is
-`defineFunction`ed and `#'linalg:add` still prints `#<lambda>` under the flag. Two members
-`--blas` DOES take are deliberately absent:
+`linalg:dot` over two packed rank-2 operands of the same width (hence `linalg:matmul` at
+rank 2 and `linalg:solve` transitively), and since phase 4a `linalg::%la-matmul-nd`, the
+STACKED product behind `linalg:matmul` at rank >= 3 -- nothing else is `defineFunction`ed
+and `#'linalg:add` still prints `#<lambda>` under the flag.
 
-- **The gemv shapes** (M.v and v.M). A matrix-by-vector product is memory-bound, so its
-  whole cost is one pass over an operand the device would have to be handed anyway. A
-  library call on the same core cannot lose that race; a round trip can.
-- **The batched rank-3 product** (`linalg::%la-matmul-nd`). todo-123's phase 4 wants it
-  FIRST of the member tier, and a batch axis is free on a GPU -- but it is a second
-  interception, not a wider `if` in this one.
+The set is narrower than `--blas`'s in one direction and wider in the other, and both
+differences are measurements rather than staging:
 
-The size threshold is `Gpu.worth`'s and nothing else: below `n*m*p = 2^17` the kernel
-returns the null sentinel and the CPU path runs, which is why every example in the
-repository is byte-identical with the flag on.
+- **The gemv shapes** (M.v and v.M) are NOT here, though `--blas` takes them. A
+  matrix-by-vector product is memory-bound, so its whole cost is one pass over an operand
+  the device would have to be handed anyway. A library call on the same core cannot lose
+  that race; a round trip can.
+- **The stacked product** IS here, though `--blas` does not take it (`.kb/linalg-blas.md`
+  says why it stopped at `dot`: a second member wants its own hand-mirrored copy of the
+  dims/broadcast/odometer helpers inside a flat template). On a device a batch axis is
+  `blockIdx.z`, so it is the same kernel with two more parameters -- and it is a
+  transformer's whole hot path.
+
+The size threshold is `Gpu.worth`'s and nothing else: below `n*m*p = 2^17` -- for a stack,
+below `batch*n*m*p = 2^17` -- the kernel returns the null sentinel and the CPU path runs,
+which is why every example in the repository is byte-identical with the flag on.
+
+### The stacked matrix product (`%la-matmul-nd`, phase 4a, 2026-08-21)
+
+**Why it went before phase 3 (residency).** Phase 3's own measurement in todo-123 is a
+five-op chain (`matmul`, `add`, `tanh`, `matmul`, `add`) of which only the two products
+were intercepted members, so residency had almost nothing to hold on to; while this member
+is compute-bound and pays with no residency at all. It is also the shape that matters
+most: before it, `--gpu` declined EVERY rank >= 3 product, so a transformer gained nothing
+from the flag -- which is the workload the flag exists for. Landing it first also gives
+phase 3 a real chain to measure, and the measurement below says what that chain now is.
+
+**The kernel is the unbatched kernel.** `gemm_batched_f64` / `gemm_batched_f32` offset the
+three pointers by `blockIdx.z` times a per-operand stride and call the same `gemm<T>`
+device function, so a batched cell folds `k` bit-identically to an unbatched one. The
+precision contract is therefore "identical to a per-batch device `linalg:dot`", stated
+exactly as `--simd`'s is (`.kb/linalg-simd.md`), and
+`GpuTest.aBatchIsBitIdenticalToTheSameSlabsRunOneAtATime` asserts it over INEXACT operands
+rather than assuming it. `batch == 1` still launches the PLAIN kernel with the parameter
+block it always had, so the rank-2 path is byte for byte what phase 1 measured.
+
+**One stride per operand, not an offset table -- and the decline that buys.** The CPU
+kernel walks the batch axes as the `%la-batch-strides` mixed-radix odometer; the device
+adds `blockIdx.z * stride`. The two agree exactly when every axis's stride is that one
+stride times the axis's own weight in the counter, which is true for a contiguous batch of
+any rank and for a wholly broadcast operand (stride 0), and false for a broadcast axis
+sitting UNDER a non-broadcast one -- `(2 1 40 40) x (2 3 40 40)` is the shape, whose `a`
+offsets go `0,0,0,base,base,base`. The interceptors derive the stride in O(rank) and
+answer -1 when no single stride reproduces the odometer, and -1 is a decline like any
+other. The alternative was a per-batch offset table in a fourth device buffer: fully
+general, one more allocation and copy per call, and it would have made the common case pay
+for a shape no example has. **A broadcast LEADING axis is stride 0 and needs no special
+case at all**, exactly as on the CPU -- and it is better than free: only one slab of that
+operand is copied to the device, which is what `(B T C) x (C, out)` -- every
+`torch:linear` -- does.
+
+**The threshold is the TOTAL work, `batch*n*m*p >= 2^17`, and it is the same constant.**
+This was the open design question: `worth` was calibrated for one product, and a batch of
+B small products is B times the work over one round trip. It could have needed a
+per-matrix floor as well -- a batch of tiny matrices moves `3*batch*n^2` bytes for
+`batch*n^3` flops, so the arithmetic intensity is the MATRIX's, not the stack's. Measured
+on the GB10 (interpreter, us/call, best of three rounds after a throwaway warm-up bench,
+`.todo/123-gpu-acceleration/matmul-nd-baseline.lisp`), it does not:
+
+| batch x n | `--simd` f64 | `--gpu` f64 | `--simd` f32 | `--gpu` f32 |
+|---|---|---|---|---|
+| 256 x 8 (2^17 exactly) | 60 | **48** | 46 | **30** |
+| 64 x 16 | 75 | **43** | 71 | **29** |
+| 32 x 24 | 106 | **49** | 66 | **35** |
+| 16 x 32 | 110 | **45** | 69 | **29** |
+| 4 x 64 | 176 | **49** | 101 | **31** |
+| 16 x 64 | 710 | **86** | 400 | **56** |
+| 32 x 64 | 1420 | **130** | 790 | **70** |
+| 4 x 128 | 1370 | **100** | 760 | **55** |
+| 16 x 128 | 5580 | **300** | 3040 | **130** |
+| 12 x 256 | 31740 | **1240** | 16660 | **380** |
+
+The device is ahead at every shape at or above the threshold, INCLUDING `256 x 8` and
+`64 x 16`, where each matrix is one 16x16 tile or less and the kernel wastes half its
+threads. Right ON the threshold it is a wash to 1.5x (48 against 58; at f32 `4 x 32` --
+also 2^17 -- measured 22.5 against 18, the one place the CPU wins), and from 2x the
+threshold up it is 2-43x. So the crossover for a stack is the same total-work point as for
+a single product, the floor really is paid once for the whole stack, and no second
+constant is needed. The batch is where this flag's ratio comes from: the CPU pays for
+every matrix in the stack, the round trip is paid once, so the ratio grows with the BATCH
+as much as with the matrix.
+
+**Two warm-up traps, and the second one is new.** `.kb`'s existing warning (the GB10 drops
+to its idle clock between small calls, so one timed round over-reports several-fold) is
+not the only one: the FIRST shape measured in a process pays ~500 us/call for its first
+few thousand device calls -- 533 us at `16 x 32` f64 against 44 for the identical bench
+immediately after it -- and it survives best-of-three, because all three rounds are inside
+the warm-up. It is the device call path being JIT-compiled (the following f32 bench is
+already fast, so it is shared machinery and not the shape), and it is why the benchmark
+file runs a throwaway bench at each width before anything it quotes. Every anomaly in the
+first draft of the table above was this and nothing else.
+
+**What it does to a transformer.** `train-gpt-soseki.lisp` at the CURRENT example shapes
+(`*n-embd*` 8, `*block-size*` 8) is byte-identical with the flag and 0.1 s slower for the
+probe: every stack in it is a few thousand multiply-adds and declines, which is the
+intended answer. At the notebook's own shapes -- `*n-embd*` 384, `*block-size*` 256, the
+one-line change the file documents -- on the JVM class output, `--simd` against
+`--gpu --simd`:
+
+| | 5 steps | 20 steps | per training step |
+|---|---|---|---|
+| `--simd` | 10.85 s | 22.72 s | 0.79 s |
+| `--gpu --simd` | 8.51 s | 14.93 s | **0.43 s** |
+
+**1.85x per step, not 26x, and that is the finding.** The per-step slope isolates training
+from setup and sampling. Back out Amdahl against the microbenchmark's ~26x at these shapes
+and the stacked product was about HALF the step; it is now a few percent of it, and what
+is left -- the element-wise tier, `softmax`, `layer-norm`, the exact `gelu` and the AdamW
+update -- is all still on the CPU. That is phase 4b's case, made by measurement rather
+than by assumption, and it is the real chain phase 3 asked for.
+
+**On the INTERPRETER the same program does not move at all** -- 5m53.6 under `--simd`
+against 5m56.0 under `--gpu --simd`, five steps, same shapes -- and the reason is worth
+more than the number. The interpreter leg is 88x the compiled one per step (70 s against
+0.79), and it is not the matmul: measured at the notebook's activation shape, on the
+interpreter,
+
+| one call, interpreter, `#f` | `--simd` | `--gpu --simd` |
+|---|---|---|
+| `linalg:erf` over 1.5 M elements (the exact `gelu`) | 21.14 s | 21.17 s |
+| `linalg:tanh` over the same | 0.022 s | 0.022 s |
+| `(4 256 384) x (384 1536)` matmul | 0.154 s | **0.007 s** |
+
+**And the stacked member inherits the native-image per-call cost, with the same
+workaround.** One `12 x (256 x 256)` f32 stack, `--gpu --simd` against `--simd`: the
+NATIVE BINARY interpreting it goes 31.0 -> 25.6 ms (1.2x), where `java -jar` goes
+16.7 -> 0.38. The class the native binary EMITS runs the same stack at 1.0 ms. So the open
+item from phase 2 is unchanged in shape and unchanged in remedy -- compile the program --
+and phase 3 still must not quote a residency figure from the native interpreter.
+
+`linalg:erf` is `(linalg:emap #'%la-erf-1 a)` and `emap` is never intercepted (todo-468),
+so on the interpreter it is a full `eval` per element: ONE gelu costs 100x the entire
+matmul budget of a step. The device made the matmul 22x faster and the program did not
+notice. **The lesson for phase 4b and for todo-468: an acceleration only moves a program
+if the program is spending its time on the member being accelerated, and on the
+interpreter today it is not.**
 
 ### The chain order, and why the device goes on top
 
@@ -480,6 +626,13 @@ and every prefix of that works the same way. Three reasons, in the order they bi
    `whatTheDeviceDeclinesFallsOnTheBestCpuPathEnabledAndNotOnTheDefun`, which uses
    `.kb/linalg-simd.md`'s own f32 v.M probe: the fallback target is legible because the
    defun prints 16778240 and the lane kernel 16777216.
+
+**For the STACKED member the chain has no library rung**, because `--blas` does not
+intercept it: `--gpu --blas --simd` is device -> lane kernel -> scalar defun there, and
+`--gpu --blas` alone is device -> defun. Pinned at rank 3 with the same f32 probe
+(`aDeclinedStackFallsOnTheLaneKernelWhenSimdIsOnAndOnTheDefunOtherwise`, in both the
+interpreter and the JVM suite), because "the flags compose" is a claim per MEMBER and not
+per flag.
 
 **The wart, measured and accepted:** at n=64-96 with `--gpu --blas` both on, the device
 accepts a product a 20-core OpenBLAS would have finished sooner (139 us against 21 at
@@ -574,7 +727,7 @@ to THREE attempts, and the order it chains them in IS the interpreter's install 
 ```
 _gpuInit(); _blasInit(); _simdInit();          // the bridges, before their methodrefs
 a = <arg1>; b = <arg2>;                        // each argument form evaluated ONCE
-r = RontoLispGpuBridge.gpuDot(a, b);   if (r != null) goto end;   // --gpu
+r = RontoLispGpuBridge.gpuDot(a, b);   if (r != null) goto end;   // --gpu (or gpuMatmulNd)
 r = RontoLispBlasBridge.blasDot(a, b); if (r != null) goto end;   // --blas
 r = RontoLispSimdBridge.laDot(a, b);   if (r != null) goto end;   // --simd
 r = linalg$colondot(a, b);                                        // the scalar defun
@@ -587,10 +740,18 @@ repeat their side effects
 (`anArgumentFormIsEvaluatedExactlyOnceEvenWhenTheKernelDeclines`, now pinned in the
 `--gpu` suite as well as the `--blas` and `--simd` ones).
 
-The emit gate is `programUsesSymbol(program, JvmLinalgBlas.QUALIFIED_DOT)` -- the same
-member, so `--gpu` and `--blas` embed on exactly the same programs, and neither embeds on
-one that never reaches the product. `--gpu` must NOT drag in the `--simd` bridge: a class
-that did would need `java --add-modules jdk.incubator.vector` to run
+**The device attempt is per MEMBER, not one hardcoded method.** `JvmLinalgGpu.handles`
+answers for `dot` and `%la-matmul-nd`, `JvmLinalgGpu.kernelKey` maps each to its `ops` key
+(`gpuDot` / `gpuMatmulNd`), and the chain above is emitted at whichever call site the
+program reaches -- with the `--blas` rung simply absent at the stacked one, since
+`JvmLinalgBlas.handles` still answers for `dot` alone.
+
+The emit gate is `programUsesSymbol` over BOTH members (`JvmLinalgGpu.QUALIFIED_DOT`,
+`JvmLinalgGpu.QUALIFIED_MATMUL_ND`), so it is no longer `--blas`'s gate: a transformer
+reaches only the stacked member, and a gate on `dot` alone would embed no bridge for
+exactly the program this flag is for. Neither flag embeds on a program that never reaches
+a product. `--gpu` must NOT drag in the `--simd` bridge: a class that did would need
+`java --add-modules jdk.incubator.vector` to run
 (`theThreeFlagsAreOrthogonalAndEmbedTheirOwnBridges`).
 
 The extended (option-form) call sites are `--simd`-only, as before: `dot` has no keyword
@@ -661,10 +822,21 @@ like `--blas`, whose availability check is nearly free.
 The dead-flag guard is the load-bearing one, as it is for `--blas`: every numeric assertion
 in `LinalgGpuTest` would pass just as well on the scalar defun, so `#'linalg:dot` printing
 `#<function LINALG:DOT>` under the flag and `#<lambda>` without it is the assertion that
-fails when the flag is DEAD.
+fails when the flag is DEAD. Since phase 4a it is TWO assertions -- `#'linalg::%la-matmul-nd`
+has its own, with the double colon its qualified spelling carries -- and the compiled
+half's gate assertion has a third case, a program whose ONLY linalg call is the stacked
+member.
 
 `LinalgGpuTest` also pins the two order claims above, the fallback target, and the eight
-combinations of the three flags over one exact program. `LinalgGpuDeclineTest` is the half
+combinations of the three flags over one exact program (which now includes two rank-3
+legs). The stacked member adds, in both suites: every batch shape the odometer can hand
+the device (plain rank 3, a broadcast right operand, a broadcast left one, rank 4, a
+rectangular non-tile-multiple slab, both widths), the three declines that are its own (a
+rank-1 operand, a non-affine batch, a stack under the threshold), and the chain pin that a
+declined stack lands on the LANE kernel rather than the defun. In `am.ik.gpu` the load-
+bearing new one is `aBatchIsBitIdenticalToTheSameSlabsRunOneAtATime`: it states the
+precision contract as an assertion instead of trusting that the batched kernel calls the
+same device function. `LinalgGpuDeclineTest` is the half
 a CI runner runs, and it pins that the flag changes nothing observable -- at a shape above
 the threshold as well as below it.
 
@@ -797,8 +969,9 @@ that must never regress.
 
 ## What is deliberately NOT here
 
-No residency, no batched rank-3 product, no element-wise tier, no Metal. Those are
-todo-123's phases 3 through 5, and each of them needs this file's numbers before it
-starts. The per-call cost of an FFM downcall inside a native image is still unexplained
+No residency, no element-wise tier, no Metal. Those are todo-123's phases 3, 4b and 5, and
+each of them needs this file's numbers before it starts -- phase 4b's case in particular
+is now a measurement (above) rather than a guess: with the stacked product on the device,
+about half of a transformer's training step is gone and the rest of it is element-wise. The per-call cost of an FFM downcall inside a native image is still unexplained
 (above), and phase 3 must not quote a residency figure from that build without measuring
 it first.

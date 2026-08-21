@@ -80,8 +80,11 @@ final class JvmGpuRuntimeBuilder {
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_gpuInit";
 
-	/** The {@code ops} key of the one accelerated kernel. */
+	/** The {@code ops} key of the rank-2 kernel. */
 	static final String DOT = "dot";
+
+	/** The {@code ops} key of the STACKED (rank &gt;= 3) kernel. */
+	static final String MATMUL_ND = "matmulNd";
 
 	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
 	private static final int CHUNK_SIZE = 40000;
@@ -91,8 +94,8 @@ final class JvmGpuRuntimeBuilder {
 
 	/**
 	 * The ready-to-emit {@code _gpuInit} method, its guard field, and the constant-pool
-	 * references the accelerated call site needs ({@code ops} keys: {@code init} and
-	 * {@value #DOT}).
+	 * references the accelerated call sites need ({@code ops} keys: {@code init},
+	 * {@value #DOT} and {@value #MATMUL_ND}).
 	 */
 	record GpuRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack, int maxLocals,
 			Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops) {
@@ -141,6 +144,8 @@ final class JvmGpuRuntimeBuilder {
 		Utf8Constant initDesc = cp.addUtf8("()V");
 		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
 		ops.put(DOT, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuDot"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(MATMUL_ND, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNd"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 
 		// --- _gpuInit body ---------------------------------------------------------

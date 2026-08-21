@@ -60,6 +60,37 @@ class LinalgGpuDeclineTest {
 	}
 
 	@Test
+	void theFlagChangesNothingObservableAboutAnExactStackedProduct() {
+		// The same for linalg:matmul at rank >= 3, which routes to the intercepted
+		// linalg::%la-matmul-nd: a plain stack, a BROADCAST right operand (the shape
+		// every torch:linear over a (B T C) activation has), and rank 4. All three are
+		// above the size threshold, so on a GPU machine the device really is asked.
+		String stack = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 8193) '(2 64 64)))
+				(defparameter *b* (linalg:add (linalg:ones '(2 64 64)) 2.0))
+				(defparameter *m* (linalg:add (linalg:ones '(64 64)) 1.0))
+				(defparameter *r4* (linalg:reshape (linalg:arange 1 12289) '(2 3 32 64)))
+				(defparameter *s4* (linalg:add (linalg:ones '(2 3 64 32)) 2.0))
+				(list (linalg:sum (linalg:matmul *a* *b*))
+				      (linalg:to-list (linalg:flatten (linalg:matmul *a* *m*)))
+				      (linalg:shape (linalg:matmul *r4* *s4*))
+				      (linalg:sum (linalg:matmul *r4* *s4*)))
+				""";
+		assertThat(eval(stack, true)).isEqualTo(eval(stack, false));
+	}
+
+	@Test
+	void aStackedProductBelowTheSizeThresholdIsUntouchedEverywhere() {
+		// The threshold for a stack is the TOTAL work, and every example in the
+		// repository is under it: 4 x 8x8x8 is 2048 multiply-adds.
+		String product = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 257) '(4 8 8)))
+				(linalg:sum (linalg:matmul *a* *a*))
+				""";
+		assertThat(eval(product, true)).isEqualTo(eval(product, false));
+	}
+
+	@Test
 	void availabilityIsAPropertyOfTheMachineAndIsAlwaysDescribed() {
 		// The CLI prints description() when the flag cannot be honoured, so it must say
 		// something on every machine rather than throw on one with no driver at all.

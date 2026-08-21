@@ -259,9 +259,11 @@ rontolisp prog.lisp --simd --blas --gpu   # all three, chained; the device is as
 
 ### What is accelerated, and what declines
 
-The matrix-by-matrix product and nothing else: `linalg:dot` over two rank-2 arrays, and therefore `linalg:matmul` at rank 2 and `linalg:solve`, which are written over it. Everything else declines and runs exactly what it ran before -- the tuned library when `--blas` is on too, the lane kernel when `--simd` is, the portable `linalg.lisp` definition otherwise. That includes the two matrix-by-vector shapes `--blas` does take (they are memory-bound, so the trip cannot pay for itself), the batched rank-3 product, general boxed arrays, mixed widths, a scalar operand, and a shape mismatch, which signals the same error as ever.
+The matrix product, in both of its shapes. `linalg:dot` over two rank-2 arrays -- and therefore `linalg:matmul` at rank 2 and `linalg:solve`, which are written over it. And the **stacked product** behind `linalg:matmul` at rank 3 or more, which is `torch.bmm`: every attention layer, and every `torch:linear` over a `(B T C)` activation. A stack costs one round trip and one launch however many matrices are in it, because the device carries the batch on an axis of its own; an operand that broadcasts over the batch -- the rank-2 weight matrix under a rank-3 activation -- is copied to the device once rather than once per matrix.
 
-It also includes **everything small**. A round trip to a device costs about 15 microseconds however little data rides on it, so a product below roughly 51x51x51 (`n * m * p` under 131072) declines and stays on the CPU. That threshold is not a mechanism of its own, it is one more decline -- which is why every example in this repository, all of which run shapes far below it, prints byte-identical output with the flag and without it. **`--gpu` exists to bring a scale you cannot train today within reach, not to make today's programs faster.**
+Everything else declines and runs exactly what it ran before -- the tuned library when `--blas` is on too, the lane kernel when `--simd` is, the portable `linalg.lisp` definition otherwise. That includes the two matrix-by-vector shapes `--blas` does take (they are memory-bound, so the trip cannot pay for itself), a rank-1 operand on either side of a stacked product, a batch shape whose slabs no single stride can reach (a broadcast axis sitting under a non-broadcast one), general boxed arrays, mixed widths, a scalar operand, and a shape mismatch, which signals the same error as ever.
+
+It also includes **everything small**. A round trip to a device costs about 15 microseconds however little data rides on it, so a product below roughly 51x51x51 (`n * m * p` under 131072) declines and stays on the CPU. For a stack the same threshold applies to the TOTAL work, `batch * n * m * p`, because the round trip is paid once for the whole stack rather than once per matrix -- so a batch of sixteen 32x32 products is offered where a single one of them is not. That threshold is not a mechanism of its own, it is one more decline -- which is why every example in this repository, all of which run shapes far below it, prints byte-identical output with the flag and without it. **`--gpu` exists to bring a scale you cannot train today within reach, not to make today's programs faster.**
 
 ### How the three flags compose
 
@@ -273,7 +275,7 @@ Each flag adds one attempt in front of the others, and every attempt that declin
 --gpu                 ->   device ->                                portable definition
 ```
 
-The device is asked first because its size threshold is three orders of magnitude above the tuned library's: it turns down everything small before touching the driver at all, and from about n=256 up it is ahead of a threaded CPU BLAS at both widths. So what the device declines lands on the fastest CPU path the invocation asked for, never back on the portable definition. The exception is a narrow band just above the threshold -- roughly n=64 to n=96 -- where `--gpu --blas` together accept a product the library alone would have finished sooner. Both sides are far under a millisecond there, and asking the library first instead would give away the several-fold win at the sizes the flag exists for.
+`--blas` takes only the rank-2 product, so a stacked one has no library rung at all: `--gpu --blas --simd` chains it device -> lane kernel -> portable definition. The device is asked first because its size threshold is three orders of magnitude above the tuned library's: it turns down everything small before touching the driver at all, and from about n=256 up it is ahead of a threaded CPU BLAS at both widths. So what the device declines lands on the fastest CPU path the invocation asked for, never back on the portable definition. The exception is a narrow band just above the threshold -- roughly n=64 to n=96 -- where `--gpu --blas` together accept a product the library alone would have finished sooner. Both sides are far under a millisecond there, and asking the library first instead would give away the several-fold win at the sizes the flag exists for.
 
 ### Reach and precision
 
@@ -310,6 +312,22 @@ The same products compiled to a `.class` and run on the JVM, best of three timed
 | 2048 | -- | 91750 | 39000 | -- | 44625 | 8375 |
 
 It is the same table, which is the point: once the product is one device call, the backend around it no longer matters. Warm carefully before you compare anything near the threshold -- at n=64 and n=128 the device drops back to its idle clock between calls, and a single cold round there can measure several times these figures.
+
+And the stacked product, which is the shape a transformer is made of: one `linalg:matmul` of `batch` `n x n` slabs, microseconds per call, interpreter, same machine and same warm-up. `--blas` has no column here because it does not take this member.
+
+| batch x n | `--simd` f64 | `--gpu` f64 | `--simd` f32 | `--gpu` f32 |
+|---|---|---|---|---|
+| 256 x 8 | 60 | 48 | 46 | 30 |
+| 64 x 16 | 75 | 43 | 71 | 29 |
+| 16 x 32 | 110 | 45 | 69 | 29 |
+| 4 x 64 | 176 | 49 | 101 | 31 |
+| 16 x 64 | 710 | 86 | 400 | 56 |
+| 16 x 128 | 5580 | 300 | 3040 | 130 |
+| 12 x 256 | 31740 | 1240 | 16660 | 380 |
+
+The batch is what the device is for: the CPU pays for every matrix in the stack while the round trip is paid once, so the ratio grows with the batch as much as with the matrix -- 1.25x at the threshold, 26x at 12 x 256 double-float and 44x single.
+
+End to end, `examples/llm-from-scratch/chapter03/train-gpt-soseki.lisp` at the notebook's own shapes (`*n-embd*` 384, `*block-size*` 256, which the file says is a one-line change) runs a training step **1.9x faster on the JVM class output** with the flag on -- 0.79 s to 0.43 s. It is not 26x, and the reason is worth knowing: with the stacked product on the device about half the step is gone, and what remains -- the element-wise tier, the softmax, the layer norms, the exact `gelu` -- is all still on the CPU. On the **interpreter** the same program shows no change at all, for a sharper version of the same reason: one exact `gelu` there is a `linalg:erf`, which is written as an `emap` over a Lisp callback and is not in any accelerated set, and at these shapes that single call costs 21 seconds against 0.007 for the matmul the device just took. Accelerating a matrix product only moves a program if the matrix product is what the program is spending its time on.
 
 ## Runnable examples
 

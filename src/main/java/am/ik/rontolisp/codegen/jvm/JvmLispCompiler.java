@@ -1227,11 +1227,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmBlasRuntimeBuilder.@Nullable BlasRuntime blasRuntime = usesBlas
 				? JvmBlasRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
 
-		// --gpu: the same gate over the same member -- the device takes the matrix by
-		// matrix case of linalg:dot and nothing else -- and the same orthogonality. What
-		// it embeds is not one template but am.ik.gpu itself, renamed into this class's
-		// package (JvmGpuRuntimeBuilder).
-		boolean usesGpu = this.gpuAccel && programUsesSymbol(program, JvmLinalgBlas.QUALIFIED_DOT);
+		// --gpu: the same gate over the same members -- the device takes the matrix by
+		// matrix case of linalg:dot and the STACKED rank->=3 product behind
+		// linalg:matmul, and nothing else -- and the same orthogonality. What it embeds
+		// is
+		// not one template but am.ik.gpu itself, renamed into this class's package
+		// (JvmGpuRuntimeBuilder). A transformer reaches only the stacked member, so a
+		// gate on dot alone would embed no bridge for exactly the program the flag is
+		// for.
+		boolean usesGpu = this.gpuAccel && (programUsesSymbol(program, JvmLinalgGpu.QUALIFIED_DOT)
+				|| programUsesSymbol(program, JvmLinalgGpu.QUALIFIED_MATMUL_ND));
 		final JvmGpuRuntimeBuilder.@Nullable GpuRuntime gpuRuntime = usesGpu
 				? JvmGpuRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
 

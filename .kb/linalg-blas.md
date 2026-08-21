@@ -103,13 +103,20 @@ this is what the next person needs:
 - **`worth(n, m, p)` has to be re-decided per batch.** The existing threshold is one
   product's flops; for a batch the right predicate is the PER-MATRIX work (a downcall per
   matrix, `batches` of them), and whether `batches` small enough to lose to the lane kernel
-  should decline the whole call. That is a measurement, not a transcription.
+  should decline the whole call. That is a measurement, not a transcription. (`--gpu` took
+  this member on 2026-08-21 and its answer does NOT carry over, for the reason this bullet
+  gives: a device runs the whole stack in ONE launch, so its threshold is the TOTAL work
+  and a batch of tiny matrices still pays. A library gemm per matrix is `batches`
+  downcalls, so the per-matrix rule stands here.)
 - **The precision contract grows a case.** `--simd`'s batched kernel is a per-batch
   `linalg:dot` exactly; a library gemm per batch is "close to", the same way this file
   already says for rank 2 -- and the docs section here names `linalg:dot` specifically.
 
 None of that is hard. It is simply a second item, and the `--simd` interception is the one
-that had to land (it reaches the WASM backends, which `--blas` never will).
+that had to land (it reaches the WASM backends, which `--blas` never will). `--gpu` has
+since taken the member (`.kb/gpu.md`), so on the interpreter and the JVM a stacked product
+already has a non-CPU path; what `--blas` would add is a rung between the device and the
+lane kernel, for the stacks the device declines.
 
 ## Identifying a TUNED library is the load-bearing part
 

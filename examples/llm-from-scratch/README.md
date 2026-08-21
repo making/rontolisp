@@ -104,6 +104,24 @@ gap that held these programs to a ~1.6x flag, well under what `--simd` gives an
 MLP. See
 [Accelerating linalg](../../doc/en/guides/simd-acceleration.md#accelerating-linalg).
 
+## `--gpu`
+
+The same batched product is what
+[`--gpu`](../../doc/en/guides/simd-acceleration.md#accelerating-the-matrix-product-on-a-gpu---gpu)
+routes to an NVIDIA device. **At the shapes tested here it changes nothing**,
+and that is the intended answer: a stack of `4 x 8x8` products is a few thousand
+multiply-adds, far under the threshold a 15 us round trip has to clear, so every
+one of them declines and the output stays byte-identical with the flag and
+without it.
+
+It is the shapes in the next section that the flag is for. With
+`chapter03/train-gpt-soseki.lisp` raised to the notebook's own `*n-embd*` 384 and
+`*block-size*` 256 -- the one-line change the file describes -- a training step
+on the JVM class output runs 1.9x faster with `--gpu --simd` than with `--simd`
+alone (0.79 s -> 0.43 s per step, same machine as above). The remaining half of
+the step is the element-wise tier, the softmax, the layer norms and the exact
+`gelu`, none of which is on the device yet.
+
 ## The shapes: the book's, and the ones that are tested
 
 The notebook trains a `d_model` = 512, 6-block, 8-head Transformer for 20

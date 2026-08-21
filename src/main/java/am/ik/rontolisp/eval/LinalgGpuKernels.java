@@ -74,6 +74,20 @@ final class LinalgGpuKernels {
 	}
 
 	/**
+	 * The same question for a STACK of {@code batch} such products, which is one round
+	 * trip and one launch -- so the threshold is over the TOTAL work rather than over one
+	 * matrix.
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m the inner dimension
+	 * @param p columns of each right operand and of each result
+	 * @return {@code true} when the stack is worth unwrapping for
+	 */
+	static boolean worth(long batch, long n, long m, long p) {
+		return Gpu.worth(batch, n, m, p);
+	}
+
+	/**
 	 * {@code a x b} for a row-major {@code n x m} by {@code m x p} double-float pair, or
 	 * {@code null} when the device declined it.
 	 * @param a the left operand, row-major
@@ -101,6 +115,43 @@ final class LinalgGpuKernels {
 	static float @Nullable [] multiply(float[] a, float[] b, int n, int m, int p) {
 		float[] out = new float[n * p];
 		return Gpu.multiply(a, 0, b, 0, out, 0, n, m, p) ? out : null;
+	}
+
+	/**
+	 * A STACK of {@code batch} double-float products, or {@code null} when the device
+	 * declined it. {@code sa} / {@code sb} are per-batch ELEMENT strides and either may
+	 * be 0, which is what a broadcast operand passes.
+	 * @param a the left operands, row-major
+	 * @param sa elements from one left operand to the next, or 0 to broadcast
+	 * @param b the right operands, row-major
+	 * @param sb elements from one right operand to the next, or 0 to broadcast
+	 * @param batch how many products are stacked
+	 * @param n rows of each {@code a} and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return a fresh {@code batch * n * p} result, or {@code null}
+	 */
+	static double @Nullable [] multiply(double[] a, int sa, double[] b, int sb, int batch, int n, int m, int p) {
+		double[] out = new double[batch * n * p];
+		return Gpu.multiply(a, 0, sa, b, 0, sb, out, 0, batch, n, m, p) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #multiply(double[], int, double[], int, int, int, int, int)}.
+	 * @param a the left operands, row-major
+	 * @param sa elements from one left operand to the next, or 0 to broadcast
+	 * @param b the right operands, row-major
+	 * @param sb elements from one right operand to the next, or 0 to broadcast
+	 * @param batch how many products are stacked
+	 * @param n rows of each {@code a} and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return a fresh {@code batch * n * p} result, or {@code null}
+	 */
+	static float @Nullable [] multiply(float[] a, int sa, float[] b, int sb, int batch, int n, int m, int p) {
+		float[] out = new float[batch * n * p];
+		return Gpu.multiply(a, 0, sa, b, 0, sb, out, 0, batch, n, m, p) ? out : null;
 	}
 
 }

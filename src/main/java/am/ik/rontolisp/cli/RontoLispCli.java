@@ -1161,6 +1161,8 @@ public final class RontoLispCli {
 		this.out.println("                     bit-identical to the other backends. RONTOLISP_BLAS names a");
 		this.out.println("                     library outright; RONTOLISP_BLAS_VERBOSE=1 prints what was bound.");
 		this.out.println("  --gpu              Route the linalg: matrix product to an NVIDIA GPU");
+		this.out.println("                     Both shapes: the rank-2 product and the stacked rank >= 3 one");
+		this.out.println("                     (torch.bmm), which is a transformer's whole hot path.");
 		this.out.println("                     Interpreter (incl. the native binary) and JVM (.class) only --");
 		this.out.println("                     the CUDA driver is reached through the foreign function API,");
 		this.out.println("                     which WASM does not have. A compiled .class carries the whole");
@@ -1169,7 +1171,9 @@ public final class RontoLispCli {
 		this.out.println("                     Needs libcuda.so.1 (the driver) and nothing else:");
 		this.out.println("                     no CUDA toolkit. A machine without a device runs the same");
 		this.out.println("                     programs, unaccelerated. Only products above ~51x51x51 are");
-		this.out.println("                     offered; everything smaller stays on the CPU. The device kernel");
+		this.out.println("                     offered -- for a rank >= 3 stack that bound is on the TOTAL");
+		this.out.println("                     work, since the whole stack is one round trip; everything");
+		this.out.println("                     smaller stays on the CPU. The device kernel");
 		this.out.println("                     fuses each multiply-add, so results are close to but not");
 		this.out.println("                     bit-identical to the other backends.");
 		this.out.println("  --no-prune         Keep every spliced library function in the compiled output");

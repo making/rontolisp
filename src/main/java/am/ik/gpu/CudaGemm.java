@@ -15,8 +15,9 @@ import static am.ik.gpu.CudaDriver.P;
 
 /**
  * The device side of {@code --gpu}: one primary context, one module JIT-compiled from the
- * checked-in PTX, and the two tiled GEMM kernels it exports. Everything that can fail
- * fails into a decline; nothing here throws.
+ * checked-in PTX, and the four tiled GEMM kernels it exports -- one product and one STACK
+ * of products, at each width. Everything that can fail fails into a decline; nothing here
+ * throws.
  *
  * <h2>The kernel comes from a PTX text, not from a toolkit</h2>
  *
@@ -71,6 +72,14 @@ final class CudaGemm {
 	static final String KERNEL_F64 = "gemm_f64", KERNEL_F32 = "gemm_f32";
 
 	/**
+	 * The STACKED siblings, one tile walk per {@code blockIdx.z} over the same slab
+	 * shape. A batch is one launch rather than one per matrix, and a broadcast operand
+	 * passes stride 0 -- so it needs no special case, exactly as on the CPU
+	 * ({@code .kb/linalg-simd.md}).
+	 */
+	static final String KERNEL_BATCHED_F64 = "gemm_batched_f64", KERNEL_BATCHED_F32 = "gemm_batched_f32";
+
+	/**
 	 * The tile the kernel is written around, and therefore its block shape: 16x16
 	 * threads, one output element each.
 	 */
@@ -78,7 +87,8 @@ final class CudaGemm {
 
 	/**
 	 * {@code gridDim.y} and {@code gridDim.z} are 16-bit on every CUDA device, so a
-	 * product with more than {@code 65535 * TILE} rows cannot be launched in one go and
+	 * product with more than {@code 65535 * TILE} rows -- or a batch of more than 65535
+	 * matrices, which rides on {@code gridDim.z} -- cannot be launched in one go and
 	 * declines. {@code gridDim.x} is 32-bit, so the column axis has no such limit.
 	 */
 	private static final int MAX_GRID_Y = 65535;
@@ -134,6 +144,10 @@ final class CudaGemm {
 
 	private final MemorySegment gemmF32;
 
+	private final MemorySegment gemmBatchedF64;
+
+	private final MemorySegment gemmBatchedF32;
+
 	private final String description;
 
 	/**
@@ -156,13 +170,16 @@ final class CudaGemm {
 	private volatile boolean usable = true;
 
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
-			MemorySegment gemmF32, boolean pooled, MemorySegment memoryPool, long syncFlopCeiling, String description) {
+			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32, boolean pooled,
+			MemorySegment memoryPool, long syncFlopCeiling, String description) {
 		this.driver = driver;
 		this.device = device;
 		this.context = context;
 		this.module = module;
 		this.gemmF64 = gemmF64;
 		this.gemmF32 = gemmF32;
+		this.gemmBatchedF64 = gemmBatchedF64;
+		this.gemmBatchedF32 = gemmBatchedF32;
 		this.pooled = pooled;
 		this.memoryPool = memoryPool;
 		this.syncFlopCeiling = syncFlopCeiling;
@@ -264,6 +281,18 @@ final class CudaGemm {
 						"cuModuleGetFunction " + KERNEL_F32 + ": " + driver.errorString(status));
 			}
 			MemorySegment f32 = functionOut.get(P, 0);
+			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_BATCHED_F64));
+			if (status != CuResult.SUCCESS) {
+				return unwind(driver, device, true, module,
+						"cuModuleGetFunction " + KERNEL_BATCHED_F64 + ": " + driver.errorString(status));
+			}
+			MemorySegment batchedF64 = functionOut.get(P, 0);
+			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_BATCHED_F32));
+			if (status != CuResult.SUCCESS) {
+				return unwind(driver, device, true, module,
+						"cuModuleGetFunction " + KERNEL_BATCHED_F32 + ": " + driver.errorString(status));
+			}
+			MemorySegment batchedF32 = functionOut.get(P, 0);
 			MemorySegment pool = MemorySegment.NULL;
 			boolean pooled = pooledAllocationWorks(driver, arena);
 			if (pooled) {
@@ -276,9 +305,8 @@ final class CudaGemm {
 			int multiprocessors = attribute(driver, arena, CudaDriver.ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
 			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
-			return new Probe(
-					new CudaGemm(driver, device, context, module, f64, f32, pooled, pool, ceiling, description),
-					description);
+			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32, pooled,
+					pool, ceiling, description), description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
@@ -474,11 +502,30 @@ final class CudaGemm {
 	 * declined or the device failed -- in which case {@code c} is untouched
 	 */
 	boolean gemm(double[] a, int oa, double[] b, int ob, double[] c, int oc, int n, int m, int p) {
+		return gemm(a, oa, 0, b, ob, 0, c, oc, 1, n, m, p);
+	}
+
+	/**
+	 * {@code c = a x b} for a STACK of {@code batch} row-major {@code n x m} by
+	 * {@code m x p} products, one launch for the whole stack: {@code blockIdx.z} carries
+	 * the batch axis and each slab is the same tile walk {@link #gemm} runs, so a batched
+	 * cell folds {@code k} exactly as an unbatched one does.
+	 *
+	 * <p>
+	 * {@code sa} and {@code sb} are per-batch ELEMENT strides and either may be 0, which
+	 * is what a BROADCAST operand passes: the whole batch then reads the same slab and
+	 * only that slab is copied to the device. {@code c} is always contiguous, {@code n*p}
+	 * per batch.
+	 * @return {@code true} when {@code c} was filled, {@code false} when the product
+	 * declined or the device failed -- in which case {@code c} is untouched
+	 */
+	boolean gemm(double[] a, int oa, int sa, double[] b, int ob, int sb, double[] c, int oc, int batch, int n, int m,
+			int p) {
 		if (!this.usable) {
 			return false;
 		}
-		long aBytes = (long) n * m * Double.BYTES, bBytes = (long) m * p * Double.BYTES,
-				cBytes = (long) n * p * Double.BYTES;
+		long aBytes = span(batch, sa, (long) n * m) * Double.BYTES,
+				bBytes = span(batch, sb, (long) m * p) * Double.BYTES, cBytes = (long) batch * n * p * Double.BYTES;
 		long[] buffers = { 0, 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
 			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
@@ -487,10 +534,10 @@ final class CudaGemm {
 			if (!allocate(arena, buffers, aBytes, bBytes, cBytes)) {
 				return false;
 			}
-			boolean sync = 2L * n * m * p >= this.syncFlopCeiling;
+			boolean sync = 2L * batch * n * m * p >= this.syncFlopCeiling;
 			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Double.BYTES, aBytes)
-					|| !upload(buffers[1], MemorySegment.ofArray(b), (long) ob * Double.BYTES, bBytes)
-					|| !launch(arena, this.gemmF64, buffers, n, m, p, sync)) {
+					|| !upload(buffers[1], MemorySegment.ofArray(b), (long) ob * Double.BYTES, bBytes) || !launch(arena,
+							batch == 1 ? this.gemmF64 : this.gemmBatchedF64, buffers, batch, sa, sb, n, m, p, sync)) {
 				return false;
 			}
 			return download(MemorySegment.ofArray(c), (long) oc * Double.BYTES, buffers[2], cBytes);
@@ -509,11 +556,22 @@ final class CudaGemm {
 	 * @return {@code true} when {@code c} was filled
 	 */
 	boolean gemmF(float[] a, int oa, float[] b, int ob, float[] c, int oc, int n, int m, int p) {
+		return gemmF(a, oa, 0, b, ob, 0, c, oc, 1, n, m, p);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #gemm(double[], int, int, double[], int, int, double[], int, int, int, int, int)}
+	 * -- the stacked product at the width the device is actually good at.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n, int m,
+			int p) {
 		if (!this.usable) {
 			return false;
 		}
-		long aBytes = (long) n * m * Float.BYTES, bBytes = (long) m * p * Float.BYTES,
-				cBytes = (long) n * p * Float.BYTES;
+		long aBytes = span(batch, sa, (long) n * m) * Float.BYTES, bBytes = span(batch, sb, (long) m * p) * Float.BYTES,
+				cBytes = (long) batch * n * p * Float.BYTES;
 		long[] buffers = { 0, 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
 			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
@@ -522,10 +580,10 @@ final class CudaGemm {
 			if (!allocate(arena, buffers, aBytes, bBytes, cBytes)) {
 				return false;
 			}
-			boolean sync = 2L * n * m * p >= this.syncFlopCeiling;
+			boolean sync = 2L * batch * n * m * p >= this.syncFlopCeiling;
 			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Float.BYTES, aBytes)
-					|| !upload(buffers[1], MemorySegment.ofArray(b), (long) ob * Float.BYTES, bBytes)
-					|| !launch(arena, this.gemmF32, buffers, n, m, p, sync)) {
+					|| !upload(buffers[1], MemorySegment.ofArray(b), (long) ob * Float.BYTES, bBytes) || !launch(arena,
+							batch == 1 ? this.gemmF32 : this.gemmBatchedF32, buffers, batch, sa, sb, n, m, p, sync)) {
 				return false;
 			}
 			return download(MemorySegment.ofArray(c), (long) oc * Float.BYTES, buffers[2], cBytes);
@@ -538,10 +596,28 @@ final class CudaGemm {
 		}
 	}
 
+	/**
+	 * How many elements of an operand one launch spans: the last batch's slab plus
+	 * everything the stride skipped over on the way to it. A broadcast operand (stride 0)
+	 * spans ONE slab however long the batch is, which is why only that slab is copied.
+	 */
+	private static long span(int batch, int stride, long matrix) {
+		return (long) (batch - 1) * stride + matrix;
+	}
+
 	/** Whether this shape can be launched at all: the grid's row axis is 16 bits. */
 	static boolean launchable(long n, long m, long p) {
-		return n > 0 && m > 0 && p > 0 && n <= Integer.MAX_VALUE && m <= Integer.MAX_VALUE && p <= Integer.MAX_VALUE
-				&& n * p <= Integer.MAX_VALUE && (n + TILE - 1) / TILE <= MAX_GRID_Y;
+		return launchable(1, n, m, p);
+	}
+
+	/**
+	 * The same for a STACK: the batch rides on {@code gridDim.z}, which is 16 bits too,
+	 * and the whole result has to be one Java array.
+	 */
+	static boolean launchable(long batch, long n, long m, long p) {
+		return batch > 0 && batch <= MAX_GRID_Y && n > 0 && m > 0 && p > 0 && n <= Integer.MAX_VALUE
+				&& m <= Integer.MAX_VALUE && p <= Integer.MAX_VALUE && batch * n * p <= Integer.MAX_VALUE
+				&& (n + TILE - 1) / TILE <= MAX_GRID_Y;
 	}
 
 	/**
@@ -643,12 +719,13 @@ final class CudaGemm {
 	}
 
 	/**
-	 * One 16x16-tiled launch over the whole output, plus -- for a product long enough
-	 * that it would matter -- the explicit wait that keeps the kernel's runtime out of
-	 * the following critical copy.
+	 * One 16x16-tiled launch over the whole output -- {@code gridDim.z} is the batch, so
+	 * a stack of products is still ONE launch -- plus, for a product long enough that it
+	 * would matter, the explicit wait that keeps the kernel's runtime out of the
+	 * following critical copy.
 	 */
-	private boolean launch(Arena arena, MemorySegment function, long[] buffers, int n, int m, int p, boolean sync)
-			throws Throwable {
+	private boolean launch(Arena arena, MemorySegment function, long[] buffers, int batch, long sa, long sb, int n,
+			int m, int p, boolean sync) throws Throwable {
 		MemorySegment a = arena.allocate(L), b = arena.allocate(L), c = arena.allocate(L);
 		a.set(L, 0, buffers[0]);
 		b.set(L, 0, buffers[1]);
@@ -657,15 +734,25 @@ final class CudaGemm {
 		rows.set(I, 0, n);
 		columns.set(I, 0, p);
 		inner.set(I, 0, m);
-		MemorySegment parameters = arena.allocate(P, 6);
+		// A single product is the plain kernel with the parameter block it has always
+		// had; only a stack pays for the two stride parameters.
+		boolean batched = batch > 1;
+		MemorySegment parameters = arena.allocate(P, batched ? 8 : 6);
 		parameters.setAtIndex(P, 0, a);
 		parameters.setAtIndex(P, 1, b);
 		parameters.setAtIndex(P, 2, c);
 		parameters.setAtIndex(P, 3, rows);
 		parameters.setAtIndex(P, 4, columns);
 		parameters.setAtIndex(P, 5, inner);
-		int status = this.driver.launchKernel(function, (p + TILE - 1) / TILE, (n + TILE - 1) / TILE, 1, TILE, TILE, 1,
-				0, MemorySegment.NULL, parameters, MemorySegment.NULL);
+		if (batched) {
+			MemorySegment strideA = arena.allocate(L), strideB = arena.allocate(L);
+			strideA.set(L, 0, sa);
+			strideB.set(L, 0, sb);
+			parameters.setAtIndex(P, 6, strideA);
+			parameters.setAtIndex(P, 7, strideB);
+		}
+		int status = this.driver.launchKernel(function, (p + TILE - 1) / TILE, (n + TILE - 1) / TILE, batch, TILE, TILE,
+				1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}
