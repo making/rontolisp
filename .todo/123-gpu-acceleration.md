@@ -664,6 +664,15 @@ nothing from the flag, which is the workload this file exists for. Doing it firs
 gives phase 3 a real chain to measure. Order is therefore 0, 1, 2, 4a
 (`%la-matmul-nd`), 3, 4b (the element-wise tier and the ufuncs).
 
+**Phase 4a LANDED 2026-08-21** (`a671f569`), on both backends, and it measured what
+phase 3 and phase 4b now have to answer to. At the notebook's own shapes a training
+step on the JVM class output is 1.9x faster; on the INTERPRETER the same program does
+not move at all, because one exact `gelu` is a `linalg:erf` -- an `emap` over a Lisp
+callback in no accelerated set -- costing 21.1 seconds per call against 0.007 for the
+matmul the device just took. **Todo-468 and the element-wise tier are now the whole
+remaining cost, not a nice-to-have**, and that chain is what phase 3 should measure
+residency against.
+
 1. **`--gpu` on the interpreter, one member: `linalg:dot`'s M.M case.** `am.ik.gpu` +
    `eval/LinalgGpu` + `eval/LinalgGpuKernels` + the checked-in PTX + the availability
    probe (no device, no driver, old card, or `libcuda.so.1` absent -> the flag is a
