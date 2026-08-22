@@ -260,6 +260,8 @@ class GpuDeclineTest {
 		// dropped them would leave a build whose probe declines on every machine.
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F64);
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F32);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F32_T4);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F32_T8);
 		// And the element-wise pair, whose op codes are the other half of a mirror
 		// nothing links: Gpu.MAP_* names them and gemm.cu switches on them.
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_MAP_F64);

@@ -82,6 +82,13 @@ final class CudaGemm implements GpuDevice {
 	static final String KERNEL_BATCHED_F64 = "gemm_batched_f64", KERNEL_BATCHED_F32 = "gemm_batched_f32";
 
 	/**
+	 * The register-tiled single-float products: the same fold over a 64x64 and a 128x128
+	 * block tile, chosen per shape by {@link #tileF32}. Both take the batched parameter
+	 * block at every batch size.
+	 */
+	static final String KERNEL_BATCHED_F32_T4 = "gemm_batched_f32_t4", KERNEL_BATCHED_F32_T8 = "gemm_batched_f32_t8";
+
+	/**
 	 * The ELEMENT-WISE map kernels, one per width. The member is an op-code PARAMETER
 	 * rather than an entry point of its own ({@link Gpu#MAP_EXP} and its siblings, which
 	 * {@code gemm.cu} switches on), so the module lookup is fixed however the member set
@@ -169,10 +176,18 @@ final class CudaGemm implements GpuDevice {
 	private static final long MAP_FLOPS_PER_ELEMENT = 64;
 
 	/**
-	 * The tile the kernel is written around, and therefore its block shape: 16x16
-	 * threads, one output element each.
+	 * The tile the 16x16 kernel is written around, and the BLOCK shape of every product
+	 * kernel: 16x16 threads. The 16x16 kernel gives each thread one output element; the
+	 * register-tiled single-float kernels give it a 4x4 or an 8x8 patch of a
+	 * {@link #REGISTER_TILE_4 64x64} or {@link #REGISTER_TILE_8 128x128} block tile.
 	 */
 	private static final int TILE = 16;
+
+	/** The block tile of {@code gemm_batched_f32_t4}: 64x64 outputs, 4x4 per thread. */
+	private static final int REGISTER_TILE_4 = 4 * TILE;
+
+	/** The block tile of {@code gemm_batched_f32_t8}: 128x128 outputs, 8x8 per thread. */
+	private static final int REGISTER_TILE_8 = 8 * TILE;
 
 	/**
 	 * {@code gridDim.y} and {@code gridDim.z} are 16-bit on every CUDA device, so a
@@ -281,6 +296,17 @@ final class CudaGemm implements GpuDevice {
 
 	private final MemorySegment gemmBatchedF32;
 
+	private final MemorySegment gemmBatchedF32T4;
+
+	private final MemorySegment gemmBatchedF32T8;
+
+	/**
+	 * The device's SM count, which is what decides between the three single-float product
+	 * kernels ({@link #tileF32}): a register-tiled grid that does not fill about half the
+	 * SMs loses to the 16x16 kernel's finer grid.
+	 */
+	private final int multiprocessors;
+
 	private final MemorySegment mapF64;
 
 	private final MemorySegment mapF32;
@@ -347,7 +373,8 @@ final class CudaGemm implements GpuDevice {
 	private volatile long residentBudgetOverride = -1;
 
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
-			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32, MemorySegment mapF64,
+			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32,
+			MemorySegment gemmBatchedF32T4, MemorySegment gemmBatchedF32T8, int multiprocessors, MemorySegment mapF64,
 			MemorySegment mapF32, MemorySegment[] strided, MemorySegment gemvF64, MemorySegment gemvF32, boolean pooled,
 			MemorySegment memoryPool, MemorySegment bounce, long syncFlopCeiling, String description) {
 		this.driver = driver;
@@ -358,6 +385,9 @@ final class CudaGemm implements GpuDevice {
 		this.gemmF32 = gemmF32;
 		this.gemmBatchedF64 = gemmBatchedF64;
 		this.gemmBatchedF32 = gemmBatchedF32;
+		this.gemmBatchedF32T4 = gemmBatchedF32T4;
+		this.gemmBatchedF32T8 = gemmBatchedF32T8;
+		this.multiprocessors = multiprocessors;
 		this.mapF64 = mapF64;
 		this.mapF32 = mapF32;
 		this.strided = strided;
@@ -477,6 +507,18 @@ final class CudaGemm implements GpuDevice {
 						"cuModuleGetFunction " + KERNEL_BATCHED_F32 + ": " + driver.errorString(status));
 			}
 			MemorySegment batchedF32 = functionOut.get(P, 0);
+			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_BATCHED_F32_T4));
+			if (status != CuResult.SUCCESS) {
+				return unwind(driver, device, true, module,
+						"cuModuleGetFunction " + KERNEL_BATCHED_F32_T4 + ": " + driver.errorString(status));
+			}
+			MemorySegment batchedF32T4 = functionOut.get(P, 0);
+			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_BATCHED_F32_T8));
+			if (status != CuResult.SUCCESS) {
+				return unwind(driver, device, true, module,
+						"cuModuleGetFunction " + KERNEL_BATCHED_F32_T8 + ": " + driver.errorString(status));
+			}
+			MemorySegment batchedF32T8 = functionOut.get(P, 0);
 			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_MAP_F64));
 			if (status != CuResult.SUCCESS) {
 				return unwind(driver, device, true, module,
@@ -543,8 +585,9 @@ final class CudaGemm implements GpuDevice {
 			int multiprocessors = attribute(driver, arena, CudaDriver.ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
 			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
-			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32, mapF64,
-					mapF32, strided, gemvF64, gemvF32, pooled, pool, bounce, ceiling, description), description);
+			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32,
+					batchedF32T4, batchedF32T8, multiprocessors, mapF64, mapF32, strided, gemvF64, gemvF32, pooled,
+					pool, bounce, ceiling, description), description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
@@ -796,7 +839,8 @@ final class CudaGemm implements GpuDevice {
 	public boolean gemm(double[] a, int oa, int sa, double[] b, int ob, int sb, double[] c, int oc, int batch, int n,
 			int m, int p) {
 		return gemm(MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(b), b, ob, sb, MemorySegment.ofArray(c),
-				c, oc, batch, n, m, p, Double.BYTES, batch == 1 ? this.gemmF64 : this.gemmBatchedF64);
+				c, oc, batch, n, m, p, Double.BYTES,
+				new Tile(batch == 1 ? this.gemmF64 : this.gemmBatchedF64, TILE, TILE, batch > 1));
 	}
 
 	/**
@@ -819,7 +863,46 @@ final class CudaGemm implements GpuDevice {
 	public boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n,
 			int m, int p) {
 		return gemm(MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(b), b, ob, sb, MemorySegment.ofArray(c),
-				c, oc, batch, n, m, p, Float.BYTES, batch == 1 ? this.gemmF32 : this.gemmBatchedF32);
+				c, oc, batch, n, m, p, Float.BYTES, tileF32(batch, n, p));
+	}
+
+	/**
+	 * One product kernel and its block tile: the entry point, the outputs one block
+	 * covers on each axis (16x16 threads either way), and whether the kernel takes the
+	 * batched parameter block -- the 16x16 kernel only when the batch is more than one,
+	 * the register-tiled ones always.
+	 */
+	private record Tile(MemorySegment function, int rows, int columns, boolean batchedParameters) {
+	}
+
+	/**
+	 * Which single-float kernel runs this shape. All three fold every cell identically (k
+	 * ascending, one fused multiply-add per term, K padded to 16 with zeros), so the
+	 * choice is invisible in the result and is made on speed alone. Measured on a GB10
+	 * (48 SMs; {@code .todo/123-gpu-acceleration/gemm-tile-probe.cu}): the 128x128 tile
+	 * is 2.2-4x the 16x16 kernel once its grid holds about half the SMs -- a
+	 * transformer's feed-forward products, n >= 768 square -- and LOSES below that, where
+	 * the grid is too small to fill the card (0.3x at 256x256); the 64x64 tile is the
+	 * middle rung, 1.2-2.3x from a full wave of blocks up and a tie below, and the one
+	 * that takes a batch of SHORT rows (the book's batch-64 of 64-row slabs: 2.3x, where
+	 * the 128-row tile wastes half of itself). An operand narrower than the tile on
+	 * either output axis stays on the finer kernel: padding would waste the tile. The
+	 * thresholds are in SMs so that a smaller card moves them down with it.
+	 */
+	private Tile tileF32(int batch, int n, int p) {
+		long blocks8 = (long) ceilDiv(n, REGISTER_TILE_8) * ceilDiv(p, REGISTER_TILE_8) * batch;
+		if (n >= REGISTER_TILE_8 && p >= REGISTER_TILE_8 && blocks8 >= Math.max(1, this.multiprocessors / 2)) {
+			return new Tile(this.gemmBatchedF32T8, REGISTER_TILE_8, REGISTER_TILE_8, true);
+		}
+		long blocks4 = (long) ceilDiv(n, REGISTER_TILE_4) * ceilDiv(p, REGISTER_TILE_4) * batch;
+		if (n >= REGISTER_TILE_4 && p >= REGISTER_TILE_4 && blocks4 >= Math.max(1, this.multiprocessors)) {
+			return new Tile(this.gemmBatchedF32T4, REGISTER_TILE_4, REGISTER_TILE_4, true);
+		}
+		return new Tile(batch == 1 ? this.gemmF32 : this.gemmBatchedF32, TILE, TILE, batch > 1);
+	}
+
+	private static int ceilDiv(int a, int b) {
+		return (a + b - 1) / b;
 	}
 
 	/**
@@ -832,7 +915,7 @@ final class CudaGemm implements GpuDevice {
 	 * the result on the way out.
 	 */
 	private boolean gemm(MemorySegment a, Object ah, int oa, int sa, MemorySegment b, Object bh, int ob, int sb,
-			MemorySegment c, Object ch, int oc, int batch, int n, int m, int p, int width, MemorySegment kernel) {
+			MemorySegment c, Object ch, int oc, int batch, int n, int m, int p, int width, Tile tile) {
 		if (!this.usable) {
 			return false;
 		}
@@ -851,7 +934,7 @@ final class CudaGemm implements GpuDevice {
 			}
 			boolean sync = 2L * batch * n * m * p >= this.syncFlopCeiling;
 			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !stage(buffers, owned, 1, bh, b, offB, bBytes)
-					|| !launch(arena, kernel, buffers, batch, sa, sb, n, m, p, sync)) {
+					|| !launch(arena, tile, buffers, batch, sa, sb, n, m, p, sync)) {
 				return false;
 			}
 			return finish(c, offC, buffers, owned, 2, ch, cBytes);
@@ -1681,13 +1764,14 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	/**
-	 * One 16x16-tiled launch over the whole output -- {@code gridDim.z} is the batch, so
-	 * a stack of products is still ONE launch -- plus, for a product long enough that it
-	 * would matter, the explicit wait that keeps the kernel's runtime out of the
-	 * following critical copy.
+	 * One launch of the chosen product kernel over the whole output, 16x16 threads per
+	 * block and one block per {@link Tile} -- {@code gridDim.z} is the batch, so a stack
+	 * of products is still ONE launch -- plus, for a product long enough that it would
+	 * matter, the explicit wait that keeps the kernel's runtime out of the following
+	 * critical copy.
 	 */
-	private boolean launch(Arena arena, MemorySegment function, long[] buffers, int batch, long sa, long sb, int n,
-			int m, int p, boolean sync) throws Throwable {
+	private boolean launch(Arena arena, Tile tile, long[] buffers, int batch, long sa, long sb, int n, int m, int p,
+			boolean sync) throws Throwable {
 		MemorySegment a = arena.allocate(L), b = arena.allocate(L), c = arena.allocate(L);
 		a.set(L, 0, buffers[0]);
 		b.set(L, 0, buffers[1]);
@@ -1696,9 +1780,10 @@ final class CudaGemm implements GpuDevice {
 		rows.set(I, 0, n);
 		columns.set(I, 0, p);
 		inner.set(I, 0, m);
-		// A single product is the plain kernel with the parameter block it has always
-		// had; only a stack pays for the two stride parameters.
-		boolean batched = batch > 1;
+		// A single product on the 16x16 kernel is the plain entry point with the
+		// parameter block it has always had; a stack, and every register-tiled product,
+		// carries the two stride parameters.
+		boolean batched = tile.batchedParameters();
 		MemorySegment parameters = arena.allocate(P, batched ? 8 : 6);
 		parameters.setAtIndex(P, 0, a);
 		parameters.setAtIndex(P, 1, b);
@@ -1713,8 +1798,8 @@ final class CudaGemm implements GpuDevice {
 			parameters.setAtIndex(P, 6, strideA);
 			parameters.setAtIndex(P, 7, strideB);
 		}
-		int status = this.driver.launchKernel(function, (p + TILE - 1) / TILE, (n + TILE - 1) / TILE, batch, TILE, TILE,
-				1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);
+		int status = this.driver.launchKernel(tile.function(), ceilDiv(p, tile.columns()), ceilDiv(n, tile.rows()),
+				batch, TILE, TILE, 1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}

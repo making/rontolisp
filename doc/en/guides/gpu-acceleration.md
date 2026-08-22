@@ -134,11 +134,11 @@ One `n x n` `linalg:matmul` on the interpreter, microseconds per call, warm. The
 | 64 | 46 | 21 | 139 | 27 | 11 | 42 |
 | 128 | 359 | 42 | 53 | 195 | 26 | 36 |
 | 256 | 2647 | 164 | 156 | 1453 | 85 | 71 |
-| 512 | 20267 | 1160 | 735 | 10567 | 510 | 215 |
-| 1024 | -- | 6450 | 5150 | -- | 3083 | 1183 |
-| 2048 | -- | 89200 | 38000 | -- | 44600 | 8067 |
+| 512 | 20267 | 1160 | 735 | 10567 | 510 | 200 |
+| 1024 | -- | 6450 | 5150 | -- | 3083 | 700 |
+| 2048 | -- | 89200 | 38000 | -- | 44600 | 4200 |
 
-Read it in two directions. Against the lane kernel the device is 7x at n=128 and 28x at n=512, and 49x at n=512 in single float -- a different order of magnitude, which is the point of the flag. Against a tuned BLAS on twenty cores it is a wash until about n=256 and then 1.6x to 2.3x at double width, 2.4x to 5.5x at single: double-float is the width this class of device is worst at, so **`--gpu` pays most for `single-float` data**, which is what `torch:` builds by default.
+Read it in two directions. Against the lane kernel the device is 7x at n=128 and 28x at n=512, and 53x at n=512 in single float -- a different order of magnitude, which is the point of the flag. Against a tuned BLAS on twenty cores it is a wash until about n=256 and then 1.6x to 2.3x at double width, 2.5x to 10x at single: double-float is the width this class of device is worst at, so **`--gpu` pays most for `single-float` data**, which is what `torch:` builds by default. The single-float rows from n=512 up were re-measured on 2026-08-22, when the f32 product gained two register-tiled kernels (a 64x64 and a 128x128 block tile, picked per shape by the device's SM count) that fold each cell in exactly the 16x16 kernel's order and so land on exactly its bits -- 2.7x at n=1024 and 3.5x at n=2048 on the kernel alone; the double-float product is unchanged, because on this device the scarce double units make every tile the same speed.
 
 The same products compiled to a `.class` and run on the JVM, best of three timed rounds after 400 warm-up calls:
 
@@ -147,9 +147,9 @@ The same products compiled to a `.class` and run on the JVM, best of three timed
 | 64 | 50 | 17 | 107 | 32 | 8 | 106 |
 | 128 | 345 | 30 | 50 | 206 | 34 | 34 |
 | 256 | 2613 | 170 | 145 | 1380 | 95 | 65 |
-| 512 | 20760 | 1140 | 740 | 10480 | 530 | 210 |
-| 1024 | -- | 6933 | 5367 | -- | 4433 | 2233 |
-| 2048 | -- | 91750 | 39000 | -- | 44625 | 8375 |
+| 512 | 20760 | 1140 | 740 | 10480 | 530 | 160 |
+| 1024 | -- | 6933 | 5367 | -- | 4433 | 850 |
+| 2048 | -- | 91750 | 39000 | -- | 44625 | 4200 |
 
 It is the same table, which is the point: once the product is one device call, the backend around it no longer matters. Warm carefully before you compare anything near the threshold -- at n=64 and n=128 the device drops back to its idle clock between calls, and a single cold round there can measure several times these figures.
 
@@ -163,9 +163,9 @@ And the stacked product, which is the shape a transformer is made of: one `linal
 | 4 x 64 | 176 | 49 | 101 | 31 |
 | 16 x 64 | 710 | 86 | 400 | 56 |
 | 16 x 128 | 5580 | 300 | 3040 | 130 |
-| 12 x 256 | 31740 | 1240 | 16660 | 380 |
+| 12 x 256 | 31740 | 1240 | 16660 | 300 |
 
-The batch is what the device is for: the CPU pays for every matrix in the stack while the round trip is paid once, so the ratio grows with the batch as much as with the matrix -- 1.25x at the threshold, 26x at 12 x 256 double-float and 44x single.
+The batch is what the device is for: the CPU pays for every matrix in the stack while the round trip is paid once, so the ratio grows with the batch as much as with the matrix -- 1.25x at the threshold, 26x at 12 x 256 double-float and 55x single (that last cell is the register-tiled kernel's, re-measured 2026-08-22; a third of it is the 9 MB of copies around a 51-microsecond kernel).
 
 The element-wise members, on the JVM class output: one `linalg:` call over 1.5 M elements -- the feed-forward activation of the transformer below -- microseconds per call, best of five timed rounds after 30 warm-up calls.
 
@@ -195,7 +195,7 @@ And the members whose CPU twin is an index odometer rather than a lane loop, on 
 
 Three to six times. The last row is the same operation at an equal shape: the flag refuses it, so both columns are the CPU running the same lane loop -- offering it to the device instead measures 112 us, which is why it is refused. That contrast is the whole selection rule for this group.
 
-End to end, `examples/llm-from-scratch/chapter03/train-gpt-soseki.lisp` at the notebook's own shapes (`*n-embd*` 384, `*block-size*` 256, which the file says is a one-line change) runs a training step **about seven times faster on the JVM class output** with the flag on -- 0.80 s against 0.11 s (0.10 to 0.11 run to run), from a 5-step and a 40-step run so that setup and sampling fall out of the slope, medians of five interleaved runs each (it was 0.89 against 0.21 when the flag first landed, and 0.80 against 0.13 measured the same day just before device residency; the difference since is that the AdamW update, the generator, and the selects and copies behind `torch:masked-fill`, `torch:index-select` and gradient clipping moved onto the acceleration seams, the generator onto the device, and since 2026-08-22 the arrays themselves stay on the device between calls). Quote the ratio rather than the digits: the same program varies by about 15% run to run on this machine.
+End to end, `examples/llm-from-scratch/chapter03/train-gpt-soseki.lisp` at the notebook's own shapes (`*n-embd*` 384, `*block-size*` 256, which the file says is a one-line change) runs a training step **about seven times faster on the JVM class output** with the flag on -- 0.79 s against 0.11 s (0.10 to 0.12 run to run), from a 5-step and a 40-step run so that setup and sampling fall out of the slope, medians of three interleaved rounds (it was 0.89 against 0.21 when the flag first landed, and 0.80 against 0.13 measured the same day just before device residency; the difference since is that the AdamW update, the generator, and the selects and copies behind `torch:masked-fill`, `torch:index-select` and gradient clipping moved onto the acceleration seams, the generator onto the device, and since 2026-08-22 the arrays themselves stay on the device between calls). Against `--simd --parallel` on twenty cores (0.37 s) it is three times; `--blas` changes nothing on that program, whose every product is the stacked one the library does not take. Quote the ratio rather than the digits: the same program varies by about 15% run to run on this machine. Past the first hundred steps the step settles near 0.06 s, and there it is the copies rather than the kernels: every device result is downloaded after every call (220 MB a step), about 40% of the step is that traffic and the waits around it, and the register-tiled product kernel of 2026-08-22 -- 2-4x on the kernel at this program's feed-forward shapes -- moved the step by nothing measurable. The example's README has the per-flag table.
 
 **The member outside `linalg`, on the program it was measured for.** [`examples/llama2`](https://github.com/making/rontolisp/tree/develop/examples/llama2) decoding `stories15M` -- 60 MB of single-float weights, 79 GEMVs per token -- on the JVM class output, 256 greedy tokens, three runs each on the same machine: **`--simd` 220 to 226 tokens per second, `--gpu --simd` 282 to 292**, about 1.3x, and the story byte-identical. Less than the weights' bandwidth would suggest, and the reason is what the device does NOT take: the four 288x288 projections per layer are a tie at about 12 microseconds and stay on the CPU, and the attention, RoPE and sampling around the GEMVs are not GEMVs at all. The three feed-forward matrices per layer and the classifier head -- two thirds of the multiply-adds -- are what moved, and the classifier head alone went from 1.5 milliseconds to 0.17.
 

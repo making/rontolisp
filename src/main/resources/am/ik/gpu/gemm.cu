@@ -62,6 +62,83 @@ extern "C" __global__ void gemm_batched_f64(const double* A, const double* B, do
   gemm_batched<double>(A, B, C, M, N, K, strideA, strideB);
 }
 
+// The REGISTER-TILED f32 siblings (2026-08-22): the same product over a 64x64 or a 128x128
+// block tile, 16x16 threads, each thread owning a TM x TN patch of the output -- rows
+// ty + i*16 and columns tx + j*16, so a warp's global loads and stores stay contiguous and
+// its shared-memory reads are conflict-free. The 16x16 kernel above moves one element of A
+// and one of B through shared memory per multiply-add; this one moves them once per TM / TN
+// multiply-adds, and at a transformer's feed-forward shapes and n >= 1024 that is 2.7-4x on
+// the GB10 (.kb/gpu.md, "The register-tiled f32 GEMM"). Below about half the device's
+// SMs in 128x128 tiles it LOSES to the kernel above -- the grid is too small to fill the
+// card -- which is why CudaGemm picks the tile per shape and keeps the 16x16 kernel for
+// f64 (where the scarce double units make every tile the same speed) and for everything
+// small.
+//
+// THE FOLD IS THE 16x16 KERNEL'S, BIT FOR BIT: every cell accumulates k ascending from +0
+// through one fused multiply-add per term, over K rounded up to 16 with zero padding, which
+// is exactly what gemm<T> does. So which tile ran is not observable in the result, and
+// CudaGemm may choose freely. gemm_batched_f32_t* takes the batched parameter block (the
+// strides) at every batch size, including 1.
+template <typename T, int TM, int TN>
+__device__ void gemm_tiled(const T* A, const T* B, T* C, int M, int N, int K) {
+  constexpr int BM = 16 * TM, BN = 16 * TN, BK = TILE;
+  __shared__ T As[BK][BM];
+  __shared__ T Bs[BK][BN];
+  int tx = threadIdx.x, ty = threadIdx.y;
+  int tid = ty * 16 + tx;
+  int row0 = blockIdx.y * BM, col0 = blockIdx.x * BN;
+  T acc[TM][TN];
+  for (int i = 0; i < TM; ++i)
+    for (int j = 0; j < TN; ++j) acc[i][j] = 0;
+  for (int t = 0; t < (K + BK - 1) / BK; ++t) {
+    int k0 = t * BK;
+    for (int e = tid; e < BM * BK; e += 256) {
+      int m = e / BK, k = e % BK;
+      int gr = row0 + m, gk = k0 + k;
+      As[k][m] = (gr < M && gk < K) ? A[gr * (long) K + gk] : (T) 0;
+    }
+    for (int e = tid; e < BK * BN; e += 256) {
+      int k = e / BN, n = e % BN;
+      int gk = k0 + k, gc = col0 + n;
+      Bs[k][n] = (gk < K && gc < N) ? B[gk * (long) N + gc] : (T) 0;
+    }
+    __syncthreads();
+    for (int k = 0; k < BK; ++k) {
+      T a[TM], b[TN];
+      for (int i = 0; i < TM; ++i) a[i] = As[k][ty + i * 16];
+      for (int j = 0; j < TN; ++j) b[j] = Bs[k][tx + j * 16];
+      for (int i = 0; i < TM; ++i)
+        for (int j = 0; j < TN; ++j) acc[i][j] = fma(a[i], b[j], acc[i][j]);
+    }
+    __syncthreads();
+  }
+  for (int i = 0; i < TM; ++i) {
+    int r = row0 + ty + i * 16;
+    if (r >= M) continue;
+    for (int j = 0; j < TN; ++j) {
+      int c = col0 + tx + j * 16;
+      if (c < N) C[r * (long) N + c] = acc[i][j];
+    }
+  }
+}
+
+template <typename T, int TM, int TN>
+__device__ void gemm_tiled_batched(const T* A, const T* B, T* C, int M, int N, int K, long long strideA,
+                                   long long strideB) {
+  long long z = blockIdx.z;
+  gemm_tiled<T, TM, TN>(A + z * strideA, B + z * strideB, C + z * (long long) M * N, M, N, K);
+}
+
+extern "C" __global__ void gemm_batched_f32_t4(const float* A, const float* B, float* C, int M, int N, int K,
+                                               long long strideA, long long strideB) {
+  gemm_tiled_batched<float, 4, 4>(A, B, C, M, N, K, strideA, strideB);
+}
+
+extern "C" __global__ void gemm_batched_f32_t8(const float* A, const float* B, float* C, int M, int N, int K,
+                                               long long strideA, long long strideB) {
+  gemm_tiled_batched<float, 8, 8>(A, B, C, M, N, K, strideA, strideB);
+}
+
 // The ELEMENT-WISE tier: one unary map per width, with the member selected by an OP CODE
 // parameter rather than by an entry point of its own. One entry point per width keeps the
 // module lookup fixed however the member set grows, and the branch is uniform across the

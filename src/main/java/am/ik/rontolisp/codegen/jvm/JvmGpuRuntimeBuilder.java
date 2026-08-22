@@ -81,9 +81,9 @@ final class JvmGpuRuntimeBuilder {
 	 * produced. {@code package-info} carries only annotations and is left behind.
 	 */
 	private static final List<String> GPU_CLASSES = List.of("GpuDevice", "GpuDevice$Thresholds", "CudaDriver",
-			"CuResult", "CudaGemm", "CudaGemm$Probe", "DeviceResidency", "DeviceResidency$Entry", "DeviceResidency$Key",
-			"DeviceResidency$Lookup", "MetalDriver", "MetalGemm", "MetalGemm$Probe", "MetalGemm$Slab", "Gpu",
-			"Gpu$Probe");
+			"CuResult", "CudaGemm", "CudaGemm$Probe", "CudaGemm$Tile", "DeviceResidency", "DeviceResidency$Entry",
+			"DeviceResidency$Key", "DeviceResidency$Lookup", "MetalDriver", "MetalGemm", "MetalGemm$Probe",
+			"MetalGemm$Slab", "Gpu", "Gpu$Probe");
 
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_gpuInit";

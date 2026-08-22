@@ -218,19 +218,23 @@ the artifact instead of only living here. `GpuDeclineTest` asserts it is still t
   the GB10: 26 ms the first time a given PTX text is seen, **1.4 ms every run after
   that**, because the driver keeps its own on-disk cache in `~/.nv/ComputeCache` and the
   resource is a fixed text. So no `cuModuleLoadDataEx` options are passed.
-- The kernel is the spike's 16x16 tiled GEMM at f32 and f64, unchanged. That is the
-  answer and not a stopgap: at f64 it MATCHES cuBLAS (0.9x, both pinned by the same scarce
-  fp64 units), and at f32 the 7x cuBLAS wins on kernel time collapses to 1.2-3.0x once the
-  copies are on the clock. todo-123 has the full table and the reasoning; nothing here
-  opens `libcublas`.
-- **Sixteen entry points since 2026-08-22** (twelve since phase 3): `gemm_f64` / `gemm_f32`, the stacked siblings
+- The product kernel was the spike's 16x16 tiled GEMM at f32 and f64, unchanged, until
+  2026-08-22; it still is at f64 -- there it MATCHES cuBLAS (0.9x, both pinned by the same
+  scarce fp64 units) -- and at f32 it is now one of three: the 16x16 kernel for everything
+  small and two REGISTER-TILED siblings, `gemm_batched_f32_t4` (64x64 block tile, 4x4
+  outputs per thread) and `gemm_batched_f32_t8` (128x128, 8x8), chosen per shape by the
+  SM count and bit-identical to it ("The register-tiled f32 GEMM" below). The 7x cuBLAS
+  had on kernel time at f32 is now about 2x, and nothing here opens `libcublas`.
+- **Eighteen entry points since 2026-08-22** (sixteen that morning, twelve since phase 3): `gemm_f64` / `gemm_f32`, the stacked siblings
   `gemm_batched_f64` / `gemm_batched_f32`, the element-wise `map_f64` / `map_f32`, the
   strided `bcast_*` / `gather_*` / `fold_*`, the generator `rng_fill_f64` /
   `rng_fill_f32` -- that pair is the Wichmann-Hill walk spelled in `_rn` intrinsics
   (so nvcc cannot contract `lo + span * u` into an FMA) behind a square-and-multiply jump,
   and the PTX grew from 113 KB to 143 KB for it -- and, the same day, the GEMV
   `gemv_f64` / `gemv_f32` behind `vec:matvec` (one warp per row, a double accumulator at
-  both widths; 143 KB to 152 KB). A batched kernel is six lines -- it offsets the
+  both widths; 143 KB to 152 KB), and that evening the two register-tiled f32 products
+  (152 KB to 204 KB, with no `#pragma unroll`: ptxas unrolls the 16-deep k loop itself,
+  measured at the same speed, and the pragma alone was another 60 KB of PTX). A batched kernel is six lines -- it offsets the
   three pointers by `blockIdx.z` times the strides and calls the SAME `gemm<T>` device
   function -- which is why a batched cell folds `k` bit-identically to an unbatched one
   and the precision contract below needed no second sentence. `gemm.cu` grew by 22 lines
@@ -1269,6 +1273,92 @@ interpreter today it is not.**
 call above is 0.155 s, and the five-step interpreter run went 332.3 -> 172.1 s under
 `--simd` (329.9 -> 171.5 with `--gpu`) -- the device still buys nothing there, so the
 lesson stands unchanged and only the member that dominates has moved.
+
+### The register-tiled f32 GEMM (2026-08-22)
+
+**Why.** The fourth profile of the training step (`.todo/491`, filed the same evening)
+put `nsys` on the 200-step `train-gpt-soseki` run at the notebook's shapes, `--gpu --simd`,
+JVM class output: of 1.63 s of kernel time, `gemm_batched_f32` was 1.05 s over 8610 launches
+-- 5.3 ms a step, about 2.3 TFLOP/s on a device whose f32 peak is near 23 -- the classic
+result of a 16x16 shared-memory tile that moves one element of each operand through shared
+memory per multiply-add. cuBLAS reaches 5-7x that on the same shapes (the spike's table),
+and the gap was the one device-side line the profile had.
+
+**What was built.** `gemm_tiled<T, TM, TN>` in `gemm.cu`: a `16*TM x 16*TN` block tile,
+16x16 threads, each thread owning a `TM x TN` patch at rows `ty + i*16` and columns
+`tx + j*16` (so a warp's global loads and stores are contiguous and its shared reads are
+conflict-free), operands staged through shared memory 16 deep in k. Two entry points,
+`gemm_batched_f32_t4` (64x64) and `gemm_batched_f32_t8` (128x128), both taking the batched
+parameter block at every batch size including 1. f32 ONLY: at f64 the GB10's scarce double
+units pin every tile to the same speed (0.9-1.0x, and the 8x8 tile spills registers and
+LOSES), so `gemm_f64` / `gemm_batched_f64` are unchanged.
+
+**The fold is the 16x16 kernel's, bit for bit, and that is what makes the choice free.**
+Each cell accumulates k ascending from +0 through one `fma.rn.f32` per term over K rounded
+up to 16 with zero padding -- which is exactly what `gemm<T>` compiles to (the PTX has
+sixteen `fma.rn.f32` and no `mul`/`add` in the old kernel) -- and a padded term is
+`fma(0, 0, acc) = acc` (an accumulator that starts at +0 and only ever adds rounded
+products is never -0). `gemm-tile-probe.cu` checked every cell of every shape below
+against the old kernel: zero differences; `GpuTest.everySingleFloatProductKernelLandsOnTheSameFusedFold`
+pins it against `Math.fma` over floats on the CPU at shapes that reach each tile, with
+M, N and K all off the tile and off 16. So the precision contract's sentence about the
+product did not change, and `CudaGemm.tileF32` may choose by speed alone.
+
+**The rule (`CudaGemm.tileF32`), and the table it came from.** `.todo/123-gpu-acceleration/gemm-tile-probe.cu`,
+GB10 (48 SMs), `nvcc -O3 -arch=native`, us per call, best of 20 after a warm-up,
+`old` = the shipped 16x16 kernel:
+
+| shape (batch x M x K . K x N) | old | 2x2 (32) | 4x4 (64) | 8x8 (128) |
+|---|---|---|---|---|
+| 4 x 256x384 . 384x192 (Q projection, broadcast W) | 65 | 64 | **55** | 72 |
+| 4 x 256x192 . 192x256 (scores) | 45 | 45 | 39 | **39** |
+| 4 x 256x256 . 256x192 (attention x V) | 45 | **43** | 44 | 50 |
+| 4 x 256x384 . 384x384 (linear-o) | 124 | 115 | 76 | **72** |
+| 4 x 256x384 . 384x1536 (MLP up) | 492 | 419 | 239 | **124** |
+| 4 x 256x1536 . 1536x384 (MLP down) | 502 | 451 | 307 | **280** |
+| 4 x 384x256 . 256x1536 (grad W up) | 479 | 430 | 219 | **134** |
+| 64 x 64x512 . 512x64 (the book's attention, batch 64) | **115** | 125 | 118 | 179 |
+| 64 x 64x512 . 512x2048 (the book's feed-forward) | 3470 | 2950 | **1525** | 1689 |
+| 256 x 256 | **19** | 31 | 45 | 54 |
+| 512 x 512 | 115 | 119 | 101 | **96** |
+| 768 x 768 | 363 | 340 | 196 | **141** |
+| 1024 x 1024 | 866 | 780 | 474 | **318** |
+| 2048 x 2048 | 6929 | 5897 | 3109 | **1991** |
+| f64, 1024 x 1024 | **4471** | 4587 | 4975 | 6761 |
+
+Read it as three regimes. The 128 tile is 2.2-4x once its grid holds about half the SMs
+(24 blocks here: `linear-o` 1.7x, MLP up 4.0x, 768-square 2.6x, 2048-square 3.5x) and
+loses below that, where 48 SMs cannot be filled by 4 or 16 blocks (256-square 0.3x,
+attention x V 0.9x). The 64 tile is the middle rung -- 1.2-2.3x from a full wave of blocks
+up, a tie below -- and the one that takes a batch of SHORT rows: the book's batch-64 of
+64-row slabs, where a 128-row tile wastes half of itself. And the 16x16 kernel keeps
+everything small and everything f64. Hence: **the 128 tile when both output axes are at
+least 128 and the grid has at least `SMs / 2` blocks; else the 64 tile when both are at
+least 64 and the grid has at least `SMs` blocks; else 16x16** -- in SMs, so a smaller card
+moves the thresholds down with it. The `#pragma unroll` the probe carried was dropped
+from the shipped kernel: ptxas unrolls the k loop itself (same speed, measured), and the
+pragma was 60 KB of PTX.
+
+**What it bought, measured through rontolisp.** The guide's n x n f32 `--gpu` column,
+re-measured the same evening (best of three rounds, warm; the 16x16 kernel's rows are
+unchanged and were left as they were): interpreter 512 / 1024 / 2048 at 215 / 1183 /
+8067 us -> **200 / 700 / 4200**; JVM class output 210 / 2233 / 8375 -> **160 / 850 /
+4200**; the stacked `12 x 256` f32 380 -> 300 (the copies are most of what is left there:
+9.4 MB a call). On the training step itself -- `train-gpt-soseki` at the notebook's
+shapes, `--gpu --simd`, the old class against the new one, three interleaved rounds --
+**nothing measurable**: 0.111 -> 0.108 s at `(t40 - t5) / 35` and 0.059 -> 0.058 at
+`(t200 - t40) / 160`, both inside the run-to-run spread. The GEMM was 5.3 ms of a 60 ms
+step and the tiled kernel takes about 2 ms of that; the step is the copies (next
+paragraph). The kernel is still the right thing to have shipped -- it is what the guide's
+tables show and what a batch-64 run of the book's own shapes would run on -- but the
+example's README quotes the step, and the step did not move.
+
+**What it did NOT buy, and why that is the finding.** The same profile put the step's
+device copies at ~40% of the step and every result download at 220 MB a step; with the
+GEMM 2-4x faster at its large shapes the step's slope barely moved, because the download
+of a `(4 256 1536)` activation costs more than the product that made it. That is
+`.todo/491`: the host-authoritative design that "Device residency, built" chose above
+is now the ceiling, not the copies it removed.
 
 ### The element-wise tier (phase 4b, 2026-08-21)
 

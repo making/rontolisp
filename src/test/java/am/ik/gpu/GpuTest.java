@@ -1,5 +1,6 @@
 package am.ik.gpu;
 
+import java.util.Arrays;
 import java.util.Random;
 
 import org.junit.jupiter.api.Test;
@@ -1047,6 +1048,49 @@ class GpuTest {
 			assertThat(Gpu.multiply(a, z * n * n, b, z * n * n, alone, 0, n, n, n)).isTrue();
 			for (int i = 0; i < n * n; i++) {
 				assertThat(batched[z * n * n + i]).isEqualTo(alone[i]);
+			}
+		}
+	}
+
+	@Test
+	void everySingleFloatProductKernelLandsOnTheSameFusedFold() {
+		// Three single-float kernels since 2026-08-22 -- the 16x16 one and the 64x64 and
+		// 128x128 register-tiled ones, chosen per shape by SM count -- and ONE contract:
+		// every cell is k ascending, one fused multiply-add per term, from +0. That fold
+		// is
+		// Math.fma over floats on the CPU, so this is an EQUALITY over inexact operands
+		// at
+		// shapes that reach each tile on this machine (a 1000-square product takes the
+		// 128 tile on anything with <= 128 SMs, a stack of 256x192 slabs the 64 tile on
+		// <= 48) and whose edges are ragged on every axis -- M, N and K all off the tile
+		// and off 16. Which kernel ran is not observable; that is the assertion.
+		int[][] shapes = { { 1, 1000, 1000, 1000 }, { 4, 256, 384, 192 }, { 3, 130, 70, 200 }, { 2, 64, 2048, 37 } };
+		Random random = new Random(20260822L);
+		for (int[] shape : shapes) {
+			int batch = shape[0], n = shape[1], m = shape[2], p = shape[3];
+			float[] a = new float[batch * n * m], b = new float[m * p], c = new float[batch * n * p];
+			for (int i = 0; i < a.length; i++) {
+				a[i] = random.nextFloat() - 0.5f;
+			}
+			for (int i = 0; i < b.length; i++) {
+				b[i] = random.nextFloat() - 0.5f;
+			}
+			// b broadcasts over the batch (stride 0), as a weight under a (B T C)
+			// activation
+			// does; a stack of one is the plain product.
+			assertThat(Gpu.multiply(a, 0, n * m, b, 0, 0, c, 0, batch, n, m, p)).as("%s", Arrays.toString(shape))
+				.isTrue();
+			for (int z = 0; z < batch; z++) {
+				for (int i = 0; i < n; i++) {
+					for (int j = 0; j < p; j++) {
+						float acc = 0f;
+						for (int k = 0; k < m; k++) {
+							acc = Math.fma(a[z * n * m + i * m + k], b[k * p + j], acc);
+						}
+						assertThat(c[z * n * p + i * p + j]).as("%s cell %d,%d,%d", Arrays.toString(shape), z, i, j)
+							.isEqualTo(acc);
+					}
+				}
 			}
 		}
 	}
