@@ -212,6 +212,42 @@ the 138 distinct characters — to about `2.99`, and the samples come out as
 recognisable 漱石 fragments (`である。`, `というもの`, `の顔`) strung together
 without sentences. Raise the numbers above and the same program keeps going.
 
+### Raised to the book's shapes, measured
+
+Both programs were run once at the book's own configuration on 2026-08-23, to check that
+"would run it unchanged" is true and to see what it costs. Two edits were needed, both to
+data and neither to the model: `train-gpt-soseki.lisp`'s `*text*` read from a file holding
+the whole novel (fetched from 青空文庫 and stripped of ruby and notes beforehand -- the
+notebook's `requests` + BeautifulSoup step; 318315 characters, 3038 distinct), and
+`section5.lisp`'s `*corpus*` read from a cloned `small_parallel_enja`. Neither file is in
+this repository, because nothing here downloads; the shape parameters were set as the
+tables above say. JVM class output, `--gpu --simd`, `java -Xmx64g -XX:+UseParallelGC
+-Xmn8g`, the same GB10:
+
+- **Chapter 3 at `block_size` 256, `n_embd` 384, 6 layers, 6 heads, batch 64 (13.06 M
+  parameters): 9.9 s per training step**, so the notebook's 5000 steps would take about
+  14 hours here. A 103-step run (17 minutes) took the loss from 8.10 (`log 3038`) to
+  4.31 and already samples sentence-shaped 漱石 -- `主人はなる。そうにものであるのでする。` --
+  with the warmup shortened to 100 steps so that a run this short reaches the base rate
+  (the trainer's `3e-4`).
+- **Chapter 2 at `d_model` 512, 6 blocks, 8 heads, `d_ff` 512, batch 64: 1.9 s per
+  batch of 64 pairs**, so 20 epochs over the 50000 training pairs would take about 8
+  hours. Two epochs over the first 10000 pairs (9 minutes) took the loss from 4.72 to
+  3.61 and the greedy decodes from `i have to the .` for everything to sentence-shaped
+  English that is not yet the translation -- `曇り の 日 で す 。` -> `it 's a day .`,
+  `私 に は 生き 甲斐 が な い 。` -> `i don 't know .` -- which is what 312 batches
+  of a 6-block model should look like.
+
+So the port runs the book's shapes; it is the speed that is not the book's. The
+arithmetic of a chapter-3 step is about 1.2 TFLOP, which the device finishes in 0.2 s of
+the 9.9; the rest is the round trip the `--gpu` section describes, scaled up -- every
+member's result copied home (an `nsys` profile of three steps and the sampling moved
+88 GB down and 40 GB up), every non-member (`where` behind the causal mask, the
+array-times-scalar forms, the equal-shape adds and multiplies) then running on the host
+over the copy, and a fresh 100 MB array allocated for each of them (20 s of the 145 s
+of a 13-step run were collector pauses). That is `.todo/491`, with the profile; until it
+lands, the shapes that are tested are the shapes to run.
+
 ## The two places this port deliberately differs from the book
 
 Both are in [`gpt/trainer.lisp`](gpt/trainer.lisp), and both would otherwise

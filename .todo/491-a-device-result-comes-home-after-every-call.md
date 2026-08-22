@@ -94,3 +94,33 @@ re-measured, not edited.
 `-XX:+UseParallelGC -Xmn4g` takes the 40-step `--gpu --simd` run from 6.0 to 5.0 s: the
 step allocates a fresh 6 MB array per activation and G1 pays for it (the `div+fresh-alloc`
 row of the `laEwFS` probe: 0.75 ms of arithmetic, 1.1-2.6 ms with the allocation).
+
+## The same step at the BOOK's shapes (2026-08-23)
+
+Run once more with the corpus the notebook actually trains on (the whole of
+『吾輩は猫である』, 318 k characters, 3038 distinct, fetched and stripped beforehand) and
+the notebook's own configuration -- `block-size` 256, `n-embd` 384, 6 layers, 6 heads,
+batch 64 (13.06 M parameters) -- `--gpu --simd`, JVM class output,
+`-XX:+UseParallelGC -Xmn8g -Xmx64g`: **9.9 s a step** (`(t13 - t3) / 10`), so the
+notebook's 5000 steps would be about 14 hours here. The arithmetic is ~1.2 TFLOP a step;
+at the tiled kernel's measured rate that is 0.2 s. Where the other 9.7 go (JFR
+`ExecutionSample` + 2x `NativeMethodSample`, ~6400 weighted samples over 13 steps):
+
+| | share |
+|---|---|
+| the bounce-buffer memcpy (`Unsafe.copyMemory0`) + the pinned DtoH wait + `ctxSynchronize` + `memcpyHtoD` | ~40% |
+| `laWhere` (the causal `masked-fill`, 6 heads x 6 layers, forward and backward) | 10% |
+| `laEwFS` (f32 array against a double scalar) | 13% |
+| the lane kernels (`laEwFF`, `laBcastFF`, the Vector API load / op / store frames) | 14% |
+| `laNewLikeF` + 20.5 s of ParallelGC pauses in a 145 s run | ~18% |
+
+`nsys` over the 3-step run: 88 GB downloaded and 40 GB uploaded (sampling 400 tokens
+without a KV cache is 71 k launches of the small `gemm_f32` on its own), DtoH API wall
+3.8 s against 1.9 s of kernel time for the whole run. So at the shape the README calls the
+book's, the device is idle more than nine tenths of the time, and three of the four lines
+above are the SAME finding: every result of a member is copied home, every non-member
+(`where`, the scalar forms, the equal-shape ops) then runs on the host over that copy,
+and every one of them allocates a fresh 100 MB array. The design above removes the first,
+turns the second into launches, and leaves the third -- which says the host array itself
+should be allocated lazily for a result that never comes home, and that is the one
+representation question the JVM backend's `[rank, dim..., data...]` header makes hard.
