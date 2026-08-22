@@ -431,9 +431,9 @@ final class MetalGemm implements GpuDevice {
 	/**
 	 * The matrix-by-vector product is not a member here: it pays only over a RESIDENT
 	 * matrix, and this backend keeps no resident copies yet ({@code .kb/gpu.md}, "Device
-	 * residency, built", for what a port would have to measure first). Both widths
-	 * decline, and the threshold is {@code Long.MAX_VALUE} so the question is never
-	 * asked.
+	 * residency, built", for what a port would have to measure first; {@code .todo/477}
+	 * is that port, residency first and the GEMV second). Both widths decline, and the
+	 * threshold is {@code Long.MAX_VALUE} so the question is never asked.
 	 */
 	@Override
 	public boolean gemv(double[] w, int ow, double[] x, int ox, double[] y, int oy, int rows, int cols) {
