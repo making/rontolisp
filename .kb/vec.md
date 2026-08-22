@@ -382,7 +382,10 @@ scalar defun. `mean`/`norm` are accelerated transitively (their spliced bodies c
   (int)arg[0]`, read via `DoubleVector.fromArray(SPECIES, arr, off + i)`; the result is a
   fresh packed `double[]` (`[1.0, n, ...]`). No shadow logic. `THRESHOLD = 128` gates the
   lane loop vs a scalar loop; the dot two-rounding mul-then-add (not fma) keeps the only
-  scalar-vs-vector divergence to reduction associativity.
+  scalar-vs-vector divergence to reduction associativity. The lane sum itself is a
+  manual ascending-index scalar loop (`sumLanes`/`sumLanesF`), not
+  `reduceLanes(ADD)` -- see `.kb/simd-parallel.md`'s invariant section for why
+  `reduceLanes(ADD)` is not safe to use here.
 - **Width-polymorphic bridge:** each kernel dispatches on the runtime backing — a `double[]`
   runs the `DoubleVector` path, a `float[]` the sibling `FloatVector` kernel (element-wise
   → a fresh `float[]`, width preserved; `sum`/`dot` → an f64 scalar, accumulated in f32 over

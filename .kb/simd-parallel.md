@@ -18,6 +18,22 @@ the same scalar tail in index order -- so **which thread runs which row cannot c
 bit**, and every byte-identity statement `.kb/linalg-simd.md` makes about `--simd` holds
 under `--simd --parallel` unchanged. That is the whole contract, and its consequence:
 
+- **The row's lane reduction must not use `DoubleVector`/`FloatVector#reduceLanes(ADD)`.**
+  The JDK does not pin the fold order of a floating-point `ADD` reduction to lane order --
+  it is free to pick whatever order the hardware reduces fastest -- and, on a warm JVM,
+  that order can change mid-run the moment a hotter compilation tier (C2) replaces a
+  colder one, independent of which thread runs the row: two calls of the identical
+  `matvecRows` on the identical row can legally answer a different bit once the method
+  gets recompiled between them (reproduced by calling the same static method from a
+  freshly spawned `Thread` a handful of times in a loop: the first few calls, still
+  interpreted/C1, agree with the caller; once total invocations cross the JIT's
+  compilation threshold, every later call agrees with EACH OTHER but not with the earlier
+  ones). `VecSimdKernels`/`JvmSimdVectorTemplate` both sum a `vacc`'s lanes with a private
+  `sumLanes`/`sumLanesF` helper instead -- a plain ascending-index scalar `+=` loop over
+  `v.lane(i)` -- because the JLS pins scalar floating-point addition order exactly,
+  regardless of compilation tier. `sum`/`dot`/`matvecRows`/`matvecRowsF` (both files) all
+  go through it; a new f64/f32 reduction must too.
+
 - **Only row-independent kernels are split.** The members: `vec:matvec`,
   `vec:matvec-into`, `linalg:dot` in its matrix-by-vector and matrix-by-matrix cases
   (the row-vector-by-matrix case is one output row and stays serial), and

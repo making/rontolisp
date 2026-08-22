@@ -119,6 +119,32 @@ final class JvmSimdVectorTemplate {
 	private JvmSimdVectorTemplate() {
 	}
 
+	/**
+	 * Sums a {@code DoubleVector}'s lanes in ascending index order, as a scalar {@code +}
+	 * chain. {@code reduceLanes(ADD)} is NOT a substitute: the JDK is free to fold a
+	 * floating-point {@code ADD} reduction in whatever order the hardware reduces
+	 * fastest, and that order can change mid-run when a hotter compilation tier replaces
+	 * a colder one -- see {@code .kb/vec.md} ("the fold order IS the value"). A manual
+	 * lane walk uses only scalar {@code double} addition, whose order the JLS pins
+	 * regardless of compilation tier. Mirrors {@code eval.VecSimdKernels#sumLanes}.
+	 */
+	private static double sumLanes(DoubleVector v) {
+		double s = 0.0;
+		for (int lane = 0; lane < v.length(); lane++) {
+			s += v.lane(lane);
+		}
+		return s;
+	}
+
+	/** {@link #sumLanes(DoubleVector)}, at single width. */
+	private static float sumLanesF(FloatVector v) {
+		float s = 0.0f;
+		for (int lane = 0; lane < v.length(); lane++) {
+			s += v.lane(lane);
+		}
+		return s;
+	}
+
 	// --- element-wise kernels (return a fresh packed simd vector) ----------------
 
 	static @Nullable Object simdAdd(@Nullable Object a, @Nullable Object b) {
@@ -398,7 +424,7 @@ final class JvmSimdVectorTemplate {
 			for (; i < bound; i += SPECIES.length()) {
 				vacc = vacc.add(DoubleVector.fromArray(SPECIES, x, ox + i));
 			}
-			acc = vacc.reduceLanes(VectorOperators.ADD);
+			acc = sumLanes(vacc);
 		}
 		for (; i < n; i++) {
 			acc += x[ox + i];
@@ -430,7 +456,7 @@ final class JvmSimdVectorTemplate {
 				vacc = vacc
 					.add(DoubleVector.fromArray(SPECIES, x, ox + i).mul(DoubleVector.fromArray(SPECIES, y, oy + i)));
 			}
-			acc = vacc.reduceLanes(VectorOperators.ADD);
+			acc = sumLanes(vacc);
 		}
 		for (; i < n; i++) {
 			acc += x[ox + i] * y[oy + i];
@@ -519,7 +545,7 @@ final class JvmSimdVectorTemplate {
 					vacc = vacc.add(DoubleVector.fromArray(SPECIES, W, base + i)
 						.mul(DoubleVector.fromArray(SPECIES, X, ox + i)));
 				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
+				acc = sumLanes(vacc);
 			}
 			for (; i < n; i++) {
 				acc += W[base + i] * X[ox + i];
@@ -547,7 +573,7 @@ final class JvmSimdVectorTemplate {
 					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
 						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
 				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
+				acc = sumLanesF(vacc);
 			}
 			for (; i < n; i++) {
 				acc += w[base + i] * x[ox + i];
@@ -3399,7 +3425,7 @@ final class JvmSimdVectorTemplate {
 			for (; i < bound; i += FSPECIES_REDUCE.length()) {
 				vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i));
 			}
-			acc = vacc.reduceLanes(VectorOperators.ADD);
+			acc = sumLanesF(vacc);
 		}
 		for (; i < n; i++) {
 			acc += x[ox + i];
@@ -3436,7 +3462,7 @@ final class JvmSimdVectorTemplate {
 				vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)
 					.mul(FloatVector.fromArray(FSPECIES_REDUCE, y, oy + i)));
 			}
-			acc = vacc.reduceLanes(VectorOperators.ADD);
+			acc = sumLanesF(vacc);
 		}
 		for (; i < n; i++) {
 			acc += x[ox + i] * y[oy + i];

@@ -74,6 +74,32 @@ final class VecSimdKernels {
 	}
 
 	/**
+	 * Sums a {@code DoubleVector}'s lanes in ascending index order, as a scalar {@code +}
+	 * chain. {@code reduceLanes(ADD)} is NOT a substitute: the JDK is free to fold a
+	 * floating-point {@code ADD} reduction in whatever order the hardware reduces
+	 * fastest, and that order can change mid-run when a hotter compilation tier replaces
+	 * a colder one -- see {@code .kb/vec.md} ("the fold order IS the value"). A manual
+	 * lane walk uses only scalar {@code double} addition, whose order the JLS pins
+	 * regardless of compilation tier.
+	 */
+	private static double sumLanes(DoubleVector v) {
+		double s = 0.0;
+		for (int lane = 0; lane < v.length(); lane++) {
+			s += v.lane(lane);
+		}
+		return s;
+	}
+
+	/** {@link #sumLanes(DoubleVector)}, at single width. */
+	private static float sumLanesF(FloatVector v) {
+		float s = 0.0f;
+		for (int lane = 0; lane < v.length(); lane++) {
+			s += v.lane(lane);
+		}
+		return s;
+	}
+
+	/**
 	 * Returns the preferred double lane count. Used only as an availability probe:
 	 * touching this class links the Vector API, so a JVM without the incubator module
 	 * raises {@link NoClassDefFoundError} here rather than deep inside a kernel.
@@ -175,7 +201,7 @@ final class VecSimdKernels {
 			for (; i < bound; i += SPECIES.length()) {
 				vacc = vacc.add(DoubleVector.fromArray(SPECIES, x, i));
 			}
-			acc = vacc.reduceLanes(VectorOperators.ADD);
+			acc = sumLanes(vacc);
 		}
 		for (; i < n; i++) {
 			acc += x[i];
@@ -196,7 +222,7 @@ final class VecSimdKernels {
 				// the reduction associativity.
 				vacc = vacc.add(DoubleVector.fromArray(SPECIES, x, i).mul(DoubleVector.fromArray(SPECIES, y, i)));
 			}
-			acc = vacc.reduceLanes(VectorOperators.ADD);
+			acc = sumLanes(vacc);
 		}
 		for (; i < n; i++) {
 			acc += x[i] * y[i];
@@ -237,7 +263,7 @@ final class VecSimdKernels {
 					vacc = vacc
 						.add(DoubleVector.fromArray(SPECIES, w, base + i).mul(DoubleVector.fromArray(SPECIES, x, i)));
 				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
+				acc = sumLanes(vacc);
 			}
 			for (; i < cols; i++) {
 				acc += w[base + i] * x[i];
@@ -780,7 +806,7 @@ final class VecSimdKernels {
 					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
 						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
 				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
+				acc = sumLanesF(vacc);
 			}
 			for (; i < cols; i++) {
 				acc += w[base + i] * x[i];
@@ -887,7 +913,7 @@ final class VecSimdKernels {
 			for (; i < bound; i += FSPECIES_REDUCE.length()) {
 				vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, x, i));
 			}
-			acc = vacc.reduceLanes(VectorOperators.ADD);
+			acc = sumLanesF(vacc);
 		}
 		for (; i < n; i++) {
 			acc += x[i];
@@ -922,7 +948,7 @@ final class VecSimdKernels {
 				vacc = vacc.add(
 						FloatVector.fromArray(FSPECIES_REDUCE, x, i).mul(FloatVector.fromArray(FSPECIES_REDUCE, y, i)));
 			}
-			acc = vacc.reduceLanes(VectorOperators.ADD);
+			acc = sumLanesF(vacc);
 		}
 		for (; i < n; i++) {
 			acc += x[i] * y[i];
