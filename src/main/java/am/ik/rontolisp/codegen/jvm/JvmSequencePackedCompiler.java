@@ -1,6 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
@@ -40,6 +42,19 @@ final class JvmSequencePackedCompiler {
 		LispVal stream = read ? JvmStringStreamCompiler.inputStreamArg(ctx, parts.get(2))
 				: JvmStringStreamCompiler.streamArg(ctx, parts.get(2));
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// A bulk READ writes a packed float array's storage in place, behind the element
+		// setter's back. Under --gpu the device may hold a resident copy of that array,
+		// so the call site keeps the sequence in a temp and reports it to _gpuWritten
+		// once the helper has returned (.kb/gpu.md, "Device residency, built").
+		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		int seqSlot = -1;
+		if (read && gpuOps != null) {
+			seqSlot = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(seqSlot);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(seqSlot);
+		}
 		JvmExprCompiler.compileExpr(stream != null ? stream : parts.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
 		JvmExprCompiler.compileExpr(parts.get(4), ctx, className);
@@ -51,6 +66,12 @@ final class JvmSequencePackedCompiler {
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ref.index());
+		if (seqSlot >= 0 && gpuOps != null) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(seqSlot);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN)).index());
+		}
 	}
 
 }

@@ -1169,7 +1169,8 @@ public final class RontoLispCli {
 		this.out.println("                     the element-wise exp/log/tanh/sin/cos/tan/asin/acos/atan/");
 		this.out.println("                     sinh/cosh/erf. sqrt/abs/negative/sign and add/sub/mul/div stay");
 		this.out.println("                     on the CPU: they are one instruction per element and a round");
-		this.out.println("                     trip cannot pay for them.");
+		this.out.println("                     trip cannot pay for them. And vec:matvec, the GEMV a decode");
+		this.out.println("                     loop is made of, over a matrix that stays on the device.");
 		this.out.println("                     Interpreter (incl. the native binary) and JVM (.class) only --");
 		this.out.println("                     the device is reached through the foreign function API, which");
 		this.out.println("                     WASM does not have. A compiled .class carries the whole");

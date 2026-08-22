@@ -222,6 +222,21 @@ class LinalgGpuDeclineTest {
 	}
 
 	@Test
+	void aMatrixByVectorProductBelowTheThresholdIsUntouchedEverywhere() {
+		// vec:matvec is the one device member outside linalg:, and it declines below
+		// 2^17 elements on every machine -- and on the first sight of any matrix on a
+		// machine with a device, so both calls here print what the defun prints.
+		for (String type : new String[] { "", " :element-type 'single-float" }) {
+			String program = """
+					(defparameter *w* (linalg:reshape (linalg:sin (linalg:arange 1 257%s)) '(16 16)))
+					(defparameter *x* (linalg:cos (linalg:arange 1 17%s)))
+					(list (vec:matvec *w* *x*) (vec:matvec *w* *x*))
+					""".formatted(type, type);
+			assertThat(eval(program, true)).as(type).isEqualTo(eval(program, false));
+		}
+	}
+
+	@Test
 	void theWholeRestOfLinalgIsUntouched() {
 		String program = """
 				(defparameter *a* (linalg:reshape (linalg:arange 1 17) '(4 4)))

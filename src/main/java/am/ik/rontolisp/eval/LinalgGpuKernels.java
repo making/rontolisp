@@ -322,6 +322,46 @@ final class LinalgGpuKernels {
 	}
 
 	/**
+	 * Whether a {@code rows x cols} matrix-by-vector product is worth offering at all --
+	 * the GEMV's driver-free size predicate. {@code true} is "worth unwrapping for": the
+	 * device then also asks whether the matrix is RESIDENT, which no size can tell.
+	 * @param rows rows of the matrix
+	 * @param cols columns of the matrix
+	 * @return {@code true} when the product is worth unwrapping for
+	 */
+	static boolean worthMatvec(long rows, long cols) {
+		return Gpu.worthMatvec(rows, cols);
+	}
+
+	/**
+	 * {@code W x} for a row-major {@code rows x cols} double-float matrix, or
+	 * {@code null} when the device declined it -- which it does on the FIRST sight of any
+	 * matrix, and always for one the program writes between calls ({@code .kb/gpu.md}).
+	 * @param w the matrix, row-major
+	 * @param x the vector
+	 * @param rows rows of {@code w} and of the result
+	 * @param cols columns of {@code w} and length of {@code x}
+	 * @return a fresh {@code rows} result, or {@code null}
+	 */
+	static double @Nullable [] matvec(double[] w, double[] x, int rows, int cols) {
+		double[] out = new double[rows];
+		return Gpu.matvec(w, 0, x, 0, out, 0, rows, cols) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of {@link #matvec(double[], double[], int, int)}.
+	 * @param w the matrix, row-major
+	 * @param x the vector
+	 * @param rows rows of {@code w} and of the result
+	 * @param cols columns of {@code w} and length of {@code x}
+	 * @return a fresh {@code rows} result, or {@code null}
+	 */
+	static float @Nullable [] matvec(float[] w, float[] x, int rows, int cols) {
+		float[] out = new float[rows];
+		return Gpu.matvec(w, 0, x, 0, out, 0, rows, cols) ? out : null;
+	}
+
+	/**
 	 * {@code a x b} for a row-major {@code n x m} by {@code m x p} double-float pair, or
 	 * {@code null} when the device declined it.
 	 * @param a the left operand, row-major

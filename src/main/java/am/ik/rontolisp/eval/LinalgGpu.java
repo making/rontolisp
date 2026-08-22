@@ -29,7 +29,10 @@ import org.jspecify.annotations.Nullable;
  * whole rest of {@code linalg:} is untouched -- including {@code sqrt}, {@code abs},
  * {@code negative}, {@code sign} and the binary {@code add} / {@code sub} / {@code mul} /
  * {@code div}, which are one machine instruction per element and cannot pay for a round
- * trip. That is a measurement ({@code .kb/gpu.md}), not a staging decision.
+ * trip. That is a measurement ({@code .kb/gpu.md}), not a staging decision. Since
+ * 2026-08-22 there is ONE member outside {@code linalg:}: {@code vec:matvec}, the GEMV a
+ * decode loop is made of, installed by {@link #installVec} when the {@code vec} library
+ * loads and accepted only over a matrix that STAYS on the device (below).
  *
  * <h2>Only the big shapes, and there are two size rules</h2>
  *
@@ -38,9 +41,11 @@ import org.jspecify.annotations.Nullable;
  * array is not CPU arithmetic but rontolisp's own per-call cost. Below
  * {@code n * m * p = 2^17} (about a 51x51x51 product) the CPU wins and the kernel
  * declines; the size threshold therefore needs no mechanism of its own, it is one more
- * decline. The matrix-by-vector shapes {@code --blas} takes are memory-bound, so they are
- * not offered here at all: a gemv's cost is one pass over an operand that would have to
- * be copied to the device anyway.
+ * decline. The {@code linalg:} matrix-by-vector shapes {@code --blas} takes are
+ * memory-bound, so they are not offered here: a gemv's cost is one pass over an operand
+ * that would have to be copied to the device anyway -- UNLESS the matrix is already
+ * there, which is the whole case for {@code vec:matvec} and the reason that member is
+ * accepted only once its matrix has been offered twice without being written.
  *
  * <p>
  * A STACK of products is one round trip and ONE launch -- the device carries the batch on
@@ -196,6 +201,55 @@ public final class LinalgGpu {
 	}
 
 	/**
+	 * Overrides {@code vec:matvec} in the given (global) environment with the device GEMV
+	 * -- the one member of {@code --gpu} outside {@code linalg:}, and the seam
+	 * {@code examples/llama2}'s decode loop runs on. Must be called AFTER the
+	 * {@code vec.lisp} forms have been evaluated into the environment and after
+	 * {@link VecSimd#install} (whichever binding it finds is what it declines to), and
+	 * only when {@link #available()} is {@code true}. It is a separate entry point from
+	 * {@link #install} because the two libraries load lazily and independently: a program
+	 * may reach {@code vec:} before {@code linalg:}, or never reach {@code linalg:} at
+	 * all, and the write hook has to be in place from the first device member either way.
+	 * @param globalEnv the global environment holding the loaded vec library
+	 * @param evaluator the evaluator used to apply the captured binding on decline
+	 */
+	public static void installVec(Environment globalEnv, LispEvaluator evaluator) {
+		FloatArrayWriteHook.install(LinalgGpuKernels::written);
+		define(globalEnv, evaluator, LispNames.VEC_PKG + ":" + LispNames.VEC_MATVEC, 2, LinalgGpu::matvec);
+	}
+
+	/**
+	 * {@code (vec:matvec w x)} on the device: a packed rank-2 matrix and a packed rank-1
+	 * vector of the same width and matching extent, above the size threshold -- and,
+	 * since a matrix-by-vector product pays only over a RESIDENT matrix, only once the
+	 * same matrix has been offered before and not written since (the library's rule,
+	 * {@code .kb/gpu.md}); everything else declines to the {@code --simd} lane kernel or
+	 * the scalar defun. The kernel accumulates in double and narrows on the store, which
+	 * is the defun's rule: at {@code #f} it lands on the defun's own bits in practice and
+	 * closer to them than the lane kernel does; at {@code #d} it is the product's few-ulp
+	 * story. Neither is asserted as byte-identity.
+	 */
+	private static @Nullable LispVal matvec(List<LispVal> args) {
+		if (!(args.get(0) instanceof LispFloatArray w) || !(args.get(1) instanceof LispFloatArray x)
+				|| w.getClass() != x.getClass() || w.rank() != 2 || x.rank() != 1) {
+			return null;
+		}
+		int rows = w.dims()[0];
+		int cols = w.dims()[1];
+		if (x.dims()[0] != cols || !LinalgGpuKernels.worthMatvec(rows, cols)) {
+			return null;
+		}
+		int[] dims = { rows };
+		if (w instanceof LispSingleFloatArray single) {
+			float[] y = LinalgGpuKernels.matvec(single.data(), ((LispSingleFloatArray) x).data(), rows, cols);
+			return y == null ? null : new LispSingleFloatArray(y, dims);
+		}
+		double[] y = LinalgGpuKernels.matvec(((LispDoubleFloatArray) w).data(), ((LispDoubleFloatArray) x).data(), rows,
+				cols);
+		return y == null ? null : new LispDoubleFloatArray(y, dims);
+	}
+
+	/**
 	 * {@code (linalg::%la-rng-fill out st mode lo span)} on the device, for a packed
 	 * destination of either width above the size threshold and a state vector in the
 	 * generator's range; everything else declines to whatever was bound before (the
@@ -288,7 +342,8 @@ public final class LinalgGpu {
 			int maxArity, Function<List<LispVal>, @Nullable LispVal> kernel) {
 		LispVal declined = globalEnv.lookupFunctionOrNull(qualified);
 		if (declined == null) {
-			throw new IllegalStateException("linalg.lisp must be loaded before " + qualified + " can be accelerated");
+			throw new IllegalStateException(
+					"the library defining " + qualified + " must be loaded before it can be accelerated");
 		}
 		globalEnv.defineFunction(qualified, new LispFunction(qualified, args -> {
 			if (args.size() >= minArity && args.size() <= maxArity) {

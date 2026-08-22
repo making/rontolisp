@@ -16,9 +16,10 @@ import static am.ik.gpu.CudaDriver.P;
 
 /**
  * The device side of {@code --gpu}: one primary context, one module JIT-compiled from the
- * checked-in PTX, and the six kernels it exports -- a tiled matrix product, a STACK of
- * them and an element-wise map, at each width. Everything that can fail fails into a
- * decline; nothing here throws.
+ * checked-in PTX, and the kernels it exports -- a tiled matrix product, a STACK of them,
+ * an element-wise map, the strided tier, the generator fill and a matrix-by-vector
+ * product, at each width. Everything that can fail fails into a decline; nothing here
+ * throws.
  *
  * <h2>The kernel comes from a PTX text, not from a toolkit</h2>
  *
@@ -103,6 +104,20 @@ final class CudaGemm implements GpuDevice {
 
 	private static final int BCAST_F64 = 0, BCAST_F32 = 1, GATHER_F64 = 2, GATHER_F32 = 3, FOLD_F64 = 4, FOLD_F32 = 5,
 			RNG_F64 = 6, RNG_F32 = 7;
+
+	/**
+	 * The GEMV behind {@code vec:matvec} ({@code .todo/475}): one warp per row over a
+	 * row-major matrix, accumulating in double at both widths. The one member whose worth
+	 * is decided by residency rather than size -- see {@link #gemv}.
+	 */
+	static final String KERNEL_GEMV_F64 = "gemv_f64", KERNEL_GEMV_F32 = "gemv_f32";
+
+	/**
+	 * Threads per block for the GEMV: eight warps, so eight rows per block. The kernel is
+	 * memory-bound and one warp reads one row with coalesced loads, so the block shape
+	 * decides nothing but the grid size.
+	 */
+	private static final int GEMV_BLOCK = 256;
 
 	/**
 	 * The work one generator element is counted as for the sync decision: three
@@ -273,6 +288,10 @@ final class CudaGemm implements GpuDevice {
 	/** The strided tier's six kernels, indexed by {@link #BCAST_F64} and its siblings. */
 	private final MemorySegment[] strided;
 
+	private final MemorySegment gemvF64;
+
+	private final MemorySegment gemvF32;
+
 	private final String description;
 
 	/**
@@ -329,8 +348,8 @@ final class CudaGemm implements GpuDevice {
 
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
 			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32, MemorySegment mapF64,
-			MemorySegment mapF32, MemorySegment[] strided, boolean pooled, MemorySegment memoryPool,
-			MemorySegment bounce, long syncFlopCeiling, String description) {
+			MemorySegment mapF32, MemorySegment[] strided, MemorySegment gemvF64, MemorySegment gemvF32, boolean pooled,
+			MemorySegment memoryPool, MemorySegment bounce, long syncFlopCeiling, String description) {
 		this.driver = driver;
 		this.device = device;
 		this.context = context;
@@ -342,6 +361,8 @@ final class CudaGemm implements GpuDevice {
 		this.mapF64 = mapF64;
 		this.mapF32 = mapF32;
 		this.strided = strided;
+		this.gemvF64 = gemvF64;
+		this.gemvF32 = gemvF32;
 		this.pooled = pooled;
 		this.memoryPool = memoryPool;
 		this.bounce = bounce;
@@ -477,6 +498,18 @@ final class CudaGemm implements GpuDevice {
 				}
 				strided[i] = functionOut.get(P, 0);
 			}
+			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_GEMV_F64));
+			if (status != CuResult.SUCCESS) {
+				return unwind(driver, device, true, module,
+						"cuModuleGetFunction " + KERNEL_GEMV_F64 + ": " + driver.errorString(status));
+			}
+			MemorySegment gemvF64 = functionOut.get(P, 0);
+			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_GEMV_F32));
+			if (status != CuResult.SUCCESS) {
+				return unwind(driver, device, true, module,
+						"cuModuleGetFunction " + KERNEL_GEMV_F32 + ": " + driver.errorString(status));
+			}
+			MemorySegment gemvF32 = functionOut.get(P, 0);
 			MemorySegment pool = MemorySegment.NULL;
 			boolean pooled = pooledAllocationWorks(driver, arena);
 			if (pooled) {
@@ -511,7 +544,7 @@ final class CudaGemm implements GpuDevice {
 			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
 			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32, mapF64,
-					mapF32, strided, pooled, pool, bounce, ceiling, description), description);
+					mapF32, strided, gemvF64, gemvF32, pooled, pool, bounce, ceiling, description), description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
@@ -679,10 +712,10 @@ final class CudaGemm implements GpuDevice {
 	public Thresholds thresholds() {
 		return this.pooled
 				? new Thresholds(Gpu.POOLED_MIN_WORK, Gpu.MAP_POOLED_MIN_ELEMENTS, Gpu.STRIDED_POOLED_MIN_ELEMENTS,
-						Gpu.FOLD_POOLED_MIN_ELEMENTS, Gpu.RNG_POOLED_MIN_ELEMENTS)
+						Gpu.FOLD_POOLED_MIN_ELEMENTS, Gpu.RNG_POOLED_MIN_ELEMENTS, Gpu.MATVEC_POOLED_MIN_ELEMENTS)
 				: new Thresholds(Gpu.UNPOOLED_MIN_WORK, Gpu.MAP_UNPOOLED_MIN_ELEMENTS,
 						Gpu.STRIDED_UNPOOLED_MIN_ELEMENTS, Gpu.FOLD_UNPOOLED_MIN_ELEMENTS,
-						Gpu.RNG_UNPOOLED_MIN_ELEMENTS);
+						Gpu.RNG_UNPOOLED_MIN_ELEMENTS, Gpu.MATVEC_UNPOOLED_MIN_ELEMENTS);
 	}
 
 	boolean pooled() {
@@ -1460,6 +1493,115 @@ final class CudaGemm implements GpuDevice {
 		finally {
 			release(owned);
 		}
+	}
+
+	/**
+	 * {@code y = W x}, the GEMV behind {@code vec:matvec} -- and the one member of this
+	 * class whose accept-or-decline is a question of RESIDENCY rather than of size.
+	 *
+	 * <p>
+	 * A matrix-by-vector product reads every element of {@code W} exactly once, so its
+	 * cost IS the pass over {@code W}, and copying {@code W} to the device first costs
+	 * more than the pass: measured over the link the device loses to the {@code --simd}
+	 * lane kernel up to ~2^19 elements and wins by less than 2x below a million. Over a
+	 * matrix that is ALREADY resident the same call is the ~9 us floor -- {@code x} up, a
+	 * launch, {@code y} down -- and the crossover is 2^17
+	 * ({@code Gpu.MATVEC_POOLED_MIN_ELEMENTS}). So the rule is: <b>a matrix is taken when
+	 * it is resident, or when it has been offered once before and not written since</b>
+	 * -- the second offer uploads it and every later one finds it there, while a matrix
+	 * the program rewrites between calls is offered "for the first time" every time and
+	 * never pays for a trip it would lose. The first sight of any matrix is a decline
+	 * that allocates nothing, and the mark it leaves is a residency entry with no buffer
+	 * ({@link CudaResidency#offeredBefore}), so {@link #written} clears it exactly as it
+	 * would clear a copy. A model's weights -- read every step, written never -- are
+	 * resident from their second step on, which is what {@code .todo/475} measured the
+	 * whole item on.
+	 * @return {@code true} when {@code y} was filled, {@code false} when the call
+	 * declined or the device failed -- in which case {@code y} is untouched
+	 */
+	@Override
+	public boolean gemv(double[] w, int ow, double[] x, int ox, double[] y, int oy, int rows, int cols) {
+		return gemv(this.gemvF64, MemorySegment.ofArray(w), w, ow, MemorySegment.ofArray(x), x, ox,
+				MemorySegment.ofArray(y), y, oy, rows, cols, Double.BYTES);
+	}
+
+	/**
+	 * The single-float sibling of {@link #gemv}. The kernel still accumulates in double,
+	 * which is what keeps it on the scalar defun's bits in practice ({@code gemm.cu}).
+	 * @return {@code true} when {@code y} was filled
+	 */
+	@Override
+	public boolean gemvF(float[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols) {
+		return gemv(this.gemvF32, MemorySegment.ofArray(w), w, ow, MemorySegment.ofArray(x), x, ox,
+				MemorySegment.ofArray(y), y, oy, rows, cols, Float.BYTES);
+	}
+
+	private boolean gemv(MemorySegment kernel, MemorySegment w, Object wh, int ow, MemorySegment x, Object xh, int ox,
+			MemorySegment y, Object yh, int oy, int rows, int cols, int width) {
+		if (!this.usable) {
+			return false;
+		}
+		long wBytes = (long) rows * cols * width, xBytes = (long) cols * width, yBytes = (long) rows * width;
+		long offW = (long) ow * width, offX = (long) ox * width, offY = (long) oy * width;
+		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(wh, offW, wBytes);
+			// The residency rule above: a matrix seen for the first time is declined and
+			// marked, nothing allocated; seen again unwritten, it is uploaded below.
+			if (buffers[0] == 0 && !this.residency.offeredBefore(wh, offW, wBytes)) {
+				return false;
+			}
+			buffers[1] = this.residency.lookup(xh, offX, xBytes);
+			if (!allocate(arena, buffers, owned, wBytes, xBytes, yBytes)) {
+				return false;
+			}
+			boolean sync = 2L * rows * cols >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, wh, w, offW, wBytes) || !stage(buffers, owned, 1, xh, x, offX, xBytes)
+					|| !launchGemv(arena, kernel, buffers, rows, cols, sync)) {
+				return false;
+			}
+			return finish(y, offY, buffers, owned, 2, yh, yBytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/** One launch of eight rows per block, one warp per row. */
+	private boolean launchGemv(Arena arena, MemorySegment function, long[] buffers, int rows, int cols, boolean sync)
+			throws Throwable {
+		MemorySegment w = arena.allocate(L), x = arena.allocate(L), y = arena.allocate(L);
+		w.set(L, 0, buffers[0]);
+		x.set(L, 0, buffers[1]);
+		y.set(L, 0, buffers[2]);
+		MemorySegment r = arena.allocate(I), c = arena.allocate(I);
+		r.set(I, 0, rows);
+		c.set(I, 0, cols);
+		MemorySegment parameters = arena.allocate(P, 5);
+		parameters.setAtIndex(P, 0, w);
+		parameters.setAtIndex(P, 1, x);
+		parameters.setAtIndex(P, 2, y);
+		parameters.setAtIndex(P, 3, r);
+		parameters.setAtIndex(P, 4, c);
+		int warps = GEMV_BLOCK / 32;
+		int status = this.driver.launchKernel(function, (rows + warps - 1) / warps, 1, 1, GEMV_BLOCK, 1, 1, 0,
+				MemorySegment.NULL, parameters, MemorySegment.NULL);
+		if (status != CuResult.SUCCESS) {
+			return fail(status);
+		}
+		if (sync) {
+			status = this.driver.ctxSynchronize();
+			if (status != CuResult.SUCCESS) {
+				return fail(status);
+			}
+		}
+		return true;
 	}
 
 	/**

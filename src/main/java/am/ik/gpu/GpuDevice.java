@@ -25,7 +25,7 @@ package am.ik.gpu;
 sealed interface GpuDevice permits CudaGemm, MetalGemm {
 
 	/**
-	 * The four size thresholds a device applies, in the units each one counts.
+	 * The size thresholds a device applies, in the units each one counts.
 	 *
 	 * @param work the minimum {@code batch * n * m * p} a matrix product is accepted at
 	 * @param map the minimum element count an element-wise map is accepted at
@@ -33,8 +33,10 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * at
 	 * @param fold the minimum INPUT element count an axis fold is accepted at
 	 * @param rng the minimum element count a generator fill is accepted at
+	 * @param matvec the minimum {@code rows * cols} a matrix-by-vector product is
+	 * accepted at, once its matrix is resident
 	 */
-	record Thresholds(long work, long map, long strided, long fold, long rng) {
+	record Thresholds(long work, long map, long strided, long fold, long rng, long matvec) {
 	}
 
 	/** What was found -- model, architecture, driver -- for {@code description()}. */
@@ -97,6 +99,19 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean rngFill(double[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3);
 
 	boolean rngFillF(float[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3);
+
+	/**
+	 * {@code y = W x} over a row-major {@code rows x cols} matrix -- the GEMV behind
+	 * {@code vec:matvec}, and the one member whose worth depends on RESIDENCY rather than
+	 * on size: a matrix-by-vector product is one pass over {@code W}, so the device wins
+	 * only when {@code W} is already there. The CUDA half therefore takes it only once
+	 * the matrix has been offered twice without being written ({@link CudaGemm}); the
+	 * Metal half keeps no resident copies yet and declines.
+	 * @return {@code true} when {@code y} was filled
+	 */
+	boolean gemv(double[] w, int ow, double[] x, int ox, double[] y, int oy, int rows, int cols);
+
+	boolean gemvF(float[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols);
 
 	/**
 	 * A host array this device may hold a resident copy of has been written, so that copy

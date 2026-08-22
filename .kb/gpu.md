@@ -36,6 +36,13 @@ pays, the invalidation every in-place write on both backends now performs, and t
 finding underneath all of it, that a device copy to or from a FRESH Java array costs this
 machine a hundred times a warm one, which is why every download is now staged through a
 pinned bounce buffer after "the library never stages" had been measured and written down.
+**THE GEMV (2026-08-22, todo-475)** is the round after that and the first member OUTSIDE
+`linalg:`: "The GEMV, and the matrix that stays" below is its record -- why a
+matrix-by-vector product pays on a device only when its matrix is already there, the
+"offered twice, never written" rule that decides when a matrix is uploaded, the double
+accumulator that puts the single-float result on the defun's own bits, the
+`read-sequence` invalidation gap the round found and closed, and the llama2 measurement:
+1.3x over a `--simd` that had itself become 2.5x faster than its README recorded.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover,ElementwiseCrossover,
@@ -93,7 +100,7 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 | `am.ik.gpu.Gpu` | the whole public surface: `available`, `description`, `worth` (a product or a stack), `worthMap`, the `multiply` and `map` overloads, the `MAP_*` op codes |
 | `am.ik.gpu.GpuDevice` | the sealed seam between the two backends: `supportsDouble`, `thresholds`, and the members |
 | `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, the per-call product and the per-call map, the download bounce buffer |
-| `am.ik.gpu.CudaResidency` | device residency: the weakly-keyed identity LRU from a host array to its resident copy, and the pending-free list |
+| `am.ik.gpu.CudaResidency` | device residency: the weakly-keyed identity LRU from a host array to its resident copy, the pending-free list, and the GEMV's no-buffer "seen once" marks |
 | `am.ik.rontolisp.FloatArrayWriteHook` | the interpreter's one write seam: every packed-array store reports here, and `eval/LinalgGpu.install` points it at `Gpu.written` |
 | `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 24 downcall handles |
 | `am.ik.gpu.CuResult` | every CUDA 13 status code, and which of them leave the context dead |
@@ -126,6 +133,8 @@ static boolean  bcast(int op, double[] a, int oA, int[] sA, double[] b, int oB, 
 static boolean  gather(double[] a, int oA, int[] sA, double[] out, int oOut, int[] dims)
 static boolean  fold(int op, double[] a, int oA, double[] out, int oOut,
                      int outer, int len, int inner)
+static boolean  worthMatvec(long rows, long cols) // ... is this MATRIX-BY-VECTOR product (once its matrix is resident)
+static boolean  matvec(double[] w, int oW, double[] x, int oX, double[] y, int oY, int rows, int cols)
 static void     written(Object hostArray)       // a packed array was written IN PLACE: its resident copy is stale
 ```
 
@@ -206,12 +215,14 @@ the artifact instead of only living here. `GpuDeclineTest` asserts it is still t
   fp64 units), and at f32 the 7x cuBLAS wins on kernel time collapses to 1.2-3.0x once the
   copies are on the clock. todo-123 has the full table and the reasoning; nothing here
   opens `libcublas`.
-- **Fourteen entry points since 2026-08-22** (twelve since phase 3): `gemm_f64` / `gemm_f32`, the stacked siblings
+- **Sixteen entry points since 2026-08-22** (twelve since phase 3): `gemm_f64` / `gemm_f32`, the stacked siblings
   `gemm_batched_f64` / `gemm_batched_f32`, the element-wise `map_f64` / `map_f32`, the
-  strided `bcast_*` / `gather_*` / `fold_*`, and the generator `rng_fill_f64` /
-  `rng_fill_f32` -- the last pair is the Wichmann-Hill walk spelled in `_rn` intrinsics
+  strided `bcast_*` / `gather_*` / `fold_*`, the generator `rng_fill_f64` /
+  `rng_fill_f32` -- that pair is the Wichmann-Hill walk spelled in `_rn` intrinsics
   (so nvcc cannot contract `lo + span * u` into an FMA) behind a square-and-multiply jump,
-  and the PTX grew from 113 KB to 143 KB for it. A batched kernel is six lines -- it offsets the
+  and the PTX grew from 113 KB to 143 KB for it -- and, the same day, the GEMV
+  `gemv_f64` / `gemv_f32` behind `vec:matvec` (one warp per row, a double accumulator at
+  both widths; 143 KB to 152 KB). A batched kernel is six lines -- it offsets the
   three pointers by `blockIdx.z` times the strides and calls the SAME `gemm<T>` device
   function -- which is why a batched cell folds `k` bit-identically to an unbatched one
   and the precision contract below needed no second sentence. `gemm.cu` grew by 22 lines
@@ -932,7 +943,7 @@ page, split out of the `--simd` guide). Keep the
 intercepted set, the size threshold, the chain order and the precision contract in sync
 with it.
 
-### The intercepted set is TWO product shapes, TWELVE element-wise members, TEN strided ones and the GENERATOR FILL
+### The intercepted set is TWO product shapes, TWELVE element-wise members, TEN strided ones, the GENERATOR FILL -- and, outside `linalg:`, the GEMV
 
 `linalg:dot` over two packed rank-2 operands of the same width (hence `linalg:matmul` at
 rank 2 and `linalg:solve` transitively); since phase 4a `linalg::%la-matmul-nd`, the
@@ -941,7 +952,11 @@ STACKED product behind `linalg:matmul` at rank >= 3; since phase 4b the element-
 phase 3 the STRIDED tier -- `add` `sub` `mul` `div` `maximum` `minimum` at a BROADCAST
 shape only, `sum` `amax` `amin` in their `:axis` form only, and `transpose` in its axes
 form only; and since 2026-08-22 `linalg::%la-rng-fill`, the seeded generator's fill
-behind `rand` / `randn` / `uniform` (below, "The second profile"). Twenty-five members.
+behind `rand` / `randn` / `uniform` (below, "The second profile"). Twenty-five `linalg:`
+members -- and, since later that day, ONE outside the package: `vec:matvec`, the GEMV
+(below, "The GEMV, and the matrix that stays"), installed by `LinalgGpu.installVec` from
+the VEC library's lazy-load hook rather than by `install`, because the two libraries
+load independently and a program may reach either first.
 Nothing else is `defineFunction`ed: `#'linalg:sqrt` and
 `#'linalg:outer` still print `#<lambda>` under the flag, and that they do is an assertion
 rather than a remark (below) -- as is that `#'linalg:sub` now does NOT, which is the
@@ -1756,8 +1771,13 @@ each backend reaches `Gpu.written`:
   that bypass the setter: `LinalgSimd`'s `%la-adam-step` (the parameter and both
   moments), `%la-scatter-rows`, `%la-scale`, `%la-rng-fill`, and `VecSimd`'s whole
   `-into` family (`clip-into`, `scale-into`, `matvec-into`, the unary and binary
-  `-into`s) call the hook themselves. A grep for writes through `.data()` outside those
-  finds none: every other producer allocates. With no listener installed the hook is a
+  `-into`s) call the hook themselves -- and so, since todo-475, does the bulk
+  `%read-sequence-packed` primitive behind `read-sequence` over a packed float array
+  (`Environment.PackedBuffer.load`), which the first enumeration MISSED: it fills the
+  storage through a `FloatBuffer` / `DoubleBuffer` view (`bytes.asFloatBuffer().get(f.data(),
+  ...)`), the grep for writes through `.data()` that was meant to catch it saw a read,
+  and it is how every model weight arrives (`examples/llama2`). Every other producer
+  allocates. With no listener installed the hook is a
   volatile read, and a write to an array that is not resident is the volatile read plus
   one identity compare (`CudaResidency.lastDropped`), so an `aset` loop pays the monitor
   once per array, not once per element.
@@ -1769,9 +1789,11 @@ each backend reaches `Gpu.written`:
   reference when the GPU runtime is emitted); `JvmLinalgKernelCompiler` calls it after the
   whole attempt chain for the four members that write a caller's array -- `%la-adam-step`
   (arguments 0, 2, 3), `%la-scatter-rows`, `%la-scale`, `%la-rng-fill` (argument 0) --
-  whichever rung ran; and `JvmSimdCompiler` calls it on the destination every `vec:`
-  `-INTO` kernel returns. The member names are UPPERCASE there; the first build compared
-  against `-into`, and the enumeration test below caught it.
+  whichever rung ran; `JvmSimdCompiler` calls it on the destination every `vec:`
+  `-INTO` kernel returns; and since todo-475 `JvmSequencePackedCompiler` keeps the
+  sequence of a `%read-sequence-packed` in a temp and reports it once the
+  `_readSeqPacked` helper has returned. The member names are UPPERCASE there; the first
+  build compared against `-into`, and the enumeration test below caught it.
 
 **The numbers, final build, same program, same day, same box.** Per training step by
 this file's method (`(t40 - t5) / 35`, five interleaved rounds, MEDIAN [range]), plus two
@@ -1818,7 +1840,151 @@ EVERY enumerated setter -- `aset`, `row-major-aset`, the three `%la-` in-place m
 printing a sum the oracle must print too; run under `--gpu` (the defuns write through
 the setter) and `--gpu --simd` (the kernels report themselves, compared against a
 `--simd` oracle so the lane sum's fold order is on both sides). It is the test that
-found the `-into` case.
+found the `-into` case -- and, extended with a `read-sequence` from a binary file in
+todo-475, the one that pins the bulk-read writer on both backends.
+
+#### The GEMV, and the matrix that stays (2026-08-22, todo-475)
+
+The first member outside `linalg:`: `vec:matvec`, the matrix-by-vector product, which is
+what `examples/llama2`'s decode loop is made of (79 GEMVs per token for `stories15M`,
+13 per layer and the classifier head) and which this file had declined twice -- once as
+a `linalg:` shape ("a matrix-by-vector product is memory-bound, so its whole cost is one
+pass over an operand the device would have to be handed anyway") and once as the
+`.todo/475` bullet. Both declines were right per CALL and wrong per TOKEN once the
+matrix does not move, which residency (above) had just made possible. The probes are
+`.todo/123-gpu-acceleration/MatvecCrossover.java` over `matvec-probe.cu` (the device
+columns, and the accumulator question) and `matvec-baseline.lisp` under `--simd` on the
+JVM class output (the CPU column); GB10, us per call, best of many:
+
+| rows x cols | elements | `--simd` f32 | device f32 cold | **resident** | kernel only | `--simd` f64 | device f64 cold | **resident** |
+|---|---|---|---|---|---|---|---|---|
+| 128x128 | 16384 | **2.5** | 16.0 | 8.9 | 5.3 | **4.5** | 17.1 | 8.5 |
+| 256x256 | 65536 | **10.0** | 20.6 | 9.7 | 6.1 | 18.5 | 23.6 | **8.8** |
+| 288x288 (llama2 q/k/v/o) | 82944 | **12.5** | 22.3 | 10.6 | 7.2 | 24.0 | 25.7 | **9.7** |
+| 384x384 | 147456 | 23.0 | 26.5 | **10.7** | 6.9 | 45.5 | 36.9 | **9.9** |
+| 512x512 | 262144 | 45.0 | 39.6 | **14.5** | 10.5 | 85.0 | 52.1 | **11.0** |
+| 768x288 (llama2 w1/w3) | 221184 | 30.0 | 33.7 | **12.1** | 8.2 | 65.0 | 46.2 | **10.7** |
+| 288x768 (llama2 w2) | 221184 | 40.0 | 33.7 | **12.9** | 8.9 | 70.0 | 46.3 | **11.0** |
+| 1024x1024 | 1 M | 200 | 101 | **26.3** | 22.4 | 367 | 160 | **15.2** |
+| 2048x2048 | 4 M | 900 | 353 | **75.1** | 70.6 | 1500 | 672 | **129** |
+| 32000x288 (llama2 head) | 9.2 M | 1467 | 775 | **169** | 163 | 2867 | 1542 | **315** |
+| 256x48 / 48x256 (llama2 KV cache) | 12288 | **5.5 / 1.5** | 15.0 / 16.9 | 8.9 / 9.6 | 5.2 / 6.9 | **5.5 / 3.5** | 16.4 / 16.5 | 8.7 / 8.9 |
+
+**Four things to read out of it.** (1) The CPU lane kernel streams a matrix at ~25 GB/s
+(the 36.8 MB head in 1.47 ms), so "cold" -- W, x up, launch, y down, the only route the
+earlier declines considered -- loses to it until ~2^19 elements and wins by less than 2x
+below a million. (2) "Resident" -- W already there, x up, launch, y down -- floors at
+~9 us and is ahead from 2^17 (384x384: 2.1x at f32, 4.6x at f64) and by 8-9x at the
+classifier head, where the kernel reads 36.8 MB in 163 us, i.e. at ~225 GB/s, the
+device's own bandwidth. (3) The 288x288 projections are a TIE (12.5 against 10.6) and the
+threshold leaves them on the CPU. (4) The KV-cache GEMVs (written every token) are far
+below any threshold.
+
+**The rule that decides the upload is not a size.** The first sight of any matrix
+declines and leaves a MARK -- a `CudaResidency` entry with no buffer (pointer 0; it
+counts for nothing in the budget, frees nothing when dropped, and `written` clears it
+exactly as it clears a copy); the second sight of the same span, unwritten, uploads it
+and records the copy; every later one is a hit. So a model's weights are resident from
+their second token on, and a matrix the program rewrites between calls (llama2's
+KV cache, a Jacobian recomputed per step) is "first sight" every time and never pays the
+cold trip it would lose -- measured, 0.87x at 384x384 f32 cold. The alternatives were a
+single threshold high enough for the cold trip to win (2^19-2^20: llama2's 768x288
+matrices never reach the device and never become resident through this member) or a bet
+that the first call's upload will be repaid (it is, for every weight; it is not, for
+every rewritten matrix in the 2^17-2^19 band). The mark costs one more `LinkedHashMap`
+entry per distinct matrix offered and a synchronized lookup on the call that declines.
+The threshold is `Gpu.MATVEC_POOLED_MIN_ELEMENTS = 2^17` over `rows * cols`, `2^20`
+unpooled; `Gpu.worthMatvec` is the probe-free size half and `Gpu.matvec` asks the
+residency half, which no size can answer. Metal keeps no resident copies, so the member
+declines there at every size (`Thresholds.matvec = Long.MAX_VALUE`).
+
+**The accumulator is a double at both widths, and that was measured too.** A float
+accumulator (the `--simd` lane kernel's width) against a double one, resident f32,
+us/call: 8.8 against 10.6 at 288x288, 8.9 against 12.1 at 768x288, 23.6 against 75.1 at
+2048x2048 (where the matrix is L2-resident and the fp64 units are the limit), 166 against
+169 at the head (memory-bound, so equal). And against the scalar defun's rule -- a double
+sum narrowed on the store -- over 1024 rows of 768 inexact floats: the double kernel is
+bit-identical on **1024 of 1024** rows (worst 0), the float kernel on 268 (worst
+2.6e-7), and the `--simd` lane kernel on 144 (worst 5.7e-7). The reason is arithmetic,
+not luck: the product of two floats is exact in double, so what separates the device from
+the defun is only the ORDER of a double sum, which moves the narrowed float only when the
+sum lies within ~1e-16 of a rounding boundary. The 2 us it costs on a small resident call
+buys a result that is CLOSER to the cross-backend oracle than the lane kernel it
+replaces, which is what lets llama2's story stay byte-identical with the flag on
+(below). It is pinned as a relative tolerance plus "more than 99% of rows identical"
+(`GpuTest.aSingleFloatMatrixByVectorProductLandsOnTheDoubleAccumulatedOracle`), not as
+byte-identity, because it is not one. At f64 it is the product's few-ulp story
+(`aDoubleMatrixByVectorProductAgreesWithTheOracleToAFewUlps`). The float4-load variant
+of the kernel was measured and is not faster (211 us at the head, against 169).
+
+**The seam is new on both backends, and it is a CHAIN.** Interpreter: `LinalgGpu.installVec`
+is called from the VEC library's lazy-load hook in `LispEvaluator`, after `VecSimd.install`,
+and `define`s `vec:matvec` over whatever is bound -- the lane native or the defun -- with
+the same declined-input protocol as every `linalg:` member (and installs the write hook
+itself, since a program may never reach `linalg:`). It is a fourth public entry point
+into `LinalgGpuKernels`, so `Target_LinalgGpu` substitutes it too. JVM:
+`JvmExprCompiler` routes a `vec:matvec` call site to `JvmSimdCompiler.compileGpuMatvec`
+whenever the GPU bridge was emitted -- with `--simd` or without -- which emits the device
+attempt over temps and on its `null` the lane kernel (which never declines) or the
+spliced defun; `JvmGpuTemplate.gpuMatvec` is the bridge method (`ops` key `matvec`), and
+`JvmLinalgGpu.QUALIFIED_VEC_MATVEC` is in the emit gate, so a program whose only device
+member is a GEMV embeds the bridge -- and, as with `linalg:`, so does any `vec:` program,
+because the spliced `vec.lisp` names the member. Declined: anything that is not a packed
+rank-2 matrix and a packed rank-1 vector of the same width and matching extent, a mixed
+pair (which the defun COMPUTES and the lane kernel refuses -- both outcomes are the
+captured binding's, pinned), and the first sight.
+
+**What it bought, on the program it was measured for.** `examples/llama2`, `stories15M`,
+256 greedy tokens, JVM class output, three interleaved runs each on this box:
+
+| | tok/s |
+|---|---|
+| `--simd` | 220, 224, 226 |
+| `--gpu --simd` | 282, 285, 292 |
+
+**1.3x, and the story byte-identical across all six runs.** Not the "several hundred
+tok/s against 87" the item projected, and the gap is the item's premise rather than the
+device: the README's 87 tok/s was stale -- `--simd` alone decodes at ~220 today (every
+row of that README was: JVM scalar 65 not 23, wasm-GC `--simd` 125 not 46, the
+interpreter 44 not 15-25; all re-measured and rewritten), so the GEMVs are ~2.4 ms of a
+4.5 ms token and not most of it -- and of those, the four 288x288 projections per layer
+are a tie and stay on the CPU. What moved is the three feed-forward matrices per layer
+and the head (two thirds of the multiply-adds). The account, from nsys over the run
+(`nsys profile -t cuda`, `cuda_api_sum`; the story ends at BOS after 222 forward passes,
+so 4219 device calls is exactly 19 a token): CPU time removed ~2.1 ms a token (the 24
+projections' 0.3 ms stay); CUDA API time added 0.72 ms a token, of which
+`cuMemcpyDtoH` is 0.5 (avg 26.5 us, median 18.8, 4199 of them -- the synchronous
+download WAITS for the kernel, and a GPU that sits idle for ~100 us of attention between
+launches answers each launch from its idle clock, which is the ramp `.kb` warned about
+at n=64), `cuMemAllocAsync` 0.1, `cuLaunchKernel` 0.05 and `cuMemcpyHtoD` 0.04 (2892
+uploads, not 4199: `w1` and `w3` share their `x`, and the second finds it resident).
+The remainder of 4.5 -> 3.4 ms is the Java side of 19 calls. So the probe's best-of
+12 us per resident call is ~38 us in situ, and the next 2x on this program is not a
+GEMV: it is the attention, RoPE and KV-cache loops, which are boxed Lisp and not on any
+seam. On the INTERPRETER the flag buys nothing (44 -> 42 tok/s), for the reason every
+round of this file has recorded: the tree walk around the kernels dominates.
+
+**The gap it found.** `read-sequence` over a packed float array writes the storage through
+a `FloatBuffer` view and reported nothing, on either backend -- a residency invalidation
+hole since todo-474 that nothing had reached, because no program read into an array the
+device already held. A decode loop is exactly the program that loads weights by bulk
+read, so both paths report now (`Environment.PackedBuffer.load` calls the hook;
+`JvmSequencePackedCompiler` reports the sequence after `_readSeqPacked` returns) and
+`everyEnumeratedWriterInvalidatesTheResidentCopy` on both backends ends with a
+`read-sequence` from a binary file.
+
+**Tests.** `GpuTest`: the two-sight rule with the hit count and the re-upload after
+`written`, the two precision pins above, the offsets, the declines with a device present,
+and a 1000-call leak run; `GpuDeclineTest`: the threshold, the decline conditions on every
+machine, the two PTX entry points. `LinalgGpuTest` / `JvmLinalgGpuAccelCompilerTest`:
+the dead-flag guard (`#'vec:matvec` is `#<function VEC:MATVEC>` under the flag),
+exact-input identity once resident at both widths, the declines as the captured binding's
+outcome (errors included), evaluate-once across the chain, and
+`theDeviceIsAskedOnTheSecondSightAndTheLaneKernelOnTheFirst`, which is `.kb/vec.md`'s
+f32 reduction probe as a matrix row -- the defun prints 16778240, the lane kernel
+16777984, the device the defun's figure -- so `(probe) (probe)` under `--gpu --simd`
+prints `(16777984 16778240)` and the chain is legible from Lisp; `LinalgGpuDeclineTest`:
+a GEMV below the threshold is untouched everywhere.
 
 ### The chain order, and why the device goes on top
 
@@ -2136,7 +2302,7 @@ says why.
 
 ### `-Pweb`
 
-`LinalgGpu.available` / `description` / `install` are the only entry points into
+`LinalgGpu.available` / `description` / `install` / `installVec` are the only entry points into
 `LinalgGpuKernels`, which holds the only reference to `am.ik.gpu` from the `eval` half --
 so BOTH bindings, the CUDA one and the Metal one, drop out behind the same three
 substitutions.
@@ -2397,10 +2563,14 @@ decline, not an omission, and each needs this file's numbers before it is revisi
   upload loses to the driver's own pageable copy past 2^18 elements over a WARM array;
   and the staged download wins by a hundred times over a COLD one, which every result
   array is. Measure with fresh arrays before touching either half again.
-- **`vec:matvec` is not here either** -- the decode loop of `examples/llama2` is one GEMV
-  per weight matrix per token and `--gpu` intercepts `linalg:` members only; the
-  measurement that says a device GEMV with the weights RESIDENT would be a different
-  order of magnitude, and what it would take, is `.todo/475`.
+- **Nothing of `vec:` but `vec:matvec`**, which IS here since 2026-08-22 ("The GEMV, and
+  the matrix that stays"), and only over a matrix that is resident or has been offered
+  once before unwritten. `vec:matvec-into` is not: it writes a CALLER's array, which the
+  device would have to download into and the caller's next write invalidate, and
+  `examples/llama2` does not use it; `vec:dot` is one reduction over two vectors the
+  device would have to be handed, and loses to the lane kernel at every size. The first
+  sight of a big matrix used ONCE is also left on the table by the rule, deliberately
+  (16 MB cold would have won 2.7x): a program that runs one GEMV does not care.
 - **The per-call cost of an FFM downcall inside a native image is still unexplained**
   (above), and nothing may quote a device figure from that build without measuring it
   first.

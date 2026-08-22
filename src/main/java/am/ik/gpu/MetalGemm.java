@@ -424,7 +424,25 @@ final class MetalGemm implements GpuDevice {
 
 	@Override
 	public Thresholds thresholds() {
-		return new Thresholds(MIN_WORK, MIN_MAP_ELEMENTS, MIN_STRIDED_ELEMENTS, Long.MAX_VALUE, Long.MAX_VALUE);
+		return new Thresholds(MIN_WORK, MIN_MAP_ELEMENTS, MIN_STRIDED_ELEMENTS, Long.MAX_VALUE, Long.MAX_VALUE,
+				Long.MAX_VALUE);
+	}
+
+	/**
+	 * The matrix-by-vector product is not a member here: it pays only over a RESIDENT
+	 * matrix, and this backend keeps no resident copies yet ({@code .kb/gpu.md}, "Device
+	 * residency, built", for what a port would have to measure first). Both widths
+	 * decline, and the threshold is {@code Long.MAX_VALUE} so the question is never
+	 * asked.
+	 */
+	@Override
+	public boolean gemv(double[] w, int ow, double[] x, int ox, double[] y, int oy, int rows, int cols) {
+		return false;
+	}
+
+	@Override
+	public boolean gemvF(float[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols) {
+		return false;
 	}
 
 	/**

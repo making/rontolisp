@@ -1,4 +1,4 @@
-// The kernels behind --gpu -- the tiled GEMMs and the element-wise maps, at f32 and f64.
+// The kernels behind --gpu -- the tiled GEMMs, the GEMV, the maps and more, at f32 and f64.
 // gemm.cu is the source, gemm.ptx is what nvcc makes of it, and the two are checked in
 // TOGETHER and regenerated together -- from the repository root, with a CUDA toolkit
 // installed. The toolkit is a DEVELOPER requirement only: at run time the NVIDIA driver
@@ -289,4 +289,43 @@ extern "C" __global__ void rng_fill_f32(float* out, int n, int mode, double lo, 
 extern "C" __global__ void rng_fill_f64(double* out, int n, int mode, double lo, double span, int s1, int s2,
                                         int s3) {
   rng_fill<double>(out, n, mode, lo, span, s1, s2, s3);
+}
+
+// The GEMV behind vec:matvec, y = W x over a row-major rows x cols matrix (.todo/475): one
+// WARP per row, lane l walking columns l, l + 32, ..., then a shuffle tree across the warp.
+// A matrix-by-vector product is memory-bound -- every element of W is read once and never
+// again -- so the kernel is written for coalesced reads of W (the 32 lanes of a warp read
+// 32 consecutive elements) and for nothing else. What makes it worth a launch at all is
+// not the kernel: it is that the matrix STAYS on the device between calls
+// (CudaResidency), so a decode step pays for x up and y down and reads W at the device's
+// own bandwidth rather than over the link (.kb/gpu.md, "The GEMV, and the matrix that
+// stays").
+//
+// The accumulator is a DOUBLE at both widths and only the store narrows, which is the
+// scalar vec.lisp defun's own rule. At f32 that makes every product of two elements EXACT
+// in the accumulator, so what separates this kernel from the defun is only the ORDER of a
+// double sum -- which moves the narrowed float only when the sum lies within ~1e-16 of an
+// f32 rounding boundary: measured, 1024 of 1024 rows bit-identical, where a float
+// accumulator (the --simd lane kernel's width) lands 2.6e-7 away and ~20% faster on a
+// small call. At f64 the fused multiply-add and the tree are the product's own few-ulp
+// story. The whole warp shares one row, so the early return is warp-uniform and the
+// full-mask shuffles below it are safe.
+template <typename T>
+__device__ void gemv(const T* W, const T* x, T* y, int rows, int cols) {
+  int row = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+  int lane = threadIdx.x & 31;
+  if (row >= rows) return;
+  const T* w = W + (long long) row * cols;
+  double acc = 0.0;
+  for (int j = lane; j < cols; j += 32) acc += (double) w[j] * (double) x[j];
+  for (int off = 16; off > 0; off >>= 1) acc += __shfl_down_sync(0xffffffffu, acc, off);
+  if (lane == 0) y[row] = (T) acc;
+}
+
+extern "C" __global__ void gemv_f32(const float* W, const float* x, float* y, int rows, int cols) {
+  gemv<float>(W, x, y, rows, cols);
+}
+
+extern "C" __global__ void gemv_f64(const double* W, const double* x, double* y, int rows, int cols) {
+  gemv<double>(W, x, y, rows, cols);
 }

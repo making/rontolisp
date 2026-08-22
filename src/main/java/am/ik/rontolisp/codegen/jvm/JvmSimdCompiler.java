@@ -7,6 +7,7 @@ import java.util.Objects;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
@@ -115,6 +116,71 @@ final class JvmSimdCompiler {
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN)).index());
 		}
+	}
+
+	/**
+	 * The {@code vec:matvec} call site under {@code --gpu}: the device attempt first,
+	 * over temps every branch reads, and on its {@code null} the lane kernel when
+	 * {@code --simd} emitted one (which never declines) or the spliced {@code vec.lisp}
+	 * defun otherwise -- the same chain {@link JvmLinalgKernelCompiler} emits for a
+	 * {@code linalg:} member, here for the one device member outside that package. The
+	 * library declines the FIRST sight of any matrix and every sight of one the program
+	 * writes between calls ({@code .kb/gpu.md}), so the fall-through is the common path
+	 * and has to be exact.
+	 */
+	static void compileGpuMatvec(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		Map<String, MethodrefConstant> gpu = Objects.requireNonNull(ctx.gpuOps, "gpu acceleration runtime");
+		Map<String, MethodrefConstant> simd = ctx.simdOps;
+		List<LispVal> args = cons.toList();
+		requireArity(args.size() == 3, "vec:matvec expects 2 arguments");
+		String qualified = PackageRegistry.qualify(LispNames.VEC_PKG, LispNames.VEC_MATVEC);
+		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
+		if (simd == null && (defun == null || defun.variadic() || defun.paramCount() != 2)) {
+			// Nothing to decline to: the ordinary call path, which is what the program
+			// would have run without the flag.
+			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
+			return;
+		}
+		// The bridge classes, before their method references resolve.
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(gpu.get("init")).index());
+		if (simd != null) {
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(simd.get("init")).index());
+		}
+		// Each argument form evaluated exactly once, into a temp.
+		int[] slots = new int[2];
+		for (int i = 0; i < 2; i++) {
+			JvmExprCompiler.compileExpr(args.get(i + 1), ctx, className);
+			slots[i] = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(slots[i]);
+		}
+		// r = RontoLispGpuBridge.gpuMatvec(w, x); if (r != null) goto end;
+		for (int slot : slots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slot);
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(gpu.get(JvmGpuRuntimeBuilder.MATVEC)).index());
+		ctx.emit(Opcode.DUP);
+		int taken = ctx.code.size();
+		ctx.emit(Opcode.IFNONNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.POP);
+		// ... else the lane kernel, or the defun.
+		for (int slot : slots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slot);
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		if (simd != null) {
+			ctx.emitU2(Objects.requireNonNull(simd.get(LispNames.VEC_MATVEC)).index());
+		}
+		else {
+			ctx.emitU2(Objects.requireNonNull(defun).methodref().index());
+		}
+		JvmEmitHelper.patchBranch(ctx, taken, ctx.code.size());
 	}
 
 	private static void requireArity(boolean ok, String message) {

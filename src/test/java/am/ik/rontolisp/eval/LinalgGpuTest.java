@@ -181,14 +181,120 @@ class LinalgGpuTest {
 				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
 		}
-		// Twenty-four members and no others. matmul, mean, var, softmax, square, relu and
-		// the exact torch:gelu are accelerated THROUGH them, not instead of them; and
-		// sqrt / abs / negative / sign are the element-wise tier's DECLINED half -- one
-		// machine instruction per element, which a round trip cannot pay for -- so they
-		// must still be the library's own lambdas under the flag.
+		// Twenty-four linalg: members and no others. matmul, mean, var, softmax, square,
+		// relu and the exact torch:gelu are accelerated THROUGH them, not instead of
+		// them; and sqrt / abs / negative / sign are the element-wise tier's DECLINED
+		// half -- one machine instruction per element, which a round trip cannot pay
+		// for -- so they must still be the library's own lambdas under the flag.
 		for (String member : new String[] { "matmul", "outer", "sqrt", "abs", "negative", "sign", "norm", "reshape",
 				"trace", "argmax", "argmin", "softmax", "mean", "var" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member).isEqualTo("#<lambda>");
+		}
+		// And the one member OUTSIDE linalg: -- vec:matvec, installed when the vec
+		// library loads, on top of whatever that library bound; vec:dot is not one.
+		assertThat(eval("(vec:zeros 1) #'vec:matvec", true).print()).isEqualTo("#<function VEC:MATVEC>");
+		assertThat(eval("(vec:zeros 1) #'vec:matvec", false).print()).isEqualTo("#<lambda>");
+		assertThat(eval("(vec:zeros 1) #'vec:dot", true).print()).isEqualTo("#<lambda>");
+	}
+
+	// --- the matrix-by-vector product (vec:matvec, 2026-08-22) -----------------------
+
+	/**
+	 * Whether this device takes the GEMV at all (the CUDA one does; Metal keeps no
+	 * copies).
+	 */
+	private static boolean takesMatvec() {
+		return am.ik.gpu.GpuThresholds.matvecMinElements() < Long.MAX_VALUE;
+	}
+
+	/** The side of a square matrix comfortably over the GEMV threshold in force. */
+	private static int matvecSide() {
+		return 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.matvecMinElements()) / 16);
+	}
+
+	/**
+	 * {@code W x} with {@code W} of exact +1 / -1 entries (the sign of a sine, exact at
+	 * both widths) and {@code x} an index ramp, so every row's dot is an exact integer
+	 * far under 2^24 and the device's reordered double sum must land on the oracle's bits
+	 * exactly. The product is taken TWICE: the first sight of a matrix declines, and the
+	 * value of the last form -- the second call -- is what the device answered.
+	 */
+	private static String exactMatvec(int side, String option) {
+		return """
+				(defparameter *w* (linalg:reshape (linalg:sign (linalg:sin (linalg:arange 1 %d%s))) '(%d %d)))
+				(defparameter *x* (linalg:arange 0 %d%s))
+				(vec:matvec *w* *x*)
+				(vec:matvec *w* *x*)
+				""".formatted(side * side + 1, option, side, side, side, option);
+	}
+
+	@Test
+	void theMatrixByVectorProductMatchesTheScalarOracleOnExactInputsOnceResident() {
+		assumeThat(takesMatvec()).as("this device keeps resident copies").isTrue();
+		int side = matvecSide();
+		assertMatchesScalarOracle(exactMatvec(side, option()));
+		assertMatchesScalarOracle(exactMatvec(side, " :element-type 'single-float"));
+	}
+
+	@Test
+	void theMatrixByVectorProductReallyRanOnTheDeviceOnTheSecondSight() {
+		assumeThat(takesMatvec()).as("this device keeps resident copies").isTrue();
+		// The accepted call is written to land on the oracle's bits, so no printed value
+		// can say it ran; the residency hit count can -- the second sight uploads the
+		// matrix, the third finds it.
+		String program = exactMatvec(matvecSide(), " :element-type 'single-float") + "(vec:matvec *w* *x*)\n";
+		long hits = am.ik.gpu.GpuThresholds.residencyHits();
+		eval(program, true);
+		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits);
+	}
+
+	@Test
+	void theDeviceIsAskedOnTheSecondSightAndTheLaneKernelOnTheFirst() {
+		assumeThat(takesMatvec()).as("this device keeps resident copies").isTrue();
+		// .kb/vec.md's f32 reduction probe, as a matrix row: the scalar defun (double
+		// accumulation, narrowed) prints 16778240 and the --simd lane kernel (four float
+		// lanes) 16777984. The device accumulates in double, so its answer is the
+		// DEFUN's -- and the first call is the lane kernel's, because the first sight of
+		// a
+		// matrix declines. That makes the chain legible from Lisp: (lane device).
+		int rows = (int) Math.max(128, (am.ik.gpu.GpuThresholds.matvecMinElements() + 1023) / 1024);
+		String program = """
+				(defparameter *w* (linalg:zeros '(%d 1024) :element-type 'single-float))
+				(setf (aref *w* 0 0) 4096.0)
+				(dotimes (j 1023) (setf (aref *w* 0 (+ j 1)) 1.0))
+				(defparameter *x* (linalg:ones '(1024) :element-type 'single-float))
+				(setf (aref *x* 0) 4096.0)
+				(defun probe () (round (aref (vec:matvec *w* *x*) 0)))
+				(list (probe) (probe))
+				""".formatted(rows);
+		assertThat(eval(program, true, false, true).print()).as("--gpu --simd").isEqualTo("(16777984 16778240)");
+		assertThat(eval(program, false, false, true).print()).as("--simd").isEqualTo("(16777984 16777984)");
+		assertThat(eval(program, true, false, false).print()).as("--gpu").isEqualTo("(16778240 16778240)");
+		assertThat(eval(program, false, false, false).print()).as("scalar").isEqualTo("(16778240 16778240)");
+	}
+
+	@Test
+	void everyMatrixByVectorDeclineRunsWhatWasBoundBeforeUnchanged() {
+		// A matrix below the threshold, a mixed-width pair (which the defun computes and
+		// the lane kernel refuses), a rank-1 "matrix", a vector of the wrong length: each
+		// is the captured binding's outcome, value or error, with the flag and without.
+		for (String form : new String[] { """
+				(defparameter *w* (linalg:reshape (linalg:arange 1 257) '(16 16)))
+				(list (vec:matvec *w* (linalg:arange 1 17)) (vec:matvec *w* (linalg:arange 1 17)))
+				""", "(vec:matvec #f((1.0 2.0) (3.0 4.0)) #d(1.0 2.0))", "(vec:matvec #d(1.0 2.0) #d(1.0 2.0))",
+				"(vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(1.0))" }) {
+			assertThat(outcome(form, true, false)).as(form).isEqualTo(outcome(form, false, false));
+			assertThat(outcome(form, true, true)).as(form + " --simd").isEqualTo(outcome(form, false, true));
+		}
+	}
+
+	/** What a program prints, or the error it signals, under the given flags. */
+	private String outcome(String program, boolean gpu, boolean simd) {
+		try {
+			return eval(program, gpu, false, simd).print();
+		}
+		catch (RuntimeException ex) {
+			return "error: " + ex.getMessage();
 		}
 	}
 
@@ -808,9 +914,11 @@ class LinalgGpuTest {
 	 * bypass the element setter under {@code --simd}, which is why the program is run
 	 * with that flag as well as without it. {@code fill} and {@code replace} are not here
 	 * because the interpreter does not accept a packed array for either; on the JVM they
-	 * expand to the setter this program already exercises.
+	 * expand to the setter this program already exercises. {@code read-sequence} over a
+	 * binary file IS here: its bulk primitive writes the storage behind the setter's back
+	 * on both backends, and it is how a model's weights arrive ({@code examples/llama2}).
 	 */
-	private static String residencyWriters(int side, String type) {
+	private static String residencyWriters(int side, String type, String file) {
 		int n = side * side;
 		return """
 				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
@@ -838,18 +946,40 @@ class LinalgGpuTest {
 				(vec:negative-into *v* *v*) (check "vec-negative-into")
 				(vec:clip-into *v* *v* -1 1) (check "vec-clip-into")
 				(vec:matvec-into *v* (linalg:ones '(%d 1)%s) *one*) (check "vec-matvec-into")
+				(with-open-file (s "%s" :element-type '(unsigned-byte 8)) (read-sequence *v* s)) (check "read-sequence")
 				""".formatted(n + 1, type, side, side, side + 1, type, side, n + 1, type, type, side, type, side, side,
-				type, side, side, type, side, side, type, n, type);
+				type, side, side, type, side, side, type, n, type, file);
+	}
+
+	/**
+	 * A binary file of {@code count} raw little-endian elements of value 7, at the width
+	 * of {@code type}, for the {@code read-sequence} writer above.
+	 */
+	static java.nio.file.Path residencyFile(int count, boolean single) throws java.io.IOException {
+		java.nio.ByteBuffer bytes = java.nio.ByteBuffer.allocate(count * (single ? 4 : 8))
+			.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+		for (int i = 0; i < count; i++) {
+			if (single) {
+				bytes.putFloat(7.0f);
+			}
+			else {
+				bytes.putDouble(7.0);
+			}
+		}
+		java.nio.file.Path file = java.nio.file.Files.createTempFile("resident", ".bin");
+		java.nio.file.Files.write(file, bytes.array());
+		return file;
 	}
 
 	@Test
-	void everyEnumeratedWriterInvalidatesTheResidentCopy() {
+	void everyEnumeratedWriterInvalidatesTheResidentCopy() throws java.io.IOException {
 		// The side of a square above the strided threshold, so the broadcast add really
 		// goes to the device and both operands really are resident afterwards.
 		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
-		String program = residencyWriters(side, option());
+		java.nio.file.Path file = residencyFile(side, !DOUBLES);
+		String program = residencyWriters(side, option(), file.toString());
 		String oracle = output(program, false, false);
-		assertThat(oracle).contains("resident ").contains("vec-matvec-into ");
+		assertThat(oracle).contains("resident ").contains("vec-matvec-into ").contains("read-sequence ");
 		// --gpu alone: the in-place members run their defuns, which write through the
 		// element setter; --gpu --simd: they run the kernels, which report themselves.
 		// The second leg's oracle is --simd itself, so that the lane sum's own fold

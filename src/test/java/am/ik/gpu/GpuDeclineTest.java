@@ -272,6 +272,9 @@ class GpuDeclineTest {
 			assertThat(ptx).contains(".visible .entry " + kernel);
 		}
 		assertThat(resource("gemm.cu")).contains("case " + Gpu.BIN_DIV + ": return x / y;");
+		// The GEMV pair behind vec:matvec, the one member outside linalg:.
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_F64);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_F32);
 		// The regeneration command travels with the artifact: without it the .ptx is an
 		// unreproducible blob.
 		assertThat(ptx).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");
@@ -304,6 +307,39 @@ class GpuDeclineTest {
 		assertThat(Gpu.rngFill(smallF, 0, 64, 1, 0.0, 1.0, 1, 2, 3)).isFalse();
 		assertThat(small).containsOnly(0.0);
 		assertThat(smallF).containsOnly(0.0f);
+	}
+
+	@Test
+	void aMatrixByVectorProductBelowTheSizeThresholdIsNeverOffered() {
+		assertThat(Gpu.worthMatvec(512, 256)).isTrue();
+		assertThat(Gpu.worthMatvec(511, 256)).isFalse();
+		assertThat(Gpu.worthMatvec(0, 512)).isFalse();
+		double[] w = new double[64 * 64], x = new double[64], y = new double[64];
+		float[] wf = new float[64 * 64], xf = new float[64], yf = new float[64];
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 64, 64)).isFalse();
+		assertThat(Gpu.matvec(wf, 0, xf, 0, yf, 0, 64, 64)).isFalse();
+		assertThat(y).containsOnly(0.0);
+		assertThat(yf).containsOnly(0.0f);
+	}
+
+	@Test
+	void everyMatrixByVectorDeclineConditionDeclinesRatherThanThrows() {
+		// A vector shorter than the matrix is wide, a result shorter than it is tall, an
+		// offset that overruns, a negative one, an empty extent: each declines with the
+		// result untouched -- on a machine with a device as on one without. (With a
+		// device the well-formed call on a matrix seen for the first time declines too,
+		// by design; GpuTest pins the second sight.)
+		int rows = 512, cols = 256;
+		double[] w = new double[rows * cols], x = new double[cols], y = new double[rows];
+		assertThat(Gpu.matvec(w, 0, new double[cols - 1], 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, new double[rows - 1], 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 1, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 1, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 1, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, -1, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 0, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, 0)).isFalse();
+		assertThat(y).containsOnly(0.0);
 	}
 
 	@Test

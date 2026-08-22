@@ -38,6 +38,8 @@ export LLAMA2_PROMPT="Once upon a time" LLAMA2_TEMPERATURE=0
 
 rontolisp llama2.lisp --simd                                    # interpreter
 rontolisp llama2.lisp -o Prog.class --simd && java --add-modules jdk.incubator.vector Prog
+rontolisp llama2.lisp -o Prog.class --gpu --simd && \
+  java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog   # + an NVIDIA GPU
 rontolisp llama2.lisp -o llama2.wasm --simd && \
   wasmtime run -W gc --dir . --env LLAMA2_PROMPT --env LLAMA2_TEMPERATURE llama2.wasm
 rontolisp llama2.lisp -o llama2.wasm --simd --component && \
@@ -55,27 +57,38 @@ which is what `./run stories15M.bin -t 0 -i "Once upon a time"` prints -- the
 whole 256-token story is byte-identical. The small model runs the same way with
 `LLAMA2_CHECKPOINT=stories260K.bin LLAMA2_TOKENIZER=tok512.bin`.
 
-## Why `--simd`
+## Why `--simd` (and `--gpu`)
 
 Decoding is one token at a time, so every matrix in the model multiplies a
 vector: the whole forward pass is GEMV (`vec:matvec`), 15 million multiply-adds
 per token for stories15M, and `--simd` lowers it to CPU vector instructions.
-Measured on one core, 256 tokens of stories15M:
+Measured on this project's NVIDIA GB10 box (one CPU core), the 222-token story
+above, 2026-08-22:
 
-| backend | scalar | `--simd` |
-| --- | --- | --- |
-| JVM | 23 tok/s | 87 tok/s |
-| wasm-GC (`wasmtime`) | 0.4 tok/s | 46 tok/s |
-| interpreter | ~15 s per token | 15-25 tok/s |
-| `run.c -O2` (one thread) | 65 tok/s | |
-| Java Vector API port of run.c ([kishida's gist](https://gist.github.com/kishida/05656bfcbe840f269784f7dbbee5928e)) | 100 tok/s | 187 tok/s |
+| backend | scalar | `--simd` | `--gpu --simd` |
+| --- | --- | --- | --- |
+| JVM | 65 tok/s | 220 tok/s | 285 tok/s |
+| wasm-GC (`wasmtime`) | 0.4 tok/s | 125 tok/s | -- (no FFM) |
+| interpreter (`java -jar`) | ~15 s per token | 44 tok/s | 42 tok/s |
+| `run.c -O2` (one thread) | 65 tok/s | | |
+| Java Vector API port of run.c ([kishida's gist](https://gist.github.com/kishida/05656bfcbe840f269784f7dbbee5928e)) | 100 tok/s | 187 tok/s | |
 
-stories15M is 60 MB of weights streamed once per token, so the ceiling is memory
-bandwidth (~11 GB/s here = ~190 tok/s), which the Java port reaches. The rontolisp
-JVM run spends ~80% of its time in the same kind of GEMV kernel and the rest in the
-boxed attention / RoPE loops; the gap to the Java port is that glue plus the
-`--simd` kernel's deliberately pinned 128-bit accumulation (one chain per row, so
-results agree bit for bit with the WASM `f32x4` kernels on every host).
+(The two scalar figures for wasm-GC and the interpreter, and the gist's, are
+from the file's first measurement; the rest were taken together.) The `--simd`
+lane kernel streams the 60 MB of weights at ~25 GB/s, about 2.4 ms of a 4.5 ms
+token on the JVM; the rest is the boxed attention, RoPE and KV-cache loops
+around the GEMVs. `--gpu --simd` moves the GEMVs whose matrix is big enough and
+STAYS on the device -- the three feed-forward matrices per layer and the
+classifier head, two thirds of the multiply-adds; the 288x288 projections are a
+tie at ~12 us and stay on the CPU -- from their second token on, once the
+library has seen the weight twice unwritten ([the guide](../../doc/en/guides/gpu-acceleration.md)).
+That is about 1.3x with the story unchanged, and the next 2x on this program is
+the glue, not a GEMV. On the interpreter the same flag buys nothing: the tree
+walk around the GEMVs dominates there. The `--simd` kernel's deliberately pinned
+128-bit accumulation (one chain per row, so results agree bit for bit with the
+WASM `f32x4` kernels on every host) is what the device does NOT reproduce -- it
+accumulates in double, like the scalar `vec.lisp` definition, and lands on that
+definition's bits instead.
 
 The interpreter's `--simd` needs the native binary or
 `java --add-modules jdk.incubator.vector -jar ...`; without the Vector API it

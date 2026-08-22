@@ -138,7 +138,12 @@ final class CudaResidency {
 
 	}
 
-	/** One resident copy: the device pointer, and the host span it mirrors. */
+	/**
+	 * One resident copy: the device pointer, and the host span it mirrors. A pointer of
+	 * {@code 0} is not a copy but a MARK -- the span was offered once to a member that
+	 * uploads only on a second sight ({@link #offeredBefore}) -- and holds no device
+	 * memory, so it counts for nothing in the budget and frees nothing when dropped.
+	 */
 	record Entry(long pointer, long offset, long bytes) {
 	}
 
@@ -178,12 +183,53 @@ final class CudaResidency {
 	 */
 	synchronized long lookup(Object host, long offset, long bytes) {
 		Entry entry = this.entries.get(new Lookup(host));
-		if (entry != null && entry.offset == offset && entry.bytes == bytes) {
+		if (entry != null && entry.pointer != 0 && entry.offset == offset && entry.bytes == bytes) {
 			this.hits++;
 			return entry.pointer;
 		}
 		this.misses++;
 		return 0;
+	}
+
+	/**
+	 * Whether {@code host}'s span has been offered through here before and not written
+	 * since -- and if not, remembers that it has now. The accept-on-second-sight rule of
+	 * the matrix-by-vector product ({@code CudaGemm.gemv}): a GEMV over a matrix that is
+	 * not resident loses to the CPU, so the first offer of a matrix declines and leaves
+	 * this mark, the second uploads it, and a matrix written in between -- which drops
+	 * the mark exactly as it drops a copy -- is never uploaded at all. The mark is an
+	 * {@link Entry} with no buffer, so it shares the weak key, the write invalidation and
+	 * the LRU with the copies, and costs nothing on the device.
+	 * @param host the host array
+	 * @param offset the first byte of the span
+	 * @param bytes the length of the span
+	 * @return {@code true} when the same span was offered before and is still unwritten
+	 */
+	synchronized boolean offeredBefore(Object host, long offset, long bytes) {
+		expunge();
+		Entry entry = this.entries.get(new Lookup(host));
+		if (entry != null && entry.pointer == 0 && entry.offset == offset && entry.bytes == bytes) {
+			return true;
+		}
+		if (entry != null) {
+			this.entries.remove(new Lookup(host));
+			drop(entry);
+		}
+		this.entries.put(new Key(host, this.collected), new Entry(0, offset, bytes));
+		this.lastDropped = null;
+		this.occupied = true;
+		return false;
+	}
+
+	/**
+	 * Forgets one entry's device memory: a real copy's buffer goes onto the pending list
+	 * and out of the byte count; a mark holds neither.
+	 */
+	private void drop(Entry entry) {
+		if (entry.pointer != 0) {
+			this.pending.add(entry.pointer);
+			this.bytes -= entry.bytes;
+		}
 	}
 
 	/**
@@ -199,8 +245,7 @@ final class CudaResidency {
 		expunge();
 		Entry previous = this.entries.remove(new Lookup(host));
 		if (previous != null) {
-			this.pending.add(previous.pointer);
-			this.bytes -= previous.bytes;
+			drop(previous);
 		}
 		this.entries.put(new Key(host, this.collected), new Entry(pointer, offset, bytes));
 		this.bytes += bytes;
@@ -209,8 +254,7 @@ final class CudaResidency {
 		while (this.bytes > this.budget && oldest.hasNext()) {
 			Entry evicted = oldest.next().getValue();
 			oldest.remove();
-			this.pending.add(evicted.pointer);
-			this.bytes -= evicted.bytes;
+			drop(evicted);
 		}
 		this.occupied = !this.entries.isEmpty();
 	}
@@ -227,8 +271,7 @@ final class CudaResidency {
 		synchronized (this) {
 			Entry entry = this.entries.remove(new Lookup(host));
 			if (entry != null) {
-				this.pending.add(entry.pointer);
-				this.bytes -= entry.bytes;
+				drop(entry);
 				this.occupied = !this.entries.isEmpty();
 			}
 			this.lastDropped = host;
@@ -259,8 +302,7 @@ final class CudaResidency {
 			}
 			if (!kept) {
 				each.remove();
-				this.pending.add(entry.pointer);
-				this.bytes -= entry.bytes;
+				drop(entry);
 			}
 		}
 		this.occupied = !this.entries.isEmpty();
@@ -295,8 +337,7 @@ final class CudaResidency {
 		while ((key = this.collected.poll()) != null) {
 			Entry entry = this.entries.remove(key);
 			if (entry != null) {
-				this.pending.add(entry.pointer);
-				this.bytes -= entry.bytes;
+				drop(entry);
 				any = true;
 			}
 		}

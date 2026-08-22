@@ -75,6 +75,16 @@ vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref 
 `(array-dimensions w)` and allocates via `vec::%make-like`). `from-list`/`to-list` need cons
 lists, so they are portable-backends-only (a `--no-gc` compile error); `matvec` runs on
 `--no-gc` too since todo-099, over the rank-2 packed matrix block (see layer 2 below).
+**`matvec` is also the ONE `vec:` member `--gpu` intercepts (2026-08-22, todo-475)** --
+on the interpreter through `LinalgGpu.installVec`, called from the vec lazy-load hook on
+top of whatever `VecSimd` bound, and on the JVM through `JvmSimdCompiler.compileGpuMatvec`,
+a device-then-lane-or-defun chain over temps. The device takes it above 2^17 matrix
+elements and only over a matrix it has been offered before and that has not been written
+since (a GEMV is one pass over its matrix, so it pays only when the matrix is already
+there); its kernel accumulates in DOUBLE like this defun, not in lanes like `--simd`, so
+at `#f` it lands on the defun's bits in practice -- the f32 probe below tells the three
+apart: defun 16778240, lanes 16777984, device 16778240. `.kb/gpu.md` ("The GEMV, and the
+matrix that stays") is the record; `vec:matvec-into` is not intercepted.
 `(setf (vec:aref v i) x)` →
 `(vec:aset v i x)` via `LispMacroExpander.expandSetf` (`VEC_QUALIFIED_AREF`).
 

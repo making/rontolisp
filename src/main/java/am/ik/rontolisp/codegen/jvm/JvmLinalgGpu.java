@@ -15,17 +15,20 @@ import am.ik.rontolisp.PackageRegistry;
  * {@link JvmLinalgKernelCompiler}, which chains this attempt ahead of the {@code --blas}
  * and {@code --simd} ones over shared temps; this class only says which members the
  * {@link JvmGpuTemplate device bridge} claims, so the compiler can decide whether to
- * embed the bridge at all.
+ * embed the bridge at all -- plus {@code vec:matvec}, the one member outside
+ * {@code linalg:}, whose call site belongs to {@link JvmSimdCompiler} and whose name is
+ * here for the gate alone.
  *
  * <p>
  * The set is the interpreter's ({@code eval/LinalgGpu}) exactly. It is NARROWER than
- * {@link JvmLinalgBlas}'s in one direction -- the two gemv shapes are memory-bound, so
- * their whole cost is one pass over an operand a device would have to be handed anyway,
- * and a round trip cannot win that race -- and WIDER in two others: {@code --blas} stops
- * at {@code dot}, while a batch axis is free on a device ({@code blockIdx.z}) and a
- * transcendental is 9-394x faster on one. {@code linalg:matmul} at every rank,
- * {@code linalg:solve}, {@code linalg:square} and {@code torch:gelu} are accelerated
- * transitively, through the same spliced call sites.
+ * {@link JvmLinalgBlas}'s in one direction -- the two {@code linalg:} gemv shapes are
+ * memory-bound, so their whole cost is one pass over an operand a device would have to be
+ * handed anyway, and a round trip cannot win that race (which is also why
+ * {@code vec:matvec} is taken only over a matrix that STAYS on the device) -- and WIDER
+ * in two others: {@code --blas} stops at {@code dot}, while a batch axis is free on a
+ * device ({@code blockIdx.z}) and a transcendental is 9-394x faster on one.
+ * {@code linalg:matmul} at every rank, {@code linalg:solve}, {@code linalg:square} and
+ * {@code torch:gelu} are accelerated transitively, through the same spliced call sites.
  *
  * <p>
  * {@code sqrt}, {@code abs}, {@code negative}, {@code sign} and the binary
@@ -55,6 +58,14 @@ final class JvmLinalgGpu {
 	 */
 	static final String QUALIFIED_RNG_FILL = PackageRegistry.qualifyInternal(LispNames.LINALG_PKG,
 			LispNames.LINALG_RNG_FILL);
+
+	/**
+	 * The one device member OUTSIDE {@code linalg:}: {@code vec:matvec}, the GEMV a
+	 * decode loop is made of, accepted only over a matrix that stays resident. Its call
+	 * site is {@link JvmSimdCompiler}'s, not {@link JvmLinalgKernelCompiler}'s, but it is
+	 * in this gate so that a program whose only device member it is embeds the bridge.
+	 */
+	static final String QUALIFIED_VEC_MATVEC = PackageRegistry.qualify(LispNames.VEC_PKG, LispNames.VEC_MATVEC);
 
 	/**
 	 * The element-wise members, each mapped to the bridge method backing it -- which is
@@ -95,7 +106,8 @@ final class JvmLinalgGpu {
 	 * @return the qualified member names this bridge accelerates
 	 */
 	static List<String> qualifiedMembers() {
-		List<String> names = new ArrayList<>(List.of(QUALIFIED_DOT, QUALIFIED_MATMUL_ND, QUALIFIED_RNG_FILL));
+		List<String> names = new ArrayList<>(
+				List.of(QUALIFIED_DOT, QUALIFIED_MATMUL_ND, QUALIFIED_RNG_FILL, QUALIFIED_VEC_MATVEC));
 		for (String member : MAP_KERNELS.keySet()) {
 			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
 		}

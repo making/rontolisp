@@ -280,7 +280,7 @@ examples:
       LLAMA2_PROMPT: Once upon a time
       LLAMA2_TEMPERATURE: "0"
       LLAMA2_STEPS: "60"
-    note: the llama2.c README demo itself, over stories15M.bin (60 MB, gitignored -- llama2/download-stories15M.sh); the RUN legs skip themselves when it is absent. 60 greedy tokens = the same text `run stories15M.bin -t 0 -n 60 -i "Once upon a time"` prints. Measured with --simd - JVM 87 tok/s, wasm-GC 46 tok/s, native interpreter 15-25 tok/s
+    note: the llama2.c README demo itself, over stories15M.bin (60 MB, gitignored -- llama2/download-stories15M.sh); the RUN legs skip themselves when it is absent. 60 greedy tokens = the same text `run stories15M.bin -t 0 -n 60 -i "Once upon a time"` prints. Measured 2026-08-22 with --simd - JVM 220 tok/s (285 with --gpu --simd, story unchanged), wasm-GC 125 tok/s, interpreter 44 tok/s
     expect:
       equals: |
         Once upon a time, there was a little girl named Lily. She loved to play outside in the sunshine. One day, she saw a big, red ball in the sky. It was the sun! She thought it was so pretty.

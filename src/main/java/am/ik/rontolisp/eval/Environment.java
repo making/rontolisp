@@ -39,6 +39,7 @@ import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.FloatText;
 import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.FloatArrayWriteHook;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFuture;
@@ -6849,9 +6850,18 @@ public final class Environment implements Scope {
 		}
 
 		void load(ByteBuffer bytes, int start, int n) {
+			// A bulk read writes a packed float array's storage IN PLACE, behind the
+			// element setter's back, so it reports the write itself: under --gpu the
+			// device may hold a resident copy of this very array (.kb/gpu.md).
 			switch (this.value) {
-				case LispSingleFloatArray f -> bytes.asFloatBuffer().get(f.data(), start, n);
-				case LispDoubleFloatArray d -> bytes.asDoubleBuffer().get(d.data(), start, n);
+				case LispSingleFloatArray f -> {
+					bytes.asFloatBuffer().get(f.data(), start, n);
+					FloatArrayWriteHook.written(f.data());
+				}
+				case LispDoubleFloatArray d -> {
+					bytes.asDoubleBuffer().get(d.data(), start, n);
+					FloatArrayWriteHook.written(d.data());
+				}
 				case LispIntVector iv -> {
 					long[] data = iv.data();
 					for (int k = 0; k < n; k++) {

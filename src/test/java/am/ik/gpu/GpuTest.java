@@ -743,6 +743,190 @@ class GpuTest {
 		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
 	}
 
+	// --- the matrix-by-vector product (vec:matvec, 2026-08-22) -----------------------
+	// The one member whose accept-or-decline is RESIDENCY rather than size: the first
+	// sight of a matrix declines and leaves a mark, the second uploads it, every later
+	// one
+	// finds it, and a write in between starts the count again.
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aMatrixByVectorProductIsTakenOnlyOnceItsMatrixHasBeenOfferedTwiceUnwritten() {
+		CudaResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "residency is the CUDA backend's");
+		Gpu.releaseResident();
+		int rows = 512, cols = 512;
+		double[] w = new double[rows * cols], x = new double[cols], y = new double[rows], oracle = new double[rows];
+		for (int i = 0; i < w.length; i++) {
+			w[i] = (i % 7) - 3; // exact small integers: a reordered sum of them is exact
+								// too
+		}
+		for (int j = 0; j < cols; j++) {
+			x[j] = (j % 5) - 2;
+		}
+		for (int r = 0; r < rows; r++) {
+			double acc = 0;
+			for (int j = 0; j < cols; j++) {
+				acc += w[r * cols + j] * x[j];
+			}
+			oracle[r] = acc;
+		}
+		// First sight: declined, nothing moved, nothing resident.
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(y).containsOnly(0.0);
+		assertThat(Gpu.residentBytes()).isZero();
+		// Second sight, unwritten: uploaded, computed exactly, and the matrix stays.
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		assertThat(y).isEqualTo(oracle);
+		assertThat(Gpu.residentBytes()).isGreaterThanOrEqualTo((long) rows * cols * Double.BYTES);
+		// Third: the matrix is a hit.
+		long hits = residency.hits();
+		java.util.Arrays.fill(y, 0.0);
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		assertThat(residency.hits()).isGreaterThan(hits);
+		assertThat(y).isEqualTo(oracle);
+		// Written: the copy is dropped, the next sight is a first sight again and
+		// declines, and the one after that uploads the NEW bytes.
+		w[0] = 100;
+		Gpu.written(w);
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		oracle[0] += (100 - (-3)) * x[0];
+		assertThat(y).isEqualTo(oracle);
+	}
+
+	@Test
+	void aSingleFloatMatrixByVectorProductLandsOnTheDoubleAccumulatedOracle() {
+		// The kernel accumulates in double at f32 too, so every product of two floats is
+		// exact in it and only the ORDER of a double sum separates it from the scalar
+		// defun's widen-accumulate-narrow rule -- which moves the narrowed float only
+		// when
+		// the sum lies within ~1e-16 of a rounding boundary: measured, never over 1024
+		// rows. A float accumulator (the lane kernel's width) lands 2.6e-7 away and on
+		// about a quarter of the rows, so the near-identity below is the contract's pin.
+		int rows = 512, cols = 768;
+		float[] w = new float[rows * cols], x = new float[cols], y = new float[rows], oracle = new float[rows];
+		for (int i = 0; i < w.length; i++) {
+			w[i] = (float) Math.sin(i * 0.37);
+		}
+		for (int j = 0; j < cols; j++) {
+			x[j] = (float) Math.cos(j * 0.11);
+		}
+		double scale = 0;
+		for (int r = 0; r < rows; r++) {
+			double acc = 0;
+			for (int j = 0; j < cols; j++) {
+				acc += (double) w[r * cols + j] * x[j];
+			}
+			oracle[r] = (float) acc;
+			scale = Math.max(scale, Math.abs(acc));
+		}
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		int identical = 0;
+		for (int r = 0; r < rows; r++) {
+			assertThat(y[r]).as("row %d", r).isCloseTo(oracle[r], within((float) (scale * 1e-6)));
+			if (y[r] == oracle[r]) {
+				identical++;
+			}
+		}
+		assertThat(identical).as("rows bit-identical to the double-accumulated oracle").isGreaterThan(rows * 99 / 100);
+	}
+
+	@Test
+	void aDoubleMatrixByVectorProductAgreesWithTheOracleToAFewUlps() {
+		// At f64 the fused multiply-add and the warp's tree are the product's own story.
+		int rows = 512, cols = 768;
+		double[] w = new double[rows * cols], x = new double[cols], y = new double[rows], oracle = new double[rows];
+		for (int i = 0; i < w.length; i++) {
+			w[i] = Math.sin(i * 0.37);
+		}
+		for (int j = 0; j < cols; j++) {
+			x[j] = Math.cos(j * 0.11);
+		}
+		double scale = 0;
+		for (int r = 0; r < rows; r++) {
+			double acc = 0;
+			for (int j = 0; j < cols; j++) {
+				acc += w[r * cols + j] * x[j];
+			}
+			oracle[r] = acc;
+			scale = Math.max(scale, Math.abs(acc));
+		}
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		for (int r = 0; r < rows; r++) {
+			assertThat(y[r]).as("row %d", r).isCloseTo(oracle[r], within(scale * 1e-13));
+		}
+	}
+
+	@Test
+	void everyMatrixByVectorOperandIncludingTheResultIsReadFromItsOwnOffset() {
+		// The compiled representation keeps a header inside each array: the matrix's
+		// elements start at 3, a vector's at 2, and the result's header must survive.
+		int rows = 400, cols = 400;
+		double[] w = new double[3 + rows * cols], x = new double[2 + cols], y = new double[2 + rows];
+		w[0] = 2;
+		w[1] = rows;
+		w[2] = cols;
+		x[0] = 1;
+		x[1] = cols;
+		y[0] = 1;
+		y[1] = rows;
+		for (int i = 0; i < rows * cols; i++) {
+			w[3 + i] = (i % 11) - 5;
+		}
+		for (int j = 0; j < cols; j++) {
+			x[2 + j] = (j % 3) - 1;
+		}
+		assertThat(Gpu.matvec(w, 3, x, 2, y, 2, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 3, x, 2, y, 2, rows, cols)).isTrue();
+		assertThat(y[0]).isEqualTo(1.0);
+		assertThat(y[1]).isEqualTo(rows);
+		for (int r = 0; r < rows; r++) {
+			double acc = 0;
+			for (int j = 0; j < cols; j++) {
+				acc += w[3 + r * cols + j] * x[2 + j];
+			}
+			assertThat(y[2 + r]).as("row %d", r).isEqualTo(acc);
+		}
+	}
+
+	@Test
+	void everyMatrixByVectorDeclineConditionStillDeclinesWithADevicePresent() {
+		int rows = 512, cols = 256;
+		double[] w = new double[rows * cols], x = new double[cols], y = new double[rows];
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 64, 64)).isFalse();
+		assertThat(Gpu.matvec(w, 0, new double[cols - 1], 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, new double[rows - 1], 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 1, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 1, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 1, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 0, cols)).isFalse();
+		assertThat(y).containsOnly(0.0);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aRunOfMatrixByVectorProductsFreesEveryBufferItAllocates() {
+		// A resident matrix, a resident vector and a result replaced every call: the
+		// steady state holds three buffers, and the drift over a thousand calls is the
+		// same loose bound every leak test here uses.
+		GpuDevice gemm = Gpu.device();
+		assertThat(gemm).isNotNull();
+		Gpu.releaseResident();
+		int rows = 512, cols = 512;
+		double[] w = new double[rows * cols], x = new double[cols], y = new double[rows];
+		assertThat(gemm.gemv(w, 0, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(gemm.gemv(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		long before = gemm.freeDeviceMemory();
+		assertThat(before).isGreaterThan(0);
+		for (int i = 0; i < 1000; i++) {
+			assertThat(gemm.gemv(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		}
+		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
+	}
+
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void aRunOfSuccessfulProductsFreesEveryBufferItAllocates() {

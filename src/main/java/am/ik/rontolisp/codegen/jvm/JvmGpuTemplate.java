@@ -214,6 +214,45 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * {@code (vec:matvec w x)} over a packed rank-2 matrix and a packed rank-1 vector of
+	 * the same width and matching extent -- the one device member outside
+	 * {@code linalg:}, the GEMV a decode loop is made of. The library accepts it only
+	 * over a matrix that is RESIDENT, or that it has been offered before and not written
+	 * since (the first sight of any matrix declines; {@code .kb/gpu.md}), so the emitted
+	 * chain falls through to the lane kernel or the defun exactly as it does for a shape
+	 * the device turns down.
+	 * @param w the matrix
+	 * @param x the vector
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuMatvec(@Nullable Object w, @Nullable Object x) {
+		if (!(w instanceof double[]) && !(w instanceof float[])) {
+			return null;
+		}
+		boolean single = w instanceof float[];
+		if (single != (x instanceof float[]) || (!single && !(x instanceof double[]))) {
+			return null;
+		}
+		if (rank(w) != 2 || rank(x) != 1) {
+			return null;
+		}
+		int rows = dim(w, 0);
+		int cols = dim(w, 1);
+		if (rows < 1 || cols < 1 || dim(x, 0) != cols || !Gpu.worthMatvec(rows, cols)) {
+			return null;
+		}
+		if (!Gpu.available()) {
+			return null;
+		}
+		if (single) {
+			float[] y = newVecF(rows);
+			return Gpu.matvec(floats(w), 3, floats(x), 2, y, 2, rows, cols) ? y : null;
+		}
+		double[] y = newVec(rows);
+		return Gpu.matvec(doubles(w), 3, doubles(x), 2, y, 2, rows, cols) ? y : null;
+	}
+
+	/**
 	 * {@code (linalg::%la-rng-fill out st mode lo span)} on the device: fills the packed
 	 * destination of either width from the three-word state vector by the closed-form
 	 * jump and answers the end state as a fresh {@code (3)} vector -- byte-identical to
@@ -863,6 +902,21 @@ final class JvmGpuTemplate {
 		m[1] = rows;
 		m[2] = cols;
 		return m;
+	}
+
+	/** A fresh rank-1 packed double vector of {@code n} elements, header written. */
+	private static double[] newVec(int n) {
+		double[] v = new double[2 + n];
+		v[0] = 1.0;
+		v[1] = n;
+		return v;
+	}
+
+	private static float[] newVecF(int n) {
+		float[] v = new float[2 + n];
+		v[0] = 1.0f;
+		v[1] = n;
+		return v;
 	}
 
 }

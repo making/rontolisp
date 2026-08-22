@@ -659,7 +659,8 @@ public final class LispEvaluator {
 	 * product the device declines -- and at the shapes rontolisp examples run today that
 	 * is nearly all of them -- falls through to the tuned CBLAS if one was asked for,
 	 * then to the Vector API kernel, then to the scalar defun. The caller must have
-	 * checked {@link LinalgGpu#available()}.
+	 * checked {@link LinalgGpu#available()}. {@code vec:matvec} is overridden the same
+	 * way when the vec library loads ({@link LinalgGpu#installVec}).
 	 * @param gpu whether to route the linalg: matrix product to a GPU
 	 */
 	public void setGpu(boolean gpu) {
@@ -6925,6 +6926,13 @@ public final class LispEvaluator {
 				// natives up through the global function namespace (Lisp-2).
 				if (this.simd) {
 					VecSimd.install(this.globalEnv);
+				}
+				// Opt-in --gpu: vec:matvec is the one device member outside linalg:, and
+				// it is installed here, on TOP of the lane kernel, when THIS library
+				// loads -- the two libraries load independently, so it cannot ride on
+				// the linalg hook above (.kb/gpu.md).
+				if (this.gpu) {
+					LinalgGpu.installVec(this.globalEnv, this);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {

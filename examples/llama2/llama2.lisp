@@ -29,6 +29,8 @@
 ;;;;   export LLAMA2_PROMPT="Once upon a time" LLAMA2_TEMPERATURE=0
 ;;;;   rontolisp llama2.lisp --simd                                  # interpreter
 ;;;;   rontolisp llama2.lisp -o Prog.class --simd && java --add-modules jdk.incubator.vector Prog
+;;;;   rontolisp llama2.lisp -o Prog.class --gpu --simd && \
+;;;;     java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog
 ;;;;   rontolisp llama2.lisp -o llama2.wasm --simd && \
 ;;;;     wasmtime run -W gc --dir . --env LLAMA2_PROMPT --env LLAMA2_TEMPERATURE llama2.wasm
 ;;;;   rontolisp llama2.lisp -o llama2.wasm --simd --component && \
@@ -39,22 +41,28 @@
 ;;;; is byte-identical on all of them). At a temperature above 0 the same
 ;;;; LLAMA2_SEED picks the same story as `run stories15M.bin -s SEED`.
 ;;;;
-;;;; WHERE THE TIME GOES, AND WHY --simd
-;;;; -----------------------------------
+;;;; WHERE THE TIME GOES, AND WHY --simd (AND --gpu)
+;;;; ------------------------------------------------
 ;;;; Every matrix multiplies a vector -- decoding is one token at a time -- so
 ;;;; the whole model is GEMV (`vec:matvec`), 15 million multiply-adds per token
-;;;; for stories15M, which `--simd` lowers to CPU vector instructions. What is
-;;;; left -- the boxed attention and RoPE loops -- is why the JVM lands at about
-;;;; half of a Java Vector API port of run.c (which is purely memory-bound on the
-;;;; 60 MB of weights). The KV
-;;;; cache is laid out per head as in tiny-llm.lisp: keys row-major (seq-len x
-;;;; head-size), values TRANSPOSED (head-size x seq-len), so both halves of
-;;;; attention are a GEMV as well. Measured (stories15M, 60 tokens, one core):
+;;;; for stories15M, which `--simd` lowers to CPU vector instructions streaming
+;;;; the 60 MB of weights at ~25 GB/s: about 2.4 ms of a 4.5 ms token on the
+;;;; JVM. What is left -- the boxed attention, RoPE and KV-cache loops -- is the
+;;;; rest. `--gpu --simd` moves the GEMVs whose matrix is big enough and STAYS
+;;;; on the device -- the three feed-forward matrices per layer and the
+;;;; classifier head, two thirds of the multiply-adds; the 288x288 projections
+;;;; are a tie and stay on the CPU -- from their second token on, which is about
+;;;; 1.3x on the JVM class output, with the story unchanged. The KV cache is laid
+;;;; out per head as in tiny-llm.lisp: keys row-major (seq-len x head-size),
+;;;; values TRANSPOSED (head-size x seq-len), so both halves of attention are a
+;;;; GEMV as well (too small for the device, and rewritten every token). Measured
+;;;; 2026-08-22 on an NVIDIA GB10 box (stories15M, the 222-token story above):
 ;;;;
-;;;;   JVM         23 tok/s ->  87 tok/s with --simd
-;;;;   wasm-GC    0.4 tok/s ->  46 tok/s with --simd     (run.c -O2: 65 tok/s)
-;;;;   interpreter  ~ 15 s/token -> 15-25 tok/s with --simd (native binary, or
-;;;;                java --add-modules jdk.incubator.vector -jar ...)
+;;;;   JVM         65 tok/s -> 220 tok/s with --simd -> 285 tok/s with --gpu --simd
+;;;;   wasm-GC    0.4 tok/s -> 125 tok/s with --simd     (run.c -O2: 65 tok/s)
+;;;;   interpreter  ~ 15 s/token -> 44 tok/s with --simd (java --add-modules
+;;;;                jdk.incubator.vector -jar ...; --gpu buys nothing there, the
+;;;;                tree walk around the GEMVs dominates)
 ;;;;
 ;;;; Without --simd the interpreter runs the scalar vec.lisp definitions, one
 ;;;; interpreted form per multiply-add: fine for stories260K, not for stories15M.

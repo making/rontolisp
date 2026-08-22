@@ -188,6 +188,26 @@ public final class Gpu {
 	 */
 	static final long RNG_UNPOOLED_MIN_ELEMENTS = 1L << 15;
 
+	/**
+	 * Below this many elements ({@code rows * cols}) a {@linkplain #matvec
+	 * matrix-by-vector product} declines. It is measured with the matrix RESIDENT, which
+	 * is the only case the member is offered in (below): a GEMV reads every element of
+	 * its matrix once, so over the link it loses to the CPU until ~2^19 elements, while
+	 * over a matrix that is already on the device its whole cost is the ~9 us floor --
+	 * {@code x} up, a launch, {@code y} down -- and the crossover against the JIT-warm
+	 * {@code --simd} lane kernel is between 256x256 (10.0 us CPU against 9.7, a tie at
+	 * {@code #f}) and 384x384 (23.0 against 10.7, 2.1x; 45.5 against 9.9 at {@code #d}).
+	 * 2^17 sits at the second, where the win is unambiguous ({@code .kb/gpu.md}).
+	 */
+	static final long MATVEC_POOLED_MIN_ELEMENTS = 1L << 17;
+
+	/**
+	 * The same on a machine without the stream-ordered allocator, where the floor is ~180
+	 * us: the CPU column passes that at about a million elements (200 us at 1024x1024
+	 * {@code #f}).
+	 */
+	static final long MATVEC_UNPOOLED_MIN_ELEMENTS = 1L << 20;
+
 	/** The deepest rank {@link #bcast} and {@link #gather} will walk; deeper declines. */
 	private static final int MAX_STRIDED_RANK = 16;
 
@@ -276,6 +296,8 @@ public final class Gpu {
 
 		private static final long RNG_MIN_ELEMENTS;
 
+		private static final long MATVEC_MIN_ELEMENTS;
+
 		static {
 			GpuDevice device;
 			String description;
@@ -317,13 +339,14 @@ public final class Gpu {
 			Gpu.probed = device;
 			GpuDevice.Thresholds thresholds = device == null
 					? new GpuDevice.Thresholds(POOLED_MIN_WORK, MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS,
-							FOLD_POOLED_MIN_ELEMENTS, RNG_POOLED_MIN_ELEMENTS)
+							FOLD_POOLED_MIN_ELEMENTS, RNG_POOLED_MIN_ELEMENTS, MATVEC_POOLED_MIN_ELEMENTS)
 					: device.thresholds();
 			MIN_WORK = thresholds.work();
 			MAP_MIN_ELEMENTS = thresholds.map();
 			STRIDED_MIN_ELEMENTS = thresholds.strided();
 			FOLD_MIN_ELEMENTS = thresholds.fold();
 			RNG_MIN_ELEMENTS = thresholds.rng();
+			MATVEC_MIN_ELEMENTS = thresholds.matvec();
 		}
 
 		/**
@@ -464,6 +487,16 @@ public final class Gpu {
 
 	static long rngMinElements() {
 		return Probe.RNG_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The matrix-by-vector threshold in force on this machine, in {@code rows * cols};
+	 * {@link Long#MAX_VALUE} on a backend that is not a member of it. Package-private and
+	 * for the tests.
+	 * @return the minimum element count a GEMV is offered at
+	 */
+	static long matvecMinElements() {
+		return Probe.MATVEC_MIN_ELEMENTS;
 	}
 
 	/**
@@ -1090,6 +1123,100 @@ public final class Gpu {
 			e >>= 1;
 		}
 		return r;
+	}
+
+	/**
+	 * Whether a {@code rows x cols} matrix-by-vector product is big enough to be worth
+	 * offering at all -- the driver-free size predicate of the GEMV, re-asked by
+	 * {@link #matvec} with the threshold actually in force. {@code true} is "worth
+	 * unwrapping for", not "will be accepted": the call itself also asks whether the
+	 * matrix is RESIDENT, which no size can tell.
+	 * @param rows rows of the matrix and length of the result
+	 * @param cols columns of the matrix and length of the vector
+	 * @return {@code true} when the product is above the size threshold
+	 */
+	public static boolean worthMatvec(long rows, long cols) {
+		return rows > 0 && cols > 0 && rows * cols >= MATVEC_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * {@code y = W x} for a row-major {@code rows x cols} double-float matrix and a
+	 * {@code cols}-long vector, written straight into the caller's array at its own
+	 * offset -- the GEMV behind {@code vec:matvec}, the one member of this library
+	 * outside {@code linalg:} and the one whose worth is decided by RESIDENCY rather than
+	 * by size.
+	 *
+	 * <p>
+	 * A matrix-by-vector product is memory-bound: its whole cost is one pass over
+	 * {@code W}, and copying {@code W} to the device costs more than the pass, so over
+	 * the link the device loses to the CPU up to ~2^19 elements. Over a matrix that is
+	 * ALREADY on the device -- a model's weight, which is read every step and never
+	 * written -- the call is the ~9 us floor plus a read at the device's own bandwidth,
+	 * and the CPU loses from 2^17 elements up. So this member is accepted only when its
+	 * matrix is resident, or when the same matrix has been offered before and not written
+	 * since -- in which case this call uploads it and every later call finds it there.
+	 * The first offer of a matrix declines and costs nothing; a matrix the program
+	 * rewrites between calls is never uploaded and never pays for the trip it would lose.
+	 * Every other operand and result follows the ordinary residency rule. On a device
+	 * that keeps no resident copies (Metal, today) the member declines outright.
+	 *
+	 * <p>
+	 * The accumulator is a {@code double} at both widths and only the store narrows,
+	 * which is the scalar defun's rule: at {@code #f} the product of two elements is
+	 * exact in it, so the result differs from the defun only where the ORDER of a double
+	 * sum crosses a single-float rounding boundary (measured: never, over 1024 rows of
+	 * 768); at {@code #d} the fused multiply-add and the warp's tree are the product's
+	 * own few-ulp story. Neither is asserted as byte-identity.
+	 * @param w the matrix, row-major, elements starting at {@code offsetW}
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param x the vector, elements starting at {@code offsetX}
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param y the array the {@code rows} results are written into
+	 * @param offsetY the index in {@code y} the results start at
+	 * @param rows rows of {@code w} and length of the result
+	 * @param cols columns of {@code w} and length of {@code x}
+	 * @return {@code true} when {@code y} was filled; {@code false} when this call
+	 * declined, in which case {@code y} is untouched
+	 */
+	public static boolean matvec(double[] w, int offsetW, double[] x, int offsetX, double[] y, int offsetY, int rows,
+			int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMatvec(w.length, offsetW, x.length, offsetX, y.length, offsetY, rows, cols)
+				&& device.gemv(w, offsetW, x, offsetX, y, offsetY, rows, cols);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #matvec(double[], int, double[], int, double[], int, int, int)}, and the
+	 * width a decode loop runs at. The accumulator is still a {@code double}.
+	 * @param w the matrix, row-major, elements starting at {@code offsetW}
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param x the vector, elements starting at {@code offsetX}
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param y the array the {@code rows} results are written into
+	 * @param offsetY the index in {@code y} the results start at
+	 * @param rows rows of {@code w} and length of the result
+	 * @param cols columns of {@code w} and length of {@code x}
+	 * @return {@code true} when {@code y} was filled
+	 */
+	public static boolean matvec(float[] w, int offsetW, float[] x, int offsetX, float[] y, int offsetY, int rows,
+			int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMatvec(w.length, offsetW, x.length, offsetX, y.length, offsetY, rows, cols)
+				&& device.gemvF(w, offsetW, x, offsetX, y, offsetY, rows, cols);
+	}
+
+	/**
+	 * Whether a GEMV is one this library will attempt: above the threshold in force, a
+	 * matrix that is one Java array, and all three operands inside the arrays they were
+	 * handed. Whether the matrix is resident is the device's question, not this one's.
+	 */
+	private static boolean offeredMatvec(long lengthW, int offsetW, long lengthX, int offsetX, long lengthY,
+			int offsetY, int rows, int cols) {
+		return rows > 0 && cols > 0 && (long) rows * cols >= Probe.MATVEC_MIN_ELEMENTS
+				&& (long) rows * cols <= Integer.MAX_VALUE && offsetW >= 0 && offsetX >= 0 && offsetY >= 0
+				&& offsetW + (long) rows * cols <= lengthW && offsetX + (long) cols <= lengthX
+				&& offsetY + (long) rows <= lengthY;
 	}
 
 	/**

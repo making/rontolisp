@@ -168,6 +168,15 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(embedsGpuBridge(compile("(print (linalg:sub #d((1.0)) #d(2.0)))", true))).isTrue();
 		assertThat(embedsGpuBridge(compile("(print (linalg:sum #d((1.0)) :axis 0))", true))).isTrue();
 		assertThat(embedsGpuBridge(compile("(print (linalg:transpose #d((1.0)) '(1 0)))", true))).isTrue();
+		// And over vec:matvec, the one member outside linalg: -- a program whose only
+		// device member it is (a decode loop) must embed the bridge. Any vec program
+		// pulls
+		// it in, as any linalg program does, because the spliced vec.lisp holds the
+		// matvec defun; and none of them does without the flag.
+		assertThat(embedsGpuBridge(compileWithVec("(print (vec:matvec #d((1.0)) #d(2.0)))", true, false))).isTrue();
+		assertThat(embedsGpuBridge(compileWithVec("(print (vec:matvec #d((1.0)) #d(2.0)))", false, false))).isFalse();
+		assertThat(embedsGpuBridge(compileWithVec("(print (vec:dot #d(1.0) #d(2.0)))", true, false))).isTrue();
+		assertThat(embedsGpuBridge(compileWithVec("(print (vec:dot #d(1.0) #d(2.0)))", false, false))).isFalse();
 	}
 
 	@Test
@@ -219,7 +228,9 @@ class JvmLinalgGpuAccelCompilerTest {
 			.contains(".visible .entry gather_f64")
 			.contains(".visible .entry gather_f32")
 			.contains(".visible .entry fold_f64")
-			.contains(".visible .entry fold_f32");
+			.contains(".visible .entry fold_f32")
+			.contains(".visible .entry gemv_f64")
+			.contains(".visible .entry gemv_f32");
 		// ... and the MSL beside it, for the same reason and one more: the machine that
 		// COMPILES a program is not the machine that runs it, so both texts travel in
 		// every --gpu class and a Linux build has to carry the Apple half too.
@@ -608,6 +619,96 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(run(compile(inexact, true, true, true))).isEqualTo(device);
 	}
 
+	// --- the matrix-by-vector product (vec:matvec, 2026-08-22) -----------------------
+
+	private static boolean takesMatvec() {
+		return aDeviceIsAvailable() && am.ik.gpu.GpuThresholds.matvecMinElements() < Long.MAX_VALUE;
+	}
+
+	/** The side of a square matrix comfortably over the GEMV threshold in force. */
+	private static int matvecSide() {
+		return 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.matvecMinElements()) / 16);
+	}
+
+	/**
+	 * {@code W x} with {@code W} of exact +1 / -1 entries and {@code x} an index ramp --
+	 * every row's dot an exact integer far under 2^24 -- taken twice, because the first
+	 * sight of a matrix declines; the second call's elements are printed.
+	 */
+	private static String exactMatvec(int side, String option) {
+		return """
+				(defparameter *w* (linalg:reshape (linalg:sign (linalg:sin (linalg:arange 1 %d%s))) '(%d %d)))
+				(defparameter *x* (linalg:arange 0 %d%s))
+				(vec:matvec *w* *x*)
+				(print (linalg:to-list (vec:matvec *w* *x*)))
+				""".formatted(side * side + 1, option, side, side, side, option);
+	}
+
+	@Test
+	@EnabledIf("takesMatvec")
+	void theMatrixByVectorProductMatchesTheScalarReferenceOnceResident() throws Exception {
+		int side = matvecSide();
+		for (String option : new String[] { TYPE, " :element-type 'single-float" }) {
+			String program = exactMatvec(side, option);
+			assertThat(run(compileWithVec(program, true, false))).as(option)
+				.isEqualTo(run(compileWithVec(program, false, false)));
+		}
+	}
+
+	@Test
+	@EnabledIf("takesMatvec")
+	void theDeviceIsAskedOnTheSecondSightAndTheLaneKernelOnTheFirst() throws Exception {
+		// .kb/vec.md's f32 reduction probe as a matrix row: the defun (double
+		// accumulation, narrowed) prints 16778240 and the lane kernel 16777984. The
+		// device accumulates in double and answers the DEFUN's figure, and only from the
+		// second sight of the matrix on -- so the chain is legible: (lane device).
+		int rows = (int) Math.max(128, (am.ik.gpu.GpuThresholds.matvecMinElements() + 1023) / 1024);
+		String program = """
+				(defparameter *w* (linalg:zeros '(%d 1024) :element-type 'single-float))
+				(setf (aref *w* 0 0) 4096.0)
+				(dotimes (j 1023) (setf (aref *w* 0 (+ j 1)) 1.0))
+				(defparameter *x* (linalg:ones '(1024) :element-type 'single-float))
+				(setf (aref *x* 0) 4096.0)
+				(defun probe () (round (aref (vec:matvec *w* *x*) 0)))
+				(print (list (probe) (probe)))
+				""".formatted(rows);
+		assertThat(run(compileWithVec(program, true, true))).as("--gpu --simd").isEqualTo("(16777984 16778240)");
+		assertThat(run(compileWithVec(program, false, true))).as("--simd").isEqualTo("(16777984 16777984)");
+		assertThat(run(compileWithVec(program, true, false))).as("--gpu").isEqualTo("(16778240 16778240)");
+		assertThat(run(compileWithVec(program, false, false))).as("scalar").isEqualTo("(16778240 16778240)");
+	}
+
+	@Test
+	void aMatvecArgumentFormIsEvaluatedExactlyOnceEvenWhenTheKernelDeclines() throws Exception {
+		// The chain reads temps: with or without --simd, a declined device attempt (here
+		// by size, on every machine) must not re-evaluate the argument forms.
+		String program = """
+				(defparameter *n* 0)
+				(defparameter *w* (linalg:reshape (linalg:arange 1 257) '(16 16)))
+				(defparameter *x* (linalg:arange 1 17))
+				(vec:matvec (progn (setq *n* (+ *n* 1)) *w*) (progn (setq *n* (+ *n* 10)) *x*))
+				(print *n*)
+				""";
+		assertThat(run(compileWithVec(program, true, false))).isEqualTo("11");
+		assertThat(run(compileWithVec(program, true, true))).isEqualTo("11");
+		assertThat(run(compileWithVec(program, false, false))).isEqualTo("11");
+	}
+
+	@Test
+	void aDeclinedMatrixByVectorProductRunsTheSameProgramToTheSameOutputOnAnyMachine() throws Exception {
+		// Below the threshold the device is never asked; with a device the first sight
+		// declines as well. Both calls print what the defun prints, everywhere.
+		for (String option : new String[] { "", " :element-type 'single-float" }) {
+			String program = """
+					(defparameter *w* (linalg:reshape (linalg:sin (linalg:arange 1 257%s)) '(16 16)))
+					(defparameter *x* (linalg:cos (linalg:arange 1 17%s)))
+					(print (list (vec:matvec *w* *x*) (vec:matvec *w* *x*)))
+					""".formatted(option, option);
+			assertThat(run(compileWithVec(program, true, false))).as(option)
+				.isEqualTo(run(compileWithVec(program, false, false)));
+		}
+	}
+
 	// --- device residency (2026-08-22) ------------------------------------------------
 
 	/**
@@ -620,9 +721,11 @@ class JvmLinalgGpuAccelCompilerTest {
 	 * bypass the element setter under {@code --simd}, which is why the program is run
 	 * with that flag as well as without it. {@code fill} and {@code replace} are not here
 	 * because the interpreter does not accept a packed array for either; on the JVM they
-	 * expand to the setter this program already exercises.
+	 * expand to the setter this program already exercises. {@code read-sequence} over a
+	 * binary file IS here: its bulk primitive writes the storage behind the setter's back
+	 * on both backends, and it is how a model's weights arrive ({@code examples/llama2}).
 	 */
-	private static String residencyWriters(int side, String type) {
+	private static String residencyWriters(int side, String type, String file) {
 		int n = side * side;
 		return """
 				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
@@ -650,8 +753,9 @@ class JvmLinalgGpuAccelCompilerTest {
 				(vec:negative-into *v* *v*) (check "vec-negative-into")
 				(vec:clip-into *v* *v* -1 1) (check "vec-clip-into")
 				(vec:matvec-into *v* (linalg:ones '(%d 1)%s) *one*) (check "vec-matvec-into")
+				(with-open-file (s "%s" :element-type '(unsigned-byte 8)) (read-sequence *v* s)) (check "read-sequence")
 				""".formatted(n + 1, type, side, side, side + 1, type, side, n + 1, type, type, side, type, side, side,
-				type, side, side, type, side, side, type, n, type);
+				type, side, side, type, side, side, type, n, type, file);
 	}
 
 	@Test
@@ -659,12 +763,25 @@ class JvmLinalgGpuAccelCompilerTest {
 	void everyEnumeratedWriterInvalidatesTheResidentCopy() throws Exception {
 		// The compiled half of the invalidation enumeration: _fvAset1/2/N report through
 		// _gpuWritten, the in-place --simd kernels' call sites report the arrays they
-		// wrote, and every vec: -into call site reports its destination. Any one of them
-		// missing leaves a stale device copy and a sum the oracle does not print.
+		// wrote, every vec: -into call site reports its destination, and a bulk
+		// read-sequence reports the array it filled. Any one of them missing leaves a
+		// stale device copy and a sum the oracle does not print.
 		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
-		String program = residencyWriters(side, TYPE);
+		Path file = this.tempDir.resolve("resident.bin");
+		java.nio.ByteBuffer bytes = java.nio.ByteBuffer.allocate(side * (DOUBLES ? 8 : 4))
+			.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+		for (int i = 0; i < side; i++) {
+			if (DOUBLES) {
+				bytes.putDouble(7.0);
+			}
+			else {
+				bytes.putFloat(7.0f);
+			}
+		}
+		Files.write(file, bytes.array());
+		String program = residencyWriters(side, TYPE, file.toString());
 		String oracle = run(compileWithVec(program, false, false));
-		assertThat(oracle).contains("resident ").contains("vec-matvec-into ");
+		assertThat(oracle).contains("resident ").contains("vec-matvec-into ").contains("read-sequence ");
 		assertThat(run(compileWithVec(program, true, false))).as("--gpu").isEqualTo(oracle);
 		// The --simd leg against a --simd oracle, as in the interpreter's test: the lane
 		// sum folds in its own order, and the device must be the only variable.
