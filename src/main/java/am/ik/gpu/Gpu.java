@@ -552,23 +552,28 @@ public final class Gpu {
 	}
 
 	/**
-	 * Imposes a residency budget in bytes on the CUDA device, or {@code -1} to restore
-	 * the derived one. Package-private and for the tests; a no-op on any other device.
+	 * Imposes a residency budget in bytes on the device, or {@code -1} to restore the
+	 * derived one. Package-private and for the tests.
 	 * @param bytes the budget, or -1
 	 */
 	static void residentBudget(long bytes) {
-		if (Probe.DEVICE instanceof CudaGemm cuda) {
+		GpuDevice device = Probe.DEVICE;
+		if (device instanceof CudaGemm cuda) {
 			cuda.residentBudget(bytes);
+		}
+		else if (device instanceof MetalGemm metal) {
+			metal.residentBudget(bytes);
 		}
 	}
 
 	/**
-	 * The CUDA device's residency cache, for the tests' hit and miss counts, or
-	 * {@code null} on any other device.
+	 * The device's residency cache, for the tests' hit and miss counts, or {@code null}
+	 * with no device.
 	 * @return the cache, or null
 	 */
-	static @Nullable CudaResidency residency() {
-		return Probe.DEVICE instanceof CudaGemm cuda ? cuda.residency() : null;
+	static @Nullable DeviceResidency residency() {
+		GpuDevice device = Probe.DEVICE;
+		return device != null ? device.residency() : null;
 	}
 
 	/**
@@ -1025,17 +1030,19 @@ public final class Gpu {
 	}
 
 	/**
-	 * The output element count of a strided shape, or -1 when the shape is one this
-	 * library will not walk -- an empty, over-deep or over-large one.
-	 */
-	/**
 	 * Whether a {@linkplain #rngFill generator fill} of {@code n} elements is worth a
 	 * round trip at all -- the driver-free size predicate, re-asked by the call itself.
+	 * Answers with the pooled CUDA constant like every other {@code worth}, and for the
+	 * same reason: it must cost nothing and answer the same before and after the probe.
+	 * (It read the threshold IN FORCE until 2026-08-22, which made it {@code false} at
+	 * every size on a Mac -- where the fill is not a member -- and ran the probe from a
+	 * predicate documented as driver-free; {@code GpuDeclineTest} caught it the first
+	 * time it ran on one.)
 	 * @param n how many elements the fill writes
 	 * @return {@code true} when the fill is above the size threshold
 	 */
 	public static boolean worthRng(long n) {
-		return n >= Probe.RNG_MIN_ELEMENTS;
+		return n >= RNG_POOLED_MIN_ELEMENTS;
 	}
 
 	/**
@@ -1157,16 +1164,18 @@ public final class Gpu {
 	 * since -- in which case this call uploads it and every later call finds it there.
 	 * The first offer of a matrix declines and costs nothing; a matrix the program
 	 * rewrites between calls is never uploaded and never pays for the trip it would lose.
-	 * Every other operand and result follows the ordinary residency rule. On a device
-	 * that keeps no resident copies (Metal, today) the member declines outright.
+	 * Every other operand and result follows the ordinary residency rule. On Metal the
+	 * same rule holds at {@code float} only, from a higher threshold (the floor is per
+	 * command buffer there; {@code MetalGemm}).
 	 *
 	 * <p>
 	 * The accumulator is a {@code double} at both widths and only the store narrows,
-	 * which is the scalar defun's rule: at {@code #f} the product of two elements is
-	 * exact in it, so the result differs from the defun only where the ORDER of a double
-	 * sum crosses a single-float rounding boundary (measured: never, over 1024 rows of
-	 * 768); at {@code #d} the fused multiply-add and the warp's tree are the product's
-	 * own few-ulp story. Neither is asserted as byte-identity.
+	 * which is the scalar defun's rule (on Metal, which has no {@code double}, a
+	 * compensated float-float pair that lands on the same bits): at {@code #f} the
+	 * product of two elements is exact in it, so the result differs from the defun only
+	 * where the ORDER of a double sum crosses a single-float rounding boundary (measured:
+	 * never, over 1024 rows of 768); at {@code #d} the fused multiply-add and the warp's
+	 * tree are the product's own few-ulp story. Neither is asserted as byte-identity.
 	 * @param w the matrix, row-major, elements starting at {@code offsetW}
 	 * @param offsetW the index of {@code w}'s first element
 	 * @param x the vector, elements starting at {@code offsetX}

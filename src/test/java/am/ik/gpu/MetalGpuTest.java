@@ -3,12 +3,16 @@ package am.ik.gpu;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * {@link GpuTest}'s Apple counterpart: the half of {@code am.ik.gpu} that needs a METAL
@@ -36,7 +40,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code gemm.metal} argues why, and this asserts it. (3) BOTH product routes compute,
  * because the tiled kernel is otherwise unreachable above the MPS threshold on any
  * machine that has MPS, which is every machine that has Metal. (4) The axis fold declines
- * at every size, which is the guard on a measured refusal.
+ * at every size, which is the guard on a measured refusal. (5) The GEMV lands on the
+ * double-accumulated oracle's bits WITHOUT a double -- the compensated accumulator's
+ * claim -- and is taken only on the second unwritten sight of its matrix, and the
+ * resident set holds that matrix and nothing else -- a measured decision -- with the
+ * budget bounding it, a write invalidating it and a collected array freeing it.
  */
 @EnabledIf("am.ik.gpu.MetalGpuTest#aMetalGpuIsAvailable")
 class MetalGpuTest {
@@ -48,6 +56,13 @@ class MetalGpuTest {
 	private static MetalGemm device() {
 		return (MetalGemm) java.util.Objects.requireNonNull(Gpu.device());
 	}
+
+	/**
+	 * The tests that assert on free device memory or on the resident set hold this, so
+	 * they never overlap each other: {@code currentAllocatedSize} and the cache are
+	 * properties of the device, not of the thread.
+	 */
+	private static final String DEVICE_MEMORY = "am.ik.gpu.device-memory";
 
 	/**
 	 * The smallest square product this machine will actually accept, times a safety
@@ -424,6 +439,7 @@ class MetalGpuTest {
 	}
 
 	@Test
+	@ResourceLock(DEVICE_MEMORY)
 	void aRunOfCallsSettlesTheBufferPoolRatherThanGrowingIt() {
 		// The Metal half owns a POOL where the CUDA half borrows the driver's, so the
 		// leak question is a different one: not "is every buffer freed" but "does the
@@ -457,6 +473,7 @@ class MetalGpuTest {
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_MAP_F32);
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_BCAST_F32);
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GATHER_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GEMV_F32);
 		// The op-code mirrors, whose other halves are Gpu.MAP_* / Gpu.BIN_* and gemm.cu.
 		// Nothing links the three, so this is the only thing that notices a slip.
 		assertThat(msl).contains("case " + Gpu.MAP_ERF + ": return erf1(x);");
@@ -465,6 +482,288 @@ class MetalGpuTest {
 		// omission: it must not reappear without the measurement being redone.
 		assertThat(msl).doesNotContain("kernel void fold_f32");
 		assertThat(device().thresholds().fold()).isEqualTo(Long.MAX_VALUE);
+		// And the GEMV IS a member here now, from a threshold this machine measured.
+		assertThat(device().thresholds().matvec()).isLessThan(Long.MAX_VALUE);
+		assertThat(Gpu.matvecMinElements()).isEqualTo(device().thresholds().matvec());
+	}
+
+	// --- the matrix-by-vector product (vec:matvec, 2026-08-22, on Metal) -------------
+	// The one member whose accept-or-decline is RESIDENCY rather than size, exactly as on
+	// CUDA: the first sight of a matrix declines and leaves a mark, the second uploads
+	// it, every later one finds it, and a write in between starts the count again. The
+	// shapes are sized off the threshold IN FORCE, which on this backend is sixteen
+	// times CUDA's.
+
+	/** The side of a square matrix comfortably over the GEMV threshold in force. */
+	private static int matvecSide() {
+		return 16 * (int) Math.ceil(Math.sqrt(2.0 * Gpu.matvecMinElements()) / 16);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aMatrixByVectorProductIsTakenOnlyOnceItsMatrixHasBeenOfferedTwiceUnwritten() {
+		DeviceResidency residency = device().residency();
+		Gpu.releaseResident();
+		int side = matvecSide();
+		float[] w = new float[side * side], x = new float[side], y = new float[side], oracle = new float[side];
+		// Exact small integers: a reordered sum of them is exact too.
+		for (int i = 0; i < w.length; i++) {
+			w[i] = (i % 7) - 3;
+		}
+		for (int j = 0; j < side; j++) {
+			x[j] = (j % 5) - 2;
+		}
+		for (int r = 0; r < side; r++) {
+			float acc = 0;
+			for (int j = 0; j < side; j++) {
+				acc += w[r * side + j] * x[j];
+			}
+			oracle[r] = acc;
+		}
+		// First sight: declined, nothing moved, nothing resident.
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, side, side)).isFalse();
+		assertThat(y).containsOnly(0.0f);
+		assertThat(Gpu.residentBytes()).isZero();
+		// Second sight, unwritten: uploaded, computed exactly, and the matrix stays.
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, side, side)).isTrue();
+		assertThat(y).isEqualTo(oracle);
+		assertThat(Gpu.residentBytes()).isGreaterThanOrEqualTo((long) side * side * Float.BYTES);
+		// Third: the matrix is a hit.
+		long hits = residency.hits();
+		java.util.Arrays.fill(y, 0.0f);
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, side, side)).isTrue();
+		assertThat(residency.hits()).isGreaterThan(hits);
+		assertThat(y).isEqualTo(oracle);
+		// Written: the copy is dropped, the next sight is a first sight again and
+		// declines, and the one after that uploads the NEW bytes.
+		w[0] = 100;
+		Gpu.written(w);
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, side, side)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, side, side)).isTrue();
+		oracle[0] += (100 - (-3)) * x[0];
+		assertThat(y).isEqualTo(oracle);
+	}
+
+	@Test
+	void aSingleFloatMatrixByVectorProductLandsOnTheDoubleAccumulatedOracleWithoutADouble() {
+		// gemm.metal's claim: a float-float compensated accumulator carries ~48 bits, so
+		// against the scalar defun's rule (a double sum, narrowed on the store) only the
+		// rare row whose exact sum sits within ~2^-48 of a float rounding boundary can
+		// differ -- measured, none of 1024 -- where a plain float sum differs on three
+		// rows in four. The same pin as the CUDA kernel's double earns.
+		int rows = 1024, cols = (int) ((Gpu.matvecMinElements() + rows - 1) / rows) + 256;
+		float[] w = new float[rows * cols], x = new float[cols], y = new float[rows], oracle = new float[rows];
+		for (int i = 0; i < w.length; i++) {
+			w[i] = (float) Math.sin(i * 0.37);
+		}
+		for (int j = 0; j < cols; j++) {
+			x[j] = (float) Math.cos(j * 0.11);
+		}
+		double scale = 0;
+		for (int r = 0; r < rows; r++) {
+			double acc = 0;
+			for (int j = 0; j < cols; j++) {
+				acc += (double) w[r * cols + j] * x[j];
+			}
+			oracle[r] = (float) acc;
+			scale = Math.max(scale, Math.abs(acc));
+		}
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		int identical = 0;
+		for (int r = 0; r < rows; r++) {
+			assertThat(y[r]).as("row %d", r).isCloseTo(oracle[r], within((float) (scale * 1e-6)));
+			if (y[r] == oracle[r]) {
+				identical++;
+			}
+		}
+		assertThat(identical).as("rows bit-identical to the double-accumulated oracle").isGreaterThan(rows * 99 / 100);
+	}
+
+	@Test
+	void everyMatrixByVectorOperandIncludingTheResultIsReadFromItsOwnOffset() {
+		// The compiled representation keeps a header inside each array: the matrix's
+		// elements start at 3, a vector's at 2, and the result's header must survive.
+		int side = matvecSide();
+		float[] w = new float[3 + side * side], x = new float[2 + side], y = new float[2 + side];
+		w[0] = 2;
+		w[1] = side;
+		w[2] = side;
+		x[0] = 1;
+		x[1] = side;
+		y[0] = 1;
+		y[1] = side;
+		for (int i = 0; i < side * side; i++) {
+			w[3 + i] = (i % 11) - 5;
+		}
+		for (int j = 0; j < side; j++) {
+			x[2 + j] = (j % 3) - 1;
+		}
+		assertThat(Gpu.matvec(w, 3, x, 2, y, 2, side, side)).isFalse();
+		assertThat(Gpu.matvec(w, 3, x, 2, y, 2, side, side)).isTrue();
+		assertThat(y[0]).isEqualTo(1.0f);
+		assertThat(y[1]).isEqualTo((float) side);
+		for (int r = 0; r < side; r++) {
+			float acc = 0;
+			for (int j = 0; j < side; j++) {
+				acc += w[3 + r * side + j] * x[2 + j];
+			}
+			assertThat(y[2 + r]).as("row %d", r).isEqualTo(acc);
+		}
+	}
+
+	@Test
+	void everyMatrixByVectorDeclineConditionStillDeclinesWithADevicePresent() {
+		int side = matvecSide();
+		float[] w = new float[side * side], x = new float[side], y = new float[side];
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 64, 64)).as("below the threshold").isFalse();
+		assertThat(Gpu.matvec(w, 0, new float[side - 1], 0, y, 0, side, side)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, new float[side - 1], 0, side, side)).isFalse();
+		assertThat(Gpu.matvec(w, 1, x, 0, y, 0, side, side)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 1, y, 0, side, side)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 1, side, side)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 0, side)).isFalse();
+		// And the double half is a hard decline however often the matrix is offered.
+		double[] wd = new double[side * side], xd = new double[side], yd = new double[side];
+		assertThat(Gpu.matvec(wd, 0, xd, 0, yd, 0, side, side)).isFalse();
+		assertThat(Gpu.matvec(wd, 0, xd, 0, yd, 0, side, side)).isFalse();
+		assertThat(Gpu.matvec(wd, 0, xd, 0, yd, 0, side, side)).isFalse();
+		assertThat(y).containsOnly(0.0f);
+		assertThat(yd).containsOnly(0.0);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aRunOfMatrixByVectorProductsSettlesThePoolRatherThanGrowingIt() {
+		// A resident matrix, a resident vector and a result slab that is replaced every
+		// call and recycled at the next: the steady state is three slabs, and the pool
+		// does not grow over a thousand calls.
+		MetalGemm gemm = device();
+		Gpu.releaseResident();
+		int side = matvecSide();
+		float[] w = new float[side * side], x = new float[side], y = new float[side];
+		assertThat(gemm.gemvF(w, 0, x, 0, y, 0, side, side)).isFalse();
+		assertThat(gemm.gemvF(w, 0, x, 0, y, 0, side, side)).isTrue();
+		for (int i = 0; i < 20; i++) {
+			assertThat(gemm.gemvF(w, 0, x, 0, y, 0, side, side)).isTrue();
+		}
+		long before = gemm.freeDeviceMemory();
+		for (int i = 0; i < 1000; i++) {
+			assertThat(gemm.gemvF(w, 0, x, 0, y, 0, side, side)).isTrue();
+		}
+		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(64L << 20);
+	}
+
+	// --- device residency, on Metal (2026-08-22) -------------------------------------
+	// The same DeviceResidency the CUDA half keeps, over this backend's own pool -- but
+	// holding ONE kind of array, the matrix of an accepted GEMV. MetalGemm's class
+	// comment has the measurement: on unified memory an upload is a memcpy, and a slab
+	// held out of the pool costs the pool a fresh one, so keeping every operand and
+	// result resident was slower than the pure pool at every cap. These pin that
+	// decision and the three properties of the set that is kept: the budget bounds it
+	// and a release gives the slabs back to the pool, a collected array frees its copy,
+	// and nothing but a GEMV matrix ever enters it.
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void onlyTheMatrixOfAnAcceptedGemvIsKeptResident() {
+		DeviceResidency residency = device().residency();
+		Gpu.releaseResident();
+		int n = (int) Gpu.mapMinElements() * 2;
+		float[] a = new float[n], c = new float[n], d = new float[n];
+		long hits = residency.hits();
+		// An element-wise member's operand and result are scratch: nothing is recorded,
+		// and the same operand again is copied in again rather than found.
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
+		assertThat(Gpu.residentBytes()).isZero();
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, d, 0, n)).isTrue();
+		assertThat(Gpu.map(Gpu.MAP_LOG, c, 0, d, 0, n)).isTrue();
+		assertThat(residency.hits()).isEqualTo(hits);
+		assertThat(Gpu.residentBytes()).isZero();
+		int side = square();
+		float[] l = new float[side * side], r = new float[side * side], out = new float[side * side];
+		assertThat(Gpu.multiply(l, 0, r, 0, out, 0, side, side, side)).isTrue();
+		assertThat(Gpu.multiply(l, 0, r, 0, out, 0, side, side, side)).isTrue();
+		assertThat(residency.hits()).isEqualTo(hits);
+		assertThat(Gpu.residentBytes()).isZero();
+		// A GEMV's matrix, on its second sight, is.
+		int m = matvecSide();
+		float[] w = new float[m * m], x = new float[m], y = new float[m];
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, m, m)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, m, m)).isTrue();
+		assertThat(Gpu.residentBytes()).isEqualTo((long) m * m * Float.BYTES);
+		// And its vector and result are not: a third call finds exactly the matrix.
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, m, m)).isTrue();
+		assertThat(residency.hits()).isEqualTo(hits + 1);
+		assertThat(Gpu.residentBytes()).isEqualTo((long) m * m * Float.BYTES);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void theResidentSetIsBoundedByItsBudgetAndAReleaseGivesTheSlabsBack() {
+		DeviceResidency residency = device().residency();
+		MetalGemm gemm = device();
+		Gpu.releaseResident();
+		// 8 MB a matrix, at this backend's threshold.
+		int rows = 1024, cols = (int) ((Gpu.matvecMinElements() + rows - 1) / rows);
+		long matrix = (long) rows * cols * Float.BYTES;
+		long budget = 4 * matrix;
+		Gpu.residentBudget(budget);
+		List<float[]> reachable = new ArrayList<>();
+		float[] x = new float[cols], y = new float[rows];
+		try {
+			for (int i = 0; i < 16; i++) {
+				float[] w = new float[rows * cols];
+				reachable.add(w);
+				assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isFalse();
+				assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+				assertThat(Gpu.residentBytes()).as("after matrix %d", i).isLessThanOrEqualTo(budget);
+			}
+			assertThat(Gpu.residentBytes()).isEqualTo(budget);
+			assertThat(residency.budget()).isEqualTo(budget);
+			long before = gemm.freeDeviceMemory();
+			Gpu.releaseResident();
+			assertThat(Gpu.residentBytes()).isZero();
+			// The slabs go back to the POOL rather than to the device, so free memory
+			// does not move: what residency held out is now on the free lists, and a
+			// later call takes it from there.
+			assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(64L << 20);
+			// Released, so the next sight is a first sight again.
+			assertThat(Gpu.matvec(reachable.get(0), 0, x, 0, y, 0, rows, cols)).isFalse();
+		}
+		finally {
+			Gpu.residentBudget(-1);
+			Gpu.releaseResident();
+		}
+		assertThat(reachable).hasSize(16);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aCollectedHostArrayTakesItsResidentCopyWithIt() throws InterruptedException {
+		Gpu.releaseResident();
+		int rows = 1024, cols = (int) ((Gpu.matvecMinElements() + rows - 1) / rows);
+		float[] keep = new float[rows * cols], x = new float[cols], y = new float[rows];
+		assertThat(Gpu.matvec(keep, 0, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(keep, 0, x, 0, y, 0, rows, cols)).isTrue();
+		long held = Gpu.residentBytes();
+		assertThat(held).isEqualTo((long) rows * cols * Float.BYTES);
+		for (int i = 0; i < 8; i++) {
+			float[] w = new float[rows * cols];
+			assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isFalse();
+			assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, cols)).isTrue();
+		}
+		assertThat(Gpu.residentBytes()).isGreaterThan(held);
+		// Eight matrices nobody can reach any more: once the collector has them, the
+		// next call's drain gives their slabs back, and only the reachable one is left.
+		long after = -1;
+		for (int attempt = 0; attempt < 20 && after != held; attempt++) {
+			System.gc();
+			Thread.sleep(20);
+			assertThat(Gpu.matvec(keep, 0, x, 0, y, 0, rows, cols)).isTrue();
+			after = Gpu.residentBytes();
+		}
+		assertThat(after).isEqualTo(held);
 	}
 
 	private String resource(String name) throws IOException {

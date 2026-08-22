@@ -104,9 +104,10 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * {@code y = W x} over a row-major {@code rows x cols} matrix -- the GEMV behind
 	 * {@code vec:matvec}, and the one member whose worth depends on RESIDENCY rather than
 	 * on size: a matrix-by-vector product is one pass over {@code W}, so the device wins
-	 * only when {@code W} is already there. The CUDA half therefore takes it only once
-	 * the matrix has been offered twice without being written ({@link CudaGemm}); the
-	 * Metal half keeps no resident copies yet and declines.
+	 * only when {@code W} is already there. Both halves therefore take it only once the
+	 * matrix has been offered twice without being written ({@link CudaGemm#gemv},
+	 * {@link MetalGemm#gemvF}) -- the Metal one at {@code float} only, like everything
+	 * else there.
 	 * @return {@code true} when {@code y} was filled
 	 */
 	boolean gemv(double[] w, int ow, double[] x, int ox, double[] y, int oy, int rows, int cols);
@@ -115,24 +116,23 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 
 	/**
 	 * A host array this device may hold a resident copy of has been written, so that copy
-	 * is stale. The CUDA half keeps such copies ({@link CudaResidency}); the Metal half
-	 * keeps none yet and this is a no-op there, which is why the default is empty rather
-	 * than abstract.
+	 * is stale. Both halves keep such copies ({@link DeviceResidency}: a CUDA buffer on
+	 * one, a pooled {@code MTLBuffer} on the other), and every in-place write on either
+	 * interceptor reaches here through {@link Gpu#written}.
 	 * @param host the host array that was written
 	 */
-	default void written(Object host) {
-	}
+	void written(Object host);
 
 	/**
-	 * Bytes held by resident copies right now; {@code 0} on a device that keeps none.
+	 * Bytes held by resident copies right now.
 	 * @return the resident total, in bytes
 	 */
-	default long residentBytes() {
-		return 0;
-	}
+	long residentBytes();
 
-	/** Drops and frees every resident copy. A no-op on a device that keeps none. */
-	default void releaseResident() {
-	}
+	/** Drops and frees every resident copy. */
+	void releaseResident();
+
+	/** The cache behind {@link #written}, for the tests' hit and miss counts. */
+	DeviceResidency residency();
 
 }

@@ -83,6 +83,8 @@ warm-up, and the sub-millisecond rows still move by ~20% run to run.
 | `MtlNiProbe.java` | does an `objc_msgSend` downcall survive GraalVM native-image next to `-H:+VectorAPISupport`? |
 | `MtlPhase5.java` | PHASE 5's own probe, and the only Metal file that compiles the CHECKED-IN `src/main/resources/am/ik/gpu/gemm.metal` rather than a string of its own: a syntax error or a missing MSL builtin fails here rather than at run time. Also checks every kernel against a Java oracle and measures the crossovers that set this backend's thresholds. |
 | `MtlBreakdown.java` | where the per-call microseconds GO, which is the question phase 5's design turned on: MPS object creation against a cached one, and a fresh `MTLBuffer` against a pooled one -- the measurement that made a buffer pool mandatory. Also checks that `rowBytes = columns * 4` is accepted by MPS on a shape whose `rowBytesFromColumns:` pads. |
+| `MtlMatvecCrossover.java` | `MatvecCrossover`'s question on Metal (todo-477): where does a resident GEMV beat the `--simd` lane kernel on this machine, does the cold trip ever pay (no: it is a memcpy of the bytes the CPU would have streamed), and -- MSL having no `double` -- what accumulator lands on the scalar defun's bits? Three device columns per shape (cold / resident / kernel) over two accumulators, a plain float sum and a COMPENSATED float-float pair, the latter compiled with and without `#pragma METAL fp contract(off)`; then both against the double-accumulated oracle at 1024x768. Answer (`.kb/gpu.md`, "Residency and the GEMV on this backend"): the compensated pair is bit-identical on 1024 of 1024 rows where the float sum is on 229, at no cost; resident wins from 2^21; cold never. Its CPU column is `matvec-baseline.lisp` under `--simd`, run on the same machine. |
+| `MtlGemvInSitu.java` | the SHIPPED route (`Gpu.matvec` over `target/classes`, residency and pool included) as a program calls it: the per-call distribution back to back, and the cost of the same resident call after a CPU gap of 0-10 ms -- the decode-loop question. Answer: a resident head is ~205 us median back to back and ~800 after a 2.5 ms gap, because the GPU lowers its clocks after ~1 ms idle; which is why `examples/llama2` is 1.0x on this machine with the flag. Run from the repository root with `-cp target/classes`. |
 | `AccelerateProbe.java` | no GPU at all: a tuned BLAS is plain C, costs no dependency, and unlike Metal it has a double. How fast is it, is one PRESENT, and is the one that is present actually TUNED? Walks a candidate list (Accelerate, NVPL, OpenBLAS, MKL, distro `libblas`), identifies what it bound and prints a verdict against measured throughput. Runs on either machine -- the probe that reframes the Apple plan, and the one that stopped it being reframed the same way on Linux. |
 
 ## Running them
@@ -160,6 +162,9 @@ java --enable-native-access=ALL-UNNAMED MtlMps.java
 java --enable-native-access=ALL-UNNAMED MtlMpsDiff.java
 java --enable-native-access=ALL-UNNAMED AccelerateProbe.java
 java --enable-native-access=ALL-UNNAMED MtlCompileCost.java   # run it three times
+java -jar $JAR matvec-baseline.lisp -o Mv.class --simd && java --add-modules jdk.incubator.vector Mv
+java --enable-native-access=ALL-UNNAMED MtlMatvecCrossover.java
+(cd ../.. && java --enable-native-access=ALL-UNNAMED -cp target/classes .todo/123-gpu-acceleration/MtlGemvInSitu.java)
 ```
 
 `Mtl.java` and `MtlSpike.java` are picked up automatically, same rule as above. None of
@@ -600,6 +605,118 @@ MTLCreateSystemDefaultDevice   13.9 ms | newLibraryWithSource    2.6 ms | same s
 MTLCreateSystemDefaultDevice   12.2 ms | newLibraryWithSource    2.7 ms | same source again    0.1 ms | 1st pipeline   0.9 ms | 2nd pipeline   0.1 ms
 MTLCreateSystemDefaultDevice   14.7 ms | newLibraryWithSource    2.9 ms | same source again    0.1 ms | 1st pipeline   0.9 ms | 2nd pipeline   0.1 ms
 ```
+
+### The GEMV on Metal (2026-08-22, todo-477), same machine
+
+The CPU column first -- `matvec-baseline.lisp` under `--simd` on the JVM class output, M4
+Max (the GB10's own column is in `.kb/gpu.md`'s GEMV section; this CPU is 1.5-2x faster at
+every shape, which moves the crossover as much as the floor does):
+
+```
+$ java --add-modules jdk.incubator.vector Mv     # matvec-baseline.lisp, JVM --simd, M4 Max
+64 x 64 SINGLE-FLOAT: 1.5 us/call          64 x 64 DOUBLE-FLOAT: 1.5 us/call
+128 x 128 SINGLE-FLOAT: 1.5 us/call        128 x 128 DOUBLE-FLOAT: 2.5 us/call
+192 x 192 SINGLE-FLOAT: 3.5 us/call        192 x 192 DOUBLE-FLOAT: 6.5 us/call
+256 x 256 SINGLE-FLOAT: 5.5 us/call        256 x 256 DOUBLE-FLOAT: 12.5 us/call
+288 x 288 SINGLE-FLOAT: 7.5 us/call        288 x 288 DOUBLE-FLOAT: 15.5 us/call
+384 x 384 SINGLE-FLOAT: 14.5 us/call       384 x 384 DOUBLE-FLOAT: 28.5 us/call
+512 x 512 SINGLE-FLOAT: 25.0 us/call       512 x 512 DOUBLE-FLOAT: 55.0 us/call
+768 x 288 SINGLE-FLOAT: 15.0 us/call       768 x 288 DOUBLE-FLOAT: 40.0 us/call
+288 x 768 SINGLE-FLOAT: 20.0 us/call       288 x 768 DOUBLE-FLOAT: 55.0 us/call
+768 x 768 SINGLE-FLOAT: 60.0 us/call       768 x 768 DOUBLE-FLOAT: 130.0 us/call
+1024 x 1024 SINGLE-FLOAT: 100.0 us/call    1024 x 1024 DOUBLE-FLOAT: 233.3 us/call
+1448 x 1448 SINGLE-FLOAT: 233.3 us/call    1448 x 1448 DOUBLE-FLOAT: 500.0 us/call
+1536 x 1536 SINGLE-FLOAT: 266.7 us/call    1536 x 1536 DOUBLE-FLOAT: 566.7 us/call
+2048 x 2048 SINGLE-FLOAT: 500.0 us/call    2048 x 2048 DOUBLE-FLOAT: 1033.3 us/call
+32000 x 288 SINGLE-FLOAT: 800.0 us/call    32000 x 288 DOUBLE-FLOAT: 1733.3 us/call
+256 x 48 SINGLE-FLOAT: 4.0 us/call         256 x 48 DOUBLE-FLOAT: 4.0 us/call
+48 x 256 SINGLE-FLOAT: 1.0 us/call         48 x 256 DOUBLE-FLOAT: 2.0 us/call
+4096 x 4096 SINGLE-FLOAT: 2333.3 us/call   4096 x 4096 DOUBLE-FLOAT: 4333.3 us/call
+
+$ java --enable-native-access=ALL-UNNAMED MtlMatvecCrossover.java
+device: Apple M4 Max
+
+rows x cols     elems |  comp cold comp resid  comp kern | acc32 resid acc32 kern
+64x64            4096 |       79.7       85.5       87.8 |       78.9       77.4
+128x128         16384 |       83.6       79.0       77.0 |       76.8       79.0
+192x192         36864 |       79.8       75.7       78.7 |       78.9       78.3
+256x256         65536 |       85.2       80.9       83.1 |       76.0       78.3
+288x288         82944 |       86.6       78.2       76.1 |       80.5       78.7
+384x384        147456 |       92.1       77.1       69.5 |       78.9       79.2
+512x512        262144 |       99.7       77.7       80.0 |       79.5       80.6
+768x288        221184 |       99.0       77.8       84.0 |       78.9       78.8
+288x768        221184 |      103.9       88.5       78.6 |       83.3       76.4
+768x768        589824 |      128.8       90.5       85.5 |       90.3       77.0
+1024x1024     1048576 |      160.7       90.1       77.4 |       74.5       86.6
+1448x1448     2096704 |      228.8       93.4       96.5 |       94.0       93.0
+1536x1536     2359296 |      243.1       94.4       92.9 |       99.8       88.1
+2048x2048     4194304 |      364.5      104.8      100.8 |      102.1      100.2
+32000x288     9216000 |      753.0      185.2      176.7 |      184.4      181.2
+256x48          12288 |       79.0       82.1       82.5 |       80.3       81.0
+48x256          12288 |       78.9       82.0       77.1 |       78.9       77.8
+4096x4096    16777216 |     1310.4      249.1      273.8 |      256.5      276.2
+
+1024x768 f32 against the scalar defun's oracle (double acc, narrowed):
+  compensated, contract off: 1024/1024 rows bit-identical, worst 0.00e+00 of the largest cell
+  compensated, default:      1024/1024 rows bit-identical, worst 0.00e+00
+  float accumulator:         229/1024 rows bit-identical, worst 2.87e-07
+  --simd lanes:              144/1024 rows bit-identical, worst 5.73e-07
+```
+
+Read the three columns against the floor: "kern" IS the floor (~77 us a command buffer)
+until the matrix is several megabytes, "resid" adds the x copy and the y copy and is within
+noise of it, and "cold" adds a memcpy of the whole matrix -- 753 us at the head against the
+CPU's 800 for the same bytes, so the cold trip can never pay here and the two-sight rule is
+not a refinement but the member. The accumulator block is the reason the Metal GEMV lands
+on the defun's bits without a `double`: the compensated float-float pair is bit-identical on
+every row (with or without the contraction pragma), the plain float sum on 229.
+
+```
+$ java --enable-native-access=ALL-UNNAMED -cp target/classes .todo/123-gpu-acceleration/MtlGemvInSitu.java
+device: Apple M4 Max (Metal, unified memory, 107 GB working set)
+-- the shipped route back to back, us per call (the first shape pays the clock ramp) --
+    32000x288  round 0: min  299.2  median  381.8  mean  394.8  p90  428.2
+    32000x288  round 1: min  251.3  median  366.8  mean  364.9  p90  437.1
+    32000x288  round 2: min  193.1  median  227.7  mean  235.5  p90  264.5
+    4096x4096  round 0: min  268.3  median  297.0  mean  298.2  p90  307.4
+    4096x4096  round 1: min  277.4  median  291.0  mean  293.3  p90  295.7
+    4096x4096  round 2: min  270.1  median  291.6  mean  293.0  p90  298.4
+    1536x1536  round 0: min  113.9  median  126.7  mean  134.0  p90  146.8
+    1536x1536  round 1: min  106.1  median  120.3  mean  122.0  p90  125.3
+    1536x1536  round 2: min  105.9  median  118.3  mean  118.2  p90  119.7
+    2048x2048  round 0: min  108.2  median  125.7  mean  126.6  p90  128.5
+    2048x2048  round 1: min  111.4  median  124.5  mean  125.5  p90  126.5
+    2048x2048  round 2: min  109.5  median  124.7  mean  125.3  p90  126.4
+    1536x1536  round 0: min  103.8  median  115.5  mean  115.6  p90  118.9
+    1536x1536  round 1: min  106.8  median  115.9  mean  116.7  p90  118.7
+    1536x1536  round 2: min  105.6  median  117.0  mean  116.8  p90  118.8
+    32000x288  round 0: min  160.9  median  184.1  mean  181.6  p90  194.6
+    32000x288  round 1: min  157.8  median  164.2  mean  166.8  p90  170.6
+    32000x288  round 2: min  156.8  median  163.7  mean  166.0  p90  165.9
+-- the same resident call after a CPU gap, mean us per call --
+    1536x1536  gap     0 us -> call  116.6 us
+    1536x1536  gap   100 us -> call  108.7 us
+    1536x1536  gap   500 us -> call  150.5 us
+    1536x1536  gap  1000 us -> call  174.0 us
+    1536x1536  gap  2500 us -> call  475.6 us
+    1536x1536  gap  5000 us -> call  464.2 us
+    1536x1536  gap 10000 us -> call  606.9 us
+    32000x288  gap     0 us -> call  210.7 us
+    32000x288  gap   100 us -> call  204.2 us
+    32000x288  gap   500 us -> call  242.5 us
+    32000x288  gap  1000 us -> call  351.9 us
+    32000x288  gap  2500 us -> call  807.2 us
+    32000x288  gap  5000 us -> call  825.3 us
+    32000x288  gap 10000 us -> call  982.3 us
+```
+
+Two things to read out of it. The shipped route is the probe's best-of plus its own
+bookkeeping and the clock's spread -- medians of ~115 us at 1536x1536, ~125 at 2048x2048,
+~165-205 at the head -- and the FIRST shape a process measures pays the ramp (the head:
+382 -> 367 -> 228 across three rounds, and 164 once warm). And the gap table is the ceiling
+on a decode loop: the same resident call costs ~2.5x more after 2.5 ms of CPU quiet, because
+the GPU lowers its clocks after about a millisecond idle, which is why `examples/llama2`
+(one head GEMV per 2.7 ms token) is 1.0x on this machine with the flag.
 
 ### The five lines that matter
 

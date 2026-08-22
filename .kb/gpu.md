@@ -43,6 +43,14 @@ matrix-by-vector product pays on a device only when its matrix is already there,
 accumulator that puts the single-float result on the defun's own bits, the
 `read-sequence` invalidation gap the round found and closed, and the llama2 measurement:
 1.3x over a `--simd` that had itself become 2.5x faster than its README recorded.
+**THE METAL HALF OF BOTH (2026-08-22, todo-477)** is the round after that, on an M4 Max:
+"Residency and the GEMV on this backend" in the Metal section is its record -- the GEMV as
+a member there from `2^21` with a COMPENSATED float accumulator that lands on the defun's
+bits without a `double`, residency measured and kept for ONE kind of array (the GEMV's
+matrix) because every other kind was slower resident than copied on unified memory, and
+the finding that sets the ceiling on a decode loop there: the GPU's idle-clock penalty,
+~0.5 ms on the first command buffer after a millisecond of quiet, which makes llama2 1.0x
+on that machine with the flag and the story unchanged.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover,ElementwiseCrossover,
@@ -576,6 +584,8 @@ what is NOT shared is the width, three of the thresholds and one whole tier.
 | element-wise tier | twelve members | the same twelve |
 | broadcast + axes transpose | yes | yes |
 | axis fold (`sum`/`amax`/`amin` `:axis`) | yes | **no, measured** |
+| `vec:matvec` (GEMV, matrix resident) | from `2^17`, double accumulator | from **`2^21`**, **compensated float** accumulator |
+| resident set | every operand and result | **the GEMV's matrix only, measured** |
 | product threshold | `2^17` | `2^22` |
 | element-wise threshold | `2^14` elements | `2^17` |
 | broadcast / gather threshold | `2^15` output elements | `2^18` |
@@ -727,8 +737,9 @@ So the buffers are size-classed by power of two (floor 4 KB), reused, and bounde
 quarter of `recommendedMaxWorkingSetSize`. **This is sound with no invalidation rule of
 any kind, which is what separates it from residency**: they are SCRATCH -- fully
 overwritten on the way in, fully read on the way out -- and no host array's device copy
-outlives the call. Residency, which WOULD need the invalidation rule enumerated above, is
-still not built on either backend.
+outlives the call. (Since todo-477 ONE kind of slab is taken out of the pool and held
+under the invalidation rule: the matrix of an accepted GEMV, "Residency and the GEMV on
+this backend" below. Everything else is still scratch, and that section says why.)
 
 The leak question changes shape with it: not "is every buffer freed" but "does the pool
 reach a steady state", which `MetalGpuTest.aRunOfCallsSettlesTheBufferPoolRatherThanGrowingIt`
@@ -870,6 +881,147 @@ a different algorithm and lands ~4.5 ulps away at f64.
 **The product is the f32 story and nothing new**: 3.2e-7 relative from the f64 oracle at
 n=208, which is what f32 costs and what a CPU f32 accumulation of the same product also
 costs. `.kb/linalg-simd.md`'s single-precision reduction contract already covers it.
+
+### Residency and the GEMV on this backend (2026-08-22, todo-477)
+
+The two CUDA rounds above this one -- residency (todo-474) and the GEMV (todo-475) --
+were built on a Linux box and left the Metal half declining `vec:matvec` at every size,
+because a GEMV pays only over a resident matrix and this backend kept no resident copies.
+This round is their Apple half, measured on an M4 Max (macOS 26.3.1, Oracle GraalVM
+25.0.3), and three of its four findings are this platform's own.
+
+**The accumulator: compensated, and on the defun's bits without a `double`.** gemm.cu sums
+in double at both widths and narrows on the store, which is the scalar `vec.lisp` defun's
+rule and what puts the CUDA result on its bits (1024 of 1024 rows). MSL has no double, and
+a plain float sum (the `--simd` lane kernel's width, a different order) lands on 229 of
+1024 rows (worst 2.9e-7). So `gemv_f32` keeps its running sum as a float-float PAIR: the
+product's rounding error recovered exactly with an fma (`p = a*b; pe = fma(a, b, -p)`),
+every addition a TwoSum whose error term goes into the low half, and the SIMD-group fold
+the same pair-wise. The pair carries ~48 bits against a double's 53, and measured at
+1024x768 over inexact data (`MtlMatvecCrossover.java`) it is bit-identical to the
+double-accumulated oracle on **1024 of 1024** rows, with and without
+`#pragma METAL fp contract(off)` (the pragma is kept: it is what makes the error-free
+transforms mean what they say, and the Metal compiler's default happened not to contract
+across statements). It costs nothing the memory-bound pass can see -- the same ~90 us a
+resident call as the plain sum. The interceptor suites' `(probe) (probe)` test -- the
+defun's 16778240 against the lane kernel's 16777984 -- therefore prints the same
+`(16777984 16778240)` under `--gpu --simd` on a Mac as on the GB10, from a kernel with no
+double in it.
+
+**The threshold: `2^21`, re-derived; the cold trip never.** `matvec-baseline.lisp` under
+`--simd` on this machine's JVM (the CPU column; this CPU is 1.5-2x the GB10's at every
+shape) against `MtlMatvecCrossover.java` (shipped route, pooled shared-storage buffers,
+one command buffer a call), f32, us per call, best of many:
+
+| rows x cols | elements | `--simd` | device cold | **resident** | kernel only |
+|---|---|---|---|---|---|
+| 256x256 | 65536 | **5.5** | 85.2 | 80.9 | 83.1 |
+| 288x288 (llama2 q/k/v/o) | 82944 | **7.5** | 86.6 | 78.2 | 76.1 |
+| 512x512 | 262144 | **25.0** | 99.7 | 77.7 | 80.0 |
+| 768x288 (llama2 w1/w3) | 221184 | **15.0** | 99.0 | 77.8 | 84.0 |
+| 768x768 | 589824 | **60.0** | 128.8 | 90.5 | 85.5 |
+| 1024x1024 | 1 M | 100.0 | 160.7 | 90.1 | 77.4 |
+| 1448x1448 | 2.1 M (2^21 - 448) | 233.3 | 228.8 | **93.4** | 96.5 |
+| 1536x1536 | 2.4 M | 266.7 | 243.1 | **94.4** | 92.9 |
+| 2048x2048 | 4.2 M | 500.0 | 364.5 | **104.8** | 100.8 |
+| 32000x288 (llama2 head) | 9.2 M | 800.0 | 753.0 | **185.2** | 176.7 |
+| 4096x4096 | 16.8 M | 2333.3 | 1310.4 | **249.1** | 273.8 |
+
+Read the "kernel only" column first: it IS the ~77 us command-buffer floor until the
+matrix is several megabytes, "resident" adds the x copy and the y copy and sits within
+noise of it, and "cold" adds a memcpy of the whole matrix -- on unified memory an upload
+is a memcpy of the very bytes the CPU kernel would have streamed, so **the cold trip
+cannot pay here at any size** (753 against 800 at the head) and the two-sight rule is not
+a refinement on this backend but the member. The crossover against the CPU is therefore
+the floor's: 1024x1024 is a tie (100 against 90), and `2^21` is where the margin is past
+the noise -- 2.5x at 1448x1448 (448 elements short of it, the measured edge), 2.8x at
+1536x1536, 4.8x at 2048x2048, 4.3x at the head, 9.4x at 4096x4096. Sixteen times the CUDA
+threshold, for the floor's sake. `MetalGemm.MIN_MATVEC_ELEMENTS`; `Gpu.worthMatvec` still
+answers with the CUDA constant (probe-free, as every `worth` does), so between `2^17` and
+`2^21` an interceptor unwraps and the library declines -- the same band as the strided
+tier's, and the same decision not to let `worth` consult the threshold in force.
+
+**In situ, and the idle clock: the finding that sets the ceiling.** `MtlGemvInSitu.java`
+runs the SHIPPED route (`Gpu.matvec` over `target/classes`, residency and pool included)
+the way a program calls it. Back to back the medians are ~115 us at 1536x1536, ~125 at
+2048x2048, ~165-205 at the head and ~295 at 4096x4096 (mins 97-106 / 105-111 / 157-184 /
+250-270 over two runs, i.e. the probe's best-of plus the interceptor's own bookkeeping and
+the clock's spread), and the FIRST shape a process measures pays the ramp (the head:
+368 -> 244 -> 205 over three rounds in one run, 382 -> 367 -> 228 in the other, and 164
+once warm). Then the same resident head with a CPU gap before every call, mean us per call:
+
+| gap before the call | 0 | 100 us | 500 us | 1 ms | **2.5 ms** | 5 ms | 10 ms |
+|---|---|---|---|---|---|---|---|
+| 32000x288, resident | 347 | 351 | 355 | 367 | **792** | 858 | 973 |
+| 1536x1536, resident | 213 | 194 | 193 | 197 | **488** | 528 | 631 |
+
+**This GPU lowers its clocks once it has been idle for more than about a millisecond, and
+the first command buffer after such a gap costs ~0.5 ms more.** A decode loop is exactly
+that shape: one GEMV per token with the attention, RoPE and the sampler between them. So
+`examples/llama2` on this machine -- `stories15M`, 256 greedy tokens, JVM class output,
+three interleaved runs each -- decodes at **376 / 380 / 358 tok/s under `--simd` and
+368 / 370 / 381 under `--gpu --simd`: 1.0x**, the story byte-identical across all six, and the
+in-situ head (the only matrix of that model above the threshold) at 625-670 us against the
+CPU's 780 (`insitu.lisp`-style measurement: 300 small GEMVs as the gap). The per-call
+table above is true and the decode loop cannot collect it. There is no public API to hold
+the clocks up, and keeping the device busy on purpose would be a heater; the acceptance
+the item allowed for -- "if the measurement says the GEMV never pays on Metal, record the
+number and keep the decline" -- is therefore half met: it pays back to back, from `2^21`,
+by 2.5-9x, and it does not pay once per token, so the member is in and the guide says
+both. The README's Mac line says the same in one sentence.
+
+**Residency: measured, and kept for ONE kind of array.** The CUDA half keeps every operand
+and result resident and took a fifth off its training step for it. The first build of
+this round did the same on Metal -- the same `DeviceResidency` (the class `CudaResidency`
+was renamed, because nothing in it is CUDA's), the same weak keys, invalidation and
+two-moment drain, with a dropped entry's slab returned to the POOL rather than freed --
+and measured it on `train-gpt-soseki.lisp` at the notebook's own `*n-embd*` 384 and
+`*block-size*` 256 under `--gpu --simd` on the JVM class output, `(t40 - t5) / 35`, three
+interleaved rounds:
+
+| per training step, M4 Max | s/step | the 40-step run |
+|---|---|---|
+| before this round (pure pool) | **0.103** | 5.38 / 5.39 / 5.39 s |
+| every operand and result resident, cap 1 GB | 0.106-0.108 | 5.63 / 5.65 / 5.67 s |
+| ... cap 256 MB / 64 MB / 16 MB | 0.106 / 0.1055 / 0.1046 | 5.58 / 5.53 / 5.48 s |
+| ... cap 0 (the bookkeeping alone) | 0.1047 | 5.44 s |
+| **the GEMV's matrix only (final)** | **0.104** | 5.34 / 5.40 / 5.48 s (the pure pool the same hour: 5.30 / 5.43 / 5.46) |
+| `--simd`, no device | 0.699 | 29.1 s |
+
+Slower at every cap, by 1-5%, and the chain hits it exists for bought nothing the clock
+could see. The reason is this platform's economics turned around: on unified memory the
+upload residency removes is a memcpy (1.5 MB in ~75 us), while a slab held out of the
+pool for a resident copy costs the pool a FRESH slab for the next call of that size class
+-- and a fresh slab pays its first-touch page faults, ~1 us a page, the very measurement
+that made the pool mandatory. The 1 GB cap is what CUDA measured as neutral; here it is the
+worst case, because the held slabs come back only when the collector reaches their arrays,
+and a training step allocates a new array per call. A smaller cap recycles sooner and
+costs less, but a cap small enough to be free would evict the one array residency is FOR
+on this backend -- a 36.8 MB classifier head, or a bigger model's hundreds of megabytes of
+weights. So the final build keeps the cache and puts one thing in it: the matrix of an
+accepted GEMV, the array that is re-read hundreds of times, written never, and cannot be
+copied per call without losing (above). `x` and `y` are scratch slabs; every other member
+is exactly the pure pool it was. `MetalGpuTest.onlyTheMatrixOfAnAcceptedGemvIsKeptResident`
+pins the decision, and the budget / release / collection claims are pinned on GEMV
+matrices (`theResidentSetIsBoundedByItsBudgetAndAReleaseGivesTheSlabsBack`,
+`aCollectedHostArrayTakesItsResidentCopyWithIt`). A release gives the slabs back to the
+POOL, not to the device -- `freeDeviceMemory` does not move -- which is the right shape
+for a pool that is the whole point. `GpuDevice`'s `written` / `residentBytes` /
+`releaseResident` / `residency` are abstract now: both halves keep copies.
+
+**What the Mac found in the CUDA-era tests.** `GpuDeclineTest`, which "must hold on every
+machine", had never run on one with Metal since the generator fill landed:
+`Gpu.worthRng` read the threshold IN FORCE (`Long.MAX_VALUE` here, the fill is not a
+member) from a predicate documented as driver-free -- so it was `false` at every size on a
+Mac and ran the probe from an `aset`-adjacent path. It answers with the pooled constant
+now, like every other `worth`. Nothing else in the suites needed a Mac to be right: the
+interceptor suites' GEMV cases were already sized off `GpuThresholds.matvecMinElements()`
+and switched themselves on the moment it stopped being `Long.MAX_VALUE`, at `#f` only.
+
+**The probes.** `MtlMatvecCrossover.java` (the crossover and the accumulator question,
+its own MSL with both accumulators), `MtlGemvInSitu.java` (the shipped route, back to back
+and gapped; run with `-cp target/classes`), and `matvec-baseline.lisp` for the CPU column,
+now with the 1448 and 1536 squares; the README records what they printed.
 
 ### The JVM class carries BOTH kernel texts
 
@@ -1673,7 +1825,7 @@ The design above, built -- and the record of the two versions that were measured
 thrown away on the way, because what decides whether a cache of device copies pays on
 this machine turned out not to be the cache.
 
-**What it is.** `am.ik.gpu.CudaResidency`: a map from a host array -- the primitive
+**What it is.** `am.ik.gpu.CudaResidency` (today `DeviceResidency`, unchanged): a map from a host array -- the primitive
 `double[]` / `float[]`, by IDENTITY, exactly as the design said, since that is the one
 object both interceptors already unwrap -- to a device buffer holding a copy of its
 elements, with the span it mirrors (`offset`, `bytes`; a different span is a miss). Every
@@ -1687,9 +1839,11 @@ ordered ahead of the kernel that reads it. The host array stays authoritative, s
 residency removes the host-to-device half of the round trip only, as the design said it
 would. `Gpu.written(host)` drops an entry and queues its buffer without a driver call --
 it runs on whichever thread wrote the array, and needs no context. `GpuDevice` gained
-`written` / `residentBytes` / `releaseResident` with empty defaults; Metal keeps no copies
-yet. The three new class files travel in the JVM blob (`CudaResidency`, its `Entry`, `Key`
-and `Lookup`) and the blob test pins the list.
+`written` / `residentBytes` / `releaseResident` (empty defaults then; abstract since
+todo-477, when the Metal half took the same class -- renamed `DeviceResidency` -- for its
+GEMV matrices, "Residency and the GEMV on this backend" above). The class files travel in
+the JVM blob (`DeviceResidency`, its `Entry`, `Key` and `Lookup`) and the blob test pins
+the list.
 
 **The keys are WEAK, and that was the first correction.** The first build held its keys
 strongly and let the LRU decide; on `train-gpt-soseki.lisp` under `--gpu --simd` it halved
@@ -1895,8 +2049,9 @@ every rewritten matrix in the 2^17-2^19 band). The mark costs one more `LinkedHa
 entry per distinct matrix offered and a synchronized lookup on the call that declines.
 The threshold is `Gpu.MATVEC_POOLED_MIN_ELEMENTS = 2^17` over `rows * cols`, `2^20`
 unpooled; `Gpu.worthMatvec` is the probe-free size half and `Gpu.matvec` asks the
-residency half, which no size can answer. Metal keeps no resident copies, so the member
-declines there at every size (`Thresholds.matvec = Long.MAX_VALUE`).
+residency half, which no size can answer. (Metal declined the member at every size until
+todo-477; it takes it from `2^21` now, with a compensated accumulator and its matrix the
+only resident array -- "Residency and the GEMV on this backend" in the Metal section.)
 
 **The accumulator is a double at both widths, and that was measured too.** A float
 accumulator (the `--simd` lane kernel's width) against a double one, resident f32,

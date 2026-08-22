@@ -433,6 +433,7 @@ class GpuDeclineTest {
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_MAP_F32);
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_BCAST_F32);
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GATHER_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GEMV_F32);
 		// The op-code mirrors, the third copy of the table gemm.cu and Gpu.MAP_* /
 		// Gpu.BIN_* hold the other two of.
 		assertThat(msl).contains("case " + Gpu.MAP_ERF + ": return erf1(x);");

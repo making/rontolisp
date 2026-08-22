@@ -202,3 +202,68 @@ kernel void gather_f32(device const float* A [[buffer(0)]],
 // accumulator and would have been exact, does not pay: on an M4 Max the CPU fold is
 // 85 us over 262144 f32 elements and 410 us over 1048576, against this backend's ~150 and
 // ~380 for the same shapes -- a tie at best, and a tie is a decline. See .kb/gpu.md.
+
+// THE GEMV behind vec:matvec -- the one member outside linalg:, and the one whose worth is
+// decided by RESIDENCY rather than size: a matrix-by-vector product is one pass over W, so
+// it pays only over a matrix that is already on the device, which is what the cache in
+// MetalGemm keeps (DeviceResidency, the same class the CUDA half uses). One SIMD-group per
+// row, lane l walking columns l, l + width, ..., then a shuffle tree across the group; the
+// whole group shares one row, so the early return is group-uniform and the full-width
+// shuffles below it are safe. Eight rows per threadgroup at the 32-wide SIMD-group of
+// every Apple GPU, and the host derives that from threadExecutionWidth rather than
+// assuming it.
+//
+// THE ACCUMULATOR IS COMPENSATED, AND THAT IS HOW IT LANDS ON THE DEFUN'S BITS WITHOUT A
+// DOUBLE. gemm.cu sums in double at both widths and narrows on the store, which is the
+// scalar vec.lisp defun's own rule and what puts the CUDA result on the defun's bits
+// (1024 of 1024 rows). MSL has no double to do that with, and a plain float sum lands on
+// 229 of 1024 rows (worst 2.9e-7) -- the --simd lane kernel's contract, a different
+// order. So this kernel keeps the running sum as a float-float PAIR: the product's own
+// rounding error is recovered exactly with an fma (p = a*b, pe = fma(a, b, -p), so that
+// a*b == p + pe exactly), and each addition is Knuth's TwoSum, whose error term goes into
+// the low half. The pair carries ~48 bits, against the 53 of a double; measured at
+// 1024x768 over inexact data it is bit-identical to the double-accumulated oracle on
+// 1024 of 1024 rows, and it costs nothing the memory-bound pass can see (the same ~90 us
+// a resident call as the plain sum, .kb/gpu.md). The contraction pragma is what makes the
+// error-free transforms mean what they say: a compiler free to fuse `hi + p` into an fma
+// across statements would compute a different `s` than the `p` the error term was taken
+// against. The Metal compiler does not do that at its defaults (measured, same 1024 rows),
+// but the pragma is the rule rather than the observation, and it costs nothing. It applies
+// from here to the end of the file, which is this kernel and nothing else.
+#pragma METAL fp contract(off)
+
+kernel void gemv_f32(device const float* W [[buffer(0)]],
+                     device const float* x [[buffer(1)]],
+                     device float* y [[buffer(2)]],
+                     constant int* args [[buffer(3)]],
+                     uint lane [[thread_index_in_simdgroup]],
+                     uint width [[threads_per_simdgroup]],
+                     uint sg [[simdgroup_index_in_threadgroup]],
+                     uint sgs [[simdgroups_per_threadgroup]],
+                     uint tg [[threadgroup_position_in_grid]]) {
+  int rows = args[0], cols = args[1];
+  int row = int(tg * sgs + sg);
+  if (row >= rows) return;
+  device const float* w = W + (long) row * cols;
+  float hi = 0.0f, lo = 0.0f;
+  for (int j = int(lane); j < cols; j += int(width)) {
+    float a = w[j], b = x[j];
+    float p = a * b;
+    float pe = fma(a, b, -p);
+    float s = hi + p;
+    float bv = s - hi;
+    float err = (hi - (s - bv)) + (p - bv);
+    hi = s;
+    lo += err + pe;
+  }
+  for (uint off = width / 2; off > 0; off >>= 1) {
+    float ohi = simd_shuffle_down(hi, off);
+    float olo = simd_shuffle_down(lo, off);
+    float s = hi + ohi;
+    float bv = s - hi;
+    float err = (hi - (s - bv)) + (ohi - bv);
+    hi = s;
+    lo += olo + err;
+  }
+  if (lane == 0) y[row] = hi + lo;
+}

@@ -58,13 +58,14 @@ public final class GpuThresholds {
 
 	/**
 	 * Residency lookups answered from the cache since the process started, or {@code -1}
-	 * on a device that keeps none -- the one observable that says a call over a resident
-	 * operand REALLY ran on the device, which no printed value can, since the accepted
-	 * member is written to land on the oracle's own bits.
+	 * with no device -- the one observable that says a call over a resident operand
+	 * REALLY ran on the device, which no printed value can, since the accepted member is
+	 * written to land on the oracle's own bits. Both backends keep a cache; the Metal one
+	 * holds only the matrices of accepted GEMVs.
 	 * @return the hit count, or -1
 	 */
 	public static long residencyHits() {
-		CudaResidency residency = Gpu.residency();
+		DeviceResidency residency = Gpu.residency();
 		return residency != null ? residency.hits() : -1;
 	}
 

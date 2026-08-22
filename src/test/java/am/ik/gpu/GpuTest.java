@@ -752,7 +752,7 @@ class GpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void aMatrixByVectorProductIsTakenOnlyOnceItsMatrixHasBeenOfferedTwiceUnwritten() {
-		CudaResidency residency = Gpu.residency();
+		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "residency is the CUDA backend's");
 		Gpu.releaseResident();
 		int rows = 512, cols = 512;
@@ -1161,7 +1161,8 @@ class GpuTest {
 
 	// --- device residency (2026-08-22) ------------------------------------------------
 	// The CUDA backend keeps a copy of every operand and result on the device, keyed by
-	// the identity of the host array and held weakly (CudaResidency). These pin the four
+	// the identity of the host array and held weakly (DeviceResidency). These pin the
+	// four
 	// properties .kb/gpu.md sells it on: a recent operand or result is not uploaded
 	// again; a write to the host array -- reported through Gpu.written, which every
 	// setter on both backends calls -- makes the next call upload it again and answer
@@ -1172,7 +1173,7 @@ class GpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void anOperandUploadedOrProducedByARecentCallIsNotUploadedAgain() {
-		CudaResidency residency = Gpu.residency();
+		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "residency is the CUDA backend's");
 		Gpu.releaseResident();
 		int n = 1 << 18;
@@ -1202,7 +1203,7 @@ class GpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void aWrittenHostArrayIsUploadedAgainAndTheAnswerFollowsTheWrite() {
-		CudaResidency residency = Gpu.residency();
+		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "residency is the CUDA backend's");
 		Gpu.releaseResident();
 		int n = 1 << 18;
@@ -1227,7 +1228,7 @@ class GpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void theResidentSetIsBoundedByItsBudgetAndAReleaseGivesTheMemoryBack() {
-		CudaResidency residency = Gpu.residency();
+		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "residency is the CUDA backend's");
 		GpuDevice gemm = Gpu.device();
 		assertThat(gemm).isNotNull();
@@ -1265,7 +1266,7 @@ class GpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void aCollectedHostArrayTakesItsResidentCopyWithIt() throws InterruptedException {
-		CudaResidency residency = Gpu.residency();
+		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "residency is the CUDA backend's");
 		Gpu.releaseResident();
 		int n = 1 << 18;

@@ -6,6 +6,8 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
@@ -14,10 +16,11 @@ import static am.ik.gpu.MetalDriver.I;
 
 /**
  * The Apple half of {@code --gpu}: one {@code MTLDevice}, one command queue, one library
- * compiled from {@code gemm.metal} at run time, and the three kernels it exports -- a
- * STACKED matrix product, an element-wise map and the strided broadcast/gather pair --
- * plus the rank-2 product, which goes through {@code MPSMatrixMultiplication} instead.
- * Everything that can fail fails into a decline; nothing here throws.
+ * compiled from {@code gemm.metal} at run time, and the four kernels it exports -- a
+ * STACKED matrix product, an element-wise map, the strided broadcast/gather pair and the
+ * GEMV behind {@code vec:matvec} -- plus the rank-2 product, which goes through
+ * {@code MPSMatrixMultiplication} instead. Everything that can fail fails into a decline;
+ * nothing here throws.
  *
  * <h2>Single float, or nothing</h2>
  *
@@ -42,13 +45,34 @@ import static am.ik.gpu.MetalDriver.I;
  * {@code cuMemAllocAsync}. Metal has no such thing: a fresh {@code MTLBuffer} is cheap to
  * create (1-8 us) but its pages fault in on the first write, which measured 60 us on a
  * small product and 4.3 ms on a 4 MB one. So the buffers here are size-classed and
- * reused, which is sound with no invalidation rule of any kind -- they are SCRATCH, fully
- * overwritten on the way in and fully read on the way out, and no host array's device
- * copy outlives the call. Residency, which would need such a rule, is still not built
- * ({@code .kb/gpu.md}).
+ * reused.
+ *
+ * <h2>And ONE resident array on top of it: the GEMV's matrix</h2>
+ *
+ * The CUDA half keeps a copy of every operand and result on the device
+ * ({@link DeviceResidency}), and measured a fifth off its training step for it. This half
+ * keeps the same cache, but puts only one thing in it: the matrix of an accepted
+ * {@link #gemvF}. That is a measurement, not a shortcut. On unified memory an upload is a
+ * memcpy into the slab's {@code contents} -- 1.5 MB in ~75 us -- while a slab held out of
+ * the pool for a resident copy costs the pool a FRESH slab for the next call of that
+ * size, and a fresh slab pays its first-touch page faults (~1 us a page; the measurement
+ * that made the pool mandatory). On the training step {@code .kb/gpu.md} measures every
+ * residency decision on, keeping every operand and result resident was 1-5% SLOWER than
+ * the pure pool at every cap tried (1 GB, 256 MB, 64 MB, 16 MB, and 0, the bookkeeping
+ * alone), and the chain hits it exists for bought nothing the clock could see. A GEMV's
+ * matrix is the one array that is re-read hundreds of times and written never, and it is
+ * the one array that cannot be copied in per call without losing (the copy IS the bytes
+ * the CPU would have streamed), so it is kept, LRU-bounded by a quarter of the pool's
+ * budget capped at {@link #RESIDENT_CAP}, dropped by {@link #written} like any resident
+ * copy, and its slab returned to the pool at the two safe moments -- the start of a call,
+ * before any operand is looked up, and the end of one, after the command buffer has
+ * completed. Every other slab is SCRATCH as before: fully overwritten on the way in,
+ * fully read on the way out, recycled the moment the call ends, sound with no
+ * invalidation rule.
  *
  * @see Gpu
  * @see MetalDriver
+ * @see DeviceResidency
  */
 final class MetalGemm implements GpuDevice {
 
@@ -60,7 +84,7 @@ final class MetalGemm implements GpuDevice {
 	 * purpose: MPS serves it.
 	 */
 	static final String KERNEL_BATCHED_F32 = "gemm_batched_f32", KERNEL_MAP_F32 = "map_f32",
-			KERNEL_BCAST_F32 = "bcast_f32", KERNEL_GATHER_F32 = "gather_f32";
+			KERNEL_BCAST_F32 = "bcast_f32", KERNEL_GATHER_F32 = "gather_f32", KERNEL_GEMV_F32 = "gemv_f32";
 
 	/**
 	 * The kernels an EMBEDDER supplied, when this library's classes travel without its
@@ -98,6 +122,27 @@ final class MetalGemm implements GpuDevice {
 	private static final long MIN_STRIDED_ELEMENTS = 1L << 18;
 
 	/**
+	 * The minimum {@code rows * cols} a matrix-by-vector product is accepted at, once its
+	 * matrix is resident: {@code 2^21}, just over a 1448x1448 matrix. Measured on an M4
+	 * Max at f32 against the JIT-warm {@code --simd} lane kernel, us per call, with the
+	 * matrix resident ({@code .todo/123-gpu-acceleration/MtlMatvecCrossover.java} against
+	 * {@code matvec-baseline.lisp}): 1024x1024 is 100 CPU against 90 device -- a tie,
+	 * because a resident call is the ~77 us command-buffer floor plus a memory-bound
+	 * kernel that does not reach it until the matrix is several megabytes -- 1448x1448 is
+	 * 233 against 93 (2.5x), 1536x1536 267 against 94 (2.8x; ~115 median in the shipped
+	 * route, 2.3x), 2048x2048 500 against 105 (4.8x), and llama2's 32000x288 classifier
+	 * head 800 against 185 (4.3x). Sixteen times the CUDA threshold, for the floor's
+	 * sake; the cold trip -- the matrix copied in every call -- never pays here at any
+	 * size (753 us at the head, against the CPU's 800), which is why the two-sight rule
+	 * of {@link #gemvF} is not optional on this backend either. And one thing the
+	 * threshold cannot see: this GPU lowers its clocks after ~1 ms idle, and the first
+	 * command buffer after such a gap pays ~0.5 ms more, so a GEMV called once every few
+	 * milliseconds (a decode loop) wins far less than a back-to-back one
+	 * ({@code .kb/gpu.md}, "Residency and the GEMV on this backend").
+	 */
+	private static final long MIN_MATVEC_ELEMENTS = 1L << 21;
+
+	/**
 	 * Where {@code MPSMatrixMultiplication} takes over from {@link #KERNEL_BATCHED_F32}
 	 * for ONE matrix of the product: {@code 2^27}, a 512x512x512 product. Below it the
 	 * tiled kernel is ahead (166 us against 180 at n=256) because MPS costs ~35 us of
@@ -110,6 +155,12 @@ final class MetalGemm implements GpuDevice {
 	 * Threads per threadgroup for the flat kernels: the map, the broadcast, the gather.
 	 */
 	private static final int FLAT_GROUP = 256;
+
+	/**
+	 * Threads per threadgroup for the GEMV: one SIMD-group per row, so this many divided
+	 * by the pipeline's {@code threadExecutionWidth} rows per threadgroup.
+	 */
+	private static final int GEMV_GROUP = 256;
 
 	/** The tile {@code gemm_batched_f32} is written around, and so its group shape. */
 	private static final int TILE = 16;
@@ -131,6 +182,15 @@ final class MetalGemm implements GpuDevice {
 	 */
 	private static final long POOL_BUDGET_DIVISOR = 4;
 
+	/**
+	 * What fraction of the POOL's budget the resident set -- the GEMV matrices -- may
+	 * hold, and the cap on it: {@code min(pool / 4, 1 GB)}, the CUDA half's own cap. A
+	 * resident slab is one the pool cannot recycle, so the bound is what keeps a program
+	 * that offers many distinct matrices from turning the pool into fresh pages; a model
+	 * whose weights exceed it keeps its most recently used ones.
+	 */
+	private static final long RESIDENT_SHARE = 4, RESIDENT_CAP = 1L << 30;
+
 	private final MetalDriver driver;
 
 	private final MemorySegment device;
@@ -147,6 +207,11 @@ final class MetalGemm implements GpuDevice {
 
 	private final MemorySegment gather;
 
+	private final MemorySegment gemv;
+
+	/** The GEMV pipeline's SIMD-group width, which is how many threads share one row. */
+	private final int gemvWidth;
+
 	private final String description;
 
 	private final long workingSet;
@@ -158,7 +223,23 @@ final class MetalGemm implements GpuDevice {
 	 */
 	private final ArrayDeque<Slab>[] free;
 
+	/**
+	 * Every slab this pool has minted and not released, free or held, in bytes of
+	 * capacity.
+	 */
 	private long pooledBytes;
+
+	/**
+	 * The resident copies -- the matrices of accepted GEMVs: host array -> the address of
+	 * the slab holding its elements ({@link DeviceResidency}), and {@link #held} is the
+	 * slab behind each such address. Both are kept in step under {@code this}: a slab is
+	 * put into {@link #held} before the cache learns its address, and removed from it
+	 * only when the cache has handed the address back through
+	 * {@link DeviceResidency#drain()}.
+	 */
+	private final DeviceResidency residency = new DeviceResidency();
+
+	private final Map<Long, Slab> held = new HashMap<>();
 
 	/**
 	 * Whether a big enough matrix goes to MPS. Not final: the tiled kernel is otherwise
@@ -171,8 +252,8 @@ final class MetalGemm implements GpuDevice {
 
 	@SuppressWarnings("unchecked")
 	private MetalGemm(MetalDriver driver, MemorySegment device, MemorySegment queue, MemorySegment library,
-			MemorySegment gemmBatched, MemorySegment map, MemorySegment bcast, MemorySegment gather, String description,
-			long workingSet) {
+			MemorySegment gemmBatched, MemorySegment map, MemorySegment bcast, MemorySegment gather, MemorySegment gemv,
+			int gemvWidth, String description, long workingSet) {
 		this.driver = driver;
 		this.device = device;
 		this.queue = queue;
@@ -181,10 +262,13 @@ final class MetalGemm implements GpuDevice {
 		this.map = map;
 		this.bcast = bcast;
 		this.gather = gather;
+		this.gemv = gemv;
+		this.gemvWidth = gemvWidth;
 		this.description = description;
 		this.workingSet = workingSet;
 		this.poolBudget = Math.max(1L << 28, workingSet / POOL_BUDGET_DIVISOR);
 		this.free = new ArrayDeque[MAX_SLAB_CLASS + 1];
+		this.residency.setBudget(derivedResidentBudget());
 	}
 
 	/**
@@ -217,11 +301,11 @@ final class MetalGemm implements GpuDevice {
 		MemorySegment pool = MemorySegment.NULL;
 		// Everything acquired so far, so that EVERY exit below -- and there are eight --
 		// unwinds it. A machine that declines at the last step must not leave a command
-		// queue, an MSL library and four pipeline states behind, which is the same rule
+		// queue, an MSL library and five pipeline states behind, which is the same rule
 		// CudaGemm.unwind follows for a retained primary context.
 		MemorySegment queue = MemorySegment.NULL;
 		MemorySegment library = MemorySegment.NULL;
-		MemorySegment[] kernels = new MemorySegment[4];
+		MemorySegment[] kernels = new MemorySegment[5];
 		boolean keep = false;
 		try {
 			pool = driver.autoreleasePoolPush();
@@ -250,7 +334,8 @@ final class MetalGemm implements GpuDevice {
 					return new Probe(null, "the Metal kernels did not compile: " + failure);
 				}
 			}
-			String[] names = { KERNEL_BATCHED_F32, KERNEL_MAP_F32, KERNEL_BCAST_F32, KERNEL_GATHER_F32 };
+			String[] names = { KERNEL_BATCHED_F32, KERNEL_MAP_F32, KERNEL_BCAST_F32, KERNEL_GATHER_F32,
+					KERNEL_GEMV_F32 };
 			for (int i = 0; i < names.length; i++) {
 				MemorySegment state = pipeline(driver, device, library, names[i]);
 				if (state == null) {
@@ -261,6 +346,12 @@ final class MetalGemm implements GpuDevice {
 			if (driver.objcClass("MPSMatrixMultiplication").address() == 0) {
 				return new Probe(null, "MetalPerformanceShaders is present but has no MPSMatrixMultiplication");
 			}
+			// The GEMV shares one SIMD-group per row, so the host has to know the width
+			// the kernel was compiled to rather than assume the 32 of every Apple GPU.
+			long width = driver.messageLong(kernels[4], "threadExecutionWidth");
+			if (width <= 0 || width > GEMV_GROUP || (width & (width - 1)) != 0) {
+				return new Probe(null, "the Metal GEMV kernel has an unusable SIMD-group width " + width);
+			}
 			long workingSet = driver.messageLong(device, "recommendedMaxWorkingSetSize");
 			boolean unified = driver.respondsTo(device, "hasUnifiedMemory")
 					&& driver.messageBool(device, "hasUnifiedMemory");
@@ -268,7 +359,7 @@ final class MetalGemm implements GpuDevice {
 					+ (workingSet >> 30) + " GB working set)";
 			keep = true;
 			return new Probe(new MetalGemm(driver, device, queue, library, kernels[0], kernels[1], kernels[2],
-					kernels[3], description, workingSet), description);
+					kernels[3], kernels[4], (int) width, description, workingSet), description);
 		}
 		catch (Throwable ex) {
 			return new Probe(null, "the Metal device could not be probed: " + describeThrowable(ex));
@@ -425,24 +516,7 @@ final class MetalGemm implements GpuDevice {
 	@Override
 	public Thresholds thresholds() {
 		return new Thresholds(MIN_WORK, MIN_MAP_ELEMENTS, MIN_STRIDED_ELEMENTS, Long.MAX_VALUE, Long.MAX_VALUE,
-				Long.MAX_VALUE);
-	}
-
-	/**
-	 * The matrix-by-vector product is not a member here: it pays only over a RESIDENT
-	 * matrix, and this backend keeps no resident copies yet ({@code .kb/gpu.md}, "Device
-	 * residency, built", for what a port would have to measure first; {@code .todo/477}
-	 * is that port, residency first and the GEMV second). Both widths decline, and the
-	 * threshold is {@code Long.MAX_VALUE} so the question is never asked.
-	 */
-	@Override
-	public boolean gemv(double[] w, int ow, double[] x, int ox, double[] y, int oy, int rows, int cols) {
-		return false;
-	}
-
-	@Override
-	public boolean gemvF(float[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols) {
-		return false;
+				MIN_MATVEC_ELEMENTS);
 	}
 
 	/**
@@ -522,6 +596,12 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/** The matrix-by-vector product at {@code double} is a hard decline like the rest. */
+	@Override
+	public boolean gemv(double[] w, int ow, double[] x, int ox, double[] y, int oy, int rows, int cols) {
+		return false;
+	}
+
 	// --- the single-float half ---------------------------------------------------------
 
 	@Override
@@ -552,6 +632,7 @@ final class MetalGemm implements GpuDevice {
 		Slab @Nullable [] slabs = null;
 		try {
 			pool = this.driver.autoreleasePoolPush();
+			enter();
 			slabs = acquire(aElements * Float.BYTES, bElements * Float.BYTES, cElements * Float.BYTES);
 			if (slabs == null) {
 				return false;
@@ -652,6 +733,7 @@ final class MetalGemm implements GpuDevice {
 		Slab @Nullable [] slabs = null;
 		try {
 			pool = this.driver.autoreleasePoolPush();
+			enter();
 			slabs = acquire((long) n * Float.BYTES, (long) n * Float.BYTES);
 			if (slabs == null) {
 				return false;
@@ -701,6 +783,7 @@ final class MetalGemm implements GpuDevice {
 		Slab @Nullable [] slabs = null;
 		try {
 			pool = this.driver.autoreleasePoolPush();
+			enter();
 			slabs = acquire(aElements * Float.BYTES, bElements * Float.BYTES, (long) n * Float.BYTES,
 					3L * rank * Integer.BYTES);
 			if (slabs == null) {
@@ -753,6 +836,7 @@ final class MetalGemm implements GpuDevice {
 		Slab @Nullable [] slabs = null;
 		try {
 			pool = this.driver.autoreleasePoolPush();
+			enter();
 			slabs = acquire(aElements * Float.BYTES, (long) n * Float.BYTES, 2L * rank * Integer.BYTES);
 			if (slabs == null) {
 				return false;
@@ -787,6 +871,107 @@ final class MetalGemm implements GpuDevice {
 		}
 	}
 
+	/**
+	 * {@code y = W x}, the GEMV behind {@code vec:matvec} -- and the one member of this
+	 * class whose accept-or-decline is a question of RESIDENCY rather than of size, for
+	 * the reason {@code CudaGemm.gemv} gives, stronger here: a matrix-by-vector product
+	 * is one pass over {@code W}, and on this backend copying {@code W} in is a memcpy of
+	 * the very bytes the CPU kernel would have streamed, so the cold trip loses at EVERY
+	 * size (753 us at llama2's 32000x288 head against the CPU's 800, and the floor below
+	 * that). Over a resident matrix the call is the ~77 us command-buffer floor plus a
+	 * read at the device's own bandwidth, and it is ahead from
+	 * {@link #MIN_MATVEC_ELEMENTS}. So the rule is the CUDA half's: <b>a matrix is taken
+	 * when it is resident, or when it has been offered once before and not written
+	 * since</b> -- the second offer uploads it, every later one finds it there, and a
+	 * matrix the program rewrites between calls is offered "for the first time" every
+	 * time and never pays for a trip it would lose. The first sight is a decline that
+	 * takes no slab, and the mark it leaves is a residency entry with no buffer
+	 * ({@link DeviceResidency#offeredBefore}), so {@link #written} clears it exactly as
+	 * it would clear a copy. The matrix is the ONLY array this backend keeps resident
+	 * (the class comment says why); {@code x} and {@code y} are scratch slabs, copied per
+	 * call -- a 1 KB memcpy and a 128 KB one at llama2's head.
+	 *
+	 * <p>
+	 * The accumulator is COMPENSATED rather than a double ({@code gemm.metal}): a
+	 * float-float pair carrying ~48 bits, which lands on the scalar defun's
+	 * double-accumulated bits on 1024 of 1024 rows measured -- the same contract the CUDA
+	 * kernel's double earns, without the width MSL does not have.
+	 * @return {@code true} when {@code y} was filled, {@code false} when the call
+	 * declined or the device failed -- in which case {@code y} is untouched
+	 */
+	@Override
+	public boolean gemvF(float[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols) {
+		long wElements = (long) rows * cols, offW = (long) ow * Float.BYTES, wBytes = wElements * Float.BYTES;
+		MemorySegment pool = MemorySegment.NULL;
+		Slab @Nullable [] slabs = null;
+		// Whether slabs[0] is this call's to recycle (a scratch slab it copied the
+		// matrix into) or the cache's.
+		boolean ownMatrix = false;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			Slab matrix = resident(w, offW, wBytes);
+			// The two-sight rule above: a matrix seen for the first time is declined and
+			// marked, nothing taken; seen again unwritten, it is copied in below.
+			if (matrix == null && !this.residency.offeredBefore(w, offW, wBytes)) {
+				return false;
+			}
+			slabs = acquire(matrix, wBytes, (long) cols * Float.BYTES, (long) rows * Float.BYTES);
+			if (slabs == null) {
+				return false;
+			}
+			ownMatrix = matrix == null;
+			if (ownMatrix) {
+				upload(w, ow, slabs[0], (int) wElements);
+			}
+			upload(x, ox, slabs[1], cols);
+			if (!dispatchGemv(slabs, rows, cols)) {
+				return false;
+			}
+			download(slabs[2], y, oy, rows);
+			if (ownMatrix) {
+				// Device and host hold the same bytes: the slab becomes the matrix's
+				// resident copy, and every later sight finds it.
+				adopt(w, offW, wBytes, slabs[0]);
+				ownMatrix = false;
+			}
+			drainPending();
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			if (slabs != null) {
+				recycle(ownMatrix ? slabs : java.util.Arrays.copyOfRange(slabs, 1, slabs.length));
+			}
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * One dispatch of the GEMV: one SIMD-group per row, {@link #GEMV_GROUP} threads a
+	 * group.
+	 */
+	private boolean dispatchGemv(Slab[] slabs, int rows, int cols) throws Throwable {
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment args = arena.allocate(I, 2);
+			args.setAtIndex(I, 0, rows);
+			args.setAtIndex(I, 1, cols);
+			int rowsPerGroup = GEMV_GROUP / this.gemvWidth;
+			MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+			MemorySegment encoder = beginEncoder(commands, this.gemv);
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[0].buffer, 0, 0);
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[1].buffer, 0, 1);
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[2].buffer, 0, 2);
+			this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 3);
+			this.driver.dispatch(encoder, MetalDriver.size(arena, (rows + rowsPerGroup - 1) / rowsPerGroup, 1, 1),
+					MetalDriver.size(arena, GEMV_GROUP, 1, 1));
+			this.driver.messageVoid(encoder, "endEncoding");
+			return commitAndWait(commands);
+		}
+	}
+
 	// --- encoding
 	// -----------------------------------------------------------------------
 
@@ -812,6 +997,117 @@ final class MetalGemm implements GpuDevice {
 		return this.driver.messageLong(commands, "status") == MetalDriver.STATUS_COMPLETED;
 	}
 
+	// --- residency
+	// ----------------------------------------------------------------------
+
+	/**
+	 * The start of every call: gives the pool back every slab the cache has dropped since
+	 * the last call. One of the two moments that is safe -- before any operand of THIS
+	 * call has been looked up, so no slab the coming dispatch reads can be among them.
+	 */
+	private void enter() {
+		drainPending();
+	}
+
+	/**
+	 * The slab holding a resident copy of {@code host}'s span, or {@code null}. A hit in
+	 * the cache whose slab is already gone (dropped, and a drain beat this call to it) is
+	 * a miss like any other.
+	 */
+	private @Nullable Slab resident(Object host, long offsetBytes, long bytes) {
+		long address = this.residency.lookup(host, offsetBytes, bytes);
+		if (address == 0) {
+			return null;
+		}
+		synchronized (this) {
+			return this.held.get(address);
+		}
+	}
+
+	/**
+	 * Records {@code slab} as the resident copy of {@code host}'s span. The slab goes
+	 * into {@link #held} BEFORE the cache learns its address, so a lookup that finds the
+	 * address always finds the slab; whatever the cache replaced or evicted for it comes
+	 * back through the next drain.
+	 */
+	private void adopt(Object host, long offsetBytes, long bytes, Slab slab) {
+		long address = slab.buffer().address();
+		synchronized (this) {
+			this.held.put(address, slab);
+		}
+		this.residency.put(host, offsetBytes, bytes, address);
+	}
+
+	/**
+	 * Returns every slab the cache has dropped, replaced, evicted or orphaned by a
+	 * collected array since the last drain to the pool's free lists.
+	 */
+	private void drainPending() {
+		long[] dropped = this.residency.drain();
+		if (dropped.length == 0) {
+			return;
+		}
+		synchronized (this) {
+			for (long address : dropped) {
+				Slab slab = this.held.remove(address);
+				if (slab != null) {
+					push(slab);
+				}
+			}
+		}
+	}
+
+	/**
+	 * A host array was written: its resident copy, if any, is stale and is dropped. No
+	 * device call happens here -- the slab goes back to the pool at the next call's safe
+	 * moment -- so this is safe from any thread and costs a volatile read when nothing is
+	 * resident.
+	 * @param host the host array that was written
+	 */
+	@Override
+	public void written(Object host) {
+		this.residency.written(host);
+	}
+
+	/**
+	 * Bytes held by resident copies right now. For the tests and the description.
+	 * @return the resident total, in bytes
+	 */
+	@Override
+	public long residentBytes() {
+		return this.residency.bytes();
+	}
+
+	/**
+	 * Drops every resident copy and gives its slab back to the pool. For the tests, whose
+	 * leak baselines are measured against an EMPTY resident set; the pool keeps the
+	 * slabs, which is what the steady-state assertion wants.
+	 */
+	@Override
+	public void releaseResident() {
+		this.residency.evictAll();
+		drainPending();
+	}
+
+	@Override
+	public DeviceResidency residency() {
+		return this.residency;
+	}
+
+	/**
+	 * Imposes a residency budget in bytes, or {@code -1} to go back to the derived one.
+	 * Package-private and for the tests, which need the LRU to evict at a size they can
+	 * afford to fill. Takes effect at once; entries over the new budget go at the next
+	 * insertion.
+	 */
+	void residentBudget(long bytes) {
+		this.residency.setBudget(bytes >= 0 ? bytes : derivedResidentBudget());
+	}
+
+	private long derivedResidentBudget() {
+		return Math.min(RESIDENT_CAP, this.poolBudget / RESIDENT_SHARE);
+	}
+
 	// --- the buffer pool
 	// -----------------------------------------------------------------
 
@@ -823,16 +1119,27 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * The slabs for one call, or {@code null} for a decline that costs the device
+	 * The scratch slabs for one call, or {@code null} for a decline that costs the device
 	 * nothing. Every slab taken before a failure goes straight back, so a call that
 	 * cannot fit leaves the pool exactly as it found it.
 	 */
 	private Slab @Nullable [] acquire(long... sizes) {
+		return acquire(null, sizes);
+	}
+
+	/**
+	 * The slabs for a GEMV: {@code resident} as {@code slabs[0]} when the matrix is
+	 * already there (and then it is the cache's, not the call's, and is left out of the
+	 * pre-flight's eviction), a scratch slab of {@code sizes[0]} otherwise; scratch slabs
+	 * for the rest.
+	 */
+	private Slab @Nullable [] acquire(@Nullable Slab resident, long... sizes) {
 		Slab[] slabs = new Slab[sizes.length];
+		long keep = resident != null ? resident.buffer().address() : 0;
 		for (int i = 0; i < sizes.length; i++) {
-			Slab slab = take(sizes[i]);
+			Slab slab = i == 0 && resident != null ? resident : take(sizes[i], keep);
 			if (slab == null) {
-				recycle(java.util.Arrays.copyOf(slabs, i));
+				recycle(java.util.Arrays.copyOfRange(slabs, resident != null ? 1 : 0, i));
 				return null;
 			}
 			slabs[i] = slab;
@@ -840,7 +1147,15 @@ final class MetalGemm implements GpuDevice {
 		return slabs;
 	}
 
-	private @Nullable Slab take(long bytes) {
+	/**
+	 * A slab of at least {@code bytes}, from the free lists or freshly minted. When the
+	 * pool's budget is reached, first its own free classes are released; if that is not
+	 * enough, every resident copy but {@code keep} -- the matrix the call in progress is
+	 * holding -- is given back and the free lists are released again: the resident set
+	 * must never be the reason a call declines. {@code null} only when the slab cannot
+	 * fit even then.
+	 */
+	private @Nullable Slab take(long bytes, long keep) {
 		if (bytes <= 0) {
 			return null;
 		}
@@ -855,7 +1170,19 @@ final class MetalGemm implements GpuDevice {
 			}
 			long capacity = 1L << sizeClass;
 			if (this.pooledBytes + capacity > this.poolBudget && !evict(capacity)) {
-				return null;
+				if (!this.residency.occupied()) {
+					return null;
+				}
+				this.residency.evictAll(new long[] { keep });
+				for (long address : this.residency.drain()) {
+					Slab slab = this.held.remove(address);
+					if (slab != null) {
+						push(slab);
+					}
+				}
+				if (!evict(capacity)) {
+					return null;
+				}
 			}
 			Slab slab = create(capacity, sizeClass);
 			if (slab != null) {
@@ -895,20 +1222,28 @@ final class MetalGemm implements GpuDevice {
 		return this.pooledBytes + wanted <= this.poolBudget;
 	}
 
+	/** Gives the call's scratch slabs back to their free lists. */
 	private void recycle(Slab @Nullable [] slabs) {
 		if (slabs == null) {
 			return;
 		}
 		synchronized (this) {
 			for (Slab slab : slabs) {
-				ArrayDeque<Slab> bucket = this.free[slab.sizeClass()];
-				if (bucket == null) {
-					bucket = new ArrayDeque<>();
-					this.free[slab.sizeClass()] = bucket;
+				if (slab != null) {
+					push(slab);
 				}
-				bucket.push(slab);
 			}
 		}
+	}
+
+	/** Onto its free list. Callers hold {@code this}. */
+	private void push(Slab slab) {
+		ArrayDeque<Slab> bucket = this.free[slab.sizeClass()];
+		if (bucket == null) {
+			bucket = new ArrayDeque<>();
+			this.free[slab.sizeClass()] = bucket;
+		}
+		bucket.push(slab);
 	}
 
 	private static int sizeClass(long bytes) {

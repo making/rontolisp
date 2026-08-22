@@ -84,7 +84,11 @@ tie at ~12 us and stay on the CPU -- from their second token on, once the
 library has seen the weight twice unwritten ([the guide](../../doc/en/guides/gpu-acceleration.md)).
 That is about 1.3x with the story unchanged, and the next 2x on this program is
 the glue, not a GEMV. On the interpreter the same flag buys nothing: the tree
-walk around the GEMVs dominates there. The `--simd` kernel's deliberately pinned
+walk around the GEMVs dominates there. On an Apple M4 Max the JVM decodes the
+same story at ~370 tok/s under `--simd` and at the same ~370 under `--gpu --simd`,
+story unchanged: only the classifier head is above Metal's threshold there, and
+the one GEMV per token it moves pays the GPU's idle-clock penalty after the
+2.7 ms of CPU work between tokens ([the guide](../../doc/en/guides/gpu-acceleration.md#on-apple-silicon)). The `--simd` kernel's deliberately pinned
 128-bit accumulation (one chain per row, so results agree bit for bit with the
 WASM `f32x4` kernels on every host) is what the device does NOT reproduce -- it
 accumulates in double, like the scalar `vec.lisp` definition, and lands on that

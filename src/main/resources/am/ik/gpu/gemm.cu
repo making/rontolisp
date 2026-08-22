@@ -297,7 +297,7 @@ extern "C" __global__ void rng_fill_f64(double* out, int n, int mode, double lo,
 // again -- so the kernel is written for coalesced reads of W (the 32 lanes of a warp read
 // 32 consecutive elements) and for nothing else. What makes it worth a launch at all is
 // not the kernel: it is that the matrix STAYS on the device between calls
-// (CudaResidency), so a decode step pays for x up and y down and reads W at the device's
+// (DeviceResidency), so a decode step pays for x up and y down and reads W at the device's
 // own bandwidth rather than over the link (.kb/gpu.md, "The GEMV, and the matrix that
 // stays").
 //

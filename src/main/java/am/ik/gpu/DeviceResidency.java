@@ -11,9 +11,14 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Device residency for the CUDA backend: a cache from a HOST array to a device buffer
+ * Device residency, shared by both backends: a cache from a HOST array to a device buffer
  * that holds a copy of it, so that a call whose operand was uploaded -- or PRODUCED -- by
- * a recent call does not upload it again.
+ * a recent call does not upload it again. {@link CudaGemm} built it first (as
+ * {@code CudaResidency}); {@link MetalGemm} adopted it unchanged when the Metal half grew
+ * resident copies, because nothing in it is CUDA's -- a device buffer is a {@code long}
+ * here whichever platform minted it (a {@code CUdeviceptr} on one, an {@code MTLBuffer}'s
+ * address on the other), and the two rules that make the cache sound (weak identity keys,
+ * invalidation on every write) are the interceptors', not the driver's.
  *
  * <h2>What it is, and what it is not</h2>
  *
@@ -60,16 +65,19 @@ import org.jspecify.annotations.Nullable;
  * <h2>The release policy</h2>
  *
  * Entries die with their arrays (above), and an LRU against a byte budget the owning
- * {@link CudaGemm} derives from free device memory (a quarter of it, refreshed whenever
- * the pre-flight re-reads {@code cuMemGetInfo}) bounds what a program that keeps its
- * arrays reachable can hold. Nothing is freed from inside this class: a dropped, evicted
- * or collected entry's buffer goes onto a PENDING list that the device code drains with
- * {@code cuMemFreeAsync} at the two moments it is safe to -- the start of a call, before
- * any operand is looked up, and the end of one, after the launch and the download. A free
- * enqueued on the null stream BETWEEN an operand's lookup and its launch would be ordered
- * before the kernel that reads it, and that is the one ordering this class exists to
- * forbid. It also keeps {@link Gpu#written(Object)}, which runs on whichever thread wrote
- * the array, free of driver calls: a host write never needs a CUDA context.
+ * device derives -- {@link CudaGemm} from free device memory (a quarter of it, refreshed
+ * whenever the pre-flight re-reads {@code cuMemGetInfo}), {@link MetalGemm} from its own
+ * pool's budget -- bounds what a program that keeps its arrays reachable can hold.
+ * Nothing is freed from inside this class: a dropped, evicted or collected entry's buffer
+ * goes onto a PENDING list that the device code drains at the two moments it is safe to
+ * -- the start of a call, before any operand is looked up, and the end of one, after the
+ * launch and the download -- with {@code cuMemFreeAsync} on CUDA, and by returning the
+ * slab to the pool on Metal. A free enqueued on the null stream BETWEEN an operand's
+ * lookup and its launch would be ordered before the kernel that reads it (and a slab
+ * recycled there could be handed to the next call and overwritten), and that is the one
+ * ordering this class exists to forbid. It also keeps {@link Gpu#written(Object)}, which
+ * runs on whichever thread wrote the array, free of driver calls: a host write never
+ * needs a CUDA context or a Metal command queue.
  *
  * <h2>Cost on the write path</h2>
  *
@@ -77,7 +85,7 @@ import org.jspecify.annotations.Nullable;
  * the empty case is a volatile read and nothing else; a non-empty cache pays one
  * uncontended monitor and one identity lookup.
  */
-final class CudaResidency {
+final class DeviceResidency {
 
 	/**
 	 * A weakly held host array, hashed by identity. {@link #equals} is written for the
@@ -194,12 +202,12 @@ final class CudaResidency {
 	/**
 	 * Whether {@code host}'s span has been offered through here before and not written
 	 * since -- and if not, remembers that it has now. The accept-on-second-sight rule of
-	 * the matrix-by-vector product ({@code CudaGemm.gemv}): a GEMV over a matrix that is
-	 * not resident loses to the CPU, so the first offer of a matrix declines and leaves
-	 * this mark, the second uploads it, and a matrix written in between -- which drops
-	 * the mark exactly as it drops a copy -- is never uploaded at all. The mark is an
-	 * {@link Entry} with no buffer, so it shares the weak key, the write invalidation and
-	 * the LRU with the copies, and costs nothing on the device.
+	 * the matrix-by-vector product ({@code CudaGemm.gemv}, {@code MetalGemm.gemvF}): a
+	 * GEMV over a matrix that is not resident loses to the CPU, so the first offer of a
+	 * matrix declines and leaves this mark, the second uploads it, and a matrix written
+	 * in between -- which drops the mark exactly as it drops a copy -- is never uploaded
+	 * at all. The mark is an {@link Entry} with no buffer, so it shares the weak key, the
+	 * write invalidation and the LRU with the copies, and costs nothing on the device.
 	 * @param host the host array
 	 * @param offset the first byte of the span
 	 * @param bytes the length of the span

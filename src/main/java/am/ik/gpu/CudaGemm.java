@@ -334,11 +334,11 @@ final class CudaGemm implements GpuDevice {
 	private int allocationsSinceRefresh;
 
 	/**
-	 * The resident copies: host array -> device buffer ({@link CudaResidency}). Every
+	 * The resident copies: host array -> device buffer ({@link DeviceResidency}). Every
 	 * member looks its operands up here before it allocates, records what it uploaded and
 	 * what it downloaded, and frees what the cache dropped at the two safe moments.
 	 */
-	private final CudaResidency residency = new CudaResidency();
+	private final DeviceResidency residency = new DeviceResidency();
 
 	/**
 	 * A byte budget imposed from outside, or {@code -1} for the derived one. For the
@@ -521,7 +521,7 @@ final class CudaGemm implements GpuDevice {
 					// default
 					// threshold of 0 hands every unused reserved byte back to the OS at
 					// each cuCtxSynchronize and each synchronous copy, and with resident
-					// copies in play (CudaResidency) the reserve is no longer three
+					// copies in play (DeviceResidency) the reserve is no longer three
 					// buffers but a training step's worth of them: measured, releasing
 					// and re-mapping it around every call made the device-to-host copies
 					// four times as expensive and the step slower than without residency.
@@ -827,7 +827,7 @@ final class CudaGemm implements GpuDevice {
 	 * The host arrays ride along beside their segments because they are the residency
 	 * KEYS: an operand a recent call uploaded or produced is found by identity and not
 	 * copied up again, and the result is recorded after its download
-	 * ({@link CudaResidency}). Every member below has the same shape: look the operands
+	 * ({@link DeviceResidency}). Every member below has the same shape: look the operands
 	 * up, allocate only what is not resident, stage what was missed, launch, and record
 	 * the result on the way out.
 	 */
@@ -1307,7 +1307,7 @@ final class CudaGemm implements GpuDevice {
 	 * The start of every call: makes the context current and frees what the cache has
 	 * dropped since the last call. This is one of the two moments a pending free is safe
 	 * to enqueue -- before any operand of THIS call has been looked up, so no buffer the
-	 * coming launch reads can be among them (see {@link CudaResidency}).
+	 * coming launch reads can be among them (see {@link DeviceResidency}).
 	 */
 	private boolean enter() throws Throwable {
 		if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
@@ -1415,7 +1415,8 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	/** The cache itself, for the tests' hit and miss counts. */
-	CudaResidency residency() {
+	@Override
+	public DeviceResidency residency() {
 		return this.residency;
 	}
 
@@ -1512,8 +1513,8 @@ final class CudaGemm implements GpuDevice {
 	 * the program rewrites between calls is offered "for the first time" every time and
 	 * never pays for a trip it would lose. The first sight of any matrix is a decline
 	 * that allocates nothing, and the mark it leaves is a residency entry with no buffer
-	 * ({@link CudaResidency#offeredBefore}), so {@link #written} clears it exactly as it
-	 * would clear a copy. A model's weights -- read every step, written never -- are
+	 * ({@link DeviceResidency#offeredBefore}), so {@link #written} clears it exactly as
+	 * it would clear a copy. A model's weights -- read every step, written never -- are
 	 * resident from their second step on, which is what {@code .todo/475} measured the
 	 * whole item on.
 	 * @return {@code true} when {@code y} was filled, {@code false} when the call
