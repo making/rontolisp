@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of {@code linalg:}
- * ({@link LinalgSimd}), the sibling of {@link VecSimdTest}. Thirty-five
+ * ({@link LinalgSimd}), the sibling of {@link VecSimdTest}. Thirty-eight
  * {@code linalg.lisp} defuns run on {@code jdk.incubator.vector} instead of their boxed
  * element loops, while the default interpreter keeps the scalar reference (the
  * cross-backend byte-identity oracle).
@@ -798,6 +798,141 @@ class LinalgSimdTest {
 		assertThatThrownBy(() -> eval("(linalg:matmul (linalg:reshape (linalg:arange 24) '(2 3 4))"
 				+ " (linalg:reshape (linalg:arange 24) '(2 3 4)))", true))
 			.hasMessageContaining("inner dimensions differ");
+	}
+
+	// --- the fused optimizer update and the generator fill --------------------------
+
+	/**
+	 * A rule vector builder plus a driver that runs {@code n} Adam steps over four
+	 * aligned arrays, with the bias corrections moving as they do in a real run.
+	 */
+	private static final String ADAM_PRELUDE = """
+			(defun rule (mode it)
+			  (let ((r (linalg::%la-make 11 0.0 nil)))
+			    (setf (aref r 0) 0.01)
+			    (setf (aref r 1) (* 0.01 0.1))
+			    (setf (aref r 2) 0.1)
+			    (setf (aref r 3) 0.9)
+			    (setf (aref r 4) (- 1.0 0.9))
+			    (setf (aref r 5) 0.999)
+			    (setf (aref r 6) (- 1.0 0.999))
+			    (setf (aref r 7) 1.0e-8)
+			    (setf (aref r 8) (- 1.0 (expt 0.9 it)))
+			    (setf (aref r 9) (- 1.0 (expt 0.999 it)))
+			    (setf (aref r 10) mode)
+			    r))
+			(defun run (et mode steps)
+			  (linalg:seed 11)
+			  (let ((x (linalg:randn '(3 5) :element-type et))
+			        (g (linalg:randn '(3 5) :element-type et))
+			        (m (linalg:zeros '(3 5) :element-type et))
+			        (v (linalg:zeros '(3 5) :element-type et)))
+			    (do ((it 1 (+ it 1)))
+			        ((> it steps))
+			      (linalg::%la-adam-step x g m v (rule mode it)))
+			    (list x m v)))
+			""";
+
+	@Test
+	void theAdamStepAndTheGeneratorFillAreInterceptedUnderSimd() {
+		// The dead-flag guard for todo-473's two members: a --simd run that silently
+		// fell back would still pass every value assertion below.
+		for (String member : new String[] { "%la-adam-step", "%la-rng-fill" }) {
+			String form = "(linalg:zeros 1) #'linalg::" + member;
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function LINALG::" + member.toUpperCase(java.util.Locale.ROOT) + ">");
+			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+	}
+
+	@Test
+	void theAdamStepIsBitIdenticalToTheScalarOracleAtBothWidthsAndEveryDecayMode() {
+		// The kernel keeps the defun's order of operations and computes in double at
+		// both widths, narrowing only on the store -- so this is byte identity, not a
+		// tolerance. All three weight-decay modes: none, coupled (torch.optim.Adam) and
+		// decoupled (torch.optim.AdamW).
+		for (String et : new String[] { "nil", "'single-float" }) {
+			for (String mode : new String[] { "0", "1", "2" }) {
+				assertMatchesScalarOracle(ADAM_PRELUDE + "(run " + et + " " + mode + " 4)");
+			}
+		}
+		// And through the optimizers themselves, which are its only real caller.
+		assertMatchesScalarOracle("""
+				(linalg:seed 3)
+				(defparameter *w* (torch:tensor (linalg:randn '(4 5)) :requires-grad t))
+				(defparameter *x* (torch:tensor (linalg:randn '(3 4))))
+				(defparameter *o* (torch:adamw (list *w*) :lr 0.01 :weight-decay 0.1))
+				(do ((i 0 (+ i 1)))
+				    ((>= i 3))
+				  (torch:zero-grad *o*)
+				  (torch:backward (torch:sum (torch:matmul *x* *w*)))
+				  (torch:step *o*))
+				(torch:data *w*)
+				""");
+	}
+
+	@Test
+	void adamStepDeclinedInputsRunTheScalarDefun() {
+		// A scalar parameter and a scalar gradient (the one branch the defun keeps for
+		// itself), a general boxed array, a mixed-width quadruple, a length mismatch,
+		// and a malformed rule vector: every one answers what the defun answers.
+		String rule = ADAM_PRELUDE;
+		assertMatchesScalarOracle(
+				rule + "(linalg::%la-adam-step 0.5 0.25 (linalg:zeros 1) (linalg:zeros 1)" + " (rule 2 1))");
+		assertMatchesScalarOracle(rule + "(linalg::%la-adam-step (linalg:ones 3) 0.25 (linalg:zeros 3)"
+				+ " (linalg:zeros 3) (rule 1 1))");
+		assertMatchesScalarOracle(rule + "(linalg::%la-adam-step (make-array 3 :initial-element 1.0)"
+				+ " (linalg:ones 3) (linalg:zeros 3) (linalg:zeros 3) (rule 0 1))");
+		assertMatchesScalarOracle(rule + "(linalg::%la-adam-step (linalg:ones 3 :element-type 'single-float)"
+				+ " (linalg:ones 3) (linalg:zeros 3) (linalg:zeros 3) (rule 0 1))");
+		// A rule vector of the wrong length, and a mode outside 0..2.
+		assertMatchesScalarOracle(rule + "(linalg::%la-adam-step (linalg:ones 3) (linalg:ones 3) (linalg:zeros 3)"
+				+ " (linalg:zeros 3) (rule 7 1))");
+		assertThatThrownBy(() -> eval("(linalg::%la-adam-step (linalg:ones 3) (linalg:ones 3) (linalg:zeros 3)"
+				+ " (linalg:zeros 3) (linalg:zeros 4))", true))
+			.isInstanceOf(RuntimeException.class);
+	}
+
+	@Test
+	void theSeededGeneratorIsBitIdenticalToTheScalarOracleAtBothWidths() {
+		// linalg:seed promises that one seed reproduces one sequence on every backend,
+		// so the fill kernel is byte identity or nothing -- every draw, both widths,
+		// every rule, and the interleaving with the scalar draws that keep using the
+		// specials (choice / permutation / %la-rng-next).
+		assertMatchesScalarOracle("""
+				(linalg:seed 42)
+				(list (linalg:rand 5) (linalg:randn '(2 3)) (linalg:uniform -1 3 4)
+				      (linalg:choice 10 5) (linalg:permutation 6)
+				      (linalg:rand '(2 2) :element-type 'single-float)
+				      (linalg:randn 3 :element-type 'single-float)
+				      (linalg:uniform 0.5 1.5 3 :element-type 'single-float)
+				      (linalg::%la-rng-next))
+				""");
+		// An empty fill draws nothing and must leave the state exactly where it was.
+		assertMatchesScalarOracle("(linalg:seed 1) (list (linalg:rand 0) (linalg::%la-rng-next))");
+		// A fill long enough to wrap each of the three moduli many times over. The
+		// ARRAY is compared, not a reduction of it: linalg:sum is itself a lane
+		// reduction under --simd and follows the reduction contract, not byte identity.
+		assertMatchesScalarOracle("(linalg:seed 9) (linalg:randn 3000)");
+	}
+
+	@Test
+	void generatorFillDeclinedInputsRunTheScalarDefun() {
+		// A general boxed destination, a state vector of the wrong length, a state word
+		// outside the generator's range, an out-of-range mode and a non-numeric bound:
+		// each declines, and the defun answers (or signals) identically.
+		assertMatchesScalarOracle("(linalg:seed 4) (linalg::%la-rng-fill (make-array 3 :initial-element 0.0)"
+				+ " (linalg::%la-rng-state) 0 0.0 1.0)");
+		assertMatchesScalarOracle("(linalg:seed 4) (linalg::%la-rng-fill (linalg:zeros 3) (linalg:zeros 4) 0 0.0 1.0)");
+		assertMatchesScalarOracle("(linalg:seed 4) (let ((s (linalg::%la-rng-state)))"
+				+ " (setf (aref s 0) -3.0) (linalg::%la-rng-fill (linalg:zeros 3) s 0 0.0 1.0))");
+		assertMatchesScalarOracle("(linalg:seed 4) (let ((s (linalg::%la-rng-state)))"
+				+ " (setf (aref s 1) 0.5) (linalg::%la-rng-fill (linalg:zeros 3) s 0 0.0 1.0))");
+		assertMatchesScalarOracle(
+				"(linalg:seed 4) (linalg::%la-rng-fill (linalg:zeros 3) (linalg::%la-rng-state) 5 0.0 1.0)");
+		assertThatThrownBy(() -> eval(
+				"(linalg:seed 4) (linalg::%la-rng-fill (linalg:zeros 3)" + " (linalg::%la-rng-state) 2 'a 1.0)", true))
+			.isInstanceOf(RuntimeException.class);
 	}
 
 	@Test

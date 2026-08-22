@@ -11,7 +11,7 @@ Three backends, one per interception mechanism:
 |---|---|---|
 | interpreter (`prog.lisp --simd`) | `eval/LinalgSimd` (re-`defineFunction`) | `eval/LinalgSimdKernels` (jdk.incubator.vector) |
 | JVM (`-o Prog.class --simd`) | `codegen/jvm/JvmLinalgKernelCompiler` (call site) | `JvmSimdVectorTemplate.la*` (the one embedded bridge) |
-| wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (42 emitted functions) |
+| wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (45 emitted functions) |
 
 `--no-gc` is out of scope: `linalg:` cannot compile there at all (`linalg::%la-make` uses
 `&optional`, and `--no-gc` has no general array type).
@@ -157,7 +157,7 @@ Two consequences worth remembering:
   `wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath` (wasm) and
   `axisFormsRunTheFoldKernelsAndMatchTheScalarOracle` (interpreter).
 
-## The intercepted set (36 members)
+## The intercepted set (38 members)
 
 `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin` `trace` `transpose`
 `reshape` `dot` `outer`, plus the todo-109 unary ufuncs `exp` `log` `tanh` `sin` `cos`
@@ -174,7 +174,9 @@ section of `.kb/vec.md`), plus the todo-117 INTERNAL pair `%la-im2col` (arity 5)
 Scratch convolution examples -- and the todo-467 INTERNAL `%la-matmul-nd` (arity 2),
 the stacked rank->=3 matrix product (below), plus the todo-468 `erf` (arity 1), the
 error function behind the exact `torch:gelu` (below -- the one member whose DEFUN is an
-`emap`, which is why the member itself had to be intercepted). Those are the intercepted internal members: a
+`emap`, which is why the member itself had to be intercepted), plus the todo-473 INTERNAL
+pair `%la-rng-fill` (arity 5) / `%la-adam-step` (arity 5) -- the seeded generator's one
+fill loop and Adam's fused element-wise update (below). Those are the intercepted internal members: a
 `%`-prefixed member's canonical qualified spelling carries the DOUBLE colon
 (`linalg::%la-im2col`), which is how the interpreter's function binding, the compilers'
 `ctx.functions` keys and the emit-gate symbol scan must compose it --
@@ -213,7 +215,9 @@ would move that member's crossover. Declines: a nil/non-integer/out-of-range axi
 (the vector `sum` of an empty axis would need the defun's INTEGER 0), a non-permutation
 axes list, a mixed-width or non-broadcastable pair, any general boxed operand.
 
-Accelerated **transitively**, so they are not intercepted directly: `mean` (calls `sum`),
+Accelerated **transitively**, so they are not intercepted directly: `rand` / `randn` /
+`uniform` (all three call `%la-rng-fill`), `torch:step` over a `torch:adam` / `torch:adamw`
+optimizer (calls `%la-adam-step` once per parameter), `mean` (calls `sum`),
 `matmul` at EVERY rank (rank <= 2 calls `dot`; rank >= 3 calls
 `%la-matmul-nd`, itself intercepted since todo-467), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
 `square` (calls `mul`), `reciprocal` (calls `div`), `clip` (calls `maximum` then
@@ -370,6 +374,114 @@ only the member that dominates has changed -- and the original todo-468 sizing n
 example's own small defaults and stopped being true the moment todo-467 took the stacked
 product out of the way.
 
+### The optimizer update and the generator (`%la-adam-step` / `%la-rng-fill`, todo-473, 2026-08-22)
+
+Both members are here for the same reason and neither is numpy: **the seam intercepts
+`linalg:` names and nothing else**, and a JFR profile of `train-gpt-soseki.lisp` under
+`--gpu --simd` said the remaining cost was two boxed Lisp loops that were not `linalg:` at
+all (`.kb/gpu.md`'s "What a training step is actually made of"): `torch::%o-adam-step` at
+22-31% and `linalg:rand`/`randn` at 16%, with `_dbl` and `_fvAset1` -- the boxing and the
+`(setf (row-major-aref ...))` they drive -- on top. **So the loops moved to `linalg:`
+rather than the seam widening to `torch:`.** That was the first of the item's two open
+decisions, and it is the cheap answer: no new touch point in any of the three backends,
+one new intercepted member each, and `%la-im2col` is the precedent -- an internal `%la-`
+member that exists for a library ABOVE this one.
+
+The alternative the item names, rewriting Adam's rule over whole-array `linalg:` members
+that ARE intercepted, was not measured and does not need to be: it is a dozen whole-array
+temporaries per parameter per step against a fused loop with none, and the record already
+says a fresh array per parameter per step is the allocation that dominates a small
+training loop (`.kb/torch.md`).
+
+**`linalg::%la-adam-step (x g m v ps)`** is the defun's own inner loop, over four aligned
+same-width arrays, with the whole rule in an eleven-element packed double vector: `lr`,
+`lr*wd`, `wd`, `b1`, `1-b1`, `b2`, `1-b2`, `eps`, `c1`, `c2`, `mode`. Two things about
+that vector are load-bearing:
+
+- **`mode` replaced the two booleans.** 0 = no weight decay, 1 = COUPLED
+  (`torch.optim.Adam`: the L2 term rides the gradient), 2 = DECOUPLED
+  (`torch.optim.AdamW`: the parameter shrinks on its own). `wd = 0` collapses both spellings
+  to the same arithmetic, which is why three values cover the four combinations.
+- **`lr * wd` is multiplied by the CALLER**, while both may still be exact rationals.
+  `(* lr wd x)` is a left fold, so the scalar rule formed `(double)(lr*wd) * x`; storing
+  `lr` and `wd` separately in a double vector and multiplying in the kernel would round
+  twice and move a run with `:lr 1/100`. Every other hyper-parameter meets a double
+  exactly once either way, so the vector may hold it narrowed.
+
+It is bit-identical at both widths, by the rule this file repeats: every element is read
+widened to double, the five multiplies, the `sqrt` and the divide run in double, and only
+the store into a single-float parameter or moment buffer narrows -- which IS the boxed
+defun's widen-compute-narrow round trip. Note `mk` / `vk` feed the parameter update at
+full double width even at `#f`, because the defun's own locals do. Declines, all answered
+by the defun: a scalar parameter or gradient (a plain number -- the one branch the defun
+keeps), a general boxed array, a mixed-width quadruple, unequal element counts, a
+malformed rule vector. **The kernel mutates in place, so every check is up front**: there
+is no mid-loop decline, and a declined call must have written nothing.
+
+**`linalg::%la-rng-fill (out st mode lo span)`** is the one fill loop `rand` / `randn` /
+`uniform` now share, and the shape of its signature is the whole trick. The generator's
+state lives in three SPECIALS, which a kernel on this seam cannot read or write; passing
+the state in as an ARRAY and answering the state it ends on as one makes the fill a pure
+function of its arguments. `%la-rng-state` reads the specials into a vector,
+`%la-rng-restore` writes one back, and the three callers bracket the fill with them. The
+generator's rule does not move: the DEFUN still calls `%la-rng-next` in a loop, so there is
+still exactly one copy of it, and the scalar draws (`%la-rng-int`, hence `choice` /
+`permutation`, and `seed`'s ten discarded draws) keep using it directly. `mode` picks the
+element rule -- 0 one uniform draw, 1 the sum of twelve minus 6 (Irwin-Hall), 2
+`lo + span * draw` -- each spelled exactly where its caller spelled it, `(- acc 6.0)` and
+`(+ lo (* span u))` included.
+
+**The item's second decision -- the closed form -- was not needed.** `s <- a*s mod m` has
+`s_k = a^k * s mod m`, so a kernel COULD fill element k in any order; none of the three
+does. Each keeps the three states in integer locals and walks the elements in order, which
+is bit-identical by construction and is where the win already is: what the defun paid was a
+boxed double per draw (twelve per `randn` element) and a boxed integer per state update,
+not the sequencing. Keep the closed form in mind only for a device kernel, where the order
+really would have to change. The kernel declines a state vector that is not three packed
+doubles that are exact non-negative integers below `2^23` -- the range `linalg:seed`
+produces and `%la-rng-next` keeps, and the range in which `a * s` cannot overflow an `int`
+and Java `%` / wasm `i32.rem_s` agree with Lisp `mod`. It also declines a boxed
+destination, a mode outside 0..2 and a non-numeric `lo` / `span`. **`linalg:seed`'s promise
+is what makes byte identity non-negotiable here**: one seed reproduces one sequence on
+every backend, and the examples' expected output is pinned to it.
+
+Measured on the aarch64 DGX Spark / GB10 Grace, GraalVM 25, `--gpu --simd` JVM class
+output, `examples/llm-from-scratch/chapter03/train-gpt-soseki.lisp` at the notebook's
+`*block-size*` 256 / `*n-embd*` 384, three interleaved rounds of a 40-step and a 5-step run
+(the medians of `(t40 - t5) / 35`):
+
+| per training step | before | after |
+|---|---|---|
+| `--gpu --simd` | 0.326 s | **0.149 s** |
+| `--simd` | 0.872 s | 0.834 s |
+
+**2.2x on the device build and 1.05x on the CPU-only one**, and the gap is not noise: once
+`--gpu` has taken `linalg:`, these two loops ARE the step, while under `--simd` alone the
+matrix product still is. The 5-step run -- setup-dominated, and setup is one `linalg:randn`
+per weight matrix -- moved 6.8 -> 3.0 s on the device build and 9.5 -> 5.8 s on the CPU
+one, which is the generator alone. The JFR frames the item was filed on are gone:
+`TORCH::%O-ADAM-STEP` 339 samples of 1514 -> `laAdamStep` 16 of 590, the three RNG frames
+242 -> `laRngFill` 52, `_dbl` 150 -> 28, `_fvAset1` 221 -> 24 (`.kb/gpu.md` carries the
+whole table).
+
+Per member, 590k elements (`(384 1536)`, the notebook's feed-forward shape), best of five:
+
+| ms/call | interpreter scalar | interpreter `--simd` | JVM scalar | JVM `--simd` |
+|---|---|---|---|---|
+| `%la-adam-step` | 2164 | **~0** | 4 | 3 |
+| `linalg:randn` | 9408 | **55** | 80 | 55 |
+| `linalg:rand` | 941 | **5** | 10 | 6 |
+
+The interpreter column is the point of interception, as everywhere in this file. **Read the
+JVM column against the end-to-end table above and not on its own**: a micro-benchmark calls
+the member with ONE set of arrays, where escape analysis scalarizes the boxing away; in the
+training program the same loop runs over dozens of differently shaped arrays and does not
+get that, which is why the profile above found 22% where this table suggests 2%.
+
+`torch::%o-sgd-step` was deliberately NOT moved: it is the same shape of loop, but it is on
+no profile -- nothing in `examples/` trains with momentum at a size where it would show --
+and a second fused member is only worth writing when something measures it.
+
 `#'linalg:dot` still names the scalar defun on the compiled backends -- the interception is
 at the *call site* there, while the interpreter overrides the *function binding*. So a
 `linalg:` function passed to `funcall` / `mapcar` is not accelerated when compiled. Same
@@ -378,7 +490,7 @@ behavior as `vec:`, deliberately.
 ## What is vectorized, and what is merely de-boxed
 
 Not every member has a lane form worth writing. The interception is still worth it for all
-thirty-six: it removes the per-element box allocation and the generic numeric dispatch that the
+thirty-eight: it removes the per-element box allocation and the generic numeric dispatch that the
 compiled defun pays, and on the interpreter it removes the whole tree-walking loop.
 
 | member | interpreter / JVM | wasm-GC |
@@ -402,6 +514,8 @@ compiled defun pays, and on the interpreter it removes the whole tree-walking lo
 | `sum`/`amax`/`amin`/`argmax`/`argmin` with axis | scalar fold loops | `*_AXIS` `_v_get`/`_v_set` fold loops |
 | `%la-matmul-nd` (stacked product) | the `dot` M.M lane loop per batch offset | the `MATMUL_ND` kernel: `dot`'s `emitGemmRow` per batch offset |
 | `erf` (the A&S 7.1.6 series) | de-boxed scalar loop | `ERF` `_v_get`/`_v_set` element loop, series inline |
+| `%la-rng-fill` (rand / randn / uniform) | de-boxed scalar loop, states in `int` locals | `RNG_FILL` `_v_set` element loop, states in i32 locals |
+| `%la-adam-step` (the fused Adam update) | de-boxed scalar loop over four arrays | `ADAM_STEP` `_v_get`/`_v_set` element loop |
 
 The wasm-GC lane forms for `dot` (v.M / M.M) / `outer` / `transpose` shipped as the todo-107
 follow-up (2026-07-10). The GEMM loop reads each `b` row through the same `i8x16.shuffle`
@@ -629,9 +743,12 @@ call sites) -- exactly as any `vec:` program does. `(print (+ 1 2))` does not.
 
 ### wasm-GC
 
-Forty-three standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
+Forty-five standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
 + 55` (the vec: block is 55 with the todo-109 kernels and `-into` siblings), emitted only
-under `--simd`; `userFuncBase()` now shifts by 98. The LAST is todo-468's `ERF` (index 42,
+under `--simd`; `userFuncBase()` now shifts by 100. The LAST two are todo-473's `RNG_FILL`
+(index 43) and `ADAM_STEP` (index 44), both on the always-present five-eq-param
+`TYPE_CALLABLE_BASE + 4` type `IM2COL` already used, so again no new type entry; before
+them todo-468's `ERF` (index 42,
 the always-present one-eq-param `TYPE_CALLABLE_BASE` type), before it todo-467's
 `MATMUL_ND` (index 41, an ordinary two-eq-param type, so no new type entry); the seven
 before THAT are
@@ -676,7 +793,7 @@ i31s. Anything else declines. `flatten` rides on it.
 
 ## Verification
 
-- `eval/LinalgSimdTest` (43) -- interception guard (`#'linalg:add` is `#<function
+- `eval/LinalgSimdTest` (48) -- interception guard (`#'linalg:add` is `#<function
   linalg:add>` under `--simd`, `#<lambda>` without; `emap`/`inv`/`det`/`solve`/`array-equal`/
   `mean`/`matmul`/`flatten` stay `#<lambda>`), byte-identity vs the oracle at both widths and
   both ranks, scalar broadcast on both sides, the declined inputs, the f32 probe, and the
@@ -685,14 +802,23 @@ i31s. Anything else declines. `flatten` rides on it.
   RangeAtBothWidths` covers the `|x| >= 6` cutoff on both sides, `0.0`/`-0.0`, negatives,
   the `|x| ~ 3` region and the exact `torch:gelu` riding on it. The JVM suite has the
   twin minus the gelu line: only the interpreter's harness has `torch.lisp` loaded.
-- `codegen/jvm/JvmLinalgSimdAccelCompilerTest` (30) -- the bridge-embedded dead-flag guard,
+  `theAdamStepAndTheGeneratorFillAreInterceptedUnderSimd` is todo-473's dead-flag guard,
+  and its value cases run four Adam steps over four aligned arrays at both widths and all
+  three decay modes (plus the optimizers themselves, which only this harness can reach),
+  and every `rand`/`randn`/`uniform`/`choice`/`permutation` draw from one seed interleaved
+  with a bare `%la-rng-next`. Note the long-fill case compares the ARRAY, not a
+  `linalg:sum` of it: `sum` is itself a lane reduction under `--simd` and follows the
+  reduction contract, not byte identity.
+- `codegen/jvm/JvmLinalgSimdAccelCompilerTest` (34) -- the bridge-embedded dead-flag guard,
   the same byte-identity set, the evaluate-once guards (base AND extended call sites), the
   library errors still signalling, the axis/broadcast/transpose-axes shapes.
-- `codegen/wasm/WasmLispCompilerIntegrationTest` (Docker + wasmtime), ten cases (the
+- `codegen/wasm/WasmLispCompilerIntegrationTest` (Docker + wasmtime), eleven cases (the
   ninth is `...MatmulNdIsByteIdenticalToTheScalarPath`, every batch shape the odometer
   walks plus the three declines; the tenth is `...ErfIsByteIdenticalToTheScalarPath`, both
   sides of the `|x| >= 6` cutoff, `-0.0`, the `|x| ~ 3` region, both widths, rank 2 and
-  the boxed declines):
+  the boxed declines; the eleventh is todo-473's
+  `...OptimizerAndGeneratorAreByteIdenticalToTheScalarPath`, the Adam step at both widths
+  and all three modes plus its five declines, and every generator rule plus its four):
   `wasmGcSimdLinalg{ElementWiseAndShapeKernels,ReductionsAndProducts}AreByteIdenticalToThe
   ScalarPath`, `...LaneProductsMatchTheScalarPathAtEveryRowLaneOffset` (the GEMM / outer /
   transpose lane forms: every shuffle-offset variant via a 7-column `#f` matrix, the odd-`p`
@@ -702,7 +828,8 @@ i31s. Anything else declines. `flatten` rides on it.
   `...AxisFormsRunTheAxisKernelsAndMatchTheScalarPath`,
   `...BroadcastAndTransposeAxesMatchTheScalarPath`, `...ErfIsByteIdenticalToTheScalar
   Path` (that harness splices only `vec.lisp` / `linalg.lisp`, so the `torch:gelu` leg is
-  covered by hand and by the other two suites).
+  covered by hand and by the other two suites),
+  `...OptimizerAndGeneratorAreByteIdenticalToTheScalarPath`.
 - `WasmLispCompilerTest.simdAppendsExactlyTheVecTypeBlockAndTheVecAndLinalgFunctionBlocks`.
 - `ci-spec.yaml` never passes `--simd`, so the cross-backend E2E is unaffected. The component
   leg (`--component --simd`) and `--optimize` were verified by hand and by the integration
@@ -714,6 +841,10 @@ i31s. Anything else declines. `flatten` rides on it.
   with and without `--simd` on ALL FOUR backends (re-verified for todo-467 and again for
   todo-468, the `--component` leg included), and `examples/ml/tiny-llm.lisp` on all three (its one
   elapsed-time line aside -- interpreter 7061 -> 96 ms with the flag).
+- For todo-473, the same program at the NOTEBOOK's shapes (40 training steps, so the
+  optimizer and the dropout masks really run) prints byte-identical output before and
+  after the change on both a `--simd` and a `--gpu --simd` JVM class -- which is the
+  acceptance that matters for two members whose kernels write their operands IN PLACE.
 
 ## Not done
 

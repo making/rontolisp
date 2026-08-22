@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The {@code --simd} JVM acceleration of the {@code linalg:} kernels, the sibling of
- * {@link JvmSimdAccelCompilerTest}. Thirty-five {@code linalg:} call sites are routed to
+ * {@link JvmSimdAccelCompilerTest}. Thirty-eight {@code linalg:} call sites are routed to
  * the embedded {@link JvmSimdVectorTemplate} bridge instead of the scalar
  * {@code linalg.lisp} defun, and must produce byte-identical output at both widths, at
  * rank 1 AND rank 2.
@@ -730,6 +730,118 @@ class JvmLinalgSimdAccelCompilerTest {
 				(print *n*)
 				""";
 		assertThat(accel(accepted)).isEqualTo("1");
+	}
+
+	// --- the fused optimizer update and the generator fill --------------------------
+
+	/**
+	 * The rule vector builder and the step driver of {@code %la-adam-step}. The bias
+	 * corrections move per step, as they do in a real run.
+	 */
+	private static final String ADAM_PRELUDE = """
+			(defun rule (mode it)
+			  (let ((r (linalg::%la-make 11 0.0 nil)))
+			    (setf (aref r 0) 0.01)
+			    (setf (aref r 1) (* 0.01 0.1))
+			    (setf (aref r 2) 0.1)
+			    (setf (aref r 3) 0.9)
+			    (setf (aref r 4) (- 1.0 0.9))
+			    (setf (aref r 5) 0.999)
+			    (setf (aref r 6) (- 1.0 0.999))
+			    (setf (aref r 7) 1.0e-8)
+			    (setf (aref r 8) (- 1.0 (expt 0.9 it)))
+			    (setf (aref r 9) (- 1.0 (expt 0.999 it)))
+			    (setf (aref r 10) mode)
+			    r))
+			(defun run (et mode steps)
+			  (linalg:seed 11)
+			  (let ((x (linalg:randn '(3 5) :element-type et))
+			        (g (linalg:randn '(3 5) :element-type et))
+			        (m (linalg:zeros '(3 5) :element-type et))
+			        (v (linalg:zeros '(3 5) :element-type et)))
+			    (do ((it 1 (+ it 1)))
+			        ((> it steps))
+			      (linalg::%la-adam-step x g m v (rule mode it)))
+			    (print x)
+			    (print m)
+			    (print v)))
+			""";
+
+	@Test
+	void theAdamStepIsByteIdenticalToTheScalarPathAtBothWidthsAndEveryDecayMode() throws Exception {
+		// The kernel keeps the defun's order of operations and computes in double at
+		// both widths, narrowing only on the store, so this is byte identity. All three
+		// weight-decay modes: none, coupled (torch.optim.Adam), decoupled (AdamW).
+		for (String et : new String[] { "nil", "'single-float" }) {
+			for (String mode : new String[] { "0", "1", "2" }) {
+				assertMatchesScalarReference(ADAM_PRELUDE + "(run " + et + " " + mode + " 4)");
+			}
+		}
+	}
+
+	@Test
+	void adamStepDeclinedInputsRunTheScalarDefunExactlyOnce() throws Exception {
+		// A scalar parameter, a scalar gradient, a general boxed array, a mixed-width
+		// quadruple and a malformed rule vector all decline to the defun.
+		assertMatchesScalarReference(
+				ADAM_PRELUDE + "(print (linalg::%la-adam-step 0.5 0.25 (linalg:zeros 1) (linalg:zeros 1) (rule 2 1)))");
+		assertMatchesScalarReference(ADAM_PRELUDE + "(print (linalg::%la-adam-step (linalg:ones 3) 0.25"
+				+ " (linalg:zeros 3) (linalg:zeros 3) (rule 1 1)))");
+		assertMatchesScalarReference(ADAM_PRELUDE + "(print (linalg::%la-adam-step (make-array 3 :initial-element 1.0)"
+				+ " (linalg:ones 3) (linalg:zeros 3) (linalg:zeros 3) (rule 0 1)))");
+		assertMatchesScalarReference(
+				ADAM_PRELUDE + "(print (linalg::%la-adam-step (linalg:ones 3 :element-type 'single-float)"
+						+ " (linalg:ones 3) (linalg:zeros 3) (linalg:zeros 3) (rule 0 1)))");
+		assertMatchesScalarReference(ADAM_PRELUDE + "(print (linalg::%la-adam-step (linalg:ones 3) (linalg:ones 3)"
+				+ " (linalg:zeros 3) (linalg:zeros 3) (rule 7 1)))");
+		// The declined branch reloads the FIVE temps rather than recompiling the forms.
+		String declined = """
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) (linalg:zeros 3))
+				(linalg::%la-adam-step (make-array 3 :initial-element 1.0) (bump) (linalg:zeros 3)
+				 (linalg:zeros 3) (linalg:zeros 11))
+				(print *n*)
+				""";
+		assertThat(accel(declined)).isEqualTo("1");
+	}
+
+	@Test
+	void theSeededGeneratorIsByteIdenticalToTheScalarPathAtBothWidths() throws Exception {
+		// linalg:seed promises one seed reproduces one sequence on every backend, so
+		// the fill kernel is byte identity or nothing -- every rule, both widths, and
+		// the interleaving with the scalar draws that keep using the specials.
+		assertMatchesScalarReference("""
+				(linalg:seed 42)
+				(print (linalg:rand 5))
+				(print (linalg:randn '(2 3)))
+				(print (linalg:uniform -1 3 4))
+				(print (linalg:choice 10 5))
+				(print (linalg:permutation 6))
+				(print (linalg:rand '(2 2) :element-type 'single-float))
+				(print (linalg:randn 3 :element-type 'single-float))
+				(print (linalg:uniform 0.5 1.5 3 :element-type 'single-float))
+				(print (linalg::%la-rng-next))
+				""");
+		// An empty fill draws nothing and leaves the state where it was; a long one
+		// wraps each of the three moduli many times over.
+		assertMatchesScalarReference("(linalg:seed 1) (print (linalg:rand 0)) (print (linalg::%la-rng-next))");
+		assertMatchesScalarReference("(linalg:seed 9) (print (linalg:randn 3000))");
+	}
+
+	@Test
+	void generatorFillDeclinedInputsRunTheScalarDefun() throws Exception {
+		// A general boxed destination, a state vector of the wrong length, a state word
+		// outside the generator's range and an out-of-range mode: each declines.
+		assertMatchesScalarReference("(linalg:seed 4) (print (linalg::%la-rng-fill"
+				+ " (make-array 3 :initial-element 0.0) (linalg::%la-rng-state) 0 0.0 1.0))");
+		assertMatchesScalarReference(
+				"(linalg:seed 4) (print (linalg::%la-rng-fill (linalg:zeros 3) (linalg:zeros 4) 0 0.0 1.0))");
+		assertMatchesScalarReference("(linalg:seed 4) (let ((s (linalg::%la-rng-state)))"
+				+ " (setf (aref s 0) -3.0) (print (linalg::%la-rng-fill (linalg:zeros 3) s 0 0.0 1.0)))");
+		assertMatchesScalarReference("(linalg:seed 4) (let ((s (linalg::%la-rng-state)))"
+				+ " (setf (aref s 1) 0.5) (print (linalg::%la-rng-fill (linalg:zeros 3) s 0 0.0 1.0)))");
+		assertMatchesScalarReference(
+				"(linalg:seed 4) (print (linalg::%la-rng-fill (linalg:zeros 3) (linalg::%la-rng-state) 5 0.0 1.0))");
 	}
 
 }

@@ -22,7 +22,7 @@ import static am.ik.rontolisp.codegen.wasm.WasmVecSimdRuntimeBuilder.withLocals;
 
 /**
  * The wasm-GC {@code --simd} runtime for the {@code linalg:} kernels, the sibling of
- * {@link WasmVecSimdRuntimeBuilder}. Forty-three hand-assembled functions that
+ * {@link WasmVecSimdRuntimeBuilder}. Forty-five hand-assembled functions that
  * {@link WasmLinalgSimdCompiler} calls at an intercepted {@code linalg:} call site (seven
  * of them cover the declined call shapes: the general numpy broadcast, the axes transpose
  * and the axis folds).
@@ -227,10 +227,22 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int ERF = 42;
 
+	// The two members todo-473 moved onto this seam, both internal linalg: names and
+	// both _v_get / _v_set element loops: the seeded generator's one fill loop (behind
+	// linalg:rand / randn / uniform) and Adam's fused element-wise update (behind
+	// torch:adam / torch:adamw). Neither has a lane form -- the generator's state is
+	// sequential and the optimizer update is a handful of f64 ops per element -- and
+	// both are bit-identical at both widths, because every element is read widened to
+	// f64 and only the store narrows.
+
+	static final int RNG_FILL = 43;
+
+	static final int ADAM_STEP = 44;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 43;
+	static final int FUNC_COUNT = 45;
 
 	// The BCAST op selector, passed as an i31 by the element-wise kernels. BOP_MAX /
 	// BOP_MIN are the strict selects ((if (> x y) x y)): the SECOND operand wins any
@@ -258,7 +270,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 			// Three eq params -> eq.
 			case BCAST, SUM_AXIS, AMAX_AXIS, AMIN_AXIS -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
 			// Five / six eq params -> eq (the always-present callable_arity_N types).
-			case IM2COL -> WasmLispCompiler.TYPE_CALLABLE_BASE + 4;
+			case IM2COL, RNG_FILL, ADAM_STEP -> WasmLispCompiler.TYPE_CALLABLE_BASE + 4;
 			case COL2IM -> WasmLispCompiler.TYPE_CALLABLE_BASE + 5;
 			// Two eq params -> eq.
 			default -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
@@ -318,6 +330,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case ARGMIN_AXIS -> buildArgFoldAxis(false, vecBase);
 			case MATMUL_ND -> buildMatmulNd(vecBase);
 			case ERF -> buildErf(vecBase);
+			case RNG_FILL -> buildRngFill(vecBase);
+			case ADAM_STEP -> buildAdamStep(vecBase);
 			default -> throw new IllegalArgumentException("no linalg: simd helper " + fn);
 		};
 	}
@@ -750,6 +764,464 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, res);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), 7, 7, 0, 0, 5, 0);
+	}
+
+	// --- the seeded generator: %la-rng-fill --------------------------------------------
+
+	// (linalg::%la-rng-fill out st mode lo span): fills out with draws from the
+	// Wichmann-Hill state held in the three-element double vector st, and answers the
+	// state it ends on as a fresh three-element vector. mode picks the element rule:
+	// 0 one uniform draw (linalg:rand), 1 the sum of twelve minus 6 (linalg:randn), 2
+	// lo + span * draw (linalg:uniform).
+	//
+	// linalg:seed promises one seed reproduces one sequence on EVERY backend, so this
+	// reproduces %la-rng-next operation for operation: three integer state updates,
+	// three divides, a left-associated sum and the frac by compares. The states live in
+	// i32 locals here, where the defun boxed a double per draw -- twelve of them per
+	// randn element -- and on this backend paid _v_get / _v_set on top.
+	//
+	// Declines: a boxed destination, a state vector that is not three packed doubles in
+	// the generator's own range (non-negative, integral, below 2^23 so a * s cannot
+	// overflow an i32), a mode outside 0..2, a non-numeric lo / span.
+	//
+	// params: 0 = out, 1 = st, 2 = mode, 3 = lo, 4 = span.
+	// i32: count 5, kind 6, shift 7, ng 8, i 9, mode 10, s1 11, s2 12, s3 13, j 14,
+	// twelve 15, idx 16, t 17, three 18, dbl 19.
+	// f64: lo 20, span 21, u 22, acc 23, d 24.
+	// eq: res 25, vbO 26, vbS 27, vbR 28, nd 29, box 30.
+	private static byte[] buildRngFill(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int out = 0, st = 1, modeA = 2, loA = 3, spanA = 4;
+		int count = 5, kind = 6, shift = 7, ng = 8, i = 9, mode = 10, s1 = 11, s2 = 12, s3 = 13, j = 14, twelve = 15,
+				idx = 16, t = 17, three = 18, dbl = 19;
+		int lo = 20, span = 21, u = 22, acc = 23, d = 24;
+		int res = 25, vbO = 26, vbS = 27, vbR = 28, nd = 29, box = 30;
+
+		block(w); // B0: the declined exit -- res stays null
+		isFarray(w, out);
+		brIfFalse(w, 0);
+		isFarray(w, st);
+		brIfFalse(w, 0);
+		// st: three packed DOUBLES (kind 0), the shape %la-rng-state builds.
+		farrayKind(w, st);
+		w.write(Instruction.BR_IF, 0);
+		farrayCount(w, st);
+		i32Const(w, 3);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		unboxI31OrDecline(w, modeA, mode);
+		get(w, mode);
+		i32Const(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		get(w, mode);
+		i32Const(w, 2);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.BR_IF, 0);
+		isNumber(w, loA);
+		brIfFalse(w, 0);
+		get(w, loA);
+		unboxF64(w, box);
+		set(w, lo);
+		isNumber(w, spanA);
+		brIfFalse(w, 0);
+		get(w, spanA);
+		unboxF64(w, box);
+		set(w, span);
+		// The three state words, each an exact non-negative integer below 2^23.
+		farrayField(w, st, 1);
+		set(w, vbS);
+		i32Const(w, 0);
+		set(w, idx);
+		emitRngStateWord(w, vbS, idx, d, t, vecBase);
+		get(w, t);
+		set(w, s1);
+		i32Const(w, 1);
+		set(w, idx);
+		emitRngStateWord(w, vbS, idx, d, t, vecBase);
+		get(w, t);
+		set(w, s2);
+		i32Const(w, 2);
+		set(w, idx);
+		emitRngStateWord(w, vbS, idx, d, t, vecBase);
+		get(w, t);
+		set(w, s3);
+		// The fill itself.
+		loadHeader(w, out, count, kind, shift, ng);
+		farrayField(w, out, 1);
+		set(w, vbO);
+		i32Const(w, 12);
+		set(w, twelve);
+		openCountLoop(w, i, count);
+		get(w, vbO);
+		get(w, i);
+		get(w, mode);
+		i32Const(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x7C); // (result f64)
+		// Irwin-Hall: twelve draws summed from a 0.0 seed, minus 6.
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		set(w, acc);
+		openCountLoop(w, j, twelve);
+		get(w, acc);
+		emitRngNext(w, s1, s2, s3, u);
+		w.write(Instruction.F64_ADD);
+		set(w, acc);
+		closeCountLoop(w, j);
+		get(w, acc);
+		w.write(Instruction.F64_CONST).writeF64(6.0);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.ELSE);
+		// A NON-ZERO mode here is 2, linalg:uniform's (+ lo (* span draw)) -- the
+		// defun's own left fold; zero is linalg:rand's bare draw.
+		get(w, mode);
+		w.write(Instruction.IF, 0x7C);
+		get(w, lo);
+		get(w, span);
+		emitRngNext(w, s1, s2, s3, u);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.ELSE);
+		emitRngNext(w, s1, s2, s3, u);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, i);
+		// The state the generator ends on, as a fresh three-element double vector.
+		i32Const(w, 3);
+		set(w, three);
+		i32Const(w, 0);
+		set(w, dbl);
+		newVblock(w, three, dbl, vbR, vecBase);
+		i32Const(w, 0);
+		set(w, idx);
+		emitRngStateOut(w, vbR, idx, s1, vecBase);
+		i32Const(w, 1);
+		set(w, idx);
+		emitRngStateOut(w, vbR, idx, s2, vecBase);
+		i32Const(w, 2);
+		set(w, idx);
+		emitRngStateOut(w, vbR, idx, s3, vecBase);
+		newBuckets1(w, three, nd);
+		makeFarrayWithDims(w, nd, vbR);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 15, 5, 0, 0, 6, 0);
+	}
+
+	/**
+	 * Reads {@code st[idx]} into {@code t} as an i32, declining (depth 0) unless it is an
+	 * exact non-negative integer below {@code 2^23} -- the range {@code linalg:seed}
+	 * produces and {@code %la-rng-next} keeps, and the range in which {@code a * s}
+	 * cannot overflow an i32. The NaN test comes first: {@code i32.trunc_s} traps on it.
+	 */
+	private static void emitRngStateWord(WasmWriter w, int vbS, int idx, int d, int t, int vecBase) {
+		vget(w, vbS, idx, vecBase);
+		set(w, d);
+		get(w, d);
+		get(w, d);
+		w.write(Instruction.F64_NE);
+		w.write(Instruction.BR_IF, 0);
+		get(w, d);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.BR_IF, 0);
+		get(w, d);
+		w.write(Instruction.F64_CONST).writeF64(8388608.0);
+		w.write(Instruction.F64_GE);
+		w.write(Instruction.BR_IF, 0);
+		get(w, d);
+		w.write(Instruction.I32_TRUNC_S_F64);
+		set(w, t);
+		get(w, t);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		get(w, d);
+		w.write(Instruction.F64_NE);
+		w.write(Instruction.BR_IF, 0);
+	}
+
+	/** {@code _v_set(vb, idx, (f64) state)} for one word of the answered state. */
+	private static void emitRngStateOut(WasmWriter w, int vb, int idx, int state, int vecBase) {
+		get(w, vb);
+		get(w, idx);
+		get(w, state);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+	}
+
+	/**
+	 * Advances the three states and leaves the next uniform double in {@code [0, 1)} on
+	 * the stack -- {@code %la-rng-next}, operation for operation.
+	 */
+	private static void emitRngNext(WasmWriter w, int s1, int s2, int s3, int u) {
+		emitRngState(w, s1, 171, 30269);
+		emitRngState(w, s2, 172, 30307);
+		emitRngState(w, s3, 170, 30323);
+		get(w, s1);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_CONST).writeF64(30269.0);
+		w.write(Instruction.F64_DIV);
+		get(w, s2);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_CONST).writeF64(30307.0);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.F64_ADD);
+		get(w, s3);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_CONST).writeF64(30323.0);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.F64_ADD);
+		set(w, u);
+		// frac(u) for u in [0, 3), by compares only -- the defun's own spelling.
+		get(w, u);
+		w.write(Instruction.F64_CONST).writeF64(2.0);
+		w.write(Instruction.F64_GE);
+		w.write(Instruction.IF, 0x7C);
+		get(w, u);
+		w.write(Instruction.F64_CONST).writeF64(2.0);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.ELSE);
+		get(w, u);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.F64_GE);
+		w.write(Instruction.IF, 0x7C);
+		get(w, u);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.ELSE);
+		get(w, u);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	/** {@code s = (a * s) mod m} -- both operands non-negative, so rem_s is Lisp mod. */
+	private static void emitRngState(WasmWriter w, int s, int a, int m) {
+		get(w, s);
+		i32Const(w, a);
+		w.write(Instruction.I32_MUL);
+		i32Const(w, m);
+		w.write(Instruction.I32_REM_S);
+		set(w, s);
+	}
+
+	// --- the fused optimizer update: %la-adam-step -------------------------------------
+
+	// (linalg::%la-adam-step x g m v ps): Adam's fused element-wise update, IN PLACE over
+	// four same-width packed arrays of the same element count, with the whole rule in the
+	// eleven-element double vector ps (lr, lr*wd, wd, b1, 1-b1, b2, 1-b2, eps, c1, c2,
+	// mode -- mode 0 no weight decay, 1 COUPLED as torch.optim.Adam, 2 DECOUPLED as
+	// torch.optim.AdamW). The parameter array itself is answered.
+	//
+	// The defun's order of operations, element for element: every element is read
+	// widened to f64 through _v_get, the five multiplies, the sqrt and the divide run in
+	// f64, and only _v_set narrows on a single-float store -- which IS the defun's
+	// widen-compute-narrow round trip, so this is bit-identical at both widths.
+	//
+	// Declines: a scalar parameter or gradient (a plain number, which the defun keeps for
+	// itself), a boxed array, a mixed-width quadruple, a count mismatch, a malformed rule
+	// vector.
+	//
+	// params: 0 = x, 1 = g, 2 = m, 3 = v, 4 = ps.
+	// i32: count 5, kind 6, shift 7, ng 8, i 9, mode 10, idx 11.
+	// f64: lr 12, lrwd 13, wd 14, b1 15, omb1 16, b2 17, omb2 18, eps 19, c1 20, c2 21,
+	// x0 22, xv 23, gv 24, mk 25, vk 26, md 27.
+	// eq: res 28, vbX 29, vbG 30, vbM 31, vbV 32, vbP 33.
+	private static byte[] buildAdamStep(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int x = 0, g = 1, m = 2, v = 3, ps = 4;
+		int count = 5, kind = 6, shift = 7, ng = 8, i = 9, mode = 10, idx = 11;
+		int lr = 12, lrwd = 13, wd = 14, b1 = 15, omb1 = 16, b2 = 17, omb2 = 18, eps = 19, c1 = 20, c2 = 21, x0 = 22,
+				xv = 23, gv = 24, mk = 25, vk = 26, md = 27;
+		int res = 28, vbX = 29, vbG = 30, vbM = 31, vbV = 32, vbP = 33;
+
+		block(w); // B0: the declined exit -- res stays null
+		isFarray(w, x);
+		isFarray(w, g);
+		w.write(Instruction.I32_AND);
+		isFarray(w, m);
+		w.write(Instruction.I32_AND);
+		isFarray(w, v);
+		w.write(Instruction.I32_AND);
+		isFarray(w, ps);
+		w.write(Instruction.I32_AND);
+		brIfFalse(w, 0);
+		// One width across the four aligned arrays; the rule vector is always double.
+		farrayKind(w, x);
+		set(w, kind);
+		get(w, kind);
+		farrayKind(w, g);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		get(w, kind);
+		farrayKind(w, m);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		get(w, kind);
+		farrayKind(w, v);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		farrayKind(w, ps);
+		w.write(Instruction.BR_IF, 0);
+		farrayCount(w, ps);
+		i32Const(w, 11);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		farrayCount(w, x);
+		set(w, count);
+		get(w, count);
+		farrayCount(w, g);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		get(w, count);
+		farrayCount(w, m);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		get(w, count);
+		farrayCount(w, v);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		farrayField(w, ps, 1);
+		set(w, vbP);
+		emitRuleSlot(w, vbP, idx, 0, lr, vecBase);
+		emitRuleSlot(w, vbP, idx, 1, lrwd, vecBase);
+		emitRuleSlot(w, vbP, idx, 2, wd, vecBase);
+		emitRuleSlot(w, vbP, idx, 3, b1, vecBase);
+		emitRuleSlot(w, vbP, idx, 4, omb1, vecBase);
+		emitRuleSlot(w, vbP, idx, 5, b2, vecBase);
+		emitRuleSlot(w, vbP, idx, 6, omb2, vecBase);
+		emitRuleSlot(w, vbP, idx, 7, eps, vecBase);
+		emitRuleSlot(w, vbP, idx, 8, c1, vecBase);
+		emitRuleSlot(w, vbP, idx, 9, c2, vecBase);
+		emitRuleSlot(w, vbP, idx, 10, md, vecBase);
+		// mode: exactly 0, 1 or 2 (the NaN test first -- i32.trunc_s traps on it).
+		get(w, md);
+		get(w, md);
+		w.write(Instruction.F64_NE);
+		w.write(Instruction.BR_IF, 0);
+		get(w, md);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.BR_IF, 0);
+		get(w, md);
+		w.write(Instruction.F64_CONST).writeF64(2.0);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.BR_IF, 0);
+		get(w, md);
+		w.write(Instruction.I32_TRUNC_S_F64);
+		set(w, mode);
+		get(w, mode);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		get(w, md);
+		w.write(Instruction.F64_NE);
+		w.write(Instruction.BR_IF, 0);
+		farrayField(w, x, 1);
+		set(w, vbX);
+		farrayField(w, g, 1);
+		set(w, vbG);
+		farrayField(w, m, 1);
+		set(w, vbM);
+		farrayField(w, v, 1);
+		set(w, vbV);
+		openCountLoop(w, i, count);
+		vget(w, vbX, i, vecBase);
+		set(w, x0);
+		// xv = decoupled ? x0 - lr*wd*x0 : x0
+		get(w, mode);
+		i32Const(w, 2);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x7C);
+		get(w, x0);
+		get(w, lrwd);
+		get(w, x0);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.ELSE);
+		get(w, x0);
+		w.write(Instruction.END);
+		set(w, xv);
+		// gv = coupled ? g0 + wd*x0 : g0
+		vget(w, vbG, i, vecBase);
+		set(w, gv);
+		get(w, mode);
+		i32Const(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, gv);
+		get(w, wd);
+		get(w, x0);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+		set(w, gv);
+		w.write(Instruction.END);
+		// mk = b1*m[i] + (1-b1)*gv; vk = b2*v[i] + (1-b2)*gv*gv
+		get(w, b1);
+		vget(w, vbM, i, vecBase);
+		w.write(Instruction.F64_MUL);
+		get(w, omb1);
+		get(w, gv);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+		set(w, mk);
+		get(w, b2);
+		vget(w, vbV, i, vecBase);
+		w.write(Instruction.F64_MUL);
+		get(w, omb2);
+		get(w, gv);
+		w.write(Instruction.F64_MUL);
+		get(w, gv);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+		set(w, vk);
+		get(w, vbM);
+		get(w, i);
+		get(w, mk);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		get(w, vbV);
+		get(w, i);
+		get(w, vk);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		// x[i] = xv - (lr * (mk / c1)) / (sqrt(vk / c2) + eps)
+		get(w, vbX);
+		get(w, i);
+		get(w, xv);
+		get(w, lr);
+		get(w, mk);
+		get(w, c1);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.F64_MUL);
+		get(w, vk);
+		get(w, c2);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.F64_SQRT);
+		get(w, eps);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, i);
+		get(w, x);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 7, 16, 0, 0, 6, 0);
+	}
+
+	/** {@code outLocal = ps[slot]} -- one hyper-parameter of the rule vector. */
+	private static void emitRuleSlot(WasmWriter w, int vbP, int idx, int slot, int outLocal, int vecBase) {
+		i32Const(w, slot);
+		set(w, idx);
+		vget(w, vbP, idx, vecBase);
+		set(w, outLocal);
 	}
 
 	/**

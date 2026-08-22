@@ -495,6 +495,21 @@ Four decisions worth keeping:
   `torch:no-grad` around it. A scalar parameter (data is a plain NUMBER) is the
   one branch inside the element loop; a parameter whose grad is still nil is
   skipped, like PyTorch's `if p.grad is None: continue`.
+- **Adam's element loop is NOT in this file any more (todo-473, 2026-08-22).**
+  `torch::%o-adam-step` keeps everything that is not per-element -- the fields,
+  the two bias corrections, the parameter walk -- and calls
+  `linalg::%la-adam-step (x g m v ps)` once per parameter, packing the whole rule
+  into the eleven-element double vector `ps` (`lr`, `lr*wd`, `wd`, `b1`, `1-b1`,
+  `b2`, `1-b2`, `eps`, `c1`, `c2`, `mode`; mode 0 = no decay, 1 = coupled,
+  2 = decoupled, which is how the two spellings above became one branch on a
+  number). It went to `linalg:` and not into a widened seam because the
+  acceleration seam intercepts `linalg:` members and NOTHING else, and that loop
+  was 22-31% of a `--gpu --simd` training step
+  (`.kb/gpu.md`, `.kb/linalg-simd.md`). `lr * wd` is multiplied in THIS file,
+  while both may still be exact rationals, so the decoupled term is the
+  `(* lr wd x)` the old inline loop formed; everything else meets a double
+  exactly once either way. `torch::%o-sgd-step` is untouched -- it is not on any
+  profile -- so SGD is still a boxed loop here.
 - **`torch:step` increments the counter FIRST.** Adam's bias correction divides
   by `1 - beta^t` with `t` = the optimizer's own `torch:step-count`, so the
   first step is fully corrected and has magnitude `lr`. That is the classic

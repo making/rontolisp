@@ -1592,6 +1592,15 @@
   ;; ONE step function rather than an adamw twin: the two rules differ in where
   ;; a single term is added, and a second copy of the inner loop would be a
   ;; second place for the bias correction to drift.
+  ;;
+  ;; The per-element loop itself is NOT here: it is linalg::%la-adam-step,
+  ;; called once per parameter with the whole rule packed into a double vector.
+  ;; It was the LARGEST frame of a --gpu --simd training step -- 22-31% of it,
+  ;; a boxed do loop over row-major-aref, plus the boxing it drove (todo-473)
+  ;; -- and moving it into a linalg: internal member is
+  ;; what puts it on the acceleration seam -- which intercepts linalg: members
+  ;; and nothing else. What this function keeps is everything that is not
+  ;; per-element: the fields, the bias corrections, and the parameter walk.
   (let* ((lr (torch:field self :lr))
          (betas (torch:field self :betas))
          (b1 (car betas))
@@ -1603,31 +1612,28 @@
          (c1 (- 1.0 (expt b1 it)))
          (c2 (- 1.0 (expt b2 it)))
          (ms (torch::%o-buffer-field self :m))
-         (vs (torch::%o-buffer-field self :v)))
+         (vs (torch::%o-buffer-field self :v))
+         (rule (linalg::%la-make 11 0.0 nil)))
+    ;; lr * wd is multiplied HERE, while both may still be exact rationals, so
+    ;; that the decoupled term is the (* lr wd x) the scalar rule formed.
+    (setf (aref rule 0) lr)
+    (setf (aref rule 1) (* lr wd))
+    (setf (aref rule 2) wd)
+    (setf (aref rule 3) b1)
+    (setf (aref rule 4) (- 1.0 b1))
+    (setf (aref rule 5) b2)
+    (setf (aref rule 6) (- 1.0 b2))
+    (setf (aref rule 7) eps)
+    (setf (aref rule 8) c1)
+    (setf (aref rule 9) c2)
+    (setf (aref rule 10) (if (= wd 0) 0 (if decoupled 2 1)))
     (do ((ps (torch::%o-params self) (cdr ps)) (i 0 (+ i 1)))
         ((null ps) self)
       (let* ((p (car ps)) (g (torch::%t-grad p)))
         (unless (null g)
-          (let* ((x (torch::%t-data p))
-                 (sx (numberp x))
-                 (sg (numberp g))
-                 (n (if sx 1 (array-total-size x)))
-                 (m (aref ms i))
-                 (v (aref vs i)))
-            (do ((k 0 (+ k 1)))
-                ((>= k n))
-              (let* ((x0 (if sx x (row-major-aref x k)))
-                     (xv (if (and decoupled (/= wd 0)) (- x0 (* lr wd x0)) x0))
-                     (g0 (if sg g (row-major-aref g k)))
-                     (gv (if (or decoupled (= wd 0)) g0 (+ g0 (* wd x0))))
-                     (mk (+ (* b1 (row-major-aref m k)) (* (- 1.0 b1) gv)))
-                     (vk (+ (* b2 (row-major-aref v k)) (* (- 1.0 b2) gv gv))))
-                (setf (row-major-aref m k) mk)
-                (setf (row-major-aref v k) vk)
-                (let ((nv (- xv (/ (* lr (/ mk c1)) (+ (sqrt (/ vk c2)) eps)))))
-                  (if sx
-                      (setf (torch::%t-data p) nv)
-                      (setf (row-major-aref x k) nv)))))))))))
+          (setf (torch::%t-data p)
+                (linalg::%la-adam-step (torch::%t-data p) g (aref ms i)
+                                       (aref vs i) rule)))))))
 
 (defun torch:sgd (params &key (lr 0.01) (momentum 0.0) (weight-decay 0.0))
   ;; Stochastic gradient descent (torch.optim.SGD) over params (a module or a

@@ -98,7 +98,13 @@ final class JvmLinalgKernelCompiler {
 			Map.entry(LispNames.LINALG_IM2COL, "laIm2col"), Map.entry(LispNames.LINALG_COL2IM, "laCol2im"),
 			// The internal STACKED matrix product behind linalg:matmul at rank >= 3
 			// (torch.bmm): one ikj slab per batch, the same kernel dot's M.M case runs.
-			Map.entry(LispNames.LINALG_MATMUL_ND, "laMatmulNd"));
+			Map.entry(LispNames.LINALG_MATMUL_ND, "laMatmulNd"),
+			// The two members todo-473 moved onto this seam: the fused optimizer update
+			// behind torch:adam / torch:adamw, and the one fill loop behind
+			// linalg:rand / randn / uniform. Both are internal linalg: members precisely
+			// so that this compiler -- which claims linalg: call sites and nothing else
+			// -- can reach them.
+			Map.entry(LispNames.LINALG_ADAM_STEP, "laAdamStep"), Map.entry(LispNames.LINALG_RNG_FILL, "laRngFill"));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
@@ -131,7 +137,7 @@ final class JvmLinalgKernelCompiler {
 	/** The argument count of the member's Lisp call form. */
 	static int arity(String member) {
 		return switch (member) {
-			case LispNames.LINALG_IM2COL -> 5;
+			case LispNames.LINALG_IM2COL, LispNames.LINALG_ADAM_STEP, LispNames.LINALG_RNG_FILL -> 5;
 			case LispNames.LINALG_COL2IM -> 6;
 			default -> UNARY.contains(member) ? 1 : 2;
 		};

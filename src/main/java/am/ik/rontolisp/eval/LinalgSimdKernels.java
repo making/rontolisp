@@ -1153,6 +1153,129 @@ final class LinalgSimdKernels {
 		return img;
 	}
 
+	// --- the fused optimizer update: %la-adam-step -----------------------------------
+	//
+	// Adam's rule over four aligned arrays, in the defun's own order of operations, so
+	// it is BIT-IDENTICAL at both widths: every element is read widened to double, the
+	// five multiplies, the sqrt and the divide run in double, and only the stores into a
+	// single-float parameter or moment buffer narrow -- which is the widen-compute-narrow
+	// round trip the boxed defun performs. Scalar by decision, like %la-im2col: the win
+	// is escaping the tree-walk and the boxed double per element (31% of a --gpu --simd
+	// training step), not the lanes.
+
+	/**
+	 * Adam's fused element-wise update in place over the parameter {@code x}, its
+	 * gradient {@code g} and the two moment buffers {@code m} and {@code v}, with the
+	 * rule packed into {@code ps} ({@code lr}, {@code lr*wd}, {@code wd}, {@code b1},
+	 * {@code 1-b1}, {@code b2}, {@code 1-b2}, {@code eps}, {@code c1}, {@code c2},
+	 * {@code mode}). {@code mode} is 0 for no weight decay, 1 for the COUPLED L2 term
+	 * ({@code torch.optim.Adam}) and 2 for the DECOUPLED one ({@code torch.optim.AdamW}).
+	 */
+	static void adamStep(double[] x, double[] g, double[] m, double[] v, double[] ps) {
+		double lr = ps[0], lrwd = ps[1], wd = ps[2], b1 = ps[3], omb1 = ps[4], b2 = ps[5], omb2 = ps[6], eps = ps[7],
+				c1 = ps[8], c2 = ps[9];
+		int mode = (int) ps[10];
+		for (int k = 0; k < x.length; k++) {
+			double x0 = x[k];
+			double xv = mode == 2 ? x0 - lrwd * x0 : x0;
+			double gv = mode == 1 ? g[k] + wd * x0 : g[k];
+			double mk = b1 * m[k] + omb1 * gv;
+			double vk = b2 * v[k] + omb2 * gv * gv;
+			m[k] = mk;
+			v[k] = vk;
+			x[k] = xv - lr * (mk / c1) / (Math.sqrt(vk / c2) + eps);
+		}
+	}
+
+	static void adamStepF(float[] x, float[] g, float[] m, float[] v, double[] ps) {
+		double lr = ps[0], lrwd = ps[1], wd = ps[2], b1 = ps[3], omb1 = ps[4], b2 = ps[5], omb2 = ps[6], eps = ps[7],
+				c1 = ps[8], c2 = ps[9];
+		int mode = (int) ps[10];
+		for (int k = 0; k < x.length; k++) {
+			// The defun reads every element widened to double and narrows only on the
+			// store, moment buffers included -- so mk / vk feed the parameter update at
+			// FULL double width even though m[k] / v[k] keep the narrowed value.
+			double x0 = x[k];
+			double xv = mode == 2 ? x0 - lrwd * x0 : x0;
+			double gv = mode == 1 ? g[k] + wd * x0 : g[k];
+			double mk = b1 * m[k] + omb1 * gv;
+			double vk = b2 * v[k] + omb2 * gv * gv;
+			m[k] = (float) mk;
+			v[k] = (float) vk;
+			x[k] = (float) (xv - lr * (mk / c1) / (Math.sqrt(vk / c2) + eps));
+		}
+	}
+
+	// --- the seeded generator: %la-rng-fill ------------------------------------------
+	//
+	// Wichmann-Hill, three multiplicative congruential states combined into one uniform
+	// double, exactly as %la-rng-next spells it: three integer updates, three divides,
+	// a left-associated sum and the frac by compares. Reproducing that operation for
+	// operation is not optional -- linalg:seed promises one seed reproduces one sequence
+	// on every backend, and the examples' expected output is pinned to it.
+	//
+	// The kernel keeps the states in int locals and writes the final one back, which is
+	// where the win is: the defun boxed a double per draw and a fresh integer per state
+	// update, twelve times per element for randn.
+
+	/** The three multipliers and moduli of the generator ({@code %la-rng-next}). */
+	private static final int RNG_A1 = 171, RNG_M1 = 30269;
+
+	private static final int RNG_A2 = 172, RNG_M2 = 30307;
+
+	private static final int RNG_A3 = 170, RNG_M3 = 30323;
+
+	/**
+	 * Fills {@code out} from the state {@code (s1, s2, s3)} and returns the state the
+	 * generator ends on, as a fresh three-element vector. {@code mode} picks the element
+	 * rule: 0 one uniform draw ({@code linalg:rand}), 1 the sum of twelve minus 6
+	 * ({@code linalg:randn}), 2 {@code lo + span * draw} ({@code linalg:uniform}).
+	 */
+	static double[] rngFill(double[] out, int mode, double lo, double span, int s1, int s2, int s3) {
+		int[] st = { s1, s2, s3 };
+		for (int k = 0; k < out.length; k++) {
+			out[k] = rngElement(mode, lo, span, st);
+		}
+		return new double[] { st[0], st[1], st[2] };
+	}
+
+	static double[] rngFillF(float[] out, int mode, double lo, double span, int s1, int s2, int s3) {
+		int[] st = { s1, s2, s3 };
+		for (int k = 0; k < out.length; k++) {
+			// The defun narrows only on the store into a single-float array.
+			out[k] = (float) rngElement(mode, lo, span, st);
+		}
+		return new double[] { st[0], st[1], st[2] };
+	}
+
+	private static double rngElement(int mode, double lo, double span, int[] st) {
+		if (mode == 1) {
+			// Irwin-Hall: twelve draws summed from a 0.0 seed, minus 6.
+			double acc = 0.0;
+			for (int j = 0; j < 12; j++) {
+				acc = acc + rngNext(st);
+			}
+			return acc - 6.0;
+		}
+		if (mode == 0) {
+			return rngNext(st);
+		}
+		return lo + span * rngNext(st);
+	}
+
+	/** {@code %la-rng-next}: the next uniform double in {@code [0, 1)}. */
+	private static double rngNext(int[] st) {
+		int s1 = RNG_A1 * st[0] % RNG_M1;
+		int s2 = RNG_A2 * st[1] % RNG_M2;
+		int s3 = RNG_A3 * st[2] % RNG_M3;
+		st[0] = s1;
+		st[1] = s2;
+		st[2] = s3;
+		double u = s1 / 30269.0 + s2 / 30307.0 + s3 / 30323.0;
+		// frac(u) for u in [0, 3), by compares only -- the defun's own spelling.
+		return u >= 2.0 ? u - 2.0 : (u >= 1.0 ? u - 1.0 : u);
+	}
+
 	// --- declined shapes: broadcast / axes transpose / axis folds --------------------
 	// Pure scalar loops mirroring the linalg.lisp defuns element for element -- no
 	// lanes. Every element is read widened to double, the operation runs in double,

@@ -5079,6 +5079,26 @@ public final class LispNames {
 	public static final String LINALG_MATMUL_ND = "%LA-MATMUL-ND";
 
 	/**
+	 * {@code linalg::%la-adam-step} (INTERNAL): Adam's FUSED element-wise update over a
+	 * parameter, its gradient and its two moment buffers, with the whole rule packed into
+	 * one double vector. It lives in {@code linalg} rather than in {@code torch} because
+	 * this seam intercepts {@code linalg:} members and nothing else, and it was 31% of a
+	 * {@code --gpu --simd} training step as a boxed {@code do} loop
+	 * ({@code torch::%o-adam-step}, its only caller, keeps the rule's documentation).
+	 */
+	public static final String LINALG_ADAM_STEP = "%LA-ADAM-STEP";
+
+	/**
+	 * {@code linalg::%la-rng-fill} (INTERNAL): fills a packed array with draws from an
+	 * explicit Wichmann-Hill state and answers the state it ends on -- the one loop
+	 * behind {@code linalg:rand}, {@code linalg:randn} and {@code linalg:uniform}, which
+	 * take their state from and put it back into the three {@code %la-rng-s*} specials.
+	 * Passing the state as an array is what makes the fill a pure function of its
+	 * arguments, and so a member this seam can intercept.
+	 */
+	public static final String LINALG_RNG_FILL = "%LA-RNG-FILL";
+
+	/**
 	 * The {@code torch} package name (a PyTorch-style tensor with reverse-mode autograd
 	 * over the {@code linalg} kernels). Like {@code linalg}, the package is implemented
 	 * once in rontolisp itself ({@code torch.lisp}, see {@code TorchLibrary}); the

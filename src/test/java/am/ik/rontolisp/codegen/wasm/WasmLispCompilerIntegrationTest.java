@@ -16018,6 +16018,94 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
+	// The seeded generator's one fill loop (linalg:rand / randn / uniform) and Adam's
+	// fused element-wise update, todo-473's two members. Both are internal linalg:
+	// members precisely so that this seam can reach them, and both are bit-identical at
+	// both widths -- the generator because linalg:seed promises one seed reproduces one
+	// sequence on every backend, the update because it keeps the defun's order of
+	// operations and narrows only on the store. The declines run the defun.
+	static List<String> optimizerAndGeneratorSources() {
+		String rule = """
+				(defun rule (mode it)
+				  (let ((r (linalg::%la-make 11 0.0 nil)))
+				    (setf (aref r 0) 0.01)
+				    (setf (aref r 1) (* 0.01 0.1))
+				    (setf (aref r 2) 0.1)
+				    (setf (aref r 3) 0.9)
+				    (setf (aref r 4) (- 1.0 0.9))
+				    (setf (aref r 5) 0.999)
+				    (setf (aref r 6) (- 1.0 0.999))
+				    (setf (aref r 7) 1.0e-8)
+				    (setf (aref r 8) (- 1.0 (expt 0.9 it)))
+				    (setf (aref r 9) (- 1.0 (expt 0.999 it)))
+				    (setf (aref r 10) mode)
+				    r))
+				(defun run (et mode steps)
+				  (linalg:seed 11)
+				  (let ((x (linalg:randn '(3 5) :element-type et))
+				        (g (linalg:randn '(3 5) :element-type et))
+				        (m (linalg:zeros '(3 5) :element-type et))
+				        (v (linalg:zeros '(3 5) :element-type et)))
+				    (do ((it 1 (+ it 1)))
+				        ((> it steps))
+				      (linalg::%la-adam-step x g m v (rule mode it)))
+				    (print x)
+				    (print m)
+				    (print v)))
+				""";
+		List<String> sources = new ArrayList<>();
+		for (String et : List.of("nil", "'single-float")) {
+			for (String mode : List.of("0", "1", "2")) {
+				sources.add(rule + "(run " + et + " " + mode + " 4)");
+			}
+		}
+		// The declines: a scalar parameter, a scalar gradient, a boxed array, a
+		// mixed-width quadruple, a mode outside 0..2.
+		sources.add(rule + "(print (linalg::%la-adam-step 0.5 0.25 (linalg:zeros 1) (linalg:zeros 1) (rule 2 1)))");
+		sources.add(rule + "(print (linalg::%la-adam-step (linalg:ones 3) 0.25 (linalg:zeros 3) (linalg:zeros 3)"
+				+ " (rule 1 1)))");
+		sources.add(rule + "(print (linalg::%la-adam-step (make-array 3 :initial-element 1.0) (linalg:ones 3)"
+				+ " (linalg:zeros 3) (linalg:zeros 3) (rule 0 1)))");
+		sources.add(rule + "(print (linalg::%la-adam-step (linalg:ones 3 :element-type 'single-float)"
+				+ " (linalg:ones 3) (linalg:zeros 3) (linalg:zeros 3) (rule 0 1)))");
+		sources.add(rule + "(print (linalg::%la-adam-step (linalg:ones 3) (linalg:ones 3) (linalg:zeros 3)"
+				+ " (linalg:zeros 3) (rule 7 1)))");
+		// The generator: every rule, both widths, and the interleaving with the scalar
+		// draws that keep using the specials (choice / permutation / %la-rng-next).
+		sources.add("""
+				(linalg:seed 42)
+				(print (linalg:rand 5))
+				(print (linalg:randn '(2 3)))
+				(print (linalg:uniform -1 3 4))
+				(print (linalg:choice 10 5))
+				(print (linalg:permutation 6))
+				(print (linalg:rand '(2 2) :element-type 'single-float))
+				(print (linalg:randn 3 :element-type 'single-float))
+				(print (linalg:uniform 0.5 1.5 3 :element-type 'single-float))
+				(print (linalg::%la-rng-next))
+				""");
+		sources.add("(linalg:seed 1) (print (linalg:rand 0)) (print (linalg::%la-rng-next))");
+		sources.add("(linalg:seed 9) (print (linalg:randn 700))");
+		// The generator's declines: a boxed destination, a state vector of the wrong
+		// length, a state word outside the generator's range, an out-of-range mode.
+		sources.add("(linalg:seed 4) (print (linalg::%la-rng-fill (make-array 3 :initial-element 0.0)"
+				+ " (linalg::%la-rng-state) 0 0.0 1.0))");
+		sources.add("(linalg:seed 4) (print (linalg::%la-rng-fill (linalg:zeros 3) (linalg:zeros 4) 0 0.0 1.0))");
+		sources.add("(linalg:seed 4) (let ((s (linalg::%la-rng-state))) (setf (aref s 0) -3.0)"
+				+ " (print (linalg::%la-rng-fill (linalg:zeros 3) s 0 0.0 1.0)))");
+		sources.add("(linalg:seed 4) (let ((s (linalg::%la-rng-state))) (setf (aref s 1) 0.5)"
+				+ " (print (linalg::%la-rng-fill (linalg:zeros 3) s 0 0.0 1.0)))");
+		sources.add("(linalg:seed 4) (print (linalg::%la-rng-fill (linalg:zeros 3) (linalg::%la-rng-state)"
+				+ " 5 0.0 1.0))");
+		return sources;
+	}
+
+	@ParameterizedTest
+	@MethodSource("optimizerAndGeneratorSources")
+	void wasmGcSimdLinalgOptimizerAndGeneratorAreByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
+	}
+
 	// The comparison-select ufuncs: array-array at both widths
 	// and rank 2 (lane gt/lt + bitselect), the f64 scalar broadcast on either side
 	// (the lane select), the f32 scalar broadcast against a NOT-f32-representable

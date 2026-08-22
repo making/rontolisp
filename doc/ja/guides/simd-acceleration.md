@@ -169,10 +169,10 @@ GC 配列からレーングループを読むと、線形メモリからの `v12
 
 ## linalg のアクセラレーション
 
-[`linalg` パッケージ](linear-algebra.md)は同じパックド浮動小数点配列の上に書かれており、`--simd` はそのうち 36 個の関数を同じカーネルへ振り向けます。
+[`linalg` パッケージ](linear-algebra.md)は同じパックド浮動小数点配列の上に書かれており、`--simd` はそのうち 38 個の関数を同じカーネルへ振り向けます。
 
-- **直接加速される**: `add`・`sub`・`mul`・`div`・`sum`・`norm`・`amax`・`amin`・`argmax`・`argmin`・`trace`・`transpose`・`reshape`・`dot`・`outer`、単項 ufunc の `exp`・`log`・`tanh`・`sin`・`cos`・`tan`・`asin`・`acos`・`atan`・`sinh`・`cosh`・`sqrt`・`abs`・`negative`・`sign`・`erf`(移植可能な定義ではスカラー級数を `emap` したものであり、`emap` は決して加速されないため、それ自体を 1 つのメンバーとして intercept しています。厳密な [`torch:gelu`](../reference/functions/torch-gelu.md) を組み立てる素です)、比較セレクトの `maximum`・`minimum`、Deep Learning from Scratch の例を支える 2 つの内部畳み込みヘルパ(`linalg::%la-im2col` と `linalg::%la-col2im`。im2col のウィンドウ展開とその随伴で、レーンカーネルではなくインデックス演算のループですが、両方の幅でビット単位まで同一です)、および ランク 3 以上の `matmul` を支える内部の積み重ね行列積(`linalg::%la-matmul-nd`。`torch.bmm` すなわち attention 層そのものであり、バッチごとに行列積カーネルを 1 回走らせます)
-- **一緒に加速される**: `mean`・`matmul`・`flatten`・`solve`・`square`・`reciprocal`・`clip`・`relu`。いずれも上の関数を使って書かれています
+- **直接加速される**: `add`・`sub`・`mul`・`div`・`sum`・`norm`・`amax`・`amin`・`argmax`・`argmin`・`trace`・`transpose`・`reshape`・`dot`・`outer`、単項 ufunc の `exp`・`log`・`tanh`・`sin`・`cos`・`tan`・`asin`・`acos`・`atan`・`sinh`・`cosh`・`sqrt`・`abs`・`negative`・`sign`・`erf`(移植可能な定義ではスカラー級数を `emap` したものであり、`emap` は決して加速されないため、それ自体を 1 つのメンバーとして intercept しています。厳密な [`torch:gelu`](../reference/functions/torch-gelu.md) を組み立てる素です)、比較セレクトの `maximum`・`minimum`、Deep Learning from Scratch の例を支える 2 つの内部畳み込みヘルパ(`linalg::%la-im2col` と `linalg::%la-col2im`。im2col のウィンドウ展開とその随伴で、レーンカーネルではなくインデックス演算のループですが、両方の幅でビット単位まで同一です)、および ランク 3 以上の `matmul` を支える内部の積み重ね行列積(`linalg::%la-matmul-nd`。`torch.bmm` すなわち attention 層そのものであり、バッチごとに行列積カーネルを 1 回走らせます)、および シード付き乱数生成器とオプティマイザ更新を支える 2 つの内部メンバー(`linalg::%la-rng-fill` は `rand` / `randn` / `uniform` が共有する唯一の充填ループ、`linalg::%la-adam-step` はパラメータ・その勾配・2 つのモーメントバッファにまたがる Adam の融合要素演算です。こちらもレーンカーネルではなくスカラーループですが、両方の幅でビット単位まで同一です)
+- **一緒に加速される**: `mean`・`matmul`・`flatten`・`solve`・`square`・`reciprocal`・`clip`・`relu`。いずれも上の関数を使って書かれています。さらに乱数コンストラクタの `rand`・`randn`・`uniform` と、[`torch` パッケージ](neural-networks.md)の [`torch:adam`](../reference/functions/torch-adam.md) / [`torch:adamw`](../reference/functions/torch-adamw.md) オプティマイザに対する [`torch:step`](../reference/functions/torch-step.md) も同様です
 - **決して加速されない**: `emap`(要素ごとに任意の関数を適用するため)・`det`・`inv`・`array-equal`・各コンストラクタ
 
 別のフラグはなく、関数ごとに何かを有効化する必要もありません。`--simd` を付けてコンパイルまたは実行すれば、`vec` とまったく同じように呼び出しが振り向けられます。
@@ -186,7 +186,7 @@ GC 配列からレーングループを読むと、線形メモリからの `v12
 
 上述の精度の規則はそのまま当てはまりますが、1 点だけ linalg に有利な例外があります。
 
-- **要素ごとの演算は両方の幅でビット単位まで同一**です。相手が配列でもスカラーでも numpy のブロードキャスト越しでも `add` / `sub` / `mul` / `div` は同一であり、単項 ufunc の `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` / `erf` も、比較セレクトの `maximum` / `minimum` / `clip` / `relu`(セレクトは入力のビットをコピーするだけなので丸めが起きません)も、`transpose`(axes 形を含む)・`reshape`・`outer`・`trace`・`amax`・`amin`・`argmax`・`argmin` も同様です。
+- **要素ごとの演算は両方の幅でビット単位まで同一**です。相手が配列でもスカラーでも numpy のブロードキャスト越しでも `add` / `sub` / `mul` / `div` は同一であり、単項 ufunc の `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` / `erf` も、比較セレクトの `maximum` / `minimum` / `clip` / `relu`(セレクトは入力のビットをコピーするだけなので丸めが起きません)も、`transpose`(axes 形を含む)・`reshape`・`outer`・`trace`・`amax`・`amin`・`argmax`・`argmin` も同様です。シード付き乱数生成器とオプティマイザ更新も同じで、1 つのシードはフラグの有無にかかわらずどのバックエンドでも同じ `rand` / `randn` / `uniform` の列を再現しますし、`torch:adam` や `torch:adamw` による学習はフラグなしのときと同じ出力を印字します。
 - **配列全体のリダクションは `vec` の規則に従います**。`sum`・`mean`・`norm`、および `dot` のベクトル形式と行列×ベクトル形式は加算順序が異なり、単精度配列に対しては単精度で累算します。
 - **軸に沿ったリダクションはビット単位まで同一です。** `(linalg:sum a :axis 0)` や `(linalg:amax a :axis 1)` などの axis 形は、移植可能な定義とまったく同じに — double で、同じ順序で、同じタイブレーク規則で — 畳み込むので、配列全体のリダクションと違って食い違いようがありません。
 - **完全な行列積も `vec` の規則に従います。** 2 つの行列に対する `(linalg:dot A B)` と `linalg:matmul` は — ランク 3 以上の積み重ね形(バッチごとに `dot` とまったく同じ畳み込みを行います)も含めて — 被演算子の幅で累算します。`#d` なら移植可能な定義とビット単位まで同一のままであり、`#f` では出力セルごとに単精度で畳み込みます — 順序は移植可能な定義そのものですが各ステップで丸めるため、両者は食い違うことがあります。これは単精度の行列積として普通の挙動で、主要なライブラリはどれも同じことをしています。同時に、ここで `#f` が `#d` の 2 倍遅いのではなく速い理由でもあります。単精度の累算器があってはじめてカーネルが単精度レーンを回せるからです。どのレーンが走ったかは結果を動かしません — レーンは総和を取る軸ではなく出力行を横切って走るからです — ので、3 つの `--simd` バックエンドは互いに厳密に一致します。単精度の行列積を移植可能な定義に一致させる必要があるなら、`#d` を使うか、その計算では `--simd` を切ってください。

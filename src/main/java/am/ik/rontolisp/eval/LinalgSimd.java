@@ -19,11 +19,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of the {@code linalg:} kernels: it
- * replaces thirty-six of the {@code linalg.lisp} defuns with native {@link LispFunction}s
- * driving the lane loops in {@link LinalgSimdKernels}. The {@code linalg:} sibling of
- * {@link VecSimd}, deliberately a separate class -- {@code vec.lisp} and
- * {@code linalg.lisp} never call each other, so their interceptors do not either. Only
- * the KERNELS are shared.
+ * replaces thirty-eight of the {@code linalg.lisp} defuns with native
+ * {@link LispFunction}s driving the lane loops in {@link LinalgSimdKernels}. The
+ * {@code linalg:} sibling of {@link VecSimd}, deliberately a separate class --
+ * {@code vec.lisp} and {@code linalg.lisp} never call each other, so their interceptors
+ * do not either. Only the KERNELS are shared.
  *
  * <h2>The fallback protocol</h2>
  *
@@ -182,6 +182,13 @@ public final class LinalgSimd {
 		// walk it routes to -- every attention layer and every torch:linear over a
 		// (B T C) activation.
 		define(globalEnv, evaluator, LispNames.LINALG_MATMUL_ND, 2, LinalgSimd::matmulNd);
+		// The two members todo-473 moved onto this seam: the FUSED optimizer update
+		// (torch:adam / torch:adamw, 31% of a --gpu --simd training step as a boxed do
+		// loop) and the one fill loop behind linalg:rand / randn / uniform. Both are
+		// internal linalg: members precisely so that this seam -- which intercepts
+		// linalg: names and nothing else -- can reach them.
+		define(globalEnv, evaluator, LispNames.LINALG_ADAM_STEP, 5, LinalgSimd::adamStep);
+		define(globalEnv, evaluator, LispNames.LINALG_RNG_FILL, 5, LinalgSimd::rngFill);
 	}
 
 	/**
@@ -835,6 +842,101 @@ public final class LinalgSimd {
 			case LispSingleFloatArray a -> new LispSingleFloatArray(
 					LinalgSimdKernels.col2imF(a.data(), n, c, h, w, fh, fw, stride, pad), dims.clone());
 		};
+	}
+
+	// --- the fused optimizer update and the generator fill ----------------------------
+
+	/**
+	 * {@code (linalg::%la-adam-step x g m v ps)}: Adam's fused element-wise update in
+	 * place over four SAME-WIDTH packed arrays of the same element count, with the rule
+	 * in an eleven-element packed double vector. A scalar parameter (whose {@code x} or
+	 * {@code g} is a plain number), a mixed-width quadruple and a malformed rule vector
+	 * all decline to the defun, which handles them.
+	 */
+	private static @Nullable LispVal adamStep(List<LispVal> args) {
+		LispFloatArray x = packed(args.get(0));
+		LispFloatArray g = packed(args.get(1));
+		LispFloatArray m = packed(args.get(2));
+		LispFloatArray v = packed(args.get(3));
+		double[] ps = adamRule(args.get(4));
+		if (x == null || g == null || m == null || v == null || ps == null) {
+			return null;
+		}
+		int n = x.totalSize();
+		if (g.totalSize() != n || m.totalSize() != n || v.totalSize() != n) {
+			return null;
+		}
+		if (x instanceof LispDoubleFloatArray a && g instanceof LispDoubleFloatArray b
+				&& m instanceof LispDoubleFloatArray c && v instanceof LispDoubleFloatArray d) {
+			LinalgSimdKernels.adamStep(a.data(), b.data(), c.data(), d.data(), ps);
+			return x;
+		}
+		if (x instanceof LispSingleFloatArray a && g instanceof LispSingleFloatArray b
+				&& m instanceof LispSingleFloatArray c && v instanceof LispSingleFloatArray d) {
+			LinalgSimdKernels.adamStepF(a.data(), b.data(), c.data(), d.data(), ps);
+			return x;
+		}
+		// Mixed widths: the defun reads every element widened anyway.
+		return null;
+	}
+
+	/**
+	 * The rule vector of {@code %la-adam-step}: eleven packed doubles whose last is the
+	 * weight-decay mode (0 none, 1 coupled, 2 decoupled). Anything else declines.
+	 */
+	private static double @Nullable [] adamRule(LispVal value) {
+		if (!(packed(value) instanceof LispDoubleFloatArray ps) || ps.data().length != 11) {
+			return null;
+		}
+		double mode = ps.data()[10];
+		return mode == 0.0 || mode == 1.0 || mode == 2.0 ? ps.data() : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-rng-fill out st mode lo span)}: fills a packed array of either
+	 * width from the state vector {@code st} and answers the state the generator ends on.
+	 * A general (boxed) destination, a state vector that is not three packed doubles in
+	 * the generator's own range, a mode outside 0..2 or a non-numeric {@code lo} /
+	 * {@code span} decline to the defun.
+	 */
+	private static @Nullable LispVal rngFill(List<LispVal> args) {
+		LispFloatArray out = packed(args.get(0));
+		Integer mode = smallInt(args.get(2));
+		Double lo = scalar(args.get(3));
+		Double span = scalar(args.get(4));
+		if (out == null || mode == null || mode < 0 || mode > 2 || lo == null || span == null) {
+			return null;
+		}
+		if (!(packed(args.get(1)) instanceof LispDoubleFloatArray s) || s.data().length != 3) {
+			return null;
+		}
+		int[] w = rngState(s.data());
+		if (w == null) {
+			return null;
+		}
+		double[] end = switch (out) {
+			case LispDoubleFloatArray a -> LinalgSimdKernels.rngFill(a.data(), mode, lo, span, w[0], w[1], w[2]);
+			case LispSingleFloatArray a -> LinalgSimdKernels.rngFillF(a.data(), mode, lo, span, w[0], w[1], w[2]);
+		};
+		return new LispDoubleFloatArray(end, new int[] { 3 });
+	}
+
+	/**
+	 * The three generator state words as exact non-negative {@code int}s below
+	 * {@code 2^23} -- the range {@code linalg:seed} produces and {@code %la-rng-next}
+	 * keeps, and the range in which {@code a * s} cannot overflow an {@code int} and Java
+	 * {@code %} agrees with Lisp {@code mod}. Anything else declines.
+	 */
+	private static int @Nullable [] rngState(double[] s) {
+		int[] w = new int[3];
+		for (int i = 0; i < 3; i++) {
+			int v = (int) s[i];
+			if (v != s[i] || v < 0 || v >= 1 << 23) {
+				return null;
+			}
+			w[i] = v;
+		}
+		return w;
 	}
 
 	/**

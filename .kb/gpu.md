@@ -1402,14 +1402,49 @@ f32 per op) is measuring an op whose copies are 1.5% of the program that op runs
 is the answer to "does residency pay": **not here, not by a factor that could survive the
 15% run-to-run spread of the same program on this machine.**
 
-What actually dominates is `torch::%o-adam-step`: PyTorch's Adam rule written as a
+What actually dominated was `torch::%o-adam-step`: PyTorch's Adam rule written as a
 `do` loop over `row-major-aref` / `(setf (row-major-aref ...))` per element per parameter,
-which boxes a double per element and is on NO acceleration seam -- not `--simd`, not
-`--blas`, not `--gpu`. Second is `linalg:rand` / `linalg:randn`, the dropout masks, which
-are the same shape of loop. **Between them they are about half of what a `--gpu --simd`
-training step now costs, and neither is a `linalg:` member.** That is a `torch:`-level
-item and not this one -- todo-473, filed off this profile -- and it is recorded here
-because it is the reason no further work on this seam will move this program much.
+which boxes a double per element and was on NO acceleration seam -- not `--simd`, not
+`--blas`, not `--gpu`. Second was `linalg:rand` / `linalg:randn`, the dropout masks, which
+are the same shape of loop. **Between them they were about half of what a `--gpu --simd`
+training step cost, and neither was a `linalg:` member.** That was a `torch:`-level item
+and not this one -- todo-473, filed off this profile -- and it is recorded here because it
+is the reason no further work on THIS seam will move this program much.
+
+**todo-473 closed it (2026-08-22) by making both of them `linalg:` members**: the Adam
+element loop became `linalg::%la-adam-step` and the three generator fills became one
+`linalg::%la-rng-fill`, each with a kernel on all three `--simd` backends
+(`.kb/linalg-simd.md`). Re-profiled on this box with the strided tier in, same program,
+same 40 steps, `--gpu --simd`, before and after that change (the sample TOTALS are what
+moved -- 1514 samples before, 590 after, for the same work):
+
+| frame | before | after |
+|---|---|---|
+| `TORCH::%O-ADAM-STEP` / `RontoLispSimdBridge.laAdamStep` | 339 (22%) | **16 (3%)** |
+| `LINALG:RAND` + `RANDN` + `%LA-RNG-NEXT` / `laRngFill` | 242 (16%) | **52 (9%)** |
+| `_fvAset1` | 221 (15%) | 24 (4%) |
+| `_dbl` | 150 (10%) | 28 (5%) |
+| `%LA-GATHER-STRIDED` | 118 (8%) | 111 (19%) |
+| `memcpyHtoD` + `memcpyDtoH` | 138 (9%) | 139 (24%) |
+
+The per-step wall clock over three interleaved rounds (medians; the same
+`(t40 - t5) / 35` this section's table uses):
+
+| per training step | before todo-473 | after |
+|---|---|---|
+| `--gpu --simd` | 0.326 s | **0.149 s** |
+| `--simd` | 0.872 s | 0.834 s |
+
+**2.2x on the device build**, against 1.05x on the CPU-only one -- and that gap is the
+finding to carry forward, because it is this section's own argument turned around: once
+`linalg:` is on the GPU, everything that is NOT `linalg:` is the program. The 5-step run
+(setup-dominated: every weight matrix is a `linalg:randn`) moved 6.8 -> 3.0 s on the device
+build and 9.5 -> 5.8 s on the CPU one, which is the generator alone.
+
+**And it moves the residency answer, in residency's favour but not far enough.** The device
+copies were 9% of a step and are now 24% of a much shorter one; the ceiling residency could
+remove is still only the host-to-device half of that (below), and re-deriving it is still
+the first thing to do before building any of it.
 
 #### The residency design that was weighed, and the enumeration it would need
 

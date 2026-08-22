@@ -189,6 +189,17 @@ distribution-exact `np.random.randn`). `linalg:seed` discards ~10 draws after
 setting the state so nearby seeds decorrelate. There is deliberately no
 dependence on the builtin `(random n)` (unseedable, backend-dependent).
 
+`rand` / `randn` / `uniform` share ONE fill loop, `linalg::%la-rng-fill (out st
+mode lo span)`, and that is what todo-473 (2026-08-22) moved them to: the loop
+takes the state as an ARRAY and answers the state it ends on as one, which is
+what makes it a pure function of its arguments and so a member `--simd` can
+intercept (`.kb/linalg-simd.md`). The three specials are its scratch --
+`%la-rng-state` reads them into a vector, `%la-rng-restore` writes a vector back
+-- so the generator's rule still lives in exactly one place, `%la-rng-next`, and
+the scalar draws (`%la-rng-int`, hence `choice` / `permutation`, and `seed`'s ten
+discarded draws) keep using it directly. `mode` picks the element rule (0 rand,
+1 randn, 2 uniform) so that each formula is spelled exactly where it was.
+
 Internal (non-exported, todo-117): `linalg::%la-im2col x fh fw stride pad`
 ((N C H W) -> (N*oh*ow, C*fh*fw) window unfold) and `linalg::%la-col2im col
 dims fh fw stride pad` (its scatter-add adjoint) back the

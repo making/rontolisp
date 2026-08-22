@@ -108,7 +108,14 @@ final class WasmLinalgSimdCompiler {
 			// The internal STACKED matrix product behind linalg:matmul at rank >= 3
 			// (torch.bmm): the ikj lane loop of the DOT kernel's M.M case, once per
 			// batch.
-			Map.entry(LispNames.LINALG_MATMUL_ND, WasmLinalgSimdRuntimeBuilder.MATMUL_ND));
+			Map.entry(LispNames.LINALG_MATMUL_ND, WasmLinalgSimdRuntimeBuilder.MATMUL_ND),
+			// The two members todo-473 moved onto this seam: the seeded generator's one
+			// fill loop (linalg:rand / randn / uniform) and Adam's fused element-wise
+			// update (torch:adam / torch:adamw). Both are internal linalg: members
+			// precisely so that this compiler -- which claims linalg: call sites and
+			// nothing else -- can reach them.
+			Map.entry(LispNames.LINALG_RNG_FILL, WasmLinalgSimdRuntimeBuilder.RNG_FILL),
+			Map.entry(LispNames.LINALG_ADAM_STEP, WasmLinalgSimdRuntimeBuilder.ADAM_STEP));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
@@ -140,7 +147,7 @@ final class WasmLinalgSimdCompiler {
 
 	private static int arity(String member) {
 		return switch (member) {
-			case LispNames.LINALG_IM2COL -> 5;
+			case LispNames.LINALG_IM2COL, LispNames.LINALG_RNG_FILL, LispNames.LINALG_ADAM_STEP -> 5;
 			case LispNames.LINALG_COL2IM -> 6;
 			default -> UNARY.contains(member) ? 1 : 2;
 		};

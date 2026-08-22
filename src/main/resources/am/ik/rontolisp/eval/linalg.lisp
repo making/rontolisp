@@ -1839,39 +1839,80 @@
     (linalg::%la-rng-next))
   n)
 
+(defun linalg::%la-rng-state ()
+  ;; The generator's three state words as a packed double vector. It is what
+  ;; makes %la-rng-fill below a PURE function of its arguments -- the state
+  ;; goes in as an array and the state it ends on comes back as one -- which
+  ;; is what a kernel on this seam can be.
+  (let ((s (linalg::%la-make 3 0.0 nil)))
+    (setf (aref s 0) linalg::%la-rng-s1)
+    (setf (aref s 1) linalg::%la-rng-s2)
+    (setf (aref s 2) linalg::%la-rng-s3)
+    s))
+
+(defun linalg::%la-rng-restore (s)
+  ;; Puts a state vector back into the three specials, so the next scalar draw
+  ;; continues exactly where the fill that produced it left off. Returns s.
+  (setq linalg::%la-rng-s1 (floor (aref s 0)))
+  (setq linalg::%la-rng-s2 (floor (aref s 1)))
+  (setq linalg::%la-rng-s3 (floor (aref s 2)))
+  s)
+
+(defun linalg::%la-rng-fill (out st mode lo span)
+  ;; Fills every element of out from the state st, and answers the state the
+  ;; generator ends on. mode picks the element rule, each spelled exactly as
+  ;; its caller used to spell it: 0 is one uniform [0, 1) draw (linalg:rand),
+  ;; 1 the sum of twelve draws minus 6 (linalg:randn's Irwin-Hall normal),
+  ;; and 2 is lo + span * draw (linalg:uniform).
+  ;;
+  ;; The three fills were the RNG half of todo-473's profile: a boxed do loop
+  ;; per element, with a boxed double per draw. Collapsing them into ONE
+  ;; internal member is what puts them on the --simd seam, which intercepts
+  ;; linalg: members and nothing else. The generator's rule itself does not
+  ;; move -- this loop still calls %la-rng-next, so there is still exactly one
+  ;; copy of it -- and the specials are its scratch: the caller restores them
+  ;; from the RETURNED vector, which is also what a kernel has to write.
+  (linalg::%la-rng-restore st)
+  (let ((n (array-total-size out)))
+    (do ((k 0 (+ k 1)))
+        ((>= k n))
+      (if (= mode 1)
+          (let ((acc 0.0))
+            (do ((j 0 (+ j 1)))
+                ((>= j 12))
+              (setq acc (+ acc (linalg::%la-rng-next))))
+            (setf (row-major-aref out k) (- acc 6.0)))
+          (if (= mode 0)
+              (setf (row-major-aref out k) (linalg::%la-rng-next))
+              (setf (row-major-aref out k)
+                    (+ lo (* span (linalg::%la-rng-next))))))))
+  (linalg::%la-rng-state))
+
 (defun linalg:rand (shape &key element-type)
   ;; An array of uniform [0, 1) draws (np.random.rand, but with a shape
   ;; designator like linalg:zeros; double by default, :element-type
   ;; 'single-float for #f).
-  (let* ((out (linalg::%la-make shape 0.0 element-type))
-         (n (array-total-size out)))
-    (do ((k 0 (+ k 1)))
-        ((>= k n) out)
-      (setf (row-major-aref out k) (linalg::%la-rng-next)))))
+  (let ((out (linalg::%la-make shape 0.0 element-type)))
+    (linalg::%la-rng-restore
+     (linalg::%la-rng-fill out (linalg::%la-rng-state) 0 0.0 1.0))
+    out))
 
 (defun linalg:randn (shape &key element-type)
   ;; An array of standard-normal draws via Irwin-Hall (np.random.randn, but
   ;; with a shape designator; see the section comment for the distribution
   ;; caveat).
-  (let* ((out (linalg::%la-make shape 0.0 element-type))
-         (n (array-total-size out)))
-    (do ((k 0 (+ k 1)))
-        ((>= k n) out)
-      (let ((acc 0.0))
-        (do ((j 0 (+ j 1)))
-            ((>= j 12))
-          (setq acc (+ acc (linalg::%la-rng-next))))
-        (setf (row-major-aref out k) (- acc 6.0))))))
+  (let ((out (linalg::%la-make shape 0.0 element-type)))
+    (linalg::%la-rng-restore
+     (linalg::%la-rng-fill out (linalg::%la-rng-state) 1 0.0 1.0))
+    out))
 
 (defun linalg:uniform (lo hi shape &key element-type)
   ;; An array of uniform draws in [lo, hi) (np.random.uniform, but with a
   ;; required shape designator).
-  (let* ((out (linalg::%la-make shape 0.0 element-type))
-         (n (array-total-size out))
-         (span (- hi lo)))
-    (do ((k 0 (+ k 1)))
-        ((>= k n) out)
-      (setf (row-major-aref out k) (+ lo (* span (linalg::%la-rng-next)))))))
+  (let ((out (linalg::%la-make shape 0.0 element-type)))
+    (linalg::%la-rng-restore
+     (linalg::%la-rng-fill out (linalg::%la-rng-state) 2 lo (- hi lo)))
+    out))
 
 (defun linalg:choice (n size)
   ;; size uniform indices in [0, n), WITH replacement (np.random.choice's
@@ -1894,3 +1935,56 @@
       (let* ((j (linalg::%la-rng-int (+ i 1))) (tmp (aref out i)))
         (setf (aref out i) (aref out j))
         (setf (aref out j) tmp)))))
+
+;; --- the fused optimizer update (torch:adam / torch:adamw) --------------------
+;; An internal member of the same kind as %la-im2col: a fused element-wise loop
+;; that a library ABOVE this one calls once per parameter per step, put here
+;; because the --simd seam intercepts linalg: members and nothing else
+;; (todo-473). torch::%o-adam-step holds the rule's documentation and is its
+;; only caller; nothing in the numpy surface reaches this.
+
+(defun linalg::%la-adam-step (x g m v ps)
+  ;; Adam's fused element-wise update, IN PLACE over four aligned arrays -- the
+  ;; parameter x, its gradient g, and the two moment buffers m and v -- with
+  ;; every hyper-parameter of the rule packed into the double vector ps:
+  ;;
+  ;;   0 lr   1 lr*wd   2 wd   3 b1   4 1-b1   5 b2   6 1-b2   7 eps
+  ;;   8 c1   9 c2   10 mode
+  ;;
+  ;; where c1 / c2 are the two bias corrections and mode selects the weight
+  ;; decay: 0 none, 1 COUPLED (torch.optim.Adam's L2 term rides the gradient),
+  ;; 2 DECOUPLED (torch.optim.AdamW shrinks the parameter itself). lr*wd is
+  ;; passed already multiplied so that an exact-rational lr and wd -- which the
+  ;; caller may hold and this vector cannot -- still meet in the product the
+  ;; scalar rule formed, (* lr wd x).
+  ;;
+  ;; x may be a plain NUMBER (a scalar parameter, whose m and v are one-element
+  ;; buffers), and so may g. The answer is the parameter's new data: x itself
+  ;; when it is an array, since the update is in place.
+  (let* ((lr (aref ps 0))
+         (lrwd (aref ps 1))
+         (wd (aref ps 2))
+         (b1 (aref ps 3))
+         (omb1 (aref ps 4))
+         (b2 (aref ps 5))
+         (omb2 (aref ps 6))
+         (eps (aref ps 7))
+         (c1 (aref ps 8))
+         (c2 (aref ps 9))
+         (mode (aref ps 10))
+         (sx (numberp x))
+         (sg (numberp g))
+         (n (if sx 1 (array-total-size x)))
+         (out x))
+    (do ((k 0 (+ k 1)))
+        ((>= k n) out)
+      (let* ((x0 (if sx x (row-major-aref x k)))
+             (xv (if (= mode 2) (- x0 (* lrwd x0)) x0))
+             (g0 (if sg g (row-major-aref g k)))
+             (gv (if (= mode 1) (+ g0 (* wd x0)) g0))
+             (mk (+ (* b1 (row-major-aref m k)) (* omb1 gv)))
+             (vk (+ (* b2 (row-major-aref v k)) (* omb2 gv gv))))
+        (setf (row-major-aref m k) mk)
+        (setf (row-major-aref v k) vk)
+        (let ((nv (- xv (/ (* lr (/ mk c1)) (+ (sqrt (/ vk c2)) eps)))))
+          (if sx (setq out nv) (setf (row-major-aref x k) nv)))))))

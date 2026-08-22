@@ -2757,6 +2757,159 @@ final class JvmSimdVectorTemplate {
 		return img;
 	}
 
+	// --- the fused optimizer update: %la-adam-step ----------------------------------
+	// Adam's rule over four aligned arrays in the defun's own order of operations, so it
+	// is BIT-IDENTICAL at both widths: every element is read widened to double, the five
+	// multiplies, the sqrt and the divide run in double, and only a store into a
+	// single-float parameter or moment buffer narrows -- which is the widen-compute-
+	// narrow round trip the boxed defun performs. Scalar by decision, like %la-im2col:
+	// what it removes is the boxed double per element (31% of a --gpu --simd training
+	// step), not the lanes.
+
+	/**
+	 * {@code (linalg::%la-adam-step x g m v rule)}: Adam's fused element-wise update in
+	 * place over four same-width packed arrays of the same element count, with the rule
+	 * in an eleven-element rank-1 packed double vector ({@code lr}, {@code lr*wd},
+	 * {@code wd}, {@code b1}, {@code 1-b1}, {@code b2}, {@code 1-b2}, {@code eps},
+	 * {@code c1}, {@code c2}, {@code mode}). A scalar parameter or gradient, a general
+	 * boxed array, a mixed-width quadruple and a malformed rule vector all decline.
+	 */
+	static @Nullable Object laAdamStep(@Nullable Object x, @Nullable Object g, @Nullable Object m, @Nullable Object v,
+			@Nullable Object rule) {
+		if (!(rule instanceof double[] ps) || ps.length != 13 || ps[0] != 1.0 || ps[1] != 11.0) {
+			return null;
+		}
+		double lr = ps[2], lrwd = ps[3], wd = ps[4], beta1 = ps[5], omb1 = ps[6], beta2 = ps[7], omb2 = ps[8],
+				eps = ps[9], corr1 = ps[10], corr2 = ps[11];
+		int mode = (int) ps[12];
+		if (mode != ps[12] || mode < 0 || mode > 2) {
+			return null;
+		}
+		if (x instanceof double[] xa && g instanceof double[] ga && m instanceof double[] ma
+				&& v instanceof double[] va) {
+			int xo = 1 + (int) xa[0], go = 1 + (int) ga[0], mo = 1 + (int) ma[0], vo = 1 + (int) va[0];
+			int n = xa.length - xo;
+			if (ga.length - go != n || ma.length - mo != n || va.length - vo != n) {
+				return null;
+			}
+			for (int k = 0; k < n; k++) {
+				double x0 = xa[xo + k];
+				double xv = mode == 2 ? x0 - lrwd * x0 : x0;
+				double gv = mode == 1 ? ga[go + k] + wd * x0 : ga[go + k];
+				double mk = beta1 * ma[mo + k] + omb1 * gv;
+				double vk = beta2 * va[vo + k] + omb2 * gv * gv;
+				ma[mo + k] = mk;
+				va[vo + k] = vk;
+				xa[xo + k] = xv - lr * (mk / corr1) / (Math.sqrt(vk / corr2) + eps);
+			}
+			return xa;
+		}
+		if (x instanceof float[] xa && g instanceof float[] ga && m instanceof float[] ma && v instanceof float[] va) {
+			int xo = 1 + (int) xa[0], go = 1 + (int) ga[0], mo = 1 + (int) ma[0], vo = 1 + (int) va[0];
+			int n = xa.length - xo;
+			if (ga.length - go != n || ma.length - mo != n || va.length - vo != n) {
+				return null;
+			}
+			for (int k = 0; k < n; k++) {
+				// The moments narrow on the STORE only: mk / vk feed the parameter
+				// update at full double width, exactly as the defun's locals do.
+				double x0 = xa[xo + k];
+				double xv = mode == 2 ? x0 - lrwd * x0 : x0;
+				double gv = mode == 1 ? ga[go + k] + wd * x0 : ga[go + k];
+				double mk = beta1 * ma[mo + k] + omb1 * gv;
+				double vk = beta2 * va[vo + k] + omb2 * gv * gv;
+				ma[mo + k] = (float) mk;
+				va[vo + k] = (float) vk;
+				xa[xo + k] = (float) (xv - lr * (mk / corr1) / (Math.sqrt(vk / corr2) + eps));
+			}
+			return xa;
+		}
+		return null;
+	}
+
+	// --- the seeded generator: %la-rng-fill ------------------------------------------
+	// Wichmann-Hill exactly as %la-rng-next spells it -- three integer state updates,
+	// three divides, a left-associated sum and the frac by compares. Reproducing that
+	// operation for operation is not optional: linalg:seed promises one seed reproduces
+	// one sequence on every backend. The states live in int locals here, where the defun
+	// boxed a double per draw (twelve of them per randn element).
+
+	/**
+	 * {@code (linalg::%la-rng-fill out st mode lo span)}: fills a packed destination of
+	 * either width from the three-element state vector {@code st} and answers the state
+	 * the generator ends on. {@code mode} is 0 for one uniform draw, 1 for the sum of
+	 * twelve minus 6, 2 for {@code lo + span * draw}.
+	 */
+	static @Nullable Object laRngFill(@Nullable Object out, @Nullable Object st, @Nullable Object modev,
+			@Nullable Object lov, @Nullable Object spanv) {
+		if (!laPacked(out) || !(st instanceof double[] s) || s.length != 5 || s[0] != 1.0 || s[1] != 3.0) {
+			return null;
+		}
+		if (!(modev instanceof Long mv) || mv < 0 || mv > 2) {
+			return null;
+		}
+		Object lo = laScalar(lov);
+		Object span = laScalar(spanv);
+		if (lo == null || span == null) {
+			return null;
+		}
+		int[] w = new int[3];
+		for (int i = 0; i < 3; i++) {
+			int u = (int) s[2 + i];
+			// The range linalg:seed produces and %la-rng-next keeps: below 2^23, so
+			// a * s cannot overflow an int and Java % agrees with Lisp mod.
+			if (u != s[2 + i] || u < 0 || u >= 1 << 23) {
+				return null;
+			}
+			w[i] = u;
+		}
+		int mode = (int) (long) mv;
+		double l = (Double) lo;
+		double sp = (Double) span;
+		if (out instanceof float[] f) {
+			int off = 1 + (int) f[0];
+			for (int k = off; k < f.length; k++) {
+				f[k] = (float) laRngElement(mode, l, sp, w);
+			}
+		}
+		else {
+			double[] d = laDoubles(out);
+			int off = 1 + (int) d[0];
+			for (int k = off; k < d.length; k++) {
+				d[k] = laRngElement(mode, l, sp, w);
+			}
+		}
+		return new double[] { 1.0, 3.0, w[0], w[1], w[2] };
+	}
+
+	private static double laRngElement(int mode, double lo, double span, int[] w) {
+		if (mode == 1) {
+			// Irwin-Hall: twelve draws summed from a 0.0 seed, minus 6.
+			double acc = 0.0;
+			for (int j = 0; j < 12; j++) {
+				acc = acc + laRngNext(w);
+			}
+			return acc - 6.0;
+		}
+		if (mode == 0) {
+			return laRngNext(w);
+		}
+		return lo + span * laRngNext(w);
+	}
+
+	/** {@code %la-rng-next}: the next uniform double in {@code [0, 1)}. */
+	private static double laRngNext(int[] w) {
+		int s1 = 171 * w[0] % 30269;
+		int s2 = 172 * w[1] % 30307;
+		int s3 = 170 * w[2] % 30323;
+		w[0] = s1;
+		w[1] = s2;
+		w[2] = s3;
+		double u = s1 / 30269.0 + s2 / 30307.0 + s3 / 30323.0;
+		// frac(u) for u in [0, 3), by compares only -- the defun's own spelling.
+		return u >= 2.0 ? u - 2.0 : (u >= 1.0 ? u - 1.0 : u);
+	}
+
 	/**
 	 * Validates the four window parameters against the spatial extent {@code (h, w)}:
 	 * Lisp integers, positive filter/stride, non-negative pad, and both padded extents
