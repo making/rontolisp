@@ -226,7 +226,7 @@ wasmtime run --invoke fingerprint gemv.wasm 100
 
 どちらのビルドも `85` を表示します(他のすべてのバックエンドと同じ支配方向です)。そして `-into` カーネルにより、何ステップ実行しても、解放されることのない `--no-gc` のバンプヒープはちょうど 3 ブロックのままです。20000 ステップではスカラーモジュールが約 600 ms、`--simd` が約 120 ms でした。
 
-エンジン全体は [`examples/llama2/llama2.lisp`](https://github.com/making/rontolisp/blob/develop/examples/llama2/llama2.lisp) です。llama2.c の `run.c` を 1 ファイルに移植したもの -- チェックポイントローダ、トークナイザ、順伝播、サンプラ -- で、本物の TinyStories チェックポイントを読み込み、C プログラムと同じ物語をトークン単位で語ります。1500 万個の重みはパックド単精度配列への `read-sequence` で読み込まれ、デコードは 1 トークンあたり 100 回超の `vec:matvec` です。stories15M では `--simd` により JVM が 23 から 87 トークン/秒に、wasm-GC が 0.4 から 46 に上がります（`run.c -O2`: 65）。[その README](https://github.com/making/rontolisp/blob/develop/examples/llama2/README.md) を参照してください。
+エンジン全体は [`examples/llama2/llama2.lisp`](https://github.com/making/rontolisp/blob/develop/examples/llama2/llama2.lisp) です。llama2.c の `run.c` を 1 ファイルに移植したもの -- チェックポイントローダ、トークナイザ、順伝播、サンプラ -- で、本物の TinyStories チェックポイントを読み込み、C プログラムと同じ物語をトークン単位で語ります。1500 万個の重みはパックド単精度配列への `read-sequence` で読み込まれ、デコードは 1 トークンあたり 100 回超の `vec:matvec` です。stories15M では `--simd` により JVM が 66 から 218 トークン/秒に、wasm-GC が 0.4 から 128 に上がります（いずれもシングルスレッド。`run.c -O2` シングルスレッドは 147。2026-08-22 に本プロジェクトの NVIDIA GB10 マシンで計測）。[その README](https://github.com/making/rontolisp/blob/develop/examples/llama2/README.md) を参照してください。
 
 インタプリタと JVM のカーネルがベクトル化するには、1 行が 128 要素以上である必要があります。それ未満ではスカラーループを実行します。ベクトルレジスタを埋める方が高くつくからです。2 つの WASM バックエンドにこの閾値はありません。
 

@@ -62,22 +62,43 @@ whole 256-token story is byte-identical. The small model runs the same way with
 Decoding is one token at a time, so every matrix in the model multiplies a
 vector: the whole forward pass is GEMV (`vec:matvec`), 15 million multiply-adds
 per token for stories15M, and `--simd` lowers it to CPU vector instructions.
-Measured on this project's NVIDIA GB10 box (one CPU core), the 222-token story
-above, 2026-08-22:
+Measured on this project's NVIDIA GB10 box (aarch64, 10 Cortex-X925 at 3.9 GHz +
+10 Cortex-A725, GraalVM 25), the 222-token story above, every row re-measured
+together on 2026-08-22 -- medians of three interleaved runs, nothing pinned:
 
 | backend | scalar | `--simd` | `--gpu --simd` |
 | --- | --- | --- | --- |
-| JVM | 65 tok/s | 220 tok/s | 285 tok/s |
-| wasm-GC (`wasmtime`) | 0.4 tok/s | 125 tok/s | -- (no FFM) |
-| interpreter (`java -jar`) | ~15 s per token | 44 tok/s | 42 tok/s |
-| `run.c -O2` (one thread) | 65 tok/s | | |
-| Java Vector API port of run.c ([kishida's gist](https://gist.github.com/kishida/05656bfcbe840f269784f7dbbee5928e)) | 100 tok/s | 187 tok/s | |
+| JVM | 66 tok/s | 218 tok/s | 283 tok/s |
+| wasm-GC (`wasmtime`) | 0.4 tok/s | 128 tok/s | -- (no FFM) |
+| interpreter (`java -jar`) | ~15 s per token | 43 tok/s | 42 tok/s |
 
-(The two scalar figures for wasm-GC and the interpreter, and the gist's, are
-from the file's first measurement; the rest were taken together.) The `--simd`
-lane kernel streams the 60 MB of weights at ~25 GB/s, about 2.4 ms of a 4.5 ms
-token on the JVM; the rest is the boxed attention, RoPE and KV-cache loops
-around the GEMVs. `--gpu --simd` moves the GEMVs whose matrix is big enough and
+Every rontolisp backend above decodes on ONE thread (the JVM still runs its own
+GC and JIT threads: ~3.1 s of CPU for a 1.4 s run). The C and Java ports of the
+same program, same box, same story, are the reference:
+
+| reference | threads | tok/s |
+| --- | --- | --- |
+| `run.c -O2` | 1 | 147 tok/s |
+| Java Vector API port of run.c ([kishida's gist](https://gist.github.com/kishida/05656bfcbe840f269784f7dbbee5928e)), the `.parallel()` in `matmul` removed | 1 | 297 tok/s |
+| the same gist as published, `matmul` being `IntStream.range(0, d).parallel()` | 20 | 535 tok/s |
+
+So the standing today, stated plainly: **on one thread `--simd` (218) loses to
+that port (297)**, by the ~1.2 ms a token this file spends in boxed Lisp around
+the GEMVs (`.todo/457`); `--gpu --simd` (283) does not catch it either; and the
+gist as published is a multi-core program rontolisp has no answer to at all,
+since no backend here uses more than one thread for a kernel (`.todo/478`).
+`--blas` does not enter this table: `vec:matvec` is outside its intercepted set
+(`.todo/471`), so the flag does nothing for this program today. Two caveats that
+keep the two tables honest: the gist's `-t 0` decode does NOT reproduce run.c's
+story (a different one comes out, so its rows are throughput only), while every
+rontolisp row is byte-identical to `./run stories15M.bin -t 0 -i "Once upon a
+time"`; and an earlier version of this table (JVM 23 / 87, wasm-GC 0.4 / 46,
+`run.c` 65, the gist 100 / 187) was measured on 2026-08-19 on a different,
+64-core x86 box -- those numbers must not be compared with the rows above.
+
+The `--simd` lane kernel streams the 60 MB of weights at ~25 GB/s,
+about 2.4 ms of a 4.6 ms token on the JVM; the rest is the boxed
+attention, RoPE and KV-cache loops around the GEMVs. `--gpu --simd` moves the GEMVs whose matrix is big enough and
 STAYS on the device -- the three feed-forward matrices per layer and the
 classifier head, two thirds of the multiply-adds; the 288x288 projections are a
 tie at ~12 us and stay on the CPU -- from their second token on, once the

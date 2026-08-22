@@ -58,11 +58,16 @@
 ;;;; GEMV as well (too small for the device, and rewritten every token). Measured
 ;;;; 2026-08-22 on an NVIDIA GB10 box (stories15M, the 222-token story above):
 ;;;;
-;;;;   JVM         65 tok/s -> 220 tok/s with --simd -> 285 tok/s with --gpu --simd
-;;;;   wasm-GC    0.4 tok/s -> 125 tok/s with --simd     (run.c -O2: 65 tok/s)
-;;;;   interpreter  ~ 15 s/token -> 44 tok/s with --simd (java --add-modules
+;;;;   JVM         66 tok/s -> 218 tok/s with --simd -> 283 tok/s with --gpu --simd
+;;;;   wasm-GC    0.4 tok/s -> 128 tok/s with --simd
+;;;;   interpreter  ~ 15 s/token -> 43 tok/s with --simd (java --add-modules
 ;;;;                jdk.incubator.vector -jar ...; --gpu buys nothing there, the
 ;;;;                tree walk around the GEMVs dominates)
+;;;;
+;;;; Every backend above decodes on ONE thread. On the same box run.c -O2 (one
+;;;; thread) does 147 tok/s and the Java Vector API port of run.c (kishida's
+;;;; gist) 297 on one thread, 535 as published -- its matmul is an
+;;;; IntStream.parallel(). The README's table has the whole comparison.
 ;;;;
 ;;;; Without --simd the interpreter runs the scalar vec.lisp definitions, one
 ;;;; interpreted form per multiply-add: fine for stories260K, not for stories15M.
