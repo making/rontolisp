@@ -2,7 +2,7 @@
 
 Difficulty: Medium
 
-Prerequisite for `.todo/482` (`short-float`), but a defect in its own right and landable
+Prerequisite for `.todo/482` (`bfloat16`), but a defect in its own right and landable
 alone: it is a pure refactor that adds no type and changes no behavior.
 
 `LispFloatArray` is a sealed umbrella, so the *right* way to ask a packed array its width
@@ -39,13 +39,13 @@ the several sites that genuinely only need "is this the same width as that one" 
 comparison of `elementType()`. Keep the emitted code shape identical; this must not move
 a single number in `LinalgSimdTest` / `VecSimdTest` / the BLAS and GPU tests.
 
-Where a site legitimately supports only some widths (BLAS has no f16 GEMM, the device
+Where a site legitimately supports only some widths (BLAS has no bf16 GEMM, the device
 kernels are f32/f64), the exhaustive switch is what makes the unsupported arm an explicit
 `null`/decline rather than a fallthrough -- which is what `.todo/486` then relies on.
 
 ## Verify
 
 `./mvnw spring-javaformat:apply test`, and the accelerated suites, must be unchanged.
-The real check is the next commit's: after `.todo/484` adds `LispShortFloatArray` to the
+The real check is the next commit's: after `.todo/484` adds `LispBFloat16Array` to the
 `permits` clause, `./mvnw compile` must list every site that needs a decision, and no
 site may be missing from that list.
