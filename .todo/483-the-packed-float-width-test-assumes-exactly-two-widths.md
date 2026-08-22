@@ -46,6 +46,6 @@ kernels are f32/f64), the exhaustive switch is what makes the unsupported arm an
 ## Verify
 
 `./mvnw spring-javaformat:apply test`, and the accelerated suites, must be unchanged.
-The real check is the next commit's: after `.todo/484` adds `LispHalfFloatArray` to the
+The real check is the next commit's: after `.todo/484` adds `LispShortFloatArray` to the
 `permits` clause, `./mvnw compile` must list every site that needs a decision, and no
 site may be missing from that list.

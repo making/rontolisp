@@ -1,6 +1,6 @@
 import jdk.incubator.vector.*;
 
-public class Half {
+public class Round1 {
 
 	static final VectorSpecies<Float> FS = FloatVector.SPECIES_PREFERRED;
 	static final VectorSpecies<Double> DS = DoubleVector.SPECIES_PREFERRED;

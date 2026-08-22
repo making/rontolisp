@@ -49,7 +49,7 @@ Note `JvmIntArrayRuntimeBuilder` and the `#<width>@` packed integer vectors
 5. The `--simd` interception (`JvmSimdCompiler`, `JvmSimdVectorTemplate`) must **not**
    grow a f16 kernel. Per `.todo/482` it widens once into an f32 scratch and calls the
    existing f32 kernel, or leaves the scalar `vec.lisp` defun in place. The measured
-   reason is in `.todo/482-half-float-short-float-storage/README.md`: a fused per-element
+   reason is in `.todo/482-short-float-a-storage-only-narrow-width/README.md`: a fused per-element
    decode is 0.31x-0.67x of f32, never faster, at any size or thread count.
 
 ## Verify

@@ -3,17 +3,21 @@
 Difficulty: Medium
 
 Part of `.todo/482`. Depends on `.todo/483`. This is the front end and the interpreter
-half only -- the JVM backend is `.todo/485`.
+side only -- the JVM backend is `.todo/485`.
 
-Add `LispHalfFloatArray(short[] data, int[] dims)` as the third permit of the sealed
+Add `LispShortFloatArray(short[] data, int[] dims)` as the third permit of the sealed
 `LispFloatArray` umbrella, storing IEEE binary16 bits and converting with
 `Float.floatToFloat16` / `Float.float16ToFloat`. It mirrors `LispSingleFloatArray`
 exactly: `elementAt` widens to `double` on read, `setElement` narrows on write, there is
-no half-float *scalar*, and the width lives entirely in the array storage.
+no `short-float` *scalar*, and the width lives entirely in the array storage.
+
+Naming, per `.todo/482`: `short-float` / `ShortFloat` in every Lisp name and every Java
+identifier; `#h(` only as the reader prefix, because `#d`/`#f` are already the width word
+rather than the CL type name and `#s` is taken by structure literals.
 
 ## Do
 
-1. `LispHalfFloatArray` + the `permits` clause. `elementType()` -> `LispNames.SHORT_FLOAT`
+1. `LispShortFloatArray` + the `permits` clause. `elementType()` -> `LispNames.SHORT_FLOAT`
    (add the constant; `PackageRegistry.CL_SYMBOLS` already carries `SHORT-FLOAT`).
    `setElement` must call `FloatArrayWriteHook.written(this.data)` like its siblings, so
    `--gpu` residency invalidation stays correct even though the device never accepts this
@@ -24,8 +28,8 @@ no half-float *scalar*, and the width lives entirely in the array storage.
    width). `#h` is unclaimed -- `#S`, `#P`, `#A` and `#<width>@` are the taken prefixes.
 4. Printer: `openPrefix()` -> `"#h("`, and `elementText(flat)` must print **the shortest
    decimal that round-trips at f16 width**, the way `FloatText.singleText` does for f32,
-   so `#h(0.1)` prints `0.1` and not `0.099975586`. Add `FloatText.halfText`.
-   `.todo/482-half-float-short-float-storage/Text.java` confirms a shortest-decimal search
+   so `#h(0.1)` prints `0.1` and not `0.099975586`. Add `FloatText.shortText`.
+   `.todo/482-short-float-a-storage-only-narrow-width/Text.java` confirms a shortest-decimal search
    round-trips **all 63488 finite patterns** and needs at most 5 significant digits -- but
    note that probe uses `BigDecimal.toString`, which spells 65504 as `6.55E+4`; reuse
    `FloatText`'s existing plain-vs-exponent decision, only swapping in the f16 round-trip

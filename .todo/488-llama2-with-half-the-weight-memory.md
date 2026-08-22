@@ -13,7 +13,7 @@ addressed below honestly.
 
 ## Do
 
-1. A `--half` (or `:element-type` parameter) load path: `read-sequence` a f16 checkpoint
+1. A `short-float` load path (a `:element-type` parameter, not a new flag spelling): `read-sequence` a f16 checkpoint
    straight into `short-float` arrays through `.todo/487`'s bulk read. Support reading a
    f32 checkpoint and narrowing at load too, so no new file format is required to try it.
 2. The KV cache at `short-float`. It is written every step and read by the attention

@@ -1,10 +1,10 @@
-# The half-float (`short-float`) spike, 2026-08-22
+# The `short-float` (f16) spike, 2026-08-22
 
 Throwaway probes kept for reproducibility, NOT project code: outside `src/`, not in the
 reactor, not formatted by `spring-javaformat:apply`, and nothing builds or tests them.
-They exist so the numbers in `../482-half-float-short-float-storage.md` can be re-derived
+They exist so the numbers in `../482-short-float-a-storage-only-narrow-width.md` can be re-derived
 on other hardware -- above all the one number that decides the whole shape of the item:
-**a half-float array is never faster to compute over on the JVM.**
+**an f16 array is never faster to compute over on the JVM.**
 
 Every file is a single-class JDK source-launcher program. Run each with:
 
@@ -29,12 +29,13 @@ kernel is DRAM-bound, and on this class of core the decode wall arrives first.
 
 | file | question it answers |
 | --- | --- |
-| `Half.java` | first round: is `Float.float16ToFloat` auto-vectorized, and does a f16 GEMV beat f32? (no, and no) |
+| `Round1.java` | first round: is `Float.float16ToFloat` auto-vectorized, and does a f16 GEMV beat f32? (no, and no) |
 | `Dec.java` | how fast can the widening decode possibly go? five variants against an f32 copy ceiling, plus an exactness sweep over all 65536 patterns |
 | `Gem.java` | GEMV with the fastest *exact* decode, single accumulator |
 | `Acc.java` | the same with 4 accumulators + FMA (the todo-480 shape), so the comparison is not dependency-chain-bound -- **this is the decisive one** |
 | `Par.java` | does the picture change at 20 threads, where bandwidth is shared? (no) |
 | `Text.java` | can the printer round-trip every f16 bit pattern through a shortest-decimal search, and how many digits does it need? (yes; 5) |
+| `F16.java` | does JEP 508's `jdk.incubator.vector.Float16` -- already in JDK 25 -- change the answer on this host? (no: 0.20 Gelem/s with an f16 accumulator, 2.9 through `floatValue()`) |
 
 ## The results, in one place
 
@@ -68,6 +69,26 @@ cache, which is why the ratio improves with size; it never crosses 1.0, and 0.67
 
 At 20 threads (`Par.java`, single-accumulator rows) f32 reaches 93 GB/s and f16 still
 loses at 0.72x: the decode scales with the cores exactly as the bandwidth demand does.
+
+## JEP 508's `Float16`, measured (`F16.java`)
+
+`jdk.incubator.vector.Float16` (JEP 508, Vector API tenth incubator) is **present in this
+JDK 25** -- in `jdk.incubator.vector`, not `java.lang`, which is what an early probe here
+got wrong. It does not rescue f16 on this host:
+
+| GEMV, 4 accumulators | Gelem/s at 1024x1024 |
+| --- | --- |
+| f32 Vector API + FMA | 16.17 |
+| hand-vectorized exact decode -> f32 accumulator (`Acc.java`) | 5.27 |
+| `Float16.floatValue()` -> f32 accumulator | 2.98 |
+| `Float.float16ToFloat` intrinsic -> f32 accumulator | 2.98 |
+| `Float16.fma` with a **`Float16` accumulator** | 0.21 |
+
+The JEP auto-vectorizes `Float16` arithmetic on **x64 with AVX512-FP16**; this is aarch64,
+so the scalar path runs and the value class is 25x slower than the hand-written decode.
+Re-run `F16.java` on an AVX512-FP16 box before concluding anything about x64. There is
+still no `Float16` *vector species* anywhere through JEP 537 (JDK 27) -- that is the thing
+that would matter, and it is still exploratory in Panama's `vectorIntrinsics+fp16` branch.
 
 Accuracy is not the problem. A f16 GEMV over N(0, 0.02) weights lands within 0.02% of the
 f64 reference at every size tried, and the f16 round-trip error is bounded by 2^-11 as

@@ -2,7 +2,7 @@
 
 Difficulty: Medium
 
-Part of `.todo/482`. Depends on `.todo/484` (and on `.todo/485` for the JVM half).
+Part of `.todo/482`. Depends on `.todo/484` (and on `.todo/485` for the JVM side).
 
 `.todo/482` specifies `short-float` as a **storage** width, so the value of the whole item
 is concentrated here: getting data in and out at f16 cheaply, and widening in one bulk
@@ -20,7 +20,7 @@ pass rather than per element.
 2. **`coerce` and the bulk width change.** `(coerce v '(array short-float))` and back, and
    the `vec:`/`linalg:` constructor `:element-type` route, must go through one bulk
    converter, not an element loop through the generic setter. The measured rates
-   (`.todo/482-half-float-short-float-storage/Dec.java`) are ~1.9 Gelem/s for a scalar
+   (`.todo/482-short-float-a-storage-only-narrow-width/Dec.java`) are ~1.9 Gelem/s for a scalar
    `Float.float16ToFloat` loop against ~3.5 for a hand-vectorized exact decode -- this
    JDK does **not** auto-vectorize the intrinsic, so the vectorized decode is worth
    writing once, here, where every other path can call it.
