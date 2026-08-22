@@ -2,6 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.util.List;
 
+import am.ik.rontolisp.FloatArrayWriteHook;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -160,9 +161,11 @@ public final class VecSimd {
 			double hi = scalar(name, args.get(3));
 			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
 				VecSimdKernels.clipInto(r.data(), x.data(), lo, hi);
+				FloatArrayWriteHook.written(r.data());
 			}
 			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
 				VecSimdKernels.clipIntoF(r.data(), x.data(), lo, hi);
+				FloatArrayWriteHook.written(r.data());
 			}
 			else {
 				throw mixedWidth(name);
@@ -242,9 +245,11 @@ public final class VecSimd {
 			double s = scalar(name, args.get(2));
 			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
 				VecSimdKernels.scaleInto(r.data(), x.data(), s);
+				FloatArrayWriteHook.written(r.data());
 			}
 			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
 				VecSimdKernels.scaleIntoF(r.data(), x.data(), s);
+				FloatArrayWriteHook.written(r.data());
 			}
 			else {
 				throw mixedWidth(name);
@@ -264,11 +269,13 @@ public final class VecSimd {
 					&& x instanceof LispDoubleFloatArray vx) {
 				requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
 				VecSimdKernels.matvecInto(r.data(), mw.data(), rows, cols, vx.data());
+				FloatArrayWriteHook.written(r.data());
 			}
 			else if (out instanceof LispSingleFloatArray r && w instanceof LispSingleFloatArray mw
 					&& x instanceof LispSingleFloatArray vx) {
 				requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
 				VecSimdKernels.matvecIntoF(r.data(), mw.data(), rows, cols, vx.data());
+				FloatArrayWriteHook.written(r.data());
 			}
 			else {
 				throw mixedWidth(name);
@@ -308,9 +315,11 @@ public final class VecSimd {
 			LispFloatArray v = array(fnName, args.get(1));
 			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
 				f64.apply(r.data(), x.data());
+				FloatArrayWriteHook.written(r.data());
 			}
 			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
 				f32.apply(r.data(), x.data());
+				FloatArrayWriteHook.written(r.data());
 			}
 			else {
 				throw mixedWidth(fnName);
@@ -330,10 +339,12 @@ public final class VecSimd {
 			if (out instanceof LispDoubleFloatArray r && a instanceof LispDoubleFloatArray x
 					&& b instanceof LispDoubleFloatArray y) {
 				f64.apply(r.data(), x.data(), y.data());
+				FloatArrayWriteHook.written(r.data());
 			}
 			else if (out instanceof LispSingleFloatArray r && a instanceof LispSingleFloatArray x
 					&& b instanceof LispSingleFloatArray y) {
 				f32.apply(r.data(), x.data(), y.data());
+				FloatArrayWriteHook.written(r.data());
 			}
 			else {
 				throw mixedWidth(fnName);

@@ -69,6 +69,22 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * A packed float array was written in place, so the device copy the library may be
+	 * holding of it is stale. The compiled half of the residency invalidation: the
+	 * emitted {@code _gpuWritten} guard calls this from {@code _fvAset1/2/N}, from the
+	 * in-place {@code --simd} kernels' call sites and from every {@code vec:}
+	 * {@code -into} call site, but only once the bridge is defined -- before that nothing
+	 * can be resident ({@code .kb/gpu.md}).
+	 * @param array the {@code double[]} or {@code float[]} that was written; anything
+	 * else is ignored
+	 */
+	static void gpuWritten(@Nullable Object array) {
+		if (array instanceof double[] || array instanceof float[]) {
+			Gpu.written(array);
+		}
+	}
+
+	/**
 	 * {@code (linalg:dot a b)} over two packed rank-2 operands of the same width: the
 	 * matrix-by-matrix product, and nothing else. The matrix-by-vector shapes
 	 * {@code --blas} takes are memory-bound, so a round trip cannot win them and they are

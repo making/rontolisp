@@ -314,6 +314,7 @@ public final class Gpu {
 			}
 			DEVICE = device;
 			DESCRIPTION = description;
+			Gpu.probed = device;
 			GpuDevice.Thresholds thresholds = device == null
 					? new GpuDevice.Thresholds(POOLED_MIN_WORK, MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS,
 							FOLD_POOLED_MIN_ELEMENTS, RNG_POOLED_MIN_ELEMENTS)
@@ -463,6 +464,78 @@ public final class Gpu {
 
 	static long rngMinElements() {
 		return Probe.RNG_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The probed device, copied out of {@link Probe} the moment it exists, so that
+	 * {@link #written} can answer "nothing is resident" on a process that has not probed
+	 * without running the probe -- a {@code dlopen}, a context and a PTX JIT -- from an
+	 * {@code aset} loop that merely stored a double.
+	 */
+	private static volatile @Nullable GpuDevice probed;
+
+	/**
+	 * Tells the library that a host array it may hold a RESIDENT copy of has been written
+	 * in place, so that copy is stale and must not be read again. The device members keep
+	 * a cache from a host array, by identity, to a device buffer holding a copy of it --
+	 * which is what lets a chain of members pay for one upload rather than one per call
+	 * -- and the host array stays authoritative, so every in-place write to a packed
+	 * float array has to come through here. The interceptors call it from every element
+	 * setter and every in-place kernel; the enumeration is in {@code .kb/gpu.md}.
+	 *
+	 * <p>
+	 * Cheap when it does not matter: a volatile read on a process with no device or
+	 * nothing resident, and an identity lookup under an uncontended monitor otherwise. It
+	 * never runs the probe, never touches the driver, never throws, and may be called
+	 * from any thread. An array that was never an operand is simply not found.
+	 * @param hostArray the {@code double[]} or {@code float[]} that was written
+	 */
+	public static void written(Object hostArray) {
+		GpuDevice device = probed;
+		if (device != null) {
+			device.written(hostArray);
+		}
+	}
+
+	/**
+	 * Bytes held by resident copies right now, or {@code 0}. Package-private and for the
+	 * tests, which assert the cache is bounded and that a release empties it.
+	 * @return the resident total, in bytes
+	 */
+	static long residentBytes() {
+		GpuDevice device = Probe.DEVICE;
+		return device != null ? device.residentBytes() : 0;
+	}
+
+	/**
+	 * Drops and frees every resident copy. Package-private and for the tests: the leak
+	 * assertions measure against an EMPTY device.
+	 */
+	static void releaseResident() {
+		GpuDevice device = Probe.DEVICE;
+		if (device != null) {
+			device.releaseResident();
+		}
+	}
+
+	/**
+	 * Imposes a residency budget in bytes on the CUDA device, or {@code -1} to restore
+	 * the derived one. Package-private and for the tests; a no-op on any other device.
+	 * @param bytes the budget, or -1
+	 */
+	static void residentBudget(long bytes) {
+		if (Probe.DEVICE instanceof CudaGemm cuda) {
+			cuda.residentBudget(bytes);
+		}
+	}
+
+	/**
+	 * The CUDA device's residency cache, for the tests' hit and miss counts, or
+	 * {@code null} on any other device.
+	 * @return the cache, or null
+	 */
+	static @Nullable CudaResidency residency() {
+		return Probe.DEVICE instanceof CudaGemm cuda ? cuda.residency() : null;
 	}
 
 	/**

@@ -17,6 +17,7 @@ import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.LinalgBlas;
 import am.ik.rontolisp.eval.LinalgGpu;
 import am.ik.rontolisp.eval.LinalgLibrary;
+import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -84,6 +85,12 @@ class JvmLinalgGpuAccelCompilerTest {
 	private byte[] compile(String lispCode, boolean gpu, boolean blas, boolean simd) {
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
 		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, simd, blas, gpu).compile(program);
+	}
+
+	/** {@link #compile} with the {@code vec:} library spliced in as well. */
+	private byte[] compileWithVec(String lispCode, boolean gpu, boolean simd) {
+		List<LispVal> program = VecLibrary.process(LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
+		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, simd, false, gpu).compile(program);
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -599,6 +606,70 @@ class JvmLinalgGpuAccelCompilerTest {
 		assumeTrue(!device.equals(library), "the library and the device round differently here");
 		assertThat(run(compile(inexact, true, true, false))).isEqualTo(device);
 		assertThat(run(compile(inexact, true, true, true))).isEqualTo(device);
+	}
+
+	// --- device residency (2026-08-22) ------------------------------------------------
+
+	/**
+	 * Every in-place writer of a packed float array there is, each followed by the same
+	 * bit-identical device member over the array it wrote, so that a writer the residency
+	 * invalidation does not see shows up as a wrong sum. The first call makes both
+	 * operands resident; {@code check} then prints a sum the oracle must print too.
+	 * {@code %la-scale} / {@code %la-scatter-rows} / {@code %la-adam-step} /
+	 * {@code %la-rng-fill} and the {@code vec:} {@code -into} family are the kernels that
+	 * bypass the element setter under {@code --simd}, which is why the program is run
+	 * with that flag as well as without it. {@code fill} and {@code replace} are not here
+	 * because the interpreter does not accept a packed array for either; on the JVM they
+	 * expand to the setter this program already exercises.
+	 */
+	private static String residencyWriters(int side, String type) {
+		int n = side * side;
+		return """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
+				(defparameter *v* (linalg:arange 1 %d%s))
+				(defparameter *one* (linalg:ones '(1)%s))
+				(defun check (tag)
+				  (format t "~a ~a ~a~%%" tag (linalg:sum (linalg:add *a* *row*)) (linalg:sum (linalg:add *v* *one*))))
+				(check "resident")
+				(setf (aref *a* 3 4) 0.5) (check "aset")
+				(setf (row-major-aref *a* 777) -1.25) (check "row-major-aset")
+				(setf (aref *row* 0 5) 100) (check "aset-other-operand")
+				(setf (aref *v* 10) 3) (check "aset-vector")
+				(setf (row-major-aref *v* 11) 4) (check "row-major-aset-vector")
+				(linalg::%%la-scale *a* 3) (check "la-scale")
+				(linalg::%%la-scale *v* 0.5) (check "la-scale-vector")
+				(linalg::%%la-scatter-rows *a* (linalg:ones '(2 %d)%s) #d(1.0 5.0)) (check "la-scatter-rows")
+				(linalg::%%la-adam-step *a* (linalg:ones '(%d %d)%s) (linalg:zeros '(%d %d)%s) (linalg:zeros '(%d %d)%s)
+				                        #d(0.01 0.0 0.0 0.9 0.1 0.999 0.001 0.00000001 1.0 1.0 0.0))
+				(check "la-adam-step")
+				(linalg::%%la-rng-fill *a* #d(11.0 22.0 33.0) 0 0.0 1.0) (check "la-rng-fill")
+				(linalg::%%la-rng-fill *v* #d(44.0 55.0 66.0) 1 0.0 1.0) (check "la-rng-fill-vector")
+				(vec:scale-into *v* *v* 2) (check "vec-scale-into")
+				(vec:add-into *v* *v* *v*) (check "vec-add-into")
+				(vec:negative-into *v* *v*) (check "vec-negative-into")
+				(vec:clip-into *v* *v* -1 1) (check "vec-clip-into")
+				(vec:matvec-into *v* (linalg:ones '(%d 1)%s) *one*) (check "vec-matvec-into")
+				""".formatted(n + 1, type, side, side, side + 1, type, side, n + 1, type, type, side, type, side, side,
+				type, side, side, type, side, side, type, n, type);
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void everyEnumeratedWriterInvalidatesTheResidentCopy() throws Exception {
+		// The compiled half of the invalidation enumeration: _fvAset1/2/N report through
+		// _gpuWritten, the in-place --simd kernels' call sites report the arrays they
+		// wrote, and every vec: -into call site reports its destination. Any one of them
+		// missing leaves a stale device copy and a sum the oracle does not print.
+		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		String program = residencyWriters(side, TYPE);
+		String oracle = run(compileWithVec(program, false, false));
+		assertThat(oracle).contains("resident ").contains("vec-matvec-into ");
+		assertThat(run(compileWithVec(program, true, false))).as("--gpu").isEqualTo(oracle);
+		// The --simd leg against a --simd oracle, as in the interpreter's test: the lane
+		// sum folds in its own order, and the device must be the only variable.
+		assertThat(run(compileWithVec(program, true, true))).as("--gpu --simd")
+			.isEqualTo(run(compileWithVec(program, false, true)));
 	}
 
 }

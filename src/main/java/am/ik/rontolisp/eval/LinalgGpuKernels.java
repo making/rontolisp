@@ -70,6 +70,18 @@ final class LinalgGpuKernels {
 		}
 	}
 
+	/**
+	 * Tells the library that a packed array's storage was written in place, so any
+	 * resident device copy of it is stale ({@code Gpu.written}). The interpreter's half
+	 * of the invalidation enumeration: installed on {@code FloatArrayWriteHook} by
+	 * {@link LinalgGpu#install}, it is reached from every element setter and every
+	 * in-place {@code --simd} kernel.
+	 * @param data the {@code double[]} or {@code float[]} that was written
+	 */
+	static void written(Object data) {
+		Gpu.written(data);
+	}
+
 	/** What was found, or why nothing was -- the text the CLI reports. */
 	static String description() {
 		try {

@@ -105,6 +105,16 @@ final class JvmSimdCompiler {
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get(member)).index());
+		// An -into kernel writes its caller's destination in place and returns it. Under
+		// --gpu the device may hold a resident copy of that array, keyed by identity, so
+		// the call site reports the write (.kb/gpu.md, "The residency design"); the
+		// allocating forms return a fresh array the device has never seen.
+		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		if (gpuOps != null && member.endsWith("-INTO")) {
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN)).index());
+		}
 	}
 
 	private static void requireArity(boolean ok, String message) {

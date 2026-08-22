@@ -180,6 +180,27 @@ final class CudaGemm implements GpuDevice {
 	private static final long CRITICAL_CHUNK_BYTES = 1L << 26;
 
 	/**
+	 * The page-locked bounce buffer every download is staged through, 16 MB: the device
+	 * copies a result into it by DMA and the Java side copies it on into the result
+	 * array. A download bigger than this goes in chunks of it.
+	 *
+	 * <p>
+	 * Why stage at all, when "The library never stages" was measured and written down
+	 * ({@code .kb/gpu.md}, "Linker.Option.critical takes heap segments here too"): that
+	 * measurement copied to and from the SAME host array every iteration, and a training
+	 * step does not -- every result is a fresh Java array, and on the machine this was
+	 * built on a device copy into a page the GPU has never touched costs ~9 us per 4 KB
+	 * page through the address-translation service, a hundred times the warm copy. The
+	 * baseline build was hiding that: its uploads touched most of the eden, so the result
+	 * arrays it later downloaded into were usually pages the GPU had seen. Device
+	 * residency halves the uploads and the downloads went cold -- 619 of 7904 over a
+	 * millisecond, 93% of the download time -- and a step got SLOWER with half the
+	 * copies. The bounce buffer is never cold, the Java copy into the fresh array costs
+	 * what a memcpy costs, and the array is then warm for any direct upload that follows.
+	 */
+	private static final long BOUNCE_BYTES = 16L << 20;
+
+	/**
 	 * At or above this many flops ({@code 2*n*m*p}) PER MULTIPROCESSOR the kernel is
 	 * awaited by an explicit {@code cuCtxSynchronize} before the result is copied back. A
 	 * device-to-host copy on the null stream waits for the kernel by itself, which is
@@ -205,6 +226,29 @@ final class CudaGemm implements GpuDevice {
 	 * wants -- so a product that would fit only by taking the last byte declines instead.
 	 */
 	private static final long ALLOCATION_HEADROOM = 64L << 20;
+
+	/**
+	 * The residency budget is the smaller of a share of free device memory -- a quarter,
+	 * re-derived whenever the pre-flight re-reads {@code cuMemGetInfo} -- and
+	 * {@link #RESIDENT_CAP}. It is a CEILING the LRU trims to, not a reservation: the
+	 * pre-flight evicts everything a call is not holding before it would ever refuse one
+	 * ({@link #allocate}), so residency can slow a call down by a copy but never turn it
+	 * into a decline.
+	 */
+	private static final int RESIDENT_SHARE = 4;
+
+	/**
+	 * 1 GB, and the cap is not a safety margin but the measurement that decides whether
+	 * residency pays at all. The buffers the cache holds are buffers the driver's pool
+	 * cannot hand out again, and what makes a per-call intercept affordable is that pool
+	 * recycling its few warm blocks: with the budget left at a quarter of this machine's
+	 * free memory (~30 GB) nothing was ever evicted, every allocation grew the pool (5 us
+	 * a call instead of 1), and a 200-step training run was SLOWER with half the uploads
+	 * than with none. Capped at 64 MB, 256 MB or 1 GB the same run was 5-10% faster than
+	 * with no residency -- the three were within noise of each other -- so the cap is the
+	 * largest of them, for a model whose chain is longer than this one's.
+	 */
+	private static final long RESIDENT_CAP = 1L << 30;
 
 	private final CudaDriver driver;
 
@@ -238,6 +282,16 @@ final class CudaGemm implements GpuDevice {
 	 */
 	private final MemorySegment memoryPool;
 
+	/**
+	 * The download bounce buffer ({@link #BOUNCE_BYTES}), or {@link MemorySegment#NULL}
+	 * on a driver without {@code cuMemHostAlloc}, in which case downloads go straight
+	 * into the heap through the critical handle as they did before.
+	 */
+	private final MemorySegment bounce;
+
+	/** Serializes the downloads, which share the one bounce buffer. */
+	private final Object bounceLock = new Object();
+
 	private final long syncFlopCeiling;
 
 	/**
@@ -260,10 +314,23 @@ final class CudaGemm implements GpuDevice {
 
 	private int allocationsSinceRefresh;
 
+	/**
+	 * The resident copies: host array -> device buffer ({@link CudaResidency}). Every
+	 * member looks its operands up here before it allocates, records what it uploaded and
+	 * what it downloaded, and frees what the cache dropped at the two safe moments.
+	 */
+	private final CudaResidency residency = new CudaResidency();
+
+	/**
+	 * A byte budget imposed from outside, or {@code -1} for the derived one. For the
+	 * tests, which need the LRU to evict at a size they can afford to fill.
+	 */
+	private volatile long residentBudgetOverride = -1;
+
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
 			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32, MemorySegment mapF64,
 			MemorySegment mapF32, MemorySegment[] strided, boolean pooled, MemorySegment memoryPool,
-			long syncFlopCeiling, String description) {
+			MemorySegment bounce, long syncFlopCeiling, String description) {
 		this.driver = driver;
 		this.device = device;
 		this.context = context;
@@ -277,6 +344,7 @@ final class CudaGemm implements GpuDevice {
 		this.strided = strided;
 		this.pooled = pooled;
 		this.memoryPool = memoryPool;
+		this.bounce = bounce;
 		this.syncFlopCeiling = syncFlopCeiling;
 		this.description = description;
 	}
@@ -416,13 +484,34 @@ final class CudaGemm implements GpuDevice {
 				pooled = driver.deviceGetDefaultMemPool(poolOut, device) == CuResult.SUCCESS;
 				if (pooled) {
 					pool = poolOut.get(P, 0);
+					// Keep the pool's reserve across synchronizations. The driver's
+					// default
+					// threshold of 0 hands every unused reserved byte back to the OS at
+					// each cuCtxSynchronize and each synchronous copy, and with resident
+					// copies in play (CudaResidency) the reserve is no longer three
+					// buffers but a training step's worth of them: measured, releasing
+					// and re-mapping it around every call made the device-to-host copies
+					// four times as expensive and the step slower than without residency.
+					// A failed allocation still trims the pool explicitly
+					// (trimMemoryPool), so a decline still costs the device nothing.
+					MemorySegment threshold = arena.allocate(L);
+					threshold.set(L, 0, -1L);
+					driver.memPoolSetAttribute(pool, CudaDriver.MEMPOOL_ATTR_RELEASE_THRESHOLD, threshold);
 				}
+			}
+			// The download bounce buffer (BOUNCE_BYTES). Allocated here rather than on
+			// the
+			// first download so that every leak test's baseline already includes it.
+			MemorySegment bounce = MemorySegment.NULL;
+			MemorySegment bounceOut = arena.allocate(P);
+			if (driver.memHostAlloc(bounceOut, BOUNCE_BYTES, 0) == CuResult.SUCCESS) {
+				bounce = bounceOut.get(P, 0).reinterpret(BOUNCE_BYTES);
 			}
 			int multiprocessors = attribute(driver, arena, CudaDriver.ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
 			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
 			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32, mapF64,
-					mapF32, strided, pooled, pool, ceiling, description), description);
+					mapF32, strided, pooled, pool, bounce, ceiling, description), description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
@@ -610,6 +699,9 @@ final class CudaGemm implements GpuDevice {
 	 */
 	boolean setPooledAllocation(boolean wanted) {
 		boolean previous = this.pooled;
+		// A resident copy was allocated by the allocator in force when it was made and
+		// must be freed by the same one, so nothing may stay resident across the switch.
+		releaseResident();
 		this.pooled = wanted && !this.memoryPool.equals(MemorySegment.NULL);
 		return previous;
 	}
@@ -670,33 +762,8 @@ final class CudaGemm implements GpuDevice {
 	@Override
 	public boolean gemm(double[] a, int oa, int sa, double[] b, int ob, int sb, double[] c, int oc, int batch, int n,
 			int m, int p) {
-		if (!this.usable) {
-			return false;
-		}
-		long aBytes = span(batch, sa, (long) n * m) * Double.BYTES,
-				bBytes = span(batch, sb, (long) m * p) * Double.BYTES, cBytes = (long) batch * n * p * Double.BYTES;
-		long[] buffers = { 0, 0, 0 };
-		try (Arena arena = Arena.ofConfined()) {
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
-				return false;
-			}
-			if (!allocate(arena, buffers, aBytes, bBytes, cBytes)) {
-				return false;
-			}
-			boolean sync = 2L * batch * n * m * p >= this.syncFlopCeiling;
-			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Double.BYTES, aBytes)
-					|| !upload(buffers[1], MemorySegment.ofArray(b), (long) ob * Double.BYTES, bBytes) || !launch(arena,
-							batch == 1 ? this.gemmF64 : this.gemmBatchedF64, buffers, batch, sa, sb, n, m, p, sync)) {
-				return false;
-			}
-			return download(MemorySegment.ofArray(c), (long) oc * Double.BYTES, buffers[2], cBytes);
-		}
-		catch (Throwable ex) {
-			return false;
-		}
-		finally {
-			release(buffers);
-		}
+		return gemm(MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(b), b, ob, sb, MemorySegment.ofArray(c),
+				c, oc, batch, n, m, p, Double.BYTES, batch == 1 ? this.gemmF64 : this.gemmBatchedF64);
 	}
 
 	/**
@@ -718,32 +785,49 @@ final class CudaGemm implements GpuDevice {
 	@Override
 	public boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n,
 			int m, int p) {
+		return gemm(MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(b), b, ob, sb, MemorySegment.ofArray(c),
+				c, oc, batch, n, m, p, Float.BYTES, batch == 1 ? this.gemmF32 : this.gemmBatchedF32);
+	}
+
+	/**
+	 * One width-independent product round trip; the two public forms differ only in it.
+	 * The host arrays ride along beside their segments because they are the residency
+	 * KEYS: an operand a recent call uploaded or produced is found by identity and not
+	 * copied up again, and the result is recorded after its download
+	 * ({@link CudaResidency}). Every member below has the same shape: look the operands
+	 * up, allocate only what is not resident, stage what was missed, launch, and record
+	 * the result on the way out.
+	 */
+	private boolean gemm(MemorySegment a, Object ah, int oa, int sa, MemorySegment b, Object bh, int ob, int sb,
+			MemorySegment c, Object ch, int oc, int batch, int n, int m, int p, int width, MemorySegment kernel) {
 		if (!this.usable) {
 			return false;
 		}
-		long aBytes = span(batch, sa, (long) n * m) * Float.BYTES, bBytes = span(batch, sb, (long) m * p) * Float.BYTES,
-				cBytes = (long) batch * n * p * Float.BYTES;
-		long[] buffers = { 0, 0, 0 };
+		long aBytes = span(batch, sa, (long) n * m) * width, bBytes = span(batch, sb, (long) m * p) * width,
+				cBytes = (long) batch * n * p * width;
+		long offA = (long) oa * width, offB = (long) ob * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+			if (!enter()) {
 				return false;
 			}
-			if (!allocate(arena, buffers, aBytes, bBytes, cBytes)) {
+			buffers[0] = this.residency.lookup(ah, offA, aBytes);
+			buffers[1] = this.residency.lookup(bh, offB, bBytes);
+			if (!allocate(arena, buffers, owned, aBytes, bBytes, cBytes)) {
 				return false;
 			}
 			boolean sync = 2L * batch * n * m * p >= this.syncFlopCeiling;
-			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Float.BYTES, aBytes)
-					|| !upload(buffers[1], MemorySegment.ofArray(b), (long) ob * Float.BYTES, bBytes) || !launch(arena,
-							batch == 1 ? this.gemmF32 : this.gemmBatchedF32, buffers, batch, sa, sb, n, m, p, sync)) {
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !stage(buffers, owned, 1, bh, b, offB, bBytes)
+					|| !launch(arena, kernel, buffers, batch, sa, sb, n, m, p, sync)) {
 				return false;
 			}
-			return download(MemorySegment.ofArray(c), (long) oc * Float.BYTES, buffers[2], cBytes);
+			return finish(c, offC, buffers, owned, 2, ch, cBytes);
 		}
 		catch (Throwable ex) {
 			return false;
 		}
 		finally {
-			release(buffers);
+			release(owned);
 		}
 	}
 
@@ -762,31 +846,7 @@ final class CudaGemm implements GpuDevice {
 	 */
 	@Override
 	public boolean map(int op, double[] a, int oa, double[] c, int oc, int n) {
-		if (!this.usable) {
-			return false;
-		}
-		long bytes = (long) n * Double.BYTES;
-		long[] buffers = { 0, 0 };
-		try (Arena arena = Arena.ofConfined()) {
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
-				return false;
-			}
-			if (!allocate(arena, buffers, bytes, bytes)) {
-				return false;
-			}
-			boolean sync = (long) n * MAP_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
-			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Double.BYTES, bytes)
-					|| !launchMap(arena, this.mapF64, buffers, n, op, sync)) {
-				return false;
-			}
-			return download(MemorySegment.ofArray(c), (long) oc * Double.BYTES, buffers[1], bytes);
-		}
-		catch (Throwable ex) {
-			return false;
-		}
-		finally {
-			release(buffers);
-		}
+		return map(this.mapF64, MemorySegment.ofArray(a), a, oa, MemorySegment.ofArray(c), c, oc, n, op, Double.BYTES);
 	}
 
 	/**
@@ -801,30 +861,36 @@ final class CudaGemm implements GpuDevice {
 	 */
 	@Override
 	public boolean mapF(int op, float[] a, int oa, float[] c, int oc, int n) {
+		return map(this.mapF32, MemorySegment.ofArray(a), a, oa, MemorySegment.ofArray(c), c, oc, n, op, Float.BYTES);
+	}
+
+	/** One width-independent map round trip; the two public forms differ only in it. */
+	private boolean map(MemorySegment kernel, MemorySegment a, Object ah, int oa, MemorySegment c, Object ch, int oc,
+			int n, int op, int width) {
 		if (!this.usable) {
 			return false;
 		}
-		long bytes = (long) n * Float.BYTES;
-		long[] buffers = { 0, 0 };
+		long bytes = (long) n * width, offA = (long) oa * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0 }, owned = { 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+			if (!enter()) {
 				return false;
 			}
-			if (!allocate(arena, buffers, bytes, bytes)) {
+			buffers[0] = this.residency.lookup(ah, offA, bytes);
+			if (!allocate(arena, buffers, owned, bytes, bytes)) {
 				return false;
 			}
 			boolean sync = (long) n * MAP_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
-			if (!upload(buffers[0], MemorySegment.ofArray(a), (long) oa * Float.BYTES, bytes)
-					|| !launchMap(arena, this.mapF32, buffers, n, op, sync)) {
+			if (!stage(buffers, owned, 0, ah, a, offA, bytes) || !launchMap(arena, kernel, buffers, n, op, sync)) {
 				return false;
 			}
-			return download(MemorySegment.ofArray(c), (long) oc * Float.BYTES, buffers[1], bytes);
+			return finish(c, offC, buffers, owned, 1, ch, bytes);
 		}
 		catch (Throwable ex) {
 			return false;
 		}
 		finally {
-			release(buffers);
+			release(owned);
 		}
 	}
 
@@ -847,8 +913,8 @@ final class CudaGemm implements GpuDevice {
 	@Override
 	public boolean bcast(int op, double[] a, int oa, int[] sa, double[] b, int ob, int[] sb, double[] c, int oc,
 			int[] dims) {
-		return bcast(op, MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(b), ob, sb, MemorySegment.ofArray(c),
-				oc, dims, Double.BYTES, this.strided[BCAST_F64]);
+		return bcast(op, MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(b), b, ob, sb,
+				MemorySegment.ofArray(c), c, oc, dims, Double.BYTES, this.strided[BCAST_F64]);
 	}
 
 	/**
@@ -859,15 +925,15 @@ final class CudaGemm implements GpuDevice {
 	@Override
 	public boolean bcastF(int op, float[] a, int oa, int[] sa, float[] b, int ob, int[] sb, float[] c, int oc,
 			int[] dims) {
-		return bcast(op, MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(b), ob, sb, MemorySegment.ofArray(c),
-				oc, dims, Float.BYTES, this.strided[BCAST_F32]);
+		return bcast(op, MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(b), b, ob, sb,
+				MemorySegment.ofArray(c), c, oc, dims, Float.BYTES, this.strided[BCAST_F32]);
 	}
 
 	/**
 	 * One width-independent broadcast round trip; the two public forms differ only in it.
 	 */
-	private boolean bcast(int op, MemorySegment a, int oa, int[] sa, MemorySegment b, int ob, int[] sb, MemorySegment c,
-			int oc, int[] dims, int width, MemorySegment kernel) {
+	private boolean bcast(int op, MemorySegment a, Object ah, int oa, int[] sa, MemorySegment b, Object bh, int ob,
+			int[] sb, MemorySegment c, Object ch, int oc, int[] dims, int width, MemorySegment kernel) {
 		if (!this.usable) {
 			return false;
 		}
@@ -875,29 +941,32 @@ final class CudaGemm implements GpuDevice {
 		int n = count(dims);
 		long aBytes = (span(dims, sa) + 1L) * width, bBytes = (span(dims, sb) + 1L) * width, cBytes = (long) n * width,
 				metaBytes = 3L * rank * Integer.BYTES;
-		long[] buffers = { 0, 0, 0, 0 };
+		long offA = (long) oa * width, offB = (long) ob * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0, 0 }, owned = { 0, 0, 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+			if (!enter()) {
 				return false;
 			}
-			if (!allocate(arena, buffers, aBytes, bBytes, cBytes, metaBytes)) {
+			buffers[0] = this.residency.lookup(ah, offA, aBytes);
+			buffers[1] = this.residency.lookup(bh, offB, bBytes);
+			if (!allocate(arena, buffers, owned, aBytes, bBytes, cBytes, metaBytes)) {
 				return false;
 			}
 			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
-			if (!upload(buffers[0], a, (long) oa * width, aBytes) || !upload(buffers[1], b, (long) ob * width, bBytes)
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !stage(buffers, owned, 1, bh, b, offB, bBytes)
 					|| !uploadLayout(arena, buffers[3], dims, sa, sb)
 					|| !launchStrided(arena, kernel, n,
 							new long[] { op, buffers[0], buffers[1], buffers[2], n, rank, buffers[3] },
 							new boolean[] { false, true, true, true, false, false, true }, sync)) {
 				return false;
 			}
-			return download(c, (long) oc * width, buffers[2], cBytes);
+			return finish(c, offC, buffers, owned, 2, ch, cBytes);
 		}
 		catch (Throwable ex) {
 			return false;
 		}
 		finally {
-			release(buffers);
+			release(owned);
 		}
 	}
 
@@ -908,7 +977,7 @@ final class CudaGemm implements GpuDevice {
 	 */
 	@Override
 	public boolean gather(double[] a, int oa, int[] sa, double[] c, int oc, int[] dims) {
-		return gather(MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(c), oc, dims, Double.BYTES,
+		return gather(MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(c), c, oc, dims, Double.BYTES,
 				this.strided[GATHER_F64]);
 	}
 
@@ -919,39 +988,41 @@ final class CudaGemm implements GpuDevice {
 	 */
 	@Override
 	public boolean gatherF(float[] a, int oa, int[] sa, float[] c, int oc, int[] dims) {
-		return gather(MemorySegment.ofArray(a), oa, sa, MemorySegment.ofArray(c), oc, dims, Float.BYTES,
+		return gather(MemorySegment.ofArray(a), a, oa, sa, MemorySegment.ofArray(c), c, oc, dims, Float.BYTES,
 				this.strided[GATHER_F32]);
 	}
 
-	private boolean gather(MemorySegment a, int oa, int[] sa, MemorySegment c, int oc, int[] dims, int width,
-			MemorySegment kernel) {
+	private boolean gather(MemorySegment a, Object ah, int oa, int[] sa, MemorySegment c, Object ch, int oc, int[] dims,
+			int width, MemorySegment kernel) {
 		if (!this.usable) {
 			return false;
 		}
 		int rank = dims.length;
 		int n = count(dims);
 		long aBytes = (span(dims, sa) + 1L) * width, cBytes = (long) n * width, metaBytes = 2L * rank * Integer.BYTES;
-		long[] buffers = { 0, 0, 0 };
+		long offA = (long) oa * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+			if (!enter()) {
 				return false;
 			}
-			if (!allocate(arena, buffers, aBytes, cBytes, metaBytes)) {
+			buffers[0] = this.residency.lookup(ah, offA, aBytes);
+			if (!allocate(arena, buffers, owned, aBytes, cBytes, metaBytes)) {
 				return false;
 			}
 			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
-			if (!upload(buffers[0], a, (long) oa * width, aBytes) || !uploadLayout(arena, buffers[2], dims, sa, null)
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !uploadLayout(arena, buffers[2], dims, sa, null)
 					|| !launchStrided(arena, kernel, n, new long[] { buffers[0], buffers[1], n, rank, buffers[2] },
 							new boolean[] { true, true, false, false, true }, sync)) {
 				return false;
 			}
-			return download(c, (long) oc * width, buffers[1], cBytes);
+			return finish(c, offC, buffers, owned, 1, ch, cBytes);
 		}
 		catch (Throwable ex) {
 			return false;
 		}
 		finally {
-			release(buffers);
+			release(owned);
 		}
 	}
 
@@ -964,8 +1035,8 @@ final class CudaGemm implements GpuDevice {
 	 */
 	@Override
 	public boolean fold(int op, double[] a, int oa, double[] c, int oc, int outer, int len, int inner) {
-		return fold(op, MemorySegment.ofArray(a), oa, MemorySegment.ofArray(c), oc, outer, len, inner, Double.BYTES,
-				this.strided[FOLD_F64]);
+		return fold(op, MemorySegment.ofArray(a), a, oa, MemorySegment.ofArray(c), c, oc, outer, len, inner,
+				Double.BYTES, this.strided[FOLD_F64]);
 	}
 
 	/**
@@ -975,38 +1046,40 @@ final class CudaGemm implements GpuDevice {
 	 */
 	@Override
 	public boolean foldF(int op, float[] a, int oa, float[] c, int oc, int outer, int len, int inner) {
-		return fold(op, MemorySegment.ofArray(a), oa, MemorySegment.ofArray(c), oc, outer, len, inner, Float.BYTES,
-				this.strided[FOLD_F32]);
+		return fold(op, MemorySegment.ofArray(a), a, oa, MemorySegment.ofArray(c), c, oc, outer, len, inner,
+				Float.BYTES, this.strided[FOLD_F32]);
 	}
 
-	private boolean fold(int op, MemorySegment a, int oa, MemorySegment c, int oc, int outer, int len, int inner,
-			int width, MemorySegment kernel) {
+	private boolean fold(int op, MemorySegment a, Object ah, int oa, MemorySegment c, Object ch, int oc, int outer,
+			int len, int inner, int width, MemorySegment kernel) {
 		if (!this.usable) {
 			return false;
 		}
 		int cells = outer * inner;
 		long aBytes = (long) cells * len * width, cBytes = (long) cells * width;
-		long[] buffers = { 0, 0 };
+		long offA = (long) oa * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0 }, owned = { 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+			if (!enter()) {
 				return false;
 			}
-			if (!allocate(arena, buffers, aBytes, cBytes)) {
+			buffers[0] = this.residency.lookup(ah, offA, aBytes);
+			if (!allocate(arena, buffers, owned, aBytes, cBytes)) {
 				return false;
 			}
 			boolean sync = (long) cells * len * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
-			if (!upload(buffers[0], a, (long) oa * width, aBytes) || !launchStrided(arena, kernel, cells,
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !launchStrided(arena, kernel, cells,
 					new long[] { op, buffers[0], buffers[1], outer, len, inner },
 					new boolean[] { false, true, true, false, false, false }, sync)) {
 				return false;
 			}
-			return download(c, (long) oc * width, buffers[1], cBytes);
+			return finish(c, offC, buffers, owned, 1, ch, cBytes);
 		}
 		catch (Throwable ex) {
 			return false;
 		}
 		finally {
-			release(buffers);
+			release(owned);
 		}
 	}
 
@@ -1122,11 +1195,16 @@ final class CudaGemm implements GpuDevice {
 	 * a failure trims the pool back afterwards, which covers the race between the check
 	 * and the allocation.
 	 */
-	private boolean allocate(Arena arena, long[] buffers, long... sizes) throws Throwable {
+	private boolean allocate(Arena arena, long[] buffers, long[] owned, long... sizes) throws Throwable {
 		MemorySegment out = arena.allocate(L);
+		// Only the slots the residency lookup left empty are allocated; a resident
+		// operand
+		// is already where the kernel wants it.
 		long total = 0;
-		for (long size : sizes) {
-			total += size;
+		for (int i = 0; i < sizes.length; i++) {
+			if (buffers[i] == 0) {
+				total += sizes[i];
+			}
 		}
 		// The pre-flight, amortized: the driver is asked every
 		// FREE_MEMORY_REFRESH_INTERVAL allocations, and sooner when a request is large
@@ -1134,31 +1212,178 @@ final class CudaGemm implements GpuDevice {
 		// was handed out, so the estimate only ever errs on the side of refusing.
 		long free = this.freeEstimate;
 		if (free < 0 || ++this.allocationsSinceRefresh >= FREE_MEMORY_REFRESH_INTERVAL || total > free / 4) {
-			free = freeDeviceMemory(arena);
-			this.freeEstimate = free;
-			this.allocationsSinceRefresh = 0;
+			free = refreshFreeMemory(arena);
+		}
+		if (free >= 0 && total > free - ALLOCATION_HEADROOM && this.residency.occupied()) {
+			// The resident copies must never be the reason a call declines: give back
+			// every one this call is not holding, hand the pool's reserve back to the
+			// device so cuMemGetInfo can see it, and ask again.
+			this.residency.evictAll(buffers);
+			drainPending();
+			trimMemoryPool();
+			free = refreshFreeMemory(arena);
 		}
 		if (free >= 0 && total > free - ALLOCATION_HEADROOM) {
 			return false;
 		}
 		for (int i = 0; i < sizes.length; i++) {
+			if (buffers[i] != 0) {
+				continue;
+			}
 			int status = this.pooled ? this.driver.memAllocAsync(out, sizes[i]) : this.driver.memAlloc(out, sizes[i]);
 			if (status != CuResult.SUCCESS) {
 				// Order matters, and getting it wrong is silent: the buffers that DID
 				// allocate have to go back to the pool before the pool is trimmed, or the
 				// trim finds them still in use and keeps their memory. Measured with the
-				// two swapped, a declined product held 78 GB of a 128 GB device.
-				release(buffers);
+				// two swapped, a declined product held 78 GB of a 128 GB device. The
+				// resident copies go back too, for the same reason the pre-flight above
+				// gives them back.
+				release(owned);
+				this.residency.evictAll(buffers);
+				drainPending();
 				trimMemoryPool();
 				this.freeEstimate = -1;
 				return fail(status);
 			}
 			buffers[i] = out.get(L, 0);
+			owned[i] = buffers[i];
 		}
 		if (free >= 0) {
 			this.freeEstimate = free - total;
 		}
 		return true;
+	}
+
+	/**
+	 * Re-asks the driver how much device memory is free, resets the amortization, and
+	 * re-derives the residency budget from the answer -- a quarter of what this process
+	 * could hold, the resident bytes themselves counted back in, capped at
+	 * {@link #RESIDENT_CAP}.
+	 */
+	private long refreshFreeMemory(Arena arena) throws Throwable {
+		long free = freeDeviceMemory(arena);
+		this.freeEstimate = free;
+		this.allocationsSinceRefresh = 0;
+		long override = this.residentBudgetOverride;
+		this.residency.setBudget(override >= 0 ? override
+				: free < 0 ? 0 : Math.min(RESIDENT_CAP, (free + this.residency.bytes()) / RESIDENT_SHARE));
+		return free;
+	}
+
+	/**
+	 * The start of every call: makes the context current and frees what the cache has
+	 * dropped since the last call. This is one of the two moments a pending free is safe
+	 * to enqueue -- before any operand of THIS call has been looked up, so no buffer the
+	 * coming launch reads can be among them (see {@link CudaResidency}).
+	 */
+	private boolean enter() throws Throwable {
+		if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+			return false;
+		}
+		drainPending();
+		return true;
+	}
+
+	/**
+	 * Moves operand {@code i} up unless the residency lookup already found it there, and
+	 * records the copy so the next call over the same array finds it. The buffer then
+	 * belongs to the cache: it is struck from {@code owned} so {@link #release} leaves
+	 * it.
+	 */
+	private boolean stage(long[] buffers, long[] owned, int i, Object host, MemorySegment heap, long offset, long bytes)
+			throws Throwable {
+		if (owned[i] == 0) {
+			return true;
+		}
+		if (!upload(buffers[i], heap, offset, bytes)) {
+			return false;
+		}
+		this.residency.put(host, offset, bytes, buffers[i]);
+		owned[i] = 0;
+		return true;
+	}
+
+	/**
+	 * The end of every successful call: the result comes down, and -- device and host now
+	 * holding the same bytes -- the buffer is recorded as the host array's resident copy
+	 * rather than freed, which is what makes a chain of members pay for one upload. Then
+	 * the other safe moment to free what the cache dropped: the launch has been enqueued
+	 * and the synchronous download has returned, so nothing the kernel read is freed
+	 * underneath it.
+	 */
+	private boolean finish(MemorySegment heap, long offset, long[] buffers, long[] owned, int i, Object host,
+			long bytes) throws Throwable {
+		if (!download(heap, offset, buffers[i], bytes)) {
+			return false;
+		}
+		this.residency.put(host, offset, bytes, buffers[i]);
+		owned[i] = 0;
+		drainPending();
+		return true;
+	}
+
+	/**
+	 * Frees every buffer the cache has dropped, replaced or evicted since the last drain.
+	 */
+	private void drainPending() {
+		for (long pointer : this.residency.drain()) {
+			free(pointer);
+		}
+	}
+
+	/**
+	 * A host array was written: its resident copy, if any, is stale and is dropped. No
+	 * driver call happens here -- the buffer is freed by the next call, on a thread that
+	 * has the context -- so this is safe from any thread and costs a volatile read when
+	 * nothing is resident.
+	 * @param host the host array that was written
+	 */
+	@Override
+	public void written(Object host) {
+		this.residency.written(host);
+	}
+
+	/**
+	 * Bytes held by resident copies right now. For the tests and the description.
+	 * @return the resident total, in bytes
+	 */
+	@Override
+	public long residentBytes() {
+		return this.residency.bytes();
+	}
+
+	/**
+	 * Drops and frees every resident copy. For the leak tests, which need the baseline
+	 * they measure against to be an EMPTY device, and for {@link #setPooledAllocation},
+	 * which must not leave a pooled buffer to be freed by the other allocator.
+	 */
+	@Override
+	public void releaseResident() {
+		this.residency.evictAll();
+		try (Arena arena = Arena.ofConfined()) {
+			if (this.driver.ctxSetCurrent(this.context) == CuResult.SUCCESS) {
+				drainPending();
+			}
+		}
+		catch (Throwable ex) {
+			// The context is gone; so are the buffers.
+		}
+	}
+
+	/**
+	 * Imposes a residency budget in bytes, or {@code -1} to go back to the derived one.
+	 * Package-private and for the tests, which need the LRU to evict at a size they can
+	 * afford to fill. Takes effect at the next pre-flight refresh, so the tests also
+	 * release what is resident to make the switch immediate.
+	 */
+	void residentBudget(long bytes) {
+		this.residentBudgetOverride = bytes;
+		this.freeEstimate = -1;
+	}
+
+	/** The cache itself, for the tests' hit and miss counts. */
+	CudaResidency residency() {
+		return this.residency;
 	}
 
 	/**
@@ -1169,27 +1394,27 @@ final class CudaGemm implements GpuDevice {
 	 */
 	@Override
 	public boolean rngFill(double[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3) {
-		return rngFill(this.strided[RNG_F64], MemorySegment.ofArray(c), (long) oc * Double.BYTES,
+		return rngFill(this.strided[RNG_F64], MemorySegment.ofArray(c), c, (long) oc * Double.BYTES,
 				(long) n * Double.BYTES, n, mode, lo, span, s1, s2, s3);
 	}
 
 	@Override
 	public boolean rngFillF(float[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3) {
-		return rngFill(this.strided[RNG_F32], MemorySegment.ofArray(c), (long) oc * Float.BYTES, (long) n * Float.BYTES,
-				n, mode, lo, span, s1, s2, s3);
+		return rngFill(this.strided[RNG_F32], MemorySegment.ofArray(c), c, (long) oc * Float.BYTES,
+				(long) n * Float.BYTES, n, mode, lo, span, s1, s2, s3);
 	}
 
-	private boolean rngFill(MemorySegment function, MemorySegment heap, long offset, long bytes, int n, int mode,
-			double lo, double span, int s1, int s2, int s3) {
+	private boolean rngFill(MemorySegment function, MemorySegment heap, Object host, long offset, long bytes, int n,
+			int mode, double lo, double span, int s1, int s2, int s3) {
 		if (!this.usable) {
 			return false;
 		}
-		long[] buffers = { 0 };
+		long[] buffers = { 0 }, owned = { 0 };
 		try (Arena arena = Arena.ofConfined()) {
-			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+			if (!enter()) {
 				return false;
 			}
-			if (!allocate(arena, buffers, bytes)) {
+			if (!allocate(arena, buffers, owned, bytes)) {
 				return false;
 			}
 			boolean sync = (long) n
@@ -1227,13 +1452,13 @@ final class CudaGemm implements GpuDevice {
 					return fail(status);
 				}
 			}
-			return download(heap, offset, buffers[0], bytes);
+			return finish(heap, offset, buffers, owned, 0, host, bytes);
 		}
 		catch (Throwable ex) {
 			return false;
 		}
 		finally {
-			release(buffers);
+			release(owned);
 		}
 	}
 
@@ -1281,13 +1506,32 @@ final class CudaGemm implements GpuDevice {
 		return true;
 	}
 
-	/** The mirror of {@link #upload}, for the result. */
+	/**
+	 * The mirror of {@link #upload}, for the result -- STAGED through the pinned bounce
+	 * buffer (see {@link #BOUNCE_BYTES} for why): the device DMAs a chunk into pinned
+	 * memory on a plain, safepoint-friendly downcall, and the Java side copies it into
+	 * the fresh result array, which is a memcpy and never a cold-page walk. Without a
+	 * bounce buffer it is the direct critical copy it used to be.
+	 */
 	private boolean download(MemorySegment heap, long offset, long source, long bytes) throws Throwable {
-		for (long done = 0; done < bytes; done += CRITICAL_CHUNK_BYTES) {
-			long chunk = Math.min(CRITICAL_CHUNK_BYTES, bytes - done);
-			int status = this.driver.memcpyDtoH(heap.asSlice(offset + done, chunk), source + done, chunk);
-			if (status != CuResult.SUCCESS) {
-				return fail(status);
+		if (this.bounce.equals(MemorySegment.NULL)) {
+			for (long done = 0; done < bytes; done += CRITICAL_CHUNK_BYTES) {
+				long chunk = Math.min(CRITICAL_CHUNK_BYTES, bytes - done);
+				int status = this.driver.memcpyDtoH(heap.asSlice(offset + done, chunk), source + done, chunk);
+				if (status != CuResult.SUCCESS) {
+					return fail(status);
+				}
+			}
+			return true;
+		}
+		synchronized (this.bounceLock) {
+			for (long done = 0; done < bytes; done += BOUNCE_BYTES) {
+				long chunk = Math.min(BOUNCE_BYTES, bytes - done);
+				int status = this.driver.memcpyDtoHPinned(this.bounce, source + done, chunk);
+				if (status != CuResult.SUCCESS) {
+					return fail(status);
+				}
+				MemorySegment.copy(this.bounce, 0, heap, offset + done, chunk);
 			}
 		}
 		return true;
@@ -1372,24 +1616,33 @@ final class CudaGemm implements GpuDevice {
 		return true;
 	}
 
-	/** Frees every device buffer that was allocated, on the failure path too. */
-	private void release(long[] buffers) {
-		for (int i = 0; i < buffers.length; i++) {
-			if (buffers[i] != 0) {
-				try {
-					if (this.pooled) {
-						this.driver.memFreeAsync(buffers[i]);
-					}
-					else {
-						this.driver.memFree(buffers[i]);
-					}
-				}
-				catch (Throwable ex) {
-					// A free that fails means the context is already gone; the sticky
-					// rule below has retired the feature, and there is nothing to undo.
-				}
-				buffers[i] = 0;
+	/**
+	 * Frees every device buffer this call allocated and the cache did not take, on the
+	 * failure path too. A buffer {@link #stage} or {@link #finish} handed to the cache is
+	 * struck from {@code owned} first and outlives the call.
+	 */
+	private void release(long[] owned) {
+		for (int i = 0; i < owned.length; i++) {
+			if (owned[i] != 0) {
+				free(owned[i]);
+				owned[i] = 0;
 			}
+		}
+	}
+
+	/** Frees one device buffer through whichever allocator is in force. */
+	private void free(long pointer) {
+		try {
+			if (this.pooled) {
+				this.driver.memFreeAsync(pointer);
+			}
+			else {
+				this.driver.memFree(pointer);
+			}
+		}
+		catch (Throwable ex) {
+			// A free that fails means the context is already gone; the sticky rule has
+			// retired the feature, and there is nothing to undo.
 		}
 	}
 

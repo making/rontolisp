@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
+import am.ik.rontolisp.FloatArrayWriteHook;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -146,6 +147,12 @@ public final class LinalgGpu {
 	 * @param evaluator the evaluator used to apply the captured binding on decline
 	 */
 	public static void install(Environment globalEnv, LispEvaluator evaluator) {
+		// Device residency: the members below keep a copy of each operand and result on
+		// the device, keyed by the identity of the packed array's storage, and the host
+		// array stays authoritative -- so every in-place write to one has to reach the
+		// library. The element setters and the in-place --simd kernels report through
+		// this hook (.kb/gpu.md, "The residency design").
+		FloatArrayWriteHook.install(LinalgGpuKernels::written);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_DOT, 2, LinalgGpu::dot);
 		// The stacked product behind linalg:matmul at rank >= 3. A %-prefixed member is
 		// an internal symbol, whose canonical qualified spelling carries the double colon

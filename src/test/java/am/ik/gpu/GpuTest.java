@@ -8,6 +8,9 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
+import java.util.ArrayList;
+import java.util.List;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * The half of {@code am.ik.gpu} that needs a GPU on the machine, and therefore runs only
@@ -970,6 +973,136 @@ class GpuTest {
 			}
 		}
 		return c;
+	}
+
+	// --- device residency (2026-08-22) ------------------------------------------------
+	// The CUDA backend keeps a copy of every operand and result on the device, keyed by
+	// the identity of the host array and held weakly (CudaResidency). These pin the four
+	// properties .kb/gpu.md sells it on: a recent operand or result is not uploaded
+	// again; a write to the host array -- reported through Gpu.written, which every
+	// setter on both backends calls -- makes the next call upload it again and answer
+	// for the NEW bytes; the resident set is bounded by its budget and a release empties
+	// it, with the device memory coming back; and an array the collector has reclaimed
+	// takes its device copy with it.
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void anOperandUploadedOrProducedByARecentCallIsNotUploadedAgain() {
+		CudaResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "residency is the CUDA backend's");
+		Gpu.releaseResident();
+		int n = 1 << 18;
+		double[] a = new double[n], c = new double[n], d = new double[n], e = new double[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = (i % 97) / 100.0;
+		}
+		long hits = residency.hits(), misses = residency.misses();
+		// First sight of a: uploaded and recorded; c is recorded after its download.
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
+		assertThat(residency.misses()).isEqualTo(misses + 1);
+		assertThat(residency.hits()).isEqualTo(hits);
+		// The same operand again: found, not moved.
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, d, 0, n)).isTrue();
+		assertThat(residency.hits()).isEqualTo(hits + 1);
+		assertThat(d).isEqualTo(c);
+		// The CHAIN, which is what residency is for: the result of one call is the
+		// operand of the next, and that is a hit too -- it was recorded on the way down.
+		assertThat(Gpu.map(Gpu.MAP_LOG, c, 0, e, 0, n)).isTrue();
+		assertThat(residency.hits()).isEqualTo(hits + 2);
+		for (int i = 0; i < n; i += 997) {
+			assertThat(e[i]).as("log(exp(a[%d]))", i).isCloseTo(a[i], within(1e-9));
+		}
+		assertThat(Gpu.residentBytes()).isGreaterThan(0);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aWrittenHostArrayIsUploadedAgainAndTheAnswerFollowsTheWrite() {
+		CudaResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "residency is the CUDA backend's");
+		Gpu.releaseResident();
+		int n = 1 << 18;
+		double[] a = new double[n], c = new double[n];
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
+		assertThat(c[12345]).isEqualTo(1.0);
+		// The host array stays authoritative: a write to it, reported the way every
+		// enumerated setter reports it, must reach the next call's answer.
+		a[12345] = 2.0;
+		Gpu.written(a);
+		long misses = residency.misses();
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
+		assertThat(residency.misses()).as("the written operand is uploaded again").isEqualTo(misses + 1);
+		assertThat(c[12345]).isCloseTo(Math.exp(2.0), within(1e-12));
+		assertThat(c[12344]).isEqualTo(1.0);
+		// An array the cache has never seen is simply not found, and the hook never
+		// throws, runs the probe or touches the driver.
+		Gpu.written(new double[1]);
+		Gpu.written("not an array at all");
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void theResidentSetIsBoundedByItsBudgetAndAReleaseGivesTheMemoryBack() {
+		CudaResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "residency is the CUDA backend's");
+		GpuDevice gemm = Gpu.device();
+		assertThat(gemm).isNotNull();
+		Gpu.releaseResident();
+		long before = gemm.freeDeviceMemory();
+		assertThat(before).isGreaterThan(0);
+		int n = 1 << 18; // 2 MB a buffer, two buffers a call
+		long budget = 8L << 20;
+		Gpu.residentBudget(budget);
+		List<double[]> reachable = new ArrayList<>();
+		try {
+			for (int i = 0; i < 32; i++) {
+				double[] a = new double[n], c = new double[n];
+				reachable.add(a);
+				reachable.add(c);
+				assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
+				assertThat(Gpu.residentBytes()).as("after call %d", i).isLessThanOrEqualTo(budget);
+			}
+			assertThat(Gpu.residentBytes()).isGreaterThan(0);
+			assertThat(residency.budget()).isEqualTo(budget);
+			Gpu.releaseResident();
+			assertThat(Gpu.residentBytes()).isZero();
+			// 32 calls of two 2 MB buffers held resident would be 128 MB; the bound is
+			// the
+			// leak tests' loose one, two-sided for the reason theirs is.
+			assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
+		}
+		finally {
+			Gpu.residentBudget(-1);
+			Gpu.releaseResident();
+		}
+		assertThat(reachable).hasSize(64);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aCollectedHostArrayTakesItsResidentCopyWithIt() throws InterruptedException {
+		CudaResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "residency is the CUDA backend's");
+		Gpu.releaseResident();
+		int n = 1 << 18;
+		double[] keep = new double[n], kc = new double[n];
+		assertThat(Gpu.map(Gpu.MAP_EXP, keep, 0, kc, 0, n)).isTrue();
+		long held = Gpu.residentBytes();
+		assertThat(held).isEqualTo(2L * n * Double.BYTES);
+		for (int i = 0; i < 8; i++) {
+			assertThat(Gpu.map(Gpu.MAP_EXP, new double[n], 0, new double[n], 0, n)).isTrue();
+		}
+		assertThat(Gpu.residentBytes()).isGreaterThan(held);
+		// Sixteen arrays nobody can reach any more: once the collector has them, the
+		// next call's drain frees their buffers, and only the reachable pair is left.
+		long after = -1;
+		for (int attempt = 0; attempt < 20 && after != held; attempt++) {
+			System.gc();
+			Thread.sleep(20);
+			assertThat(Gpu.map(Gpu.MAP_EXP, keep, 0, kc, 0, n)).isTrue();
+			after = Gpu.residentBytes();
+		}
+		assertThat(after).isEqualTo(held);
 	}
 
 }

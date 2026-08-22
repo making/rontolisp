@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import am.ik.rontolisp.FloatArrayWriteHook;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
@@ -904,11 +905,13 @@ public final class LinalgSimd {
 		if (x instanceof LispDoubleFloatArray a && g instanceof LispDoubleFloatArray b
 				&& m instanceof LispDoubleFloatArray c && v instanceof LispDoubleFloatArray d) {
 			LinalgSimdKernels.adamStep(a.data(), b.data(), c.data(), d.data(), ps);
+			written(a.data(), c.data(), d.data());
 			return x;
 		}
 		if (x instanceof LispSingleFloatArray a && g instanceof LispSingleFloatArray b
 				&& m instanceof LispSingleFloatArray c && v instanceof LispSingleFloatArray d) {
 			LinalgSimdKernels.adamStepF(a.data(), b.data(), c.data(), d.data(), ps);
+			written(a.data(), c.data(), d.data());
 			return x;
 		}
 		// Mixed widths: the defun reads every element widened anyway.
@@ -953,6 +956,7 @@ public final class LinalgSimd {
 			case LispDoubleFloatArray a -> LinalgSimdKernels.rngFill(a.data(), mode, lo, span, w[0], w[1], w[2]);
 			case LispSingleFloatArray a -> LinalgSimdKernels.rngFillF(a.data(), mode, lo, span, w[0], w[1], w[2]);
 		};
+		written(out instanceof LispDoubleFloatArray d ? d.data() : ((LispSingleFloatArray) out).data());
 		return new LispDoubleFloatArray(end, new int[] { 3 });
 	}
 
@@ -1158,10 +1162,12 @@ public final class LinalgSimd {
 		}
 		if (z instanceof LispDoubleFloatArray zd && g instanceof LispDoubleFloatArray gd) {
 			LinalgSimdKernels.scatterRows(zd.data(), gd.data(), slab, rows);
+			written(zd.data());
 			return z;
 		}
 		if (z instanceof LispSingleFloatArray zf && g instanceof LispSingleFloatArray gf) {
 			LinalgSimdKernels.scatterRowsF(zf.data(), gf.data(), slab, rows);
+			written(zf.data());
 			return z;
 		}
 		return null;
@@ -1195,8 +1201,14 @@ public final class LinalgSimd {
 			return null;
 		}
 		switch (g) {
-			case LispDoubleFloatArray d -> LinalgSimdKernels.scale(d.data(), s);
-			case LispSingleFloatArray f -> LinalgSimdKernels.scale(f.data(), s);
+			case LispDoubleFloatArray d -> {
+				LinalgSimdKernels.scale(d.data(), s);
+				written(d.data());
+			}
+			case LispSingleFloatArray f -> {
+				LinalgSimdKernels.scale(f.data(), s);
+				written(f.data());
+			}
 		}
 		return g;
 	}
@@ -1403,6 +1415,18 @@ public final class LinalgSimd {
 
 		float[] apply(double s, float[] a);
 
+	}
+
+	/**
+	 * Reports that the given packed storage arrays were written in place, for whatever
+	 * flag keeps a copy of them elsewhere -- {@code --gpu}'s device residency
+	 * ({@code FloatArrayWriteHook}). The four in-place members here bypass the element
+	 * setter that reports for every other write, so they report themselves.
+	 */
+	private static void written(Object... data) {
+		for (Object array : data) {
+			FloatArrayWriteHook.written(array);
+		}
 	}
 
 }

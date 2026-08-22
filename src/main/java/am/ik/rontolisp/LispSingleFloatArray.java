@@ -35,6 +35,7 @@ public record LispSingleFloatArray(float[] data, int[] dims) implements LispFloa
 	public void setElement(int flat, double value) {
 		// Narrow f64 -> f32 on store.
 		this.data[flat] = (float) value;
+		FloatArrayWriteHook.written(this.data);
 	}
 
 	@Override

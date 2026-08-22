@@ -30,6 +30,7 @@ public record LispDoubleFloatArray(double[] data, int[] dims) implements LispFlo
 	@Override
 	public void setElement(int flat, double value) {
 		this.data[flat] = value;
+		FloatArrayWriteHook.written(this.data);
 	}
 
 	@Override

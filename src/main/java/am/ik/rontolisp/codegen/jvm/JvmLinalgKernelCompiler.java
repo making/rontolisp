@@ -180,6 +180,21 @@ final class JvmLinalgKernelCompiler {
 		return EXTENDED.get(member);
 	}
 
+	/**
+	 * The members that write a CALLER'S packed array in place, and which of their
+	 * arguments (by position) they write: the fused Adam update writes the parameter and
+	 * the two moments, the scatter-add its destination, the clip scale its operand, and
+	 * the generator fill the array it fills. Under {@code --gpu} the call site reports
+	 * each of those arrays to {@code _gpuWritten} after the chain, whichever rung of it
+	 * ran: the device keeps resident copies of packed arrays keyed by identity, and an
+	 * in-place write that reached it through no setter would leave the copy stale
+	 * ({@code .kb/gpu.md}, "The residency design"). The defun rung writes through
+	 * {@code _fvAset*}, which reports on its own, so for it this is redundant and cheap.
+	 */
+	private static final Map<String, int[]> WRITTEN = Map.of(LispNames.LINALG_ADAM_STEP, new int[] { 0, 2, 3 },
+			LispNames.LINALG_SCATTER_ROWS, new int[] { 0 }, LispNames.LINALG_SCALE, new int[] { 0 },
+			LispNames.LINALG_RNG_FILL, new int[] { 0 });
+
 	/** The ops-map key of a member's extended bridge registration. */
 	static String extendedKey(String member) {
 		return qualifiedName(member) + "#ext";
@@ -317,6 +332,19 @@ final class JvmLinalgKernelCompiler {
 		ctx.emitU2(defun.methodref().index());
 		for (int branchPos : takenBranches) {
 			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+		}
+		// The residency invalidation, after the chain and with the result still on the
+		// stack: each array this member wrote in place is reported, whichever rung ran.
+		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		int[] written = gpuOps != null ? WRITTEN.get(member) : null;
+		if (written != null && gpuOps != null) {
+			MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
+			for (int i : written) {
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slots[i]);
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(report.index());
+			}
 		}
 	}
 

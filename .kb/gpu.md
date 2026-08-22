@@ -29,11 +29,18 @@ record -- the generator fill became a device member (the one with no operand and
 byte-identical result), eleven boxed Lisp walks the profile named went onto the `--simd`
 seam instead (`.kb/linalg-simd.md`), the per-call `cuMemGetInfo` was amortized, and the
 host-memory copy route was measured and kept. It is also where the residency numbers were
-re-derived, which is the section to read before touching `.todo/474`.
+re-derived. **DEVICE RESIDENCY (2026-08-22, todo-474)** is the round after that, and it is
+the one that reversed two of this file's measured declines: "Device residency, built"
+below is its record -- the weakly-keyed identity cache, the cap that decides whether it
+pays, the invalidation every in-place write on both backends now performs, and the
+finding underneath all of it, that a device copy to or from a FRESH Java array costs this
+machine a hundred times a warm one, which is why every download is now staged through a
+pinned bounce buffer after "the library never stages" had been measured and written down.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover,ElementwiseCrossover,
-StridedCrossover}.java` over the shared driver-only binding `CuLib.java`, plus
+StridedCrossover,ResidencyCost,FreshPageCost}.java` over the shared driver-only binding
+`CuLib.java`, plus
 `matmul-baseline-warm.lisp`, `elementwise-baseline.lisp` and `shaped-baseline.lisp` for
 the CPU columns;
 that directory's README says which answers which and records what they printed. They need
@@ -85,7 +92,9 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 | `am.ik.rontolisp.codegen.jvm.JvmLinalgGpu` | which members the device bridge claims (fourteen), and each one's `ops` key |
 | `am.ik.gpu.Gpu` | the whole public surface: `available`, `description`, `worth` (a product or a stack), `worthMap`, the `multiply` and `map` overloads, the `MAP_*` op codes |
 | `am.ik.gpu.GpuDevice` | the sealed seam between the two backends: `supportsDouble`, `thresholds`, and the members |
-| `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, the per-call product and the per-call map |
+| `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, the per-call product and the per-call map, the download bounce buffer |
+| `am.ik.gpu.CudaResidency` | device residency: the weakly-keyed identity LRU from a host array to its resident copy, and the pending-free list |
+| `am.ik.rontolisp.FloatArrayWriteHook` | the interpreter's one write seam: every packed-array store reports here, and `eval/LinalgGpu.install` points it at `Gpu.written` |
 | `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 24 downcall handles |
 | `am.ik.gpu.CuResult` | every CUDA 13 status code, and which of them leave the context dead |
 | `am.ik.gpu.MetalGemm` | the Apple half: the probe, the MSL library, MPS, the buffer pool, the per-call members |
@@ -117,6 +126,7 @@ static boolean  bcast(int op, double[] a, int oA, int[] sA, double[] b, int oB, 
 static boolean  gather(double[] a, int oA, int[] sA, double[] out, int oOut, int[] dims)
 static boolean  fold(int op, double[] a, int oA, double[] out, int oOut,
                      int outer, int len, int inner)
+static void     written(Object hostArray)       // a packed array was written IN PLACE: its resident copy is stale
 ```
 
 Row-major `n x m` by `m x p`, a fresh `n * p` array back or `null`; the `out`-taking forms
@@ -135,6 +145,15 @@ is the shape every `torch:linear` over a `(B T C)` activation has.
 however the member set grows. An op code the library does not name is a decline like any
 other, and the kernel's own `default` is the identity rather than a member, so a mirror
 that ever slipped cannot silently answer some other function.
+
+**`written` is the other half of residency and it is a CONTRACT on the caller, not a
+convenience.** Every member keeps a copy of each operand and result on the device, keyed by
+the identity of the host array, and reads that copy instead of uploading again -- so every
+in-place write to a packed array's storage must come through `written`, or the next call
+answers for bytes the array no longer holds. The enumeration of the writers on each
+backend is in "Device residency, built" and pinned by a test on each. `written` is cheap
+when it does not matter (a volatile read with nothing resident), never runs the probe,
+never touches the driver, never throws, and takes any object.
 
 **The offsets are mandatory, not a convenience.** The compiled backends keep a
 `[rank, dim..., data...]` header inside the same array as the data, so an interceptor on
@@ -254,10 +273,16 @@ whole binding declines rather than half-binding.
   JVM backend's tests run in a second surefire fork where every compiled class defines
   its own copy of this binding and loads its own module. It was 64 MB over 500 products
   and that is too tight to survive a parallel fork -- measured, 159 MB of drift.
-- **Nothing is cached between calls, and phase 3 decided it stays that way.** Residency
-  was measured against the real chain and declined; the ceiling, the design that was
-  weighed and the invalidation enumeration it would have needed are all in "The strided
-  tier, and why residency was NOT built" below.
+- **Since 2026-08-22 the operands and the result of every call STAY on the device** --
+  a copy of each, keyed by the identity of the host array and held weakly, an LRU against
+  a budget that is the smaller of a quarter of free memory and 1 GB, freed when the host
+  array is collected, written, evicted or released (`CudaResidency`; "Device residency,
+  built" below is the record, including why the first two versions of it made the
+  program SLOWER). Phase 3 had measured residency and declined it; the second profile
+  re-derived the ceiling and todo-474 built it. A dropped buffer is never freed from the
+  write path: it is queued and freed at the start of the next call, before any operand is
+  looked up, or at the end of one, after the launch and the download -- the one ordering
+  that keeps a stream-ordered free behind the kernel that reads the buffer.
 - **Threads.** The driver API is thread-safe and every call owns its buffers, so concurrent
   products are correct without a lock; they serialize on the device anyway, because
   everything goes to the null stream. The one caveat a future interceptor should know: a
@@ -360,7 +385,15 @@ in a per-call confined arena:
 The gap widens rather than closes with size, unlike `--blas`'s, because the staging buffer
 is a native allocation of the operand's size on every call -- a per-call `mmap` and page
 fault of 8 MB at n=1024, which is most of the 3.1x. **So there is no size at which staging
-wins, and the library never stages.**
+wins, and the library never stages -- FOR THE UPLOAD, and over a host array the GPU has
+touched before.** That table copied to and from the same host array on every iteration.
+Since 2026-08-22 every DOWNLOAD is staged through one pinned 16 MB bounce buffer the probe
+allocates once (`cuMemHostAlloc`; a plain non-critical `cuMemcpyDtoH` into it, then a Java
+copy into the result array, in 16 MB chunks), because a result array is a FRESH Java
+array and on this machine a device copy into a page the GPU has never touched costs a
+hundred times a warm one -- "Device residency, built" below has the probe and the
+numbers. The upload stays direct: its source was just written by the CPU, and a CPU
+write is what makes a page warm.
 
 The same tradeoff `--blas` documented still applies: a critical call does not transition
 the thread to native, so the VM cannot reach a safepoint while it runs. **A GPU has TWO
@@ -1556,14 +1589,15 @@ earlier sections quote, so read the ratio:
 6.7x against the CPU build at the medians, 8x at the best pair; 0.21 -> 0.149 -> 0.119 s
 across the three rounds of this file. **The residency ceiling is therefore re-derived at
 roughly one fifth to one quarter of a step** -- the host-to-device half of the 41% --
-and `.todo/474` carries that number, the design above and the writer enumeration (now one
-entry longer: `%la-scatter-rows`, `%la-scale` and `%la-adam-step` write in place and
-would need the hook too).
+and that number, the design below and the writer enumeration (one entry longer than the
+design's: `%la-scatter-rows`, `%la-scale` and `%la-adam-step` write in place) became
+`.todo/474`, which the next round built.
 
 #### The residency design that was weighed, and the enumeration it would need
 
-Recorded so that whoever revisits it starts from here rather than from todo-123's two
-sentences.
+Recorded on 2026-08-21 so that whoever revisited it would start from here rather than
+from todo-123's two sentences; the next section is what was then built from it on
+2026-08-22, and where the design had to change.
 
 **Where the handle would live.** The todo offers an identity-keyed device cache or a
 device handle inside the packed array. **The handle cannot go in the array**: on the
@@ -1616,6 +1650,175 @@ before anyone spends the complexity: re-run `ElementwiseCrossover.java`'s third 
 the per-op ceiling and the JFR profile above for the share of the program that ceiling
 applies to. **The first number is the one todo-123 quotes and the second is the one that
 decides.**
+
+
+#### Device residency, built (2026-08-22, todo-474)
+
+The design above, built -- and the record of the two versions that were measured and
+thrown away on the way, because what decides whether a cache of device copies pays on
+this machine turned out not to be the cache.
+
+**What it is.** `am.ik.gpu.CudaResidency`: a map from a host array -- the primitive
+`double[]` / `float[]`, by IDENTITY, exactly as the design said, since that is the one
+object both interceptors already unwrap -- to a device buffer holding a copy of its
+elements, with the span it mirrors (`offset`, `bytes`; a different span is a miss). Every
+member of `CudaGemm` now looks each operand up before it allocates (a hit is the launch
+pointer and no upload), records an uploaded operand after its upload and the result after
+its download (device and host hold the same bytes at both moments), and frees what the
+cache dropped at the two moments a stream-ordered free is safe to enqueue: the start of a
+call, before any operand of it is looked up, and the end of one, after the launch and the
+synchronous download. A free enqueued BETWEEN an operand's lookup and its launch would be
+ordered ahead of the kernel that reads it. The host array stays authoritative, so
+residency removes the host-to-device half of the round trip only, as the design said it
+would. `Gpu.written(host)` drops an entry and queues its buffer without a driver call --
+it runs on whichever thread wrote the array, and needs no context. `GpuDevice` gained
+`written` / `residentBytes` / `releaseResident` with empty defaults; Metal keeps no copies
+yet. The three new class files travel in the JVM blob (`CudaResidency`, its `Entry`, `Key`
+and `Lookup`) and the blob test pins the list.
+
+**The keys are WEAK, and that was the first correction.** The first build held its keys
+strongly and let the LRU decide; on `train-gpt-soseki.lisp` under `--gpu --simd` it halved
+the uploads and made the step **2.3x slower** (0.32 s against 0.13 at steps 5-40). Every
+activation and gradient the step allocates stayed reachable from the cache, the Java heap
+grew to 14 GB, the driver's pool grew with it one cold allocation at a time, and the
+device-to-host copies went from a quarter of the step to two thirds. A cache keyed on an
+array's identity has no meaning once the array is unreachable, so the key is now a
+`WeakReference` with an identity hash, a collected key turns up on a `ReferenceQueue`, and
+the next drain frees its buffer. `LinkedHashMap` in access order over those keys is the
+LRU; a lookup presents a transient `Lookup` whose `equals` matches a stored key by
+referent, so a lookup allocates no reference.
+
+**The budget is a CAP on the pool, not a share of the card, and that was the second.**
+With weak keys the step was still slower than without residency (T40 7.5-10 s against
+5.2-6.8 before; T200 17-19 s against 15.5-16.5), with half the uploads. nsys said why:
+`cuMemcpyDtoH` had gone from 533 ms to 2550 ms over a 40-step run for the same 7904 calls
+and the same bytes, and `cuMemAllocAsync` from 1.9 to 8.6 us a call. Two probes separated
+the two:
+
+- `ResidencyCost.java`: live stream-ordered blocks do NOT slow a copy. One 1 MB alloc +
+  HtoD + DtoH + free cycle is 50 us with nothing else alive, with 64, 512 or 2048 live
+  1 MB blocks the pool handed out earlier, and after freeing them; the growing pattern
+  (alloc and keep, 300 times) reads 24 us a DtoH throughout. Raising the pool's release
+  threshold (`CU_MEMPOOL_ATTR_RELEASE_THRESHOLD`, driver default 0 = hand every unused
+  reserved byte back at every sync) changes the reserve it keeps (2080 MB against 32)
+  and nothing else. It is set to the maximum at probe time anyway -- a pool that holds a
+  training step's copies rather than three buffers should not be unmapped around every
+  synchronous copy -- and a failed allocation still trims it explicitly, so a decline
+  still costs the device nothing.
+- `FreshPageCost.java`, the decisive one: **a device copy to or from a host array the GPU
+  has never touched costs ~9 us per 4 KB page** -- an HtoD from a fresh 1 MB Java array
+  is 2.3 ms median against 25 us over a reused one, a DtoH into one is 50 us median with a
+  fifth of them over 2 ms, and with eden churn the median recovers but the p90 does not.
+  The GB10 answers `PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES` 1: the copy engine
+  reaches pageable memory through the CPU's page tables, and the first translation of
+  each page is the cost. What warms a page is a CPU copy INTO it (a `System.arraycopy`
+  into the fresh array first: DtoH 35 us median, 70 us max) -- not the JVM's own zeroing
+  of it, and not a store per 4 KB page (THP) -- or any device access to it, in either
+  direction.
+
+That second probe explains the whole history of this section. A training step's result
+arrays are fresh, so every download lands on cold pages -- and the BASELINE had been
+paying for that too (65% of its upload time and half its download time were in under 1%
+of the copies), just less: its 15,000 uploads a run touched most of the eden, so the
+arrays it later downloaded into were usually pages the GPU had seen. Residency halved the
+uploads and took the incidental warming with them, and the downloads went cold: 619 of
+7904 over a millisecond, 93% of the download time. So:
+
+- **Every download is staged** through one pinned 16 MB bounce buffer
+  (`CudaGemm.BOUNCE_BYTES`; `cuMemHostAlloc` at probe time so every leak test's baseline
+  includes it; a non-critical `cuMemcpyDtoH` into it and `MemorySegment.copy` into the
+  result, 16 MB at a time, under one lock). The DMA into pinned memory is never cold, the
+  Java copy into the fresh array is a memcpy, and the array is then warm for any direct
+  upload that follows. The upload stays direct and critical: its source was just written
+  by the CPU -- a lane kernel's result, an Adam-updated weight, an `aset` loop's array --
+  and that is warm by the probe's own finding. On the 40-step run this alone took the
+  baseline from 7.1 s to 5.5-5.7 s, with residency switched off.
+- **The cap.** With the budget left at a quarter of this machine's free memory (~30 GB)
+  nothing was ever evicted before the collector got to it, every allocation grew the pool
+  (5 us a call instead of 1), and the 200-step run was SLOWER with half the uploads than
+  with none (17-19 s against 16-16.5). Capped at 64 MB, 256 MB or 1 GB the same run was
+  5-10% faster than with no residency and the three were within noise of each other, so
+  the budget is `min(free / 4, 1 GB)`, re-derived at every pre-flight refresh
+  (`CudaGemm.RESIDENT_CAP`). The cap is what keeps the driver's pool recycling its warm
+  blocks; it is not a safety margin. The pre-flight still evicts everything a call is not
+  holding, trims the pool and asks again before it would refuse a call, so residency can
+  slow a call by one upload but never turn it into a decline.
+
+**The invalidation, as built.** Every in-place write to a packed float array's storage on
+each backend reaches `Gpu.written`:
+
+- the interpreter: `LispDoubleFloatArray.setElement` / `LispSingleFloatArray.setElement`
+  call `am.ik.rontolisp.FloatArrayWriteHook.written(data)`, a static hook in the root
+  package (it must not name any accelerator: `-Pweb` cuts `am.ik.gpu` out by
+  substituting `eval/LinalgGpu`, whose `install` is what points the hook at
+  `LinalgGpuKernels::written`). That covers `aset`, `row-major-aset`, `fill`, `replace`
+  and every Lisp-level loop, which is every writer there is except the `--simd` kernels
+  that bypass the setter: `LinalgSimd`'s `%la-adam-step` (the parameter and both
+  moments), `%la-scatter-rows`, `%la-scale`, `%la-rng-fill`, and `VecSimd`'s whole
+  `-into` family (`clip-into`, `scale-into`, `matvec-into`, the unary and binary
+  `-into`s) call the hook themselves. A grep for writes through `.data()` outside those
+  finds none: every other producer allocates. With no listener installed the hook is a
+  volatile read, and a write to an array that is not resident is the volatile read plus
+  one identity compare (`CudaResidency.lastDropped`), so an `aset` loop pays the monitor
+  once per array, not once per element.
+- the JVM class output: under `--gpu` the class carries `_gpuWritten(Object)`,
+  `if (_gpuInited != 0) RontoLispGpuBridge.gpuWritten(array)` -- the guard is what lets
+  `_fvAset1` be emitted before the bridge class is defined, and a write before the first
+  device call costs a `getstatic` and a branch. `_fvAset1` / `_fvAset2` / `_fvAsetN` call
+  it after every packed store (`JvmFloatArrayRuntimeBuilder`, which takes the method
+  reference when the GPU runtime is emitted); `JvmLinalgKernelCompiler` calls it after the
+  whole attempt chain for the four members that write a caller's array -- `%la-adam-step`
+  (arguments 0, 2, 3), `%la-scatter-rows`, `%la-scale`, `%la-rng-fill` (argument 0) --
+  whichever rung ran; and `JvmSimdCompiler` calls it on the destination every `vec:`
+  `-INTO` kernel returns. The member names are UPPERCASE there; the first build compared
+  against `-into`, and the enumeration test below caught it.
+
+**The numbers, final build, same program, same day, same box.** Per training step by
+this file's method (`(t40 - t5) / 35`, five interleaved rounds, MEDIAN [range]), plus two
+longer runs:
+
+| | before (HEAD of that morning) | with residency + staged downloads |
+|---|---|---|
+| `--gpu --simd`, per step | 0.133 s [0.102-0.150] | **0.107 s** [0.102-0.113] |
+| `--simd`, per step | -- | 0.80 s |
+| the 40-step run, whole | 5.7-7.3 s (median 6.7) | 5.6-5.9 s (median 5.75) |
+| the 100-step run, whole | 10.8-11.0 s | 9.3-9.7 s |
+| the 200-step run, whole | 15.8-16.0 s | 15.4 s |
+| steps 100-200, per step (`(t200 - t100) / 100`) | 0.051 s | 0.057-0.061 s |
+
+7.5x against the CPU build at the medians; the step is a fifth shorter on the metric every
+earlier round used, and the run-to-run spread that made the device build bimodal (the
+cold-page tail, it turns out) is gone from it. **Read the last row before quoting the
+first.** A long run warms its own pages: by step 100 the BASELINE is down to 51 ms a step
+(JIT warm-up and page warmth together), and there the staged download's extra memcpy
+(~20 us/MB) roughly cancels what residency saves on uploads, so the two builds are at
+parity or the new one a little behind -- the 200-step runs are within 3% of each other.
+What residency buys, on this machine, is the first hundred steps and the predictability;
+what it does not yet buy is the steady state, and the items on this seam that would
+(a device Adam step over resident parameters; an overlapped or parallel bounce copy; the
+downcall cost of `.todo/476`) start from that row, not the first.
+
+**What the profile says is left.** The third profile of the step (T200, `--gpu --simd`,
+~1000 samples): `memcpyHtoD` 110, `laEwFS` + `FloatVector.intoArray` 196, `laAdamStep`
+67, `Invokers.checkCustomized` 79 -- that last one is `MethodHandle.invokeExact` on the
+driver's handles, which are instance fields and therefore not constants to the JIT, so
+every downcall goes through the generic invoker (`.todo/476`). The copies are no longer
+the first line.
+
+**Tests.** `GpuTest`: `anOperandUploadedOrProducedByARecentCallIsNotUploadedAgain` (the
+hit and miss counts, and the chain -- a result as the next operand is a hit),
+`aWrittenHostArrayIsUploadedAgainAndTheAnswerFollowsTheWrite`,
+`theResidentSetIsBoundedByItsBudgetAndAReleaseGivesTheMemoryBack` (a budget of 8 MB
+over 32 calls of 4 MB, then the two-sided free-memory bound after `releaseResident`),
+`aCollectedHostArrayTakesItsResidentCopyWithIt`. On each interceptor,
+`everyEnumeratedWriterInvalidatesTheResidentCopy`: one program that makes two operands
+resident with a bit-identical device member (a broadcast `add`), then writes through
+EVERY enumerated setter -- `aset`, `row-major-aset`, the three `%la-` in-place members,
+`%la-rng-fill`, five `vec:` `-into` forms -- re-running the member after each and
+printing a sum the oracle must print too; run under `--gpu` (the defuns write through
+the setter) and `--gpu --simd` (the kernels report themselves, compared against a
+`--simd` oracle so the lane sum's fold order is on both sides). It is the test that
+found the `-into` case.
 
 ### The chain order, and why the device goes on top
 
@@ -1997,6 +2200,11 @@ nothing else catches a swapped constant. `LinalgGpuDeclineTest` is the half
 a CI runner runs, and it pins that the flag changes nothing observable -- at a shape above
 the threshold as well as below it.
 
+Since 2026-08-22 both suites also carry `everyEnumeratedWriterInvalidatesTheResidentCopy`
+-- the pin on residency's invalidation enumeration, described under "Device residency,
+built"; it is the test to extend when a new in-place writer of a packed array is added
+anywhere.
+
 `JvmLinalgGpuAccelCompilerTest` mirrors that split for the compiled backend, and its
 dead-flag guard is the bridge NAME in the class bytes (the renamed library classes are
 base64 in the blob and do not appear as text; the PTX does, which is what pins that the
@@ -2137,7 +2345,13 @@ text and no test anywhere may hand it anything else**: the override is process-w
 read at probe time, so a placeholder would decide what the whole suite's device compiles,
 whichever class happened to run first.
 
-**The five tests that assert on FREE DEVICE MEMORY hold a `@ResourceLock` and their bound
+Since 2026-08-22 it also pins residency: the hit on a repeated or chained operand, the
+re-upload after `written`, the budget and the release (the sixth free-memory assertion),
+and the collected key. Note that the leak tests now run with resident copies in play:
+`a`, `b`, `c` reused across 1000 calls are two resident operands and one result replaced
+per call, so a run's steady state holds three buffers and the bounds are unchanged.
+
+**The six tests that assert on FREE DEVICE MEMORY hold a `@ResourceLock` and their bound
 was widened to 1.5 GB in phase 3.** `cuMemGetInfo` reports the DEVICE, not the thread:
 two leak tests running at once each read the other's pool churn as their own drift, and
 the JVM backend's fork loads a separate copy of the binding -- its own primary context,
@@ -2153,36 +2367,36 @@ that must never regress.
 
 ## What is deliberately NOT here
 
-No residency, no axis fold ON METAL, no element-wise member whose scalar cost is one
+No residency ON METAL, no axis fold ON METAL, no element-wise member whose scalar cost is one
 machine instruction AT AN EQUAL SHAPE, and nothing at all outside `linalg:`. Each is a measured
 decline, not an omission, and each needs this file's numbers before it is revisited:
 
 - **The axis fold on METAL** is a refusal with two numbers attached (above), and the
   amax/amin half of it is the one to revisit first if that backend's floor ever drops:
   the sum half cannot come back at all while `%la-fold-axis` accumulates in double.
-- **Residency (todo-123's phase 3) was measured and DECLINED**, and the section above is
-  the whole record: the per-op ceiling is real (2.2-6.4x at f64, 15-18x at f32) but the
-  copies it would remove were 1.5% of a `--gpu --simd` training step before the strided
-  tier and are 3.5% after it, so removing ALL of them is the flag's whole remaining
-  headroom on the program it exists for. The design it would take, and the
-  enumeration of every in-place write on a packed array that its invalidation rule would
-  need, are written down there so a future attempt starts from them. **Re-derive BOTH
-  numbers before spending the complexity**: the per-op one from
-  `ElementwiseCrossover.java`'s third table, and the share-of-program one from a JFR
-  execution profile with FULL stacks (the compiled Lisp functions have no line-number
-  table, so a profile filtered on `line:` sees only the Java half and reports the wrong
-  answer by 6x).
+- **Residency was measured and DECLINED in phase 3, re-derived by the second profile and
+  BUILT by todo-474** -- on CUDA. "Device residency, built" is the record, and the
+  lesson to carry to Metal (which keeps no copies yet) is that the cache was never the
+  hard part: the two things that decided it were the fresh-page cost of a device copy,
+  which a different platform will have a different answer to, and a cap small enough
+  that the allocator keeps recycling. **Measure a Metal port the same way before
+  believing it** -- `FreshPageCost.java`'s question first, then the cap sweep on the
+  program.
 - **The optimizer update is on the `--simd` seam (todo-473) and the RNG is on THIS one
-  (2026-08-22), and what is left of a step is the copies.** After the second profile the
-  device copies are 41% of a `--gpu --simd` step, the f32-array-times-double-scalar loops
-  (scalar by the precision contract, `.kb/linalg-simd.md`) 17%, the Adam kernel 8%.
-  Residency is the item with the ceiling (`.todo/474`); a device Adam step would move
-  9.4 MB up and 7 MB back per parameter for a 0.5 ms CPU loop and is not worth it
-  WITHOUT residency.
-- **A zero-copy or pinned-staging route was measured (2026-08-22) and declined** -- the
-  table in "The second profile" is the record: the kernel over host memory would be 4x,
-  and it is unreachable from a movable Java heap; the reachable variant loses to the
-  driver's own pageable copy past 2^18 elements.
+  (2026-08-22), and with residency in the copies are no longer the first line of the
+  profile.** What is: the f32-array-times-double-scalar loops (scalar by the precision
+  contract, `.kb/linalg-simd.md`), the Adam kernel, and the generic `MethodHandle`
+  invoker under every downcall (`.todo/476`). A device Adam step -- one kernel over the
+  parameter, the two moments and the gradient, all four resident -- is now the shape the
+  design said would become cheap; it is not built, and its measurement is the next item
+  on this seam if one is filed.
+- **A zero-copy route was measured (2026-08-22) and declined; a pinned-staging route was
+  measured, declined, and then TAKEN for the download** -- the table in "The second
+  profile" is the first record and "Device residency, built" the second: the kernel over
+  host memory would be 4x, and it is unreachable from a movable Java heap; the staged
+  upload loses to the driver's own pageable copy past 2^18 elements over a WARM array;
+  and the staged download wins by a hundred times over a COLD one, which every result
+  array is. Measure with fresh arrays before touching either half again.
 - **`vec:matvec` is not here either** -- the decode loop of `examples/llama2` is one GEMV
   per weight matrix per token and `--gpu` intercepts `linalg:` members only; the
   measurement that says a device GEMV with the weights RESIDENT would be a different

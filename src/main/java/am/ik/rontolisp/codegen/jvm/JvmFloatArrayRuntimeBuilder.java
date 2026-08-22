@@ -3,6 +3,8 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.jspecify.annotations.Nullable;
+
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -148,7 +150,7 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * @return the helper methods
 	 */
 	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant selfClass) {
+			ClassConstant selfClass, @Nullable MethodrefConstant written) {
 		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
 		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
@@ -197,11 +199,11 @@ final class JvmFloatArrayRuntimeBuilder {
 		methods.add(buildArefN(cp, doubleArrayClass, floatArrayClass, objectArrayClass, longClass, longIntValue,
 				doubleValueOf, arefN));
 		methods.add(buildAset1(cp, doubleArrayClass, floatArrayClass, longClass, numberClass, longIntValue,
-				numberDoubleValue, doubleValueOf, dbl, aset1));
+				numberDoubleValue, doubleValueOf, dbl, aset1, written));
 		methods.add(buildAset2(cp, doubleArrayClass, floatArrayClass, longClass, numberClass, longIntValue,
-				numberDoubleValue, doubleValueOf, dbl, aset2));
+				numberDoubleValue, doubleValueOf, dbl, aset2, written));
 		methods.add(buildAsetN(cp, doubleArrayClass, floatArrayClass, objectArrayClass, longClass, numberClass,
-				longIntValue, numberDoubleValue, doubleValueOf, dbl, asetN));
+				longIntValue, numberDoubleValue, doubleValueOf, dbl, asetN, written));
 		methods.add(buildDims(cp, doubleArrayClass, floatArrayClass, objectClass, longValueOf, arrayDims));
 		methods.add(buildLength(cp, doubleArrayClass, floatArrayClass, longValueOf, toGeneral, lengthHelper));
 		methods.add(buildMake(cp, false, MAKE, objectArrayClass, longClass, numberClass, longIntValue,
@@ -524,16 +526,16 @@ final class JvmFloatArrayRuntimeBuilder {
 	private static ArrayMethod buildAset1(ConstantPool cp, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant longClass, ClassConstant numberClass,
 			MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue, MethodrefConstant doubleValueOf,
-			MethodrefConstant dbl, MethodrefConstant aset1) {
+			MethodrefConstant dbl, MethodrefConstant aset1, @Nullable MethodrefConstant written) {
 		int arr = 0, i = 1, val = 2, d = 3, rank = 4, idx = 5, dval = 6;
 		JvmAsm a = new JvmAsm();
 		int notDouble = a.label();
 		int notPacked = a.label();
 		emitAset1Body(a, false, doubleArrayClass, notDouble, arr, i, val, d, rank, idx, dval, longClass, numberClass,
-				longIntValue, numberDoubleValue, doubleValueOf, dbl);
+				longIntValue, numberDoubleValue, doubleValueOf, dbl, written);
 		a.bind(notDouble);
 		emitAset1Body(a, true, floatArrayClass, notPacked, arr, i, val, d, rank, idx, dval, longClass, numberClass,
-				longIntValue, numberDoubleValue, doubleValueOf, dbl);
+				longIntValue, numberDoubleValue, doubleValueOf, dbl, written);
 		a.bind(notPacked);
 		a.aload(arr);
 		a.aload(i);
@@ -546,7 +548,7 @@ final class JvmFloatArrayRuntimeBuilder {
 	private static void emitAset1Body(JvmAsm a, boolean single, ClassConstant arrayClass, int elseLabel, int arr, int i,
 			int val, int d, int rank, int idx, int dval, ClassConstant longClass, ClassConstant numberClass,
 			MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue, MethodrefConstant doubleValueOf,
-			MethodrefConstant dbl) {
+			MethodrefConstant dbl, @Nullable MethodrefConstant written) {
 		a.aload(arr);
 		a.instanceOf(arrayClass);
 		a.branch(Opcode.IFEQ, elseLabel);
@@ -574,6 +576,11 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iload(idx);
 		a.dload(dval);
 		storeElem(a, single);
+		if (written != null) {
+			// --gpu: the array may have a resident device copy; it is stale now.
+			a.aload(d);
+			a.invokestatic(written);
+		}
 		emitStoredValue(a, single, dval, doubleValueOf);
 	}
 
@@ -582,16 +589,16 @@ final class JvmFloatArrayRuntimeBuilder {
 	private static ArrayMethod buildAset2(ConstantPool cp, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant longClass, ClassConstant numberClass,
 			MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue, MethodrefConstant doubleValueOf,
-			MethodrefConstant dbl, MethodrefConstant aset2) {
+			MethodrefConstant dbl, MethodrefConstant aset2, @Nullable MethodrefConstant written) {
 		int arr = 0, i = 1, j = 2, val = 3, d = 4, rank = 5, cols = 6, idx = 7, dval = 8;
 		JvmAsm a = new JvmAsm();
 		int notDouble = a.label();
 		int notPacked = a.label();
 		emitAset2Body(a, false, doubleArrayClass, notDouble, arr, i, j, val, d, rank, cols, idx, dval, longClass,
-				numberClass, longIntValue, numberDoubleValue, doubleValueOf, dbl);
+				numberClass, longIntValue, numberDoubleValue, doubleValueOf, dbl, written);
 		a.bind(notDouble);
 		emitAset2Body(a, true, floatArrayClass, notPacked, arr, i, j, val, d, rank, cols, idx, dval, longClass,
-				numberClass, longIntValue, numberDoubleValue, doubleValueOf, dbl);
+				numberClass, longIntValue, numberDoubleValue, doubleValueOf, dbl, written);
 		a.bind(notPacked);
 		a.aload(arr);
 		a.aload(i);
@@ -605,7 +612,7 @@ final class JvmFloatArrayRuntimeBuilder {
 	private static void emitAset2Body(JvmAsm a, boolean single, ClassConstant arrayClass, int elseLabel, int arr, int i,
 			int j, int val, int d, int rank, int cols, int idx, int dval, ClassConstant longClass,
 			ClassConstant numberClass, MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant dbl) {
+			MethodrefConstant doubleValueOf, MethodrefConstant dbl, @Nullable MethodrefConstant written) {
 		a.aload(arr);
 		a.instanceOf(arrayClass);
 		a.branch(Opcode.IFEQ, elseLabel);
@@ -643,6 +650,11 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iload(idx);
 		a.dload(dval);
 		storeElem(a, single);
+		if (written != null) {
+			// --gpu: the array may have a resident device copy; it is stale now.
+			a.aload(d);
+			a.invokestatic(written);
+		}
 		emitStoredValue(a, single, dval, doubleValueOf);
 	}
 
@@ -652,16 +664,17 @@ final class JvmFloatArrayRuntimeBuilder {
 	private static ArrayMethod buildAsetN(ConstantPool cp, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant objectArrayClass, ClassConstant longClass,
 			ClassConstant numberClass, MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant dbl, MethodrefConstant asetN) {
+			MethodrefConstant doubleValueOf, MethodrefConstant dbl, MethodrefConstant asetN,
+			@Nullable MethodrefConstant written) {
 		int arr = 0, subs = 1, val = 2, d = 3, subsArr = 4, rank = 5, flat = 6, k = 7, idx = 8, dval = 9;
 		JvmAsm a = new JvmAsm();
 		int notDouble = a.label();
 		int notPacked = a.label();
 		emitAsetNBody(a, false, doubleArrayClass, notDouble, arr, subs, val, d, subsArr, rank, flat, k, idx, dval,
-				objectArrayClass, longClass, numberClass, longIntValue, numberDoubleValue, doubleValueOf, dbl);
+				objectArrayClass, longClass, numberClass, longIntValue, numberDoubleValue, doubleValueOf, dbl, written);
 		a.bind(notDouble);
 		emitAsetNBody(a, true, floatArrayClass, notPacked, arr, subs, val, d, subsArr, rank, flat, k, idx, dval,
-				objectArrayClass, longClass, numberClass, longIntValue, numberDoubleValue, doubleValueOf, dbl);
+				objectArrayClass, longClass, numberClass, longIntValue, numberDoubleValue, doubleValueOf, dbl, written);
 		a.bind(notPacked);
 		a.aload(arr);
 		a.aload(subs);
@@ -675,7 +688,7 @@ final class JvmFloatArrayRuntimeBuilder {
 			int subs, int val, int d, int subsArr, int rank, int flat, int k, int idx, int dval,
 			ClassConstant objectArrayClass, ClassConstant longClass, ClassConstant numberClass,
 			MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue, MethodrefConstant doubleValueOf,
-			MethodrefConstant dbl) {
+			MethodrefConstant dbl, @Nullable MethodrefConstant written) {
 		a.aload(arr);
 		a.instanceOf(arrayClass);
 		a.branch(Opcode.IFEQ, elseLabel);
@@ -735,6 +748,11 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iload(idx);
 		a.dload(dval);
 		storeElem(a, single);
+		if (written != null) {
+			// --gpu: the array may have a resident device copy; it is stale now.
+			a.aload(d);
+			a.invokestatic(written);
+		}
 		emitStoredValue(a, single, dval, doubleValueOf);
 	}
 

@@ -1797,7 +1797,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			// delegate to the general _array* helpers above for a non-packed array, so
 			// they are emitted alongside (and depend on) them.
 			if (usesFloatArray) {
-				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass));
+				// Under --gpu every packed store also reports itself, so a device copy of
+				// the array is dropped (.kb/gpu.md, "The residency design").
+				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
+						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.WRITTEN) : null));
 			}
 			// The packed integer-vector helpers (_iv*) dispatch on instanceof long[]
 			// and delegate any other array shape down the chain (to the _fv* tier when
@@ -2713,6 +2716,18 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(gpuRuntime.maxStack())
 									.writeU2(gpuRuntime.maxLocals())
 									.writeCode((Object[]) gpuRuntime.initCode().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+					// The residency invalidation guard, called from every in-place write
+					// to
+					// a packed float array (JvmGpuRuntimeBuilder.WRITTEN_METHOD).
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.writtenName(),
+							gpuRuntime.writtenDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(1)
+									.writeU2(1)
+									.writeCode((Object[]) gpuRuntime.writtenCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

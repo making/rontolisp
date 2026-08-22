@@ -98,4 +98,26 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 
 	boolean rngFillF(float[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3);
 
+	/**
+	 * A host array this device may hold a resident copy of has been written, so that copy
+	 * is stale. The CUDA half keeps such copies ({@link CudaResidency}); the Metal half
+	 * keeps none yet and this is a no-op there, which is why the default is empty rather
+	 * than abstract.
+	 * @param host the host array that was written
+	 */
+	default void written(Object host) {
+	}
+
+	/**
+	 * Bytes held by resident copies right now; {@code 0} on a device that keeps none.
+	 * @return the resident total, in bytes
+	 */
+	default long residentBytes() {
+		return 0;
+	}
+
+	/** Drops and frees every resident copy. A no-op on a device that keeps none. */
+	default void releaseResident() {
+	}
+
 }

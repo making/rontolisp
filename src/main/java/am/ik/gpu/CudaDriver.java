@@ -53,6 +53,15 @@ final class CudaDriver {
 	/** {@code CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT}. */
 	static final int ATTRIBUTE_MULTIPROCESSOR_COUNT = 16;
 
+	/**
+	 * {@code CU_MEMPOOL_ATTR_RELEASE_THRESHOLD}: how many reserved bytes a pool holds on
+	 * to before it gives memory back to the OS at the next synchronization point. The
+	 * driver's default is 0 -- release everything unused at EVERY sync -- which is fine
+	 * for a pool that holds three buffers between two calls and ruinous for one that
+	 * holds a training step's resident copies (see {@code CudaGemm.probe}).
+	 */
+	static final int MEMPOOL_ATTR_RELEASE_THRESHOLD = 4;
+
 	static final ValueLayout.OfInt I = ValueLayout.JAVA_INT;
 
 	static final ValueLayout.OfLong L = ValueLayout.JAVA_LONG;
@@ -95,9 +104,17 @@ final class CudaDriver {
 
 	private final @Nullable MethodHandle cuMemPoolTrimTo;
 
+	private final @Nullable MethodHandle cuMemPoolSetAttribute;
+
 	private final MethodHandle cuMemcpyHtoD;
 
 	private final MethodHandle cuMemcpyDtoH;
+
+	private final MethodHandle cuMemcpyDtoHPinned;
+
+	private final @Nullable MethodHandle cuMemHostAlloc;
+
+	private final @Nullable MethodHandle cuMemFreeHost;
 
 	private final MethodHandle cuModuleLoadData;
 
@@ -131,8 +148,12 @@ final class CudaDriver {
 		this.cuMemFreeAsync = optional(lookup, "cuMemFreeAsync", FunctionDescriptor.of(I, L, P));
 		this.cuDeviceGetDefaultMemPool = optional(lookup, "cuDeviceGetDefaultMemPool", FunctionDescriptor.of(I, P, I));
 		this.cuMemPoolTrimTo = optional(lookup, "cuMemPoolTrimTo", FunctionDescriptor.of(I, P, L));
+		this.cuMemPoolSetAttribute = optional(lookup, "cuMemPoolSetAttribute", FunctionDescriptor.of(I, P, I, P));
 		this.cuMemcpyHtoD = handle(lookup, "cuMemcpyHtoD_v2", htod, critical);
 		this.cuMemcpyDtoH = handle(lookup, "cuMemcpyDtoH_v2", dtoh, critical);
+		this.cuMemcpyDtoHPinned = handle(lookup, "cuMemcpyDtoH_v2", dtoh);
+		this.cuMemHostAlloc = optional(lookup, "cuMemHostAlloc", FunctionDescriptor.of(I, P, L, I));
+		this.cuMemFreeHost = optional(lookup, "cuMemFreeHost", FunctionDescriptor.of(I, P));
 		this.cuModuleLoadData = handle(lookup, "cuModuleLoadData", FunctionDescriptor.of(I, P, P));
 		this.cuModuleUnload = handle(lookup, "cuModuleUnload", FunctionDescriptor.of(I, P));
 		this.cuModuleGetFunction = handle(lookup, "cuModuleGetFunction", FunctionDescriptor.of(I, P, P, P));
@@ -286,6 +307,19 @@ final class CudaDriver {
 	}
 
 	/**
+	 * Sets one attribute of a memory pool; {@code value} points at the attribute's own
+	 * type ({@code cuuint64_t} for {@link #MEMPOOL_ATTR_RELEASE_THRESHOLD}). Optional in
+	 * the same sense as the pool calls: a driver without it simply keeps the default.
+	 */
+	int memPoolSetAttribute(MemorySegment pool, int attribute, MemorySegment value) throws Throwable {
+		MethodHandle handle = this.cuMemPoolSetAttribute;
+		if (handle == null) {
+			return CuResult.CUDA_ERROR_NOT_SUPPORTED.code();
+		}
+		return (int) handle.invokeExact(pool, attribute, value);
+	}
+
+	/**
 	 * Whether this driver exports the stream-ordered allocator AND the two calls that
 	 * make its failure mode survivable. All four go together: a pool that cannot be
 	 * trimmed is worse than no pool at all.
@@ -313,6 +347,40 @@ final class CudaDriver {
 	 */
 	int memcpyDtoH(MemorySegment destination, long source, long bytes) throws Throwable {
 		return (int) this.cuMemcpyDtoH.invokeExact(destination, source, bytes);
+	}
+
+	/**
+	 * Device to a PINNED host buffer, NOT critical: the destination is native memory the
+	 * driver allocated ({@link #memHostAlloc}), so no heap segment is involved, the
+	 * thread transitions to native as for any ordinary downcall, and the wait for a
+	 * queued kernel that this call still performs is safepoint-friendly. The staged
+	 * download ({@code CudaGemm.download}) uses this and then copies the bounce buffer
+	 * into the Java array itself.
+	 */
+	int memcpyDtoHPinned(MemorySegment destination, long source, long bytes) throws Throwable {
+		return (int) this.cuMemcpyDtoHPinned.invokeExact(destination, source, bytes);
+	}
+
+	/**
+	 * Page-locked host memory the device can DMA into at full speed, for the download
+	 * bounce buffer. Optional like the pool calls; a driver without it downloads straight
+	 * into the heap as before.
+	 */
+	int memHostAlloc(MemorySegment out, long bytes, int flags) throws Throwable {
+		MethodHandle handle = this.cuMemHostAlloc;
+		if (handle == null) {
+			return CuResult.CUDA_ERROR_NOT_SUPPORTED.code();
+		}
+		return (int) handle.invokeExact(out, bytes, flags);
+	}
+
+	/** Frees what {@link #memHostAlloc} allocated. */
+	int memFreeHost(MemorySegment pointer) throws Throwable {
+		MethodHandle handle = this.cuMemFreeHost;
+		if (handle == null) {
+			return CuResult.CUDA_ERROR_NOT_SUPPORTED.code();
+		}
+		return (int) handle.invokeExact(pointer);
 	}
 
 	int moduleLoadData(MemorySegment out, MemorySegment image) throws Throwable {

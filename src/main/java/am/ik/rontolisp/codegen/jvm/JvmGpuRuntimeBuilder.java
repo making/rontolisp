@@ -81,11 +81,25 @@ final class JvmGpuRuntimeBuilder {
 	 * produced. {@code package-info} carries only annotations and is left behind.
 	 */
 	private static final List<String> GPU_CLASSES = List.of("GpuDevice", "GpuDevice$Thresholds", "CudaDriver",
-			"CuResult", "CudaGemm", "CudaGemm$Probe", "MetalDriver", "MetalGemm", "MetalGemm$Probe", "MetalGemm$Slab",
-			"Gpu", "Gpu$Probe");
+			"CuResult", "CudaGemm", "CudaGemm$Probe", "CudaResidency", "CudaResidency$Entry", "CudaResidency$Key",
+			"CudaResidency$Lookup", "MetalDriver", "MetalGemm", "MetalGemm$Probe", "MetalGemm$Slab", "Gpu",
+			"Gpu$Probe");
 
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_gpuInit";
+
+	/**
+	 * The emitted guard every in-place write to a packed float array calls under
+	 * {@code --gpu}: {@code if (_gpuInited != 0) RontoLispGpuBridge.gpuWritten(array)}.
+	 * The guard is what lets {@code _fvAset1} be emitted before the bridge class is
+	 * defined -- a setter that ran before any device member would otherwise resolve a
+	 * class that does not exist yet -- and it is the fast path: a write before the first
+	 * device call costs a {@code getstatic} and a branch.
+	 */
+	static final String WRITTEN_METHOD = "_gpuWritten";
+
+	/** The {@code ops} key of {@link #WRITTEN_METHOD}'s method reference. */
+	static final String WRITTEN = "written";
 
 	/** The {@code ops} key of the rank-2 kernel. */
 	static final String DOT = "dot";
@@ -130,7 +144,8 @@ final class JvmGpuRuntimeBuilder {
 	 * {@value #DOT} and {@value #MATMUL_ND}).
 	 */
 	record GpuRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack, int maxLocals,
-			Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops) {
+			Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops,
+			Utf8Constant writtenName, Utf8Constant writtenDesc, List<Integer> writtenCode) {
 	}
 
 	/**
@@ -181,6 +196,11 @@ final class JvmGpuRuntimeBuilder {
 		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
 		Utf8Constant initDesc = cp.addUtf8("()V");
 		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
+		Utf8Constant writtenName = cp.addUtf8(WRITTEN_METHOD);
+		Utf8Constant writtenDesc = cp.addUtf8("(Ljava/lang/Object;)V");
+		ops.put(WRITTEN, cp.addMethodref(thisClass, cp.addNameAndType(writtenName, writtenDesc)));
+		MethodrefConstant bridgeWritten = cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("gpuWritten"), cp.addUtf8("(Ljava/lang/Object;)V")));
 		ops.put(DOT, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuDot"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(MATMUL_ND, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNd"),
@@ -237,8 +257,23 @@ final class JvmGpuRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(code, guardPos, code.size());
 		code.add(Opcode.RETURN);
 
+		// --- _gpuWritten body ------------------------------------------------------
+		// if (_gpuInited != 0) RontoLispGpuBridge.gpuWritten(array); return;
+		List<Integer> written = new ArrayList<>();
+		written.add(Opcode.GETSTATIC);
+		JvmRuntimeBuilder.emitU2(written, initedField.index());
+		int skipPos = written.size();
+		written.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(written, 0);
+		written.add(Opcode.ALOAD_0);
+		written.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(written, bridgeWritten.index());
+		JvmRuntimeBuilder.patchBranch(written, skipPos, written.size());
+		written.add(Opcode.RETURN);
+
 		// The deepest stack is [lookup, decoder, chunk, chunk] inside a class blob.
-		return new GpuRuntime(initName, initDesc, code, 4, 1, initedFieldName, initedFieldDesc, ops);
+		return new GpuRuntime(initName, initDesc, code, 4, 1, initedFieldName, initedFieldDesc, ops, writtenName,
+				writtenDesc, written);
 	}
 
 	/** Loads one chunk sequence onto the stack, concatenated back into one string. */
