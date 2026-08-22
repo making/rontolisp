@@ -741,14 +741,19 @@ is OUR measurement, not vendor-documented behavior: it may live here, never in `
 header.** The guides say only "whether the Vector API bridge becomes CPU instructions is up to the
 JVM that runs the class, so measure".
 
-- **`THRESHOLD = 128` is compared against the ROW LENGTH**, not the total element count
-  (`if (cols >= THRESHOLD)` in `simdMatvec`/`matvecF`). A matrix of many short rows runs the scalar
-  loop for every row no matter how large it is. Below 128 elements per row/vector the interpreter and
-  JVM run a scalar loop; wasm-GC and `--no-gc` have no threshold. `nn-vec.lisp`'s rows are 2 and 4
-  long, so `--simd` does literally nothing there. In `tiny-llm.lisp` exactly one of the thirteen
-  GEMVs falls below it — `(vec:matvec vt a)`, whose row length is the CONTEXT length because the V
-  cache is transposed (12 here) — worth 0.46% of the multiply-adds, and it vectorizes on its own once
-  a real context passes 128 tokens.
+- **`THRESHOLD = 128` is compared against the ROW LENGTH**, not the total element count,
+  and since `.todo/457` (2026-08-22) the GEMV row loops have their own gate,
+  **`MATVEC_ROW_THRESHOLD = 16`** (`matvecRows`/`matvecRowsF` in `JvmSimdVectorTemplate` and
+  `eval.VecSimdKernels`, the same value in both): a GEMV amortizes its per-call setup over
+  every row, so a row only needs one lane chain's worth of elements, and under the 128 gate
+  a matrix of many short rows -- llama2's attention over a 48-wide head, 256 rows, 72 calls
+  a token -- ran every row scalar (~8 us a call; ~1.8 us with lanes). Below 16 elements per
+  row, and below 128 for the element-wise kernels and the other reductions, the interpreter
+  and JVM run a scalar loop; wasm-GC and `--no-gc` have no threshold. A row of 16..127
+  therefore now reduces in lane order on the JVM/interpreter too, which is why
+  `nn-vec.lisp`'s rows of 2 and 4 still see literally nothing from `--simd`, while
+  `tiny-llm.lisp`'s `(vec:matvec vt a)` (row length = the CONTEXT length, 12 here) stays
+  scalar until a real context passes 16 tokens.
 - **Print only INTEGERS.** WASM prints floats to ~7 significant digits (`2.718281` vs
   `2.7182818284590455`) and its `exp` differs from the JVM's in the low bits, so a float never
   compares across backends. `argmax` is the trick: an integer that depends on every multiply-add yet

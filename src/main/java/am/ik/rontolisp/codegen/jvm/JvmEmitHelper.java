@@ -13,6 +13,13 @@ final class JvmEmitHelper {
 	}
 
 	static void compileLong(long value, JvmLispCompiler.Ctx ctx) {
+		emitRawLong(value, ctx);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.longValueOf.index());
+	}
+
+	/** Pushes the primitive {@code long} (no boxing). */
+	static void emitRawLong(long value, JvmLispCompiler.Ctx ctx) {
 		if (value == 0) {
 			ctx.emit(Opcode.LCONST_0);
 		}
@@ -24,11 +31,16 @@ final class JvmEmitHelper {
 			ctx.emit(Opcode.LDC2_W);
 			ctx.emitU2(lc.index());
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.longValueOf.index());
 	}
 
 	static void compileDouble(double value, JvmLispCompiler.Ctx ctx) {
+		emitRawDouble(value, ctx);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.doubleValueOf.index());
+	}
+
+	/** Pushes the primitive {@code double} (no boxing). */
+	static void emitRawDouble(double value, JvmLispCompiler.Ctx ctx) {
 		// The raw-bits guard keeps -0.0 out of the DCONST_0 peephole (-0.0 == 0.0
 		// in Java), mirroring JvmQuoteCompiler.emitRawDouble.
 		if (value == 0.0 && Double.doubleToRawLongBits(value) == 0L) {
@@ -42,8 +54,6 @@ final class JvmEmitHelper {
 			ctx.emit(Opcode.LDC2_W);
 			ctx.emitU2(dc.index());
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.doubleValueOf.index());
 	}
 
 	static void compileBigInteger(java.math.BigInteger value, JvmLispCompiler.Ctx ctx) {

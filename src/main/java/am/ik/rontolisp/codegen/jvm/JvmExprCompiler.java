@@ -1249,8 +1249,14 @@ final class JvmExprCompiler {
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
-				case LispNames.DOTIMES ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx, className);
+				case LispNames.DOTIMES -> {
+					// A numeric loop over packed float arrays compiles to a guarded
+					// primitive loop first; anything outside that subset takes the
+					// ordinary expansion (.kb/jvm-typed-loops.md).
+					if (!JvmTypedLoopCompiler.tryCompile(cons, ctx, className)) {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx, className);
+					}
+				}
 				case LispNames.PROG1 ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg1(cons), ctx, className);
 				case LispNames.TIME -> JvmExprCompiler.compileExpr(LispMacroExpander.expandTime(cons), ctx, className);

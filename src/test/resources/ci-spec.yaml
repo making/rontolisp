@@ -347,6 +347,85 @@ cases:
       4294967294
       T
       (8 NIL 7 8)
+  - name: jvm-typed-numeric-loops
+    source: |
+      (defun tl-softmax (att scores pos inv)
+        (let ((top -1e30) (z 0.0))
+          (dotimes (u (+ pos 1))
+            (let ((sc (* (aref scores u) inv)))
+              (setf (aref att u) sc)
+              (when (> sc top) (setq top sc))))
+          (dotimes (u (+ pos 1))
+            (let ((e (exp (- (aref att u) top))))
+              (setf (aref att u) e)
+              (setq z (+ z e))))
+          (dotimes (u (+ pos 1)) (setf (aref att u) (/ (aref att u) z)))
+          (list top z)))
+      (let ((tl-att (make-array 8 :element-type 'single-float :initial-element 0.0))
+            (tl-scores (make-array 8 :element-type 'single-float :initial-element 0.0)))
+        (dotimes (i 8) (setf (aref tl-scores i) (* i 0.7)))
+        (let ((r (tl-softmax tl-att tl-scores 5 0.25)))
+          (print (round (* 1000 (first r))))
+          (print (round (* 1000 (second r)))))
+        (print (round (* 100000 (aref tl-att 3))))
+        (let ((r (tl-softmax tl-att tl-scores 7 2)))
+          (print (round (* 1000 (second r))))))
+      (let ((tl-kc (make-array '(4 3) :element-type 'single-float :initial-element 0.0))
+            (tl-vt (make-array '(3 4) :element-type 'double-float :initial-element 0.0))
+            (tl-k (make-array 6 :element-type 'single-float :initial-element 1.5))
+            (tl-hs 3) (tl-pos 2) (tl-base 3))
+        (dotimes (i tl-hs) (setf (aref tl-kc tl-pos i) (aref tl-k (+ tl-base i))))
+        (print tl-kc)
+        (dotimes (i tl-hs) (setf (aref tl-vt i tl-pos) (* 2 (aref tl-k (+ tl-base i)))))
+        (print tl-vt)
+        (let ((v (make-array 6 :element-type 'single-float :initial-element 0.0))
+              (rc (make-array '(4 2) :element-type 'single-float :initial-element 0.5))
+              (rs (make-array '(4 2) :element-type 'single-float :initial-element 0.25))
+              (half 1) (n-heads 3))
+          (dotimes (i 6) (setf (aref v i) (+ i 1)))
+          (dotimes (h n-heads)
+            (dotimes (i half)
+              (let* ((j (+ (* h 2) (* 2 i)))
+                     (fcr (aref rc tl-pos i)) (fci (aref rs tl-pos i))
+                     (v0 (aref v j)) (v1 (aref v (+ j 1))))
+                (setf (aref v j) (- (* v0 fcr) (* v1 fci)))
+                (setf (aref v (+ j 1)) (+ (* v0 fci) (* v1 fcr))))))
+          (print v)))
+      (let ((tl-cnt 0) (tl-acc 0.0) (tl-a (make-array 4 :element-type 'double-float :initial-element 2.0)) (tl-n 0))
+        (print (dotimes (i 4 i) (setq tl-acc (+ tl-acc (aref tl-a i)))))
+        (print tl-acc)
+        (print (dotimes (i tl-n) (setq tl-acc (+ tl-acc 1.0))))
+        (print tl-acc)
+        (print (dotimes (i 3 tl-cnt) (setq tl-cnt (+ tl-cnt 2))))
+        (print (dotimes (i 2) (setq tl-acc (setf (aref tl-a i) 0.5))))
+        (print tl-acc))
+      (let ((tl-g (make-array 3 :initial-element 1)) (tl-s 0.0))
+        (dotimes (i 3) (setq tl-s (+ tl-s (aref tl-g i))))
+        (print tl-s))
+      (let ((tl-d (make-array 3 :element-type 'double-float :initial-element 0.0)) (tl-hits 0.0))
+        (setf (aref tl-d 1) 2.5)
+        (dotimes (i 3) (unless (< (aref tl-d i) 1.0) (setq tl-hits (+ tl-hits 1.0))))
+        (print tl-hits)
+        (dotimes (i 3) (when (> (aref tl-d i) -1.0) (setq tl-hits (+ tl-hits 10.0))))
+        (print tl-hits))
+    expected: |
+      875
+      4049
+      17403
+      1327
+      #f((0.0 0.0 0.0) (0.0 0.0 0.0) (1.5 1.5 1.5) (0.0 0.0 0.0))
+      #d((0.0 0.0 3.0 0.0) (0.0 0.0 3.0 0.0) (0.0 0.0 3.0 0.0))
+      #f(0.0 1.25 0.5 2.75 1.0 4.25)
+      4
+      8.0
+      NIL
+      8.0
+      6
+      NIL
+      0.5
+      3.0
+      1.0
+      31.0
   - name: fused-comparisons-and-raw-leaf-stores
     source: |
       (print (< 9223372036854775807 (+ 9223372036854775807 1)))

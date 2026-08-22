@@ -32,6 +32,22 @@ one runtime helper per operator with an `instanceof Long` fast path
 (`.kb/integer-bitwise-fast-paths.md`, already worth 5x over the BigInteger
 round trip it replaced), but each helper still takes and returns a boxed value.
 
+## The float-loop half is done (2026-08-22, `.todo/457`)
+
+`JvmTypedLoopCompiler` (`.kb/jvm-typed-loops.md`) types a `dotimes` over packed
+float arrays -- fixnum index math, `aref`/`setf aref`, `let` temporaries, `+ - * /`,
+the unary Math functions, comparisons under `if`/`when`/`unless`, nested `dotimes`
+-- into primitive `long`/`double` locals behind one guard at entry, with the boxed
+emission as the bail target. It is a LOOP-level speculation (no per-operation
+fallback, so no `_fx_*`-style overflow recovery: fixnum arithmetic is typed only
+under a static magnitude bound), which is the wrong shape for THIS item -- the
+SHA-256 rounds are masked-wrap integer trees, `logand`/`ash`, loop-carried
+accumulators, `flet` helpers -- so this item is still open as written. What carries
+over: the raw-literal helpers (`JvmEmitHelper.emitRawLong`/`emitRawDouble`), the
+long/double local slot handling the `StackMapAugmenter` already accepts, and the
+`Ctx.typedLoops` speed-for-size gate (`--optimize=size` now declines something on
+the JVM; extend the same gate here).
+
 ## What to build
 
 The JVM analogue of todo-194's `WasmIntFusionCompiler`

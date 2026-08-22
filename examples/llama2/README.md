@@ -70,9 +70,9 @@ interleaved runs, nothing pinned:
 
 | backend | threads | scalar | `--simd` | `--simd --parallel` | `--gpu --simd` | `--gpu --simd --parallel` |
 | --- | --- | --- | --- | --- | --- | --- |
-| JVM | 1, or 20 under `--parallel` | 66 tok/s | 221 tok/s | 319 tok/s (330 with `RONTOLISP_THREADS=10`) | 278 tok/s | 265 tok/s |
-| wasm-GC (`wasmtime`) | 1 | 0.4 tok/s | 128 tok/s | -- (no threads) | -- (no FFM) | -- |
-| interpreter (`java -jar`) | 1, or 20 under `--parallel` | ~15 s per token | 43 tok/s | 44 tok/s | 42 tok/s | -- |
+| JVM | 1, or 20 under `--parallel` | 104 tok/s | 336 tok/s | 637 tok/s (684 with `RONTOLISP_THREADS=10`) | 458 tok/s | 427 tok/s |
+| wasm-GC (`wasmtime`) | 1 | 0.4 tok/s | 125 tok/s | -- (no threads) | -- (no FFM) | -- |
+| interpreter (`java -jar`) | 1, or 20 under `--parallel` | ~15 s per token | 44 tok/s | 44 tok/s | 42 tok/s | -- |
 
 Without `--parallel` every rontolisp backend decodes on ONE thread (the JVM
 still runs its own GC and JIT threads: ~3.1 s of CPU for a 1.4 s run); with it
@@ -82,31 +82,39 @@ and Java ports of the same program, same box, same story, are the reference:
 | reference | threads | tok/s |
 | --- | --- | --- |
 | `run.c -O2` | 1 | 147 tok/s |
-| Java Vector API port of run.c ([kishida's gist](https://gist.github.com/kishida/05656bfcbe840f269784f7dbbee5928e)), the `.parallel()` in `matmul` removed | 1 | 297 tok/s |
-| the same gist as published, `matmul` being `IntStream.range(0, d).parallel()` | 20 | 535 tok/s |
+| Java Vector API port of run.c ([kishida's gist](https://gist.github.com/kishida/05656bfcbe840f269784f7dbbee5928e), `-v on`), every `.parallel()` removed | 1 | 312 tok/s |
+| the same gist as published, `matmul` and the attention heads being `IntStream.range(...).parallel()` | 20 | 513 tok/s |
 
-So the standing today, stated plainly: **on one thread `--simd` (221) loses to
-that port (297)**, by the ~1.2 ms a token this file spends in boxed Lisp around
-the GEMVs (`.todo/457`); `--gpu --simd` (278) does not catch it either; and **on
-20 threads `--simd --parallel` (319) loses to the gist as published (535)** by
-the same glue: the GEMVs are down from ~2.4 ms to ~0.7 ms of a token, and the
-~2.2 ms of boxed attention, RoPE and KV-cache loops around them are now two
-thirds of it. `--gpu --simd --parallel` (265) is slower than either flag alone
-here: the device takes the big GEMVs, the spinning worker threads compete with
-its driver for the cores, and what is left for the lanes are the 288x288
-projections -- pick one of the two for this program. `--blas` does not enter
-this table: `vec:matvec` is outside its intercepted set (`.todo/471`), so the
-flag does nothing for this program today. Two caveats that
-keep the two tables honest: the gist's `-t 0` decode does NOT reproduce run.c's
-story (a different one comes out, so its rows are throughput only), while every
-rontolisp row is byte-identical to `./run stories15M.bin -t 0 -i "Once upon a
-time"`; and an earlier version of this table (JVM 23 / 87, wasm-GC 0.4 / 46,
-`run.c` 65, the gist 100 / 187) was measured on 2026-08-19 on a different,
-64-core x86 box -- those numbers must not be compared with the rows above.
+So the standing today, stated plainly: **on one thread `--simd` (336) beats
+that port (312), and on 20 threads `--simd --parallel` (637) beats the gist as
+published (513)**, the same thread count on each row. Before the JVM backend's
+typed loops (also 2026-08-22) both rows lost (221 against 297, 319 against 535,
+measured the same way): the GEMVs were already at
+parity, and the ~2 ms a token this file spent in boxed Lisp around them -- the
+softmax, RoPE, attention copies and KV-cache loops, ~60 ns an iteration of
+`Double`/`Long` allocation and `Object` dispatch -- was the whole gap. The JVM
+backend now compiles a `dotimes` of that shape to a primitive loop
+(`.kb/jvm-typed-loops.md`; the same values, ~30x on the softmax), and the GEMV
+kernel vectorizes a short row (the 48-wide attention head used to run scalar,
+`.kb/vec.md`); nothing in this file changed. `--gpu --simd` (458) and
+`--gpu --simd --parallel` (427) both trail `--simd --parallel` now: the device
+takes the big GEMVs but pays a synchronous download per call, and with the
+spinning worker threads also competing with its driver for the cores the
+combination is the slower of the two -- pick `--simd --parallel` for this
+program. `--blas` does not enter this table: `vec:matvec` is outside its
+intercepted set (`.todo/471`), so the flag does nothing for this program today.
+Two caveats that keep the two tables honest: the gist's `-t 0` decode does NOT
+reproduce run.c's story (a different one comes out, so its rows are throughput
+only), while every rontolisp row is byte-identical to `./run stories15M.bin -t 0
+-i "Once upon a time"`; and an earlier version of this table (JVM 23 / 87,
+wasm-GC 0.4 / 46, `run.c` 65, the gist 100 / 187) was measured on 2026-08-19 on
+a different, 64-core x86 box -- those numbers must not be compared with the rows
+above.
 
-The `--simd` lane kernel streams the 60 MB of weights at ~25 GB/s,
-about 2.4 ms of a 4.6 ms token on the JVM; the rest is the boxed
-attention, RoPE and KV-cache loops around the GEMVs. `--simd --parallel` runs
+The `--simd` lane kernel streams the 60 MB of weights at ~20 GB/s, about 2.4 ms
+of a 3.0 ms token on one JVM thread; what is left is the attention's 72 small
+GEMVs and the kernel calls between them (`.todo/480` names the next lever: the
+GEMV row is one accumulator chain). `--simd --parallel` runs
 every GEMV above ~2^15 multiply-adds -- all of them here, the 288x288
 projections included -- over a row range per thread, bit-identical to the
 serial kernel ([the guide](../../doc/en/guides/simd-acceleration.md#using-more-than-one-core---parallel));
@@ -116,8 +124,8 @@ STAYS on the device -- the three feed-forward matrices per layer and the
 classifier head, two thirds of the multiply-adds; the 288x288 projections are a
 tie at ~12 us and stay on the CPU -- from their second token on, once the
 library has seen the weight twice unwritten ([the guide](../../doc/en/guides/gpu-acceleration.md)).
-That is about 1.3x with the story unchanged, and the next 2x on this program is
-the glue, not a GEMV. On the interpreter neither flag buys anything (44 tok/s
+That is about 1.4x over `--simd` with the story unchanged, and below
+`--simd --parallel` on this box. On the interpreter neither flag buys anything (44 tok/s
 under `--simd --parallel`, 42 under `--gpu --simd`): the tree walk around the
 GEMVs dominates there. On an Apple M4 Max the JVM decodes the
 same story at ~370 tok/s under `--simd` and at the same ~370 under `--gpu --simd`,

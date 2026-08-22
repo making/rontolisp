@@ -152,11 +152,15 @@ Three things the in-situ numbers say that the probes could not:
   319): the device takes the big GEMVs, the spinning workers compete with the driver's
   threads for the cores, and the lanes are left with the 288x288 projections. The chain
   is correct and pinned; the combination is documented as not a win for this program.
-- **The gate's second half is NOT met by this item alone**: 319 on 20 threads against the
-  gist's 535 on 20. The GEMVs are down from ~2.4 ms to ~0.7 ms of a token; the ~2.2 ms
-  of boxed attention / RoPE / KV-cache glue is `.todo/457`'s and is now two thirds of the
+- **The gate's second half was NOT met by this item alone**: 319 on 20 threads against the
+  gist's 535 on 20. The GEMVs were down from ~2.4 ms to ~0.7 ms of a token; the ~2.2 ms
+  of boxed attention / RoPE / KV-cache glue was `.todo/457`'s, two thirds of the
   token. The first half is: 319 >= 260, story byte-identical on all four backends with
   and without the flag (`ExamplesE2eTest`, `parallel: true` on both llama2 entries).
+  **Met later the same day by `.todo/457`** (`.kb/jvm-typed-loops.md` + the GEMV row
+  threshold in `.kb/vec.md`): `--simd --parallel` 637 tok/s against the gist's 513
+  re-measured beside it, `--simd` 336 against its 312 on one thread; the example's README
+  carries the table.
 
 ## `linalg:` GEMM against `--blas` (phase 3)
 

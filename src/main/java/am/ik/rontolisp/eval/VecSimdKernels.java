@@ -64,6 +64,12 @@ final class VecSimdKernels {
 	 */
 	private static final int THRESHOLD = 128;
 
+	/**
+	 * The GEMV row-length gate, mirroring
+	 * {@code JvmSimdVectorTemplate.MATVEC_ROW_THRESHOLD}.
+	 */
+	private static final int MATVEC_ROW_THRESHOLD = 16;
+
 	private VecSimdKernels() {
 	}
 
@@ -224,7 +230,7 @@ final class VecSimdKernels {
 			int base = row * cols;
 			int i = 0;
 			double acc = 0.0;
-			if (cols >= THRESHOLD) {
+			if (cols >= MATVEC_ROW_THRESHOLD) {
 				DoubleVector vacc = DoubleVector.zero(SPECIES);
 				int bound = SPECIES.loopBound(cols);
 				for (; i < bound; i += SPECIES.length()) {
@@ -767,7 +773,7 @@ final class VecSimdKernels {
 			int base = row * cols;
 			int i = 0;
 			float acc = 0.0f;
-			if (cols >= THRESHOLD) {
+			if (cols >= MATVEC_ROW_THRESHOLD) {
 				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
 				int bound = FSPECIES_REDUCE.loopBound(cols);
 				for (; i < bound; i += FSPECIES_REDUCE.length()) {

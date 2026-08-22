@@ -12772,13 +12772,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void theSizeLevelIsADocumentedNoOpOnThisBackend() {
+	void theSizeLevelChangesNothingWithoutATypedLoop() {
 		// --optimize=size is accepted everywhere so a build script need not be
-		// backend-specific, but the emissions it declines are wasm-GC ones (fused
-		// integer trees, unboxed dual-representation locals) and this backend has
-		// neither. The docs say the two levels produce the same class here; this is
-		// what makes that statement checkable -- and what fails the day someone gives
-		// the JVM backend a speed-for-size trade without saying so.
+		// backend-specific. The one emission it declines on this backend is the typed
+		// numeric loop (JvmTypedLoopCompiler); a program without a dotimes in that
+		// subset compiles to the same class at both levels, which the docs say -- this
+		// is what makes that statement checkable, and what fails the day someone gives
+		// the JVM backend another speed-for-size trade without saying so.
 		List<LispVal> program = LispReader.readAllFromString("""
 				(defun rol32e (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
 				(print (rol32e 2882400001 8))
@@ -12806,6 +12806,135 @@ class JvmLispCompilerTest {
 		assertThat(flagless).isEqualTo(optimized);
 		assertThat(off).isNotEqualTo(optimized);
 		assertThat(off.length).isGreaterThan(optimized.length);
+	}
+
+	/**
+	 * The typed-loop program: every shape {@code JvmTypedLoopCompiler} takes (a softmax
+	 * with assigned accumulators, rank-2 stores, a nested rope-shaped loop whose index
+	 * math goes through let temporaries, a result form, a zero-trip loop, a store whose
+	 * value is used) and the guard failures it must survive (a general array, a Long in a
+	 * double-speculated slot, NaN under when/unless, an out-of-bounds access caught by
+	 * handler-case with the accumulators written back).
+	 */
+	private static final String TYPED_LOOP_PROGRAM = """
+			(defun tl-softmax (att scores pos inv)
+			  (let ((top -1e30) (z 0.0))
+			    (dotimes (u (+ pos 1))
+			      (let ((sc (* (aref scores u) inv)))
+			        (setf (aref att u) sc)
+			        (when (> sc top) (setq top sc))))
+			    (dotimes (u (+ pos 1))
+			      (let ((e (exp (- (aref att u) top))))
+			        (setf (aref att u) e)
+			        (setq z (+ z e))))
+			    (dotimes (u (+ pos 1)) (setf (aref att u) (/ (aref att u) z)))
+			    (list top z)))
+			(let ((att (make-array 8 :element-type 'single-float :initial-element 0.0))
+			      (scores (make-array 8 :element-type 'single-float :initial-element 0.0)))
+			  (dotimes (i 8) (setf (aref scores i) (* i 0.7)))
+			  (print (tl-softmax att scores 5 0.25))
+			  (print att)
+			  (print (tl-softmax att scores 7 2)))
+			(let ((kc (make-array '(4 3) :element-type 'single-float :initial-element 0.0))
+			      (vt (make-array '(3 4) :element-type 'double-float :initial-element 0.0))
+			      (k (make-array 6 :element-type 'single-float :initial-element 1.5))
+			      (hs 3) (pos 2) (base 3))
+			  (dotimes (i hs) (setf (aref kc pos i) (aref k (+ base i))))
+			  (print kc)
+			  (dotimes (i hs) (setf (aref vt i pos) (* 2 (aref k (+ base i)))))
+			  (print vt)
+			  (let ((v (make-array 6 :element-type 'single-float :initial-element 0.0))
+			        (rc (make-array '(4 2) :element-type 'single-float :initial-element 0.5))
+			        (rs (make-array '(4 2) :element-type 'single-float :initial-element 0.25))
+			        (half 1) (n-heads 3))
+			    (dotimes (i 6) (setf (aref v i) (+ i 1)))
+			    (dotimes (h n-heads)
+			      (dotimes (i half)
+			        (let* ((j (+ (* h 2) (* 2 i)))
+			               (fcr (aref rc pos i)) (fci (aref rs pos i))
+			               (v0 (aref v j)) (v1 (aref v (+ j 1))))
+			          (setf (aref v j) (- (* v0 fcr) (* v1 fci)))
+			          (setf (aref v (+ j 1)) (+ (* v0 fci) (* v1 fcr))))))
+			    (print v)))
+			(let ((cnt 0) (acc 0.0) (a (make-array 4 :element-type 'double-float :initial-element 2.0)) (n 0))
+			  (print (dotimes (i 4 i) (setq acc (+ acc (aref a i)))))
+			  (print acc)
+			  (print (dotimes (i n) (setq acc (+ acc 1.0))))
+			  (print acc)
+			  (print (dotimes (i 3 cnt) (setq cnt (+ cnt 2))))
+			  (print (dotimes (i 2) (setq acc (setf (aref a i) 0.1))))
+			  (print acc))
+			(let ((g (make-array 3 :initial-element 1)) (s 0.0))
+			  (dotimes (i 3) (setq s (+ s (aref g i))))
+			  (print s))
+			(let ((a (make-array 3 :element-type 'double-float :initial-element 0.0)) (hits 0.0))
+			  (setf (aref a 1) (/ 0.0 0.0))
+			  (dotimes (i 3) (unless (< (aref a i) 1.0) (setq hits (+ hits 1.0))))
+			  (print hits)
+			  (dotimes (i 3) (when (> (aref a i) -1.0) (setq hits (+ hits 10.0))))
+			  (print hits))
+			(let ((z 0.0) (n 0) (a (make-array 3 :element-type 'single-float :initial-element 1.0)))
+			  (handler-case (dotimes (i 10) (setq z (+ z (aref a i))) (setq n (+ n 1)))
+			    (error (e) (print 'caught)))
+			  (print z)
+			  (print n))
+			""";
+
+	private static final String TYPED_LOOP_EXPECTED = """
+			(0.875 4.049147766510589)
+			#f(0.10295056 0.12263946 0.1460938 0.17403367 0.20731696 0.24696554 0.0 0.0)
+			(9.800000190734863 1.32729250931335)
+			#f((0.0 0.0 0.0) (0.0 0.0 0.0) (1.5 1.5 1.5) (0.0 0.0 0.0))
+			#d((0.0 0.0 3.0 0.0) (0.0 0.0 3.0 0.0) (0.0 0.0 3.0 0.0))
+			#f(0.0 1.25 0.5 2.75 1.0 4.25)
+			4
+			8.0
+			NIL
+			8.0
+			6
+			NIL
+			0.1
+			3.0
+			1.0
+			21.0
+			CAUGHT
+			3.0
+			3""";
+
+	@Test
+	void typedLoopsMatchTheBoxedPathAndTheSizeLevelDeclinesThem() throws Exception {
+		// The typed dotimes emission is a speculation with the ordinary expansion as its
+		// fallback; this pins that it answers what the fallback answers, bit for bit,
+		// across the shapes it takes and the guards it fails -- and that --optimize=size
+		// (which declines the speed-for-size trades) compiles the same program to
+		// different bytes, i.e. the default build really did emit the typed loops.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(TYPED_LOOP_PROGRAM));
+		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(small).isNotEqualTo(fast);
+		assertThat(runClass(fast)).isEqualTo(TYPED_LOOP_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(TYPED_LOOP_EXPECTED);
+	}
+
+	private String runClass(byte[] classBytes) throws Exception {
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			return baos.toString().trim();
+		}
 	}
 
 }

@@ -1353,6 +1353,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.signalClauseMatch(signalClauseMatch)
 			.printCase(printCase)
 			.usesFloatArray(usesFloatArray)
+			.typedLoops(!this.optimize.prefersSizeOverSpeed())
 			.usesIntArray(usesIntArray)
 			.usesPackedSequenceIo(usesPackedSequenceIo)
 			.usesArrays(usesArrays)
@@ -4282,6 +4283,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesFloatArray = false;
 
 		/**
+		 * True when a {@code dotimes} in the typed subset compiles to a guarded primitive
+		 * loop ({@link JvmTypedLoopCompiler}); off under {@code --optimize=size}, which
+		 * declines the speed-for-size trades. Shared across every context.
+		 */
+		boolean typedLoops = true;
+
+		/**
 		 * True when the program can produce a packed integer vector (a {@code #N@(...)}
 		 * literal or {@code make-array :element-type '(unsigned-byte 8|16|32)}). When
 		 * set, the rank-1 array op compilers route through the {@code _iv*} dispatch
@@ -4556,6 +4564,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.signalClauseMatch = builder.signalClauseMatch;
 			this.printCase = builder.printCase;
 			this.usesFloatArray = builder.usesFloatArray;
+			this.typedLoops = builder.typedLoops;
 			this.usesIntArray = builder.usesIntArray;
 			this.usesPackedSequenceIo = builder.usesPackedSequenceIo;
 			this.usesArrays = builder.usesArrays;
@@ -4816,6 +4825,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean printCase = false;
 
 			private boolean usesFloatArray = false;
+
+			private boolean typedLoops = true;
 
 			private boolean usesIntArray = false;
 
@@ -5232,6 +5243,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesFloatArray(boolean usesFloatArray) {
 				this.usesFloatArray = usesFloatArray;
+				return this;
+			}
+
+			Builder typedLoops(boolean typedLoops) {
+				this.typedLoops = typedLoops;
 				return this;
 			}
 

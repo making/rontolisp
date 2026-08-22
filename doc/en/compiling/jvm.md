@@ -75,11 +75,18 @@ optimizer does not bring such a name back.
 selects — everything above — for a build script that wants it written down.
 `--optimize=off` declines it, and emits what a build before the flag was on by
 default emitted. `--optimize=size` asks for the smallest output a backend can
-give; this backend accepts it and emits a byte-for-byte identical class, because
-what that level declines are the wasm-GC emissions that spend bytes on speed and
-there is no counterpart here -- the same program's JVM bytecode is about a third
-the size of its WASM to begin with. So one build script can pass
-`--optimize=size` for every target.
+give. On this backend the one thing it declines is the typed numeric loop: a
+`dotimes` whose body reads and writes packed single/double-float arrays through
+fixnum index math, `let` temporaries, `+ - * /`, the unary math functions and
+`if`/`when`/`unless` tests compiles by default to a primitive `long`/`double`
+loop over raw `float[]`/`double[]` accesses, behind a check at the loop's entry
+that falls back to the ordinary emission whenever the variables are not what the
+typing assumed -- the same values either way, several times faster, and a larger
+class because the body is emitted more than once. `--optimize=size` keeps only
+the ordinary emission; a program without such a loop compiles to the same class
+at both levels, and the same program's JVM bytecode is about a third the size of
+its WASM to begin with. So one build script can pass `--optimize=size` for every
+target.
 
 `--optimize=off` exists for two jobs, and neither of them is making a program
 work: comparing an artifact against one built before a compiler change, and

@@ -46,9 +46,10 @@
 ;;;; Every matrix multiplies a vector -- decoding is one token at a time -- so
 ;;;; the whole model is GEMV (`vec:matvec`), 15 million multiply-adds per token
 ;;;; for stories15M, which `--simd` lowers to CPU vector instructions streaming
-;;;; the 60 MB of weights at ~25 GB/s: about 2.4 ms of a 4.5 ms token on the
-;;;; JVM. What is left -- the boxed attention, RoPE and KV-cache loops -- is the
-;;;; rest. `--gpu --simd` moves the GEMVs whose matrix is big enough and STAYS
+;;;; the 60 MB of weights at ~20 GB/s: about 2.4 ms of a 3.0 ms token on the
+;;;; JVM. The attention, RoPE and KV-cache loops around the GEMVs compile to
+;;;; primitive loops on the JVM (.kb/jvm-typed-loops.md) and are the small rest.
+;;;; `--gpu --simd` moves the GEMVs whose matrix is big enough and STAYS
 ;;;; on the device -- the three feed-forward matrices per layer and the
 ;;;; classifier head, two thirds of the multiply-adds; the 288x288 projections
 ;;;; are a tie and stay on the CPU -- from their second token on, which is about
@@ -58,16 +59,18 @@
 ;;;; GEMV as well (too small for the device, and rewritten every token). Measured
 ;;;; 2026-08-22 on an NVIDIA GB10 box (stories15M, the 222-token story above):
 ;;;;
-;;;;   JVM         66 tok/s -> 218 tok/s with --simd -> 283 tok/s with --gpu --simd
-;;;;   wasm-GC    0.4 tok/s -> 128 tok/s with --simd
-;;;;   interpreter  ~ 15 s/token -> 43 tok/s with --simd (java --add-modules
+;;;;   JVM        104 tok/s -> 336 tok/s with --simd -> 637 tok/s with --simd --parallel
+;;;;                (458 tok/s with --gpu --simd)
+;;;;   wasm-GC    0.4 tok/s -> 125 tok/s with --simd
+;;;;   interpreter  ~ 15 s/token -> 44 tok/s with --simd (java --add-modules
 ;;;;                jdk.incubator.vector -jar ...; --gpu buys nothing there, the
 ;;;;                tree walk around the GEMVs dominates)
 ;;;;
-;;;; Every backend above decodes on ONE thread. On the same box run.c -O2 (one
-;;;; thread) does 147 tok/s and the Java Vector API port of run.c (kishida's
-;;;; gist) 297 on one thread, 535 as published -- its matmul is an
-;;;; IntStream.parallel(). The README's table has the whole comparison.
+;;;; Every backend above decodes on ONE thread except --parallel, which runs the
+;;;; GEMVs on every core (20 here). On the same box run.c -O2 (one thread) does
+;;;; 147 tok/s and the Java Vector API port of run.c (kishida's gist) 312 on one
+;;;; thread, 513 as published -- its matmul is an IntStream.parallel(). The
+;;;; README's table has the whole comparison.
 ;;;;
 ;;;; Without --simd the interpreter runs the scalar vec.lisp definitions, one
 ;;;; interpreted form per multiply-add: fine for stories260K, not for stories15M.

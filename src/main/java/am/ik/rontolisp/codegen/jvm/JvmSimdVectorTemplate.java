@@ -106,6 +106,16 @@ final class JvmSimdVectorTemplate {
 	 */
 	private static final int THRESHOLD = 128;
 
+	/**
+	 * The GEMV row loops amortize the per-call setup over every row, so a row only needs
+	 * enough elements to make one lane chain worth its reduction: below this many COLUMNS
+	 * the row runs scalar. A matrix of many short rows (attention over a 48-wide head)
+	 * ran every row scalar under {@link #THRESHOLD}, which is compared against the row
+	 * length. Mirrored by {@code eval.VecSimdKernels}; the wasm kernels have no threshold
+	 * at all.
+	 */
+	private static final int MATVEC_ROW_THRESHOLD = 16;
+
 	private JvmSimdVectorTemplate() {
 	}
 
@@ -502,7 +512,7 @@ final class JvmSimdVectorTemplate {
 			int base = ow + row * n;
 			int i = 0;
 			double acc = 0.0;
-			if (n >= THRESHOLD) {
+			if (n >= MATVEC_ROW_THRESHOLD) {
 				DoubleVector vacc = DoubleVector.zero(SPECIES);
 				int bound = SPECIES.loopBound(n);
 				for (; i < bound; i += SPECIES.length()) {
@@ -530,7 +540,7 @@ final class JvmSimdVectorTemplate {
 			int base = ow + row * n;
 			int i = 0;
 			float acc = 0.0f;
-			if (n >= THRESHOLD) {
+			if (n >= MATVEC_ROW_THRESHOLD) {
 				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
 				int bound = FSPECIES_REDUCE.loopBound(n);
 				for (; i < bound; i += FSPECIES_REDUCE.length()) {
