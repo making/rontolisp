@@ -2547,7 +2547,8 @@ decline, not an omission, and each needs this file's numbers before it is revisi
   which a different platform will have a different answer to, and a cap small enough
   that the allocator keeps recycling. **Measure a Metal port the same way before
   believing it** -- `FreshPageCost.java`'s question first, then the cap sweep on the
-  program.
+  program. That port, and the `vec:matvec` GEMV that needs it on Metal, is
+  `.todo/477`, an Apple-hardware item by design.
 - **The optimizer update is on the `--simd` seam (todo-473) and the RNG is on THIS one
   (2026-08-22), and with residency in the copies are no longer the first line of the
   profile.** What is: the f32-array-times-double-scalar loops (scalar by the precision
