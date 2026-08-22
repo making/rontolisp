@@ -1,102 +1,97 @@
-# 457. llama2 on the JVM: from 87 to ~150 tok/s (`--simd`)
+# 457. llama2 on the JVM: beat the Java port (535 tok/s)
 
 Difficulty: High
 
-Measured 2026-08-19 on `examples/llama2/` (stories15M: 60 MB of f32 weights streamed
-once per token, one core, 256 greedy tokens, this 64-core box):
+Rewritten 2026-08-22 after `.todo/478` landed (`--simd --parallel`), replacing the
+2026-08-19 plan (64-core x86 box, 87 tok/s, "toward 150") whose GEMV half is done. The
+standing on the GB10 (10 Cortex-X925 + 10 A725, GraalVM 25; stories15M, the 222-token
+`-t 0` story, medians of three interleaved runs, nothing pinned):
 
-| | tok/s | ms/token |
+| | threads | tok/s | ms/token |
+|---|---|---|---|
+| rontolisp JVM `--simd` | 1 | 221 | 4.5 |
+| rontolisp JVM `--simd --parallel` | 20 | 319 (330 at `RONTOLISP_THREADS=10`) | 3.1 |
+| rontolisp JVM `--gpu --simd` | 1 + device | 278 | 3.6 |
+| `run.c -O2` | 1 | 147 | 6.8 |
+| kishida's Java Vector API port, `.parallel()` removed | 1 | 297 | 3.4 |
+| **kishida's port as published** (`IntStream.range(0, d).parallel()` matmul) | 20 | **535** | **1.87** |
+
+**Every acceleration flag is now out of the picture.** `--blas` does nothing here
+(`vec:matvec` is outside its set, `.todo/471`; measured 224 / 314 with it), `--gpu` on
+top of `--parallel` is a loss (265, the spinners compete with the driver), and the GEMVs
+are ~0.9-1.1 ms of the 3.1 ms token -- so **even a zero-cost GEMV leaves ~2.2 ms =
+~450 tok/s, below 535.** The whole remaining gap is the boxed Lisp around the GEMVs, and
+the port's equivalent of it is plain `float[]` loops that cost it ~0.2 ms. Its GEMVs are
+not faster than ours; its glue is ten times cheaper.
+
+## Where the 3.1 ms goes (measured)
+
+`457-.../llama2-prof.lisp` is the example with `System.nanoTime` ticks around every
+section (`java:static`, ~1.4 us a tick, ~200 ticks a token -- subtract ~0.3 ms from the
+total); `--simd --parallel`, us per token:
+
+| section | us/token | what it is |
 |---|---|---|
-| rontolisp JVM `--simd` | 87 | 11.5 |
-| rontolisp JVM scalar | 23 | |
-| `run.c -O2` (one thread) | 65 | |
-| Java Vector-API port of run.c (kishida's gist, `SPECIES_PREFERRED` 256-bit `fma`) | 187 | 5.3 |
+| attention, of which | ~1900 | 6 layers x 6 heads |
+| -- softmax (3 boxed loops over `pos+1`) | 800 | `tick.lisp`: 21 us per call over 111 scores = 63 ns per boxed iteration; x36 per token |
+| -- `qh` copy + scores GEMV `(vec:matvec kch qh)` | 430 | the GEMV is 256x48 = 12K MACs, below the `--parallel` threshold (serial ~2 us); the rest is the 48-element boxed copy and the call |
+| -- `oh` GEMV + copy into `out` | 240 | same shape, same story |
+| -- KV append (2 x 48 boxed stores per kv head) | 170 | |
+| rope (2 x 144 boxed pair rotations) | 380 | |
+| rmsnorm x 2 (`vec:dot` + `vec:scale` + `vec:mul`, 3 fresh vectors) | 250 | |
+| silu * h3 (7 fresh vectors, a scalar `Math.exp` loop over 768) | 200 | |
+| GEMVs (24 x 288x288, 12 x 768x288, 6 x 288x768, the 32000x288 head) | ~900-1100 | `GemvColdProbe.java`: a 288x288 GEMV from cold DRAM is 11 us serial / 4.3 us parallel; the head ~400 us |
+| sample + decode | 20 | |
 
-**UPDATE 2026-08-22: the table above is the 64-core x86 box; this project's day-to-day
-machine is now the GB10 DGX Spark (aarch64, 10 Cortex-X925 + 10 Cortex-A725), and every
-number moves.** Re-measured there the same day, same story, medians of three interleaved
-runs, nothing pinned: rontolisp JVM `--simd` **218**, `--gpu --simd` **283**, JVM scalar
-66, `run.c -O2` (one thread) **147**, the gist **297 on one thread** (its `.parallel()`
-removed) and **535 as published** (its `matmul` is `IntStream.range(0, d).parallel()`,
-so the 187 above was a parallel program measured on one core). The two boxes must not be
-compared row by row. What survives the move is the SHAPE of the gap, and it is what this
-item is about: one thread against one thread we are at 4.6 ms a token against the port's
-3.4, and the ~1.2 ms difference is the boxed glue, not the GEMV. The gate below is
-therefore restated for the GB10: **>= 290 tok/s single-threaded** (a narrow loss to the
-gist's single-thread 297 is the goal; beating it is `--blas`'s and `--gpu`'s job, and
-matching the published gist at all needs the multi-core work in `.todo/478`).
-`.todo/478` landed 2026-08-22 (`--simd --parallel`, `.kb/simd-parallel.md`): JVM 319 tok/s
-on 20 threads (3.1 ms/token) against the gist's 535 (1.9 ms) -- the GEMVs are ~0.7 ms of
-the token now, the ~2.2 ms of glue THIS item is about is the rest, so its gate ("above
-535") is this item's to close.
+So ~2.0 ms of the token is 36 x (softmax + copies) + rope + the element-wise chains, and
+it is all the same thing: **a compiled Lisp numeric loop boxes every `Double` and every
+`Long` and dispatches `+`/`*`/`>` on `Object`** (`.todo/412`), ~60 ns per iteration where
+the JVM would do the same work in ~2 ns. The budget to beat 535: GEMV ~0.9 ms + glue
+<= 0.9 ms = 1.8 ms.
 
-187 tok/s IS the ceiling here: a cold-cache sweep over 85 MB of matrices runs at 9-12
-GB/s whatever the kernel (one 128-bit chain, four 128-bit chains, one 256-bit `fma`
-chain all land there), so 60 MB/token = ~5.5 ms = ~190 tok/s. **150 tok/s = 6.7
-ms/token: the GEMVs at the bandwidth wall (~5.5 ms) plus at most ~1.2 ms of
-everything else.** Today: JFR puts ~80% (~9 ms) in `RontoLispSimdBridge.matvecF` and
-~2.3 ms in the Lisp around it. Both halves have to move.
+## The plan, by expected saving
 
-## Where the 9 ms of GEMV goes (it should be 5.5)
+1. **Backend: unboxed numeric loops over packed float arrays (~1.5 ms, the lever).** The
+   shape every hot loop here has -- `(dotimes (u n) ...)` with a fixnum counter whose
+   body reads and writes packed single/double-float arrays (`aref` / `(setf (aref ...))`)
+   through `let`/`let*` temporaries and float arithmetic (`+ - * / exp sqrt > <`) -- must
+   compile to primitive `int`/`float`/`double` locals and `float[]` accesses, no `Double`
+   or `Long` allocation, no `_add(Object,Object)`. A type pass over the loop body
+   (the index is a fixnum by construction; an `aref` of a known packed array is a float;
+   arithmetic over floats is a float; anything else bails to the boxed path for the
+   whole loop) and a second emitter for the typed subset. This is `.todo/412`'s "no
+   fusion" narrowed to what every numeric program needs first; it turns the softmax,
+   rope, the three attention copies and the KV append into ~0.15 ms together. Pin it
+   with the byte-identity of the llama2 story and with ci-spec cases per construct; the
+   interpreter and wasm are untouched (same values, the JVM only gets faster).
+2. **Example-side, independent of 1 (~0.4 ms):**
+   - the attention GEMVs (256x48 and 48x256, 144 a token) sit below the 2^15
+     `--parallel` threshold and below the 128-column lane threshold: a head of 48 runs
+     the scalar tail in `matvecRowsF` row by row. Give the row loop a lane form for
+     short rows (the `.todo/457` original item 3 -- THRESHOLD guards a per-call cost the
+     GEMV pays once), and consider letting `--parallel` take a call of >= 2^14 MACs when
+     it has >= 64 rows;
+   - fuse `wq`/`wk`/`wv` into one 864x288 matrix and `w1`/`w3` into one 1536x288 at load
+     time: 6 dispatches a layer become 2, each better amortized, and the split is a
+     copy the unboxed loop of 1 makes free (or `vec:matvec-into` into a slice);
+   - the residual / RMSNorm / SwiGLU chain on `-into` kernels over state buffers
+     (`vec:exp-into`, `vec:mul-into`, `vec:add-into`): 12+ fresh vectors a layer become
+     none, and the GC stops evicting the weight stream;
+   - the softmax as whole-vector kernels once `.todo/456` (the wasm `exp` past |x|~300)
+     is closed: `(vec:clip (scores - max) -80 0)` -> `vec:exp-into` -> `vec:sum` ->
+     `vec:scale-into` over the `pos+1` prefix -- which needs a prefix length on the
+     `-into` kernels or a `vec:softmax-into`; with 1 done this is moot.
+3. **GEMV in situ (~0.2-0.3 ms):** the 24 projections cost ~4.3 us each cold (DRAM
+   latency on ten 32 KB streams, not bandwidth); try a smaller leaf for a cold matrix
+   only if 2's fusion does not already hide it. `vec:matvec-into` over a reused result
+   buffer for every GEMV in the loop.
 
-`JvmSimdVectorTemplate.matvecF` / `dotF` accumulate each row in ONE `FloatVector` on
-`FSPECIES_REDUCE = SPECIES_128`, pinned to four lanes so a compiled `.class` answers
-the same `(vec:dot v v)` on every host and agrees bit for bit with the WASM `f32x4`
-kernels (the precision contract, `.kb/linalg-simd.md`). One dependent
-`vacc.add(...)` chain per row issues 16 bytes per ~4 cycles: ~1 MAC/cycle = ~12 GB/s
-of demand at 3 GHz -- exactly the DRAM bandwidth, so any per-row overhead (the
-reduce, the header offsets, the result store, the per-call `newVecF`) drops the
-stream below it; the real run moves ~6.5 GB/s. Hot-cache microbench, 288x288: ours
-25.6 us, the same loop in a plain Java class 21 us, four interleaved 128-bit chains
-15 us, one 256-bit `fma` chain 17 us.
-
-1. **K interleaved 128-bit accumulators per row, summed in a FIXED order at the end,
-   on every `--simd` backend at once** -- JVM `matvecF`/`dotF`, interpreter
-   `VecSimdKernels`, the WASM f32x4 `_vec_matvec`/`_vec_dot` in
-   `WasmVecSimdRuntimeBuilder`, `--no-gc`. Lane order stays host-independent
-   (128-bit everywhere) and the four backends still agree bit for bit, but the value
-   CHANGES from today's single chain once: every pinned f32 `--simd` reduction digit
-   moves together. Write the new order into the contract in `.kb/linalg-simd.md`.
-   The f64 kernels (`SPECIES_PREFERRED`) are untouched.
-2. Shave the per-row fixed cost: hoist `loopBound`, avoid `reduceLanes` per row by
-   keeping a vector of partial sums (store after 4 rows), or at least measure what
-   the plain-Java 21 us vs our 25.6 us is -- the header-offset `x` access
-   (`ox + i`) defeats the bounds-check elimination the 0-based Java loop gets.
-3. The attention GEMVs have `head-size` columns (48 here; 64-128 for the Llama
-   family) -- below `THRESHOLD` (128), so `matvecF` runs its scalar tail loop for
-   all of them: 2 x 6 heads x 6 layers x (256 x 48) ~ 0.9M scalar MACs per token.
-   The threshold guards the per-CALL vector setup, which a matvec pays once per
-   matrix, not per row: give the row loop its own (much lower) threshold.
-
-## Where the 2.3 ms of glue goes
-
-The Lisp between the GEMVs compiles to boxed `Object` arithmetic on the JVM
-(`.todo/412`): per token, `rope` rotates 2 x 144 pairs x 6 layers (~17K boxed
-float ops), `attention` copies 6 x 48 query elements and 6 x 48 outputs per layer
-and stores 2 x 288 cache elements, the softmax runs 3 loops over `pos` elements per
-head, and `vec:add` / `vec:mul` / `vec:scale` / `linalg:row` / `vec:ones` each
-allocate a fresh vector (GC pressure evicts the weight stream from cache). Levers,
-cheapest first:
-
-4. **Example-side**: the `-into` kernels for the residual/RMSNorm/SwiGLU chain (no
-   allocation per op), `linalg:row` -> a reused buffer, and the RoPE tables as two
-   precomputed (seq-len x dim) cos/sin vectors so RoPE becomes `vec:mul`/`vec:sub`
-   over even/odd halves -- but that needs a strided or de-interleaved layout, i.e. a
-   `vec:` kernel that does not exist. The softmax over `pos+1` entries could be
-   whole-vector (`vec:exp`/`vec:sum`/`vec:scale` + a 0/1 keep mask) on the JVM; it
-   was tried with a `-1e30` additive mask and REVERTED because the WASM software
-   `exp` explodes past |x| ~ 300 (`.todo/456`) -- fix that first, then a clipped
-   `(vec:clip (scores - max) -80 0)` form is safe on every backend.
-5. **Backend-side, the real lever**: an unboxed fast path for `(aref packed i)` /
-   `(setf (aref packed i) v)` inside a loop whose index is a fixnum and whose
-   value feeds float arithmetic -- the JVM backend boxes every integer and every
-   double today (`.todo/412`, "no fusion"). Even a local `double` register for the
-   `let*` temporaries of `rope` would take most of the 17K boxings out.
+Order: 2 first (an afternoon, measurable per bullet with `llama2-prof.lisp`), then 1.
+Re-measure the README table after each.
 
 ## Gate
 
-`examples/llama2/` at >= 290 tok/s on the GB10, single-threaded (256 tokens,
-stories15M, the README table re-measured), the story still byte-identical to `run.c` on all four
-backends (`examples.yaml`'s `equals`), and every `--simd` backend still agreeing on
-the f32 reductions (ci-spec `comparison-select-ufuncs` / vec cases, the pinned
-digits updated ONCE, together).
+`examples/llama2` on the GB10: **`--simd --parallel` above the published port's 535
+tok/s** (README table re-measured on one day, the port re-measured beside it), `--simd`
+single-threaded above the port's single-thread 297, the story byte-identical to `run.c`
+on all four backends (`examples.yaml`'s `equals`), and every ci-spec case unchanged.
