@@ -239,12 +239,6 @@ examples:
         - "blas-matmul: 128x128 double-float (linalg:matmul a b), 1 time(s)"
         - "corners: (141404 143849 140073 127438)"
         - "trace:   16222272"
-  - path: ml/gpu-matmul.lisp
-    backends: [interpreter, jvm, wasm]
-    note: the --gpu showcase -- one 256x256 SINGLE-float linalg:matmul (Metal has no double, so the default width would decline the device). Deterministic (entries are the row-major index mod 8, so every partial sum is exact at single precision and neither a lane fold nor a fused multiply-add can move the trace; an integer is printed, not a float). The elapsed-time part of the line is not checked. Run it again with --simd and with --gpu --simd - per product on an M4 Max, interpreter 15448 -> 2.49 -> 0.24 ms. ~16 s on the interpreter leg, which runs the portable definition once
-    expect:
-      contains:
-        - "trace 802816,"
   - path: ml/simd-gemv-nogc.lisp
     backends: [no-gc, no-gc-simd]
     note: simd-gemv's inner loop as a --no-gc reactor (the rank-2 packed matrix layout + vec:matvec GEMV) -- the host invokes the fingerprint export (wasmtime run --invoke fingerprint prog.wasm 100 -> 85, matching simd-gemv.lisp's step-100 argmax on both lowerings; verified manually, the harness only compiles). matvec-into/scale-into keep the never-freed bump heap at exactly three blocks

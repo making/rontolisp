@@ -74,7 +74,7 @@ n=128 is below the threshold and declines. From n=192 the device is four times t
 
 ## A runnable example
 
-[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) is one `linalg:matmul` and nothing else, at **single-float** width -- the width a Mac's GPU can take -- over a 256x256 matrix whose entries are integers below 8, so every partial sum is exact at single precision and neither a lane fold nor a fused multiply-add can move the printed trace. Run it three ways:
+[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) is one `linalg:matmul` over a 256x256 matrix and a timing loop, and nothing else -- eight lines, at **single-float** width, the width a Mac's GPU can take. Run it three ways:
 
 ```bash
 rontolisp examples/ml/gpu-matmul.lisp               # the portable definition
@@ -82,7 +82,7 @@ rontolisp examples/ml/gpu-matmul.lisp --simd        # CPU vector lanes
 rontolisp examples/ml/gpu-matmul.lisp --gpu --simd  # the device, lanes below it
 ```
 
-Per 256x256 product on an Apple M4 Max: the native interpreter goes 15448 ms -> 2.49 ms with `--simd` -> 0.24 ms with `--gpu --simd`, and the JVM class output 1.69 ms -> 0.24 ms. Compiled to wasm-GC, where there is no foreign function API and so no `--gpu`, `--simd` alone gets it to 5.96 ms. The program times itself -- it repeats the product for half a second and divides -- so only the flagless run is slow to finish: one product, about 16 seconds.
+Per 256x256 product on an Apple M4 Max: the native interpreter goes 14846 ms -> 2.54 ms with `--simd` -> 0.24 ms with `--gpu --simd`, and the JVM class output 1.60 ms -> 0.18 ms. Compiled to wasm-GC, where there is no foreign function API and so no `--gpu`, it goes 474 ms -> 6.02 ms with `--simd` alone. The program times itself -- it repeats the product for half a second and divides -- so only the flagless interpreter run is slow to finish: one product, about 15 seconds.
 
 ## How the three flags compose
 

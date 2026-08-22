@@ -74,7 +74,7 @@ n=128 はしきい値未満で辞退します。n=192 からデバイスは CPU 
 
 ## 実行できる例
 
-[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) は `linalg:matmul` を 1 回呼ぶだけのプログラムで、幅は **single-float** -- Mac の GPU が受け取れる唯一の幅 -- 、対象は 256x256 の行列です。要素はすべて 8 未満の整数なので途中の総和はすべて単精度で厳密に表現でき、レーン単位の畳み込みも積和融合演算も、表示される trace を動かせません。3 通りに実行してください:
+[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) は 256x256 の行列に対する `linalg:matmul` 1 回と計測ループだけ、全部で 8 行のプログラムです。幅は **single-float** -- Mac の GPU が受け取れる唯一の幅 -- です。3 通りに実行してください:
 
 ```bash
 rontolisp examples/ml/gpu-matmul.lisp               # the portable definition
@@ -82,7 +82,7 @@ rontolisp examples/ml/gpu-matmul.lisp --simd        # CPU vector lanes
 rontolisp examples/ml/gpu-matmul.lisp --gpu --simd  # the device, lanes below it
 ```
 
-Apple M4 Max での 256x256 の積 1 回あたり: ネイティブのインタプリタは 15448 ms -> `--simd` で 2.49 ms -> `--gpu --simd` で 0.24 ms、JVM クラス出力は 1.69 ms -> 0.24 ms です。外部関数インタフェースがなく `--gpu` も使えない wasm-GC にコンパイルした場合は、`--simd` だけで 5.96 ms になります。プログラム自身が計測します -- 0.5 秒間だけ積を繰り返して割ります -- ので、終わるまで時間がかかるのはフラグなしの実行だけです: 積 1 回で約 16 秒。
+Apple M4 Max での 256x256 の積 1 回あたり: ネイティブのインタプリタは 14846 ms -> `--simd` で 2.54 ms -> `--gpu --simd` で 0.24 ms、JVM クラス出力は 1.60 ms -> 0.18 ms です。外部関数インタフェースがなく `--gpu` も使えない wasm-GC にコンパイルした場合は 474 ms -> `--simd` だけで 6.02 ms になります。プログラム自身が計測します -- 0.5 秒間だけ積を繰り返して割ります -- ので、終わるまで時間がかかるのはインタプリタでフラグなしの実行だけです: 積 1 回で約 15 秒。
 
 ## 3 つのフラグはどう合成されるのか
 
