@@ -86,9 +86,32 @@ carry this item.
 | `487` | conversion and bulk width change: the bits pair, `coerce`, reading a bf16 file | Medium |
 | `488` | the fused bf16 GEMV / dot kernels -- where the 1.6x comes from | Medium |
 | `489` | the goal: a 1B-class model on rontolisp | High |
+| `490` | bf16 on the device: `gemv_bf16`, the residency cap, the precision row | High |
 
 Order: 483 first (a pure refactor that makes every later site a compile error rather than a
 silent misroute), then 484, then 485 and 486 in either order, then 487, then 488, then 489.
+`490` is a follow-on, not a fork: see below.
+
+## Why this is not a CUDA item, even though the goal is an LLM
+
+Items 483-487 are host-side and required whichever processor ends up doing the arithmetic
+-- `--gpu` intercepts `vec:matvec` at the call level over a *host* packed array, so the
+device cannot hold what the language cannot represent. Only 488 and 490 are a choice, and
+on this machine it is a smaller choice than it looks:
+
+**GB10's 128 GB of LPDDR5X is shared by the CPU and the GPU at ~273 GB/s**, and the CPU
+path already reached 93 GB/s of it at 20 threads (`Par.java`). A bandwidth-bound GEMV on
+the device is therefore worth roughly 2-3x the CPU `--parallel` path here, not the order of
+magnitude a discrete HBM card would give -- which is the same thing `.kb/gpu.md` found from
+the other side ("on unified memory an upload is a memcpy of the very bytes the CPU kernel
+would have streamed").
+
+bf16's own ~2x is **orthogonal** to that: it applies on both sides for the same reason.
+So the CPU kernel (488) is not a detour to be skipped on the way to the device -- it is
+the cheaper half of the win, it needs no device to develop or test, and because bf16 -> f32
+is exact it is the **bit-exact oracle** a device kernel can be checked against. `.kb/gpu.md`
+already carries a precision contract per member because the device diverges from the CPU at
+f32; bf16 gets a better story than that, but only if the exact CPU answer exists first.
 
 ## The name
 

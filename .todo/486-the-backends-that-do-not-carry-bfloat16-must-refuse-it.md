@@ -23,9 +23,10 @@ wrong number, not a crash.
 
 ## Decline, silently and correctly
 
-- **`--gpu`** (`LinalgGpu`, `LinalgGpuKernels`): the device kernels are f32/f64. (bf16 on
-  the device is a real win -- it is what tensor cores want -- but it is a separate item;
-  see "where it would pay" in `.todo/482`.) After
+- **`--gpu`** (`LinalgGpu`, `LinalgGpuKernels`): the device kernels are f32/f64, so a
+  bf16 operand declines here **until `.todo/490` lands** -- that item gives the device its
+  own bf16 GEMV and supersedes this clause. Declining correctly first is what makes it a
+  performance item rather than a correctness one. After
   `.todo/483` these sites are exhaustive switches, so the bf16 arm returns `null` and the
   caller falls through to the lane or defun path exactly as it already does when the
   device is absent or the matrix is too small. Check `installVec`'s `matvec` intercept and
