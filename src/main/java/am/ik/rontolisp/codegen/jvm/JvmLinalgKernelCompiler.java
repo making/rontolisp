@@ -167,6 +167,8 @@ final class JvmLinalgKernelCompiler {
 				5;
 			case LispNames.LINALG_COL2IM -> 6;
 			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS -> 3;
+			// concatenate takes its list and :axis; a device member only, in that form.
+			case LispNames.LINALG_CONCATENATE -> 1;
 			default -> UNARY.contains(member) ? 1 : 2;
 		};
 	}
@@ -186,7 +188,10 @@ final class JvmLinalgKernelCompiler {
 			new Extended("laTransposeAxes", 2), LispNames.LINALG_SUM, new Extended("laSumAxis", 3),
 			LispNames.LINALG_AMAX, new Extended("laAmaxAxis", 3), LispNames.LINALG_AMIN, new Extended("laAminAxis", 3),
 			LispNames.LINALG_ARGMAX, new Extended("laArgmaxAxis", 2), LispNames.LINALG_ARGMIN,
-			new Extended("laArgminAxis", 2));
+			new Extended("laArgminAxis", 2),
+			// concatenate has no lane kernel: the name here is never emitted, the shape
+			// is.
+			LispNames.LINALG_CONCATENATE, new Extended("laConcatenate", 2));
 
 	/** The extended (option-form) kernel of the given member, or {@code null}. */
 	static @org.jspecify.annotations.Nullable Extended extended(String member) {
@@ -198,11 +203,13 @@ final class JvmLinalgKernelCompiler {
 	 * arguments (by position) they write: the fused Adam update writes the parameter and
 	 * the two moments, the scatter-add its destination, the clip scale its operand, and
 	 * the generator fill the array it fills. Under {@code --gpu} the call site reports
-	 * each of those arrays to {@code _gpuWritten} after the chain, whichever rung of it
-	 * ran: the device keeps resident copies of packed arrays keyed by identity, and an
-	 * in-place write that reached it through no setter would leave the copy stale
-	 * ({@code .kb/gpu.md}, "The residency design"). The defun rung writes through
-	 * {@code _fvAset*}, which reports on its own, so for it this is redundant and cheap.
+	 * each of those arrays to {@code _gpuWritten} BEFORE the host rungs of the chain --
+	 * after the device attempt, which keeps its own copies current: the device keeps
+	 * resident copies of packed arrays keyed by identity, and an in-place write that
+	 * reached it through no setter would leave the copy stale, or overwrite bytes only
+	 * the device held ({@code .kb/gpu.md}, "Device residency"). The defun rung writes
+	 * through {@code _fvAset*}, which reports on its own, so for it this is redundant and
+	 * cheap.
 	 */
 	private static final Map<String, int[]> WRITTEN = Map.of(LispNames.LINALG_ADAM_STEP, new int[] { 0, 2, 3 },
 			LispNames.LINALG_SCATTER_ROWS, new int[] { 0 }, LispNames.LINALG_SCALE, new int[] { 0 },
@@ -303,6 +310,32 @@ final class JvmLinalgKernelCompiler {
 		if (gpuKey != null && gpu != null) {
 			emitAttempt(ctx, gpu, gpuKey, extendedCall ? layout : null, slots, arity, takenBranches);
 		}
+		// The host rungs below read the arguments on the host, and the in-place members
+		// among them write some: under --gpu every argument is materialized first (a
+		// result the device still holds the only copy of comes home), and each array
+		// the member writes is reported BEFORE the write -- here, where only a host rung
+		// can follow, so a device rung that took the member and left the array resident
+		// is not undone (.kb/gpu.md, "A result comes home on first host touch").
+		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		if (gpuOps != null) {
+			MethodrefConstant materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
+			for (int slot : slots) {
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slot);
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(materialize.index());
+			}
+			int[] written = WRITTEN.get(member);
+			if (written != null) {
+				MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
+				for (int i : written) {
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(slots[i]);
+					ctx.emit(Opcode.INVOKESTATIC);
+					ctx.emitU2(report.index());
+				}
+			}
+		}
 		if (blas != null && !extendedCall) {
 			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, takenBranches);
 		}
@@ -345,19 +378,6 @@ final class JvmLinalgKernelCompiler {
 		ctx.emitU2(defun.methodref().index());
 		for (int branchPos : takenBranches) {
 			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
-		}
-		// The residency invalidation, after the chain and with the result still on the
-		// stack: each array this member wrote in place is reported, whichever rung ran.
-		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
-		int[] written = gpuOps != null ? WRITTEN.get(member) : null;
-		if (written != null && gpuOps != null) {
-			MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
-			for (int i : written) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(report.index());
-			}
 		}
 	}
 

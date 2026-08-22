@@ -25,22 +25,49 @@ public record LispSingleFloatArray(float[] data, int[] dims) implements LispFloa
 		return LispNames.SINGLE_FLOAT;
 	}
 
+	/**
+	 * The storage, for a HOST read: every reader goes through here (the kernels, the
+	 * printer, a record pattern, Java interop), and the access hook first brings home any
+	 * copy of it a device holds ({@code .kb/gpu.md}). A read costs one volatile load when
+	 * no accelerator is installed.
+	 * @return the flat row-major elements
+	 */
+	@Override
+	public float[] data() {
+		FloatArrayAccessHook.read(this.data);
+		return this.data;
+	}
+
+	/**
+	 * The storage WITHOUT the read hook -- for the device interceptor alone, which hands
+	 * the array to the accelerator that may already hold it and must not have it
+	 * downloaded first. Every other caller reads through {@link #data()}.
+	 * @return the flat row-major elements, possibly stale on the host
+	 */
+	public float[] storage() {
+		return this.data;
+	}
+
 	@Override
 	public double elementAt(int flat) {
 		// Widen f32 -> f64 on read.
+		FloatArrayAccessHook.read(this.data);
 		return this.data[flat];
 	}
 
 	@Override
 	public void setElement(int flat, double value) {
-		// Narrow f64 -> f32 on store.
+		// Reported BEFORE the store: a device copy that was the authoritative one comes
+		// home first, then is dropped, and the narrowed f64 -> f32 value lands on the
+		// array's real bytes.
+		FloatArrayAccessHook.written(this.data);
 		this.data[flat] = (float) value;
-		FloatArrayWriteHook.written(this.data);
 	}
 
 	@Override
 	public String elementText(int flat) {
 		// The element prints at its stored f32 width, so #f(0.1) round-trips.
+		FloatArrayAccessHook.read(this.data);
 		return FloatText.singleText(this.data[flat]);
 	}
 
@@ -51,6 +78,7 @@ public record LispSingleFloatArray(float[] data, int[] dims) implements LispFloa
 
 	@Override
 	public LispArray toGeneralArray() {
+		FloatArrayAccessHook.read(this.data);
 		LispVal[] boxed = new LispVal[this.data.length];
 		for (int i = 0; i < this.data.length; i++) {
 			boxed[i] = new LispDouble(this.data[i]);

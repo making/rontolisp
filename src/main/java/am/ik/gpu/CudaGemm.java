@@ -113,6 +113,23 @@ final class CudaGemm implements GpuDevice {
 			RNG_F64 = 6, RNG_F32 = 7;
 
 	/**
+	 * The RESIDENT tier's kernels ({@code .todo/491}), in the order {@link #resident}
+	 * holds them: the equal-shape binary op, the array-with-scalar form, the three-way
+	 * select and the fused Adam update, at each width. None of them is offered over a
+	 * round trip -- their CPU twins are lane loops, which the element-wise tier measured
+	 * a round trip cannot beat -- but every one is a launch with no copy over an operand
+	 * that is ALREADY on the device, and that is the only way {@link Gpu} offers them.
+	 */
+	static final String[] KERNELS_RESIDENT = { "zip_f64", "zip_f32", "scal_f64", "scal_f32", "where_f64", "where_f32",
+			"adam_f64", "adam_f32", "copy_f64", "copy_f32" };
+
+	private static final int ZIP_F64 = 0, ZIP_F32 = 1, SCAL_F64 = 2, SCAL_F32 = 3, WHERE_F64 = 4, WHERE_F32 = 5,
+			ADAM_F64 = 6, ADAM_F32 = 7, COPY_F64 = 8, COPY_F32 = 9;
+
+	/** The stand-in for a scalar operand of the three-way select; never resident. */
+	private static final Object NO_ARRAY = new Object();
+
+	/**
 	 * The GEMV behind {@code vec:matvec} ({@code .todo/475}): one warp per row over a
 	 * row-major matrix, accumulating in double at both widths. The one member whose worth
 	 * is decided by residency rather than size -- see {@link #gemv}.
@@ -268,6 +285,20 @@ final class CudaGemm implements GpuDevice {
 	private static final int RESIDENT_SHARE = 4;
 
 	/**
+	 * With LAZY results on the budget is not a share but a HEADROOM: everything the
+	 * device has, less an eighth of it (and never less than half a gigabyte), because an
+	 * eviction then costs a download AND a later upload rather than one upload, and what
+	 * a training step keeps reachable -- every activation until its backward -- is what
+	 * it is: at the book's shapes a quarter and then a half of this machine's free memory
+	 * both evicted the graph by the tens of gigabytes per step ({@code .kb/gpu.md}). The
+	 * pre-flight still evicts everything a call is not holding before it would refuse the
+	 * call, so the headroom is for the rest of the process, not for the next launch.
+	 */
+	private static final int LAZY_HEADROOM_SHARE = 8;
+
+	private static final long LAZY_HEADROOM_FLOOR = 512L << 20;
+
+	/**
 	 * 1 GB, and the cap is not a safety margin but the measurement that decides whether
 	 * residency pays at all. The buffers the cache holds are buffers the driver's pool
 	 * cannot hand out again, and what makes a per-call intercept affordable is that pool
@@ -314,6 +345,11 @@ final class CudaGemm implements GpuDevice {
 	/** The strided tier's six kernels, indexed by {@link #BCAST_F64} and its siblings. */
 	private final MemorySegment[] strided;
 
+	/**
+	 * The resident tier's eight kernels, indexed by {@link #ZIP_F64} and its siblings.
+	 */
+	private final MemorySegment[] resident;
+
 	private final MemorySegment gemvF64;
 
 	private final MemorySegment gemvF32;
@@ -350,6 +386,14 @@ final class CudaGemm implements GpuDevice {
 	private volatile boolean usable = true;
 
 	/**
+	 * Whether a member's RESULT stays on the device until the host first reads it
+	 * ({@link #lazyResults}), or is downloaded before the call returns as the library's
+	 * default contract says. Off by default; the interceptors, which enumerate every host
+	 * read of packed-array storage and materialize first, switch it on.
+	 */
+	private volatile boolean lazy;
+
+	/**
 	 * The last {@code cuMemGetInfo} answer less what has been allocated since, or
 	 * {@code -1} when it must be asked again. A plain field on purpose: two threads
 	 * racing on it can only make the estimate staler, and a stale estimate costs nothing
@@ -375,8 +419,9 @@ final class CudaGemm implements GpuDevice {
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
 			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32,
 			MemorySegment gemmBatchedF32T4, MemorySegment gemmBatchedF32T8, int multiprocessors, MemorySegment mapF64,
-			MemorySegment mapF32, MemorySegment[] strided, MemorySegment gemvF64, MemorySegment gemvF32, boolean pooled,
-			MemorySegment memoryPool, MemorySegment bounce, long syncFlopCeiling, String description) {
+			MemorySegment mapF32, MemorySegment[] strided, MemorySegment[] resident, MemorySegment gemvF64,
+			MemorySegment gemvF32, boolean pooled, MemorySegment memoryPool, MemorySegment bounce, long syncFlopCeiling,
+			String description) {
 		this.driver = driver;
 		this.device = device;
 		this.context = context;
@@ -391,6 +436,7 @@ final class CudaGemm implements GpuDevice {
 		this.mapF64 = mapF64;
 		this.mapF32 = mapF32;
 		this.strided = strided;
+		this.resident = resident;
 		this.gemvF64 = gemvF64;
 		this.gemvF32 = gemvF32;
 		this.pooled = pooled;
@@ -540,6 +586,15 @@ final class CudaGemm implements GpuDevice {
 				}
 				strided[i] = functionOut.get(P, 0);
 			}
+			MemorySegment[] resident = new MemorySegment[KERNELS_RESIDENT.length];
+			for (int i = 0; i < KERNELS_RESIDENT.length; i++) {
+				status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNELS_RESIDENT[i]));
+				if (status != CuResult.SUCCESS) {
+					return unwind(driver, device, true, module,
+							"cuModuleGetFunction " + KERNELS_RESIDENT[i] + ": " + driver.errorString(status));
+				}
+				resident[i] = functionOut.get(P, 0);
+			}
 			status = driver.moduleGetFunction(functionOut, module, arena.allocateFrom(KERNEL_GEMV_F64));
 			if (status != CuResult.SUCCESS) {
 				return unwind(driver, device, true, module,
@@ -586,8 +641,8 @@ final class CudaGemm implements GpuDevice {
 			long ceiling = SYNC_FLOPS_PER_MULTIPROCESSOR * Math.max(1, multiprocessors);
 			String description = describe(driver, arena, device) + (pooled ? "" : ", unpooled allocation");
 			return new Probe(new CudaGemm(driver, device, context, module, f64, f32, batchedF64, batchedF32,
-					batchedF32T4, batchedF32T8, multiprocessors, mapF64, mapF32, strided, gemvF64, gemvF32, pooled,
-					pool, bounce, ceiling, description), description);
+					batchedF32T4, batchedF32T8, multiprocessors, mapF64, mapF32, strided, resident, gemvF64, gemvF32,
+					pooled, pool, bounce, ceiling, description), description);
 		}
 		catch (Throwable ex) {
 			// Anything at all: a descriptor defect, a JVM that forbids native access, a
@@ -1224,14 +1279,23 @@ final class CudaGemm implements GpuDevice {
 	 */
 	private boolean uploadLayout(Arena arena, long destination, int[] dims, int[] sa, int @Nullable [] sb)
 			throws Throwable {
+		return uploadLayout(arena, destination, dims, sa, sb, null);
+	}
+
+	/** The same with a third operand's strides, for the three-way select. */
+	private boolean uploadLayout(Arena arena, long destination, int[] dims, int[] sa, int @Nullable [] sb,
+			int @Nullable [] sc) throws Throwable {
 		int rank = dims.length;
-		int words = rank * (sb == null ? 2 : 3);
+		int words = rank * (sb == null ? 2 : sc == null ? 3 : 4);
 		MemorySegment host = arena.allocate(I, words);
 		for (int k = 0; k < rank; k++) {
 			host.setAtIndex(I, k, dims[k]);
 			host.setAtIndex(I, rank + k, sa[k]);
 			if (sb != null) {
 				host.setAtIndex(I, 2 * rank + k, sb[k]);
+			}
+			if (sc != null) {
+				host.setAtIndex(I, 3 * rank + k, sc[k]);
 			}
 		}
 		int status = this.driver.memcpyHtoD(destination, host, (long) words * Integer.BYTES);
@@ -1335,6 +1399,7 @@ final class CudaGemm implements GpuDevice {
 			// every one this call is not holding, hand the pool's reserve back to the
 			// device so cuMemGetInfo can see it, and ask again.
 			this.residency.evictAll(buffers);
+			settle();
 			drainPending();
 			trimMemoryPool();
 			free = refreshFreeMemory(arena);
@@ -1356,6 +1421,7 @@ final class CudaGemm implements GpuDevice {
 				// gives them back.
 				release(owned);
 				this.residency.evictAll(buffers);
+				settle();
 				drainPending();
 				trimMemoryPool();
 				this.freeEstimate = -1;
@@ -1381,8 +1447,16 @@ final class CudaGemm implements GpuDevice {
 		this.freeEstimate = free;
 		this.allocationsSinceRefresh = 0;
 		long override = this.residentBudgetOverride;
+		// Lazily, neither the cap nor the share applies: an eviction is then a download
+		// AND
+		// a later upload, and the pool's recycling, which the cap exists for, is worth
+		// less
+		// than either; the budget is what the device has less a headroom (.kb/gpu.md, "A
+		// result comes home on first host touch").
+		long held = free < 0 ? 0 : free + this.residency.bytes();
 		this.residency.setBudget(override >= 0 ? override
-				: free < 0 ? 0 : Math.min(RESIDENT_CAP, (free + this.residency.bytes()) / RESIDENT_SHARE));
+				: this.lazy ? Math.max(0, held - Math.max(held / LAZY_HEADROOM_SHARE, LAZY_HEADROOM_FLOOR))
+						: Math.min(RESIDENT_CAP, held / RESIDENT_SHARE));
 		return free;
 	}
 
@@ -1414,28 +1488,139 @@ final class CudaGemm implements GpuDevice {
 		if (!upload(buffers[i], heap, offset, bytes)) {
 			return false;
 		}
-		this.residency.put(host, offset, bytes, buffers[i]);
+		this.residency.put(host, offset, bytes, buffers[i], false);
 		owned[i] = 0;
-		return true;
+		return settle();
 	}
 
 	/**
-	 * The end of every successful call: the result comes down, and -- device and host now
-	 * holding the same bytes -- the buffer is recorded as the host array's resident copy
-	 * rather than freed, which is what makes a chain of members pay for one upload. Then
-	 * the other safe moment to free what the cache dropped: the launch has been enqueued
-	 * and the synchronous download has returned, so nothing the kernel read is freed
+	 * The end of every successful call. Eagerly (the library's default), the result comes
+	 * down and -- device and host now holding the same bytes -- the buffer is recorded as
+	 * the host array's CLEAN resident copy rather than freed, which is what makes a chain
+	 * of members pay for one upload. Lazily ({@link #lazyResults}), nothing comes down:
+	 * the buffer is recorded as the array's DIRTY copy -- the device holds the bytes and
+	 * the host does not -- and the download happens on the host's first read of the array
+	 * ({@link #materialize}) or never. A buffer the call did not allocate (an in-place
+	 * member over a resident array) is marked rather than recorded. Then the other safe
+	 * moment to free what the cache dropped: the launch has been enqueued (and, eagerly,
+	 * the synchronous download has returned), so nothing the kernel read is freed
 	 * underneath it.
 	 */
 	private boolean finish(MemorySegment heap, long offset, long[] buffers, long[] owned, int i, Object host,
 			long bytes) throws Throwable {
-		if (!download(heap, offset, buffers[i], bytes)) {
+		if (this.lazy) {
+			if (owned[i] != 0) {
+				this.residency.put(host, offset, bytes, buffers[i], true);
+				owned[i] = 0;
+			}
+			else {
+				this.residency.markDirty(host, offset, bytes);
+			}
+		}
+		else {
+			if (!download(heap, offset, buffers[i], bytes)) {
+				return false;
+			}
+			if (owned[i] != 0) {
+				this.residency.put(host, offset, bytes, buffers[i], false);
+				owned[i] = 0;
+			}
+		}
+		if (!settle()) {
 			return false;
 		}
-		this.residency.put(host, offset, bytes, buffers[i]);
-		owned[i] = 0;
 		drainPending();
 		return true;
+	}
+
+	/**
+	 * Performs every flush the cache has let go of since the last call here -- a DIRTY
+	 * copy it evicted, released or replaced, whose bytes the host array does not have:
+	 * each is downloaded into its array and its buffer then queued for the next drain.
+	 * Called immediately after every cache operation that can produce one, so that no
+	 * array is ever without an entry while the device still holds its only bytes. The
+	 * buffers are queued rather than freed here because a flush can run BEFORE a launch
+	 * that reads the same buffer (an eviction inside {@link #stage}), and a free must
+	 * stay behind that launch.
+	 */
+	private boolean settle() throws Throwable {
+		for (DeviceResidency.Flush flush : this.residency.flushes()) {
+			if (!download(heap(flush.host()), flush.offset(), flush.pointer(), flush.bytes())) {
+				this.residency.release(flush.pointer());
+				return false;
+			}
+			this.residency.release(flush.pointer());
+		}
+		return true;
+	}
+
+	/** The heap segment over a resident host array, which is always one of the two. */
+	private static MemorySegment heap(Object host) {
+		return host instanceof float[] f ? MemorySegment.ofArray(f) : MemorySegment.ofArray((double[]) host);
+	}
+
+	/**
+	 * Brings a DIRTY copy of {@code host} home -- the download every host read of
+	 * packed-array storage performs first under {@link #lazyResults}. Cheap when it does
+	 * not matter: a volatile read when nothing is dirty, and one identity compare for a
+	 * loop that reads one array. When it does matter it is the one operation of this
+	 * library that cannot decline: the host has no other copy of those bytes, so a
+	 * download the driver refuses is an error rather than a fallback.
+	 * @param host the host array about to be read
+	 */
+	@Override
+	public void materialize(Object host) {
+		DeviceResidency.Flush flush = this.residency.claimDirty(host);
+		if (flush == null) {
+			return;
+		}
+		boolean ok;
+		try {
+			ok = this.driver.ctxSetCurrent(this.context) == CuResult.SUCCESS
+					&& download(heap(host), flush.offset(), flush.pointer(), flush.bytes());
+		}
+		catch (Throwable ex) {
+			throw new IllegalStateException("a device result could not be brought home: " + ex, ex);
+		}
+		if (!ok) {
+			throw new IllegalStateException("a device result could not be brought home: the driver refused the copy");
+		}
+	}
+
+	/**
+	 * Whether a copy of {@code host} is resident -- the question the resident tier asks
+	 * before it offers a member. No context, no driver call.
+	 * @param host the host array
+	 * @return {@code true} when a device buffer holds a copy of it
+	 */
+	@Override
+	public boolean resident(Object host) {
+		return this.residency.resident(host);
+	}
+
+	/**
+	 * Switches lazy results on or off. Switching OFF brings every dirty copy home first,
+	 * so that the eager contract -- a result is in its array when the call returns --
+	 * holds for everything resident from then on.
+	 * @param on whether results stay on the device until first read
+	 */
+	@Override
+	public void lazyResults(boolean on) {
+		this.lazy = on;
+		if (!on) {
+			try {
+				if (this.driver.ctxSetCurrent(this.context) == CuResult.SUCCESS) {
+					for (DeviceResidency.Flush flush : this.residency.claimAllDirty()) {
+						download(heap(flush.host()), flush.offset(), flush.pointer(), flush.bytes());
+					}
+				}
+			}
+			catch (Throwable ex) {
+				// The context is gone, and with it the copies; the sticky rule has
+				// retired
+				// the feature.
+			}
+		}
 	}
 
 	/**
@@ -1448,14 +1633,17 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	/**
-	 * A host array was written: its resident copy, if any, is stale and is dropped. No
-	 * driver call happens here -- the buffer is freed by the next call, on a thread that
-	 * has the context -- so this is safe from any thread and costs a volatile read when
-	 * nothing is resident.
-	 * @param host the host array that was written
+	 * A host array is about to be written: its resident copy, if any, is stale and is
+	 * dropped -- after being brought home first when it was the authoritative one
+	 * ({@link #materialize}), so that the write lands on the array's real bytes. For a
+	 * clean copy no driver call happens here -- the buffer is freed by the next call, on
+	 * a thread that has the context -- so this is safe from any thread and costs a
+	 * volatile read when nothing is resident.
+	 * @param host the host array that is being written
 	 */
 	@Override
 	public void written(Object host) {
+		materialize(host);
 		this.residency.written(host);
 	}
 
@@ -1478,6 +1666,7 @@ final class CudaGemm implements GpuDevice {
 		this.residency.evictAll();
 		try (Arena arena = Arena.ofConfined()) {
 			if (this.driver.ctxSetCurrent(this.context) == CuResult.SUCCESS) {
+				settle();
 				drainPending();
 			}
 		}
@@ -1531,6 +1720,9 @@ final class CudaGemm implements GpuDevice {
 			if (!enter()) {
 				return false;
 			}
+			// A destination that is already resident is filled in place: the fill covers
+			// its whole span, so whatever it held is superseded.
+			buffers[0] = this.residency.lookup(host, offset, bytes);
 			if (!allocate(arena, buffers, owned, bytes)) {
 				return false;
 			}
@@ -1636,6 +1828,10 @@ final class CudaGemm implements GpuDevice {
 			// The residency rule above: a matrix seen for the first time is declined and
 			// marked, nothing allocated; seen again unwritten, it is uploaded below.
 			if (buffers[0] == 0 && !this.residency.offeredBefore(wh, offW, wBytes)) {
+				settle();
+				return false;
+			}
+			if (!settle()) {
 				return false;
 			}
 			buffers[1] = this.residency.lookup(xh, offX, xBytes);
@@ -1676,6 +1872,402 @@ final class CudaGemm implements GpuDevice {
 		int warps = GEMV_BLOCK / 32;
 		int status = this.driver.launchKernel(function, (rows + warps - 1) / warps, 1, 1, GEMV_BLOCK, 1, 1, 0,
 				MemorySegment.NULL, parameters, MemorySegment.NULL);
+		if (status != CuResult.SUCCESS) {
+			return fail(status);
+		}
+		if (sync) {
+			status = this.driver.ctxSynchronize();
+			if (status != CuResult.SUCCESS) {
+				return fail(status);
+			}
+		}
+		return true;
+	}
+
+	// --- the resident tier (.todo/491) -------------------------------------------------
+	// Four members whose CPU twin is a lane loop, which a round trip could never win and
+	// which Gpu therefore offers only over an operand that is ALREADY resident: the
+	// equal-shape binary op, the array-with-scalar form, linalg:where and the fused Adam
+	// update. Each is the ordinary shape -- look up, allocate what is missing, stage,
+	// launch, finish -- and each computes in double and narrows on the store, so all four
+	// land on the CPU kernels' bits (gemm.cu).
+
+	/**
+	 * {@code c[i] = op(a[i], b[i])} over two operands of the same shape -- the shape the
+	 * element-wise tier refused as a round trip, taken here because {@link Gpu} has
+	 * already found an operand resident.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean zip(int op, double[] a, int oa, double[] b, int ob, double[] c, int oc, int n) {
+		return zip(op, MemorySegment.ofArray(a), a, oa, MemorySegment.ofArray(b), b, ob, MemorySegment.ofArray(c), c,
+				oc, n, Double.BYTES, this.resident[ZIP_F64]);
+	}
+
+	@Override
+	public boolean zipF(int op, float[] a, int oa, float[] b, int ob, float[] c, int oc, int n) {
+		return zip(op, MemorySegment.ofArray(a), a, oa, MemorySegment.ofArray(b), b, ob, MemorySegment.ofArray(c), c,
+				oc, n, Float.BYTES, this.resident[ZIP_F32]);
+	}
+
+	private boolean zip(int op, MemorySegment a, Object ah, int oa, MemorySegment b, Object bh, int ob, MemorySegment c,
+			Object ch, int oc, int n, int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		long bytes = (long) n * width, offA = (long) oa * width, offB = (long) ob * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, bytes);
+			buffers[1] = this.residency.lookup(bh, offB, bytes);
+			if (!allocate(arena, buffers, owned, bytes, bytes, bytes)) {
+				return false;
+			}
+			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, ah, a, offA, bytes) || !stage(buffers, owned, 1, bh, b, offB, bytes)
+					|| !launchStrided(arena, kernel, n, new long[] { op, buffers[0], buffers[1], buffers[2], n },
+							new boolean[] { false, true, true, true, false }, sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 2, ch, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * {@code c[i] = op(a[i], s)} -- or {@code op(s, a[i])} when {@code swap} -- over a
+	 * DOUBLE scalar whatever the array's width, which is the CPU kernel's contract too.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean scale(int op, double[] a, int oa, double s, boolean swap, double[] c, int oc, int n) {
+		return scale(op, MemorySegment.ofArray(a), a, oa, s, swap, MemorySegment.ofArray(c), c, oc, n, Double.BYTES,
+				this.resident[SCAL_F64]);
+	}
+
+	@Override
+	public boolean scaleF(int op, float[] a, int oa, double s, boolean swap, float[] c, int oc, int n) {
+		return scale(op, MemorySegment.ofArray(a), a, oa, s, swap, MemorySegment.ofArray(c), c, oc, n, Float.BYTES,
+				this.resident[SCAL_F32]);
+	}
+
+	private boolean scale(int op, MemorySegment a, Object ah, int oa, double s, boolean swap, MemorySegment c,
+			Object ch, int oc, int n, int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		long bytes = (long) n * width, offA = (long) oa * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0 }, owned = { 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, bytes);
+			// In place (the destination IS the operand, as %la-scale writes it): the
+			// kernel
+			// reads and writes the same element of the one resident buffer, and finish
+			// marks it dirty rather than recording a second one.
+			if (ch == ah && oc == oa && buffers[0] != 0) {
+				buffers[1] = buffers[0];
+			}
+			if (!allocate(arena, buffers, owned, bytes, bytes)) {
+				return false;
+			}
+			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, ah, a, offA, bytes)) {
+				return false;
+			}
+			// The parameter block: op, A, s (a double), C, n, swap.
+			MemorySegment opv = arena.allocate(I), av = arena.allocate(L), sv = arena.allocate(D),
+					cv = arena.allocate(L), nv = arena.allocate(I), swv = arena.allocate(I);
+			opv.set(I, 0, op);
+			av.set(L, 0, buffers[0]);
+			sv.set(D, 0, s);
+			cv.set(L, 0, buffers[1]);
+			nv.set(I, 0, n);
+			swv.set(I, 0, swap ? 1 : 0);
+			MemorySegment parameters = arena.allocate(P, 6);
+			parameters.setAtIndex(P, 0, opv);
+			parameters.setAtIndex(P, 1, av);
+			parameters.setAtIndex(P, 2, sv);
+			parameters.setAtIndex(P, 3, cv);
+			parameters.setAtIndex(P, 4, nv);
+			parameters.setAtIndex(P, 5, swv);
+			if (!launchFlat(kernel, n, parameters, sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 1, ch, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * The strided copy: {@code c[oc + so.i] = a[oa + sa.i]} over {@code dims}, either
+	 * stride vector possibly negative -- reshape, the rank-2 transpose, a slice and each
+	 * slab of a concatenation, over a resident operand only. Offsets are element offsets
+	 * of the two WALKS' origins; the residency span of each array is still its whole data
+	 * part, which the caller passes as {@code spanA} / {@code spanC} (an element offset
+	 * and count), so that a slice finds the array it was cut from.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean copy(double[] a, int oa, int[] sa, int spanOa, int spanNa, double[] c, int oc, int[] sc, int spanOc,
+			int spanNc, int[] dims) {
+		return copy(MemorySegment.ofArray(a), a, oa, sa, spanOa, spanNa, MemorySegment.ofArray(c), c, oc, sc, spanOc,
+				spanNc, dims, Double.BYTES, this.resident[COPY_F64]);
+	}
+
+	@Override
+	public boolean copyF(float[] a, int oa, int[] sa, int spanOa, int spanNa, float[] c, int oc, int[] sc, int spanOc,
+			int spanNc, int[] dims) {
+		return copy(MemorySegment.ofArray(a), a, oa, sa, spanOa, spanNa, MemorySegment.ofArray(c), c, oc, sc, spanOc,
+				spanNc, dims, Float.BYTES, this.resident[COPY_F32]);
+	}
+
+	private boolean copy(MemorySegment a, Object ah, int oa, int[] sa, int spanOa, int spanNa, MemorySegment c,
+			Object ch, int oc, int[] sc, int spanOc, int spanNc, int[] dims, int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		int rank = dims.length;
+		int n = count(dims);
+		long aBytes = (long) spanNa * width, cBytes = (long) spanNc * width, metaBytes = 3L * rank * Integer.BYTES;
+		long offA = (long) spanOa * width, offC = (long) spanOc * width;
+		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, aBytes);
+			// A destination already resident (a concatenation's second slab onward) is
+			// written into in place; a fresh one is allocated and recorded.
+			buffers[1] = this.residency.lookup(ch, offC, cBytes);
+			if (!allocate(arena, buffers, owned, aBytes, cBytes, metaBytes)) {
+				return false;
+			}
+			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !uploadLayout(arena, buffers[2], dims, sa, sc)) {
+				return false;
+			}
+			// The kernel walks from each side's origin: the buffer plus the walk's own
+			// offset within the span.
+			long originA = buffers[0] + ((long) oa - spanOa) * width,
+					originC = buffers[1] + ((long) oc - spanOc) * width;
+			if (!launchStrided(arena, kernel, n, new long[] { originA, originC, n, rank, buffers[2] },
+					new boolean[] { true, true, false, false, true }, sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 1, ch, cBytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * {@code c[i] = m[im(i)] != 0 ? x[ix(i)] : y[iy(i)]} over three operands broadcast
+	 * together, any of which may be a scalar ({@code null} array, its value in the
+	 * double) -- {@code linalg:where}. The mask may be either width; {@code x} /
+	 * {@code y} share the result's.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean where(@Nullable Object m, int om, int[] sm, double ms, double @Nullable [] x, int ox, int[] sx,
+			double xs, double @Nullable [] y, int oy, int[] sy, double ys, double[] c, int oc, int[] dims) {
+		return where(m, om, sm, ms, x == null ? null : MemorySegment.ofArray(x), x, ox, sx, xs,
+				y == null ? null : MemorySegment.ofArray(y), y, oy, sy, ys, MemorySegment.ofArray(c), c, oc, dims,
+				Double.BYTES, this.resident[WHERE_F64]);
+	}
+
+	@Override
+	public boolean whereF(@Nullable Object m, int om, int[] sm, double ms, float @Nullable [] x, int ox, int[] sx,
+			double xs, float @Nullable [] y, int oy, int[] sy, double ys, float[] c, int oc, int[] dims) {
+		return where(m, om, sm, ms, x == null ? null : MemorySegment.ofArray(x), x, ox, sx, xs,
+				y == null ? null : MemorySegment.ofArray(y), y, oy, sy, ys, MemorySegment.ofArray(c), c, oc, dims,
+				Float.BYTES, this.resident[WHERE_F32]);
+	}
+
+	private boolean where(@Nullable Object mh, int om, int[] sm, double ms, @Nullable MemorySegment x,
+			@Nullable Object xh, int ox, int[] sx, double xs, @Nullable MemorySegment y, @Nullable Object yh, int oy,
+			int[] sy, double ys, MemorySegment c, Object ch, int oc, int[] dims, int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		int rank = dims.length;
+		int n = count(dims);
+		int mkind = mh instanceof float[] ? 1 : mh instanceof double[] ? 2 : 0;
+		int mwidth = mkind == 1 ? Float.BYTES : Double.BYTES;
+		// NullAway cannot see that a non-zero kind implies a non-null array, so the three
+		// array operands are re-bound non-null here, a scalar's to a placeholder that is
+		// never looked up, staged or read.
+		Object mArray = mh == null ? NO_ARRAY : mh, xArray = xh == null ? NO_ARRAY : xh,
+				yArray = yh == null ? NO_ARRAY : yh;
+		MemorySegment m = mkind == 0 ? null : heap(mArray);
+		long mBytes = mkind == 0 ? 0 : (span(dims, sm) + 1L) * mwidth,
+				xBytes = x == null ? 0 : (span(dims, sx) + 1L) * width,
+				yBytes = y == null ? 0 : (span(dims, sy) + 1L) * width, cBytes = (long) n * width,
+				metaBytes = 4L * rank * Integer.BYTES;
+		long offM = (long) om * mwidth, offX = (long) ox * width, offY = (long) oy * width, offC = (long) oc * width;
+		// Slots: 0 mask, 1 x, 2 y, 3 result, 4 layout. A scalar operand's slot is a zero
+		// byte count and stays a null pointer.
+		long[] buffers = { 0, 0, 0, 0, 0 }, owned = { 0, 0, 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			if (m != null) {
+				buffers[0] = this.residency.lookup(mArray, offM, mBytes);
+			}
+			if (x != null) {
+				buffers[1] = this.residency.lookup(xArray, offX, xBytes);
+			}
+			if (y != null) {
+				buffers[2] = this.residency.lookup(yArray, offY, yBytes);
+			}
+			if (!allocate(arena, buffers, owned, mBytes, xBytes, yBytes, cBytes, metaBytes)) {
+				return false;
+			}
+			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if ((m != null && !stage(buffers, owned, 0, mArray, m, offM, mBytes))
+					|| (x != null && !stage(buffers, owned, 1, xArray, x, offX, xBytes))
+					|| (y != null && !stage(buffers, owned, 2, yArray, y, offY, yBytes))
+					|| !uploadLayout(arena, buffers[4], dims, sm, sx, sy)) {
+				return false;
+			}
+			// The parameter block: M, mkind, ms, X, xs, Y, ys, C, n, rank, meta.
+			MemorySegment mv = arena.allocate(L), mk = arena.allocate(I), msv = arena.allocate(D),
+					xv = arena.allocate(L), xsv = arena.allocate(D), yv = arena.allocate(L), ysv = arena.allocate(D),
+					cv = arena.allocate(L), nv = arena.allocate(I), rv = arena.allocate(I), metav = arena.allocate(L);
+			mv.set(L, 0, buffers[0]);
+			mk.set(I, 0, mkind);
+			msv.set(D, 0, ms);
+			xv.set(L, 0, buffers[1]);
+			xsv.set(D, 0, xs);
+			yv.set(L, 0, buffers[2]);
+			ysv.set(D, 0, ys);
+			cv.set(L, 0, buffers[3]);
+			nv.set(I, 0, n);
+			rv.set(I, 0, rank);
+			metav.set(L, 0, buffers[4]);
+			MemorySegment parameters = arena.allocate(P, 11);
+			MemorySegment[] slots = { mv, mk, msv, xv, xsv, yv, ysv, cv, nv, rv, metav };
+			for (int i = 0; i < slots.length; i++) {
+				parameters.setAtIndex(P, i, slots[i]);
+			}
+			if (!launchFlat(kernel, n, parameters, sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 3, ch, cBytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * Adam's fused update in place over the parameter, its gradient and the two moments:
+	 * the parameter and the moments are WRITTEN on the device and marked dirty, so a
+	 * model's weights, once resident, never come home until the host reads them. The rule
+	 * is {@code [lr, lr*wd, wd, b1, 1-b1, b2, 1-b2, eps, c1, c2, mode]}.
+	 * @return {@code true} when the update ran
+	 */
+	@Override
+	public boolean adamStep(double[] x, int ox, double[] g, int og, double[] m, int om, double[] v, int ov, int n,
+			double[] rule) {
+		return adamStep(MemorySegment.ofArray(x), x, ox, MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(m), m,
+				om, MemorySegment.ofArray(v), v, ov, n, rule, Double.BYTES, this.resident[ADAM_F64]);
+	}
+
+	@Override
+	public boolean adamStepF(float[] x, int ox, float[] g, int og, float[] m, int om, float[] v, int ov, int n,
+			double[] rule) {
+		return adamStep(MemorySegment.ofArray(x), x, ox, MemorySegment.ofArray(g), g, og, MemorySegment.ofArray(m), m,
+				om, MemorySegment.ofArray(v), v, ov, n, rule, Float.BYTES, this.resident[ADAM_F32]);
+	}
+
+	private boolean adamStep(MemorySegment x, Object xh, int ox, MemorySegment g, Object gh, int og, MemorySegment m,
+			Object mh, int om, MemorySegment v, Object vh, int ov, int n, double[] rule, int width,
+			MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		long bytes = (long) n * width, offX = (long) ox * width, offG = (long) og * width, offM = (long) om * width,
+				offV = (long) ov * width;
+		long[] buffers = { 0, 0, 0, 0 }, owned = { 0, 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(xh, offX, bytes);
+			buffers[1] = this.residency.lookup(gh, offG, bytes);
+			buffers[2] = this.residency.lookup(mh, offM, bytes);
+			buffers[3] = this.residency.lookup(vh, offV, bytes);
+			if (!allocate(arena, buffers, owned, bytes, bytes, bytes, bytes)) {
+				return false;
+			}
+			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, xh, x, offX, bytes) || !stage(buffers, owned, 1, gh, g, offG, bytes)
+					|| !stage(buffers, owned, 2, mh, m, offM, bytes) || !stage(buffers, owned, 3, vh, v, offV, bytes)) {
+				return false;
+			}
+			// The parameter block: X, G, M, V, n, the ten doubles of the rule, mode.
+			MemorySegment parameters = arena.allocate(P, 16);
+			for (int i = 0; i < 4; i++) {
+				MemorySegment slot = arena.allocate(L);
+				slot.set(L, 0, buffers[i]);
+				parameters.setAtIndex(P, i, slot);
+			}
+			MemorySegment nv = arena.allocate(I);
+			nv.set(I, 0, n);
+			parameters.setAtIndex(P, 4, nv);
+			for (int i = 0; i < 10; i++) {
+				MemorySegment slot = arena.allocate(D);
+				slot.set(D, 0, rule[i]);
+				parameters.setAtIndex(P, 5 + i, slot);
+			}
+			MemorySegment mode = arena.allocate(I);
+			mode.set(I, 0, (int) rule[10]);
+			parameters.setAtIndex(P, 15, mode);
+			if (!launchFlat(kernel, n, parameters, sync)) {
+				return false;
+			}
+			// Three arrays were written in place: each stays resident as the
+			// authoritative
+			// copy (lazily) or comes home now (eagerly).
+			return finish(x, offX, buffers, owned, 0, xh, bytes) && finish(m, offM, buffers, owned, 2, mh, bytes)
+					&& finish(v, offV, buffers, owned, 3, vh, bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/** One flat launch over {@code n} elements with a ready parameter block. */
+	private boolean launchFlat(MemorySegment function, int n, MemorySegment parameters, boolean sync) throws Throwable {
+		int status = this.driver.launchKernel(function, (n + STRIDED_BLOCK - 1) / STRIDED_BLOCK, 1, 1, STRIDED_BLOCK, 1,
+				1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}

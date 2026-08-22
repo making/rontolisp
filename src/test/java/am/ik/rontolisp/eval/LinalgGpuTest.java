@@ -172,22 +172,31 @@ class LinalgGpuTest {
 				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
 		}
-		// And every member of the STRIDED tier: the six binary ops (taken only at a
-		// BROADCAST shape -- the override is installed unconditionally, the SHAPE is what
-		// the kernel declines), the three axis folds and the axes transpose.
+		// And every member of the STRIDED tier: the six binary ops (the override is
+		// installed unconditionally, the SHAPE and the residency are what the kernel
+		// declines on), the three axis folds and the axes transpose -- and the RESIDENT
+		// tier (.todo/491): sqrt / abs / negative / sign, the five comparison masks,
+		// where
+		// and the Adam update, members over a resident operand only.
 		for (String member : new String[] { "add", "sub", "mul", "div", "maximum", "minimum", "sum", "amax", "amin",
-				"transpose" }) {
+				"transpose", "sqrt", "abs", "negative", "sign", "greater", "greater-equal", "less", "less-equal",
+				"equal", "where", "reshape", "concatenate" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member)
 				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
 		}
-		// Twenty-four linalg: members and no others. matmul, mean, var, softmax, square,
-		// relu and the exact torch:gelu are accelerated THROUGH them, not instead of
-		// them; and sqrt / abs / negative / sign are the element-wise tier's DECLINED
-		// half -- one machine instruction per element, which a round trip cannot pay
-		// for -- so they must still be the library's own lambdas under the flag.
-		for (String member : new String[] { "matmul", "outer", "sqrt", "abs", "negative", "sign", "norm", "reshape",
-				"trace", "argmax", "argmin", "softmax", "mean", "var" }) {
+		for (String internal : new String[] { "%la-adam-step", "%la-gather-strided", "%la-scale" }) {
+			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, true).print()).as(internal)
+				.isEqualTo("#<function LINALG::" + internal.toUpperCase() + ">");
+			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, false).print()).as(internal)
+				.isEqualTo("#<lambda>");
+		}
+		// Forty linalg: members and no others. matmul, mean, var, softmax, square, relu,
+		// slice, flatten and the exact torch:gelu are accelerated THROUGH them, not
+		// instead of them, so they must still be the library's own lambdas under the
+		// flag.
+		for (String member : new String[] { "matmul", "outer", "norm", "trace", "argmax", "argmin", "softmax", "mean",
+				"var", "take-rows", "slice", "flatten", "stack" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member).isEqualTo("#<lambda>");
 		}
 		// And the one member OUTSIDE linalg: -- vec:matvec, installed when the vec
@@ -987,6 +996,174 @@ class LinalgGpuTest {
 		// is the only variable.
 		assertThat(output(program, true, false)).as("--gpu").isEqualTo(oracle);
 		assertThat(output(program, true, true)).as("--gpu --simd").isEqualTo(output(program, false, true));
+	}
+
+	// --- lazy results and the resident tier (.todo/491) -------------------------------
+
+	/**
+	 * Every HOST READ of a packed array's storage there is, each over a result the device
+	 * produced and -- since {@code .todo/491} -- left on the device: the element reads,
+	 * the printer, a defun that walks the array, the lane and the {@code vec:} kernels, a
+	 * typed loop, {@code to-list}, the bulk {@code write-sequence}, and the writes that
+	 * must bring a result home BEFORE they land ({@code (setf (aref ...))}, an in-place
+	 * kernel, an {@code -into}). A reader the materialization does not see prints the
+	 * zeros of an array nobody filled. The members are the bit-identical ones (a
+	 * broadcast add, a transpose), so the oracle is the same program without the flag.
+	 */
+	private static String residencyReaders(int side, String type, String file) {
+		int n = side * side;
+		return """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
+				(defparameter *v* (linalg:arange 1 %d%s))
+				(defparameter *one* (linalg:ones '(1)%s))
+				(defparameter *r* (linalg:add *a* *row*))
+				(defparameter *rv* (linalg:add *v* *one*))
+				(format t "aref ~a ~a ~a ~a~%%" (aref *r* 3 4) (row-major-aref *r* 777) (aref *rv* 10) (row-major-aref *rv* 11))
+				(format t "print ~a~%%" (subseq (format nil "~a" *rv*) 0 24))
+				(format t "prin1 ~a~%%" (subseq (prin1-to-string *r*) 0 24))
+				(format t "array-equal ~a~%%" (linalg:array-equal *r* (linalg:add *a* *row*)))
+				(format t "sum ~a ~a~%%" (linalg:sum *r*) (linalg:sum *rv*))
+				(format t "vec ~a ~a~%%" (vec:sum *rv*) (vec:dot *rv* *rv*))
+				(let ((rv *rv*) (acc 0.0))
+				  (dotimes (i %d) (setq acc (+ acc (aref rv i))))
+				  (format t "loop ~a~%%" acc))
+				(format t "to-list ~a~%%" (subseq (linalg:to-list *rv*) 0 4))
+				(format t "length ~a ~a~%%" (length *rv*) (array-dimensions *r*))
+				(with-open-file (s "%s" :direction :output :element-type '(unsigned-byte 8) :if-exists :supersede)
+				  (write-sequence *rv* s))
+				(defparameter *back* (linalg:zeros '(%d)%s))
+				(with-open-file (s "%s" :element-type '(unsigned-byte 8)) (read-sequence *back* s))
+				(format t "write-sequence ~a ~a~%%" (aref *back* 7) (linalg:sum *back*))
+				(defparameter *r2* (linalg:add *a* *row*))
+				(setf (aref *r2* 0 0) -1.0)
+				(format t "aset-into-result ~a ~a ~a~%%" (aref *r2* 0 0) (aref *r2* 1 1) (linalg:sum *r2*))
+				(defparameter *r3* (linalg:add *a* *row*))
+				(linalg::%%la-scale *r3* 2)
+				(format t "scale-result ~a~%%" (linalg:sum *r3*))
+				(defparameter *r4* (linalg:add *v* *one*))
+				(vec:scale-into *r4* *r4* 0.5)
+				(format t "into-result ~a~%%" (vec:sum *r4*))
+				(format t "chain ~a~%%" (linalg:sum (linalg:add (linalg:add *a* *row*) *row*)))
+				(format t "transpose ~a~%%" (linalg:sum (linalg:transpose (linalg:add *a* *row*) '(1 0))))
+				"""
+			.formatted(n + 1, type, side, side, side + 1, type, side, n + 1, type, type, side, file, n, type, file);
+	}
+
+	@Test
+	void everyEnumeratedReaderMaterializesTheDeviceResult() throws java.io.IOException {
+		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		java.nio.file.Path file = java.nio.file.Files.createTempFile("lazy", ".bin");
+		String program = residencyReaders(side, option(), file.toString());
+		String oracle = output(program, false, false);
+		assertThat(oracle).contains("aref ").contains("write-sequence ").contains("transpose ");
+		assertThat(output(program, true, false)).as("--gpu").isEqualTo(oracle);
+		// The --simd leg against a --simd oracle: the lane sum's own fold order is on
+		// both sides, and the device is the only variable.
+		assertThat(output(program, true, true)).as("--gpu --simd").isEqualTo(output(program, false, true));
+	}
+
+	@Test
+	void aDeviceResultStaysOnTheDeviceUntilTheHostFirstReadsIt() {
+		assumeThat(am.ik.gpu.GpuThresholds.dirtyCount()).as("lazy results are the CUDA backend's")
+			.isGreaterThanOrEqualTo(0);
+		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		String program = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
+				(linalg:add *a* *row*)
+				""".formatted(side * side + 1, option(), side, side, side + 1, option(), side);
+		int dirty = am.ik.gpu.GpuThresholds.dirtyCount();
+		LispVal result = eval(program, true);
+		// The value came back as a packed array whose storage the device still holds:
+		// one more dirty copy, and zeros on the host ...
+		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty + 1);
+		Object storage = result instanceof LispSingleFloatArray f ? f.storage()
+				: ((LispDoubleFloatArray) result).storage();
+		assertThat(storage instanceof float[] f ? f[5] : ((double[]) storage)[5]).isZero();
+		// ... until the first read through the accessor brings it home, once.
+		double[] elements = elements(result);
+		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty);
+		assertThat(elements[5]).isEqualTo(6 + 6);
+		assertThat(elements[side + 3]).isEqualTo(side + 4 + 4);
+		assertThat(elements(result)[5]).isEqualTo(12);
+	}
+
+	/**
+	 * The resident tier over both backends' interceptors: the equal-shape binary ops, the
+	 * scalar forms, the comparison masks, sqrt / abs / negative / sign, where and the
+	 * Adam update, each over an operand the device holds ({@code *r*}, a device result)
+	 * and each bit-identical to the CPU kernel it replaces.
+	 */
+	private static String residentTier(int side, String type) {
+		int n = side * side;
+		return """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
+				(defparameter *r* (linalg:add *a* *row*))
+				(defparameter *b* (linalg:reshape (linalg:linspace 0.5 9.5 %d%s) '(%d %d)))
+				(defun s (x) (linalg:sum x))
+				(format t "equal ~a ~a ~a ~a ~a ~a~%%" (s (linalg:add *r* *b*)) (s (linalg:sub *b* *r*)) (s (linalg:mul *r* *b*))
+				        (s (linalg:div *b* *r*)) (s (linalg:maximum *r* *b*)) (s (linalg:minimum *b* *r*)))
+				(format t "compare ~a ~a ~a ~a ~a~%%" (s (linalg:greater *r* *b*)) (s (linalg:greater-equal *b* *r*))
+				        (s (linalg:less *r* *b*)) (s (linalg:less-equal *b* *r*)) (s (linalg:equal *r* *r*)))
+				(format t "scalar ~a ~a ~a ~a ~a~%%" (s (linalg:mul *r* 0.3)) (s (linalg:div *r* 7)) (s (linalg:sub 2.5 *r*))
+				        (s (linalg:div 1 *r*)) (s (linalg:greater *r* 100)))
+				(format t "unary ~a ~a ~a ~a~%%" (s (linalg:sqrt *r*)) (s (linalg:abs (linalg:sub 100 *r*)))
+				        (s (linalg:negative *r*)) (s (linalg:sign (linalg:sub *r* 50))))
+				(format t "where ~a ~a~%%" (s (linalg:where (linalg:greater *row* 3) *r* -1.5)) (s (linalg:where *r* 2.0 *b*)))
+				(defparameter *g* (linalg:mul *r* 0.01))
+				(defparameter *x* (linalg:reshape (linalg:linspace -1.0 1.0 %d%s) '(%d %d)))
+				(defparameter *m* (linalg:zeros '(%d %d)%s))
+				(defparameter *v* (linalg:zeros '(%d %d)%s))
+				(linalg::%%la-adam-step *x* *g* *m* *v* #d(0.01 0.001 0.1 0.9 0.1 0.999 0.001 0.00000001 0.1 0.001 2.0))
+				(linalg::%%la-adam-step *x* *g* *m* *v* #d(0.01 0.001 0.1 0.9 0.1 0.999 0.001 0.00000001 0.19 0.001999 1.0))
+				(format t "adam ~a ~a ~a~%%" (s *x*) (s *m*) (s *v*))
+				(format t "chain ~a~%%" (s (linalg:div (linalg:sub (linalg:mul *r* 2) *b*) (linalg:add *b* 0.5))))
+				(format t "reshape ~a ~a~%%" (s (linalg:mul (linalg:reshape *r* (list (* %d 2) (/ %d 2))) 1.5))
+				        (linalg:to-list (linalg:slice (linalg:reshape *r* (list (* %d 2) (/ %d 2))) '((1 3) (3 7)))))
+				(format t "transpose ~a~%%" (linalg:to-list (linalg:slice (linalg:transpose *r*) '((2 4) (0 3)))))
+				(format t "slice ~a ~a~%%" (s (linalg:slice *r* '((1 %d 3) (5 nil 2))))
+				        (linalg:to-list (linalg:slice *r* '((10 2 -4) (7 1 -3)))))
+				(format t "cat ~a ~a~%%" (s (linalg:concatenate (list *r* *b* *r*) :axis 0))
+				        (linalg:to-list (linalg:slice (linalg:concatenate (list *b* *r*) :axis 1) (list '(3 4) (list (- %d 2) (+ %d 2))))))
+				(defparameter *g2* (linalg:mul *r* 0.5))
+				(linalg::%%la-scale *g2* 0.125)
+				(format t "scale ~a ~a~%%" (s *g2*) (aref *g2* 2 3))
+				"""
+			.formatted(n + 1, type, side, side, side + 1, type, side, n, type, side, side, n, type, side, side, side,
+					side, type, side, side, type, side, side, side, side, side, side, side);
+	}
+
+	@Test
+	void theResidentTierRunsOverAResidentOperandAndLandsOnTheCpuKernelsBits() {
+		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		String program = residentTier(side, option());
+		String oracle = output(program, false, false);
+		assertThat(oracle).contains("equal ").contains("adam ").contains("chain ");
+		long hits = am.ik.gpu.GpuThresholds.residencyHits();
+		assertThat(output(program, true, false)).as("--gpu").isEqualTo(oracle);
+		// The dead-flag guard: every member above read a RESIDENT operand on the device,
+		// and the cache counted each as a hit. Thirty-odd members; the bound is loose.
+		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits + 20);
+		assertThat(output(program, true, true)).as("--gpu --simd").isEqualTo(output(program, false, true));
+	}
+
+	@Test
+	void theResidentTierDeclinesWithoutAResidentOperandAndTheCpuRunsUnchanged() {
+		// The same members over operands the device has never seen: every one declines
+		// (a round trip cannot beat the lane loop, .kb/gpu.md), the cache counts no hit,
+		// and the program prints what it prints without the flag. linspace and arange
+		// allocate on the host and are not members.
+		String program = """
+				(defparameter *a* (linalg:linspace 0.5 9.5 %d%s))
+				(defparameter *b* (linalg:linspace 0.1 3.1 %d%s))
+				(list (linalg:sum (linalg:add *a* *b*)) (linalg:sum (linalg:mul *a* 0.3)) (linalg:sum (linalg:sqrt *a*))
+				      (linalg:sum (linalg:where (linalg:greater *a* 5) *b* 0.0)) (linalg:sum (linalg:greater *a* *b*)))
+				""".formatted(MAP_N, option(), MAP_N, option());
+		long hits = am.ik.gpu.GpuThresholds.residencyHits();
+		assertMatchesScalarOracle(program);
+		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isEqualTo(hits);
 	}
 
 }

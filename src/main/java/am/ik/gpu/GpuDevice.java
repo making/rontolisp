@@ -115,13 +115,99 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean gemvF(float[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols);
 
 	/**
-	 * A host array this device may hold a resident copy of has been written, so that copy
-	 * is stale. Both halves keep such copies ({@link DeviceResidency}: a CUDA buffer on
-	 * one, a pooled {@code MTLBuffer} on the other), and every in-place write on either
-	 * interceptor reaches here through {@link Gpu#written}.
-	 * @param host the host array that was written
+	 * {@code c[i] = op(a[i], b[i])} over two operands of the SAME shape -- the resident
+	 * tier ({@code .todo/491}): offered by {@link Gpu} only once an operand is resident,
+	 * because as a round trip the CPU's lane loop wins. Bit-identical to it.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean zip(int op, double[] a, int oa, double[] b, int ob, double[] c, int oc, int n);
+
+	boolean zipF(int op, float[] a, int oa, float[] b, int ob, float[] c, int oc, int n);
+
+	/**
+	 * {@code c[i] = op(a[i], s)}, or {@code op(s, a[i])} when {@code swap}, over a double
+	 * scalar -- the resident tier's array-with-scalar form. Bit-identical to the CPU's.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean scale(int op, double[] a, int oa, double s, boolean swap, double[] c, int oc, int n);
+
+	boolean scaleF(int op, float[] a, int oa, double s, boolean swap, float[] c, int oc, int n);
+
+	/**
+	 * {@code c = where(m, x, y)} over three operands broadcast to {@code dims}, any of
+	 * which may be a scalar (a {@code null} array and its double); the mask is a
+	 * {@code double[]} / {@code float[]} of either width, or {@code null} for a scalar.
+	 * The resident tier's three-way select. Bit-identical to the CPU's.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean where(@org.jspecify.annotations.Nullable Object m, int om, int[] sm, double ms,
+			double @org.jspecify.annotations.Nullable [] x, int ox, int[] sx, double xs,
+			double @org.jspecify.annotations.Nullable [] y, int oy, int[] sy, double ys, double[] c, int oc,
+			int[] dims);
+
+	boolean whereF(@org.jspecify.annotations.Nullable Object m, int om, int[] sm, double ms,
+			float @org.jspecify.annotations.Nullable [] x, int ox, int[] sx, double xs,
+			float @org.jspecify.annotations.Nullable [] y, int oy, int[] sy, double ys, float[] c, int oc, int[] dims);
+
+	/**
+	 * The strided copy {@code c[oc + sc.i] = a[oa + sa.i]} over {@code dims} -- reshape,
+	 * the rank-2 transpose, a slice, a slab of a concatenation -- over a resident operand
+	 * only. {@code spanOa / spanNa} and {@code spanOc / spanNc} are each array's whole
+	 * data part (element offset and count), which is the span residency keys on.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean copy(double[] a, int oa, int[] sa, int spanOa, int spanNa, double[] c, int oc, int[] sc, int spanOc,
+			int spanNc, int[] dims);
+
+	boolean copyF(float[] a, int oa, int[] sa, int spanOa, int spanNa, float[] c, int oc, int[] sc, int spanOc,
+			int spanNc, int[] dims);
+
+	/**
+	 * Adam's fused update IN PLACE over the parameter, its gradient and the two moments
+	 * -- the resident tier's one writing member, which leaves the three written arrays
+	 * resident. Bit-identical to the CPU's.
+	 * @return {@code true} when the update ran
+	 */
+	boolean adamStep(double[] x, int ox, double[] g, int og, double[] m, int om, double[] v, int ov, int n,
+			double[] rule);
+
+	boolean adamStepF(float[] x, int ox, float[] g, int og, float[] m, int om, float[] v, int ov, int n, double[] rule);
+
+	/**
+	 * A host array this device may hold a resident copy of is about to be written, so
+	 * that copy is stale -- and, if it was the authoritative one ({@link #lazyResults}),
+	 * it is brought home first. Both halves keep such copies ({@link DeviceResidency}: a
+	 * CUDA buffer on one, a pooled {@code MTLBuffer} on the other), and every in-place
+	 * write on either interceptor reaches here through {@link Gpu#written}.
+	 * @param host the host array that is being written
 	 */
 	void written(Object host);
+
+	/**
+	 * A host array is about to be READ: if the device holds its only bytes (a result left
+	 * there under {@link #lazyResults}), they come home now. Every host read of
+	 * packed-array storage on either interceptor reaches here through
+	 * {@link Gpu#materialize}. On a backend that keeps no lazy results this is a no-op.
+	 * @param host the host array about to be read
+	 */
+	void materialize(Object host);
+
+	/**
+	 * Whether a copy of {@code host} is resident, at any span -- the question the
+	 * resident tier asks before offering a member whose CPU twin is a lane loop.
+	 * @param host the host array
+	 * @return {@code true} when a device buffer holds a copy of it
+	 */
+	boolean resident(Object host);
+
+	/**
+	 * Whether a member's result STAYS on the device until the host first reads it, rather
+	 * than being downloaded before the call returns. A backend may decline the mode and
+	 * keep downloading -- Metal does, where unified memory makes the copy a memcpy -- and
+	 * {@link #materialize} is then a no-op.
+	 * @param on whether to keep results on the device
+	 */
+	void lazyResults(boolean on);
 
 	/**
 	 * Bytes held by resident copies right now.

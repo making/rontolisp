@@ -47,6 +47,20 @@ import org.jspecify.annotations.Nullable;
  * size thresholds are higher and it does not take the {@linkplain #fold axis fold} at
  * all. {@code .kb/gpu.md} has the measurements behind each of those.
  *
+ * <h2>Residency, and results that stay</h2>
+ *
+ * Every member keeps a copy of each operand and result on the device, keyed by the host
+ * array's identity, so a chain of members uploads each array once; {@link #written} is
+ * the caller's side of that contract. Since {@code .todo/491} a caller may also ask for
+ * LAZY results ({@link #lazyResults}): a result then stays on the device and its host
+ * array is filled only when the caller says the host is about to read it
+ * ({@link #materialize}) -- the mode the rontolisp interceptors run in, having enumerated
+ * every host read -- and the members whose CPU twin is a lane loop, which no round trip
+ * could win, are offered over a resident operand ({@link #zip}, {@link #scale},
+ * {@link #where}, {@link #adamStep}, the {@link #MAP_SQRT} maps). Off, which is the
+ * default, every method below fills its {@code out} before it returns, as its javadoc
+ * says.
+ *
  * <h2>Offsets, because the arrays have headers</h2>
  *
  * Every operand -- the result included -- takes an element offset. rontolisp's compiled
@@ -229,9 +243,24 @@ public final class Gpu {
 			MAP_ACOS = 7, MAP_ATAN = 8, MAP_SINH = 9, MAP_COSH = 10, MAP_ERF = 11;
 
 	/**
+	 * The four maps the element-wise tier REFUSED as a round trip and takes since
+	 * {@code .todo/491} over a RESIDENT operand only (the resident tier): one machine
+	 * instruction each, so no size makes the trip pay, and no trip is paid when the
+	 * operand is already there. Each computes in double and narrows on the store, so
+	 * unlike the twelve above they are BIT-IDENTICAL to the CPU kernels.
+	 */
+	public static final int MAP_SQRT = 12, MAP_ABS = 13, MAP_NEGATIVE = 14, MAP_SIGN = 15;
+
+	/**
+	 * How many op codes {@link #map} takes at the SIZE threshold -- the twelve libm
+	 * members; an op at or past this is offered over a resident operand only.
+	 */
+	public static final int MAP_LIBM_OPS = 12;
+
+	/**
 	 * How many op codes {@link #map} knows; an op outside {@code [0, MAP_OPS)} declines.
 	 */
-	public static final int MAP_OPS = 12;
+	public static final int MAP_OPS = 16;
 
 	/**
 	 * The op codes {@link #bcast} takes, mirrored by the {@code bin_op} switch in
@@ -254,10 +283,17 @@ public final class Gpu {
 	public static final int BIN_ADD = 0, BIN_SUB = 1, BIN_MUL = 2, BIN_DIV = 3, BIN_MAX = 4, BIN_MIN = 5;
 
 	/**
-	 * How many op codes {@link #bcast} knows; an op outside {@code [0, BIN_OPS)}
-	 * declines.
+	 * The five comparison masks -- {@code 1.0} where the relation holds, else {@code 0.0}
+	 * -- which {@link #bcast}, {@link #zip} and {@link #scale} all take:
+	 * {@code linalg:greater} and its siblings, the dropout mask's compare among them.
 	 */
-	public static final int BIN_OPS = 6;
+	public static final int BIN_GT = 6, BIN_GE = 7, BIN_LT = 8, BIN_LE = 9, BIN_EQ = 10;
+
+	/**
+	 * How many op codes {@link #bcast}, {@link #zip} and {@link #scale} know; an op
+	 * outside {@code [0, BIN_OPS)} declines.
+	 */
+	public static final int BIN_OPS = 11;
 
 	/**
 	 * The op codes {@link #fold} takes, mirrored by the {@code fold} switch in
@@ -531,6 +567,63 @@ public final class Gpu {
 	}
 
 	/**
+	 * Tells the library that a host array is about to be READ on the host, so that if the
+	 * device holds the only copy of its bytes -- a result left there under
+	 * {@link #lazyResults}, or an array a device member updated in place -- they come
+	 * home first. With lazy results off this never has anything to do; with them on, the
+	 * interceptors call it from every host read of packed-array storage, and the
+	 * enumeration of those readers is in {@code .kb/gpu.md} beside the writers'.
+	 *
+	 * <p>
+	 * As cheap as {@link #written} when it does not matter: a volatile read on a process
+	 * with no device or nothing lazy, one identity compare for a loop that reads one
+	 * array, and the download only when the array is the one the device holds. It is also
+	 * the ONE operation here that cannot decline: when the host has no other copy of the
+	 * bytes, a download the driver refuses is an {@link IllegalStateException} rather
+	 * than a silent fallback, because silence there would be a wrong answer.
+	 * @param hostArray the {@code double[]} or {@code float[]} about to be read
+	 */
+	public static void materialize(Object hostArray) {
+		GpuDevice device = probed;
+		if (device != null) {
+			device.materialize(hostArray);
+		}
+	}
+
+	/**
+	 * Whether the device holds a copy of {@code hostArray} -- the question the resident
+	 * tier's members ask before they are offered at all, and the reason an interceptor
+	 * may offer a member below the size threshold: an operand that is already there pays
+	 * no trip. Never runs the probe and never touches the driver.
+	 * @param hostArray the {@code double[]} or {@code float[]}
+	 * @return {@code true} when a device copy of it is resident
+	 */
+	public static boolean resident(Object hostArray) {
+		GpuDevice device = probed;
+		return device != null && device.resident(hostArray);
+	}
+
+	/**
+	 * Switches LAZY results on or off for this process. On, a member's result stays on
+	 * the device -- its host array is NOT filled when the call returns -- until the host
+	 * first reads it through {@link #materialize}, or never; an array a device member
+	 * updates in place ({@link #adamStep}, {@link #rngFill}) likewise. That is what lets
+	 * a chain of members {@code matmul -> div -> where -> softmax -> matmul} move nothing
+	 * over the link, and it is the mode the interceptors run in, having enumerated every
+	 * host read ({@code .kb/gpu.md}, "A result comes home on first host touch"). Off --
+	 * the default, and the contract every method's javadoc states -- a result is in its
+	 * array when the call returns. Switching off brings every lazy result home first. A
+	 * backend may decline the mode and keep downloading (Metal does).
+	 * @param on whether results stay on the device until the host first reads them
+	 */
+	public static void lazyResults(boolean on) {
+		GpuDevice device = Probe.DEVICE;
+		if (device != null) {
+			device.lazyResults(on);
+		}
+	}
+
+	/**
 	 * Bytes held by resident copies right now, or {@code 0}. Package-private and for the
 	 * tests, which assert the cache is bounded and that a release empties it.
 	 * @return the resident total, in bytes
@@ -653,6 +746,7 @@ public final class Gpu {
 			int m, int p) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null && offered(a.length, offsetA, b.length, offsetB, out.length, offsetOut, n, m, p)
+				&& worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)
 				&& device.gemm(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
 	}
 
@@ -675,6 +769,7 @@ public final class Gpu {
 			int m, int p) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null && offered(a.length, offsetA, b.length, offsetB, out.length, offsetOut, n, m, p)
+				&& worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)
 				&& device.gemmF(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
 	}
 
@@ -715,8 +810,10 @@ public final class Gpu {
 	public static boolean multiply(double[] a, int offsetA, int strideA, double[] b, int offsetB, int strideB,
 			double[] out, int offsetOut, int batch, int n, int m, int p) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut,
-				batch, n, m, p)
+		return device != null
+				&& offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, batch, n, m,
+						p)
+				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b)
 				&& device.gemm(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
 	}
 
@@ -741,8 +838,10 @@ public final class Gpu {
 	public static boolean multiply(float[] a, int offsetA, int strideA, float[] b, int offsetB, int strideB,
 			float[] out, int offsetOut, int batch, int n, int m, int p) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut,
-				batch, n, m, p)
+		return device != null
+				&& offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, batch, n, m,
+						p)
+				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b)
 				&& device.gemmF(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
 	}
 
@@ -759,7 +858,8 @@ public final class Gpu {
 	 * @return a fresh {@code n * p} array, or {@code null} when this call declines
 	 */
 	public static double @Nullable [] multiply(double[] a, int offsetA, double[] b, int offsetB, int n, int m, int p) {
-		if (Probe.DEVICE == null || !offered(a.length, offsetA, b.length, offsetB, (long) n * p, 0, n, m, p)) {
+		if (Probe.DEVICE == null || !offered(a.length, offsetA, b.length, offsetB, (long) n * p, 0, n, m, p)
+				|| !worthOrResident(Probe.DEVICE, (long) n * m * p, Probe.MIN_WORK, a, b)) {
 			return null;
 		}
 		double[] out = new double[n * p];
@@ -779,7 +879,8 @@ public final class Gpu {
 	 * @return a fresh {@code n * p} array, or {@code null} when this call declines
 	 */
 	public static float @Nullable [] multiply(float[] a, int offsetA, float[] b, int offsetB, int n, int m, int p) {
-		if (Probe.DEVICE == null || !offered(a.length, offsetA, b.length, offsetB, (long) n * p, 0, n, m, p)) {
+		if (Probe.DEVICE == null || !offered(a.length, offsetA, b.length, offsetB, (long) n * p, 0, n, m, p)
+				|| !worthOrResident(Probe.DEVICE, (long) n * m * p, Probe.MIN_WORK, a, b)) {
 			return null;
 		}
 		float[] out = new float[n * p];
@@ -834,7 +935,7 @@ public final class Gpu {
 	public static boolean map(int op, double[] a, int offsetA, double[] out, int offsetOut, int n) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
-				&& device.map(op, a, offsetA, out, offsetOut, n);
+				&& worthMapOrResident(device, op, n, a) && device.map(op, a, offsetA, out, offsetOut, n);
 	}
 
 	/**
@@ -852,7 +953,28 @@ public final class Gpu {
 	public static boolean map(int op, float[] a, int offsetA, float[] out, int offsetOut, int n) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
-				&& device.mapF(op, a, offsetA, out, offsetOut, n);
+				&& worthMapOrResident(device, op, n, a) && device.mapF(op, a, offsetA, out, offsetOut, n);
+	}
+
+	/**
+	 * The map's policy: a libm member at or above the size threshold, or ANY member over
+	 * a resident operand -- there is no trip to pay for then, and a result that stays
+	 * resident saves the next one.
+	 */
+	private static boolean worthMapOrResident(GpuDevice device, int op, long n, Object a) {
+		return (op < MAP_LIBM_OPS && n >= Probe.MAP_MIN_ELEMENTS) || device.resident(a);
+	}
+
+	/**
+	 * The policy every size-thresholded member shares since {@code .todo/491}: big enough
+	 * for the threshold in force, or an operand already resident.
+	 */
+	private static boolean worthOrResident(GpuDevice device, long work, long threshold, Object a, Object b) {
+		return work >= threshold || device.resident(a) || device.resident(b);
+	}
+
+	private static boolean worthOrResident(GpuDevice device, long work, long threshold, Object a) {
+		return work >= threshold || device.resident(a);
 	}
 
 	/**
@@ -909,6 +1031,7 @@ public final class Gpu {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
 				&& offeredBcast(op, a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, dims)
+				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a, b)
 				&& device.bcast(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
 	}
 
@@ -935,6 +1058,7 @@ public final class Gpu {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
 				&& offeredBcast(op, a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, dims)
+				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a, b)
 				&& device.bcastF(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
 	}
 
@@ -955,6 +1079,7 @@ public final class Gpu {
 	public static boolean gather(double[] a, int offsetA, int[] strideA, double[] out, int offsetOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredGather(a.length, offsetA, strideA, out.length, offsetOut, dims)
+				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a)
 				&& device.gather(a, offsetA, strideA, out, offsetOut, dims);
 	}
 
@@ -972,6 +1097,7 @@ public final class Gpu {
 	public static boolean gather(float[] a, int offsetA, int[] strideA, float[] out, int offsetOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredGather(a.length, offsetA, strideA, out.length, offsetOut, dims)
+				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a)
 				&& device.gatherF(a, offsetA, strideA, out, offsetOut, dims);
 	}
 
@@ -1004,6 +1130,7 @@ public final class Gpu {
 			int inner) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner)
+				&& worthOrResident(device, (long) outer * inner * len, Probe.FOLD_MIN_ELEMENTS, a)
 				&& device.fold(op, a, offsetA, out, offsetOut, outer, len, inner);
 	}
 
@@ -1026,6 +1153,7 @@ public final class Gpu {
 			int inner) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null && offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner)
+				&& worthOrResident(device, (long) outer * inner * len, Probe.FOLD_MIN_ELEMENTS, a)
 				&& device.foldF(op, a, offsetA, out, offsetOut, outer, len, inner);
 	}
 
@@ -1215,6 +1343,368 @@ public final class Gpu {
 				&& device.gemvF(w, offsetW, x, offsetX, y, offsetY, rows, cols);
 	}
 
+	// --- the resident tier (.todo/491) -------------------------------------------------
+	// Members whose CPU twin is a lane loop, which a round trip cannot beat at any size
+	// (the element-wise tier's measurement) and which are therefore offered ONLY over an
+	// operand that is already resident -- where there is no trip, and the result stays
+	// for the next member. Every one computes in double and narrows on the store, as the
+	// CPU kernels do, so all are bit-identical to them.
+
+	/**
+	 * {@code out[i] = op(a[i], b[i])} over two operands of the SAME shape -- the binary
+	 * members at the shape {@link #bcast} deliberately does not take. Offered only when
+	 * {@code a} or {@code b} is {@linkplain #resident resident}; otherwise declines,
+	 * whatever the size, because the caller's lane loop wins a round trip.
+	 * @param op one of the {@link #BIN_ADD} constants
+	 * @param a the left operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled (or, lazily, left resident)
+	 */
+	public static boolean zip(int op, double[] a, int offsetA, double[] b, int offsetB, double[] out, int offsetOut,
+			int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredZip(op, a.length, offsetA, b.length, offsetB, out.length, offsetOut, n)
+				&& (device.resident(a) || device.resident(b))
+				&& device.zip(op, a, offsetA, b, offsetB, out, offsetOut, n);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #zip(int, double[], int, double[], int, double[], int, int)}.
+	 * @param op one of the {@link #BIN_ADD} constants
+	 * @param a the left operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean zip(int op, float[] a, int offsetA, float[] b, int offsetB, float[] out, int offsetOut,
+			int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredZip(op, a.length, offsetA, b.length, offsetB, out.length, offsetOut, n)
+				&& (device.resident(a) || device.resident(b))
+				&& device.zipF(op, a, offsetA, b, offsetB, out, offsetOut, n);
+	}
+
+	/**
+	 * {@code out[i] = op(a[i], s)} -- or {@code op(s, a[i])} when {@code swap} -- over a
+	 * DOUBLE scalar whatever the array's width, which is the CPU kernel's contract
+	 * ({@code (float) (a[i] op s)} at {@code #f}). Offered only when {@code a} is
+	 * resident.
+	 * @param op one of the {@link #BIN_ADD} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param s the scalar
+	 * @param swap whether the scalar is the LEFT operand of {@code op}
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean scale(int op, double[] a, int offsetA, double s, boolean swap, double[] out, int offsetOut,
+			int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredZip(op, a.length, offsetA, a.length, offsetA, out.length, offsetOut, n)
+				&& device.resident(a) && device.scale(op, a, offsetA, s, swap, out, offsetOut, n);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #scale(int, double[], int, double, boolean, double[], int, int)}.
+	 * @param op one of the {@link #BIN_ADD} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param s the scalar
+	 * @param swap whether the scalar is the LEFT operand of {@code op}
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean scale(int op, float[] a, int offsetA, double s, boolean swap, float[] out, int offsetOut,
+			int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredZip(op, a.length, offsetA, a.length, offsetA, out.length, offsetOut, n)
+				&& device.resident(a) && device.scaleF(op, a, offsetA, s, swap, out, offsetOut, n);
+	}
+
+	/**
+	 * {@code out = where(m, x, y)}: the element of {@code x} where the mask is non-zero,
+	 * of {@code y} where it is zero, over three operands broadcast to {@code dims} by the
+	 * numpy rules -- {@code linalg:where}, and through it {@code torch:masked-fill}. Any
+	 * operand may be a SCALAR: a {@code null} array with its value in the double beside
+	 * it (its stride vector is then ignored). The mask is a {@code double[]} or
+	 * {@code float[]} of either width, or {@code null}; {@code x} and {@code y} share the
+	 * result's. Offered only when some array operand is resident. A select, so
+	 * bit-identical to the CPU's.
+	 * @param m the mask, or {@code null} for a scalar
+	 * @param offsetM the index of {@code m}'s first element
+	 * @param strideM {@code m}'s stride along each output axis
+	 * @param scalarM the mask's value when it is a scalar
+	 * @param x the where-true operand, or {@code null} for a scalar
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param strideX {@code x}'s stride along each output axis
+	 * @param scalarX {@code x}'s value when it is a scalar
+	 * @param y the where-false operand, or {@code null} for a scalar
+	 * @param offsetY the index of {@code y}'s first element
+	 * @param strideY {@code y}'s stride along each output axis
+	 * @param scalarY {@code y}'s value when it is a scalar
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean where(@Nullable Object m, int offsetM, int[] strideM, double scalarM, double @Nullable [] x,
+			int offsetX, int[] strideX, double scalarX, double @Nullable [] y, int offsetY, int[] strideY,
+			double scalarY, double[] out, int offsetOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredWhere(m, offsetM, strideM, x == null ? -1 : x.length, offsetX, strideX,
+						y == null ? -1 : y.length, offsetY, strideY, out.length, offsetOut, dims)
+				&& ((m != null && device.resident(m)) || (x != null && device.resident(x))
+						|| (y != null && device.resident(y)))
+				&& device.where(m, offsetM, strideM, scalarM, x, offsetX, strideX, scalarX, y, offsetY, strideY,
+						scalarY, out, offsetOut, dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #where(Object, int, int[], double, double[], int, int[], double, double[], int, int[], double, double[], int, int[])}.
+	 * @param m the mask, or {@code null} for a scalar
+	 * @param offsetM the index of {@code m}'s first element
+	 * @param strideM {@code m}'s stride along each output axis
+	 * @param scalarM the mask's value when it is a scalar
+	 * @param x the where-true operand, or {@code null} for a scalar
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param strideX {@code x}'s stride along each output axis
+	 * @param scalarX {@code x}'s value when it is a scalar
+	 * @param y the where-false operand, or {@code null} for a scalar
+	 * @param offsetY the index of {@code y}'s first element
+	 * @param strideY {@code y}'s stride along each output axis
+	 * @param scalarY {@code y}'s value when it is a scalar
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean where(@Nullable Object m, int offsetM, int[] strideM, double scalarM, float @Nullable [] x,
+			int offsetX, int[] strideX, double scalarX, float @Nullable [] y, int offsetY, int[] strideY,
+			double scalarY, float[] out, int offsetOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredWhere(m, offsetM, strideM, x == null ? -1 : x.length, offsetX, strideX,
+						y == null ? -1 : y.length, offsetY, strideY, out.length, offsetOut, dims)
+				&& ((m != null && device.resident(m)) || (x != null && device.resident(x))
+						|| (y != null && device.resident(y)))
+				&& device.whereF(m, offsetM, strideM, scalarM, x, offsetX, strideX, scalarX, y, offsetY, strideY,
+						scalarY, out, offsetOut, dims);
+	}
+
+	/**
+	 * Adam's fused update IN PLACE: {@code x}, {@code m} and {@code v} are rewritten from
+	 * {@code g} under {@code rule} = {@code [lr, lr*wd, wd, b1, 1-b1, b2, 1-b2, eps, c1,
+	 * c2, mode]} (mode 0 none, 1 coupled, 2 decoupled weight decay), exactly as
+	 * {@code linalg::%la-adam-step}'s CPU kernel spells it and in its order, so the three
+	 * land on its bits. Offered only when one of the four is resident -- and once it has
+	 * run, the three it wrote are (lazily, the authoritative copies), so a model's
+	 * weights never come home between steps.
+	 * @param x the parameter, rewritten
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param g the gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param m the first moment, rewritten
+	 * @param offsetM the index of {@code m}'s first element
+	 * @param v the second moment, rewritten
+	 * @param offsetV the index of {@code v}'s first element
+	 * @param n how many elements
+	 * @param rule the eleven-number rule
+	 * @return {@code true} when the update ran; {@code false} when it declined, in which
+	 * case nothing was written
+	 */
+	public static boolean adamStep(double[] x, int offsetX, double[] g, int offsetG, double[] m, int offsetM,
+			double[] v, int offsetV, int n, double[] rule) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredAdam(x.length, offsetX, g.length, offsetG, m.length, offsetM, v.length, offsetV, n, rule)
+				&& (device.resident(x) || device.resident(g) || device.resident(m) || device.resident(v))
+				&& device.adamStep(x, offsetX, g, offsetG, m, offsetM, v, offsetV, n, rule);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #adamStep(double[], int, double[], int, double[], int, double[], int, int, double[])}.
+	 * @param x the parameter, rewritten
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param g the gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param m the first moment, rewritten
+	 * @param offsetM the index of {@code m}'s first element
+	 * @param v the second moment, rewritten
+	 * @param offsetV the index of {@code v}'s first element
+	 * @param n how many elements
+	 * @param rule the eleven-number rule
+	 * @return {@code true} when the update ran
+	 */
+	public static boolean adamStep(float[] x, int offsetX, float[] g, int offsetG, float[] m, int offsetM, float[] v,
+			int offsetV, int n, double[] rule) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredAdam(x.length, offsetX, g.length, offsetG, m.length, offsetM, v.length, offsetV, n, rule)
+				&& (device.resident(x) || device.resident(g) || device.resident(m) || device.resident(v))
+				&& device.adamStepF(x, offsetX, g, offsetG, m, offsetM, v, offsetV, n, rule);
+	}
+
+	/**
+	 * The strided COPY {@code out[offsetOut + strideOut.i] = a[offsetA + strideA.i]} over
+	 * {@code dims}, either stride vector possibly NEGATIVE (a slice with a negative step)
+	 * -- what {@code linalg:reshape}, the rank-2 {@code transpose}, {@code slice} and
+	 * each slab of a {@code concatenate} are. Offered over a resident operand only: a
+	 * copy cannot pay for a round trip, and over an operand that is already there it is a
+	 * launch with no copy over the link, whose result stays for the next member.
+	 * {@code spanA} / {@code spanOut} name each array's WHOLE data part (element offset
+	 * and count), which is what residency keys an array on -- a slice must find the array
+	 * it was cut from, and a concatenation's later slabs the output its first slab made
+	 * resident. A pure copy, so bit-identical. Declines a walk that reaches outside
+	 * either span.
+	 * @param a the source
+	 * @param offsetA the element index the source walk starts at
+	 * @param strideA the source stride along each output axis, in elements
+	 * @param spanA {@code {offset, count}} of {@code a}'s data part
+	 * @param out the destination
+	 * @param offsetOut the element index the destination walk starts at
+	 * @param strideOut the destination stride along each output axis
+	 * @param spanOut {@code {offset, count}} of {@code out}'s data part
+	 * @param dims the walk's shape, outermost first
+	 * @return {@code true} when {@code out} was filled (or, lazily, left resident)
+	 */
+	public static boolean copy(double[] a, int offsetA, int[] strideA, int[] spanA, double[] out, int offsetOut,
+			int[] strideOut, int[] spanOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredCopy(a.length, offsetA, strideA, spanA, out.length, offsetOut, strideOut, spanOut, dims)
+				&& device.resident(a) && device.copy(a, offsetA, strideA, spanA[0], spanA[1], out, offsetOut, strideOut,
+						spanOut[0], spanOut[1], dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #copy(double[], int, int[], int[], double[], int, int[], int[], int[])}.
+	 * @param a the source
+	 * @param offsetA the element index the source walk starts at
+	 * @param strideA the source stride along each output axis, in elements
+	 * @param spanA {@code {offset, count}} of {@code a}'s data part
+	 * @param out the destination
+	 * @param offsetOut the element index the destination walk starts at
+	 * @param strideOut the destination stride along each output axis
+	 * @param spanOut {@code {offset, count}} of {@code out}'s data part
+	 * @param dims the walk's shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean copy(float[] a, int offsetA, int[] strideA, int[] spanA, float[] out, int offsetOut,
+			int[] strideOut, int[] spanOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredCopy(a.length, offsetA, strideA, spanA, out.length, offsetOut, strideOut, spanOut, dims)
+				&& device.resident(a) && device.copyF(a, offsetA, strideA, spanA[0], spanA[1], out, offsetOut,
+						strideOut, spanOut[0], spanOut[1], dims);
+	}
+
+	/**
+	 * The bounds of a strided copy: a shape it walks, both spans inside their arrays, and
+	 * both walks -- strides of either sign -- inside their spans.
+	 */
+	private static boolean offeredCopy(long lengthA, int offsetA, int[] strideA, int[] spanA, long lengthOut,
+			int offsetOut, int[] strideOut, int[] spanOut, int[] dims) {
+		long total = stridedCount(dims);
+		if (total < 0 || spanA.length != 2 || spanOut.length != 2 || strideA.length != dims.length
+				|| strideOut.length != dims.length) {
+			return false;
+		}
+		if (spanA[0] < 0 || spanA[1] < 0 || spanOut[0] < 0 || spanOut[1] < 0 || spanA[0] + (long) spanA[1] > lengthA
+				|| spanOut[0] + (long) spanOut[1] > lengthOut) {
+			return false;
+		}
+		return walkInside(offsetA, strideA, dims, spanA) && walkInside(offsetOut, strideOut, dims, spanOut);
+	}
+
+	/**
+	 * Whether a walk from {@code offset} by {@code stride} over {@code dims} stays in the
+	 * span.
+	 */
+	private static boolean walkInside(int offset, int[] stride, int[] dims, int[] span) {
+		long lo = offset, hi = offset;
+		for (int k = 0; k < dims.length; k++) {
+			long travel = (long) (dims[k] - 1) * stride[k];
+			if (travel < 0) {
+				lo += travel;
+			}
+			else {
+				hi += travel;
+			}
+		}
+		return lo >= span[0] && hi < span[0] + (long) span[1];
+	}
+
+	/**
+	 * The bounds of an equal-shape binary op or a scalar form: an op it names, inside.
+	 */
+	private static boolean offeredZip(int op, long lengthA, int offsetA, long lengthB, int offsetB, long lengthOut,
+			int offsetOut, int n) {
+		return op >= 0 && op < BIN_OPS && n > 0 && offsetA >= 0 && offsetB >= 0 && offsetOut >= 0
+				&& (long) offsetA + n <= lengthA && (long) offsetB + n <= lengthB && (long) offsetOut + n <= lengthOut;
+	}
+
+	/**
+	 * The bounds of a three-way select: a shape it walks, at least one array operand, and
+	 * every array's reachable span inside it. A length of -1 marks a scalar operand.
+	 */
+	private static boolean offeredWhere(@Nullable Object m, int offsetM, int[] strideM, long lengthX, int offsetX,
+			int[] strideX, long lengthY, int offsetY, int[] strideY, long lengthOut, int offsetOut, int[] dims) {
+		long total = stridedCount(dims);
+		if (total < 0 || offsetOut < 0 || offsetOut + total > lengthOut) {
+			return false;
+		}
+		if (m == null && lengthX < 0 && lengthY < 0) {
+			return false;
+		}
+		if (m != null) {
+			long lengthM = m instanceof double[] d ? d.length : m instanceof float[] f ? f.length : -1;
+			long spanM = stridedSpan(dims, strideM);
+			if (lengthM < 0 || spanM < 0 || offsetM < 0 || offsetM + spanM >= lengthM) {
+				return false;
+			}
+		}
+		if (lengthX >= 0) {
+			long spanX = stridedSpan(dims, strideX);
+			if (spanX < 0 || offsetX < 0 || offsetX + spanX >= lengthX) {
+				return false;
+			}
+		}
+		if (lengthY >= 0) {
+			long spanY = stridedSpan(dims, strideY);
+			if (spanY < 0 || offsetY < 0 || offsetY + spanY >= lengthY) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** The bounds of an Adam update: four spans inside their arrays and a sane rule. */
+	private static boolean offeredAdam(long lengthX, int offsetX, long lengthG, int offsetG, long lengthM, int offsetM,
+			long lengthV, int offsetV, int n, double[] rule) {
+		return n > 0 && rule.length == 11 && (rule[10] == 0.0 || rule[10] == 1.0 || rule[10] == 2.0) && offsetX >= 0
+				&& offsetG >= 0 && offsetM >= 0 && offsetV >= 0 && (long) offsetX + n <= lengthX
+				&& (long) offsetG + n <= lengthG && (long) offsetM + n <= lengthM && (long) offsetV + n <= lengthV;
+	}
+
 	/**
 	 * Whether a GEMV is one this library will attempt: above the threshold in force, a
 	 * matrix that is one Java array, and all three operands inside the arrays they were
@@ -1283,7 +1773,7 @@ public final class Gpu {
 	private static boolean offeredBcast(int op, long lengthA, int offsetA, int[] strideA, long lengthB, int offsetB,
 			int[] strideB, long lengthOut, int offsetOut, int[] dims) {
 		long total = stridedCount(dims);
-		if (op < 0 || op >= BIN_OPS || total < 0 || total < Probe.STRIDED_MIN_ELEMENTS) {
+		if (op < 0 || op >= BIN_OPS || total < 0) {
 			return false;
 		}
 		long spanA = stridedSpan(dims, strideA);
@@ -1296,7 +1786,7 @@ public final class Gpu {
 	private static boolean offeredGather(long lengthA, int offsetA, int[] strideA, long lengthOut, int offsetOut,
 			int[] dims) {
 		long total = stridedCount(dims);
-		if (total < 0 || total < Probe.STRIDED_MIN_ELEMENTS) {
+		if (total < 0) {
 			return false;
 		}
 		long spanA = stridedSpan(dims, strideA);
@@ -1316,9 +1806,8 @@ public final class Gpu {
 		}
 		long cells = (long) outer * inner;
 		long total = cells * len;
-		return cells >= FOLD_MIN_CELLS && cells <= Integer.MAX_VALUE && total <= Integer.MAX_VALUE
-				&& total >= Probe.FOLD_MIN_ELEMENTS && offsetA >= 0 && offsetOut >= 0 && offsetA + total <= lengthA
-				&& offsetOut + cells <= lengthOut;
+		return cells >= FOLD_MIN_CELLS && cells <= Integer.MAX_VALUE && total <= Integer.MAX_VALUE && offsetA >= 0
+				&& offsetOut >= 0 && offsetA + total <= lengthA && offsetOut + cells <= lengthOut;
 	}
 
 	/**
@@ -1327,8 +1816,8 @@ public final class Gpu {
 	 * the two arrays it was handed.
 	 */
 	private static boolean offeredMap(int op, long lengthA, int offsetA, long lengthOut, int offsetOut, int n) {
-		return op >= 0 && op < MAP_OPS && n > 0 && n >= Probe.MAP_MIN_ELEMENTS && offsetA >= 0 && offsetOut >= 0
-				&& (long) offsetA + n <= lengthA && (long) offsetOut + n <= lengthOut;
+		return op >= 0 && op < MAP_OPS && n > 0 && offsetA >= 0 && offsetOut >= 0 && (long) offsetA + n <= lengthA
+				&& (long) offsetOut + n <= lengthOut;
 	}
 
 	/**
@@ -1358,9 +1847,9 @@ public final class Gpu {
 	 */
 	private static boolean offered(long lengthA, int offsetA, int strideA, long lengthB, int offsetB, int strideB,
 			long lengthOut, int offsetOut, int batch, int n, int m, int p) {
-		return batch > 0 && n > 0 && m > 0 && p > 0 && (long) batch * n * m * p >= Probe.MIN_WORK
-				&& CudaGemm.launchable(batch, n, m, p) && offsetA >= 0 && offsetB >= 0 && offsetOut >= 0 && strideA >= 0
-				&& strideB >= 0 && (long) offsetA + (long) (batch - 1) * strideA + (long) n * m <= lengthA
+		return batch > 0 && n > 0 && m > 0 && p > 0 && CudaGemm.launchable(batch, n, m, p) && offsetA >= 0
+				&& offsetB >= 0 && offsetOut >= 0 && strideA >= 0 && strideB >= 0
+				&& (long) offsetA + (long) (batch - 1) * strideA + (long) n * m <= lengthA
 				&& (long) offsetB + (long) (batch - 1) * strideB + (long) m * p <= lengthB
 				&& (long) offsetOut + (long) batch * n * p <= lengthOut;
 	}

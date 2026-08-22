@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import am.ik.rontolisp.FloatArrayWriteHook;
+import am.ik.rontolisp.FloatArrayAccessHook;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
@@ -1078,7 +1078,7 @@ public final class LinalgSimd {
 	}
 
 	/** A proper list of small integers (negative allowed), or {@code null}. */
-	private static int @Nullable [] ints(LispVal value) {
+	static int @Nullable [] ints(LispVal value) {
 		List<Integer> out = new ArrayList<>();
 		LispVal cursor = value;
 		while (cursor instanceof LispCons cons) {
@@ -1275,7 +1275,7 @@ public final class LinalgSimd {
 		return total >= 0 && total <= Integer.MAX_VALUE - 8;
 	}
 
-	private static @Nullable Integer smallInt(LispVal value) {
+	static @Nullable Integer smallInt(LispVal value) {
 		return value instanceof LispInteger i && i.value() >= Integer.MIN_VALUE && i.value() <= Integer.MAX_VALUE
 				? (int) i.value() : null;
 	}
@@ -1310,7 +1310,7 @@ public final class LinalgSimd {
 	/**
 	 * A {@code make-array} shape designator: an integer, or a proper list of integers.
 	 */
-	private static int @Nullable [] shape(LispVal value) {
+	static int @Nullable [] shape(LispVal value) {
 		if (value instanceof LispInteger n) {
 			return n.value() >= 0 && n.value() <= Integer.MAX_VALUE ? new int[] { (int) n.value() } : null;
 		}
@@ -1429,12 +1429,12 @@ public final class LinalgSimd {
 	/**
 	 * Reports that the given packed storage arrays were written in place, for whatever
 	 * flag keeps a copy of them elsewhere -- {@code --gpu}'s device residency
-	 * ({@code FloatArrayWriteHook}). The four in-place members here bypass the element
+	 * ({@code FloatArrayAccessHook}). The four in-place members here bypass the element
 	 * setter that reports for every other write, so they report themselves.
 	 */
 	private static void written(Object... data) {
 		for (Object array : data) {
-			FloatArrayWriteHook.written(array);
+			FloatArrayAccessHook.written(array);
 		}
 	}
 

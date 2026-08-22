@@ -1024,6 +1024,8 @@ final class JvmTypedLoopCompiler {
 
 		private final @Nullable MethodrefConstant written;
 
+		private final @Nullable MethodrefConstant materialize;
+
 		Emitter(Analysis an, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 			this.an = an;
 			this.cons = cons;
@@ -1033,6 +1035,7 @@ final class JvmTypedLoopCompiler {
 			this.doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D"));
 			Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 			this.written = gpuOps == null ? null : gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN);
+			this.materialize = gpuOps == null ? null : gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE);
 		}
 
 		boolean emit() {
@@ -1223,10 +1226,21 @@ final class JvmTypedLoopCompiler {
 			this.ctx.emit(v.slot);
 		}
 
-		/** Casts every array into its typed slot and reads its header once. */
+		/**
+		 * Casts every array into its typed slot and reads its header once. The arrays are
+		 * loop-invariant, so under {@code --gpu} this is also where each is materialized
+		 * -- the raw {@code faload}s in the body read the host's bytes, which must be the
+		 * device's first ({@code .kb/gpu.md}).
+		 */
 		private void hoistArrays(List<Var> arrays) {
 			ClassConstant cls = this.single ? this.floatArrayClass : this.doubleArrayClass;
 			for (Var v : arrays) {
+				if (this.materialize != null) {
+					this.ctx.emit(Opcode.ALOAD);
+					this.ctx.emit(v.refSlot);
+					this.ctx.emit(Opcode.INVOKESTATIC);
+					this.ctx.emitU2(this.materialize.index());
+				}
 				this.ctx.emit(Opcode.ALOAD);
 				this.ctx.emit(v.refSlot);
 				this.ctx.emit(Opcode.CHECKCAST);
@@ -1508,6 +1522,14 @@ final class JvmTypedLoopCompiler {
 		}
 
 		private void aset(Aset a, boolean valueNeeded) {
+			if (this.written != null) {
+				// --gpu, BEFORE the store: the array may have a resident device copy
+				// (materialized at loop entry, so it is clean by now); it is stale now.
+				this.ctx.emit(Opcode.ALOAD);
+				this.ctx.emit(a.arr().slot);
+				this.ctx.emit(Opcode.INVOKESTATIC);
+				this.ctx.emitU2(this.written.index());
+			}
 			arrayIndex(a.arr(), a.idx());
 			exprAsDouble(a.value());
 			int tmp = -1;
@@ -1523,13 +1545,6 @@ final class JvmTypedLoopCompiler {
 			}
 			else {
 				this.ctx.emit(Opcode.DASTORE);
-			}
-			if (this.written != null) {
-				// --gpu: the array may have a resident device copy; it is stale now.
-				this.ctx.emit(Opcode.ALOAD);
-				this.ctx.emit(a.arr().slot);
-				this.ctx.emit(Opcode.INVOKESTATIC);
-				this.ctx.emitU2(this.written.index());
 			}
 			if (valueNeeded) {
 				// the value of a store is the value AS STORED (narrowed for single)

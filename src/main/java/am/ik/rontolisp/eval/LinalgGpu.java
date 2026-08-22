@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
-import am.ik.rontolisp.FloatArrayWriteHook;
+import am.ik.rontolisp.FloatArrayAccessHook;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -152,12 +152,7 @@ public final class LinalgGpu {
 	 * @param evaluator the evaluator used to apply the captured binding on decline
 	 */
 	public static void install(Environment globalEnv, LispEvaluator evaluator) {
-		// Device residency: the members below keep a copy of each operand and result on
-		// the device, keyed by the identity of the packed array's storage, and the host
-		// array stays authoritative -- so every in-place write to one has to reach the
-		// library. The element setters and the in-place --simd kernels report through
-		// this hook (.kb/gpu.md, "The residency design").
-		FloatArrayWriteHook.install(LinalgGpuKernels::written);
+		hooks();
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_DOT, 2, LinalgGpu::dot);
 		// The stacked product behind linalg:matmul at rank >= 3. A %-prefixed member is
 		// an internal symbol, whose canonical qualified spelling carries the double colon
@@ -172,14 +167,20 @@ public final class LinalgGpu {
 			int op = member.getValue();
 			define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + member.getKey(), 1, args -> map(op, args));
 		}
-		// The STRIDED tier: the three shapes whose CPU twin is a scalar ODOMETER walk.
-		// The binary ops are the same names the element-wise tier refuses -- and this is
-		// not a reversal of that refusal: it declines an EQUAL-shaped pair, where the CPU
-		// runs a lane loop, and takes only a genuine BROADCAST (see bcast).
+		// The binary members, at three shapes: a BROADCAST pair (the strided tier, whose
+		// CPU twin is a scalar odometer walk, taken from the size threshold), and -- the
+		// resident tier -- an EQUAL-shaped pair or an array with a scalar, whose CPU twin
+		// is a lane loop a round trip cannot beat, taken only over a RESIDENT operand
+		// (see bcast). The five comparison masks are the same three shapes.
 		for (Map.Entry<String, Integer> member : BIN_MEMBERS.entrySet()) {
 			int op = member.getValue();
 			define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + member.getKey(), 2, args -> bcast(op, args));
 		}
+		// The rest of the resident tier: the three-way select behind torch:masked-fill
+		// and
+		// the fused Adam update, both over resident operands only.
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_WHERE, 3, LinalgGpu::where);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_ADAM_STEP, 5, LinalgGpu::adamStep);
 		// The axis folds and the axes transpose live at the EXTENDED call shapes, so
 		// their
 		// arity is a range: `(linalg:sum a :axis 0 :keepdims t)` is five arguments and
@@ -190,8 +191,18 @@ public final class LinalgGpu {
 			define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + member.getKey(), 3, 5,
 					args -> foldAxis(op, args));
 		}
-		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_TRANSPOSE, 2, 2,
-				LinalgGpu::transposeAxes);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_TRANSPOSE, 1, 2,
+				LinalgGpu::transpose);
+		// The COPY members of the resident tier: reshape, the rank-2 transpose (above, at
+		// arity 1), slice's strided gather, concatenate and the in-place clip scale --
+		// each a copy the CPU would have had to download the operand for, and each a
+		// launch over a resident one.
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_RESHAPE, 2, LinalgGpu::reshape);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_GATHER_STRIDED, 5,
+				LinalgGpu::gatherStrided);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_CONCATENATE, 1, 3,
+				LinalgGpu::concatenate);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SCALE, 2, LinalgGpu::scaleInPlace);
 		// The seeded generator's fill (linalg:rand / randn / uniform): no operand goes
 		// up, the draws come back, and the closed-form jump makes it bit-identical to
 		// the sequential walk -- the one member here whose result is byte-for-byte the
@@ -214,8 +225,25 @@ public final class LinalgGpu {
 	 * @param evaluator the evaluator used to apply the captured binding on decline
 	 */
 	public static void installVec(Environment globalEnv, LispEvaluator evaluator) {
-		FloatArrayWriteHook.install(LinalgGpuKernels::written);
+		hooks();
 		define(globalEnv, evaluator, LispNames.VEC_PKG + ":" + LispNames.VEC_MATVEC, 2, LinalgGpu::matvec);
+	}
+
+	/**
+	 * Device residency, and its lazy results: the members keep a copy of each operand and
+	 * result on the device, keyed by the identity of the packed array's storage, and
+	 * since {@code .todo/491} a RESULT stays there until the host first reads it. So
+	 * every in-place write to a packed array has to reach the library before it happens,
+	 * and every host read has to let the library bring the bytes home first. Both go
+	 * through {@link FloatArrayAccessHook}: the records' element setter and the in-place
+	 * {@code --simd} kernels report writes, and the records' {@code data()} accessor --
+	 * the one way to a packed array's storage on this backend -- reports reads
+	 * ({@code .kb/gpu.md}, "A result comes home on first host touch"). The interceptor
+	 * itself hands the device {@code storage()}, which does not.
+	 */
+	private static void hooks() {
+		FloatArrayAccessHook.install(LinalgGpuKernels::written, LinalgGpuKernels::materialize);
+		LinalgGpuKernels.lazyResults();
 	}
 
 	/**
@@ -241,11 +269,11 @@ public final class LinalgGpu {
 		}
 		int[] dims = { rows };
 		if (w instanceof LispSingleFloatArray single) {
-			float[] y = LinalgGpuKernels.matvec(single.data(), ((LispSingleFloatArray) x).data(), rows, cols);
+			float[] y = LinalgGpuKernels.matvec(single.storage(), ((LispSingleFloatArray) x).storage(), rows, cols);
 			return y == null ? null : new LispSingleFloatArray(y, dims);
 		}
-		double[] y = LinalgGpuKernels.matvec(((LispDoubleFloatArray) w).data(), ((LispDoubleFloatArray) x).data(), rows,
-				cols);
+		double[] y = LinalgGpuKernels.matvec(((LispDoubleFloatArray) w).storage(), ((LispDoubleFloatArray) x).storage(),
+				rows, cols);
 		return y == null ? null : new LispDoubleFloatArray(y, dims);
 	}
 
@@ -280,8 +308,8 @@ public final class LinalgGpu {
 		}
 		int mode = (int) modeV.value();
 		double[] end = switch (out) {
-			case LispDoubleFloatArray d -> LinalgGpuKernels.rngFill(d.data(), mode, lo, span, w[0], w[1], w[2]);
-			case LispSingleFloatArray f -> LinalgGpuKernels.rngFill(f.data(), mode, lo, span, w[0], w[1], w[2]);
+			case LispDoubleFloatArray d -> LinalgGpuKernels.rngFill(d.storage(), mode, lo, span, w[0], w[1], w[2]);
+			case LispSingleFloatArray f -> LinalgGpuKernels.rngFill(f.storage(), mode, lo, span, w[0], w[1], w[2]);
 		};
 		return end == null ? null : new LispDoubleFloatArray(end, new int[] { 3 });
 	}
@@ -301,10 +329,18 @@ public final class LinalgGpu {
 	 * the SECOND operand wins a tie -- {@code LinalgSimdKernels.BOP_MAX}'s rule, and the
 	 * defun's.
 	 */
-	private static final Map<String, Integer> BIN_MEMBERS = Map.of(LispNames.LINALG_ADD, LinalgGpuKernels.BIN_ADD,
-			LispNames.LINALG_SUB, LinalgGpuKernels.BIN_SUB, LispNames.LINALG_MUL, LinalgGpuKernels.BIN_MUL,
-			LispNames.LINALG_DIV, LinalgGpuKernels.BIN_DIV, LispNames.LINALG_MAXIMUM, LinalgGpuKernels.BIN_MAX,
-			LispNames.LINALG_MINIMUM, LinalgGpuKernels.BIN_MIN);
+	private static final Map<String, Integer> BIN_MEMBERS = Map.ofEntries(
+			Map.entry(LispNames.LINALG_ADD, LinalgGpuKernels.BIN_ADD),
+			Map.entry(LispNames.LINALG_SUB, LinalgGpuKernels.BIN_SUB),
+			Map.entry(LispNames.LINALG_MUL, LinalgGpuKernels.BIN_MUL),
+			Map.entry(LispNames.LINALG_DIV, LinalgGpuKernels.BIN_DIV),
+			Map.entry(LispNames.LINALG_MAXIMUM, LinalgGpuKernels.BIN_MAX),
+			Map.entry(LispNames.LINALG_MINIMUM, LinalgGpuKernels.BIN_MIN),
+			Map.entry(LispNames.LINALG_GREATER, LinalgGpuKernels.BIN_GT),
+			Map.entry(LispNames.LINALG_GREATER_EQUAL, LinalgGpuKernels.BIN_GE),
+			Map.entry(LispNames.LINALG_LESS, LinalgGpuKernels.BIN_LT),
+			Map.entry(LispNames.LINALG_LESS_EQUAL, LinalgGpuKernels.BIN_LE),
+			Map.entry(LispNames.LINALG_EQUAL, LinalgGpuKernels.BIN_EQ));
 
 	/** The axis folds the device takes, each with its own op code. */
 	private static final Map<String, Integer> FOLD_MEMBERS = Map.of(LispNames.LINALG_SUM, LinalgGpuKernels.FOLD_SUM,
@@ -326,7 +362,13 @@ public final class LinalgGpu {
 			Map.entry(LispNames.LINALG_ATAN, LinalgGpuKernels.MAP_ATAN),
 			Map.entry(LispNames.LINALG_SINH, LinalgGpuKernels.MAP_SINH),
 			Map.entry(LispNames.LINALG_COSH, LinalgGpuKernels.MAP_COSH),
-			Map.entry(LispNames.LINALG_ERF, LinalgGpuKernels.MAP_ERF));
+			Map.entry(LispNames.LINALG_ERF, LinalgGpuKernels.MAP_ERF),
+			// The resident tier's four: one machine instruction each, members over a
+			// resident operand only (see map).
+			Map.entry(LispNames.LINALG_SQRT, LinalgGpuKernels.MAP_SQRT),
+			Map.entry(LispNames.LINALG_ABS, LinalgGpuKernels.MAP_ABS),
+			Map.entry(LispNames.LINALG_NEGATIVE, LinalgGpuKernels.MAP_NEGATIVE),
+			Map.entry(LispNames.LINALG_SIGN, LinalgGpuKernels.MAP_SIGN));
 
 	/**
 	 * Overrides one member with a kernel that declines back to whatever the member was
@@ -375,15 +417,29 @@ public final class LinalgGpu {
 			return null;
 		}
 		int n = a.totalSize();
-		if (!LinalgGpuKernels.worthMap(n)) {
+		// A libm member from the size threshold, ANY member over a resident operand --
+		// there is no trip to pay for then, and the result stays for the next member.
+		Object data = storage(a);
+		if (!((op < LinalgGpuKernels.MAP_LIBM_OPS && LinalgGpuKernels.worthMap(n))
+				|| LinalgGpuKernels.resident(data))) {
 			return null;
 		}
 		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.map(op, single.data(), n);
+			float[] c = LinalgGpuKernels.map(op, single.storage(), n);
 			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
 		}
-		double[] c = LinalgGpuKernels.map(op, ((LispDoubleFloatArray) a).data(), n);
+		double[] c = LinalgGpuKernels.map(op, ((LispDoubleFloatArray) a).storage(), n);
 		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+	}
+
+	/** The raw storage of a packed array, for the device and the residency question. */
+	private static Object storage(LispFloatArray a) {
+		return a instanceof LispSingleFloatArray f ? f.storage() : ((LispDoubleFloatArray) a).storage();
+	}
+
+	/** Whether the device holds a copy of the array. */
+	private static boolean resident(LispFloatArray a) {
+		return LinalgGpuKernels.resident(storage(a));
 	}
 
 	/**
@@ -409,41 +465,182 @@ public final class LinalgGpu {
 	 * selects leave no libm to disagree about.
 	 */
 	private static @Nullable LispVal bcast(int op, List<LispVal> args) {
-		if (!(args.get(0) instanceof LispFloatArray a) || !(args.get(1) instanceof LispFloatArray b)
-				|| a.getClass() != b.getClass()) {
+		LispVal av = args.get(0), bv = args.get(1);
+		LispFloatArray a = av instanceof LispFloatArray p ? p : null, b = bv instanceof LispFloatArray q ? q : null;
+		if (a != null && b != null) {
+			if (a.getClass() != b.getClass()) {
+				return null;
+			}
+			int[] da = a.dims();
+			int[] db = b.dims();
+			if (Arrays.equals(da, db)) {
+				return zip(op, a, b);
+			}
+			// The size test FIRST, over a bound that costs nothing: a broadcast output is
+			// at least as big as either operand. Every linalg:add in a program pays this
+			// method, so a declined call must not allocate a shape it is about to throw
+			// away. A resident operand is offered at any size.
+			boolean resident = resident(a) || resident(b);
+			if (!resident && !LinalgGpuKernels.worthStrided(Math.max(a.totalSize(), b.totalSize()))) {
+				return null;
+			}
+			int[] od = bcastShape(da, db);
+			if (od == null) {
+				return null;
+			}
+			long total = 1;
+			for (int d : od) {
+				total *= d;
+			}
+			if (!resident && !LinalgGpuKernels.worthStrided(total)) {
+				return null;
+			}
+			int[] sa = bcastStrides(da, od);
+			int[] sb = bcastStrides(db, od);
+			if (a instanceof LispSingleFloatArray single) {
+				float[] c = LinalgGpuKernels.bcast(op, single.storage(), sa, ((LispSingleFloatArray) b).storage(), sb,
+						od);
+				return c == null ? null : new LispSingleFloatArray(c, od);
+			}
+			double[] c = LinalgGpuKernels.bcast(op, ((LispDoubleFloatArray) a).storage(), sa,
+					((LispDoubleFloatArray) b).storage(), sb, od);
+			return c == null ? null : new LispDoubleFloatArray(c, od);
+		}
+		// An array with a scalar, either way round: the resident tier's scalar form, over
+		// a resident array only. A commutative op with the scalar on the left is the same
+		// kernel; the rest swap.
+		if (a != null) {
+			Double s = number(bv);
+			return s == null || !resident(a) ? null : scale(op, a, s, false);
+		}
+		if (b != null) {
+			Double s = number(av);
+			return s == null || !resident(b) ? null : scale(op, b, s, true);
+		}
+		return null;
+	}
+
+	/**
+	 * The resident tier's EQUAL-shape binary op: the case the element-wise tier measured
+	 * and refused as a round trip -- the CPU runs a lane loop -- and which is a launch
+	 * with no copy once an operand is resident. Declined otherwise, at any size, and the
+	 * lane kernel runs as before. Bit-identical to it: double arithmetic, narrowed on the
+	 * store.
+	 */
+	private static @Nullable LispVal zip(int op, LispFloatArray a, LispFloatArray b) {
+		if (!resident(a) && !resident(b)) {
 			return null;
 		}
-		int[] da = a.dims();
-		int[] db = b.dims();
-		if (Arrays.equals(da, db)) {
+		int n = a.totalSize();
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.zip(op, single.storage(), ((LispSingleFloatArray) b).storage(), n);
+			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
+		}
+		double[] c = LinalgGpuKernels.zip(op, ((LispDoubleFloatArray) a).storage(),
+				((LispDoubleFloatArray) b).storage(), n);
+		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+	}
+
+	/** The resident tier's array-with-scalar form; see {@link #zip}. */
+	private static @Nullable LispVal scale(int op, LispFloatArray a, double s, boolean swap) {
+		int n = a.totalSize();
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.scale(op, single.storage(), s, swap, n);
+			return c == null ? null : new LispSingleFloatArray(c, a.dims().clone());
+		}
+		double[] c = LinalgGpuKernels.scale(op, ((LispDoubleFloatArray) a).storage(), s, swap, n);
+		return c == null ? null : new LispDoubleFloatArray(c, a.dims().clone());
+	}
+
+	/**
+	 * {@code (linalg:where mask x y)} on the device -- the resident tier's three-way
+	 * select, {@code torch:masked-fill}'s member: every operand a packed array of either
+	 * width or a plain number, broadcast together, the result at {@code x}'s width when
+	 * it is an array, else {@code y}'s, else double -- {@code LinalgSimd.where}'s rule
+	 * and the defun's. Offered only when some array operand is resident; a select, so
+	 * bit-identical. Declined, and the captured binding answers: no array at all, a boxed
+	 * array or a ratio scalar, an incompatible broadcast, a mask whose width is neither.
+	 */
+	private static @Nullable LispVal where(List<LispVal> args) {
+		LispVal mv = args.get(0), xv = args.get(1), yv = args.get(2);
+		LispFloatArray m = LinalgSimd.packed(mv), x = LinalgSimd.packed(xv), y = LinalgSimd.packed(yv);
+		if (m == null && x == null && y == null) {
 			return null;
 		}
-		// The size test FIRST, over a bound that costs nothing: a broadcast output is at
-		// least as big as either operand. Every linalg:add in a program pays this method,
-		// so a declined call must not allocate a shape it is about to throw away.
-		if (!LinalgGpuKernels.worthStrided(Math.max(a.totalSize(), b.totalSize()))) {
+		if (!((m != null && resident(m)) || (x != null && resident(x)) || (y != null && resident(y)))) {
 			return null;
 		}
-		int[] od = bcastShape(da, db);
+		Double ms = m == null ? number(mv) : null, xs = x == null ? number(xv) : null,
+				ys = y == null ? number(yv) : null;
+		if ((m == null && ms == null) || (x == null && xs == null) || (y == null && ys == null)) {
+			return null;
+		}
+		boolean single = x != null ? x instanceof LispSingleFloatArray
+				: (y != null && y instanceof LispSingleFloatArray);
+		if ((x != null && y != null && x.getClass() != y.getClass())) {
+			return null;
+		}
+		int[] od = null;
+		for (LispFloatArray a : new LispFloatArray[] { m, x, y }) {
+			if (a != null) {
+				od = od == null ? a.dims().clone() : bcastShape(od, a.dims());
+				if (od == null) {
+					return null;
+				}
+			}
+		}
 		if (od == null) {
 			return null;
 		}
-		long total = 1;
-		for (int d : od) {
-			total *= d;
-		}
-		if (!LinalgGpuKernels.worthStrided(total)) {
-			return null;
-		}
-		int[] sa = bcastStrides(da, od);
-		int[] sb = bcastStrides(db, od);
-		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.bcast(op, single.data(), sa, ((LispSingleFloatArray) b).data(), sb, od);
+		Object mData = m == null ? null : storage(m);
+		int[] sm = m == null ? null : bcastStrides(m.dims(), od), sx = x == null ? null : bcastStrides(x.dims(), od),
+				sy = y == null ? null : bcastStrides(y.dims(), od);
+		double mScalar = ms == null ? 0.0 : ms, xScalar = xs == null ? 0.0 : xs, yScalar = ys == null ? 0.0 : ys;
+		if (single) {
+			float[] c = LinalgGpuKernels.where(mData, sm, mScalar,
+					x == null ? null : ((LispSingleFloatArray) x).storage(), sx, xScalar,
+					y == null ? null : ((LispSingleFloatArray) y).storage(), sy, yScalar, od);
 			return c == null ? null : new LispSingleFloatArray(c, od);
 		}
-		double[] c = LinalgGpuKernels.bcast(op, ((LispDoubleFloatArray) a).data(), sa,
-				((LispDoubleFloatArray) b).data(), sb, od);
+		double[] c = LinalgGpuKernels.where(mData, sm, mScalar, x == null ? null : ((LispDoubleFloatArray) x).storage(),
+				sx, xScalar, y == null ? null : ((LispDoubleFloatArray) y).storage(), sy, yScalar, od);
 		return c == null ? null : new LispDoubleFloatArray(c, od);
+	}
+
+	/**
+	 * {@code (linalg::%la-adam-step x g m v rule)} on the device -- the resident tier's
+	 * one writing member: the parameter and both moments are updated IN PLACE on the
+	 * device, from a gradient that is usually the previous member's result, and stay
+	 * there as the authoritative copies; a model's weights then never come home between
+	 * steps. Offered only when one of the four is resident; declined otherwise, and the
+	 * {@code --simd} kernel or the defun runs -- bit-identically, since the kernel spells
+	 * the same arithmetic in the same order. The rule is the eleven-element vector
+	 * {@code LinalgSimd.adamStep} takes.
+	 */
+	private static @Nullable LispVal adamStep(List<LispVal> args) {
+		LispFloatArray x = LinalgSimd.packed(args.get(0)), g = LinalgSimd.packed(args.get(1)),
+				m = LinalgSimd.packed(args.get(2)), v = LinalgSimd.packed(args.get(3));
+		if (x == null || g == null || m == null || v == null || x.getClass() != g.getClass()
+				|| x.getClass() != m.getClass() || x.getClass() != v.getClass()) {
+			return null;
+		}
+		int n = x.totalSize();
+		if (g.totalSize() != n || m.totalSize() != n || v.totalSize() != n) {
+			return null;
+		}
+		if (!(LinalgSimd.packed(args.get(4)) instanceof LispDoubleFloatArray ps) || ps.data().length != 11) {
+			return null;
+		}
+		double[] rule = ps.data();
+		if (!(resident(x) || resident(g) || resident(m) || resident(v))) {
+			return null;
+		}
+		boolean ran = x instanceof LispSingleFloatArray xs
+				? LinalgGpuKernels.adamStep(xs.storage(), ((LispSingleFloatArray) g).storage(),
+						((LispSingleFloatArray) m).storage(), ((LispSingleFloatArray) v).storage(), n, rule)
+				: LinalgGpuKernels.adamStep(((LispDoubleFloatArray) x).storage(), ((LispDoubleFloatArray) g).storage(),
+						((LispDoubleFloatArray) m).storage(), ((LispDoubleFloatArray) v).storage(), n, rule);
+		return ran ? x : null;
 	}
 
 	/**
@@ -484,7 +681,7 @@ public final class LinalgGpu {
 		for (int i = axis + 1; i < d.length; i++) {
 			inner *= d[i];
 		}
-		if (!LinalgGpuKernels.worthFold((long) outer * inner * len) || (long) outer * inner < 2) {
+		if ((!LinalgGpuKernels.worthFold((long) outer * inner * len) && !resident(a)) || (long) outer * inner < 2) {
 			return null;
 		}
 		int[] od = LinalgSimd.axisShape(d, axis, !(opts[1] instanceof LispNil));
@@ -492,11 +689,225 @@ public final class LinalgGpu {
 			return null;
 		}
 		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.fold(op, single.data(), outer, len, inner);
+			float[] c = LinalgGpuKernels.fold(op, single.storage(), outer, len, inner);
 			return c == null ? null : new LispSingleFloatArray(c, od);
 		}
-		double[] c = LinalgGpuKernels.fold(op, ((LispDoubleFloatArray) a).data(), outer, len, inner);
+		double[] c = LinalgGpuKernels.fold(op, ((LispDoubleFloatArray) a).storage(), outer, len, inner);
 		return c == null ? null : new LispDoubleFloatArray(c, od);
+	}
+
+	/**
+	 * {@code linalg:transpose} at both call shapes: the axes form (a rank-n permutation,
+	 * from the size threshold or over a resident operand) and -- since {@code .todo/491}
+	 * -- the plain form, the matrix transpose, over a resident operand only, as a strided
+	 * copy. Both pure copies, so bit-identical. The plain form over a vector or a rank
+	 * above 2 is the defun's (it answers the vector itself, and an error).
+	 */
+	private static @Nullable LispVal transpose(List<LispVal> args) {
+		if (args.size() == 2) {
+			return transposeAxes(args);
+		}
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		if (a == null || a.rank() != 2 || !resident(a)) {
+			return null;
+		}
+		int r = a.dims()[0], c = a.dims()[1];
+		int[] od = { c, r };
+		return copyInto(a, 0, new int[] { 1, c }, od, new int[] { r, 1 }, od);
+	}
+
+	/**
+	 * A strided copy of {@code a} into a fresh array of shape {@code od}, walked over
+	 * {@code dims} from {@code base} by {@code sa} on the source and {@code so} on the
+	 * destination -- the resident tier's copy member, or {@code null} when it declined.
+	 */
+	private static @Nullable LispVal copyInto(LispFloatArray a, int base, int[] sa, int[] dims, int[] so, int[] od) {
+		int n = 1;
+		for (int d : od) {
+			n *= d;
+		}
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = new float[n];
+			return LinalgGpuKernels.copy(single.storage(), base, sa, c, 0, so, dims) ? new LispSingleFloatArray(c, od)
+					: null;
+		}
+		double[] c = new double[n];
+		return LinalgGpuKernels.copy(((LispDoubleFloatArray) a).storage(), base, sa, c, 0, so, dims)
+				? new LispDoubleFloatArray(c, od) : null;
+	}
+
+	/**
+	 * {@code (linalg:reshape a shape)} over a resident operand: the same elements under a
+	 * new header, one contiguous copy. A shape with {@code -1} is the defun's.
+	 */
+	private static @Nullable LispVal reshape(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		int[] od = LinalgSimd.shape(args.get(1));
+		if (a == null || od == null || !resident(a)) {
+			return null;
+		}
+		long total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		int n = a.totalSize();
+		if (total != n || n < 1) {
+			return null;
+		}
+		return copyInto(a, 0, new int[] { 1 }, new int[] { n }, new int[] { 1 }, od);
+	}
+
+	/**
+	 * {@code (linalg::%la-gather-strided a od rs base single)} -- the walk behind
+	 * {@code linalg:slice} and {@code broadcast-to} -- over a resident operand: one
+	 * strided copy, the innermost-first strides reversed into the device's per-axis
+	 * order, the base as the walk's origin, a negative stride allowed. Declines a width
+	 * flag that is not the operand's (the CPU widens; the device copies), an empty
+	 * output, and a walk outside the operand, like {@code LinalgSimd.gatherStrided}.
+	 */
+	private static @Nullable LispVal gatherStrided(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		int[] od = LinalgSimd.shape(args.get(1));
+		int[] rs = LinalgSimd.ints(args.get(2));
+		Integer base = LinalgSimd.smallInt(args.get(3));
+		if (a == null || od == null || rs == null || base == null || rs.length != od.length || !resident(a)) {
+			return null;
+		}
+		boolean single = !(args.get(4) instanceof LispNil);
+		if (single != (a instanceof LispSingleFloatArray)) {
+			return null;
+		}
+		int rank = od.length;
+		int[] sa = new int[rank];
+		long total = 1;
+		for (int k = 0; k < rank; k++) {
+			sa[k] = rs[rank - 1 - k];
+			total *= od[k];
+		}
+		if (total < 1 || total > Integer.MAX_VALUE || !LinalgSimd.gatherInBounds(od, sa, base, a.totalSize())) {
+			return null;
+		}
+		return copyInto(a, base, sa, od, rowMajorStrides(od), od);
+	}
+
+	/**
+	 * {@code (linalg:concatenate arrays :axis ax)} -- {@code torch:cat} -- over packed
+	 * inputs of one width of which at least one is resident: one strided copy per input
+	 * into its slab of the output, the resident input first so that the output is
+	 * resident for the rest (which are then uploaded into it). The defun's shape rules;
+	 * anything it would signal on declines to it.
+	 */
+	private static @Nullable LispVal concatenate(List<LispVal> args) {
+		LispVal[] opts = LinalgSimd.options(args, 1, "AXIS");
+		if (opts == null) {
+			return null;
+		}
+		List<LispFloatArray> inputs = new java.util.ArrayList<>();
+		LispVal cursor = args.get(0);
+		while (cursor instanceof am.ik.rontolisp.LispCons cons) {
+			LispFloatArray a = LinalgSimd.packed(cons.car());
+			if (a == null) {
+				return null;
+			}
+			inputs.add(a);
+			cursor = cons.cdr();
+		}
+		if (!(cursor instanceof LispNil) || inputs.isEmpty()) {
+			return null;
+		}
+		LispFloatArray first = inputs.get(0);
+		int rank = first.rank();
+		Integer ax = opts[0] instanceof LispNil ? Integer.valueOf(0) : LinalgSimd.normAxis(opts[0], rank);
+		if (ax == null) {
+			return null;
+		}
+		int[] d0 = first.dims();
+		long total = 0;
+		boolean anyResident = false;
+		for (LispFloatArray a : inputs) {
+			if (a.getClass() != first.getClass() || a.rank() != rank) {
+				return null;
+			}
+			for (int k = 0; k < rank; k++) {
+				if (k != ax && a.dims()[k] != d0[k]) {
+					return null;
+				}
+			}
+			total += a.dims()[ax];
+			anyResident |= resident(a);
+		}
+		if (!anyResident || total < 1 || total > Integer.MAX_VALUE) {
+			return null;
+		}
+		int[] od = d0.clone();
+		od[ax] = (int) total;
+		int[] so = rowMajorStrides(od);
+		long n = 1;
+		for (int d : od) {
+			n *= d;
+		}
+		if (n > Integer.MAX_VALUE - 8) {
+			return null;
+		}
+		// The resident input first: its copy makes the output resident, and every other
+		// input's copy then finds the output there.
+		int lead = 0;
+		while (!resident(inputs.get(lead))) {
+			lead++;
+		}
+		int[] offsets = new int[inputs.size()];
+		for (int i = 0, cum = 0; i < inputs.size(); i++) {
+			offsets[i] = cum * so[ax];
+			cum += inputs.get(i).dims()[ax];
+		}
+		boolean single = first instanceof LispSingleFloatArray;
+		float[] cf = single ? new float[(int) n] : null;
+		double[] cd = single ? null : new double[(int) n];
+		for (int step = 0; step < inputs.size(); step++) {
+			int i = step == 0 ? lead : (step <= lead ? step - 1 : step);
+			LispFloatArray a = inputs.get(i);
+			int[] dims = a.dims();
+			boolean ok = single
+					? LinalgGpuKernels.copy(((LispSingleFloatArray) a).storage(), 0, rowMajorStrides(dims),
+							java.util.Objects.requireNonNull(cf), offsets[i], so, dims)
+					: LinalgGpuKernels.copy(((LispDoubleFloatArray) a).storage(), 0, rowMajorStrides(dims),
+							java.util.Objects.requireNonNull(cd), offsets[i], so, dims);
+			if (!ok) {
+				// A later slab declining after the first was written: the output is a
+				// resident half-filled array nobody holds; the defun runs from scratch.
+				return null;
+			}
+		}
+		return single ? new LispSingleFloatArray(java.util.Objects.requireNonNull(cf), od)
+				: new LispDoubleFloatArray(java.util.Objects.requireNonNull(cd), od);
+	}
+
+	/** The row-major strides of a shape, in elements. */
+	private static int[] rowMajorStrides(int[] dims) {
+		int[] s = new int[dims.length];
+		int acc = 1;
+		for (int k = dims.length - 1; k >= 0; k--) {
+			s[k] = acc;
+			acc *= dims[k];
+		}
+		return s;
+	}
+
+	/**
+	 * {@code (linalg::%la-scale g s)} -- gradient clipping's in-place multiply -- over a
+	 * resident array: the kernel reads and writes the one resident buffer, which stays
+	 * the authoritative copy, so the Adam update that follows finds the gradient there.
+	 * Answers {@code g}, as the CPU kernel does.
+	 */
+	private static @Nullable LispVal scaleInPlace(List<LispVal> args) {
+		LispFloatArray g = LinalgSimd.packed(args.get(0));
+		Double s = number(args.get(1));
+		if (g == null || s == null || !resident(g)) {
+			return null;
+		}
+		boolean ran = g instanceof LispSingleFloatArray f ? LinalgGpuKernels.scaleInPlace(f.storage(), s)
+				: LinalgGpuKernels.scaleInPlace(((LispDoubleFloatArray) g).storage(), s);
+		return ran ? g : null;
 	}
 
 	/**
@@ -516,7 +927,8 @@ public final class LinalgGpu {
 		int rank = a.rank();
 		// The size test first, for the reason bcast's is first: a transpose's output is
 		// its operand's own element count, so this costs nothing and allocates nothing.
-		if (!LinalgGpuKernels.worthStrided(a.totalSize())) {
+		boolean resident = resident(a);
+		if (!resident && !LinalgGpuKernels.worthStrided(a.totalSize())) {
 			return null;
 		}
 		int[] axes = LinalgSimd.permutation(args.get(1), rank);
@@ -538,14 +950,14 @@ public final class LinalgGpu {
 			sa[k] = source[axes[k]];
 			total *= od[k];
 		}
-		if (!LinalgGpuKernels.worthStrided(total)) {
+		if (!resident && !LinalgGpuKernels.worthStrided(total)) {
 			return null;
 		}
 		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.gather(single.data(), sa, od);
+			float[] c = LinalgGpuKernels.gather(single.storage(), sa, od);
 			return c == null ? null : new LispSingleFloatArray(c, od);
 		}
-		double[] c = LinalgGpuKernels.gather(((LispDoubleFloatArray) a).data(), sa, od);
+		double[] c = LinalgGpuKernels.gather(((LispDoubleFloatArray) a).storage(), sa, od);
 		return c == null ? null : new LispDoubleFloatArray(c, od);
 	}
 
@@ -579,16 +991,16 @@ public final class LinalgGpu {
 		int n = a.dims()[0];
 		int m = a.dims()[1];
 		int p = b.dims()[1];
-		if (m != b.dims()[0] || !LinalgGpuKernels.worth(n, m, p)) {
+		if (m != b.dims()[0] || !(LinalgGpuKernels.worth(n, m, p) || resident(a) || resident(b))) {
 			return null;
 		}
 		int[] dims = { n, p };
 		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.multiply(single.data(), ((LispSingleFloatArray) b).data(), n, m, p);
+			float[] c = LinalgGpuKernels.multiply(single.storage(), ((LispSingleFloatArray) b).storage(), n, m, p);
 			return c == null ? null : new LispSingleFloatArray(c, dims);
 		}
-		double[] c = LinalgGpuKernels.multiply(((LispDoubleFloatArray) a).data(), ((LispDoubleFloatArray) b).data(), n,
-				m, p);
+		double[] c = LinalgGpuKernels.multiply(((LispDoubleFloatArray) a).storage(),
+				((LispDoubleFloatArray) b).storage(), n, m, p);
 		return c == null ? null : new LispDoubleFloatArray(c, dims);
 	}
 
@@ -634,7 +1046,8 @@ public final class LinalgGpu {
 			batches *= d;
 		}
 		long total = batches * n * p;
-		if (batches < 1 || total > Integer.MAX_VALUE - 8 || !LinalgGpuKernels.worth(batches, n, m, p)) {
+		if (batches < 1 || total > Integer.MAX_VALUE - 8
+				|| !(LinalgGpuKernels.worth(batches, n, m, p) || resident(a) || resident(b))) {
 			return null;
 		}
 		long sa = batchStride(ba, bd, (long) n * m);
@@ -647,12 +1060,12 @@ public final class LinalgGpu {
 		od[bd.length + 1] = p;
 		int batch = (int) batches;
 		if (a instanceof LispSingleFloatArray single) {
-			float[] c = LinalgGpuKernels.multiply(single.data(), (int) sa, ((LispSingleFloatArray) b).data(), (int) sb,
-					batch, n, m, p);
+			float[] c = LinalgGpuKernels.multiply(single.storage(), (int) sa, ((LispSingleFloatArray) b).storage(),
+					(int) sb, batch, n, m, p);
 			return c == null ? null : new LispSingleFloatArray(c, od);
 		}
-		double[] c = LinalgGpuKernels.multiply(((LispDoubleFloatArray) a).data(), (int) sa,
-				((LispDoubleFloatArray) b).data(), (int) sb, batch, n, m, p);
+		double[] c = LinalgGpuKernels.multiply(((LispDoubleFloatArray) a).storage(), (int) sa,
+				((LispDoubleFloatArray) b).storage(), (int) sb, batch, n, m, p);
 		return c == null ? null : new LispDoubleFloatArray(c, od);
 	}
 

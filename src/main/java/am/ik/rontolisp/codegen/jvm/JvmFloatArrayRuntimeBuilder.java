@@ -150,7 +150,7 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * @return the helper methods
 	 */
 	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant selfClass, @Nullable MethodrefConstant written) {
+			ClassConstant selfClass, @Nullable MethodrefConstant written, @Nullable MethodrefConstant materialize) {
 		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
 		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
@@ -188,16 +188,18 @@ final class JvmFloatArrayRuntimeBuilder {
 
 		List<ArrayMethod> methods = new ArrayList<>();
 		methods.add(buildToGeneral(cp, TO_GENERAL, doubleArrayClass, floatArrayClass, arrayListClass, objectClass,
-				alInit, alAdd, longValueOf, doubleValueOf, null));
+				alInit, alAdd, longValueOf, doubleValueOf, null, materialize));
 		// The print-only variant: a single-float element is boxed as a transient Float
 		// so _lispToString renders it at its f32 width (#f(0.1) round-trips); every
 		// semantic conversion keeps going through _fvToGeneral's widened Doubles.
 		methods.add(buildToGeneral(cp, TO_GENERAL_PRINT, doubleArrayClass, floatArrayClass, arrayListClass, objectClass,
-				alInit, alAdd, longValueOf, doubleValueOf, floatValueOf));
-		methods.add(buildAref1(cp, doubleArrayClass, floatArrayClass, longClass, longIntValue, doubleValueOf, aref1));
-		methods.add(buildAref2(cp, doubleArrayClass, floatArrayClass, longClass, longIntValue, doubleValueOf, aref2));
+				alInit, alAdd, longValueOf, doubleValueOf, floatValueOf, materialize));
+		methods.add(buildAref1(cp, doubleArrayClass, floatArrayClass, longClass, longIntValue, doubleValueOf, aref1,
+				materialize));
+		methods.add(buildAref2(cp, doubleArrayClass, floatArrayClass, longClass, longIntValue, doubleValueOf, aref2,
+				materialize));
 		methods.add(buildArefN(cp, doubleArrayClass, floatArrayClass, objectArrayClass, longClass, longIntValue,
-				doubleValueOf, arefN));
+				doubleValueOf, arefN, materialize));
 		methods.add(buildAset1(cp, doubleArrayClass, floatArrayClass, longClass, numberClass, longIntValue,
 				numberDoubleValue, doubleValueOf, dbl, aset1, written));
 		methods.add(buildAset2(cp, doubleArrayClass, floatArrayClass, longClass, numberClass, longIntValue,
@@ -230,8 +232,12 @@ final class JvmFloatArrayRuntimeBuilder {
 	private static ArrayMethod buildToGeneral(ConstantPool cp, String name, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant arrayListClass, ClassConstant objectClass,
 			MethodrefConstant alInit, MethodrefConstant alAdd, MethodrefConstant longValueOf,
-			MethodrefConstant doubleValueOf, @org.jspecify.annotations.Nullable MethodrefConstant floatValueOf) {
+			MethodrefConstant doubleValueOf, @org.jspecify.annotations.Nullable MethodrefConstant floatValueOf,
+			@Nullable MethodrefConstant materialize) {
 		JvmAsm a = new JvmAsm();
+		// --gpu: every element is about to be read; a result the device still holds comes
+		// home first. Once, for the whole array, ahead of the loop.
+		emitMaterialize(a, 0, materialize);
 		int tryFloat = a.label();
 		a.aload(0);
 		a.instanceOf(doubleArrayClass);
@@ -242,6 +248,16 @@ final class JvmFloatArrayRuntimeBuilder {
 		emitToGeneralBody(a, true, floatArrayClass, arrayListClass, objectClass, alInit, alAdd, longValueOf,
 				doubleValueOf, floatValueOf);
 		return new ArrayMethod(cp.addUtf8(name), cp.addUtf8(TO_GENERAL_DESC), 6, 9, a.finish());
+	}
+
+	/**
+	 * {@code _gpuMaterialize(local)} when the GPU runtime is emitted; nothing otherwise.
+	 */
+	private static void emitMaterialize(JvmAsm a, int local, @Nullable MethodrefConstant materialize) {
+		if (materialize != null) {
+			a.aload(local);
+			a.invokestatic(materialize);
+		}
 	}
 
 	// floatValueOf non-null selects the print-only boxing: a single-float element is
@@ -339,9 +355,11 @@ final class JvmFloatArrayRuntimeBuilder {
 	// 0=arr, 1=i, 2=d, 3=rank.
 	private static ArrayMethod buildAref1(ConstantPool cp, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant longClass, MethodrefConstant longIntValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant aref1) {
+			MethodrefConstant doubleValueOf, MethodrefConstant aref1, @Nullable MethodrefConstant materialize) {
 		int arr = 0, i = 1, d = 2, rank = 3;
 		JvmAsm a = new JvmAsm();
+		// --gpu: the element read below must see the device's bytes if it holds them.
+		emitMaterialize(a, arr, materialize);
 		int notDouble = a.label();
 		int notPacked = a.label();
 		emitAref1Body(a, false, doubleArrayClass, notDouble, arr, i, d, rank, longClass, longIntValue, doubleValueOf);
@@ -384,9 +402,10 @@ final class JvmFloatArrayRuntimeBuilder {
 	// cols = (int) d[2]; else _aref2. Locals: 0=arr, 1=i, 2=j, 3=d, 4=rank, 5=cols.
 	private static ArrayMethod buildAref2(ConstantPool cp, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant longClass, MethodrefConstant longIntValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant aref2) {
+			MethodrefConstant doubleValueOf, MethodrefConstant aref2, @Nullable MethodrefConstant materialize) {
 		int arr = 0, i = 1, j = 2, d = 3, rank = 4, cols = 5;
 		JvmAsm a = new JvmAsm();
+		emitMaterialize(a, arr, materialize);
 		int notDouble = a.label();
 		int notPacked = a.label();
 		emitAref2Body(a, false, doubleArrayClass, notDouble, arr, i, j, d, rank, cols, longClass, longIntValue,
@@ -443,9 +462,11 @@ final class JvmFloatArrayRuntimeBuilder {
 	// Locals: 0=arr, 1=subs, 2=d, 3=subsArr, 4=rank, 5=flat, 6=k.
 	private static ArrayMethod buildArefN(ConstantPool cp, ClassConstant doubleArrayClass,
 			ClassConstant floatArrayClass, ClassConstant objectArrayClass, ClassConstant longClass,
-			MethodrefConstant longIntValue, MethodrefConstant doubleValueOf, MethodrefConstant arefN) {
+			MethodrefConstant longIntValue, MethodrefConstant doubleValueOf, MethodrefConstant arefN,
+			@Nullable MethodrefConstant materialize) {
 		int arr = 0, subs = 1, d = 2, subsArr = 3, rank = 4, flat = 5, k = 6;
 		JvmAsm a = new JvmAsm();
+		emitMaterialize(a, arr, materialize);
 		int notDouble = a.label();
 		int notPacked = a.label();
 		emitArefNBody(a, false, doubleArrayClass, notDouble, arr, subs, d, subsArr, rank, flat, k, objectArrayClass,
@@ -572,15 +593,16 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.checkcast(numberClass);
 		a.invokevirtual(numberDoubleValue);
 		a.dstore(dval);
+		if (written != null) {
+			// --gpu, BEFORE the store: a device copy that was the authoritative one comes
+			// home first and is dropped, so the store lands on the array's real bytes.
+			a.aload(d);
+			a.invokestatic(written);
+		}
 		a.aload(d);
 		a.iload(idx);
 		a.dload(dval);
 		storeElem(a, single);
-		if (written != null) {
-			// --gpu: the array may have a resident device copy; it is stale now.
-			a.aload(d);
-			a.invokestatic(written);
-		}
 		emitStoredValue(a, single, dval, doubleValueOf);
 	}
 
@@ -646,15 +668,16 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.checkcast(numberClass);
 		a.invokevirtual(numberDoubleValue);
 		a.dstore(dval);
+		if (written != null) {
+			// --gpu, BEFORE the store: a device copy that was the authoritative one comes
+			// home first and is dropped, so the store lands on the array's real bytes.
+			a.aload(d);
+			a.invokestatic(written);
+		}
 		a.aload(d);
 		a.iload(idx);
 		a.dload(dval);
 		storeElem(a, single);
-		if (written != null) {
-			// --gpu: the array may have a resident device copy; it is stale now.
-			a.aload(d);
-			a.invokestatic(written);
-		}
 		emitStoredValue(a, single, dval, doubleValueOf);
 	}
 
@@ -744,15 +767,16 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.checkcast(numberClass);
 		a.invokevirtual(numberDoubleValue);
 		a.dstore(dval);
+		if (written != null) {
+			// --gpu, BEFORE the store: a device copy that was the authoritative one comes
+			// home first and is dropped, so the store lands on the array's real bytes.
+			a.aload(d);
+			a.invokestatic(written);
+		}
 		a.aload(d);
 		a.iload(idx);
 		a.dload(dval);
 		storeElem(a, single);
-		if (written != null) {
-			// --gpu: the array may have a resident device copy; it is stale now.
-			a.aload(d);
-			a.invokestatic(written);
-		}
 		emitStoredValue(a, single, dval, doubleValueOf);
 	}
 

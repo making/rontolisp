@@ -4970,6 +4970,13 @@ public final class LispNames {
 	/** {@code linalg:reshape}: a fresh array of the given shape, row-major elements. */
 	public static final String LINALG_RESHAPE = "RESHAPE";
 
+	/**
+	 * {@code linalg:concatenate}: the arrays of a list joined along an existing axis
+	 * ({@code torch:cat}). A device member since {@code .todo/491}, over a resident
+	 * input.
+	 */
+	public static final String LINALG_CONCATENATE = "CONCATENATE";
+
 	/** {@code linalg:exp}: element-wise {@code e^x} (numpy {@code np.exp}). */
 	public static final String LINALG_EXP = "EXP";
 

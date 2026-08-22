@@ -77,7 +77,10 @@ final class JvmLinalgGpu {
 			Map.entry(LispNames.LINALG_TAN, "gpuTan"), Map.entry(LispNames.LINALG_ASIN, "gpuAsin"),
 			Map.entry(LispNames.LINALG_ACOS, "gpuAcos"), Map.entry(LispNames.LINALG_ATAN, "gpuAtan"),
 			Map.entry(LispNames.LINALG_SINH, "gpuSinh"), Map.entry(LispNames.LINALG_COSH, "gpuCosh"),
-			Map.entry(LispNames.LINALG_ERF, "gpuErf"));
+			Map.entry(LispNames.LINALG_ERF, "gpuErf"),
+			// The resident tier's four maps: members over a RESIDENT operand only.
+			Map.entry(LispNames.LINALG_SQRT, "gpuSqrt"), Map.entry(LispNames.LINALG_ABS, "gpuAbs"),
+			Map.entry(LispNames.LINALG_NEGATIVE, "gpuNegative"), Map.entry(LispNames.LINALG_SIGN, "gpuSign"));
 
 	/**
 	 * The STRIDED tier's BASE call shapes: the binary element-wise members, taken only at
@@ -85,9 +88,24 @@ final class JvmLinalgGpu {
 	 * element-wise tier measured and refused). Same convention: the value is the bridge
 	 * method and the {@code ops} key at once.
 	 */
-	private static final Map<String, String> BIN_KERNELS = Map.of(LispNames.LINALG_ADD, "gpuAdd", LispNames.LINALG_SUB,
-			"gpuSub", LispNames.LINALG_MUL, "gpuMul", LispNames.LINALG_DIV, "gpuDiv", LispNames.LINALG_MAXIMUM,
-			"gpuMaximum", LispNames.LINALG_MINIMUM, "gpuMinimum");
+	private static final Map<String, String> BIN_KERNELS = Map.ofEntries(Map.entry(LispNames.LINALG_ADD, "gpuAdd"),
+			Map.entry(LispNames.LINALG_SUB, "gpuSub"), Map.entry(LispNames.LINALG_MUL, "gpuMul"),
+			Map.entry(LispNames.LINALG_DIV, "gpuDiv"), Map.entry(LispNames.LINALG_MAXIMUM, "gpuMaximum"),
+			Map.entry(LispNames.LINALG_MINIMUM, "gpuMinimum"),
+			// The comparison masks, at the same three shapes (broadcast, equal, scalar).
+			Map.entry(LispNames.LINALG_GREATER, "gpuGreater"),
+			Map.entry(LispNames.LINALG_GREATER_EQUAL, "gpuGreaterEqual"), Map.entry(LispNames.LINALG_LESS, "gpuLess"),
+			Map.entry(LispNames.LINALG_LESS_EQUAL, "gpuLessEqual"), Map.entry(LispNames.LINALG_EQUAL, "gpuEqual"),
+			// The rest of the resident tier: the three-way select, the Adam update, and
+			// the
+			// COPY members -- reshape, slice's strided gather, the in-place clip scale.
+			Map.entry(LispNames.LINALG_WHERE, JvmGpuRuntimeBuilder.WHERE),
+			Map.entry(LispNames.LINALG_ADAM_STEP, JvmGpuRuntimeBuilder.ADAM_STEP),
+			Map.entry(LispNames.LINALG_RESHAPE, "gpuReshape"),
+			Map.entry(LispNames.LINALG_GATHER_STRIDED, JvmGpuRuntimeBuilder.GATHER_STRIDED),
+			Map.entry(LispNames.LINALG_SCALE, "gpuScale"),
+			// The plain (rank-2) transpose; the axes form is in EXT_KERNELS.
+			Map.entry(LispNames.LINALG_TRANSPOSE, "gpuTranspose"));
 
 	/**
 	 * The STRIDED tier's EXTENDED (option-form) call shapes -- the axis folds and the
@@ -97,7 +115,7 @@ final class JvmLinalgGpu {
 	 */
 	private static final Map<String, String> EXT_KERNELS = Map.of(LispNames.LINALG_SUM, "gpuSumAxis",
 			LispNames.LINALG_AMAX, "gpuAmaxAxis", LispNames.LINALG_AMIN, "gpuAminAxis", LispNames.LINALG_TRANSPOSE,
-			"gpuTransposeAxes");
+			"gpuTransposeAxes", LispNames.LINALG_CONCATENATE, "gpuConcatenate");
 
 	/**
 	 * Every qualified name the emit gate scans for. A program that reaches none of them
@@ -112,10 +130,14 @@ final class JvmLinalgGpu {
 			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
 		}
 		for (String member : BIN_KERNELS.keySet()) {
-			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
+			names.add(member.startsWith("%") ? PackageRegistry.qualifyInternal(LispNames.LINALG_PKG, member)
+					: PackageRegistry.qualify(LispNames.LINALG_PKG, member));
 		}
 		for (String member : EXT_KERNELS.keySet()) {
-			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
+			String qualified = PackageRegistry.qualify(LispNames.LINALG_PKG, member);
+			if (!names.contains(qualified)) {
+				names.add(qualified);
+			}
 		}
 		names.sort(String::compareTo);
 		return names;

@@ -50,7 +50,16 @@ bits without a `double`, residency measured and kept for ONE kind of array (the 
 matrix) because every other kind was slower resident than copied on unified memory, and
 the finding that sets the ceiling on a decode loop there: the GPU's idle-clock penalty,
 ~0.5 ms on the first command buffer after a millisecond of quiet, which makes llama2 1.0x
-on that machine with the flag and the story unchanged.
+on that machine with the flag and the story unchanged. **LAZY RESULTS (2026-08-23,
+todo-491)** is the round after that, and it reversed the design todo-474 chose: "A result
+comes home on first host touch" below is its record -- a member's result stays on the
+device until the host first reads it, every host read of packed-array storage on both
+backends is enumerated and materializes first (the mirror of the writer enumeration), the
+cap no longer applies lazily (its first build, which kept it, was SLOWER than the eager
+one, and the section says why), and the members this file had REFUSED as round trips --
+the equal-shape and scalar binary ops, `sqrt` and its three siblings, `where`, the Adam
+step, and the copies: `reshape`, `transpose`, `slice`, `concatenate`, `%la-scale` -- are
+members over a RESIDENT operand, every one bit-identical to the CPU kernel it replaces.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover,ElementwiseCrossover,
@@ -109,7 +118,7 @@ Nothing outside it is needed to talk to a GPU. The direction the interceptors wi
 | `am.ik.gpu.GpuDevice` | the sealed seam between the two backends: `supportsDouble`, `thresholds`, and the members |
 | `am.ik.gpu.CudaGemm` | the probe, the context/module lifetime, the per-call product and the per-call map, the download bounce buffer |
 | `am.ik.gpu.CudaResidency` | device residency: the weakly-keyed identity LRU from a host array to its resident copy, the pending-free list, and the GEMV's no-buffer "seen once" marks |
-| `am.ik.rontolisp.FloatArrayWriteHook` | the interpreter's one write seam: every packed-array store reports here, and `eval/LinalgGpu.install` points it at `Gpu.written` |
+| `am.ik.rontolisp.FloatArrayAccessHook` | the interpreter's two seams: every packed-array store reports here BEFORE it lands, and every read of packed-array storage (the records' `data()` accessor) reports here first; `eval/LinalgGpu.install` points them at `Gpu.written` / `Gpu.materialize` |
 | `am.ik.gpu.CudaDriver` | the FFM binding: `libcuda.so.1` and 24 downcall handles |
 | `am.ik.gpu.CuResult` | every CUDA 13 status code, and which of them leave the context dead |
 | `am.ik.gpu.MetalGemm` | the Apple half: the probe, the MSL library, MPS, the buffer pool, the per-call members |
@@ -143,7 +152,15 @@ static boolean  fold(int op, double[] a, int oA, double[] out, int oOut,
                      int outer, int len, int inner)
 static boolean  worthMatvec(long rows, long cols) // ... is this MATRIX-BY-VECTOR product (once its matrix is resident)
 static boolean  matvec(double[] w, int oW, double[] x, int oX, double[] y, int oY, int rows, int cols)
-static void     written(Object hostArray)       // a packed array was written IN PLACE: its resident copy is stale
+static void     written(Object hostArray)       // a packed array is ABOUT TO BE written in place: its resident copy is stale (and comes home first if it was the only one)
+static void     materialize(Object hostArray)   // a packed array is about to be READ on the host: a lazy result comes home
+static boolean  resident(Object hostArray)      // does the device hold a copy of it
+static void     lazyResults(boolean on)         // results stay on the device until materialized (the interceptors' mode; off by default)
+static boolean  zip(int op, a, oA, b, oB, out, oOut, n)            // equal-shape binary op, over a resident operand only
+static boolean  scale(int op, a, oA, double s, boolean swap, out, oOut, n)   // array-with-scalar form, resident only
+static boolean  where(m, oM, sM, ms, x, oX, sX, xs, y, oY, sY, ys, out, oOut, dims)  // the three-way select, resident only
+static boolean  adamStep(x, oX, g, oG, m, oM, v, oV, n, double[] rule)      // Adam IN PLACE, resident only
+static boolean  copy(a, oA, sA, spanA, out, oOut, sOut, spanOut, dims)      // the strided copy: reshape / transpose / slice / concatenate, resident only
 ```
 
 Row-major `n x m` by `m x p`, a fresh `n * p` array back or `null`; the `out`-taking forms
@@ -163,14 +180,19 @@ however the member set grows. An op code the library does not name is a decline 
 other, and the kernel's own `default` is the identity rather than a member, so a mirror
 that ever slipped cannot silently answer some other function.
 
-**`written` is the other half of residency and it is a CONTRACT on the caller, not a
-convenience.** Every member keeps a copy of each operand and result on the device, keyed by
+**`written` and `materialize` are the two halves of residency's CONTRACT on the caller, not
+conveniences.** Every member keeps a copy of each operand and result on the device, keyed by
 the identity of the host array, and reads that copy instead of uploading again -- so every
-in-place write to a packed array's storage must come through `written`, or the next call
-answers for bytes the array no longer holds. The enumeration of the writers on each
-backend is in "Device residency, built" and pinned by a test on each. `written` is cheap
-when it does not matter (a volatile read with nothing resident), never runs the probe,
-never touches the driver, never throws, and takes any object.
+in-place write to a packed array's storage must come through `written` BEFORE it lands, or
+the next call answers for bytes the array no longer holds; and since todo-491, with
+`lazyResults` on, a result STAYS on the device until the host first reads it, so every
+host read of packed-array storage must come through `materialize` first, or it reads the
+zeros of an array nobody filled. The enumerations -- the writers in "Device residency,
+built", the readers in "A result comes home on first host touch" -- are pinned by a test
+on each backend. Both hooks are cheap when they do not matter (a volatile read with nothing
+resident or nothing dirty, and one identity compare for a loop over one array), never run
+the probe, never throw, and take any object; `materialize` is the one that cannot decline
+when it does matter.
 
 **The offsets are mandatory, not a convenience.** The compiled backends keep a
 `[rank, dim..., data...]` header inside the same array as the data, so an interceptor on
@@ -296,6 +318,9 @@ whole binding declines rather than half-binding.
   JVM backend's tests run in a second surefire fork where every compiled class defines
   its own copy of this binding and loads its own module. It was 64 MB over 500 products
   and that is too tight to survive a parallel fork -- measured, 159 MB of drift.
+- **Since 2026-08-23 a RESULT also stays UNREAD on the device until the host first touches
+  it** (`Gpu.lazyResults`, the interceptors' mode; "A result comes home on first host
+  touch" below), and the 1 GB cap does not apply in that mode.
 - **Since 2026-08-22 the operands and the result of every call STAY on the device** --
   a copy of each, keyed by the identity of the host array and held weakly, an LRU against
   a budget that is the smaller of a quarter of free memory and 1 GB, freed when the host
@@ -2007,7 +2032,8 @@ uploads and took the incidental warming with them, and the downloads went cold: 
 each backend reaches `Gpu.written`:
 
 - the interpreter: `LispDoubleFloatArray.setElement` / `LispSingleFloatArray.setElement`
-  call `am.ik.rontolisp.FloatArrayWriteHook.written(data)`, a static hook in the root
+  call `am.ik.rontolisp.FloatArrayAccessHook.written(data)` (named `FloatArrayWriteHook`
+  until todo-491 gave it its read half), a static hook in the root
   package (it must not name any accelerator: `-Pweb` cuts `am.ik.gpu` out by
   substituting `eval/LinalgGpu`, whose `install` is what points the hook at
   `LinalgGpuKernels::written`). That covers `aset`, `row-major-aset`, `fill`, `replace`
@@ -2230,6 +2256,203 @@ f32 reduction probe as a matrix row -- the defun prints 16778240, the lane kerne
 16777984, the device the defun's figure -- so `(probe) (probe)` under `--gpu --simd`
 prints `(16777984 16778240)` and the chain is legible from Lisp; `LinalgGpuDeclineTest`:
 a GEMV below the threshold is untouched everywhere.
+
+#### A result comes home on first host touch (2026-08-23, todo-491)
+
+The round after the GEMV, and the one that replaced the design "Device residency, built"
+chose: the host array is no longer the source of truth while a chain runs. `.todo/491`
+was filed off the fourth profile of the training step (the one that found the
+register-tiled GEMM was not the first line): every device result was downloaded --
+220 MB a step at the notebook's shapes, 37534 `cuMemcpyDtoH` over a 200-step run, 44 GB
+-- and about 40% of the step was that traffic and the waits around it, because the
+download of a `(4 256 1536)` activation costs more than the product that made it. This
+section is the record of what was built, in four parts: the LAZY result, the READER
+enumeration that makes it sound, the RESIDENT tier of members that it unlocked, and the
+numbers.
+
+**Lazy results.** `Gpu.lazyResults(true)` -- which both interceptors switch on at install,
+and which is off by default so the library's own contract ("`out` is filled when the call
+returns") holds for any other embedder -- makes every member's `finish` skip the
+download: the result buffer is recorded in `DeviceResidency` as the array's DIRTY copy
+(`Entry.dirty`: the device holds the bytes, the host array holds zeros), and an in-place
+member (`rngFill`, the Adam step, the clip scale) marks the buffer it wrote dirty rather
+than recording a second one. A dirty copy comes home through exactly one operation,
+`Gpu.materialize(host)` -> `CudaGemm.materialize` -> `DeviceResidency.claimDirty` (marks
+clean, answers the `Flush` to download) -> the same pinned bounce download the eager path
+uses. A clean copy stays resident for the next member, so a chain
+`matmul -> div -> where -> softmax -> matmul` moves nothing over the link until something
+on the host reads a link of it, and then moves only that link. `materialize` is the ONE
+operation of this library that cannot decline: when the host has no other copy of the
+bytes, a download the driver refuses is an `IllegalStateException`, not a silent fallback,
+because silence there would be a wrong answer. Two rules keep the cache sound:
+
+- **`Gpu.written(host)` now runs BEFORE the write, and materializes first.** Written
+  after the store (as it was), a dirty copy's download would have clobbered the store; so
+  every setter on both backends reports before it stores (`LispFloatArray.setElement`,
+  `_fvAset1/2/N`, the typed loop's `aset`), and every in-place kernel's call site reports
+  before the kernel runs. A dirty copy then comes home, the entry is dropped, and the
+  write lands on real bytes. The interpreter's in-place `--simd` kernels still report
+  after the write and are still correct, because they read the array through `data()`
+  first, which materialized it; `read-sequence`'s bulk primitive is the one that reports
+  first and reads `storage()`.
+- **The device never drops a dirty copy on its own.** Every path in `DeviceResidency`
+  that lets an entry go -- the LRU eviction in `put`, `evictAll` from the pre-flight, a
+  replacement at a different span, `offeredBefore` -- turns a dirty one into a
+  `DeviceResidency.Flush` (the host array held STRONGLY, the pointer, the span), and
+  `CudaGemm.settle()` downloads every flush immediately after the call that produced it
+  and queues the pointer for the next drain. Immediately, because between the drop and
+  the download the array has no entry and a reader would see nothing to materialize; and
+  queued rather than freed, because an eviction inside `stage` runs BEFORE the launch that
+  reads the buffer. The LRU evicts CLEAN copies first and a dirty one only when no clean
+  one is left: evicting a clean copy costs at most one later upload, a dirty one costs a
+  download now. A dirty copy whose array the collector reclaimed is unreadable and is
+  simply freed. `lazyResults(false)` brings every dirty copy home first (`claimAllDirty`),
+  which is what keeps `GpuTest`'s eager assertions honest whatever ran before them in the
+  fork.
+
+**The budget, re-derived twice.** Lazily neither the 1 GB `RESIDENT_CAP` nor the quarter
+share applies: the budget is everything the device has less an eighth of it (never less
+than 512 MB; `LAZY_HEADROOM_SHARE`, refreshed at every pre-flight by `refreshFreeMemory`).
+The first lazy build kept the cap and was SLOWER than the eager build it replaced (the
+200-step run 17.1 s against 15.4, `cuMemcpyDtoH` 48246 copies / 61 GB against 37534 /
+44 GB): the autograd graph keeps a step's activations reachable until its backward, so
+with ~400 MB of dirty results live the cap evicted them as fast as they were made, by
+downloading, and the step paid for the download AND the re-upload. Measured on the
+40-step run under `nsys`: cap 1 GB, 7133 `cuMemcpyDtoH` / 8.0 GB; cap 8 GB or 32 GB
+(nothing evicted), 2462 / 0.94 GB. Then the BOOK's shapes did it again one size up: with
+the quarter share the 3-step run flushed 45 GB of the graph during backward (the share
+converges to a quarter, then a half, of what is left once a 64 GB heap and the pool
+itself are taken out of this machine's 123 GB), with a half share still 45 GB, and with
+the headroom rule nothing -- 8.1 s a step became 6.3. The cap's reason -- the driver's
+pool recycling its warm blocks, 1 us an allocation instead of 5 -- is worth a few
+milliseconds a step (the 200-step run's `cuMemAllocAsync` went from 0.20 s to 0.44); one
+evicted activation is worth more, and the pre-flight still evicts everything a call is
+not holding before it would refuse the call. The eager mode keeps the cap and its
+measurement.
+
+**Two fast paths, and the one that had to become a ring.** `claimDirty` and `written`
+are called once per element from an `aref` / `aset` loop, so each short-circuits on
+"nothing dirty" / "nothing resident" (a volatile read) and on "the array I answered for
+last time". The second was a SINGLE remembered array, and the first profile of the lazy
+build put `DeviceResidency.claimDirty` at the top with 32% of the samples: a loop that
+reads one array and writes another (`linalg:concatenate`'s defun, a typed `dotimes` over
+two arrays) alternated between them and took the monitor on every element. Both fast
+paths now remember the last four arrays (`RECENT`); a loop over more still pays the
+monitor and is still correct.
+
+**The reader enumeration.** The writer enumeration of todo-474 has its mirror: every HOST
+READ of packed-array storage on each backend materializes first, and a reader that misses
+the seam reads the zeros of an array nobody filled. The interpreter has ONE seam: the
+records' `data()` accessor, which `LispSingleFloatArray` / `LispDoubleFloatArray` now
+override to call `FloatArrayAccessHook.read` -- every reader there is goes through it (the
+`--simd` and `vec:` kernels, `aref` through `elementAt`, the printer through
+`elementText`, `toGeneralArray`, `read-sequence`'s mirror, a record pattern, Java interop)
+-- and the one reader that must NOT, the device interceptor itself, takes `storage()`.
+`FloatArrayWriteHook` became `FloatArrayAccessHook` for its second half; `install` points
+both at `LinalgGpuKernels` (`written` / `materialize`). The JVM class output has no such
+seam and enumerates instead, through `_gpuMaterialize` (`JvmGpuRuntimeBuilder.MATERIALIZE`,
+the guard twin of `_gpuWritten`): `_fvAref1/2/N` and `_fvToGeneral` / `_fvToGeneralPrint`
+(which is the printer, `equal`, every coercion) at their top (`JvmFloatArrayRuntimeBuilder`);
+every argument of every accelerated `linalg:` call site, right after the device attempt and
+before any host rung -- the `--blas` rung, the lane rung, the defun -- which is also where
+the in-place members' `_gpuWritten` reports moved to, so a device rung that took the
+member and left the array resident is not undone (`JvmLinalgKernelCompiler`); every
+argument of every `vec:` call site, the `-into` destination as `_gpuWritten` instead
+(`JvmSimdCompiler`), and both operands of the `vec:matvec` chain's host rungs; the typed
+loops at `hoistArrays`, once per array, since the arrays are loop-invariant
+(`JvmTypedLoopCompiler`); `_writeSeqPacked`'s sequence, with `_readSeqPacked`'s reported as
+written before the helper (`JvmSequencePackedCompiler`); and every argument of a Java
+interop call, which reads a packed array raw (`JvmJavaInteropCompiler`). `_fvDims`,
+`_fvLength` and `_fvElementType` read the header only, which is written at allocation and
+never stale, and need no seam. The pin on each backend is
+`everyEnumeratedReaderMaterializesTheDeviceResult`: one program that makes device results
+(a broadcast add, a transpose -- the bit-identical members, so the oracle is the same
+program without the flag) and then reads them through every reader above, and writes into
+them through `aset`, `%la-scale` and `scale-into` (a write that must bring the result home
+first), printing after each; run under `--gpu` against no flag and `--gpu --simd` against
+`--simd`. On the interpreter `aDeviceResultStaysOnTheDeviceUntilTheHostFirstReadsIt` pins
+the laziness itself through `GpuThresholds.dirtyCount()` -- a count the JVM class output's
+embedded copy cannot expose, which is why "really stayed" is the interpreter's assertion
+and "same output" the JVM's.
+
+**The resident tier.** With nothing coming home, the members this file REFUSED because a
+round trip cannot beat a lane loop became launches with no copy, and every one is offered
+ONLY over an operand that is already resident (`Gpu.resident`, a lookup without a hit
+count): declined otherwise at any size, so the refusals' measurements stand. All of them
+compute in double and narrow on the store -- the CPU kernels' own rule for exactly these
+members -- so all are bit-identical to them, which the tests assert as equality; the one
+wrinkle is `sqrt`'s NaN, which the device signs and `Math.sqrt` does not, so the kernel
+canonicalizes it.
+
+| member (`am.ik.gpu`) | `linalg:` shape | kernel |
+|---|---|---|
+| `zip(op, a, b)` | `add` `sub` `mul` `div` `maximum` `minimum` and the five masks `greater` `greater-equal` `less` `less-equal` `equal` at an EQUAL shape | `zip_fXX`, `bin_op` in double; `BIN_GT .. BIN_EQ` = 6..10 |
+| `scale(op, a, s, swap)` | the same eleven with a SCALAR on either side (`laEwFS` / `laEwSF`'s shape) | `scal_fXX`, the scalar a double whatever the width |
+| `map(MAP_SQRT .. MAP_SIGN)` | `sqrt` `abs` `negative` `sign` | the map kernel's cases 12..15, in double (`MAP_LIBM_OPS` = 12 is where the size threshold stops applying) |
+| `where(m, x, y)` | `linalg:where`, hence `torch:masked-fill`; any operand a scalar, the mask either width | `where_fXX` over a 4-stride layout |
+| `adamStep(x, g, m, v, rule)` | `%la-adam-step`, IN PLACE: x, m, v stay resident and dirty | `adam_fXX`, every step an `_rn` intrinsic so nothing contracts into an FMA |
+| `copy(a, sa, out, so, dims)` | `reshape` (hence `expand-dims`, `squeeze`, `flatten`), the plain rank-2 `transpose`, `%la-gather-strided` (hence `slice`, `broadcast-to`), `concatenate` (`torch:cat`, one copy per input into its slab, the resident input first so the output is resident for the rest), and `%la-scale` through `scale` in place | `copy_fXX`: one source and one destination stride per axis, either sign |
+
+The size-thresholded members (the products, the libm maps, the broadcast, the gather,
+the fold) also take a resident operand at ANY size -- `worthOrResident` in `Gpu`, and the
+interceptors' pre-checks say `worth || resident` -- because the trip the threshold exists
+to amortize is not being paid. The ones that stayed on the CPU, and what they cost the
+step at the notebook's shapes, are under "what is left" below. On the JVM the new members
+are `JvmLinalgGpu.handles` entries like any other; `concatenate` is the first
+EXTENDED-only member with no lane kernel (`LinalgKernelCallLayout` gained its `:axis`
+shape, `JvmLinalgKernelCompiler` its arity), and the interpreter defines `transpose` at
+arity 1..2 now. `GpuTest.theResidentTierIsOfferedOnlyOverAResidentOperandAndLandsOnTheCpuKernelsBits`
+and `theStridedCopyIsTheCopyMembersOverAResidentOperandAndAScaleRunsInPlace` pin the
+library; `theResidentTierRunsOverAResidentOperandAndLandsOnTheCpuKernelsBits` on each
+interceptor runs every member over a device result against the oracle, and the
+interpreter's asserts the hit count moved; `theResidentTierDeclinesWithoutAResidentOperandAndTheCpuRunsUnchanged`
+is the other half. Metal declines the whole tier and `lazyResults`: on unified memory the
+copy home is a memcpy, its cost was never measured there, and `materialize` is a no-op
+(`MetalGemm`); `bin_op` in `gemm.metal` gained the five masks so `bcast` answers them.
+
+**What the profile says is left** (the 40-step run, materializations counted by caller):
+`torch:clip-grad-norm`'s `%la-sum-squares` reads every gradient -- 7 MB a step, 760
+downloads over 40 steps -- and stays a sequential double fold on the host because its
+contract is the defun's order, which a parallel reduction cannot keep; `%la-scale` after
+it runs in place on the device, so the Adam step finds the gradients resident. The
+embedding's `take-rows` / `gather` / `scatter-rows` (small at these shapes, 4.7 MB a step
+at the book's), the few-cell folds of `%t-unbroadcast` (a fold with fewer than 256 output
+cells is declined as a single-threaded device loop, so its big operand comes home), and
+the loss's `mean`. Every one is a follow-up item, not a measurement against this design.
+And the host array of a lazy result is still ALLOCATED -- a zeroed 6 MB Java array per
+activation that may never be read -- which is the representation question
+`[rank, dim..., data...]` makes hard and `.todo/492` holds.
+
+**Numbers** (GB10, JVM class output, `train-gpt-soseki` at the notebook's shapes, the
+method of every table above):
+
+| | before (todo-474's final build, 2026-08-22) | lazy results + the resident tier (2026-08-23) |
+|---|---|---|
+| `--gpu --simd`, per step, `(t40 - t5) / 35` (median of 3) | 0.107 s | **0.085 s** (4.51 - 1.52) |
+| steady state, `(t200 - t40) / 160` | 0.057-0.061 s | **0.038 s** (10.56 - 4.51) |
+| the same with `-XX:+UseParallelGC -Xmn4g` | -- | **0.024 s** (7.0 - 3.18) |
+| `--simd`, per step / steady state | 0.80 s / 0.85 s | unchanged |
+| the 5 / 40 / 200-step runs, whole (medians) | 1.9 / 5.75 / 15.4 s | **1.52 / 4.51 / 10.56 s** (ParallelGC: 3.18 / 7.0) |
+| `cuMemcpyDtoH` over the 200-step run, count / bytes / API wall | 37534 / 44 GB / 2.04 s | **6737 / 2.34 GB / 0.12 s** |
+| `cuMemcpyHtoD`, count / bytes / API wall | 36723 / 21.7 GB / 0.86 s | **27076 / 3.6 GB / 0.43 s** (the median copy is now a layout buffer of a few bytes) |
+| `cuCtxSynchronize` | 0.70 s | 0.35 s |
+| kernel time, all | 1.63 s | 1.84 s (`zip` 0.20, `scal` 0.17, `adam` 0.12, `copy` 0.03, `where` 0.01 -- the members the host used to run) |
+| `cuMemAllocAsync` | 0.20 s (2.0 us a call) | 0.44 s (4.5 us a call: the pool grows without the cap -- 2 ms a step, the price of not evicting) |
+
+At the BOOK's shapes (the full novel, 6 layers, 6 heads, batch 64; `-Xmx64g
+-XX:+UseParallelGC -Xmn8g`, `(t13 - t3) / 10`) the step went 9.9 s -> 8.1 (the half
+share, still evicting) -> **6.3 s** (the headroom rule): the arithmetic is 0.2 s of it,
+the copies were the second line (a 3-step run plus its 800 sampled tokens now moves
+~5 GB down, the sampling's softmax and layer-norm reads most of it, against 88 GB), and
+the third -- a zeroed 100 MB host array per result, read or not, and the collector's
+share of it -- is now the first. That is `.todo/492`.
+
+Read the three rows of the step together. Against `--simd` the flag is **9.4x** on the
+README's own metric (it was 7.5x), **22x** at the steady state and **35x** with the
+parallel collector, where a 200-step run is 7 s; the download bytes fell nineteenfold and
+the count 5.6-fold (the rest is the host reads listed above, `%la-sum-squares` first). The
+first lazy build, which kept the 1 GB cap, measured 17.1 s for the same 200 steps.
+
 
 ### The chain order, and why the device goes on top
 
@@ -2851,8 +3074,17 @@ decline, not an omission, and each needs this file's numbers before it is revisi
   (above), and nothing may quote a device figure from that build without measuring it
   first.
 - **`sqrt`, `abs`, `negative`, `sign` and the binary `add` / `sub` / `mul` / `div` AT AN
-  EQUAL SHAPE** are refusals with numbers attached. The binary four are members at a
-  BROADCAST shape since phase 3, which is not a reversal: it is a different CPU column.
-  Re-open the rest only with residency, or on a machine whose measured table looks
-  different -- and re-run `ElementwiseCrossover.java` plus `elementwise-baseline.lisp`
-  before believing either.
+  EQUAL SHAPE** are refusals with numbers attached AS ROUND TRIPS, and the numbers stand:
+  over an operand the device does not hold they still decline at every size. Since
+  2026-08-23 they are members over a RESIDENT operand ("A result comes home on first host
+  touch"), which is not a reversal either: it is the case the refusal's measurement never
+  had, a launch with no copy. Re-run `ElementwiseCrossover.java` plus
+  `elementwise-baseline.lisp` before offering any of them as a round trip.
+- **No device `%la-sum-squares`, `take-rows`, `gather`, `scatter-rows`** -- the host reads
+  a lazy training step still makes -- and **no lazy HOST allocation**: the host array of a
+  result that never comes home is still a zeroed Java array. Both are filed (`.todo/492`,
+  `.todo/493`) with the bytes they cost, under "A result comes home on first host touch".
+- **No lazy results on METAL.** `MetalGemm.lazyResults` declines and `materialize` is a
+  no-op there: on unified memory the copy home is a memcpy, and whether it was ever the
+  cost was not measured. Measure it before switching it on; the reader enumeration is
+  already in place on both interceptors, so the switch itself is one method.

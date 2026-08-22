@@ -39,7 +39,7 @@ import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.FloatText;
 import am.ik.rontolisp.LispArray;
-import am.ik.rontolisp.FloatArrayWriteHook;
+import am.ik.rontolisp.FloatArrayAccessHook;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFuture;
@@ -6855,12 +6855,12 @@ public final class Environment implements Scope {
 			// device may hold a resident copy of this very array (.kb/gpu.md).
 			switch (this.value) {
 				case LispSingleFloatArray f -> {
-					bytes.asFloatBuffer().get(f.data(), start, n);
-					FloatArrayWriteHook.written(f.data());
+					FloatArrayAccessHook.written(f.storage());
+					bytes.asFloatBuffer().get(f.storage(), start, n);
 				}
 				case LispDoubleFloatArray d -> {
-					bytes.asDoubleBuffer().get(d.data(), start, n);
-					FloatArrayWriteHook.written(d.data());
+					FloatArrayAccessHook.written(d.storage());
+					bytes.asDoubleBuffer().get(d.storage(), start, n);
 				}
 				case LispIntVector iv -> {
 					long[] data = iv.data();

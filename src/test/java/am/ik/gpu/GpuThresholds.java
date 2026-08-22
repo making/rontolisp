@@ -70,6 +70,27 @@ public final class GpuThresholds {
 	}
 
 	/**
+	 * Residency lookups that missed since the process started, or {@code -1} with no
+	 * device -- with {@link #residencyHits()}, what says whether a call uploaded.
+	 * @return the miss count, or -1
+	 */
+	public static long residencyMisses() {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null ? residency.misses() : -1;
+	}
+
+	/**
+	 * How many resident copies are DIRTY right now -- results left on the device that the
+	 * host has not read ({@code Gpu.lazyResults}) -- or {@code -1} with no device. The
+	 * one observable that says a result really stayed on the device.
+	 * @return the dirty count, or -1
+	 */
+	public static int dirtyCount() {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null ? residency.dirtyCount() : -1;
+	}
+
+	/**
 	 * Whether a {@code #d} operand can reach the device at all. {@code false} on Metal,
 	 * where MSL has no {@code double}.
 	 * @return {@code true} when the double half of the library is live here

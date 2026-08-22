@@ -155,6 +155,11 @@ static inline float bin_op(int op, float x, float y) {
     case 3: return x / y;
     case 4: return x > y ? x : y;
     case 5: return x < y ? x : y;
+    case 6: return x > y ? 1.0f : 0.0f;
+    case 7: return x >= y ? 1.0f : 0.0f;
+    case 8: return x < y ? 1.0f : 0.0f;
+    case 9: return x <= y ? 1.0f : 0.0f;
+    case 10: return x == y ? 1.0f : 0.0f;
     default: return x;
   }
 }

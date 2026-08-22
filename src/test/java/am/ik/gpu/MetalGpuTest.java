@@ -276,7 +276,10 @@ class MetalGpuTest {
 			// (0, 1): inside every member's domain, asin and acos included.
 			a[i] = (float) ((i + 1) / (double) (n + 1));
 		}
-		for (int op = 0; op < Gpu.MAP_OPS; op++) {
+		// The twelve libm members; the resident tier's four past them are offered over
+		// a resident operand only, which this backend never has (it keeps no lazy
+		// results), and decline.
+		for (int op = 0; op < Gpu.MAP_LIBM_OPS; op++) {
 			assertThat(Gpu.map(op, a, 0, out, 0, n)).as("op %d", op).isTrue();
 			for (int i = 0; i < n; i += 97) {
 				double expected = expected(op, a[i]);
@@ -433,6 +436,8 @@ class MetalGpuTest {
 		int elements = (int) Gpu.mapMinElements() * 2;
 		float[] x = new float[elements], y = new float[elements];
 		assertThat(Gpu.map(Gpu.MAP_OPS, x, 0, y, 0, elements)).as("an op code the library does not name").isFalse();
+		assertThat(Gpu.map(Gpu.MAP_SQRT, x, 0, y, 0, elements)).as("a resident-only member, nothing resident")
+			.isFalse();
 		assertThat(Gpu.map(Gpu.MAP_EXP, x, 0, y, 0, elements / 64)).as("below the element threshold").isFalse();
 		assertThat(out).containsOnly(0.0f);
 		assertThat(y).containsOnly(0.0f);

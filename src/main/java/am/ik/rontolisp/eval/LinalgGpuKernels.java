@@ -45,7 +45,11 @@ final class LinalgGpuKernels {
 	 */
 	static final int MAP_EXP = Gpu.MAP_EXP, MAP_LOG = Gpu.MAP_LOG, MAP_TANH = Gpu.MAP_TANH, MAP_SIN = Gpu.MAP_SIN,
 			MAP_COS = Gpu.MAP_COS, MAP_TAN = Gpu.MAP_TAN, MAP_ASIN = Gpu.MAP_ASIN, MAP_ACOS = Gpu.MAP_ACOS,
-			MAP_ATAN = Gpu.MAP_ATAN, MAP_SINH = Gpu.MAP_SINH, MAP_COSH = Gpu.MAP_COSH, MAP_ERF = Gpu.MAP_ERF;
+			MAP_ATAN = Gpu.MAP_ATAN, MAP_SINH = Gpu.MAP_SINH, MAP_COSH = Gpu.MAP_COSH, MAP_ERF = Gpu.MAP_ERF,
+			MAP_SQRT = Gpu.MAP_SQRT, MAP_ABS = Gpu.MAP_ABS, MAP_NEGATIVE = Gpu.MAP_NEGATIVE, MAP_SIGN = Gpu.MAP_SIGN;
+
+	/** The first map op that is a member over a RESIDENT operand only ({@code sqrt}). */
+	static final int MAP_LIBM_OPS = Gpu.MAP_LIBM_OPS;
 
 	/**
 	 * The op codes {@link #bcast} and {@link #fold} take, re-exported for the same reason
@@ -54,7 +58,8 @@ final class LinalgGpuKernels {
 	 * {@code LinalgSimdKernels.BOP_MAX} does.
 	 */
 	static final int BIN_ADD = Gpu.BIN_ADD, BIN_SUB = Gpu.BIN_SUB, BIN_MUL = Gpu.BIN_MUL, BIN_DIV = Gpu.BIN_DIV,
-			BIN_MAX = Gpu.BIN_MAX, BIN_MIN = Gpu.BIN_MIN, FOLD_SUM = Gpu.FOLD_SUM, FOLD_AMAX = Gpu.FOLD_AMAX,
+			BIN_MAX = Gpu.BIN_MAX, BIN_MIN = Gpu.BIN_MIN, BIN_GT = Gpu.BIN_GT, BIN_GE = Gpu.BIN_GE, BIN_LT = Gpu.BIN_LT,
+			BIN_LE = Gpu.BIN_LE, BIN_EQ = Gpu.BIN_EQ, FOLD_SUM = Gpu.FOLD_SUM, FOLD_AMAX = Gpu.FOLD_AMAX,
 			FOLD_AMIN = Gpu.FOLD_AMIN;
 
 	private LinalgGpuKernels() {
@@ -80,6 +85,36 @@ final class LinalgGpuKernels {
 	 */
 	static void written(Object data) {
 		Gpu.written(data);
+	}
+
+	/**
+	 * Tells the library that a packed array's storage is about to be READ on the host, so
+	 * that a result the device still holds the only copy of comes home first
+	 * ({@code Gpu.materialize}). The interpreter's half of the reader enumeration:
+	 * installed on {@code FloatArrayAccessHook} by {@link LinalgGpu#install}, it is
+	 * reached from the records' {@code data()} accessor and their own element reads.
+	 * @param data the {@code double[]} or {@code float[]} about to be read
+	 */
+	static void materialize(Object data) {
+		Gpu.materialize(data);
+	}
+
+	/**
+	 * Whether the device holds a copy of the array -- what lets a member be offered below
+	 * its size threshold, or at all for the resident tier.
+	 * @param data the {@code double[]} or {@code float[]}
+	 * @return {@code true} when a copy is resident
+	 */
+	static boolean resident(Object data) {
+		return Gpu.resident(data);
+	}
+
+	/**
+	 * Switches lazy results on: every member's result stays on the device until the host
+	 * first reads it, which the hooks above make safe ({@code .kb/gpu.md}).
+	 */
+	static void lazyResults() {
+		Gpu.lazyResults(true);
 	}
 
 	/** What was found, or why nothing was -- the text the CLI reports. */
@@ -426,6 +461,135 @@ final class LinalgGpuKernels {
 	static float @Nullable [] multiply(float[] a, int sa, float[] b, int sb, int batch, int n, int m, int p) {
 		float[] out = new float[batch * n * p];
 		return Gpu.multiply(a, 0, sa, b, 0, sb, out, 0, batch, n, m, p) ? out : null;
+	}
+
+	// --- the resident tier (.todo/491) -------------------------------------------------
+
+	/**
+	 * {@code op} over two SAME-SHAPED double-float operands, or {@code null} when the
+	 * device declined it -- which it does unless one of them is already resident.
+	 * @param op one of the {@code BIN_*} constants
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @param n how many elements each holds
+	 * @return a fresh {@code n} result, or {@code null}
+	 */
+	static double @Nullable [] zip(int op, double[] a, double[] b, int n) {
+		double[] out = new double[n];
+		return Gpu.zip(op, a, 0, b, 0, out, 0, n) ? out : null;
+	}
+
+	/** The single-float sibling of {@link #zip(int, double[], double[], int)}. */
+	static float @Nullable [] zip(int op, float[] a, float[] b, int n) {
+		float[] out = new float[n];
+		return Gpu.zip(op, a, 0, b, 0, out, 0, n) ? out : null;
+	}
+
+	/**
+	 * {@code op} over a resident double-float array and a double scalar -- the scalar on
+	 * the left when {@code swap} -- or {@code null} when the device declined it.
+	 * @param op one of the {@code BIN_*} constants
+	 * @param a the array
+	 * @param s the scalar
+	 * @param swap whether the scalar is the left operand
+	 * @param n how many elements
+	 * @return a fresh {@code n} result, or {@code null}
+	 */
+	static double @Nullable [] scale(int op, double[] a, double s, boolean swap, int n) {
+		double[] out = new double[n];
+		return Gpu.scale(op, a, 0, s, swap, out, 0, n) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of {@link #scale(int, double[], double, boolean, int)}.
+	 */
+	static float @Nullable [] scale(int op, float[] a, double s, boolean swap, int n) {
+		float[] out = new float[n];
+		return Gpu.scale(op, a, 0, s, swap, out, 0, n) ? out : null;
+	}
+
+	/**
+	 * {@code linalg:where} over three operands broadcast to {@code dims}, any of which
+	 * may be a scalar ({@code null} array, its value beside it), at double width; or
+	 * {@code null} when the device declined it.
+	 * @param m the mask, either width, or null
+	 * @param sm the mask's strides over the output, or null
+	 * @param ms the mask's value when scalar
+	 * @param x the where-true operand or null
+	 * @param sx its strides or null
+	 * @param xs its value when scalar
+	 * @param y the where-false operand or null
+	 * @param sy its strides or null
+	 * @param ys its value when scalar
+	 * @param dims the output shape
+	 * @return a fresh result of {@code dims} elements, or {@code null}
+	 */
+	static double @Nullable [] where(@Nullable Object m, int @Nullable [] sm, double ms, double @Nullable [] x,
+			int @Nullable [] sx, double xs, double @Nullable [] y, int @Nullable [] sy, double ys, int[] dims) {
+		int[] zero = new int[dims.length];
+		double[] out = new double[count(dims)];
+		return Gpu.where(m, 0, sm == null ? zero : sm, ms, x, 0, sx == null ? zero : sx, xs, y, 0,
+				sy == null ? zero : sy, ys, out, 0, dims) ? out : null;
+	}
+
+	/** The single-float sibling of {@link #where}. */
+	static float @Nullable [] where(@Nullable Object m, int @Nullable [] sm, double ms, float @Nullable [] x,
+			int @Nullable [] sx, double xs, float @Nullable [] y, int @Nullable [] sy, double ys, int[] dims) {
+		int[] zero = new int[dims.length];
+		float[] out = new float[count(dims)];
+		return Gpu.where(m, 0, sm == null ? zero : sm, ms, x, 0, sx == null ? zero : sx, xs, y, 0,
+				sy == null ? zero : sy, ys, out, 0, dims) ? out : null;
+	}
+
+	/**
+	 * {@code linalg::%la-adam-step}'s fused update IN PLACE on the device, over four
+	 * double-float arrays of {@code n} elements; {@code false} when the device declined
+	 * (nothing written), which it does unless one of the four is resident.
+	 * @param x the parameter
+	 * @param g the gradient
+	 * @param m the first moment
+	 * @param v the second moment
+	 * @param n the element count
+	 * @param rule the eleven-number rule
+	 * @return {@code true} when the update ran
+	 */
+	static boolean adamStep(double[] x, double[] g, double[] m, double[] v, int n, double[] rule) {
+		return Gpu.adamStep(x, 0, g, 0, m, 0, v, 0, n, rule);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #adamStep(double[], double[], double[], double[], int, double[])}.
+	 */
+	static boolean adamStep(float[] x, float[] g, float[] m, float[] v, int n, double[] rule) {
+		return Gpu.adamStep(x, 0, g, 0, m, 0, v, 0, n, rule);
+	}
+
+	/**
+	 * The strided copy {@code out[oOut + so.i] = a[oa + sa.i]} over {@code dims} into a
+	 * caller-allocated destination, or {@code false} when the device declined it (it does
+	 * unless {@code a}, or {@code out} already, is resident). The interpreter's spans are
+	 * whole arrays from 0.
+	 */
+	static boolean copy(double[] a, int oa, int[] sa, double[] out, int oOut, int[] so, int[] dims) {
+		return Gpu.copy(a, oa, sa, new int[] { 0, a.length }, out, oOut, so, new int[] { 0, out.length }, dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #copy(double[], int, int[], double[], int, int[], int[])}.
+	 */
+	static boolean copy(float[] a, int oa, int[] sa, float[] out, int oOut, int[] so, int[] dims) {
+		return Gpu.copy(a, oa, sa, new int[] { 0, a.length }, out, oOut, so, new int[] { 0, out.length }, dims);
+	}
+
+	/** {@code %la-scale}'s in-place multiply of a resident array by a double scalar. */
+	static boolean scaleInPlace(double[] a, double s) {
+		return Gpu.scale(Gpu.BIN_MUL, a, 0, s, false, a, 0, a.length);
+	}
+
+	static boolean scaleInPlace(float[] a, double s) {
+		return Gpu.scale(Gpu.BIN_MUL, a, 0, s, false, a, 0, a.length);
 	}
 
 }

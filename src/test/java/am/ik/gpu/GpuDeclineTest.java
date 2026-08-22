@@ -277,6 +277,13 @@ class GpuDeclineTest {
 		// The GEMV pair behind vec:matvec, the one member outside linalg:.
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_F64);
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_F32);
+		// The resident tier's eight, and the mirrors it added: the four maps past the
+		// libm ones and the five comparison masks.
+		for (String kernel : CudaGemm.KERNELS_RESIDENT) {
+			assertThat(ptx).contains(".visible .entry " + kernel);
+		}
+		assertThat(resource("gemm.cu")).contains("case " + Gpu.MAP_SQRT + ": {").contains("sqrt((double) x)");
+		assertThat(resource("gemm.cu")).contains("case " + Gpu.BIN_EQ + ": return x == y ? 1.0 : 0.0;");
 		// The regeneration command travels with the artifact: without it the .ptx is an
 		// unreproducible blob.
 		assertThat(ptx).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");
@@ -474,6 +481,49 @@ class GpuDeclineTest {
 			assertThat(in).as("resource %s", name).isNotNull();
 			return new String(in.readAllBytes(), StandardCharsets.US_ASCII);
 		}
+	}
+
+	@Test
+	void theResidentTierAndTheLazyHooksDeclineOrDoNothingOnAMachineWithoutADevice() {
+		// The hooks the interceptors call from every packed-array read and write never
+		// throw, never probe and never touch a driver -- a program that writes a double
+		// into an array must not pay for a dlopen.
+		assertThatCode(() -> {
+			Gpu.written(new double[4]);
+			Gpu.materialize(new double[4]);
+			Gpu.materialize("not an array");
+			assertThat(Gpu.resident(new float[4])).isFalse();
+			Gpu.lazyResults(true);
+			Gpu.lazyResults(false);
+		}).doesNotThrowAnyException();
+		// The resident tier is offered over a resident operand only, and with no device
+		// nothing is ever resident: every member declines, whatever its arguments.
+		int n = 1 << 16;
+		double[] a = new double[n], b = new double[n], out = new double[n];
+		float[] af = new float[n], bf = new float[n], outF = new float[n];
+		double[] rule = { 0.01, 0.001, 0.1, 0.9, 0.1, 0.999, 0.001, 1e-8, 0.19, 0.001999, 0.0 };
+		assertThatCode(() -> {
+			assertThat(Gpu.zip(Gpu.BIN_ADD, a, 0, b, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.zip(Gpu.BIN_MUL, af, 0, bf, 0, outF, 0, n)).isFalse();
+			assertThat(Gpu.scale(Gpu.BIN_DIV, a, 0, 2.0, false, out, 0, n)).isFalse();
+			assertThat(Gpu.scale(Gpu.BIN_SUB, af, 0, 2.0, true, outF, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_SQRT, a, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_SIGN, af, 0, outF, 0, n)).isFalse();
+			assertThat(Gpu.where(a, 0, new int[] { 1 }, 0.0, b, 0, new int[] { 1 }, 0.0, null, 0, new int[] { 0 }, 1.0,
+					out, 0, new int[] { n }))
+				.isFalse();
+			assertThat(Gpu.where(af, 0, new int[] { 1 }, 0.0, bf, 0, new int[] { 1 }, 0.0, null, 0, new int[] { 0 },
+					1.0, outF, 0, new int[] { n }))
+				.isFalse();
+			assertThat(Gpu.adamStep(a, 0, b, 0, out, 0, new double[n], 0, n, rule)).isFalse();
+			assertThat(Gpu.adamStep(af, 0, bf, 0, outF, 0, new float[n], 0, n, rule)).isFalse();
+			assertThat(Gpu.copy(a, 0, new int[] { 1 }, new int[] { 0, n }, out, 0, new int[] { 1 }, new int[] { 0, n },
+					new int[] { n }))
+				.isFalse();
+			assertThat(Gpu.copy(af, 0, new int[] { 1 }, new int[] { 0, n }, outF, 0, new int[] { 1 },
+					new int[] { 0, n }, new int[] { n }))
+				.isFalse();
+		}).doesNotThrowAnyException();
 	}
 
 }

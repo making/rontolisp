@@ -1831,10 +1831,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			// delegate to the general _array* helpers above for a non-packed array, so
 			// they are emitted alongside (and depend on) them.
 			if (usesFloatArray) {
-				// Under --gpu every packed store also reports itself, so a device copy of
-				// the array is dropped (.kb/gpu.md, "The residency design").
+				// Under --gpu every packed store reports itself first, so a device copy
+				// of
+				// the array comes home if it was the authoritative one and is dropped;
+				// and
+				// every packed READ materializes first (.kb/gpu.md, "Device residency").
 				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
-						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.WRITTEN) : null));
+						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.WRITTEN) : null,
+						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.MATERIALIZE) : null));
 			}
 			// The packed integer-vector helpers (_iv*) dispatch on instanceof long[]
 			// and delegate any other array shape down the chain (to the _fv* tier when
@@ -2762,6 +2766,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(1)
 									.writeU2(1)
 									.writeCode((Object[]) gpuRuntime.writtenCode().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+					// Its read-side twin, called before every host read of one
+					// (JvmGpuRuntimeBuilder.MATERIALIZE_METHOD).
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.materializeName(),
+							gpuRuntime.materializeDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(1)
+									.writeU2(1)
+									.writeCode((Object[]) gpuRuntime.materializeCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

@@ -101,21 +101,28 @@ final class JvmSimdCompiler {
 		// Make sure the bridge class is defined before its method reference resolves.
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+		// Under --gpu the lane kernel reads its arguments on the host, so each is
+		// materialized first (a result the device still holds comes home); an -into
+		// kernel writes its caller's destination -- the first argument -- in place, so
+		// that one is reported as WRITTEN instead, before the call: the device's copy of
+		// it comes home if it was the authoritative one and is dropped (.kb/gpu.md,
+		// "Device residency"). The allocating forms return a fresh array the device has
+		// never seen.
+		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		boolean into = member.endsWith("-INTO");
 		for (int i = 1; i <= arity; i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+			if (gpuOps != null) {
+				ctx.emit(Opcode.DUP);
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(Objects
+					.requireNonNull(gpuOps
+						.get(into && i == 1 ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))
+					.index());
+			}
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get(member)).index());
-		// An -into kernel writes its caller's destination in place and returns it. Under
-		// --gpu the device may hold a resident copy of that array, keyed by identity, so
-		// the call site reports the write (.kb/gpu.md, "The residency design"); the
-		// allocating forms return a fresh array the device has never seen.
-		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
-		if (gpuOps != null && member.endsWith("-INTO")) {
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN)).index());
-		}
 	}
 
 	/**
@@ -168,7 +175,14 @@ final class JvmSimdCompiler {
 		ctx.emit(Opcode.IFNONNULL);
 		ctx.emitU2(0);
 		ctx.emit(Opcode.POP);
-		// ... else the lane kernel, or the defun.
+		// ... else the lane kernel, or the defun -- both host reads, so both operands
+		// are materialized first.
+		for (int slot : slots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slot);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(gpu.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
+		}
 		for (int slot : slots) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(slot);

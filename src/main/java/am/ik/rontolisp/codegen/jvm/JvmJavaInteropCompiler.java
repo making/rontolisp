@@ -54,6 +54,10 @@ final class JvmJavaInteropCompiler {
 			case LispNames.JAVA_CALL -> {
 				requireArity(args.size() >= 3, "java:call expects (java:call object \"method\" args...)");
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				// The receiver may itself be a packed array ((java:call arr "clone")),
+				// and
+				// Java reads it raw: materialize it like every other argument.
+				emitMaterialize(ctx);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				compileRestArray(args, 3, ctx, className);
 				emitBridgeCall(ctx, ops, "call");
@@ -87,6 +91,20 @@ final class JvmJavaInteropCompiler {
 		}
 	}
 
+	/**
+	 * Under {@code --gpu}, materializes the value on top of the stack (leaving it there):
+	 * Java code reads a packed array raw, so a result the device still holds the only
+	 * copy of has to come home before it is handed over ({@code .kb/gpu.md}).
+	 */
+	private static void emitMaterialize(JvmLispCompiler.Ctx ctx) {
+		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		if (gpuOps != null) {
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
+		}
+	}
+
 	/** Evaluates {@code args[from..]} into a fresh {@code Object[]} left on the stack. */
 	private static void compileRestArray(List<LispVal> args, int from, JvmLispCompiler.Ctx ctx, String className) {
 		JvmEmitHelper.emitIntConst(ctx, args.size() - from);
@@ -96,6 +114,7 @@ final class JvmJavaInteropCompiler {
 			ctx.emit(Opcode.DUP);
 			JvmEmitHelper.emitIntConst(ctx, i - from);
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+			emitMaterialize(ctx);
 			ctx.emit(Opcode.AASTORE);
 		}
 	}

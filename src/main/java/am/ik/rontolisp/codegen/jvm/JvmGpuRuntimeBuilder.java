@@ -82,8 +82,8 @@ final class JvmGpuRuntimeBuilder {
 	 */
 	private static final List<String> GPU_CLASSES = List.of("GpuDevice", "GpuDevice$Thresholds", "CudaDriver",
 			"CuResult", "CudaGemm", "CudaGemm$Probe", "CudaGemm$Tile", "DeviceResidency", "DeviceResidency$Entry",
-			"DeviceResidency$Key", "DeviceResidency$Lookup", "MetalDriver", "MetalGemm", "MetalGemm$Probe",
-			"MetalGemm$Slab", "Gpu", "Gpu$Probe");
+			"DeviceResidency$Flush", "DeviceResidency$Key", "DeviceResidency$Lookup", "MetalDriver", "MetalGemm",
+			"MetalGemm$Probe", "MetalGemm$Slab", "Gpu", "Gpu$Probe");
 
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_gpuInit";
@@ -100,6 +100,27 @@ final class JvmGpuRuntimeBuilder {
 
 	/** The {@code ops} key of {@link #WRITTEN_METHOD}'s method reference. */
 	static final String WRITTEN = "written";
+
+	/**
+	 * The emitted guard every HOST READ of a packed float array's storage calls under
+	 * {@code --gpu}:
+	 * {@code if (_gpuInited != 0) RontoLispGpuBridge.gpuMaterialize(array)} -- the other
+	 * half of {@link #WRITTEN_METHOD}, for lazy results: a result the device still holds
+	 * the only copy of comes home before the read. Same guard, same reason.
+	 */
+	static final String MATERIALIZE_METHOD = "_gpuMaterialize";
+
+	/** The {@code ops} key of {@link #MATERIALIZE_METHOD}'s method reference. */
+	static final String MATERIALIZE = "materialize";
+
+	/** The {@code ops} key of the Adam update ({@code linalg::%la-adam-step}). */
+	static final String ADAM_STEP = "adamStep";
+
+	/** The {@code ops} key of the three-way select ({@code linalg:where}). */
+	static final String WHERE = "where";
+
+	/** The {@code ops} key of the strided gather behind {@code linalg:slice}. */
+	static final String GATHER_STRIDED = "gatherStrided";
 
 	/** The {@code ops} key of the rank-2 kernel. */
 	static final String DOT = "dot";
@@ -123,7 +144,8 @@ final class JvmGpuRuntimeBuilder {
 	 * member, so the two need no table between them.
 	 */
 	private static final List<String> MAP_KERNELS = List.of("gpuExp", "gpuLog", "gpuTanh", "gpuSin", "gpuCos", "gpuTan",
-			"gpuAsin", "gpuAcos", "gpuAtan", "gpuSinh", "gpuCosh", "gpuErf");
+			"gpuAsin", "gpuAcos", "gpuAtan", "gpuSinh", "gpuCosh", "gpuErf", "gpuSqrt", "gpuAbs", "gpuNegative",
+			"gpuSign");
 
 	/**
 	 * The {@code ops} keys of the STRIDED tier's two-argument kernels: the broadcast
@@ -131,7 +153,8 @@ final class JvmGpuRuntimeBuilder {
 	 * key IS the bridge method name.
 	 */
 	private static final List<String> BINARY_KERNELS = List.of("gpuAdd", "gpuSub", "gpuMul", "gpuDiv", "gpuMaximum",
-			"gpuMinimum", "gpuTransposeAxes");
+			"gpuMinimum", "gpuGreater", "gpuGreaterEqual", "gpuLess", "gpuLessEqual", "gpuEqual", "gpuTransposeAxes",
+			"gpuReshape", "gpuConcatenate", "gpuScale");
 
 	/**
 	 * The strided tier's three-argument kernels: the axis folds
@@ -152,7 +175,8 @@ final class JvmGpuRuntimeBuilder {
 	 */
 	record GpuRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack, int maxLocals,
 			Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops,
-			Utf8Constant writtenName, Utf8Constant writtenDesc, List<Integer> writtenCode) {
+			Utf8Constant writtenName, Utf8Constant writtenDesc, List<Integer> writtenCode, Utf8Constant materializeName,
+			Utf8Constant materializeDesc, List<Integer> materializeCode) {
 	}
 
 	/**
@@ -208,6 +232,20 @@ final class JvmGpuRuntimeBuilder {
 		ops.put(WRITTEN, cp.addMethodref(thisClass, cp.addNameAndType(writtenName, writtenDesc)));
 		MethodrefConstant bridgeWritten = cp.addMethodref(bridgeClass,
 				cp.addNameAndType(cp.addUtf8("gpuWritten"), cp.addUtf8("(Ljava/lang/Object;)V")));
+		Utf8Constant materializeName = cp.addUtf8(MATERIALIZE_METHOD);
+		Utf8Constant materializeDesc = cp.addUtf8("(Ljava/lang/Object;)V");
+		ops.put(MATERIALIZE, cp.addMethodref(thisClass, cp.addNameAndType(materializeName, materializeDesc)));
+		MethodrefConstant bridgeMaterialize = cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("gpuMaterialize"), cp.addUtf8("(Ljava/lang/Object;)V")));
+		ops.put(WHERE, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuWhere"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(ADAM_STEP, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuAdamStep"), cp.addUtf8(
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(GATHER_STRIDED, cp
+			.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuGatherStrided"), cp.addUtf8(
+					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put("gpuTranspose", cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("gpuTranspose"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(DOT, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuDot"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(MATMUL_ND, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNd"),
@@ -280,9 +318,23 @@ final class JvmGpuRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(written, skipPos, written.size());
 		written.add(Opcode.RETURN);
 
+		// --- _gpuMaterialize body --------------------------------------------------
+		// if (_gpuInited != 0) RontoLispGpuBridge.gpuMaterialize(array); return;
+		List<Integer> materialize = new ArrayList<>();
+		materialize.add(Opcode.GETSTATIC);
+		JvmRuntimeBuilder.emitU2(materialize, initedField.index());
+		int skipMaterialize = materialize.size();
+		materialize.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(materialize, 0);
+		materialize.add(Opcode.ALOAD_0);
+		materialize.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(materialize, bridgeMaterialize.index());
+		JvmRuntimeBuilder.patchBranch(materialize, skipMaterialize, materialize.size());
+		materialize.add(Opcode.RETURN);
+
 		// The deepest stack is [lookup, decoder, chunk, chunk] inside a class blob.
 		return new GpuRuntime(initName, initDesc, code, 4, 1, initedFieldName, initedFieldDesc, ops, writtenName,
-				writtenDesc, written);
+				writtenDesc, written, materializeName, materializeDesc, materialize);
 	}
 
 	/** Loads one chunk sequence onto the stack, concatenated back into one string. */

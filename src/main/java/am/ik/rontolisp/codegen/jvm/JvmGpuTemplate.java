@@ -55,6 +55,14 @@ final class JvmGpuTemplate {
 	 */
 	static void gpuKernels(String ptx) {
 		Gpu.useKernels(ptx);
+		// Lazy results: a member's result stays on the device until the host first reads
+		// it. Safe here because the compiled program materializes before every host read
+		// of packed-array storage -- _fvAref*, _fvToGeneral*, every host rung of every
+		// accelerated call site, the typed loops, the bulk write-sequence, Java interop
+		// --
+		// through _gpuMaterialize (.kb/gpu.md, "A result comes home on first host
+		// touch").
+		Gpu.lazyResults(true);
 	}
 
 	/**
@@ -85,6 +93,21 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * A packed float array is about to be READ on the host: if the device holds its only
+	 * bytes (a result left there lazily), they come home first. The compiled half of the
+	 * reader enumeration: the emitted {@code _gpuMaterialize} guard calls this from every
+	 * host read of packed-array storage, once the bridge is defined -- before that
+	 * nothing can be resident. Anything that is not a packed array is ignored, so a call
+	 * site may report every argument without looking.
+	 * @param array the value about to be read
+	 */
+	static void gpuMaterialize(@Nullable Object array) {
+		if (array instanceof double[] || array instanceof float[]) {
+			Gpu.materialize(array);
+		}
+	}
+
+	/**
 	 * {@code (linalg:dot a b)} over two packed rank-2 operands of the same width: the
 	 * matrix-by-matrix product, and nothing else. The matrix-by-vector shapes
 	 * {@code --blas} takes are memory-bound, so a round trip cannot win them and they are
@@ -107,7 +130,7 @@ final class JvmGpuTemplate {
 		int n = dim(a, 0);
 		int m = dim(a, 1);
 		int p = dim(b, 1);
-		if (m != dim(b, 0) || !Gpu.worth(n, m, p)) {
+		if (m != dim(b, 0) || !(Gpu.worth(n, m, p) || resident(a) || resident(b))) {
 			return null;
 		}
 		// Asked before the result is allocated, and cached from then on: on a machine
@@ -175,7 +198,8 @@ final class JvmGpuTemplate {
 		}
 		int rank = bd.length + 2;
 		long total = batches * n * p;
-		if (batches < 1 || total + 1 + rank > Integer.MAX_VALUE - 8 || !Gpu.worth(batches, n, m, p)) {
+		if (batches < 1 || total + 1 + rank > Integer.MAX_VALUE - 8
+				|| !(Gpu.worth(batches, n, m, p) || resident(a) || resident(b))) {
 			return null;
 		}
 		long sa = batchStride(ba, bd, (long) n * m);
@@ -427,6 +451,492 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * {@code (linalg:sqrt a)} on the device -- the resident tier: one machine instruction
+	 * per element, which a round trip cannot pay for, so it is offered over a RESIDENT
+	 * operand only, where there is no trip. Bit-identical to the lane kernel.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSqrt(@Nullable Object a) {
+		return map(Gpu.MAP_SQRT, a);
+	}
+
+	/**
+	 * {@code (linalg:abs a)} on the device, over a resident operand only.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuAbs(@Nullable Object a) {
+		return map(Gpu.MAP_ABS, a);
+	}
+
+	/**
+	 * {@code (linalg:negative a)} on the device, over a resident operand only.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuNegative(@Nullable Object a) {
+		return map(Gpu.MAP_NEGATIVE, a);
+	}
+
+	/**
+	 * {@code (linalg:sign a)} on the device, over a resident operand only.
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSign(@Nullable Object a) {
+		return map(Gpu.MAP_SIGN, a);
+	}
+
+	/**
+	 * {@code (linalg:greater a b)} on the device: the comparison mask ({@code 1.0} where
+	 * the relation holds) at the three shapes the binary members take.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuGreater(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_GT, a, b);
+	}
+
+	/**
+	 * {@code (linalg:greater-equal a b)} on the device.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuGreaterEqual(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_GE, a, b);
+	}
+
+	/**
+	 * {@code (linalg:less a b)} on the device.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuLess(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_LT, a, b);
+	}
+
+	/**
+	 * {@code (linalg:less-equal a b)} on the device.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuLessEqual(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_LE, a, b);
+	}
+
+	/**
+	 * {@code (linalg:equal a b)} on the device.
+	 * @param a the left operand
+	 * @param b the right operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuEqual(@Nullable Object a, @Nullable Object b) {
+		return bcast(Gpu.BIN_EQ, a, b);
+	}
+
+	/**
+	 * {@code (linalg:where mask x y)} on the device -- the resident tier's three-way
+	 * select, {@code torch:masked-fill}'s member: every operand a packed array of either
+	 * width or a plain number, broadcast together; the result at {@code x}'s width when
+	 * it is an array, else {@code y}'s, else double ({@code laWhere}'s rule and the
+	 * defun's). Offered only when some array operand is resident; a select, so
+	 * bit-identical. Declines no array at all, a boxed array or a ratio, an incompatible
+	 * broadcast, and a mixed-width x / y.
+	 * @param m the mask
+	 * @param x the where-true operand
+	 * @param y the where-false operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuWhere(@Nullable Object m, @Nullable Object x, @Nullable Object y) {
+		boolean ma = packed(m), xa = packed(x), ya = packed(y);
+		if (!ma && !xa && !ya) {
+			return null;
+		}
+		if (!((ma && resident(m)) || (xa && resident(x)) || (ya && resident(y)))) {
+			return null;
+		}
+		Double ms = ma ? null : scalar(m), xs = xa ? null : scalar(x), ys = ya ? null : scalar(y);
+		if ((!ma && ms == null) || (!xa && xs == null) || (!ya && ys == null)) {
+			return null;
+		}
+		boolean single = xa ? x instanceof float[] : (ya && y instanceof float[]);
+		if (xa && ya && (x instanceof float[]) != (y instanceof float[])) {
+			return null;
+		}
+		int[] od = null;
+		for (Object o : new Object[] { m, x, y }) {
+			if (packed(o)) {
+				int[] d = dims(o, rank(o));
+				od = od == null ? d : bcastShape(od, d);
+				if (od == null) {
+					return null;
+				}
+			}
+		}
+		if (od == null) {
+			return null;
+		}
+		int rank = od.length;
+		long total = count(od);
+		if (total + 1 + rank > Integer.MAX_VALUE - 8) {
+			return null;
+		}
+		int off = 1 + rank;
+		int[] sm = ma ? bcastStrides(dims(m, rank(m)), od) : new int[rank];
+		int[] sx = xa ? bcastStrides(dims(x, rank(x)), od) : new int[rank];
+		int[] sy = ya ? bcastStrides(dims(y, rank(y)), od) : new int[rank];
+		double mv = ms == null ? 0.0 : ms, xv = xs == null ? 0.0 : xs, yv = ys == null ? 0.0 : ys;
+		int om = ma ? 1 + rank(m) : 0, ox = xa ? 1 + rank(x) : 0, oy = ya ? 1 + rank(y) : 0;
+		if (single) {
+			float[] c = newLike(od, off + (int) total);
+			return Gpu.where(ma ? m : null, om, sm, mv, xa ? floats(x) : null, ox, sx, xv, ya ? floats(y) : null, oy,
+					sy, yv, c, off, od) ? c : null;
+		}
+		double[] c = newLikeD(od, off + (int) total);
+		return Gpu.where(ma ? m : null, om, sm, mv, xa ? doubles(x) : null, ox, sx, xv, ya ? doubles(y) : null, oy, sy,
+				yv, c, off, od) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-adam-step x g m v rule)} on the device -- the resident tier's
+	 * one writing member: the parameter and both moments are updated IN PLACE on the
+	 * device from a gradient that is usually the previous member's result, and stay there
+	 * as the authoritative copies, so a model's weights never come home between steps.
+	 * Offered only when one of the four is resident; declines a boxed or mixed-width
+	 * quadruple, a length mismatch and a malformed rule, and the lane kernel or the defun
+	 * then runs -- bit-identically. Answers {@code x}, as the kernel does.
+	 * @param x the parameter
+	 * @param g the gradient
+	 * @param m the first moment
+	 * @param v the second moment
+	 * @param rule the eleven-element rule vector
+	 * @return {@code x}, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuAdamStep(@Nullable Object x, @Nullable Object g, @Nullable Object m, @Nullable Object v,
+			@Nullable Object rule) {
+		if (!(rule instanceof double[] ps) || ps.length != 13 || ps[0] != 1.0 || ps[1] != 11.0) {
+			return null;
+		}
+		double[] r = java.util.Arrays.copyOfRange(ps, 2, 13);
+		if (!packed(x) || !packed(g) || !packed(m) || !packed(v)) {
+			return null;
+		}
+		boolean single = x instanceof float[];
+		if ((g instanceof float[]) != single || (m instanceof float[]) != single || (v instanceof float[]) != single) {
+			return null;
+		}
+		int ox = 1 + rank(x), og = 1 + rank(g), om = 1 + rank(m), ov = 1 + rank(v);
+		int n = length(x) - ox;
+		if (n < 1 || length(g) - og != n || length(m) - om != n || length(v) - ov != n) {
+			return null;
+		}
+		if (!(resident(x) || resident(g) || resident(m) || resident(v))) {
+			return null;
+		}
+		boolean ran = single ? Gpu.adamStep(floats(x), ox, floats(g), og, floats(m), om, floats(v), ov, n, r)
+				: Gpu.adamStep(doubles(x), ox, doubles(g), og, doubles(m), om, doubles(v), ov, n, r);
+		return ran ? x : null;
+	}
+
+	/**
+	 * {@code (linalg:reshape a shape)} over a resident operand: the same elements under a
+	 * new header, one contiguous device copy ({@code laReshape}'s rule, a {@code -1}
+	 * shape declined). Over anything else declines, and the lane kernel or the defun
+	 * copies on the host.
+	 * @param a the operand
+	 * @param shape the new shape, a number or a proper list of numbers
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuReshape(@Nullable Object a, @Nullable Object shape) {
+		if (!packed(a) || !resident(a)) {
+			return null;
+		}
+		int[] od = shapeOf(shape);
+		if (od == null) {
+			return null;
+		}
+		int rank = rank(a);
+		int n = length(a) - 1 - rank;
+		long total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		if (n < 1 || total != n) {
+			return null;
+		}
+		return copyInto(java.util.Objects.requireNonNull(a), 1 + rank, new int[] { 1 }, new int[] { n },
+				new int[] { 1 }, od);
+	}
+
+	/**
+	 * {@code (linalg:transpose a)}, the plain matrix transpose, over a resident rank-2
+	 * operand: one strided copy. A vector or a rank above 2 is the defun's (the vector
+	 * itself; an error).
+	 * @param a the operand
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuTranspose(@Nullable Object a) {
+		if (!packed(a) || rank(a) != 2 || !resident(a)) {
+			return null;
+		}
+		int r = dim(a, 0), c = dim(a, 1);
+		int[] od = { c, r };
+		return copyInto(java.util.Objects.requireNonNull(a), 3, new int[] { 1, c }, od, new int[] { r, 1 }, od);
+	}
+
+	/**
+	 * {@code (linalg::%la-gather-strided a od rs base single)} -- the walk behind
+	 * {@code linalg:slice} and {@code broadcast-to} -- over a resident operand: one
+	 * strided copy, the innermost-first strides reversed into the device's per-axis order
+	 * and the base as the walk's origin; a negative stride is allowed. Declines a width
+	 * flag that is not the operand's (the CPU widens, the device copies), an empty output
+	 * and a walk outside the operand, as {@code laGatherStrided} does.
+	 * @param a the operand
+	 * @param odv the output shape
+	 * @param rsv the innermost-first strides
+	 * @param basev the flat index the walk starts at
+	 * @param singlev non-null for a single-float result
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuGatherStrided(@Nullable Object a, @Nullable Object odv, @Nullable Object rsv,
+			@Nullable Object basev, @Nullable Object singlev) {
+		if (!packed(a) || !(basev instanceof Long bl) || bl < 0 || bl > Integer.MAX_VALUE || !resident(a)) {
+			return null;
+		}
+		if ((singlev != null) != (a instanceof float[])) {
+			return null;
+		}
+		int[] od = shapeOf(odv);
+		int[] rs = ints(rsv);
+		if (od == null || rs == null || rs.length != od.length) {
+			return null;
+		}
+		int rank = od.length;
+		int[] sa = new int[rank];
+		long total = 1;
+		for (int k = 0; k < rank; k++) {
+			sa[k] = rs[rank - 1 - k];
+			total *= od[k];
+		}
+		if (total < 1 || total + 1 + rank > Integer.MAX_VALUE - 8) {
+			return null;
+		}
+		int base = (int) (long) bl;
+		return copyInto(java.util.Objects.requireNonNull(a), 1 + rank(a) + base, sa, od, rowMajorStrides(od), od);
+	}
+
+	/**
+	 * {@code (linalg:concatenate arrays :axis ax)} -- {@code torch:cat} -- over packed
+	 * inputs of one width of which at least one is resident: one strided copy per input
+	 * into its slab of the output, the resident input first so that the output is
+	 * resident for the rest (which are then uploaded into it). The defun's shape rules;
+	 * anything it would signal on declines to it.
+	 * @param list the inputs, a compiled proper list
+	 * @param axis the axis, or {@code null} for 0
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuConcatenate(@Nullable Object list, @Nullable Object axis) {
+		java.util.List<Object> inputs = new java.util.ArrayList<>();
+		Object cursor = list;
+		while (cursor instanceof Object[] cell && cell.length == 2) {
+			if (!packed(cell[0])) {
+				return null;
+			}
+			inputs.add(cell[0]);
+			cursor = cell[1];
+		}
+		if (cursor != null || inputs.isEmpty()) {
+			return null;
+		}
+		Object first = inputs.get(0);
+		boolean single = first instanceof float[];
+		int rank = rank(first);
+		long ax;
+		if (axis == null) {
+			ax = 0;
+		}
+		else if (axis instanceof Long l) {
+			ax = l < 0 ? l + rank : l;
+		}
+		else {
+			return null;
+		}
+		if (ax < 0 || ax >= rank) {
+			return null;
+		}
+		int[] d0 = dims(first, rank);
+		long total = 0;
+		boolean anyResident = false;
+		for (Object a : inputs) {
+			if ((a instanceof float[]) != single || rank(a) != rank) {
+				return null;
+			}
+			int[] d = dims(a, rank);
+			for (int k = 0; k < rank; k++) {
+				if (k != ax && d[k] != d0[k]) {
+					return null;
+				}
+			}
+			total += d[(int) ax];
+			anyResident |= resident(a);
+		}
+		if (!anyResident || total < 1 || total > Integer.MAX_VALUE) {
+			return null;
+		}
+		int[] od = d0.clone();
+		od[(int) ax] = (int) total;
+		int[] so = rowMajorStrides(od);
+		long n = count(od);
+		int off = 1 + rank;
+		if (n + off > Integer.MAX_VALUE - 8) {
+			return null;
+		}
+		int lead = 0;
+		while (!resident(inputs.get(lead))) {
+			lead++;
+		}
+		int[] offsets = new int[inputs.size()];
+		for (int i = 0, cum = 0; i < inputs.size(); i++) {
+			offsets[i] = off + cum * so[(int) ax];
+			cum += dims(inputs.get(i), rank)[(int) ax];
+		}
+		float[] cf = single ? newLike(od, off + (int) n) : null;
+		double[] cd = single ? null : newLikeD(od, off + (int) n);
+		for (int step = 0; step < inputs.size(); step++) {
+			int i = step == 0 ? lead : (step <= lead ? step - 1 : step);
+			Object a = inputs.get(i);
+			int[] d = dims(a, rank);
+			int[] spanOut = { off, (int) n };
+			boolean ok = single
+					? Gpu.copy(floats(a), off, rowMajorStrides(d), new int[] { off, (int) count(d) },
+							java.util.Objects.requireNonNull(cf), offsets[i], so, spanOut, d)
+					: Gpu.copy(doubles(a), off, rowMajorStrides(d), new int[] { off, (int) count(d) },
+							java.util.Objects.requireNonNull(cd), offsets[i], so, spanOut, d);
+			if (!ok) {
+				return null;
+			}
+		}
+		return single ? cf : cd;
+	}
+
+	/**
+	 * {@code (linalg::%la-scale g s)} -- gradient clipping's in-place multiply -- over a
+	 * resident array: the kernel reads and writes the one resident buffer, which stays
+	 * the authoritative copy, so the Adam update that follows finds the gradient there.
+	 * Answers {@code g}, as the lane kernel does.
+	 * @param g the array, scaled in place
+	 * @param sv the scalar
+	 * @return {@code g}, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuScale(@Nullable Object g, @Nullable Object sv) {
+		Double s = scalar(sv);
+		if (!packed(g) || s == null || !resident(g)) {
+			return null;
+		}
+		int off = 1 + rank(g);
+		int n = length(g) - off;
+		if (n < 1) {
+			return null;
+		}
+		boolean ran = g instanceof float[] f ? Gpu.scale(Gpu.BIN_MUL, f, off, s, false, f, off, n)
+				: Gpu.scale(Gpu.BIN_MUL, doubles(g), off, s, false, doubles(g), off, n);
+		return ran ? g : null;
+	}
+
+	/**
+	 * A strided copy of {@code a} into a fresh {@code od}-shaped array of its width,
+	 * walked over {@code dims} from element {@code origin} of {@code a} by {@code sa},
+	 * and from the new array's first element by {@code so}. {@code null} when the device
+	 * declined it.
+	 */
+	private static @Nullable Object copyInto(Object a, int origin, int[] sa, int[] dims, int[] so, int[] od) {
+		int off = 1 + od.length;
+		int n = (int) count(od);
+		int rank = rank(a);
+		if (a instanceof float[] x) {
+			float[] c = newLike(od, off + n);
+			return Gpu.copy(x, origin, sa, new int[] { 1 + rank, x.length - 1 - rank }, c, off, so,
+					new int[] { off, n }, dims) ? c : null;
+		}
+		double[] x = doubles(a);
+		double[] c = newLikeD(od, off + n);
+		return Gpu.copy(x, origin, sa, new int[] { 1 + rank, x.length - 1 - rank }, c, off, so, new int[] { off, n },
+				dims) ? c : null;
+	}
+
+	/** The row-major strides of a shape, in elements. */
+	private static int[] rowMajorStrides(int[] dims) {
+		int[] s = new int[dims.length];
+		int acc = 1;
+		for (int k = dims.length - 1; k >= 0; k--) {
+			s[k] = acc;
+			acc *= dims[k];
+		}
+		return s;
+	}
+
+	/** A shape designator -- a non-negative Long, or a proper list of them -- as ints. */
+	private static int @Nullable [] shapeOf(@Nullable Object shape) {
+		if (shape instanceof Long n) {
+			return n >= 0 && n <= Integer.MAX_VALUE ? new int[] { (int) (long) n } : null;
+		}
+		int[] out = ints(shape);
+		if (out == null) {
+			return null;
+		}
+		for (int d : out) {
+			if (d < 0) {
+				return null;
+			}
+		}
+		return out;
+	}
+
+	/** A proper list of ints, of either sign. */
+	private static int @Nullable [] ints(@Nullable Object list) {
+		int count = 0;
+		Object cursor = list;
+		while (cursor instanceof Object[] cell && cell.length == 2 && cell[0] instanceof Long l
+				&& l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) {
+			count++;
+			cursor = cell[1];
+		}
+		if (cursor != null) {
+			return null;
+		}
+		int[] out = new int[count];
+		cursor = list;
+		for (int i = 0; i < count; i++) {
+			Object[] cell = (Object[]) java.util.Objects.requireNonNull(cursor);
+			out[i] = (int) (long) (Long) java.util.Objects.requireNonNull(cell[0]);
+			cursor = cell[1];
+		}
+		return out;
+	}
+
+	/** Whether the value is a packed float array of either width. */
+	private static boolean packed(@Nullable Object o) {
+		return o instanceof double[] || o instanceof float[];
+	}
+
+	/**
+	 * Whether the device holds a copy of the value (a packed array); false for the rest.
+	 */
+	private static boolean resident(@Nullable Object o) {
+		return o != null && Gpu.resident(o);
+	}
+
+	/** The Java length of a packed array of either width. */
+	private static int length(@Nullable Object o) {
+		return o instanceof float[] f ? f.length : doubles(o).length;
+	}
+
+	/**
 	 * {@code (linalg:add a b)} at a BROADCAST shape on the device.
 	 * @param a the left operand
 	 * @param b the right operand
@@ -537,7 +1047,8 @@ final class JvmGpuTemplate {
 		}
 		int[] d = dims(a, rank);
 		// The size test first, for the reason bcast's is first.
-		if (!Gpu.worthStrided(count(d))) {
+		boolean resident = resident(a);
+		if (!resident && !Gpu.worthStrided(count(d))) {
 			return null;
 		}
 		int[] perm = permutation(axes, rank);
@@ -559,7 +1070,7 @@ final class JvmGpuTemplate {
 			total *= od[k];
 		}
 		int off = 1 + rank;
-		if (!Gpu.worthStrided(total) || !Gpu.available()) {
+		if ((!resident && !Gpu.worthStrided(total)) || !Gpu.available()) {
 			return null;
 		}
 		if (a instanceof float[] x) {
@@ -579,11 +1090,21 @@ final class JvmGpuTemplate {
 	 * kernel declines them.
 	 */
 	private static @Nullable Object bcast(int op, @Nullable Object a, @Nullable Object b) {
-		if (!(a instanceof double[]) && !(a instanceof float[])) {
+		if (!packed(a)) {
+			// A scalar on the left of a packed array: the resident tier's scalar form,
+			// with the scalar as the LEFT operand of a non-commutative op.
+			if (packed(b)) {
+				Double s = scalar(a);
+				return s == null ? null : scale(op, java.util.Objects.requireNonNull(b), s, true);
+			}
 			return null;
 		}
+		if (!packed(b)) {
+			Double s = scalar(b);
+			return s == null ? null : scale(op, java.util.Objects.requireNonNull(a), s, false);
+		}
 		boolean single = a instanceof float[];
-		if (single != (b instanceof float[]) || (!single && !(b instanceof double[]))) {
+		if (single != (b instanceof float[])) {
 			return null;
 		}
 		int ra = rank(a);
@@ -594,12 +1115,14 @@ final class JvmGpuTemplate {
 		int[] da = dims(a, ra);
 		int[] db = dims(b, rb);
 		if (java.util.Arrays.equals(da, db)) {
-			return null;
+			return zip(op, java.util.Objects.requireNonNull(a), java.util.Objects.requireNonNull(b));
 		}
 		// The size test FIRST, over a bound that costs nothing: a broadcast output is at
 		// least as big as either operand. Every linalg:add call site in the program runs
-		// this method, so a declined call must not allocate a shape it will throw away.
-		if (!Gpu.worthStrided(Math.max(count(da), count(db)))) {
+		// this method, so a declined call must not allocate a shape it will throw away. A
+		// resident operand is offered at any size.
+		boolean resident = resident(a) || resident(b);
+		if (!resident && !Gpu.worthStrided(Math.max(count(da), count(db)))) {
 			return null;
 		}
 		int[] od = bcastShape(da, db);
@@ -611,7 +1134,7 @@ final class JvmGpuTemplate {
 			total *= d;
 		}
 		int rank = od.length;
-		if (total + 1 + rank > Integer.MAX_VALUE - 8 || !Gpu.worthStrided(total) || !Gpu.available()) {
+		if (total + 1 + rank > Integer.MAX_VALUE - 8 || (!resident && !Gpu.worthStrided(total)) || !Gpu.available()) {
 			return null;
 		}
 		int[] sa = bcastStrides(da, od);
@@ -623,6 +1146,57 @@ final class JvmGpuTemplate {
 		}
 		double[] c = newLikeD(od, off + (int) total);
 		return Gpu.bcast(op, doubles(a), 1 + ra, sa, doubles(b), 1 + rb, sb, c, off, od) ? c : null;
+	}
+
+	/**
+	 * The resident tier's EQUAL-shape binary op -- the case the element-wise tier
+	 * measured and refused as a round trip (the lane kernel below wins), and a launch
+	 * with no copy once an operand is resident. Declined otherwise, at any size.
+	 * Bit-identical to the lane kernel: double arithmetic, narrowed on the store.
+	 */
+	private static @Nullable Object zip(int op, Object a, Object b) {
+		if (!resident(a) && !resident(b)) {
+			return null;
+		}
+		int off = 1 + rank(a);
+		int n = length(a) - off;
+		if (n < 1 || length(b) - off != n) {
+			return null;
+		}
+		if (a instanceof float[] x) {
+			float[] c = new float[x.length];
+			System.arraycopy(x, 0, c, 0, off);
+			return Gpu.zip(op, x, off, floats(b), off, c, off, n) ? c : null;
+		}
+		double[] x = doubles(a);
+		double[] c = new double[x.length];
+		System.arraycopy(x, 0, c, 0, off);
+		return Gpu.zip(op, x, off, doubles(b), off, c, off, n) ? c : null;
+	}
+
+	/**
+	 * The resident tier's array-with-scalar form ({@code laEwFS} / {@code laEwSF}'s
+	 * shape): over a resident array only, with the scalar a double whatever the array's
+	 * width, as the lane kernel keeps it.
+	 */
+	private static @Nullable Object scale(int op, Object a, double s, boolean swap) {
+		if (!resident(a)) {
+			return null;
+		}
+		int off = 1 + rank(a);
+		int n = length(a) - off;
+		if (n < 1) {
+			return null;
+		}
+		if (a instanceof float[] x) {
+			float[] c = new float[x.length];
+			System.arraycopy(x, 0, c, 0, off);
+			return Gpu.scale(op, x, off, s, swap, c, off, n) ? c : null;
+		}
+		double[] x = doubles(a);
+		double[] c = new double[x.length];
+		System.arraycopy(x, 0, c, 0, off);
+		return Gpu.scale(op, x, off, s, swap, c, off, n) ? c : null;
 	}
 
 	/**
@@ -658,7 +1232,7 @@ final class JvmGpuTemplate {
 		for (int i = ax + 1; i < d.length; i++) {
 			inner *= d[i];
 		}
-		if (!Gpu.worthFold((long) outer * inner * len) || (long) outer * inner < 2) {
+		if ((!Gpu.worthFold((long) outer * inner * len) && !resident(a)) || (long) outer * inner < 2) {
 			return null;
 		}
 		int[] od = axisShape(d, ax, keepdims != null);
@@ -777,7 +1351,9 @@ final class JvmGpuTemplate {
 			count *= dim(a, i);
 		}
 		int length = single ? floats(a).length : doubles(a).length;
-		if (count < 1 || count != length - off || !Gpu.worthMap(count)) {
+		// A libm member from the size threshold; any member -- the resident tier's four
+		// included -- over a resident operand, where there is no trip to pay for.
+		if (count < 1 || count != length - off || !((op < Gpu.MAP_LIBM_OPS && Gpu.worthMap(count)) || resident(a))) {
 			return null;
 		}
 		// Asked before the result is allocated, and cached from then on: on a machine

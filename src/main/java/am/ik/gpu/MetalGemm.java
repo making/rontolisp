@@ -729,6 +729,11 @@ final class MetalGemm implements GpuDevice {
 	 */
 	@Override
 	public boolean mapF(int op, float[] a, int oa, float[] c, int oc, int n) {
+		if (op >= Gpu.MAP_LIBM_OPS) {
+			// The resident tier's four maps have no case in gemm.metal and no resident
+			// operand to be offered over here.
+			return false;
+		}
 		MemorySegment pool = MemorySegment.NULL;
 		Slab @Nullable [] slabs = null;
 		try {
@@ -1035,7 +1040,7 @@ final class MetalGemm implements GpuDevice {
 		synchronized (this) {
 			this.held.put(address, slab);
 		}
-		this.residency.put(host, offsetBytes, bytes, address);
+		this.residency.put(host, offsetBytes, bytes, address, false);
 	}
 
 	/**
@@ -1043,6 +1048,11 @@ final class MetalGemm implements GpuDevice {
 	 * collected array since the last drain to the pool's free lists.
 	 */
 	private void drainPending() {
+		// This backend never marks a copy dirty, so a flush never carries bytes the host
+		// lacks; its slab simply goes back with the rest.
+		for (DeviceResidency.Flush flush : this.residency.flushes()) {
+			this.residency.release(flush.pointer());
+		}
 		long[] dropped = this.residency.drain();
 		if (dropped.length == 0) {
 			return;
@@ -1092,6 +1102,90 @@ final class MetalGemm implements GpuDevice {
 	@Override
 	public DeviceResidency residency() {
 		return this.residency;
+	}
+
+	/**
+	 * A no-op: this backend keeps no lazy results, so no host array ever lacks bytes the
+	 * device holds.
+	 */
+	@Override
+	public void materialize(Object host) {
+	}
+
+	@Override
+	public boolean resident(Object host) {
+		return this.residency.resident(host);
+	}
+
+	/**
+	 * Declined: on unified memory a result's copy home is a memcpy, and what the CUDA
+	 * half measured as the cost of every result coming home ({@code .todo/491}) has not
+	 * been measured here. Results keep coming home before the call returns, and
+	 * {@link #materialize} stays a no-op. Measure before changing this
+	 * ({@code .kb/gpu.md}, "Residency and the GEMV on this backend").
+	 */
+	@Override
+	public void lazyResults(boolean on) {
+	}
+
+	// The resident tier is not a member set here: it exists to avoid a round trip that
+	// on this backend is a memcpy, and the only resident arrays are the GEMV's matrices.
+	// Each declines, and the CPU kernel runs.
+
+	@Override
+	public boolean zip(int op, double[] a, int oa, double[] b, int ob, double[] c, int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean zipF(int op, float[] a, int oa, float[] b, int ob, float[] c, int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean scale(int op, double[] a, int oa, double s, boolean swap, double[] c, int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean scaleF(int op, float[] a, int oa, double s, boolean swap, float[] c, int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean where(@Nullable Object m, int om, int[] sm, double ms, double @Nullable [] x, int ox, int[] sx,
+			double xs, double @Nullable [] y, int oy, int[] sy, double ys, double[] c, int oc, int[] dims) {
+		return false;
+	}
+
+	@Override
+	public boolean whereF(@Nullable Object m, int om, int[] sm, double ms, float @Nullable [] x, int ox, int[] sx,
+			double xs, float @Nullable [] y, int oy, int[] sy, double ys, float[] c, int oc, int[] dims) {
+		return false;
+	}
+
+	@Override
+	public boolean adamStep(double[] x, int ox, double[] g, int og, double[] m, int om, double[] v, int ov, int n,
+			double[] rule) {
+		return false;
+	}
+
+	@Override
+	public boolean copy(double[] a, int oa, int[] sa, int spanOa, int spanNa, double[] c, int oc, int[] sc, int spanOc,
+			int spanNc, int[] dims) {
+		return false;
+	}
+
+	@Override
+	public boolean copyF(float[] a, int oa, int[] sa, int spanOa, int spanNa, float[] c, int oc, int[] sc, int spanOc,
+			int spanNc, int[] dims) {
+		return false;
+	}
+
+	@Override
+	public boolean adamStepF(float[] x, int ox, float[] g, int og, float[] m, int om, float[] v, int ov, int n,
+			double[] rule) {
+		return false;
 	}
 
 	/**
@@ -1174,6 +1268,9 @@ final class MetalGemm implements GpuDevice {
 					return null;
 				}
 				this.residency.evictAll(new long[] { keep });
+				for (DeviceResidency.Flush flush : this.residency.flushes()) {
+					this.residency.release(flush.pointer());
+				}
 				for (long address : this.residency.drain()) {
 					Slab slab = this.held.remove(address);
 					if (slab != null) {

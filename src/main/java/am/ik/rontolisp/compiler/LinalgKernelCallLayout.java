@@ -45,7 +45,8 @@ public final class LinalgKernelCallLayout {
 			LispNames.LINALG_SUM, new Extended(3, List.of("AXIS", "KEEPDIMS")), LispNames.LINALG_AMAX,
 			new Extended(3, List.of("AXIS", "KEEPDIMS")), LispNames.LINALG_AMIN,
 			new Extended(3, List.of("AXIS", "KEEPDIMS")), LispNames.LINALG_ARGMAX, new Extended(2, List.of("AXIS")),
-			LispNames.LINALG_ARGMIN, new Extended(2, List.of("AXIS")));
+			LispNames.LINALG_ARGMIN, new Extended(2, List.of("AXIS")), LispNames.LINALG_CONCATENATE,
+			new Extended(2, List.of("AXIS")));
 
 	/**
 	 * Returns the extended shape of the given member, or {@code null} when the member has
