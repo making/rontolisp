@@ -121,17 +121,47 @@ output stays byte-identical with the flag and without it.
 It is the shapes in the next section that the flag is for. With
 `chapter03/train-gpt-soseki.lisp` raised to the notebook's own `*n-embd*` 384 and
 `*block-size*` 256 -- the one-line change the file describes -- a training step
-on the JVM class output runs **six to eight times faster** with `--gpu --simd`
-than with `--simd` alone (0.80 s -> 0.12 s per step, 0.10-0.14 run to run, same machine as above, from
-a 5-step and a 40-step run so setup and sampling fall out of the slope, medians of
-five interleaved runs; the same program varies by ~15% run to run, so read the
-ratio rather than the digits). It was 0.89 -> 0.21 when the flag first landed;
-since then the AdamW update, the dropout generator, `torch:masked-fill`'s `where`,
-the embedding lookup and its adjoint, and gradient clipping have all moved onto
-the acceleration seams -- and the generator onto the device itself, where it is
-still bit-identical to the CPU's sequence. **What is left of that step is the
-copies**: about forty percent of it is moving arrays to the device and back, and
-keeping them resident between calls is the open item (`.todo/474`).
+on the JVM class output, per step from a 5-step and a 40-step run so setup and
+sampling fall out of the slope, medians of three interleaved rounds on the same
+aarch64 DGX Spark (GB10), 2026-08-22:
+
+| flags (JVM class output) | per training step |
+| --- | --- |
+| `--simd` | 0.79 s |
+| `--simd --parallel` | 0.37 s |
+| `--blas --simd` | 0.79 s |
+| `--gpu --simd` | **0.11 s** (0.10-0.12) |
+| `--gpu --blas --simd`, `--gpu --simd --parallel` | 0.11 s (within noise of the row above) |
+
+**Seven times `--simd`, three times `--simd --parallel`.** It was 0.89 -> 0.21 when the
+flag first landed; since then the AdamW update, the dropout generator,
+`torch:masked-fill`'s `where`, the embedding lookup and its adjoint, and gradient
+clipping have all moved onto the acceleration seams, the generator onto the device itself
+(still bit-identical to the CPU's sequence), the arrays stay resident on the device
+between calls, and the stacked f32 product runs a register-tiled kernel at its large
+shapes. Over a longer run the step settles at about 0.06 s (steps 40-200): the JIT
+and the page warmth arrive, and what is left is not the kernels -- an `nsys` profile
+of that run puts the device busy for 8 ms of the step and the host-device copies,
+220 MB of downloads a step, at about 40% of it. Every result still comes home after
+every call, and replacing that is the open item (`.todo/491`). The same program varies
+by about 15% run to run, so read the ratios rather than the digits.
+
+Two of the rows say something the flags' own guides already say, in this program's terms.
+`--blas` changes nothing here because **every product in these files is the stacked
+rank-3 one** -- an attention layer's `torch:matmul` over `(B T C)` and a `torch:linear`
+over a `(B T C)` activation -- and `--blas` takes only the rank-2 `linalg:dot`
+([BLAS acceleration](../../doc/en/guides/blas-acceleration.md)); nothing in the source
+would change that without un-batching the model. And
+[`--parallel`](../../doc/en/guides/simd-acceleration.md#using-more-than-one-core---parallel)
+halves the CPU step on twenty cores because that same stacked product is the member it
+splits; with `--gpu` in front the device takes those products first, so adding
+`--parallel` to a `--gpu` run changes nothing measurable.
+
+One JVM flag is worth knowing on the `--gpu` run: each activation of this step is a fresh
+6 MB single-float array, and on the default collector the allocation costs more than the
+arithmetic on it (a `(/ x s)` over 1.5 M elements is 0.75 ms; with the fresh array it is
+1.1-2.6). `java -XX:+UseParallelGC -Xmn4g ...` took the 40-step `--gpu --simd` run from
+6.0 s to 5.0 s on this machine.
 
 Note that once a transcendental runs on the device, a program that touches one
 is no longer byte-identical with the flag and without it: the device carries its
