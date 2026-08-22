@@ -2203,6 +2203,30 @@ scalar defun by four orders of magnitude (132 SECONDS at n=512), so the flag is 
 having in the binary -- but the per-call native-image cost is an open item and it is the
 first thing to measure before phase 3 quotes any residency figure.
 
+**And on METAL the wart is not narrow at all: it runs from the threshold to about
+n=1500.** Measured 2026-08-22 on the M4 Max native binary, one n x n f32 product, ms per
+call (`examples/ml/gpu-matmul.lisp`'s timing loop at each size):
+
+| n | `--simd` | `--gpu --simd` | `--blas --simd` |
+|---|---|---|---|
+| 256 | 2.49 | 0.24 | **0.06** |
+| 512 | 22.8 | 0.43 | **0.20** |
+| 1024 | 173 | 1.19 | **0.99** |
+| 2048 | 1354 | **4.65** | 9.96 |
+| 4096 | 10693 | **20.9** | 64.9 |
+
+Accelerate's f32 gemm holds 2.1 TFLOP/s from n=1024 -- an order of magnitude past what
+sixteen cores at the `--simd` column's own per-core rate (13 GFLOP/s) could reach, so it is
+the CPU cluster's matrix coprocessor rather than lanes or threads -- and it pays no
+per-command-buffer floor. The device's efficiency climbs with n (139 -> 622 -> 1804 -> 3695
+-> 6591 GFLOP/s) because the ~77 us floor and the operand copies are fixed while the work is
+n^3, so the crossover is where the two curves meet, near n=1500. `worth()` does not move:
+it is calibrated against `--simd`, which is what a machine without a tuned library has, and
+teaching it about a loaded CBLAS would make a language-independent library depend on one --
+the same argument as the n=64-96 band above. The user-facing statement is the Apple Silicon
+paragraph in the guide's composition section. Note that the native-binary paragraph above is
+a CUDA figure and does not apply here: this table IS a native binary.
+
 ### The JVM backend: the whole library travels in the class
 
 The decision phase 2 existed to make, and it went the OTHER way from `--blas`'s.

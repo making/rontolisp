@@ -72,6 +72,18 @@ And one `n x n` `linalg:matmul` on the interpreter, single-float, microseconds p
 
 n=128 is below the threshold and declines. From n=192 the device is four times the CPU, and by n=512 it is forty-five. Your machine, and the shapes your program actually runs, will differ; measure.
 
+## A runnable example
+
+[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) is one `linalg:matmul` and nothing else, at **single-float** width -- the width a Mac's GPU can take -- over a 256x256 matrix whose entries are integers below 8, so every partial sum is exact at single precision and neither a lane fold nor a fused multiply-add can move the printed trace. Run it three ways:
+
+```bash
+rontolisp examples/ml/gpu-matmul.lisp               # the portable definition
+rontolisp examples/ml/gpu-matmul.lisp --simd        # CPU vector lanes
+rontolisp examples/ml/gpu-matmul.lisp --gpu --simd  # the device, lanes below it
+```
+
+Per 256x256 product on an Apple M4 Max: the native interpreter goes 15448 ms -> 2.49 ms with `--simd` -> 0.24 ms with `--gpu --simd`, and the JVM class output 1.69 ms -> 0.24 ms. Compiled to wasm-GC, where there is no foreign function API and so no `--gpu`, `--simd` alone gets it to 5.96 ms. The program times itself -- it repeats the product for half a second and divides -- so only the flagless run is slow to finish: one product, about 16 seconds.
+
 ## How the three flags compose
 
 Each flag adds one attempt in front of the others, and every attempt that declines hands the same arguments to the next:
@@ -82,13 +94,25 @@ Each flag adds one attempt in front of the others, and every attempt that declin
 --gpu                 ->   device ->                                portable definition
 ```
 
-`--blas` takes only the rank-2 product, so a stacked one -- or an element-wise call -- has no library rung at all: `--gpu --blas --simd` chains those device -> lane kernel -> portable definition. The device is asked first because its size threshold is three orders of magnitude above the tuned library's: it turns down everything small before touching the driver at all, and from about n=256 up it is ahead of a threaded CPU BLAS at both widths. So what the device declines lands on the fastest CPU path the invocation asked for, never back on the portable definition. The exception is a narrow band just above the threshold -- roughly n=64 to n=96 -- where `--gpu --blas` together accept a product the library alone would have finished sooner. Both sides are far under a millisecond there, and asking the library first instead would give away the several-fold win at the sizes the flag exists for.
+`--blas` takes only the rank-2 product, so a stacked one -- or an element-wise call -- has no library rung at all: `--gpu --blas --simd` chains those device -> lane kernel -> portable definition. The device is asked first because its size threshold is three orders of magnitude above the tuned library's: it turns down everything small before touching the driver at all, and on an NVIDIA card it is ahead of a threaded CPU BLAS at both widths from about n=256 up. So what the device declines lands on the fastest CPU path the invocation asked for, never back on the portable definition. The exception is a narrow band just above the threshold -- roughly n=64 to n=96 -- where `--gpu --blas` together accept a product the library alone would have finished sooner. Both sides are far under a millisecond there, and asking the library first instead would give away the several-fold win at the sizes the flag exists for.
+
+**On Apple Silicon that ordering does not hold below about n=1500.** Accelerate's `sgemm` does not run in vector lanes at all: it reaches 2.1 TFLOP/s on an M4 Max, more than sixteen cores at the `--simd` column's per-core rate could give, so it is neither lanes nor threads but the CPU cluster's matrix coprocessor -- and it is a plain call on the same memory, with none of the ~80 microsecond command-buffer floor a Metal launch pays. The library therefore wins everything small, and the device pulls ahead only once the `n^3` work has outgrown the fixed cost of the trip. One n x n single-float product on the interpreter, ms per call:
+
+| n | `--simd` | `--gpu` | `--blas` |
+|---|---|---|---|
+| 256 | 2.49 | 0.24 | **0.06** |
+| 512 | 22.8 | 0.43 | **0.20** |
+| 1024 | 173 | 1.19 | **0.99** |
+| 2048 | 1354 | **4.65** | 9.96 |
+| 4096 | 10693 | **20.9** | 64.9 |
+
+So between the Metal threshold (about n=166) and about n=1500, `--gpu --blas` hands the product to the slower of the two: on a Mac whose matrix products all live in that band, `--blas` alone is the faster invocation.
 
 ## Reach and precision
 
 `--gpu` reaches the **interpreter** (including the native binary) and the **JVM class output**. The device is called through the foreign function API, which WASM does not have, so `--gpu` with a `.wasm` output is an error rather than a silent no-op; a WASM program has `--simd`.
 
-A class compiled with `--gpu` is still standalone -- both bindings travel inside it, whichever kind of machine compiled it, so there is nothing to put on the classpath and `java Prog` is the whole command on either kind of machine. It does call a restricted method, so run it as `java --enable-native-access=ALL-UNNAMED Prog` to keep the JVM's warning off standard error. In the native **binary** each device call currently costs 20 to 50 times more than on the JVM (one n=512 double-float product measured 17.4 ms against 0.74), enough that on that build `--gpu --blas` is slower than `--blas` alone at every size measured; `--gpu` still beats `--simd` there by more than 2x, and the portable definition by four orders of magnitude. Compiling the program to a class is the way around that cost -- the class the native binary emits is the one `java -jar` emits, and it runs at the speeds in the second table below.
+A class compiled with `--gpu` is still standalone -- both bindings travel inside it, whichever kind of machine compiled it, so there is nothing to put on the classpath and `java Prog` is the whole command on either kind of machine. It does call a restricted method, so run it as `java --enable-native-access=ALL-UNNAMED Prog` to keep the JVM's warning off standard error. On an NVIDIA card each device call in the native **binary** currently costs 20 to 50 times more than on the JVM (one n=512 double-float product measured 17.4 ms against 0.74), enough that on that build `--gpu --blas` is slower than `--blas` alone at every size measured (the Metal binding does not pay it -- the Apple Silicon figures above are a native binary); `--gpu` still beats `--simd` there by more than 2x, and the portable definition by four orders of magnitude. Compiling the program to a class is the way around that cost -- the class the native binary emits is the one `java -jar` emits, and it runs at the speeds in the second table below.
 
 **`--gpu` is the first flag whose results you should not expect to match the other backends digit for digit.** Two separate reasons, and the second is the new one:
 
