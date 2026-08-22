@@ -43,5 +43,10 @@ pass rather than per element.
   subnormals, +/-0, the max finite 65504, and both infinities.
 - Bulk widen of all 65536 patterns is bit-identical to a `Float.float16ToFloat` loop --
   including NaN payloads, which is where the fast decodes differ.
+- Re-measure the widen-once cost **on x64** as well as aarch64. The spike was run on
+  aarch64 only, and x64 has had `vcvtph2ps` since 2013, so the bulk decode may want a
+  different implementation there -- see "Should this be re-run on x64?" in
+  `.todo/482-short-float-a-storage-only-narrow-width/README.md`. The *result* must be
+  bit-identical on both; only the cost may differ.
 - A f16 file written by `short-float-bits` and read back by `read-sequence` compares equal
   on every backend that carries the width.

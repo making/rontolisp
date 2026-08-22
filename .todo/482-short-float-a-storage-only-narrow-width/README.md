@@ -90,6 +90,36 @@ Re-run `F16.java` on an AVX512-FP16 box before concluding anything about x64. Th
 still no `Float16` *vector species* anywhere through JEP 537 (JDK 27) -- that is the thing
 that would matter, and it is still exploratory in Panama's `vectorIntrinsics+fp16` branch.
 
+## Should this be re-run on x64?
+
+Not before it is needed, and it cannot change the decision. Two things separate:
+
+- **What an x64 run could genuinely move**: the decode cost in the *mixed-precision*
+  shape (f16 storage, f32 accumulator) -- the only shape this repo can ship. x64 has had
+  `vcvtph2ps` (F16C, 8 lanes) since 2013, so if HotSpot auto-vectorizes a scalar
+  `Float.float16ToFloat` loop there, the widen-once cost could collapse. Note that
+  openjdk/jdk#22755, the Float16 auto-vectorization work, covers *arithmetic*
+  (add/sub/mul/div/sqrt/fma), not the conversions -- so this is a question, not a
+  known win.
+- **What it cannot move**: the `Float16`-accumulator kernel, the one thing AVX512-FP16
+  would make genuinely fast. `.kb/vec.md`'s lane-count pin already forbids its shape:
+  `FSPECIES_REDUCE` is `SPECIES_128` and not `SPECIES_PREFERRED` precisely so "a compiled
+  `.class` / native binary must not answer differently on an AVX-512 host". An f16
+  accumulator changes the accumulator's *precision*, not merely its lane count, so it
+  would break that invariant harder than the case the pin was written for -- at any
+  speed, on any host.
+
+So the storage-not-compute conclusion is host-independent by construction, and the six
+child items' scope does not depend on an x64 number. The useful place for one is item
+487, which has to measure the widen-once cost on whatever host it is implemented on
+anyway; add x64 to its verification rather than re-running this spike.
+
+Practically: every probe here is a single-file source-launcher program, so an x64 answer
+costs one command on any x64 box --
+`java --add-modules jdk.incubator.vector Acc.java`, then `F16.java`. Note that a standard
+GitHub `ubuntu-latest` runner is unlikely to have AVX512-FP16 (Sapphire Rapids or later),
+so CI would answer the F16C question but probably not the `Float16` one.
+
 Accuracy is not the problem. A f16 GEMV over N(0, 0.02) weights lands within 0.02% of the
 f64 reference at every size tried, and the f16 round-trip error is bounded by 2^-11 as
 expected.
