@@ -173,7 +173,8 @@ public final class RontoLispCli {
 					+ "': give the program either inline or in a file");
 		}
 		if (!test && inline == null && !options.containsNoKey()) {
-			repl(systemPath, dists, options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"));
+			repl(systemPath, dists, options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
+					options.contains("--parallel"));
 			return;
 		}
 
@@ -221,9 +222,9 @@ public final class RontoLispCli {
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
-					options.contains("--no-prune"), options.contains("--emit-wit"), options.contains("--emit-js-glue"),
-					options.contains("--host-random"), options.contains("--host-fetch"),
-					options.contains("--reentrant"),
+					options.contains("--parallel"), options.contains("--no-prune"), options.contains("--emit-wit"),
+					options.contains("--emit-js-glue"), options.contains("--host-random"),
+					options.contains("--host-fetch"), options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
 					inputFile);
 		}
@@ -243,7 +244,7 @@ public final class RontoLispCli {
 						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
 			}
 			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), options.contains("--blas"),
-					options.contains("--gpu"), inputFile);
+					options.contains("--gpu"), options.contains("--parallel"), inputFile);
 		}
 	}
 
@@ -298,10 +299,12 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void repl(List<String> systemPath, DistClient dists, boolean simd, boolean blas, boolean gpu) {
+	private void repl(List<String> systemPath, DistClient dists, boolean simd, boolean blas, boolean gpu,
+			boolean parallel) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDistClient(dists);
+		requireSimdForParallel(simd, parallel);
 		if (simd) {
 			enableSimd(evaluator);
 		}
@@ -310,6 +313,9 @@ public final class RontoLispCli {
 		}
 		if (gpu) {
 			enableGpu(evaluator);
+		}
+		if (parallel) {
+			evaluator.setParallel(true);
 		}
 		StringBuilder buffer = new StringBuilder();
 		if (System.console() != null && isJLineAvailable()) {
@@ -411,6 +417,19 @@ public final class RontoLispCli {
 		}
 	}
 
+	// --parallel is a modifier of --simd -- it splits the rows of the --simd matrix
+	// products across threads and intercepts nothing of its own -- so without --simd it
+	// could only be ignored, and a silent no-op is what an acceleration flag exists to
+	// make visible (the --simd dead-flag lesson, CliOptionsTest). Checked on every path
+	// that takes the flag: the interpreter, the REPL and the compiler.
+	private static void requireSimdForParallel(boolean simd, boolean parallel) {
+		if (parallel && !simd) {
+			throw new UnsupportedOperationException(
+					"--parallel splits the --simd kernels across threads, so it needs --simd:"
+							+ " pass both (e.g. --simd --parallel)");
+		}
+	}
+
 	// --gpu routes the linalg: matrix product and the element-wise transcendentals to an
 	// NVIDIA GPU, or on a Mac to Apple Silicon through Metal. Like --blas the answer is
 	// a property of the machine rather than of the build, so a decline is an ordinary
@@ -428,11 +447,12 @@ public final class RontoLispCli {
 	}
 
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
-			boolean simd, boolean blas, boolean gpu, @Nullable String entryFile) {
+			boolean simd, boolean blas, boolean gpu, boolean parallel, @Nullable String entryFile) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDistClient(dists);
+		requireSimdForParallel(simd, parallel);
 		if (simd) {
 			enableSimd(evaluator);
 		}
@@ -441,6 +461,9 @@ public final class RontoLispCli {
 		}
 		if (gpu) {
 			enableGpu(evaluator);
+		}
+		if (parallel) {
+			evaluator.setParallel(true);
 		}
 		// #. read-time eval: only sources textually containing #. pay for the marker
 		// read; each top-level form's markers resolve just before it evaluates, the
@@ -464,8 +487,9 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean blas, boolean gpu, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom,
-			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
+			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean wit, boolean jsGlue,
+			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
+			@Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -475,7 +499,8 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, dists, outputFile, dynamic, component, noWasi, optimize, noGc,
-					simd, blas, gpu, noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary, entryFile);
+					simd, blas, gpu, parallel, noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary,
+					entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -506,8 +531,9 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean blas, boolean gpu, boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom,
-			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
+			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean wit, boolean jsGlue,
+			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
+			@Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -531,6 +557,16 @@ public final class RontoLispCli {
 			throw new UnsupportedOperationException("--gpu reaches the interpreter and the JVM class output only:"
 					+ " a GPU is driven through the foreign function API, which WASM does not have."
 					+ " Use --simd for the linalg: kernels on a .wasm output");
+		}
+		// --parallel needs threads, which neither WASM backend has (no threads in wasm-GC
+		// or --no-gc), and it needs --simd, whose kernels are what it splits: both are
+		// hard errors for the same reason as above -- the flag must never be a silent
+		// no-op -- and the wasm outputs stay byte-identical to what they were.
+		requireSimdForParallel(simd, parallel);
+		if (parallel && !outputFile.endsWith(".class")) {
+			throw new UnsupportedOperationException("--parallel reaches the interpreter and the JVM class output only:"
+					+ " a .wasm module has no threads to split the --simd kernels across."
+					+ " Use --simd alone on a .wasm output");
 		}
 		// --emit-js-glue writes the host half of a boundary only a --no-wasi core module
 		// has: a component is instantiated through its own bindings (jco), and --no-gc
@@ -909,7 +945,8 @@ public final class RontoLispCli {
 			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic, optimize, simd, blas, gpu).runtimeFeatures(features.names())
+			bytes = new JvmLispCompiler(className, dynamic, optimize, simd, blas, gpu, parallel)
+				.runtimeFeatures(features.names())
 				.compile(TlsPemInliner.inline(program, baseDir));
 		}
 		try {
@@ -1154,6 +1191,19 @@ public final class RontoLispCli {
 		this.out.println("                     behaves as without --simd. Interpreter/REPL: run the vec: kernels");
 		this.out.println("                     on the Vector API (baked into the native binary; on java -jar add");
 		this.out.println("                     --add-modules jdk.incubator.vector, else it falls back to scalar).");
+		this.out.println("  --parallel         With --simd: split the matrix products across CPU cores");
+		this.out.println("                     vec:matvec / vec:matvec-into, linalg:dot over a matrix and");
+		this.out.println("                     linalg:matmul (the stacked product included) run a row range");
+		this.out.println("                     per thread once a call is big enough (~2^15 multiply-adds);");
+		this.out.println("                     every other kernel, every reduction included, stays on the");
+		this.out.println("                     calling thread. The rows are independent chains, so the");
+		this.out.println("                     results are bit-identical to --simd alone. RONTOLISP_THREADS");
+		this.out.println("                     sets the thread count (the caller included; default: the");
+		this.out.println("                     available processors; 1 = serial); the workers are daemon");
+		this.out.println("                     threads that spin ~1 ms between calls before sleeping, so a");
+		this.out.println("                     loop of products keeps them busy. Interpreter (incl. the");
+		this.out.println("                     native binary) and JVM (.class) only -- WASM has no threads.");
+		this.out.println("                     Needs --simd: without it there is nothing to split.");
 		this.out.println("  --blas             Route the linalg: matrix product to a tuned CBLAS from the OS");
 		this.out.println("                     Interpreter (incl. the native binary) and JVM (.class) only --");
 		this.out.println("                     WASM has no foreign function interface. macOS finds Accelerate");

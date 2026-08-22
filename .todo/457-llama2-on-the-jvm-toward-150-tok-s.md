@@ -25,6 +25,10 @@ item is about: one thread against one thread we are at 4.6 ms a token against th
 therefore restated for the GB10: **>= 290 tok/s single-threaded** (a narrow loss to the
 gist's single-thread 297 is the goal; beating it is `--blas`'s and `--gpu`'s job, and
 matching the published gist at all needs the multi-core work in `.todo/478`).
+`.todo/478` landed 2026-08-22 (`--simd --parallel`, `.kb/simd-parallel.md`): JVM 319 tok/s
+on 20 threads (3.1 ms/token) against the gist's 535 (1.9 ms) -- the GEMVs are ~0.7 ms of
+the token now, the ~2.2 ms of glue THIS item is about is the rest, so its gate ("above
+535") is this item's to close.
 
 187 tok/s IS the ceiling here: a cold-cache sweep over 85 MB of matrices runs at 9-12
 GB/s whatever the kernel (one 128-bit chain, four 128-bit chains, one 256-bit `fma`

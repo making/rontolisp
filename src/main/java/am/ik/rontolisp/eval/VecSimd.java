@@ -64,8 +64,11 @@ public final class VecSimd {
 	 * have been evaluated into the same environment, so these definitions win, and only
 	 * when {@link #available()} is {@code true}.
 	 * @param globalEnv the global environment holding the loaded vec library
+	 * @param parallel {@code --parallel}: run {@code vec:matvec} /
+	 * {@code vec:matvec-into} over a row range per thread when the call is worth it
+	 * ({@link SimdParallel}) -- the same row chains, so the same bits
 	 */
-	public static void install(Environment globalEnv) {
+	public static void install(Environment globalEnv, boolean parallel) {
 		define(globalEnv, LispNames.VEC_ADD, VecSimdKernels::add, VecSimdKernels::addF);
 		define(globalEnv, LispNames.VEC_SUB, VecSimdKernels::sub, VecSimdKernels::subF);
 		define(globalEnv, LispNames.VEC_MUL, VecSimdKernels::mul, VecSimdKernels::mulF);
@@ -111,16 +114,16 @@ public final class VecSimd {
 			int rows = w.dims()[0];
 			int cols = w.dims()[1];
 			if (w instanceof LispDoubleFloatArray mw && x instanceof LispDoubleFloatArray vx) {
-				return vector(VecSimdKernels.matvec(mw.data(), rows, cols, vx.data()));
+				return vector(VecSimdKernels.matvec(mw.data(), rows, cols, vx.data(), parallel));
 			}
 			if (w instanceof LispSingleFloatArray mw && x instanceof LispSingleFloatArray vx) {
-				return vector(VecSimdKernels.matvecF(mw.data(), rows, cols, vx.data()));
+				return vector(VecSimdKernels.matvecF(mw.data(), rows, cols, vx.data(), parallel));
 			}
 			throw mixedWidth(name);
 		});
 		installUnary(globalEnv);
 		installCompare(globalEnv);
-		installInto(globalEnv);
+		installInto(globalEnv, parallel);
 	}
 
 	/**
@@ -234,7 +237,7 @@ public final class VecSimd {
 	 * These natives replace the scalar {@code vec.lisp} defuns, so the
 	 * {@code vec:matvec-into} alias guard written there has to be repeated here.
 	 */
-	private static void installInto(Environment globalEnv) {
+	private static void installInto(Environment globalEnv, boolean parallel) {
 		defineInto(globalEnv, LispNames.VEC_ADD_INTO, VecSimdKernels::addInto, VecSimdKernels::addIntoF);
 		defineInto(globalEnv, LispNames.VEC_SUB_INTO, VecSimdKernels::subInto, VecSimdKernels::subIntoF);
 		defineInto(globalEnv, LispNames.VEC_MUL_INTO, VecSimdKernels::mulInto, VecSimdKernels::mulIntoF);
@@ -268,13 +271,13 @@ public final class VecSimd {
 			if (out instanceof LispDoubleFloatArray r && w instanceof LispDoubleFloatArray mw
 					&& x instanceof LispDoubleFloatArray vx) {
 				requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
-				VecSimdKernels.matvecInto(r.data(), mw.data(), rows, cols, vx.data());
+				VecSimdKernels.matvecInto(r.data(), mw.data(), rows, cols, vx.data(), parallel);
 				FloatArrayWriteHook.written(r.data());
 			}
 			else if (out instanceof LispSingleFloatArray r && w instanceof LispSingleFloatArray mw
 					&& x instanceof LispSingleFloatArray vx) {
 				requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
-				VecSimdKernels.matvecIntoF(r.data(), mw.data(), rows, cols, vx.data());
+				VecSimdKernels.matvecIntoF(r.data(), mw.data(), rows, cols, vx.data(), parallel);
 				FloatArrayWriteHook.written(r.data());
 			}
 			else {

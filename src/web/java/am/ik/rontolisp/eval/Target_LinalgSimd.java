@@ -30,7 +30,7 @@ final class Target_LinalgSimd {
 	}
 
 	@Substitute
-	static void install(Environment globalEnv, LispEvaluator evaluator) {
+	static void install(Environment globalEnv, LispEvaluator evaluator, boolean parallel) {
 		throw new IllegalStateException("--simd is not available in the browser playground");
 	}
 

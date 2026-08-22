@@ -139,6 +139,37 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void replWithParallelKeepsTheSimdNativesAndRefusesToRunWithoutThem() {
+		// --parallel modifies the --simd natives (vec:matvec stays the native function,
+		// now splitting its rows) and intercepts nothing of its own, so without --simd it
+		// is the dead flag CliOptionsTest is about -- a hard error, not a silent no-op.
+		String output = runCli("(vec:zeros 1) #'vec:matvec\n", "--simd", "--parallel");
+		assertThat(output).contains("#<function VEC:MATVEC>");
+		assertThatThrownBy(() -> runCli("(vec:zeros 1) #'vec:matvec\n", "--parallel"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--parallel splits the --simd kernels across threads, so it needs --simd");
+	}
+
+	@Test
+	void parallelOnAWasmOutputIsAHardErrorWhileTheClassOutputBindsTheParallelEntries() throws Exception {
+		// WASM has no threads, so a .wasm build could only ignore the flag; the JVM class
+		// output binds the matrix products to the bridge entries that split their rows.
+		Path file = tempDir.resolve("prog.lisp");
+		Files.writeString(file, "(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))\n");
+		assertThatThrownBy(
+				() -> runCli("", file.toString(), "-o", tempDir.resolve("p.wasm").toString(), "--simd", "--parallel"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--parallel reaches the interpreter and the JVM class output only");
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", tempDir.resolve("P.class").toString(), "--parallel"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("needs --simd");
+		Path classFile = tempDir.resolve("P.class");
+		runCli("", file.toString(), "-o", classFile.toString(), "--simd", "--parallel");
+		assertThat(Files.readString(classFile, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.contains("simdMatvecParallel");
+	}
+
+	@Test
 	void gpuOnAWasmOutputIsAHardErrorWhileTheClassOutputEmbedsTheBridge() throws Exception {
 		// WASM has no foreign function API, so a .wasm build could only IGNORE the flag
 		// -- and silently running unaccelerated is exactly what an acceleration flag

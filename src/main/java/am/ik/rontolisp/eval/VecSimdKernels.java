@@ -36,7 +36,8 @@ import jdk.incubator.vector.VectorSpecies;
  * jdk.incubator.vector} (the {@link #laneCount()} probe turns that into a graceful scalar
  * fallback), and the browser Web Image build cuts it out by substituting
  * {@link VecSimd}'s two methods. Keep it free of any other rontolisp reference so those
- * two boundaries stay simple.
+ * two boundaries stay simple -- {@link SimdParallel}, the {@code --parallel} row split
+ * the GEMV kernels call with the flag on, holds no Vector API and is the one exception.
  */
 final class VecSimdKernels {
 
@@ -203,11 +204,23 @@ final class VecSimdKernels {
 	 * @param rows the row count (the length of the result)
 	 * @param cols the column count (the length of {@code x})
 	 * @param x the vector
+	 * @param parallel {@code --parallel}: split the rows across threads when the call is
+	 * worth it ({@link SimdParallel}); the same row chains, so the same bits
 	 * @return a fresh vector of length {@code rows}
 	 */
-	static double[] matvec(double[] w, int rows, int cols, double[] x) {
+	static double[] matvec(double[] w, int rows, int cols, double[] x, boolean parallel) {
 		double[] r = new double[rows];
-		for (int row = 0; row < rows; row++) {
+		matvecInto(r, w, rows, cols, x, parallel);
+		return r;
+	}
+
+	/**
+	 * Rows {@code [from, to)} of the f64 GEMV, one lane chain per row ({@link #dot}'s
+	 * two-rounding mul-then-add, the scalar tail in index order): a row's bits depend on
+	 * nothing but the row, which is what lets {@code --parallel} split them.
+	 */
+	private static void matvecRows(double[] r, double[] w, int cols, double[] x, int from, int to) {
+		for (int row = from; row < to; row++) {
 			int base = row * cols;
 			int i = 0;
 			double acc = 0.0;
@@ -225,7 +238,6 @@ final class VecSimdKernels {
 			}
 			r[row] = acc;
 		}
-		return r;
 	}
 
 	// --- element-wise unary ufuncs -------------------------------------------------
@@ -663,24 +675,12 @@ final class VecSimdKernels {
 		}
 	}
 
-	static void matvecInto(double[] r, double[] w, int rows, int cols, double[] x) {
-		for (int row = 0; row < rows; row++) {
-			int base = row * cols;
-			int i = 0;
-			double acc = 0.0;
-			if (cols >= THRESHOLD) {
-				DoubleVector vacc = DoubleVector.zero(SPECIES);
-				int bound = SPECIES.loopBound(cols);
-				for (; i < bound; i += SPECIES.length()) {
-					vacc = vacc
-						.add(DoubleVector.fromArray(SPECIES, w, base + i).mul(DoubleVector.fromArray(SPECIES, x, i)));
-				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
-			}
-			for (; i < cols; i++) {
-				acc += w[base + i] * x[i];
-			}
-			r[row] = acc;
+	static void matvecInto(double[] r, double[] w, int rows, int cols, double[] x, boolean parallel) {
+		if (parallel && SimdParallel.worth(rows, cols)) {
+			SimdParallel.rows(rows, cols, (from, to) -> matvecRows(r, w, cols, x, from, to));
+		}
+		else {
+			matvecRows(r, w, cols, x, 0, rows);
 		}
 	}
 
@@ -749,8 +749,21 @@ final class VecSimdKernels {
 		}
 	}
 
-	static void matvecIntoF(float[] r, float[] w, int rows, int cols, float[] x) {
-		for (int row = 0; row < rows; row++) {
+	static void matvecIntoF(float[] r, float[] w, int rows, int cols, float[] x, boolean parallel) {
+		if (parallel && SimdParallel.worth(rows, cols)) {
+			SimdParallel.rows(rows, cols, (from, to) -> matvecRowsF(r, w, cols, x, from, to));
+		}
+		else {
+			matvecRowsF(r, w, cols, x, 0, rows);
+		}
+	}
+
+	/**
+	 * {@link #matvecRows} at single width: the {@link #dotF} chain, four lanes, f32
+	 * accumulator.
+	 */
+	private static void matvecRowsF(float[] r, float[] w, int cols, float[] x, int from, int to) {
+		for (int row = from; row < to; row++) {
 			int base = row * cols;
 			int i = 0;
 			float acc = 0.0f;
@@ -912,26 +925,9 @@ final class VecSimdKernels {
 	}
 
 	/** {@link #matvec} for a single-float matrix: {@link #dotF} once per row. */
-	static float[] matvecF(float[] w, int rows, int cols, float[] x) {
+	static float[] matvecF(float[] w, int rows, int cols, float[] x, boolean parallel) {
 		float[] r = new float[rows];
-		for (int row = 0; row < rows; row++) {
-			int base = row * cols;
-			int i = 0;
-			float acc = 0.0f;
-			if (cols >= THRESHOLD) {
-				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
-				int bound = FSPECIES_REDUCE.loopBound(cols);
-				for (; i < bound; i += FSPECIES_REDUCE.length()) {
-					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
-						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
-				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
-			}
-			for (; i < cols; i++) {
-				acc += w[base + i] * x[i];
-			}
-			r[row] = acc;
-		}
+		matvecIntoF(r, w, rows, cols, x, parallel);
 		return r;
 	}
 

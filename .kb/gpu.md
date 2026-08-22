@@ -2743,6 +2743,12 @@ decline, not an omission, and each needs this file's numbers before it is revisi
   upload loses to the driver's own pageable copy past 2^18 elements over a WARM array;
   and the staged download wins by a hundred times over a COLD one, which every result
   array is. Measure with fresh arrays before touching either half again.
+- **`--parallel` (todo-478, `.kb/simd-parallel.md`) sits strictly BELOW the device decision
+  on both backends**: the device attempt runs on the calling thread (so does `CudaResidency`,
+  which is not thread-safe), and only what it declines reaches the row-parallel lane kernel
+  -- `compileGpuMatvec` / `JvmLinalgKernelCompiler` bind the lane rung to the parallel
+  bridge entry, `LinalgGpu.installVec` wraps whatever `VecSimd` bound. Pinned by
+  `JvmSimdParallelCompilerTest.underGpuTheParallelLanesSitBelowTheDeviceDecision`.
 - **Nothing of `vec:` but `vec:matvec`**, which IS here since 2026-08-22 ("The GEMV, and
   the matrix that stays"), and only over a matrix that is resident or has been offered
   once before unwritten. `vec:matvec-into` is not: it writes a CALLER's array, which the

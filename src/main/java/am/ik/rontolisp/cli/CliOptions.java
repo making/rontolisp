@@ -14,8 +14,8 @@ public class CliOptions {
 
 	private static final Set<String> noValueKeys = Set.of("-h", "--help", //
 			"-v", "--version", "--dynamic", "--buffered-output", "--component", "--no-wasi", "--host-random",
-			"--host-fetch", "--reentrant", "--optimize", "--no-gc", "--simd", "--blas", "--gpu", "--no-prune",
-			"--emit-wit", "--emit-js-glue", "--color", "--no-color", "--disable-colors");
+			"--host-fetch", "--reentrant", "--optimize", "--no-gc", "--simd", "--blas", "--gpu", "--parallel",
+			"--no-prune", "--emit-wit", "--emit-js-glue", "--color", "--no-color", "--disable-colors");
 
 	// A key that may be REPEATED: every occurrence appends to the same value, joined with
 	// a newline, instead of the last one winning. -e is one program written in several

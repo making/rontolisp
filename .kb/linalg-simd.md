@@ -34,7 +34,9 @@ interceptor is named `JvmLinalgKernelCompiler` rather than `JvmLinalgSimdCompile
 emits a CHAIN of up to three attempts over one set of temps, ending at the scalar defun,
 and since 2026-08-21 it emits that chain at the EXTENDED (option-form) call sites too.
 Nothing below changes: with `--blas` and `--gpu` off, a `--simd` build emits and computes
-exactly what it did before.
+exactly what it did before. A FOURTH flag, `--parallel` (`.kb/simd-parallel.md`), is a modifier of
+`--simd` rather than a rung of that chain: the matrix products (`dot`'s matrix cases and
+`%la-matmul-nd`) run a row range per thread and stay bit-identical; nothing else moves.
 
 **`--gpu` is the one flag over this seam whose element-wise results are NOT bit-identical
 to the defun** -- for its TRANSCENDENTAL tier only; its strided tier (the broadcast pairs,

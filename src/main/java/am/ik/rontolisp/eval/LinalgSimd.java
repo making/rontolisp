@@ -85,8 +85,12 @@ public final class LinalgSimd {
 	 * and falls back to it -- and only when {@link #available()} is {@code true}.
 	 * @param globalEnv the global environment holding the loaded linalg library
 	 * @param evaluator the evaluator used to apply a captured scalar defun on fallback
+	 * @param parallel {@code --parallel}: run the matrix products ({@code dot}'s
+	 * matrix-by-vector and matrix-by-matrix cases, the stacked {@code %la-matmul-nd})
+	 * over a row range per thread when the call is worth it ({@link SimdParallel}) -- the
+	 * same row chains, so the same bits; no other member changes
 	 */
-	public static void install(Environment globalEnv, LispEvaluator evaluator) {
+	public static void install(Environment globalEnv, LispEvaluator evaluator, boolean parallel) {
 		Elementwise add = new Elementwise(LinalgSimdKernels.BOP_ADD, LinalgSimdKernels::add, LinalgSimdKernels::addF,
 				LinalgSimdKernels::addScalar, LinalgSimdKernels::addScalarF,
 				(s, x) -> LinalgSimdKernels.addScalar(x, s), (s, x) -> LinalgSimdKernels.addScalarF(x, s));
@@ -132,7 +136,7 @@ public final class LinalgSimd {
 		define(globalEnv, evaluator, LispNames.LINALG_TRACE, 1, LinalgSimd::trace);
 		define(globalEnv, evaluator, LispNames.LINALG_TRANSPOSE, 1, 2, LinalgSimd::transpose);
 		define(globalEnv, evaluator, LispNames.LINALG_RESHAPE, 2, LinalgSimd::reshape);
-		define(globalEnv, evaluator, LispNames.LINALG_DOT, 2, LinalgSimd::dot);
+		define(globalEnv, evaluator, LispNames.LINALG_DOT, 2, args -> dot(args, parallel));
 		define(globalEnv, evaluator, LispNames.LINALG_OUTER, 2, LinalgSimd::outer);
 		// The named element-wise unary ufuncs. linalg:square and
 		// linalg:reciprocal are accelerated transitively -- their defuns call
@@ -182,7 +186,7 @@ public final class LinalgSimd {
 		// (torch.bmm): the rank <= 2 dispatch stays in the library, this is the batched
 		// walk it routes to -- every attention layer and every torch:linear over a
 		// (B T C) activation.
-		define(globalEnv, evaluator, LispNames.LINALG_MATMUL_ND, 2, LinalgSimd::matmulNd);
+		define(globalEnv, evaluator, LispNames.LINALG_MATMUL_ND, 2, args -> matmulNd(args, parallel));
 		// The two members todo-473 moved onto this seam: the FUSED optimizer update
 		// (torch:adam / torch:adamw, 31% of a --gpu --simd training step as a boxed do
 		// loop) and the one fill loop behind linalg:rand / randn / uniform. Both are
@@ -673,7 +677,7 @@ public final class LinalgSimd {
 	 * {@code linalg:mul}, itself intercepted); so does any dimension mismatch, so the
 	 * defun raises its own error.
 	 */
-	private static @Nullable LispVal dot(List<LispVal> args) {
+	private static @Nullable LispVal dot(List<LispVal> args, boolean parallel) {
 		LispFloatArray a = packed(args.get(0));
 		LispFloatArray b = packed(args.get(1));
 		if (a == null || b == null || a.getClass() != b.getClass() || a.rank() > 2 || b.rank() > 2) {
@@ -694,8 +698,11 @@ public final class LinalgSimd {
 				return null;
 			}
 			int[] dims = { rows };
-			return single ? new LispSingleFloatArray(LinalgSimdKernels.matvecF(floats(a), rows, cols, floats(b)), dims)
-					: new LispDoubleFloatArray(LinalgSimdKernels.matvec(doubles(a), rows, cols, doubles(b)), dims);
+			return single
+					? new LispSingleFloatArray(LinalgSimdKernels.matvecF(floats(a), rows, cols, floats(b), parallel),
+							dims)
+					: new LispDoubleFloatArray(LinalgSimdKernels.matvec(doubles(a), rows, cols, doubles(b), parallel),
+							dims);
 		}
 		if (a.rank() == 1 && b.rank() == 2) {
 			int n = b.dims()[0];
@@ -705,8 +712,9 @@ public final class LinalgSimd {
 			}
 			// A row vector times a matrix is the n = 1 case of the matrix product.
 			int[] dims = { p };
-			return single ? new LispSingleFloatArray(LinalgSimdKernels.matmulF(floats(a), floats(b), 1, n, p), dims)
-					: new LispDoubleFloatArray(LinalgSimdKernels.matmul(doubles(a), doubles(b), 1, n, p), dims);
+			return single
+					? new LispSingleFloatArray(LinalgSimdKernels.matmulF(floats(a), floats(b), 1, n, p, false), dims)
+					: new LispDoubleFloatArray(LinalgSimdKernels.matmul(doubles(a), doubles(b), 1, n, p, false), dims);
 		}
 		int n = a.dims()[0];
 		int m = a.dims()[1];
@@ -715,8 +723,9 @@ public final class LinalgSimd {
 			return null;
 		}
 		int[] dims = { n, p };
-		return single ? new LispSingleFloatArray(LinalgSimdKernels.matmulF(floats(a), floats(b), n, m, p), dims)
-				: new LispDoubleFloatArray(LinalgSimdKernels.matmul(doubles(a), doubles(b), n, m, p), dims);
+		return single
+				? new LispSingleFloatArray(LinalgSimdKernels.matmulF(floats(a), floats(b), n, m, p, parallel), dims)
+				: new LispDoubleFloatArray(LinalgSimdKernels.matmul(doubles(a), doubles(b), n, m, p, parallel), dims);
 	}
 
 	/**
@@ -748,7 +757,7 @@ public final class LinalgSimd {
 	 * batch shapes, mismatched inner dimensions, and any empty extent (the defun's
 	 * zero-length {@code k} fold answers the INTEGER 0 it seeds with).
 	 */
-	private static @Nullable LispVal matmulNd(List<LispVal> args) {
+	private static @Nullable LispVal matmulNd(List<LispVal> args, boolean parallel) {
 		LispFloatArray a = packed(args.get(0));
 		LispFloatArray b = packed(args.get(1));
 		if (a == null || b == null || a.getClass() != b.getClass() || a.rank() < 2 || b.rank() < 2) {
@@ -783,9 +792,9 @@ public final class LinalgSimd {
 		od[bd.length + 1] = p;
 		return switch (a) {
 			case LispDoubleFloatArray x -> new LispDoubleFloatArray(LinalgSimdKernels.matmulNd(x.data(),
-					((LispDoubleFloatArray) b).data(), bd, sa, sb, n, m, p, (int) batches), od);
+					((LispDoubleFloatArray) b).data(), bd, sa, sb, n, m, p, (int) batches, parallel), od);
 			case LispSingleFloatArray x -> new LispSingleFloatArray(LinalgSimdKernels.matmulNdF(x.data(),
-					((LispSingleFloatArray) b).data(), bd, sa, sb, n, m, p, (int) batches), od);
+					((LispSingleFloatArray) b).data(), bd, sa, sb, n, m, p, (int) batches, parallel), od);
 		};
 	}
 

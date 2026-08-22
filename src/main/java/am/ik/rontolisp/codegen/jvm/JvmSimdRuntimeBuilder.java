@@ -66,9 +66,14 @@ final class JvmSimdRuntimeBuilder {
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
 	 * @param stringConcat {@code String.concat(String)}
+	 * @param parallel {@code --parallel}: bind the GEMV / GEMM members
+	 * ({@code vec:matvec}, {@code vec:matvec-into}, {@code linalg:dot},
+	 * {@code linalg::%la-matmul-nd}) to the bridge entries that split their rows across
+	 * threads; every other member and every other byte of the runtime is the same
 	 * @return the runtime pieces
 	 */
-	static SimdRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat) {
+	static SimdRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
+			boolean parallel) {
 		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME,
 				BRIDGE_NAME);
 		String base64 = Base64.getEncoder().encodeToString(bridgeBytes);
@@ -126,8 +131,10 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdDiv"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_DOT,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdDot"), cp.addUtf8(binaryDesc))));
-		ops.put(LispNames.VEC_MATVEC,
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvec"), cp.addUtf8(binaryDesc))));
+		// The GEMV, serial or row-parallel: the --parallel build binds the same call
+		// site to the entry that splits the rows (the kernel, and so the bits, are one).
+		ops.put(LispNames.VEC_MATVEC, cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8(parallel ? "simdMatvecParallel" : "simdMatvec"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_SUM,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSum"), cp.addUtf8(unaryDesc))));
 		ops.put(LispNames.VEC_ADD_INTO,
@@ -140,8 +147,8 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdDivInto"), cp.addUtf8(ternaryDesc))));
 		ops.put(LispNames.VEC_SCALE_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdScaleInto"), cp.addUtf8(ternaryDesc))));
-		ops.put(LispNames.VEC_MATVEC_INTO,
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvecInto"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_MATVEC_INTO, cp.addMethodref(bridgeClass, cp.addNameAndType(
+				cp.addUtf8(parallel ? "simdMatvecIntoParallel" : "simdMatvecInto"), cp.addUtf8(ternaryDesc))));
 		// The element-wise unary ufuncs: one operand (unary), or a
 		// destination plus one operand (binary) for the -into siblings.
 		ops.put(LispNames.VEC_EXP,
@@ -235,8 +242,8 @@ final class JvmSimdRuntimeBuilder {
 		for (String member : JvmLinalgKernelCompiler.members()) {
 			String desc = "(" + "Ljava/lang/Object;".repeat(JvmLinalgKernelCompiler.arity(member))
 					+ ")Ljava/lang/Object;";
-			ops.put(JvmLinalgKernelCompiler.qualifiedName(member), cp.addMethodref(bridgeClass,
-					cp.addNameAndType(cp.addUtf8(JvmLinalgKernelCompiler.bridgeMethod(member)), cp.addUtf8(desc))));
+			ops.put(JvmLinalgKernelCompiler.qualifiedName(member), cp.addMethodref(bridgeClass, cp
+				.addNameAndType(cp.addUtf8(JvmLinalgKernelCompiler.bridgeMethod(member, parallel)), cp.addUtf8(desc))));
 			// The option-form (:axis / axes) kernels ride the same bridge under a
 			// distinct
 			// ops key, one extra methodref per extended member.

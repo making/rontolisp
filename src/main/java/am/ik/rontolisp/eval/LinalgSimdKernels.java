@@ -767,12 +767,12 @@ final class LinalgSimdKernels {
 	}
 
 	/** Matrix times column vector (GEMV): exactly {@code vec:matvec}'s kernel. */
-	static double[] matvec(double[] w, int rows, int cols, double[] x) {
-		return VecSimdKernels.matvec(w, rows, cols, x);
+	static double[] matvec(double[] w, int rows, int cols, double[] x, boolean parallel) {
+		return VecSimdKernels.matvec(w, rows, cols, x, parallel);
 	}
 
-	static float[] matvecF(float[] w, int rows, int cols, float[] x) {
-		return VecSimdKernels.matvecF(w, rows, cols, x);
+	static float[] matvecF(float[] w, int rows, int cols, float[] x, boolean parallel) {
+		return VecSimdKernels.matvecF(w, rows, cols, x, parallel);
 	}
 
 	/**
@@ -791,20 +791,28 @@ final class LinalgSimdKernels {
 	 * <p>
 	 * {@code vector . matrix} is this kernel with {@code n = 1}.
 	 */
-	static double[] matmul(double[] a, double[] b, int n, int m, int p) {
+	static double[] matmul(double[] a, double[] b, int n, int m, int p, boolean parallel) {
 		double[] r = new double[n * p];
-		matmulInto(a, 0, b, 0, r, 0, n, m, p);
+		if (parallel && SimdParallel.worth(n, (long) m * p)) {
+			SimdParallel.rows(n, (long) m * p, (from, to) -> matmulRows(a, 0, b, 0, r, 0, m, p, from, to));
+		}
+		else {
+			matmulRows(a, 0, b, 0, r, 0, m, p, 0, n);
+		}
 		return r;
 	}
 
 	/**
-	 * One {@code n x m} by {@code m x p} slab of the {@code ikj} loop, reading {@code a}
-	 * at {@code oa}, {@code b} at {@code ob} and accumulating into {@code r} at
-	 * {@code or}. The rank-2 product is the {@code oa = ob = or = 0} case and every batch
-	 * of {@link #matmulNd} is one call, so there is exactly one lane loop.
+	 * Output rows {@code [from, to)} of one {@code n x m} by {@code m x p} slab of the
+	 * {@code ikj} loop, reading {@code a} at {@code oa}, {@code b} at {@code ob} and
+	 * accumulating into {@code r} at {@code or}. The rank-2 product and every batch of
+	 * {@link #matmulNd} run this one lane loop -- serially over {@code [0, n)}, or under
+	 * {@code --parallel} over a row range per thread: row {@code i} folds {@code k} into
+	 * its own cells and reads nothing another row writes, so the split cannot move a bit.
 	 */
-	private static void matmulInto(double[] a, int oa, double[] b, int ob, double[] r, int or, int n, int m, int p) {
-		for (int i = 0; i < n; i++) {
+	private static void matmulRows(double[] a, int oa, double[] b, int ob, double[] r, int or, int m, int p, int from,
+			int to) {
+		for (int i = from; i < to; i++) {
 			int ro = or + i * p;
 			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
@@ -847,14 +855,20 @@ final class LinalgSimdKernels {
 	 * it runs 190x slower than the scalar loop it would replace. The numbers, and the
 	 * rerunnable probe behind them, are in {@code .kb/linalg-simd.md}.
 	 */
-	static float[] matmulF(float[] a, float[] b, int n, int m, int p) {
+	static float[] matmulF(float[] a, float[] b, int n, int m, int p, boolean parallel) {
 		float[] r = new float[n * p];
-		matmulIntoF(a, 0, b, 0, r, 0, n, m, p);
+		if (parallel && SimdParallel.worth(n, (long) m * p)) {
+			SimdParallel.rows(n, (long) m * p, (from, to) -> matmulRowsF(a, 0, b, 0, r, 0, m, p, from, to));
+		}
+		else {
+			matmulRowsF(a, 0, b, 0, r, 0, m, p, 0, n);
+		}
 		return r;
 	}
 
-	private static void matmulIntoF(float[] a, int oa, float[] b, int ob, float[] r, int or, int n, int m, int p) {
-		for (int i = 0; i < n; i++) {
+	private static void matmulRowsF(float[] a, int oa, float[] b, int ob, float[] r, int or, int m, int p, int from,
+			int to) {
+		for (int i = from; i < to; i++) {
 			int ro = or + i * p;
 			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
@@ -877,45 +891,61 @@ final class LinalgSimdKernels {
 	}
 
 	/**
-	 * The STACKED matrix product ({@code linalg::%la-matmul-nd}): one {@link #matmulInto}
-	 * slab per batch, the batch offsets advancing through the {@code %la-batch-strides}
-	 * odometer (a broadcast leading axis has stride 0, so it simply re-reads the same
-	 * slab). Every output cell therefore folds {@code k} exactly as a per-batch
-	 * {@code linalg:dot} does -- the precision contract is {@code dot}'s, not the
-	 * defun's.
+	 * The STACKED matrix product ({@code linalg::%la-matmul-nd}): one {@link #matmulRows}
+	 * slab per batch, the batch offsets taken from the {@code %la-batch-strides} odometer
+	 * (a broadcast leading axis has stride 0, so it simply re-reads the same slab). Every
+	 * output cell therefore folds {@code k} exactly as a per-batch {@code linalg:dot}
+	 * does -- the precision contract is {@code dot}'s, not the defun's. Under
+	 * {@code --parallel} the output rows of the whole stack ({@code batches * n} of them)
+	 * are what is split across threads; a batch boundary is just another row boundary.
 	 * @param bd the broadcast batch shape, outermost first
 	 * @param sa {@code a}'s batch strides, aligned to {@code bd}
 	 * @param sb {@code b}'s batch strides, aligned to {@code bd}
+	 * @param parallel {@code --parallel}: split the rows when the call is worth it
 	 */
-	static double[] matmulNd(double[] a, double[] b, int[] bd, int[] sa, int[] sb, int n, int m, int p, int batches) {
+	static double[] matmulNd(double[] a, double[] b, int[] bd, int[] sa, int[] sb, int n, int m, int p, int batches,
+			boolean parallel) {
 		double[] r = new double[batches * n * p];
-		int[] idx = new int[bd.length];
-		int oa = 0;
-		int ob = 0;
-		for (int z = 0; z < batches; z++) {
-			matmulInto(a, oa, b, ob, r, z * n * p, n, m, p);
-			for (int ax = bd.length - 1; ax >= 0; ax--) {
-				idx[ax]++;
-				oa += sa[ax];
-				ob += sb[ax];
-				if (idx[ax] < bd[ax]) {
-					break;
-				}
-				idx[ax] = 0;
-				oa -= bd[ax] * sa[ax];
-				ob -= bd[ax] * sb[ax];
-			}
+		int[] offA = new int[batches];
+		int[] offB = new int[batches];
+		batchOffsets(bd, sa, sb, offA, offB);
+		int rows = batches * n;
+		if (parallel && SimdParallel.worth(rows, (long) m * p)) {
+			SimdParallel.rows(rows, (long) m * p, (from, to) -> matmulNdRows(a, b, r, offA, offB, n, m, p, from, to));
+		}
+		else {
+			matmulNdRows(a, b, r, offA, offB, n, m, p, 0, rows);
 		}
 		return r;
 	}
 
-	static float[] matmulNdF(float[] a, float[] b, int[] bd, int[] sa, int[] sb, int n, int m, int p, int batches) {
+	static float[] matmulNdF(float[] a, float[] b, int[] bd, int[] sa, int[] sb, int n, int m, int p, int batches,
+			boolean parallel) {
 		float[] r = new float[batches * n * p];
+		int[] offA = new int[batches];
+		int[] offB = new int[batches];
+		batchOffsets(bd, sa, sb, offA, offB);
+		int rows = batches * n;
+		if (parallel && SimdParallel.worth(rows, (long) m * p)) {
+			SimdParallel.rows(rows, (long) m * p, (from, to) -> matmulNdRowsF(a, b, r, offA, offB, n, m, p, from, to));
+		}
+		else {
+			matmulNdRowsF(a, b, r, offA, offB, n, m, p, 0, rows);
+		}
+		return r;
+	}
+
+	/**
+	 * The {@code %la-batch-strides} odometer, unrolled into one operand offset per batch
+	 * up front, so a row range can start in the middle of the stack.
+	 */
+	private static void batchOffsets(int[] bd, int[] sa, int[] sb, int[] offA, int[] offB) {
 		int[] idx = new int[bd.length];
 		int oa = 0;
 		int ob = 0;
-		for (int z = 0; z < batches; z++) {
-			matmulIntoF(a, oa, b, ob, r, z * n * p, n, m, p);
+		for (int z = 0; z < offA.length; z++) {
+			offA[z] = oa;
+			offB[z] = ob;
 			for (int ax = bd.length - 1; ax >= 0; ax--) {
 				idx[ax]++;
 				oa += sa[ax];
@@ -928,7 +958,33 @@ final class LinalgSimdKernels {
 				ob -= bd[ax] * sb[ax];
 			}
 		}
-		return r;
+	}
+
+	/**
+	 * Rows {@code [from, to)} of the stacked product, counted across the whole stack (row
+	 * {@code q} is row {@code q % n} of batch {@code q / n}): each batch's share is one
+	 * {@link #matmulRows} call.
+	 */
+	private static void matmulNdRows(double[] a, double[] b, double[] r, int[] offA, int[] offB, int n, int m, int p,
+			int from, int to) {
+		for (int q = from; q < to;) {
+			int z = q / n;
+			int i0 = q % n;
+			int i1 = Math.min(n, i0 + (to - q));
+			matmulRows(a, offA[z], b, offB[z], r, z * n * p, m, p, i0, i1);
+			q += i1 - i0;
+		}
+	}
+
+	private static void matmulNdRowsF(float[] a, float[] b, float[] r, int[] offA, int[] offB, int n, int m, int p,
+			int from, int to) {
+		for (int q = from; q < to;) {
+			int z = q / n;
+			int i0 = q % n;
+			int i1 = Math.min(n, i0 + (to - q));
+			matmulRowsF(a, offA[z], b, offB[z], r, z * n * p, m, p, i0, i1);
+			q += i1 - i0;
+		}
 	}
 
 	/** {@code out[i][j] = u[i] * v[j]}: one scaled copy of {@code v} per row. */

@@ -108,6 +108,8 @@ public final class LispEvaluator {
 
 	private boolean gpu = false;
 
+	private boolean parallel = false;
+
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
 
 	// The uiop definitions already evaluated into the global environment, keyed by their
@@ -665,6 +667,20 @@ public final class LispEvaluator {
 	 */
 	public void setGpu(boolean gpu) {
 		this.gpu = gpu;
+	}
+
+	/**
+	 * Enables the opt-in {@code --parallel} row split of the {@code --simd} matrix
+	 * products: {@code vec:matvec} / {@code vec:matvec-into}, {@code linalg:dot}'s matrix
+	 * cases and the stacked {@code linalg:matmul} run over a row range per thread
+	 * ({@link SimdParallel}) when a call is worth it. A modifier of {@link #setSimd} --
+	 * without it nothing is intercepted and the flag is inert -- and bit-identical to it:
+	 * the rows are independent chains, so which thread runs which row cannot change a
+	 * result. The reductions are never split.
+	 * @param parallel whether to split the matrix products across threads
+	 */
+	public void setParallel(boolean parallel) {
+		this.parallel = parallel;
 	}
 
 	/**
@@ -6884,7 +6900,7 @@ public final class LispEvaluator {
 				// back to it for the inputs it does not handle (general arrays, mixed
 				// widths, shape errors), so linalg.lisp stays the single source of truth.
 				if (this.simd) {
-					LinalgSimd.install(this.globalEnv, this);
+					LinalgSimd.install(this.globalEnv, this, this.parallel);
 				}
 				// Opt-in --blas, installed LAST so that what it declines to is the
 				// simd native when there is one and the scalar defun otherwise.
@@ -6925,7 +6941,7 @@ public final class LispEvaluator {
 				// Vector API natives. mean/norm keep their scalar bodies and pick the
 				// natives up through the global function namespace (Lisp-2).
 				if (this.simd) {
-					VecSimd.install(this.globalEnv);
+					VecSimd.install(this.globalEnv, this.parallel);
 				}
 				// Opt-in --gpu: vec:matvec is the one device member outside linalg:, and
 				// it is installed here, on TOP of the lane kernel, when THIS library

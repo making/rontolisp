@@ -193,6 +193,22 @@ The precision rules above carry over, with one exception in linalg's favor:
 
 `linalg` does not compile under `--no-gc` at all, with or without `--simd`. The `--no-gc` row of the target table above therefore concerns `vec` only.
 
+## Using more than one core (`--parallel`)
+
+Every `--simd` kernel runs on the calling thread. `--parallel`, passed together with `--simd`, splits the **matrix products** across CPU cores: `vec:matvec` / `vec:matvec-into`, `linalg:dot` over a matrix (matrix-by-vector and matrix-by-matrix) and `linalg:matmul` (the stacked rank >= 3 product included) run a range of output rows per thread once a call is big enough -- about 2^15 multiply-adds, so a 288x288 matrix-by-vector product is split and a 128x128 one is not. Everything else stays on the calling thread: the element-wise kernels would not pay for a dispatch, and the reductions (`sum`, `dot` of two vectors, `norm`, `mean`) are never split, because there the fold order is the value.
+
+**The results are bit-identical to `--simd` alone.** A matrix product is one independent chain per output row; which thread computes which row cannot change a single bit, so everything the precision paragraphs above say about `--simd` holds unchanged, and a program prints the same bytes with and without the flag.
+
+- `RONTOLISP_THREADS` sets the thread count, the calling thread included (default: the available processors; `RONTOLISP_THREADS=1` runs serially). The worker threads are daemon threads created on the first call worth splitting, never before, so a program that makes no such call starts no thread. Between calls they keep spinning for about a millisecond before they sleep -- that is what makes a product that follows a millisecond of other work still pay -- so while a loop of products runs, the threads are busy; size the count to what the machine's job allows, the way you would `OPENBLAS_NUM_THREADS` for [`--blas`](blas-acceleration.md).
+- Interpreter (the native binary included) and JVM `.class` only. WebAssembly has no threads, so the flag is a compile error on a `.wasm` output rather than a silent no-op -- and it needs `--simd`, whose kernels are what it splits, so `--parallel` alone is an error too.
+- Expect a few times the serial kernel on a large product, not the core count: a matrix-by-vector product streams its matrix once, so memory bandwidth is the ceiling. On a 20-core box a 32000x288 single-float matrix-by-vector product gains about 3.8x, a 768x288 one about 1.8x, and the `examples/llama2` decode loop about 1.4x over `--simd` ([its README](../../../examples/llama2/README.md)).
+
+```lisp
+(let ((w (linalg:reshape (linalg:arange 0 230400) '(800 288)))
+      (x (linalg:ones '(288))))
+  (vec:aref (vec:matvec w x) 799))   ; => 6.6313584e7
+```
+
 ## Beyond `--simd`
 
 Two further acceleration flags reach `linalg` on the CPU-hosted backends, each with a page of its own, and neither of them touches `vec`:
@@ -200,7 +216,7 @@ Two further acceleration flags reach `linalg` on the CPU-hosted backends, each w
 - [**Tuned BLAS acceleration (`--blas`)**](blas-acceleration.md) -- the matrix product through a library blocked for the machine's cache hierarchy.
 - [**GPU acceleration (`--gpu`)**](gpu-acceleration.md) -- that product, the element-wise transcendentals, and the broadcast / axis-fold / axes-transpose shapes on an NVIDIA device or on Apple Silicon.
 
-The three are orthogonal: pass any combination, or none. [How the three flags compose](gpu-acceleration.md#how-the-three-flags-compose) describes the order they are asked in when more than one is on.
+The three are orthogonal: pass any combination, or none. [How the three flags compose](gpu-acceleration.md#how-the-three-flags-compose) describes the order they are asked in when more than one is on. `--parallel` is not a fourth rung of that chain but a modifier of `--simd`: where the chain reaches the lane kernel, it reaches the row-parallel one.
 
 ## Runnable examples
 

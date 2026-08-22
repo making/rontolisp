@@ -72,6 +72,13 @@ import org.jspecify.annotations.Nullable;
  * Design constraints (as for {@link JavaBridgeTemplate}): no nested classes or records
  * (lambdas are fine) and no references to other rontolisp classes -- the bytes must stand
  * alone once embedded.
+ *
+ * <p>
+ * {@code --parallel} adds no kernel: the {@code *Parallel} bridge entries
+ * ({@link #simdMatvecParallel}, {@link #simdMatvecIntoParallel}, {@link #laDotParallel},
+ * {@link #laMatmulNdParallel}) run the very GEMV / GEMM row loops over a row range per
+ * thread (the "row-parallel dispatch" section), which is why their results are
+ * bit-identical to the serial entries, and why no reduction has one.
  */
 final class JvmSimdVectorTemplate {
 
@@ -433,20 +440,65 @@ final class JvmSimdVectorTemplate {
 	 * over {@code d} rows.
 	 */
 	static @Nullable Object simdMatvec(@Nullable Object w, @Nullable Object x) {
+		return matvec(w, x, false);
+	}
+
+	/**
+	 * {@link #simdMatvec} with its rows split across the {@code --parallel} threads
+	 * (below): the same row chains, so the same bits, whichever thread runs which row.
+	 */
+	static @Nullable Object simdMatvecParallel(@Nullable Object w, @Nullable Object x) {
+		return matvec(w, x, true);
+	}
+
+	private static @Nullable Object matvec(@Nullable Object w, @Nullable Object x, boolean parallel) {
 		if (w instanceof float[] fw) {
-			return matvecF(fw, asFloat(x));
+			float[] fx = asFloat(x);
+			int d = (int) fw[1];
+			int n = (int) fw[2];
+			float[] r = newVecF(d);
+			if (parallel && parallelWorth(d, n)) {
+				parallelRows(d, n, (from, to) -> {
+					matvecRowsF(r, 2, fw, fx, from, to);
+					return 0;
+				});
+			}
+			else {
+				matvecRowsF(r, 2, fw, fx, 0, d);
+			}
+			return r;
 		}
 		if (x instanceof float[]) {
 			throw mixedWidth();
 		}
 		double[] W = (double[]) java.util.Objects.requireNonNull(w);
 		double[] X = (double[]) java.util.Objects.requireNonNull(x);
-		int ow = 1 + (int) W[0]; // rank-2 matrix header -> elements start at 3
 		int d = (int) W[1]; // rows
+		double[] r = newVec(d);
+		if (parallel && parallelWorth(d, (int) W[2])) {
+			parallelRows(d, (int) W[2], (from, to) -> {
+				matvecRows(r, 2, W, X, from, to);
+				return 0;
+			});
+		}
+		else {
+			matvecRows(r, 2, W, X, 0, d);
+		}
+		return r;
+	}
+
+	/**
+	 * Rows {@code [from, to)} of the f64 GEMV: {@code r[or + row] = dot(row of W, X)},
+	 * {@code W} a rank-2 packed matrix ({@code [2, d, n, e_00, ...]}, elements at 3),
+	 * {@code X} a rank-1 packed vector. One lane chain per row, {@link #simdDot}'s
+	 * two-rounding mul-then-add, the scalar tail in index order: the row's bits depend on
+	 * nothing but the row, which is what lets {@code --parallel} split them.
+	 */
+	private static void matvecRows(double[] r, int or, double[] W, double[] X, int from, int to) {
+		int ow = 1 + (int) W[0]; // rank-2 matrix header -> elements start at 3
 		int n = (int) W[2]; // columns = length of x
 		int ox = 1 + (int) X[0];
-		double[] r = newVec(d);
-		for (int row = 0; row < d; row++) {
+		for (int row = from; row < to; row++) {
 			int base = ow + row * n;
 			int i = 0;
 			double acc = 0.0;
@@ -462,9 +514,36 @@ final class JvmSimdVectorTemplate {
 			for (; i < n; i++) {
 				acc += W[base + i] * X[ox + i];
 			}
-			r[2 + row] = acc;
+			r[or + row] = acc;
 		}
-		return r;
+	}
+
+	/**
+	 * {@link #matvecRows} at single width: the {@link #dotF} chain, four lanes, f32
+	 * accumulator.
+	 */
+	private static void matvecRowsF(float[] r, int or, float[] w, float[] x, int from, int to) {
+		int ow = 1 + (int) w[0];
+		int n = (int) w[2];
+		int ox = 1 + (int) x[0];
+		for (int row = from; row < to; row++) {
+			int base = ow + row * n;
+			int i = 0;
+			float acc = 0.0f;
+			if (n >= THRESHOLD) {
+				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
+				int bound = FSPECIES_REDUCE.loopBound(n);
+				for (; i < bound; i += FSPECIES_REDUCE.length()) {
+					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
+						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
+				}
+				acc = vacc.reduceLanes(VectorOperators.ADD);
+			}
+			for (; i < n; i++) {
+				acc += w[base + i] * x[ox + i];
+			}
+			r[or + row] = acc;
+		}
 	}
 
 	// --- destination-passing kernels (write into out, allocate nothing) -----------
@@ -671,12 +750,36 @@ final class JvmSimdVectorTemplate {
 	}
 
 	static @Nullable Object simdMatvecInto(@Nullable Object out, @Nullable Object w, @Nullable Object x) {
+		return matvecInto(out, w, x, false);
+	}
+
+	/**
+	 * {@link #simdMatvecInto} with its rows split across the {@code --parallel} threads.
+	 */
+	static @Nullable Object simdMatvecIntoParallel(@Nullable Object out, @Nullable Object w, @Nullable Object x) {
+		return matvecInto(out, w, x, true);
+	}
+
+	private static @Nullable Object matvecInto(@Nullable Object out, @Nullable Object w, @Nullable Object x,
+			boolean parallel) {
 		if (out == x || out == w) {
 			throw new IllegalArgumentException(
 					"vec:matvec-into: out must not be the same array as w or x (each out element folds over all of x)");
 		}
 		if (out instanceof float[] fr) {
-			matvecIntoF(fr, asFloat(w), asFloat(x));
+			float[] fw = asFloat(w);
+			float[] fx = asFloat(x);
+			int or = 1 + (int) fr[0];
+			int d = (int) fw[1];
+			if (parallel && parallelWorth(d, (int) fw[2])) {
+				parallelRows(d, (int) fw[2], (from, to) -> {
+					matvecRowsF(fr, or, fw, fx, from, to);
+					return 0;
+				});
+			}
+			else {
+				matvecRowsF(fr, or, fw, fx, 0, d);
+			}
 			return out;
 		}
 		requireDouble(w, x);
@@ -684,27 +787,15 @@ final class JvmSimdVectorTemplate {
 		double[] mw = (double[]) java.util.Objects.requireNonNull(w);
 		double[] vx = (double[]) java.util.Objects.requireNonNull(x);
 		int or = 1 + (int) r[0];
-		int ow = 1 + (int) mw[0];
 		int d = (int) mw[1];
-		int n = (int) mw[2];
-		int ox = 1 + (int) vx[0];
-		for (int row = 0; row < d; row++) {
-			int base = ow + row * n;
-			int i = 0;
-			double acc = 0.0;
-			if (n >= THRESHOLD) {
-				DoubleVector vacc = DoubleVector.zero(SPECIES);
-				int bound = SPECIES.loopBound(n);
-				for (; i < bound; i += SPECIES.length()) {
-					vacc = vacc.add(DoubleVector.fromArray(SPECIES, mw, base + i)
-						.mul(DoubleVector.fromArray(SPECIES, vx, ox + i)));
-				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
-			}
-			for (; i < n; i++) {
-				acc += mw[base + i] * vx[ox + i];
-			}
-			r[or + row] = acc;
+		if (parallel && parallelWorth(d, (int) mw[2])) {
+			parallelRows(d, (int) mw[2], (from, to) -> {
+				matvecRows(r, or, mw, vx, from, to);
+				return 0;
+			});
+		}
+		else {
+			matvecRows(r, or, mw, vx, 0, d);
 		}
 		return out;
 	}
@@ -1779,6 +1870,18 @@ final class JvmSimdVectorTemplate {
 	 * that to {@code linalg:mul}, itself intercepted.
 	 */
 	static @Nullable Object laDot(@Nullable Object a, @Nullable Object b) {
+		return laDot(a, b, false);
+	}
+
+	/**
+	 * {@link #laDot} with the rows of its matrix-by-vector and matrix-by-matrix cases
+	 * split across the {@code --parallel} threads (the row-parallel kernels below).
+	 */
+	static @Nullable Object laDotParallel(@Nullable Object a, @Nullable Object b) {
+		return laDot(a, b, true);
+	}
+
+	private static @Nullable Object laDot(@Nullable Object a, @Nullable Object b, boolean parallel) {
 		if (!laPacked(a) || !laPacked(b) || laRank(a) > 2 || laRank(b) > 2) {
 			return null;
 		}
@@ -1790,7 +1893,7 @@ final class JvmSimdVectorTemplate {
 			return laDim(a, 0) == laDim(b, 0) ? simdDot(a, b) : null;
 		}
 		if (laRank(a) == 2 && laRank(b) == 1) {
-			return laDim(a, 1) == laDim(b, 0) ? simdMatvec(a, b) : null;
+			return laDim(a, 1) == laDim(b, 0) ? matvec(a, b, parallel) : null;
 		}
 		if (laRank(a) == 1 && laRank(b) == 2) {
 			// A row vector times a matrix is the n = 1 case of the matrix product; the
@@ -1801,12 +1904,12 @@ final class JvmSimdVectorTemplate {
 				return null;
 			}
 			if (single) {
-				float[] m = laMatmulF(laFloats(a), laFloats(b), 1, n, p);
+				float[] m = laMatmulF(laFloats(a), laFloats(b), 1, n, p, false);
 				float[] r = newVecF(p);
 				System.arraycopy(m, 3, r, 2, p);
 				return r;
 			}
-			double[] m = laMatmul(laDoubles(a), laDoubles(b), 1, n, p);
+			double[] m = laMatmul(laDoubles(a), laDoubles(b), 1, n, p, false);
 			double[] r = newVec(p);
 			System.arraycopy(m, 3, r, 2, p);
 			return r;
@@ -1817,7 +1920,8 @@ final class JvmSimdVectorTemplate {
 		if (m != laDim(b, 0)) {
 			return null;
 		}
-		return single ? laMatmulF(laFloats(a), laFloats(b), n, m, p) : laMatmul(laDoubles(a), laDoubles(b), n, m, p);
+		return single ? laMatmulF(laFloats(a), laFloats(b), n, m, p, parallel)
+				: laMatmul(laDoubles(a), laDoubles(b), n, m, p, parallel);
 	}
 
 	/**
@@ -1833,21 +1937,34 @@ final class JvmSimdVectorTemplate {
 	 * summation order. The single-float sibling ({@link #laMatmulF}) keeps the same
 	 * {@code k} order, but folds it at single precision.
 	 */
-	private static double[] laMatmul(double[] a, double[] b, int n, int m, int p) {
+	private static double[] laMatmul(double[] a, double[] b, int n, int m, int p, boolean parallel) {
 		double[] r = laNewMat(n, p);
-		laMatmulInto(a, 1 + (int) a[0], b, 1 + (int) b[0], r, 3, n, m, p);
+		int oa = 1 + (int) a[0];
+		int ob = 1 + (int) b[0];
+		if (parallel && parallelWorth(n, (long) m * p)) {
+			parallelRows(n, (long) m * p, (from, to) -> {
+				laMatmulRows(a, oa, b, ob, r, 3, m, p, from, to);
+				return 0;
+			});
+		}
+		else {
+			laMatmulRows(a, oa, b, ob, r, 3, m, p, 0, n);
+		}
 		return r;
 	}
 
 	/**
-	 * One {@code n x m} by {@code m x p} slab of the {@code ikj} loop, reading {@code a}
-	 * at {@code oa}, {@code b} at {@code ob} and accumulating into {@code r} at
-	 * {@code or} -- all three already past their dimension headers. The rank-2 product is
-	 * one call and every batch of {@link #laMatmulNd} is one call, so there is exactly
-	 * one lane loop.
+	 * Output rows {@code [from, to)} of one {@code n x m} by {@code m x p} slab of the
+	 * {@code ikj} loop, reading {@code a} at {@code oa}, {@code b} at {@code ob} and
+	 * accumulating into {@code r} at {@code or} -- all three already past their dimension
+	 * headers. The rank-2 product and every batch of {@link #laMatmulNd} run this one
+	 * lane loop, serially over {@code [0, n)} or, under {@code --parallel}, over a row
+	 * range per thread: row {@code i} folds {@code k} into its own cells and reads
+	 * nothing another row writes, so the split cannot move a bit.
 	 */
-	private static void laMatmulInto(double[] a, int oa, double[] b, int ob, double[] r, int or, int n, int m, int p) {
-		for (int i = 0; i < n; i++) {
+	private static void laMatmulRows(double[] a, int oa, double[] b, int ob, double[] r, int or, int m, int p, int from,
+			int to) {
+		for (int i = from; i < to; i++) {
 			int ro = or + i * p;
 			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
@@ -1881,14 +1998,25 @@ final class JvmSimdVectorTemplate {
 	 * which loses on every architecture measured and has no intrinsic at all on aarch64
 	 * ({@code .kb/linalg-simd.md}).
 	 */
-	private static float[] laMatmulF(float[] a, float[] b, int n, int m, int p) {
+	private static float[] laMatmulF(float[] a, float[] b, int n, int m, int p, boolean parallel) {
 		float[] r = laNewMatF(n, p);
-		laMatmulIntoF(a, 1 + (int) a[0], b, 1 + (int) b[0], r, 3, n, m, p);
+		int oa = 1 + (int) a[0];
+		int ob = 1 + (int) b[0];
+		if (parallel && parallelWorth(n, (long) m * p)) {
+			parallelRows(n, (long) m * p, (from, to) -> {
+				laMatmulRowsF(a, oa, b, ob, r, 3, m, p, from, to);
+				return 0;
+			});
+		}
+		else {
+			laMatmulRowsF(a, oa, b, ob, r, 3, m, p, 0, n);
+		}
 		return r;
 	}
 
-	private static void laMatmulIntoF(float[] a, int oa, float[] b, int ob, float[] r, int or, int n, int m, int p) {
-		for (int i = 0; i < n; i++) {
+	private static void laMatmulRowsF(float[] a, int oa, float[] b, int ob, float[] r, int or, int m, int p, int from,
+			int to) {
+		for (int i = from; i < to; i++) {
 			int ro = or + i * p;
 			int ao = oa + i * m;
 			for (int k = 0; k < m; k++) {
@@ -1913,7 +2041,7 @@ final class JvmSimdVectorTemplate {
 	/**
 	 * {@code (linalg::%la-matmul-nd a b)}, the STACKED matrix product
 	 * ({@code torch.bmm}): the last two axes are the matrix and every leading axis
-	 * broadcasts. One {@link #laMatmulInto} slab per batch over the
+	 * broadcasts. One {@link #laMatmulRows} slab per batch over the
 	 * {@code %la-batch-strides} offsets, so every output cell folds {@code k} exactly as
 	 * a per-batch {@code linalg:dot} does -- the precision contract is {@code dot}'s, not
 	 * the scalar defun's.
@@ -1924,6 +2052,19 @@ final class JvmSimdVectorTemplate {
 	 * non-broadcastable batch shapes, mismatched inner dimensions, any empty extent.
 	 */
 	static @Nullable Object laMatmulNd(@Nullable Object a, @Nullable Object b) {
+		return laMatmulNd(a, b, false);
+	}
+
+	/**
+	 * {@link #laMatmulNd} with the output rows of the whole stack -- {@code batches * n}
+	 * of them, each {@code m * p} multiply-adds -- split across the {@code --parallel}
+	 * threads; a batch boundary is just another row boundary to the split.
+	 */
+	static @Nullable Object laMatmulNdParallel(@Nullable Object a, @Nullable Object b) {
+		return laMatmulNd(a, b, true);
+	}
+
+	private static @Nullable Object laMatmulNd(@Nullable Object a, @Nullable Object b, boolean parallel) {
 		if (!laPacked(a) || !laPacked(b) || laRank(a) < 2 || laRank(b) < 2) {
 			return null;
 		}
@@ -1956,48 +2097,18 @@ final class JvmSimdVectorTemplate {
 		}
 		int[] sa = laBatchStrides(ba, bd, n * m);
 		int[] sb = laBatchStrides(bb, bd, m * p);
-		int[] idx = new int[bd.length];
 		int off = 1 + rank;
+		int count = (int) batches;
+		// The batch offsets up front (the %la-batch-strides odometer), so a row range
+		// can start in the middle of the stack.
+		int[] offA = new int[count];
+		int[] offB = new int[count];
+		int[] idx = new int[bd.length];
 		int oa = 1 + da.length;
 		int ob = 1 + db.length;
-		int count = (int) batches;
-		if (single) {
-			float[] x = laFloats(a);
-			float[] y = laFloats(b);
-			float[] r = new float[off + (int) total];
-			r[0] = rank;
-			for (int i = 0; i < bd.length; i++) {
-				r[1 + i] = bd[i];
-			}
-			r[rank - 1] = n;
-			r[rank] = p;
-			for (int z = 0; z < count; z++) {
-				laMatmulIntoF(x, oa, y, ob, r, off + z * n * p, n, m, p);
-				for (int ax = bd.length - 1; ax >= 0; ax--) {
-					idx[ax]++;
-					oa += sa[ax];
-					ob += sb[ax];
-					if (idx[ax] < bd[ax]) {
-						break;
-					}
-					idx[ax] = 0;
-					oa -= bd[ax] * sa[ax];
-					ob -= bd[ax] * sb[ax];
-				}
-			}
-			return r;
-		}
-		double[] x = laDoubles(a);
-		double[] y = laDoubles(b);
-		double[] r = new double[off + (int) total];
-		r[0] = rank;
-		for (int i = 0; i < bd.length; i++) {
-			r[1 + i] = bd[i];
-		}
-		r[rank - 1] = n;
-		r[rank] = p;
 		for (int z = 0; z < count; z++) {
-			laMatmulInto(x, oa, y, ob, r, off + z * n * p, n, m, p);
+			offA[z] = oa;
+			offB[z] = ob;
 			for (int ax = bd.length - 1; ax >= 0; ax--) {
 				idx[ax]++;
 				oa += sa[ax];
@@ -2010,7 +2121,74 @@ final class JvmSimdVectorTemplate {
 				ob -= bd[ax] * sb[ax];
 			}
 		}
+		int rows = count * n;
+		if (single) {
+			float[] x = laFloats(a);
+			float[] y = laFloats(b);
+			float[] r = new float[off + (int) total];
+			r[0] = rank;
+			for (int i = 0; i < bd.length; i++) {
+				r[1 + i] = bd[i];
+			}
+			r[rank - 1] = n;
+			r[rank] = p;
+			if (parallel && parallelWorth(rows, (long) m * p)) {
+				parallelRows(rows, (long) m * p, (from, to) -> {
+					laMatmulNdRowsF(x, y, r, offA, offB, off, n, m, p, from, to);
+					return 0;
+				});
+			}
+			else {
+				laMatmulNdRowsF(x, y, r, offA, offB, off, n, m, p, 0, rows);
+			}
+			return r;
+		}
+		double[] x = laDoubles(a);
+		double[] y = laDoubles(b);
+		double[] r = new double[off + (int) total];
+		r[0] = rank;
+		for (int i = 0; i < bd.length; i++) {
+			r[1 + i] = bd[i];
+		}
+		r[rank - 1] = n;
+		r[rank] = p;
+		if (parallel && parallelWorth(rows, (long) m * p)) {
+			parallelRows(rows, (long) m * p, (from, to) -> {
+				laMatmulNdRows(x, y, r, offA, offB, off, n, m, p, from, to);
+				return 0;
+			});
+		}
+		else {
+			laMatmulNdRows(x, y, r, offA, offB, off, n, m, p, 0, rows);
+		}
 		return r;
+	}
+
+	/**
+	 * Rows {@code [from, to)} of the stacked product, counted across the whole stack (row
+	 * {@code q} is row {@code q % n} of batch {@code q / n}): each batch's share is one
+	 * {@link #laMatmulRows} call.
+	 */
+	private static void laMatmulNdRows(double[] x, double[] y, double[] r, int[] offA, int[] offB, int off, int n,
+			int m, int p, int from, int to) {
+		for (int q = from; q < to;) {
+			int z = q / n;
+			int i0 = q % n;
+			int i1 = Math.min(n, i0 + (to - q));
+			laMatmulRows(x, offA[z], y, offB[z], r, off + z * n * p, m, p, i0, i1);
+			q += i1 - i0;
+		}
+	}
+
+	private static void laMatmulNdRowsF(float[] x, float[] y, float[] r, int[] offA, int[] offB, int off, int n, int m,
+			int p, int from, int to) {
+		for (int q = from; q < to;) {
+			int z = q / n;
+			int i0 = q % n;
+			int i1 = Math.min(n, i0 + (to - q));
+			laMatmulRowsF(x, offA[z], y, offB[z], r, off + z * n * p, m, p, i0, i1);
+			q += i1 - i0;
+		}
 	}
 
 	/**
@@ -3095,32 +3273,6 @@ final class JvmSimdVectorTemplate {
 		}
 	}
 
-	private static void matvecIntoF(float[] r, float[] w, float[] x) {
-		int or = 1 + (int) r[0];
-		int ow = 1 + (int) w[0];
-		int d = (int) w[1];
-		int n = (int) w[2];
-		int ox = 1 + (int) x[0];
-		for (int row = 0; row < d; row++) {
-			int base = ow + row * n;
-			int i = 0;
-			float acc = 0.0f;
-			if (n >= THRESHOLD) {
-				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
-				int bound = FSPECIES_REDUCE.loopBound(n);
-				for (; i < bound; i += FSPECIES_REDUCE.length()) {
-					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
-						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
-				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
-			}
-			for (; i < n; i++) {
-				acc += w[base + i] * x[ox + i];
-			}
-			r[or + row] = acc;
-		}
-	}
-
 	/** {@code r[i] = x[i] + y[i]} in native f32 (no double-rounding for a single +). */
 	private static float[] addF(float[] x, float[] y) {
 		int ox = 1 + (int) x[0];
@@ -3288,31 +3440,209 @@ final class JvmSimdVectorTemplate {
 	 * ({@link #dotF} once per row), stored at single-float width so the result keeps the
 	 * width of its operands.
 	 */
-	private static float[] matvecF(float[] w, float[] x) {
-		int ow = 1 + (int) w[0]; // rank-2 matrix header -> elements start at 3
-		int d = (int) w[1];
-		int n = (int) w[2];
-		int ox = 1 + (int) x[0];
-		float[] r = newVecF(d);
-		for (int row = 0; row < d; row++) {
-			int base = ow + row * n;
-			int i = 0;
-			float acc = 0.0f;
-			if (n >= THRESHOLD) {
-				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
-				int bound = FSPECIES_REDUCE.loopBound(n);
-				for (; i < bound; i += FSPECIES_REDUCE.length()) {
-					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
-						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, ox + i)));
+	// --- the row-parallel dispatch (--parallel) ------------------------------------
+	// The GEMV and GEMM kernels above are d independent row chains: which thread runs
+	// which row cannot change a bit, so splitting rows across threads keeps every
+	// byte-identity statement in this file, and the --parallel bridge entries above are
+	// the same kernels over a row range per thread. The reductions (sum/dot/norm) are
+	// NOT split -- there the fold order IS the value -- and the element-wise kernels are
+	// bandwidth-bound and would not pay. The shape, decided by measurement
+	// (.kb/simd-parallel.md): RONTOLISP_THREADS - 1 daemon worker threads that SPIN on
+	// an epoch for the next call and park only after PARALLEL_SPIN_NANOS idle -- a
+	// ForkJoinPool worker parks within microseconds of going idle, and in a program that
+	// runs boxed Lisp between its matrix products every dispatch then paid the unpark
+	// chain and lost to the serial kernel. The rows of a call are claimed in grain-sized
+	// leaves off one counter, by the caller and the workers alike, so a slow core just
+	// takes fewer leaves; the caller spins until the last leaf is done. A call below
+	// PARALLEL_MIN_WORK multiply-adds is not split (the dispatch floor is ~3 us), a leaf
+	// holds at least PARALLEL_GRAIN of them and there are at most
+	// PARALLEL_LEAVES_PER_THREAD leaves per thread. No thread exists until the first call
+	// that is worth it, and none when RONTOLISP_THREADS=1.
+
+	/**
+	 * Multiply-adds below which a call is not split: a 288x288 GEMV pays, a 128x128 one
+	 * does not.
+	 */
+	private static final long PARALLEL_MIN_WORK = 1L << 15;
+
+	/** Multiply-adds a leaf holds at least. */
+	private static final long PARALLEL_GRAIN = 1L << 13;
+
+	/** Leaves per thread at most: bounds the claim-counter traffic of a large call. */
+	private static final int PARALLEL_LEAVES_PER_THREAD = 4;
+
+	/** How long an idle worker keeps spinning for the next call before it parks. */
+	private static final long PARALLEL_SPIN_NANOS = 1_000_000L;
+
+	/**
+	 * The thread count RONTOLISP_THREADS asked for (the caller included), 0 until read.
+	 */
+	private static volatile int parallelThreads;
+
+	private static Thread @Nullable [] parallelWorkers;
+
+	/** 1 where the worker of that index is parked and needs an unpark. */
+	private static java.util.concurrent.atomic.@Nullable AtomicIntegerArray parallelParked;
+
+	/** Bumped once per call; the workers spin on it. */
+	private static volatile long parallelEpoch;
+
+	/**
+	 * The call being run: {@code {body, int[] {rows, grain}, next, pending, failure}} --
+	 * one array read once per call by each worker, so a worker that is late to a call can
+	 * never mix one call's kernel with another's counters.
+	 */
+	private static volatile Object @Nullable [] parallelJob;
+
+	/**
+	 * Whether a call of {@code rows} rows of {@code workPerRow} multiply-adds each is
+	 * worth splitting.
+	 */
+	private static boolean parallelWorth(int rows, long workPerRow) {
+		return rows >= 2 && rows * workPerRow >= PARALLEL_MIN_WORK && parallelThreads() > 1;
+	}
+
+	private static int parallelThreads() {
+		int t = parallelThreads;
+		if (t == 0) {
+			synchronized (JvmSimdVectorTemplate.class) {
+				t = parallelThreads;
+				if (t == 0) {
+					t = Runtime.getRuntime().availableProcessors();
+					String env = System.getenv("RONTOLISP_THREADS");
+					if (env != null && !env.isBlank()) {
+						try {
+							t = Integer.parseInt(env.trim());
+						}
+						catch (NumberFormatException ex) {
+							System.err
+								.println("RONTOLISP_THREADS=" + env + " is not a number; using " + t + " threads");
+						}
+					}
+					t = Math.max(1, t);
+					if (t > 1) {
+						Thread[] workers = new Thread[t - 1];
+						parallelParked = new java.util.concurrent.atomic.AtomicIntegerArray(workers.length);
+						for (int i = 0; i < workers.length; i++) {
+							int id = i;
+							Thread worker = new Thread(() -> parallelWorker(id), "rontolisp-parallel-" + i);
+							worker.setDaemon(true);
+							workers[i] = worker;
+						}
+						parallelWorkers = workers;
+						for (Thread worker : workers) {
+							worker.start();
+						}
+					}
+					parallelThreads = t;
 				}
-				acc = vacc.reduceLanes(VectorOperators.ADD);
 			}
-			for (; i < n; i++) {
-				acc += w[base + i] * x[ox + i];
-			}
-			r[2 + row] = acc;
 		}
-		return r;
+		return t;
+	}
+
+	/**
+	 * Runs {@code body} over {@code [0, rows)} in leaves claimed by the calling thread
+	 * and the workers together; bit-identical to {@code body(0, rows)} whenever the rows
+	 * are independent. Only called when {@link #parallelWorth} said so. One call at a
+	 * time: a second calling thread waits for the first call to finish.
+	 */
+	private static void parallelRows(int rows, long workPerRow, java.util.function.IntBinaryOperator body) {
+		synchronized (JvmSimdVectorTemplate.class) {
+			int threads = parallelThreads();
+			int grain = (int) Math.max(Math.max(1, PARALLEL_GRAIN / workPerRow),
+					rows / (PARALLEL_LEAVES_PER_THREAD * threads));
+			java.util.concurrent.atomic.AtomicInteger pending = new java.util.concurrent.atomic.AtomicInteger(rows);
+			java.util.concurrent.atomic.AtomicReference<@Nullable Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+			Object[] job = { body, new int[] { rows, grain }, new java.util.concurrent.atomic.AtomicInteger(), pending,
+					failure };
+			parallelJob = job;
+			parallelEpoch++;
+			Thread[] workers = java.util.Objects.requireNonNull(parallelWorkers);
+			java.util.concurrent.atomic.AtomicIntegerArray parked = java.util.Objects.requireNonNull(parallelParked);
+			for (int i = 0; i < workers.length; i++) {
+				if (parked.get(i) != 0) {
+					java.util.concurrent.locks.LockSupport.unpark(workers[i]);
+				}
+			}
+			parallelClaim(job);
+			while (pending.get() != 0) {
+				Thread.onSpinWait();
+			}
+			Throwable failed = failure.get();
+			if (failed != null) {
+				throw failed instanceof RuntimeException re ? re : new IllegalStateException(failed);
+			}
+		}
+	}
+
+	/** Claims and runs grain-sized leaves of the job until none is left. */
+	private static void parallelClaim(Object[] job) {
+		java.util.function.IntBinaryOperator body = (java.util.function.IntBinaryOperator) job[0];
+		int[] shape = (int[]) job[1];
+		java.util.concurrent.atomic.AtomicInteger next = (java.util.concurrent.atomic.AtomicInteger) job[2];
+		java.util.concurrent.atomic.AtomicInteger pending = (java.util.concurrent.atomic.AtomicInteger) job[3];
+		@SuppressWarnings("unchecked")
+		java.util.concurrent.atomic.AtomicReference<@Nullable Throwable> failure = (java.util.concurrent.atomic.AtomicReference<@Nullable Throwable>) job[4];
+		int rows = shape[0];
+		int grain = shape[1];
+		while (true) {
+			int from = next.getAndAdd(grain);
+			if (from >= rows) {
+				return;
+			}
+			int to = Math.min(rows, from + grain);
+			try {
+				body.applyAsInt(from, to);
+			}
+			catch (Throwable ex) {
+				failure.compareAndSet(null, ex);
+			}
+			finally {
+				pending.addAndGet(from - to);
+			}
+		}
+	}
+
+	/**
+	 * A worker: spin on the epoch, park after the spin budget, claim the call's leaves.
+	 */
+	private static void parallelWorker(int id) {
+		java.util.concurrent.atomic.AtomicIntegerArray parked = java.util.Objects.requireNonNull(parallelParked);
+		long seen = 0;
+		int spins = 0;
+		while (true) {
+			long deadline = System.nanoTime() + PARALLEL_SPIN_NANOS;
+			long epoch;
+			while ((epoch = parallelEpoch) == seen) {
+				// Spinning workers must not crowd out the caller, the JIT, the GC or a
+				// device driver's threads on a box they fill: yield every few dozen
+				// spins, which costs nothing on an idle core and gives way on a busy one.
+				if ((++spins & 63) == 0) {
+					Thread.yield();
+				}
+				else {
+					Thread.onSpinWait();
+				}
+				if (System.nanoTime() > deadline) {
+					// Publish "parked" before the last look at the epoch: the caller
+					// bumps the epoch before it scans the flags, so one of the two
+					// sides always sees the other (Dekker), and a stale permit only
+					// costs one more look.
+					parked.set(id, 1);
+					if (parallelEpoch == seen) {
+						java.util.concurrent.locks.LockSupport.park();
+					}
+					parked.set(id, 0);
+					deadline = System.nanoTime() + PARALLEL_SPIN_NANOS;
+				}
+			}
+			seen = epoch;
+			Object[] job = parallelJob;
+			if (job != null) {
+				parallelClaim(job);
+			}
+		}
 	}
 
 	// --- packed float-array construction -----------------------------------------

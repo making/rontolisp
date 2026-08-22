@@ -85,6 +85,9 @@ there); its kernel accumulates in DOUBLE like this defun, not in lanes like `--s
 at `#f` it lands on the defun's bits in practice -- the f32 probe below tells the three
 apart: defun 16778240, lanes 16777984, device 16778240. `.kb/gpu.md` ("The GEMV, and the
 matrix that stays") is the record; `vec:matvec-into` is not intercepted.
+**`matvec` / `matvec-into` are also the two `vec:` members `--parallel` splits across threads**
+(2026-08-22, todo-478, `.kb/simd-parallel.md`): the same row chains over a row range per
+thread, bit-identical to the serial kernel; no reduction is.
 `(setf (vec:aref v i) x)` →
 `(vec:aset v i x)` via `LispMacroExpander.expandSetf` (`VEC_QUALIFIED_AREF`).
 

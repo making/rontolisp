@@ -201,7 +201,9 @@ for the `--simd` column.
 2. **Threads.** A tuned BLAS is multi-threaded and rontolisp is not: one `linalg:matmul` may
    occupy every core. That is most of the Linux figure above. The docs say so and name
    `OPENBLAS_NUM_THREADS` / `MKL_NUM_THREADS` / `VECLIB_MAXIMUM_THREADS` rather than fighting
-   them.
+   them. Since todo-478 `--simd --parallel` (`.kb/simd-parallel.md`) threads the lane GEMM
+   too, and the library still wins it by 1.3-3.8x at n = 128..1024 on the GB10 (a blocked
+   SGEMM against an `ikj` lane loop), so this flag stays the answer where a library exists.
 
 ## Tests
 

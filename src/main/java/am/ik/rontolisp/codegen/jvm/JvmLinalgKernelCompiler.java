@@ -146,6 +146,19 @@ final class JvmLinalgKernelCompiler {
 		return Objects.requireNonNull(KERNELS.get(member));
 	}
 
+	/**
+	 * The bridge method backing the given member in a {@code --parallel} build: the two
+	 * matrix-product members -- {@code dot} (its matrix-by-vector and matrix-by-matrix
+	 * cases) and the stacked {@code %la-matmul-nd} -- bind to the entries that split
+	 * their output rows across threads; every other member is the serial entry, because a
+	 * reduction's fold order is its value and an element-wise kernel would not pay.
+	 */
+	static String bridgeMethod(String member, boolean parallel) {
+		String serial = bridgeMethod(member);
+		return parallel && (LispNames.LINALG_DOT.equals(member) || LispNames.LINALG_MATMUL_ND.equals(member))
+				? serial + "Parallel" : serial;
+	}
+
 	/** The argument count of the member's Lisp call form. */
 	static int arity(String member) {
 		return switch (member) {

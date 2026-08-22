@@ -87,6 +87,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final boolean gpuAccel;
 
+	private final boolean parallelAccel;
+
 	/**
 	 * The names the compiled program's {@code *features*} starts out holding. The JVM
 	 * backend's own set unless the frontend {@link #runtimeFeatures(List) says otherwise}
@@ -255,12 +257,43 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel,
 			boolean blasAccel, boolean gpuAccel) {
+		this(className, dynamic, optimize, simdAccel, blasAccel, gpuAccel, false);
+	}
+
+	/**
+	 * Create a new JVM compiler targeting the given class name.
+	 * @param className the fully qualified class name for the generated class
+	 * @param dynamic when {@code true}, unresolved function calls and variable references
+	 * are resolved at runtime against the embedded {@code eval} global environment (late
+	 * binding); see {@link #JvmLispCompiler(String, boolean)}
+	 * @param optimize dead-code elimination and what the class is optimized FOR; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel)}
+	 * @param simdAccel the {@code --simd} lowering; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean)}
+	 * @param blasAccel the {@code --blas} lowering; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean, boolean)}
+	 * @param gpuAccel the {@code --gpu} lowering; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel, boolean, boolean, boolean)}
+	 * @param parallelAccel when {@code true} ({@code --parallel}), the {@code --simd}
+	 * bridge's GEMV / GEMM call sites ({@code vec:matvec}, {@code vec:matvec-into},
+	 * {@code linalg:dot}, the stacked {@code linalg:matmul}) bind to the entries that
+	 * split their rows across {@code RONTOLISP_THREADS} threads -- the same row chains,
+	 * so the same bits ({@code .kb/simd-parallel.md}). A modifier of {@code simdAccel},
+	 * which it therefore requires; the emitted bytes differ by those method names alone
+	 */
+	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel,
+			boolean blasAccel, boolean gpuAccel, boolean parallelAccel) {
+		if (parallelAccel && !simdAccel) {
+			throw new IllegalArgumentException(
+					"--parallel splits the --simd kernels across threads, so it needs --simd");
+		}
 		this.className = className;
 		this.dynamic = dynamic;
 		this.optimize = optimize;
 		this.simdAccel = simdAccel;
 		this.blasAccel = blasAccel;
 		this.gpuAccel = gpuAccel;
+		this.parallelAccel = parallelAccel;
 	}
 
 	/**
@@ -1216,7 +1249,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// packed float-array _fv* helpers still render/index its double[] results.
 		boolean usesSimd = this.simdAccel && programUsesAnyAcceleratedSimdOp(program);
 		final JvmSimdRuntimeBuilder.@Nullable SimdRuntime simdRuntime = usesSimd
-				? JvmSimdRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
+				? JvmSimdRuntimeBuilder.build(cp, thisClass, stringConcat, this.parallelAccel) : null;
 
 		// --blas: emit the CBLAS bridge only when the program actually reaches the
 		// linalg: matrix product -- directly, or through the spliced linalg:matmul /

@@ -253,7 +253,9 @@ examples:
 
   # --- llama2: llama2.c ported whole (see its README.md) ----------------------
   # Both entries run under --simd (the interpreter's scalar kernels take ~15 s per
-  # stories15M token) with the knobs in the environment (a program has no argv).
+  # stories15M token) with the knobs in the environment (a program has no argv), and
+  # the threaded legs (interpreter, JVM) under --simd --parallel as well: the
+  # row-parallel GEMV must tell the same story as the serial one, byte for byte.
   # Greedy decoding, so the story is byte-identical on every backend AND to the C
   # program's -- the whole point of an `equals`.
   - path: llama2/llama2.lisp
@@ -261,6 +263,7 @@ examples:
     workDir: llama2
     workFiles: [stories260K.bin, tok512.bin]
     simd: true
+    parallel: true
     env:
       LLAMA2_CHECKPOINT: stories260K.bin
       LLAMA2_TOKENIZER: tok512.bin
@@ -276,11 +279,12 @@ examples:
     workDir: llama2
     workFiles: [stories15M.bin, tokenizer.bin]
     simd: true
+    parallel: true
     env:
       LLAMA2_PROMPT: Once upon a time
       LLAMA2_TEMPERATURE: "0"
       LLAMA2_STEPS: "60"
-    note: the llama2.c README demo itself, over stories15M.bin (60 MB, gitignored -- llama2/download-stories15M.sh); the RUN legs skip themselves when it is absent. 60 greedy tokens = the same text `run stories15M.bin -t 0 -n 60 -i "Once upon a time"` prints. Measured 2026-08-22 with --simd - JVM 220 tok/s (285 with --gpu --simd, story unchanged), wasm-GC 125 tok/s, interpreter 44 tok/s
+    note: the llama2.c README demo itself, over stories15M.bin (60 MB, gitignored -- llama2/download-stories15M.sh); the RUN legs skip themselves when it is absent. 60 greedy tokens = the same text `run stories15M.bin -t 0 -n 60 -i "Once upon a time"` prints. Measured 2026-08-22 with --simd - JVM 221 tok/s (319 with --simd --parallel on 20 threads, 278 with --gpu --simd, story unchanged), wasm-GC 125 tok/s, interpreter 44 tok/s
     expect:
       equals: |
         Once upon a time, there was a little girl named Lily. She loved to play outside in the sunshine. One day, she saw a big, red ball in the sky. It was the sun! She thought it was so pretty.

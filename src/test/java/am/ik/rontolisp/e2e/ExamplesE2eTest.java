@@ -55,6 +55,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * {@code --add-modules jdk.incubator.vector} (as does the interpreter when the driver is
  * the exec jar). For an example whose scalar interpretation is minutes per token (llama2
  * over a real checkpoint), this is the difference between a leg and no leg.</li>
+ * <li>{@code parallel} -- {@code true} adds {@code --parallel} to the interpreter and JVM
+ * legs (the two that have threads; the wasm legs refuse the flag and run serially), so a
+ * {@code simd: true} example also pins that the row-parallel kernels print the same
+ * story.</li>
  * <li>{@code stdin} / {@code stdinFile} -- text fed to the program's standard input
  * (inline, or from a file resolved under {@code examples/}).</li>
  * <li>{@code expect} -- how to check RUN output; exactly one of:
@@ -163,7 +167,7 @@ class ExamplesE2eTest {
 	record Example(String path, List<String> backends, @Nullable List<String> args, @Nullable String stdin,
 			@Nullable String stdinFile, @Nullable Expect expect, @Nullable List<String> systemPath,
 			@Nullable String workDir, @Nullable List<String> workFiles, @Nullable Map<String, String> env,
-			@Nullable Boolean simd, @Nullable String note) {
+			@Nullable Boolean simd, @Nullable Boolean parallel, @Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
@@ -180,6 +184,14 @@ class ExamplesE2eTest {
 		/** The {@code --simd} flag when the example asks for it, else nothing. */
 		List<String> simdFlag() {
 			return simdOn() ? List.of("--simd") : List.of();
+		}
+
+		/**
+		 * The {@code --parallel} flag for a threaded leg when the example asks for it,
+		 * else nothing.
+		 */
+		List<String> parallelFlag() {
+			return Boolean.TRUE.equals(this.parallel) ? List.of("--parallel") : List.of();
 		}
 	}
 
@@ -329,14 +341,14 @@ class ExamplesE2eTest {
 				// read as a second one. An interpreted example needs --system-path just
 				// as much as a compiled one -- asdf:load-system resolves the .asd at run
 				// time here.
-				Result run = exec(runDir,
-						concat(vectorApiDriver(driver, example), concat(concat(List.of(src), flags), args)), stdin,
-						env);
+				Result run = exec(runDir, concat(vectorApiDriver(driver, example),
+						concat(concat(List.of(src), concat(flags, example.parallelFlag())), args)), stdin, env);
 				assertRan(run, example, "interpreter");
 			}
 			case JVM -> {
-				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null,
-						Map.of());
+				Result compile = exec(runDir,
+						concat(driver, concat(List.of(src, "-o", "Prog.class"), concat(flags, example.parallelFlag()))),
+						null, Map.of());
 				assertCompiled(compile, example, "jvm (compile)");
 				List<String> java = example.simdOn() ? List.of("java", "--add-modules", "jdk.incubator.vector")
 						: List.of("java");
