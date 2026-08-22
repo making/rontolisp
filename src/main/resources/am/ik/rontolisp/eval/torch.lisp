@@ -992,20 +992,11 @@
          (iv (torch::%t-indices idx)))
     (torch::%t-result (linalg:take-rows xa iv) (list ta)
                       (lambda (g)
-                        (let* ((z (linalg::%la-like xa))
-                               (slab
-                                (linalg::%la-tail-size (array-dimensions xa) 0))
-                               (m (length iv)))
-                          (do ((i 0 (+ i 1)))
-                              ((>= i m))
-                            (let ((dst (* (truncate (aref iv i)) slab))
-                                  (src (* i slab)))
-                              (do ((k 0 (+ k 1)))
-                                  ((>= k slab))
-                                (setf (row-major-aref z (+ dst k))
-                                      (+ (row-major-aref z (+ dst k))
-                                         (row-major-aref g (+ src k)))))))
-                          (list z))))))
+                        ;; linalg::%la-scatter-rows is that scatter-add as an
+                        ;; intercepted linalg: member (it was a boxed loop here).
+                        (list
+                         (linalg::%la-scatter-rows (linalg::%la-like xa) g
+                                                   iv))))))
 
 ;; --- the module protocol -----------------------------------------------------
 ;; A module is the second record of this package: a named bag of FIELDS plus a
@@ -1691,7 +1682,10 @@
   ;; denominator. The returned norm is the one MEASURED, before any clipping,
   ;; so a training loop can log it. A parameter no gradient reached is skipped.
   ;; Call it between torch:backward and torch:step: it rewrites the gradients
-  ;; the optimizer is about to read, and touches no tape.
+  ;; the optimizer is about to read, and touches no tape. The two element loops
+  ;; are linalg::%la-sum-squares and linalg::%la-scale -- the same arithmetic
+  ;; in the same order, moved onto the --simd seam (they were a sixth of a
+  ;; --gpu --simd training step as boxed loops here, .kb/gpu.md).
   (let ((ps (torch::%o-param-list params)) (total 0.0))
     (do ((q ps (cdr q)))
         ((null q))
@@ -1699,10 +1693,7 @@
         (unless (null g)
           (if (numberp g)
               (setq total (+ total (* g g)))
-              (do ((k 0 (+ k 1)) (n (array-total-size g) n))
-                  ((>= k n))
-                (let ((v (row-major-aref g k)))
-                  (setq total (+ total (* v v)))))))))
+              (setq total (linalg::%la-sum-squares g total))))))
     (let ((norm (sqrt total)))
       (when (> norm max-norm)
         (let ((scale (/ max-norm (+ norm 1.0e-6))))
@@ -1712,10 +1703,7 @@
               (unless (null g)
                 (if (numberp g)
                     (setf (torch::%t-grad (car q)) (* g scale))
-                    (do ((k 0 (+ k 1)) (n (array-total-size g) n))
-                        ((>= k n))
-                      (setf (row-major-aref g k)
-                            (* (row-major-aref g k) scale)))))))))
+                    (linalg::%la-scale g scale)))))))
       norm)))
 
 ;; --- batching, padding and the attention masks -------------------------------

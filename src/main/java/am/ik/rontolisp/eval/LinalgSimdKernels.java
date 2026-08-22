@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import jdk.incubator.vector.DoubleVector;
 import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.VectorSpecies;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The lane loops behind the interpreter's opt-in {@code --simd} acceleration of the
@@ -1296,6 +1297,23 @@ final class LinalgSimdKernels {
 
 	static final int BOP_MIN = 5;
 
+	// The comparison MASKS -- linalg:greater / greater-equal / less / less-equal /
+	// equal -- are %la-bcast over (if (> x y) 1 0) and its siblings: a 1.0 / 0.0 mask at
+	// the first array operand's width. IEEE comparisons on the widened elements, exactly
+	// the defun's, so the masks are bit-identical at both widths by construction (the
+	// only values they hold are 1.0 and 0.0). The dropout mask
+	// (linalg:greater (linalg:rand shape) p) is the shape that put them here.
+
+	static final int BOP_GT = 6;
+
+	static final int BOP_GE = 7;
+
+	static final int BOP_LT = 8;
+
+	static final int BOP_LE = 9;
+
+	static final int BOP_EQ = 10;
+
 	private static double applyBinary(int op, double a, double b) {
 		return switch (op) {
 			case BOP_ADD -> a + b;
@@ -1303,8 +1321,66 @@ final class LinalgSimdKernels {
 			case BOP_MUL -> a * b;
 			case BOP_DIV -> a / b;
 			case BOP_MAX -> a > b ? a : b;
-			default -> a < b ? a : b;
+			case BOP_MIN -> a < b ? a : b;
+			case BOP_GT -> a > b ? 1.0 : 0.0;
+			case BOP_GE -> a >= b ? 1.0 : 0.0;
+			case BOP_LT -> a < b ? 1.0 : 0.0;
+			case BOP_LE -> a <= b ? 1.0 : 0.0;
+			default -> a == b ? 1.0 : 0.0;
 		};
+	}
+
+	/** The equal-shape comparison mask: {@code out[i] = (x[i] op y[i]) ? 1 : 0}. */
+	static double[] compare(int op, double[] x, double[] y) {
+		double[] r = new double[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = applyBinary(op, x[i], y[i]);
+		}
+		return r;
+	}
+
+	static float[] compareF(int op, float[] x, float[] y) {
+		float[] r = new float[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) applyBinary(op, x[i], y[i]);
+		}
+		return r;
+	}
+
+	/** {@code (x[i] op s)}: the widened element against the FULL double scalar. */
+	static double[] compareScalar(int op, double[] x, double s) {
+		double[] r = new double[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = applyBinary(op, x[i], s);
+		}
+		return r;
+	}
+
+	static float[] compareScalarF(int op, float[] x, double s) {
+		float[] r = new float[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) applyBinary(op, x[i], s);
+		}
+		return r;
+	}
+
+	/**
+	 * {@code (s op y[i])}: the scalar on the LEFT, which matters for every op but equal.
+	 */
+	static double[] compareFrom(int op, double s, double[] y) {
+		double[] r = new double[y.length];
+		for (int i = 0; i < y.length; i++) {
+			r[i] = applyBinary(op, s, y[i]);
+		}
+		return r;
+	}
+
+	static float[] compareFromF(int op, double s, float[] y) {
+		float[] r = new float[y.length];
+		for (int i = 0; i < y.length; i++) {
+			r[i] = (float) applyBinary(op, s, y[i]);
+		}
+		return r;
 	}
 
 	/**
@@ -1312,7 +1388,7 @@ final class LinalgSimdKernels {
 	 * {@code od}, with 0 on every stretched axis (extent 1 or missing) so the odometer
 	 * re-reads the same element across it -- {@code %la-bcast-strides} verbatim.
 	 */
-	private static int[] bcastStrides(int[] d, int[] od) {
+	static int[] bcastStrides(int[] d, int[] od) {
 		int[] s = new int[od.length];
 		int acc = 1;
 		for (int k = od.length - 1, i = d.length - 1; k >= 0; k--, i--) {
@@ -1570,6 +1646,190 @@ final class LinalgSimdKernels {
 			}
 		}
 		return out;
+	}
+
+	// --- linalg:where, %la-gather-strided, take-rows and %la-scatter-rows -------------
+	// Pure selects and copies, every one of them a scalar odometer walk or a slab copy:
+	// no arithmetic but an IEEE `== 0` test and an add, so all four are bit-identical to
+	// the defuns at both widths. What they remove is the boxed row-major-aref per element
+	// -- in a --gpu --simd training step torch:masked-fill (where over a broadcast
+	// mask) and the torch:cat / torch:index-select adjoints (slice, scatter-rows) were
+	// a third of what was left once linalg: itself was on the device (.kb/gpu.md).
+
+	/**
+	 * {@code linalg:where} over operands already reduced to (array-or-null, scalar,
+	 * per-output-axis strides): the element of {@code x} where the mask is non-zero, of
+	 * {@code y} where it is zero, at the broadcast shape {@code od}, written at single
+	 * width when {@code single}. An array operand is a raw {@code double[]} or
+	 * {@code float[]} (read widened); a null one means the scalar beside it. The result
+	 * is a {@code float[]} or a {@code double[]} of {@code od}'s element count.
+	 */
+	static Object where(@Nullable Object m, double ms, int @Nullable [] sm, @Nullable Object x, double xs,
+			int @Nullable [] sx, @Nullable Object y, double ys, int @Nullable [] sy, int[] od, boolean single) {
+		int rank = od.length;
+		int total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		double[] md = m instanceof double[] v ? v : null, xd = x instanceof double[] v ? v : null,
+				yd = y instanceof double[] v ? v : null;
+		float[] mf = m instanceof float[] v ? v : null, xf = x instanceof float[] v ? v : null,
+				yf = y instanceof float[] v ? v : null;
+		int[] zero = new int[rank];
+		int[] tm = sm != null ? sm : zero, tx = sx != null ? sx : zero, ty = sy != null ? sy : zero;
+		int[] idx = new int[rank];
+		int om = 0, ox = 0, oy = 0;
+		// One of the two is the result and the other an empty sentinel, so the loop
+		// branches on the flag and never on a null.
+		float[] outF = single ? new float[total] : new float[0];
+		double[] outD = single ? new double[0] : new double[total];
+		for (int k = 0; k < total; k++) {
+			double mv = md != null ? md[om] : (mf != null ? mf[om] : ms);
+			double v = mv == 0.0 ? (yd != null ? yd[oy] : (yf != null ? yf[oy] : ys))
+					: (xd != null ? xd[ox] : (xf != null ? xf[ox] : xs));
+			if (single) {
+				outF[k] = (float) v;
+			}
+			else {
+				outD[k] = v;
+			}
+			for (int a = rank - 1; a >= 0; a--) {
+				idx[a]++;
+				om += tm[a];
+				ox += tx[a];
+				oy += ty[a];
+				if (idx[a] < od[a]) {
+					break;
+				}
+				idx[a] = 0;
+				om -= od[a] * tm[a];
+				ox -= od[a] * tx[a];
+				oy -= od[a] * ty[a];
+			}
+		}
+		return single ? outF : outD;
+	}
+
+	/**
+	 * {@code %la-gather-strided}: a fresh {@code od}-shaped array (single width when
+	 * {@code single}) filled by walking {@code a}'s flat index from {@code base} through
+	 * the OUTERMOST-FIRST per-axis strides {@code s} -- the defun's innermost-first list
+	 * reversed by the caller, who has also checked that every index the walk reaches is
+	 * inside {@code a}.
+	 */
+	static Object gatherStrided(Object a, int[] od, int[] s, int base, boolean single) {
+		int rank = od.length;
+		int total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		double[] ad = a instanceof double[] v ? v : new double[0];
+		float[] af = a instanceof float[] v ? v : new float[0];
+		boolean wide = a instanceof double[];
+		int[] idx = new int[rank];
+		int src = base;
+		float[] outF = single ? new float[total] : new float[0];
+		double[] outD = single ? new double[0] : new double[total];
+		for (int k = 0; k < total; k++) {
+			double v = wide ? ad[src] : af[src];
+			if (single) {
+				outF[k] = (float) v;
+			}
+			else {
+				outD[k] = v;
+			}
+			for (int x = rank - 1; x >= 0; x--) {
+				idx[x]++;
+				src += s[x];
+				if (idx[x] < od[x]) {
+					break;
+				}
+				idx[x] = 0;
+				src -= od[x] * s[x];
+			}
+		}
+		return single ? outF : outD;
+	}
+
+	/**
+	 * {@code %la-sum-squares}: {@code acc + sum(v * v)} as a LEFT fold in double from
+	 * {@code acc}, every element read widened -- the order {@code torch:clip-grad-norm}
+	 * accumulates in, so this is byte identity and not a lane reduction.
+	 */
+	static double sumSquares(double[] g, double acc) {
+		double total = acc;
+		for (double v : g) {
+			total = total + v * v;
+		}
+		return total;
+	}
+
+	static double sumSquares(float[] g, double acc) {
+		double total = acc;
+		for (float f : g) {
+			double v = f;
+			total = total + v * v;
+		}
+		return total;
+	}
+
+	/**
+	 * {@code %la-scale}: {@code g[k] = g[k] * s} in place, narrowed only on an f32 store.
+	 */
+	static void scale(double[] g, double s) {
+		for (int k = 0; k < g.length; k++) {
+			g[k] = g[k] * s;
+		}
+	}
+
+	static void scale(float[] g, double s) {
+		for (int k = 0; k < g.length; k++) {
+			g[k] = (float) ((double) g[k] * s);
+		}
+	}
+
+	/**
+	 * {@code linalg:take-rows}: slab {@code rows[i]} of {@code a} copied to slab
+	 * {@code i}.
+	 */
+	static double[] takeRows(double[] a, int slab, int[] rows) {
+		double[] out = new double[rows.length * slab];
+		for (int i = 0; i < rows.length; i++) {
+			System.arraycopy(a, rows[i] * slab, out, i * slab, slab);
+		}
+		return out;
+	}
+
+	static float[] takeRowsF(float[] a, int slab, int[] rows) {
+		float[] out = new float[rows.length * slab];
+		for (int i = 0; i < rows.length; i++) {
+			System.arraycopy(a, rows[i] * slab, out, i * slab, slab);
+		}
+		return out;
+	}
+
+	/**
+	 * {@code %la-scatter-rows}: slab {@code i} of {@code g} ADDED into slab
+	 * {@code rows[i]} of {@code z}, in place -- {@code (+ z g)} on the widened elements,
+	 * narrowed only on a single-float store, which is what the defun's
+	 * {@code setf row-major-aref} does.
+	 */
+	static void scatterRows(double[] z, double[] g, int slab, int[] rows) {
+		for (int i = 0; i < rows.length; i++) {
+			int dst = rows[i] * slab, src = i * slab;
+			for (int k = 0; k < slab; k++) {
+				z[dst + k] = z[dst + k] + g[src + k];
+			}
+		}
+	}
+
+	static void scatterRowsF(float[] z, float[] g, int slab, int[] rows) {
+		for (int i = 0; i < rows.length; i++) {
+			int dst = rows[i] * slab, src = i * slab;
+			for (int k = 0; k < slab; k++) {
+				z[dst + k] = (float) ((double) z[dst + k] + (double) g[src + k]);
+			}
+		}
 	}
 
 }

@@ -481,6 +481,13 @@ Four decisions worth keeping:
   optimizers over disjoint parameter LISTS are what a group is here, which is
   how a transformer decays its weight matrices and leaves its biases,
   LayerNorm gains and embedding tables alone.
+- **`torch:clip-grad-norm`'s two element loops are `linalg::%la-sum-squares` /
+  `linalg::%la-scale` since 2026-08-22** (the left-fold sum of squares from the running
+  total, and the in-place scale) -- the `%la-adam-step` move again: they were a sixth of
+  a `--gpu --simd` training step as boxed loops here, and the seam intercepts `linalg:`
+  members only (`.kb/linalg-simd.md`). The scalar-gradient branches and the in-place
+  contract are unchanged. Likewise `torch:index-select`'s backward is one
+  `linalg::%la-scatter-rows` call rather than an inline scatter-add loop.
 - **`torch:clip-grad-norm` lives here because nothing else can write a grad.**
   `torch:set-data` writes a parameter's DATA; there is no `torch:set-grad`, so
   `torch.nn.utils.clip_grad_norm_` cannot be a user-level defun. It returns

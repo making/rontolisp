@@ -424,7 +424,7 @@ final class MetalGemm implements GpuDevice {
 
 	@Override
 	public Thresholds thresholds() {
-		return new Thresholds(MIN_WORK, MIN_MAP_ELEMENTS, MIN_STRIDED_ELEMENTS, Long.MAX_VALUE);
+		return new Thresholds(MIN_WORK, MIN_MAP_ELEMENTS, MIN_STRIDED_ELEMENTS, Long.MAX_VALUE, Long.MAX_VALUE);
 	}
 
 	/**
@@ -458,6 +458,21 @@ final class MetalGemm implements GpuDevice {
 
 	@Override
 	public boolean map(int op, double[] a, int oa, double[] c, int oc, int n) {
+		return false;
+	}
+
+	/**
+	 * The generator fill is not a member here: it writes {@code double} draws, and this
+	 * backend has no {@code double} (and its threshold is {@code Long.MAX_VALUE}, so the
+	 * question is never asked). Both widths decline.
+	 */
+	@Override
+	public boolean rngFill(double[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+		return false;
+	}
+
+	@Override
+	public boolean rngFillF(float[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3) {
 		return false;
 	}
 

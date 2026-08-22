@@ -157,7 +157,7 @@ Two consequences worth remembering:
   `wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath` (wasm) and
   `axisFormsRunTheFoldKernelsAndMatchTheScalarOracle` (interpreter).
 
-## The intercepted set (38 members)
+## The intercepted set (49 members)
 
 `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin` `trace` `transpose`
 `reshape` `dot` `outer`, plus the todo-109 unary ufuncs `exp` `log` `tanh` `sin` `cos`
@@ -176,7 +176,12 @@ the stacked rank->=3 matrix product (below), plus the todo-468 `erf` (arity 1), 
 error function behind the exact `torch:gelu` (below -- the one member whose DEFUN is an
 `emap`, which is why the member itself had to be intercepted), plus the todo-473 INTERNAL
 pair `%la-rng-fill` (arity 5) / `%la-adam-step` (arity 5) -- the seeded generator's one
-fill loop and Adam's fused element-wise update (below). Those are the intercepted internal members: a
+fill loop and Adam's fused element-wise update (below), plus the 2026-08-22 SELECTS AND
+COPIES (below): the comparison masks `greater` `greater-equal` `less` `less-equal` `equal`
+(arity 2), `where` (arity 3), `take-rows` (arity 2), and the INTERNAL `%la-gather-strided`
+(arity 5, the one strided read behind `slice` and `%la-broadcast-to`), `%la-scatter-rows`
+(arity 3, `take-rows`' scatter-add adjoint), `%la-sum-squares` (arity 2) and `%la-scale`
+(arity 2, `torch:clip-grad-norm`'s two halves). Those are the intercepted internal members: a
 `%`-prefixed member's canonical qualified spelling carries the DOUBLE colon
 (`linalg::%la-im2col`), which is how the interpreter's function binding, the compilers'
 `ctx.functions` keys and the emit-gate symbol scan must compose it --
@@ -487,10 +492,120 @@ at the *call site* there, while the interpreter overrides the *function binding*
 `linalg:` function passed to `funcall` / `mapcar` is not accelerated when compiled. Same
 behavior as `vec:`, deliberately.
 
+### The selects and copies (2026-08-22): comparison masks, `where`, the strided gather, `take-rows` and its adjoint, `clip-grad-norm`'s halves
+
+Eleven members in one round, and they are here for the reason todo-473's two were: a JFR
+profile of `train-gpt-soseki.lisp` under `--gpu --simd` at the notebook's shapes, taken
+AFTER todo-473 landed (`.kb/gpu.md`, "The second profile"), said that 40% of what was left
+of a training step was boxed `row-major-aref` walks that were not intercepted at all --
+`linalg:where` through `torch:masked-fill` (and its `%la-broadcast-to` ->
+`%la-gather-strided` materializations, 22% on their own), `linalg:greater` through the
+dropout mask (6%, the `emap` branch of `%la-bcast`), `linalg:slice` through `torch:cat`'s
+adjoint (3%), `torch:index-select`'s inline scatter-add (5%), `torch:clip-grad-norm`'s two
+loops (4%, 17% once everything else had moved) and `take-rows` (2%). None of them is
+arithmetic: every one is a select, an IEEE compare, a copy or a widened add, so every one
+is **bit-identical to its defun at both widths by construction**, and the round needed no
+precision decision at all.
+
+- **The five comparison masks** ride the element-wise dispatch: the same three `%la-bcast`
+  shapes (equal dims, a scalar on either side, a broadcast pair through the BCAST walk
+  with a new op code, `BOP_GT`..`BOP_EQ` = 6..10 in `LinalgSimdKernels`, the JVM template
+  and the wasm builder alike), a 1.0/0.0 result at the first ARRAY operand's width (the
+  `emap`'s), and the comparisons are the defun's own IEEE `>` `>=` `<` `<=` `=` on the
+  widened elements -- so `-0.0` equals `0.0` and NaN compares false everywhere, exactly
+  as `.kb/linalg-simd.md`'s `>` section says the scalar comparisons now do. NOT
+  symmetric, so the scalar-on-the-left shape runs the reversed loop like the selects do.
+  Two numbers decline (the defun answers an integer).
+- **`where` (arity 3)** is a three-operand broadcast walk: each operand an array of
+  either width or a number, the output shape folded pairwise over the array operands,
+  stride 0 on a stretched axis and no stride at all for a scalar, `(= mask 0)` as an IEEE
+  `== 0.0` test, and the result at `x`'s width when `x` is an array, else `y`'s, else
+  double -- the defun's rule. No array at all declines (the defun answers a number), an
+  incompatible broadcast declines (the defun's shape error), mixed widths among the
+  operands are taken (each element is read widened anyway). A kernel, not a
+  materialization: the defun builds three broadcast copies first and then selects, which
+  is why it was a fifth of a step on its own.
+- **`%la-gather-strided (a od rs base single)`** -- note the FIFTH PARAMETER CHANGED: it was
+  the element-type symbol `etype`, it is now a flag (`nil` = double, non-nil = single).
+  The defun turns the flag back into the `%la-make` symbol; the two callers pass
+  `(eq (linalg::%la-etype a) 'single-float)`. The change is what made the member
+  interceptable on all three backends without a symbol comparison: on the JVM a quoted
+  symbol is a `String`, on wasm an interned `$string` offset, on the interpreter a
+  `LispSymbol`, and a nil/non-nil test is the one thing all three answer the same way.
+  The kernel parses `od` (a shape designator) and `rs` (a proper list of i31/integers, the
+  innermost-first strides -- NEGATIVE for a reversed slice), reverses `rs` into
+  outermost-first strides, and **computes the walk's lowest and highest flat index up
+  front** (the base plus each axis's full negative or positive travel, in `long` on the
+  JVM/interpreter and in f64 on wasm), declining when either leaves `a` -- so a declined
+  call has read nothing and the defun signals its own subscript error per element as it
+  always did. An empty output (a 0 extent) walks nothing and is always in bounds.
+- **`take-rows (a idx)` and `%la-scatter-rows (z g idx)`** read the index vector exactly as
+  the defun does -- `(truncate (aref idx i))` -- and decline when it is not a rank-1 packed
+  vector or when any truncated index leaves `[0, rows)` (the defun's subscript error); the
+  check is `v > -1.0 && v < rows` on the double, so `-0.5` truncates to 0 like the defun's
+  `truncate` and NaN declines. `%la-scatter-rows` is NEW in `linalg.lisp`: it is the loop
+  `torch:index-select`'s backward spelled inline, moved under a `linalg:` name so the seam
+  can reach it (the `%la-im2col` / `%la-adam-step` precedent), in place over `z` with the
+  widened add narrowed only on a single-float store; it also requires the two arrays to be
+  the same width and `g`'s count to be `m * slab` (else the defun). `take-rows` copies
+  slabs (`System.arraycopy` on the JVM, a `_v_get`/`_v_set` walk on wasm).
+- **`%la-sum-squares (g acc)` and `%la-scale (g s)`** are `torch:clip-grad-norm`'s two
+  element loops, which are the Adam precedent again: `(+ total (* v v))` as a LEFT fold in
+  double from the caller's accumulator (so it is byte identity and NOT a lane reduction --
+  a `linalg:sum` of squares would follow the reduction contract and move the clip
+  scale), and `(* g s)` in place. A ratio accumulator or scale declines to the defun's
+  exact rational arithmetic (on wasm `isNumber` excludes the ratio struct for the same
+  reason; `unboxF64` would have converted it). `torch:clip-grad-norm` keeps its scalar
+  branches and its in-place contract.
+
+Per backend the touch points are the usual three and nothing new: `LinalgSimd`
+(`define`s with the arities above) + `LinalgSimdKernels` (`compare*`, `where`,
+`gatherStrided`, `takeRows`, `scatterRows`, `sumSquares`, `scale`; `bcastStrides` went
+package-private for `where`), `JvmLinalgKernelCompiler.KERNELS` (`arity` 3 for `where` /
+`%la-scatter-rows`, 5 for `%la-gather-strided`) + `JvmSimdVectorTemplate` (`laGreater` ..
+`laEqual` through `laElementwise` with `OP_GT`..`OP_EQ`, `laWhere`, `laGatherStrided`,
+`laTakeRows`, `laScatterRows`, `laSumSquares`, `laScale`), and
+`WasmLinalgSimdCompiler` + `WasmLinalgSimdRuntimeBuilder` (`COMPARE_GT`..`COMPARE_EQ` 45..49,
+`WHERE` 50, `GATHER_STRIDED` 51, `TAKE_ROWS` 52, `SCATTER_ROWS` 53, `SUM_SQUARES` 54,
+`SCALE` 55; `FUNC_COUNT` 45 -> 56, `userFuncBase()` shifts by 111 under `--simd`; the
+3-param members on `TYPE_CALLABLE_BASE + 2`, the 5-param one on `+ 4`, so again no new
+type entry). The wasm builder grew two generic helpers for them: `emitOdometerN` (the
+carry over ANY number of stride/offset pairs -- three for `where`; the old two-pair
+`emitOdometer` delegates to it) and an `emitBcastShape` overload with an explicit decline
+depth (the original hard-coded `br_if 2`, which is only right at the exit block's top
+level; `where` folds the shape inside two `if`s and needs 4). `emitApplyBop` now branches
+on `op >= BOP_GT` first, so the BCAST kernel answers the comparison masks at a broadcast
+shape with a select chain over the op.
+
+Measured on the GB10 (`.kb/gpu.md` carries the whole profile): the frames the round was
+filed on -- `%LA-GATHER-STRIDED` 96 samples of 600, `WHERE` 20, `EMAP` 25, the backward
+lambda 18, `CLIP-GRAD-NORM` 13 plus the `_dbl` / `_fvAset1` / `_fvAref1` boxing they
+drove -- are 6 + 4 + 0 + 0 + 0 after it, and the `--gpu --simd` step moved 0.148 s ->
+~0.11 s on that round alone (with the generator's device member, `.kb/gpu.md`, it is
+0.119 s median over five rounds, 0.097 at best). The CPU-only `--simd` step moved
+0.83 -> 0.80 s, because there the stacked product still dominates.
+
+Verification: `LinalgSimdTest.theSelectsAndCopiesAre{InterceptedUnderSimd,
+BitIdenticalToTheScalarOracleAtEveryShapeAndWidth}` and
+`...DeclineWhatTheDefunSignalsAndSignalItUnchanged` (the dead-flag guard over all eleven
+names, 40-odd value cases over every shape and width -- scalars on either side, broadcast
+pairs, `-0.0`, a reversed slice, an empty index vector, mixed widths, a ratio
+accumulator, boxed operands -- and a `torch:` program that drives them through
+`masked-fill`, `index-select`, `cat`, `slice` and `clip-grad-norm` on one seeded tape; note
+it uses `torch:mul` rather than `torch:matmul` between the tensors, because an f32 MATMUL
+is the one member in that chain that is NOT byte-identical under `--simd`),
+`JvmLinalgSimdAccelCompilerTest.theSelectsAndCopiesAre{ByteIdenticalToTheScalarPathAtEvery
+ShapeAndWidth,EvaluateTheirArgumentsExactlyOnce}` (the same cases through `print`, plus
+the three-temp and five-temp evaluate-once guards), and
+`WasmLispCompilerIntegrationTest.wasmGcSimdLinalgSelectsAndCopiesAreByteIdenticalToThe
+ScalarPath` (the same cases, one wasmtime run each). The four training examples print
+byte-identical output on all four backends before and after (`train-gpt-soseki.lisp` and
+`chapter02/section5.lisp`, `--simd` and `--gpu --simd`, the `--component` leg included).
+
 ## What is vectorized, and what is merely de-boxed
 
 Not every member has a lane form worth writing. The interception is still worth it for all
-thirty-eight: it removes the per-element box allocation and the generic numeric dispatch that the
+forty-nine: it removes the per-element box allocation and the generic numeric dispatch that the
 compiled defun pays, and on the interpreter it removes the whole tree-walking loop.
 
 | member | interpreter / JVM | wasm-GC |
@@ -743,9 +858,11 @@ call sites) -- exactly as any `vec:` program does. `(print (+ 1 2))` does not.
 
 ### wasm-GC
 
-Forty-five standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
+Fifty-six standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
 + 55` (the vec: block is 55 with the todo-109 kernels and `-into` siblings), emitted only
-under `--simd`; `userFuncBase()` now shifts by 100. The LAST two are todo-473's `RNG_FILL`
+under `--simd`; `userFuncBase()` now shifts by 111. The LAST eleven are the 2026-08-22
+selects and copies (`COMPARE_GT` .. `SCALE`, indices 45..55, above); before them
+todo-473's `RNG_FILL`
 (index 43) and `ADAM_STEP` (index 44), both on the always-present five-eq-param
 `TYPE_CALLABLE_BASE + 4` type `IM2COL` already used, so again no new type entry; before
 them todo-468's `ERF` (index 42,

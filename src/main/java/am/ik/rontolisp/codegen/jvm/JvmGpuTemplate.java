@@ -198,6 +198,68 @@ final class JvmGpuTemplate {
 	}
 
 	/**
+	 * {@code (linalg::%la-rng-fill out st mode lo span)} on the device: fills the packed
+	 * destination of either width from the three-word state vector by the closed-form
+	 * jump and answers the end state as a fresh {@code (3)} vector -- byte-identical to
+	 * the sequential fill, which is what {@code linalg:seed} promises. Declines a boxed
+	 * destination, a state vector that is not three packed doubles in the generator's
+	 * range, a mode outside 0..2, a non-numeric bound and a fill below the threshold; the
+	 * {@code --simd} kernel or the defun then answer the same bytes.
+	 * @param out the destination
+	 * @param st the state vector
+	 * @param modev the element rule
+	 * @param lov rule 2's lower bound
+	 * @param spanv rule 2's range
+	 * @return the end state, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuRngFill(@Nullable Object out, @Nullable Object st, @Nullable Object modev,
+			@Nullable Object lov, @Nullable Object spanv) {
+		if ((!(out instanceof double[]) && !(out instanceof float[])) || !(st instanceof double[] s) || s.length != 5
+				|| s[0] != 1.0 || s[1] != 3.0 || !(modev instanceof Long mv) || mv < 0 || mv > 2) {
+			return null;
+		}
+		Double lo = scalar(lov), span = scalar(spanv);
+		if (lo == null || span == null) {
+			return null;
+		}
+		int off = 1 + rank(out);
+		int n = (out instanceof float[] f ? f.length : doubles(out).length) - off;
+		if (n < 1 || !Gpu.worthRng(n)) {
+			return null;
+		}
+		int[] w = new int[3];
+		for (int i = 0; i < 3; i++) {
+			int u = (int) s[2 + i];
+			if (u != s[2 + i] || u < 0 || u >= 1 << 23) {
+				return null;
+			}
+			w[i] = u;
+		}
+		if (!Gpu.available()) {
+			return null;
+		}
+		int mode = (int) (long) mv;
+		boolean filled = out instanceof float[] f ? Gpu.rngFill(f, off, n, mode, lo, span, w[0], w[1], w[2])
+				: Gpu.rngFill(doubles(out), off, n, mode, lo, span, w[0], w[1], w[2]);
+		if (!filled) {
+			return null;
+		}
+		int[] end = Gpu.rngAdvance(w[0], w[1], w[2], (long) n * (mode == 1 ? 12 : 1));
+		return new double[] { 1.0, 3.0, end[0], end[1], end[2] };
+	}
+
+	/** A Lisp number the kernels take as a bound, as a {@code Double}, else null. */
+	private static @Nullable Double scalar(@Nullable Object o) {
+		if (o instanceof Double d) {
+			return d;
+		}
+		if (o instanceof Long l) {
+			return (double) l;
+		}
+		return null;
+	}
+
+	/**
 	 * {@code (linalg:exp a)} and its eleven siblings over a packed operand of either
 	 * width and any rank -- the ELEMENT-WISE tier. One method per member, because the
 	 * emitted call site names its kernel by an {@code ops} key and loads the member's own

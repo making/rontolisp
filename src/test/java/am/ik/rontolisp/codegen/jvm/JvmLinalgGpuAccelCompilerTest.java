@@ -268,6 +268,36 @@ class JvmLinalgGpuAccelCompilerTest {
 
 	@Test
 	@EnabledIf("aDeviceIsAvailable")
+	void theGeneratorFillIsByteIdenticalToTheScalarReferenceOnTheDevice() throws Exception {
+		// The seeded generator through the compiled backend: the device fill and the
+		// sequential walk print the same bytes at both widths and every rule, and the
+		// generator continues where the walk would have.
+		assertMatchesScalarReference("""
+				(linalg:seed 7)
+				(defparameter *a* (linalg:rand 100000))
+				(defparameter *b* (linalg:randn 50000))
+				(defparameter *c* (linalg:uniform -2 3 70000))
+				(defparameter *d* (linalg:rand '(200 300) :element-type 'single-float))
+				(defparameter *e* (linalg:randn 30000 :element-type 'single-float))
+				(print (list (linalg:sum (linalg:mul *a* *a*)) (linalg:sum (linalg:mul *b* *b*))
+				             (linalg:sum (linalg:mul *c* *c*)) (linalg:sum (linalg:mul *d* *d*))
+				             (linalg:sum (linalg:mul *e* *e*))
+				             (aref *a* 8191) (aref *a* 8192) (aref *b* 49999) (aref *d* 199 299)
+				             (aref *e* 12345) (linalg::%la-rng-next) (linalg:rand 3)))
+				""");
+	}
+
+	@Test
+	void aDeclinedGeneratorFillRunsTheSameProgramToTheSameOutputOnAnyMachine() throws Exception {
+		// Below the threshold, and with a state word outside the generator's range: the
+		// device is never asked, and a --gpu class prints what a plain one prints.
+		assertMatchesScalarReference("(linalg:seed 3) (print (list (linalg:rand 8191) (linalg::%la-rng-next)))");
+		assertMatchesScalarReference("(linalg:seed 4) (let ((s (linalg::%la-rng-state))) (setf (aref s 0) -3.0)"
+				+ " (print (linalg::%la-rng-fill (linalg:zeros 20000) s 0 0.0 1.0)))");
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
 	void theStridedTierIsBitIdenticalToTheScalarReference() throws Exception {
 		// The tier's whole claim, on the compiled backend: a BROADCAST binary op, an AXIS
 		// fold and an axes TRANSPOSE are bit-identical to the defun at both widths, over

@@ -144,6 +144,53 @@ final class LinalgGpuKernels {
 	}
 
 	/**
+	 * Whether a generator fill of {@code n} elements is worth a round trip -- the one
+	 * member with no operand to copy up, so its threshold is the lowest of the set.
+	 * @param n how many elements the fill writes
+	 * @return {@code true} when the fill is worth unwrapping for
+	 */
+	static boolean worthRng(long n) {
+		return Gpu.worthRng(n);
+	}
+
+	/**
+	 * {@code linalg::%la-rng-fill}'s loop on the device: fills {@code out} from the state
+	 * {@code (s1, s2, s3)} by the closed-form jump and answers the state the generator
+	 * ends on as a fresh three-element vector -- or {@code null} when the device
+	 * declined, in which case {@code out} is untouched.
+	 * @param out the destination
+	 * @param mode 0 one uniform draw, 1 the Irwin-Hall normal, 2 {@code lo + span * draw}
+	 * @param lo rule 2's lower bound
+	 * @param span rule 2's range
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @return the end state, or {@code null}
+	 */
+	static double @Nullable [] rngFill(double[] out, int mode, double lo, double span, int s1, int s2, int s3) {
+		if (!Gpu.rngFill(out, 0, out.length, mode, lo, span, s1, s2, s3)) {
+			return null;
+		}
+		return endState(out.length, mode, s1, s2, s3);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #rngFill(double[], int, double, double, int, int, int)}.
+	 */
+	static double @Nullable [] rngFill(float[] out, int mode, double lo, double span, int s1, int s2, int s3) {
+		if (!Gpu.rngFill(out, 0, out.length, mode, lo, span, s1, s2, s3)) {
+			return null;
+		}
+		return endState(out.length, mode, s1, s2, s3);
+	}
+
+	private static double[] endState(int n, int mode, int s1, int s2, int s3) {
+		int[] end = Gpu.rngAdvance(s1, s2, s3, (long) n * (mode == 1 ? 12 : 1));
+		return new double[] { end[0], end[1], end[2] };
+	}
+
+	/**
 	 * Whether a broadcast binary op or an axes transpose over {@code n} OUTPUT elements
 	 * is worth a round trip -- the strided tier's size predicate, which touches no
 	 * driver.

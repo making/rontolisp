@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of {@code linalg:}
- * ({@link LinalgSimd}), the sibling of {@link VecSimdTest}. Thirty-eight
+ * ({@link LinalgSimd}), the sibling of {@link VecSimdTest}. Forty-nine
  * {@code linalg.lisp} defuns run on {@code jdk.incubator.vector} instead of their boxed
  * element loops, while the default interpreter keeps the scalar reference (the
  * cross-backend byte-identity oracle).
@@ -932,6 +932,119 @@ class LinalgSimdTest {
 				"(linalg:seed 4) (linalg::%la-rng-fill (linalg:zeros 3) (linalg::%la-rng-state) 5 0.0 1.0)");
 		assertThatThrownBy(() -> eval(
 				"(linalg:seed 4) (linalg::%la-rng-fill (linalg:zeros 3)" + " (linalg::%la-rng-state) 2 'a 1.0)", true))
+			.isInstanceOf(RuntimeException.class);
+	}
+
+	/** The selects and copies of the 2026-08-22 member extension, shape by shape. */
+	private static final String[] SELECT_AND_COPY_CASES = {
+			// The comparison masks: both widths, a scalar on either side, equal dims and
+			// a broadcast pair, and the two-number case the kernels decline.
+			"(linalg:equal #d(1.0 2.0 0.0) 0)", "(linalg:greater #f(1.0 2.0 0.0) 0.5)",
+			"(linalg:greater 0.5 #f(1.0 2.0 0.0))", "(linalg:greater-equal #d(1.0 2.0 0.0) #d(1.0 3.0 -1.0))",
+			"(linalg:less #f((1.0 2.0) (3.0 4.0)) #f((2.0 2.0) (2.0 5.0)))",
+			"(linalg:less-equal #d((1.0 2.0) (3.0 4.0)) #d(2.0 3.0))",
+			"(linalg:greater #d((1.0 2.0) (3.0 4.0)) #d(2.0 3.0))", "(linalg:equal 1 2)",
+			"(linalg:greater #d(0.0 -0.0 1.0) -0.0)", "(linalg:equal #f(0.0 -0.0) 0.0)",
+			"(linalg:less-equal #d(1.0 2.0) #f(1.0 3.0))",
+			// where: every operand mix -- array masks against arrays and scalars of both
+			// widths, a scalar mask, three numbers (declined), a width-mixed pair.
+			"(linalg:where #d((0.0 1.0) (1.0 0.0)) 9 #d((1.0 2.0) (3.0 4.0)))",
+			"(linalg:where #d(0.0 1.0) #f((1.0 2.0) (3.0 4.0)) -1.5)", "(linalg:where 1 #d(1.0 2.0) #d(3.0 4.0))",
+			"(linalg:where 0 #d(1.0 2.0) 5)", "(linalg:where #d((1.0) (0.0)) #d(1.0 2.0 3.0) #f(7.0 8.0 9.0))",
+			"(linalg:where 2 3 4)", "(linalg:where #d(-0.0 1.0) #d(1.0 2.0) #d(3.0 4.0))",
+			"(linalg:where #f((1.0 0.0)) #f((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0)))",
+			// take-rows, slice (the strided gather) and the scatter-add adjoint.
+			"(linalg:take-rows #d((1.0 2.0) (3.0 4.0) (5.0 6.0)) #d(2.0 0.0 2.0))",
+			"(linalg:take-rows #f((1.0 2.0) (3.0 4.0)) (linalg:zeros 0))",
+			"(linalg:take-rows #f(((1.0 2.0) (3.0 4.0)) ((5.0 6.0) (7.0 8.0))) #d(1.0 1.0))",
+			"(linalg:take-rows #d((1.0 2.0) (3.0 4.0)) #d(1.7 0.2))",
+			"(linalg:slice #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '(nil (2 0 -1)))",
+			"(linalg:slice #f((1.0 2.0 3.0) (4.0 5.0 6.0)) '((1 2) (0 3 2)))",
+			"(linalg:slice #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '((0 2) (1 1)))",
+			"(linalg:slice #d(((1.0 2.0) (3.0 4.0)) ((5.0 6.0) (7.0 8.0))) '((1 2) nil (-1 nil -1)))",
+			"(linalg::%la-gather-strided #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '(2 2) '(1 3) 1 t)",
+			"(linalg::%la-gather-strided #f((1.0 2.0 3.0) (4.0 5.0 6.0)) '(3) '(2) 0 nil)",
+			"(linalg::%la-scatter-rows (linalg:zeros '(3 2)) #d((1.0 2.0) (3.0 4.0) (5.0 6.0)) #d(2.0 0.0 2.0))",
+			"(linalg::%la-scatter-rows (linalg:zeros '(3 2) :element-type 'single-float)"
+					+ " #f((1.0 2.0) (3.0 4.0) (5.0 6.0)) #d(2.0 0.0 2.0))",
+			// The two halves of clip-grad-norm: the left fold from an accumulator (a
+			// ratio accumulator declines to the defun's exact arithmetic) and the scale.
+			"(linalg::%la-sum-squares #d(1.0 2.0 3.0) 0.5)", "(linalg::%la-sum-squares #f(0.1 0.2) 0.0)",
+			"(linalg::%la-sum-squares #d(1.0 2.0) 1/3)", "(linalg::%la-scale #d(1.0 2.0 3.0) 0.5)",
+			"(linalg::%la-scale #f(1.0 2.0 3.0) 0.1)", "(linalg::%la-scale #f(1.0 2.0 3.0) 2)",
+			// Boxed operands decline to the defun everywhere.
+			"(linalg:greater (make-array 3 :initial-element 1) 0)",
+			"(linalg:where (make-array 2 :initial-element 1) #d(1.0 2.0) #d(3.0 4.0))",
+			"(linalg:take-rows (make-array '(2 2) :initial-element 1) #d(1.0))",
+			"(linalg::%la-sum-squares (make-array 2 :initial-element 2) 0.0)",
+			// The causal mask torch:masked-fill builds, combined as the transformer
+			// example combines it, and the masked fill itself at a transformer's shape.
+			"(linalg:maximum (linalg:expand-dims (linalg:equal (linalg:from-list '(1 2 0 0)) 0) 1)"
+					+ " (linalg:expand-dims (linalg:triu (linalg:ones '(4 4)) :k 1) 0))",
+			"(linalg:where (linalg:expand-dims (linalg:triu (linalg:ones '(3 3)) :k 1) 0) -1.0e9"
+					+ " (linalg:reshape (linalg:arange 0 18 :element-type 'single-float) '(2 3 3)))", };
+
+	@Test
+	void theSelectsAndCopiesAreInterceptedUnderSimd() {
+		// The dead-flag guard for the 2026-08-22 members -- the comparison masks, where,
+		// take-rows, the strided gather behind slice and broadcast-to, take-rows'
+		// scatter-add adjoint and the two halves of torch:clip-grad-norm. A --simd run
+		// that silently fell back would still pass every value assertion below.
+		for (String member : new String[] { "greater", "greater-equal", "less", "less-equal", "equal", "where",
+				"take-rows" }) {
+			String form = "(linalg:zeros 1) #'linalg:" + member;
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function LINALG:" + member.toUpperCase(java.util.Locale.ROOT) + ">");
+			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+		for (String member : new String[] { "%la-gather-strided", "%la-scatter-rows", "%la-sum-squares",
+				"%la-scale" }) {
+			String form = "(linalg:zeros 1) #'linalg::" + member;
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function LINALG::" + member.toUpperCase(java.util.Locale.ROOT) + ">");
+			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+	}
+
+	@Test
+	void theSelectsAndCopiesAreBitIdenticalToTheScalarOracleAtEveryShapeAndWidth() {
+		// Pure selects and copies: an IEEE compare, an `== 0` test, a widened add. Every
+		// case is byte identity, the declines included (they run the defun).
+		for (String form : SELECT_AND_COPY_CASES) {
+			assertMatchesScalarOracle(form);
+		}
+		// And the callers that put them on the seam, at a small transformer's shapes:
+		// torch:masked-fill, torch:index-select's backward, torch:cat's backward and
+		// torch:clip-grad-norm, all through the same seeded weights.
+		assertMatchesScalarOracle("""
+				(linalg:seed 11)
+				(defparameter *tab* (torch:tensor (linalg:randn '(6 4)) :requires-grad t))
+				(defparameter *e* (torch:index-select *tab* #d(2.0 0.0 2.0 5.0)))
+				(defparameter *w* (torch:tensor (linalg:randn '(4 4)) :requires-grad t))
+				(defparameter *s* (torch:mul *e* *w*))
+				(defparameter *m* (torch:masked-fill *s* (torch:subsequent-mask 4) -1.0e9))
+				(defparameter *c* (torch:cat (list *m* (torch:slice *m* '((0 2)))) :axis 0))
+				(torch:backward (torch:sum (torch:softmax *c* :axis -1)))
+				(list (torch:data *c*) (torch:grad *tab*) (torch:grad *w*)
+				      (torch:clip-grad-norm (list *tab* *w*) 0.01) (torch:grad *tab*) (torch:grad *w*))
+				""");
+	}
+
+	@Test
+	void theSelectsAndCopiesDeclineWhatTheDefunSignalsAndSignalItUnchanged() {
+		// A slice whose walk would leave the array, an index outside the rows, a
+		// scatter whose slab counts disagree: the kernels check up front, touch nothing,
+		// and the defun then signals exactly what it always did.
+		assertThatThrownBy(() -> eval("(linalg::%la-gather-strided #d(1.0 2.0 3.0) '(4) '(1) 0 nil)", true))
+			.isInstanceOf(RuntimeException.class);
+		assertThatThrownBy(() -> eval("(linalg:take-rows #d((1.0) (2.0)) #d(2.0))", true))
+			.isInstanceOf(RuntimeException.class);
+		assertThatThrownBy(() -> eval("(linalg:take-rows #d((1.0) (2.0)) #d(-1.0))", true))
+			.isInstanceOf(RuntimeException.class);
+		assertThatThrownBy(
+				() -> eval("(linalg::%la-scatter-rows (linalg:zeros '(2 2)) #d((1.0 2.0)) #d(0.0 1.0))", true))
+			.isInstanceOf(RuntimeException.class);
+		assertThatThrownBy(() -> eval("(linalg:where #d(1.0 0.0 1.0) #d(1.0 2.0) #d(3.0 4.0))", true))
 			.isInstanceOf(RuntimeException.class);
 	}
 

@@ -104,7 +104,19 @@ final class JvmLinalgKernelCompiler {
 			// linalg:rand / randn / uniform. Both are internal linalg: members precisely
 			// so that this compiler -- which claims linalg: call sites and nothing else
 			// -- can reach them.
-			Map.entry(LispNames.LINALG_ADAM_STEP, "laAdamStep"), Map.entry(LispNames.LINALG_RNG_FILL, "laRngFill"));
+			Map.entry(LispNames.LINALG_ADAM_STEP, "laAdamStep"), Map.entry(LispNames.LINALG_RNG_FILL, "laRngFill"),
+			// The comparison masks, where, the strided gather behind slice /
+			// broadcast-to, and the embedding lookup with its scatter-add adjoint:
+			// pure selects and copies that were a third of a --gpu --simd training
+			// step as boxed odometer walks (.kb/gpu.md).
+			Map.entry(LispNames.LINALG_GREATER, "laGreater"),
+			Map.entry(LispNames.LINALG_GREATER_EQUAL, "laGreaterEqual"), Map.entry(LispNames.LINALG_LESS, "laLess"),
+			Map.entry(LispNames.LINALG_LESS_EQUAL, "laLessEqual"), Map.entry(LispNames.LINALG_EQUAL, "laEqual"),
+			Map.entry(LispNames.LINALG_WHERE, "laWhere"), Map.entry(LispNames.LINALG_GATHER_STRIDED, "laGatherStrided"),
+			Map.entry(LispNames.LINALG_TAKE_ROWS, "laTakeRows"),
+			Map.entry(LispNames.LINALG_SCATTER_ROWS, "laScatterRows"),
+			// The two halves of torch:clip-grad-norm, moved here like the Adam step.
+			Map.entry(LispNames.LINALG_SUM_SQUARES, "laSumSquares"), Map.entry(LispNames.LINALG_SCALE, "laScale"));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
@@ -137,8 +149,11 @@ final class JvmLinalgKernelCompiler {
 	/** The argument count of the member's Lisp call form. */
 	static int arity(String member) {
 		return switch (member) {
-			case LispNames.LINALG_IM2COL, LispNames.LINALG_ADAM_STEP, LispNames.LINALG_RNG_FILL -> 5;
+			case LispNames.LINALG_IM2COL, LispNames.LINALG_ADAM_STEP, LispNames.LINALG_RNG_FILL,
+					LispNames.LINALG_GATHER_STRIDED ->
+				5;
 			case LispNames.LINALG_COL2IM -> 6;
+			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS -> 3;
 			default -> UNARY.contains(member) ? 1 : 2;
 		};
 	}

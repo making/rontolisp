@@ -226,3 +226,67 @@ extern "C" __global__ void fold_f32(int op, const float* A, float* C, int outer,
 extern "C" __global__ void fold_f64(int op, const double* A, double* C, int outer, int len, int inner) {
   fold<double>(op, A, C, outer, len, inner);
 }
+
+// The seeded GENERATOR fill behind linalg:rand / randn / uniform (linalg::%la-rng-fill):
+// Wichmann-Hill, three integer LCGs combined into one uniform double, spelled operation
+// for operation as the scalar defun spells it -- the same divides, the same
+// left-associated sum, the same frac-by-compares -- because linalg:seed promises one
+// seed reproduces one sequence on EVERY backend. Every arithmetic step is a _rn
+// intrinsic so nvcc cannot contract `lo + span * u` into an FMA, which would move the
+// low bit; the integer half is exact by construction.
+//
+// What makes it a kernel at all is the closed form. The defun (and every CPU kernel)
+// walks the sequence in order, one state update per draw; thread i instead jumps
+// straight to the state its element starts from -- s_k = a^k * s mod m, square-and-
+// multiply over k = i * draws steps -- and then draws exactly as the defun would from
+// there. The host advances the END state the same way (Gpu.rngAdvance), so the
+// generator continues where a sequential fill would have left it.
+__device__ int wh_pow(int a, long long e, int m) {
+  long long r = 1, b = a % m;
+  while (e > 0) {
+    if (e & 1) r = r * b % m;
+    b = b * b % m;
+    e >>= 1;
+  }
+  return (int) r;
+}
+
+__device__ double wh_next(int* s1, int* s2, int* s3) {
+  *s1 = 171 * *s1 % 30269;
+  *s2 = 172 * *s2 % 30307;
+  *s3 = 170 * *s3 % 30323;
+  double u = __dadd_rn(__dadd_rn(__ddiv_rn((double) *s1, 30269.0), __ddiv_rn((double) *s2, 30307.0)),
+                       __ddiv_rn((double) *s3, 30323.0));
+  return u >= 2.0 ? __dsub_rn(u, 2.0) : (u >= 1.0 ? __dsub_rn(u, 1.0) : u);
+}
+
+template <typename T>
+__device__ void rng_fill(T* out, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  long long steps = (long long) i * (mode == 1 ? 12 : 1);
+  int t1 = (int) ((long long) s1 * wh_pow(171, steps, 30269) % 30269);
+  int t2 = (int) ((long long) s2 * wh_pow(172, steps, 30307) % 30307);
+  int t3 = (int) ((long long) s3 * wh_pow(170, steps, 30323) % 30323);
+  double v;
+  if (mode == 1) {
+    double acc = 0.0;
+    for (int j = 0; j < 12; ++j) acc = __dadd_rn(acc, wh_next(&t1, &t2, &t3));
+    v = __dsub_rn(acc, 6.0);
+  } else if (mode == 0) {
+    v = wh_next(&t1, &t2, &t3);
+  } else {
+    v = __dadd_rn(lo, __dmul_rn(span, wh_next(&t1, &t2, &t3)));
+  }
+  out[i] = (T) v;
+}
+
+extern "C" __global__ void rng_fill_f32(float* out, int n, int mode, double lo, double span, int s1, int s2,
+                                        int s3) {
+  rng_fill<float>(out, n, mode, lo, span, s1, s2, s3);
+}
+
+extern "C" __global__ void rng_fill_f64(double* out, int n, int mode, double lo, double span, int s1, int s2,
+                                        int s3) {
+  rng_fill<double>(out, n, mode, lo, span, s1, s2, s3);
+}

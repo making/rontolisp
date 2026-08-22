@@ -42,6 +42,10 @@ public final class GpuThresholds {
 		return Gpu.foldMinElements();
 	}
 
+	public static long rngMinElements() {
+		return Gpu.rngMinElements();
+	}
+
 	/**
 	 * Whether a {@code #d} operand can reach the device at all. {@code false} on Metal,
 	 * where MSL has no {@code double}.

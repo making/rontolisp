@@ -93,17 +93,32 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:rand shape &key element-type)` / `(linalg:randn ...)` / `(linalg:uniform lo hi shape ...)` | uniform [0,1) / standard normal / uniform [lo,hi) arrays from the seeded generator |
 | `(linalg:choice n size)` / `(linalg:permutation n)` | size indices in [0,n) with replacement (np.random.choice default) / Fisher-Yates shuffle of 0..n-1; both packed double vectors of integer values |
 
+## Three more internal members for the library above (2026-08-22)
+
+`%la-scatter-rows (z g idx)` (slab `i` of `g` ADDED into slab `idx[i]` of `z`, in place --
+`take-rows`' adjoint, which `torch:index-select`'s backward used to spell inline),
+`%la-sum-squares (g acc)` (the accumulator plus the sum of squares, a LEFT fold in double
+from `acc`) and `%la-scale (g s)` (`g` scaled in place) exist for `torch:` the way
+`%la-adam-step` does: the `--simd` seam intercepts `linalg:` members and nothing else, and
+these three loops were a sixth of a `--gpu --simd` training step as boxed
+`row-major-aref` walks in `torch.lisp` (`.kb/gpu.md`). Nothing in the numpy surface
+reaches them; `.kb/linalg-simd.md` has the kernels.
+
 ## Rank-N (todo-459): the stacked matmul, the joins, and one odometer
 
 Everything the rank-N round added is numpy parity, and all of it bottoms out in two
 internal walks so there is exactly one place where a strided read can be wrong:
 
-- **`%la-gather-strided (a od rs base etype)`** -- fill a fresh `od`-shaped array by
+- **`%la-gather-strided (a od rs base single)`** -- fill a fresh `od`-shaped array by
   walking `a`'s flat row-major index from `base`, advancing by the INNERMOST-FIRST
   strides `rs` through the `%la-bcast-loop` odometer carry. `linalg:slice` builds
   `rs` from `step * axis-stride` and `base` from the start indices;
   `%la-broadcast-to` builds it from `%la-bcast-strides` (stride 0 on a stretched
-  axis) with `base` 0. Nothing else needs a per-element division.
+  axis) with `base` 0. Nothing else needs a per-element division. The fifth
+  parameter is the result WIDTH as a flag (`nil` double, non-nil single; it was the
+  element-type symbol until 2026-08-22), because the walk is an intercepted `--simd`
+  member on all three backends and a flag is what every backend's kernel can read
+  without a symbol comparison (`.kb/linalg-simd.md`, "The selects and copies").
 - **`%la-matmul-nd`** -- the batched product. `%la-batch-strides d od base` is
   `%la-bcast-strides` with a non-1 innermost stride (`base` = the trailing matrix's
   size), which is the whole difference between "broadcast an element" and "broadcast

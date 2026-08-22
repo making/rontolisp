@@ -22,7 +22,7 @@ import static am.ik.rontolisp.codegen.wasm.WasmVecSimdRuntimeBuilder.withLocals;
 
 /**
  * The wasm-GC {@code --simd} runtime for the {@code linalg:} kernels, the sibling of
- * {@link WasmVecSimdRuntimeBuilder}. Forty-five hand-assembled functions that
+ * {@link WasmVecSimdRuntimeBuilder}. Fifty-six hand-assembled functions that
  * {@link WasmLinalgSimdCompiler} calls at an intercepted {@code linalg:} call site (seven
  * of them cover the declined call shapes: the general numpy broadcast, the axes transpose
  * and the axis folds).
@@ -239,10 +239,39 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int ADAM_STEP = 44;
 
+	// The comparison MASKS (linalg:greater and its four siblings), linalg:where, the
+	// strided gather behind linalg:slice / %la-broadcast-to, linalg:take-rows and its
+	// scatter-add adjoint, and the two halves of torch:clip-grad-norm: the selects and
+	// copies that were a third of a --gpu --simd training step as boxed odometer walks
+	// (.kb/gpu.md). All element walks through _v_get / _v_set -- no arithmetic but an
+	// IEEE compare, an `== 0` test and an add -- so bit-identical to the defuns.
+
+	static final int COMPARE_GT = 45;
+
+	static final int COMPARE_GE = 46;
+
+	static final int COMPARE_LT = 47;
+
+	static final int COMPARE_LE = 48;
+
+	static final int COMPARE_EQ = 49;
+
+	static final int WHERE = 50;
+
+	static final int GATHER_STRIDED = 51;
+
+	static final int TAKE_ROWS = 52;
+
+	static final int SCATTER_ROWS = 53;
+
+	static final int SUM_SQUARES = 54;
+
+	static final int SCALE = 55;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 45;
+	static final int FUNC_COUNT = 56;
 
 	// The BCAST op selector, passed as an i31 by the element-wise kernels. BOP_MAX /
 	// BOP_MIN are the strict selects ((if (> x y) x y)): the SECOND operand wins any
@@ -260,6 +289,19 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int BOP_MIN = 5;
 
+	// The comparison masks' op codes (LinalgSimdKernels.BOP_GT .. BOP_EQ): a 1.0 / 0.0
+	// result from an IEEE comparison of the widened elements.
+
+	static final int BOP_GT = 6;
+
+	static final int BOP_GE = 7;
+
+	static final int BOP_LT = 8;
+
+	static final int BOP_LE = 9;
+
+	static final int BOP_EQ = 10;
+
 	/** The type index of each function, in emission order (for the function section). */
 	static int typeIndexOf(int fn) {
 		return switch (fn) {
@@ -268,9 +310,9 @@ final class WasmLinalgSimdRuntimeBuilder {
 					ATAN, SINH, COSH, SQRT, ABS, NEGATIVE, SIGN, ERF ->
 				WasmLispCompiler.TYPE_CALLABLE_BASE;
 			// Three eq params -> eq.
-			case BCAST, SUM_AXIS, AMAX_AXIS, AMIN_AXIS -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
+			case BCAST, SUM_AXIS, AMAX_AXIS, AMIN_AXIS, WHERE, SCATTER_ROWS -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
 			// Five / six eq params -> eq (the always-present callable_arity_N types).
-			case IM2COL, RNG_FILL, ADAM_STEP -> WasmLispCompiler.TYPE_CALLABLE_BASE + 4;
+			case IM2COL, RNG_FILL, ADAM_STEP, GATHER_STRIDED -> WasmLispCompiler.TYPE_CALLABLE_BASE + 4;
 			case COL2IM -> WasmLispCompiler.TYPE_CALLABLE_BASE + 5;
 			// Two eq params -> eq.
 			default -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
@@ -332,6 +374,17 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case ERF -> buildErf(vecBase);
 			case RNG_FILL -> buildRngFill(vecBase);
 			case ADAM_STEP -> buildAdamStep(vecBase);
+			case COMPARE_GT -> buildCompare(BOP_GT, vecBase);
+			case COMPARE_GE -> buildCompare(BOP_GE, vecBase);
+			case COMPARE_LT -> buildCompare(BOP_LT, vecBase);
+			case COMPARE_LE -> buildCompare(BOP_LE, vecBase);
+			case COMPARE_EQ -> buildCompare(BOP_EQ, vecBase);
+			case WHERE -> buildWhere(vecBase);
+			case GATHER_STRIDED -> buildGatherStrided(vecBase);
+			case TAKE_ROWS -> buildTakeRows(vecBase);
+			case SCATTER_ROWS -> buildScatterRows(vecBase);
+			case SUM_SQUARES -> buildSumSquares(vecBase);
+			case SCALE -> buildScale(vecBase);
 			default -> throw new IllegalArgumentException("no linalg: simd helper " + fn);
 		};
 	}
@@ -2990,6 +3043,782 @@ final class WasmLinalgSimdRuntimeBuilder {
 		set(w, outLocal);
 	}
 
+	// --- the comparison masks, where, the strided gather, take-rows and its adjoint ---
+	// (linalg:greater a b) and its four siblings, (linalg:where m x y),
+	// (linalg::%la-gather-strided a od rs base single), (linalg:take-rows a idx),
+	// (linalg::%la-scatter-rows z g idx), and torch:clip-grad-norm's two halves
+	// (linalg::%la-sum-squares g acc) / (linalg::%la-scale g s). Element walks through
+	// _v_get / _v_set and dims/strides in $hash_buckets, like the declined-shape kernels
+	// above; the odometer carry is emitOdometerN's. No arithmetic but an IEEE compare,
+	// an `== 0` test and a widened add, so all of them are bit-identical to the defuns.
+
+	// The comparison mask: array-array at equal dims (an element walk), unequal dims
+	// through BCAST with the op, and a full-f64 scalar on either side. A 1.0 / 0.0
+	// result at the first ARRAY operand's width -- the emap's, which is what the defun
+	// answers. Two numbers decline (the defun answers an integer).
+	//
+	// params: 0 = a, 1 = b. i32: count 2, kind 3, i 4, len 5, ok 6. f64: s 7.
+	// eq: res 8, da 9, db 10, nd 11, vbD 12, vbA 13, vbB 14, box 15.
+	private static byte[] buildCompare(int bop, int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int a = 0, bArg = 1;
+		int count = 2, kind = 3, i = 4, len = 5, ok = 6;
+		int s = 7;
+		int res = 8, da = 9, db = 10, nd = 11, vbD = 12, vbA = 13, vbB = 14, box = 15;
+
+		block(w); // B0: the declined exit
+		block(w); // B1: a is not an farray
+		block(w); // B2: both farrays
+		isFarray(w, a);
+		isFarray(w, bArg);
+		w.write(Instruction.I32_AND);
+		brIfFalse(w, 0); // not both -> B1
+		farrayKind(w, a);
+		set(w, kind);
+		get(w, kind);
+		farrayKind(w, bArg);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 2); // mixed widths -> decline
+		emitDimsEqual(w, a, bArg, da, db, len, i, ok);
+		get(w, ok);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, a);
+		get(w, bArg);
+		i32Const(w, bop);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.linalgFuncBase() + BCAST);
+		set(w, res);
+		w.write(Instruction.BR, 3); // -> B0
+		w.write(Instruction.END);
+		farrayCount(w, a);
+		set(w, count);
+		farrayField(w, a, 1);
+		set(w, vbA);
+		farrayField(w, bArg, 1);
+		set(w, vbB);
+		newVblock(w, count, kind, vbD, vecBase);
+		openCountLoop(w, i, count);
+		get(w, vbD);
+		get(w, i);
+		vget(w, vbA, i, vecBase);
+		vget(w, vbB, i, vecBase);
+		emitCompareConst(w, bop);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, i);
+		copyDims(w, a, nd, len, i, da);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.BR, 2); // -> B0
+		w.write(Instruction.END); // B2
+
+		// --- array (op) scalar ---
+		isFarray(w, a);
+		brIfFalse(w, 0); // a is not an farray -> B1's end, the scalar (op) array case
+		isNumber(w, bArg);
+		brIfFalse(w, 1); // not a broadcastable number -> decline
+		get(w, bArg);
+		unboxF64(w, box);
+		set(w, s);
+		farrayCount(w, a);
+		set(w, count);
+		farrayKind(w, a);
+		set(w, kind);
+		farrayField(w, a, 1);
+		set(w, vbA);
+		newVblock(w, count, kind, vbD, vecBase);
+		openCountLoop(w, i, count);
+		get(w, vbD);
+		get(w, i);
+		vget(w, vbA, i, vecBase);
+		get(w, s);
+		emitCompareConst(w, bop);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, i);
+		copyDims(w, a, nd, len, i, da);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.BR, 1); // -> B0
+		w.write(Instruction.END); // B1
+
+		// --- scalar (op) array ---
+		isFarray(w, bArg);
+		brIfFalse(w, 0);
+		isNumber(w, a);
+		brIfFalse(w, 0);
+		get(w, a);
+		unboxF64(w, box);
+		set(w, s);
+		farrayCount(w, bArg);
+		set(w, count);
+		farrayKind(w, bArg);
+		set(w, kind);
+		farrayField(w, bArg, 1);
+		set(w, vbB);
+		newVblock(w, count, kind, vbD, vecBase);
+		openCountLoop(w, i, count);
+		get(w, vbD);
+		get(w, i);
+		get(w, s);
+		vget(w, vbB, i, vecBase);
+		emitCompareConst(w, bop);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, i);
+		copyDims(w, bArg, nd, len, i, db);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 5, 1, 0, 0, 8, 0);
+	}
+
+	/**
+	 * Consumes two f64s and leaves {@code (x op y) ? 1.0 : 0.0} for a compile-time op.
+	 */
+	private static void emitCompareConst(WasmWriter w, int bop) {
+		w.write(switch (bop) {
+			case BOP_GT -> Instruction.F64_GT;
+			case BOP_GE -> Instruction.F64_GE;
+			case BOP_LT -> Instruction.F64_LT;
+			case BOP_LE -> Instruction.F64_LE;
+			default -> Instruction.F64_EQ;
+		});
+		w.write(Instruction.F64_CONVERT_U_I32);
+	}
+
+	// (linalg:where m x y): the element of x where the mask is non-zero, of y where it
+	// is zero; every operand an farray of either width or a number, broadcast together
+	// by the numpy rules (the broadcast shape folded pairwise over the array operands,
+	// stride 0 on a stretched axis, no stride at all for a scalar). The result keeps
+	// x's width when x is an array, else y's, else double -- the defun's rule. No
+	// array at all declines (the defun answers a number), and so does an incompatible
+	// broadcast (the defun's own shape error).
+	//
+	// params: 0 = m, 1 = x, 2 = y.
+	// i32: rank 3, k 4, ai 5, dxa 6, dxb 7, total 8, tmp 9, ax 10, om 11, ox 12,
+	// oy 13, kind 14, rx 15, have 16, fm 17, fx 18, fy 19, acc 20, rank2 21.
+	// f64: ms 22, xs 23, ys 24, mv 25, vv 26, tf 27.
+	// eq: res 28, od 29, od2 30, dd 31, sm 32, sx 33, sy 34, idx 35, vbM 36, vbX 37,
+	// vbY 38, vbD 39, box 40.
+	private static byte[] buildWhere(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int m = 0, x = 1, y = 2;
+		int rank = 3, k = 4, ai = 5, dxa = 6, dxb = 7, total = 8, tmp = 9, ax = 10, om = 11, ox = 12, oy = 13,
+				kind = 14, rx = 15, have = 16, fm = 17, fx = 18, fy = 19, acc = 20, rank2 = 21;
+		int ms = 22, xs = 23, ys = 24, mv = 25, vv = 26, tf = 27;
+		int res = 28, od = 29, od2 = 30, dd = 31, sm = 32, sx = 33, sy = 34, idx = 35, vbM = 36, vbX = 37, vbY = 38,
+				vbD = 39, box = 40;
+		int[] operands = { m, x, y };
+		int[] flags = { fm, fx, fy };
+		int[] strides = { sm, sx, sy };
+		int[] scalars = { ms, xs, ys };
+		int[] vblocks = { vbM, vbX, vbY };
+
+		block(w); // B0: the declined exit
+		for (int p = 0; p < 3; p++) {
+			isFarray(w, operands[p]);
+			set(w, flags[p]);
+			get(w, flags[p]);
+			isNumber(w, operands[p]);
+			w.write(Instruction.I32_OR);
+			brIfFalse(w, 0); // neither an array nor a broadcastable number
+		}
+		get(w, fm);
+		get(w, fx);
+		w.write(Instruction.I32_OR);
+		get(w, fy);
+		w.write(Instruction.I32_OR);
+		brIfFalse(w, 0); // three numbers: the defun answers a number
+		// The broadcast shape, folded pairwise over the array operands.
+		i32Const(w, 0);
+		set(w, have);
+		for (int p = 0; p < 3; p++) {
+			get(w, flags[p]);
+			w.write(Instruction.IF, 0x40);
+			get(w, have);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			copyDims(w, operands[p], od, tmp, k, dd);
+			farrayRank(w, operands[p]);
+			set(w, rank);
+			w.write(Instruction.ELSE);
+			farrayRank(w, operands[p]);
+			set(w, rx);
+			get(w, rank);
+			get(w, rx);
+			get(w, rank);
+			get(w, rx);
+			w.write(Instruction.I32_GT_S);
+			w.write(Instruction.SELECT);
+			set(w, rank2);
+			farrayField(w, operands[p], 0);
+			set(w, dd);
+			// From inside the helper's loop: loop 0, block 1, this if 2, the outer if 3,
+			// B0 4.
+			emitBcastShape(w, od, rank, dd, rx, rank2, od2, k, ai, dxa, dxb, tmp, tf, 4);
+			get(w, od2);
+			set(w, od);
+			get(w, rank2);
+			set(w, rank);
+			w.write(Instruction.END);
+			i32Const(w, 1);
+			set(w, have);
+			w.write(Instruction.END);
+		}
+		// Per-operand strides (0 on a stretched axis; all 0 for a scalar), scalars and
+		// lane blocks.
+		for (int p = 0; p < 3; p++) {
+			get(w, flags[p]);
+			w.write(Instruction.IF, 0x40);
+			farrayField(w, operands[p], 0);
+			set(w, dd);
+			farrayRank(w, operands[p]);
+			set(w, rx);
+			emitAlignedStrides(w, dd, rx, rank, strides[p], ax, ai, dxa, acc, -1, true);
+			farrayField(w, operands[p], 1);
+			set(w, vblocks[p]);
+			w.write(Instruction.ELSE);
+			newBucketsFilled(w, rank, strides[p]);
+			get(w, operands[p]);
+			unboxF64(w, box);
+			set(w, scalars[p]);
+			w.write(Instruction.END);
+		}
+		// The width: x's, else y's, else double.
+		i32Const(w, 0);
+		set(w, kind);
+		get(w, fx);
+		w.write(Instruction.IF, 0x40);
+		farrayKind(w, x);
+		set(w, kind);
+		w.write(Instruction.ELSE);
+		get(w, fy);
+		w.write(Instruction.IF, 0x40);
+		farrayKind(w, y);
+		set(w, kind);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		i32Const(w, 1);
+		set(w, total);
+		openCountLoop(w, k, rank);
+		get(w, total);
+		bucketAt(w, od, k);
+		w.write(Instruction.I32_MUL);
+		set(w, total);
+		closeCountLoop(w, k);
+		newVblock(w, total, kind, vbD, vecBase);
+		newBucketsFilled(w, rank, idx);
+		i32Const(w, 0);
+		set(w, om);
+		i32Const(w, 0);
+		set(w, ox);
+		i32Const(w, 0);
+		set(w, oy);
+		openCountLoop(w, k, total);
+		get(w, fm);
+		w.write(Instruction.IF, 0x7C);
+		vget(w, vbM, om, vecBase);
+		w.write(Instruction.ELSE);
+		get(w, ms);
+		w.write(Instruction.END);
+		set(w, mv);
+		get(w, mv);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF, 0x7C);
+		get(w, fy);
+		w.write(Instruction.IF, 0x7C);
+		vget(w, vbY, oy, vecBase);
+		w.write(Instruction.ELSE);
+		get(w, ys);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		get(w, fx);
+		w.write(Instruction.IF, 0x7C);
+		vget(w, vbX, ox, vecBase);
+		w.write(Instruction.ELSE);
+		get(w, xs);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		set(w, vv);
+		get(w, vbD);
+		get(w, k);
+		get(w, vv);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		emitOdometerN(w, rank, ax, tmp, idx, od, new int[] { sm, sx, sy }, new int[] { om, ox, oy });
+		closeCountLoop(w, k);
+		makeFarrayWithDims(w, od, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 19, 6, 0, 0, 13, 0);
+	}
+
+	// (linalg::%la-gather-strided a od rs base single): a fresh od-shaped array of the
+	// flagged width filled from a by walking its flat index from base through the
+	// INNERMOST-FIRST strides rs -- every slice and broadcast-to in the library. od is
+	// a shape designator of non-negative i31s, rs a proper list of i31s (negative for a
+	// reversed slice) of the same length, base an i31, single nil or not. The walk's
+	// lowest and highest flat index are computed up front (in f64, exact), so a call
+	// that would read outside a declines having read nothing and the defun signals
+	// its own subscript error.
+	//
+	// params: 0 = a, 1 = odl, 2 = rsl, 3 = basev, 4 = singlev.
+	// i32: rank 5, n 6, k 7, d 8, src 9, base 10, kind 11, tmp 12, ax 13, count 14.
+	// f64: tf 15, lo 16, hi 17, travel 18.
+	// eq: res 19, od 20, rs 21, s 22, idx 23, cur 24, vbA 25, vbD 26.
+	private static byte[] buildGatherStrided(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int a = 0, odl = 1, rsl = 2, basev = 3, singlev = 4;
+		int rank = 5, n = 6, k = 7, d = 8, src = 9, base = 10, kind = 11, tmp = 12, ax = 13, count = 14;
+		int tf = 15, lo = 16, hi = 17, travel = 18;
+		int res = 19, od = 20, rs = 21, s = 22, idx = 23, cur = 24, vbA = 25, vbD = 26;
+
+		block(w); // B0: the declined exit
+		isFarray(w, a);
+		brIfFalse(w, 0);
+		emitShapeDims(w, odl, rank, n, d, k, od, cur);
+		get(w, rank);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0); // not a shape designator (or rank 0)
+		// rs: a proper list of exactly rank i31s, negatives allowed.
+		newBucketsFilled(w, rank, rs);
+		i32Const(w, 0);
+		set(w, k);
+		get(w, rsl);
+		set(w, cur);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, cur);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1); // end of list
+		get(w, k);
+		get(w, rank);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 2); // too many strides -> B0
+		consCar(w, cur);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 2); // a non-integer stride -> B0
+		consCar(w, cur);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		set(w, d);
+		bucketSet(w, rs, k, d);
+		get(w, k);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		consCdr(w, cur);
+		set(w, cur);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		get(w, cur);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0); // a dotted tail -> B0
+		get(w, k);
+		get(w, rank);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0); // too few strides -> B0
+		unboxI31OrDecline(w, basev, base);
+		// s[k] = rs[rank - 1 - k] (outermost first), the walk's extremes and the element
+		// count, all in f64 so nothing overflows on the way to the check.
+		newBucketsFilled(w, rank, s);
+		get(w, base);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		set(w, lo);
+		get(w, lo);
+		set(w, hi);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		set(w, tf);
+		openCountLoop(w, k, rank);
+		get(w, rank);
+		i32Const(w, 1);
+		w.write(Instruction.I32_SUB);
+		get(w, k);
+		w.write(Instruction.I32_SUB);
+		set(w, tmp);
+		bucketAt(w, rs, tmp);
+		set(w, d);
+		bucketSet(w, s, k, d);
+		bucketAt(w, od, k);
+		i32Const(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		get(w, d);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_MUL);
+		set(w, travel);
+		get(w, travel);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.IF, 0x40);
+		get(w, lo);
+		get(w, travel);
+		w.write(Instruction.F64_ADD);
+		set(w, lo);
+		w.write(Instruction.ELSE);
+		get(w, hi);
+		get(w, travel);
+		w.write(Instruction.F64_ADD);
+		set(w, hi);
+		w.write(Instruction.END);
+		get(w, tf);
+		bucketAt(w, od, k);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_MUL);
+		set(w, tf);
+		get(w, tf);
+		w.write(Instruction.F64_CONST).writeF64(2147483000.0);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.BR_IF, 2); // output too large -> B0
+		closeCountLoop(w, k);
+		get(w, tf);
+		w.write(Instruction.I32_TRUNC_S_F64);
+		set(w, n);
+		farrayCount(w, a);
+		set(w, count);
+		get(w, n);
+		w.write(Instruction.IF, 0x40);
+		get(w, lo);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		get(w, hi);
+		get(w, count);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_GE);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.BR_IF, 1); // a read outside a -> B0
+		w.write(Instruction.END);
+		get(w, singlev);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		set(w, kind);
+		newVblock(w, n, kind, vbD, vecBase);
+		farrayField(w, a, 1);
+		set(w, vbA);
+		newBucketsFilled(w, rank, idx);
+		get(w, base);
+		set(w, src);
+		openCountLoop(w, k, n);
+		get(w, vbD);
+		get(w, k);
+		vget(w, vbA, src, vecBase);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		emitOdometer(w, rank, ax, tmp, idx, od, s, src, -1, -1);
+		closeCountLoop(w, k);
+		makeFarrayWithDims(w, od, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 10, 4, 0, 0, 8, 0);
+	}
+
+	/**
+	 * Validates an index vector the way the defun reads it -- {@code (truncate (aref idx
+	 * i))}, each required to land inside {@code [0, rows)}: {@code idxLocal} must be a
+	 * rank-1 farray whose every element is {@code > -1} and {@code < rows}; otherwise
+	 * branch to {@code declineDepth} (from the function's top level). Leaves {@code m}
+	 * (the index count) and {@code vbI} set.
+	 */
+	private static void emitRowIndexes(WasmWriter w, int idxLocal, int rows, int m, int i, int v, int vbI, int vecBase,
+			int declineDepth) {
+		isFarray(w, idxLocal);
+		brIfFalse(w, declineDepth);
+		farrayRank(w, idxLocal);
+		i32Const(w, 1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, declineDepth);
+		farrayCount(w, idxLocal);
+		set(w, m);
+		farrayField(w, idxLocal, 1);
+		set(w, vbI);
+		openCountLoop(w, i, m);
+		vget(w, vbI, i, vecBase);
+		set(w, v);
+		get(w, v);
+		w.write(Instruction.F64_CONST).writeF64(-1.0);
+		w.write(Instruction.F64_GT);
+		get(w, v);
+		get(w, rows);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.I32_AND);
+		brIfFalse(w, declineDepth + 2); // from inside the loop: loop 0, block 1
+		closeCountLoop(w, i);
+	}
+
+	// (linalg:take-rows a idx): the axis-0 slabs of a selected by the index vector, a
+	// fresh array of a's width -- the embedding lookup. A boxed vector or an index the
+	// defun would turn into a subscript error declines.
+	//
+	// params: 0 = a, 1 = idx.
+	// i32: rows 2, slab 3, m 4, i 5, k 6, r 7, total 8, kind 9, dst 10, src 11, len 12,
+	// count 13.
+	// f64: v 14. eq: res 15, od 16, vbA 17, vbI 18, vbD 19, da 20.
+	private static byte[] buildTakeRows(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int a = 0, idx = 1;
+		int rows = 2, slab = 3, m = 4, i = 5, k = 6, r = 7, total = 8, kind = 9, dst = 10, src = 11, len = 12,
+				count = 13;
+		int v = 14;
+		int res = 15, od = 16, vbA = 17, vbI = 18, vbD = 19, da = 20;
+
+		block(w); // B0: the declined exit
+		isFarray(w, a);
+		brIfFalse(w, 0);
+		farrayRank(w, a);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		dimAt(w, a, 0, rows);
+		farrayCount(w, a);
+		set(w, count);
+		emitSlab(w, rows, count, slab);
+		emitRowIndexes(w, idx, rows, m, i, v, vbI, vecBase, 0);
+		get(w, m);
+		get(w, slab);
+		w.write(Instruction.I32_MUL);
+		set(w, total);
+		farrayKind(w, a);
+		set(w, kind);
+		newVblock(w, total, kind, vbD, vecBase);
+		farrayField(w, a, 1);
+		set(w, vbA);
+		openCountLoop(w, i, m);
+		vget(w, vbI, i, vecBase);
+		w.write(Instruction.I32_TRUNC_S_F64);
+		set(w, r);
+		openCountLoop(w, k, slab);
+		get(w, i);
+		get(w, slab);
+		w.write(Instruction.I32_MUL);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		set(w, dst);
+		get(w, r);
+		get(w, slab);
+		w.write(Instruction.I32_MUL);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		set(w, src);
+		get(w, vbD);
+		get(w, dst);
+		vget(w, vbA, src, vecBase);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, k);
+		closeCountLoop(w, i);
+		copyDims(w, a, od, len, i, da);
+		i32Const(w, 0);
+		set(w, i);
+		bucketSet(w, od, i, m);
+		makeFarrayWithDims(w, od, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 12, 1, 0, 0, 6, 0);
+	}
+
+	/** {@code slab = rows == 0 ? 0 : count / rows}: the axis-0 slab size. */
+	private static void emitSlab(WasmWriter w, int rows, int count, int slab) {
+		get(w, rows);
+		w.write(Instruction.IF, 0x7F);
+		get(w, count);
+		get(w, rows);
+		w.write(Instruction.I32_DIV_S);
+		w.write(Instruction.ELSE);
+		i32Const(w, 0);
+		w.write(Instruction.END);
+		set(w, slab);
+	}
+
+	// (linalg::%la-scatter-rows z g idx): slab i of g ADDED into slab idx[i] of z, in
+	// place, for two same-width farrays whose slab counts agree -- take-rows' adjoint.
+	// Answers z. The widened add narrows only on a single-float store (_v_set), the
+	// defun's own setf.
+	//
+	// params: 0 = z, 1 = g, 2 = idx.
+	// i32: rows 3, slab 4, m 5, i 6, k 7, r 8, dst 9, src 10, count 11, kind 12.
+	// f64: v 13. eq: res 14, vbZ 15, vbG 16, vbI 17.
+	private static byte[] buildScatterRows(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int z = 0, g = 1, idx = 2;
+		int rows = 3, slab = 4, m = 5, i = 6, k = 7, r = 8, dst = 9, src = 10, count = 11, kind = 12;
+		int v = 13;
+		int res = 14, vbZ = 15, vbG = 16, vbI = 17;
+
+		block(w); // B0: the declined exit
+		isFarray(w, z);
+		isFarray(w, g);
+		w.write(Instruction.I32_AND);
+		brIfFalse(w, 0);
+		farrayKind(w, z);
+		set(w, kind);
+		get(w, kind);
+		farrayKind(w, g);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		farrayRank(w, z);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		dimAt(w, z, 0, rows);
+		farrayCount(w, z);
+		set(w, count);
+		emitSlab(w, rows, count, slab);
+		emitRowIndexes(w, idx, rows, m, i, v, vbI, vecBase, 0);
+		get(w, m);
+		get(w, slab);
+		w.write(Instruction.I32_MUL);
+		farrayCount(w, g);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0); // the slab counts disagree -> the defun
+		farrayField(w, z, 1);
+		set(w, vbZ);
+		farrayField(w, g, 1);
+		set(w, vbG);
+		openCountLoop(w, i, m);
+		vget(w, vbI, i, vecBase);
+		w.write(Instruction.I32_TRUNC_S_F64);
+		set(w, r);
+		openCountLoop(w, k, slab);
+		get(w, r);
+		get(w, slab);
+		w.write(Instruction.I32_MUL);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		set(w, dst);
+		get(w, i);
+		get(w, slab);
+		w.write(Instruction.I32_MUL);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		set(w, src);
+		get(w, vbZ);
+		get(w, dst);
+		vget(w, vbZ, dst, vecBase);
+		vget(w, vbG, src, vecBase);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, k);
+		closeCountLoop(w, i);
+		get(w, z);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 10, 1, 0, 0, 4, 0);
+	}
+
+	// (linalg::%la-sum-squares g acc): acc plus the sum of the squares of g's elements,
+	// left-folded in f64 from acc -- torch:clip-grad-norm's own order, so byte identity
+	// and not a lane reduction. A boxed array or a ratio accumulator (the defun's exact
+	// rational fold) declines. Answers a boxed float.
+	//
+	// params: 0 = g, 1 = accv. i32: count 2, i 3. f64: total 4, v 5.
+	// eq: res 6, vbG 7, box 8.
+	private static byte[] buildSumSquares(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int g = 0, accv = 1;
+		int count = 2, i = 3;
+		int total = 4, v = 5;
+		int res = 6, vbG = 7, box = 8;
+
+		block(w); // B0: the declined exit
+		isFarray(w, g);
+		brIfFalse(w, 0);
+		isNumber(w, accv);
+		brIfFalse(w, 0);
+		get(w, accv);
+		unboxF64(w, box);
+		set(w, total);
+		farrayCount(w, g);
+		set(w, count);
+		farrayField(w, g, 1);
+		set(w, vbG);
+		openCountLoop(w, i, count);
+		vget(w, vbG, i, vecBase);
+		set(w, v);
+		get(w, total);
+		get(w, v);
+		get(w, v);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+		set(w, total);
+		closeCountLoop(w, i);
+		get(w, total);
+		boxFloat(w);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 2, 2, 0, 0, 3, 0);
+	}
+
+	// (linalg::%la-scale g s): g scaled in place by the number s (the widened product,
+	// narrowed only by a single-float _v_set). Answers g. A ratio declines.
+	//
+	// params: 0 = g, 1 = sv. i32: count 2, i 3. f64: s 4. eq: res 5, vbG 6, box 7.
+	private static byte[] buildScale(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int g = 0, sv = 1;
+		int count = 2, i = 3;
+		int s = 4;
+		int res = 5, vbG = 6, box = 7;
+
+		block(w); // B0: the declined exit
+		isFarray(w, g);
+		brIfFalse(w, 0);
+		isNumber(w, sv);
+		brIfFalse(w, 0);
+		get(w, sv);
+		unboxF64(w, box);
+		set(w, s);
+		farrayCount(w, g);
+		set(w, count);
+		farrayField(w, g, 1);
+		set(w, vbG);
+		openCountLoop(w, i, count);
+		get(w, vbG);
+		get(w, i);
+		vget(w, vbG, i, vecBase);
+		get(w, s);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, i);
+		get(w, g);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 2, 1, 0, 0, 3, 0);
+	}
+
 	// --- shared emit helpers --------------------------------------------------------
 
 	// --- the declined call-shape kernels: bcast / axes / axis folds ------------------
@@ -3095,6 +3924,51 @@ final class WasmLinalgSimdRuntimeBuilder {
 	 * selects (the second operand wins any false comparison).
 	 */
 	private static void emitApplyBop(WasmWriter w, int opLocal, int vxLocal, int vyLocal) {
+		// The comparison masks first (BOP_GT .. BOP_EQ): five IEEE comparisons, a select
+		// chain on the op, and the i32 truth value converted to 1.0 / 0.0.
+		get(w, opLocal);
+		i32Const(w, BOP_GT);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x7C);
+		get(w, vxLocal);
+		get(w, vyLocal);
+		w.write(Instruction.F64_GT);
+		get(w, vxLocal);
+		get(w, vyLocal);
+		w.write(Instruction.F64_GE);
+		get(w, opLocal);
+		i32Const(w, BOP_GE);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.SELECT); // op == GE ? ge : gt
+		get(w, vxLocal);
+		get(w, vyLocal);
+		w.write(Instruction.F64_LT);
+		get(w, opLocal);
+		i32Const(w, BOP_LT);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.SELECT);
+		get(w, vxLocal);
+		get(w, vyLocal);
+		w.write(Instruction.F64_LE);
+		get(w, opLocal);
+		i32Const(w, BOP_LE);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.SELECT);
+		get(w, vxLocal);
+		get(w, vyLocal);
+		w.write(Instruction.F64_EQ);
+		get(w, opLocal);
+		i32Const(w, BOP_EQ);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.F64_CONVERT_U_I32);
+		w.write(Instruction.ELSE);
+		emitApplyArithmeticBop(w, opLocal, vxLocal, vyLocal);
+		w.write(Instruction.END);
+	}
+
+	/** The arithmetic and strict-select half of {@link #emitApplyBop}: ops 0..5. */
+	private static void emitApplyArithmeticBop(WasmWriter w, int opLocal, int vxLocal, int vyLocal) {
 		get(w, opLocal);
 		i32Const(w, 2);
 		w.write(Instruction.I32_LT_S);
@@ -3705,6 +4579,18 @@ final class WasmLinalgSimdRuntimeBuilder {
 	 */
 	private static void emitBcastShape(WasmWriter w, int daLocal, int raLocal, int dbLocal, int rbLocal, int rankLocal,
 			int odLocal, int kLocal, int aiLocal, int dxaLocal, int dxbLocal, int tmpLocal, int tfLocal) {
+		emitBcastShape(w, daLocal, raLocal, dbLocal, rbLocal, rankLocal, odLocal, kLocal, aiLocal, dxaLocal, dxbLocal,
+				tmpLocal, tfLocal, 2);
+	}
+
+	/**
+	 * The same, branching to the declined exit at {@code declineDepth} from INSIDE the
+	 * count loop it opens (the loop's own two levels are the first two): 2 when the
+	 * caller is at the exit block's top level, more from inside an {@code if}.
+	 */
+	private static void emitBcastShape(WasmWriter w, int daLocal, int raLocal, int dbLocal, int rbLocal, int rankLocal,
+			int odLocal, int kLocal, int aiLocal, int dxaLocal, int dxbLocal, int tmpLocal, int tfLocal,
+			int declineDepth) {
 		newBucketsFilled(w, rankLocal, odLocal);
 		w.write(Instruction.F64_CONST);
 		w.writeF64(1.0);
@@ -3752,7 +4638,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		i32Const(w, 1);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.I32_AND);
-		w.write(Instruction.BR_IF, 2); // incompatible -> the declined exit
+		w.write(Instruction.BR_IF, declineDepth); // incompatible -> the declined exit
 		get(w, dxaLocal);
 		get(w, dxbLocal);
 		get(w, dxaLocal);
@@ -3770,7 +4656,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.F64_CONST);
 		w.writeF64(2147483000.0);
 		w.write(Instruction.F64_GT);
-		w.write(Instruction.BR_IF, 2); // output too large -> decline
+		w.write(Instruction.BR_IF, declineDepth); // output too large -> decline
 		closeCountLoop(w, kLocal);
 	}
 
@@ -3853,6 +4739,19 @@ final class WasmLinalgSimdRuntimeBuilder {
 	 */
 	private static void emitOdometer(WasmWriter w, int rankLocal, int axLocal, int tmpLocal, int idxLocal, int odLocal,
 			int s1Local, int off1Local, int s2Local, int off2Local) {
+		if (s2Local >= 0) {
+			emitOdometerN(w, rankLocal, axLocal, tmpLocal, idxLocal, odLocal, new int[] { s1Local, s2Local },
+					new int[] { off1Local, off2Local });
+		}
+		else {
+			emitOdometerN(w, rankLocal, axLocal, tmpLocal, idxLocal, odLocal, new int[] { s1Local },
+					new int[] { off1Local });
+		}
+	}
+
+	/** The same carry over any number of (stride, offset) pairs -- three for where. */
+	private static void emitOdometerN(WasmWriter w, int rankLocal, int axLocal, int tmpLocal, int idxLocal, int odLocal,
+			int[] strideLocals, int[] offsetLocals) {
 		get(w, rankLocal);
 		i32Const(w, 1);
 		w.write(Instruction.I32_SUB);
@@ -3868,15 +4767,11 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		set(w, tmpLocal);
 		bucketSet(w, idxLocal, axLocal, tmpLocal);
-		get(w, off1Local);
-		bucketAt(w, s1Local, axLocal);
-		w.write(Instruction.I32_ADD);
-		set(w, off1Local);
-		if (s2Local >= 0) {
-			get(w, off2Local);
-			bucketAt(w, s2Local, axLocal);
+		for (int p = 0; p < strideLocals.length; p++) {
+			get(w, offsetLocals[p]);
+			bucketAt(w, strideLocals[p], axLocal);
 			w.write(Instruction.I32_ADD);
-			set(w, off2Local);
+			set(w, offsetLocals[p]);
 		}
 		get(w, tmpLocal);
 		bucketAt(w, odLocal, axLocal);
@@ -3885,19 +4780,13 @@ final class WasmLinalgSimdRuntimeBuilder {
 		i32Const(w, 0);
 		set(w, tmpLocal);
 		bucketSet(w, idxLocal, axLocal, tmpLocal);
-		get(w, off1Local);
-		bucketAt(w, odLocal, axLocal);
-		bucketAt(w, s1Local, axLocal);
-		w.write(Instruction.I32_MUL);
-		w.write(Instruction.I32_SUB);
-		set(w, off1Local);
-		if (s2Local >= 0) {
-			get(w, off2Local);
+		for (int p = 0; p < strideLocals.length; p++) {
+			get(w, offsetLocals[p]);
 			bucketAt(w, odLocal, axLocal);
-			bucketAt(w, s2Local, axLocal);
+			bucketAt(w, strideLocals[p], axLocal);
 			w.write(Instruction.I32_MUL);
 			w.write(Instruction.I32_SUB);
-			set(w, off2Local);
+			set(w, offsetLocals[p]);
 		}
 		get(w, axLocal);
 		i32Const(w, 1);

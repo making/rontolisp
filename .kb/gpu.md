@@ -23,7 +23,13 @@ of, which is no longer `linalg:` at all. **METAL** (phase 5, 2026-08-21) is the 
 DEVICE rather than a fifth tier: "The Metal backend" below is its whole record, and the
 one thing to know before reading anything above it is that everything above it is CUDA.
 Where the two disagree -- the width, three thresholds, one whole tier -- that section
-says so and is the one that applies on a Mac.
+says so and is the one that applies on a Mac. **The second profile (2026-08-22)** is the
+round after the item closed: "The second profile, and the round it drove" below is its
+record -- the generator fill became a device member (the one with no operand and a
+byte-identical result), eleven boxed Lisp walks the profile named went onto the `--simd`
+seam instead (`.kb/linalg-simd.md`), the per-call `cuMemGetInfo` was amortized, and the
+host-memory copy route was measured and kept. It is also where the residency numbers were
+re-derived, which is the section to read before touching `.todo/474`.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover,ElementwiseCrossover,
@@ -181,8 +187,12 @@ the artifact instead of only living here. `GpuDeclineTest` asserts it is still t
   fp64 units), and at f32 the 7x cuBLAS wins on kernel time collapses to 1.2-3.0x once the
   copies are on the clock. todo-123 has the full table and the reasoning; nothing here
   opens `libcublas`.
-- **Twelve entry points since phase 3**: `gemm_f64` / `gemm_f32`, the stacked siblings
-  `gemm_batched_f64` / `gemm_batched_f32`, and the element-wise `map_f64` / `map_f32`. A batched kernel is six lines -- it offsets the
+- **Fourteen entry points since 2026-08-22** (twelve since phase 3): `gemm_f64` / `gemm_f32`, the stacked siblings
+  `gemm_batched_f64` / `gemm_batched_f32`, the element-wise `map_f64` / `map_f32`, the
+  strided `bcast_*` / `gather_*` / `fold_*`, and the generator `rng_fill_f64` /
+  `rng_fill_f32` -- the last pair is the Wichmann-Hill walk spelled in `_rn` intrinsics
+  (so nvcc cannot contract `lo + span * u` into an FMA) behind a square-and-multiply jump,
+  and the PTX grew from 113 KB to 143 KB for it. A batched kernel is six lines -- it offsets the
   three pointers by `blockIdx.z` times the strides and calls the SAME `gemm<T>` device
   function -- which is why a batched cell folds `k` bit-identically to an unbatched one
   and the precision contract below needed no second sentence. `gemm.cu` grew by 22 lines
@@ -303,7 +313,13 @@ block walks the whole sequence):
 
 1. **A pre-flight.** The three buffers' total is checked against `cuMemGetInfo` less
    64 MB of headroom before anything is allocated, so a product that cannot fit never
-   grows the pool at all. It costs 0.6 us on a call that is going to succeed.
+   grows the pool at all. It cost 0.6 us on a call that is going to succeed when it was
+   measured cold; **in a training step it measured 6-13 us a call** (nsys, 7060 calls,
+   91 ms of a 6.5 s run), so since 2026-08-22 it is AMORTIZED: the answer is remembered,
+   decremented by what was handed out, and re-asked every 64 allocations or as soon as a
+   request is more than a quarter of the remembered figure (`CudaGemm.allocate`). The
+   guard is unchanged -- an estimate that errs does so towards REFUSING, and a request the
+   stale figure lets through that the device then refuses still lands on the trim below.
 2. **A trim after a failed allocation** -- for the case the pre-flight cannot see coming,
    where free memory changed underneath it. Three calls, in this order, or it silently
    does nothing:
@@ -883,15 +899,17 @@ page, split out of the `--simd` guide). Keep the
 intercepted set, the size threshold, the chain order and the precision contract in sync
 with it.
 
-### The intercepted set is TWO product shapes, TWELVE element-wise members and TEN strided ones
+### The intercepted set is TWO product shapes, TWELVE element-wise members, TEN strided ones and the GENERATOR FILL
 
 `linalg:dot` over two packed rank-2 operands of the same width (hence `linalg:matmul` at
 rank 2 and `linalg:solve` transitively); since phase 4a `linalg::%la-matmul-nd`, the
 STACKED product behind `linalg:matmul` at rank >= 3; since phase 4b the element-wise
-`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`; and since
+`exp` `log` `tanh` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `erf`; since
 phase 3 the STRIDED tier -- `add` `sub` `mul` `div` `maximum` `minimum` at a BROADCAST
 shape only, `sum` `amax` `amin` in their `:axis` form only, and `transpose` in its axes
-form only. Twenty-four members. Nothing else is `defineFunction`ed: `#'linalg:sqrt` and
+form only; and since 2026-08-22 `linalg::%la-rng-fill`, the seeded generator's fill
+behind `rand` / `randn` / `uniform` (below, "The second profile"). Twenty-five members.
+Nothing else is `defineFunction`ed: `#'linalg:sqrt` and
 `#'linalg:outer` still print `#<lambda>` under the flag, and that they do is an assertion
 rather than a remark (below) -- as is that `#'linalg:sub` now does NOT, which is the
 strided tier's own dead-flag guard.
@@ -914,13 +932,18 @@ differences are measurements rather than staging:
   which is the phase-3 finding: the same `linalg:sub` is a device member against a
   `(4 256 1)` operand and a decline against a `(4 256 384)` one, because `--simd` walks
   the first with an odometer and the second with lanes.
+- **The generator fill** is here and is the only member with NO operand: nothing goes
+  up, the draws come back, and the closed form `a^k s mod m` lets every thread jump to
+  its own state -- so it is bit-identical to the sequential walk (the one member whose
+  device result is byte-for-byte the CPU's at every size) and its threshold is the
+  lowest of the set.
 
 The size threshold is `Gpu.worth`'s and nothing else: below `n*m*p = 2^17` -- for a stack,
 below `batch*n*m*p = 2^17`, for an element-wise map below `n = 2^14` ELEMENTS, for a
 broadcast or an axes transpose below `2^15` OUTPUT elements, for an axis fold below `2^17`
-INPUT elements or 256 output cells -- the kernel returns the null sentinel and the CPU
-path runs, which is why every example in the repository is byte-identical with the flag
-on.
+INPUT elements or 256 output cells, for a generator fill below `2^13` elements -- the
+kernel returns the null sentinel and the CPU path runs, which is why every example in
+the repository is byte-identical with the flag on.
 
 ### The stacked matrix product (`%la-matmul-nd`, phase 4a, 2026-08-21)
 
@@ -1445,6 +1468,97 @@ build and 9.5 -> 5.8 s on the CPU one, which is the generator alone.
 copies were 9% of a step and are now 24% of a much shorter one; the ceiling residency could
 remove is still only the host-to-device half of that (below), and re-deriving it is still
 the first thing to do before building any of it.
+
+#### The second profile (2026-08-22), and the round it drove
+
+The same program, the same 40 steps, JVM class output, `--gpu --simd`, profiled AGAIN
+after todo-473 -- and the finding was that what the first profile had called "not
+`linalg:`" was mostly `linalg:` members that were not INTERCEPTED: boxed odometer walks
+the interpreter and both compilers still ran as the defun. Top frames, 600 samples:
+
+| frame | samples | what it is |
+|---|---|---|
+| `%LA-GATHER-STRIDED` + `%LA-BROADCAST-TO` + `WHERE` + the `_dbl` / `_add` they drive | ~130 (22%) | `torch:masked-fill`: `linalg:where` over the causal mask, which MATERIALIZES three broadcast copies through the strided gather and then selects, forward and backward |
+| `memcpyHtoD` + `memcpyDtoH` | 133 (22%) | every device copy in the step |
+| `laRngFill` | 47 (8%) | the dropout masks -- already a kernel, still sequential |
+| `EMAP` through `GREATER` | ~38 (6%) | the dropout mask's compare, `%la-bcast`'s `emap` branch |
+| `_lambda_576` (`torch:index-select`'s backward) | ~30 (5%) | the embedding scatter-add, inline in `torch.lisp` |
+| `CLIP-GRAD-NORM` | ~24 (4%) | two boxed loops |
+| `SLICE` (`torch:cat`'s backward) | 20 (3%) | the strided gather again |
+| `laEwFS` + `FloatVector.intoArray` | ~45 (8%) | the f32-array-times-double-scalar loops, scalar by the precision contract |
+
+**Three things were done, in the order the table ranks them.**
+
+1. **Eleven members went onto the `--simd` seam** (`.kb/linalg-simd.md`, "The selects and
+   copies"): `where`, the five comparison masks, `take-rows`, `%la-gather-strided` (slice
+   and broadcast-to), and three new internal members for loops that lived in `torch.lisp`
+   -- `%la-scatter-rows` (index-select's adjoint), `%la-sum-squares` / `%la-scale`
+   (clip-grad-norm). None is arithmetic, so all are bit-identical and no precision
+   decision was needed; none is a DEVICE member, because a de-boxed CPU select over a
+   1 MB mask is ~0.3 ms where the device round trip would be ~0.12, and four of them a
+   step is not worth a tier. After it the frames above read 6 + 4 + 0 + 0 + 0.
+2. **The generator fill became a device member** -- the one the table says is the next
+   cost and the one that had to be bit-identical or nothing (`linalg:seed`'s promise).
+   The closed form is what makes it possible: thread `i` computes `s_i = a^(i*draws) s
+   mod m` for each of the three LCGs by square-and-multiply (exact integers), then draws
+   exactly as the walk does -- the same divides, the same left-associated sum, the same
+   frac-by-compares -- every arithmetic step a `_rn` intrinsic so nvcc cannot contract
+   the `lo + span * u` of `uniform` into an FMA, and `Gpu.rngAdvance` advances the END
+   state on the host by the same closed form. Asserted bit-for-bit at both widths and
+   all three rules (`GpuTest.theGeneratorFillIsBitIdentical...`, the interpreter and JVM
+   suites on `seed` + `rand`/`randn`/`uniform`/`choice`/`%la-rng-next` in one program).
+   The threshold is `2^13` elements (`RngCrossover.java`: one uniform draw per element is
+   0.7-0.8x at 2^12 and 1.6-1.8x at 2^13, the normal 4x at 2^12, 20-45x at 10^6); on
+   Metal it is `Long.MAX_VALUE` -- the member needs a double. One buffer, no copy up, a
+   `download`: the cheapest round trip in the file. The dropout `rand` at `(4 256 384)`
+   went from ~4 ms to ~50 us, and the 5-step (setup-dominated, every weight a `randn`)
+   run from 3.3 s to 1.9 s.
+3. **`cuMemGetInfo` was amortized** (above, "A DECLINE MUST COST THE DEVICE NOTHING").
+
+**And the copy route was measured again and KEPT.** The GB10 answers
+`CU_DEVICE_ATTRIBUTE_INTEGRATED` 1, `PAGEABLE_MEMORY_ACCESS` 1,
+`PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES` 1: a kernel can read host memory directly,
+and `ZeroCopyRoute.java` measured what that is worth for an f32 `exp` map (us/call, best
+of many):
+
+| elements | R0 today (critical copies) | R1 pinned staging + DMA | R2 zero-copy + Java copies | R3 kernel over host memory, no copies | R4 kernel over device memory |
+|---|---|---|---|---|---|
+| 65536 | 27.2 | 31.2 | 22.5 | 8.6 | 6.4 |
+| 262144 | 52.2 | 93.7 | 61.5 | 15.2 | 6.7 |
+| 1 M | 165.7 | 393.7 | 272.5 | 40.7 | 11.8 |
+| 4 M | 667.5 | 1732.2 | 1212.3 | 144.7 | 137.5 |
+
+R3 is the prize -- 4x on every op at 1 M -- and it is unreachable: a kernel reading the
+Java heap must have the array PINNED for its whole run, and FFM's `critical` pins for one
+downcall only (a launch returns before the kernel reads; a `cuMemcpyDtoH` after it pins
+the DESTINATION only; the address of a heap array is not even obtainable outside a
+downcall), so the only safe zero-copy is R2, through pinned host buffers -- and the Java
+`MemorySegment.copy` into them runs at 35-60 GB/s single-threaded, slower than the
+driver's own pageable copy (R0's ~53 GB/s), so R2 loses past 262144 and wins 17% at
+65536. Neither pays for a pinned pool and its budget. **The route stays R0**, and any
+future change to it re-runs that table first.
+
+After the three, the profile reads (270 samples): `memcpyHtoD` + `memcpyDtoH` 111 (41%),
+`laEwFS` + `intoArray` + `laEwFF` 45 (17%), `laAdamStep` 22 (8%), `laWhere` 6,
+`laGatherStrided` 4, the clip-grad-norm frames gone. Per training step, JVM class output,
+the same `(t40 - t5) / 35` as the tables above, five interleaved rounds, MEDIAN [range]
+-- and note the range: the device build is bimodal run to run on this machine (a
+40-step run is 5.3 s or 6.9 s and rarely in between), which is wider than the 15% the
+earlier sections quote, so read the ratio:
+
+| per training step | before this round (2 rounds) | after (5 rounds) |
+|---|---|---|
+| `--gpu --simd` | 0.148 s [0.135-0.160] | **0.119 s** [0.097-0.144] |
+| `--simd` | 0.826 s | 0.797 s [0.797-0.811] |
+| the 5-step run (setup: every weight a `randn`) | 3.3 s | **1.9 s** |
+| the 40-step run, whole | 8.1-8.9 s | 5.3-6.9 s |
+
+6.7x against the CPU build at the medians, 8x at the best pair; 0.21 -> 0.149 -> 0.119 s
+across the three rounds of this file. **The residency ceiling is therefore re-derived at
+roughly one fifth to one quarter of a step** -- the host-to-device half of the 41% --
+and `.todo/474` carries that number, the design above and the writer enumeration (now one
+entry longer: `%la-scatter-rows`, `%la-scale` and `%la-adam-step` write in place and
+would need the hook too).
 
 #### The residency design that was weighed, and the enumeration it would need
 
@@ -2007,9 +2121,14 @@ since the map path allocates TWO buffers in its own `finally` and the product's 
 cannot reach it. `GpuDeclineTest` pins that the probe answers without
 throwing, that every decline condition declines rather than throws, that the status table
 is total, that only the context-destroying statuses are sticky, that the PTX is the
-artifact the loader expects with its regeneration command still attached (all TWELVE entry
-points, and the `erf` and `div` cases in `gemm.cu`, which are the only things anywhere
-that check the op-code mirrors), and that `useKernels` is accepted without probing. Its
+artifact the loader expects with its regeneration command still attached (all FOURTEEN
+entry points, and the `erf` and `div` cases in `gemm.cu`, which are the only things anywhere
+that check the op-code mirrors), and that `useKernels` is accepted without probing. Since
+2026-08-22 `GpuTest` also pins the generator fill bit-for-bit against the sequential walk
+at both widths, all three rules and an offset, with its own no-leak run (one buffer, a
+path none of the other leak tests reach), and `GpuDeclineTest` pins its threshold, its
+decline conditions and -- on every machine, it is pure integer arithmetic --
+`rngAdvance` against a 100,000-step sequential walk. Its
 element-wise and strided halves pin the thresholds, the bounds -- for the strided tier the
 bound is over the whole reachable SPAN of a stride vector, not the element count, which is
 what stops a kernel indexing outside the caller's array -- and, the one that matters, that
@@ -2018,7 +2137,7 @@ text and no test anywhere may hand it anything else**: the override is process-w
 read at probe time, so a placeholder would decide what the whole suite's device compiles,
 whichever class happened to run first.
 
-**The four tests that assert on FREE DEVICE MEMORY hold a `@ResourceLock` and their bound
+**The five tests that assert on FREE DEVICE MEMORY hold a `@ResourceLock` and their bound
 was widened to 1.5 GB in phase 3.** `cuMemGetInfo` reports the DEVICE, not the thread:
 two leak tests running at once each read the other's pool churn as their own drift, and
 the JVM backend's fork loads a separate copy of the binding -- its own primary context,
@@ -2053,11 +2172,21 @@ decline, not an omission, and each needs this file's numbers before it is revisi
   execution profile with FULL stacks (the compiled Lisp functions have no line-number
   table, so a profile filtered on `line:` sees only the Java half and reports the wrong
   answer by 6x).
-- **The optimizer update and the RNG are the bottleneck now, and they are not on this
-  seam.** `torch::%o-adam-step` is ~31% of a training step and `linalg:rand`/`randn`
-  another ~14%, both per-element boxed Lisp loops that no acceleration flag reaches. That
-  is todo-473 rather than anything on this seam; it is named here because it is why no
-  further work on the `linalg:` seam will move `train-gpt-soseki.lisp` much.
+- **The optimizer update is on the `--simd` seam (todo-473) and the RNG is on THIS one
+  (2026-08-22), and what is left of a step is the copies.** After the second profile the
+  device copies are 41% of a `--gpu --simd` step, the f32-array-times-double-scalar loops
+  (scalar by the precision contract, `.kb/linalg-simd.md`) 17%, the Adam kernel 8%.
+  Residency is the item with the ceiling (`.todo/474`); a device Adam step would move
+  9.4 MB up and 7 MB back per parameter for a 0.5 ms CPU loop and is not worth it
+  WITHOUT residency.
+- **A zero-copy or pinned-staging route was measured (2026-08-22) and declined** -- the
+  table in "The second profile" is the record: the kernel over host memory would be 4x,
+  and it is unreachable from a movable Java heap; the reachable variant loses to the
+  driver's own pageable copy past 2^18 elements.
+- **`vec:matvec` is not here either** -- the decode loop of `examples/llama2` is one GEMV
+  per weight matrix per token and `--gpu` intercepts `linalg:` members only; the
+  measurement that says a device GEMV with the weights RESIDENT would be a different
+  order of magnitude, and what it would take, is `.todo/475`.
 - **The per-call cost of an FFM downcall inside a native image is still unexplained**
   (above), and nothing may quote a device figure from that build without measuring it
   first.

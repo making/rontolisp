@@ -5,8 +5,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -178,6 +180,58 @@ public final class LinalgGpu {
 		}
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_TRANSPOSE, 2, 2,
 				LinalgGpu::transposeAxes);
+		// The seeded generator's fill (linalg:rand / randn / uniform): no operand goes
+		// up, the draws come back, and the closed-form jump makes it bit-identical to
+		// the sequential walk -- the one member here whose result is byte-for-byte the
+		// CPU's at any size. It was a fifth of a --gpu --simd training step as the
+		// dropout masks (.kb/gpu.md).
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_RNG_FILL, 5, LinalgGpu::rngFill);
+	}
+
+	/**
+	 * {@code (linalg::%la-rng-fill out st mode lo span)} on the device, for a packed
+	 * destination of either width above the size threshold and a state vector in the
+	 * generator's range; everything else declines to whatever was bound before (the
+	 * {@code --simd} kernel or the defun, which agree with it bit for bit).
+	 */
+	private static @Nullable LispVal rngFill(List<LispVal> args) {
+		if (!(args.get(0) instanceof LispFloatArray out) || !(args.get(1) instanceof LispDoubleFloatArray st)
+				|| st.data().length != 3 || !(args.get(2) instanceof LispInteger modeV) || modeV.value() < 0
+				|| modeV.value() > 2) {
+			return null;
+		}
+		Double lo = number(args.get(3)), span = number(args.get(4));
+		if (lo == null || span == null) {
+			return null;
+		}
+		int n = out.totalSize();
+		if (!LinalgGpuKernels.worthRng(n)) {
+			return null;
+		}
+		int[] w = new int[3];
+		for (int i = 0; i < 3; i++) {
+			double v = st.data()[i];
+			int u = (int) v;
+			if (u != v || u < 0 || u >= 1 << 23) {
+				return null;
+			}
+			w[i] = u;
+		}
+		int mode = (int) modeV.value();
+		double[] end = switch (out) {
+			case LispDoubleFloatArray d -> LinalgGpuKernels.rngFill(d.data(), mode, lo, span, w[0], w[1], w[2]);
+			case LispSingleFloatArray f -> LinalgGpuKernels.rngFill(f.data(), mode, lo, span, w[0], w[1], w[2]);
+		};
+		return end == null ? null : new LispDoubleFloatArray(end, new int[] { 3 });
+	}
+
+	/** A double or integer scalar as a double; a ratio (or anything else) declines. */
+	private static @Nullable Double number(LispVal value) {
+		return switch (value) {
+			case LispDouble d -> d.value();
+			case LispInteger i -> (double) i.value();
+			default -> null;
+		};
 	}
 
 	/**

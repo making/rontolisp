@@ -115,7 +115,22 @@ final class WasmLinalgSimdCompiler {
 			// precisely so that this compiler -- which claims linalg: call sites and
 			// nothing else -- can reach them.
 			Map.entry(LispNames.LINALG_RNG_FILL, WasmLinalgSimdRuntimeBuilder.RNG_FILL),
-			Map.entry(LispNames.LINALG_ADAM_STEP, WasmLinalgSimdRuntimeBuilder.ADAM_STEP));
+			Map.entry(LispNames.LINALG_ADAM_STEP, WasmLinalgSimdRuntimeBuilder.ADAM_STEP),
+			// The comparison masks, where, the strided gather behind slice /
+			// broadcast-to, the embedding lookup with its scatter-add adjoint, and the
+			// two halves of torch:clip-grad-norm: pure selects and copies that were a
+			// third of a --gpu --simd training step as boxed odometer walks (.kb/gpu.md).
+			Map.entry(LispNames.LINALG_GREATER, WasmLinalgSimdRuntimeBuilder.COMPARE_GT),
+			Map.entry(LispNames.LINALG_GREATER_EQUAL, WasmLinalgSimdRuntimeBuilder.COMPARE_GE),
+			Map.entry(LispNames.LINALG_LESS, WasmLinalgSimdRuntimeBuilder.COMPARE_LT),
+			Map.entry(LispNames.LINALG_LESS_EQUAL, WasmLinalgSimdRuntimeBuilder.COMPARE_LE),
+			Map.entry(LispNames.LINALG_EQUAL, WasmLinalgSimdRuntimeBuilder.COMPARE_EQ),
+			Map.entry(LispNames.LINALG_WHERE, WasmLinalgSimdRuntimeBuilder.WHERE),
+			Map.entry(LispNames.LINALG_GATHER_STRIDED, WasmLinalgSimdRuntimeBuilder.GATHER_STRIDED),
+			Map.entry(LispNames.LINALG_TAKE_ROWS, WasmLinalgSimdRuntimeBuilder.TAKE_ROWS),
+			Map.entry(LispNames.LINALG_SCATTER_ROWS, WasmLinalgSimdRuntimeBuilder.SCATTER_ROWS),
+			Map.entry(LispNames.LINALG_SUM_SQUARES, WasmLinalgSimdRuntimeBuilder.SUM_SQUARES),
+			Map.entry(LispNames.LINALG_SCALE, WasmLinalgSimdRuntimeBuilder.SCALE));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
@@ -147,8 +162,11 @@ final class WasmLinalgSimdCompiler {
 
 	private static int arity(String member) {
 		return switch (member) {
-			case LispNames.LINALG_IM2COL, LispNames.LINALG_RNG_FILL, LispNames.LINALG_ADAM_STEP -> 5;
+			case LispNames.LINALG_IM2COL, LispNames.LINALG_RNG_FILL, LispNames.LINALG_ADAM_STEP,
+					LispNames.LINALG_GATHER_STRIDED ->
+				5;
 			case LispNames.LINALG_COL2IM -> 6;
+			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS -> 3;
 			default -> UNARY.contains(member) ? 1 : 2;
 		};
 	}

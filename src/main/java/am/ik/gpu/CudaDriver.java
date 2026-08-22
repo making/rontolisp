@@ -57,6 +57,8 @@ final class CudaDriver {
 
 	static final ValueLayout.OfLong L = ValueLayout.JAVA_LONG;
 
+	static final ValueLayout.OfDouble D = ValueLayout.JAVA_DOUBLE;
+
 	static final AddressLayout P = ValueLayout.ADDRESS;
 
 	private static final Linker LINKER = Linker.nativeLinker();

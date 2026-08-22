@@ -434,13 +434,16 @@
         ((null p) (reverse out))
       (setq out (cons (if (= k ax) n (car p)) out)))))
 
-(defun linalg::%la-gather-strided (a od rs base etype)
-  ;; A fresh od-shaped array of width etype filled by walking a's flat row-major
-  ;; index from base, advancing by the INNERMOST-FIRST strides rs through the
-  ;; same odometer carry %la-bcast-loop uses -- O(1) amortized per element, no
-  ;; per-element division. Every strided read in the library (broadcast-to,
-  ;; slice) is this one walk.
-  (let* ((out (linalg::%la-make od 0.0 etype))
+(defun linalg::%la-gather-strided (a od rs base single)
+  ;; A fresh od-shaped array -- single-float when single is non-nil, double
+  ;; otherwise -- filled by walking a's flat row-major index from base,
+  ;; advancing by the INNERMOST-FIRST strides rs through the same odometer
+  ;; carry %la-bcast-loop uses -- O(1) amortized per element, no per-element
+  ;; division. Every strided read in the library (broadcast-to, slice) is this
+  ;; one walk, which is why it is an intercepted member of the --simd seam: the
+  ;; width rides as a flag rather than an element-type symbol so a kernel on
+  ;; any backend can read it without a symbol comparison.
+  (let* ((out (linalg::%la-make od 0.0 (if single 'single-float nil)))
          (n (array-total-size out))
          (rdims (reverse od))
          (idx (linalg::%la-zero-counters (length od)))
@@ -464,7 +467,8 @@
   ;; the same element through its stride-0 entry. a's shape must already
   ;; broadcast to od (the caller computed od from it).
   (linalg::%la-gather-strided a od
-   (linalg::%la-bcast-strides (array-dimensions a) od) 0 (linalg::%la-etype a)))
+   (linalg::%la-bcast-strides (array-dimensions a) od) 0
+   (eq (linalg::%la-etype a) 'single-float)))
 
 (defun linalg::%la-batch-shape (dx dy)
   ;; The broadcast shape of two BATCH dims lists (a stacked matmul's leading
@@ -1009,7 +1013,8 @@
                 (setq od (cons (max 0 (ceiling (/ (- e0 s0) step))) od))
                 (setq os (cons (* step (car pt)) os))
                 (setq base (+ base (* s0 (car pt)))))))))
-    (linalg::%la-gather-strided a (reverse od) os base (linalg::%la-etype a))))
+    (linalg::%la-gather-strided a (reverse od) os base
+                                (eq (linalg::%la-etype a) 'single-float))))
 
 (defun linalg:triu (a &key (k 0))
   ;; The upper triangle of a: a copy with everything BELOW the k-th diagonal
@@ -1670,6 +1675,42 @@
             ((>= k slab))
           (setf (row-major-aref out (+ dst k))
                 (row-major-aref a (+ src k))))))))
+
+(defun linalg::%la-scatter-rows (z g idx)
+  ;; The adjoint of take-rows, in place: slab i of g is ADDED into slab idx[i]
+  ;; of z (any rank >= 1, index values truncated to integers, a repeated index
+  ;; accumulating every contribution). Returns z. An internal member of the
+  ;; same kind as %la-im2col: the loop torch:index-select's backward used to
+  ;; spell inline over row-major-aref, moved here so the --simd seam -- which
+  ;; intercepts linalg: members and nothing else -- can reach it.
+  (let* ((slab (linalg::%la-tail-size (array-dimensions z) 0)) (m (length idx)))
+    (do ((i 0 (+ i 1)))
+        ((>= i m) z)
+      (let ((dst (* (truncate (aref idx i)) slab)) (src (* i slab)))
+        (do ((k 0 (+ k 1)))
+            ((>= k slab))
+          (setf (row-major-aref z (+ dst k))
+           (+ (row-major-aref z (+ dst k)) (row-major-aref g (+ src k)))))))))
+
+(defun linalg::%la-sum-squares (g acc)
+  ;; acc plus the sum of the squares of g's elements, accumulated exactly as
+  ;; torch:clip-grad-norm's total was: a left fold in double from acc, one
+  ;; element at a time, each read widened. An internal member of the same kind
+  ;; as %la-adam-step -- a loop a library ABOVE this one ran per parameter per
+  ;; step, moved here so the --simd seam can reach it. Returns the number.
+  (let ((n (array-total-size g)) (total acc))
+    (do ((k 0 (+ k 1)))
+        ((>= k n) total)
+      (let ((v (row-major-aref g k))) (setq total (+ total (* v v)))))))
+
+(defun linalg::%la-scale (g s)
+  ;; g scaled IN PLACE by the number s, element by element -- the other half of
+  ;; torch:clip-grad-norm, which rewrites the gradients the optimizer is about
+  ;; to read. Returns g.
+  (let ((n (array-total-size g)))
+    (do ((k 0 (+ k 1)))
+        ((>= k n) g)
+      (setf (row-major-aref g k) (* (row-major-aref g k) s)))))
 
 (defun linalg:row (a i)
   ;; The axis-0 slice i of a with axis 0 DROPPED (numpy's x[i] integer

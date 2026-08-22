@@ -295,6 +295,64 @@ class GpuDeclineTest {
 	}
 
 	@Test
+	void aGeneratorFillBelowTheSizeThresholdIsNeverOffered() {
+		assertThat(Gpu.worthRng(1L << 13)).isTrue();
+		assertThat(Gpu.worthRng((1L << 13) - 1)).isFalse();
+		double[] small = new double[64];
+		float[] smallF = new float[64];
+		assertThat(Gpu.rngFill(small, 0, 64, 0, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(smallF, 0, 64, 1, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(small).containsOnly(0.0);
+		assertThat(smallF).containsOnly(0.0f);
+	}
+
+	@Test
+	void everyGeneratorFillDeclineConditionDeclinesRatherThanThrows() {
+		// A mode outside 0..2, a state word outside the generator's range, a fill that
+		// does not fit inside the destination: each declines with the destination
+		// untouched -- on a machine with a device as on one without.
+		int n = 1 << 14;
+		double[] out = new double[n];
+		assertThat(Gpu.rngFill(out, 0, n, 3, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 0, n, -1, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 0, n, 0, 0.0, 1.0, -1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 0, n, 0, 0.0, 1.0, 1, 1 << 23, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 1, n, 0, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 0, n + 1, 0, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, -1, n, 0, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
+	void theClosedFormAdvanceIsTheSequentialWalksEndState() {
+		// Pure integer arithmetic, so it runs on every machine: the end state the device
+		// fill reports must be the state a sequential walk of the same length reaches,
+		// including across a wrap of every modulus and from the seed words linalg:seed
+		// produces.
+		int[] st = { 4321, 8765, 2468 };
+		int[] walk = st.clone();
+		for (long steps = 0; steps <= 100_000; steps++) {
+			if (steps % 997 == 0 || steps < 20) {
+				assertThat(Gpu.rngAdvance(st[0], st[1], st[2], steps)).as("after %d steps", steps).isEqualTo(walk);
+			}
+			walk[0] = 171 * walk[0] % 30269;
+			walk[1] = 172 * walk[1] % 30307;
+			walk[2] = 170 * walk[2] % 30323;
+		}
+		assertThat(Gpu.rngAdvance(1, 1, 1, 0)).isEqualTo(new int[] { 1, 1, 1 });
+		assertThat(Gpu.rngAdvance(0, 5, 7, 12))
+			.isEqualTo(new int[] { 0, 5 * pow(172, 12, 30307) % 30307, 7 * pow(170, 12, 30323) % 30323 });
+	}
+
+	private static int pow(long a, int e, int m) {
+		long r = 1;
+		for (int i = 0; i < e; i++) {
+			r = r * a % m;
+		}
+		return (int) r;
+	}
+
+	@Test
 	void everyStridedDeclineConditionDeclinesRatherThanThrows() {
 		// The bounds are what stop a kernel indexing outside the caller's array: the
 		// kernel walks strides freely, so the library has to bound the whole reachable

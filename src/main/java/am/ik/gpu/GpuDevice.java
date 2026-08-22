@@ -32,8 +32,9 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * @param strided the minimum OUTPUT element count a broadcast or gather is accepted
 	 * at
 	 * @param fold the minimum INPUT element count an axis fold is accepted at
+	 * @param rng the minimum element count a generator fill is accepted at
 	 */
-	record Thresholds(long work, long map, long strided, long fold) {
+	record Thresholds(long work, long map, long strided, long fold, long rng) {
 	}
 
 	/** What was found -- model, architecture, driver -- for {@code description()}. */
@@ -92,5 +93,9 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean fold(int op, double[] a, int oa, double[] c, int oc, int outer, int len, int inner);
 
 	boolean foldF(int op, float[] a, int oa, float[] c, int oc, int outer, int len, int inner);
+
+	boolean rngFill(double[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3);
+
+	boolean rngFillF(float[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3);
 
 }

@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 
 import org.jspecify.annotations.Nullable;
 
+import static am.ik.gpu.CudaDriver.D;
 import static am.ik.gpu.CudaDriver.I;
 import static am.ik.gpu.CudaDriver.L;
 import static am.ik.gpu.CudaDriver.P;
@@ -98,9 +99,28 @@ final class CudaGemm implements GpuDevice {
 	 * element-wise tier lost at equal shapes ({@code .kb/gpu.md}).
 	 */
 	static final String[] KERNELS_STRIDED = { "bcast_f64", "bcast_f32", "gather_f64", "gather_f32", "fold_f64",
-			"fold_f32" };
+			"fold_f32", "rng_fill_f64", "rng_fill_f32" };
 
-	private static final int BCAST_F64 = 0, BCAST_F32 = 1, GATHER_F64 = 2, GATHER_F32 = 3, FOLD_F64 = 4, FOLD_F32 = 5;
+	private static final int BCAST_F64 = 0, BCAST_F32 = 1, GATHER_F64 = 2, GATHER_F32 = 3, FOLD_F64 = 4, FOLD_F32 = 5,
+			RNG_F64 = 6, RNG_F32 = 7;
+
+	/**
+	 * The work one generator element is counted as for the sync decision: three
+	 * square-and-multiply jumps (~31 iterations each) plus the draws themselves -- twelve
+	 * for the Irwin-Hall rule, one otherwise.
+	 */
+	private static final long RNG_FLOPS_PER_ELEMENT = 256, RNG_FLOPS_PER_NORMAL = 1024;
+
+	/**
+	 * How many allocations share one {@code cuMemGetInfo} answer before it is asked
+	 * again. The pre-flight against free memory costs 6-13 us a call on the GB10 (every
+	 * intercepted call pays it, so it was 1.4% of a training run); the answer is re-asked
+	 * after this many allocations, and sooner whenever a request is large against the
+	 * remembered figure -- and the guard the figure serves is unchanged, because a
+	 * request the stale estimate lets through that the device then refuses still lands on
+	 * the failed-allocation trim below.
+	 */
+	private static final int FREE_MEMORY_REFRESH_INTERVAL = 64;
 
 	/**
 	 * Threads per block for the element-wise maps. They are one-dimensional and each
@@ -229,6 +249,16 @@ final class CudaGemm implements GpuDevice {
 	private volatile boolean pooled;
 
 	private volatile boolean usable = true;
+
+	/**
+	 * The last {@code cuMemGetInfo} answer less what has been allocated since, or
+	 * {@code -1} when it must be asked again. A plain field on purpose: two threads
+	 * racing on it can only make the estimate staler, and a stale estimate costs nothing
+	 * but the trim a refused allocation already pays for.
+	 */
+	private long freeEstimate = -1;
+
+	private int allocationsSinceRefresh;
 
 	private CudaGemm(CudaDriver driver, int device, MemorySegment context, MemorySegment module, MemorySegment gemmF64,
 			MemorySegment gemmF32, MemorySegment gemmBatchedF64, MemorySegment gemmBatchedF32, MemorySegment mapF64,
@@ -560,9 +590,10 @@ final class CudaGemm implements GpuDevice {
 	public Thresholds thresholds() {
 		return this.pooled
 				? new Thresholds(Gpu.POOLED_MIN_WORK, Gpu.MAP_POOLED_MIN_ELEMENTS, Gpu.STRIDED_POOLED_MIN_ELEMENTS,
-						Gpu.FOLD_POOLED_MIN_ELEMENTS)
+						Gpu.FOLD_POOLED_MIN_ELEMENTS, Gpu.RNG_POOLED_MIN_ELEMENTS)
 				: new Thresholds(Gpu.UNPOOLED_MIN_WORK, Gpu.MAP_UNPOOLED_MIN_ELEMENTS,
-						Gpu.STRIDED_UNPOOLED_MIN_ELEMENTS, Gpu.FOLD_UNPOOLED_MIN_ELEMENTS);
+						Gpu.STRIDED_UNPOOLED_MIN_ELEMENTS, Gpu.FOLD_UNPOOLED_MIN_ELEMENTS,
+						Gpu.RNG_UNPOOLED_MIN_ELEMENTS);
 	}
 
 	boolean pooled() {
@@ -1097,7 +1128,16 @@ final class CudaGemm implements GpuDevice {
 		for (long size : sizes) {
 			total += size;
 		}
-		long free = freeDeviceMemory(arena);
+		// The pre-flight, amortized: the driver is asked every
+		// FREE_MEMORY_REFRESH_INTERVAL allocations, and sooner when a request is large
+		// against the remembered figure; in between, the figure is decremented by what
+		// was handed out, so the estimate only ever errs on the side of refusing.
+		long free = this.freeEstimate;
+		if (free < 0 || ++this.allocationsSinceRefresh >= FREE_MEMORY_REFRESH_INTERVAL || total > free / 4) {
+			free = freeDeviceMemory(arena);
+			this.freeEstimate = free;
+			this.allocationsSinceRefresh = 0;
+		}
 		if (free >= 0 && total > free - ALLOCATION_HEADROOM) {
 			return false;
 		}
@@ -1110,11 +1150,91 @@ final class CudaGemm implements GpuDevice {
 				// two swapped, a declined product held 78 GB of a 128 GB device.
 				release(buffers);
 				trimMemoryPool();
+				this.freeEstimate = -1;
 				return fail(status);
 			}
 			buffers[i] = out.get(L, 0);
 		}
+		if (free >= 0) {
+			this.freeEstimate = free - total;
+		}
 		return true;
+	}
+
+	/**
+	 * The generator fill: one buffer, no copy up, one launch and the result back -- the
+	 * one member of this library with no operand, which is why its threshold is the
+	 * lowest. The closed-form jump and the draws are {@code gemm.cu}'s; see there.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean rngFill(double[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+		return rngFill(this.strided[RNG_F64], MemorySegment.ofArray(c), (long) oc * Double.BYTES,
+				(long) n * Double.BYTES, n, mode, lo, span, s1, s2, s3);
+	}
+
+	@Override
+	public boolean rngFillF(float[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+		return rngFill(this.strided[RNG_F32], MemorySegment.ofArray(c), (long) oc * Float.BYTES, (long) n * Float.BYTES,
+				n, mode, lo, span, s1, s2, s3);
+	}
+
+	private boolean rngFill(MemorySegment function, MemorySegment heap, long offset, long bytes, int n, int mode,
+			double lo, double span, int s1, int s2, int s3) {
+		if (!this.usable) {
+			return false;
+		}
+		long[] buffers = { 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+				return false;
+			}
+			if (!allocate(arena, buffers, bytes)) {
+				return false;
+			}
+			boolean sync = (long) n
+					* (mode == 1 ? RNG_FLOPS_PER_NORMAL : RNG_FLOPS_PER_ELEMENT) >= this.syncFlopCeiling;
+			// The parameter block: the pointer, three ints, two doubles and three ints,
+			// each in its own slot of its own width.
+			MemorySegment out = arena.allocate(L), count = arena.allocate(I), which = arena.allocate(I),
+					low = arena.allocate(D), range = arena.allocate(D), w1 = arena.allocate(I), w2 = arena.allocate(I),
+					w3 = arena.allocate(I);
+			out.set(L, 0, buffers[0]);
+			count.set(I, 0, n);
+			which.set(I, 0, mode);
+			low.set(D, 0, lo);
+			range.set(D, 0, span);
+			w1.set(I, 0, s1);
+			w2.set(I, 0, s2);
+			w3.set(I, 0, s3);
+			MemorySegment parameters = arena.allocate(P, 8);
+			parameters.setAtIndex(P, 0, out);
+			parameters.setAtIndex(P, 1, count);
+			parameters.setAtIndex(P, 2, which);
+			parameters.setAtIndex(P, 3, low);
+			parameters.setAtIndex(P, 4, range);
+			parameters.setAtIndex(P, 5, w1);
+			parameters.setAtIndex(P, 6, w2);
+			parameters.setAtIndex(P, 7, w3);
+			int status = this.driver.launchKernel(function, (n + STRIDED_BLOCK - 1) / STRIDED_BLOCK, 1, 1,
+					STRIDED_BLOCK, 1, 1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);
+			if (status != CuResult.SUCCESS) {
+				return fail(status);
+			}
+			if (sync) {
+				status = this.driver.ctxSynchronize();
+				if (status != CuResult.SUCCESS) {
+					return fail(status);
+				}
+			}
+			return download(heap, offset, buffers[0], bytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(buffers);
+		}
 	}
 
 	/**

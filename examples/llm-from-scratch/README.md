@@ -121,16 +121,17 @@ output stays byte-identical with the flag and without it.
 It is the shapes in the next section that the flag is for. With
 `chapter03/train-gpt-soseki.lisp` raised to the notebook's own `*n-embd*` 384 and
 `*block-size*` 256 -- the one-line change the file describes -- a training step
-on the JVM class output runs **three to four times faster** with `--gpu --simd`
-than with `--simd` alone (0.89 s -> 0.21 s per step, same machine as above, from
-a 5-step and a 40-step run so setup and sampling fall out of the slope; the same
-program varies by ~15% run to run, so read the ratio rather than the digits).
-**What is left of that step is no longer `linalg`**: about a third of it is the
-AdamW parameter update and another seventh the dropout random numbers, both
-per-element loops written in Lisp inside `torch:` and on no acceleration seam.
-Keeping arrays resident on the device between calls -- the obvious next idea --
-was measured against this program and declined: every device copy in the step is
-under 2% of it.
+on the JVM class output runs **six to eight times faster** with `--gpu --simd`
+than with `--simd` alone (0.80 s -> 0.12 s per step, 0.10-0.14 run to run, same machine as above, from
+a 5-step and a 40-step run so setup and sampling fall out of the slope, medians of
+five interleaved runs; the same program varies by ~15% run to run, so read the
+ratio rather than the digits). It was 0.89 -> 0.21 when the flag first landed;
+since then the AdamW update, the dropout generator, `torch:masked-fill`'s `where`,
+the embedding lookup and its adjoint, and gradient clipping have all moved onto
+the acceleration seams -- and the generator onto the device itself, where it is
+still bit-identical to the CPU's sequence. **What is left of that step is the
+copies**: about forty percent of it is moving arrays to the device and back, and
+keeping them resident between calls is the open item (`.todo/474`).
 
 Note that once a transcendental runs on the device, a program that touches one
 is no longer byte-identical with the flag and without it: the device carries its

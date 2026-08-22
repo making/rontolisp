@@ -671,6 +671,76 @@ class GpuTest {
 	}
 
 	@Test
+	void theGeneratorFillIsBitIdenticalToTheSequentialWalkAtBothWidthsAndEveryRule() {
+		// The whole claim of the member: the closed-form jump puts every element at the
+		// state the sequential walk would have reached, and the draws from there are the
+		// walk's own operations -- so the device fill is byte-for-byte the CPU's at both
+		// widths, for every rule, from an offset, and its reported end state is the
+		// walk's. The size spans a wrap of every modulus many times over.
+		int n = (int) Math.max(Gpu.rngMinElements() * 2, 1 << 16);
+		int s1 = 4321, s2 = 8765, s3 = 2468;
+		for (int mode = 0; mode <= 2; mode++) {
+			double[] expected = new double[n];
+			int[] st = { s1, s2, s3 };
+			for (int k = 0; k < n; k++) {
+				expected[k] = element(mode, -1.0, 3.0, st);
+			}
+			double[] out = new double[n + 3];
+			float[] outF = new float[n + 5];
+			assertThat(Gpu.rngFill(out, 3, n, mode, -1.0, 3.0, s1, s2, s3)).as("mode %d f64", mode).isTrue();
+			assertThat(Gpu.rngFill(outF, 5, n, mode, -1.0, 3.0, s1, s2, s3)).as("mode %d f32", mode).isTrue();
+			for (int k = 0; k < n; k++) {
+				assertThat(out[3 + k]).as("mode %d element %d", mode, k).isEqualTo(expected[k]);
+				assertThat(outF[5 + k]).as("mode %d f32 element %d", mode, k).isEqualTo((float) expected[k]);
+			}
+			assertThat(out[0]).isEqualTo(0.0);
+			assertThat(outF[4]).isEqualTo(0.0f);
+			assertThat(Gpu.rngAdvance(s1, s2, s3, (long) n * (mode == 1 ? 12 : 1))).isEqualTo(st);
+		}
+	}
+
+	/** The sequential rule, as the CPU kernels spell it. */
+	private static double element(int mode, double lo, double span, int[] st) {
+		if (mode == 1) {
+			double acc = 0.0;
+			for (int j = 0; j < 12; j++) {
+				acc = acc + next(st);
+			}
+			return acc - 6.0;
+		}
+		if (mode == 0) {
+			return next(st);
+		}
+		return lo + span * next(st);
+	}
+
+	private static double next(int[] st) {
+		int a = 171 * st[0] % 30269, b = 172 * st[1] % 30307, c = 170 * st[2] % 30323;
+		st[0] = a;
+		st[1] = b;
+		st[2] = c;
+		double u = a / 30269.0 + b / 30307.0 + c / 30323.0;
+		return u >= 2.0 ? u - 2.0 : (u >= 1.0 ? u - 1.0 : u);
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aRunOfGeneratorFillsFreesEveryBufferItAllocates() {
+		// One buffer a call, on a path none of the other leak tests reach.
+		GpuDevice gemm = Gpu.device();
+		assertThat(gemm).isNotNull();
+		int n = 1 << 18;
+		double[] out = new double[n];
+		assertThat(gemm.rngFill(out, 0, n, 1, 0.0, 1.0, 1, 2, 3)).isTrue();
+		long before = gemm.freeDeviceMemory();
+		assertThat(before).isGreaterThan(0);
+		for (int i = 0; i < 1000; i++) {
+			assertThat(gemm.rngFill(out, 0, n, i % 3, 0.0, 1.0, 1, 2, 3)).isTrue();
+		}
+		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
+	}
+
+	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void aRunOfSuccessfulProductsFreesEveryBufferItAllocates() {
 		GpuDevice gemm = Gpu.device();

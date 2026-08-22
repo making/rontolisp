@@ -19,11 +19,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of the {@code linalg:} kernels: it
- * replaces thirty-eight of the {@code linalg.lisp} defuns with native
- * {@link LispFunction}s driving the lane loops in {@link LinalgSimdKernels}. The
- * {@code linalg:} sibling of {@link VecSimd}, deliberately a separate class --
- * {@code vec.lisp} and {@code linalg.lisp} never call each other, so their interceptors
- * do not either. Only the KERNELS are shared.
+ * replaces forty-nine of the {@code linalg.lisp} defuns with native {@link LispFunction}s
+ * driving the lane loops in {@link LinalgSimdKernels}. The {@code linalg:} sibling of
+ * {@link VecSimd}, deliberately a separate class -- {@code vec.lisp} and
+ * {@code linalg.lisp} never call each other, so their interceptors do not either. Only
+ * the KERNELS are shared.
  *
  * <h2>The fallback protocol</h2>
  *
@@ -189,6 +189,41 @@ public final class LinalgSimd {
 		// linalg: names and nothing else -- can reach them.
 		define(globalEnv, evaluator, LispNames.LINALG_ADAM_STEP, 5, LinalgSimd::adamStep);
 		define(globalEnv, evaluator, LispNames.LINALG_RNG_FILL, 5, LinalgSimd::rngFill);
+		// The comparison MASKS: the same three %la-bcast shapes as the arithmetic, with
+		// a 1.0 / 0.0 result. The dropout mask (linalg:greater (linalg:rand shape) p)
+		// ran the boxed emap in every training step (.kb/gpu.md).
+		for (int[] pair : new int[][] { { 0, LinalgSimdKernels.BOP_GT }, { 1, LinalgSimdKernels.BOP_GE },
+				{ 2, LinalgSimdKernels.BOP_LT }, { 3, LinalgSimdKernels.BOP_LE }, { 4, LinalgSimdKernels.BOP_EQ } }) {
+			int bop = pair[1];
+			String member = switch (pair[0]) {
+				case 0 -> LispNames.LINALG_GREATER;
+				case 1 -> LispNames.LINALG_GREATER_EQUAL;
+				case 2 -> LispNames.LINALG_LESS;
+				case 3 -> LispNames.LINALG_LESS_EQUAL;
+				default -> LispNames.LINALG_EQUAL;
+			};
+			Elementwise compare = new Elementwise(bop, (x, y) -> LinalgSimdKernels.compare(bop, x, y),
+					(x, y) -> LinalgSimdKernels.compareF(bop, x, y),
+					(x, sc) -> LinalgSimdKernels.compareScalar(bop, x, sc),
+					(x, sc) -> LinalgSimdKernels.compareScalarF(bop, x, sc),
+					(sc, y) -> LinalgSimdKernels.compareFrom(bop, sc, y),
+					(sc, y) -> LinalgSimdKernels.compareFromF(bop, sc, y));
+			define(globalEnv, evaluator, member, 2, args -> elementwise(compare, args));
+		}
+		// The selects and copies behind torch:masked-fill, torch:slice / torch:cat and
+		// torch:index-select: where over broadcast operands, the one strided read every
+		// slice and broadcast-to is, and the embedding lookup with its scatter-add
+		// adjoint. Pure copies -- bit-identical by construction -- that were a third of
+		// a --gpu --simd training step as boxed odometer walks (.kb/gpu.md).
+		define(globalEnv, evaluator, LispNames.LINALG_WHERE, 3, LinalgSimd::where);
+		define(globalEnv, evaluator, LispNames.LINALG_GATHER_STRIDED, 5, LinalgSimd::gatherStrided);
+		define(globalEnv, evaluator, LispNames.LINALG_TAKE_ROWS, 2, LinalgSimd::takeRows);
+		define(globalEnv, evaluator, LispNames.LINALG_SCATTER_ROWS, 3, LinalgSimd::scatterRows);
+		// The two halves of torch:clip-grad-norm: the left-fold sum of squares over a
+		// gradient and the in-place scale -- moved here from the boxed loops they were,
+		// like the Adam step before them.
+		define(globalEnv, evaluator, LispNames.LINALG_SUM_SQUARES, 2, LinalgSimd::sumSquares);
+		define(globalEnv, evaluator, LispNames.LINALG_SCALE, 2, LinalgSimd::scale);
 	}
 
 	/**
@@ -919,6 +954,251 @@ public final class LinalgSimd {
 			case LispSingleFloatArray a -> LinalgSimdKernels.rngFillF(a.data(), mode, lo, span, w[0], w[1], w[2]);
 		};
 		return new LispDoubleFloatArray(end, new int[] { 3 });
+	}
+
+	// --- where, the strided gather, take-rows and its adjoint --------------------------
+
+	/**
+	 * {@code (linalg:where mask x y)}: the element of {@code x} where the mask is
+	 * non-zero, of {@code y} where it is zero, all three operands packed arrays of either
+	 * width or plain numbers, broadcast together by the numpy rules. The result keeps
+	 * {@code x}'s width when {@code x} is an array, else {@code y}'s, else double -- the
+	 * defun's rule. Declines when no operand is an array (the defun answers a number), on
+	 * a general boxed array, a ratio scalar, or an incompatible broadcast (the defun
+	 * signals its own shape error).
+	 */
+	private static @Nullable LispVal where(List<LispVal> args) {
+		LispVal mv = args.get(0), xv = args.get(1), yv = args.get(2);
+		LispFloatArray m = packed(mv), x = packed(xv), y = packed(yv);
+		if (m == null && x == null && y == null) {
+			return null;
+		}
+		Double ms = m == null ? scalar(mv) : null, xs = x == null ? scalar(xv) : null,
+				ys = y == null ? scalar(yv) : null;
+		if ((m == null && ms == null) || (x == null && xs == null) || (y == null && ys == null)) {
+			return null;
+		}
+		int[] od = null;
+		for (LispFloatArray a : new LispFloatArray[] { m, x, y }) {
+			if (a != null) {
+				od = od == null ? a.dims().clone() : bcastShape(od, a.dims());
+				if (od == null) {
+					return null;
+				}
+			}
+		}
+		if (od == null) {
+			return null;
+		}
+		boolean single = x != null ? x instanceof LispSingleFloatArray
+				: (y != null && y instanceof LispSingleFloatArray);
+		Object out = LinalgSimdKernels.where(data(m), ms == null ? 0.0 : ms,
+				m == null ? null : LinalgSimdKernels.bcastStrides(m.dims(), od), data(x), xs == null ? 0.0 : xs,
+				x == null ? null : LinalgSimdKernels.bcastStrides(x.dims(), od), data(y), ys == null ? 0.0 : ys,
+				y == null ? null : LinalgSimdKernels.bcastStrides(y.dims(), od), od, single);
+		return out instanceof float[] f ? new LispSingleFloatArray(f, od)
+				: new LispDoubleFloatArray((double[]) out, od);
+	}
+
+	/** The raw element store of a packed array, or {@code null} for a null operand. */
+	private static @Nullable Object data(@Nullable LispFloatArray a) {
+		return switch (a) {
+			case null -> null;
+			case LispDoubleFloatArray d -> d.data();
+			case LispSingleFloatArray f -> f.data();
+		};
+	}
+
+	/**
+	 * {@code (linalg::%la-gather-strided a od rs base single)}: a fresh {@code od}-shaped
+	 * array of the flagged width filled from the packed {@code a} by the strided walk.
+	 * Declines a general boxed source, a malformed shape or stride list, and -- the one
+	 * check the defun makes per element as a subscript error -- a walk that would reach
+	 * outside {@code a}: the lowest and highest flat index the odometer visits are
+	 * computed up front from the extents and strides, so a declined call has read nothing
+	 * and the defun signals exactly what it always did.
+	 */
+	private static @Nullable LispVal gatherStrided(List<LispVal> args) {
+		LispFloatArray a = packed(args.get(0));
+		int[] od = shape(args.get(1));
+		int[] rs = ints(args.get(2));
+		Integer base = smallInt(args.get(3));
+		if (a == null || od == null || rs == null || base == null || rs.length != od.length) {
+			return null;
+		}
+		int rank = od.length;
+		int[] s = new int[rank];
+		for (int k = 0; k < rank; k++) {
+			s[k] = rs[rank - 1 - k];
+		}
+		if (!gatherInBounds(od, s, base, a.totalSize())) {
+			return null;
+		}
+		boolean single = !(args.get(4) instanceof LispNil);
+		Object out = LinalgSimdKernels.gatherStrided(java.util.Objects.requireNonNull(data(a)), od, s, base, single);
+		return out instanceof float[] f ? new LispSingleFloatArray(f, od)
+				: new LispDoubleFloatArray((double[]) out, od);
+	}
+
+	/**
+	 * Whether every flat index a strided walk over {@code od} from {@code base} reaches
+	 * lies inside a store of {@code size} elements -- the extremes are the base plus each
+	 * axis's full negative or positive travel, and the element count must fit an
+	 * {@code int}. An empty output walks nothing and is always in bounds.
+	 */
+	static boolean gatherInBounds(int[] od, int[] s, int base, int size) {
+		long total = 1, lo = base, hi = base;
+		for (int k = 0; k < od.length; k++) {
+			total *= od[k];
+			if (!sizeFits(total)) {
+				return false;
+			}
+			long travel = (long) (od[k] - 1) * s[k];
+			if (travel < 0) {
+				lo += travel;
+			}
+			else {
+				hi += travel;
+			}
+		}
+		return total == 0 || (lo >= 0 && hi < size);
+	}
+
+	/** A proper list of small integers (negative allowed), or {@code null}. */
+	private static int @Nullable [] ints(LispVal value) {
+		List<Integer> out = new ArrayList<>();
+		LispVal cursor = value;
+		while (cursor instanceof LispCons cons) {
+			Integer v = smallInt(cons.car());
+			if (v == null) {
+				return null;
+			}
+			out.add(v);
+			cursor = cons.cdr();
+		}
+		if (!(cursor instanceof LispNil)) {
+			return null;
+		}
+		int[] r = new int[out.size()];
+		for (int i = 0; i < r.length; i++) {
+			r[i] = out.get(i);
+		}
+		return r;
+	}
+
+	/**
+	 * An index vector as the defun reads it -- {@code (truncate (aref idx i))} -- as
+	 * {@code int}s, each required to land inside {@code [0, rows)}: a packed vector of
+	 * either width, and anything else (a boxed vector, a negative or out-of-range index,
+	 * which the defun turns into its own subscript error) declines.
+	 */
+	private static int @Nullable [] rowIndexes(LispVal value, int rows) {
+		LispFloatArray idx = packed(value);
+		if (idx == null || idx.dims().length != 1) {
+			return null;
+		}
+		int m = idx.totalSize();
+		int[] out = new int[m];
+		for (int i = 0; i < m; i++) {
+			double v = idx instanceof LispDoubleFloatArray d ? d.data()[i] : ((LispSingleFloatArray) idx).data()[i];
+			if (!(v > -1.0 && v < rows)) {
+				return null;
+			}
+			out[i] = (int) v;
+		}
+		return out;
+	}
+
+	/**
+	 * {@code (linalg:take-rows a idx)}: the axis-0 slabs of the packed {@code a} selected
+	 * by the index vector, as a fresh array of {@code a}'s width.
+	 */
+	private static @Nullable LispVal takeRows(List<LispVal> args) {
+		LispFloatArray a = packed(args.get(0));
+		if (a == null || a.dims().length < 1) {
+			return null;
+		}
+		int[] rows = rowIndexes(args.get(1), a.dims()[0]);
+		if (rows == null) {
+			return null;
+		}
+		int slab = a.dims()[0] == 0 ? 0 : a.totalSize() / a.dims()[0];
+		if (!sizeFits((long) rows.length * slab)) {
+			return null;
+		}
+		int[] od = a.dims().clone();
+		od[0] = rows.length;
+		return switch (a) {
+			case LispDoubleFloatArray d ->
+				new LispDoubleFloatArray(LinalgSimdKernels.takeRows(d.data(), slab, rows), od);
+			case LispSingleFloatArray f ->
+				new LispSingleFloatArray(LinalgSimdKernels.takeRowsF(f.data(), slab, rows), od);
+		};
+	}
+
+	/**
+	 * {@code (linalg::%la-scatter-rows z g idx)}: slab {@code i} of {@code g} added into
+	 * slab {@code idx[i]} of {@code z}, in place, for two SAME-WIDTH packed arrays whose
+	 * slab sizes agree; answers {@code z}. A mixed-width pair, a slab-count mismatch and
+	 * a bad index all decline to the defun, which handles (or signals) them.
+	 */
+	private static @Nullable LispVal scatterRows(List<LispVal> args) {
+		LispFloatArray z = packed(args.get(0));
+		LispFloatArray g = packed(args.get(1));
+		if (z == null || g == null || z.dims().length < 1) {
+			return null;
+		}
+		int[] rows = rowIndexes(args.get(2), z.dims()[0]);
+		if (rows == null) {
+			return null;
+		}
+		int slab = z.dims()[0] == 0 ? 0 : z.totalSize() / z.dims()[0];
+		if ((long) rows.length * slab != g.totalSize()) {
+			return null;
+		}
+		if (z instanceof LispDoubleFloatArray zd && g instanceof LispDoubleFloatArray gd) {
+			LinalgSimdKernels.scatterRows(zd.data(), gd.data(), slab, rows);
+			return z;
+		}
+		if (z instanceof LispSingleFloatArray zf && g instanceof LispSingleFloatArray gf) {
+			LinalgSimdKernels.scatterRowsF(zf.data(), gf.data(), slab, rows);
+			return z;
+		}
+		return null;
+	}
+
+	/**
+	 * {@code (linalg::%la-sum-squares g acc)}: the accumulator plus the sum of the
+	 * squares of a packed array's elements, left-folded in double from {@code acc} --
+	 * answered as a double. A boxed array or a non-double/integer accumulator declines.
+	 */
+	private static @Nullable LispVal sumSquares(List<LispVal> args) {
+		LispFloatArray g = packed(args.get(0));
+		Double acc = scalar(args.get(1));
+		if (g == null || acc == null) {
+			return null;
+		}
+		return new LispDouble(switch (g) {
+			case LispDoubleFloatArray d -> LinalgSimdKernels.sumSquares(d.data(), acc);
+			case LispSingleFloatArray f -> LinalgSimdKernels.sumSquares(f.data(), acc);
+		});
+	}
+
+	/**
+	 * {@code (linalg::%la-scale g s)}: the packed array scaled in place by the number
+	 * {@code s}; answers {@code g}. A boxed array or a ratio scalar declines.
+	 */
+	private static @Nullable LispVal scale(List<LispVal> args) {
+		LispFloatArray g = packed(args.get(0));
+		Double s = scalar(args.get(1));
+		if (g == null || s == null) {
+			return null;
+		}
+		switch (g) {
+			case LispDoubleFloatArray d -> LinalgSimdKernels.scale(d.data(), s);
+			case LispSingleFloatArray f -> LinalgSimdKernels.scale(f.data(), s);
+		}
+		return g;
 	}
 
 	/**

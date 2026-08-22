@@ -49,6 +49,14 @@ final class JvmLinalgGpu {
 			LispNames.LINALG_MATMUL_ND);
 
 	/**
+	 * The seeded generator's fill ({@code linalg::%la-rng-fill}, behind {@code rand} /
+	 * {@code randn} / {@code uniform}), the one member here with no operand to copy up
+	 * and a result that is byte-identical to the CPU's.
+	 */
+	static final String QUALIFIED_RNG_FILL = PackageRegistry.qualifyInternal(LispNames.LINALG_PKG,
+			LispNames.LINALG_RNG_FILL);
+
+	/**
 	 * The element-wise members, each mapped to the bridge method backing it -- which is
 	 * also its {@code ops} key ({@link JvmGpuRuntimeBuilder}).
 	 */
@@ -87,7 +95,7 @@ final class JvmLinalgGpu {
 	 * @return the qualified member names this bridge accelerates
 	 */
 	static List<String> qualifiedMembers() {
-		List<String> names = new ArrayList<>(List.of(QUALIFIED_DOT, QUALIFIED_MATMUL_ND));
+		List<String> names = new ArrayList<>(List.of(QUALIFIED_DOT, QUALIFIED_MATMUL_ND, QUALIFIED_RNG_FILL));
 		for (String member : MAP_KERNELS.keySet()) {
 			names.add(PackageRegistry.qualify(LispNames.LINALG_PKG, member));
 		}
@@ -117,6 +125,9 @@ final class JvmLinalgGpu {
 		}
 		if (LispNames.LINALG_MATMUL_ND.equals(member)) {
 			return JvmGpuRuntimeBuilder.MATMUL_ND;
+		}
+		if (LispNames.LINALG_RNG_FILL.equals(member)) {
+			return JvmGpuRuntimeBuilder.RNG_FILL;
 		}
 		String map = MAP_KERNELS.get(member);
 		return map != null ? map : BIN_KERNELS.get(member);

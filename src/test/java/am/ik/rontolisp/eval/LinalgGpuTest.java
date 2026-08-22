@@ -421,6 +421,47 @@ class LinalgGpuTest {
 	}
 
 	@Test
+	void theGeneratorFillIsByteIdenticalToTheScalarOracleOnTheDevice() {
+		// linalg:seed's promise holds across the device: the closed-form jump reproduces
+		// the sequential walk bit for bit, at both widths and every rule, and the
+		// generator continues where the walk would have -- the scalar draws after a
+		// device fill are the oracle's. (On a device without the member -- Metal -- every
+		// fill declines and the program is identical anyway.)
+		assertMatchesScalarOracle("""
+				(linalg:seed 7)
+				(defparameter *a* (linalg:rand 100000))
+				(defparameter *b* (linalg:randn 50000))
+				(defparameter *c* (linalg:uniform -2 3 70000))
+				(defparameter *d* (linalg:rand '(200 300) :element-type 'single-float))
+				(defparameter *e* (linalg:randn 30000 :element-type 'single-float))
+				(defparameter *f* (linalg:uniform 0.5 1.5 9000 :element-type 'single-float))
+				(list (linalg:to-list (linalg:slice *a* '((8190 8200))))
+				      (linalg:to-list (linalg:slice *b* '((49990 50000))))
+				      (linalg:to-list (linalg:slice *c* '((0 10))))
+				      (linalg:to-list (linalg:slice *d* '((199 200) (290 300))))
+				      (linalg:to-list (linalg:slice *e* '((12340 12350))))
+				      (linalg:to-list (linalg:slice *f* '((8990 9000))))
+				      (linalg::%la-rng-next) (linalg:rand 3) (linalg:choice 10 4))
+				""");
+	}
+
+	@Test
+	void aGeneratorFillReallyRanOnTheDevice() {
+		// The value assertion above would pass on a dead flag: the observable difference
+		// is that the member is BOUND to the device interceptor -- and that a fill below
+		// the threshold, or a state word outside the generator's range, is declined to
+		// what was bound before and answers the same bytes.
+		assertThat(eval("(linalg:zeros 1) #'linalg::%la-rng-fill", true).print())
+			.isEqualTo("#<function LINALG::%LA-RNG-FILL>");
+		assertThat(eval("(linalg:zeros 1) #'linalg::%la-rng-fill", false).print()).isEqualTo("#<lambda>");
+		assertMatchesScalarOracle("(linalg:seed 3) (list (linalg:rand 8191) (linalg::%la-rng-next))");
+		assertMatchesScalarOracle("(linalg:seed 4) (let ((s (linalg::%la-rng-state)))"
+				+ " (setf (aref s 0) -3.0) (linalg::%la-rng-fill (linalg:zeros 20000) s 0 0.0 1.0))");
+		assertMatchesScalarOracle(
+				"(linalg:seed 4) (linalg::%la-rng-fill (linalg:zeros 20000) (linalg::%la-rng-state) 5 0.0 1.0)");
+	}
+
+	@Test
 	void theStridedTierIsBitIdenticalToTheScalarOracle() {
 		// The claim that separates this tier from the element-wise one: a broadcast
 		// binary op, an axis fold and an axes transpose are BIT-IDENTICAL to the defun at

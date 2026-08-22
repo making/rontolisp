@@ -1125,6 +1125,24 @@ final class JvmSimdVectorTemplate {
 
 	private static final int OP_MIN = 5;
 
+	// The comparison MASKS (linalg:greater and its four siblings): the same three shapes
+	// as the arithmetic, a 1.0 / 0.0 result at the first array operand's width, IEEE
+	// comparisons on the widened elements exactly as the %la-bcast lambdas -- so scalar
+	// loops (the lane gates stop at OP_DIV) and bit-identical by construction. NOT
+	// symmetric (a > b is b < a), so the scalar-on-the-left shape runs laEwSD / laEwSF
+	// like the selects do. The dropout mask (linalg:greater (linalg:rand shape) p) is the
+	// shape that put them here.
+
+	private static final int OP_GT = 6;
+
+	private static final int OP_GE = 7;
+
+	private static final int OP_LT = 8;
+
+	private static final int OP_LE = 9;
+
+	private static final int OP_EQ = 10;
+
 	static @Nullable Object laAdd(@Nullable Object a, @Nullable Object b) {
 		return laElementwise(OP_ADD, a, b);
 	}
@@ -1147,6 +1165,26 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object laMinimum(@Nullable Object a, @Nullable Object b) {
 		return laElementwise(OP_MIN, a, b);
+	}
+
+	static @Nullable Object laGreater(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_GT, a, b);
+	}
+
+	static @Nullable Object laGreaterEqual(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_GE, a, b);
+	}
+
+	static @Nullable Object laLess(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_LT, a, b);
+	}
+
+	static @Nullable Object laLessEqual(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_LE, a, b);
+	}
+
+	static @Nullable Object laEqual(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_EQ, a, b);
 	}
 
 	// The named element-wise unary ufuncs: the vec: unary loops at the
@@ -1471,6 +1509,21 @@ final class JvmSimdVectorTemplate {
 		}
 		if (op == OP_MIN) {
 			return a < b ? a : b;
+		}
+		if (op == OP_GT) {
+			return a > b ? 1.0 : 0.0;
+		}
+		if (op == OP_GE) {
+			return a >= b ? 1.0 : 0.0;
+		}
+		if (op == OP_LT) {
+			return a < b ? 1.0 : 0.0;
+		}
+		if (op == OP_LE) {
+			return a <= b ? 1.0 : 0.0;
+		}
+		if (op == OP_EQ) {
+			return a == b ? 1.0 : 0.0;
 		}
 		return a / b;
 	}
@@ -3301,6 +3354,363 @@ final class JvmSimdVectorTemplate {
 	private static RuntimeException mixedWidth() {
 		return new IllegalArgumentException(
 				"vec: operands must share an element type (mixed single-float and double-float)");
+	}
+
+	// --- linalg:where, %la-gather-strided, take-rows and %la-scatter-rows -------------
+	// Pure selects and copies over the in-array header layout: a scalar odometer walk
+	// or a slab copy, no arithmetic but an IEEE `== 0` test and an add, so every one is
+	// bit-identical to the defun at both widths. What they remove is the boxed
+	// row-major-aref per element -- torch:masked-fill (where over a broadcast mask) and
+	// the torch:cat / torch:index-select adjoints (slice, scatter-rows) were a third of
+	// a --gpu --simd training step once linalg: itself was on the device (.kb/gpu.md).
+
+	/**
+	 * {@code (linalg:where mask x y)}: the element of {@code x} where the mask is
+	 * non-zero, of {@code y} where it is zero; every operand a packed array of either
+	 * width or a plain number, broadcast together. The result keeps {@code x}'s width
+	 * when {@code x} is an array, else {@code y}'s, else double. Declines when no operand
+	 * is an array, on a general array or ratio scalar, and on an incompatible broadcast.
+	 */
+	static @Nullable Object laWhere(@Nullable Object m, @Nullable Object x, @Nullable Object y) {
+		boolean ma = laPacked(m), xa = laPacked(x), ya = laPacked(y);
+		if (!ma && !xa && !ya) {
+			return null;
+		}
+		Object ms = ma ? null : laScalar(m), xs = xa ? null : laScalar(x), ys = ya ? null : laScalar(y);
+		if ((!ma && ms == null) || (!xa && xs == null) || (!ya && ys == null)) {
+			return null;
+		}
+		int[] od = null;
+		for (Object o : new Object[] { m, x, y }) {
+			if (laPacked(o)) {
+				od = od == null ? laDims(o) : laBcastShape(od, laDims(o));
+				if (od == null) {
+					return null;
+				}
+			}
+		}
+		if (od == null) {
+			return null;
+		}
+		int rank = od.length;
+		int total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		int[] zero = new int[rank];
+		int[] sm = ma ? laBcastStrides(laDims(m), od) : zero, sx = xa ? laBcastStrides(laDims(x), od) : zero,
+				sy = ya ? laBcastStrides(laDims(y), od) : zero;
+		double[] md = m instanceof double[] v ? v : null, xd = x instanceof double[] v ? v : null,
+				yd = y instanceof double[] v ? v : null;
+		float[] mf = m instanceof float[] v ? v : null, xf = x instanceof float[] v ? v : null,
+				yf = y instanceof float[] v ? v : null;
+		double mv0 = ms == null ? 0.0 : (Double) ms, xv0 = xs == null ? 0.0 : (Double) xs,
+				yv0 = ys == null ? 0.0 : (Double) ys;
+		int om = ma ? 1 + laRank(m) : 0, ox = xa ? 1 + laRank(x) : 0, oy = ya ? 1 + laRank(y) : 0;
+		boolean single = xa ? x instanceof float[] : (ya && y instanceof float[]);
+		int off = 1 + rank;
+		// One of the two is the result and the other an empty sentinel, so the loop
+		// branches on the flag and never on a null.
+		float[] outF = single ? new float[off + total] : new float[0];
+		double[] outD = single ? new double[0] : new double[off + total];
+		if (single) {
+			outF[0] = rank;
+			for (int k = 0; k < rank; k++) {
+				outF[1 + k] = od[k];
+			}
+		}
+		else {
+			outD[0] = rank;
+			for (int k = 0; k < rank; k++) {
+				outD[1 + k] = od[k];
+			}
+		}
+		int[] idx = new int[rank];
+		for (int k = 0; k < total; k++) {
+			double mv = md != null ? md[om] : (mf != null ? mf[om] : mv0);
+			double v = mv == 0.0 ? (yd != null ? yd[oy] : (yf != null ? yf[oy] : yv0))
+					: (xd != null ? xd[ox] : (xf != null ? xf[ox] : xv0));
+			if (single) {
+				outF[off + k] = (float) v;
+			}
+			else {
+				outD[off + k] = v;
+			}
+			for (int a = rank - 1; a >= 0; a--) {
+				idx[a]++;
+				om += sm[a];
+				ox += sx[a];
+				oy += sy[a];
+				if (idx[a] < od[a]) {
+					break;
+				}
+				idx[a] = 0;
+				om -= od[a] * sm[a];
+				ox -= od[a] * sx[a];
+				oy -= od[a] * sy[a];
+			}
+		}
+		return single ? outF : outD;
+	}
+
+	/**
+	 * {@code (linalg::%la-gather-strided a od rs base single)}: a fresh {@code od}-shaped
+	 * array of the flagged width filled from the packed {@code a} by walking its flat
+	 * index from {@code base} through the innermost-first strides {@code rs}. Declines a
+	 * general source, a malformed shape or stride list, and a walk that would reach
+	 * outside {@code a} -- computed up front from the extents and strides, so a declined
+	 * call has read nothing and the defun signals its own subscript error.
+	 */
+	static @Nullable Object laGatherStrided(@Nullable Object a, @Nullable Object odv, @Nullable Object rsv,
+			@Nullable Object basev, @Nullable Object singlev) {
+		if (!laPacked(a) || !(basev instanceof Long bl) || bl < Integer.MIN_VALUE || bl > Integer.MAX_VALUE) {
+			return null;
+		}
+		long[] odl = laShape(odv);
+		int[] rs = laInts(rsv);
+		if (odl == null || rs == null || rs.length != odl.length) {
+			return null;
+		}
+		int rank = odl.length;
+		int[] od = new int[rank];
+		int[] s = new int[rank];
+		long total = 1, lo = bl, hi = bl;
+		for (int k = 0; k < rank; k++) {
+			if (odl[k] > Integer.MAX_VALUE) {
+				return null;
+			}
+			od[k] = (int) odl[k];
+			s[k] = rs[rank - 1 - k];
+			total *= od[k];
+			if (!laSizeFits(total + 1 + rank)) {
+				return null;
+			}
+			long travel = (long) (od[k] - 1) * s[k];
+			if (travel < 0) {
+				lo += travel;
+			}
+			else {
+				hi += travel;
+			}
+		}
+		if (total != 0 && (lo < 0 || hi >= laTotal(a))) {
+			return null;
+		}
+		int base = (int) (long) bl;
+		int n = (int) total;
+		int off = 1 + rank;
+		double[] ad = a instanceof double[] v ? v : new double[0];
+		float[] af = a instanceof float[] v ? v : new float[0];
+		boolean wide = a instanceof double[];
+		int a0 = 1 + laRank(a);
+		boolean single = singlev != null;
+		float[] outF = single ? new float[off + n] : new float[0];
+		double[] outD = single ? new double[0] : new double[off + n];
+		if (single) {
+			outF[0] = rank;
+			for (int k = 0; k < rank; k++) {
+				outF[1 + k] = od[k];
+			}
+		}
+		else {
+			outD[0] = rank;
+			for (int k = 0; k < rank; k++) {
+				outD[1 + k] = od[k];
+			}
+		}
+		int[] idx = new int[rank];
+		int src = a0 + base;
+		for (int k = 0; k < n; k++) {
+			double v = wide ? ad[src] : af[src];
+			if (single) {
+				outF[off + k] = (float) v;
+			}
+			else {
+				outD[off + k] = v;
+			}
+			for (int x = rank - 1; x >= 0; x--) {
+				idx[x]++;
+				src += s[x];
+				if (idx[x] < od[x]) {
+					break;
+				}
+				idx[x] = 0;
+				src -= od[x] * s[x];
+			}
+		}
+		return single ? outF : outD;
+	}
+
+	/**
+	 * {@code (linalg::%la-sum-squares g acc)}: the accumulator plus the sum of the
+	 * squares of the packed {@code g}'s elements, left-folded in double from {@code acc}
+	 * -- {@code torch:clip-grad-norm}'s own order, so byte identity. A boxed array or a
+	 * non-double/integer accumulator declines.
+	 */
+	static @Nullable Object laSumSquares(@Nullable Object g, @Nullable Object accv) {
+		Object acc = laScalar(accv);
+		if (!laPacked(g) || acc == null) {
+			return null;
+		}
+		double total = (Double) acc;
+		if (g instanceof float[] f) {
+			for (int k = 1 + (int) f[0]; k < f.length; k++) {
+				double v = f[k];
+				total = total + v * v;
+			}
+			return total;
+		}
+		double[] d = laDoubles(g);
+		for (int k = 1 + (int) d[0]; k < d.length; k++) {
+			total = total + d[k] * d[k];
+		}
+		return total;
+	}
+
+	/**
+	 * {@code (linalg::%la-scale g s)}: the packed {@code g} scaled in place by the number
+	 * {@code s} (widened multiply, narrowed only on a single-float store); answers
+	 * {@code g}. A boxed array or a ratio declines.
+	 */
+	static @Nullable Object laScale(@Nullable Object g, @Nullable Object sv) {
+		Object s = laScalar(sv);
+		if (!laPacked(g) || s == null) {
+			return null;
+		}
+		double scale = (Double) s;
+		if (g instanceof float[] f) {
+			for (int k = 1 + (int) f[0]; k < f.length; k++) {
+				f[k] = (float) ((double) f[k] * scale);
+			}
+			return f;
+		}
+		double[] d = laDoubles(g);
+		for (int k = 1 + (int) d[0]; k < d.length; k++) {
+			d[k] = d[k] * scale;
+		}
+		return d;
+	}
+
+	/** A proper list of {@code int}s, negative allowed ({@code laShape} forbids them). */
+	private static int @Nullable [] laInts(@Nullable Object list) {
+		int count = 0;
+		Object cursor = list;
+		while (cursor instanceof Object[] cell && cell.length == 2 && cell[0] instanceof Long l
+				&& l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) {
+			count++;
+			cursor = cell[1];
+		}
+		if (cursor != null) {
+			return null;
+		}
+		int[] out = new int[count];
+		Object walk = list;
+		for (int i = 0; i < count; i++) {
+			Object[] cell = (Object[]) java.util.Objects.requireNonNull(walk);
+			out[i] = (int) (long) (Long) java.util.Objects.requireNonNull(cell[0]);
+			walk = cell[1];
+		}
+		return out;
+	}
+
+	/**
+	 * An index vector as the defun reads it -- {@code (truncate (aref idx i))} -- each
+	 * required to land inside {@code [0, rows)}: a packed rank-1 vector of either width;
+	 * a boxed vector, a negative or out-of-range index (the defun's own subscript error)
+	 * declines.
+	 */
+	private static int @Nullable [] laRowIndexes(@Nullable Object idx, int rows) {
+		if (!laPacked(idx) || laRank(idx) != 1) {
+			return null;
+		}
+		int m = laTotal(idx);
+		int[] out = new int[m];
+		for (int i = 0; i < m; i++) {
+			double v = laAt(idx, 2 + i);
+			if (!(v > -1.0 && v < rows)) {
+				return null;
+			}
+			out[i] = (int) v;
+		}
+		return out;
+	}
+
+	/**
+	 * {@code (linalg:take-rows a idx)}: the axis-0 slabs of the packed {@code a} selected
+	 * by the index vector, as a fresh array of {@code a}'s width.
+	 */
+	static @Nullable Object laTakeRows(@Nullable Object a, @Nullable Object idx) {
+		if (!laPacked(a) || laRank(a) < 1) {
+			return null;
+		}
+		int rows0 = laDim(a, 0);
+		int[] rows = laRowIndexes(idx, rows0);
+		if (rows == null) {
+			return null;
+		}
+		int rank = laRank(a);
+		int slab = rows0 == 0 ? 0 : laTotal(a) / rows0;
+		long n = (long) rows.length * slab;
+		if (!laSizeFits(n + 1 + rank)) {
+			return null;
+		}
+		int off = 1 + rank;
+		if (a instanceof float[] src) {
+			float[] out = new float[off + (int) n];
+			System.arraycopy(src, 0, out, 0, off);
+			out[1] = rows.length;
+			for (int i = 0; i < rows.length; i++) {
+				System.arraycopy(src, off + rows[i] * slab, out, off + i * slab, slab);
+			}
+			return out;
+		}
+		double[] src = laDoubles(a);
+		double[] out = new double[off + (int) n];
+		System.arraycopy(src, 0, out, 0, off);
+		out[1] = rows.length;
+		for (int i = 0; i < rows.length; i++) {
+			System.arraycopy(src, off + rows[i] * slab, out, off + i * slab, slab);
+		}
+		return out;
+	}
+
+	/**
+	 * {@code (linalg::%la-scatter-rows z g idx)}: slab {@code i} of {@code g} ADDED into
+	 * slab {@code idx[i]} of {@code z}, in place, for two same-width packed arrays whose
+	 * slab counts agree; answers {@code z}. Widened add, narrowed only on a single-float
+	 * store -- the defun's {@code setf row-major-aref}.
+	 */
+	static @Nullable Object laScatterRows(@Nullable Object z, @Nullable Object g, @Nullable Object idx) {
+		if (!laPacked(z) || !laPacked(g) || laRank(z) < 1 || (z instanceof float[]) != (g instanceof float[])) {
+			return null;
+		}
+		int rows0 = laDim(z, 0);
+		int[] rows = laRowIndexes(idx, rows0);
+		if (rows == null) {
+			return null;
+		}
+		int slab = rows0 == 0 ? 0 : laTotal(z) / rows0;
+		if ((long) rows.length * slab != laTotal(g)) {
+			return null;
+		}
+		int zo = 1 + laRank(z), go = 1 + laRank(g);
+		if (z instanceof float[] zf && g instanceof float[] gf) {
+			for (int i = 0; i < rows.length; i++) {
+				int dst = zo + rows[i] * slab, src = go + i * slab;
+				for (int k = 0; k < slab; k++) {
+					zf[dst + k] = (float) ((double) zf[dst + k] + (double) gf[src + k]);
+				}
+			}
+			return zf;
+		}
+		double[] zd = laDoubles(z), gd = laDoubles(g);
+		for (int i = 0; i < rows.length; i++) {
+			int dst = zo + rows[i] * slab, src = go + i * slab;
+			for (int k = 0; k < slab; k++) {
+				zd[dst + k] = zd[dst + k] + gd[src + k];
+			}
+		}
+		return zd;
 	}
 
 }

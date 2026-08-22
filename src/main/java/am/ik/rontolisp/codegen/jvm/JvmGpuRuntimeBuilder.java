@@ -93,6 +93,9 @@ final class JvmGpuRuntimeBuilder {
 	/** The {@code ops} key of the STACKED (rank &gt;= 3) kernel. */
 	static final String MATMUL_ND = "matmulNd";
 
+	/** The {@code ops} key of the generator fill ({@code linalg::%la-rng-fill}). */
+	static final String RNG_FILL = "rngFill";
+
 	/**
 	 * The {@code ops} keys of the ELEMENT-WISE kernels, one per bridge method. The key is
 	 * the method name, which is what {@link JvmLinalgGpu#kernelKey} composes from the
@@ -182,6 +185,8 @@ final class JvmGpuRuntimeBuilder {
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(MATMUL_ND, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNd"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(RNG_FILL, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuRngFill"), cp.addUtf8(
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		for (String kernel : MAP_KERNELS) {
 			ops.put(kernel, cp.addMethodref(bridgeClass,
 					cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"))));

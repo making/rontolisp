@@ -5031,6 +5031,45 @@ public final class LispNames {
 	public static final String LINALG_MINIMUM = "MINIMUM";
 
 	/**
+	 * {@code linalg:greater}: element-wise {@code a > b} as a 0.0/1.0 mask (numpy
+	 * {@code np.greater}); either operand may be a scalar, and two arrays broadcast. The
+	 * dropout mask {@code (linalg:greater (linalg:rand shape) p)} is the shape that put
+	 * it on the acceleration seam.
+	 */
+	public static final String LINALG_GREATER = "GREATER";
+
+	/** {@code linalg:greater-equal}: element-wise {@code a >= b} as a 0.0/1.0 mask. */
+	public static final String LINALG_GREATER_EQUAL = "GREATER-EQUAL";
+
+	/** {@code linalg:less}: element-wise {@code a < b} as a 0.0/1.0 mask. */
+	public static final String LINALG_LESS = "LESS";
+
+	/** {@code linalg:less-equal}: element-wise {@code a <= b} as a 0.0/1.0 mask. */
+	public static final String LINALG_LESS_EQUAL = "LESS-EQUAL";
+
+	/**
+	 * {@code linalg:equal}: element-wise numeric equality as a 0.0/1.0 mask (one boolean
+	 * for the whole array is {@code linalg:array-equal}, which is never intercepted).
+	 */
+	public static final String LINALG_EQUAL = "EQUAL";
+
+	/**
+	 * {@code linalg:where}: element-wise selection (numpy {@code np.where}) -- the
+	 * element of {@code x} where the mask is non-zero, of {@code y} where it is zero; all
+	 * three operands may be scalars or arrays and broadcast together. It is what
+	 * {@code torch:masked-fill} (the causal attention mask) is built on, which is why it
+	 * is on the acceleration seam.
+	 */
+	public static final String LINALG_WHERE = "WHERE";
+
+	/**
+	 * {@code linalg:take-rows}: the axis-0 slabs of an array selected by an index vector
+	 * (numpy {@code np.take(a, idx, axis=0)}) -- the embedding lookup behind
+	 * {@code torch:index-select}.
+	 */
+	public static final String LINALG_TAKE_ROWS = "TAKE-ROWS";
+
+	/**
 	 * {@code linalg:clip}: element-wise {@code min(max(x, lo), hi)} (numpy
 	 * {@code np.clip} with scalar bounds), defined as the composition
 	 * {@code (linalg:minimum (linalg:maximum a lo) hi)}.
@@ -5097,6 +5136,37 @@ public final class LispNames {
 	 * arguments, and so a member this seam can intercept.
 	 */
 	public static final String LINALG_RNG_FILL = "%LA-RNG-FILL";
+
+	/**
+	 * {@code linalg::%la-gather-strided} (INTERNAL): the one strided read every
+	 * {@code linalg:slice} and every {@code %la-broadcast-to} is -- a fresh array filled
+	 * by walking the source's flat index from a base through per-axis strides, the width
+	 * riding as a flag. Intercepted because the boxed odometer walk was a fifth of a
+	 * {@code --gpu --simd} training step through {@code torch:masked-fill} and the
+	 * {@code torch:cat} adjoint.
+	 */
+	public static final String LINALG_GATHER_STRIDED = "%LA-GATHER-STRIDED";
+
+	/**
+	 * {@code linalg::%la-scatter-rows} (INTERNAL): the adjoint of
+	 * {@link #LINALG_TAKE_ROWS}, in place -- slab {@code i} of the gradient is ADDED into
+	 * slab {@code idx[i]} of the destination. The loop {@code torch:index-select}'s
+	 * backward used to spell inline.
+	 */
+	public static final String LINALG_SCATTER_ROWS = "%LA-SCATTER-ROWS";
+
+	/**
+	 * {@code linalg::%la-sum-squares} (INTERNAL): an accumulator plus the sum of the
+	 * squares of an array's elements, the left fold {@code torch:clip-grad-norm} takes
+	 * over every gradient -- moved onto the acceleration seam from the boxed loop it was.
+	 */
+	public static final String LINALG_SUM_SQUARES = "%LA-SUM-SQUARES";
+
+	/**
+	 * {@code linalg::%la-scale} (INTERNAL): an array scaled IN PLACE by a number, the
+	 * other half of {@code torch:clip-grad-norm}.
+	 */
+	public static final String LINALG_SCALE = "%LA-SCALE";
 
 	/**
 	 * The {@code torch} package name (a PyTorch-style tensor with reverse-mode autograd

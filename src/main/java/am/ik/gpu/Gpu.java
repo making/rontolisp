@@ -171,6 +171,23 @@ public final class Gpu {
 	 */
 	private static final long FOLD_MIN_CELLS = 256;
 
+	/**
+	 * Below this many elements a {@linkplain #rngFill generator fill} declines and the
+	 * CPU's sequential walk wins. A fill has no operand to copy up -- only the result
+	 * comes back -- so its floor is the lowest of the set, and the CPU side costs ~3 ns
+	 * per uniform draw (~36 per Irwin-Hall normal, which is twelve of them). Measured on
+	 * the GB10 ({@code .todo/123-gpu-acceleration/RngCrossover.java}): one uniform draw
+	 * per element is 0.7-0.8x at 2^12 and 1.6-1.8x at 2^13, the normal 4x at 2^12
+	 * already; 2^13 is where every rule wins, and the one threshold serves all three
+	 * ({@code .kb/gpu.md}).
+	 */
+	static final long RNG_POOLED_MIN_ELEMENTS = 1L << 13;
+
+	/**
+	 * The same on a machine without the stream-ordered allocator (one buffer, ~180 us).
+	 */
+	static final long RNG_UNPOOLED_MIN_ELEMENTS = 1L << 15;
+
 	/** The deepest rank {@link #bcast} and {@link #gather} will walk; deeper declines. */
 	private static final int MAX_STRIDED_RANK = 16;
 
@@ -257,6 +274,8 @@ public final class Gpu {
 
 		private static final long FOLD_MIN_ELEMENTS;
 
+		private static final long RNG_MIN_ELEMENTS;
+
 		static {
 			GpuDevice device;
 			String description;
@@ -295,13 +314,15 @@ public final class Gpu {
 			}
 			DEVICE = device;
 			DESCRIPTION = description;
-			GpuDevice.Thresholds thresholds = device == null ? new GpuDevice.Thresholds(POOLED_MIN_WORK,
-					MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS, FOLD_POOLED_MIN_ELEMENTS)
+			GpuDevice.Thresholds thresholds = device == null
+					? new GpuDevice.Thresholds(POOLED_MIN_WORK, MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS,
+							FOLD_POOLED_MIN_ELEMENTS, RNG_POOLED_MIN_ELEMENTS)
 					: device.thresholds();
 			MIN_WORK = thresholds.work();
 			MAP_MIN_ELEMENTS = thresholds.map();
 			STRIDED_MIN_ELEMENTS = thresholds.strided();
 			FOLD_MIN_ELEMENTS = thresholds.fold();
+			RNG_MIN_ELEMENTS = thresholds.rng();
 		}
 
 		/**
@@ -438,6 +459,10 @@ public final class Gpu {
 	 */
 	static long foldMinCells() {
 		return FOLD_MIN_CELLS;
+	}
+
+	static long rngMinElements() {
+		return Probe.RNG_MIN_ELEMENTS;
 	}
 
 	/**
@@ -897,6 +922,114 @@ public final class Gpu {
 	 * The output element count of a strided shape, or -1 when the shape is one this
 	 * library will not walk -- an empty, over-deep or over-large one.
 	 */
+	/**
+	 * Whether a {@linkplain #rngFill generator fill} of {@code n} elements is worth a
+	 * round trip at all -- the driver-free size predicate, re-asked by the call itself.
+	 * @param n how many elements the fill writes
+	 * @return {@code true} when the fill is above the size threshold
+	 */
+	public static boolean worthRng(long n) {
+		return n >= Probe.RNG_MIN_ELEMENTS;
+	}
+
+	/**
+	 * Fills {@code n} elements of {@code out} from the Wichmann-Hill generator in state
+	 * {@code (s1, s2, s3)} -- the seeded generator behind {@code linalg:rand} /
+	 * {@code randn} / {@code uniform}: {@code mode} 0 is one uniform {@code [0, 1)} draw
+	 * per element, 1 the sum of twelve draws minus 6 (the Irwin-Hall normal), 2
+	 * {@code lo + span * draw}. The kernel reproduces the scalar generator operation for
+	 * operation and is BIT-IDENTICAL to a sequential fill at both widths: every element
+	 * starts from the state the closed form {@code a^k s mod m} puts it at, then draws as
+	 * the sequential walk would, and only the store into a single-float result narrows.
+	 * The state the generator ENDS on is the caller's to compute, through
+	 * {@link #rngAdvance}, from the same closed form.
+	 *
+	 * <p>
+	 * Declines a mode outside 0..2, a state word outside {@code [0, 2^23)} (the range the
+	 * generator keeps, and the range in which the integer arithmetic is exact), a fill
+	 * below the size threshold, and one that does not fit inside {@code out}.
+	 * @param out the array the draws are written into
+	 * @param offsetOut the index in {@code out} the fill starts at
+	 * @param n how many elements to fill
+	 * @param mode which element rule, 0..2
+	 * @param lo the lower bound of rule 2
+	 * @param span the range of rule 2
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean rngFill(double[] out, int offsetOut, int n, int mode, double lo, double span, int s1, int s2,
+			int s3) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRng(out.length, offsetOut, n, mode, s1, s2, s3)
+				&& device.rngFill(out, offsetOut, n, mode, lo, span, s1, s2, s3);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #rngFill(double[], int, int, int, double, double, int, int, int)}: the draws
+	 * are computed in double and narrowed on the store, as the scalar fill does.
+	 * @param out the array the draws are written into
+	 * @param offsetOut the index in {@code out} the fill starts at
+	 * @param n how many elements to fill
+	 * @param mode which element rule, 0..2
+	 * @param lo the lower bound of rule 2
+	 * @param span the range of rule 2
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean rngFill(float[] out, int offsetOut, int n, int mode, double lo, double span, int s1, int s2,
+			int s3) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRng(out.length, offsetOut, n, mode, s1, s2, s3)
+				&& device.rngFillF(out, offsetOut, n, mode, lo, span, s1, s2, s3);
+	}
+
+	/**
+	 * The state the generator is in after {@code steps} draws from {@code (s1, s2, s3)}
+	 * -- the host half of {@link #rngFill}, by the same closed form the kernel uses
+	 * ({@code a^k s mod m}, square-and-multiply, exact integer arithmetic), so a fill's
+	 * end state is what a sequential walk would have reached. Pure arithmetic: it touches
+	 * no device and is available on every machine.
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @param steps how many draws to advance by
+	 * @return the three state words after {@code steps} draws
+	 */
+	public static int[] rngAdvance(int s1, int s2, int s3, long steps) {
+		return new int[] { (int) ((long) s1 * modPow(171, steps, 30269) % 30269),
+				(int) ((long) s2 * modPow(172, steps, 30307) % 30307),
+				(int) ((long) s3 * modPow(170, steps, 30323) % 30323) };
+	}
+
+	private static long modPow(long a, long e, long m) {
+		long r = 1, b = a % m;
+		while (e > 0) {
+			if ((e & 1) != 0) {
+				r = r * b % m;
+			}
+			b = b * b % m;
+			e >>= 1;
+		}
+		return r;
+	}
+
+	/**
+	 * The range the generator keeps its words in, and in which {@code a * s} is exact.
+	 */
+	private static final int RNG_STATE_LIMIT = 1 << 23;
+
+	private static boolean offeredRng(long lengthOut, int offsetOut, int n, int mode, int s1, int s2, int s3) {
+		return mode >= 0 && mode <= 2 && n > 0 && n >= Probe.RNG_MIN_ELEMENTS && offsetOut >= 0
+				&& (long) offsetOut + n <= lengthOut && s1 >= 0 && s1 < RNG_STATE_LIMIT && s2 >= 0
+				&& s2 < RNG_STATE_LIMIT && s3 >= 0 && s3 < RNG_STATE_LIMIT;
+	}
+
 	private static long stridedCount(int[] dims) {
 		if (dims.length < 1 || dims.length > MAX_STRIDED_RANK) {
 			return -1;

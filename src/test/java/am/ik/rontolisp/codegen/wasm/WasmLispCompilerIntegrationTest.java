@@ -16106,6 +16106,60 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
+	// The 2026-08-22 selects and copies: the comparison masks (equal dims, a broadcast
+	// pair, a scalar on either side, both widths), where over every operand mix, the
+	// strided gather behind slice (a negative step included), take-rows and its
+	// scatter-add adjoint, clip-grad-norm's two halves -- and their declines (boxed
+	// operands, a ratio accumulator, three numbers), which run the defun.
+	static List<String> selectAndCopySources() {
+		List<String> sources = new ArrayList<>();
+		for (String form : new String[] { "(linalg:equal #d(1.0 2.0 0.0) 0)", "(linalg:greater #f(1.0 2.0 0.0) 0.5)",
+				"(linalg:greater 0.5 #f(1.0 2.0 0.0))", "(linalg:greater-equal #d(1.0 2.0 0.0) #d(1.0 3.0 -1.0))",
+				"(linalg:less #f((1.0 2.0) (3.0 4.0)) #f((2.0 2.0) (2.0 5.0)))",
+				"(linalg:less-equal #d((1.0 2.0) (3.0 4.0)) #d(2.0 3.0))",
+				"(linalg:greater #d((1.0 2.0) (3.0 4.0)) #d(2.0 3.0))", "(linalg:equal 1 2)",
+				"(linalg:greater #d(0.0 -0.0 1.0) -0.0)", "(linalg:equal #f(0.0 -0.0) 0.0)",
+				"(linalg:less-equal #d(1.0 2.0) #f(1.0 3.0))",
+				"(linalg:where #d((0.0 1.0) (1.0 0.0)) 9 #d((1.0 2.0) (3.0 4.0)))",
+				"(linalg:where #d(0.0 1.0) #f((1.0 2.0) (3.0 4.0)) -1.5)", "(linalg:where 1 #d(1.0 2.0) #d(3.0 4.0))",
+				"(linalg:where 0 #d(1.0 2.0) 5)", "(linalg:where #d((1.0) (0.0)) #d(1.0 2.0 3.0) #f(7.0 8.0 9.0))",
+				"(linalg:where 2 3 4)", "(linalg:where #d(-0.0 1.0) #d(1.0 2.0) #d(3.0 4.0))",
+				"(linalg:where #f((1.0 0.0)) #f((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0)))",
+				"(linalg:take-rows #d((1.0 2.0) (3.0 4.0) (5.0 6.0)) #d(2.0 0.0 2.0))",
+				"(linalg:take-rows #f((1.0 2.0) (3.0 4.0)) (linalg:zeros 0))",
+				"(linalg:take-rows #f(((1.0 2.0) (3.0 4.0)) ((5.0 6.0) (7.0 8.0))) #d(1.0 1.0))",
+				"(linalg:take-rows #d((1.0 2.0) (3.0 4.0)) #d(1.7 0.2))",
+				"(linalg:slice #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '(nil (2 0 -1)))",
+				"(linalg:slice #f((1.0 2.0 3.0) (4.0 5.0 6.0)) '((1 2) (0 3 2)))",
+				"(linalg:slice #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '((0 2) (1 1)))",
+				"(linalg:slice #d(((1.0 2.0) (3.0 4.0)) ((5.0 6.0) (7.0 8.0))) '((1 2) nil (-1 nil -1)))",
+				"(linalg::%la-gather-strided #d((1.0 2.0 3.0) (4.0 5.0 6.0)) '(2 2) '(1 3) 1 t)",
+				"(linalg::%la-gather-strided #f((1.0 2.0 3.0) (4.0 5.0 6.0)) '(3) '(2) 0 nil)",
+				"(linalg::%la-scatter-rows (linalg:zeros '(3 2)) #d((1.0 2.0) (3.0 4.0) (5.0 6.0)) #d(2.0 0.0 2.0))",
+				"(linalg::%la-scatter-rows (linalg:zeros '(3 2) :element-type 'single-float)"
+						+ " #f((1.0 2.0) (3.0 4.0) (5.0 6.0)) #d(2.0 0.0 2.0))",
+				"(linalg::%la-sum-squares #d(1.0 2.0 3.0) 0.5)", "(linalg::%la-sum-squares #f(0.1 0.2) 0.0)",
+				"(linalg::%la-sum-squares #d(1.0 2.0) 1/3)", "(linalg::%la-scale #d(1.0 2.0 3.0) 0.5)",
+				"(linalg::%la-scale #f(1.0 2.0 3.0) 0.1)", "(linalg::%la-scale #f(1.0 2.0 3.0) 2)",
+				"(linalg:greater (make-array 3 :initial-element 1) 0)",
+				"(linalg:where (make-array 2 :initial-element 1) #d(1.0 2.0) #d(3.0 4.0))",
+				"(linalg:take-rows (make-array '(2 2) :initial-element 1) #d(1.0))",
+				"(linalg::%la-sum-squares (make-array 2 :initial-element 2) 0.0)",
+				"(linalg:maximum (linalg:expand-dims (linalg:equal (linalg:from-list '(1 2 0 0)) 0) 1)"
+						+ " (linalg:expand-dims (linalg:triu (linalg:ones '(4 4)) :k 1) 0))",
+				"(linalg:where (linalg:expand-dims (linalg:triu (linalg:ones '(3 3)) :k 1) 0) -1.0e9"
+						+ " (linalg:reshape (linalg:arange 0 18 :element-type 'single-float) '(2 3 3)))" }) {
+			sources.add("(print " + form + ")");
+		}
+		return sources;
+	}
+
+	@ParameterizedTest
+	@MethodSource("selectAndCopySources")
+	void wasmGcSimdLinalgSelectsAndCopiesAreByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
+	}
+
 	// The comparison-select ufuncs: array-array at both widths
 	// and rank 2 (lane gt/lt + bitselect), the f64 scalar broadcast on either side
 	// (the lane select), the f32 scalar broadcast against a NOT-f32-representable
