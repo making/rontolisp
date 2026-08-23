@@ -209,6 +209,17 @@ public final class LinalgGpu {
 		// CPU's at any size. It was a fifth of a --gpu --simd training step as the
 		// dropout masks (.kb/gpu.md).
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_RNG_FILL, 5, LinalgGpu::rngFill);
+		// The INDEX tier: the embedding lookup, its scatter-add adjoint and the
+		// cross-entropy pick -- index-driven copies, hence bit-identical, hence members
+		// over a resident operand at any size like the rest of that tier. And the clip
+		// norm's sum of squares, the one member here whose fold ORDER is not the defun's
+		// (.kb/gpu.md, "The index tier and the clip norm").
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_TAKE_ROWS, 2, LinalgGpu::takeRows);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_GATHER, 2, LinalgGpu::pick);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SCATTER_ROWS, 3,
+				LinalgGpu::scatterRows);
+		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SUM_SQUARES, 2,
+				LinalgGpu::sumSquares);
 	}
 
 	/**
@@ -275,6 +286,108 @@ public final class LinalgGpu {
 		double[] y = LinalgGpuKernels.matvec(((LispDoubleFloatArray) w).storage(), ((LispDoubleFloatArray) x).storage(),
 				rows, cols);
 		return y == null ? null : new LispDoubleFloatArray(y, dims);
+	}
+
+	/**
+	 * {@code (linalg:take-rows a idx)} on the device: the axis-0 slabs of a packed array
+	 * named by the index vector, over a RESIDENT table only -- an embedding table is one
+	 * after the optimizer has updated it there, and the lookup is then a launch with no
+	 * copy whose result stays on the device for the layers above. A pure gather, so it is
+	 * the CPU kernel's bits.
+	 */
+	private static @Nullable LispVal takeRows(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		if (a == null || a.dims().length < 1 || a.dims()[0] == 0) {
+			return null;
+		}
+		int[] rows = LinalgSimd.rowIndexes(args.get(1), a.dims()[0]);
+		if (rows == null || rows.length == 0) {
+			return null;
+		}
+		int slab = a.totalSize() / a.dims()[0];
+		int[] od = a.dims().clone();
+		od[0] = rows.length;
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.takeRows(single.storage(), rows, slab);
+			return c == null ? null : new LispSingleFloatArray(c, od);
+		}
+		double[] c = LinalgGpuKernels.takeRows(((LispDoubleFloatArray) a).storage(), rows, slab);
+		return c == null ? null : new LispDoubleFloatArray(c, od);
+	}
+
+	/**
+	 * {@code (linalg:gather a idx)} on the device: one element per row of a packed
+	 * matrix, the column chosen by the index vector -- the cross-entropy pick, over a
+	 * resident matrix (which the log-softmax above it leaves behind) only. A pure gather
+	 * again.
+	 */
+	private static @Nullable LispVal pick(List<LispVal> args) {
+		LispFloatArray a = LinalgSimd.packed(args.get(0));
+		if (a == null || a.dims().length != 2) {
+			return null;
+		}
+		int cols = a.dims()[1];
+		int[] columns = LinalgSimd.rowIndexes(args.get(1), cols);
+		if (columns == null || columns.length != a.dims()[0]) {
+			return null;
+		}
+		int[] od = { columns.length };
+		if (a instanceof LispSingleFloatArray single) {
+			float[] c = LinalgGpuKernels.pick(single.storage(), columns, cols);
+			return c == null ? null : new LispSingleFloatArray(c, od);
+		}
+		double[] c = LinalgGpuKernels.pick(((LispDoubleFloatArray) a).storage(), columns, cols);
+		return c == null ? null : new LispDoubleFloatArray(c, od);
+	}
+
+	/**
+	 * {@code (linalg::%la-scatter-rows z g idx)} on the device, IN PLACE: the adjoint of
+	 * take-rows, offered once either array is resident -- the gradient normally is, and
+	 * {@code z} (a fresh zero table) then stays on the device for the optimizer instead
+	 * of bringing the gradient home. A repeated index accumulates in INDEX order, which
+	 * is the defun's own value: the library sorts the indices by destination rather than
+	 * using atomics, so this is the CPU kernel's bits too. {@code z} is NOT reported
+	 * written -- the device holds it now.
+	 */
+	private static @Nullable LispVal scatterRows(List<LispVal> args) {
+		LispFloatArray z = LinalgSimd.packed(args.get(0));
+		LispFloatArray g = LinalgSimd.packed(args.get(1));
+		if (z == null || g == null || z.getClass() != g.getClass() || z.dims().length < 1 || z.dims()[0] == 0) {
+			return null;
+		}
+		int[] rows = LinalgSimd.rowIndexes(args.get(2), z.dims()[0]);
+		int slab = z.totalSize() / z.dims()[0];
+		if (rows == null || slab < 1 || (long) rows.length * slab != g.totalSize()) {
+			return null;
+		}
+		boolean ran = z instanceof LispSingleFloatArray single
+				? LinalgGpuKernels.scatterRows(single.storage(), ((LispSingleFloatArray) g).storage(), rows, slab)
+				: LinalgGpuKernels.scatterRows(((LispDoubleFloatArray) z).storage(),
+						((LispDoubleFloatArray) g).storage(), rows, slab);
+		return ran ? z : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-sum-squares g acc)} on the device, over a RESIDENT gradient
+	 * only: the first half of {@code torch:clip-grad-norm}, which otherwise reads every
+	 * gradient of the model on the host and is the largest download a lazy training step
+	 * still makes. This is the ONE member of this flag that does not compute the defun's
+	 * arithmetic in the defun's ORDER -- a single left fold has no parallel form -- and
+	 * the break is stated in {@code .kb/gpu.md} rather than hidden: the terms are the
+	 * same and rounded in the same places, the association is by block, and the block
+	 * count is a function of the length so the answer is reproducible.
+	 */
+	private static @Nullable LispVal sumSquares(List<LispVal> args) {
+		LispFloatArray g = LinalgSimd.packed(args.get(0));
+		Double acc = LinalgSimd.scalar(args.get(1));
+		if (g == null || acc == null) {
+			return null;
+		}
+		Double total = switch (g) {
+			case LispSingleFloatArray f -> LinalgGpuKernels.sumSquares(f.storage(), acc);
+			case LispDoubleFloatArray d -> LinalgGpuKernels.sumSquares(d.storage(), acc);
+		};
+		return total == null ? null : new LispDouble(total);
 	}
 
 	/**

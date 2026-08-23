@@ -105,7 +105,13 @@ final class JvmLinalgGpu {
 			Map.entry(LispNames.LINALG_GATHER_STRIDED, JvmGpuRuntimeBuilder.GATHER_STRIDED),
 			Map.entry(LispNames.LINALG_SCALE, "gpuScale"),
 			// The plain (rank-2) transpose; the axes form is in EXT_KERNELS.
-			Map.entry(LispNames.LINALG_TRANSPOSE, "gpuTranspose"));
+			Map.entry(LispNames.LINALG_TRANSPOSE, "gpuTranspose"),
+			// The INDEX tier and the clip norm's sum of squares: the
+			// embedding lookup, its scatter-add adjoint, the cross-entropy pick and the
+			// fold every gradient of the model used to come home for.
+			Map.entry(LispNames.LINALG_TAKE_ROWS, "gpuTakeRows"), Map.entry(LispNames.LINALG_GATHER, "gpuPick"),
+			Map.entry(LispNames.LINALG_SCATTER_ROWS, JvmGpuRuntimeBuilder.SCATTER_ROWS),
+			Map.entry(LispNames.LINALG_SUM_SQUARES, "gpuSumSquares"));
 
 	/**
 	 * The STRIDED tier's EXTENDED (option-form) call shapes -- the axis folds and the

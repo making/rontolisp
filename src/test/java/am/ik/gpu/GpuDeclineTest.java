@@ -528,6 +528,18 @@ class GpuDeclineTest {
 			assertThat(Gpu.copy(af, 0, new int[] { 1 }, new int[] { 0, n }, outF, 0, new int[] { 1 },
 					new int[] { 0, n }, new int[] { n }))
 				.isFalse();
+			// The index tier and the clip norm, resident-only in the same
+			// way: with nothing resident every one of them declines, and the sum answers
+			// null rather than a number the caller would have believed.
+			int[] idx = new int[n / 16];
+			assertThat(Gpu.takeRows(a, 0, n, out, 0, idx, 16)).isFalse();
+			assertThat(Gpu.takeRows(af, 0, n, outF, 0, idx, 16)).isFalse();
+			assertThat(Gpu.pick(a, 0, out, 0, idx, 16)).isFalse();
+			assertThat(Gpu.pick(af, 0, outF, 0, idx, 16)).isFalse();
+			assertThat(Gpu.scatterRows(a, 0, b, 0, idx, n / 16, 16)).isFalse();
+			assertThat(Gpu.scatterRows(af, 0, bf, 0, idx, n / 16, 16)).isFalse();
+			assertThat(Gpu.sumSquares(a, 0, n, 0.5)).isNull();
+			assertThat(Gpu.sumSquares(af, 0, n, 0.5)).isNull();
 		}).doesNotThrowAnyException();
 	}
 

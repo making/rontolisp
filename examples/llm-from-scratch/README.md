@@ -142,15 +142,23 @@ f32 product runs a register-tiled kernel at its large shapes -- and since 2026-0
 device result **stays on the device until something on the host reads it**, so a chain of
 members moves nothing over the link, and the members whose operands are already there
 (the equal-shape and scalar arithmetic, `where`, the Adam step, the reshapes, slices and
-`cat`) run as launches with no copy. Over a longer run the step settles at **0.038 s**
-(steps 40-200: 22 times `--simd`'s 0.85 there), and at **0.024 s** -- 35 times, a
-200-step run in 7 s -- under `java -XX:+UseParallelGC -Xmn4g`. An `nsys` profile of the
-200-step run moves 2.3 GB down in 6737 copies, against the 44 GB and 37534 of the day
-before; what is left of the step is the kernels, the host arrays each result still
-allocates whether or not it is ever read, and gradient clipping's one sum over every
-gradient, which is the host read a training step still makes (`.todo/492`, `.todo/493`).
-The same program varies by about 15% run to run, so read the ratios rather than the
-digits.
+`cat`) run as launches with no copy. Over a longer run the step settles at **0.033 s**
+(steps 40-200: 26 times `--simd`'s 0.85 there), and at about **0.024 s** -- a 200-step run
+in 7 s -- under `java -XX:+UseParallelGC -Xmn4g`. An `nsys` profile of the 200-step run
+moves 2.3 GB down in 6737 copies, against the 44 GB and 37534 of the day before.
+
+Later the same day the last of those copies went too. A 40-step run brought **443 MB home
+in 1200 copies**: gradient clipping's sum over every gradient of the model, the embedding
+lookup and its scatter-add adjoint, the cross-entropy's target-logit pick, and the few
+bias-gradient folds too small to be offered. All five are device members now -- the sum in
+blocks, which is [the one result of this flag that is not the portable definition's own
+arithmetic in its own order](../../doc/en/guides/gpu-acceleration.md#reach-and-precision),
+and the other four bit-identical -- and the same run brings **0.16 MB home in 40 copies**,
+the loss the loop prints. It is worth a tenth of the settled step (0.037 -> 0.033 s over
+steps 40-200, medians of five interleaved rounds) and nothing over the first forty, where
+warmup is most of the run: what is left of the step is the kernels and the host arrays
+each result still allocates whether or not it is ever read. The same program varies by
+about 15% run to run, so read the ratios rather than the digits.
 
 On an Apple M4 Max the same 40-step program at the notebook's shapes (JVM class output,
 2026-08-23) runs at **0.104 s a step under `--gpu --simd`** against 0.70 under `--simd`
@@ -264,8 +272,8 @@ members run there. What is left at this shape, and why the step moved only from 
 6.3 where the notebook-shaped one halved, is the third line of that profile: a fresh
 100 MB host array is still allocated (and zeroed) for every result whether or not anything
 ever reads it, and the collector pays for each of them (20 s of the 145 s of a 13-step
-run were pauses). A host array that is not allocated until something reads it is
-`.todo/492`; until it lands, the shapes that are tested are the shapes to run.
+run were pauses). Until a host array is allocated only when something reads it, the shapes
+that are tested are the shapes to run.
 
 ## The two places this port deliberately differs from the book
 

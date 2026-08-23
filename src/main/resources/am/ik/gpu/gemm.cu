@@ -575,3 +575,107 @@ extern "C" __global__ void copy_f32(const float* A, float* C, int n, int rank, c
 extern "C" __global__ void copy_f64(const double* A, double* C, int n, int rank, const int* meta) {
   copy_strided<double>(A, C, n, rank, meta);
 }
+
+// The INDEX tier: the three members an embedding table and a cross-entropy pick are made
+// of. All three are index-driven copies with no arithmetic to reorder, so all three are
+// bit-identical to the CPU kernels -- which is what lets them be offered over a RESIDENT
+// operand at any size, the way the copy above is: the operand is already here, and the
+// CPU would have had to download it.
+
+// linalg:take-rows (mode 0) and linalg:gather (mode 1) -- the embedding lookup and the
+// cross-entropy "pick the target logit". A pure gather:
+//   mode 0: C[i * slab + k] = A[idx[i] * slab + k], over n = m * slab output elements
+//   mode 1: C[i]            = A[i * slab + idx[i]], over n = m, slab = the row length
+template <typename T>
+__device__ void take(int mode, const T* A, T* C, const int* idx, int n, int slab) {
+  int t = blockIdx.x * blockDim.x + threadIdx.x;
+  if (t >= n) return;
+  if (mode == 0) {
+    int i = t / slab;
+    C[t] = A[(long long) idx[i] * slab + (t - i * slab)];
+  } else {
+    C[t] = A[(long long) t * slab + idx[t]];
+  }
+}
+
+extern "C" __global__ void take_f32(int mode, const float* A, float* C, const int* idx, int n, int slab) {
+  take<float>(mode, A, C, idx, n, slab);
+}
+
+extern "C" __global__ void take_f64(int mode, const double* A, double* C, const int* idx, int n, int slab) {
+  take<double>(mode, A, C, idx, n, slab);
+}
+
+// linalg::%la-scatter-rows, the adjoint of take-rows, IN PLACE: slab i of G is ADDED into
+// slab idx[i] of Z for i ASCENDING, so a REPEATED index -- which a token embedding's
+// gradient is nothing but -- accumulates in index order, and that order is the defun's
+// value rather than an accident of it. Atomics would lose it. A thread per (destination
+// slab, column) keeps it and needs none: the caller hands the indices over already
+// GROUPED by destination (a counting sort; meta is start[rows + 1] followed by the m
+// source slab numbers, ascending inside each group), so thread (r, k) walks its own
+// group and no two threads ever touch one cell. Widen, add, narrow per step, which is
+// what the defun's row-major-aref store does.
+template <typename T>
+__device__ void scatter(T* Z, const T* G, const int* meta, int rows, int slab) {
+  int t = blockIdx.x * blockDim.x + threadIdx.x;
+  if (t >= rows * slab) return;
+  int r = t / slab, k = t - r * slab;
+  int from = meta[r], to = meta[r + 1];
+  if (from == to) return;
+  const int* order = meta + rows + 1;
+  T z = Z[t];
+  for (int j = from; j < to; ++j) {
+    z = (T) ((double) z + (double) G[(long long) order[j] * slab + k]);
+  }
+  Z[t] = z;
+}
+
+extern "C" __global__ void scatter_f32(float* Z, const float* G, const int* meta, int rows, int slab) {
+  scatter<float>(Z, G, meta, rows, slab);
+}
+
+extern "C" __global__ void scatter_f64(double* Z, const double* G, const int* meta, int rows, int slab) {
+  scatter<double>(Z, G, meta, rows, slab);
+}
+
+// linalg::%la-sum-squares, the first half of torch:clip-grad-norm: sum(v * v) over the
+// whole array, in double at both widths. This is the ONE kernel in this file that does
+// not compute the caller's own fold ORDER, and it is a deliberate break rather than an
+// oversight -- the defun's contract is a single left fold, which no parallel reduction
+// keeps, and every alternative was worse than the break (.kb/gpu.md, "The index tier and
+// the clip norm"). Each block folds a grid-stride slice and writes one double partial;
+// the host adds the partials up in block order, so the value is still a pure function of
+// the length. Both steps are _rn intrinsics, so each term is rounded exactly where the
+// defun rounds it and only the ASSOCIATION differs.
+//
+// The launcher MUST use exactly SUMSQ_BLOCK threads per block: the shared array is that
+// long and the grid stride is written in terms of it, so the two are one number in two
+// files (CudaGemm launches this through the strided helper, whose block size is the same
+// 256).
+#define SUMSQ_BLOCK 256
+
+template <typename T>
+__device__ void sumsq(const T* A, double* P, int n) {
+  __shared__ double s[SUMSQ_BLOCK];
+  int t = threadIdx.x;
+  double acc = 0.0;
+  for (long long i = (long long) blockIdx.x * SUMSQ_BLOCK + t; i < n; i += (long long) SUMSQ_BLOCK * gridDim.x) {
+    double v = (double) A[i];
+    acc = __dadd_rn(acc, __dmul_rn(v, v));
+  }
+  s[t] = acc;
+  __syncthreads();
+  for (int w = SUMSQ_BLOCK / 2; w > 0; w >>= 1) {
+    if (t < w) s[t] = __dadd_rn(s[t], s[t + w]);
+    __syncthreads();
+  }
+  if (t == 0) P[blockIdx.x] = s[0];
+}
+
+extern "C" __global__ void sumsq_f32(const float* A, double* P, int n) {
+  sumsq<float>(A, P, n);
+}
+
+extern "C" __global__ void sumsq_f64(const double* A, double* P, int n) {
+  sumsq<double>(A, P, n);
+}

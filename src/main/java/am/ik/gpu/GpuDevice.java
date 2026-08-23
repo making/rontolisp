@@ -163,6 +163,45 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 			int spanNc, int[] dims);
 
 	/**
+	 * The INDEX tier: an index-driven gather, {@code mode} 0 being
+	 * {@code linalg:take-rows} ({@code c[i * slab + k] = a[idx[i] * slab + k]}, over
+	 * {@code n = idx.length * slab} output elements) and {@code mode} 1
+	 * {@code linalg:gather} ({@code c[i] = a[i * slab + idx[i]]}, over {@code n} of
+	 * them). {@code lenA} is how many elements of {@code a} the operand spans, which is
+	 * what residency keys on. A pure copy, so bit-identical to the CPU kernel; offered
+	 * over a resident operand only, like the rest of that tier.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	boolean take(int mode, double[] a, int oa, int lenA, double[] c, int oc, int[] idx, int n, int slab);
+
+	boolean takeF(int mode, float[] a, int oa, int lenA, float[] c, int oc, int[] idx, int n, int slab);
+
+	/**
+	 * The adjoint of {@code take-rows} ({@code linalg::%la-scatter-rows}), IN PLACE: slab
+	 * {@code i} of {@code g} added into slab {@code idx[i]} of {@code z}, with a repeated
+	 * index accumulating in INDEX order. {@code meta} carries the indices already grouped
+	 * by destination -- {@code rows + 1} group starts, then the {@code m} source slab
+	 * numbers ascending inside each group -- which is what keeps that order without
+	 * atomics. Bit-identical to the CPU kernel.
+	 * @return {@code true} when the scatter ran
+	 */
+	boolean scatter(double[] z, int oz, double[] g, int og, int[] meta, int rows, int slab, int m);
+
+	boolean scatterF(float[] z, int oz, float[] g, int og, int[] meta, int rows, int slab, int m);
+
+	/**
+	 * The per-block partials of {@code sum(a[i] * a[i])}, each a double, or {@code null}
+	 * when this call declined -- the device half of {@code linalg::%la-sum-squares},
+	 * behind {@code torch:clip-grad-norm}. The one member of this library that does NOT
+	 * compute the caller's fold order: a single left fold has no parallel form, so the
+	 * association differs and only the per-term rounding is kept ({@code .kb/gpu.md}).
+	 * @return the block partials, or {@code null} on a decline
+	 */
+	double @org.jspecify.annotations.Nullable [] sumSquares(double[] a, int oa, int n);
+
+	double @org.jspecify.annotations.Nullable [] sumSquaresF(float[] a, int oa, int n);
+
+	/**
 	 * Adam's fused update IN PLACE over the parameter, its gradient and the two moments
 	 * -- the resident tier's one writing member, which leaves the three written arrays
 	 * resident. Bit-identical to the CPU's.

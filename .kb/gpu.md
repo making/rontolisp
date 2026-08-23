@@ -1259,7 +1259,9 @@ when a slab may be recycled and when an upload into a recycled slab is safe, the
 ordering the residency design exists to forbid, so it needs the same care the CUDA stream
 ordering got; measure it at the notebook's shapes, where the tie is, before the book's.
 The second is `.todo/492` (no host array for a lazy result), which would halve the
-footprint that puts this machine under pressure; `.todo/493` applies here as on CUDA. The
+footprint that puts this machine under pressure. The index tier and the clip norm
+(todo-493) decline here for the same reason the rest of the lazy design is off: with no
+lazy results there is no download for them to save. The
 probes: `MtlSoftF64.java` and `MtlResidentFloor.java`, beside the todo-477 ones.
 
 ### The JVM class carries BOTH kernel texts
@@ -1334,7 +1336,7 @@ page, split out of the `--simd` guide). Keep the
 intercepted set, the size threshold, the chain order and the precision contract in sync
 with it.
 
-### The intercepted set is TWO product shapes, TWELVE element-wise members, TEN strided ones, the GENERATOR FILL -- and, outside `linalg:`, the GEMV
+### The intercepted set is TWO product shapes, TWELVE element-wise members, TEN strided ones, the GENERATOR FILL, the RESIDENT and INDEX tiers -- and, outside `linalg:`, the GEMV
 
 `linalg:dot` over two packed rank-2 operands of the same width (hence `linalg:matmul` at
 rank 2 and `linalg:solve` transitively); since phase 4a `linalg::%la-matmul-nd`, the
@@ -1348,10 +1350,19 @@ members -- and, since later that day, ONE outside the package: `vec:matvec`, the
 (below, "The GEMV, and the matrix that stays"), installed by `LinalgGpu.installVec` from
 the VEC library's lazy-load hook rather than by `install`, because the two libraries
 load independently and a program may reach either first.
-Nothing else is `defineFunction`ed: `#'linalg:sqrt` and
-`#'linalg:outer` still print `#<lambda>` under the flag, and that they do is an assertion
-rather than a remark (below) -- as is that `#'linalg:sub` now does NOT, which is the
-strided tier's own dead-flag guard.
+
+Since 2026-08-23 the RESIDENT tier joins them -- `sqrt` `abs` `negative` `sign`, the
+binary six and the five comparison masks at an EQUAL or SCALAR shape, `where`,
+`%la-adam-step`, `reshape`, the rank-2 `transpose`, `%la-gather-strided`, `concatenate`,
+`%la-scale` ("A result comes home on first host touch") -- and with it the INDEX tier and
+the clip norm: `take-rows`, `gather`, `%la-scatter-rows`, `%la-sum-squares` ("The index
+tier and the clip norm"). Every one of those is installed UNCONDITIONALLY and declines
+unless an operand is already on the device, so the refusals their measurements recorded
+still hold for a round trip. Forty-four `linalg:` members in all.
+Nothing else is `defineFunction`ed: `#'linalg:outer`, `#'linalg:norm` and
+`#'linalg:matmul` still print `#<lambda>` under the flag, and that they do is an assertion
+rather than a remark (below) -- as is that `#'linalg:sub` and `#'linalg:take-rows` now do
+NOT, which is each tier's own dead-flag guard.
 
 The set is narrower than `--blas`'s in one direction and wider in the other, and both
 differences are measurements rather than staging:
@@ -1380,7 +1391,8 @@ differences are measurements rather than staging:
 The size threshold is `Gpu.worth`'s and nothing else: below `n*m*p = 2^17` -- for a stack,
 below `batch*n*m*p = 2^17`, for an element-wise map below `n = 2^14` ELEMENTS, for a
 broadcast or an axes transpose below `2^15` OUTPUT elements, for an axis fold below `2^17`
-INPUT elements or 256 output cells, for a generator fill below `2^13` elements -- the
+INPUT elements or 256 output cells (32 over a resident operand, `.todo/493`), for a
+generator fill below `2^13` elements -- the
 kernel returns the null sentinel and the CPU path runs, which is why every example in
 the repository is byte-identical with the flag on.
 
@@ -1842,7 +1854,10 @@ declines below **2^15 = 32768 OUTPUT elements**; an axis fold below **2^17 = 131
 elements**, and additionally below **256 output cells** whatever its input size -- a fold
 with one output cell is a single-threaded device loop and loses to any CPU, which is
 exactly what a whole-array `(linalg:sum a)` or a keepdims-less vector reduction is. The
-unpooled floors are 2^17 and 2^19. The sweep both columns come from
+unpooled floors are 2^17 and 2^19. Over a RESIDENT operand the cell floor is one WARP
+instead (32; `FOLD_RESIDENT_MIN_CELLS`, 2026-08-23), because there the CPU alternative is
+not a free walk over the operand but a DOWNLOAD of it -- see "The index tier and the clip
+norm", which is also where that floor's own measurement is. The sweep both columns come from
 (`shaped-baseline.lisp` and `StridedCrossover.java`, same shapes row for row):
 
 | n | CPU bcast f64 / f32 | dev bcast f64 / f32 | CPU fold f64 / f32 | dev fold f64 / f32 | CPU transpose f64 / f32 | dev transpose f64 / f32 |
@@ -2624,15 +2639,15 @@ Metal section: the tier lands on the CPU's bits through binary64 in SOFTWARE, th
 works and is pinned, and the interceptors do not switch it on there, because it measured
 a tie at the notebook's shapes and a loss at the book's (`Gpu.lazyResultsIfWorthwhile`).
 
-**What the profile says is left** (the 40-step run, materializations counted by caller):
+**What the profile said was left** (the 40-step run, materializations counted by caller):
 `torch:clip-grad-norm`'s `%la-sum-squares` reads every gradient -- 7 MB a step, 760
-downloads over 40 steps -- and stays a sequential double fold on the host because its
+downloads over 40 steps -- and stayed a sequential double fold on the host because its
 contract is the defun's order, which a parallel reduction cannot keep; `%la-scale` after
 it runs in place on the device, so the Adam step finds the gradients resident. The
-embedding's `take-rows` / `gather` / `scatter-rows` (small at these shapes, 4.7 MB a step
-at the book's), the few-cell folds of `%t-unbroadcast` (a fold with fewer than 256 output
-cells is declined as a single-threaded device loop, so its big operand comes home), and
-the loss's `mean`. Every one is a follow-up item, not a measurement against this design.
+embedding's `take-rows` / `gather` / `scatter-rows`, and the few-cell folds of
+`%t-unbroadcast` (a fold with fewer than 256 output cells was declined as a
+single-threaded device loop, so its big operand came home). All of them moved the same
+day, which is "The index tier and the clip norm" below; the loss scalar is what is left.
 And the host array of a lazy result is still ALLOCATED -- a zeroed 6 MB Java array per
 activation that may never be read -- which is the representation question
 `[rank, dim..., data...]` makes hard and `.todo/492` holds.
@@ -2667,6 +2682,126 @@ parallel collector, where a 200-step run is 7 s; the download bytes fell ninetee
 the count 5.6-fold (the rest is the host reads listed above, `%la-sum-squares` first). The
 first lazy build, which kept the 1 GB cap, measured 17.1 s for the same 200 steps.
 
+
+#### The index tier and the clip norm (2026-08-23, todo-493)
+
+The round after the lazy results, and the one that finishes them: with results staying on
+the device a 40-step `train-gpt-soseki` at the notebook's shapes still downloaded **443 MB
+in 1200 copies** -- the "what the profile said was left" list above, counted by the caller
+of `_gpuMaterialize`. Five callers, and every one of them a member this file had refused
+for a reason that stopped being true once nothing came home:
+
+| caller | copies / 40 steps | MB | the shape, and why it read on the host |
+|---|---|---|---|
+| `torch:clip-grad-norm` -> `linalg::%la-sum-squares` | 760 | 278.8 | 19 downloads a step -- the model's gradients that were on the device, the largest a `(1536 384)` weight: a sequential double fold whose contract IS the defun's order |
+| `torch:index-select`'s backward -> `linalg::%la-scatter-rows` | 80 | 75.0 | the two embedding gradients, `(1024 384)` and `(256 384)`: a scatter-ADD whose repeated indices make its order its value |
+| `torch::%t-unbroadcast`'s small axis folds | 240 | 45.0 | 6 a step over a `(256 192)` operand -- `inner` is the head width 192, under `FOLD_MIN_CELLS` |
+| `torch:index-select` -> `linalg:take-rows` | 80 | 23.1 | the two embedding TABLES, `(256 384)` and `(138 384)`: an index-driven copy with no device member |
+| `torch:cross-entropy-loss` -> `linalg:gather` (through `_fvAref2`) | 40 | 21.6 | the `(1024 138)` log-softmax, read one element per row by the defun's own loop |
+
+All five moved. What is left of that column is **40 copies and 0.16 MB** -- the loss
+scalar, which a training loop prints and which therefore has to come home.
+
+**The index tier: three members, all bit-identical, all resident-only.** `take_fXX` (one
+kernel, two modes) is `linalg:take-rows` at mode 0 and `linalg:gather` at mode 1, and both
+are pure gathers -- `out[i * slab + k] = a[idx[i] * slab + k]` and
+`out[i] = a[i * cols + idx[i]]` -- so there is no arithmetic to reorder and the CPU
+kernels' bits fall out. `scatter_fXX` is `linalg::%la-scatter-rows`, and it is the one that
+needed a design: the CPU adds slab `i` of the gradient into slab `idx[i]` of the table for
+`i` ASCENDING, and a token embedding's indices repeat (1024 tokens over a 138-character
+vocabulary), so the order is the VALUE and atomics would lose it. The kernel keeps it
+without atomics by turning the parallelism inside out -- **one thread per DESTINATION cell,
+not per source element**: `Gpu.scatterRows` counting-sorts the indices by destination
+first (stably, so each group is ascending) and hands the kernel `start[rows + 1]` followed
+by the grouped source slab numbers, and thread `(r, k)` then walks its own group in the
+defun's order over a cell no other thread touches. It widens, adds and narrows per step,
+which is what the defun's `row-major-aref` store does. All three are offered ONLY over a
+resident operand, at any size, for the reason the rest of the resident tier is: a copy
+cannot pay for a round trip and does not have to.
+
+`scatter-rows` also inverts the traffic. Its destination is a FRESH zero table
+(`%la-like`), so the device pays an upload of 0.2-0.4 MB instead of a download of 1.9 MB --
+and the table then stays resident for the clip and the Adam step, which is where the
+gradient was going anyway.
+
+**The clip norm, and the one break with the defun's order.** `%la-sum-squares` is
+`acc + sum(g*g)` threaded through every gradient of the model -- `torch:clip-grad-norm`
+takes the square root of the total -- and it is the largest host read a lazy step makes. It is also the one member of this library that CANNOT be bit-identical, and
+that is a property of the shape rather than of the effort. Every other reduction here keeps
+its caller's order by giving each output cell one thread and walking it sequentially; a
+whole-array sum has ONE cell, so that trick has nothing to divide. Three ways out were
+considered:
+
+- a **fixed blocked order both sides use** -- change the defun and every CPU kernel to fold
+  in blocks, so the device can match it. Rejected on inspection rather than on effort: no
+  single order is good on both machines. A CPU wants few contiguous accumulators (a blocked
+  order that is one chain per block is still `n` dependent adds, so it is not even faster
+  there); a device wants thousands of grid-strided ones, which on a CPU is either a 1024-way
+  strided walk or an 8 KB accumulator array allocated per call -- and the defun is the
+  cross-backend oracle, which every other backend and every doc example would have had to
+  follow into it.
+- **leave it on the host**, which is what todo-491 did, and is the 278 MB above.
+- **break the order for this one member**, and say so. That is what was built.
+
+The kernel folds a grid-strided slice per block in a `double` accumulator, adds the block
+up in a shared-memory tree, and writes one `double` partial per block; the host adds the
+partials in block order and from the caller's seed. Every term is rounded exactly where the
+defun rounds it (`__dmul_rn`, `__dadd_rn`) -- only the ASSOCIATION differs, and it is the
+better approximation of the two, being a tree. The block count is
+`min(1024, ceil(n / 256))`, a pure function of the length, so the answer is REPRODUCIBLE
+run to run and the partials that come home are at most 8 KB. The precision contract this
+adds is one line: **under `--gpu`, `torch:clip-grad-norm`'s norm is within a few ulps of
+the norm every other backend computes, and is not equal to it.** The flag already breaks
+bit-identity for products and transcendentals; a clip norm is used as a scale.
+
+**The few-cell fold, and why it is not a member on its own.** `FOLD_MIN_CELLS` is 256
+because a fold with fewer output cells is a thin device loop that loses to a CPU that has
+the operand. Over a RESIDENT operand the CPU does not have it -- the alternative is a
+download -- so the floor there is one WARP (`FOLD_RESIDENT_MIN_CELLS` = 32), the point
+below which the launch cannot fill even one. Measured ALONE this was worth nothing: the
+240 copies became 240 copies of 768 bytes instead of 192 KB, because the bias gradient it
+produced was read by `clip-grad-norm` on the very next line. It is worth its 45 MB only
+with the sum on the device too, and the two together are why the column is empty.
+
+**Numbers** (GB10, JVM class output, `train-gpt-soseki` at the notebook's shapes,
+`--gpu --simd`; every time is the median of five INTERLEAVED rounds against a jar built
+from the previous commit, run 5 / 40 / 200 steps):
+
+| | todo-491 (2026-08-23 morning) | the index tier + the clip norm |
+|---|---|---|
+| `_gpuMaterialize` downloads over 40 steps, count / bytes | 1200 / 443 MB | **40 / 0.16 MB** |
+| `cuMemcpyDtoH` over the same run, count / bytes | 1200 / 465 MB | **1120 / 1.8 MB** (760 of them the 8 KB partial blocks) |
+| the 200-step run, whole | 10.05 s | **9.52 s** |
+| steady state, `(t200 - t40) / 160` | 0.0366 s | **0.0329 s** |
+| the whole slope, `(t200 - t5) / 195` | 0.0442 s | **0.0419 s** |
+| per step, `(t40 - t5) / 35` -- the README's metric | 0.0789 s | 0.0831 s |
+| new kernel time over the 40-step run | -- | `sumsq` 5.8 ms / 1080, `take` 0.6 / 120, `scatter` 0.44 / 80, `fold` +6.3 / +240 |
+| CUDA API wall over the 40-step run | 529 ms | 498 ms |
+
+**Read those rows honestly: 10% at the steady state, and NOTHING over the first forty.**
+Both signs reproduced across two independent rounds, so neither is noise on its own. The
+traffic removed is ~11 MB a step, and the CUDA API is about 12 ms of the 40-step run's
+83 ms step (498 ms over 40) -- everything else is HOST: the zeroed array every result
+still allocates and the collector's share of it, which is `.todo/492`. So the ceiling was
+never 50%, and the device side did move the right way (529 -> 498 ms). The first forty
+steps are mostly JIT, and four more members on the hot path is more for C2 to compile
+before the loop settles; that is the best explanation of the row that went the wrong way,
+and it is a hypothesis rather than a measurement. The honest summary is that the change
+buys the steady state and pays for it in warmup. What the empty column buys is not the
+10%: it is that every future kernel, and every host-side saving after it, is now measured
+against a step that does not stop.
+
+**The tests.** `GpuTest.theIndexTierIsOfferedOnlyOverAResidentOperandAndCopiesTheCpuKernelsBits`
+(the library: every member over a resident table against a Java oracle, with repeating
+indices, and every one declining before the table is resident) and
+`theSumOfSquaresFoldsInBlocksAndIsReproducibleWithinAFewUlpsOfTheSequentialSum` (closeness,
+reproducibility, the seed and a slice); `theIndexTierRunsOverAResidentTableAndLandsOnTheCpuKernelsBits`
+on each interceptor, against the same program without the flag, plus
+`theIndexTierDeclinesWithoutAResidentTableAndTheCpuRunsUnchanged` on the interpreter and
+`theIndexTierAndTheClipNormAreInTheEmitGate` on the JVM; and
+`theClipNormFoldsInBlocksOnTheDeviceCloseToTheSequentialSumAndReproducibly` on both, which
+asserts CLOSENESS rather than equality because that is the contract. Metal declines all
+four members and says why: it does not run lazily, so it has no download to save.
 
 ### The chain order, and why the device goes on top
 
@@ -3309,10 +3444,12 @@ decline, not an omission, and each needs this file's numbers before it is revisi
   touch"), which is not a reversal either: it is the case the refusal's measurement never
   had, a launch with no copy. Re-run `ElementwiseCrossover.java` plus
   `elementwise-baseline.lisp` before offering any of them as a round trip.
-- **No device `%la-sum-squares`, `take-rows`, `gather`, `scatter-rows`** -- the host reads
-  a lazy training step still makes -- and **no lazy HOST allocation**: the host array of a
-  result that never comes home is still a zeroed Java array. Both are filed (`.todo/492`,
-  `.todo/493`) with the bytes they cost, under "A result comes home on first host touch".
+- **No lazy HOST allocation**: the host array of a result that never comes home is still a
+  zeroed Java array, which at the book's shapes is 100 MB per result. Filed as
+  `.todo/492`, with the bytes it costs, under "A result comes home on first host touch".
+  Its four neighbours in that list -- `%la-sum-squares`, `take-rows`, `gather`,
+  `scatter-rows` -- were built the same day ("The index tier and the clip norm"), and the
+  clip norm is the ONE member of this flag whose fold order is not the caller's.
 - **No asynchronous command buffers on METAL, and so no lazy results for the
   interceptors there.** Every Metal call commits and waits, so a chain over resident
   operands is the CPU's time plus the device's; lazy results and the resident tier are

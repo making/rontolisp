@@ -1105,7 +1105,7 @@ public final class LinalgSimd {
 	 * either width, and anything else (a boxed vector, a negative or out-of-range index,
 	 * which the defun turns into its own subscript error) declines.
 	 */
-	private static int @Nullable [] rowIndexes(LispVal value, int rows) {
+	static int @Nullable [] rowIndexes(LispVal value, int rows) {
 		LispFloatArray idx = packed(value);
 		if (idx == null || idx.dims().length != 1) {
 			return null;
@@ -1299,7 +1299,7 @@ public final class LinalgSimd {
 	 * A number the kernels can broadcast. Only integers and doubles: a ratio would need
 	 * the defun's exact arithmetic on the scalar side.
 	 */
-	private static @Nullable Double scalar(LispVal value) {
+	static @Nullable Double scalar(LispVal value) {
 		return switch (value) {
 			case LispDouble d -> d.value();
 			case LispInteger i -> (double) i.value();

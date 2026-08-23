@@ -177,26 +177,28 @@ class LinalgGpuTest {
 		// declines on), the three axis folds and the axes transpose -- and the RESIDENT
 		// tier (.todo/491): sqrt / abs / negative / sign, the five comparison masks,
 		// where
-		// and the Adam update, members over a resident operand only.
+		// and the Adam update, members over a resident operand only -- plus the INDEX
+		// tier and the clip norm's sum of squares, resident-only as well.
 		for (String member : new String[] { "add", "sub", "mul", "div", "maximum", "minimum", "sum", "amax", "amin",
 				"transpose", "sqrt", "abs", "negative", "sign", "greater", "greater-equal", "less", "less-equal",
-				"equal", "where", "reshape", "concatenate" }) {
+				"equal", "where", "reshape", "concatenate", "take-rows", "gather" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member)
 				.isEqualTo("#<function LINALG:" + member.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, false).print()).as(member).isEqualTo("#<lambda>");
 		}
-		for (String internal : new String[] { "%la-adam-step", "%la-gather-strided", "%la-scale" }) {
+		for (String internal : new String[] { "%la-adam-step", "%la-gather-strided", "%la-scale", "%la-scatter-rows",
+				"%la-sum-squares" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, true).print()).as(internal)
 				.isEqualTo("#<function LINALG::" + internal.toUpperCase() + ">");
 			assertThat(eval("(linalg:zeros 1) #'linalg::" + internal, false).print()).as(internal)
 				.isEqualTo("#<lambda>");
 		}
-		// Forty linalg: members and no others. matmul, mean, var, softmax, square, relu,
-		// slice, flatten and the exact torch:gelu are accelerated THROUGH them, not
+		// Forty-four linalg: members and no others. matmul, mean, var, softmax, square,
+		// relu, slice, flatten and the exact torch:gelu are accelerated THROUGH them, not
 		// instead of them, so they must still be the library's own lambdas under the
 		// flag.
 		for (String member : new String[] { "matmul", "outer", "norm", "trace", "argmax", "argmin", "softmax", "mean",
-				"var", "take-rows", "slice", "flatten", "stack" }) {
+				"var", "slice", "flatten", "stack" }) {
 			assertThat(eval("(linalg:zeros 1) #'linalg:" + member, true).print()).as(member).isEqualTo("#<lambda>");
 		}
 		// And the one member OUTSIDE linalg: -- vec:matvec, installed when the vec
@@ -1169,6 +1171,112 @@ class LinalgGpuTest {
 		long hits = am.ik.gpu.GpuThresholds.residencyHits();
 		assertMatchesScalarOracle(program);
 		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isEqualTo(hits);
+	}
+
+	/**
+	 * The INDEX tier over a resident table: the embedding lookup, the per-row pick and
+	 * the scatter-add adjoint, all three index-driven copies and all three BIT-IDENTICAL
+	 * to the CPU kernels, so the assertion is equality against the same program without
+	 * the flag. The indices REPEAT, which is where the scatter's order can be seen at
+	 * all.
+	 */
+	@Test
+	void theIndexTierRunsOverAResidentTableAndLandsOnTheCpuKernelsBits() {
+		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		String program = indexTier(side, option());
+		String oracle = output(program, false, false);
+		assertThat(oracle).contains("take ").contains("pick ").contains("scatter ");
+		long hits = am.ik.gpu.GpuThresholds.residencyHits();
+		assertThat(output(program, true, false)).as("--gpu").isEqualTo(oracle);
+		if (am.ik.gpu.GpuThresholds.lazyResultsOn()) {
+			assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits);
+		}
+		assertThat(output(program, true, true)).as("--gpu --simd").isEqualTo(output(program, false, true));
+	}
+
+	@Test
+	void theIndexTierDeclinesWithoutAResidentTableAndTheCpuRunsUnchanged() {
+		// A table the device has never seen: the lookup and its adjoint decline whatever
+		// the size, and the program prints what it prints without the flag.
+		String program = """
+				(defparameter *t* (linalg:reshape (linalg:linspace 0.5 9.5 %d%s) '(%d %d)))
+				(defparameter *i* (let ((v (linalg:zeros '(%d)%s)))
+				                    (dotimes (i %d v) (setf (aref v i) (mod (* i 7) %d)))))
+				(defparameter *z* (linalg:zeros '(%d %d)%s))
+				(list (linalg:sum (linalg:take-rows *t* *i*)) (linalg:sum (linalg:gather *t* *i*))
+				      (linalg:sum (linalg::%%la-scatter-rows *z* (linalg:take-rows *t* *i*) *i*)))
+				""".formatted(MAP_N, option(), 64, MAP_N / 64, 64, option(), 64, 64, 64, MAP_N / 64, option());
+		long hits = am.ik.gpu.GpuThresholds.residencyHits();
+		assertMatchesScalarOracle(program);
+		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isEqualTo(hits);
+	}
+
+	/**
+	 * The one member of this flag whose fold ORDER is not the defun's: a clip norm's sum
+	 * of squares, folded in blocks on the device. So the assertion is NOT equality -- it
+	 * is that the answer is within a few ulps of the sequential fold, that it is the same
+	 * on every run (the block count is a function of the length, not of the schedule),
+	 * and that the scale it produces still rewrites the gradients the same way.
+	 */
+	@Test
+	void theClipNormFoldsInBlocksOnTheDeviceCloseToTheSequentialSumAndReproducibly() {
+		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		String program = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
+				(defparameter *g* (linalg:mul *a* 0.001))
+				(format t "norm ~a~%%" (sqrt (linalg::%%la-sum-squares *g* 0.25)))
+				(linalg::%%la-scale *g* 0.5)
+				(format t "scaled ~a~%%" (sqrt (linalg::%%la-sum-squares *g* 0.0)))
+				""".formatted(side * side + 1, option(), side, side);
+		double[] oracle = numbers(output(program, false, false));
+		double[] device = numbers(output(program, true, false));
+		assertThat(device).hasSameSizeAs(oracle);
+		for (int i = 0; i < oracle.length; i++) {
+			assertThat(device[i]).as("value %d", i).isCloseTo(oracle[i], within(Math.abs(oracle[i]) * 1e-9));
+		}
+		// Reproducible: the same program, the same digits, every time.
+		assertThat(output(program, true, false)).isEqualTo(output(program, true, false));
+	}
+
+	/** The doubles of a printed program's output, in order. */
+	private static double[] numbers(String printed) {
+		java.util.List<Double> values = new java.util.ArrayList<>();
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("-?\\d+\\.\\d+(?:[eEdD]-?\\d+)?").matcher(printed);
+		while (m.find()) {
+			values.add(Double.parseDouble(m.group().replace('d', 'e').replace('D', 'E')));
+		}
+		double[] out = new double[values.size()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = values.get(i);
+		}
+		return out;
+	}
+
+	/**
+	 * The index tier's program: a resident table (a broadcast add makes it one), the
+	 * lookup, the pick, and the scatter-add over an index vector whose values repeat --
+	 * without repeats the accumulation order the kernel keeps would not be visible.
+	 */
+	private static String indexTier(int side, String type) {
+		int n = side * side;
+		return """
+				(defun ix (m k)
+				  (let ((v (linalg:zeros (list m)%s)))
+				    (dotimes (i m v) (setf (aref v i) (mod (* i 7) k)))))
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
+				(defparameter *t* (linalg:add *a* *row*))
+				(defparameter *idx* (ix %d %d))
+				(defparameter *col* (ix %d %d))
+				(defun s (x) (linalg:sum x))
+				(format t "take ~a ~a~%%" (s (linalg:take-rows *t* *idx*))
+				        (linalg:to-list (linalg:slice (linalg:take-rows *t* *idx*) '((2 4) (0 3)))))
+				(format t "pick ~a ~a~%%" (s (linalg:gather *t* *col*))
+				        (linalg:to-list (linalg:slice (linalg:gather *t* *col*) '((0 5)))))
+				(defparameter *z* (linalg:mul *t* 0.5))
+				(format t "scatter ~a ~a~%%"
+				        (s (linalg::%%la-scatter-rows *z* (linalg:take-rows *t* *idx*) *idx*)) (aref *z* 3 4))
+				""".formatted(type, n + 1, type, side, side, side + 1, type, side, 4 * side, side, side, side);
 	}
 
 }

@@ -122,6 +122,12 @@ final class JvmGpuRuntimeBuilder {
 	/** The {@code ops} key of the strided gather behind {@code linalg:slice}. */
 	static final String GATHER_STRIDED = "gatherStrided";
 
+	/**
+	 * The {@code ops} key of the scatter-add adjoint, the index tier's three-argument
+	 * member.
+	 */
+	static final String SCATTER_ROWS = "scatterRows";
+
 	/** The {@code ops} key of the rank-2 kernel. */
 	static final String DOT = "dot";
 
@@ -154,7 +160,7 @@ final class JvmGpuRuntimeBuilder {
 	 */
 	private static final List<String> BINARY_KERNELS = List.of("gpuAdd", "gpuSub", "gpuMul", "gpuDiv", "gpuMaximum",
 			"gpuMinimum", "gpuGreater", "gpuGreaterEqual", "gpuLess", "gpuLessEqual", "gpuEqual", "gpuTransposeAxes",
-			"gpuReshape", "gpuConcatenate", "gpuScale");
+			"gpuReshape", "gpuConcatenate", "gpuScale", "gpuTakeRows", "gpuPick", "gpuSumSquares");
 
 	/**
 	 * The strided tier's three-argument kernels: the axis folds
@@ -244,6 +250,8 @@ final class JvmGpuRuntimeBuilder {
 		ops.put(GATHER_STRIDED, cp
 			.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuGatherStrided"), cp.addUtf8(
 					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ops.put(SCATTER_ROWS, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuScatterRows"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put("gpuTranspose", cp.addMethodref(bridgeClass,
 				cp.addNameAndType(cp.addUtf8("gpuTranspose"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(DOT, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuDot"),

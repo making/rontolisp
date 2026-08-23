@@ -690,6 +690,43 @@ final class MetalGemm implements GpuDevice {
 		return false;
 	}
 
+	/**
+	 * The index tier and the clip norm are CUDA-only. Both halves exist to keep a lazy
+	 * result from coming home, and this backend does not run lazily -- on unified memory
+	 * the copy home is a memcpy, which measured a tie at the notebook's shapes and a loss
+	 * at the book's ({@code .kb/gpu.md}, "Lazy results and the resident tier on Metal")
+	 * -- so there is nothing here for them to save.
+	 */
+	@Override
+	public boolean take(int mode, double[] a, int oa, int lenA, double[] c, int oc, int[] idx, int n, int slab) {
+		return false;
+	}
+
+	@Override
+	public boolean takeF(int mode, float[] a, int oa, int lenA, float[] c, int oc, int[] idx, int n, int slab) {
+		return false;
+	}
+
+	@Override
+	public boolean scatter(double[] z, int oz, double[] g, int og, int[] meta, int rows, int slab, int m) {
+		return false;
+	}
+
+	@Override
+	public boolean scatterF(float[] z, int oz, float[] g, int og, int[] meta, int rows, int slab, int m) {
+		return false;
+	}
+
+	@Override
+	public double @Nullable [] sumSquares(double[] a, int oa, int n) {
+		return null;
+	}
+
+	@Override
+	public double @Nullable [] sumSquaresF(float[] a, int oa, int n) {
+		return null;
+	}
+
 	// --- the single-float half ---------------------------------------------------------
 
 	@Override

@@ -966,4 +966,96 @@ class JvmLinalgGpuAccelCompilerTest {
 		}
 	}
 
+	/**
+	 * The index tier's program, the interpreter test's own: a resident table, the lookup,
+	 * the per-row pick, and the scatter-add over an index vector whose values repeat.
+	 */
+	private static String indexTier(int side, String type) {
+		int n = side * side;
+		return """
+				(defun ix (m k)
+				  (let ((v (linalg:zeros (list m)%s)))
+				    (dotimes (i m v) (setf (aref v i) (mod (* i 7) k)))))
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d%s) '(1 %d)))
+				(defparameter *t* (linalg:add *a* *row*))
+				(defparameter *idx* (ix %d %d))
+				(defparameter *col* (ix %d %d))
+				(defun s (x) (linalg:sum x))
+				(format t "take ~a ~a~%%" (s (linalg:take-rows *t* *idx*))
+				        (linalg:to-list (linalg:slice (linalg:take-rows *t* *idx*) '((2 4) (0 3)))))
+				(format t "pick ~a ~a~%%" (s (linalg:gather *t* *col*))
+				        (linalg:to-list (linalg:slice (linalg:gather *t* *col*) '((0 5)))))
+				(defparameter *z* (linalg:mul *t* 0.5))
+				(format t "scatter ~a ~a~%%"
+				        (s (linalg::%%la-scatter-rows *z* (linalg:take-rows *t* *idx*) *idx*)) (aref *z* 3 4))
+				""".formatted(type, n + 1, type, side, side, side + 1, type, side, 4 * side, side, side, side);
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void theIndexTierRunsOverAResidentTableAndLandsOnTheCpuKernelsBits() throws Exception {
+		// The compiled half of the index tier: the embedding lookup, its
+		// scatter-add adjoint and the cross-entropy pick, all three index-driven copies,
+		// so all three land on the lane kernels' bits.
+		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		String program = indexTier(side, TYPE);
+		String oracle = scalar(program);
+		assertThat(oracle).contains("take ").contains("pick ").contains("scatter ");
+		assertThat(embedsGpuBridge(compile(program, true))).isTrue();
+		assertThat(accel(program)).as("--gpu").isEqualTo(oracle);
+		assertThat(run(compile(program, true, false, true))).as("--gpu --simd")
+			.isEqualTo(run(compile(program, false, false, true)));
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void theClipNormFoldsInBlocksOnTheDeviceCloseToTheSequentialSumAndReproducibly() throws Exception {
+		// The one member of this bridge whose fold ORDER is not the defun's, so the
+		// assertion is closeness rather than equality -- and reproducibility, because the
+		// block count is a function of the length and not of the schedule.
+		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
+		String program = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
+				(defparameter *g* (linalg:mul *a* 0.001))
+				(format t "norm ~a~%%" (sqrt (linalg::%%la-sum-squares *g* 0.25)))
+				(linalg::%%la-scale *g* 0.5)
+				(format t "scaled ~a~%%" (sqrt (linalg::%%la-sum-squares *g* 0.0)))
+				""".formatted(side * side + 1, TYPE, side, side);
+		double[] oracle = numbers(scalar(program));
+		double[] device = numbers(accel(program));
+		assertThat(device).hasSameSizeAs(oracle);
+		for (int i = 0; i < oracle.length; i++) {
+			assertThat(device[i]).as("value %d", i).isCloseTo(oracle[i], within(Math.abs(oracle[i]) * 1e-9));
+		}
+		assertThat(accel(program)).isEqualTo(accel(program));
+	}
+
+	/** The doubles of a printed program's output, in order. */
+	private static double[] numbers(String printed) {
+		java.util.List<Double> values = new java.util.ArrayList<>();
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("-?\\d+\\.\\d+(?:[eEdD]-?\\d+)?").matcher(printed);
+		while (m.find()) {
+			values.add(Double.parseDouble(m.group().replace('d', 'e').replace('D', 'E')));
+		}
+		double[] out = new double[values.size()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = values.get(i);
+		}
+		return out;
+	}
+
+	@Test
+	void theIndexTierAndTheClipNormAreInTheEmitGate() {
+		// A program whose only linalg: call is one of the index tier's members embeds the
+		// bridge: the lookup, the pick, the scatter-add and the sum of squares alone.
+		for (String call : new String[] { "(linalg:take-rows #d((1.0 2.0) (3.0 4.0)) #d(1 0))",
+				"(linalg:gather #d((1.0 2.0) (3.0 4.0)) #d(1 0))",
+				"(linalg::%la-scatter-rows #d((1.0 2.0) (3.0 4.0)) #d((1.0 1.0)) #d(0))",
+				"(linalg::%la-sum-squares #d(1.0 2.0) 0.0)" }) {
+			assertThat(embedsGpuBridge(compile("(print " + call + ")", true))).as(call).isTrue();
+			assertThat(embedsGpuBridge(compile("(print " + call + ")", false))).as(call).isFalse();
+		}
+	}
+
 }

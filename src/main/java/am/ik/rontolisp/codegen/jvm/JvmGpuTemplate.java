@@ -1312,6 +1312,153 @@ final class JvmGpuTemplate {
 	}
 
 	/** A fresh single-float result of the given shape, header written, elements zero. */
+	/**
+	 * {@code (linalg:take-rows a idx)} on the device: the axis-0 slabs of a packed table
+	 * named by the index vector, over a RESIDENT table only -- the INDEX tier, and a pure
+	 * gather, hence the lane kernel's bits.
+	 * @param a the table
+	 * @param idx the index vector
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuTakeRows(@Nullable Object a, @Nullable Object idx) {
+		if (!packed(a) || rank(a) < 1 || !resident(a)) {
+			return null;
+		}
+		int rank = rank(a);
+		int[] d = dims(a, rank);
+		int lenA = (int) count(d);
+		if (d[0] < 1 || lenA < 1) {
+			return null;
+		}
+		int slab = lenA / d[0];
+		int[] rows = rowIndexes(idx, d[0]);
+		if (slab < 1 || rows == null || rows.length == 0) {
+			return null;
+		}
+		int off = 1 + rank;
+		long n = (long) rows.length * slab;
+		if (n > Integer.MAX_VALUE - off || !Gpu.available()) {
+			return null;
+		}
+		int[] od = d.clone();
+		od[0] = rows.length;
+		if (a instanceof float[] x) {
+			float[] c = newLike(od, off + (int) n);
+			return Gpu.takeRows(x, off, lenA, c, off, rows, slab) ? c : null;
+		}
+		double[] x = doubles(a);
+		double[] c = newLikeD(od, off + (int) n);
+		return Gpu.takeRows(x, off, lenA, c, off, rows, slab) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg:gather a idx)} on the device: one element per row of a packed
+	 * matrix, the column chosen by the index vector -- a cross entropy's target-logit
+	 * pick, over a resident matrix only.
+	 * @param a the matrix
+	 * @param idx one column number per row
+	 * @return the packed result, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuPick(@Nullable Object a, @Nullable Object idx) {
+		if (!packed(a) || rank(a) != 2 || !resident(a)) {
+			return null;
+		}
+		int[] d = dims(a, 2);
+		int[] columns = rowIndexes(idx, d[1]);
+		if (columns == null || columns.length != d[0] || !Gpu.available()) {
+			return null;
+		}
+		int[] od = { d[0] };
+		if (a instanceof float[] x) {
+			float[] c = newLike(od, 2 + d[0]);
+			return Gpu.pick(x, 3, c, 2, columns, d[1]) ? c : null;
+		}
+		double[] x = doubles(a);
+		double[] c = newLikeD(od, 2 + d[0]);
+		return Gpu.pick(x, 3, c, 2, columns, d[1]) ? c : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-scatter-rows z g idx)} on the device, IN PLACE: take-rows'
+	 * adjoint, offered once either array is resident, with a repeated index accumulating
+	 * in INDEX order the way the lane kernel's loop does. {@code z} stays on the device
+	 * and must NOT be reported written by the call site.
+	 * @param z the destination table
+	 * @param g the gradient
+	 * @param idx the destination slab of each of {@code g}'s
+	 * @return {@code z}, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuScatterRows(@Nullable Object z, @Nullable Object g, @Nullable Object idx) {
+		if (!packed(z) || !packed(g)
+				|| java.util.Objects.requireNonNull(z).getClass() != java.util.Objects.requireNonNull(g).getClass()
+				|| rank(z) < 1) {
+			return null;
+		}
+		int rankZ = rank(z), rankG = rank(g);
+		int[] dz = dims(z, rankZ);
+		int lenZ = (int) count(dz);
+		if (dz[0] < 1 || lenZ < 1) {
+			return null;
+		}
+		int slab = lenZ / dz[0];
+		int[] rows = rowIndexes(idx, dz[0]);
+		if (slab < 1 || rows == null || (long) rows.length * slab != count(dims(g, rankG)) || !Gpu.available()) {
+			return null;
+		}
+		boolean ran = z instanceof float[] x ? Gpu.scatterRows(x, 1 + rankZ, floats(g), 1 + rankG, rows, dz[0], slab)
+				: Gpu.scatterRows(doubles(z), 1 + rankZ, doubles(g), 1 + rankG, rows, dz[0], slab);
+		return ran ? z : null;
+	}
+
+	/**
+	 * {@code (linalg::%la-sum-squares g acc)} on the device, over a RESIDENT gradient
+	 * only -- the first half of {@code torch:clip-grad-norm}, and the one member of this
+	 * bridge whose fold ORDER is not the defun's ({@code .kb/gpu.md}).
+	 * @param g the gradient
+	 * @param accv the accumulator
+	 * @return the total as a boxed double, or {@code null} when the device declined it
+	 */
+	static @Nullable Object gpuSumSquares(@Nullable Object g, @Nullable Object accv) {
+		Double acc = scalar(accv);
+		if (!packed(g) || acc == null || rank(g) < 1 || !resident(g) || !Gpu.available()) {
+			return null;
+		}
+		int off = 1 + rank(g);
+		int n = length(g) - off;
+		if (n < 1) {
+			return null;
+		}
+		return g instanceof float[] x ? Gpu.sumSquares(x, off, n, acc) : Gpu.sumSquares(doubles(g), off, n, acc);
+	}
+
+	/**
+	 * An index vector as the defun reads it -- {@code (truncate (aref idx i))} -- as
+	 * {@code int}s, each required to land inside {@code [0, bound)}; anything else
+	 * declines. The vector is MATERIALIZED first: it is read here on the host, and a lazy
+	 * result the device still holds the only copy of would otherwise read as zeros
+	 * ({@code .kb/gpu.md}, "A result comes home on first host touch").
+	 */
+	private static int @Nullable [] rowIndexes(@Nullable Object idx, int bound) {
+		if (!packed(idx) || rank(idx) != 1) {
+			return null;
+		}
+		Gpu.materialize(java.util.Objects.requireNonNull(idx));
+		int off = 2;
+		int m = length(idx) - off;
+		if (m < 1) {
+			return null;
+		}
+		int[] out = new int[m];
+		for (int i = 0; i < m; i++) {
+			double v = idx instanceof float[] f ? f[off + i] : doubles(idx)[off + i];
+			if (!(v > -1.0 && v < bound)) {
+				return null;
+			}
+			out[i] = (int) v;
+		}
+		return out;
+	}
+
 	private static float[] newLike(int[] od, int length) {
 		float[] c = new float[length];
 		c[0] = od.length;

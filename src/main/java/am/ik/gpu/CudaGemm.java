@@ -121,10 +121,21 @@ final class CudaGemm implements GpuDevice {
 	 * that is ALREADY on the device, and that is the only way {@link Gpu} offers them.
 	 */
 	static final String[] KERNELS_RESIDENT = { "zip_f64", "zip_f32", "scal_f64", "scal_f32", "where_f64", "where_f32",
-			"adam_f64", "adam_f32", "copy_f64", "copy_f32" };
+			"adam_f64", "adam_f32", "copy_f64", "copy_f32", "take_f64", "take_f32", "scatter_f64", "scatter_f32",
+			"sumsq_f64", "sumsq_f32" };
 
 	private static final int ZIP_F64 = 0, ZIP_F32 = 1, SCAL_F64 = 2, SCAL_F32 = 3, WHERE_F64 = 4, WHERE_F32 = 5,
-			ADAM_F64 = 6, ADAM_F32 = 7, COPY_F64 = 8, COPY_F32 = 9;
+			ADAM_F64 = 6, ADAM_F32 = 7, COPY_F64 = 8, COPY_F32 = 9, TAKE_F64 = 10, TAKE_F32 = 11, SCATTER_F64 = 12,
+			SCATTER_F32 = 13, SUMSQ_F64 = 14, SUMSQ_F32 = 15;
+
+	/**
+	 * Threads per block of the sum-of-squares reduction, and the most blocks it is ever
+	 * launched with. The block size is {@link #STRIDED_BLOCK} so that one launch helper
+	 * serves both, and the block count is capped so the partials that come home are at
+	 * most 8 KB whatever the operand -- and so that the number of them, hence the order
+	 * the host adds them in, is a pure function of the length.
+	 */
+	private static final int SUMSQ_MAX_BLOCKS = 1024;
 
 	/** The stand-in for a scalar operand of the three-way select; never resident. */
 	private static final Object NO_ARRAY = new Object();
@@ -2192,6 +2203,183 @@ final class CudaGemm implements GpuDevice {
 		finally {
 			release(owned);
 		}
+	}
+
+	/**
+	 * The embedding lookup and the cross-entropy pick -- {@code linalg:take-rows} at
+	 * {@code mode} 0 and {@code linalg:gather} at 1 -- as an index-driven gather. A pure
+	 * copy, so bit-identical to the CPU kernels.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean take(int mode, double[] a, int oa, int lenA, double[] c, int oc, int[] idx, int n, int slab) {
+		return take(mode, MemorySegment.ofArray(a), a, oa, lenA, MemorySegment.ofArray(c), c, oc, idx, n, slab,
+				Double.BYTES, this.resident[TAKE_F64]);
+	}
+
+	@Override
+	public boolean takeF(int mode, float[] a, int oa, int lenA, float[] c, int oc, int[] idx, int n, int slab) {
+		return take(mode, MemorySegment.ofArray(a), a, oa, lenA, MemorySegment.ofArray(c), c, oc, idx, n, slab,
+				Float.BYTES, this.resident[TAKE_F32]);
+	}
+
+	private boolean take(int mode, MemorySegment a, Object ah, int oa, int lenA, MemorySegment c, Object ch, int oc,
+			int[] idx, int n, int slab, int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		long aBytes = (long) lenA * width, cBytes = (long) n * width, idxBytes = (long) idx.length * Integer.BYTES;
+		long offA = (long) oa * width, offC = (long) oc * width;
+		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, aBytes);
+			if (!allocate(arena, buffers, owned, aBytes, cBytes, idxBytes)) {
+				return false;
+			}
+			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !uploadInts(arena, buffers[2], idx)
+					|| !launchStrided(arena, kernel, n,
+							new long[] { mode, buffers[0], buffers[1], buffers[2], n, slab },
+							new boolean[] { false, true, true, true, false, false }, sync)) {
+				return false;
+			}
+			return finish(c, offC, buffers, owned, 1, ch, cBytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * {@code linalg::%la-scatter-rows}, take-rows' adjoint, IN PLACE: {@code z} is
+	 * written on the device and stays there. {@code meta} is the indices GROUPED by
+	 * destination -- {@code rows + 1} group starts followed by the source slab numbers,
+	 * ascending inside each group -- which is what lets one thread per destination cell
+	 * keep the defun's index order without atomics ({@code scatter} in {@code gemm.cu}).
+	 * Bit-identical to the CPU kernel.
+	 * @return {@code true} when the scatter ran
+	 */
+	@Override
+	public boolean scatter(double[] z, int oz, double[] g, int og, int[] meta, int rows, int slab, int m) {
+		return scatter(MemorySegment.ofArray(z), z, oz, MemorySegment.ofArray(g), g, og, meta, rows, slab, m,
+				Double.BYTES, this.resident[SCATTER_F64]);
+	}
+
+	@Override
+	public boolean scatterF(float[] z, int oz, float[] g, int og, int[] meta, int rows, int slab, int m) {
+		return scatter(MemorySegment.ofArray(z), z, oz, MemorySegment.ofArray(g), g, og, meta, rows, slab, m,
+				Float.BYTES, this.resident[SCATTER_F32]);
+	}
+
+	private boolean scatter(MemorySegment z, Object zh, int oz, MemorySegment g, Object gh, int og, int[] meta,
+			int rows, int slab, int m, int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return false;
+		}
+		long zBytes = (long) rows * slab * width, gBytes = (long) m * slab * width,
+				metaBytes = (long) meta.length * Integer.BYTES;
+		long offZ = (long) oz * width, offG = (long) og * width;
+		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return false;
+			}
+			buffers[0] = this.residency.lookup(zh, offZ, zBytes);
+			buffers[1] = this.residency.lookup(gh, offG, gBytes);
+			if (!allocate(arena, buffers, owned, zBytes, gBytes, metaBytes)) {
+				return false;
+			}
+			int cells = rows * slab;
+			boolean sync = (long) m * slab * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
+			if (!stage(buffers, owned, 0, zh, z, offZ, zBytes) || !stage(buffers, owned, 1, gh, g, offG, gBytes)
+					|| !uploadInts(arena, buffers[2], meta)
+					|| !launchStrided(arena, kernel, cells,
+							new long[] { buffers[0], buffers[1], buffers[2], rows, slab },
+							new boolean[] { true, true, true, false, false }, sync)) {
+				return false;
+			}
+			return finish(z, offZ, buffers, owned, 0, zh, zBytes);
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * The block partials of {@code sum(a[i] * a[i])} in double, or {@code null} when this
+	 * call declined -- the device half of {@code linalg::%la-sum-squares}, and the ONE
+	 * member here that does not compute the caller's fold order. The caller adds the
+	 * partials up in block order; how many there are is a pure function of {@code n}, so
+	 * the value is reproducible.
+	 * @return the per-block partials, or {@code null} on a decline
+	 */
+	@Override
+	public double @Nullable [] sumSquares(double[] a, int oa, int n) {
+		return sumSquares(MemorySegment.ofArray(a), a, oa, n, Double.BYTES, this.resident[SUMSQ_F64]);
+	}
+
+	@Override
+	public double @Nullable [] sumSquaresF(float[] a, int oa, int n) {
+		return sumSquares(MemorySegment.ofArray(a), a, oa, n, Float.BYTES, this.resident[SUMSQ_F32]);
+	}
+
+	private double @Nullable [] sumSquares(MemorySegment a, Object ah, int oa, int n, int width, MemorySegment kernel) {
+		if (!this.usable) {
+			return null;
+		}
+		int blocks = (int) Math.min(SUMSQ_MAX_BLOCKS, ((long) n + STRIDED_BLOCK - 1) / STRIDED_BLOCK);
+		long aBytes = (long) n * width, pBytes = (long) blocks * Double.BYTES, offA = (long) oa * width;
+		long[] buffers = { 0, 0 }, owned = { 0, 0 };
+		try (Arena arena = Arena.ofConfined()) {
+			if (!enter()) {
+				return null;
+			}
+			buffers[0] = this.residency.lookup(ah, offA, aBytes);
+			if (!allocate(arena, buffers, owned, aBytes, pBytes)) {
+				return null;
+			}
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !launchStrided(arena, kernel, blocks * STRIDED_BLOCK,
+					new long[] { buffers[0], buffers[1], n }, new boolean[] { true, true, false }, false)) {
+				return null;
+			}
+			// The partials are the ONLY thing that comes home, and the synchronous
+			// download orders itself behind the launch that made them.
+			double[] partials = new double[blocks];
+			if (!download(MemorySegment.ofArray(partials), 0, buffers[1], pBytes)) {
+				return null;
+			}
+			drainPending();
+			return partials;
+		}
+		catch (Throwable ex) {
+			return null;
+		}
+		finally {
+			release(owned);
+		}
+	}
+
+	/**
+	 * Copies a small {@code int} vector -- an index list, or a scatter's grouped indices
+	 * -- into the device buffer the index-tier kernels read it out of, the way
+	 * {@link #uploadLayout} does for the strided tier's strides.
+	 */
+	private boolean uploadInts(Arena arena, long destination, int[] values) throws Throwable {
+		MemorySegment host = arena.allocate(I, values.length);
+		for (int k = 0; k < values.length; k++) {
+			host.setAtIndex(I, k, values[k]);
+		}
+		int status = this.driver.memcpyHtoD(destination, host, (long) values.length * Integer.BYTES);
+		return status == CuResult.SUCCESS || fail(status);
 	}
 
 	/**

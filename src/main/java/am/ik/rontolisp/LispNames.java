@@ -5077,6 +5077,13 @@ public final class LispNames {
 	public static final String LINALG_TAKE_ROWS = "TAKE-ROWS";
 
 	/**
+	 * {@code linalg:gather}: one element per ROW of a matrix, the column chosen by an
+	 * index vector (numpy's {@code y[np.arange(n), t]} fancy-indexing idiom) -- the
+	 * target-logit pick behind {@code torch:cross-entropy-loss}.
+	 */
+	public static final String LINALG_GATHER = "GATHER";
+
+	/**
 	 * {@code linalg:clip}: element-wise {@code min(max(x, lo), hi)} (numpy
 	 * {@code np.clip} with scalar bounds), defined as the composition
 	 * {@code (linalg:minimum (linalg:maximum a lo) hi)}.

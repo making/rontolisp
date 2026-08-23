@@ -187,6 +187,16 @@ public final class Gpu {
 	private static final long FOLD_MIN_CELLS = 256;
 
 	/**
+	 * The same floor for a fold whose operand is already RESIDENT, which is a different
+	 * race. The 256 above is measured against a CPU that has the operand; a resident
+	 * operand under {@link #lazyResults} has to be DOWNLOADED before any CPU kernel can
+	 * touch it, and that copy costs more per element than the device's thin walk does,
+	 * however few threads it runs in. One warp is the floor there: below 32 cells the
+	 * launch cannot fill even one, and the download is the cheaper of two bad options.
+	 */
+	private static final long FOLD_RESIDENT_MIN_CELLS = 32;
+
+	/**
 	 * Below this many elements a {@linkplain #rngFill generator fill} declines and the
 	 * CPU's sequential walk wins. A fill has no operand to copy up -- only the result
 	 * comes back -- so its floor is the lowest of the set, and the CPU side costs ~3 ns
@@ -518,7 +528,9 @@ public final class Gpu {
 	}
 
 	/**
-	 * The minimum number of output cells a fold needs. Package-private and for the tests.
+	 * The minimum number of output cells a fold needs when its operand has to be copied
+	 * up. Package-private and for the tests; a RESIDENT operand's floor is one warp
+	 * ({@link #FOLD_RESIDENT_MIN_CELLS}).
 	 * @return the fold's parallelism floor
 	 */
 	static long foldMinCells() {
@@ -1174,8 +1186,12 @@ public final class Gpu {
 	public static boolean fold(int op, double[] a, int offsetA, double[] out, int offsetOut, int outer, int len,
 			int inner) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner)
-				&& worthOrResident(device, (long) outer * inner * len, Probe.FOLD_MIN_ELEMENTS, a)
+		if (device == null) {
+			return false;
+		}
+		boolean resident = device.resident(a);
+		return offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner, resident)
+				&& (resident || (long) outer * inner * len >= Probe.FOLD_MIN_ELEMENTS)
 				&& device.fold(op, a, offsetA, out, offsetOut, outer, len, inner);
 	}
 
@@ -1197,9 +1213,239 @@ public final class Gpu {
 	public static boolean fold(int op, float[] a, int offsetA, float[] out, int offsetOut, int outer, int len,
 			int inner) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner)
-				&& worthOrResident(device, (long) outer * inner * len, Probe.FOLD_MIN_ELEMENTS, a)
+		if (device == null) {
+			return false;
+		}
+		boolean resident = device.resident(a);
+		return offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner, resident)
+				&& (resident || (long) outer * inner * len >= Probe.FOLD_MIN_ELEMENTS)
 				&& device.foldF(op, a, offsetA, out, offsetOut, outer, len, inner);
+	}
+
+	/**
+	 * The INDEX tier, member one of three: the axis-0 slabs of {@code a} named by
+	 * {@code idx}, in the index vector's order --
+	 * {@code out[i * slab + k] = a[idx[i] * slab + k]}. An embedding lookup is this and
+	 * nothing else. A pure copy, so it is bit-identical to any CPU kernel, and like the
+	 * rest of the resident tier it is offered ONLY over an operand that is already on the
+	 * device: a gather that has to copy its table up cannot beat a
+	 * {@code System.arraycopy} loop, and a resident one costs a launch.
+	 * @param a the table
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param lenA how many elements of {@code a} the table spans
+	 * @param out the array the {@code idx.length * slab} results are written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param idx the slab numbers to take, each in {@code [0, lenA / slab)}
+	 * @param slab the element count of one axis-0 slab
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean takeRows(double[] a, int offsetA, int lenA, double[] out, int offsetOut, int[] idx,
+			int slab) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredTake(a.length, offsetA, lenA, out.length, offsetOut, idx, slab)
+				&& device.resident(a) && device.take(0, a, offsetA, lenA, out, offsetOut, idx, idx.length * slab, slab);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #takeRows(double[], int, int, double[], int, int[], int)}.
+	 */
+	public static boolean takeRows(float[] a, int offsetA, int lenA, float[] out, int offsetOut, int[] idx, int slab) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredTake(a.length, offsetA, lenA, out.length, offsetOut, idx, slab)
+				&& device.resident(a)
+				&& device.takeF(0, a, offsetA, lenA, out, offsetOut, idx, idx.length * slab, slab);
+	}
+
+	/**
+	 * Member two: one element per ROW, the column chosen by the index vector --
+	 * {@code out[i] = a[i * cols + idx[i]]} over an {@code idx.length x cols} matrix.
+	 * That is the fancy-indexing idiom a class-index cross entropy picks its target logit
+	 * with. A pure copy again, and again offered over a resident operand only.
+	 * @param a the matrix
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code idx.length} results are written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param idx one column number per row, each in {@code [0, cols)}
+	 * @param cols the matrix's row length
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean pick(double[] a, int offsetA, double[] out, int offsetOut, int[] idx, int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredPick(a.length, offsetA, out.length, offsetOut, idx, cols) && device.resident(a)
+				&& device.take(1, a, offsetA, idx.length * cols, out, offsetOut, idx, idx.length, cols);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #pick(double[], int, double[], int, int[], int)}.
+	 */
+	public static boolean pick(float[] a, int offsetA, float[] out, int offsetOut, int[] idx, int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredPick(a.length, offsetA, out.length, offsetOut, idx, cols) && device.resident(a)
+				&& device.takeF(1, a, offsetA, idx.length * cols, out, offsetOut, idx, idx.length, cols);
+	}
+
+	/**
+	 * Member three, and the adjoint of {@link #takeRows}: slab {@code i} of {@code g}
+	 * ADDED into slab {@code idx[i]} of {@code z}, IN PLACE, with a repeated index
+	 * accumulating in INDEX order -- which is the CPU kernel's value and not merely its
+	 * result, so this member sorts the indices by destination before it launches rather
+	 * than reaching for atomics. Widen, add, narrow per step, exactly as the CPU does,
+	 * hence bit-identical. Offered once either array is resident: the gradient usually
+	 * is, and {@code z} -- a fresh zero table -- then stays on the device for the
+	 * optimizer.
+	 * @param z the destination table, written in place
+	 * @param offsetZ the index of {@code z}'s first element
+	 * @param g the gradient, {@code idx.length} slabs of {@code slab} elements
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param idx the destination slab of each of {@code g}'s, each in {@code [0, rows)}
+	 * @param rows how many slabs {@code z} has
+	 * @param slab the element count of one slab
+	 * @return {@code true} when the scatter ran
+	 */
+	public static boolean scatterRows(double[] z, int offsetZ, double[] g, int offsetG, int[] idx, int rows, int slab) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || !offeredScatter(z.length, offsetZ, g.length, offsetG, idx, rows, slab)
+				|| !(device.resident(g) || device.resident(z))) {
+			return false;
+		}
+		return device.scatter(z, offsetZ, g, offsetG, groupByDestination(idx, rows), rows, slab, idx.length);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #scatterRows(double[], int, double[], int, int[], int, int)}.
+	 */
+	public static boolean scatterRows(float[] z, int offsetZ, float[] g, int offsetG, int[] idx, int rows, int slab) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || !offeredScatter(z.length, offsetZ, g.length, offsetG, idx, rows, slab)
+				|| !(device.resident(g) || device.resident(z))) {
+			return false;
+		}
+		return device.scatterF(z, offsetZ, g, offsetG, groupByDestination(idx, rows), rows, slab, idx.length);
+	}
+
+	/**
+	 * {@code seed + sum(a[i] * a[i])} over {@code n} elements in a {@code double}
+	 * accumulator, or {@code null} when this call declined -- the sum a gradient-norm
+	 * clip measures its norm with, and the ONE member of this library whose result is not
+	 * the caller's own arithmetic in the caller's own order.
+	 *
+	 * <p>
+	 * A single left fold has no parallel form: every other reduction here keeps its
+	 * caller's order by giving each output cell one thread and walking it sequentially,
+	 * and a whole-array sum has one cell. So this member folds in BLOCKS -- each block a
+	 * grid-strided slice of the array, added up in a shared-memory tree, and the block
+	 * partials added in block order by the caller -- which is the same arithmetic with a
+	 * different association: every term is rounded exactly where the sequential fold
+	 * rounds it, and the block count is a pure function of {@code n}, so the answer is
+	 * reproducible. It is a closer approximation of the exact sum than the sequential
+	 * fold is, and it differs from it. See {@code .kb/gpu.md}.
+	 *
+	 * <p>
+	 * Offered over a RESIDENT operand only, like the rest of that tier: this reads its
+	 * whole operand once, so over a round trip a CPU that already has the bytes wins.
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param n how many elements to fold
+	 * @param seed the accumulator to start from
+	 * @return the total, or {@code null} when the device declined
+	 */
+	public static @Nullable Double sumSquares(double[] a, int offsetA, int n, double seed) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || n < 1 || offsetA < 0 || (long) offsetA + n > a.length || !device.resident(a)) {
+			return null;
+		}
+		return total(device.sumSquares(a, offsetA, n), seed);
+	}
+
+	/** The single-float sibling of {@link #sumSquares(double[], int, int, double)}. */
+	public static @Nullable Double sumSquares(float[] a, int offsetA, int n, double seed) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || n < 1 || offsetA < 0 || (long) offsetA + n > a.length || !device.resident(a)) {
+			return null;
+		}
+		return total(device.sumSquaresF(a, offsetA, n), seed);
+	}
+
+	/** The block partials added up in block order, from the caller's accumulator. */
+	private static @Nullable Double total(double @Nullable [] partials, double seed) {
+		if (partials == null) {
+			return null;
+		}
+		double sum = seed;
+		for (double p : partials) {
+			sum += p;
+		}
+		return sum;
+	}
+
+	/**
+	 * The scatter's indices sorted by DESTINATION, stably, as the kernel reads them:
+	 * {@code rows + 1} group starts followed by the source slab numbers, ascending inside
+	 * each group. A counting sort, so it costs one pass over the indices and one over the
+	 * rows -- both of which are tiny beside the slabs they move.
+	 */
+	private static int[] groupByDestination(int[] idx, int rows) {
+		int m = idx.length;
+		int[] meta = new int[rows + 1 + m];
+		for (int value : idx) {
+			meta[value + 1]++;
+		}
+		for (int r = 0; r < rows; r++) {
+			meta[r + 1] += meta[r];
+		}
+		int[] cursor = new int[rows];
+		for (int r = 0; r < rows; r++) {
+			cursor[r] = meta[r];
+		}
+		for (int i = 0; i < m; i++) {
+			meta[rows + 1 + cursor[idx[i]]++] = i;
+		}
+		return meta;
+	}
+
+	/** Whether an index-driven slab gather is inside both arrays and its index range. */
+	private static boolean offeredTake(long lengthA, int offsetA, int lenA, long lengthOut, int offsetOut, int[] idx,
+			int slab) {
+		if (slab < 1 || lenA < slab || idx.length < 1 || offsetA < 0 || offsetOut < 0
+				|| (long) offsetA + lenA > lengthA) {
+			return false;
+		}
+		long out = (long) idx.length * slab;
+		return out <= Integer.MAX_VALUE && offsetOut + out <= lengthOut && inRange(idx, lenA / slab);
+	}
+
+	/** The same for the per-row pick. */
+	private static boolean offeredPick(long lengthA, int offsetA, long lengthOut, int offsetOut, int[] idx, int cols) {
+		if (cols < 1 || idx.length < 1 || offsetA < 0 || offsetOut < 0) {
+			return false;
+		}
+		long span = (long) idx.length * cols;
+		return span <= Integer.MAX_VALUE && offsetA + span <= lengthA && offsetOut + idx.length <= lengthOut
+				&& inRange(idx, cols);
+	}
+
+	/** The same for the scatter-add. */
+	private static boolean offeredScatter(long lengthZ, int offsetZ, long lengthG, int offsetG, int[] idx, int rows,
+			int slab) {
+		if (slab < 1 || rows < 1 || idx.length < 1 || offsetZ < 0 || offsetG < 0) {
+			return false;
+		}
+		long z = (long) rows * slab, g = (long) idx.length * slab;
+		return z <= Integer.MAX_VALUE && g <= Integer.MAX_VALUE && offsetZ + z <= lengthZ && offsetG + g <= lengthG
+				&& inRange(idx, rows);
+	}
+
+	/** Whether every index is inside {@code [0, bound)}. */
+	private static boolean inRange(int[] idx, int bound) {
+		for (int value : idx) {
+			if (value < 0 || value >= bound) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -1841,18 +2087,21 @@ public final class Gpu {
 
 	/**
 	 * Whether an axis fold is one this library will attempt: an op it names, enough
-	 * output cells to be worth a grid, above the threshold in force on this machine, and
-	 * inside both arrays.
+	 * output cells to be worth a grid -- one block's worth over a round trip, one warp's
+	 * over a RESIDENT operand, whose alternative is a download rather than a free CPU --
+	 * and inside both arrays. The SIZE threshold is asked by the caller, which skips it
+	 * for a resident operand like every other member here.
 	 */
 	private static boolean offeredFold(int op, long lengthA, int offsetA, long lengthOut, int offsetOut, int outer,
-			int len, int inner) {
+			int len, int inner, boolean resident) {
 		if (op < 0 || op >= FOLD_OPS || outer < 1 || len < 1 || inner < 1) {
 			return false;
 		}
 		long cells = (long) outer * inner;
 		long total = cells * len;
-		return cells >= FOLD_MIN_CELLS && cells <= Integer.MAX_VALUE && total <= Integer.MAX_VALUE && offsetA >= 0
-				&& offsetOut >= 0 && offsetA + total <= lengthA && offsetOut + cells <= lengthOut;
+		return cells >= (resident ? FOLD_RESIDENT_MIN_CELLS : FOLD_MIN_CELLS) && cells <= Integer.MAX_VALUE
+				&& total <= Integer.MAX_VALUE && offsetA >= 0 && offsetOut >= 0 && offsetA + total <= lengthA
+				&& offsetOut + cells <= lengthOut;
 	}
 
 	/**

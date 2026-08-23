@@ -593,4 +593,68 @@ final class LinalgGpuKernels {
 		return Gpu.scale(Gpu.BIN_MUL, a, 0, s, false, a, 0, a.length);
 	}
 
+	// --- the index tier and the clip norm
+	// -----------------------------------
+
+	/**
+	 * {@code linalg:take-rows} on the device: the {@code slab}-sized axis-0 slabs of
+	 * {@code a} named by {@code rows}, as a fresh array, or {@code null} when the device
+	 * declined (it does unless {@code a} is resident).
+	 */
+	static double @Nullable [] takeRows(double[] a, int[] rows, int slab) {
+		double[] out = new double[rows.length * slab];
+		return Gpu.takeRows(a, 0, a.length, out, 0, rows, slab) ? out : null;
+	}
+
+	/** The single-float sibling of {@link #takeRows(double[], int[], int)}. */
+	static float @Nullable [] takeRows(float[] a, int[] rows, int slab) {
+		float[] out = new float[rows.length * slab];
+		return Gpu.takeRows(a, 0, a.length, out, 0, rows, slab) ? out : null;
+	}
+
+	/**
+	 * {@code linalg:gather} on the device: {@code out[i] = a[i, cols[i]]} over a matrix
+	 * of {@code cols.length} rows, or {@code null} on a decline.
+	 */
+	static double @Nullable [] pick(double[] a, int[] columns, int cols) {
+		double[] out = new double[columns.length];
+		return Gpu.pick(a, 0, out, 0, columns, cols) ? out : null;
+	}
+
+	/** The single-float sibling of {@link #pick(double[], int[], int)}. */
+	static float @Nullable [] pick(float[] a, int[] columns, int cols) {
+		float[] out = new float[columns.length];
+		return Gpu.pick(a, 0, out, 0, columns, cols) ? out : null;
+	}
+
+	/**
+	 * {@code linalg::%la-scatter-rows} on the device, IN PLACE: {@code z} is written on
+	 * the device and stays there, so the caller must NOT report it written.
+	 */
+	static boolean scatterRows(double[] z, double[] g, int[] rows, int slab) {
+		return Gpu.scatterRows(z, 0, g, 0, rows, z.length / slab, slab);
+	}
+
+	/**
+	 * The single-float sibling of {@link #scatterRows(double[], double[], int[], int)}.
+	 */
+	static boolean scatterRows(float[] z, float[] g, int[] rows, int slab) {
+		return Gpu.scatterRows(z, 0, g, 0, rows, z.length / slab, slab);
+	}
+
+	/**
+	 * {@code linalg::%la-sum-squares} on the device: {@code acc} plus the sum of the
+	 * squares, folded in BLOCKS rather than in the defun's single left fold -- the one
+	 * result of this flag that is not the caller's own arithmetic in the caller's own
+	 * order ({@code .kb/gpu.md}). {@code null} on a decline.
+	 */
+	static @Nullable Double sumSquares(double[] a, double acc) {
+		return Gpu.sumSquares(a, 0, a.length, acc);
+	}
+
+	/** The single-float sibling of {@link #sumSquares(double[], double)}. */
+	static @Nullable Double sumSquares(float[] a, double acc) {
+		return Gpu.sumSquares(a, 0, a.length, acc);
+	}
+
 }

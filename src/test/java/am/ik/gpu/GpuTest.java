@@ -1788,4 +1788,119 @@ class GpuTest {
 		assertThat(a).isEqualTo(expected);
 	}
 
+	/**
+	 * The INDEX tier: an embedding lookup, a per-row pick and the scatter-add adjoint,
+	 * each offered only over a resident operand and each BIT-IDENTICAL to the CPU kernel
+	 * it replaces -- so the comparison is equality, and the scatter's indices REPEAT,
+	 * which is where the order it keeps can be seen.
+	 */
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void theIndexTierIsOfferedOnlyOverAResidentOperandAndCopiesTheCpuKernelsBits() {
+		assumeTrue(Gpu.residency() != null, "the index tier is the CUDA backend's");
+		Gpu.releaseResident();
+		int rows = 97, slab = 384, m = 1024;
+		float[] table = new float[rows * slab];
+		for (int i = 0; i < table.length; i++) {
+			table[i] = (float) Math.sin(i * 0.013) * 4;
+		}
+		int[] idx = new int[m];
+		for (int i = 0; i < m; i++) {
+			idx[i] = (i * 37 + i / 7) % rows;
+		}
+		float[] out = new float[m * slab];
+		// Nothing resident: the whole tier declines, at any size.
+		assertThat(Gpu.takeRows(table, 0, table.length, out, 0, idx, slab)).isFalse();
+		assertThat(Gpu.pick(table, 0, new float[rows], 0, new int[rows], slab)).isFalse();
+		assertThat(Gpu.scatterRows(new float[rows * slab], 0, out, 0, idx, rows, slab)).isFalse();
+		assertThat(Gpu.sumSquares(table, 0, table.length, 0.0)).isNull();
+		// Resident, and every member is a launch with no copy up.
+		assertThat(Gpu.map(Gpu.MAP_EXP, table, 0, new float[table.length], 0, table.length)).isTrue();
+		assertThat(Gpu.resident(table)).isTrue();
+		assertThat(Gpu.takeRows(table, 0, table.length, out, 0, idx, slab)).isTrue();
+		for (int i = 0; i < m; i++) {
+			for (int k = 0; k < slab; k += 61) {
+				assertThat(out[i * slab + k]).as("take %d,%d", i, k).isEqualTo(table[idx[i] * slab + k]);
+			}
+		}
+		// The per-row pick, over the same table read as an m x slab matrix.
+		int[] cols = new int[rows];
+		for (int i = 0; i < rows; i++) {
+			cols[i] = (i * 53) % slab;
+		}
+		float[] picked = new float[rows];
+		assertThat(Gpu.pick(table, 0, picked, 0, cols, slab)).isTrue();
+		for (int i = 0; i < rows; i++) {
+			assertThat(picked[i]).as("pick %d", i).isEqualTo(table[i * slab + cols[i]]);
+		}
+		// The scatter-add: the CPU kernel's own loop is the oracle, and every one of the
+		// 97 destinations is hit ten times or so, so the order is what is being asserted.
+		float[] z = new float[rows * slab], oracle = new float[rows * slab];
+		for (int i = 0; i < z.length; i++) {
+			z[i] = (float) Math.cos(i * 0.021);
+			oracle[i] = z[i];
+		}
+		for (int i = 0; i < m; i++) {
+			for (int k = 0; k < slab; k++) {
+				int d = idx[i] * slab + k;
+				oracle[d] = (float) ((double) oracle[d] + (double) out[i * slab + k]);
+			}
+		}
+		assertThat(Gpu.resident(out)).isTrue();
+		assertThat(Gpu.scatterRows(z, 0, out, 0, idx, rows, slab)).isTrue();
+		assertThat(z).isEqualTo(oracle);
+		// An index outside the table declines rather than reading off the end.
+		int[] bad = idx.clone();
+		bad[3] = rows;
+		assertThat(Gpu.takeRows(table, 0, table.length, out, 0, bad, slab)).isFalse();
+		assertThat(Gpu.scatterRows(z, 0, out, 0, bad, rows, slab)).isFalse();
+		assertThat(Gpu.pick(table, 0, picked, 0, new int[] { slab }, slab)).isFalse();
+	}
+
+	/**
+	 * The clip norm's sum of squares: the ONE member of this library whose result is not
+	 * the caller's own fold. It is offered over a resident operand only, it is
+	 * REPRODUCIBLE (the block count is a function of the length), and it is within a few
+	 * ulps of the sequential fold -- on the correct side of it, since a blocked sum is
+	 * the better approximation.
+	 */
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void theSumOfSquaresFoldsInBlocksAndIsReproducibleWithinAFewUlpsOfTheSequentialSum() {
+		assumeTrue(Gpu.residency() != null, "the sum of squares is the CUDA backend's");
+		Gpu.releaseResident();
+		int n = 1 << 20;
+		float[] a = new float[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = (float) (Math.sin(i * 0.0007) * 0.5 + 0.5);
+		}
+		assertThat(Gpu.sumSquares(a, 0, n, 1.5)).isNull();
+		assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, new float[n], 0, n)).isTrue();
+		double sequential = 1.5;
+		for (float v : a) {
+			double d = v;
+			sequential = sequential + d * d;
+		}
+		Double first = Gpu.sumSquares(a, 0, n, 1.5);
+		assertThat(first).isNotNull();
+		assertThat(first).isCloseTo(sequential, within(Math.abs(sequential) * 1e-12));
+		// Same length, same answer, every time: the association is fixed, not scheduled.
+		for (int r = 0; r < 4; r++) {
+			assertThat(Gpu.sumSquares(a, 0, n, 1.5)).isEqualTo(first);
+		}
+		// The seed is added to the total, and a slice folds only its own elements.
+		assertThat(Gpu.sumSquares(a, 0, n, 0.0)).isCloseTo(first - 1.5, within(Math.abs(sequential) * 1e-12));
+		double tail = 0;
+		for (int i = n / 2; i < n; i++) {
+			double d = a[i];
+			tail = tail + d * d;
+		}
+		Double half = Gpu.sumSquares(a, n / 2, n / 2, 0.0);
+		assertThat(half).isNotNull();
+		assertThat(half).isCloseTo(tail, within(Math.abs(tail) * 1e-12));
+		// An empty or out-of-bounds slice declines.
+		assertThat(Gpu.sumSquares(a, 0, 0, 0.0)).isNull();
+		assertThat(Gpu.sumSquares(a, 1, n, 0.0)).isNull();
+	}
+
 }
