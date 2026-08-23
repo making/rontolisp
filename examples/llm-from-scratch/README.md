@@ -156,7 +156,7 @@ the rest as in the file), per training step:
 | `--simd` | 0.79 s | 0.85 s |
 | `--simd --parallel` | 0.37 s | -- |
 | `--blas --simd` | 0.79 s | -- |
-| `--gpu --simd` | **0.056 s** | **0.017 s** |
+| `--gpu --simd` | **0.050 s** | **0.016 s** |
 
 `--blas` changes nothing because every product here is the stacked rank-3 one, which
 `--blas` does not take; `--parallel` halves the CPU step because that product is what it
@@ -174,8 +174,8 @@ class output, `java -Xmx64g -XX:+UseParallelGC -Xmn8g`:
 
 | | | rontolisp | PyTorch on the same machine |
 | --- | --- | --- | --- |
-| chapter 3, 13.06 M parameters | per training step | **0.84 s** | 0.24 s eager fp32, 0.21 s bf16 autocast, 0.096 s `torch.compile` + bf16 |
-| | the notebook's 5000 steps (warmup 1000, eval every 500) | **70.7 min**; loss 8.10 -> 0.24, validation 0.116 | 20.4 min eager fp32; loss 0.17 |
+| chapter 3, 13.06 M parameters | per training step | **0.81 s** | 0.24 s eager fp32 (TF32 tensor cores, the container's default), 0.21 s bf16 autocast, 0.096 s `torch.compile` + bf16 |
+| | the notebook's 5000 steps (warmup 1000, eval every 500) | **67.2 min**; loss 8.10 -> 0.24, validation 0.116 | 20.4 min eager fp32; loss 0.17 |
 | chapter 2, `d_model` 512 | per batch of 64 pairs | **0.35 s** | -- |
 | | 2 epochs over 10000 pairs + 20 greedy decodes | **2.1 min**; loss 4.72 -> 3.61 | -- |
 | | the notebook's 20 epochs over 50000 pairs | ~1.5 h (projected, not run) | -- |
@@ -183,10 +183,16 @@ class output, `java -Xmx64g -XX:+UseParallelGC -Xmn8g`:
 The PyTorch column is the same model (the book's per-head attention, AdamW, clipping,
 dropout 0.1) written against PyTorch in NVIDIA's `pytorch:25.11` container on the same
 machine, 300 steps, `(t200 - t40) / 160`; `torch.compile` adds 19 s of compilation. So
-the port is 3.5x behind eager PyTorch on this card and 9x behind the compiled bf16 run.
-The chapter-3 step is about 1.2 TFLOP, which the device finishes in 0.2 s; the
-rest of the 0.84 is launches, the link and the host glue around the kernels, so the flag
-is at a twentieth of the card's single-float peak -- the gap that remains. The 5000-step
+the port is about 3x behind eager PyTorch on this card and 8x behind the compiled bf16
+run -- and a profile of both runs says where, precisely. Both steps are DEVICE-bound
+(rontolisp ~0.72 s of kernel time in its step, PyTorch ~0.23 in its): the difference is
+what the device is asked to do. PyTorch's "eager fp32" products run on TF32 **tensor
+cores** (the container's default) for ~98 ms a step where rontolisp's bit-exact IEEE
+f32 product takes ~250 ms; and PyTorch's elementwise ops are fused single kernels
+(dropout, softmax, layer-norm, GELU each one memory pass) for ~133 ms where rontolisp
+pays one pass per `linalg:` member, ~475 ms. Launches are not the story: since
+2026-08-23 the launch pipeline runs ahead of the device (`.kb/gpu.md`) and the host is
+overlapped. The 5000-step
 run memorises the novel (the validation loss is over windows that overlap the training
 windows, the book's own `random_split`) and samples sentence-shaped 漱石:
 `吾輩はこのくらいの家アンドレア・デル・サルトでもこれである。美学者は笑いながら…`.

@@ -279,6 +279,13 @@ final class CudaGemm implements GpuDevice {
 	private static final long SYNC_FLOPS_PER_MULTIPROCESSOR = 1L << 22;
 
 	/**
+	 * The size, in ints, of the by-value layout struct every strided kernel with a layout
+	 * takes ({@code strided_meta} in {@code gemm.cu}): the output dims plus up to three
+	 * per-operand stride vectors at {@link Gpu}'s rank ceiling of 16.
+	 */
+	private static final int LAYOUT_INTS = 64;
+
+	/**
 	 * How much free device memory a product leaves untouched. The device is shared --
 	 * with the display, with other CUDA processes, and with whatever the driver itself
 	 * wants -- so a product that would fit only by taking the last byte declines instead.
@@ -385,6 +392,17 @@ final class CudaGemm implements GpuDevice {
 	private final Object bounceLock = new Object();
 
 	private final long syncFlopCeiling;
+
+	/**
+	 * Whether a kernel has been enqueued on the null stream since the last explicit wait.
+	 * Only ever set under {@link #lazy} results, where the post-launch
+	 * {@code cuCtxSynchronize} is skipped ({@link #awaitLaunched}); a CRITICAL copy asks
+	 * {@link #awaitQueued} first so the queue's runtime never sits inside its
+	 * safepoint-free window. Volatile because the interceptors may run from more than one
+	 * thread; a race costs at worst one extra (or one late) synchronize, never a wrong
+	 * answer -- the null stream orders the work itself.
+	 */
+	private volatile boolean queued;
 
 	/**
 	 * Whether per-call memory comes from the driver's pool. Not final: the fallback path
@@ -1077,13 +1095,15 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	// --- the strided tier ------------------------------------------------------------
-	// Four buffers for a broadcast binary op, three for a gather, two for a fold: the
-	// operands, the result, and -- for the first two -- a small int buffer holding the
-	// output dims followed by one source stride per output axis per operand. That fourth
-	// buffer is 3 * rank ints, so it costs one pooled allocation (0.7-2.3 us) and a copy
-	// of at most 192 bytes; passing the layout as a by-value kernel parameter would save
-	// that and cost a second parameter-packing shape, which is not a trade worth making
-	// at these sizes.
+	// Three buffers for a broadcast binary op, two for a gather or a fold: the operands
+	// and the result. The LAYOUT -- the output dims followed by one source stride per
+	// output axis per operand -- rides BY VALUE in the kernel parameter block
+	// ({@link #layout}): it used to be a fourth device buffer, which cost one pooled
+	// allocation and one synchronous 192-byte copy per call, and that copy is what a
+	// profile of the book's-shape training step showed DRAINING the null-stream queue --
+	// a synchronous cuMemcpyHtoD orders behind every queued kernel, so each strided call
+	// was a hidden cuCtxSynchronize and the pipeline could never run ahead (about a
+	// thousand of them per step).
 
 	/**
 	 * {@code out[i] = op(a[ia(i)], b[ib(i)])} over a BROADCAST binary element-wise op:
@@ -1121,25 +1141,23 @@ final class CudaGemm implements GpuDevice {
 		}
 		int rank = dims.length;
 		int n = count(dims);
-		long aBytes = (span(dims, sa) + 1L) * width, bBytes = (span(dims, sb) + 1L) * width, cBytes = (long) n * width,
-				metaBytes = 3L * rank * Integer.BYTES;
+		long aBytes = (span(dims, sa) + 1L) * width, bBytes = (span(dims, sb) + 1L) * width, cBytes = (long) n * width;
 		long offA = (long) oa * width, offB = (long) ob * width, offC = (long) oc * width;
-		long[] buffers = { 0, 0, 0, 0 }, owned = { 0, 0, 0, 0 };
+		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
 			if (!enter()) {
 				return false;
 			}
 			buffers[0] = this.residency.lookup(ah, offA, aBytes);
 			buffers[1] = this.residency.lookup(bh, offB, bBytes);
-			if (!allocate(arena, buffers, owned, aBytes, bBytes, cBytes, metaBytes)) {
+			if (!allocate(arena, buffers, owned, aBytes, bBytes, cBytes)) {
 				return false;
 			}
 			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
 			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !stage(buffers, owned, 1, bh, b, offB, bBytes)
-					|| !uploadLayout(arena, buffers[3], dims, sa, sb)
-					|| !launchStrided(arena, kernel, n,
-							new long[] { op, buffers[0], buffers[1], buffers[2], n, rank, buffers[3] },
-							new boolean[] { false, true, true, true, false, false, true }, sync)) {
+					|| !launchStrided(arena, kernel, n, new long[] { op, buffers[0], buffers[1], buffers[2], n, rank },
+							new boolean[] { false, true, true, true, false, false }, layout(arena, dims, sa, sb, null),
+							sync)) {
 				return false;
 			}
 			return finish(c, offC, buffers, owned, 2, ch, cBytes);
@@ -1181,21 +1199,21 @@ final class CudaGemm implements GpuDevice {
 		}
 		int rank = dims.length;
 		int n = count(dims);
-		long aBytes = (span(dims, sa) + 1L) * width, cBytes = (long) n * width, metaBytes = 2L * rank * Integer.BYTES;
+		long aBytes = (span(dims, sa) + 1L) * width, cBytes = (long) n * width;
 		long offA = (long) oa * width, offC = (long) oc * width;
-		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
+		long[] buffers = { 0, 0 }, owned = { 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
 			if (!enter()) {
 				return false;
 			}
 			buffers[0] = this.residency.lookup(ah, offA, aBytes);
-			if (!allocate(arena, buffers, owned, aBytes, cBytes, metaBytes)) {
+			if (!allocate(arena, buffers, owned, aBytes, cBytes)) {
 				return false;
 			}
 			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
-			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !uploadLayout(arena, buffers[2], dims, sa, null)
-					|| !launchStrided(arena, kernel, n, new long[] { buffers[0], buffers[1], n, rank, buffers[2] },
-							new boolean[] { true, true, false, false, true }, sync)) {
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes)
+					|| !launchStrided(arena, kernel, n, new long[] { buffers[0], buffers[1], n, rank },
+							new boolean[] { true, true, false, false }, layout(arena, dims, sa, null, null), sync)) {
 				return false;
 			}
 			return finish(c, offC, buffers, owned, 1, ch, cBytes);
@@ -1284,44 +1302,45 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	/**
-	 * Copies the layout -- the output dims, then one source stride per output axis per
-	 * operand -- into the small device buffer the strided kernels index it out of. Plain
-	 * ints, so a rank-8 broadcast is 96 bytes.
+	 * Packs the layout -- the output dims, then one source stride per output axis per
+	 * operand -- into the fixed-size struct the strided kernels take BY VALUE
+	 * ({@code strided_meta} in {@code gemm.cu}): always {@link #LAYOUT_INTS} ints, the
+	 * unused tail zero, because {@code cuLaunchKernel} copies the declared parameter
+	 * size. The driver hands it to the kernel with the rest of the parameter block, so
+	 * unlike the device buffer this replaces it costs no allocation and -- the reason it
+	 * moved -- no synchronous copy that would drain the null-stream queue.
 	 */
-	private boolean uploadLayout(Arena arena, long destination, int[] dims, int[] sa, int @Nullable [] sb)
-			throws Throwable {
-		return uploadLayout(arena, destination, dims, sa, sb, null);
-	}
-
-	/** The same with a third operand's strides, for the three-way select. */
-	private boolean uploadLayout(Arena arena, long destination, int[] dims, int[] sa, int @Nullable [] sb,
-			int @Nullable [] sc) throws Throwable {
+	private MemorySegment layout(Arena arena, int[] dims, int[] sa, int @Nullable [] sb, int @Nullable [] sc) {
 		int rank = dims.length;
-		int words = rank * (sb == null ? 2 : sc == null ? 3 : 4);
-		MemorySegment host = arena.allocate(I, words);
+		MemorySegment meta = arena.allocate(I, LAYOUT_INTS);
 		for (int k = 0; k < rank; k++) {
-			host.setAtIndex(I, k, dims[k]);
-			host.setAtIndex(I, rank + k, sa[k]);
+			meta.setAtIndex(I, k, dims[k]);
+			meta.setAtIndex(I, rank + k, sa[k]);
 			if (sb != null) {
-				host.setAtIndex(I, 2 * rank + k, sb[k]);
+				meta.setAtIndex(I, 2 * rank + k, sb[k]);
 			}
 			if (sc != null) {
-				host.setAtIndex(I, 3 * rank + k, sc[k]);
+				meta.setAtIndex(I, 3 * rank + k, sc[k]);
 			}
 		}
-		int status = this.driver.memcpyHtoD(destination, host, (long) words * Integer.BYTES);
-		return status == CuResult.SUCCESS || fail(status);
+		return meta;
 	}
 
 	/**
 	 * One flat launch over {@code n} output cells, one thread each. The parameter block
 	 * is described by two parallel arrays -- the values, and whether each is a device
-	 * POINTER (8 bytes) or an {@code int} (4) -- because the three strided kernels take
-	 * three different mixtures of the two.
+	 * POINTER (8 bytes) or an {@code int} (4) -- because the strided kernels take
+	 * different mixtures of the two, plus, where the kernel has one, the by-value
+	 * {@link #layout} struct as the final parameter.
 	 */
 	private boolean launchStrided(Arena arena, MemorySegment function, int n, long[] values, boolean[] pointer,
 			boolean sync) throws Throwable {
-		MemorySegment parameters = arena.allocate(P, values.length);
+		return launchStrided(arena, function, n, values, pointer, null, sync);
+	}
+
+	private boolean launchStrided(Arena arena, MemorySegment function, int n, long[] values, boolean[] pointer,
+			@Nullable MemorySegment meta, boolean sync) throws Throwable {
+		MemorySegment parameters = arena.allocate(P, values.length + (meta == null ? 0 : 1));
 		for (int i = 0; i < values.length; i++) {
 			MemorySegment slot = arena.allocate(pointer[i] ? L : I);
 			if (pointer[i]) {
@@ -1332,18 +1351,15 @@ final class CudaGemm implements GpuDevice {
 			}
 			parameters.setAtIndex(P, i, slot);
 		}
+		if (meta != null) {
+			parameters.setAtIndex(P, values.length, meta);
+		}
 		int status = this.driver.launchKernel(function, (n + STRIDED_BLOCK - 1) / STRIDED_BLOCK, 1, 1, STRIDED_BLOCK, 1,
 				1, 0, MemorySegment.NULL, parameters, MemorySegment.NULL);
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}
-		if (sync) {
-			status = this.driver.ctxSynchronize();
-			if (status != CuResult.SUCCESS) {
-				return fail(status);
-			}
-		}
-		return true;
+		return awaitLaunched(sync);
 	}
 
 	/**
@@ -1850,11 +1866,8 @@ final class CudaGemm implements GpuDevice {
 			if (status != CuResult.SUCCESS) {
 				return fail(status);
 			}
-			if (sync) {
-				status = this.driver.ctxSynchronize();
-				if (status != CuResult.SUCCESS) {
-					return fail(status);
-				}
+			if (!awaitLaunched(sync)) {
+				return false;
 			}
 			return finish(heap, offset, buffers, owned, 0, host, bytes);
 		}
@@ -1970,13 +1983,7 @@ final class CudaGemm implements GpuDevice {
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}
-		if (sync) {
-			status = this.driver.ctxSynchronize();
-			if (status != CuResult.SUCCESS) {
-				return fail(status);
-			}
-		}
-		return true;
+		return awaitLaunched(sync);
 	}
 
 	// --- the resident tier (.todo/491) -------------------------------------------------
@@ -2139,9 +2146,9 @@ final class CudaGemm implements GpuDevice {
 		}
 		int rank = dims.length;
 		int n = count(dims);
-		long aBytes = (long) spanNa * width, cBytes = (long) spanNc * width, metaBytes = 3L * rank * Integer.BYTES;
+		long aBytes = (long) spanNa * width, cBytes = (long) spanNc * width;
 		long offA = (long) spanOa * width, offC = (long) spanOc * width;
-		long[] buffers = { 0, 0, 0 }, owned = { 0, 0, 0 };
+		long[] buffers = { 0, 0 }, owned = { 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
 			if (!enter()) {
 				return false;
@@ -2150,19 +2157,19 @@ final class CudaGemm implements GpuDevice {
 			// A destination already resident (a concatenation's second slab onward) is
 			// written into in place; a fresh one is allocated and recorded.
 			buffers[1] = this.residency.lookup(ch, offC, cBytes);
-			if (!allocate(arena, buffers, owned, aBytes, cBytes, metaBytes)) {
+			if (!allocate(arena, buffers, owned, aBytes, cBytes)) {
 				return false;
 			}
 			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
-			if (!stage(buffers, owned, 0, ah, a, offA, aBytes) || !uploadLayout(arena, buffers[2], dims, sa, sc)) {
+			if (!stage(buffers, owned, 0, ah, a, offA, aBytes)) {
 				return false;
 			}
 			// The kernel walks from each side's origin: the buffer plus the walk's own
 			// offset within the span.
 			long originA = buffers[0] + ((long) oa - spanOa) * width,
 					originC = buffers[1] + ((long) oc - spanOc) * width;
-			if (!launchStrided(arena, kernel, n, new long[] { originA, originC, n, rank, buffers[2] },
-					new boolean[] { true, true, false, false, true }, sync)) {
+			if (!launchStrided(arena, kernel, n, new long[] { originA, originC, n, rank },
+					new boolean[] { true, true, false, false }, layout(arena, dims, sa, sc, null), sync)) {
 				return false;
 			}
 			return finish(c, offC, buffers, owned, 1, ch, cBytes);
@@ -2216,12 +2223,11 @@ final class CudaGemm implements GpuDevice {
 		MemorySegment m = mkind == 0 ? null : heap(mArray);
 		long mBytes = mkind == 0 ? 0 : (span(dims, sm) + 1L) * mwidth,
 				xBytes = x == null ? 0 : (span(dims, sx) + 1L) * width,
-				yBytes = y == null ? 0 : (span(dims, sy) + 1L) * width, cBytes = (long) n * width,
-				metaBytes = 4L * rank * Integer.BYTES;
+				yBytes = y == null ? 0 : (span(dims, sy) + 1L) * width, cBytes = (long) n * width;
 		long offM = (long) om * mwidth, offX = (long) ox * width, offY = (long) oy * width, offC = (long) oc * width;
-		// Slots: 0 mask, 1 x, 2 y, 3 result, 4 layout. A scalar operand's slot is a zero
-		// byte count and stays a null pointer.
-		long[] buffers = { 0, 0, 0, 0, 0 }, owned = { 0, 0, 0, 0, 0 };
+		// Slots: 0 mask, 1 x, 2 y, 3 result. A scalar operand's slot is a zero byte
+		// count and stays a null pointer; the layout rides in the parameter block.
+		long[] buffers = { 0, 0, 0, 0 }, owned = { 0, 0, 0, 0 };
 		try (Arena arena = Arena.ofConfined()) {
 			if (!enter()) {
 				return false;
@@ -2235,20 +2241,19 @@ final class CudaGemm implements GpuDevice {
 			if (y != null) {
 				buffers[2] = this.residency.lookup(yArray, offY, yBytes);
 			}
-			if (!allocate(arena, buffers, owned, mBytes, xBytes, yBytes, cBytes, metaBytes)) {
+			if (!allocate(arena, buffers, owned, mBytes, xBytes, yBytes, cBytes)) {
 				return false;
 			}
 			boolean sync = (long) n * STRIDED_FLOPS_PER_ELEMENT >= this.syncFlopCeiling;
 			if ((m != null && !stage(buffers, owned, 0, mArray, m, offM, mBytes))
 					|| (x != null && !stage(buffers, owned, 1, xArray, x, offX, xBytes))
-					|| (y != null && !stage(buffers, owned, 2, yArray, y, offY, yBytes))
-					|| !uploadLayout(arena, buffers[4], dims, sm, sx, sy)) {
+					|| (y != null && !stage(buffers, owned, 2, yArray, y, offY, yBytes))) {
 				return false;
 			}
 			// The parameter block: M, mkind, ms, X, xs, Y, ys, C, n, rank, meta.
 			MemorySegment mv = arena.allocate(L), mk = arena.allocate(I), msv = arena.allocate(D),
 					xv = arena.allocate(L), xsv = arena.allocate(D), yv = arena.allocate(L), ysv = arena.allocate(D),
-					cv = arena.allocate(L), nv = arena.allocate(I), rv = arena.allocate(I), metav = arena.allocate(L);
+					cv = arena.allocate(L), nv = arena.allocate(I), rv = arena.allocate(I);
 			mv.set(L, 0, buffers[0]);
 			mk.set(I, 0, mkind);
 			msv.set(D, 0, ms);
@@ -2259,7 +2264,7 @@ final class CudaGemm implements GpuDevice {
 			cv.set(L, 0, buffers[3]);
 			nv.set(I, 0, n);
 			rv.set(I, 0, rank);
-			metav.set(L, 0, buffers[4]);
+			MemorySegment metav = layout(arena, dims, sm, sx, sy);
 			MemorySegment parameters = arena.allocate(P, 11);
 			MemorySegment[] slots = { mv, mk, msv, xv, xsv, yv, ysv, cv, nv, rv, metav };
 			for (int i = 0; i < slots.length; i++) {
@@ -2443,10 +2448,14 @@ final class CudaGemm implements GpuDevice {
 
 	/**
 	 * Copies a small {@code int} vector -- an index list, or a scatter's grouped indices
-	 * -- into the device buffer the index-tier kernels read it out of, the way
-	 * {@link #uploadLayout} does for the strided tier's strides.
+	 * -- into the device buffer the index-tier kernels read it out of. Unlike the strided
+	 * tier's layout, an index list has no fixed size, so it cannot ride in the parameter
+	 * block and stays a buffer plus a critical copy (behind {@link #awaitQueued}).
 	 */
 	private boolean uploadInts(Arena arena, long destination, int[] values) throws Throwable {
+		if (!awaitQueued()) {
+			return false;
+		}
 		MemorySegment host = arena.allocate(I, values.length);
 		for (int k = 0; k < values.length; k++) {
 			host.setAtIndex(I, k, values[k]);
@@ -2543,12 +2552,47 @@ final class CudaGemm implements GpuDevice {
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}
-		if (sync) {
-			status = this.driver.ctxSynchronize();
-			if (status != CuResult.SUCCESS) {
-				return fail(status);
-			}
+		return awaitLaunched(sync);
+	}
+
+	/**
+	 * The wait that follows a launch. EAGERLY it is the explicit {@code cuCtxSynchronize}
+	 * the {@code sync} flag asks for ({@link #SYNC_FLOPS_PER_MULTIPROCESSOR}): the result
+	 * is about to come down over a CRITICAL copy, and without the wait the kernel's whole
+	 * runtime would sit inside that copy's safepoint-free window. LAZILY nothing comes
+	 * down at the end of a call, so the same wait only idled the host while the device
+	 * ran -- a profile of the book's-shape training step measured 817 of them a step,
+	 * half the step's wall time -- and it is SKIPPED: the launch is recorded in
+	 * {@link #queued} instead, and the critical copies keep the safepoint argument by
+	 * asking {@link #awaitQueued} first.
+	 */
+	private boolean awaitLaunched(boolean sync) throws Throwable {
+		if (this.lazy) {
+			this.queued = true;
+			return true;
 		}
+		if (!sync) {
+			return true;
+		}
+		int status = this.driver.ctxSynchronize();
+		return status == CuResult.SUCCESS || fail(status);
+	}
+
+	/**
+	 * The explicit wait before a CRITICAL copy: drains the null-stream queue on a plain,
+	 * safepoint-friendly downcall so that the copy's critical window holds the copy
+	 * alone. A no-op whenever nothing has been enqueued since the last wait -- eager
+	 * calls, and the pinned-bounce download path, never need it.
+	 */
+	private boolean awaitQueued() throws Throwable {
+		if (!this.queued) {
+			return true;
+		}
+		int status = this.driver.ctxSynchronize();
+		if (status != CuResult.SUCCESS) {
+			return fail(status);
+		}
+		this.queued = false;
 		return true;
 	}
 
@@ -2572,6 +2616,7 @@ final class CudaGemm implements GpuDevice {
 		}
 		try {
 			this.driver.ctxSynchronize();
+			this.queued = false;
 			this.driver.memPoolTrimTo(this.memoryPool, 0);
 		}
 		catch (Throwable ex) {
@@ -2586,6 +2631,9 @@ final class CudaGemm implements GpuDevice {
 	 * rather than a staging buffer.
 	 */
 	private boolean upload(long destination, MemorySegment heap, long offset, long bytes) throws Throwable {
+		if (!awaitQueued()) {
+			return false;
+		}
 		for (long done = 0; done < bytes; done += CRITICAL_CHUNK_BYTES) {
 			long chunk = Math.min(CRITICAL_CHUNK_BYTES, bytes - done);
 			int status = this.driver.memcpyHtoD(destination + done, heap.asSlice(offset + done, chunk), chunk);
@@ -2605,6 +2653,9 @@ final class CudaGemm implements GpuDevice {
 	 */
 	private boolean download(MemorySegment heap, long offset, long source, long bytes) throws Throwable {
 		if (this.bounce.equals(MemorySegment.NULL)) {
+			if (!awaitQueued()) {
+				return false;
+			}
 			for (long done = 0; done < bytes; done += CRITICAL_CHUNK_BYTES) {
 				long chunk = Math.min(CRITICAL_CHUNK_BYTES, bytes - done);
 				int status = this.driver.memcpyDtoH(heap.asSlice(offset + done, chunk), source + done, chunk);
@@ -2667,13 +2718,7 @@ final class CudaGemm implements GpuDevice {
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}
-		if (sync) {
-			status = this.driver.ctxSynchronize();
-			if (status != CuResult.SUCCESS) {
-				return fail(status);
-			}
-		}
-		return true;
+		return awaitLaunched(sync);
 	}
 
 	/**
@@ -2699,13 +2744,7 @@ final class CudaGemm implements GpuDevice {
 		if (status != CuResult.SUCCESS) {
 			return fail(status);
 		}
-		if (sync) {
-			status = this.driver.ctxSynchronize();
-			if (status != CuResult.SUCCESS) {
-				return fail(status);
-			}
-		}
-		return true;
+		return awaitLaunched(sync);
 	}
 
 	/**

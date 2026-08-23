@@ -217,6 +217,15 @@ extern "C" __global__ void map_f64(const double* A, double* C, int n, int op) {
 
 #define STRIDED_BLOCK 256
 
+// The layout rides BY VALUE in the kernel parameter block rather than in a device
+// buffer: a buffer took one pooled allocation and one synchronous host-to-device copy
+// per call, and that copy DRAINED the null-stream queue -- every strided launch
+// serialized behind the previous kernel's whole runtime (.kb/gpu.md). 64 ints is the
+// output dims plus three stride vectors at the rank ceiling of 16.
+typedef struct {
+  int v[64];
+} strided_meta;
+
 // Mirrored by Gpu.BIN_* and by LinalgSimdKernels.BOP_* -- three copies of one table, and
 // the last is the oracle. MAX/MIN are the strict selects `(if (> x y) x y)`, so the
 // SECOND operand wins a tie and a NaN.
@@ -256,13 +265,13 @@ __device__ void bcast(int op, const T* A, const T* B, T* C, int n, int rank, con
 }
 
 extern "C" __global__ void bcast_f32(int op, const float* A, const float* B, float* C, int n, int rank,
-                                     const int* meta) {
-  bcast<float>(op, A, B, C, n, rank, meta);
+                                     strided_meta meta) {
+  bcast<float>(op, A, B, C, n, rank, meta.v);
 }
 
 extern "C" __global__ void bcast_f64(int op, const double* A, const double* B, double* C, int n, int rank,
-                                     const int* meta) {
-  bcast<double>(op, A, B, C, n, rank, meta);
+                                     strided_meta meta) {
+  bcast<double>(op, A, B, C, n, rank, meta.v);
 }
 
 // The axes transpose, and any other pure permuted copy: one source stride per OUTPUT axis.
@@ -280,12 +289,12 @@ __device__ void gather(const T* A, T* C, int n, int rank, const int* meta) {
   C[i] = A[ia];
 }
 
-extern "C" __global__ void gather_f32(const float* A, float* C, int n, int rank, const int* meta) {
-  gather<float>(A, C, n, rank, meta);
+extern "C" __global__ void gather_f32(const float* A, float* C, int n, int rank, strided_meta meta) {
+  gather<float>(A, C, n, rank, meta.v);
 }
 
-extern "C" __global__ void gather_f64(const double* A, double* C, int n, int rank, const int* meta) {
-  gather<double>(A, C, n, rank, meta);
+extern "C" __global__ void gather_f64(const double* A, double* C, int n, int rank, strided_meta meta) {
+  gather<double>(A, C, n, rank, meta.v);
 }
 
 // The axis fold: out[o * inner + j] folds A[(o * len + k) * inner + j] over k ASCENDING,
@@ -501,13 +510,13 @@ __device__ void where_op(const void* M, int mkind, double ms, const T* X, double
 }
 
 extern "C" __global__ void where_f32(const void* M, int mkind, double ms, const float* X, double xs, const float* Y,
-                                     double ys, float* C, int n, int rank, const int* meta) {
-  where_op<float>(M, mkind, ms, X, xs, Y, ys, C, n, rank, meta);
+                                     double ys, float* C, int n, int rank, strided_meta meta) {
+  where_op<float>(M, mkind, ms, X, xs, Y, ys, C, n, rank, meta.v);
 }
 
 extern "C" __global__ void where_f64(const void* M, int mkind, double ms, const double* X, double xs,
-                                     const double* Y, double ys, double* C, int n, int rank, const int* meta) {
-  where_op<double>(M, mkind, ms, X, xs, Y, ys, C, n, rank, meta);
+                                     const double* Y, double ys, double* C, int n, int rank, strided_meta meta) {
+  where_op<double>(M, mkind, ms, X, xs, Y, ys, C, n, rank, meta.v);
 }
 
 // Adam's fused update in place over the parameter, its gradient and the two moments,
@@ -568,12 +577,12 @@ __device__ void copy_strided(const T* A, T* C, int n, int rank, const int* meta)
   C[ic] = A[ia];
 }
 
-extern "C" __global__ void copy_f32(const float* A, float* C, int n, int rank, const int* meta) {
-  copy_strided<float>(A, C, n, rank, meta);
+extern "C" __global__ void copy_f32(const float* A, float* C, int n, int rank, strided_meta meta) {
+  copy_strided<float>(A, C, n, rank, meta.v);
 }
 
-extern "C" __global__ void copy_f64(const double* A, double* C, int n, int rank, const int* meta) {
-  copy_strided<double>(A, C, n, rank, meta);
+extern "C" __global__ void copy_f64(const double* A, double* C, int n, int rank, strided_meta meta) {
+  copy_strided<double>(A, C, n, rank, meta.v);
 }
 
 // The INDEX tier: the three members an embedding table and a cross-entropy pick are made

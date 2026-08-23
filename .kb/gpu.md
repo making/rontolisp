@@ -1905,14 +1905,20 @@ the permutation check, both of which allocate an `int[]` the decline would throw
 The first draft did it the other way round and its declined path allocated two arrays per
 call. Keep the cheap bound first.
 
-**The layout rides in a fourth device buffer.** A broadcast needs the output dims plus one
-stride per axis per operand -- `3 * rank` ints, at most 192 bytes -- and a gather two
-thirds of that. It is one more pooled allocation (0.7-2.3 us) and one more tiny copy per
-call, and it goes through the same pre-flight and the same `finally` as the operands, so
-`aRunOfStridedCallsFreesEveryBufferItAllocates` is the leak pin for the FOUR-buffer path
-that neither the product's nor the map's leak test reaches. Passing the layout as a
-by-value kernel parameter would save the allocation and cost a second parameter-packing
-shape; at these sizes that is not a trade worth making.
+**The layout rides BY VALUE in the kernel parameter block** (since todo-496; it was a
+fourth device buffer until 2026-08-23). A broadcast needs the output dims plus one
+stride per axis per operand -- `3 * rank` ints -- and phase 3 put them in a small pooled
+buffer, judging a by-value parameter "not a trade worth making" against the 0.7-2.3 us
+the allocation cost. That judgment priced the allocation and missed the COPY: the
+192-byte `cuMemcpyHtoD` is synchronous, so it orders behind every kernel already queued
+on the null stream -- each strided call was a hidden `cuCtxSynchronize`, and once lazy
+results stopped downloading, that hidden wait was what kept the launch pipeline from
+ever running ahead ("The step is device-bound" below). Now `bcast`/`gather`/`copy`/
+`where` take a fixed `strided_meta` struct (64 ints: dims plus up to three stride
+vectors at the rank ceiling of 16) that `cuLaunchKernel` copies with the rest of the
+parameter block -- no allocation, no copy, no ordering. `take` and `scatter` keep their
+index BUFFERS, because an index list has no fixed size; their uploads go behind
+`awaitQueued`.
 
 **The JVM backend gained one genuinely new thing: a device rung at the EXTENDED call
 sites.** Until now `.kb/linalg-simd.md`'s option-form machinery
@@ -2997,6 +3003,102 @@ host array, with the one that is read landing on the oracle's bits -- and runs t
 program without the flag under the same heap to see it die of `OutOfMemoryError`, so the
 bound has teeth. The two reader-enumeration pins and every resident/index-tier test ran
 unchanged, which is what says the seams answer the right array.
+
+#### The step is device-bound: the pipeline opened, and the passes counted (2026-08-23, todo-496)
+
+The round after the result stubs, and the one that corrected the premise it was filed
+under. `.todo/496` said the book's-shape step was "launch-bound": ~1.2 TFLOP the device
+finishes in ~0.2 s, the other ~0.6 s launches, the link and the host glue. The profile
+it asked for (nsys over the 3- and 13-step runs, the 10-step DIFF isolating training
+steps from setup and sampling) says otherwise: the step was **0.77 s of which ~0.72 s is
+device kernel time** -- the device is essentially never idle, and the "0.2 s of
+arithmetic" was a FLOP estimate that ignored where the time actually goes on this card
+(memory passes, and a product without tensor cores). What the profile DID find on the
+host side were two hidden serializers, both removed in this round; what the freed
+pipeline then measured is the honest decomposition against PyTorch below, and it moved
+the follow-up from "cut the launches" to "cut the device work".
+
+**The two serializers.** Per training step, before this round: 817 `cuCtxSynchronize`
+(0.52 s of API time), 1056 `cuMemcpyHtoD` (0.19 s, of which the actual copies were
+microseconds), 3830 `cuLaunchKernel`, 4362 `cuMemAllocAsync`.
+
+- **The post-launch `cuCtxSynchronize` predated lazy results** (`.todo/496`'s first
+  suspect): it existed so an eagerly downloaded result's CRITICAL copy would not sit
+  behind the kernel's whole runtime inside a safepoint-free window. Under lazy results
+  nothing is downloaded at the end of a call, so the wait only idled the host. It is now
+  skipped when `lazy` (`CudaGemm.awaitLaunched`), and the safepoint argument was
+  RE-ARGUED rather than dropped: the launch sets a `queued` flag, and every remaining
+  CRITICAL copy path -- `upload` (operand staging), `uploadInts` (take/scatter indices),
+  and the no-bounce download fallback -- first drains the queue through `awaitQueued`, a
+  plain, safepoint-friendly downcall, so the critical window holds the copy alone. The
+  pinned-bounce download path needs nothing: `cuMemcpyDtoH` into the pinned buffer is
+  bound WITHOUT `critical`, and blocking on the null stream there is safepoint-friendly
+  by construction. Eager behavior is unchanged. (`queued` is volatile and racy by
+  design: a race costs one extra or one late synchronize, never a wrong answer.)
+- **The strided layout buffer was a hidden sync per call.** The 192-byte layout upload
+  (`uploadLayout`) was synchronous, so it ordered behind every queued kernel -- with the
+  explicit syncs gone the pipeline would still have drained at every `bcast`/`gather`/
+  `copy`/`where`. The layout now rides by value in the parameter block ("The layout
+  rides BY VALUE" above), which also removed its allocation.
+
+After both: **57 `cuMemcpyHtoD` and 53 syncs a step** (genuine operand staging -- the
+fresh batch, the index lists -- each draining the queue first), allocations 4362 ->
+3363. The step went 0.77 -> **0.695 s** on the 13-step slope (B103: 94 s, steady
+`(t103-t13)/90` = 0.79 s; the notebook's full 5000 steps **70.7 -> 67.2 min**, 0.81
+s/step raw, every loss line byte-identical to the previous build's run); at the
+NOTEBOOK's shapes 0.056 -> **0.050** on the README's metric and 0.017 -> **0.016**
+steady. About 9-10%: the pipeline can now run a few kernels deep, but the host was
+already mostly overlapped -- the device is the floor.
+
+**Where the 0.7 s goes** (kernel time per training step, the 13-3 diff bucketed by grid
+shape):
+
+| tier | ms/step | what it is |
+|---|---|---|
+| the products (`gemm_batched_f32_t8`/`t4`) | ~250 | QKV/proj/MLP/vocab, IEEE f32, bit-identical |
+| activation-shape passes (16384 x 384, ~640 launches) | ~200 | backward adds (`zip` 269/step), layer-norm chain (`bcast` 156), transposes (`gather` 121), scales, GELU |
+| score-shape passes (64 x 6 x 256 x 256) | ~115 | mask, scale, dropout mul, softmax backward over 25 M cells |
+| per-head passes (64 x 256 x 256) | ~50 | softmax forward chain, `where` mask, per-head slicing |
+| axis folds | ~30 | layer-norm mean/var, softmax amax/sum, unbroadcast sums (297 `fold`/step) |
+| dropout masks (`rng_fill`) | ~19 | 13 a step |
+| Adam + clip + take/scatter | ~7 | |
+
+**PyTorch on the same card, decomposed the same way** (nsys over the harness's 40-step
+eager "fp32" run in the `pytorch:25.11` container): **231 ms of kernel time a step --
+98 ms of GEMM and 133 ms of everything else, in ~1400 launches** (also device-bound: its
+step walls at 0.244 s). Two findings that reframe the README's comparison:
+
+- **PyTorch's "eager fp32" GEMMs are `cutlass_80_tensorop_s1688gemm_*` -- TF32 TENSOR
+  CORES**, NVIDIA's container default, not IEEE f32. Our 250 ms of product is bit-exact
+  IEEE f32, bit-identical to the CPU; theirs is a precision class we deliberately do not
+  use (yet -- the width question is `.todo/482`-`490`'s). That is ~2.5x of the gap and
+  it is not a launch or a fusion story at all.
+- **The other 3.6x (475 vs 133 ms) is PASS COUNT, not launch overhead.** PyTorch eager
+  runs the same per-head graph but its elementwise ops are FUSED single kernels --
+  `fused_dropout` (generate + mask + scale in one pass), `softmax_warp_backward`,
+  `layer_norm_grad_input`, one-kernel GELU fwd/bwd, `masked_scale` -- and its transposes
+  are views. We pay one full memory pass per `linalg:` member: a dropout at the score
+  shape is four passes over 100 MB (rng, compare, mul, scale) where PyTorch pays one.
+
+**So suspect 2 (fused `softmax` / `layer-norm` kernels), measured rather than built:**
+the LAUNCH half of what fusion buys vanished with the pipeline (launches are 2.5 us of
+API each, overlapped); the MEMORY half at these shapes is ~20 ms/step for a fused
+softmax forward, ~15 for layer-norm forward, and roughly 100-150 ms/step across the
+whole fusible set (softmax/layer-norm/dropout/GELU, forward AND backward -- backward
+fusion means hand-written adjoints in `torch.lisp`, a tape-semantics change that moves
+CPU outputs too). That is real but it is a program of its own and it is filed with
+these numbers as `.todo/499`; it was not built in this round because even a perfect
+fused softmax forward is 3% of this step. Suspects 3 and 4 for the record: warm
+`cuMemAllocAsync` is 3363 calls/step (~30 ms of API time, now overlapped),
+`cuMemGetInfo` 60/step, and the `System.gc` share is todo-492's unchanged 3%.
+
+The method note that made the PyTorch comparison possible: the container's own nsys
+(2025.5) writes a report the host's 2025.3 cannot export, so `nsys stats` runs INSIDE
+the container and the sqlite it leaves behind is readable anywhere. And the
+shape-bucketed kernel diff is a 20-line sqlite query over
+`CUPTI_ACTIVITY_KIND_KERNEL` grouped by `(name, gridX, gridY, gridZ)` -- the per-shape
+table above cannot be read off `cuda_gpu_kern_sum`, whose averages mix a 365 us
+score-shape `zip` with a 2 us scalar one.
 
 ### The chain order, and why the device goes on top
 
