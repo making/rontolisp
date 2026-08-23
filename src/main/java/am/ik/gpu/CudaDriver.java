@@ -8,6 +8,8 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
@@ -21,11 +23,14 @@ import org.jspecify.annotations.Nullable;
  *
  * <h2>A binding that is absent is not a binding that failed</h2>
  *
- * Constructing one either binds every symbol or throws, and {@link #open()} turns the
- * throw into {@code null}. That is deliberate: on a machine with no NVIDIA driver the
- * library lookup itself fails, and there is nothing to report but "no". Because the
- * handles are then final and non-null, every call site below is free of null checks --
- * the availability question is asked exactly once, by {@link Gpu}.
+ * Constructing one either binds every symbol or throws, and {@link #open()} answers
+ * {@code null} only when the LIBRARY is not there. That split is deliberate: on a machine
+ * with no NVIDIA driver the library lookup itself fails and there is nothing to report
+ * but "no", whereas a library that is present and then fails to bind has a reason worth
+ * printing -- a driver too old to export an entry point, or a native-image build missing
+ * one of the downcall registrations {@link #signatures()} enumerates -- and the throw
+ * carries it. Because the handles are then final and non-null, every call site below is
+ * free of null checks -- the availability question is asked exactly once, by {@link Gpu}.
  *
  * <h2>The two copies are critical</h2>
  *
@@ -128,7 +133,22 @@ final class CudaDriver {
 
 	private final MethodHandle cuGetErrorString;
 
-	private CudaDriver(SymbolLookup lookup) {
+	/**
+	 * Every downcall SHAPE this binding asks the linker for, and the same for the
+	 * {@linkplain Linker.Option#critical(boolean) critical} ones -- the download is bound
+	 * both ways, so one shape can be in both sets. Native Image builds a downcall stub
+	 * only for a signature registered at BUILD time and refuses to make a handle for any
+	 * other, and refusing ONE fails this whole constructor: a shape missing from
+	 * {@code reachability-metadata.json} makes the binary decline as though the machine
+	 * had no driver at all. So the shapes are recorded as they are bound, and the test
+	 * pins the checked-in metadata against what is actually asked for rather than against
+	 * a list someone remembered to update.
+	 */
+	private final Set<FunctionDescriptor> signatures = new LinkedHashSet<>();
+
+	private final Set<FunctionDescriptor> criticalSignatures = new LinkedHashSet<>();
+
+	CudaDriver(SymbolLookup lookup) {
 		Linker.Option critical = Linker.Option.critical(true);
 		FunctionDescriptor htod = FunctionDescriptor.of(I, L, P, L);
 		FunctionDescriptor dtoh = FunctionDescriptor.of(I, P, L, L);
@@ -163,9 +183,10 @@ final class CudaDriver {
 		this.cuGetErrorString = handle(lookup, "cuGetErrorString", FunctionDescriptor.of(I, I, P));
 	}
 
-	private static MethodHandle handle(SymbolLookup lookup, String name, FunctionDescriptor descriptor,
+	private MethodHandle handle(SymbolLookup lookup, String name, FunctionDescriptor descriptor,
 			Linker.Option... options) {
 		MemorySegment symbol = lookup.find(name).orElseThrow(() -> new IllegalStateException(name + " is missing"));
+		record(descriptor, options);
 		return LINKER.downcallHandle(symbol, descriptor, options);
 	}
 
@@ -174,23 +195,58 @@ final class CudaDriver {
 	 * the stream-ordered allocator is optional: everything else has been in the driver
 	 * API since CUDA 4, so a driver missing one of those is not a driver.
 	 */
-	private static @Nullable MethodHandle optional(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
-		return lookup.find(name).map(symbol -> LINKER.downcallHandle(symbol, descriptor)).orElse(null);
+	private @Nullable MethodHandle optional(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
+		return lookup.find(name).map(symbol -> {
+			record(descriptor);
+			return LINKER.downcallHandle(symbol, descriptor);
+		}).orElse(null);
+	}
+
+	/**
+	 * Remembers one bound shape. {@code critical(true)} is the only option this binding
+	 * ever passes, and it makes a DIFFERENT registration than the same shape without it,
+	 * which is why the two are kept apart.
+	 * @param descriptor the shape just bound
+	 * @param options the options it was bound with
+	 */
+	private void record(FunctionDescriptor descriptor, Linker.Option... options) {
+		(options.length == 0 ? this.signatures : this.criticalSignatures).add(descriptor);
+	}
+
+	/**
+	 * The shapes bound WITHOUT {@code critical}, for the native-image registration test.
+	 * @return the plain downcall shapes this binding asked the linker for
+	 */
+	Set<FunctionDescriptor> signatures() {
+		return Set.copyOf(this.signatures);
+	}
+
+	/**
+	 * The shapes bound WITH {@code critical(true)}.
+	 * @return the critical downcall shapes this binding asked the linker for
+	 */
+	Set<FunctionDescriptor> criticalSignatures() {
+		return Set.copyOf(this.criticalSignatures);
 	}
 
 	/**
 	 * Binds {@code libcuda.so.1}, or answers {@code null} when there is nothing to bind:
-	 * no NVIDIA driver, a platform that has none, a JVM that forbids native access, or a
-	 * driver too old to export one of the entry points above. Never throws.
+	 * no NVIDIA driver, a platform that has none, or a JVM that forbids native access. A
+	 * library that IS present and then fails to bind -- a driver too old to export one of
+	 * the entry points above, a downcall shape a native image was not built for --
+	 * THROWS, because "absent" and "unusable" are different answers and only the caller
+	 * printing them can tell the user which one this machine gave.
 	 * @return the binding, or {@code null} when this machine has no CUDA driver
 	 */
 	static @Nullable CudaDriver open() {
+		SymbolLookup lookup;
 		try {
-			return new CudaDriver(SymbolLookup.libraryLookup(LIBRARY, Arena.global()));
+			lookup = SymbolLookup.libraryLookup(LIBRARY, Arena.global());
 		}
 		catch (Throwable ex) {
 			return null;
 		}
+		return new CudaDriver(lookup);
 	}
 
 	// --- the entry points -------------------------------------------------------------

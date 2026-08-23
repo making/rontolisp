@@ -10,7 +10,9 @@ import java.lang.foreign.SegmentAllocator;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.jspecify.annotations.Nullable;
@@ -36,10 +38,14 @@ import org.jspecify.annotations.Nullable;
  *
  * <h2>A binding that is absent is not a binding that failed</h2>
  *
- * Constructing one either binds every symbol or throws, and {@link #open()} turns the
- * throw into {@code null} -- on Linux, on a JVM that forbids native access, or on a Mac
- * too old to have one of these frameworks. The availability question is then asked
- * exactly once, by {@link Gpu}.
+ * Constructing one either binds every symbol or throws, and {@link #open()} answers
+ * {@code null} only when the FRAMEWORKS are not there -- on Linux, or on a JVM that
+ * forbids native access. A framework that is present and then fails to bind (a Mac too
+ * old for one of these selectors, a native image missing one of the downcall
+ * registrations {@link #signatures()} enumerates) throws instead, because "absent" and
+ * "unusable" are different answers and only the caller printing them can say which one
+ * this machine gave. The availability question is then asked exactly once, by
+ * {@link Gpu}.
  *
  * @see MetalGemm
  * @see Gpu
@@ -153,11 +159,23 @@ final class MetalDriver {
 	 */
 	private final MethodHandle idMpsInit;
 
+	/**
+	 * Every downcall SHAPE this binding asks the linker for. Native Image builds a
+	 * downcall stub only for a signature registered at BUILD time and refuses to make a
+	 * handle for any other, and refusing ONE fails this whole constructor: a shape
+	 * missing from {@code reachability-metadata.json} makes the binary decline as though
+	 * the machine had no Metal at all. So the shapes are recorded as they are bound, and
+	 * the test pins the checked-in metadata against what is actually asked for rather
+	 * than against a list someone remembered to update. Nothing here is {@code critical}:
+	 * every operand crosses through a shared buffer.
+	 */
+	private final Set<FunctionDescriptor> signatures = new LinkedHashSet<>();
+
 	private final Map<String, MemorySegment> selectors = new ConcurrentHashMap<>();
 
 	private final Map<String, MemorySegment> classes = new ConcurrentHashMap<>();
 
-	private MetalDriver(SymbolLookup objc, SymbolLookup metal, SymbolLookup mps) {
+	MetalDriver(SymbolLookup objc, SymbolLookup metal, SymbolLookup mps) {
 		this.objcGetClass = handle(objc, "objc_getClass", FunctionDescriptor.of(P, P));
 		this.selRegisterName = handle(objc, "sel_registerName", FunctionDescriptor.of(P, P));
 		this.poolPush = handle(objc, "objc_autoreleasePoolPush", FunctionDescriptor.of(P));
@@ -187,9 +205,18 @@ final class MetalDriver {
 		mps.find("MPSSupportsMTLDevice");
 	}
 
-	private static MethodHandle handle(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
+	private MethodHandle handle(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
 		MemorySegment symbol = lookup.find(name).orElseThrow(() -> new IllegalStateException(name + " is missing"));
+		this.signatures.add(descriptor);
 		return LINKER.downcallHandle(symbol, descriptor);
+	}
+
+	/**
+	 * The shapes bound here, for the native-image registration test.
+	 * @return the downcall shapes this binding asked the linker for
+	 */
+	Set<FunctionDescriptor> signatures() {
+		return Set.copyOf(this.signatures);
 	}
 
 	/**
@@ -200,8 +227,7 @@ final class MetalDriver {
 	 * @param argumentLayouts the selector's own arguments
 	 * @return a handle that must be invoked with {@code (receiver, selector, ...)}
 	 */
-	private static MethodHandle send(SymbolLookup objc, @Nullable MemoryLayout returnLayout,
-			MemoryLayout... argumentLayouts) {
+	private MethodHandle send(SymbolLookup objc, @Nullable MemoryLayout returnLayout, MemoryLayout... argumentLayouts) {
 		MemoryLayout[] all = new MemoryLayout[argumentLayouts.length + 2];
 		all[0] = P;
 		all[1] = P;
@@ -214,18 +240,22 @@ final class MetalDriver {
 	/**
 	 * Binds the three frameworks, or answers {@code null} when there is nothing to bind:
 	 * any platform but macOS, a JVM that forbids native access, or a Mac without
-	 * MetalPerformanceShaders. Never throws.
+	 * MetalPerformanceShaders. A framework that opens and then fails to bind throws, so
+	 * that the caller can print the reason rather than call this machine a Linux box.
 	 * @return the binding, or {@code null} when this machine has no Metal
 	 */
 	static @Nullable MetalDriver open() {
+		SymbolLookup objc, metal, mps;
 		try {
 			Arena arena = Arena.global();
-			return new MetalDriver(SymbolLookup.libraryLookup(LIB_OBJC, arena),
-					SymbolLookup.libraryLookup(LIB_METAL, arena), SymbolLookup.libraryLookup(LIB_MPS, arena));
+			objc = SymbolLookup.libraryLookup(LIB_OBJC, arena);
+			metal = SymbolLookup.libraryLookup(LIB_METAL, arena);
+			mps = SymbolLookup.libraryLookup(LIB_MPS, arena);
 		}
 		catch (Throwable ex) {
 			return null;
 		}
+		return new MetalDriver(objc, metal, mps);
 	}
 
 	// --- interning --------------------------------------------------------------------

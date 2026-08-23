@@ -3161,9 +3161,21 @@ Two build inputs, both already in
   never makes `CudaGemm` reachable. Verified: the native binary compiles a `--gpu` class
   and the class runs the device.
 - **`reachability-metadata.json`**: a `foreign.downcalls` entry per distinct SIGNATURE --
-  24 handles collapse to 15 shapes, added to the six `--blas` ones. Without them the
-  binary binds the driver and then throws `MissingForeignRegistrationError` on the first
-  call. Generate them with the tracing agent
+  28 handles collapse to 18 shapes, added to the six `--blas` ones. Without them the
+  linker REFUSES the handle (`MissingForeignRegistrationError`) at BINDING time, not at
+  call time, and both drivers bind every entry point in their constructor: one missing
+  shape fails the whole binding, so the binary reports "`libcuda.so.1` is not present:
+  this machine has no NVIDIA driver" ON A MACHINE WITH A WORKING GPU and runs
+  unaccelerated. That is how the pinned-download round shipped: it added
+  `cuMemcpyDtoH_v2` PLAIN (the same shape as the critical one is a DIFFERENT
+  registration), `cuMemHostAlloc` and `cuMemPoolSetAttribute`, none of them in the file,
+  and only the native binary noticed. Two things now stand against it: `CudaDriver.open`
+  and `MetalDriver.open` answer `null` only when the LIBRARY is absent and let a binding
+  failure THROW, so `probe` prints "the CUDA driver could not be bound: ..." with the
+  reason instead of blaming the machine; and `NativeImageForeignConfigTest` binds both
+  drivers against a lookup that finds everything -- no device needed, so it runs on every
+  machine -- and asserts that every shape they actually ask the linker for has an entry
+  in the checked-in file. Generate them with the tracing agent
   (`-agentlib:native-image-agent=config-output-dir=...`) over a program that opens the
   binding and runs a product, then fold the result in -- the agent traces
   `Linker.downcallHandle`, so merely constructing `CudaDriver` registers every shape.
@@ -3187,6 +3199,7 @@ Mirrors `--blas`'s split exactly; the interceptor's own tests are listed above.
 | needs a DOUBLE-capable GPU on the machine (`@EnabledIf` on the probe) | `am/ik/gpu/GpuTest` |
 | needs a METAL device | `am/ik/gpu/MetalGpuTest` |
 | must hold on EVERY machine, GPU or not | `am/ik/gpu/GpuDeclineTest` |
+| the native-image downcall registration, both drivers, on EVERY machine | `am/ik/gpu/NativeImageForeignConfigTest` |
 
 `GpuTest` pins the checked-in PTX (it is a generated artifact with no other test of its
 validity, and a bad regeneration would pass every decline test), the exactness of a

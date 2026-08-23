@@ -1,9 +1,10 @@
 {
   "comment": [
     "Foreign downcalls, for the accelerations that have them. Native Image needs every",
-    "downcall stub registered ahead of time: without these the binary binds the library, then",
-    "throws MissingForeignRegistrationError on the first call and declines to the",
-    "unaccelerated kernel -- correct output, silently no acceleration. A downcall entry takes",
+    "downcall stub registered ahead of time, and the linker REFUSES the handle for a shape",
+    "that has none: one missing entry fails the whole binding -- which both GPU drivers do in",
+    "their constructor -- and the binary then declines as though the machine had no device at",
+    "all, correct output and silently no acceleration. A downcall entry takes",
     "returnType, parameterTypes and options ONLY; a per-entry \"comment\" key is rejected by the",
     "schema, which is why the two groups are described here instead.",
     "",
@@ -13,7 +14,7 @@
     "(thread-transitioning) handle instead.",
     "",
     "The rest are the CUDA driver API downcalls behind am.ik.gpu (.kb/gpu.md), one entry per",
-    "distinct SHAPE rather than per entry point -- 24 handles collapse to 15 signatures, in",
+    "distinct SHAPE rather than per entry point -- 28 handles collapse to 18 signatures, in",
     "the order below:",
     "  ()                       cuCtxSynchronize",
     "  (int)                    cuInit, cuDevicePrimaryCtxRelease_v2",
@@ -25,13 +26,17 @@
     "  (long, void*)            cuMemFreeAsync",
     "  (void*, void*)           cuModuleLoadData, cuMemGetInfo_v2",
     "  (void*, int, int)        cuDeviceGetName, cuDeviceGetAttribute",
+    "  (void*, int, void*)      cuMemPoolSetAttribute",
     "  (void*, void*, void*)    cuModuleGetFunction",
     "  (void*, long, void*)     cuMemAllocAsync",
+    "  (void*, long, int)       cuMemHostAlloc",
     "  (long, void*, long)      cuMemcpyHtoD_v2, critical",
     "  (void*, long, long)      cuMemcpyDtoH_v2, critical",
+    "  (void*, long, long)      cuMemcpyDtoH_v2, plain -- the staged download",
     "  (void*, int x7, void* x3) cuLaunchKernel",
     "Both copies are critical: they take a heap segment, so an operand never needs a staging",
-    "copy, and one too big for a single critical window is split rather than staged.",
+    "copy, and one too big for a single critical window is split rather than staged. The",
+    "download is ALSO registered plain, for the route that stages it through a pinned buffer.",
     "Regenerate with the tracing agent over a program that opens the binding and runs a",
     "product -- the agent traces Linker.downcallHandle, so constructing CudaDriver or",
     "MetalDriver is enough. The type names are the agent's own (jlong, jint, jboolean);",
@@ -116,11 +121,19 @@
       },
       {
         "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "void*"]
+      },
+      {
+        "returnType": "jint",
         "parameterTypes": ["void*", "void*", "void*"]
       },
       {
         "returnType": "jint",
         "parameterTypes": ["void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jint"]
       },
       {
         "returnType": "jint",
@@ -131,6 +144,10 @@
         "returnType": "jint",
         "parameterTypes": ["void*", "jlong", "jlong"],
         "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jlong"]
       },
       {
         "returnType": "jint",
