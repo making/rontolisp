@@ -2955,10 +2955,30 @@ recommend is now the SLOWER of the two -- with nothing to collect, a 4 GB young
 generation is 4 GB of pages the device has never touched (the fresh-page cost of
 todo-474), which a default heap that recycles its regions every forty steps does not pay.
 That is a hypothesis from one log (no full collection in either run, one young against
-five), and the README now simply does not recommend the flag. Against `--simd` alone
+five), and the README records the notebook-shape figure as it is; at the book's shape the
+flag is the FASTER one again (the next paragraph), and `.todo/498` holds the question. Against `--simd` alone
 (0.85 s a step, unchanged) the flag is 15x on the README's metric and **50x** at the
 steady state; at the book's shapes the notebook's 5000 steps would now take about an hour
 here instead of nine.
+
+**The book's run, and PyTorch on the same card** (2026-08-23 night, after the round
+closed). The notebook's own 5000 steps (warmup 1000, eval every 500) ran in **70.7 min**
+(4244 s; loss 8.10 -> 0.24, validation 0.116 over the book's overlapping `random_split`
+windows, 2888 `System.gc()` = 132 s = 3%), a 103-step run in 101 s against 17 min at the
+9.9 s build, and chapter 2 at `d_model` 512 at **0.35 s a batch** (2 epochs over 10000
+pairs in 124 s; the 20-epoch book run, ~1.5 h, was not run: `.todo/497`). The same
+chapter-3 model written against PyTorch (NVIDIA's `pytorch:25.11` container, the book's
+per-head attention, AdamW, clipping, dropout; `(t200 - t40) / 160` over 300 steps) on the
+same GB10: **eager fp32 0.243 s a step, bf16 autocast 0.21 s, `torch.compile` + bf16
+0.096 s** (+19 s compilation; the eager fp32 run's full 5000 steps took 20.4 min and
+ended at a train loss of 0.17 against the port's 0.24). The port's 0.84 s is 3.5x the
+eager figure and 9x the compiled one; the arithmetic is ~0.2 s of it, so what remains is launches, the link and
+the host glue -- `.todo/496` has the suspects (the big-product `cuCtxSynchronize` that
+predates lazy results, one launch per member where `torch.compile` fuses, per-call
+allocation with no cap, the tape). One more measurement from the night: at the BOOK's
+shape `-XX:+UseParallelGC -Xmn8g` beats the default collector by a third (103 steps: 101 s
+against 131), the opposite of the notebook-shape row above; `.todo/498` holds both logs'
+question.
 
 **The tests.** `GpuTest.aStubResultAllocatesNoHostArrayUntilTheHostFirstReadsIt` (the
 library: a stub result stays three floats, is a full operand to the next member with no

@@ -82,129 +82,12 @@ the low-order digits of the WASM `exp`/`log` approximations cannot show
 through. That is why the two generated 漱石 passages are the same text on the
 interpreter, the JVM and wasm-GC rather than merely the same kind of text.
 
-## `--simd`
-
-Every operation here computes through `linalg`, so
-[`--simd`](../../doc/en/guides/simd-acceleration.md) applies with nothing to
-change in the source, and it leaves the output byte-identical. The two training
-programs are tested with the flag for that reason — it buys back the margin
-their interpreter leg needs:
-
-| | scalar | `--simd` |
-| --- | --- | --- |
-| `chapter02/section5.lisp`, interpreter | 40.9 s | 5.4 s |
-| `chapter03/train-gpt-soseki.lisp`, interpreter | 52.4 s | 6.5 s |
-| `chapter03/train-gpt-soseki.lisp`, JVM | 2.11 s | 0.70 s |
-| `chapter03/train-gpt-soseki.lisp`, wasm-GC | 1.83 s | 0.41 s |
-
-(Median of 3 / min of 5 on an aarch64 DGX Spark, GraalVM 25, wasmtime 47.)
-The batched (rank >= 3) matrix product an attention layer almost entirely *is*
-became part of the accelerated set on 2026-08-20; before that it was the one
-gap that held these programs to a ~1.6x flag, well under what `--simd` gives an
-MLP. See
-[Accelerating linalg](../../doc/en/guides/simd-acceleration.md#accelerating-linalg).
-
-## `--gpu`
-
-The same batched product is what
-[`--gpu`](../../doc/en/guides/gpu-acceleration.md)
-routes to an NVIDIA device, along with the element-wise transcendentals
-(`exp`, `tanh`, `erf` and nine more) that `gelu`, `softmax` and `log-softmax`
-are built from, and -- since 2026-08-21 -- the broadcast `sub` / `div` / `mul`,
-the `:axis` reductions and the axes `transpose` that the rest of `softmax` and
-`layer-norm` are made of. **At the shapes tested here it changes nothing**, and that is
-the intended answer: a stack of `4 x 8x8` products is a few thousand
-multiply-adds and an activation is a few hundred elements, both far under the
-thresholds a 15 us round trip has to clear, so every call declines and the
-output stays byte-identical with the flag and without it.
-
-It is the shapes in the next section that the flag is for. With
-`chapter03/train-gpt-soseki.lisp` raised to the notebook's own `*n-embd*` 384 and
-`*block-size*` 256 -- the one-line change the file describes -- a training step
-on the JVM class output, per step from a 5-step and a 40-step run so setup and
-sampling fall out of the slope, medians of three interleaved rounds on the same
-aarch64 DGX Spark (GB10), 2026-08-22:
-
-| flags (JVM class output) | per training step |
-| --- | --- |
-| `--simd` | 0.79 s |
-| `--simd --parallel` | 0.37 s |
-| `--blas --simd` | 0.79 s |
-| `--gpu --simd` | **0.056 s** (0.085 the same morning) |
-| `--gpu --blas --simd`, `--gpu --simd --parallel` | within noise of the row above (2026-08-22; not re-measured since) |
-
-**Fourteen times `--simd`, seven times `--simd --parallel`**, measured 2026-08-23 evening.
-It was 0.89 -> 0.21 when the flag first landed and 0.11 the day before; since then the AdamW
-update, the dropout generator, `torch:masked-fill`'s `where`, the embedding lookup and
-its adjoint, and gradient clipping have all moved onto the acceleration seams, the
-generator onto the device itself (still bit-identical to the CPU's sequence), the stacked
-f32 product runs a register-tiled kernel at its large shapes -- and since 2026-08-23 a
-device result **stays on the device until something on the host reads it**, so a chain of
-members moves nothing over the link, and the members whose operands are already there
-(the equal-shape and scalar arithmetic, `where`, the Adam step, the reshapes, slices and
-`cat`) run as launches with no copy. Over a longer run the step settles at **0.017 s**
-(steps 40-200: 50 times `--simd`'s 0.85 there; a 200-step run in 5.8 s). An `nsys` profile
-of the 200-step run moves 2.3 GB down in 6737 copies, against the 44 GB and 37534 of the
-day before.
-
-Later the same day the last of those copies went too. A 40-step run brought **443 MB home
-in 1200 copies**: gradient clipping's sum over every gradient of the model, the embedding
-lookup and its scatter-add adjoint, the cross-entropy's target-logit pick, and the few
-bias-gradient folds too small to be offered. All five are device members now -- the sum in
-blocks, which is [the one result of this flag that is not the portable definition's own
-arithmetic in its own order](../../doc/en/guides/gpu-acceleration.md#reach-and-precision),
-and the other four bit-identical -- and the same run brings **0.16 MB home in 40 copies**,
-the loss the loop prints. It is worth a tenth of the settled step (0.037 -> 0.033 s over
-steps 40-200, medians of five interleaved rounds) and nothing over the first forty, where
-warmup is most of the run. And last of all went the host arrays each result still
-allocated whether or not it was ever read: since the evening of 2026-08-23 a device
-result's host array is **its header alone** -- the elements are allocated only when
-something on the host reads them, and a result nobody reads costs the heap nothing -- which
-is what took the settled step from 0.033 s to 0.017 and the 40-step run from 4.5 s to
-3.0. It also retired the collector advice that used to stand here: with nothing to
-collect, the default collector is now the faster one, and `-XX:+UseParallelGC -Xmn4g`
-makes the 200-step run slower (9.3 s against 5.8). The same program varies by about 15%
-run to run, so read the ratios rather than the digits.
-
-On an Apple M4 Max the same 40-step program at the notebook's shapes (JVM class output,
-2026-08-23) runs at **0.104 s a step under `--gpu --simd`** against 0.70 under `--simd`
--- a 6.7x that the Metal guide's five-times-higher per-call floor and single-float-only
-member set explain -- and the round that keeps results on the device changes nothing
-there: built and measured on Metal the same day, it is a tie at these shapes (0.102) and
-slower at the book's, so on a Mac every device result still comes home when its call
-returns ([the guide's Apple section](../../doc/en/guides/gpu-acceleration.md#on-apple-silicon)).
-
-Two of the rows say something the flags' own guides already say, in this program's terms.
-`--blas` changes nothing here because **every product in these files is the stacked
-rank-3 one** -- an attention layer's `torch:matmul` over `(B T C)` and a `torch:linear`
-over a `(B T C)` activation -- and `--blas` takes only the rank-2 `linalg:dot`
-([BLAS acceleration](../../doc/en/guides/blas-acceleration.md)); nothing in the source
-would change that without un-batching the model. And
-[`--parallel`](../../doc/en/guides/simd-acceleration.md#using-more-than-one-core---parallel)
-halves the CPU step on twenty cores because that same stacked product is the member it
-splits; with `--gpu` in front the device takes those products first, so adding
-`--parallel` to a `--gpu` run changes nothing measurable.
-
-One JVM flag is worth knowing on the `--gpu` run: each activation of this step is a fresh
-6 MB single-float array, and on the default collector the allocation costs more than the
-arithmetic on it (a `(/ x s)` over 1.5 M elements is 0.75 ms; with the fresh array it is
-1.1-2.6). `java -XX:+UseParallelGC -Xmn4g ...` took the 40-step `--gpu --simd` run from
-6.0 s to 5.0 s on this machine.
-
-Note that once a transcendental runs on the device, a program that touches one
-is no longer byte-identical with the flag and without it: the device carries its
-own `exp` and `erf`, which differ from the CPU's in the last digit or two, and
-over 20 training steps that is enough to move the sampled text. The guide's
-precision section has the measured divergence; `CUDA_VISIBLE_DEVICES=` makes any
-flagged run identical to an unflagged one again.
-
 ## The shapes: the book's, and the ones that are tested
 
 The notebook trains a `d_model` = 512, 6-block, 8-head Transformer for 20
-epochs over `small_parallel_enja` on a GPU. That is the **documented**
-configuration, and this port would run it unchanged. What is actually tested is
-a shrunken one, because the point is that the pipeline is right, not that a
-laptop can train a translator:
+epochs over `small_parallel_enja` on a GPU. This port runs that configuration
+unchanged (see [Performance](#performance)); what is tested is a shrunken one,
+because the point of the test is that the pipeline is right:
 
 | | book | tested here |
 | --- | --- | --- |
@@ -216,10 +99,9 @@ laptop can train a translator:
 | section 2.3.4 identity training | 10000 × 10, 100 epochs | 64 × 10, 40 epochs |
 
 Every one of those is a `defparameter` at the top of its file: raise them (and
-add data) to walk back toward the book's run. The trained model **memorises**
-its eight pairs — it reproduces all eight target sentences exactly, and it does
-not generalise beyond them. That is what a corpus this small can do, and saying
-so is more useful than pretending otherwise.
+add data) to walk back toward the book's run. At the tested size the model
+**memorises** its eight pairs — it reproduces all eight target sentences exactly
+and does not generalise beyond them.
 
 Chapter 3's notebook trains a `n_embd` = 384, 6-layer, 6-head GPT for 5000
 steps over the whole of 『吾輩は猫である』 on a T4, and the same applies:
@@ -235,52 +117,82 @@ steps over the whole of 『吾輩は猫である』 on a T4, and the same applie
 | generated tokens | 200 | 30 |
 
 100 steps over 448 characters is enough to make the point and no more: the
-training loss falls from `4.93` — which is `log(138)`, the uniform guess over
-the 138 distinct characters — to about `2.99`, and the samples come out as
-recognisable 漱石 fragments (`である。`, `というもの`, `の顔`) strung together
-without sentences. Raise the numbers above and the same program keeps going.
+training loss falls from `4.93` — `log(138)`, the uniform guess over the 138
+distinct characters — to about `2.99`, and the samples come out as recognisable
+漱石 fragments (`である。`, `というもの`, `の顔`) strung together without sentences.
 
-### Raised to the book's shapes, measured
+## Performance
 
-Both programs were run once at the book's own configuration on 2026-08-23, to check that
-"would run it unchanged" is true and to see what it costs. Two edits were needed, both to
-data and neither to the model: `train-gpt-soseki.lisp`'s `*text*` read from a file holding
-the whole novel (fetched from 青空文庫 and stripped of ruby and notes beforehand -- the
-notebook's `requests` + BeautifulSoup step; 318315 characters, 3038 distinct), and
-`section5.lisp`'s `*corpus*` read from a cloned `small_parallel_enja`. Neither file is in
-this repository, because nothing here downloads; the shape parameters were set as the
-tables above say. JVM class output, `--gpu --simd`, `java -Xmx64g -XX:+UseParallelGC
--Xmn8g`, the same GB10:
+Everything here computes through `linalg`, so the acceleration flags apply with nothing
+to change in the source -- [`--simd`](../../doc/en/guides/simd-acceleration.md),
+[`--parallel`](../../doc/en/guides/simd-acceleration.md#using-more-than-one-core---parallel),
+[`--blas`](../../doc/en/guides/blas-acceleration.md),
+[`--gpu`](../../doc/en/guides/gpu-acceleration.md) -- and the output stays the same
+except where a device transcendental runs (`--gpu`: its `exp` / `erf` differ from the
+CPU's in the last digit or two, which over a training run moves the sampled text;
+`CUDA_VISIBLE_DEVICES=` makes the run identical again). The history of how each number
+below was reached is in [`.kb/gpu.md`](../../.kb/gpu.md); this section keeps the current
+figures only. All on one aarch64 DGX Spark (GB10, 20 cores, 128 GB unified memory),
+GraalVM 25, wasmtime 47, JVM class output unless noted; medians of three runs, 2026-08-23.
 
-- **Chapter 3 at `block_size` 256, `n_embd` 384, 6 layers, 6 heads, batch 64 (13.06 M
-  parameters): 9.9 s per training step** on 2026-08-23 morning, **6.3 s** that evening
-  with results staying on the device, and **0.65 s** that night with no host array
-  behind a result nobody reads (`(t13 - t3) / 10`, outputs byte-identical across the
-  three), so the notebook's 5000 steps would take about an hour here. A 103-step run
-  (17 minutes, at the 9.9 s build) took the loss from 8.10 (`log 3038`) to
-  4.31 and already samples sentence-shaped 漱石 -- `主人はなる。そうにものであるのでする。` --
-  with the warmup shortened to 100 steps so that a run this short reaches the base rate
-  (the trainer's `3e-4`).
-- **Chapter 2 at `d_model` 512, 6 blocks, 8 heads, `d_ff` 512, batch 64: 1.9 s per
-  batch of 64 pairs**, so 20 epochs over the 50000 training pairs would take about 8
-  hours. Two epochs over the first 10000 pairs (9 minutes) took the loss from 4.72 to
-  3.61 and the greedy decodes from `i have to the .` for everything to sentence-shaped
-  English that is not yet the translation -- `曇り の 日 で す 。` -> `it 's a day .`,
-  `私 に は 生き 甲斐 が な い 。` -> `i don 't know .` -- which is what 312 batches
-  of a 6-block model should look like.
+**The shapes that are tested** (the shrunken ones in the files, below):
 
-So the port runs the book's shapes, and since 2026-08-23 at a speed that is within a
-factor of three of the arithmetic: a chapter-3 step is about 1.2 TFLOP, which the device
-finishes in 0.2 s of the 0.65. Until that day the rest was the round trip the `--gpu`
-section describes, scaled up -- every member's result copied home (an `nsys` profile of
-three steps and the sampling moved 88 GB down and 40 GB up), every non-member (`where`
-behind the causal mask, the array-times-scalar forms, the equal-shape adds and
-multiplies) then running on the host over the copy -- and, once results stayed on the
-device and those members ran there (6.3 s), the fresh 100 MB host array still allocated
-and zeroed for every result whether or not anything read it: 4.7 s of that 6.3 were
-collector pauses over a heap that grew to 58 GB. With a device result's host array
-reduced to its header, the heap's live set is 170 MB, and the remaining 0.45 s a step is
-the launches and the link -- the shape the book trains at is now a shape to run.
+| | scalar | `--simd` |
+| --- | --- | --- |
+| `chapter02/section5.lisp`, interpreter | 40.9 s | 5.4 s |
+| `chapter03/train-gpt-soseki.lisp`, interpreter | 52.4 s | 6.5 s |
+| `chapter03/train-gpt-soseki.lisp`, JVM | 2.11 s | 0.70 s |
+| `chapter03/train-gpt-soseki.lisp`, wasm-GC | 1.83 s | 0.41 s |
+
+`--gpu` changes nothing at these shapes, by design: a stack of `4 x 8x8` products is a
+few thousand multiply-adds, far under the threshold a 15 us round trip has to clear, so
+every call declines and the output is byte-identical with the flag and without it.
+
+**`train-gpt-soseki.lisp` at the notebook's width** (`*n-embd*` 384, `*block-size*` 256,
+the rest as in the file), per training step:
+
+| flags | per step, `(t40 - t5) / 35` | steady state, `(t200 - t40) / 160` |
+| --- | --- | --- |
+| `--simd` | 0.79 s | 0.85 s |
+| `--simd --parallel` | 0.37 s | -- |
+| `--blas --simd` | 0.79 s | -- |
+| `--gpu --simd` | **0.056 s** | **0.017 s** |
+
+`--blas` changes nothing because every product here is the stacked rank-3 one, which
+`--blas` does not take; `--parallel` halves the CPU step because that product is what it
+splits, and adds nothing to a `--gpu` run, where the device takes it first. On an Apple M4
+Max the same program runs at 0.104 s a step under `--gpu --simd` against 0.70 under
+`--simd` ([the guide's Apple section](../../doc/en/guides/gpu-acceleration.md#on-apple-silicon)).
+The interpreter shows no change from `--gpu` at any of these shapes: its step is 30x a
+compiled one, and what dominates it is the tree walk, not the kernels -- compile before
+you measure a flag.
+
+**The book's own shapes**, run unchanged but for data (the whole novel, fetched from
+青空文庫 and stripped of ruby beforehand; a cloned `small_parallel_enja`) and the
+`defparameter`s at the top of each file set to the tables above. `--gpu --simd`, JVM
+class output, `java -Xmx64g -XX:+UseParallelGC -Xmn8g`:
+
+| | | rontolisp | PyTorch on the same machine |
+| --- | --- | --- | --- |
+| chapter 3, 13.06 M parameters | per training step | **0.84 s** | 0.24 s eager fp32, 0.21 s bf16 autocast, 0.096 s `torch.compile` + bf16 |
+| | the notebook's 5000 steps (warmup 1000, eval every 500) | **70.7 min**; loss 8.10 -> 0.24, validation 0.116 | 20.4 min eager fp32; loss 0.17 |
+| chapter 2, `d_model` 512 | per batch of 64 pairs | **0.35 s** | -- |
+| | 2 epochs over 10000 pairs + 20 greedy decodes | **2.1 min**; loss 4.72 -> 3.61 | -- |
+| | the notebook's 20 epochs over 50000 pairs | ~1.5 h (projected, not run) | -- |
+
+The PyTorch column is the same model (the book's per-head attention, AdamW, clipping,
+dropout 0.1) written against PyTorch in NVIDIA's `pytorch:25.11` container on the same
+machine, 300 steps, `(t200 - t40) / 160`; `torch.compile` adds 19 s of compilation. So
+the port is 3.5x behind eager PyTorch on this card and 9x behind the compiled bf16 run.
+The chapter-3 step is about 1.2 TFLOP, which the device finishes in 0.2 s; the
+rest of the 0.84 is launches, the link and the host glue around the kernels, so the flag
+is at a twentieth of the card's single-float peak -- the gap that remains. The 5000-step
+run memorises the novel (the validation loss is over windows that overlap the training
+windows, the book's own `random_split`) and samples sentence-shaped 漱石:
+`吾輩はこのくらいの家アンドレア・デル・サルトでもこれである。美学者は笑いながら…`.
+At this shape `-XX:+UseParallelGC -Xmn8g` is a third faster than the default collector
+(103 steps in 101 s against 131); at the notebook's width the default collector is the
+faster one.
 
 ## The two places this port deliberately differs from the book
 
