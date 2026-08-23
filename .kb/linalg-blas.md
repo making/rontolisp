@@ -219,9 +219,17 @@ would pass on the scalar defun. `#'linalg:dot` printing `#<function LINALG:DOT>`
 and the bridge name appearing in the class bytes (JVM) are the assertions that fail when the
 flag is dead.
 
-Native image needs two things: the `JvmBlasTemplate.class` resource entry (already in
-`resource-config.json`, beside the `--simd` one) and `--enable-native-access=ALL-UNNAMED`,
-which the `native` profile already passes. The exec jar carries
+Native image needs three things: the `JvmBlasTemplate.class` resource entry (already in
+`resource-config.json`, beside the `--simd` one), `--enable-native-access=ALL-UNNAMED`,
+which the `native` profile already passes, and a `foreign.downcalls` entry per SHAPE in
+`reachability-metadata.json` -- six of them, the gemm shape at both widths both critical
+and plain, the gemv shape at both widths critical. Native Image builds a downcall stub
+only for a registered signature and REFUSES the handle for any other, so one missing entry
+sends the whole static block down its catch and the binary reports "the foreign function
+API is unavailable" on a machine whose tuned library is right there. `LinalgBlasKernels`
+records the shapes as it binds them -- `bind` takes the LOOKUP so a machine with no CBLAS
+can bind them against a stub -- and `LinalgBlasDeclineTest` pins them against the file.
+`--gpu` shipped exactly this bug on the CUDA side (`.kb/gpu.md`, "Native image"). The exec jar carries
 `Enable-Native-Access: ALL-UNNAMED` in its manifest; a compiled `.class` does not, so running
 one prints the JVM's restricted-method warning unless the user passes the flag -- which the
 docs say.

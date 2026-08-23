@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.NativeImageDowncalls;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,17 @@ class LinalgBlasDeclineTest {
 		// something either way rather than throw on a machine with no library at all.
 		assertThat(LinalgBlas.description()).isNotBlank();
 		assertThat(LinalgBlas.available()).isEqualTo(LinalgBlas.description().contains("("));
+	}
+
+	@Test
+	void everyDowncallShapeIsRegisteredForTheNativeImage() {
+		// Binds the six handles against a lookup that finds everything -- they are made,
+		// never called -- so the shapes are recorded on a machine with no CBLAS too.
+		LinalgBlasKernels.bind(NativeImageDowncalls.EVERYTHING);
+		assertThat(NativeImageDowncalls.missing(LinalgBlasKernels.signatures(), LinalgBlasKernels.criticalSignatures()))
+			.as("CBLAS downcall shapes with no entry in the native-image metadata -- the binary refuses to bind "
+					+ "them, so --blas declines on a machine whose tuned library is right there")
+			.isEmpty();
 	}
 
 	@Test

@@ -3175,7 +3175,9 @@ Two build inputs, both already in
   reason instead of blaming the machine; and `NativeImageForeignConfigTest` binds both
   drivers against a lookup that finds everything -- no device needed, so it runs on every
   machine -- and asserts that every shape they actually ask the linker for has an entry
-  in the checked-in file. Generate them with the tracing agent
+  in the checked-in file. `--blas` is guarded the same way from
+  `LinalgBlasDeclineTest` (`.kb/linalg-blas.md`), through the shared
+  `NativeImageDowncalls` test helper. Generate them with the tracing agent
   (`-agentlib:native-image-agent=config-output-dir=...`) over a program that opens the
   binding and runs a product, then fold the result in -- the agent traces
   `Linker.downcallHandle`, so merely constructing `CudaDriver` registers every shape.

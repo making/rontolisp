@@ -8,6 +8,8 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.jspecify.annotations.Nullable;
 
@@ -111,6 +113,29 @@ final class LinalgBlasKernels {
 	/** CBLAS enum constants: row-major storage, and the two transpose modes. */
 	private static final int ROW_MAJOR = 101, NO_TRANS = 111, TRANS = 112;
 
+	/** {@code cblas_dgemm} and {@code cblas_sgemm}: the same shape at the two widths. */
+	private static final FunctionDescriptor GEMM_D = FunctionDescriptor.ofVoid(I, I, I, I, I, I, D, P, I, P, I, D, P,
+			I), GEMM_F = FunctionDescriptor.ofVoid(I, I, I, I, I, I, F, P, I, P, I, F, P, I);
+
+	/** {@code cblas_dgemv} and {@code cblas_sgemv}. */
+	private static final FunctionDescriptor GEMV_D = FunctionDescriptor.ofVoid(I, I, I, I, D, P, I, P, I, D, P, I),
+			GEMV_F = FunctionDescriptor.ofVoid(I, I, I, I, F, P, I, P, I, F, P, I);
+
+	/**
+	 * Every downcall SHAPE bound below, and the same for the
+	 * {@linkplain Linker.Option#critical(boolean) critical} ones -- a product above the
+	 * flop ceiling is issued through a plain handle, so a gemm shape is in both sets.
+	 * Native Image builds a downcall stub only for a signature registered at BUILD time
+	 * and refuses the handle for any other, and refusing one sends the whole block below
+	 * down its catch: a shape missing from {@code reachability-metadata.json} makes the
+	 * binary report the foreign function API as unavailable on a machine whose tuned
+	 * CBLAS is right there. So the shapes are recorded as they are bound, and
+	 * {@code LinalgBlasDeclineTest} pins the checked-in metadata against what is actually
+	 * asked for rather than against a list someone remembered to update.
+	 */
+	private static final Set<FunctionDescriptor> SIGNATURES = ConcurrentHashMap.newKeySet(),
+			CRITICAL_SIGNATURES = ConcurrentHashMap.newKeySet();
+
 	private static final @Nullable MethodHandle DGEMM, SGEMM, DGEMV, SGEMV, DGEMM_STAGED, SGEMM_STAGED;
 
 	/** What was bound, or why nothing was: the text the CLI reports. */
@@ -120,22 +145,15 @@ final class LinalgBlasKernels {
 		MethodHandle dgemm = null, sgemm = null, dgemv = null, sgemv = null, dgemmStaged = null, sgemmStaged = null;
 		String description;
 		try {
-			Linker linker = Linker.nativeLinker();
-			FunctionDescriptor gemmD = FunctionDescriptor.ofVoid(I, I, I, I, I, I, D, P, I, P, I, D, P, I);
-			FunctionDescriptor gemmF = FunctionDescriptor.ofVoid(I, I, I, I, I, I, F, P, I, P, I, F, P, I);
-			FunctionDescriptor gemvD = FunctionDescriptor.ofVoid(I, I, I, I, D, P, I, P, I, D, P, I);
-			FunctionDescriptor gemvF = FunctionDescriptor.ofVoid(I, I, I, I, F, P, I, P, I, F, P, I);
-			Linker.Option critical = Linker.Option.critical(true);
 			String forced = env(LIBRARY_ENV);
 			String[] candidates = forced != null ? new String[] { forced } : CANDIDATES;
 			String bound = null;
 			String identity = null;
 			for (String candidate : candidates) {
 				SymbolLookup lookup;
-				MemorySegment gemm;
 				try {
 					lookup = SymbolLookup.libraryLookup(candidate, Arena.global());
-					gemm = lookup.find("cblas_dgemm").orElseThrow();
+					lookup.find("cblas_dgemm").orElseThrow();
 				}
 				catch (RuntimeException ex) {
 					continue;
@@ -146,13 +164,13 @@ final class LinalgBlasKernels {
 					// reference, which is slower than the kernel we already have.
 					continue;
 				}
-				dgemm = linker.downcallHandle(gemm, gemmD, critical);
-				dgemmStaged = linker.downcallHandle(gemm, gemmD);
-				MemorySegment sgemmSym = lookup.find("cblas_sgemm").orElseThrow();
-				sgemm = linker.downcallHandle(sgemmSym, gemmF, critical);
-				sgemmStaged = linker.downcallHandle(sgemmSym, gemmF);
-				dgemv = linker.downcallHandle(lookup.find("cblas_dgemv").orElseThrow(), gemvD, critical);
-				sgemv = linker.downcallHandle(lookup.find("cblas_sgemv").orElseThrow(), gemvF, critical);
+				Bound handles = bind(lookup);
+				dgemm = handles.dgemm();
+				dgemmStaged = handles.dgemmStaged();
+				sgemm = handles.sgemm();
+				sgemmStaged = handles.sgemmStaged();
+				dgemv = handles.dgemv();
+				sgemv = handles.sgemv();
 				bound = candidate;
 				break;
 			}
@@ -179,6 +197,54 @@ final class LinalgBlasKernels {
 		if (dgemm != null && env(VERBOSE_ENV) != null) {
 			System.err.println("rontolisp: --blas bound " + description);
 		}
+	}
+
+	/** The six handles one tuned CBLAS gives, in the order the fields above take them. */
+	record Bound(MethodHandle dgemm, MethodHandle dgemmStaged, MethodHandle sgemm, MethodHandle sgemmStaged,
+			MethodHandle dgemv, MethodHandle sgemv) {
+	}
+
+	/**
+	 * Binds the six handles out of one library. It takes the LOOKUP rather than reading
+	 * the candidate list itself so that the registration test can bind the same six
+	 * shapes on a machine with no CBLAS at all -- see {@link #SIGNATURES} for why that
+	 * test exists.
+	 * @param lookup the library to bind, which must export all four entry points
+	 * @return the six handles
+	 */
+	static Bound bind(SymbolLookup lookup) {
+		Linker linker = Linker.nativeLinker();
+		Linker.Option critical = Linker.Option.critical(true);
+		MemorySegment gemm = lookup.find("cblas_dgemm").orElseThrow();
+		MemorySegment sgemm = lookup.find("cblas_sgemm").orElseThrow();
+		return new Bound(handle(linker, gemm, GEMM_D, critical), handle(linker, gemm, GEMM_D),
+				handle(linker, sgemm, GEMM_F, critical), handle(linker, sgemm, GEMM_F),
+				handle(linker, lookup.find("cblas_dgemv").orElseThrow(), GEMV_D, critical),
+				handle(linker, lookup.find("cblas_sgemv").orElseThrow(), GEMV_F, critical));
+	}
+
+	private static MethodHandle handle(Linker linker, MemorySegment symbol, FunctionDescriptor descriptor,
+			Linker.Option... options) {
+		// critical(true) is the only option bound here; anything else would be a
+		// different registration and would have to be recorded as one.
+		(options.length == 0 ? SIGNATURES : CRITICAL_SIGNATURES).add(descriptor);
+		return linker.downcallHandle(symbol, descriptor, options);
+	}
+
+	/**
+	 * The shapes bound WITHOUT {@code critical}, for the native-image registration test.
+	 * @return the plain downcall shapes this binding asked the linker for
+	 */
+	static Set<FunctionDescriptor> signatures() {
+		return Set.copyOf(SIGNATURES);
+	}
+
+	/**
+	 * The shapes bound WITH {@code critical(true)}.
+	 * @return the critical downcall shapes this binding asked the linker for
+	 */
+	static Set<FunctionDescriptor> criticalSignatures() {
+		return Set.copyOf(CRITICAL_SIGNATURES);
 	}
 
 	/** The name a tuned candidate identifies itself by, or {@code null} if none does. */
