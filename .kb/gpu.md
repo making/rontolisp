@@ -2409,6 +2409,8 @@ interpreter's asserts the hit count moved; `theResidentTierDeclinesWithoutAResid
 is the other half. Metal declines the whole tier and `lazyResults`: on unified memory the
 copy home is a memcpy, its cost was never measured there, and `materialize` is a no-op
 (`MetalGemm`); `bin_op` in `gemm.metal` gained the five masks so `bcast` answers them.
+The Apple half -- a measurement first, since todo-477 found residency 1-5% slower there
+with EAGER results -- is `.todo/494`.
 
 **What the profile says is left** (the 40-step run, materializations counted by caller):
 `torch:clip-grad-norm`'s `%la-sum-squares` reads every gradient -- 7 MB a step, 760
