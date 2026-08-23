@@ -2962,8 +2962,10 @@ generation is 4 GB of pages the device has never touched (the fresh-page cost of
 todo-474), which a default heap that recycles its regions every forty steps does not pay.
 That is a hypothesis from one log (no full collection in either run, one young against
 five), and the README records the notebook-shape figure as it is; at the book's shape the
-flag is the FASTER one again (the next paragraph), and `.todo/498` holds the question. Against `--simd` alone
-(0.85 s a step, unchanged) the flag is 15x on the README's metric and **50x** at the
+flag is the FASTER one again (the next paragraph); both rows are settled two sections
+below ("The collector question"), and the hypothesis in this one is the half that
+survived. Against `--simd` alone (0.85 s a step, unchanged) the flag is 15x on the
+README's metric and **50x** at the
 steady state; at the book's shapes the notebook's 5000 steps would now take about an hour
 here instead of nine.
 
@@ -2983,8 +2985,8 @@ the host glue -- `.todo/496` has the suspects (the big-product `cuCtxSynchronize
 predates lazy results, one launch per member where `torch.compile` fuses, per-call
 allocation with no cap, the tape). One more measurement from the night: at the BOOK's
 shape `-XX:+UseParallelGC -Xmn8g` beats the default collector by a third (103 steps: 101 s
-against 131), the opposite of the notebook-shape row above; `.todo/498` holds both logs'
-question.
+against 131), the opposite of the notebook-shape row above -- both logs, and what they
+say, are two sections below ("The collector question").
 
 **The tests.** `GpuTest.aStubResultAllocatesNoHostArrayUntilTheHostFirstReadsIt` (the
 library: a stub result stays three floats, is a full operand to the next member with no
@@ -3099,6 +3101,122 @@ shape-bucketed kernel diff is a 20-line sqlite query over
 `CUPTI_ACTIVITY_KIND_KERNEL` grouped by `(name, gridX, gridY, gridZ)` -- the per-shape
 table above cannot be read off `cuda_gpu_kern_sum`, whose averages mix a 365 us
 score-shape `zip` with a 2 us scalar one.
+
+#### The collector question: the pauses are 3%, the pages are the difference (2026-08-24, todo-498)
+
+`.todo/498` was filed on a contradiction the README had recorded without an explanation:
+under `--gpu --simd` the DEFAULT collector runs `train-gpt-soseki` at the notebook's width
+faster than `-XX:+UseParallelGC -Xmn4g` (5.8 s against 9.3 over 200 steps) and LOSES to
+`-XX:+UseParallelGC -Xmn8g` at the book's shapes by a third. Two hypotheses came with it:
+cold pages at the notebook's width, and at the book's a G1 answer to `System.gc()` that
+is a full collection of a 64 GB heap. Both `-Xlog:gc` logs, taken at HEAD (after todo-496,
+so the numbers below are NOT the item's): **the second hypothesis is wrong -- a full
+collection here is 50 ms under either collector -- what both rows are actually made of is
+pages the device has never touched, and the collection request itself is worth 4.5x.**
+There is no flag that wins at both shapes, so what the README now prints is the rule
+underneath them.
+
+**The book's shapes, 103 steps** (the `--gpu --simd` class, GB10; `-Xmx64g` unless the row
+says otherwise, one or two rounds each):
+
+| flags | 103 steps | the collector's share of it |
+|---|---|---|
+| default collector (G1) | 115.4 / 113.8 s | 259 pauses, **2.83 s**; of them 24 `System.gc()` full collections at **51 ms** each |
+| ... plus `-Xms8g` | 107.4 s | 67 full collections, 3.34 s |
+| ... plus `-XX:+ExplicitGCInvokesConcurrent` | **98.4 / 99.6 s** (default heap: 99.8) | 329 pauses, **1.80 s**; 97 `System.gc()`, not one of them full |
+| `-XX:+UseParallelGC -Xmn8g` | **95.8 / 93.9 s** (`-Xmx10g`: 94.7) | 55 pauses, **2.71 s**; 54 full collections at **49 ms** each |
+| `-XX:+UseParallelGC`, young generation adaptive | 106.5 / 104.4 s | |
+| default collector, `-XX:+DisableExplicitGC` | **431.8 s** | 369 pauses, 16.3 s, none full |
+| default collector, `-Xmx10g -XX:+AlwaysPreTouch` | 146.3 s | |
+
+Read the two full-collection cells against each other (rows 1 and 4): a G1 full
+collection and a ParallelGC one cost **the same 50 ms** here, because what a full
+collection walks is the live set, and with result stubs (todo-492) that is 143 MB
+whatever `-Xmx` says. The two
+collectors' TOTAL pause time over the same run is 2.83 s against 2.71 -- 3% of the run in
+both -- so the 20 s between them is not collection work at all. The hypothesis that G1
+answers the library's request with an expensive full collection is false in every part
+except the word "full".
+
+**What the full collection costs is the PAGES, and two flags say so.** `-Xms8g` alone --
+which changes nothing about how often or how long G1 collects, only that it may not
+uncommit below 8 GB (without it the log shows the heap dropping from 8.1 GB to 1.5 GB at
+each full collection and growing back before the next) -- recovers 8 of the 20 s.
+`-XX:+ExplicitGCInvokesConcurrent`, which answers `System.gc()` with a concurrent cycle
+and never compacts, recovers all of it, while RAISING the number of requests the library
+makes from 24 to 97 and LOWERING total pause time to 1.8 s. A compacting full collection
+moves every live array to a new address and hands the regrown heap fresh pages; a device
+copy to or from a page the GPU has not touched costs ~9 us per 4 KB (todo-474,
+`FreshPageCost.java`), and at these shapes a step allocates ~1.9 GB of heap (the last
+paragraph) on top of what it uploads.
+
+**The notebook's width says the same thing with no collection at all** (medians of three,
+`-Xmx64g` where a heap is set):
+
+| flags | 5 / 40 / 200 steps | `(t40-t5)/35` | `(t200-t40)/160` | the 200-step run's collector |
+|---|---|---|---|---|
+| default collector | 1.05 / 2.93 / **5.40 s** | 0.054 | **0.0154** | 5 young pauses, 38 ms, no `System.gc()` |
+| ... plus `-XX:+ExplicitGCInvokesConcurrent` | 1.06 / 2.86 / **5.44 s** | 0.051 | 0.0161 | the same |
+| `-XX:+UseParallelGC -Xmn4g` | 1.12 / 3.27 / 8.48 s | 0.061 | 0.0326 | **ONE** young pause, 10 ms |
+| `-XX:+UseParallelGC`, young adaptive | 1.16 / 2.17 / **5.05 s** | **0.029** | 0.0180 | 7 pauses, 42 ms |
+| `-XX:+UseParallelGC -Xmn4g -XX:+AlwaysPreTouch` | 2.05 / 3.27 / 6.46 s | 0.035 | 0.0200 | 1 pause |
+| default collector, `-Xmx10g -XX:+AlwaysPreTouch` | 1.79 / 3.98 / 22.9 s | -- | 0.118 | 43 pauses, **12.9 s** |
+
+The third row collects ONCE in a 200-step run, for 10 ms, and is 3 s slower than the first:
+there is no collection work for the difference to be made of. What separates them is that
+`-Xmn4g` is 4 GB of young generation the program never fills, so every result array is on
+a page the device has never touched -- and the flag that WARMS those pages from the CPU
+before the program starts, `-XX:+AlwaysPreTouch`, takes the same configuration from 8.40 s
+to 6.46 (steady 0.033 -> 0.020) without changing a single collection. Not sizing the young
+generation at all recovers the rest, and is the fastest of everything measured here.
+
+**So the rule, not a recipe: the heap's pages have to be ones the program recycles.** Two
+configurations satisfy it, neither wins at both shapes, and the 5000-step pair is what
+decides which the README prints where:
+
+| | 103 steps | the notebook's own 5000 steps | at the notebook's WIDTH, 200 steps |
+|---|---|---|---|
+| `-XX:+UseParallelGC -Xmn8g` | **93.9-95.8 s** | **67.2 min** (4034 s; 2888 `System.gc()`, 132 s of pauses) | 8.48 s |
+| default collector + `-XX:+ExplicitGCInvokesConcurrent` | 98.4-99.8 s | 72.2 min (4335 s; 6730 `System.gc()`, **59 s** of pauses -- and **496 s of concurrent mark cycles**) | **5.44 s** |
+| default collector alone | 113.8-115.4 s | -- | 5.40 s |
+
+Read the middle cell of the second row: the concurrent answer has less than HALF the pause
+time of the parallel one and is five minutes slower over the same 5000 steps, because 6730
+concurrent cycles are eight minutes of background threads competing with the one thread
+that feeds the device. So at the book's shapes the parallel collector with a young
+generation the program FILLS -- 1.9 GB a step turns `-Xmn8g` over every four -- is the
+fastest thing measured; at the notebook's width, where a step allocates megabytes and the
+budget is never reached at all, those same flags are the slowest. The README therefore
+prints the RULE both rows obey rather than one flag set: hand-size a young generation only
+where the program fills it, otherwise leave the collector alone, and add
+`-XX:+ExplicitGCInvokesConcurrent` when the run is long enough to keep asking. Both
+5000-step runs print byte-identical output, loss series and samples included. Two traps
+worth the ink: `-XX:+AlwaysPreTouch` under G1 is a disaster (146 s at the book's shapes,
+4x at the notebook's) because G1 resizes the heap constantly and pretouches every
+expansion INSIDE the pause -- the log shows single "Prepare Mixed" pauses of 106 and
+166 ms over a 150 MB heap; and `-Xmn` sized for the wrong shape is worse than no `-Xmn`
+at all, which is what the notebook-width table's third row is.
+
+**Chapter 2, the same question asked of a second program** (`d_model` 512, 2 epochs over
+10000 pairs, at HEAD): 115.9 / 117.3 s under `-XX:+UseParallelGC -Xmn8g` against
+109.1 / 112.6 under the default collector plus `-XX:+ExplicitGCInvokesConcurrent` -- the
+concurrent answer WINS here, by 5%, which is the rule rather than an exception: this model
+allocates less per batch than chapter 3's, so an 8 GB young generation is again one the
+program does not turn over. The same runs re-measure the README's chapter-2 rows, which
+had been carried over from before todo-496: the whole run is **1.9 min** (116.6 s median
+under the printed flags) and the batch **0.34 s**, by (whole run - the same program with
+`*epochs*` 0, which is 9.35 s of corpus setup and 20 greedy decodes) / 314 batches.
+
+**The control that keeps todo-492's policy.** `-XX:+DisableExplicitGC` makes the same run
+take **431.8 s** -- 4.5x -- with only 16 s of pauses in it: with the request refused the
+LRU has nothing but dirty entries to evict and flushes live-looking dead results into
+fresh backings, the allocation the lazy mode exists to avoid. So `DeviceResidency`'s
+`collectionWanted` / `COLLECTION_SHARE` policy is not what this item changes: it costs 3%
+of the run under every collector measured and it earns 350%. One premise of the item was
+wrong and is worth correcting for the next reader: "almost nothing is allocated per step"
+is true of the LIVE SET, not of the allocation rate -- the ParallelGC log shows the heap
+growing 143 MB -> 3081 MB between collections 1.6 steps apart, ~1.9 GB a step, all of it
+dying.
 
 ### The chain order, and why the device goes on top
 
