@@ -896,6 +896,51 @@ class JvmLinalgGpuAccelCompilerTest {
 			.isEqualTo(run(compileWithVec(program, false, true)));
 	}
 
+	/**
+	 * The compiled half of {@code .todo/492}: a lazy result's host array is a STUB -- the
+	 * header alone -- and the elements are allocated only when something reads them. The
+	 * one observable the class output has is MEMORY, so the pin is a run of the class in
+	 * a JVM too small to hold the results: forty-eight 16 MB activations kept reachable
+	 * on a 256 MB heap, which fits only if none of them has a host array, with the one
+	 * that IS read landing on the oracle's bits -- and the same program without the flag
+	 * failing for want of heap, so the bound has teeth.
+	 */
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void aLazyResultAllocatesNoHostArrayOnTheCompiledBackend() throws Exception {
+		assumeTrue(am.ik.gpu.GpuThresholds.lazyResultsPay(), "lazy results pay on this backend (CUDA, not Metal)");
+		int side = 2048;
+		int n = side * side;
+		String program = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d :element-type 'single-float) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d :element-type 'single-float) '(1 %d)))
+				(defparameter *keep* nil)
+				(dotimes (i 48) (setq *keep* (cons (linalg:add *a* *row*) *keep*)))
+				(format t "kept ~a~%%" (length *keep*))
+				(format t "sum ~a ~a~%%" (aref (car *keep*) 7 9) (aref (car (last *keep*)) %d %d))
+				""".formatted(n + 1, side, side, side + 1, side, side - 1, side - 1);
+		String oracle = run(compileWithVec(program.replace("(dotimes (i 48)", "(dotimes (i 1)"), false, false));
+		assertThat(oracle).contains("kept 1").contains("sum ");
+		Process gpu = runInASmallJvm(compileWithVec(program, true, false));
+		String out = new String(gpu.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		String err = new String(gpu.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(gpu.waitFor()).as("--gpu on a 256 MB heap:%n%s%s", out, err).isZero();
+		assertThat(out.trim()).contains("kept 48").endsWith(oracle.substring(oracle.indexOf("sum ")));
+		Process cpu = runInASmallJvm(compileWithVec(program, false, false));
+		String cpuErr = new String(cpu.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(cpu.waitFor()).as("the same program with host arrays does not fit").isNotZero();
+		assertThat(cpuErr).contains("OutOfMemoryError");
+	}
+
+	/** Runs a compiled class in a child JVM with a 256 MB heap. */
+	private Process runInASmallJvm(byte[] classBytes) throws Exception {
+		Path dir = Files.createDirectories(this.tempDir.resolve("small-" + System.nanoTime()));
+		Files.write(dir.resolve("Test.class"), classBytes);
+		String java = ProcessHandle.current().info().command().orElse("java");
+		return new ProcessBuilder(java, "-Xmx256m", "--enable-native-access=ALL-UNNAMED", "-cp", dir.toString(), "Test")
+			.start();
+	}
+
 	/** The interpreter test's resident-tier program, verbatim. */
 	private static String residentTier(int side, String type) {
 		int n = side * side;

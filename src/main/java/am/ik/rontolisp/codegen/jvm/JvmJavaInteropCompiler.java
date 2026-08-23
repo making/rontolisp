@@ -92,14 +92,19 @@ final class JvmJavaInteropCompiler {
 	}
 
 	/**
-	 * Under {@code --gpu}, materializes the value on top of the stack (leaving it there):
-	 * Java code reads a packed array raw, so a result the device still holds the only
-	 * copy of has to come home before it is handed over ({@code .kb/gpu.md}).
+	 * Under {@code --gpu}, materializes the value on top of the stack and REPLACES it
+	 * with what the guard answers: Java code reads a packed array raw, so a result the
+	 * device still holds the only copy of has to come home before it is handed over, and
+	 * what is handed over is the array holding the bytes -- a result stub's backing when
+	 * the value is one ({@code .kb/gpu.md}). That backing is what Java sees, keeps and
+	 * answers; the rule that a host rung's answer is mapped back onto the caller's object
+	 * is NOT applied here, because Java may store the array as well as answer it -- the
+	 * one seam where a program can come to hold a backing beside its stub, and the one
+	 * the kb names.
 	 */
 	private static void emitMaterialize(JvmLispCompiler.Ctx ctx) {
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 		if (gpuOps != null) {
-			ctx.emit(Opcode.DUP);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(java.util.Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
 		}

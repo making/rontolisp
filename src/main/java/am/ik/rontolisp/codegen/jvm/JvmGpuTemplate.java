@@ -83,14 +83,19 @@ final class JvmGpuTemplate {
 	 * emitted {@code _gpuWritten} guard calls this from {@code _fvAset1/2/N}, from the
 	 * in-place {@code --simd} kernels' call sites and from every {@code vec:}
 	 * {@code -into} call site, but only once the bridge is defined -- before that nothing
-	 * can be resident ({@code .kb/gpu.md}).
+	 * can be resident ({@code .kb/gpu.md}). Answers the array the write must land in: the
+	 * array itself, or -- when it is a result STUB, the header alone, whose elements the
+	 * library holds ({@code Gpu.materialize}) -- its backing; the caller writes into what
+	 * is answered and keeps holding what it passed.
 	 * @param array the {@code double[]} or {@code float[]} that was written; anything
-	 * else is ignored
+	 * else is answered back untouched
+	 * @return the array to write into
 	 */
-	static void gpuWritten(@Nullable Object array) {
+	static @Nullable Object gpuWritten(@Nullable Object array) {
 		if (array instanceof double[] || array instanceof float[]) {
-			Gpu.written(array);
+			return Gpu.written(array);
 		}
+		return array;
 	}
 
 	/**
@@ -98,14 +103,36 @@ final class JvmGpuTemplate {
 	 * bytes (a result left there lazily), they come home first. The compiled half of the
 	 * reader enumeration: the emitted {@code _gpuMaterialize} guard calls this from every
 	 * host read of packed-array storage, once the bridge is defined -- before that
-	 * nothing can be resident. Anything that is not a packed array is ignored, so a call
-	 * site may report every argument without looking.
+	 * nothing can be resident. Answers the array to READ: the array itself, or the
+	 * backing of a result stub (see {@link #gpuWritten}); every reader reads what is
+	 * answered, and the value the program holds stays the one it passed. Anything that is
+	 * not a packed array is answered back untouched, so a call site may report every
+	 * argument without looking.
 	 * @param array the value about to be read
+	 * @return the array holding its bytes
 	 */
-	static void gpuMaterialize(@Nullable Object array) {
+	static @Nullable Object gpuMaterialize(@Nullable Object array) {
 		if (array instanceof double[] || array instanceof float[]) {
-			Gpu.materialize(array);
+			return Gpu.materialize(array);
 		}
+		return array;
+	}
+
+	/**
+	 * A host rung's answer, mapped back onto the caller's object: the lane kernels and
+	 * the defuns that write an argument in place answer that argument, and under
+	 * {@code --gpu} the argument they were handed is a stub's BACKING
+	 * ({@link #gpuMaterialize}), which must not become a value the program holds beside
+	 * the stub -- two identities for one storage would let a write through one leave a
+	 * stale device copy keyed by the other. The emitted call sites call this once per
+	 * argument after every host rung ({@code _gpuUnswap}).
+	 * @param result the host rung's answer
+	 * @param original the argument as the program passed it
+	 * @param handed the argument as the rung received it
+	 * @return {@code original} when the rung answered {@code handed}, else {@code result}
+	 */
+	static @Nullable Object gpuUnswap(@Nullable Object result, @Nullable Object original, @Nullable Object handed) {
+		return result != null && result == handed ? original : result;
 	}
 
 	/**
@@ -217,7 +244,7 @@ final class JvmGpuTemplate {
 		int batch = (int) batches;
 		int off = 1 + rank;
 		if (single) {
-			float[] c = new float[off + (int) total];
+			float[] c = resultF(off, total);
 			c[0] = rank;
 			for (int i = 0; i < bd.length; i++) {
 				c[1 + i] = bd[i];
@@ -227,7 +254,7 @@ final class JvmGpuTemplate {
 			return Gpu.multiply(floats(a), 1 + ra, (int) sa, floats(b), 1 + rb, (int) sb, c, off, batch, n, m, p) ? c
 					: null;
 		}
-		double[] c = new double[off + (int) total];
+		double[] c = result(off, total);
 		c[0] = rank;
 		for (int i = 0; i < bd.length; i++) {
 			c[1 + i] = bd[i];
@@ -294,8 +321,10 @@ final class JvmGpuTemplate {
 	 */
 	static @Nullable Object gpuRngFill(@Nullable Object out, @Nullable Object st, @Nullable Object modev,
 			@Nullable Object lov, @Nullable Object spanv) {
-		if ((!(out instanceof double[]) && !(out instanceof float[])) || !(st instanceof double[] s) || s.length != 5
-				|| s[0] != 1.0 || s[1] != 3.0 || !(modev instanceof Long mv) || mv < 0 || mv > 2) {
+		// The state vector is read here on the host: through the materialize seam, like
+		// every host read of a packed array.
+		if ((!(out instanceof double[]) && !(out instanceof float[])) || !(gpuMaterialize(st) instanceof double[] s)
+				|| s.length != 5 || s[0] != 1.0 || s[1] != 3.0 || !(modev instanceof Long mv) || mv < 0 || mv > 2) {
 			return null;
 		}
 		Double lo = scalar(lov), span = scalar(spanv);
@@ -303,7 +332,7 @@ final class JvmGpuTemplate {
 			return null;
 		}
 		int off = 1 + rank(out);
-		int n = (out instanceof float[] f ? f.length : doubles(out).length) - off;
+		int n = length(out) - off;
 		if (n < 1 || !Gpu.worthRng(n)) {
 			return null;
 		}
@@ -594,11 +623,11 @@ final class JvmGpuTemplate {
 		double mv = ms == null ? 0.0 : ms, xv = xs == null ? 0.0 : xs, yv = ys == null ? 0.0 : ys;
 		int om = ma ? 1 + rank(m) : 0, ox = xa ? 1 + rank(x) : 0, oy = ya ? 1 + rank(y) : 0;
 		if (single) {
-			float[] c = newLike(od, off + (int) total);
+			float[] c = newLike(od);
 			return Gpu.where(ma ? m : null, om, sm, mv, xa ? floats(x) : null, ox, sx, xv, ya ? floats(y) : null, oy,
 					sy, yv, c, off, od) ? c : null;
 		}
-		double[] c = newLikeD(od, off + (int) total);
+		double[] c = newLikeD(od);
 		return Gpu.where(ma ? m : null, om, sm, mv, xa ? doubles(x) : null, ox, sx, xv, ya ? doubles(y) : null, oy, sy,
 				yv, c, off, od) ? c : null;
 	}
@@ -620,7 +649,8 @@ final class JvmGpuTemplate {
 	 */
 	static @Nullable Object gpuAdamStep(@Nullable Object x, @Nullable Object g, @Nullable Object m, @Nullable Object v,
 			@Nullable Object rule) {
-		if (!(rule instanceof double[] ps) || ps.length != 13 || ps[0] != 1.0 || ps[1] != 11.0) {
+		// The rule vector is read here on the host: through the materialize seam.
+		if (!(gpuMaterialize(rule) instanceof double[] ps) || ps.length != 13 || ps[0] != 1.0 || ps[1] != 11.0) {
 			return null;
 		}
 		double[] r = java.util.Arrays.copyOfRange(ps, 2, 13);
@@ -806,8 +836,8 @@ final class JvmGpuTemplate {
 			offsets[i] = off + cum * so[(int) ax];
 			cum += dims(inputs.get(i), rank)[(int) ax];
 		}
-		float[] cf = single ? newLike(od, off + (int) n) : null;
-		double[] cd = single ? null : newLikeD(od, off + (int) n);
+		float[] cf = single ? newLike(od) : null;
+		double[] cd = single ? null : newLikeD(od);
 		for (int step = 0; step < inputs.size(); step++) {
 			int i = step == 0 ? lead : (step <= lead ? step - 1 : step);
 			Object a = inputs.get(i);
@@ -859,15 +889,14 @@ final class JvmGpuTemplate {
 		int off = 1 + od.length;
 		int n = (int) count(od);
 		int rank = rank(a);
+		int[] spanA = { 1 + rank, length(a) - 1 - rank };
 		if (a instanceof float[] x) {
-			float[] c = newLike(od, off + n);
-			return Gpu.copy(x, origin, sa, new int[] { 1 + rank, x.length - 1 - rank }, c, off, so,
-					new int[] { off, n }, dims) ? c : null;
+			float[] c = newLike(od);
+			return Gpu.copy(x, origin, sa, spanA, c, off, so, new int[] { off, n }, dims) ? c : null;
 		}
 		double[] x = doubles(a);
-		double[] c = newLikeD(od, off + n);
-		return Gpu.copy(x, origin, sa, new int[] { 1 + rank, x.length - 1 - rank }, c, off, so, new int[] { off, n },
-				dims) ? c : null;
+		double[] c = newLikeD(od);
+		return Gpu.copy(x, origin, sa, spanA, c, off, so, new int[] { off, n }, dims) ? c : null;
 	}
 
 	/** The row-major strides of a shape, in elements. */
@@ -932,9 +961,14 @@ final class JvmGpuTemplate {
 		return o != null && Gpu.resident(o);
 	}
 
-	/** The Java length of a packed array of either width. */
+	/**
+	 * The length a packed array of this header has in full: the header plus the product
+	 * of its dimensions. Read from the header and never from the Java length, because a
+	 * result STUB ({@link #resultF}) is the header alone.
+	 */
 	private static int length(@Nullable Object o) {
-		return o instanceof float[] f ? f.length : doubles(o).length;
+		int rank = rank(o);
+		return Math.toIntExact(1 + rank + count(dims(o, rank)));
 	}
 
 	/**
@@ -1075,11 +1109,11 @@ final class JvmGpuTemplate {
 			return null;
 		}
 		if (a instanceof float[] x) {
-			float[] c = newLike(od, off + (int) total);
+			float[] c = newLike(od);
 			return Gpu.gather(x, off, sa, c, off, od) ? c : null;
 		}
 		double[] x = doubles(a);
-		double[] c = newLikeD(od, off + (int) total);
+		double[] c = newLikeD(od);
 		return Gpu.gather(x, off, sa, c, off, od) ? c : null;
 	}
 
@@ -1142,10 +1176,10 @@ final class JvmGpuTemplate {
 		int[] sb = bcastStrides(db, od);
 		int off = 1 + rank;
 		if (single) {
-			float[] c = newLike(od, off + (int) total);
+			float[] c = newLike(od);
 			return Gpu.bcast(op, floats(a), 1 + ra, sa, floats(b), 1 + rb, sb, c, off, od) ? c : null;
 		}
-		double[] c = newLikeD(od, off + (int) total);
+		double[] c = newLikeD(od);
 		return Gpu.bcast(op, doubles(a), 1 + ra, sa, doubles(b), 1 + rb, sb, c, off, od) ? c : null;
 	}
 
@@ -1165,12 +1199,12 @@ final class JvmGpuTemplate {
 			return null;
 		}
 		if (a instanceof float[] x) {
-			float[] c = new float[x.length];
+			float[] c = resultF(off, n);
 			System.arraycopy(x, 0, c, 0, off);
 			return Gpu.zip(op, x, off, floats(b), off, c, off, n) ? c : null;
 		}
 		double[] x = doubles(a);
-		double[] c = new double[x.length];
+		double[] c = result(off, n);
 		System.arraycopy(x, 0, c, 0, off);
 		return Gpu.zip(op, x, off, doubles(b), off, c, off, n) ? c : null;
 	}
@@ -1190,12 +1224,12 @@ final class JvmGpuTemplate {
 			return null;
 		}
 		if (a instanceof float[] x) {
-			float[] c = new float[x.length];
+			float[] c = resultF(off, n);
 			System.arraycopy(x, 0, c, 0, off);
 			return Gpu.scale(op, x, off, s, swap, c, off, n) ? c : null;
 		}
 		double[] x = doubles(a);
-		double[] c = new double[x.length];
+		double[] c = result(off, n);
 		System.arraycopy(x, 0, c, 0, off);
 		return Gpu.scale(op, x, off, s, swap, c, off, n) ? c : null;
 	}
@@ -1243,11 +1277,11 @@ final class JvmGpuTemplate {
 		int off = 1 + od.length;
 		int cells = outer * inner;
 		if (a instanceof float[] x) {
-			float[] c = newLike(od, off + cells);
+			float[] c = newLike(od);
 			return Gpu.fold(op, x, 1 + rank, c, off, outer, len, inner) ? c : null;
 		}
 		double[] x = doubles(a);
-		double[] c = newLikeD(od, off + cells);
+		double[] c = newLikeD(od);
 		return Gpu.fold(op, x, 1 + rank, c, off, outer, len, inner) ? c : null;
 	}
 
@@ -1343,11 +1377,11 @@ final class JvmGpuTemplate {
 		int[] od = d.clone();
 		od[0] = rows.length;
 		if (a instanceof float[] x) {
-			float[] c = newLike(od, off + (int) n);
+			float[] c = newLike(od);
 			return Gpu.takeRows(x, off, lenA, c, off, rows, slab) ? c : null;
 		}
 		double[] x = doubles(a);
-		double[] c = newLikeD(od, off + (int) n);
+		double[] c = newLikeD(od);
 		return Gpu.takeRows(x, off, lenA, c, off, rows, slab) ? c : null;
 	}
 
@@ -1370,11 +1404,11 @@ final class JvmGpuTemplate {
 		}
 		int[] od = { d[0] };
 		if (a instanceof float[] x) {
-			float[] c = newLike(od, 2 + d[0]);
+			float[] c = newLike(od);
 			return Gpu.pick(x, 3, c, 2, columns, d[1]) ? c : null;
 		}
 		double[] x = doubles(a);
-		double[] c = newLikeD(od, 2 + d[0]);
+		double[] c = newLikeD(od);
 		return Gpu.pick(x, 3, c, 2, columns, d[1]) ? c : null;
 	}
 
@@ -1442,7 +1476,7 @@ final class JvmGpuTemplate {
 		if (!packed(idx) || rank(idx) != 1) {
 			return null;
 		}
-		Gpu.materialize(java.util.Objects.requireNonNull(idx));
+		Object storage = Gpu.materialize(java.util.Objects.requireNonNull(idx));
 		int off = 2;
 		int m = length(idx) - off;
 		if (m < 1) {
@@ -1450,7 +1484,7 @@ final class JvmGpuTemplate {
 		}
 		int[] out = new int[m];
 		for (int i = 0; i < m; i++) {
-			double v = idx instanceof float[] f ? f[off + i] : doubles(idx)[off + i];
+			double v = storage instanceof float[] f ? f[off + i] : doubles(storage)[off + i];
 			if (!(v > -1.0 && v < bound)) {
 				return null;
 			}
@@ -1459,8 +1493,9 @@ final class JvmGpuTemplate {
 		return out;
 	}
 
-	private static float[] newLike(int[] od, int length) {
-		float[] c = new float[length];
+	/** A fresh result of shape {@code od} ({@link #resultF}), header written. */
+	private static float[] newLike(int[] od) {
+		float[] c = resultF(1 + od.length, count(od));
 		c[0] = od.length;
 		for (int k = 0; k < od.length; k++) {
 			c[1 + k] = od[k];
@@ -1469,8 +1504,8 @@ final class JvmGpuTemplate {
 	}
 
 	/** The double-float sibling of {@link #newLike}. */
-	private static double[] newLikeD(int[] od, int length) {
-		double[] c = new double[length];
+	private static double[] newLikeD(int[] od) {
+		double[] c = result(1 + od.length, count(od));
 		c[0] = od.length;
 		for (int k = 0; k < od.length; k++) {
 			c[1 + k] = od[k];
@@ -1498,10 +1533,10 @@ final class JvmGpuTemplate {
 		for (int i = 0; i < rank; i++) {
 			count *= dim(a, i);
 		}
-		int length = single ? floats(a).length : doubles(a).length;
 		// A libm member from the size threshold; any member -- the resident tier's four
 		// included -- over a resident operand, where there is no trip to pay for.
-		if (count < 1 || count != length - off || !((op < Gpu.MAP_LIBM_OPS && Gpu.worthMap(count)) || resident(a))) {
+		if (count < 1 || count > Integer.MAX_VALUE - off
+				|| !((op < Gpu.MAP_LIBM_OPS && Gpu.worthMap(count)) || resident(a))) {
 			return null;
 		}
 		// Asked before the result is allocated, and cached from then on: on a machine
@@ -1513,12 +1548,12 @@ final class JvmGpuTemplate {
 		int n = (int) count;
 		if (single) {
 			float[] source = floats(a);
-			float[] c = new float[length];
+			float[] c = resultF(off, n);
 			System.arraycopy(source, 0, c, 0, off);
 			return Gpu.map(op, source, off, c, off, n) ? c : null;
 		}
 		double[] source = doubles(a);
-		double[] c = new double[length];
+		double[] c = result(off, n);
 		System.arraycopy(source, 0, c, 0, off);
 		return Gpu.map(op, source, off, c, off, n) ? c : null;
 	}
@@ -1613,7 +1648,7 @@ final class JvmGpuTemplate {
 	}
 
 	private static double[] newMat(int rows, int cols) {
-		double[] m = new double[3 + rows * cols];
+		double[] m = result(3, (long) rows * cols);
 		m[0] = 2.0;
 		m[1] = rows;
 		m[2] = cols;
@@ -1621,7 +1656,7 @@ final class JvmGpuTemplate {
 	}
 
 	private static float[] newMatF(int rows, int cols) {
-		float[] m = new float[3 + rows * cols];
+		float[] m = resultF(3, (long) rows * cols);
 		m[0] = 2.0f;
 		m[1] = rows;
 		m[2] = cols;
@@ -1630,17 +1665,36 @@ final class JvmGpuTemplate {
 
 	/** A fresh rank-1 packed double vector of {@code n} elements, header written. */
 	private static double[] newVec(int n) {
-		double[] v = new double[2 + n];
+		double[] v = result(2, n);
 		v[0] = 1.0;
 		v[1] = n;
 		return v;
 	}
 
 	private static float[] newVecF(int n) {
-		float[] v = new float[2 + n];
+		float[] v = resultF(2, n);
 		v[0] = 1.0f;
 		v[1] = n;
 		return v;
+	}
+
+	/**
+	 * A member's RESULT array: {@code off} header slots and {@code total} elements -- or,
+	 * while results stay on the device ({@code Gpu.lazyResultsOn}), the header alone.
+	 * Such a STUB is the value the program holds; the library allocates the elements'
+	 * host storage the first time something reads them ({@code Gpu.materialize}) and
+	 * answers it to every reader through {@link #gpuMaterialize}, so a result nobody
+	 * reads -- most of a training step's activations -- costs the host no array and the
+	 * collector nothing. The header is written by the caller, into slots below
+	 * {@code off}, which the stub has.
+	 */
+	private static float[] resultF(int off, long total) {
+		return new float[Gpu.lazyResultsOn() ? off : Math.toIntExact(off + total)];
+	}
+
+	/** The double-float sibling of {@link #resultF}. */
+	private static double[] result(int off, long total) {
+		return new double[Gpu.lazyResultsOn() ? off : Math.toIntExact(off + total)];
 	}
 
 }

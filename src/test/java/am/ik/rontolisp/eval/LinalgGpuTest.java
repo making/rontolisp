@@ -1076,19 +1076,27 @@ class LinalgGpuTest {
 				(linalg:add *a* *row*)
 				""".formatted(side * side + 1, option(), side, side, side + 1, option(), side);
 		int dirty = am.ik.gpu.GpuThresholds.dirtyCount();
+		int backed = am.ik.gpu.GpuThresholds.backingCount();
 		LispVal result = eval(program, true);
 		// The value came back as a packed array whose storage the device still holds:
-		// one more dirty copy, and zeros on the host ...
+		// one more dirty copy, and on the host a STUB -- no array of the result's size
+		// was allocated at all (.kb/gpu.md, "A lazy result allocates no host array") ...
 		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty + 1);
+		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed);
 		Object storage = result instanceof LispSingleFloatArray f ? f.storage()
 				: ((LispDoubleFloatArray) result).storage();
-		assertThat(storage instanceof float[] f ? f[5] : ((double[]) storage)[5]).isZero();
-		// ... until the first read through the accessor brings it home, once.
+		assertThat(storage instanceof float[] f ? f.length : ((double[]) storage).length).isZero();
+		assertThat(((am.ik.rontolisp.LispFloatArray) result).totalSize()).isEqualTo(side * side);
+		// ... until the first read through the accessor brings it home, once, into a
+		// backing the accessor answers; the record's storage stays the stub it keys on.
 		double[] elements = elements(result);
 		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty);
+		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed + 1);
 		assertThat(elements[5]).isEqualTo(6 + 6);
 		assertThat(elements[side + 3]).isEqualTo(side + 4 + 4);
 		assertThat(elements(result)[5]).isEqualTo(12);
+		assertThat(storage instanceof float[] f ? f.length : ((double[]) storage).length).isZero();
+		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed + 1);
 	}
 
 	/**

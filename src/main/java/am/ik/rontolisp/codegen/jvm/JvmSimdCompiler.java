@@ -102,27 +102,50 @@ final class JvmSimdCompiler {
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
 		// Under --gpu the lane kernel reads its arguments on the host, so each is
-		// materialized first (a result the device still holds comes home); an -into
-		// kernel writes its caller's destination -- the first argument -- in place, so
-		// that one is reported as WRITTEN instead, before the call: the device's copy of
-		// it comes home if it was the authoritative one and is dropped (.kb/gpu.md,
+		// materialized first (a result the device still holds comes home) and the kernel
+		// is handed what the guard answers -- the array, or a result stub's backing; an
+		// -into kernel writes its caller's destination -- the first argument -- in place,
+		// so that one is reported as WRITTEN instead, before the call: the device's copy
+		// of it comes home if it was the authoritative one and is dropped (.kb/gpu.md,
 		// "Device residency"). The allocating forms return a fresh array the device has
-		// never seen.
+		// never seen; an -into form answers its destination, which is mapped back onto
+		// the caller's own object (_gpuUnswap) so the program never holds a backing.
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 		boolean into = member.endsWith("-INTO");
+		int original = -1, handed = -1;
 		for (int i = 1; i <= arity; i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 			if (gpuOps != null) {
-				ctx.emit(Opcode.DUP);
+				boolean destination = into && i == 1;
+				if (destination) {
+					original = ctx.allocTemp();
+					handed = ctx.allocTemp();
+					ctx.emit(Opcode.DUP);
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(original);
+				}
 				ctx.emit(Opcode.INVOKESTATIC);
 				ctx.emitU2(Objects
-					.requireNonNull(gpuOps
-						.get(into && i == 1 ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))
+					.requireNonNull(
+							gpuOps.get(destination ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))
 					.index());
+				if (destination) {
+					ctx.emit(Opcode.DUP);
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(handed);
+				}
 			}
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get(member)).index());
+		if (gpuOps != null && into) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(original);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(handed);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP)).index());
+		}
 	}
 
 	/**
@@ -176,12 +199,15 @@ final class JvmSimdCompiler {
 		ctx.emitU2(0);
 		ctx.emit(Opcode.POP);
 		// ... else the lane kernel, or the defun -- both host reads, so both operands
-		// are materialized first.
+		// are materialized first and the rung is handed what the guard answers. Both
+		// answer a fresh vector, never an operand, so nothing is mapped back.
 		for (int slot : slots) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(slot);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(Objects.requireNonNull(gpu.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(slot);
 		}
 		for (int slot : slots) {
 			ctx.emit(Opcode.ALOAD);

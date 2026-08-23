@@ -34,15 +34,19 @@ public record LispSingleFloatArray(float[] data, int[] dims) implements LispFloa
 	 */
 	@Override
 	public float[] data() {
-		FloatArrayAccessHook.read(this.data);
-		return this.data;
+		return (float[]) FloatArrayAccessHook.read(this.data);
 	}
 
 	/**
 	 * The storage WITHOUT the read hook -- for the device interceptor alone, which hands
 	 * the array to the accelerator that may already hold it and must not have it
-	 * downloaded first. Every other caller reads through {@link #data()}.
-	 * @return the flat row-major elements, possibly stale on the host
+	 * downloaded first, and for an in-place kernel reporting a write, which names the
+	 * identity the device is keyed on. Every other caller reads through {@link #data()}.
+	 * Under {@code --gpu} a device result's storage is a STUB -- an empty array, distinct
+	 * per result -- and the elements are in the backing {@link #data()} answers
+	 * ({@code FloatArrayAccessHook}); so its length is not the element count, which is
+	 * {@link #totalSize()}.
+	 * @return the flat row-major elements, possibly stale on the host, or a result stub
 	 */
 	public float[] storage() {
 		return this.data;
@@ -51,24 +55,21 @@ public record LispSingleFloatArray(float[] data, int[] dims) implements LispFloa
 	@Override
 	public double elementAt(int flat) {
 		// Widen f32 -> f64 on read.
-		FloatArrayAccessHook.read(this.data);
-		return this.data[flat];
+		return data()[flat];
 	}
 
 	@Override
 	public void setElement(int flat, double value) {
 		// Reported BEFORE the store: a device copy that was the authoritative one comes
 		// home first, then is dropped, and the narrowed f64 -> f32 value lands on the
-		// array's real bytes.
-		FloatArrayAccessHook.written(this.data);
-		this.data[flat] = (float) value;
+		// array's real bytes -- the array the hook answers.
+		((float[]) FloatArrayAccessHook.written(this.data))[flat] = (float) value;
 	}
 
 	@Override
 	public String elementText(int flat) {
 		// The element prints at its stored f32 width, so #f(0.1) round-trips.
-		FloatArrayAccessHook.read(this.data);
-		return FloatText.singleText(this.data[flat]);
+		return FloatText.singleText(data()[flat]);
 	}
 
 	@Override
@@ -78,10 +79,10 @@ public record LispSingleFloatArray(float[] data, int[] dims) implements LispFloa
 
 	@Override
 	public LispArray toGeneralArray() {
-		FloatArrayAccessHook.read(this.data);
-		LispVal[] boxed = new LispVal[this.data.length];
-		for (int i = 0; i < this.data.length; i++) {
-			boxed[i] = new LispDouble(this.data[i]);
+		float[] d = data();
+		LispVal[] boxed = new LispVal[d.length];
+		for (int i = 0; i < d.length; i++) {
+			boxed[i] = new LispDouble(d[i]);
 		}
 		return new LispArray(this.dims, boxed);
 	}

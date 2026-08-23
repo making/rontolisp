@@ -60,6 +60,12 @@ one, and the section says why), and the members this file had REFUSED as round t
 the equal-shape and scalar binary ops, `sqrt` and its three siblings, `where`, the Adam
 step, and the copies: `reshape`, `transpose`, `slice`, `concatenate`, `%la-scale` -- are
 members over a RESIDENT operand, every one bit-identical to the CPU kernel it replaces.
+**THE INDEX TIER (todo-493)** and **THE RESULT STUB (todo-492)** are the two rounds after
+it, both 2026-08-23: the first moved the last host reads of a training step onto the
+device, and the second -- "A lazy result allocates no host array" -- made a lazy result's
+host array the header alone, its elements allocated by the library only when something
+reads them, and woke the collector the device then depends on; the book's-shape step went
+from 6.3 s to 0.65.
 
 **Every number below is re-derivable.** The probes are
 `.todo/123-gpu-acceleration/{AllocatorCost,CopyRoute,WorthCrossover,ElementwiseCrossover,
@@ -1258,8 +1264,12 @@ host touch, would overlap the host with the device the way CUDA does -- and it c
 when a slab may be recycled and when an upload into a recycled slab is safe, the one
 ordering the residency design exists to forbid, so it needs the same care the CUDA stream
 ordering got; measure it at the notebook's shapes, where the tie is, before the book's.
-The second is `.todo/492` (no host array for a lazy result), which would halve the
-footprint that puts this machine under pressure. The index tier and the clip norm
+The second was `.todo/492` (no host array for a lazy result), which is now BUILT in the
+library for both backends -- a result stub and its backing, "A lazy result allocates no
+host array" -- and would halve the footprint that puts this machine under pressure; it is
+unmeasured here, because the interceptors do not run lazily on this backend, and the lazy
+mode is what produces stubs. Measuring it is the cheapest experiment this section holds:
+switch `lazyResultsPay` on, run the two programs. The index tier and the clip norm
 (todo-493) decline here for the same reason the rest of the lazy design is off: with no
 lazy results there is no download for them to save. The
 probes: `MtlSoftF64.java` and `MtlResidentFloor.java`, beside the todo-477 ones.
@@ -2502,8 +2512,10 @@ download: the result buffer is recorded in `DeviceResidency` as the array's DIRT
 (`Entry.dirty`: the device holds the bytes, the host array holds zeros), and an in-place
 member (`rngFill`, the Adam step, the clip scale) marks the buffer it wrote dirty rather
 than recording a second one. A dirty copy comes home through exactly one operation,
-`Gpu.materialize(host)` -> `CudaGemm.materialize` -> `DeviceResidency.claimDirty` (marks
-clean, answers the `Flush` to download) -> the same pinned bounce download the eager path
+`Gpu.materialize(host)` -> `CudaGemm.materialize` -> `DeviceResidency.claim` (marks
+clean, answers the `Flush` to download -- and, since todo-492, the array to READ: the host
+array, or the backing of a result STUB whose host array is the header alone, "A lazy
+result allocates no host array" below) -> the same pinned bounce download the eager path
 uses. A clean copy stays resident for the next member, so a chain
 `matmul -> div -> where -> softmax -> matmul` moves nothing over the link until something
 on the host reads a link of it, and then moves only that link. `materialize` is the ONE
@@ -2555,15 +2567,17 @@ evicted activation is worth more, and the pre-flight still evicts everything a c
 not holding before it would refuse the call. The eager mode keeps the cap and its
 measurement.
 
-**Two fast paths, and the one that had to become a ring.** `claimDirty` and `written`
-are called once per element from an `aref` / `aset` loop, so each short-circuits on
-"nothing dirty" / "nothing resident" (a volatile read) and on "the array I answered for
-last time". The second was a SINGLE remembered array, and the first profile of the lazy
-build put `DeviceResidency.claimDirty` at the top with 32% of the samples: a loop that
-reads one array and writes another (`linalg:concatenate`'s defun, a typed `dotimes` over
-two arrays) alternated between them and took the monitor on every element. Both fast
-paths now remember the last four arrays (`RECENT`); a loop over more still pays the
-monitor and is still correct.
+**Two fast paths, and the one that had to become a ring.** `claimDirty` (today
+`recentClaim` + `claim`, since the answer became an array rather than a flush) and
+`written` are called once per element from an `aref` / `aset` loop, so each
+short-circuits on "nothing dirty (and no stub backed)" / "nothing resident" (a volatile
+read) and on "the array I answered for last time". The second was a SINGLE remembered
+array, and the first profile of the lazy build put `DeviceResidency.claimDirty` at the
+top with 32% of the samples: a loop that reads one array and writes another
+(`linalg:concatenate`'s defun, a typed `dotimes` over two arrays) alternated between them
+and took the monitor on every element. Both fast paths now remember the last four arrays
+(`RECENT`; the read ring holds `(host, storage)` pairs since todo-492); a loop over more
+still pays the monitor and is still correct.
 
 **The reader enumeration.** The writer enumeration of todo-474 has its mirror: every HOST
 READ of packed-array storage on each backend materializes first, and a reader that misses
@@ -2648,9 +2662,10 @@ embedding's `take-rows` / `gather` / `scatter-rows`, and the few-cell folds of
 `%t-unbroadcast` (a fold with fewer than 256 output cells was declined as a
 single-threaded device loop, so its big operand came home). All of them moved the same
 day, which is "The index tier and the clip norm" below; the loss scalar is what is left.
-And the host array of a lazy result is still ALLOCATED -- a zeroed 6 MB Java array per
+And the host array of a lazy result was still ALLOCATED -- a zeroed 6 MB Java array per
 activation that may never be read -- which is the representation question
-`[rank, dim..., data...]` makes hard and `.todo/492` holds.
+`[rank, dim..., data...]` makes hard and `.todo/492` held; "A lazy result allocates no host
+array" below is its answer.
 
 **Numbers** (GB10, JVM class output, `train-gpt-soseki` at the notebook's shapes, the
 method of every table above):
@@ -2674,7 +2689,8 @@ share, still evicting) -> **6.3 s** (the headroom rule): the arithmetic is 0.2 s
 the copies were the second line (a 3-step run plus its 800 sampled tokens now moves
 ~5 GB down, the sampling's softmax and layer-norm reads most of it, against 88 GB), and
 the third -- a zeroed 100 MB host array per result, read or not, and the collector's
-share of it -- is now the first. That is `.todo/492`.
+share of it -- was then the first. That was `.todo/492`, and "A lazy result allocates no
+host array" below took the step from 6.3 s to 0.65.
 
 Read the three rows of the step together. Against `--simd` the flag is **9.4x** on the
 README's own metric (it was 7.5x), **22x** at the steady state and **35x** with the
@@ -2802,6 +2818,165 @@ on each interceptor, against the same program without the flag, plus
 `theClipNormFoldsInBlocksOnTheDeviceCloseToTheSequentialSumAndReproducibly` on both, which
 asserts CLOSENESS rather than equality because that is the contract. Metal declines all
 four members and says why: it does not run lazily, so it has no download to save.
+
+#### A lazy result allocates no host array (2026-08-23, todo-492)
+
+The round after the index tier, and the one that took the book's-shape step from 6.3 s
+to **0.65 s**: with every result staying on the device, the training step at the book's
+shapes was made of the HOST ARRAYS those results still allocated -- a fresh, zeroed 25-100
+MB Java array per activation whether or not anything ever read it -- and of the collector
+that then had to carry them. Measured before anything was changed (`(t13 - t3) / 10`,
+`-Xmx64g -XX:+UseParallelGC -Xmn8g`, `-Xlog:gc`): 6.25 s a step, of which **4.7 s were
+collector pauses** -- the heap grew to 58 GB before each 4 s full collection and the young
+collections copied gigabytes of live-but-never-read activations on the way -- and most of
+the rest was the zeroing. The arithmetic is 0.2 s of it. This section is the record of
+the representation that removed the allocation, the rule that keeps two identities from
+becoming one storage, the collector the removal then had to wake, and the numbers.
+
+**The representation: a result is a STUB, and its storage is the library's.** The
+question `.todo/492` posed was where to put "no host storage yet" when the JVM backend's
+packed array IS a bare `float[]` with its `[rank, dim..., data...]` header inside it. The
+answer is that the value the program holds is still that array, but SHORT: a lazy result's
+host array is the header alone (`[rank, dim...]`, 3 floats for a matrix; on the
+interpreter, whose record keeps its dims beside the storage, an EMPTY `float[0]` /
+`double[0]`, distinct per result). Every header-only reader -- `array-dimensions`,
+`length`, `array-rank`, `array-element-type`, the type predicates, the printer's prefix --
+works on it unchanged, which is the whole reason it is a short array of the same type
+rather than a new kind of object; and the stub is the IDENTITY the residency is keyed on,
+exactly as the full array was, because it is the object the program's variables, conses
+and closures capture. The elements live on the device while the entry is dirty, and --
+from the first host touch -- in a BACKING the library allocates
+(`DeviceResidency.storageFor`: the full span, the stub's own prefix copied in) and holds
+in a second weak-keyed map beside the entries, for as long as the stub is reachable. The
+library tells a stub from a full array STRUCTURALLY: a result array that is exactly the
+prefix ahead of the result offset (`Gpu.fitsResult`: `length == offset`) is a stub; one
+long enough to hold the span is a full array; anything between is a caller's mistake and
+declines. A stub offered as an OPERAND has an extent of the span it stands for
+(`GpuDevice.extent`: its own length, or the end of its entry's span, or its backing's
+length, whichever is larger), which is what the bounds checks now ask instead of
+`a.length` -- the first build asked `a.length`, the library declined every stub operand
+and every stub result, the interceptors fell to their host rungs, and the interpreter's
+tests were the ones that said so. So a stub is in one of three states and never a
+fourth -- a dirty device copy and no backing; a device copy and a backing; a backing alone
+-- and every path that lets a dirty copy go flushes it into the backing first
+(`storageFor` from `drop`, `claim`, `claimAllDirty`, eager `finish`); a stub with neither
+is a broken invariant and `source` throws on it rather than uploading zeros.
+
+**The two seams now ANSWER the array to use.** `Gpu.materialize(host)` and
+`Gpu.written(host)` return `Object`: the host array itself, or a stub's backing (the
+ring that makes the fast path cheap remembers `(host, storage)` pairs, `Recent`, as one
+immutable object per slot so a reader racing the writer never sees one host's storage
+under another's). On the interpreter the ONE seam did not move: the records' `data()`
+answers what the hook answers, `setElement` writes into what `written` answers, and the
+in-place `--simd` kernels that report their own writes now name `storage()` -- the stub,
+the identity -- and not the array `data()` handed them, which the first build got wrong
+(`VecSimd`'s `-into` family reported the backing, the stub's entry stayed clean and stale,
+and the next device member over it would have read the old bytes). The JVM class output
+enumerates as before, each site REBINDING what it hands the reader: `_fvAref1/2/N` and
+`_fvToGeneral*` rebind their array local to `_gpuMaterialize`'s answer; `_fvAset1/2/N`
+store into `_gpuWritten`'s; every accelerated `linalg:` call site rebinds each temp after
+the device attempt (the written arguments through `_gpuWritten`); every `vec:` call site
+hands the lane kernel the guard's answer; the typed loops hoist the answer into the typed
+slot and keep reporting the body's `aset` on the VARIABLE's slot, the program's object;
+`_readSeqPacked` / `_writeSeqPacked` and Java interop receive the answer; and `_fvLength`
+at rank 1 reads `d[1]` instead of `d.length - 2`, because a stub has no `d.length` to
+speak of -- the kb had called it header-only and it was not. `resultF` / `result` in
+`JvmGpuTemplate` and `LinalgGpuKernels` allocate the stub when `Gpu.lazyResultsOn()`, the
+full array otherwise (Metal, where the interceptors do not run lazily, is untouched by
+all of this), and the bridge's `length(o)` is the header's product and never the Java
+length.
+
+**The unswap rule: a host rung that answers its argument answers the caller's object.**
+The lane kernels and the defuns that write an argument in place answer that argument
+(`%la-scale` answers `g`, `%la-adam-step` its `x`, every `vec:` `-into` its destination),
+and under this mode the argument they were handed is the BACKING. Let that escape as a
+value and the program holds two objects for one storage -- the stub in its variable, the
+backing in the result -- and a device member offered the backing keys a second entry on
+it that a write through the stub never invalidates: a silent stale read, exactly the
+class of bug the enumerations exist to rule out. So every call site that hands a backing
+to a host rung maps the rung's answer back through `_gpuUnswap(result, original, handed)`
+(`JvmGpuTemplate.gpuUnswap`: `result == handed ? original : result`), once per argument
+at the `linalg:` call sites and for the destination of an `-into` form; the interpreter
+has no such problem, because its value is the RECORD and the backing never leaves
+`data()`. The one seam where the rule is not applied is Java interop on the JVM: Java is
+handed the backing because it reads the array raw, and Java may STORE it as well as
+answer it, so a program that passes a device result to Java, gets it back and then offers
+both the original and what Java answered to the device has two identities for one storage
+-- the hole the kb names, and the same hole the interpreter has through
+`LispJavaBridge`, whose unwrap answers `data()`.
+
+**The collector it had to wake.** "Entries die with their arrays" (todo-474) assumed the
+collector runs, and with stubs it stopped running: a stub is twenty bytes, the young
+generation that had filled every eighty results now takes minutes to fill, and the stubs
+a step had dropped -- with the 25-100 MB device buffers behind them -- stayed uncollected
+and therefore resident until the pool reached its budget, where the LRU evicted them by
+DOWNLOADING into fresh backings: the allocation this mode exists to avoid, on a
+unified-memory machine the host's memory as well (`cuMemGetInfo`'s free figure is the
+system's, and the pool at its budget squeezed the heap: a traced run was OOM-killed with
+21 GB of RSS), and in the first measurement a heap that still grew to 23 GB and a 1.9 s
+step. So the LRU now evicts CLEAN copies on its own and, when only dirty ones are left,
+STOPS and sets `collectionWanted`; the owner (`CudaGemm.trim`, `MetalGemm.adopt`) then
+runs `System.gc()` -- the JDK's own direct buffers are the precedent: off-heap memory
+governed by small Java objects, collected on demand when their limit is hit -- drains
+what the collector released, and only then `evictOverBudget`s what is still over, as
+flushes, keeping the call's own buffers. The pre-flight does the same before its
+evict-everything step. A collection is asked for at most once per eighth of the budget
+PRODUCED since the last one (`DeviceResidency.COLLECTION_SHARE`, floor 64 MB), so a live
+set that genuinely exceeds the budget flushes rather than collecting on every call.
+Measured at the book's shapes: the heap's live set is 170 MB, a full collection is
+60-140 ms, and the 13-step run collects six times (0.35 s of its 26 s). The budget itself
+did not change; what changed is that the pool now sits at it, so the eighth of headroom
+the lazy budget leaves is what keeps the host alive, and it held.
+
+**Numbers** (GB10, JVM class output, the README's method and flags, one round each,
+outputs byte-identical to the previous build's):
+
+| `train-gpt-soseki` at the book's shapes | before (HEAD, 2026-08-23 afternoon) | stubs, collector not yet woken | stubs + the collector |
+|---|---|---|---|
+| 3-step run | 32.5 s | 19.1 s | 19.5 s |
+| 13-step run | 95.0 s | 38.5 s | **26.0 s** |
+| per step, `(t13 - t3) / 10` | 6.25 s | 1.94 s | **0.65 s** |
+| collector pauses over the 13-step run | 60.4 s (223 pauses, two 4 s full collections a 3-step run) | 3.2 s (12, the heap grown to 23 GB by eviction flushes) | 0.40 s (7: six `System.gc()` of 60-140 ms, one young) |
+| live heap after a full collection | 19-21 GB | 17 GB | **170 MB** |
+| backings allocated over a 3-step run + sampling | -- | 8377 / 20 GB (eviction flushes, mostly) | 7189 / 63 MB (the loss, `linalg:mean`'s layer-norm statistics, the sampling's softmax, `topk`, `multinomial` -- every one a genuine host read) |
+
+At the NOTEBOOK's shapes (the method of every table above, medians of three):
+
+| | the index tier (2026-08-23, the row above) | stubs + the collector |
+|---|---|---|
+| the 5 / 40 / 200-step runs, whole | 1.52 / 4.51 / 9.52 s | **1.08 / 3.04 / 5.78 s** |
+| per step, `(t40 - t5) / 35` -- the README's metric | 0.083 s | **0.056 s** |
+| steady state, `(t200 - t40) / 160`, DEFAULT collector | 0.033 s | **0.017 s** |
+| the same with `-XX:+UseParallelGC -Xmn4g` | 0.024 s | 0.038 s (the 200-step run 9.3 s) |
+
+The acceptance criterion was the default-collector steady state "closer to the ParallelGC
+figure than to today's"; it went past it, and the ParallelGC flag the README used to
+recommend is now the SLOWER of the two -- with nothing to collect, a 4 GB young
+generation is 4 GB of pages the device has never touched (the fresh-page cost of
+todo-474), which a default heap that recycles its regions every forty steps does not pay.
+That is a hypothesis from one log (no full collection in either run, one young against
+five), and the README now simply does not recommend the flag. Against `--simd` alone
+(0.85 s a step, unchanged) the flag is 15x on the README's metric and **50x** at the
+steady state; at the book's shapes the notebook's 5000 steps would now take about an hour
+here instead of nine.
+
+**The tests.** `GpuTest.aStubResultAllocatesNoHostArrayUntilTheHostFirstReadsIt` (the
+library: a stub result stays three floats, is a full operand to the next member with no
+upload, and the first read answers a backing of the full span with the header copied in,
+the same one every time; an ordinary array answers itself),
+`aWriteThroughAStubLandsInItsBackingAndTheStubIsUploadedFromIt`,
+`anEvictedReleasedOrEagerStubIsDownloadedIntoABackingNotLost` (the cap's flushes, the
+switch-off, a release, a stub handed over eagerly, and the malformed result that
+declines) and `aCollectedStubTakesItsBackingWithIt`. On the interpreter
+`aDeviceResultStaysOnTheDeviceUntilTheHostFirstReadsIt` now asserts the stub: storage of
+length zero, `totalSize` the shape's, `backingCount` unchanged until the read and one
+more after it, the storage still empty after. On the JVM
+`aLazyResultAllocatesNoHostArrayOnTheCompiledBackend` runs the class in a CHILD JVM with
+a 256 MB heap holding forty-eight 16 MB results -- which fits only if none of them has a
+host array, with the one that is read landing on the oracle's bits -- and runs the same
+program without the flag under the same heap to see it die of `OutOfMemoryError`, so the
+bound has teeth. The two reader-enumeration pins and every resident/index-tier test ran
+unchanged, which is what says the seams answer the right array.
 
 ### The chain order, and why the device goes on top
 

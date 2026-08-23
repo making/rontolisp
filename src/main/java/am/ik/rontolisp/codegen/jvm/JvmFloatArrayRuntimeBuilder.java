@@ -251,12 +251,16 @@ final class JvmFloatArrayRuntimeBuilder {
 	}
 
 	/**
-	 * {@code _gpuMaterialize(local)} when the GPU runtime is emitted; nothing otherwise.
+	 * {@code local = _gpuMaterialize(local)} when the GPU runtime is emitted; nothing
+	 * otherwise. The guard answers the array to READ -- the array itself, or a result
+	 * stub's backing -- so the local is rebound to it and every read below sees the
+	 * bytes.
 	 */
 	private static void emitMaterialize(JvmAsm a, int local, @Nullable MethodrefConstant materialize) {
 		if (materialize != null) {
 			a.aload(local);
 			a.invokestatic(materialize);
+			a.astore(local);
 		}
 	}
 
@@ -595,9 +599,13 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.dstore(dval);
 		if (written != null) {
 			// --gpu, BEFORE the store: a device copy that was the authoritative one comes
-			// home first and is dropped, so the store lands on the array's real bytes.
+			// home first and is dropped, so the store lands on the array's real bytes --
+			// which are the array the guard ANSWERS (the array, or a result stub's
+			// backing), so the store goes into that.
 			a.aload(d);
 			a.invokestatic(written);
+			a.checkcast(arrayClass);
+			a.astore(d);
 		}
 		a.aload(d);
 		a.iload(idx);
@@ -670,9 +678,13 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.dstore(dval);
 		if (written != null) {
 			// --gpu, BEFORE the store: a device copy that was the authoritative one comes
-			// home first and is dropped, so the store lands on the array's real bytes.
+			// home first and is dropped, so the store lands on the array's real bytes --
+			// which are the array the guard ANSWERS (the array, or a result stub's
+			// backing), so the store goes into that.
 			a.aload(d);
 			a.invokestatic(written);
+			a.checkcast(arrayClass);
+			a.astore(d);
 		}
 		a.aload(d);
 		a.iload(idx);
@@ -769,9 +781,13 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.dstore(dval);
 		if (written != null) {
 			// --gpu, BEFORE the store: a device copy that was the authoritative one comes
-			// home first and is dropped, so the store lands on the array's real bytes.
+			// home first and is dropped, so the store lands on the array's real bytes --
+			// which are the array the guard ANSWERS (the array, or a result stub's
+			// backing), so the store goes into that.
 			a.aload(d);
 			a.invokestatic(written);
+			a.checkcast(arrayClass);
+			a.astore(d);
 		}
 		a.aload(d);
 		a.iload(idx);
@@ -896,11 +912,12 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iload(rank);
 		a.iconst(1);
 		a.branch(Opcode.IF_ICMPNE, rankN);
-		// rank 1: count = d.length - 2
+		// rank 1: count = d[1], the header's one dimension -- read from the header and
+		// not from the Java length, because under --gpu a result stub is the header alone
+		// (.kb/gpu.md, "A lazy result allocates no host array").
 		a.aload(d);
-		a.arraylength();
-		a.iconst(2);
-		a.op(Opcode.ISUB);
+		a.iconst(1);
+		loadHeaderInt(a, single);
 		a.op(Opcode.I2L);
 		a.invokestatic(longValueOf);
 		a.areturn();

@@ -76,15 +76,35 @@ final class LinalgGpuKernels {
 	}
 
 	/**
+	 * A member's RESULT storage of {@code n} elements -- or, while results stay on the
+	 * device ({@code Gpu.lazyResultsOn}), a STUB: an empty array, distinct per result,
+	 * that the record holds as its storage and the library keys its residency on, with
+	 * the elements allocated by the library the first time the host reads them
+	 * ({@code Gpu.materialize}, answered through the records' {@code data()}). A result
+	 * nobody reads then costs the host no array ({@code .kb/gpu.md}, "A lazy result
+	 * allocates no host array").
+	 */
+	static float[] resultF(int n) {
+		return new float[Gpu.lazyResultsOn() ? 0 : n];
+	}
+
+	/** The double-float sibling of {@link #resultF}. */
+	static double[] result(int n) {
+		return new double[Gpu.lazyResultsOn() ? 0 : n];
+	}
+
+	/**
 	 * Tells the library that a packed array's storage was written in place, so any
 	 * resident device copy of it is stale ({@code Gpu.written}). The interpreter's half
 	 * of the invalidation enumeration: installed on {@code FloatArrayWriteHook} by
 	 * {@link LinalgGpu#install}, it is reached from every element setter and every
-	 * in-place {@code --simd} kernel.
+	 * in-place {@code --simd} kernel. Answers the array the write must land in
+	 * ({@code Gpu.written}: the storage, or a result stub's backing).
 	 * @param data the {@code double[]} or {@code float[]} that was written
+	 * @return the array to write into
 	 */
-	static void written(Object data) {
-		Gpu.written(data);
+	static Object written(Object data) {
+		return Gpu.written(data);
 	}
 
 	/**
@@ -93,10 +113,13 @@ final class LinalgGpuKernels {
 	 * ({@code Gpu.materialize}). The interpreter's half of the reader enumeration:
 	 * installed on {@code FloatArrayAccessHook} by {@link LinalgGpu#install}, it is
 	 * reached from the records' {@code data()} accessor and their own element reads.
+	 * Answers the array to read ({@code Gpu.materialize}: the storage, or a result stub's
+	 * backing).
 	 * @param data the {@code double[]} or {@code float[]} about to be read
+	 * @return the array holding its bytes
 	 */
-	static void materialize(Object data) {
-		Gpu.materialize(data);
+	static Object materialize(Object data) {
+		return Gpu.materialize(data);
 	}
 
 	/**
@@ -175,7 +198,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code n} result, or {@code null}
 	 */
 	static double @Nullable [] map(int op, double[] a, int n) {
-		double[] out = new double[n];
+		double[] out = result(n);
 		return Gpu.map(op, a, 0, out, 0, n) ? out : null;
 	}
 
@@ -187,7 +210,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code n} result, or {@code null}
 	 */
 	static float @Nullable [] map(int op, float[] a, int n) {
-		float[] out = new float[n];
+		float[] out = resultF(n);
 		return Gpu.map(op, a, 0, out, 0, n) ? out : null;
 	}
 
@@ -207,6 +230,7 @@ final class LinalgGpuKernels {
 	 * ends on as a fresh three-element vector -- or {@code null} when the device
 	 * declined, in which case {@code out} is untouched.
 	 * @param out the destination
+	 * @param n how many elements it holds
 	 * @param mode 0 one uniform draw, 1 the Irwin-Hall normal, 2 {@code lo + span * draw}
 	 * @param lo rule 2's lower bound
 	 * @param span rule 2's range
@@ -215,22 +239,22 @@ final class LinalgGpuKernels {
 	 * @param s3 the third state word
 	 * @return the end state, or {@code null}
 	 */
-	static double @Nullable [] rngFill(double[] out, int mode, double lo, double span, int s1, int s2, int s3) {
-		if (!Gpu.rngFill(out, 0, out.length, mode, lo, span, s1, s2, s3)) {
+	static double @Nullable [] rngFill(double[] out, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+		if (!Gpu.rngFill(out, 0, n, mode, lo, span, s1, s2, s3)) {
 			return null;
 		}
-		return endState(out.length, mode, s1, s2, s3);
+		return endState(n, mode, s1, s2, s3);
 	}
 
 	/**
 	 * The single-float sibling of
-	 * {@link #rngFill(double[], int, double, double, int, int, int)}.
+	 * {@link #rngFill(double[], int, int, double, double, int, int, int)}.
 	 */
-	static double @Nullable [] rngFill(float[] out, int mode, double lo, double span, int s1, int s2, int s3) {
-		if (!Gpu.rngFill(out, 0, out.length, mode, lo, span, s1, s2, s3)) {
+	static double @Nullable [] rngFill(float[] out, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+		if (!Gpu.rngFill(out, 0, n, mode, lo, span, s1, s2, s3)) {
 			return null;
 		}
-		return endState(out.length, mode, s1, s2, s3);
+		return endState(n, mode, s1, s2, s3);
 	}
 
 	private static double[] endState(int n, int mode, int s1, int s2, int s3) {
@@ -271,7 +295,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh result of {@code dims} elements, or {@code null}
 	 */
 	static double @Nullable [] bcast(int op, double[] a, int[] sa, double[] b, int[] sb, int[] dims) {
-		double[] out = new double[count(dims)];
+		double[] out = result(count(dims));
 		return Gpu.bcast(op, a, 0, sa, b, 0, sb, out, 0, dims) ? out : null;
 	}
 
@@ -287,7 +311,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh result of {@code dims} elements, or {@code null}
 	 */
 	static float @Nullable [] bcast(int op, float[] a, int[] sa, float[] b, int[] sb, int[] dims) {
-		float[] out = new float[count(dims)];
+		float[] out = resultF(count(dims));
 		return Gpu.bcast(op, a, 0, sa, b, 0, sb, out, 0, dims) ? out : null;
 	}
 
@@ -300,7 +324,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh result of {@code dims} elements, or {@code null}
 	 */
 	static double @Nullable [] gather(double[] a, int[] sa, int[] dims) {
-		double[] out = new double[count(dims)];
+		double[] out = result(count(dims));
 		return Gpu.gather(a, 0, sa, out, 0, dims) ? out : null;
 	}
 
@@ -312,7 +336,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh result of {@code dims} elements, or {@code null}
 	 */
 	static float @Nullable [] gather(float[] a, int[] sa, int[] dims) {
-		float[] out = new float[count(dims)];
+		float[] out = resultF(count(dims));
 		return Gpu.gather(a, 0, sa, out, 0, dims) ? out : null;
 	}
 
@@ -328,7 +352,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code outer * inner} result, or {@code null}
 	 */
 	static double @Nullable [] fold(int op, double[] a, int outer, int len, int inner) {
-		double[] out = new double[outer * inner];
+		double[] out = result(outer * inner);
 		return Gpu.fold(op, a, 0, out, 0, outer, len, inner) ? out : null;
 	}
 
@@ -344,7 +368,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code outer * inner} result, or {@code null}
 	 */
 	static float @Nullable [] fold(int op, float[] a, int outer, int len, int inner) {
-		float[] out = new float[outer * inner];
+		float[] out = resultF(outer * inner);
 		return Gpu.fold(op, a, 0, out, 0, outer, len, inner) ? out : null;
 	}
 
@@ -380,7 +404,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code rows} result, or {@code null}
 	 */
 	static double @Nullable [] matvec(double[] w, double[] x, int rows, int cols) {
-		double[] out = new double[rows];
+		double[] out = result(rows);
 		return Gpu.matvec(w, 0, x, 0, out, 0, rows, cols) ? out : null;
 	}
 
@@ -393,7 +417,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code rows} result, or {@code null}
 	 */
 	static float @Nullable [] matvec(float[] w, float[] x, int rows, int cols) {
-		float[] out = new float[rows];
+		float[] out = resultF(rows);
 		return Gpu.matvec(w, 0, x, 0, out, 0, rows, cols) ? out : null;
 	}
 
@@ -408,7 +432,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code n * p} result, or {@code null}
 	 */
 	static double @Nullable [] multiply(double[] a, double[] b, int n, int m, int p) {
-		double[] out = new double[n * p];
+		double[] out = result(n * p);
 		return Gpu.multiply(a, 0, b, 0, out, 0, n, m, p) ? out : null;
 	}
 
@@ -423,7 +447,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code n * p} result, or {@code null}
 	 */
 	static float @Nullable [] multiply(float[] a, float[] b, int n, int m, int p) {
-		float[] out = new float[n * p];
+		float[] out = resultF(n * p);
 		return Gpu.multiply(a, 0, b, 0, out, 0, n, m, p) ? out : null;
 	}
 
@@ -442,7 +466,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code batch * n * p} result, or {@code null}
 	 */
 	static double @Nullable [] multiply(double[] a, int sa, double[] b, int sb, int batch, int n, int m, int p) {
-		double[] out = new double[batch * n * p];
+		double[] out = result(batch * n * p);
 		return Gpu.multiply(a, 0, sa, b, 0, sb, out, 0, batch, n, m, p) ? out : null;
 	}
 
@@ -460,7 +484,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code batch * n * p} result, or {@code null}
 	 */
 	static float @Nullable [] multiply(float[] a, int sa, float[] b, int sb, int batch, int n, int m, int p) {
-		float[] out = new float[batch * n * p];
+		float[] out = resultF(batch * n * p);
 		return Gpu.multiply(a, 0, sa, b, 0, sb, out, 0, batch, n, m, p) ? out : null;
 	}
 
@@ -476,13 +500,13 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code n} result, or {@code null}
 	 */
 	static double @Nullable [] zip(int op, double[] a, double[] b, int n) {
-		double[] out = new double[n];
+		double[] out = result(n);
 		return Gpu.zip(op, a, 0, b, 0, out, 0, n) ? out : null;
 	}
 
 	/** The single-float sibling of {@link #zip(int, double[], double[], int)}. */
 	static float @Nullable [] zip(int op, float[] a, float[] b, int n) {
-		float[] out = new float[n];
+		float[] out = resultF(n);
 		return Gpu.zip(op, a, 0, b, 0, out, 0, n) ? out : null;
 	}
 
@@ -497,7 +521,7 @@ final class LinalgGpuKernels {
 	 * @return a fresh {@code n} result, or {@code null}
 	 */
 	static double @Nullable [] scale(int op, double[] a, double s, boolean swap, int n) {
-		double[] out = new double[n];
+		double[] out = result(n);
 		return Gpu.scale(op, a, 0, s, swap, out, 0, n) ? out : null;
 	}
 
@@ -505,7 +529,7 @@ final class LinalgGpuKernels {
 	 * The single-float sibling of {@link #scale(int, double[], double, boolean, int)}.
 	 */
 	static float @Nullable [] scale(int op, float[] a, double s, boolean swap, int n) {
-		float[] out = new float[n];
+		float[] out = resultF(n);
 		return Gpu.scale(op, a, 0, s, swap, out, 0, n) ? out : null;
 	}
 
@@ -528,7 +552,7 @@ final class LinalgGpuKernels {
 	static double @Nullable [] where(@Nullable Object m, int @Nullable [] sm, double ms, double @Nullable [] x,
 			int @Nullable [] sx, double xs, double @Nullable [] y, int @Nullable [] sy, double ys, int[] dims) {
 		int[] zero = new int[dims.length];
-		double[] out = new double[count(dims)];
+		double[] out = result(count(dims));
 		return Gpu.where(m, 0, sm == null ? zero : sm, ms, x, 0, sx == null ? zero : sx, xs, y, 0,
 				sy == null ? zero : sy, ys, out, 0, dims) ? out : null;
 	}
@@ -537,7 +561,7 @@ final class LinalgGpuKernels {
 	static float @Nullable [] where(@Nullable Object m, int @Nullable [] sm, double ms, float @Nullable [] x,
 			int @Nullable [] sx, double xs, float @Nullable [] y, int @Nullable [] sy, double ys, int[] dims) {
 		int[] zero = new int[dims.length];
-		float[] out = new float[count(dims)];
+		float[] out = resultF(count(dims));
 		return Gpu.where(m, 0, sm == null ? zero : sm, ms, x, 0, sx == null ? zero : sx, xs, y, 0,
 				sy == null ? zero : sy, ys, out, 0, dims) ? out : null;
 	}
@@ -570,27 +594,31 @@ final class LinalgGpuKernels {
 	 * The strided copy {@code out[oOut + so.i] = a[oa + sa.i]} over {@code dims} into a
 	 * caller-allocated destination, or {@code false} when the device declined it (it does
 	 * unless {@code a}, or {@code out} already, is resident). The interpreter's spans are
-	 * whole arrays from 0.
+	 * whole arrays from 0: {@code na} and {@code nOut} elements, taken from the records'
+	 * dims and never from the arrays' lengths, since either may be a stub.
 	 */
-	static boolean copy(double[] a, int oa, int[] sa, double[] out, int oOut, int[] so, int[] dims) {
-		return Gpu.copy(a, oa, sa, new int[] { 0, a.length }, out, oOut, so, new int[] { 0, out.length }, dims);
+	static boolean copy(double[] a, int oa, int[] sa, int na, double[] out, int oOut, int[] so, int nOut, int[] dims) {
+		return Gpu.copy(a, oa, sa, new int[] { 0, na }, out, oOut, so, new int[] { 0, nOut }, dims);
 	}
 
 	/**
 	 * The single-float sibling of
-	 * {@link #copy(double[], int, int[], double[], int, int[], int[])}.
+	 * {@link #copy(double[], int, int[], int, double[], int, int[], int, int[])}.
 	 */
-	static boolean copy(float[] a, int oa, int[] sa, float[] out, int oOut, int[] so, int[] dims) {
-		return Gpu.copy(a, oa, sa, new int[] { 0, a.length }, out, oOut, so, new int[] { 0, out.length }, dims);
+	static boolean copy(float[] a, int oa, int[] sa, int na, float[] out, int oOut, int[] so, int nOut, int[] dims) {
+		return Gpu.copy(a, oa, sa, new int[] { 0, na }, out, oOut, so, new int[] { 0, nOut }, dims);
 	}
 
-	/** {@code %la-scale}'s in-place multiply of a resident array by a double scalar. */
-	static boolean scaleInPlace(double[] a, double s) {
-		return Gpu.scale(Gpu.BIN_MUL, a, 0, s, false, a, 0, a.length);
+	/**
+	 * {@code %la-scale}'s in-place multiply of a resident array of {@code n} elements by
+	 * a double scalar.
+	 */
+	static boolean scaleInPlace(double[] a, int n, double s) {
+		return Gpu.scale(Gpu.BIN_MUL, a, 0, s, false, a, 0, n);
 	}
 
-	static boolean scaleInPlace(float[] a, double s) {
-		return Gpu.scale(Gpu.BIN_MUL, a, 0, s, false, a, 0, a.length);
+	static boolean scaleInPlace(float[] a, int n, double s) {
+		return Gpu.scale(Gpu.BIN_MUL, a, 0, s, false, a, 0, n);
 	}
 
 	// --- the index tier and the clip norm
@@ -601,15 +629,15 @@ final class LinalgGpuKernels {
 	 * {@code a} named by {@code rows}, as a fresh array, or {@code null} when the device
 	 * declined (it does unless {@code a} is resident).
 	 */
-	static double @Nullable [] takeRows(double[] a, int[] rows, int slab) {
-		double[] out = new double[rows.length * slab];
-		return Gpu.takeRows(a, 0, a.length, out, 0, rows, slab) ? out : null;
+	static double @Nullable [] takeRows(double[] a, int lenA, int[] rows, int slab) {
+		double[] out = result(rows.length * slab);
+		return Gpu.takeRows(a, 0, lenA, out, 0, rows, slab) ? out : null;
 	}
 
-	/** The single-float sibling of {@link #takeRows(double[], int[], int)}. */
-	static float @Nullable [] takeRows(float[] a, int[] rows, int slab) {
-		float[] out = new float[rows.length * slab];
-		return Gpu.takeRows(a, 0, a.length, out, 0, rows, slab) ? out : null;
+	/** The single-float sibling of {@link #takeRows(double[], int, int[], int)}. */
+	static float @Nullable [] takeRows(float[] a, int lenA, int[] rows, int slab) {
+		float[] out = resultF(rows.length * slab);
+		return Gpu.takeRows(a, 0, lenA, out, 0, rows, slab) ? out : null;
 	}
 
 	/**
@@ -617,13 +645,13 @@ final class LinalgGpuKernels {
 	 * of {@code cols.length} rows, or {@code null} on a decline.
 	 */
 	static double @Nullable [] pick(double[] a, int[] columns, int cols) {
-		double[] out = new double[columns.length];
+		double[] out = result(columns.length);
 		return Gpu.pick(a, 0, out, 0, columns, cols) ? out : null;
 	}
 
 	/** The single-float sibling of {@link #pick(double[], int[], int)}. */
 	static float @Nullable [] pick(float[] a, int[] columns, int cols) {
-		float[] out = new float[columns.length];
+		float[] out = resultF(columns.length);
 		return Gpu.pick(a, 0, out, 0, columns, cols) ? out : null;
 	}
 
@@ -631,15 +659,16 @@ final class LinalgGpuKernels {
 	 * {@code linalg::%la-scatter-rows} on the device, IN PLACE: {@code z} is written on
 	 * the device and stays there, so the caller must NOT report it written.
 	 */
-	static boolean scatterRows(double[] z, double[] g, int[] rows, int slab) {
-		return Gpu.scatterRows(z, 0, g, 0, rows, z.length / slab, slab);
+	static boolean scatterRows(double[] z, int rowsZ, double[] g, int[] rows, int slab) {
+		return Gpu.scatterRows(z, 0, g, 0, rows, rowsZ, slab);
 	}
 
 	/**
-	 * The single-float sibling of {@link #scatterRows(double[], double[], int[], int)}.
+	 * The single-float sibling of
+	 * {@link #scatterRows(double[], int, double[], int[], int)}.
 	 */
-	static boolean scatterRows(float[] z, float[] g, int[] rows, int slab) {
-		return Gpu.scatterRows(z, 0, g, 0, rows, z.length / slab, slab);
+	static boolean scatterRows(float[] z, int rowsZ, float[] g, int[] rows, int slab) {
+		return Gpu.scatterRows(z, 0, g, 0, rows, rowsZ, slab);
 	}
 
 	/**
@@ -648,13 +677,13 @@ final class LinalgGpuKernels {
 	 * result of this flag that is not the caller's own arithmetic in the caller's own
 	 * order ({@code .kb/gpu.md}). {@code null} on a decline.
 	 */
-	static @Nullable Double sumSquares(double[] a, double acc) {
-		return Gpu.sumSquares(a, 0, a.length, acc);
+	static @Nullable Double sumSquares(double[] a, int n, double acc) {
+		return Gpu.sumSquares(a, 0, n, acc);
 	}
 
-	/** The single-float sibling of {@link #sumSquares(double[], double)}. */
-	static @Nullable Double sumSquares(float[] a, double acc) {
-		return Gpu.sumSquares(a, 0, a.length, acc);
+	/** The single-float sibling of {@link #sumSquares(double[], int, double)}. */
+	static @Nullable Double sumSquares(float[] a, int n, double acc) {
+		return Gpu.sumSquares(a, 0, n, acc);
 	}
 
 }

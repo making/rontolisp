@@ -130,11 +130,11 @@ aarch64 DGX Spark (GB10), 2026-08-22:
 | `--simd` | 0.79 s |
 | `--simd --parallel` | 0.37 s |
 | `--blas --simd` | 0.79 s |
-| `--gpu --simd` | **0.085 s** (0.08-0.10) |
+| `--gpu --simd` | **0.056 s** (0.085 the same morning) |
 | `--gpu --blas --simd`, `--gpu --simd --parallel` | within noise of the row above (2026-08-22; not re-measured since) |
 
-**Nine times `--simd`, four times `--simd --parallel`**, measured 2026-08-23. It was
-0.89 -> 0.21 when the flag first landed and 0.11 the day before; since then the AdamW
+**Fourteen times `--simd`, seven times `--simd --parallel`**, measured 2026-08-23 evening.
+It was 0.89 -> 0.21 when the flag first landed and 0.11 the day before; since then the AdamW
 update, the dropout generator, `torch:masked-fill`'s `where`, the embedding lookup and
 its adjoint, and gradient clipping have all moved onto the acceleration seams, the
 generator onto the device itself (still bit-identical to the CPU's sequence), the stacked
@@ -142,10 +142,10 @@ f32 product runs a register-tiled kernel at its large shapes -- and since 2026-0
 device result **stays on the device until something on the host reads it**, so a chain of
 members moves nothing over the link, and the members whose operands are already there
 (the equal-shape and scalar arithmetic, `where`, the Adam step, the reshapes, slices and
-`cat`) run as launches with no copy. Over a longer run the step settles at **0.033 s**
-(steps 40-200: 26 times `--simd`'s 0.85 there), and at about **0.024 s** -- a 200-step run
-in 7 s -- under `java -XX:+UseParallelGC -Xmn4g`. An `nsys` profile of the 200-step run
-moves 2.3 GB down in 6737 copies, against the 44 GB and 37534 of the day before.
+`cat`) run as launches with no copy. Over a longer run the step settles at **0.017 s**
+(steps 40-200: 50 times `--simd`'s 0.85 there; a 200-step run in 5.8 s). An `nsys` profile
+of the 200-step run moves 2.3 GB down in 6737 copies, against the 44 GB and 37534 of the
+day before.
 
 Later the same day the last of those copies went too. A 40-step run brought **443 MB home
 in 1200 copies**: gradient clipping's sum over every gradient of the model, the embedding
@@ -156,9 +156,15 @@ arithmetic in its own order](../../doc/en/guides/gpu-acceleration.md#reach-and-p
 and the other four bit-identical -- and the same run brings **0.16 MB home in 40 copies**,
 the loss the loop prints. It is worth a tenth of the settled step (0.037 -> 0.033 s over
 steps 40-200, medians of five interleaved rounds) and nothing over the first forty, where
-warmup is most of the run: what is left of the step is the kernels and the host arrays
-each result still allocates whether or not it is ever read. The same program varies by
-about 15% run to run, so read the ratios rather than the digits.
+warmup is most of the run. And last of all went the host arrays each result still
+allocated whether or not it was ever read: since the evening of 2026-08-23 a device
+result's host array is **its header alone** -- the elements are allocated only when
+something on the host reads them, and a result nobody reads costs the heap nothing -- which
+is what took the settled step from 0.033 s to 0.017 and the 40-step run from 4.5 s to
+3.0. It also retired the collector advice that used to stand here: with nothing to
+collect, the default collector is now the faster one, and `-XX:+UseParallelGC -Xmn4g`
+makes the 200-step run slower (9.3 s against 5.8). The same program varies by about 15%
+run to run, so read the ratios rather than the digits.
 
 On an Apple M4 Max the same 40-step program at the notebook's shapes (JVM class output,
 2026-08-23) runs at **0.104 s a step under `--gpu --simd`** against 0.70 under `--simd`
@@ -248,8 +254,10 @@ tables above say. JVM class output, `--gpu --simd`, `java -Xmx64g -XX:+UseParall
 
 - **Chapter 3 at `block_size` 256, `n_embd` 384, 6 layers, 6 heads, batch 64 (13.06 M
   parameters): 9.9 s per training step** on 2026-08-23 morning, **6.3 s** that evening
-  with results staying on the device (`(t13 - t3) / 10`), so the notebook's 5000 steps
-  would take about 9 hours here. A 103-step run (17 minutes) took the loss from 8.10 (`log 3038`) to
+  with results staying on the device, and **0.65 s** that night with no host array
+  behind a result nobody reads (`(t13 - t3) / 10`, outputs byte-identical across the
+  three), so the notebook's 5000 steps would take about an hour here. A 103-step run
+  (17 minutes, at the 9.9 s build) took the loss from 8.10 (`log 3038`) to
   4.31 and already samples sentence-shaped 漱石 -- `主人はなる。そうにものであるのでする。` --
   with the warmup shortened to 100 steps so that a run this short reaches the base rate
   (the trainer's `3e-4`).
@@ -261,19 +269,18 @@ tables above say. JVM class output, `--gpu --simd`, `java -Xmx64g -XX:+UseParall
   `私 に は 生き 甲斐 が な い 。` -> `i don 't know .` -- which is what 312 batches
   of a 6-block model should look like.
 
-So the port runs the book's shapes; it is the speed that is not the book's. The
-arithmetic of a chapter-3 step is about 1.2 TFLOP, which the device finishes in 0.2 s of
-the 6.3. Until 2026-08-23 the rest was the round trip the `--gpu` section describes,
-scaled up -- every member's result copied home (an `nsys` profile of three steps and the
-sampling moved 88 GB down and 40 GB up), every non-member (`where` behind the causal
-mask, the array-times-scalar forms, the equal-shape adds and multiplies) then running on
-the host over the copy -- and that half is gone: results stay on the device and those
-members run there. What is left at this shape, and why the step moved only from 9.9 to
-6.3 where the notebook-shaped one halved, is the third line of that profile: a fresh
-100 MB host array is still allocated (and zeroed) for every result whether or not anything
-ever reads it, and the collector pays for each of them (20 s of the 145 s of a 13-step
-run were pauses). Until a host array is allocated only when something reads it, the shapes
-that are tested are the shapes to run.
+So the port runs the book's shapes, and since 2026-08-23 at a speed that is within a
+factor of three of the arithmetic: a chapter-3 step is about 1.2 TFLOP, which the device
+finishes in 0.2 s of the 0.65. Until that day the rest was the round trip the `--gpu`
+section describes, scaled up -- every member's result copied home (an `nsys` profile of
+three steps and the sampling moved 88 GB down and 40 GB up), every non-member (`where`
+behind the causal mask, the array-times-scalar forms, the equal-shape adds and
+multiplies) then running on the host over the copy -- and, once results stayed on the
+device and those members ran there (6.3 s), the fresh 100 MB host array still allocated
+and zeroed for every result whether or not anything read it: 4.7 s of that 6.3 were
+collector pauses over a heap that grew to 58 GB. With a device result's host array
+reduced to its header, the heap's live set is 170 MB, and the remaining 0.45 s a step is
+the launches and the link -- the shape the book trains at is now a shape to run.
 
 ## The two places this port deliberately differs from the book
 

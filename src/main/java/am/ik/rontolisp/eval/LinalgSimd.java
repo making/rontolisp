@@ -914,13 +914,13 @@ public final class LinalgSimd {
 		if (x instanceof LispDoubleFloatArray a && g instanceof LispDoubleFloatArray b
 				&& m instanceof LispDoubleFloatArray c && v instanceof LispDoubleFloatArray d) {
 			LinalgSimdKernels.adamStep(a.data(), b.data(), c.data(), d.data(), ps);
-			written(a.data(), c.data(), d.data());
+			written(a.storage(), c.storage(), d.storage());
 			return x;
 		}
 		if (x instanceof LispSingleFloatArray a && g instanceof LispSingleFloatArray b
 				&& m instanceof LispSingleFloatArray c && v instanceof LispSingleFloatArray d) {
 			LinalgSimdKernels.adamStepF(a.data(), b.data(), c.data(), d.data(), ps);
-			written(a.data(), c.data(), d.data());
+			written(a.storage(), c.storage(), d.storage());
 			return x;
 		}
 		// Mixed widths: the defun reads every element widened anyway.
@@ -965,7 +965,7 @@ public final class LinalgSimd {
 			case LispDoubleFloatArray a -> LinalgSimdKernels.rngFill(a.data(), mode, lo, span, w[0], w[1], w[2]);
 			case LispSingleFloatArray a -> LinalgSimdKernels.rngFillF(a.data(), mode, lo, span, w[0], w[1], w[2]);
 		};
-		written(out instanceof LispDoubleFloatArray d ? d.data() : ((LispSingleFloatArray) out).data());
+		written(out instanceof LispDoubleFloatArray d ? d.storage() : ((LispSingleFloatArray) out).storage());
 		return new LispDoubleFloatArray(end, new int[] { 3 });
 	}
 
@@ -1171,12 +1171,12 @@ public final class LinalgSimd {
 		}
 		if (z instanceof LispDoubleFloatArray zd && g instanceof LispDoubleFloatArray gd) {
 			LinalgSimdKernels.scatterRows(zd.data(), gd.data(), slab, rows);
-			written(zd.data());
+			written(zd.storage());
 			return z;
 		}
 		if (z instanceof LispSingleFloatArray zf && g instanceof LispSingleFloatArray gf) {
 			LinalgSimdKernels.scatterRowsF(zf.data(), gf.data(), slab, rows);
-			written(zf.data());
+			written(zf.storage());
 			return z;
 		}
 		return null;
@@ -1212,11 +1212,11 @@ public final class LinalgSimd {
 		switch (g) {
 			case LispDoubleFloatArray d -> {
 				LinalgSimdKernels.scale(d.data(), s);
-				written(d.data());
+				written(d.storage());
 			}
 			case LispSingleFloatArray f -> {
 				LinalgSimdKernels.scale(f.data(), s);
-				written(f.data());
+				written(f.storage());
 			}
 		}
 		return g;
@@ -1430,7 +1430,9 @@ public final class LinalgSimd {
 	 * Reports that the given packed storage arrays were written in place, for whatever
 	 * flag keeps a copy of them elsewhere -- {@code --gpu}'s device residency
 	 * ({@code FloatArrayAccessHook}). The four in-place members here bypass the element
-	 * setter that reports for every other write, so they report themselves.
+	 * setter that reports for every other write, so they report themselves -- naming the
+	 * records' {@code storage()}, the identity the device is keyed on, and not the array
+	 * {@code data()} handed them to write, which may be a result stub's backing.
 	 */
 	private static void written(Object... data) {
 		for (Object array : data) {

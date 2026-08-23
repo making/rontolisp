@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -315,32 +316,40 @@ final class JvmLinalgKernelCompiler {
 		// result the device still holds the only copy of comes home), and each array
 		// the member writes is reported BEFORE the write -- here, where only a host rung
 		// can follow, so a device rung that took the member and left the array resident
-		// is not undone (.kb/gpu.md, "A result comes home on first host touch").
+		// is not undone (.kb/gpu.md, "A result comes home on first host touch"). Each
+		// temp is REBOUND to what the guard answers -- the array, or a result stub's
+		// backing -- and the original kept beside it, so that a host rung's answer can be
+		// mapped back onto the caller's own object below (_gpuUnswap).
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		int[] originals = new int[0];
 		if (gpuOps != null) {
 			MethodrefConstant materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
-			for (int slot : slots) {
+			MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
+			int[] written = WRITTEN.getOrDefault(member, new int[0]);
+			originals = new int[supplied];
+			for (int i = 0; i < supplied; i++) {
+				int index = i;
+				boolean writes = Arrays.stream(written).anyMatch(w -> w == index);
+				originals[i] = ctx.allocTemp();
 				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slot);
+				ctx.emit(slots[i]);
+				ctx.emit(Opcode.DUP);
+				ctx.emit(Opcode.ASTORE);
+				ctx.emit(originals[i]);
 				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(materialize.index());
-			}
-			int[] written = WRITTEN.get(member);
-			if (written != null) {
-				MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
-				for (int i : written) {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(slots[i]);
-					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(report.index());
-				}
+				ctx.emitU2(writes ? report.index() : materialize.index());
+				ctx.emit(Opcode.ASTORE);
+				ctx.emit(slots[i]);
 			}
 		}
+		// The host rungs' own answers all pass through the unswap below; only the device
+		// rung's skips it.
+		List<Integer> hostBranches = new ArrayList<>();
 		if (blas != null && !extendedCall) {
-			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, takenBranches);
+			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, hostBranches);
 		}
 		if (simd != null) {
-			emitAttempt(ctx, simd, extendedCall ? extendedKey(member) : qualified, layout, slots, arity, takenBranches);
+			emitAttempt(ctx, simd, extendedCall ? extendedKey(member) : qualified, layout, slots, arity, hostBranches);
 		}
 		for (int i = 0; i < arity; i++) {
 			ctx.emit(Opcode.ALOAD);
@@ -376,6 +385,22 @@ final class JvmLinalgKernelCompiler {
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(defun.methodref().index());
+		for (int branchPos : hostBranches) {
+			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+		}
+		if (gpuOps != null) {
+			// A host rung that answered one of its arguments answered the backing it was
+			// handed: answer the caller's object instead, once per argument.
+			MethodrefConstant unswap = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP));
+			for (int i = 0; i < supplied; i++) {
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(originals[i]);
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slots[i]);
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(unswap.index());
+			}
+		}
 		for (int branchPos : takenBranches) {
 			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
 		}

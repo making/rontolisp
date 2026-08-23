@@ -6851,17 +6851,14 @@ public final class Environment implements Scope {
 
 		void load(ByteBuffer bytes, int start, int n) {
 			// A bulk read writes a packed float array's storage IN PLACE, behind the
-			// element setter's back, so it reports the write itself: under --gpu the
-			// device may hold a resident copy of this very array (.kb/gpu.md).
+			// element setter's back, so it reports the write itself and writes into what
+			// the hook answers: under --gpu the device may hold a resident copy of this
+			// very array, or its only copy, and the storage may be a stub (.kb/gpu.md).
 			switch (this.value) {
-				case LispSingleFloatArray f -> {
-					FloatArrayAccessHook.written(f.storage());
-					bytes.asFloatBuffer().get(f.storage(), start, n);
-				}
-				case LispDoubleFloatArray d -> {
-					FloatArrayAccessHook.written(d.storage());
-					bytes.asDoubleBuffer().get(d.storage(), start, n);
-				}
+				case LispSingleFloatArray f ->
+					bytes.asFloatBuffer().get((float[]) FloatArrayAccessHook.written(f.storage()), start, n);
+				case LispDoubleFloatArray d ->
+					bytes.asDoubleBuffer().get((double[]) FloatArrayAccessHook.written(d.storage()), start, n);
 				case LispIntVector iv -> {
 					long[] data = iv.data();
 					for (int k = 0; k < n; k++) {

@@ -46,10 +46,10 @@ final class JvmSequencePackedCompiler {
 		// setter's back, and a bulk WRITE reads it behind every reader's. Under --gpu the
 		// device may hold a resident -- or the only -- copy of that array, so the call
 		// site reports the sequence to _gpuWritten / _gpuMaterialize BEFORE the helper
-		// runs (.kb/gpu.md, "Device residency").
+		// runs and hands the helper what the guard answers -- the array, or a result
+		// stub's backing (.kb/gpu.md, "Device residency"). The helper answers a position.
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 		if (gpuOps != null) {
-			ctx.emit(Opcode.DUP);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(Objects
 				.requireNonNull(gpuOps.get(read ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))

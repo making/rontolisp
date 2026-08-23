@@ -82,19 +82,23 @@ final class JvmGpuRuntimeBuilder {
 	 */
 	private static final List<String> GPU_CLASSES = List.of("GpuDevice", "GpuDevice$Thresholds", "CudaDriver",
 			"CuResult", "CudaGemm", "CudaGemm$Probe", "CudaGemm$Tile", "DeviceResidency", "DeviceResidency$Entry",
-			"DeviceResidency$Flush", "DeviceResidency$Key", "DeviceResidency$Lookup", "MetalDriver", "MetalGemm",
-			"MetalGemm$Probe", "MetalGemm$Slab", "MetalGemm$Call", "Gpu", "Gpu$Probe");
+			"DeviceResidency$Flush", "DeviceResidency$Claim", "DeviceResidency$Recent", "DeviceResidency$Key",
+			"DeviceResidency$Lookup", "MetalDriver", "MetalGemm", "MetalGemm$Probe", "MetalGemm$Slab", "MetalGemm$Call",
+			"Gpu", "Gpu$Probe");
 
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_gpuInit";
 
 	/**
 	 * The emitted guard every in-place write to a packed float array calls under
-	 * {@code --gpu}: {@code if (_gpuInited != 0) RontoLispGpuBridge.gpuWritten(array)}.
-	 * The guard is what lets {@code _fvAset1} be emitted before the bridge class is
-	 * defined -- a setter that ran before any device member would otherwise resolve a
-	 * class that does not exist yet -- and it is the fast path: a write before the first
-	 * device call costs a {@code getstatic} and a branch.
+	 * {@code --gpu}:
+	 * {@code _gpuInited != 0 ? RontoLispGpuBridge.gpuWritten(array) : array} -- and
+	 * writes into what it ANSWERS, which is the array itself or, for a result stub, the
+	 * backing the library holds its elements in ({@code .kb/gpu.md}, "A lazy result
+	 * allocates no host array"). The guard is what lets {@code _fvAset1} be emitted
+	 * before the bridge class is defined -- a setter that ran before any device member
+	 * would otherwise resolve a class that does not exist yet -- and it is the fast path:
+	 * a write before the first device call costs a {@code getstatic} and a branch.
 	 */
 	static final String WRITTEN_METHOD = "_gpuWritten";
 
@@ -104,14 +108,29 @@ final class JvmGpuRuntimeBuilder {
 	/**
 	 * The emitted guard every HOST READ of a packed float array's storage calls under
 	 * {@code --gpu}:
-	 * {@code if (_gpuInited != 0) RontoLispGpuBridge.gpuMaterialize(array)} -- the other
-	 * half of {@link #WRITTEN_METHOD}, for lazy results: a result the device still holds
-	 * the only copy of comes home before the read. Same guard, same reason.
+	 * {@code _gpuInited != 0 ? RontoLispGpuBridge.gpuMaterialize(array) : array} -- the
+	 * other half of {@link #WRITTEN_METHOD}, for lazy results: a result the device still
+	 * holds the only copy of comes home before the read, and the reader reads what the
+	 * guard ANSWERS (the array, or a stub's backing). Same guard, same reason.
 	 */
 	static final String MATERIALIZE_METHOD = "_gpuMaterialize";
 
 	/** The {@code ops} key of {@link #MATERIALIZE_METHOD}'s method reference. */
 	static final String MATERIALIZE = "materialize";
+
+	/**
+	 * The emitted guard a call site runs over a HOST RUNG's answer, once per argument it
+	 * handed over through {@link #MATERIALIZE_METHOD} or {@link #WRITTEN_METHOD}:
+	 * {@code _gpuInited != 0 ? RontoLispGpuBridge.gpuUnswap(result, original, handed) : result}
+	 * -- a rung that answered the argument it was handed (the in-place kernels, an
+	 * {@code -into} form, a defun that answers its operand) answers the caller's own
+	 * object instead of the backing, so the program never holds a backing beside its
+	 * stub.
+	 */
+	static final String UNSWAP_METHOD = "_gpuUnswap";
+
+	/** The {@code ops} key of {@link #UNSWAP_METHOD}'s method reference. */
+	static final String UNSWAP = "unswap";
 
 	/** The {@code ops} key of the Adam update ({@code linalg::%la-adam-step}). */
 	static final String ADAM_STEP = "adamStep";
@@ -182,7 +201,8 @@ final class JvmGpuRuntimeBuilder {
 	record GpuRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack, int maxLocals,
 			Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops,
 			Utf8Constant writtenName, Utf8Constant writtenDesc, List<Integer> writtenCode, Utf8Constant materializeName,
-			Utf8Constant materializeDesc, List<Integer> materializeCode) {
+			Utf8Constant materializeDesc, List<Integer> materializeCode, Utf8Constant unswapName,
+			Utf8Constant unswapDesc, List<Integer> unswapCode) {
 	}
 
 	/**
@@ -234,15 +254,21 @@ final class JvmGpuRuntimeBuilder {
 		Utf8Constant initDesc = cp.addUtf8("()V");
 		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
 		Utf8Constant writtenName = cp.addUtf8(WRITTEN_METHOD);
-		Utf8Constant writtenDesc = cp.addUtf8("(Ljava/lang/Object;)V");
+		Utf8Constant writtenDesc = cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;");
 		ops.put(WRITTEN, cp.addMethodref(thisClass, cp.addNameAndType(writtenName, writtenDesc)));
 		MethodrefConstant bridgeWritten = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("gpuWritten"), cp.addUtf8("(Ljava/lang/Object;)V")));
+				cp.addNameAndType(cp.addUtf8("gpuWritten"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
 		Utf8Constant materializeName = cp.addUtf8(MATERIALIZE_METHOD);
-		Utf8Constant materializeDesc = cp.addUtf8("(Ljava/lang/Object;)V");
+		Utf8Constant materializeDesc = cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;");
 		ops.put(MATERIALIZE, cp.addMethodref(thisClass, cp.addNameAndType(materializeName, materializeDesc)));
 		MethodrefConstant bridgeMaterialize = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("gpuMaterialize"), cp.addUtf8("(Ljava/lang/Object;)V")));
+				cp.addNameAndType(cp.addUtf8("gpuMaterialize"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
+		Utf8Constant unswapName = cp.addUtf8(UNSWAP_METHOD);
+		Utf8Constant unswapDesc = cp
+			.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		ops.put(UNSWAP, cp.addMethodref(thisClass, cp.addNameAndType(unswapName, unswapDesc)));
+		MethodrefConstant bridgeUnswap = cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuUnswap"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
 		ops.put(WHERE, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuWhere"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(ADAM_STEP, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuAdamStep"), cp.addUtf8(
@@ -313,36 +339,47 @@ final class JvmGpuRuntimeBuilder {
 		code.add(Opcode.RETURN);
 
 		// --- _gpuWritten body ------------------------------------------------------
-		// if (_gpuInited != 0) RontoLispGpuBridge.gpuWritten(array); return;
-		List<Integer> written = new ArrayList<>();
-		written.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(written, initedField.index());
-		int skipPos = written.size();
-		written.add(Opcode.IFEQ);
-		JvmRuntimeBuilder.emitU2(written, 0);
-		written.add(Opcode.ALOAD_0);
-		written.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(written, bridgeWritten.index());
-		JvmRuntimeBuilder.patchBranch(written, skipPos, written.size());
-		written.add(Opcode.RETURN);
+		// return _gpuInited != 0 ? RontoLispGpuBridge.gpuWritten(array) : array;
+		List<Integer> written = guard(initedField, bridgeWritten, 1);
 
 		// --- _gpuMaterialize body --------------------------------------------------
-		// if (_gpuInited != 0) RontoLispGpuBridge.gpuMaterialize(array); return;
-		List<Integer> materialize = new ArrayList<>();
-		materialize.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(materialize, initedField.index());
-		int skipMaterialize = materialize.size();
-		materialize.add(Opcode.IFEQ);
-		JvmRuntimeBuilder.emitU2(materialize, 0);
-		materialize.add(Opcode.ALOAD_0);
-		materialize.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(materialize, bridgeMaterialize.index());
-		JvmRuntimeBuilder.patchBranch(materialize, skipMaterialize, materialize.size());
-		materialize.add(Opcode.RETURN);
+		// return _gpuInited != 0 ? RontoLispGpuBridge.gpuMaterialize(array) : array;
+		List<Integer> materialize = guard(initedField, bridgeMaterialize, 1);
+
+		// --- _gpuUnswap body -------------------------------------------------------
+		// return _gpuInited != 0 ? RontoLispGpuBridge.gpuUnswap(result, original, handed)
+		// : result;
+		List<Integer> unswap = guard(initedField, bridgeUnswap, 3);
 
 		// The deepest stack is [lookup, decoder, chunk, chunk] inside a class blob.
 		return new GpuRuntime(initName, initDesc, code, 4, 1, initedFieldName, initedFieldDesc, ops, writtenName,
-				writtenDesc, written, materializeName, materializeDesc, materialize);
+				writtenDesc, written, materializeName, materializeDesc, materialize, unswapName, unswapDesc, unswap);
+	}
+
+	/**
+	 * The body of one guard: {@code _gpuInited != 0 ? bridge(args...) : args[0]}. The
+	 * bridge is only named once the field says it has been defined; before that the first
+	 * argument is answered untouched, which is the right answer for all three guards
+	 * (nothing can be resident, so nothing is swapped).
+	 */
+	private static List<Integer> guard(FieldrefConstant initedField, MethodrefConstant bridge, int arity) {
+		List<Integer> code = new ArrayList<>();
+		code.add(Opcode.GETSTATIC);
+		JvmRuntimeBuilder.emitU2(code, initedField.index());
+		int skip = code.size();
+		code.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(code, 0);
+		for (int i = 0; i < arity; i++) {
+			code.add(Opcode.ALOAD);
+			code.add(i);
+		}
+		code.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(code, bridge.index());
+		code.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(code, skip, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ARETURN);
+		return code;
 	}
 
 	/** Loads one chunk sequence onto the stack, concatenated back into one string. */

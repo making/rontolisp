@@ -1511,6 +1511,228 @@ class GpuTest {
 		}
 	}
 
+	// --- a lazy result allocates no host array (.todo/492)
+	// ------------------------------
+
+	/**
+	 * A result STUB: the three-slot prefix a rank-2 caller keeps ahead of its elements.
+	 */
+	private static double[] stub(int rows, int cols) {
+		return new double[] { 2, rows, cols };
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aStubResultAllocatesNoHostArrayUntilTheHostFirstReadsIt() {
+		DeviceResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "lazy results are the CUDA backend's");
+		Gpu.releaseResident();
+		int n = 1 << 18;
+		double[] a = new double[n];
+		for (int i = 0; i < n; i++) {
+			a[i] = (i % 97) / 100.0;
+		}
+		Gpu.lazyResults(true);
+		try {
+			// The result array handed over is the header alone; the library takes it,
+			// allocates nothing on the host, and keeps the elements on the device.
+			double[] c = stub(512, 512);
+			int backed = residency.backingCount();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
+			assertThat(c).hasSize(3);
+			assertThat(residency.backingCount()).isEqualTo(backed);
+			assertThat(residency.dirtyCount()).isEqualTo(1);
+			assertThat(Gpu.resident(c)).isTrue();
+			// A stub is a full operand to the next member -- its extent is the span it
+			// was created with, not its Java length -- and the chain moves nothing.
+			double[] e = stub(512, 512);
+			long hits = residency.hits();
+			assertThat(Gpu.map(Gpu.MAP_LOG, c, 3, e, 3, n)).isTrue();
+			assertThat(residency.hits()).isEqualTo(hits + 1);
+			assertThat(residency.dirtyCount()).isEqualTo(2);
+			assertThat(residency.backingCount()).isEqualTo(backed);
+			// The first host read allocates the BACKING -- the full span, the stub's
+			// own prefix copied in -- and downloads into it; the stub itself stays what
+			// it was, and is what the program keeps holding.
+			Object storage = Gpu.materialize(e);
+			assertThat(storage).isInstanceOf(double[].class).isNotSameAs(e);
+			double[] backing = (double[]) storage;
+			assertThat(backing).hasSize(3 + n);
+			assertThat(backing[0]).isEqualTo(2.0);
+			assertThat(backing[1]).isEqualTo(512.0);
+			assertThat(backing[2]).isEqualTo(512.0);
+			for (int i = 0; i < n; i += 997) {
+				assertThat(backing[3 + i]).as("log(exp(a[%d]))", i).isCloseTo(a[i], within(1e-9));
+			}
+			assertThat(e).hasSize(3);
+			assertThat(residency.dirtyCount()).isEqualTo(1);
+			assertThat(residency.backingCount()).isEqualTo(backed + 1);
+			// Every later read answers the same backing, and an ordinary array answers
+			// itself.
+			assertThat(Gpu.materialize(e)).isSameAs(backing);
+			assertThat(Gpu.materialize(a)).isSameAs(a);
+			assertThat(Gpu.materialize(new double[4])).isInstanceOf(double[].class);
+			// The stub stays resident, clean, for the next member.
+			assertThat(Gpu.resident(e)).isTrue();
+			double[] f = stub(512, 512);
+			hits = residency.hits();
+			assertThat(Gpu.map(Gpu.MAP_EXP, e, 3, f, 3, n)).isTrue();
+			assertThat(residency.hits()).isEqualTo(hits + 1);
+			assertThat(((double[]) Gpu.materialize(f))[3 + 100]).isCloseTo(Math.exp(a[100]), within(1e-9));
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aWriteThroughAStubLandsInItsBackingAndTheStubIsUploadedFromIt() {
+		DeviceResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "lazy results are the CUDA backend's");
+		Gpu.releaseResident();
+		int n = 1 << 18;
+		double[] a = new double[n];
+		Gpu.lazyResults(true);
+		try {
+			double[] c = stub(512, 512);
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
+			// The write hook answers the array the store must land in: the backing,
+			// allocated and filled now, with the device copy then forgotten.
+			double[] backing = (double[]) Gpu.written(c);
+			assertThat(backing).hasSize(3 + n);
+			assertThat(backing[3 + 100]).isEqualTo(1.0);
+			assertThat(Gpu.resident(c)).isFalse();
+			backing[3 + 100] = 2.0;
+			assertThat(Gpu.written(c)).isSameAs(backing);
+			// Offered again, the stub is uploaded from its backing -- the written value
+			// is what the device reads -- and the answer follows the write.
+			double[] d = stub(512, 512);
+			long misses = residency.misses();
+			assertThat(Gpu.map(Gpu.MAP_LOG, c, 3, d, 3, n)).isTrue();
+			assertThat(residency.misses()).as("the written stub is uploaded again").isEqualTo(misses + 1);
+			double[] out = (double[]) Gpu.materialize(d);
+			assertThat(out[3 + 100]).isCloseTo(Math.log(2.0), within(1e-12));
+			assertThat(out[3 + 99]).isZero();
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void anEvictedReleasedOrEagerStubIsDownloadedIntoABackingNotLost() {
+		DeviceResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "lazy results are the CUDA backend's");
+		Gpu.releaseResident();
+		int n = 1 << 18; // 2 MB a buffer
+		long budget = 8L << 20;
+		Gpu.residentBudget(budget);
+		Gpu.lazyResults(true);
+		List<double[]> results = new ArrayList<>();
+		try {
+			double[] a = new double[n];
+			for (int i = 0; i < n; i++) {
+				a[i] = (i % 89) / 100.0;
+			}
+			// Thirty-two stub results against a budget that holds three: the cap evicts
+			// by downloading, and what it evicts lands in a backing nobody asked for yet.
+			for (int i = 0; i < 32; i++) {
+				double[] c = stub(512, 512);
+				results.add(c);
+				assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
+				assertThat(Gpu.residentBytes()).as("after call %d", i).isLessThanOrEqualTo(budget);
+			}
+			assertThat(residency.dirtyCount()).isGreaterThan(0);
+			assertThat(residency.backingCount()).isGreaterThan(20);
+			int stillResident = 0;
+			for (double[] c : results) {
+				assertThat(c).hasSize(3);
+				if (Gpu.resident(c)) {
+					stillResident++;
+				}
+				assertThat(((double[]) Gpu.materialize(c))[3 + 777]).isCloseTo(Math.exp(a[777]), within(1e-12));
+			}
+			assertThat(stillResident).isBetween(1, 4);
+			// Switching lazy results off flushes the rest into backings; a release keeps
+			// them readable; and a stub handed over EAGERLY is filled into a backing
+			// before the call returns.
+			Gpu.lazyResults(false);
+			assertThat(residency.dirtyCount()).isZero();
+			Gpu.releaseResident();
+			assertThat(Gpu.residentBytes()).isZero();
+			for (double[] c : results) {
+				assertThat(((double[]) Gpu.materialize(c))[3 + 777]).isCloseTo(Math.exp(a[777]), within(1e-12));
+			}
+			double[] eager = stub(512, 512);
+			int backed = residency.backingCount();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, eager, 3, n)).isTrue();
+			assertThat(residency.backingCount()).isEqualTo(backed + 1);
+			assertThat(residency.dirtyCount()).isZero();
+			assertThat(((double[]) Gpu.materialize(eager))[3 + 777]).isCloseTo(Math.exp(a[777]), within(1e-12));
+			// A result array that is neither full nor exactly the prefix is a caller's
+			// mistake and declines.
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, new double[10], 3, n)).isFalse();
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.residentBudget(-1);
+			Gpu.releaseResident();
+		}
+	}
+
+	@Test
+	@ResourceLock(DEVICE_MEMORY)
+	void aCollectedStubTakesItsBackingWithIt() throws InterruptedException {
+		DeviceResidency residency = Gpu.residency();
+		assumeTrue(residency != null, "lazy results are the CUDA backend's");
+		Gpu.releaseResident();
+		int n = 1 << 18;
+		double[] a = new double[n];
+		Gpu.lazyResults(true);
+		try {
+			double[] keep = stub(512, 512);
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, keep, 3, n)).isTrue();
+			double[] keepBacking = (double[]) Gpu.materialize(keep);
+			// Settle what earlier tests left unreachable before counting.
+			for (int attempt = 0; attempt < 5; attempt++) {
+				System.gc();
+				Thread.sleep(20);
+			}
+			int backed = residency.backingCount();
+			for (int i = 0; i < 8; i++) {
+				double[] c = stub(512, 512);
+				assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, c, 3, n)).isTrue();
+				Gpu.materialize(c);
+			}
+			assertThat(residency.backingCount()).isEqualTo(backed + 8);
+			// The read-side ring remembers the last few arrays it answered for (strongly,
+			// as it always has); push the stubs out of it so nothing but this frame holds
+			// them.
+			for (int i = 0; i < 4; i++) {
+				Gpu.materialize(new double[8]);
+			}
+			// Eight stubs nobody can reach: once the collector has them, their backings
+			// go with them, and the one still held keeps its backing.
+			int after = -1;
+			for (int attempt = 0; attempt < 20 && after != backed; attempt++) {
+				System.gc();
+				Thread.sleep(20);
+				after = residency.backingCount();
+			}
+			assertThat(after).isEqualTo(backed);
+			assertThat(Gpu.materialize(keep)).isSameAs(keepBacking);
+			assertThat(keepBacking[3 + 5]).isEqualTo(1.0);
+		}
+		finally {
+			Gpu.lazyResults(false);
+			Gpu.releaseResident();
+		}
+	}
+
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void aDeviceMemberUpdatingAnArrayInPlaceLeavesItResidentAndAuthoritative() {

@@ -3,6 +3,7 @@ package am.ik.gpu;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,14 +30,36 @@ import org.jspecify.annotations.Nullable;
  * can also be DIRTY: the device holds the bytes and the host array does NOT -- a result a
  * member left on the device rather than downloading it, or an array a device member
  * updated in place. A dirty entry is the one place the library is the source of truth,
- * and every host read of that array has to {@linkplain #claimDirty materialize} it first;
- * the enumeration of those readers, on each interceptor, is in {@code .kb/gpu.md} ("A
- * result comes home on first host touch") and pinned by a test on each, exactly as the
- * writers are. The device side never drops a dirty entry on its own: every path that
- * removes one -- an eviction, a release, a replacement at a different span -- hands the
- * buffer back to the owning device as a {@link Flush} to DOWNLOAD before it is freed, and
- * the device does so at once, before it returns to its caller. A dirty entry whose host
- * array has been collected holds bytes nobody can read, and is simply freed.
+ * and every host read of that array has to {@linkplain #claim materialize} it first; the
+ * enumeration of those readers, on each interceptor, is in {@code .kb/gpu.md} ("A result
+ * comes home on first host touch") and pinned by a test on each, exactly as the writers
+ * are. The device side never drops a dirty entry on its own: every path that removes one
+ * -- an eviction, a release, a replacement at a different span -- hands the buffer back
+ * to the owning device as a {@link Flush} to DOWNLOAD before it is freed, and the device
+ * does so at once, before it returns to its caller. A dirty entry whose host array has
+ * been collected holds bytes nobody can read, and is simply freed.
+ *
+ * <h2>A result's host array may be a STUB, and the storage is then this class's</h2>
+ *
+ * Since {@code .todo/492} the host array a member is handed for its RESULT may be shorter
+ * than the span it stands for -- an array holding only the prefix ahead of the elements
+ * (the JVM class output's {@code [rank, dim...]} header; nothing at all on the
+ * interpreter), allocated by an interceptor that does not want to pay for a zeroed host
+ * array nobody may ever read. Such a stub is recognised structurally -- it is shorter
+ * than the span the entry records -- and never written into: its bytes live on the device
+ * while the entry is dirty, and in a BACKING array this class allocates the first time
+ * the host asks for them ({@link #claim}: the prefix copied from the stub, the elements
+ * downloaded by the owner). The backing is held STRONGLY for as long as the stub is
+ * reachable (a second weak-keyed map, {@code backings}), answered by every later claim,
+ * written through by the host's setters, and uploaded from when the stub is offered again
+ * after its device copy was dropped. So a stub is in one of three states and never a
+ * fourth: a dirty device copy and no backing; a device copy and a backing; a backing
+ * alone. Every path that lets a dirty copy go flushes it into the backing first, and a
+ * stub that has neither is a broken invariant the owner throws on rather than uploading
+ * zeros. The identity the interceptors key on is the STUB's -- it is the object the
+ * program holds -- and the backing is handed out only for the duration of a host read or
+ * write; a host rung that would answer its argument back is made to answer the caller's
+ * own object ({@code .kb/gpu.md}, "A lazy result allocates no host array").
  *
  * <h2>The key is the IDENTITY of the primitive array, held WEAKLY</h2>
  *
@@ -67,11 +90,11 @@ import org.jspecify.annotations.Nullable;
  * was made, and a dirty one only until the host reads or writes the array. Every in-place
  * write to a packed float array on either backend calls {@link Gpu#written(Object)}
  * BEFORE the write, which brings a dirty copy home and then drops the entry; every host
- * read calls {@link Gpu#materialize(Object)} first. Writing or reading through a path
- * that is not enumerated is a silent wrong answer, which is why both enumerations are
- * pinned by a test on each backend.
+ * read calls {@link Gpu#materialize(Object)} first and reads what it answers. Writing or
+ * reading through a path that is not enumerated is a silent wrong answer, which is why
+ * both enumerations are pinned by a test on each backend.
  *
- * <h2>The release policy</h2>
+ * <h2>The release policy, and the collector it has to wake</h2>
  *
  * Entries die with their arrays (above), and an LRU against a byte budget the owning
  * device derives -- {@link CudaGemm} from free device memory (a quarter of it, refreshed
@@ -89,9 +112,29 @@ import org.jspecify.annotations.Nullable;
  * the array, free of driver calls when the entry is clean: a host write of a clean array
  * never needs a CUDA context or a Metal command queue.
  *
+ * <p>
+ * "Entries die with their arrays" assumed the collector RUNS, and with result stubs it no
+ * longer does on its own: a stub is twenty bytes, so a program whose every result is one
+ * allocates almost nothing on the heap, the young generation takes minutes to fill, and
+ * the stubs a training step has dropped -- with the 25-100 MB device buffers behind them
+ * -- stay uncollected, and therefore resident, until the pool reaches its budget;
+ * evicting them THEN would flush live-looking dead results into fresh backings, which is
+ * the allocation this whole mode exists to avoid, and on a unified-memory machine the
+ * pool at its budget is the host's memory too. So the LRU evicts CLEAN copies on its own
+ * and, when only dirty ones are left, STOPS and asks for a collection instead
+ * ({@link #collectionWanted}): the owner runs {@code System.gc()} -- the precedent is the
+ * JDK's own direct buffers, whose off-heap memory is governed by small Java objects the
+ * same way and which call the collector when their limit is hit -- drains what the
+ * collector released, and only then evicts what is still over budget
+ * ({@link #evictOverBudget}), as a flush. A collection is asked for at most once per
+ * {@link #COLLECTION_SHARE} of the budget PRODUCED since the last one
+ * ({@link #producedSinceCollection}), so a live set that genuinely exceeds the budget
+ * does not collect on every call. {@code .kb/gpu.md}, "A lazy result allocates no host
+ * array", has the measurement.
+ *
  * <h2>Cost on the read and write paths</h2>
  *
- * {@link #written(Object)} and {@link #claimDirty(Object)} are called once per element
+ * {@link #written(Object)} and {@link #recentClaim(Object)} are called once per element
  * store or load from an {@code aset} / {@code aref} loop, so the empty case of each is a
  * volatile read and nothing else; a non-empty cache pays one uncontended monitor and one
  * identity lookup, once per array rather than once per element, because each remembers
@@ -186,21 +229,44 @@ final class DeviceResidency {
 
 	/**
 	 * A dirty copy the cache has let go of, for the owning device to DOWNLOAD into its
-	 * host array and only then free -- an evicted, released or replaced entry whose bytes
-	 * the host does not yet have. The host array is held strongly here so it cannot be
-	 * collected between the decision and the download.
+	 * host storage and only then free -- an evicted, released or replaced entry whose
+	 * bytes the host does not yet have. The target is held strongly here so it cannot be
+	 * collected between the decision and the download; it is the host array itself, or
+	 * the backing this class allocated when the host array is a stub.
 	 *
-	 * @param host the host array the bytes belong in
+	 * @param target the array the bytes belong in
 	 * @param pointer the device buffer
-	 * @param offset the first byte of the span in the host array
+	 * @param offset the first byte of the span in the target
 	 * @param bytes the length of the span
 	 */
-	record Flush(Object host, long pointer, long offset, long bytes) {
+	record Flush(Object target, long pointer, long offset, long bytes) {
+	}
+
+	/**
+	 * The answer of a materialization {@link #claim}: the array that holds -- or, once
+	 * {@code flush} is performed, will hold -- the host array's bytes, and the download
+	 * the owner must perform first, if any.
+	 *
+	 * @param storage the array to read: the host array, or a stub's backing
+	 * @param flush the download to perform before reading it, or {@code null}
+	 */
+	record Claim(Object storage, @Nullable Flush flush) {
 	}
 
 	private final ReferenceQueue<Object> collected = new ReferenceQueue<>();
 
 	private final LinkedHashMap<Object, Entry> entries = new LinkedHashMap<>(64, 0.75f, true);
+
+	/**
+	 * Stub to backing (see the class comment): the same weak identity keys, on the same
+	 * queue, so a collected stub takes its backing with it at the next {@link #expunge}.
+	 * Separate from {@link #entries}, which is about device memory and is what the LRU
+	 * walks; a backing outlives the device copy.
+	 */
+	private final HashMap<Object, Object> backings = new HashMap<>();
+
+	/** {@code true} while any stub has a backing: the cheap gate for {@link #claim}. */
+	private volatile boolean backed;
 
 	private final List<Long> pending = new ArrayList<>();
 
@@ -210,7 +276,25 @@ final class DeviceResidency {
 
 	private long budget;
 
-	/** How many entries are dirty; the cheap gate for {@link #claimDirty}. */
+	/**
+	 * Bytes recorded by {@link #put} since the owner last collected; see the class
+	 * comment.
+	 */
+	private long producedSinceCollection;
+
+	/**
+	 * Set when the LRU found only DIRTY entries left to evict and left them for the owner
+	 * to collect first; cleared by {@link #evictOverBudget}.
+	 */
+	private boolean collectionWanted;
+
+	/**
+	 * How much of the budget must have been PUT since the last collection before another
+	 * is asked for: an eighth.
+	 */
+	static final int COLLECTION_SHARE = 8;
+
+	/** How many entries are dirty; the cheap gate for {@link #recentClaim}. */
 	private volatile int dirtyCount;
 
 	/** The cheap gate for {@link #written}: {@code true} while any entry exists. */
@@ -237,13 +321,21 @@ final class DeviceResidency {
 	private volatile int droppedCursor;
 
 	/**
-	 * The arrays {@link #claimDirty} recently answered "clean" for (materialized, clean
-	 * already, or absent), so that an element loop reading them pays the lock once. Any
-	 * dirty insertion clears them, because an array may be dirty again.
+	 * The arrays {@link #claim} recently answered for (materialized, clean already, or
+	 * absent), so that an element loop reading them pays the lock once. Any dirty
+	 * insertion clears them, because an array may be dirty again.
 	 */
-	private final @Nullable Object[] recentlyClean = new @Nullable Object[RECENT];
+	private final @Nullable Recent[] recentlyClean = new @Nullable Recent[RECENT];
 
 	private volatile int cleanCursor;
+
+	/**
+	 * One slot of the clean ring: the array and the storage answered for it, as ONE
+	 * immutable pair, so that a reader racing the writer sees a slot whose two halves
+	 * belong together or a slot it does not match -- never a host with another's storage.
+	 */
+	private record Recent(Object host, Object storage) {
+	}
 
 	/** Whether {@code host} is in the ring; a volatile read per slot, no allocation. */
 	private boolean recent(@Nullable Object[] ring, int cursor, Object host) {
@@ -255,17 +347,24 @@ final class DeviceResidency {
 		return false;
 	}
 
-	/** Adds {@code host} to the ring; under the monitor, so the cursor is consistent. */
-	private void remember(@Nullable Object[] ring, boolean dropped, Object host) {
-		int cursor = dropped ? this.droppedCursor : this.cleanCursor;
-		ring[cursor] = host;
-		cursor = (cursor + 1) % RECENT;
-		if (dropped) {
-			this.droppedCursor = cursor;
-		}
-		else {
-			this.cleanCursor = cursor;
-		}
+	/**
+	 * Adds {@code host} to the dropped ring; under the monitor, so the cursor is
+	 * consistent.
+	 */
+	private void rememberDropped(Object host) {
+		int cursor = this.droppedCursor;
+		this.recentlyDropped[cursor] = host;
+		this.droppedCursor = (cursor + 1) % RECENT;
+	}
+
+	/**
+	 * Adds {@code host} and the storage answered for it to the clean ring; under the
+	 * monitor, so the cursor is consistent.
+	 */
+	private void rememberClean(Object host, Object storage) {
+		int cursor = this.cleanCursor;
+		this.recentlyClean[cursor] = new Recent(host, storage);
+		this.cleanCursor = (cursor + 1) % RECENT;
 	}
 
 	/** Empties a ring; under the monitor. */
@@ -273,6 +372,22 @@ final class DeviceResidency {
 		for (int i = 0; i < RECENT; i++) {
 			ring[i] = null;
 		}
+	}
+
+	/**
+	 * The clean ring's storage answer for {@code host}, or {@code null} when absent. The
+	 * volatile cursor is read first, which is what orders the slot reads after the
+	 * writer's stores.
+	 */
+	private @Nullable Object recentStorage(Object host) {
+		int cursor = this.cleanCursor;
+		for (int i = 0; i < RECENT; i++) {
+			Recent slot = this.recentlyClean[(cursor + i) % RECENT];
+			if (slot != null && slot.host == host) {
+				return slot.storage;
+			}
+		}
+		return null;
 	}
 
 	private long hits;
@@ -362,11 +477,126 @@ final class DeviceResidency {
 		if (entry.dirty) {
 			this.dirtyCount--;
 			if (host != null) {
-				this.flushes.add(new Flush(host, entry.pointer, entry.offset, entry.bytes));
+				this.flushes.add(new Flush(storageFor(host, entry.offset, entry.bytes), entry.pointer, entry.offset,
+						entry.bytes));
 				return;
 			}
 		}
 		this.pending.add(entry.pointer);
+	}
+
+	/**
+	 * The array that holds {@code host}'s bytes at the span, allocating a stub's backing
+	 * if it has none yet: {@code host} itself when it is long enough to hold the span,
+	 * else its backing -- a fresh array of the span's full length with {@code host}'s own
+	 * prefix (the interceptor's header) copied in, recorded against the stub and kept for
+	 * as long as the stub is reachable.
+	 * @param host the host array
+	 * @param offset the first byte of the span
+	 * @param bytes the length of the span
+	 * @return the array holding, or about to hold, the span
+	 */
+	synchronized Object storageFor(Object host, long offset, long bytes) {
+		if (!stub(host, offset, bytes)) {
+			return host;
+		}
+		Object backing = this.backings.get(new Lookup(host));
+		if (backing == null) {
+			backing = allocateBacking(host, offset + bytes);
+			this.backings.put(new Key(host, this.collected), backing);
+			this.backed = true;
+		}
+		return backing;
+	}
+
+	/**
+	 * The array holding {@code host}'s bytes for an UPLOAD from the host: {@code host},
+	 * or a stub's backing -- which a stub whose device copy is gone always has (the class
+	 * comment's invariant). A stub with neither is a broken invariant, and uploading its
+	 * zeros would be a silent wrong answer, so it throws instead.
+	 * @param host the host array about to be uploaded
+	 * @param offset the first byte of the span
+	 * @param bytes the length of the span
+	 * @return the array to upload from
+	 */
+	synchronized Object source(Object host, long offset, long bytes) {
+		if (!stub(host, offset, bytes)) {
+			return host;
+		}
+		Object backing = this.backings.get(new Lookup(host));
+		if (backing == null) {
+			throw new IllegalStateException("a device result's host array has neither a device copy nor storage");
+		}
+		return backing;
+	}
+
+	/**
+	 * The array that holds {@code host}'s bytes for a host READ or WRITE that has no span
+	 * to hand -- the fast answer once a stub has a backing, and {@code host} itself for
+	 * every ordinary array. Under the monitor.
+	 */
+	private Object storageOf(Object host) {
+		Object backing = this.backings.get(new Lookup(host));
+		return backing != null ? backing : host;
+	}
+
+	/**
+	 * The element count {@code host} stands for: its own length, or the end of the span
+	 * its entry mirrors, or its backing's length, whichever is largest -- so that a stub
+	 * passes the bounds checks at the span it was created with, and an ordinary array at
+	 * its own length. A volatile read when nothing is resident or backed.
+	 * @param host the host array
+	 * @return the extent, in elements
+	 */
+	long extent(Object host) {
+		long own = lengthInBytes(host);
+		if (!this.occupied && !this.backed) {
+			return own / width(host);
+		}
+		synchronized (this) {
+			Entry entry = this.entries.get(new Lookup(host));
+			long bytes = own;
+			if (entry != null) {
+				bytes = Math.max(bytes, entry.offset + entry.bytes);
+			}
+			Object backing = this.backings.get(new Lookup(host));
+			if (backing != null) {
+				bytes = Math.max(bytes, lengthInBytes(backing));
+			}
+			return bytes / width(host);
+		}
+	}
+
+	private static int width(Object host) {
+		return host instanceof float[] ? Float.BYTES : Double.BYTES;
+	}
+
+	/** Whether {@code host} is too short to hold the span -- a stub (class comment). */
+	private static boolean stub(Object host, long offset, long bytes) {
+		return lengthInBytes(host) < offset + bytes;
+	}
+
+	private static long lengthInBytes(Object host) {
+		if (host instanceof float[] f) {
+			return (long) f.length * Float.BYTES;
+		}
+		if (host instanceof double[] d) {
+			return (long) d.length * Double.BYTES;
+		}
+		return Long.MAX_VALUE;
+	}
+
+	/** A stub's backing: the full span, with the stub's own prefix copied in. */
+	private static Object allocateBacking(Object stub, long spanEnd) {
+		if (stub instanceof float[] f) {
+			float[] backing = new float[Math.toIntExact(spanEnd / Float.BYTES)];
+			System.arraycopy(f, 0, backing, 0, f.length);
+			return backing;
+		}
+		double[] d = (double[]) stub;
+		double[] backing = new double[Math.toIntExact(spanEnd / Double.BYTES)];
+		System.arraycopy(d, 0, backing, 0, d.length);
+		return backing;
 	}
 
 	/**
@@ -394,12 +624,50 @@ final class DeviceResidency {
 		}
 		this.entries.put(new Key(host, this.collected), new Entry(pointer, offset, bytes, dirty));
 		this.bytes += bytes;
+		this.producedSinceCollection += bytes;
 		forget(this.recentlyDropped);
 		if (dirty) {
 			this.dirtyCount++;
 			forget(this.recentlyClean);
 		}
-		evictOverBudget(new long[] { pointer });
+		evict(new long[] { pointer }, false);
+		this.occupied = !this.entries.isEmpty();
+	}
+
+	/**
+	 * Whether the last {@link #put} left the cache over budget with only DIRTY entries to
+	 * evict, for the owner to collect first (class comment) and then
+	 * {@link #evictOverBudget}.
+	 * @return {@code true} while a collection is wanted
+	 */
+	synchronized boolean collectionWanted() {
+		return this.collectionWanted;
+	}
+
+	/**
+	 * Whether enough has been produced since the last collection for another to be worth
+	 * asking for -- {@link #COLLECTION_SHARE}'s rule.
+	 * @return {@code true} when the owner may run the collector now
+	 */
+	synchronized boolean collectionDue() {
+		return this.producedSinceCollection >= Math.max(this.budget / COLLECTION_SHARE, 64L << 20);
+	}
+
+	/** The owner has run the collector; the production count starts over. */
+	synchronized void collected() {
+		this.producedSinceCollection = 0;
+	}
+
+	/**
+	 * The forced half of the LRU: evicts whatever is still over budget, dirty entries
+	 * included -- as flushes -- keeping the call's own buffers. The owner calls it after
+	 * a collection and the drain that follows; {@link #put} itself evicts only clean
+	 * entries.
+	 * @param keep device pointers to leave resident
+	 */
+	synchronized void evictOverBudget(long[] keep) {
+		expunge();
+		evict(keep, true);
 		this.occupied = !this.entries.isEmpty();
 	}
 
@@ -421,37 +689,55 @@ final class DeviceResidency {
 	}
 
 	/**
-	 * The materialization claim: if {@code host} has a DIRTY copy, marks it clean and
-	 * answers the flush the caller must perform at once (the download into the host
-	 * array); answers {@code null} when the array is clean, absent, or was the last one
-	 * answered for. The mark is made before the download so that a reader on the same
-	 * thread sees a consistent state; the device keeps the entry, so the array stays
-	 * resident for the next member.
+	 * The fast half of the materialization claim: the storage to read for {@code host}
+	 * when nothing needs the monitor -- {@code host} itself while nothing is dirty and no
+	 * stub is backed, or the ring's answer for an array claimed recently -- and
+	 * {@code null} when {@link #claim} must be asked. A volatile read and at most four
+	 * identity compares, for the element loops that call it once per element.
 	 * @param host the host array about to be read
-	 * @return the download to perform, or {@code null}
+	 * @return the array to read, or {@code null} when the slow path must decide
 	 */
-	@Nullable Flush claimDirty(Object host) {
-		if (this.dirtyCount == 0 || recent(this.recentlyClean, this.cleanCursor, host)) {
-			return null;
+	@Nullable Object recentClaim(Object host) {
+		if (this.dirtyCount == 0 && !this.backed) {
+			return host;
 		}
-		synchronized (this) {
-			Entry entry = this.entries.get(new Lookup(host));
-			remember(this.recentlyClean, false, host);
-			if (entry == null || !entry.dirty) {
-				return null;
-			}
+		return recentStorage(host);
+	}
+
+	/**
+	 * The materialization claim: the array that holds {@code host}'s bytes ({@code host},
+	 * or a stub's backing, allocated now if the stub has none), and -- if {@code host}
+	 * has a DIRTY copy, which is marked clean here -- the flush the caller must perform
+	 * at once, the download into that storage. The mark is made before the download so
+	 * that a reader on the same thread sees a consistent state; the device keeps the
+	 * entry, so the array stays resident for the next member. The answer is remembered in
+	 * the ring for {@link #recentClaim}.
+	 * @param host the host array about to be read
+	 * @return the storage and the download to perform first, if any
+	 */
+	synchronized Claim claim(Object host) {
+		Entry entry = this.entries.get(new Lookup(host));
+		Object storage;
+		Flush flush = null;
+		if (entry != null && entry.dirty) {
 			entry.dirty = false;
 			this.dirtyCount--;
-			return new Flush(host, entry.pointer, entry.offset, entry.bytes);
+			storage = storageFor(host, entry.offset, entry.bytes);
+			flush = new Flush(storage, entry.pointer, entry.offset, entry.bytes);
 		}
+		else {
+			storage = storageOf(host);
+		}
+		rememberClean(host, storage);
+		return new Claim(storage, flush);
 	}
 
 	/**
 	 * The host array was written (or is about to be): its resident copy, if any, is stale
 	 * and is dropped. The buffer is not freed here -- see the class comment -- but
-	 * queued. The caller has {@linkplain #claimDirty materialized} the array first, so
-	 * the entry is clean by the time it is dropped; a dirty one that reaches here anyway
-	 * (a caller that did not) is flushed rather than lost.
+	 * queued. The caller has {@linkplain #claim materialized} the array first, so the
+	 * entry is clean by the time it is dropped; a dirty one that reaches here anyway (a
+	 * caller that did not) is flushed rather than lost.
 	 * @param host the host array that was written
 	 */
 	void written(Object host) {
@@ -464,7 +750,7 @@ final class DeviceResidency {
 				drop(host, entry);
 				this.occupied = !this.entries.isEmpty();
 			}
-			remember(this.recentlyDropped, true, host);
+			rememberDropped(host);
 		}
 	}
 
@@ -502,11 +788,13 @@ final class DeviceResidency {
 
 	/**
 	 * The LRU: while over budget, drop the least recently used CLEAN entry; when none is
-	 * left, the least recently used dirty one, as a flush. Entries in {@code keep} are
-	 * the call's own and are never evicted.
+	 * left, either stop and ask for a collection ({@code dirtyToo} false) or evict the
+	 * least recently used dirty one as a flush ({@code dirtyToo} true). Entries in
+	 * {@code keep} are the call's own and are never evicted.
 	 */
-	private void evictOverBudget(long[] keep) {
+	private void evict(long[] keep, boolean dirtyToo) {
 		boolean cleanLeft = true;
+		this.collectionWanted = false;
 		while (this.bytes > this.budget) {
 			Map.Entry<Object, Entry> victim = null;
 			for (Map.Entry<Object, Entry> slot : this.entries.entrySet()) {
@@ -527,6 +815,10 @@ final class DeviceResidency {
 			if (victim == null) {
 				if (cleanLeft) {
 					cleanLeft = false;
+					if (!dirtyToo) {
+						this.collectionWanted = true;
+						return;
+					}
 					continue;
 				}
 				return;
@@ -596,7 +888,8 @@ final class DeviceResidency {
 				this.dirtyCount--;
 				Object host = ((Key) slot.getKey()).get();
 				if (host != null) {
-					out.add(new Flush(host, entry.pointer, entry.offset, entry.bytes));
+					out.add(new Flush(storageFor(host, entry.offset, entry.bytes), entry.pointer, entry.offset,
+							entry.bytes));
 				}
 			}
 		}
@@ -612,15 +905,20 @@ final class DeviceResidency {
 	private void expunge() {
 		Object key;
 		boolean any = false;
+		boolean anyBacking = false;
 		while ((key = this.collected.poll()) != null) {
 			Entry entry = this.entries.remove(key);
 			if (entry != null) {
 				drop(null, entry);
 				any = true;
 			}
+			anyBacking |= this.backings.remove(key) != null;
 		}
 		if (any) {
 			this.occupied = !this.entries.isEmpty();
+		}
+		if (anyBacking) {
+			this.backed = !this.backings.isEmpty();
 		}
 	}
 
@@ -647,6 +945,12 @@ final class DeviceResidency {
 	/** How many resident copies are dirty; for the tests. */
 	int dirtyCount() {
 		return this.dirtyCount;
+	}
+
+	/** How many stubs hold a backing right now; for the tests. */
+	synchronized int backingCount() {
+		expunge();
+		return this.backings.size();
 	}
 
 	/** Lookups answered from the cache since the process started; for the tests. */

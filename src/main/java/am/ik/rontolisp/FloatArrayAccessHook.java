@@ -1,6 +1,6 @@
 package am.ik.rontolisp;
 
-import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 import org.jspecify.annotations.Nullable;
 
@@ -31,6 +31,19 @@ import org.jspecify.annotations.Nullable;
  * materialize is the device interceptor itself, which takes {@code storage()} instead.
  *
  * <p>
+ * Both seams ANSWER the array to read or write. Since {@code .todo/492} a device member's
+ * result may be a STUB -- on this backend an empty {@code float[]} / {@code double[]} in
+ * the record's field, distinct per result, so that it keys the residency by identity like
+ * any storage -- whose elements live on the device and, once read, in a BACKING array the
+ * accelerator allocates and answers here; the record's {@code data()} answers that
+ * backing, and {@code setElement} writes into what {@link #written} answers. With no
+ * listener installed either seam answers its argument. So the record's {@code storage()}
+ * is the identity the device is keyed on and the one thing the device is handed, and
+ * {@code data()} is what the host reads; an in-place kernel that reports a write names
+ * {@code storage()}, never the array {@code data()} gave it ({@code .kb/gpu.md}, "A lazy
+ * result allocates no host array").
+ *
+ * <p>
  * Lives in the root package, which depends on nothing, as a plain static hook rather than
  * a reference to any accelerator: the browser playground's build cuts {@code am.ik.gpu}
  * out by substituting {@code eval/LinalgGpu}, and a reference from here would pull it
@@ -38,47 +51,48 @@ import org.jspecify.annotations.Nullable;
  */
 public final class FloatArrayAccessHook {
 
-	private static volatile @Nullable Consumer<Object> writer;
+	private static volatile @Nullable UnaryOperator<Object> writer;
 
-	private static volatile @Nullable Consumer<Object> reader;
+	private static volatile @Nullable UnaryOperator<Object> reader;
 
 	private FloatArrayAccessHook() {
 	}
 
 	/**
 	 * Installs the listeners every packed float array access is reported to, or removes
-	 * them.
+	 * them. Each is given the record's storage and answers the array to write or read:
+	 * the storage itself, or the backing of a result stub (class comment).
 	 * @param onWrite given the {@code double[]} or {@code float[]} that is about to be
-	 * written; {@code null} to uninstall
+	 * written, answers the array to write into; {@code null} to uninstall
 	 * @param onRead given the {@code double[]} or {@code float[]} that is about to be
-	 * read; {@code null} to uninstall
+	 * read, answers the array to read; {@code null} to uninstall
 	 */
-	public static void install(@Nullable Consumer<Object> onWrite, @Nullable Consumer<Object> onRead) {
+	public static void install(@Nullable UnaryOperator<Object> onWrite, @Nullable UnaryOperator<Object> onRead) {
 		writer = onWrite;
 		reader = onRead;
 	}
 
 	/**
 	 * Reports that {@code data} -- a packed array's {@code double[]} or {@code float[]}
-	 * storage -- is about to be written in place.
+	 * storage -- is about to be written in place, and answers the array the write must
+	 * land in: {@code data} itself, or a result stub's backing.
 	 * @param data the storage that is being written
+	 * @return the array to write into
 	 */
-	public static void written(Object data) {
-		Consumer<Object> hook = writer;
-		if (hook != null) {
-			hook.accept(data);
-		}
+	public static Object written(Object data) {
+		UnaryOperator<Object> hook = writer;
+		return hook != null ? hook.apply(data) : data;
 	}
 
 	/**
-	 * Reports that {@code data} is about to be read on the host.
+	 * Reports that {@code data} is about to be read on the host, and answers the array to
+	 * read: {@code data} itself, or a result stub's backing.
 	 * @param data the storage that is being read
+	 * @return the array holding its bytes
 	 */
-	public static void read(Object data) {
-		Consumer<Object> hook = reader;
-		if (hook != null) {
-			hook.accept(data);
-		}
+	public static Object read(Object data) {
+		UnaryOperator<Object> hook = reader;
+		return hook != null ? hook.apply(data) : data;
 	}
 
 }

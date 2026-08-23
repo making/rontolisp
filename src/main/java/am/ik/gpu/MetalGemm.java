@@ -1626,9 +1626,12 @@ final class MetalGemm implements GpuDevice {
 				return;
 			}
 			Slab slab = this.slabs[slot];
-			upload(host, offset, slab, (int) elements);
+			// A stub (DeviceResidency, the class comment) is uploaded from its backing.
+			float[] source = host.length >= offset + elements ? host : (float[]) MetalGemm.this.residency.source(host,
+					(long) offset * Float.BYTES, elements * Float.BYTES);
+			upload(source, offset, slab, (int) elements);
 			if (adopt || MetalGemm.this.lazy) {
-				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, false);
+				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, false, keep());
 				this.owned[slot] = false;
 			}
 		}
@@ -1642,11 +1645,15 @@ final class MetalGemm implements GpuDevice {
 		void finish(int slot, float[] host, int offset, long elements) {
 			Slab slab = this.slabs[slot];
 			if (!MetalGemm.this.lazy) {
-				download(slab, host, offset, (int) elements);
+				// Eagerly a stub's backing is allocated and filled here, before the call
+				// returns.
+				float[] target = host.length >= offset + elements ? host : (float[]) MetalGemm.this.residency
+					.storageFor(host, (long) offset * Float.BYTES, elements * Float.BYTES);
+				download(slab, target, offset, (int) elements);
 				return;
 			}
 			if (this.owned[slot]) {
-				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, true);
+				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, true, keep());
 				this.owned[slot] = false;
 			}
 			else {
@@ -1691,13 +1698,28 @@ final class MetalGemm implements GpuDevice {
 	 * The slab goes into {@link #held} BEFORE the cache learns its address, so a lookup
 	 * that finds the address always finds the slab; whatever the cache replaced or
 	 * evicted for it comes back through the next drain, a dirty one downloaded first.
+	 * {@code keep} is the call's own slabs, which an eviction must leave alone.
 	 */
-	private void adopt(Object host, long offsetBytes, long bytes, Slab slab, boolean dirty) {
+	private void adopt(Object host, long offsetBytes, long bytes, Slab slab, boolean dirty, long[] keep) {
 		long address = slab.buffer().address();
 		synchronized (this) {
 			this.held.put(address, slab);
 		}
 		this.residency.put(host, offsetBytes, bytes, address, dirty);
+		if (this.residency.collectionWanted()) {
+			// Only dirty copies left to evict: wake the collector first, if it is due,
+			// so that results the program has dropped -- stubs the young generation has
+			// not got round to -- go back to the pool rather than being flushed into
+			// fresh host arrays (DeviceResidency, the class comment); then evict what is
+			// still over budget, keeping this call's slabs. The flushes run at the next
+			// drain, as every flush here does.
+			if (this.residency.collectionDue()) {
+				System.gc();
+				this.residency.collected();
+			}
+			drainPending();
+			this.residency.evictOverBudget(keep);
+		}
 	}
 
 	/**
@@ -1723,8 +1745,8 @@ final class MetalGemm implements GpuDevice {
 	private void flushNow() {
 		for (DeviceResidency.Flush flush : this.residency.flushes()) {
 			Slab slab = this.held.get(flush.pointer());
-			if (slab != null && flush.host() instanceof float[] host) {
-				download(slab, host, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES));
+			if (slab != null && flush.target() instanceof float[] target) {
+				download(slab, target, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES));
 			}
 			this.residency.release(flush.pointer());
 		}
@@ -1738,42 +1760,58 @@ final class MetalGemm implements GpuDevice {
 	 * next call's safe moment -- so this is safe from any thread and costs a volatile
 	 * read when nothing is resident.
 	 * @param host the host array that is being written
+	 * @return the array to write into: {@code host}, or a stub's backing
 	 */
 	@Override
-	public void written(Object host) {
-		materialize(host);
+	public Object written(Object host) {
+		Object storage = materialize(host);
 		this.residency.written(host);
+		return storage;
 	}
 
 	/**
 	 * Brings a DIRTY copy of {@code host} home -- the download every host read of
 	 * packed-array storage performs first under {@link #lazyResults}: a memcpy out of the
-	 * slab's {@code contents}. Cheap when it does not matter: a volatile read when
-	 * nothing is dirty, and one identity compare for a loop that reads one array. When it
-	 * does matter it is the one operation of this library that cannot decline: the host
-	 * has no other copy of those bytes, so a slab that is not there is an error rather
-	 * than a fallback.
+	 * slab's {@code contents} -- and answers the array the host must read ({@code host},
+	 * or its backing when it is a stub: {@link DeviceResidency}, the class comment).
+	 * Cheap when it does not matter: a volatile read when nothing is dirty and no stub is
+	 * backed, and a few identity compares for a loop that reads one array. When it does
+	 * matter it is the one operation of this library that cannot decline: the host has no
+	 * other copy of those bytes, so a slab that is not there is an error rather than a
+	 * fallback.
 	 * @param host the host array about to be read
+	 * @return the array holding its bytes
 	 */
 	@Override
-	public void materialize(Object host) {
-		DeviceResidency.Flush flush = this.residency.claimDirty(host);
+	public Object materialize(Object host) {
+		Object recent = this.residency.recentClaim(host);
+		if (recent != null) {
+			return recent;
+		}
+		DeviceResidency.Claim claim = this.residency.claim(host);
+		DeviceResidency.Flush flush = claim.flush();
 		if (flush == null) {
-			return;
+			return claim.storage();
 		}
 		Slab slab;
 		synchronized (this) {
 			slab = this.held.get(flush.pointer());
 		}
-		if (slab == null || !(host instanceof float[] array)) {
+		if (slab == null || !(flush.target() instanceof float[] target)) {
 			throw new IllegalStateException("a device result could not be brought home: its buffer is gone");
 		}
-		download(slab, array, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES));
+		download(slab, target, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES));
+		return claim.storage();
 	}
 
 	@Override
 	public boolean resident(Object host) {
 		return this.residency.resident(host);
+	}
+
+	@Override
+	public long extent(Object host) {
+		return this.residency.extent(host);
 	}
 
 	/**
@@ -1812,8 +1850,9 @@ final class MetalGemm implements GpuDevice {
 			synchronized (this) {
 				for (DeviceResidency.Flush flush : this.residency.claimAllDirty()) {
 					Slab slab = this.held.get(flush.pointer());
-					if (slab != null && flush.host() instanceof float[] host) {
-						download(slab, host, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES));
+					if (slab != null && flush.target() instanceof float[] target) {
+						download(slab, target, (int) (flush.offset() / Float.BYTES),
+								(int) (flush.bytes() / Float.BYTES));
 					}
 				}
 			}

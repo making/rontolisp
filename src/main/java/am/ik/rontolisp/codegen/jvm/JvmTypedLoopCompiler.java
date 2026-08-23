@@ -1235,14 +1235,15 @@ final class JvmTypedLoopCompiler {
 		private void hoistArrays(List<Var> arrays) {
 			ClassConstant cls = this.single ? this.floatArrayClass : this.doubleArrayClass;
 			for (Var v : arrays) {
+				this.ctx.emit(Opcode.ALOAD);
+				this.ctx.emit(v.refSlot);
 				if (this.materialize != null) {
-					this.ctx.emit(Opcode.ALOAD);
-					this.ctx.emit(v.refSlot);
+					// The typed slot takes what the guard answers: the array, or a
+					// result stub's backing. The variable's own slot keeps the program's
+					// object, which is what the body's aset reports as written.
 					this.ctx.emit(Opcode.INVOKESTATIC);
 					this.ctx.emitU2(this.materialize.index());
 				}
-				this.ctx.emit(Opcode.ALOAD);
-				this.ctx.emit(v.refSlot);
 				this.ctx.emit(Opcode.CHECKCAST);
 				this.ctx.emitU2(cls.index());
 				this.ctx.emit(Opcode.ASTORE);
@@ -1525,10 +1526,14 @@ final class JvmTypedLoopCompiler {
 			if (this.written != null) {
 				// --gpu, BEFORE the store: the array may have a resident device copy
 				// (materialized at loop entry, so it is clean by now); it is stale now.
+				// Reported on the program's object (the variable's slot), not the typed
+				// slot, which may be a stub's backing the library does not key on; the
+				// guard's answer is the typed slot already and is dropped.
 				this.ctx.emit(Opcode.ALOAD);
-				this.ctx.emit(a.arr().slot);
+				this.ctx.emit(a.arr().refSlot);
 				this.ctx.emit(Opcode.INVOKESTATIC);
 				this.ctx.emitU2(this.written.index());
+				this.ctx.emit(Opcode.POP);
 			}
 			arrayIndex(a.arr(), a.idx());
 			exprAsDouble(a.value());

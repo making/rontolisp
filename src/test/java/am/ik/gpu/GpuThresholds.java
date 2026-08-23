@@ -90,6 +90,18 @@ public final class GpuThresholds {
 	}
 
 	/**
+	 * How many result STUBS hold a backing right now -- lazy results the host has read,
+	 * or written, at least once -- or {@code -1} with no device. With
+	 * {@link #dirtyCount}, the observable that says a lazy result allocated no host array
+	 * until it was read.
+	 * @return the backing count, or -1
+	 */
+	public static int backingCount() {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null ? residency.backingCount() : -1;
+	}
+
+	/**
 	 * Whether lazy results are in force on the device the interceptors found -- the mode
 	 * they switch on where the backend says it pays
 	 * ({@code Gpu.lazyResultsIfWorthwhile}): CUDA yes, Metal no, measured. The tests that
@@ -98,6 +110,17 @@ public final class GpuThresholds {
 	 */
 	public static boolean lazyResultsOn() {
 		return Gpu.lazyResultsOn();
+	}
+
+	/**
+	 * Whether lazy results PAY on the device found -- what decides whether an
+	 * interceptor, in this process or in a compiled class's own copy of the library,
+	 * switches them on ({@code GpuDevice.lazyResultsPay}): CUDA yes, Metal no.
+	 * @return {@code true} when an interceptor over this device runs with lazy results
+	 */
+	public static boolean lazyResultsPay() {
+		GpuDevice device = Gpu.device();
+		return device != null && device.lazyResultsPay();
 	}
 
 	/**

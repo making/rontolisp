@@ -2758,8 +2758,8 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 					// The residency invalidation guard, called from every in-place write
-					// to
-					// a packed float array (JvmGpuRuntimeBuilder.WRITTEN_METHOD).
+					// to a packed float array, answering the array to write into
+					// (JvmGpuRuntimeBuilder.WRITTEN_METHOD).
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.writtenName(),
 							gpuRuntime.writtenDesc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
@@ -2769,7 +2769,8 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0)
 									.writeU2(0);
 							})));
-					// Its read-side twin, called before every host read of one
+					// Its read-side twin, called before every host read of one and
+					// answering the array to read
 					// (JvmGpuRuntimeBuilder.MATERIALIZE_METHOD).
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.materializeName(),
 							gpuRuntime.materializeDesc(),
@@ -2777,6 +2778,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(1)
 									.writeU2(1)
 									.writeCode((Object[]) gpuRuntime.materializeCode().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+					// And the one a call site runs over a host rung's answer, per
+					// argument it handed over (JvmGpuRuntimeBuilder.UNSWAP_METHOD).
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.unswapName(),
+							gpuRuntime.unswapDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(3)
+									.writeU2(3)
+									.writeCode((Object[]) gpuRuntime.unswapCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

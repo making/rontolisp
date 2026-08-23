@@ -1406,9 +1406,17 @@ final class CudaGemm implements GpuDevice {
 			free = refreshFreeMemory(arena);
 		}
 		if (free >= 0 && total > free - ALLOCATION_HEADROOM && this.residency.occupied()) {
-			// The resident copies must never be the reason a call declines: give back
-			// every one this call is not holding, hand the pool's reserve back to the
-			// device so cuMemGetInfo can see it, and ask again.
+			// The resident copies must never be the reason a call declines. First the
+			// ones the program has dropped and the collector has not yet noticed (the
+			// stubs' case, DeviceResidency's class comment): collect, drain, trim the
+			// pool's reserve back to the device, ask again ...
+			collect();
+			trimMemoryPool();
+			free = refreshFreeMemory(arena);
+		}
+		if (free >= 0 && total > free - ALLOCATION_HEADROOM && this.residency.occupied()) {
+			// ... and only then give back every copy this call is not holding, live
+			// ones included, hand the pool's reserve back again, and ask once more.
 			this.residency.evictAll(buffers);
 			settle();
 			drainPending();
@@ -1496,12 +1504,47 @@ final class CudaGemm implements GpuDevice {
 		if (owned[i] == 0) {
 			return true;
 		}
-		if (!upload(buffers[i], heap, offset, bytes)) {
+		// A stub (DeviceResidency, the class comment) is uploaded from its backing; its
+		// own segment is too short to hold the span.
+		MemorySegment source = heap.byteSize() >= offset + bytes ? heap
+				: heap(this.residency.source(host, offset, bytes));
+		if (!upload(buffers[i], source, offset, bytes)) {
 			return false;
 		}
 		this.residency.put(host, offset, bytes, buffers[i], false);
 		owned[i] = 0;
+		return trim(buffers) && settle();
+	}
+
+	/**
+	 * After a {@code put} that left the cache over budget with only DIRTY entries to
+	 * evict: wake the collector first, if it is due, so that the results the program has
+	 * already dropped -- stubs the young generation never filled up enough to collect --
+	 * go back to the pool instead of being flushed into fresh host arrays; drain what it
+	 * released; and only then evict what is still over budget, as flushes
+	 * ({@link DeviceResidency}, the class comment). The call's own buffers are kept.
+	 */
+	private boolean trim(long[] buffers) throws Throwable {
+		if (!this.residency.collectionWanted()) {
+			return true;
+		}
+		collect();
+		this.residency.evictOverBudget(buffers);
 		return settle();
+	}
+
+	/**
+	 * Runs the collector when the cache says enough has been produced since the last
+	 * time, and frees what it released. {@code System.gc()} is a request the JVM may
+	 * ignore ({@code -XX:+DisableExplicitGC}); then the eviction that follows is what it
+	 * was before, a flush.
+	 */
+	private void collect() {
+		if (this.residency.collectionDue()) {
+			System.gc();
+			this.residency.collected();
+		}
+		drainPending();
 	}
 
 	/**
@@ -1523,18 +1566,29 @@ final class CudaGemm implements GpuDevice {
 			if (owned[i] != 0) {
 				this.residency.put(host, offset, bytes, buffers[i], true);
 				owned[i] = 0;
+				if (!trim(buffers)) {
+					return false;
+				}
 			}
 			else {
 				this.residency.markDirty(host, offset, bytes);
 			}
 		}
 		else {
-			if (!download(heap, offset, buffers[i], bytes)) {
+			// Eagerly a stub's backing is allocated here and filled before the call
+			// returns, which is what keeps the library's own contract for an embedder
+			// that hands over stubs without lazy results.
+			MemorySegment target = heap.byteSize() >= offset + bytes ? heap
+					: heap(this.residency.storageFor(host, offset, bytes));
+			if (!download(target, offset, buffers[i], bytes)) {
 				return false;
 			}
 			if (owned[i] != 0) {
 				this.residency.put(host, offset, bytes, buffers[i], false);
 				owned[i] = 0;
+				if (!trim(buffers)) {
+					return false;
+				}
 			}
 		}
 		if (!settle()) {
@@ -1556,7 +1610,7 @@ final class CudaGemm implements GpuDevice {
 	 */
 	private boolean settle() throws Throwable {
 		for (DeviceResidency.Flush flush : this.residency.flushes()) {
-			if (!download(heap(flush.host()), flush.offset(), flush.pointer(), flush.bytes())) {
+			if (!download(heap(flush.target()), flush.offset(), flush.pointer(), flush.bytes())) {
 				this.residency.release(flush.pointer());
 				return false;
 			}
@@ -1565,30 +1619,40 @@ final class CudaGemm implements GpuDevice {
 		return true;
 	}
 
-	/** The heap segment over a resident host array, which is always one of the two. */
+	/**
+	 * The heap segment over a host array or a backing, which is always one of the two.
+	 */
 	private static MemorySegment heap(Object host) {
 		return host instanceof float[] f ? MemorySegment.ofArray(f) : MemorySegment.ofArray((double[]) host);
 	}
 
 	/**
 	 * Brings a DIRTY copy of {@code host} home -- the download every host read of
-	 * packed-array storage performs first under {@link #lazyResults}. Cheap when it does
-	 * not matter: a volatile read when nothing is dirty, and one identity compare for a
-	 * loop that reads one array. When it does matter it is the one operation of this
-	 * library that cannot decline: the host has no other copy of those bytes, so a
-	 * download the driver refuses is an error rather than a fallback.
+	 * packed-array storage performs first under {@link #lazyResults} -- and answers the
+	 * array the host must read: {@code host} itself, or its backing when {@code host} is
+	 * a stub ({@link DeviceResidency}, the class comment). Cheap when it does not matter:
+	 * a volatile read when nothing is dirty and no stub is backed, and a few identity
+	 * compares for a loop that reads one array. When it does matter it is the one
+	 * operation of this library that cannot decline: the host has no other copy of those
+	 * bytes, so a download the driver refuses is an error rather than a fallback.
 	 * @param host the host array about to be read
+	 * @return the array holding its bytes
 	 */
 	@Override
-	public void materialize(Object host) {
-		DeviceResidency.Flush flush = this.residency.claimDirty(host);
+	public Object materialize(Object host) {
+		Object recent = this.residency.recentClaim(host);
+		if (recent != null) {
+			return recent;
+		}
+		DeviceResidency.Claim claim = this.residency.claim(host);
+		DeviceResidency.Flush flush = claim.flush();
 		if (flush == null) {
-			return;
+			return claim.storage();
 		}
 		boolean ok;
 		try {
 			ok = this.driver.ctxSetCurrent(this.context) == CuResult.SUCCESS
-					&& download(heap(host), flush.offset(), flush.pointer(), flush.bytes());
+					&& download(heap(flush.target()), flush.offset(), flush.pointer(), flush.bytes());
 		}
 		catch (Throwable ex) {
 			throw new IllegalStateException("a device result could not be brought home: " + ex, ex);
@@ -1596,6 +1660,7 @@ final class CudaGemm implements GpuDevice {
 		if (!ok) {
 			throw new IllegalStateException("a device result could not be brought home: the driver refused the copy");
 		}
+		return claim.storage();
 	}
 
 	/**
@@ -1607,6 +1672,11 @@ final class CudaGemm implements GpuDevice {
 	@Override
 	public boolean resident(Object host) {
 		return this.residency.resident(host);
+	}
+
+	@Override
+	public long extent(Object host) {
+		return this.residency.extent(host);
 	}
 
 	/** {@code true}: measured on a GB10, a fifth off the training step and then half. */
@@ -1633,7 +1703,7 @@ final class CudaGemm implements GpuDevice {
 			try {
 				if (this.driver.ctxSetCurrent(this.context) == CuResult.SUCCESS) {
 					for (DeviceResidency.Flush flush : this.residency.claimAllDirty()) {
-						download(heap(flush.host()), flush.offset(), flush.pointer(), flush.bytes());
+						download(heap(flush.target()), flush.offset(), flush.pointer(), flush.bytes());
 					}
 				}
 			}
@@ -1657,16 +1727,19 @@ final class CudaGemm implements GpuDevice {
 	/**
 	 * A host array is about to be written: its resident copy, if any, is stale and is
 	 * dropped -- after being brought home first when it was the authoritative one
-	 * ({@link #materialize}), so that the write lands on the array's real bytes. For a
-	 * clean copy no driver call happens here -- the buffer is freed by the next call, on
-	 * a thread that has the context -- so this is safe from any thread and costs a
-	 * volatile read when nothing is resident.
+	 * ({@link #materialize}), so that the write lands on the array's real bytes, which
+	 * are the array answered (a stub's backing, or the array itself). For a clean copy no
+	 * driver call happens here -- the buffer is freed by the next call, on a thread that
+	 * has the context -- so this is safe from any thread and costs a volatile read when
+	 * nothing is resident.
 	 * @param host the host array that is being written
+	 * @return the array to write into
 	 */
 	@Override
-	public void written(Object host) {
-		materialize(host);
+	public Object written(Object host) {
+		Object storage = materialize(host);
 		this.residency.written(host);
+		return storage;
 	}
 
 	/**

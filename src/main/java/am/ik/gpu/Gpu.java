@@ -573,13 +573,17 @@ public final class Gpu {
 	 * nothing resident, and an identity lookup under an uncontended monitor otherwise. It
 	 * never runs the probe, never touches the driver, never throws, and may be called
 	 * from any thread. An array that was never an operand is simply not found.
+	 *
+	 * <p>
+	 * Answers the array the write must land in. That is {@code hostArray} itself unless
+	 * it is a result STUB (see {@link #materialize}), whose bytes live in a backing this
+	 * library holds: the write goes there, and the program keeps holding the stub.
 	 * @param hostArray the {@code double[]} or {@code float[]} that was written
+	 * @return the array to write into
 	 */
-	public static void written(Object hostArray) {
+	public static Object written(Object hostArray) {
 		GpuDevice device = probed;
-		if (device != null) {
-			device.written(hostArray);
-		}
+		return device != null ? device.written(hostArray) : hostArray;
 	}
 
 	/**
@@ -592,18 +596,34 @@ public final class Gpu {
 	 *
 	 * <p>
 	 * As cheap as {@link #written} when it does not matter: a volatile read on a process
-	 * with no device or nothing lazy, one identity compare for a loop that reads one
+	 * with no device or nothing lazy, a few identity compares for a loop that reads one
 	 * array, and the download only when the array is the one the device holds. It is also
 	 * the ONE operation here that cannot decline: when the host has no other copy of the
 	 * bytes, a download the driver refuses is an {@link IllegalStateException} rather
 	 * than a silent fallback, because silence there would be a wrong answer.
+	 *
+	 * <p>
+	 * <b>Answers the array to read</b>, which is {@code hostArray} itself unless it is a
+	 * result STUB. Under {@link #lazyResults} a caller may hand a member, as its result
+	 * array, one that is SHORTER than the span it names -- holding only the elements
+	 * before the result offset (the caller's header; nothing at all at offset 0) -- and
+	 * then no host array of the result's size is allocated until the host first asks for
+	 * the bytes here: they stay on the device, and this call allocates their BACKING (an
+	 * array of the full span, the stub's prefix copied in) and downloads into it. The
+	 * backing is kept for as long as the stub is reachable and answered by every later
+	 * call; {@link #written} answers it too, so a host write through the stub lands in
+	 * it; and a stub offered again as an operand after its device copy was dropped is
+	 * uploaded from it. The stub stays the object the program holds and the identity the
+	 * library keys on, which is why the backing is answered here rather than swapped in.
+	 * Without lazy results a stub is still accepted: the backing is allocated and filled
+	 * before the member returns, and this call answers it. An ordinary, full-length
+	 * result array behaves exactly as before: it is filled, and answered as itself.
 	 * @param hostArray the {@code double[]} or {@code float[]} about to be read
+	 * @return the array holding its bytes: {@code hostArray}, or a stub's backing
 	 */
-	public static void materialize(Object hostArray) {
+	public static Object materialize(Object hostArray) {
 		GpuDevice device = probed;
-		if (device != null) {
-			device.materialize(hostArray);
-		}
+		return device != null ? device.materialize(hostArray) : hostArray;
 	}
 
 	/**
@@ -671,11 +691,12 @@ public final class Gpu {
 	private static volatile boolean lazyIfWorthwhile;
 
 	/**
-	 * Whether lazy results are in force on the probed device. Package-private, for the
-	 * tests that assume the mode before asserting on it.
+	 * Whether lazy results are in force on the probed device: the question an interceptor
+	 * asks before allocating a member's result array, since under the mode a STUB (see
+	 * {@link #materialize}) is enough. Never runs the probe; {@code false} before it.
 	 * @return {@code true} while results stay on the device until read
 	 */
-	static boolean lazyResultsOn() {
+	public static boolean lazyResultsOn() {
 		GpuDevice device = probed;
 		return device != null && device.lazyResultsOn();
 	}
@@ -802,7 +823,9 @@ public final class Gpu {
 	public static boolean multiply(double[] a, int offsetA, double[] b, int offsetB, double[] out, int offsetOut, int n,
 			int m, int p) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offered(a.length, offsetA, b.length, offsetB, out.length, offsetOut, n, m, p)
+		return device != null
+				&& offered(extent(device, a), offsetA, extent(device, b), offsetB, extent(device, out), offsetOut, n, m,
+						p)
 				&& worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)
 				&& device.gemm(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
 	}
@@ -825,7 +848,9 @@ public final class Gpu {
 	public static boolean multiply(float[] a, int offsetA, float[] b, int offsetB, float[] out, int offsetOut, int n,
 			int m, int p) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offered(a.length, offsetA, b.length, offsetB, out.length, offsetOut, n, m, p)
+		return device != null
+				&& offered(extent(device, a), offsetA, extent(device, b), offsetB, extent(device, out), offsetOut, n, m,
+						p)
 				&& worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)
 				&& device.gemmF(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
 	}
@@ -868,8 +893,8 @@ public final class Gpu {
 			double[] out, int offsetOut, int batch, int n, int m, int p) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, batch, n, m,
-						p)
+				&& offered(extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, batch, n, m, p)
 				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b)
 				&& device.gemm(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
 	}
@@ -896,8 +921,8 @@ public final class Gpu {
 			float[] out, int offsetOut, int batch, int n, int m, int p) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offered(a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, batch, n, m,
-						p)
+				&& offered(extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, batch, n, m, p)
 				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b)
 				&& device.gemmF(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
 	}
@@ -915,8 +940,9 @@ public final class Gpu {
 	 * @return a fresh {@code n * p} array, or {@code null} when this call declines
 	 */
 	public static double @Nullable [] multiply(double[] a, int offsetA, double[] b, int offsetB, int n, int m, int p) {
-		if (Probe.DEVICE == null || !offered(a.length, offsetA, b.length, offsetB, (long) n * p, 0, n, m, p)
-				|| !worthOrResident(Probe.DEVICE, (long) n * m * p, Probe.MIN_WORK, a, b)) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || !offered(extent(device, a), offsetA, extent(device, b), offsetB, (long) n * p, 0, n, m, p)
+				|| !worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)) {
 			return null;
 		}
 		double[] out = new double[n * p];
@@ -936,8 +962,9 @@ public final class Gpu {
 	 * @return a fresh {@code n * p} array, or {@code null} when this call declines
 	 */
 	public static float @Nullable [] multiply(float[] a, int offsetA, float[] b, int offsetB, int n, int m, int p) {
-		if (Probe.DEVICE == null || !offered(a.length, offsetA, b.length, offsetB, (long) n * p, 0, n, m, p)
-				|| !worthOrResident(Probe.DEVICE, (long) n * m * p, Probe.MIN_WORK, a, b)) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || !offered(extent(device, a), offsetA, extent(device, b), offsetB, (long) n * p, 0, n, m, p)
+				|| !worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)) {
 			return null;
 		}
 		float[] out = new float[n * p];
@@ -991,7 +1018,7 @@ public final class Gpu {
 	 */
 	public static boolean map(int op, double[] a, int offsetA, double[] out, int offsetOut, int n) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
+		return device != null && offeredMap(op, extent(device, a), offsetA, extent(device, out), offsetOut, n)
 				&& worthMapOrResident(device, op, n, a) && device.map(op, a, offsetA, out, offsetOut, n);
 	}
 
@@ -1009,7 +1036,7 @@ public final class Gpu {
 	 */
 	public static boolean map(int op, float[] a, int offsetA, float[] out, int offsetOut, int n) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredMap(op, a.length, offsetA, out.length, offsetOut, n)
+		return device != null && offeredMap(op, extent(device, a), offsetA, extent(device, out), offsetOut, n)
 				&& worthMapOrResident(device, op, n, a) && device.mapF(op, a, offsetA, out, offsetOut, n);
 	}
 
@@ -1087,7 +1114,8 @@ public final class Gpu {
 			double[] out, int offsetOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offeredBcast(op, a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, dims)
+				&& offeredBcast(op, extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, dims)
 				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a, b)
 				&& device.bcast(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
 	}
@@ -1114,7 +1142,8 @@ public final class Gpu {
 			float[] out, int offsetOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offeredBcast(op, a.length, offsetA, strideA, b.length, offsetB, strideB, out.length, offsetOut, dims)
+				&& offeredBcast(op, extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, dims)
 				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a, b)
 				&& device.bcastF(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
 	}
@@ -1135,7 +1164,8 @@ public final class Gpu {
 	 */
 	public static boolean gather(double[] a, int offsetA, int[] strideA, double[] out, int offsetOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredGather(a.length, offsetA, strideA, out.length, offsetOut, dims)
+		return device != null
+				&& offeredGather(extent(device, a), offsetA, strideA, extent(device, out), offsetOut, dims)
 				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a)
 				&& device.gather(a, offsetA, strideA, out, offsetOut, dims);
 	}
@@ -1153,7 +1183,8 @@ public final class Gpu {
 	 */
 	public static boolean gather(float[] a, int offsetA, int[] strideA, float[] out, int offsetOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredGather(a.length, offsetA, strideA, out.length, offsetOut, dims)
+		return device != null
+				&& offeredGather(extent(device, a), offsetA, strideA, extent(device, out), offsetOut, dims)
 				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a)
 				&& device.gatherF(a, offsetA, strideA, out, offsetOut, dims);
 	}
@@ -1190,7 +1221,7 @@ public final class Gpu {
 			return false;
 		}
 		boolean resident = device.resident(a);
-		return offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner, resident)
+		return offeredFold(op, extent(device, a), offsetA, extent(device, out), offsetOut, outer, len, inner, resident)
 				&& (resident || (long) outer * inner * len >= Probe.FOLD_MIN_ELEMENTS)
 				&& device.fold(op, a, offsetA, out, offsetOut, outer, len, inner);
 	}
@@ -1217,7 +1248,7 @@ public final class Gpu {
 			return false;
 		}
 		boolean resident = device.resident(a);
-		return offeredFold(op, a.length, offsetA, out.length, offsetOut, outer, len, inner, resident)
+		return offeredFold(op, extent(device, a), offsetA, extent(device, out), offsetOut, outer, len, inner, resident)
 				&& (resident || (long) outer * inner * len >= Probe.FOLD_MIN_ELEMENTS)
 				&& device.foldF(op, a, offsetA, out, offsetOut, outer, len, inner);
 	}
@@ -1242,7 +1273,8 @@ public final class Gpu {
 	public static boolean takeRows(double[] a, int offsetA, int lenA, double[] out, int offsetOut, int[] idx,
 			int slab) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredTake(a.length, offsetA, lenA, out.length, offsetOut, idx, slab)
+		return device != null
+				&& offeredTake(extent(device, a), offsetA, lenA, extent(device, out), offsetOut, idx, slab)
 				&& device.resident(a) && device.take(0, a, offsetA, lenA, out, offsetOut, idx, idx.length * slab, slab);
 	}
 
@@ -1252,7 +1284,8 @@ public final class Gpu {
 	 */
 	public static boolean takeRows(float[] a, int offsetA, int lenA, float[] out, int offsetOut, int[] idx, int slab) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredTake(a.length, offsetA, lenA, out.length, offsetOut, idx, slab)
+		return device != null
+				&& offeredTake(extent(device, a), offsetA, lenA, extent(device, out), offsetOut, idx, slab)
 				&& device.resident(a)
 				&& device.takeF(0, a, offsetA, lenA, out, offsetOut, idx, idx.length * slab, slab);
 	}
@@ -1272,7 +1305,8 @@ public final class Gpu {
 	 */
 	public static boolean pick(double[] a, int offsetA, double[] out, int offsetOut, int[] idx, int cols) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredPick(a.length, offsetA, out.length, offsetOut, idx, cols) && device.resident(a)
+		return device != null && offeredPick(extent(device, a), offsetA, extent(device, out), offsetOut, idx, cols)
+				&& device.resident(a)
 				&& device.take(1, a, offsetA, idx.length * cols, out, offsetOut, idx, idx.length, cols);
 	}
 
@@ -1282,7 +1316,8 @@ public final class Gpu {
 	 */
 	public static boolean pick(float[] a, int offsetA, float[] out, int offsetOut, int[] idx, int cols) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredPick(a.length, offsetA, out.length, offsetOut, idx, cols) && device.resident(a)
+		return device != null && offeredPick(extent(device, a), offsetA, extent(device, out), offsetOut, idx, cols)
+				&& device.resident(a)
 				&& device.takeF(1, a, offsetA, idx.length * cols, out, offsetOut, idx, idx.length, cols);
 	}
 
@@ -1306,7 +1341,7 @@ public final class Gpu {
 	 */
 	public static boolean scatterRows(double[] z, int offsetZ, double[] g, int offsetG, int[] idx, int rows, int slab) {
 		GpuDevice device = Probe.DEVICE;
-		if (device == null || !offeredScatter(z.length, offsetZ, g.length, offsetG, idx, rows, slab)
+		if (device == null || !offeredScatter(extent(device, z), offsetZ, extent(device, g), offsetG, idx, rows, slab)
 				|| !(device.resident(g) || device.resident(z))) {
 			return false;
 		}
@@ -1319,7 +1354,7 @@ public final class Gpu {
 	 */
 	public static boolean scatterRows(float[] z, int offsetZ, float[] g, int offsetG, int[] idx, int rows, int slab) {
 		GpuDevice device = Probe.DEVICE;
-		if (device == null || !offeredScatter(z.length, offsetZ, g.length, offsetG, idx, rows, slab)
+		if (device == null || !offeredScatter(extent(device, z), offsetZ, extent(device, g), offsetG, idx, rows, slab)
 				|| !(device.resident(g) || device.resident(z))) {
 			return false;
 		}
@@ -1354,7 +1389,7 @@ public final class Gpu {
 	 */
 	public static @Nullable Double sumSquares(double[] a, int offsetA, int n, double seed) {
 		GpuDevice device = Probe.DEVICE;
-		if (device == null || n < 1 || offsetA < 0 || (long) offsetA + n > a.length || !device.resident(a)) {
+		if (device == null || n < 1 || offsetA < 0 || (long) offsetA + n > extent(device, a) || !device.resident(a)) {
 			return null;
 		}
 		return total(device.sumSquares(a, offsetA, n), seed);
@@ -1363,7 +1398,7 @@ public final class Gpu {
 	/** The single-float sibling of {@link #sumSquares(double[], int, int, double)}. */
 	public static @Nullable Double sumSquares(float[] a, int offsetA, int n, double seed) {
 		GpuDevice device = Probe.DEVICE;
-		if (device == null || n < 1 || offsetA < 0 || (long) offsetA + n > a.length || !device.resident(a)) {
+		if (device == null || n < 1 || offsetA < 0 || (long) offsetA + n > extent(device, a) || !device.resident(a)) {
 			return null;
 		}
 		return total(device.sumSquaresF(a, offsetA, n), seed);
@@ -1414,7 +1449,7 @@ public final class Gpu {
 			return false;
 		}
 		long out = (long) idx.length * slab;
-		return out <= Integer.MAX_VALUE && offsetOut + out <= lengthOut && inRange(idx, lenA / slab);
+		return out <= Integer.MAX_VALUE && fitsResult(lengthOut, offsetOut, out) && inRange(idx, lenA / slab);
 	}
 
 	/** The same for the per-row pick. */
@@ -1423,7 +1458,7 @@ public final class Gpu {
 			return false;
 		}
 		long span = (long) idx.length * cols;
-		return span <= Integer.MAX_VALUE && offsetA + span <= lengthA && offsetOut + idx.length <= lengthOut
+		return span <= Integer.MAX_VALUE && offsetA + span <= lengthA && fitsResult(lengthOut, offsetOut, idx.length)
 				&& inRange(idx, cols);
 	}
 
@@ -1495,7 +1530,7 @@ public final class Gpu {
 	public static boolean rngFill(double[] out, int offsetOut, int n, int mode, double lo, double span, int s1, int s2,
 			int s3) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredRng(out.length, offsetOut, n, mode, s1, s2, s3)
+		return device != null && offeredRng(extent(device, out), offsetOut, n, mode, s1, s2, s3)
 				&& device.rngFill(out, offsetOut, n, mode, lo, span, s1, s2, s3);
 	}
 
@@ -1517,7 +1552,7 @@ public final class Gpu {
 	public static boolean rngFill(float[] out, int offsetOut, int n, int mode, double lo, double span, int s1, int s2,
 			int s3) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredRng(out.length, offsetOut, n, mode, s1, s2, s3)
+		return device != null && offeredRng(extent(device, out), offsetOut, n, mode, s1, s2, s3)
 				&& device.rngFillF(out, offsetOut, n, mode, lo, span, s1, s2, s3);
 	}
 
@@ -1609,8 +1644,8 @@ public final class Gpu {
 	public static boolean matvec(double[] w, int offsetW, double[] x, int offsetX, double[] y, int offsetY, int rows,
 			int cols) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredMatvec(w.length, offsetW, x.length, offsetX, y.length, offsetY, rows, cols)
-				&& device.gemv(w, offsetW, x, offsetX, y, offsetY, rows, cols);
+		return device != null && offeredMatvec(extent(device, w), offsetW, extent(device, x), offsetX,
+				extent(device, y), offsetY, rows, cols) && device.gemv(w, offsetW, x, offsetX, y, offsetY, rows, cols);
 	}
 
 	/**
@@ -1630,8 +1665,8 @@ public final class Gpu {
 	public static boolean matvec(float[] w, int offsetW, float[] x, int offsetX, float[] y, int offsetY, int rows,
 			int cols) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredMatvec(w.length, offsetW, x.length, offsetX, y.length, offsetY, rows, cols)
-				&& device.gemvF(w, offsetW, x, offsetX, y, offsetY, rows, cols);
+		return device != null && offeredMatvec(extent(device, w), offsetW, extent(device, x), offsetX,
+				extent(device, y), offsetY, rows, cols) && device.gemvF(w, offsetW, x, offsetX, y, offsetY, rows, cols);
 	}
 
 	// --- the resident tier (.todo/491) -------------------------------------------------
@@ -1659,7 +1694,9 @@ public final class Gpu {
 	public static boolean zip(int op, double[] a, int offsetA, double[] b, int offsetB, double[] out, int offsetOut,
 			int n) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredZip(op, a.length, offsetA, b.length, offsetB, out.length, offsetOut, n)
+		return device != null
+				&& offeredZip(op, extent(device, a), offsetA, extent(device, b), offsetB, extent(device, out),
+						offsetOut, n)
 				&& (device.resident(a) || device.resident(b))
 				&& device.zip(op, a, offsetA, b, offsetB, out, offsetOut, n);
 	}
@@ -1680,7 +1717,9 @@ public final class Gpu {
 	public static boolean zip(int op, float[] a, int offsetA, float[] b, int offsetB, float[] out, int offsetOut,
 			int n) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredZip(op, a.length, offsetA, b.length, offsetB, out.length, offsetOut, n)
+		return device != null
+				&& offeredZip(op, extent(device, a), offsetA, extent(device, b), offsetB, extent(device, out),
+						offsetOut, n)
 				&& (device.resident(a) || device.resident(b))
 				&& device.zipF(op, a, offsetA, b, offsetB, out, offsetOut, n);
 	}
@@ -1703,8 +1742,9 @@ public final class Gpu {
 	public static boolean scale(int op, double[] a, int offsetA, double s, boolean swap, double[] out, int offsetOut,
 			int n) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredZip(op, a.length, offsetA, a.length, offsetA, out.length, offsetOut, n)
-				&& device.resident(a) && device.scale(op, a, offsetA, s, swap, out, offsetOut, n);
+		return device != null && offeredZip(op, extent(device, a), offsetA, extent(device, a), offsetA,
+				extent(device, out), offsetOut, n) && device.resident(a)
+				&& device.scale(op, a, offsetA, s, swap, out, offsetOut, n);
 	}
 
 	/**
@@ -1723,7 +1763,9 @@ public final class Gpu {
 	public static boolean scale(int op, float[] a, int offsetA, double s, boolean swap, float[] out, int offsetOut,
 			int n) {
 		GpuDevice device = Probe.DEVICE;
-		return device != null && offeredZip(op, a.length, offsetA, a.length, offsetA, out.length, offsetOut, n)
+		return device != null
+				&& offeredZip(op, extent(device, a), offsetA, extent(device, a), offsetA, extent(device, out),
+						offsetOut, n)
 				&& device.resident(a) && device.scaleF(op, a, offsetA, s, swap, out, offsetOut, n);
 	}
 
@@ -1758,8 +1800,9 @@ public final class Gpu {
 			double scalarY, double[] out, int offsetOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offeredWhere(m, offsetM, strideM, x == null ? -1 : x.length, offsetX, strideX,
-						y == null ? -1 : y.length, offsetY, strideY, out.length, offsetOut, dims)
+				&& offeredWhere(m == null ? -1 : extent(device, m), offsetM, strideM,
+						x == null ? -1 : extent(device, x), offsetX, strideX, y == null ? -1 : extent(device, y),
+						offsetY, strideY, extent(device, out), offsetOut, dims)
 				&& ((m != null && device.resident(m)) || (x != null && device.resident(x))
 						|| (y != null && device.resident(y)))
 				&& device.where(m, offsetM, strideM, scalarM, x, offsetX, strideX, scalarX, y, offsetY, strideY,
@@ -1791,8 +1834,9 @@ public final class Gpu {
 			double scalarY, float[] out, int offsetOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offeredWhere(m, offsetM, strideM, x == null ? -1 : x.length, offsetX, strideX,
-						y == null ? -1 : y.length, offsetY, strideY, out.length, offsetOut, dims)
+				&& offeredWhere(m == null ? -1 : extent(device, m), offsetM, strideM,
+						x == null ? -1 : extent(device, x), offsetX, strideX, y == null ? -1 : extent(device, y),
+						offsetY, strideY, extent(device, out), offsetOut, dims)
 				&& ((m != null && device.resident(m)) || (x != null && device.resident(x))
 						|| (y != null && device.resident(y)))
 				&& device.whereF(m, offsetM, strideM, scalarM, x, offsetX, strideX, scalarX, y, offsetY, strideY,
@@ -1824,7 +1868,8 @@ public final class Gpu {
 			double[] v, int offsetV, int n, double[] rule) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offeredAdam(x.length, offsetX, g.length, offsetG, m.length, offsetM, v.length, offsetV, n, rule)
+				&& offeredAdam(extent(device, x), offsetX, extent(device, g), offsetG, extent(device, m), offsetM,
+						extent(device, v), offsetV, n, rule)
 				&& (device.resident(x) || device.resident(g) || device.resident(m) || device.resident(v))
 				&& device.adamStep(x, offsetX, g, offsetG, m, offsetM, v, offsetV, n, rule);
 	}
@@ -1848,7 +1893,8 @@ public final class Gpu {
 			int offsetV, int n, double[] rule) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offeredAdam(x.length, offsetX, g.length, offsetG, m.length, offsetM, v.length, offsetV, n, rule)
+				&& offeredAdam(extent(device, x), offsetX, extent(device, g), offsetG, extent(device, m), offsetM,
+						extent(device, v), offsetV, n, rule)
 				&& (device.resident(x) || device.resident(g) || device.resident(m) || device.resident(v))
 				&& device.adamStepF(x, offsetX, g, offsetG, m, offsetM, v, offsetV, n, rule);
 	}
@@ -1880,7 +1926,8 @@ public final class Gpu {
 			int[] strideOut, int[] spanOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offeredCopy(a.length, offsetA, strideA, spanA, out.length, offsetOut, strideOut, spanOut, dims)
+				&& offeredCopy(extent(device, a), offsetA, strideA, spanA, extent(device, out), offsetOut, strideOut,
+						spanOut, dims)
 				&& device.resident(a) && device.copy(a, offsetA, strideA, spanA[0], spanA[1], out, offsetOut, strideOut,
 						spanOut[0], spanOut[1], dims);
 	}
@@ -1903,7 +1950,8 @@ public final class Gpu {
 			int[] strideOut, int[] spanOut, int[] dims) {
 		GpuDevice device = Probe.DEVICE;
 		return device != null
-				&& offeredCopy(a.length, offsetA, strideA, spanA, out.length, offsetOut, strideOut, spanOut, dims)
+				&& offeredCopy(extent(device, a), offsetA, strideA, spanA, extent(device, out), offsetOut, strideOut,
+						spanOut, dims)
 				&& device.resident(a) && device.copyF(a, offsetA, strideA, spanA[0], spanA[1], out, offsetOut,
 						strideOut, spanOut[0], spanOut[1], dims);
 	}
@@ -1920,7 +1968,7 @@ public final class Gpu {
 			return false;
 		}
 		if (spanA[0] < 0 || spanA[1] < 0 || spanOut[0] < 0 || spanOut[1] < 0 || spanA[0] + (long) spanA[1] > lengthA
-				|| spanOut[0] + (long) spanOut[1] > lengthOut) {
+				|| !fitsResult(lengthOut, spanOut[0], spanOut[1])) {
 			return false;
 		}
 		return walkInside(offsetA, strideA, dims, spanA) && walkInside(offsetOut, strideOut, dims, spanOut);
@@ -1949,27 +1997,26 @@ public final class Gpu {
 	 */
 	private static boolean offeredZip(int op, long lengthA, int offsetA, long lengthB, int offsetB, long lengthOut,
 			int offsetOut, int n) {
-		return op >= 0 && op < BIN_OPS && n > 0 && offsetA >= 0 && offsetB >= 0 && offsetOut >= 0
-				&& (long) offsetA + n <= lengthA && (long) offsetB + n <= lengthB && (long) offsetOut + n <= lengthOut;
+		return op >= 0 && op < BIN_OPS && n > 0 && offsetA >= 0 && offsetB >= 0 && (long) offsetA + n <= lengthA
+				&& (long) offsetB + n <= lengthB && fitsResult(lengthOut, offsetOut, n);
 	}
 
 	/**
 	 * The bounds of a three-way select: a shape it walks, at least one array operand, and
 	 * every array's reachable span inside it. A length of -1 marks a scalar operand.
 	 */
-	private static boolean offeredWhere(@Nullable Object m, int offsetM, int[] strideM, long lengthX, int offsetX,
+	private static boolean offeredWhere(long lengthM, int offsetM, int[] strideM, long lengthX, int offsetX,
 			int[] strideX, long lengthY, int offsetY, int[] strideY, long lengthOut, int offsetOut, int[] dims) {
 		long total = stridedCount(dims);
-		if (total < 0 || offsetOut < 0 || offsetOut + total > lengthOut) {
+		if (total < 0 || !fitsResult(lengthOut, offsetOut, total)) {
 			return false;
 		}
-		if (m == null && lengthX < 0 && lengthY < 0) {
+		if (lengthM < 0 && lengthX < 0 && lengthY < 0) {
 			return false;
 		}
-		if (m != null) {
-			long lengthM = m instanceof double[] d ? d.length : m instanceof float[] f ? f.length : -1;
+		if (lengthM >= 0) {
 			long spanM = stridedSpan(dims, strideM);
-			if (lengthM < 0 || spanM < 0 || offsetM < 0 || offsetM + spanM >= lengthM) {
+			if (spanM < 0 || offsetM < 0 || offsetM + spanM >= lengthM) {
 				return false;
 			}
 		}
@@ -2006,7 +2053,7 @@ public final class Gpu {
 		return rows > 0 && cols > 0 && (long) rows * cols >= Probe.MATVEC_MIN_ELEMENTS
 				&& (long) rows * cols <= Integer.MAX_VALUE && offsetW >= 0 && offsetX >= 0 && offsetY >= 0
 				&& offsetW + (long) rows * cols <= lengthW && offsetX + (long) cols <= lengthX
-				&& offsetY + (long) rows <= lengthY;
+				&& fitsResult(lengthY, offsetY, rows);
 	}
 
 	/**
@@ -2015,9 +2062,9 @@ public final class Gpu {
 	private static final int RNG_STATE_LIMIT = 1 << 23;
 
 	private static boolean offeredRng(long lengthOut, int offsetOut, int n, int mode, int s1, int s2, int s3) {
-		return mode >= 0 && mode <= 2 && n > 0 && n >= Probe.RNG_MIN_ELEMENTS && offsetOut >= 0
-				&& (long) offsetOut + n <= lengthOut && s1 >= 0 && s1 < RNG_STATE_LIMIT && s2 >= 0
-				&& s2 < RNG_STATE_LIMIT && s3 >= 0 && s3 < RNG_STATE_LIMIT;
+		return mode >= 0 && mode <= 2 && n > 0 && n >= Probe.RNG_MIN_ELEMENTS && fitsResult(lengthOut, offsetOut, n)
+				&& s1 >= 0 && s1 < RNG_STATE_LIMIT && s2 >= 0 && s2 < RNG_STATE_LIMIT && s3 >= 0
+				&& s3 < RNG_STATE_LIMIT;
 	}
 
 	private static long stridedCount(int[] dims) {
@@ -2069,8 +2116,8 @@ public final class Gpu {
 		}
 		long spanA = stridedSpan(dims, strideA);
 		long spanB = stridedSpan(dims, strideB);
-		return spanA >= 0 && spanB >= 0 && offsetA >= 0 && offsetB >= 0 && offsetOut >= 0 && offsetA + spanA < lengthA
-				&& offsetB + spanB < lengthB && offsetOut + total <= lengthOut;
+		return spanA >= 0 && spanB >= 0 && offsetA >= 0 && offsetB >= 0 && offsetA + spanA < lengthA
+				&& offsetB + spanB < lengthB && fitsResult(lengthOut, offsetOut, total);
 	}
 
 	/** {@link #offeredBcast} for the one-operand form. */
@@ -2081,8 +2128,7 @@ public final class Gpu {
 			return false;
 		}
 		long spanA = stridedSpan(dims, strideA);
-		return spanA >= 0 && offsetA >= 0 && offsetOut >= 0 && offsetA + spanA < lengthA
-				&& offsetOut + total <= lengthOut;
+		return spanA >= 0 && offsetA >= 0 && offsetA + spanA < lengthA && fitsResult(lengthOut, offsetOut, total);
 	}
 
 	/**
@@ -2100,8 +2146,8 @@ public final class Gpu {
 		long cells = (long) outer * inner;
 		long total = cells * len;
 		return cells >= (resident ? FOLD_RESIDENT_MIN_CELLS : FOLD_MIN_CELLS) && cells <= Integer.MAX_VALUE
-				&& total <= Integer.MAX_VALUE && offsetA >= 0 && offsetOut >= 0 && offsetA + total <= lengthA
-				&& offsetOut + cells <= lengthOut;
+				&& total <= Integer.MAX_VALUE && offsetA >= 0 && offsetA + total <= lengthA
+				&& fitsResult(lengthOut, offsetOut, cells);
 	}
 
 	/**
@@ -2110,8 +2156,8 @@ public final class Gpu {
 	 * the two arrays it was handed.
 	 */
 	private static boolean offeredMap(int op, long lengthA, int offsetA, long lengthOut, int offsetOut, int n) {
-		return op >= 0 && op < MAP_OPS && n > 0 && offsetA >= 0 && offsetOut >= 0 && (long) offsetA + n <= lengthA
-				&& (long) offsetOut + n <= lengthOut;
+		return op >= 0 && op < MAP_OPS && n > 0 && offsetA >= 0 && (long) offsetA + n <= lengthA
+				&& fitsResult(lengthOut, offsetOut, n);
 	}
 
 	/**
@@ -2142,10 +2188,30 @@ public final class Gpu {
 	private static boolean offered(long lengthA, int offsetA, int strideA, long lengthB, int offsetB, int strideB,
 			long lengthOut, int offsetOut, int batch, int n, int m, int p) {
 		return batch > 0 && n > 0 && m > 0 && p > 0 && CudaGemm.launchable(batch, n, m, p) && offsetA >= 0
-				&& offsetB >= 0 && offsetOut >= 0 && strideA >= 0 && strideB >= 0
+				&& offsetB >= 0 && strideA >= 0 && strideB >= 0
 				&& (long) offsetA + (long) (batch - 1) * strideA + (long) n * m <= lengthA
 				&& (long) offsetB + (long) (batch - 1) * strideB + (long) m * p <= lengthB
-				&& (long) offsetOut + (long) batch * n * p <= lengthOut;
+				&& fitsResult(lengthOut, offsetOut, (long) batch * n * p);
+	}
+
+	/**
+	 * Whether a member's RESULT span can be taken: inside the array it was handed, or the
+	 * array is a STUB -- exactly the prefix ahead of the result, and nothing else --
+	 * whose elements the library will hold on the device and in a backing of its own
+	 * ({@link #materialize}). Anything between the two is a caller's mistake and
+	 * declines.
+	 */
+	private static boolean fitsResult(long lengthOut, long offsetOut, long count) {
+		return offsetOut >= 0 && (lengthOut == offsetOut || offsetOut + count <= lengthOut);
+	}
+
+	/**
+	 * The element count {@code host} may be read or written at, as the bounds checks see
+	 * it: its Java length, or -- for a result stub, whose elements the device or its
+	 * backing holds -- the span it stands for ({@link GpuDevice#extent}).
+	 */
+	private static long extent(GpuDevice device, Object host) {
+		return device.extent(host);
 	}
 
 }

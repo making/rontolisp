@@ -217,19 +217,24 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * that copy is stale -- and, if it was the authoritative one ({@link #lazyResults}),
 	 * it is brought home first. Both halves keep such copies ({@link DeviceResidency}: a
 	 * CUDA buffer on one, a pooled {@code MTLBuffer} on the other), and every in-place
-	 * write on either interceptor reaches here through {@link Gpu#written}.
+	 * write on either interceptor reaches here through {@link Gpu#written}. Answers the
+	 * array the write must land in: {@code host}, or the backing of a result stub
+	 * ({@link DeviceResidency}, the class comment).
 	 * @param host the host array that is being written
+	 * @return the array to write into
 	 */
-	void written(Object host);
+	Object written(Object host);
 
 	/**
 	 * A host array is about to be READ: if the device holds its only bytes (a result left
 	 * there under {@link #lazyResults}), they come home now. Every host read of
 	 * packed-array storage on either interceptor reaches here through
-	 * {@link Gpu#materialize}. A download on CUDA, a memcpy out of the slab on Metal.
+	 * {@link Gpu#materialize} and reads what it answers: {@code host}, or the backing of
+	 * a result stub. A download on CUDA, a memcpy out of the slab on Metal.
 	 * @param host the host array about to be read
+	 * @return the array holding its bytes
 	 */
-	void materialize(Object host);
+	Object materialize(Object host);
 
 	/**
 	 * Whether a copy of {@code host} is resident, at any span -- the question the
@@ -238,6 +243,16 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * @return {@code true} when a device buffer holds a copy of it
 	 */
 	boolean resident(Object host);
+
+	/**
+	 * The element count {@code host} can be read or written at, as {@link Gpu}'s bounds
+	 * checks see it: its own Java length, or -- for a result STUB, whose elements live on
+	 * this device or in the backing {@link DeviceResidency} allocated -- the span it
+	 * stands for, whichever is larger. Never runs the probe, never touches the driver.
+	 * @param host the host array
+	 * @return the extent, in elements
+	 */
+	long extent(Object host);
 
 	/**
 	 * Whether a member's result STAYS on the device until the host first reads it, rather
