@@ -3218,6 +3218,118 @@ is true of the LIVE SET, not of the allocation rate -- the ParallelGC log shows 
 growing 143 MB -> 3081 MB between collections 1.6 steps apart, ~1.9 GB a step, all of it
 dying.
 
+#### Chapter 2's whole run, and the batch that is a quarter host (2026-08-24, todo-497)
+
+The chapter-2 Transformer at the book's own configuration -- `d_model` 512, 6 blocks, 8
+heads, `d_ff` 512, batch 64, `max_length` 20, the whole 50000-pair `small_parallel_enja`
+training split, 20 epochs, 15640 batches -- had never been run: `.todo/497` was filed on a
+README row that said "~1.5 h (projected, not run)". It is now a measurement, and the batch
+underneath it has a profile that does NOT read like chapter 3's.
+
+**The run.** `--gpu --simd`, JVM class output, `java -Xmx64g -XX:+ExplicitGCInvokesConcurrent`
+(the configuration todo-498's rule asks for on this program -- it allocates less a batch
+than chapter 3's, so an 8 GB young generation is one it never fills):
+
+| | |
+|---|---|
+| wall | **5364.9 s = 89.4 min** -- the item's 1.5 h projection was right |
+| loss, epoch 00 -> 19 | **3.555 -> 0.052** |
+| greedy decode | **14 of the first 20 source sentences reproduce their reference target EXACTLY** |
+| the batch, over the run | **0.34 s** (5364.9 / 15640, setup and the 20 decodes included) |
+| the collector | 191 `System.gc()`, every one answered concurrently, no full collection |
+
+The decodes are the readable half of the result: `私 は テニス 部員 で す 。 -> i 'm in the
+tennis club .`, `道路 を 横切 る とき は 車 に 注意 し なさ い 。 -> when you cross the
+street , watch out for cars .`, `私 は 音楽 が 好き で は あ り ま せ ん 。 -> i do not like
+music .` -- against the 2-epoch run's `i like to do .` for that last one. The epoch rate
+IMPROVES through the run, 4.4 min an epoch over the first three and 3.3 by the tenth,
+which is JIT warmup and the device residency filling, not the data.
+
+**The device budget holds over 89 minutes, and the collector costs 1.5% in pauses -- but
+G1 spends 8.9% of the run marking.** From `-Xlog:gc`: 21735 pauses totalling **80.7 s
+(1.5%)** and 6296 concurrent mark cycles totalling **477.7 s**. What drives them is not
+the library's 191 requests -- those are 1.78 s of the total -- but **7714 "Pause Young
+(Concurrent Start) (G1 Humongous Allocation)" pauses, 51 s**: at the book's vocabulary a
+logits array is 64 x 19 x 6638 single-floats = 32 MB, over half of the 32 MB G1 region
+`-Xmx64g` ergonomics choose, so every one of them the program materialises is a humongous
+object that may start a cycle.
+
+**The collector control, at the book's LENGTH.** todo-498 had only a 2-epoch run to decide
+chapter 2's configuration on; this one settles it. The same 20 epochs under
+`-XX:+UseParallelGC -Xmn8g` take **5571.3 s against 5364.9**, 3.8% slower, output
+BYTE-IDENTICAL down to the decodes -- with **2172 `System.gc()` answered as full
+collections and 210 s of pauses (3.8% of the run)** against G1's 191 requests and 80.7 s.
+So the rule holds at length and by about the same margin it did at 2 epochs (5% there,
+4% here): this model never fills an 8 GB young generation, so hand-sizing one costs. One
+number this run adds -- giving the concurrent configuration `-Xmx64g` is worth 5% on the
+2-epoch run by itself (104.4 s median of three, against todo-498's 109-113 s without it),
+which is the region-size half of the same page story.
+
+**The batch: 0.317 s of which 230 ms is device kernel time.** Measured on the book's own
+corpus over a 60-batch window (a 3/13-batch slope lies here -- the first 13 batches run at
+0.6 s while JIT and the residency warm up), nsys over batches 61-120 diffed against 1-60,
+walls unprofiled, three rounds (0.330 / 0.308 / 0.317):
+
+| | per batch |
+|---|---|
+| wall | **0.317 s** |
+| device kernel time | **230.4 ms** -- the device is busy **~73%** of the batch |
+| `cuLaunchKernel` | **11029** (33.0 ms of API time) |
+| `cuMemAllocAsync` | 10282 (17.2 ms) |
+| `cuCtxSynchronize` | **102** (168.7 ms of host WAIT) |
+| `cuMemcpyHtoD` | **104 copies, 247 MB**, 12.5 ms |
+| `cuMemcpyDtoH` | **4 copies, 4.3 MB**, 0.09 ms |
+
+So this is not chapter 3's story (0.72 s of device in a 0.77 s step, 3830 launches, 57
+HtoD). Chapter 2 runs **2.9x the launches in a step half as long**, because the port
+follows the book's explicit per-head loop: 1011 parameter tensors, **2289 batched
+products** and **2158 axis folds** a batch, most of them small.
+
+| kernel family | n/batch | ms/batch |
+|---|---|---|
+| `gemm_batched_f32` (untiled, the per-head products) | 1814 | 79.5 |
+| `fold_f32` (softmax amax/sum, layer-norm mean/var, unbroadcast sums) | 2158 | 52.1 |
+| `gemm_batched_f32_t8` (the vocabulary projection) | 43 | 20.7 |
+| `gemm_batched_f32_t4` | 432 | 18.8 |
+| `adam_f32` | 1011 | 14.5 |
+| `zip_f32` | 1106 | 12.3 |
+| `gather_f32` (transposes, per-head slicing) | 1339 | 11.8 |
+| `bcast_f32` | 1239 | 10.7 |
+| `scal_f32` / `copy_f32` / `map_f32` / `where_f32` | 1882 | 9.8 |
+
+**The host quarter is an UPLOAD, not a read.** Lazy results hold: 4 downloads a batch,
+0.09 ms. What the batch does instead is stage 247 MB UP, and `CudaGemm.upload` drains the
+launch queue first (`awaitQueued`), which is what the 102 `cuCtxSynchronize` are -- the
+pipeline todo-496 opened is closed about a hundred times a batch. A stack-walking trace on
+`upload`/`download` (a scratch build; `Long.getLong("rontolisp.gpu.copyTrace")` gating a
+`StackWalker` in both) names every one of them:
+
+| per batch | MB | caller |
+|---|---|---|
+| 90 uploads | 183 | `torch::%t-grad-bcast` from `torch:backward`'s adjoint lambdas |
+| 3 uploads | 55 | two more backward lambdas |
+| 6 uploads | 4.2 | `linalg:matmul` operand staging, `torch:masked-fill`, two scalars |
+| **2 downloads** | 4.2 | **`torch:add` in `positional-encoding-forward`** |
+| 2 downloads | ~0 | the loss scalar (`torch:sum` under `torch:cross-entropy-loss`) and one `aref` in a backward lambda |
+| (setup only) 1158 uploads | 292 | the first `torch::%o-adam-step`: after that the parameters, `m` and `v` STAY resident |
+| (setup only) 475 uploads | 114 | `torch:parameter` initialisation |
+
+Two findings, and one of them is a program:
+
+- **The 90 uploads are an array of ZEROS.** `torch::%t-grad-bcast` is
+  `(linalg:add (linalg:zeros-like x) gk)` -- a fresh host array at the activation shape
+  allocated so that the add's broadcast will stretch `gk` back over it, then staged up as
+  an operand. `linalg::%la-broadcast-to` is the same operation with no zeros and lowers to
+  a strided device member over a resident operand. Filed with these numbers as
+  `.todo/500`; it is a `torch.lisp` change, so it moves all four backends and is not a
+  GPU-only edit.
+- **The one member still running on the host is deliberate and documented.**
+  `positional-encoding-forward` adds a DOUBLE `pe` buffer to single-float activations --
+  `transformer/utils.lisp` says why (chapter 2 section 3 checks a dot-product identity to
+  1e-6 at that width) and says that `--simd` declines the mixed-width pair. Under `--gpu`
+  that decline now costs a 2.1 MB DOWNLOAD as well, twice a batch, because its other
+  operand is a device result. It is 0.09 ms and the trade is the example's, not the flag's.
+
 ### The chain order, and why the device goes on top
 
 On the interpreter a chain is INSTALL ORDER -- each `install` captures whatever

@@ -170,15 +170,17 @@ you measure a flag.
 **The book's own shapes**, run unchanged but for data (the whole novel, fetched from
 青空文庫 and stripped of ruby beforehand; a cloned `small_parallel_enja`) and the
 `defparameter`s at the top of each file set to the tables above. `--gpu --simd`, JVM
-class output, `java -Xmx64g -XX:+UseParallelGC -Xmn8g` (why those flags: below):
+class output, `java -Xmx64g` plus the collector each program's shape asks for -- chapter 3
+`-XX:+UseParallelGC -Xmn8g`, chapter 2 `-XX:+ExplicitGCInvokesConcurrent` (why those
+flags, and why they differ: below):
 
 | | | rontolisp | PyTorch on the same machine |
 | --- | --- | --- | --- |
 | chapter 3, 13.06 M parameters | per training step | **0.81 s** | 0.24 s eager fp32 (TF32 tensor cores, the container's default), 0.21 s bf16 autocast, 0.096 s `torch.compile` + bf16 |
 | | the notebook's 5000 steps (warmup 1000, eval every 500) | **67.2 min**; loss 8.10 -> 0.24, validation 0.116 | 20.4 min eager fp32; loss 0.17 |
-| chapter 2, `d_model` 512 | per batch of 64 pairs | **0.34 s** | -- |
-| | 2 epochs over 10000 pairs + 20 greedy decodes | **1.9 min**; loss 4.72 -> 3.61 | -- |
-| | the notebook's 20 epochs over 50000 pairs | ~1.5 h (projected, not run) | -- |
+| chapter 2, `d_model` 512 | per batch of 64 pairs | **0.30 s** | -- |
+| | 2 epochs over 10000 pairs + 20 greedy decodes | **1.7 min**; loss 4.72 -> 3.61 | -- |
+| | the notebook's 20 epochs over 50000 pairs (15640 batches) | **89 min**; loss 3.56 -> 0.052, 14 of 20 sentences translated exactly | -- |
 
 The PyTorch column is the same model (the book's per-head attention, AdamW, clipping,
 dropout 0.1) written against PyTorch in NVIDIA's `pytorch:25.11` container on the same
@@ -196,6 +198,22 @@ overlapped. The 5000-step
 run memorises the novel (the validation loss is over windows that overlap the training
 windows, the book's own `random_split`) and samples sentence-shaped 漱石:
 `吾輩はこのくらいの家アンドレア・デル・サルトでもこれである。美学者は笑いながら…`.
+
+**Chapter 2's batch is a quarter host; chapter 3's is not.** The 20-epoch run ends at a
+training loss of 0.052 and translates 14 of the first 20 source sentences exactly
+(`私 は テニス 部員 で す 。` -> `i 'm in the tennis club .`,
+`道路 を 横切 る とき は 車 に 注意 し なさ い 。` -> `when you cross the street , watch out
+for cars .`). Its batch is 0.32 s of which 230 ms is device kernel time -- **11029 kernel
+launches** against chapter 3's 3830 in a step twice as long, because this port follows the
+book's explicit per-head loop: 1011 parameter tensors, 2289 batched products and 2158 axis
+folds a batch, most of them small. What leaves the device idle for the rest is not a host
+READ (four downloads a batch, 4 MB -- results stay on the device) but a host WRITE: **247
+MB staged UP a batch**, and an upload waits for the queued kernels before it copies. Of
+that, 183 MB is an array of ZEROS, allocated by the reduction adjoint so that a broadcast
+add will stretch the gradient back over it; the one member that genuinely runs on the CPU
+is the positional encoding's mixed-width add, which
+[`transformer/utils.lisp`](transformer/utils.lisp) explains and chooses deliberately.
+[`.kb/gpu.md`](../../.kb/gpu.md) has the profile.
 
 **One rule, not two flag sets.** `--gpu` keeps results on the device, so a result the
 program has dropped holds device memory until the collector notices it is gone; the
@@ -215,7 +233,10 @@ fills is gigabytes of pages the device has never touched, and `-Xmn4g` at the no
 width is **57% slower** than setting nothing at all. So hand-size a young generation only
 where the program fills it, and otherwise leave the collector alone -- at the notebook's
 width, where the budget is never reached and no collection is ever asked for, none of this
-applies. `.kb/gpu.md` has the logs.
+applies. That is why chapter 2 above is run under different flags from chapter 3: it
+allocates less a batch and never fills an 8 GB young generation, so the concurrent answer
+wins there -- by 5% over 2 epochs and 4% over the full 20 (89.4 min against 92.9), with
+byte-identical output either way. `.kb/gpu.md` has the logs.
 
 ## The two places this port deliberately differs from the book
 
