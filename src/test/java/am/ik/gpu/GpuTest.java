@@ -1373,6 +1373,9 @@ class GpuTest {
 	void aLazyResultStaysOnTheDeviceUntilTheHostFirstReadsIt() {
 		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "lazy results are the CUDA backend's");
+		// And the mode PAYS here -- measured, a fifth off the training step -- which is
+		// what makes it the interceptors' mode on this backend (not on Metal).
+		assertThat(java.util.Objects.requireNonNull(Gpu.device()).lazyResultsPay()).isTrue();
 		Gpu.releaseResident();
 		int n = 1 << 18;
 		double[] a = new double[n], c = new double[n], e = new double[n];

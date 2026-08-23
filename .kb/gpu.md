@@ -612,9 +612,9 @@ what is NOT shared is the width, three of the thresholds and one whole tier.
 | stacked product | our batched kernel | our batched kernel |
 | element-wise tier | twelve members | the same twelve |
 | broadcast + axes transpose | yes | yes |
-| axis fold (`sum`/`amax`/`amin` `:axis`) | yes | **no, measured** |
+| axis fold (`sum`/`amax`/`amin` `:axis`) | yes | **not as a round trip, measured**; over a resident operand only (the sum in software binary64) |
 | `vec:matvec` (GEMV, matrix resident) | from `2^17`, double accumulator | from **`2^21`**, **compensated float** accumulator |
-| resident set | every operand and result | **the GEMV's matrix only, measured** |
+| resident set | every operand and result | **the GEMV's matrix only, measured** (lazy results are built and pinned but measured not to pay: the interceptors stay eager) |
 | product threshold | `2^17` | `2^22` |
 | element-wise threshold | `2^14` elements | `2^17` |
 | broadcast / gather threshold | `2^15` output elements | `2^18` |
@@ -1051,6 +1051,216 @@ and switched themselves on the moment it stopped being `Long.MAX_VALUE`, at `#f`
 its own MSL with both accumulators), `MtlGemvInSitu.java` (the shipped route, back to back
 and gapped; run with `-cp target/classes`), and `matvec-baseline.lisp` for the CPU column,
 now with the 1448 and 1536 squares; the README records what they printed.
+
+### Lazy results and the resident tier on Metal (2026-08-23, todo-494)
+
+The Apple half of "A result comes home on first host touch" below, built and measured on
+the same M4 Max as todo-477 (macOS 26.3.1, Oracle GraalVM 25.0.3). The CUDA round left
+this backend declining the whole of it -- `lazyResults` ignored, `materialize` a no-op,
+every resident-tier member `false`, no entry point in `gemm.metal` -- because todo-477 had
+measured residency 1-5% SLOWER here with EAGER results and nothing about lazy ones had
+been measured. Six findings, the first of them a bug that predates the item and the last of them the
+decision: the mode is built, bit-identical and pinned, and the interceptors do NOT switch
+it on here, because it does not pay.
+
+**The JVM class output had not used the GPU on a Mac since todo-491.** The emitted
+`_gpuInit` hands over the PTX, asks for lazy results, then hands over the MSL -- and
+`Gpu.lazyResults` ran the probe. With no MSL to compile, `MetalGemm.probe` answered "the
+Metal kernels are not on the classpath", the probe is once per process, and every call of
+every `--gpu` class declined for its whole life -- silently, because a decline is an
+ordinary outcome, and the class printed exactly what the CPU prints. The first baseline of
+this round therefore measured 0.70 s a step for BOTH builds (the `--simd` figure), and the
+in-situ pin that would have caught it did not exist: the JVM suite compares a compiled
+program's output with the oracle's, which a dead flag also prints. `Gpu.lazyResults` no
+longer probes (the wish is recorded and applied the moment the device exists), and
+`JvmLinalgGpuAccelCompilerTest.theEmbeddedLibraryFindsTheDeviceThisMachineHas` loads the
+embedded, renamed `RontoLispGpuGpu` out of the class's own loader and asserts it found what
+the test JVM found. Every Mac figure for the class output in this file from 2026-08-23 on
+is measured with that fix; the earlier ones predate the bug.
+
+**The design is the CUDA one, over the pool.** `MetalGemm`'s members now have
+`CudaGemm`'s shape -- look the operands up (`Call.lookup`), take a pool slab for what is
+missing (`ensure`), upload and keep (`stage`), dispatch, record the result (`finish`) -- and
+the slabs the cache holds are pool slabs: a member's result slab becomes the host array's
+DIRTY entry in the shared `DeviceResidency` instead of being downloaded and recycled, an
+in-place member (`scale` into itself, the Adam step, a concatenation's later slabs) marks
+the slab it wrote, every operand a call uploads is kept as a CLEAN copy, and
+`materialize` is a memcpy out of the slab's `contents`. The drain's flushes DOWNLOAD before
+the slab goes back to the free lists (`flushNow`, also under the pool-pressure eviction in
+`take`, which keeps the call's own slabs); `written` is materialize-then-drop, as on CUDA;
+`lazyResults(false)` brings every dirty copy home. Eagerly -- the library's default, the
+mode the tests run in -- nothing changes from todo-477: the GEMV's matrix is the only
+resident array, every other slab is scratch. The two modes have one budget rule each:
+eagerly `min(pool / 4, 1 GB)` for the resident set over a pool of a quarter of the
+working set; lazily the POOL may hold the working set less an eighth (never less than
+512 MB) and the resident set the pool less an eighth of that, because here the pool and
+the resident set compete for the same slabs and the headroom is what one call's scratch
+and the free lists live in (`LAZY_HEADROOM_SHARE`). The first lazy build kept the quarter
+pool and fell into the trap todo-491 hit at 1 GB on CUDA: at the book's shapes the graph
+a step keeps reachable until its backward is tens of gigabytes, the LRU flushed it as
+fast as it was made -- 195 GB of flushes and ten whole-set evictions under pool pressure
+over 13 steps -- and the step was a third slower than the pure pool. The rule above
+brought the flushes to zero; it did not bring the step back, below. The pre-flight that
+evicts everything a call is not holding before it would refuse the call is the same; a
+dirty copy it evicts is downloaded first.
+
+**A backend with no `double` runs binary64 in software, and that is what makes the tier
+bit-identical here.** The CPU kernels behind these members compute in double and narrow
+on the store. For two floats the float arithmetic IS that (the `bcast_f32` argument,
+which now covers `zip`, `where`, `copy`, `abs` / `negative` / `sign` and the scalar forms
+whose scalar is exactly a float -- an integer, a single-float literal, `(sqrt d-k)`). For
+the rest it cannot be: a scalar that is not a float (`(linalg:mul g 0.1d0)`), every step
+of the Adam update (its rule is ten doubles; the bias corrections are nothing a float
+holds), and the sum fold, which `%la-fold-axis` accumulates in double. So `gemm.metal`
+carries IEEE binary64 in 64-bit integer arithmetic: a value is its bit pattern in a
+`ulong`, every operation unpacks to sign / exponent / 53-bit significand, works in a
+128-bit integer so that every intermediate is exact or carries a sticky bit, and packs
+through ONE rounding step (`f64_pack`: round to nearest even, the subnormals, overflow to
+infinity) shared by add / sub / mul / div / sqrt and the exact widening of a float and the
+narrowing `(float) d`. Division is restoring (55 quotient bits, the remainder sticky),
+the square root digit-by-digit over a 128-bit radicand (56 root bits), the product four
+32-bit partial products. It is slower than a float op by a hundred-odd instructions an
+element, which a memory-bound launch over a resident operand does not notice. The pin is
+`MetalGpuTest.theSoftwareBinary64RouteLandsOnJavasDoubleArithmeticBitForBit`: the scalar
+forms over 2^18 bit patterns (subnormals, the specials, the tiny and the huge) and
+twenty-odd scalars from 1e-310 to `Double.MAX_VALUE`, the Adam update over three steps,
+the equal-shape ops -- against Java's arithmetic, bit for bit (a NaN is a NaN); the probe
+that ran it first (`MtlSoftF64.java`) did the same over 1364 scalar calls with 0
+mismatches. `GpuDeclineTest` still asserts no code line of the file says `double`; the
+emulation is spelled `f64`.
+
+**This GPU flushes subnormal floats to zero in every float operation, `MTLMathModeSafe`
+or not.** Measured through the probe: a subnormal operand through `x * 7.0f`, `x > 0.0f`,
+`fabs`, `sqrt` all answer as if `x` were zero, and a product that lands in the subnormal
+range is flushed. The CPU does neither, and a bit-identity claim has to hold for those bits
+too, so every float kernel guards it (`bin_op_exact`): an operand that is subnormal, or a
+result below `FLT_MIN` (where the hardware has flushed it), is recomputed on the binary64
+route, which works on the bits and never flushes; `abs` / `negative` / `sign` are bit
+operations; the fold's amax / amin compare through an order key the flush cannot touch;
+`where`'s mask test is a bit test. The guard is two compares an element. It also closes a
+gap the STRIDED tier had since phase 5 -- `bcast_f32` was not bit-identical for a subnormal
+operand, and nothing had fed it one. And `sqrt` needs `precise::sqrt`: plain `sqrt` under
+the safe math mode is 1 ulp off in ~10% of operands (27621 of 262144 in the probe), where
+`precise::sqrt` is correctly rounded and therefore `Math.sqrt` narrowed.
+
+**The fold is a member here now -- over a resident operand only.** The round-trip refusal
+of phase 5 stands and its threshold stays `Long.MAX_VALUE`: as a trip, amax / amin tie the
+CPU and a float sum could not be the defun's bits. Over an operand that is already on the
+device the trip is not paid and the alternative is bringing the operand home for the CPU's
+fold -- `softmax`'s `amax` and `sum` over a device-resident score matrix -- so `fold_f32`
+exists (the sum in software binary64, amax / amin as bit moves), and
+`Gpu.worthOrResident` offers it exactly as it offers the other size-thresholded members.
+`MetalGpuTest.theAxisFoldIsDeclinedForItsSizeAtEveryWidth` keeps the refusal; the tier
+test pins the member.
+
+**The floor, and where it puts the threshold.** A launch over resident operands, nothing
+copied, through the shipped route (`MtlResidentFloor.java`; us per call, the CPU column a
+memcpy of the operand out of the slab plus the lane loop):
+
+| elements | device `zip` | device `scale` | CPU memcpy + loop | loop alone |
+|---|---|---|---|---|
+| 2^12 | 116 | 115 | 1.3 | 1.0 |
+| 2^14 | 129 | 140 | 5.0 | 4.1 |
+| 2^16 | 113 | 126 | 20.5 | 16.4 |
+| 2^17 | 95 | 97 | 41.9 | 33.7 |
+| 2^18 | 138 | 122 | 83.5 | 66.4 |
+| 2^19 | 151 | 141 | ~340 | 179 |
+| 2^20 | 204 | 202 | 336 | 266 |
+| 2^21 | 303 | 280 | 673 | 533 |
+
+So a resident launch is ~100-140 us whatever its size until 2^18 -- the ~77 us command
+buffer and the library's own bookkeeping around it -- and crosses the CPU between 2^18 and
+2^19. `MetalGemm.MIN_RESIDENT_ELEMENTS` is the floor every member is held to when it is
+offered for a resident operand rather than for its size (the resident tier, and a
+size-thresholded member below its threshold), and the training step put it LOWER than
+that table says, at **2^14**: at the notebook's shapes the 40-step run was 5.23-5.30 s
+with the floor there, 5.37-5.59 at 2^17, 5.72-5.92 at 2^18, 5.66-5.72 at 2^19, 5.78-5.91
+at 2^20 (and 5.79-5.83 with no floor at all), because a declined member over a resident
+operand costs a materialize, the CPU loop and the re-upload of its result around it, and
+a chain that flips between the two pays both memcpys at every flip.
+
+**What it is worth: a tie at the notebook's shapes.** `train-gpt-soseki` on the JVM
+class output, `--gpu --simd`, the method of every table above, the pure-pool baseline
+being this tree at the previous commit with only the probe-order fix applied, interleaved
+rounds on the same hour:
+
+| per training step, M4 Max (notebook's shapes) | s/step | the 5 / 40-step runs |
+|---|---|---|
+| pure pool (todo-477's final build + the probe-order fix) | **0.104** | 1.78-1.81 / 5.38-5.50 (median 5.49) |
+| lazy results + the resident tier, floor 2^14 | **0.102** | 1.68-1.71 / 5.23-5.57 (median 5.27) |
+| the same, operands not kept | 0.102 | 5.26-5.27 |
+| the same under `-XX:+UseParallelGC -Xmn4g` | 0.100 | 5.24-5.43 (the pure pool 5.47-5.52) |
+
+Three to four per cent, which the run-to-run spread of this program (about three per
+cent) does not separate from zero -- and the output is identical between the two builds,
+as it must be.
+
+**And a loss at the book's shapes.** 6 layers, 6 heads, batch 64, `-Xmx64g
+-XX:+UseParallelGC -Xmn8g`; a synthetic corpus of the novel's size and vocabulary (318315
+characters, 3038 distinct) for the `(t13 - t3) / 10` runs, and the same model over a short
+corpus of the same vocabulary (36456 characters) for the per-step rows, because the data
+loader's setup over the full corpus costs six minutes a run and the step does not depend
+on the corpus:
+
+| per training step, M4 Max (book's shapes) | s/step |
+|---|---|
+| pure pool | **8.9** (`(t13 - t3) / 10`); 8.2-9.1 per step, steady |
+| lazy + the tier, the quarter pool (the first build) | 12.0, with 15 GB of flushes a step |
+| lazy + the tier, the pool rule above (no flushes) | 10.5-18.7 per step, mean ~15 |
+| ... operands not kept | 9.0-16.7, mean ~12.7 |
+| ... the tier held to 2^24 elements | 10.2-17.4, mean ~14 |
+| lazy results only, the tier declined | 13.0-21.7, mean ~18 |
+
+Read the last row first: lazy results ALONE are the worst, at twice the pure pool. With
+the tier declined every CPU member materializes its operand (210 GB over 13 steps) and
+its result is uploaded again by the next device member (85 GB), which is the pure pool's
+traffic in both directions plus a resident set of 44 GB that the pure pool never holds.
+With the tier the traffic falls (20 GB down, 36-48 GB up) and the step is still half
+again the pure pool's, and it VARIES -- 10 to 19 seconds step to step where the pure pool
+holds 8.2-9.1 -- with the per-call kernel times of the same kernels 1.5-2x what the 3-step
+run measured for them. Three things this backend does that the GB10 does not, and
+together they are the answer:
+
+1. **Every call waits.** A Metal call is `commit` and `waitUntilCompleted`; nothing
+   overlaps. On CUDA the launches are asynchronous and the host's bookkeeping, allocation
+   and host-side members run under them; here the step is the CPU's time PLUS the
+   device's, so a member moved from the CPU to the device pays in full and wins only if
+   the device is faster at it -- and at these sizes (6-25 M elements) a memory-bound
+   launch at the ~80-150 GB/s this route reaches (a 25 M-element `zip` is 2.2-3.6 ms) is
+   not much faster than the M4's lane loop over the same bytes.
+2. **Unified memory holds both copies.** A lazy result has a host array (zeroed, allocated,
+   `.todo/492`) AND a slab; at the book's shapes that is a 58-60 GB pool of slabs beside a
+   64 GB heap on a 128 GB machine, the system starts compressing pages, and the device's
+   reads of shared-storage buffers slow with it -- which is what the inflated, varying
+   kernel times are. The GB10's pool is device memory the heap does not share.
+3. **The download it saves is a memcpy.** What todo-491 removed on CUDA -- 44 GB over the
+   link in a 200-step run -- is on this platform a memcpy inside the same memory, at
+   20+ GB/s; the ~1.5 GB a step that still come home here cost about 0.1 s of the 8.9.
+
+So the acceptance rule of the item decides it: the step is not faster than the pure pool,
+the number is recorded, and the decline is kept -- as a POLICY, not by tearing the mode
+out. `GpuDevice.lazyResultsPay()` is the measured answer per backend (`true` on CUDA,
+`false` here), `Gpu.lazyResultsIfWorthwhile()` is what both interceptors now call
+(`LinalgGpuKernels.lazyResults`, `JvmGpuTemplate.gpuKernels`), and `Gpu.lazyResults(true)`
+stays the unconditional request an embedder or a test makes, honoured on both backends.
+`MetalGpuTest.theInterceptorsRequestLeavesResultsEagerHereAndAnEmbeddersDoesNot` pins the
+decision and the distinction; the five lazy-results tests and the soft-binary64 one pin
+the mode; the interpreter suite's `aDeviceResultStaysOnTheDeviceUntilTheHostFirstReadsIt`
+and the hit-count half of `theResidentTierRuns...` assume `GpuThresholds.lazyResultsOn()`
+and the rest of both suites run as before. Eagerly, then, this backend is exactly
+todo-477's: the GEMV matrix is the only resident array, and the resident tier -- which is
+offered only over a resident operand -- runs over a GEMV matrix and nothing else (a
+`linalg:mul` of a resident weight by a scalar, bit-identical, result home).
+
+**What would change the answer.** The first item above is the lever: encoding a chain
+into fewer command buffers, or committing without waiting and waiting only at the first
+host touch, would overlap the host with the device the way CUDA does -- and it changes
+when a slab may be recycled and when an upload into a recycled slab is safe, the one
+ordering the residency design exists to forbid, so it needs the same care the CUDA stream
+ordering got; measure it at the notebook's shapes, where the tie is, before the book's.
+The second is `.todo/492` (no host array for a lazy result), which would halve the
+footprint that puts this machine under pressure; `.todo/493` applies here as on CUDA. The
+probes: `MtlSoftF64.java` and `MtlResidentFloor.java`, beside the todo-477 ones.
 
 ### The JVM class carries BOTH kernel texts
 
@@ -2406,11 +2616,13 @@ and `theStridedCopyIsTheCopyMembersOverAResidentOperandAndAScaleRunsInPlace` pin
 library; `theResidentTierRunsOverAResidentOperandAndLandsOnTheCpuKernelsBits` on each
 interceptor runs every member over a device result against the oracle, and the
 interpreter's asserts the hit count moved; `theResidentTierDeclinesWithoutAResidentOperandAndTheCpuRunsUnchanged`
-is the other half. Metal declines the whole tier and `lazyResults`: on unified memory the
-copy home is a memcpy, its cost was never measured there, and `materialize` is a no-op
-(`MetalGemm`); `bin_op` in `gemm.metal` gained the five masks so `bcast` answers them.
-The Apple half -- a measurement first, since todo-477 found residency 1-5% slower there
-with EAGER results -- is `.todo/494`.
+is the other half. Metal declined the whole tier and `lazyResults` in this round (on
+unified memory the copy home is a memcpy, and its cost had not been measured there);
+`bin_op` in `gemm.metal` gained the five masks so `bcast` answers them. The Apple half was
+built and measured as todo-494 -- "Lazy results and the resident tier on Metal" in the
+Metal section: the tier lands on the CPU's bits through binary64 in SOFTWARE, the mode
+works and is pinned, and the interceptors do not switch it on there, because it measured
+a tie at the notebook's shapes and a loss at the book's (`Gpu.lazyResultsIfWorthwhile`).
 
 **What the profile says is left** (the 40-step run, materializations counted by caller):
 `torch:clip-grad-norm`'s `%la-sum-squares` reads every gradient -- 7 MB a step, 760
@@ -3086,7 +3298,12 @@ decline, not an omission, and each needs this file's numbers before it is revisi
   a lazy training step still makes -- and **no lazy HOST allocation**: the host array of a
   result that never comes home is still a zeroed Java array. Both are filed (`.todo/492`,
   `.todo/493`) with the bytes they cost, under "A result comes home on first host touch".
-- **No lazy results on METAL.** `MetalGemm.lazyResults` declines and `materialize` is a
-  no-op there: on unified memory the copy home is a memcpy, and whether it was ever the
-  cost was not measured. Measure it before switching it on; the reader enumeration is
-  already in place on both interceptors, so the switch itself is one method.
+- **No asynchronous command buffers on METAL, and so no lazy results for the
+  interceptors there.** Every Metal call commits and waits, so a chain over resident
+  operands is the CPU's time plus the device's; lazy results and the resident tier are
+  built and pinned on this backend and measured a tie at the notebook's shapes and a loss
+  at the book's ("Lazy results and the resident tier on Metal"), so the interceptors ask
+  for them only where the backend says they pay (`Gpu.lazyResultsIfWorthwhile`). Encoding
+  a chain into fewer command buffers, or waiting only at the first host touch, is the
+  lever, and it changes when a slab may be recycled -- the one ordering the residency
+  design exists to forbid.

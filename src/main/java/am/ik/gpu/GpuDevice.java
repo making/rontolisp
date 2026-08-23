@@ -187,7 +187,7 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * A host array is about to be READ: if the device holds its only bytes (a result left
 	 * there under {@link #lazyResults}), they come home now. Every host read of
 	 * packed-array storage on either interceptor reaches here through
-	 * {@link Gpu#materialize}. On a backend that keeps no lazy results this is a no-op.
+	 * {@link Gpu#materialize}. A download on CUDA, a memcpy out of the slab on Metal.
 	 * @param host the host array about to be read
 	 */
 	void materialize(Object host);
@@ -202,12 +202,30 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 
 	/**
 	 * Whether a member's result STAYS on the device until the host first reads it, rather
-	 * than being downloaded before the call returns. A backend may decline the mode and
-	 * keep downloading -- Metal does, where unified memory makes the copy a memcpy -- and
-	 * {@link #materialize} is then a no-op.
+	 * than being downloaded before the call returns. Both halves honour it: CUDA since
+	 * {@code .todo/491}, Metal since {@code .todo/494}, each measured on its own hardware
+	 * ({@code .kb/gpu.md}).
 	 * @param on whether to keep results on the device
 	 */
 	void lazyResults(boolean on);
+
+	/**
+	 * Whether lazy results PAY on this backend -- the measured answer that decides
+	 * whether the interceptors switch them on ({@link Gpu#lazyResultsIfWorthwhile}).
+	 * {@code true} on CUDA (a fifth off the training step, then half); {@code false} on
+	 * Metal, where the same design measured a tie at small shapes and a loss at large
+	 * ones ({@code .kb/gpu.md}, "Lazy results and the resident tier on Metal").
+	 * Independent of {@link #lazyResults}: an embedder that asks gets the mode on either
+	 * backend.
+	 * @return {@code true} when the interceptors should run with lazy results
+	 */
+	boolean lazyResultsPay();
+
+	/**
+	 * Whether lazy results are in force right now.
+	 * @return {@code true} while results stay on the device until read
+	 */
+	boolean lazyResultsOn();
 
 	/**
 	 * Bytes held by resident copies right now.

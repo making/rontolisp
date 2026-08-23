@@ -443,10 +443,15 @@ class GpuDeclineTest {
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_BCAST_F32);
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GATHER_F32);
 		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GEMV_F32);
+		for (String kernel : MetalGemm.KERNELS_RESIDENT) {
+			assertThat(msl).contains("kernel void " + kernel);
+		}
 		// The op-code mirrors, the third copy of the table gemm.cu and Gpu.MAP_* /
 		// Gpu.BIN_* hold the other two of.
 		assertThat(msl).contains("case " + Gpu.MAP_ERF + ": return erf1(x);");
+		assertThat(msl).contains("case " + Gpu.MAP_SQRT + ": {");
 		assertThat(msl).contains("case " + Gpu.BIN_DIV + ": return x / y;");
+		assertThat(msl).contains("case " + Gpu.BIN_EQ + ": return x == y ? 1.0f : 0.0f;");
 		// MSL rejects `double` outright, so a `double` in the CODE is a source that
 		// cannot
 		// compile on any Mac -- which no machine without one would notice. The comments

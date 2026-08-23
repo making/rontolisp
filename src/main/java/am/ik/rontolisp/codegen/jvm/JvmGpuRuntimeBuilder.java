@@ -83,7 +83,7 @@ final class JvmGpuRuntimeBuilder {
 	private static final List<String> GPU_CLASSES = List.of("GpuDevice", "GpuDevice$Thresholds", "CudaDriver",
 			"CuResult", "CudaGemm", "CudaGemm$Probe", "CudaGemm$Tile", "DeviceResidency", "DeviceResidency$Entry",
 			"DeviceResidency$Flush", "DeviceResidency$Key", "DeviceResidency$Lookup", "MetalDriver", "MetalGemm",
-			"MetalGemm$Probe", "MetalGemm$Slab", "Gpu", "Gpu$Probe");
+			"MetalGemm$Probe", "MetalGemm$Slab", "MetalGemm$Call", "Gpu", "Gpu$Probe");
 
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_gpuInit";

@@ -110,11 +110,12 @@ final class LinalgGpuKernels {
 	}
 
 	/**
-	 * Switches lazy results on: every member's result stays on the device until the host
-	 * first reads it, which the hooks above make safe ({@code .kb/gpu.md}).
+	 * Switches lazy results on where the device says they pay (CUDA; not Metal,
+	 * measured): every member's result then stays on the device until the host first
+	 * reads it, which the hooks above make safe ({@code .kb/gpu.md}).
 	 */
 	static void lazyResults() {
-		Gpu.lazyResults(true);
+		Gpu.lazyResultsIfWorthwhile();
 	}
 
 	/** What was found, or why nothing was -- the text the CLI reports. */

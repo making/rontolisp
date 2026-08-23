@@ -9,7 +9,10 @@ What is left of a training step at the book's shapes is the THIRD line of 491's 
 now the first: every result still allocates a fresh, zeroed Java array on the host -- a
 6 MB activation at the notebook's shapes, 25-100 MB at the book's (batch 64, T 256,
 C 384, the MLP's 1536) -- whether or not anything ever reads it, and the collector pays
-for each of them.
+for each of them. (On Metal, where the same mode was built and measured in `.todo/494`,
+this doubling is one of the three reasons it does not pay: a 58-60 GB pool of slabs beside
+a 64 GB heap on a 128 GB machine puts the system under memory pressure, and the device's
+reads slow with it. Halving the footprint is what this item would do for that backend too.)
 
 ## What it costs
 

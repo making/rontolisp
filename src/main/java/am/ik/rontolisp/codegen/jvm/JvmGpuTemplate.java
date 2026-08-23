@@ -55,14 +55,15 @@ final class JvmGpuTemplate {
 	 */
 	static void gpuKernels(String ptx) {
 		Gpu.useKernels(ptx);
-		// Lazy results: a member's result stays on the device until the host first reads
-		// it. Safe here because the compiled program materializes before every host read
-		// of packed-array storage -- _fvAref*, _fvToGeneral*, every host rung of every
+		// Lazy results, where the device says they pay (CUDA; not Metal, measured): a
+		// member's result stays on the device until the host first reads it. Safe here
+		// because the compiled program materializes before every host read of
+		// packed-array storage -- _fvAref*, _fvToGeneral*, every host rung of every
 		// accelerated call site, the typed loops, the bulk write-sequence, Java interop
-		// --
-		// through _gpuMaterialize (.kb/gpu.md, "A result comes home on first host
-		// touch").
-		Gpu.lazyResults(true);
+		// -- through _gpuMaterialize (.kb/gpu.md, "A result comes home on first host
+		// touch"). The MSL text arrives AFTER this (gpuMetalKernels), so the wish must
+		// not run the probe, and it does not: it is applied when the probe runs.
+		Gpu.lazyResultsIfWorthwhile();
 	}
 
 	/**

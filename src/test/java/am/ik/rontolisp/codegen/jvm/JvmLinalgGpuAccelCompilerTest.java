@@ -113,6 +113,44 @@ class JvmLinalgGpuAccelCompilerTest {
 		}
 	}
 
+	/**
+	 * Runs a {@code --gpu} class in a loader of its own and answers whether the library
+	 * EMBEDDED in it -- defined into that loader by {@code _gpuInit} under its renamed
+	 * name -- found a device. The one observable that says the compiled program really
+	 * accelerates, which no printed value can: every member is written to land on the
+	 * oracle's bits, so a class whose embedded probe failed prints the same thing.
+	 */
+	private boolean embeddedDeviceAvailable(byte[] classBytes) throws Exception {
+		Path classFile = this.tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(new ByteArrayOutputStream()));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			Class<?> gpu = loader.loadClass(JvmGpuRuntimeBuilder.GPU_PREFIX + "Gpu");
+			return (boolean) gpu.getMethod("available").invoke(null);
+		}
+	}
+
+	@Test
+	@EnabledIf("aDeviceIsAvailable")
+	void theEmbeddedLibraryFindsTheDeviceThisMachineHas() throws Exception {
+		// The dead-flag guard for the compiled backend: _gpuInit hands over the PTX, asks
+		// for lazy results, then hands over the MSL -- and until 2026-08-23 the middle
+		// step ran the probe, so on a Mac the embedded Metal half had no source to
+		// compile and every class declined for its whole life while printing the right
+		// answers. The embedded copy must find what the test JVM's copy found.
+		assertThat(embeddedDeviceAvailable(compile("(print (linalg:matmul #d((1.0)) #d((2.0))))", true))).isTrue();
+	}
+
 	private String accel(String lispCode) throws Exception {
 		return run(compile(lispCode, true));
 	}

@@ -1598,6 +1598,17 @@ final class CudaGemm implements GpuDevice {
 		return this.residency.resident(host);
 	}
 
+	/** {@code true}: measured on a GB10, a fifth off the training step and then half. */
+	@Override
+	public boolean lazyResultsPay() {
+		return true;
+	}
+
+	@Override
+	public boolean lazyResultsOn() {
+		return this.lazy;
+	}
+
 	/**
 	 * Switches lazy results on or off. Switching OFF brings every dirty copy home first,
 	 * so that the eager contract -- a result is in its array when the call returns --

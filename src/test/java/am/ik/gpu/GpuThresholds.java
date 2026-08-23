@@ -60,8 +60,7 @@ public final class GpuThresholds {
 	 * Residency lookups answered from the cache since the process started, or {@code -1}
 	 * with no device -- the one observable that says a call over a resident operand
 	 * REALLY ran on the device, which no printed value can, since the accepted member is
-	 * written to land on the oracle's own bits. Both backends keep a cache; the Metal one
-	 * holds only the matrices of accepted GEMVs.
+	 * written to land on the oracle's own bits. Both backends keep a cache.
 	 * @return the hit count, or -1
 	 */
 	public static long residencyHits() {
@@ -88,6 +87,17 @@ public final class GpuThresholds {
 	public static int dirtyCount() {
 		DeviceResidency residency = Gpu.residency();
 		return residency != null ? residency.dirtyCount() : -1;
+	}
+
+	/**
+	 * Whether lazy results are in force on the device the interceptors found -- the mode
+	 * they switch on where the backend says it pays
+	 * ({@code Gpu.lazyResultsIfWorthwhile}): CUDA yes, Metal no, measured. The tests that
+	 * assert a result STAYED assume it.
+	 * @return {@code true} while results stay on the device until read
+	 */
+	public static boolean lazyResultsOn() {
+		return Gpu.lazyResultsOn();
 	}
 
 	/**

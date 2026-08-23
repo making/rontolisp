@@ -1065,8 +1065,8 @@ class LinalgGpuTest {
 
 	@Test
 	void aDeviceResultStaysOnTheDeviceUntilTheHostFirstReadsIt() {
-		assumeThat(am.ik.gpu.GpuThresholds.dirtyCount()).as("lazy results are the CUDA backend's")
-			.isGreaterThanOrEqualTo(0);
+		assumeThat(am.ik.gpu.GpuThresholds.lazyResultsOn()).as("lazy results pay on this backend (CUDA, not Metal)")
+			.isTrue();
 		int side = 16 * (int) Math.ceil(Math.sqrt(2.0 * am.ik.gpu.GpuThresholds.stridedMinElements()) / 16);
 		String program = """
 				(defparameter *a* (linalg:reshape (linalg:arange 1 %d%s) '(%d %d)))
@@ -1144,8 +1144,13 @@ class LinalgGpuTest {
 		long hits = am.ik.gpu.GpuThresholds.residencyHits();
 		assertThat(output(program, true, false)).as("--gpu").isEqualTo(oracle);
 		// The dead-flag guard: every member above read a RESIDENT operand on the device,
-		// and the cache counted each as a hit. Thirty-odd members; the bound is loose.
-		assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits + 20);
+		// and the cache counted each as a hit. Thirty-odd members; the bound is loose. On
+		// a backend where lazy results do not pay (Metal, measured) nothing but a GEMV
+		// matrix is ever resident, the tier is never offered, and the program still
+		// prints the oracle -- which the assertion above has checked.
+		if (am.ik.gpu.GpuThresholds.lazyResultsOn()) {
+			assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits + 20);
+		}
 		assertThat(output(program, true, true)).as("--gpu --simd").isEqualTo(output(program, false, true));
 	}
 

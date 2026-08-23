@@ -152,6 +152,14 @@ gradient, which is the host read a training step still makes (`.todo/492`, `.tod
 The same program varies by about 15% run to run, so read the ratios rather than the
 digits.
 
+On an Apple M4 Max the same 40-step program at the notebook's shapes (JVM class output,
+2026-08-23) runs at **0.104 s a step under `--gpu --simd`** against 0.70 under `--simd`
+-- a 6.7x that the Metal guide's five-times-higher per-call floor and single-float-only
+member set explain -- and the round that keeps results on the device changes nothing
+there: built and measured on Metal the same day, it is a tie at these shapes (0.102) and
+slower at the book's, so on a Mac every device result still comes home when its call
+returns ([the guide's Apple section](../../doc/en/guides/gpu-acceleration.md#on-apple-silicon)).
+
 Two of the rows say something the flags' own guides already say, in this program's terms.
 `--blas` changes nothing here because **every product in these files is the stacked
 rank-3 one** -- an attention layer's `torch:matmul` over `(B T C)` and a `torch:linear`

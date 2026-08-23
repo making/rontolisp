@@ -44,8 +44,9 @@ import org.jspecify.annotations.Nullable;
  * differences are visible through the decline protocol and are worth expecting: the Metal
  * backend has no {@code double} at all, so every {@code double}-taking method below
  * declines there whatever the size; and its per-call floor is five times CUDA's, so its
- * size thresholds are higher and it does not take the {@linkplain #fold axis fold} at
- * all. {@code .kb/gpu.md} has the measurements behind each of those.
+ * size thresholds are higher and it takes the {@linkplain #fold axis fold} only over a
+ * resident operand, never for its size. {@code .kb/gpu.md} has the measurements behind
+ * each of those.
  *
  * <h2>Residency, and results that stay</h2>
  *
@@ -373,6 +374,9 @@ public final class Gpu {
 			DEVICE = device;
 			DESCRIPTION = description;
 			Gpu.probed = device;
+			if (device != null && (Gpu.lazyWanted || (Gpu.lazyIfWorthwhile && device.lazyResultsPay()))) {
+				device.lazyResults(true);
+			}
 			GpuDevice.Thresholds thresholds = device == null
 					? new GpuDevice.Thresholds(POOLED_MIN_WORK, MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS,
 							FOLD_POOLED_MIN_ELEMENTS, RNG_POOLED_MIN_ELEMENTS, MATVEC_POOLED_MIN_ELEMENTS)
@@ -609,18 +613,59 @@ public final class Gpu {
 	 * first reads it through {@link #materialize}, or never; an array a device member
 	 * updates in place ({@link #adamStep}, {@link #rngFill}) likewise. That is what lets
 	 * a chain of members {@code matmul -> div -> where -> softmax -> matmul} move nothing
-	 * over the link, and it is the mode the interceptors run in, having enumerated every
+	 * over the link, and it is the mode the interceptors run in where the device says it
+	 * pays ({@link #lazyResultsIfWorthwhile}: CUDA, not Metal), having enumerated every
 	 * host read ({@code .kb/gpu.md}, "A result comes home on first host touch"). Off --
 	 * the default, and the contract every method's javadoc states -- a result is in its
-	 * array when the call returns. Switching off brings every lazy result home first. A
-	 * backend may decline the mode and keep downloading (Metal does).
+	 * array when the call returns. Switching off brings every lazy result home first.
+	 *
+	 * <p>
+	 * Never runs the probe: the wish is recorded and applied to the device the moment it
+	 * is probed, so an embedder may ask for the mode BEFORE it has supplied the kernel
+	 * texts ({@link #useKernels}, {@link #useMetalKernels}). It did run the probe until
+	 * 2026-08-23, and that is why the JVM class output never found a Metal device: its
+	 * {@code _gpuInit} asked for lazy results between handing over the PTX and the MSL,
+	 * the probe ran with no MSL to compile, and every call on a Mac declined for the life
+	 * of the process -- silently, because a decline is an ordinary outcome.
 	 * @param on whether results stay on the device until the host first reads them
 	 */
 	public static void lazyResults(boolean on) {
-		GpuDevice device = Probe.DEVICE;
+		lazyWanted = on;
+		GpuDevice device = probed;
 		if (device != null) {
 			device.lazyResults(on);
 		}
+	}
+
+	/** The mode {@link #lazyResults} asked for, applied when the device is probed. */
+	private static volatile boolean lazyWanted;
+
+	/**
+	 * Switches lazy results on IF THE DEVICE SAYS THEY PAY
+	 * ({@link GpuDevice#lazyResultsPay}): the interceptors' request, as against
+	 * {@link #lazyResults}, which is unconditional. The two backends measured differently
+	 * -- a fifth off the training step on CUDA, a tie at small shapes and a loss at large
+	 * ones on Metal -- and the measurement lives in the backend, not in the interceptor.
+	 * Never runs the probe; applied when it runs.
+	 */
+	public static void lazyResultsIfWorthwhile() {
+		lazyIfWorthwhile = true;
+		GpuDevice device = probed;
+		if (device != null && device.lazyResultsPay()) {
+			device.lazyResults(true);
+		}
+	}
+
+	private static volatile boolean lazyIfWorthwhile;
+
+	/**
+	 * Whether lazy results are in force on the probed device. Package-private, for the
+	 * tests that assume the mode before asserting on it.
+	 * @return {@code true} while results stay on the device until read
+	 */
+	static boolean lazyResultsOn() {
+		GpuDevice device = probed;
+		return device != null && device.lazyResultsOn();
 	}
 
 	/**
