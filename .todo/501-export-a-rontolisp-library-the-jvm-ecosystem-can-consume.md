@@ -145,15 +145,26 @@ with no CUDA and no Metal (OpenBLAS present, Vector API available):
   is at `Lookup.defineClass`, which happens before any device probe -- a packaged `--gpu`
   class dies with `RontoLispGpuGpuDevice not in same package as lookup class` on a
   device-less machine, and the same program in the default package answers correctly
-  (unaccelerated). So the fix and its test need no device.
+  (unaccelerated). And the rename is not merely *reached* without a device, it is fully
+  EXERCISED: `-verbose:class` on a device-less `--gpu` run shows all 21 travelling classes
+  plus the bridge loading and linking (both the CUDA and the Metal halves -- `CudaDriver`,
+  `CudaGemm$Tile`, `DeviceResidency$Lookup`, `MetalGemm$Slab`, ...), so a botched
+  cross-class reference cannot hide behind the missing device. The fix and its test need
+  no device.
 - `.todo/503`, `.todo/505`, `.todo/506`, `.todo/507`, `.todo/508` touch no device path at
   all. `--simd` and `--blas` both run for real here, which covers the acceleration story
   end to end.
 - **The one exception**: `.todo/504`'s "`--gpu` residency" paragraph -- whether a handle a
   `--gpu` kernel returns forces a materialization the next call would only re-upload.
   Designing and implementing the handle needs nothing; confirming it does not defeat the
-  resident/lazy tier (`.todo/492`/`494`) needs a device. Build it here, verify that one
-  interaction on the GB10.
+  resident/lazy tier needs a device, and it has TWO halves, since that tier was settled
+  separately for CUDA (`.todo/492`/`493`) and for Metal (`.todo/494`). Build it here,
+  confirm on the GB10, and on a Mac before claiming the flag as a whole is unaffected.
+- Soft preference, not a requirement: `.todo/503`'s acceptance asks for an `examples/jvm/`
+  program calling a compiled export from Java, and the one worth shipping is a `--gpu`
+  matmul -- "call a GPU kernel from Java" is the headline the whole parent earns. Author
+  that example where the acceleration is real, even though the directive itself is
+  device-free.
 
 ## Acceptance
 
