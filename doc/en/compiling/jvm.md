@@ -3,7 +3,7 @@
 Give `rontolisp` an output path ending in `.class` with `-o`, and it compiles the
 source straight to JVM bytecode instead of interpreting it -- no ASM or other
 library, the bytecode is emitted by hand. The output extension is what selects the
-backend (`.class` for JVM, `.wasm` for WASM).
+backend (`.class` or `.jar` for JVM, `.wasm` for WASM).
 
 ```bash
 echo '(print (+ 1 2))' > hello.lisp
@@ -18,6 +18,13 @@ The generated class is named after the output file, so the name you pass to
 with `java -cp . com.example.Kernels` from the directory the path started in
 (the missing directories are created). The program's top-level forms
 become the class's entry point and run in order when you launch it.
+
+`-o out.jar` writes a jar rather than a bare class: the class, the runtime
+classes that have to travel with it, a manifest, and -- with
+`--maven-coordinates` -- the Maven metadata that lets a consumer install it with
+no flags at all. A jar path names no class, so `--class-name` gives the name
+there; it works for `.class` output too, where it replaces the name the path
+would give.
 
 A class can also be a **library** Java code calls directly:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md)

@@ -3,10 +3,16 @@ package am.ik.rontolisp.cli;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
@@ -84,6 +90,164 @@ class RontoLispCliTest {
 		assertThatThrownBy(() -> runCli("", program.toString(), "--no-main"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("--no-main");
+	}
+
+	/** The library the jar tests below compile: an export of each interesting shape. */
+	private Path kernelsLibrary() throws Exception {
+		Path program = this.tempDir.resolve("kernels.lisp");
+		Files.writeString(program, """
+				(defvar *scale* 2.0)
+				(defun scaled-sum (a b) (* *scale* (+ a b)))
+				(defun norm2 (x) (sqrt (vec:dot x x)))
+				(rontolisp:jvm-export 'scaled-sum :params '(:float :float) :returns :float)
+				(rontolisp:jvm-export 'norm2 :params '(:float-vector) :returns :float)
+				""");
+		return program;
+	}
+
+	private static Map<String, byte[]> entries(Path jar) throws Exception {
+		Map<String, byte[]> entries = new LinkedHashMap<>();
+		try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(jar))) {
+			for (ZipEntry entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
+				entries.put(entry.getName(), zip.readAllBytes());
+			}
+		}
+		return entries;
+	}
+
+	@Test
+	void aLibraryJarCarriesTheClassTheHandleRuntimeAndItsOwnCoordinates() throws Exception {
+		Path jar = this.tempDir.resolve("acme-kernels-1.0.0.jar");
+		runCli("", kernelsLibrary().toString(), "-o", jar.toString(), "--class-name", "com.acme.Kernels",
+				"--maven-coordinates", "com.acme:acme-kernels:1.0.0", "--no-main");
+		Map<String, byte[]> entries = entries(jar);
+		// The handle runtime travels INSIDE the artifact: the .class path writes it
+		// beside the output class, and a jar that left it out is a NoClassDefFoundError
+		// in the consumer rather than an error at compile time.
+		assertThat(entries.keySet()).containsExactly("META-INF/MANIFEST.MF",
+				"META-INF/maven/com.acme/acme-kernels/pom.xml", "META-INF/maven/com.acme/acme-kernels/pom.properties",
+				"com/acme/Kernels.class", "am/ik/rontolisp/runtime/RontoBoundary.class",
+				"am/ik/rontolisp/runtime/RontoFloatArray$Width.class", "am/ik/rontolisp/runtime/RontoFloatArray.class");
+		String manifest = new String(entries.get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8);
+		// A library is not a program: nobody should java -jar it, so it carries no
+		// Main-Class.
+		assertThat(manifest).contains("Manifest-Version: 1.0")
+			.contains("Created-By: rontolisp ")
+			.doesNotContain("Main-Class");
+		assertThat(new String(entries.get("META-INF/maven/com.acme/acme-kernels/pom.xml"), StandardCharsets.UTF_8))
+			.contains("<artifactId>acme-kernels</artifactId>");
+		assertThat(
+				new String(entries.get("META-INF/maven/com.acme/acme-kernels/pom.properties"), StandardCharsets.UTF_8))
+			.isEqualTo("groupId=com.acme\nartifactId=acme-kernels\nversion=1.0.0\n");
+	}
+
+	@Test
+	void aLibraryJarIsSelfContainedOnAClasspathThatCarriesNothingOfRontolisp() throws Exception {
+		Path jar = this.tempDir.resolve("kernels.jar");
+		runCli("", kernelsLibrary().toString(), "-o", jar.toString(), "--class-name", "com.acme.Kernels", "--no-main");
+		// The platform loader as parent, so nothing of rontolisp is visible except what
+		// the jar itself carries -- which is the whole claim the artifact makes.
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { jar.toUri().toURL() },
+				ClassLoader.getPlatformClassLoader())) {
+			Class<?> kernels = loader.loadClass("com.acme.Kernels");
+			assertThat(kernels.getMethod("scaledSum", double.class, double.class).invoke(null, 2.5, 3.5))
+				.isEqualTo(12.0);
+			Class<?> handle = loader.loadClass("am.ik.rontolisp.runtime.RontoFloatArray");
+			Object x = handle.getMethod("of", double[].class, int[].class)
+				.invoke(null, new double[] { 3.0, 4.0 }, new int[0]);
+			assertThat(kernels.getMethod("norm2", handle).invoke(null, x)).isEqualTo(5.0);
+		}
+	}
+
+	@Test
+	void aProgramJarKeepsItsMainClassSoJavaJarStillRunsIt() throws Exception {
+		Path program = this.tempDir.resolve("prog.lisp");
+		Files.writeString(program, "(print (+ 1 2))\n");
+		Path jar = this.tempDir.resolve("prog.jar");
+		runCli("", program.toString(), "-o", jar.toString(), "--class-name", "com.example.Prog");
+		assertThat(new String(entries(jar).get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8))
+			.contains("Main-Class: com.example.Prog");
+	}
+
+	@Test
+	void aJarOutputNeedsAClassNameBecauseItsPathNamesNoClass() throws Exception {
+		assertThatThrownBy(() -> runCli("", kernelsLibrary().toString(), "-o",
+				this.tempDir.resolve("kernels.jar").toString(), "--no-main"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--class-name");
+	}
+
+	@Test
+	void theClassNameFlagReplacesTheNameTheOutputPathWouldGive() throws Exception {
+		// -o names the FILE; --class-name names the class inside it, so a build directory
+		// no longer has to be shaped like the package.
+		Path output = this.tempDir.resolve("build/K.class");
+		runCli("", kernelsLibrary().toString(), "-o", output.toString(), "--class-name", "com.acme.Kernels",
+				"--no-main");
+		assertThat(Files.readString(output, StandardCharsets.ISO_8859_1)).contains("com/acme/Kernels");
+		// The handle runtime has no package path to hang off here, so it lands beside the
+		// output file rather than nowhere.
+		assertThat(this.tempDir.resolve("build/am/ik/rontolisp/runtime/RontoFloatArray.class")).exists();
+	}
+
+	@Test
+	void theArtifactFlagsAreRefusedOnAnOutputThatCannotCarryThem() throws Exception {
+		Path program = kernelsLibrary();
+		Path wasm = this.tempDir.resolve("k.wasm");
+		Path classFile = this.tempDir.resolve("K.class");
+		Path jar = this.tempDir.resolve("k.jar");
+		assertThatThrownBy(
+				() -> runCli("", program.toString(), "-o", wasm.toString(), "--class-name", "com.acme.Kernels"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--class-name");
+		// A bare .class has no META-INF to carry the pair in.
+		assertThatThrownBy(() -> runCli("", program.toString(), "-o", classFile.toString(), "--maven-coordinates",
+				"com.acme:kernels:1.0.0"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--maven-coordinates");
+		assertThatThrownBy(() -> runCli("", program.toString(), "-o", jar.toString(), "--class-name",
+				"com.acme.Kernels", "--no-main", "--emit-pom"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--maven-coordinates");
+		assertThatThrownBy(() -> runCli("", program.toString(), "--class-name", "com.acme.Kernels"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("-o");
+		assertThatThrownBy(() -> runCli("", program.toString(), "-o", jar.toString(), "--class-name", "9lives"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("not a Java identifier");
+	}
+
+	@Test
+	void emitPomWritesThePomBesideTheJarAndRefusesToOverwriteAFileItDidNotWrite() throws Exception {
+		Path program = kernelsLibrary();
+		Path jar = this.tempDir.resolve("kernels-1.0.0.jar");
+		Path pom = this.tempDir.resolve("kernels-1.0.0.pom");
+		runCli("", program.toString(), "-o", jar.toString(), "--class-name", "com.acme.Kernels", "--maven-coordinates",
+				"com.acme:kernels:1.0.0", "--no-main", "--emit-pom");
+		assertThat(Files.readString(pom)).contains("<artifactId>kernels</artifactId>");
+		// Rewriting our own pom is the ordinary rebuild; a hand-written one is the
+		// build's, and the jar is already committed by the time we get here.
+		runCli("", program.toString(), "-o", jar.toString(), "--class-name", "com.acme.Kernels", "--maven-coordinates",
+				"com.acme:kernels:1.0.0", "--no-main", "--emit-pom");
+		Files.writeString(pom, "<project>hand written</project>");
+		assertThatThrownBy(() -> runCli("", program.toString(), "-o", jar.toString(), "--class-name",
+				"com.acme.Kernels", "--maven-coordinates", "com.acme:kernels:1.0.0", "--no-main", "--emit-pom"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--emit-pom would overwrite");
+	}
+
+	@Test
+	void twoCompilesOfOneProgramProduceByteIdenticalJars() throws Exception {
+		// The jar is emitted output like every other artifact: one fixed entry timestamp
+		// and a fixed entry order (.kb/emitted-output-determinism.md).
+		Path program = kernelsLibrary();
+		Path first = this.tempDir.resolve("a.jar");
+		Path second = this.tempDir.resolve("b.jar");
+		for (Path jar : List.of(first, second)) {
+			runCli("", program.toString(), "-o", jar.toString(), "--class-name", "com.acme.Kernels",
+					"--maven-coordinates", "com.acme:kernels:1.0.0", "--no-main");
+		}
+		assertThat(Files.readAllBytes(first)).isEqualTo(Files.readAllBytes(second));
 	}
 
 	@Test

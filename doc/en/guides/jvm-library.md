@@ -166,15 +166,32 @@ rank the designator does not declare throws at the boundary.
 
 ## Packaging for Maven consumers
 
-The class file is already in its package directory, so a jar is one command,
-and installing it into the local repository makes it an ordinary dependency:
+`-o out.jar` compiles straight to a jar, and `--maven-coordinates` stamps that
+jar with its own identity:
 
 ```bash
-jar cf acme-kernels-1.0.0.jar com/ am/
-mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
-    -DgroupId=com.example -DartifactId=acme-kernels -Dversion=1.0.0 \
-    -Dpackaging=jar
+rontolisp kernels.lisp -o acme-kernels-1.0.0.jar \
+    --class-name com.example.Kernels \
+    --maven-coordinates com.example:acme-kernels:1.0.0 \
+    --no-main
 ```
+
+`--class-name` is not a convenience here — a `.jar` path names no class, where
+a `.class` path always did. It works for `.class` output too, where it replaces
+the name the `-o` path would give, so a build directory no longer has to be
+shaped like the package.
+
+The coordinates then ride **inside** the jar, as the
+`META-INF/maven/<groupId>/<artifactId>/pom.xml` + `pom.properties` pair every
+Maven-built jar already carries. Installing it therefore takes no coordinate
+flags at all — no `-DgroupId`, no `-DartifactId`, no `-Dversion`, no
+`-DpomFile`:
+
+```bash
+mvn install:install-file -Dfile=acme-kernels-1.0.0.jar
+```
+
+and it is an ordinary dependency from there on:
 
 ```xml
 <dependency>
@@ -184,18 +201,37 @@ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
 </dependency>
 ```
 
-(The `am/` above is `am/ik/rontolisp/runtime/`, written beside your class when
-a library declares a `:float-vector` / `:float-matrix` export — the handle
-class, so the jar still has **no dependency**. It is written at its canonical
-name rather than renamed into your package, because two rontolisp libraries
-have to agree on the type for a caller to feed one's result to the other's
-kernel; the copies are identical bytes.)
+`--emit-pom` writes that same pom next to the jar as `acme-kernels-1.0.0.pom`
+as well, for a `deploy-file` that wants it as a separate file; it refuses to
+overwrite a pom it did not write itself.
 
-A scalar/string library needs nothing else at run time — the class is
-self-contained. One acceleration note: a `--simd` build requires the consumer's
-JVM to pass `--add-modules jdk.incubator.vector`; `--blas` and `--gpu` builds
-probe for their native library at run time and degrade to the portable kernels
-when it is absent, so they need nothing from the consumer.
+### What the jar contains
+
+| entry | when |
+| --- | --- |
+| `META-INF/MANIFEST.MF` | always — with a `Main-Class` only when the class has a `main`, so `java -jar` runs a program jar and a `--no-main` library jar carries none |
+| `com/example/Kernels.class` | always |
+| `am/ik/rontolisp/runtime/*.class` | when a `:float-vector` / `:float-matrix` export declares the handle type |
+| `META-INF/maven/.../pom.xml`, `pom.properties` | with `--maven-coordinates` |
+
+The handle classes travel inside the artifact at their canonical names rather
+than renamed into your package, because two rontolisp libraries have to agree
+on the type for a caller to feed one's result to the other's kernel; the copies
+are identical bytes. Forgetting them would not be a compile error here — it
+would be a `NoClassDefFoundError` in the consumer.
+
+The generated pom's `<dependencies>` is empty, and that is the point rather
+than an omission: a compiled class embeds everything it calls, so the artifact
+really has none. One acceleration note: a `--simd` build gets its vector
+kernels only on a JVM started with `--add-modules jdk.incubator.vector` —
+without the module the class degrades to the portable scalar kernels and says
+so — and the generated pom repeats it in its `<description>`, because the
+consumer never saw the build command. `--blas` and `--gpu` builds probe for
+their native library at run time and degrade the same way, so they need nothing
+from the consumer either.
+
+Compiling the same program twice produces byte-identical jars: the entry order
+and the entry timestamps are fixed, not taken from the clock.
 
 ## Limitations
 
@@ -204,5 +240,6 @@ when it is absent, so they need nothing from the consumer.
 - A packed float array crosses at rank 1 or 2; rank 3 and above has no
   designator yet, and a general (boxed) array has none at all — `:bytes` is
   still the only designator for a non-float array.
-- The jar above carries no Maven metadata of its own and no `Main-Class`;
-  coordinates ride the `install:install-file` flags.
+- `-o out.jar` writes exactly one artifact: no `-sources` or `-javadoc` jar,
+  and no signature. `install-file` / `deploy-file` take those as their own
+  flags.

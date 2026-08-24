@@ -122,7 +122,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 echo '(print (+ 1 2))' > test.lisp
 
 java -jar $JAR test.lisp                                                    # interpreter
-java -jar $JAR test.lisp -o Prog.class && java Prog                         # JVM (keep the name path-free)
+java -jar $JAR test.lisp -o Prog.class && java Prog                         # JVM (path-free name, or --class-name)
 java -jar $JAR test.lisp -o test.wasm && wasmtime run -W gc test.wasm       # WASM preview 1
 java -jar $JAR test.lisp -o test-comp.wasm --component && \
   wasmtime run -W gc=y test-comp.wasm                                       # WASM component (WASI 0.3)

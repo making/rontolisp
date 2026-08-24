@@ -187,9 +187,61 @@ output and (in the compiler, so an embedder gets it too) a program with no
 jvm-export — `main` is the only shake root such a program has, so a main-less
 export-less class would shake to nothing. Kept ORTHOGONAL to the directive: a
 program may want both a `main` and exports (a CLI tool that is also a library),
-and only the flag says which. No `Main-Class` consequences yet (that is
-`.todo/505`'s jar work). While here: `-o com/acme/Kernels.class` now creates the
+and only the flag says which. It also decides a jar's `Main-Class` (below).
+While here: `-o com/acme/Kernels.class` now creates the
 missing parent directories (`RontoLispCli`), since the `-o` path IS the package.
+
+## `-o out.jar` — the consumable artifact
+
+`.class` and `.jar` are the SAME compile; the jar is packaging around it
+(`cli/JvmJarWriter`, `cli/MavenCoordinates`, `cli/JvmArtifactOptions`). Every flag
+that used to test "the JVM class output only" (`--blas` / `--gpu` / `--parallel` /
+`--no-main`) now tests `RontoLispCli.jvmOutput`, which is the two extensions.
+
+- **`--class-name` is a CONSEQUENCE of jar output, not a convenience.** The class name
+  WAS the `-o` path (`outputFile.replace(".class","")` handed straight to the
+  compiler), and a jar path names no class. Given, it also replaces the path-derived
+  name on a `.class` output; `JvmArtifactOptions.classRoot` then roots the travelling
+  runtime classes at the package root when the `-o` path still ends in the package
+  path (the historical behavior, byte for byte) and beside the output file when it
+  does not.
+- **The entries**, in this fixed order: the manifest (`Main-Class` exactly when the
+  class HAS a main, so `java -jar` runs a program jar and a `--no-main` library jar
+  carries none), the `META-INF/maven` pair when `--maven-coordinates` is given, the
+  class at its package path, then `JvmLispCompiler.runtimeClassFiles()` at their
+  canonical names. **The runtime classes are the trap**: leaving them out is a
+  `NoClassDefFoundError` in the CONSUMER, not an error here — pinned by
+  `RontoLispCliTest#aLibraryJarIsSelfContainedOnAClasspathThatCarriesNothingOfRontolisp`,
+  which loads the jar under the PLATFORM loader so nothing of rontolisp is visible
+  except what the jar itself carries.
+- **The embedded pom IS the feature.** With
+  `META-INF/maven/<groupId>/<artifactId>/pom.xml` + `pom.properties` present,
+  `mvn install:install-file -Dfile=out.jar` installs at the right coordinates with no
+  `-DgroupId` / `-DartifactId` / `-Dversion` / `-DpomFile`, and the pom Maven writes
+  beside the artifact is the embedded one rather than a stub. Pinned end to end by
+  `e2e/JarMavenConsumerE2eTest` (opt-in `-Drontolisp.jar.e2e=true`: it shells out to
+  Maven and installs into the developer's REAL local repository — which it must, since
+  that is what `install-file` does — under a groupId namespaced to the test and
+  deleted afterwards).
+- `<dependencies/>` is written EMPTY rather than omitted: emptiness is the property
+  that makes the artifact trivial to consume, so the file states it. The
+  `<description>` carries the `--simd` → `--add-modules jdk.incubator.vector` note:
+  since `.todo/507` a module-less JVM degrades to the scalar kernels rather than
+  failing, so the flag is worth PASSING rather than required — and the consumer, who
+  never saw the build command, has nowhere else to learn that.
+- **A jar is emitted output** ([emitted-output-determinism.md](emitted-output-determinism.md)):
+  one fixed DOS timestamp via `setTimeLocal` — `setTime(long)` converts through the
+  default zone and adds an extended-timestamp extra field, so the same build would
+  differ between machines — and a fixed entry order, the runtime classes SORTED
+  because `runtimeClassFiles()` answers a `Map.copyOf` whose iteration order is
+  per-process random.
+- `--emit-pom` writes the same pom beside the jar, the `--emit-wit`-next-to-the-`.wasm`
+  precedent, with `--emit-js-glue`'s refuse-to-overwrite guard against
+  `MavenCoordinates.POM_MARKER` (version-free, so an upgrade still recognizes the pom
+  the previous release wrote).
+- **Not ours: `install` / `deploy`.** Writing the artifact is the compiler's job;
+  putting it in a repository is Maven's, and `install-file` / `deploy-file` already do
+  it.
 
 ## Validation (all at compile time, in `JvmLispCompiler` after Pass 1)
 

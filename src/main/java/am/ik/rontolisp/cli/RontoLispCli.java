@@ -228,7 +228,7 @@ public final class RontoLispCli {
 					options.contains("--host-random"), options.contains("--host-fetch"),
 					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
-					inputFile);
+					JvmArtifactOptions.from(options), inputFile);
 		}
 		else {
 			// A side-artifact flag names a file to write BESIDE the output, so without
@@ -246,8 +246,16 @@ public final class RontoLispCli {
 						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
 			}
 			if (options.contains("--no-main")) {
-				throw new UnsupportedOperationException(
-						"--no-main compiles a JVM library class (no main method), so it needs -o <file>.class");
+				throw new UnsupportedOperationException("--no-main compiles a JVM library class (no main method), so"
+						+ " it needs -o <file>.class or -o <file>.jar");
+			}
+			// The artifact-describing flags name what a JVM compile WRITES, so without a
+			// compile there is nothing they could describe.
+			for (String flag : List.of("--class-name", "--maven-coordinates", "--emit-pom")) {
+				if (options.contains(flag)) {
+					throw new UnsupportedOperationException(flag
+							+ " describes a compiled JVM artifact, so it needs -o <file>.class" + " or -o <file>.jar");
+				}
 			}
 			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), options.contains("--blas"),
 					options.contains("--gpu"), options.contains("--parallel"), inputFile);
@@ -495,7 +503,7 @@ public final class RontoLispCli {
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
 			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit,
 			boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
-			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
+			@Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -506,7 +514,7 @@ public final class RontoLispCli {
 		try {
 			compileRecorded(source, baseDir, systemPath, dists, outputFile, dynamic, component, noWasi, optimize, noGc,
 					simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue, hostRandom, hostFetch, reentrant,
-					hostBoundary, entryFile);
+					hostBoundary, jvmArtifact, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -539,7 +547,7 @@ public final class RontoLispCli {
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
 			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit,
 			boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
-			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
+			@Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -554,12 +562,30 @@ public final class RontoLispCli {
 		// --no-main is the JVM backend's library mode (the --no-wasi reactor turn's
 		// twin): it drops the main entry point, so it only means something for a
 		// .class output.
-		if (noMain && !outputFile.endsWith(".class")) {
+		if (noMain && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--no-main compiles a JVM library class (no main method), so it"
-					+ " needs a .class output -- e.g. -o Kernels.class --no-main."
+					+ " needs a .class or .jar output -- e.g. -o Kernels.class --no-main."
 					+ " The WASM equivalent is --no-wasi (reactor mode)");
 		}
-		if (blas && !outputFile.endsWith(".class")) {
+		// --class-name names the class a JVM compile emits. It is REQUIRED for a jar
+		// (whose path names no class) and optional for a .class, where it overrides the
+		// name the -o path would give.
+		if (jvmArtifact.className() != null && !jvmOutput(outputFile)) {
+			throw new UnsupportedOperationException("--class-name names the class a JVM compile emits, so it needs a"
+					+ " .class or .jar output -- e.g. -o kernels.jar --class-name com.example.Kernels");
+		}
+		// --maven-coordinates stamps an artifact with its own identity, and the place it
+		// travels is META-INF/maven inside a JAR: a bare .class has nowhere to carry it.
+		if (jvmArtifact.coordinates() != null && !outputFile.endsWith(".jar")) {
+			throw new UnsupportedOperationException("--maven-coordinates rides inside a jar's META-INF/maven, so it"
+					+ " needs a .jar output -- e.g. -o kernels-1.0.0.jar --class-name com.example.Kernels"
+					+ " --maven-coordinates com.example:kernels:1.0.0");
+		}
+		if (jvmArtifact.emitPom() && jvmArtifact.coordinates() == null) {
+			throw new UnsupportedOperationException("--emit-pom writes the pom of the coordinates the jar carries,"
+					+ " so it needs --maven-coordinates groupId:artifactId:version");
+		}
+		if (blas && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--blas reaches the interpreter and the JVM class output only:"
 					+ " a tuned CBLAS is called through the foreign function API, which WASM does not have."
 					+ " Use --simd for the linalg: kernels on a .wasm output");
@@ -567,7 +593,7 @@ public final class RontoLispCli {
 		// --gpu is the same story one layer out: the CUDA driver and Metal are both
 		// reached through the foreign function API, so WASM cannot have either, and a
 		// silent no-op is exactly what the flag exists to prevent.
-		if (gpu && !outputFile.endsWith(".class")) {
+		if (gpu && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--gpu reaches the interpreter and the JVM class output only:"
 					+ " a GPU is driven through the foreign function API, which WASM does not have."
 					+ " Use --simd for the linalg: kernels on a .wasm output");
@@ -577,7 +603,7 @@ public final class RontoLispCli {
 		// hard errors for the same reason as above -- the flag must never be a silent
 		// no-op -- and the wasm outputs stay byte-identical to what they were.
 		requireSimdForParallel(simd, parallel);
-		if (parallel && !outputFile.endsWith(".class")) {
+		if (parallel && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--parallel reaches the interpreter and the JVM class output only:"
 					+ " a .wasm module has no threads to split the --simd kernels across."
 					+ " Use --simd alone on a .wasm output");
@@ -889,6 +915,9 @@ public final class RontoLispCli {
 				: LibraryDefunPruner.stripSystemMarkers(program);
 		byte[] bytes;
 		Map<String, byte[]> jvmRuntimeClasses = Map.of();
+		// The internal name of the class a JVM compile emitted, needed again below to
+		// place it inside a jar or to root the runtime classes beside a .class.
+		String jvmClassName = null;
 		String witText = null;
 		String glueText = null;
 		String glueFile = jsGlue ? outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".js" : null;
@@ -959,7 +988,11 @@ public final class RontoLispCli {
 			// The JVM backend cannot parse PEM in hand-assembled bytecode, so rewrite
 			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
-			String className = outputFile.replace(".class", "");
+			// The class name is the -o path with .class taken off, or --class-name where
+			// one was given -- and a jar output has no path to read one from, so there
+			// the flag is required (JvmArtifactOptions.internalClassName).
+			String className = jvmArtifact.internalClassName(outputFile);
+			jvmClassName = className;
 			JvmLispCompiler jvmCompiler = new JvmLispCompiler(className, dynamic, optimize, simd, blas, gpu, parallel)
 				.noMain(noMain)
 				.runtimeFeatures(features.names());
@@ -976,17 +1009,30 @@ public final class RontoLispCli {
 			if (outputPath.getParent() != null) {
 				Files.createDirectories(outputPath.getParent());
 			}
-			Files.write(outputPath, bytes);
-			if (!jvmRuntimeClasses.isEmpty()) {
-				// Rooted where the output class's own package root is -- the -o path IS
-				// the package, so `-o com/acme/Kernels.class` writes them under the same
-				// tree and `javac -cp .` / `jar cf` pick them up with no arrangement.
-				String root = outputFile.substring(0,
-						outputFile.length() - (outputFile.replace(".class", "").length() + ".class".length()));
-				for (Map.Entry<String, byte[]> runtimeClass : jvmRuntimeClasses.entrySet()) {
-					Path runtimePath = Path.of(root + runtimeClass.getKey());
-					Files.createDirectories(Objects.requireNonNull(runtimePath.getParent()));
-					Files.write(runtimePath, runtimeClass.getValue());
+			if (outputFile.endsWith(".jar")) {
+				// A jar is the same bytecode with the packaging a consumer needs around
+				// it: the manifest, the runtime classes (which the .class path writes
+				// beside the output -- leaving them out is a NoClassDefFoundError in the
+				// consumer, not an error here), and the coordinates when given.
+				Files.write(outputPath, JvmJarWriter.jar(Objects.requireNonNull(jvmClassName), bytes, jvmRuntimeClasses,
+						!noMain, jvmArtifact.coordinates(), simd));
+				if (jvmArtifact.emitPom()) {
+					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd);
+				}
+			}
+			else {
+				Files.write(outputPath, bytes);
+				if (!jvmRuntimeClasses.isEmpty()) {
+					// Rooted where the output class's own package root is -- the -o path
+					// IS the package, so `-o com/acme/Kernels.class` writes them under
+					// the same tree and `javac -cp .` / `jar cf` pick them up with no
+					// arrangement.
+					String root = JvmArtifactOptions.classRoot(outputFile, Objects.requireNonNull(jvmClassName));
+					for (Map.Entry<String, byte[]> runtimeClass : jvmRuntimeClasses.entrySet()) {
+						Path runtimePath = Path.of(root + runtimeClass.getKey());
+						Files.createDirectories(Objects.requireNonNull(runtimePath.getParent()));
+						Files.write(runtimePath, runtimeClass.getValue());
+					}
 				}
 			}
 			if (wit) {
@@ -1072,6 +1118,31 @@ public final class RontoLispCli {
 		return component ? WitExportDirective.Backend.WASM_COMPONENT : WitExportDirective.Backend.WASM_GC;
 	}
 
+	/**
+	 * A JVM compile: a bare {@code .class}, or the {@code .jar} that packages it. The two
+	 * carry the same bytecode, so every flag that reaches the JVM backend reaches both.
+	 */
+	private static boolean jvmOutput(String outputFile) {
+		return outputFile.endsWith(".class") || outputFile.endsWith(".jar");
+	}
+
+	/**
+	 * {@code --emit-pom}: writes the generated pom NEXT to the jar as well, the way
+	 * {@code --emit-wit} writes the world next to the {@code .wasm} -- for a
+	 * {@code deploy-file} that wants the pom as a separate file. Only a pom this flag
+	 * wrote before is overwritten; anything else is someone's own and is refused by name.
+	 */
+	private static void writePom(String outputFile, MavenCoordinates coordinates, boolean simd) throws IOException {
+		Path pom = Path.of(outputFile.substring(0, outputFile.length() - ".jar".length()) + ".pom");
+		if (Files.exists(pom)
+				&& !Files.readString(pom, StandardCharsets.UTF_8).startsWith(MavenCoordinates.POM_MARKER)) {
+			throw new UnsupportedOperationException("--emit-pom would overwrite " + pom
+					+ ", which it did not write (it does not start with \"" + MavenCoordinates.POM_MARKER
+					+ "\"). Compile to a different -o name, or move that file aside");
+		}
+		Files.writeString(pom, coordinates.pomXml(simd));
+	}
+
 	// Emits a one-line warning to stderr. Kept off stdout (this.out) so it never corrupts
 	// a
 	// compiled program's piped output or the REPL transcript.
@@ -1085,6 +1156,7 @@ public final class RontoLispCli {
 		this.out.println("  file               Interpret the file");
 		this.out.println("  -e \"FORMS\"         Interpret the given program instead of a file (--eval)");
 		this.out.println("  file -o out.class   Compile to JVM bytecode");
+		this.out.println("  file -o out.jar     Compile to a jar (needs --class-name)");
 		this.out.println("  file -o out.wasm    Compile to WASM");
 		this.out.println();
 		this.out.println("Subcommands:");
@@ -1136,12 +1208,28 @@ public final class RontoLispCli {
 		this.out.println("                     world with --world NAME when the file declares several.");
 		this.out.println("                     The program then IMPLEMENTS the .wit: the compiler checks every");
 		this.out.println("                     defun against it, so no :params/:returns list is written by hand");
-		this.out.println("  --no-main          With a .class output: compile a LIBRARY class instead of a");
-		this.out.println("                     command -- no main method, and the class is entered through");
-		this.out.println("                     its rontolisp:jvm-export typed methods (at least one is");
-		this.out.println("                     required; main is the only tree-shaker root otherwise). The");
-		this.out.println("                     top level runs once, at class initialization, exactly as a");
-		this.out.println("                     --no-wasi reactor runs its top level at instantiation");
+		this.out.println("  --no-main          With a .class or .jar output: compile a LIBRARY class");
+		this.out.println("                     instead of a command -- no main method (and no Main-Class in");
+		this.out.println("                     a jar), and the class is entered through its");
+		this.out.println("                     rontolisp:jvm-export typed methods (at least one is required;");
+		this.out.println("                     main is the only tree-shaker root otherwise). The top level");
+		this.out.println("                     runs once, at class initialization, exactly as a --no-wasi");
+		this.out.println("                     reactor runs its top level at instantiation");
+		this.out.println("  --class-name NAME  With a .class or .jar output: the fully qualified name of");
+		this.out.println("                     the emitted class (com.example.Kernels). REQUIRED for a .jar,");
+		this.out.println("                     whose path names no class; for a .class it replaces the name");
+		this.out.println("                     the -o path would give, so -o build/K.class can still be");
+		this.out.println("                     com.example.Kernels");
+		this.out.println("  --maven-coordinates G:A:V");
+		this.out.println("                     With a .jar output: embed META-INF/maven/G/A/pom.xml and");
+		this.out.println("                     pom.properties, so the coordinates travel INSIDE the jar and");
+		this.out.println("                     `mvn install:install-file -Dfile=out.jar` needs no -DgroupId,");
+		this.out.println("                     -DartifactId, -Dversion or -DpomFile. The generated pom has an");
+		this.out.println("                     empty <dependencies>, which is the truth: a compiled class");
+		this.out.println("                     embeds everything it calls");
+		this.out.println("  --emit-pom         Write that same pom next to the jar as out.pom (for");
+		this.out.println("                     deploy-file), the way --emit-wit writes the world next to the");
+		this.out.println("                     .wasm. Needs --maven-coordinates");
 		this.out.println("  --no-wasi          Emit WASM with no WASI imports (reactor mode)");
 		this.out.println("                     Instantiates without an import object (beyond any");
 		this.out.println("                     rontolisp:wasm-import host functions); pure-compute");

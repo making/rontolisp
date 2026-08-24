@@ -173,16 +173,31 @@ GEMV での計測では反復あたり 0.070 ms — Lisp から一度も出な�
 
 ## Maven コンシューマ向けのパッケージング
 
-クラスファイルはすでにパッケージディレクトリの中にあるので、jar は 1
-コマンドで作れ、ローカルリポジトリにインストールすれば普通の依存関係に
-なります。
+`-o out.jar` は直接 jar へコンパイルし、`--maven-coordinates` はその jar に
+自身の座標を刻み込みます。
 
 ```bash
-jar cf acme-kernels-1.0.0.jar com/ am/
-mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
-    -DgroupId=com.example -DartifactId=acme-kernels -Dversion=1.0.0 \
-    -Dpackaging=jar
+rontolisp kernels.lisp -o acme-kernels-1.0.0.jar \
+    --class-name com.example.Kernels \
+    --maven-coordinates com.example:acme-kernels:1.0.0 \
+    --no-main
 ```
+
+ここでの `--class-name` は便利機能ではありません — `.class` のパスは常に
+クラス名そのものでしたが、`.jar` のパスはどのクラスも名指ししないからです。
+`.class` 出力にも使え、その場合は `-o` のパスが与える名前を置き換えるので、
+ビルドディレクトリをパッケージの形に合わせる必要はもうありません。
+
+座標は jar の**内側**に乗ります。Maven でビルドされた jar がすでに持っている
+`META-INF/maven/<groupId>/<artifactId>/pom.xml` + `pom.properties` の組がその
+場所です。したがってインストールに座標のフラグは一切要りません —
+`-DgroupId` も `-DartifactId` も `-Dversion` も `-DpomFile` も不要です。
+
+```bash
+mvn install:install-file -Dfile=acme-kernels-1.0.0.jar
+```
+
+あとは普通の依存関係です。
 
 ```xml
 <dependency>
@@ -192,19 +207,37 @@ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
 </dependency>
 ```
 
-(上の `am/` は `am/ik/rontolisp/runtime/` です。ライブラリが
-`:float-vector` / `:float-matrix` のエクスポートを宣言したときにクラスの隣へ
-書き出されるハンドルクラスであり、これにより jar は**依存関係を持たない**まま
-です。あなたのパッケージへリネームせず正準名のまま書き出すのは、ある
-ライブラリの結果を別のライブラリのカーネルへ渡すために、2 つの rontolisp
-ライブラリが型について一致していなければならないからです。コピーどうしは
-同一のバイト列です。)
+`--emit-pom` は同じ pom を `acme-kernels-1.0.0.pom` として jar の隣にも
+書き出します。pom を独立したファイルとして欲しい `deploy-file` のためです。
+自分で書いていない pom を上書きすることは拒否します。
 
-スカラー/文字列のライブラリは実行時にこれ以外何も必要としません — クラスは
-自己完結しています。アクセラレーションについて 1 点: `--simd` ビルドは
-コンシューマの JVM に `--add-modules jdk.incubator.vector` を要求します。
-`--blas` と `--gpu` ビルドは実行時にネイティブライブラリを探し、なければ
-ポータブルなカーネルへ縮退するので、コンシューマ側には何も要りません。
+### jar に入るもの
+
+| エントリ | 条件 |
+| --- | --- |
+| `META-INF/MANIFEST.MF` | 常に。`Main-Class` はクラスが `main` を持つときだけなので、`java -jar` はプログラムの jar を実行でき、`--no-main` のライブラリ jar は持ちません |
+| `com/example/Kernels.class` | 常に |
+| `am/ik/rontolisp/runtime/*.class` | `:float-vector` / `:float-matrix` のエクスポートがハンドル型を宣言したとき |
+| `META-INF/maven/.../pom.xml`, `pom.properties` | `--maven-coordinates` があるとき |
+
+ハンドルクラスはあなたのパッケージへリネームされず、正準名のままアーティファクトの
+中を運ばれます。ある ライブラリの結果を別のライブラリのカーネルへ渡すために、2 つの
+rontolisp ライブラリが型について一致していなければならないからです。コピーどうしは
+同一のバイト列です。これを入れ忘れてもここではコンパイルエラーになりません —
+コンシューマ側の `NoClassDefFoundError` になります。
+
+生成される pom の `<dependencies>` は空で、それは省略ではなく要点です。
+コンパイルされたクラスは呼び出すものをすべて埋め込むので、アーティファクトは
+本当に依存関係を持ちません。アクセラレーションについて 1 点: `--simd` ビルドが
+ベクトルカーネルを得られるのは `--add-modules jdk.incubator.vector` 付きで
+起動された JVM の上だけです — モジュールがなければクラスはポータブルな
+スカラーカーネルへ縮退し、その旨を出力します。コンシューマはビルドコマンドを
+見ていないので、生成される pom も `<description>` でそれを伝えます。`--blas` と
+`--gpu` ビルドは実行時にネイティブライブラリを探し、同じように縮退するので、
+やはりコンシューマ側には何も要りません。
+
+同じプログラムを 2 回コンパイルすればバイト単位で同一の jar になります。
+エントリの順序もタイムスタンプも固定で、時計から取っていません。
 
 ## 制限
 
@@ -214,5 +247,6 @@ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
 - パック済み float 配列が渡れるのはランク 1 か 2 です。ランク 3 以上の指定子は
   まだなく、一般 (ボックス化) 配列には指定子がありません — float 以外の配列は
   今も `:bytes` だけです。
-- 上の jar は自前の Maven メタデータも `Main-Class` も持ちません。座標は
-  `install:install-file` のフラグで渡します。
+- `-o out.jar` が書き出すアーティファクトは 1 つだけです。`-sources` や
+  `-javadoc` の jar も署名もありません。それらは `install-file` /
+  `deploy-file` 自身のフラグで扱います。
