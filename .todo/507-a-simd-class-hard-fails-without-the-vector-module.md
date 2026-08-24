@@ -53,9 +53,14 @@ define fails:
 hard-fails on an unequipped runtime, and the other three already state the opposite
 contract in `--help`.
 
-Check `--parallel` at the same time (it is a `--simd` modifier, so it degrades with it),
-and check what `--gpu`'s `_gpuInit` does on a JVM missing the FFM permissions rather than
-missing a device -- it may have the same gap for a different reason.
+Check `--parallel` at the same time (it is a `--simd` modifier, so it degrades with it).
+`--gpu` is already CLEAR on both counts and needs nothing here -- verified 2026-08-24 on a
+machine with no CUDA and no Metal: a `--gpu` class answers correctly (unaccelerated) both
+with and without `--enable-native-access=ALL-UNNAMED`, so the missing device and the
+missing FFM permission are both already degradations rather than failures. `--blas` is
+clear too (it binds a real OpenBLAS when there is one and runs unaccelerated when there is
+not). **`--simd` is the only one of the four that hard-fails**, which is the whole reason
+this item exists.
 
 ## Acceptance
 

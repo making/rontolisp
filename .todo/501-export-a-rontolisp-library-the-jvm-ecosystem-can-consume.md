@@ -27,6 +27,47 @@ against the Vector API or the FFM API by hand. The kernels are the asset; the `.
 a jail. A Java caller cannot get at them, and a `.class` in the default package cannot be
 consumed by a Maven project even if it could.
 
+## The consumption strategy: one story, two entry points
+
+Not "two alternatives" -- they are the same artifact reached from the two situations a
+Java project is actually in, and `.todo/506` is the primary one.
+
+**In-project (the default, `.todo/506`).** The Lisp is another source set. Nothing about
+packaging changes, because Maven already knows how to package `target/classes`:
+
+```
+pom.xml                                  <- one <plugin> block
+src/main/lisp/com/acme/Kernels.lisp      <- kernels + (rontolisp:jvm-export 'norm2 ...)
+src/main/java/app/App.java               <- Kernels.norm2(vec)
+$ mvn package                            <- one jar, Java and Lisp classes together
+```
+
+This is what every JVM-language plugin does (kotlin-maven-plugin, scala-maven-plugin) and
+it is the shape a Java developer expects. `mvn install` / `deploy` / a Gradle consumer /
+an IDE all work with no further concepts, and the Lisp source ships in the same repo as
+the code that calls it -- which is the case that makes the kernels worth writing in
+rontolisp at all.
+
+**Shipped-library (`.todo/505`).** When the kernel library is built separately from its
+consumers -- a team publishing kernels to other teams, a non-Maven consumer, anything
+being pushed to a repository -- the CLI produces the jar directly and the coordinates ride
+inside it:
+
+```
+$ rontolisp kernel.lisp -o acme-kernels-1.0.0.jar \
+      --class-name com.acme.Kernels --maven-coordinates com.acme:acme-kernels:1.0.0 \
+      --no-main --simd
+$ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar     # no -DgroupId, no -DpomFile
+```
+
+Then it is an ordinary `<dependency>`. Verified end to end in the spike.
+
+**What a consumer needs beyond the jar**, and it is short: nothing for a scalar/string
+export; `rontolisp-runtime` for an array export (`.todo/504` -- the handle types have to
+be shared or two libraries cannot chain); `--add-modules jdk.incubator.vector` for a
+`--simd` build until `.todo/507` makes that degrade instead of fail. `--blas` and `--gpu`
+need nothing at build time and degrade on their own at run time already.
+
 ## The spike (2026-08-24, all of it verified, none of it kept)
 
 Library file, no top-level call, compiled `-o com/acme/Kernels.class --simd`:
@@ -49,17 +90,20 @@ zero-copy by construction. A hand-written 30-line facade + `jar` + `mvn install:
 gave a plain Maven project `Vec.norm2(new double[]{3,4}) == 5.0` with a `--simd` kernel
 underneath.
 
-**What the measurement says.** 2^20 doubles, 200 iterations, Oracle GraalVM 25.0.4:
+**What the measurement says.** 2^20 doubles, 300 iterations after 3000 warm-up calls,
+Oracle GraalVM 25.0.4:
 
-| | ms/call |
-|---|---|
-| plain Java loop (C2 auto-vectorized) | 0.90 |
-| `Kernels.NORM2` on a pre-packed `double[]` | **0.30** |
-| the same through a facade that copies `double[]` in | 2.5-2.9 |
+| | ms/call | vs plain Java |
+|---|---|---|
+| plain Java loop (C2 auto-vectorized) | 0.90 | 1.0x |
+| `Kernels.NORM2` on a pre-packed `double[]` | **0.27** | **3.3x** |
+| the same behind an opaque handle (`.todo/504`'s design) | **0.27** | **3.3x** |
+| the same behind a facade that copies `double[]` per call | 2.67 | 0.34x |
 
-The kernel is 3x the hand-written Java loop. A boundary that copies is 8x the kernel and
-turns that 3x win into a 3x loss. **The API shape is therefore not a taste question** --
-`.todo/504`.
+The kernel is 3.3x the hand-written Java loop, and **the handle design keeps all of it** --
+the extra `getfield` is below measuring noise. The last row is the naive API measured in
+order to RULE IT OUT: a per-call copy is ~10x the kernel and turns the 3.3x win into a 3x
+loss. So the target of this whole item is the 3.3x, and `.todo/504` is how it is kept.
 
 **The six things that make it unsupported.** Each is a child item above except the last
 two, which are notes for whoever takes `.todo/503`:
@@ -91,6 +135,25 @@ two, which are notes for whoever takes `.todo/503`:
    typed boundary is not a convenience over this; it is the only safe shape.
 6. `-o com/acme/Kernels.class` does not create `com/acme/`
    (`NoSuchFileException`). One `Files.createDirectories` in `RontoLispCli`.
+
+## Where this can be built
+
+**No GPU needed for any of it except one paragraph.** Verified 2026-08-24 on Linux x86_64
+with no CUDA and no Metal (OpenBLAS present, Vector API available):
+
+- `.todo/502` is fully reproducible and verifiable here for ALL FOUR bridges. The failure
+  is at `Lookup.defineClass`, which happens before any device probe -- a packaged `--gpu`
+  class dies with `RontoLispGpuGpuDevice not in same package as lookup class` on a
+  device-less machine, and the same program in the default package answers correctly
+  (unaccelerated). So the fix and its test need no device.
+- `.todo/503`, `.todo/505`, `.todo/506`, `.todo/507`, `.todo/508` touch no device path at
+  all. `--simd` and `--blas` both run for real here, which covers the acceleration story
+  end to end.
+- **The one exception**: `.todo/504`'s "`--gpu` residency" paragraph -- whether a handle a
+  `--gpu` kernel returns forces a materialization the next call would only re-upload.
+  Designing and implementing the handle needs nothing; confirming it does not defeat the
+  resident/lazy tier (`.todo/492`/`494`) needs a device. Build it here, verify that one
+  interaction on the GB10.
 
 ## Acceptance
 
