@@ -24,3 +24,8 @@ git push origin ${VERSION}
 ./set-next-minor-version.sh
 git push origin develop
 ```
+
+`rontolisp-maven-plugin/` is outside the root reactor but rides this cycle: it embeds a
+rontolisp, so its version says which one. The version scripts above set it together with
+the root pom, and the deploy job publishes it right after the core artifact — nothing
+extra to run by hand.

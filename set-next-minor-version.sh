@@ -6,5 +6,8 @@ PATCH_VERSION=$(echo ${CURRENT_VERSION} | awk -F '.' '{print $3}' )
 NEXT_MINOR_VERSION="${MAJOR_VERSION}.$((${MINOR_VERSION} + 1)).0-SNAPSHOT"
 
 ./mvnw versions:set -DnewVersion="${NEXT_MINOR_VERSION}" -DallowSnapshots -DgenerateBackupPoms=false
-git add pom.xml
+# rontolisp-maven-plugin is outside the reactor but embeds this rontolisp, so its
+# version has to say which one.
+./mvnw -f rontolisp-maven-plugin/pom.xml versions:set -DnewVersion="${NEXT_MINOR_VERSION}" -DallowSnapshots -DgenerateBackupPoms=false
+git add pom.xml rontolisp-maven-plugin/pom.xml
 git commit -m "Bump to ${NEXT_MINOR_VERSION}"

@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!--
+		Compiles src/main/lisp into target/classes, so a Maven project can keep
+		rontolisp kernels beside its Java and package both in one jar. Independent
+		of the rontolisp core project (separate reactor), because a Maven plugin
+		must depend on maven-plugin-api / maven-core and the core libraries are
+		dependency-free: docs-tool/ is the same arrangement. Built and run
+		separately.
+
+		  ../mvnw -f rontolisp-maven-plugin/pom.xml test
+		  ../mvnw -f rontolisp-maven-plugin/pom.xml install
+
+		It depends on the rontolisp artifact by coordinates, so a SNAPSHOT build
+		needs `../mvnw install -DskipTests` first. Its version tracks the
+		rontolisp it embeds: the release scripts bump both.
+	-->
+
+	<groupId>am.ik.rontolisp</groupId>
+	<artifactId>rontolisp-maven-plugin</artifactId>
+	<version>0.1.0-SNAPSHOT</version>
+	<packaging>maven-plugin</packaging>
+	<name>rontolisp-maven-plugin</name>
+	<description>Compiles src/main/lisp into target/classes with the rontolisp JVM backend</description>
+	<url>https://github.com/making/rontolisp</url>
+
+	<licenses>
+		<license>
+			<name>Apache License, Version 2.0</name>
+			<url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+			<distribution>repo</distribution>
+		</license>
+	</licenses>
+	<scm>
+		<url>https://github.com/making/rontolisp</url>
+		<connection>scm:git:git@github.com:making/rontolisp.git</connection>
+		<developerConnection>scm:git:git@github.com:making/rontolisp.git
+		</developerConnection>
+	</scm>
+	<developers>
+		<developer>
+			<id>making</id>
+			<name>Toshiaki Maki</name>
+			<email>makingx@gmail.com</email>
+			<url>https://ik.am</url>
+		</developer>
+	</developers>
+
+	<properties>
+		<java.version>25</java.version>
+		<maven.compiler.release>${java.version}</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<!-- The rontolisp the plugin compiles with: always this plugin's own version. -->
+		<rontolisp.version>${project.version}</rontolisp.version>
+		<maven.version>3.9.9</maven.version>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>am.ik.rontolisp</groupId>
+			<artifactId>rontolisp</artifactId>
+			<version>${rontolisp.version}</version>
+			<exclusions>
+				<!-- The REPL's line editor. A build never opens one. -->
+				<exclusion>
+					<groupId>org.jline</groupId>
+					<artifactId>jline</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.maven</groupId>
+			<artifactId>maven-plugin-api</artifactId>
+			<version>${maven.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.maven</groupId>
+			<artifactId>maven-core</artifactId>
+			<version>${maven.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.maven.plugin-tools</groupId>
+			<artifactId>maven-plugin-annotations</artifactId>
+			<version>3.15.1</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<version>5.11.4</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<version>3.27.0</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.13.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.5.2</version>
+				<configuration>
+					<systemPropertyVariables>
+						<!-- The version MavenBuildE2eTest looks for in the local repository. -->
+						<rontolisp.plugin.version>${project.version}</rontolisp.plugin.version>
+					</systemPropertyVariables>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-plugin-plugin</artifactId>
+				<version>3.15.2</version>
+				<configuration>
+					<goalPrefix>rontolisp</goalPrefix>
+				</configuration>
+				<dependencies>
+					<!--
+						The descriptor goal reads the class files of every compile-scope
+						dependency to find inherited @Parameter fields, and rontolisp is
+						compiled at Java 25 (class file major 69). The ASM the released
+						plugin carries stops before that and fails the build with
+						"Unsupported class file major version 69", so it gets a current
+						one.
+					-->
+					<dependency>
+						<groupId>org.ow2.asm</groupId>
+						<artifactId>asm</artifactId>
+						<version>9.10.1</version>
+					</dependency>
+				</dependencies>
+			</plugin>
+			<!--
+				Same formatter, same version as the root project: this module is
+				outside that reactor, so it needs its own declaration to be held to
+				the one style. `validate` fails the build on unformatted sources;
+				`spring-javaformat:apply` fixes them.
+			-->
+			<plugin>
+				<groupId>io.spring.javaformat</groupId>
+				<artifactId>spring-javaformat-maven-plugin</artifactId>
+				<version>0.0.47</version>
+				<executions>
+					<execution>
+						<phase>validate</phase>
+						<goals>
+							<goal>validate</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.sonatype.central</groupId>
+				<artifactId>central-publishing-maven-plugin</artifactId>
+				<version>0.11.0</version>
+				<extensions>true</extensions>
+				<configuration>
+					<publishingServerId>central</publishingServerId>
+					<autoPublish>true</autoPublish>
+					<waitUntil>published</waitUntil>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+</project>

@@ -64,7 +64,7 @@ at every rank and every width. `BoundaryType.FLOAT_VECTOR` / `FLOAT_MATRIX` carr
 instead of failing later in a component lift.
 
 **The measurement is the design, and it is not a tradeoff.** `examples/jvm/bench/`, in the
-repo because it is the number the whole of `.todo/501` rests on (2^20 doubles, 300
+repo because it is the number this whole boundary rests on (2^20 doubles, 300
 iterations after 3000 warm-ups, `--simd`, Oracle GraalVM 25.0.4, Linux x86_64):
 
 | | ms/call | vs plain Java |
@@ -255,6 +255,64 @@ that used to test "the JVM class output only" (`--blas` / `--gpu` / `--parallel`
 - **Not ours: `install` / `deploy`.** Writing the artifact is the compiler's job;
   putting it in a repository is Maven's, and `install-file` / `deploy-file` already do
   it.
+
+## `rontolisp-maven-plugin` — `src/main/lisp` as a source set
+
+The other entry point of the same story, and the PRIMARY one: in a project that owns both
+halves, the Lisp is not a shipped artifact at all, it is another source set. One
+`<plugin>` block, `src/main/lisp/com/acme/Kernels.lisp` beside `src/main/java`, and
+`mvn package` produces one jar with both — Maven already knows how to package
+`target/classes`, so no jar writer, no coordinates flag and no `install-file` is involved.
+Its own module (`rontolisp-maven-plugin/`, outside the root reactor like `docs-tool/`,
+depending on the rontolisp artifact by coordinates), goals `compile` and `testCompile`,
+one parameter per JVM-reaching CLI flag under the same name.
+
+**The path IS the class name** (`src/main/lisp/com/acme/Kernels.lisp` →
+`com.acme.Kernels`), the convention every JVM-language plugin uses; a path segment that is
+not a Java identifier is refused by name rather than producing an unusable class.
+
+**`process-sources`, not `compile` — and this is measured, not chosen.** The classes the
+goal writes (the kernel class, and the `am.ik.rontolisp.runtime` handle a
+`:float-vector` export hands out) are what `src/main/java` compiles AGAINST, so they must
+exist before javac. Maven's model builder merges the lifecycle-injected plugins AHEAD of
+the POM-declared ones, so a goal bound to `compile` runs AFTER
+`maven-compiler-plugin:compile`: bound there, the sample project fails with
+`package com.example does not exist`. `process-sources` / `process-test-sources` is the
+only ordering declaration order cannot break, and it is what `kotlin-maven-plugin`
+documents for the same mixed-source reason. `MavenBuildE2eTest` is the pin, and it is a
+REAL Maven build — nothing else can see a phase-ordering regression.
+
+**`noMain` defaults to TRUE**, unlike the CLI's flag: a Lisp source set is a library by
+definition, and an export-less class would shake to nothing under the default
+`--optimize`. So a source file with no `rontolisp:jvm-export` fails the build instead of
+producing an empty class; `<noMain>false</noMain>` keeps a `main` beside the exports.
+
+**Staleness is all-or-nothing**, which is `maven-compiler-plugin`'s own rule and the only
+safe one here: a `(load "...")` splices one source into another, so a file whose own
+timestamp did not move can still need recompiling. A runtime class is rewritten only when
+its bytes differ, so an unchanged one does not make the next build look stale.
+
+### The seam: `cli/CompileFrontend` + `cli/JvmSourceCompiler`
+
+The plugin compiles IN PROCESS, not by shelling out to the CLI — and the reason is that
+the front end is where the work is. `cli/CompileFrontend` is the whole of it (the read
+with the target's feature set, the `(load ...)` inlining, user-macro expansion, the
+library splice chain, the WIT lowerings, the `boundp` fold, the library tree-shaker), in
+ONE order-critical place that all four backends and every embedder share.
+`cli/JvmSourceCompiler` is the public embedder entry point: fluent like `JvmLispCompiler`
+itself, source text in, class bytes plus travelling runtime classes out, nothing written
+to disk. `RontoLispCli`'s `-o out.class` / `-o out.jar` path runs the SAME backend half
+(`compileProgram`), which is what
+`JvmSourceCompilerTest#theEmbeddedCompileIsByteIdenticalToTheCommandLines` pins — an
+embedder that got a different program from the same source would be a second compiler.
+Diagnostics are shared too (`cli/CompileDiagnostics`), so an embedder's failure carries
+the same `file:line:column:` prefix the command line prints, and the plugin hands it to
+Maven verbatim as a `MojoFailureException`.
+
+**Its release rides with the core's.** The plugin embeds a rontolisp, so its version must
+say which one: the version scripts (`set-release-version.sh`,
+`set-next-{patch,minor}-version.sh`) set the module's version and its
+`rontolisp.version` property together, and CI deploys it right after the core.
 
 ## Validation (all at compile time, in `JvmLispCompiler` after Pass 1)
 

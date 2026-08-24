@@ -171,7 +171,68 @@ GEMV での計測では反復あたり 0.070 ms — Lisp から一度も出な�
 ランク 2 の `dims()` を持つ同じクラスです。指定子が宣言していないランクは
 境界でスローされます。
 
+## Maven プロジェクト: `src/main/lisp`
+
+カーネルとそれを呼ぶ Java が同じプロジェクトにあるなら、Lisp をアーティファクトにす
+る必要はありません。単なるもう 1 つのソースセットであり、`target/classes` のパッケー
+ジング方法は Maven がすでに知っています。`<plugin>` ブロック 1 つが設定のすべてです:
+
+```xml
+<plugin>
+    <groupId>am.ik.rontolisp</groupId>
+    <artifactId>rontolisp-maven-plugin</artifactId>
+    <version>VERSION</version>
+    <executions>
+        <execution>
+            <goals><goal>compile</goal></goals>
+            <configuration>
+                <simd>true</simd>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+```
+pom.xml
+src/main/lisp/com/example/Kernels.lisp   <- the kernels, with their jvm-export declarations
+src/main/java/app/App.java               <- Kernels.scaledSum(...), Kernels.norm2(...)
+```
+
+```bash
+mvn package     # one jar, Lisp classes and Java classes together
+```
+
+**`src/main/lisp` 以下のパスがクラス名になります**。`.java` ファイルのパスと同じで、
+`src/main/lisp/com/example/Kernels.lisp` は `com.example.Kernels` になり、ファイルごと
+の宣言は不要です。出力は通常の場所に置かれた通常のクラスなので、`mvn install`、
+`mvn deploy`、生成された jar を使う Gradle コンシューマ、IDE のいずれも追加の概念なし
+に動きます。
+
+ゴールは javac より前の `process-sources` で走ります。`src/main/java` が書き出された
+もの (カーネルのクラスと `RontoFloatArray` ハンドル型の両方) に対してコンパイルされる
+からです。`testCompile` ゴールはその双子で、`process-test-sources` で `src/test/lisp`
+を `target/test-classes` にコンパイルします。
+
+JVM バックエンドに届くフラグはすべて同じ名前のパラメータになります — `simd`、`blas`、
+`gpu`、`parallel`、`optimize`、`dynamic`、`noPrune`、`systemPath`、`dists` — そして
+`skip` (`-Drontolisp.skip=true`) でゴールを止められます。コマンドラインと既定値が違う
+のは 1 つだけ、`noMain` が **オン** であることです。ソースセットはライブラリだからで、
+`rontolisp:jvm-export` を持たないファイルは中身のないクラスを生む代わりにビルドを失敗
+させます。`main` をエクスポートと並べて残すなら `<noMain>false</noMain>` を指定します。
+
+コンパイルエラーは rontolisp の診断をそのまま持つビルド失敗として報告されます。
+`file:line:column:` の接頭辞も含まれるので IDE から飛べます。コンパイルは
+`maven-compiler-plugin` と同じ意味でインクリメンタルです。古いものが 1 つもなければ何
+もコンパイルせず、1 つでもあればソースセット全体をコンパイルします — `(load "...")`
+はあるファイルを別のファイルに差し込むので、ファイル単位のタイムスタンプだけは信用で
+きないからです。
+
 ## Maven コンシューマ向けのパッケージング
+
+カーネルを使う側とは *別に* ビルドする場合 — 他チームへ配布する、Maven ではない
+コンシューマがいる、リポジトリに publish する — は、コンパイラ自身がアーティファクト
+を書きます。
 
 `-o out.jar` は直接 jar へコンパイルし、`--maven-coordinates` はその jar に
 自身の座標を刻み込みます。

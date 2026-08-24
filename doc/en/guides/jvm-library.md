@@ -164,10 +164,68 @@ Both element widths cross the same designator (`of(double[])` and
 a matrix is the same class with a rank-2 `dims()` rather than a second type. A
 rank the designator does not declare throws at the boundary.
 
+## A Maven project: `src/main/lisp`
+
+If the kernels and the Java that calls them live in the same project, the Lisp does not
+have to become an artifact at all — it is just another source set, and Maven already
+knows how to package `target/classes`. One `<plugin>` block is the whole setup:
+
+```xml
+<plugin>
+    <groupId>am.ik.rontolisp</groupId>
+    <artifactId>rontolisp-maven-plugin</artifactId>
+    <version>VERSION</version>
+    <executions>
+        <execution>
+            <goals><goal>compile</goal></goals>
+            <configuration>
+                <simd>true</simd>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+```
+pom.xml
+src/main/lisp/com/example/Kernels.lisp   <- the kernels, with their jvm-export declarations
+src/main/java/app/App.java               <- Kernels.scaledSum(...), Kernels.norm2(...)
+```
+
+```bash
+mvn package     # one jar, Lisp classes and Java classes together
+```
+
+**The path under `src/main/lisp` is the class name**, exactly as a `.java` file's path is:
+`src/main/lisp/com/example/Kernels.lisp` becomes `com.example.Kernels`, and nothing has to
+be declared per file. `mvn install`, `mvn deploy`, a Gradle consumer of the resulting jar
+and an IDE all work with no further concepts, because the output is ordinary classes in
+the ordinary place.
+
+The goal runs at `process-sources`, before javac, because `src/main/java` compiles
+*against* what it writes — the kernel class and the `RontoFloatArray` handle type both.
+The `testCompile` goal is its twin: `src/test/lisp` into `target/test-classes`, at
+`process-test-sources`.
+
+Every flag that reaches the JVM backend is a parameter under the same name — `simd`,
+`blas`, `gpu`, `parallel`, `optimize`, `dynamic`, `noPrune`, `systemPath`, `dists` — and
+`skip` (`-Drontolisp.skip=true`) turns the goal off. One default differs from the command
+line: `noMain` is **on**, because a source set is a library, so a file with no
+`rontolisp:jvm-export` fails the build rather than producing a class with nothing in it.
+Set `<noMain>false</noMain>` to keep a `main` beside the exports.
+
+A compile error is reported as a build failure carrying the rontolisp diagnostic verbatim,
+`file:line:column:` prefix included, so an IDE can jump to it. Compilation is incremental
+in `maven-compiler-plugin`'s sense: if nothing is stale, nothing is compiled, and if
+anything is, the whole source set is — a `(load "...")` splices one file into another, so
+per-file timestamps cannot be trusted alone.
+
 ## Packaging for Maven consumers
 
-`-o out.jar` compiles straight to a jar, and `--maven-coordinates` stamps that
-jar with its own identity:
+When the kernels are built *separately* from the projects that use them — a team
+publishing to other teams, a non-Maven consumer, anything pushed to a repository
+— the compiler writes the artifact itself. `-o out.jar` compiles straight to a
+jar, and `--maven-coordinates` stamps that jar with its own identity:
 
 ```bash
 rontolisp kernels.lisp -o acme-kernels-1.0.0.jar \

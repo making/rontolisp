@@ -6,6 +6,18 @@
 ./mvnw spring-javaformat:apply test            # all tests
 ```
 
+Two modules live OUTSIDE the root reactor, each with its own `pom.xml`, because each needs
+a dependency the core libraries may not have. `./mvnw test` does not build either:
+
+```bash
+./mvnw -f docs-tool/pom.xml test               # the documentation site generator
+./mvnw -f rontolisp-maven-plugin/pom.xml test  # the compile-src/main/lisp plugin
+```
+
+`rontolisp-maven-plugin` depends on the rontolisp artifact by coordinates, so a SNAPSHOT
+build needs `./mvnw install -DskipTests` first, and its own `install` is what
+`MavenBuildE2eTest` (`-Drontolisp.plugin.e2e=true`) needs.
+
 Three documentation layers, no duplication between them:
 
 - `doc/en/**` + `doc/ja/**` -- user-facing behavior and examples (rendered by `docs-tool/`,
@@ -60,6 +72,11 @@ am.ik.gpu -> (nothing)
 - **A compile-time AST pass that reads a file belongs in `eval`, not `cli`, and must read
   through `SourceLoader`** -- the browser playground (`src/web/java`) never touches `cli`
   and has no filesystem (`.kb/wit.md`).
+- **The compile path's front end is `cli/CompileFrontend`, not a stretch of
+  `RontoLispCli`** -- the read, the `(load ...)` inlining, the library splice chain, the
+  WIT lowerings and the tree-shaker, in one order-critical place. Every backend and every
+  embedder goes through it; a JVM embedder goes through `cli/JvmSourceCompiler`, which is
+  the same backend half the CLI's `-o out.class` runs (`.kb/jvm-export.md`).
 
 Where behavior must be identical across the interpreter, the JVM and both WASM backends,
 the topic's `.kb` file says so and names the pinning test -- change the file and the test

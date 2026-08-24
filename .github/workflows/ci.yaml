@@ -290,6 +290,28 @@ jobs:
       with:
         path: ~/.rontolisp/quicklisp
         key: ${{ steps.quicklisp-cache.outputs.cache-primary-key }}
+  # The Maven plugin is outside the root reactor, so `./mvnw test` never sees it. It
+  # needs the core installed by coordinates, which is why this is a job of its own rather
+  # than a step of `test`, and it runs the REAL-Maven E2E: the phase ordering that lets
+  # src/main/java compile against the Lisp classes cannot be seen any other way.
+  maven-plugin:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up JDK 25
+      uses: actions/setup-java@v5
+      with:
+        java-version: '25'
+        distribution: 'liberica'
+        cache: maven
+    - name: Install rontolisp
+      run: ./mvnw -V --no-transfer-progress install -DskipTests
+    - name: Install the plugin
+      run: ./mvnw -V --no-transfer-progress -f rontolisp-maven-plugin/pom.xml install -DskipTests
+    - name: Test the plugin
+      run: ./mvnw -V --no-transfer-progress -f rontolisp-maven-plugin/pom.xml -Drontolisp.plugin.e2e=true test
+
   deploy:
     needs: test
     if: github.event_name != 'pull_request'
@@ -334,6 +356,20 @@ jobs:
         set -e
         mvn -V \
             generate-sources \
+            javadoc:jar \
+            source:jar \
+            package \
+            org.apache.maven.plugins:maven-gpg-plugin:3.0.1:sign \
+            deploy \
+            --no-transfer-progress \
+            -Dgpg.passphrase=${GPG_PASSPHRASE} \
+            -DskipTests=true
+    # The Maven plugin is its own reactor and depends on the core by coordinates, so it
+    # goes after -- the step above ran the full lifecycle, which installed what it needs.
+    - name: Deploy rontolisp-maven-plugin to Maven Central
+      run: |
+        set -e
+        mvn -V -f rontolisp-maven-plugin/pom.xml \
             javadoc:jar \
             source:jar \
             package \
