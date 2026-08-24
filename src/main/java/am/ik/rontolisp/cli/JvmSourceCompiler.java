@@ -2,9 +2,11 @@ package am.ik.rontolisp.cli;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.compiler.JvmExportDirective;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.reader.Features;
@@ -160,11 +162,36 @@ public final class JvmSourceCompiler {
 	 * @return the emitted class and the runtime classes that travel with it
 	 */
 	public Result compile(String source, @Nullable String entryFile) {
+		return run(source, entryFile, false).orElseThrow();
+	}
+
+	/**
+	 * Compiles a source text only if the program it expands to declares at least one
+	 * {@code rontolisp:jvm-export}, and answers empty otherwise.
+	 * <p>
+	 * This is what a SOURCE SET compiles through: a directory of Lisp is ordinary Lisp,
+	 * of which only the files that declare an export have a Java caller at all. The
+	 * question is asked of the EXPANDED program rather than of the text, so an export a
+	 * {@code (load ...)}ed file or a user macro contributes counts -- it is the same list
+	 * the backend collects its directives from.
+	 * @param source the program text
+	 * @param entryFile the path the text was read from, for diagnostics and for
+	 * {@code (load ...)} provenance
+	 * @return the emitted class, or empty when the program exports nothing
+	 */
+	public Optional<Result> compileIfExported(String source, @Nullable String entryFile) {
+		return run(source, entryFile, true);
+	}
+
+	private Optional<Result> run(String source, @Nullable String entryFile, boolean onlyIfExported) {
 		return CompileDiagnostics.recording(() -> {
 			CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, this.baseDir, this.systemPath,
 					DistClient.createDefault(this.dists), false, this.dynamic, false, false, false, false, null, false,
 					this.noPrune);
-			return compileProgram(frontend.program(), frontend.features());
+			if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
+				return Optional.empty();
+			}
+			return Optional.of(compileProgram(frontend.program(), frontend.features()));
 		});
 	}
 

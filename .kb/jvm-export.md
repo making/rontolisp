@@ -282,15 +282,32 @@ only ordering declaration order cannot break, and it is what `kotlin-maven-plugi
 documents for the same mixed-source reason. `MavenBuildE2eTest` is the pin, and it is a
 REAL Maven build — nothing else can see a phase-ordering regression.
 
-**`noMain` defaults to TRUE**, unlike the CLI's flag: a Lisp source set is a library by
-definition, and an export-less class would shake to nothing under the default
-`--optimize`. So a source file with no `rontolisp:jvm-export` fails the build instead of
-producing an empty class; `<noMain>false</noMain>` keeps a `main` beside the exports.
+**A source set is Lisp, not a pile of exports** — the premise the goal is built on. The
+files load each other, most of them have no Java caller at all, and only the ones that
+declare a `rontolisp:jvm-export` have a Java-facing surface. So a file compiles to a class
+exactly when the class would have an ENTRY POINT: `noMain` defaults to TRUE (a source set
+is a library, and the CLI's flag does not), that entry point is the exports, and a file
+declaring none is left as Lisp — spliced into the files that `(load ...)` it, or run by
+the interpreter — rather than failing the build. `<noMain>false</noMain>` gives every file
+`main`, so every file compiles the way the command line compiles a program.
+`JvmSourceCompiler.compileIfExported` is the seam, and it asks the EXPANDED program (the
+list the backend collects directives from), so an export a `(load ...)`ed file or a user
+macro contributes counts.
+
+**The path-is-the-class-name rule follows the same line**: it is checked only for a file
+that earns a class, so the Lisp convention `string-utils.lisp` beside `Kernels.lisp` is
+not an error. Requiring every `.lisp` to be a Java identifier was the same wrong premise
+in a second place.
 
 **Staleness is all-or-nothing**, which is `maven-compiler-plugin`'s own rule and the only
 safe one here: a `(load "...")` splices one source into another, so a file whose own
-timestamp did not move can still need recompiling. A runtime class is rewritten only when
-its bytes differ, so an unchanged one does not make the next build look stale.
+timestamp did not move can still need recompiling. It reads its state from a STATUS FILE
+(`target/rontolisp/compile-status.txt`, source path -> class name or `-`) rather than from
+the output directory, because a source set whose files need not each produce a class
+cannot ask the output directory whether a missing class was skipped or never built; a
+recorded class that has since been deleted, and an added or removed source, both make it
+stale. A runtime class is rewritten only when its bytes differ, so an unchanged one does
+not make the next build look stale.
 
 ### The seam: `cli/CompileFrontend` + `cli/JvmSourceCompiler`
 

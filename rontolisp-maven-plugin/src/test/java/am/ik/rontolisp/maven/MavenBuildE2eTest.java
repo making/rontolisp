@@ -61,9 +61,11 @@ class MavenBuildE2eTest {
 
 		Path jar = this.project.resolve("target/consumer-1.0.0.jar");
 		assertThat(jar).exists();
-		// One jar, both languages -- and the handle class the export hands out.
+		// One jar, both languages -- and the handle class the export hands out. The
+		// unexported helper is spliced into the kernel, so it is no class of its own.
 		assertThat(entries(jar)).contains("com/example/Kernels.class", "app/App.class",
 				"am/ik/rontolisp/runtime/RontoFloatArray.class");
+		assertThat(entries(jar)).noneMatch(entry -> entry.contains("scale-helpers"));
 		assertThat(run(javaExecutable(), this.project, "-cp", jar.toString(), "app.App").lines().toList())
 			.containsExactly("12.0", "5.0");
 
@@ -75,16 +77,25 @@ class MavenBuildE2eTest {
 		Path kernels = this.project.resolve("src/main/lisp/com/example/Kernels.lisp");
 		Files.createDirectories(kernels.getParent());
 		Files.writeString(kernels, """
+				(load "scale-helpers.lisp")
+
 				(defvar *scale* 2.0)
 
 				(defun scaled-sum (a b)
-				  (* *scale* (+ a b)))
+				  (scale-by *scale* (+ a b)))
 
 				(defun norm2 (x)
 				  (sqrt (vec:dot x x)))
 
 				(rontolisp:jvm-export 'scaled-sum :params '(:float :float) :returns :float)
 				(rontolisp:jvm-export 'norm2 :params '(:float-vector) :returns :float)
+				""");
+		// Ordinary Lisp beside the kernels: no export, a name no class could carry, and
+		// the build has to be fine with both -- a source set is Lisp, not a pile of
+		// exports.
+		Files.writeString(this.project.resolve("src/main/lisp/com/example/scale-helpers.lisp"), """
+				(defun scale-by (scale x)
+				  (* scale x))
 				""");
 		Path app = this.project.resolve("src/main/java/app/App.java");
 		Files.createDirectories(app.getParent());

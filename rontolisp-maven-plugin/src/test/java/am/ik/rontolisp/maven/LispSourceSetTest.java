@@ -99,25 +99,75 @@ class LispSourceSetTest {
 	}
 
 	@Test
-	void aSourcePathThatIsNotAJavaIdentifierIsRefusedByName() throws Exception {
+	void aSourcePathThatIsNotAJavaIdentifierIsRefusedByNameOnceItExports() throws Exception {
 		Path source = this.project.resolve("src/main/lisp/my-kernels/Vec.lisp");
 		Files.createDirectories(source.getParent());
-		Files.writeString(source, "(defun f (x) x)\n");
+		Files.writeString(source, """
+				(defun f (x) x)
+				(rontolisp:jvm-export 'f :params '(:float) :returns :float)
+				""");
 		Path classes = this.project.resolve("target/classes");
 		assertThatThrownBy(() -> compile(classes, compiler -> {
 		})).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("'my-kernels' is not a Java identifier");
 	}
 
 	@Test
-	void aLibraryWithNoExportIsRefusedRatherThanEmitted() throws Exception {
-		Path source = this.project.resolve("src/main/lisp/com/example/NoExport.lisp");
+	void aSourceWithNoExportIsOrdinaryLispAndProducesNoClass() throws Exception {
+		// The Lisp convention, and not a class name: a file with no export never has to
+		// be one, so this is the shape a source set is mostly made of.
+		Path source = this.project.resolve("src/main/lisp/my-kernels/string-utils.lisp");
 		Files.createDirectories(source.getParent());
-		Files.writeString(source, "(defun f (x) x)\n");
+		Files.writeString(source, "(defun shout (s) (string-upcase s))\n");
 		Path classes = this.project.resolve("target/classes");
-		// --no-main is the source set's default: without an export the class would have
-		// no shaker root at all and would shake to nothing.
-		assertThatThrownBy(() -> compile(classes, compiler -> {
-		})).isInstanceOf(LispCompilationException.class).hasMessageContaining("jvm-export");
+
+		LispSourceSet.Result result = compile(classes, compiler -> {
+		});
+
+		assertThat(result.sources()).isEqualTo(1);
+		assertThat(result.classes()).isEmpty();
+		assertThat(result.uncompiled()).containsExactly("my-kernels/string-utils.lisp");
+		assertThat(classes).doesNotExist();
+	}
+
+	@Test
+	void anExportedKernelCompilesBesideTheHelperItLoads() throws Exception {
+		Path helper = this.project.resolve("src/main/lisp/com/example/vector-helpers.lisp");
+		Files.createDirectories(helper.getParent());
+		Files.writeString(helper, "(defun square (x) (* x x))\n");
+		Path source = this.project.resolve("src/main/lisp/com/example/Kernels.lisp");
+		Files.writeString(source, """
+				(load "vector-helpers.lisp")
+
+				(defun sum-of-squares (a b)
+				  (+ (square a) (square b)))
+
+				(rontolisp:jvm-export 'sum-of-squares :params '(:float :float) :returns :float)
+				""");
+		Path classes = this.project.resolve("target/classes");
+
+		LispSourceSet.Result result = compile(classes, compiler -> {
+		});
+
+		// The helper is spliced into the kernel by (load ...), not compiled on its own.
+		assertThat(result.classes()).containsExactly("com.example.Kernels");
+		assertThat(result.uncompiled()).containsExactly("com/example/vector-helpers.lisp");
+		assertThat(classes.resolve("com/example")).isDirectoryContaining("glob:**/Kernels.class");
+	}
+
+	@Test
+	void withNoMainOffEveryFileCompilesAsAProgram() throws Exception {
+		Path source = this.project.resolve("src/main/lisp/com/example/Report.lisp");
+		Files.createDirectories(source.getParent());
+		Files.writeString(source, "(print (+ 1 2))\n");
+		Path classes = this.project.resolve("target/classes");
+
+		LispSourceSet.Result result = new LispSourceSet(this.project.resolve("src/main/lisp"), classes,
+				this.project.resolve("target/rontolisp/compile-status.txt"), false, compiler -> {
+				})
+			.compile();
+
+		assertThat(result.classes()).containsExactly("com.example.Report");
+		assertThat(run(classes, "com.example.Report")).isEqualTo("3\n");
 	}
 
 	private Path writeKernels() throws Exception {
@@ -140,7 +190,7 @@ class LispSourceSetTest {
 
 	private LispSourceSet.Result compile(Path classes, Consumer<JvmSourceCompiler> configuration) throws Exception {
 		return new LispSourceSet(this.project.resolve("src/main/lisp"), classes,
-				compiler -> configuration.accept(compiler.noMain(true)))
+				this.project.resolve("target/rontolisp/compile-status.txt"), true, configuration)
 			.compile();
 	}
 

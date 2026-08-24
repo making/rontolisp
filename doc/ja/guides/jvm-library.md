@@ -196,6 +196,7 @@ GEMV での計測では反復あたり 0.070 ms — Lisp から一度も出な�
 ```
 pom.xml
 src/main/lisp/com/example/Kernels.lisp   <- the kernels, with their jvm-export declarations
+src/main/lisp/com/example/helpers.lisp   <- ordinary Lisp the kernels (load ...), no class
 src/main/java/app/App.java               <- Kernels.scaledSum(...), Kernels.norm2(...)
 ```
 
@@ -203,11 +204,19 @@ src/main/java/app/App.java               <- Kernels.scaledSum(...), Kernels.norm
 mvn package     # one jar, Lisp classes and Java classes together
 ```
 
-**`src/main/lisp` 以下のパスがクラス名になります**。`.java` ファイルのパスと同じで、
-`src/main/lisp/com/example/Kernels.lisp` は `com.example.Kernels` になり、ファイルごと
-の宣言は不要です。出力は通常の場所に置かれた通常のクラスなので、`mvn install`、
-`mvn deploy`、生成された jar を使う Gradle コンシューマ、IDE のいずれも追加の概念なし
-に動きます。
+**ソースセットは Lisp であって、エクスポートの寄せ集めではありません**。ファイルがクラ
+スになるのは `rontolisp:jvm-export` を 1 つ以上宣言したときだけです。それが、Java の呼
+び出し側が使えるエントリポイントをクラスに与えるものだからです。`src/main/lisp` にある
+それ以外のものは普通の Lisp のままです — エクスポートするファイルが `(load ...)` する
+補助コードや、インタープリタで走らせるプログラムです。コンパイルされず、エラーにもなら
+ず、クラス名の規則に従う必要もないので、`Kernels.lisp` の隣の `string-utils.lisp` で問
+題ありません。
+
+**エクスポートするファイルについては `src/main/lisp` 以下のパスがクラス名になります**。
+`.java` ファイルのパスと同じで、`src/main/lisp/com/example/Kernels.lisp` は
+`com.example.Kernels` になり、ファイルごとの宣言は不要です。出力は通常の場所に置かれた
+通常のクラスなので、`mvn install`、`mvn deploy`、生成された jar を使う Gradle コンシュ
+ーマ、IDE のいずれも追加の概念なしに動きます。
 
 ゴールは javac より前の `process-sources` で走ります。`src/main/java` が書き出された
 もの (カーネルのクラスと `RontoFloatArray` ハンドル型の両方) に対してコンパイルされる
@@ -218,8 +227,9 @@ JVM バックエンドに届くフラグはすべて同じ名前のパラメー�
 `gpu`、`parallel`、`optimize`、`dynamic`、`noPrune`、`systemPath`、`dists` — そして
 `skip` (`-Drontolisp.skip=true`) でゴールを止められます。コマンドラインと既定値が違う
 のは 1 つだけ、`noMain` が **オン** であることです。ソースセットはライブラリだからで、
-`rontolisp:jvm-export` を持たないファイルは中身のないクラスを生む代わりにビルドを失敗
-させます。`main` をエクスポートと並べて残すなら `<noMain>false</noMain>` を指定します。
+エクスポートしないファイルがクラスではなく普通の Lisp になるのもこれによります。
+`<noMain>false</noMain>` にすると、すべてのファイルが `main` を持ってコンパイルされま
+す。`rontolisp prog.lisp -o Prog.class` がプログラムをコンパイルするのと同じ形です。
 
 コンパイルエラーは rontolisp の診断をそのまま持つビルド失敗として報告されます。
 `file:line:column:` の接頭辞も含まれるので IDE から飛べます。コンパイルは

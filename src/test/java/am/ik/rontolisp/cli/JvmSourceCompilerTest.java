@@ -72,4 +72,29 @@ class JvmSourceCompilerTest {
 			.compile("(defun f (x) x)\n", "empty.lisp")).hasMessageContaining("jvm-export");
 	}
 
+	@Test
+	void compileIfExportedAnswersEmptyForOrdinaryLisp() {
+		// What a SOURCE SET asks: most of a directory of Lisp has no Java caller, so the
+		// question is whether the file has one, not whether it could be forced into one.
+		assertThat(new JvmSourceCompiler("com.example.Helpers").noMain(true)
+			.compileIfExported("(defun f (x) x)\n", "helpers.lisp")).isEmpty();
+	}
+
+	@Test
+	void compileIfExportedSeesAnExportALoadedFileContributes() throws Exception {
+		// The question is asked of the EXPANDED program, so a declaration that arrives
+		// through (load ...) counts -- the backend collects its directives from the same
+		// list.
+		Files.writeString(this.tempDir.resolve("exports.lisp"),
+				"(rontolisp:jvm-export 'twice :params '(:float) :returns :float)\n");
+		String source = """
+				(defun twice (x) (* 2 x))
+				(load "exports.lisp")
+				""";
+
+		assertThat(new JvmSourceCompiler("com.example.Kernels").noMain(true)
+			.baseDir(this.tempDir.toString())
+			.compileIfExported(source, this.tempDir.resolve("kernels.lisp").toString())).isPresent();
+	}
+
 }

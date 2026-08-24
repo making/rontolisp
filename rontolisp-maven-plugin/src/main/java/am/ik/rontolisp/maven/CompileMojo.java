@@ -30,6 +30,19 @@ public class CompileMojo extends AbstractLispCompileMojo {
 	@Parameter(defaultValue = "${project.build.outputDirectory}", required = true)
 	private File outputDirectory;
 
+	/**
+	 * The previous run's source-to-class mapping, which is what the staleness check
+	 * compares against: a source set whose files need not each produce a class cannot
+	 * read its own state off the output directory alone.
+	 */
+	@Parameter(defaultValue = "${project.build.directory}/rontolisp/compile-status.txt", readonly = true)
+	private File statusFile;
+
+	@Override
+	protected File statusFile() {
+		return this.statusFile;
+	}
+
 	@Override
 	protected File sourceDirectory() {
 		return this.sourceDirectory;

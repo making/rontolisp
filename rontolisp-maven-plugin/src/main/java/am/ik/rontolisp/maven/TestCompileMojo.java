@@ -22,6 +22,15 @@ public class TestCompileMojo extends AbstractLispCompileMojo {
 	@Parameter(defaultValue = "${project.build.testOutputDirectory}", required = true)
 	private File testOutputDirectory;
 
+	/** The test twin of {@link CompileMojo}'s status file. */
+	@Parameter(defaultValue = "${project.build.directory}/rontolisp/test-compile-status.txt", readonly = true)
+	private File statusFile;
+
+	@Override
+	protected File statusFile() {
+		return this.statusFile;
+	}
+
 	@Override
 	protected File sourceDirectory() {
 		return this.testSourceDirectory;

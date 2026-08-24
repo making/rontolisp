@@ -59,11 +59,13 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 	 * {@code --no-main}: emit a library class, entered through its
 	 * {@code rontolisp:jvm-export} declarations only.
 	 * <p>
-	 * On by default, because a Lisp SOURCE SET is a library by definition: a class with
-	 * no exports has no Java caller, and under the default {@code --optimize} its
-	 * functions are unreachable from {@code main} and shaken away. A source file with no
-	 * export therefore fails the build rather than producing an empty class. Turn it off
-	 * to keep a {@code main} beside the exports.
+	 * On by default, because a Lisp SOURCE SET is a library by definition: the Java half
+	 * of the project calls the exports and nothing else. It also decides WHICH files
+	 * compile, because a class is worth emitting only when it has an entry point. On,
+	 * that entry point is the exports, so a file that declares none is ordinary Lisp --
+	 * loaded by the files that do, or run by the interpreter -- and is left alone. Off,
+	 * every file has {@code main} and every file compiles, the way the command line
+	 * compiles a program.
 	 */
 	@Parameter(property = "rontolisp.noMain", defaultValue = "true")
 	private boolean noMain = true;
@@ -89,6 +91,12 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 	protected abstract File outputDirectory();
 
 	/**
+	 * @return where the previous run's source-to-class mapping is recorded, for the
+	 * staleness check
+	 */
+	protected abstract File statusFile();
+
+	/**
 	 * @return what this goal calls a source set, for the log line
 	 */
 	protected abstract String description();
@@ -105,7 +113,7 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 			return;
 		}
 		LispSourceSet sourceSet = new LispSourceSet(sourceDirectory.toPath(), outputDirectory().toPath(),
-				this::configure);
+				statusFile().toPath(), this.noMain, this::configure);
 		LispSourceSet.Result result;
 		try {
 			result = sourceSet.compile();
@@ -126,14 +134,23 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 			return;
 		}
 		if (result.upToDate()) {
-			getLog().info("Nothing to compile - all " + result.sources() + " Lisp class"
-					+ (result.sources() == 1 ? "" : "es") + " are up to date");
+			getLog().info("Nothing to compile - all " + result.sources() + " Lisp source"
+					+ (result.sources() == 1 ? " is" : "s are") + " up to date");
 			return;
 		}
-		getLog().info("Compiling " + result.sources() + " Lisp source" + (result.sources() == 1 ? "" : "s") + " to "
-				+ outputDirectory());
+		getLog().info("Compiled " + result.classes().size() + " of " + result.sources() + " Lisp source"
+				+ (result.sources() == 1 ? "" : "s") + " to " + outputDirectory());
 		for (String className : result.classes()) {
 			getLog().debug("  " + className);
+		}
+		// Not a warning: an unexported file is the NORMAL case in a source set. It is
+		// support code the exported files load, or a program the interpreter runs.
+		if (!result.uncompiled().isEmpty()) {
+			getLog().info(result.uncompiled().size() + " Lisp source" + (result.uncompiled().size() == 1 ? "" : "s")
+					+ " declare no (rontolisp:jvm-export ...) and stay Lisp");
+			for (String source : result.uncompiled()) {
+				getLog().debug("  " + source);
+			}
 		}
 	}
 
@@ -145,7 +162,6 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 			.dynamic(this.dynamic)
 			.optimize(OptimizeLevel.parse(this.optimize))
 			.noPrune(this.noPrune)
-			.noMain(this.noMain)
 			.systemPath(this.systemPath == null ? List.of() : this.systemPath)
 			.dists(this.dists == null ? List.of() : this.dists);
 	}

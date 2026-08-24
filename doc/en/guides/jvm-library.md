@@ -189,6 +189,7 @@ knows how to package `target/classes`. One `<plugin>` block is the whole setup:
 ```
 pom.xml
 src/main/lisp/com/example/Kernels.lisp   <- the kernels, with their jvm-export declarations
+src/main/lisp/com/example/helpers.lisp   <- ordinary Lisp the kernels (load ...), no class
 src/main/java/app/App.java               <- Kernels.scaledSum(...), Kernels.norm2(...)
 ```
 
@@ -196,11 +197,18 @@ src/main/java/app/App.java               <- Kernels.scaledSum(...), Kernels.norm
 mvn package     # one jar, Lisp classes and Java classes together
 ```
 
-**The path under `src/main/lisp` is the class name**, exactly as a `.java` file's path is:
-`src/main/lisp/com/example/Kernels.lisp` becomes `com.example.Kernels`, and nothing has to
-be declared per file. `mvn install`, `mvn deploy`, a Gradle consumer of the resulting jar
-and an IDE all work with no further concepts, because the output is ordinary classes in
-the ordinary place.
+**A source set is Lisp, not a pile of exports.** A file becomes a class exactly when it
+declares at least one `rontolisp:jvm-export` — that is what gives the class an entry point
+a Java caller can use. Everything else in `src/main/lisp` stays ordinary Lisp: the support
+code the exported files `(load ...)`, a program you run with the interpreter. It is not
+compiled, it is not an error, and it does not have to be named like a class, so
+`string-utils.lisp` is fine beside `Kernels.lisp`.
+
+**The path under `src/main/lisp` is the class name** for the files that do export, exactly
+as a `.java` file's path is: `src/main/lisp/com/example/Kernels.lisp` becomes
+`com.example.Kernels`, and nothing has to be declared per file. `mvn install`,
+`mvn deploy`, a Gradle consumer of the resulting jar and an IDE all work with no further
+concepts, because the output is ordinary classes in the ordinary place.
 
 The goal runs at `process-sources`, before javac, because `src/main/java` compiles
 *against* what it writes — the kernel class and the `RontoFloatArray` handle type both.
@@ -210,9 +218,10 @@ The `testCompile` goal is its twin: `src/test/lisp` into `target/test-classes`, 
 Every flag that reaches the JVM backend is a parameter under the same name — `simd`,
 `blas`, `gpu`, `parallel`, `optimize`, `dynamic`, `noPrune`, `systemPath`, `dists` — and
 `skip` (`-Drontolisp.skip=true`) turns the goal off. One default differs from the command
-line: `noMain` is **on**, because a source set is a library, so a file with no
-`rontolisp:jvm-export` fails the build rather than producing a class with nothing in it.
-Set `<noMain>false</noMain>` to keep a `main` beside the exports.
+line: `noMain` is **on**, because a source set is a library, and that is also what makes
+an unexported file ordinary Lisp rather than a class. Set `<noMain>false</noMain>` and
+every file gets a `main` and is compiled, the way `rontolisp prog.lisp -o Prog.class`
+compiles a program.
 
 A compile error is reported as a build failure carrying the rontolisp diagnostic verbatim,
 `file:line:column:` prefix included, so an IDE can jump to it. Compilation is incremental
