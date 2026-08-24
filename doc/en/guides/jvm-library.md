@@ -149,6 +149,16 @@ places where you asked for one. This also makes destination-passing work:
 `RontoFloatArray.zeros(...)` builds a buffer that a `vec:...-into` export
 writes into, so a Java-side loop allocates nothing per iteration.
 
+**Under `--gpu`, a result stays on the device until you read it.** A handle a
+`--gpu` kernel returned is not brought home at the boundary, so a Java-side
+chain `h = Kernels.step(w, h)` leaves every intermediate on the device and only
+the read at the end downloads one. Measured over 200 chained GEMVs on a
+resident 2048x2048 matrix: 0.070 ms per iteration, the same as the loop that
+never leaves Lisp, and one upload for the whole run instead of one per call.
+What follows from it is that the *read* is where the cost sits — the first
+`get(i)` or `toArray()` on a fresh device result pays the download, later ones
+do not — so read a result once rather than element by element.
+
 Both element widths cross the same designator (`of(double[])` and
 `of(float[])`; `width()` reports which), and the rank comes from the header, so
 a matrix is the same class with a rank-2 `dims()` rather than a second type. A

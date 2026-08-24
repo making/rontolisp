@@ -130,9 +130,20 @@ array is the HEADER ALONE (`.todo/492`; hence `checkPacked` requires `1 + rank` 
 and not one more). A class with no guards resolves to a marker and costs one reference
 comparison. `RontoFloatArrayTest#aHostReadGoesThroughTheOwnerClassResidencyGuard` pins the
 whole seam with a stand-in owner class, so it is exercised with no device.
-**Not yet confirmed on a device**: that this really keeps a `--gpu` result on the device
-across a Java-side chain has to be measured on CUDA and on Metal (the tier was settled
-separately, `.todo/492`/`493` and `.todo/494`).
+
+**Measured on CUDA, and it holds** (`examples/jvm/bench/`, `./run.sh gpu`: 200 chained
+GEMVs over a resident 2048x2048 f32 matrix, GB10, GraalVM 25.0.4). The Java chain
+`h = Kernels.step(w, h)` runs at **0.070 ms/iteration against the same chain inside Lisp's
+0.070** -- one crossing per iteration costs nothing measurable -- and the library's own
+residency counters, read reflectively out of the compiled class, say **1 upload for the
+whole run** (8 KB) where a boundary that materialized would have paid **200** (1600 KB) and
+0.098-0.117 ms/iteration, i.e. 1.4x-1.7x. `toArray()` moves the result home exactly once
+(one dirty copy cleared, one stub given a backing; a second read moves nothing) and answers
+the same library compiled without `--gpu` BIT FOR BIT, with the host array before that read
+being the 2-element header alone. `set(i, v)` lands on the array the guard answers on both
+sides of the tier -- a lazy result the device still holds, and the resident matrix, whose
+device copy the write invalidates. **Metal is not measured** (no device here): the tier was
+settled separately there (`.todo/494`), so `.todo/510` stays open for that half.
 
 ## Exports are tree-shaker roots — the third liveness source
 

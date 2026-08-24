@@ -794,6 +794,19 @@ packed rank-2 matrix and a packed rank-1 vector of the same width and matching e
 mixed pair (which the defun COMPUTES and the lane kernel refuses -- both outcomes are the
 captured binding's), and the first sight.
 
+**The tier survives the Java boundary, measured.** A compiled library's
+`:float-vector` result crosses as a `RontoFloatArray` handle wrapped WITHOUT materializing
+([jvm-export.md](jvm-export.md)), so the question this file has to answer is whether a
+Java-side chain still keeps its intermediates here. It does: 200 chained GEMVs over a
+resident 2048x2048 f32 matrix run at **0.070 ms/iteration through the handle against
+0.070 for the same chain inside Lisp**, with **1 upload for the whole run** where a
+materializing boundary pays 200 (8 KB against 1600 KB) and 0.098-0.117 ms/iteration. The
+read at the end brings the result home exactly once -- one dirty copy cleared, one stub
+given a backing -- and answers the same library built without `--gpu` bit for bit; a
+`set` through the handle invalidates the resident copy the way the emitted `_gpuWritten`
+guard does, so the next call sees it. `examples/jvm/bench/`, `./run.sh gpu`, GB10 +
+GraalVM 25.0.4, CUDA (Metal unmeasured).
+
 ### The collector, and the flags that do and do not help
 
 **On CUDA the library ASKS for a collection, and that request earns 350% while costing 3%.**

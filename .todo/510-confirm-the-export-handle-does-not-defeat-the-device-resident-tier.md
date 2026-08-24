@@ -2,61 +2,54 @@
 
 Difficulty: Medium
 
-Carved out of `.todo/504` when the packed float-array boundary type landed. Everything
-about `:float-vector` / `:float-matrix` is built, tested and documented
-(`.kb/jvm-export.md`, "The packed float array"); this is the ONE claim in it that a
-device-less machine cannot check. `.todo/501` already named it as the single paragraph of
-that item needing hardware.
+Carved out of `.todo/504` when the packed float-array boundary type landed. **The CUDA
+half is done** (2026-08-24, GB10): the claim holds, the harness is checked in, and
+`.kb/jvm-export.md` / `.kb/gpu.md` carry the numbers. What is left is the SAME three
+measurements on Metal, which cannot be taken here -- the lazy/resident tier was settled
+separately for that backend (`.todo/494`, where lazy results are measured as a tie and
+left OFF), so its answer does not follow from CUDA's.
 
-## The claim
+## What was measured, and how to repeat it
 
-A handle a `--gpu` kernel returns must NOT force a materialization the next call would
-only re-upload. What ships is built for that:
+`examples/jvm/bench/` -- `gpu-kernels.lisp` (one GEMV, exported per call and as a whole
+chain) + `GpuResidencyBench.java`, run by `./run.sh gpu`. The bench compiles the same
+source twice, with `--gpu` and without, and reads the library's own residency counters
+reflectively out of the compiled class (`<package>.RontoLispGpuDeviceResidency`), which is
+the compiled-class stand-in for `GpuThresholds.dirtyCount()`.
 
-- `RontoBoundary.floatArrayResult` wraps the answered array **without** calling
-  `_gpuMaterialize`, so a Java-side chain `h = Kernels.step(h)` should keep the result on
-  the device across every crossing;
-- `RontoFloatArray` instead adopts the generated class and resolves its private
-  `_gpuMaterialize` / `_gpuWritten` guards, so the download happens on the first
-  `get`/`set`/`toArray` and not before;
-- a lazy result's host array is the HEADER ALONE (`.todo/492`), so `checkPacked` requires
-  `1 + rank` elements and the handle reads rank/dims/size off the stub without a guard.
+On CUDA, 200 chained GEMVs over a resident 2048x2048 f32 matrix:
 
-The seam itself is pinned with a stand-in owner class
-(`RontoFloatArrayTest#aHostReadGoesThroughTheOwnerClassResidencyGuard`), and the
-reflective resolution was verified against a real `--gpu` class on a device-less machine
-(both guards resolve to `MethodHandle(Object)Object`). What is NOT verified is the
-behavior that needs a device.
+1. **stays resident across the boundary** -- 0.070 ms/iteration through the handle against
+   0.070 for the same chain inside Lisp, and 1 upload (8 KB) for the whole run where a
+   materializing boundary pays 200 (1600 KB) and 0.098-0.117 ms/iteration;
+2. **`toArray()` brings it home exactly once** -- one dirty copy cleared, one stub given a
+   backing, a second read moves nothing -- and answers the no-`--gpu` build bit for bit;
+3. **`set(i, v)` lands on the array the guard answers** -- both into a lazy result the
+   device still holds and into the resident matrix, whose device copy the write
+   invalidates, and the next kernel call sees both.
 
-## What to measure, and where
+## What is left: the same three on Metal
 
-**Two halves.** The lazy/resident tier was settled separately for CUDA (`.todo/492`/`493`)
-and for Metal (`.todo/494`), so both have to answer, on the GB10 and on a Mac:
+Needs a Mac. `./run.sh gpu` is the whole procedure; the bench prints
+`device: present` or a line saying the run proves nothing, so a device-less machine cannot
+mistake the output for a result.
 
-1. A Java loop over a `--gpu` export whose kernel is device-eligible (`vec:matvec` over a
-   resident matrix is the measured one, `.kb/gpu.md` "The GEMV, and the matrix that
-   stays") stays resident across the boundary: no download-and-re-upload per iteration.
-   `GpuThresholds.dirtyCount()` is the interpreter's assertion for "really stayed"; the
-   JVM class output cannot expose it, so measure the transfer volume or the per-iteration
-   time against the same loop in Lisp.
-2. `toArray()` on a handle a device kernel returned brings the result home exactly once
-   and answers the right numbers -- the same oracle as
-   `everyEnumeratedReaderMaterializesTheDeviceResult`: the program without `--gpu`.
-3. `set(i, v)` through a handle on a resident array lands on the array the guard ANSWERS,
-   so a following kernel call sees the write.
+Two things to expect to differ, and to record rather than to fix:
 
-`examples/jvm/bench/` is the harness to extend; it already compiles a library and calls it
-from Java, so the `--gpu` row is a flag and a second kernel.
+- lazy results are OFF on Metal, so measurement 1's chain may bring every intermediate
+  home whatever the boundary does -- in which case the finding is about the tier, not
+  about the handle, and the handle's claim is simply not load-bearing there;
+- the resident set on Metal is the GEMV matrix only, so measurement 3's lazy-result half
+  may have nothing resident to write into.
 
 ## If it does not hold
 
-The fallback is materializing in `floatArrayResult`, which is CORRECT today and only
-costs the round trip -- so a failure here is a performance finding, not a correctness one.
-Say which in `.kb/jvm-export.md` either way: the file currently says the confirmation is
-outstanding.
+The fallback is materializing in `floatArrayResult`, which is CORRECT today and only costs
+the round trip -- so a failure is a performance finding, not a correctness one. Say which
+in `.kb/jvm-export.md` either way.
 
 ## Acceptance
 
-The three measurements above on CUDA and on Metal, the numbers in `.kb/gpu.md` beside the
-resident-tier table, and `.kb/jvm-export.md`'s "Not yet confirmed on a device" paragraph
-replaced by what was measured.
+The three measurements on Metal, added beside the CUDA ones in `.kb/gpu.md` (the "Lazy
+results and the resident tier on Metal" section) and in `.kb/jvm-export.md`, whose
+`--gpu` residency paragraph currently ends "Metal is not measured".
