@@ -7,7 +7,9 @@ module, declaring the WASM-boundary types of its parameters and result. It is a
 compile-time directive, not an ordinary function: on the **interpreter** and
 **JVM** backends it is a no-op that simply returns the named symbol, so the same
 source runs on every backend. See
-[Compiling to WebAssembly](../../compiling/wasm.md) for the full guide.
+[Compiling to WebAssembly](../../compiling/wasm.md) for the full guide. Its JVM
+twin is [`rontolisp:jvm-export`](rontolisp-jvm-export.md) — the same
+declaration, emitting a typed Java-callable method on a compiled class.
 
 ```lisp
 (defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))

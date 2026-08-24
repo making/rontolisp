@@ -2581,6 +2581,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			else if (WasmExportCompiler.isExportForm(expr)) {
 				exportDecls.add(WasmExportCompiler.parse((LispCons) expr));
 			}
+			else if (am.ik.rontolisp.compiler.JvmExportDirective.isExportForm(expr)) {
+				// rontolisp:jvm-export declares a typed Java entry point for the JVM
+				// backend; on WASM it is a no-op, exactly as wasm-export is on the JVM.
+			}
 			else if (WasmImportCompiler.isImportForm(expr)) {
 				importDecls.add(WasmImportCompiler.parse((LispCons) expr));
 			}

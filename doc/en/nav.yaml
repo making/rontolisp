@@ -64,6 +64,8 @@ sections:
         title: Neural Networks (torch)
       - file: guides/java-interop.md
         title: Java Interop
+      - file: guides/jvm-library.md
+        title: Export a JVM Library (jvm-export / --no-main)
       - file: guides/async.md
         title: Asynchronous Programming (async / await)
       - file: guides/http-fetch.md

@@ -13,9 +13,17 @@ java Hello
 
 The generated class is named after the output file, so the name you pass to
 `java` is the file's stem: `-o Hello.class` produces a class `Hello` you run with
-`java Hello`. Keep the path free of directories (use a plain `Hello.class`, not
-`out/Hello.class`), since the class name must match. The program's top-level forms
+`java Hello`. A directory in the path becomes the class's Java **package**:
+`-o com/example/Kernels.class` produces `com.example.Kernels`, which you run
+with `java -cp . com.example.Kernels` from the directory the path started in
+(the missing directories are created). The program's top-level forms
 become the class's entry point and run in order when you launch it.
+
+A class can also be a **library** Java code calls directly:
+[`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md)
+declares a typed, Java-callable static method for a `defun`, and `--no-main`
+drops the `main` entry point entirely. See
+[Export a JVM library](../guides/jvm-library.md).
 
 Example (`hello.lisp`):
 
@@ -47,8 +55,12 @@ program actually uses, which for the same `fact` is ~190 KB. The elimination is
 behavior-preserving: reachability follows the actual `invoke` instructions
 in the bytecode, so anything a first-class function value, `funcall`, or an embedded
 `eval`/`load` can dispatch to is kept, and the `java:` interop bridge's reflective
-entry point survives as an explicit root. The same levels also tree-shake the
-[WASM output](wasm.md).
+entry point survives as an explicit root. Every
+[`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md) typed
+method is an explicit root too — its caller is Java code the bytecode cannot
+show — which is what lets a compiled
+[library](../guides/jvm-library.md) keep the default size. The same levels also
+tree-shake the [WASM output](wasm.md).
 
 The dispatch methods `funcall` goes through list only the functions your program
 can actually obtain as a value — `#'name`, a quoted `'name` designator, a

@@ -222,9 +222,10 @@ public final class RontoLispCli {
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
-					options.contains("--parallel"), options.contains("--no-prune"), options.contains("--emit-wit"),
-					options.contains("--emit-js-glue"), options.contains("--host-random"),
-					options.contains("--host-fetch"), options.contains("--reentrant"),
+					options.contains("--parallel"), options.contains("--no-prune"), options.contains("--no-main"),
+					options.contains("--emit-wit"), options.contains("--emit-js-glue"),
+					options.contains("--host-random"), options.contains("--host-fetch"),
+					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
 					inputFile);
 		}
@@ -242,6 +243,10 @@ public final class RontoLispCli {
 			if (options.contains("--reentrant")) {
 				throw new UnsupportedOperationException(
 						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
+			}
+			if (options.contains("--no-main")) {
+				throw new UnsupportedOperationException(
+						"--no-main compiles a JVM library class (no main method), so it needs -o <file>.class");
 			}
 			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), options.contains("--blas"),
 					options.contains("--gpu"), options.contains("--parallel"), inputFile);
@@ -487,9 +492,9 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean wit, boolean jsGlue,
-			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
-			@Nullable String entryFile) {
+			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit,
+			boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
+			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -499,8 +504,8 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, dists, outputFile, dynamic, component, noWasi, optimize, noGc,
-					simd, blas, gpu, parallel, noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary,
-					entryFile);
+					simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue, hostRandom, hostFetch, reentrant,
+					hostBoundary, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -531,9 +536,9 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			String outputFile, boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc,
-			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean wit, boolean jsGlue,
-			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
-			@Nullable String entryFile) {
+			boolean simd, boolean blas, boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit,
+			boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
+			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -545,6 +550,14 @@ public final class RontoLispCli {
 		// interpreter and the JVM backend have and WASM does not: a .wasm output could
 		// only ignore the flag, and silently running unaccelerated is exactly what the
 		// flag exists to make visible.
+		// --no-main is the JVM backend's library mode (the --no-wasi reactor turn's
+		// twin): it drops the main entry point, so it only means something for a
+		// .class output.
+		if (noMain && !outputFile.endsWith(".class")) {
+			throw new UnsupportedOperationException("--no-main compiles a JVM library class (no main method), so it"
+					+ " needs a .class output -- e.g. -o Kernels.class --no-main."
+					+ " The WASM equivalent is --no-wasi (reactor mode)");
+		}
 		if (blas && !outputFile.endsWith(".class")) {
 			throw new UnsupportedOperationException("--blas reaches the interpreter and the JVM class output only:"
 					+ " a tuned CBLAS is called through the foreign function API, which WASM does not have."
@@ -945,12 +958,18 @@ public final class RontoLispCli {
 			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic, optimize, simd, blas, gpu, parallel)
+			bytes = new JvmLispCompiler(className, dynamic, optimize, simd, blas, gpu, parallel).noMain(noMain)
 				.runtimeFeatures(features.names())
 				.compile(TlsPemInliner.inline(program, baseDir));
 		}
 		try {
-			Files.write(Path.of(outputFile), bytes);
+			// -o com/acme/Kernels.class places the class in a package via its path, so
+			// the directory is part of the request; create it instead of failing.
+			Path outputPath = Path.of(outputFile);
+			if (outputPath.getParent() != null) {
+				Files.createDirectories(outputPath.getParent());
+			}
+			Files.write(outputPath, bytes);
 			if (wit) {
 				String witFile = outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".wit";
 				Files.writeString(Path.of(witFile), Objects.requireNonNull(witText));
@@ -1098,6 +1117,12 @@ public final class RontoLispCli {
 		this.out.println("                     world with --world NAME when the file declares several.");
 		this.out.println("                     The program then IMPLEMENTS the .wit: the compiler checks every");
 		this.out.println("                     defun against it, so no :params/:returns list is written by hand");
+		this.out.println("  --no-main          With a .class output: compile a LIBRARY class instead of a");
+		this.out.println("                     command -- no main method, and the class is entered through");
+		this.out.println("                     its rontolisp:jvm-export typed methods (at least one is");
+		this.out.println("                     required; main is the only tree-shaker root otherwise). The");
+		this.out.println("                     top level runs once, at class initialization, exactly as a");
+		this.out.println("                     --no-wasi reactor runs its top level at instantiation");
 		this.out.println("  --no-wasi          Emit WASM with no WASI imports (reactor mode)");
 		this.out.println("                     Instantiates without an import object (beyond any");
 		this.out.println("                     rontolisp:wasm-import host functions); pure-compute");

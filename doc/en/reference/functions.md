@@ -441,6 +441,7 @@ package system. Each name below links to its own page.
 | `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | bind an encrypted listening socket from PEM certificate/key files |
 | `rontolisp:tls-upgrade` | `(rontolisp:tls-upgrade sock "example.com")` | wrap an already-connected stream handle in TLS as a client; returns a new stream handle |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
+| `rontolisp:jvm-export` | `(rontolisp:jvm-export 'fact :params '(:s64) :returns :s64)` | declare a typed, Java-callable static method for a `defun` when compiling to a JVM class |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | declare a host function callable from Lisp when compiling to a WASM core module |
 | `rontolisp:wit-export` | `(rontolisp:wit-export "greeter.wit" :world greeter)` | declare that the program implements a WIT world: its exports are checked against the program's `defun`s, and their types come from the WIT |
 | `rontolisp:wit-import` | `(rontolisp:wit-import "store.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)` | declare that the program calls a WIT interface: every function it declares is bound as an ordinary Lisp function (`kv:bucket-get`), against a provider on the interpreter/JVM, a WASM import on Preview 1, and a `canon lower`ed component-model import under `--component`, where the host is the provider |
@@ -486,8 +487,11 @@ portability with existing Common Lisp code. The TLS variants (`rontolisp:tls-con
 [tls-listen](functions/rontolisp-tls-listen.md) and
 [tls-listen-pem](functions/rontolisp-tls-listen-pem.md) reference pages.
 `rontolisp:wasm-export`,
+`rontolisp:jvm-export`,
 `rontolisp:wasm-import`, `rontolisp:wit-export` and `rontolisp:wit-import` are
-compile-time directives; the WIT pair take a `.wit` file as the single source of
+compile-time directives; `jvm-export` is `wasm-export`'s JVM twin — a typed,
+Java-callable entry point on a compiled class
+([jvm-export](functions/rontolisp-jvm-export.md)); the WIT pair take a `.wit` file as the single source of
 truth for a boundary, so the types are never hand-written. `wit-export` declares
 that the program **implements** a WIT world (and `--scaffold-wit` generates the
 implementation's skeleton from it); `wit-import` declares that it **calls** a WIT

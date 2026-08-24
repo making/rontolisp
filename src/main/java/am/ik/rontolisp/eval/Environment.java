@@ -1667,6 +1667,11 @@ public final class Environment implements Scope {
 		String exportName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT);
 		env.defineFunction(exportName,
 				new LispFunction(exportName, args -> args.isEmpty() ? LispNil.INSTANCE : args.get(0)));
+		// rontolisp:jvm-export is the JVM twin: it declares the typed Java-callable
+		// wrapper of a defun for the JVM compiler, and is the same no-op here.
+		String jvmExportName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JVM_EXPORT);
+		env.defineFunction(jvmExportName,
+				new LispFunction(jvmExportName, args -> args.isEmpty() ? LispNil.INSTANCE : args.get(0)));
 		// rontolisp:wasm-import declares a host function imported into a compiled WASM
 		// module (see the WASM compiler). The host does not exist on the interpreter
 		// (or the JVM backend), so the directive defines a stub under the declared name

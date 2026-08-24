@@ -438,6 +438,7 @@
 | `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | PEMの証明書／鍵ファイルから暗号化リスニングソケットをバインドします |
 | `rontolisp:tls-upgrade` | `(rontolisp:tls-upgrade sock "example.com")` | 接続済みのストリームハンドルをクライアントとしてTLSでラップします。新しいストリームハンドルを返します |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
+| `rontolisp:jvm-export` | `(rontolisp:jvm-export 'fact :params '(:s64) :returns :s64)` | JVMクラスへのコンパイル時に、`defun` の型付きでJavaから呼び出し可能なstaticメソッドを宣言します |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | WASMコアモジュールへのコンパイル時に、ホスト関数をLispから呼び出し可能として宣言します |
 | `rontolisp:wit-export` | `(rontolisp:wit-export "greeter.wit" :world greeter)` | プログラムがWIT worldを実装していることを宣言します。worldのエクスポートはプログラムの `defun` と照合され、型はWITから得られます |
 | `rontolisp:wit-import` | `(rontolisp:wit-import "store.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)` | プログラムがWITインターフェースを呼び出すことを宣言します。宣言された各関数が通常のLisp関数（`kv:bucket-get`）として束縛され、インタプリタ／JVMではプロバイダに、Preview 1ではWASMインポートに、`--component` ではホストをプロバイダとする `canon lower` 済みのコンポーネントモデルインポートに向かいます |
@@ -464,8 +465,8 @@
 [tls-connect](functions/rontolisp-tls-connect.md)、
 [tls-upgrade](functions/rontolisp-tls-upgrade.md)、
 [tls-listen](functions/rontolisp-tls-listen.md)、
-[tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export`、`rontolisp:wasm-import`、`rontolisp:wit-export`、`rontolisp:wit-import`
-はコンパイル時ディレクティブです。WITの2つは `.wit` ファイルを境界の唯一の真実の源とするため、型を手書きすることはありません。`wit-export` はプログラムがWIT worldを**実装している**ことを宣言し（`--scaffold-wit` はそこから実装のスケルトンを生成します）、`wit-import` はWITインターフェースを**呼び出す**ことを宣言して、インターフェースが宣言する各関数を通常のLisp関数として束縛します。インタプリタとJVMバックエンドでは*プロバイダ*（[`rontolisp:wit-provide`](functions/rontolisp-wit-provide.md)）へ、Preview 1 WASMでは `rontolisp:wasm-import` へ、`--component` では `canon lower` 済みのコンポーネントモデルのインスタンスインポートへローワリングされ（後者2つではホストがプロバイダになります）、1つのソースがすべてのバックエンドで動きます。rontolispは**どのインターフェースについてもプロバイダを同梱していません**。同梱しているのはプロバイダの仕組みであって、個々のインターフェースが何であるかは知らないため、WITインターフェースの実装は通常のLispコードです。WITの `result` のerrorアームは `rontolisp:wit-error` コンディションをシグナルし、そのペイロードは `rontolisp:wit-error-payload` で読みます。
+[tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export`、`rontolisp:jvm-export`、`rontolisp:wasm-import`、`rontolisp:wit-export`、`rontolisp:wit-import`
+はコンパイル時ディレクティブです。`jvm-export` は `wasm-export` のJVM版の双子 — コンパイルされたクラス上の型付きでJavaから呼び出し可能なエントリポイント — です（[jvm-export](functions/rontolisp-jvm-export.md)）。WITの2つは `.wit` ファイルを境界の唯一の真実の源とするため、型を手書きすることはありません。`wit-export` はプログラムがWIT worldを**実装している**ことを宣言し（`--scaffold-wit` はそこから実装のスケルトンを生成します）、`wit-import` はWITインターフェースを**呼び出す**ことを宣言して、インターフェースが宣言する各関数を通常のLisp関数として束縛します。インタプリタとJVMバックエンドでは*プロバイダ*（[`rontolisp:wit-provide`](functions/rontolisp-wit-provide.md)）へ、Preview 1 WASMでは `rontolisp:wasm-import` へ、`--component` では `canon lower` 済みのコンポーネントモデルのインスタンスインポートへローワリングされ（後者2つではホストがプロバイダになります）、1つのソースがすべてのバックエンドで動きます。rontolispは**どのインターフェースについてもプロバイダを同梱していません**。同梱しているのはプロバイダの仕組みであって、個々のインターフェースが何であるかは知らないため、WITインターフェースの実装は通常のLispコードです。WITの `result` のerrorアームは `rontolisp:wit-error` コンディションをシグナルし、そのペイロードは `rontolisp:wit-error-payload` で読みます。
 [wasm-export](functions/rontolisp-wasm-export.md)、
 [wasm-import](functions/rontolisp-wasm-import.md)、
 [wit-export](functions/rontolisp-wit-export.md)、

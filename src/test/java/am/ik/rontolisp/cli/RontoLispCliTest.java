@@ -52,6 +52,41 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void compileOutputCreatesMissingPackageDirectories() throws Exception {
+		// -o com/acme/Kernels.class places the class in a package via its path, so the
+		// directory is part of the request (it used to be a NoSuchFileException).
+		Path program = this.tempDir.resolve("kernels.lisp");
+		Files.writeString(program, "(defun norm (x) x)\n");
+		Path output = this.tempDir.resolve("com/acme/Kernels.class");
+		runCli("", program.toString(), "-o", output.toString());
+		assertThat(output).exists();
+	}
+
+	@Test
+	void noMainCompilesALibraryClass() throws Exception {
+		Path program = this.tempDir.resolve("lib.lisp");
+		Files.writeString(program,
+				"(defun twice (x) (* x 2))\n" + "(rontolisp:jvm-export 'twice :params '(:s64) :returns :s64)\n");
+		Path output = this.tempDir.resolve("Lib.class");
+		runCli("", program.toString(), "-o", output.toString(), "--no-main");
+		assertThat(output).exists();
+	}
+
+	@Test
+	void noMainNeedsAClassOutput() throws Exception {
+		Path program = this.tempDir.resolve("lib.lisp");
+		Files.writeString(program, "(defun twice (x) (* x 2))\n");
+		assertThatThrownBy(
+				() -> runCli("", program.toString(), "-o", this.tempDir.resolve("lib.wasm").toString(), "--no-main"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--no-main")
+			.hasMessageContaining(".class");
+		assertThatThrownBy(() -> runCli("", program.toString(), "--no-main"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--no-main");
+	}
+
+	@Test
 	void anUncaughtConditionReportsOneLineAndExitsOne() throws Exception {
 		// The interpreter's half of the cross-backend contract: the condition's report,
 		// once, on standard error -- not the 16 (212 for a cl-postgres connect) frames

@@ -45,6 +45,7 @@ import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.JvmExportDirective;
 import am.ik.rontolisp.compiler.WasmImportDirective;
 
 import am.ik.jvm.AccessFlag;
@@ -96,6 +97,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * with.
 	 */
 	private List<String> runtimeFeatures = LispMacroExpander.backendFeatures(false);
+
+	/**
+	 * Library mode ({@code --no-main}): no {@code main} method; the class is entered
+	 * through its {@code rontolisp:jvm-export} wrappers only. See {@link #noMain}.
+	 */
+	private boolean noMain;
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -307,6 +314,23 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public JvmLispCompiler runtimeFeatures(List<String> features) {
 		this.runtimeFeatures = List.copyOf(features);
+		return this;
+	}
+
+	/**
+	 * Compile a library class instead of a command: no {@code main} method is emitted
+	 * (the CLI's {@code --no-main}, the twin of the WASM side's {@code --no-wasi} reactor
+	 * turn). The program must declare at least one {@code rontolisp:jvm-export} —
+	 * {@code main} is the only tree-shaker root an unexported program has, so a main-less
+	 * class without exports would shake to nothing — and its top level runs in
+	 * {@code <clinit>}, i.e. once, when the class is initialized by the first call into
+	 * it (a class with exports runs its top level there whether or not {@code main} is
+	 * kept; see {@code .kb/jvm-export.md}).
+	 * @param noMain whether to omit the {@code main} entry point
+	 * @return this compiler
+	 */
+	public JvmLispCompiler noMain(boolean noMain) {
+		this.noMain = noMain;
 		return this;
 	}
 
@@ -869,10 +893,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		// binds a variable to a closure like any other setq.
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
+		// (rontolisp:jvm-export ...) directives: each becomes a typed, Java-callable
+		// wrapper method next to the untyped defun method (JvmExportRuntimeBuilder),
+		// and an extra tree-shaker root. Validated below, once the defuns are known.
+		List<JvmExportDirective> exportDecls = new ArrayList<>();
 		for (LispVal expr : program) {
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
 				defuns.add(extractSetqLambda(LispMacroExpander.expandDefun(cons)));
+			}
+			else if (JvmExportDirective.isExportForm(expr)) {
+				exportDecls.add(JvmExportDirective.parse((LispCons) expr));
 			}
 			else if (WasmImportDirective.isImportForm(expr)) {
 				// rontolisp:wasm-import declares a host function that only exists in a
@@ -1135,6 +1166,46 @@ public final class JvmLispCompiler implements LispCompiler {
 					methodref, nameUtf8, descUtf8));
 		}
 
+		// Validate the jvm-export directives now that every defun (and its mangled
+		// method name) is known. Each names an existing, fixed-arity top-level defun;
+		// each wrapper's Java name must be new in the class — a duplicate method name
+		// (another export's, or a mangled defun's) is a ClassFormatError at LOAD time
+		// otherwise (.kb/core-representation.md records the redefined-defun form of it).
+		if (this.noMain && exportDecls.isEmpty()) {
+			throw new UnsupportedOperationException("--no-main removes the only tree-shaker root an unexported"
+					+ " program has, so it requires at least one (rontolisp:jvm-export ...) declaration");
+		}
+		Set<String> mangledDefunNames = new HashSet<>();
+		for (String defunName : functions.keySet()) {
+			mangledDefunNames.add(mangleMethodName(defunName));
+		}
+		Set<String> exportMethodNames = new HashSet<>();
+		for (JvmExportDirective decl : exportDecls) {
+			FunctionInfo target = functions.get(decl.name());
+			if (target == null || !userDefinedNames.contains(decl.name())) {
+				throw new UnsupportedOperationException(
+						"rontolisp:jvm-export names an unknown function (must be a top-level defun): " + decl.name());
+			}
+			if (target.variadic) {
+				throw new UnsupportedOperationException("rontolisp:jvm-export cannot export '" + decl.name()
+						+ "': its lambda list takes &optional/&rest/&key arguments, which have no fixed Java"
+						+ " signature");
+			}
+			if (decl.paramTypes().size() != target.paramCount) {
+				throw new UnsupportedOperationException(
+						"rontolisp:jvm-export arity mismatch for '" + decl.name() + "': declared "
+								+ decl.paramTypes().size() + " params, but the function takes " + target.paramCount);
+			}
+			if (mangledDefunNames.contains(decl.methodName())) {
+				throw new UnsupportedOperationException("rontolisp:jvm-export name '" + decl.methodName()
+						+ "' collides with the method name of a defun; rename the export with :as");
+			}
+			if (!exportMethodNames.add(decl.methodName())) {
+				throw new UnsupportedOperationException(
+						"rontolisp:jvm-export name '" + decl.methodName() + "' is declared twice; rename one with :as");
+			}
+		}
+
 		// Shared state for lambda discovery
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
@@ -1150,8 +1221,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
 		// it pulls in the eval runtime as well.
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
+		// An :s-expr jvm-export parameter is parsed through the embedded reader
+		// (_readFromString), so it forces the reader runtime exactly as
+		// read-from-string in the source would.
 		boolean usesRead = programUsesSymbol(program, LispNames.READ)
-				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
+				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad
+				|| JvmExportRuntimeBuilder.needsReader(exportDecls);
 
 		// When the program uses eval, the runtime _apply dispatches by argument count, so
 		// every arity up to the maximum callable must have a dispatch method. The apply
@@ -1527,12 +1602,27 @@ public final class JvmLispCompiler implements LispCompiler {
 			chunkCtx.emit(Opcode.RETURN);
 		}
 
-		// main() simply calls each top-level chunk in order, then returns.
+		// main() simply calls each top-level chunk in order, then returns. With any
+		// jvm-export, the top level moves to <clinit> instead (via the _top$run method
+		// built below): a typed wrapper may be the first call into the class, and the
+		// defvar/defparameter initialization in the chunks must have run by then — the
+		// cross-backend precedent is the --no-wasi reactor, which runs its top level at
+		// instantiation, and <clinit> is the JVM's instantiation. main (when kept) then
+		// only triggers class initialization, so the top level still runs exactly once,
+		// idempotent under the JVM's own class-init locking (.kb/jvm-export.md).
+		boolean topLevelInClinit = !exportDecls.isEmpty();
 		Ctx mainCtx = ctxBuilder.build();
 		mainCtx.evalStoreRef = evalStoreRef;
+		Ctx topRunnerCtx = null;
+		Ctx entryCtx = mainCtx;
+		if (topLevelInClinit) {
+			topRunnerCtx = ctxBuilder.build();
+			topRunnerCtx.evalStoreRef = evalStoreRef;
+			entryCtx = topRunnerCtx;
+		}
 		for (MethodrefConstant ref : topChunkRefs) {
-			mainCtx.emit(Opcode.INVOKESTATIC);
-			mainCtx.emitU2(ref.index());
+			entryCtx.emit(Opcode.INVOKESTATIC);
+			entryCtx.emitU2(ref.index());
 		}
 		// A program that writes RAW OCTETS to standard output has to drain the
 		// PrintStream itself. It auto-flushes on a newline and on every byte[] write --
@@ -1545,18 +1635,26 @@ public final class JvmLispCompiler implements LispCompiler {
 		// operators that reach the helper, so every other artifact keeps its exact bytes:
 		// ANY new path to _writeByte's standard-output branch must join this gate.
 		if (programUsesSymbol(program, LispNames.WRITE_BYTE) || programUsesSymbol(program, LispNames.WRITE_SEQUENCE)) {
-			mainCtx.emit(Opcode.GETSTATIC);
-			mainCtx.emitU2(systemOut.index());
-			mainCtx.emit(Opcode.INVOKEVIRTUAL);
-			mainCtx.emitU2(cp.addMethodref(cp.addClass(cp.addUtf8("java/io/PrintStream")),
+			entryCtx.emit(Opcode.GETSTATIC);
+			entryCtx.emitU2(systemOut.index());
+			entryCtx.emit(Opcode.INVOKEVIRTUAL);
+			entryCtx.emitU2(cp.addMethodref(cp.addClass(cp.addUtf8("java/io/PrintStream")),
 					cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")))
 				.index());
 		}
-		mainCtx.emit(Opcode.RETURN);
+		entryCtx.emit(Opcode.RETURN);
 		// A condition nobody caught reports itself on standard error instead of
 		// unwinding out of main as a stack trace through mangled Lisp names. Last, so
-		// every handler main already carries dispatches first.
-		JvmUncaughtHandler.append(mainCtx);
+		// every handler main already carries dispatches first. In _top$run the same
+		// report-and-rethrow surfaces to a Java caller as ExceptionInInitializerError
+		// (which also poisons the class permanently) — the reactor's failure shape,
+		// stated in the docs rather than designed around.
+		JvmUncaughtHandler.append(entryCtx);
+		if (topLevelInClinit) {
+			// main (when kept) has nothing left to do: invoking it already triggered
+			// <clinit>, which ran the top level.
+			mainCtx.emit(Opcode.RETURN);
+		}
 
 		// Pass 2c: Compile lambda bodies (iteratively, new lambdas may be discovered
 		// during defun compilation, top-level compilation, or even lambda compilation)
@@ -2166,8 +2264,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
 		Utf8Constant codeUtf8 = cp.addUtf8("Code");
+		// The typed jvm-export wrapper methods (and their marshalling helpers), plus
+		// the _top$run method <clinit> calls to run the top level (see mainCtx above).
+		// Built here so every constant they mint precedes the pool serialization below.
+		final Utf8Constant topRunnerName = topLevelInClinit ? cp.addUtf8("_top$run") : null;
+		final MethodrefConstant topRunnerRef = topRunnerName == null ? null
+				: cp.addMethodref(thisClass, cp.addNameAndType(topRunnerName, topChunkDesc));
+		final List<JvmExportRuntimeBuilder.BuiltMethod> exportMethods = exportDecls.isEmpty() ? List.of()
+				: JvmExportRuntimeBuilder.build(cp, thisClass, exportDecls, functions);
 
 		// Effectively-final aliases for capture in the writer lambda
+		final Ctx topRunnerCtxFinal = topRunnerCtx;
 		final List<Integer> evalBody = evalCode;
 		final List<Integer> applyBody = applyCode;
 		final List<Integer> storeBody = storeCode;
@@ -2217,7 +2324,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				? cp.addFieldref(thisClass, cp.addNameAndType(streamsFieldName, streamsFieldDesc)) : null;
 		final @Nullable FieldrefConstant streamCountFieldRef = usesErrorOutput
 				? cp.addFieldref(thisClass, cp.addNameAndType(streamCountFieldName, streamCountFieldDesc)) : null;
-		final boolean initsClinit = seedsStandardStream || usesErrorOutput;
+		final boolean initsClinit = seedsStandardStream || usesErrorOutput || topLevelInClinit;
 		final Utf8Constant standardOutputClinitName = initsClinit ? cp.addUtf8("<clinit>") : null;
 		final Utf8Constant standardOutputClinitDesc = initsClinit ? cp.addUtf8("()V") : null;
 
@@ -2228,6 +2335,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// byte. The runtime-builder methods never defer: their raw-list patchBranch
 		// still throws, and they stay under budget by construction.
 		am.ik.jvm.BranchRelaxer.relax(mainCtx.code, mainCtx.deferredBranches, mainCtx.exceptionTable);
+		if (topRunnerCtx != null) {
+			am.ik.jvm.BranchRelaxer.relax(topRunnerCtx.code, topRunnerCtx.deferredBranches,
+					topRunnerCtx.exceptionTable);
+		}
 		for (Ctx chunk : topChunks) {
 			am.ik.jvm.BranchRelaxer.relax(chunk.code, chunk.deferredBranches, chunk.exceptionTable);
 		}
@@ -2447,14 +2558,40 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 			})
 			.writeMethods(methods -> {
-				methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
-						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(mainCtx.maxStack())
-								.writeU2(mainCtx.maxLocals)
-								.writeCode((Object[]) mainCtx.code.toArray(new Integer[0]))
-								.writeExceptionTable(mainCtx.exceptionTable)
-								.writeU2(0);
-						})));
+				if (!this.noMain) {
+					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(mainCtx.maxStack())
+									.writeU2(mainCtx.maxLocals)
+									.writeCode((Object[]) mainCtx.code.toArray(new Integer[0]))
+									.writeExceptionTable(mainCtx.exceptionTable)
+									.writeU2(0);
+							})));
+				}
+				if (topRunnerCtxFinal != null) {
+					// _top$run: the top-level body <clinit> runs (see mainCtx above).
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+							java.util.Objects.requireNonNull(topRunnerName), topChunkDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(topRunnerCtxFinal.maxStack())
+									.writeU2(topRunnerCtxFinal.maxLocals)
+									.writeCode((Object[]) topRunnerCtxFinal.code.toArray(new Integer[0]))
+									.writeExceptionTable(topRunnerCtxFinal.exceptionTable)
+									.writeU2(0);
+							})));
+				}
+				for (JvmExportRuntimeBuilder.BuiltMethod em : exportMethods) {
+					methods.add(
+							(em.isPublic() ? AccessFlag.ACC_PUBLIC : AccessFlag.ACC_PRIVATE) | AccessFlag.ACC_STATIC,
+							em.name(), em.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(em.maxStack())
+									.writeU2(em.maxLocals())
+									.writeCode((Object[]) em.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
 				// The top-level body, split into one or more void chunk methods main()
 				// calls.
 				for (int i = 0; i < topChunks.size(); i++) {
@@ -2607,6 +2744,13 @@ public final class JvmLispCompiler implements LispCompiler {
 					}
 					clinitCode.addAll(layoutClinitCode);
 					clinitCode.addAll(structTableClinitFinal);
+					if (topRunnerRef != null) {
+						// Run the top level last, after every piece of runtime infra
+						// above is seeded — this is the export-carrying class's
+						// "top level at instantiation" (see mainCtx above).
+						clinitCode.add(Opcode.INVOKESTATIC);
+						JvmRuntimeBuilder.emitU2(clinitCode, topRunnerRef.index());
+					}
 					clinitCode.add(Opcode.RETURN);
 					// max_stack: the ThreadLocal group peaks at 2 (NEW; DUP), the layout
 					// group at 4 (array; DUP; index; LDC), the reader's struct directory
@@ -3150,7 +3294,18 @@ public final class JvmLispCompiler implements LispCompiler {
 			// call-graph tree-shaker cannot see, so they are extra roots when
 			// tls-connect's
 			// :insecure trust-all manager is present.
-			java.util.Set<String> roots = new java.util.HashSet<>(Set.of("main"));
+			java.util.Set<String> roots = new java.util.HashSet<>();
+			if (!this.noMain) {
+				roots.add("main");
+			}
+			// Every jvm-export wrapper is a root: a host calls it directly, an edge no
+			// bytecode in the class can show. This is the directive's whole point under
+			// --optimize — without it a library's defuns are unreachable from main and
+			// shaken away (.kb/optimize-dead-code-elimination.md names this as the
+			// third liveness source, next to main and the dispatchable-funcId set).
+			for (JvmExportDirective decl : exportDecls) {
+				roots.add(decl.methodName());
+			}
 			if (usesJava) {
 				roots.add("_apply");
 			}

@@ -467,6 +467,7 @@ categories:
       - { slug: rontolisp-tls-listen-pem, name: "rontolisp:tls-listen-pem" }
       - { slug: rontolisp-tls-upgrade, name: "rontolisp:tls-upgrade" }
       - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
+      - { slug: rontolisp-jvm-export, name: "rontolisp:jvm-export" }
       - { slug: rontolisp-wasm-import, name: "rontolisp:wasm-import" }
       - { slug: rontolisp-wit-export, name: "rontolisp:wit-export" }
       - { slug: rontolisp-wit-import, name: "rontolisp:wit-import" }

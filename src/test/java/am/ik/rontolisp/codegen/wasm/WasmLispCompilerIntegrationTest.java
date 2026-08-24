@@ -459,6 +459,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void jvmExportDirectiveIsANoOpOnWasm() throws Exception {
+		// rontolisp:jvm-export declares a typed Java entry point for the JVM backend;
+		// here it is skipped, exactly as wasm-export is a no-op on the JVM — one
+		// library source can declare both.
+		assertThat(compileAndRun("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(rontolisp:jvm-export 'fact :params '(:s32) :returns :s32)
+				(print (fact 5))
+				""")).isEqualTo("120");
+	}
+
+	@Test
 	void exportScalarFunctionsCallableViaInvoke() throws Exception {
 		String program = """
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))

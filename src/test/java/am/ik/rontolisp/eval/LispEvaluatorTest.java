@@ -7064,6 +7064,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void jvmExportIsNoOpReturningTheNamedSymbol() {
+		// The JVM twin of wasm-export: a compile-time directive for the JVM backend,
+		// the same no-op here, so one source runs on every backend.
+		assertThat(evalMulti("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
+				+ "(rontolisp:jvm-export 'fact :params '(:s32) :returns :s32)" + "(fact 5)"))
+			.isEqualTo(new LispInteger(120));
+		assertThat(eval("(rontolisp:jvm-export 'fact :params '(:s32) :returns :s32)"))
+			.isEqualTo(new LispSymbol("FACT"));
+	}
+
+	@Test
 	void wasmImportDefinesAnErrorSignallingStub() {
 		// The directive returns the named symbol; the imported host function only
 		// exists in compiled WASM output, so calling the stub signals an error.

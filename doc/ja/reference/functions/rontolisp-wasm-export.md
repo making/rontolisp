@@ -7,7 +7,10 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 通常の関数ではなくコンパイル時のディレクティブです。**インタプリタ**および
 **JVM** バックエンドでは、名前付きシンボルをそのまま返す no-op となるため、同じ
 ソースがすべてのバックエンドで動作します。詳細は
-[WebAssembly へのコンパイル](../../compiling/wasm.md) を参照してください。
+[WebAssembly へのコンパイル](../../compiling/wasm.md) を参照してください。JVM
+版の双子は [`rontolisp:jvm-export`](rontolisp-jvm-export.md) で、同じ宣言が
+コンパイルされたクラス上に型付きで Java から呼び出し可能なメソッドを生成
+します。
 
 ```lisp
 (defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))

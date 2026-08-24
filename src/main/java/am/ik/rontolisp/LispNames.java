@@ -5597,6 +5597,15 @@ public final class LispNames {
 	public static final String WASM_EXPORT = "WASM-EXPORT";
 
 	/**
+	 * The {@code jvm-export} directive provided by the {@code rontolisp} package — the
+	 * JVM twin of {@link #WASM_EXPORT}. Used as {@code (rontolisp:jvm-export 'name
+	 * :params '(...) :returns ... :as "javaName")} to emit a typed, Java-callable static
+	 * method next to a compiled {@code defun}. A no-op on the interpreter and the WASM
+	 * backends.
+	 */
+	public static final String JVM_EXPORT = "JVM-EXPORT";
+
+	/**
 	 * The {@code wit-export} directive provided by the {@code rontolisp} package. Used as
 	 * {@code (rontolisp:wit-export "world.wit" :world name)} to declare that the program
 	 * implements a WIT world: the compiler checks every {@code defun} against the world's

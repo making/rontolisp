@@ -301,6 +301,13 @@ final class JvmExprCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 					return;
 				}
+				if (LispNames.JVM_EXPORT.equals(qn.member())) {
+					// A top-level (rontolisp:jvm-export ...) was consumed in Pass 1;
+					// reaching this compiler means the directive is nested inside a
+					// body, where it cannot declare anything.
+					throw new UnsupportedOperationException(
+							"rontolisp:jvm-export is a top-level directive; it cannot appear inside a function body");
+				}
 				if (LispNames.WASM_IMPORT.equals(qn.member())) {
 					// rontolisp:wasm-import declares a host function imported into WASM
 					// output; on the JVM the error-signalling stub defun was registered
