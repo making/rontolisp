@@ -132,8 +132,11 @@ public class GpuResidencyBench {
 		}
 		int dirty = residency.dirty();
 		int backed = residency.backed();
-		System.out.printf("  before the read: %d elements held, host array of %d (the header alone)%n", h.size(),
-				java.lang.reflect.Array.getLength(h.packed()));
+		int packed = java.lang.reflect.Array.getLength(h.packed());
+		// A lazy result's host array is the header alone (1 + rank); an eager backend's
+		// carries the elements, which is a statement about the tier and not about the handle.
+		System.out.printf("  before the read: %d elements held, host array of %d (%s)%n", h.size(), packed,
+				packed == h.size() + 2 ? "the elements -- this backend answers eagerly" : "the header alone");
 		double[] out = h.toArray();
 		System.out.printf("  the read:        dirty %d -> %d, stubs holding a backing %d -> %d%n", dirty,
 				residency.dirty(), backed, residency.backed());
@@ -169,8 +172,11 @@ public class GpuResidencyBench {
 		double before = GpuKernels.step(w, x).get(0);
 		x.set(3, x.get(3) + 1.0);
 		double after = GpuKernels.step(w, x).get(0);
-		// Row 0 of the answer moves by exactly the weight that multiplies element 3.
-		check("into a lazy device result", after - before, weights[3]);
+		// Row 0 of the answer moves by exactly the weight that multiplies element 3. Whether
+		// the array written to is a lazy stub's backing or the result itself is the tier's
+		// answer, not the handle's -- the handle writes what the guard hands it either way.
+		boolean lazy = java.lang.reflect.Array.getLength(x.packed()) != x.size() + 2;
+		check(lazy ? "into a lazy device result" : "into an eager result", after - before, weights[3]);
 
 		RontoFloatArray u = RontoFloatArray.of(start);
 		double base = GpuKernels.step(w, u).get(0);

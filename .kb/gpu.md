@@ -805,7 +805,8 @@ read at the end brings the result home exactly once -- one dirty copy cleared, o
 given a backing -- and answers the same library built without `--gpu` bit for bit; a
 `set` through the handle invalidates the resident copy the way the emitted `_gpuWritten`
 guard does, so the next call sees it. `examples/jvm/bench/`, `./run.sh gpu`, GB10 +
-GraalVM 25.0.4, CUDA (Metal unmeasured).
+GraalVM 25.0.4, CUDA. **On Metal the same three say the claim is true and idle** -- see
+"Lazy results and the resident tier on Metal" below.
 
 ### The collector, and the flags that do and do not help
 
@@ -1192,6 +1193,26 @@ first host touch would overlap the host with the device the way CUDA does, and i
 when a slab may be recycled, the one ordering the residency design exists to forbid. That
 is `.todo/495`, and the second item is `.todo/492`'s stubs, which are built in the library
 and unmeasured here because the interceptors do not run lazily.
+
+**The Java boundary, measured here too, finds nothing to defeat.** The same harness
+(`examples/jvm/bench/`, `./run.sh gpu`, 200 chained GEMVs over a resident 2048x2048 f32
+matrix, M4 Max 40-core GPU + GraalVM 25.0.3) answers all three of CUDA's questions with the
+eager tier above. The Java chain through the `RontoFloatArray` handle runs at **0.128-0.140
+ms/iteration against the same chain inside Lisp's 0.127-0.142 and a per-call materializing
+chain's 0.127-0.149** -- one number, three ways -- and all three upload the vector **200
+times** (1600 KB), the Lisp-internal chain included, because a result that came home
+eagerly has to go back up whatever the boundary does. So the handle's non-materializing
+wrap costs nothing here and buys nothing either: what it protects on CUDA is exactly the
+traffic this backend has already decided to pay, and on unified memory that upload is a
+memcpy into a shared slab. `toArray()` then moves NOTHING -- dirty 0 and backings 0,
+unchanged across the read, the host array already carrying all 2048 elements rather than
+the 2-element header -- and still answers the same library built without `--gpu` bit for
+bit. The half that does bite is `set` INTO THE RESIDENT MATRIX, the one thing this backend
+keeps on the device: the write invalidates its device copy through the same `_gpuWritten`
+guard the emitted code uses, and the next GEMV sees the new weight. This is a performance
+finding and not a correctness one ([jvm-export.md](jvm-export.md)); it becomes load-bearing
+the day `.todo/495` makes lazy results pay here, which is why `floatArrayResult` is not
+being changed to materialize.
 
 **The floor every resident-offered member is held to is `MIN_RESIDENT_ELEMENTS` = 2^14**,
 and the training step put it LOWER than the crossover table says. A launch over resident

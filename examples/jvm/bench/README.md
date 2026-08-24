@@ -67,5 +67,34 @@ The other two halves, printed by the same run:
   holds and into the resident matrix, whose device copy the write invalidates.
 
 Measured 2026-08-24 on an NVIDIA GB10 (aarch64, driver 580.173.02), Oracle
-GraalVM 25.0.4. **CUDA only** — the same three measurements on Metal are
-outstanding.
+GraalVM 25.0.4.
+
+### The same three on Metal: the handle is free, and not load-bearing
+
+Metal keeps lazy results **off** as a measured policy, so every kernel result
+comes home eagerly whether or not it crosses the boundary. That decides all
+three rows at once — the same 200 chained GEMVs, on an Apple M4 Max (40-core
+GPU, macOS 26.3.1), Oracle GraalVM 25.0.3:
+
+| | ms/iteration | uploads | KB moved |
+| --- | --- | --- | --- |
+| the same chain inside Lisp — no crossing at all | 0.127–0.142 | 200 | 1600 |
+| **the Java chain, one crossing per iteration** | **0.128–0.140** | **200** | **1600** |
+| a chain that materializes at every crossing | 0.127–0.149 | 200 | 1600 |
+
+All three are the same number, and the traffic column is the reason: the tier
+already pays the round trip the boundary was suspected of adding, and on unified
+memory that upload is a memcpy into a shared slab. So the handle costs nothing
+here either — but the claim it protects is idle until lazy results pay on this
+backend.
+
+The other two halves degenerate the same way, as expected:
+
+- `toArray()` moves **nothing** — dirty 0, backings 0, unchanged across the read
+  — because the result was never away: the host array before the read already
+  carries all 2048 elements, not the 2-element header. It still answers the
+  no-`--gpu` build **bit for bit**.
+- `set(i, v)` **into the resident matrix is the half that still bites**: the
+  matrix is the one thing Metal does keep on the device, and the write
+  invalidates its device copy so the next GEMV sees the new weight. The lazy
+  half is an eager result here, and the write lands on it too.

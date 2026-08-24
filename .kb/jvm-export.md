@@ -142,8 +142,21 @@ whole run** (8 KB) where a boundary that materialized would have paid **200** (1
 the same library compiled without `--gpu` BIT FOR BIT, with the host array before that read
 being the 2-element header alone. `set(i, v)` lands on the array the guard answers on both
 sides of the tier -- a lazy result the device still holds, and the resident matrix, whose
-device copy the write invalidates. **Metal is not measured** (no device here): the tier was
-settled separately there (`.todo/494`), so `.todo/510` stays open for that half.
+device copy the write invalidates.
+
+**Measured on Metal too, where it holds and is idle** (same harness, M4 Max 40-core GPU +
+GraalVM 25.0.3, macOS 26.3.1). Lazy results are OFF there as a measured policy
+([gpu.md](gpu.md), "Lazy results and the resident tier on Metal"), so every result comes
+home eagerly whether or not it crosses the boundary, and that answers all three at once:
+the Java chain, the same chain inside Lisp and a chain that materializes at every crossing
+are **one number** (0.127-0.149 ms/iteration across the three) and all upload the vector
+**200 times**, the Lisp-internal chain included. `toArray()` moves NOTHING -- the host
+array already carries every element, not the header alone -- and still answers the
+no-`--gpu` build bit for bit. Only the `set` into the RESIDENT MATRIX still exercises the
+seam, and it does: the write invalidates the device copy and the next kernel call sees it.
+So the handle costs nothing on either backend; what it protects is load-bearing on CUDA and
+idle on Metal until `.todo/495` makes lazy results pay there -- which is why
+`floatArrayResult` still does not materialize.
 
 ## Exports are tree-shaker roots — the third liveness source
 
