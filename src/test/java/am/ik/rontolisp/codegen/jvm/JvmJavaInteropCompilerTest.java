@@ -341,4 +341,37 @@ class JvmJavaInteropCompilerTest {
 		assertThat(roundTripped).isEqualTo(original);
 	}
 
+	// MethodHandles.Lookup.defineClass(byte[]) requires the defined class to share the
+	// lookup class's package, so a generated class that HAS a package must rename the
+	// embedded bridge into that package too -- not into the default package, which is
+	// what every other test above compiles into.
+	@Test
+	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackage() throws Exception {
+		List<LispVal> program = LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))");
+		JvmLispCompiler compiler = new JvmLispCompiler("com/example/Test");
+		byte[] classBytes = compiler.compile(program);
+		Path packageDir = this.tempDir.resolve("com").resolve("example");
+		Files.createDirectories(packageDir);
+		Files.write(packageDir.resolve("Test.class"), classBytes);
+
+		String bridgeName = "com/example/" + JvmJavaRuntimeBuilder.BRIDGE_NAME;
+		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1)).contains(bridgeName);
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("com.example.Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("7");
+		}
+	}
+
 }

@@ -22,9 +22,9 @@ import am.ik.rontolisp.LispNames;
  * {@code .class} when the {@code --simd} flag is on. Like {@link JvmJavaRuntimeBuilder}
  * it does not hand-assemble the kernel logic: the Vector API kernels live in
  * {@link JvmSimdVectorTemplate} (plain Java, compiled by the project build), whose
- * bytecode is read from the classpath at compile time, renamed into the default package
- * (a {@code Lookup.defineClass(byte[])} requirement) as {@value #BRIDGE_NAME},
- * base64-encoded, and embedded as string constants. The emitted
+ * bytecode is read from the classpath at compile time, renamed into the generated
+ * program's own package (a {@code Lookup.defineClass(byte[])} requirement) as
+ * {@value #BRIDGE_NAME}, base64-encoded, and embedded as string constants. The emitted
  * {@code private static void _simdInit()} decodes and defines the class on first use
  * (guarded by the {@code _simdInited} int field); unlike the {@code java:} bridge there
  * is no {@code bind} callback -- the kernels are self-contained. Every accelerated
@@ -34,7 +34,10 @@ import am.ik.rontolisp.LispNames;
  */
 final class JvmSimdRuntimeBuilder {
 
-	/** The default-package name the embedded bridge class is defined under at runtime. */
+	/**
+	 * The name the embedded bridge class is defined under at runtime, relative to the
+	 * generated program's own package (see {@link #build}).
+	 */
 	static final String BRIDGE_NAME = "RontoLispSimdBridge";
 
 	/** The template's internal (constant-pool) class name before renaming. */
@@ -70,12 +73,16 @@ final class JvmSimdRuntimeBuilder {
 	 * ({@code vec:matvec}, {@code vec:matvec-into}, {@code linalg:dot},
 	 * {@code linalg::%la-matmul-nd}) to the bridge entries that split their rows across
 	 * threads; every other member and every other byte of the runtime is the same
+	 * @param packagePrefix the generated class's package as an internal-name prefix
+	 * ({@code ""} for the default package, otherwise e.g. {@code "com/example/"}) --
+	 * {@code Lookup.defineClass(byte[])} requires the defined class to share the lookup
+	 * class's package, so the bridge is renamed into this one too
 	 * @return the runtime pieces
 	 */
-	static SimdRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
-			boolean parallel) {
-		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME,
-				BRIDGE_NAME);
+	static SimdRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat, boolean parallel,
+			String packagePrefix) {
+		String bridgeName = packagePrefix + BRIDGE_NAME;
+		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
 		String base64 = Base64.getEncoder().encodeToString(bridgeBytes);
 		List<ConstantPool.StringConstant> chunks = new ArrayList<>();
 		for (int i = 0; i < base64.length(); i += CHUNK_SIZE) {
@@ -99,7 +106,7 @@ final class JvmSimdRuntimeBuilder {
 		MethodrefConstant defineClass = cp.addMethodref(lookupClass,
 				cp.addNameAndType(cp.addUtf8("defineClass"), cp.addUtf8("([B)Ljava/lang/Class;")));
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(BRIDGE_NAME));
+		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
 		String binaryDesc = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 		String unaryDesc = "(Ljava/lang/Object;)Ljava/lang/Object;";
 		// The destination-passing kernels take the destination as a leading argument.

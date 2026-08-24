@@ -3435,12 +3435,15 @@ So `JvmGpuRuntimeBuilder` generalizes the template mechanism from one class to a
 of them plus one data resource:
 
 - every class file of `am.ik.gpu` is read from the compiler's classpath and renamed by ONE
-  prefix rule, `am/ik/gpu/` -> `RontoLispGpu`, so `Gpu` becomes `RontoLispGpuGpu` and a
-  nested `Gpu$Probe` follows its outer class without being named;
+  prefix rule, `am/ik/gpu/` -> the generated program's own package plus `RontoLispGpu`, so
+  `Gpu` becomes (in the default package) `RontoLispGpuGpu` and a nested `Gpu$Probe`
+  follows its outer class without being named; a class emitted into `com/example/` gets
+  `com/example/RontoLispGpuGpu` instead, because `Lookup.defineClass(byte[])` requires the
+  defined class to share the lookup class's package;
 - `JvmGpuTemplate` -- the call site's glue, ~130 lines: the packed `[rank, dim..., data]`
-  header, the null sentinel, nothing else -- is renamed to `RontoLispGpuBridge` by the
-  same pass, which is what lets it be WRITTEN against `am.ik.gpu` and type-checked by
-  javac while resolving to the embedded copies at run time;
+  header, the null sentinel, nothing else -- is renamed to `RontoLispGpuBridge` under the
+  same package by the same pass, which is what lets it be WRITTEN against `am.ik.gpu` and
+  type-checked by javac while resolving to the embedded copies at run time;
 - each is base64'd into its own chunked string constant, and the emitted `_gpuInit` runs
   one `MethodHandles.lookup().defineClass` per blob. Definition order is free: a class
   file's references to its siblings resolve lazily, on the first instruction that uses
@@ -3484,7 +3487,7 @@ Two routes were weighed and rejected, and the reasons are worth keeping:
   exists to make exactly that visible. Not acceptable here.
 
 **The kernels cannot be a resource on the other side.** `CudaGemm` reads `gemm.ptx` from
-beside itself; renamed into a compiled program's default package there is no such resource
+beside itself; renamed into a compiled program's own package there is no such resource
 and there never can be, so the PTX rides in the same blob as an ordinary string constant
 (verbatim, not base64 -- it is ASCII text) and `_gpuInit` hands it to `Gpu.useKernels`
 before anything can probe. That one public method is the entire cost this route imposed on

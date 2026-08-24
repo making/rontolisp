@@ -20,9 +20,10 @@ import am.ik.jvm.Opcode;
  * Builds the {@code --blas} CBLAS bridge for the generated standalone {@code .class}, the
  * exact shape of {@link JvmSimdRuntimeBuilder} one kernel wide: the logic lives in
  * {@link JvmBlasTemplate} (plain Java, compiled by the project build), whose bytecode is
- * read from the classpath at compile time, renamed into the default package as
- * {@value #BRIDGE_NAME}, base64-encoded and embedded as string constants, and the emitted
- * {@code private static void _blasInit()} decodes and defines it on first use.
+ * read from the classpath at compile time, renamed into the generated program's own
+ * package as {@value #BRIDGE_NAME}, base64-encoded and embedded as string constants, and
+ * the emitted {@code private static void _blasInit()} decodes and defines it on first
+ * use.
  *
  * <p>
  * It is a SECOND bridge rather than more methods on the {@code --simd} one because the
@@ -33,7 +34,10 @@ import am.ik.jvm.Opcode;
  */
 final class JvmBlasRuntimeBuilder {
 
-	/** The default-package name the embedded bridge class is defined under at runtime. */
+	/**
+	 * The name the embedded bridge class is defined under at runtime, relative to the
+	 * generated program's own package (see {@link #build}).
+	 */
 	static final String BRIDGE_NAME = "RontoLispBlasBridge";
 
 	/** The template's internal (constant-pool) class name before renaming. */
@@ -66,11 +70,16 @@ final class JvmBlasRuntimeBuilder {
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
 	 * @param stringConcat {@code String.concat(String)}
+	 * @param packagePrefix the generated class's package as an internal-name prefix
+	 * ({@code ""} for the default package, otherwise e.g. {@code "com/example/"}) --
+	 * {@code Lookup.defineClass(byte[])} requires the defined class to share the lookup
+	 * class's package, so the bridge is renamed into this one too
 	 * @return the runtime pieces
 	 */
-	static BlasRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat) {
-		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME,
-				BRIDGE_NAME);
+	static BlasRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
+			String packagePrefix) {
+		String bridgeName = packagePrefix + BRIDGE_NAME;
+		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
 		String base64 = Base64.getEncoder().encodeToString(bridgeBytes);
 		List<ConstantPool.StringConstant> chunks = new ArrayList<>();
 		for (int i = 0; i < base64.length(); i += CHUNK_SIZE) {
@@ -94,7 +103,7 @@ final class JvmBlasRuntimeBuilder {
 		MethodrefConstant defineClass = cp.addMethodref(lookupClass,
 				cp.addNameAndType(cp.addUtf8("defineClass"), cp.addUtf8("([B)Ljava/lang/Class;")));
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(BRIDGE_NAME));
+		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
 		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
 		Utf8Constant initDesc = cp.addUtf8("()V");

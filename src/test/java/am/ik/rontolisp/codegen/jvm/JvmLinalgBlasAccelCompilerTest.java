@@ -204,4 +204,39 @@ class JvmLinalgBlasAccelCompilerTest {
 		assertThat(run(compile(program, true, true))).isEqualTo(scalar(program));
 	}
 
+	// MethodHandles.Lookup.defineClass(byte[]) requires the defined class to share the
+	// lookup class's package; every test above compiles into the default package, so this
+	// one alone proves the embedded bridge is renamed into a NON-default package too --
+	// runs on any machine, since a below-threshold product declines regardless.
+	@Test
+	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackageAndRunsThere() throws Exception {
+		String lispCode = "(print (linalg:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))";
+		String expected = scalar(lispCode);
+		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] classBytes = new JvmLispCompiler("com/example/Test", false, OptimizeLevel.NONE, false, true)
+			.compile(program);
+
+		String bridgeName = "com/example/" + JvmBlasRuntimeBuilder.BRIDGE_NAME;
+		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).contains(bridgeName);
+
+		Path packageDir = this.tempDir.resolve("com").resolve("example");
+		Files.createDirectories(packageDir);
+		Files.write(packageDir.resolve("Test.class"), classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("com.example.Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo(expected);
+		}
+	}
+
 }

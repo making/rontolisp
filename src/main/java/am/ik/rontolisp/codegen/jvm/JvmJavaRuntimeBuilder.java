@@ -22,21 +22,21 @@ import am.ik.jvm.Opcode;
  * Builds the {@code java:} interop runtime for the generated standalone {@code .class}.
  * Unlike the other runtime builders it does not hand-assemble the interop logic: the
  * logic lives in {@link JavaBridgeTemplate} (plain Java, compiled by the project build),
- * whose bytecode is read from the classpath at compile time, renamed into the default
- * package (the generated program's package -- a {@code Lookup.defineClass(byte[])}
- * requirement) as {@value #BRIDGE_NAME}, base64-encoded, and embedded as string
- * constants. The emitted {@code private static void _javaInit()} decodes and defines the
- * class on first use (guarded by the {@code _javaInited} int field) and hands the
- * program's {@code _apply} callback over via {@code bind(Class)}, so the compiled output
- * stays a single self-contained {@code .class} file. Every {@code java:} call site is
- * preceded by an {@code _javaInit} call; the bridge method references resolve lazily (at
- * their first execution), by which time the class is defined in the program's own class
- * loader.
+ * whose bytecode is read from the classpath at compile time, renamed into the generated
+ * program's own package (a {@code Lookup.defineClass(byte[])} requirement) as
+ * {@value #BRIDGE_NAME}, base64-encoded, and embedded as string constants. The emitted
+ * {@code private static void _javaInit()} decodes and defines the class on first use
+ * (guarded by the {@code _javaInited} int field) and hands the program's {@code _apply}
+ * callback over via {@code bind(Class)}, so the compiled output stays a single
+ * self-contained {@code .class} file. Every {@code java:} call site is preceded by an
+ * {@code _javaInit} call; the bridge method references resolve lazily (at their first
+ * execution), by which time the class is defined in the program's own class loader.
  */
 final class JvmJavaRuntimeBuilder {
 
 	/**
-	 * The default-package name the embedded bridge class is defined under at runtime.
+	 * The name the embedded bridge class is defined under at runtime, relative to the
+	 * generated program's own package (see {@link #build}).
 	 */
 	static final String BRIDGE_NAME = "RontoLispJavaBridge";
 
@@ -68,10 +68,16 @@ final class JvmJavaRuntimeBuilder {
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
 	 * @param stringConcat {@code String.concat(String)}
+	 * @param packagePrefix the generated class's package as an internal-name prefix
+	 * ({@code ""} for the default package, otherwise e.g. {@code "com/example/"}) --
+	 * {@code Lookup.defineClass(byte[])} requires the defined class to share the lookup
+	 * class's package, so the bridge is renamed into this one too
 	 * @return the runtime pieces
 	 */
-	static JavaRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat) {
-		byte[] bridgeBytes = renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, BRIDGE_NAME);
+	static JavaRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
+			String packagePrefix) {
+		String bridgeName = packagePrefix + BRIDGE_NAME;
+		byte[] bridgeBytes = renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
 		String base64 = Base64.getEncoder().encodeToString(bridgeBytes);
 		List<ConstantPool.StringConstant> chunks = new ArrayList<>();
 		for (int i = 0; i < base64.length(); i += CHUNK_SIZE) {
@@ -95,7 +101,7 @@ final class JvmJavaRuntimeBuilder {
 		MethodrefConstant defineClass = cp.addMethodref(lookupClass,
 				cp.addNameAndType(cp.addUtf8("defineClass"), cp.addUtf8("([B)Ljava/lang/Class;")));
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(BRIDGE_NAME));
+		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
 		MethodrefConstant bind = cp.addMethodref(bridgeClass,
 				cp.addNameAndType(cp.addUtf8("bind"), cp.addUtf8("(Ljava/lang/Class;)V")));
 		String twoArgDesc = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";

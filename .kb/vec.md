@@ -398,8 +398,9 @@ scalar defun. `mean`/`norm` are accelerated transitively (their spliced bodies c
   like the rest (`matvecF` mirrors `dotF`, each row's f32 acc stored straight into the
   `float[]`).
 - `JvmSimdRuntimeBuilder` — reads the template `.class` from the classpath, renames it into
-  the default package (`RontoLispSimdBridge`), base64-embeds it, and emits `_simdInit`
-  (a `Lookup.defineClass` guarded by `_simdInited`), exactly like the `java:` interop bridge.
+  the generated program's own package (`RontoLispSimdBridge`), base64-embeds it, and emits
+  `_simdInit` (a `Lookup.defineClass` guarded by `_simdInited`), exactly like the `java:`
+  interop bridge.
 - `JvmSimdCompiler.compile` — emits the call site: `_simdInit` then the args then the bridge
   method. Wired in `JvmExprCompiler` (`ctx.simdOps != null && JvmSimdCompiler.handles(...)`).
 - Gate: `JvmLispCompiler` computes `usesSimd = simdAccel && programUsesAnyAcceleratedSimdOp`

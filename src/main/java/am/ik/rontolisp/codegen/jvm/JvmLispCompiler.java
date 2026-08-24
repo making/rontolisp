@@ -464,6 +464,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
 		ConstantPool cp = new ConstantPool();
 		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
+		// The internal-name package prefix of the generated class ("" for the default
+		// package, otherwise e.g. "com/example/"): every embedded acceleration/interop
+		// bridge is renamed into it, because Lookup.defineClass(byte[]) requires the
+		// defined class to share the lookup class's package.
+		int classNameSlash = this.className.lastIndexOf('/');
+		String bridgePackagePrefix = classNameSlash < 0 ? "" : this.className.substring(0, classNameSlash + 1);
 		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
 
 		ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
@@ -831,7 +837,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// forces the eval runtime (the bridge applies Lisp callables through _apply).
 		boolean usesJava = programUsesAnyJavaOp(program);
 		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJava
-				? JvmJavaRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
+				? JvmJavaRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
 
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
@@ -1249,7 +1255,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// packed float-array _fv* helpers still render/index its double[] results.
 		boolean usesSimd = this.simdAccel && programUsesAnyAcceleratedSimdOp(program);
 		final JvmSimdRuntimeBuilder.@Nullable SimdRuntime simdRuntime = usesSimd
-				? JvmSimdRuntimeBuilder.build(cp, thisClass, stringConcat, this.parallelAccel) : null;
+				? JvmSimdRuntimeBuilder.build(cp, thisClass, stringConcat, this.parallelAccel, bridgePackagePrefix)
+				: null;
 
 		// --blas: emit the CBLAS bridge only when the program actually reaches the
 		// linalg: matrix product -- directly, or through the spliced linalg:matmul /
@@ -1258,7 +1265,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// other, and a build with both emits both bridges.
 		boolean usesBlas = this.blasAccel && programUsesSymbol(program, JvmLinalgBlas.QUALIFIED_DOT);
 		final JvmBlasRuntimeBuilder.@Nullable BlasRuntime blasRuntime = usesBlas
-				? JvmBlasRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
+				? JvmBlasRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
 
 		// --gpu: the same gate over its own members -- the matrix by matrix case of
 		// linalg:dot, the STACKED rank->=3 product behind linalg:matmul, and the twelve
@@ -1275,7 +1282,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final JvmGpuRuntimeBuilder.@Nullable GpuRuntime gpuRuntime = usesGpu
-				? JvmGpuRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
+				? JvmGpuRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
 
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()

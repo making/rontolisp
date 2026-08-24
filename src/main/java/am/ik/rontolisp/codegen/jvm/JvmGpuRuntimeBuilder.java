@@ -31,10 +31,10 @@ import am.ik.jvm.Opcode;
  * must cost the device nothing (three calls, in one order), the 101-entry
  * {@code CUresult} table and which seventeen of its statuses are sticky, the per-device
  * safepoint threshold, the chunked critical copies. So the blob carries the library's own
- * class files instead, renamed by one prefix rule ({@code am/ik/gpu/} ->
- * {@value #GPU_PREFIX}) into the emitted program's package, and the compiled backend runs
- * the very bytes the interpreter runs. {@link JvmGpuTemplate} rides along as the call
- * site's glue and is renamed the same way, which is what lets it be written against
+ * class files instead, renamed by one prefix rule ({@code am/ik/gpu/} -> the emitted
+ * program's own package plus {@value #GPU_PREFIX}), and the compiled backend runs the
+ * very bytes the interpreter runs. {@link JvmGpuTemplate} rides along as the call site's
+ * glue and is renamed the same way, which is what lets it be written against
  * {@code am.ik.gpu} and type-checked by javac.
  *
  * <p>
@@ -49,9 +49,9 @@ import am.ik.jvm.Opcode;
  * <h2>The kernels cannot be a resource on the other side</h2>
  *
  * {@code CudaGemm} normally reads {@code gemm.ptx} from beside itself on the classpath,
- * and {@code MetalGemm} reads {@code gemm.metal}. Renamed into a compiled program's
- * default package there is no such resource and never can be, so both texts are embedded
- * as ordinary string constants and handed to {@code Gpu.useKernels} /
+ * and {@code MetalGemm} reads {@code gemm.metal}. Renamed into a compiled program's own
+ * package there is no such resource and never can be, so both texts are embedded as
+ * ordinary string constants and handed to {@code Gpu.useKernels} /
  * {@code useMetalKernels} by the emitted {@code _gpuInit}, before anything can probe.
  * BOTH travel in every class: the machine that compiled the program is not necessarily
  * the machine that runs it, and a standalone class that accelerated only on its
@@ -60,11 +60,15 @@ import am.ik.jvm.Opcode;
 final class JvmGpuRuntimeBuilder {
 
 	/**
-	 * The prefix the library's classes are renamed onto ({@code am/ik/gpu/X} -> ...X).
+	 * The prefix the library's classes are renamed onto ({@code am/ik/gpu/X} -> ...X),
+	 * relative to the generated program's own package (see {@link #build}).
 	 */
 	static final String GPU_PREFIX = "RontoLispGpu";
 
-	/** The default-package name the embedded call-site glue is defined under. */
+	/**
+	 * The name the embedded call-site glue is defined under, relative to the generated
+	 * program's own package (see {@link #build}).
+	 */
 	static final String BRIDGE_NAME = "RontoLispGpuBridge";
 
 	/** The template's internal (constant-pool) class name before renaming. */
@@ -210,14 +214,21 @@ final class JvmGpuRuntimeBuilder {
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
 	 * @param stringConcat {@code String.concat(String)}
+	 * @param packagePrefix the generated class's package as an internal-name prefix
+	 * ({@code ""} for the default package, otherwise e.g. {@code "com/example/"}) --
+	 * {@code Lookup.defineClass(byte[])} requires the defined class to share the lookup
+	 * class's package, so the whole embedded library is renamed into this one too
 	 * @return the runtime pieces
 	 */
-	static GpuRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat) {
+	static GpuRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
+			String packagePrefix) {
+		String bridgeName = packagePrefix + BRIDGE_NAME;
+		String gpuPrefix = packagePrefix + GPU_PREFIX;
 		List<List<ConstantPool.StringConstant>> blobs = new ArrayList<>();
 		for (String name : GPU_CLASSES) {
-			blobs.add(chunks(cp, rename(loadResource(GPU_INTERNAL_PREFIX + name + ".class"))));
+			blobs.add(chunks(cp, rename(loadResource(GPU_INTERNAL_PREFIX + name + ".class"), bridgeName, gpuPrefix)));
 		}
-		blobs.add(chunks(cp, rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"))));
+		blobs.add(chunks(cp, rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName, gpuPrefix)));
 		// The PTX is text, not bytecode: it is embedded verbatim rather than base64'd,
 		// and goes to Gpu.useKernels instead of to defineClass.
 		List<ConstantPool.StringConstant> ptx = chunks(cp,
@@ -244,7 +255,7 @@ final class JvmGpuRuntimeBuilder {
 		MethodrefConstant defineClass = cp.addMethodref(lookupClass,
 				cp.addNameAndType(cp.addUtf8("defineClass"), cp.addUtf8("([B)Ljava/lang/Class;")));
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(BRIDGE_NAME));
+		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
 		MethodrefConstant kernels = cp.addMethodref(bridgeClass,
 				cp.addNameAndType(cp.addUtf8("gpuKernels"), cp.addUtf8("(Ljava/lang/String;)V")));
 		MethodrefConstant metalKernels = cp.addMethodref(bridgeClass,
@@ -407,15 +418,17 @@ final class JvmGpuRuntimeBuilder {
 	}
 
 	/**
-	 * Renames one class file out of its own package and out of {@code am.ik.gpu}. Both
-	 * renames run over every file: the glue names the library, the library names itself,
-	 * and a name that is not in a given file simply does not match. The library's rename
-	 * is a PREFIX rule, so a nested class ({@code am/ik/gpu/Gpu$Probe}) follows its outer
-	 * one without being listed.
+	 * Renames one class file out of its own package and out of {@code am.ik.gpu}, into
+	 * the generated program's own package. Both renames run over every file: the glue
+	 * names the library, the library names itself, and a name that is not in a given file
+	 * simply does not match. The library's rename is a PREFIX rule, so a nested class
+	 * ({@code am/ik/gpu/Gpu$Probe}) follows its outer one without being listed.
+	 * @param bridgeName {@code packagePrefix + }{@link #BRIDGE_NAME}
+	 * @param gpuPrefix {@code packagePrefix + }{@link #GPU_PREFIX}
 	 */
-	private static byte[] rename(byte[] classFile) {
-		byte[] renamed = JvmJavaRuntimeBuilder.renameClass(classFile, TEMPLATE_INTERNAL_NAME, BRIDGE_NAME);
-		return JvmJavaRuntimeBuilder.renameClass(renamed, GPU_INTERNAL_PREFIX, GPU_PREFIX);
+	private static byte[] rename(byte[] classFile, String bridgeName, String gpuPrefix) {
+		byte[] renamed = JvmJavaRuntimeBuilder.renameClass(classFile, TEMPLATE_INTERNAL_NAME, bridgeName);
+		return JvmJavaRuntimeBuilder.renameClass(renamed, GPU_INTERNAL_PREFIX, gpuPrefix);
 	}
 
 	/** Reads one of the embedded files from the compiler's own classpath. */
