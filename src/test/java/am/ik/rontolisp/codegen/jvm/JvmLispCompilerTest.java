@@ -12602,6 +12602,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileRank2InitialContentsFillsRowMajor() throws Exception {
+		// A literal rank >= 2 :initial-contents used to be refused outright on
+		// the compiled backends; it now lowers to a nested row-major fill, matching the
+		// interpreter -- for the general boxed representation and for the packed
+		// float-array one (the silent-zero bug the interpreter fix addressed).
+		assertThat(compileAndRun("(print (aref (make-array '(2 2) :initial-contents '((1 2) (3 4))) 1 1))"))
+			.isEqualTo("4");
+		assertThat(compileAndRun("(print (aref (make-array '(2 3) :initial-contents '((1 2 3) (4 5 6))) 1 0))"))
+			.isEqualTo("4");
+		assertThat(compileAndRun("""
+				(print (make-array '(2 2) :element-type 'double-float
+				                    :initial-contents '((1.0 2.0) (3.0 4.0))))
+				""")).isEqualTo("#d((1.0 2.0) (3.0 4.0))");
+		assertThat(compileAndRun("""
+				(print (make-array '(2 2 2) :initial-contents '(((1 2) (3 4)) ((5 6) (7 8)))))
+				""")).isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+	}
+
+	@Test
 	void compilePackedIntVectorIntrospection() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((a (make-array 3 :element-type '(unsigned-byte 8))))

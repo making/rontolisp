@@ -14788,6 +14788,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void packedFloatArrayMakeArrayHonoursInitialContents() {
+		// :initial-contents used to be silently dropped for the packed
+		// float-array representation (unlike the packed integer-vector one above),
+		// leaving the zero-initialized block with no error -- for every rank.
+		assertThat(eval("(make-array 3 :element-type 'double-float :initial-contents '(1.0 2.0 3.0))").print())
+			.isEqualTo("#d(1.0 2.0 3.0)");
+		assertThat(eval("(make-array 3 :element-type 'single-float :initial-contents '(1.0 2.0 3.0))").print())
+			.isEqualTo("#f(1.0 2.0 3.0)");
+		assertThat(eval("(make-array '(2 2) :element-type 'double-float" + " :initial-contents '((1.0 2.0) (3.0 4.0)))")
+			.print()).isEqualTo("#d((1.0 2.0) (3.0 4.0))");
+		// The motivating repro: a rank-2 packed matrix built with :initial-contents
+		// used to matvec as all zeros.
+		assertThat(eval("""
+				(let* ((m (make-array '(2 2) :element-type 'double-float
+				                       :initial-contents '((1.0 2.0) (3.0 4.0))))
+				       (v (make-array '(2 2) :element-type 'double-float)))
+				  (setf (aref v 0 0) 1.0 (aref v 0 1) 2.0 (aref v 1 0) 3.0 (aref v 1 1) 4.0)
+				  (equalp m v))
+				""")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
 	void packedIntVectorIntrospection() {
 		assertThat(eval("""
 				(let ((a (make-array 3 :element-type '(unsigned-byte 8))))

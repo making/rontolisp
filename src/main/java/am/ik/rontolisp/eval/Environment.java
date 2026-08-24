@@ -900,21 +900,34 @@ public final class Environment implements Scope {
 			if (packedType != null && !hasFillPointer && !adjustable) {
 				// :element-type 'double-float / 'single-float with no fill pointer /
 				// adjustability / displacement selects the packed float-array
-				// representation (unboxed double[] / float[]). The initial element
-				// coerces
-				// to a double (narrowed to a float for single-float); a non-real is a
-				// type
-				// error (there is no degrade path).
+				// representation (unboxed double[] / float[]). :initial-contents fills it
+				// (any rank, walked row-major like the general array below); otherwise
+				// the initial element coerces to a double (narrowed to a float for
+				// single-float). A non-real is a type error (there is no degrade path).
 				double fill = initGiven ? asDouble(init) : 0.0;
 				if (packedType.equals(LispNames.SINGLE_FLOAT)) {
 					float[] sdata = new float[total];
-					if (fill != 0.0) {
+					if (initialContents != null) {
+						LispVal[] tmp = new LispVal[total];
+						fillInitialContents(initialContents, dims, 0, tmp, 0);
+						for (int i = 0; i < total; i++) {
+							sdata[i] = (float) asDouble(tmp[i]);
+						}
+					}
+					else if (fill != 0.0) {
 						java.util.Arrays.fill(sdata, (float) fill);
 					}
 					return new LispSingleFloatArray(sdata, dims);
 				}
 				double[] fdata = new double[total];
-				if (fill != 0.0) {
+				if (initialContents != null) {
+					LispVal[] tmp = new LispVal[total];
+					fillInitialContents(initialContents, dims, 0, tmp, 0);
+					for (int i = 0; i < total; i++) {
+						fdata[i] = asDouble(tmp[i]);
+					}
+				}
+				else if (fill != 0.0) {
 					java.util.Arrays.fill(fdata, fill);
 				}
 				return new LispDoubleFloatArray(fdata, dims);

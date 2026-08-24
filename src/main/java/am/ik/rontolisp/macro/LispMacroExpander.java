@@ -27171,10 +27171,14 @@ public final class LispMacroExpander {
 	/**
 	 * Lowers {@code (make-array dims ... :initial-contents list)} for the compiled
 	 * backends to the equivalent allocation plus an element-wise fill: the inner
-	 * {@code make-array} keeps every other keyword, and the contents list is walked with
-	 * {@code %aset} (rank-1; a literal multi-dimension list is rejected -- the
-	 * interpreter fills nested contents natively). Returns {@code null} when the form has
-	 * no {@code :initial-contents}.
+	 * {@code make-array} keeps every other keyword. A rank-1 array (dims not a literal
+	 * multi-element list) fills with {@code %aset}, walking the contents with
+	 * {@code elt}; a literal rank >= 2 dims list fills with
+	 * {@link #lowerNestedInitialContentsMakeArray}, one nested {@code dotimes} per
+	 * dimension descending into {@code contents} with {@code elt} and writing each leaf
+	 * through {@code %row-major-aset} at its row-major flat index (this used to be
+	 * refused outright, out of step with the interpreter, which fills nested contents
+	 * natively). Returns {@code null} when the form has no {@code :initial-contents}.
 	 * @param cons the make-array expression
 	 * @return the lowering, or null
 	 */
@@ -27202,8 +27206,16 @@ public final class LispMacroExpander {
 		if (parts.get(1) instanceof LispCons dims && dims.car() instanceof LispSymbol q
 				&& LispNames.QUOTE.equals(q.name()) && dims.cdr() instanceof LispCons dimList
 				&& dimList.car() instanceof LispCons literalDims && literalDims.cdr() instanceof LispCons) {
-			throw new UnsupportedOperationException(
-					"make-array :initial-contents supports rank-1 arrays only on the compiled backends");
+			List<LispVal> dimVals = literalDims.toList();
+			int[] sizes = new int[dimVals.size()];
+			for (int i = 0; i < dimVals.size(); i++) {
+				if (!(dimVals.get(i) instanceof LispInteger n)) {
+					throw new UnsupportedOperationException(
+							"make-array :initial-contents requires literal integer dimensions on the compiled backends");
+				}
+				sizes[i] = (int) n.value();
+			}
+			return lowerNestedInitialContentsMakeArray(inner, contents, sizes);
 		}
 		LispSymbol arrVar = new LispSymbol("__mk_arr");
 		LispSymbol idxVar = new LispSymbol("__mk_i");
@@ -27218,6 +27230,64 @@ public final class LispMacroExpander {
 					.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, fmtCall(LispNames.ELT, contentsVar, idxVar)))));
 		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents,
 				makeLet(lenVar.name(), callOf(LispNames.LENGTH, contentsVar), fill)));
+	}
+
+	/**
+	 * Builds the rank >= 2 lowering for {@link #lowerInitialContentsMakeArray}: allocate
+	 * with {@code inner}, bind {@code contents} once, then descend it one dimension at a
+	 * time with nested {@code dotimes}/{@code elt} and store each leaf with
+	 * {@code %row-major-aset} at the row-major flat index computed from the
+	 * compile-time-known {@code sizes} (a running counter is unnecessary since the
+	 * strides -- and so every index -- are already constants).
+	 * @param inner the {@code (make-array dims other-keywords...)} call, contents
+	 * stripped
+	 * @param contents the {@code :initial-contents} form (any nested sequence, evaluated
+	 * once)
+	 * @param sizes the literal dimension sizes, most significant first
+	 * @return the let-wrapped allocation-plus-fill expression
+	 */
+	private static LispVal lowerNestedInitialContentsMakeArray(List<LispVal> inner, LispVal contents, int[] sizes) {
+		LispSymbol arrVar = new LispSymbol("__mk_arr");
+		LispSymbol contentsVar = new LispSymbol("__mk_c");
+		int[] strides = new int[sizes.length];
+		strides[sizes.length - 1] = 1;
+		for (int d = sizes.length - 2; d >= 0; d--) {
+			strides[d] = strides[d + 1] * sizes[d + 1];
+		}
+		LispVal loop = buildNestedInitialContentsFillLevel(arrVar, contentsVar, sizes, strides, 0,
+				new java.util.ArrayList<>());
+		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents, loop));
+	}
+
+	// One dimension level of the nested-fill loop: (dotimes (idx size [arr]) body),
+	// where body either descends one more level (elt-binding the next level's sequence)
+	// or, at the innermost dimension, stores the leaf value. idxVars accumulates the
+	// loop variables bound so far (outermost first) so the leaf level can compute its
+	// flat row-major index directly from them and the precomputed strides.
+	private static LispVal buildNestedInitialContentsFillLevel(LispSymbol arrVar, LispVal seqExpr, int[] sizes,
+			int[] strides, int level, List<LispSymbol> idxVars) {
+		LispSymbol idxVar = new LispSymbol("__mk_i" + level);
+		List<LispSymbol> withThisLevel = new java.util.ArrayList<>(idxVars);
+		withThisLevel.add(idxVar);
+		LispVal body;
+		if (level == sizes.length - 1) {
+			LispVal index = strides[0] == 1 ? withThisLevel.get(0)
+					: fmtCall(LispNames.MUL, withThisLevel.get(0), new LispInteger(strides[0]));
+			for (int d = 1; d < withThisLevel.size(); d++) {
+				LispVal term = (strides[d] == 1) ? withThisLevel.get(d)
+						: fmtCall(LispNames.MUL, withThisLevel.get(d), new LispInteger(strides[d]));
+				index = fmtCall(LispNames.ADD, index, term);
+			}
+			body = fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, index, fmtCall(LispNames.ELT, seqExpr, idxVar));
+		}
+		else {
+			LispSymbol rowVar = new LispSymbol("__mk_row" + (level + 1));
+			body = makeLet(rowVar.name(), fmtCall(LispNames.ELT, seqExpr, idxVar),
+					buildNestedInitialContentsFillLevel(arrVar, rowVar, sizes, strides, level + 1, withThisLevel));
+		}
+		LispVal resultForm = (level == 0) ? arrVar : LispNil.INSTANCE;
+		LispVal spec = listToCons(List.of(idxVar, new LispInteger(sizes[level]), resultForm));
+		return listToCons(List.of(new LispSymbol(LispNames.DOTIMES), spec, body));
 	}
 
 	/**

@@ -222,6 +222,20 @@ cases:
       ((UNSIGNED-BYTE 8) 0 #(1 44))
       (DOUBLE-FLOAT 0.0 T "xxx")
       T
+  - name: make-array-rank2-initial-contents
+    source: |
+      ;; A literal rank >= 2 :initial-contents used to be silently zero-filled
+      ;; on the interpreter and refused outright on the compiled backends.
+      (print (aref (make-array '(2 2) :initial-contents '((1 2) (3 4))) 1 1))
+      (print (aref (make-array '(2 3) :initial-contents '((1 2 3) (4 5 6))) 1 0))
+      (print (make-array '(2 2) :element-type 'double-float
+                          :initial-contents '((1.0 2.0) (3.0 4.0))))
+      (print (make-array '(2 2 2) :initial-contents '(((1 2) (3 4)) ((5 6) (7 8)))))
+    expected: |
+      4
+      4
+      #d((1.0 2.0) (3.0 4.0))
+      #3A(((1 2) (3 4)) ((5 6) (7 8)))
   - name: fill-and-over-arity-funcall
     source: |
       (let* ((fl-a (make-array 5 :element-type '(unsigned-byte 8) :initial-element 9))
