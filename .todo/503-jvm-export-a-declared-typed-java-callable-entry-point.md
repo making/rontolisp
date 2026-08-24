@@ -54,7 +54,8 @@ mangled defun name** -- `(jvm-export 'norm2 :as "NORM2")` would be a duplicate m
 name, which is a `ClassFormatError` at LOAD time, the same failure mode
 `.kb/core-representation.md` records for redefined defuns.
 
-**3. Run the top level before the first export call.** `defvar`/`defparameter`
+**3. Run the top level before the first export call -- and let `--no-main` name the
+mode.** `defvar`/`defparameter`
 initialization is in `_top$0..N`, which only `main` calls, so a static call arriving first
 reads `null` -- the spike got
 `NPE: ... because the return value of "_big(Object)" is null` out of `SCALED-SUM(1,2)`.
@@ -67,6 +68,39 @@ stream-global and layout-pool seeding, so this is an append, not a new method), 
 around: a top-level form that throws becomes `ExceptionInInitializerError` and poisons the
 class permanently, and a top-level `exit` kills the caller's JVM. Both are true of the
 reactor too.
+
+**`--no-main` is the flag this mode should be named by**, on the `--no-wasi` precedent,
+and it is not cosmetic. `--no-wasi` turns a WASI *command* (entry `_start`, runs once,
+exits) into a *reactor* (top level at instantiation, host calls exports afterwards); the
+JVM has exactly those two shapes and only the first one today. `--no-main` is the same
+turn: drop `main`, and the class is a library.
+
+- **Hard dependency on the export roots above.** `main` is the only shake root a normal
+  program has (`JvmLispCompiler:3126`), so removing it without export roots shakes the
+  class to nothing. `--no-main` with no `jvm-export` must be a CLI error naming the flag
+  -- the same shape as `--host-random` requiring `--no-wasi`.
+- **It removes the re-entrancy problem rather than adding one.** `main` is a static method
+  OF the generated class, so invoking it already triggers `<clinit>` first (JVMS class
+  initialization); the JVM's own init locking is the idempotency. So the top level goes in
+  `<clinit>` for every export-carrying class, `main` (when present) keeps only its own
+  epilogue, and no `_inited` guard is needed on either path.
+- **Two things `main` does besides calling `_top$N` have to move with it.** The
+  uncaught-condition exception table (`JvmUncaughtHandler` -- and note that inside
+  `<clinit>` its report-and-rethrow surfaces as `ExceptionInInitializerError`, which also
+  poisons the class for every later call), and the `System.out.flush()` a raw-octet
+  program gets. Both are why this must stay GATED rather than becoming the default: a
+  flagless build's stderr and exit behaviour is pinned by `ci-spec.yaml` and by
+  `.kb/emitted-output-determinism.md`.
+- **It changes how this project's own tests reach a program.** 32 sites invoke the
+  generated `main` reflectively (`JvmLispCompilerTest:106` and friends); a `--no-main`
+  program needs another trigger -- `Class.forName` for the top-level effects, or the export
+  call itself -- so the harness gains a second entry helper.
+- **It is what makes a library jar honest.** No `main` means no `Main-Class` in
+  `.todo/505`'s manifest, which is correct for an artifact nobody should `java -jar`.
+
+Keep it orthogonal to the directive, not implied by it: a program may legitimately want
+both a `main` and exports (a CLI tool that is also a library), and only the flag can say
+which.
 
 **4. Marshal, and never silently mis-marshal.** `BoundaryType`'s existing designators map
 cleanly (`:s8`..`:u64` -> `byte`/`short`/`int`/`long`, `:float` -> `double`, `:bool` ->

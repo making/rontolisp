@@ -11,7 +11,7 @@ are the work:
 | item | what |
 |---|---|
 | `.todo/502` | the embedded bridges hardcode the default package, so `--simd`/`--blas`/`--gpu`/`java:` die in a packaged class -- **the prerequisite blocker** |
-| `.todo/503` | `rontolisp:jvm-export`: a declared, typed, Java-callable entry point (the `wasm-export` twin) |
+| `.todo/503` | `rontolisp:jvm-export` + `--no-main`: a declared, typed, Java-callable entry point, and the library mode it implies (the `wasm-export` / `--no-wasi` twin) |
 | `.todo/504` | the packed float array as a Java boundary type -- a copying boundary costs 8x the kernel |
 | `.todo/505` | `-o out.jar`: a consumable jar carrying its own Maven coordinates |
 | `.todo/506` | `rontolisp-maven-plugin`: compile `src/main/lisp` into `target/classes` |
@@ -80,7 +80,9 @@ two, which are notes for whoever takes `.todo/503`:
    `NPE: ... because the return value of "_big(Object)" is null`. `.todo/503` -- the
    reactor component "runs its top level at instantiation"
    (`.kb/wasm-export-no-wasi.md`), and `<clinit>` is that, so cross-backend consistency
-   picks the answer.
+   picks the answer. **The JVM has the same two shapes wasm does -- a command and a
+   library -- and only the first one today**, so `--no-main` names the second exactly as
+   `--no-wasi` names the reactor; `.todo/503` carries it.
 5. **The value representation leaks, and it leaks SILENTLY.** A string carries its frame
    quotes as storage (`.kb/core-representation.md`), so `GREET("ron")` -- a plain Java
    `String` -- answered `"hello, o"`: it read the `r` and `n` as the frame and took the

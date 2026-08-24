@@ -40,8 +40,10 @@ rontolisp kernel.lisp -o target/acme-kernels-1.0.0.jar \
   too, where it replaces the path-derived name (and makes CLAUDE.md's "keep the name
   path-free" caveat unnecessary).
 - **The jar contents**: the class at its package path, `META-INF/MANIFEST.MF` with
-  `Main-Class` when the program has a top level (so `java -jar out.jar` still works), and
-  the two `META-INF/maven/...` files when `--maven-coordinates` is given.
+  `Main-Class` when the class HAS a `main` (so `java -jar out.jar` still works for a
+  program, and a `--no-main` library jar -- `.todo/503` -- carries no `Main-Class`, which
+  is correct for an artifact nobody should `java -jar`), and the two
+  `META-INF/maven/...` files when `--maven-coordinates` is given.
 - **`--emit-pom` writes the pom NEXT to the jar** as well, mirroring `--emit-wit` next to
   the `.wasm` -- that is the established precedent for "also write the metadata a host
   needs", including its refuse-to-overwrite-a-file-we-did-not-write check
