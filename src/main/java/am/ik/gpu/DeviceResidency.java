@@ -31,8 +31,8 @@ import org.jspecify.annotations.Nullable;
  * member left on the device rather than downloading it, or an array a device member
  * updated in place. A dirty entry is the one place the library is the source of truth,
  * and every host read of that array has to {@linkplain #claim materialize} it first; the
- * enumeration of those readers, on each interceptor, is in {@code .kb/gpu.md} ("A result
- * comes home on first host touch") and pinned by a test on each, exactly as the writers
+ * enumeration of those readers, on each interceptor, is in {@code .kb/gpu.md} ("The two
+ * seams, and what must report through them") and pinned by a test on each, as the writers
  * are. The device side never drops a dirty entry on its own: every path that removes one
  * -- an eviction, a release, a replacement at a different span -- hands the buffer back
  * to the owning device as a {@link Flush} to DOWNLOAD before it is freed, and the device
@@ -59,7 +59,7 @@ import org.jspecify.annotations.Nullable;
  * zeros. The identity the interceptors key on is the STUB's -- it is the object the
  * program holds -- and the backing is handed out only for the duration of a host read or
  * write; a host rung that would answer its argument back is made to answer the caller's
- * own object ({@code .kb/gpu.md}, "A lazy result allocates no host array").
+ * own object ({@code .kb/gpu.md}, "Lazy results, and the result that has no host array").
  *
  * <h2>The key is the IDENTITY of the primitive array, held WEAKLY</h2>
  *
@@ -129,8 +129,8 @@ import org.jspecify.annotations.Nullable;
  * ({@link #evictOverBudget}), as a flush. A collection is asked for at most once per
  * {@link #COLLECTION_SHARE} of the budget PRODUCED since the last one
  * ({@link #producedSinceCollection}), so a live set that genuinely exceeds the budget
- * does not collect on every call. {@code .kb/gpu.md}, "A lazy result allocates no host
- * array", has the measurement.
+ * does not collect on every call. {@code .kb/gpu.md}, "The collector, and the flags that
+ * do and do not help", has the measurement.
  *
  * <h2>Cost on the read and write paths</h2>
  *

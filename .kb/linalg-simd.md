@@ -244,10 +244,9 @@ member, so `--simd` did nothing for it on the interpreter and the JVM and made i
 SLOWER on wasm-GC (it paid the `TYPE_VBLOCK` `_v_get`/`_v_set` cost this file opens with
 and got nothing back).
 
-**`--gpu` intercepts this member too** (2026-08-21, `.kb/gpu.md`'s "The stacked matrix
-product"; it took the todo-109 unary ufuncs and `erf` the same day, `.kb/gpu.md`'s "The
-element-wise tier"), and the batch odometer is exactly where the two differ: the device walks the
-batch with ONE stride per operand, so a broadcast leading axis is stride 0 as it is here,
+**`--gpu` intercepts this member too** (2026-08-21, `.kb/gpu.md`'s intercepted set; it
+took the todo-109 unary ufuncs and `erf` the same day), and the batch odometer is exactly
+where the two differ: the device walks the batch with ONE stride per operand, so a broadcast leading axis is stride 0 as it is here,
 but a broadcast axis sitting UNDER a non-broadcast one is a decline there and lands back
 on this kernel. The threshold there is the TOTAL work, `batch*n*m*p`, since a stack is one
 round trip.
@@ -372,9 +371,9 @@ shapes (`*n-embd*` 384, `*block-size*` 256, `*max-steps*` 5), interpreter, wall 
 | `--simd` | 332.3 s | **172.1 s** |
 | `--gpu --simd` | 329.9 s | **171.5 s** |
 
-**1.93x, and it closes the todo-123 phase-4a finding** (`.kb/gpu.md`, "On the INTERPRETER
-the same program does not move at all"): the reason the device bought nothing there was
-that ONE exact `gelu` cost ~21 s against 0.007 s for the matmul it had just taken. That
+**1.93x, and it closes the todo-123 phase-4a finding**: the reason the device bought
+nothing on the interpreter was that ONE exact `gelu` cost ~21 s against 0.007 s for the
+matmul it had just taken. That
 call is now 0.155 s. The device still buys nothing on the interpreter -- the lesson stands,
 only the member that dominates has changed -- and the original todo-468 sizing note
 ("this is NOT the bottleneck at the shapes the examples test") was written against the
@@ -386,8 +385,7 @@ product out of the way.
 Both members are here for the same reason and neither is numpy: **the seam intercepts
 `linalg:` names and nothing else**, and a JFR profile of `train-gpt-soseki.lisp` under
 `--gpu --simd` said the remaining cost was two boxed Lisp loops that were not `linalg:` at
-all (`.kb/gpu.md`'s "What a training step is actually made of"): `torch::%o-adam-step` at
-22-31% and `linalg:rand`/`randn` at 16%, with `_dbl` and `_fvAset1` -- the boxing and the
+all: `torch::%o-adam-step` at 22-31% and `linalg:rand`/`randn` at 16%, with `_dbl` and `_fvAset1` -- the boxing and the
 `(setf (row-major-aref ...))` they drive -- on top. **So the loops moved to `linalg:`
 rather than the seam widening to `torch:`.** That was the first of the item's two open
 decisions, and it is the cheap answer: no new touch point in any of the three backends,
@@ -498,8 +496,8 @@ behavior as `vec:`, deliberately.
 
 Eleven members in one round, and they are here for the reason todo-473's two were: a JFR
 profile of `train-gpt-soseki.lisp` under `--gpu --simd` at the notebook's shapes, taken
-AFTER todo-473 landed (`.kb/gpu.md`, "The second profile"), said that 40% of what was left
-of a training step was boxed `row-major-aref` walks that were not intercepted at all --
+AFTER todo-473 landed, said that 40% of what was left of a training step was boxed
+`row-major-aref` walks that were not intercepted at all --
 `linalg:where` through `torch:masked-fill` (and its `%la-broadcast-to` ->
 `%la-gather-strided` materializations, 22% on their own), `linalg:greater` through the
 dropout mask (6%, the `emap` branch of `%la-bcast`), `linalg:slice` through `torch:cat`'s

@@ -1080,7 +1080,8 @@ class LinalgGpuTest {
 		LispVal result = eval(program, true);
 		// The value came back as a packed array whose storage the device still holds:
 		// one more dirty copy, and on the host a STUB -- no array of the result's size
-		// was allocated at all (.kb/gpu.md, "A lazy result allocates no host array") ...
+		// was allocated at all (.kb/gpu.md, "Lazy results, and the result that has no
+		// host array") ...
 		assertThat(am.ik.gpu.GpuThresholds.dirtyCount()).isEqualTo(dirty + 1);
 		assertThat(am.ik.gpu.GpuThresholds.backingCount()).isEqualTo(backed);
 		Object storage = result instanceof LispSingleFloatArray f ? f.storage()

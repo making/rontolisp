@@ -213,7 +213,7 @@ public final class LinalgGpu {
 		// cross-entropy pick -- index-driven copies, hence bit-identical, hence members
 		// over a resident operand at any size like the rest of that tier. And the clip
 		// norm's sum of squares, the one member here whose fold ORDER is not the defun's
-		// (.kb/gpu.md, "The index tier and the clip norm").
+		// (.kb/gpu.md, "The tiers that exist only over a resident operand").
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_TAKE_ROWS, 2, LinalgGpu::takeRows);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + ":" + LispNames.LINALG_GATHER, 2, LinalgGpu::pick);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SCATTER_ROWS, 3,
@@ -249,8 +249,8 @@ public final class LinalgGpu {
 	 * through {@link FloatArrayAccessHook}: the records' element setter and the in-place
 	 * {@code --simd} kernels report writes, and the records' {@code data()} accessor --
 	 * the one way to a packed array's storage on this backend -- reports reads
-	 * ({@code .kb/gpu.md}, "A result comes home on first host touch"). The interceptor
-	 * itself hands the device {@code storage()}, which does not.
+	 * ({@code .kb/gpu.md}, "The two seams, and what must report through them"). The
+	 * interceptor itself hands the device {@code storage()}, which does not.
 	 */
 	private static void hooks() {
 		FloatArrayAccessHook.install(LinalgGpuKernels::written, LinalgGpuKernels::materialize);

@@ -64,7 +64,7 @@ shapes is ~20 ms of waiting however little it moves.
    `MetalGemm.lazyResultsPay()` to `true` only if both are faster than the pure pool;
    otherwise record the numbers beside the round's and keep it `false`. Either way the
    interceptors' request (`Gpu.lazyResultsIfWorthwhile`) is the only switch.
-5. Re-run todo-509's collector matrix (`.kb/gpu.md`, "The Metal half of that round"). It
+5. Re-run todo-509's collector matrix (`.kb/gpu.md`, "The collector, and the flags that do and do not help"). It
    found `System.gc()` called ZERO times on this backend in every configuration at both
    shapes, because the library's collection request is gated on the LRU having only DIRTY
    copies left and eagerly there are none -- so the whole CUDA collector rule is scoped

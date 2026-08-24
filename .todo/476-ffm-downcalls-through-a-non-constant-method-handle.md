@@ -2,7 +2,7 @@
 
 Filed 2026-08-22 off the third `--gpu --simd` profile of
 `examples/llm-from-scratch/chapter03/train-gpt-soseki.lisp` at the notebook's shapes, taken
-while todo-474 (device residency) landed (`.kb/gpu.md`, "Device residency, built").
+while todo-474 (device residency) landed (`.kb/gpu.md`, "Device residency").
 Difficulty: Low-Medium. Status: open -- seen in a profile, not measured in isolation.
 
 ## What the profile shows

@@ -914,7 +914,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.branch(Opcode.IF_ICMPNE, rankN);
 		// rank 1: count = d[1], the header's one dimension -- read from the header and
 		// not from the Java length, because under --gpu a result stub is the header alone
-		// (.kb/gpu.md, "A lazy result allocates no host array").
+		// (.kb/gpu.md, "Lazy results, and the result that has no host array").
 		a.aload(d);
 		a.iconst(1);
 		loadHeaderInt(a, single);

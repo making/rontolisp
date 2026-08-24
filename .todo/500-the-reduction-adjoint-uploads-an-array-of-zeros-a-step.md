@@ -2,9 +2,9 @@
 
 Difficulty: Medium
 
-Filed 2026-08-24 while closing `.todo/497`. Read `.kb/gpu.md` "Chapter 2 at the book's
-shapes" first -- it is the profile this comes out of -- and "The step is device-bound"
-before it, whose opened pipeline this closes 90 times a batch.
+Filed 2026-08-24 while closing `.todo/497`. Read `.kb/gpu.md` "The launch pipeline, and what a
+step is actually bound by" first, whose opened pipeline this closes 90 times a batch.
+The chapter-2 profile it was filed off is in the git history of that file.
 
 ## What the profile found
 

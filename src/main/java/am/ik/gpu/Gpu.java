@@ -647,9 +647,10 @@ public final class Gpu {
 	 * a chain of members {@code matmul -> div -> where -> softmax -> matmul} move nothing
 	 * over the link, and it is the mode the interceptors run in where the device says it
 	 * pays ({@link #lazyResultsIfWorthwhile}: CUDA, not Metal), having enumerated every
-	 * host read ({@code .kb/gpu.md}, "A result comes home on first host touch"). Off --
-	 * the default, and the contract every method's javadoc states -- a result is in its
-	 * array when the call returns. Switching off brings every lazy result home first.
+	 * host read ({@code .kb/gpu.md}, "The two seams, and what must report through them").
+	 * Off -- the default, and the contract every method's javadoc states -- a result is
+	 * in its array when the call returns. Switching off brings every lazy result home
+	 * first.
 	 *
 	 * <p>
 	 * Never runs the probe: the wish is recorded and applied to the device the moment it

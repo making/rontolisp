@@ -316,7 +316,8 @@ final class JvmLinalgKernelCompiler {
 		// result the device still holds the only copy of comes home), and each array
 		// the member writes is reported BEFORE the write -- here, where only a host rung
 		// can follow, so a device rung that took the member and left the array resident
-		// is not undone (.kb/gpu.md, "A result comes home on first host touch"). Each
+		// is not undone (.kb/gpu.md, "The two seams, and what must report through them").
+		// Each
 		// temp is REBOUND to what the guard answers -- the array, or a result stub's
 		// backing -- and the original kept beside it, so that a host rung's answer can be
 		// mapped back onto the caller's own object below (_gpuUnswap).

@@ -2,9 +2,9 @@
 
 Difficulty: High
 
-Filed 2026-08-23 while closing `.todo/496`. Read `.kb/gpu.md` "The step is device-bound:
-the pipeline opened, and the passes counted" first -- its tables are the evidence, and
-its PyTorch decomposition is the target.
+Filed 2026-08-23 while closing `.todo/496`. Read `.kb/gpu.md` "The launch pipeline, and what a
+step is actually bound by" first -- its PyTorch decomposition is the target. The
+round-by-round tables it was filed off are in the git history of that file.
 
 ## Where it stands
 

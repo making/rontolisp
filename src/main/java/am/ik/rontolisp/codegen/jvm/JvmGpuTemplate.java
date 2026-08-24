@@ -60,9 +60,10 @@ final class JvmGpuTemplate {
 		// because the compiled program materializes before every host read of
 		// packed-array storage -- _fvAref*, _fvToGeneral*, every host rung of every
 		// accelerated call site, the typed loops, the bulk write-sequence, Java interop
-		// -- through _gpuMaterialize (.kb/gpu.md, "A result comes home on first host
-		// touch"). The MSL text arrives AFTER this (gpuMetalKernels), so the wish must
-		// not run the probe, and it does not: it is applied when the probe runs.
+		// -- through _gpuMaterialize (.kb/gpu.md, "The two seams, and what must
+		// report through them"). The MSL text arrives AFTER this (gpuMetalKernels), so
+		// the wish must not run the probe, and it does not: it is applied when the
+		// probe runs.
 		Gpu.lazyResultsIfWorthwhile();
 	}
 
@@ -1470,7 +1471,7 @@ final class JvmGpuTemplate {
 	 * {@code int}s, each required to land inside {@code [0, bound)}; anything else
 	 * declines. The vector is MATERIALIZED first: it is read here on the host, and a lazy
 	 * result the device still holds the only copy of would otherwise read as zeros
-	 * ({@code .kb/gpu.md}, "A result comes home on first host touch").
+	 * ({@code .kb/gpu.md}, "The two seams, and what must report through them").
 	 */
 	private static int @Nullable [] rowIndexes(@Nullable Object idx, int bound) {
 		if (!packed(idx) || rank(idx) != 1) {
