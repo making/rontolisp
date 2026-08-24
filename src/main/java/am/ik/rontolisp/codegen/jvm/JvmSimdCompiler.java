@@ -98,7 +98,21 @@ final class JvmSimdCompiler {
 		int arity = Objects.requireNonNull(ARITIES.get(member));
 		requireArity(args.size() == arity + 1,
 				"vec:" + member + " expects " + arity + " argument" + (arity == 1 ? "" : "s"));
-		// Make sure the bridge class is defined before its method reference resolves.
+		// The scalar vec.lisp fallback for a runtime without jdk.incubator.vector
+		// (JvmSimdRuntimeBuilder's _simdReady() reads false there): the very defun the
+		// program would call without --simd. Only reachable when it is actually there,
+		// at the arity this call site expects -- a shadowed redefinition, say, takes
+		// the ordinary direct-call path instead and forgoes acceleration altogether,
+		// same guard as compileGpuMatvec below.
+		String qualified = PackageRegistry.qualify(LispNames.VEC_PKG, member);
+		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
+		if (defun == null || defun.variadic() || defun.paramCount() != arity) {
+			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
+			return;
+		}
+		// Make sure the bridge class is defined -- or, on a runtime without
+		// jdk.incubator.vector, that _simdReady() below reads false -- before anything
+		// decides which path to take.
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
 		// Under --gpu the lane kernel reads its arguments on the host, so each is
@@ -110,8 +124,14 @@ final class JvmSimdCompiler {
 		// "Device residency"). The allocating forms return a fresh array the device has
 		// never seen; an -into form answers its destination, which is mapped back onto
 		// the caller's own object (_gpuUnswap) so the program never holds a backing.
+		//
+		// Each argument is evaluated exactly once, into a temp that BOTH the bridge
+		// call and the scalar-defun fallback below read -- recompiling an argument form
+		// would run its side effects twice (the same reason JvmLinalgKernelCompiler's
+		// chain uses temps).
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 		boolean into = member.endsWith("-INTO");
+		int[] slots = new int[arity];
 		int original = -1, handed = -1;
 		for (int i = 1; i <= arity; i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
@@ -119,7 +139,6 @@ final class JvmSimdCompiler {
 				boolean destination = into && i == 1;
 				if (destination) {
 					original = ctx.allocTemp();
-					handed = ctx.allocTemp();
 					ctx.emit(Opcode.DUP);
 					ctx.emit(Opcode.ASTORE);
 					ctx.emit(original);
@@ -130,14 +149,41 @@ final class JvmSimdCompiler {
 							gpuOps.get(destination ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))
 					.index());
 				if (destination) {
+					handed = ctx.allocTemp();
 					ctx.emit(Opcode.DUP);
 					ctx.emit(Opcode.ASTORE);
 					ctx.emit(handed);
 				}
 			}
+			slots[i - 1] = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(slots[i - 1]);
+		}
+		// if (!_simdReady()) goto fallback; Bridge(slots...); goto end; fallback:
+		// defun(slots...); end: -- the fallback lands exactly where a declined linalg:
+		// attempt would, so the gpu unswap below applies uniformly to either answer.
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(ops.get(JvmSimdRuntimeBuilder.AVAILABLE)).index());
+		int fallbackBranch = ctx.code.size();
+		ctx.emit(Opcode.IFEQ);
+		ctx.emitU2(0);
+		for (int slot : slots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slot);
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get(member)).index());
+		int skipFallback = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
+		for (int slot : slots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slot);
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(defun.methodref().index());
+		JvmEmitHelper.patchBranch(ctx, skipFallback, ctx.code.size());
 		if (gpuOps != null && into) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(original);
@@ -165,9 +211,11 @@ final class JvmSimdCompiler {
 		requireArity(args.size() == 3, "vec:matvec expects 2 arguments");
 		String qualified = PackageRegistry.qualify(LispNames.VEC_PKG, LispNames.VEC_MATVEC);
 		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
-		if (simd == null && (defun == null || defun.variadic() || defun.paramCount() != 2)) {
-			// Nothing to decline to: the ordinary call path, which is what the program
-			// would have run without the flag.
+		if (defun == null || defun.variadic() || defun.paramCount() != 2) {
+			// No scalar defun to decline to at this call site (a shadowed vec:matvec,
+			// or a different arity) -- required unconditionally now that the --simd
+			// bridge can itself decline (module missing at runtime, see below): the
+			// ordinary call path is what the program would have run without the flags.
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
@@ -209,16 +257,40 @@ final class JvmSimdCompiler {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slot);
 		}
-		for (int slot : slots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slot);
-		}
-		ctx.emit(Opcode.INVOKESTATIC);
 		if (simd != null) {
+			// if (!_simdReady()) goto fallback -- a runtime without jdk.incubator.vector
+			// (JvmSimdRuntimeBuilder) takes the scalar defun instead, the same decline
+			// every other accelerated vec:/linalg: call site gives.
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).index());
+			int fallbackBranch = ctx.code.size();
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
+			for (int slot : slots) {
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slot);
+			}
+			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(Objects.requireNonNull(simd.get(LispNames.VEC_MATVEC)).index());
+			int skipFallback = ctx.code.size();
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
+			for (int slot : slots) {
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slot);
+			}
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(defun.methodref().index());
+			JvmEmitHelper.patchBranch(ctx, skipFallback, ctx.code.size());
 		}
 		else {
-			ctx.emitU2(Objects.requireNonNull(defun).methodref().index());
+			for (int slot : slots) {
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slot);
+			}
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(defun.methodref().index());
 		}
 		JvmEmitHelper.patchBranch(ctx, taken, ctx.code.size());
 	}

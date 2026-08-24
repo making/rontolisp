@@ -349,7 +349,18 @@ final class JvmLinalgKernelCompiler {
 			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, hostBranches);
 		}
 		if (simd != null) {
+			// A runtime without jdk.incubator.vector never defined the bridge
+			// (JvmSimdRuntimeBuilder's _simdInit caught the LinkageError and left
+			// _simdReady() false): skip this rung entirely rather than resolve a
+			// method reference into it, landing exactly where a declined kernel would
+			// -- the next rung, or the scalar defun.
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).index());
+			int skipPos = ctx.code.size();
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
 			emitAttempt(ctx, simd, extendedCall ? extendedKey(member) : qualified, layout, slots, arity, hostBranches);
+			JvmEmitHelper.patchBranch(ctx, skipPos, ctx.code.size());
 		}
 		for (int i = 0; i < arity; i++) {
 			ctx.emit(Opcode.ALOAD);

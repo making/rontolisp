@@ -2369,6 +2369,10 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(simdRuntime.initedFieldName())
 						.writeU2(simdRuntime.initedFieldDesc())
 						.writeU2(0));
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(simdRuntime.availableFieldName())
+						.writeU2(simdRuntime.availableFieldDesc())
+						.writeU2(0));
 				}
 				if (blasRuntime != null) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
@@ -2739,6 +2743,22 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(simdRuntime.maxStack())
 									.writeU2(simdRuntime.maxLocals())
 									.writeCode((Object[]) simdRuntime.initCode().toArray(new Integer[0]))
+									.writeExceptionTable(simdRuntime.initExceptionTable())
+									.writeU2(0);
+							})));
+					// _simdReady(): returns whether the bridge define succeeded --
+					// _simdInit must have run first, same as every ops.get(member)
+					// call site. False on a runtime without jdk.incubator.vector, so
+					// the accelerated call sites (JvmSimdCompiler, the --simd rung of
+					// JvmLinalgKernelCompiler's chain) can decline to the scalar defun
+					// instead of resolving a method reference into a bridge class that
+					// was never defined.
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.readyName(),
+							simdRuntime.readyDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(1)
+									.writeU2(0)
+									.writeCode((Object[]) simdRuntime.readyCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

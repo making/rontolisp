@@ -7,11 +7,11 @@ accelerated.
 
 Three backends, one per interception mechanism:
 
-| backend | interceptor | kernels |
-|---|---|---|
-| interpreter (`prog.lisp --simd`) | `eval/LinalgSimd` (re-`defineFunction`) | `eval/LinalgSimdKernels` (jdk.incubator.vector) |
-| JVM (`-o Prog.class --simd`) | `codegen/jvm/JvmLinalgKernelCompiler` (call site) | `JvmSimdVectorTemplate.la*` (the one embedded bridge) |
-| wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (45 emitted functions) |
+| backend | interceptor | kernels | without `jdk.incubator.vector` |
+|---|---|---|---|
+| interpreter (`prog.lisp --simd`) | `eval/LinalgSimd` (re-`defineFunction`) | `eval/LinalgSimdKernels` (jdk.incubator.vector) | `VecSimd.available()` probes first; `RontoLispCli.enableSimd` warns once and leaves `evaluator.setSimd` off, so `LinalgSimd.install` never runs -- the scalar defuns stay bound |
+| JVM (`-o Prog.class --simd`) | `codegen/jvm/JvmLinalgKernelCompiler` (call site) | `JvmSimdVectorTemplate.la*` (the one embedded bridge) | `_simdInit` catches the `LinkageError` `Lookup.defineClass` raises, warns once, leaves `_simdAvailable` false; every call site checks `_simdReady()` (the `ops.get("available")` methodref) BEFORE resolving a reference into the bridge, and skips straight to the next rung / scalar defun when it reads false |
+| wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (45 emitted functions) | n/a -- the kernels are emitted wasm functions, not an external module; nothing to be missing |
 
 `--no-gc` is out of scope: `linalg:` cannot compile there at all (`linalg::%la-make` uses
 `&optional`, and `--no-gc` has no general array type).
@@ -841,6 +841,22 @@ the failure would be at RUN time, not build time. `JvmSimdRuntimeBuilder` regist
 `"linalg::%la-im2col"`), because `vec:add` and `linalg:add` share a member name. The
 descriptors are composed per member arity (1/2/5/6 `Object` params).
 
+**`jdk.incubator.vector` is an optional module**: `_simdInit`'s
+`Lookup.defineClass` resolves the template's verifier-visible types AT THAT CALL, so a JVM
+without `--add-modules jdk.incubator.vector` fails to LINK the bridge -- before any bridge
+method ever runs, and unlike `--blas`/`--gpu`, whose "is it there" probe is a method call
+inside an already-linked bridge. `_simdInit` catches the `LinkageError`, prints the same
+one-line warning `RontoLispCli.enableSimd` prints (once -- the `_simdInited` guard field
+also gates the catch, so a program with a thousand accelerated call sites still warns
+once), and leaves the new `_simdAvailable` field false; `_simdReady()` exposes it as one
+more `ops` entry (`"available"`). Every accelerated call site -- `JvmSimdCompiler`'s `vec:`
+call sites, `JvmSimdCompiler.compileGpuMatvec`'s `--gpu`-declined rung, and the `--simd`
+rung below -- checks `_simdReady()` BEFORE emitting a call that would resolve a method
+reference into the bridge, and falls back to the scalar defun (over the SAME temps) when it
+reads false, instead of letting the class-define failure surface as a raw
+`NoClassDefFoundError` at whichever call site runs first. `JvmSimdModuleFallbackTest` pins
+this by running a compiled class in a fresh child JVM that never sees `--add-modules`.
+
 The compiled packed array carries an **in-array header** `[rank, dim..., data...]`,
 `off = 1 + rank`. So an element-wise linalg kernel is the `vec:` one at a different offset,
 and the fresh result must copy the whole header (`laNewLike`) rather than write `[1, n]`.
@@ -849,8 +865,12 @@ and the fresh result must copy the whole header (`laNewLike`) rather than write 
 
 ```
 _simdInit(); a = <arg1>; b = <arg2>;          // ASTORE into temps
-r = Bridge.laAdd(a, b);
-if (r == null) r = linalg$colonadd(a, b);     // ALOAD the same temps
+if (_simdReady()) {                           // skipped entirely if the module is absent
+  r = Bridge.laAdd(a, b);
+  if (r != null) goto end;
+}
+r = linalg$colonadd(a, b);                    // ALOAD the same temps
+end:
 ```
 
 The gate is `JvmLispCompiler.programUsesAnyAcceleratedSimdOp`, now scanning both packages.

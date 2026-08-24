@@ -406,13 +406,19 @@ scalar defun. `mean`/`norm` are accelerated transitively (their spliced bodies c
 - Gate: `JvmLispCompiler` computes `usesSimd = simdAccel && programUsesAnyAcceleratedSimdOp`
   and builds the runtime → `Ctx.simdOps`. **`JvmArrayRuntimeBuilder` / the `_fv*` packed
   helpers are UNCHANGED** — packed is a separate repr; the bridge result is rendered/indexed
-  by the same `_fv*` helpers. Running a `--simd` class needs
-  `java --add-modules jdk.incubator.vector`; the default build is byte-identical and needs
-  no incubator module.
-- **Dead-flag guard** ([[simd-shadow-and-dead-flag-lesson]]): running a `--simd` class
-  without `--add-modules jdk.incubator.vector` MUST fail at `_simdInit`'s `defineClass`
-  (`NoClassDefFoundError: jdk/incubator/vector/Vector`) — proof the interception fired. A
-  scalar build runs fine without the module.
+  by the same `_fv*` helpers. Getting the acceleration out of a `--simd` class needs
+  `java --add-modules jdk.incubator.vector` (see the degrade bullet below for a JVM
+  without it); the default build is byte-identical and needs no incubator module.
+- **Module-absence degrade** (was a hard fail before it): `_simdInit`'s
+  `Lookup.defineClass` still fails to LINK the bridge on a JVM without
+  `--add-modules jdk.incubator.vector` (`LinkageError`/`NoClassDefFoundError:
+  jdk/incubator/vector/Vector` — proof the interception fired, verified via
+  `embedsBridge`/`JvmSimdModuleFallbackTest` rather than a runnable crash pin now), but
+  `_simdInit` CATCHES it, warns once on stderr, and leaves the new `_simdAvailable` field
+  false. Every accelerated call site checks the `_simdReady()` accessor before resolving a
+  reference into the bridge and falls back to the scalar defun when it reads false — the
+  same degrade `--blas`/`--gpu` already gave on a machine with no library/device. A scalar
+  build runs fine without the module regardless, as before.
 - Because the spliced `mean`/`norm` bodies always call `sum`/`dot`, ANY `--simd` program
   using the vec package at all embeds the bridge (the dead defuns are shaken by `--optimize`).
 

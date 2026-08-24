@@ -15300,11 +15300,13 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdModuleNeedsTheSimdProposalAndTheDefaultOneDoesNot() throws Exception {
-		// The runnable dead-flag guard, the wasm-GC counterpart of the JVM's
-		// NoClassDefFoundError-without-the-incubator-module check: turning the SIMD
-		// proposal off makes wasmtime REFUSE to compile the --simd module (its v128
-		// opcodes no longer validate), while the default module still runs. Proves the
-		// interception fired -- correctness alone cannot, since both compute the same
+		// The runnable dead-flag guard, the wasm-GC counterpart of the JVM's embedded-
+		// bridge check (JvmSimdAccelCompilerTest#embedsBridge; a JVM without
+		// jdk.incubator.vector degrades instead of failing to run at all):
+		// turning the SIMD proposal off makes wasmtime REFUSE to compile the --simd
+		// module (its v128 opcodes no longer validate), while the default module still
+		// runs. Proves the interception fired -- correctness alone cannot, since both
+		// compute the same
 		// values. (relaxed-simd must be disabled too: wasmtime rejects simd=n on its
 		// own.)
 		String source = "(print (vec:dot (vec:ones 5) (vec:ones 5)))";
