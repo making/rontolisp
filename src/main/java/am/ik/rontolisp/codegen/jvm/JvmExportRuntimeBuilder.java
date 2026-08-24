@@ -10,6 +10,8 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import org.jspecify.annotations.Nullable;
+
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.JvmExportDirective;
 
@@ -82,6 +84,26 @@ final class JvmExportRuntimeBuilder {
 
 	private static final String BYTES_OUT_DESC = "(Ljava/lang/Object;)[B";
 
+	/**
+	 * The internal name of the packed float-array handle a compiled library hands out.
+	 */
+	static final String HANDLE_CLASS = "am/ik/rontolisp/runtime/RontoFloatArray";
+
+	private static final String HANDLE_DESC = "L" + HANDLE_CLASS + ";";
+
+	/** The internal name of the marshalling seam the wrappers call for that handle. */
+	static final String BOUNDARY_CLASS = "am/ik/rontolisp/runtime/RontoBoundary";
+
+	private static final String ARRAY_ARG = "floatArrayArgument";
+
+	private static final String ARRAY_ARG_DESC = "(" + HANDLE_DESC + "ILjava/lang/Class;Ljava/lang/String;)"
+			+ "Ljava/lang/Object;";
+
+	private static final String ARRAY_RESULT = "floatArrayResult";
+
+	private static final String ARRAY_RESULT_DESC = "(Ljava/lang/Object;ILjava/lang/Class;Ljava/lang/String;)"
+			+ HANDLE_DESC;
+
 	private JvmExportRuntimeBuilder() {
 	}
 
@@ -92,6 +114,65 @@ final class JvmExportRuntimeBuilder {
 	 */
 	static boolean needsReader(List<JvmExportDirective> decls) {
 		return decls.stream().anyMatch(d -> d.paramTypes().contains(BoundaryType.S_EXPR));
+	}
+
+	/**
+	 * Returns whether any declaration carries a packed float array across the boundary.
+	 * The caller must then force the packed float-array runtime on (a declared handle is
+	 * the only thing a library needs to reach {@code aref}/{@code length} over one) and
+	 * make the handle's class files travel with the compiled output.
+	 * @param decls the parsed directives
+	 * @return {@code true} when a {@code :float-vector} / {@code :float-matrix} appears
+	 */
+	static boolean needsFloatArray(List<JvmExportDirective> decls) {
+		return decls.stream()
+			.anyMatch(d -> d.returnType().jvmOnly() || d.paramTypes().stream().anyMatch(BoundaryType::jvmOnly));
+	}
+
+	/**
+	 * The class files of {@code am.ik.rontolisp.runtime} that travel BESIDE a compiled
+	 * library that hands out a packed float-array handle.
+	 *
+	 * <p>
+	 * They are copied verbatim, at their canonical names — NOT renamed into the program's
+	 * package the way the acceleration bridges are
+	 * ({@code .kb/template-class-embedding.md}). The rename is what makes a bridge
+	 * private to one program, and privacy is exactly wrong for a boundary TYPE: two
+	 * rontolisp libraries must agree on the handle class or a caller cannot feed one
+	 * library's result to the other's kernel. One canonical name, identical bytes, and a
+	 * jar that still has no dependency ({@code .kb/jvm-export.md}, "Where the handle type
+	 * comes from").
+	 *
+	 * <p>
+	 * {@code package-info.class} is deliberately absent: it carries only the build's
+	 * nullness annotation, which is the compiler's business and not the artifact's.
+	 */
+	static final List<String> RUNTIME_CLASS_FILES = List.of("am/ik/rontolisp/runtime/RontoBoundary.class",
+			"am/ik/rontolisp/runtime/RontoFloatArray.class", "am/ik/rontolisp/runtime/RontoFloatArray$Width.class");
+
+	/**
+	 * Reads {@link #RUNTIME_CLASS_FILES} off the compiler's own classpath.
+	 * @return each class file's path within an output tree (or jar), mapped to its bytes
+	 */
+	static Map<String, byte[]> runtimeClassFiles() {
+		Map<String, byte[]> files = new java.util.LinkedHashMap<>();
+		for (String path : RUNTIME_CLASS_FILES) {
+			try (java.io.InputStream in = JvmExportRuntimeBuilder.class.getClassLoader().getResourceAsStream(path)) {
+				if (in == null) {
+					throw new IllegalStateException(path + " not found on the classpath");
+				}
+				files.put(path, in.readAllBytes());
+			}
+			catch (java.io.IOException ex) {
+				throw new java.io.UncheckedIOException(ex);
+			}
+		}
+		return Map.copyOf(files);
+	}
+
+	/** The rank a packed float-array designator declares. */
+	private static int declaredRank(BoundaryType type) {
+		return type == BoundaryType.FLOAT_MATRIX ? 2 : 1;
 	}
 
 	/**
@@ -110,6 +191,7 @@ final class JvmExportRuntimeBuilder {
 			case BOOL -> "Z";
 			case STRING, S_EXPR -> "Ljava/lang/String;";
 			case BYTES -> "[B";
+			case FLOAT_VECTOR, FLOAT_MATRIX -> HANDLE_DESC;
 			case VOID -> "V";
 		};
 	}
@@ -136,7 +218,7 @@ final class JvmExportRuntimeBuilder {
 	static List<BuiltMethod> build(ConstantPool cp, ClassConstant thisClass, List<JvmExportDirective> decls,
 			Map<String, JvmLispCompiler.FunctionInfo> functions) {
 		List<BuiltMethod> methods = new ArrayList<>();
-		Refs refs = new Refs(cp, thisClass);
+		Refs refs = new Refs(cp, thisClass, needsFloatArray(decls));
 		boolean needArgGuard = false;
 		boolean needResultGuard = false;
 		boolean needUnframe = false;
@@ -213,7 +295,25 @@ final class JvmExportRuntimeBuilder {
 
 		final ClassConstant longArrayClass;
 
-		Refs(ConstantPool cp, ClassConstant thisClass) {
+		final ClassConstant thisClassConstant;
+
+		final @Nullable MethodrefConstant floatArrayArgument;
+
+		final @Nullable MethodrefConstant floatArrayResult;
+
+		Refs(ConstantPool cp, ClassConstant thisClass, boolean floatArray) {
+			this.thisClassConstant = thisClass;
+			if (floatArray) {
+				ClassConstant boundary = cp.addClass(cp.addUtf8(BOUNDARY_CLASS));
+				this.floatArrayArgument = cp.addMethodref(boundary,
+						cp.addNameAndType(cp.addUtf8(ARRAY_ARG), cp.addUtf8(ARRAY_ARG_DESC)));
+				this.floatArrayResult = cp.addMethodref(boundary,
+						cp.addNameAndType(cp.addUtf8(ARRAY_RESULT), cp.addUtf8(ARRAY_RESULT_DESC)));
+			}
+			else {
+				this.floatArrayArgument = null;
+				this.floatArrayResult = null;
+			}
 			this.longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 			this.stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
 			this.longArrayClass = cp.addClass(cp.addUtf8("[J"));
@@ -317,6 +417,17 @@ final class JvmExportRuntimeBuilder {
 					invoke(asm, Opcode.INVOKESTATIC, refs.bytesIn);
 					slot += 1;
 				}
+				case FLOAT_VECTOR, FLOAT_MATRIX -> {
+					// The handle hands over the packed array it already holds -- no copy,
+					// which is this boundary type's whole point (.kb/jvm-export.md).
+					emitLoad(asm, Opcode.ALOAD, slot);
+					emitIntConst(asm, declaredRank(t));
+					emitLdcClass(asm, refs.thisClassConstant);
+					emitLdcString(asm, cp, "rontolisp:jvm-export " + decl.methodName() + " argument " + (i + 1) + " ("
+							+ t.designator().toLowerCase(Locale.ROOT) + ") ");
+					invoke(asm, Opcode.INVOKESTATIC, java.util.Objects.requireNonNull(refs.floatArrayArgument));
+					slot += 1;
+				}
 				case VOID -> throw new IllegalStateException(":void parameter survived parsing: " + decl);
 			}
 		}
@@ -373,6 +484,16 @@ final class JvmExportRuntimeBuilder {
 			}
 			case BYTES -> {
 				invoke(asm, Opcode.INVOKESTATIC, refs.bytesOut);
+				asm.code.add(Opcode.ARETURN);
+			}
+			case FLOAT_VECTOR, FLOAT_MATRIX -> {
+				// The handle ALIASES the array the function answered: no copy, and under
+				// --gpu no materialization until the caller actually reads an element.
+				emitIntConst(asm, declaredRank(ret));
+				emitLdcClass(asm, refs.thisClassConstant);
+				emitLdcString(asm, cp, "rontolisp:jvm-export " + decl.methodName() + " result ("
+						+ ret.designator().toLowerCase(Locale.ROOT) + ") ");
+				invoke(asm, Opcode.INVOKESTATIC, java.util.Objects.requireNonNull(refs.floatArrayResult));
 				asm.code.add(Opcode.ARETURN);
 			}
 		}
@@ -696,6 +817,22 @@ final class JvmExportRuntimeBuilder {
 			asm.code.add(Opcode.LDC_W);
 			JvmRuntimeBuilder.emitU2(asm.code, sc.index());
 		}
+	}
+
+	private static void emitLdcClass(JvmAsm asm, ClassConstant clazz) {
+		if (clazz.index() <= 255) {
+			asm.code.add(Opcode.LDC);
+			asm.code.add(clazz.index());
+		}
+		else {
+			asm.code.add(Opcode.LDC_W);
+			JvmRuntimeBuilder.emitU2(asm.code, clazz.index());
+		}
+	}
+
+	private static void emitIntConst(JvmAsm asm, int value) {
+		asm.code.add(Opcode.BIPUSH);
+		asm.code.add(value);
 	}
 
 	private static void emitLdc2(JvmAsm asm, ConstantPool cp, long value) {

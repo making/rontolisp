@@ -12,7 +12,7 @@ are the work:
 |---|---|
 | `.todo/502` | the embedded bridges hardcode the default package, so `--simd`/`--blas`/`--gpu`/`java:` die in a packaged class -- **the prerequisite blocker** |
 | `.todo/503` | `rontolisp:jvm-export` + `--no-main`: a declared, typed, Java-callable entry point, and the library mode it implies (the `wasm-export` / `--no-wasi` twin) |
-| `.todo/504` | the packed float array as a Java boundary type -- a copying boundary costs 8x the kernel |
+| `.todo/504` | the packed float array as a Java boundary type -- a copying boundary costs 8x the kernel (DONE; `.todo/510` is its one device-side confirmation) |
 | `.todo/505` | `-o out.jar`: a consumable jar carrying its own Maven coordinates |
 | `.todo/506` | `rontolisp-maven-plugin`: compile `src/main/lisp` into `target/classes` |
 | `.todo/507` | a `--simd` class hard-fails without `--add-modules jdk.incubator.vector` instead of degrading |
@@ -62,10 +62,12 @@ $ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar     # no -DgroupId, no 
 
 Then it is an ordinary `<dependency>`. Verified end to end in the spike.
 
-**What a consumer needs beyond the jar**, and it is short: nothing for a scalar/string
-export; `rontolisp-runtime` for an array export (`.todo/504` -- the handle types have to
-be shared or two libraries cannot chain); `--add-modules jdk.incubator.vector` for a
-`--simd` build until `.todo/507` makes that degrade instead of fail. `--blas` and `--gpu`
+**What a consumer needs beyond the jar**, and it is short: **nothing** -- `.todo/504`
+landed with the handle's class files travelling INSIDE the artifact at their canonical
+names, so an array export chains across libraries with no shared dependency
+(`.kb/jvm-export.md`, "Where the handle type comes from"); `--add-modules
+jdk.incubator.vector` for a `--simd` build until `.todo/507` makes that degrade instead
+of fail. `--blas` and `--gpu`
 need nothing at build time and degrade on their own at run time already.
 
 ## The spike (2026-08-24, all of it verified, none of it kept)
@@ -154,7 +156,7 @@ with no CUDA and no Metal (OpenBLAS present, Vector API available):
 - `.todo/503`, `.todo/505`, `.todo/506`, `.todo/507`, `.todo/508` touch no device path at
   all. `--simd` and `--blas` both run for real here, which covers the acceleration story
   end to end.
-- **The one exception**: `.todo/504`'s "`--gpu` residency" paragraph -- whether a handle a
+- **The one exception** (now `.todo/510`): `.todo/504`'s "`--gpu` residency" paragraph -- whether a handle a
   `--gpu` kernel returns forces a materialization the next call would only re-upload.
   Designing and implementing the handle needs nothing; confirming it does not defeat the
   resident/lazy tier needs a device, and it has TWO halves, since that tier was settled

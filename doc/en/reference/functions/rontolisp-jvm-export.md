@@ -55,6 +55,8 @@ mapped to Java types:
 | `:string` | `String` | the wrapper converts to and from the internal string representation |
 | `:s-expr` | `String` | s-expression text: read on the way in, printed (prin1 form) on the way out — any value except a function |
 | `:bytes` | `byte[]` | an `(unsigned-byte 8)` vector as raw bytes, copied in each direction |
+| `:float-vector` | `RontoFloatArray` | a rank-1 packed float array (`linalg:`/`vec:`), **aliased** — see below |
+| `:float-matrix` | `RontoFloatArray` | the same handle at rank 2 |
 
 **The boundary carries the value exactly, or it throws** — the same
 trapping-not-masking rule as the WASM boundary. An argument the declared type
@@ -63,6 +65,35 @@ cannot state (`300` through `:u8`, a negative `long` through `:u64`) throws
 `ArithmeticException`; a result of the wrong kind entirely (a `:string` export
 whose function answered a number) throws `ClassCastException`. Nothing is
 silently wrapped, masked or mis-decoded.
+
+## The packed float array handle
+
+`:float-vector` and `:float-matrix` both cross as
+`am.ik.rontolisp.runtime.RontoFloatArray`, the handle that holds a packed float
+array's own representation — `of(double[])` / `of(float[])` copies into it once,
+`get`/`set`/`size`/`dims` index in place, `toArray()` copies out once. Every
+crossing in between is a **reference**, not a conversion: a plain `double[]`
+parameter type would be both silently mis-readable (a packed array carries a
+dimension header, so a bare Java array is not one) and about ten times the cost
+of the kernel it feeds.
+
+Consequences worth stating:
+
+- **A returned handle aliases the Lisp array.** Writing through it is visible to
+  a Lisp closure over the same array, and the other way round. Nothing is
+  defensively copied.
+- **Both element widths use the one designator.** `double-float` and
+  `single-float` arrays are disjoint representations; `width()` reports which,
+  and accessors read and write in `double` either way, exactly as `aref` does.
+- **The rank is checked at the boundary.** `:float-vector` accepts and answers
+  rank 1, `:float-matrix` rank 2; anything else throws.
+- **The handle's class files travel with the compiled class**, written beside it
+  under `am/ik/rontolisp/runtime/`, so the artifact still has no dependency.
+- **WASM has no carrier for it**: `rontolisp:wasm-export` refuses both
+  designators by name.
+
+See [Export a JVM library](../../guides/jvm-library.md) for the measurement and
+the destination-passing pattern.
 
 ## The top level runs at class initialization
 
@@ -99,6 +130,6 @@ WASM reactor. See [Export a JVM library](../../guides/jvm-library.md).
   parameter count must match its arity, and a lambda list taking
   `&optional`/`&rest`/`&key` is refused (it has no fixed Java signature) —
   wrap it in a fixed-arity `defun` and export that.
-- The packed float array (`linalg:`/`vec:` values) is not yet a boundary type;
-  `:bytes` is the only array designator today.
+- A packed float array crosses at rank 1 or 2 only; a general (boxed) array has
+  no designator, and `:bytes` remains the only one for a non-float array.
 - The directive is top-level only, like `wasm-export`.

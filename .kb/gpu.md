@@ -615,6 +615,14 @@ loop-invariant; `_readSeqPacked` / `_writeSeqPacked`; and every argument of a Ja
 call, which reads a packed array raw. `_fvDims` / `_fvLength` / `_fvElementType` read the
 header only, which is written at allocation and never stale.
 
+**The one reader that cannot be enumerated** is `am.ik.rontolisp.runtime.RontoFloatArray`,
+the `rontolisp:jvm-export` handle: it is a class OUTSIDE the generated program, so it
+adopts the generated class instead and resolves that class's `_gpuMaterialize` /
+`_gpuWritten` reflectively, reading and writing what the guard answers
+([jvm-export.md](jvm-export.md), "The packed float array"). It is also why the boundary
+does NOT materialize when it hands a result over -- doing so would download a result the
+next call would only re-upload.
+
 **The pins.** `everyEnumeratedWriterInvalidatesTheResidentCopy` and
 `everyEnumeratedReaderMaterializesTheDeviceResult`, on EACH interceptor: one program that
 makes operands and results resident with a bit-identical member, then writes through every

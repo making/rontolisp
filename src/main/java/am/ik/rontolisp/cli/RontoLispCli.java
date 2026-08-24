@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -887,6 +888,7 @@ public final class RontoLispCli {
 		program = (!dynamic && !noPrune) ? LibraryDefunPruner.prune(program)
 				: LibraryDefunPruner.stripSystemMarkers(program);
 		byte[] bytes;
+		Map<String, byte[]> jvmRuntimeClasses = Map.of();
 		String witText = null;
 		String glueText = null;
 		String glueFile = jsGlue ? outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".js" : null;
@@ -958,9 +960,14 @@ public final class RontoLispCli {
 			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic, optimize, simd, blas, gpu, parallel).noMain(noMain)
-				.runtimeFeatures(features.names())
-				.compile(TlsPemInliner.inline(program, baseDir));
+			JvmLispCompiler jvmCompiler = new JvmLispCompiler(className, dynamic, optimize, simd, blas, gpu, parallel)
+				.noMain(noMain)
+				.runtimeFeatures(features.names());
+			bytes = jvmCompiler.compile(TlsPemInliner.inline(program, baseDir));
+			// A :float-vector / :float-matrix export hands out a handle class; it travels
+			// beside the program's own class so the artifact still has no dependency
+			// (.kb/jvm-export.md).
+			jvmRuntimeClasses = jvmCompiler.runtimeClassFiles();
 		}
 		try {
 			// -o com/acme/Kernels.class places the class in a package via its path, so
@@ -970,6 +977,18 @@ public final class RontoLispCli {
 				Files.createDirectories(outputPath.getParent());
 			}
 			Files.write(outputPath, bytes);
+			if (!jvmRuntimeClasses.isEmpty()) {
+				// Rooted where the output class's own package root is -- the -o path IS
+				// the package, so `-o com/acme/Kernels.class` writes them under the same
+				// tree and `javac -cp .` / `jar cf` pick them up with no arrangement.
+				String root = outputFile.substring(0,
+						outputFile.length() - (outputFile.replace(".class", "").length() + ".class".length()));
+				for (Map.Entry<String, byte[]> runtimeClass : jvmRuntimeClasses.entrySet()) {
+					Path runtimePath = Path.of(root + runtimeClass.getKey());
+					Files.createDirectories(Objects.requireNonNull(runtimePath.getParent()));
+					Files.write(runtimePath, runtimeClass.getValue());
+				}
+			}
 			if (wit) {
 				String witFile = outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".wit";
 				Files.writeString(Path.of(witFile), Objects.requireNonNull(witText));

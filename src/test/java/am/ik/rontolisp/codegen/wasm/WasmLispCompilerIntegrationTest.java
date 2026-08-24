@@ -471,6 +471,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theJvmOnlyHandleDesignatorsAreRefusedByNameOnWasm() {
+		// :float-vector / :float-matrix ride a Java handle class; no WASM carrier states
+		// one, so the designator is refused where it is written instead of failing later
+		// in a lift (.kb/jvm-export.md).
+		assertThatThrownBy(() -> compileAndRun("""
+				(defun echo (v) v)
+				(rontolisp:wasm-export 'echo :params '(:float-vector) :returns :float-vector)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":float-vector is a JVM boundary type");
+	}
+
+	@Test
 	void exportScalarFunctionsCallableViaInvoke() throws Exception {
 		String program = """
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))

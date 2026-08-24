@@ -100,6 +100,67 @@ JVM を終了させます。ライブラリのトップレベルは定義と初�
 ライブラリが `--optimize=off` でランタイム全体を抱え込む代わりにデフォルトの
 `--optimize` サイズを保てる理由です。
 
+## パック済み float 配列
+
+`linalg:` と `vec:` の値は**パック済み float 配列**であり、そのまま境界を
+渡ります — `:float-vector` (ランク 1) と `:float-matrix` (ランク 2) で、
+どちらも 1 つの Java クラス `am.ik.rontolisp.runtime.RontoFloatArray` が
+運びます。
+
+```lisp
+(defun norm2 (x)
+  (sqrt (vec:dot x x)))
+
+(defun axpy (a x y)
+  (vec:add (vec:scale x a) y))
+
+(rontolisp:jvm-export 'norm2 :params '(:float-vector) :returns :float)
+(rontolisp:jvm-export 'axpy :params '(:float :float-vector :float-vector) :returns :float-vector)
+```
+
+```java
+import am.ik.rontolisp.runtime.RontoFloatArray;
+import com.example.Kernels;
+
+RontoFloatArray x = RontoFloatArray.of(new double[] { 3.0, 4.0 });   // copies, once
+double n = Kernels.norm2(x);                                          // 5.0
+RontoFloatArray y = Kernels.axpy(2.0, x, RontoFloatArray.of(new double[] { 1.0, 1.0 }));
+double[] out = y.toArray();                                           // copies out, once
+```
+
+**なぜ `double[]` ではなくハンドルなのか。** パック済み float 配列は次元
+ヘッダを埋め込んだ素の `double[]` (または `float[]`) なので、ただの Java
+配列はそれではありません — `new double[]{3, 4}` を渡してもコンパイルは通り、
+誤った数値が返ります。呼び出しごとに変換すれば安全ですが、その費用は与える
+カーネルのおよそ 10 倍で、3 倍の勝ちが 3 倍の負けに変わります。
+
+| | ms/call | plain Java 比 |
+| --- | --- | --- |
+| plain Java ループ、C2 が自動ベクトル化 | 0.89 | 1.00x |
+| パック済み配列へのカーネル (下限) | 0.29 | 3.06x |
+| **ハンドル越しのカーネル** | **0.29** | **3.12x** |
+| 呼び出しごとにコピーするファサード越し | 2.58 | 0.35x |
+
+ハンドルはパック済み表現を呼び出しをまたいで保持します: `of(...)` が一度
+コピーし、`toArray()` が一度コピーして返し、その間の呼び出しは何もコピー
+しません。ベンチマークは
+[`examples/jvm/bench/`](https://github.com/making/rontolisp/tree/main/examples/jvm/bench)
+です。
+
+**ハンドルは Lisp 側の配列をエイリアスします。** カーネルが*返した*ハンドルは
+Lisp 側が保持しているまさにその配列です: ハンドル経由の `set(i, v)` は同じ
+配列を閉じ込めた Lisp のクロージャから見え、逆に Lisp 側の書き込みは
+`get(i)` から見えます。防御的コピーは一切しません — そのコピーこそ表の最終行
+です。`of(...)` と `toArray()` がコピーの起きる 2 箇所であり、それはあなたが
+コピーを頼んだ 2 箇所です。これは destination-passing も成立させます:
+`RontoFloatArray.zeros(...)` が作ったバッファに `vec:...-into` の
+エクスポートが書き込むので、Java 側のループは反復ごとに何も確保しません。
+
+要素幅はどちらも同じ指定子を通り (`of(double[])` と `of(float[])`、どちらかは
+`width()` が答えます)、ランクはヘッダから来るので、行列は 2 つ目の型ではなく
+ランク 2 の `dims()` を持つ同じクラスです。指定子が宣言していないランクは
+境界でスローされます。
+
 ## Maven コンシューマ向けのパッケージング
 
 クラスファイルはすでにパッケージディレクトリの中にあるので、jar は 1
@@ -107,7 +168,7 @@ JVM を終了させます。ライブラリのトップレベルは定義と初�
 なります。
 
 ```bash
-jar cf acme-kernels-1.0.0.jar com/
+jar cf acme-kernels-1.0.0.jar com/ am/
 mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
     -DgroupId=com.example -DartifactId=acme-kernels -Dversion=1.0.0 \
     -Dpackaging=jar
@@ -121,6 +182,14 @@ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
 </dependency>
 ```
 
+(上の `am/` は `am/ik/rontolisp/runtime/` です。ライブラリが
+`:float-vector` / `:float-matrix` のエクスポートを宣言したときにクラスの隣へ
+書き出されるハンドルクラスであり、これにより jar は**依存関係を持たない**まま
+です。あなたのパッケージへリネームせず正準名のまま書き出すのは、ある
+ライブラリの結果を別のライブラリのカーネルへ渡すために、2 つの rontolisp
+ライブラリが型について一致していなければならないからです。コピーどうしは
+同一のバイト列です。)
+
 スカラー/文字列のライブラリは実行時にこれ以外何も必要としません — クラスは
 自己完結しています。アクセラレーションについて 1 点: `--simd` ビルドは
 コンシューマの JVM に `--add-modules jdk.incubator.vector` を要求します。
@@ -132,8 +201,8 @@ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
 - エクスポートできるのは固定アリティのトップレベル `defun` のみです。
   `&optional`/`&rest`/`&key` のラムダリストは拒否されます (固定アリティの
   `defun` でラップしてください)。
-- パック済み float 配列 (`linalg:`/`vec:` の値) はまだ境界型ではないため、
-  数値配列 API は現在 `:bytes` (双方向でコピー) を通るか、Lisp 側に
-  とどまります。
+- パック済み float 配列が渡れるのはランク 1 か 2 です。ランク 3 以上の指定子は
+  まだなく、一般 (ボックス化) 配列には指定子がありません — float 以外の配列は
+  今も `:bytes` だけです。
 - 上の jar は自前の Maven メタデータも `Main-Class` も持ちません。座標は
   `install:install-file` のフラグで渡します。

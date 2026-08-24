@@ -91,6 +91,13 @@ thread, bit-identical to the serial kernel; no reduction is.
 `(setf (vec:aref v i) x)` →
 `(vec:aset v i x)` via `LispMacroExpander.expandSetf` (`VEC_QUALIFIED_AREF`).
 
+**The packed array is also a JAVA boundary type.** `rontolisp:jvm-export`'s
+`:float-vector` / `:float-matrix` hand one to a Java caller as
+`am.ik.rontolisp.runtime.RontoFloatArray`, a handle that ALIASES it (no copy at either
+crossing -- a copying boundary measured ~10x the kernel) and whose class files travel
+beside the compiled class. The aliasing contract, the widths/rank rules and the `--gpu`
+residency seam: [jvm-export.md](jvm-export.md), "The packed float array".
+
 ## Destination-passing `-into` kernels (todo-103)
 
 Each vector-returning kernel has an `-into` sibling — `add-into`/`sub-into`/`mul-into`/

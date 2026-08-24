@@ -36,6 +36,10 @@ Maven's own `jar`/`install`/`deploy` do the rest.
   `optimize`, `dynamic`, `systemPath`, `dist`), named the same.
 - Incremental: skip a file whose `.class` is newer, so a mixed Java/Lisp project does not
   recompile the world. `maven-compiler-plugin`'s staleness check is the model.
+- Write `JvmLispCompiler.runtimeClassFiles()` into the output directory too: a
+  `:float-vector` export's handle class travels with the artifact rather than as a
+  dependency (`.todo/504`, `.kb/jvm-export.md`), and `src/main/java` has to be able to
+  compile against it -- which means writing it in the `compile` goal, BEFORE javac runs.
 - Report a compile error as a `MojoFailureException` carrying the rontolisp diagnostic
   verbatim (it already has `file:line:col`, so an IDE can jump to it).
 

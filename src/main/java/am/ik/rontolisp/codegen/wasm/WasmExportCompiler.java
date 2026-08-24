@@ -992,6 +992,9 @@ final class WasmExportCompiler {
 			case BYTES -> throw new UnsupportedOperationException(
 					"rontolisp:wasm-export :bytes is a core-module (Preview 1 / --no-wasi) boundary type; the"
 							+ " --component path does not lift it yet");
+			// Unreachable: typeDesignator refuses the JVM-only handle types by name.
+			case FLOAT_VECTOR, FLOAT_MATRIX -> throw new IllegalStateException(
+					"a JVM-only boundary type reached the WASM component lift: " + type.designator());
 			case VOID -> null;
 		};
 	}
@@ -1033,6 +1036,9 @@ final class WasmExportCompiler {
 			// Unreachable: componentValType already refused the declaration.
 			case BYTES ->
 				throw new UnsupportedOperationException("rontolisp:wasm-export :bytes has no component-model lift");
+			// Unreachable: typeDesignator refuses the JVM-only handle types by name.
+			case FLOAT_VECTOR, FLOAT_MATRIX -> throw new IllegalStateException(
+					"a JVM-only boundary type reached the WASM component lift: " + decl.returnType().designator());
 			case VOID -> "void";
 		};
 	}
@@ -1107,12 +1113,20 @@ final class WasmExportCompiler {
 	static BoundaryType typeDesignator(LispVal value, LispCons form) {
 		if (value instanceof LispSymbol sym && sym.isKeyword()) {
 			BoundaryType type = BoundaryType.forDesignator(sym.name());
+			if (type != null && type.jvmOnly()) {
+				// The packed float-array handle is a Java class; no WASM carrier states
+				// one, so refuse the designator by name instead of failing in a lift.
+				throw new UnsupportedOperationException("rontolisp:wasm-export type designator "
+						+ type.designator().toLowerCase(java.util.Locale.ROOT)
+						+ " is a JVM boundary type (rontolisp:jvm-export); the WASM boundary has no carrier for a"
+						+ " packed float array, in " + form.print());
+			}
 			if (type != null && type != BoundaryType.VOID) {
 				return type;
 			}
 		}
 		throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type designator " + value.print()
-				+ " in " + form.print() + " (expected one of " + BoundaryType.valueDesignators() + ")");
+				+ " in " + form.print() + " (expected one of " + BoundaryType.wasmValueDesignators() + ")");
 	}
 
 	// A return designator is a known scalar/memory type, or a void marker: :void, nil,

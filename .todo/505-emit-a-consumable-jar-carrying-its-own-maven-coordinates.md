@@ -50,7 +50,12 @@ rontolisp kernel.lisp -o target/acme-kernels-1.0.0.jar \
   (`RontoLispCli`'s `--emit-js-glue` guard is the model).
 - **Dependencies**: a rontolisp-compiled class has none. It embeds its own bridges
   (`.todo/502`), so the generated pom's `<dependencies>` is genuinely empty -- state that
-  in the docs, because it is the property that makes this jar trivial to consume.
+  in the docs, because it is the property that makes this jar trivial to consume. This
+  survived `.todo/504`: a `:float-vector` export's handle class travels INSIDE the
+  artifact rather than as a dependency, so **the jar writer must add
+  `JvmLispCompiler.runtimeClassFiles()` as entries** (the `.class` path writes them next
+  to the output class today, `RontoLispCli`) -- forgetting them is a `NoClassDefFoundError`
+  in the consumer, not a compile error here.
 - Do NOT run `install`/`deploy` from the CLI. Writing the artifact is ours; putting it in
   a repository is Maven's, and `install-file`/`deploy-file` already do it.
 

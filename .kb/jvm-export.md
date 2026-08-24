@@ -3,8 +3,8 @@
 `(rontolisp:jvm-export 'name :params '(T...) :returns T :as "javaName")` is the JVM
 twin of `rontolisp:wasm-export` ([wasm-export-no-wasi.md](wasm-export-no-wasi.md)):
 it declares the Java-boundary types of a top-level `defun` so `JvmLispCompiler`
-emits a thin `public static` wrapper with a primitive/`String`/`byte[]` signature
-next to the untyped `(Object...)Object` method. Directive parsing + the Java-name
+emits a thin `public static` wrapper with a primitive/`String`/`byte[]`/handle
+signature next to the untyped `(Object...)Object` method. Directive parsing + the Java-name
 derivation live in `compiler.JvmExportDirective` (backend-free, the
 `WasmImportDirective` arrangement); the bytecode emission in
 `codegen.jvm.JvmExportRuntimeBuilder`. A no-op everywhere else, so one source runs
@@ -37,6 +37,7 @@ which requires it), so the flagless corpus (`ci-spec.yaml`,
 | `:string` | `String` | wrapper adds/strips the FRAME QUOTES storage carries |
 | `:s-expr` | `String` | in: frame + `_readFromString`; out: `_lispToString` |
 | `:bytes` | `byte[]` | copies to/from the packed octet vector `long[]{8, e0, ...}` |
+| `:float-vector` `:float-matrix` | `RontoFloatArray` | JVM-ONLY (`jvmOnly()`); ALIASES the packed float array, rank checked -- see below |
 
 The rule is wasm-export's verbatim: **the boundary carries the value exactly, or
 it throws** — `IllegalArgumentException` for an argument outside its declared
@@ -52,6 +53,86 @@ frames on the way in and unframes on the way out, and
 An `:s-expr` parameter forces the reader runtime on
 (`usesRead |= JvmExportRuntimeBuilder.needsReader`), with read-from-string's full
 consequences (`anyNameResolvable` -> every funcId dispatchable).
+
+## The packed float array (`:float-vector` / `:float-matrix`)
+
+The two designators the JVM boundary has and WASM does not: a packed float array
+([vec.md](vec.md)) crossing as `am.ik.rontolisp.runtime.RontoFloatArray`, ONE handle class
+at every rank and every width. `BoundaryType.FLOAT_VECTOR` / `FLOAT_MATRIX` carry
+`jvmOnly()`, which is what makes `WasmExportCompiler.typeDesignator` refuse them by name
+(pinned by `WasmLispCompilerIntegrationTest#theJvmOnlyHandleDesignatorsAreRefusedByNameOnWasm`)
+instead of failing later in a component lift.
+
+**The measurement is the design, and it is not a tradeoff.** `examples/jvm/bench/`, in the
+repo because it is the number the whole of `.todo/501` rests on (2^20 doubles, 300
+iterations after 3000 warm-ups, `--simd`, Oracle GraalVM 25.0.4, Linux x86_64):
+
+| | ms/call | vs plain Java |
+|---|---|---|
+| plain Java loop, C2 auto-vectorized | 0.89 | 1.00x |
+| `Kernels.NORM2(packed)` on a pre-packed array | 0.29 | 3.06x |
+| **behind the handle** | **0.29** | **3.12x** |
+| behind a facade that copies a `double[]` per call | 2.58 | 0.35x |
+
+The copy is ~10x the kernel: **a `double[]`-in/`double[]`-out designator would hand a
+caller a slower-than-Java result and call it acceleration.** So the wrapper ALIASES in both
+directions -- `RontoBoundary.floatArrayArgument` hands over `handle.packed()`, and
+`floatArrayResult` wraps the answered array -- and the only copies are the two the caller
+asks for, `of(...)` in and `toArray()` out. `JvmExportTest#aHandleHeldAcrossCallsCopiesOnce`
+pins it by object identity, which is the only way to say "no copy" without a profiler.
+
+**Aliasing is therefore the contract, not an implementation detail.** `set(i, v)` through a
+handle a kernel returned is visible to a Lisp closure over the same array and vice versa;
+nothing is defensively copied, because that copy IS the last row of the table. Say it in
+the docs rather than defend against it.
+
+**Both widths, any rank.** `double[]` and `float[]` are disjoint representations and
+`.todo/482`-`487` are adding a third, so `RontoFloatArray` dispatches width in ONE private
+place (`widthOf`/`headerAt`) and reports it as `Width`, an enum a caller must not assume
+has two members. Rank comes from the header, so a matrix is the same class with a rank-2
+`dims()`; the designator only says which rank the boundary accepts, and a mismatch throws
+there (`IllegalArgumentException` inbound, `ClassCastException` outbound -- the wrapper's
+existing split). A declared handle also forces `usesFloatArray` on in `JvmLispCompiler`: a
+library whose only contact with the representation is `aref`/`length` over its argument
+builds no packed array of its own and would otherwise be emitted without the `_fv*`
+accessors.
+
+**Where the handle type comes from** -- the real fork, and the tension is worth naming.
+Emitting the type per library the way the acceleration bridges travel
+([template-class-embedding.md](template-class-embedding.md)) keeps the artifact
+dependency-free, but the RENAME that makes a bridge private to one program is exactly wrong
+for a boundary TYPE: two rontolisp libraries would then have two incompatible vector types
+and a caller could not feed one's result to the other's kernel, which is the first thing
+anyone will try. A shared `rontolisp-runtime` artifact fixes that and is what every JVM
+language does -- at the cost of a dependency the artifact does not have today. What ships
+takes both: the class files are copied VERBATIM at their canonical names next to the output
+class (`JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` -> `JvmLispCompiler.runtimeClassFiles()`
+-> `RontoLispCli`, and `resource-config.json` so the native binary carries them), so one
+canonical name makes chaining work while the jar still has no dependency, and identical
+bytes make the duplicate harmless. `am.ik.rontolisp.runtime` imports nothing outside
+`java.base`, so lifting it into a published artifact later is a packaging change and not a
+code motion. The travelling list is hand-kept (nothing can enumerate a package from a
+classpath, still less from inside a native image) and pinned against the package's actual
+class files by `JvmExportTest#theTravellingClassListIsEveryClassFileOfTheRuntimePackage`;
+`package-info.class` deliberately stays behind, since it carries only the build's nullness
+annotation.
+
+**`--gpu` residency, and why the handle does not materialize.** The JVM class output has no
+read seam and ENUMERATES its readers through `_gpuMaterialize` ([gpu.md](gpu.md), "The two
+seams, and what must report through them"); a handle's `get`/`set`/`toArray` are new readers outside that
+enumeration. Materializing at the boundary would be correct and would also defeat the lazy
+tier -- a result the device still holds would come home only for the next call to re-upload
+it. So the handle is wrapped WITHOUT materializing and carries the guard instead: it adopts
+the generated class (the wrapper passes `ldc thisClass`), resolves that class's private
+`_gpuMaterialize` / `_gpuWritten` once through `MethodHandles`, and reads/writes what the
+guard ANSWERS -- the array, or a lazy result stub's backing, since a lazy result's host
+array is the HEADER ALONE (`.todo/492`; hence `checkPacked` requires `1 + rank` elements
+and not one more). A class with no guards resolves to a marker and costs one reference
+comparison. `RontoFloatArrayTest#aHostReadGoesThroughTheOwnerClassResidencyGuard` pins the
+whole seam with a stand-in owner class, so it is exercised with no device.
+**Not yet confirmed on a device**: that this really keeps a `--gpu` result on the device
+across a Java-side chain has to be measured on CUDA and on Metal (the tier was settled
+separately, `.todo/492`/`493` and `.todo/494`).
 
 ## Exports are tree-shaker roots — the third liveness source
 

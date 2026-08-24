@@ -342,6 +342,9 @@ final class NoGcWasmComponentBuilder {
 			// (NoGcWasmCompiler.requireSupported).
 			case S_EXPR, BYTES -> throw new UnsupportedOperationException("rontolisp:wasm-export type "
 					+ decl.returnType().designator() + " has no component post-return signature");
+			// Unreachable: typeDesignator refuses the JVM-only handle types by name.
+			case FLOAT_VECTOR, FLOAT_MATRIX -> throw new IllegalStateException(
+					"a JVM-only boundary type reached the WASM component lift: " + decl.returnType().designator());
 		};
 	}
 

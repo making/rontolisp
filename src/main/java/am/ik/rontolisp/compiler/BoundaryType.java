@@ -128,6 +128,23 @@ public enum BoundaryType {
 	BYTES(":BYTES", null),
 
 	/**
+	 * {@code float-vector}: a rank-1 packed float array, crossing as the
+	 * {@code am.ik.rontolisp.runtime.RontoFloatArray} handle. A rontolisp-only boundary
+	 * type with no WIT spelling and <strong>no WASM carrier</strong>: it is the JVM
+	 * boundary's answer to a representation a plain {@code double[]} cannot state, and it
+	 * works by the caller HOLDING the packed array across calls rather than by copying it
+	 * at each ({@code .kb/jvm-export.md}, "The packed float array").
+	 */
+	FLOAT_VECTOR(":FLOAT-VECTOR", null),
+
+	/**
+	 * {@code float-matrix}: {@link #FLOAT_VECTOR} at rank 2 — the same Java handle type
+	 * with a rank-2 dimension header, since the header carries the rank and a second
+	 * class would only stop the two from chaining.
+	 */
+	FLOAT_MATRIX(":FLOAT-MATRIX", null),
+
+	/**
 	 * No result: the wrapper discards the Lisp return value and has no WASM result.
 	 * Selected when {@code :returns} is omitted, or given as {@code nil}, {@code '()} or
 	 * {@code :void}. A parameter can never have this type.
@@ -284,15 +301,39 @@ public enum BoundaryType {
 	}
 
 	/**
+	 * Returns whether this type crosses the JVM boundary only. The two packed float-array
+	 * members ride a Java handle class ({@code am.ik.rontolisp.runtime.RontoFloatArray});
+	 * no WASM carrier states one, so {@code rontolisp:wasm-export} refuses them by name
+	 * rather than failing later in a lift.
+	 * @return {@code true} for {@link #FLOAT_VECTOR} and {@link #FLOAT_MATRIX}
+	 */
+	public boolean jvmOnly() {
+		return this == FLOAT_VECTOR || this == FLOAT_MATRIX;
+	}
+
+	/**
 	 * The designators a directive may name, in vocabulary order, for an error message
 	 * that has to spell out the accepted set. {@link #VOID} is excluded: it is the
 	 * omitted-{@code :returns} marker, not something a parameter list may contain.
 	 * @return the canonical designators of every non-void member
 	 */
 	public static List<String> valueDesignators() {
+		return designators(type -> type != VOID);
+	}
+
+	/**
+	 * The subset of {@link #valueDesignators()} a WASM boundary can carry, i.e. without
+	 * the {@link #jvmOnly()} members.
+	 * @return the canonical designators of every non-void, non-JVM-only member
+	 */
+	public static List<String> wasmValueDesignators() {
+		return designators(type -> type != VOID && !type.jvmOnly());
+	}
+
+	private static List<String> designators(java.util.function.Predicate<BoundaryType> accept) {
 		List<String> names = new java.util.ArrayList<>();
 		for (BoundaryType type : values()) {
-			if (type != VOID) {
+			if (accept.test(type)) {
 				names.add(type.designator);
 			}
 		}

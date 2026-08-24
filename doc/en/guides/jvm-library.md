@@ -96,13 +96,71 @@ otherwise, and a main-less class without exports would shake to nothing.
 Exports are extra shaker roots, which is what lets a library keep the default
 `--optimize` size instead of carrying the whole runtime with `--optimize=off`.
 
+## The packed float array
+
+`linalg:` and `vec:` values are **packed float arrays**, and they cross the
+boundary as themselves — `:float-vector` (rank 1) and `:float-matrix` (rank 2),
+both carried by one Java class, `am.ik.rontolisp.runtime.RontoFloatArray`:
+
+```lisp
+(defun norm2 (x)
+  (sqrt (vec:dot x x)))
+
+(defun axpy (a x y)
+  (vec:add (vec:scale x a) y))
+
+(rontolisp:jvm-export 'norm2 :params '(:float-vector) :returns :float)
+(rontolisp:jvm-export 'axpy :params '(:float :float-vector :float-vector) :returns :float-vector)
+```
+
+```java
+import am.ik.rontolisp.runtime.RontoFloatArray;
+import com.example.Kernels;
+
+RontoFloatArray x = RontoFloatArray.of(new double[] { 3.0, 4.0 });   // copies, once
+double n = Kernels.norm2(x);                                          // 5.0
+RontoFloatArray y = Kernels.axpy(2.0, x, RontoFloatArray.of(new double[] { 1.0, 1.0 }));
+double[] out = y.toArray();                                           // copies out, once
+```
+
+**Why a handle and not a `double[]`.** A packed float array is a bare
+`double[]` (or `float[]`) carrying an embedded dimension header, so a plain
+Java array is not one — passing `new double[]{3, 4}` would compile and answer a
+wrong number. Converting one at every call would be safe but costs about ten
+times the kernel it feeds, which turns a 3x win into a 3x loss:
+
+| | ms/call | vs plain Java |
+| --- | --- | --- |
+| plain Java loop, C2 auto-vectorized | 0.89 | 1.00x |
+| kernel on a pre-packed array (the floor) | 0.29 | 3.06x |
+| **kernel behind the handle** | **0.29** | **3.12x** |
+| kernel behind a facade that copies per call | 2.58 | 0.35x |
+
+The handle holds the packed representation across calls: `of(...)` copies once,
+`toArray()` copies out once, every call in between copies nothing. The
+benchmark is [`examples/jvm/bench/`](https://github.com/making/rontolisp/tree/main/examples/jvm/bench).
+
+**A handle aliases the Lisp array.** A handle a kernel *returns* is the very
+array the Lisp side holds: `set(i, v)` through the handle is visible to a Lisp
+closure over it, and a Lisp write is visible through `get(i)`. Nothing is
+defensively copied — that copy is the last row of the table. `of(...)` and
+`toArray()` are the two places where a copy happens, and they are the two
+places where you asked for one. This also makes destination-passing work:
+`RontoFloatArray.zeros(...)` builds a buffer that a `vec:...-into` export
+writes into, so a Java-side loop allocates nothing per iteration.
+
+Both element widths cross the same designator (`of(double[])` and
+`of(float[])`; `width()` reports which), and the rank comes from the header, so
+a matrix is the same class with a rank-2 `dims()` rather than a second type. A
+rank the designator does not declare throws at the boundary.
+
 ## Packaging for Maven consumers
 
 The class file is already in its package directory, so a jar is one command,
 and installing it into the local repository makes it an ordinary dependency:
 
 ```bash
-jar cf acme-kernels-1.0.0.jar com/
+jar cf acme-kernels-1.0.0.jar com/ am/
 mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
     -DgroupId=com.example -DartifactId=acme-kernels -Dversion=1.0.0 \
     -Dpackaging=jar
@@ -116,6 +174,13 @@ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar \
 </dependency>
 ```
 
+(The `am/` above is `am/ik/rontolisp/runtime/`, written beside your class when
+a library declares a `:float-vector` / `:float-matrix` export — the handle
+class, so the jar still has **no dependency**. It is written at its canonical
+name rather than renamed into your package, because two rontolisp libraries
+have to agree on the type for a caller to feed one's result to the other's
+kernel; the copies are identical bytes.)
+
 A scalar/string library needs nothing else at run time — the class is
 self-contained. One acceleration note: a `--simd` build requires the consumer's
 JVM to pass `--add-modules jdk.incubator.vector`; `--blas` and `--gpu` builds
@@ -126,8 +191,8 @@ when it is absent, so they need nothing from the consumer.
 
 - Only a fixed-arity top-level `defun` can be exported; `&optional`/`&rest`/
   `&key` lambda lists are refused (wrap them in a fixed-arity `defun`).
-- The packed float array (`linalg:`/`vec:` values) is not yet a boundary type,
-  so a numeric-array API currently crosses through `:bytes` (a copy each way)
-  or stays Lisp-side.
+- A packed float array crosses at rank 1 or 2; rank 3 and above has no
+  designator yet, and a general (boxed) array has none at all — `:bytes` is
+  still the only designator for a non-float array.
 - The jar above carries no Maven metadata of its own and no `Main-Class`;
   coordinates ride the `install:install-file` flags.

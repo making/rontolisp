@@ -63,6 +63,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmLispCompiler"
+        },
+        "pattern": "am/ik/rontolisp/runtime/.*\\.class"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
         },
         "pattern": "am/ik/rontolisp/codegen/jvm/JvmGpuTemplate\\.class"

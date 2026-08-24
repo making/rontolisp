@@ -104,6 +104,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	private boolean noMain;
 
+	/**
+	 * Whether the last {@link #compile} declared a packed float-array boundary type, i.e.
+	 * whether the emitted class needs {@link #runtimeClassFiles()} beside it.
+	 */
+	private boolean needsHandleRuntime;
+
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
 
@@ -332,6 +338,22 @@ public final class JvmLispCompiler implements LispCompiler {
 	public JvmLispCompiler noMain(boolean noMain) {
 		this.noMain = noMain;
 		return this;
+	}
+
+	/**
+	 * The runtime class files the compiled class needs BESIDE it — the packed float-array
+	 * handle a {@code :float-vector} / {@code :float-matrix} export hands out, and its
+	 * marshalling seam. Empty unless the program declared one of those designators, so an
+	 * ordinary compilation still produces exactly one file.
+	 *
+	 * <p>
+	 * They are written at their canonical names rather than renamed into the program's
+	 * package, because two rontolisp libraries have to agree on a boundary TYPE for a
+	 * caller to chain them ({@code .kb/jvm-export.md}). Valid after {@link #compile}.
+	 * @return each class file's path within an output tree (or jar), mapped to its bytes
+	 */
+	public Map<String, byte[]> runtimeClassFiles() {
+		return this.needsHandleRuntime ? JvmExportRuntimeBuilder.runtimeClassFiles() : Map.of();
 	}
 
 	@Override
@@ -1276,7 +1298,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A runtime read can produce ANY datum -- #(...), #f(...), #d(...) -- so the
 		// reader forces the array machinery on; without it a read vector would not
 		// print or index correctly.
-		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead;
+		// A declared :float-vector / :float-matrix boundary hands a packed float array to
+		// a defun that may never build one itself (a library whose only contact with the
+		// representation is aref/length over its argument), so the declaration forces the
+		// packed float-array runtime on exactly as a #d(...) literal would.
+		this.needsHandleRuntime = JvmExportRuntimeBuilder.needsFloatArray(exportDecls);
+		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime;
 
 		// Whether the program can produce a packed integer vector (a #N@(...) literal
 		// or make-array :element-type '(unsigned-byte 8|16|32)). When true, the rank-1

@@ -11,6 +11,7 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.runtime.RontoFloatArray;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -290,6 +291,156 @@ class JvmExportTest {
 				""");
 		clazz.getMethod("main", String[].class).invoke(null, (Object) new String[0]);
 		assertThat(clazz.getMethod("countNow").invoke(null)).isEqualTo(1);
+	}
+
+	@Test
+	void aFloatVectorCrossesAsTheHandleWithNoCopyInEitherDirection() throws Exception {
+		// The measurement that shaped this designator: a per-call copy is ~10x the
+		// kernel, so the boundary must hand over the packed array the handle already
+		// holds. Identity is how "no copy" is pinned.
+		Class<?> clazz = compileToClass("""
+				(defun echo (v) v)
+				(rontolisp:jvm-export 'echo :params '(:float-vector) :returns :float-vector)
+				""");
+		RontoFloatArray in = RontoFloatArray.of(new double[] { 3.0, 4.0 });
+		Method echo = clazz.getMethod("echo", RontoFloatArray.class);
+		Object out = echo.invoke(null, in);
+		assertThat(out).isInstanceOf(RontoFloatArray.class);
+		assertThat(((RontoFloatArray) out).packed()).isSameAs(in.packed());
+	}
+
+	@Test
+	void aHandleHeldAcrossCallsCopiesOnce() throws Exception {
+		// n calls cost one copy, not n: of() copies into the packed representation, and
+		// every crossing after that hands over that very array.
+		Class<?> clazz = compileToClass("""
+				(defun bump (v)
+				  (dotimes (i (length v) v) (setf (aref v i) (+ 1.0d0 (aref v i)))))
+				(rontolisp:jvm-export 'bump :params '(:float-vector) :returns :float-vector)
+				""");
+		Method bump = clazz.getMethod("bump", RontoFloatArray.class);
+		RontoFloatArray handle = RontoFloatArray.of(new double[] { 0.0, 10.0 });
+		Object packed = handle.packed();
+		for (int i = 0; i < 5; i++) {
+			assertThat(((RontoFloatArray) bump.invoke(null, handle)).packed()).isSameAs(packed);
+		}
+		// The Lisp side wrote into the caller's own storage, five times over.
+		assertThat(handle.toArray()).containsExactly(5.0, 15.0);
+		assertThat(handle.packed()).isSameAs(packed);
+	}
+
+	@Test
+	void bothPackedWidthsCrossTheSameDesignator() throws Exception {
+		// double[] and float[] are disjoint representations; the designator names the
+		// packed float array, not one of its widths.
+		Class<?> clazz = compileToClass("""
+				(defun total (v)
+				  (let ((acc 0.0d0))
+				    (dotimes (i (length v) acc) (setq acc (+ acc (aref v i))))))
+				(rontolisp:jvm-export 'total :params '(:float-vector) :returns :float)
+				""");
+		Method total = clazz.getMethod("total", RontoFloatArray.class);
+		assertThat(total.invoke(null, RontoFloatArray.of(new double[] { 1.5, 2.5 }))).isEqualTo(4.0);
+		assertThat(total.invoke(null, RontoFloatArray.of(new float[] { 1.5f, 2.5f }))).isEqualTo(4.0);
+	}
+
+	@Test
+	void aFloatMatrixIsTheSameHandleAtRankTwo() throws Exception {
+		Class<?> clazz = compileToClass("""
+				(defun cell (m i j) (aref m i j))
+				(defun transpose (m)
+				  (let* ((rows (first (array-dimensions m)))
+				         (cols (second (array-dimensions m)))
+				         (out (make-array (list cols rows) :element-type 'double-float)))
+				    (dotimes (i rows out)
+				      (dotimes (j cols)
+				        (setf (aref out j i) (aref m i j))))))
+				(rontolisp:jvm-export 'cell :params '(:float-matrix :s32 :s32) :returns :float)
+				(rontolisp:jvm-export 'transpose :params '(:float-matrix) :returns :float-matrix)
+				""");
+		RontoFloatArray matrix = RontoFloatArray.of(new double[] { 1, 2, 3, 4, 5, 6 }, 2, 3);
+		assertThat(clazz.getMethod("cell", RontoFloatArray.class, int.class, int.class).invoke(null, matrix, 1, 2))
+			.isEqualTo(6.0);
+		Object transposed = clazz.getMethod("transpose", RontoFloatArray.class).invoke(null, matrix);
+		assertThat(((RontoFloatArray) transposed).dims()).containsExactly(3, 2);
+		assertThat(((RontoFloatArray) transposed).toArray()).containsExactly(1, 4, 2, 5, 3, 6);
+	}
+
+	@Test
+	void aRankTheDesignatorDoesNotDeclareThrowsAtTheBoundary() throws Exception {
+		Class<?> clazz = compileToClass("""
+				(defun echo (v) v)
+				(rontolisp:jvm-export 'echo :params '(:float-vector) :returns :float-vector)
+				(rontolisp:jvm-export 'echo :params '(:float-vector) :returns :float-matrix :as "echoAsMatrix")
+				""");
+		RontoFloatArray matrix = RontoFloatArray.of(new double[] { 1, 2, 3, 4 }, 2, 2);
+		assertThatThrownBy(() -> clazz.getMethod("echo", RontoFloatArray.class).invoke(null, matrix))
+			.hasCauseInstanceOf(IllegalArgumentException.class)
+			.cause()
+			.hasMessageContaining("argument 1 (:float-vector) expects rank 1, got rank 2");
+		RontoFloatArray vector = RontoFloatArray.of(new double[] { 1, 2 });
+		assertThatThrownBy(() -> clazz.getMethod("echoAsMatrix", RontoFloatArray.class).invoke(null, vector))
+			.hasCauseInstanceOf(ClassCastException.class)
+			.cause()
+			.hasMessageContaining("result (:float-matrix) expects rank 2, got rank 1");
+	}
+
+	@Test
+	void aResultThatIsNotAPackedFloatArrayThrowsClassCastException() throws Exception {
+		Class<?> clazz = compileToClass("""
+				(defun not-a-vector () 42)
+				(rontolisp:jvm-export 'not-a-vector :returns :float-vector :as "notAVector")
+				""");
+		assertThatThrownBy(() -> clazz.getMethod("notAVector").invoke(null))
+			.hasCauseInstanceOf(ClassCastException.class)
+			.cause()
+			.hasMessageContaining("not a packed float array");
+	}
+
+	@Test
+	void theHandleClassFilesTravelOnlyWithALibraryThatDeclaresOne() throws Exception {
+		// The artifact stays dependency-free: the handle's class files are written beside
+		// the program's own class, at their canonical names so two libraries agree on the
+		// type (.kb/jvm-export.md, "Where the handle type comes from").
+		List<LispVal> withHandle = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun echo (v) v)
+				(rontolisp:jvm-export 'echo :params '(:float-vector) :returns :float-vector)
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("ExportTest", false, OptimizeLevel.DEFAULT);
+		compiler.compile(withHandle);
+		assertThat(compiler.runtimeClassFiles().keySet()).containsExactlyInAnyOrder(
+				"am/ik/rontolisp/runtime/RontoBoundary.class", "am/ik/rontolisp/runtime/RontoFloatArray.class",
+				"am/ik/rontolisp/runtime/RontoFloatArray$Width.class");
+		for (byte[] classFile : compiler.runtimeClassFiles().values()) {
+			assertThat(classFile).isNotEmpty();
+		}
+		List<LispVal> withoutHandle = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun echo (x) x)
+				(rontolisp:jvm-export 'echo :params '(:s32) :returns :s32)
+				"""));
+		JvmLispCompiler plain = new JvmLispCompiler("ExportTest", false, OptimizeLevel.DEFAULT);
+		plain.compile(withoutHandle);
+		assertThat(plain.runtimeClassFiles()).isEmpty();
+	}
+
+	@Test
+	void theTravellingClassListIsEveryClassFileOfTheRuntimePackage() throws Exception {
+		// Nothing can enumerate a package from a classpath, still less from inside a
+		// native image, so the list is hand-kept — and pinned here against the package's
+		// actual class files. package-info carries only the build's nullness annotation
+		// and deliberately stays behind.
+		Path packageDir = Path.of("target/classes/am/ik/rontolisp/runtime");
+		try (java.util.stream.Stream<Path> files = Files.list(packageDir)) {
+			List<String> onDisk = files.map(path -> path.getFileName().toString())
+				.filter(name -> name.endsWith(".class"))
+				.filter(name -> !name.equals("package-info.class"))
+				.sorted()
+				.toList();
+			assertThat(JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES.stream()
+				.map(path -> path.substring(path.lastIndexOf('/') + 1))
+				.sorted()
+				.toList()).isEqualTo(onDisk);
+		}
 	}
 
 	@Test

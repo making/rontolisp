@@ -45,9 +45,13 @@ eval -> macro, compiler, reader, rontolisp (AST types only), am.ik.gpu
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 format -> (nothing)
+runtime -> (nothing)
 am.ik.gpu -> (nothing)
 ```
 
+- `runtime` imports nothing at all, project or otherwise: its classes are COPIED into a
+  compiled library's output as the `rontolisp:jvm-export` handle boundary types
+  (`.kb/jvm-export.md`), so anything they imported would become that artifact's dependency.
 - `format` depends on nothing, not even `reader`: it needs the source verbatim and has its
   own lossless CST front end (`.kb/formatter.md`).
 - `compiler` holds backend-shared, backend-FREE front-ends and depends on no backend.
