@@ -215,7 +215,7 @@ is the positional encoding's mixed-width add, which
 [`transformer/utils.lisp`](transformer/utils.lisp) explains and chooses deliberately.
 [`.kb/gpu.md`](../../.kb/gpu.md) has the profile.
 
-**One rule, not two flag sets.** `--gpu` keeps results on the device, so a result the
+**One rule, not two flag sets -- on an NVIDIA card.** `--gpu` keeps results on the device, so a result the
 program has dropped holds device memory until the collector notices it is gone; the
 library asks for a collection when its budget fills, and REFUSING that request
 (`-XX:+DisableExplicitGC`) makes the book's shapes **4.5x** slower. Granting it is cheap:
@@ -233,7 +233,12 @@ fills is gigabytes of pages the device has never touched, and `-Xmn4g` at the no
 width is **57% slower** than setting nothing at all. So hand-size a young generation only
 where the program fills it, and otherwise leave the collector alone -- at the notebook's
 width, where the budget is never reached and no collection is ever asked for, none of this
-applies. That is why chapter 2 above is run under different flags from chapter 3: it
+applies. **Nor does any of it on an Apple GPU**, where results do not stay on the device
+at all, so the request is never made at either shape, and the buffers the device reads are
+the same unified memory the heap is written into -- there is no page the device has not
+touched. Every flag above is within 1.5% of leaving the collector alone at the notebook's
+width there, and at the book's shapes `-XX:+UseParallelGC -Xmn8g` is 13% SLOWER than
+leaving it alone. On a Mac, set `-Xmx` and stop. That is why chapter 2 above is run under different flags from chapter 3: it
 allocates less a batch and never fills an 8 GB young generation, so the concurrent answer
 wins there -- by 5% over 2 epochs and 4% over the full 20 (89.4 min against 92.9), with
 byte-identical output either way. `.kb/gpu.md` has the logs.

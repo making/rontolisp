@@ -234,7 +234,7 @@ public final class Gpu {
 	static final long MATVEC_UNPOOLED_MIN_ELEMENTS = 1L << 20;
 
 	/** The deepest rank {@link #bcast} and {@link #gather} will walk; deeper declines. */
-	private static final int MAX_STRIDED_RANK = 16;
+	static final int MAX_STRIDED_RANK = 16;
 
 	/**
 	 * The op codes {@link #map} takes, mirrored by the {@code switch} in {@code gemm.cu}

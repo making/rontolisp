@@ -58,12 +58,20 @@ shapes is ~20 ms of waiting however little it moves.
 4. Measure in the order the round measured: the floor probe first (`MtlResidentFloor`
    -- a chain of resident `zip`s should drop well under 100 us a member once nothing
    waits), then the notebook's shapes against the pure pool (0.104 s a step, the method
-   in `.kb/gpu.md`), then the book's (8.9 s a step; the fast-corpus program of the round
-   reproduces the model at a 36456-character corpus of the same vocabulary). Flip
+   in `.kb/gpu.md`), then the book's (8.9 s a step;
+   `.todo/123-gpu-acceleration/gpt-book-shapes-fast.lisp` reproduces the model at a
+   36456-character corpus of the same vocabulary). Flip
    `MetalGemm.lazyResultsPay()` to `true` only if both are faster than the pure pool;
    otherwise record the numbers beside the round's and keep it `false`. Either way the
    interceptors' request (`Gpu.lazyResultsIfWorthwhile`) is the only switch.
-5. Tests: `MetalGpuTest`'s lazy tests hold as they are (they read through `materialize`);
+5. Re-run todo-509's collector matrix (`.kb/gpu.md`, "The Metal half of that round"). It
+   found `System.gc()` called ZERO times on this backend in every configuration at both
+   shapes, because the library's collection request is gated on the LRU having only DIRTY
+   copies left and eagerly there are none -- so the whole CUDA collector rule is scoped
+   away from Apple silicon today. Flipping `lazyResultsPay` starts that request firing
+   here for the first time, and the eight-row table has to be re-taken before the guides'
+   Apple sentence stands.
+6. Tests: `MetalGpuTest`'s lazy tests hold as they are (they read through `materialize`);
    add the ordering pin -- a chain whose result slab is recycled and re-uploaded before
    the host reads the result, asserted to still read the right bytes -- and the failure
    pin of step 2. `aRunOfCallsSettlesTheBufferPoolRatherThanGrowingIt` must still settle

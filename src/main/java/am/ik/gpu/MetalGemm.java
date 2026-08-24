@@ -925,24 +925,24 @@ final class MetalGemm implements GpuDevice {
 		try {
 			pool = this.driver.autoreleasePoolPush();
 			enter();
-			call = new Call(4);
+			call = new Call(3);
 			call.lookup(0, a, oa, aElements);
 			call.lookup(1, b, ob, bElements);
-			if (!call.ensure(0, aElements) || !call.ensure(1, bElements) || !call.ensure(2, n)
-					|| !call.ensureBytes(3, 3L * rank * Integer.BYTES)) {
+			if (!call.ensure(0, aElements) || !call.ensure(1, bElements) || !call.ensure(2, n)) {
 				return false;
 			}
 			call.stage(0, a, oa, aElements, false);
 			call.stage(1, b, ob, bElements, false);
-			uploadLayout(call.slabs[3], dims, sa, sb, null);
 			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment meta = layout(arena, 3, dims, sa, sb, null);
 				MemorySegment args = arena.allocate(I, 3);
 				args.setAtIndex(I, 0, op);
 				args.setAtIndex(I, 1, n);
 				args.setAtIndex(I, 2, rank);
 				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
 				MemorySegment encoder = beginEncoder(commands, this.bcast);
-				bind(encoder, call.slabs, 0, 1, 2, 3);
+				bind(encoder, call.slabs, 0, 1, 2);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 3L * rank * Integer.BYTES, 3);
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 3L * Integer.BYTES, 4);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
@@ -980,20 +980,21 @@ final class MetalGemm implements GpuDevice {
 		try {
 			pool = this.driver.autoreleasePoolPush();
 			enter();
-			call = new Call(3);
+			call = new Call(2);
 			call.lookup(0, a, oa, aElements);
-			if (!call.ensure(0, aElements) || !call.ensure(1, n) || !call.ensureBytes(2, 2L * rank * Integer.BYTES)) {
+			if (!call.ensure(0, aElements) || !call.ensure(1, n)) {
 				return false;
 			}
 			call.stage(0, a, oa, aElements, false);
-			uploadLayout(call.slabs[2], dims, sa, null, null);
 			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment meta = layout(arena, 2, dims, sa, null, null);
 				MemorySegment args = arena.allocate(I, 2);
 				args.setAtIndex(I, 0, n);
 				args.setAtIndex(I, 1, rank);
 				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
 				MemorySegment encoder = beginEncoder(commands, this.gather);
-				bind(encoder, call.slabs, 0, 1, 2);
+				bind(encoder, call.slabs, 0, 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 2L * rank * Integer.BYTES, 2);
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 3);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
@@ -1298,9 +1299,9 @@ final class MetalGemm implements GpuDevice {
 		try {
 			pool = this.driver.autoreleasePoolPush();
 			enter();
-			// Slots: 0 mask, 1 x, 2 y, 3 result, 4 layout. A scalar operand's slot stays
-			// null and the result slab is bound in its place, never read.
-			call = new Call(5);
+			// Slots: 0 mask, 1 x, 2 y, 3 result. A scalar operand's slot stays null and
+			// the result slab is bound in its place, never read.
+			call = new Call(4);
 			if (mask != null) {
 				call.lookup(0, mask, om, mElements);
 			}
@@ -1311,8 +1312,7 @@ final class MetalGemm implements GpuDevice {
 				call.lookup(2, y, oy, yElements);
 			}
 			if ((mask != null && !call.ensure(0, mElements)) || (x != null && !call.ensure(1, xElements))
-					|| (y != null && !call.ensure(2, yElements)) || !call.ensure(3, n)
-					|| !call.ensureBytes(4, 4L * rank * Integer.BYTES)) {
+					|| (y != null && !call.ensure(2, yElements)) || !call.ensure(3, n)) {
 				return false;
 			}
 			if (mask != null) {
@@ -1324,8 +1324,8 @@ final class MetalGemm implements GpuDevice {
 			if (y != null) {
 				call.stage(2, y, oy, yElements, false);
 			}
-			uploadLayout(call.slabs[4], dims, sm, sx, sy);
 			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment meta = layout(arena, 4, dims, sm, sx, sy);
 				MemorySegment args = arena.allocate(I, 6);
 				args.setAtIndex(I, 0, n);
 				args.setAtIndex(I, 1, rank);
@@ -1339,10 +1339,11 @@ final class MetalGemm implements GpuDevice {
 				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
 				MemorySegment encoder = beginEncoder(commands, this.tier[WHERE]);
 				Slab result = call.slabs[3];
-				for (int i = 0; i < 5; i++) {
+				for (int i = 0; i < 4; i++) {
 					Slab slab = call.slabs[i] != null ? call.slabs[i] : result;
 					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slab.buffer, 0, i);
 				}
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 4L * rank * Integer.BYTES, 4);
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 6L * Integer.BYTES, 5);
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", scalars, 2L * Float.BYTES, 6);
 				flatDispatch(arena, encoder, n);
@@ -1453,15 +1454,15 @@ final class MetalGemm implements GpuDevice {
 		try {
 			pool = this.driver.autoreleasePoolPush();
 			enter();
-			call = new Call(3);
+			call = new Call(2);
 			call.lookup(0, a, spanOa, spanNa);
 			call.lookup(1, c, spanOc, spanNc);
-			if (!call.ensure(0, spanNa) || !call.ensure(1, spanNc) || !call.ensureBytes(2, 3L * rank * Integer.BYTES)) {
+			if (!call.ensure(0, spanNa) || !call.ensure(1, spanNc)) {
 				return false;
 			}
 			call.stage(0, a, spanOa, spanNa, false);
-			uploadLayout(call.slabs[2], dims, sa, sc, null);
 			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment meta = layout(arena, 3, dims, sa, sc, null);
 				MemorySegment args = arena.allocate(I, 4);
 				args.setAtIndex(I, 0, n);
 				args.setAtIndex(I, 1, rank);
@@ -1471,7 +1472,8 @@ final class MetalGemm implements GpuDevice {
 				args.setAtIndex(I, 3, oc - spanOc);
 				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
 				MemorySegment encoder = beginEncoder(commands, this.tier[COPY]);
-				bind(encoder, call.slabs, 0, 1, 2);
+				bind(encoder, call.slabs, 0, 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 3L * rank * Integer.BYTES, 2);
 				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 4L * Integer.BYTES, 3);
 				flatDispatch(arena, encoder, n);
 				this.driver.messageVoid(encoder, "endEncoding");
@@ -2028,22 +2030,43 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * The layout the strided kernels index out of: the output dims, then one source
-	 * stride per output axis per operand, all in elements. Rank 8 is 96 bytes.
+	 * The layout the strided kernels index out of -- the output dims, then one source
+	 * stride per output axis per operand, all in elements -- packed into a CONFINED
+	 * segment that rides to the kernel BY VALUE ({@code setBytes:length:atIndex:} at the
+	 * index the buffer used to be bound at; a {@code constant int*} parameter takes
+	 * either). It was a pooled slab until 2026-08-24. Unlike the CUDA half's move, the
+	 * COPY was never the problem here -- writing into a shared slab's {@code contents} is
+	 * a memcpy on unified memory that orders behind nothing -- what it removes is a 4 KB
+	 * slab ({@link #MIN_SLAB_BYTES}) taken from and given back to the pool per strided
+	 * call, its binding, and one class of pooled buffer that a committed command buffer
+	 * reads, which is a slab a per-slab fence would otherwise have to cover.
+	 *
+	 * <p>
+	 * {@code vectors} is how many the kernel indexes -- the dims plus one stride vector
+	 * per operand -- so the segment is exactly the bytes the old slab held. {@link Gpu}
+	 * holds the rank to {@link Gpu#MAX_STRIDED_RANK}, which is what keeps the length
+	 * under {@code setBytes}'s 4 KB limit: the worst case is four vectors at rank 16, 256
+	 * bytes. The guard says so rather than trusting it; it throws into the member's own
+	 * {@code catch}, which is an ordinary decline.
 	 */
-	private static void uploadLayout(Slab slab, int[] dims, int[] sa, int @Nullable [] sb, int @Nullable [] sc) {
+	private static MemorySegment layout(Arena arena, int vectors, int[] dims, int[] sa, int @Nullable [] sb,
+			int @Nullable [] sc) {
 		int rank = dims.length;
-		MemorySegment contents = slab.contents();
+		if (rank > Gpu.MAX_STRIDED_RANK || vectors > 4) {
+			throw new IllegalArgumentException("layout rank " + rank + " x " + vectors);
+		}
+		MemorySegment meta = arena.allocate(I, (long) vectors * rank);
 		for (int k = 0; k < rank; k++) {
-			contents.setAtIndex(I, k, dims[k]);
-			contents.setAtIndex(I, rank + k, sa[k]);
+			meta.setAtIndex(I, k, dims[k]);
+			meta.setAtIndex(I, rank + k, sa[k]);
 			if (sb != null) {
-				contents.setAtIndex(I, 2 * rank + k, sb[k]);
+				meta.setAtIndex(I, 2 * rank + k, sb[k]);
 			}
 			if (sc != null) {
-				contents.setAtIndex(I, 3 * rank + k, sc[k]);
+				meta.setAtIndex(I, 3 * rank + k, sc[k]);
 			}
 		}
+		return meta;
 	}
 
 	// --- shapes

@@ -281,9 +281,10 @@ final class CudaGemm implements GpuDevice {
 	/**
 	 * The size, in ints, of the by-value layout struct every strided kernel with a layout
 	 * takes ({@code strided_meta} in {@code gemm.cu}): the output dims plus up to three
-	 * per-operand stride vectors at {@link Gpu}'s rank ceiling of 16.
+	 * per-operand stride vectors at {@link Gpu#MAX_STRIDED_RANK}, which is what holds a
+	 * layout to this size.
 	 */
-	private static final int LAYOUT_INTS = 64;
+	private static final int LAYOUT_INTS = 4 * Gpu.MAX_STRIDED_RANK;
 
 	/**
 	 * How much free device memory a product leaves untouched. The device is shared --

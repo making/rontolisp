@@ -1905,8 +1905,10 @@ the permutation check, both of which allocate an `int[]` the decline would throw
 The first draft did it the other way round and its declined path allocated two arrays per
 call. Keep the cheap bound first.
 
-**The layout rides BY VALUE in the kernel parameter block** (since todo-496; it was a
-fourth device buffer until 2026-08-23). A broadcast needs the output dims plus one
+**The layout rides BY VALUE in the kernel parameter block** on BOTH backends (CUDA since
+todo-496, Metal since todo-509; it was a fourth device buffer until 2026-08-23, and the
+two backends moved it for different reasons -- the paragraph below is CUDA's, and the
+Metal one is a pooled slab per call rather than a copy). A broadcast needs the output dims plus one
 stride per axis per operand -- `3 * rank` ints -- and phase 3 put them in a small pooled
 buffer, judging a by-value parameter "not a trade worth making" against the 0.7-2.3 us
 the allocation cost. That judgment priced the allocation and missed the COPY: the
@@ -3104,6 +3106,10 @@ score-shape `zip` with a 2 us scalar one.
 
 #### The collector question: the pauses are 3%, the pages are the difference (2026-08-24, todo-498)
 
+**Everything in this section is the CUDA backend's**, and todo-509 measured that it does
+not travel: on Metal the request is never made and the flags below are the slowest thing
+there -- "The Metal half of that round" has that table and the mechanism.
+
 `.todo/498` was filed on a contradiction the README had recorded without an explanation:
 under `--gpu --simd` the DEFAULT collector runs `train-gpt-soseki` at the notebook's width
 faster than `-XX:+UseParallelGC -Xmn4g` (5.8 s against 9.3 over 200 steps) and LOSES to
@@ -3329,6 +3335,146 @@ Two findings, and one of them is a program:
   1e-6 at that width) and says that `--simd` declines the mixed-width pair. Under `--gpu`
   that decline now costs a 2.1 MB DOWNLOAD as well, twice a batch, because its other
   operand is a device result. It is 0.09 ms and the trade is the example's, not the flag's.
+
+#### The Metal half of that round, and a collector rule that does NOT travel (2026-08-24, todo-509)
+
+`.todo/496` and `.todo/498` were measured on the GB10, and the machine that ran them has
+no Metal device. `.todo/509` asked what of the two carries to Apple silicon, on the same
+M4 Max every other Metal row here was taken on. Two answers. The layout rides by value on
+this backend too -- **724 pooled slabs a training step that no longer exist, and no
+measurable time either way** -- and the collector rule the README and both guides print is
+**CUDA's**: on this backend the library never asks for a collection at all, and the flags
+that rule recommends are the SLOWEST thing measured here.
+
+Two halves of the CUDA round do not travel and the file should say so once. The
+post-launch `cuCtxSynchronize` has no counterpart to remove, because every Metal call is
+`commit` + `waitUntilCompleted` by construction -- making that asynchronous is `.todo/495`.
+And its safepoint argument was about a `GetPrimitiveArrayCritical` window holding a copy;
+`MetalGemm` stages through `MemorySegment.copy` into a shared slab, so there is no critical
+window here to reason about.
+
+**The layout, counted before it was moved.** `MIN_STRIDED_ELEMENTS` is 2^18 on this
+backend against CUDA's much lower thresholds, so the first question was whether the
+strided tier runs often enough here for its layout to matter at all. Counters on the four
+strided members and on the pool, over the JVM class output under `--gpu --simd`, differenced
+between a 3- and a 13-step run at the book's shapes and a 5- and a 40-step run at the
+notebook's width:
+
+| per training step | the book's shapes | the notebook's width |
+|---|---|---|
+| `bcast` launches | 381 | 43 |
+| `gather` launches | 343 | 12 |
+| `where` / `copy_strided` launches | **0** | **0** |
+| member calls of every kind | 1371 | 103 |
+| pool acquisitions, of which | 4444 | 346 |
+| ... the LAYOUT's | **724** | **55** |
+
+So the tier is far from rare -- 724 pooled slabs a step, a sixth of every acquisition the
+pool serves -- and each of them is `MIN_SLAB_BYTES` = 4 KB for a layout of 96 to 256
+bytes. `where` and `copy_strided` are zero at both shapes and that is not an accident:
+they are RESIDENT-operand members, and eagerly (`lazyResultsPay()` is `false` here) the
+only resident array is a GEMV matrix. The layout now rides in the parameter block
+(`setBytes:length:atIndex:` at the index the buffer was bound at -- a
+`constant int* meta [[buffer(N)]]` parameter takes either, which the strided pins verify
+on the device), the four call sites lost their layout slot, and the same counters read
+**3720 and 291** acquisitions a step, exactly 724 and 55 fewer.
+
+**What that is worth is nothing measurable, and the count above is why it was worth doing
+anyway.** Unlike the CUDA half, the COPY was never the problem here -- writing into a
+shared slab's `contents()` is a memcpy on unified memory that orders behind nothing -- so
+what was removed is an allocation, a binding, and one class of pooled buffer that a
+committed command buffer reads. Per call, through the shipped route
+(`MtlStridedFloor.java`, eager, operands not resident, medians of three, us):
+
+| output elements | `bcast` before -> after | `gather` before -> after |
+|---|---|---|
+| 262272 | 242 -> 245 | 196 -> 199 |
+| 524544 | 308 -> 306 | 276 -> 304 |
+| 1048704 | 354 -> 341 | 346 -> 339 |
+| 2097408 | 551 -> 536 | 543 -> 534 |
+| 4194432 | 1126 -> 1153 | 956 -> 923 |
+| 8388864 | 1884 -> 1884 | 1834 -> 1793 |
+
+Noise in both columns, and it has to be: the smallest call the tier takes here is a
+memory pass over 2^18 elements -- 242 us of it -- and what was removed is a deque pop
+under a monitor, a `setBuffer` binding and the matching push, none of which is a
+microsecond. The small end
+says the same -- a strided `copy` over a RESIDENT operand, the one strided shape that runs
+below the size threshold (`MIN_RESIDENT_ELEMENTS`, 2^14), is 130 / 106 / 117 / 129 / 170 /
+211 / 314 us at 2^14 .. 2^20 before and 130 / 109 / 119 / 129 / 166 / 217 / 302 after,
+under the ~110-130 us command-buffer floor either way. `MtlResidentFloor` is unchanged
+(~120-165 us until 2^18, crossing the CPU between 2^18 and 2^19), as it must be: `zip` and
+`scale` never had a layout.
+
+And the step is a tie, at both shapes (JVM class output, `--gpu --simd`, three interleaved
+rounds, the method of every table above):
+
+| | before | after |
+|---|---|---|
+| the notebook's width, `(t40 - t5) / 35` | **0.106** (0.104-0.108) | **0.107** (0.106-0.109) |
+| the book's shapes, `(t13 - t3) / 10` | **8.50** (8.42-8.60) | **8.57** (8.49-8.64) |
+
+Both differences are inside a run-to-run spread of about 2%, which is what a change of
+0.7 ms in an 8.5 s step should look like. The gate the item was accepted on is the other
+one: every output byte-identical between the two builds at both shapes, the 100-step
+notebook run's two sampled sentences included, and `MetalGpuTest`'s 31 pins green. The
+reason to keep it is the count and what the count is made of -- 724 fewer pool
+acquisitions a step, and a class of slab that `.todo/495`'s per-slab fence never has to
+cover, because a layout that never touches the pool can never be recycled under a command
+buffer that still reads it.
+
+**The collector question, asked again on this device: the request is never made.**
+`DeviceResidency` is shared, and its `collectionWanted` / `COLLECTION_SHARE` request runs
+`System.gc()` on Metal too -- but it is gated on the LRU having nothing but DIRTY copies
+left to evict, and that is a lazy-mode state. Eagerly, the only array this backend keeps
+is a GEMV matrix, held CLEAN. `-Xlog:gc` over both shapes says so in one column:
+**`System.gc()` appears zero times in every configuration below, at both shapes.** So the
+whole mechanism the CUDA rule is built on -- a compacting answer to the library's request,
+and the fresh pages it hands back -- has nothing to act on here, and the control that gave
+that rule its teeth on CUDA costs nothing at all.
+
+The book's shapes, 23 steps of the fast-corpus program (about 35 s of setup and 20 steps
+of slope; two rounds each, `-Xmx64g` unless the row says otherwise):
+
+| flags | 23 steps | pauses | of them full | total pause | `System.gc()` |
+|---|---|---|---|---|---|
+| **default collector (G1)** | **177.3 / 182.7 s** | 194-219 | 0-1 | 1.7-2.0 s | **0** |
+| ... plus `-XX:+ExplicitGCInvokesConcurrent` | 179.1 / 182.2 s | 186-222 | 1 | 1.8-2.2 s | 0 |
+| ... plus `-XX:+DisableExplicitGC` | 178.9 / 186.6 s | 170-227 | 1 | 1.9-2.7 s | 0 |
+| ... plus `-XX:+AlwaysPreTouch` (`-Xmx32g`) | 196.6 s | 643 | 14 | 9.7 s | 0 |
+| `-XX:+UseParallelGC -Xmn8g` | 203.9 / 205.2 s | 391 | 14 | **26.2 s** | 0 |
+| ... plus `-XX:+ExplicitGCInvokesConcurrent` | 203.3 / 204.3 s | 391-392 | 15 | 26.2 s | 0 |
+| ... plus `-XX:+AlwaysPreTouch` (`-Xmx32g`) | 204.0 s | 390 | 45 | 26.0 s | 0 |
+| `-XX:+UseParallelGC`, young generation adaptive | 190.1 / 190.8 s | 215-221 | 22 | 16.1-16.6 s | 0 |
+
+The notebook's width, 200 steps, medians of three, the same eight rows: **22.1 / 22.3 /
+22.3 / 22.2 / 22.1 / 22.3 / 22.0 / 23.5 s** in the order above -- one and a half per cent
+between the fastest and the seventh, `System.gc()` zero everywhere, and total pause time
+0.1-0.3 s of 22. Nothing to choose at all, where the CUDA table at the same width spanned
+5.4 to 22.9 s.
+
+**Read the two `-XX:+UseParallelGC -Xmn8g` rows against the first: the flags the README
+prints for chapter 3 are 13% SLOWER here**, and 26 s of their 204 is pause time against
+the default collector's 2 s of 180. The pages argument is what fails to travel. On the
+GB10 an upload is a copy into device memory the heap does not share, so a heap page the
+GPU has never touched costs ~9 us per 4 KB (`FreshPageCost.java`) and a young generation
+the program recycles is worth 20% of a run. Here the pool's slabs ARE host memory: a
+"device copy" is a memcpy into a shared `MTLBuffer` the pool already holds, the GPU reads
+the same pages the CPU wrote, and there is no such thing as a page the device has not
+touched. What is left of the flags is their ordinary cost, and an 8 GB young generation on
+a machine whose GPU and heap share 128 GB is a cost. `-XX:+AlwaysPreTouch` is a trap under
+G1 here as it is there (643 pauses, 9.7 s), for G1's own reason -- it pretouches every
+heap expansion inside the pause -- and not for a device one.
+
+**So the rule is scoped rather than generalised.** `.kb`, the guide (both languages) and
+`examples/llm-from-scratch/README.md` now say that the collection request, the pages
+argument and the flags that follow from them are the CUDA backend's, and that on Apple
+silicon the answer is to leave the collector alone. Nothing in `DeviceResidency` changes:
+a per-device collection policy would be a `GpuDevice` question, and there is no policy to
+decide while the request is never made. It becomes a live question again the moment
+`.todo/495` makes lazy results pay here -- that is the item that would start the request
+firing on this backend for the first time, and its measurement list says to re-run this
+table.
 
 ### The chain order, and why the device goes on top
 
