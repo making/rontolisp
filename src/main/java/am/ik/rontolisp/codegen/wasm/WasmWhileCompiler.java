@@ -30,11 +30,9 @@ final class WasmWhileCompiler {
 		// levels so a return nested in the body computes the correct br depth.
 		ctx.wasmCtrlDepth += 2;
 		// Evaluate the test; exit the block (depth 1) when it is nil. A fusable binary
-		// comparison keeps its truth value as a raw i32 (no t/nil boxing per iteration).
-		if (WasmComparisonCompiler.tryCompileConditionI32(parts.get(1), ctx)) {
-			ctx.writer.write(Instruction.I32_EQZ);
-		}
-		else {
+		// comparison (under any number of `not`s) yields the EXIT condition as a raw
+		// i32, so the loop pays neither the t/nil boxing nor an inversion per iteration.
+		if (!WasmComparisonCompiler.tryCompileConditionI32(parts.get(1), ctx, true)) {
 			WasmExprCompiler.compileExpr(parts.get(1), ctx);
 			ctx.writer.write(Instruction.REF_IS_NULL);
 		}

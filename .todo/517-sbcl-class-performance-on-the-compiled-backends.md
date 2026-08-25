@@ -3,7 +3,7 @@
 Difficulty: High (parent item; each child is sized on its own)
 
 Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522`
-(518, 519 and 520 are closed).
+(518, 519, 520 and 521 are closed).
 Related, already open: `.todo/412` (the JVM boxes every integer and has no fusion).
 
 ## Where this came from
@@ -117,6 +117,23 @@ sees is structural, and each piece is separately fixable:
   on any row now.
 - **wasm's `loop for ... to ...` is 2x its own `dotimes`** (0.83 vs 0.41) because
   the counted-loop lowering only covers `dotimes`. `.todo/521`.
+
+  **`.todo/521` is closed.** The counted-loop treatment now recognizes the
+  induction variable in the `let` + `while` sandwich `loop`'s numeric head lowers
+  to, instead of only a literal-bound `dotimes`
+  (`WasmCountedLoopCompiler`, `.kb/wasm-counted-loops.md`). Re-measured on the
+  same machine after it landed:
+
+  | benchmark | was (top level / `defun`) | now (top level / `defun`) |
+  | --- | --- | --- |
+  | wasm `loop ... sum` | 0.85 / 0.78 | **0.35 / 0.32** |
+
+  That is the row's whole gap: the idiomatic CL spelling now matches its own
+  `dotimes` (0.30 in a `defun`) and sits at 1.7x SBCL's 0.219 s -- inside the
+  target. A computed limit (`for i from 0 below (length v)`) still takes the
+  boxed lowering, and the reason it is a separate trade is recorded in that
+  `.kb` file's re-evaluation triggers. The JVM is unmoved (0.38 either way),
+  which is `.todo/412`'s question, exactly as this item said it would be.
 - **The default `rontolisp app.lisp` is the interpreter**, 20x-200x off the
   compiled backends. `.todo/522`.
 

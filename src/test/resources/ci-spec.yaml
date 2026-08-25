@@ -10373,6 +10373,52 @@ cases:
       (3 3 3)
       :OUTER
       333331000
+  - name: counted-numeric-for
+    source: |
+      ;; `loop`'s numeric `for` head lowers to a let* + while sandwich, and the
+      ;; wasm-GC backend gives the induction variable in it the same bare i64
+      ;; slot a dotimes counter gets. These pin every way the variable is still
+      ;; observable, and the shapes the eligibility scan must refuse (an
+      ;; assigned variable, a captured one, a non-integral limit, a limit at the
+      ;; i31 ceiling), which fall back to the ordinary boxed expansion.
+      (print (loop for cn-i from 1 to 10 sum cn-i))
+      (print (loop for cn-i from 0 below 4 collect cn-i))
+      (print (loop for cn-i from 10 downto 1 by 3 collect cn-i))
+      (print (loop for cn-i from 1 to 4 finally (return cn-i)))
+      (print (loop for cn-i from 1 to 100 do (when (= cn-i 3) (return (* cn-i 100)))))
+      (print (loop for cn-i from 1 to 2 collect (loop for cn-i from 7 to 8 collect cn-i)))
+      (let ((cn-v (make-array 4 :initial-element 0)))
+        (loop for cn-i from 0 below 4 do (setf (aref cn-v cn-i) (* cn-i cn-i)))
+        (print cn-v))
+      (print (loop for cn-i from 1 to 6 do (when (= cn-i 2) (setq cn-i 4)) collect cn-i))
+      (let ((cn-fs (loop for cn-i from 1 to 3 collect (lambda () cn-i))))
+        (print (mapcar #'funcall cn-fs)))
+      (print (loop for cn-i from 1 to 4.5 collect cn-i))
+      (print (loop for cn-i from 1073741820 to 1073741825 collect cn-i))
+      (let ((cn-i :outer)) (loop for cn-i from 1 to 2) (print cn-i))
+      (print (let ((cn-i 0) (cn-s 0))
+               (while (< cn-i 5) (setq cn-s (+ cn-s (* cn-i cn-i))) (setq cn-i (+ cn-i 1)))
+               (list cn-i cn-s)))
+      (print (loop for cn-i from 1 to 10 while (< cn-i 4) collect cn-i))
+      (print (loop for cn-i from 1 to 3 sum (* cn-i 1000000000000000000000)))
+      (print (loop for cn-i from -2 to 2 collect (- cn-i)))
+    expected: |
+      55
+      (0 1 2 3)
+      (10 7 4 1)
+      5
+      300
+      ((7 8) (7 8))
+      #(0 1 4 9)
+      (1 4 5 6)
+      (4 4 4)
+      (1 2 3 4)
+      (1073741820 1073741821 1073741822 1073741823 1073741824 1073741825)
+      :OUTER
+      (5 30)
+      (1 2 3)
+      6000000000000000000000
+      (2 1 0 -1 -2)
   - name: statically-typed-print-arguments
     source: |
       ;; princ of a form the compiler can TYPE (a float-contagious arithmetic

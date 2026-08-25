@@ -97,7 +97,13 @@ final class WasmSetqCompiler {
 			String name = ((LispSymbol) parts.get(1 + 2 * p)).name();
 			LispVal valueExpr = parts.get(2 + 2 * p);
 			WasmIntFusionCompiler.RawLocal raw = ctx.rawLocals.get(name);
-			if (raw != null) {
+			if (raw != null && raw.counted()) {
+				// The one assignment a counted loop variable has: its step, an i64.add
+				// into the slot with no re-box (WasmCountedLoopCompiler). Every other
+				// shape is a scan/emitter disagreement and throws there.
+				WasmCountedLoopCompiler.compileStep(name, valueExpr, raw, ctx);
+			}
+			else if (raw != null) {
 				WasmIntFusionCompiler.compileRawStore(valueExpr, ctx, raw);
 			}
 			else {

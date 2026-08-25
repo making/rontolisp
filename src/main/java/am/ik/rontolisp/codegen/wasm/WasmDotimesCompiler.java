@@ -9,7 +9,6 @@ import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
-import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -45,7 +44,9 @@ import am.ik.wasm.Type;
  * <p>
  * The eligibility scan is what keeps the shadow-free representation sound: it refuses the
  * shape whenever anything in the loop could write the variable, capture it or observe it
- * through a channel the slot is not on. See {@code .kb/wasm-counted-loops.md}.
+ * through a channel the slot is not on. It lives in {@link WasmCountedLoopCompiler},
+ * which applies the same proof to {@code loop}'s numeric {@code for} head. See
+ * {@code .kb/wasm-counted-loops.md}.
  */
 final class WasmDotimesCompiler {
 
@@ -59,16 +60,6 @@ final class WasmDotimesCompiler {
 	 * iteration's index, has to fit.
 	 */
 	private static final long MAX_COUNT = (1L << 30) - 1;
-
-	/**
-	 * Operators that can write a variable place. The AST reaching a backend has every
-	 * user macro already expanded ({@code UserMacroExpander}), so this list is closed:
-	 * anything else that assigns does it by expanding into one of these.
-	 */
-	private static final Set<String> MODIFY_OPERATORS = Set.of(LispNames.SETQ, LispNames.PSETQ, LispNames.SETF,
-			LispNames.PSETF, LispNames.MULTIPLE_VALUE_SETQ, LispNames.INCF, LispNames.DECF, LispNames.PUSH,
-			LispNames.PUSHNEW, LispNames.POP, LispNames.ROTATEF, LispNames.SHIFTF, LispNames.REMF, LispNames.DEFVAR,
-			LispNames.DEFPARAMETER, LispNames.DEFCONSTANT);
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (!compileCounted(cons, ctx)) {
@@ -115,7 +106,7 @@ final class WasmDotimesCompiler {
 			// (FreeVarAnalyzer.createsAClosure).
 			return false;
 		}
-		if (assignsName(scoped, name)
+		if (WasmCountedLoopCompiler.assignsName(scoped, name)
 				|| FreeVarAnalyzer.findCapturedVars(scoped, Set.of(name), ctx.functions.keySet()).contains(name)) {
 			// A captured counter needs a cell a nested lambda can read; an assigned one
 			// needs somewhere to put a value that is not a fixnum. Either way the
@@ -204,149 +195,6 @@ final class WasmDotimesCompiler {
 		ctx.rawLocals = savedRawLocals;
 		ctx.nextI64Local = savedNextI64Local;
 		return true;
-	}
-
-	/** Whether any form in the list could assign {@code name}. */
-	private static boolean assignsName(List<LispVal> forms, String name) {
-		for (LispVal form : forms) {
-			if (assignsName(form, name)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * Whether {@code form} contains, at any depth, an assignment whose target could be
-	 * the variable {@code name}. Deliberately blind to lexical scope and to quoting: an
-	 * inner binding's assignment also counts, which only narrows eligibility.
-	 */
-	private static boolean assignsName(LispVal form, String name) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head && cons.isProperList() && MODIFY_OPERATORS.contains(head.name())) {
-			for (LispVal place : places(head.name(), cons.toList())) {
-				if (writesName(place, name)) {
-					return true;
-				}
-			}
-		}
-		LispVal cur = cons;
-		while (cur instanceof LispCons cell) {
-			if (assignsName(cell.car(), name)) {
-				return true;
-			}
-			cur = cell.cdr();
-		}
-		return false;
-	}
-
-	/** The place arguments of a modify form, by operator. */
-	private static List<LispVal> places(String op, List<LispVal> parts) {
-		List<LispVal> out = new ArrayList<>();
-		switch (op) {
-			// (setq place value ...) and its parallel/generalized siblings.
-			case LispNames.SETQ, LispNames.PSETQ, LispNames.SETF, LispNames.PSETF -> {
-				for (int i = 1; i + 1 < parts.size(); i += 2) {
-					out.add(parts.get(i));
-				}
-			}
-			// (multiple-value-setq (place...) form)
-			case LispNames.MULTIPLE_VALUE_SETQ -> {
-				if (parts.size() > 1 && parts.get(1) instanceof LispCons names) {
-					out.addAll(names.toList());
-				}
-			}
-			// (push item place) / (pushnew item place key...)
-			case LispNames.PUSH, LispNames.PUSHNEW -> {
-				if (parts.size() > 2) {
-					out.add(parts.get(2));
-				}
-			}
-			// (rotatef place...) -- every argument is a place.
-			case LispNames.ROTATEF -> out.addAll(parts.subList(1, parts.size()));
-			// (shiftf place... newvalue) -- all but the last.
-			case LispNames.SHIFTF -> {
-				if (parts.size() > 2) {
-					out.addAll(parts.subList(1, parts.size() - 1));
-				}
-			}
-			// (incf place [delta]) / (decf ...) / (pop place) / (remf place indicator)
-			// / (defvar name [value]) and its siblings: the first argument.
-			default -> {
-				if (parts.size() > 1) {
-					out.add(parts.get(1));
-				}
-			}
-		}
-		return out;
-	}
-
-	/**
-	 * Whether writing through this place could write the VARIABLE {@code name}.
-	 *
-	 * <p>
-	 * A bare symbol place is the variable itself. A place FORM writes its own sub-place
-	 * -- {@code (setf (getf pl k) v)} stores back through {@code pl}, {@code (setf (ldb
-	 * spec x) v)} through {@code x}, {@code (setf (aref s i) c)} through {@code s} when
-	 * {@code s} turns out to be a string. For the indexed accessors below the sub-place
-	 * is a known argument and the rest are pure subscript/key READS, which is what keeps
-	 * the overwhelmingly common {@code (dotimes (i 16) (setf (aref buf i) 0))} eligible;
-	 * every other accessor is treated as writing anything it mentions.
-	 */
-	private static boolean writesName(LispVal place, String name) {
-		if (place instanceof LispSymbol sym) {
-			return name.equals(sym.name());
-		}
-		if (!(place instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
-			// Not a place shape this knows how to read: assume it writes anything it
-			// mentions (an atom that is not a symbol writes nothing).
-			return mentions(place, name);
-		}
-		List<LispVal> parts = cons.toList();
-		int subPlace = switch (head.name()) {
-			// (aref a i...) / (svref v i) / (elt s i) / (char s i) / (schar s i) /
-			// (row-major-aref a k) / (vec:aref v i) / (fill-pointer v) / (subseq s a b)
-			case LispNames.AREF, LispNames.SVREF, LispNames.ELT, LispNames.CHAR, LispNames.SCHAR,
-					LispNames.ROW_MAJOR_AREF, LispNames.VEC_QUALIFIED_AREF, LispNames.FILL_POINTER, LispNames.SUBSEQ ->
-				1;
-			// (the type place)
-			case LispNames.THE -> 2;
-			// (gethash key table [default]) -- the TABLE is the sub-place.
-			case LispNames.GETHASH -> 2;
-			// (values place...) -- setf distributes over every one of them.
-			case LispNames.VALUES -> -1;
-			default -> 0;
-		};
-		if (subPlace == -1) {
-			for (int i = 1; i < parts.size(); i++) {
-				if (writesName(parts.get(i), name)) {
-					return true;
-				}
-			}
-			return false;
-		}
-		if (subPlace == 0) {
-			// An accessor with no known sub-place: assume anything it mentions.
-			return mentions(cons, name);
-		}
-		return subPlace < parts.size() && writesName(parts.get(subPlace), name);
-	}
-
-	/** Whether the symbol occurs anywhere in the form. */
-	private static boolean mentions(LispVal form, String name) {
-		if (form instanceof LispSymbol sym) {
-			return name.equals(sym.name());
-		}
-		LispVal cur = form;
-		while (cur instanceof LispCons cell) {
-			if (mentions(cell.car(), name)) {
-				return true;
-			}
-			cur = cell.cdr();
-		}
-		return cur instanceof LispSymbol tail && name.equals(tail.name());
 	}
 
 }

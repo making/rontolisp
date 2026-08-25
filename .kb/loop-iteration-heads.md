@@ -108,6 +108,20 @@ see the constant -- the gensym-hidden `1` kept every iteration of ironclad's
 `sha256-expand-block` on the checked `_fx_add` helper call (~14% of the PBKDF2
 profile). A computed step or limit still binds exactly as before.
 
+## The numeric head's shape is what the wasm counted loop recognizes
+
+`for VAR from A to B [by S]` expands to a `let*` binding `VAR` to a literal `A`
+plus a `while` whose test compares `VAR` against a literal `B` and whose body
+ends in `(setq VAR (+ VAR S))`. On wasm-GC that exact sandwich is what
+`WasmCountedLoopCompiler` proves into an unboxed `i64` counter
+(`.kb/wasm-counted-loops.md`) -- worth 2.2x on a 10^8-iteration `sum`. The
+recognizer re-derives everything it needs from the AST in front of it, so a
+change here cannot make it WRONG; it can only make it stop firing. If the
+expansion ever moves the step out of the `while` body's statement list, hides a
+literal bound behind a gensym again (see the section above), or introduces a
+second assignment of the variable, that speed is silently gone -- re-measure the
+`counted-numeric-for` shapes when you touch `parseForNumeric`.
+
 ## Pinning
 
 - `LispEvaluatorTest.evalLoopVariableKeepsLastValueAfterTermination` -- the full

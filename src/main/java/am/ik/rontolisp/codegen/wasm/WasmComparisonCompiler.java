@@ -51,11 +51,29 @@ final class WasmComparisonCompiler {
 	 * having emitted nothing for every other shape.
 	 */
 	static boolean tryCompileConditionI32(LispVal test, WasmLispCompiler.Ctx ctx) {
+		return tryCompileConditionI32(test, ctx, false);
+	}
+
+	/**
+	 * The same, with {@code negated} asking for the COMPLEMENT: a non-0 i32 exactly when
+	 * the test is false, which is what a loop's exit {@code br_if} wants. A
+	 * {@code (not ...)} wrapper flips the request instead of emitting an {@code i32.eqz},
+	 * so {@code loop}'s numeric head -- whose test is spelled {@code (not (> i limit))}
+	 * ({@code .kb/loop-iteration-heads.md}) -- exits on the bare compare.
+	 */
+	static boolean tryCompileConditionI32(LispVal test, WasmLispCompiler.Ctx ctx, boolean negated) {
 		if (!(test instanceof LispCons cons) || !cons.isProperList()
 				|| !(cons.car() instanceof am.ik.rontolisp.LispSymbol head)) {
 			return false;
 		}
 		List<LispVal> args = cons.toList();
+		if (args.size() == 2 && (am.ik.rontolisp.LispNames.NOT.equals(head.name())
+				|| am.ik.rontolisp.LispNames.NULL.equals(head.name()))) {
+			// `not` and `null` are the same function and are dispatched by name here
+			// exactly as WasmExprCompiler dispatches them, so no user definition can be
+			// meant instead.
+			return tryCompileConditionI32(args.get(1), ctx, !negated);
+		}
 		if (args.size() != 3) {
 			return false;
 		}
@@ -70,7 +88,13 @@ final class WasmComparisonCompiler {
 		if (i32Opcode < 0 || WasmLispCompiler.hasDoubleLiteral(args)) {
 			return false;
 		}
-		return WasmIntFusionCompiler.tryCompileCompare(cons, ctx, i64OpcodeFor(i32Opcode), maskFor(i32Opcode), false);
+		if (!WasmIntFusionCompiler.tryCompileCompare(cons, ctx, i64OpcodeFor(i32Opcode), maskFor(i32Opcode), false)) {
+			return false;
+		}
+		if (negated) {
+			ctx.writer.write(am.ik.wasm.Instruction.I32_EQZ);
+		}
+		return true;
 	}
 
 	private static int i64OpcodeFor(int i32Opcode) {

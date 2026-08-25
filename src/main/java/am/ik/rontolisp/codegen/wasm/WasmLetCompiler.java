@@ -88,6 +88,19 @@ final class WasmLetCompiler {
 		// closure-free one.
 		Set<String> rawEligible = new HashSet<>();
 		int savedNextI64Local = ctx.nextI64Local;
+		// A COUNTED induction variable: the treatment the wasm backend gives a dotimes
+		// counter, for the let + while sandwich `loop`'s numeric `for` head lowers to
+		// (and that a hand-written loop spells out). It is the STRONGER representation
+		// -- an i64 slot with no boxed shadow at all -- so it is decided before the dual
+		// one and wins the binding; and like dotimes it is not gated on
+		// speedTradesEnabled, because the loop head it replaces always shrinks and
+		// always runs faster (.kb/wasm-counted-loops.md).
+		WasmCountedLoopCompiler.Induction counted = null;
+		if (!ctx.dynamic && !async && ctx.asyncResume == null
+				&& (!ctx.topLevel || !FreeVarAnalyzer.createsAClosure(bodyExprs))
+				&& !Boolean.getBoolean("rontolisp.debug.norawlocals")) {
+			counted = WasmCountedLoopCompiler.analyze(bindings, bodyExprs, capturedInLet, ctx);
+		}
 		if (WasmIntFusionCompiler.speedTradesEnabled(ctx) && !ctx.dynamic && !async && ctx.asyncResume == null
 				&& (!ctx.topLevel || !FreeVarAnalyzer.createsAClosure(bodyExprs))
 				&& !Boolean.getBoolean("rontolisp.debug.norawlocals") && bindings instanceof LispCons rawScan) {
@@ -194,6 +207,11 @@ final class WasmLetCompiler {
 					int lexSlot = ctx.allocLocal(name);
 					ctx.writer.write(Instruction.SET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(lexSlot);
+					continue;
+				}
+				if (counted != null && counted.name().equals(name)) {
+					// Counted binding: an i64 slot, no ordinary local and no shadow.
+					rawRegistrations.put(name, WasmCountedLoopCompiler.compileBinding(counted, ctx));
 					continue;
 				}
 				if (rawEligible.contains(name)) {

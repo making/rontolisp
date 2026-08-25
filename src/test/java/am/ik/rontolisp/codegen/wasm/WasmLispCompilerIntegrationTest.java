@@ -1237,6 +1237,87 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void countedNumericForHeadsMatchTheExpandedLowering() throws Exception {
+		// `loop`'s numeric `for` head lowers to a let* + while sandwich
+		// (.kb/loop-iteration-heads.md), and the wasm backend recognizes the induction
+		// variable in it and gives it the same bare i64 slot a dotimes counter gets
+		// (.kb/wasm-counted-loops.md). Pinned here: every way the variable is still
+		// observable, and every shape the eligibility scan must REFUSE -- which then
+		// falls back to the ordinary boxed expansion. In order: (1) the accumulator sees
+		// it; (2) an exclusive limit; (3) a descending step with `by`; (4) `finally`
+		// sees the value ONE STEP PAST the limit, which is what the range proof has to
+		// cover; (5) a `return` out of the body carries its value through the %block;
+		// (6) a nested head of the SAME name shadows and restores; (7) an indexed store
+		// whose SUBSCRIPT is the variable stays eligible; (8) a body that ASSIGNS it
+		// falls back; (9) a CAPTURED variable falls back (one binding for the whole
+		// loop, so every closure sees the final value); (10) a non-integral limit falls
+		// back; (11) a limit at the i31 ceiling falls back -- the slot would box
+		// inexactly; (12) the same loop written by hand as let + while; (13) a `while`
+		// clause conjoined onto the head's own test; (14) the accumulator's overflow
+		// promotion to exact arbitrary precision is untouched; (15) a negative start.
+		String program = """
+				(print (loop for i from 1 to 10 sum i))
+				(print (loop for i from 0 below 4 collect i))
+				(print (loop for i from 10 downto 1 by 3 collect i))
+				(print (loop for i from 1 to 4 finally (return i)))
+				(print (loop for i from 1 to 100 do (when (= i 3) (return (* i 100)))))
+				(print (loop for i from 1 to 2 collect (loop for i from 7 to 8 collect i)))
+				(let ((v (make-array 4 :initial-element 0)))
+				  (loop for i from 0 below 4 do (setf (aref v i) (* i i)))
+				  (print v))
+				(print (loop for i from 1 to 6 do (when (= i 2) (setq i 4)) collect i))
+				(let ((fs (loop for i from 1 to 3 collect (lambda () i))))
+				  (print (mapcar #'funcall fs)))
+				(print (loop for i from 1 to 4.5 collect i))
+				(print (loop for i from 1073741820 to 1073741825 collect i))
+				(let ((i :outer)) (loop for i from 1 to 2) (print i))
+				(print (let ((i 0) (s 0))
+				         (while (< i 5) (setq s (+ s (* i i))) (setq i (+ i 1)))
+				         (list i s)))
+				(print (loop for i from 1 to 10 while (< i 4) collect i))
+				(print (loop for i from 1 to 3 sum (* i 1000000000000000000000)))
+				(print (loop for i from -2 to 2 collect (- i)))
+				""";
+		String expected = """
+				55
+				(0 1 2 3)
+				(10 7 4 1)
+				5
+				300
+				((7 8) (7 8))
+				#(0 1 4 9)
+				(1 4 5 6)
+				(4 4 4)
+				(1 2 3 4)
+				(1073741820 1073741821 1073741822 1073741823 1073741824 1073741825)
+				:OUTER
+				(5 30)
+				(1 2 3)
+				6000000000000000000000
+				(2 1 0 -1 -2)""";
+		assertThat(compileAndRun(program)).isEqualTo(expected);
+		// Not a speed-for-size trade (no shadow, no duplicated fallback), so
+		// --optimize=size emits it too and must answer the same.
+		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+			.compile(LispReader.readAllFromString(program));
+		assertThat(runModule(small, "counted-numeric-for.wasm")).isEqualTo(expected);
+		// The assertions above pass whether or not the counter is unboxed -- the whole
+		// point is that they must. So pin the recognizer FIRING too, by the one thing
+		// output equality cannot show: the identical loop over a computed limit stays on
+		// the boxed lowering and is bigger. Without this, a change to the loop expansion
+		// that stopped fitting the pattern would cost the 2.2x in silence
+		// (.kb/loop-iteration-heads.md).
+		String literalLimit = "(let ((s 0)) (loop for i from 0 below 1000 do (setq s (+ s i))) (print s))";
+		String computedLimit = "(let ((s 0) (n 1000)) (loop for i from 0 below n do (setq s (+ s i))) (print s))";
+		byte[] counted = new WasmLispCompiler().compile(LispReader.readAllFromString(literalLimit));
+		byte[] boxed = new WasmLispCompiler().compile(LispReader.readAllFromString(computedLimit));
+		assertThat(runModule(counted, "counted-numeric-for-literal.wasm")).isEqualTo("499500");
+		assertThat(runModule(boxed, "counted-numeric-for-computed.wasm")).isEqualTo("499500");
+		assertThat(counted.length).as("the counted loop head is smaller than the boxed one it replaces")
+			.isLessThan(boxed.length);
+	}
+
+	@Test
 	void staticallyTypedPrintArgumentsPrintWhatTheValueDispatchWouldHave() throws Exception {
 		// princ of a form the compiler can TYPE skips the value dispatch, which is what
 		// keeps _princ_val and everything reachable only from it out of the module

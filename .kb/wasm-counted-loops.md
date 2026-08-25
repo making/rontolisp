@@ -1,15 +1,24 @@
-# WASM counted loops (`dotimes` over a literal bound)
+# WASM counted loops (`dotimes`, and a `let` + `while` induction variable)
 
 **Invariant: a counted loop's induction variable is an `i64` slot with NO boxed
 shadow, and the eligibility scan is the whole proof that nothing can observe it
-any other way.** `WasmDotimesCompiler`, wasm-GC backend (Preview 1 AND
-`--component`; the interpreter, the JVM and `--no-gc` keep the macro expansion).
+any other way.** Two entry points, wasm-GC backend (Preview 1 AND `--component`;
+the interpreter, the JVM and `--no-gc` keep the macro expansion):
+
+- `WasmDotimesCompiler` -- a `dotimes` over a LITERAL bound, which it emits
+  whole (its own `block`/`loop` pair, below);
+- `WasmCountedLoopCompiler` -- a `let` binding that a `while` in the body steps,
+  which is what `loop`'s numeric `for` head lowers to
+  (`.kb/loop-iteration-heads.md`) and what a hand-written loop spells out. Here
+  the ordinary `WasmLetCompiler`/`WasmWhileCompiler` emit the loop; only the
+  variable's REPRESENTATION changes.
 
 Unlike the two speed-for-size trades next door (`.kb/wasm-int-fusion.md`,
-`.kb/wasm-unboxed-locals.md`) this one is **not gated on `--optimize=size`**: it
-emits strictly less code AND runs strictly faster, because the representation it
+`.kb/wasm-unboxed-locals.md`) this one is **not gated on `--optimize=size`**: the
+loop head always shrinks AND always runs faster, because the representation it
 replaces is not "boxed but cheap", it is "boxed plus a generic comparison call
-plus a re-box, per iteration".
+plus a re-box, per iteration". There is no shadow, no per-leaf guard and no
+duplicated generic fallback to pay for it with.
 
 ## What the general lowering costs
 
@@ -70,7 +79,7 @@ no new rules: `WasmExprCompiler.compileSymbolRef` consults raw locals before
 ordinary locals, captures and module globals, and `WasmLetCompiler` already
 removes a shadowed outer registration whatever the new binding's representation.
 
-The four places that branch on `counted()`:
+The five places that branch on `counted()`:
 
 | site | dual | counted |
 | --- | --- | --- |
@@ -78,18 +87,21 @@ The four places that branch on `counted()`:
 | `emitLeafUnboxes` | sentinel test, then the i31/TYPE_BIGNUM guarded unbox | nothing |
 | `emitFallback` | sentinel test, then `_int_new` or the shadow | `i32.wrap_i64; ref.i31` |
 | `emitRawLocalBoxedRead` | the `_ub_read` call | `i32.wrap_i64; ref.i31` |
+| `WasmSetqCompiler.compileForEffect` | `compileRawStore` (raw fast path or shadow) | `WasmCountedLoopCompiler.compileStep` -- the one `i64.add` |
 
 The snapshot exists so a later leaf's side effect cannot change what an earlier
-read of the same local observed; a counted variable has no assignment anywhere
-in the loop, so there is nothing to snapshot. That it reads RAW inside a fused
-tree is the speed half: `(- i 2)` index math and `(+ s i)` accumulation stop
-paying a guard per leaf, and a comparison against it fuses
-(`tryCompileCompare`).
+read of the same local observed; a counted variable's only assignment is its own
+step, which the loop's own iteration separates from every read, so there is
+nothing to snapshot. That it reads RAW inside a fused tree is the speed half:
+`(- i 2)` index math and `(+ s i)` accumulation stop paying a guard per leaf,
+and a comparison against it fuses (`tryCompileCompare`).
 
-`compileRawStore` **throws** on a counted target rather than assuming: the only
-way to reach it is an assignment the eligibility scan below missed.
+`compileRawStore` **throws** on a counted target rather than assuming, and
+`compileStep` throws on any value shape that is not the proven step: between
+them, an assignment the eligibility scan below missed fails the compile loudly
+instead of inventing a representation there is no shadow to hold.
 
-## Eligibility
+## Eligibility: `dotimes`
 
 All of these must hold; anything else falls back to `expandDotimes` verbatim:
 
@@ -126,7 +138,62 @@ watermark restored after it, so fused sites inside the body allocate above it
 and their own save/restore cannot reuse it (`.kb/wasm-unboxed-locals.md`, "the
 i64 locals run").
 
+## Eligibility: a `let` + `while` induction variable
+
+`WasmCountedLoopCompiler.analyze` runs on every `let` the wasm backend compiles.
+By then a `let*` is nested `let`s, so `loop`'s numeric head presents as the
+OUTERMOST binding with the `while` several bodies down -- the scan looks at the
+whole `let` form, not at its immediate body. A binding qualifies when all of
+this holds; anything else just keeps the ordinary representation, with no other
+change to how the loop is emitted:
+
+- the init is a **literal integer** within `±(2^30 - 1)`;
+- the name is a non-keyword symbol, not special, not duplicated in the same
+  binding list, and not captured by a lambda in the body (`capturedInLet`);
+- the whole `let` form holds **exactly one** assignment of it -- the same
+  place-writing scan the `dotimes` list above describes, which lives in this
+  class now and `WasmDotimesCompiler` calls -- and that assignment is
+  `(setq VAR (+ VAR n))`, `(+ n VAR)` or `(- VAR n)` with a literal non-zero
+  `n`;
+- that `setq` is a **direct element of a `while`'s body list**. That is
+  statement position, the only position a counted variable can be assigned in at
+  all: there is no boxed value to hand back, so
+  `WasmSetqCompiler.compileForEffect` routes it to `compileStep` and every other
+  route reaches `compileRawStore`, which throws;
+- that `while`'s own test **bounds** the variable: a comparison against a
+  literal integer, under any number of `not`s, possibly as one conjunct of an
+  `and`. Any conjunct is enough -- failing it ends the loop before the step runs
+  again. Negating a comparison is sound because both operands are integers (the
+  variable by construction, the other by this very test), so there is no NaN to
+  make an operator and its negation both false; and the recursion into `and`
+  happens only on the POSITIVE side, since a negated conjunction is a
+  disjunction of negations and a bound from one disjunct proves nothing;
+- the two extremes then have to box exactly as an i31: the init, and one step
+  past the bound. That second one is the value that FAILS the test, and it is
+  observable -- `(loop for i from 1 to 4 finally (return i))` is 5 -- which is
+  why the range proof cannot stop at the limit.
+
+The context gates are the dual representation's minus the `--optimize=size` one:
+`--dynamic`, an async body and a top-level body that creates a closure are all
+out. `WasmLetCompiler` decides the counted binding BEFORE the dual one --
+counted is the stronger representation (no shadow at all), so it wins the
+binding.
+
+### The exit test
+
+`WasmComparisonCompiler.tryCompileConditionI32` takes a `negated` request and
+answers a `not` by flipping it rather than by emitting an `i32.eqz`. The numeric
+head's test is spelled `(not (> i limit))`, so `while` gets its exit condition
+as one bare `i64.gt_s` feeding `br_if` -- the same two instructions
+`WasmDotimesCompiler` emits by hand. This is general and it is more than an
+inversion saved: before, the `not` wrapper pushed the WHOLE test onto the boxed
+path (a `_rat_cmp_bits` or fused compare boxing t/nil, a `not` call, a null
+test), so every `while`/`if` over a negated comparison now fuses where it did
+not.
+
 ## Measured
+
+### `dotimes`
 
 wasmtime 47.0.2, `--optimize` unless stated, 2026-08-08.
 
@@ -152,6 +219,38 @@ Checked-in browser artifacts moved -0.5% (`webgl-battlefront`) to -8.9%
 (`wasm-browser/dice`); `hiragana/infer` and `rainbow` are byte-identical (no
 literal-bound `dotimes`).
 
+### The `let` + `while` head (todo-521)
+
+wasmtime 47.0.3, 2026-08-25. `(loop for i from 1 to 100000000 sum i)` inside a
+`defun`, best of three:
+
+| level | before | after | the `dotimes` twin |
+| --- | ---: | ---: | ---: |
+| `--optimize` | 0.78 s | **0.32 s** | 0.30 s |
+| `--optimize=size` | 5.81 s | **3.62 s** | -- |
+
+That is the whole gap this was filed for: the idiomatic CL spelling used to cost
+2.4x its own `dotimes` and now matches it (SBCL 2.6.5 does it in 0.208 s).
+
+| module | before | after |
+| --- | ---: | ---: |
+| `(loop for i from 0 below 1000000)` alone | 2,070 | **1,262** |
+| the `sum` benchmark above | 9,812 | **9,468** |
+| a 1,000-iteration `(setq s (+ s (* i i)))` loop in a `defun` | 10,419 | **10,065** |
+
+At `--optimize=size` the same three are 1,884 -> **1,367**, 9,381 -> 9,383 and
+9,929 -> 9,934: the loop head itself always shrinks, and the two +2/+5-byte
+programs are the counted reads boxing at sites that fusion would otherwise have
+consumed.
+
+Rebuilding the browser examples with and without the change moves five of the
+thirteen, all down: `minesweeper` -340, `battlefront` -705, `heat3d` -232,
+`platformer` -80, `robot-arm` -790 bytes; the rest are byte-identical. The
+CHECKED-IN copies were left alone -- they are stale against HEAD's compiler for
+unrelated reasons (a `wasm-browser/dice` rebuild is +60% over the committed
+file), so refreshing them here would have buried this change's five deltas in
+that drift.
+
 ## Pinning tests
 
 `WasmLispCompilerIntegrationTest.countedDotimesLoopsMatchTheExpandedLowering`
@@ -160,20 +259,38 @@ assigned counter falling back, a captured counter falling back, an array fill
 whose subscript is the counter) and the `counted-dotimes` ci-spec case (all four
 backends).
 
+`WasmLispCompilerIntegrationTest.countedNumericForHeadsMatchTheExpandedLowering`
+and the `counted-numeric-for` ci-spec case do the same for the `let` + `while`
+head: the accumulator, an exclusive limit, a descending `by` step, the value
+`finally` sees ONE STEP past the limit, `return` out of the body, a nested
+same-name head, an indexed store subscripted by the variable, and the five
+refusals -- assigned, captured, a non-integral limit, a limit at the i31
+ceiling, and the hand-written `let` + `while` spelling that must answer the
+same. Both run at `--optimize=size` too.
+
 ## Re-evaluation triggers
 
-- **A non-literal bound is the open half.** It cannot reuse this shape as it
-  stands: a runtime count needs a guard, and a guard needs a generic loop to
-  bail into, which means emitting the body twice -- a speed-for-size trade,
-  which is exactly what this item is not. The way in would be a runtime
-  "count to i64" coercion that reproduces `(< i n)`'s semantics for a float or a
-  ratio bound exactly; measure before believing it pays.
+- **A non-literal bound is still the open half**, and todo-521 re-decided it the
+  same way for `loop`'s head, where a computed limit
+  (`for i from 0 below (length v)`) is common. It cannot reuse this shape: a
+  runtime limit needs an entry guard ("is it an integer inside the i31 range?"),
+  and the guard's failing arm needs a generic loop to bail into, which means
+  emitting the body TWICE. Every no-duplication alternative was considered and
+  none is sound -- clamping the limit changes which iterations run; a generic
+  exit test still needs the counter itself bounded; trapping instead of bailing
+  turns a legal (if absurd) program into an error. So it is a speed-for-size
+  trade after all, and the way in is to gate the duplicated version on
+  `WasmIntFusionCompiler.speedTradesEnabled` exactly as
+  `.kb/wasm-unboxed-locals.md` gates its own duplicated fallback, keeping the
+  variable's post-loop reads on ONE representation (write the counted slot back
+  into the boxed local at the counted arm's exit). Measure before believing it
+  pays.
 - **A counted read feeding a float coercion still round-trips through a box.**
   `pi_approx`'s `(* 2.0 i)` emits `i32.wrap_i64; ref.i31` and then calls
   `_as_f64` on it. An `f64.convert_i64_s` straight off the slot would delete two
   instructions and a call per iteration; it needs `castFloatGetF64` to learn
   about raw operands, so it is a `.kb/wasm-shared-coercion.md` change, not one
   here.
-- If the counted flavour ever needs a THIRD behaviour at one of the four
+- If the counted flavour ever needs a THIRD behaviour at one of the five
   `counted()` branches, that is the signal that `RawLocal` should become a
   sealed interface with two implementations rather than a record with a flag.
