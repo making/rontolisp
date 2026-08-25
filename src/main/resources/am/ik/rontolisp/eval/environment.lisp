@@ -1,4 +1,5 @@
-;;;; environment.lisp -- %host-getenv over wit-imported wasi:cli/environment@0.3.0.
+;;;; environment.lisp -- %host-getenv and %host-argv over wit-imported
+;;;; wasi:cli/environment@0.3.0.
 ;;;;
 ;;;; This is the --component implementation of the HOST read behind uiop:getenv
 ;;;; (spliced by eval/EnvironmentLibrary when a --component program reaches it). The
@@ -37,3 +38,12 @@
       ((null %getenv-rest) nil)
     (if (string= (car (car %getenv-rest)) %getenv-name)
         (return (car (cdr (car %getenv-rest)))))))
+
+;; %host-argv: the vector behind the whole uiop/image command-line family (the five
+;; public names are Lisp over it, uiop-image.lisp). get-arguments hands back the
+;; POSIX-style arguments INCLUDING argv[0], which is the shape every backend answers,
+;; so there is nothing to reshape here. Preview 1 scans the args_sizes_get / args_get
+;; buffer instead (_argv, WasmArgvRuntimeBuilder); the interpreter and the JVM have
+;; their own primitive. A program that reads no arguments is not spliced this defun,
+;; and binds no get-arguments.
+(defun %host-argv () (%environ:get-arguments))

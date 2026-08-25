@@ -580,6 +580,10 @@ final class JvmExprCompiler {
 				// turns a nil answer into its not-implemented-error.
 				case LispNames.HOST_GETENV -> JvmGetenvCompiler.compile(cons, ctx, className);
 				case LispNames.HOST_GETCWD -> JvmGetcwdCompiler.compile(cons, ctx, className);
+				// The command-line primitive behind the uiop/image family (the public
+				// five are Lisp over it, uiop-image.lisp): main's own String[] behind
+				// the class name, through the _argv helper.
+				case LispNames.HOST_ARGV -> JvmArgvCompiler.compile(cons, ctx, className);
 				// %target-machine-type: the ABI this artifact targets, the one thing the
 				// environment-enquiry family (machine-type, a prelude defun over it)
 				// answers differently per backend. A class file is CPU-independent, so

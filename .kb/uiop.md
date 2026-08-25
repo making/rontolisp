@@ -428,7 +428,7 @@ routing them around it would leave three copies of "look a name up in a package,
 error or not". Its compiled-backend status answer is the one
 `.kb/symbol-runtime-api.md` describes (`.todo/254`).
 
-## `uiop/image`'s decisions (todo-362: 25/30)
+## `uiop/image`'s decisions (30/30)
 
 The whole sub-package is Lisp source in `uiop-image.lisp` except the exit
 PRIMITIVE, which is per backend. Three groups, three answers.
@@ -514,14 +514,61 @@ PRIMITIVE, which is per backend. Three groups, three answers.
   is a place (`.todo/367`), both bodies become the one `register-hook-function`
   call upstream writes.
 
-- **The command-line five are still missing** (`argv0`,
-  `command-line-arguments`, `raw-command-line-arguments`,
-  `setup-command-line-arguments`, `*command-line-arguments*`): they need a
-  `%host-argv` primitive on four backends, which on `--component` means the
-  fixed import block declaring `wasi:cli/environment`'s `get-arguments` (the
-  block currently declares `get-environment` only, and a second import of the
-  same interface name would be invalid) -- a regeneration of
-  `src/wasm-component/`'s blobs and the WIT fixtures. `.todo/362` carries it.
+- **The command-line five are ONE Lisp definition over one primitive**
+  (todo-362, 2026-08-25): `%host-argv` (`LispNames.HOST_ARGV`) answers the
+  vector as `(program-name user-arg ...)` on every backend, so
+  `raw-command-line-arguments` IS the primitive, `command-line-arguments` is its
+  `rest`, `argv0` its `first`, and there is no per-backend arm at all. Upstream
+  reaches the same two answers only for `*image-dumped-p*` `:executable` and
+  otherwise hunts for a `--` inside a vector that still carries the
+  implementation's own arguments; rontolisp is always the executable case,
+  because the CLI splits at the separator ITSELF (`CliOptions.arguments()`,
+  everything after `--`) and a compiled artifact never sees a rontolisp option.
+  `*command-line-arguments*` is SEEDED from `(command-line-arguments)` at load
+  time where upstream defaults it to nil: upstream fills it from
+  `restore-image`, the one thing no backend here can do, so a nil default would
+  leave the variable a trap with nowhere to call `setup-command-line-arguments`
+  from. Per backend:
+  - the interpreter takes the vector the CLI threads in
+    (`LispEvaluator.setCommandLineArguments`): the input file as argv0 --
+    `rontolisp` itself for `-e` / `test` / the REPL, which have no program file
+    -- then the arguments after `--`. An EMBEDDED run (the tests, the browser
+    playground) leaves it empty, and nil is upstream's own answer for an
+    implementation it cannot ask;
+  - the JVM stores `main`'s `String[]` into a static `_argv` field from main's
+    OWN PROLOGUE (a defun that reads the command line is an ordinary static
+    method and cannot see main's locals) and `_argv()` prepends the CLASS NAME,
+    which is what stood on the `java` command line. A `jvm-export` library runs
+    its top level in `<clinit>`, before any main could store one, and the null
+    field answers nil there;
+  - **Preview 1's `args_sizes_get` / `args_get` are APPENDED USER IMPORTS**, not
+    fixed slots (`WasmArgvRuntimeBuilder`, called through
+    `PLACEHOLDER_FUNC_BASE + ordinal` the way `--host-random`'s entropy import
+    is): the eleven index-pinned preview1 slots do not grow, no `--no-wasi` stub
+    slot appears, and the `--component` adapter's export list is untouched. The
+    `_argv` helper itself is a FIXED index (`FUNC_ARGV`, appended after
+    `FUNC_WRITE_PACKED`, reusing `TYPE_READ_LINE`'s `() -> (ref null eq)`), with
+    a nil-answering stub body for a program that reads no arguments;
+  - `--component` binds `wasi:cli/environment@0.3.0`'s `get-arguments` in
+    `environment.lisp`, beside `get-environment` -- which DID need the fixed
+    import block to declare it (`core.wat` + `regen.sh` + `FIXED_BLOCK_IFACES`,
+    then `regen-wit.sh` and `WasiWitDefinitions`; the block is pruned per
+    INTERFACE, so every component that imports the environment interface now
+    declares both members, which is what `WitOracleE2eTest` checks against
+    `wasm-tools`). `EnvironmentLibrary` splices per NAME, so a getenv-only
+    program still binds only `get-environment`;
+  - a `--no-wasi` reactor answers nil: it owns no WASI world and is entered
+    through exported functions, so there is no command line of its own -- the
+    same value-not-a-code-path rule `%host-getcwd` follows.
+
+  Pinned by `LispEvaluatorTest.evalUiopImageTheCommandLine*`,
+  `JvmLispCompilerTest.compileAndRunUiopImageTheCommandLine` (a child JVM, the
+  only place a real command line exists),
+  `WasmLispCompilerIntegrationTest.uiopImageTheCommandLineCompilesAndRuns` (both
+  wasm backends), `CliOptionsTest.everythingAfterTheSeparatorBelongsToTheProgram`
+  and the `uiop-image-command-line` ci-spec case -- which is also the only test
+  anywhere that argument PASSING agrees across the four launchers
+  (`CiSpecE2eTest.PROGRAM_ARGUMENTS`).
 
 Pinned by the `evalUiopImage*` block of `LispEvaluatorTest` (five tests,
 including the exit signal's code and the no-cleanup rule),

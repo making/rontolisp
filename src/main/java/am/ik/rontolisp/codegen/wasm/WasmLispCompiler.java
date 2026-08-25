@@ -108,6 +108,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final String HOST_RANDOM_FIELD = "random_get";
 
 	/**
+	 * The WASI Preview 1 module name, for the imports that are APPENDED rather than
+	 * declared in the eleven index-pinned fixed slots: the {@code args_sizes_get} /
+	 * {@code args_get} pair {@code %host-argv} reads its vector from, bound the way
+	 * {@code exit.lisp} binds {@code proc_exit} -- as an ordinary user import, so a
+	 * program that never asks for them imports nothing new.
+	 */
+	static final String WASI_PREVIEW1_MODULE = "wasi_snapshot_preview1";
+
+	/**
 	 * Creates a new WASM compiler.
 	 * <p>
 	 * Compiles at {@link OptimizeLevel#DEFAULT} -- the level an absent {@code --optimize}
@@ -1356,7 +1365,18 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_WRITE_PACKED = FUNC_READ_PACKED + 1;
 
-	static final int FX_FUNC_LAST = FUNC_WRITE_PACKED;
+	// _argv () -> (ref null eq): the program's argument vector as a list of strings,
+	// argv0 first -- the host read behind %host-argv, and therefore behind the whole
+	// uiop/image command-line family. It scans the buffer args_sizes_get / args_get
+	// fill, the pair being APPENDED USER IMPORTS rather than fixed slots
+	// (WasmArgvRuntimeBuilder), so the eleven index-pinned preview1 imports do not
+	// grow and no --component adapter export list changes. Reuses the () -> (ref null
+	// eq) signature (TYPE_READ_LINE), so no new type entry; appended after the last
+	// fixed helper so no index above shifts. A program that reads no arguments gets a
+	// nil-answering stub body and imports nothing.
+	static final int FUNC_ARGV = FUNC_WRITE_PACKED + 1;
+
+	static final int FX_FUNC_LAST = FUNC_ARGV;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -2036,6 +2056,20 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
 
+	// argv scratch, the same shape one page-3 region higher: the count / buffer-size
+	// words, then the pointer array and the "arg\0" buffer args_get fills. The words
+	// live here rather than beside ENV_COUNT_ADDR because the low scratch region ends
+	// at 251 and DATA_BASE_OFFSET (256) may not move -- shifting it would change the
+	// static-data base of every module. The module's memory is floored at four pages,
+	// so page 3 is always there.
+	static final int ARGV_COUNT_ADDR = 0x38000; // 229376, page 3 + 32 KiB
+
+	static final int ARGV_BUFSIZE_ADDR = 0x38004;
+
+	static final int ARGV_PTRS_ADDR = 0x38010;
+
+	static final int ARGV_BUF_ADDR = 0x3C000; // 245760, page 3 + 48 KiB
+
 	// Socket scratch cell in page 4 (0x40000), between the rontolisp data/heap (pages
 	// 0-3) and the adapter scratch (page 5+). sock.tcp-connect / tcp-listen /
 	// tcp-accept write the preview1-style socket fd (>= 200, serviced by the sockets
@@ -2476,6 +2510,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// functions are generated for every registered arity so _eval can apply them.
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
 		// it pulls in the eval runtime as well.
+		// %host-argv on Preview 1: the two WASI command-line imports and the real _argv
+		// body, or neither. A --component program has the spliced environment.lisp defun
+		// instead (get-arguments off the fixed block), and a --no-wasi reactor has no
+		// command line at all -- the expression compiler answers nil there, the way it
+		// does for %host-getcwd.
+		boolean usesHostArgv = !this.component && !this.noWasi && programUsesSymbol(program, LispNames.HOST_ARGV);
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
 		boolean usesRead = programUsesSymbol(program, LispNames.READ)
 				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
@@ -3958,6 +3998,21 @@ public final class WasmLispCompiler implements LispCompiler {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(HOST_RANDOM_MODULE, HOST_RANDOM_FIELD, TYPE_INTERN));
 		}
+		// %host-argv: the WASI command-line pair joins the same ordinal space LAST, for
+		// the same reason --host-random does -- a program that also declares
+		// rontolisp:wasm-import functions keeps their ordinals and its bytes. Both are
+		// (i32, i32) -> i32, TYPE_INTERN's shape, so no type entry is appended either.
+		// Preview 1 only: under --component %host-argv is the spliced environment.lisp
+		// defun over wasi:cli/environment's get-arguments, and a --no-wasi reactor has
+		// no command line to read at all (the compiler answers nil there).
+		final int @Nullable [] argvOrdinals = usesHostArgv ? new int[] { hostImports.size(), hostImports.size() + 1 }
+				: null;
+		if (argvOrdinals != null) {
+			hostImports
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "args_sizes_get", TYPE_INTERN));
+			hostImports
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "args_get", TYPE_INTERN));
+		}
 
 		// Which funcIds the arity ladders (and the name registry below) must carry a case
 		// for. Every emitted body has been compiled by now, so ctx.valueFuncIds holds
@@ -5320,6 +5375,7 @@ public final class WasmLispCompiler implements LispCompiler {
 															// start, end) -> value
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _write_packed (seq, stream,
 															// start, end) -> value
+				fnDef.addFunction(TYPE_READ_LINE); // _argv () -> arg list (FUNC_ARGV)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6023,6 +6079,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				// FUNC_WRITE_PACKED)
 				code.addFunction(WasmPackedIoRuntimeBuilder.buildReadPackedBody(this.simd));
 				code.addFunction(WasmPackedIoRuntimeBuilder.buildWritePackedBody(this.simd));
+				// command-line vector body (FUNC_ARGV); a stub unless the program
+				// reads its arguments, since the real one calls imports only a reader
+				// declares.
+				code.addFunction(argvOrdinals == null ? WasmArgvRuntimeBuilder.buildStub()
+						: WasmArgvRuntimeBuilder.build(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[0],
+								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[1]));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

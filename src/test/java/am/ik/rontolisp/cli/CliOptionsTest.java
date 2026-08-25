@@ -126,6 +126,28 @@ class CliOptionsTest {
 	}
 
 	@Test
+	void everythingAfterTheSeparatorBelongsToTheProgram() {
+		// `--` is where rontolisp's options end and the program's arguments begin: that
+		// is how an interpreted program is handed anything at all
+		// ((uiop:command-line-arguments)), and the only way to tell --optimize the
+		// compiler flag from --optimize the argument.
+		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--simd", "--", "--optimize", "-e", "x" });
+		assertThat(options.getNokey()).isEqualTo("prog.lisp");
+		assertThat(options.contains("--simd")).isTrue();
+		assertThat(options.contains("--optimize")).isFalse();
+		assertThat(options.get("-e")).isNull();
+		assertThat(options.arguments()).containsExactly("--optimize", "-e", "x");
+		// A second separator is an argument like any other, and no separator means no
+		// arguments -- not an empty positional.
+		assertThat(CliOptions.build(new String[] { "prog.lisp", "--", "--", "a" }).arguments()).containsExactly("--",
+				"a");
+		assertThat(CliOptions.build(new String[] { "prog.lisp" }).arguments()).isEmpty();
+		// It is a separator only where an option key would be: as a VALUE it is the
+		// value.
+		assertThat(CliOptions.build(new String[] { "prog.lisp", "-o", "--" }).get("-o")).isEqualTo("--");
+	}
+
+	@Test
 	void aValueGivenAsTheFollowingArgumentKeepsItsEqualsSigns() {
 		// The glued form must not reach into a value the space form supplies.
 		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--system-path", "/a=b:/c" });

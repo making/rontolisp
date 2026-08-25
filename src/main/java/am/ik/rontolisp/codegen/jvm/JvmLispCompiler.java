@@ -760,6 +760,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// java.security and keeps byte-identical output.
 		boolean usesSecureRandom = programUsesSymbol(program,
 				PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.RANDOM_BYTE_INTERNAL));
+		// Command-line helper: emitted only when the program references the internal
+		// %host-argv primitive (the spliced uiop/image command-line family is its one
+		// caller), so a program that does not read its arguments keeps byte-identical
+		// output -- and main grows no prologue.
+		boolean usesArgv = programUsesSymbol(program, LispNames.HOST_ARGV);
 		// Strict UTF-8 decode helper: emitted only when the program references the
 		// internal %octets-to-string-strict primitive (the prelude's lenient octet
 		// decoder is its one caller), so a program that never turns bytes into text
@@ -1651,6 +1656,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean topLevelInClinit = !exportDecls.isEmpty();
 		Ctx mainCtx = ctxBuilder.build();
 		mainCtx.evalStoreRef = evalStoreRef;
+		// The command line's static home, built HERE rather than beside the other
+		// runtime helpers because main's own prologue is what fills it: a defun that
+		// reads the arguments is an ordinary static method and cannot see main's locals.
+		final JvmArgvRuntimeBuilder.@Nullable ArgvRuntime argvRuntime = usesArgv
+				? JvmArgvRuntimeBuilder.build(cp, thisClass, objectClass, stringConcat, this.className) : null;
+		if (argvRuntime != null) {
+			// _argv = args. In main and only in main -- with a jvm-export the top level
+			// has already run in <clinit>, before any main could store one, which is the
+			// null the helper answers nil for.
+			mainCtx.emit(Opcode.ALOAD_0);
+			mainCtx.emit(Opcode.PUTSTATIC);
+			mainCtx.emitU2(argvRuntime.field().index());
+		}
 		Ctx topRunnerCtx = null;
 		Ctx entryCtx = mainCtx;
 		if (topLevelInClinit) {
@@ -2426,6 +2444,12 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(secureRandomRuntime.fieldDesc())
 						.writeU2(0));
 				}
+				if (argvRuntime != null) {
+					f.add(w -> w.writeU2(JvmArgvRuntimeBuilder.fieldAccessFlags())
+						.writeU2(argvRuntime.fieldName())
+						.writeU2(argvRuntime.fieldDesc())
+						.writeU2(0));
+				}
 				// VOLATILE: the synchronized _addStream writes the table back on every
 				// call, and that store is what publishes a new entry to the reader
 				// threads (one virtual thread per served request).
@@ -3077,6 +3101,16 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(secureRandomRuntime.maxStack())
 									.writeU2(secureRandomRuntime.maxLocals())
 									.writeCode((Object[]) secureRandomRuntime.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (argvRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, argvRuntime.name(), argvRuntime.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(argvRuntime.maxStack())
+									.writeU2(argvRuntime.maxLocals())
+									.writeCode((Object[]) argvRuntime.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

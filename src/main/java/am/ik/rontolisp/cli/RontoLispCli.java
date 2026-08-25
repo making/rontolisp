@@ -145,7 +145,7 @@ public final class RontoLispCli {
 		}
 		if (!test && inline == null && !options.containsNoKey()) {
 			repl(systemPath, dists, options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
-					options.contains("--parallel"));
+					options.contains("--parallel"), commandLine(null, options.arguments()));
 			return;
 		}
 
@@ -228,7 +228,8 @@ public final class RontoLispCli {
 				}
 			}
 			interpret(source, baseDir, systemPath, dists, options.contains("--simd"), options.contains("--blas"),
-					options.contains("--gpu"), options.contains("--parallel"), inputFile);
+					options.contains("--gpu"), options.contains("--parallel"), inputFile,
+					commandLine(inputFile, options.arguments()));
 		}
 	}
 
@@ -284,9 +285,10 @@ public final class RontoLispCli {
 	}
 
 	private void repl(List<String> systemPath, DistClient dists, boolean simd, boolean blas, boolean gpu,
-			boolean parallel) {
+			boolean parallel, List<String> commandLine) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
+		evaluator.setCommandLineArguments(commandLine);
 		evaluator.setDistClient(dists);
 		requireSimdForParallel(simd, parallel);
 		if (simd) {
@@ -390,11 +392,32 @@ public final class RontoLispCli {
 		}
 	}
 
+	/**
+	 * The argument vector the interpreted program reads as its own: the input file as
+	 * argv0 -- {@code rontolisp} itself when the program came from {@code -e}, from
+	 * {@code test} or from the REPL, where there is no program file to name -- followed
+	 * by everything after the {@code --} separator. It is what {@code %host-argv}
+	 * answers, and therefore what the {@code uiop/image} command-line family reads. The
+	 * compile paths take no vector here: a compiled artifact gets its own at RUN time,
+	 * from the JVM's {@code main} or from WASI.
+	 * @param inputFile the program file, or {@code null} when there is none
+	 * @param arguments the arguments after the {@code --} separator
+	 * @return the vector, argv0 first
+	 */
+	private static List<String> commandLine(@Nullable String inputFile, List<String> arguments) {
+		List<String> argv = new ArrayList<>();
+		argv.add(inputFile == null ? "rontolisp" : inputFile);
+		argv.addAll(arguments);
+		return List.copyOf(argv);
+	}
+
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
-			boolean simd, boolean blas, boolean gpu, boolean parallel, @Nullable String entryFile) {
+			boolean simd, boolean blas, boolean gpu, boolean parallel, @Nullable String entryFile,
+			List<String> commandLine) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
+		evaluator.setCommandLineArguments(commandLine);
 		evaluator.setDistClient(dists);
 		requireSimdForParallel(simd, parallel);
 		if (simd) {
@@ -816,6 +839,11 @@ public final class RontoLispCli {
 		this.out.println("  file -o out.class   Compile to JVM bytecode");
 		this.out.println("  file -o out.jar     Compile to an executable jar (java -jar out.jar)");
 		this.out.println("  file -o out.wasm    Compile to WASM");
+		this.out.println("  file -- ARG...     Interpret the file with ARG... as the PROGRAM's own");
+		this.out.println("                     arguments: everything after -- is (uiop:command-line-");
+		this.out.println("                     arguments), never a rontolisp option. A compiled");
+		this.out.println("                     artifact takes them from its own host instead");
+		this.out.println("                     (java Out a b, wasmtime run out.wasm a b)");
 		this.out.println();
 		this.out.println("Subcommands:");
 		this.out.println("  format PATH...     Re-indent Lisp source files in place (a");

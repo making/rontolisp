@@ -7536,6 +7536,22 @@ public final class LispNames {
 	public static final String HOST_EXIT = "%HOST-EXIT";
 
 	/**
+	 * The {@code %host-argv} internal primitive behind the {@code uiop/image}
+	 * command-line family: the program's own argument vector as a list of strings, argv0
+	 * first. The five public names are Lisp over it ({@code uiop-image.lisp}), so
+	 * {@code (uiop:command-line-arguments)} is {@code (rest (%host-argv))} on every
+	 * backend rather than four behaviours wearing one name. Per backend: the CLI's own
+	 * arguments -- the input file, then what follows a {@code --} separator -- on the
+	 * interpreter, {@code main(String[])} behind the class name on the JVM, the WASI
+	 * {@code args_sizes_get} / {@code args_get} buffer scan ({@code _argv}) on Preview 1,
+	 * and the spliced {@code environment.lisp} defun over wit-imported
+	 * {@code wasi:cli/environment}'s {@code get-arguments} under {@code --component}. A
+	 * host with no command line at all (the browser playground) answers nil, which is
+	 * upstream's own answer for an implementation it cannot ask.
+	 */
+	public static final String HOST_ARGV = "%HOST-ARGV";
+
+	/**
 	 * The {@code %getenv-override} prelude reader: the {@code (name . value)} entry a
 	 * {@code (setf (uiop:getenv name) value)} wrote, or nil. {@link #GETENV_OVERRIDE_SET}
 	 * is the writer; both carry the store's defvar, the way the {@code symbol-plist}

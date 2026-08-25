@@ -2174,17 +2174,42 @@ class JvmLispCompilerTest {
 
 	// Runs the compiled class in a CHILD JVM: a program calling uiop:quit ends the JVM it
 	// runs in, so the reflective compileAndRun above would take the test runner with it.
-	private Run compileAndRunInChildJvm(String lispCode) throws Exception {
+	private Run compileAndRunInChildJvm(String lispCode, String... arguments) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(
 				LispReader.readAllFromString(lispCode, am.ik.rontolisp.reader.Features.JVM),
 				am.ik.rontolisp.reader.Features.JVM);
 		Files.write(this.tempDir.resolve("Test.class"), new JvmLispCompiler("Test").compile(program));
-		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
-				this.tempDir.toString(), "Test")
-			.redirectErrorStream(true)
-			.start();
+		List<String> command = new java.util.ArrayList<>(
+				List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
+						this.tempDir.toString(), "Test"));
+		command.addAll(List.of(arguments));
+		Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
 		String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		return new Run(out.trim(), process.waitFor());
+	}
+
+	@Test
+	void compileAndRunUiopImageTheCommandLine() throws Exception {
+		// main(String[]) carries the user arguments and no argv0, so the CLASS NAME is
+		// prepended: it is what stood on the command line, and it makes the vector the
+		// same (program-name user-arg ...) shape the other three backends answer. The
+		// arguments have to come from a REAL command line, so this case runs in a child
+		// JVM like the quitting ones do.
+		Run run = compileAndRunInChildJvm("""
+				(print (uiop:raw-command-line-arguments))
+				(print (uiop:argv0))
+				(print (uiop:command-line-arguments))
+				(print uiop:*command-line-arguments*)
+				""", "alpha", "beta");
+		assertThat(run.out()).isEqualTo("""
+				("Test" "alpha" "beta")
+				"Test"
+				("alpha" "beta")
+				("alpha" "beta")""");
+		assertThat(run.code()).isZero();
+		// No arguments is the vector with argv0 alone, not nil: the program was still
+		// started from a command line.
+		assertThat(compileAndRunInChildJvm("(print (uiop:command-line-arguments))").out()).isEqualTo("NIL");
 	}
 
 	@Test

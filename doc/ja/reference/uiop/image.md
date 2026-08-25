@@ -2,8 +2,8 @@
 
 `uiop/image` は、プログラムがその「端」で行うことをまとめたものです。ステータス
 コードを付けてプロセスを終了する、誰も処理しなかったコンディションを報告する、
-イメージの復元時やダンプ時に走る処理を登録する。**30 個のエクスポートのうち 25
-個が実装済み**で、未実装の 5 つはコマンドライン関連です（[このページの末尾](#what-is-missing-the-command-line)）。
+イメージの復元時やダンプ時に走る処理を登録する、起動時のコマンドラインを読む。
+**30 個のエクスポートはすべて実装済みです。**
 
 どの名前も 2 通りの綴りで参照できます。`uiop:quit` と `uiop/image:quit` は同じ
 関数です（[uiop パッケージ](../uiop.md#sub-packages)）。
@@ -19,6 +19,9 @@
 - **ダンプ・復元・生成できるイメージが存在しない**ため、その 3 つはシグナルします。
   ただし周囲のフックは本物です。フックへの登録は単なるリストへの push だからです。
   [イメージフック](#image-hooks)を参照してください。
+- **引数ベクタの形はどこでも同じ**で `(program-name user-arg ...)` です。インタプ
+  リタで動かすプログラムの引数は `--` セパレータの後ろに置きます。
+  [コマンドライン](#the-command-line)を参照してください。
 
 ## 終了する
 
@@ -178,11 +181,50 @@ rontolisp app.lisp -o app.wasm       # a WASM module
 
 `uiop:dump-image` が担っていたのはこの役割です。
 
-## 未実装: コマンドライン
+## コマンドライン
 
-`uiop:argv0`、`uiop:command-line-arguments`、
-`uiop:raw-command-line-arguments`、`uiop:setup-command-line-arguments` は**まだ
-未実装**です。他の未実装 uiop 名と同様に `uiop:not-implemented-error` をシグナル
-し、`uiop:*command-line-arguments*` は `nil` です。今日入力を必要とするプログラム
-は、環境変数（[`uiop:getenv`](../functions/uiop-getenv.md)）か標準入力から読んで
-ください。
+| 名前 | 返すもの |
+|------|----------|
+| `uiop:raw-command-line-arguments` | ベクタ全体。プログラム名に続いてユーザ引数 |
+| `uiop:command-line-arguments` | ユーザ引数 -- ベクタの rest（明示的に渡したベクタの rest でもよい） |
+| `uiop:argv0` | プログラム名 -- ベクタの first |
+| `uiop:*command-line-arguments*` | ユーザ引数。プログラムの実行前に初期化される |
+| `uiop:setup-command-line-arguments` | この変数をベクタから初期化し直す |
+
+```console
+$ cat args.lisp
+(print (uiop:argv0))
+(print (uiop:command-line-arguments))
+$ rontolisp args.lisp -- alpha beta
+"args.lisp"
+("alpha" "beta")
+```
+
+**`--` が rontolisp 自身のオプションの終わりであり、プログラムの引数の始まりです。**
+`--optimize` がコンパイラのフラグなのか、プログラムが受け取りたい引数なのかを他に
+区別する手段はありません。したがってインタプリタで動かすプログラムの引数は、常に
+セパレータの後ろに置きます。
+
+コンパイル済みの成果物にこの曖昧さはありません。ホストが渡すとおりに引数を受け
+取ります。
+
+```console
+$ rontolisp args.lisp -o Args.class --class-name Args && java Args alpha beta
+"Args"
+("alpha" "beta")
+$ rontolisp args.lisp -o args.wasm && wasmtime run -W gc args.wasm alpha beta
+"args.wasm"
+("alpha" "beta")
+```
+
+4 つのバックエンドすべてで形は同じです。だからこそ `uiop:command-line-arguments`
+はベクタの rest、`uiop:argv0` はその first と決められ、バックエンドごとの規則は
+要りません。異なるのはプログラム名だけで、それを知っているのはホストだけだからで
+す。インタプリタでは入力ファイル、JVM ではクラス名（`java` のコマンドラインに
+立っていたもの）、WASM の両バックエンドではホストが `args[0]` に入れたもの
+（`wasmtime run` ならモジュールのパス）です。
+
+上流の UIOP がこの答えを返すのは実行可能形式としてダンプされたイメージのときだけ
+で、それ以外では処理系自身の引数を含んだままのベクタから `--` を探します。
+rontolisp は常に実行可能形式の側です。CLI がセパレータで自分で分割し、コンパイル
+済みの成果物は rontolisp のオプションを見ることがありません。

@@ -21,12 +21,20 @@ import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code --component} implementation of {@code %host-getenv} -- the host read behind
- * {@code uiop:getenv}: a Lisp-source library ({@code environment.lisp}) over a
- * wit-imported {@code wasi:cli/environment@0.3.0} surface ({@code environment.wit}), both
- * on the classpath. The interpreter and the JVM keep {@code System.getenv}; Preview 1
- * keeps the {@code environ_sizes_get} / {@code environ_get} buffer scan ({@code _getenv},
- * see {@code WasmGetenvRuntimeBuilder}), which only a preview1 host can fill.
+ * The {@code --component} implementation of {@code %host-getenv} and {@code %host-argv}
+ * -- the host reads behind {@code uiop:getenv} and the {@code uiop/image} command-line
+ * family: a Lisp-source library ({@code environment.lisp}) over a wit-imported
+ * {@code wasi:cli/environment@0.3.0} surface ({@code environment.wit}), both on the
+ * classpath. The interpreter and the JVM keep {@code System.getenv} and {@code main}'s
+ * own {@code String[]}; Preview 1 keeps the {@code environ_sizes_get} /
+ * {@code environ_get} buffer scan ({@code _getenv}, see {@code WasmGetenvRuntimeBuilder})
+ * and the {@code args_sizes_get} / {@code args_get} one ({@code _argv}), which only a
+ * preview1 host can fill.
+ *
+ * <p>
+ * The splice is per NAME: a program that only reads the environment binds only
+ * {@code get-environment}, so adding the second member changed no getenv-only component's
+ * bytes.
  *
  * <p>
  * ONE binding serves every component variant. On the base / sockets variants
@@ -55,9 +63,10 @@ public final class EnvironmentLibrary {
 
 	/**
 	 * The compile-path splice: when a {@code --component} program references
-	 * {@code %host-getenv} (which the spliced {@code uiop:getenv} definition does),
-	 * splice {@code environment.lisp} (its {@code wit-import} directive already lowered).
-	 * A no-op on every other backend and when the program does not read the environment.
+	 * {@code %host-getenv} (which the spliced {@code uiop:getenv} definition does) or
+	 * {@code %host-argv} (which the spliced command-line family does), splice the
+	 * matching {@code environment.lisp} defuns (its {@code wit-import} directive already
+	 * lowered). A no-op on every other backend and when the program reads neither.
 	 * @param program the top-level forms
 	 * @param backend the backend being compiled for
 	 * @return the program, spliced when applicable
@@ -66,24 +75,32 @@ public final class EnvironmentLibrary {
 		if (backend != WitExportDirective.Backend.WASM_COMPONENT) {
 			return program;
 		}
-		boolean referenced = false;
-		for (LispVal form : program) {
-			if (references(form)) {
-				referenced = true;
-				break;
-			}
-		}
-		if (!referenced || definesGetenv(program)) {
+		// Per NAME, not per file: a program that only reads the environment must not
+		// bind get-arguments (and vice versa), or the two would drag each other into
+		// every component's import and the bytes of a getenv-only program would change
+		// for a family it never calls.
+		boolean needsGetenv = needs(program, LispNames.HOST_GETENV);
+		boolean needsArgv = needs(program, LispNames.HOST_ARGV);
+		if (!needsGetenv && !needsArgv) {
 			return program;
 		}
 		List<LispVal> envForms = forms();
-		// The WIT member filter: every name an environment.lisp defun mentions (one
-		// binding, get-environment -- derived like WaitForLibrary's, not hardcoded).
+		// The WIT member filter: every name a KEPT environment.lisp defun mentions
+		// (derived like WaitForLibrary's, not hardcoded), so the lowered interface
+		// declares exactly the members the spliced bodies call.
 		Set<String> members = new HashSet<>();
+		List<LispVal> kept = new ArrayList<>();
 		for (LispVal form : envForms) {
-			if (!WitImportDirective.isDirective(form)) {
-				collectNames(form, members);
+			if (WitImportDirective.isDirective(form)) {
+				continue;
 			}
+			String defined = definedName(form);
+			if ((LispNames.HOST_GETENV.equals(defined) && !needsGetenv)
+					|| (LispNames.HOST_ARGV.equals(defined) && !needsArgv)) {
+				continue;
+			}
+			kept.add(form);
+			collectNames(form, members);
 		}
 		List<LispVal> out = new ArrayList<>();
 		for (LispVal form : envForms) {
@@ -91,30 +108,40 @@ public final class EnvironmentLibrary {
 				WitImportDirective.Directive directive = WitImportDirective.parse((LispCons) form);
 				out.addAll(WitImportDirective.lower(directive, witText(), directive.path(),
 						WitExportDirective.Backend.WASM_COMPONENT, members, members));
-				continue;
+				break;
 			}
-			out.add(form);
 		}
+		out.addAll(kept);
 		out.addAll(program);
 		return out;
 	}
 
-	private static boolean references(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> namesGetenv(sym.name());
-			case LispCons cons -> references(cons.car()) || references(cons.cdr());
-			default -> false;
-		};
+	// Whether the program reaches the given host primitive and does not define it
+	// itself -- the two halves every library splice checks before adding a definition.
+	private static boolean needs(List<LispVal> program, String primitive) {
+		for (LispVal form : program) {
+			if (references(form, primitive)) {
+				return !definesPrimitive(program, primitive);
+			}
+		}
+		return false;
 	}
 
-	// Whether the symbol names the HOST read behind uiop:getenv. It is the internal
-	// %host-getenv, not the uiop name: the public uiop:getenv is a Lisp definition on
-	// every backend (uiop-os.lisp) that consults the (setf (uiop:getenv ...)) override
-	// map first, and it is the one that calls this. The name is a rontolisp internal
-	// with no package qualifier, so there is no spelling to normalize -- and this pass
-	// runs after the uiop splice, which is what puts the reference in the program.
-	private static boolean namesGetenv(String symbolName) {
-		return LispNames.HOST_GETENV.equals(symbolName);
+	// The name a (defun NAME ...) form defines, or null for anything else.
+	@Nullable private static String definedName(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && isDefunHead(head.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+			return name.name();
+		}
+		return null;
+	}
+
+	private static boolean references(LispVal form, String primitive) {
+		return switch (form) {
+			case LispSymbol sym -> primitive.equals(sym.name());
+			case LispCons cons -> references(cons.car(), primitive) || references(cons.cdr(), primitive);
+			default -> false;
+		};
 	}
 
 	// A defun head in any source spelling: bare defun, cl:defun and
@@ -129,13 +156,11 @@ public final class EnvironmentLibrary {
 				|| (LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.ASYNC_DEFUN.equals(qn.member())));
 	}
 
-	// Whether the program already defines %host-getenv (a defun of it), so the splice
-	// does not collide with it -- the dedup guard every library splice carries.
-	private static boolean definesGetenv(List<LispVal> program) {
+	// Whether the program already defines the primitive itself (a defun of it), so the
+	// splice does not collide with it -- the dedup guard every library splice carries.
+	private static boolean definesPrimitive(List<LispVal> program, String primitive) {
 		for (LispVal form : program) {
-			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && isDefunHead(head.name())
-					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
-					&& namesGetenv(name.name())) {
+			if (primitive.equals(definedName(form))) {
 				return true;
 			}
 		}

@@ -156,3 +156,34 @@
   (declare (ignore %ci-destination %ci-object-files %ci-keys))
   (uiop/utility:not-implemented-error "UIOP/IMAGE:CREATE-IMAGE"
                                       "there are no lisp object files to link: the compile backends take one program and emit one artifact"))
+
+;;; The command line. One shape on all four backends, from the %host-argv primitive:
+;;; the vector is (program-name user-arg ...), so command-line-arguments is its rest
+;;; and argv0 its first, with no per-backend arm. Where each backend's vector comes
+;;; from is LispNames.HOST_ARGV's business; what the five names MEAN is here.
+;;
+;; Upstream reaches the same two answers through *image-dumped-p* being :executable
+;; -- an implementation that was dumped gets its own argv, everything else has to
+;; find the "--" a wrapper script left in a vector that still holds the
+;; implementation's own arguments. Nothing dumps here and *image-dumped-p* stays nil
+;; (see above), so this divergence is deliberate: rontolisp is always the executable
+;; case, because the CLI keeps its own options out of the vector (it splits them at
+;; the -- separator itself) and a compiled artifact only ever sees the program's.
+(defun uiop/image:raw-command-line-arguments () (%host-argv))
+
+(defun uiop/image:argv0 () (first (%host-argv)))
+
+(defun uiop/image:command-line-arguments
+    (&optional (%cla-arguments (uiop/image:raw-command-line-arguments)))
+  (rest %cla-arguments))
+
+(defun uiop/image:setup-command-line-arguments ()
+  (setf uiop/image:*command-line-arguments*
+        (uiop/image:command-line-arguments)))
+
+;; SEEDED, where upstream's default is nil: upstream fills it from restore-image, the
+;; one thing no backend here can do, so a nil default would leave the variable a trap
+;; -- read for the arguments it names and answering nothing, forever, with nowhere to
+;; call setup-command-line-arguments from. A program starts fresh on every backend,
+;; which is exactly the restored-image case, so the initial value is that call's.
+(defvar uiop/image:*command-line-arguments* (uiop/image:command-line-arguments))

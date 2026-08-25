@@ -895,6 +895,30 @@ final class WasmExprCompiler {
 						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
 					}
 				}
+				// The host command line behind the uiop/image family (the public five
+				// are Lisp over it -- uiop-image.lisp). Preview 1 scans the buffer its
+				// two appended WASI imports fill (_argv); --component takes the spliced
+				// environment.lisp defun over wit-imported wasi:cli/environment's
+				// get-arguments, the sibling of the get-environment binding, and so
+				// falls through to the ordinary call path like %host-getenv does. A
+				// --no-wasi reactor answers nil: it owns no WASI world and is entered
+				// through exported functions, so there is no command line of its own to
+				// read -- the same value-not-a-code-path rule %host-getcwd follows.
+				case LispNames.HOST_ARGV -> {
+					if (ctx.noWasi) {
+						WasmExprCompiler.compileExpr(LispNil.INSTANCE, ctx);
+					}
+					else if (!ctx.component) {
+						WasmArgvCompiler.compile(cons, ctx);
+					}
+					else if (!ctx.functions.containsKey(LispNames.HOST_ARGV)) {
+						throw new UnsupportedOperationException(LispNames.HOST_ARGV
+								+ " under --component is the spliced environment.lisp binding, but the program was compiled without it (eval/EnvironmentLibrary.process must run on the compile path)");
+					}
+					else {
+						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
+					}
+				}
 				// %host-getcwd: nil on both WASM backends. A WASI program has preopened
 				// directories and no CURRENT one -- there is no cwd to answer and no
 				// chdir to move it -- and uiop:getcwd's one shared Lisp definition turns

@@ -279,8 +279,8 @@ public final class PackageRegistry {
 			LispNames.WILD_INFERIORS_AT, LispNames.PATHNAME_DIRECTORY_COMPONENT, LispNames.DIRECTORY_IN,
 			LispNames.DIRECTORY_SUBDIRS, LispNames.WILD_DIRS, LispNames.PATH_DIR_PARTS, LispNames.RENAME_FILE_INTERNAL,
 			LispNames.PRINT_CASED_INTERNAL, LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.HOST_GETENV,
-			LispNames.HOST_GETCWD, LispNames.HOST_EXIT, LispNames.GETENV_OVERRIDE, LispNames.GETENV_OVERRIDE_SET,
-			LispNames.NSTRING_REPLACE, LispNames.TARGET_MACHINE_TYPE);
+			LispNames.HOST_GETCWD, LispNames.HOST_EXIT, LispNames.HOST_ARGV, LispNames.GETENV_OVERRIDE,
+			LispNames.GETENV_OVERRIDE_SET, LispNames.NSTRING_REPLACE, LispNames.TARGET_MACHINE_TYPE);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

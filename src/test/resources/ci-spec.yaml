@@ -10841,6 +10841,37 @@ cases:
       second
       "
       (:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)
+  - name: uiop-image-command-line
+    source: |
+      ;; The command-line family, and with it the ONE thing nothing else here
+      ;; pins: that argument passing itself agrees. The driver runs each backend
+      ;; with its own launcher and hands the same two arguments to all four --
+      ;; after a `--` separator on the interpreter, straight to `java Test` on
+      ;; the JVM, after the module path under wasmtime -- so a backend that read
+      ;; a different vector would show up right here.
+      ;;
+      ;; Only the REST is printed: argv0 is the program NAME, which is the input
+      ;; file, the class name and the module path respectively, and only the
+      ;; count and its type can be the same on all four.
+      (print (uiop:command-line-arguments))
+      (print uiop:*command-line-arguments*)
+      (print (rest (uiop:raw-command-line-arguments)))
+      (print (list (length (uiop:raw-command-line-arguments)) (stringp (uiop:argv0))))
+      ;; An explicit vector is the argument the &optional takes, so the same rule
+      ;; applies to a vector the caller built.
+      (print (uiop:command-line-arguments '("prog" "x" "y")))
+      ;; setup-command-line-arguments re-seeds the variable the load-time seed
+      ;; already filled.
+      (setf uiop:*command-line-arguments* '("stale"))
+      (uiop:setup-command-line-arguments)
+      (print uiop:*command-line-arguments*)
+    expected: |
+      ("alpha" "beta")
+      ("alpha" "beta")
+      ("alpha" "beta")
+      (3 T)
+      ("x" "y")
+      ("alpha" "beta")
   - name: print-case
     source: |
       ;; *print-case* converts the case of every SYMBOL the printer spells --

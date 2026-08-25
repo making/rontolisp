@@ -6,6 +6,10 @@
   (import "wasi:cli/stderr@0.3.0" "write-via-stream" (func (param i32) (result i32)))
   (import "wasi:cli/stdin@0.3.0" "read-via-stream" (func (param i32)))
   (import "wasi:cli/environment@0.3.0" "get-environment" (func (param i32)))
+  ;; get-arguments is bound by environment.lisp (%host-argv), not by the adapter --
+  ;; the block declares it so a program that reads its command line can bind it FROM
+  ;; the block, a second import of this interface being invalid.
+  (import "wasi:cli/environment@0.3.0" "get-arguments" (func (param i32)))
   (import "wasi:clocks/system-clock@0.3.0" "now" (func (param i32)))
   (import "wasi:clocks/monotonic-clock@0.3.0" "now" (func (result i64)))
   (import "wasi:clocks/monotonic-clock@0.3.0" "[async-lower]wait-for" (func (param i64) (result i32)))

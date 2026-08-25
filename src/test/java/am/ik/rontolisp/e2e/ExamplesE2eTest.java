@@ -47,7 +47,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * </ul>
  * Per-example manifest fields (all optional except {@code path}/{@code backends}):
  * <ul>
- * <li>{@code args} -- command-line arguments appended when the program is run.</li>
+ * <li>{@code args} -- the program's OWN command-line arguments, what
+ * {@code (uiop:command-line-arguments)} answers. They are appended when the program is
+ * run: after a {@code --} separator on the interpreter (where rontolisp's own options
+ * end), after the class name on the JVM, after the module path under wasmtime.</li>
  * <li>{@code os} -- the operating systems the example can RUN on ({@code mac},
  * {@code linux}, {@code windows}; one token or a list). Omitted means everywhere, which
  * is what almost every example is. It gates the RUN legs ONLY: a COMPILE leg never
@@ -57,8 +60,8 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * failure.</li>
  * <li>{@code env} -- environment variables (a map) the program sees: exported to the
  * interpreter / JVM process, passed to wasmtime as {@code --env NAME=VALUE}. This is how
- * an example takes its knobs today (a rontolisp program has no argv, so it reads
- * {@code uiop:getenv}).</li>
+ * an example takes a knob a WASM leg must also see; {@code args} above is the other way,
+ * and a program reads it with {@code uiop:command-line-arguments}.</li>
  * <li>{@code simd} -- {@code true} runs every leg under {@code --simd}: the interpreter
  * and every compile get the flag, the JVM leg runs with
  * {@code --add-modules jdk.incubator.vector} (as does the interpreter when the driver is
@@ -443,13 +446,17 @@ class ExamplesE2eTest {
 		List<String> flags = concat(example.simdFlag(), systemPathFlags(example));
 		switch (backend) {
 			case INTERPRETER -> {
-				// The flags come BEFORE the program's own arguments: the CLI takes one
-				// positional (the input file), so an option written after them would be
-				// read as a second one. An interpreted example needs --system-path just
-				// as much as a compiled one -- asdf:load-system resolves the .asd at run
-				// time here.
-				Result run = exec(runDir, concat(vectorApiDriver(driver, example),
-						concat(concat(List.of(src), concat(flags, example.parallelFlag())), args)), stdin, env);
+				// The flags come BEFORE the program's own arguments, and a `--` separates
+				// the two: rontolisp's options end there and the program's begin, which
+				// is what puts them in (uiop:command-line-arguments). Without the
+				// separator an argument would be read as a second input file. An
+				// interpreted example needs --system-path just as much as a compiled one
+				// -- asdf:load-system resolves the .asd at run time here.
+				List<String> ownArguments = args.isEmpty() ? List.of() : concat(List.of("--"), args);
+				Result run = exec(runDir,
+						concat(vectorApiDriver(driver, example),
+								concat(concat(List.of(src), concat(flags, example.parallelFlag())), ownArguments)),
+						stdin, env);
 				assertRan(run, example, "interpreter");
 			}
 			case JVM -> {

@@ -28,6 +28,13 @@ function indices. Runs before `WasmTreeShaker.shake` (`--optimize` composes; unu
 imports are shaken like unused WASI imports). The pre-injection module is invalid (calls
 to 2^27) — never validate/emit it directly.
 
+**A RUNTIME BUILDER may bind one too**, through the same placeholder encoding: `--host-random`'s
+entropy import (`buildNoWasiHostRandomGetBody`) and the `_argv` helper's `args_sizes_get` /
+`args_get` pair (`WasmArgvRuntimeBuilder`, `%host-argv` on Preview 1 -- `.kb/uiop.md`) are
+appended to `hostImports` LAST, after the directive-declared slots, so a program that also
+writes `rontolisp:wasm-import` keeps its ordinals and its bytes. That is what lets a WASI
+function be added without touching the eleven index-pinned preview1 import slots.
+
 Modes: `--component` and `--no-gc` throw a clear `UnsupportedOperationException`.
 Interpreter (`Environment`) and JVM (`JvmLispCompiler` pass 1 synthesizes a
 `(defun name (...) (error ...))` stub via `WasmImportDirective`; the directive itself is

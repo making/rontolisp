@@ -356,6 +356,15 @@ public final class LispEvaluator {
 	private List<String> systemPath = List.of();
 
 	/**
+	 * The program's own argument vector, argv0 first -- what {@code %host-argv} answers
+	 * and therefore what the {@code uiop/image} command-line family reads. Empty by
+	 * default: an EMBEDDED run (the tests, the browser playground) has no command line of
+	 * its own, and upstream's answer for an implementation it cannot ask is nil too. The
+	 * CLI threads the input file plus everything after the {@code --} separator here.
+	 */
+	private List<String> commandLineArguments = List.of();
+
+	/**
 	 * The dist downloader behind {@code ql:quickload} / {@code ql-dist:install-dist}:
 	 * created lazily on first use (so a program that never calls either touches no
 	 * network/cache), or injected by the CLI ({@code --dist}) resp. a test via
@@ -649,6 +658,17 @@ public final class LispEvaluator {
 	 */
 	public void setSystemPath(List<String> systemPath) {
 		this.systemPath = List.copyOf(systemPath);
+	}
+
+	/**
+	 * Sets the program's argument vector, argv0 first -- the value the {@code uiop/image}
+	 * command-line family reads ({@code (uiop:command-line-arguments)} is its rest,
+	 * {@code (uiop:argv0)} its first). The CLI threads the input file and the arguments
+	 * after the {@code --} separator here; an embedded run leaves it empty.
+	 * @param arguments the argument vector, argv0 first
+	 */
+	public void setCommandLineArguments(List<String> arguments) {
+		this.commandLineArguments = List.copyOf(arguments);
 	}
 
 	/**
@@ -1528,6 +1548,22 @@ public final class LispEvaluator {
 				names = new LispCons(new LispString(entries.get(i)), names);
 			}
 			return new LispCons(LispTrue.INSTANCE, names);
+		}));
+		// %host-argv: the program's own argument vector as a list of strings, argv0
+		// first. It lives HERE rather than in Environment because the value is state the
+		// caller supplies (setCommandLineArguments) -- an embedded run has no command
+		// line and answers nil. The five public uiop/image names are Lisp over it
+		// (uiop-image.lisp), so command-line-arguments is (rest (%host-argv)) on all four
+		// backends.
+		this.globalEnv.defineFunction(LispNames.HOST_ARGV, new LispFunction(LispNames.HOST_ARGV, args -> {
+			if (!args.isEmpty()) {
+				throw new LispEvalException(LispNames.HOST_ARGV + " expects no arguments, got " + args.size());
+			}
+			LispVal argv = LispNil.INSTANCE;
+			for (int i = this.commandLineArguments.size() - 1; i >= 0; i--) {
+				argv = new LispCons(new LispString(this.commandLineArguments.get(i)), argv);
+			}
+			return argv;
 		}));
 		// uiop:add-package-local-nickname -- lite: registers a GLOBAL nickname (no
 		// per-package scoping); the mechanism libraries recommend for shortening long

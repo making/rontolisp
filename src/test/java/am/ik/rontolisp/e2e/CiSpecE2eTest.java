@@ -302,12 +302,29 @@ class CiSpecE2eTest {
 		}
 	}
 
+	/**
+	 * The arguments every backend's launcher hands the concatenated program, so the
+	 * {@code uiop-image-command-line} case can pin that the four agree about what a
+	 * program's own arguments ARE -- not just about the family that reads them. Each
+	 * launcher below passes them the way its host spells them: after a {@code --}
+	 * separator on the interpreter (where rontolisp's own options end), straight after
+	 * the class name on the JVM, and after the module path under wasmtime.
+	 */
+	private static final List<String> PROGRAM_ARGUMENTS = List.of("alpha", "beta");
+
+	private static List<String> withArguments(List<String> command) {
+		List<String> full = new ArrayList<>(command);
+		full.addAll(PROGRAM_ARGUMENTS);
+		return full;
+	}
+
 	private static List<String> runBackend(Backend backend, Path bin, Path program) throws Exception {
 		return switch (backend) {
-			case INTERPRETER -> execLabeled("interpret", List.of(bin.toString(), program.toString()));
+			case INTERPRETER ->
+				execLabeled("interpret", withArguments(List.of(bin.toString(), program.toString(), "--")));
 			case JVM -> {
 				execLabeled("compile-jvm", List.of(bin.toString(), program.toString(), "-o", "Test.class"));
-				yield execLabeled("run-jvm", List.of("java", "Test"));
+				yield execLabeled("run-jvm", withArguments(List.of("java", "Test")));
 			}
 			case WASM -> {
 				execLabeled("compile-wasm", List.of(bin.toString(), program.toString(), "-o", "test.wasm"));
@@ -318,14 +335,14 @@ class CiSpecE2eTest {
 				// exceptions=y because the concatenated program contains catching cases
 				// (handler-case &c), which put the whole module in EH mode (harmless
 				// otherwise).
-				yield execLabeled("run-wasm", List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir",
-						".", "--dir", "/tmp", "test.wasm"));
+				yield execLabeled("run-wasm", withArguments(List.of("wasmtime", "--wasm", "gc", "--wasm",
+						"exceptions=y", "--dir", ".", "--dir", "/tmp", "test.wasm")));
 			}
 			case WASM_COMPONENT -> {
 				execLabeled("compile-wasm-component",
 						List.of(bin.toString(), program.toString(), "-o", "test.component.wasm", "--component"));
-				yield execLabeled("run-wasm-component", List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
-						"--dir", ".", "--dir", "/tmp", "test.component.wasm"));
+				yield execLabeled("run-wasm-component", withArguments(List.of("wasmtime", "run", "-W", "gc=y", "-W",
+						"exceptions=y", "--dir", ".", "--dir", "/tmp", "test.component.wasm")));
 			}
 		};
 	}

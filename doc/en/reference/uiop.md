@@ -36,7 +36,7 @@ one member name:
 | [`uiop/pathname`](uiop/pathname.md) | the pathname algebra (`subpathname`, `parse-unix-namestring`, `enough-pathname`) | 50 / 50 |
 | `uiop/filesystem` | probe, walk and mutate the file system | 8 / 32 |
 | `uiop/stream` | file contents, temporary files, encodings, the standard streams | 3 / 66 |
-| [`uiop/image`](uiop/image.md) | exit, fatal conditions, the dump hooks (and the command line, which is not implemented) | 25 / 30 |
+| [`uiop/image`](uiop/image.md) | exit, fatal conditions, the dump hooks, the command line | 30 / 30 |
 | `uiop/launch-program` | asynchronous subprocesses | 0 / 19 |
 | `uiop/run-program` | synchronous subprocesses | 0 / 7 |
 | `uiop/lisp-build` | `compile-file*` and the deferred warnings | 1 / 44 |
@@ -50,15 +50,17 @@ target the counts above are measured against, so both move together.
 
 ## What is implemented
 
-Four sub-packages have their own page. Three are complete: `uiop/utility` — the
+Four sub-packages have their own page, and all four are complete: `uiop/utility` — the
 68 portable helpers everything else in uiop is written in
 ([uiop/utility](uiop/utility.md)) — `uiop/pathname`, the 50-member pathname
 algebra ([uiop/pathname](uiop/pathname.md)), and `uiop/os`, the 22 host-identity,
 environment and working-directory members ([uiop/os](uiop/os.md), which is where
 [`uiop:getenv`](functions/uiop-getenv.md) lives). The fourth is
-[uiop/image](uiop/image.md), where [`uiop:quit`](uiop/image.md#exiting) ends the
-process with a status code on all four backends, and where the fatal-condition,
-backtrace and image-hook families live. The rest:
+[uiop/image](uiop/image.md), complete as well: [`uiop:quit`](uiop/image.md#exiting)
+ends the process with a status code on all four backends,
+[`uiop:command-line-arguments`](uiop/image.md#the-command-line) reads the
+arguments the program was started with on all four, and the fatal-condition,
+backtrace and image-hook families live there too. The rest:
 
 | Function | Example | Result |
 |----------|---------|--------|

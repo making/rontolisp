@@ -4057,6 +4057,57 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// The command-line vector with real arguments, on either wasm backend. Preview 1
+	// scans the buffer its two APPENDED args_sizes_get / args_get imports fill (_argv);
+	// --component takes the spliced environment.lisp defun over wit-imported
+	// wasi:cli/environment's get-arguments, so that splice runs here the way the CLI
+	// pipeline runs it.
+	private static String compileAndRunWithArguments(String lispCode, boolean component, String... arguments)
+			throws Exception {
+		Features features = component ? Features.WASM.with(List.of(Features.COMPONENT)) : Features.WASM;
+		List<LispVal> program = am.ik.rontolisp.eval.EnvironmentLibrary.process(
+				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode, features),
+						features),
+				component ? am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT
+						: am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC);
+		byte[] bytes = new WasmLispCompiler(false, component).compile(program);
+		String module = path(component ? "args.component.wasm" : "args.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(bytes), module);
+		List<String> command = new java.util.ArrayList<>(
+				List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module));
+		command.addAll(List.of(arguments));
+		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void uiopImageTheCommandLineCompilesAndRuns() throws Exception {
+		// The vector is WASI's own args, which already begin with the program name --
+		// wasmtime puts the module path there -- so it is the same (program-name
+		// user-arg ...) shape the interpreter and the JVM answer, and
+		// command-line-arguments is its rest on all four.
+		String source = """
+				(print (uiop:argv0))
+				(print (uiop:command-line-arguments))
+				(print uiop:*command-line-arguments*)
+				(print (length (uiop:raw-command-line-arguments)))
+				""";
+		for (boolean component : new boolean[] { false, true }) {
+			String output = compileAndRunWithArguments(source, component, "alpha", "beta");
+			assertThat(output).as("component: %s", component).endsWith("""
+					("alpha" "beta")
+					("alpha" "beta")
+					3""");
+			assertThat(output.lines().findFirst().orElseThrow()).as("argv0 for component: %s", component)
+				.contains("args")
+				.endsWith(".wasm\"");
+			assertThat(compileAndRunWithArguments("(print (uiop:command-line-arguments))", component))
+				.as("no arguments, component: %s", component)
+				.isEqualTo("NIL");
+		}
+	}
+
 	@Test
 	void componentGetenvFromWasiEnvironment() throws Exception {
 		// Component mode reads environment variables through wasi:cli/environment.

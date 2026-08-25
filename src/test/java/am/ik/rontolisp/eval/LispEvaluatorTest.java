@@ -15494,6 +15494,49 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalUiopImageTheCommandLine() {
+		// One SHAPE on all four backends: the vector is (program-name user-arg ...), so
+		// command-line-arguments is its rest and argv0 its first, with no per-backend
+		// arm. Here the vector is what the CLI threads in -- the input file, then the
+		// arguments after the -- separator.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.setCommandLineArguments(List.of("app.lisp", "alpha", "beta"));
+		LispVal result = LispNil.INSTANCE;
+		for (LispVal expr : LispReader.readAllFromString("""
+				(list (uiop:raw-command-line-arguments)
+				      (uiop:argv0)
+				      (uiop:command-line-arguments)
+				      uiop:*command-line-arguments*
+				      (uiop:command-line-arguments '("other" "x")))
+				""")) {
+			result = evaluator.eval(expr);
+		}
+		assertThat(result.print()).isEqualTo(
+				"((\"app.lisp\" \"alpha\" \"beta\") \"app.lisp\" (\"alpha\" \"beta\") (\"alpha\" \"beta\") (\"x\"))");
+	}
+
+	@Test
+	void evalUiopImageTheCommandLineIsEmptyWhenThereIsNone() {
+		// An EMBEDDED run -- these tests, the browser playground -- has no command line
+		// of its own, and nil is upstream's answer for an implementation it cannot ask.
+		assertThat(evalMulti("""
+				(list (uiop:raw-command-line-arguments) (uiop:argv0) (uiop:command-line-arguments))
+				""").print()).isEqualTo("(NIL NIL NIL)");
+	}
+
+	@Test
+	void evalUiopImageSetupCommandLineArgumentsReseedsTheVariable() {
+		// The variable is SEEDED at load time (upstream fills it from restore-image, the
+		// one thing no backend here can do), and setup-command-line-arguments is what
+		// re-seeds it after a program binds or clobbers it.
+		assertThat(evalMulti("""
+				(setf uiop:*command-line-arguments* '("stale"))
+				(uiop:setup-command-line-arguments)
+				uiop:*command-line-arguments*
+				""").print()).isEqualTo("NIL");
+	}
+
+	@Test
 	void evalFlexiStreamsInMemoryInputStreamIsARealBinaryStream() {
 		// smart-buffer's finalize-buffer hands one of these to the multipart parser,
 		// and http-body type-tests it against flex:vector-stream for its fast path.

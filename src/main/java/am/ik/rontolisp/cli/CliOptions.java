@@ -1,7 +1,9 @@
 package am.ik.rontolisp.cli;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -33,14 +35,38 @@ public class CliOptions {
 
 	private final Map<String, String> options;
 
+	private final List<String> arguments;
+
 	private static final String NOKEY = "__";
 
 	/**
-	 * Create a new instance wrapping the given options map.
+	 * Create a new instance wrapping the given options map, with no program arguments.
 	 * @param options the parsed options
 	 */
 	public CliOptions(Map<String, String> options) {
+		this(options, List.of());
+	}
+
+	/**
+	 * Create a new instance wrapping the given options map and program arguments.
+	 * @param options the parsed options
+	 * @param arguments the arguments after the {@code --} separator, in order
+	 */
+	public CliOptions(Map<String, String> options, List<String> arguments) {
 		this.options = Collections.unmodifiableMap(options);
+		this.arguments = List.copyOf(arguments);
+	}
+
+	/**
+	 * The PROGRAM's own arguments: everything after the {@code --} separator, which is
+	 * where rontolisp's options end and the interpreted program's begin. They reach the
+	 * program as {@code (uiop:command-line-arguments)}; the input file is its
+	 * {@code (uiop:argv0)}, so the separator is what keeps a rontolisp option out of a
+	 * vector the program is entitled to read as its own.
+	 * @return the arguments after {@code --}, empty when there was no separator
+	 */
+	public List<String> arguments() {
+		return this.arguments;
 	}
 
 	/**
@@ -99,8 +125,23 @@ public class CliOptions {
 	 */
 	public static CliOptions build(String[] args) {
 		final Map<String, String> options = new LinkedHashMap<>();
+		final List<String> arguments = new ArrayList<>();
 		String key = null;
+		boolean separated = false;
 		for (String arg : args) {
+			// Everything after the FIRST `--` belongs to the program, verbatim: a second
+			// `--`, a leading dash, a name that would otherwise be an option. That is the
+			// only way an interpreted program can be handed an argument at all, and the
+			// convention upstream's uiop:command-line-arguments documents for an image
+			// that is not itself the executable.
+			if (separated) {
+				arguments.add(arg);
+				continue;
+			}
+			if (key == null && "--".equals(arg)) {
+				separated = true;
+				continue;
+			}
 			if (key == null) {
 				// --key=value: everything after the FIRST '=' is the value, so a value
 				// may itself contain one.
@@ -140,7 +181,7 @@ public class CliOptions {
 		if (key != null) {
 			throw new IllegalArgumentException("option '" + key + "' requires a value");
 		}
-		return new CliOptions(options);
+		return new CliOptions(options, arguments);
 	}
 
 	private static void put(Map<String, String> options, String rawKey, String value) {

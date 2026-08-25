@@ -423,7 +423,8 @@ public final class WasmComponentBuilder {
 	 */
 	private static final java.util.Map<String, java.util.Set<String>> FIXED_BLOCK_IFACES = java.util.Map.of(
 			"wasi:clocks/monotonic-clock@0.3.0", java.util.Set.of("now", "wait-for"), "wasi:cli/stdin@0.3.0",
-			java.util.Set.of("read-via-stream"), "wasi:cli/environment@0.3.0", java.util.Set.of("get-environment"));
+			java.util.Set.of("read-via-stream"), "wasi:cli/environment@0.3.0",
+			java.util.Set.of("get-environment", "get-arguments"));
 
 	private WasmComponentBuilder() {
 	}

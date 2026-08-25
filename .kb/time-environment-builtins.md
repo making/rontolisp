@@ -6,6 +6,19 @@ Implemented in all three backends, returning an **integer everywhere** (the thre
 
 **Reading an environment variable is spelled `uiop:getenv`, and ONLY that (2026-07-29)**: ANSI Common Lisp has no `getenv`, so homing one in `cl` would have shipped a name no other implementation answers to and that a portability `#-`/`#+` could not see coming. It lives in the `uiop` package instead -- the spelling implementation-independent libraries already use -- as one of the uiop members with a real definition (`.kb/uiop.md`). Mechanics: `LispNames.GETENV` is the member name and `LispNames.UIOP_GETENV` (`"UIOP/OS:GETENV"` -- getenv's HOME sub-package, which is what a `uiop:getenv` occurrence resolves to) the canonical qualified spelling; `PackageRegistry` exports it from `uiop/os` and re-exports it from `uiop`, and NOT from `CL_FUNCTIONS` (so `rontolisp:list-functions` and `symbol-function` do not know a bare `GETENV`); the interpreter registers `%host-getenv` in `Environment.createGlobal` and both compilers dispatch that internal name in their `compileCons` name switch (it was the QUALIFIED uiop name before todo-356, matched through `UiopExports.denotes` ahead of the function-call path; the public name is a real defun now, so the dispatch moved down to the primitive). There is deliberately no `cl:getenv` alias: a compatibility alias would keep the non-standard spelling alive in user code, which is the thing being retired. Pinned by `LispEvaluatorTest#evalGetenv` + `#bareGetenvIsNotACommonLispFunction`, `JvmLispCompilerTest#compileAndRunGetenv`, `WasmLispCompilerIntegrationTest#componentGetenvFromWasiEnvironment`/`#httpHandlerReadsTheEnvironmentUnderWasmtimeServe`/`#preview1GetenvDoesNotCorruptNewline`, and the ci-spec case `getenv-does-not-corrupt-newline`.
 
+**`%host-argv` rides the same seam (2026-08-25, todo-362)**: the `uiop/image`
+command-line family is one Lisp definition (`uiop-image.lisp`) over a second
+per-backend primitive, `LispNames.HOST_ARGV`, answering
+`(program-name user-arg ...)` everywhere. It shares this file's environment seam
+on `--component` only -- `environment.lisp` binds `get-arguments` beside
+`get-environment`, which is why the fixed import block had to declare it -- and
+takes its own road on the other three: the vector the CLI threads in on the
+interpreter, `main`'s `String[]` behind the class name on the JVM, and on
+Preview 1 an `_argv` helper over `args_sizes_get` / `args_get` bound as APPENDED
+user imports, so no preview1 import slot and no adapter export list moves. The
+full shape, and why the block widening was the only unavoidable part, is in
+`.kb/uiop.md` (`uiop/image`'s decisions).
+
 **On `--component` getenv is a Lisp library, not an adapter path (todo 217, 2026-07-30)**:
 `uiop:getenv` under `--component` is `environment.lisp` over a wit-imported
 `wasi:cli/environment@0.3.0` (`src/main/resources/am/ik/rontolisp/eval/environment.{lisp,wit}`,

@@ -2,9 +2,8 @@
 
 `uiop/image` is what a program does at its edges: end the process with a status
 code, report a condition nobody handled, and register work to run when an image
-is restored or dumped. **25 of the 30 exports are implemented**; the five that
-are not are the command-line family, named at the [bottom of this
-page](#what-is-missing-the-command-line).
+is restored or dumped, and read the command line it was started with. **All 30
+exports are implemented.**
 
 Every name is reachable through either spelling: `uiop:quit` and
 `uiop/image:quit` are the same function
@@ -22,6 +21,9 @@ gap:
 - **There is no image to dump, restore or create**, so those three signal — but
   the hooks around them are real, because registering into one is just a list
   push. See [Image hooks](#image-hooks).
+- **The argument vector has one shape everywhere**, `(program-name user-arg
+  ...)`, and an interpreted program's arguments follow a `--` separator. See
+  [The command line](#the-command-line).
 
 ## Exiting
 
@@ -181,11 +183,51 @@ rontolisp app.lisp -o app.wasm       # a WASM module
 
 which is what `uiop:dump-image` would have been for.
 
-## What is missing: the command line
+## The command line
 
-`uiop:argv0`, `uiop:command-line-arguments`,
-`uiop:raw-command-line-arguments` and `uiop:setup-command-line-arguments` are
-**not implemented yet**: they signal `uiop:not-implemented-error` like every
-other unfilled uiop name, and `uiop:*command-line-arguments*` is `nil`. A
-program that needs input today reads it from the environment
-([`uiop:getenv`](../functions/uiop-getenv.md)) or from standard input.
+| Name | What it answers |
+|------|-----------------|
+| `uiop:raw-command-line-arguments` | the whole vector: the program name, then the user arguments |
+| `uiop:command-line-arguments` | the user arguments — the vector's rest (or the rest of a vector passed explicitly) |
+| `uiop:argv0` | the program name — the vector's first |
+| `uiop:*command-line-arguments*` | the user arguments, seeded before the program runs |
+| `uiop:setup-command-line-arguments` | seed that variable again from the vector |
+
+```console
+$ cat args.lisp
+(print (uiop:argv0))
+(print (uiop:command-line-arguments))
+$ rontolisp args.lisp -- alpha beta
+"args.lisp"
+("alpha" "beta")
+```
+
+**`--` is where rontolisp's own options end and the program's arguments begin.**
+Nothing else could tell `--optimize` the compiler flag from `--optimize` the
+argument a program wants to be handed, so an interpreted program's arguments
+always follow the separator.
+
+A compiled artifact has no such ambiguity: it takes its arguments the way its
+host hands them over.
+
+```console
+$ rontolisp args.lisp -o Args.class --class-name Args && java Args alpha beta
+"Args"
+("alpha" "beta")
+$ rontolisp args.lisp -o args.wasm && wasmtime run -W gc args.wasm alpha beta
+"args.wasm"
+("alpha" "beta")
+```
+
+The SHAPE is the same on all four backends, which is what lets
+`uiop:command-line-arguments` be the vector's rest and `uiop:argv0` its first
+with no per-backend rule. Only the program NAME differs, because only the host
+knows it: the input file under the interpreter, the class name on the JVM (what
+stood on the `java` command line), and whatever the host put in `args[0]` on
+both WASM backends — the module path, for `wasmtime run`.
+
+Upstream UIOP answers this way only for an image that was dumped as an
+executable, and otherwise hunts for a `--` inside a vector that still carries
+the implementation's own arguments. rontolisp is always the executable case:
+the CLI splits at the separator itself, and a compiled artifact never sees a
+rontolisp option at all.
