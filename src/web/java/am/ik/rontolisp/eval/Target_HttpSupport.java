@@ -3,7 +3,6 @@ package am.ik.rontolisp.eval;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-import am.ik.rontolisp.web.BrowserHttp;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import org.graalvm.webimage.api.JSString;

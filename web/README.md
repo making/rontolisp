@@ -193,7 +193,7 @@ One-time repo setup: **Settings -> Pages -> Build and deployment -> Source:
   so a WASM guest cannot `await` a browser Promise directly. Instead, a Web Image
   substitution (`src/web/java/.../eval/Target_HttpSupport.java`) hands the request
   to the **main-thread fetch broker** over a `SharedArrayBuffer`
-  (`src/web/java/.../web/BrowserHttp.java`) and `await` blocks the worker with
+  (`src/web/java/.../eval/BrowserHttp.java`) and `await` blocks the worker with
   `Atomics.wait` — requests genuinely overlap. On the main thread (e.g.
   `compile-run.html`) or without cross-origin isolation it falls back to a
   **synchronous `XMLHttpRequest`**. Either way requests are subject to the browser

@@ -1,4 +1,4 @@
-package am.ik.rontolisp.web;
+package am.ik.rontolisp.eval;
 
 import org.graalvm.webimage.api.JS;
 import org.graalvm.webimage.api.JSString;
