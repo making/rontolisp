@@ -17,6 +17,13 @@ final class JvmRemfTailCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// The inline walk below is a loop in expression position: its head must sit at
+		// operand stack depth 0, or HotSpot refuses to OSR-compile the method
+		// (JvmEmitHelper.inLoopScope).
+		JvmEmitHelper.inLoopScope(ctx, () -> compileLoop(cons, ctx, className));
+	}
+
+	private static void compileLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		// Evaluate plist
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);

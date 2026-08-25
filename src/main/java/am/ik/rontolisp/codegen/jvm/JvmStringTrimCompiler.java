@@ -31,6 +31,14 @@ final class JvmStringTrimCompiler {
 	}
 
 	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean left, boolean right) {
+		// The inline walk below is a loop in expression position: its head must sit at
+		// operand stack depth 0, or HotSpot refuses to OSR-compile the method
+		// (JvmEmitHelper.inLoopScope).
+		JvmEmitHelper.inLoopScope(ctx, () -> compileLoop(cons, ctx, className, left, right));
+	}
+
+	private static void compileLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean left,
+			boolean right) {
 		List<LispVal> args = cons.toList();
 		int strClass = ctx.stringClass.index();
 		MethodrefConstant lengthRef = JvmEmitHelper.stringMethod(ctx, "length", "()I");

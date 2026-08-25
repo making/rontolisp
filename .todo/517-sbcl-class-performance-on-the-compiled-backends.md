@@ -2,7 +2,8 @@
 
 Difficulty: High (parent item; each child is sized on its own)
 
-Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522`.
+Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522`
+(518, 519 and 520 are closed).
 Related, already open: `.todo/412` (the JVM boxes every integer and has no fusion).
 
 ## Where this came from
@@ -93,6 +94,27 @@ sees is structural, and each piece is separately fixable:
 - **The JVM is 8.5x slower than wasm on the same list walk** (15.99 vs 1.88 for
   10^9 `cdr`s) -- and slower than rontolisp's own tree-walking interpreter --
   because HotSpot refuses to compile the loop at all. `.todo/520`.
+
+  **`.todo/520` is closed.** HotSpot only enters an on-stack-replacement
+  compilation at a backedge whose operand stack is EMPTY, and a method entered
+  once has no other route in -- so every loop head that sat under the enclosing
+  expression's pending operands ran interpreted forever. `nth`'s inline `cdr`
+  walk moved into its own `_nthcdr` method, and every other emitter that writes
+  a backedge now spills the pending operands around it
+  (`.kb/jvm-osr-backedges.md`). Re-measured on the same machine, TOP-LEVEL
+  spelling, after it landed:
+
+  | benchmark | was (JVM / wasm) | now (JVM / wasm) |
+  | --- | --- | --- |
+  | 10^9 `cdr` | 15.41 / 1.92 | **3.61 / 1.89** |
+
+  4.3x on the row, 1.9x off the wasm backend and 3.1x off SBCL, with
+  `-XX:+PrintCompilation` showing `_nthcdr` and the enclosing `_top$0` both
+  compiled at tier 4 and no `COMPILE SKIPPED: stack not empty at OSR entry
+  point` anywhere. The corpus went from 3333 hostile backedges across 92 example
+  programs to zero, pinned by `JvmOsrBackedgeCorpusTest` and an `ExamplesE2eTest`
+  assertion on every JVM leg. No compiled backend is slower than the interpreter
+  on any row now.
 - **wasm's `loop for ... to ...` is 2x its own `dotimes`** (0.83 vs 0.41) because
   the counted-loop lowering only covers `dotimes`. `.todo/521`.
 - **The default `rontolisp app.lisp` is the interpreter**, 20x-200x off the

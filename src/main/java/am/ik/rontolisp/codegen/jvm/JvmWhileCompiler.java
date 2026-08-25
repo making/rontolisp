@@ -9,6 +9,16 @@ import am.ik.jvm.Opcode;
 /**
  * Compiles the {@code while} special form. Repeatedly evaluates the body while the test
  * expression is non-nil, then leaves nil on the stack as the loop's value.
+ *
+ * <p>
+ * The enclosing expression's pending operands are spilled to locals first, so the loop
+ * head -- the backedge target -- sits at operand stack depth 0, the only shape HotSpot
+ * will enter an on-stack-replacement compilation at ({@link JvmTagbodyCompiler} has the
+ * full reasoning). This is the lowering
+ * {@code do}/{@code do*}/{@code dotimes}/{@code dolist} and most of {@code loop} reach,
+ * so an unspilled loop head here is what a {@code getf} inside an argument list, or
+ * {@code (setq s (+ s (loop ...)))}, would leave running in the bytecode interpreter
+ * forever. The operands are reloaded under the loop's nil result on the way out.
  */
 final class JvmWhileCompiler {
 
@@ -17,6 +27,7 @@ final class JvmWhileCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
+		JvmLispCompiler.Ctx.Spill spill = JvmEmitHelper.enterLoopScope(ctx);
 		int loopStart = ctx.code.size();
 		// Evaluate the test; if nil, branch out of the loop.
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
@@ -35,6 +46,7 @@ final class JvmWhileCompiler {
 		JvmEmitHelper.patchBranch(ctx, gotoPos, loopStart);
 		// Loop exit: patch the IFNULL here and push nil as the result.
 		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+		JvmEmitHelper.leaveLoopScope(ctx, spill);
 		ctx.emit(Opcode.ACONST_NULL);
 	}
 

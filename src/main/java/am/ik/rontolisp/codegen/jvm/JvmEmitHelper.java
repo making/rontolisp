@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import am.ik.jvm.ArrayType;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
+import am.ik.jvm.OperandStack;
 
 /**
  * Shared helper methods for JVM bytecode emission used across all expression compilers.
@@ -10,6 +11,81 @@ import am.ik.jvm.Opcode;
 final class JvmEmitHelper {
 
 	private JvmEmitHelper() {
+	}
+
+	/**
+	 * Emits an inline loop that leaves one reference as its value, with the enclosing
+	 * expression's pending operands spilled to locals around it -- so the loop head, the
+	 * target of the backedge, sits at operand stack depth 0.
+	 *
+	 * <p>
+	 * HotSpot can only enter an on-stack-replacement compilation at a backedge whose
+	 * operand stack is empty; a loop head under pending operands is refused at every tier
+	 * ({@code COMPILE SKIPPED: stack not empty at OSR entry point}), and a method entered
+	 * once -- every top-level form, every {@code defun} called once with a long loop
+	 * inside -- has no other route into a compiled version, so it runs in the bytecode
+	 * interpreter forever. {@link JvmTagbodyCompiler} carries the full reasoning; every
+	 * emitter that writes a backedge reachable from expression position goes through here
+	 * or does the same bracketing itself.
+	 * @param ctx the emission context
+	 * @param emitLoop emits the loop; must leave exactly one reference on the stack
+	 */
+	static void inLoopScope(JvmLispCompiler.Ctx ctx, Runnable emitLoop) {
+		JvmLispCompiler.Ctx.Spill spill = enterLoopScope(ctx);
+		emitLoop.run();
+		if (spill.isEmpty()) {
+			return;
+		}
+		// The loop's value has to end up back ON TOP of the reloaded operands.
+		int resultSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(resultSlot);
+		leaveLoopScope(ctx, spill);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(resultSlot);
+	}
+
+	/**
+	 * Spills the enclosing expression's pending operands so the loop about to be emitted
+	 * has its head at operand stack depth 0, and registers the spill so a {@code return}
+	 * or {@code go} leaving the loop for an enclosing block reloads that block's operands
+	 * from it -- the same bookkeeping {@code handler-case}'s spill uses. Balanced by
+	 * {@link #leaveLoopScope}. Used directly by the emitters whose loop leaves no value
+	 * of its own to reorder ({@link JvmTagbodyCompiler}, {@link JvmWhileCompiler}: both
+	 * push their nil result after the reload).
+	 * @param ctx the emission context
+	 * @return the spill, empty when nothing was pending -- then the emitted bytes are
+	 * unchanged and {@link #leaveLoopScope} is a no-op
+	 */
+	static JvmLispCompiler.Ctx.Spill enterLoopScope(JvmLispCompiler.Ctx ctx) {
+		if (!ctx.hasRoomToSpillOperandStack()) {
+			// Out of one-byte local slots. The spill is an optimization, so it declines
+			// rather than failing a compile that would otherwise have succeeded.
+			return JvmLispCompiler.Ctx.Spill.EMPTY;
+		}
+		if (ctx.stack.snapshot().contains(OperandStack.Slot.UNINIT)) {
+			// A half-constructed object cannot be saved into a local -- the verifier
+			// tracks it apart from an ordinary reference -- so the spill is impossible
+			// here and the loop head keeps its pending operands. No emitter leaves one
+			// live across an argument today (JvmErrorCompiler was the last to), and the
+			// corpus check pins that; the fallback keeps a future one compiling rather
+			// than failing outright.
+			return JvmLispCompiler.Ctx.Spill.EMPTY;
+		}
+		JvmLispCompiler.Ctx.Spill spill = ctx.spillLoopEntryStack();
+		if (!spill.isEmpty()) {
+			ctx.spillScopes.push(new JvmLispCompiler.SpillScope(spill, ctx.blockTargets.size()));
+		}
+		return spill;
+	}
+
+	/** Reloads what {@link #enterLoopScope} spilled, and unregisters the spill scope. */
+	static void leaveLoopScope(JvmLispCompiler.Ctx ctx, JvmLispCompiler.Ctx.Spill spill) {
+		if (spill.isEmpty()) {
+			return;
+		}
+		ctx.spillScopes.pop();
+		spill.restore(ctx);
 	}
 
 	static void compileLong(long value, JvmLispCompiler.Ctx ctx) {

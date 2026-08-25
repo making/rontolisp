@@ -35,11 +35,12 @@ final class JvmErrorCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
 		int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
 		int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
-		// new RuntimeException
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
-		// message: arg.substring(1, arg.length() - 1)
+		// message: arg.substring(1, arg.length() - 1), computed into a local BEFORE the
+		// allocation. The verifier tracks a half-constructed object apart from an
+		// ordinary reference and no local can hold one, so evaluating the message under
+		// a live `new` would deny every form that has to spill the operand stack -- a
+		// handler-case, and any loop, inside the message expression (the message is
+		// usually a `format` call, which is full of both).
 		JvmExprCompiler.compileExpr(messageExpr, ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
@@ -52,7 +53,15 @@ final class JvmErrorCompiler {
 		ctx.emit(Opcode.SWAP);
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(substring);
-		// throw
+		int messageSlot = ctx.errorMessageSlot();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(messageSlot);
+		// throw new RuntimeException(message)
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(runtimeEx.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(messageSlot);
 		ctx.emit(Opcode.INVOKESPECIAL);
 		ctx.emitU2(ctor.index());
 		ctx.emit(Opcode.ATHROW);

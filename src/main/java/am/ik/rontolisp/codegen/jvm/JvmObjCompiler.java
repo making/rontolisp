@@ -271,6 +271,13 @@ final class JvmObjCompiler {
 	 * keeps the whole thing one loop with no tail pointer.
 	 */
 	static void compileSlots(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// The inline walk below is a loop in expression position: its head must sit at
+		// operand stack depth 0, or HotSpot refuses to OSR-compile the method
+		// (JvmEmitHelper.inLoopScope).
+		JvmEmitHelper.inLoopScope(ctx, () -> compileSlotsLoop(cons, ctx, className));
+	}
+
+	private static void compileSlotsLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		if (gateOff(ctx)) {
 			evaluateForEffectThenNil(args.get(1), ctx, className);

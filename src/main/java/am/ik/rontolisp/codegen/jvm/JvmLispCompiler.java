@@ -2351,6 +2351,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmLengthRuntimeBuilder.LengthMethod lengthMethodBody = JvmLengthRuntimeBuilder.build(cp,
 				objectArrayClass, stringClass, longValueOf, thisClass);
 
+		// nthcdr runtime helper. Emitted unconditionally for the same reason _length is:
+		// nthcdr is generated internally by a long tail of expanders (nth, elt, loop's
+		// list stepping, destructuring-bind, format's ~* family), so a source-symbol gate
+		// would miss those call sites -- and the body is ~20 bytes. It exists as a method
+		// at all so its loop's backedge sits at operand stack depth 0, the only shape
+		// HotSpot will OSR-compile (JvmNthcdrRuntimeBuilder).
+		final JvmNthcdrRuntimeBuilder.NthcdrMethod nthcdrMethodBody = JvmNthcdrRuntimeBuilder.build(cp,
+				objectArrayClass);
+
 		// The character-index helpers (_cpoff / _scount) every string index and every
 		// string length reads through. Emitted unconditionally for the same reason
 		// _length is: the sites are generated internally too, and the pair is ~60 bytes.
@@ -3260,6 +3269,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(lengthMethodBody.maxStack())
 									.writeU2(lengthMethodBody.maxLocals())
 									.writeCode((Object[]) lengthMethodBody.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				{
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nthcdrMethodBody.name(),
+							nthcdrMethodBody.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(nthcdrMethodBody.maxStack())
+									.writeU2(nthcdrMethodBody.maxLocals())
+									.writeCode((Object[]) nthcdrMethodBody.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -4631,6 +4651,15 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int maxLocals = 1;
 
+		/**
+		 * The one local {@code %error}'s message rides in, allocated on first use. The
+		 * value is written and read five instructions later with no control flow in
+		 * between and the throw never returns, so every {@code error} site in the method
+		 * shares it rather than burning a slot each (the 255-slot ceiling is real:
+		 * {@code JvmEmitHelper.enterLoopScope} already declines a spill against it).
+		 */
+		private int errorMessageSlot = -1;
+
 		boolean dynamic = false;
 
 		/**
@@ -5846,6 +5875,33 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * live: they are saved here and reloaded by {@link Spill#restore} past the merge.
 		 */
 		Spill spillOperandStack() {
+			return this.spillOperandStack("a catching form");
+		}
+
+		/**
+		 * Spills the values live on the operand stack so the loop that follows has its
+		 * backedge target at depth 0 -- the only shape HotSpot will OSR-compile (see
+		 * {@link JvmTagbodyCompiler}). Reloading is the caller's job, under whatever
+		 * value the loop leaves behind.
+		 */
+		Spill spillLoopEntryStack() {
+			return this.spillOperandStack("a loop");
+		}
+
+		/**
+		 * {@return true when the live operand stack still fits in this method's local
+		 * slots} A catching form has no choice and fails the compile without the room; a
+		 * loop spill is an optimization, so it asks first and simply declines.
+		 */
+		boolean hasRoomToSpillOperandStack() {
+			int needed = 0;
+			for (OperandStack.Slot slot : this.stack.snapshot()) {
+				needed += slot.width();
+			}
+			return this.nextLocal + needed - 1 <= MAX_LOCAL_SLOT;
+		}
+
+		private Spill spillOperandStack(String what) {
 			List<OperandStack.Slot> live = this.stack.snapshot();
 			if (live.isEmpty()) {
 				return Spill.EMPTY;
@@ -5856,7 +5912,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				// No emitter puts a catching form there today; one that did would have to
 				// evaluate the value into a local before the `new`.
 				throw new UnsupportedOperationException(
-						"Cannot compile a catching form while an object is under construction");
+						"Cannot compile " + what + " while an object is under construction");
 			}
 			int[] slots = new int[live.size()];
 			for (int i = live.size() - 1; i >= 0; i--) {
@@ -5871,7 +5927,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					// a slot whose number the one-byte operand of the load/store opcodes
 					// (there is no `wide` form here) silently wraps into another slot's.
 					throw new UnsupportedOperationException(
-							"Cannot compile a catching form here: the function is out of local variable slots");
+							"Cannot compile " + what + " here: the function is out of local variable slots");
 				}
 				this.emit(storeOpcode(slot));
 				this.emit(slots[i]);
@@ -5898,6 +5954,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		record Spill(List<OperandStack.Slot> live, int[] slots) {
 
 			static final Spill EMPTY = new Spill(List.of(), new int[0]);
+
+			/**
+			 * {@return true when the operand stack was already empty, so nothing was
+			 * saved}
+			 */
+			boolean isEmpty() {
+				return this.live.isEmpty();
+			}
 
 			/**
 			 * Reloads the spilled values, restoring the operand stack it was taken from.
@@ -5942,6 +6006,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			int slot = this.allocTemp();
 			this.locals.put(name, slot);
 			return slot;
+		}
+
+		/**
+		 * {@return the shared local {@code %error} spills its message into}
+		 */
+		int errorMessageSlot() {
+			if (this.errorMessageSlot < 0) {
+				this.errorMessageSlot = this.allocTemp();
+			}
+			return this.errorMessageSlot;
 		}
 
 		int allocTemp() {

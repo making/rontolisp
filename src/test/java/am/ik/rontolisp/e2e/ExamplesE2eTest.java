@@ -464,6 +464,7 @@ class ExamplesE2eTest {
 						concat(driver, concat(List.of(src, "-o", "Prog.class"), concat(flags, example.parallelFlag()))),
 						null, Map.of());
 				assertCompiled(compile, example, "jvm (compile)");
+				assertNoOsrHostileBackedges(runDir, example, "jvm (compile)");
 				List<String> java = example.simdOn() ? List.of("java", "--add-modules", "jdk.incubator.vector")
 						: List.of("java");
 				Result run = exec(runDir, concat(java, concat(List.of("-cp", jvmClasspath(runDir), "Prog"), args)),
@@ -484,6 +485,7 @@ class ExamplesE2eTest {
 				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null,
 						Map.of());
 				assertCompiled(compile, example, "jvm-compile");
+				assertNoOsrHostileBackedges(runDir, example, "jvm-compile");
 			}
 			case WASM_COMPONENT -> {
 				Result compile = exec(runDir,
@@ -677,6 +679,26 @@ class ExamplesE2eTest {
 		Path jar = jarProp != null ? Path.of(jarProp) : newestExecJar();
 		return (jar != null && Files.isRegularFile(jar)) ? List.of("java", "-jar", jar.toAbsolutePath().toString())
 				: null;
+	}
+
+	/**
+	 * Asserts the emitted class holds no backward branch into a non-empty operand stack.
+	 * HotSpot can only enter an on-stack-replacement compilation at a backedge whose
+	 * operand stack is empty, and a method entered once -- every top-level form, every
+	 * {@code defun} called once with a long loop inside -- has no other route into a
+	 * compiled version, so such a loop runs in the bytecode interpreter forever
+	 * ({@code .kb/jvm-osr-backedges.md}). {@code JvmOsrBackedgeCorpusTest} pins the same
+	 * invariant over {@code ci-spec.yaml}; this leg covers the examples.
+	 */
+	private static void assertNoOsrHostileBackedges(Path runDir, Example example, String leg) throws IOException {
+		Path classFile = runDir.resolve("Prog.class");
+		if (!Files.isRegularFile(classFile)) {
+			return;
+		}
+		assertThat(am.ik.jvm.StackMapAugmenter.osrHostileBackedges(Files.readAllBytes(classFile)))
+			.as("[example '" + example.path() + "' on " + leg + "] backward branches into a non-empty "
+					+ "operand stack -- HotSpot refuses to OSR-compile such a method (.kb/jvm-osr-backedges.md)")
+			.isEmpty();
 	}
 
 	/**

@@ -31,6 +31,18 @@ single-`Code`-attribute class shape `JvmClassShaker` relies on):
   under a synthetic `[Throwable]`-stack frame, and dead ranges are carved out
   of the exception table.
 
+## The second entry point: `osrHostileBackedges`
+
+The same dataflow answers a question the emitters cannot answer for themselves:
+which backward branches target a bci whose operand stack is non-empty -- the one
+loop shape HotSpot refuses to OSR-compile
+([jvm-osr-backedges.md](jvm-osr-backedges.md)). It is read-only (no frames are
+written, no version stamped) and, unlike `augment`, it ACCEPTS an
+already-augmented class: a `StackMapTable` sitting in a `Code` attribute is
+skipped rather than rejected, so the analysis can be pointed at a finished
+`.class` file. `augment` still rejects one, because it re-derives the frames and
+must not be handed a stale table.
+
 ## Merge rules and safety properties
 
 - Reference types merge to a nearest common superclass from a FIXED table (the

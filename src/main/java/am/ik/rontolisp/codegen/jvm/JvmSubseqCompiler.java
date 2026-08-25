@@ -36,6 +36,13 @@ final class JvmSubseqCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// The inline walk below is a loop in expression position: its head must sit at
+		// operand stack depth 0, or HotSpot refuses to OSR-compile the method
+		// (JvmEmitHelper.inLoopScope).
+		JvmEmitHelper.inLoopScope(ctx, () -> compileLoop(cons, ctx, className));
+	}
+
+	private static void compileLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal rewritten = LispMacroExpander.expandSubseqCompat(cons, ctx.usesArrays,
 				ctx.functions.containsKey(LispNames.SUBSEQ_RUNTIME));
 		if (rewritten != null) {

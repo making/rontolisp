@@ -51,6 +51,10 @@ import org.jspecify.annotations.Nullable;
  * The pass must run after {@link JvmClassShaker} when both apply: the shaker rejects
  * {@code Code} sub-attributes, and the frames reference constant-pool entries this pass
  * appends, which the shaker's compaction would not know how to rewrite.
+ * <p>
+ * The same dataflow answers a second, read-only question through
+ * {@link #osrHostileBackedges}: which backward branches target a position whose operand
+ * stack is non-empty -- the one loop shape HotSpot refuses to compile.
  */
 public final class StackMapAugmenter {
 
@@ -196,14 +200,40 @@ public final class StackMapAugmenter {
 	}
 
 	/**
-	 * Computes and inserts a {@code StackMapTable} into every method and stamps the given
-	 * class-file major version.
-	 * @param classFile a class file as produced by {@link ByteCodeWriter} (single
-	 * {@code Code} attribute per method, no other attributes anywhere)
-	 * @param majorVersion the class-file major version to stamp (e.g. 61 for Java 17)
-	 * @return the augmented class file
+	 * A backward branch whose target position carries a non-empty operand stack -- the
+	 * one loop shape HotSpot refuses to compile. See {@link #osrHostileBackedges}.
+	 *
+	 * @param method the method's name
+	 * @param descriptor the method's descriptor
+	 * @param branchPc the offset of the backward branch instruction
+	 * @param targetPc the offset it jumps to (the loop head)
+	 * @param stackDepth the operand stack depth at {@code targetPc}
 	 */
-	public static byte[] augment(byte[] classFile, int majorVersion) {
+	public record Backedge(String method, String descriptor, int branchPc, int targetPc, int stackDepth) {
+
+		@Override
+		public String toString() {
+			return this.method + this.descriptor + ": " + this.branchPc + " -> " + this.targetPc + " (stack depth "
+					+ this.stackDepth + ")";
+		}
+	}
+
+	/**
+	 * The class structure {@link #augment} and {@link #osrHostileBackedges} both parse.
+	 */
+	private record Parsed(int minor, List<@Nullable CpEntry> cp, int accessFlags, int thisIdx, int superIdx,
+			int[] interfaces, List<FieldInfo> fields, List<MethodInfo> methods) {
+	}
+
+	/**
+	 * Parses the class structure both public entry points work from.
+	 * @param classFile the class file bytes
+	 * @param skipCodeSubAttributes whether to skip (rather than reject) a {@code Code}
+	 * sub-attribute -- true for the read-only analysis, which accepts an
+	 * already-augmented class, false for {@link #augment}, which re-derives the frames
+	 * and must not be handed a stale table
+	 */
+	private static Parsed parse(byte[] classFile, boolean skipCodeSubAttributes) {
 		int[] p = { 0 };
 		int magic = readU4(classFile, p);
 		if (magic != 0xCAFEBABE) {
@@ -285,7 +315,17 @@ public final class StackMapAugmenter {
 			}
 			int codeAttrCount = readU2(classFile, p);
 			if (codeAttrCount != 0) {
-				throw new IllegalStateException("StackMapAugmenter: unsupported Code sub-attribute");
+				if (!skipCodeSubAttributes) {
+					throw new IllegalStateException("StackMapAugmenter: unsupported Code sub-attribute");
+				}
+				// The read-only analysis accepts an already-augmented class: it derives
+				// everything from the code itself, so a StackMapTable left by a previous
+				// run is redundant and simply skipped.
+				for (int j = 0; j < codeAttrCount; j++) {
+					readU2(classFile, p); // attribute_name_index
+					int subAttrLen = readU4(classFile, p);
+					p[0] += subAttrLen;
+				}
 			}
 			methods
 				.add(new MethodInfo(access, nameIdx, descIdx, attrNameIdx, maxStack, maxLocals, code, exceptionTable));
@@ -298,6 +338,53 @@ public final class StackMapAugmenter {
 		if (p[0] != classFile.length) {
 			throw new IllegalStateException("StackMapAugmenter: trailing bytes after class structure");
 		}
+		return new Parsed(minor, cp, accessFlags, thisIdx, superIdx, interfaces, fields, methods);
+	}
+
+	/**
+	 * Reports every backward branch in the class whose target carries a non-empty operand
+	 * stack. HotSpot can only enter an on-stack-replacement compilation at a backedge
+	 * whose operand stack is empty; a loop head with pending operands is refused at every
+	 * tier ({@code COMPILE SKIPPED: stack not empty at OSR entry point}), so a method
+	 * entered once with such a loop inside runs in the bytecode interpreter forever.
+	 * <p>
+	 * The dataflow is the same one {@link #augment} runs -- it already computes the
+	 * fixpoint operand stack at every branch target -- so this is the one place that sees
+	 * what all the emitters together produced.
+	 * @param classFile a class file in the shape {@link #augment} accepts, before or
+	 * after augmentation (a {@code StackMapTable} already present is ignored)
+	 * @return the offending backedges, empty when the class has none
+	 */
+	public static List<Backedge> osrHostileBackedges(byte[] classFile) {
+		Parsed parsed = parse(classFile, true);
+		String thisClassName = className(parsed.cp, parsed.thisIdx);
+		List<Backedge> found = new ArrayList<>();
+		for (MethodInfo m : parsed.methods) {
+			MethodAnalyzer analyzer = new MethodAnalyzer(parsed.cp, thisClassName, m);
+			analyzer.analyze();
+			found.addAll(analyzer.hostileBackedges());
+		}
+		return found;
+	}
+
+	/**
+	 * Computes and inserts a {@code StackMapTable} into every method and stamps the given
+	 * class-file major version.
+	 * @param classFile a class file as produced by {@link ByteCodeWriter} (single
+	 * {@code Code} attribute per method, no other attributes anywhere)
+	 * @param majorVersion the class-file major version to stamp (e.g. 61 for Java 17)
+	 * @return the augmented class file
+	 */
+	public static byte[] augment(byte[] classFile, int majorVersion) {
+		Parsed parsed = parse(classFile, false);
+		int minor = parsed.minor;
+		List<@Nullable CpEntry> cp = parsed.cp;
+		int accessFlags = parsed.accessFlags;
+		int thisIdx = parsed.thisIdx;
+		int superIdx = parsed.superIdx;
+		int[] interfaces = parsed.interfaces;
+		List<FieldInfo> fields = parsed.fields;
+		List<MethodInfo> methods = parsed.methods;
 
 		String thisClassName = className(cp, thisIdx);
 
@@ -701,6 +788,32 @@ public final class StackMapAugmenter {
 				frames.add(new FrameEntry(needed, frameLocals(frame), List.copyOf(frame.stack)));
 			}
 			return new MethodFrames(patched, exceptionTable, frames);
+		}
+
+		/**
+		 * Every backward branch reached by the dataflow whose target's fixpoint operand
+		 * stack is non-empty -- the loop shape HotSpot refuses to OSR-compile. Dead code
+		 * is skipped: it never runs, so no JIT ever looks at it. Read after
+		 * {@link #analyze()}, and only by {@link #osrHostileBackedges}: the augment path
+		 * never asks, so it never pays for the extra walk.
+		 */
+		List<Backedge> hostileBackedges() {
+			List<Backedge> found = new ArrayList<>();
+			int pc = 0;
+			while (pc < this.code.length) {
+				int op = this.code[pc] & 0xff;
+				if (this.visited[pc]) {
+					for (int target : branchTargets(pc, op)) {
+						Frame frame = this.leaderFrames.get(target);
+						if (target <= pc && frame != null && !frame.stack.isEmpty()) {
+							found.add(new Backedge(utf8(this.cp, this.m.nameIdx), utf8(this.cp, this.m.descIdx), pc,
+									target, frame.stack.size()));
+						}
+					}
+				}
+				pc += 1 + operandLength(op, pc);
+			}
+			return found;
 		}
 
 		/**

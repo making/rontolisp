@@ -30,6 +30,18 @@ import org.jspecify.annotations.Nullable;
  * {@code go}'s target must already have a fixed shape, and a label whose predecessors are
  * all {@code go}s would otherwise be modeled unreachable. Forward {@code go}s are
  * back-patched when their label is emitted; falling off the end yields nil.
+ *
+ * <p>
+ * That entry stack is spilled to locals FIRST, so every label -- and therefore the target
+ * of every backward {@code go} -- sits at operand stack depth 0. This is the
+ * {@code loop}/{@code do}/{@code dotimes}/{@code dolist} family's whole loop shape, and
+ * HotSpot can only enter an on-stack-replacement compilation at a backedge whose operand
+ * stack is empty: a loop head under the enclosing expression's pending operands is
+ * refused at every tier ({@code COMPILE SKIPPED: stack not empty at OSR entry point}),
+ * and a top-level form or a {@code defun} called once is entered once, so OSR is the only
+ * route into it. Written in argument position -- {@code (setq s (+ s (loop ...)))} -- an
+ * unspilled tagbody would run in the bytecode interpreter forever. The operands are
+ * reloaded under the tagbody's nil result on the way out.
  */
 final class JvmTagbodyCompiler {
 
@@ -46,6 +58,11 @@ final class JvmTagbodyCompiler {
 				pendingGos.put(label, new ArrayList<>());
 			}
 		}
+		// Entered BEFORE the TagbodyScope records its spill depth, so a go to one of this
+		// tagbody's own labels does not treat the spill as escaped -- those labels are at
+		// depth 0 now. A return/go leaving for an ENCLOSING block does escape it, and
+		// reloads that block's operands from there.
+		JvmLispCompiler.Ctx.Spill spill = JvmEmitHelper.enterLoopScope(ctx);
 		List<OperandStack.Slot> entryStack = ctx.stack.snapshot();
 		JvmLispCompiler.TagbodyScope scope = new JvmLispCompiler.TagbodyScope(entryStack, ctx.unwindScopes.size(),
 				ctx.spillScopes.size(), labelPositions, pendingGos);
@@ -69,6 +86,7 @@ final class JvmTagbodyCompiler {
 			}
 		}
 		ctx.tagbodyScopes.pop();
+		JvmEmitHelper.leaveLoopScope(ctx, spill);
 		ctx.emit(Opcode.ACONST_NULL);
 	}
 

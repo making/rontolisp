@@ -1267,10 +1267,16 @@ final class JvmExprCompiler {
 				case LispNames.DOTIMES -> {
 					// A numeric loop over packed float arrays compiles to a guarded
 					// primitive loop first; anything outside that subset takes the
-					// ordinary expansion (.kb/jvm-typed-loops.md).
-					if (!JvmTypedLoopCompiler.tryCompile(cons, ctx, className)) {
-						JvmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx, className);
-					}
+					// ordinary expansion (.kb/jvm-typed-loops.md). Either way the loop
+					// head has to sit at operand stack depth 0 -- the typed emitter
+					// writes its backedge itself, and the expansion's `while` head is
+					// one too -- so both run inside the spill
+					// (JvmEmitHelper.inLoopScope).
+					JvmEmitHelper.inLoopScope(ctx, () -> {
+						if (!JvmTypedLoopCompiler.tryCompile(cons, ctx, className)) {
+							JvmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx, className);
+						}
+					});
 				}
 				case LispNames.PROG1 ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg1(cons), ctx, className);

@@ -2,13 +2,22 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
- * Compiles the {@code nthcdr} built-in function. Generates a loop that applies
- * {@code cdr} n times to the list argument.
+ * Compiles the {@code nthcdr} built-in function. It pushes the count and the list and
+ * calls the {@code _nthcdr} static runtime helper emitted by
+ * {@link JvmNthcdrRuntimeBuilder}, which walks {@code cdr} that many times.
+ *
+ * <p>
+ * The walk deliberately does NOT live here: an inline loop would put its backedge under
+ * the enclosing expression's pending operands, and HotSpot refuses to OSR-compile such a
+ * loop head at every tier ({@link JvmNthcdrRuntimeBuilder} has the detail). Every
+ * {@code nth} reaches this compiler too -- {@code (nth n l)} expands to
+ * {@code (car (nthcdr n l))}.
  */
 final class JvmNthcdrCompiler {
 
@@ -17,54 +26,16 @@ final class JvmNthcdrCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		// Evaluate n -> Long, unbox to long, convert to int
+		// Evaluate n -> Long, unbox to long, convert to int. Evaluated before the list,
+		// as the inline walk this replaced did.
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.L2I);
-		int nSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(nSlot);
-		// Evaluate list
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		int listSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
-		// loop: if n <= 0, exit
-		int loopPos = ctx.code.size();
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(nSlot);
-		int ifLePos = ctx.code.size();
-		ctx.emit(Opcode.IFLE);
-		ctx.emitU2(0);
-		// nil short-circuits: (nthcdr n lst) past the end is nil, like CL.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		// list = ((Object[]) list)[1] (cdr)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
-		// n = n - 1
-		ctx.emit(Opcode.IINC);
-		ctx.emit(nSlot);
-		ctx.emit(0xFF); // -1 as unsigned byte
-		// goto loop
-		int gotoPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		int offset = loopPos - gotoPos;
-		ctx.emitU2(offset & 0xFFFF);
-		// exit: load list
-		JvmEmitHelper.patchBranch(ctx, ifLePos, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
+		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
+				ctx.cp.addUtf8(JvmNthcdrRuntimeBuilder.METHOD), ctx.cp.addUtf8(JvmNthcdrRuntimeBuilder.DESC)));
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ref.index());
 	}
 
 }
