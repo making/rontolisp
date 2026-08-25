@@ -40,8 +40,7 @@
 
 ;; Anything the widget layer lacks is one objc:send away: the window is an
 ;; ordinary NSWindow.
-(objc:send *window* "setBackgroundColor:"
- (objc:send "NSColor" "colorWithRed:green:blue:alpha:" 0.92 0.96 1.0 1.0))
+(objc:send *window* "setBackgroundColor:" (appkit:color 234 244 255))
 
 (format t "window ~a is up; close it to exit~%"
         (objc:send *window* "windowNumber"))
