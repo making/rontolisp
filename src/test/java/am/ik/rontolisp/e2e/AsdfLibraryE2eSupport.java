@@ -220,12 +220,13 @@ abstract class AsdfLibraryE2eSupport {
 	// from the project root): a file round-trip after a library load is part of what
 	// these tests pin (the close methods).
 	private String runWasm(byte[] wasmBytes, boolean component) throws Exception {
-		String path = "/tmp/" + artifactName() + (component ? "-component.wasm" : "-p1.wasm");
+		String runDir = "/tmp/" + artifactName() + (component ? "-component-" : "-p1-") + System.nanoTime();
+		String path = runDir + "/module.wasm";
 		GenericContainer<?> wasmtime = WasmtimeSupport.container();
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path);
 		String flags = component ? "run -W gc=y -W exceptions=y" : "--wasm gc --wasm exceptions=y";
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"mkdir -p /tmp/target && cd /tmp && wasmtime " + flags + " --dir . " + path);
+				"mkdir -p " + runDir + "/target && cd " + runDir + " && wasmtime " + flags + " --dir . " + path);
 		assertThat(result.getExitCode()).as("exit code (component=%s): stderr: %s", component, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
