@@ -1,0 +1,5 @@
+(defparameter arr (make-array 1000000))
+(dotimes (i 1000000) (setf (aref arr i) (1+ i)))
+(defparameter s 0)
+(dotimes (i 10000000) (setq s (+ s (aref arr (random 1000000)))))
+(print s)

@@ -1,0 +1,5 @@
+(defun run (lst n)
+  (let ((s 0))
+    (dotimes (i n) (setq s (+ s (nth 999 lst))))
+    s))
+(print (run (loop for i from 1 to 1000 collect i) 1000000))

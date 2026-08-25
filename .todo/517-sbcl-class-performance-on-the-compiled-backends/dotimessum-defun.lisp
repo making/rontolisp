@@ -1,0 +1,5 @@
+(defun run ()
+  (let ((s 0))
+    (dotimes (i 100000000) (setq s (+ s i)))
+    s))
+(print (run))
