@@ -62,6 +62,36 @@ Directions, none of them yet chosen:
 Whatever is chosen, the interpreter stays: it is the REPL, it is `eval`, it is
 the semantics the other three backends are pinned against.
 
+## Decision (2026-08-25)
+
+**The default stays the interpreter, and the docs now say so loudly**
+(direction 5) -- recorded in full, with the measurements and the re-evaluation
+triggers, in `.kb/default-run-path.md`. The two facts that decided it:
+
+- **The ~0.63 s hypothesis is falsified.** Measured in process, the whole
+  frontend (read, splice chain, macro expansion, pruner) costs **4 ms warm**;
+  the backend emit ~140 ms warm. The fixed cost is class loading + JIT warm-up
+  of the compiler itself on a cold JVM (268 ms + 613 ms cold), which the
+  native binary's AOT already removed: its whole compile is ~0.16 s. There is
+  no splice work to cache and no algorithmic target to attack.
+- **Compile-by-default is impossible on the native binary and regressive on
+  `java -jar`.** A closed-world native image cannot define classes at run time
+  (GraalVM 25's `-H:RuntimeClassLoading` is experimental and interprets what
+  it loads), and in-memory compile+run under `java -jar` makes `(print 'hi)`
+  0.44 s -> 0.99 s while the loops go 6x faster -- exactly the trade the
+  acceptance forbids. The source-hash cache is mechanically sound
+  (`.kb/emitted-output-determinism.md`) but auto-switching engines between
+  run 1 and run 2 turns every open interpreter/compile-path divergence
+  (`.todo/384`, `.todo/446`, `.todo/434`, `.todo/444`) into a silent
+  run-to-run behavior change; it unlocks when that backlog closes.
+
+Delivered: `.kb/default-run-path.md` (decision record + triggers: GraalVM
+Crema executing at compiled speed, the divergence backlog, `.todo/412`),
+"Interpretation Speed" in `doc/*/getting-started/file-interpretation.md`, and
+the execution-modes list in `doc/*/index.md` -- a reader can no longer assume
+the default path is the fast one. `(print 'hi)` and every backend's output are
+untouched (no code change).
+
 ## Acceptance
 
 Deliberately open -- this item's first deliverable is a decision, recorded here,

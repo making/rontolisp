@@ -137,6 +137,22 @@ sees is structural, and each piece is separately fixable:
 - **The default `rontolisp app.lisp` is the interpreter**, 20x-200x off the
   compiled backends. `.todo/522`.
 
+  **`.todo/522` is closed -- decided, not implemented away.** The default
+  STAYS the interpreter, by decision recorded in `.kb/default-run-path.md`.
+  The measurement falsified the cacheable-splice hypothesis (the whole
+  frontend costs 4 ms warm; the ~0.63 s is the compiler's own class-load/JIT
+  warm-up on a cold JVM, already absent in the native binary whose whole
+  compile is ~0.16 s), and compile-by-default is impossible on the native
+  binary (a closed-world image cannot define classes at run time) and makes
+  `(print 'hi)` 2.2x slower under `java -jar`. The docs now say the flagless
+  path is the slow one and route CPU-bound programs to `-o`
+  (`doc/*/getting-started/file-interpretation.md`). Re-evaluation triggers --
+  GraalVM Crema executing loaded classes at compiled speed, the
+  interpreter/compile-path divergence backlog closing (unlocks the
+  source-hash cache), `.todo/412` -- are in the `.kb` file. This parent's
+  "run the way a user runs a script" target is therefore carried by the
+  compiled backends' own rows plus `.todo/412`, not by a default switch.
+
 ## Target
 
 The four rows above, in their TOP-LEVEL spelling, within **2x of SBCL** on at

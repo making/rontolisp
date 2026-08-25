@@ -2,7 +2,9 @@
 
 A minimal Common Lisp subset implemented in Java. It supports three execution modes:
 
-- **Interpreter** -- Tree-walking evaluation with REPL support
+- **Interpreter** -- Tree-walking evaluation with REPL support; the default when
+  a file is run, built for turnaround rather than throughput (loop-heavy code
+  runs 20x-200x faster compiled)
 - **JVM compiler** -- Compiles Lisp to `.class` bytecode runnable on any JRE
 - **WASM compiler** -- Compiles Lisp to `.wasm` using wasm-GC, targeting either a WASI Preview 1 core module or a WASI 0.3 (Component Model) component
 
