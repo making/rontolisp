@@ -78,17 +78,19 @@ final class WasmLetCompiler {
 		// (its init, or a setq/setf pair in the body) gets an i64 slot + a boxed shadow
 		// slot instead of an ordinary local. Every assignment funnels through
 		// WasmSetqCompiler (psetq/rotatef/incf/... all expand to setq), which stores
-		// raw on the fused fast path and boxes into the shadow otherwise. Gated off at
-		// top level (the eval-mirror writes boxed slots), under --dynamic and in async
-		// bodies, like the rest of the fusion machinery -- and under --optimize=size,
-		// which declines both halves of that machinery through the one predicate
-		// (WasmIntFusionCompiler.speedTradesEnabled): a local kept raw with fusion off
-		// would bail into its boxed shadow on every assignment.
+		// raw on the fused fast path and boxes into the shadow otherwise. Gated off
+		// under --dynamic and in async bodies, like the rest of the fusion machinery --
+		// and under --optimize=size, which declines both halves of that machinery
+		// through the one predicate (WasmIntFusionCompiler.speedTradesEnabled): a local
+		// kept raw with fusion off would bail into its boxed shadow on every
+		// assignment. At TOP LEVEL a closure-free body qualifies too (a top-level loop
+		// counter is 3x on the boxed shape) -- see createsAClosure for why only a
+		// closure-free one.
 		Set<String> rawEligible = new HashSet<>();
 		int savedNextI64Local = ctx.nextI64Local;
-		if (WasmIntFusionCompiler.speedTradesEnabled(ctx) && !ctx.dynamic && !ctx.topLevel && !async
-				&& ctx.asyncResume == null && !Boolean.getBoolean("rontolisp.debug.norawlocals")
-				&& bindings instanceof LispCons rawScan) {
+		if (WasmIntFusionCompiler.speedTradesEnabled(ctx) && !ctx.dynamic && !async && ctx.asyncResume == null
+				&& (!ctx.topLevel || !FreeVarAnalyzer.createsAClosure(bodyExprs))
+				&& !Boolean.getBoolean("rontolisp.debug.norawlocals") && bindings instanceof LispCons rawScan) {
 			Map<String, List<LispVal>> assignedValues = new HashMap<>();
 			for (LispVal bodyForm : bodyExprs) {
 				collectAssignedValues(bodyForm, assignedValues);

@@ -37,6 +37,11 @@ public final class FreeVarAnalyzer {
 			// captures it: findFreeVars subtracts enclosingLexicals from this set.
 			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR);
 
+	/** The operators that can build a closure -- see {@link #createsAClosure}. */
+	private static final Set<String> CLOSURE_OPERATORS = Set.of(LispNames.LAMBDA, LispNames.DEFUN,
+			LispNames.ASYNC_LAMBDA, LispNames.ASYNC_LAMBDA_QUALIFIED, LispNames.ASYNC_DEFUN,
+			LispNames.ASYNC_DEFUN_QUALIFIED);
+
 	private FreeVarAnalyzer() {
 	}
 
@@ -531,6 +536,21 @@ public final class FreeVarAnalyzer {
 						}
 						case LispNames.LET_STAR -> collectCapturedVars(LispMacroExpander.expandLetStar(cons), localVars,
 								knownFunctions, captured, insideLambda);
+						// The SUBSTITUTION family, expanded before walking for the same
+						// reason as in collectFreeVars -- and here it is a lost CAPTURE,
+						// not a spurious free variable: a lambda body that spells only
+						// the macro name captures whatever the expansion references
+						// ((symbol-macrolet ((big (* n n))) (lambda () big)) captures n).
+						// Missing it leaves the outer binding unboxed -- or, on wasm, an
+						// unboxed i64 local -- with no cell for the closure to load.
+						case LispNames.SYMBOL_MACROLET ->
+							collectCapturedVars(LispMacroExpander.expandSymbolMacrolet(cons), localVars, knownFunctions,
+									captured, insideLambda);
+						case LispNames.WITH_SLOTS -> collectCapturedVars(LispMacroExpander.expandWithSlots(cons),
+								localVars, knownFunctions, captured, insideLambda);
+						case LispNames.WITH_ACCESSORS ->
+							collectCapturedVars(LispMacroExpander.expandWithAccessors(cons), localVars, knownFunctions,
+									captured, insideLambda);
 						// Expand before walking (same reason as collectFreeVars).
 						case LispNames.COND -> collectCapturedVars(LispMacroExpander.expandCond(cons), localVars,
 								knownFunctions, captured, insideLambda);
@@ -724,6 +744,42 @@ public final class FreeVarAnalyzer {
 			}
 		}
 		return names;
+	}
+
+	/**
+	 * Whether any form in a body can build a closure. The WASM backend asks before giving
+	 * a TOP-LEVEL {@code let}'s binding an unboxed (i64) local: the capture analysis
+	 * below has two blind spots that only top level reaches, and a boxed local tolerates
+	 * both while a raw slot does not (the closure emitter needs a cell, and throws
+	 * "Cannot find variable for closure" without one).
+	 * <ul>
+	 * <li>a {@code defun} nested in a top-level {@code let} -- the CL closure-over-let
+	 * idiom -- which {@link #findCapturedVars} skips by design: in a function body a
+	 * {@code defun} is not a closure, and the nested one reaches the binding through the
+	 * global backing store {@code GlobalVarCollector} mints for it;</li>
+	 * <li>an {@code async-lambda}/{@code async-defun}, whose head that walk does not read
+	 * as a lambda (the async emitter runs its own free-variable pass instead).</li>
+	 * </ul>
+	 * Deliberately blind to scope and to quoting: over-approximating only declines an
+	 * unboxing that was available, while a miss is a compile-time throw.
+	 * @param body the forms to scan
+	 * @return {@code true} when any of them mentions a closure-building operator
+	 */
+	public static boolean createsAClosure(List<LispVal> body) {
+		for (LispVal expr : body) {
+			if (mentionsClosureOperator(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentionsClosureOperator(LispVal expr) {
+		return switch (expr) {
+			case LispSymbol sym -> CLOSURE_OPERATORS.contains(sym.name());
+			case LispCons cons -> mentionsClosureOperator(cons.car()) || mentionsClosureOperator(cons.cdr());
+			default -> false;
+		};
 	}
 
 }

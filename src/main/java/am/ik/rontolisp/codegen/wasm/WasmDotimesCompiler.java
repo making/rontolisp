@@ -81,11 +81,12 @@ final class WasmDotimesCompiler {
 	 * not qualify.
 	 */
 	private static boolean compileCounted(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (ctx.asyncResume != null || ctx.dynamic || (ctx.topLevel && ctx.usesEval)) {
-			// An async body's locals belong to the spill machinery; --dynamic resolves
-			// variables through the environment; and at top level with eval in the
-			// program the ordinary lowering MIRRORS each step of the counter into the
-			// eval global environment, which a slot cannot be read from.
+		if (ctx.asyncResume != null || ctx.dynamic) {
+			// An async body's locals belong to the spill machinery, and --dynamic
+			// resolves variables through the environment. A top-level counter is fine:
+			// the eval mirror writes a global backing store, never a lexical slot
+			// (WasmSetqCompiler.mirrorsTopLevelGlobal), and a dotimes counter is a
+			// lexical no eval'd form can name.
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
@@ -107,6 +108,12 @@ final class WasmDotimesCompiler {
 		List<LispVal> scoped = new ArrayList<>(parts.subList(2, parts.size()));
 		if (specParts.size() == 3) {
 			scoped.add(specParts.get(2));
+		}
+		if (ctx.topLevel && FreeVarAnalyzer.createsAClosure(scoped)) {
+			// Top level only: the capture test below has blind spots there that the
+			// ordinary expansion's boxed slot tolerates and this i64 counter does not
+			// (FreeVarAnalyzer.createsAClosure).
+			return false;
 		}
 		if (assignsName(scoped, name)
 				|| FreeVarAnalyzer.findCapturedVars(scoped, Set.of(name), ctx.functions.keySet()).contains(name)) {

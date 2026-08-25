@@ -7902,18 +7902,22 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void symbolMacroletForms() throws Exception {
 		// Substitution, let-shadowing, nesting, setq write-through, a lambda-body
-		// reference, and the dbi shape (setf through a slot-value expansion).
+		// reference at top level and the same inside a defun (the capture of n is
+		// visible only THROUGH the substitution -- an unboxed local has no cell for the
+		// closure to load), and the dbi shape (setf through a slot-value expansion).
 		assertThat(compileAndRun("""
 				(symbol-macrolet ((x 42)) (print (list (let ((x 1)) x) x)))
 				(symbol-macrolet ((x 1)) (symbol-macrolet ((x 2)) (print x)))
 				(let ((cell (list 1 2))) (symbol-macrolet ((head (car cell))) (setq head 99) (print cell)))
 				(let ((n 10)) (symbol-macrolet ((big (* n n))) (print (funcall (lambda () big)))))
+				(defun sm-square () (let ((n 10)) (symbol-macrolet ((big (* n n))) (funcall (lambda () big)))))
+				(print (sm-square))
 				(defclass conn () ((auto-commit :initform nil)))
 				(defvar *c* (make-instance 'conn))
 				(symbol-macrolet ((auto-commit (slot-value *c* 'auto-commit)))
 				  (setf auto-commit 'on)
 				  (print auto-commit))
-				""")).isEqualTo("(1 42)\n2\n(99 2)\n100\nON");
+				""")).isEqualTo("(1 42)\n2\n(99 2)\n100\n100\nON");
 	}
 
 	@Test

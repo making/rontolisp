@@ -56,6 +56,20 @@ sees is structural, and each piece is separately fixable:
   runtime's global alist. Two independent defects: `.todo/518` (the mirror fires
   for lexicals) and `.todo/519` (the eval runtime is switched on for programs
   that never call `eval`).
+
+  **`.todo/518` is closed.** The mirror now fires only for a name with a global
+  backing store, and wasm's unboxed-local trade no longer declines a top-level
+  `let`. Re-measured on the same machine, TOP-LEVEL spelling, after it landed:
+
+  | benchmark | was (JVM / wasm) | now (JVM / wasm) | the `defun` spelling now |
+  | --- | --- | --- | --- |
+  | `loop ... sum` | 2.80 / 2.50 | **0.37 / 0.83** | 0.38 / 0.79 |
+  | 10^7 x `random` | 0.78 / 1.94 | 0.54 / 1.88 | 0.43 / 1.65 |
+  | 10^7 x `aref` | 1.73 / 2.43 | 1.59 / 2.30 | 1.00 / 2.71 |
+  | 10^9 `cdr` | 15.99 / 1.88 | 15.49 / 1.92 | 16.38 / 1.78 |
+
+  The `loop sum` row is now AT the `defun` spelling on both backends; the rest of
+  the top-level/`defun` gap that remains (`aref` on the JVM) is `.todo/519`.
 - **The JVM is 8.5x slower than wasm on the same list walk** (15.99 vs 1.88 for
   10^9 `cdr`s) -- and slower than rontolisp's own tree-walking interpreter --
   because HotSpot refuses to compile the loop at all. `.todo/520`.

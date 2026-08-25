@@ -782,6 +782,11 @@ final class WasmAsyncEmit {
 			.usesSynonymStreams(proto.usesSynonymStreams)
 			.usesSeqString(proto.usesSeqString)
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
+			// NOT optional: freshCtx builds the synchronous top level's CHUNKS, where an
+			// unboxed local's shadow is marked authoritative by reading this module
+			// global. Without it the chunk emits `global.get -1` and the module does not
+			// parse.
+			.rawSentinelGlobalIndex(proto.rawSentinelGlobalIndex)
 			.simd(proto.simd)
 			.userFuncBase(proto.userFuncBase)
 			// NOT optional either, for the same reason as the instance pair below: a

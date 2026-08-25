@@ -1406,6 +1406,14 @@ class JvmLispCompilerTest {
 		// A reference inside a lambda body substitutes (closure over the expansion).
 		assertThat(compileAndRun("(let ((n 10)) (symbol-macrolet ((big (* n n))) (print (funcall (lambda () big)))))"))
 			.isEqualTo("100");
+		// The same shape inside a defun. The lambda body spells only the macro name, so
+		// the capture of n is visible only THROUGH the substitution: the capture walk
+		// expands it (FreeVarAnalyzer.collectCapturedVars), or the binding is left with
+		// no cell for the closure to load.
+		assertThat(compileAndRun("""
+				(defun sm-square () (let ((n 10)) (symbol-macrolet ((big (* n n))) (funcall (lambda () big)))))
+				(print (sm-square))
+				""")).isEqualTo("100");
 	}
 
 	@Test
@@ -12979,6 +12987,51 @@ class JvmLispCompilerTest {
 			}
 			return baos.toString().trim();
 		}
+	}
+
+	@Test
+	void aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv() throws Exception {
+		// The eval mirror (_store into _genv) exists so an eval'd form can read a
+		// variable the compiled program assigned at top level. A LEXICAL of a top-level
+		// form is not one: CL's eval resolves against the null lexical environment, so
+		// no eval'd form can name a top-level let/loop variable -- nor the temporaries
+		// the macro expanders generate, which are symbols in no package at all. Each
+		// mirror costs an _envLookup, a linear walk of the eval global alist, per
+		// assignment -- so a top-level loop paid one per iteration per assigned name.
+		String program = """
+				(setq mirrored-global 0)
+				(let ((probe-lexical 0)) (setq probe-lexical 1) (print probe-lexical))
+				(print (loop for probe-counter from 1 to 3 sum probe-counter))
+				(eval '(print mirrored-global))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		// Exactly one: the top-level (setq mirrored-global 0). The let variable, the
+		// loop counter and the loop's accumulator temporary emit none.
+		assertThat(evalStoreCallsInTopLevel(classBytes)).isEqualTo(1);
+		assertThat(runClass(classBytes)).isEqualTo("1\n6\n0");
+	}
+
+	/**
+	 * Counts the {@code _store} calls the top-level body emits -- the eval-global mirror.
+	 * Only the top-level methods are walked ({@code main} plus the {@code _top$N} chunks
+	 * it is split into): the eval runtime's own {@code _eval}/{@code _apply} bodies call
+	 * {@code _store} too, and always will.
+	 */
+	private static int evalStoreCallsInTopLevel(byte[] classBytes) {
+		int calls = 0;
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			String name = method.methodName().stringValue();
+			if (!name.equals("main") && !name.startsWith("_top$")) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : method.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString("_store")) {
+					calls++;
+				}
+			}
+		}
+		return calls;
 	}
 
 }

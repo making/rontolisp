@@ -202,7 +202,11 @@ final class WasmSetqCompiler {
 		}
 		ctx.writer.write(Instruction.TEE_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		mirrorTopLevelGlobal(name, slot, ctx);
+		// Not mirrored into the eval runtime: this is a plain lexical local, and CL's
+		// eval sees only the null lexical environment, so no eval'd form can name a
+		// top-level let/loop/do variable -- nor the temporaries the macro expanders
+		// generate (__loop_acc0, the while cursor, __nrev_*), which are not symbols in
+		// any package at all.
 		dualWriteSpecialGlobal(name, slot, ctx);
 	}
 
@@ -235,7 +239,7 @@ final class WasmSetqCompiler {
 	 * stack (left there by the {@code local.tee}) is preserved as the form's result.
 	 */
 	static void mirrorTopLevelGlobal(String name, int slot, WasmLispCompiler.Ctx ctx) {
-		if (!mirrorsTopLevelGlobal(ctx)) {
+		if (!mirrorsTopLevelGlobal(name, ctx)) {
 			return;
 		}
 		// _store(place, value, GLOBAL_ENV) -> value ; drop the returned value (the result
@@ -255,11 +259,18 @@ final class WasmSetqCompiler {
 	 * to stage the assigned value in a local ONLY so the mirror can read it back asks
 	 * first, so a program that never evals does not pay a {@code local.tee} -- and a
 	 * local -- per top-level binding.
+	 * <p>
+	 * Only a name with a global backing store qualifies: a lexical -- a top-level
+	 * {@code let}/{@code loop}/{@code do} variable, or a macro-generated temporary -- is
+	 * invisible to {@code eval}, which resolves against the null lexical environment, so
+	 * mirroring one is not conservatism but wasted work ({@code _store} walks the global
+	 * alist linearly, once per assignment, on every iteration of a top-level loop).
+	 * @param name the assigned variable name
 	 * @param ctx the context the assignment is being emitted into
 	 * @return {@code true} when the mirror emits
 	 */
-	static boolean mirrorsTopLevelGlobal(WasmLispCompiler.Ctx ctx) {
-		return ctx.topLevel && ctx.usesEval;
+	static boolean mirrorsTopLevelGlobal(String name, WasmLispCompiler.Ctx ctx) {
+		return ctx.topLevel && ctx.usesEval && ctx.globalIndices.containsKey(name);
 	}
 
 }

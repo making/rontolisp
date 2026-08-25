@@ -103,10 +103,15 @@ eqref local:
   for profiling;
 - not special, not captured by a nested lambda (`FreeVarAnalyzer` -- captures
   need cells), not a duplicate binding name in the same `let`;
-- not at top level (the eval-mirror reads boxed slots), not under `--dynamic`,
-  not in an async body (`ctx.asyncResume`/await -- the spill machinery owns
-  locals there; the `rontolisp.debug.norawlocals` property force-disables for
-  A/B profiling);
+- not under `--dynamic`, not in an async body (`ctx.asyncResume`/await -- the
+  spill machinery owns locals there; the `rontolisp.debug.norawlocals` property
+  force-disables for A/B profiling). **Top level is NOT excluded**: it was,
+  while the eval mirror wrote every top-level assignment (a boxed slot the
+  mirror read back), which cost a top-level `loop` 3x. The mirror now writes
+  only names with a global backing store (`.kb/eval-runtime.md`), and a
+  raw-eligible binding is by construction neither special nor captured, so no
+  mirror can reach one. A chunked top level reaches the sentinel global through
+  `WasmAsyncEmit.freshCtx`, which must carry `rawSentinelGlobalIndex`;
 - at least one assignment (the init, or a `setq`/`setf`-pair value found by a
   shadowing-blind body walk) is integer-tree-SHAPED (`isRawAssignShaped`) --
   a pure heuristic: precision only affects performance, never correctness,

@@ -1395,4 +1395,25 @@ class WasmLispCompilerTest {
 		assertThat(occurrences(module, "ZZTOP")).isEqualTo(1);
 	}
 
+	@Test
+	void aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv() {
+		// The eval mirror (_store into GLOBAL_ENV) exists so an eval'd form can read a
+		// variable the compiled program assigned at top level. A LEXICAL of a top-level
+		// form is not one: CL's eval resolves against the null lexical environment, so
+		// no eval'd form can name a top-level let/loop variable -- nor the temporaries
+		// the macro expanders generate, which are symbols in no package at all. Each
+		// mirror costs a linear walk of the eval global alist, per assignment, per
+		// iteration. The mirror spells the name it stores under as a string literal, so
+		// the module's string table is the witness for both halves.
+		byte[] module = compile("""
+				(setq mirrored-global 0)
+				(let ((probe-lexical 0)) (setq probe-lexical 1) (print probe-lexical))
+				(print (loop for probe-counter from 1 to 3 sum probe-counter))
+				(eval '(print mirrored-global))
+				""");
+		assertThat(occurrences(module, "MIRRORED-GLOBAL")).isEqualTo(1);
+		assertThat(occurrences(module, "PROBE-LEXICAL")).isZero();
+		assertThat(occurrences(module, "PROBE-COUNTER")).isZero();
+	}
+
 }

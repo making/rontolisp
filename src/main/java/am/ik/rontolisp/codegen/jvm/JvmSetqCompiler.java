@@ -83,13 +83,17 @@ final class JvmSetqCompiler {
 			mirrorTopLevelGlobal(name, ctx);
 		}
 		else {
+			// A plain lexical local of this method body. NOT mirrored into the eval
+			// runtime: CL's eval sees only the null lexical environment, so no eval'd
+			// form can name a top-level let/loop/do variable -- nor the temporaries the
+			// macro expanders generate (__loop_acc0, the while cursor, __nrev_*), which
+			// are not symbols in any package at all.
 			ctx.emit(Opcode.DUP);
 			if (slot == null) {
 				slot = ctx.allocLocal(name);
 			}
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slot);
-			mirrorTopLevelGlobal(name, ctx);
 		}
 		// A special that is dual-bound here (a lexical slot/capture established by a
 		// special-named let, see JvmLetCompiler): the assignment must reach the DYNAMIC
@@ -138,12 +142,12 @@ final class JvmSetqCompiler {
 	 * Mirrors a top-level global variable binding into the embedded {@code eval}
 	 * runtime's global environment, so an eval'd expression can resolve a variable that
 	 * compiled code defined via {@code setq}/{@code defvar} (the compiled value otherwise
-	 * lives only in a {@code main()} local the interpreter cannot see). No-op unless the
-	 * program uses {@code eval} and this is the top-level context. Expects the assigned
-	 * value on the stack and leaves it there (the {@code _store} call returns it).
+	 * lives only in a {@code main()} local the interpreter cannot see). No-op unless
+	 * {@link #mirrorsTopLevelGlobal} holds. Expects the assigned value on the stack and
+	 * leaves it there (the {@code _store} call returns it).
 	 */
 	static void mirrorTopLevelGlobal(String name, JvmLispCompiler.Ctx ctx) {
-		if (!ctx.topLevel || ctx.evalStoreRef == null) {
+		if (!mirrorsTopLevelGlobal(name, ctx)) {
 			return;
 		}
 		// stack: value -> _store(name, value, null) -> value
@@ -151,7 +155,23 @@ final class JvmSetqCompiler {
 		ctx.emit(Opcode.SWAP);
 		ctx.emit(Opcode.ACONST_NULL);
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.evalStoreRef.index());
+		ctx.emitU2(java.util.Objects.requireNonNull(ctx.evalStoreRef).index());
+	}
+
+	/**
+	 * Whether an assignment to {@code name} here is mirrored into the eval runtime's
+	 * global environment. Only a name with a global backing store qualifies: a lexical --
+	 * a top-level {@code let}/{@code loop}/{@code do} variable, or a macro-generated
+	 * temporary -- is invisible to {@code eval}, which resolves against the null lexical
+	 * environment, so mirroring one is not conservatism but wasted work (and
+	 * {@code _store} is a linear walk of the global alist, paid on every iteration of a
+	 * top-level loop).
+	 * @param name the assigned variable name
+	 * @param ctx the context the assignment is being emitted into
+	 * @return {@code true} when the mirror emits
+	 */
+	static boolean mirrorsTopLevelGlobal(String name, JvmLispCompiler.Ctx ctx) {
+		return ctx.topLevel && ctx.evalStoreRef != null && ctx.globals.contains(name);
 	}
 
 }
