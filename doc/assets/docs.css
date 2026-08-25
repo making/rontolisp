@@ -312,6 +312,7 @@ a:hover { text-decoration-color: var(--accent); }
 
 /* --- markdown content --- */
 .markdown { max-width: var(--content-max); }
+.markdown img { max-width: 100%; height: auto; }
 .markdown h1 {
 	font-family: var(--serif);
 	font-weight: 600;

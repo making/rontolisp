@@ -1,6 +1,6 @@
 # rontolisp
 
-![rontolisp logo](images/rontolisp-logo.png)
+<img src="images/rontolisp-logo.png" alt="rontolisp logo" width="360">
 
 A Common Lisp subset implemented in Java. It supports three execution modes:
 
