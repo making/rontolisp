@@ -1,0 +1,32 @@
+# 514. `LinalgGpuTest` never finishes on an Apple silicon Mac
+
+Difficulty: Medium
+
+Seen 2026-08-25 on this M-series Mac (macOS 26.3, Metal), in a full
+`./mvnw spring-javaformat:apply test`: 178 test classes reported, every one of them green
+(0 failures, 0 errors) and exactly ONE class started and never reported --
+`am.ik.rontolisp.eval.LinalgGpuTest`. The run sat there until it was killed. Reproduced
+with the class alone (`-Dtest=LinalgGpuTest`), so it is not a parallel-suite interaction
+like `.todo/481`'s drift bound.
+
+What the machine shows while it hangs:
+
+- `sample` of the surefire JVM: no thread on top of stack anywhere in Metal or in the
+  binding -- every thread parked in `_pthread_cond_wait` / `semaphore_wait_trap`. Nothing
+  is spinning; something is waiting for a completion that never arrives.
+- `jstack <pid>` refuses with `state is not ready to participate in attach handshake!`, so
+  the Java-level view has to come from `kill -3` into the fork's output file (the dumpstream
+  under `target/surefire-reports/`) rather than from an attach.
+- The class is `@EnabledIf`-conditional and skips on every CI runner, so CI has never run
+  it; only a developer machine with a device does.
+
+Where to start: which test METHOD is in flight when it stops (`kill -3` the fork and read
+the dump, or run the methods one at a time), then whether the wait is a Metal command
+buffer that never completes (`.kb/gpu.md`'s asynchronous-command-buffer work is
+`.todo/495`) or a latch in the test's own harness. Whatever the cause, the class wants a
+`@Timeout` so a full `./mvnw test` fails in minutes with a stack instead of hanging.
+
+Not caused by the `objc:`/`appkit:` work of 2026-08-25: `am.ik.gpu`'s `MetalDriver` is its
+own hand-written binding and reaches neither `am.ik.objc` nor `appkit.lisp`, and the run
+that found this changed only `appkit.lisp`, the native-image metadata, one test table and
+documentation.
