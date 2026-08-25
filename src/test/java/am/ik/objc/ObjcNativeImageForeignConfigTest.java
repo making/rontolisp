@@ -73,6 +73,7 @@ class ObjcNativeImageForeignConfigTest {
 			inst("NSButton", "setAction:"), inst("NSButton", "performClick:"), inst("NSButton", "title"),
 			inst("NSObject", "isKindOfClass:"), inst("NSObject", "init"),
 			inst("NSObject", "performSelector:withObject:"), inst("NSObject", "respondsToSelector:"),
+			inst("NSObject", "performSelectorOnMainThread:withObject:waitUntilDone:"),
 			cls("NSString", "stringWithUTF8String:"), inst("NSString", "UTF8String"), inst("NSString", "length"),
 			inst("NSString", "rangeOfString:"), inst("NSString", "uppercaseString"),
 			cls("NSNumber", "numberWithDouble:"), inst("NSNumber", "doubleValue"),

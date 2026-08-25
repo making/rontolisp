@@ -56,7 +56,10 @@
     "can serve: the shapes appkit.lisp and the documented examples send, plus the 60 most common",
     "shapes of a census over the instance and class methods of 29 core AppKit/Foundation classes",
     "(13,065 methods on macOS 26.3; the top 60 reach 90.6% of them, ObjcRuntime derives a shape from",
-    "the selector's own type encoding). A selector whose shape is outside this table SIGNALS in the",
+    "the selector's own type encoding). The last one is outside that census:",
+    "performSelectorOnMainThread:withObject:waitUntilDone:, which appkit.lisp uses to start",
+    "-[NSApplication run] on thread 0 (without it no click is ever dispatched).",
+    "A selector whose shape is outside this table SIGNALS in the",
     "binary, naming the entry to add here; the JVM registers nothing ahead of time and binds any",
     "shape. ObjcNativeImageForeignConfigTest pins the runtime shapes on every machine and the",
     "appkit selectors on a Mac.",
@@ -465,6 +468,10 @@
       {
         "returnType": "struct(jlong,jlong)",
         "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "jboolean"]
       }
     ],
     "upcalls": [

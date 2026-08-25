@@ -21,7 +21,8 @@
 
 ;; The shared application object, activated once per process. setActivationPolicy:
 ;; 0 is NSApplicationActivationPolicyRegular, which is what lets a process with no
-;; bundle take focus and show a window.
+;; bundle take focus and show a window; -[NSApplication run] below is what lets it
+;; answer a click.
 (defvar appkit::*app* nil)
 
 ;; The one target object every button sends its action to: an instance of a class
@@ -40,6 +41,17 @@
          (let ((app (objc:send "NSApplication" "sharedApplication")))
            (objc:send app "setActivationPolicy:" 0)
            (objc:send app "finishLaunching")
+           ;; Hand thread 0 to AppKit's OWN event loop. The run loop it is
+           ;; parked in delivers events to the process but dequeues none of
+           ;; them: without -[NSApplication run] the window draws and nothing
+           ;; in it answers a click -- not a button, not the red close button --
+           ;; and the application never becomes active. run never returns, so no
+           ;; thread that has to come back may call it; asking thread 0 to
+           ;; perform it on its next run-loop cycle (waitUntilDone NO) starts it
+           ;; without blocking the caller, and every objc:send hop still works,
+           ;; because run drains the main queue like the loop it replaces.
+           (objc:send app "performSelectorOnMainThread:withObject:waitUntilDone:"
+                      "run" nil nil)
            (setq appkit::*app* app)
            app)))))
 

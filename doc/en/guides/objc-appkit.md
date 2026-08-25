@@ -123,6 +123,13 @@ several sends pays the hop once when wrapped in `objc:on-main`, which is what th
 `appkit` functions do. A function already running on the main thread (a button's
 handler) runs its sends inline, so a callback may call back into the GUI freely.
 
+The first `appkit:` call also hands thread 0 to AppKit's own event loop
+(`-[NSApplication run]`, started there without blocking anyone). That is what makes a
+window answer a click at all, and it is why the process takes focus and appears in the
+app switcher. It is the `appkit` layer that starts it, not `objc`, which stays the
+generic binding: a window built from raw `objc:send` in a program that never calls an
+`appkit:` function draws and responds to nothing, so build it with `appkit:window`.
+
 A callback runs with the interpreter's *global* dynamic bindings — a `let` binding of
 a special variable on the REPL thread is not visible to it — and an error it does not
 handle is printed as `objc: error in a callback: ...` rather than signalled: there is

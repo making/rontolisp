@@ -43,6 +43,23 @@ one that may touch a window, and the Lisp thread is never it:
   CoreFoundation frame at all). `RONTOLISP_OBJC_TRACE=1` prints every hop and every
   run-loop return.
 
+**Parking thread 0 is not enough -- AppKit has to be the one draining it.** A CFRunLoop
+lets the window server deliver events to the process, but only `-[NSApplication run]`
+DEQUEUES them (`nextEventMatchingMask:` -> `sendEvent:`). Until it runs, a window draws
+and nothing in it answers a click -- not a button, not the red close button -- and
+`isActive` / `isKeyWindow` stay NO however often `activateIgnoringOtherApps:` is sent.
+That was the first cut's real state, found 2026-08-25. `run` never returns, so no thread
+that has to come back may call it: `appkit::%app` asks thread 0 to
+`performSelectorOnMainThread:withObject:` it `waitUntilDone:` NO, which starts it on the
+next run-loop cycle -- NESTED inside whatever loop was parking the thread (the launcher's
+under `java -jar`, `MainThread.runLoop()`'s in the binary) -- and blocks nobody. Every hop
+still works, because `run` drains the main queue exactly like the loop it replaces; a REPL
+keeps taking input, `appkit:wait` still returns when the window closes, and `appkit:click`
+still drives a button head-lessly. `%app` is the ONLY place that starts it, so a window
+built from raw `objc:` in a process that never called an `appkit:` function draws and
+answers nothing -- deliberate, since `objc:` is the generic binding and a Foundation-only
+script must not become an app.
+
 **Every entry point hops.** `MainThread.sync` hands a body to the main dispatch queue with
 `dispatch_sync_f` and waits; the body crosses through ONE upcall stub (`trampoline`,
 `void(void*)`) whose context pointer is a ticket into a slot map. Every `objc:` verb runs
@@ -182,8 +199,9 @@ window, click, label mutated by Lisp, close survived, on `java -jar` AND the nat
 
 ## Open items
 
-- No Dock icon, menu bar or Cmd-Q (a process with no bundle); an app delegate is one
-  `objc:define-class` away and not written.
+- No menu bar and no Cmd-Q (a process with no bundle sets no main menu); an app delegate
+  is one `objc:define-class` away and not written. With the event loop running the process
+  is a foreground application: it activates, takes focus and appears in the app switcher.
 - Callback shapes with struct or integer arguments, and block-taking selectors.
 - x86_64: `objc_msgSend_stret` is selected for a struct return wider than 16 bytes and
   has not been exercised.
