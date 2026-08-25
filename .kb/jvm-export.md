@@ -195,9 +195,9 @@ and a top-level `uiop:quit` kills the caller's JVM.
 
 Names the library mode on the `--no-wasi` precedent: drop `main`, the class is
 entered through exports only. `JvmLispCompiler.noMain(boolean)`;
-`CliOptions.noValueKeys` + `RontoLispCli` route it, refusing a non-`.class`
-output and (in the compiler, so an embedder gets it too) a program with no
-jvm-export — `main` is the only shake root such a program has, so a main-less
+`CliOptions.noValueKeys` + `RontoLispCli` route it, refusing a non-JVM
+output, a jar with no `--class-name` (below) and (in the compiler, so an embedder
+gets it too) a program with no jvm-export — `main` is the only shake root such a program has, so a main-less
 export-less class would shake to nothing. Kept ORTHOGONAL to the directive: a
 program may want both a `main` and exports (a CLI tool that is also a library),
 and only the flag says which. It also decides a jar's `Main-Class` (below).
@@ -211,13 +211,25 @@ missing parent directories (`RontoLispCli`), since the `-o` path IS the package.
 that used to test "the JVM class output only" (`--blas` / `--gpu` / `--parallel` /
 `--no-main`) now tests `RontoLispCli.jvmOutput`, which is the two extensions.
 
-- **`--class-name` is a CONSEQUENCE of jar output, not a convenience.** The class name
+- **`--class-name` is required by the LIBRARY jar, not by jar output.** The class name
   WAS the `-o` path (`outputFile.replace(".class","")` handed straight to the
-  compiler), and a jar path names no class. Given, it also replaces the path-derived
-  name on a `.class` output; `JvmArtifactOptions.classRoot` then roots the travelling
-  runtime classes at the package root when the `-o` path still ends in the package
-  path (the historical behavior, byte for byte) and beside the output file when it
-  does not.
+  compiler) and a jar path names no class, so the flag started out mandatory for every
+  jar — which made `-o app.jar` unable to produce a runnable app on its own, the one
+  thing a jar is for. The split is what the class IS: a `--no-main` library's class is
+  the artifact's Java API and the caller's `import`, so `RontoLispCli` refuses that jar
+  without the flag; a program jar is entered through the manifest, so its class name is
+  an implementation detail and `JvmArtifactOptions.classNameFromJarPath` DERIVES one
+  from the file's stem — split on everything a Java identifier cannot hold and rejoined
+  in CamelCase (`app.jar` -> `App`, `my-app-1.0.0.jar` -> `MyApp100`, a digit-leading
+  stem prefixed `_`). Sanitizing is load-bearing rather than cosmetic: a stem is a FILE
+  name, and a `.` left in it reads as a package separator, i.e. a `Main-Class` that does
+  not resolve to the one entry the jar has. Given, the flag also replaces the
+  path-derived name on a `.class` output; `JvmArtifactOptions.classRoot` then roots the
+  travelling runtime classes at the package root when the `-o` path still ends in the
+  package path (the historical behavior, byte for byte) and beside the output file when
+  it does not. Pinned by `RontoLispCliTest#aProgramJarNeedsNoClassNameAndIsExecutable`
+  (which really runs `java -jar`), `#aProgramJarsClassNameIsItsFileNameInCamelCase` and
+  `#aLibraryJarStillNeedsAClassNameBecauseItsClassIsItsApi`.
 - **The entries**, in this fixed order: the manifest (`Main-Class` exactly when the
   class HAS a main, so `java -jar` runs a program jar and a `--no-main` library jar
   carries none), the `META-INF/maven` pair when `--maven-coordinates` is given, the

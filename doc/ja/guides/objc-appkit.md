@@ -130,7 +130,7 @@ JVM は事前に何も登録せずどんな形でもバインドするので、�
 ```console
 $ rontolisp examples/macos/counter.lisp -o Counter.class --class-name Counter
 $ java Counter
-$ rontolisp examples/macos/counter.lisp -o counter.jar --class-name Counter
+$ rontolisp examples/macos/counter.lisp -o counter.jar
 $ java -jar counter.jar
 ```
 

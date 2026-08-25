@@ -22,9 +22,19 @@ become the class's entry point and run in order when you launch it.
 `-o out.jar` writes a jar rather than a bare class: the class, the runtime
 classes that have to travel with it, a manifest, and -- with
 `--maven-coordinates` -- the Maven metadata that lets a consumer install it with
-no flags at all. A jar path names no class, so `--class-name` gives the name
-there; it works for `.class` output too, where it replaces the name the path
-would give.
+no flags at all. The jar is **executable**, so it needs nothing else to run:
+
+```bash
+rontolisp hello.lisp -o hello.jar
+java -jar hello.jar
+```
+
+A jar path names no class, so the class inside takes its name from the file's
+stem in CamelCase (`hello.jar` -> `Hello`, `my-app-1.0.0.jar` -> `MyApp100`) and
+the manifest's `Main-Class` points at it. That name only matters if you call the
+class directly: `--class-name` sets it, and it is REQUIRED for a `--no-main`
+library jar, whose class is the artifact's Java API rather than an entry point.
+It works for `.class` output too, where it replaces the name the path would give.
 
 A class can also be a **library** Java code calls directly:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md)

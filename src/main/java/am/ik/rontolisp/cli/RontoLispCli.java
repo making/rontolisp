@@ -466,9 +466,16 @@ public final class RontoLispCli {
 					+ " needs a .class or .jar output -- e.g. -o Kernels.class --no-main."
 					+ " The WASM equivalent is --no-wasi (reactor mode)");
 		}
-		// --class-name names the class a JVM compile emits. It is REQUIRED for a jar
-		// (whose path names no class) and optional for a .class, where it overrides the
-		// name the -o path would give.
+		// --class-name names the class a JVM compile emits. A --no-main jar REQUIRES it:
+		// there the class is the artifact's Java API, and a name derived from the file
+		// would be the caller's import. A program jar derives one instead (the manifest's
+		// Main-Class is what runs it), and a .class takes it from the -o path unless the
+		// flag overrides it.
+		if (noMain && outputFile.endsWith(".jar") && jvmArtifact.className() == null) {
+			throw new UnsupportedOperationException("--no-main makes the class itself the artifact's Java API, so a"
+					+ " library jar has to name it: add --class-name com.example.Kernels."
+					+ " Only a program jar derives its class name from the -o file name");
+		}
 		if (jvmArtifact.className() != null && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--class-name names the class a JVM compile emits, so it needs a"
 					+ " .class or .jar output -- e.g. -o kernels.jar --class-name com.example.Kernels");
@@ -649,8 +656,10 @@ public final class RontoLispCli {
 		}
 		else {
 			// The class name is the -o path with .class taken off, or --class-name where
-			// one was given -- and a jar output has no path to read one from, so there
-			// the flag is required (JvmArtifactOptions.internalClassName).
+			// one was given -- and a jar output has no path to read one from, so a
+			// program jar derives one from its file name and a --no-main library jar
+			// (whose class is its API) has to be given one
+			// (JvmArtifactOptions.internalClassName).
 			// The backend half itself is JvmSourceCompiler's, which is also what an
 			// embedder (the Maven plugin) compiles through, so the two cannot drift.
 			JvmSourceCompiler.Result compiled = new JvmSourceCompiler(jvmArtifact.internalClassName(outputFile))
@@ -805,7 +814,7 @@ public final class RontoLispCli {
 		this.out.println("  file               Interpret the file");
 		this.out.println("  -e \"FORMS\"         Interpret the given program instead of a file (--eval)");
 		this.out.println("  file -o out.class   Compile to JVM bytecode");
-		this.out.println("  file -o out.jar     Compile to a jar (needs --class-name)");
+		this.out.println("  file -o out.jar     Compile to an executable jar (java -jar out.jar)");
 		this.out.println("  file -o out.wasm    Compile to WASM");
 		this.out.println();
 		this.out.println("Subcommands:");
@@ -865,9 +874,11 @@ public final class RontoLispCli {
 		this.out.println("                     runs once, at class initialization, exactly as a --no-wasi");
 		this.out.println("                     reactor runs its top level at instantiation");
 		this.out.println("  --class-name NAME  With a .class or .jar output: the fully qualified name of");
-		this.out.println("                     the emitted class (com.example.Kernels). REQUIRED for a .jar,");
-		this.out.println("                     whose path names no class; for a .class it replaces the name");
-		this.out.println("                     the -o path would give, so -o build/K.class can still be");
+		this.out.println("                     the emitted class (com.example.Kernels). REQUIRED for a");
+		this.out.println("                     --no-main library jar, whose class IS its Java API; a program");
+		this.out.println("                     jar derives one from the -o file name (app.jar -> App) and is");
+		this.out.println("                     entered through the manifest. For a .class it replaces the");
+		this.out.println("                     name the -o path would give, so -o build/K.class can still be");
 		this.out.println("                     com.example.Kernels");
 		this.out.println("  --maven-coordinates G:A:V");
 		this.out.println("                     With a .jar output: embed META-INF/maven/G/A/pom.xml and");

@@ -10,7 +10,14 @@ java Hello
 
 生成されるクラスは出力ファイルにちなんで命名されるため、`java` に渡す名前はファイルの語幹（ステム）になります。`-o Hello.class` はクラス `Hello` を生成し、`java Hello` で実行します。パス中のディレクトリはクラスの Java **パッケージ**になります: `-o com/example/Kernels.class` は `com.example.Kernels` を生成し、パスの起点ディレクトリから `java -cp . com.example.Kernels` で実行します（足りないディレクトリは作成されます）。プログラムのトップレベルのフォームはクラスのエントリーポイントになり、起動時に順番に実行されます。
 
-`-o out.jar` は素のクラスではなく jar を書き出します。クラス本体、一緒に運ばれなければならないランタイムクラス、マニフェスト、そして `--maven-coordinates` があれば、コンシューマがフラグを一切付けずにインストールできる Maven メタデータが入ります。jar のパスはどのクラスも名指ししないので、名前は `--class-name` で与えます。このフラグは `.class` 出力でも使え、その場合はパスが与える名前を置き換えます。
+`-o out.jar` は素のクラスではなく jar を書き出します。クラス本体、一緒に運ばれなければならないランタイムクラス、マニフェスト、そして `--maven-coordinates` があれば、コンシューマがフラグを一切付けずにインストールできる Maven メタデータが入ります。この jar は**実行可能**で、そのまま動きます:
+
+```bash
+rontolisp hello.lisp -o hello.jar
+java -jar hello.jar
+```
+
+jar のパスはどのクラスも名指ししないので、中のクラスはファイルの語幹（ステム）を CamelCase にした名前を取り（`hello.jar` なら `Hello`、`my-app-1.0.0.jar` なら `MyApp100`）、マニフェストの `Main-Class` がそれを指します。この名前が意味を持つのはクラスを直接呼ぶときだけです。名前は `--class-name` で指定でき、`--no-main` のライブラリ jar では**必須**です。そちらのクラスはエントリポイントではなくアーティファクトの Java API そのものだからです。このフラグは `.class` 出力でも使え、その場合はパスが与える名前を置き換えます。
 
 クラスは Java コードが直接呼び出す**ライブラリ**にもなれます:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md) は `defun` に対して型付きで Java から呼び出し可能な static メソッドを宣言し、`--no-main` は `main` エントリポイントを完全に取り除きます。[JVM ライブラリのエクスポート](../guides/jvm-library.md) を参照してください。

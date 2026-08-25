@@ -11,7 +11,7 @@
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/macos/counter.lisp
 ;;;;   ./target/rontolisp examples/macos/counter.lisp
 ;;;;   ./target/rontolisp examples/macos/counter.lisp -o Counter.class --class-name Counter && java Counter
-;;;;   ./target/rontolisp examples/macos/counter.lisp -o counter.jar --class-name Counter && java -jar counter.jar
+;;;;   ./target/rontolisp examples/macos/counter.lisp -o counter.jar && java -jar counter.jar
 ;;;;
 ;;;; Typed into the REPL instead, the same forms open the same window and the REPL
 ;;;; keeps taking input while it is up: the window lives on the process's first

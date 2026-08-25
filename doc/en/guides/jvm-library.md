@@ -243,10 +243,12 @@ rontolisp kernels.lisp -o acme-kernels-1.0.0.jar \
     --no-main
 ```
 
-`--class-name` is not a convenience here — a `.jar` path names no class, where
-a `.class` path always did. It works for `.class` output too, where it replaces
-the name the `-o` path would give, so a build directory no longer has to be
-shaped like the package.
+`--class-name` is not a convenience here — a `.jar` path names no class, and a
+library's class IS the API its callers import, so `--no-main` requires the flag.
+(A program jar, which is entered through the manifest, derives the name from its
+file name instead.) It works for `.class` output too, where it replaces the name
+the `-o` path would give, so a build directory no longer has to be shaped like
+the package.
 
 The coordinates then ride **inside** the jar, as the
 `META-INF/maven/<groupId>/<artifactId>/pom.xml` + `pom.properties` pair every

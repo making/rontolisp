@@ -105,6 +105,20 @@ class RontoLispCliTest {
 		return program;
 	}
 
+	/**
+	 * Runs the jar the way its user will -- {@code java -jar}, so the manifest is what
+	 * finds the entry point -- and answers its output.
+	 */
+	private static String runJar(Path jar) throws Exception {
+		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-jar",
+				jar.toString())
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).describedAs("java -jar %s said:%n%s", jar, output).isZero();
+		return output;
+	}
+
 	private static Map<String, byte[]> entries(Path jar) throws Exception {
 		Map<String, byte[]> entries = new LinkedHashMap<>();
 		try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(jar))) {
@@ -174,7 +188,40 @@ class RontoLispCliTest {
 	}
 
 	@Test
-	void aJarOutputNeedsAClassNameBecauseItsPathNamesNoClass() throws Exception {
+	void aProgramJarNeedsNoClassNameAndIsExecutable() throws Exception {
+		// -o app.jar on its own has to produce something `java -jar` runs: the class a
+		// program jar holds is an implementation detail behind the manifest, so there is
+		// nothing for the user to name.
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, "(print (+ 1 2))\n");
+		Path jar = this.tempDir.resolve("app.jar");
+		runCli("", program.toString(), "-o", jar.toString());
+		assertThat(entries(jar)).containsKey("App.class");
+		assertThat(new String(entries(jar).get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8))
+			.contains("Main-Class: App");
+		assertThat(runJar(jar)).isEqualTo("3\n");
+	}
+
+	@Test
+	void aProgramJarsClassNameIsItsFileNameInCamelCase() throws Exception {
+		// The stem is a FILE name and may hold anything a file name may: a '.' read as a
+		// package separator would leave the manifest naming a class the jar does not
+		// have.
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, "(print 1)\n");
+		Path jar = this.tempDir.resolve("build/my-app-1.0.0.jar");
+		runCli("", program.toString(), "-o", jar.toString());
+		assertThat(entries(jar)).containsKey("MyApp100.class");
+		assertThat(new String(entries(jar).get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8))
+			.contains("Main-Class: MyApp100");
+		// A stem that starts with a digit is still not a class name after capitalizing.
+		Path digits = this.tempDir.resolve("2048.jar");
+		runCli("", program.toString(), "-o", digits.toString());
+		assertThat(entries(digits)).containsKey("_2048.class");
+	}
+
+	@Test
+	void aLibraryJarStillNeedsAClassNameBecauseItsClassIsItsApi() throws Exception {
 		assertThatThrownBy(() -> runCli("", kernelsLibrary().toString(), "-o",
 				this.tempDir.resolve("kernels.jar").toString(), "--no-main"))
 			.isInstanceOf(UnsupportedOperationException.class)
