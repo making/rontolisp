@@ -18,7 +18,7 @@ import org.jspecify.annotations.Nullable;
  * is a rewrite of the interpreter's {@code eval/JavaInterop} against the compiled runtime
  * value representation ({@code null} = nil, {@code Long} = integer, {@code Double} =
  * float, a {@code String} with surrounding quotes = string, any other {@code String} =
- * symbol ({@code "t"} = true), {@code Character} = character, an exact {@code Object[]} =
+ * symbol ({@code "T"} = true), {@code Character} = character, an exact {@code Object[]} =
  * cons cell or (with an {@code Integer} head) a function value, an {@code ArrayList} with
  * a leading {@code Object[]} of dimension sizes = array); the overload selection costs
  * and tie-breaking are identical, so a program behaves the same interpreted and compiled.
@@ -443,7 +443,7 @@ final class JavaBridgeTemplate {
 				}
 				return NO_MATCH;
 			}
-			if ("t".equals(s)) { // the symbol t = Lisp true
+			if ("T".equals(s)) { // the symbol t = Lisp true (the reader upcases it)
 				if (target == boolean.class) {
 					out[index] = Boolean.TRUE;
 					return COST_EXACT;

@@ -93,12 +93,17 @@ final class JvmJarWriter {
 	/**
 	 * The manifest. {@code Main-Class} is present exactly when the class HAS a main, so
 	 * {@code java -jar out.jar} keeps working for a program and a {@code --no-main}
-	 * library jar carries none.
+	 * library jar carries none. {@code Enable-Native-Access} is always present, as in
+	 * rontolisp's own exec jar: a program that reaches the foreign function API --
+	 * {@code objc:} / {@code appkit:}, {@code --blas}, {@code --gpu} -- then runs under
+	 * {@code java -jar} without the JDK's restricted-method warning, and the header is
+	 * inert for a program that reaches nothing.
 	 */
 	private static String manifest(String className, boolean mainClass) {
 		StringBuilder manifest = new StringBuilder();
 		append(manifest, "Manifest-Version", "1.0");
 		append(manifest, "Created-By", "rontolisp " + Version.getVersion());
+		append(manifest, "Enable-Native-Access", "ALL-UNNAMED");
 		if (mainClass) {
 			append(manifest, "Main-Class", className.replace('/', '.'));
 		}

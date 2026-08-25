@@ -12,10 +12,13 @@ description is `doc/{en,ja}/guides/objc-appkit.md`; the example is
 
 What it is worth: the `rontolisp` native binary is the REPL people run, and `java:` cannot
 be INTERPRETED there at all (no reflection metadata). FFM needs none, so this is the one
-way that binary opens a window. Interpreter only, on macOS: every compiler refuses a
-program that references either package (`CompileFrontend`, after load inlining, naming
-the reference), and a machine without the runtime -- Linux, a JVM without
-`--enable-native-access` -- SIGNALS at the call.
+way that binary opens a window. macOS only, on the interpreter and on the JVM class output
+(todo-513: the binding travels inside the class, "The JVM backend" below); both WASM
+backends refuse a program that references either package (`CompileFrontend`, after load
+inlining, naming the reference), permanently -- no FFM, no AppKit -- and a machine
+without the runtime -- Linux, a JVM that DENIES native access
+(`--illegal-native-access=deny`; the JDK's default is a one-time warning) -- SIGNALS at
+the call.
 
 ## The one architectural fact: AppKit belongs to thread 0
 
@@ -104,6 +107,52 @@ one object balance the same way. Classes own nothing. Hence the rule `appkit:win
 honours and a raw `objc:` window must: `setReleasedWhenClosed:` NO, or the close releases a
 reference the wrapper still holds. Leaking is the safe direction everywhere here.
 
+## The JVM backend: the binding travels in the class, and calls back into it
+
+`-o Prog.class` / `-o lib.jar` (todo-513, 2026-08-25) is the `--gpu` route (`.kb/gpu.md`,
+"The JVM backend"; `.kb/template-class-embedding.md`, "A closure of classes"): every class
+file of `am.ik.objc` is renamed by one prefix rule (`am/ik/objc/` -> the program's package +
+`RontoLispObjc`), base64'd, and `Lookup.defineClass`'d by the emitted `_objcInit` on the
+first `objc:` call, so the compiled program runs the interpreter's own bytes -- one
+encoding parser, one hop, one closed callback set. `JvmObjcRuntimeBuilder` owns the list
+(pinned against `target/classes/am/ik/objc` by
+`JvmObjcInteropCompilerTest#theBlobCarriesTheWholeLibrary`; a class added to the package
+is added there). Two classes ride along, renamed the same way, each ONE class file:
+
+- `JvmObjcTemplate` -> `RontoLispObjcBridge`: the seven verbs against the compiled value
+  model, the hand-kept twin of `ObjcBridge` -- marshalling, ownership, the messages --
+  KEEP THE TWO IN SYNC. Written with an if-chain over `TypeEncoding.Kind` because an
+  enum `switch` lowers to a synthetic `$1` class the blob does not carry (the test pins
+  that neither template has a `$` sibling on disk).
+- `JvmObjcHandle` -> `RontoLispObjcObject`: the compiled `LispObjcObject` -- address +
+  class name, `equals` by address (what the compiled `_equal` falls back to), `toString`
+  = `#<objc Class>`. The printer reaches it through the bridge's `objcPrint` hook
+  (`JvmRuntimeBuilder.ObjcPrint`, guarded by `_objcInited`), emitted AHEAD of the `java:`
+  branch, which would otherwise claim it as a host object.
+
+Three things differ from the `--gpu` blob. **Definition order is not free**: a method
+body's sibling reference resolves lazily, but the VERIFIER loads a class it must check
+assignability against while defining the referencing class -- a `catch` type must be a
+`Throwable` -- so `ObjcException` is defined first (every class in the library catches it;
+alphabetical order died in `defineClass` with `NoClassDefFoundError`). **The blob makes
+UPCALLS into the program**: a `define-class` method and an `on-main` body are applied
+through `_apply`, handed over by `bind(Class)` from `_objcInit` (the `java:proxy`
+precedent), which is why `usesObjc` forces `usesEval` and roots `_apply` for the shaker.
+**The gate is the seven verbs**, qualified, and `appkit.lisp` reaches them: `AppKitLibrary
+.process` splices the widget layer on the compile path (`CompileFrontend`, beside
+`LinalgLibrary`; pruned to what the program calls like every library), so an `appkit:`
+program compiles as ordinary Lisp whose `objc:send` gates the blob on.
+
+Under the `java` launcher thread 0 is already parked in a `CFRunLoop`, so the hand-over
+the native binary needs does not arise; the compiled hop is `MainThread.sync` exactly as
+interpreted. A bare `.class` without `--enable-native-access=ALL-UNNAMED` gets the JDK's
+one-time warning and works; a `.jar` carries `Enable-Native-Access: ALL-UNNAMED` in its
+manifest (every jar does, `JvmJarWriter`). The native binary COMPILES such a program
+too: the blob's files are registered in `resource-config.json` beside the other
+templates. Each compiled program defines its own copy of the library into its own
+loader -- fine for a program, and the reason the test names a run-time class per program
+(`objc_allocateClassPair` cannot be undone).
+
 ## Package rules and the web build
 
 `am.ik.objc -> (nothing)`; `eval -> am.ik.objc` through ONE class, `eval/ObjcBridge`,
@@ -121,7 +170,8 @@ through a hand-written shape table and could ride on `am.ik.objc`; it does not y
 | the encoding parser (pure) | `am.ik.objc.TypeEncodingTest` |
 | native-image registration: runtime downcalls + callback upcalls (any machine), appkit selectors (Mac) | `am.ik.objc.ObjcNativeImageForeignConfigTest` |
 | the verbs, headless (Foundation + a run-time class; Mac), the signal elsewhere (any machine) | `eval/ObjcInteropTest` |
-| the library defines exactly the registry's exports, lazy load, the compile-path refusal on every backend | `eval/AppKitLibraryTest` |
+| the library defines exactly the registry's exports, lazy load, the WASM refusal and the JVM splice | `eval/AppKitLibraryTest` |
+| the verbs compiled to a class (the interpreter cases, mirrored), the embedded class list, one file per template | `codegen/jvm/JvmObjcInteropCompilerTest` |
 | `eval -> am.ik.objc`, and the library imports nothing | `PackageCycleTest` |
 
 A window is never opened by a test (CI has no display; a doc `lisp` fence that opened one
@@ -135,8 +185,5 @@ window, click, label mutated by Lisp, close survived, on `java -jar` AND the nat
 - No Dock icon, menu bar or Cmd-Q (a process with no bundle); an app delegate is one
   `objc:define-class` away and not written.
 - Callback shapes with struct or integer arguments, and block-taking selectors.
-- The JVM backend could carry the library as an embedded blob (`JvmGpuRuntimeBuilder`
-  precedent); then `AppKitLibrary` gains a `process` like `LinalgLibrary`'s and the
-  refusal narrows to WASM.
 - x86_64: `objc_msgSend_stret` is selected for a struct return wider than 16 bytes and
   has not been exercised.

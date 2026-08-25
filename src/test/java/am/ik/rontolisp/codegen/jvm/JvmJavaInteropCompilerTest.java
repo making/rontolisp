@@ -109,6 +109,14 @@ class JvmJavaInteropCompilerTest {
 		assertThat(compileAndRun("(print (java:static \"java.lang.Math\" \"sqrt\" 16))")).isEqualTo("4.0");
 	}
 
+	// The symbol t marshals to a boolean parameter (the compiled true is the bare
+	// symbol "T", which is also what a boolean answer comes back as).
+	@Test
+	void trueMarshalsToABooleanParameter() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.String\" \"valueOf\" t))")).isEqualTo("\"true\"");
+		assertThat(compileAndRun("(print (java:static \"java.lang.Boolean\" \"logicalAnd\" t t))")).isEqualTo("T");
+	}
+
 	// A boolean Java return (ArrayList.add) surfaces as t.
 	@Test
 	void booleanReturnSurfacesAsTrue() throws Exception {

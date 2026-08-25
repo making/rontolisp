@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -25,9 +26,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The shipped {@code appkit} library as a library: it parses, it defines exactly the
  * functions the package registry exports, the interpreter loads it on the first
- * {@code appkit:} resolution, and the compile path refuses a program that reaches it.
- * Nothing here opens a window (CI has no display); the visible behavior is
- * {@code examples/macos/}.
+ * {@code appkit:} resolution, the JVM compile path splices it and the WASM one refuses a
+ * program that reaches it. Nothing here opens a window (CI has no display); the visible
+ * behavior is {@code examples/macos/}.
  */
 class AppKitLibraryTest {
 
@@ -79,24 +80,53 @@ class AppKitLibraryTest {
 	}
 
 	@Test
-	void theCompilePathRefusesBothPackagesOnEveryBackend(@TempDir Path dir) throws IOException {
+	void theCompilePathRefusesBothPackagesOnTheWasmBackendsAndCompilesThemForTheJvm(@TempDir Path dir)
+			throws IOException {
 		Path source = dir.resolve("gui.lisp");
 		Files.writeString(source, "(print (appkit:window \"hi\"))\n");
 		Path loader = dir.resolve("loader.lisp");
 		Files.writeString(loader, "(load \"gui.lisp\")\n");
-		for (String[] output : new String[][] { { "-o", dir.resolve("Prog.class").toString() },
-				{ "-o", dir.resolve("prog.wasm").toString() },
+		for (String[] output : new String[][] { { "-o", dir.resolve("prog.wasm").toString() },
 				{ "-o", dir.resolve("comp.wasm").toString(), "--component" } }) {
 			assertThatThrownBy(() -> compile(source, output)).isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("Cannot compile: APPKIT:WINDOW")
-				.hasMessageContaining("interpreter only");
+				.hasMessageContaining("not in a .wasm");
 			// A (load ...)-ed file is caught too: the refusal runs after load inlining.
 			assertThatThrownBy(() -> compile(loader, output)).isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("Cannot compile: APPKIT:WINDOW");
 		}
 		Files.writeString(source, "(objc:send \"NSString\" \"stringWithUTF8String:\" \"x\")\n");
-		assertThatThrownBy(() -> compile(source, "-o", dir.resolve("Prog.class").toString()))
+		assertThatThrownBy(() -> compile(source, "-o", dir.resolve("prog.wasm").toString()))
 			.hasMessageContaining("Cannot compile: OBJC:SEND");
+		// The JVM backend carries the binding as an embedded blob: both programs compile,
+		// the appkit one with the widget layer spliced in, to a class and to a jar whose
+		// manifest enables native access for a plain java -jar.
+		Files.writeString(source, "(print (appkit:window \"hi\"))\n");
+		Path prog = dir.resolve("Prog.class");
+		compile(loader, "-o", prog.toString());
+		String bytes = Files.readString(prog, StandardCharsets.ISO_8859_1);
+		assertThat(bytes).contains("RontoLispObjcBridge").contains("APPKIT$colonWINDOW");
+		Path jar = dir.resolve("prog.jar");
+		compile(source, "-o", jar.toString(), "--class-name", "Prog");
+		assertThat(Files.size(jar)).isGreaterThan(0);
+		Files.writeString(source, "(objc:send \"NSString\" \"stringWithUTF8String:\" \"x\")\n");
+		compile(source, "-o", prog.toString());
+		assertThat(Files.readString(prog, StandardCharsets.ISO_8859_1)).contains("RontoLispObjcBridge")
+			.doesNotContain("APPKIT$colon");
+	}
+
+	@Test
+	void theCompilePathSplicesTheLibraryExactlyWhenAppkitIsReferenced() {
+		// objc: alone needs no widget layer; a qualified or an in-package appkit
+		// reference -- even one AFTER an objc: reference, which the first-reference
+		// walk stops at -- prepends the definitions.
+		assertThat(AppKitLibrary.process(read("(print 1)"))).hasSize(1);
+		assertThat(AppKitLibrary.process(read("(objc:send x \"y\")"))).hasSize(1);
+		assertThat(AppKitLibrary.process(read("(objc:send x \"y\") (appkit:window \"t\")")))
+			.hasSize(AppKitLibrary.forms().size() + 2);
+		assertThat(AppKitLibrary.process(read("(in-package appkit) (window \"t\")")))
+			.hasSize(AppKitLibrary.forms().size() + 2);
+		assertThat(AppKitLibrary.process(read("(in-package cl-user) (print 'window)"))).hasSize(2);
 	}
 
 	private static void compile(Path source, String... options) {
