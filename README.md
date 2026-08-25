@@ -1,5 +1,7 @@
 # rontolisp
 
+![rontolisp logo](images/rontolisp-logo.png)
+
 A minimal Common Lisp subset implemented in Java. It supports three execution modes:
 
 - **Interpreter** -- Tree-walking evaluation with REPL support

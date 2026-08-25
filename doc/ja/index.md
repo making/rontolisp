@@ -1,5 +1,7 @@
 # rontolisp
 
+![rontolisp logo](../assets/rontolisp-logo.png)
+
 Java で実装された最小限の Common Lisp サブセットです。3 つの実行モードをサポートします。
 
 - **インタプリタ** -- REPL をサポートするツリーウォーク評価。ファイル実行時の
