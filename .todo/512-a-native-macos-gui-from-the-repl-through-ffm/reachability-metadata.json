@@ -1,0 +1,29 @@
+{
+  "foreign": {
+    "downcalls": [
+      {"returnType": "void*", "parameterTypes": ["void*"]},
+      {"returnType": "void*", "parameterTypes": []},
+      {"returnType": "void", "parameterTypes": []},
+      {"returnType": "void", "parameterTypes": ["void*"]},
+      {"returnType": "void*", "parameterTypes": ["void*", "void*"]},
+      {"returnType": "void*", "parameterTypes": ["void*", "void*", "void*"]},
+      {"returnType": "void", "parameterTypes": ["void*", "void*"]},
+      {"returnType": "void", "parameterTypes": ["void*", "void*", "void*"]},
+      {"returnType": "void", "parameterTypes": ["void*", "void*", "jlong"]},
+      {"returnType": "void", "parameterTypes": ["void*", "void*", "jboolean"]},
+      {"returnType": "jboolean", "parameterTypes": ["void*", "void*", "jlong"]},
+      {"returnType": "jboolean", "parameterTypes": ["void*", "void*", "void*", "void*"]},
+      {"returnType": "jlong", "parameterTypes": ["void*", "void*"]},
+      {"returnType": "void*", "parameterTypes": ["void*", "void*", "jlong"]},
+      {"returnType": "void*", "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)"]},
+      {"returnType": "void", "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)"]},
+      {"returnType": "void*", "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)", "jlong", "jlong", "jboolean"]},
+      {"returnType": "jint", "parameterTypes": []},
+      {"returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*"]}
+    ],
+    "upcalls": [
+      {"returnType": "void", "parameterTypes": ["void*"]},
+      {"returnType": "void", "parameterTypes": ["void*", "void*", "void*"]}
+    ]
+  }
+}
