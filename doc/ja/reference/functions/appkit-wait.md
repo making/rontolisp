@@ -1,0 +1,10 @@
+# appkit:wait
+
+`(appkit:wait window)`
+
+ウィンドウが閉じられるまで呼び出し側スレッドをブロックし (1 秒に 20 回ポーリング)、`nil` を返します。スクリプトは最後にこれを呼びます。最後のフォームが返るとプロセスが終了するためです。REPL には不要です。ボタンのハンドラから呼んではいけません。ハンドラはウィンドウを閉じるはずのスレッドで動いています。`objc` の上に rontolisp で書かれ初回使用時に読み込まれる Cocoa ウィジェット層、`appkit` パッケージの一部です。macOS のインタプリタ専用 (`java -jar` または `rontolisp` バイナリ) で、ディスプレイが必要です。[macOS GUI ガイド](../../guides/objc-appkit.md)を参照してください。
+
+```console
+> (appkit:wait *win*)   ; returns once the window is closed
+NIL
+```

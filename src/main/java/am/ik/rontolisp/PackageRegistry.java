@@ -365,6 +365,17 @@ public final class PackageRegistry {
 	private static final List<String> VEC_FUNCTION_NAMES = sorted(VEC_FUNCTIONS);
 
 	/**
+	 * The functions exported by the {@code appkit} package (a Cocoa widget layer over the
+	 * {@code objc} verbs), implemented in {@code appkit.lisp} (see
+	 * {@code AppKitLibrary}). Plain strings, like {@code linalg}: they exist only as
+	 * Lisp-source defuns.
+	 */
+	private static final Set<String> APPKIT_FUNCTIONS = Set.of("WINDOW", "LABEL", "BUTTON", "SET-TEXT", "TEXT", "CLICK",
+			"CLOSE", "VISIBLE-P", "WAIT");
+
+	private static final List<String> APPKIT_FUNCTION_NAMES = sorted(APPKIT_FUNCTIONS);
+
+	/**
 	 * The functions exported by the {@code usocket} package (a usocket-compatible shim
 	 * over the {@code rontolisp:tcp-*} built-ins), implemented in {@code usocket.lisp}
 	 * (see {@code UsocketLibrary}). Plain strings, like {@code linalg}: no evaluator or
@@ -498,12 +509,12 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
 			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
-			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG,
-			LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG,
-			LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG,
-			LispNames.BT2_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG,
-			LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG,
-			"KEYWORD"), Set.copyOf(UiopExports.subPackages()));
+			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.ASDF_PKG,
+			LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
+			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
+			LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG,
+			LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG,
+			LispNames.CL_SSL_PKG, "KEYWORD"), Set.copyOf(UiopExports.subPackages()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -581,6 +592,16 @@ public final class PackageRegistry {
 		// run on the JVM interpreter only -- the compilers cannot lower them.
 		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,
 				LispNames.JAVA_CALL, LispNames.JAVA_STATIC, LispNames.JAVA_FIELD, LispNames.JAVA_PROXY))));
+		// Interpreter-only Objective-C interop through the foreign function API (no
+		// reflection, so it runs in the native binary too). Does not use cl; its values
+		// (LispObjcObject) cannot be lowered by any compiler.
+		define(new LispPackage(LispNames.OBJC_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS,
+						LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS,
+						LispNames.OBJC_OBJECTP))));
+		// A Cocoa widget layer over objc:, implemented once in appkit.lisp and loaded on
+		// demand (AppKitLibrary). Does not use cl; every function is external.
+		define(new LispPackage(LispNames.APPKIT_PKG, List.of(), new HashSet<>(APPKIT_FUNCTIONS)));
 		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
 		// files as plain data -- see eval.AsdfSystems; the runtime component metaobject
 		// family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp). Does not
@@ -933,6 +954,15 @@ public final class PackageRegistry {
 	 */
 	public static List<String> vecFunctionNames() {
 		return VEC_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names of the functions exported by the {@code appkit} package, sorted
+	 * alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> appkitFunctionNames() {
+		return APPKIT_FUNCTION_NAMES;
 	}
 
 	/**

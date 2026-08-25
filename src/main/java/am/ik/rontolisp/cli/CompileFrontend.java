@@ -6,6 +6,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.AppKitLibrary;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.ExitLibrary;
@@ -154,6 +155,16 @@ final class CompileFrontend {
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.
 		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
+		// objc: and appkit: are interpreter-only (a LispObjcObject has no lowering on any
+		// backend); refuse them here, after load inlining, so a (load ...)-ed file is
+		// caught too and the error names the reference rather than an undefined function
+		// somewhere inside a spliced library.
+		String objcReference = AppKitLibrary.firstObjcReference(loaded);
+		if (objcReference != null) {
+			throw new IllegalArgumentException("Cannot compile: " + objcReference
+					+ " -- the objc: and appkit: packages run on the interpreter only (java -jar, or the rontolisp "
+					+ "binary), not in a compiled .class or .wasm");
+		}
 		// Under --component the inliner also prunes the interface members the program
 		// never references -- the core tree shaker cannot do that job even under
 		// --optimize, because a WIT member costs a component-level import declaration and

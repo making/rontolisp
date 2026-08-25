@@ -654,6 +654,26 @@ categories:
       - { slug: java-static, name: "java:static" }
       - { slug: java-field, name: "java:field" }
       - { slug: java-proxy, name: "java:proxy" }
+  - title: "objc パッケージ (Objective-C ランタイム)"
+    functions:
+      - { slug: objc-class, name: "objc:class" }
+      - { slug: objc-send, name: "objc:send" }
+      - { slug: objc-define-class, name: "objc:define-class" }
+      - { slug: objc-on-main, name: "objc:on-main" }
+      - { slug: objc-string, name: "objc:string" }
+      - { slug: objc-address, name: "objc:address" }
+      - { slug: objc-objectp, name: "objc:objectp" }
+  - title: "appkit パッケージ (Cocoa ウィジェット)"
+    functions:
+      - { slug: appkit-window, name: "appkit:window" }
+      - { slug: appkit-label, name: "appkit:label" }
+      - { slug: appkit-button, name: "appkit:button" }
+      - { slug: appkit-set-text, name: "appkit:set-text" }
+      - { slug: appkit-text, name: "appkit:text" }
+      - { slug: appkit-click, name: "appkit:click" }
+      - { slug: appkit-close, name: "appkit:close" }
+      - { slug: appkit-visible-p, name: "appkit:visible-p" }
+      - { slug: appkit-wait, name: "appkit:wait" }
   - title: "asdf パッケージ (システム定義)"
     functions:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }

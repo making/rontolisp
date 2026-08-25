@@ -69,7 +69,9 @@ class PackageCycleTest {
 		Map<String, Set<String>> graph = packageGraph();
 		assertThat(graph).hasSizeGreaterThan(10);
 		assertThat(graph.getOrDefault("am.ik.rontolisp.eval", Set.of())).contains("am.ik.rontolisp.macro",
-				"am.ik.rontolisp.reader", "am.ik.gpu");
+				"am.ik.rontolisp.reader", "am.ik.gpu", "am.ik.objc");
+		// The language-independent libraries import no project package.
+		assertThat(graph.getOrDefault("am.ik.objc", Set.of())).isEmpty();
 		assertThat(graph.getOrDefault("am.ik.rontolisp.reader", Set.of())).doesNotContain("am.ik.rontolisp.eval");
 	}
 

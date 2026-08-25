@@ -59,7 +59,7 @@
 #                deep-learning-from-scratch/download-mnist.sh.
 #   note         free-form comment
 #
-# GUI examples (jvm/, minesweeper, rainbow/, the webgl-*/ and other browser
+# GUI examples (jvm/, macos/, minesweeper, rainbow/, the webgl-*/ and other browser
 # demos) are intentionally absent: they open a window or run in a page and
 # cannot be checked headless. Two exceptions, both for the same reason -- the
 # part that is not GUI: browser/wit-component's Lisp half is a pure-compute

@@ -6003,6 +6003,50 @@ public final class LispNames {
 	public static final String JAVA_PROXY = "PROXY";
 
 	/**
+	 * The {@code objc} package name: the Objective-C runtime through the foreign function
+	 * API ({@code am.ik.objc}, wired in {@code eval.ObjcInterop}). The exact analogue of
+	 * {@code java} -- a package named after the foreign system with a handful of generic
+	 * verbs -- but reflection-free, so it runs in the native binary too. Interpreter
+	 * only: no compiler lowers a {@code LispObjcObject}. Does not use {@code cl}.
+	 */
+	public static final String OBJC_PKG = "OBJC";
+
+	/** {@code objc:class} -- a class by name: {@code (objc:class "NSWindow")}. */
+	public static final String OBJC_CLASS = "CLASS";
+
+	/**
+	 * {@code objc:send} -- sends a message, typed by the selector's own encoding:
+	 * {@code (objc:send receiver "setTitle:" "hello")}.
+	 */
+	public static final String OBJC_SEND = "SEND";
+
+	/**
+	 * {@code objc:define-class} -- registers a class whose methods are Lisp functions:
+	 * {@code (objc:define-class "Name" "NSObject" '(("invoke:" fn)) '("Protocol"))}.
+	 */
+	public static final String OBJC_DEFINE_CLASS = "DEFINE-CLASS";
+
+	/** {@code objc:on-main} -- runs a function on thread 0 and answers its value. */
+	public static final String OBJC_ON_MAIN = "ON-MAIN";
+
+	/** {@code objc:string} -- an {@code NSString} for a Lisp string. */
+	public static final String OBJC_STRING = "STRING";
+
+	/** {@code objc:address} -- an object's address, as an integer. */
+	public static final String OBJC_ADDRESS = "ADDRESS";
+
+	/** {@code objc:objectp} -- whether a value is an Objective-C object reference. */
+	public static final String OBJC_OBJECTP = "OBJECTP";
+
+	/**
+	 * The {@code appkit} package name: a Cocoa widget layer over the {@code objc} verbs,
+	 * written in rontolisp itself ({@code appkit.lisp}, see {@code eval.AppKitLibrary})
+	 * and loaded lazily on the first {@code appkit:} resolution, the {@code linalg}
+	 * pattern. Does not use {@code cl}; every function is external.
+	 */
+	public static final String APPKIT_PKG = "APPKIT";
+
+	/**
 	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF: system
 	 * definitions parsed from {@code .asd} files as plain data -- see
 	 * {@code eval.AsdfSystems}). Real ASDF is not ported; only {@code defsystem} and

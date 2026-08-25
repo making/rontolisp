@@ -1,0 +1,19 @@
+# objc:on-main
+
+`(objc:on-main function)`
+
+Calls a zero-argument function on the process's main thread -- the one AppKit belongs to -- and answers its value; an error it signals is re-signalled to the caller. A function already on the main thread runs inline, so nesting cannot deadlock. Each `objc:send` hops by itself; this batches several into one hop. Part of the macOS-only `objc` package -- the interpreter under `java -jar` and in the `rontolisp` native binary, never a compiled `.class` or `.wasm`; on a machine without the runtime it signals an `error`. See the [macOS GUI guide](../../guides/objc-appkit.md).
+
+```console
+> (objc:on-main (lambda () (+ 1 2)))
+3
+> (objc:on-main
+    (lambda ()
+      (let ((win (objc:send (objc:send "NSWindow" "alloc")
+                            "initWithContentRect:styleMask:backing:defer:"
+                            (list 0 0 400 200) 15 2 nil)))
+        (objc:send win "setReleasedWhenClosed:" nil)
+        (objc:send win "makeKeyAndOrderFront:" nil)
+        win)))
+#<objc NSWindow>
+```

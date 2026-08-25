@@ -26,6 +26,7 @@ import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispJavaObject;
+import am.ik.rontolisp.LispObjcObject;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.macro.FormatRenderer;
@@ -95,6 +96,8 @@ public final class LispEvaluator {
 	private boolean jsonLibraryLoaded = false;
 
 	private boolean linalgLibraryLoaded = false;
+
+	private boolean appkitLibraryLoaded = false;
 
 	private boolean torchLibraryLoaded = false;
 
@@ -2734,6 +2737,17 @@ public final class LispEvaluator {
 			return new LispString(name);
 		}));
 		registerJava();
+		registerObjc();
+	}
+
+	// Registers the interpreter side of the `objc` package (eval/ObjcInterop over
+	// am.ik.objc, the foreign-function binding to the Objective-C runtime). Registered
+	// here beside java: for the same reason -- a callback (a button's action) applies a
+	// user function and so needs the evaluator's apply. Unlike java: it needs no
+	// reflection, so it works in the native binary; every compiler refuses it
+	// (CompileFrontend).
+	private void registerObjc() {
+		ObjcInterop.register(this.globalEnv, (function, callArgs) -> apply(function, callArgs, this.globalEnv));
 	}
 
 	/**
@@ -3891,6 +3905,7 @@ public final class LispEvaluator {
 			case LispFloatArray fa -> fa;
 			case am.ik.rontolisp.LispIntVector iv -> iv;
 			case LispJavaObject j -> j;
+			case LispObjcObject o -> o;
 			case LispFuture f -> f;
 			case am.ik.rontolisp.LispThread th -> th;
 			case LispStream s -> s;
@@ -6984,6 +6999,20 @@ public final class LispEvaluator {
 				// enabled (.kb/gpu.md).
 				if (this.gpu) {
 					LinalgGpu.install(this.globalEnv, this);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The appkit package is a Lisp-source library (appkit.lisp) over the objc:
+			// verbs: load it the same way on the first resolution of an appkit:-qualified
+			// function. Nothing here asks whether this machine has AppKit -- the objc:
+			// call inside the first widget signals if it does not.
+			if (!this.appkitLibraryLoaded && AppKitLibrary.isAppkitQualified(name)) {
+				this.appkitLibraryLoaded = true;
+				for (LispVal form : AppKitLibrary.forms()) {
+					eval(form, this.globalEnv);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {

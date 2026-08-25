@@ -64,6 +64,8 @@ sections:
         title: ニューラルネットワーク（torch）
       - file: guides/java-interop.md
         title: Java 連携
+      - file: guides/objc-appkit.md
+        title: macOS GUI（objc / appkit）
       - file: guides/jvm-library.md
         title: JVM ライブラリのエクスポート（jvm-export / --no-main）
       - file: guides/async.md

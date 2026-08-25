@@ -691,6 +691,36 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `java:field` | `(java:field "java.lang.Integer" "MAX_VALUE")` | マーシャリングされたフィールド値 |
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | callable を背後に持つインターフェースのインスタンス |
 
+## objc パッケージの関数
+
+`objc` パッケージは Foreign Function API で Objective-C ランタイムと AppKit をバインドします。リフレクションを使わないため、`java:` と違って `java -jar` だけでなく**ネイティブバイナリ**でも動作します。**macOS のインタプリタ専用**であり (コンパイル済み `.class` や `.wasm` は拒否します)、**Common Lisp の一部ではありません**。関数は `objc:` 修飾子付きで参照します。各名前は個別のページにリンクしています。マーシャリング、スレッド、所有権、ネイティブバイナリの形テーブルについては [macOS GUI ガイド](../guides/objc-appkit.md)を参照してください。
+
+| 関数 | 例 | 結果 |
+|------|-----|------|
+| `objc:class` | `(objc:class "NSWindow")` | クラス (`#<objc NSWindow>`) |
+| `objc:send` | `(objc:send (objc:string "hi") "length")` | セレクタの宣言型に従ってマーシャリングされた結果 |
+| `objc:define-class` | `(objc:define-class "Target" "NSObject" (list (list "invoke:" fn)))` | メソッドが Lisp 関数であるクラス |
+| `objc:on-main` | `(objc:on-main (lambda () ...))` | メインスレッドで計算された関数の値 |
+| `objc:string` | `(objc:string "hi")` | `NSString` |
+| `objc:address` | `(objc:address obj)` | オブジェクトのアドレス (整数) |
+| `objc:objectp` | `(objc:objectp x)` | Objective-C オブジェクトなら `t` |
+
+## appkit パッケージの関数
+
+`appkit` パッケージは `objc` の上に rontolisp で書かれた Cocoa ウィジェット層で、`linalg` と同様に初回使用時に読み込まれます。macOS のディスプレイが必要で、インタプリタでのみ動作します。**Common Lisp の一部ではありません**。関数は `appkit:` 修飾子付きで参照します。[macOS GUI ガイド](../guides/objc-appkit.md)を参照してください。
+
+| 関数 | 例 | 結果 |
+|------|-----|------|
+| `appkit:window` | `(appkit:window "title" :width 480 :height 300)` | 表示済み・中央配置の `NSWindow` |
+| `appkit:label` | `(appkit:label win "text" :x 20 :y 120 :width 380)` | ウィンドウ内の `NSTextField` ラベル |
+| `appkit:button` | `(appkit:button win "Click" :x 20 :y 40 :on-click (lambda () ...))` | アクションでクロージャを実行する `NSButton` |
+| `appkit:set-text` | `(appkit:set-text label "new text")` | 表示されたテキスト |
+| `appkit:text` | `(appkit:text label)` | コントロールのテキスト (文字列) |
+| `appkit:click` | `(appkit:click button)` | `nil`。クリックと同じようにアクションが実行される |
+| `appkit:close` | `(appkit:close win)` | `nil`。ウィンドウは閉じられる (隠される) |
+| `appkit:visible-p` | `(appkit:visible-p win)` | ウィンドウが画面上にあるかどうか |
+| `appkit:wait` | `(appkit:wait win)` | ウィンドウが閉じられた後に `nil` |
+
 ## asdf パッケージの関数
 
 `asdf` パッケージは、`.asd` 定義から複数ファイルのシステムをロードするための、ASDF の

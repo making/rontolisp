@@ -739,6 +739,45 @@ limitations.
 | `java:field` | `(java:field "java.lang.Integer" "MAX_VALUE")` | the marshalled field value |
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | an interface instance backed by the callable |
 
+## objc Package Functions
+
+The `objc` package binds the Objective-C runtime and AppKit through the foreign
+function API — no reflection, so unlike `java:` it works in the **native
+binary** as well as under `java -jar`. It is **macOS, interpreter only** (a
+compiled `.class` or `.wasm` refuses it) and **not part of Common Lisp**;
+reference its functions with the `objc:` qualifier. Each name below links to its
+own page; the [macOS GUI guide](../guides/objc-appkit.md) covers marshalling,
+threads, ownership and the native binary's shape table.
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `objc:class` | `(objc:class "NSWindow")` | a class (`#<objc NSWindow>`) |
+| `objc:send` | `(objc:send (objc:string "hi") "length")` | the result, marshalled by the selector's declared type |
+| `objc:define-class` | `(objc:define-class "Target" "NSObject" (list (list "invoke:" fn)))` | a class whose methods are Lisp functions |
+| `objc:on-main` | `(objc:on-main (lambda () ...))` | the function's value, computed on the main thread |
+| `objc:string` | `(objc:string "hi")` | an `NSString` |
+| `objc:address` | `(objc:address obj)` | the object's address, an integer |
+| `objc:objectp` | `(objc:objectp x)` | `t` for an Objective-C object |
+
+## appkit Package Functions
+
+The `appkit` package is a Cocoa widget layer written in rontolisp over `objc`,
+loaded on first use like `linalg`; it needs a macOS display and runs on the
+interpreter only. It is **not part of Common Lisp**; reference its functions
+with the `appkit:` qualifier. See the [macOS GUI guide](../guides/objc-appkit.md).
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `appkit:window` | `(appkit:window "title" :width 480 :height 300)` | a shown, centered `NSWindow` |
+| `appkit:label` | `(appkit:label win "text" :x 20 :y 120 :width 380)` | an `NSTextField` label in the window |
+| `appkit:button` | `(appkit:button win "Click" :x 20 :y 40 :on-click (lambda () ...))` | an `NSButton` whose action runs the closure |
+| `appkit:set-text` | `(appkit:set-text label "new text")` | the text, now shown |
+| `appkit:text` | `(appkit:text label)` | the control's text as a string |
+| `appkit:click` | `(appkit:click button)` | `nil`; the action ran as a click would |
+| `appkit:close` | `(appkit:close win)` | `nil`; the window is closed (hidden) |
+| `appkit:visible-p` | `(appkit:visible-p win)` | whether the window is on screen |
+| `appkit:wait` | `(appkit:wait win)` | `nil`, once the window has been closed |
+
 ## asdf Package Functions
 
 The `asdf` package is a limited, API-compatible subset of ASDF for loading

@@ -33,6 +33,7 @@ import am.ik.rontolisp.eval.LinalgGpu;
 import am.ik.rontolisp.eval.LispEvalException;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.ObjcInterop;
 import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLoader;
@@ -1058,6 +1059,43 @@ public final class RontoLispCli {
 	 * @param args the command-line arguments
 	 */
 	public static void main(String[] args) {
+		// In the native binary on macOS, main runs on the process's FIRST thread -- the
+		// one AppKit demands for every window and the one nothing drains. So the binary
+		// does what the java launcher does for a jar: the CLI moves to a second thread
+		// and thread 0 parks in the run loop, which pumps AppKit and the main dispatch
+		// queue the objc: package hops through. Unconditional, because thread 0 cannot
+		// be handed over later; on a JVM, on Linux and in the browser it answers false
+		// and nothing changes (.kb/objc.md).
+		if (ObjcInterop.mainThreadHandOverRequired()) {
+			Thread worker = new Thread(null, () -> {
+				int code;
+				try {
+					code = launch(args);
+				}
+				catch (Throwable ex) {
+					ex.printStackTrace();
+					code = 1;
+				}
+				// Thread 0 never returns from the run loop, so the exit code has to
+				// leave through System.exit whatever its value.
+				System.exit(code);
+			}, "main", WORKER_STACK_BYTES);
+			worker.start();
+			ObjcInterop.parkMainThread();
+			return;
+		}
+		exit(launch(args));
+	}
+
+	/**
+	 * The stack of the thread the CLI runs on when thread 0 is handed over: at least what
+	 * the OS gives the first thread (8 MiB), since the interpreter's recursion depth is
+	 * the program's.
+	 */
+	private static final long WORKER_STACK_BYTES = 16L << 20;
+
+	/** The whole command line, answering the exit code. */
+	private static int launch(String[] args) {
 		// By default stdout stays auto-flushing so each REPL input gets an immediate
 		// response. Opt in to a block-buffered, non-auto-flushing stream with
 		// --buffered-output: flushing on every print/format call interleaves badly when
@@ -1073,8 +1111,7 @@ public final class RontoLispCli {
 		}
 		if (!buffered) {
 			RontoLispCli cli = new RontoLispCli(System.in, System.out);
-			exit(runReporting(cli, args));
-			return;
+			return runReporting(cli, args);
 		}
 		PrintStream bufferedOut = new PrintStream(
 				new BufferedOutputStream(new FileOutputStream(FileDescriptor.out), 1 << 16), false,
@@ -1082,14 +1119,12 @@ public final class RontoLispCli {
 		System.setOut(bufferedOut);
 		Runtime.getRuntime().addShutdownHook(new Thread(bufferedOut::flush));
 		RontoLispCli cli = new RontoLispCli(System.in, bufferedOut);
-		int code;
 		try {
-			code = runReporting(cli, args);
+			return runReporting(cli, args);
 		}
 		finally {
 			bufferedOut.flush();
 		}
-		exit(code);
 	}
 
 	/**

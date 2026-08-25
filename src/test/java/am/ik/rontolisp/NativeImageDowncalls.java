@@ -90,10 +90,32 @@ public final class NativeImageDowncalls {
 		return missing;
 	}
 
+	/**
+	 * The upcall shapes with no entry in the checked-in file: what a native image would
+	 * refuse to build a stub for. An upcall stub is registered under
+	 * {@code foreign.upcalls}, separately from the downcalls, and has no critical option.
+	 * @param shapes the shapes bound with {@code Linker.upcallStub}
+	 * @return the unregistered ones, spelled as the file spells them
+	 */
+	public static List<String> missingUpcalls(Set<FunctionDescriptor> shapes) {
+		Set<String> registered = registered("upcalls");
+		List<String> missing = new ArrayList<>();
+		for (FunctionDescriptor descriptor : shapes) {
+			if (!registered.contains(signature(descriptor, false))) {
+				missing.add(signature(descriptor, false));
+			}
+		}
+		return missing;
+	}
+
 	/** Every {@code foreign.downcalls} entry, in this class's own spelling. */
 	private static Set<String> registered() {
-		JsonNode downcalls = JsonMapper.builder().build().readTree(read(METADATA)).path("foreign").path("downcalls");
-		assertThat(downcalls.size()).as("foreign.downcalls entries in %s", METADATA).isPositive();
+		return registered("downcalls");
+	}
+
+	private static Set<String> registered(String section) {
+		JsonNode downcalls = JsonMapper.builder().build().readTree(read(METADATA)).path("foreign").path(section);
+		assertThat(downcalls.size()).as("foreign.%s entries in %s", section, METADATA).isPositive();
 		Set<String> registered = new LinkedHashSet<>();
 		for (JsonNode entry : downcalls) {
 			List<String> parameters = new ArrayList<>();
@@ -131,6 +153,7 @@ public final class NativeImageDowncalls {
 			case ValueLayout.OfDouble ignored -> "jdouble";
 			case GroupLayout group -> group.memberLayouts()
 				.stream()
+				.filter(member -> !(member instanceof java.lang.foreign.PaddingLayout))
 				.map(NativeImageDowncalls::type)
 				.collect(Collectors.joining(",", "struct(", ")"));
 			default -> throw new IllegalStateException("no metadata spelling for " + layout);

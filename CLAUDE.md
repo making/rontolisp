@@ -38,13 +38,16 @@ Source string
     -> WasmLispCompiler (codegen.wasm) -> byte[] (.wasm)
 ```
 
-`am.ik.jvm`, `am.ik.wasm`, `am.ik.wit` and `am.ik.gpu` are **language-independent**
+`am.ik.jvm`, `am.ik.wasm`, `am.ik.wit`, `am.ik.gpu` and `am.ik.objc` are **language-independent**
 libraries; none may import rontolisp packages or external dependencies. `am.ik.gpu` is the
 device half of `--gpu` -- CUDA and Metal behind one sealed `GpuDevice` seam -- and imports
 nothing at all (`.kb/gpu.md`); the interpreter reaches it
 through `eval/LinalgGpu` -> `eval/LinalgGpuKernels`, and the JVM backend EMBEDS its class
 files in the compiled output (`codegen/jvm/JvmGpuRuntimeBuilder`) -- so a class added to
-that package must be added to the list that travels.
+that package must be added to the list that travels. `am.ik.objc` is the Objective-C runtime and
+AppKit through FFM (`.kb/objc.md`), reached from `eval/ObjcInterop` -> `eval/ObjcBridge` only,
+so `-Pweb` substitutes the one entry class; the `appkit` widget layer is `appkit.lisp`, shipped
+like `linalg.lisp`.
 
 Package dependency direction (no cycles allowed):
 
@@ -53,12 +56,13 @@ cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit
 codegen.jvm -> compiler, macro, am.ik.jvm, am.ik.gpu
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, rontolisp (AST types only), am.ik.gpu
+eval -> macro, compiler, reader, rontolisp (AST types only), am.ik.gpu, am.ik.objc
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 format -> (nothing)
 runtime -> (nothing)
 am.ik.gpu -> (nothing)
+am.ik.objc -> (nothing)
 ```
 
 - `runtime` imports nothing at all, project or otherwise: its classes are COPIED into a
@@ -191,6 +195,8 @@ exercise:
 ## After Task Completion
 
 - Format Lisp: `java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar format examples/ src/main/resources/ size-report/programs/`
+- A GUI change (`objc:`/`appkit:`, `RontoLispCli.main`'s thread hand-over) is verified by hand on
+  BOTH `java -jar` and the native binary with `examples/macos/counter.lisp` -- no test opens a window.
 - Web profile: `./mvnw -Pweb compile` whenever `src/web/java` or a signature it overrides
   changed -- `./mvnw test` does not compile it. Run it AFTER the test suite (or `clean` in
   between): it leaves the web source set in `target/classes`, and a later `./mvnw test`

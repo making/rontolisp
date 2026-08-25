@@ -13,6 +13,7 @@ runs identically on the interpreter, the JVM and WASM.
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API on top |
 | [`jvm/`](jvm) | A Java-callable library class, `java:` interop and Swing GUIs (JVM only) |
+| [`macos/`](macos) | A native Cocoa window through the built-in `appkit` / `objc` packages (macOS interpreter only -- `java -jar` and the native binary) |
 | [`browser/`](browser) | Browser demos: compile to WASM, run in a page |
 | [`count-vowels/`](count-vowels), [`wit/`](wit) | Crossing the WASM boundary: exporting to a host, implementing a WIT world, calling one, composing with Rust |
 | [`asdf/`](asdf) | Loading real third-party libraries with `asdf:load-system` / `ql:quickload` |
@@ -160,6 +161,24 @@ See the [Java interop guide](../doc/en/guides/java-interop.md).
 | [`life-gui.lisp`](jvm/life-gui.lisp) | Game of Life animated on a `javax.swing.Timer`, loading the same `life-core.lisp` as `life.lisp` |
 | [`minesweeper-swing.lisp`](browser/minesweeper/minesweeper-swing.lisp) | Minesweeper on the desktop, loading the same core as the browser build |
 
+## A native macOS window — `macos/`
+
+A Cocoa window with no Swing, no `java:` and nothing installed: the built-in
+`appkit` package is a widget layer written in rontolisp over `objc`, which binds
+AppKit through the foreign function API. Interpreter only, on macOS with a
+display — under `java -jar` **and** in the `rontolisp` native binary, which is
+where `java:` cannot interpret at all. Not in `examples.yaml`: it opens a window.
+See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
+
+| File | What it demonstrates |
+| --- | --- |
+| [`counter.lisp`](macos/counter.lisp) | A window, a label and a button whose action is a Lisp closure; one raw `objc:send` for what the widget layer lacks; `appkit:wait` so the script outlives its last form |
+
+```bash
+java -jar $JAR examples/macos/counter.lisp
+./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
+```
+
 ## Browser demos
 
 A Lisp program compiled to `.wasm` and driven from plain HTML/JavaScript —
@@ -299,7 +318,7 @@ the whole suite.
 
 Adding an example means appending an entry to `examples.yaml` — no Java changes.
 To regenerate an externalised expected file, run the example and save its
-stdout. GUI examples (`jvm/` and the `browser/` demos) are excluded: they open a
+stdout. GUI examples (`jvm/`, `macos/` and the `browser/` demos) are excluded: they open a
 window or run in a page and cannot be checked headless — though the part of one
 that is not GUI can be, which is what
 [`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp)
