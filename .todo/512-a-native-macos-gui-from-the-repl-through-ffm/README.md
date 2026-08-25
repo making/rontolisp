@@ -10,7 +10,7 @@ Xcode, a bundle, or any dependency -- AppKit, `libobjc` and libdispatch are in t
 
 | file | what it answers |
 |---|---|
-| `AppKitSpike.java` | the binding: window, label, target/action button, and the main-thread pump. Static methods, so `java:static` can reach them |
+| `AppKitSpike.java` | the binding: window, label, target/action button, and the main-thread pump. Static methods only so a probe outside `src/` can be reached from Lisp at all -- the feature itself ships a `gui` package and no `java:` |
 | `appkit-spike.lisp` | the same window driven from the rontolisp interpreter, with the button handler written in Lisp |
 | `NativeImageSpike.java` | the native-image case: `main` IS thread 0, the REPL moves off it, thread 0 idles in `CFRunLoopRun` |
 | `reachability-metadata.json` | the `downcalls` + `upcalls` registration `NativeImageSpike` needs. The `upcalls` section is the shape the project does not have yet |

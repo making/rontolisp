@@ -39,8 +39,10 @@ window. FFM works there; the spike proves it.
 3. **The same in a GraalVM native image**, with an `upcalls` section added to
    `reachability-metadata.json` beside the existing `downcalls`.
 4. **The whole loop from the rontolisp interpreter**: `appkit-spike.lisp` opens the window
-   through `java:static` over the spike facade and passes a **Lisp lambda** as the button
-   handler (auto-proxied to `Runnable`); clicking it runs Lisp, which sets the label text.
+   and passes a **Lisp lambda** as the button handler; clicking it runs Lisp, which sets
+   the label text. The probe reaches the facade through `java:static` only because a probe
+   may not add anything under `src/` -- the shipped surface is a `gui` package (below), and
+   `java:` is scaffolding this item throws away.
 
 ## The mechanics that decide the design
 
@@ -82,12 +84,21 @@ architectural fact everything else follows from.
   `eval -> am.ik.appkit`.
 - **One reference from `eval`**, the way `eval/LinalgGpu` is the single reference to
   `am.ik.gpu`, so `-Pweb` can cut it (`src/web/java` has no AppKit and must not carry it).
-- **A `gui` package of builtins** (`LispNames` + `PackageRegistry`, the way `linalg` and
-  `java` are registered), not a `java:`-style reflective surface. Sketch:
+- **A dedicated `gui` package of ordinary builtins -- decided, not an option** (user,
+  2026-08-25). The shipping surface is `gui:` symbols registered the way `linalg` is:
+  `LispNames` constants, a `PackageRegistry` entry so they are not misclassified as user
+  symbols, `Environment.createGlobal()` definitions, and `BuiltinFunctionWrappers` entries
+  so each is a first-class value -- the "Adding a Built-in Function" workflow in CLAUDE.md,
+  end to end. **`java:static` / `java:proxy` appear ONLY in the probe**, because a probe
+  may not add anything under `src/`; nothing in the shipped feature goes through the
+  reflective bridge, and a user never writes a class name or a signature string. Sketch:
   `(gui:window "title" :width 480 :height 260)`, `(gui:label win text :at (x y w h))`,
   `(gui:button win "Click me" :at (...) :on-click (lambda () ...))`, `(gui:set-text v s)`,
-  `(gui:close win)`. A handler is an ordinary Lisp closure; the binding keeps it alive and
-  applies it through the evaluator, exactly as `java:proxy` does.
+  `(gui:close win)`. A handler is an ordinary Lisp closure applied through the evaluator
+  (`LispEvaluator.registerJava()` is the precedent for a builtin that needs `apply`), a
+  window is an opaque Lisp value rather than a `LispJavaObject`, and the whole surface must
+  work with `java.desktop` absent and reflection unavailable -- which is exactly what makes
+  it work in the native binary.
 - **Interpreter first.** The JVM output can follow through an embedded blob
   (`JvmGpuRuntimeBuilder` / `JvmJavaRuntimeBuilder` are both precedents -- the class list
   that travels must then include `am.ik.appkit`). Both WASM backends refuse the whole
