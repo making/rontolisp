@@ -264,9 +264,11 @@ examples:
 
   # --- llama2: llama2.c ported whole (see its README.md) ----------------------
   # Both entries run under --simd (the interpreter's scalar kernels take ~15 s per
-  # stories15M token) with the knobs in the environment (a program has no argv), and
-  # the threaded legs (interpreter, JVM) under --simd --parallel as well: the
-  # row-parallel GEMV must tell the same story as the serial one, byte for byte.
+  # stories15M token), and the threaded legs (interpreter, JVM) under --simd
+  # --parallel as well: the row-parallel GEMV must tell the same story as the
+  # serial one, byte for byte. The first entry passes run.c's knobs on the
+  # COMMAND LINE and the second the same knobs in the ENVIRONMENT, which is what
+  # the program falls back to, so both halves of it are covered.
   # Greedy decoding, so the story is byte-identical on every backend AND to the C
   # program's -- the whole point of an `equals`.
   - path: llama2/llama2.lisp
@@ -275,12 +277,7 @@ examples:
     workFiles: [stories260K.bin, tok512.bin]
     simd: true
     parallel: true
-    env:
-      LLAMA2_CHECKPOINT: stories260K.bin
-      LLAMA2_TOKENIZER: tok512.bin
-      LLAMA2_PROMPT: Once upon a time
-      LLAMA2_TEMPERATURE: "0"
-      LLAMA2_STEPS: "40"
+    args: ["stories260K.bin", "-z", "tok512.bin", "-i", "Once upon a time", "-t", "0", "-n", "40"]
     note: run.c ported whole -- checkpoint loader (read-sequence over packed single-float arrays), tokenizer + BPE encoder, forward pass, sampler, generate -- over the checked-in 1 MB stories260K model. Greedy (temperature 0), 40 tokens, so the story is the same on every backend and in `run stories260K.bin -z tok512.bin -t 0 -n 40 -i "Once upon a time"`. The tok/s line goes to stderr and is not checked
     expect:
       equals: |

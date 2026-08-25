@@ -18,32 +18,36 @@ model the llama2.c README demos, `stories15M.bin` (60 MB), is one script away:
 
 ## Running
 
-The knobs are run.c's flags, read from the environment (a rontolisp program has
-no argv yet):
+The knobs are run.c's own flags, read with `uiop:command-line-arguments`. Each
+one falls back to an `LLAMA2_*` environment variable, for a host that hands the
+program no command line (a browser shim, an embedder):
 
-| variable | run.c flag | default |
+| run.c flag | variable | default |
 | --- | --- | --- |
-| `LLAMA2_CHECKPOINT` | the positional checkpoint | `stories15M.bin` |
-| `LLAMA2_TOKENIZER` | `-z` | `tokenizer.bin` |
-| `LLAMA2_PROMPT` | `-i` | empty |
-| `LLAMA2_STEPS` | `-n` | 256 |
-| `LLAMA2_TEMPERATURE` | `-t` | 1.0 (0 = greedy) |
-| `LLAMA2_TOPP` | `-p` | 0.9 |
-| `LLAMA2_SEED` | `-s` | the clock |
+| the positional checkpoint | `LLAMA2_CHECKPOINT` | `stories15M.bin` |
+| `-z` | `LLAMA2_TOKENIZER` | `tokenizer.bin` |
+| `-i` | `LLAMA2_PROMPT` | empty |
+| `-n` | `LLAMA2_STEPS` | 256 |
+| `-t` | `LLAMA2_TEMPERATURE` | 1.0 (0 = greedy) |
+| `-p` | `LLAMA2_TOPP` | 0.9 |
+| `-s` | `LLAMA2_SEED` | the clock |
 
-From this directory, on all four backends:
+From this directory, on all four backends. The interpreter takes the program's
+own arguments after `--` (everything before it is the compiler's); a compiled
+artifact takes them straight after itself:
 
 ```bash
-export LLAMA2_PROMPT="Once upon a time" LLAMA2_TEMPERATURE=0
+ARGS='stories15M.bin -t 0 -i "Once upon a time"'
 
-rontolisp llama2.lisp --simd                                    # interpreter
-rontolisp llama2.lisp -o Prog.class --simd && java --add-modules jdk.incubator.vector Prog
+rontolisp llama2.lisp --simd -- $ARGS                            # interpreter
+rontolisp llama2.lisp -o Prog.class --simd && \
+  java --add-modules jdk.incubator.vector Prog $ARGS
 rontolisp llama2.lisp -o Prog.class --gpu --simd && \
-  java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog   # + an NVIDIA GPU
+  java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog $ARGS  # + an NVIDIA GPU
 rontolisp llama2.lisp -o llama2.wasm --simd && \
-  wasmtime run -W gc --dir . --env LLAMA2_PROMPT --env LLAMA2_TEMPERATURE llama2.wasm
+  wasmtime run -W gc --dir . llama2.wasm $ARGS
 rontolisp llama2.lisp -o llama2.wasm --simd --component && \
-  wasmtime run -W gc --dir . --env LLAMA2_PROMPT --env LLAMA2_TEMPERATURE llama2.wasm
+  wasmtime run -W gc --dir . llama2.wasm $ARGS
 ```
 
 Every one of them prints
@@ -54,8 +58,8 @@ Lily wanted to play with the ball...
 ```
 
 which is what `./run stories15M.bin -t 0 -i "Once upon a time"` prints -- the
-whole 256-token story is byte-identical. The small model runs the same way with
-`LLAMA2_CHECKPOINT=stories260K.bin LLAMA2_TOKENIZER=tok512.bin`.
+whole 256-token story is byte-identical, and so is the command line. The small
+model runs the same way with `stories260K.bin -z tok512.bin`.
 
 ## Why `--simd` (and `--parallel`, and `--gpu`)
 

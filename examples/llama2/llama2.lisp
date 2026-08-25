@@ -19,27 +19,32 @@
 ;;;;
 ;;;; RUN IT
 ;;;; ------
-;;;; The knobs are run.c's command-line flags, read from the environment (a
-;;;; rontolisp program has no argv yet): LLAMA2_CHECKPOINT (the positional
-;;;; checkpoint, default stories15M.bin), LLAMA2_TOKENIZER (-z, default
-;;;; tokenizer.bin), LLAMA2_PROMPT (-i), LLAMA2_STEPS (-n, default 256),
-;;;; LLAMA2_TEMPERATURE (-t, default 1.0), LLAMA2_TOPP (-p, default 0.9),
-;;;; LLAMA2_SEED (-s, default: the clock). From this directory:
+;;;; The knobs are run.c's own command-line flags, read with
+;;;; uiop:command-line-arguments: the positional checkpoint (default
+;;;; stories15M.bin), -z the tokenizer (default tokenizer.bin), -i the prompt,
+;;;; -n the steps (default 256), -t the temperature (default 1.0), -p top-p
+;;;; (default 0.9) and -s the seed (default: the clock). Each one falls back to
+;;;; an LLAMA2_* environment variable (LLAMA2_CHECKPOINT, LLAMA2_TOKENIZER,
+;;;; LLAMA2_PROMPT, LLAMA2_STEPS, LLAMA2_TEMPERATURE, LLAMA2_TOPP, LLAMA2_SEED)
+;;;; for a host that has no command line to give. From this directory -- the
+;;;; interpreter takes the program's own arguments after `--`, a compiled
+;;;; artifact simply after itself:
 ;;;;
-;;;;   export LLAMA2_PROMPT="Once upon a time" LLAMA2_TEMPERATURE=0
-;;;;   rontolisp llama2.lisp --simd                                  # interpreter
-;;;;   rontolisp llama2.lisp -o Prog.class --simd && java --add-modules jdk.incubator.vector Prog
+;;;;   ARGS='stories15M.bin -t 0 -i "Once upon a time"'
+;;;;   rontolisp llama2.lisp --simd -- $ARGS                          # interpreter
+;;;;   rontolisp llama2.lisp -o Prog.class --simd && \
+;;;;     java --add-modules jdk.incubator.vector Prog $ARGS
 ;;;;   rontolisp llama2.lisp -o Prog.class --gpu --simd && \
-;;;;     java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog
+;;;;     java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog $ARGS
 ;;;;   rontolisp llama2.lisp -o llama2.wasm --simd && \
-;;;;     wasmtime run -W gc --dir . --env LLAMA2_PROMPT --env LLAMA2_TEMPERATURE llama2.wasm
+;;;;     wasmtime run -W gc --dir . llama2.wasm $ARGS
 ;;;;   rontolisp llama2.lisp -o llama2.wasm --simd --component && \
-;;;;     wasmtime run -W gc --dir . --env LLAMA2_PROMPT --env LLAMA2_TEMPERATURE llama2.wasm
+;;;;     wasmtime run -W gc --dir . llama2.wasm $ARGS
 ;;;;
 ;;;; Temperature 0 is greedy decoding: the story is the same on every run, every
 ;;;; backend and in the C program (the whole 256-token story of the prompt above
-;;;; is byte-identical on all of them). At a temperature above 0 the same
-;;;; LLAMA2_SEED picks the same story as `run stories15M.bin -s SEED`.
+;;;; is byte-identical on all of them). At a temperature above 0 the same seed
+;;;; picks the same story as `run stories15M.bin -s SEED`.
 ;;;;
 ;;;; WHERE THE TIME GOES, AND WHY --simd (AND --gpu)
 ;;;; ------------------------------------------------
@@ -79,7 +84,13 @@
 ;;;; `read-sequence` into packed single-float arrays -- one bulk transfer per
 ;;;; weight matrix, ~0.2 s on every backend.
 
-;;; --- knobs (run.c's flags, from the environment) -----------------------------
+;;; --- knobs (run.c's flags, then the environment) -----------------------------
+;;; `llama2 stories15M.bin -z tokenizer.bin -t 0 -n 40 -i "Once upon a time"`,
+;;; the C program's own command line, on every backend. The LLAMA2_* variables
+;;; stay as the fallback: a host that hands the program no command line (a
+;;; browser shim, an embedder) still has an environment to set.
+(defparameter *args* (uiop:command-line-arguments))
+
 (defun env-or (name default)
   (let ((v (uiop:getenv name))) (if (and v (> (length v) 0)) v default)))
 
@@ -87,13 +98,36 @@
   (let ((v (uiop:getenv name)))
     (if (and v (> (length v) 0)) (read-from-string v) default)))
 
-(defparameter *checkpoint* (env-or "LLAMA2_CHECKPOINT" "stories15M.bin"))
-(defparameter *tokenizer* (env-or "LLAMA2_TOKENIZER" "tokenizer.bin"))
-(defparameter *prompt* (env-or "LLAMA2_PROMPT" ""))
-(defparameter *steps* (env-number "LLAMA2_STEPS" 256))
-(defparameter *temperature* (env-number "LLAMA2_TEMPERATURE" 1.0))
-(defparameter *topp* (env-number "LLAMA2_TOPP" 0.9))
-(defparameter *seed* (env-number "LLAMA2_SEED" (get-universal-time)))
+(defun flag-value (flag)
+  ;; The word after FLAG on the command line, or nil when it is not there (a
+  ;; trailing flag with nothing after it counts as absent, as in run.c).
+  (do ((rest *args* (cdr rest)))
+      ((null (cdr rest)) nil)
+    (if (string= (car rest) flag) (return (car (cdr rest))))))
+
+(defun checkpoint-argument ()
+  ;; run.c's positional checkpoint: the first argument, when it is not a flag.
+  (let ((head (car *args*)))
+    (if (and head (> (length head) 0) (not (char= (char head 0) #\-)))
+        head
+        nil)))
+
+(defun flag-or-env (flag name default)
+  (or (flag-value flag) (env-or name default)))
+
+(defun flag-or-env-number (flag name default)
+  (let ((v (flag-value flag)))
+    (if v (read-from-string v) (env-number name default))))
+
+(defparameter *checkpoint*
+  (or (checkpoint-argument) (env-or "LLAMA2_CHECKPOINT" "stories15M.bin")))
+(defparameter *tokenizer* (flag-or-env "-z" "LLAMA2_TOKENIZER" "tokenizer.bin"))
+(defparameter *prompt* (flag-or-env "-i" "LLAMA2_PROMPT" ""))
+(defparameter *steps* (flag-or-env-number "-n" "LLAMA2_STEPS" 256))
+(defparameter *temperature* (flag-or-env-number "-t" "LLAMA2_TEMPERATURE" 1.0))
+(defparameter *topp* (flag-or-env-number "-p" "LLAMA2_TOPP" 0.9))
+(defparameter *seed*
+  (flag-or-env-number "-s" "LLAMA2_SEED" (get-universal-time)))
 
 ;;; --- little-endian binary reading -------------------------------------------
 ;;; The checkpoint is raw little-endian int32 / float32, exactly what run.c
