@@ -30,6 +30,11 @@
 # per-example fields (all optional except path/backends)
 # ------------------------------------------------------
 #   args         command-line arguments appended when the program is run
+#   os           the OSes the example can RUN on (mac / linux / windows; one
+#                token or a list). Omitted = everywhere, which is what almost
+#                every example is. It gates the RUN legs ONLY -- a COMPILE leg
+#                never executes the program, so it stays green on every machine.
+#                A gated-out leg is a skip, not a failure.
 #   stdin        text fed to the program's standard input (inline)
 #   stdinFile    ...or from a file, resolved under examples/
 #   expect       how to check RUN output -- exactly one of:
@@ -69,7 +74,10 @@
 # minesweeper-core-test.lisp loads and checks with rove. A third one is of a
 # different kind: browser/minesweeper's macOS front-end has a jvm-compile leg,
 # because a GUI that cannot RUN here can still be COMPILED here, and compiling
-# it is exactly what the objc:/appkit: JVM path has to keep doing.
+# it is exactly what the objc:/appkit: JVM path has to keep doing. A fourth,
+# macos/objc-runtime.lisp, opens no window at all: it is listed with its output
+# checked and `os: [mac]`, so the RUN legs gate on the platform the Objective-C
+# runtime needs while its compile leg keeps running everywhere.
 
 examples:
   # --- console: pure, cross-backend algorithms & I/O -------------------------
@@ -540,6 +548,38 @@ examples:
       the literal (load "minesweeper-core.lisp"), the (require :cocoa
       "../../macos/cocoa.lisp") splice, the objc:define-class callbacks the cocoa
       library builds its clickable grid from, and the embedded am.ik.objc blob.
+
+  # --- macos: the objc package with no window in it ---------------------------
+  - path: macos/objc-runtime.lisp
+    backends: [interpreter, jvm, jvm-compile]
+    os: [mac]
+    note: >-
+      the only macos/ example that opens nothing -- introspection, key-value
+      coding, a class defined at run time whose isEqual: Foundation calls -- so
+      it is the one whose OUTPUT can be checked, which is what os: [mac] is for:
+      the Objective-C runtime is macOS-only and this harness runs everywhere, so
+      the RUN legs gate on the platform and the jvm-compile leg does not. That
+      compile leg pins what minesweeper-macos cannot: a program that gates the
+      embedded am.ik.objc blob on through the bare objc: verbs, with no appkit:
+      reference and so no AppKitLibrary splice. The check is `contains` rather
+      than a whole expected file because section 2 prints the PRIVATE class the
+      runtime chose (__NSCFString, __NSArrayM, NSTaggedPointerString) -- true
+      today, Apple's to rename -- so the needles pin the stable tail of the
+      chain and every other section verbatim.
+    expect:
+      contains:
+        - "NSString        length=11  doubleValue=0.0  uppercaseString=OBJECTIVE-C"
+        - "<- NSString <- NSObject"
+        - "-[NSString rangeOfString:]   returns {_NSRange=QQ}, takes @ : @"
+        - "so rangeOfString: answers    (10 1)"
+        - "valueForKey: \"length\"    11, 4, 9"
+        - "keyPath \"@max.length\"    11"
+        - "sorted by \"length\"       Lisp, Smalltalk, Objective-C"
+        - "the dictionary by key    Brad Cox, 1984"
+        - "containsObject: a seven -> T"
+        - "indexOfObject: a seven -> 1"
+        - "observed rontolisp.card.played carrying the ace"
+        - "no window was opened, and nothing above declared a type"
 
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp

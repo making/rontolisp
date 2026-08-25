@@ -66,6 +66,31 @@
 #<objc __NSCFNumber>
 ```
 
+### ランタイムは問い合わせられる対象
+
+Objective-C が実行のその瞬間に決めることは、その瞬間に読み出せます。レシーバがある名前に
+応えるか、実際のクラスは何か、メソッドがどんな型を宣言しているか、あるキーの下に何がある
+か。
+
+```console
+> (objc:send (objc:string "hi") "respondsToSelector:" "uppercaseString")
+T
+> (objc:send (objc:send (objc:send (objc:string "hi") "class") "description") "UTF8String")
+"NSTaggedPointerString"
+> (objc:send (objc:send (objc:string "hi") "methodSignatureForSelector:" "hasPrefix:") "methodReturnType")
+"B"
+> (objc:send (objc:send (objc:string "hello") "valueForKey:" "length") "doubleValue")
+5.0
+```
+
+2 行目はクラスクラスタを現行犯で捉えたものです。`objc:string` は `NSString` を求め、値に
+応じて選ばれた非公開のサブクラスが返っています。`examples/macos/objc-runtime.lisp` は、この
+側面のパッケージ全体を 1 つの実行可能なファイルにまとめたものです。文字列として持ち回り
+`respondsToSelector:` で守るセレクタ、辿るクラス階層、読み出すメソッド自身の型エンコーディ
+ング、キー値コーディングと文字列キーによるソート、`containsObject:` が呼び出す `isEqual:` が
+Lisp のクロージャである実行時定義クラス、そして `NSNotificationCenter` のオブザーバ。ウィン
+ドウを開かない唯一の `objc:` の例でもあります。
+
 ### セレクタ自身のエンコーディングで型付け
 
 `objc:send` はシグネチャを推測しません。Objective-C ランタイムはすべてのメソッドを完全に記述しており (`method_getTypeEncoding` は例えば `initWithContentRect:styleMask:backing:defer:` に対して `@68@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16Q48Q56B64` を返します)、各引数と結果はその宣言に従ってマーシャリングされます:

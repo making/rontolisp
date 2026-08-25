@@ -57,8 +57,9 @@ class ObjcNativeImageForeignConfigTest {
 	 * Every selector the widget layer and the documented examples send: a class, a
 	 * selector, and whether it is a class method. Kept in step with {@code appkit.lisp},
 	 * {@code doc/en/guides/objc-appkit.md} and the {@code cocoa} example library
-	 * ({@code examples/macos/cocoa.lisp}) by hand; a new selector there is a row here, so
-	 * the binary is known to serve it before it ships.
+	 * ({@code examples/macos/cocoa.lisp}) and the runtime example
+	 * ({@code examples/macos/objc-runtime.lisp}) by hand; a new selector there is a row
+	 * here, so the binary is known to serve it before it ships.
 	 */
 	private static final List<String[]> SENT = List.of(cls("NSApplication", "sharedApplication"),
 			inst("NSApplication", "setActivationPolicy:"), inst("NSApplication", "finishLaunching"),
@@ -90,7 +91,25 @@ class ObjcNativeImageForeignConfigTest {
 			inst("NSBox", "setNeedsDisplay:"), cls("NSAppearance", "appearanceNamed:"),
 			inst("NSWindow", "setAppearance:"), inst("NSWindow", "setTitlebarAppearsTransparent:"),
 			cls("NSTimer", "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"),
-			inst("NSTimer", "invalidate"));
+			inst("NSTimer", "invalidate"),
+			// examples/macos/objc-runtime.lisp: the window-free half of the package --
+			// introspection, key-value coding, a run-time class Foundation calls back
+			// into
+			inst("NSObject", "description"), inst("NSObject", "class"), inst("NSObject", "superclass"),
+			cls("NSObject", "alloc"), inst("NSObject", "methodSignatureForSelector:"), inst("NSObject", "valueForKey:"),
+			inst("NSObject", "setValue:forKey:"), inst("NSString", "stringByAppendingString:"),
+			inst("NSString", "hasPrefix:"), inst("NSString", "doubleValue"),
+			inst("NSMethodSignature", "numberOfArguments"), inst("NSMethodSignature", "methodReturnType"),
+			inst("NSMethodSignature", "getArgumentTypeAtIndex:"), cls("NSArray", "arrayWithObject:"),
+			inst("NSArray", "count"), inst("NSArray", "objectAtIndex:"), inst("NSArray", "componentsJoinedByString:"),
+			inst("NSArray", "containsObject:"), inst("NSArray", "indexOfObject:"), inst("NSArray", "valueForKeyPath:"),
+			inst("NSArray", "sortedArrayUsingDescriptors:"), cls("NSMutableArray", "array"),
+			inst("NSMutableArray", "addObject:"), cls("NSMutableDictionary", "dictionary"),
+			cls("NSSortDescriptor", "sortDescriptorWithKey:ascending:"), cls("NSNotificationCenter", "defaultCenter"),
+			inst("NSNotificationCenter", "addObserver:selector:name:object:"),
+			inst("NSNotificationCenter", "postNotificationName:object:"),
+			inst("NSNotificationCenter", "removeObserver:"), inst("NSNotification", "name"),
+			inst("NSNotification", "object"));
 
 	private static String[] cls(String name, String selector) {
 		return new String[] { name, selector, "class" };

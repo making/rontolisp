@@ -89,6 +89,31 @@ with a handful of generic verbs.
 #<objc __NSCFNumber>
 ```
 
+### The runtime is something you can ask
+
+Everything Objective-C settles at the moment it happens is also readable at that moment:
+whether a receiver answers to a name, which class it really is, what types a method
+declares, what sits under a key.
+
+```console
+> (objc:send (objc:string "hi") "respondsToSelector:" "uppercaseString")
+T
+> (objc:send (objc:send (objc:send (objc:string "hi") "class") "description") "UTF8String")
+"NSTaggedPointerString"
+> (objc:send (objc:send (objc:string "hi") "methodSignatureForSelector:" "hasPrefix:") "methodReturnType")
+"B"
+> (objc:send (objc:send (objc:string "hello") "valueForKey:" "length") "doubleValue")
+5.0
+```
+
+The second line catches a class cluster in the act — `objc:string` asked for an `NSString`
+and got a private subclass chosen for the value. `examples/macos/objc-runtime.lisp` is this
+whole side of the package in one runnable file: selectors carried around as strings and
+guarded by `respondsToSelector:`, class hierarchies walked, a method's own type encoding
+read back, key-value coding and a sort by a text key, a class defined at run time whose
+`isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter`
+observer. It is the one `objc:` example that opens no window.
+
 ### Typed by the selector's own encoding
 
 `objc:send` never guesses a signature. The Objective-C runtime describes every

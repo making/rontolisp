@@ -10,7 +10,13 @@ interpreter the way `linalg.lisp` is (`.kb/linalg.md`): a bare REPL types
 description is `doc/{en,ja}/guides/objc-appkit.md`; the examples are
 `examples/macos/counter.lisp` and, over the reusable `cocoa` helper package
 `examples/macos/cocoa.lisp`, `examples/browser/minesweeper/minesweeper-macos.lisp`
-(GUI, so neither is in `examples.yaml`).
+(GUI, so neither is in `examples.yaml`), plus `examples/macos/objc-runtime.lisp` --
+the window-free half (introspection, NSMethodSignature, KVC, a run-time class whose
+`isEqual:` Foundation calls, an NSNotificationCenter observer), which opens nothing and
+is in `examples.yaml` under `os: [mac]` -- the field that gates a RUN leg on the platform
+and leaves the COMPILE legs alone, added for it -- so its output is checked on a Mac and
+its lowering everywhere: the one program that gates the blob on through the bare `objc:`
+verbs, with no `appkit:` reference and so no splice.
 
 What it is worth: the `rontolisp` native binary is the REPL people run, and `java:` cannot
 be INTERPRETED there at all (no reflection metadata). FFM needs none, so this is the one
@@ -85,7 +91,8 @@ homogeneous AppKit structs -- and `ObjcRuntime.send` binds one `objc_msgSend` ha
 distinct shape (Apple's arm64 rule: never through the variadic declaration; an `NSRect`
 through a `long` shape is a SIGBUS) and calls it with `invokeWithArguments`, which a
 native image serves (probed 2026-08-25). So a wrong selector, arity or operand type is an
-`ObjcException` -> a Lisp `error`, never a crash. Blocks (`@?`), unions, bitfields and
+`ObjcException` -> a Lisp `error`, never a crash -- with one hole, a VARIADIC selector,
+under "Open items". Blocks (`@?`), unions, bitfields and
 function pointers are refused by name.
 
 A native image builds a downcall stub only for a shape registered at build time
@@ -102,8 +109,8 @@ table signals with the exact entry to add. The JVM registers nothing and binds a
 a program discovers what it sends. Pinned by `ObjcNativeImageForeignConfigTest`: the
 runtime shapes and the callback stubs on every machine (against `NativeImageDowncalls.EVERYTHING`),
 the `appkit` selectors resolved on a Mac against the file. **A new selector in
-`appkit.lisp`, in `examples/macos/cocoa.lisp` or in the docs is a row in that test's
-table.**
+`appkit.lisp`, in `examples/macos/cocoa.lisp`, in `examples/macos/objc-runtime.lisp` or in
+the docs is a row in that test's table.**
 
 The `foreign.upcalls` section is the project's first. `ObjcClasses` defines a class at
 run time (`objc_allocateClassPair` + `class_addMethod` + `objc_registerClassPair`) whose
@@ -213,5 +220,10 @@ the todo's probes stay under
   is one `objc:define-class` away and not written. With the event loop running the process
   is a foreground application: it activates, takes focus and appears in the app switcher.
 - Callback shapes with struct or integer arguments, and block-taking selectors.
+- A VARIADIC selector is the one hole in "never a crash" (todo-516): the encoding does not
+  mark it, so `arrayWithObjects:` is bound as `@@:@`, the nil terminator lands in a
+  register the callee never reads, and the process dies in `objc_retain`. Refuse the known
+  set by name the way blocks are refused, then serve them with
+  `Linker.Option.firstVariadicArg`.
 - x86_64: `objc_msgSend_stret` is selected for a struct return wider than 16 bytes and
   has not been exercised.

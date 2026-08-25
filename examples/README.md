@@ -13,7 +13,7 @@ runs identically on the interpreter, the JVM and WASM.
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API on top |
 | [`jvm/`](jvm) | A Java-callable library class, `java:` interop and Swing GUIs (JVM only) |
-| [`macos/`](macos) | A native Cocoa window through the built-in `appkit` / `objc` packages (macOS interpreter only -- `java -jar` and the native binary) |
+| [`macos/`](macos) | A native Cocoa window, and the Objective-C runtime under it, through the built-in `appkit` / `objc` packages (macOS only -- `java -jar`, the native binary, a compiled class) |
 | [`browser/`](browser) | Browser demos: compile to WASM, run in a page |
 | [`count-vowels/`](count-vowels), [`wit/`](wit) | Crossing the WASM boundary: exporting to a host, implementing a WIT world, calling one, composing with Rust |
 | [`asdf/`](asdf) | Loading real third-party libraries with `asdf:load-system` / `ql:quickload` |
@@ -161,14 +161,17 @@ See the [Java interop guide](../doc/en/guides/java-interop.md).
 | [`life-gui.lisp`](jvm/life-gui.lisp) | Game of Life animated on a `javax.swing.Timer`, loading the same `life-core.lisp` as `life.lisp` |
 | [`minesweeper-swing.lisp`](browser/minesweeper/minesweeper-swing.lisp) | Minesweeper on the desktop, loading the same core as the browser build |
 
-## A native macOS window — `macos/`
+## Native macOS — `macos/`
 
 A Cocoa window with no Swing, no `java:` and nothing installed: the built-in
 `appkit` package is a widget layer written in rontolisp over `objc`, which binds
-AppKit through the foreign function API. macOS with a display, and every JVM-side
+AppKit through the foreign function API. macOS, and every JVM-side
 shape of the language: under `java -jar`, in the `rontolisp` native binary — which
 is where `java:` cannot interpret at all — and compiled to a `.class` / `.jar`.
-Not in `examples.yaml`: it opens a window.
+The window examples are not in `examples.yaml`: they need a display.
+[`objc-runtime.lisp`](macos/objc-runtime.lisp) is the exception — it opens nothing,
+so it runs in a terminal and is listed there, with its output checked on macOS
+(`os: [mac]`) and its compile leg everywhere.
 See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 
 | File | What it demonstrates |
@@ -176,8 +179,10 @@ See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 | [`counter.lisp`](macos/counter.lisp) | A window, a label and a button whose action is a Lisp closure; one raw `objc:send` for what the widget layer lacks; `appkit:wait` so the script outlives its last form |
 | [`cocoa.lisp`](macos/cocoa.lisp) | A reusable AppKit helper library written entirely on `objc:` + `appkit:`, in its own package -- rounded panels, vertically centred labels, a clickable grid (`objc:define-class` makes a view whose `mouseDown:` is a Lisp function) and an `NSTimer`; the AppKit counterpart of [`swing.lisp`](jvm/swing.lisp) |
 | [`minesweeper-macos.lisp`](browser/minesweeper/minesweeper-macos.lisp) | Minesweeper as a native Cocoa window, loading the same core as the browser and Swing builds |
+| [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
 
 ```bash
+java -jar $JAR examples/macos/objc-runtime.lisp     # no window; prints and exits
 java -jar $JAR examples/macos/counter.lisp
 ./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp
@@ -306,7 +311,9 @@ matches this text), `file` (matches a file under `examples/`), `contains`
 0 and non-empty output". `equals`/`file` are checked against **all** run
 backends, so a per-backend divergence is a real failure. An example that loads
 an ASDF system names its directory — or, like the rove ones above, the LIST of
-directories — under `systemPath`.
+directories — under `systemPath`. One that can only *run* on a given platform
+names it under `os` (`os: [mac]`): that gates the run legs and leaves the
+compile legs alone, so its lowering is still checked everywhere.
 
 The suite is opt-in, so a plain `./mvnw test` skips it:
 
@@ -328,4 +335,6 @@ stdout. GUI examples (`jvm/`, `macos/` and the `browser/` demos) are excluded: t
 window or run in a page and cannot be checked headless — though the part of one
 that is not GUI can be, which is what
 [`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp)
-is.
+is, and what [`objc-runtime.lisp`](macos/objc-runtime.lisp) is throughout — it
+opens nothing, so its output is checked like any other example, under
+`os: [mac]` for the runtime it needs.

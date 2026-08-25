@@ -19,10 +19,12 @@ import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.api.condition.OS;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.dataformat.yaml.YAMLMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.junit.jupiter.api.Assumptions.abort;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.DynamicContainer.dynamicContainer;
@@ -46,6 +48,13 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * Per-example manifest fields (all optional except {@code path}/{@code backends}):
  * <ul>
  * <li>{@code args} -- command-line arguments appended when the program is run.</li>
+ * <li>{@code os} -- the operating systems the example can RUN on ({@code mac},
+ * {@code linux}, {@code windows}; one token or a list). Omitted means everywhere, which
+ * is what almost every example is. It gates the RUN legs ONLY: a COMPILE leg never
+ * executes the program, so it stays green on every machine -- which is the whole point
+ * for {@code macos/objc-runtime.lisp}, whose output can be checked on a Mac while its
+ * lowering keeps being checked in CI. A leg gated out is a skipped assumption, not a
+ * failure.</li>
  * <li>{@code env} -- environment variables (a map) the program sees: exported to the
  * interpreter / JVM process, passed to wasmtime as {@code --env NAME=VALUE}. This is how
  * an example takes its knobs today (a rontolisp program has no argv, so it reads
@@ -164,13 +173,22 @@ class ExamplesE2eTest {
 			@Nullable Boolean skip) {
 	}
 
-	record Example(String path, List<String> backends, @Nullable List<String> args, @Nullable String stdin,
-			@Nullable String stdinFile, @Nullable Expect expect, @Nullable List<String> systemPath,
-			@Nullable String workDir, @Nullable List<String> workFiles, @Nullable Map<String, String> env,
-			@Nullable Boolean simd, @Nullable Boolean parallel, @Nullable String note) {
+	record Example(String path, List<String> backends, @Nullable List<String> os, @Nullable List<String> args,
+			@Nullable String stdin, @Nullable String stdinFile, @Nullable Expect expect,
+			@Nullable List<String> systemPath, @Nullable String workDir, @Nullable List<String> workFiles,
+			@Nullable Map<String, String> env, @Nullable Boolean simd, @Nullable Boolean parallel,
+			@Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
+		}
+
+		/**
+		 * Whether this machine is one the example can RUN on. An example that names no
+		 * {@code os} runs everywhere; one that names some runs only there.
+		 */
+		boolean runnableOnThisOs() {
+			return this.os == null || this.os.stream().anyMatch(token -> parseOs(token) == OS.current());
 		}
 
 		Map<String, String> envOrEmpty() {
@@ -261,6 +279,62 @@ class ExamplesE2eTest {
 		}
 	}
 
+	/**
+	 * {@code os} gates the RUN legs and leaves the COMPILE legs alone, so an example that
+	 * needs a platform to execute still has its lowering checked on every machine. Needs
+	 * neither the examples opt-in nor a driver, and asserts the same thing on any
+	 * platform: the gate follows {@link OS#current()}.
+	 * @throws Exception if the inline manifest cannot be parsed
+	 */
+	@Test
+	void osGatesTheRunLegsOnly() throws Exception {
+		Manifest manifest = MAPPER.readValue("""
+				examples:
+				  - path: mac-only.lisp
+				    backends: [interpreter, jvm, jvm-compile]
+				    os: [mac]
+				  - path: one-token.lisp
+				    backends: [interpreter]
+				    os: mac
+				  - path: everywhere.lisp
+				    backends: [interpreter, jvm-compile]
+				""", Manifest.class);
+		Example macOnly = manifest.examples().get(0);
+		Example oneToken = manifest.examples().get(1);
+		Example everywhere = manifest.examples().get(2);
+		boolean elsewhere = OS.current() != OS.MAC;
+
+		assertThat(skippedForOs(Backend.INTERPRETER, macOnly)).isEqualTo(elsewhere);
+		assertThat(skippedForOs(Backend.JVM, macOnly)).isEqualTo(elsewhere);
+		// ACCEPT_SINGLE_VALUE_AS_ARRAY: `os: mac` is the same declaration as `os: [mac]`.
+		assertThat(skippedForOs(Backend.INTERPRETER, oneToken)).isEqualTo(elsewhere);
+		// A COMPILE leg never executes the program, so no platform gates it.
+		assertThat(skippedForOs(Backend.JVM_COMPILE, macOnly)).isFalse();
+		assertThat(skippedForOs(Backend.INTERPRETER, everywhere)).isFalse();
+		assertThat(skippedForOs(Backend.JVM_COMPILE, everywhere)).isFalse();
+	}
+
+	/**
+	 * Every {@code os} token the real manifest names is a platform. A typo would
+	 * otherwise gate an example out of every machine there is -- silently, since a gated
+	 * leg is a skip.
+	 * @throws Exception if the manifest cannot be read
+	 */
+	@Test
+	void everyOsTokenInTheManifestIsKnown() throws Exception {
+		assumeTrue(Files.isRegularFile(MANIFEST), () -> "manifest not found: " + MANIFEST);
+		for (Example example : loadManifest().examples()) {
+			if (example.os() == null) {
+				continue;
+			}
+			for (String token : example.os()) {
+				assertThatCode(() -> parseOs(token))
+					.as("%s declares an os token that names no platform: %s", example.path(), token)
+					.doesNotThrowAnyException();
+			}
+		}
+	}
+
 	@TestFactory
 	Stream<DynamicNode> examples() throws Exception {
 		List<String> driver = resolveDriver();
@@ -281,6 +355,36 @@ class ExamplesE2eTest {
 			nodes.add(exampleNode(example, driver));
 		}
 		return nodes.stream();
+	}
+
+	/**
+	 * One {@code os} token from the manifest, as the platform it names. A typo fails the
+	 * leg (and {@link #everyOsTokenInTheManifestIsKnown()}) with the spelling that was
+	 * wrong, rather than quietly gating the example out of every machine there is.
+	 * @param token the manifest spelling, e.g. {@code mac}
+	 * @return the platform
+	 */
+	static OS parseOs(String token) {
+		try {
+			return OS.valueOf(token.trim().toUpperCase(Locale.ROOT));
+		}
+		catch (IllegalArgumentException ex) {
+			throw new IllegalArgumentException(
+					"unknown os token in examples.yaml: '" + token + "' -- expected one of " + List.of(OS.values()),
+					ex);
+		}
+	}
+
+	/**
+	 * Whether this leg is gated out by the example's {@code os}. Only a RUN leg is: a
+	 * COMPILE leg builds the program without executing it, so it is as portable as the
+	 * compiler and keeps running everywhere.
+	 * @param backend the leg
+	 * @param example the manifest entry
+	 * @return {@code true} when the leg must be skipped here
+	 */
+	static boolean skippedForOs(Backend backend, Example example) {
+		return backend.runsProgram() && !example.runnableOnThisOs();
 	}
 
 	/**
@@ -308,6 +412,9 @@ class ExamplesE2eTest {
 		for (String token : example.backends()) {
 			Backend backend = Backend.fromToken(token);
 			tests.add(dynamicTest(token, () -> {
+				if (skippedForOs(backend, example)) {
+					abort(example.path() + " runs on " + example.os() + " only; this is " + OS.current());
+				}
 				if (backend == Backend.WASM && !onPath("wasmtime")) {
 					abort("wasmtime not on PATH");
 				}
