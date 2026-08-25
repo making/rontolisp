@@ -50,7 +50,8 @@
            ;; perform it on its next run-loop cycle (waitUntilDone NO) starts it
            ;; without blocking the caller, and every objc:send hop still works,
            ;; because run drains the main queue like the loop it replaces.
-           (objc:send app "performSelectorOnMainThread:withObject:waitUntilDone:"
+           (objc:send app
+                      "performSelectorOnMainThread:withObject:waitUntilDone:"
                       "run" nil nil)
            (setq appkit::*app* app)
            app)))))
