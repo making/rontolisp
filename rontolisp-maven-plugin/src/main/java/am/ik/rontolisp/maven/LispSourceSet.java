@@ -110,9 +110,9 @@ public final class LispSourceSet {
 		if (sources.isEmpty()) {
 			return new Result(0, List.of(), List.of(), true);
 		}
-		Result previous = upToDate(sources);
-		if (previous != null) {
-			return previous;
+		Optional<Result> unchanged = upToDate(sources);
+		if (unchanged.isPresent()) {
+			return unchanged.get();
 		}
 		List<String> classes = new ArrayList<>();
 		List<String> uncompiled = new ArrayList<>();
@@ -179,26 +179,26 @@ public final class LispSourceSet {
 	}
 
 	/**
-	 * The previous run's result when nothing has changed, and {@code null} when anything
-	 * has: a source added or removed, a source touched since the status file was written,
-	 * or a class it recorded no longer in the output directory (someone cleaned it).
+	 * The previous run's result when nothing has changed, and empty when anything has: a
+	 * source added or removed, a source touched since the status file was written, or a
+	 * class it recorded no longer in the output directory (someone cleaned it).
 	 */
-	private Result upToDate(List<Path> sources) throws IOException {
+	private Optional<Result> upToDate(List<Path> sources) throws IOException {
 		if (!Files.isRegularFile(this.statusFile)) {
-			return null;
+			return Optional.empty();
 		}
 		long stamp = Files.getLastModifiedTime(this.statusFile).toMillis();
 		List<String> classes = new ArrayList<>();
 		List<String> uncompiled = new ArrayList<>();
 		List<String> recorded = Files.readAllLines(this.statusFile, StandardCharsets.UTF_8);
 		if (recorded.size() != sources.size()) {
-			return null;
+			return Optional.empty();
 		}
 		for (int i = 0; i < sources.size(); i++) {
 			String[] entry = recorded.get(i).split(STATUS_SEPARATOR, 2);
 			if (entry.length != 2 || !entry[0].equals(relative(sources.get(i)))
 					|| Files.getLastModifiedTime(sources.get(i)).toMillis() > stamp) {
-				return null;
+				return Optional.empty();
 			}
 			if (NO_CLASS.equals(entry[1])) {
 				uncompiled.add(entry[0]);
@@ -207,10 +207,10 @@ public final class LispSourceSet {
 				classes.add(entry[1]);
 			}
 			else {
-				return null;
+				return Optional.empty();
 			}
 		}
-		return new Result(sources.size(), List.copyOf(classes), List.copyOf(uncompiled), true);
+		return Optional.of(new Result(sources.size(), List.copyOf(classes), List.copyOf(uncompiled), true));
 	}
 
 	/**

@@ -1,10 +1,12 @@
 package am.ik.rontolisp.maven;
 
 import java.io.File;
+import java.util.Objects;
 
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles {@code src/main/lisp} into {@code target/classes}, so the Lisp is just another
@@ -22,13 +24,16 @@ import org.apache.maven.plugins.annotations.Parameter;
 @Mojo(name = "compile", defaultPhase = LifecyclePhase.PROCESS_SOURCES, threadSafe = true)
 public class CompileMojo extends AbstractLispCompileMojo {
 
+	// Maven injects the @Parameter fields after construction, so each is @Nullable and
+	// the accessor below is the one place that turns the injection into the non-null
+	// contract the base class declares.
 	/** The directory holding the {@code .lisp} tree. */
 	@Parameter(defaultValue = "${project.basedir}/src/main/lisp")
-	private File sourceDirectory;
+	private @Nullable File sourceDirectory;
 
 	/** Where the classes go: {@code target/classes}, which is what gets jarred. */
 	@Parameter(defaultValue = "${project.build.outputDirectory}", required = true)
-	private File outputDirectory;
+	private @Nullable File outputDirectory;
 
 	/**
 	 * The previous run's source-to-class mapping, which is what the staleness check
@@ -36,21 +41,21 @@ public class CompileMojo extends AbstractLispCompileMojo {
 	 * read its own state off the output directory alone.
 	 */
 	@Parameter(defaultValue = "${project.build.directory}/rontolisp/compile-status.txt", readonly = true)
-	private File statusFile;
+	private @Nullable File statusFile;
 
 	@Override
 	protected File statusFile() {
-		return this.statusFile;
+		return Objects.requireNonNull(this.statusFile, "statusFile is required");
 	}
 
 	@Override
 	protected File sourceDirectory() {
-		return this.sourceDirectory;
+		return Objects.requireNonNull(this.sourceDirectory, "sourceDirectory is required");
 	}
 
 	@Override
 	protected File outputDirectory() {
-		return this.outputDirectory;
+		return Objects.requireNonNull(this.outputDirectory, "outputDirectory is required");
 	}
 
 	@Override
