@@ -2,14 +2,15 @@
 //
 // A tiny, dependency-free WASI Preview 1 shim, just large enough to run a
 // program compiled by rontolisp (`rontolisp prog.lisp -o prog.wasm`) in a
-// browser. rontolisp's WASM output imports exactly nine functions from the
+// browser. rontolisp's WASM output imports exactly eleven functions from the
 // "wasi_snapshot_preview1" module:
 //
 //   fd_write, fd_read, path_open, fd_close, fd_readdir,
-//   random_get, clock_time_get, environ_sizes_get, environ_get
+//   random_get, clock_time_get, environ_sizes_get, environ_get,
+//   args_sizes_get, args_get
 //
 // A module built with --optimize imports only the ones it actually reaches, so
-// the shim provides all nine and lets the link pick.
+// the shim provides all eleven and lets the link pick.
 //
 // This shim implements them over plain JavaScript:
 //   - stdout/stderr (fd 1/2) are captured into strings instead of a real tty
@@ -18,6 +19,8 @@
 //   - directories (fd_readdir) are not supported and report "not supported"
 //   - randomness uses crypto.getRandomValues, the clock uses Date.now()
 //   - environment variables come from the `env` option
+//   - command-line arguments come from the `args` option (what
+//     uiop:command-line-arguments reads; args[0] is the program name)
 //
 // It is intentionally minimal and easy to read; it is NOT a complete WASI
 // implementation. For a fuller one, use a package such as
@@ -31,13 +34,16 @@ const WASI_ENOSYS = 52; // function not supported
 /**
  * Create a WASI Preview 1 import object plus helpers for one run of a module.
  *
- * @param {Object}  [opts]
- * @param {string}  [opts.stdin]  text delivered to the program's stdin (fd 0)
- * @param {Object}  [opts.env]    environment variables, e.g. { NAME: "Ada" }
+ * @param {Object}    [opts]
+ * @param {string}    [opts.stdin]  text delivered to the program's stdin (fd 0)
+ * @param {Object}    [opts.env]    environment variables, e.g. { NAME: "Ada" }
+ * @param {string[]}  [opts.args]   command-line arguments, argv[0] first, e.g.
+ *                                  ["prog.wasm", "-n", "40"]; what
+ *                                  uiop:command-line-arguments hands the program
  * @returns {{ imports: object, setMemory: (m: WebAssembly.Memory) => void,
  *             getStdout: () => string, getStderr: () => string }}
  */
-export function createWasi({ stdin = "", env = {} } = {}) {
+export function createWasi({ stdin = "", env = {}, args = [] } = {}) {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
@@ -52,6 +58,9 @@ export function createWasi({ stdin = "", env = {} } = {}) {
   const envEntries = Object.entries(env).map(([k, v]) =>
     encoder.encode(`${k}=${v}\0`),
   );
+
+  // argv entries are NUL-terminated byte arrays, the same layout.
+  const argEntries = args.map((a) => encoder.encode(`${a}\0`));
 
   const view = () => new DataView(memory.buffer);
   const bytes = () => new Uint8Array(memory.buffer);
@@ -140,6 +149,28 @@ export function createWasi({ stdin = "", env = {} } = {}) {
         view().setUint32(ptrsOut + i * 4, bufPtr, true);
         mem.set(envEntries[i], bufPtr);
         bufPtr += envEntries[i].length;
+      }
+      return WASI_ESUCCESS;
+    },
+
+    // args_sizes_get(count_out, bufsize_out) -> errno. Same shape as the
+    // environ pair: rontolisp's _argv helper asks for the sizes, then for the
+    // pointer table and the buffer.
+    args_sizes_get(countOut, bufsizeOut) {
+      const bufSize = argEntries.reduce((sum, a) => sum + a.length, 0);
+      view().setUint32(countOut, argEntries.length, true);
+      view().setUint32(bufsizeOut, bufSize, true);
+      return WASI_ESUCCESS;
+    },
+
+    // args_get(ptrs_out, buf_out) -> errno
+    args_get(ptrsOut, bufOut) {
+      const mem = bytes();
+      let bufPtr = bufOut;
+      for (let i = 0; i < argEntries.length; i++) {
+        view().setUint32(ptrsOut + i * 4, bufPtr, true);
+        mem.set(argEntries[i], bufPtr);
+        bufPtr += argEntries[i].length;
       }
       return WASI_ESUCCESS;
     },

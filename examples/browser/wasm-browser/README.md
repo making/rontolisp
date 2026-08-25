@@ -28,21 +28,25 @@ anything.
 ## How it works
 
 A rontolisp-compiled module is a WASI "command": it exports `memory` and
-`_start`, and imports eight functions from `wasi_snapshot_preview1`:
+`_start`, and imports eleven functions from `wasi_snapshot_preview1`:
 
 ```
-fd_write  fd_read  path_open  fd_close
+fd_write  fd_read  path_open  fd_close  fd_readdir
 random_get  clock_time_get  environ_sizes_get  environ_get
+args_sizes_get  args_get
 ```
 
-There is no host runtime in a browser, so `wasi-shim.js` implements those eight
+There is no host runtime in a browser, so `wasi-shim.js` implements those eleven
 functions in JavaScript:
 
 - **stdout / stderr** (`fd_write`) are captured into strings instead of a tty.
 - **stdin** (`fd_read`) is served from a string you pass in.
-- **files** (`path_open`) are unsupported and report "no entry".
+- **files** (`path_open`) are unsupported and report "no entry"; so are
+  **directories** (`fd_readdir`).
 - **randomness** uses `crypto.getRandomValues`; the **clock** uses `Date.now()`.
 - **environment variables** come from an `env` option.
+- **command-line arguments** come from an `args` option — what
+  `uiop:command-line-arguments` hands the program.
 
 Running a module is then three steps (see `runWasm` in `wasi-shim.js`):
 
@@ -59,6 +63,10 @@ const res = await runWasm("./greet.wasm", { stdin: "Ada\n" });
 
 // Passing input via environment variables:
 const res2 = await runWasm("./prog.wasm", { env: { NAME: "Ada" } });
+
+// Passing input as command-line arguments (args[0] is the program name, so
+// uiop:command-line-arguments sees ("-n" "40")):
+const res4 = await runWasm("./prog.wasm", { args: ["prog.wasm", "-n", "40"] });
 
 // If you already have the module bytes in memory (e.g. compiled in the
 // browser, with no file to fetch), skip the fetch with runWasmModule:
@@ -114,13 +122,13 @@ examples/browser/wasm-browser/build.sh
 
 ## Notes and limitations
 
-- **Input channels.** A WASI command cannot be handed arguments the way a
-  function call can. To pass data in, use **stdin** (`read-line`), **environment
+- **Input channels.** A WASI command is a whole program, not a function you
+  call with arguments. To pass data in, use **stdin** (`read-line`),
+  **command-line arguments** (`uiop:command-line-arguments`), **environment
   variables** (`uiop:getenv`), or compile the input into the program. This shim
-  supports stdin (demoed by `greet.wasm`) and env (pass `{ env: { NAME: "Ada" } }`
-  to `runWasm`); command-line args are not wired (rontolisp's output does not
-  import `args_get`).
+  supports all three: `{ stdin: "Ada\n" }` (demoed by `greet.wasm`),
+  `{ args: ["prog.wasm", "-n", "40"] }` and `{ env: { NAME: "Ada" } }`.
 - **Files.** `open` / `load` / `with-open-file` will fail in the browser —
-  there is no filesystem behind `path_open`. Use stdin/env instead.
+  there is no filesystem behind `path_open`. Use stdin, `args` or `env` instead.
 - This shim is intentionally minimal and readable. For a more complete browser
   WASI implementation, use a package such as `@bjorn3/browser_wasi_shim`.

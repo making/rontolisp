@@ -47,7 +47,7 @@ either runtime:
 # wasmtime (needs WebAssembly GC: -W gc)
 echo '(fib 20)' | wasmtime run -W gc loaded.wasm
 
-# Node.js 22+ — save run.mjs (node:wasi over the eight preview1 imports),
+# Node.js 22+ — save run.mjs (node:wasi over the preview1 imports),
 # then pipe a call to it
 echo '(fib 20)' | node run.mjs loaded.wasm
 ```

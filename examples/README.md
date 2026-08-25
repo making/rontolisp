@@ -204,7 +204,7 @@ needs no glue at all. Each directory has its own README.
 | --- | --- |
 | [`wit-component/`](browser/wit-component) | The first rontolisp component in a browser: a Mandelbrot/Julia explorer whose page supplies *nothing* — no `instantiate`, no import object, no WASI shim, no `(ptr, len)` decoding. A WIT world types the exports and `jco transpile` produces one self-contained ES module |
 | [`rainbow/`](browser/rainbow) | HSV↔RGB and shortest-arc hue interpolation in Lisp, behind one `rainbow-html(string) -> string` export |
-| [`wasm-browser/`](browser/wasm-browser) | The plumbing: running a rontolisp `.wasm` from plain HTML + JavaScript, stdin included |
+| [`wasm-browser/`](browser/wasm-browser) | The plumbing: running a rontolisp `.wasm` from plain HTML + JavaScript, stdin, command-line arguments and env included |
 | [`minesweeper/`](browser/minesweeper) | A playable Minesweeper whose rules live in a `minesweeper-core.lisp` shared with the Swing and native-macOS builds — and checked head-less by [`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp) |
 | [`hiragana/`](browser/hiragana) | A 46-class handwriting recognizer: the ch07 SimpleConvNet trained offline on Kuzushiji-49, its weights read back at startup, driven from a `<canvas>` |
 | [`webgl-triangle/`](browser/webgl-triangle) | The WebGL hello world and the smallest `rontolisp:wasm-import` program: ten imported host functions, no exports, no frame loop |
