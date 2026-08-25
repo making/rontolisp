@@ -2,7 +2,7 @@
 
 ![rontolisp logo](../assets/rontolisp-logo.png)
 
-A minimal Common Lisp subset implemented in Java. It supports three execution modes:
+A Common Lisp subset implemented in Java. It supports three execution modes:
 
 - **Interpreter** -- Tree-walking evaluation with REPL support; the default when
   a file is run, built for turnaround rather than throughput (loop-heavy code
