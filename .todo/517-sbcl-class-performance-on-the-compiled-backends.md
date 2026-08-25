@@ -70,6 +70,26 @@ sees is structural, and each piece is separately fixable:
 
   The `loop sum` row is now AT the `defun` spelling on both backends; the rest of
   the top-level/`defun` gap that remains (`aref` on the JVM) is `.todo/519`.
+
+  **`.todo/519` is closed too.** The injected `map*`/`every`/`some` wrapper
+  bodies are `(apply f ...)`, so every class called an `_apply` it had not
+  declared, and the post-compile self-check answered that by forcing the eval
+  runtime on -- for programs with no `eval` in them. They are now injected only
+  for a program that can reach one. Re-measured on the same machine, same
+  spellings, after it landed:
+
+  | benchmark | top level (JVM / wasm) | `defun` (JVM / wasm) |
+  | --- | --- | --- |
+  | `loop ... sum` | **0.36 / 0.81** | 0.35 / 0.83 |
+  | 10^7 x `random` | **0.45 / 1.84** | 0.37 / 1.61 |
+  | 10^7 x `aref` | **1.22 / 2.36** | 0.91 / 2.33 |
+  | 10^9 `cdr` | 15.41 / 1.92 | 15.39 / 1.79 |
+
+  Artifact size is what moved most: the four top-level classes are now 6.4 KB /
+  6.6 KB / 12.0 KB / 6.9 KB where every one of them used to be ~34 KB, and
+  `(defvar *s* 0) (setq *s* 1) (print *s*)` is 4.0 KB against 34.0 KB. The JVM
+  top-level/`defun` gap that is left (`aref`, 1.22 vs 0.91) is boxed generic
+  arithmetic, i.e. `.todo/412`.
 - **The JVM is 8.5x slower than wasm on the same list walk** (15.99 vs 1.88 for
   10^9 `cdr`s) -- and slower than rontolisp's own tree-walking interpreter --
   because HotSpot refuses to compile the loop at all. `.todo/520`.

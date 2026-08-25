@@ -13011,6 +13011,64 @@ class JvmLispCompilerTest {
 		assertThat(runClass(classBytes)).isEqualTo("1\n6\n0");
 	}
 
+	@Test
+	void aProgramThatNeverMentionsEvalCarriesNoEvalRuntime() throws Exception {
+		// The map*/every/some wrapper bodies are (apply f ...), so injecting them into
+		// every program left the finished class calling an _apply it had not declared --
+		// and the post-compile self-check answered that by forcing the eval runtime on.
+		// Free while --optimize shook the unreferenced wrappers back out, and anything
+		// but free once the program had a top-level global: the forced gate made the
+		// mirror real, so one setq turned a 4 KB class into a 34 KB one.
+		String program = """
+				(defvar *counter* 0)
+				(setq *counter* 1)
+				(print *counter*)
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", "_store", "_envLookup",
+				"_lookup");
+		assertThat(classBytes.length).isLessThan(8_000);
+		assertThat(runClass(classBytes)).isEqualTo("1");
+	}
+
+	@Test
+	void namingOneOfTheApplyingWrappersBringsTheEvalRuntimeBack() throws Exception {
+		// The wrappers are gated on the reference, not deleted: both spellings of the
+		// designator inject the wrapper AND force the runtime its body calls, so a
+		// program that takes one as a value still works. #'name is the one the reader
+		// writes; 'name is the one FunctionDesignators normalizes into it.
+		for (String designator : List.of("#'mapcar", "'mapcar")) {
+			byte[] classBytes = new JvmLispCompiler("Test")
+				.compile(LispReader.readAllFromString("(print (funcall " + designator + " #'1+ '(1 2 3)))"));
+			assertThat(declaredMethodNames(classBytes)).contains("_apply");
+			assertThat(runClass(classBytes)).isEqualTo("(2 3 4)");
+		}
+	}
+
+	@Test
+	void aComputedDesignatorStillResolvesASymbolThroughTheRegistry() throws Exception {
+		// The name registry used to ride along on the always-on eval gate. It is now
+		// gated on the arities Pass 2 dispatched through, because an operator that calls
+		// a designator it cannot read -- mapcar here, but sort/remove-if/find-if are the
+		// same site -- may be handed a SYMBOL at run time, and only _lookup answers one.
+		String program = """
+				(defun pred (x) (evenp x))
+				(print (mapcar (car (list 'pred)) '(2 3 4)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(runClass(classBytes)).isEqualTo("(T NIL T)");
+	}
+
+	/** Every method the class declares, in declaration order. */
+	private static List<String> declaredMethodNames(byte[] classBytes) {
+		return java.lang.classfile.ClassFile.of()
+			.parse(classBytes)
+			.methods()
+			.stream()
+			.map(method -> method.methodName().stringValue())
+			.toList();
+	}
+
 	/**
 	 * Counts the {@code _store} calls the top-level body emits -- the eval-global mirror.
 	 * Only the top-level methods are walked ({@code main} plus the {@code _top$N} chunks

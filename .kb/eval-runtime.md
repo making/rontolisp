@@ -26,14 +26,34 @@ injected `#'mapcar`-family/`#'funcall` wrapper bodies, which are added after the
   `(setf (symbol-function ...))` still force the full eval runtime, which implies the
   apply tier.
 
-**The JVM deliberately keeps `apply` (and multiple-value-call, and `#'funcall`) forcing
-`usesEval`**: measured 2026-08-10, a trivial `(print (+ 1 2))` JVM class already carries
-`_eval`/`_apply`/`_store`/`_lookup` and every `_invoke_N` -- the always-injected wrapper
-bodies reference `_apply`, the post-compile self-check (`gateGroupFor`/`GateUnderpredicted`,
-`.kb/adjustable-arrays.md`) forces `GROUP_EVAL` on, and the class shaker is what trims it
-under `--optimize`. Narrowing the JVM gate would change nothing but add a guaranteed
-re-compile pass. Re-evaluation trigger: if the JVM wrapper set ever becomes
-reference-gated like the WASM spread tier, revisit.
+**The JVM keeps `apply` and `multiple-value-call` forcing `usesEval`** -- it has no
+separate apply tier -- **but the injected wrappers no longer force it.** They used to: the
+`map*`/`every`/`some`/`funcall` wrapper bodies are `(apply f ...)`, they went into every
+program, the finished class then called an `_apply` it had never declared, and the
+post-compile self-check (`gateGroupFor`/`GateUnderpredicted`, `.kb/adjustable-arrays.md`)
+answered that by forcing `GROUP_EVAL` on -- for programs with no `eval` in them. Free
+while `--optimize` shook the unreferenced wrappers back out, and anything but free once
+the program had a top-level global: the forced gate made the mirror below real, so one
+`setq` turned a 4 KB class into a 34 KB one. So `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS`
+is now injected exactly when the program can reach one -- `#'name` or `'name` anywhere
+(`referencesFunctionDesignator`, position-blind on purpose), a computed `funcall`/`apply`
+target, or a name the program reads or builds at run time -- and that same reference is
+what forces `usesEval`. Pinned by `JvmLispCompilerTest`'s
+`aProgramThatNeverMentionsEvalCarriesNoEvalRuntime` /
+`namingOneOfTheApplyingWrappersBringsTheEvalRuntimeBack`.
+
+`GateUnderpredicted` stays: it is the backstop for a gate that is genuinely
+under-predicted. The ARRAY gate still fires it on every compile for the same wrapper
+reason (`FILL`/`COERCE`/`VECTOR`/`SVREF`/... call `_aset1`), which is a separate item.
+
+**The name registry is no longer a passenger of that gate.** `_lookup` used to ride along
+on an always-on `usesEval`; it is now `usesEval || usesRuntimeFunctionDesignator ||
+!indirectCallArities.isEmpty()`. The source scan reads `funcall`/`apply` only, so the last
+clause is what covers every OTHER operator that calls a designator it cannot read --
+`mapcar`, `sort`, `remove-if`, `maphash`, a bare `(f x)` whose head is an expression: a
+dispatcher is exactly a call site a SYMBOL can arrive at, and only `_lookup` resolves one.
+**The WASM backend has no such clause and traps on `(mapcar (car (list 'pred)) l)`** --
+a live gap, not a consequence of this.
 
 ## A literal `boundp` never reaches this gate
 

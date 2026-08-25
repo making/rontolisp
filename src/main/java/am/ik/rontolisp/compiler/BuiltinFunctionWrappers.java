@@ -192,6 +192,36 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * Whether the expression names the operator as a function DESIGNATOR -- either the
+	 * {@code #'name} shape {@link #referencesFunctionValue} scans for or the
+	 * {@code 'name} one, which {@code compiler.FunctionDesignators.normalize} turns into
+	 * the first in designator position. A gate that decides whether to inject a wrapper
+	 * AT ALL has to count both: dropping the wrapper leaves
+	 * {@code (funcall 'mapcar #'1+ l)} with no function to call, and the failure is a
+	 * compile error, not a fallback.
+	 *
+	 * <p>
+	 * Deliberately blind to POSITION -- a {@code 'name} inside quoted data counts too.
+	 * The cost of over-counting is one injected wrapper; the cost of under-counting is a
+	 * program that no longer compiles.
+	 * @param expr the expression to scan
+	 * @param name the operator name
+	 * @return {@code true} when a {@code (function name)} or {@code (quote name)} occurs
+	 */
+	public static boolean referencesFunctionDesignator(LispVal expr, String name) {
+		if (!(expr instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op
+				&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
+				&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+				&& name.equals(sym.name())) {
+			return true;
+		}
+		return referencesFunctionDesignator(cons.car(), name) || referencesFunctionDesignator(cons.cdr(), name);
+	}
+
+	/**
 	 * Whether the expression takes the named operator as a first-class function value --
 	 * a {@code (function name)} form (the {@code #'name} reader shape).
 	 * @param expr the expression to scan
