@@ -5,8 +5,8 @@ the prose below it is [`../notes/cloudflare-workers.md`](../notes/cloudflare-wor
 What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-workers/).
 How the report is built and run: [../README.md](../README.md).
 
-- measured: 2026-08-21
-- rontolisp: 0.1.0-SNAPSHOT (`7ad7d34`)
+- measured: 2026-08-25
+- rontolisp: 0.1.0-SNAPSHOT (`61929e1`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
@@ -15,13 +15,13 @@ How the report is built and run: [../README.md](../README.md).
 | hello-clack | `--no-wasi --optimize=size` | 340,262 | 99,496 | 3.2% |
 | hello-tiny-routes | `--no-wasi --optimize=size` | 372,361 | 106,266 | 3.4% |
 | hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 822,584 | 214,483 | 6.8% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,692,574 | 610,297 | 19.4% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,692,370 | 610,402 | 19.4% |
 | httpbin | `--no-wasi --host-boundary=streaming --optimize=size` | 183,420 | 58,942 | 1.9% |
 | httpbin-clack | `--no-wasi --host-boundary=streaming --optimize=size` | 358,771 | 104,629 | 3.3% |
 | httpbin-clack-one-source | `--no-wasi --host-boundary=streaming --optimize=size` | 358,214 | 104,842 | 3.3% |
 | httpbin-tiny-routes | `--no-wasi --host-boundary=streaming --optimize=size` | 402,400 | 114,342 | 3.6% |
 | httpbin-tiny-routes (full tiny-routes) | `--no-wasi --host-boundary=streaming --optimize=size` | 853,129 | 222,722 | 7.1% |
-| httpbin-ningle | `--no-wasi --host-boundary=streaming --optimize=size` | 2,699,329 | 612,850 | 19.5% |
+| httpbin-ningle | `--no-wasi --host-boundary=streaming --optimize=size` | 2,699,125 | 612,580 | 19.5% |
 | dog-fetcher | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 383,867 | 113,545 | 3.6% |
 | dog-relay | `--no-wasi --host-fetch --host-boundary=streaming --reentrant --optimize=size` | 381,323 | 110,488 | 3.5% |
 | btc-ticker | `--no-wasi --host-fetch --optimize=size` | 348,676 | 102,767 | 3.3% |
@@ -29,7 +29,7 @@ How the report is built and run: [../README.md](../README.md).
 | httpbin-component (core module) | `--component --no-wasi --optimize=size` | 178,515 | 57,177 | 1.8% |
 
 The component row is the core module alone. Reached through `jco transpile`
-a Worker also imports the generated JavaScript: **76,872 B** of it.
+a Worker also imports the generated JavaScript: **78,760 B** of it.
 
 ## What is measured
 
