@@ -50,12 +50,14 @@ ships to run at load time — and on a call whose regex is a variable or compute
 byte-identical with all eight stripped
 (`.kb/optimize-dead-code-elimination.md`, "What ROUTING costs a clack module").
 
-**The one gap left is interpreter-side and has a different cause**: the interpreter
-re-expands a user macro on every evaluation, so a literal regex inside `do-matches`
-gets a FRESH `(scan …)` cons per iteration, which misses the per-call-site memos
-below and rebuilds the scanner anyway (11.1 s vs 0.75 s for 500 iterations). Fixing
-that means memoizing macro expansion by call-site identity in the interpreter —
-recorded as `.todo/182`, not done here.
+**The one gap left was interpreter-side and had a different cause**, closed on
+2026-08-25: the interpreter re-expanded a user macro on every evaluation, so a literal
+regex inside `do-matches` got a FRESH `(scan …)` cons per iteration, which missed the
+per-call-site memos below and rebuilt the scanner anyway (11.1 s vs 0.75 s for 500
+iterations). The interpreter now memoizes macro expansion by call-site identity too, so
+these two memos see one call form per source occurrence and hit: the same 500 iterations
+measure 1.29 s — [defmacro-backquote.md](defmacro-backquote.md), "A call site is expanded
+ONCE".
 
 ## `define-compiler-macro` — registration and application
 

@@ -14,6 +14,63 @@ Backquote (`` ` ``/`,`/`,@`; `Token.Backquote`/`Unquote`/`UnquoteSplicing`, `,` 
 
 Consequences: the runtime `_eval`/`read` of compiled output knows neither `defmacro` nor `` ` ``; macros must be defined before use.
 
+## A call site is expanded ONCE, on every backend (2026-08-25)
+
+**Invariant: a user-macro call form is expanded once per source occurrence, not once per
+evaluation — the interpreter included.** The compile path always worked this way
+(`UserMacroExpander` walks the program and replaces each call site with its expansion);
+the interpreter used to call `expandUserMacro` from `evalCons` on every visit, so a macro
+call inside a function body re-interpreted the whole macro body on every call of that
+function. `LispEvaluator.userMacroExpansions` — an `IdentityHashMap` keyed on the call
+site's cons, bounded by `EXPANSION_MEMO_LIMIT`, the same shape as the
+`compilerMacroExpansions`/`loadTimeValues` memos next to it — closes the gap.
+
+The cost it removes is not marginal, because a macro body is an ordinary interpreted
+program and a serious one is a compiler. `trivia`'s `match` compiles its patterns at
+expansion time, ~100 ms a call:
+
+| `(fib 10)` written with `trivia:match`, interpreter | before | after |
+| --- | --- | --- |
+| 177 `match` expansions | 17,385 ms | **115 ms** |
+
+The two memos below it also start hitting for free: a re-expansion handed them a FRESHLY
+consed call form every time, so a `define-compiler-macro` rewrite and the
+`load-time-value` slot inside it were rebuilt per iteration
+([compiler-macros.md](compiler-macros.md)).
+
+**Invalidation.** A cached expansion is only valid for the macro definitions that
+produced it, so every write to the `userMacros` table goes through
+`LispEvaluator.putUserMacro`/`removeUserMacro`, which drop the WHOLE memo: a redefined
+`defmacro`, `fmakunbound`, `(setf (symbol-function ...))`, a `(setf (macro-function ...))`
+alias, and `macrolet`/`pushLocalMacro` entering or leaving scope (a `macrolet` replaces the
+table for a dynamic extent, so the same call site genuinely means something else inside
+it). Dropping everything rather than the affected call sites is deliberate: the memo
+refills as the sites are reached again, and there is no edge to get wrong.
+
+The memo is guarded by its own monitor, never held across an expansion (a macro body is a
+whole program, re-enters the expander, and may take the library load lock): a macro call is
+ordinary Lisp, so it is reachable from a served request, and that is one virtual thread per
+request ([concurrent-served-requests.md](concurrent-served-requests.md)). Two threads
+racing on one call site both expand and the last write wins — a wasted expansion, not a
+wrong answer, because each expansion is self-consistent.
+
+**What it changes semantically**: a macro body that READS state while expanding (cl-who's
+`with-html-output` consults `*html-mode*`) now freezes the first answer. That is what a
+compiled program has always done, so this moves the interpreter TOWARD cross-backend
+identity, not away from it. The interpreter-only gensym counter caveat in
+[gensym-macroexpand.md](gensym-macroexpand.md) shrinks the same way: a macro body calling
+`gensym` bumps the counter once per call site now, not once per evaluation.
+
+Built-in macros (`loop`, `dolist`, `cond`, `setf`, ...) are still re-expanded per
+evaluation — `evalCons` lowers them through `LispMacroExpander.expand*` inline. Those
+expansions are pure functions of the form, so memoizing them would need no invalidation at
+all, but the memo would be far hotter than this one; measure before assuming the lookup
+pays for itself.
+
+Tests: `LispEvaluatorTest#userMacroExpandsOncePerCallSite` (a counter in the macro body:
+three calls through one call site expand once, a second call site expands again),
+`#redefiningAMacroReexpandsItsCallSites`, `#macroletEnteringAndLeavingScopeInvalidatesTheExpansionMemo`.
+
 ## `destructuring-bind` + macro lambda lists (shared destructuring machinery)
 
 `destructuring-bind` is a `LispMacroExpander` lowering (`expandDestructuringBind`, `CL_MACROS`, wired into the evaluator + all three compilers + `FreeVarAnalyzer` + `rewriteLocalCalls`/`UserMacroExpander.expandAll` pattern-keeping cases): the pattern becomes a `let*` of car/cdr chains over a `__db<N>_whole` temp. A keyword-free pattern reuses the plain pairs walker shared with `loop` destructuring (`destructurePairs`, lifted out of `LoopExpander`); a pattern with lambda-list keywords binds the required prefix positionally, then `LambdaLists.appendTailBindings` (a flat-binding variant of the `LambdaLists.expand` prologue, incl. the unknown-`&key` check as a `__ll_check` throwaway binding) handles `&optional`/`&rest`/`&body`/`&key`/`&aux` over a `__db<N>_r<i>` rest temp. Nested sub-patterns recurse (keyword-using ones through their own `__db<N>_g<i>` temp). A dotted tail in a keyword-USING pattern is normalized to `&rest` (`destructuringBindings`; trivia level0 destructures clauses as `((pattern &rest body) . rest)`) — the keyword-free path already handled dotted tails in `destructurePairs`. Lite semantics: NO mismatch errors (missing → nil, surplus ignored). **`&whole` works** in BOTH forms (added with the cl-postgres/alexandria enablement, `.kb/asdf.md`): as the pattern's first element it binds its variable to the whole source list and the remaining pattern destructures the same source again (`destructuringBindings`, safe because the accessor chain is side-effect-free), and in a `defmacro` lambda list `LispEvaluator.evalDefmacro` binds it to the rebuilt call form `(cons 'name args)` and forces the destructuring path so the internal rest variable exists. `&environment` in a MACRO lambda list is stripped and bound to nil by `makeUserMacro` before the pattern reaches the destructuring machinery -- so a portable macro that merely PASSES it on (cl-ppcre hands it to `get-setf-expansion`) works, one that expects a real environment object does not -- and it is still an error inside `destructuring-bind` itself.

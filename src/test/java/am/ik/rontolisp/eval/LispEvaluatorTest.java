@@ -14231,6 +14231,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void userMacroExpandsOncePerCallSite() {
+		// CL expands a macro call when the code containing it is processed, not on every
+		// evaluation: three calls through one call site expand the body once, and a
+		// SECOND call site of the same macro expands again (the memo is keyed on the
+		// occurrence, like load-time-value above).
+		assertThat(
+				evalMulti("(defvar ume-n 0)" + " (defmacro ume-probe () (setq ume-n (+ ume-n 1)) (list 'quote ume-n))"
+						+ " (defun ume-here () (ume-probe))" + " (defun ume-there () (ume-probe))"
+						+ " (list (ume-here) (ume-here) (ume-here) (ume-there) ume-n)")
+					.print())
+			.isEqualTo("(1 1 1 2 2)");
+	}
+
+	@Test
+	void redefiningAMacroReexpandsItsCallSites() {
+		// The memoized expansion is only valid for the definitions that produced it.
+		assertThat(evalMulti("(defmacro ume-v () 1)" + " (defun ume-read () (ume-v))" + " (defvar ume-first (ume-read))"
+				+ " (defmacro ume-v () 2)" + " (list ume-first (ume-read))")
+			.print()).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void macroletEnteringAndLeavingScopeInvalidatesTheExpansionMemo() {
+		// A macrolet replaces the macro table for its dynamic extent, so the same call
+		// site means something different inside it -- and the global meaning again after.
+		assertThat(evalMulti("(defmacro ume-ml () :global)" + " (defun ume-ml-call () (ume-ml))"
+				+ " (list (ume-ml-call) (macrolet ((ume-ml () :local)) (ume-ml-call)) (ume-ml-call))")
+			.print()).isEqualTo("(:GLOBAL :LOCAL :GLOBAL)");
+	}
+
+	@Test
 	void ieee754BitsRoundTripDoublesAsUnsignedIntegers() {
 		assertThat(eval("(list (%ieee754-double-bits 1.0d0) (%ieee754-double-from-bits 4607182418800017408))").print())
 			.isEqualTo("(4607182418800017408 1.0)");

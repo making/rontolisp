@@ -224,6 +224,27 @@ public final class LispEvaluator {
 			&& this.userMacros.containsKey(op.name()) ? expandUserMacro(form) : null;
 
 	/**
+	 * Memo of {@link #expandUserMacro}, keyed by the CALL SITE's cons identity. CL
+	 * expands a macro call once, when the code containing it is processed; the
+	 * interpreter used to re-expand on EVERY evaluation, so a macro call in a loop body
+	 * re-interpreted the whole macro body per iteration -- and every memo below missed
+	 * too, because each iteration handed them a freshly consed expansion. Expanding once
+	 * per source occurrence is what the compile path ({@link UserMacroExpander}) already
+	 * does, so the memo moves the interpreter TOWARD cross-backend identity: a macro body
+	 * that reads a global while expanding now freezes the first answer everywhere alike.
+	 * Every write to {@link #userMacros} goes through {@link #putUserMacro} /
+	 * {@link #removeUserMacro}, which drop the memo -- a redefined {@code defmacro} or a
+	 * {@code macrolet} entering or leaving scope changes what a call site means.
+	 * <p>
+	 * Guarded by its own monitor, never held across an expansion: a macro call is
+	 * ordinary Lisp and so is reachable from a served request, which is one virtual
+	 * thread per request ({@code .kb/concurrent-served-requests.md}). Two threads racing
+	 * on the same call site both expand and the last write wins -- each expansion is
+	 * self-consistent, so that is a wasted expansion, not a wrong answer.
+	 */
+	private final java.util.IdentityHashMap<LispVal, LispVal> userMacroExpansions = new java.util.IdentityHashMap<>();
+
+	/**
 	 * Memo of {@link #expandCompilerMacro}, keyed by the CALL SITE's cons identity: a
 	 * compiler macro is a compile-time hint, so applying it once per source occurrence
 	 * (rather than once per evaluation) is both the point of the optimization and what
@@ -240,7 +261,7 @@ public final class LispEvaluator {
 	private final java.util.IdentityHashMap<LispVal, List<LispVal>> loadTimeValues = new java.util.IdentityHashMap<>();
 
 	/**
-	 * Upper bound on the two identity memos above. A program that builds call forms at
+	 * Upper bound on the three identity memos above. A program that builds call forms at
 	 * runtime and feeds them to {@code eval} would otherwise retain one entry per form
 	 * forever; past the bound the expansion is simply recomputed, which is exactly the
 	 * behavior before compiler macros were applied at all.
@@ -1675,7 +1696,7 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.FMAKUNBOUND + " expects a symbol, got " + args.get(0).print());
 			}
 			this.globalEnv.undefineFunction(sym.name());
-			this.userMacros.remove(sym.name());
+			removeUserMacro(sym.name());
 			return sym;
 		}));
 		// (setf (symbol-function 'f) fn) / (setf (fdefinition 'f) fn) lower here:
@@ -1689,7 +1710,7 @@ public final class LispEvaluator {
 								+ (args.isEmpty() ? "nothing" : args.get(0).print()));
 					}
 					this.globalEnv.defineFunction(sym.name(), args.get(1));
-					this.userMacros.remove(sym.name());
+					removeUserMacro(sym.name());
 					return args.get(1);
 				}));
 		// The compile paths' setf-only-alias forwarder body reads the binding through
@@ -5612,7 +5633,7 @@ public final class LispEvaluator {
 		if (PackageRegistry.isClSymbol(name.name())) {
 			throw new LispEvalException(LispNames.DEFMACRO + " cannot redefine the standard operator " + name.name());
 		}
-		this.userMacros.put(name.name(),
+		putUserMacro(name.name(),
 				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
 		return name;
 	}
@@ -5878,7 +5899,7 @@ public final class LispEvaluator {
 			if (!added.contains(name.name()) && this.userMacros.containsKey(name.name())) {
 				saved.put(name.name(), this.userMacros.get(name.name()));
 			}
-			this.userMacros.put(name.name(), macro);
+			putUserMacro(name.name(), macro);
 			added.add(name.name());
 		}
 		try {
@@ -5896,10 +5917,10 @@ public final class LispEvaluator {
 		finally {
 			for (String n : added) {
 				if (saved.containsKey(n)) {
-					this.userMacros.put(n, saved.get(n));
+					putUserMacro(n, saved.get(n));
 				}
 				else {
-					this.userMacros.remove(n);
+					removeUserMacro(n);
 				}
 			}
 		}
@@ -5923,6 +5944,41 @@ public final class LispEvaluator {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Installs a user macro, invalidating the expansion memo.
+	 * @param name the macro name
+	 * @param macro the macro
+	 */
+	private void putUserMacro(String name, UserMacro macro) {
+		this.userMacros.put(name, macro);
+		invalidateUserMacroExpansions();
+	}
+
+	/**
+	 * Drops a user macro, invalidating the expansion memo when the table really changed.
+	 * @param name the macro name
+	 */
+	private void removeUserMacro(String name) {
+		if (this.userMacros.remove(name) != null) {
+			invalidateUserMacroExpansions();
+		}
+	}
+
+	/**
+	 * Drops every memoized user-macro expansion. Called on any change to the macro table:
+	 * a cached expansion is only valid for the macro definitions that produced it, and a
+	 * {@code macrolet} entering or leaving scope is such a change. Dropping the whole
+	 * memo rather than the affected call sites is the cheap and obviously correct answer
+	 * -- the memo refills as the call sites are reached again.
+	 */
+	private void invalidateUserMacroExpansions() {
+		synchronized (this.userMacroExpansions) {
+			if (!this.userMacroExpansions.isEmpty()) {
+				this.userMacroExpansions.clear();
+			}
+		}
 	}
 
 	/**
@@ -5978,7 +6034,7 @@ public final class LispEvaluator {
 			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION + ": " + target
 					+ " is not a user macro (only a defmacro-defined macro can be aliased)");
 		}
-		this.userMacros.put(alias, macro.getValue());
+		putUserMacro(alias, macro.getValue());
 		return new LispSymbol(alias);
 	}
 
@@ -6054,7 +6110,7 @@ public final class LispEvaluator {
 	 */
 	public @Nullable Object pushLocalMacro(LispSymbol name, LispVal paramForm, List<LispVal> body) {
 		UserMacro previous = this.userMacros.get(name.name());
-		this.userMacros.put(name.name(), makeUserMacro(LispNames.MACROLET, name, paramForm, body, this.globalEnv));
+		putUserMacro(name.name(), makeUserMacro(LispNames.MACROLET, name, paramForm, body, this.globalEnv));
 		return previous;
 	}
 
@@ -6066,10 +6122,10 @@ public final class LispEvaluator {
 	 */
 	public void popLocalMacro(String name, @Nullable Object previous) {
 		if (previous instanceof UserMacro macro) {
-			this.userMacros.put(name, macro);
+			putUserMacro(name, macro);
 		}
 		else {
-			this.userMacros.remove(name);
+			removeUserMacro(name);
 		}
 	}
 
@@ -6445,17 +6501,33 @@ public final class LispEvaluator {
 
 	/**
 	 * Expands a user macro call by one step: binds the unevaluated argument forms to the
-	 * macro parameters and evaluates the macro body, returning the expansion form.
+	 * macro parameters and evaluates the macro body, returning the expansion form. The
+	 * answer is memoized per call site ({@link #userMacroExpansions}), so a macro call
+	 * reached a million times is expanded once.
 	 * @param form the macro call form; its operator must be a defined user macro
 	 * @return the expansion
 	 */
 	public LispVal expandUserMacro(LispCons form) {
+		synchronized (this.userMacroExpansions) {
+			LispVal cached = this.userMacroExpansions.get(form);
+			if (cached != null) {
+				return cached;
+			}
+		}
 		String name = ((LispSymbol) form.car()).name();
 		UserMacro macro = this.userMacros.get(name);
 		if (macro == null) {
 			throw new LispEvalException(name + " is not a user macro");
 		}
-		return expandMacroCall(name, macro, form);
+		// Outside the monitor: a macro body is a whole program, it re-enters this method
+		// for the macro calls inside it, and it may take the library load lock.
+		LispVal expansion = expandMacroCall(name, macro, form);
+		synchronized (this.userMacroExpansions) {
+			if (this.userMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
+				this.userMacroExpansions.put(form, expansion);
+			}
+		}
+		return expansion;
 	}
 
 	/**
