@@ -40,6 +40,12 @@ Cocoa window, and its rendering layer — `examples/macos/cocoa.lisp`, a reusabl
 `cocoa` package of rounded panels, vertically centred labels, a clickable grid and a
 repeating timer — is written entirely on the verbs below.
 
+`examples/macos/listener.lisp` puts the language itself in the window: a transcript in
+an `NSTextView`, an editable `NSTextField` whose Return key is a Lisp closure, and
+`eval` on what it reads — printed output captured, an error shown as a line instead of
+ending the process. The window and the evaluator are the same image, so a form typed
+into it can open the next window.
+
 | Function | Purpose |
 |----------|---------|
 | `appkit:window` | `(appkit:window title &key (width 480) (height 300))` — a shown, centered `NSWindow` |

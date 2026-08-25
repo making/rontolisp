@@ -20,6 +20,8 @@
 
 もっと大きなものも同じように Lisp で組み立てます。`examples/browser/minesweeper/minesweeper-macos.lisp` は Cocoa ウィンドウで完全なマインスイーパを遊べますし、その描画層 — 角丸パネル、垂直中央寄せのラベル、クリック可能なグリッド、繰り返しタイマーを持つ再利用可能な `cocoa` パッケージ `examples/macos/cocoa.lisp` — はすべて以下の動詞だけで書かれています。
 
+`examples/macos/listener.lisp` は言語そのものをウィンドウに載せます。`NSTextView` のトランスクリプト、Return キーが Lisp のクロージャである編集可能な `NSTextField`、そして読み取った式への `eval` — 印字された出力も取り込み、エラーはプロセスを終わらせずに一行として表示されます。ウィンドウと評価器は同じイメージなので、そこに打ち込んだ式が次のウィンドウを開けます。
+
 | 関数 | 用途 |
 |------|------|
 | `appkit:window` | `(appkit:window title &key (width 480) (height 300))` — 表示済み・中央配置の `NSWindow` |

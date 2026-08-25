@@ -9,8 +9,11 @@ interpreter the way `linalg.lisp` is (`.kb/linalg.md`): a bare REPL types
 `(appkit:window "hi")` with nothing required and nothing to copy. The user-facing
 description is `doc/{en,ja}/guides/objc-appkit.md`; the examples are
 `examples/macos/counter.lisp` and, over the reusable `cocoa` helper package
-`examples/macos/cocoa.lisp`, `examples/browser/minesweeper/minesweeper-macos.lisp`
-(GUI, so neither is in `examples.yaml`), plus `examples/macos/objc-runtime.lisp` --
+`examples/macos/cocoa.lisp`, `examples/browser/minesweeper/minesweeper-macos.lisp`, and
+`examples/macos/listener.lisp` -- a Lisp listener in a Cocoa window (an `NSTextView`
+transcript, an editable field whose Return key is a Lisp closure, `eval` on what it
+reads), the shortest demonstration that the window and the evaluator are one image
+(GUI, so none of them is in `examples.yaml`), plus `examples/macos/objc-runtime.lisp` --
 the window-free half (introspection, NSMethodSignature, KVC, a run-time class whose
 `isEqual:` Foundation calls, an NSNotificationCenter observer), which opens nothing and
 is in `examples.yaml` under `os: [mac]` -- the field that gates a RUN leg on the platform

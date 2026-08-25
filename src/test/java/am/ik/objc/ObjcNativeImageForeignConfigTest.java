@@ -58,8 +58,9 @@ class ObjcNativeImageForeignConfigTest {
 	 * selector, and whether it is a class method. Kept in step with {@code appkit.lisp},
 	 * {@code doc/en/guides/objc-appkit.md} and the {@code cocoa} example library
 	 * ({@code examples/macos/cocoa.lisp}) and the runtime example
-	 * ({@code examples/macos/objc-runtime.lisp}) by hand; a new selector there is a row
-	 * here, so the binary is known to serve it before it ships.
+	 * ({@code examples/macos/objc-runtime.lisp}) and the listener example
+	 * ({@code examples/macos/listener.lisp}) by hand; a new selector there is a row here,
+	 * so the binary is known to serve it before it ships.
 	 */
 	private static final List<String[]> SENT = List.of(cls("NSApplication", "sharedApplication"),
 			inst("NSApplication", "setActivationPolicy:"), inst("NSApplication", "finishLaunching"),
@@ -109,7 +110,23 @@ class ObjcNativeImageForeignConfigTest {
 			inst("NSNotificationCenter", "addObserver:selector:name:object:"),
 			inst("NSNotificationCenter", "postNotificationName:object:"),
 			inst("NSNotificationCenter", "removeObserver:"), inst("NSNotification", "name"),
-			inst("NSNotification", "object"));
+			inst("NSNotification", "object"),
+			// examples/macos/listener.lisp: a transcript in a scrolling text view,
+			// an editable field whose Return key is a Lisp closure
+			cls("NSScrollView", "alloc"), inst("NSScrollView", "initWithFrame:"),
+			inst("NSScrollView", "setHasVerticalScroller:"), inst("NSScrollView", "setBorderType:"),
+			inst("NSScrollView", "setDocumentView:"), inst("NSScrollView", "setAutoresizingMask:"),
+			cls("NSTextView", "alloc"), inst("NSTextView", "initWithFrame:"), inst("NSTextView", "setEditable:"),
+			inst("NSTextView", "setFont:"), inst("NSTextView", "setTextContainerInset:"),
+			inst("NSTextView", "setVerticallyResizable:"), inst("NSTextView", "setHorizontallyResizable:"),
+			inst("NSTextView", "setMinSize:"), inst("NSTextView", "setMaxSize:"),
+			inst("NSTextView", "setAutoresizingMask:"), inst("NSTextView", "textContainer"),
+			inst("NSTextView", "setString:"), inst("NSTextView", "string"),
+			inst("NSTextView", "scrollToEndOfDocument:"), inst("NSTextContainer", "setWidthTracksTextView:"),
+			cls("NSFont", "userFixedPitchFontOfSize:"), inst("NSTextField", "setPlaceholderString:"),
+			inst("NSTextField", "setTarget:"), inst("NSTextField", "setAction:"),
+			inst("NSTextField", "setAutoresizingMask:"), inst("NSButton", "setAutoresizingMask:"),
+			inst("NSWindow", "makeFirstResponder:"));
 
 	private static String[] cls(String name, String selector) {
 		return new String[] { name, selector, "class" };
