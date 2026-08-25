@@ -18097,7 +18097,7 @@ public final class LispMacroExpander {
 		// registration in every pipeline. The fold goes FIRST: a folded
 		// (load-time-value (+ 1 2)) is an atom, which the hoist then correctly declines
 		// to give a slot.
-		program = PureBuiltinFolder.foldProgram(program, dynamic);
+		program = PureBuiltinFolder.foldProgram(program, dynamic, usesPrintCase(program));
 		program = hoistLoadTimeValues(program);
 		// A defclass carrying (:metaclass M) switches the metaclass protocol on: the
 		// protocol's default methods and driver (MopProtocol) are PREPENDED so the walk

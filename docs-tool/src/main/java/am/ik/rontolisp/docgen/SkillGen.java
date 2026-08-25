@@ -812,7 +812,7 @@ public final class SkillGen {
 		String markdown = mapLinks(Files.readString(guide, StandardCharsets.UTF_8), INSTALL_GUIDE,
 				(inTree, resolved) -> inTree ? this.siteBase + "/docs/" + this.lang + "/" + asHtml(resolved)
 						: siteUrl(resolved));
-		MutableDataSet options = DocGen.markdownOptions();
+		MutableDataSet options = Markdown.options();
 		String body = HtmlRenderer.builder(options).build().render(Parser.builder(options).build().parse(markdown));
 		return readResource(INDEX_HTML_RESOURCE).replace("{{version}}", version)
 			.replace("{{site-base}}", this.siteBase)

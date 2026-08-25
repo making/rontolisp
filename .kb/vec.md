@@ -176,7 +176,7 @@ array-array selects lane-ize at BOTH widths -- interpreter/JVM keep plain scalar
 loops (a select's bits cannot depend on lane grouping, so lane forms are perf-only; the
 JVM linalg lane blocks are gated `op <= OP_DIV`), wasm-GC runs
 `WasmVecLoops.gcMap2Select` (gt/lt mask + `v128.bitselect`; `F32X4_GT`/`F64X2_GT` joined
-`Instruction` + `WasmTreeShaker.skipSimd`), relu is the `U_RELU` gcMap1/simdMap1 lane
+`Instruction` + `WasmSections.skipSimd`), relu is the `U_RELU` gcMap1/simdMap1 lane
 form (the 0.0 bound is exact at f32, the U_ABS argument), and `--no-gc` uses
 `simdMap2Select` under `--simd` / `scalarMap2Select` (compare + core `select`) without.
 The scalar-vs-array shapes keep the established widen rule: linalg's f64-scalar
@@ -282,7 +282,7 @@ on wasm like `signum`'s edge). The design decisions, per backend:
   `(signum x)` builtins themselves remain unknown on `--no-gc` (only the `vec:` kernels
   gained the lowering).
 - New v128 opcodes for all this (`f32x4/f64x2.sqrt/abs/neg/lt`, `v128.bitselect`) are in
-  `am.ik.wasm.Instruction` AND `WasmTreeShaker.skipSimd` (which throws on unknown 0xFD).
+  `am.ik.wasm.Instruction` AND `WasmSections.skipSimd` (which throws on unknown 0xFD).
 
 Pinned by the unary-ufunc test blocks in `eval/VecSimdTest`, `eval/LinalgSimdTest`,
 `JvmSimdAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `NoGcWasmCompilerTest`

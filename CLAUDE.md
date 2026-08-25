@@ -180,7 +180,10 @@ exercise:
 - Java 25+
 - No external dependencies in the core libraries (reader, eval, codegen, `am.ik.*`).
   `docs-tool/` is a separate Maven project and may use flexmark/snakeyaml.
-- Modern Java (records, pattern matching, sealed types, text blocks); no circular references between classes or packages.
+- Modern Java (records, pattern matching, sealed types, text blocks). The package graph
+  is a DAG, and a class-level reference cycle is allowed only inside the designed
+  mutual-recursion clusters (sealed hierarchies, dispatch/re-entrancy hubs) --
+  `PackageCycleTest` pins both halves and names each allowed cluster with its reason.
 - `src/test/resources/ci-spec.yaml` is the single source of truth for `CiSpecE2eTest`. Cases
   share global state and run IN ORDER: the driver concatenates them into one program, runs
   the binary once per backend, and slices the output back per case.

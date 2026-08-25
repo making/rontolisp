@@ -6185,7 +6185,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			else if (funcSizeNames != null) {
 				dumpFuncSizes(coreModule, funcSizeNames, hostImports.size(),
-						am.ik.wasm.WasmTreeShaker.importedFunctionCount(coreModule), null);
+						am.ik.wasm.WasmSections.importedFunctionCount(coreModule), null);
 			}
 			if (this.serve) {
 				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
@@ -6265,7 +6265,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if (funcSizeNames != null) {
 			dumpFuncSizes(coreModule, funcSizeNames, hostImports.size(),
-					am.ik.wasm.WasmTreeShaker.importedFunctionCount(coreModule), null);
+					am.ik.wasm.WasmSections.importedFunctionCount(coreModule), null);
 		}
 		return coreModule;
 	}

@@ -66,16 +66,21 @@ final class WasmBodyFolder {
 	private static final int SEC_CODE = 10;
 
 	/**
-	 * Folds duplicate bodies in a shaken module, composing the fold's renumbering into
-	 * the shake's remap so the result still maps the INPUT module's function indices to
-	 * the emitted ones (a folded function maps to its survivor's index, not to -1).
-	 * @param shaken a {@link WasmTreeShaker#shakeWithRemap} result
-	 * @return the result with duplicate bodies folded; the input unchanged when the
-	 * module has none
+	 * The fold's outcome: the folded module and its old-to-new function index mapping.
 	 */
-	static WasmTreeShaker.ShakeResult fold(WasmTreeShaker.ShakeResult shaken) {
-		byte[] module = shaken.module();
-		int @Nullable [] folded = null; // shaken-module index -> folded-module index
+	record Fold(byte[] module, int[] remap) {
+	}
+
+	/**
+	 * Folds duplicate bodies to a fixpoint, composing the passes' renumberings so the
+	 * result maps the INPUT module's function indices to the folded one's (a folded
+	 * function maps to its survivor's index, never to -1).
+	 * @param module a core WASM module (the 8-byte header followed by sections)
+	 * @return the folded module with its renumbering, or {@code null} when the module
+	 * holds no two functions to fold
+	 */
+	static @Nullable Fold fold(byte[] module) {
+		int @Nullable [] folded = null; // input-module index -> folded-module index
 		while (true) {
 			@Nullable Pass pass = foldOnce(module);
 			if (pass == null) {
@@ -84,21 +89,7 @@ final class WasmBodyFolder {
 			module = pass.module();
 			folded = folded == null ? pass.remap() : compose(folded, pass.remap());
 		}
-		if (folded == null) {
-			return shaken;
-		}
-		int[] remap;
-		if (shaken.funcRemap() == null) {
-			remap = folded;
-		}
-		else {
-			remap = new int[shaken.funcRemap().length];
-			for (int i = 0; i < remap.length; i++) {
-				int base = shaken.funcRemap()[i];
-				remap[i] = base < 0 ? -1 : folded[base];
-			}
-		}
-		return new WasmTreeShaker.ShakeResult(module, shaken.importedFunctionCount(), remap);
+		return folded == null ? null : new Fold(module, folded);
 	}
 
 	private static int[] compose(int[] first, int[] second) {
@@ -116,11 +107,11 @@ final class WasmBodyFolder {
 	// Performs one fold pass, or returns null when no two defined functions share a
 	// canonically-equal declared type and identical code bytes.
 	private static @Nullable Pass foldOnce(byte[] module) {
-		List<WasmTreeShaker.Section> sections = WasmTreeShaker.parseSections(module);
-		WasmTreeShaker.@Nullable Section typeSec = null;
-		WasmTreeShaker.@Nullable Section functionSec = null;
-		WasmTreeShaker.@Nullable Section codeSec = null;
-		for (WasmTreeShaker.Section s : sections) {
+		List<WasmSections.Section> sections = WasmSections.parseSections(module);
+		WasmSections.@Nullable Section typeSec = null;
+		WasmSections.@Nullable Section functionSec = null;
+		WasmSections.@Nullable Section codeSec = null;
+		for (WasmSections.Section s : sections) {
 			// A table or element section holds function references this pass does not
 			// rewrite (same guard, same reason as the tree shaker's).
 			if (s.id() == SEC_TABLE || s.id() == SEC_ELEMENT) {
@@ -139,9 +130,9 @@ final class WasmBodyFolder {
 		if (typeSec == null || functionSec == null || codeSec == null) {
 			return null;
 		}
-		int numImports = WasmTreeShaker.importedFunctionCount(module);
-		int[] defTypeIdx = WasmTreeShaker.parseFunctionSection(functionSec.payload());
-		List<byte[]> codeEntries = WasmTreeShaker.parseCodeEntries(codeSec.payload());
+		int numImports = WasmSections.importedFunctionCount(module);
+		int[] defTypeIdx = WasmSections.parseFunctionSection(functionSec.payload());
+		List<byte[]> codeEntries = WasmSections.parseCodeEntries(codeSec.payload());
 		String[] typeKeys = typeEquivalenceKeys(typeSec.payload());
 		int numDefined = codeEntries.size();
 		// survivor[i] = the first defined function with i's declared type and body.
@@ -172,30 +163,30 @@ final class WasmBodyFolder {
 				remap[numImports + i] = remap[numImports + survivor[i]];
 			}
 		}
-		List<WasmTreeShaker.Section> rebuilt = new ArrayList<>(sections.size());
-		for (WasmTreeShaker.Section s : sections) {
+		List<WasmSections.Section> rebuilt = new ArrayList<>(sections.size());
+		for (WasmSections.Section s : sections) {
 			switch (s.id()) {
 				case SEC_FUNCTION ->
-					rebuilt.add(new WasmTreeShaker.Section(SEC_FUNCTION, rebuildFunctionSection(defTypeIdx, survivor)));
+					rebuilt.add(new WasmSections.Section(SEC_FUNCTION, rebuildFunctionSection(defTypeIdx, survivor)));
 				case SEC_CODE ->
-					rebuilt.add(new WasmTreeShaker.Section(SEC_CODE, rebuildCodeSection(codeEntries, survivor, remap)));
-				case SEC_EXPORT -> rebuilt.add(new WasmTreeShaker.Section(SEC_EXPORT,
-						WasmTreeShaker.rebuildExportSection(s.payload(), remap)));
+					rebuilt.add(new WasmSections.Section(SEC_CODE, rebuildCodeSection(codeEntries, survivor, remap)));
+				case SEC_EXPORT -> rebuilt
+					.add(new WasmSections.Section(SEC_EXPORT, WasmSections.rebuildExportSection(s.payload(), remap)));
 				case SEC_START -> rebuilt
-					.add(new WasmTreeShaker.Section(SEC_START, WasmTreeShaker.rebuildStartSection(s.payload(), remap)));
-				case SEC_GLOBAL -> rebuilt.add(new WasmTreeShaker.Section(SEC_GLOBAL,
-						redirectFuncRefs(s.payload(), WasmTreeShaker.scanGlobalSection(s.payload()), remap)));
+					.add(new WasmSections.Section(SEC_START, WasmSections.rebuildStartSection(s.payload(), remap)));
+				case SEC_GLOBAL -> rebuilt.add(new WasmSections.Section(SEC_GLOBAL,
+						redirectFuncRefs(s.payload(), WasmSections.scanGlobalSection(s.payload()), remap)));
 				case SEC_CUSTOM -> {
 					// A `name` section maps function indices to names, and this pass has
 					// just renumbered them (same rationale as the tree shaker's drop).
-					if (!"name".equals(WasmTreeShaker.customSectionName(s.payload()))) {
+					if (!"name".equals(WasmSections.customSectionName(s.payload()))) {
 						rebuilt.add(s);
 					}
 				}
 				default -> rebuilt.add(s);
 			}
 		}
-		return new Pass(WasmTreeShaker.assemble(rebuilt), remap);
+		return new Pass(WasmSections.assemble(rebuilt), remap);
 	}
 
 	private static byte[] rebuildFunctionSection(int[] defTypeIdx, int[] survivor) {
@@ -206,10 +197,10 @@ final class WasmBodyFolder {
 				count++;
 			}
 		}
-		WasmTreeShaker.writeU(body, count);
+		WasmSections.writeU(body, count);
 		for (int i = 0; i < defTypeIdx.length; i++) {
 			if (survivor[i] == i) {
-				WasmTreeShaker.writeU(body, defTypeIdx[i]);
+				WasmSections.writeU(body, defTypeIdx[i]);
 			}
 		}
 		return body.toByteArray();
@@ -222,34 +213,34 @@ final class WasmBodyFolder {
 				continue;
 			}
 			byte[] entry = codeEntries.get(i);
-			kept.add(redirectFuncRefs(entry, WasmTreeShaker.scanBody(entry), remap));
+			kept.add(redirectFuncRefs(entry, WasmSections.scanBody(entry), remap));
 		}
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
-		WasmTreeShaker.writeU(body, kept.size());
+		WasmSections.writeU(body, kept.size());
 		for (byte[] entry : kept) {
-			WasmTreeShaker.writeU(body, entry.length);
-			WasmTreeShaker.writeRaw(body, entry);
+			WasmSections.writeU(body, entry.length);
+			WasmSections.writeRaw(body, entry);
 		}
 		return body.toByteArray();
 	}
 
 	// Splices only the FUNCTION references; type immediates keep their bytes verbatim
 	// (folding drops no type, so there is nothing to renumber there).
-	private static byte[] redirectFuncRefs(byte[] buf, List<WasmTreeShaker.Ref> refs, int[] remap) {
+	private static byte[] redirectFuncRefs(byte[] buf, List<WasmSections.Ref> refs, int[] remap) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		int cursor = 0;
-		for (WasmTreeShaker.Ref r : refs) {
-			if (r.kind() != WasmTreeShaker.RefKind.FUNC) {
+		for (WasmSections.Ref r : refs) {
+			if (r.kind() != WasmSections.RefKind.FUNC) {
 				continue;
 			}
-			WasmTreeShaker.writeRaw(out, WasmTreeShaker.slice(buf, cursor, r.start()));
-			WasmTreeShaker.writeU(out, remap[r.index()]);
+			WasmSections.writeRaw(out, WasmSections.slice(buf, cursor, r.start()));
+			WasmSections.writeU(out, remap[r.index()]);
 			cursor = r.end();
 		}
 		if (cursor == 0) {
 			return buf;
 		}
-		WasmTreeShaker.writeRaw(out, WasmTreeShaker.slice(buf, cursor, buf.length));
+		WasmSections.writeRaw(out, WasmSections.slice(buf, cursor, buf.length));
 		return out.toByteArray();
 	}
 
@@ -263,15 +254,15 @@ final class WasmBodyFolder {
 	 * equality cannot prove canonical equality, so only the index itself matches.
 	 */
 	private static String[] typeEquivalenceKeys(byte[] payload) {
-		List<WasmTreeShaker.TypeEntry> entries = WasmTreeShaker.parseTypeSection(payload);
+		List<WasmSections.TypeEntry> entries = WasmSections.parseTypeSection(payload);
 		int totalTypes = 0;
-		for (WasmTreeShaker.TypeEntry e : entries) {
+		for (WasmSections.TypeEntry e : entries) {
 			totalTypes += e.typeCount();
 		}
 		String[] keys = new String[totalTypes];
-		for (WasmTreeShaker.TypeEntry e : entries) {
+		for (WasmSections.TypeEntry e : entries) {
 			boolean selfReferential = false;
-			for (WasmTreeShaker.Ref r : e.refs()) {
+			for (WasmSections.Ref r : e.refs()) {
 				if (r.index() >= e.firstTypeIndex() && r.index() < e.firstTypeIndex() + e.typeCount()) {
 					selfReferential = true;
 					break;

@@ -222,7 +222,7 @@ and is the ONLY multiple-value entry point outside the macro expander:
 Resolution runs ONCE (`resolvePackages` + `evalResolved`, not `eval`): package
 resolution is not idempotent under a `:shadow` package.
 
-Callers: `RontoLispCli.evalBuffer` (both the JLine and the piped REPL go through
+Callers: `ReplBuffer.eval` (both the JLine and the piped REPL go through
 it) echoes EVERY form of the buffer, right after it runs -- so a form's own output
 precedes its own value and two forms on one line echo twice, which is what SBCL
 does reading them one at a time. An empty buffer now echoes nothing instead of
@@ -278,7 +278,7 @@ misread as a call form); `UserMacroExpander.expandAll` +
 `LispMacroExpander.rewriteLocalCalls` cases keeping the mv-bind variable list
 verbatim; `BuiltinFunctionWrappers` (`values`). REPL echo:
 `LispEvaluator.evalValues` + `LispMacroExpander.isSyntacticMultipleValueProducer`,
-consumed by `RontoLispCli.evalBuffer` and `RontoPlayground.evalLine`.
+consumed by `ReplBuffer.eval` and `RontoPlayground.evalLine`.
 
 ## Pinning tests
 

@@ -81,8 +81,8 @@ final class JLineRepl {
 					break;
 				}
 				buffer.append(line).append('\n');
-				if (RontoLispCli.isBalanced(buffer.toString())) {
-					RontoLispCli.evalBuffer(evaluator, out, buffer);
+				if (ReplBuffer.isBalanced(buffer.toString())) {
+					ReplBuffer.eval(evaluator, out, buffer);
 				}
 			}
 		}

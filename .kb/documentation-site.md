@@ -153,7 +153,7 @@ the template, that rule belongs on a doc page instead; inline it from there.
 
 - The install page (`skill/index.html`) follows the same rule: it is
   `SkillGen.INSTALL_GUIDE` = `doc/<lang>/getting-started/agent-skill.md` rendered (with
-  `DocGen.markdownOptions`, the shared dialect) into the chrome of
+  `Markdown.options`, the shared dialect) into the chrome of
   `skill/index.html`, so the install instructions someone follows exist once, as
   a manual page. Because that page is served from `/skill/` rather than from
   among the docs, its in-tree links are rewritten to absolute `docs/<lang>/*.html`

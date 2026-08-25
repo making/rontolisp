@@ -81,33 +81,32 @@ public final class WasmImportInjector {
 			return module;
 		}
 		int shift = hostImports.size();
-		List<WasmTreeShaker.Section> sections = WasmTreeShaker.parseSections(module);
-		List<WasmTreeShaker.Section> rebuilt = new ArrayList<>(sections.size() + 1);
+		List<WasmSections.Section> sections = WasmSections.parseSections(module);
+		List<WasmSections.Section> rebuilt = new ArrayList<>(sections.size() + 1);
 		boolean importSectionSeen = false;
-		for (WasmTreeShaker.Section s : sections) {
+		for (WasmSections.Section s : sections) {
 			switch (s.id()) {
 				case SEC_IMPORT -> {
 					importSectionSeen = true;
-					rebuilt.add(new WasmTreeShaker.Section(SEC_IMPORT, prependImports(s.payload(), hostImports)));
+					rebuilt.add(new WasmSections.Section(SEC_IMPORT, prependImports(s.payload(), hostImports)));
 				}
 				case SEC_FUNCTION -> {
 					// A module with no import section (e.g. --no-wasi) gets a fresh one
 					// right before the function section, preserving section order.
 					if (!importSectionSeen) {
 						importSectionSeen = true;
-						rebuilt.add(new WasmTreeShaker.Section(SEC_IMPORT, prependImports(null, hostImports)));
+						rebuilt.add(new WasmSections.Section(SEC_IMPORT, prependImports(null, hostImports)));
 					}
 					rebuilt.add(s);
 				}
 				case SEC_CODE ->
-					rebuilt.add(new WasmTreeShaker.Section(SEC_CODE, rewriteCode(s.payload(), shift, placeholderBase)));
-				case SEC_EXPORT ->
-					rebuilt.add(new WasmTreeShaker.Section(SEC_EXPORT, shiftExports(s.payload(), shift)));
-				case SEC_START -> rebuilt.add(new WasmTreeShaker.Section(SEC_START, shiftStart(s.payload(), shift)));
+					rebuilt.add(new WasmSections.Section(SEC_CODE, rewriteCode(s.payload(), shift, placeholderBase)));
+				case SEC_EXPORT -> rebuilt.add(new WasmSections.Section(SEC_EXPORT, shiftExports(s.payload(), shift)));
+				case SEC_START -> rebuilt.add(new WasmSections.Section(SEC_START, shiftStart(s.payload(), shift)));
 				default -> rebuilt.add(s);
 			}
 		}
-		return WasmTreeShaker.assemble(rebuilt);
+		return WasmSections.assemble(rebuilt);
 	}
 
 	// Prepends the injected entries to the import section payload (or builds a fresh
@@ -119,80 +118,80 @@ public final class WasmImportInjector {
 		byte[] existingEntries = new byte[0];
 		if (existingPayload != null) {
 			int[] p = { 0 };
-			existingCount = WasmTreeShaker.readU(existingPayload, p);
-			existingEntries = WasmTreeShaker.slice(existingPayload, p[0], existingPayload.length);
+			existingCount = WasmSections.readU(existingPayload, p);
+			existingEntries = WasmSections.slice(existingPayload, p[0], existingPayload.length);
 		}
-		WasmTreeShaker.writeU(body, hostImports.size() + existingCount);
+		WasmSections.writeU(body, hostImports.size() + existingCount);
 		for (HostImport imp : hostImports) {
 			writeName(body, imp.module());
 			writeName(body, imp.name());
 			body.write(KIND_FUNC);
-			WasmTreeShaker.writeU(body, imp.typeIndex());
+			WasmSections.writeU(body, imp.typeIndex());
 		}
-		WasmTreeShaker.writeRaw(body, existingEntries);
+		WasmSections.writeRaw(body, existingEntries);
 		return body.toByteArray();
 	}
 
 	// Rewrites every call/ref.func immediate: a placeholder resolves to its import
 	// index, everything else shifts past the injected imports.
 	private static byte[] rewriteCode(byte[] payload, int shift, int placeholderBase) {
-		List<byte[]> entries = WasmTreeShaker.parseCodeEntries(payload);
+		List<byte[]> entries = WasmSections.parseCodeEntries(payload);
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
-		WasmTreeShaker.writeU(body, entries.size());
+		WasmSections.writeU(body, entries.size());
 		for (byte[] entry : entries) {
 			byte[] rewritten = rewriteBody(entry, shift, placeholderBase);
-			WasmTreeShaker.writeU(body, rewritten.length);
-			WasmTreeShaker.writeRaw(body, rewritten);
+			WasmSections.writeU(body, rewritten.length);
+			WasmSections.writeRaw(body, rewritten);
 		}
 		return body.toByteArray();
 	}
 
 	private static byte[] rewriteBody(byte[] entry, int shift, int placeholderBase) {
-		List<WasmTreeShaker.CallSite> sites = WasmTreeShaker.scanCallSites(entry);
+		List<WasmSections.CallSite> sites = WasmSections.scanCallSites(entry);
 		if (sites.isEmpty()) {
 			return entry;
 		}
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		int cursor = 0;
-		for (WasmTreeShaker.CallSite cs : sites) {
-			WasmTreeShaker.writeRaw(out, WasmTreeShaker.slice(entry, cursor, cs.operandStart()));
+		for (WasmSections.CallSite cs : sites) {
+			WasmSections.writeRaw(out, WasmSections.slice(entry, cursor, cs.operandStart()));
 			int target = cs.target();
-			WasmTreeShaker.writeU(out, target >= placeholderBase ? target - placeholderBase : target + shift);
+			WasmSections.writeU(out, target >= placeholderBase ? target - placeholderBase : target + shift);
 			cursor = cs.operandEnd();
 		}
-		WasmTreeShaker.writeRaw(out, WasmTreeShaker.slice(entry, cursor, entry.length));
+		WasmSections.writeRaw(out, WasmSections.slice(entry, cursor, entry.length));
 		return out.toByteArray();
 	}
 
 	private static byte[] shiftExports(byte[] payload, int shift) {
 		int[] p = { 0 };
-		int count = WasmTreeShaker.readU(payload, p);
+		int count = WasmSections.readU(payload, p);
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
-		WasmTreeShaker.writeU(body, count);
+		WasmSections.writeU(body, count);
 		for (int i = 0; i < count; i++) {
 			int nameStart = p[0];
-			WasmTreeShaker.skipName(payload, p);
-			WasmTreeShaker.writeRaw(body, WasmTreeShaker.slice(payload, nameStart, p[0]));
+			WasmSections.skipName(payload, p);
+			WasmSections.writeRaw(body, WasmSections.slice(payload, nameStart, p[0]));
 			int kind = payload[p[0]++] & 0xff;
-			int index = WasmTreeShaker.readU(payload, p);
+			int index = WasmSections.readU(payload, p);
 			body.write(kind);
-			WasmTreeShaker.writeU(body, kind == KIND_FUNC ? index + shift : index);
+			WasmSections.writeU(body, kind == KIND_FUNC ? index + shift : index);
 		}
 		return body.toByteArray();
 	}
 
 	private static byte[] shiftStart(byte[] payload, int shift) {
 		int[] p = { 0 };
-		int index = WasmTreeShaker.readU(payload, p);
+		int index = WasmSections.readU(payload, p);
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
-		WasmTreeShaker.writeU(body, index + shift);
+		WasmSections.writeU(body, index + shift);
 		return body.toByteArray();
 	}
 
 	private static void writeName(ByteArrayOutputStream out, String name) {
 		byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
-		WasmTreeShaker.writeU(out, bytes.length);
-		WasmTreeShaker.writeRaw(out, bytes);
+		WasmSections.writeU(out, bytes.length);
+		WasmSections.writeRaw(out, bytes);
 	}
 
 }

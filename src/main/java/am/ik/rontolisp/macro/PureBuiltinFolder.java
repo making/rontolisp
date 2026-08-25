@@ -108,13 +108,17 @@ public final class PureBuiltinFolder {
 	 * @param program the top-level forms
 	 * @param dynamic whether the backend compiles in late-binding mode
 	 * ({@code --dynamic}), where a name resolves at run time and nothing may be folded
+	 * @param usesPrintCase whether the program mentions {@code *print-case*} -- the
+	 * caller's {@code LispMacroExpander.usesPrintCase} scan, handed in rather than
+	 * re-derived so this pass cannot disagree with the expander's other print-case
+	 * decisions
 	 * @return the folded program, or {@code program} itself when nothing folded
 	 */
-	public static List<LispVal> foldProgram(List<LispVal> program, boolean dynamic) {
+	public static List<LispVal> foldProgram(List<LispVal> program, boolean dynamic, boolean usesPrintCase) {
 		if (dynamic) {
 			return program;
 		}
-		Set<String> blocked = shadowedOperators(program);
+		Set<String> blocked = shadowedOperators(program, usesPrintCase);
 		if (blocked == null) {
 			// The program installs a function binding through (setf (symbol-function
 			// ...)) with a computed name: no table entry can be assumed to still be the
@@ -285,7 +289,7 @@ public final class PureBuiltinFolder {
 	 * library's {@code (defun cl-user::length ...)} blocks {@code length} as well.
 	 * @return the blocked names, or {@code null} when the whole pass must stand down
 	 */
-	private static @Nullable Set<String> shadowedOperators(List<LispVal> program) {
+	private static @Nullable Set<String> shadowedOperators(List<LispVal> program, boolean usesPrintCase) {
 		Set<String> blocked = new LinkedHashSet<>();
 		for (LispVal form : program) {
 			if (!collectShadowed(form, blocked)) {
@@ -297,7 +301,7 @@ public final class PureBuiltinFolder {
 		// two rendering entries stop being constant. Blocking the operators outright
 		// rather than the two literal types keeps the rule one line and costs a program
 		// that binds the variable nothing measurable.
-		if (LispMacroExpander.usesPrintCase(program)) {
+		if (usesPrintCase) {
 			blocked.add(LispNames.PRINC_TO_STRING);
 			blocked.add(LispNames.PRIN1_TO_STRING);
 		}

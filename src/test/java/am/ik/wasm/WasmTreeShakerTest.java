@@ -529,7 +529,7 @@ class WasmTreeShakerTest {
 		int[] p = { 8 };
 		while (p[0] < module.length) {
 			int id = module[p[0]++] & 0xff;
-			int size = WasmTreeShaker.readU(module, p);
+			int size = WasmSections.readU(module, p);
 			if (id == 11) {
 				return java.util.Arrays.copyOfRange(module, p[0], p[0] + size);
 			}
@@ -571,7 +571,7 @@ class WasmTreeShakerTest {
 		int[] p = { 8 };
 		while (p[0] < module.length) {
 			int id = module[p[0]++] & 0xff;
-			int size = WasmTreeShaker.readU(module, p);
+			int size = WasmSections.readU(module, p);
 			if (id == 11) {
 				return size;
 			}
@@ -641,7 +641,7 @@ class WasmTreeShakerTest {
 			ids.add(module[p[0]++] & 0xff);
 			// Read the size first: `p[0] += readU(module, p)` would discard readU's own
 			// advance of p[0].
-			int size = WasmTreeShaker.readU(module, p);
+			int size = WasmSections.readU(module, p);
 			p[0] += size;
 		}
 		return ids;

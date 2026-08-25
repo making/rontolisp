@@ -320,8 +320,8 @@ public final class RontoLispCli {
 					break;
 				}
 				buffer.append(line).append('\n');
-				if (isBalanced(buffer.toString())) {
-					evalBuffer(evaluator, this.out, buffer);
+				if (ReplBuffer.isBalanced(buffer.toString())) {
+					ReplBuffer.eval(evaluator, this.out, buffer);
 					this.out.print("> ");
 					this.out.flush();
 				}
@@ -329,46 +329,6 @@ public final class RontoLispCli {
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
-		}
-	}
-
-	static void evalBuffer(LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
-		try {
-			// #. read-time eval at the REPL: only a buffer textually containing #. pays
-			// for the marker read; each form's markers resolve just before it runs, the
-			// same timing interpret/loadFile use.
-			String source = buffer.toString();
-			boolean markers = source.contains("#.");
-			List<LispVal> exprs = markers ? LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER)
-					: LispReader.readAllFromString(source);
-			// EVERY form in the buffer is echoed, right after it runs, and as a
-			// multiple-value consumer would see it: one value per line, as in any CL
-			// REPL ((floor 10 3) echoes 3 then 1; (values) echoes nothing). A form's
-			// own output therefore precedes its own value, and two forms typed on one
-			// line echo twice -- what SBCL does reading them one at a time.
-			for (LispVal expr : exprs) {
-				List<LispVal> values = evaluator.evalValues(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
-				freshLine(evaluator);
-				for (LispVal value : values) {
-					out.println(value.print());
-				}
-			}
-		}
-		catch (RuntimeException ex) {
-			freshLine(evaluator);
-			out.println("Error: " + ex.getMessage());
-		}
-		buffer.setLength(0);
-	}
-
-	// The echoed result starts on its own line even when the evaluated form left
-	// standard output mid-line (e.g. a print-family call without a trailing newline).
-	private static void freshLine(LispEvaluator evaluator) {
-		try {
-			evaluator.eval(LispReader.readAllFromString("(fresh-line)").get(0));
-		}
-		catch (RuntimeException ignored) {
-			// Echo the result anyway; fresh-line is cosmetic.
 		}
 	}
 
@@ -1082,34 +1042,6 @@ public final class RontoLispCli {
 		this.out.println("                     Searched in the order given, quicklisp first unless named;");
 		this.out.println("                     each caches under ~/.rontolisp/<dist> (RONTOLISP_DIST_HOME).");
 		this.out.println("                     A program can install one itself: (ql-dist:install-dist NAME)");
-	}
-
-	static boolean isBalanced(String input) {
-		int depth = 0;
-		boolean inString = false;
-		for (int i = 0; i < input.length(); i++) {
-			char c = input.charAt(i);
-			if (inString) {
-				if (c == '\\' && i + 1 < input.length()) {
-					i++;
-				}
-				else if (c == '"') {
-					inString = false;
-				}
-			}
-			else {
-				if (c == '"') {
-					inString = true;
-				}
-				else if (c == '(') {
-					depth++;
-				}
-				else if (c == ')') {
-					depth--;
-				}
-			}
-		}
-		return depth <= 0 && !inString;
 	}
 
 	private static String readFile(String path) {

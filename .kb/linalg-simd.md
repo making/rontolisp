@@ -648,7 +648,7 @@ An `#f` scratch row is what makes the matrix product a reduction-contract kernel
 rather than a bit-identical one, and all three `--simd` backends had to move together or
 they would stop agreeing. wasm accumulated in f64 until then, widening each window group
 through `f64x2.promote_low_f32x4` into two accumulator groups; that instruction is no longer
-emitted by anything (its `WasmTreeShaker.skipSimd` case stays, harmless). `transpose` uses two shuffles per 2x2 f64 block and the
+emitted by anything (its `WasmSections.skipSimd` case stays, harmless). `transpose` uses two shuffles per 2x2 f64 block and the
 classic eight-shuffle butterfly per 4x4 f32 block. No new function indices: the same 15
 linalg kernels got new bodies, so `userFuncBase()` and every structural pin are untouched.
 
@@ -923,7 +923,7 @@ for free. Three things the `vec:` kernels did not have to do:
   `gcSaveLastGroup` / `gcRestoreLastGroupTail` do it once per call.
 
 `f32x4.div` (`0xFD 0xE7`) was added to `am.ik.wasm.Instruction`, to `WasmVecLoops.f32x4Of`
-and to `WasmTreeShaker.skipSimd` (which throws on an unknown `0xFD` sub-opcode, by design).
+and to `WasmSections.skipSimd` (which throws on an unknown `0xFD` sub-opcode, by design).
 
 `reshape` parses its shape designator in wasm: an i31, or a proper cons list of non-negative
 i31s. Anything else declines. `flatten` rides on it.

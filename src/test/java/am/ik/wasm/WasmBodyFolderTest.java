@@ -72,10 +72,10 @@ class WasmBodyFolderTest {
 				""";
 		List<LispVal> program = LispReader.readAllFromString(source);
 		assertThat(
-				WasmTreeShaker.parseCodeEntries(section(new NoGcWasmCompiler(OptimizeLevel.NONE).compile(program), 10)))
+				WasmSections.parseCodeEntries(section(new NoGcWasmCompiler(OptimizeLevel.NONE).compile(program), 10)))
 			.hasSize(4);
 		byte[] optimized = new NoGcWasmCompiler(OptimizeLevel.DEFAULT).compile(program);
-		assertThat(WasmTreeShaker.parseCodeEntries(section(optimized, 10))).hasSize(2);
+		assertThat(WasmSections.parseCodeEntries(section(optimized, 10))).hasSize(2);
 		assertThat(exportedFunctionIndices(optimized)).hasSize(2)
 			.containsOnly(exportedFunctionIndices(optimized).get(0));
 		assertFunctionRefsInRange(optimized);
@@ -84,12 +84,12 @@ class WasmBodyFolderTest {
 	private static List<Integer> exportedFunctionIndices(byte[] module) {
 		byte[] payload = section(module, 7);
 		int[] p = { 0 };
-		int count = WasmTreeShaker.readU(payload, p);
+		int count = WasmSections.readU(payload, p);
 		List<Integer> indices = new java.util.ArrayList<>();
 		for (int i = 0; i < count; i++) {
-			WasmTreeShaker.skipName(payload, p);
+			WasmSections.skipName(payload, p);
 			int kind = payload[p[0]++] & 0xff;
-			int index = WasmTreeShaker.readU(payload, p);
+			int index = WasmSections.readU(payload, p);
 			if (kind == 0x00) {
 				indices.add(index);
 			}
@@ -100,8 +100,8 @@ class WasmBodyFolderTest {
 	// How many defined functions share their declared type index and code bytes with an
 	// earlier one (0 = the module is at the folder's fixpoint).
 	private static int duplicateBodyCount(byte[] module) {
-		int[] defTypeIdx = WasmTreeShaker.parseFunctionSection(section(module, 3));
-		List<byte[]> codeEntries = WasmTreeShaker.parseCodeEntries(section(module, 10));
+		int[] defTypeIdx = WasmSections.parseFunctionSection(section(module, 3));
+		List<byte[]> codeEntries = WasmSections.parseCodeEntries(section(module, 10));
 		assertThat(defTypeIdx.length).isEqualTo(codeEntries.size());
 		Map<String, Integer> seen = new HashMap<>();
 		int duplicates = 0;
@@ -116,11 +116,11 @@ class WasmBodyFolderTest {
 
 	// Every function reference a body still holds must name a function that exists.
 	private static void assertFunctionRefsInRange(byte[] module) {
-		List<byte[]> codeEntries = WasmTreeShaker.parseCodeEntries(section(module, 10));
-		int totalFuncs = WasmTreeShaker.importedFunctionCount(module) + codeEntries.size();
+		List<byte[]> codeEntries = WasmSections.parseCodeEntries(section(module, 10));
+		int totalFuncs = WasmSections.importedFunctionCount(module) + codeEntries.size();
 		for (byte[] entry : codeEntries) {
-			for (WasmTreeShaker.Ref r : WasmTreeShaker.scanBody(entry)) {
-				if (r.kind() == WasmTreeShaker.RefKind.FUNC) {
+			for (WasmSections.Ref r : WasmSections.scanBody(entry)) {
+				if (r.kind() == WasmSections.RefKind.FUNC) {
 					assertThat(r.index()).isLessThan(totalFuncs);
 				}
 			}
@@ -128,7 +128,7 @@ class WasmBodyFolderTest {
 	}
 
 	private static byte[] section(byte[] module, int id) {
-		for (WasmTreeShaker.Section s : WasmTreeShaker.parseSections(module)) {
+		for (WasmSections.Section s : WasmSections.parseSections(module)) {
 			if (s.id() == id) {
 				return s.payload();
 			}

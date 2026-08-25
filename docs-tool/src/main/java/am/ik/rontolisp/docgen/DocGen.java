@@ -14,9 +14,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-import com.vladsch.flexmark.ext.autolink.AutolinkExtension;
-import com.vladsch.flexmark.ext.gfm.strikethrough.StrikethroughExtension;
-import com.vladsch.flexmark.ext.tables.TablesExtension;
 import com.vladsch.flexmark.html.HtmlRenderer;
 import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.data.MutableDataSet;
@@ -80,28 +77,9 @@ public final class DocGen {
 		this.source = source;
 		this.out = out;
 		this.defaultLang = defaultLang;
-		MutableDataSet options = markdownOptions();
+		MutableDataSet options = Markdown.options();
 		this.parser = Parser.builder(options).build();
 		this.renderer = HtmlRenderer.builder(options).build();
-	}
-
-	/**
-	 * The Markdown dialect of this documentation, shared by every HTML the tool emits --
-	 * the site pages here and the skill's install page in {@link SkillGen} -- so that a
-	 * page reads the same wherever it is rendered.
-	 */
-	static MutableDataSet markdownOptions() {
-		MutableDataSet options = new MutableDataSet();
-		options.set(Parser.EXTENSIONS,
-				List.of(TablesExtension.create(), AutolinkExtension.create(), StrikethroughExtension.create()));
-		// Heading ids (for intra-page #anchor links) without wrapping the heading
-		// text in an anchor element.
-		options.set(HtmlRenderer.GENERATE_HEADER_ID, true);
-		options.set(HtmlRenderer.RENDER_HEADER_ID, true);
-		options.set(TablesExtension.COLUMN_SPANS, false);
-		options.set(TablesExtension.APPEND_MISSING_COLUMNS, true);
-		options.set(TablesExtension.DISCARD_EXTRA_COLUMNS, true);
-		return options;
 	}
 
 	public static void main(String[] args) throws IOException {

@@ -296,7 +296,7 @@ everywhere except `--no-gc`.
   cleanups. The three-point spectrum: interpreter catches `LispEvalException`
   only, JVM catches any `RuntimeException`, wasm-GC catches `$lisp-cond`
   throws only.
-- **Walkers**: `WasmTreeShaker.scanInstr` (shared by `WasmImportInjector`)
+- **Walkers**: `WasmSections.scanInstr` (shared by `WasmImportInjector`)
   knows `throw` (0x08, tag immediate), `throw_ref` (0x0A), `try_table` (0x1F,
   blocktype + catch-clause vector) and the `exnref` valtype (0x69); tags are
   their own index space so function renumbering is unaffected. P1 EH +
