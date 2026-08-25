@@ -165,18 +165,24 @@ See the [Java interop guide](../doc/en/guides/java-interop.md).
 
 A Cocoa window with no Swing, no `java:` and nothing installed: the built-in
 `appkit` package is a widget layer written in rontolisp over `objc`, which binds
-AppKit through the foreign function API. Interpreter only, on macOS with a
-display — under `java -jar` **and** in the `rontolisp` native binary, which is
-where `java:` cannot interpret at all. Not in `examples.yaml`: it opens a window.
+AppKit through the foreign function API. macOS with a display, and every JVM-side
+shape of the language: under `java -jar`, in the `rontolisp` native binary — which
+is where `java:` cannot interpret at all — and compiled to a `.class` / `.jar`.
+Not in `examples.yaml`: it opens a window.
 See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 
 | File | What it demonstrates |
 | --- | --- |
 | [`counter.lisp`](macos/counter.lisp) | A window, a label and a button whose action is a Lisp closure; one raw `objc:send` for what the widget layer lacks; `appkit:wait` so the script outlives its last form |
+| [`cocoa.lisp`](macos/cocoa.lisp) | A reusable AppKit helper library written entirely on `objc:` + `appkit:`, in its own package -- rounded panels, vertically centred labels, a clickable grid (`objc:define-class` makes a view whose `mouseDown:` is a Lisp function) and an `NSTimer`; the AppKit counterpart of [`swing.lisp`](jvm/swing.lisp) |
+| [`minesweeper-macos.lisp`](browser/minesweeper/minesweeper-macos.lisp) | Minesweeper as a native Cocoa window, loading the same core as the browser and Swing builds |
 
 ```bash
 java -jar $JAR examples/macos/counter.lisp
 ./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
+java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp
+java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp \
+  -o Minesweeper.class && java Minesweeper
 ```
 
 ## Browser demos
@@ -190,7 +196,7 @@ needs no glue at all. Each directory has its own README.
 | [`wit-component/`](browser/wit-component) | The first rontolisp component in a browser: a Mandelbrot/Julia explorer whose page supplies *nothing* — no `instantiate`, no import object, no WASI shim, no `(ptr, len)` decoding. A WIT world types the exports and `jco transpile` produces one self-contained ES module |
 | [`rainbow/`](browser/rainbow) | HSV↔RGB and shortest-arc hue interpolation in Lisp, behind one `rainbow-html(string) -> string` export |
 | [`wasm-browser/`](browser/wasm-browser) | The plumbing: running a rontolisp `.wasm` from plain HTML + JavaScript, stdin included |
-| [`minesweeper/`](browser/minesweeper) | A playable Minesweeper whose rules live in a `minesweeper-core.lisp` shared with the Swing build — and checked head-less by [`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp) |
+| [`minesweeper/`](browser/minesweeper) | A playable Minesweeper whose rules live in a `minesweeper-core.lisp` shared with the Swing and native-macOS builds — and checked head-less by [`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp) |
 | [`hiragana/`](browser/hiragana) | A 46-class handwriting recognizer: the ch07 SimpleConvNet trained offline on Kuzushiji-49, its weights read back at startup, driven from a `<canvas>` |
 | [`webgl-triangle/`](browser/webgl-triangle) | The WebGL hello world and the smallest `rontolisp:wasm-import` program: ten imported host functions, no exports, no frame loop |
 | [`webgl-cube/`](browser/webgl-cube) | Hello 3D: perspective and rotation matrices computed in Lisp every frame; bulk floats cross through a staging array |

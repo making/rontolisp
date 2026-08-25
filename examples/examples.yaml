@@ -66,7 +66,10 @@
 # module with no host imports, so its COMPILE leg pins its WIT world against the
 # program even though its jco/browser half cannot run here; and
 # browser/minesweeper's rules live in a rendering-free core, which
-# minesweeper-core-test.lisp loads and checks with rove.
+# minesweeper-core-test.lisp loads and checks with rove. A third one is of a
+# different kind: browser/minesweeper's macOS front-end has a jvm-compile leg,
+# because a GUI that cannot RUN here can still be COMPILED here, and compiling
+# it is exactly what the objc:/appkit: JVM path has to keep doing.
 
 examples:
   # --- console: pure, cross-backend algorithms & I/O -------------------------
@@ -508,12 +511,14 @@ examples:
     note: implements count_vowels_component.wit via rontolisp:wit-export -- the world is the export list, so this also pins the contract check on both component paths (the README builds it --no-gc --component; the wasm-component backend here exercises the wasm-GC lowering of the same world). Host-invoked (wasmtime run --invoke 'count-vowels("Hello, World!")' -> 3), so the harness only compiles
 
   # --- browser/minesweeper: the rules of a GUI example, checked head-less -----
+  # (and, below it, the one GUI front-end that is compiled but never run)
   - path: browser/minesweeper/minesweeper-core-test.lisp
     backends: [interpreter, jvm, wasm]
     systemPath: [src/test/resources/rove, src/test/resources/dissect, src/test/resources/cl-ppcre]
     note: >-
-      the two minesweeper front-ends (browser/WASM and Swing) open a window and
-      are excluded like every other GUI example, but the rules they share --
+      the three minesweeper front-ends (browser/WASM, Swing and native macOS)
+      open a window and are excluded like every other GUI example, but the rules
+      they share --
       minesweeper-core.lisp, a pure state machine that touches neither screen nor
       entropy -- are not GUI at all. This file loads it and asserts them with
       rove (geometry, the flood fill, the win and loss transitions, flagging, and
@@ -525,6 +530,16 @@ examples:
       contains:
         - "✓ 7 tests completed"
         - "All 7 tests passed."
+  - path: browser/minesweeper/minesweeper-macos.lisp
+    backends: [jvm-compile]
+    note: >-
+      the third front-end of the same game, and the only GUI example with a leg
+      of its own: it opens a Cocoa window, so it can never RUN head-less, but it
+      is the largest objc:/appkit: program in the tree and compiling it needs no
+      macOS at all. The leg pins the whole JVM lowering of a window in one go --
+      the literal (load "minesweeper-core.lisp"), the (require :cocoa
+      "../../macos/cocoa.lisp") splice, the objc:define-class callbacks the cocoa
+      library builds its clickable grid from, and the embedded am.ik.objc blob.
 
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp

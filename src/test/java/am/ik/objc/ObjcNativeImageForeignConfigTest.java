@@ -55,9 +55,10 @@ class ObjcNativeImageForeignConfigTest {
 
 	/**
 	 * Every selector the widget layer and the documented examples send: a class, a
-	 * selector, and whether it is a class method. Kept in step with {@code appkit.lisp}
-	 * and {@code doc/en/guides/objc-appkit.md} by hand; a new selector there is a row
-	 * here, so the binary is known to serve it before it ships.
+	 * selector, and whether it is a class method. Kept in step with {@code appkit.lisp},
+	 * {@code doc/en/guides/objc-appkit.md} and the {@code cocoa} example library
+	 * ({@code examples/macos/cocoa.lisp}) by hand; a new selector there is a row here, so
+	 * the binary is known to serve it before it ships.
 	 */
 	private static final List<String[]> SENT = List.of(cls("NSApplication", "sharedApplication"),
 			inst("NSApplication", "setActivationPolicy:"), inst("NSApplication", "finishLaunching"),
@@ -77,7 +78,19 @@ class ObjcNativeImageForeignConfigTest {
 			cls("NSString", "stringWithUTF8String:"), inst("NSString", "UTF8String"), inst("NSString", "length"),
 			inst("NSString", "rangeOfString:"), inst("NSString", "uppercaseString"),
 			cls("NSNumber", "numberWithDouble:"), inst("NSNumber", "doubleValue"),
-			cls("NSColor", "colorWithRed:green:blue:alpha:"), inst("NSWindow", "setBackgroundColor:"));
+			cls("NSColor", "colorWithRed:green:blue:alpha:"), inst("NSWindow", "setBackgroundColor:"),
+			cls("NSFont", "boldSystemFontOfSize:"), cls("NSFont", "systemFontOfSize:"), cls("NSTextField", "alloc"),
+			inst("NSTextField", "initWithFrame:"), inst("NSTextField", "setFont:"), inst("NSTextField", "sizeToFit"),
+			inst("NSTextField", "frame"), inst("NSTextField", "setEditable:"), inst("NSTextField", "setSelectable:"),
+			inst("NSTextField", "setBezeled:"), inst("NSTextField", "setBordered:"),
+			inst("NSTextField", "setDrawsBackground:"), inst("NSTextField", "setAlignment:"),
+			inst("NSTextField", "setTextColor:"), cls("NSBox", "alloc"), inst("NSBox", "initWithFrame:"),
+			inst("NSBox", "setBoxType:"), inst("NSBox", "setTitlePosition:"), inst("NSBox", "setCornerRadius:"),
+			inst("NSBox", "setBorderWidth:"), inst("NSBox", "setFillColor:"), inst("NSBox", "setBorderColor:"),
+			inst("NSBox", "setNeedsDisplay:"), cls("NSAppearance", "appearanceNamed:"),
+			inst("NSWindow", "setAppearance:"), inst("NSWindow", "setTitlebarAppearsTransparent:"),
+			cls("NSTimer", "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"),
+			inst("NSTimer", "invalidate"));
 
 	private static String[] cls(String name, String selector) {
 		return new String[] { name, selector, "class" };

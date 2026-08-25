@@ -1,10 +1,11 @@
-# Minesweeper (one Lisp rulebook, two front-ends)
+# Minesweeper (one Lisp rulebook, three front-ends)
 
-A complete Minesweeper whose rules are written once in rontolisp and played two
+A complete Minesweeper whose rules are written once in rontolisp and played three
 ways: in the **browser** (the rules compiled ahead of time to a WebAssembly
-reactor) and on the **desktop** (the same rules run on the interpreter behind a
-Java/Swing window). All the interesting work -- the flood-fill reveal and
-win/lose detection -- happens in Lisp; only the drawing differs between the two.
+reactor), on the **desktop through Java/Swing**, and on the **desktop as a native
+macOS window** (both of those run the same rules on the interpreter). All the
+interesting work -- the flood-fill reveal and win/lose detection -- happens in
+Lisp; only the drawing differs between the three.
 
 | File | Role |
 | --- | --- |
@@ -14,12 +15,13 @@ win/lose detection -- happens in Lisp; only the drawing differs between the two.
 | [`minesweeper.wasm`](minesweeper.wasm) | Prebuilt module (regenerate with `build.sh`) |
 | [`build.sh`](build.sh) | Recompile `minesweeper-wasm.lisp` to `minesweeper.wasm` |
 | [`minesweeper-swing.lisp`](minesweeper-swing.lisp) | Desktop front-end: loads the core, paints a Swing grid |
-| [`minesweeper-core-test.lisp`](minesweeper-core-test.lisp) | The rules, checked with [rove](../../../doc/en/guides/testing.md) -- neither front-end can be run head-less, the core can |
+| [`minesweeper-macos.lisp`](minesweeper-macos.lisp) | Desktop front-end: loads the core, builds a native Cocoa window |
+| [`minesweeper-core-test.lisp`](minesweeper-core-test.lisp) | The rules, checked with [rove](../../../doc/en/guides/testing.md) -- no front-end can be run head-less, the core can |
 
-The two front-ends share `minesweeper-core.lisp` verbatim -- the browser build
-inlines it at compile time (a top-level literal `load`), and the Swing build
-loads it at run time. Swapping the rendering layer is all it takes to move the
-same game between WebAssembly and the JVM.
+The three front-ends share `minesweeper-core.lisp` verbatim -- the browser build
+inlines it at compile time (a top-level literal `load`), and the two desktop
+builds load it at run time. Swapping the rendering layer is all it takes to move
+the same game between WebAssembly, the JVM and AppKit.
 
 Because the core touches neither the screen nor entropy, it is also the part
 that can be TESTED, and `minesweeper-core-test.lisp` does — the flood fill, the
@@ -51,6 +53,35 @@ its own mines -- keeping them off the first click. The rendering layer reuses th
 `(require :swing "../../jvm/swing.lisp")`), whose clickable, text-capable label grid
 (`swing:label-grid-window`) was built for this game.
 
+## Play it on the desktop (native macOS)
+
+```bash
+# from the repo root, after ./mvnw package
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/browser/minesweeper/minesweeper-macos.lisp
+
+# or, after ./mvnw -Pnative package -- no JVM in sight
+./target/rontolisp examples/browser/minesweeper/minesweeper-macos.lisp
+
+# or compiled, like the Swing build (the binding travels inside the class)
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar \
+  examples/browser/minesweeper/minesweeper-macos.lisp -o Minesweeper.class
+java Minesweeper
+```
+
+Left-click opens a cell, right-click (or Ctrl-click) flags it, and the face
+starts a fresh board; a mine counter and a running clock sit either side of it.
+This front-end draws a **real Cocoa window** -- rounded tiles, a dark title bar,
+emoji glyphs -- out of the built-in `objc` / `appkit` packages, which bind AppKit
+through the foreign function API. Two consequences: it needs macOS with a
+display, and unlike the Swing build it also runs in the **`rontolisp` native
+binary**, where `java:` interop cannot be interpreted at all ([the macOS GUI
+guide](../../../doc/en/guides/objc-appkit.md) says why). Compiling it to a
+`.class` works exactly like the Swing build's, the binding travelling inside the
+class; only WASM refuses, having no foreign function API. Its rendering layer is
+the reusable [`../../macos/cocoa.lisp`](../../macos/cocoa.lisp) `cocoa` package
+-- the AppKit counterpart of `swing.lisp`, spliced in the same way with
+`(require :cocoa "../../macos/cocoa.lisp")`.
+
 ## Play it in the browser (WebAssembly)
 
 ```bash
@@ -75,9 +106,10 @@ a reactor has no entropy source, the page cannot ask Lisp to roll the mines; but
 it does not reimplement the placement rule either. Instead the page only shuffles
 a random ordering of the cell indices (its sole job) and hands it to the shared
 Lisp `place-mines`, which applies the first-click-safe placement rule -- the same
-`place-mines` the Swing front-end calls with an interpreter-shuffled ordering. So
-entropy stays host-side while the rule stays in Lisp, and the two front-ends
-place mines identically.
+`place-mines` the two desktop front-ends call with an interpreter-shuffled
+ordering. So
+entropy stays host-side while the rule stays in Lisp, and every front-end places
+mines identically.
 
 The game is a **pure state machine**. The state is a nested list of integers
 `(status w h mines revealed flags)`; the page treats it as an opaque string that

@@ -7,8 +7,10 @@ exact analogue of `java:` (`.kb/java-interop.md`) minus the reflection. **`appki
 widget layer written in rontolisp over those verbs (`appkit.lisp`), shipped inside the
 interpreter the way `linalg.lisp` is (`.kb/linalg.md`): a bare REPL types
 `(appkit:window "hi")` with nothing required and nothing to copy. The user-facing
-description is `doc/{en,ja}/guides/objc-appkit.md`; the example is
-`examples/macos/counter.lisp` (GUI, so not in `examples.yaml`).
+description is `doc/{en,ja}/guides/objc-appkit.md`; the examples are
+`examples/macos/counter.lisp` and, over the reusable `cocoa` helper package
+`examples/macos/cocoa.lisp`, `examples/browser/minesweeper/minesweeper-macos.lisp`
+(GUI, so neither is in `examples.yaml`).
 
 What it is worth: the `rontolisp` native binary is the REPL people run, and `java:` cannot
 be INTERPRETED there at all (no reflection metadata). FFM needs none, so this is the one
@@ -48,17 +50,17 @@ lets the window server deliver events to the process, but only `-[NSApplication 
 DEQUEUES them (`nextEventMatchingMask:` -> `sendEvent:`). Until it runs, a window draws
 and nothing in it answers a click -- not a button, not the red close button -- and
 `isActive` / `isKeyWindow` stay NO however often `activateIgnoringOtherApps:` is sent.
-That was the first cut's real state, found 2026-08-25. `run` never returns, so no thread
-that has to come back may call it: `appkit::%app` asks thread 0 to
-`performSelectorOnMainThread:withObject:` it `waitUntilDone:` NO, which starts it on the
-next run-loop cycle -- NESTED inside whatever loop was parking the thread (the launcher's
-under `java -jar`, `MainThread.runLoop()`'s in the binary) -- and blocks nobody. Every hop
-still works, because `run` drains the main queue exactly like the loop it replaces; a REPL
-keeps taking input, `appkit:wait` still returns when the window closes, and `appkit:click`
-still drives a button head-lessly. `%app` is the ONLY place that starts it, so a window
-built from raw `objc:` in a process that never called an `appkit:` function draws and
-answers nothing -- deliberate, since `objc:` is the generic binding and a Foundation-only
-script must not become an app.
+That was the first cut's real state, found 2026-08-25 from the minesweeper front-end and
+true of `counter.lisp` too. `run` never returns, so no thread that has to come back may
+call it: `appkit::%app` asks thread 0 to `performSelectorOnMainThread:withObject:` it
+`waitUntilDone:` NO, which starts it on the next run-loop cycle -- NESTED inside whatever
+loop was parking the thread (the launcher's under `java -jar`, `MainThread.runLoop()`'s in
+the binary) -- and blocks nobody. Every hop still works, because `run` drains the main
+queue exactly like the loop it replaces; a REPL keeps taking input, `appkit:wait` still
+returns when the window closes, and `appkit:click` still drives a button head-lessly.
+`%app` is the ONLY place that starts it, so a window built from raw `objc:` in a process
+that never called an `appkit:` function draws and answers nothing -- deliberate, since
+`objc:` is the generic binding and a Foundation-only script must not become an app.
 
 **Every entry point hops.** `MainThread.sync` hands a body to the main dispatch queue with
 `dispatch_sync_f` and waits; the body crosses through ONE upcall stub (`trampoline`,
@@ -89,14 +91,19 @@ function pointers are refused by name.
 A native image builds a downcall stub only for a shape registered at build time
 (`MissingForeignRegistrationError`, an `Error`, at `Linker.downcallHandle`), so the served
 set is a CLOSED TABLE in `reachability-metadata.json`: the runtime's own C functions, every
-shape `appkit.lisp` and the documented examples send, and the 60 most common shapes of a
+shape `appkit.lisp`, the `cocoa` example library and the documented examples send, and the
+60 most common shapes of a
 census over 29 core AppKit/Foundation classes (13,065 methods, 90.6% reached; the spike's
-`ShapeCensus.java` at `.todo/512-*/`, re-runnable). A selector outside it signals with the
-exact entry to add. The JVM registers nothing and binds any shape, so `java -jar` is where
+`ShapeCensus.java` at `.todo/512-*/`, re-runnable). Exactly one entry is outside both --
+`NSTimer`'s `scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:`, the clock
+behind `cocoa:animate`; everything else `cocoa.lisp` sends (NSBox, the NSTextField
+setters, NSFont, NSAppearance) was already served by the census. A selector outside the
+table signals with the exact entry to add. The JVM registers nothing and binds any shape, so `java -jar` is where
 a program discovers what it sends. Pinned by `ObjcNativeImageForeignConfigTest`: the
 runtime shapes and the callback stubs on every machine (against `NativeImageDowncalls.EVERYTHING`),
 the `appkit` selectors resolved on a Mac against the file. **A new selector in
-`appkit.lisp` or the docs is a row in that test's table.**
+`appkit.lisp`, in `examples/macos/cocoa.lisp` or in the docs is a row in that test's
+table.**
 
 The `foreign.upcalls` section is the project's first. `ObjcClasses` defines a class at
 run time (`objc_allocateClassPair` + `class_addMethod` + `objc_registerClassPair`) whose
@@ -194,7 +201,10 @@ through a hand-written shape table and could ride on `am.ik.objc`; it does not y
 A window is never opened by a test (CI has no display; a doc `lisp` fence that opened one
 would hang `DocExamplesTest`, so the guide uses `console` fences). The visible loop --
 window, click, label mutated by Lisp, close survived, on `java -jar` AND the native binary
--- is verified by hand with `examples/macos/counter.lisp`; the todo's probes stay under
+-- is verified by hand with `examples/macos/counter.lisp`, and the widened surface
+(a run-time NSBox/NSTextField subclass whose `mouseDown:`/`rightMouseDown:` are Lisp
+functions, an `NSTimer`) with `examples/browser/minesweeper/minesweeper-macos.lisp`;
+the todo's probes stay under
 `.todo/512-*/` for re-running the mechanism on another Mac.
 
 ## Open items
