@@ -3,14 +3,19 @@
 ;;;; rontolisp examples/ml/gpu-matmul.lisp --gpu --simd   #  0.24 ms  Metal
 ;;;; rontolisp examples/ml/gpu-matmul.lisp --blas --simd  #  0.05 ms  Accelerate
 ;;;;
-;;;; N=2048 rontolisp examples/ml/gpu-matmul.lisp --gpu --simd   #  4.00 ms
-;;;; N=2048 rontolisp examples/ml/gpu-matmul.lisp --blas --simd  #  8.72 ms
+;;;; The size is the program's own argument -- after `--`, where the compiler's
+;;;; options end and the program's begin -- and defaults to 256:
 ;;;;
-;;;; and the same program as a JVM class, 0.17 ms:
+;;;; rontolisp examples/ml/gpu-matmul.lisp --gpu --simd -- 2048   #  4.00 ms
+;;;; rontolisp examples/ml/gpu-matmul.lisp --blas --simd -- 2048  #  8.72 ms
+;;;;
+;;;; and the same program as a JVM class, 0.17 ms (a compiled artifact takes the
+;;;; argument straight after itself, with no separator to get past):
 ;;;; rontolisp examples/ml/gpu-matmul.lisp -o Gpumatmul.class --gpu --simd
-;;;; java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED Gpumatmul
+;;;; java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED Gpumatmul 2048
 
-(defparameter *n* (parse-integer (or (uiop:getenv "N") "256")))
+(defparameter *n*
+  (parse-integer (or (first (uiop:command-line-arguments)) "256")))
 
 (defparameter *a* (linalg:rand (list *n* *n*) :element-type 'single-float))
 

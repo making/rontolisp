@@ -78,7 +78,7 @@ n=128 is below the threshold and declines. From n=192 the device is four times t
 
 ## A runnable example
 
-[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) is one `linalg:matmul` over a 256x256 matrix and a timing loop, and nothing else -- nine lines, at **single-float** width, the width a Mac's GPU can take. Set `N` in the environment for another size. Run it three ways:
+[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) is one `linalg:matmul` over a 256x256 matrix and a timing loop, and nothing else -- nine lines, at **single-float** width, the width a Mac's GPU can take. Another size is the program's own argument -- `rontolisp examples/ml/gpu-matmul.lisp --gpu --simd -- 2048`, where `--` is the point the compiler's options end and the program's begin. Run it three ways:
 
 ```bash
 rontolisp examples/ml/gpu-matmul.lisp               # the portable definition

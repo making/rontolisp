@@ -78,7 +78,7 @@ n=128 はしきい値未満で辞退します。n=192 からデバイスは CPU 
 
 ## 実行できる例
 
-[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) は 256x256 の行列に対する `linalg:matmul` 1 回と計測ループだけ、全部で 9 行のプログラムです。幅は **single-float** -- Mac の GPU が受け取れる唯一の幅 -- です。別のサイズを試すには環境変数 `N` を設定してください。3 通りに実行してください:
+[`examples/ml/gpu-matmul.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/gpu-matmul.lisp) は 256x256 の行列に対する `linalg:matmul` 1 回と計測ループだけ、全部で 9 行のプログラムです。幅は **single-float** -- Mac の GPU が受け取れる唯一の幅 -- です。別のサイズはプログラム自身の引数です -- `rontolisp examples/ml/gpu-matmul.lisp --gpu --simd -- 2048` のように書きます。`--` がコンパイラのオプションの終わりであり、プログラムの引数の始まりです。3 通りに実行してください:
 
 ```bash
 rontolisp examples/ml/gpu-matmul.lisp               # the portable definition
