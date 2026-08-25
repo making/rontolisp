@@ -6787,7 +6787,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.ARRAY_DISPLACEMENT)
 				|| programUsesSymbol(program, LispNames.ARRAY_DISP_TARGET)
 				|| programUsesSymbol(program, LispNames.ARRAY_DISP_OFFSET)
-				|| programUsesSymbol(program, LispNames.COERCE) || programContainsArrayLiteral(program);
+				|| programUsesSymbol(program, LispNames.COERCE)
+				// fill/read-sequence/write-sequence join the list for the same reason
+				// as the JVM twin (LispMacroExpander.usesGeneralArrayOp): their
+				// wrapper bodies have an array-typed arm, so the reference that would
+				// otherwise leave the wrapper excluded is what has to turn this gate
+				// on (BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS).
+				|| programUsesSymbol(program, LispNames.FILL) || programUsesSymbol(program, LispNames.READ_SEQUENCE)
+				|| programUsesSymbol(program, LispNames.WRITE_SEQUENCE) || programContainsArrayLiteral(program);
 	}
 
 	// True when a self-evaluating array literal (#(...)) appears anywhere in the

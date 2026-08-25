@@ -43,8 +43,9 @@ what forces `usesEval`. Pinned by `JvmLispCompilerTest`'s
 `namingOneOfTheApplyingWrappersBringsTheEvalRuntimeBack`.
 
 `GateUnderpredicted` stays: it is the backstop for a gate that is genuinely
-under-predicted. The ARRAY gate still fires it on every compile for the same wrapper
-reason (`FILL`/`COERCE`/`VECTOR`/`SVREF`/... call `_aset1`), which is a separate item.
+under-predicted. The ARRAY gate used to fire it on every compile for the same wrapper
+reason (`FILL`/`COERCE`/`VECTOR`/`SVREF`/... call `_aset1`); fixed the same way --
+`.kb/adjustable-arrays.md`'s "The array-gated wrapper set is complete" section.
 
 **The name registry is no longer a passenger of that gate.** `_lookup` used to ride along
 on an always-on `usesEval`; it is now `usesEval || usesRuntimeFunctionDesignator ||

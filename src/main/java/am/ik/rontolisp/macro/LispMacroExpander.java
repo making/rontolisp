@@ -18724,7 +18724,14 @@ public final class LispMacroExpander {
 						LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE, LispNames.VECTOR_PUSH,
 						LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
 						LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
-						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.COERCE ->
+						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.COERCE,
+						// fill/read-sequence/write-sequence join the list for the same
+						// reason as make-string: each has an array-typed arm the JVM
+						// backend's array runtime gate must see coming, or the injected
+						// #'fill / #'read-sequence / #'write-sequence wrapper reaches
+						// _aset1/_charVecMake/_aref1 the array gate never predicted
+						// (BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS).
+						LispNames.FILL, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE ->
 					true;
 				default -> false;
 			};

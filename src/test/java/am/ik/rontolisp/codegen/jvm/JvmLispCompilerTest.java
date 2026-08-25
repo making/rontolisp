@@ -10529,6 +10529,34 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aProgramThatNeverNamesAnArrayOperatorCarriesNoArrayRuntime() throws Exception {
+		// fill/coerce/vector/read-sequence/write-sequence/svref/array-rank/
+		// array-dimension/array-total-size/array-row-major-index each has an injected
+		// wrapper whose body reaches _aset1/_charVecMake/_arrayMake/_aref1/_arrayDims --
+		// so every program carried those ten wrappers regardless of its own source, the
+		// finished class called methods it never declared, and the post-compile
+		// self-check answered that by forcing the array gate on and re-running the whole
+		// compile, for a program with no array in it (.todo history: 13,654 B for this
+		// exact program before the fix).
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(print (mapcar (lambda (x) (* x x)) '(1 2 3)))"));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_aset1", "_aref1", "_arrayMake", "_charVecMake",
+				"_arrayDims");
+		assertThat(classBytes.length).isLessThan(8_000);
+		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
+	}
+
+	@Test
+	void namingOneOfTheArrayWrappersBringsTheArrayRuntimeBack() throws Exception {
+		// The wrappers are gated on the reference, not deleted: a program that takes
+		// one of the ten as a value still works, and its wrapper's array arm is real.
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(print (funcall #'fill (make-array 3 :initial-element 0) 9))"));
+		assertThat(declaredMethodNames(classBytes)).contains("_aset1");
+		assertThat(runClass(classBytes)).isEqualTo("#(9 9 9)");
+	}
+
+	@Test
 	void compileSequenceOperatorsWithoutTheArrayRuntime() throws Exception {
 		// The other half of the gate above: with the array arms dropped, every
 		// sequence operator whose lowering carried one still answers for the two

@@ -65,11 +65,30 @@ public final class BuiltinFunctionWrappers {
 	 * {@code make-string} is on the list because it lowers to the character-vector
 	 * {@code make-array} ({@code .kb/adjustable-arrays.md}); both backends' array gate
 	 * names it, so the wrapper is injected exactly when the runtime it calls is emitted.
+	 *
+	 * <p>
+	 * {@code fill}/{@code coerce}/{@code vector}/{@code read-sequence}/
+	 * {@code write-sequence}/{@code svref}/{@code array-rank}/{@code array-dimension}/
+	 * {@code array-total-size}/{@code array-row-major-index} are on the list for the same
+	 * reason: their wrapper bodies reach {@code _aset1}/{@code _charVecMake}/
+	 * {@code _arrayMake}/{@code _aref1}/{@code _arrayDims}, which JVM emits only under
+	 * the array gate. Left off, every non-array program still carried these ten wrappers
+	 * (nothing gated them), the finished class called methods it never declared, and the
+	 * post-compile self-check answered that by forcing the array gate on and re-running
+	 * the whole compile -- for a program with no array in it. Every one of the ten is
+	 * already a name the array gate itself scans for on the JVM
+	 * ({@code LispMacroExpander.usesGeneralArrayOp}) and on WASM
+	 * ({@code WasmLispCompiler.programUsesAnyArrayOp}), so a program that takes one of
+	 * them as a value keeps its wrapper: the same reference that would otherwise leave it
+	 * excluded is what turns the gate on.
 	 */
 	public static final Set<String> ARRAY_FILL_POINTER_FUNCTIONS = Set.of(LispNames.FILL_POINTER,
 			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE,
 			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
-			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.MAKE_STRING);
+			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.MAKE_STRING, LispNames.FILL,
+			LispNames.COERCE, LispNames.VECTOR, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.SVREF,
+			LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
+			LispNames.ARRAY_ROW_MAJOR_INDEX);
 
 	/**
 	 * Signal-operator wrappers ({@code #'error}/{@code #'cerror}/{@code #'signal}/

@@ -312,6 +312,31 @@ dangles in an array-free class) plus
 `compileSequenceOperatorsWithoutTheArrayRuntime` (the survivors still answer for
 lists and strings).
 
+### The array-gated wrapper set is complete (todo-523)
+
+Ten wrapper bodies were never behind the `arraysExist`-flag dispatch the table above
+describes, so they called `_aset1`/`_charVecMake`/`_arrayMake`/`_aref1`/`_arrayDims`
+UNCONDITIONALLY: `fill`, `coerce`, `vector`, `read-sequence`, `write-sequence`, `svref`,
+`array-rank`, `array-dimension`, `array-total-size`, `array-row-major-index`. Every one
+of them is injected in every class whether or not the program mentions it (same as the
+~33 flag-gated wrappers were before todo-210), so an array-free program's finished class
+called methods it never declared and step 3 forced `GROUP_ARRAYS` on and re-ran the whole
+compile -- for a program with no array in it. `(print (mapcar (lambda (x) (* x x)) '(1 2
+3)))` was 13,654 bytes for exactly this reason.
+
+Fixed the `#'funcall`/`APPLY_USING_FUNCTIONS` way (`.kb/eval-runtime.md`): reference-gate
+wrapper and runtime on the same fact instead of flag-gating the body. All ten joined
+`BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS`, so each wrapper is excluded
+exactly when `programUsesAnyArrayOp` is false; `LispMacroExpander.usesGeneralArrayOp`
+(the JVM scan `programUsesAnyArrayOp` calls) already named `coerce`/`vector`/`svref`/
+`array-rank`/`array-dimension`/`array-total-size`/`array-row-major-index`, so only
+`fill`/`read-sequence`/`write-sequence` were new there -- and `WasmLispCompiler`'s own
+`programUsesAnyArrayOp` (which the same `ARRAY_FILL_POINTER_FUNCTIONS` set gates on
+WASM) got the same three added, so the two scans cannot drift and a program that takes
+`#'fill` as a value with no other array op keeps its wrapper on both backends. Pinned by
+`JvmLispCompilerTest`'s `aProgramThatNeverNamesAnArrayOperatorCarriesNoArrayRuntime` /
+`namingOneOfTheArrayWrappersBringsTheArrayRuntimeBack`.
+
 The packed `_fv*` / `_iv*` tiers need no equivalent: `Ctx.usesArrays` is true
 whenever `usesFloatArray` / `usesIntArray` is, and an `aref` only compiles to
 `_ivAref1` / `_fvAref1` when that tier is emitted, so a wrapper body can never
