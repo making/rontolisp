@@ -93,12 +93,13 @@ final class ObjcBridge {
 			if (args.size() < 2 || !(args.get(1) instanceof LispString selector)) {
 				throw new LispEvalException("objc:send expects (objc:send receiver \"selector\" args...)");
 			}
-			ObjcRuntime runtime = ObjcRuntime.get();
 			LispVal target = args.get(0);
 			if (target instanceof LispNil) {
-				// Objective-C answers nil to a message sent to nil.
+				// Objective-C answers nil to a message sent to nil, even on a machine
+				// without the runtime -- no need to require it just to answer nil.
 				return LispNil.INSTANCE;
 			}
+			ObjcRuntime runtime = ObjcRuntime.get();
 			@Nullable Object[] operands = new @Nullable Object[args.size() - 2];
 			for (int i = 2; i < args.size(); i++) {
 				operands[i - 2] = toJava(args.get(i));
