@@ -16,8 +16,10 @@
 ;;;;
 ;;;; macOS only: the interpreter and a compiled JVM class both carry the binding;
 ;;;; WASM has no foreign function API and refuses (doc/en/guides/objc-appkit.md).
-;;;; The rendering layer is the reusable `cocoa` package (../../macos/cocoa.lisp),
-;;;; the AppKit counterpart of the Swing build's ../../jvm/swing.lisp.
+;;;; The widgets are the built-in `appkit` package -- a colour, a rounded panel,
+;;;; a centred label, a click, a timer -- and the board itself is the reusable
+;;;; `cocoa` grid (../../macos/cocoa.lisp), the AppKit counterpart of the Swing
+;;;; build's ../../jvm/swing.lisp.
 ;;;;
 ;;;; Left-click opens a cell, right-click (or Ctrl-click) flags it, and the face
 ;;;; starts a fresh board. Like the Swing build and unlike the entropy-free WASM
@@ -52,21 +54,21 @@
 
 ;;; --- palette -----------------------------------------------------------------
 
-(defparameter *c-window* (cocoa:rgb 26 29 38))   ; the window itself
-(defparameter *c-readout* (cocoa:rgb 16 18 25))  ; the two counter panels
-(defparameter *c-digits* (cocoa:rgb 255 176 74)) ; their amber digits
-(defparameter *c-face* (cocoa:rgb 246 200 92))   ; the new-game button
-(defparameter *c-hint* (cocoa:rgb 138 146 166))  ; the line under the board
+(defparameter *c-window* (appkit:color 26 29 38))   ; the window itself
+(defparameter *c-readout* (appkit:color 16 18 25))  ; the two counter panels
+(defparameter *c-digits* (appkit:color 255 176 74)) ; their amber digits
+(defparameter *c-face* (appkit:color 246 200 92))   ; the new-game button
+(defparameter *c-hint* (appkit:color 138 146 166))  ; the line under the board
 
 ;; Covered cells alternate between two shades -- a checkerboard that makes a
 ;; large board readable without any grid lines.
-(defparameter *c-hidden-a* (cocoa:rgb 104 116 146))
-(defparameter *c-hidden-b* (cocoa:rgb 94 106 136))
-(defparameter *c-open-a* (cocoa:rgb 230 233 241))
-(defparameter *c-open-b* (cocoa:rgb 220 224 234))
-(defparameter *c-boom* (cocoa:rgb 214 69 65)) ; the mine you stepped on
+(defparameter *c-hidden-a* (appkit:color 104 116 146))
+(defparameter *c-hidden-b* (appkit:color 94 106 136))
+(defparameter *c-open-a* (appkit:color 230 233 241))
+(defparameter *c-open-b* (appkit:color 220 224 234))
+(defparameter *c-boom* (appkit:color 214 69 65)) ; the mine you stepped on
 
-(defparameter *fg-wrong* (cocoa:rgb 150 40 40))
+(defparameter *fg-wrong* (appkit:color 150 40 40))
 
 (defparameter *glyph-mine* "💣")
 (defparameter *glyph-flag* "🚩")
@@ -74,60 +76,87 @@
 
 ;;; Classic per-number text colours (1 blue, 2 green, 3 red, ...).
 (defun number-color (n)
-  (cond ((= n 1) (cocoa:rgb 25 60 210))
-        ((= n 2) (cocoa:rgb 20 130 40))
-        ((= n 3) (cocoa:rgb 210 40 40))
-        ((= n 4) (cocoa:rgb 20 20 140))
-        ((= n 5) (cocoa:rgb 140 30 30))
-        ((= n 6) (cocoa:rgb 20 130 130))
-        ((= n 7) (cocoa:rgb 24 24 28))
-        (t (cocoa:rgb 90 90 90))))
+  (cond ((= n 1) (appkit:color 25 60 210))
+        ((= n 2) (appkit:color 20 130 40))
+        ((= n 3) (appkit:color 210 40 40))
+        ((= n 4) (appkit:color 20 20 140))
+        ((= n 5) (appkit:color 140 30 30))
+        ((= n 6) (appkit:color 20 130 130))
+        ((= n 7) (appkit:color 24 24 28))
+        (t (appkit:color 90 90 90))))
 
 ;;; --- the window (the only part that differs from the Swing build) ------------
 
 (defparameter *win*
-  (cocoa:window "rontolisp minesweeper" *win-w* *win-h*
-                :background *c-window*
-                :dark t))
+  (appkit:window "rontolisp minesweeper"
+                 :width *win-w*
+                 :height *win-h*
+                 :background *c-window*
+                 :dark t))
 
-;; Left: mines remaining. Right: elapsed seconds. Both are a dark rounded panel
-;; with amber digits, the way the arcade original counted.
-(cocoa:panel *win* *pad* (+ *header-y* 4) 96 44 :fill *c-readout* :radius 10)
+;; A dark rounded panel with amber digits, the way the arcade original counted:
+;; the panel is the backdrop, the label answered is what the game writes into.
+(defun readout (x)
+  (appkit:panel *win*
+                :x x
+                :y (+ *header-y* 4)
+                :width 96
+                :height 44
+                :fill *c-readout*
+                :radius 10)
+  (appkit:label *win* ""
+                :x x
+                :y (+ *header-y* 4)
+                :width 96
+                :height 44
+                :size 19
+                :color *c-digits*
+                :align :center
+                :bold t))
 
-(defparameter *mine-readout*
-  (cocoa:text *win* "" *pad* (+ *header-y* 4) 96 44 :size 19 :color *c-digits*))
+;; Left: mines remaining. Right: elapsed seconds.
+(defparameter *mine-readout* (readout *pad*))
 
-(cocoa:panel *win* (- *win-w* *pad* 96) (+ *header-y* 4) 96 44
-             :fill *c-readout*
-             :radius 10)
-
-(defparameter *time-readout*
-  (cocoa:text *win* "" (- *win-w* *pad* 96) (+ *header-y* 4) 96 44
-              :size 19
-              :color *c-digits*))
+(defparameter *time-readout* (readout (- *win-w* *pad* 96)))
 
 ;; Centre: the face. A tile like any other, so a click reaches it the same way.
 (defparameter *face-tile*
-  (cocoa:panel *win* (/ (- *win-w* 52) 2) *header-y* 52 52
-               :fill *c-face*
-               :radius 14))
+  (appkit:panel *win*
+                :x (/ (- *win-w* 52) 2)
+                :y *header-y*
+                :width 52
+                :height 52
+                :fill *c-face*
+                :radius 14))
 
 (defparameter *face*
-  (cocoa:text *win* "🙂" (/ (- *win-w* 52) 2) *header-y* 52 52 :size 26))
+  (appkit:label *win* "🙂"
+                :x (/ (- *win-w* 52) 2)
+                :y *header-y*
+                :width 52
+                :height 52
+                :size 26
+                :align :center
+                :bold t))
 
 (defparameter *hint*
-  (cocoa:text *win* "" *pad* *hint-y* *board-w* 20
-              :size 12
-              :color *c-hint*
-              :bold nil))
+  (appkit:label *win* ""
+                :x *pad*
+                :y *hint-y*
+                :width *board-w*
+                :height 20
+                :size 12
+                :color *c-hint*
+                :align :center))
 
-(cocoa:grid *win* *h* *w*
-            :size *tile*
-            :gap *gap*
-            :x *pad*
-            :y *board-y*
-            :font-size 19
-            :radius 7)
+(defparameter *board*
+  (cocoa:grid *win* *h* *w*
+              :size *tile*
+              :gap *gap*
+              :x *pad*
+              :y *board-y*
+              :font-size 19
+              :radius 7))
 
 ;;; --- the live game -----------------------------------------------------------
 
@@ -152,39 +181,39 @@
          (is-mine (= (nth i (st-mines state)) 1))
          (is-rev (= (nth i (st-revealed state)) 1))
          (is-flag (= (nth i (st-flags state)) 1)))
-    (cocoa:cell-text *win* r c "")
+    (cocoa:cell-text *board* r c "")
     (cond
           ;; The mine you actually stepped on.
           ((and is-rev is-mine)
-           (cocoa:paint *win* r c *c-boom*)
-           (cocoa:cell-text *win* r c *glyph-mine*))
+           (cocoa:paint *board* r c *c-boom*)
+           (cocoa:cell-text *board* r c *glyph-mine*))
           ;; A normally revealed cell: blank, or a neighbour count 1..8.
           (is-rev
-           (cocoa:paint *win* r c (if dark *c-open-b* *c-open-a*))
+           (cocoa:paint *board* r c (if dark *c-open-b* *c-open-a*))
            (let ((cnt (adjacent-count (st-mines state) i *w* *h*)))
              (when (> cnt 0)
-               (cocoa:cell-fg *win* r c (number-color cnt))
-               (cocoa:cell-text *win* r c (princ-to-string cnt)))))
+               (cocoa:cell-fg *board* r c (number-color cnt))
+               (cocoa:cell-text *board* r c (princ-to-string cnt)))))
           ;; Game over: reveal every remaining mine -- as a planted flag if the
           ;; board was swept, as a bomb if it was not.
           ((and over is-mine)
-           (cocoa:paint *win* r c
+           (cocoa:paint *board* r c
                         (if (= (game-status state) 1)
                             (if dark *c-hidden-b* *c-hidden-a*)
                             (if dark *c-open-b* *c-open-a*)))
-           (cocoa:cell-text *win* r c
+           (cocoa:cell-text *board* r c
             (if (= (game-status state) 1) *glyph-flag* *glyph-mine*)))
           ;; Game over: a flag that turned out to be wrong.
           ((and over is-flag)
-           (cocoa:paint *win* r c (if dark *c-open-b* *c-open-a*))
-           (cocoa:cell-fg *win* r c *fg-wrong*)
-           (cocoa:cell-text *win* r c *glyph-wrong*))
+           (cocoa:paint *board* r c (if dark *c-open-b* *c-open-a*))
+           (cocoa:cell-fg *board* r c *fg-wrong*)
+           (cocoa:cell-text *board* r c *glyph-wrong*))
           ;; A flag still standing.
           (is-flag
-           (cocoa:paint *win* r c (if dark *c-hidden-b* *c-hidden-a*))
-           (cocoa:cell-text *win* r c *glyph-flag*))
+           (cocoa:paint *board* r c (if dark *c-hidden-b* *c-hidden-a*))
+           (cocoa:cell-text *board* r c *glyph-flag*))
           ;; An ordinary covered cell.
-          (t (cocoa:paint *win* r c (if dark *c-hidden-b* *c-hidden-a*))))))
+          (t (cocoa:paint *board* r c (if dark *c-hidden-b* *c-hidden-a*))))))
 
 (defun mines-shown ()
   (cond ((= (game-status *state*) 1) 0)
@@ -201,12 +230,12 @@
 
 (defun update-header ()
   (let ((s (game-status *state*)))
-    (cocoa:set-text *mine-readout*
-                    (concatenate 'string "💣 " (digits (mines-shown))))
-    (cocoa:set-text *time-readout*
-                    (concatenate 'string "⏱ " (digits *seconds*)))
-    (cocoa:set-text *face* (face-glyph s))
-    (cocoa:set-text *hint* (hint-text s))))
+    (appkit:set-text *mine-readout*
+                     (concatenate 'string "💣 " (digits (mines-shown))))
+    (appkit:set-text *time-readout*
+                     (concatenate 'string "⏱ " (digits *seconds*)))
+    (appkit:set-text *face* (face-glyph s))
+    (appkit:set-text *hint* (hint-text s))))
 
 (defun draw ()
   (dotimes (i (* *w* *h*)) (paint-cell i (floor (/ i *w*)) (mod i *w*)))
@@ -242,13 +271,13 @@
 ;; (a timer answering nil invalidates itself).
 (defun start-clock ()
   (let ((mine *generation*))
-    (cocoa:animate 1
-                   (lambda ()
-                     (when (and (= mine *generation*)
-                                (= (game-status *state*) 0))
-                       (setq *seconds* (+ *seconds* 1))
-                       (update-header)
-                       t)))))
+    (appkit:timer 1
+                  (lambda ()
+                    (when (and (= mine *generation*)
+                               (= (game-status *state*) 0))
+                      (setq *seconds* (+ *seconds* 1))
+                      (update-header)
+                      t)))))
 
 ;;; --- interaction -------------------------------------------------------------
 
@@ -285,13 +314,13 @@
 
 ;;; --- wire it up --------------------------------------------------------------
 
-(cocoa:on-cell-click *win* (function on-click))
-(cocoa:clickable *face-tile* (lambda (button) (reset)))
-(cocoa:clickable *face* (lambda (button) (reset)))
+(cocoa:on-cell-click *board* (function on-click))
+(appkit:on-click *face-tile* (lambda (button) (reset)))
+(appkit:on-click *face* (lambda (button) (reset)))
 (reset)
 
 (format t "minesweeper window ~a is open; close it to quit~%"
-        (objc:send (cocoa:ns-window *win*) "windowNumber"))
+        (objc:send *win* "windowNumber"))
 
 ;; A script's process ends when its last form returns, so wait for the close.
-(cocoa:wait *win*)
+(appkit:wait *win*)

@@ -177,14 +177,16 @@ See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 | File | What it demonstrates |
 | --- | --- |
 | [`counter.lisp`](macos/counter.lisp) | A window, a label and a button whose action is a Lisp closure; one raw `objc:send` for what the widget layer lacks; `appkit:wait` so the script outlives its last form |
-| [`cocoa.lisp`](macos/cocoa.lisp) | A reusable AppKit helper library written entirely on `objc:` + `appkit:`, in its own package -- rounded panels, vertically centred labels, a clickable grid (`objc:define-class` makes a view whose `mouseDown:` is a Lisp function) and an `NSTimer`; the AppKit counterpart of [`swing.lisp`](jvm/swing.lisp) |
+| [`cocoa.lisp`](macos/cocoa.lisp) | A clickable grid of tiles over the built-in `appkit:` rungs (`panel`, `label`, `on-click`), in its own package -- the board-game policy the widget layer deliberately leaves out; the AppKit counterpart of [`swing.lisp`](jvm/swing.lisp)'s `label-grid-window` |
 | [`minesweeper-macos.lisp`](browser/minesweeper/minesweeper-macos.lisp) | Minesweeper as a native Cocoa window, loading the same core as the browser and Swing builds |
+| [`life-macos.lisp`](macos/life-macos.lisp) | Game of Life on an `appkit:timer`, loading the same `life-core.lisp` as [`life-gui.lisp`](jvm/life-gui.lisp) -- the same world, a Cocoa surface instead of a Swing one; a click edits the world under the simulation |
 | [`listener.lisp`](macos/listener.lisp) | A Lisp listener in a Cocoa window, the way Clozure CL's IDE does it: an `NSTextView` transcript in an `NSScrollView`, an editable `NSTextField` whose Return key is a Lisp closure (`objc:define-class` again, this time for a target/action), and `eval` on what it reads -- printed output captured, an error shown as a line. The window and the evaluator are one image, so a form typed in opens the next window |
 | [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
 
 ```bash
 java -jar $JAR examples/macos/objc-runtime.lisp     # no window; prints and exits
 java -jar $JAR examples/macos/counter.lisp
+java -jar $JAR examples/macos/life-macos.lisp
 java -jar $JAR examples/macos/listener.lisp
 ./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp

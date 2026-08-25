@@ -8,8 +8,11 @@ widget layer written in rontolisp over those verbs (`appkit.lisp`), shipped insi
 interpreter the way `linalg.lisp` is (`.kb/linalg.md`): a bare REPL types
 `(appkit:window "hi")` with nothing required and nothing to copy. The user-facing
 description is `doc/{en,ja}/guides/objc-appkit.md`; the examples are
-`examples/macos/counter.lisp` and, over the reusable `cocoa` helper package
-`examples/macos/cocoa.lisp`, `examples/browser/minesweeper/minesweeper-macos.lisp`, and
+`examples/macos/counter.lisp` and, over the `cocoa` grid helper
+`examples/macos/cocoa.lisp`, `examples/browser/minesweeper/minesweeper-macos.lisp` and
+`examples/macos/life-macos.lisp` (Conway's Life on an `appkit:timer`, the Swing
+front-end's twin over one shared core -- the second consumer that fixed the promoted
+API, "Where the line goes" below), and
 `examples/macos/listener.lisp` -- a Lisp listener in a Cocoa window (an `NSTextView`
 transcript, an editable field whose Return key is a Lisp closure, `eval` on what it
 reads), the shortest demonstration that the window and the evaluator are one image
@@ -85,6 +88,43 @@ above an upcall kills the process. An exception inside a `sync` body is carried 
 rethrown on the caller's thread as it was, so a Lisp non-local exit through
 `objc:on-main` works.
 
+## Where the line goes: widgets ship, layout stays an example
+
+(todo-515, 2026-08-25) `appkit` carries the rungs immediately above a window --
+`appkit:color`, `appkit:font`, `appkit:panel` (an `NSBox` in its custom form),
+`appkit:set-color`, `appkit:on-click`, `appkit:timer`, a vertically centred
+`appkit:label`, and `:background` / `:dark` on `appkit:window` -- because the binary is
+what people install and a binary user has no `examples/` directory to copy from. Two of
+them cannot be reached by an obvious `objc:send` at all: a centred label needs the font's
+line height MEASURED (an `NSTextField` draws its string at the TOP of its frame;
+`appkit::%line-height` asks a throwaway `sizeToFit` field once per font and caches by font
+address), and a clickable view needs a run-time subclass, since `NSBox` and `NSTextField`
+answer no click -- `appkit::%clickable-class` defines `RontoLispAppKitPanel` /
+`RontoLispAppKitLabel` over `mouseDown:` / `rightMouseDown:`, and every panel and label is
+an instance of one, so one address-keyed table lets a panel and the label drawn over it
+share a handler with no event forwarding.
+
+What stays OUT is LAYOUT: `examples/macos/cocoa.lisp` is now the grid alone -- rows
+top-down, a panel plus a label per cell, both wired to one handler -- board-game policy,
+the AppKit twin of `swing:label-grid-window`, which stayed an example for the same reason.
+
+The decisions that are load-bearing:
+
+- The rungs are `appkit:` functions, NOT a second built-in `cocoa` package: a package name
+  is taken for good (no shadowing, no `delete-package`), and one toolkit reading under two
+  prefixes buys the user nothing.
+- `appkit:on-click`'s handler takes the BUTTON NUMBER -- 1 left, 3 right, the
+  `java.awt.event` numbers, so a Swing front-end's handler reads the same. A button's own
+  `:on-click` closure takes none (a button has no right click); given a button,
+  `on-click` sets its target/action, so one verb wires any widget.
+- `appkit:set-color` dispatches on the view the way `appkit:set-text` does: an `NSBox`
+  gets `setFillColor:` + `setNeedsDisplay:`, anything else `setTextColor:`.
+- A rung costs a `PackageRegistry.APPKIT_FUNCTIONS` entry (the library and the registry
+  must agree EXACTLY -- `AppKitLibraryTest`), a per-operator page under
+  `doc/{en,ja}/reference/functions/appkit-*.md` with a `_catalog.yaml` entry and a row in
+  the guide's table in BOTH languages, and growth in the blob: `AppKitLibrary.process`
+  prepends the whole library, unpruned, to every compiled `appkit:` program.
+
 ## `objc:send` derives its shape from the runtime -- and the native binary serves a closed table
 
 The runtime describes every selector completely (`method_getTypeEncoding`:
@@ -101,19 +141,20 @@ function pointers are refused by name.
 A native image builds a downcall stub only for a shape registered at build time
 (`MissingForeignRegistrationError`, an `Error`, at `Linker.downcallHandle`), so the served
 set is a CLOSED TABLE in `reachability-metadata.json`: the runtime's own C functions, every
-shape `appkit.lisp`, the `cocoa` example library and the documented examples send, and the
+shape `appkit.lisp` and the documented examples send, and the
 60 most common shapes of a
 census over 29 core AppKit/Foundation classes (13,065 methods, 90.6% reached; the spike's
 `ShapeCensus.java` at `.todo/512-*/`, re-runnable). Exactly one entry is outside both --
 `NSTimer`'s `scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:`, the clock
-behind `cocoa:animate`; everything else `cocoa.lisp` sends (NSBox, the NSTextField
+behind `appkit:timer`; everything else the widget rungs send (NSBox, the NSTextField
 setters, NSFont, NSAppearance) was already served by the census. A selector outside the
 table signals with the exact entry to add. The JVM registers nothing and binds any shape, so `java -jar` is where
 a program discovers what it sends. Pinned by `ObjcNativeImageForeignConfigTest`: the
 runtime shapes and the callback stubs on every machine (against `NativeImageDowncalls.EVERYTHING`),
 the `appkit` selectors resolved on a Mac against the file. **A new selector in
-`appkit.lisp`, in `examples/macos/cocoa.lisp`, in `examples/macos/objc-runtime.lisp` or in
-the docs is a row in that test's table.**
+`appkit.lisp`, in `examples/macos/objc-runtime.lisp`, in `examples/macos/listener.lisp` or
+in the docs is a row in that test's table.** An example that only calls `appkit:` adds
+nothing: the widget layer is where the sends live.
 
 The `foreign.upcalls` section is the project's first. `ObjcClasses` defines a class at
 run time (`objc_allocateClassPair` + `class_addMethod` + `objc_registerClassPair`) whose
@@ -213,7 +254,10 @@ would hang `DocExamplesTest`, so the guide uses `console` fences). The visible l
 window, click, label mutated by Lisp, close survived, on `java -jar` AND the native binary
 -- is verified by hand with `examples/macos/counter.lisp`, and the widened surface
 (a run-time NSBox/NSTextField subclass whose `mouseDown:`/`rightMouseDown:` are Lisp
-functions, an `NSTimer`) with `examples/browser/minesweeper/minesweeper-macos.lisp`;
+functions, an `NSTimer`) with `examples/browser/minesweeper/minesweeper-macos.lisp` and
+`examples/macos/life-macos.lisp` -- the latter on all three (`java -jar`, the native
+binary, `-o Life.class`), which is what a change to the widget layer costs, since it now
+travels into every compiled `appkit:` program;
 the todo's probes stay under
 `.todo/512-*/` for re-running the mechanism on another Mac.
 

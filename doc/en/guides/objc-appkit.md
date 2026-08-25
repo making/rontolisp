@@ -4,7 +4,8 @@ Two built-in packages open a real Cocoa window from a rontolisp REPL with nothin
 installed: `objc` binds the Objective-C runtime and AppKit through the JVM's
 foreign function API (no JNI, no bundled native library, no reflection), and
 `appkit` is a small widget layer written in rontolisp on top of it — a window, a
-label, a button whose action is a Lisp closure.
+label, a button whose action is a Lisp closure, a coloured panel, a click and a
+repeating timer.
 
 > **macOS only; interpreter and JVM class.** Both packages work under
 > `java -jar rontolisp.jar`, in the `rontolisp` native binary — the binding needs no
@@ -36,9 +37,10 @@ because a script's process exits when its last form returns.
 
 Anything larger is built the same way, in Lisp:
 `examples/browser/minesweeper/minesweeper-macos.lisp` plays a full Minesweeper in a
-Cocoa window, and its rendering layer — `examples/macos/cocoa.lisp`, a reusable
-`cocoa` package of rounded panels, vertically centred labels, a clickable grid and a
-repeating timer — is written entirely on the verbs below.
+Cocoa window and `examples/macos/life-macos.lisp` runs Conway's Life in one, both
+out of the widgets below. What the two share above them is a board:
+`examples/macos/cocoa.lisp`, a small `cocoa` package holding the grid of clickable
+tiles they happen to want — board-game policy, which is why it stays an example.
 
 `examples/macos/listener.lisp` puts the language itself in the window: a transcript in
 an `NSTextView`, an editable `NSTextField` whose Return key is a Lisp closure, and
@@ -48,19 +50,42 @@ into it can open the next window.
 
 | Function | Purpose |
 |----------|---------|
-| `appkit:window` | `(appkit:window title &key (width 480) (height 300))` — a shown, centered `NSWindow` |
-| `appkit:label` | `(appkit:label window text &key (x 20) (y 20) (width 200) (height 24))` — an `NSTextField` label |
+| `appkit:window` | `(appkit:window title &key (width 480) (height 300) background dark)` — a shown, centered `NSWindow` |
+| `appkit:label` | `(appkit:label window text &key x y width height (size 13) color (align :left) bold)` — an `NSTextField` label, its string centred in the rectangle |
 | `appkit:button` | `(appkit:button window title &key x y (width 120) (height 32) on-click)` — an `NSButton`; `on-click` is a zero-argument function |
+| `appkit:panel` | `(appkit:panel window &key x y width height fill (radius 0) (border 0) border-color)` — a filled, rounded `NSBox` |
+| `appkit:color` | `(appkit:color r g b &optional (alpha 1.0))` — an `NSColor` from 0-255 components |
+| `appkit:font` | `(appkit:font size &key bold)` — the system font at that size |
 | `appkit:set-text` | `(appkit:set-text view text)` — a button's title, any other control's string value |
+| `appkit:set-color` | `(appkit:set-color view color)` — a panel's fill colour, any other control's text colour |
 | `appkit:text` | `(appkit:text view)` — the title or string value, as a Lisp string |
+| `appkit:on-click` | `(appkit:on-click view handler)` — the handler takes the button number: 1 left, 3 right |
 | `appkit:click` | `(appkit:click button)` — performs the action as a click would |
+| `appkit:timer` | `(appkit:timer seconds fn)` — a repeating `NSTimer`; `fn` answering `nil` stops it |
 | `appkit:close` | `(appkit:close window)` — closes (hides) the window; the value stays valid |
 | `appkit:visible-p` | `(appkit:visible-p window)` — whether it is on screen |
 | `appkit:wait` | `(appkit:wait window)` — blocks the calling thread until the window is closed |
 
-Coordinates are AppKit's: the origin is the window's bottom-left corner. Every
-widget is a plain Objective-C object, so anything the layer lacks is one `objc:send`
-away:
+Coordinates are AppKit's: the origin is the window's bottom-left corner. A label is
+centred vertically in the rectangle it is given, which is what puts a digit in the
+middle of a tile; a panel is the tile itself, and both answer a click:
+
+```console
+> (defvar *board* (appkit:window "tiles" :width 200 :height 200
+                                 :background (appkit:color 26 29 38) :dark t))
+> (defvar *tile* (appkit:panel *board* :x 20 :y 20 :width 34 :height 34
+                               :fill (appkit:color 104 116 146) :radius 7))
+> (defvar *digit* (appkit:label *board* "3" :x 20 :y 20 :width 34 :height 34
+                                :size 19 :align :center :bold t))
+> (appkit:on-click *tile*
+    (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
+#<objc RontoLispAppKitPanel>
+> (appkit:timer 1 (lambda () (appkit:set-text *digit* "4") nil))
+#<objc __NSCFTimer>
+```
+
+Every widget is a plain Objective-C object, so anything the layer lacks is one
+`objc:send` away:
 
 ```console
 > (objc:send *win* "setBackgroundColor:"

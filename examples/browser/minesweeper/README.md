@@ -77,10 +77,11 @@ display, and unlike the Swing build it also runs in the **`rontolisp` native
 binary**, where `java:` interop cannot be interpreted at all ([the macOS GUI
 guide](../../../doc/en/guides/objc-appkit.md) says why). Compiling it to a
 `.class` works exactly like the Swing build's, the binding travelling inside the
-class; only WASM refuses, having no foreign function API. Its rendering layer is
-the reusable [`../../macos/cocoa.lisp`](../../macos/cocoa.lisp) `cocoa` package
--- the AppKit counterpart of `swing.lisp`, spliced in the same way with
-`(require :cocoa "../../macos/cocoa.lisp")`.
+class; only WASM refuses, having no foreign function API. Its widgets -- a
+colour, a rounded panel, a centred label, a click, a timer -- are the built-in
+`appkit` package; only the board on top of them is an example of its own,
+[`../../macos/cocoa.lisp`](../../macos/cocoa.lisp), spliced in like the Swing
+build's helper with `(require :cocoa "../../macos/cocoa.lisp")`.
 
 ## Play it in the browser (WebAssembly)
 

@@ -56,8 +56,7 @@ class ObjcNativeImageForeignConfigTest {
 	/**
 	 * Every selector the widget layer and the documented examples send: a class, a
 	 * selector, and whether it is a class method. Kept in step with {@code appkit.lisp},
-	 * {@code doc/en/guides/objc-appkit.md} and the {@code cocoa} example library
-	 * ({@code examples/macos/cocoa.lisp}) and the runtime example
+	 * {@code doc/en/guides/objc-appkit.md}, the runtime example
 	 * ({@code examples/macos/objc-runtime.lisp}) and the listener example
 	 * ({@code examples/macos/listener.lisp}) by hand; a new selector there is a row here,
 	 * so the binary is known to serve it before it ships.

@@ -668,9 +668,15 @@ categories:
       - { slug: appkit-window, name: "appkit:window" }
       - { slug: appkit-label, name: "appkit:label" }
       - { slug: appkit-button, name: "appkit:button" }
+      - { slug: appkit-panel, name: "appkit:panel" }
+      - { slug: appkit-color, name: "appkit:color" }
+      - { slug: appkit-font, name: "appkit:font" }
       - { slug: appkit-set-text, name: "appkit:set-text" }
+      - { slug: appkit-set-color, name: "appkit:set-color" }
       - { slug: appkit-text, name: "appkit:text" }
+      - { slug: appkit-on-click, name: "appkit:on-click" }
       - { slug: appkit-click, name: "appkit:click" }
+      - { slug: appkit-timer, name: "appkit:timer" }
       - { slug: appkit-close, name: "appkit:close" }
       - { slug: appkit-visible-p, name: "appkit:visible-p" }
       - { slug: appkit-wait, name: "appkit:wait" }

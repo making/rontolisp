@@ -1,6 +1,6 @@
 # macOS GUI (objc / appkit)
 
-2 つの組み込みパッケージで、何もインストールせずに rontolisp の REPL から本物の Cocoa ウィンドウを開けます。`objc` は JVM の Foreign Function API を通じて Objective-C ランタイムと AppKit をバインドし (JNI なし、同梱ネイティブライブラリなし、リフレクションなし)、`appkit` はその上に rontolisp で書かれた小さなウィジェット層です — ウィンドウ、ラベル、Lisp クロージャをアクションに持つボタン。
+2 つの組み込みパッケージで、何もインストールせずに rontolisp の REPL から本物の Cocoa ウィンドウを開けます。`objc` は JVM の Foreign Function API を通じて Objective-C ランタイムと AppKit をバインドし (JNI なし、同梱ネイティブライブラリなし、リフレクションなし)、`appkit` はその上に rontolisp で書かれた小さなウィジェット層です — ウィンドウ、ラベル、Lisp クロージャをアクションに持つボタン、色付きパネル、クリック、繰り返しタイマー。
 
 > **macOS 専用。インタプリタと JVM クラスで動作。** 両パッケージは `java -jar rontolisp.jar`、`rontolisp` ネイティブバイナリ (バインディングはリフレクションを必要としないためで、これが `java:` 連携にはできないことです)、そしてバインディングを内部に抱えた `.class` / `.jar` にコンパイルしたプログラムで動作します。どちらの WASM バックエンドにも foreign function API はないので、そうしたプログラムを `.wasm` にコンパイルすると `Cannot compile: appkit:window ...` エラーになります。Linux 上、またはネイティブアクセスを拒否する JVM (`--illegal-native-access=deny`) では、すべての `objc:` 関数が関数名で始まり理由を述べるメッセージの通常の `error` をシグナルします。
 
@@ -18,23 +18,45 @@
 
 ウィンドウが中央に前面表示され、ボタンをクリックするとクロージャが実行されてラベルが更新されます。その間も REPL はあなたのものです — ウィンドウはプロセスの最初のスレッド上にあり、入力を読むスレッドとは別です — し、ウィンドウを閉じても REPL は終了しません。`examples/macos/counter.lisp` は同じプログラムをスクリプトにしたもので、末尾の `(appkit:wait *win*)` がウィンドウが閉じられるまでブロックします。スクリプトのプロセスは最後のフォームが返ると終了するためです。
 
-もっと大きなものも同じように Lisp で組み立てます。`examples/browser/minesweeper/minesweeper-macos.lisp` は Cocoa ウィンドウで完全なマインスイーパを遊べますし、その描画層 — 角丸パネル、垂直中央寄せのラベル、クリック可能なグリッド、繰り返しタイマーを持つ再利用可能な `cocoa` パッケージ `examples/macos/cocoa.lisp` — はすべて以下の動詞だけで書かれています。
+もっと大きなものも同じように Lisp で組み立てます。`examples/browser/minesweeper/minesweeper-macos.lisp` は Cocoa ウィンドウで完全なマインスイーパを遊べますし、`examples/macos/life-macos.lisp` はその中でライフゲームを走らせます。どちらも以下のウィジェットだけでできています。2 つが共有しているのはその上のボード、つまり両者がたまたま欲しがったクリック可能なタイルのグリッドを持つ小さな `cocoa` パッケージ `examples/macos/cocoa.lisp` です。これはボードゲームのポリシーであり、だからこそサンプルのままです。
 
 `examples/macos/listener.lisp` は言語そのものをウィンドウに載せます。`NSTextView` のトランスクリプト、Return キーが Lisp のクロージャである編集可能な `NSTextField`、そして読み取った式への `eval` — 印字された出力も取り込み、エラーはプロセスを終わらせずに一行として表示されます。ウィンドウと評価器は同じイメージなので、そこに打ち込んだ式が次のウィンドウを開けます。
 
 | 関数 | 用途 |
 |------|------|
-| `appkit:window` | `(appkit:window title &key (width 480) (height 300))` — 表示済み・中央配置の `NSWindow` |
-| `appkit:label` | `(appkit:label window text &key (x 20) (y 20) (width 200) (height 24))` — `NSTextField` のラベル |
+| `appkit:window` | `(appkit:window title &key (width 480) (height 300) background dark)` — 表示済み・中央配置の `NSWindow` |
+| `appkit:label` | `(appkit:label window text &key x y width height (size 13) color (align :left) bold)` — 矩形内で文字列を中央寄せした `NSTextField` ラベル |
 | `appkit:button` | `(appkit:button window title &key x y (width 120) (height 32) on-click)` — `NSButton`。`on-click` は引数なしの関数 |
+| `appkit:panel` | `(appkit:panel window &key x y width height fill (radius 0) (border 0) border-color)` — 塗りつぶした角丸の `NSBox` |
+| `appkit:color` | `(appkit:color r g b &optional (alpha 1.0))` — 0-255 の成分から作る `NSColor` |
+| `appkit:font` | `(appkit:font size &key bold)` — そのサイズのシステムフォント |
 | `appkit:set-text` | `(appkit:set-text view text)` — ボタンならタイトル、それ以外のコントロールなら string value |
+| `appkit:set-color` | `(appkit:set-color view color)` — パネルなら塗りつぶし色、それ以外のコントロールなら文字色 |
 | `appkit:text` | `(appkit:text view)` — タイトルまたは string value を Lisp 文字列で |
+| `appkit:on-click` | `(appkit:on-click view handler)` — ハンドラはボタン番号を取る。1 が左、3 が右 |
 | `appkit:click` | `(appkit:click button)` — クリックと同じようにアクションを実行 |
+| `appkit:timer` | `(appkit:timer seconds fn)` — 繰り返す `NSTimer`。`fn` が `nil` を返すと止まる |
 | `appkit:close` | `(appkit:close window)` — ウィンドウを閉じる (隠す)。値は有効なまま |
 | `appkit:visible-p` | `(appkit:visible-p window)` — 画面上にあるかどうか |
 | `appkit:wait` | `(appkit:wait window)` — ウィンドウが閉じられるまで呼び出し側スレッドをブロック |
 
-座標系は AppKit のもので、原点はウィンドウの左下です。すべてのウィジェットはただの Objective-C オブジェクトなので、この層にないものは `objc:send` 一つ分の距離にあります:
+座標系は AppKit のもので、原点はウィンドウの左下です。ラベルは与えられた矩形の中で垂直方向に中央寄せされ、それがタイルの中央に数字を置いてくれます。パネルはそのタイルそのもので、どちらもクリックに応えます:
+
+```console
+> (defvar *board* (appkit:window "tiles" :width 200 :height 200
+                                 :background (appkit:color 26 29 38) :dark t))
+> (defvar *tile* (appkit:panel *board* :x 20 :y 20 :width 34 :height 34
+                               :fill (appkit:color 104 116 146) :radius 7))
+> (defvar *digit* (appkit:label *board* "3" :x 20 :y 20 :width 34 :height 34
+                                :size 19 :align :center :bold t))
+> (appkit:on-click *tile*
+    (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
+#<objc RontoLispAppKitPanel>
+> (appkit:timer 1 (lambda () (appkit:set-text *digit* "4") nil))
+#<objc __NSCFTimer>
+```
+
+すべてのウィジェットはただの Objective-C オブジェクトなので、この層にないものは `objc:send` 一つ分の距離にあります:
 
 ```console
 > (objc:send *win* "setBackgroundColor:"
