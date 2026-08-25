@@ -6006,8 +6006,9 @@ public final class LispNames {
 	 * The {@code objc} package name: the Objective-C runtime through the foreign function
 	 * API ({@code am.ik.objc}, wired in {@code eval.ObjcInterop}). The exact analogue of
 	 * {@code java} -- a package named after the foreign system with a handful of generic
-	 * verbs -- but reflection-free, so it runs in the native binary too. Interpreter
-	 * only: no compiler lowers a {@code LispObjcObject}. Does not use {@code cl}.
+	 * verbs -- but reflection-free, so it runs in the native binary too. Interpreted, and
+	 * compiled to a JVM class (the binding travels in the class,
+	 * {@code codegen.jvm.JvmObjcRuntimeBuilder}); never to WASM. Does not use {@code cl}.
 	 */
 	public static final String OBJC_PKG = "OBJC";
 

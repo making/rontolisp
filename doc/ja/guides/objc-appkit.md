@@ -2,7 +2,7 @@
 
 2 つの組み込みパッケージで、何もインストールせずに rontolisp の REPL から本物の Cocoa ウィンドウを開けます。`objc` は JVM の Foreign Function API を通じて Objective-C ランタイムと AppKit をバインドし (JNI なし、同梱ネイティブライブラリなし、リフレクションなし)、`appkit` はその上に rontolisp で書かれた小さなウィジェット層です — ウィンドウ、ラベル、Lisp クロージャをアクションに持つボタン。
 
-> **macOS のインタプリタ専用。** 両パッケージは `java -jar rontolisp.jar` *と* `rontolisp` ネイティブバイナリの両方で動作します。バインディングはリフレクションを必要としないためで、これが `java:` 連携にはできないことです。どちらのコンパイラも Objective-C オブジェクトを lowering できないので、`objc:` や `appkit:` を参照するプログラムを `.class` や `.wasm` にコンパイルすると `Cannot compile: appkit:window ...` エラーになります。Linux 上、または `--enable-native-access=ALL-UNNAMED` なしで起動した JVM では、すべての `objc:` 関数が関数名で始まり理由を述べるメッセージの通常の `error` をシグナルします。
+> **macOS 専用。インタプリタと JVM クラスで動作。** 両パッケージは `java -jar rontolisp.jar`、`rontolisp` ネイティブバイナリ (バインディングはリフレクションを必要としないためで、これが `java:` 連携にはできないことです)、そしてバインディングを内部に抱えた `.class` / `.jar` にコンパイルしたプログラムで動作します。どちらの WASM バックエンドにも foreign function API はないので、そうしたプログラムを `.wasm` にコンパイルすると `Cannot compile: appkit:window ...` エラーになります。Linux 上、またはネイティブアクセスを拒否する JVM (`--illegal-native-access=deny`) では、すべての `objc:` 関数が関数名で始まり理由を述べるメッセージの通常の `error` をシグナルします。
 
 ## REPL からウィンドウを
 
@@ -17,6 +17,8 @@
 ```
 
 ウィンドウが中央に前面表示され、ボタンをクリックするとクロージャが実行されてラベルが更新されます。その間も REPL はあなたのものです — ウィンドウはプロセスの最初のスレッド上にあり、入力を読むスレッドとは別です — し、ウィンドウを閉じても REPL は終了しません。`examples/macos/counter.lisp` は同じプログラムをスクリプトにしたもので、末尾の `(appkit:wait *win*)` がウィンドウが閉じられるまでブロックします。スクリプトのプロセスは最後のフォームが返ると終了するためです。
+
+もっと大きなものも同じように Lisp で組み立てます。`examples/browser/minesweeper/minesweeper-macos.lisp` は Cocoa ウィンドウで完全なマインスイーパを遊べますし、その描画層 — 角丸パネル、垂直中央寄せのラベル、クリック可能なグリッド、繰り返しタイマーを持つ再利用可能な `cocoa` パッケージ `examples/macos/cocoa.lisp` — はすべて以下の動詞だけで書かれています。
 
 | 関数 | 用途 |
 |------|------|
@@ -119,9 +121,22 @@ in this binary; register it under foreign.downcalls in reachability-metadata.jso
 
 JVM は事前に何も登録せずどんな形でもバインドするので、バイナリを作る前にプログラムが何を送るかを知る場所は `java -jar` です。
 
+## JVM クラスへのコンパイル
+
+同じプログラムは `.class` や `.jar` にコンパイルでき、素の `java` ランチャで動きます。ランチャはプロセスの最初のスレッドを自分でイベントループに留めます:
+
+```console
+$ rontolisp examples/macos/counter.lisp -o Counter.class --class-name Counter
+$ java Counter
+$ rontolisp examples/macos/counter.lisp -o counter.jar --class-name Counter
+$ java -jar counter.jar
+```
+
+クラスはバインディング全体 (`am.ik.objc`、自身のパッケージにリネーム済み) と使用する `appkit` ウィジェットを抱えているので、`java.lang.foreign` を持つ JVM (コンパイラが動いたものか、それより新しいもの) 以外には何も必要ありません。素の `.class` を `--enable-native-access=ALL-UNNAMED` なしで実行すると JDK の restricted-method 警告が一度出ますが動作します。`.jar` はマニフェストでネイティブアクセスを有効にします。`rontolisp` バイナリもそうしたプログラムをコンパイルできます。`.wasm` 出力は拒否され (`Cannot compile: appkit:window ...`)、今後もそうです: そちら側には foreign function API も AppKit もありません。
+
 ## 制限
 
-- macOS のみ、インタプリタのみ (`java -jar`、または `rontolisp` バイナリ)。コンパイラでは使えず、`objc:` / `appkit:` の参照はすべてのバックエンドでコンパイルエラーです。
+- macOS のみ: インタプリタ (`java -jar`、または `rontolisp` バイナリ) とコンパイル済み `.class` / `.jar`。`.wasm` は不可で、`objc:` / `appkit:` の参照は両 WASM バックエンドでコンパイルエラーです。
 - アプリケーションバンドルのないプロセスには Dock アイコンもメニューバーもありません。Cmd-Q はなく、最後のウィンドウを閉じても終了しません — REPL がプロセスです。
 - コールバックの形は上の閉じた集合です。構造体や整数の引数を持つデリゲートメソッド、ブロックを取るセレクタは、この段階にはない段を必要とします。
 - Apple シリコン向け。Intel Mac では 2 レジスタより広い構造体は `objc_msgSend_stret` で返され、バインディングはそれを選びますが動作確認はしていません。

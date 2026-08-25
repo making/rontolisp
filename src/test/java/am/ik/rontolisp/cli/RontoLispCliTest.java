@@ -134,6 +134,10 @@ class RontoLispCliTest {
 		assertThat(manifest).contains("Manifest-Version: 1.0")
 			.contains("Created-By: rontolisp ")
 			.doesNotContain("Main-Class");
+		// Every jar enables native access for its unnamed module, like rontolisp's own
+		// exec jar: an objc:/--blas/--gpu program then runs under java -jar without
+		// the JDK's restricted-method warning, and the header is inert otherwise.
+		assertThat(manifest).contains("Enable-Native-Access: ALL-UNNAMED");
 		assertThat(new String(entries.get("META-INF/maven/com.acme/acme-kernels/pom.xml"), StandardCharsets.UTF_8))
 			.contains("<artifactId>acme-kernels</artifactId>");
 		assertThat(

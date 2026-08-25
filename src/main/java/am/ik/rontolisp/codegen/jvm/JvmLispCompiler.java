@@ -885,6 +885,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJava
 				? JvmJavaRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
 
+		// objc: runtime: emitted only when the program uses one of the seven objc: verbs
+		// (an appkit: program does, through the spliced appkit.lisp). It embeds the whole
+		// am.ik.objc library plus the bridge and the handle, renamed into this class's
+		// package (JvmObjcRuntimeBuilder), and forces the eval runtime: a method of
+		// objc:define-class and the body of objc:on-main are applied through _apply from
+		// an upcall on thread 0.
+		boolean usesObjc = programUsesAnyObjcOp(program);
+		final JvmObjcRuntimeBuilder.@Nullable ObjcRuntime objcRuntime = usesObjc
+				? JvmObjcRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
 				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectArrayClass, stringLength, stringConcat,
@@ -1259,7 +1269,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// into that same _fenv.
 		// multiple-value-call forces apply too: its expansion spreads a spill
 		// producer's dynamic value count with (apply fn (append ...)).
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava || usesObjc
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
@@ -1456,6 +1466,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.tlsListenP12Helper(tlsListenP12HelperMethod)
 			.httpHandlerRuntime(httpHandlerRuntime)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
+			.objcOps(objcRuntime != null ? objcRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.blockExitChannel(blockExitChannel)
 			.restartMode(restartMode)
@@ -2037,6 +2048,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		else {
 			javaPrint = null;
 		}
+		// A wrapped objc: object prints as #<objc Class> (interpreter parity), through
+		// the bridge's print hook -- emitted AHEAD of the java: branch, which would
+		// otherwise print the wrapper as a host object; guarded by the init field, so
+		// the printer never names the bridge class before _objcInit defined it.
+		final JvmRuntimeBuilder.@Nullable ObjcPrint objcPrint = objcRuntime != null
+				? new JvmRuntimeBuilder.ObjcPrint(objcRuntime.initedField(),
+						Objects.requireNonNull(objcRuntime.ops().get(JvmObjcRuntimeBuilder.PRINT)))
+				: null;
 
 		// A hash table prints as the unreadable #<HASH-TABLE :TEST EQUAL :COUNT n> tag,
 		// the same text the interpreter and both WASM backends emit; the branch is
@@ -2109,8 +2128,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToStringMethod, nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, charBoxClass,
-				charPrin1Method, arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint,
-				packedPrint, packedIntPrint, instPrint, strEscMethod, hashPrint);
+				charPrin1Method, arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, objcPrint,
+				futurePrint, packedPrint, packedIntPrint, instPrint, strEscMethod, hashPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -2118,8 +2137,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToDisplayStringMethod, nilStr, funcStr, stringCharAt, stringLength, stringSubstring,
 				stringLastIndexOf, ratioArrayClass, stringConcat, slashStr, charBoxClass, characterToString,
-				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, futurePrint, packedPrint,
-				packedIntPrint, instPrint, hashPrint);
+				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, objcPrint, futurePrint,
+				packedPrint, packedIntPrint, instPrint, hashPrint);
 		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
@@ -2500,6 +2519,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(javaRuntime.initedFieldName())
 						.writeU2(javaRuntime.initedFieldDesc())
+						.writeU2(0));
+				}
+				if (objcRuntime != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(objcRuntime.initedFieldName())
+						.writeU2(objcRuntime.initedFieldDesc())
 						.writeU2(0));
 				}
 				if (simdRuntime != null) {
@@ -2903,6 +2928,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(javaRuntime.maxStack())
 									.writeU2(javaRuntime.maxLocals())
 									.writeCode((Object[]) javaRuntime.initCode().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (objcRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, objcRuntime.initName(),
+							objcRuntime.initDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(objcRuntime.maxStack())
+									.writeU2(objcRuntime.maxLocals())
+									.writeCode((Object[]) objcRuntime.initCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -3333,7 +3369,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (JvmExportDirective decl : exportDecls) {
 				roots.add(decl.methodName());
 			}
-			if (usesJava) {
+			// ... and an objc: callback (a run-time class's method, objc:on-main's body)
+			// reaches it from an upcall on thread 0, the same invisible edge.
+			if (usesJava || usesObjc) {
 				roots.add("_apply");
 			}
 			if (usesTlsConnect) {
@@ -3539,6 +3577,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (String member : List.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
 				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY)) {
 			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.JAVA_PKG, member))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// True when the program references any of the seven objc: verbs, so the embedded
+	// am.ik.objc blob (and the eval runtime its callbacks need) is emitted. A program
+	// that uses appkit: qualifies through the spliced appkit.lisp, whose widgets are
+	// objc:send.
+	private static boolean programUsesAnyObjcOp(List<LispVal> program) {
+		for (String member : JvmObjcInteropCompiler.members()) {
+			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.OBJC_PKG, member))) {
 				return true;
 			}
 		}
@@ -4383,6 +4434,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		final @Nullable Map<String, MethodrefConstant> javaOps;
 
 		/**
+		 * The {@code objc:} bridge references ({@code init} plus one per verb); null
+		 * unless the program uses an {@code objc:} verb.
+		 */
+		final @Nullable Map<String, MethodrefConstant> objcOps;
+
+		/**
 		 * The accelerated {@code vec:} bridge references ({@code init} plus one per
 		 * vectorizable kernel member name -- {@code add}/{@code sub}/{@code mul}/
 		 * {@code scale}/{@code dot}/{@code sum}); null unless {@code --simd} emitted the
@@ -4882,6 +4939,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tlsListenP12Helper = builder.tlsListenP12Helper;
 			this.httpHandlerRuntime = builder.httpHandlerRuntime;
 			this.javaOps = builder.javaOps;
+			this.objcOps = builder.objcOps;
 			this.simdOps = builder.simdOps;
 			this.blasOps = builder.blasOps;
 			this.gpuOps = builder.gpuOps;
@@ -5031,6 +5089,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime;
 
 			private @Nullable Map<String, MethodrefConstant> javaOps;
+
+			private @Nullable Map<String, MethodrefConstant> objcOps;
 
 			private @Nullable Map<String, MethodrefConstant> simdOps;
 
@@ -5404,6 +5464,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder javaOps(@Nullable Map<String, MethodrefConstant> javaOps) {
 				this.javaOps = javaOps;
+				return this;
+			}
+
+			Builder objcOps(@Nullable Map<String, MethodrefConstant> objcOps) {
+				this.objcOps = objcOps;
 				return this;
 			}
 

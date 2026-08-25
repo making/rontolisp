@@ -2,7 +2,7 @@
 
 `(objc:define-class "Name" "Superclass" methods &optional protocols)`
 
-メソッドが Lisp 関数であるクラスを登録します。`methods` は `("selector:" function)` のペアのリストで、各関数は最初に receiver、続いてメソッド自身の引数を受け取ります。メソッドの型はスーパークラスがそのセレクタを宣言していればそこから、そうでなければ採用したプロトコル (`protocols`、名前のリスト) から取られ、どちらにもなければ target/action の形 (結果なし、コロンごとに 1 つのオブジェクト引数) がデフォルトです。再定義するとメソッドが束縛し直されます。クラスを返します。macOS 専用の `objc` パッケージの一部です。`java -jar` のインタプリタと `rontolisp` ネイティブバイナリで動作し、コンパイル済み `.class` や `.wasm` では使えません。ランタイムのないマシンでは `error` をシグナルします。[macOS GUI ガイド](../../guides/objc-appkit.md)を参照してください。
+メソッドが Lisp 関数であるクラスを登録します。`methods` は `("selector:" function)` のペアのリストで、各関数は最初に receiver、続いてメソッド自身の引数を受け取ります。メソッドの型はスーパークラスがそのセレクタを宣言していればそこから、そうでなければ採用したプロトコル (`protocols`、名前のリスト) から取られ、どちらにもなければ target/action の形 (結果なし、コロンごとに 1 つのオブジェクト引数) がデフォルトです。再定義するとメソッドが束縛し直されます。クラスを返します。macOS 専用の `objc` パッケージの一部です。`java -jar` のインタプリタ、`rontolisp` ネイティブバイナリ、コンパイル済み `.class` / `.jar` で動作し、`.wasm` では使えません。ランタイムのないマシンでは `error` をシグナルします。[macOS GUI ガイド](../../guides/objc-appkit.md)を参照してください。
 
 ```console
 > (defvar *cls*

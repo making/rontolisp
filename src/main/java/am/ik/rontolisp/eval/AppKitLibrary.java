@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -29,13 +30,19 @@ import org.jspecify.annotations.Nullable;
  * consumer must splice itself.
  *
  * <p>
- * The interpreter evaluates {@link #forms()} into the global environment the first time
- * an {@code appkit:}-qualified function is resolved
- * ({@code LispEvaluator#resolveFunction}). There is no compile-path splice: {@code objc:}
- * has no lowering on any backend, so {@code CompileFrontend} refuses a program that
- * references either package ({@link #firstObjcReference}) before any library is spliced.
- * When the JVM backend grows an embedded {@code am.ik.objc} blob, this class gains a
- * {@code process} like {@code LinalgLibrary}'s and that refusal narrows to WASM.
+ * Consumers, the {@link LinalgLibrary} pair:
+ * <ul>
+ * <li>the interpreter evaluates {@link #forms()} into the global environment the first
+ * time an {@code appkit:}-qualified function is resolved
+ * ({@code LispEvaluator#resolveFunction});</li>
+ * <li>the JVM compile path ({@code CompileFrontend}) calls {@link #process(List)} after
+ * user-macro expansion: when the program references the {@code appkit} package, the
+ * library definitions are prepended, and their {@code objc:send} calls gate the embedded
+ * {@code am.ik.objc} blob on ({@code codegen.jvm.JvmObjcRuntimeBuilder}).</li>
+ * </ul>
+ * The WASM backends have no foreign function API and never will, so
+ * {@code CompileFrontend} refuses a {@code .wasm} output for a program that references
+ * either package ({@link #firstObjcReference}) before any library is spliced.
  */
 public final class AppKitLibrary {
 
@@ -107,11 +114,46 @@ public final class AppKitLibrary {
 		return null;
 	}
 
+	/**
+	 * The compile-path pre-pass: when the program references the {@code appkit} package
+	 * (an {@code appkit:}/{@code appkit::} qualified symbol anywhere, or a bare exported
+	 * name while {@code (in-package appkit)} is in effect), prepends the library
+	 * definitions. A program that does not use appkit -- one that uses {@code objc:}
+	 * directly included -- is returned unchanged.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @return the program with the appkit library spliced in when used
+	 */
+	public static List<LispVal> process(List<LispVal> program) {
+		Walker walker = new Walker();
+		for (LispVal form : program) {
+			walker.trackTopLevelInPackage(form);
+			walker.detect(form);
+		}
+		if (!walker.appkit) {
+			return program;
+		}
+		List<LispVal> out = new ArrayList<>(forms());
+		out.addAll(program);
+		return out;
+	}
+
 	private static final class Walker {
 
 		private @Nullable String found;
 
+		/**
+		 * Whether an {@code appkit} reference (not merely an {@code objc} one) was seen.
+		 */
+		private boolean appkit;
+
 		private String currentPackage = LispNames.CL_USER_PKG;
+
+		/** Records the FIRST reference; later ones only matter for {@link #appkit}. */
+		private void reference(String name) {
+			if (this.found == null) {
+				this.found = name;
+			}
+		}
 
 		private void trackTopLevelInPackage(LispVal form) {
 			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
@@ -131,22 +173,31 @@ public final class AppKitLibrary {
 		}
 
 		private void detect(LispVal form) {
-			if (this.found != null) {
+			if (this.appkit) {
+				// Nothing left to learn: the first reference is recorded and the
+				// library is needed.
 				return;
 			}
 			switch (form) {
 				case LispSymbol sym -> {
 					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 					if (qn != null) {
-						if (LispNames.OBJC_PKG.equals(qn.pkg()) || LispNames.APPKIT_PKG.equals(qn.pkg())) {
-							this.found = sym.name();
+						if (LispNames.APPKIT_PKG.equals(qn.pkg())) {
+							this.appkit = true;
+							reference(sym.name());
+						}
+						else if (LispNames.OBJC_PKG.equals(qn.pkg())) {
+							reference(sym.name());
 						}
 					}
-					else if ((LispNames.APPKIT_PKG.equals(this.currentPackage)
-							&& PackageRegistry.appkitFunctionNames().contains(sym.name().toUpperCase(Locale.ROOT)))
-							|| (LispNames.OBJC_PKG.equals(this.currentPackage)
-									&& OBJC_VERBS.contains(sym.name().toUpperCase(Locale.ROOT)))) {
-						this.found = this.currentPackage + ":" + sym.name();
+					else if (LispNames.APPKIT_PKG.equals(this.currentPackage)
+							&& PackageRegistry.appkitFunctionNames().contains(sym.name().toUpperCase(Locale.ROOT))) {
+						this.appkit = true;
+						reference(this.currentPackage + ":" + sym.name());
+					}
+					else if (LispNames.OBJC_PKG.equals(this.currentPackage)
+							&& OBJC_VERBS.contains(sym.name().toUpperCase(Locale.ROOT))) {
+						reference(this.currentPackage + ":" + sym.name());
 					}
 				}
 				case LispCons cons -> {

@@ -155,15 +155,16 @@ final class CompileFrontend {
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.
 		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
-		// objc: and appkit: are interpreter-only (a LispObjcObject has no lowering on any
-		// backend); refuse them here, after load inlining, so a (load ...)-ed file is
-		// caught too and the error names the reference rather than an undefined function
-		// somewhere inside a spliced library.
-		String objcReference = AppKitLibrary.firstObjcReference(loaded);
+		// objc: and appkit: have no WASM lowering and never will (no foreign function
+		// API, no AppKit); the JVM backend carries the binding as an embedded blob
+		// (JvmObjcRuntimeBuilder). Refuse the WASM outputs here, after load inlining, so
+		// a (load ...)-ed file is caught too and the error names the reference rather
+		// than an undefined function somewhere inside a spliced library.
+		String objcReference = wasm ? AppKitLibrary.firstObjcReference(loaded) : null;
 		if (objcReference != null) {
 			throw new IllegalArgumentException("Cannot compile: " + objcReference
-					+ " -- the objc: and appkit: packages run on the interpreter only (java -jar, or the rontolisp "
-					+ "binary), not in a compiled .class or .wasm");
+					+ " -- the objc: and appkit: packages run on the interpreter (java -jar, or the rontolisp "
+					+ "binary) and in a compiled .class or .jar, not in a .wasm");
 		}
 		// Under --component the inliner also prunes the interface members the program
 		// never references -- the core tree shaker cannot do that job even under
@@ -290,11 +291,14 @@ final class CompileFrontend {
 		// all -- reaches the cell too; a program that never names unread-char is
 		// returned unchanged.
 		// TorchLibrary runs BEFORE LinalgLibrary so the linalg: references inside the
-		// spliced torch definitions pull the linalg library in too.
+		// spliced torch definitions pull the linalg library in too. AppKitLibrary splices
+		// appkit.lisp (the widget layer over the objc: verbs) the same way, so a JVM
+		// class compiled from an appkit: program carries the widgets and, through their
+		// objc:send, gates the embedded binding on.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(LinalgLibrary
-						.process(TorchLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))),
+					UrlLibrary.process(AppKitLibrary.process(LinalgLibrary
+						.process(TorchLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded)))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /

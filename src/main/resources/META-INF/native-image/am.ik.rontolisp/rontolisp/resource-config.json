@@ -93,6 +93,24 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmObjcTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmObjcHandle\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
+        },
+        "pattern": "am/ik/objc/.*\\.class"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
         },
         "pattern": "am/ik/rontolisp/macro/format-render\\.lisp"

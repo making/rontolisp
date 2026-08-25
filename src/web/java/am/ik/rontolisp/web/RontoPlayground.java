@@ -184,6 +184,15 @@ public final class RontoPlayground {
 	private static List<LispVal> frontend(String source, Features features, WitExportDirective.Backend backend) {
 		List<LispVal> read = WitImportInliner.inline(LispReader.readAllFromString(source, features), null, backend,
 				uploads);
+		// objc: and appkit: need the Objective-C runtime on the machine that RUNS the
+		// program, and the JVM output would need the binding's class files, which the
+		// browser build does not carry: refuse both outputs by the reference, as the CLI
+		// does for its WASM outputs.
+		String objcReference = am.ik.rontolisp.eval.AppKitLibrary.firstObjcReference(read);
+		if (objcReference != null) {
+			throw new IllegalArgumentException("Cannot compile: " + objcReference
+					+ " -- the objc: and appkit: packages are not available in the browser playground");
+		}
 		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
 				.process(VecLibrary.process(LispPreludeLibrary.process(

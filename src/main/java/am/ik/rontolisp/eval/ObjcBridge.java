@@ -95,8 +95,8 @@ final class ObjcBridge {
 			}
 			LispVal target = args.get(0);
 			if (target instanceof LispNil) {
-				// Objective-C answers nil to a message sent to nil, even on a machine
-				// without the runtime -- no need to require it just to answer nil.
+				// Objective-C answers nil to a message sent to nil -- on every machine,
+				// so the runtime is not opened for it.
 				return LispNil.INSTANCE;
 			}
 			ObjcRuntime runtime = ObjcRuntime.get();

@@ -2,7 +2,7 @@
 
 `(objc:define-class "Name" "Superclass" methods &optional protocols)`
 
-Registers a class whose methods are Lisp functions. `methods` is a list of `("selector:" function)` pairs; each function receives the receiver first, then the method's own arguments. A method's type comes from the superclass when it declares the selector, from an adopted protocol (`protocols`, a list of names) otherwise, and defaults to a target/action shape: no result, one object argument per colon. Re-defining a class rebinds its methods. Answers the class. Part of the macOS-only `objc` package -- the interpreter under `java -jar` and in the `rontolisp` native binary, never a compiled `.class` or `.wasm`; on a machine without the runtime it signals an `error`. See the [macOS GUI guide](../../guides/objc-appkit.md).
+Registers a class whose methods are Lisp functions. `methods` is a list of `("selector:" function)` pairs; each function receives the receiver first, then the method's own arguments. A method's type comes from the superclass when it declares the selector, from an adopted protocol (`protocols`, a list of names) otherwise, and defaults to a target/action shape: no result, one object argument per colon. Re-defining a class rebinds its methods. Answers the class. Part of the macOS-only `objc` package -- the interpreter (`java -jar`, or the `rontolisp` native binary) and a compiled `.class` / `.jar`, never a `.wasm`; on a machine without the runtime it signals an `error`. See the [macOS GUI guide](../../guides/objc-appkit.md).
 
 ```console
 > (defvar *cls*

@@ -6,13 +6,14 @@ foreign function API (no JNI, no bundled native library, no reflection), and
 `appkit` is a small widget layer written in rontolisp on top of it — a window, a
 label, a button whose action is a Lisp closure.
 
-> **Interpreter on macOS only.** Both packages work under `java -jar rontolisp.jar`
-> *and* in the `rontolisp` native binary — the binding needs no reflection, which is
-> what `java:` interop lacks there. Neither compiler lowers an Objective-C object, so
-> compiling a program that references `objc:` or `appkit:` to a `.class` or `.wasm`
-> is a `Cannot compile: appkit:window ...` error. On Linux, or on a JVM started
-> without `--enable-native-access=ALL-UNNAMED`, every `objc:` function signals an
-> ordinary `error` whose message starts with the function's name and says why.
+> **macOS only; interpreter and JVM class.** Both packages work under
+> `java -jar rontolisp.jar`, in the `rontolisp` native binary — the binding needs no
+> reflection, which is what `java:` interop lacks there — and in a program compiled
+> to a `.class` or `.jar`, which carries the binding inside it. Neither WASM backend
+> has a foreign function API, so compiling such a program to a `.wasm` is a
+> `Cannot compile: appkit:window ...` error. On Linux, or on a JVM that denies native
+> access (`--illegal-native-access=deny`), every `objc:` function signals an ordinary
+> `error` whose message starts with the function's name and says why.
 
 ## A window from the REPL
 
@@ -32,6 +33,12 @@ the process's first thread, not on the one reading your input — and closing th
 window does not end the REPL. `examples/macos/counter.lisp` is the same program as a
 script; it ends with `(appkit:wait *win*)`, which blocks until the window is closed,
 because a script's process exits when its last form returns.
+
+Anything larger is built the same way, in Lisp:
+`examples/browser/minesweeper/minesweeper-macos.lisp` plays a full Minesweeper in a
+Cocoa window, and its rendering layer — `examples/macos/cocoa.lisp`, a reusable
+`cocoa` package of rounded panels, vertically centred labels, a clickable grid and a
+repeating timer — is written entirely on the verbs below.
 
 | Function | Purpose |
 |----------|---------|
@@ -170,10 +177,32 @@ in this binary; register it under foreign.downcalls in reachability-metadata.jso
 The JVM registers nothing ahead of time and binds any shape, so `java -jar` is the
 place to find out what a program sends before a binary is built for it.
 
+## Compiling to a JVM class
+
+The same program compiles to a `.class` or a `.jar` and runs under a plain `java`
+launcher, which parks the process's first thread in an event loop by itself:
+
+```console
+$ rontolisp examples/macos/counter.lisp -o Counter.class --class-name Counter
+$ java Counter
+$ rontolisp examples/macos/counter.lisp -o counter.jar --class-name Counter
+$ java -jar counter.jar
+```
+
+The class carries the whole binding (`am.ik.objc`, renamed into its own package) and
+the `appkit` widgets it uses, so it needs nothing beside a JVM with `java.lang.foreign`
+— the one the compiler ran on, or newer. A bare `.class` run without
+`--enable-native-access=ALL-UNNAMED` prints the JDK's restricted-method warning once
+and works; a `.jar` enables native access in its manifest. The `rontolisp` binary
+compiles such a program too. A `.wasm` output is refused —
+`Cannot compile: appkit:window ...` — and always will be: there is no foreign function
+API and no AppKit on that side.
+
 ## Limitations
 
-- macOS only, interpreter only (`java -jar`, or the `rontolisp` binary). Not on the
-  compilers; an `objc:` / `appkit:` reference is a compile error on every backend.
+- macOS only: the interpreter (`java -jar`, or the `rontolisp` binary) and a compiled
+  `.class` / `.jar`. Never a `.wasm`; an `objc:` / `appkit:` reference is a compile
+  error on both WASM backends.
 - A process without an application bundle gets no Dock icon or menu bar; there is no
   Cmd-Q, and closing the last window does not quit — the REPL is the process.
 - Callback shapes are the closed set above; a delegate method with a struct or

@@ -2,13 +2,16 @@
 ;;;;
 ;;;; A window, a label and a button whose action is a Lisp closure, built on the
 ;;;; built-in `appkit` package (a widget layer written in rontolisp over the `objc`
-;;;; package, which binds AppKit through the foreign function API). It runs on the
-;;;; interpreter on macOS -- under `java -jar` AND in the `rontolisp` native binary,
-;;;; which is what `java:` interop cannot do -- and needs a display, so it is not in
-;;;; examples.yaml.
+;;;; package, which binds AppKit through the foreign function API). It runs on macOS
+;;;; on the interpreter -- under `java -jar` AND in the `rontolisp` native binary,
+;;;; which is what `java:` interop cannot do -- and compiled to a JVM class or jar,
+;;;; which carries the binding inside it; never as WASM. It needs a display, so it is
+;;;; not in examples.yaml.
 ;;;;
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/macos/counter.lisp
 ;;;;   ./target/rontolisp examples/macos/counter.lisp
+;;;;   ./target/rontolisp examples/macos/counter.lisp -o Counter.class --class-name Counter && java Counter
+;;;;   ./target/rontolisp examples/macos/counter.lisp -o counter.jar --class-name Counter && java -jar counter.jar
 ;;;;
 ;;;; Typed into the REPL instead, the same forms open the same window and the REPL
 ;;;; keeps taking input while it is up: the window lives on the process's first

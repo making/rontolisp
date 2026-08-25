@@ -4,7 +4,8 @@ package am.ik.rontolisp;
  * An opaque reference to an Objective-C object or class, produced by the {@code objc}
  * package ({@code objc:class}, {@code objc:send}, ...) and handed to the AppKit widget
  * layer written over it. Like {@link LispJavaObject} it exists only at interpreter
- * runtime -- it never appears in source, and no compiler can lower it -- but unlike one
+ * runtime -- it never appears in source; the JVM class output has its own twin,
+ * {@code codegen.jvm.JvmObjcHandle}, and no WASM backend can lower it -- but unlike one
  * it needs no reflection, which is what lets it work in the native binary.
  *
  * <p>

@@ -9,6 +9,7 @@ import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
+import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
@@ -521,6 +522,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
+			@org.jspecify.annotations.Nullable ObjcPrint objcPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
@@ -695,7 +697,7 @@ final class JvmRuntimeBuilder {
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
 		emitHashTableBranch(code, hashPrint);
-		emitDefaultTail(code, objectToString, javaPrint);
+		emitDefaultTail(code, objectToString, javaPrint, objcPrint);
 
 		return code;
 	}
@@ -972,6 +974,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
+			@org.jspecify.annotations.Nullable ObjcPrint objcPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
@@ -1174,7 +1177,7 @@ final class JvmRuntimeBuilder {
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
 		emitHashTableBranch(code, hashPrint);
-		emitDefaultTail(code, objectToString, javaPrint);
+		emitDefaultTail(code, objectToString, javaPrint, objcPrint);
 
 		return code;
 	}
@@ -1303,6 +1306,17 @@ final class JvmRuntimeBuilder {
 	 */
 	record JavaPrint(ClassConstant bigIntegerClass, MethodrefConstant objectGetClass, MethodrefConstant classGetName,
 			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix) {
+	}
+
+	/**
+	 * Constant-pool references for printing a wrapped {@code objc:} object as
+	 * {@code #<objc Class>} (interpreter parity) through the embedded bridge's print
+	 * hook, threaded into the two lisp-to-string builders only when the program uses
+	 * {@code objc:}. {@code initedField} is the {@code _objcInited} guard: the hook is
+	 * called only once {@code _objcInit} has defined the bridge class, so a print before
+	 * the first {@code objc:} call never resolves a class that does not exist yet.
+	 */
+	record ObjcPrint(FieldrefConstant initedField, MethodrefConstant print) {
 	}
 
 	/**
@@ -1716,7 +1730,29 @@ final class JvmRuntimeBuilder {
 	 * decimal digits.
 	 */
 	private static void emitDefaultTail(List<Integer> code, MethodrefConstant objectToString,
-			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
+			@org.jspecify.annotations.Nullable ObjcPrint objcPrint) {
+		if (objcPrint != null) {
+			// if (_objcInited != 0) { String s = RontoLispObjcBridge.objcPrint(val);
+			// if (s != null) return s; } -- ahead of the java: branch, which would
+			// otherwise claim the wrapper as a host object.
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, objcPrint.initedField().index());
+			int notInited = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, objcPrint.print().index());
+			code.add(Opcode.DUP);
+			int notObjc = code.size();
+			code.add(Opcode.IFNULL);
+			emitU2(code, 0);
+			code.add(Opcode.ARETURN);
+			patchBranch(code, notObjc, code.size());
+			code.add(Opcode.POP);
+			patchBranch(code, notInited, code.size());
+		}
 		if (javaPrint != null) {
 			List<Integer> toStringBranches = new ArrayList<>();
 			code.add(Opcode.ALOAD_0);
