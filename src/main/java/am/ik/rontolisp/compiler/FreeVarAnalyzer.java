@@ -371,7 +371,8 @@ public final class FreeVarAnalyzer {
 						// never see the variable -- postmodern's statement-id counter
 						// closes over exactly such a lock, and the missing capture made
 						// the enclosing defun fail to compile.
-						case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED ->
+						case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
+								LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED ->
 							collectFreeVars(LispMacroExpander.expandWithMutex(cons), boundVars, knownFunctions, globals,
 									specialNames, freeVars);
 						case LispNames.FUNCTION -> {
@@ -580,7 +581,8 @@ public final class FreeVarAnalyzer {
 									knownFunctions, captured, insideLambda);
 						// The lock spec holds a VALUE, not a binding (same reason as in
 						// collectFreeVars).
-						case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED ->
+						case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
+								LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED ->
 							collectCapturedVars(LispMacroExpander.expandWithMutex(cons), localVars, knownFunctions,
 									captured, insideLambda);
 						// Expand before walking (same reason as collectFreeVars).

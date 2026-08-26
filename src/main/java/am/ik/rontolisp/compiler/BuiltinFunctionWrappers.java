@@ -161,6 +161,11 @@ public final class BuiltinFunctionWrappers {
 		// exactly this reason). Ungated, every program carried a wrapper calling a defun
 		// it does not have.
 		gated.add(LispNames.TYPEP);
+		// #'coerce for the same reason, one step removed: the wrapper's result type is a
+		// PARAMETER, so its body takes the computed-coerce dispatch, whose "already of
+		// that type" arm is a computed typep -- the same %typep-runtime defun, gated by
+		// the same scan (which counts a (function coerce) beside the (function typep)).
+		gated.add(LispNames.COERCE);
 		// #'map-into for the same shape: the wrapper stores through (setf (elt ...)),
 		// whose string arm calls the gated %schar-set-runtime helper
 		// (LispMacroExpander's reachesScharSet scan, which names map-into).
@@ -456,7 +461,11 @@ public final class BuiltinFunctionWrappers {
 	// ((member nil ss) (reverse acc))
 	// (setq acc (cons (apply f (mapcar (lambda (x) (car x)) ss)) acc))
 	// (setq ss (mapcar (lambda (x) (cdr x)) ss)))))
-	// (if (null type) nil (coerce __map_r type))))
+	// (if (null type) nil
+	// (let ((__map_t (if (consp type) (car type) type)))
+	// (if (member __map_t '(string ...)) (coerce __map_r 'string)
+	// (if (member __map_t '(list cons)) (coerce __map_r 'list)
+	// (coerce __map_r 'vector)))))))
 	private static WrapperDef mapWrapper() {
 		LispSymbol seqs = new LispSymbol("__map_ss");
 		LispSymbol acc = new LispSymbol("__map_acc");
@@ -472,8 +481,27 @@ public final class BuiltinFunctionWrappers {
 		LispVal collect = callV(LispNames.SETQ, acc, callV(LispNames.CONS, apply, acc));
 		LispVal advance = callV(LispNames.SETQ, seqs, callV(LispNames.MAPCAR, projection(LispNames.CDR), seqs));
 		LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO), bindings, exit, collect, advance));
+		// The result type is dispatched HERE, onto three LITERAL coerces, rather than
+		// handed to coerce as a computed designator. map's result type is a sequence
+		// designator by contract, so the three arms are the whole surface -- and a
+		// computed coerce would end in its "already of that type" arm, which is a
+		// computed typep, i.e. the %typep-runtime defun; that defun's gate scans the
+		// SOURCE program and would never see this wrapper body. The (function typep)
+		// rule in LispMacroExpander.needsRuntimeTypep answers the same problem by
+		// counting the reference that injects the wrapper -- which cannot work here,
+		// where the map wrapper rides the eval runtime's gate instead of a name.
+		LispSymbol head = new LispSymbol("__map_t");
+		LispVal headOf = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
+				callV(LispNames.CAR, new LispSymbol("type")), new LispSymbol("type")));
+		LispVal toVector = coerceTo(collected.name(), "VECTOR");
+		LispVal toList = coerceTo(collected.name(), "LIST");
+		LispVal toString = coerceTo(collected.name(), "STRING");
+		LispVal byFamily = listToCons(List.of(new LispSymbol(LispNames.IF),
+				memberOf(head, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"), toString,
+				listToCons(List.of(new LispSymbol(LispNames.IF), memberOf(head, "LIST", "CONS"), toList, toVector))));
 		LispVal convert = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "type"),
-				LispNil.INSTANCE, callV(LispNames.COERCE, collected, new LispSymbol("type"))));
+				LispNil.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(head, headOf)))), byFamily))));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of(listToCons(List.of(collected, walk)))), convert));
 		return new WrapperDef(LispNames.MAP, List.of("type", "f", "s", LispNames.LAMBDA_REST, "more"), List.of(body));

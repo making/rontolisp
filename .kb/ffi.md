@@ -52,7 +52,12 @@ struct is copied into `malloc`'d memory and answered as a pointer the caller fre
   `ffi:pointerp` therefore answers nil for `42` and a wrong operand at the boundary is a
   type error -- but a plain integer is still ACCEPTED wherever an address is expected,
   and `ffi:address` is its own inverse (pointer -> integer, integer -> pointer, so
-  cffi's `make-pointer`/`pointer-address`/`null-pointer` all fall out of one verb).
+  cffi's `make-pointer`/`pointer-address`/`null-pointer` all fall out of one verb). An
+  address is UNSIGNED 64-bit on both sides of that inverse: an operand at or above 2^63
+  arrives as a BIGNUM and wraps to the raw 64 bits, and `ffi:address` of a pointer
+  answers the unsigned integer (`:uint64`'s own rule, one helper). Without it the
+  sentinel addresses real bindings pass would not round-trip -- cl-sqlite's
+  `SQLITE_TRANSIENT` is literally `(mod -1 (expt 2 64))`.
 - **`ffi:alloc` is `malloc`.** CFFI's contract is explicit `foreign-free`; no `Arena`
   models that without side bookkeeping. Foreign memory outlives every Lisp scope. The
   only arena anywhere is the call-scoped confined one inside `FfiRuntime.call` that

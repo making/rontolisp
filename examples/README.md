@@ -12,7 +12,7 @@ runs identically on the interpreter, the JVM and WASM.
 | [`llm-from-scratch/`](llm-from-scratch) | 『作ってわかる大規模言語モデルの仕組み』 chapters 2 and 3, ported: attention, an encoder/decoder Transformer, then a GPT trained on 漱石 and sampled from — all on the `torch` package |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API on top |
-| [`jvm/`](jvm) | A Java-callable library class, `java:` interop and Swing GUIs (JVM only) |
+| [`jvm/`](jvm) | A Java-callable library class, a C library through `cffi`, `java:` interop and Swing GUIs (JVM only) |
 | [`macos/`](macos) | A native Cocoa window, and the Objective-C runtime under it, through the built-in `appkit` / `objc` packages (macOS only -- `java -jar`, the native binary, a compiled class) |
 | [`browser/`](browser) | Browser demos: compile to WASM, run in a page |
 | [`count-vowels/`](count-vowels), [`wit/`](wit) | Crossing the WASM boundary: exporting to a host, implementing a WIT world, calling one, composing with Rust |
@@ -148,6 +148,17 @@ the [JVM library guide](../doc/en/guides/jvm-library.md).
 | --- | --- |
 | [`kernels-library.lisp`](jvm/kernels-library.lisp) | `rontolisp:jvm-export` + `--no-main`: typed `public static` methods over scalars, strings and packed float arrays |
 | [`bench/`](jvm/bench) | What the packed float-array boundary costs — the handle against a plain Java loop, the raw kernel, and a copying facade |
+
+## A C library through CFFI — `jvm/`
+
+Upstream CFFI, quickloaded and bound to the machine's own shared library by the
+foreign function API. The JVM family only — the interpreter, the native binary
+and a compiled `.class`/`.jar`; neither WASM backend has a foreign function API.
+See the [C libraries guide](../doc/en/guides/cffi.md).
+
+| File | What it demonstrates |
+| --- | --- |
+| [`cffi-sqlite.lisp`](jvm/cffi-sqlite.lisp) | A real SQLite database through **cl-sqlite**: a table created, rows inserted, updated and read back, plus a prepared statement stepped by hand. Needs `libsqlite3` on the machine |
 
 ## Java interop / GUI (JVM only) — `jvm/`
 

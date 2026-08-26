@@ -656,6 +656,21 @@ categories:
       - { slug: java-static, name: "java:static" }
       - { slug: java-field, name: "java:field" }
       - { slug: java-proxy, name: "java:proxy" }
+  - title: "ffi パッケージ (C ライブラリ)"
+    functions:
+      - { slug: ffi-open, name: "ffi:open" }
+      - { slug: ffi-symbol, name: "ffi:symbol" }
+      - { slug: ffi-call, name: "ffi:call" }
+      - { slug: ffi-callback, name: "ffi:callback" }
+      - { slug: ffi-alloc, name: "ffi:alloc" }
+      - { slug: ffi-free, name: "ffi:free" }
+      - { slug: ffi-peek, name: "ffi:peek" }
+      - { slug: ffi-poke, name: "ffi:poke" }
+      - { slug: ffi-size, name: "ffi:size" }
+      - { slug: ffi-align, name: "ffi:align" }
+      - { slug: ffi-pointerp, name: "ffi:pointerp" }
+      - { slug: ffi-address, name: "ffi:address" }
+      - { slug: ffi-errno, name: "ffi:errno" }
   - title: "objc パッケージ (Objective-C ランタイム)"
     functions:
       - { slug: objc-class, name: "objc:class" }

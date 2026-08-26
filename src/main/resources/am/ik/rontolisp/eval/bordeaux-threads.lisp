@@ -57,6 +57,13 @@
   (declare (ignore name))
   (rontolisp:make-mutex))
 
+;; make-lock is already reentrant here, so a recursive lock IS a plain lock;
+;; the pair exists upstream only because ITS make-lock is not. with-recursive-
+;; lock-held is the built-in expansion beside with-lock-held, not a defun.
+(defun bordeaux-threads:make-recursive-lock (&rest name)
+  (declare (ignore name))
+  (rontolisp:make-mutex))
+
 (defun bordeaux-threads:acquire-lock (lock &optional (wait-p t))
   (rontolisp:mutex-acquire lock)
   t)

@@ -746,10 +746,11 @@ public final class PackageRegistry {
 		// accessors stay INTERNAL, as upstream, which is why the same file reaches for
 		// flex::vector-stream-vector with a double one.
 		Set<String> flexiExternals = Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS,
-				LispNames.OCTETS_TO_STRING, LispNames.VECTOR_STREAM, LispNames.MAKE_IN_MEMORY_INPUT_STREAM);
+				LispNames.OCTETS_TO_STRING, LispNames.VECTOR_STREAM, LispNames.MAKE_IN_MEMORY_INPUT_STREAM,
+				LispNames.MAKE_IN_MEMORY_OUTPUT_STREAM, LispNames.GET_OUTPUT_STREAM_SEQUENCE);
 		Set<String> flexiSymbols = new HashSet<>(flexiExternals);
 		flexiSymbols.addAll(Set.of(LispNames.VECTOR_INPUT_STREAM, LispNames.VECTOR_STREAM_VECTOR,
-				LispNames.VECTOR_STREAM_INDEX, LispNames.VECTOR_STREAM_END));
+				LispNames.VECTOR_STREAM_INDEX, LispNames.VECTOR_STREAM_END, LispNames.VECTOR_OUTPUT_STREAM));
 		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(), flexiSymbols, flexiExternals));
 		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.BITS_DOUBLE_FLOAT, LispNames.DOUBLE_FLOAT_BITS,
@@ -779,10 +780,11 @@ public final class PackageRegistry {
 				LispNames.BT2_PKG, LispNames.THREADP, LispNames.BT2_PKG, LispNames.THREAD_ALIVE_P, LispNames.BT2_PKG,
 				LispNames.DESTROY_THREAD, LispNames.BT2_PKG, LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.BT2_PKG,
 				LispNames.CURRENT_THREAD, LispNames.BT2_PKG);
-		Set<String> btV1Externals = new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK,
-				LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD,
-				LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
-				LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.CURRENT_THREAD));
+		Set<String> btV1Externals = new HashSet<>(
+				Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
+						LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
+						LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
+						LispNames.CURRENT_THREAD, LispNames.MAKE_RECURSIVE_LOCK, LispNames.WITH_RECURSIVE_LOCK_HELD));
 		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(), btV1Externals, Set.copyOf(btV1Externals),
 				btThreadImports));
 		Map<String, String> bt2LockImports = Map.of(LispNames.MAKE_LOCK, LispNames.BORDEAUX_THREADS_PKG,
@@ -890,9 +892,10 @@ public final class PackageRegistry {
 				"DEFSECTION", "SECTION", "MAKE-GITHUB-SOURCE-URI-FN", "REGISTER-DOC-IN-PAX-WORLD"))));
 		// trivial-garbage (nickname tg): the no-op GC-finalizer shim behind the
 		// built-in ASDF system of the same name (trivial-garbage.lisp,
-		// eval.ShimLibraries) -- dbd-postgres imports these two members.
-		define(new LispPackage(LispNames.TRIVIAL_GARBAGE_PKG, List.of(),
-				new HashSet<>(Set.of("FINALIZE", "CANCEL-FINALIZATION"))));
+		// eval.ShimLibraries) -- dbd-postgres imports the finalizer pair, and the
+		// weak-table pair is what a CFFI binding keeps its per-thread state in.
+		define(new LispPackage(LispNames.TRIVIAL_GARBAGE_PKG, List.of(), new HashSet<>(
+				Set.of("FINALIZE", "CANCEL-FINALIZATION", "MAKE-WEAK-HASH-TABLE", "HASH-TABLE-WEAKNESS"))));
 		// cl+ssl: the CLIENT-side TLS shim behind the built-in ASDF system of the same
 		// name (cl-ssl.lisp, eval.ShimLibraries), over the rontolisp:tls-upgrade
 		// primitive. The externals are the surface dexador (and the other

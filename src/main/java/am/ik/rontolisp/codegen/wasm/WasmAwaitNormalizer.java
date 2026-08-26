@@ -119,9 +119,11 @@ final class WasmAwaitNormalizer {
 				};
 			}
 			if (LispNames.BORDEAUX_THREADS_PKG.equals(qn.pkg())) {
-				// with-lock-held takes a lock SPEC and a body; the rest of the bt shim
-				// (make-lock, acquire-lock, release-lock) are strict defuns.
-				return !LispNames.WITH_LOCK_HELD.equals(qn.member());
+				// with-lock-held (and its recursive twin) takes a lock SPEC and a body;
+				// the rest of the bt shim (make-lock, acquire-lock, release-lock) are
+				// strict defuns.
+				return !LispNames.WITH_LOCK_HELD.equals(qn.member())
+						&& !LispNames.WITH_RECURSIVE_LOCK_HELD.equals(qn.member());
 			}
 			if (LispNames.USOCKET_PKG.equals(qn.pkg())) {
 				// the with-*/guard convenience macros bind variables

@@ -495,6 +495,13 @@ shim therefore defines
   vector -- which is what lets circular-streams rewind a body it already read.
 - the `FLEX` nickname (`PackageRegistry.BUILTIN_NICKNAMES`), the spelling
   smart-buffer and http-body use.
+- the WRITE half, added by the cffi consumer probe (`.kb/cffi.md`):
+  `flexi-streams::vector-output-stream` (a `rontolisp:fundamental-binary-output-stream`
+  over an adjustable fill-pointer vector), `make-in-memory-output-stream` and
+  `get-output-stream-sequence`, which RESETS the stream as upstream does and
+  answers a PACKED `(unsigned-byte 8)` array. Deliberately NOT a
+  `vector-stream`: that class is what http-body type-tests to take its no-copy
+  INPUT path, and a sink has no readable vector to hand it.
 
 Ordering consequence: `BuiltinSystems.DEPENDENCIES` records
 `flexi-streams -> trivial-gray-streams`, the same edge real flexi-streams'

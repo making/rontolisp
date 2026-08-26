@@ -22548,8 +22548,14 @@ public final class LispMacroExpander {
 		LispVal errorCall = listToCons(
 				List.of(new LispSymbol(LispNames.ERROR), new LispString("coerce: unsupported result type ~s"), spec));
 		// (coerce x t) is the identity in CL; t is the value LispTrue, not a symbol, so
-		// it needs its own eq test rather than a member of the name lists.
-		LispVal identity = makeIf(mvCall(LispNames.EQ_GENERAL, t, LispTrue.INSTANCE), x, errorCall);
+		// it needs its own eq test rather than a member of the name lists. Every OTHER
+		// designator outside the sequence and float families falls through to CLHS's
+		// general rule -- "if the object is already of the specified type, it is
+		// returned" -- delegated to typep rather than to a second list of names, so
+		// (coerce 0 'fixnum) answers 0 (iterate's make-initial-value) while
+		// (coerce 0.5 'fixnum) still signals.
+		LispVal alreadyOfType = makeIf(mvCall(LispNames.TYPEP, x, spec), x, errorCall);
+		LispVal identity = makeIf(mvCall(LispNames.EQ_GENERAL, t, LispTrue.INSTANCE), x, alreadyOfType);
 		LispVal toVector = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), x))
 				: coerceToVectorBody(x);
 		LispVal toString = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), x))
@@ -29963,7 +29969,10 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol op) {
 			if (LispNames.QUOTE.equals(op.name())) {
-				return false;
+				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
+				// injects the wrapper (the reference scan that gates the wrapper walks
+				// into quotes), so the two scans have to agree about exactly that.
+				return containsWrapperInjectingReference(cons.cdr());
 			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 			String member = qn == null ? op.name() : qn.member();
@@ -30103,7 +30112,10 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol op) {
 			if (LispNames.QUOTE.equals(op.name())) {
-				return false;
+				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
+				// injects the wrapper (the reference scan that gates the wrapper walks
+				// into quotes), so the two scans have to agree about exactly that.
+				return containsWrapperInjectingReference(cons.cdr());
 			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 			String member = qn == null ? op.name() : qn.member();
@@ -30164,7 +30176,10 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol op) {
 			if (LispNames.QUOTE.equals(op.name())) {
-				return false;
+				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
+				// injects the wrapper (the reference scan that gates the wrapper walks
+				// into quotes), so the two scans have to agree about exactly that.
+				return containsWrapperInjectingReference(cons.cdr());
 			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 			String member = qn == null ? op.name() : qn.member();
@@ -30334,7 +30349,10 @@ public final class LispMacroExpander {
 	 * {@code (function typep)} counts as well: the injected {@code #'typep} wrapper's
 	 * body is a call whose specifier is a PARAMETER, i.e. the computed shape, and the
 	 * wrapper is added long after this scan runs -- so a program that only ever takes
-	 * {@code typep} as a value would otherwise call a defun the gate never injected.
+	 * {@code typep} as a value would otherwise call a defun the gate never injected. So
+	 * does a {@code coerce} with a computed result type, whose fall-through arm is a
+	 * computed {@code typep} for the same reason, and {@code (function coerce)}, whose
+	 * injected wrapper IS such a coerce.
 	 * @param program the top-level forms
 	 * @return {@code true} when the shared dispatch defun is needed
 	 */
@@ -30348,7 +30366,10 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol op) {
 			if (LispNames.QUOTE.equals(op.name())) {
-				return false;
+				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
+				// injects the wrapper (the reference scan that gates the wrapper walks
+				// into quotes), so the two scans have to agree about exactly that.
+				return containsWrapperInjectingReference(cons.cdr());
 			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 			String member = qn == null ? op.name() : qn.member();
@@ -30359,12 +30380,42 @@ public final class LispMacroExpander {
 				}
 			}
 			if (LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons named
-					&& named.car() instanceof LispSymbol target && LispNames.TYPEP.equals(memberOf(target.name()))) {
+					&& named.car() instanceof LispSymbol target && (LispNames.TYPEP.equals(memberOf(target.name()))
+							|| LispNames.COERCE.equals(memberOf(target.name())))) {
 				// #'typep: the wrapper's specifier is a parameter, i.e. computed.
+				// #'coerce: its wrapper's result type is a parameter too, and the
+				// computed-coerce dispatch ends in a computed typep.
 				return true;
+			}
+			if (LispNames.COERCE.equals(member) && cons.isProperList()) {
+				// A COMPUTED coerce type ends in the "already of that type" arm, which
+				// is a computed typep -- emitted by expandComputedCoerce long after this
+				// scan runs, so the coerce site is what has to be counted here.
+				List<LispVal> parts = cons.toList();
+				if (parts.size() == 3 && isComputedTypepSpec(parts.get(2))) {
+					return true;
+				}
 			}
 		}
 		return containsRuntimeTypep(cons.car()) || containsRuntimeTypep(cons.cdr());
+	}
+
+	/**
+	 * Whether the form holds a {@code (function typep)} or {@code (function coerce)} --
+	 * the two references whose injected wrapper body compiles to a {@code %typep-runtime}
+	 * call. Walks quoted data, because the wrapper's own gate does.
+	 */
+	private static boolean containsWrapperInjectingReference(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
+				&& cons.cdr() instanceof LispCons named && named.car() instanceof LispSymbol target
+				&& (LispNames.TYPEP.equals(memberOf(target.name()))
+						|| LispNames.COERCE.equals(memberOf(target.name())))) {
+			return true;
+		}
+		return containsWrapperInjectingReference(cons.car()) || containsWrapperInjectingReference(cons.cdr());
 	}
 
 	/** Whether a typep specifier argument takes the computed-specifier dispatch path. */

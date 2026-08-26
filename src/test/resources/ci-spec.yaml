@@ -11401,10 +11401,14 @@ cases:
       (:SELF NIL)
       (2 1)
 
-# Cases that END the program, so they cannot join the corpus above: each is
-# compiled and run on its own, and what it asserts is the standard-error report
-# plus a non-zero exit. `stderr` lines must APPEAR -- wasmtime wraps its own
-# trap backtrace around ours.
+# Cases that cannot join the corpus above: one that ENDS the program, one whose
+# subject a backend does not have at all. Each is compiled and run on its own.
+# What an ending case asserts is the standard-error report plus a non-zero exit
+# (`fails: true`); `stderr` lines must APPEAR -- wasmtime wraps its own trap
+# backtrace around ours. `refusedOn` names the backends that must REFUSE to
+# compile the program instead of running it, with `refusal` the text their
+# report must carry -- the shape a case takes when its subject exists on the
+# JVM family only.
 standalone:
   - name: uncaught-condition-report
     source: |
@@ -11423,6 +11427,28 @@ standalone:
     stderr: |
       Unhandled condition: database error: password authentication failed
     fails: true
+  - name: foreign-call-against-the-process
+    source: |
+      ;; A foreign call the whole JVM family carries and neither WASM backend
+      ;; can: strlen, looked up in the PROCESS itself, so no library has to be
+      ;; installed anywhere. This is what cffi:defcfun lowers to -- the cffi
+      ;; layer above it is pinned network-free against the vendored upstream
+      ;; source by CffiSystemTest / JvmFfiInteropCompilerTest, and cannot be
+      ;; spelled here because it would need a download. What this case adds is
+      ;; the NATIVE BINARY: the call has to land inside the registered downcall
+      ;; shape grid, which no unit test can check.
+      (let ((strlen (ffi:symbol (ffi:open) "strlen")))
+        (print (ffi:call strlen :long (quote (:string)) "hello, world"))
+        (print (ffi:pointerp strlen)))
+      (print (ffi:size :int))
+      (print (ffi:align :double))
+    stdout: |
+      12
+      T
+      4
+      8
+    refusedOn: [wasm, wasm_component]
+    refusal: "Cannot compile: FFI:SYMBOL"
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

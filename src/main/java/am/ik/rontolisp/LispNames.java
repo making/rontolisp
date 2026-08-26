@@ -7460,6 +7460,29 @@ public final class LispNames {
 	public static final String MAKE_IN_MEMORY_INPUT_STREAM = "MAKE-IN-MEMORY-INPUT-STREAM";
 
 	/**
+	 * {@code flexi-streams::vector-output-stream} -- the writable in-memory octet stream.
+	 * NOT a {@link #VECTOR_STREAM}: that class is what http-body type-tests to take its
+	 * no-copy INPUT path, and an output stream has no readable vector to hand it.
+	 * Internal, as upstream.
+	 */
+	public static final String VECTOR_OUTPUT_STREAM = "VECTOR-OUTPUT-STREAM";
+
+	/**
+	 * {@code flexi-streams:make-in-memory-output-stream} -- an octet sink whose bytes
+	 * {@link #GET_OUTPUT_STREAM_SEQUENCE} hands back. The write half of the in-memory
+	 * pair, the shape upstream cl+ssl's {@code with-bio-output-to-sequence} is written
+	 * over.
+	 */
+	public static final String MAKE_IN_MEMORY_OUTPUT_STREAM = "MAKE-IN-MEMORY-OUTPUT-STREAM";
+
+	/**
+	 * {@code flexi-streams:get-output-stream-sequence} -- the bytes written to a
+	 * {@link #MAKE_IN_MEMORY_OUTPUT_STREAM} so far, resetting the stream as upstream
+	 * does.
+	 */
+	public static final String GET_OUTPUT_STREAM_SEQUENCE = "GET-OUTPUT-STREAM-SEQUENCE";
+
+	/**
 	 * The {@code org.shirakumo.float-features} shim package name ({@code float-features}
 	 * is its built-in nickname and the built-in ASDF system name).
 	 */
@@ -7557,6 +7580,27 @@ public final class LispNames {
 	 * {@code bordeaux-threads:with-lock-held}.
 	 */
 	public static final String WITH_LOCK_HELD_QUALIFIED = BORDEAUX_THREADS_PKG + ":" + WITH_LOCK_HELD;
+
+	/**
+	 * {@code bt:with-recursive-lock-held} -- the SAME expansion as
+	 * {@link #WITH_LOCK_HELD}. Upstream distinguishes the two because its
+	 * {@code make-lock} is not reentrant; the shim's is (bordeaux-threads.lisp), so a
+	 * recursive lock and a plain one are one object and the two macros are one shape.
+	 */
+	public static final String WITH_RECURSIVE_LOCK_HELD = "WITH-RECURSIVE-LOCK-HELD";
+
+	/**
+	 * The canonical package-qualified spelling of
+	 * {@code bordeaux-threads:with-recursive-lock-held}.
+	 */
+	public static final String WITH_RECURSIVE_LOCK_HELD_QUALIFIED = BORDEAUX_THREADS_PKG + ":"
+			+ WITH_RECURSIVE_LOCK_HELD;
+
+	/**
+	 * {@code bt:make-recursive-lock} -- a shim {@code defun} answering the same reentrant
+	 * lock {@code make-lock} does.
+	 */
+	public static final String MAKE_RECURSIVE_LOCK = "MAKE-RECURSIVE-LOCK";
 
 	/**
 	 * The {@code bt2} shim package name: the modern (v2) bordeaux-threads API namespace,

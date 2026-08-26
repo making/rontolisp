@@ -121,6 +121,20 @@ class CffiSystemTest {
 	}
 
 	@Test
+	void aSentinelPointerAtTheTopOfTheAddressSpaceRoundTrips() {
+		// (mod -1 (expt 2 (* 8 (cffi:foreign-type-size :pointer)))) is how a binding
+		// spells a (void *)-1 sentinel -- cl-sqlite's SQLITE_TRANSIENT, passed on every
+		// text and blob bind. An address is unsigned 64-bit on both sides of
+		// make-pointer / pointer-address, so it must come back as itself rather than
+		// as -1. Needs no native access: this is the pointer VALUE, not a call.
+		Session session = cffi();
+		assertThat(session.eval("(cffi:pointer-address"
+				+ " (cffi:make-pointer (mod -1 (expt 2 (* 8 (cffi:foreign-type-size :pointer))))))"))
+			.isEqualTo("18446744073709551615");
+		assertThat(session.eval("(cffi:pointerp (cffi:make-pointer #xFFFFFFFFFFFFFFFF))")).isEqualTo("T");
+	}
+
+	@Test
 	void aLibraryOpenedAtRunTimeJoinsTheFlatNamespace() {
 		assumeTrue(FfiInterop.available(), FfiInterop.description());
 		Session session = cffi();

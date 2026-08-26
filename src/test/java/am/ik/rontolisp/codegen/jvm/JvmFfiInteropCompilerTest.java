@@ -146,6 +146,10 @@ class JvmFfiInteropCompilerTest {
 		assertThat(compileAndRun("(print (ffi:address 291))")).isEqualTo("#<pointer #x123>");
 		assertThat(compileAndRun("(print (equal (ffi:address 7) (ffi:address 7)))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (ffi:pointerp (ffi:address 0)))")).isEqualTo("T");
+		// The unsigned-64-bit round trip, case for case with the interpreter
+		// (JvmFfiTemplate is the hand-kept twin of eval/FfiBridge).
+		assertThat(compileAndRun("(print (ffi:address (ffi:address #xFFFFFFFFFFFFFFFF)))"))
+			.isEqualTo("18446744073709551615");
 	}
 
 	@Test

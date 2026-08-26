@@ -255,12 +255,23 @@ final class JvmFfiTemplate {
 	/** Implements {@code (ffi:address value)} -- its own inverse. */
 	static Object ffiAddress(@Nullable Object value) {
 		if (value instanceof JvmFfiHandle handle) {
-			return handle.address();
+			// An address is UNSIGNED 64-bit, so the answer follows :uint64's rule --
+			// otherwise (ffi:address (ffi:address #xFFFFFFFFFFFFFFFF)) would not be the
+			// identity the sentinel addresses (SQLITE_TRANSIENT) rely on.
+			return unsigned64(handle.address());
 		}
 		if (value instanceof Long address) {
 			return new JvmFfiHandle(address);
 		}
+		if (value instanceof BigInteger big) {
+			return new JvmFfiHandle(big.longValue());
+		}
 		throw new RuntimeException("ffi:address expects a pointer or an integer address, got " + describe(value));
+	}
+
+	/** A raw 64-bit word as the unsigned integer it denotes (an address, a :uint64). */
+	private static Object unsigned64(long raw) {
+		return raw < 0 ? BigInteger.valueOf(raw).add(TWO_64) : (Object) raw;
 	}
 
 	/** Implements {@code (ffi:errno)}. */
@@ -352,6 +363,11 @@ final class JvmFfiTemplate {
 		if (value instanceof Long address) {
 			return address;
 		}
+		// An address above 2^63 arrives as a bignum; the wrap to the raw 64 bits is what
+		// an unsigned address means.
+		if (value instanceof BigInteger big) {
+			return big.longValue();
+		}
 		throw new RuntimeException(
 				"ffi:" + member + " expects a pointer or an integer address, got " + describe(value));
 	}
@@ -392,6 +408,9 @@ final class JvmFfiTemplate {
 			}
 			if (value instanceof Long l) {
 				return l;
+			}
+			if (value instanceof BigInteger big) {
+				return big.longValue();
 			}
 			return operandMismatch(member, scalar, value);
 		}
@@ -436,8 +455,7 @@ final class JvmFfiTemplate {
 			return new JvmFfiHandle((Long) value);
 		}
 		if (scalar == FfiType.Scalar.UINT64) {
-			long raw = (Long) value;
-			return raw < 0 ? BigInteger.valueOf(raw).add(TWO_64) : (Object) raw;
+			return unsigned64((Long) value);
 		}
 		if (scalar == FfiType.Scalar.FLOAT || scalar == FfiType.Scalar.DOUBLE) {
 			return value;

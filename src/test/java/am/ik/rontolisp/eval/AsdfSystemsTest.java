@@ -345,6 +345,33 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void parsesTheBundledCffiReplacementAsd() {
+		// Upstream's own cffi.asd cannot be read as data twice over: it opens with
+		// (error "Sorry, this Lisp is not yet supported") for an implementation its list
+		// does not name, and ends in a defmethod version-satisfies. AsdOverrides
+		// substitutes this replacement, whose ONE substantive change is the
+		// implementation component -- (:file "cffi-rontolisp"), spliced from a bundled
+		// resource, so upstream's tree on disk is never edited (.kb/cffi.md).
+		String source = AsdOverrides.replacementSource("cffi.asd");
+		assertThat(source).isNotNull();
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/cffi.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		AsdfSystems.LispSystem cffi = systems.get(0);
+		assertThat(cffi.name()).isEqualTo("cffi");
+		// :64-bit comes from upstream's own route -- trivial-features named in
+		// :defsystem-depends-on -- not from a feature this file declares.
+		assertThat(cffi.defsystemDependsOn()).containsExactly("trivial-features");
+		assertThat(cffi.dependsOn()).containsExactly("alexandria", "babel");
+		// The portable files are upstream's, in upstream's order, with the backend
+		// spliced in where the per-implementation component goes and strings.lisp still
+		// named (ShimLibraries substitutes its CONTENT, not its place).
+		assertThat(cffi.files()).containsExactly("src/package.lisp", "src/sys-utils.lisp", "src/cffi-rontolisp.lisp",
+				"src/utils.lisp", "src/libraries.lisp", "src/early-types.lisp", "src/types.lisp", "src/enum.lisp",
+				"src/strings.lisp", "src/structures.lisp", "src/functions.lisp", "src/foreign-vars.lisp",
+				"src/features.lisp");
+	}
+
+	@Test
 	void parsesTheBundledDbiReplacementAsd() {
 		// The dbi.asd upstream ships parses fine as data, but its cache selection
 		// rides a thread-capability feature expression that can never match

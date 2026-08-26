@@ -679,11 +679,13 @@ final class WasmExprCompiler {
 					}
 				}
 			}
-			// bordeaux-threads:with-lock-held is the same built-in expansion as
+			// bordeaux-threads:with-lock-held -- and its recursive twin, the shim's
+			// lock being reentrant -- is the same built-in expansion as
 			// rontolisp:with-mutex; the rest of the bt shim is bordeaux-threads.lisp
 			// defuns, which fall through to the ordinary qualified-call path.
 			if (qn != null && LispNames.BORDEAUX_THREADS_PKG.equals(qn.pkg())
-					&& LispNames.WITH_LOCK_HELD.equals(qn.member())) {
+					&& (LispNames.WITH_LOCK_HELD.equals(qn.member())
+							|| LispNames.WITH_RECURSIVE_LOCK_HELD.equals(qn.member()))) {
 				compileExpr(LispMacroExpander.expandWithMutex(cons, ctx.ehMode), ctx);
 				return;
 			}

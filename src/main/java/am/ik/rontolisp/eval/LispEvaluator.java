@@ -4884,8 +4884,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWithArena(cons), env);
 				case LispNames.WITH_MUTEX_QUALIFIED:
 				case LispNames.WITH_LOCK_HELD_QUALIFIED:
+				case LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED:
 					// Acquire / body / release-on-every-exit; bordeaux-threads'
-					// with-lock-held is the same shape over the same primitives.
+					// with-lock-held is the same shape over the same primitives, and its
+					// recursive twin is the same again -- the shim's lock is reentrant.
 					return eval(LispMacroExpander.expandWithMutex(cons), env);
 				case LispNames.WIT_EXPORT_QUALIFIED:
 					return evalWitExport(cons);

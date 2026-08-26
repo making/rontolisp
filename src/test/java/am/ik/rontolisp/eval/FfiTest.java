@@ -81,6 +81,13 @@ class FfiTest {
 		assertThat(eval("(equal (ffi:address 7) (ffi:address 7))")).isEqualTo("T");
 		assertThat(eval("(princ-to-string (ffi:address 255))")).isEqualTo("\"#<pointer #xff>\"");
 		assertThat(eval("(ffi:address (ffi:address 0))")).isEqualTo("0");
+		// An address is UNSIGNED 64-bit on BOTH sides of that inverse: one at or above
+		// 2^63 arrives as a bignum, wraps to the raw bits, and comes back as the same
+		// unsigned integer rather than a negative one. cl-sqlite's SQLITE_TRANSIENT is
+		// literally (mod -1 (expt 2 64)), and it is passed on every text/blob bind.
+		assertThat(eval("(ffi:address (ffi:address #xFFFFFFFFFFFFFFFF))")).isEqualTo("18446744073709551615");
+		assertThat(eval("(ffi:pointerp (ffi:address (mod -1 (expt 2 64))))")).isEqualTo("T");
+		assertThat(eval("(ffi:address (ffi:address #x8000000000000000))")).isEqualTo("9223372036854775808");
 		// The pure type arithmetic: sizes and alignments, the C struct layout rule
 		// (padding between members and at the tail), nesting.
 		assertThat(eval("(list (ffi:size :char) (ffi:size :short) (ffi:size :int) (ffi:size :long)"

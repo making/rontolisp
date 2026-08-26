@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -103,7 +104,26 @@ class CiSpecE2eTest {
 	 * exclusively -- wasmtime prints its own trap report around ours
 	 * @param fails whether the program is expected to exit non-zero
 	 */
-	record Standalone(String name, String source, @Nullable String stdout, @Nullable String stderr, boolean fails) {
+	record Standalone(String name, String source, @Nullable String stdout, @Nullable String stderr,
+			@Nullable Boolean fails, @Nullable List<String> refusedOn, @Nullable String refusal) {
+
+		/** Whether the program is expected to end with a non-zero exit. */
+		boolean failsExpected() {
+			return Boolean.TRUE.equals(this.fails);
+		}
+
+		/**
+		 * Whether this backend must REFUSE to compile the program rather than run it --
+		 * the shape a case takes when its subject exists on some backends only (the
+		 * foreign function API on the JVM family, absent from both WASM backends). The
+		 * compile is then asserted to fail with {@link #refusal} in its report, and
+		 * nothing is run.
+		 * @param backend the leg
+		 * @return {@code true} when the compile must fail here
+		 */
+		boolean refusedOn(Backend backend) {
+			return this.refusedOn != null && this.refusedOn.contains(backend.name().toLowerCase(Locale.ROOT));
+		}
 	}
 
 	record Spec(List<Case> cases, @Nullable List<Standalone> standalone) {
@@ -267,6 +287,10 @@ class CiSpecE2eTest {
 		Path source = workDir.resolve(standalone.name() + ".lisp");
 		Files.writeString(source, standalone.source());
 		String stem = "S" + standalone.name().replaceAll("[^A-Za-z0-9]", "");
+		if (standalone.refusedOn(backend)) {
+			assertRefusedCompile(backend, bin, standalone, source, stem);
+			return;
+		}
 		Result result = switch (backend) {
 			case INTERPRETER -> execCapture(List.of(bin.toString(), source.toString()));
 			case JVM -> {
@@ -294,12 +318,34 @@ class CiSpecE2eTest {
 		for (String line : splitLines(standalone.stderr() == null ? "" : standalone.stderr())) {
 			assertThat(splitLines(result.stderr())).as("%s", where).contains(line);
 		}
-		if (standalone.fails()) {
+		if (standalone.failsExpected()) {
 			assertThat(result.exit()).as("%s: expected a non-zero exit", where).isNotZero();
 		}
 		else {
 			assertThat(result.exit()).as("%s", where).isZero();
 		}
+	}
+
+	/**
+	 * Asserts that compiling a standalone case for this backend FAILS, with the case's
+	 * {@code refusal} text in the report. A backend that has no foreign function API
+	 * refuses such a program by name at compile time; the refusal is the contract, so it
+	 * is asserted rather than skipped.
+	 */
+	private static void assertRefusedCompile(Backend backend, Path bin, Standalone standalone, Path source, String stem)
+			throws Exception {
+		List<String> command = switch (backend) {
+			case INTERPRETER -> List.of(bin.toString(), source.toString());
+			case JVM -> List.of(bin.toString(), source.toString(), "-o", stem + ".class");
+			case WASM -> List.of(bin.toString(), source.toString(), "-o", stem + ".wasm");
+			case WASM_COMPONENT ->
+				List.of(bin.toString(), source.toString(), "-o", stem + ".component.wasm", "--component");
+		};
+		Result result = execCapture(command);
+		String where = "standalone case '%s' on %s: expected a refusal%n--- stderr ---%n%s".formatted(standalone.name(),
+				backend, result.stderr());
+		assertThat(result.exit()).as("%s", where).isNotZero();
+		assertThat(result.stderr()).as("%s", where).contains(standalone.refusal() == null ? "" : standalone.refusal());
 	}
 
 	/**

@@ -190,8 +190,12 @@ final class FfiBridge {
 				throw new LispEvalException("ffi:address expects 1 argument, got " + args.size());
 			}
 			return switch (args.get(0)) {
-				case LispForeignPointer pointer -> new LispInteger(pointer.address());
+				// An address is UNSIGNED 64-bit, so the answer follows :uint64's rule --
+				// otherwise (ffi:address (ffi:address #xFFFFFFFFFFFFFFFF)) would not be
+				// the identity the sentinel addresses (SQLITE_TRANSIENT) rely on.
+				case LispForeignPointer pointer -> unsigned64(pointer.address());
 				case LispInteger integer -> new LispForeignPointer(integer.value());
+				case LispBigInteger big -> new LispForeignPointer(big.value().longValue());
 				default -> throw new LispEvalException(
 						"ffi:address expects a pointer or an integer address, got " + args.get(0).print());
 			};
@@ -298,9 +302,17 @@ final class FfiBridge {
 		return switch (value) {
 			case LispForeignPointer pointer -> pointer.address();
 			case LispInteger integer -> integer.value();
+			// An address above 2^63 arrives as a bignum; the wrap to the raw 64 bits is
+			// what an unsigned address means.
+			case LispBigInteger big -> big.value().longValue();
 			default -> throw new LispEvalException("ffi:" + member.toLowerCase(Locale.ROOT)
 					+ " expects a pointer or an integer address, got " + value.print());
 		};
+	}
+
+	/** A raw 64-bit word as the unsigned integer it denotes (an address, a :uint64). */
+	private static LispVal unsigned64(long raw) {
+		return raw < 0 ? new LispBigInteger(BigInteger.valueOf(raw).add(TWO_64)) : new LispInteger(raw);
 	}
 
 	private static long integerArgument(String member, LispVal value, String what) {
@@ -333,6 +345,7 @@ final class FfiBridge {
 				case LispNil ignored -> null;
 				case LispForeignPointer pointer -> pointer.address();
 				case LispInteger integer -> integer.value();
+				case LispBigInteger big -> big.value().longValue();
 				default -> operandMismatch(member, scalar, value);
 			};
 			case STRING -> switch (value) {
@@ -362,10 +375,7 @@ final class FfiBridge {
 		FfiType.Scalar scalar = (FfiType.Scalar) type;
 		return switch (scalar) {
 			case POINTER -> new LispForeignPointer((Long) value);
-			case UINT64 -> {
-				long raw = (Long) value;
-				yield raw < 0 ? new LispBigInteger(BigInteger.valueOf(raw).add(TWO_64)) : new LispInteger(raw);
-			}
+			case UINT64 -> unsigned64((Long) value);
 			case INT8, UINT8, INT16, UINT16, INT32, UINT32, INT64 -> new LispInteger((Long) value);
 			case FLOAT, DOUBLE -> new LispDouble((Double) value);
 			case STRING -> new LispString((String) value);

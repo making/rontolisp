@@ -24,3 +24,22 @@
 (defun trivial-garbage:cancel-finalization (object)
   (declare (ignore object))
   nil)
+
+;; A weak hash table degrades to an ORDINARY one. Weakness is not observable
+;; from within Common Lisp -- a program cannot tell whether an entry it never
+;; looks at was collected -- so the only difference is that the table retains
+;; more, which is the same trade the finalizer no-op above makes. :weakness
+;; and :weakness-matters are dropped and the remaining arguments reach
+;; make-hash-table, so :test carries through.
+(defun trivial-garbage:make-weak-hash-table (&rest args)
+  (let ((plain nil))
+    (do ((tail args (cddr tail)))
+        ((null tail))
+      (unless (member (car tail) '(:weakness :weakness-matters))
+        (setq plain (append plain (list (car tail) (cadr tail))))))
+    (apply #'make-hash-table plain)))
+
+;; Nothing here is weak, so the accessor says so.
+(defun trivial-garbage:hash-table-weakness (table)
+  (declare (ignore table))
+  nil)

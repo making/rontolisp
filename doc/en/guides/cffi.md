@@ -31,6 +31,14 @@ CL-USER> (strlen "hello, world")
 marshalling. `:string` copies the Lisp string into foreign memory for the call and
 frees it after, and a `:string` RETURN reads the NUL-terminated UTF-8 back.
 
+A `defcfun` costs a **downcall handle**, which is built once per call SHAPE
+(return type plus argument types) and reused for every symbol of that shape.
+Building one is about 24 µs; calling it is about 0.5 µs. So the first call
+through a new shape pays for the handle and every later call — through any
+function of the same shape — does not, which is why a binding that defines a
+hundred functions over a dozen shapes warms up in microseconds rather than
+milliseconds.
+
 For a one-off call there is `foreign-funcall`, which needs no definition:
 
 ```console
@@ -173,6 +181,17 @@ CL-USER> (cffi:pointerp (cffi:get-var-pointer '*optind*))
 T
 ```
 
+## Libraries that use CFFI
+
+The point of running upstream CFFI is the libraries written against it. What
+has actually been tried here:
+
+| library | result |
+|---|---|
+| [**cl-sqlite**](https://common-lisp.net/project/cl-sqlite/) (`sqlite`) | **works.** `(ql:quickload "sqlite")` and you have a real database: `connect`, `execute-non-query`, `execute-to-list`, `execute-single`, `with-transaction`, prepared statements stepped by hand. There is no SQL engine bundled here — the `libsqlite3` on your machine is the engine. See [`examples/jvm/cffi-sqlite.lisp`](https://github.com/making/rontolisp/blob/develop/examples/jvm/cffi-sqlite.lisp). Interpreter and native binary; see the `defcenum` row below for why not a compiled class |
+| **static-vectors** | **does not load, and cannot.** It is not a CFFI consumer but a second implementation seam: its `.asd` refuses an implementation its own list does not name, and past that it needs a per-implementation file supplying a vector whose storage is memory a pointer can be taken into. Nothing here has such an array. Allocate with `cffi:foreign-alloc` instead |
+| **cl+ssl** | the bundled [`cl+ssl` shim](asdf-systems.md#built-in-shim-systems) over rontolisp's own TLS stays the default, and upstream's OpenSSL binding does **not** load. Every blocker met was in a dependency, not in CFFI — the last one is that the real library wants `flexi-streams:flexi-stream` as a wrapper CLASS, which the flexi-streams shim deliberately does not have |
+
 ## What does not work
 
 | | |
@@ -181,6 +200,7 @@ T
 | `cffi-libffi` | Refused too, and for the opposite reason: structures by value already work (above), so there is nothing for it to add |
 | `with-pointer-to-vector-data` | Copies **in and out** instead of pinning: the body sees a fresh foreign buffer, and what the C side wrote reaches the Lisp vector when the body returns, not before. A pointer kept past the body is dangling |
 | `:long-double` | Not a foreign type here |
+| `defcenum` in a compiled program | A `defcfun` whose argument or return type is a `defcenum` (or another translated type) makes CFFI embed the foreign-type OBJECT in its expansion, which upstream makes legal with a `make-load-form` method. The interpreter and the native binary are fine — the object is live. A `-o Prog.class` is not: it cannot dump the object, and the compile fails with `Cannot quote: #<HASH-TABLE ...>`. An enum-free binding compiles normally |
 
 ## In the native binary
 

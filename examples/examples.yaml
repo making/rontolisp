@@ -66,6 +66,12 @@
 #                file skips the leg (assumption abort) rather than failing --
 #                for gitignored dataset dumps you fetch via
 #                deep-learning-from-scratch/download-mnist.sh.
+#   library      shared libraries the example calls into through cffi, spelled as
+#                a define-foreign-library spells them (one per platform). The RUN
+#                legs are skipped unless the platform's loader resolves ONE of
+#                them -- the `os` gate's shape, for the other kind of thing a
+#                machine may not have. COMPILE legs are never gated: they load
+#                nothing.
 #   note         free-form comment
 #
 # GUI examples (jvm/, macos/, minesweeper, rainbow/, the webgl-*/ and other browser
@@ -614,6 +620,31 @@ examples:
         - "round trip T"
         - "the file has audio in it: T"
         - "nothing was installed, and no window was opened"
+
+  # --- jvm: a C library through upstream CFFI (JVM family only) ----------------
+  - path: jvm/cffi-sqlite.lisp
+    backends: [interpreter]
+    library: [libsqlite3.so.0, libsqlite3.so, libsqlite3.dylib]
+    note: >-
+      a real SQLite database through cl-sqlite -- upstream CFFI, quickloaded and
+      bound to libsqlite3 by the foreign function API, with no SQL engine of our
+      own underneath it. `library:` gates the RUN leg the way `os:` gates the
+      macOS ones: the C library is the engine, and a machine without it skips
+      rather than fails. Interpreter only, and the reason is exact: a defcenum
+      return type -- which cl-sqlite's every entry point has -- makes cffi embed
+      the foreign-type OBJECT in its expansion and rely on make-load-form, which
+      the compile paths do not honor yet, so the jvm leg cannot be claimed;
+      neither WASM backend has a foreign function API at all. The version line
+      is the machine's libsqlite3, hence `contains` rather than `equals`.
+    expect:
+      contains:
+        - "rows 3"
+        - "nut 30"
+        - "bolt 25"
+        - "washer 7"
+        - "total 62"
+        - "over-ten bolt"
+        - "over-ten nut"
 
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp

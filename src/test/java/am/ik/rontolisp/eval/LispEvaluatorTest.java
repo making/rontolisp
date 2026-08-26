@@ -15558,6 +15558,52 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFlexiStreamsInMemoryOutputStreamCollectsAndResets() {
+		// The write half of the in-memory pair. get-output-stream-sequence RESETS the
+		// stream, as upstream does, so a second call answers only what came after the
+		// first -- which is what a caller looping over chunks relies on.
+		assertThat(evalMulti("""
+				(asdf:load-system "flexi-streams")
+				(let ((s (flex:make-in-memory-output-stream :element-type '(unsigned-byte 8))))
+				  (write-byte 104 s)
+				  (write-byte 105 s)
+				  (let ((first (flex:get-output-stream-sequence s)))
+				    (write-byte 33 s)
+				    (list (coerce first 'list)
+				          (and (typep first '(array (unsigned-byte 8) (*))) t)
+				          (flex:get-output-stream-sequence s :as-list t)
+				          (flex:get-output-stream-sequence s :as-list t))))
+				""").print()).isEqualTo("((104 105) T (33) NIL)");
+	}
+
+	@Test
+	void evalTrivialGarbageWeakHashTableIsAnOrdinaryOne() {
+		// Weakness is not observable from within Common Lisp, so the shim answers a
+		// plain table: :weakness and :weakness-matters are dropped, every other
+		// argument reaches make-hash-table (:test carries through), and
+		// hash-table-weakness says nil because nothing here is weak.
+		assertThat(evalMulti("""
+				(asdf:load-system "trivial-garbage")
+				(let ((h (tg:make-weak-hash-table :weakness :key :test 'equal)))
+				  (setf (gethash "k" h) 1)
+				  (list (gethash "k" h) (hash-table-count h) (tg:hash-table-weakness h)))
+				""").print()).isEqualTo("(1 1 NIL)");
+	}
+
+	@Test
+	void evalCoerceAnswersTheObjectWhenItIsAlreadyOfTheComputedType() {
+		// CLHS: "if the object is already of the specified type, it is returned". The
+		// consumer is iterate's make-initial-value -- (coerce 0 type) for every iter
+		// clause carrying a :type -- which is what cl-sqlite loads through. A
+		// designator the object does NOT satisfy still signals.
+		assertThat(evalMulti("""
+				(let ((int 'fixnum) (num 'number) (ch 'character))
+				  (list (coerce 0 int) (coerce 3 num) (coerce #\\a ch)
+				        (handler-case (coerce 0.5 int) (error () :signaled))))
+				""").print()).isEqualTo("(0 3 #\\a :SIGNALED)");
+	}
+
+	@Test
 	void evalDefstructAcceptsAKeywordConcName() {
 		// :conc-name takes a STRING DESIGNATOR, so a keyword designates its name
 		// WITHOUT the colon -- fast-http's (defstruct (http (:conc-name :http-))).

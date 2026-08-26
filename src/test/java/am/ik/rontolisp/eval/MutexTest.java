@@ -99,6 +99,22 @@ class MutexTest {
 	}
 
 	@Test
+	void bordeauxThreadsRecursiveLockIsThePlainLock() {
+		// Upstream separates the two because ITS make-lock is not reentrant; the shim's
+		// is, so a recursive lock and a plain one are one object and
+		// with-recursive-lock-held is the same built-in expansion as with-lock-held --
+		// including the nesting that is the whole point of the name.
+		LispEvaluator evaluator = evaluator();
+		evaluator.eval(LispReader.readFromString("(asdf:load-system \"bordeaux-threads\")"));
+		assertThat(evalAll(evaluator, """
+				(let ((l (bt:make-recursive-lock "init")))
+				  (list (bt:with-recursive-lock-held (l)
+				          (bt:with-recursive-lock-held (l) 'nested))
+				        (bt:with-lock-held (l) 'plain)))
+				""").print()).isEqualTo("(NESTED PLAIN)");
+	}
+
+	@Test
 	void concurrentIncrementsUnderTheLockAgreeWithTheSequentialResult() throws Exception {
 		int threads = 4;
 		int perThread = 2000;

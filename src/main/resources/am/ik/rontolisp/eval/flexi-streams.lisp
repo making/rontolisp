@@ -127,3 +127,42 @@
 (defmethod (setf rontolisp:stream-file-position)
     (position (stream flexi-streams:vector-stream))
   (setf (flexi-streams::vector-stream-index stream) position))
+
+;; The WRITE half of the in-memory pair. Deliberately NOT a vector-stream:
+;; that class is what http-body type-tests to take its no-copy input path,
+;; and a sink has no readable vector to hand it. The bytes accumulate in an
+;; adjustable fill-pointer vector and come back PACKED, the shape
+;; string-to-octets already answers with.
+
+(defclass flexi-streams::vector-output-stream
+    (rontolisp:fundamental-binary-output-stream)
+  ((flexi-streams::vec :initarg :vec
+                       :initform nil
+                       :accessor flexi-streams::vector-stream-vector)))
+
+;; :element-type and :transformer are accepted and ignored: every in-memory
+;; sink here is an octet sink, and no caller re-maps its elements on the way
+;; in.
+(defun flexi-streams:make-in-memory-output-stream
+    (&key element-type transformer (initial-size 32))
+  (declare (ignore element-type transformer))
+  (make-instance 'flexi-streams::vector-output-stream
+                 :vec (make-array initial-size
+                                  :element-type '(unsigned-byte 8)
+                                  :adjustable t
+                                  :fill-pointer 0)))
+
+(defmethod rontolisp:stream-write-byte
+    ((stream flexi-streams::vector-output-stream) byte)
+  (vector-push-extend byte (flexi-streams::vector-stream-vector stream))
+  byte)
+
+;; Upstream RESETS the stream, so a second call answers only what was written
+;; after the first.
+(defun flexi-streams:get-output-stream-sequence (stream &key as-list)
+  (let* ((buffer (flexi-streams::vector-stream-vector stream))
+         (result
+          (make-array (fill-pointer buffer) :element-type '(unsigned-byte 8))))
+    (dotimes (i (fill-pointer buffer)) (setf (aref result i) (aref buffer i)))
+    (setf (fill-pointer buffer) 0)
+    (if as-list (coerce result 'list) result)))

@@ -3,6 +3,8 @@ package am.ik.rontolisp.e2e;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.foreign.Arena;
+import java.lang.foreign.SymbolLookup;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -59,6 +61,11 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * for {@code macos/objc-runtime.lisp}, whose output can be checked on a Mac while its
  * lowering keeps being checked in CI. A leg gated out is a skipped assumption, not a
  * failure.</li>
+ * <li>{@code library} -- shared libraries the example calls into through {@code cffi},
+ * spelled as a {@code define-foreign-library} spells them (one per platform). The RUN
+ * legs are skipped unless the platform's loader resolves ONE of them; a COMPILE leg is
+ * never gated, because it loads nothing. The {@code os} gate's shape, for the other kind
+ * of thing a machine may not have.</li>
  * <li>{@code env} -- environment variables (a map) the program sees: exported to the
  * interpreter / JVM process, passed to wasmtime as {@code --env NAME=VALUE}. This is how
  * an example takes a knob a WASM leg must also see; {@code args} above is the other way,
@@ -181,7 +188,7 @@ class ExamplesE2eTest {
 			@Nullable String stdin, @Nullable String stdinFile, @Nullable Expect expect,
 			@Nullable List<String> systemPath, @Nullable String workDir, @Nullable List<String> workFiles,
 			@Nullable Map<String, String> env, @Nullable Boolean simd, @Nullable Boolean parallel,
-			@Nullable String note) {
+			@Nullable List<String> library, @Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
@@ -193,6 +200,17 @@ class ExamplesE2eTest {
 		 */
 		boolean runnableOnThisOs() {
 			return this.os == null || this.os.stream().anyMatch(token -> parseOs(token) == OS.current());
+		}
+
+		/**
+		 * Whether this machine HAS one of the shared libraries the example calls into
+		 * through {@code cffi}. The names are spelled as a {@code define-foreign-library}
+		 * spells them (one per platform), and the leg needs only one to resolve -- the
+		 * example's own library definition picks the right one. An example that names
+		 * none needs none.
+		 */
+		boolean foreignLibrariesPresent() {
+			return this.library == null || this.library.stream().anyMatch(ExamplesE2eTest::libraryLoadable);
 		}
 
 		Map<String, String> envOrEmpty() {
@@ -392,6 +410,29 @@ class ExamplesE2eTest {
 	}
 
 	/**
+	 * Whether this leg is gated out by the example's {@code library}: a RUN leg of a
+	 * {@code cffi} example on a machine that has none of the shared libraries it calls. A
+	 * COMPILE leg is not gated -- it never loads anything.
+	 * @param backend the leg
+	 * @param example the manifest entry
+	 * @return {@code true} when the leg must be skipped here
+	 */
+	static boolean skippedForLibrary(Backend backend, Example example) {
+		return backend.runsProgram() && !example.foreignLibrariesPresent();
+	}
+
+	/** Whether the platform's loader resolves a shared library by that name. */
+	private static boolean libraryLoadable(String name) {
+		try (Arena arena = Arena.ofConfined()) {
+			SymbolLookup.libraryLookup(name, arena);
+			return true;
+		}
+		catch (RuntimeException | Error ex) {
+			return false;
+		}
+	}
+
+	/**
 	 * Whether {@code example} survives the {@code -Drontolisp.examples.only=...} filter:
 	 * a comma-separated list of substrings matched against the manifest path, so
 	 * {@code -Drontolisp.examples.only=cloudflare} runs one directory and
@@ -418,6 +459,9 @@ class ExamplesE2eTest {
 			tests.add(dynamicTest(token, () -> {
 				if (skippedForOs(backend, example)) {
 					abort(example.path() + " runs on " + example.os() + " only; this is " + OS.current());
+				}
+				if (skippedForLibrary(backend, example)) {
+					abort(example.path() + " needs one of " + example.library() + "; this machine has none");
 				}
 				if (backend == Backend.WASM && !onPath("wasmtime")) {
 					abort("wasmtime not on PATH");

@@ -128,6 +128,33 @@ injected, then fully shaken out). The JVM wrapper catalog's biggest bodies went
   the array gate keeps the trio out. Same trade as `%subseq-runtime`, same answer: the
   gate under-predicting costs bytes, never correctness.
 
+## The computed-coerce fall-through is a `typep`, and that couples two gates
+
+A COMPUTED result type (`(coerce x type)` with `type` a variable) dispatches on the
+designator's head over the float, list, string and vector families, and what is left
+over -- `fixnum`, `character`, a class name, anything -- lands in one arm that applies
+CLHS's general rule: **"if the object is already of the specified type, it is
+returned"**, spelled `(if (typep x spec) x (error ...))`. Nothing else is honest: the
+alternative is a second, growing list of type names. iterate's `make-initial-value`
+is the consumer that forced it (`(coerce 0 type)` for every `iter` clause carrying a
+`:type`), and with it cl-sqlite loads (`.kb/cffi.md`).
+
+The coupling this creates on the compile paths: that arm is a computed `typep`, i.e. a
+call to the shared `%typep-runtime` defun, which `expandTopLevelDefinitions` injects
+only when `LispMacroExpander.needsRuntimeTypep` says so -- and that scan sees the
+SOURCE program, never the injected wrappers. So three things must stay in step:
+
+- the scan counts a computed `coerce` beside a computed `typep`, and `(function
+  coerce)` beside `(function typep)` -- including inside QUOTED data, because the
+  wrapper's own gate (`BuiltinFunctionWrappers.referencesFunctionValue`) walks in
+  there;
+- `#'coerce` is in `REFERENCE_GATED_FUNCTIONS`, so its wrapper -- whose body IS a
+  computed coerce -- is injected only for a program that names it, the `#'typep`
+  precedent exactly;
+- the `#'map` wrapper dispatches its result type onto three LITERAL coerces instead of
+  handing it to a computed one. It rides the EVAL runtime's gate rather than a name of
+  its own, so no reference scan could ever see it coming.
+
 ## Pinning tests
 
 - `LispMacroExpanderTest.aCoerceSiteIsOneCallWhenTheProgramCarriesTheSharedConversions`
