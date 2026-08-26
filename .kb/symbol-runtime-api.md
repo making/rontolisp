@@ -626,6 +626,20 @@ Verified form for form against SBCL 2.2.9 (`(cond ((special-operator-p op) ...)
 ((macro-function op) ...) (t ...))` over `if`/`quote`/a user macro/`when`/`car`/`+`/
 `handler-case`).
 
+**`while` is the ONE exception, and it is a name-space exception, not a partition one**
+(2026-08-27). `while` is rontolisp's own extension; it sits in the `cl` package only
+because that is where the built-in operators live, and CL has no such symbol. So
+`macro-function` answers NIL for it (`PackageRegistry.namesWithoutMacroFunction()` =
+the 25 ANSI operators plus `while`, consulted by BOTH `runtimeMacroNames()` and
+`LispEvaluator.isMacroName`), the same answer a special operator gets. The reason is a
+code walker: iterate's `walk` asks `(macro-function (car form))` BEFORE it recognizes its
+own clauses, so a yes on `while` made it refuse to walk `(iter ... (while test))` --
+warning "a macro that won't expand", leaving the clause in the emitted tagbody instead of
+turning it into the loop's exit test, and the loop then never ended. Any library
+extension put in `cl` has to answer the same way; the general rule is that a name CL does
+not have must not claim a macro function. Pinned by the `while` leg of
+`LispEvaluatorTest.macroFunctionAndSpecialOperatorPPartitionTheOperators`.
+
 **One definition per predicate, shared by every backend, and no compile-time fold.**
 Both are `LispPreludeLibrary` entries whose baked name table is GENERATED from
 `PackageRegistry` (so it cannot drift from the expander it describes) and tested with

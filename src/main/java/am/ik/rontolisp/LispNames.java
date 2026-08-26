@@ -492,6 +492,30 @@ public final class LispNames {
 	/** The {@code nthcdr} built-in function. */
 	public static final String NTHCDR = "NTHCDR";
 
+	/**
+	 * The {@code ldiff} standard function: a fresh list of the elements preceding
+	 * {@code object} in {@code list}, or a copy of the whole list (dotted tail included)
+	 * when {@code object} is not one of its tails. A prelude defun, so one definition
+	 * serves all four backends.
+	 */
+	public static final String LDIFF = "LDIFF";
+
+	/**
+	 * The {@code sublis} standard function: a fresh tree with every subtree matching an
+	 * alist key replaced by that entry's value, {@code :key} / {@code :test} /
+	 * {@code :test-not} honoured. A prelude defun; the destructive {@code nsublis} is
+	 * absent, as is {@code subst}.
+	 */
+	public static final String SUBLIS = "SUBLIS";
+
+	/**
+	 * The {@code gentemp} standard function (deprecated by CLHS, still used by iterate):
+	 * interns a fresh symbol named {@code prefix} plus a counter that no symbol of that
+	 * name already claims. Unlike {@link #GENSYM} the answer is INTERNED, which is the
+	 * whole point of the function. A prelude defun.
+	 */
+	public static final String GENTEMP = "GENTEMP";
+
 	/** The {@code length} built-in function. */
 	public static final String LENGTH = "LENGTH";
 
@@ -1155,6 +1179,15 @@ public final class LispNames {
 	 * The {@code maphash} built-in function (apply a function to each key/value pair).
 	 */
 	public static final String MAPHASH = "MAPHASH";
+
+	/**
+	 * The {@code with-hash-table-iterator} standard macro: binds a local iterator
+	 * function that answers {@code (values more-p key value)} one entry per call. Expands
+	 * to a snapshot alist plus an {@code flet} over it ({@code LispMacroExpander}), so no
+	 * backend needs a hash cursor primitive; the snapshot is why a table mutated during
+	 * the walk is not seen, which CLHS leaves undefined anyway.
+	 */
+	public static final String WITH_HASH_TABLE_ITERATOR = "WITH-HASH-TABLE-ITERATOR";
 
 	// Arrays
 

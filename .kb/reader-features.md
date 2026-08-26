@@ -55,6 +55,33 @@ variable seeded nil (`LispNames.COPY_READTABLE` and friends) — enough for the
 OTHER user dispatch character is therefore silently not honored: its literals hit
 the ordinary lexer, which is a read error unless they happen to parse.
 
+`#L(...)` / `#nL(...)` (added for iterate, 2026-08-27): the SharpL
+abbreviation, a lambda whose arguments are named `!1`, `!2`, ... positionally --
+`#L(list !2 !3)` reads as `#'(lambda (!1 !2 !3) (list !2 !3))`. Native for the
+same reason `#N@(` is: iterate installs it with
+`set-dispatch-macro-character`, which is a no-op here, and without it
+`#L!2` (iterate.lisp:773) lexes as ONE symbol named `#L!2` and every clause
+breaks at use. The arity is the highest `!n` the datum mentions unless `#nL`
+spells it out (a smaller count is a read error); a datum whose first element is
+itself a cons other than a `lambda` call is a LIST of body forms, iterate's own
+`list-of-forms?`. Upstream binds gensyms and redirects the `!n` onto them with
+`symbol-macrolet` purely for hygiene against a macroexpansion inside the body;
+naming the parameters `!n` directly is the equivalence iterate's own
+documentation states, and the `(declare (ignore ...))` it emits for the
+unmentioned arguments is dropped (no rontolisp backend has the style warning it
+suppresses). **Inside a backquote template the lambda cannot be built as a
+datum** -- iterate's unioning clause is
+`` `(... (delete-if #L(member !1 var :test ,test) ...)) `` -- so
+`LispReader.readSharpLTemplate` reads the datum RAW once (where an unquote is a
+marker cons) to get the arity, rewinds, and lets the ordinary template machinery
+build the body; the lambda is then assembled around it by construction code
+(`(list 'function (list 'lambda '(!1) BODY-CODE))`). `readRawTemplate` has its
+own case, so a `#L` inside a NESTED backquote goes through the CLtL2 path whole.
+Tests: `LispReaderTest.readSharpL*`, `LispEvaluatorTest.evalSharpLIsIteratesNumberedArgumentLambda`,
+`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`'s
+`*SharpLAndCommaDotAndWithHashTableIterator`, ci-spec
+`sharp-l-comma-dot-and-hash-table-iterator`.
+
 Symbol single-escapes (added for parse-number, 2026-07-05): a backslash in a
 symbol token makes the NEXT character part of the name verbatim -- even a
 terminating one -- and is itself dropped (`LispLexer.readSymbol`), so locals

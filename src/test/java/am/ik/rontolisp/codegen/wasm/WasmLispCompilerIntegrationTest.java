@@ -8132,6 +8132,31 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void sharpLAndCommaDotAndWithHashTableIterator() throws Exception {
+		// #L lowers in the reader, ",." is ",@", and with-hash-table-iterator expands to
+		// a snapshot alist plus an flet -- all front-end work, so the WASM backend sees
+		// only ordinary forms. ldiff/sublis ride the prelude splice.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (mapcar #L(* !1 !1) '(1 2 3)))
+				(print (funcall #L(list !2 !3) 'a 'b 'c))
+				(let ((xs '(1 2))) (print `(f ,.xs g)))
+				(print (ldiff '(1 2 3 4) nil))
+				(print (sublis '((a . 1)) '(a b)))
+				(let ((h (make-hash-table)))
+				  (setf (gethash 'a h) 1)
+				  (with-hash-table-iterator (next h)
+				    (multiple-value-bind (more k v) (next)
+				      (print (list more k v)))))
+				"""));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
+				path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("(1 4 9)\n(B C)\n(F 1 2 G)\n(1 2 3 4)\n(1 B)\n(T A 1)");
+	}
+
+	@Test
 	void defineCompilerMacroAndRestartCase() throws Exception {
 		// define-compiler-macro is consumed by eval.UserMacroExpander (the compilers
 		// never

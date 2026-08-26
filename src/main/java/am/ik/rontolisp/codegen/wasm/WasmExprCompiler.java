@@ -1270,6 +1270,8 @@ final class WasmExprCompiler {
 							sym.name() + " requires the interpreter (no runtime package registry in compiled mode)");
 				case LispNames.WITH_PACKAGE_ITERATOR ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx);
+				case LispNames.WITH_HASH_TABLE_ITERATOR ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithHashTableIterator(cons), ctx);
 				case LispNames.PROG -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx);
 				case LispNames.PROG_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, true), ctx);
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);

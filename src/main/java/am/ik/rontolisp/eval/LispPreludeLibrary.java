@@ -30,6 +30,12 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Current members:
  * <ul>
+ * <li>{@code ldiff} / {@code sublis} / {@code gentemp} -- the three list-and-symbol
+ * functions iterate's own source needs at load time: the elements preceding a given tail
+ * (the whole list, dotted tail included, when it is not a tail), a fresh tree with every
+ * alist-key subtree replaced ({@code :key}/{@code :test}/{@code :test-not}; the
+ * destructive {@code nsublis} is absent), and a fresh INTERNED symbol named prefix plus a
+ * counter.</li>
  * <li>{@code equalp} -- like {@code equal} but strings/characters compare case
  * insensitively, numbers by value, and arrays element-wise (same dimensions, elements
  * compared with {@code equalp}); lite (hash-tables/structures fall back to
@@ -138,6 +144,57 @@ public final class LispPreludeLibrary {
 				                                 (t nil))))
 				                  (cmp 0)))))
 				        (t (eql a b))))
+				""");
+		// ldiff / sublis / gentemp -- the three list-and-symbol functions iterate's own
+		// source needs at LOAD time (expand-iterate splits a body's declarations with
+		// ldiff, defmacro-clause substitutes its template parameters with sublis, and a
+		// clause's dispatch function is named by gentemp). Pure walks over primitives
+		// every backend has, so one definition serves all four.
+		SOURCES.put(LispNames.LDIFF, """
+				(defun ldiff (%ld-list %ld-object)
+				  (do ((%ld-tail %ld-list (cdr %ld-tail))
+				       (%ld-acc nil))
+				      ((atom %ld-tail)
+				       (if (eql %ld-tail %ld-object)
+				           (nreverse %ld-acc)
+				           (append (nreverse %ld-acc) %ld-tail)))
+				    (if (eql %ld-tail %ld-object)
+				        (return (nreverse %ld-acc))
+				        (setq %ld-acc (cons (car %ld-tail) %ld-acc)))))
+				""");
+		SOURCES.put(LispNames.SUBLIS, """
+				(defun sublis (%sb-alist %sb-tree &key %sb-key %sb-test %sb-test-not)
+				  (labels ((%sb-walk (%sb-x)
+				             (let* ((%sb-probe (if %sb-key (funcall %sb-key %sb-x) %sb-x))
+				                    (%sb-entry
+				                      (cond (%sb-test-not
+				                             (assoc %sb-probe %sb-alist :test-not %sb-test-not))
+				                            (%sb-test
+				                             (assoc %sb-probe %sb-alist :test %sb-test))
+				                            (t (assoc %sb-probe %sb-alist)))))
+				               (cond (%sb-entry (cdr %sb-entry))
+				                     ((consp %sb-x)
+				                      (cons (%sb-walk (car %sb-x)) (%sb-walk (cdr %sb-x))))
+				                     (t %sb-x)))))
+				    (%sb-walk %sb-tree)))
+				""");
+		// The counter is a defvar for the same reason the %symbol-plists store is one:
+		// defvar assigns only when unbound, so the spliced copy never resets a count.
+		SOURCES.put(LispNames.GENTEMP, """
+				(defvar %gentemp-counter 0)
+				(defun gentemp (&optional %gt-prefix %gt-package)
+				  (let ((%gt-stem (if %gt-prefix (string %gt-prefix) "T")))
+				    (do ((%gt-name nil))
+				        (nil)
+				      (setq %gentemp-counter (+ %gentemp-counter 1))
+				      (setq %gt-name
+				            (concatenate 'string %gt-stem (write-to-string %gentemp-counter)))
+				      (unless (if %gt-package
+				                  (find-symbol %gt-name %gt-package)
+				                  (find-symbol %gt-name))
+				        (return (if %gt-package
+				                    (intern %gt-name %gt-package)
+				                    (intern %gt-name)))))))
 				""");
 		SOURCES.put(LispNames.ALPHANUMERICP, """
 				(defun alphanumericp (c)

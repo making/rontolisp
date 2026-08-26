@@ -134,6 +134,7 @@
 | `provide` | `(provide :util)` | モジュールをロード済みとして登録し、以後の `require` を no-op にします。モジュール名を返します。コンパイルパスではリテラルなトップレベルフォームである必要があります |
 | `gensym` | `(gensym)`, `(gensym "tmp")` | `#:g1`, `#:tmp2` -- マクロの一時変数のための新しいシンボル(カウンタはプログラム全体で共有) |
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- 新しいアンインターンドシンボル(gensym の `#:` 規約、カウンタなし) |
+| `gentemp` | `(gentemp "Q")` | `Q1` -- prefix + カウンタの名前で intern される新しいシンボル(CLHS では非推奨。iterate が使用) |
 | `copy-symbol` | `(copy-symbol 'foo)` | `#:FOO` -- 同名のアンインターンドシンボル。属性リスト引数は無視され、コピーは `make-symbol` の同一性差異を引き継ぐ |
 | `intern` | `(intern "foo")` | シンボル `foo`。インタプリタでは名前はカレントパッケージ(`in-package` の状態)にインターンされます。`(intern name :keyword)` はキーワードを作り、それ以外のパッケージ引数はエラー |
 | `find-symbol` | `(find-symbol "car")` | 名前が既知(cl シンボル・キーワード・ユーザー定義)なら `car`、なければ `nil`。存在しないパッケージを指定した場合も `nil`(コンパイラ: `nil` を返せるのはリテラル文字列のときだけ) |
@@ -178,6 +179,7 @@
 | `second` `third` `fourth` | `(second '(1 2 3))` | `2` |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)`(先頭のn要素をスキップ) |
+| `ldiff` | `(ldiff '(1 2 3) '(3))` | `(1 2)`(指定した末尾より前の要素の新しいコピー。末尾でなければリスト全体) |
 | `length` | `(length '(1 2 3))`, `(length "abc")`, `(length #(1 2 3))` | `3`, `3`, `3`(リスト、文字列、ベクタ。nilでは `0`) |
 | `reverse` | `(reverse '(1 2 3))` | `(3 2 1)` |
 | `member` | `(member 2 '(1 2 3))` | `(2 3)`(carが要素と `eql` になる末尾、またはnil。省略可能な `:test`/`:key` キーワードを取ります。例: `(member '(a d) '((a b) (a d)) :test 'equal)` -> `((a d))`) |
@@ -217,6 +219,7 @@
 | `nconc` | `(nconc (list 1 2) (list 3 4) (list 5))` | `(1 2 3 4 5)`(任意個数のリストを破壊的に連結し、最初の非 `nil` 引数を返します) |
 | `copy-list` | `(copy-list '(1 2 3))` | `(1 2 3)`(リストの浅いコピー) |
 | `copy-tree` | `(copy-tree '(1 (2 3)))` | `(1 (2 3))`(コンスツリーの深いコピー) |
+| `sublis` | `(sublis '((a . 1)) '(a b))` | `(1 B)`(連想リストのキーに一致する部分木を置き換えた新しい木。`:key`/`:test`/`:test-not`) |
 | `nreverse` | `(nreverse '(1 2 3))` | `(3 2 1)`(各 `cdr` を繋ぎ替えてリストを破壊的に反転します。戻り値を使ってください) |
 | `make-list` | `(make-list 3 :initial-element 0)` | `(0 0 0)`(1 つの要素値を共有する n 個のセルのリスト。既定は `nil`) |
 | `union` | `(union '(1 2 3) '(2 3 4))` | `(4 1 2 3)`(集合の和。既定では `eql` 比較で、省略可能な `:test`/`:key` キーワードを取ります。結果順序は未規定) |

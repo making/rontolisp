@@ -55,8 +55,9 @@ public final class PackageRegistry {
 			LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF,
 			LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND,
 			LispNames.SLOT_EXISTS_P, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR,
-			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS, LispNames.WITH_COMPILATION_UNIT,
-			LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK);
+			LispNames.WITH_HASH_TABLE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS,
+			LispNames.WITH_COMPILATION_UNIT, LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART,
+			LispNames.PPRINT_LOGICAL_BLOCK);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -124,8 +125,9 @@ public final class PackageRegistry {
 			LispNames.CHAR_EQUAL, LispNames.CHAR_NOT_EQUAL, LispNames.CHAR_LESSP, LispNames.CHAR_GREATERP,
 			LispNames.CHAR_NOT_LESSP, LispNames.CHAR_NOT_GREATERP, LispNames.GRAPHIC_CHAR_P, LispNames.STANDARD_CHAR_P,
 			LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P,
-			LispNames.ALPHANUMERICP, LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT,
-			LispNames.BIT, LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
+			LispNames.ALPHANUMERICP, LispNames.LDIFF, LispNames.SUBLIS, LispNames.GENTEMP,
+			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BIT,
+			LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
 			LispNames.COMPILED_FUNCTION_P, LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.LIST_ALL_PACKAGES,
 			LispNames.USE_PACKAGE, LispNames.EXPORT, LispNames.UNEXPORT, LispNames.FIND_CLASS, LispNames.GET,
 			LispNames.SYMBOL_PLIST, LispNames.DIGIT_CHAR_P, LispNames.DIGIT_CHAR, LispNames.MAKE_HASH_TABLE,
@@ -455,15 +457,37 @@ public final class PackageRegistry {
 			LispNames.THE, LispNames.THROW, LispNames.UNWIND_PROTECT);
 
 	/**
+	 * The operators {@code macro-function} answers NIL for: the 25 ANSI special operators
+	 * plus {@code while}. {@code while} is rontolisp's OWN extension, not a CL name at
+	 * all, and it only sits in the {@code cl} package because that is where the built-in
+	 * operators live -- so claiming a macro function for it answers a question about a
+	 * symbol CL does not have. A code walker asking "is this head a macro I should
+	 * expand?" about a library's own {@code while} then gets a yes and refuses to walk
+	 * its own clause: iterate's `(iter ... (while test))` warned "a macro that won't
+	 * expand" and looped forever, because the clause survived into the emitted tagbody
+	 * instead of becoming its exit test.
+	 */
+	private static final Set<String> NO_MACRO_FUNCTION = union(ANSI_SPECIAL_OPERATORS, Set.of(LispNames.WHILE));
+
+	/**
+	 * Returns the operators {@code macro-function} must answer nil for -- the ANSI
+	 * special operators plus rontolisp's own {@code while}.
+	 * @return the names with no macro function
+	 */
+	public static Set<String> namesWithoutMacroFunction() {
+		return NO_MACRO_FUNCTION;
+	}
+
+	/**
 	 * The names {@code macro-function} answers a macro function for, before the program's
 	 * own {@code defmacro}s are added: every operator with no function value that is not
-	 * one of the 25 ANSI special operators. That includes the {@code cl} macros the
-	 * expander dispatches on AND the CL macros rontolisp happens to implement as special
-	 * forms -- the two are indistinguishable to a caller, and both answers are "you
-	 * cannot apply this name".
+	 * in {@link #NO_MACRO_FUNCTION}. That includes the {@code cl} macros the expander
+	 * dispatches on AND the CL macros rontolisp happens to implement as special forms --
+	 * the two are indistinguishable to a caller, and both answers are "you cannot apply
+	 * this name".
 	 */
 	private static final List<String> RUNTIME_MACRO_NAMES = SPECIAL_OPERATOR_NAMES.stream()
-		.filter(name -> !ANSI_SPECIAL_OPERATORS.contains(name))
+		.filter(name -> !NO_MACRO_FUNCTION.contains(name))
 		.sorted()
 		.toList();
 

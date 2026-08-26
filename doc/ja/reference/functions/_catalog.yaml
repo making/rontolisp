@@ -176,12 +176,14 @@ categories:
       - { slug: second-third-fourth, name: "second third fourth" }
       - { slug: nth, name: "nth" }
       - { slug: nthcdr, name: "nthcdr" }
+      - { slug: ldiff, name: "ldiff" }
       - { slug: list, name: "list" }
       - { slug: list*, name: "list*" }
       - { slug: acons, name: "acons" }
       - { slug: make-list, name: "make-list" }
       - { slug: copy-list, name: "copy-list" }
       - { slug: copy-tree, name: "copy-tree" }
+      - { slug: sublis, name: "sublis" }
   - title: "リスト操作"
     functions:
       - { slug: length, name: "length" }
@@ -329,6 +331,7 @@ categories:
   - title: "シンボルとマクロ"
     functions:
       - { slug: gensym, name: "gensym" }
+      - { slug: gentemp, name: "gentemp" }
       - { slug: make-symbol, name: "make-symbol" }
       - { slug: copy-symbol, name: "copy-symbol" }
       - { slug: intern, name: "intern" }

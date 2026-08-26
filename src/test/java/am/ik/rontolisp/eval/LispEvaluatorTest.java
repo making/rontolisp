@@ -4779,6 +4779,11 @@ class LispEvaluatorTest {
 		assertThat(eval("(list (special-operator-p 'defun) (and (macro-function 'defun) t)"
 				+ " (and (macro-function (intern \"WHEN\")) t) (macro-function 'car) (macro-function 'if))")
 			.print()).isEqualTo("(NIL T T NIL NIL)");
+		// while is rontolisp's OWN extension, not a CL name, so macro-function answers
+		// nil for it like it does for a special operator: a code walker asking whether a
+		// library's same-named symbol is a macro to expand must get no (iterate's
+		// (iter ... (while test)) clause).
+		assertThat(eval("(macro-function 'while)").print()).isEqualTo("NIL");
 	}
 
 	@Test
@@ -4846,6 +4851,52 @@ class LispEvaluatorTest {
 			.hasMessageContaining("only supports aliasing a user macro");
 		assertThatThrownBy(() -> eval("(setf (macro-function 'sfmf-y) (macro-function 'sfmf-no-such))"))
 			.hasMessageContaining("is not a user macro");
+	}
+
+	@Test
+	void evalCommaDotSplicesLikeCommaAt() {
+		// ",." is ",@" with permission to destroy the spliced list; iterate's
+		// expand-iterate is written entirely in it.
+		assertThat(eval("(let ((xs '(1 2))) `(f ,.xs g))").print()).isEqualTo("(F 1 2 G)");
+		assertThat(eval("(let ((xs '(1 2)) (tail '(9))) `(f ,.xs .,tail))").print()).isEqualTo("(F 1 2 9)");
+	}
+
+	@Test
+	void evalSharpLIsIteratesNumberedArgumentLambda() {
+		assertThat(eval("(mapcar #L(* !1 !1) '(1 2 3))").print()).isEqualTo("(1 4 9)");
+		assertThat(eval("(funcall #L(list !2 !3) 'a 'b 'c)").print()).isEqualTo("(B C)");
+		assertThat(eval("(funcall #3L(list !1) 'a 'b 'c)").print()).isEqualTo("(A)");
+		// A #L inside a backquote template whose body carries an unquote.
+		assertThat(eval("(let ((n 10)) (mapcar (eval `#L(+ !1 ,n)) '(1 2)))").print()).isEqualTo("(11 12)");
+	}
+
+	@Test
+	void evalLdiffSublisGentemp() {
+		assertThat(eval("(ldiff '(1 2 3) nil)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(let ((l '(1 2 3 4))) (ldiff l (cddr l)))").print()).isEqualTo("(1 2)");
+		// object is not a tail: the whole list is copied, dotted tail included.
+		assertThat(eval("(ldiff '(1 2 . 3) nil)").print()).isEqualTo("(1 2 . 3)");
+		assertThat(eval("(sublis '((a . 1) (b . 2)) '(a (b c) . a))").print()).isEqualTo("(1 (2 C) . 1)");
+		assertThat(eval("(sublis (pairlis '(x y) '(10 20)) '(+ x y))").print()).isEqualTo("(+ 10 20)");
+		// gentemp answers a fresh INTERNED symbol, a different one every call.
+		assertThat(eval("(let ((a (gentemp \"Q\")) (b (gentemp \"Q\"))) (list (eq a b) (symbolp a)))").print())
+			.isEqualTo("(NIL T)");
+	}
+
+	@Test
+	void evalWithHashTableIterator() {
+		assertThat(eval("""
+				(let ((h (make-hash-table)))
+				  (setf (gethash 'a h) 1)
+				  (setf (gethash 'b h) 2)
+				  (with-hash-table-iterator (next h)
+				    (let ((acc nil))
+				      (loop (multiple-value-bind (more k v) (next)
+				              (if more (setq acc (cons (cons k v) acc)) (return))))
+				      (sort acc #'string< :key (lambda (e) (symbol-name (car e)))))))
+				""").print()).isEqualTo("((A . 1) (B . 2))");
+		// Exhausted: the first value is nil.
+		assertThat(eval("(with-hash-table-iterator (n (make-hash-table)) (n))").print()).isEqualTo("NIL");
 	}
 
 	@Test

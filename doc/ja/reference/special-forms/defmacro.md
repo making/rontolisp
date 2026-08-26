@@ -10,6 +10,7 @@
 - `,expr` は `expr` の値を挿入します
 - `,@expr` は `expr` の値(リスト)を周囲のリストに継ぎ足し(splice)ます
 - `',@expr`（`'` または `#'` の直後の splice）は継ぎ足した要素から `(quote ...)`/`(function ...)` リストを構築します。慣用的な 1 要素の splice では結果は `'x`/`#'x` として読み戻せます
+- `,.expr` は `,@expr` と同じく splice します(CL は継ぎ足したリストの破壊を許しますが、ここでは破壊しません)
 
 ネストしたバッククォート(バッククォートテンプレートの中の別のバッククォート)はサポートされ、読み取り時に完全に展開されるため、`once-only` のような古典的なマクロ書きマクロも動作します。マクロ本体で変数捕捉のない一時変数を生成するには [`gensym`](../functions/gensym.md) を、展開結果を調べるには [`macroexpand-1`](../functions/macroexpand-1.md)/[`macroexpand`](../functions/macroexpand.md) を使用してください。
 

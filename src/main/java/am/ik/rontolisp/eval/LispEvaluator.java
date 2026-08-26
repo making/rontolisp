@@ -5160,6 +5160,8 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandWithOpenStream(cons, true), env);
 			case LispNames.WITH_PACKAGE_ITERATOR:
 				return eval(LispMacroExpander.expandWithPackageIterator(cons), env);
+			case LispNames.WITH_HASH_TABLE_ITERATOR:
+				return eval(LispMacroExpander.expandWithHashTableIterator(cons), env);
 			case LispNames.DO_EXTERNAL_SYMBOLS:
 			case LispNames.DO_SYMBOLS:
 				return evalDoSymbols(cons, env, name);
@@ -6780,7 +6782,7 @@ public final class LispEvaluator {
 	 */
 	private boolean isMacroName(String name) {
 		return isUserMacro(name)
-				|| (SPECIAL_OPERATORS.contains(name) && !PackageRegistry.ansiSpecialOperatorNames().contains(name));
+				|| (SPECIAL_OPERATORS.contains(name) && !PackageRegistry.namesWithoutMacroFunction().contains(name));
 	}
 
 	/**

@@ -145,11 +145,11 @@ public final class LispFormatter {
 
 	/**
 	 * Writes a reader macro and its datum. {@code '}, {@code `}, {@code ,}, {@code ,@},
-	 * {@code #'}, {@code #.} and {@code #n=} are one to three characters wide and must
-	 * stay glued to their datum. A {@code #+feature} guard is different: it can be as
-	 * wide as {@code #-(or ccl (and ecl little-endian) (and sbcl little-endian))}, and
-	 * gluing that to its form starts the form near the margin and pushes every line of it
-	 * past. So a guarded form that does not fit on one line gets the line below the
+	 * {@code ,.}, {@code #'}, {@code #.} and {@code #n=} are one to three characters wide
+	 * and must stay glued to their datum. A {@code #+feature} guard is different: it can
+	 * be as wide as {@code #-(or ccl (and ecl little-endian) (and sbcl little-endian))},
+	 * and gluing that to its form starts the form near the margin and pushes every line
+	 * of it past. So a guarded form that does not fit on one line gets the line below the
 	 * guard, at the guard's own indent -- which is how the idiom is written by hand, and
 	 * what trivial-formatter does unconditionally.
 	 * @param prefix the prefixed node

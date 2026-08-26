@@ -1775,6 +1775,44 @@ class JvmLispCompilerTest {
 	// path: the nested backquote is fully expanded by the reader, so the JVM
 	// compiler only sees ordinary list/cons/quote calls.
 	@Test
+	void compileAndRunSharpLAndCommaDotAndWithHashTableIterator() throws Exception {
+		// The three iterate-shaped surfaces that are pure front-end work: #L lowers in
+		// the reader, ",." is ",@", and with-hash-table-iterator expands to a snapshot
+		// alist plus an flet, so the backend sees only ordinary forms.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (mapcar #L(* !1 !1) '(1 2 3)))
+				(print (funcall #L(list !2 !3) 'a 'b 'c))
+				(let ((xs '(1 2))) (print `(f ,.xs g)))
+				(print (ldiff '(1 2 3 4) nil))
+				(print (sublis '((a . 1)) '(a b)))
+				(let ((h (make-hash-table)))
+				  (setf (gethash 'a h) 1)
+				  (with-hash-table-iterator (next h)
+				    (multiple-value-bind (more k v) (next)
+				      (print (list more k v)))))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(1 4 9)\n(B C)\n(F 1 2 G)\n(1 2 3 4)\n(1 B)\n(T A 1)");
+		}
+	}
+
+	@Test
 	void compileAndRunNestedBackquoteOnceOnly() throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
 				(defmacro once-only (names &body body)

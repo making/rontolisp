@@ -630,9 +630,73 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readBackquoteCommaDotSplicing() {
+		// ",." is ",@" with permission to destroy the spliced list (CLHS 2.4.6), so it
+		// reads to the same append. iterate's expand-iterate is written entirely in it:
+		// `(tagbody (progn ,.init-code) ,.(if used (list step)) ...).
+		assertThat(LispReader.readFromString("`(a ,.bs c)").print())
+			.isEqualTo("(APPEND (LIST (QUOTE A)) BS (LIST (QUOTE C)))");
+		assertThat(LispReader.readFromString("`(progn ,.body)").print())
+			.isEqualTo("(APPEND (LIST (QUOTE PROGN)) BODY)");
+		assertThat(LispReader.readFromString("`(x ,.(if flag (list s)))").print())
+			.isEqualTo("(APPEND (LIST (QUOTE X)) (IF FLAG (LIST S)))");
+	}
+
+	@Test
+	void readBackquoteCommaDotWithDottedUnquoteTail() {
+		// iterate expand-iterate:610 verbatim: `(let* ,binds ,.decls ,(if p
+		// `(unwind-protect
+		// ,body .,prot) body)) -- ",." beside a dotted ".," tail in one template.
+		assertThat(LispReader.readFromString("`(unwind-protect ,body .,prot)").print())
+			.isEqualTo("(CONS (QUOTE UNWIND-PROTECT) (CONS BODY PROT))");
+		assertThat(LispReader.readFromString("`(f ,.xs .,tail)").print())
+			.isEqualTo("(APPEND (LIST (QUOTE F)) XS TAIL)");
+	}
+
+	@Test
 	void readBackquoteSplicingTailAfterDotFails() {
 		assertThatThrownBy(() -> LispReader.readFromString("`(a . ,@xs)")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining(",@");
+	}
+
+	@Test
+	void readSharpL() {
+		// #L is iterate's numbered-argument lambda: the arity is the highest !n the
+		// body mentions, and the body is one form unless its first element is itself a
+		// cons (iterate's list-of-forms?).
+		assertThat(LispReader.readFromString("#L(* !1 !1)").print()).isEqualTo("(FUNCTION (LAMBDA (!1) (* !1 !1)))");
+		assertThat(LispReader.readFromString("#L(list !2 !3)").print())
+			.isEqualTo("(FUNCTION (LAMBDA (!1 !2 !3) (LIST !2 !3)))");
+		assertThat(LispReader.readFromString("#L(f)").print()).isEqualTo("(FUNCTION (LAMBDA NIL (F)))");
+		assertThat(LispReader.readFromString("#L((g !1) (h !1))").print())
+			.isEqualTo("(FUNCTION (LAMBDA (!1) (G !1) (H !1)))");
+		// A lambda call in head position is one form, not a list of forms.
+		assertThat(LispReader.readFromString("#L((lambda (x) x) !1)").print())
+			.isEqualTo("(FUNCTION (LAMBDA (!1) ((LAMBDA (X) X) !1)))");
+	}
+
+	@Test
+	void readSharpLWithExplicitArity() {
+		assertThat(LispReader.readFromString("#3L(list !1)").print())
+			.isEqualTo("(FUNCTION (LAMBDA (!1 !2 !3) (LIST !1)))");
+		assertThatThrownBy(() -> LispReader.readFromString("#1L(list !2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("too few arguments");
+		assertThatThrownBy(() -> LispReader.readFromString("#5000L(list !1)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("more than");
+		// !n past the cap is a NAME, not an argument: the lambda list stays empty.
+		assertThat(LispReader.readFromString("#L(list !999999999)").print())
+			.isEqualTo("(FUNCTION (LAMBDA NIL (LIST !999999999)))");
+	}
+
+	@Test
+	void readSharpLInsideBackquoteTemplate() {
+		// iterate's unioning clause: `(... (delete-if #L(member !1 var :test ,test)
+		// ...)).
+		// The body carries an unquote, so the lambda is assembled by construction code
+		// rather than read as a datum -- the arity still comes from the raw body.
+		assertThat(LispReader.readFromString("`(delete-if #L(member !1 xs :test ,test))").print())
+			.isEqualTo("(LIST (QUOTE DELETE-IF) " + "(LIST (QUOTE FUNCTION) (LIST (QUOTE LAMBDA) (QUOTE (!1)) "
+					+ "(LIST (QUOTE MEMBER) (QUOTE !1) (QUOTE XS) (QUOTE :TEST) TEST))))");
 	}
 
 	@Test

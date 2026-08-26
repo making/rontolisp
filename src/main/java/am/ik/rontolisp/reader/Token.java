@@ -38,6 +38,16 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Sharp-L ({@code #L} / {@code #nL}) token: iterate's numbered-argument lambda
+	 * abbreviation, which the reader lowers over the datum that follows.
+	 *
+	 * @param nArgs the explicit argument count of {@code #nL}, or -1 for a bare
+	 * {@code #L} (the count is then the highest {@code !n} the body mentions)
+	 */
+	record SharpL(int nArgs) implements Token {
+	}
+
+	/**
 	 * Structure literal open ({@code #S(} / {@code #s(}) token; closed by the matching
 	 * {@link RightParen}. The contents are the type name followed by alternating slot
 	 * names and values, read as data.

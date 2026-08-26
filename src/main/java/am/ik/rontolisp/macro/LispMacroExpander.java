@@ -168,6 +168,7 @@ public final class LispMacroExpander {
 			case LispNames.RESTART_BIND -> expandRestartBind(cons);
 			case LispNames.WITH_SIMPLE_RESTART -> expandWithSimpleRestart(cons);
 			case LispNames.MAKE_CONDITION -> expandMakeCondition(cons);
+			case LispNames.WITH_HASH_TABLE_ITERATOR -> expandWithHashTableIterator(cons);
 			case LispNames.WITH_SLOTS -> expandWithSlots(cons);
 			case LispNames.WITH_ACCESSORS -> expandWithAccessors(cons);
 			case LispNames.SYMBOL_MACROLET -> expandSymbolMacrolet(cons);
@@ -24780,6 +24781,69 @@ public final class LispMacroExpander {
 		flet.add(listToCons(List.of(iterator)));
 		flet.addAll(parts.subList(2, parts.size()));
 		return listToCons(List.of(new LispSymbol(LispNames.PROGN), spec.get(1), listToCons(flet)));
+	}
+
+	/**
+	 * Expands {@code (with-hash-table-iterator (name table) body...)} into a SNAPSHOT
+	 * alist plus an {@code flet} binding {@code name} to a local function -- not CL's
+	 * {@code macrolet} -- that pops one entry per call and answers
+	 * {@code (values t key value)}, or {@code (values nil nil nil)} once exhausted.
+	 *
+	 * <p>
+	 * The snapshot is the same {@code maphash}-into-an-alist walk {@code loop}'s
+	 * {@code being the hash-keys} clause uses, which is what keeps the macro free of any
+	 * per-backend hash cursor: the expansion is ordinary {@code let}/{@code flet}/
+	 * {@code maphash} every backend already compiles. Lite, in the direction CLHS leaves
+	 * undefined anyway: an entry added or removed DURING the walk is not seen, and the
+	 * iterator is an ordinary local function, so it can be passed as a value where CL's
+	 * macrolet cannot. The internal variable is named after the iterator rather than a
+	 * gensym, so nesting two iterators shadows correctly and the emitted form stays
+	 * identical across backends and runs ({@code .kb/emitted-output-determinism.md}).
+	 * @param cons the with-hash-table-iterator expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithHashTableIterator(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons specCons) || specCons.toList().size() != 2
+				|| !(specCons.toList().get(0) instanceof LispSymbol name)) {
+			throw new IllegalArgumentException(LispNames.WITH_HASH_TABLE_ITERATOR
+					+ " expects (with-hash-table-iterator (name table) body...): " + cons.print());
+		}
+		LispVal table = specCons.toList().get(1);
+		String stem = "__whti_" + name.name();
+		LispSymbol rest = new LispSymbol(stem);
+		LispSymbol acc = new LispSymbol(stem + "_acc");
+		LispSymbol key = new LispSymbol(stem + "_k");
+		LispSymbol value = new LispSymbol(stem + "_v");
+		LispSymbol entry = new LispSymbol(stem + "_e");
+		// (let ((acc nil)) (maphash (lambda (k v) (setq acc (cons (cons k v) acc)))
+		// TABLE) acc)
+		LispVal collect = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(key, value)),
+				listToCons(
+						List.of(new LispSymbol(LispNames.SETQ), acc, listToCons(List.of(new LispSymbol(LispNames.CONS),
+								listToCons(List.of(new LispSymbol(LispNames.CONS), key, value)), acc))))));
+		LispVal snapshot = listToCons(
+				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)))),
+						listToCons(List.of(new LispSymbol(LispNames.MAPHASH), collect, table)), acc));
+		// (let ((e (car rest))) (setq rest (cdr rest)) (values t (car e) (cdr e)))
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(
+						List.of(listToCons(List.of(entry, listToCons(List.of(new LispSymbol(LispNames.CAR), rest)))))),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), rest,
+						listToCons(List.of(new LispSymbol(LispNames.CDR), rest)))),
+				listToCons(List.of(new LispSymbol(LispNames.VALUES), LispTrue.INSTANCE,
+						listToCons(List.of(new LispSymbol(LispNames.CAR), entry)),
+						listToCons(List.of(new LispSymbol(LispNames.CDR), entry))))));
+		LispVal exhausted = listToCons(
+				List.of(new LispSymbol(LispNames.VALUES), LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE));
+		LispVal iterator = listToCons(List.of(name, LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.IF), rest, step, exhausted))));
+		List<LispVal> flet = new java.util.ArrayList<>();
+		flet.add(new LispSymbol(LispNames.FLET));
+		flet.add(listToCons(List.of(iterator)));
+		flet.addAll(parts.subList(2, parts.size()));
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(rest, snapshot)))), listToCons(flet)));
 	}
 
 	/**

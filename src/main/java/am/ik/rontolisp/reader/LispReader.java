@@ -414,6 +414,7 @@ public final class LispReader {
 			case Token.RightParen ignored -> throw err("Unexpected ')'");
 			case Token.Dot ignored -> throw err("Unexpected '.'");
 			case Token.Eof ignored -> throw err("Unexpected end of input");
+			case Token.SharpL sharp -> readSharpL(sharp.nArgs());
 			case Token.LabelDef def -> {
 				// #n=: record the next datum under the label. Lite: no circular
 				// structures -- a #n# inside the labeled datum itself is unresolvable.
@@ -852,6 +853,152 @@ public final class LispReader {
 		return new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(quoted, LispNil.INSTANCE));
 	}
 
+	/**
+	 * {@code #L} / {@code #nL}: iterate's SharpL abbreviation, a lambda whose arguments
+	 * are named {@code !1}, {@code !2}, ... positionally. {@code #L(list !2 !3)} reads as
+	 * {@code #'(lambda (!1 !2 !3) (list !2 !3))} -- the arity is the highest {@code !n}
+	 * the body mentions unless {@code #nL} spells it out, and a body whose first element
+	 * is itself a cons (other than a {@code lambda} call) is a LIST of forms rather than
+	 * one form, matching iterate's own {@code list-of-forms?}.
+	 *
+	 * <p>
+	 * Native here for the reason {@code #N@(} is: a user dispatch macro cannot extend the
+	 * Java-side reader, so {@code set-dispatch-macro-character} is an accepted no-op and
+	 * iterate's own {@code sharpL-reader} never runs ({@code .kb/reader-features.md}).
+	 * Upstream binds gensyms and redirects the {@code !n} symbols onto them with
+	 * {@code symbol-macrolet}, purely so a macroexpansion inside the body cannot capture
+	 * them; naming the parameters {@code !n} directly is the same lambda, and is what
+	 * iterate's own documentation gives as the equivalence. The {@code (declare (ignore
+	 * ...))} upstream emits for the unmentioned arguments is dropped: it exists to
+	 * suppress a style warning no rontolisp backend emits.
+	 * @param declared the arity of {@code #nL}, or -1 for a bare {@code #L}
+	 * @return the {@code (function (lambda ...))} form
+	 */
+	private LispVal readSharpL(int declared) {
+		return sharpLForm(readExpr(), declared);
+	}
+
+	/**
+	 * The {@code #L} lowering itself, over a datum already read: answers
+	 * {@code (function (lambda (!1 ... !n) . body))}.
+	 * @param datum the datum that followed the {@code #L}
+	 * @param declared the arity of {@code #nL}, or -1 for a bare {@code #L}
+	 * @return the {@code (function (lambda ...))} form
+	 */
+	private LispVal sharpLForm(LispVal datum, int declared) {
+		java.util.TreeSet<Integer> mentioned = new java.util.TreeSet<>();
+		collectBangVars(datum, mentioned);
+		LispVal params = sharpLParams(sharpLArity(declared, mentioned));
+		LispVal body = isListOfForms(datum) ? datum : new LispCons(datum, LispNil.INSTANCE);
+		LispVal lambda = new LispCons(new LispSymbol(LispNames.LAMBDA), new LispCons(params, body));
+		return list2(new LispSymbol(LispNames.FUNCTION), lambda);
+	}
+
+	/**
+	 * {@code #L} inside a backquote template. The body may itself contain unquotes
+	 * (iterate's
+	 * {@code `(subst (expr var) (delete-if #L(member !1 var :test ,test) ...))} is the
+	 * shape), so the lambda cannot be built as a datum here: the body becomes ordinary
+	 * template construction code and the lambda is assembled around it at run time. The
+	 * arity still comes from a raw pre-read of the same datum, where an unquote is a
+	 * marker cons rather than a hole.
+	 * @param declared the arity of {@code #nL}, or -1 for a bare {@code #L}
+	 * @return construction code yielding the {@code (function (lambda ...))} form
+	 */
+	private LispVal readSharpLTemplate(int declared) {
+		int save = this.pos;
+		boolean sawNested = this.rawSawNestedBackquote;
+		LispVal raw = readRawTemplate();
+		this.rawSawNestedBackquote = sawNested;
+		this.pos = save;
+		TemplateElement body = readTemplateElement();
+		if (body.splicing()) {
+			throw err(",@ cannot be the body of #L in a backquote template");
+		}
+		java.util.TreeSet<Integer> mentioned = new java.util.TreeSet<>();
+		collectBangVars(raw, mentioned);
+		LispVal params = list2(new LispSymbol(LispNames.QUOTE), sharpLParams(sharpLArity(declared, mentioned)));
+		LispVal lambdaHead = list2(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.LAMBDA));
+		// A body that is a LIST of forms splices into the lambda (list*), a single form
+		// becomes its one body form (list).
+		LispVal lambda = new LispCons(new LispSymbol(isListOfForms(raw) ? LispNames.LIST_STAR : LispNames.LIST),
+				listOf3(lambdaHead, params, body.form()));
+		return listOf3(new LispSymbol(LispNames.LIST),
+				list2(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.FUNCTION)), lambda);
+	}
+
+	/**
+	 * The widest {@code !n} a {@code #L} body may mention. Well past any real use (CL's
+	 * own {@code lambda-parameters-limit} floor is 50); the point is that a symbol like
+	 * {@code !999999999} is a NAME, not a millionth argument.
+	 */
+	private static final int SHARP_L_MAX_ARITY = 4096;
+
+	/**
+	 * The arity of a {@code #L}: the count {@code #nL} spells out, or the highest
+	 * {@code !n} the body mentions. A spelled-out count below that (or above the cap) is
+	 * a read error, as it is upstream.
+	 * @param declared the arity of {@code #nL}, or -1 for a bare {@code #L}
+	 * @param mentioned the {@code !n} numbers the body mentions
+	 * @return the lambda list length
+	 */
+	private int sharpLArity(int declared, java.util.SortedSet<Integer> mentioned) {
+		int highest = mentioned.isEmpty() ? 0 : mentioned.last();
+		if (declared >= 0 && declared < highest) {
+			throw err("#" + declared + "L specifies too few arguments (the body mentions !" + highest + ")");
+		}
+		if (declared > SHARP_L_MAX_ARITY) {
+			throw err("#" + declared + "L specifies more than " + SHARP_L_MAX_ARITY + " arguments");
+		}
+		return declared >= 0 ? declared : highest;
+	}
+
+	/** The {@code (!1 !2 ... !n)} lambda list of a {@code #L} of the given arity. */
+	private static LispVal sharpLParams(int arity) {
+		LispVal params = LispNil.INSTANCE;
+		for (int i = arity; i >= 1; i--) {
+			params = new LispCons(new LispSymbol("!" + i), params);
+		}
+		return params;
+	}
+
+	/**
+	 * iterate's {@code list-of-forms?}: a cons of conses, but not a {@code lambda} call.
+	 */
+	private static boolean isListOfForms(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispCons head
+				&& !(head.car() instanceof LispSymbol sym
+						&& LispNames.LAMBDA.equals(LispSymbol.memberName(sym.name())));
+	}
+
+	/** Records every {@code !n} argument symbol reachable in a {@code #L} body. */
+	private static void collectBangVars(LispVal form, java.util.Set<Integer> into) {
+		if (form instanceof LispCons cons) {
+			collectBangVars(cons.car(), into);
+			collectBangVars(cons.cdr(), into);
+			return;
+		}
+		if (form instanceof LispSymbol symbol) {
+			String name = LispSymbol.memberName(symbol.name());
+			if (name.length() > 1 && name.charAt(0) == '!') {
+				int n = 0;
+				for (int i = 1; i < name.length(); i++) {
+					char c = name.charAt(i);
+					// Not an argument at all: any non-digit (`!foo`), or a number wider
+					// than a lambda list could hold -- stopping there also keeps the
+					// accumulation from overflowing into a bogus arity.
+					if (c < '0' || c > '9' || n > SHARP_L_MAX_ARITY) {
+						return;
+					}
+					n = n * 10 + (c - '0');
+				}
+				if (n >= 1 && n <= SHARP_L_MAX_ARITY) {
+					into.add(n);
+				}
+			}
+		}
+	}
+
 	// --- Backquote (quasiquote) -------------------------------------------------
 	//
 	// A backquote template is expanded AT READ TIME into ordinary list/append/quote
@@ -928,6 +1075,10 @@ public final class LispReader {
 				}
 				this.pos++;
 				yield new TemplateElement(readTemplateList(), false);
+			}
+			case Token.SharpL sharp -> {
+				this.pos++;
+				yield new TemplateElement(readSharpLTemplate(sharp.nArgs()), false);
 			}
 			case Token.Quote ignored -> {
 				this.pos++;
@@ -1107,6 +1258,10 @@ public final class LispReader {
 			case Token.LeftParen ignored -> {
 				this.pos++;
 				return readRawList();
+			}
+			case Token.SharpL sharp -> {
+				this.pos++;
+				return sharpLForm(readRawTemplate(), sharp.nArgs());
 			}
 			case Token.Quote ignored -> {
 				this.pos++;

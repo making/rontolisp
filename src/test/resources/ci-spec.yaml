@@ -6542,6 +6542,26 @@ cases:
   # ',@xs in a backquote template = (quote ,@xs) = (cons 'quote xs): the
   # one-element splice yields 'x (trivia level0's `(equal ,*what* ',@args)),
   # the empty splice (QUOTE), the two-element splice (QUOTE A B).
+  - name: sharp-l-comma-dot-and-hash-table-iterator
+    source: |
+      (print (mapcar #L(* !1 !1) '(1 2 3)))
+      (print (funcall #L(list !2 !3) 'a 'b 'c))
+      (let ((ci-cd-xs '(1 2))) (print `(f ,.ci-cd-xs g)))
+      (print (ldiff '(1 2 3 4) nil))
+      (print (sublis '((a . 1)) '(a b)))
+      (let ((ci-whti-h (make-hash-table)))
+        (setf (gethash 'a ci-whti-h) 1)
+        (with-hash-table-iterator (ci-whti-next ci-whti-h)
+          (multiple-value-bind (ci-whti-more ci-whti-k ci-whti-v) (ci-whti-next)
+            (print (list ci-whti-more ci-whti-k ci-whti-v)))))
+    expected: |
+      (1 4 9)
+      (B C)
+      (F 1 2 G)
+      (1 2 3 4)
+      (1 B)
+      (T A 1)
+
   - name: backquote-quoted-splice
     source: |
       (print `(a ',@'(b)))

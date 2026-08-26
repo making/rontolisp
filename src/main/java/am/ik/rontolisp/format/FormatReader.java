@@ -86,7 +86,7 @@ public final class FormatReader {
 			case '(' -> readListing("(", trivia);
 			case '\'' -> readPrefix("'", trivia);
 			case '`' -> readPrefix("`", trivia);
-			case ',' -> readPrefix(lookingAt(",@") ? ",@" : ",", trivia);
+			case ',' -> readPrefix(lookingAt(",@") ? ",@" : lookingAt(",.") ? ",." : ",", trivia);
 			case '"' -> new CstNode.Atom(readStringLiteral(), trivia);
 			case '#' -> readDispatch(trivia);
 			default -> new CstNode.Atom(readToken(), trivia);
@@ -177,8 +177,10 @@ public final class FormatReader {
 	// A prefix is printed GLUED to its datum, which for ',' can change what the result
 	// reads as: `(, @section)` -- a comma whose datum happens to start with '@' -- would
 	// come back out as `,@section`, unquote-SPLICING. `,.` is the same reader macro's
-	// other spelling. Both are legal spellings upstream uses (trivial-utf-8's pax-pages),
-	// so the separating space is part of the token stream and has to survive.
+	// other spelling (`(, .body)` vs `,.body`), and both are legal spellings upstream
+	// uses (trivial-utf-8's pax-pages), so the separating space is part of the token
+	// stream and has to survive. The GLUED spellings are lexed as one prefix above; this
+	// only keeps a comma that was written APART from its datum apart.
 	private String separatedPrefix(String prefix) {
 		if (!",".equals(prefix)) {
 			return prefix;

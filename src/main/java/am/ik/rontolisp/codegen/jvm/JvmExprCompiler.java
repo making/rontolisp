@@ -874,6 +874,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx, className);
 				case LispNames.WITH_PACKAGE_ITERATOR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx, className);
+				case LispNames.WITH_HASH_TABLE_ITERATOR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithHashTableIterator(cons), ctx, className);
 				case LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_SYMBOLS ->
 					// Real on the interpreter (registry-backed); inside #. the macro-time
 					// evaluator resolves it before compilation. A runtime occurrence has

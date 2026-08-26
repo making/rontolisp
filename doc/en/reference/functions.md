@@ -137,6 +137,7 @@ page.
 | `provide` | `(provide :util)` | Mark a module as loaded so a later `require` of it is a no-op. Returns the module name. On the compile path it must be a literal, top-level form |
 | `gensym` | `(gensym)`, `(gensym "tmp")` | `#:g1`, `#:tmp2` -- a fresh symbol for macro temporaries (the counter is program-wide) |
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- a fresh uninterned symbol (the gensym `#:` convention, no counter) |
+| `gentemp` | `(gentemp "Q")` | `Q1` -- a fresh INTERNED symbol named prefix + a counter (CLHS-deprecated; iterate uses it) |
 | `copy-symbol` | `(copy-symbol 'foo)` | `#:FOO` -- an uninterned symbol of the same name; the property-list argument is ignored, and the copy inherits `make-symbol`'s identity deviation |
 | `intern` | `(intern "foo")` | The symbol `foo`. On the interpreter the name is interned into the current package (`in-package` state); `(intern name :keyword)` builds a keyword, any other package argument is an error |
 | `find-symbol` | `(find-symbol "car")` | `car` when the name is known (cl symbol, keyword, or user definition), else `nil`; a package that does not exist yields `nil` too (compilers: only a literal string can answer `nil`) |
@@ -181,6 +182,7 @@ page.
 | `second` `third` `fourth` | `(second '(1 2 3))` | `2` |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
+| `ldiff` | `(ldiff '(1 2 3) '(3))` | `(1 2)` (fresh copy of the elements before the given tail; the whole list if it is not a tail) |
 | `length` | `(length '(1 2 3))`, `(length "abc")`, `(length #(1 2 3))` | `3`, `3`, `3` (lists, strings and vectors; `0` for nil) |
 | `reverse` | `(reverse '(1 2 3))` | `(3 2 1)` |
 | `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eql` to the item, or nil; optional `:test`/`:key` keywords, e.g. `(member '(a d) '((a b) (a d)) :test 'equal)` -> `((a d))`) |
@@ -220,6 +222,7 @@ page.
 | `nconc` | `(nconc (list 1 2) (list 3 4) (list 5))` | `(1 2 3 4 5)` (destructively concatenate any number of lists; returns the first non-`nil` argument) |
 | `copy-list` | `(copy-list '(1 2 3))` | `(1 2 3)` (shallow copy of a list) |
 | `copy-tree` | `(copy-tree '(1 (2 3)))` | `(1 (2 3))` (deep copy of a cons tree) |
+| `sublis` | `(sublis '((a . 1)) '(a b))` | `(1 B)` (fresh tree with every subtree matching an alist key replaced; `:key`/`:test`/`:test-not`) |
 | `nreverse` | `(nreverse '(1 2 3))` | `(3 2 1)` (destructively reverse a list by rewiring each `cdr`; use the return value) |
 | `make-list` | `(make-list 3 :initial-element 0)` | `(0 0 0)` (list of n cells sharing the one element value; `nil` by default) |
 | `union` | `(union '(1 2 3) '(2 3 4))` | `(4 1 2 3)` (set union, `eql` compare by default, optional `:test`/`:key` keywords; result order unspecified) |

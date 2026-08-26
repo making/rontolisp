@@ -184,8 +184,12 @@ public final class LispLexer {
 			else if (c == ',') {
 				// A comma between two digits is a grouping separator consumed inside
 				// readNumber (e.g. "1,000"), so a comma reaching here starts a token:
-				// unquote (,x) or unquote-splicing (,@x) inside a backquote template.
-				if (this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '@') {
+				// unquote (,x) or unquote-splicing (,@x / ,.x) inside a backquote
+				// template. CLHS 2.4.6 gives ",." the semantics of ",@" plus permission
+				// to destroy the spliced list; splicing non-destructively is conformant,
+				// so both spellings produce one token.
+				if (this.pos + 1 < this.input.length()
+						&& (this.input.charAt(this.pos + 1) == '@' || this.input.charAt(this.pos + 1) == '.')) {
 					add(tokens, new Token.UnquoteSplicing(), tokenStart);
 					this.pos += 2;
 				}
@@ -196,6 +200,15 @@ public final class LispLexer {
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\'') {
 				add(tokens, new Token.FunctionQuote(), tokenStart);
+				this.pos += 2;
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'L' || this.input.charAt(this.pos + 1) == 'l')) {
+				// #L( -- iterate's SharpL abbreviation, native here for the same reason
+				// #N@( is: a user dispatch macro cannot extend the Java-side reader, and
+				// set-dispatch-macro-character is an accepted no-op. The arity is the
+				// highest !n the datum mentions; the reader does the lowering.
+				add(tokens, new Token.SharpL(-1), tokenStart);
 				this.pos += 2;
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
@@ -334,6 +347,20 @@ public final class LispLexer {
 					add(tokens, width == 8 || width == 16 || width == 32 ? new Token.IntVectorOpen(width)
 							: new Token.VectorOpen(), tokenStart);
 					this.pos = probe + 2;
+				}
+				else if (probe < this.input.length()
+						&& (this.input.charAt(probe) == 'L' || this.input.charAt(probe) == 'l')) {
+					// #nL: iterate's numbered-argument lambda with the arity spelled
+					// out. Lowered by the reader over the datum that follows.
+					int nArgs;
+					try {
+						nArgs = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw err("Invalid #L argument count: " + this.input.substring(this.pos, probe));
+					}
+					add(tokens, new Token.SharpL(nArgs), tokenStart);
+					this.pos = probe + 1;
 				}
 				else if (probe < this.input.length()
 						&& (this.input.charAt(probe) == '=' || this.input.charAt(probe) == '#')) {

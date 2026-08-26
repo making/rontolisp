@@ -72,3 +72,31 @@ before `.todo/430`:
   with a `0` count instead of trapping on the `i31.get_s`. `FUNC_PRINT_I32_NO_NL` writes
   the digits -- the function the same arm already calls for an array's rank, so no new
   function index and no shift in the component blobs.
+
+## `with-hash-table-iterator`
+
+The CLHS macro is a MACRO here in the same lite direction `with-package-iterator` is: the
+name is bound by `flet` to a local FUNCTION, not by CL's `macrolet`, so the iterator can
+also be passed as a value. `LispMacroExpander.expandWithHashTableIterator` lowers
+`(with-hash-table-iterator (name table) body...)` to a `let` over a SNAPSHOT alist -- the
+same `(let ((acc nil)) (maphash (lambda (k v) (setq acc (cons (cons k v) acc))) TABLE) acc)`
+walk `loop`'s `being the hash-keys` clause uses -- plus an `flet` whose body pops one entry
+per call and answers `(values t key value)`, or `(values nil nil nil)` once exhausted.
+Snapshotting is what keeps the macro free of a per-backend hash cursor: the expansion is
+ordinary `let`/`flet`/`maphash` all four backends already compile, so the evaluator, both
+compilers and the fold pass only need the one-line dispatch each
+(`LispEvaluator.evalCons`, `Jvm`/`WasmExprCompiler.compileCons`, `PureBuiltinFolder`'s
+name-headed-spec arm). The cost is the lite part: an entry added or removed DURING the
+walk is not seen, which CLHS leaves undefined anyway.
+
+The internal variables are named after the ITERATOR (`__whti_<name>`, `..._acc`, `..._k`,
+`..._v`, `..._e`) rather than gensyms. Two reasons, and both matter: nesting two iterators
+then shadows exactly as the iterator names do, and the emitted form stays identical across
+backends and across runs (`.kb/emitted-output-determinism.md`), which a global gensym
+counter would not.
+
+Added 2026-08-27 for iterate's `(for ... in-hashtable ...)` clause, which wraps the whole
+loop body in it. Tests: `LispEvaluatorTest.evalWithHashTableIterator`,
+`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`'s
+`*SharpLAndCommaDotAndWithHashTableIterator`, ci-spec
+`sharp-l-comma-dot-and-hash-table-iterator`.

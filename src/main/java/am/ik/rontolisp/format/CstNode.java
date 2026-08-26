@@ -52,7 +52,7 @@ public sealed interface CstNode {
 
 	/**
 	 * A reader macro that binds to the single datum after it: {@code '}, {@code `},
-	 * {@code ,}, {@code ,@}, {@code #'}, {@code #.}, {@code #3=} and the
+	 * {@code ,}, {@code ,@}, {@code ,.}, {@code #'}, {@code #.}, {@code #3=} and the
 	 * {@code #+feature} / {@code #-feature} guards (whose feature expression is folded
 	 * into the prefix text, with its internal whitespace collapsed to single spaces).
 	 * Printed glued to its datum, so the pair never splits across lines.
