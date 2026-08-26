@@ -25,8 +25,9 @@ half of the binding (introspection, NSMethodSignature, KVC, a run-time class who
 and leaves the COMPILE legs alone, added for it -- so its output is checked on a Mac and
 its lowering everywhere: the one program that gates the blob on through the bare `objc:`
 verbs, with no `appkit:` reference and so no splice. `examples/macos/metal.lisp` +
-`metal-triangle.lisp` + `metal-cube.lisp` (todo-525, 2026-08-26) are the GPU pair, the
-AppKit twins of `examples/browser/webgl-triangle` and `webgl-cube` -- "Metal" below.
+`metal-triangle.lisp` + `metal-cube.lisp` + `metal-robot-arm.lisp` (todo-525,
+2026-08-26) are the GPU set, the AppKit twins of `examples/browser/webgl-triangle`,
+`webgl-cube` and `webgl-robot-arm` -- "Metal" below.
 
 What it is worth: the `rontolisp` native binary is the REPL people run, and `java:` cannot
 be INTERPRETED there at all (no reflection metadata). FFM needs none, so this is the one
@@ -220,9 +221,10 @@ the first cut sent the header down the wire and the two backends disagreed by tw
 ## Metal: the GPU is reachable, OpenGL is not
 
 `examples/macos/metal.lisp` (the shared surface, `webgl-common/gl.lisp`'s twin) plus
-`examples/macos/metal-triangle.lisp` and `metal-cube.lisp` -- the AppKit answers to
-`examples/browser/webgl-triangle` and `webgl-cube`. They add no Java: Metal is an
-Objective-C API almost end to end, so `objc:send` drives all of it.
+`examples/macos/metal-triangle.lisp`, `metal-cube.lisp` and `metal-robot-arm.lisp` -- the
+AppKit answers to `examples/browser/webgl-triangle`, `webgl-cube` and `webgl-robot-arm`.
+They add no Java: Metal is an Objective-C API almost end to end, so `objc:send` drives all
+of it.
 
 - **OpenGL cannot be reached and never will be.** `glClear` / `glDrawArrays` are plain C
   functions, outside `objc_msgSend` entirely; `objc:` binds no C entry points. Deprecated
@@ -237,7 +239,34 @@ Objective-C API almost end to end, so `objc:send` drives all of it.
   handed over never becomes the backing store), and the frame loop is `appkit:timer` --
   an `NSTimer` on thread 0, which is where Metal wants the frame anyway.
 - The cube needs no depth attachment: a cube is CONVEX, so back-face culling alone leaves
-  exactly the visible faces.
+  exactly the visible faces. The robot arm is not, so it asks `metal:attach` for one
+  (`:depth t`) -- a private `Depth32Float` texture the size of the drawable that the pass
+  clears and every pipeline drawing into it must DECLARE, which is why `metal:pipeline`
+  reads the format off the context rather than taking it from the caller. Its glow pass is
+  the other half of the same seam: `metal:pipeline :blend t` (additive, one + one) plus a
+  `metal:depth-state :writes nil`, so a sprite is hidden by the machine and not by another
+  sprite.
+- **The arm's geometry is rewritten every frame**, which `metal:buffer` (copy once, never
+  change) cannot serve: `metal:shared-buffer` allocates and `metal:upload` memcpys into
+  `contents` through `-[NSData getBytes:length:]`. The CPU writes next frame's vertices
+  while the GPU may still be reading this frame's, so the program rotates three copies --
+  the standard Metal answer, and the one thing WebGL hid from the browser twin.
+- **The mouse is `objc:define-class`**, not a rung of `appkit`: an `NSView` subclass whose
+  `mouseDown:` / `mouseDragged:` / `mouseUp:` / `scrollWheel:` / `acceptsFirstMouse:` are
+  Lisp closures, set as the window's content view BEFORE `metal:attach` puts the layer on
+  it, so the drawing surface and the input surface are one view. Every one of those
+  selectors is declared by NSView, so the encoding is read off the superclass and all of
+  them land on the supported `v@:@` / `B@:@` shapes; `locationInWindow` answers an NSPoint
+  (a struct return, a flat list) and `scrollingDeltaY` a double.
+- Neither GPU example holds a coordinate in a scalar variable, and the arm is where that
+  pays: a point, a direction, a colour and a camera axis are packed single-float
+  3-vectors, the joint chain is a rank-2 (joint xyz) array, and combining them is a
+  `linalg` call -- which is what lets the look-at (`[R | -R.eye]`, two
+  `linalg:concatenate`s over a `linalg:matmul`), the position Jacobian (a skew matrix per
+  joint) and the damped normal equations read as the matrix expressions they are. The ONE
+  place that stays scalar is the innermost tessellation loop, which writes six floats
+  straight into the vertex array several thousand times a frame; a fresh 3-vector per
+  corner would be an allocation per float written.
 - The cube's MVP matrix is `linalg`'s, not hand-written arithmetic, and it reaches the GPU
   with NO conversion: a linalg result is a packed float array and `objc:data` takes one of
   any rank, so `linalg:matmul` -> `objc:data` -> `setVertexBytes:` is the whole path.

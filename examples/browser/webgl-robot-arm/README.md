@@ -30,6 +30,20 @@ Toggle between them mid-move and the poses differ: DLS spreads the motion
 across all joints, FABRIK drags the chain geometrically, and the analytic arm
 moves like a rigid two-segment machine.
 
+## Every coordinate is an array, and the arithmetic is `linalg`
+
+Not one coordinate in this program is a scalar variable: a point, a direction, a
+colour and a camera axis are float vectors, the joint chain is a rank-2
+`(joint xyz)` array, and combining them is a `linalg` call rather than three
+lines of the same expression with `x`, `y` and `z` spelled into it. That is what
+lets the matrix steps read as the matrix expressions they are — the look-at is
+`[R | -R·eye]`, two `linalg:concatenate`s over a `linalg:matmul`; the position
+Jacobian is a skew matrix per joint; the min-jerk step is one lerp;
+unprojecting a click is two `linalg:dot`s. The one place that stays scalar is
+the innermost tessellation loop, which stages six floats a vertex several
+thousand times a frame — a fresh 3-vector per corner would be an allocation per
+float staged.
+
 ## The rest of the program
 
 - **Minimum-jerk interpolation** — the commanded hand position travels along
@@ -53,6 +67,11 @@ JavaScript is the same host boundary as [`webgl-galaxy`](../webgl-galaxy): one-l
 WebGL2 bindings over a handle table, two staging `Float32Array`s, pointer
 gestures forwarded as exported-function calls, and the HUD — no kinematics, no
 matrices, no rendering logic of its own.
+
+[`examples/macos/metal-robot-arm.lisp`](../../macos/metal-robot-arm.lisp) is the
+same program with the host boundary removed: Metal through `objc:send`, a packed
+single-float array *as* the vertex buffer's bytes, and the mouse through an
+`NSView` subclass whose `mouseDown:` / `scrollWheel:` are Lisp closures.
 
 ## What's in here
 
@@ -81,8 +100,10 @@ bindings are generated from the same `gl.wit`.
 (defun min-jerk (u)
   (* u u u (+ 10.0 (* u (+ -15.0 (* u 6.0))))))
 
-;; each frame: advance the commanded hand position along the profile ...
-(setq *tx* (+ *sx* (* s (- *gx* *sx*))))
+;; each frame: advance the commanded hand position along the profile --
+;; one lerp over 3-vectors, whatever the axis
+(setq *target*
+      (linalg:add *start* (linalg:mul (linalg:sub *goal* *start*) (min-jerk u))))
 
 ;; ... and solve the chain onto it -- the damped-least-squares step is one
 ;; linalg expression: dtheta = J^T (J J^T + lambda^2 I)^-1 e
@@ -114,7 +135,7 @@ Needs a browser with WebAssembly GC (Chrome 119+, Firefox 120+, Safari 18.2+).
 - `--no-wasi` means the module's *only* imports are the host functions declared
   in the program and the shared `gl` package — the import object is the whole
   embedding API. `--optimize` tree-shakes the runtime down to what is reached;
-  the shipped module imports 44 functions, the most of any of these demos.
+  the shipped module imports 38 functions, the most of any of these demos.
 - Input is delivered through exported functions (`pointer`, `orbit`, `zoom`),
   not imports: the page classifies the gesture and pushes it in, and the camera
   itself lives in Lisp. Exports in, imports out — the module never polls the

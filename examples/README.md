@@ -176,8 +176,9 @@ menu bar item, its menu entries Lisp closures.
 Objective-C runtime, and one that is not linked into the process is one `NSBundle`
 message away, which is what [`system-frameworks.lisp`](macos/system-frameworks.lisp)
 is about. Metal is one of them, and it is Objective-C nearly end to end, so the GPU
-is reachable with nothing added: [`metal-triangle.lisp`](macos/metal-triangle.lisp)
-and [`metal-cube.lisp`](macos/metal-cube.lisp) are the AppKit twins of the WebGL
+is reachable with nothing added: [`metal-triangle.lisp`](macos/metal-triangle.lisp),
+[`metal-cube.lisp`](macos/metal-cube.lisp) and
+[`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) are the AppKit twins of the WebGL
 examples under [`browser/`](browser).
 The window examples are not in `examples.yaml`: they need a display. The two that
 open nothing — [`objc-runtime.lisp`](macos/objc-runtime.lisp) and
@@ -198,6 +199,7 @@ See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 | [`metal.lisp`](macos/metal.lisp) | A Metal drawing surface on an `appkit:window`, in its own package -- the layer, the drawable, the render pass and the command buffer, which every Metal program writes identically; the macOS counterpart of [`webgl-common/gl.lisp`](browser/webgl-common/gl.lisp). The device comes from `CAMetalLayer`'s `preferredDevice`, so no C entry point is needed and the whole binding is `objc:send` |
 | [`metal-triangle.lisp`](macos/metal-triangle.lisp) | The WebGL hello world on a Mac GPU, the twin of [`webgl-triangle`](browser/webgl-triangle): one gradient triangle, no vertex buffer at all (the shader looks its corners up by `vertex_id`), Metal Shading Language compiled from a Lisp string at run time |
 | [`metal-cube.lisp`](macos/metal-cube.lisp) | The full pipeline, the twin of [`webgl-cube`](browser/webgl-cube): a vertex buffer and a per-frame MVP matrix, both `objc:data` over packed single-float arrays -- the matrix comes straight out of the built-in [`linalg`](../doc/en/guides/linear-algebra.md) package, since a linalg result IS a packed array and `objc:data` takes one of any rank; back-face culling instead of a depth buffer (a cube is convex) and face normals from `dfdx`/`dfdy`; the frame loop is an `appkit:timer` |
+| [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) | The twin of [`webgl-robot-arm`](browser/webgl-robot-arm), and the whole of a renderer: a depth attachment, a lit-triangle pipeline and an additive glow-sprite one, geometry re-tessellated every frame into shared `MTLBuffer`s rotated through three slots, and the mouse -- an `NSView` subclass defined at run time whose `mouseDown:` / `mouseDragged:` / `scrollWheel:` are Lisp closures, installed as the window's content view. Click and the arm solves damped-least-squares Jacobian IK onto the unprojected point along a minimum-jerk trajectory; drag to orbit, scroll to zoom. Every coordinate is a packed single-float vector and every combination of them a [`linalg`](../doc/en/guides/linear-algebra.md) call, so the look-at, the Jacobian and the damped normal equations read as the matrix expressions they are |
 | [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
 
 ```bash
@@ -209,6 +211,7 @@ java -jar $JAR examples/macos/listener.lisp
 java -jar $JAR examples/macos/menubar.lisp             # no window; look at the menu bar
 java -jar $JAR examples/macos/metal-triangle.lisp
 java -jar $JAR examples/macos/metal-cube.lisp
+java -jar $JAR examples/macos/metal-robot-arm.lisp
 ./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp \
@@ -232,7 +235,7 @@ needs no glue at all. Each directory has its own README.
 | [`webgl-cube/`](browser/webgl-cube) | Hello 3D: perspective and rotation matrices computed in Lisp every frame; bulk floats cross through a staging array |
 | [`webgl-galaxy/`](browser/webgl-galaxy) | A spiral galaxy driven entirely from Lisp, GLSL sources included, over 32 host functions declared by a WIT — the JavaScript is generated one-line bindings |
 | [`webgl-heat3d/`](browser/webgl-heat3d) | The rank-3 array showcase: the page's whole state is one `(n n n)` array, diffused and projected every frame |
-| [`webgl-robot-arm/`](browser/webgl-robot-arm) | A 3-D arm that reaches where you click: damped-least-squares Jacobian IK every frame (FABRIK and the analytic closed form on a HUD toggle), on a minimum-jerk trajectory |
+| [`webgl-robot-arm/`](browser/webgl-robot-arm) | A 3-D arm that reaches where you click: damped-least-squares Jacobian IK every frame (FABRIK and the analytic closed form on a HUD toggle), on a minimum-jerk trajectory. Every coordinate is a float vector and every combination of them a `linalg` call; [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) is the same program with the host boundary removed |
 | [`webgl-platformer/`](browser/webgl-platformer) | A one-stage 3D platformer: gravity, coyote time, per-axis AABB collision, enemy patrols and the follow camera, all in Lisp |
 | [`webgl-battlefront/`](browser/webgl-battlefront) | A Pointer-Lock snow battle: third-person aim camera, blaster bolts, a lightsaber that hits *and* deflects, and stormtrooper/AT-AT/boss AI |
 | [`webgl-common/`](browser/webgl-common) | Not a demo but the shared `gl` package the others splice in with `(require :gl ...)`; `--optimize` tree-shakes the entries a demo never calls |

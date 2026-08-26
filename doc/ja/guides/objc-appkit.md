@@ -203,9 +203,14 @@ CL-USER> (handler-case
 
 この 2 つが GPU を射程に入れます。Metal はほぼ全面が Objective-C の API なので、`objc:send`
 だけで何も足さずに駆動できます。`examples/macos/metal-triangle.lisp` は WebGL の hello world
-を、`examples/macos/metal-cube.lisp` は陰影付きの回転する立方体を描き、シェーダは Lisp の文
-字列から実行時にコンパイルされます (OpenGL は逆で、射程外のままです。`glClear` などは素の C
-関数であり、`objc_msgSend` は届きません)。
+を、`examples/macos/metal-cube.lisp` は陰影付きの回転する立方体を、
+`examples/macos/metal-robot-arm.lisp` は自分で逆運動学を解いてクリックした先へ手を伸ばすロ
+ボットアームを描き、シェーダは Lisp の文字列から実行時にコンパイルされます (OpenGL は逆で、
+射程外のままです。`glClear` などは素の C 関数であり、`objc_msgSend` は届きません)。
+
+そこにマウスを運ぶのが `objc:define-class` です。描画面は実行時に定義した `NSView` のサブク
+ラスで、その `mouseDown:` / `mouseDragged:` / `scrollWheel:` は Lisp のクロージャ — ウィ
+ジェット層が `NSBox` にクリックを答えさせるのと同じ動詞です。
 
 ### スレッド: すべてはメインスレッドで起きる
 

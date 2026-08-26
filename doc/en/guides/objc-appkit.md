@@ -248,9 +248,15 @@ CL-USER> (handler-case
 
 Together they are what puts the GPU in reach: Metal is an Objective-C API almost
 end to end, so `objc:send` drives it with nothing added — `examples/macos/metal-triangle.lisp`
-draws the WebGL hello world and `examples/macos/metal-cube.lisp` a spinning, shaded cube,
-shaders compiled from Lisp strings at run time. (OpenGL is the opposite and stays out of
-reach: `glClear` and friends are plain C functions, which `objc_msgSend` does not reach.)
+draws the WebGL hello world, `examples/macos/metal-cube.lisp` a spinning, shaded cube, and
+`examples/macos/metal-robot-arm.lisp` a robot arm that solves its own inverse kinematics and
+reaches for wherever you click, with shaders compiled from Lisp strings at run time. (OpenGL
+is the opposite and stays out of reach: `glClear` and friends are plain C functions, which
+`objc_msgSend` does not reach.)
+
+`objc:define-class` is what carries the mouse there: the drawing surface is an `NSView`
+subclass defined at run time whose `mouseDown:` / `mouseDragged:` / `scrollWheel:` are Lisp
+closures, the same verb the widget layer uses to make an `NSBox` answer a click.
 
 ### Threads: everything happens on the main thread
 

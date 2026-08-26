@@ -21,13 +21,16 @@
 ;;;;   (require :metal "metal.lisp")
 ;;;;
 ;;;; API:
-;;;;   (metal:attach window &key clear scale)  -> a context on the window
+;;;;   (metal:attach window &key clear scale depth) -> a context on the window
 ;;;;   (metal:device ctx) (metal:layer ctx)    -> the MTLDevice / CAMetalLayer
 ;;;;   (metal:library ctx source)              -> compile MSL source (signals)
-;;;;   (metal:pipeline ctx lib vfn ffn)        -> an MTLRenderPipelineState
+;;;;   (metal:pipeline ctx lib vfn ffn &key blend) -> an MTLRenderPipelineState
+;;;;   (metal:depth-state ctx &key writes compare) -> an MTLDepthStencilState
 ;;;;   (metal:floats list)                     -> a packed single-float array
 ;;;;   (metal:buffer ctx floats)               -> an MTLBuffer holding them
-;;;;   (metal:uniform encoder index floats)    -> set them as vertex bytes
+;;;;   (metal:shared-buffer ctx bytes)         -> an MTLBuffer to rewrite
+;;;;   (metal:upload buffer floats)            -> copy floats into one
+;;;;   (metal:uniform encoder index floats &key stage) -> set them inline
 ;;;;   (metal:frame ctx fn)                    -> draw one frame; fn gets the
 ;;;;                                              render command encoder
 ;;;;   (metal:run ctx fn &key fps)             -> call metal:frame on a timer
@@ -40,9 +43,11 @@
 
 (defpackage metal
   (:use cl)
-  (:export attach device layer queue library pipeline floats buffer uniform
-           frame run +triangle+ +triangle-strip+ +cull-none+ +cull-front+
-           +cull-back+ +winding-clockwise+ +winding-counter-clockwise+))
+  (:export attach device layer queue library pipeline depth-state floats buffer
+           shared-buffer upload uniform frame run +point+ +triangle+
+           +triangle-strip+ +cull-none+ +cull-front+ +cull-back+
+           +winding-clockwise+ +winding-counter-clockwise+ +compare-less+
+           +compare-always+))
 
 (in-package metal)
 
@@ -51,8 +56,11 @@
 ;;; drawing program spells out.
 
 (defconstant +bgra8-unorm+ 80)      ; MTLPixelFormatBGRA8Unorm
+(defconstant +depth32-float+ 252)   ; MTLPixelFormatDepth32Float
 (defconstant +load-clear+ 2)        ; MTLLoadActionClear
 (defconstant +store-store+ 1)       ; MTLStoreActionStore
+(defconstant +store-dont-care+ 0)   ; MTLStoreActionDontCare
+(defconstant +point+ 0)             ; MTLPrimitiveTypePoint
 (defconstant +triangle+ 3)          ; MTLPrimitiveTypeTriangle
 (defconstant +triangle-strip+ 4)    ; MTLPrimitiveTypeTriangleStrip
 (defconstant +cull-none+ 0)         ; MTLCullModeNone
@@ -60,8 +68,28 @@
 (defconstant +cull-back+ 2)         ; MTLCullModeBack
 (defconstant +winding-clockwise+ 0) ; MTLWindingClockwise
 (defconstant +winding-counter-clockwise+ 1)
+(defconstant +compare-less+ 1)    ; MTLCompareFunctionLess
+(defconstant +compare-always+ 7)  ; MTLCompareFunctionAlways
+(defconstant +blend-add+ 0)       ; MTLBlendOperationAdd
+(defconstant +factor-one+ 1)      ; MTLBlendFactorOne
+(defconstant +storage-private+ 2) ; MTLStorageModePrivate
+(defconstant +usage-render-target+ 4)
 
 ;;; --- the surface --------------------------------------------------------------
+
+;; A depth attachment the size of the drawable. Nothing but a convex shape can
+;; be drawn without one (metal-cube.lisp is that exception and asks for none):
+;; a machine made of overlapping tubes and spheres needs the per-pixel depth
+;; test, which costs one private texture the pass clears and every pipeline
+;; drawing into it must declare.
+(defun %depth-texture (dev width height)
+  (let ((desc
+         (objc:send (objc:class "MTLTextureDescriptor")
+                    "texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
+                    +depth32-float+ (floor width) (floor height) nil)))
+    (objc:send desc "setStorageMode:" +storage-private+)
+    (objc:send desc "setUsage:" +usage-render-target+)
+    (objc:send dev "newTextureWithDescriptor:" desc)))
 
 ;; Replaces WINDOW's content view backing with a CAMetalLayer and answers the
 ;; context every other function here takes. CLEAR is the (r g b a) the frame
@@ -69,7 +97,7 @@
 ;;
 ;; setLayer: before setWantsLayer: -- the other order makes AppKit build a layer
 ;; of its own first and the one handed over never becomes the backing store.
-(defun attach (window &key (clear '(0.05 0.06 0.09 1.0)) (scale 2))
+(defun attach (window &key (clear '(0.05 0.06 0.09 1.0)) (scale 2) depth)
   (let ((ctx (make-hash-table :test 'eq)))
     (objc:on-main
      (lambda ()
@@ -91,7 +119,10 @@
          (setf (gethash 'layer ctx) lyr)
          (setf (gethash 'device ctx) dev)
          (setf (gethash 'queue ctx) (objc:send dev "newCommandQueue"))
-         (setf (gethash 'clear ctx) clear))))
+         (setf (gethash 'clear ctx) clear)
+         (when depth
+           (setf (gethash 'depth ctx)
+                 (%depth-texture dev (* scale width) (* scale height)))))))
     ctx))
 
 (defun device (ctx) (gethash 'device ctx))
@@ -112,22 +143,49 @@
 
 ;; A render pipeline over the two named functions of LIB, drawing into the
 ;; layer's pixel format.
-(defun pipeline (ctx lib vertex-name fragment-name)
+(defun pipeline (ctx lib vertex-name fragment-name &key blend)
   (objc:on-main
    (lambda ()
-     (let ((desc
-            (objc:send
-             (objc:send (objc:class "MTLRenderPipelineDescriptor") "alloc")
-             "init")))
+     (let* ((desc
+             (objc:send
+              (objc:send (objc:class "MTLRenderPipelineDescriptor") "alloc")
+              "init"))
+            (color
+             (objc:send (objc:send desc "colorAttachments")
+                        "objectAtIndexedSubscript:" 0)))
        (objc:send desc "setVertexFunction:"
         (objc:send lib "newFunctionWithName:" (objc:string vertex-name)))
        (objc:send desc "setFragmentFunction:"
         (objc:send lib "newFunctionWithName:" (objc:string fragment-name)))
-       (objc:send (objc:send (objc:send desc "colorAttachments")
-                             "objectAtIndexedSubscript:" 0) "setPixelFormat:"
-                  +bgra8-unorm+)
+       (objc:send color "setPixelFormat:" +bgra8-unorm+)
+       (when blend
+         (objc:send color "setBlendingEnabled:" t)
+         (objc:send color "setRgbBlendOperation:" +blend-add+)
+         (objc:send color "setAlphaBlendOperation:" +blend-add+)
+         (objc:send color "setSourceRGBBlendFactor:" +factor-one+)
+         (objc:send color "setSourceAlphaBlendFactor:" +factor-one+)
+         (objc:send color "setDestinationRGBBlendFactor:" +factor-one+)
+         (objc:send color "setDestinationAlphaBlendFactor:" +factor-one+))
+       ;; a pipeline's attachment formats must match the pass it draws into,
+       ;; so the depth format follows the context and is not the caller's
+       (when (gethash 'depth ctx)
+         (objc:send desc "setDepthAttachmentPixelFormat:" +depth32-float+))
        (objc:send (device ctx) "newRenderPipelineStateWithDescriptor:error:"
                   desc :error)))))
+
+;; How a pipeline uses the depth attachment. :writes nil is the glow pass: it
+;; READS the depth the solid pass wrote, so a sprite behind the arm is hidden,
+;; but writes none of its own, so sprites do not occlude each other.
+(defun depth-state (ctx &key (writes t) (compare +compare-less+))
+  (objc:on-main
+   (lambda ()
+     (let ((desc
+            (objc:send
+             (objc:send (objc:class "MTLDepthStencilDescriptor") "alloc")
+             "init")))
+       (objc:send desc "setDepthCompareFunction:" compare)
+       (objc:send desc "setDepthWriteEnabled:" writes)
+       (objc:send (device ctx) "newDepthStencilStateWithDescriptor:" desc)))))
 
 ;;; --- getting numbers onto the GPU ---------------------------------------------
 ;;;
@@ -150,11 +208,31 @@
     (objc:send (device ctx) "newBufferWithBytes:length:options:"
                (objc:send data "bytes") (objc:send data "length") 0)))
 
-;; Sets VALUES as the vertex-stage bytes at buffer INDEX -- a per-frame uniform
-;; small enough that Metal wants it inline rather than in a buffer.
-(defun uniform (encoder index values)
+;; An MTLBuffer of BYTES bytes in shared storage, whose contents the CPU
+;; rewrites -- what metal:buffer is not. A program that re-tessellates its
+;; geometry every frame allocates once here and copies per frame; the buffers
+;; it keeps in flight are its own business (see metal-robot-arm.lisp).
+(defun shared-buffer (ctx bytes)
+  (objc:send (device ctx) "newBufferWithLength:options:" bytes 0))
+
+;; Copies VALUES into BUFFER, which must be one of the above and at least as
+;; long. NSData's getBytes:length: is the memcpy: objc:data lays the numbers
+;; out and `contents` is where they land.
+(defun upload (buffer values)
   (let ((data (objc:data (if (listp values) (floats values) values))))
-    (objc:send encoder "setVertexBytes:length:atIndex:" (objc:send data "bytes")
+    (objc:send data "getBytes:length:" (objc:send buffer "contents")
+               (objc:send data "length"))))
+
+;; Sets VALUES as the STAGE's bytes at buffer INDEX -- a per-frame uniform
+;; small enough that Metal wants it inline rather than in a buffer. The vertex
+;; and fragment stages number their buffers independently, so index 0 of one is
+;; not index 0 of the other.
+(defun uniform (encoder index values &key (stage :vertex))
+  (let ((data (objc:data (if (listp values) (floats values) values))))
+    (objc:send encoder
+               (if (eq stage :fragment)
+                   "setFragmentBytes:length:atIndex:"
+                   "setVertexBytes:length:atIndex:") (objc:send data "bytes")
                (objc:send data "length") index)))
 
 ;;; --- a frame ------------------------------------------------------------------
@@ -182,6 +260,15 @@
            (objc:send color "setLoadAction:" +load-clear+)
            (objc:send color "setStoreAction:" +store-store+)
            (objc:send color "setClearColor:" (gethash 'clear ctx))
+           (let ((zbuf (gethash 'depth ctx)))
+             (when zbuf
+               (let ((z (objc:send pass "depthAttachment")))
+                 (objc:send z "setTexture:" zbuf)
+                 (objc:send z "setLoadAction:" +load-clear+)
+                 (objc:send z "setClearDepth:" 1.0)
+                 ;; nothing reads the depth after the frame, so it never
+                 ;; leaves tile memory
+                 (objc:send z "setStoreAction:" +store-dont-care+))))
            (let ((encoder
                   (objc:send commands "renderCommandEncoderWithDescriptor:"
                              pass)))
