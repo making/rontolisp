@@ -8,9 +8,14 @@ public class Launch {
 		tomcat.setBaseDir(new File("tomcat-base").getAbsolutePath());
 		tomcat.setPort(18080);
 		tomcat.getConnector();
+		if (args.length > 2) {
+			tomcat.getConnector().setProperty("maxThreads", args[2]);
+			tomcat.getConnector().setProperty("minSpareThreads", args[2]);
+		}
 		tomcat.addWebapp(contextPath, new File(args[0]).getAbsolutePath());
 		tomcat.start();
-		System.out.println("READY on 18080 context='" + contextPath + "'");
+		System.out.println("READY on 18080 context='" + contextPath + "' maxThreads="
+				+ (args.length > 2 ? args[2] : "default"));
 		tomcat.getServer().await();
 	}
 }

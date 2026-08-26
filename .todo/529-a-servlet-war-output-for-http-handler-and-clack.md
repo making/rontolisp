@@ -80,6 +80,8 @@ container:
 | the SAME war on Tomcat 11 and on Jetty 12 EE10 | works, unmodified |
 | `metadata-complete="true"` in a user `web.xml` | initializer still runs |
 | `<absolute-ordering/>` in a user `web.xml` | initializer still runs |
+| `startAsync` + one virtual thread per request | works; see below |
+| a handler that signals | 500 in 8 ms, no hang |
 
 The byte-exact row is free rather than lucky: `Response` already carries
 `byte[]`, so the todo-341 Phase 3b invariant (`.kb/http-server.md`, "A binary
@@ -92,12 +94,53 @@ through `_invoke_1` + `_await`, and the JDK transport runs every request on a
 virtual thread; Tomcat's default pool is platform threads. `await` blocks there
 just as happily.
 
-The last two rows are the ones that decide where the service file goes.
 `metadata-complete` and `<absolute-ordering/>` are the two documented ways to
 suppress web-fragment and annotation processing, and neither reaches an
 initializer declared in `WEB-INF/classes` -- both target `WEB-INF/lib` jars. So
 the class-directory placement is not merely convenient (it is what makes the
 Maven route free, `.todo/533`); it is the more robust of the two placements.
+
+## Servlet async is not an optimization here -- it is the invariant
+
+The first spike ran `handle` on the container's own thread. That is wrong, and
+the reason is written down: `.kb/concurrent-served-requests.md` opens with
+**"`rontolisp:http-handler` / `serve` runs ONE VIRTUAL THREAD PER REQUEST on the
+interpreter and the JVM"**, and the three bugs that file records -- special
+bindings visible to another request, the stream table handing out a duplicate
+handle, a lazy library load losing a name -- are all shared-state-across-requests
+bugs. A container pool hands the SAME thread to request after request, and the
+compiled class keeps per-thread state in ThreadLocals (`_condTl`, `_hcDepthTl`,
+`_handoffTl` are static fields on the emitted class). Measured, sync mode, 20
+requests: **5 distinct `http-nio-exec-*` threads, each reused 4 times.**
+
+`startAsync` fixes it exactly, and cheaply: release the container thread, run
+the whole existing blocking pipeline on a fresh virtual thread, complete the
+`AsyncContext` when it returns. Measured, async mode, 20 requests: **20 distinct
+`VirtualThread[#nn]`, each used once** -- the same shape `RontoHttpServer`
+already gives the JDK transport with its `newVirtualThreadPerTaskExecutor`.
+
+And it is what lets a war absorb concurrency the pool cannot. Tomcat connector
+pinned to 4 threads, handler `(await (wait-for 300))`:
+
+| | 16 concurrent | 64 concurrent |
+| --- | --- | --- |
+| sync (handler on the container thread) | 1.335 s | -- |
+| async (`startAsync` + virtual thread) | **0.386 s** | **0.388 s** |
+
+3.5x at 16, and FLAT from 16 to 64 while the pool stays at 4 -- which is the
+actual claim: the container thread is genuinely released. 200 sequential
+requests on the fast path cost 1.215 s async against 1.225 s sync, i.e. no
+measurable uncontended penalty (that measurement is dominated by client
+process startup and is a sanity check, not a throughput number; a real one is
+`.todo/530`'s job).
+
+There is no deeper win available beyond this, and it is worth saying why: a JVM
+rontolisp future IS a bare `CompletableFuture` and `%async-run` runs the body on
+a virtual thread (`.kb/async-await.md`), so awaiting parks a virtual thread
+rather than suspending a continuation. Handing the servlet a
+`CompletableFuture<Response>` instead of blocking one virtual thread would be a
+prettier seam and would buy nothing -- the thread it saves is the cheap one. The
+expensive thread is the container's, and `startAsync` is what releases it.
 
 ## What is NOT free, and is what the children are
 
@@ -142,6 +185,16 @@ container pins all of it at once.
   never packaged into the exec jar, the native binary or a `.jar` output;
   `resource-config.json` already globs `am/ik/rontolisp/runtime/.*\.class`, so
   the class travels into the native image as a resource without a new entry.
-- **Out of scope**: async servlets (`startAsync`), WebSocket
-  (`jakarta.websocket`; `clack.socket` is already out of scope per `.todo/223`),
-  serving static resources from the war, and `javax`-era containers.
+- **`startAsync` is IN, and is the default** -- see the section above; it is what
+  keeps the one-virtual-thread-per-request invariant. It rides in `.todo/530`
+  rather than a child of its own: it is forty lines of the same class and the
+  same E2E, and shipping the synchronous shape first would mean knowingly
+  shipping a transport that violates a documented invariant.
+- **Out of scope**: non-blocking servlet IO (`ReadListener` / `WriteListener`).
+  The body path is `readAllBytes` in and `write(byte[])` out; rewriting it
+  around the non-blocking callbacks would be a large change to earn back
+  blocking on a virtual thread, which is the cheap thread. Revisit only if a
+  measurement says otherwise.
+- **Out of scope**: WebSocket (`jakarta.websocket`; `clack.socket` is already
+  out of scope per `.todo/223`), serving static resources from the war, and
+  `javax`-era containers.

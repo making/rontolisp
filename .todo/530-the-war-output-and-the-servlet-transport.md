@@ -112,12 +112,53 @@ Details that are load-bearing rather than incidental:
 - **No `load-on-startup` needed**: `onStartup` already ran the top level at
   deploy, which is the thing `load-on-startup` would have been for. Set it
   anyway for the servlet itself; it costs a line.
+- **`registration.setAsyncSupported(true)` is MANDATORY** and is not the
+  default for a programmatic registration. Without it every request dies with
+  `IllegalStateException: A filter or servlet of the current chain does not
+  support asynchronous operations` -- found the hard way in the spike.
 
 **`RontoHttpServlet`** takes the `Handler` through its constructor -- no
 `init()`, no reflection, nothing to look up. One `service` override plus a
 ten-field `Request` fill.
 
-- **`destroy()` does nothing.** The war holds no port and no thread.
+- **It is ASYNC by default**, and that is a correctness requirement rather than
+  a tuning choice -- see `.todo/529`, "Servlet async is not an optimization
+  here". `service` calls `startAsync`, hands the request to a
+  `newVirtualThreadPerTaskExecutor`, and the whole existing blocking pipeline
+  (read the body, `handle`, write the response) runs there:
+
+  ```java
+  AsyncContext context = req.startAsync();
+  context.setTimeout(0);
+  this.requestThreads.execute(() -> {
+      try { write(this.handler.handle(toRequest(req)), (HttpServletResponse) context.getResponse()); }
+      catch (Throwable ex) { /* 500, if not committed */ }
+      finally { context.complete(); }
+  });
+  ```
+
+  Three details, each of which the spike got wrong first:
+  - **`setTimeout(0)`.** Tomcat's default `AsyncContext` timeout is 30 s and
+    would kill a slow handler mid-flight. The JDK transport imposes no deadline,
+    so neither does this one. If a deadline is ever wanted it is the user's
+    knob, not ours.
+  - **`complete()` in a `finally`.** A handler that throws must not leave the
+    request hanging until the timeout. Verified: a signalling handler answers
+    500 in 8 ms.
+  - **Read the body INSIDE the virtual thread**, not before `startAsync` --
+    otherwise the container thread is still paying for the read, which is the
+    whole thing being avoided. Blocking reads are legal inside an async context.
+- **The synchronous path stays, as an opt-out** (a `rontolisp.async` context
+  param). Someone running a container already configured with virtual threads
+  has no use for the extra hop, and someone with a filter chain that refuses
+  async needs a way out -- see the failure mode below.
+- **Filter compatibility is the one thing that can break a user's war**: a
+  filter without `<async-supported>true</async-supported>` in the chain makes
+  `startAsync` throw. Catch `IllegalStateException` around it and fall back to
+  the synchronous path with ONE stderr warning naming the context param, rather
+  than failing the request -- a war that silently degrades in throughput beats a
+  war that 500s because someone added a logging filter.
+- **`destroy()` shuts the executor down.** The war holds no port.
 - **`getServletInfo()`** answers the rontolisp version, so a container's manager
   page says what is deployed.
 - **One handler slot per webapp, not per process.** `_httpHandlerFn` is a static
@@ -128,8 +169,8 @@ ten-field `Request` fill.
 - Both classes compile against `jakarta.servlet-api` 6.0.0 and were verified on
   a Servlet 6.1 container. Between them they touch `HttpServlet`,
   `HttpServletRequest`, `HttpServletResponse`, `ServletException`,
-  `ServletContainerInitializer`, `ServletContext`, `ServletRegistration` and
-  `@HandlesTypes`.
+  `AsyncContext`, `ServletContainerInitializer`, `ServletContext`,
+  `ServletRegistration` and `@HandlesTypes`.
 
 **Portability caveat worth one line in the docs**: an embedded Jetty needs
 `AnnotationConfiguration` added to the context before it runs initializers at
@@ -222,9 +263,20 @@ change. Pick one and write down why.
 - A war built WITHOUT the `<clinit>` move must fail the E2E loudly, not subtly.
   Assert the deployment fails rather than that requests 500 -- that is what
   rethrowing from `onStartup` buys.
+- **The concurrency invariant is pinned, not assumed**: a test that fires N
+  concurrent requests through a container pool of far fewer threads and asserts
+  every request saw a DISTINCT handler thread. That is the assertion
+  `.kb/concurrent-served-requests.md` earns -- a throughput number would drift
+  on CI, a distinct-thread-count will not. Pair it with the load-test shape that
+  file names (concurrent POSTs, expecting all of them back), which is where this
+  bug family actually shows up.
+- A signalling handler answers 500 promptly rather than hanging to the async
+  timeout.
 - Two compiles of one program produce byte-identical wars.
 - `doc/{en,ja}/guides/http-handler.md` gains the war section, mirrored, with the
-  `ExceptionInInitializerError` failure shape, the one-slot-per-webapp note and
-  the "you may add your own `web.xml`" note. `.kb/http-server.md` gains the
-  fifth transport; `.kb/jvm-export.md`'s "What travels" table gains the third
-  row.
+  `ExceptionInInitializerError` failure shape, the one-slot-per-webapp note, the
+  "you may add your own `web.xml`" note and the async opt-out with its filter
+  caveat. `.kb/http-server.md` gains the fifth transport;
+  `.kb/concurrent-served-requests.md`'s opening invariant gains the servlet
+  transport by name, with `startAsync` as how it is kept there;
+  `.kb/jvm-export.md`'s "What travels" table gains the third row.

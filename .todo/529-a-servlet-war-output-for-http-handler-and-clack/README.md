@@ -18,6 +18,8 @@ $M2/org/apache/tomcat/embed/tomcat-embed-el/11.0.24/tomcat-embed-el-11.0.24.jar:
 $M2/org/apache/tomcat/tomcat-annotations-api/11.0.18/tomcat-annotations-api-11.0.18.jar
 
 # 1. The program class. Nothing about this compile knows what a servlet is.
+#    spike-async-handler.lisp is the fuller one: /error, /slow (an awaited
+#    wait-for), /bin (an octet body) and an echo that reports its thread.
 java -jar $JAR spike-handler.lisp -o out/App.class --class-name App
 
 # 2. The adapter and the initializer, against the servlet API and the emitted
@@ -32,13 +34,24 @@ echo 'am.ik.rontolisp.runtime.RontoHttpServletInitializer' \
   > war/WEB-INF/classes/META-INF/services/jakarta.servlet.ServletContainerInitializer
 (cd war && jar --create --file ../app.war .)
 
-# 4. Deploy it, on either container. Second arg is a context path.
+# 4. Deploy it, on either container. Second arg is a context path, third is
+#    Tomcat's maxThreads -- which is how the async measurement was taken.
 javac -cp "$TOMCAT" -d . Launch.java && mkdir -p tomcat-base/webapps
 java -cp "$TOMCAT:." Launch app.war                       # Tomcat, :18080
+java -cp "$TOMCAT:." Launch app.war "" 4                  # ... with a 4-thread pool
 
 # Jetty needs its classpath resolved first (see .todo/529 for the two coordinates).
 javac -cp "$JETTY_CP" -d . JettyLaunch.java
 java -cp "$JETTY_CP:." JettyLaunch app.war                # Jetty, :18081
+```
+
+The servlet is async by default; adding a `WEB-INF/web.xml` with a
+`rontolisp.async` context-param of `false` builds the synchronous comparison
+war from identical class files. The measurement in `.todo/529` is those two
+wars, one 4-thread connector, and:
+
+```bash
+time (for i in $(seq 1 16); do curl -sS -o /dev/null http://localhost:18080/slow & done; wait)
 ```
 
 ## Two things the spike sources stand in for

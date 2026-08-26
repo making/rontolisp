@@ -45,8 +45,9 @@ public final class RontoHttpServletInitializer implements ServletContainerInitia
 		catch (ReflectiveOperationException ex) {
 			throw new ServletException("cannot start rontolisp program " + program.getName(), ex);
 		}
-		ServletRegistration.Dynamic registration = context.addServlet("rontolisp", new RontoHttpServlet(handler));
+		ServletRegistration.Dynamic registration = context.addServlet("rontolisp", new RontoHttpServlet(handler, !"false".equals(context.getInitParameter("rontolisp.async"))));
 		registration.setLoadOnStartup(1);
+		registration.setAsyncSupported(true);
 		registration.addMapping("/*");
 	}
 
