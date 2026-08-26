@@ -2515,6 +2515,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSetfApplyArefIsTheRuntimeRankPlace() {
+		// (setf (apply #'aref a subs) v) -- CLHS 5.1.2.5, the spelling cffi's
+		// foreign-array-to-lisp uses for an array whose rank is a runtime value; the
+		// spread prefix before the tail list participates too, and the value is
+		// answered.
+		assertThat(evalMulti("(setq a (make-array '(2 3) :initial-element 0))"
+				+ " (setf (apply #'aref a (list 1 2)) 42) (setf (apply #'aref a 0 (list 1)) 7)"
+				+ " (list (aref a 1 2) (aref a 0 1) (setf (apply #'aref a (list 0 0)) 9))")
+			.print()).isEqualTo("(42 7 9)");
+	}
+
+	@Test
 	void evalSetfReturnsValue() {
 		assertThat(evalMulti("(setq x (list 1 2 3)) (setf (car x) 42)")).isEqualTo(new LispInteger(42));
 	}

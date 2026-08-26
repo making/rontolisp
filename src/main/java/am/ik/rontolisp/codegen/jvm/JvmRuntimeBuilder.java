@@ -523,6 +523,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable ObjcPrint objcPrint,
+			@org.jspecify.annotations.Nullable ObjcPrint ffiPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
@@ -697,7 +698,7 @@ final class JvmRuntimeBuilder {
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
 		emitHashTableBranch(code, hashPrint);
-		emitDefaultTail(code, objectToString, javaPrint, objcPrint);
+		emitDefaultTail(code, objectToString, javaPrint, objcPrint, ffiPrint);
 
 		return code;
 	}
@@ -975,6 +976,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable ObjcPrint objcPrint,
+			@org.jspecify.annotations.Nullable ObjcPrint ffiPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
@@ -1177,7 +1179,7 @@ final class JvmRuntimeBuilder {
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
 		emitHashTableBranch(code, hashPrint);
-		emitDefaultTail(code, objectToString, javaPrint, objcPrint);
+		emitDefaultTail(code, objectToString, javaPrint, objcPrint, ffiPrint);
 
 		return code;
 	}
@@ -1729,30 +1731,38 @@ final class JvmRuntimeBuilder {
 	 * (a promoted Lisp integer) still falls through to {@code toString()}, which is its
 	 * decimal digits.
 	 */
+	/** One guarded bridge print branch of {@link #emitDefaultTail}. */
+	private static void emitBridgePrintHook(List<Integer> code, @org.jspecify.annotations.Nullable ObjcPrint hook) {
+		if (hook == null) {
+			return;
+		}
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, hook.initedField().index());
+		int notInited = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, hook.print().index());
+		code.add(Opcode.DUP);
+		int notHandled = code.size();
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, notHandled, code.size());
+		code.add(Opcode.POP);
+		patchBranch(code, notInited, code.size());
+	}
+
 	private static void emitDefaultTail(List<Integer> code, MethodrefConstant objectToString,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
-			@org.jspecify.annotations.Nullable ObjcPrint objcPrint) {
-		if (objcPrint != null) {
-			// if (_objcInited != 0) { String s = RontoLispObjcBridge.objcPrint(val);
-			// if (s != null) return s; } -- ahead of the java: branch, which would
-			// otherwise claim the wrapper as a host object.
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, objcPrint.initedField().index());
-			int notInited = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, objcPrint.print().index());
-			code.add(Opcode.DUP);
-			int notObjc = code.size();
-			code.add(Opcode.IFNULL);
-			emitU2(code, 0);
-			code.add(Opcode.ARETURN);
-			patchBranch(code, notObjc, code.size());
-			code.add(Opcode.POP);
-			patchBranch(code, notInited, code.size());
-		}
+			@org.jspecify.annotations.Nullable ObjcPrint objcPrint,
+			@org.jspecify.annotations.Nullable ObjcPrint ffiPrint) {
+		// The objc: and ffi: print hooks share one shape: if (_xInited != 0)
+		// { String s = Bridge.print(val); if (s != null) return s; } -- ahead of the
+		// java: branch, which would otherwise claim the wrapper as a host object.
+		emitBridgePrintHook(code, objcPrint);
+		emitBridgePrintHook(code, ffiPrint);
 		if (javaPrint != null) {
 			List<Integer> toStringBranches = new ArrayList<>();
 			code.add(Opcode.ALOAD_0);

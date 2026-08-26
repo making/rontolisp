@@ -98,6 +98,19 @@ class FfiTest {
 	}
 
 	@Test
+	void applyCallIsFfiCallWithTheArgumentsAsOneList() {
+		assumeTrue(FfiInterop.available(), FfiInterop.description());
+		// The internal fixed-arity spelling the cffi backend calls instead of
+		// (apply #'ffi:call ...), so the compiled backends need no first-class
+		// #'ffi:call; same answer as the spread form.
+		assertThat(eval("""
+				(let ((strlen (ffi:symbol (ffi:open) "strlen")))
+				  (list (ffi:call strlen :long '(:string) "hello, world")
+				        (ffi:%apply-call strlen :long '(:string) (list "hello, world"))))
+				""")).isEqualTo("(12 12)");
+	}
+
+	@Test
 	void theProcessesOwnSymbolsAnswerACallAndAMissingSymbolIsNil() {
 		assumeTrue(FfiInterop.available(), FfiInterop.description());
 		// (ffi:open) with no argument is the process itself; a :string argument

@@ -3420,6 +3420,35 @@ public final class LispMacroExpander {
 					// The optional default in the place is only used by gethash in read
 					// position, so it is dropped here.
 					listToCons(List.of(new LispSymbol(LispNames.PUTHASH), placeParts.get(1), placeParts.get(2), value));
+				case LispNames.APPLY -> {
+					// (setf (apply #'aref array sub... tail-list) val) -- CLHS 5.1.2.5,
+					// the spelling cffi's foreign-array-to-lisp uses for a rank decided
+					// at run time. No spread-at-runtime setter exists, so the place is
+					// lowered through the row-major one:
+					// (let ((%a array))
+					// (%row-major-aset %a (apply #'array-row-major-index %a
+					// (list* sub... tail-list)) val)).
+					String applied = placeParts.size() >= 4 && placeParts.get(1) instanceof LispCons fnCons
+							&& fnCons.car() instanceof LispSymbol fnHead && LispNames.FUNCTION.equals(fnHead.name())
+							&& fnCons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fnSym
+									? fnSym.name() : null;
+					if (!LispNames.AREF.equals(applied) && !LispNames.SVREF.equals(applied)) {
+						throw new UnsupportedOperationException(
+								"setf does not support place: APPLY (only (setf (apply #'aref ...)) is supported)");
+					}
+					LispSymbol arrayVar = new LispSymbol("__setf_apply_arr");
+					List<LispVal> subscripts = new java.util.ArrayList<>();
+					subscripts.add(new LispSymbol(LispNames.LIST_STAR));
+					for (int i = 3; i < placeParts.size(); i++) {
+						subscripts.add(placeParts.get(i));
+					}
+					LispVal rowMajorIndex = listToCons(List.of(new LispSymbol(LispNames.APPLY),
+							listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+									new LispSymbol(LispNames.ARRAY_ROW_MAJOR_INDEX))),
+							arrayVar, listToCons(subscripts)));
+					yield makeLet(arrayVar.name(), placeParts.get(2), listToCons(
+							List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET), arrayVar, rowMajorIndex, value)));
+				}
 				case LispNames.AREF, LispNames.SVREF -> {
 					// (setf (aref array sub...) val) -> (%aset array sub... val);
 					// svref is aref restricted to one subscript, so it shares the place.

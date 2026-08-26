@@ -353,6 +353,10 @@ final class JvmExprCompiler {
 				JvmObjcInteropCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
+			if (qn != null && LispNames.FFI_PKG.equals(qn.pkg()) && JvmFfiInteropCompiler.handles(qn.member())) {
+				JvmFfiInteropCompiler.compile(qn.member(), cons, ctx, className);
+				return;
+			}
 			// The uiop MACROS with real expansions. A macro cannot reach the uiop stub
 			// lowering (which only sees function-call shapes), and these are not stubs:
 			// smart-buffer's disk-spill path runs with-temporary-file, and the

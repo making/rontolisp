@@ -91,6 +91,26 @@ public final class NativeImageDowncalls {
 	}
 
 	/**
+	 * The downcall shapes -- bound with {@code captureCallState} and without
+	 * {@code critical}, the {@code am.ik.ffi} runtime's kind -- with no entry in the
+	 * checked-in file. A capture registration is a different stub than the same shape
+	 * without it, so the spelling carries the flag.
+	 * @param captured the shapes bound with {@code Linker.Option.captureCallState}
+	 * @return the unregistered ones, spelled as the file spells them
+	 */
+	public static List<String> missingCaptured(Set<FunctionDescriptor> captured) {
+		Set<String> registered = registered();
+		List<String> missing = new ArrayList<>();
+		for (FunctionDescriptor descriptor : captured) {
+			String signature = signature(descriptor, false) + " capture";
+			if (!registered.contains(signature)) {
+				missing.add(signature);
+			}
+		}
+		return missing;
+	}
+
+	/**
 	 * The upcall shapes with no entry in the checked-in file: what a native image would
 	 * refuse to build a stub for. An upcall stub is registered under
 	 * {@code foreign.upcalls}, separately from the downcalls, and has no critical option.
@@ -125,7 +145,9 @@ public final class NativeImageDowncalls {
 			// A critical registration is a different stub than the same shape without
 			// it, and only allowHeapAccess makes the one a heap segment can be passed to.
 			boolean critical = entry.path("options").path("critical").path("allowHeapAccess").asBoolean(false);
-			registered.add(signature(alias(entry.path("returnType").asString("void")), parameters, critical));
+			boolean capture = entry.path("options").path("captureCallState").asBoolean(false);
+			registered.add(signature(alias(entry.path("returnType").asString("void")), parameters, critical)
+					+ (capture ? " capture" : ""));
 		}
 		return registered;
 	}

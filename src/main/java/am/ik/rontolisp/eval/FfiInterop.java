@@ -143,7 +143,7 @@ public final class FfiInterop {
 
 	private static final Set<String> FFI_VERBS = Set.of(LispNames.FFI_OPEN, LispNames.FFI_SYMBOL, LispNames.FFI_CALL,
 			LispNames.FFI_CALLBACK, LispNames.FFI_ALLOC, LispNames.FFI_FREE, LispNames.FFI_PEEK, LispNames.FFI_POKE,
-			LispNames.FFI_SIZE, LispNames.FFI_ALIGN, LispNames.FFI_POINTERP, LispNames.FFI_ADDRESS,
-			LispNames.FFI_ERRNO);
+			LispNames.FFI_SIZE, LispNames.FFI_ALIGN, LispNames.FFI_POINTERP, LispNames.FFI_ADDRESS, LispNames.FFI_ERRNO,
+			LispNames.FFI_APPLY_CALL);
 
 }

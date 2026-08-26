@@ -99,32 +99,17 @@ final class FfiBridge {
 			if (args.size() < 3) {
 				throw new LispEvalException("ffi:call expects (ffi:call function return-type argument-types args...)");
 			}
-			long function = address(LispNames.FFI_CALL, args.get(0));
-			FfiType returnType = parseType(LispNames.FFI_CALL, args.get(1));
-			List<FfiType> argTypes = new ArrayList<>();
-			int firstVariadic = -1;
-			for (LispVal designator : elements(LispNames.FFI_CALL, args.get(2), "the argument-type list")) {
-				if (designator instanceof LispSymbol marker && marker.isKeyword()
-						&& "VARARGS".equalsIgnoreCase(LispSymbol.displayName(marker.name()))) {
-					if (firstVariadic >= 0) {
-						throw new LispEvalException("ffi:call: :varargs may appear once");
-					}
-					firstVariadic = argTypes.size();
-					continue;
-				}
-				argTypes.add(parseType(LispNames.FFI_CALL, designator));
+			return call(args.subList(0, 3), args.subList(3, args.size()));
+		});
+		// Internal: ffi:call with the arguments as one list -- the fixed-arity spelling
+		// the cffi backend uses where its argument list is a runtime value, so no
+		// backend needs #'ffi:call as a first-class function.
+		define(globalEnv, LispNames.FFI_APPLY_CALL, args -> {
+			if (args.size() != 4) {
+				throw new LispEvalException(
+						"ffi:%apply-call expects (ffi:%apply-call function return-type argument-types args)");
 			}
-			if (args.size() - 3 != argTypes.size()) {
-				throw new LispEvalException("ffi:call declares " + argTypes.size() + " argument"
-						+ (argTypes.size() == 1 ? "" : "s") + " but got " + (args.size() - 3));
-			}
-			@Nullable Object[] values = new @Nullable Object[argTypes.size()];
-			for (int i = 0; i < values.length; i++) {
-				values[i] = toProtocol(LispNames.FFI_CALL, argTypes.get(i), args.get(i + 3));
-			}
-			Object raw = FfiRuntime.get()
-				.call(new FfiRuntime.CallRequest(function, returnType, argTypes, firstVariadic, values));
-			return fromProtocol(returnType, raw);
+			return call(args.subList(0, 3), elements(LispNames.FFI_APPLY_CALL, args.get(3), "the argument list"));
 		});
 		define(globalEnv, LispNames.FFI_CALLBACK, args -> {
 			if (args.size() != 3) {
@@ -217,6 +202,39 @@ final class FfiBridge {
 			}
 			return new LispInteger(FfiRuntime.get().errno());
 		});
+	}
+
+	/**
+	 * The {@code ffi:call} body: the fixed head (function, return type, types), then the
+	 * arguments.
+	 */
+	private static LispVal call(List<LispVal> head, List<LispVal> callArgs) {
+		long function = address(LispNames.FFI_CALL, head.get(0));
+		FfiType returnType = parseType(LispNames.FFI_CALL, head.get(1));
+		List<FfiType> argTypes = new ArrayList<>();
+		int firstVariadic = -1;
+		for (LispVal designator : elements(LispNames.FFI_CALL, head.get(2), "the argument-type list")) {
+			if (designator instanceof LispSymbol marker && marker.isKeyword()
+					&& "VARARGS".equalsIgnoreCase(LispSymbol.displayName(marker.name()))) {
+				if (firstVariadic >= 0) {
+					throw new LispEvalException("ffi:call: :varargs may appear once");
+				}
+				firstVariadic = argTypes.size();
+				continue;
+			}
+			argTypes.add(parseType(LispNames.FFI_CALL, designator));
+		}
+		if (callArgs.size() != argTypes.size()) {
+			throw new LispEvalException("ffi:call declares " + argTypes.size() + " argument"
+					+ (argTypes.size() == 1 ? "" : "s") + " but got " + callArgs.size());
+		}
+		@Nullable Object[] values = new @Nullable Object[argTypes.size()];
+		for (int i = 0; i < values.length; i++) {
+			values[i] = toProtocol(LispNames.FFI_CALL, argTypes.get(i), callArgs.get(i));
+		}
+		Object raw = FfiRuntime.get()
+			.call(new FfiRuntime.CallRequest(function, returnType, argTypes, firstVariadic, values));
+		return fromProtocol(returnType, raw);
 	}
 
 	// Every verb signals a plain error whose message names the verb: the runtime's own

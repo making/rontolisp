@@ -6144,6 +6144,16 @@ public final class LispNames {
 	public static final String FFI_ERRNO = "ERRNO";
 
 	/**
+	 * {@code ffi:%apply-call} -- internal: {@code ffi:call} with the arguments as one
+	 * LIST, {@code (ffi:%apply-call fn ret types args)}. It exists for the {@code cffi}
+	 * backend, whose argument lists are runtime values: {@code (apply #'ffi:call ...)}
+	 * would need the operator as a first-class value, which the compiled backends do not
+	 * give the {@code ffi} package (the {@code objc:} precedent), where this spells the
+	 * same call as a fixed-arity form every backend compiles.
+	 */
+	public static final String FFI_APPLY_CALL = "%APPLY-CALL";
+
+	/**
 	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF: system
 	 * definitions parsed from {@code .asd} files as plain data -- see
 	 * {@code eval.AsdfSystems}). Real ASDF is not ported; only {@code defsystem} and

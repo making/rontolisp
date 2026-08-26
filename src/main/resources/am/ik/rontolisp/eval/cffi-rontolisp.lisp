@@ -250,11 +250,22 @@ backend's structures-by-value support."
               (cons (%ffi-type rettype) (mapcar #'%ffi-type argtypes))))))
 
 (defun %call-address (address rettype argtypes args)
+  ;; ffi:%apply-call is ffi:call with the arguments as one list: the fixed-arity
+  ;; spelling, so no backend needs #'ffi:call as a first-class function value.
   (let ((shape (%shape rettype argtypes)))
-    (apply #'ffi:call address (car shape) (cdr shape) args)))
+    (ffi:%apply-call address (car shape) (cdr shape) args)))
 
 (defun %call-symbol (name rettype argtypes args)
-  (%call-address (%symbol-address name) rettype argtypes args))
+  ;; In a native image a downcall shape outside the registered grid is refused;
+  ;; ffi:'s signal names the shape and the metadata entry to add, and this frame
+  ;; is the one that knows WHICH function the user was calling -- so the miss,
+  ;; and only the miss, is re-signalled with the name in front.  Any other error
+  ;; passes through untouched.
+  (handler-case (%call-address (%symbol-address name) rettype argtypes args)
+    (error (e)
+      (if (search "no foreign-call stub" (format nil "~a" e))
+          (error "cffi: calling ~a: ~a" name e)
+          (error e)))))
 
 (defun foreign-funcall-type-and-args (args)
   "Split cffi's (type value ... type value rettype) into three values: the

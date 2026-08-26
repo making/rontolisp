@@ -74,9 +74,23 @@ check: grovelling compiles and runs a C program to read the platform's headers, 
 struct-by-value needs no libffi here. The `swank` precedent -- a clear message beats
 letting `ql:quickload` fetch something that then dies unparsed.
 
-Interpreter only today. Both WASM backends refuse a program that reaches `ffi:` (and so
-one that reaches `cffi:`) permanently, by name, in `CompileFrontend`. The native binary's
-downcall-shape registration and the JVM class output's embedded blob are `.todo/541`.
+Both WASM backends refuse a program that reaches `ffi:` (and so one that reaches
+`cffi:`) permanently, by name, in `CompileFrontend`. Everywhere else it runs: the native
+binary interprets it against the registered downcall/upcall shape GRID (`.kb/ffi.md` --
+the carrier canonicalisation is what makes the grid finite, and a shape outside it
+signals the one metadata entry that would register it; `%call-symbol` re-signals that
+miss with the function's name in front), and the JVM class output embeds the whole
+binding (`JvmFfiRuntimeBuilder`), so `use.lisp`-shaped programs compile to a `.class`
+and answer the interpreter byte for byte. Three compile-path facts the cffi source
+forced into existence, each pinned in `JvmFfiInteropCompilerTest`: `%call-address` calls
+the internal `ffi:%apply-call` (ffi:call with the arguments as ONE list) instead of
+`(apply #'ffi:call ...)`, because the compiled backends give `ffi:` no first-class
+function values; `(fboundp 'name)` over a name the macro-time evaluator defined AS A
+MACRO folds to `t` in `UserMacroExpander` (macros do not exist in a compiled program, so
+the runtime probe would answer nil and functions.lisp's guarded fallback
+`%foreign-funcall-varargs` defmacro would run -- and die -- at run time); and
+`(setf (apply #'aref ...))` (CLHS 5.1.2.5, foreign-array-to-lisp's runtime-rank store)
+lowers through the row-major place in `LispMacroExpander.expandSetf`.
 `cffi:defcvar` does not work at all: it expands into `define-symbol-macro`, which
 rontolisp does not have (`.todo/546`).
 

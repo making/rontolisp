@@ -46,6 +46,31 @@ import org.jspecify.annotations.Nullable;
  * {@code am.ik.gpu}), and the compiled twin that wants {@code invokeExact} on constants
  * is the JVM backend's job, not this class's.
  *
+ * <h2>The carriers are canonicalised, so a native image can ship a finite shape grid</h2>
+ *
+ * A native image compiles a stub per foreign SHAPE ahead of time and refuses a handle for
+ * a shape that has none -- and {@code cffi:defcfun} invents shapes at run time, in the
+ * user's program, after the binary was built. So the shape space is COLLAPSED before the
+ * descriptor is built: every narrow integer argument travels as {@code jlong} (the C
+ * callee reads the low bits of its register -- what SysV and AAPCS64 do; verified on the
+ * stack-passed path too, whose slots both Linux ABIs round to 8 bytes) and every integer
+ * return is read as {@code jlong} and narrowed back by the DECLARED type (a callee leaves
+ * garbage above the bits it set). {@code jfloat} and {@code jdouble} stay distinct (a
+ * float is not a narrowed double), and a pointer or string is already {@code void*}. Four
+ * carriers per parameter, so the grid in {@code reachability-metadata.json} can cover the
+ * small arities outright ({@code FfiNativeImageForeignConfigTest} pins that it does).
+ *
+ * <p>
+ * Three cases keep their EXACT layouts, which are ABI-correct everywhere and simply fall
+ * outside the grid: an argument past the sixth integer-class position (past the register
+ * window Apple's AArch64 packs stack arguments, so widening one there would shift every
+ * slot after it), a variadic call (each {@code firstVariadicArg} index is a distinct
+ * stub, so no grid covers varargs anyway -- and the Apple variadic path is the one this
+ * machine cannot verify), and a call that passes or returns a struct by value (the member
+ * list is part of the shape). On the JVM the linker binds any shape and the
+ * canonicalisation is invisible; in the binary those calls signal the actionable
+ * {@link FfiException} naming the one metadata entry to add.
+ *
  * <h2>{@code errno} is captured, not fetched</h2>
  *
  * Every downcall handle is bound with {@code Linker.Option.captureCallState("errno")}
@@ -263,6 +288,7 @@ public final class FfiRuntime {
 					+ (argTypes.size() == 1 ? "" : "s") + " but got " + values.length);
 		}
 		MethodHandle handle = downcall(request.returnType(), argTypes, request.firstVariadic());
+		boolean canonical = canonicalisable(request.returnType(), argTypes, request.firstVariadic());
 		try (Arena arena = Arena.ofConfined()) {
 			List<Object> invocation = new ArrayList<>(values.length + 3);
 			invocation.add(MemorySegment.ofAddress(request.function()));
@@ -271,7 +297,8 @@ public final class FfiRuntime {
 			}
 			invocation.add(this.captureState.get());
 			for (int i = 0; i < values.length; i++) {
-				invocation.add(toNativeArgument(argTypes.get(i), values[i], i, arena));
+				boolean widened = canonical && intClassIndex(argTypes, i) < REGISTER_WINDOW;
+				invocation.add(toNativeArgument(argTypes.get(i), values[i], i, arena, widened));
 			}
 			Object raw;
 			try {
@@ -301,23 +328,142 @@ public final class FfiRuntime {
 			@Nullable Object[] values) {
 	}
 
-	private static MethodHandle downcall(FfiType ret, List<FfiType> args, int firstVariadic) {
-		StringBuilder key = new StringBuilder(ret.spelling());
-		for (FfiType arg : args) {
-			key.append('|').append(arg.spelling());
+	/**
+	 * The number of integer-class parameters both supported ABIs are GUARANTEED to pass
+	 * in registers (SysV x86-64 has 6, AAPCS64 has 8): the window inside which widening a
+	 * narrow integer argument to {@code jlong} cannot move any other argument.
+	 */
+	static final int REGISTER_WINDOW = 6;
+
+	/**
+	 * Whether the whole call takes the canonical carriers: fixed (a variadic tail keeps
+	 * C's own promotions and each {@code firstVariadicArg} index is its own stub anyway)
+	 * and struct-free (a by-value struct's member list is part of the shape).
+	 */
+	static boolean canonicalisable(FfiType ret, List<FfiType> args, int firstVariadic) {
+		if (firstVariadic >= 0 || ret instanceof Struct) {
+			return false;
 		}
-		key.append('#').append(firstVariadic);
-		return DOWNCALLS.computeIfAbsent(key.toString(), ignored -> {
-			MemoryLayout[] layouts = new MemoryLayout[args.size()];
-			for (int i = 0; i < args.size(); i++) {
-				FfiType arg = args.get(i);
-				if (arg == Scalar.VOID) {
-					throw new FfiException("an argument cannot be :void");
-				}
-				layouts[i] = arg.layout();
+		for (FfiType arg : args) {
+			if (arg instanceof Struct) {
+				return false;
 			}
-			FunctionDescriptor descriptor = ret == Scalar.VOID ? FunctionDescriptor.ofVoid(layouts)
-					: FunctionDescriptor.of(ret.layout(), layouts);
+		}
+		return true;
+	}
+
+	/** How many integer-class (integer, pointer, string) parameters precede index i. */
+	static int intClassIndex(List<FfiType> args, int index) {
+		int count = 0;
+		for (int i = 0; i < index; i++) {
+			if (!(args.get(i) instanceof Scalar scalar) || (scalar != Scalar.FLOAT && scalar != Scalar.DOUBLE)) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	private static boolean narrowInteger(FfiType type) {
+		return type instanceof Scalar scalar && switch (scalar) {
+			case INT8, UINT8, INT16, UINT16, INT32, UINT32 -> true;
+			default -> false;
+		};
+	}
+
+	/**
+	 * The layouts the descriptor is built from: the canonical carriers where the call is
+	 * {@linkplain #canonicalisable(FfiType, List, int) canonicalisable}, the declared
+	 * types' own layouts everywhere else.
+	 */
+	static FunctionDescriptor descriptorFor(FfiType ret, List<FfiType> args, int firstVariadic) {
+		boolean canonical = canonicalisable(ret, args, firstVariadic);
+		MemoryLayout[] layouts = new MemoryLayout[args.size()];
+		for (int i = 0; i < args.size(); i++) {
+			FfiType arg = args.get(i);
+			if (arg == Scalar.VOID) {
+				throw new FfiException("an argument cannot be :void");
+			}
+			boolean widened = canonical && narrowInteger(arg) && intClassIndex(args, i) < REGISTER_WINDOW;
+			layouts[i] = widened ? ValueLayout.JAVA_LONG : arg.layout();
+		}
+		if (ret == Scalar.VOID) {
+			return FunctionDescriptor.ofVoid(layouts);
+		}
+		MemoryLayout retLayout = canonical && narrowInteger(ret) ? ValueLayout.JAVA_LONG : ret.layout();
+		return FunctionDescriptor.of(retLayout, layouts);
+	}
+
+	/** One layout as the reachability-metadata schema spells it. */
+	static String metadataType(MemoryLayout layout) {
+		return switch (layout) {
+			case AddressLayout ignored -> "void*";
+			case ValueLayout.OfByte ignored -> "jbyte";
+			case ValueLayout.OfBoolean ignored -> "jboolean";
+			case ValueLayout.OfChar ignored -> "jchar";
+			case ValueLayout.OfShort ignored -> "jshort";
+			case ValueLayout.OfInt ignored -> "jint";
+			case ValueLayout.OfLong ignored -> "jlong";
+			case ValueLayout.OfFloat ignored -> "jfloat";
+			case ValueLayout.OfDouble ignored -> "jdouble";
+			case java.lang.foreign.GroupLayout group -> group.memberLayouts()
+				.stream()
+				.filter(member -> !(member instanceof java.lang.foreign.PaddingLayout))
+				.map(FfiRuntime::metadataType)
+				.collect(java.util.stream.Collectors.joining(",", "struct(", ")"));
+			default -> throw new FfiException("no metadata spelling for " + layout);
+		};
+	}
+
+	/**
+	 * The one {@code reachability-metadata.json} entry that would register a shape,
+	 * verbatim -- what the miss message tells the user to add.
+	 */
+	private static String metadataEntry(String section, FunctionDescriptor descriptor, int firstVariadic,
+			boolean capture) {
+		StringBuilder entry = new StringBuilder("{\"returnType\": \"")
+			.append(descriptor.returnLayout().map(FfiRuntime::metadataType).orElse("void"))
+			.append("\", \"parameterTypes\": [");
+		List<MemoryLayout> arguments = descriptor.argumentLayouts();
+		for (int i = 0; i < arguments.size(); i++) {
+			entry.append(i == 0 ? "" : ", ").append('"').append(metadataType(arguments.get(i))).append('"');
+		}
+		entry.append(']');
+		if (capture || firstVariadic >= 0) {
+			entry.append(", \"options\": {");
+			if (capture) {
+				entry.append("\"captureCallState\": true").append(firstVariadic >= 0 ? ", " : "");
+			}
+			if (firstVariadic >= 0) {
+				entry.append("\"firstVariadicArg\": ").append(firstVariadic);
+			}
+			entry.append('}');
+		}
+		return entry.append("} in foreign.").append(section).toString();
+	}
+
+	/** The shape's human spelling for messages and the cache key. */
+	private static String spellDescriptor(FunctionDescriptor descriptor) {
+		return descriptor.returnLayout().map(FfiRuntime::metadataType).orElse("void") + "("
+				+ descriptor.argumentLayouts()
+					.stream()
+					.map(FfiRuntime::metadataType)
+					.collect(java.util.stream.Collectors.joining(","))
+				+ ")";
+	}
+
+	private static boolean missingRegistration(Throwable ex) {
+		for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+			if (cause.getClass().getName().contains("MissingForeignRegistration")) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static MethodHandle downcall(FfiType ret, List<FfiType> args, int firstVariadic) {
+		FunctionDescriptor descriptor = descriptorFor(ret, args, firstVariadic);
+		String key = spellDescriptor(descriptor) + (firstVariadic >= 0 ? "#" + firstVariadic : "");
+		return DOWNCALLS.computeIfAbsent(key, ignored -> {
 			List<Linker.Option> options = new ArrayList<>(2);
 			options.add(Linker.Option.captureCallState("errno"));
 			if (firstVariadic >= 0) {
@@ -328,9 +474,17 @@ public final class FfiRuntime {
 			}
 			catch (Throwable ex) {
 				// A native image refuses a shape it did not register at build time
-				// (MissingForeignRegistrationError, an Error): name the shape to add.
-				throw new FfiException("no foreign-call stub for the shape " + key
-						+ "; in a native image every downcall shape must be registered at build time", ex);
+				// (MissingForeignRegistrationError): say exactly what to do about it.
+				if (missingRegistration(ex)) {
+					throw new FfiException("this binary has no foreign-call stub for the shape "
+							+ spellDescriptor(descriptor) + " -- a native image registers every downcall shape "
+							+ "at build time, and this one is outside the shipped grid; add "
+							+ metadataEntry("downcalls", descriptor, firstVariadic, true)
+							+ " of META-INF/native-image/am.ik.rontolisp/rontolisp/reachability-metadata.json and "
+							+ "rebuild the binary, or run the program on java -jar, where any shape binds", ex);
+				}
+				throw new FfiException(
+						"no downcall handle for the shape " + spellDescriptor(descriptor) + ": " + message(ex), ex);
 			}
 		});
 	}
@@ -487,16 +641,16 @@ public final class FfiRuntime {
 		if (returnType == Scalar.STRING || returnType instanceof Struct) {
 			throw new FfiException("a callback cannot return " + returnType.spelling());
 		}
-		MemoryLayout[] layouts = new MemoryLayout[argTypes.size()];
-		for (int i = 0; i < argTypes.size(); i++) {
-			FfiType arg = argTypes.get(i);
+		for (FfiType arg : argTypes) {
 			if (!(arg instanceof Scalar scalar) || scalar == Scalar.VOID || scalar == Scalar.STRING) {
 				throw new FfiException("a callback argument cannot be " + arg.spelling() + " (take a :pointer)");
 			}
-			layouts[i] = scalar.layout();
 		}
-		FunctionDescriptor descriptor = returnType == Scalar.VOID ? FunctionDescriptor.ofVoid(layouts)
-				: FunctionDescriptor.of(returnType.layout(), layouts);
+		// The canonical carriers, the downcall rule in the other direction: a callback
+		// is always fixed and struct-free, so only the register window limits it. The
+		// stub reads the caller's full register (garbage above a narrow argument's own
+		// bits), and dispatch narrows by the declared type.
+		FunctionDescriptor descriptor = descriptorFor(returnType, argTypes, -1);
 		CallbackShape shape = new CallbackShape(target, returnType, List.copyOf(argTypes));
 		MethodHandle handle = DISPATCH.bindTo(shape)
 			.asCollector(Object[].class, argTypes.size())
@@ -505,17 +659,17 @@ public final class FfiRuntime {
 			return LINKER.upcallStub(handle, descriptor, Arena.global()).address();
 		}
 		catch (Throwable ex) {
-			throw new FfiException("no upcall stub for the shape " + spellShape(returnType, argTypes)
-					+ "; in a native image every callback shape must be registered at build time", ex);
+			if (missingRegistration(ex)) {
+				throw new FfiException("this binary has no upcall stub for the callback shape "
+						+ spellDescriptor(descriptor) + " -- a native image registers every callback shape at "
+						+ "build time, and this one is outside the shipped grid; add "
+						+ metadataEntry("upcalls", descriptor, -1, false)
+						+ " of META-INF/native-image/am.ik.rontolisp/rontolisp/reachability-metadata.json and "
+						+ "rebuild the binary, or run the program on java -jar, where any shape binds", ex);
+			}
+			throw new FfiException("no upcall stub for the shape " + spellDescriptor(descriptor) + ": " + message(ex),
+					ex);
 		}
-	}
-
-	private static String spellShape(FfiType returnType, List<FfiType> argTypes) {
-		StringBuilder spelling = new StringBuilder(returnType.spelling());
-		for (FfiType arg : argTypes) {
-			spelling.append(' ').append(arg.spelling());
-		}
-		return spelling.toString();
 	}
 
 	private record CallbackShape(Callback target, FfiType returnType, List<FfiType> argTypes) {
@@ -541,10 +695,11 @@ public final class FfiRuntime {
 	}
 
 	/**
-	 * The exactly-boxed value {@code asType} unboxes for the stub's return. A
-	 * {@code null} answer -- the target answered nothing, or let an error escape -- is
-	 * zero of the declared type, because this runs below a native frame and must not
-	 * throw.
+	 * The exactly-boxed value {@code asType} unboxes for the stub's return -- a
+	 * {@code Long} for every integer type, since a callback's descriptor carries the
+	 * canonical {@code jlong} return (the C caller reads the low bits). A {@code null}
+	 * answer -- the target answered nothing, or let an error escape -- is zero of the
+	 * declared type, because this runs below a native frame and must not throw.
 	 */
 	private static @Nullable Object toCallbackReturn(FfiType type, @Nullable Object value) {
 		if (type == Scalar.VOID) {
@@ -552,9 +707,12 @@ public final class FfiRuntime {
 		}
 		Scalar scalar = (Scalar) type;
 		return switch (scalar) {
-			case INT8, UINT8 -> (byte) (value == null ? 0 : integer(scalar, value));
-			case INT16, UINT16 -> (short) (value == null ? 0 : integer(scalar, value));
-			case INT32, UINT32 -> (int) (value == null ? 0 : integer(scalar, value));
+			case INT8 -> (long) (byte) (value == null ? 0 : integer(scalar, value));
+			case UINT8 -> (value == null ? 0 : integer(scalar, value)) & 0xFFL;
+			case INT16 -> (long) (short) (value == null ? 0 : integer(scalar, value));
+			case UINT16 -> (value == null ? 0 : integer(scalar, value)) & 0xFFFFL;
+			case INT32 -> (long) (int) (value == null ? 0 : integer(scalar, value));
+			case UINT32 -> (value == null ? 0 : integer(scalar, value)) & 0xFFFF_FFFFL;
 			case INT64, UINT64 -> value == null ? 0L : integer(scalar, value);
 			case FLOAT -> (float) (value == null ? 0 : floating(scalar, value));
 			case DOUBLE -> value == null ? 0.0d : floating(scalar, value);
@@ -565,8 +723,13 @@ public final class FfiRuntime {
 
 	// --- marshalling ------------------------------------------------------------------
 
-	/** A protocol value as the exactly-typed argument the downcall handle wants. */
-	private static Object toNativeArgument(FfiType type, @Nullable Object value, int index, Arena arena) {
+	/**
+	 * A protocol value as the exactly-typed argument the downcall handle wants: the
+	 * 64-bit carrier where the parameter was {@code widened} to the canonical
+	 * {@code jlong}, the declared width elsewhere.
+	 */
+	private static Object toNativeArgument(FfiType type, @Nullable Object value, int index, Arena arena,
+			boolean widened) {
 		if (type instanceof Struct struct) {
 			if (value == null) {
 				throw new FfiException("argument " + index + " is a " + struct.spelling() + " and cannot be NULL");
@@ -574,6 +737,11 @@ public final class FfiRuntime {
 			return MemorySegment.ofAddress(integer(struct, value)).reinterpret(struct.size());
 		}
 		Scalar scalar = (Scalar) type;
+		if (widened && narrowInteger(scalar)) {
+			// The callee reads the low bits: a sign-extended long carries every narrow
+			// value, signed or unsigned, exactly.
+			return integer(scalar, value);
+		}
 		return switch (scalar) {
 			case INT8, UINT8 -> (byte) integer(scalar, value);
 			case INT16, UINT16 -> (short) integer(scalar, value);
@@ -629,13 +797,17 @@ public final class FfiRuntime {
 			return copy;
 		}
 		Scalar scalar = (Scalar) type;
+		// An integer arrives as the declared width on the exact path and as the
+		// canonical jlong -- whose bits above the declared width are the callee's
+		// garbage -- on the canonical one; narrowing by the DECLARED type is correct
+		// for both, and re-extends by the declared signedness.
 		return switch (scalar) {
-			case INT8 -> (long) (Byte) raw;
-			case UINT8 -> (Byte) raw & 0xFFL;
-			case INT16 -> (long) (Short) raw;
-			case UINT16 -> (Short) raw & 0xFFFFL;
-			case INT32 -> (long) (Integer) raw;
-			case UINT32 -> (Integer) raw & 0xFFFF_FFFFL;
+			case INT8 -> (long) (byte) ((Number) raw).longValue();
+			case UINT8 -> ((Number) raw).longValue() & 0xFFL;
+			case INT16 -> (long) (short) ((Number) raw).longValue();
+			case UINT16 -> ((Number) raw).longValue() & 0xFFFFL;
+			case INT32 -> (long) (int) ((Number) raw).longValue();
+			case UINT32 -> ((Number) raw).longValue() & 0xFFFF_FFFFL;
 			case INT64, UINT64 -> (Long) raw;
 			case FLOAT -> (double) (Float) raw;
 			case DOUBLE -> (Double) raw;

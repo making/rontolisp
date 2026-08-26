@@ -601,15 +601,16 @@ public final class PackageRegistry {
 		// A Cocoa widget layer over objc:, implemented once in appkit.lisp and loaded on
 		// demand (AppKitLibrary). Does not use cl; every function is external.
 		define(new LispPackage(LispNames.APPKIT_PKG, List.of(), new HashSet<>(APPKIT_FUNCTIONS)));
-		// Interpreter-only C interop through the foreign function API (no reflection,
-		// so it runs in the native binary too): the foreign primitives CFFI's backend
-		// stands on (eval.FfiInterop over am.ik.ffi). Does not use cl; its values
-		// (LispForeignPointer) cannot be lowered by any WASM backend.
+		// C interop through the foreign function API (no reflection, so it runs in the
+		// native binary too, against the registered shape grid): the foreign primitives
+		// CFFI's backend stands on (eval.FfiInterop over am.ik.ffi). Does not use cl;
+		// its values (LispForeignPointer) cannot be lowered by any WASM backend, and the
+		// JVM class output carries the binding as an embedded blob.
 		define(new LispPackage(LispNames.FFI_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.FFI_OPEN, LispNames.FFI_SYMBOL, LispNames.FFI_CALL,
 						LispNames.FFI_CALLBACK, LispNames.FFI_ALLOC, LispNames.FFI_FREE, LispNames.FFI_PEEK,
 						LispNames.FFI_POKE, LispNames.FFI_SIZE, LispNames.FFI_ALIGN, LispNames.FFI_POINTERP,
-						LispNames.FFI_ADDRESS, LispNames.FFI_ERRNO))));
+						LispNames.FFI_ADDRESS, LispNames.FFI_ERRNO, LispNames.FFI_APPLY_CALL))));
 		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
 		// files as plain data -- see eval.AsdfSystems; the runtime component metaobject
 		// family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp). Does not

@@ -29,7 +29,12 @@ argument-type list + arguments -- the whole calling convention, decided at RUN t
 `ffi:callback` (a Lisp function + a shape -> a code address), `ffi:alloc` / `ffi:free`,
 `ffi:peek` / `ffi:poke` (`(ffi:peek ptr type [offset])`, `(ffi:poke ptr type value
 [offset])`; `:string` peek reads the NUL-terminated UTF-8 at the location, `:string`
-poke is refused), `ffi:size` / `ffi:align`, `ffi:pointerp`, `ffi:address`, `ffi:errno`.
+poke is refused), `ffi:size` / `ffi:align`, `ffi:pointerp`, `ffi:address`, `ffi:errno` --
+plus ONE internal member, `ffi:%apply-call`, which is `ffi:call` with the arguments as a
+single list. It exists for the cffi backend, whose argument lists are runtime values:
+`(apply #'ffi:call ...)` would need the operator as a first-class value, which the
+compiled backends do not give the `ffi` package (the `objc:` precedent -- no
+`BuiltinFunctionWrappers` entries), and the fixed-arity spelling compiles everywhere.
 
 Type designators are the CFFI keywords (`:char :uchar :short :ushort :int :uint :long
 :ulong :llong :ullong :float :double :pointer :string :void`, plus `:int8`..`:uint64`),
@@ -56,8 +61,32 @@ struct is copied into `malloc`'d memory and answered as a pointer the caller fre
   call one. `FfiRuntime` caches UNBOUND handles (the address is the leading argument) in
   a `static final` map keyed by descriptor spelling + variadic index, so one handle
   serves every symbol of a shape. The `.todo/476` trap -- a handle the JIT cannot
-  constant-fold -- still applies to this interpreter path (`invokeWithArguments` through
-  a map fetch); the compiled twin that reads handles as constants is todo-541's job.
+  constant-fold -- still applies (`invokeWithArguments` through a map fetch); a
+  constant-`invokeExact` twin remains future work.
+- **The carriers are canonicalised, so the native binary's shape grid is finite.** A
+  native image compiles a stub per foreign SHAPE at build time and refuses any other --
+  and `cffi:defcfun` invents shapes at run time, after the binary was built. So before
+  the descriptor is built, every narrow integer argument is widened to `jlong` (the C
+  callee reads the low bits of its register -- SysV and AAPCS64 both; verified on the
+  Linux stack-passed path too, whose slots both ABIs round to 8 bytes) and every integer
+  return is read as `jlong` and narrowed by the DECLARED type (the callee leaves garbage
+  above the bits it set; `fromNativeReturn` masks). `jfloat`/`jdouble` stay distinct and
+  pointers/strings are already `void*`: four carriers per parameter. Three cases keep
+  their EXACT layouts, ABI-correct everywhere and simply outside the grid: a narrow
+  integer past the SIXTH integer-class position (`FfiRuntime.REGISTER_WINDOW` -- past
+  the register window both ABIs guarantee, and Apple's AArch64 packs stack arguments, so
+  widening one there would shift the frame), a variadic call (each `firstVariadicArg`
+  index is its own stub, and the Apple variadic path is the unverifiable one), and a
+  by-value struct (the member list is part of the shape). Upcalls follow the same rule
+  in the other direction. The grid itself lives in `reachability-metadata.json` (all
+  `void*`/`jlong` combinations at arity 0-6, plus `jdouble` at 1-4, plus `jfloat` at
+  1-2, x five return carriers, every entry with `captureCallState`; upcalls to arity 4)
+  -- `FfiNativeImageForeignConfigTest` generates and pins it, and its class comment is
+  the coverage log. A miss signals the ONE metadata entry that would register the shape,
+  verbatim, plus "or run it on java -jar" -- and the cffi backend's `%call-symbol`
+  re-signals that one error with the function name in front (`handler-case` gated on the
+  `no foreign-call stub` marker), so a binding failing in the binary and not on the JVM
+  never looks like a bug in the binding.
 - **`errno` is captured, not fetched.** Every downcall handle carries
   `Linker.Option.captureCallState("errno")` into a PER-THREAD capture segment;
   `ffi:errno` reads the value the calling thread's last call left. Correct under
@@ -80,12 +109,18 @@ struct is copied into `malloc`'d memory and answered as a pointer the caller fre
 Both WASM backends refuse a program that references `ffi:` -- permanently, by name, in
 `CompileFrontend` after load inlining (`FfiInterop.firstFfiReference`, the
 `AppKitLibrary.firstObjcReference` shape) -- there is no foreign function API in any
-WASM runtime. The JVM class output does not carry the binding yet and fails at the
-unknown function; the embedded-blob twin (`JvmObjcRuntimeBuilder`'s shape) and the
-native binary's shape registration are todo-541. In a native image today the verbs
-interpret, and a downcall/upcall shape that was not registered at build time signals an
-`FfiException` naming the shape rather than crashing. The browser build cuts the whole
-binding by substituting `FfiInterop`'s three bridge-touching methods
+WASM runtime. The JVM class output CARRIES the binding: `JvmFfiRuntimeBuilder` (the
+`JvmObjcRuntimeBuilder` mechanism) embeds every class file of `am.ik.ffi` plus the
+bridge (`JvmFfiTemplate`, the hand-kept twin of `eval/FfiBridge` -- KEEP IN SYNC) and
+the pointer value (`JvmFfiHandle`, `LispForeignPointer`'s twin: prints
+`#<pointer #x...>`, equal by address), renamed into the program's own package and
+defined lazily by the emitted `_ffiInit`; the gate is any `ffi:` verb surviving load
+inlining (`programUsesAnyFfiOp`), which a `cffi:` program passes through the spliced
+backend. An `ffi:callback` applies its Lisp function through `_apply` (so `usesFfi`
+forces the eval runtime and roots `_apply` in the shaker), and the compiled printer
+gains an `_ffiInited`-guarded print hook beside the objc one. In a native image the
+verbs interpret against the registered shape grid above. The browser build cuts the
+whole binding by substituting `FfiInterop`'s three bridge-touching methods
 (`Target_FfiInterop`); `firstFfiReference` is pure AST and stays.
 
 ## Tests
@@ -95,3 +130,5 @@ binding by substituting `FfiInterop`'s three bridge-touching methods
 | the type model, pure: designator aliases, the C struct padding rule | `am.ik.ffi.FfiTypeTest` |
 | the verbs end to end: libm/libsqlite3/the process, every scalar through peek/poke, a string round trip, a struct return by slot (`div`), qsort through a Lisp callback, a callback called as a plain address + the escaped-error-answers-zero rule, varargs (`snprintf`), errno from a failed `open`, the signal texts, the WASM refusal | `eval/FfiTest` |
 | `eval -> am.ik.ffi`, and the library imports nothing | `PackageCycleTest` |
+| the verbs compiled to a `.class`, case for case with the interpreter (run on any Linux/mac with native access); the blob gated on the reference; the class list pinned against the build; `ffi:%apply-call`; the fboundp-of-a-macro fold; the `(setf (apply #'aref ...))` place | `codegen/jvm/JvmFfiInteropCompilerTest` |
+| the native-image grid: every canonical shape registered (captureCallState included), malloc/free's capture-free shapes, the bundled consumers' shapes landing inside it, the canonicalisation rules themselves | `am.ik.ffi.FfiNativeImageForeignConfigTest` |

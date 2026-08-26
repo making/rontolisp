@@ -179,8 +179,8 @@ final class CompileFrontend {
 		String ffiReference = wasm ? FfiInterop.firstFfiReference(loaded) : null;
 		if (ffiReference != null) {
 			throw new IllegalArgumentException("Cannot compile: " + ffiReference
-					+ " -- the ffi: package runs on the interpreter (java -jar, or the rontolisp binary), "
-					+ "not in a .wasm");
+					+ " -- the ffi: package runs on the interpreter (java -jar, or the rontolisp binary) "
+					+ "and in a compiled .class or .jar, not in a .wasm");
 		}
 		// Under --component the inliner also prunes the interface members the program
 		// never references -- the core tree shaker cannot do that job even under

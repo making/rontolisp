@@ -12,10 +12,11 @@ foreign function API (no JNI, no bundled native library, no reflection). Everyth
 above that seam — the type system, `defcfun`'s argument walker, the enum and
 bitfield layers, the translate/expand protocol — is upstream's code.
 
-> **Interpreter today.** `cffi` works under `java -jar rontolisp.jar` and in the
-> REPL. Neither WASM backend has a foreign function API, so compiling such a program
-> to a `.wasm` is a `Cannot compile: FFI:...` error, permanently. The native binary
-> and the `-o Prog.class` output do not carry the binding yet.
+> **Where it runs.** `cffi` works under `java -jar rontolisp.jar`, in the REPL, in
+> the `rontolisp` native binary, and in a compiled `-o Prog.class` / `-o app.jar`,
+> which carry the binding inside the emitted class. Neither WASM backend has a
+> foreign function API, so compiling such a program to a `.wasm` is a
+> `Cannot compile: FFI:...` error, permanently.
 
 ## A C function in three lines
 
@@ -164,6 +165,22 @@ CL-USER> (cffi:with-foreign-pointer (buf 64)
 | `cffi:defcvar` | Not available — it expands into `define-symbol-macro`, which rontolisp does not have. Read the variable through `cffi:foreign-symbol-pointer` plus `cffi:mem-ref` instead |
 | `with-pointer-to-vector-data` | Copies **in and out** instead of pinning: the body sees a fresh foreign buffer, and what the C side wrote reaches the Lisp vector when the body returns, not before. A pointer kept past the body is dangling |
 | `:long-double` | Not a foreign type here |
+
+## In the native binary
+
+A native image compiles a stub per foreign call **shape** ahead of time, and
+`defcfun` invents shapes at run time, in your program — so the binary ships a
+registered grid. Every narrow integer travels as its 64-bit carrier and every
+pointer or string as `void*`, which collapses a C API's shapes to a few carriers per
+parameter; the grid then covers all pointer/integer argument combinations to arity
+6, with `double` to arity 4 and `float` to arity 2, at every return type, and the
+callback shapes to arity 4. In practice a binding's fixed-arity calls just work.
+
+A call outside the grid — a narrow integer argument past the sixth, a variadic
+tail, a structure by value — signals an error naming the one
+`reachability-metadata.json` entry that would register it, so the fix is to add
+that entry and rebuild the binary, or to run the program on `java -jar`, where any
+shape binds.
 
 ## Where the pieces live
 

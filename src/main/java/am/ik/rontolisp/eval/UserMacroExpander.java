@@ -211,6 +211,14 @@ public final class UserMacroExpander {
 			// library pruner) see the canonical async-defun/async-lambda forms, exactly
 			// as they would for code the CLI rewrote before macro expansion.
 			expanded = LispMacroExpander.rewriteAsyncSugarForm(expanded);
+			// (fboundp 'name) over a name the macro-time evaluator has DEFINED AS A
+			// MACRO is a compile-time t: macros do not exist in the compiled program,
+			// so the runtime probe would answer nil and take the wrong branch. cffi's
+			// functions.lisp guards its fallback %foreign-funcall-varargs defmacro
+			// exactly this way -- (eval-when (...) (unless (fboundp '...) (defmacro
+			// ...))) -- and the fold is what lets the kept load-toplevel member
+			// collapse instead of calling DEFMACRO at run time.
+			expanded = foldMacroFboundp(expanded, macroEval);
 			if (isOperator(expanded, LispNames.DEFMACRO)) {
 				// A macro expanded into a macro definition: consume it as well.
 				macroEval.evalResolved(expanded);
@@ -424,7 +432,7 @@ public final class UserMacroExpander {
 				registerMacroTimeDefinitions(member, macroEval);
 			}
 			if (loadTime) {
-				result.add(requalifyShadowedClNames(member, macroEval));
+				result.add(requalifyShadowedClNames(foldMacroFboundp(member, macroEval), macroEval));
 			}
 		}
 	}
@@ -451,6 +459,76 @@ public final class UserMacroExpander {
 			}
 			default -> form;
 		};
+	}
+
+	/**
+	 * Folds {@code (fboundp 'name)} to {@code t} where {@code name} is a user macro the
+	 * macro-time evaluator has defined by this point, and collapses the
+	 * {@code if}/{@code when}/{@code unless}/{@code not} whose test the fold decided. A
+	 * macro is {@code fboundp} in CL and in the interpreter, but it does not exist in the
+	 * compiled program at all, so only a compile-time answer can be the right one. Only
+	 * the {@code t} direction is decided: a name that is not a macro may still be a
+	 * function, which stays a runtime question.
+	 */
+	private static LispVal foldMacroFboundp(LispVal form, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.FBOUNDP.equals(memberName(op.name()))
+				&& cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil
+				&& argCell.car() instanceof LispCons quote && quote.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quote.cdr() instanceof LispCons quotedCell
+				&& quotedCell.car() instanceof LispSymbol probed && macroEval.isUserMacro(probed.name())) {
+			return SourceProvenance.inherit(cons, LispTrue.INSTANCE);
+		}
+		LispVal car = foldMacroFboundp(cons.car(), macroEval);
+		LispVal cdr = foldMacroFboundp(cons.cdr(), macroEval);
+		if (car == cons.car() && cdr == cons.cdr()) {
+			return form;
+		}
+		LispCons rebuilt = new LispCons(car, cdr);
+		LispVal collapsed = collapseDecidedTest(rebuilt);
+		return SourceProvenance.inherit(cons, collapsed != null ? collapsed : rebuilt);
+	}
+
+	/**
+	 * Collapses {@code (if t a b)} / {@code (when t body...)} / {@code (unless t
+	 * body...)} / {@code (not t)} whose test {@link #foldMacroFboundp} just decided;
+	 * {@code null} when there is nothing to collapse. The
+	 * {@code compiler/CompileTimeBoundp} rule, scoped to what the macro fold produces.
+	 */
+	private static @org.jspecify.annotations.Nullable LispVal collapseDecidedTest(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispTrue)) {
+			return null;
+		}
+		return switch (memberName(head.name())) {
+			case LispNames.IF -> parts.size() != 3 && parts.size() != 4 ? null : parts.get(2);
+			case LispNames.WHEN -> parts.size() == 2 ? LispNil.INSTANCE : parts.size() == 3 ? parts.get(2)
+					: new LispCons(new LispSymbol(LispNames.PROGN), properListTail(parts, 2));
+			case LispNames.UNLESS -> LispNil.INSTANCE;
+			case LispNames.NOT -> parts.size() != 2 ? null : LispNil.INSTANCE;
+			default -> null;
+		};
+	}
+
+	private static LispVal properListTail(List<LispVal> parts, int from) {
+		LispVal tail = LispNil.INSTANCE;
+		for (int i = parts.size() - 1; i >= from; i--) {
+			tail = new LispCons(parts.get(i), tail);
+		}
+		return tail;
+	}
+
+	private static String memberName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
 	}
 
 	private static boolean isOperator(LispVal form, String name) {
