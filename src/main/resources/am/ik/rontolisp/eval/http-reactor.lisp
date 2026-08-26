@@ -425,16 +425,19 @@
 (defun rontolisp::%http-reactor-request-tuple (req body buffered)
   ;; The positional raw tuple %http-make-env consumes:
   ;;   (method request-uri header-alist body server-protocol url-scheme
-  ;;    local-name local-port remote-addr remote-port)
+  ;;    local-name local-port remote-addr remote-port script-name)
   ;; The Host header supplies :server-name / :server-port, so the two
   ;; placeholders below never win when the host sends one. BODY is the
   ;; out-of-band body source; the envelope's own "body" key is the fallback,
   ;; which is what keeps a host that has not moved yet working unchanged.
+  ;; "script-name" is the envelope's optional mount point (a host that mounts
+  ;; a Worker under a path has the same problem the Servlet war has), a RAW
+  ;; prefix of "target"; absent means root-mounted.
   (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
    (rontolisp::%http-reactor-header-alist (gethash "headers" req))
    (rontolisp::%http-reactor-request-body body (gethash "body" req) buffered)
    "HTTP/1.1" (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req)
-   nil))
+   nil (or (gethash "script-name" req) "")))
 
 (defun rontolisp::%http-reactor-write (sink chunk)
   ;; One response chunk out, RESOLVED. A host writer that suspends answers a

@@ -1,5 +1,9 @@
 package am.ik.rontolisp.eval;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -252,6 +256,44 @@ class HttpHandlerTest {
 		assertThat(request.target()).isEqualTo("/a%20b?a=1&b=?x");
 		assertThat(request.bodyString()).isEqualTo("ボディ");
 		assertThat(request.body()).isEqualTo("ボディ".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	@Test
+	void aMountedRequestSplitsScriptNameAndPathInfo() {
+		// The interpreter's native environment construction makes the same split the
+		// other two make (.kb/http-server.md, "The invariant"): the raw mount prefix
+		// comes off the target BEFORE percent-decoding, :script-name is its decode,
+		// :request-uri stays the full raw target, and a non-prefix scriptName degrades
+		// to the root-mounted split rather than signalling.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		LispVal env = evaluator.buildClackEnv(mounted("/my%20app/caf%C3%A9?q=1", "/my%20app"), LispNil.INSTANCE);
+		assertThat(plistGet(env, ":SCRIPT-NAME")).isEqualTo("\"/my app\"");
+		assertThat(plistGet(env, ":PATH-INFO")).isEqualTo("\"/café\"");
+		assertThat(plistGet(env, ":REQUEST-URI")).isEqualTo("\"/my%20app/caf%C3%A9?q=1\"");
+
+		LispVal root = evaluator.buildClackEnv(mounted("/myapp", "/myapp"), LispNil.INSTANCE);
+		assertThat(plistGet(root, ":SCRIPT-NAME")).isEqualTo("\"/myapp\"");
+		assertThat(plistGet(root, ":PATH-INFO")).isEqualTo("\"\"");
+
+		LispVal degraded = evaluator.buildClackEnv(mounted("/hello", "/other"), LispNil.INSTANCE);
+		assertThat(plistGet(degraded, ":SCRIPT-NAME")).isEqualTo("\"\"");
+		assertThat(plistGet(degraded, ":PATH-INFO")).isEqualTo("\"/hello\"");
+	}
+
+	private static RontoHttpServer.Request mounted(String target, String scriptName) {
+		return new RontoHttpServer.Request("GET", target, List.of(), new byte[0], "HTTP/1.1", "http", "", 0, "", 0,
+				scriptName);
+	}
+
+	// Walks the environment plist for one key's printed value.
+	private static String plistGet(LispVal plist, String key) {
+		for (LispVal cursor = plist; cursor instanceof LispCons cons
+				&& cons.cdr() instanceof LispCons rest; cursor = rest.cdr()) {
+			if (cons.car() instanceof LispSymbol symbol && key.equals(symbol.name())) {
+				return rest.car().print();
+			}
+		}
+		throw new IllegalStateException("no " + key + " in the environment plist");
 	}
 
 	@Test

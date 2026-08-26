@@ -110,9 +110,14 @@ public final class RontoHttpServer {
 	 * @param localPort the port this server is bound to
 	 * @param remoteAddr the peer address, or {@code ""} when unknown
 	 * @param remotePort the peer port, or {@code 0} when unknown
+	 * @param scriptName the application's mount point as a RAW prefix of {@code target}
+	 * (still percent-encoded, the Servlet transport's context path + servlet path), or
+	 * {@code ""} on a root-mounted transport. Only the transport knows where it is
+	 * mounted, so the value enters here, with the other transport facts: the environment
+	 * build splits it into {@code :script-name} / {@code :path-info}
 	 */
 	public record Request(String method, String target, List<Header> headers, byte[] body, String protocol,
-			String scheme, String localName, int localPort, String remoteAddr, int remotePort) {
+			String scheme, String localName, int localPort, String remoteAddr, int remotePort, String scriptName) {
 
 		/**
 		 * Creates a request carrying only what a test needs, defaulting the transport
@@ -125,7 +130,7 @@ public final class RontoHttpServer {
 		 */
 		public static Request of(String method, String target, List<Header> headers, String body) {
 			return new Request(method, target, headers, body.getBytes(StandardCharsets.UTF_8), "HTTP/1.1", "http", "",
-					0, "", 0);
+					0, "", 0, "");
 		}
 
 		/**
@@ -371,11 +376,13 @@ public final class RontoHttpServer {
 		final byte[] body = exchange.getRequestBody().readAllBytes();
 		final InetSocketAddress local = exchange.getLocalAddress();
 		final InetSocketAddress remote = exchange.getRemoteAddress();
+		// scriptName "": this server owns its whole port, so the application is
+		// root-mounted by construction.
 		return new Request(method, target, headers, body, exchange.getProtocol(),
 				exchange instanceof HttpsExchange ? "https" : "http", local == null ? "" : local.getHostString(),
 				local == null ? 0 : local.getPort(),
 				remote == null || remote.getAddress() == null ? "" : remote.getAddress().getHostAddress(),
-				remote == null ? 0 : remote.getPort());
+				remote == null ? 0 : remote.getPort(), "");
 	}
 
 	private static void writeResponse(HttpExchange exchange, Response response) throws IOException {

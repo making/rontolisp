@@ -8962,13 +8962,26 @@ public final class LispEvaluator {
 	 * Builds the Clack environment for one served request. The KEY SET and its order are
 	 * {@link ClackEnv#FIELDS}; only the per-field value extraction is this backend's, so
 	 * an unmapped field fails loudly here -- the same drift guard every backend applies
-	 * to the same declaration.
+	 * to the same declaration. Package-private so the mounted script-name split -- which
+	 * no transport of THIS backend can produce (only the Servlet war mounts the
+	 * application) -- stays testable.
 	 */
-	private LispVal buildClackEnv(RontoHttpServer.Request request, LispVal rawBody) {
+	LispVal buildClackEnv(RontoHttpServer.Request request, LispVal rawBody) {
 		String target = request.target();
 		int q = target.indexOf('?');
 		String path = q < 0 ? target : target.substring(0, q);
 		LispVal query = q < 0 ? LispNil.INSTANCE : new LispString(target.substring(q + 1));
+		// The mounted split: the RAW mount prefix comes off the target path BEFORE
+		// percent-decoding, and both halves come out decoded; a non-prefix scriptName
+		// degrades to the root-mounted split (same arithmetic as RontoHttpClack.buildEnv
+		// and %http-make-env -- the three constructions of one declared shape).
+		String script = request.scriptName();
+		String scriptName = "";
+		String pathInfo = path;
+		if (!script.isEmpty() && path.startsWith(script)) {
+			scriptName = RontoHttpClack.percentDecode(script);
+			pathInfo = path.substring(script.length());
+		}
 		// The header table: lowercased names, repeated headers joined with ", " in wire
 		// order (the Clack handler-backend rule), and never nil -- lack-request gethashes
 		// it unguarded.
@@ -8999,8 +9012,8 @@ public final class LispEvaluator {
 			entries.add(new LispSymbol(field));
 			entries.add(switch (field) {
 				case ClackEnv.REQUEST_METHOD -> new LispSymbol(":" + request.method().toUpperCase(Locale.ROOT));
-				case ClackEnv.SCRIPT_NAME -> new LispString("");
-				case ClackEnv.PATH_INFO -> new LispString(RontoHttpClack.percentDecode(path));
+				case ClackEnv.SCRIPT_NAME -> new LispString(scriptName);
+				case ClackEnv.PATH_INFO -> new LispString(RontoHttpClack.percentDecode(pathInfo));
 				case ClackEnv.QUERY_STRING -> query;
 				// "" is the transport's "unknown" (RontoHttpServer.Request carries no
 				// nulls -- the travelling package has no @Nullable to spell one with).

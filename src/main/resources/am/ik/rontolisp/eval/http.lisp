@@ -244,8 +244,11 @@
            ;; are nil here while the interpreter and the JVM carry the real peer; the
            ;; scheme and the protocol are likewise not readable from the pruned
            ;; import block. See .kb/http-server.md for the re-evaluation trigger.
+           ;; script-name "": wasi:http hands over a whole authority, so the
+           ;; application is root-mounted by construction.
            (raw
-            (list method target headers body "HTTP/1.1" "http" nil 80 nil nil))
+            (list method target headers body "HTTP/1.1" "http" nil 80 nil nil
+                  ""))
            (res
             (rontolisp:await
              (rontolisp::%http-serve-request (function %serve-dispatch) raw)))

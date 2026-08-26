@@ -11,8 +11,10 @@ Clack のレスポンスリスト `(status headers body)` を返します — Cl
 
 - **環境** — ちょうど次のキーを持つプロパティリストで、常にすべて存在します:
   `:request-method`（大文字化・intern 済みのキーワード。`:GET` / `:POST` /
-  ...。`(eq m :POST)` が動きます）、`:script-name`（常に `""`）、`:path-info`
-  （パーセントデコード済みのパス）、`:query-string`（最初の `?` より後ろの
+  ...。`(eq m :POST)` が動きます）、`:script-name`（アプリケーションの
+  マウントポイント。パーセントデコード済み — コンテキストパス配下に
+  デプロイした Servlet war 以外では `""`）、`:path-info`
+  （パーセントデコード済みのパス。マウントポイントを取り除いたもの）、`:query-string`（最初の `?` より後ろの
   生のテキスト、なければ `nil` —
   [`rontolisp:query-param`](rontolisp-query-param.md) /
   [`rontolisp:query-params`](rontolisp-query-params.md) でパースして

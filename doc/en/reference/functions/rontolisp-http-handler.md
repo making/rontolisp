@@ -10,8 +10,10 @@ as is (see [Clack Web Applications](../../guides/clack.md)):
 
 - **environment** — a property list with exactly these keys, always all
   present: `:request-method` (an upcased interned keyword, `:GET` / `:POST` /
-  ..., so `(eq m :POST)` works), `:script-name` (always `""`), `:path-info`
-  (the percent-decoded path), `:query-string` (the raw text after the first
+  ..., so `(eq m :POST)` works), `:script-name` (the application's mount point,
+  percent-decoded — `""` everywhere but a Servlet war deployed under a context
+  path), `:path-info` (the percent-decoded path, with the mount point stripped
+  first), `:query-string` (the raw text after the first
   `?`, or `nil` — parse it with
   [`rontolisp:query-param`](rontolisp-query-param.md) /
   [`rontolisp:query-params`](rontolisp-query-params.md)), `:server-name`,

@@ -55,6 +55,19 @@ public final class RontoHttpClack {
 		int q = target.indexOf('?');
 		String path = q < 0 ? target : target.substring(0, q);
 		Object query = q < 0 ? null : quote(target.substring(q + 1));
+		// The mounted split (the Servlet war under a context path): the RAW mount
+		// prefix comes off the target path BEFORE percent-decoding -- that is what
+		// makes it strippable at all -- and :script-name is its decode, so both halves
+		// come out decoded, the same shape lack's mount middleware produces when it
+		// moves a matched prefix across. A scriptName that is not a prefix of the
+		// target degrades to the root-mounted split rather than signalling.
+		String script = request.scriptName();
+		String scriptName = "";
+		String pathInfo = path;
+		if (!script.isEmpty() && path.startsWith(script)) {
+			scriptName = percentDecode(script);
+			pathInfo = path.substring(script.length());
+		}
 		// The header table: lowercased names, repeated headers joined with ", " in wire
 		// order (the Clack handler-backend rule), never nil.
 		LinkedHashMap<Object, Object> headers = RontoHashTable.newTable();
@@ -109,8 +122,8 @@ public final class RontoHttpClack {
 			String field = fields.get(i);
 			Object value = switch (field) {
 				case RontoClackEnv.REQUEST_METHOD -> ":" + request.method().toUpperCase(Locale.ROOT);
-				case RontoClackEnv.SCRIPT_NAME -> quote("");
-				case RontoClackEnv.PATH_INFO -> quote(percentDecode(path));
+				case RontoClackEnv.SCRIPT_NAME -> quote(scriptName);
+				case RontoClackEnv.PATH_INFO -> quote(percentDecode(pathInfo));
 				case RontoClackEnv.QUERY_STRING -> query;
 				case RontoClackEnv.SERVER_NAME -> quote(serverName.isEmpty() ? "localhost" : serverName);
 				case RontoClackEnv.SERVER_PORT -> serverPort == 0 ? Long.valueOf(80) : serverPort;

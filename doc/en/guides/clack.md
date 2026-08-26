@@ -55,8 +55,8 @@ standard `(status headers body)` list:
 | env key | value |
 |---------|-------|
 | `:request-method` | the method as an upcased interned keyword (`:GET`, `:POST`, ...) |
-| `:script-name` | `""` |
-| `:path-info` | the percent-decoded request path |
+| `:script-name` | the application's mount point, percent-decoded — `""` everywhere but a [Servlet war](http-handler.md#compiled-to-a-servlet-war) deployed under a context path |
+| `:path-info` | the percent-decoded request path, with the mount point stripped first |
 | `:query-string` | the raw query string, or `nil` |
 | `:request-uri` | the raw request target verbatim (still encoded, query included) |
 | `:server-name` / `:server-port` | from the `Host` header when present, otherwise the listener's |
@@ -319,6 +319,10 @@ Two details the host side must get right:
 - Send `content-length` for a request with a body. `lack/request` parses nothing
   without it, and a request that arrived chunked carries none — set it from the
   bytes you actually read.
+- A host that mounts the application under a path may add an optional
+  `"script-name"` key: the mount point as a **raw** prefix of `target`. It
+  becomes `:script-name` (percent-decoded) with `:path-info` carrying only the
+  remainder; absent means root-mounted.
 
 Response headers cross as an **array of pairs**, not an object, so an
 application that sets two cookies still answers two `Set-Cookie` headers.

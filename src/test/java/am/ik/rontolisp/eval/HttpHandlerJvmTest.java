@@ -55,6 +55,36 @@ class HttpHandlerJvmTest {
 		assertThat(plistGet(env, ":SERVER-NAME")).isEqualTo("\"localhost\"");
 	}
 
+	@Test
+	@SuppressWarnings("NullAway") // buildEnv is called from bytecode, where nil IS null
+	void aMountedRequestSplitsScriptNameAndPathInfo() {
+		// The Servlet transport is the one transport that mounts the application
+		// (context path + servlet path, both RAW -- still percent-encoded, so the
+		// prefix is strippable before decoding). :script-name gets the decoded mount
+		// point, :path-info the decoded remainder, :request-uri the full raw target --
+		// the Rack/PSGI split (.kb/http-server.md).
+		Object env = RontoHttpClack.buildEnv(mounted("/my%20app/caf%C3%A9?q=1", "/my%20app"), null);
+		assertThat(plistGet(env, ":SCRIPT-NAME")).isEqualTo("\"/my app\"");
+		assertThat(plistGet(env, ":PATH-INFO")).isEqualTo("\"/café\"");
+		assertThat(plistGet(env, ":REQUEST-URI")).isEqualTo("\"/my%20app/caf%C3%A9?q=1\"");
+
+		// The mount point itself: :path-info is "", not "/".
+		Object root = RontoHttpClack.buildEnv(mounted("/myapp", "/myapp"), null);
+		assertThat(plistGet(root, ":SCRIPT-NAME")).isEqualTo("\"/myapp\"");
+		assertThat(plistGet(root, ":PATH-INFO")).isEqualTo("\"\"");
+
+		// A scriptName that is not a prefix of the target degrades to the root-mounted
+		// split rather than signalling.
+		Object degraded = RontoHttpClack.buildEnv(mounted("/hello", "/other"), null);
+		assertThat(plistGet(degraded, ":SCRIPT-NAME")).isEqualTo("\"\"");
+		assertThat(plistGet(degraded, ":PATH-INFO")).isEqualTo("\"/hello\"");
+	}
+
+	private static RontoHttpServer.Request mounted(String target, String scriptName) {
+		return new RontoHttpServer.Request("GET", target, java.util.List.of(), new byte[0], "HTTP/1.1", "http", "", 0,
+				"", 0, scriptName);
+	}
+
 	// Walks the JVM runtime representation of a plist: an Object[2] cons chain.
 	private static Object plistGet(Object plist, String key) {
 		Object cursor = plist;

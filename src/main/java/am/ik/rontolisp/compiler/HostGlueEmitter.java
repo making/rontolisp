@@ -1018,6 +1018,11 @@ public final class HostGlueEmitter {
 				}
 				case "remote-addr" ->
 					conditional.add("    if (remoteAddr != null) head[\"" + key + "\"] = remoteAddr;");
+				// ABSENT: the emitted glue serves a whole fetch boundary, so the
+				// application is root-mounted. A hand-written host that mounts it under
+				// a path sends the key itself.
+				case "script-name" -> {
+				}
 				// The call's identity, present exactly where the body imports lead with
 				// it (--reentrant streaming): the transport threads it back to them.
 				case "call-id" -> {

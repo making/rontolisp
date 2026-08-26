@@ -9912,6 +9912,45 @@ cases:
       "text/plain"
       5
       "hello"
+  - name: http-clack-script-name
+    source: |
+      ;; A MOUNTED application (the Servlet war under a context path): the raw
+      ;; tuple's eleventh member is the mount point as a RAW prefix of the
+      ;; target -- still percent-encoded, the servlet transport's context path
+      ;; + servlet path. :script-name is its percent-decode, :path-info the
+      ;; decode of the remainder, :request-uri the full raw target -- the
+      ;; Rack/PSGI split. Only the war transport produces a non-empty value
+      ;; today, so the split is pinned here, on the library every backend
+      ;; shares, not only on the transport that can reach it.
+      (defun ci-script-env (target script)
+        (rontolisp::%http-make-env
+         (list "get" target '(("Host" . "h")) nil "HTTP/1.1" "http"
+               "0.0.0.0" 8080 nil nil script)))
+      (defvar *ci-mounted* (ci-script-env "/my%20app/caf%C3%A9?q=1" "/my%20app"))
+      (print (getf *ci-mounted* :script-name))
+      (print (getf *ci-mounted* :path-info))
+      (print (getf *ci-mounted* :request-uri))
+      ;; a request for the mount point itself: :path-info is "", not "/"
+      (print (getf (ci-script-env "/myapp" "/myapp") :path-info))
+      ;; a script name that is not a prefix of the target degrades to the
+      ;; root-mounted split rather than signalling
+      (defvar *ci-unmounted* (ci-script-env "/hello" "/other"))
+      (print (getf *ci-unmounted* :script-name))
+      (print (getf *ci-unmounted* :path-info))
+      ;; and the ten-member tuple every root-mounted transport still sends is
+      ;; byte-for-byte unchanged: no eleventh member means no mount
+      (print (getf (rontolisp::%http-make-env
+                    (list "get" "/plain" nil nil "HTTP/1.1" "http"
+                          "0.0.0.0" 8080 nil nil))
+                   :script-name))
+    expected: |
+      "/my app"
+      "/café"
+      "/my%20app/caf%C3%A9?q=1"
+      ""
+      ""
+      "/hello"
+      ""
   - name: http-reactor-body-source
     source: |
       ;; The host-driven reactor transport takes a request HEAD (the JSON

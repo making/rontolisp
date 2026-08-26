@@ -67,6 +67,7 @@ class WarE2eTest {
 	private static final String HANDLER = """
 			(rontolisp:async-defun handler (env)
 			  (let ((path (getf env :path-info))
+			        (script (getf env :script-name))
 			        (method (getf env :request-method))
 			        (query (getf env :query-string))
 			        (headers (getf env :headers))
@@ -88,8 +89,8 @@ class WarE2eTest {
 			      (t
 			       (list 200
 			             (list :content-type "text/plain" :x-demo "one" :x-demo "two")
-			             (list (format nil "path=~a method=~a query=~a ua=~a len=~a body=~a"
-			                           path method query (gethash "user-agent" headers) len
+			             (list (format nil "path=~a script=~a method=~a query=~a ua=~a len=~a body=~a"
+			                           path script method query (gethash "user-agent" headers) len
 			                           (if (and body len (> len 0))
 			                               (let ((s (make-string len))) (read-sequence s body) s)
 			                               ""))))))))
@@ -190,7 +191,7 @@ class WarE2eTest {
 			.POST(HttpRequest.BodyPublishers.ofString("hello"))
 			.build(), HttpResponse.BodyHandlers.ofString());
 		assertThat(echo.statusCode()).isEqualTo(200);
-		assertThat(echo.body()).isEqualTo("path=/echo method=POST query=a=1 ua=ronto-e2e len=5 body=hello");
+		assertThat(echo.body()).isEqualTo("path=/echo script= method=POST query=a=1 ua=ronto-e2e len=5 body=hello");
 		// Repeated response headers: both pairs emitted.
 		assertThat(echo.headers().allValues("x-demo")).containsExactly("one", "two");
 
@@ -219,6 +220,33 @@ class WarE2eTest {
 		HttpResponse<String> failed = client.send(HttpRequest.newBuilder(uri(port, "/error")).build(),
 				HttpResponse.BodyHandlers.ofString());
 		assertThat(failed.statusCode()).isEqualTo(500);
+	}
+
+	@Test
+	void theWarUnderAContextPathSplitsScriptNameAndPathInfo() throws Exception {
+		optIn();
+		// The .todo/531 defect end to end: deployed at /myapp, :script-name must be the
+		// mount point and :path-info the remainder (the Rack/PSGI split) -- before the
+		// fix :path-info was /myapp/echo with :script-name "", so every mounted route
+		// missed. The war is the ONLY transport that can produce a non-empty
+		// :script-name, so this is the one place the whole path -- container to
+		// environment -- is exercised.
+		Path war = compileWar(HANDLER);
+		Tomcat tomcat = tomcat(war, 0, "/myapp");
+		try {
+			int port = tomcat.getConnector().getLocalPort();
+			HttpResponse<String> echo = client().send(HttpRequest.newBuilder(uri(port, "/myapp/echo?a=1"))
+				.header("User-Agent", "ronto-e2e")
+				.POST(HttpRequest.BodyPublishers.ofString("hello"))
+				.build(), HttpResponse.BodyHandlers.ofString());
+			assertThat(echo.statusCode()).isEqualTo(200);
+			assertThat(echo.body())
+				.isEqualTo("path=/echo script=/myapp method=POST query=a=1 ua=ronto-e2e len=5 body=hello");
+		}
+		finally {
+			tomcat.stop();
+			tomcat.destroy();
+		}
 	}
 
 	@Test
@@ -284,6 +312,10 @@ class WarE2eTest {
 	}
 
 	private Tomcat tomcat(Path war, int maxThreads) throws Exception {
+		return tomcat(war, maxThreads, "");
+	}
+
+	private Tomcat tomcat(Path war, int maxThreads, String contextPath) throws Exception {
 		Path base = Files.createDirectories(this.tempDir.resolve("tomcat-" + war.getFileName()));
 		Files.createDirectories(base.resolve("webapps"));
 		Tomcat tomcat = new Tomcat();
@@ -294,7 +326,7 @@ class WarE2eTest {
 			tomcat.getConnector().setProperty("maxThreads", String.valueOf(maxThreads));
 			tomcat.getConnector().setProperty("minSpareThreads", String.valueOf(maxThreads));
 		}
-		tomcat.addWebapp("", new File(war.toString()).getAbsolutePath());
+		tomcat.addWebapp(contextPath, new File(war.toString()).getAbsolutePath());
 		tomcat.start();
 		return tomcat;
 	}

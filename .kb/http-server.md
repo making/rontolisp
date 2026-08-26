@@ -63,16 +63,24 @@ measured division that stands:
   does not apply.
 
 The transports keep only what is genuinely theirs (reading the wire, writing
-the answer): `RontoHttpServer.Request` carries the 10 raw transport facts —
+the answer): `RontoHttpServer.Request` carries the 11 raw transport facts —
 target verbatim (still percent-encoded, query included), headers in wire order
-with duplicates kept, the body as BYTES, protocol/scheme/local/remote.
+with duplicates kept, the body as BYTES, protocol/scheme/local/remote, and the
+mount point (`scriptName`, a RAW prefix of the target; `""` on every
+root-mounted transport — only the transport knows where it is mounted, so the
+value enters through the tuple, not through a special case in the library).
 
 ## The fifth transport: the Servlet war (`-o app.war`)
 
 A `rontolisp:http-handler` program compiles to a Servlet war that deploys
 unmodified on any Servlet 6 container. The transport is two classes in
-`runtime` — `RontoHttpServlet` (a ten-field `Request` fill in, a `Response`
-write out; byte-exact, no encode of its own) and `RontoHttpServletInitializer`
+`runtime` — `RontoHttpServlet` (an eleven-field `Request` fill in, a `Response`
+write out; byte-exact, no encode of its own; its `scriptName` is
+`getContextPath() + getServletPath()` — the context path is UNDECODED per the
+Servlet spec, which is what makes the sum a raw strippable prefix of the
+target, and the sum generalizes past `/*`: a servlet prefix-mapped at `/api/*`
+inside context `/myapp` mounts the application at `/myapp/api`) and
+`RontoHttpServletInitializer`
 (`@HandlesTypes(RontoHttpServer.Handler.class)`: the container hands over the
 program class BECAUSE implementing `Handler` is already what the JVM backend
 emits, so the war carries no name and no `web.xml`; its only non-class file is
@@ -125,9 +133,20 @@ deployed webapp on its own. Tomcat needs nothing.
 
 ## The environment contract (all verified against upstream Clack)
 
-`:REQUEST-METHOD` upcased interned keyword / `:SCRIPT-NAME` `""` / `:PATH-INFO`
-percent-decoded (lenient decoder: a malformed escape copies verbatim; `+` is
-NOT decoded — that is a query-string rule) / `:QUERY-STRING` raw text after the
+`:REQUEST-METHOD` upcased interned keyword / `:SCRIPT-NAME` the application's
+mount point, percent-decoded — `""` on every root-mounted transport, which is
+all of them but the Servlet war under a context path (Rack/PSGI: `SCRIPT_NAME`
+is the mount point, `PATH_INFO` the remainder; `lack/app/mount` and the session
+middleware `setf getf` these two keys on the same convention). The raw prefix
+comes off the target BEFORE percent-decoding (what makes it strippable at
+all); a `scriptName` that is not a prefix of the target degrades to the
+root-mounted split rather than signalling. Pinned on all four backends by
+ci-spec `http-clack-script-name`, end to end by `WarE2eTest`'s context-path
+leg / `:PATH-INFO`
+percent-decoded, with the raw mount prefix stripped first (lenient decoder: a
+malformed escape copies verbatim; `+` is
+NOT decoded — that is a query-string rule); a request for the mount point
+itself gets `""`, not `/` / `:QUERY-STRING` raw text after the
 first `?`, nil when absent / `:SERVER-NAME` + `:SERVER-PORT` from the `Host`
 header (port = last colon followed only by digits, so IPv6 literals survive),
 else the listening address / `:SERVER-PROTOCOL` keyword / `:REQUEST-URI` the

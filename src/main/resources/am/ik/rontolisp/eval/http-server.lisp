@@ -8,7 +8,7 @@
 ;;;;
 ;;;;   (rontolisp::%http-serve-request app raw)
 ;;;;     raw = (method request-uri header-alist body server-protocol url-scheme
-;;;;            local-name local-port remote-addr remote-port)
+;;;;            local-name local-port remote-addr remote-port [script-name])
 ;;;;     =>    (status header-alist body-string)
 ;;;;
 ;;;; Everything between those two lines -- percent-decoding, the "?" split,
@@ -423,10 +423,23 @@
          (host (gethash "host" headers))
          (hostpair (if host (rontolisp::%http-host-split host) nil))
          (clen (gethash "content-length" headers))
-         (body (nth 3 raw)))
+         (body (nth 3 raw))
+         ;; The mounted split (the Servlet war under a context path): (nth 10
+         ;; raw) is the mount point as a RAW prefix of the target -- still
+         ;; percent-encoded, which is what makes it strippable BEFORE decoding
+         ;; -- and both halves come out decoded, the same shape lack's mount
+         ;; middleware produces when it moves a matched prefix across. Absent
+         ;; (the ten-member tuple every root-mounted transport sends) or not a
+         ;; prefix of the target, the split degrades to the root-mounted one
+         ;; rather than signalling.
+         (script (let ((s (nth 10 raw))) (if (stringp s) s "")))
+         (mounted
+          (and (> (length script) 0) (<= (length script) (length path))
+               (string= script (subseq path 0 (length script))))))
     (list :REQUEST-METHOD (rontolisp::%http-method-keyword (nth 0 raw))
-     :SCRIPT-NAME ""
-     :PATH-INFO (rontolisp::%http-percent-decode path)
+     :SCRIPT-NAME (if mounted (rontolisp::%http-percent-decode script) "")
+     :PATH-INFO (rontolisp::%http-percent-decode
+                 (if mounted (subseq path (length script)) path))
      :QUERY-STRING query
      :SERVER-NAME (or (if hostpair (car hostpair) nil) (nth 6 raw) "localhost")
      :SERVER-PORT (or (if hostpair (cdr hostpair) nil) (nth 7 raw) 80)

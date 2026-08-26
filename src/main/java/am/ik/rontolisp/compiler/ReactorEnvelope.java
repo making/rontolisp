@@ -61,11 +61,13 @@ public final class ReactorEnvelope {
 	 * shared normalizer owns that split); {@code headers} is a JSON OBJECT, and a request
 	 * with a body must carry {@code content-length} in it; {@code body} is the in-band
 	 * body, {@code ""} or absent for none; {@code scheme} defaults to {@code "http"} and
-	 * {@code remote-addr} to nothing; {@code call-id} is {@link #CALL_ID_KEY}, absent
-	 * everywhere but a {@code --reentrant} streaming build.
+	 * {@code remote-addr} to nothing; {@code script-name} is the application's mount
+	 * point as a RAW prefix of {@code target}, for a host that mounts the application
+	 * under a path -- absent means root-mounted; {@code call-id} is {@link #CALL_ID_KEY},
+	 * absent everywhere but a {@code --reentrant} streaming build.
 	 */
 	public static final List<String> REQUEST_KEYS = List.of("method", "target", "headers", "body", "scheme",
-			"remote-addr", CALL_ID_KEY);
+			"remote-addr", "script-name", CALL_ID_KEY);
 
 	/**
 	 * The response head's keys, in the order {@code %http-reactor-envelope} writes them.

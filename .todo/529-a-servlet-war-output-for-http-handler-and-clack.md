@@ -7,8 +7,14 @@ Children: `.todo/530` (the war output and the servlet transport) -- DONE
 classes on `WAR_RUNTIME_CLASS_FILES`, the `%http-server-start` seam registers
 and returns, `WarE2eTest` on Tomcat AND Jetty; `.kb/http-server.md`, "The
 fifth transport"). `.todo/531` (`:script-name` is fixed empty, so a war under
-a context path misroutes), `.todo/532` (Clack on the servlet transport),
-`.todo/533` (the Maven plugin builds a war): OPEN.
+a context path misroutes) -- DONE (2026-08-26: the raw tuple's eleventh
+member, the split in all three constructions -- raw prefix off BEFORE
+decoding, both halves decoded, non-prefix degrades -- the servlet's
+`getContextPath() + getServletPath()`, the reactor envelope's optional
+`"script-name"` key, ci-spec `http-clack-script-name` on all four backends,
+`WarE2eTest`'s context-path leg; `.kb/http-server.md`, "The environment
+contract"). `.todo/532` (Clack on the servlet transport), `.todo/533` (the
+Maven plugin builds a war): OPEN.
 
 Spike files: `.todo/529-a-servlet-war-output-for-http-handler-and-clack/`
 (`README.md` reproduces the run).

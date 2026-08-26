@@ -745,7 +745,9 @@ roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
   the pin (`RontoLispCliTest`, the reactor-component invoke case in
   `WasmLispCompilerIntegrationTest`).
 - **The envelope is an API now** — `{method, target, headers, body, scheme,
-  remote-addr}` in, `{status, headers, body}` out. Two parts of it are
+  remote-addr}` in (plus an optional `script-name`, the mount point as a RAW
+  prefix of `target`, for a host that mounts the application under a path —
+  absent means root-mounted), `{status, headers, body}` out. Two parts of it are
   load-bearing and were both found by measurement: `target` is the RAW request
   target (path and query still joined, still encoded — `%http-make-env` owns
   that split, and a pre-split path leaves `:query-string` nil), and the response

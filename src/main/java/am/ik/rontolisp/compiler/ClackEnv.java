@@ -50,7 +50,9 @@ import am.ik.rontolisp.runtime.RontoClackEnv;
  *
  * <p>
  * Value contracts, per key: {@code :request-method} an upcased keyword;
- * {@code :script-name} always {@code ""}; {@code :path-info} percent-decoded;
+ * {@code :script-name} the application's mount point, percent-decoded ({@code ""} on
+ * every root-mounted transport -- only the Servlet war under a context path mounts one);
+ * {@code :path-info} percent-decoded, with the raw mount prefix stripped BEFORE decoding;
  * {@code :query-string} the raw text after the first {@code ?} or nil; {@code :server-*}
  * from the {@code Host} header, falling back to the listening address;
  * {@code :server-protocol} a keyword; {@code :request-uri} the raw target verbatim;
@@ -66,7 +68,11 @@ public final class ClackEnv {
 	/** {@code :request-method} -- the upcased method keyword ({@code :GET}). */
 	public static final String REQUEST_METHOD = RontoClackEnv.REQUEST_METHOD;
 
-	/** {@code :script-name} -- always the empty string, never nil. */
+	/**
+	 * {@code :script-name} -- the application's mount point, percent-decoded; {@code ""}
+	 * on a root-mounted transport (every transport but the Servlet war under a context
+	 * path). Never nil.
+	 */
 	public static final String SCRIPT_NAME = RontoClackEnv.SCRIPT_NAME;
 
 	/** {@code :path-info} -- the percent-decoded path, no query. */

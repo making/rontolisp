@@ -32,8 +32,8 @@ always all present:
 | env key | value |
 |---------|-------|
 | `:request-method` | the method as an upcased interned keyword (`:GET`, `:POST`, ...), so `(eq m :POST)` works |
-| `:script-name` | always `""` |
-| `:path-info` | the percent-decoded request path |
+| `:script-name` | the application's mount point, percent-decoded — `""` everywhere but a [Servlet war](#compiled-to-a-servlet-war) deployed under a context path |
+| `:path-info` | the percent-decoded request path, with the mount point stripped first |
 | `:query-string` | the raw text after the first `?`, or `nil` when there is none |
 | `:server-name` / `:server-port` | from the `Host` header when present, otherwise the listener's |
 | `:server-protocol` | a keyword, e.g. `:HTTP/1.1` |
@@ -150,6 +150,12 @@ interface the JVM class output already implements) and registers a servlet at
 `/*`. The container owns the port, so a port written in the
 `rontolisp:http-handler` form is ignored with a one-line warning at compile
 time. `--maven-coordinates` and `--emit-pom` work as they do for a jar.
+
+The war also serves correctly under a **non-root context path** (deployed as
+`myapp.war` rather than `ROOT.war`): the container's mount point reaches the
+handler as `:script-name` and `:path-info` carries only the remainder, so a
+router matches the same routes wherever the war is mounted. This is the only
+transport where `:script-name` is not `""`.
 
 The servlet is **asynchronous by default**: each request releases the
 container's thread and runs the handler on its own virtual thread, the same

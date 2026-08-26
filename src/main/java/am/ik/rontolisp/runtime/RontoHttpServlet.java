@@ -183,9 +183,17 @@ public final class RontoHttpServlet extends HttpServlet {
 			target = target + "?" + req.getQueryString();
 		}
 		byte[] body = req.getInputStream().readAllBytes();
+		// The mount point: the context path plus the servlet path. getContextPath() is
+		// UNDECODED per the Servlet spec, which is what makes the sum a raw prefix of
+		// the target above and therefore strippable before percent-decoding (a decoded
+		// getPathInfo() would force a re-encode). The sum also generalizes past the /*
+		// registration: a servlet prefix-mapped at /api/* inside context /myapp mounts
+		// the application at /myapp/api -- exactly Rack's SCRIPT_NAME.
+		String scriptName = (req.getContextPath() == null ? "" : req.getContextPath())
+				+ (req.getServletPath() == null ? "" : req.getServletPath());
 		return new RontoHttpServer.Request(req.getMethod(), target, headers, body, req.getProtocol(), req.getScheme(),
 				req.getLocalName() == null ? "" : req.getLocalName(), req.getLocalPort(),
-				req.getRemoteAddr() == null ? "" : req.getRemoteAddr(), req.getRemotePort());
+				req.getRemoteAddr() == null ? "" : req.getRemoteAddr(), req.getRemotePort(), scriptName);
 	}
 
 }

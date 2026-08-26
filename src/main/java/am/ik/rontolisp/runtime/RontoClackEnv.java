@@ -25,7 +25,11 @@ public final class RontoClackEnv {
 	/** {@code :request-method} -- the upcased method keyword ({@code :GET}). */
 	public static final String REQUEST_METHOD = ":REQUEST-METHOD";
 
-	/** {@code :script-name} -- always the empty string, never nil. */
+	/**
+	 * {@code :script-name} -- the application's mount point, percent-decoded; {@code ""}
+	 * on a root-mounted transport (every transport but the Servlet war under a context
+	 * path). Never nil.
+	 */
 	public static final String SCRIPT_NAME = ":SCRIPT-NAME";
 
 	/** {@code :path-info} -- the percent-decoded path, no query. */
