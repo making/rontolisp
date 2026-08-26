@@ -494,7 +494,7 @@ Beside it,
 deploys
 [`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/httpbin-clack.lisp)
 *itself* — the file that binds a socket when you interpret it — and so contains
-no Lisp file at all: one source, four hosts.
+no Lisp file at all: one source, five hosts.
 
 If the module size matters more than the `clackup` line, this adapter is small
 enough to write out by hand and skip loading clack entirely.

@@ -498,7 +498,7 @@ UTF-8 としてデコードし、しかも検証しません)、*渡ること自
 [`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/httpbin-clack.lisp)
 *そのもの* — インタプリタで実行すればソケットを bind するあのファイル — を
 デプロイするので、ディレクトリには Lisp ファイルが 1 つもありません:
-1 つのソースで 4 つのホストです。
+1 つのソースで 5 つのホストです。
 
 `clackup` の 1 行よりモジュールサイズが重要なら、このアダプタは手書きできる程度
 の量なので、clack のロード自体を省けます。

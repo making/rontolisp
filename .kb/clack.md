@@ -170,7 +170,16 @@ and the choice is made at COMPILE time by the reader features — which is what
 lets ONE source (`examples/net/httpbin-clack.lisp`, clackup line included) run
 unchanged on the interpreter, the JVM, `wasmtime serve` AND a reactor host
 (verified on all four, workerd via `wrangler dev` for the reactor leg,
-2026-08-09). Since todo-335 the FETCH-capable shape rides the same rule:
+2026-08-09), and since todo-532 on a Servlet war as well — five transports, no
+edit (the war leg re-verified for both `net/hello-clack.lisp` and
+`net/httpbin-clack.lisp` on an embedded Tomcat, GET and a POST body, and their
+`:port` now reads the `PORT` environment variable, which only the two socket
+transports look at, 2026-08-26). `examples/net/hello-clack.lisp` is that rule at
+its smallest — four forms — and `examples/cloudflare-workers/hello-clack-one-source`
+deploys it the way `httpbin-clack-one-source` deploys the httpbin one. The
+manifest pins four of the five legs per file (`war-compile` and `wasm-reactor`
+are `ExamplesE2eTest` backend tokens; the interpreter blocks, so it is the leg
+a reader runs). Since todo-335 the FETCH-capable shape rides the same rule:
 `examples/cloudflare-workers/dog-fetcher/worker.lisp` is `:server :rontolisp`
 and runs on all four too — JDK client / wasi:http (its serve leg needs
 `wasmtime serve -S cli=y -S tcp=y -S inherit-network=y`, because clack's

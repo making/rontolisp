@@ -7,11 +7,18 @@
 ;; :server :rontolisp serves on the TARGET's native inbound transport, chosen at
 ;; compile time, so this ONE file is every host's program -- including, unedited,
 ;; the Worker examples/cloudflare-workers/httpbin-clack-one-source deploys.
-;; :port applies where the program owns the socket and is ignored where the host
-;; does. Preview 1 has no incoming TCP: the program compiles and clackup fails at
-;; run time.
+;; Preview 1 has no incoming TCP: the program compiles and clackup fails at run
+;; time.
 ;;
-;;   rontolisp examples/net/httpbin-clack.lisp   # first run downloads clack/lack
+;;   rontolisp examples/net/httpbin-clack.lisp                            # :8080
+;;   PORT=3000 rontolisp examples/net/httpbin-clack.lisp                  # :3000
+;;   rontolisp examples/net/httpbin-clack.lisp -o App.class && java -cp . App
+;;   rontolisp examples/net/httpbin-clack.lisp -o app.jar && java -jar app.jar
+;;   rontolisp examples/net/httpbin-clack.lisp -o app.war                 # Servlet 6 container
+;;   rontolisp examples/net/httpbin-clack.lisp -o app.wasm --component && \
+;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y app.wasm
+;;   rontolisp examples/net/httpbin-clack.lisp -o worker.wasm --no-wasi   # Cloudflare Worker
+;;
 ;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
 ;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post
 
@@ -91,4 +98,11 @@
              (list* :content-type "application/json" (second response))
              (cddr response)))))
 
-(clack:clackup (wrap-json #'app) :server :rontolisp :port 8080 :use-thread nil)
+;; Works on the interpreter and the JDK HTTP server only.
+(defun server-port ()
+  (let ((value (uiop:getenvp "PORT"))) (if value (parse-integer value) 8080)))
+
+(clack:clackup (wrap-json #'app)
+               :server :rontolisp
+               :port (server-port)
+               :use-thread nil)

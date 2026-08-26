@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Compile the Worker's module. There is no worker.lisp in this directory and
 # that is the point: the program is examples/net/httpbin-clack.lisp ITSELF --
-# the same file that serves on the interpreter, on the JVM and under
-# `wasmtime serve` -- compiled for a host that calls an export instead of
-# handing over a socket. :server :rontolisp picks this transport at compile
+# the same file that serves on the interpreter and the JVM, deploys as a Servlet
+# war and runs under `wasmtime serve` -- compiled for a host that calls an
+# export instead of handing over a socket. :server :rontolisp picks this transport at compile
 # time (--no-wasi reads the handler backend in reactor shape), and the
 # compiler synthesizes the `handle-request` export src/index.js calls.
 #

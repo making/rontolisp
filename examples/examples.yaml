@@ -754,7 +754,7 @@ examples:
       like the others here. :port is read from the PORT environment variable,
       which only the two socket transports look at.
   - path: net/httpbin-clack.lisp
-    backends: [jvm-compile, wasm-component, wasm-reactor]
+    backends: [jvm-compile, war-compile, wasm-component, wasm-reactor]
     note: >-
       plain Clack, and the ONE source for every host:
       cloudflare-workers/httpbin-clack-one-source compiles THIS file (not a
@@ -762,11 +762,15 @@ examples:
       shape under --no-wasi. What this pins is that the file the Worker ships is
       still a portable Clack application -- an application FUNCTION plus a
       middleware applied directly, which is also the spelling that keeps
-      clackup's pathname branch provably dead -- on the two backends where
-      clackup can actually bind (a blocking server, hence compile-only; Preview
-      1 has no incoming TCP). Its --no-wasi leg is the wasm-reactor token, the
-      shape the Worker's own build.sh then compiles --optimize=size with the
-      streaming boundary its echoed bodies need.
+      clackup's pathname branch provably dead -- on every transport
+      :server :rontolisp picks between: the two that bind a socket (a blocking
+      server, hence compile-only; Preview 1 has no incoming TCP), the Servlet
+      war a container deploys, and the reactor a host calls. Its --no-wasi leg
+      is the wasm-reactor token, the shape the Worker's own build.sh then
+      compiles --optimize=size with the streaming boundary its echoed bodies
+      need. Like net/hello-clack.lisp it takes :port from the PORT environment
+      variable -- the same file, five hosts, the endpoints being the only
+      difference.
   - path: net/httpbin-tiny-routes.lisp
     backends: [jvm-compile, wasm-component]
     note: >-

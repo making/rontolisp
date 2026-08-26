@@ -1,10 +1,11 @@
-# httpbin-clack-one-source — one Clack file, every host, this one included
+# httpbin-clack-one-source — one Clack file, five hosts, this one included
 
 There is **no `worker.lisp` in this directory**, and that is the point. The
 program is [`net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) *itself* —
-the file that serves these endpoints on the interpreter, on the JVM and under
-`wasmtime serve` — compiled here unchanged for a host that calls an export
-instead of handing over a socket.
+the file that serves these endpoints on the interpreter and the JVM, deploys
+into a Servlet container as a war, and runs under `wasmtime serve` — compiled
+here unchanged for a host that **calls an export** instead of handing over a
+socket.
 
 ```bash
 ./build.sh          # ../../net/httpbin-clack.lisp -> src/worker.wasm
@@ -17,36 +18,43 @@ $ curl 'http://localhost:8787/get?a=1&b=two'
 {"args":{"a":"1","b":"two"},"headers":{"host":"localhost:8787",...},"method":"GET","path":"/get"}
 ```
 
-## One source, four hosts
+## One source, five hosts
 
 `:server :rontolisp` means "serve on **this target's** native inbound
-transport", and the transport is chosen at *compile* time:
+transport", and the transport is chosen at *compile* time. Nothing in the
+program names a host:
 
-| Build | Transport | How it runs |
+| Build | Who owns the port | How it runs |
 | --- | --- | --- |
-| interpret / `-o App.class` | the program binds a socket | `rontolisp ../../net/httpbin-clack.lisp`, then `curl :8080` |
-| `-o app.wasm --component` | the host owns the socket (wasi:http) | `wasmtime serve ... app.wasm` |
-| `-o worker.wasm --no-wasi` | the host **calls** the module — a reactor | this directory: the generated `src/worker.js` calls `handle-request` |
-
-The `clackup` line does not change between the rows: `:port 8080` applies where
-the program owns the socket and is ignored where the host does, and
-`:use-thread nil` keeps the interpreter and the JVM serving in the foreground.
-Deploying to Cloudflare is not a port of the program; it is a compile flag.
-WASM Preview 1 is the one host where `clackup` cannot serve — it has no incoming
-TCP, so the program compiles and `clackup` fails at run time.
+| interpret | the program binds it | `PORT=3000 rontolisp ../../net/httpbin-clack.lisp` |
+| `-o App.class` / `-o app.jar` | the program binds it | `java -cp . App` / `java -jar app.jar`, `PORT` the same |
+| `-o app.war` | the Servlet container | `cp app.war $CATALINA_HOME/webapps/` |
+| `-o app.wasm --component` | the wasi:http host | `wasmtime serve ... app.wasm` |
+| `-o worker.wasm --no-wasi` | Cloudflare | this directory: the generated `src/worker.js` calls `handle-request` |
 
 ```bash
-rontolisp ../../net/httpbin-clack.lisp                                  # :8080
-rontolisp ../../net/httpbin-clack.lisp -o Serve.class && \
-  java -cp . Serve
+PORT=3000 rontolisp ../../net/httpbin-clack.lisp                          # :3000
+rontolisp ../../net/httpbin-clack.lisp -o App.class && java -cp . App     # :8080
+rontolisp ../../net/httpbin-clack.lisp -o app.war                         # any Servlet 6 container
 rontolisp ../../net/httpbin-clack.lisp -o serve.wasm --component && \
   wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y serve.wasm
-rontolisp ../../net/httpbin-clack.lisp -o src/worker.wasm --no-wasi --optimize=size
+./build.sh                                                                # this Worker
 ```
 
-[`examples.yaml`](../../examples.yaml) pins the first three (a blocking server,
-so the manifest builds it rather than running it); the fourth is this
-directory's `build.sh`.
+The `clackup` line does not change between the rows. `:port` — here
+`(uiop:getenvp "PORT")`, defaulting to 8080 — applies where the program owns
+the socket and is ignored on the three hosts that own it themselves; a Worker
+has no environment at all, so `getenvp` answers `nil` there and the default is
+the value nobody reads. `:use-thread nil` keeps the two socket transports
+serving in the foreground. Deploying to Cloudflare is not a port of the
+program; it is a compile flag.
+
+WASM Preview 1 is the one host where `clackup` cannot serve — it has no
+incoming TCP, so the program compiles and `clackup` fails at run time.
+
+[`examples.yaml`](../../examples.yaml) pins the JVM class, the war, the
+component and the reactor — all four built from the one file, which is where a
+per-target edit would have to hide.
 
 The most direct check that this is a Clack application is to serve it as one and
 point the same `curl`s at both: nothing is recompiled and nothing edited between
@@ -63,6 +71,9 @@ Only in the `:server` designator, and each answers a different question.
 | `:server` | `:reactor` — host-driven on *every* backend | `:rontolisp` — this *target*'s native transport |
 | Developed locally by | [`check.lisp`](../httpbin-clack/check.lisp) calling `dispatch` on every backend | serving it for real and `curl` |
 | Answers | "what does a Clack Worker look like?" | "how much does deploying one cost me in edits?" — none |
+
+[`../hello-clack-one-source`](../hello-clack-one-source) is the same claim at
+the smallest size there is: the same five hosts, four forms of Lisp.
 
 Everything else is shared and documented once, in `../httpbin-clack`: where the
 [`handle-request` export comes from](../httpbin-clack/README.md#where-the-export-comes-from),
