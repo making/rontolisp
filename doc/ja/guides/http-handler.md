@@ -177,6 +177,10 @@ war には後から独自の `web.xml`（フィルタ、セキュリティ制約
   クラスローダを持つので、1 つのコンテナに rontolisp の war を複数並べて
   デプロイできます。
 
+[Clack](clack.md) のアプリケーションも同じように war にコンパイルできます。
+出力が `.war` なら `clack:clackup ... :server :rontolisp` が Servlet
+トランスポートを選ぶので、ソースを変更する必要はありません。
+
 ## WASI HTTP コンポーネントにコンパイルする
 
 さらに **WASI HTTP コンポーネント** にもコンパイルでき、`wasmtime serve`

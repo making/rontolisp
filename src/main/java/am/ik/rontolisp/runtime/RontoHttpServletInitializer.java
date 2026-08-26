@@ -89,10 +89,34 @@ public final class RontoHttpServletInitializer implements ServletContainerInitia
 	}
 
 	/**
-	 * Fails the deployment when the top level ran and still left the handler slot empty
-	 * -- the shape of a class whose top level lives in {@code main} (a war built without
-	 * the {@code <clinit>} move). Without this every request would 500 with an
-	 * unattributable {@code NullPointerException} instead.
+	 * How long a handler registration still in flight on a thread the top level spawned
+	 * is given to land. Six orders of magnitude above what it takes in practice: the
+	 * thread is already runnable when this is reached, and only a war that never
+	 * registers ever spends the whole budget -- a failed deployment, where the wait costs
+	 * nothing.
+	 */
+	private static final long REGISTRATION_WAIT_NANOS = 5_000_000_000L;
+
+	/**
+	 * Fails the deployment when the top level ran and still left the handler slot empty.
+	 * Without this every request would 500 with an unattributable
+	 * {@code NullPointerException} instead.
+	 *
+	 * <p>
+	 * The wait is what makes {@code clack:clackup} work at its DEFAULT
+	 * {@code :use-thread t}: that asks {@code clack.handler:run} to call the handler
+	 * backend's {@code run} on a spawned thread, and the JVM holds that thread at the
+	 * class-initialization lock until {@code <clinit>} returns -- so the registration
+	 * provably cannot land before this point, and observing an empty slot the instant
+	 * initialization finishes means nothing yet. Without the wait the deployment succeeds
+	 * or fails by coin flip (measured: 3 of 10). The slot is a VOLATILE field
+	 * ({@code JvmLispCompiler}), which is what makes the value this loop reads a
+	 * published one rather than a lucky one.
+	 *
+	 * <p>
+	 * What is left after the budget is the shape this check was written for: a class
+	 * whose top level lives in {@code main} (a war built without the {@code <clinit>}
+	 * move), which never registers at all.
 	 */
 	private static void requireRegisteredHandler(Class<?> program) throws ServletException {
 		final Field slot;
@@ -105,11 +129,20 @@ public final class RontoHttpServletInitializer implements ServletContainerInitia
 		}
 		try {
 			slot.setAccessible(true);
-			if (slot.get(null) == null) {
-				throw new ServletException("the rontolisp program " + program.getName() + " initialized without"
-						+ " registering its handler: its top level did not run at class initialization"
-						+ " (was this war compiled by rontolisp's -o app.war?)");
+			long deadline = System.nanoTime() + REGISTRATION_WAIT_NANOS;
+			while (slot.get(null) == null) {
+				if (System.nanoTime() - deadline >= 0) {
+					throw new ServletException("the rontolisp program " + program.getName() + " initialized without"
+							+ " registering its handler: its top level did not run at class initialization"
+							+ " (was this war compiled by rontolisp's -o app.war?)");
+				}
+				Thread.sleep(1);
 			}
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new ServletException(
+					"interrupted while waiting for the rontolisp program " + program.getName() + " to register", ex);
 		}
 		catch (ReflectiveOperationException | SecurityException ex) {
 			// The slot cannot be read here; a broken program then fails per request

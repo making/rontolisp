@@ -2,12 +2,14 @@
 
 The `.todo/223` milestone: Eitaro Fukamachi's Clack loads VERBATIM from the
 Quicklisp dist (clack-20250622-git + lack-20260101-git) and a Clack application
-runs through `clack:clackup :server :rontolisp` on the interpreter, the JVM and
-the WASM `--component` backend. Preview 1 has no incoming TCP by design
+runs through `clack:clackup :server :rontolisp` on the interpreter, the JVM,
+the WASM `--component` backend and — since todo-532 — a Servlet war deployed in
+any Servlet 6 container. Preview 1 has no incoming TCP by design
 (`.kb/tcp-sockets.md`): the program COMPILES and `clackup` signals the standard
 `http-handler` message at CALL time (see the policy note below). Pinned by
 `ClackE2eTest` (opt-in `RONTOLISP_CLACK_E2E=1`: Docker for the pinned wasmtime,
-network for the first quickload) — which runs its three legs twice: once over a
+an embedded Tomcat off the test classpath for the war,
+network for the first quickload) — which runs its legs twice: once over a
 bare handler lambda, and once over a real ROUTING application (tiny-routes plus
 its cookie middleware, both quickloaded unpatched; `.kb/asdf.md`), because "one
 handler function" is not what an application looks like and the routes are read
@@ -15,10 +17,10 @@ inside the application's own package.
 
 ## Two routing layers are verified, and they are a different test
 
-**tiny-routes** (`ClackE2eTest`'s second trio) and **ningle** v0.3.0 +
-myway + map-set (`NingleE2eTest`, opt-in `RONTOLISP_NINGLE_E2E=1`, same three
-legs) both load unpatched and both serve on the interpreter, the JVM and the
-`--component` build. Keeping the second one is not redundancy — it exercises
+**tiny-routes** (`ClackE2eTest`'s second group) and **ningle** v0.3.0 +
+myway + map-set (`NingleE2eTest`, opt-in `RONTOLISP_NINGLE_E2E=1`, the same
+legs) both load unpatched and both serve on the interpreter, the JVM, the
+`--component` build and a Servlet war. Keeping the second one is not redundancy — it exercises
 machinery the first has no counterpart for, and each of these is what broke
 while it was being made to work:
 
@@ -188,6 +190,33 @@ socket leg keeps wasi:sockets in the import surface) / `env.fetch` under
   `handle-request` export. `:port`/`:address` are ignored, run returns at
   once. Pinned by `RontoLispCliTest.clackRontolispBackendUnderNoWasi*` and its
   without-`--no-wasi` twin.
+- `#+rontolisp-servlet` (`-o app.war`; `Features.JVM_SERVLET`,
+  `.kb/http-server.md`, "The fifth transport"): the container owns the port
+  and the war's top level has to RETURN, so run hands the app to the SAME
+  `rontolisp::%http-server-start` seam the socket leg calls — in war mode that
+  seam registers the handler and answers a dead handle — and returns. No bind,
+  no join, and `stop` answers nil: undeploying the war is what stops it.
+  `:script-name` makes a war under a context path route
+  (todo-531), so a mounted ningle/tiny-routes/lack application works there and
+  nowhere else. Pinned by
+  `RontoLispCliTest.clackRontolispBackendOnAWarRegistersWithoutBindingOrJoining`
+  (the compiled program contains no `startServer` and no `joinServer`) and by
+  the war legs of `ClackE2eTest` (both application shapes) and `NingleE2eTest`
+  (the lack-request body read), each deploying a CLI-built war into an embedded
+  Tomcat.
+
+  **`:use-thread` is the one keyword this leg does not merely ignore.** It has
+  nothing to run on a thread, so both values register and return — but
+  clackup's DEFAULT `t` asks `clack.handler:run` to call the shim's `run` on a
+  spawned thread, and the JVM holds that thread at the class-initialization
+  lock until the war's `<clinit>` returns. The registration therefore lands
+  just AFTER the container looked for it, and the deployment succeeded or
+  failed by coin flip (measured: 3 of 10) until
+  `RontoHttpServletInitializer` was given a bounded wait for it and the handler
+  slot was made VOLATILE (`JvmLispCompiler`) so the value that wait reads is a
+  published one rather than a lucky one. That is why the war legs of
+  `ClackE2eTest`/`NingleE2eTest` deliberately leave `:use-thread` at its
+  default: with it pinned to nil they would pass without any of that.
 
 WHY a reader feature and not a front-end rewrite: the shim is the ONE place
 that already branches per target (`#+rontolisp-wasm`), builtin-shim sources are

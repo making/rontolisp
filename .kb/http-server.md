@@ -107,7 +107,19 @@ else) selected when `-o` ends in `.war`, and `JvmLispCompiler.servlet`:
   compile time — the container owns the port); the `%http-server-start` seam
   REGISTERS AND RETURNS rather than refusing (handle 0, `join` returns at
   once, `stop` a no-op, `port` answers 0) — the register spelling is what
-  makes the Clack servlet leg a feature-gated spelling of the same call;
+  makes the Clack servlet leg (`#+rontolisp-servlet`, todo-532,
+  `.kb/clack.md`) a feature-gated spelling of the same call;
+- the handler slot is a VOLATILE field, and the initializer WAITS a bounded
+  5 s for it rather than failing on the instant it finds it empty. On the
+  socket transports `Thread.start()` published the slot (the server thread
+  starts after the write) and the top level filled it before returning; a war
+  has neither guarantee — the container's request threads exist already, and a
+  `clack:clackup` left at its default `:use-thread t` writes the slot from a
+  thread of its own, which the JVM holds at the class-initialization lock
+  until `<clinit>` returns, so the registration lands just AFTER this check
+  looked for it. Without the wait that deployment succeeded 3 times in 10;
+  with it the check still fails exactly the war it was written for (a top
+  level left in `main`, which never registers at all);
 - a program with no handler is refused at compile time in `JvmLispCompiler`
   (nothing for the container to call);
 - the servlet is ASYNC by default and that is the concurrency invariant, not a
@@ -127,6 +139,10 @@ not a spec guarantee), the octet-body row on RAW bytes, the distinct-thread
 concurrency pin, and both deployment-failure shapes. Structure:
 `RontoLispCliTest`'s war tests and
 `JvmHttpHandlerTravellingRuntimeTest.aWarCarriesTheServletTransportWhoseOnlyOutsideReferenceIsTheServletApi`.
+The CLACK applications that ride the transport are pinned separately, by the
+war legs of `ClackE2eTest` (a bare handler lambda and a tiny-routes routing
+application) and `NingleE2eTest` (the lack-request body read) — the three
+suites share `EmbeddedServletContainer` and all deploy the war UNMODIFIED.
 An embedded Jetty needs `AnnotationConfiguration` added before it runs
 initializers at all; a standalone Jetty enables its `annotations` module for a
 deployed webapp on its own. Tomcat needs nothing.

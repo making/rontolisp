@@ -177,6 +177,10 @@ Two failure shapes worth knowing:
 - The handler slot is per webapp, not per process: each webapp has its own
   class loader, so two rontolisp wars deploy side by side in one container.
 
+A [Clack](clack.md) application compiles to a war the same way — `clack:clackup
+... :server :rontolisp` picks the servlet transport when the output is a
+`.war`, with no change to the source.
+
 ## Compiled to a WASI HTTP component
 
 It also compiles to a **WASI HTTP component** that runs under

@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.testsupport.WasmtimeSupport;
+import org.apache.catalina.startup.Tomcat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
@@ -31,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the {@code clack-handler-rontolisp} backend.
  *
  * <p>
- * Three live legs assert the same HTTP round trip:
+ * Four live legs assert the same HTTP round trip:
  *
  * <ol>
  * <li><b>interpreter</b> and <b>JVM class</b> -- the SAME self-driving program:
@@ -44,7 +45,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li><b>WASM component</b> -- the same clackup program compiled with {@code --component}
  * and served by {@code wasmtime serve} (the host owns the socket: {@code HttpLibrary}
  * extracts the shim's NESTED {@code rontolisp:http-handler} call for the export wiring),
- * answered over HTTP from this test.</li>
+ * answered over HTTP from this test;</li>
+ * <li><b>Servlet war</b> -- the SAME serve-shaped source compiled with {@code -o
+ * clack.war} and deployed unmodified into an embedded Tomcat (the shim's
+ * {@code #+rontolisp-servlet} leg: the container owns the port, so {@code run} registers
+ * the application and returns), answered over HTTP from this test. It runs with
+ * {@code clackup}'s {@code :use-thread} at its DEFAULT, which on a war means the
+ * registration lands on a thread the JVM held at the class-initialization lock -- the
+ * thing {@code RontoHttpServletInitializer} waits for, and a coin flip without it.</li>
  * </ol>
  *
  * WASM Preview 1 is the fourth backend and has no incoming TCP by design
@@ -55,21 +63,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code handler-case}.
  *
  * <p>
- * The same three legs run once more over a REAL application with routes: tiny-routes
- * v0.1.1 plus its cookie middleware, both quickloaded UNPATCHED, composed with
- * {@code pipe} and served through the same {@code clackup}. That pair is the answer to
- * "what do I write after {@code clackup}", and it covers what the transport-free
- * {@link TinyRoutesE2eTest} cannot: the live {@code ql:quickload} of the upstream dist
- * (rather than the vendored copy), the cookie system's own dependency graph (cl-cookie /
- * quri / local-time / proc-parse) and the Clack request environment reaching the
- * middleware chain as it really arrives -- {@code :raw-body} stream, {@code :headers}
- * table and all. The routes are read inside the application's OWN package, which is what
- * a compiled serve component needs {@code HttpLibrary}'s synthesized bridge to survive.
+ * The same legs run once more over a REAL application with routes: tiny-routes v0.1.1
+ * plus its cookie middleware, both quickloaded UNPATCHED, composed with {@code pipe} and
+ * served through the same {@code clackup}. That pair is the answer to "what do I write
+ * after {@code clackup}", and it covers what the transport-free {@link TinyRoutesE2eTest}
+ * cannot: the live {@code ql:quickload} of the upstream dist (rather than the vendored
+ * copy), the cookie system's own dependency graph (cl-cookie / quri / local-time /
+ * proc-parse) and the Clack request environment reaching the middleware chain as it
+ * really arrives -- {@code :raw-body} stream, {@code :headers} table and all. The routes
+ * are read inside the application's OWN package, which is what a compiled serve component
+ * needs {@code HttpLibrary}'s synthesized bridge to survive.
  *
  * <p>
- * Opt-in ({@code RONTOLISP_CLACK_E2E=1}): it needs Docker (the pinned wasmtime image)
- * and, on the first run, network access ({@code ql:quickload} downloads clack, lack and
- * their dependencies into {@code ~/.rontolisp/quicklisp}).
+ * Opt-in ({@code RONTOLISP_CLACK_E2E=1}): it needs Docker (the pinned wasmtime image; the
+ * war legs need only the embedded Tomcat on the test classpath) and, on the first run,
+ * network access ({@code ql:quickload} downloads clack, lack and their dependencies into
+ * {@code ~/.rontolisp/quicklisp}).
  *
  * <pre>{@code
  * RONTOLISP_CLACK_E2E=1 ./mvnw -Dtest=ClackE2eTest -DfailIfNoTests=false test
@@ -140,8 +149,12 @@ class ClackE2eTest {
 				""".formatted(port, port, port, port);
 	}
 
-	/** The serve-shaped program the component leg compiles (the host owns the socket). */
-	private static final String COMPONENT_EXERCISE = """
+	/**
+	 * The serve-shaped program the component AND war legs compile -- ONE source, because
+	 * that is the claim: the transport is chosen by the reader features, not by the
+	 * clackup call. Nothing here says wasm or servlet.
+	 */
+	private static final String SERVE_EXERCISE = """
 			(ql:quickload "clack")
 			(clack:clackup
 			 (lambda (env)
@@ -241,8 +254,8 @@ class ClackE2eTest {
 				""".formatted(port, port, port, port, port, port, port);
 	}
 
-	/** The serve-shaped tiny-routes program the component leg compiles. */
-	private static final String TINY_ROUTES_COMPONENT_EXERCISE = TINY_ROUTES_APP + """
+	/** The serve-shaped tiny-routes program the component and war legs compile. */
+	private static final String TINY_ROUTES_SERVE_EXERCISE = TINY_ROUTES_APP + """
 			(clack:clackup *routes* :server :rontolisp :port 8080)
 			""";
 
@@ -264,7 +277,7 @@ class ClackE2eTest {
 
 	@Test
 	void clackupServesOnWasmComponentUnderWasmtimeServe(@TempDir Path workDir) throws Exception {
-		Path program = writeProgram(workDir, COMPONENT_EXERCISE);
+		Path program = writeProgram(workDir, SERVE_EXERCISE);
 		runCli(workDir, program.getFileName().toString(), "-o", "clack.wasm", "--component");
 		byte[] component = Files.readAllBytes(workDir.resolve("clack.wasm"));
 		// -S cli/tcp/inherit-network: the spliced usocket shim (a clack dependency)
@@ -288,6 +301,11 @@ class ClackE2eTest {
 	}
 
 	@Test
+	void clackupServesFromAWarOnTomcat(@TempDir Path workDir) throws Exception {
+		assertThat(serveWar(workDir, SERVE_EXERCISE, "clack.war", "/echo?a=1")).isEqualTo("clack GET /echo q=a=1");
+	}
+
+	@Test
 	void tinyRoutesRoundTripOnTheInterpreter(@TempDir Path workDir) throws Exception {
 		Path program = writeProgram(workDir, tinyRoutesExercise(freePort()));
 		assertThat(runCli(workDir, program.getFileName().toString()))
@@ -305,7 +323,7 @@ class ClackE2eTest {
 
 	@Test
 	void tinyRoutesServesOnWasmComponentUnderWasmtimeServe(@TempDir Path workDir) throws Exception {
-		Path program = writeProgram(workDir, TINY_ROUTES_COMPONENT_EXERCISE);
+		Path program = writeProgram(workDir, TINY_ROUTES_SERVE_EXERCISE);
 		runCli(workDir, program.getFileName().toString(), "-o", "tiny-routes.wasm", "--component");
 		byte[] component = Files.readAllBytes(workDir.resolve("tiny-routes.wasm"));
 		try (GenericContainer<?> serve = new GenericContainer<>(WasmtimeSupport.IMAGE)
@@ -338,6 +356,67 @@ class ClackE2eTest {
 			HttpResponse<String> missing = client.send(HttpRequest.newBuilder(URI.create(base + "/zzz")).GET().build(),
 					HttpResponse.BodyHandlers.ofString());
 			assertThat(missing.statusCode()).isEqualTo(404);
+		}
+	}
+
+	@Test
+	void tinyRoutesServesFromAWarOnTomcat(@TempDir Path workDir) throws Exception {
+		// The routing half: a bare handler lambda never reads a path template, a method
+		// matcher or a request BODY, and an application does all three.
+		Path war = compileWar(workDir, TINY_ROUTES_SERVE_EXERCISE, "tiny-routes.war");
+		Tomcat tomcat = EmbeddedServletContainer.tomcat(workDir.resolve("tomcat"), war, "", 0);
+		try {
+			String base = "http://127.0.0.1:" + tomcat.getConnector().getLocalPort();
+			HttpClient client = HttpClient.newHttpClient();
+			HttpResponse<String> hello = client.send(HttpRequest.newBuilder(URI.create(base + "/hello")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(hello.statusCode()).isEqualTo(200);
+			assertThat(hello.body()).isEqualTo("hello world");
+			assertThat(hello.headers().firstValue("set-cookie")).contains("sid=42; Path=/");
+			HttpResponse<String> user = client.send(HttpRequest.newBuilder(URI.create(base + "/users/42")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(user.body()).isEqualTo("user 42");
+			// The buffered :raw-body through the servlet transport, read by a middleware.
+			HttpResponse<String> echo = client.send(HttpRequest.newBuilder(URI.create(base + "/echo"))
+				.POST(HttpRequest.BodyPublishers.ofString("abc"))
+				.build(), HttpResponse.BodyHandlers.ofString());
+			assertThat(echo.body()).isEqualTo("echo:abc");
+			HttpResponse<String> cookies = client.send(
+					HttpRequest.newBuilder(URI.create(base + "/cookies")).header("cookie", "a=1; b=2").build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(cookies.body()).isEqualTo("a=1,b=2");
+			HttpResponse<String> missing = client.send(HttpRequest.newBuilder(URI.create(base + "/zzz")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(missing.statusCode()).isEqualTo(404);
+		}
+		finally {
+			tomcat.stop();
+			tomcat.destroy();
+		}
+	}
+
+	/** Compiles a clackup source to a war with the CLI, exactly as a user would. */
+	private static Path compileWar(Path workDir, String source, String warName) throws Exception {
+		Path program = writeProgram(workDir, source);
+		runCli(workDir, program.getFileName().toString(), "-o", warName);
+		return workDir.resolve(warName);
+	}
+
+	/** Deploys the war at the root context and answers one GET's body. */
+	private static String serveWar(Path workDir, String source, String warName, String pathAndQuery) throws Exception {
+		Path war = compileWar(workDir, source, warName);
+		Tomcat tomcat = EmbeddedServletContainer.tomcat(workDir.resolve("tomcat"), war, "", 0);
+		try {
+			HttpResponse<String> response = HttpClient.newHttpClient()
+				.send(HttpRequest
+					.newBuilder(URI.create("http://127.0.0.1:" + tomcat.getConnector().getLocalPort() + pathAndQuery))
+					.build(), HttpResponse.BodyHandlers.ofString());
+			assertThat(response.statusCode()).isEqualTo(200);
+			return response.body();
+		}
+		finally {
+			tomcat.stop();
+			tomcat.destroy();
 		}
 	}
 

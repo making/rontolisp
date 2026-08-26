@@ -1,7 +1,6 @@
 package am.ik.rontolisp.e2e;
 
 import java.io.ByteArrayInputStream;
-import java.io.File;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.net.URI;
@@ -316,19 +315,8 @@ class WarE2eTest {
 	}
 
 	private Tomcat tomcat(Path war, int maxThreads, String contextPath) throws Exception {
-		Path base = Files.createDirectories(this.tempDir.resolve("tomcat-" + war.getFileName()));
-		Files.createDirectories(base.resolve("webapps"));
-		Tomcat tomcat = new Tomcat();
-		tomcat.setBaseDir(base.toAbsolutePath().toString());
-		tomcat.setPort(0);
-		tomcat.getConnector();
-		if (maxThreads > 0) {
-			tomcat.getConnector().setProperty("maxThreads", String.valueOf(maxThreads));
-			tomcat.getConnector().setProperty("minSpareThreads", String.valueOf(maxThreads));
-		}
-		tomcat.addWebapp(contextPath, new File(war.toString()).getAbsolutePath());
-		tomcat.start();
-		return tomcat;
+		return EmbeddedServletContainer.tomcat(this.tempDir.resolve("tomcat-" + war.getFileName()), war, contextPath,
+				maxThreads);
 	}
 
 	private static byte[] classpathResource(String path) throws Exception {

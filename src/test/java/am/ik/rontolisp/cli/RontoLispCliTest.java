@@ -378,6 +378,30 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void clackRontolispBackendOnAWarRegistersWithoutBindingOrJoining() throws Exception {
+		// The one-clackup-source contract's war leg (.kb/clack.md), the twin of
+		// clackRontolispBackendUnderNoWasiSynthesizesTheReactorExport above: read with
+		// #+rontolisp-servlet, the clack-handler-rontolisp shim's run hands the app to
+		// the %http-server-start seam and RETURNS -- the container owns the port and the
+		// top level has to finish. What the compiled program must NOT contain is the
+		// socket leg: no startServer, and no joinServer to block <clinit> forever.
+		// quickloading the shim directly (a BUILT-IN system, no network) and calling its
+		// run is the clackup shape minus the clack dist.
+		Path file = this.tempDir.resolve("app.lisp");
+		Files.writeString(file, """
+				(ql:quickload "clack-handler-rontolisp")
+				(defun app (env) (list 200 (list :content-type "text/plain") (list "ok")))
+				(clack.handler.rontolisp:run #'app :port 8080)
+				""");
+		Path war = this.tempDir.resolve("app.war");
+		runCli("", file.toString(), "-o", war.toString());
+		String program = new String(entries(war).get("WEB-INF/classes/App.class"), StandardCharsets.ISO_8859_1);
+		assertThat(program).doesNotContain("startServer").doesNotContain("joinServer").doesNotContain("stopServer");
+		// And it still IS a served program: the slot the servlet dispatches through.
+		assertThat(program).contains("_httpHandlerFn");
+	}
+
+	@Test
 	void aWrittenHttpHandlerPortWarnsOnceOnAWarBecauseTheContainerOwnsThePort() throws Exception {
 		Path program = this.tempDir.resolve("app.lisp");
 		Files.writeString(program, """

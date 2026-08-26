@@ -202,6 +202,20 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
 - **WASM Preview 1** は設計上着信 TCP を持ちません: プログラムはコンパイル
   でき、`clackup` は実行時に `HTTP-HANDLER requires --component ...` を送出
   します (`handler-case` で捕捉可能)。
+- **Servlet war** (`-o app.war`) — ポートはコンテナが所有します: 同じ
+  プログラムが war にコンパイルされ、Tomcat、Jetty、WildFly をはじめとする
+  Servlet 6 コンテナにそのままデプロイできます。`web.xml` も設定も不要です。
+  `run` はアプリケーションを登録して戻り、`:port` と `:address` は無視され、
+  `clack:stop` は意味を持ちません — war をアンデプロイすることが停止手段です。
+  ルート以外にマウントできる唯一のバックエンドでもあります: 例えば `/myapp`
+  というコンテキストパスの下では `:script-name` が `/myapp`、`:path-info` が
+  残りの部分になるので、マウントされた ningle / tiny-routes / lack
+  アプリケーションも他と同じようにルーティングされます。
+
+  ```console
+  $ rontolisp app.lisp -o app.war
+  $ cp app.war $CATALINA_HOME/webapps/
+  ```
 
 ## ホストから呼ばれる場合: リアクタビルド
 

@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.testsupport.WasmtimeSupport;
+import org.apache.catalina.startup.Tomcat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
@@ -38,17 +39,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  * when the route is defined -- so a route can be selected by something other than the
  * path. It also reads every request through {@code lack-request}, which tiny-routes never
  * touches: the whole http-body / fast-http / smart-buffer / circular-streams chain is
- * inside these three legs.
+ * inside these legs.
  *
  * <p>
- * Three live legs assert the same HTTP round trip over one application:
+ * Four live legs assert the same HTTP round trip over one application:
  *
  * <ol>
  * <li><b>interpreter</b> and <b>JVM class</b> -- the SAME self-driving program: clackup
  * with every default in force, eleven probes fetched against itself
  * ({@code rontolisp:fetch}), then {@code clack:stop} and the proof the port closed;</li>
  * <li><b>WASM component</b> -- the same routes compiled with {@code --component} and
- * served by {@code wasmtime serve}, answered over HTTP from this test.</li>
+ * served by {@code wasmtime serve}, answered over HTTP from this test;</li>
+ * <li><b>Servlet war</b> -- the same routes compiled with {@code -o ningle.war} and
+ * deployed unmodified into an embedded Tomcat. This is the leg {@link ClackE2eTest}'s war
+ * pair cannot stand in for: ningle reads every request through {@code lack-request}, so
+ * the http-body / fast-http / smart-buffer / circular-streams chain runs over the SERVLET
+ * transport's buffered {@code :raw-body} here.</li>
  * </ol>
  *
  * WASM Preview 1 is the fourth backend and has no incoming TCP by design, so it cannot
@@ -206,8 +212,11 @@ class NingleE2eTest {
 				""".formatted(port, port, port, port, port, port, port, port, port, port, port, port, port);
 	}
 
-	/** The serve-shaped program the component leg compiles (the host owns the socket). */
-	private static final String NINGLE_COMPONENT_EXERCISE = NINGLE_APP + """
+	/**
+	 * The serve-shaped program the component AND war legs compile -- ONE source: the
+	 * transport is chosen by the reader features, not by the clackup call.
+	 */
+	private static final String NINGLE_SERVE_EXERCISE = NINGLE_APP + """
 			(clack:clackup *app* :server :rontolisp :port 8080)
 			""";
 
@@ -228,7 +237,7 @@ class NingleE2eTest {
 
 	@Test
 	void ningleServesOnWasmComponentUnderWasmtimeServe(@TempDir Path workDir) throws Exception {
-		Path program = writeProgram(workDir, NINGLE_COMPONENT_EXERCISE);
+		Path program = writeProgram(workDir, NINGLE_SERVE_EXERCISE);
 		runCli(workDir, program.getFileName().toString(), "-o", "ningle.wasm", "--component");
 		byte[] component = Files.readAllBytes(workDir.resolve("ningle.wasm"));
 		// -S cli/tcp/inherit-network: the spliced usocket shim (a clack dependency)
@@ -285,6 +294,51 @@ class NingleE2eTest {
 					HttpResponse.BodyHandlers.ofString());
 			assertThat(missing.statusCode()).isEqualTo(404);
 			assertThat(missing.body()).isEmpty();
+		}
+	}
+
+	@Test
+	void ningleServesFromAWarOnTomcat(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, NINGLE_SERVE_EXERCISE);
+		runCli(workDir, program.getFileName().toString(), "-o", "ningle.war");
+		Tomcat tomcat = EmbeddedServletContainer.tomcat(workDir.resolve("tomcat"), workDir.resolve("ningle.war"), "",
+				0);
+		try {
+			String base = "http://127.0.0.1:" + tomcat.getConnector().getLocalPort();
+			HttpClient client = HttpClient.newHttpClient();
+			HttpResponse<String> welcome = client.send(HttpRequest.newBuilder(URI.create(base + "/")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(welcome.statusCode()).isEqualTo(200);
+			assertThat(welcome.body()).isEqualTo("Welcome to ningle!");
+			HttpResponse<String> hello = client.send(HttpRequest.newBuilder(URI.create(base + "/hello/Eitaro")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(hello.body()).isEqualTo("Hello, Eitaro");
+			HttpResponse<String> query = client.send(
+					HttpRequest.newBuilder(URI.create(base + "/search?q=lisp")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(query.body()).isEqualTo("q=lisp");
+			// The lack-request read of a POST body, over the servlet transport.
+			HttpResponse<String> posted = client.send(HttpRequest.newBuilder(URI.create(base + "/submit"))
+				.header("content-type", "application/x-www-form-urlencoded")
+				.POST(HttpRequest.BodyPublishers.ofString("q=body"))
+				.build(), HttpResponse.BodyHandlers.ofString());
+			assertThat(posted.body()).isEqualTo("posted body");
+			// A requirement closure told apart by a HEADER, off the servlet's table.
+			HttpResponse<String> flagged = client.send(
+					HttpRequest.newBuilder(URI.create(base + "/flag")).header("x-flag", "on").build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(flagged.body()).isEqualTo("flagged=on");
+			HttpResponse<String> teapot = client.send(HttpRequest.newBuilder(URI.create(base + "/teapot")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(teapot.statusCode()).isEqualTo(418);
+			HttpResponse<String> missing = client.send(HttpRequest.newBuilder(URI.create(base + "/nope")).build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(missing.statusCode()).isEqualTo(404);
+			assertThat(missing.body()).isEmpty();
+		}
+		finally {
+			tomcat.stop();
+			tomcat.destroy();
 		}
 	}
 

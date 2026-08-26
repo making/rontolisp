@@ -34,6 +34,11 @@
 ;;   answers with the synthesized handle-request wasm-export -- the same
 ;;   store, dispatcher and JSON envelope the explicit clack-handler-reactor
 ;;   backend uses, so the two cannot drift.
+;; - Servlet war (#+rontolisp-servlet: -o app.war): the container owns the
+;;   port and the top level must RETURN, so run hands the app to the same
+;;   rontolisp::%http-server-start seam the socket leg uses -- in war mode that
+;;   seam registers the handler and answers at once -- and there is nothing to
+;;   join and nothing to stop (undeploying the war is what stops it).
 ;;
 ;; There is NO bridge here for the socket legs, and that is the point: since
 ;; the rontolisp:http-handler cutover, rontolisp's own server protocol IS
@@ -73,7 +78,7 @@
 (defun clack.handler.rontolisp::%app (env)
   (funcall clack.handler.rontolisp::*app* env))
 
-#-rontolisp-wasm
+#-(or rontolisp-wasm rontolisp-servlet)
 (defun clack.handler.rontolisp:run
     (app &key (port 5000) (address "127.0.0.1") debug &allow-other-keys)
   (declare (ignore debug))
@@ -85,10 +90,38 @@
                       server)
       (rontolisp::%http-server-stop server))))
 
-#-rontolisp-wasm
+#-(or rontolisp-wasm rontolisp-servlet)
 (defun clack.handler.rontolisp:stop (server)
   (rontolisp::%http-server-stop server)
   t)
+
+;; The servlet leg: the container owns the port, so run has nothing to bind and
+;; nothing to block on. It registers the application in the single handler slot
+;; -- the same %http-server-start seam the socket leg calls, which in war mode
+;; registers and answers a dead handle -- and returns, which is what lets the
+;; war's top level finish.
+;;
+;; :use-thread is neither honoured nor refused: there is no acceptor to keep
+;; alive, so both values register and return. It is not free of consequence
+;; though, and the consequence is not this file's to fix -- clackup's default t
+;; runs this function on a SPAWNED thread, which the JVM holds at the
+;; class-initialization lock until the war's <clinit> returns, so the
+;; registration lands just after the container looked for it.
+;; RontoHttpServletInitializer waits for exactly that, and the handler slot is
+;; volatile so the value it sees is a published one.
+#+rontolisp-servlet
+(defun clack.handler.rontolisp:run
+    (app &key (port 5000) (address "127.0.0.1") debug &allow-other-keys)
+  (declare (ignore port address debug))
+  (setf clack.handler.rontolisp::*app* app)
+  (rontolisp::%http-server-start app 0 nil :raw-body :buffered))
+
+;; Undeploying the war is what stops it; there is no server of this process's
+;; to hand back.
+#+rontolisp-servlet
+(defun clack.handler.rontolisp:stop (server)
+  (declare (ignore server))
+  nil)
 
 #+(and rontolisp-wasm (not rontolisp-reactor))
 (defun clack.handler.rontolisp:run

@@ -2651,7 +2651,15 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(0));
 				}
 				if (httpHandlerRuntime != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+					// VOLATILE: the handler slot is written once by the thread that runs
+					// the top level and read by every request thread afterwards. On the
+					// socket transports the server thread is started AFTER the write, so
+					// Thread.start() published it; a SERVLET war has no such edge -- the
+					// container's request threads exist already, and a clack:clackup left
+					// at :use-thread t writes the slot from a thread of its own -- so the
+					// field carries the publication itself. One volatile read per request
+					// is not measurable against an HTTP round trip.
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
 						.writeU2(httpHandlerRuntime.handlerFieldName())
 						.writeU2(httpHandlerRuntime.handlerFieldDesc())
 						.writeU2(0));

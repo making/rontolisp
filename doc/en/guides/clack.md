@@ -199,6 +199,20 @@ on this target's native inbound transport", chosen at compile time:
 - **WASM Preview 1** has no incoming TCP by design: the program compiles, and
   `clackup` signals `HTTP-HANDLER requires --component ...` at run time
   (catchable with `handler-case`).
+- **Servlet war** (`-o app.war`) — the container owns the port: the same
+  program compiles to a war that deploys unmodified on Tomcat, Jetty, WildFly
+  or any other Servlet 6 container, with no `web.xml` and nothing to configure.
+  `run` registers the application and returns, `:port` and `:address` are
+  ignored, and `clack:stop` is meaningless — undeploying the war is what stops
+  it. This is the one backend that can be mounted somewhere other than the
+  root: under a context path such as `/myapp`, `:script-name` is `/myapp` and
+  `:path-info` the remainder, so a mounted ningle / tiny-routes / lack
+  application routes as it does anywhere else.
+
+  ```console
+  $ rontolisp app.lisp -o app.war
+  $ cp app.war $CATALINA_HOME/webapps/
+  ```
 
 ## A host that calls you: the reactor build
 
