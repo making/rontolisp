@@ -91,6 +91,13 @@ final class JvmExprCompiler {
 
 	static void compileSymbolRef(LispSymbol sym, JvmLispCompiler.Ctx ctx) {
 		String name = sym.name();
+		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): never special,
+		// never captured, never in ctx.locals -- resolved first.
+		JvmIntFusionCompiler.RawLocal rawLocal = ctx.rawLocals.get(name);
+		if (rawLocal != null) {
+			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawLocal, ctx);
+			return;
+		}
 		// DYNAMIC-FIRST read of a dual-bound special (see JvmLetCompiler): in the
 		// binding method the lexical slot exists only so nested lambdas can capture
 		// it -- reads go to the dynamic store, so a called function's dynamic
@@ -457,18 +464,37 @@ final class JvmExprCompiler {
 			// is a diagnostic rather than honouring the definition.
 			boolean redefinedClFunction = ClRedefinitionWarnings.redefinesClFunction(sym.name(), ctx.userDefunNames);
 			switch (sym.name()) {
-				case LispNames.ADD ->
-					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);
-				case LispNames.SUB ->
-					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.SUB, Opcode.DSUB, className);
-				case LispNames.MUL ->
-					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MUL, Opcode.DMUL, className);
+				// The integer expression-tree fusion tries first on the arithmetic and
+				// bitwise heads (.kb/jvm-int-fusion.md); when it declines (a single op
+				// over plain leaves, a double literal, --optimize=size) nothing was
+				// emitted and the per-op path below runs exactly as before.
+				case LispNames.ADD -> {
+					if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);
+					}
+				}
+				case LispNames.SUB -> {
+					if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.SUB, Opcode.DSUB, className);
+					}
+				}
+				case LispNames.MUL -> {
+					if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MUL, Opcode.DMUL, className);
+					}
+				}
 				case LispNames.DIV ->
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.DIV, Opcode.DDIV, className);
-				case LispNames.MOD ->
-					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MOD, Opcode.DREM, className);
-				case LispNames.REM ->
-					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.REM, Opcode.DREM, className);
+				case LispNames.MOD -> {
+					if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MOD, Opcode.DREM, className);
+					}
+				}
+				case LispNames.REM -> {
+					if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.REM, Opcode.DREM, className);
+					}
+				}
 				case LispNames.EQ -> compileComparison(cons, ctx, className, Opcode.IFEQ);
 				case LispNames.LT -> compileComparison(cons, ctx, className, Opcode.IFLT);
 				case LispNames.GT -> compileComparison(cons, ctx, className, Opcode.IFGT);
@@ -1139,7 +1165,14 @@ final class JvmExprCompiler {
 						JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx, className);
 					}
 				}
-				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
+				case LispNames.FUNCALL -> {
+					// A funcall of a fusion-eligible flet lambda substitutes its body
+					// into a fused tree (.kb/jvm-int-fusion.md); anything else takes
+					// the ordinary dispatch.
+					if (!JvmIntFusionCompiler.tryCompileLocalCall(cons, ctx, className)) {
+						JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
+					}
+				}
 				case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
 				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);
 				case LispNames.MAP ->
@@ -1351,7 +1384,10 @@ final class JvmExprCompiler {
 				}
 				case LispNames.SIGNUM -> JvmSignumCompiler.compile(cons, ctx, className);
 				case LispNames.LOGAND -> {
-					if (isBinaryCall(cons)) {
+					if (JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						// fused (.kb/jvm-int-fusion.md)
+					}
+					else if (isBinaryCall(cons)) {
 						JvmBitwiseCompiler.compileLogand(cons, ctx, className);
 					}
 					else {
@@ -1359,7 +1395,10 @@ final class JvmExprCompiler {
 					}
 				}
 				case LispNames.LOGIOR -> {
-					if (isBinaryCall(cons)) {
+					if (JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						// fused (.kb/jvm-int-fusion.md)
+					}
+					else if (isBinaryCall(cons)) {
 						JvmBitwiseCompiler.compileLogior(cons, ctx, className);
 					}
 					else {
@@ -1367,15 +1406,26 @@ final class JvmExprCompiler {
 					}
 				}
 				case LispNames.LOGXOR -> {
-					if (isBinaryCall(cons)) {
+					if (JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						// fused (.kb/jvm-int-fusion.md)
+					}
+					else if (isBinaryCall(cons)) {
 						JvmBitwiseCompiler.compileLogxor(cons, ctx, className);
 					}
 					else {
 						JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
 					}
 				}
-				case LispNames.LOGNOT -> JvmBitwiseCompiler.compileLognot(cons, ctx, className);
-				case LispNames.ASH -> JvmBitwiseCompiler.compileAsh(cons, ctx, className);
+				case LispNames.LOGNOT -> {
+					if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						JvmBitwiseCompiler.compileLognot(cons, ctx, className);
+					}
+				}
+				case LispNames.ASH -> {
+					if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						JvmBitwiseCompiler.compileAsh(cons, ctx, className);
+					}
+				}
 				case LispNames.INTEGER_LENGTH -> JvmBitwiseCompiler.compileIntegerLength(cons, ctx, className);
 				case LispNames.LOGBITP -> JvmBitwiseCompiler.compileLogbitp(cons, ctx, className);
 				case LispNames.LIST_STAR ->
@@ -1497,6 +1547,16 @@ final class JvmExprCompiler {
 					if (LispNames.isCarCdrComposition(sym.name())) {
 						JvmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx, className);
 					}
+					// A ROOT-position call to a fusion-inlinable defun ((mod32+ a b) as
+					// a setf value or argument) fuses like a call inside a tree would:
+					// classify substitutes the body, so the site pays one outlined call
+					// instead of a boxed call whose body re-guards its own arguments
+					// (.kb/jvm-int-fusion.md). Anything else declines with nothing
+					// emitted and takes the ordinary call path.
+					else if (ctx.inlinableDefuns.containsKey(sym.name())
+							&& JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+						// fused
+					}
 					else {
 						JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
 					}
@@ -1534,7 +1594,12 @@ final class JvmExprCompiler {
 	 */
 	private static void compileComparison(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int branchOpcode) {
 		if (isBinaryCall(cons)) {
-			JvmComparisonCompiler.compile(cons, ctx, branchOpcode, className);
+			// A comparison whose side is an integer tree fuses into one outlined raw
+			// long compare (.kb/jvm-int-fusion.md); the both-plain shape keeps the
+			// generic emission.
+			if (!JvmIntFusionCompiler.tryCompileCompareValue(cons, ctx, className, branchOpcode)) {
+				JvmComparisonCompiler.compile(cons, ctx, branchOpcode, className);
+			}
 		}
 		else {
 			JvmExprCompiler.compileExpr(LispMacroExpander.expandComparison(cons), ctx, className);

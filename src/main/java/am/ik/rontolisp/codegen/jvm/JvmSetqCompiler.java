@@ -37,6 +37,15 @@ final class JvmSetqCompiler {
 	}
 
 	private static void compilePair(String name, LispVal valueExpr, JvmLispCompiler.Ctx ctx, String className) {
+		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): the store
+		// funnels through the fused raw-store path, and the setq's value is re-read
+		// boxed. Never special, never captured, never in ctx.locals.
+		JvmIntFusionCompiler.RawLocal rawLocal = ctx.rawLocals.get(name);
+		if (rawLocal != null) {
+			JvmIntFusionCompiler.compileRawStore(valueExpr, ctx, className, rawLocal);
+			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawLocal, ctx);
+			return;
+		}
 		JvmExprCompiler.compileExpr(valueExpr, ctx, className);
 		Integer slot = ctx.locals.get(name);
 		if (slot != null && ctx.boxedVars.contains(name)) {

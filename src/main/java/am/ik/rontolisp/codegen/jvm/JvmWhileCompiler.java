@@ -29,10 +29,19 @@ final class JvmWhileCompiler {
 		List<LispVal> parts = cons.toList();
 		JvmLispCompiler.Ctx.Spill spill = JvmEmitHelper.enterLoopScope(ctx);
 		int loopStart = ctx.code.size();
-		// Evaluate the test; if nil, branch out of the loop.
-		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// Evaluate the test; if false, branch out of the loop. A fusable binary
+		// comparison leaves a RAW int truth value (no boxed t/nil per iteration,
+		// .kb/jvm-int-fusion.md); any other test compiles boxed as before.
+		int exitBranchOpcode;
+		if (JvmIntFusionCompiler.tryCompileCondition(parts.get(1), ctx, className)) {
+			exitBranchOpcode = Opcode.IFEQ;
+		}
+		else {
+			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+			exitBranchOpcode = Opcode.IFNULL;
+		}
 		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
+		ctx.emit(exitBranchOpcode);
 		ctx.emitU2(0);
 		// Body: every expression leaves a (boxed) reference, which is discarded.
 		for (int i = 2; i < parts.size(); i++) {

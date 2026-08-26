@@ -4,7 +4,13 @@ Difficulty: High (parent item; each child is sized on its own)
 
 Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522`
 (518, 519, 520 and 521 are closed).
-Related, already open: `.todo/412` (the JVM boxes every integer and has no fusion).
+Related: `.todo/412` (the JVM boxes every integer and has no fusion) -- closed
+2026-08-26 by JVM integer expression-tree fusion (`.kb/jvm-int-fusion.md`).
+Re-measured after it landed, TOP-LEVEL spelling, best of three: `loop sum`
+0.36 -> **0.19 s** (SBCL 0.21 -- inside the target), 10^7 `random` 0.45 ->
+0.43 s, 10^7 `aref` 1.22 -> 1.23 s, 10^9 `cdr` unchanged; the rows still
+outside 2x are exactly the "measured, understood, not yet filed" residuals
+below (`_random`, the generic `_aref1`), no longer boxed arithmetic.
 
 ## Where this came from
 
@@ -169,5 +175,7 @@ children land and the numbers are re-taken against a fixed baseline:
   (`_aref1` is a generic helper call; row 3 minus row 2).
 - wasm `random` is ~4x the JVM's (row 2: 1.71 vs 0.40 in `defun`).
 - Boxed generic arithmetic in every loop head and accumulator (`_cmpb`,
-  `_add`, `Long.valueOf` per iteration) is the whole of the remaining 1.9x-3.4x
-  on the JVM. That is `.todo/412`, already open and already scoped.
+  `_add`, `Long.valueOf` per iteration) was the whole of the remaining
+  1.9x-3.4x on the JVM. That was `.todo/412`, closed 2026-08-26
+  (`.kb/jvm-int-fusion.md`); the `loop sum` row now sits AT SBCL (0.19 vs
+  0.21 s), and what remains on the other rows is the two residuals above.

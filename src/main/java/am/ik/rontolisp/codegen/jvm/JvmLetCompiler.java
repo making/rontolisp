@@ -48,6 +48,8 @@ final class JvmLetCompiler {
 		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
 		Set<String> savedBoxedVars = new HashSet<>(ctx.boxedVars);
+		Map<String, JvmIntFusionCompiler.RawLocal> savedRawLocals = new HashMap<>(ctx.rawLocals);
+		Map<String, JvmIntFusionCompiler.LocalIntLambda> savedLocalIntLambdas = new HashMap<>(ctx.localIntLambdas);
 		int savedNextLocal = ctx.nextLocal;
 		// Every binding name takes part in capture analysis: a special-named binding is
 		// DUAL-BOUND (dynamic set + a lexical slot, mirroring the interpreter), so a
@@ -65,6 +67,7 @@ final class JvmLetCompiler {
 		// Each dynamic (special) binding established here: {tlFieldIndex, saveSlot}.
 		// Restored (reverse order) after the body, before the scope is popped.
 		List<int[]> dynamicRestores = null;
+		Set<String> boundInThisLet = new HashSet<>();
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
 				LispCons pair = (LispCons) binding;
@@ -119,6 +122,8 @@ final class JvmLetCompiler {
 					int lexSlot = ctx.allocLocal(name);
 					ctx.emit(Opcode.ASTORE);
 					ctx.emit(lexSlot);
+					ctx.rawLocals.remove(name);
+					ctx.localIntLambdas.remove(name);
 					if (capturedInLet.contains(name)) {
 						ctx.boxedVars.add(name);
 					}
@@ -127,6 +132,37 @@ final class JvmLetCompiler {
 					}
 					continue;
 				}
+				// An unboxed dual-representation binding (.kb/jvm-int-fusion.md): a
+				// plain lexical whose init or some body assignment is integer-shaped
+				// gets a raw long slot plus a boxed shadow; registered AFTER the init
+				// compiled, so the init still resolves an outer same-named binding.
+				if (!capturedInLet.contains(name) && !boundInThisLet.contains(name) && ctx.nextLocal + 4 <= 250
+						&& JvmIntFusionCompiler.rawBindingEligible(name, pairList.get(1),
+								parts.subList(2, parts.size()), ctx)) {
+					int longSlot = ctx.allocTemp();
+					ctx.allocTemp();
+					int shadowSlot = ctx.allocTemp();
+					int flagSlot = ctx.allocTemp();
+					JvmIntFusionCompiler.RawLocal rawLocal = new JvmIntFusionCompiler.RawLocal(longSlot, shadowSlot,
+							flagSlot);
+					// Pre-initialize the raw and shadow slots: a store writes only its
+					// own pair, so every slot must be DEFINED on every path or a later
+					// read fails verification at a merge.
+					ctx.emit(Opcode.LCONST_0);
+					ctx.emit(Opcode.LSTORE);
+					ctx.emit(longSlot);
+					ctx.emit(Opcode.ACONST_NULL);
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(shadowSlot);
+					JvmIntFusionCompiler.compileRawStore(pairList.get(1), ctx, className, rawLocal);
+					ctx.rawLocals.put(name, rawLocal);
+					ctx.locals.remove(name);
+					ctx.localIntLambdas.remove(name);
+					ctx.boxedVars.remove(name);
+					boundInThisLet.add(name);
+					continue;
+				}
+				boundInThisLet.add(name);
 				if (capturedInLet.contains(name)) {
 					ctx.emit(Opcode.ICONST_1);
 					ctx.emit(Opcode.ANEWARRAY);
@@ -142,6 +178,18 @@ final class JvmLetCompiler {
 				int slot = ctx.allocLocal(name);
 				ctx.emit(Opcode.ASTORE);
 				ctx.emit(slot);
+				ctx.rawLocals.remove(name);
+				ctx.localIntLambdas.remove(name);
+				// A let-bound lambda whose body is a closed integer tree over its
+				// parameters (the flet lowering's __FLETn_f shape) registers for
+				// fused-call substitution; the closure value in the slot is untouched,
+				// so every non-fused use still works (.kb/jvm-int-fusion.md).
+				if (JvmIntFusionCompiler.enabled(ctx) && pairList.get(1) instanceof LispCons initCons) {
+					JvmIntFusionCompiler.LocalIntLambda lil = JvmIntFusionCompiler.eligibleLocalLambda(initCons, ctx);
+					if (lil != null) {
+						ctx.localIntLambdas.put(name, lil);
+					}
+				}
 				// The boxed set tracks names, so this binding's boxedness must
 				// REPLACE a shadowed outer binding's: a raw closure stored under a
 				// name whose outer binding was boxed would otherwise be cell-read in
@@ -181,6 +229,8 @@ final class JvmLetCompiler {
 		}
 		ctx.locals = savedLocals;
 		ctx.boxedVars = savedBoxedVars;
+		ctx.rawLocals = savedRawLocals;
+		ctx.localIntLambdas = savedLocalIntLambdas;
 		ctx.nextLocal = savedNextLocal;
 	}
 

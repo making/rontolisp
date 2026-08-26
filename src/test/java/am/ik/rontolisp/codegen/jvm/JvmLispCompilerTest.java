@@ -12852,16 +12852,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void theSizeLevelChangesNothingWithoutATypedLoop() {
+	void theSizeLevelChangesNothingWithoutASpeedForSizeTrade() {
 		// --optimize=size is accepted everywhere so a build script need not be
-		// backend-specific. The one emission it declines on this backend is the typed
-		// numeric loop (JvmTypedLoopCompiler); a program without a dotimes in that
-		// subset compiles to the same class at both levels, which the docs say -- this
-		// is what makes that statement checkable, and what fails the day someone gives
-		// the JVM backend another speed-for-size trade without saying so.
+		// backend-specific. The emissions it declines on this backend are the typed
+		// numeric loop (JvmTypedLoopCompiler) and integer expression-tree fusion
+		// (JvmIntFusionCompiler); a program with neither shape compiles to the same
+		// class at both levels, which the docs say -- this is what makes that
+		// statement checkable, and what fails the day someone gives the JVM backend
+		// another speed-for-size trade without saying so.
 		List<LispVal> program = LispReader.readAllFromString("""
-				(defun rol32e (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
-				(print (rol32e 2882400001 8))
+				(defun pair (x) (list x x))
+				(print (pair 'hey))
 				""");
 		byte[] fast = new JvmLispCompiler("Same", false, OptimizeLevel.DEFAULT).compile(program);
 		byte[] small = new JvmLispCompiler("Same", false, OptimizeLevel.SIZE).compile(program);
@@ -12995,6 +12996,116 @@ class JvmLispCompilerTest {
 		assertThat(small).isNotEqualTo(fast);
 		assertThat(runClass(fast)).isEqualTo(TYPED_LOOP_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(TYPED_LOOP_EXPECTED);
+	}
+
+	/**
+	 * The integer-fusion program: every shape {@code JvmIntFusionCompiler} takes (the
+	 * masked-wrap mod32+/rol32 pair through inlinable-defun substitution, a fused loop
+	 * over them, overflow promotion past {@code long}, float and nil leaves bailing to
+	 * the generic path, the mod/rem/ash sign semantics and strength reductions, a fused
+	 * flet-lambda call, side-effects-once under substitution, the raw-local nil re-read
+	 * that pins the sentinel design, packed integer-vector raw reads and their
+	 * out-of-range error shape, NaN comparisons in condition and value position, the
+	 * zero-divisor error shape, 1+/1- normalization, a literal ldb, and a loop head's
+	 * fused compare).
+	 */
+	private static final String INT_FUSION_PROGRAM = """
+			(defun mod32+ (a b) (logand (+ a b) 4294967295))
+			(defun rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+			(print (mod32+ 4294967295 10))
+			(print (rol32 2882400001 8))
+			(let ((s 0))
+			  (dotimes (i 64) (setq s (mod32+ s (rol32 (+ i 12345) (mod i 31)))))
+			  (print s))
+			(let ((big 3037000500))
+			  (print (* big big))
+			  (print (+ (* big big) 1)))
+			(let ((x 1.5))
+			  (print (+ x 2))
+			  (print (< x 2)))
+			(let ((v nil))
+			  (setq v 7)
+			  (setq v nil)
+			  (print v))
+			(print (mod -7 3))
+			(print (mod 7 -3))
+			(print (rem -7 3))
+			(print (rem 7 -3))
+			(print (ash -17 -2))
+			(print (ash 3 62))
+			(print (lognot 0))
+			(flet ((mix (a b) (logand (+ (* a 31) b) 65535)))
+			  (let ((h 0))
+			    (dotimes (i 20) (setq h (mix h i)))
+			    (print h)))
+			(defvar *calls* 0)
+			(defun bump () (setq *calls* (+ *calls* 1)) *calls*)
+			(print (mod32+ (bump) (bump)))
+			(print *calls*)
+			(let ((v (make-array 8 :element-type '(unsigned-byte 32))))
+			  (dotimes (i 8) (setf (aref v i) (* i 1000000007)))
+			  (let ((s 0))
+			    (dotimes (i 8) (setq s (+ s (aref v i))))
+			    (print s))
+			  (handler-case (print (+ (aref v 100) 1)) (error (e) (print 'oob))))
+			(let ((nan (/ 0.0 0.0)) (c 0))
+			  (if (< nan 1) (setq c 1) (setq c 2))
+			  (print c)
+			  (print (>= nan 0)))
+			(let ((z 0))
+			  (handler-case (print (mod (+ z 5) z)) (error (e) (print 'divzero))))
+			(let ((k 10))
+			  (print (1+ (* k k)))
+			  (print (1- (* k k))))
+			(print (ldb (byte 8 8) 305419896))
+			(print (loop for i from 1 to 10 sum i))
+			""";
+
+	private static final String INT_FUSION_EXPECTED = """
+			9
+			3454992811
+			2147508531
+			9223372037000250000
+			9223372037000250001
+			3.5
+			T
+			NIL
+			2
+			-2
+			-1
+			1
+			-5
+			13835058055282163712
+			-1
+			46090
+			3
+			2
+			15115098308
+			OOB
+			2
+			NIL
+			DIVZERO
+			101
+			99
+			86
+			55""";
+
+	@Test
+	void fusedIntegerExpressionTreesMatchTheGenericPath() throws Exception {
+		// The fused emission is an optimization with a total fallback; this pins that
+		// it answers what the generic per-op path answers, bit for bit, across the
+		// shapes it takes and the bails it survives -- and that --optimize=size (which
+		// declines the speed-for-size trades) compiles the same program to different
+		// bytes, i.e. the default build really did emit the fused methods.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(INT_FUSION_PROGRAM));
+		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(small).isNotEqualTo(fast);
+		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
+		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
+		assertThat(runClass(fast)).isEqualTo(INT_FUSION_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(INT_FUSION_EXPECTED);
 	}
 
 	private String runClass(byte[] classBytes) throws Exception {

@@ -969,8 +969,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// definition wins even BETWEEN the two defuns (whole-program static
 		// resolution, same as the WASM backend's).
 		Map<String, Integer> lastDefinition = new HashMap<>();
+		Set<String> multiplyDefinedDefuns = new HashSet<>();
 		for (int i = 0; i < defuns.size(); i++) {
-			lastDefinition.put(defuns.get(i).name, i);
+			if (lastDefinition.put(defuns.get(i).name, i) != null) {
+				// A redefined name is excluded from fused-call substitution below: a
+				// call site between the two definitions still resolves to the last one
+				// (whole-program static resolution), but staying out keeps the
+				// substitution's uniqueness criterion identical to the WASM backend's.
+				multiplyDefinedDefuns.add(defuns.get(i).name);
+			}
 		}
 		if (lastDefinition.size() < defuns.size()) {
 			List<DefunDecl> lastOnly = new ArrayList<>(lastDefinition.size());
@@ -1430,8 +1437,28 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmGpuRuntimeBuilder.@Nullable GpuRuntime gpuRuntime = usesGpu
 				? JvmGpuRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
 
+		// Integer expression-tree fusion (.kb/jvm-int-fusion.md): the shared registry
+		// of outlined fused-site methods, plus the fusion-inlinable defuns -- uniquely
+		// defined one-liner integer wrappers (mod32+/rol32) whose bodies substitute
+		// into fused trees. Never under --dynamic (late binding must keep observing
+		// redefinition); the whole feature is a speed-for-size trade --optimize=size
+		// declines.
+		boolean intFusion = !this.optimize.prefersSizeOverSpeed();
+		JvmIntFusionCompiler.State fusedState = new JvmIntFusionCompiler.State(this.className);
+		Map<String, DefunDecl> inlinableDefuns = new HashMap<>();
+		if (intFusion && !this.dynamic) {
+			for (DefunDecl defun : defuns) {
+				if (!multiplyDefinedDefuns.contains(defun.name) && JvmIntFusionCompiler.isInlinableDefun(defun)) {
+					inlinableDefuns.put(defun.name, defun);
+				}
+			}
+		}
+
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
+			.intFusion(intFusion)
+			.inlinableDefuns(inlinableDefuns)
+			.fusedState(fusedState)
 			.cp(cp)
 			.numOps(numericRuntime.ops())
 			.mathOps(mathOps)
@@ -1811,6 +1838,17 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaCtx.emit(Opcode.ARETURN);
 			lambdaCtxs.add(lambdaCtx);
 			lambdaIdx++;
+		}
+
+		// Pass 2d: emit the outlined fused-site method bodies (JvmIntFusionCompiler).
+		// After every program body, because Pass 2 is what registers the sites; before
+		// class assembly, because the bodies mint constant-pool entries. A fused body
+		// compiles no Lisp expression, so the pending list cannot grow under this walk.
+		List<Ctx> fusedCtxs = new ArrayList<>();
+		for (JvmIntFusionCompiler.Pending pendingFused : fusedState.pending) {
+			Ctx fusedCtx = ctxBuilder.build();
+			JvmIntFusionCompiler.emitMethodBody(pendingFused, fusedCtx, this.className);
+			fusedCtxs.add(fusedCtx);
 		}
 
 		// Debug hook (-Drontolisp.jvm.debug-method-sizes=true): rank the emitted
@@ -2456,6 +2494,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		for (Ctx lambdaCtx : lambdaCtxs) {
 			am.ik.jvm.BranchRelaxer.relax(lambdaCtx.code, lambdaCtx.deferredBranches, lambdaCtx.exceptionTable);
+		}
+		for (Ctx fusedCtx : fusedCtxs) {
+			am.ik.jvm.BranchRelaxer.relax(fusedCtx.code, fusedCtx.deferredBranches, fusedCtx.exceptionTable);
+		}
+		// The fusion helpers, built HERE (before assembly) because their bodies mint
+		// constant-pool entries: _ubRead whenever a raw local exists, _fxAsh whenever a
+		// fused fast path shifts.
+		final List<JvmNumericRuntimeBuilder.NumericMethod> fusedHelperMethods = new ArrayList<>();
+		if (fusedState.usesUbRead) {
+			fusedHelperMethods.add(JvmIntFusionCompiler.buildUbRead(cp, longValueOf));
+		}
+		if (fusedState.usesFxAsh) {
+			fusedHelperMethods.add(JvmIntFusionCompiler.buildFxAsh(cp));
 		}
 
 		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
@@ -3335,6 +3386,32 @@ public final class JvmLispCompiler implements LispCompiler {
 									attr.writeU2(entry[0]).writeU2(entry[1]).writeU2(entry[2]).writeU2(entry[3]);
 								}
 								attr.writeU2(0);
+							})));
+				}
+				// The outlined fused-site methods (.kb/jvm-int-fusion.md) and their
+				// two shared helpers, present only when Pass 2 registered a site / a
+				// raw local -- a program without one is byte-identical to before.
+				for (int i = 0; i < fusedCtxs.size(); i++) {
+					JvmIntFusionCompiler.Pending pendingFused = fusedState.pending.get(i);
+					final Ctx fusedCtx = fusedCtxs.get(i);
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, pendingFused.nameUtf8(),
+							pendingFused.descUtf8(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(fusedCtx.maxStack())
+									.writeU2(fusedCtx.maxLocals)
+									.writeCode((Object[]) fusedCtx.code.toArray(new Integer[0]))
+									.writeExceptionTable(fusedCtx.exceptionTable)
+									.writeU2(0);
+							})));
+				}
+				for (JvmNumericRuntimeBuilder.NumericMethod nm : fusedHelperMethods) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(nm.maxStack())
+									.writeU2(nm.maxLocals())
+									.writeCode((Object[]) nm.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
 							})));
 				}
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
@@ -4719,6 +4796,42 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean typedLoops = true;
 
 		/**
+		 * True when a nested integer arithmetic/bitwise tree compiles to an outlined
+		 * fused method ({@link JvmIntFusionCompiler}); off under {@code --optimize=size}
+		 * (the same speed-for-size gate as {@link #typedLoops}). Shared across every
+		 * context.
+		 */
+		boolean intFusion = true;
+
+		/**
+		 * The fusion-inlinable defuns: uniquely defined, fixed-arity, single closed
+		 * integer-tree body ({@link JvmIntFusionCompiler#isInlinableDefun}); empty under
+		 * {@code --dynamic}. Shared across every context.
+		 */
+		Map<String, DefunDecl> inlinableDefuns = Map.of();
+
+		/**
+		 * The per-compile fused-site registry (outlined {@code _fx$N} methods, the helper
+		 * flags), shared across every context; null only in a context built outside a
+		 * whole-program compile.
+		 */
+		JvmIntFusionCompiler.@Nullable State fusedState;
+
+		/**
+		 * The unboxed dual-representation locals in scope
+		 * ({@link JvmIntFusionCompiler.RawLocal}: a raw {@code long} slot plus a boxed
+		 * shadow), keyed by name. Scoped like {@link #locals} -- {@link JvmLetCompiler}
+		 * registers, shadows and restores; a name here is never in {@link #locals}.
+		 */
+		Map<String, JvmIntFusionCompiler.RawLocal> rawLocals = new HashMap<>();
+
+		/**
+		 * The let-bound local functions eligible for fused-call substitution
+		 * ({@code flet}'s {@code __FLETn_f} lambdas), scoped like {@link #locals}.
+		 */
+		Map<String, JvmIntFusionCompiler.LocalIntLambda> localIntLambdas = new HashMap<>();
+
+		/**
 		 * True when the program can produce a packed integer vector (a {@code #N@(...)}
 		 * literal or {@code make-array :element-type '(unsigned-byte 8|16|32)}). When
 		 * set, the rank-1 array op compilers route through the {@code _iv*} dispatch
@@ -4994,6 +5107,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.printCase = builder.printCase;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.typedLoops = builder.typedLoops;
+			this.intFusion = builder.intFusion;
+			this.inlinableDefuns = builder.inlinableDefuns;
+			this.fusedState = builder.fusedState;
 			this.usesIntArray = builder.usesIntArray;
 			this.usesPackedSequenceIo = builder.usesPackedSequenceIo;
 			this.usesArrays = builder.usesArrays;
@@ -5259,6 +5375,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesFloatArray = false;
 
 			private boolean typedLoops = true;
+
+			private boolean intFusion = true;
+
+			private Map<String, DefunDecl> inlinableDefuns = Map.of();
+
+			private JvmIntFusionCompiler.@Nullable State fusedState;
 
 			private boolean usesIntArray = false;
 
@@ -5685,6 +5807,21 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder typedLoops(boolean typedLoops) {
 				this.typedLoops = typedLoops;
+				return this;
+			}
+
+			Builder intFusion(boolean intFusion) {
+				this.intFusion = intFusion;
+				return this;
+			}
+
+			Builder inlinableDefuns(Map<String, DefunDecl> inlinableDefuns) {
+				this.inlinableDefuns = inlinableDefuns;
+				return this;
+			}
+
+			Builder fusedState(JvmIntFusionCompiler.@Nullable State fusedState) {
+				this.fusedState = fusedState;
 				return this;
 			}
 

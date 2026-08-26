@@ -54,7 +54,8 @@ final class JvmDefvarCompiler {
 				ctx.definedGlobals.add(name.name());
 			}
 		}
-		else if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
+		else if (parts.size() > 2
+				&& (force || !(ctx.locals.containsKey(name.name()) || ctx.rawLocals.containsKey(name.name())))) {
 			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 			// Mirror the binding into the eval runtime's global env; _store returns the
 			// value, which we discard here because the local slot keeps the compiled

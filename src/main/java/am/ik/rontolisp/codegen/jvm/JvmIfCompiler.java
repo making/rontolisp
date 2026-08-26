@@ -16,9 +16,19 @@ final class JvmIfCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
-		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// A fusable binary comparison in condition position leaves a RAW int truth
+		// value and branches on it directly, skipping the boxed t/nil round trip
+		// (.kb/jvm-int-fusion.md); any other test compiles boxed as before.
+		int falseBranchOpcode;
+		if (JvmIntFusionCompiler.tryCompileCondition(parts.get(1), ctx, className)) {
+			falseBranchOpcode = Opcode.IFEQ;
+		}
+		else {
+			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+			falseBranchOpcode = Opcode.IFNULL;
+		}
 		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
+		ctx.emit(falseBranchOpcode);
 		ctx.emitU2(0);
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 		int gotoEndPos = ctx.code.size();

@@ -227,8 +227,12 @@ class JvmClassShakerTest {
 		// the dispatcher and shake. A string call site brings them back; so does
 		// taking #'sizeof as a VALUE (the narrower's escape, mirroring the
 		// funcall-dispatch gate); and without --optimize nothing narrows at all.
+		// keepme's body is deliberately NOT a single closed integer tree: a one-liner
+		// (* x 2) is fusion-inlinable (JvmIntFusionCompiler), and substituting it into
+		// the caller would leave KEEPME uncalled -- correctly shaken, but no longer the
+		// witness this test needs for "the SELECTED branch's callee survives".
 		String defs = "(defgeneric sizeof (x)) (defmethod sizeof ((x integer)) (keepme x)) "
-				+ "(defmethod sizeof ((x string)) (dropme x)) (defun keepme (x) (* x 2)) "
+				+ "(defmethod sizeof ((x string)) (dropme x)) (defun keepme (x) x (* x 2)) "
 				+ "(defun dropme (x) 999) (print (sizeof 21))";
 		byte[] narrowed = compile(defs, OptimizeLevel.DEFAULT);
 		assertThat(declaredMethodNames(narrowed)).contains("KEEPME").doesNotContain("DROPME");
