@@ -5,22 +5,22 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-26
-- rontolisp: 0.1.0-SNAPSHOT (`d734597`)
+- rontolisp: 0.1.0-SNAPSHOT (`450be3a`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
-| hello_world | `--optimize=off` | core (command) | Preview 1 | 148,270 |
+| hello_world | `--optimize=off` | core (command) | Preview 1 | 148,368 |
 | hello_world | `--optimize` | core (command) | Preview 1 | 538 |
 | hello_world | `--optimize=size` | core (command) | Preview 1 | 538 |
 | hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,693 |
 | hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 406 |
-| pi_approx | `--optimize=off` | core (command) | Preview 1 | 148,611 |
+| pi_approx | `--optimize=off` | core (command) | Preview 1 | 148,709 |
 | pi_approx | `--optimize` | core (command) | Preview 1 | 3,259 |
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,858 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 4,013 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 3,442 |
-| zlib | `--optimize=off` | core (command) | Preview 1 | 352,981 |
+| zlib | `--optimize=off` | core (command) | Preview 1 | 353,079 |
 | zlib | `--optimize` | core (command) | Preview 1 | 123,893 |
 | zlib | `--optimize=size` | core (command) | Preview 1 | 98,138 |
 | zlib | `--component --optimize=size` | component (command) | Preview 3 | 101,282 |
@@ -61,8 +61,8 @@ byte.
 
 **`zlib` is the row that carries the runtime, not just the library.** chipz
 calls `apply`, which turns the embedded `eval` runtime on, and it uses
-`catch`/`throw`, which puts the module in EH mode (hence `-W exceptions=y` in
-the run, and why the unoptimized row is hundreds of KB rather than the ~100 KB
+`catch`/`throw`, which puts the module in EH mode (hence the exception-handling
+support required at run time, and why the unoptimized row is hundreds of KB rather than the ~100 KB
 the inflate code alone would be). Both are properties of the library's own
 source, not of how the program was written.
 
