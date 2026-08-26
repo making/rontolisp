@@ -104,5 +104,6 @@
 
 (clack:clackup (wrap-json #'app)
                :server :rontolisp
+               :address "0.0.0.0"
                :port (server-port)
                :use-thread nil)

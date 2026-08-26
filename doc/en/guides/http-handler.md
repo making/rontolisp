@@ -99,6 +99,12 @@ Hello from rontolisp!
 GET /hello
 ```
 
+The listener binds the **wildcard** address (`0.0.0.0`, dual-stack), not
+loopback, so the port is reachable from other machines as soon as the host
+allows it. The directive has no address argument: to choose the bind address —
+loopback only, or one specific interface — serve the same application through
+[`clack:clackup`](clack.md), whose `:address` defaults to `127.0.0.1`.
+
 ## Compiled to a JVM class
 
 The same source compiles to a **JVM class** serving the same way, and the

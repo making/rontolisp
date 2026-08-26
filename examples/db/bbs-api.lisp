@@ -359,4 +359,8 @@
   (tiny:pipe *routes* (wrap-errors) (wrap-json-content-type)
              (tiny:wrap-request-body) (tiny:wrap-query-parameters)))
 
-(clack:clackup *app* :server :rontolisp :port 8080 :use-thread nil)
+(clack:clackup *app*
+               :server :rontolisp
+               :address "0.0.0.0"
+               :port 8080
+               :use-thread nil)

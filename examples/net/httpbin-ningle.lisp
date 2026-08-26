@@ -102,4 +102,8 @@
     (list :error "not found"
           :path (lack.request:request-path-info ningle:*request*)))))
 
-(clack:clackup *app* :server :rontolisp :port 8080 :use-thread nil)
+(clack:clackup *app*
+               :server :rontolisp
+               :address "0.0.0.0"
+               :port 8080
+               :use-thread nil)

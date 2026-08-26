@@ -32,5 +32,6 @@
                                 (getf env :request-method)
                                 (getf env :path-info)))))
                :server :rontolisp
+               :address "0.0.0.0"
                :port 5000
                :use-thread nil)

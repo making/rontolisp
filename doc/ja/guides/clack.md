@@ -45,8 +45,18 @@ Hello, Clack! GET /hello
   プロセスが停止される (Ctrl-C) までブロックします — 上のスクリプト形です。
 - **`:use-default-middlewares t` (デフォルト)** は `lack:builder` を通じて
   アプリケーションを lack のバックトレースミドルウェアでラップします。
-- `:address` はリスナーのバインド先 (デフォルト `127.0.0.1`)。`:silent t` は
-  バナーを、`:debug nil` はデバッグ通知を抑制します。
+- `:address` はリスナーのバインド先で、デフォルトは `127.0.0.1` です — つまり
+  同じマシンからしか応答しません。全インターフェースにバインドするには
+  `:address "0.0.0.0"` を渡します。コンテナ・VM・LAN に公開するサーバではこれが
+  必要で、`examples/` 配下の Clack サンプルはすべてこの形で書かれています。
+- `:silent t` はバナーを、`:debug nil` はデバッグ通知を抑制します。
+
+`:address` が効くのは**プログラム自身がソケットを持つ**バックエンド —
+インタープリタと JVM — だけです。Servlet war、WASI コンポーネント、リアクタは
+ホスト側 (コンテナ、`wasmtime serve`、Worker) がリスナーを所有するため、
+`:port` と同じく `:address` も無視されます。素の
+[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+ディレクティブにはアドレス引数自体が無く、ワイルドカードにバインドします。
 
 ## アプリケーションプロトコル
 

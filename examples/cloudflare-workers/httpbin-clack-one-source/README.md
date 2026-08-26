@@ -45,8 +45,11 @@ The `clackup` line does not change between the rows. `:port` — here
 `(uiop:getenvp "PORT")`, defaulting to 8080 — applies where the program owns
 the socket and is ignored on the three hosts that own it themselves; a Worker
 has no environment at all, so `getenvp` answers `nil` there and the default is
-the value nobody reads. `:use-thread nil` keeps the two socket transports
-serving in the foreground. Deploying to Cloudflare is not a port of the
+the value nobody reads. `:address "0.0.0.0"` is the same kind of key: it
+binds the wildcard on those two transports instead of clackup's loopback
+default, and the three hosts that own the socket ignore it.
+`:use-thread nil` keeps the two socket transports serving in the
+foreground. Deploying to Cloudflare is not a port of the
 program; it is a compile flag.
 
 WASM Preview 1 is the one host where `clackup` cannot serve — it has no

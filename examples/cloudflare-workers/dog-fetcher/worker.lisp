@@ -77,4 +77,8 @@
   (tiny:define-any "*" (req)
     (error-response 404 (format nil "no route for ~a" (tiny:path-info req)))))
 
-(clack:clackup *routes* :server :rontolisp :port 8080 :use-thread nil)
+(clack:clackup *routes*
+               :server :rontolisp
+               :address "0.0.0.0"
+               :port 8080
+               :use-thread nil)

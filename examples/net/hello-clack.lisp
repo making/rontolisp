@@ -23,4 +23,8 @@
 (defun server-port ()
   (let ((value (uiop:getenvp "PORT"))) (if value (parse-integer value) 8080)))
 
-(clack:clackup #'app :server :rontolisp :port (server-port) :use-thread nil)
+(clack:clackup #'app
+               :server :rontolisp
+               :address "0.0.0.0"
+               :port (server-port)
+               :use-thread nil)

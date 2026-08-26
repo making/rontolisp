@@ -52,7 +52,10 @@ as is (see [Clack Web Applications](../../guides/clack.md)):
 
 On the **interpreter** and **JVM** backends `http-handler` starts a blocking
 embedded HTTP server on `port` (default `8080`, one virtual thread per request)
-and serves until the process is stopped (Ctrl-C). Compiled to a **WASI
+and serves until the process is stopped (Ctrl-C). The listener binds the
+wildcard address (`0.0.0.0`, dual-stack); there is no address argument, so a
+program that must choose its bind address serves through
+[`clack:clackup`](../../guides/clack.md) and its `:address` instead. Compiled to a **WASI
 component** (`--component`) it instead exports `wasi:http/handler@0.3.0`, so
 the module runs as a serverless HTTP component under `wasmtime serve` (the
 `port` argument is ignored — the host owns the socket). Compiled to a

@@ -44,8 +44,18 @@ The defaults work the way Clack users expect:
   process is stopped (Ctrl-C) — the script shape used above.
 - **`:use-default-middlewares t` (the default)** wraps the application in
   lack's backtrace middleware through `lack:builder`.
-- `:address` binds the listener (default `127.0.0.1`); `:silent t` suppresses
-  the banner and `:debug nil` the debug notice.
+- `:address` binds the listener, and the default is `127.0.0.1` — the server
+  answers only from the same machine. Pass `:address "0.0.0.0"` to bind every
+  interface, which is what a container, a VM or a LAN-visible server needs;
+  every Clack example under `examples/` is written that way.
+- `:silent t` suppresses the banner and `:debug nil` the debug notice.
+
+`:address` applies where the PROGRAM owns the socket — the interpreter and the
+JVM. The Servlet war, the WASI component and the reactor are hosted: the
+container, `wasmtime serve` or the Worker owns the listener, so `:address` is
+ignored there exactly as `:port` is. The bare
+[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+directive takes no address argument at all and binds the wildcard.
 
 ## The application protocol
 
