@@ -2,15 +2,15 @@
 
 Difficulty: High (parent item; each child is sized on its own)
 
-Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522`
-(518, 519, 520 and 521 are closed).
+Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522` (all
+closed), plus `.todo/527` and `.todo/528`, filed 2026-08-26 out of the residual
+section below and both OPEN.
 Related: `.todo/412` (the JVM boxes every integer and has no fusion) -- closed
 2026-08-26 by JVM integer expression-tree fusion (`.kb/jvm-int-fusion.md`).
-Re-measured after it landed, TOP-LEVEL spelling, best of three: `loop sum`
-0.36 -> **0.19 s** (SBCL 0.21 -- inside the target), 10^7 `random` 0.45 ->
-0.43 s, 10^7 `aref` 1.22 -> 1.23 s, 10^9 `cdr` unchanged; the rows still
-outside 2x are exactly the "measured, understood, not yet filed" residuals
-below (`_random`, the generic `_aref1`), no longer boxed arithmetic.
+
+**Every child having landed, the four rows were re-taken on one fixed baseline
+-- see "The fixed baseline" below. Two of the four are inside the 2x target and
+two are not, and the two that are not are exactly `.todo/527` and `.todo/528`.**
 
 ## Where this came from
 
@@ -159,6 +159,36 @@ sees is structural, and each piece is separately fixable:
   "run the way a user runs a script" target is therefore carried by the
   compiled backends' own rows plus `.todo/412`, not by a default switch.
 
+## The fixed baseline (2026-08-26, this machine, every child landed)
+
+SBCL 2.2.9 / GraalVM 25.0.4 / wasmtime 47.0.3, best of three, wall clock
+including runtime startup, output verified equal to SBCL's. Sources and commands:
+`.todo/517-sbcl-class-performance-on-the-compiled-backends/README.md`.
+
+| benchmark | SBCL | interp | JVM top level | JVM in `defun` | wasm top level | wasm in `defun` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `(loop for i from 1 to 100000000 sum i)` | 0.21 | 56.85 | **0.21** | 0.23 | 0.31 | 0.31 |
+| 10^7 x `(+ s (random 1000000))` | 0.16 | 7.70 | **0.46** | 0.38 | 1.86 | 1.60 |
+| 10^7 x `(+ s (aref a (random 1000000)))`, `a` 10^6 wide | 0.26 | 12.45 | **1.22** | 0.95 | 2.32 | 2.36 |
+| 10^9 `cdr` steps, `(nth 999 lst)` x 10^6 | 1.16 | 3.99 | 3.35 | 3.31 | **1.87** | 1.82 |
+
+The `--component` backend, `defun` spelling, for the record: `loop sum` 0.35,
+`random` 2.70, `aref` 3.70, `nth` 1.89.
+
+Ratios against SBCL in the acceptance shape (TOP-LEVEL, best compiled backend):
+
+| row | ratio | verdict |
+| --- | --- | --- |
+| `loop sum` | **1.0x** (JVM 0.21) | inside the target |
+| 10^9 `cdr` | **1.6x** (wasm 1.87) | inside the target |
+| `random` | 2.9x (JVM 0.46) | **`.todo/528`** |
+| `aref` | 4.7x (JVM 1.22) | **`.todo/527`** |
+
+Against the first measurement in this file: `loop sum` 2.80 -> 0.21 (13x),
+10^9 `cdr` 15.99 -> 3.35 on the JVM and 1.88 -> 1.87 on wasm, `random` 0.78 ->
+0.46, `aref` 1.73 -> 1.22. No compiled backend is slower than the interpreter on
+any row, and the interpreter itself moved (`loop sum` ~72 est. -> 56.85).
+
 ## Target
 
 The four rows above, in their TOP-LEVEL spelling, within **2x of SBCL** on at
@@ -166,16 +196,33 @@ least one compiled backend, and no row where a compiled backend is slower than
 the interpreter. The top-level spelling is the acceptance shape on purpose: it
 is how scripts are written, and it is what the note wrote.
 
-## Measured, understood, not yet filed
+## Measured, understood, now filed
 
-Residuals that are real but small next to the four above; file them once the
-children land and the numbers are re-taken against a fixed baseline:
+The residuals this section carried are filed, with the numbers re-taken against
+the fixed baseline above:
 
-- JVM `aref` on a simple vector costs ~50 ns/access against SBCL's ~12 ns
-  (`_aref1` is a generic helper call; row 3 minus row 2).
-- wasm `random` is ~4x the JVM's (row 2: 1.71 vs 0.40 in `defun`).
-- Boxed generic arithmetic in every loop head and accumulator (`_cmpb`,
-  `_add`, `Long.valueOf` per iteration) was the whole of the remaining
-  1.9x-3.4x on the JVM. That was `.todo/412`, closed 2026-08-26
-  (`.kb/jvm-int-fusion.md`); the `loop sum` row now sits AT SBCL (0.19 vs
-  0.21 s), and what remains on the other rows is the two residuals above.
+- **`aref` -- `.todo/527`.** Filed here as "`_aref1` is a generic helper call".
+  Re-measuring falsified that: on a 1,000-element array the JVM's `aref` costs
+  **1.7 ns** and beats SBCL, and the cost rises with the array size
+  (1.7 / 15.6 / 34.9 / **55.5** ns at 10^3 / 10^4 / 10^5 / 10^6 elements) where
+  SBCL's stays flat. The helper inlines; what costs 55 ns is that a general
+  array is an `ArrayList` of boxed `Long`s, so a random read is two dependent
+  cold hops through 24 MB. Not the call -- the representation.
+- **`random` -- `.todo/528`.** The wasm draw is 177 ns against the JVM's 24 and
+  SBCL's 7.5, because `WasmRandomCompiler` calls the WASI `random_get` host
+  function ONCE PER DRAW; a `perf` profile puts 12% of cycles in wasm code and
+  the rest in wasmtime's export-name hashing, per-call `Vec` allocation and
+  ChaCha20. The item covers the JVM half too (`Math.random()` is a shared
+  `AtomicLong` CAS), because the row's acceptance is measured against the best
+  compiled backend and that is now the JVM.
+- **Boxed generic arithmetic** in every loop head and accumulator was the whole
+  of the remaining 1.9x-3.4x on the JVM. That was `.todo/412`, closed 2026-08-26
+  (`.kb/jvm-int-fusion.md`); the `loop sum` row now sits AT SBCL.
+
+One residual is measured and still unfiled, deliberately -- it does not block
+any row's acceptance, because the JVM carries both rows it touches:
+
+- **wasm's general `aref` is size-INdependent**, ~61 ns/access on a
+  1,000-element array and ~76 ns on a 1,000,000-element one. That is dispatch
+  overhead, not layout, so it is a different defect from `.todo/527` and wants a
+  call-shape fix. File it if wasm ever has to carry the `aref` row.
