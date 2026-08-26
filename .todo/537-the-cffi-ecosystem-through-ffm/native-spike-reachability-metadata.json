@@ -1,0 +1,50 @@
+{
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jdouble",
+        "parameterTypes": [
+          "jdouble"
+        ]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": [
+          "void*",
+          "jlong",
+          "jlong",
+          "void*"
+        ]
+      }
+    ],
+    "upcalls": [
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*"
+        ]
+      }
+    ]
+  },
+  "reflection": [
+    {
+      "type": "NativeSpike",
+      "methods": [
+        {
+          "name": "cmp",
+          "parameterTypes": [
+            "java.lang.foreign.MemorySegment",
+            "java.lang.foreign.MemorySegment"
+          ]
+        }
+      ]
+    }
+  ]
+}
