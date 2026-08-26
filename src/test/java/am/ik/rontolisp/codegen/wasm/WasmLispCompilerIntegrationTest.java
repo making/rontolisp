@@ -3388,6 +3388,54 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(defs + "(let ((f #'addall)) (print (funcall f 1 2 3)))")).isEqualTo("6");
 	}
 
+	// Every operator that CALLS a function argument accepts a SYMBOL designator at run
+	// time, as CL says and the interpreter does. The compiler cannot read one out of
+	// (car (list 'pred)), so the call dispatches, and only the _lookup name registry
+	// resolves the symbol that arrives -- the gate that emits it used to read
+	// funcall/apply spellings alone, so every operator here trapped on `unreachable`
+	// while the interpreter and the JVM answered. One row per family: the map loops and
+	// sort reach the dispatcher through WasmDesignatorCall, the sequence predicates
+	// through the funcall their Pass 2 expansion builds, maphash through its own site.
+	@Test
+	void aComputedSymbolDesignatorResolvesForEveryOperatorThatCallsIt() throws Exception {
+		String defs = "(defun pred (x) (evenp x)) (defun lt (a b) (< a b)) ";
+		assertThat(compileAndRun(defs + "(print (mapcar (car (list 'pred)) '(2 3 4)))")).isEqualTo("(T NIL T)");
+		assertThat(compileAndRun(defs + "(print (mapc (car (list 'pred)) '(2 3)))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun(defs + "(print (mapcan (car (list 'list)) '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(defs + "(print (every (car (list 'pred)) '(2 3 4)))")).isEqualTo("NIL");
+		assertThat(compileAndRun(defs + "(print (some (car (list 'pred)) '(1 3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun(defs + "(print (remove-if (car (list 'pred)) '(2 3 4)))")).isEqualTo("(3)");
+		assertThat(compileAndRun(defs + "(print (count-if (car (list 'pred)) '(2 3 4)))")).isEqualTo("2");
+		assertThat(compileAndRun(defs + "(print (find-if (car (list 'pred)) '(2 3 4)))")).isEqualTo("2");
+		assertThat(compileAndRun(defs + "(print (position-if (car (list 'pred)) '(2 3 4)))")).isEqualTo("0");
+		assertThat(compileAndRun(defs + "(print (member-if (car (list 'pred)) '(1 2 3)))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun(defs + "(print (reduce (car (list 'lt)) '(1 2)))")).isEqualTo("T");
+		assertThat(compileAndRun(defs + "(print (sort (list 3 1 2) (car (list 'lt))))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun(defs + "(print (stable-sort (list 3 1 2) (car (list 'lt))))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun(defs + "(print (sort (list 3 1 2) #'< :key (car (list 'identity))))"))
+			.isEqualTo("(1 2 3)");
+		// A designator out of a function PARAMETER is the same fact one call deeper.
+		assertThat(compileAndRun(defs + "(defun call-it (f l) (mapcar f l)) (print (call-it 'pred '(2 3)))"))
+			.isEqualTo("(T NIL)");
+		assertThat(compileAndRun(defs + """
+				(let ((h (make-hash-table)))
+				  (setf (gethash 1 h) 2)
+				  (maphash (car (list 'lt)) h)
+				  (print (hash-table-count h)))
+				""")).isEqualTo("1");
+	}
+
+	// The component backend answers the same, the way every cross-backend fact here is
+	// pinned on both WASM tiers.
+	@Test
+	void aComputedSymbolDesignatorResolvesOnTheComponentBackendToo() throws Exception {
+		String defs = "(defun pred (x) (evenp x)) (defun lt (a b) (< a b)) ";
+		assertThat(compileComponentAndRun(defs + "(print (mapcar (car (list 'pred)) '(2 3 4)))"))
+			.isEqualTo("(T NIL T)");
+		assertThat(compileComponentAndRun(defs + "(print (every (car (list 'pred)) '(2 3 4)))")).isEqualTo("NIL");
+		assertThat(compileComponentAndRun(defs + "(print (sort (list 3 1 2) (car (list 'lt))))")).isEqualTo("(1 2 3)");
+	}
+
 	@Test
 	void mapFamilyTrapsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) traps rather than

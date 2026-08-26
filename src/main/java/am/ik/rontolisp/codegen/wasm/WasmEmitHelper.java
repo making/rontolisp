@@ -824,6 +824,14 @@ final class WasmEmitHelper {
 		// The emitted value is a literal the program can hold at run time, so its
 		// spelling is a designator the dispatch gate's name probes must see.
 		ctx.spelledLiterals.add(displayForm);
+		if (!ctx.injectedRuntimeBody) {
+			// ... and the registry gate needs to know whether the USER's text is what
+			// spells it: an injected wrapper body quotes 'list / 'cons / 'string as type
+			// designators for its own coerce calls, and those collide with the wrapper
+			// defun names without ever being a function designator
+			// (Ctx.userSpelledLiterals).
+			ctx.userSpelledLiterals.add(displayForm);
+		}
 		compileUnspelledLiteral(displayForm, ctx);
 	}
 

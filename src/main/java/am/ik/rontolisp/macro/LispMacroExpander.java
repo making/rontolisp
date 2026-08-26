@@ -29959,8 +29959,18 @@ public final class LispMacroExpander {
 		return containsRuntimeFunctionDesignator(cons.car()) || containsRuntimeFunctionDesignator(cons.cdr());
 	}
 
-	/** Whether a function-designator form names its target statically. */
-	private static boolean isStaticFunctionDesignator(LispVal fnForm) {
+	/**
+	 * Whether a function-designator form names its target STATICALLY -- {@code #'name},
+	 * {@code 'name} or a literal {@code (lambda ...)}. Such a designator evaluates to a
+	 * closure the compiler built, never to a symbol, so a call site handed one can never
+	 * be asked to resolve a name at run time. Every other spelling -- a variable, a call,
+	 * a struct slot read -- may deliver a SYMBOL, which only the name registry resolves,
+	 * so the backends' registry gates ask this question at each site that funcalls its
+	 * function argument.
+	 * @param fnForm the expression in function-designator position
+	 * @return {@code true} when the designator is statically known
+	 */
+	public static boolean isStaticFunctionDesignator(LispVal fnForm) {
 		if (!(fnForm instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
 			return false;
 		}

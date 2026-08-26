@@ -43,6 +43,11 @@ final class WasmLambdaCompiler {
 				ctx.functions.keySet(), ctx.globals, enclosingLexicals);
 
 		int funcId = ctx.nextFuncId[0]++;
+		if (ctx.injectedRuntimeBody) {
+			// Built by an injected wrapper body, so Pass 2c compiles it as one too
+			// (Ctx.injectedRuntimeLambdas).
+			ctx.injectedRuntimeLambdas.add(funcId);
+		}
 		String methodName = "_lambda_" + funcId;
 		int funcIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
 		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,

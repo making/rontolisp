@@ -61,6 +61,13 @@ final class WasmFunctionCallCompiler {
 			return;
 		}
 		ctx.indirectCallArities.add(arity);
+		// See Ctx.runtimeDesignatorDispatch: a designator the compiler cannot read may
+		// be a SYMBOL at run time, which only the name registry resolves. This is the
+		// seam the sequence operators arrive at -- (every f l) and its family expand
+		// into a loop over (funcall #pred elem) during Pass 2.
+		if (!ctx.injectedRuntimeBody && !LispMacroExpander.isStaticFunctionDesignator(parts.get(1))) {
+			ctx.runtimeDesignatorDispatch[0] = true;
+		}
 		int dispatchFuncIdx = WasmLispCompiler.dispatchFuncIndex(arity, ctx.extraDispatchFuncBase);
 
 		// Push funcval

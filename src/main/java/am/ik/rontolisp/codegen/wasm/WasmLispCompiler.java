@@ -2888,9 +2888,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				wrapperExcludes.add(op);
 			}
 		}
+		// The defuns from here down are INJECTED runtime, not the user's program: the
+		// built-in wrapper catalog and the shared sequence helpers. Their bodies funcall
+		// a designator PARAMETER, so every one of them is a dispatch of a designator the
+		// compiler cannot read -- in every program, including one whose own text has no
+		// higher-order call at all. Recording which defuns they are is what lets the
+		// name-registry gate below read the user's designators only
+		// (Ctx.injectedRuntimeBody).
+		Set<String> injectedRuntimeDefuns = new HashSet<>();
 		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
 		for (LispVal wrapper : wrappers) {
-			defuns.add(extractSetqLambda(wrapper));
+			DefunDecl decl = extractSetqLambda(wrapper);
+			injectedRuntimeDefuns.add(decl.name);
+			defuns.add(decl);
 		}
 		// The shared subseq dispatch, once per program that calls subseq -- from its own
 		// source or from a wrapper body just added, which is why this is here and not in
@@ -2907,12 +2917,16 @@ public final class WasmLispCompiler implements LispCompiler {
 			.anyMatch(LispMacroExpander.sequenceOpRuntimeNames()::contains) ? List.of()
 					: LispMacroExpander.sequenceOpRuntimeWrappers(program, wrappers);
 		for (LispVal helper : seqOpHelpers) {
-			defuns.add(extractSetqLambda(helper));
+			DefunDecl decl = extractSetqLambda(helper);
+			injectedRuntimeDefuns.add(decl.name);
+			defuns.add(decl);
 		}
 		if (!userDefinedNames.contains(LispNames.SUBSEQ_RUNTIME)
 				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers)
 						|| LispMacroExpander.programUsesSubseq(seqOpHelpers))) {
-			defuns.add(extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper()));
+			DefunDecl decl = extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper());
+			injectedRuntimeDefuns.add(decl.name);
+			defuns.add(decl);
 		}
 		// The shared sequence-conversion trio, once per program whose lowerings can
 		// reach a literal coerce -- every generic sequence operator's dispatch does, and
@@ -2923,7 +2937,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (!userDefinedNames.contains(LispNames.SEQ_TO_LIST) && (LispMacroExpander.programUsesSeqConversion(program)
 				|| LispMacroExpander.programUsesSeqConversion(wrappers))) {
 			for (LispVal helper : LispMacroExpander.seqConversionWrappers()) {
-				defuns.add(extractSetqLambda(helper));
+				DefunDecl decl = extractSetqLambda(helper);
+				injectedRuntimeDefuns.add(decl.name);
+				defuns.add(decl);
 			}
 		}
 
@@ -3096,11 +3112,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Ctx.spelledLiterals). Filled while the bodies are emitted, read below by the
 		// dispatch gate's name probes.
 		Set<String> spelledLiterals = new HashSet<>();
+		// The half of it the user's own text spells; see Ctx.userSpelledLiterals.
+		Set<String> userSpelledLiterals = new HashSet<>();
 		// The cl functions whose user defun an operator interception already warned
 		// about: the warning is per NAME, not per call site (see
 		// Ctx.warnedClRedefinitions).
 		Set<String> warnedClRedefinitions = new HashSet<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
+		// Set by the seams that dispatch a designator the compiler could not read; see
+		// Ctx.runtimeDesignatorDispatch and the registry gate below.
+		boolean[] runtimeDesignatorDispatch = new boolean[1];
+		// The lambdas the injected runtime bodies build; see Ctx.injectedRuntimeLambdas.
+		Set<Integer> injectedRuntimeLambdas = new HashSet<>();
 		// The async waiter wake-up goes through the arity-1 dispatch (the resume
 		// functions are arity-1 lambdas), and the wasi-stream read/close thunks
 		// through the arity-0 one, so both bodies must be real.
@@ -3162,8 +3185,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			.duplicatedDefunNames(duplicatedDefunNames)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
+			.runtimeDesignatorDispatch(runtimeDesignatorDispatch)
+			.injectedRuntimeLambdas(injectedRuntimeLambdas)
 			.valueFuncIds(valueFuncIds)
 			.spelledLiterals(spelledLiterals)
+			.userSpelledLiterals(userSpelledLiterals)
 			.nextFuncId(nextFuncId)
 			.dynamic(this.dynamic)
 			.optimize(this.optimize)
@@ -3232,6 +3258,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// result calls the _str_from_mem helper, whose index follows the lambdas.
 		Map<String, Integer> importBodySlots = new HashMap<>();
 		for (DefunDecl defun : defuns) {
+			// See Ctx.injectedRuntimeBody: a wrapper catalog body is not the user's
+			// designator use, so its dispatches do not arm the name registry.
+			ctxBuilder.injectedRuntimeBody(injectedRuntimeDefuns.contains(defun.name));
 			if (importWrappers.containsKey(defun.name) || componentImportWrappers.containsKey(defun.name)
 					|| componentDropWrappers.containsKey(defun.name) || componentAsyncWrappers.containsKey(defun.name)
 					|| componentCallStartWrappers.containsKey(defun.name)
@@ -3301,6 +3330,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			// Rebuild with correct local declarations (extra locals beyond env+params)
 			userFunctionBodies.add(buildLocalsAndPatch(funcCtx, defun.paramNames.size() + 1, funcBody));
 		}
+
+		// Every body from here on is the user's program again (the lambda pass included:
+		// a lambda lifted out of a wrapper body is compiled here, and counting it as the
+		// user's is the conservative direction).
+		ctxBuilder.injectedRuntimeBody(false);
 
 		// Pass 2b: Build _start function body
 		ByteArrayOutputStream startBody = new ByteArrayOutputStream();
@@ -3436,7 +3470,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			ByteArrayOutputStream lambdaBody = new ByteArrayOutputStream();
 			WasmWriter lambdaWriter = new WasmWriter(lambdaBody);
-			Ctx lambdaCtx = ctxBuilder.writer(lambdaWriter).bodyStream(lambdaBody).build();
+			// A lambda an injected wrapper body built is injected runtime too (see
+			// Ctx.injectedRuntimeLambdas); a nested one inherits it through this ctx.
+			Ctx lambdaCtx = ctxBuilder.injectedRuntimeBody(injectedRuntimeLambdas.contains(lambda.funcId()))
+				.writer(lambdaWriter)
+				.bodyStream(lambdaBody)
+				.build();
 
 			// Slot 0 = env (closure environment)
 			lambdaCtx.closureEnvSlot = 0;
@@ -4031,8 +4070,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		// blob is built, since building it interns every surviving name.
 		boolean nameResolvable = anyNameResolvable(program, usesRead, usesLoad);
 		boolean symbolBuilders = RuntimeNameProducers.anySymbolBuilder(program);
-		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, spelledLiterals,
-				usesEval || usesRuntimeDesignator || usesApplyRuntime, nameResolvable, symbolBuilders);
+		// Whether a runtime SYMBOL designator can reach a call site. The source scan
+		// above reads funcall/apply SPELLINGS only, so every other operator that calls
+		// its function argument -- mapcar, sort, reduce, maphash, and the whole
+		// sequence family, which reaches funcall through a Pass 2 macro expansion --
+		// answers with what Pass 2 actually emitted instead
+		// (Ctx.runtimeDesignatorDispatch). Both halves are needed: a dispatched
+		// designator the compiler could not read is where a symbol ARRIVES, and a name
+		// the program spells (or can build, or can read) is what _lookup could answer
+		// with. Without the second half every (reduce #'+ l) would pull the registry in
+		// -- its expansion binds the function to a temp, so the funcall dispatches --
+		// for a module in which no symbol naming a defun exists.
+		boolean designatorSymbolArrives = runtimeDesignatorDispatch[0]
+				&& (nameResolvable || anyDefunNameSpelled(defuns, userSpelledLiterals, symbolBuilders));
+		boolean registryLive = usesEval || usesRuntimeDesignator || usesApplyRuntime || designatorSymbolArrives;
+		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, spelledLiterals, registryLive,
+				nameResolvable, symbolBuilders);
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
@@ -4126,7 +4179,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// actually having such a call -- the registry embeds every defun NAME, so
 		// emitting it unconditionally would make two programs with identical CODE
 		// differ in bytes (the wit-import byte-identity pins).
-		if (usesEval || usesRuntimeDesignator || usesApplyRuntime) {
+		if (registryLive) {
 			ByteArrayOutputStream registry = new ByteArrayOutputStream();
 			int registryCount = 0;
 			for (int i = 0; i < defuns.size(); i++) {
@@ -6544,6 +6597,28 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * applied
 	 * @return the funcIds that need a ladder case (and a registry row)
 	 */
+	/**
+	 * Whether any defun's name is one a runtime designator could CARRY -- a spelling this
+	 * compile emits as a value, or one a symbol builder can assemble from those. The
+	 * registry answers names and nothing else, so a module holding no such spelling has
+	 * nothing for {@code _lookup} to find and needs neither it nor the blob, however many
+	 * designators Pass 2 dispatched. Uses the probe {@link #dispatchableFuncIds} uses for
+	 * the rows themselves, so the gate and the rows agree by construction.
+	 * @param defuns the program's top-level functions
+	 * @param spelledLiterals every literal spelling Pass 2 emitted as a runtime value
+	 * @param symbolBuilders whether the program contains a symbol builder
+	 * @return {@code true} when at least one defun name is reachable as a designator
+	 */
+	private static boolean anyDefunNameSpelled(List<DefunDecl> defuns, Set<String> spelledLiterals,
+			boolean symbolBuilders) {
+		for (DefunDecl defun : defuns) {
+			if (DesignatorSpellings.anySpelled(defun.name, spelledLiterals, symbolBuilders)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds,
 			Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders) {
 		if (this.dynamic || anyNameResolvable) {
@@ -7148,6 +7223,44 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<Integer> indirectCallArities;
 
 		/**
+		 * Whether Pass 2 dispatched a designator it could NOT read -- a
+		 * {@code funcall}/{@code mapcar}/{@code sort}/{@code maphash}/... whose function
+		 * argument is neither {@code #'name} nor {@code 'name} nor a literal
+		 * {@code lambda} ({@link LispMacroExpander#isStaticFunctionDesignator}). Only
+		 * such a site can be handed a SYMBOL at run time, and only the {@code _lookup}
+		 * registry resolves one, so this is half of the registry gate in {@code compile}
+		 * -- the other half being whether the program spells a name the registry could
+		 * answer with. Recorded during emission rather than scanned off the source
+		 * because the sequence operators reach their call through a MACRO expansion no
+		 * pre-scan sees ({@code (every f l)} becomes a {@code do} loop over
+		 * {@code (funcall #pred elem)}), which is why
+		 * {@code LispMacroExpander.usesRuntimeFunctionDesignator} -- reading
+		 * {@code funcall}/{@code apply} spellings only -- missed every one of them. One
+		 * mutable holder shared by every {@code Ctx}, like {@link #valueFuncIds}.
+		 */
+		boolean[] runtimeDesignatorDispatch;
+
+		/**
+		 * Whether the body being emitted is INJECTED runtime rather than the user's
+		 * program -- a {@code BuiltinFunctionWrappers} catalog entry or one of the shared
+		 * sequence helpers. Every one of those bodies funcalls a designator PARAMETER, so
+		 * they dispatch in every program ever compiled and would hold
+		 * {@link #runtimeDesignatorDispatch} permanently true; a symbol can only reach
+		 * one by being passed as an ARGUMENT to a first-class use of the built-in, which
+		 * is the {@code funcall}/{@code apply} the source scan already reads.
+		 */
+		boolean injectedRuntimeBody = false;
+
+		/**
+		 * The funcIds of lambdas created while {@link #injectedRuntimeBody} was set --
+		 * the comparator {@code stable-sort} builds, {@code complement}'s closure -- so
+		 * Pass 2c can re-enter each of those bodies with the same answer. Their
+		 * designator is the wrapper's parameter just as the wrapper body's is. One
+		 * mutable set shared by every {@code Ctx}, like {@link #valueFuncIds}.
+		 */
+		Set<Integer> injectedRuntimeLambdas;
+
+		/**
 		 * The funcIds this program can reach as a first-class FUNCTION VALUE, recorded as
 		 * Pass 2 emits them: every {@code (function name)} closure
 		 * ({@link WasmFunctionFormCompiler#compileNamed}) and every {@code (lambda ...)}
@@ -7174,6 +7287,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * row) is not a name the program spells, and must not arm a dispatch-ladder case.
 		 */
 		Set<String> spelledLiterals;
+
+		/**
+		 * The subset of {@link #spelledLiterals} the USER's program spells -- everything
+		 * emitted while {@link #injectedRuntimeBody} was clear. The name-registry gate
+		 * reads this rather than the full set: the wrapper catalog quotes {@code 'list},
+		 * {@code 'cons}, {@code 'string} and friends as type designators inside its own
+		 * bodies, which name wrapper defuns without any of them ever being a function
+		 * designator, and reading the full set therefore armed the registry for every
+		 * program ever compiled. {@code dispatchableFuncIds} still reads the full set:
+		 * once the registry is live, a row is cheap and a spelling anywhere can reach it.
+		 */
+		Set<String> userSpelledLiterals;
 
 		/**
 		 * The {@code cl} function names this compile has already warned about, so an
@@ -7676,8 +7801,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
+			this.runtimeDesignatorDispatch = builder.runtimeDesignatorDispatch;
+			this.injectedRuntimeBody = builder.injectedRuntimeBody;
+			this.injectedRuntimeLambdas = builder.injectedRuntimeLambdas;
 			this.valueFuncIds = builder.valueFuncIds;
 			this.spelledLiterals = builder.spelledLiterals;
+			this.userSpelledLiterals = builder.userSpelledLiterals;
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
@@ -7760,9 +7889,17 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private Set<Integer> indirectCallArities = new HashSet<>();
 
+			private boolean[] runtimeDesignatorDispatch = new boolean[1];
+
+			private boolean injectedRuntimeBody = false;
+
+			private Set<Integer> injectedRuntimeLambdas = new HashSet<>();
+
 			private Set<Integer> valueFuncIds = new HashSet<>();
 
 			private Set<String> spelledLiterals = new HashSet<>();
+
+			private Set<String> userSpelledLiterals = new HashSet<>();
 
 			private Set<String> warnedClRedefinitions = new HashSet<>();
 
@@ -7916,6 +8053,21 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder runtimeDesignatorDispatch(boolean[] runtimeDesignatorDispatch) {
+				this.runtimeDesignatorDispatch = runtimeDesignatorDispatch;
+				return this;
+			}
+
+			Builder injectedRuntimeBody(boolean injectedRuntimeBody) {
+				this.injectedRuntimeBody = injectedRuntimeBody;
+				return this;
+			}
+
+			Builder injectedRuntimeLambdas(Set<Integer> injectedRuntimeLambdas) {
+				this.injectedRuntimeLambdas = injectedRuntimeLambdas;
+				return this;
+			}
+
 			Builder valueFuncIds(Set<Integer> valueFuncIds) {
 				this.valueFuncIds = valueFuncIds;
 				return this;
@@ -7923,6 +8075,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder spelledLiterals(Set<String> spelledLiterals) {
 				this.spelledLiterals = spelledLiterals;
+				return this;
+			}
+
+			Builder userSpelledLiterals(Set<String> userSpelledLiterals) {
+				this.userSpelledLiterals = userSpelledLiterals;
 				return this;
 			}
 

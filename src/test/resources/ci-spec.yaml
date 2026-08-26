@@ -1094,6 +1094,39 @@ cases:
       (11 22 33 44)
       ((1 . A) (2 . B))
       (111 222)
+  - name: computed-symbol-function-designator
+    source: |
+      ;; CL lets a SYMBOL be the function designator of every operator that calls
+      ;; its function argument, and a designator the compiler cannot read out of
+      ;; the source -- one taken from a list, a slot, a parameter -- must resolve
+      ;; the same way at run time. On WASM that resolution is the name registry,
+      ;; whose gate used to read funcall/apply spellings alone, so each operator
+      ;; below trapped there while the other three backends answered.
+      (defun ci-cfd-even (x) (evenp x))
+      (defun ci-cfd-lt (a b) (< a b))
+      (defun ci-cfd-map (f l) (mapcar f l))
+      (print (mapcar (car (list 'ci-cfd-even)) '(2 3 4)))
+      (print (every (car (list 'ci-cfd-even)) '(2 3 4)))
+      (print (remove-if (car (list 'ci-cfd-even)) '(2 3 4)))
+      (print (count-if (car (list 'ci-cfd-even)) '(2 3 4)))
+      (print (find-if (car (list 'ci-cfd-even)) '(2 3 4)))
+      (print (position-if (car (list 'ci-cfd-even)) '(2 3 4)))
+      (print (sort (list 3 1 2) (car (list 'ci-cfd-lt))))
+      (print (ci-cfd-map 'ci-cfd-even '(2 3)))
+      (let ((h (make-hash-table)))
+        (setf (gethash 1 h) 2)
+        (maphash (car (list 'ci-cfd-lt)) h)
+        (print (hash-table-count h)))
+    expected: |
+      (T NIL T)
+      NIL
+      (3)
+      2
+      2
+      0
+      (1 2 3)
+      (T NIL)
+      1
   - name: map-into
     source: |
       (print (map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))

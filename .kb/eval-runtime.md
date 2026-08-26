@@ -48,13 +48,49 @@ reason (`FILL`/`COERCE`/`VECTOR`/`SVREF`/... call `_aset1`); fixed the same way 
 `.kb/adjustable-arrays.md`'s "The array-gated wrapper set is complete" section.
 
 **The name registry is no longer a passenger of that gate.** `_lookup` used to ride along
-on an always-on `usesEval`; it is now `usesEval || usesRuntimeFunctionDesignator ||
-!indirectCallArities.isEmpty()`. The source scan reads `funcall`/`apply` only, so the last
-clause is what covers every OTHER operator that calls a designator it cannot read --
-`mapcar`, `sort`, `remove-if`, `maphash`, a bare `(f x)` whose head is an expression: a
-dispatcher is exactly a call site a SYMBOL can arrive at, and only `_lookup` resolves one.
-**The WASM backend has no such clause and traps on `(mapcar (car (list 'pred)) l)`** --
-a live gap, not a consequence of this.
+on an always-on `usesEval`. On the JVM it is now `usesEval ||
+usesRuntimeFunctionDesignator || !indirectCallArities.isEmpty()`. The source scan reads
+`funcall`/`apply` only, so the last clause is what covers every OTHER operator that calls
+a designator it cannot read -- `mapcar`, `sort`, `remove-if`, `maphash`, a bare `(f x)`
+whose head is an expression: a dispatcher is exactly a call site a SYMBOL can arrive at,
+and only `_lookup` resolves one. That clause is effectively always true, because the
+injected wrapper bodies take their designator as a PARAMETER and so dispatch in every
+program -- measured, not assumed: `(print (+ 1 2))` dispatches `__every_pred`,
+`__reduce_gfn` and a dozen more out of the catalog. Narrowing it wants either the
+demand-driven wrapper injection `.todo/519` started or the WASM answer below, which
+separates the injected bodies from the user's without either.
+
+## The WASM registry gate reads what Pass 2 emitted, in two halves
+
+WASM cannot afford the JVM's always-true clause -- a wit-import module's bytes are pinned
+-- so it asks the same question precisely, and both halves are recorded during EMISSION
+rather than scanned off the source:
+
+- **A symbol can ARRIVE**: `Ctx.runtimeDesignatorDispatch` is set wherever Pass 2
+  dispatches a designator that is not `#'name` / `'name` / a literal `lambda`
+  (`LispMacroExpander.isStaticFunctionDesignator`) -- `WasmDesignatorCall.prepare` for the
+  map family / `reduce` / `sort`, `WasmFunctionCallCompiler.compileFuncall`,
+  `WasmHashTableCompiler.compileMaphash`. Emission-time, because the sequence predicates
+  reach their call through a Pass 2 macro expansion no pre-scan sees: `(every f l)` becomes
+  a `do` loop over `(funcall #pred elem)`, which is why the funcall/apply source scan
+  missed `every`, `remove-if`, `count-if`, `find-if` and `position-if` alike.
+- **A name can ANSWER**: `Ctx.userSpelledLiterals` -- the half of `spelledLiterals` the
+  user's own text spells -- must hold a spelling of some defun name
+  (`DesignatorSpellings`), or the program must be able to build or read one
+  (`nameResolvable`).
+
+Both halves exist to keep the INJECTED runtime out of the answer. The wrapper catalog's
+bodies funcall a designator parameter and quote `'list`/`'cons`/`'string` for their own
+`coerce` calls, so a gate reading either half over the whole module is true for
+`(print (+ 1 2))`. `Ctx.injectedRuntimeBody` marks those bodies while they are emitted
+(and `Ctx.injectedRuntimeLambdas` carries the mark to the lambdas they build -- the
+`stable-sort` comparator, `complement`'s closure -- so Pass 2c re-enters them with the same
+answer); a designator arriving inside one can only have come from a `funcall`/`apply` the
+source scan already reads. A program whose designators the compiler can read is
+byte-identical to one built before any of this existed. Pinned by
+`WasmLispCompilerTest.onlyAnUnreadableDesignatorPullsInTheNameRegistry` and
+`WasmLispCompilerIntegrationTest.aComputedSymbolDesignatorResolvesForEveryOperatorThatCallsIt`
+(plus its `--component` twin).
 
 ## A literal `boundp` never reaches this gate
 

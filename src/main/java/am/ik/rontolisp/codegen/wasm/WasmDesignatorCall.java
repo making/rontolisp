@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -71,6 +72,13 @@ final class WasmDesignatorCall {
 			return direct;
 		}
 		int index = dispatchFuncIndex.getAsInt();
+		// A designator the compiler cannot READ may deliver a SYMBOL at run time, which
+		// only the name registry resolves -- so the site tells the module it dispatched
+		// one (Ctx.runtimeDesignatorDispatch). A static designator is a closure the
+		// compiler built and needs nothing.
+		if (!ctx.injectedRuntimeBody && !LispMacroExpander.isStaticFunctionDesignator(fnForm)) {
+			ctx.runtimeDesignatorDispatch[0] = true;
+		}
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(fnForm), ctx);
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);

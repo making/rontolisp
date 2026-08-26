@@ -747,6 +747,11 @@ final class WasmAsyncEmit {
 			.lambdaDecls(proto.lambdaDecls)
 			.indirectCallArities(proto.indirectCallArities)
 			// Module-wide and MUTATED during emission, like indirectCallArities above:
+			// a designator the async body dispatches without being able to read it must
+			// still arm the name registry (see Ctx.runtimeDesignatorDispatch).
+			.runtimeDesignatorDispatch(proto.runtimeDesignatorDispatch)
+			.injectedRuntimeLambdas(proto.injectedRuntimeLambdas)
+			// Module-wide and MUTATED during emission, like indirectCallArities above:
 			// freshCtx also builds the synchronous top level, so dropping it here loses
 			// every closure the top level materializes and the dispatch ladders lose
 			// their cases for them (a trap at the first (funcall f ...)).
@@ -755,6 +760,7 @@ final class WasmAsyncEmit {
 			// the synchronous top level spells must keep arming the dispatch gate's
 			// name probes.
 			.spelledLiterals(proto.spelledLiterals)
+			.userSpelledLiterals(proto.userSpelledLiterals)
 			.nextFuncId(proto.nextFuncId)
 			.dynamic(proto.dynamic)
 			// The level decides emission shape (the fusion/unboxed-local trades), so a

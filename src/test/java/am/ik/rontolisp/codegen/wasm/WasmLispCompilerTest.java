@@ -1396,6 +1396,26 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void onlyAnUnreadableDesignatorPullsInTheNameRegistry() {
+		// The registry is what resolves a SYMBOL designator at run time, and it embeds
+		// every dispatchable defun NAME -- so it is emitted only for a program that can
+		// hand a symbol to a call site: one that DISPATCHES a designator the compiler
+		// cannot read AND spells a name the registry could answer with. Both halves
+		// matter. The wrapper catalog dispatches its parameter in every program ever
+		// compiled and quotes 'list / 'cons for its own coerce calls, so a gate reading
+		// either half over the whole module is permanently true; and (every #'pred l)
+		// binds the predicate to a macro temp, so the funcall its expansion builds
+		// dispatches a variable however statically the user spelled it.
+		String defs = "(defun pred (x) (evenp x)) ";
+		byte[] readable = compile(defs + "(let ((f #'pred)) (print (mapcar f '(1 2))) (print (every f '(1 2))))");
+		byte[] computed = compile(defs + "(let ((f (car (list 'pred)))) (print (mapcar f '(1 2))))");
+		// The registry's row for PRED is the only thing that spells the name: the
+		// readable module builds the closure by funcId and never mentions it.
+		assertThat(occurrences(readable, "PRED")).isZero();
+		assertThat(occurrences(computed, "PRED")).isEqualTo(1);
+	}
+
+	@Test
 	void aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv() {
 		// The eval mirror (_store into GLOBAL_ENV) exists so an eval'd form can read a
 		// variable the compiled program assigned at top level. A LEXICAL of a top-level

@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -327,6 +328,11 @@ final class WasmHashTableCompiler {
 	static void compileMaphash(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		ctx.indirectCallArities.add(2);
+		// maphash always dispatches (it has no direct-call route), so the registry gate
+		// reads the designator itself -- see Ctx.runtimeDesignatorDispatch.
+		if (!ctx.injectedRuntimeBody && !LispMacroExpander.isStaticFunctionDesignator(args.get(1))) {
+			ctx.runtimeDesignatorDispatch[0] = true;
+		}
 		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + 2;
 
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
