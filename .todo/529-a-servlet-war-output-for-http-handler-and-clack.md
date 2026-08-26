@@ -13,7 +13,13 @@ decoding, both halves decoded, non-prefix degrades -- the servlet's
 `getContextPath() + getServletPath()`, the reactor envelope's optional
 `"script-name"` key, ci-spec `http-clack-script-name` on all four backends,
 `WarE2eTest`'s context-path leg; `.kb/http-server.md`, "The environment
-contract"). `.todo/532` (Clack on the servlet transport), `.todo/533` (the
+contract"). `.todo/532` (Clack on the servlet transport) -- DONE (2026-08-26:
+the shim's fourth `run` leg, `#+rontolisp-servlet`; the initializer's bounded
+wait for a registration clackup's default `:use-thread t` puts on a spawned
+thread the class-init lock holds back, and the VOLATILE handler slot that makes
+that wait read a published value; war legs on both application shapes in
+`ClackE2eTest` plus `NingleE2eTest`, over the shared `EmbeddedServletContainer`;
+`.kb/clack.md`'s transport list is four bullets now). `.todo/533` (the
 Maven plugin builds a war): OPEN.
 
 Spike files: `.todo/529-a-servlet-war-output-for-http-handler-and-clack/`
