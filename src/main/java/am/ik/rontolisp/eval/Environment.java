@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.DoubleUnaryOperator;
@@ -2215,8 +2216,10 @@ public final class Environment implements Scope {
 				}));
 		// random: a non-negative random number below the (positive) limit, of the same
 		// type as the limit (integer -> integer, float -> float). The interpreter and the
-		// JVM backend draw from Math.random(); the WASM backend draws real entropy from
-		// the WASI random_get host function.
+		// JVM backend draw from ThreadLocalRandom (a per-thread generator seeded from the
+		// process's entropy); the WASM backends draw from a module-local SplitMix64
+		// generator seeded once from the host. All three are plain PRNGs, which is what
+		// CL's random is -- the entropy API is %random-byte below (.kb/random.md).
 		// make-random-state: nil, always -- no random-state objects exist (random
 		// ignores its optional state argument), and nil is what a caller stores and
 		// passes back. The argument (nil / t / a state) is accepted and ignored.
@@ -2240,22 +2243,22 @@ public final class Environment implements Scope {
 				if (d.value() <= 0.0) {
 					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
 				}
-				return new LispDouble(Math.random() * d.value());
+				return new LispDouble(ThreadLocalRandom.current().nextDouble() * d.value());
 			}
 			if (limit instanceof LispInteger i) {
 				if (i.value() <= 0) {
 					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
 				}
-				return new LispInteger((long) (Math.random() * i.value()));
+				return new LispInteger((long) (ThreadLocalRandom.current().nextDouble() * i.value()));
 			}
 			if (limit instanceof LispBigInteger b) {
 				if (b.value().signum() <= 0) {
 					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
 				}
 				// Scale a [0,1) random fraction across the bignum range, then floor.
-				return normalizeBig(
-						new java.math.BigDecimal(b.value()).multiply(java.math.BigDecimal.valueOf(Math.random()))
-							.toBigInteger());
+				return normalizeBig(new java.math.BigDecimal(b.value())
+					.multiply(java.math.BigDecimal.valueOf(ThreadLocalRandom.current().nextDouble()))
+					.toBigInteger());
 			}
 			throw new LispEvalException("random expects an integer or float limit, got: " + limit.print());
 		}));

@@ -61,8 +61,11 @@ wasmtime run -W gc=y --dir . fileio.wasm
 # "hello"
 ```
 
-- `random` draws real entropy from `wasi:random@0.3.0` (Preview 1 uses the
-  host's `random_get`), so `(random N)` differs each run.
+- `random` draws from a built-in generator seeded once per run from
+  `wasi:random@0.3.0` (Preview 1 seeds from the host's `random_get`), so
+  `(random N)` differs each run;
+  [`rontolisp:random-bytes`](../reference/functions/rontolisp-random-bytes.md)
+  takes the host's entropy directly, one byte at a time.
   `get-universal-time` / `get-internal-real-time` / `get-internal-run-time`
   read `wasi:clocks@0.3.0` (`system-clock`/`monotonic-clock`), and `uiop:getenv`
   reads `wasi:cli/environment@0.3.0`.

@@ -472,10 +472,12 @@ final class WasmExprCompiler {
 				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
 					if (ctx.noWasi && !ctx.hostRandom) {
-						// The one place where --no-wasi's PRNG must NOT stand in for the
-						// host. `random` there is a self-contained SplitMix64 (CL's
-						// random is a pseudo-random draw from *random-state*, so a fixed
-						// start is inside its contract), but random-bytes promises
+						// The one place where the module-local PRNG must NOT stand in
+						// for the host. `random` is an inlined SplitMix64 on EVERY wasm
+						// build (CL's random is a pseudo-random draw from
+						// *random-state*, so a module-local generator -- with a fixed
+						// start where there is no host to seed it from -- is inside its
+						// contract, .kb/random.md), but random-bytes promises
 						// CRYPTOGRAPHIC entropy -- answering that from a fixed-seed
 						// generator is precisely the "data the program cannot tell from
 						// real" the trapping stubs exist to avoid. A call-time error, not
@@ -495,7 +497,9 @@ final class WasmExprCompiler {
 					// One cryptographically strong byte: the low byte of a WASI
 					// random_get draw (real host entropy in Preview 1, wasi:random
 					// under --component, the env.random_get host import under
-					// --no-wasi --host-random), boxed as an i31 fixnum.
+					// --no-wasi --host-random), boxed as an i31 fixnum. A host call PER
+					// BYTE, deliberately -- this is the one caller `random`'s cheap
+					// module-local generator may never answer.
 					WasmRandomCompiler.compileRandomByte(cons, ctx);
 					return;
 				}

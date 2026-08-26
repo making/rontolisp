@@ -1,4 +1,11 @@
-# Spike sources for `.todo/528`
+# Spike sources for `.todo/528` (closed 2026-08-26)
+
+The item is closed -- `random` now draws from a generator inside the program on
+every backend (`.kb/random.md`), so these files measure the generator rather
+than a host call. The `--no-wasi` line below is no longer a separate
+measurement: every wasm build runs that same SplitMix64 step, inlined at the
+draw site, and only the seeding differs.
+
 
 10^7 `(random 1000)` draws, and the identical loop with the draw replaced by a
 constant. The per-draw cost is the difference divided by 10^7. Top-level

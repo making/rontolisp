@@ -26,8 +26,22 @@ final class JvmMathFnCompiler {
 	/** Key for {@code Math.signum(D)D} in the math ops map. */
 	static final String SIGNUM_D = "signum.d";
 
-	/** Key for {@code Math.random()D} in the math ops map. */
-	static final String RANDOM = "random";
+	/**
+	 * Key for {@code ThreadLocalRandom.current()} in the math ops map -- the first half
+	 * of the entropy source behind {@code random} (see {@link #TLR_NEXT_DOUBLE}).
+	 */
+	static final String TLR_CURRENT = "tlr.current";
+
+	/**
+	 * Key for {@code ThreadLocalRandom.nextDouble()D} in the math ops map. Together with
+	 * {@link #TLR_CURRENT} this is what {@code random} draws from, on the compile path
+	 * and in the interpreter alike: {@code Math.random()} is one process-wide
+	 * {@code java.util.Random} whose 48-bit seed advances by a {@code compareAndSet} on a
+	 * shared {@code AtomicLong}, so every draw pays a CAS and a memory fence for state
+	 * nothing shares. The per-thread generator costs neither and is a strictly better
+	 * generator; {@code .kb/random.md} records why CL's contract allows the swap.
+	 */
+	static final String TLR_NEXT_DOUBLE = "tlr.nextDouble";
 
 	/**
 	 * The Lisp names handled by this compiler, each mapping to {@code Math.<name>(D)D}.
@@ -43,8 +57,8 @@ final class JvmMathFnCompiler {
 	 * Builds the {@code java.lang.Math} method references used by the math compilers.
 	 * @param cp the constant pool to populate
 	 * @param mathClass the {@code java/lang/Math} class constant
-	 * @return references keyed by Lisp name (for the unary functions), plus {@link #POW}
-	 * and {@link #SIGNUM_D}
+	 * @return references keyed by Lisp name (for the unary functions), plus {@link #POW},
+	 * {@link #SIGNUM_D} and the two {@code ThreadLocalRandom} halves
 	 */
 	static Map<String, MethodrefConstant> buildOps(ConstantPool cp, ClassConstant mathClass) {
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
@@ -57,7 +71,11 @@ final class JvmMathFnCompiler {
 		}
 		ops.put(POW, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(DD)D"))));
 		ops.put(SIGNUM_D, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D"))));
-		ops.put(RANDOM, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("random"), cp.addUtf8("()D"))));
+		ClassConstant tlrClass = cp.addClass(cp.addUtf8("java/util/concurrent/ThreadLocalRandom"));
+		ops.put(TLR_CURRENT, cp.addMethodref(tlrClass,
+				cp.addNameAndType(cp.addUtf8("current"), cp.addUtf8("()Ljava/util/concurrent/ThreadLocalRandom;"))));
+		ops.put(TLR_NEXT_DOUBLE,
+				cp.addMethodref(tlrClass, cp.addNameAndType(cp.addUtf8("nextDouble"), cp.addUtf8("()D"))));
 		return ops;
 	}
 

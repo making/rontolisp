@@ -6,19 +6,24 @@
 
 | ビルド | `(random n)` | `rontolisp:random-bytes` | 時計 |
 | --- | --- | --- | --- |
-| インタプリタ、JVM | JVM の生成器 | 動く | マシンの時計 |
-| WASM(デフォルト、Preview 1) | ホストの WASI `random_get` | 動く | WASI `clock_time_get` |
-| WASM `--component` | ホストの `wasi:random` | 動く | `wasi:clocks` |
-| WASM `--no-wasi` | 組み込みの生成器。**どのインスタンスも同じ列** | シグナル | ホストが `__ronto_set_time` で書き込んだ値。書き込まれるまではシグナル |
-| WASM `--no-wasi --host-random` | ホストの `env.random_get` | 動く | 上と同じ |
+| インタプリタ、JVM | JDK がシードする `ThreadLocalRandom` | 動く | マシンの時計 |
+| WASM(デフォルト、Preview 1) | ホストの WASI `random_get` でシードされる組み込み生成器 | 動く | WASI `clock_time_get` |
+| WASM `--component` | ホストの `wasi:random` でシードされる組み込み生成器 | 動く | `wasi:clocks` |
+| WASM `--no-wasi` | 同じ組み込み生成器。シードなし: **どのインスタンスも同じ列** | シグナル | ホストが `__ronto_set_time` で書き込んだ値。書き込まれるまではシグナル |
+| WASM `--no-wasi --host-random` | ホストの `env.random_get` でシードされる組み込み生成器 | 動く | 上と同じ |
 
-判断が必要なのは `--no-wasi` の行だけです。それ以外ではどちらの値もホスト自身のものであり、このページの残りは最後のケースの話です。
+判断が必要なのは `--no-wasi` の行だけです。それ以外では、最終的にすべてがホスト自身のエントロピーに由来します。このページの残りは最後のケースの話です。
 
 ## 乱数
 
 Common Lisp の [`random`](../reference/functions/random.md) はエントロピー API ではなく
 `*random-state*` からの疑似乱数の draw です: 予測不可能性は契約のどこでも約束されておらず、イメージが固定の状態から始まることも許されています。それを約束するのは別の
 API である [`rontolisp:random-bytes`](../reference/functions/rontolisp-random-bytes.md) で、本物のエントロピー源があるところでのみ利用できます。
+
+この区別は draw が安い理由でもあります。`random`
+は draw のたびにホストへ新しいバイトを要求するのではなく、**プログラム内部**にある生成器を回します。その生成器は実行ごとに一度だけホストのエントロピーでシードされます
+— 1 回あたり数百ナノ秒ではなく数ナノ秒で済むのはこのためです。本当にホストへ行くのは
+`rontolisp:random-bytes` のほうで、こちらは毎回 1 バイトずつホストから取ります。
 
 ```lisp
 (print (list (random 1) (< (random 10) 10)))   ; => (0 T)
@@ -108,11 +113,12 @@ instance.exports._initialize();
 
 シードフックと同様、これもコアモジュール形態だけにあります。リアクターコンポーネントはトップレベルをインスタンス化時に実行するため、ホストが先に時刻を設定できる瞬間が存在しません。そこでは時計はシグナルし、その旨を述べます。
 
-### ホストから直接引く — `--host-random`
+### ホストからエントロピーを得る — `--host-random`
 
-`--host-random` は組み込みの生成器をホスト呼び出しに置き換えます。つまりすべての draw
-がホストのエントロピーになります — quickload
-したライブラリの中の draw も含めて。ライブラリ側はバイトの出どころを知りません:
+`--host-random` はエントロピーを引くためのホストインポートをモジュールに 1 つ与えます。組み込みの生成器は最初の draw
+でそこからシードされ — quickload
+したライブラリの中の draw も含めて。ライブラリ側は乱数の出どころを知りません —
+`rontolisp:random-bytes` はそこから直接供給されます:
 
 ```bash
 rontolisp app.lisp --no-wasi --host-random -o app.wasm
@@ -134,8 +140,8 @@ instance.exports._initialize();
 ```
 
 エントロピーが本当にホストのものなので、ここでは `rontolisp:random-bytes` が動きます。`__ronto_seed_random`
-はエクスポートされません — シードすべきモジュール内の状態がもう残っていないからです。`__ronto_set_time`
-は影響を受けません: 2 つのサービスは独立で、モジュール内の生成器を持つのは一方だけだからです。
+はエクスポートされません — このフックが存在する目的を、フラグがすでに自動でやってくれるからです。`__ronto_set_time`
+は影響を受けません: 2 つのサービスは独立で、フラグが不要にするフックを持つのは一方だけだからです。
 
 インポートゼロというデフォルトは変わりません。これはオプトインであり、モジュールはホストが**必ず**提供しなければならないインポートを 1
 つ持つことになります。プログラムが一度も draw しなければツリーシェイカーがそのインポートを落とします。このフラグはコアモジュール専用です:

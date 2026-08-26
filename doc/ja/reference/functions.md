@@ -259,7 +259,7 @@
 | `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951`(常に浮動小数点) |
 | `isqrt` | `(isqrt 17)` | `4`(整数平方根、実数根の床) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
-| `random` | `(random 100)`, `(random 1.0)` | `[0, 100)` / `[0.0, 1.0)` の範囲の値(結果型は上限に従います。`(random 1)` は常に `0`)。インタプリタとJVMは `Math.random` から取得します。WASMはPreview 1モードではWASIの `random_get` ホスト関数から、`--component` モードでは `wasi:random@0.3.0` から実際のエントロピーを取得するため、列は実行ごとに異なります |
+| `random` | `(random 100)`, `(random 1.0)` | `[0, 100)` / `[0.0, 1.0)` の範囲の値(結果型は上限に従います。`(random 1)` は常に `0`)。どのバックエンドもプログラム内部の生成器(インタプリタとJVMは `ThreadLocalRandom`、WASMは組み込みの生成器)から draw し、ホストがある場合はそのエントロピー(Preview 1モードではWASIの `random_get`、`--component` モードでは `wasi:random@0.3.0`)で実行ごとに一度シードされるため、列は実行ごとに異なります |
 | `make-random-state` | `(make-random-state t)` | 常に `nil` -- random-state オブジェクトは存在しません。`random` は省略可能な state 引数を受理して無視するため、保存して渡し直すイディオムはそのまま動きます |
 | `get-universal-time` | `(get-universal-time)` | 1900-01-01 GMTからの秒数。すべてのバックエンドで整数です(WASMはPreview 1では実際のホストクロック、`--component` モードでは `wasi:clocks@0.3.0` を読みます) |
 | `encode-universal-time` | `(encode-universal-time 0 0 0 1 1 1970 0)` | `2208988800` -- 分解された時刻要素からユニバーサルタイムへ。タイムゾーン省略時はローカルではなく GMT |

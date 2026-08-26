@@ -228,8 +228,11 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D")));
 		MethodrefConstant intSignum = cp.addMethodref(integerClass,
 				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(I)I")));
-		MethodrefConstant mathRandom = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("random"), cp.addUtf8("()D")));
+		ClassConstant tlrClass = cp.addClass(cp.addUtf8("java/util/concurrent/ThreadLocalRandom"));
+		MethodrefConstant tlrCurrent = cp.addMethodref(tlrClass,
+				cp.addNameAndType(cp.addUtf8("current"), cp.addUtf8("()Ljava/util/concurrent/ThreadLocalRandom;")));
+		MethodrefConstant tlrNextDouble = cp.addMethodref(tlrClass,
+				cp.addNameAndType(cp.addUtf8("nextDouble"), cp.addUtf8("()D")));
 		MethodrefConstant floorModLong = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("floorMod"), cp.addUtf8("(JJ)J")));
 
@@ -421,7 +424,7 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildSignum(nSignum, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
 				signumDouble, rRatNum, biSignum, longValueOf));
 		methods.add(buildRandom(nRandom, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
-				longValueOf, mathRandom));
+				longValueOf, tlrCurrent, tlrNextDouble));
 		methods.add(buildSelect(nMin, dBinary, rCmp, Opcode.IFGT));
 		methods.add(buildSelect(nMax, dBinary, rCmp, Opcode.IFLT));
 		methods.add(buildDbl(nDbl, dUnary, ratArrClass, numberClass, bigDecClass, bdInit, bdDivide, bdDoubleValue,
@@ -1192,11 +1195,16 @@ final class JvmNumericRuntimeBuilder {
 	// robust to a BigInteger / ratio limit.
 	private static NumericMethod buildRandom(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
 			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant longValueOf, MethodrefConstant mathRandom) {
+			MethodrefConstant doubleValueOf, MethodrefConstant longValueOf, MethodrefConstant tlrCurrent,
+			MethodrefConstant tlrNextDouble) {
 		List<Integer> c = new ArrayList<>();
-		// d = Math.random() * _dbl(limit)
+		// d = ThreadLocalRandom.current().nextDouble() * _dbl(limit). The per-thread
+		// generator, not Math.random()'s single shared java.util.Random -- see
+		// .kb/random.md.
 		c.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(c, mathRandom.index());
+		JvmRuntimeBuilder.emitU2(c, tlrCurrent.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, tlrNextDouble.index());
 		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
 		c.add(Opcode.DMUL);
 		// limit instanceof Double ? Double.valueOf(d) : Long.valueOf((long) d)

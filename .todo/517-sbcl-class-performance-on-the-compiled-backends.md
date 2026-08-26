@@ -3,14 +3,15 @@
 Difficulty: High (parent item; each child is sized on its own)
 
 Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522` (all
-closed), plus `.todo/527` and `.todo/528`, filed 2026-08-26 out of the residual
-section below and both OPEN.
+closed), plus `.todo/527` (OPEN) and `.todo/528` (closed 2026-08-26), filed out
+of the residual section below.
 Related: `.todo/412` (the JVM boxes every integer and has no fusion) -- closed
 2026-08-26 by JVM integer expression-tree fusion (`.kb/jvm-int-fusion.md`).
 
 **Every child having landed, the four rows were re-taken on one fixed baseline
--- see "The fixed baseline" below. Two of the four are inside the 2x target and
-two are not, and the two that are not are exactly `.todo/527` and `.todo/528`.**
+-- see "The fixed baseline" below. THREE of the four are now inside the 2x
+target, and the one that is not is `.todo/527`.** `.todo/528` closed
+2026-08-26 and took the `random` row from 2.9x to 1.8x.
 
 ## Where this came from
 
@@ -168,12 +169,13 @@ including runtime startup, output verified equal to SBCL's. Sources and commands
 | benchmark | SBCL | interp | JVM top level | JVM in `defun` | wasm top level | wasm in `defun` |
 | --- | --- | --- | --- | --- | --- | --- |
 | `(loop for i from 1 to 100000000 sum i)` | 0.21 | 56.85 | **0.21** | 0.23 | 0.31 | 0.31 |
-| 10^7 x `(+ s (random 1000000))` | 0.16 | 7.70 | **0.46** | 0.38 | 1.86 | 1.60 |
+| 10^7 x `(+ s (random 1000000))` | 0.16 | 7.70 | 0.46 | 0.38 | 1.86 | 1.60 |
+| the same row re-taken after `.todo/528` landed | 0.16 | 7.31 | **0.29** | 0.16 | 0.37 | 0.23 |
 | 10^7 x `(+ s (aref a (random 1000000)))`, `a` 10^6 wide | 0.26 | 12.45 | **1.22** | 0.95 | 2.32 | 2.36 |
 | 10^9 `cdr` steps, `(nth 999 lst)` x 10^6 | 1.16 | 3.99 | 3.35 | 3.31 | **1.87** | 1.82 |
 
 The `--component` backend, `defun` spelling, for the record: `loop sum` 0.35,
-`random` 2.70, `aref` 3.70, `nth` 1.89.
+`random` 2.70 (**0.24** after `.todo/528`), `aref` 3.70, `nth` 1.89.
 
 Ratios against SBCL in the acceptance shape (TOP-LEVEL, best compiled backend):
 
@@ -181,13 +183,14 @@ Ratios against SBCL in the acceptance shape (TOP-LEVEL, best compiled backend):
 | --- | --- | --- |
 | `loop sum` | **1.0x** (JVM 0.21) | inside the target |
 | 10^9 `cdr` | **1.6x** (wasm 1.87) | inside the target |
-| `random` | 2.9x (JVM 0.46) | **`.todo/528`** |
+| `random` | **1.8x** (JVM 0.29) | inside the target -- `.todo/528`, closed |
 | `aref` | 4.7x (JVM 1.22) | **`.todo/527`** |
 
 Against the first measurement in this file: `loop sum` 2.80 -> 0.21 (13x),
 10^9 `cdr` 15.99 -> 3.35 on the JVM and 1.88 -> 1.87 on wasm, `random` 0.78 ->
-0.46, `aref` 1.73 -> 1.22. No compiled backend is slower than the interpreter on
-any row, and the interpreter itself moved (`loop sum` ~72 est. -> 56.85).
+0.46 -> **0.29** (and 1.94 -> **0.37** on wasm), `aref` 1.73 -> 1.22. No compiled
+backend is slower than the interpreter on any row, and the interpreter itself
+moved (`loop sum` ~72 est. -> 56.85).
 
 ## Target
 
@@ -199,7 +202,7 @@ is how scripts are written, and it is what the note wrote.
 ## Measured, understood, now filed
 
 The residuals this section carried are filed, with the numbers re-taken against
-the fixed baseline above:
+the fixed baseline above. One of the two has since closed:
 
 - **`aref` -- `.todo/527`.** Filed here as "`_aref1` is a generic helper call".
   Re-measuring falsified that: on a 1,000-element array the JVM's `aref` costs
@@ -208,13 +211,30 @@ the fixed baseline above:
   SBCL's stays flat. The helper inlines; what costs 55 ns is that a general
   array is an `ArrayList` of boxed `Long`s, so a random read is two dependent
   cold hops through 24 MB. Not the call -- the representation.
-- **`random` -- `.todo/528`.** The wasm draw is 177 ns against the JVM's 24 and
-  SBCL's 7.5, because `WasmRandomCompiler` calls the WASI `random_get` host
-  function ONCE PER DRAW; a `perf` profile puts 12% of cycles in wasm code and
-  the rest in wasmtime's export-name hashing, per-call `Vec` allocation and
-  ChaCha20. The item covers the JVM half too (`Math.random()` is a shared
-  `AtomicLong` CAS), because the row's acceptance is measured against the best
-  compiled backend and that is now the JVM.
+- **`random` -- `.todo/528`, CLOSED 2026-08-26.** The wasm draw was 177 ns
+  against the JVM's 24 and SBCL's 7.5, because `WasmRandomCompiler` called the
+  WASI `random_get` host function ONCE PER DRAW; a `perf` profile put 12% of
+  cycles in wasm code and the rest in wasmtime's export-name hashing, per-call
+  `Vec` allocation and ChaCha20. The item covered the JVM half too
+  (`Math.random()` is a shared `AtomicLong` CAS), because the row's acceptance is
+  measured against the best compiled backend and that is now the JVM.
+
+  **Both halves landed** (`.kb/random.md`). `random` is a PRNG in CL, so the draw
+  is now a generator inside the program on every backend, never a host call per
+  draw: an inline SplitMix64 step over `RANDOM_STATE_ADDR` on every wasm build
+  (seeded ONCE per instance from `random_get`, so two runs still differ), and
+  `ThreadLocalRandom` on the interpreter and the JVM. `rontolisp::%random-byte`
+  keeps its per-byte host call -- it is the one caller that promises entropy.
+  Re-measured on the same machine, best of five:
+
+  | benchmark | was (JVM / wasm / component) | now (JVM / wasm / component) |
+  | --- | --- | --- |
+  | `random` top level | 0.46 / 1.86 / 2.70 | **0.29 / 0.37 / 0.39** |
+  | `random` in `defun` | 0.38 / 1.60 / 2.70 | **0.16 / 0.23 / 0.24** |
+  | per draw | 24 / 177 / ~270 ns | **6.1 / 29.4 / 29.2 ns** |
+
+  1.8x SBCL on the acceptance shape (0.29 against 0.16), inside the target, and
+  wasm is 1.3x the JVM where `.todo/517` recorded 4.0x.
 - **Boxed generic arithmetic** in every loop head and accumulator was the whole
   of the remaining 1.9x-3.4x on the JVM. That was `.todo/412`, closed 2026-08-26
   (`.kb/jvm-int-fusion.md`); the `loop sum` row now sits AT SBCL.

@@ -257,13 +257,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param hostRandom when {@code true} (the CLI's {@code --host-random}, which
 	 * requires {@code noWasi} and rejects {@code component}), the {@code random_get} slot
 	 * forwards to a single host import {@code env.random_get(buf, len) -> errno} instead
-	 * of running the module-local SplitMix64 generator. The module then imports exactly
-	 * that one function -- the zero-import default is unchanged, this is the opt-in --
-	 * and in exchange {@code random} draws the host's entropy (so a quickloaded library's
-	 * {@code (random ...)} does too, without the library knowing) and
-	 * {@code rontolisp:random-bytes} works instead of signalling. No
-	 * {@code __ronto_seed_random} is exported, because no module-local generator state is
-	 * left to seed.
+	 * of running the module-local SplitMix64 stub. The module then imports exactly that
+	 * one function -- the zero-import default is unchanged, this is the opt-in -- and in
+	 * exchange {@code rontolisp:random-bytes} works instead of signalling, and the
+	 * module-local generator behind {@code random} is SEEDED from the host on its first
+	 * draw instead of starting fixed (so a quickloaded library's {@code (random ...)}
+	 * draws from an unpredictable stream without the library knowing;
+	 * {@code .kb/random.md}). No {@code __ronto_seed_random} is exported, because the
+	 * flag already does automatically what that hook exists for.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
 			boolean simd, boolean hostRandom) {
@@ -666,7 +667,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// WASI entropy source imported in both modes: Preview 1 mode binds the real
 	// wasi_snapshot_preview1 random_get; component mode binds the adapter's random_get,
 	// which draws from wasi:random. Importing it in both modes keeps the import count --
-	// and the defined function indices below -- identical across modes.
+	// and the defined function indices below -- identical across modes. Two callers, both
+	// in WasmRandomCompiler: rontolisp::%random-byte spends one call PER BYTE (it
+	// promises cryptographic entropy), and `random` spends one per INSTANCE, to seed the
+	// generator it then draws from in-module (.kb/random.md).
 	static final int FUNC_RANDOM_GET = 4; // imported
 
 	// WASI clock and environment imported in both modes: Preview 1 binds the real
@@ -1980,13 +1984,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// interned string bytes are clobbered.
 	static final int READDIR_USED_ADDR = 208;
 
-	// The --no-wasi PRNG's 64-bit state cell (8-aligned at 216..223, still below the
-	// DATA_BASE_OFFSET=256 headroom). Only a --no-wasi module reads or writes it: there
-	// random_get is not a host call but a SplitMix64 step over this cell
-	// (WasmIoRuntimeBuilder.buildNoWasiRandomGetBody). Zero-initialized memory is a valid
-	// SplitMix64 seed -- the step adds the golden-ratio gamma before mixing, so state 0
-	// is no weaker than any other -- which is why no data segment seeds it, and why every
-	// instance of one module walks the SAME sequence (deliberate; see
+	// The PRNG's 64-bit state cell (8-aligned at 216..223, still below the
+	// DATA_BASE_OFFSET=256 headroom). EVERY build reads and writes it: `random` is a
+	// SplitMix64 step over this cell inlined at the call site (WasmRandomCompiler), not
+	// a host call, on Preview 1 / --component / --no-wasi alike (.kb/random.md).
+	// Zero-initialized memory is a valid SplitMix64 seed -- the step adds the
+	// golden-ratio gamma before mixing, so state 0 is no weaker than any other -- so no
+	// data segment seeds it. A module with a host to ask replaces the zero with eight
+	// bytes of random_get entropy on its FIRST draw (RANDOM_SEEDED_ADDR below); a
+	// --no-wasi module has no host, so every instance of it walks the SAME sequence
+	// unless the exported __ronto_seed_random hook is called (deliberate; see
 	// .kb/wasm-export-no-wasi.md).
 	static final int RANDOM_STATE_ADDR = 216;
 
@@ -2030,6 +2037,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// not needed: the fd is the function's result.
 	static final int PATH_SKIP_ADDR = 248;
 
+	// "The PRNG has been seeded" flag (252..255, the last word below the
+	// DATA_BASE_OFFSET=256 headroom): zero-initialized memory means "not yet", so the
+	// first `random` draw of an instance that HAS a host draws eight bytes from
+	// random_get into RANDOM_STATE_ADDR and sets this, and no later draw pays a host
+	// call. A --no-wasi module without --host-random emits no seeding at all -- it has
+	// no host to ask -- and never reads this cell.
+	static final int RANDOM_SEEDED_ADDR = 252;
+
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
 	// the allocation base just above its 8 bytes. cabi_realloc keeps its pointer in this
@@ -2059,7 +2074,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// argv scratch, the same shape one page-3 region higher: the count / buffer-size
 	// words, then the pointer array and the "arg\0" buffer args_get fills. The words
 	// live here rather than beside ENV_COUNT_ADDR because the low scratch region ends
-	// at 251 and DATA_BASE_OFFSET (256) may not move -- shifting it would change the
+	// at 255 and DATA_BASE_OFFSET (256) may not move -- shifting it would change the
 	// static-data base of every module. The module's memory is floored at four pages,
 	// so page 3 is always there.
 	static final int ARGV_COUNT_ADDR = 0x38000; // 229376, page 3 + 32 KiB
@@ -2099,8 +2114,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	// and
 	// the time built-ins (TIME_SCRATCH_ADDR=128 .. 135) would clobber shared string bytes
 	// (notably the newline at the old base+9). The highest scratch byte
-	// (PATH_SKIP_ADDR=248 .. 251) ends at 251, so 256
-	// gives headroom; the next fixed region (RT_INTERN_BASE=8192) is far above realistic
+	// (RANDOM_SEEDED_ADDR=252 .. 255) ends at 255, so 256
+	// exactly fits it; the next fixed region (RT_INTERN_BASE=8192) is far above realistic
 	// string-segment sizes. Shifting this base does not move any function/import index,
 	// so
 	// the --component blobs are unaffected (see CLAUDE.md index-stability invariant).
@@ -5870,7 +5885,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// The other nine ANSWER, each for its own reason (see the builders):
 				// fd_write is a SINK, so writing to stdout/stderr on a reactor discards
 				// the bytes instead of killing the instance; random_get is a
-				// self-contained SplitMix64 generator over a linear-memory state cell;
+				// self-contained SplitMix64 generator over a linear-memory state cell
+				// (which nothing calls here any more -- `random` inlines the same step
+				// at the draw site, .kb/random.md -- so the shaker drops it unless
+				// --host-random makes it the seeding forwarder);
 				// the two environ functions report an EMPTY environment; and the three
 				// filesystem slots report an errno, which the _open / _probe_file /
 				// _list_directory / _load runtimes already turn into nil. EBADF on
@@ -5887,7 +5905,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// going through them.
 				// --host-random opts ONE slot out of all this: random_get stops being a
 				// stub and forwards to a host import, which is the only way an answer
-				// here can be the host's rather than a fact about the module.
+				// here can be the host's rather than a fact about the module. That is
+				// what %random-byte spends per byte and what seeds `random`'s generator
+				// once per instance.
 				if (this.noWasi) {
 					for (int i = 0; i < IMPORT_FUNC_COUNT; i++) {
 						code.addFunction(switch (i) {
@@ -7352,9 +7372,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		/**
 		 * True under {@code --no-wasi --host-random}: the {@code random_get} slot
-		 * forwards to a host import instead of the module-local generator, so the entropy
-		 * behind {@code random} really is the host's. Read by the one site that must not
-		 * stand in for a host, {@code rontolisp::%random-byte}.
+		 * forwards to a host import instead of the module-local stub, so the bytes behind
+		 * {@code rontolisp::%random-byte} really are the host's -- and the module-local
+		 * generator {@code random} draws from can be seeded from them. Read by that one
+		 * site, which must not stand in for a host, and by {@code WasmRandomCompiler},
+		 * which emits seeding exactly when there IS a host to ask.
 		 */
 		boolean hostRandom = false;
 

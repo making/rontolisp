@@ -262,7 +262,7 @@ page.
 | `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951` (always a float) |
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
-| `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`). The interpreter and JVM draw from `Math.random`; WASM draws real entropy from the WASI `random_get` host function in Preview 1 mode and `wasi:random@0.3.0` in `--component` mode, so the sequence differs each run |
+| `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`). every backend draws from a generator inside the program (`ThreadLocalRandom` on the interpreter and JVM, a built-in generator on WASM), seeded once per run from the host's entropy where there is a host — WASI `random_get` in Preview 1 mode, `wasi:random@0.3.0` in `--component` mode — so the sequence differs each run |
 | `make-random-state` | `(make-random-state t)` | always `nil` -- no random-state objects exist; `random` accepts and ignores an optional state argument, so the store-and-pass-back seeding idiom works unchanged |
 | `get-universal-time` | `(get-universal-time)` | seconds since 1900-01-01 GMT, as an integer on every backend (WASM reads the real host clock in Preview 1, `wasi:clocks@0.3.0` in `--component` mode) |
 | `encode-universal-time` | `(encode-universal-time 0 0 0 1 1 1970 0)` | `2208988800` -- decoded components to universal time; a missing time zone means GMT, not the local zone |

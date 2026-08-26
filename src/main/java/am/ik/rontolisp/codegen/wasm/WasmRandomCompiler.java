@@ -8,14 +8,34 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Compiles the {@code random} built-in function for WASM. Unlike the interpreter and JVM
- * backends (which use {@code Math.random()}), WASM draws entropy from the WASI
- * {@code random_get} host function (imported in both Preview 1 and {@code --component}
- * mode; see {@link WasmLispCompiler#FUNC_RANDOM_GET}), so {@code (random N)} differs each
- * run. The float path masks the low 32 bits of the filled buffer to {@code [0, 2^31)} for
- * its fraction; the integer path draws all 64 bits masked to {@code [0, 2^63)}, so an
- * integer limit beyond the i31 fixnum range (a {@code TYPE_BIGNUM} box) works and the
- * result normalizes through {@code _int_new}.
+ * Compiles the {@code random} built-in function for WASM. The draw is a SplitMix64 step
+ * over the module-local state cell {@link WasmLispCompiler#RANDOM_STATE_ADDR}, inlined at
+ * the call site -- on EVERY build, Preview 1 and {@code --component} included, not only
+ * {@code --no-wasi}. CL's {@code random} is a pseudo-random draw from
+ * {@code *random-state*}, so a module-local generator is inside its contract, and a host
+ * call per draw is not something it ever promised: the WASI {@code random_get} route this
+ * used to take cost ~177 ns a draw against ~4 ns here, nearly all of it on the host side
+ * (an export-name hash, a {@code Vec} allocation, an unwind guard and a ChaCha20 CSPRNG,
+ * per draw). See {@code .kb/random.md}.
+ *
+ * <p>
+ * A module that HAS a host replaces the zero start state with eight bytes of
+ * {@code random_get} entropy on its FIRST draw
+ * ({@link WasmLispCompiler#RANDOM_SEEDED_ADDR} is the once-only flag), so two runs of the
+ * same module still draw differently. A {@code --no-wasi} module without
+ * {@code --host-random} has no host to ask and emits no seeding at all: it keeps the
+ * fixed start state and its exported {@code __ronto_seed_random} hook, unchanged.
+ *
+ * <p>
+ * {@code rontolisp::%random-byte} is NOT served from here: it promises cryptographic
+ * entropy, so it keeps calling {@code random_get} once per byte (see
+ * {@link #compileRandomByte}).
+ *
+ * <p>
+ * The float path masks the low 32 bits of the draw to {@code [0, 2^31)} for its fraction;
+ * the integer path masks all 64 bits to {@code [0, 2^63)}, so an integer limit beyond the
+ * i31 fixnum range (a {@code TYPE_BIGNUM} box) works and the result normalizes through
+ * {@code _int_new}.
  *
  * <p>
  * A float-literal argument compiles straight to the float path
@@ -23,7 +43,8 @@ import am.ik.wasm.Type;
  * ({@code ref.test TYPE_FLOAT}): a float limit takes the float path, an integer limit the
  * {@code rand mod limit} i31 path. The runtime test is what lets a float limit reaching
  * {@code random} through a variable work (the compile-time literal shape alone cannot
- * detect it).
+ * detect it). ONE draw is taken before the test and shared by both branches, so a call
+ * advances the generator exactly once either way.
  */
 final class WasmRandomCompiler {
 
@@ -42,7 +63,9 @@ final class WasmRandomCompiler {
 		}
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
 			// Float-literal limit: the float path directly, no runtime test needed.
+			int savedI64 = ctx.nextI64Local;
 			emitRandomI32(ctx);
+			ctx.nextI64Local = savedI64;
 			emitFloatLimitProduct(ctx, () -> {
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
 				WasmEmitHelper.castFloatGetF64(ctx);
@@ -55,14 +78,27 @@ final class WasmRandomCompiler {
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(limitSlot);
+			// ONE draw, taken before the test and parked, so both branches spend the
+			// same step and a call advances the generator exactly once.
+			int savedI64 = ctx.nextI64Local;
+			int drawSlot = ctx.allocI64Temp();
+			emitRandomDraw(ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writeI64LocalIndex(drawSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(limitSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 			ctx.writer.write(Instruction.IF);
 			ctx.writer.writeRefType(true, Type.EQ.code());
-			// Float limit: (rand / 2^31) * limit, a TYPE_FLOAT struct.
-			emitRandomI32(ctx);
+			// Float limit: (rand / 2^31) * limit, a TYPE_FLOAT struct. The fraction
+			// spends the draw's low 32 bits, masked to [0, 2^31).
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writeI64LocalIndex(drawSlot);
+			ctx.writer.write(Instruction.I32_WRAP_I64);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(RANDOM_MASK);
+			ctx.writer.write(Instruction.I32_AND);
 			emitFloatLimitProduct(ctx, () -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(limitSlot);
@@ -72,7 +108,11 @@ final class WasmRandomCompiler {
 			// Integer limit: rand mod limit in i64, normalized through _int_new. The
 			// masked value is non-negative and the limit is positive, so the unsigned
 			// remainder stays in [0, limit); _int_val accepts an i31 or boxed limit.
-			emitRandomI63(ctx);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writeI64LocalIndex(drawSlot);
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(Long.MAX_VALUE);
+			ctx.writer.write(Instruction.I64_AND);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(limitSlot);
 			ctx.writer.write(Instruction.CALL);
@@ -81,6 +121,7 @@ final class WasmRandomCompiler {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 			ctx.writer.write(Instruction.END);
+			ctx.nextI64Local = savedI64;
 		}
 	}
 
@@ -127,44 +168,51 @@ final class WasmRandomCompiler {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
-	// Leaves a non-negative random i32 in [0, 2^31) on the stack, drawn from the WASI
-	// random_get host function (Preview 1: real host entropy; component: the adapter's
-	// wasi:random-backed implementation). random_get is imported in both modes, so the
-	// path is identical.
+	// Leaves a non-negative random i32 in [0, 2^31) on the stack: the low 32 bits of one
+	// generator step, masked.
 	private static void emitRandomI32(WasmLispCompiler.Ctx ctx) {
-		// random_get(RANDOM_SCRATCH_ADDR, 8) fills 8 bytes; drop the errno.
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(8);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
-		ctx.writer.write(Instruction.DROP);
-		// Load the low 32 bits and mask to [0, 2^31).
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
-		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		emitRandomDraw(ctx);
+		ctx.writer.write(Instruction.I32_WRAP_I64);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(RANDOM_MASK);
 		ctx.writer.write(Instruction.I32_AND);
 	}
 
-	// Leaves a non-negative random i64 in [0, 2^63) on the stack: the same 8-byte
-	// random_get draw, loaded whole and masked to 63 bits.
-	private static void emitRandomI63(WasmLispCompiler.Ctx ctx) {
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(8);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
-		ctx.writer.write(Instruction.DROP);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
-		ctx.writer.write(Instruction.I64_LOAD, 0x03, 0x00);
-		ctx.writer.write(Instruction.I64_CONST);
-		ctx.writer.writeSignedLeb128(Long.MAX_VALUE);
-		ctx.writer.write(Instruction.I64_AND);
+	// Leaves one SplitMix64 draw (a u64) on the stack, seeding the generator from the
+	// host's entropy on the first draw of the instance when there IS a host to ask.
+	private static void emitRandomDraw(WasmLispCompiler.Ctx ctx) {
+		if (!ctx.noWasi || ctx.hostRandom) {
+			// if (mem32[RANDOM_SEEDED_ADDR] == 0) { flag = 1; state = random_get(8) }
+			// -- one host call per INSTANCE, not per draw. A --no-wasi module without
+			// --host-random skips this entirely: it has no host, so its generator keeps
+			// the fixed start state the __ronto_seed_random hook exists to replace.
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SEEDED_ADDR);
+			ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SEEDED_ADDR);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(1);
+			ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(8);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_STATE_ADDR);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
+			ctx.writer.write(Instruction.I64_LOAD, 0x03, 0x00);
+			ctx.writer.write(Instruction.I64_STORE, 0x03, 0x00);
+			ctx.writer.write(Instruction.END);
+		}
+		int scratch = ctx.allocI64Temp();
+		WasmIoRuntimeBuilder.emitSplitMix64Next(ctx.writer, w -> ctx.writeI64LocalIndex(scratch));
 	}
 
 }

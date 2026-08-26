@@ -2013,9 +2013,11 @@ final class WasmIoRuntimeBuilder {
 	/**
 	 * Builds the {@code --no-wasi --host-random} {@code random_get} slot: instead of the
 	 * module-local generator below, the slot FORWARDS its two parameters to a host import
-	 * and returns the host's errno, so every {@code random} draw -- including one in a
-	 * quickloaded library's top-level form, which never learns where the bytes came from
-	 * -- is the host's entropy.
+	 * and returns the host's errno. That is what {@code rontolisp::%random-byte} spends
+	 * per byte, and what the module-local generator is SEEDED from on its first
+	 * {@code random} draw -- so a quickloaded library's top-level {@code (random ...)},
+	 * which never learns where the bytes came from, draws from a stream the host's
+	 * entropy started ({@code .kb/random.md}).
 	 *
 	 * <p>
 	 * The signature is preview1's {@code random_get(buf, len) -> errno} exactly, so a
@@ -2029,7 +2031,7 @@ final class WasmIoRuntimeBuilder {
 	 * ({@code WasmExprCompiler} un-gates {@code rontolisp::%random-byte} when it is in
 	 * effect): the entropy is genuinely the host's, so nothing is being passed off as
 	 * something it is not. It is also why {@code __ronto_seed_random} is NOT emitted
-	 * alongside it -- there is no module-local state left to seed.
+	 * alongside it -- the flag already does automatically what that hook exists for.
 	 * @param placeholderFuncIndex the placeholder call index of the host import
 	 * ({@code WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal}), which
 	 * {@link am.ik.wasm.WasmImportInjector} rewrites to the import's real function index
@@ -2061,6 +2063,14 @@ final class WasmIoRuntimeBuilder {
 	 * {@code buf_len} pseudo-random bytes and returns errno 0. Nothing is imported, so a
 	 * reactor's {@code (random n)} -- including one in a TOP-LEVEL form of a quickloaded
 	 * library -- answers instead of killing the instance.
+	 *
+	 * <p>
+	 * Since {@code random} draws by INLINING the same generator step at the call site
+	 * ({@link WasmRandomCompiler}, {@code .kb/random.md}), nothing under a plain
+	 * {@code --no-wasi} reaches this body any more and the tree shaker drops it; the
+	 * sequence a program sees is unchanged, because the step is the same step. It is
+	 * still emitted (the slot's index is fixed) and it is still live under
+	 * {@code --host-random}, where it forwards the seeding call to the host.
 	 *
 	 * <p>
 	 * <strong>Why this is not the fabricated input the sink rule forbids</strong> (the
@@ -2104,7 +2114,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.BR_IF);
 		w.writeUnsignedLeb128(1);
 		getLocal(w, BUF);
-		emitSplitMix64Next(w, S);
+		emitSplitMix64Next(w, sw -> sw.writeUnsignedLeb128(S));
 		// align=0: a caller's buffer need not be 8-aligned (the two rontolisp call sites
 		// pass RANDOM_SCRATCH_ADDR, which is, but random_get's contract does not say so).
 		w.write(Instruction.I64_STORE, 0x00, 0x00);
@@ -2126,7 +2136,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.BR_IF);
 		w.writeUnsignedLeb128(0);
-		emitSplitMix64Next(w, S);
+		emitSplitMix64Next(w, sw -> sw.writeUnsignedLeb128(S));
 		setLocal(w, T);
 		w.write(Instruction.LOOP, 0x40); // $tail
 		getLocal(w, BUF);
@@ -2156,11 +2166,31 @@ final class WasmIoRuntimeBuilder {
 		return body.toByteArray();
 	}
 
-	// One SplitMix64 step, leaving the u64 draw on the stack: the state cell advances by
-	// the golden-ratio gamma, and the new state is mixed through two xor-shift-multiply
-	// rounds and a final xor-shift. `scratch` is an i64 local the caller does not need
-	// across this sequence.
-	private static void emitSplitMix64Next(WasmWriter w, int scratch) {
+	/**
+	 * Writes the local INDEX of the generator's i64 scratch slot, after the opcode. A
+	 * hand-built body here knows its slot number outright; a body emitted through
+	 * {@code WasmLispCompiler.Ctx} has to go through the i64 placeholder machinery
+	 * instead, because an i64 local's absolute index is not known until the body is
+	 * complete. One generator, two ways of naming its scratch.
+	 */
+	@FunctionalInterface
+	interface ScratchSlot {
+
+		void write(WasmWriter w);
+
+	}
+
+	/**
+	 * One SplitMix64 step over {@link WasmLispCompiler#RANDOM_STATE_ADDR}, leaving the
+	 * u64 draw on the stack: the state cell advances by the golden-ratio gamma, and the
+	 * new state is mixed through two xor-shift-multiply rounds and a final xor-shift.
+	 * This is the generator behind {@code random} on EVERY wasm build
+	 * ({@code .kb/random.md}); {@code scratch} names an i64 local the caller does not
+	 * need across the sequence.
+	 * @param w the writer to emit into
+	 * @param scratch names the i64 scratch local
+	 */
+	static void emitSplitMix64Next(WasmWriter w, ScratchSlot scratch) {
 		// mem64[RANDOM_STATE_ADDR] += GAMMA ; scratch = the new state
 		i32(w, WasmLispCompiler.RANDOM_STATE_ADDR);
 		i32(w, WasmLispCompiler.RANDOM_STATE_ADDR);
@@ -2168,7 +2198,7 @@ final class WasmIoRuntimeBuilder {
 		i64(w, SM64_GAMMA);
 		w.write(Instruction.I64_ADD);
 		w.write(Instruction.TEE_LOCAL);
-		w.writeUnsignedLeb128(scratch);
+		scratch.write(w);
 		w.write(Instruction.I64_STORE, 0x03, 0x00);
 		emitSplitMix64Mix(w, scratch, 30, SM64_MIX1);
 		emitSplitMix64Mix(w, scratch, 27, SM64_MIX2);
@@ -2181,7 +2211,7 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	// scratch = (scratch ^ (scratch >>> shift)) * multiplier
-	private static void emitSplitMix64Mix(WasmWriter w, int scratch, int shift, long multiplier) {
+	private static void emitSplitMix64Mix(WasmWriter w, ScratchSlot scratch, int shift, long multiplier) {
 		getLocal(w, scratch);
 		getLocal(w, scratch);
 		i64(w, shift);
@@ -2190,6 +2220,16 @@ final class WasmIoRuntimeBuilder {
 		i64(w, multiplier);
 		w.write(Instruction.I64_MUL);
 		setLocal(w, scratch);
+	}
+
+	private static void getLocal(WasmWriter w, ScratchSlot slot) {
+		w.write(Instruction.GET_LOCAL);
+		slot.write(w);
+	}
+
+	private static void setLocal(WasmWriter w, ScratchSlot slot) {
+		w.write(Instruction.SET_LOCAL);
+		slot.write(w);
 	}
 
 	// === low-level emit helpers ===

@@ -3167,6 +3167,50 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoWasiAndInvoke(program, "__ronto_seed_random", "42")).isEmpty();
 	}
 
+	// i64.const 0x9E3779B97F4A7C15 -- the SplitMix64 golden-ratio gamma, in the signed
+	// LEB128 the emitter writes. Nothing else in an emitted module spells this constant,
+	// so its presence IS "the generator is in here".
+	private static final byte[] SPLITMIX64_GAMMA_CONST = { 0x42, (byte) 0x95, (byte) 0xf8, (byte) 0xa9, (byte) 0xfa,
+			(byte) 0x97, (byte) 0xb7, (byte) 0xde, (byte) 0x9b, (byte) 0x9e, 0x7f };
+
+	private static boolean carriesTheGenerator(byte[] module) {
+		outer: for (int i = 0; i + SPLITMIX64_GAMMA_CONST.length <= module.length; i++) {
+			for (int j = 0; j < SPLITMIX64_GAMMA_CONST.length; j++) {
+				if (module[i + j] != SPLITMIX64_GAMMA_CONST[j]) {
+					continue outer;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	@Test
+	void aWasiBuildDrawsFromTheInModuleGeneratorAndKeepsTheEntropyApiOnTheHost() throws Exception {
+		// CL's random is a pseudo-random draw from *random-state*, so the draw is a
+		// SplitMix64 step INLINED at the call site on every build -- never a host call
+		// per draw, which cost 177 ns against the ~4 ns this does (.kb/random.md). The
+		// gamma constant is that generator's signature: a Preview 1 module that draws
+		// carries it, and one whose only randomness is rontolisp::%random-byte must NOT,
+		// because the entropy API promises the HOST's own bytes and may never be
+		// answered from the generator. That second assertion is the security half: it
+		// fails the moment the module-local generator can reach %random-byte.
+		assertThat(carriesTheGenerator(
+				new WasmLispCompiler(false, false, false).compile(LispReader.readAllFromString("(print (random 10))"))))
+			.as("the draw inlines the generator instead of calling random_get")
+			.isTrue();
+		assertThat(carriesTheGenerator(new WasmLispCompiler(false, false, false)
+			.compile(LispReader.readAllFromString("(print (rontolisp::%random-byte))"))))
+			.as("the entropy API never reaches the module-local generator")
+			.isFalse();
+
+		// And two runs of the same module still differ: the generator is seeded ONCE
+		// per instance from the host's random_get, so a draw stays unpredictable
+		// without paying a host call for every one of them.
+		String draws = "(dotimes (i 4) (princ (random 1000000000)) (terpri))";
+		assertThat(compileAndRun(draws)).as("seeded per instance, not per module").isNotEqualTo(compileAndRun(draws));
+	}
+
 	@Test
 	void noWasiModuleAnswersAnEmptyEnvironmentAndAnEmptyFilesystem() throws Exception {
 		// A stub may answer when the answer is TRUE OF THIS MODULE. A reactor has no

@@ -9,10 +9,13 @@ import am.ik.jvm.Opcode;
 /**
  * Compiles the {@code random} built-in function. Returns a non-negative random number
  * below the limit, of the same type as the limit. A float-literal argument compiles
- * straight to {@code Math.random() * limit} (a double); otherwise the {@code _random}
+ * straight to {@code tlr.nextDouble() * limit} (a double); otherwise the {@code _random}
  * runtime helper dispatches on the limit's runtime type (so a float limit reaching
  * {@code random} through a variable yields a float, not a trap). Both draw from
- * {@code java.lang.Math.random}.
+ * {@code java.util.concurrent.ThreadLocalRandom}, one per-thread generator seeded from
+ * the process's entropy -- not {@code Math.random}, whose single shared
+ * {@code java.util.Random} advances its seed by a contended {@code compareAndSet}
+ * ({@code .kb/random.md}).
  */
 final class JvmRandomCompiler {
 
@@ -26,10 +29,12 @@ final class JvmRandomCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (JvmLispCompiler.hasDoubleLiteral(args)) {
-			// Float limit: Math.random() * limit, kept as a double.
+			// Float limit: tlr.nextDouble() * limit, kept as a double.
 			JvmEmitHelper.unboxDouble(ctx);
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.RANDOM).index());
+			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).index());
+			ctx.emit(Opcode.INVOKEVIRTUAL);
+			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).index());
 			ctx.emit(Opcode.DMUL);
 			JvmEmitHelper.boxDouble(ctx);
 		}

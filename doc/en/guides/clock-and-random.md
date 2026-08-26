@@ -9,14 +9,15 @@ have an answer for.
 
 | build | `(random n)` | `rontolisp:random-bytes` | the clock |
 | --- | --- | --- | --- |
-| interpreter, JVM | the JVM's generator | works | the machine's clock |
-| WASM (default, Preview 1) | the host's WASI `random_get` | works | WASI `clock_time_get` |
-| WASM `--component` | the host's `wasi:random` | works | `wasi:clocks` |
-| WASM `--no-wasi` | a built-in generator, **same sequence every instance** | signals | what the host wrote through `__ronto_set_time`; signals until it does |
-| WASM `--no-wasi --host-random` | the host's `env.random_get` | works | as above |
+| interpreter, JVM | `ThreadLocalRandom`, seeded by the JDK | works | the machine's clock |
+| WASM (default, Preview 1) | a built-in generator, seeded from the host's WASI `random_get` | works | WASI `clock_time_get` |
+| WASM `--component` | a built-in generator, seeded from the host's `wasi:random` | works | `wasi:clocks` |
+| WASM `--no-wasi` | the same built-in generator, unseeded: **same sequence every instance** | signals | what the host wrote through `__ronto_set_time`; signals until it does |
+| WASM `--no-wasi --host-random` | a built-in generator, seeded from the host's `env.random_get` | works | as above |
 
-Only the `--no-wasi` rows need a decision from you; everywhere else both values
-are the host's own, and the rest of this page is about that last case.
+Only the `--no-wasi` rows need a decision from you; everywhere else the host's
+entropy is what everything ultimately comes from, and the rest of this page is
+about that last case.
 
 ## Randomness
 
@@ -26,6 +27,12 @@ unpredictability, and an image may start from a fixed state.
 [`rontolisp:random-bytes`](../reference/functions/rontolisp-random-bytes.md) is the
 separate API that does promise it, and it is available only where a real entropy
 source is.
+
+That distinction is also why a draw is cheap. `random` runs a generator that lives
+**inside the program** and is seeded once per run from the host's entropy, rather
+than asking the host for fresh bytes on every draw — which costs a few nanoseconds
+instead of a few hundred. `rontolisp:random-bytes` is the one that really does go
+to the host, one byte at a time, every time.
 
 ```lisp
 (print (list (random 1) (< (random 10) 10)))   ; => (0 T)
@@ -136,9 +143,10 @@ the time first; the clocks signal there, and say so.
 
 ### Drawing from the host — `--host-random`
 
-`--host-random` replaces the built-in generator with a host call, so every draw is
-the host's entropy — including draws inside a quickloaded library, which never
-learns where the bytes came from:
+`--host-random` gives the module one host import to draw entropy from. The
+built-in generator is then seeded from it on the first draw — including a draw
+inside a quickloaded library, which never learns where its randomness came from —
+and `rontolisp:random-bytes` is served from it directly:
 
 ```bash
 rontolisp app.lisp --no-wasi --host-random -o app.wasm
@@ -161,9 +169,10 @@ instance.exports._initialize();
 ```
 
 Because the entropy really is the host's, `rontolisp:random-bytes` works here. No
-`__ronto_seed_random` is exported — there is no module-local state left to seed.
+`__ronto_seed_random` is exported — the flag already does automatically what that
+hook exists for.
 `__ronto_set_time` is unaffected: the two services are independent, and only one of
-them has a module-local generator to make redundant.
+them has a hook the flag makes redundant.
 
 The zero-import default is unchanged; this is the opt-in, and the module now has an
 import the host **must** provide. The tree shaker still drops it if the program
