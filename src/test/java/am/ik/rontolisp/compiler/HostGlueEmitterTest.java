@@ -36,13 +36,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * envelope, the latter carrying the {@code env.fetch} host half as well -- the same
  * streaming fetcher compiled {@code --reentrant} ({@code dog-relay/src/worker.js}: no
  * queue, per-call body state keyed by the call id), and a reactor that does not fetch, on
- * each boundary: the {@code hello-*} trio, which imports nothing at all, and the four
- * {@code httpbin-*} directories that go through {@code clackup}.
+ * each boundary: the four {@code hello-*} directories, which import nothing at all, and
+ * the four {@code httpbin-*} ones that go through {@code clackup}.
  *
  * <p>
  * The glue is derived from the DECLARATIONS alone, which is why the programs compiled
  * here are a handful of lines rather than the examples' own, and why one file per SHAPE
- * covers eight directories: the same reactor shape declares the same imports and the same
+ * covers nine directories: the same reactor shape declares the same imports and the same
  * {@code handle-request} export, so it emits the same file byte for byte. That is
  * asserted rather than assumed -- every directory in a family is pinned against the one
  * derived string. (Verified: each example's own build writes its file unchanged.)
@@ -65,10 +65,11 @@ class HostGlueEmitterTest {
 
 	private static final List<Path> RELAY_GLUE = glueIn("dog-relay");
 
-	// One file between three directories, and one between four: the glue is derived from
+	// One file between four directories, and one between four: the glue is derived from
 	// the declarations, and these carry the same ones. The claim their READMEs make is
 	// checked here rather than asserted there.
-	private static final List<Path> HELLO_GLUE = glueIn("hello-clack", "hello-ningle", "hello-tiny-routes");
+	private static final List<Path> HELLO_GLUE = glueIn("hello-clack", "hello-clack-one-source", "hello-ningle",
+			"hello-tiny-routes");
 
 	private static final List<Path> HTTPBIN_GLUE = glueIn("httpbin-clack", "httpbin-clack-one-source", "httpbin-ningle",
 			"httpbin-tiny-routes");

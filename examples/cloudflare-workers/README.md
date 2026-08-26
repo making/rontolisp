@@ -21,6 +21,7 @@ Module sizes are measured rather than quoted here:
 | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three `wasm-export`ed functions JavaScript calls directly. `--no-gc`, a plain MVP module with zero imports | 32 lines, no dependencies |
 | [`hello-clack/`](hello-clack) | **Start here if you want Clack.** One application function and `clack:clackup` — the whole of [Clack](https://github.com/fukamachi/clack)'s API | GENERATED, and all of it: `src/index.js` is three lines |
+| [`hello-clack-one-source/`](hello-clack-one-source) | **No `worker.lisp` at all**, and the smallest program that says so: `build.sh` compiles [`net/hello-clack.lisp`](../net/hello-clack.lisp) unchanged — the file that also binds a socket locally, deploys as a Servlet war and serves under `wasmtime serve`. One source, five hosts | GENERATED — the same file `hello-clack` gets |
 | [`hello-tiny-routes/`](hello-tiny-routes) | [tiny-routes](https://github.com/jeko2000/tiny-routes): a route table composed with `define-routes`, threaded through middleware with `pipe`. Loaded as `tiny-routes/lite`, so no regex engine ships | GENERATED — the same file `hello-clack` gets, because the declarations are the same |
 | [`hello-ningle/`](hello-ningle) | [ningle](https://github.com/fukamachi/ningle): routes assigned to a CLOS *object*, a bare string as a controller, an overridden `not-found` **method** | GENERATED — the same file `hello-clack` gets, because the declarations are the same |
 | [`httpbin/`](httpbin) | **No library.** Five echo endpoints, 405, 404, `handler-case` — plus the reactor adapter written out by hand, so clack never ships | 54 lines, boundary included — the one hand-written host left here |
@@ -43,6 +44,10 @@ Module sizes are measured rather than quoted here:
 - **`httpbin-clack/`** when the file should read like every other Clack program.
   The per-request cost is the same as `httpbin/`'s; what clack costs is module
   size and a little isolate startup, paid once.
+- **`hello-clack-one-source/`** for the same reason as
+  `httpbin-clack-one-source/` below, at the smallest size there is: it is the
+  one directory here whose Lisp file lives outside it, and the shortest answer
+  to "what does deploying an existing server here cost me?" — a compile flag.
 - **`httpbin-clack-one-source/`** when the program already serves somewhere
   else. `:server :rontolisp` picks the transport from the compile target, so
   there is no edit between a local server and this Worker.

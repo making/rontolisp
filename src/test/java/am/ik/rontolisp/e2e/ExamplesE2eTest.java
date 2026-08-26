@@ -39,11 +39,12 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * <li><b>RUN</b> ({@code interpreter}/{@code jvm}/{@code wasm}) -- the program runs to
  * completion; we assert it exits 0 and (optionally) that its stdout matches the declared
  * {@code expect}.</li>
- * <li><b>COMPILE</b> ({@code jvm-compile}/{@code wasm-component}/{@code no-gc}/
- * {@code no-gc-simd}) -- for the blocking servers and the host-invoked {@code --no-gc}
- * module, which never return on their own, we only build them and assert the compile
- * succeeds. This still catches broken {@code (load ...)} paths, missing symbols and
- * package errors.</li>
+ * <li><b>COMPILE</b> ({@code jvm-compile}/{@code war-compile}/{@code wasm-component}/
+ * {@code wasm-reactor}/{@code no-gc}/{@code no-gc-simd}) -- for the blocking servers and
+ * the host-invoked modules, which never return on their own (or are never run as a
+ * program at all: a war is deployed and a reactor is called), we only build them and
+ * assert the compile succeeds. This still catches broken {@code (load ...)} paths,
+ * missing symbols and package errors.</li>
  * </ul>
  * Per-example manifest fields (all optional except {@code path}/{@code backends}):
  * <ul>
@@ -152,7 +153,7 @@ class ExamplesE2eTest {
 	enum Backend {
 
 		// RUN backends run the program; COMPILE backends only build it (see verify()).
-		INTERPRETER, JVM, WASM, JVM_COMPILE, WASM_COMPONENT, NO_GC, NO_GC_SIMD;
+		INTERPRETER, JVM, WASM, JVM_COMPILE, WAR_COMPILE, WASM_COMPONENT, WASM_REACTOR, NO_GC, NO_GC_SIMD;
 
 		/**
 		 * The manifest spelling: lower-case with hyphens (e.g. {@code wasm-component}).
@@ -487,11 +488,28 @@ class ExamplesE2eTest {
 				assertCompiled(compile, example, "jvm-compile");
 				assertNoOsrHostileBackedges(runDir, example, "jvm-compile");
 			}
+			case WAR_COMPILE -> {
+				// The Servlet transport: the container owns the port, so there is
+				// nothing to run here -- the war is deployed, and the deployment
+				// itself is pinned by WarE2eTest / ClackE2eTest.
+				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "app.war"), flags)), null,
+						Map.of());
+				assertCompiled(compile, example, "war-compile");
+			}
 			case WASM_COMPONENT -> {
 				Result compile = exec(runDir,
 						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--component", "--optimize"), flags)),
 						null, Map.of());
 				assertCompiled(compile, example, "wasm-component");
+			}
+			case WASM_REACTOR -> {
+				// The host CALLS the module (a Cloudflare Worker, a browser page,
+				// node) rather than running it, so this leg builds the reactor shape
+				// the directory's own build.sh deploys.
+				Result compile = exec(runDir,
+						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--no-wasi", "--optimize"), flags)), null,
+						Map.of());
+				assertCompiled(compile, example, "wasm-reactor");
 			}
 			case NO_GC -> {
 				Result compile = exec(runDir,

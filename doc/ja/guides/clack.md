@@ -217,6 +217,14 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
   $ cp app.war $CATALINA_HOME/webapps/
   ```
 
+上の各行は、すべて同じ 1 ファイルです。
+[`examples/net/hello-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/hello-clack.lisp)
+は最小の Clack アプリケーションで、一切編集せずに 5 つすべてへコンパイルできます。
+`:port` は環境変数 `PORT` を読みますが、それを見るのはソケットを自分で持つ 2 つの
+トランスポートだけです。
+[`examples/cloudflare-workers/hello-clack-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/hello-clack-one-source)
+は、その同じファイルを Worker としてデプロイし、ホストごとのコマンドを並べています。
+
 ## ホストから呼ばれる場合: リアクタビルド
 
 ソケットを渡してこないホストもあります。Cloudflare Workers、ブラウザのページ、

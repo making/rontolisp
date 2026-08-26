@@ -214,6 +214,14 @@ on this target's native inbound transport", chosen at compile time:
   $ cp app.war $CATALINA_HOME/webapps/
   ```
 
+Every row above is one file:
+[`examples/net/hello-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/hello-clack.lisp)
+is the smallest Clack application there is, and it compiles to all five without
+an edit — its `:port` reads the `PORT` environment variable, which only the two
+transports that own a socket look at.
+[`examples/cloudflare-workers/hello-clack-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/hello-clack-one-source)
+deploys that same file as a Worker, and lists the per-host commands.
+
 ## A host that calls you: the reactor build
 
 Some hosts never hand you a socket. A Cloudflare Worker, a browser page, node
