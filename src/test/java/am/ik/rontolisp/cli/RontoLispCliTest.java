@@ -301,6 +301,102 @@ class RontoLispCliTest {
 		assertThat(Files.readAllBytes(first)).isEqualTo(Files.readAllBytes(second));
 	}
 
+	/** The serving program the war tests below compile. */
+	private Path servedProgram() throws Exception {
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, """
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain") (list (getf env :path-info))))
+				(rontolisp:http-handler 'handle)
+				""");
+		return program;
+	}
+
+	@Test
+	void aWarCarriesTheProgramTheRuntimeAndTheOneLineServiceDeclaration() throws Exception {
+		Path war = this.tempDir.resolve("app.war");
+		runCli("", servedProgram().toString(), "-o", war.toString());
+		Map<String, byte[]> entries = entries(war);
+		// The class name is derived from the war's stem exactly as a program jar's is.
+		assertThat(entries).containsKey("WEB-INF/classes/App.class");
+		// The travelling closure plus the servlet transport, all under WEB-INF/classes.
+		assertThat(entries).containsKey("WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServer.class")
+			.containsKey("WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServlet.class")
+			.containsKey("WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServletInitializer.class");
+		// The one non-class file: the same line in every war rontolisp ever emits. No
+		// web.xml, and nothing naming the program class.
+		assertThat(
+				new String(entries.get("WEB-INF/classes/META-INF/services/jakarta.servlet.ServletContainerInitializer"),
+						StandardCharsets.UTF_8))
+			.isEqualTo("am.ik.rontolisp.runtime.RontoHttpServletInitializer\n");
+		assertThat(entries).doesNotContainKey("WEB-INF/web.xml");
+		// No Main-Class: a war has no entry point. Enable-Native-Access stays (a
+		// --blas/--gpu war still wants it; inert otherwise).
+		String manifest = new String(entries.get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8);
+		assertThat(manifest).doesNotContain("Main-Class").contains("Enable-Native-Access: ALL-UNNAMED");
+	}
+
+	@Test
+	void twoCompilesOfOneProgramProduceByteIdenticalWars() throws Exception {
+		Path program = servedProgram();
+		Path first = this.tempDir.resolve("a.war");
+		Path second = this.tempDir.resolve("b.war");
+		for (Path war : List.of(first, second)) {
+			runCli("", program.toString(), "-o", war.toString(), "--class-name", "com.example.App");
+		}
+		assertThat(Files.readAllBytes(first)).isEqualTo(Files.readAllBytes(second));
+	}
+
+	@Test
+	void aWarWithNothingToServeIsRefusedAtCompileTime() throws Exception {
+		// There would be nothing for the container to call.
+		Path program = this.tempDir.resolve("plain.lisp");
+		Files.writeString(program, "(print (+ 1 2))\n");
+		assertThatThrownBy(() -> runCli("", program.toString(), "-o", this.tempDir.resolve("app.war").toString()))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("nothing for the container to call");
+	}
+
+	@Test
+	void noMainIsRefusedByNameOnAWar() throws Exception {
+		assertThatThrownBy(() -> runCli("", servedProgram().toString(), "-o",
+				this.tempDir.resolve("app.war").toString(), "--no-main"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--no-main")
+			.hasMessageContaining(".war");
+	}
+
+	@Test
+	void aWarIsAMavenArtifactSoTheCoordinatesRideInItsMetaInf() throws Exception {
+		Path war = this.tempDir.resolve("app-1.0.0.war");
+		runCli("", servedProgram().toString(), "-o", war.toString(), "--class-name", "com.example.App",
+				"--maven-coordinates", "com.example:app:1.0.0", "--emit-pom");
+		Map<String, byte[]> entries = entries(war);
+		assertThat(entries).containsKey("META-INF/maven/com.example/app/pom.xml")
+			.containsKey("META-INF/maven/com.example/app/pom.properties");
+		assertThat(Files.readString(this.tempDir.resolve("app-1.0.0.pom"))).contains("<artifactId>app</artifactId>");
+	}
+
+	@Test
+	void aWrittenHttpHandlerPortWarnsOnceOnAWarBecauseTheContainerOwnsThePort() throws Exception {
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, """
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain") (list "ok")))
+				(rontolisp:http-handler 'handle 8080)
+				""");
+		java.io.ByteArrayOutputStream err = new java.io.ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
+		try {
+			runCli("", program.toString(), "-o", this.tempDir.resolve("app.war").toString());
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		assertThat(err.toString(StandardCharsets.UTF_8)).contains("the servlet container owns the port");
+	}
+
 	@Test
 	void anUncaughtConditionReportsOneLineAndExitsOne() throws Exception {
 		// The interpreter's half of the cross-backend contract: the condition's report,

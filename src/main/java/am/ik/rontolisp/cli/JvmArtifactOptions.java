@@ -47,7 +47,13 @@ record JvmArtifactOptions(@Nullable String className, @Nullable MavenCoordinates
 			return this.className.replace('.', '/');
 		}
 		if (outputFile.endsWith(".jar")) {
-			return classNameFromJarPath(outputFile);
+			return classNameFromStem(outputFile, ".jar");
+		}
+		// A war derives its class name exactly the way a program jar does: the class is
+		// an implementation detail behind the @HandlesTypes discovery, so nobody has to
+		// name it (-o app.war is App).
+		if (outputFile.endsWith(".war")) {
+			return classNameFromStem(outputFile, ".war");
 		}
 		if (!outputFile.endsWith(".class")) {
 			throw new UnsupportedOperationException("-o " + outputFile + " does not name a class, so the class name"
@@ -67,11 +73,12 @@ record JvmArtifactOptions(@Nullable String className, @Nullable MavenCoordinates
 	 * jar's single entry would then be unfindable, i.e. a {@code Main-Class} that does
 	 * not resolve. Capitalizing the first segment also puts the name out of reach of the
 	 * Java keywords, which are all lower case.
-	 * @param outputFile the {@code -o} path, ending in {@code .jar}
+	 * @param outputFile the {@code -o} path, ending in the given extension
+	 * @param extension the archive extension ({@code .jar} or {@code .war})
 	 * @return the internal class name, in the default package
 	 */
-	private static String classNameFromJarPath(String outputFile) {
-		String stem = outputFile.substring(0, outputFile.length() - ".jar".length());
+	private static String classNameFromStem(String outputFile, String extension) {
+		String stem = outputFile.substring(0, outputFile.length() - extension.length());
 		int separator = Math.max(stem.lastIndexOf('/'), stem.lastIndexOf(java.io.File.separatorChar));
 		stem = stem.substring(separator + 1);
 		StringBuilder name = new StringBuilder();

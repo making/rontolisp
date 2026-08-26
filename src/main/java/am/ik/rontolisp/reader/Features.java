@@ -52,6 +52,19 @@ public final class Features {
 	/** The features active when compiling to JVM bytecode. */
 	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support"));
 
+	/**
+	 * The features active when compiling to JVM bytecode in SERVLET mode -- a
+	 * {@code -o app.war} output, where the servlet container owns the port and the
+	 * {@code rontolisp:http-handler} directive registers its handler and RETURNS instead
+	 * of binding and blocking. {@code :rontolisp-servlet} is a target-describing feature
+	 * exactly like {@code :rontolisp-reactor}: it is what lets the
+	 * {@code clack-handler-rontolisp} shim choose the register-and-return transport per
+	 * target and on nothing else, so one {@code clackup} source runs on every host
+	 * ({@code .kb/clack.md}).
+	 */
+	public static final Features JVM_SERVLET = new Features(
+			List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "rontolisp-servlet"));
+
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
 	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode"));
 

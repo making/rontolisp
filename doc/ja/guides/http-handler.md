@@ -132,6 +132,45 @@ $ java -jar app.jar
 `target/classes` へ書き出すので、`src/main/lisp` に置いたサービスはビルドが
 作る jar にそのまま入ります。
 
+## Servlet war にコンパイルする
+
+同じソースは **Servlet war** にもコンパイルでき、Servlet 6 対応のコンテナ
+（Tomcat 10.1/11、Jetty 12、および現行の Jakarta EE サーバ）に無設定・無改変で
+デプロイできます。
+
+```console
+$ rontolisp app.lisp -o app.war
+$ cp app.war $CATALINA_HOME/webapps/ROOT.war
+```
+
+war には `web.xml` もプログラムクラス名を書いたファイルも入っていません。
+コンテナがコンパイル済みクラス自体を発見し（JVM クラス出力が既に実装している
+ハンドラインタフェースを実装しているため）、`/*` にサーブレットを登録します。
+ポートはコンテナが所有するので、`rontolisp:http-handler` に書かれたポートは
+コンパイル時に 1 行の警告とともに無視されます。`--maven-coordinates` と
+`--emit-pom` は jar と同じように使えます。
+
+サーブレットは**デフォルトで非同期**です。各リクエストはコンテナのスレッドを
+解放し、ハンドラは専用の仮想スレッドで実行されます。これは他のすべての
+rontolisp トランスポートが守るリクエストごと 1 仮想スレッドの規則そのものです。
+仮想スレッドを設定済みのコンテナでは `rontolisp.async` コンテキストパラメータ
+を `false` にしてオプトアウトできます。チェーン内のフィルタが非同期対応を
+宣言していない場合、war はリクエストを失敗させる代わりに、このパラメータ名を
+示す警告を 1 回出して同期パスにフォールバックします。
+
+war には後から独自の `web.xml`（フィルタ、セキュリティ制約、
+`<session-config>`）を追加できます。`metadata-complete="true"` や
+`<absolute-ordering/>` の下でもイニシャライザは動作し続けます。
+
+知っておくべき 2 つの失敗の形:
+
+- シグナルするトップレベルフォームは `ExceptionInInitializerError` として現れ、
+  **デプロイ**を失敗させます — コンテナは 500 を返し続ける代わりに webapp の
+  失敗として報告します。
+- ハンドラのスロットはプロセスごとではなく webapp ごとです。webapp は各自の
+  クラスローダを持つので、1 つのコンテナに rontolisp の war を複数並べて
+  デプロイできます。
+
 ## WASI HTTP コンポーネントにコンパイルする
 
 さらに **WASI HTTP コンポーネント** にもコンパイルでき、`wasmtime serve`

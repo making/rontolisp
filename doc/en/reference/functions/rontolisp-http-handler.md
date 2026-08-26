@@ -53,7 +53,10 @@ embedded HTTP server on `port` (default `8080`, one virtual thread per request)
 and serves until the process is stopped (Ctrl-C). Compiled to a **WASI
 component** (`--component`) it instead exports `wasi:http/handler@0.3.0`, so
 the module runs as a serverless HTTP component under `wasmtime serve` (the
-`port` argument is ignored — the host owns the socket).
+`port` argument is ignored — the host owns the socket). Compiled to a
+**Servlet war** (`-o app.war`) it registers the handler with the servlet
+container instead of binding a socket, and the `port` argument is likewise
+ignored — see the [HTTP guide](../../guides/http-handler.md#compiled-to-a-servlet-war).
 
 ```console
 (defun handle (env)

@@ -2,10 +2,13 @@
 
 Difficulty: High (parent item; each child is sized on its own)
 
-Children: `.todo/530` (the war output and the servlet transport),
-`.todo/531` (`:script-name` is fixed empty, so a war under a context path
-misroutes), `.todo/532` (Clack on the servlet transport), `.todo/533` (the
-Maven plugin builds a war). All OPEN.
+Children: `.todo/530` (the war output and the servlet transport) -- DONE
+(2026-08-26: `-o app.war`, `Features.JVM_SERVLET`, the two `runtime` servlet
+classes on `WAR_RUNTIME_CLASS_FILES`, the `%http-server-start` seam registers
+and returns, `WarE2eTest` on Tomcat AND Jetty; `.kb/http-server.md`, "The
+fifth transport"). `.todo/531` (`:script-name` is fixed empty, so a war under
+a context path misroutes), `.todo/532` (Clack on the servlet transport),
+`.todo/533` (the Maven plugin builds a war): OPEN.
 
 Spike files: `.todo/529-a-servlet-war-output-for-http-handler-and-clack/`
 (`README.md` reproduces the run).

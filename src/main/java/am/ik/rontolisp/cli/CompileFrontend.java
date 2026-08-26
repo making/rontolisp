@@ -77,6 +77,7 @@ final class CompileFrontend {
 	 * @param systemPath the ASDF system search path
 	 * @param dists the Quicklisp-format distributions
 	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param servlet whether the target is a {@code .war} output (JVM servlet mode)
 	 * @param dynamic {@code --dynamic}
 	 * @param component {@code --component}
 	 * @param noWasi {@code --no-wasi}
@@ -88,8 +89,8 @@ final class CompileFrontend {
 	 * @return the expanded program and what a backend needs to know about it
 	 */
 	static Result run(String source, @Nullable String entryFile, @Nullable String baseDir, List<String> systemPath,
-			DistClient dists, boolean wasm, boolean dynamic, boolean component, boolean noWasi, boolean noGc,
-			boolean hostFetch, @Nullable HostBoundary hostBoundary, boolean reentrant, boolean noPrune) {
+			DistClient dists, boolean wasm, boolean servlet, boolean dynamic, boolean component, boolean noWasi,
+			boolean noGc, boolean hostFetch, @Nullable HostBoundary hostBoundary, boolean reentrant, boolean noPrune) {
 		HostBoundary boundary = hostBoundary == null ? HostBoundary.ENVELOPE : hostBoundary;
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
@@ -115,7 +116,12 @@ final class CompileFrontend {
 		// imports nothing) or --no-gc (a pure-compute reactor with or without the
 		// component wrap).
 		boolean reactor = noWasi || noGc;
-		Features features = wasm ? (reactor ? Features.WASM_REACTOR : Features.WASM) : Features.JVM;
+		// And a .war output reads with #+rontolisp-servlet active: the reactor
+		// precedent, a target-describing feature rather than an internal compiler flag,
+		// because the clack-handler-rontolisp shim branches on features and on nothing
+		// else (.kb/clack.md).
+		Features features = wasm ? (reactor ? Features.WASM_REACTOR : Features.WASM)
+				: (servlet ? Features.JVM_SERVLET : Features.JVM);
 		// And #+rontolisp-component selects code for the COMPONENT BOUNDARY, which is a
 		// different boundary rather than a different backend: a component's host
 		// functions cross the canonical ABI, so the core-module directives

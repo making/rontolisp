@@ -79,6 +79,42 @@ class JvmHttpHandlerTravellingRuntimeTest {
 		assertThat(compile("(print (+ 1 2))").runtimeClasses()).isEmpty();
 	}
 
+	/**
+	 * The war-mode arm: the servlet transport travels IN ADDITION to the served closure,
+	 * and only there -- a {@code .class}/{@code .jar} compile (the arm above) never
+	 * carries it, so no existing artifact gains the {@code jakarta.servlet} reference.
+	 * The war closure is self-contained GIVEN a container, so the walk admits
+	 * {@code jakarta/servlet/**} as provided and keeps failing for any other outside
+	 * reference (an {@code eval} name, the build's {@code @Nullable}, a new library).
+	 */
+	@Test
+	void aWarCarriesTheServletTransportWhoseOnlyOutsideReferenceIsTheServletApi() {
+		JvmSourceCompiler.Result compiled = new JvmSourceCompiler("Served").servlet(true).compile("""
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain") (list (getf env :path-info))))
+
+				(rontolisp:http-handler 'handle)
+				""", null);
+
+		Set<String> expected = new LinkedHashSet<>(JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES);
+		expected.addAll(JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES);
+		assertThat(compiled.runtimeClasses().keySet()).containsExactlyInAnyOrderElementsOf(expected);
+		for (String warClass : JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES) {
+			byte[] bytes = compiled.runtimeClasses().get(warClass);
+			assertThat(bytes).isNotNull();
+			for (String reference : allReferences(bytes)) {
+				assertThat(reference)
+					.as("%s may reach only the JDK, the servlet API and the travelling runtime itself", warClass)
+					.matches(name -> name.startsWith("java/") || name.startsWith("jakarta/servlet/")
+							|| name.startsWith(TRAVELLING_PACKAGE), "an allowed prefix");
+				if (reference.startsWith("am/ik/")) {
+					assertThat(compiled.runtimeClasses()).as("%s is referenced but does not travel", reference)
+						.containsKey(reference + ".class");
+				}
+			}
+		}
+	}
+
 	@Test
 	void theCompiledClassServesWithOnlyItsOwnOutputOnTheClasspath() throws Exception {
 		// The stoppable seam rather than the http-handler directive: it binds an
@@ -153,6 +189,32 @@ class JvmHttpHandlerTravellingRuntimeTest {
 			}
 		}
 		return found;
+	}
+
+	// EVERY class reference in one class file's constant pool (internal names, array
+	// element types unwrapped, the class itself excluded) -- what the war arm checks
+	// against its allowed prefixes.
+	private static Set<String> allReferences(byte[] classBytes) {
+		Set<String> references = new TreeSet<>();
+		var model = ClassFile.of().parse(classBytes);
+		String self = model.thisClass().asInternalName();
+		for (PoolEntry entry : model.constantPool()) {
+			if (entry instanceof ClassEntry classEntry) {
+				String name = classEntry.asInternalName();
+				int element = name.lastIndexOf('[');
+				if (element >= 0) {
+					name = name.substring(element + 1).replaceAll("^L|;$", "");
+					if (name.length() == 1) {
+						// A primitive array descriptor ([B, [J, ...) names no class.
+						continue;
+					}
+				}
+				if (!name.equals(self)) {
+					references.add(name);
+				}
+			}
+		}
+		return references;
 	}
 
 	// The am.ik.* class-file paths named in one class file's constant pool. An array

@@ -79,7 +79,8 @@ final class JvmJarWriter {
 		return out.toByteArray();
 	}
 
-	private static void write(ZipOutputStream zip, String name, byte[] content) throws IOException {
+	/** Also used by {@link JvmWarWriter}, whose entries follow the same rules. */
+	static void write(ZipOutputStream zip, String name, byte[] content) throws IOException {
 		ZipEntry entry = new ZipEntry(name);
 		// setTimeLocal writes the DOS time field directly. setTime(long) would convert
 		// through the default time zone and add an extended-timestamp extra field, so the
@@ -98,8 +99,13 @@ final class JvmJarWriter {
 	 * {@code objc:} / {@code appkit:}, {@code --blas}, {@code --gpu} -- then runs under
 	 * {@code java -jar} without the JDK's restricted-method warning, and the header is
 	 * inert for a program that reaches nothing.
+	 *
+	 * <p>
+	 * Also used by {@link JvmWarWriter} with {@code mainClass=false}: a war has no entry
+	 * point (nobody {@code java -jar}s a war), and {@code Enable-Native-Access} stays --
+	 * inert when unused, and a {@code --blas}/{@code --gpu} war still wants it.
 	 */
-	private static String manifest(String className, boolean mainClass) {
+	static String manifest(String className, boolean mainClass) {
 		StringBuilder manifest = new StringBuilder();
 		append(manifest, "Manifest-Version", "1.0");
 		append(manifest, "Created-By", "rontolisp " + Version.getVersion());

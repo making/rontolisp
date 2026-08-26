@@ -52,6 +52,16 @@
 			<groupId>org.jspecify</groupId>
 			<artifactId>jspecify</artifactId>
 		</dependency>
+		<!-- The ONE sanctioned outside dependency of am.ik.rontolisp.runtime (the servlet
+		     transport a -o app.war output travels, .kb/http-server.md): provided scope,
+		     so it is never in the exec jar, a .class/.jar output or the native image.
+		     6.0.0 is the compile floor; the war runs on any Servlet 6.0+ container. -->
+		<dependency>
+			<groupId>jakarta.servlet</groupId>
+			<artifactId>jakarta.servlet-api</artifactId>
+			<version>6.0.0</version>
+			<scope>provided</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter-api</artifactId>
@@ -85,6 +95,26 @@
 		<dependency>
 			<groupId>tools.jackson.dataformat</groupId>
 			<artifactId>jackson-dataformat-yaml</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- WarE2eTest deploys a compiled war into BOTH embedded containers (initializer
+		     discovery is a container behavior, not a spec guarantee). Test scope only. -->
+		<dependency>
+			<groupId>org.apache.tomcat.embed</groupId>
+			<artifactId>tomcat-embed-core</artifactId>
+			<version>11.0.24</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.eclipse.jetty.ee10</groupId>
+			<artifactId>jetty-ee10-webapp</artifactId>
+			<version>12.0.31</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.eclipse.jetty.ee10</groupId>
+			<artifactId>jetty-ee10-annotations</artifactId>
+			<version>12.0.31</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>
@@ -538,6 +568,16 @@ gitBranch=${git.branch}
 
 	<dependencyManagement>
 		<dependencies>
+			<!-- BEFORE spring-boot-dependencies (first import wins): the WarE2eTest
+			     Jetty is EE10 12.0.x, and Boot's managed 12.1.x jetty-core underneath it
+			     is a NoSuchMethodError at container start. -->
+			<dependency>
+				<groupId>org.eclipse.jetty</groupId>
+				<artifactId>jetty-bom</artifactId>
+				<version>12.0.31</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
 			<dependency>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-dependencies</artifactId>

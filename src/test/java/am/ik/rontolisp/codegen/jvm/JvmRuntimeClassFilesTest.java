@@ -15,12 +15,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Nothing can enumerate a package from a classpath, still less from inside a native
  * image, so each feature's travelling list is hand-kept -- the packed float-array
- * handle's ({@code JvmExportRuntimeBuilder}) and the served-request runtime's
- * ({@code JvmHttpHandlerRuntimeBuilder}). This pins their union against the package's
- * actual class files, so a class added there is a failure HERE rather than a
- * {@code NoClassDefFoundError} in someone's deployment. Which of the two lists it belongs
- * to is the feature's own test's business ({@code JvmHttpHandlerTravellingRuntimeTest}
- * recomputes the served closure).
+ * handle's ({@code JvmExportRuntimeBuilder}), the served-request runtime's and the war's
+ * servlet transport ({@code JvmHttpHandlerRuntimeBuilder}). This pins their union against
+ * the package's actual class files, so a class added there is a failure HERE rather than
+ * a {@code NoClassDefFoundError} in someone's deployment. Which of the three lists it
+ * belongs to is the feature's own test's business
+ * ({@code JvmHttpHandlerTravellingRuntimeTest} recomputes the served closure).
  *
  * <p>
  * {@code package-info.class} deliberately stays behind: it carries only the build's
@@ -38,8 +38,9 @@ class JvmRuntimeClassFilesTest {
 				.sorted()
 				.toList();
 			assertThat(Stream
-				.concat(JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES.stream(),
-						JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES.stream())
+				.of(JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES, JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES,
+						JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES)
+				.flatMap(List::stream)
 				.map(path -> path.substring(path.lastIndexOf('/') + 1))
 				.sorted()
 				.toList()).isEqualTo(onDisk);

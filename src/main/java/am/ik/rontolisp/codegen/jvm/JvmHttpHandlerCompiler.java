@@ -6,6 +6,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.jvm.Opcode;
 
 /**
@@ -66,6 +67,19 @@ final class JvmHttpHandlerCompiler {
 		JvmFunctionFormCompiler.compileNamed(nameSym.name(), ctx, className);
 		ctx.emit(Opcode.PUTSTATIC);
 		ctx.emitU2(runtime.handlerField().index());
+		if (ctx.servletMode) {
+			// Servlet mode (-o app.war): register and RETURN. The container owns the
+			// port and calls handle(Request) through the travelling RontoHttpServlet;
+			// blocking here would leave <clinit> -- which the container's initializer
+			// runs -- hanging forever. A written port is accepted and ignored, the way
+			// an ignored flag should behave: named once, not an error.
+			if (portExpr != null) {
+				CompileWarnings.warn("warning: " + LispNames.HTTP_HANDLER + " port " + portExpr.print()
+						+ " is ignored in a war: the servlet container owns the port");
+			}
+			ctx.emit(Opcode.ACONST_NULL);
+			return;
+		}
 		// port (int); default 8080
 		if (portExpr != null) {
 			JvmExprCompiler.compileExpr(portExpr, ctx, className);

@@ -59,7 +59,10 @@ Clack のレスポンスリスト `(status headers body)` を返します — Cl
 **WASI コンポーネント**（`--component`）にコンパイルすると、代わりに
 `wasi:http/handler@0.3.0` をエクスポートし、`wasmtime serve` 上でサーバレス
 HTTP コンポーネントとして動作します（`port` 引数は無視されます。ソケットは
-ホストが所有します）。
+ホストが所有します）。**Servlet war**（`-o app.war`）にコンパイルすると、
+ソケットをバインドする代わりにハンドラをサーブレットコンテナに登録し、
+`port` 引数は同様に無視されます —
+[HTTP ガイド](../../guides/http-handler.md#compiled-to-a-servlet-war)を参照。
 
 ```console
 (defun handle (env)

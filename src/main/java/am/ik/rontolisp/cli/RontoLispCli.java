@@ -484,6 +484,13 @@ public final class RontoLispCli {
 		// --no-main is the JVM backend's library mode (the --no-wasi reactor turn's
 		// twin): it drops the main entry point, so it only means something for a
 		// .class output.
+		// --no-main and a .war are mutually exclusive: a war never has a main, so the
+		// flag is either redundant or a mistake. Refuse it by name, before the general
+		// jvmOutput check below would wave it through.
+		if (noMain && outputFile.endsWith(".war")) {
+			throw new UnsupportedOperationException("--no-main cannot be combined with a .war output: a war has no"
+					+ " main to remove (its entry point is the servlet container). Drop the flag");
+		}
 		if (noMain && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--no-main compiles a JVM library class (no main method), so it"
 					+ " needs a .class or .jar output -- e.g. -o Kernels.class --no-main."
@@ -504,11 +511,13 @@ public final class RontoLispCli {
 					+ " .class or .jar output -- e.g. -o kernels.jar --class-name com.example.Kernels");
 		}
 		// --maven-coordinates stamps an artifact with its own identity, and the place it
-		// travels is META-INF/maven inside a JAR: a bare .class has nowhere to carry it.
-		if (jvmArtifact.coordinates() != null && !outputFile.endsWith(".jar")) {
-			throw new UnsupportedOperationException("--maven-coordinates rides inside a jar's META-INF/maven, so it"
-					+ " needs a .jar output -- e.g. -o kernels-1.0.0.jar --class-name com.example.Kernels"
-					+ " --maven-coordinates com.example:kernels:1.0.0");
+		// travels is META-INF/maven inside a JAR or a WAR (a war IS a Maven artifact):
+		// a bare .class has nowhere to carry it.
+		if (jvmArtifact.coordinates() != null && !outputFile.endsWith(".jar") && !outputFile.endsWith(".war")) {
+			throw new UnsupportedOperationException(
+					"--maven-coordinates rides inside a jar's or a war's META-INF/maven,"
+							+ " so it needs a .jar or .war output -- e.g. -o kernels-1.0.0.jar"
+							+ " --class-name com.example.Kernels --maven-coordinates com.example:kernels:1.0.0");
 		}
 		if (jvmArtifact.emitPom() && jvmArtifact.coordinates() == null) {
 			throw new UnsupportedOperationException("--emit-pom writes the pom of the coordinates the jar carries,"
@@ -600,8 +609,8 @@ public final class RontoLispCli {
 		// and the library tree-shaker -- in the one place all four backends and the
 		// embedded JVM seam (JvmSourceCompiler) share (CompileFrontend).
 		CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, baseDir, systemPath, dists,
-				outputFile.endsWith(".wasm"), dynamic, component, noWasi, noGc, hostFetch, hostBoundary, reentrant,
-				noPrune);
+				outputFile.endsWith(".wasm"), outputFile.endsWith(".war"), dynamic, component, noWasi, noGc, hostFetch,
+				hostBoundary, reentrant, noPrune);
 		List<LispVal> program = frontend.program();
 		Features features = frontend.features();
 		boolean serve = frontend.serve();
@@ -693,6 +702,7 @@ public final class RontoLispCli {
 				.gpu(gpu)
 				.parallel(parallel)
 				.noMain(noMain)
+				.servlet(outputFile.endsWith(".war"))
 				.baseDir(baseDir)
 				.compileProgram(program, features);
 			jvmClassName = compiled.internalClassName();
@@ -713,6 +723,17 @@ public final class RontoLispCli {
 				// consumer, not an error here), and the coordinates when given.
 				Files.write(outputPath, JvmJarWriter.jar(Objects.requireNonNull(jvmClassName), bytes, jvmRuntimeClasses,
 						!noMain, jvmArtifact.coordinates(), simd));
+				if (jvmArtifact.emitPom()) {
+					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd);
+				}
+			}
+			else if (outputFile.endsWith(".war")) {
+				// A war is the same bytecode (compiled in servlet mode) inside
+				// WEB-INF/classes, plus the one-line service declaration that lets any
+				// Servlet 6 container discover the program itself -- no web.xml, no
+				// configuration (JvmWarWriter).
+				Files.write(outputPath, JvmWarWriter.war(Objects.requireNonNull(jvmClassName), bytes, jvmRuntimeClasses,
+						jvmArtifact.coordinates(), simd));
 				if (jvmArtifact.emitPom()) {
 					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd);
 				}
@@ -800,11 +821,13 @@ public final class RontoLispCli {
 	}
 
 	/**
-	 * A JVM compile: a bare {@code .class}, or the {@code .jar} that packages it. The two
-	 * carry the same bytecode, so every flag that reaches the JVM backend reaches both.
+	 * A JVM compile: a bare {@code .class}, the {@code .jar} that packages it, or the
+	 * {@code .war} that packages it for a servlet container. All three carry the same
+	 * bytecode (the war additionally compiled in servlet mode), so every flag that
+	 * reaches the JVM backend reaches each of them.
 	 */
 	private static boolean jvmOutput(String outputFile) {
-		return outputFile.endsWith(".class") || outputFile.endsWith(".jar");
+		return outputFile.endsWith(".class") || outputFile.endsWith(".jar") || outputFile.endsWith(".war");
 	}
 
 	/**
@@ -814,6 +837,7 @@ public final class RontoLispCli {
 	 * wrote before is overwritten; anything else is someone's own and is refused by name.
 	 */
 	private static void writePom(String outputFile, MavenCoordinates coordinates, boolean simd) throws IOException {
+		// .jar and .war are the same length, so one cut serves both archive outputs.
 		Path pom = Path.of(outputFile.substring(0, outputFile.length() - ".jar".length()) + ".pom");
 		if (Files.exists(pom)
 				&& !Files.readString(pom, StandardCharsets.UTF_8).startsWith(MavenCoordinates.POM_MARKER)) {
@@ -838,6 +862,10 @@ public final class RontoLispCli {
 		this.out.println("  -e \"FORMS\"         Interpret the given program instead of a file (--eval)");
 		this.out.println("  file -o out.class   Compile to JVM bytecode");
 		this.out.println("  file -o out.jar     Compile to an executable jar (java -jar out.jar)");
+		this.out.println("  file -o app.war     Compile an http-handler program to a Servlet war that");
+		this.out.println("                     deploys unmodified on any Servlet 6 container (Tomcat,");
+		this.out.println("                     Jetty, ...): no web.xml, no configuration; the container");
+		this.out.println("                     owns the port, so a written port is ignored");
 		this.out.println("  file -o out.wasm    Compile to WASM");
 		this.out.println("  file -- ARG...     Interpret the file with ARG... as the PROGRAM's own");
 		this.out.println("                     arguments: everything after -- is (uiop:command-line-");
@@ -901,7 +929,7 @@ public final class RontoLispCli {
 		this.out.println("                     main is the only tree-shaker root otherwise). The top level");
 		this.out.println("                     runs once, at class initialization, exactly as a --no-wasi");
 		this.out.println("                     reactor runs its top level at instantiation");
-		this.out.println("  --class-name NAME  With a .class or .jar output: the fully qualified name of");
+		this.out.println("  --class-name NAME  With a .class, .jar or .war output: the fully qualified name of");
 		this.out.println("                     the emitted class (com.example.Kernels). REQUIRED for a");
 		this.out.println("                     --no-main library jar, whose class IS its Java API; a program");
 		this.out.println("                     jar derives one from the -o file name (app.jar -> App) and is");
@@ -909,7 +937,7 @@ public final class RontoLispCli {
 		this.out.println("                     name the -o path would give, so -o build/K.class can still be");
 		this.out.println("                     com.example.Kernels");
 		this.out.println("  --maven-coordinates G:A:V");
-		this.out.println("                     With a .jar output: embed META-INF/maven/G/A/pom.xml and");
+		this.out.println("                     With a .jar or .war output: embed META-INF/maven/G/A/pom.xml and");
 		this.out.println("                     pom.properties, so the coordinates travel INSIDE the jar and");
 		this.out.println("                     `mvn install:install-file -Dfile=out.jar` needs no -DgroupId,");
 		this.out.println("                     -DartifactId, -Dversion or -DpomFile. The generated pom has an");

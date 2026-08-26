@@ -92,6 +92,28 @@ final class JvmHttpHandlerRuntimeBuilder {
 		return JvmRuntimeClassFiles.read(RUNTIME_CLASS_FILES);
 	}
 
+	/**
+	 * The THIRD travelling list ({@code .kb/jvm-export.md}, "What travels"): the servlet
+	 * transport a {@code -o app.war} output carries in addition to
+	 * {@link #RUNTIME_CLASS_FILES}. Reached ONLY by a war compile
+	 * ({@code JvmLispCompiler.servlet}), so no {@code .class} or {@code .jar} output ever
+	 * gains these classes' {@code jakarta.servlet} reference -- the one sanctioned
+	 * exception to the runtime package importing nothing outside {@code java.base},
+	 * satisfied by definition: a war runs in a servlet container, and a container without
+	 * {@code jakarta.servlet} is not a container.
+	 */
+	static final List<String> WAR_RUNTIME_CLASS_FILES = List.of("am/ik/rontolisp/runtime/RontoHttpServlet.class",
+			"am/ik/rontolisp/runtime/RontoHttpServletInitializer.class");
+
+	/**
+	 * Reads {@link #WAR_RUNTIME_CLASS_FILES} off the compiler's own classpath.
+	 * @return each class file's path within the war's {@code WEB-INF/classes}, mapped to
+	 * its bytes
+	 */
+	static Map<String, byte[]> warRuntimeClassFiles() {
+		return JvmRuntimeClassFiles.read(WAR_RUNTIME_CLASS_FILES);
+	}
+
 	/** The ready-to-emit {@code handle(Request)} method body. */
 	record HandleMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
 	}

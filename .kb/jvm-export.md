@@ -116,6 +116,7 @@ else's artifact, and the mechanism is general -- not the handle's alone:
 | --- | --- | --- |
 | `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector` / `:float-matrix` export | `RontoFloatArray` + `RontoBoundary`, the handle type and its marshalling seam |
 | `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / the `%http-server-start` seam | `RontoHttpServer` (the embedded server, shared with the interpreter), `RontoHttpClack` (the per-request Clack glue) and the two declarations they read, `RontoClackEnv` + `RontoHashTable` (`.kb/http-server.md`) |
+| `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` output only (in ADDITION to the served list) | `RontoHttpServlet` + `RontoHttpServletInitializer`, the Servlet transport (`.kb/http-server.md`, "The fifth transport") -- the one sanctioned `jakarta.servlet` import, satisfied by definition (a war runs in a servlet container), `provided` scope in the pom, never in any other artifact |
 
 Both go through `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` ->
 `RontoLispCli` (beside a `-o X.class`, INSIDE a `-o X.jar`) and `LispSourceSet` (the Maven
@@ -126,7 +127,13 @@ therefore self-contained -- `java -cp . App`, no rontolisp jar** (the guide
 
 The price is the rule that makes it work: **a class in `runtime` imports nothing at all,
 not even the build's `@Nullable`** -- that annotation is `RuntimeVisible`, so its class
-file reference would follow the class into the consumer's artifact. Hence `RontoHashTable.get`
+file reference would follow the class into the consumer's artifact. The ONE stated
+exception is the war row above: the two servlet classes import `jakarta.servlet`,
+because they are emitted into a `.war` alone and a container without `jakarta.servlet`
+is not a container -- the same argument `RontoHttpServer`'s `com.sun.net.httpserver`
+import already makes about the JDK, one module further out. The war-mode arm of
+`JvmHttpHandlerTravellingRuntimeTest` admits `jakarta/servlet/**` as provided and keeps
+failing for any other outside reference. Hence `RontoHashTable.get`
 takes the absent value instead of answering null, `RontoHttpServer.Request` spells "unknown"
 as `""`, and `RontoHttpServer` raises its own nested `ServerException` which the
 interpreter's call site turns back into a `LispEvalException`. Because the package imports

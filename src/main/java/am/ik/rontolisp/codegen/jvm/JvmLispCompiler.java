@@ -105,6 +105,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean noMain;
 
 	/**
+	 * Servlet mode ({@code -o app.war}): the program serves through a servlet container
+	 * that owns the port, so the {@code rontolisp:http-handler} directive registers its
+	 * handler and RETURNS (no bind, no block), the top level moves into {@code <clinit>}
+	 * (the container's initializer runs it via {@code Class.forName}), and the two
+	 * servlet adapter classes join {@link #runtimeClassFiles()}. See {@link #servlet}.
+	 */
+	private boolean servletMode;
+
+	/**
 	 * Whether the last {@link #compile} declared a packed float-array boundary type, i.e.
 	 * whether the emitted class needs the handle half of {@link #runtimeClassFiles()}
 	 * beside it.
@@ -348,6 +357,22 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * Selects servlet mode ({@code -o app.war}). The program must serve (a
+	 * {@code rontolisp:http-handler} directive or the {@code %http-server-start} seam): a
+	 * war with nothing for the container to call is refused at compile time. The top
+	 * level moves into {@code <clinit>} exactly as an export does -- the container's
+	 * initializer triggers it through {@code Class.forName} -- and the directive stores
+	 * the handler funcref and returns instead of calling the blocking {@code serve}: the
+	 * container owns the port.
+	 * @param servlet whether to compile for a servlet container
+	 * @return this compiler
+	 */
+	public JvmLispCompiler servlet(boolean servlet) {
+		this.servletMode = servlet;
+		return this;
+	}
+
+	/**
 	 * The runtime class files the compiled class needs BESIDE it — the packed float-array
 	 * handle a {@code :float-vector} / {@code :float-matrix} export hands out with its
 	 * marshalling seam, and the embedded HTTP server a {@code rontolisp:http-handler}
@@ -371,6 +396,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsHttpRuntime) {
 			files.putAll(JvmHttpHandlerRuntimeBuilder.runtimeClassFiles());
+			// A war additionally carries the servlet transport -- the THIRD travelling
+			// list, reached only here so no .class/.jar output ever gains the
+			// jakarta.servlet reference (.kb/jvm-export.md, "What travels").
+			if (this.servletMode) {
+				files.putAll(JvmHttpHandlerRuntimeBuilder.warRuntimeClassFiles());
+			}
 		}
 		return Map.copyOf(files);
 	}
@@ -685,6 +716,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				// method and the _httpHandlerFn slot.
 				|| programUsesSymbol(program,
 						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.HTTP_SERVER_START));
+		// A war exists to be called by a servlet container, so a program with no
+		// handler to register is refused HERE (an embedder gets the check too), not
+		// discovered as a dead deployment.
+		if (this.servletMode && !usesHttpHandler) {
+			throw new UnsupportedOperationException("-o app.war serves through a servlet container, but this program"
+					+ " has no rontolisp:http-handler directive (and no rontolisp::%http-server-start): there is"
+					+ " nothing for the container to call. Compile to a .class or .jar instead");
+		}
 		boolean usesFetch = programUsesSymbol(program, fetchQualified);
 		boolean usesAsyncSpawn = programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED) || usesHttpHandler;
 		boolean usesStreamOps = programUsesSymbol(program,
@@ -1551,6 +1590,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.objcOps(objcRuntime != null ? objcRuntime.ops() : null)
 			.dynamic(this.dynamic)
+			.servletMode(this.servletMode)
 			.blockExitChannel(blockExitChannel)
 			.restartMode(restartMode)
 			.signalClauseMatch(signalClauseMatch)
@@ -1731,7 +1771,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// instantiation, and <clinit> is the JVM's instantiation. main (when kept) then
 		// only triggers class initialization, so the top level still runs exactly once,
 		// idempotent under the JVM's own class-init locking (.kb/jvm-export.md).
-		boolean topLevelInClinit = !exportDecls.isEmpty();
+		// Servlet mode forces the same move with or without an export: the container's
+		// initializer reaches the top level through Class.forName(name, true, loader),
+		// and a war whose top level stayed in main deploys, finds the class, and 500s
+		// on every request with an unfilled handler slot (the .todo/529 spike measured
+		// exactly that failure).
+		boolean topLevelInClinit = !exportDecls.isEmpty() || this.servletMode;
 		Ctx mainCtx = ctxBuilder.build();
 		mainCtx.evalStoreRef = evalStoreRef;
 		// The command line's static home, built HERE rather than beside the other
@@ -3063,9 +3108,19 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
+				// The five lazy _*Init methods below define an embedded class (or bind a
+				// native library) behind a plain int guard, and a served program runs
+				// one virtual thread per request -- two first calls arriving together
+				// both passed the guard and the second defineClass died with a
+				// LinkageError (found by WarE2eTest's concurrent burst; the exact bug
+				// family .kb/concurrent-served-requests.md records for the
+				// interpreter's lazy loads, whose rule is: take the lock, check the
+				// flag, set it, evaluate). ACC_SYNCHRONIZED is that rule in bytecode;
+				// steady state pays one uncontended class monitor per call, which every
+				// one of these paths (reflection, FFM, a kernel) dwarfs.
 				if (javaRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, javaRuntime.initName(),
-							javaRuntime.initDesc(),
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+							javaRuntime.initName(), javaRuntime.initDesc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(javaRuntime.maxStack())
 									.writeU2(javaRuntime.maxLocals())
@@ -3075,8 +3130,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (objcRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, objcRuntime.initName(),
-							objcRuntime.initDesc(),
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+							objcRuntime.initName(), objcRuntime.initDesc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(objcRuntime.maxStack())
 									.writeU2(objcRuntime.maxLocals())
@@ -3086,8 +3141,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (simdRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.initName(),
-							simdRuntime.initDesc(),
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+							simdRuntime.initName(), simdRuntime.initDesc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(simdRuntime.maxStack())
 									.writeU2(simdRuntime.maxLocals())
@@ -3113,8 +3168,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (blasRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, blasRuntime.initName(),
-							blasRuntime.initDesc(),
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+							blasRuntime.initName(), blasRuntime.initDesc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(blasRuntime.maxStack())
 									.writeU2(blasRuntime.maxLocals())
@@ -3124,8 +3179,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (gpuRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.initName(),
-							gpuRuntime.initDesc(),
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+							gpuRuntime.initName(), gpuRuntime.initDesc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(gpuRuntime.maxStack())
 									.writeU2(gpuRuntime.maxLocals())
@@ -4762,6 +4817,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean dynamic = false;
 
 		/**
+		 * Servlet mode ({@code -o app.war}): the http-handler directive and the
+		 * {@code %http-server-*} seam register the handler and return instead of binding
+		 * a port the container owns.
+		 */
+		boolean servletMode = false;
+
+		/**
 		 * True when the program can put a non-local exit on the {@code _nleTl} channel --
 		 * it lowers a cross-lambda {@code return-from} (a {@code %nlx-*} form is emitted)
 		 * or uses {@code catch}/{@code throw}. Gates the {@code handler-case} handler's
@@ -5123,6 +5185,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.conditionChannel = builder.conditionChannel;
 			this.layoutPool = builder.layoutPool;
 			this.dynamic = builder.dynamic;
+			this.servletMode = builder.servletMode;
 			this.blockExitChannel = builder.blockExitChannel;
 			this.restartMode = builder.restartMode;
 			this.signalClauseMatch = builder.signalClauseMatch;
@@ -5385,6 +5448,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private int[] nextFuncId = new int[1];
 
 			private boolean dynamic = false;
+
+			private boolean servletMode = false;
 
 			private boolean blockExitChannel = false;
 
@@ -5799,6 +5864,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder dynamic(boolean dynamic) {
 				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder servletMode(boolean servletMode) {
+				this.servletMode = servletMode;
 				return this;
 			}
 

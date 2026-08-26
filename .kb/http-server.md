@@ -67,6 +67,62 @@ the answer): `RontoHttpServer.Request` carries the 10 raw transport facts —
 target verbatim (still percent-encoded, query included), headers in wire order
 with duplicates kept, the body as BYTES, protocol/scheme/local/remote.
 
+## The fifth transport: the Servlet war (`-o app.war`)
+
+A `rontolisp:http-handler` program compiles to a Servlet war that deploys
+unmodified on any Servlet 6 container. The transport is two classes in
+`runtime` — `RontoHttpServlet` (a ten-field `Request` fill in, a `Response`
+write out; byte-exact, no encode of its own) and `RontoHttpServletInitializer`
+(`@HandlesTypes(RontoHttpServer.Handler.class)`: the container hands over the
+program class BECAUSE implementing `Handler` is already what the JVM backend
+emits, so the war carries no name and no `web.xml`; its only non-class file is
+the one-line `ServletContainerInitializer` service declaration, identical in
+every war). They travel on the THIRD list,
+`JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES`, reached only by a war
+compile — their `jakarta.servlet` import is the one sanctioned exception to
+the runtime package importing nothing (`.kb/jvm-export.md`, "What travels");
+`jakarta.servlet-api` sits in the root pom in `provided` scope and reaches no
+other artifact.
+
+War mode is a reader feature (`Features.JVM_SERVLET`, `:rontolisp-servlet` —
+the reactor precedent, so the Clack shim can branch on features and nothing
+else) selected when `-o` ends in `.war`, and `JvmLispCompiler.servlet`:
+
+- the top level moves into `<clinit>` exactly as a `jvm-export` moves it; the
+  initializer runs it through `Class.forName(name, true, loader)` (a container
+  loads `@HandlesTypes` candidates WITHOUT initializing). A war without the
+  move deploys and 500s on every request with an unfilled handler slot — the
+  initializer's reflective post-check turns that into a FAILED DEPLOYMENT, and
+  a signalling top level (`ExceptionInInitializerError`) is rethrown as
+  `ServletException` for the same reason;
+- the directive stores the funcref and RETURNS (a written port warns once at
+  compile time — the container owns the port); the `%http-server-start` seam
+  REGISTERS AND RETURNS rather than refusing (handle 0, `join` returns at
+  once, `stop` a no-op, `port` answers 0) — the register spelling is what
+  makes the Clack servlet leg a feature-gated spelling of the same call;
+- a program with no handler is refused at compile time in `JvmLispCompiler`
+  (nothing for the container to call);
+- the servlet is ASYNC by default and that is the concurrency invariant, not a
+  tuning knob (`.kb/concurrent-served-requests.md`): `startAsync` +
+  `setTimeout(0)` + one virtual thread per request, `complete()` in a
+  `finally`. Opt-out: `rontolisp.async` context param `false`; a filter chain
+  that refuses async falls back to sync with one warning. One handler slot per
+  WEBAPP (per class loader), so two rontolisp wars in one container do not
+  collide;
+- `JvmWarWriter` is `JvmJarWriter` with a different entry prefix and manifest
+  (no `Main-Class`); byte-identical across compiles
+  (`.kb/emitted-output-determinism.md`).
+
+Pinned by `WarE2eTest` (opt-in `-Drontolisp.war.e2e=true`): the spike table on
+BOTH embedded Tomcat and Jetty (initializer discovery is a container behavior,
+not a spec guarantee), the octet-body row on RAW bytes, the distinct-thread
+concurrency pin, and both deployment-failure shapes. Structure:
+`RontoLispCliTest`'s war tests and
+`JvmHttpHandlerTravellingRuntimeTest.aWarCarriesTheServletTransportWhoseOnlyOutsideReferenceIsTheServletApi`.
+An embedded Jetty needs `AnnotationConfiguration` added before it runs
+initializers at all; a standalone Jetty enables its `annotations` module for a
+deployed webapp on its own. Tomcat needs nothing.
+
 ## The environment contract (all verified against upstream Clack)
 
 `:REQUEST-METHOD` upcased interned keyword / `:SCRIPT-NAME` `""` / `:PATH-INFO`

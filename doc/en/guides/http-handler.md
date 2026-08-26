@@ -133,6 +133,44 @@ The [Maven plugin](jvm-library.md#a-maven-project-srcmainlisp) writes them
 into `target/classes` the same way, so a `src/main/lisp` service ends up
 inside the jar the build produces.
 
+## Compiled to a Servlet war
+
+The same source also compiles to a **Servlet war** that deploys unmodified,
+with no configuration, on any Servlet 6 container (Tomcat 10.1/11, Jetty 12,
+and every current Jakarta EE server):
+
+```console
+$ rontolisp app.lisp -o app.war
+$ cp app.war $CATALINA_HOME/webapps/ROOT.war
+```
+
+The war carries no `web.xml` and no file naming the program class: the
+container discovers the compiled class itself (it implements the handler
+interface the JVM class output already implements) and registers a servlet at
+`/*`. The container owns the port, so a port written in the
+`rontolisp:http-handler` form is ignored with a one-line warning at compile
+time. `--maven-coordinates` and `--emit-pom` work as they do for a jar.
+
+The servlet is **asynchronous by default**: each request releases the
+container's thread and runs the handler on its own virtual thread, the same
+one-virtual-thread-per-request rule every other rontolisp transport keeps. A
+container already configured with virtual threads can opt out with a
+`rontolisp.async` context parameter of `false`. If a filter in the chain does
+not declare async support, the war falls back to the synchronous path with one
+warning naming that parameter, rather than failing requests.
+
+You may add your own `web.xml` to the war afterwards (a filter, a security
+constraint, a `<session-config>`); the initializer keeps working even under
+`metadata-complete="true"` or `<absolute-ordering/>`.
+
+Two failure shapes worth knowing:
+
+- A top-level form that signals surfaces as `ExceptionInInitializerError` and
+  fails the **deployment** — the container reports a failed webapp instead of
+  answering 500 forever.
+- The handler slot is per webapp, not per process: each webapp has its own
+  class loader, so two rontolisp wars deploy side by side in one container.
+
 ## Compiled to a WASI HTTP component
 
 It also compiles to a **WASI HTTP component** that runs under

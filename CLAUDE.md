@@ -72,10 +72,12 @@ am.ik.objc -> (nothing)
   COPIED into a compiled program's output (beside a `.class`, inside a `.jar`, into the
   Maven plugin's `target/classes`), so anything they imported would become that
   artifact's dependency. What travels and when: `.kb/jvm-export.md`, "What travels" — the
-  `rontolisp:jvm-export` handle boundary types, and the embedded HTTP server a
-  `rontolisp:http-handler` program serves through (`.kb/http-server.md`). **A class added
-  to this package must be added to a travelling list** (`JvmRuntimeClassFilesTest` fails
-  otherwise).
+  `rontolisp:jvm-export` handle boundary types, the embedded HTTP server a
+  `rontolisp:http-handler` program serves through (`.kb/http-server.md`), and — ONE
+  stated exception to importing nothing — the `jakarta.servlet` transport pair only a
+  `-o app.war` output carries (`provided` scope; the container supplies it by
+  definition). **A class added to this package must be added to a travelling list**
+  (`JvmRuntimeClassFilesTest` fails otherwise).
 - `format` depends on nothing, not even `reader`: it needs the source verbatim and has its
   own lossless CST front end (`.kb/formatter.md`).
 - `compiler` holds backend-shared, backend-FREE front-ends and depends on no backend.

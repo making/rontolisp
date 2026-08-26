@@ -60,6 +60,25 @@ final class JvmHttpServerSeamCompiler {
 			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 			ctx.emit(Opcode.PUTSTATIC);
 			ctx.emitU2(runtime.handlerField().index());
+			if (ctx.servletMode) {
+				// Servlet mode (-o app.war): the seam REGISTERS AND RETURNS rather than
+				// refusing by name. Refusing would be the more honest answer to "a war
+				// cannot own a port" -- but the register spelling is the whole point:
+				// the clack-handler-rontolisp shim reaches this seam, and registering
+				// here is what makes its servlet leg (.todo/532) a feature-gated
+				// spelling of the same call instead of a new transport. The port and
+				// address are evaluated for their effects and discarded (the container
+				// owns both), and the answered handle is the constant 0: join returns
+				// at once, stop is a no-op, port answers 0 -- the container's port is
+				// not this process's to know.
+				JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+				ctx.emit(Opcode.POP);
+				JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
+				ctx.emit(Opcode.POP);
+				ctx.emit(Opcode.LCONST_0);
+				JvmEmitHelper.boxLong(ctx);
+				return;
+			}
 			// port (int)
 			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 			JvmEmitHelper.unboxLong(ctx);
@@ -85,6 +104,19 @@ final class JvmHttpServerSeamCompiler {
 			throw new UnsupportedOperationException(member + " expects a server handle, got " + (parts.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		if (ctx.servletMode) {
+			// The register-and-return contract's other half (see the start arm above):
+			// there is no server of this process's to join, stop or ask.
+			ctx.emit(Opcode.POP);
+			if (LispNames.HTTP_SERVER_PORT.equals(member)) {
+				ctx.emit(Opcode.LCONST_0);
+				JvmEmitHelper.boxLong(ctx);
+			}
+			else {
+				ctx.emit(Opcode.ACONST_NULL);
+			}
+			return;
+		}
 		JvmEmitHelper.unboxLong(ctx);
 		if (LispNames.HTTP_SERVER_PORT.equals(member)) {
 			ConstantPool.MethodrefConstant port = ctx.cp.addMethodref(supportClass,

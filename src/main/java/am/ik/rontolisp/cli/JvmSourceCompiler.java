@@ -48,6 +48,8 @@ public final class JvmSourceCompiler {
 
 	private boolean noMain;
 
+	private boolean servlet;
+
 	private @Nullable String baseDir;
 
 	private List<String> systemPath = List.of();
@@ -127,6 +129,17 @@ public final class JvmSourceCompiler {
 	}
 
 	/**
+	 * @param servlet servlet mode ({@code -o app.war}): the source is read with
+	 * {@code #+rontolisp-servlet} active, the top level moves into {@code <clinit>}, and
+	 * the {@code rontolisp:http-handler} directive registers its handler and returns
+	 * instead of binding a port -- the container owns the port
+	 */
+	public JvmSourceCompiler servlet(boolean servlet) {
+		this.servlet = servlet;
+		return this;
+	}
+
+	/**
 	 * @param baseDir the directory a {@code (load "...")} resolves against
 	 */
 	public JvmSourceCompiler baseDir(@Nullable String baseDir) {
@@ -186,8 +199,8 @@ public final class JvmSourceCompiler {
 	private Optional<Result> run(String source, @Nullable String entryFile, boolean onlyIfExported) {
 		return CompileDiagnostics.recording(() -> {
 			CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, this.baseDir, this.systemPath,
-					DistClient.createDefault(this.dists), false, this.dynamic, false, false, false, false, null, false,
-					this.noPrune);
+					DistClient.createDefault(this.dists), false, this.servlet, this.dynamic, false, false, false, false,
+					null, false, this.noPrune);
 			if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
 				return Optional.empty();
 			}
@@ -209,6 +222,7 @@ public final class JvmSourceCompiler {
 		JvmLispCompiler compiler = new JvmLispCompiler(this.internalClassName, this.dynamic, this.optimize, this.simd,
 				this.blas, this.gpu, this.parallel)
 			.noMain(this.noMain)
+			.servlet(this.servlet)
 			.runtimeFeatures(features.names());
 		byte[] bytes = compiler.compile(TlsPemInliner.inline(program, this.baseDir));
 		// A :float-vector / :float-matrix export hands out a handle class; it travels

@@ -2,9 +2,15 @@
 
 **The invariant: any process-wide mutable state a request handler can reach must be
 thread-safe, because `rontolisp:http-handler` / `serve` runs ONE VIRTUAL THREAD PER
-REQUEST on the interpreter and the JVM** (`.kb/fetch-http.md`; the WASM backends are
-single-threaded by construction and are exempt from everything here -- their
-concurrent-serve story is the HOST's cast lowering, `.kb/wasm-gc-final-types.md`). A handler is
+REQUEST on the interpreter, the JVM and the Servlet transport** (`.kb/fetch-http.md`;
+the WASM backends are single-threaded by construction and are exempt from everything
+here -- their concurrent-serve story is the HOST's cast lowering,
+`.kb/wasm-gc-final-types.md`). On the Servlet transport (`-o app.war`,
+`.kb/http-server.md`) the invariant is kept by `startAsync`: the container's pool hands
+the SAME platform thread to request after request, so `RontoHttpServlet` releases it and
+runs the whole blocking pipeline on a fresh virtual thread -- async is the correctness
+requirement there, not a tuning choice, and `WarE2eTest` pins it as a distinct-thread
+count under a 4-thread connector pool. A handler is
 ordinary Lisp, so "state a handler can reach" is broad: the stream table, the global
 function/variable namespaces, every lazily loaded library, the condition/CLOS registries.
 Sequential requests never see any of it -- **only a burst does**, which is why every bug
@@ -12,7 +18,7 @@ in this family was found by a load test and not by the suite.
 
 The failure shape is always the same: a burst of N concurrent requests loses a few, and
 the losses look like something else's fault (the database dropped the connection, a
-function is undefined, a stale value came back). Three have been found and fixed so far:
+function is undefined, a stale value came back). Four have been found and fixed so far:
 
 - **Special variables** (fixed earlier, `.kb/dynamic-special-variables.md`): a dynamic
   binding established by one request was visible to another.
@@ -20,6 +26,14 @@ function is undefined, a stale value came back). Three have been found and fixed
   two concurrent `tcp-connect`s took the same handle -- one socket was dropped and both
   Lisp handles denoted the survivor, interleaving two PostgreSQL handshakes on one
   connection. Mechanics and the per-backend rule: `.kb/read-load-streams.md`.
+- **The compiled class's lazy `_*Init` methods** (found 2026-08-26 by `WarE2eTest`'s
+  concurrent burst): the JVM backend's five lazily-defined embeds (`_javaInit`,
+  `_objcInit`, and the simd/blas/gpu inits) guarded `Lookup.defineClass` behind a plain
+  int field, so two first `java:` calls arriving together both passed the guard and the
+  second died with `LinkageError: attempted duplicate class definition` -- 14 of 16
+  requests in the burst. Fixed by emitting all five with `ACC_SYNCHRONIZED`
+  (`JvmLispCompiler`), which is the rule below in bytecode; steady state pays one
+  uncontended class monitor per call, which reflection/FFM/a kernel dwarfs.
 - **Lazy library loading** (.todo/193, the same load test): every Lisp-source library
   (url.lisp, linalg.lisp, vec.lisp, usocket.lisp, json.lisp, gray.lisp, wit.lisp, the
   prelude) and every GENERATED runtime (the condition renderer, the restart runtime, the
