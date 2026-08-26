@@ -10278,6 +10278,47 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compilePackedGeneralArrayWidensInvisiblyOnANonIntegerStore() throws Exception {
+		// A plain (make-array n) starts PACKED (a long[] behind the header); the
+		// first non-integer store widens it in place, and an alias created before the
+		// widening still sees every element -- including one stored after the
+		// integers -- because the ArrayList is the identity.
+		assertThat(compileAndRun("""
+				(defparameter *a* (make-array 6))
+				(defparameter *alias* *a*)
+				(dotimes (i 6) (setf (aref *a* i) (* i 10)))
+				(setf (aref *a* 3) "mid")
+				(setf (aref *a* 5) 'end)
+				(print (list (aref *alias* 0) (aref *alias* 3) (aref *alias* 5) (aref *a* 4)))
+				""")).isEqualTo("(0 \"mid\" END 40)");
+	}
+
+	@Test
+	void compilePackedGeneralArrayNilAndSentinelInteger() throws Exception {
+		// A fresh element reads nil (the packed sentinel), an explicit nil store
+		// reads back nil, and storing the sentinel integer itself (most-negative
+		// long) widens rather than aliasing nil.
+		assertThat(compileAndRun("""
+				(defparameter *a* (make-array 3 :initial-element 1))
+				(setf (aref *a* 0) nil)
+				(setf (aref *a* 1) -9223372036854775808)
+				(print (list (aref *a* 0) (aref *a* 1) (aref *a* 2) (array-element-type *a*)))
+				""")).isEqualTo("(NIL -9223372036854775808 1 T)");
+	}
+
+	@Test
+	void compilePackedGeneralArrayRankNAndDisplacedView() throws Exception {
+		// The packed store is flat, so rank-n subscripts and a displaced view over a
+		// packed target read the same storage.
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array '(2 3) :initial-element 0))
+				(setf (aref *m* 1 2) 42)
+				(defparameter *row* (make-array 3 :displaced-to *m* :displaced-index-offset 3))
+				(print (list (aref *row* 2) (row-major-aref *m* 5) (array-displacement *row*)))
+				""")).isEqualTo("(42 42 #2A((0 0 0) (0 0 42)))");
+	}
+
+	@Test
 	void compileFillPointerVectorPrintsUpToFillPointer() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((v (make-array 5 :fill-pointer 3 :initial-element 9)))

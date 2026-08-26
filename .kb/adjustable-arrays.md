@@ -576,6 +576,56 @@ offset in `_aref*`/`_aset*` is untouched); every dims reader gained one extra
 null) and `JvmQuoteCompiler.compileQuotedArray` (literals: slots 1/2 null).
 `buildToString` + `_length` clamp the element count to the fill pointer.
 
+**A PLAIN general array starts PACKED (todo-527, 2026-08-26).** When
+`_arrayMake` sees no fill pointer, no adjustability and an initial element that
+is nil or an in-range integer (a runtime decision, so `#'make-array`'s variadic
+wrapper and `adjust-array`'s temp allocation take it too), the ArrayList holds
+ONLY a LENGTH-6 header `Object[]{dims, null, null, null, null, long[] data}`
+and the row-major elements live unboxed in the `long[]`, with `Long.MIN_VALUE`
+as the nil sentinel (storing that integer itself widens instead, so it stays
+representable). A random `aref` into a large general vector of integers is then
+ONE probe into one flat primitive array -- the layout SBCL's simple-vector of
+immediate fixnums has -- instead of a dependent pointer chase through an 8 MB
+`Object[]` and a scatter of boxed `Long`s; that chase was linear in the array
+size (1.7 -> 55.5 ns/access from 10^3 to 10^6 elements) and is now flat the way
+SBCL's is (~3 -> ~12 ns), taking `.todo/517`'s top-level `aref` row from 1.22 s
+to 0.51 s against SBCL's 0.26-0.29. The mechanics:
+
+- The tag is the header LENGTH: 3 = ordinary boxed, 4 = character vector,
+  5 = displaced, **6 = packed**. `emitResolveDisplacement`'s loop already ends
+  on the null `header[3]`, so a packed header never reads as a displacement,
+  and `_strv`/`stringp`'s `length == 4` test never sees it as a character
+  vector. `_arrayDispOffset` gained a `header[3] != null` test (length > 4
+  alone would have answered null instead of 0 for a packed array).
+- `_rmGet`/`_rmSet` -- the single data-access primitives every accessor and the
+  printer already funnel through -- branch on the tag AFTER the displacement
+  walk (the header is already in a local, so the ordinary path pays one
+  `arraylength` compare): packed reads `data[idx-1]` (sentinel -> nil), packed
+  stores write an in-range `Long` unboxed.
+- The first store that cannot pack (a non-integer, or the sentinel integer)
+  calls **`_arrayWiden`**: the header is replaced by the ordinary length-3
+  shape and every `long[]` element is appended boxed (sentinel as null). The
+  ArrayList object IS the array's identity, so every alias sees the widened
+  array -- widening is invisible, one O(n) copy, once. `_arrayBecome` widens
+  both operands up front (its element copy is `size()`-based) and
+  `_charVecMake` widens before stamping the length-4 marker.
+- The one non-helper consumer of the representation, `JavaBridgeTemplate
+  .marshal` (the `java:` interop sequence bridge), got its own packed branch.
+- The fill-pointer surface (`_vectorPush`/`Pop`/`PushExtend`,
+  `_fillPointer`/`_setFillPointer`) never meets a packed array: packing
+  requires fp == null, and those helpers error on a missing fill pointer
+  first. The packed INT vectors' `long[]{width, ...}` values are disjoint --
+  the array VALUE here is still the ArrayList, `instanceof long[]` on it is
+  false, so the iv -> fv -> general dispatch chains are untouched.
+
+Pinned by `JvmLispCompilerTest.compilePackedGeneralArrayWidensInvisiblyOnANon
+IntegerStore` / `compilePackedGeneralArrayNilAndSentinelInteger` /
+`compilePackedGeneralArrayRankNAndDisplacedView` plus the whole pre-existing
+fill-pointer/adjust/displaced/copy-array set. The interpreter and both WASM
+backends keep their boxed general representation (the wasm general `aref`'s
+cost is size-INdependent dispatch, a different defect -- `.todo/517`'s residual
+note).
+
 A DISPLACED array carries a 5-element header
 `Object[]{dims, null, null, target, offsetLong}` and holds NO data slots
 (`_arrayMakeDisplaced(dims, target, offset)`, bounds-checked against the

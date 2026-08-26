@@ -121,3 +121,35 @@ wants a call-shape fix, not a layout fix. Recorded as a residual under
   (`.kb/adjustable-arrays.md`) are byte-identical in behaviour -- `copy-array`,
   `adjust-array`, `array-displacement`, `vector-push-extend` all pinned.
 - `ci-spec.yaml` and `ExamplesE2eTest` byte-identical on all four backends.
+
+## Landed (2026-08-26)
+
+Shape (1) from "What to build", decided at RUN time inside `_arrayMake` so the
+variadic `#'make-array` wrapper and `adjust-array`'s temp take it too: a plain
+general array (no fill pointer / adjustability / displacement, initial element
+nil or an in-range integer) packs its row-major elements into a flat `long[]`
+behind a LENGTH-6 header, `Long.MIN_VALUE` as the nil sentinel; the first store
+that cannot pack calls `_arrayWiden`, which reboxes in place -- the ArrayList
+is the identity, so widening is invisible to every alias. The tag is the header
+length (3 boxed / 4 charvec / 5 displaced / 6 packed), tested in
+`_rmGet`/`_rmSet` AFTER the displacement walk, where the header is already in a
+local -- the boxed path pays one `arraylength` compare, and the 1.7 ns case
+measured 3.0 ns with the build loop included. Full mechanics:
+`.kb/adjustable-arrays.md` ("A PLAIN general array starts PACKED"),
+cross-referenced from `.kb/core-representation.md`.
+
+Acceptance, measured (best of 5, wall incl. startup, this machine):
+
+- `.todo/517` `aref` row, TOP-LEVEL, JVM: 1.22 -> **0.51 s** against the
+  baseline's SBCL 0.26 (2.0x) and 0.29 re-measured the same day (1.8x);
+  `defun` spelling 0.95 -> **0.29 s**, AT SBCL.
+- The size sweep is FLAT the way SBCL's is: 3.0 / 2.0 / 9.0 / **12.0** ns per
+  access at 10^3 / 10^4 / 10^5 / 10^6 elements (was 1.7 / 15.6 / 34.9 / 55.5)
+  against SBCL's 3.0 / 1.6 / 7.4 / 10.8 -- the 10^3 -> 10^6 ratio is 4.0x
+  here and 3.6x on SBCL.
+- Widening pinned by `JvmLispCompilerTest`'s three `compilePackedGeneralArray*`
+  tests (alias sees a post-widening store; nil and the sentinel integer;
+  rank-n + displaced view over a packed target); the fill-pointer / adjustable
+  / displaced / charvec surfaces by the pre-existing set. Full suite 8788
+  green, `CiSpecE2eTest` 1636 green on the native binary, `ExamplesE2eTest`
+  302 green -- all four backends byte-identical.

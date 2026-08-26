@@ -481,6 +481,15 @@ final class JavaBridgeTemplate {
 			if (!(header[0] instanceof Object[] dims) || dims.length != 1) {
 				return NO_MATCH; // only rank-1 vectors are bridged
 			}
+			if (header.length == 6 && header[5] instanceof long[] packed) {
+				// The PACKED shape: the elements live unboxed in the long[] behind the
+				// length-6 header, with Long.MIN_VALUE as the nil sentinel.
+				List<@Nullable Object> elements = new ArrayList<>(packed.length);
+				for (long v : packed) {
+					elements.add(v == Long.MIN_VALUE ? null : v);
+				}
+				return marshalSequence(elements, target, out, index);
+			}
 			int count = header[1] instanceof Long fp ? fp.intValue() : list.size() - 1;
 			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index);
 		}

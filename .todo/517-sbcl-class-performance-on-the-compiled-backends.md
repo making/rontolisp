@@ -2,16 +2,17 @@
 
 Difficulty: High (parent item; each child is sized on its own)
 
-Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522` (all
-closed), plus `.todo/527` (OPEN) and `.todo/528` (closed 2026-08-26), filed out
-of the residual section below.
+Children: `.todo/518`, `.todo/519`, `.todo/520`, `.todo/521`, `.todo/522`,
+`.todo/527` and `.todo/528` (ALL closed), the last two filed out of the
+residual section below.
 Related: `.todo/412` (the JVM boxes every integer and has no fusion) -- closed
 2026-08-26 by JVM integer expression-tree fusion (`.kb/jvm-int-fusion.md`).
 
 **Every child having landed, the four rows were re-taken on one fixed baseline
--- see "The fixed baseline" below. THREE of the four are now inside the 2x
-target, and the one that is not is `.todo/527`.** `.todo/528` closed
-2026-08-26 and took the `random` row from 2.9x to 1.8x.
+-- see "The fixed baseline" below. ALL FOUR are now inside the 2x target.**
+`.todo/528` closed 2026-08-26 and took the `random` row from 2.9x to 1.8x;
+`.todo/527` closed 2026-08-26 and took the `aref` row from 4.7x to 2.0x (1.8x
+against SBCL re-measured the same day).
 
 ## Where this came from
 
@@ -172,6 +173,7 @@ including runtime startup, output verified equal to SBCL's. Sources and commands
 | 10^7 x `(+ s (random 1000000))` | 0.16 | 7.70 | 0.46 | 0.38 | 1.86 | 1.60 |
 | the same row re-taken after `.todo/528` landed | 0.16 | 7.31 | **0.29** | 0.16 | 0.37 | 0.23 |
 | 10^7 x `(+ s (aref a (random 1000000)))`, `a` 10^6 wide | 0.26 | 12.45 | **1.22** | 0.95 | 2.32 | 2.36 |
+| the same row re-taken after `.todo/527` landed (SBCL re-measured 0.29 that day) | 0.26 | 12.67 | **0.51** | 0.29 | unchanged | unchanged |
 | 10^9 `cdr` steps, `(nth 999 lst)` x 10^6 | 1.16 | 3.99 | 3.35 | 3.31 | **1.87** | 1.82 |
 
 The `--component` backend, `defun` spelling, for the record: `loop sum` 0.35,
@@ -184,13 +186,14 @@ Ratios against SBCL in the acceptance shape (TOP-LEVEL, best compiled backend):
 | `loop sum` | **1.0x** (JVM 0.21) | inside the target |
 | 10^9 `cdr` | **1.6x** (wasm 1.87) | inside the target |
 | `random` | **1.8x** (JVM 0.29) | inside the target -- `.todo/528`, closed |
-| `aref` | 4.7x (JVM 1.22) | **`.todo/527`** |
+| `aref` | **2.0x** (JVM 0.51 against the baseline's 0.26; 1.8x against SBCL's 0.29 re-measured the same day) | inside the target -- `.todo/527`, closed |
 
 Against the first measurement in this file: `loop sum` 2.80 -> 0.21 (13x),
 10^9 `cdr` 15.99 -> 3.35 on the JVM and 1.88 -> 1.87 on wasm, `random` 0.78 ->
-0.46 -> **0.29** (and 1.94 -> **0.37** on wasm), `aref` 1.73 -> 1.22. No compiled
-backend is slower than the interpreter on any row, and the interpreter itself
-moved (`loop sum` ~72 est. -> 56.85).
+0.46 -> **0.29** (and 1.94 -> **0.37** on wasm), `aref` 1.73 -> 1.22 ->
+**0.51** (and 0.95 -> **0.29** in a `defun` -- AT SBCL). No compiled backend is
+slower than the interpreter on any row, and the interpreter itself moved
+(`loop sum` ~72 est. -> 56.85).
 
 ## Target
 
@@ -202,15 +205,25 @@ is how scripts are written, and it is what the note wrote.
 ## Measured, understood, now filed
 
 The residuals this section carried are filed, with the numbers re-taken against
-the fixed baseline above. One of the two has since closed:
+the fixed baseline above. Both have since closed:
 
-- **`aref` -- `.todo/527`.** Filed here as "`_aref1` is a generic helper call".
-  Re-measuring falsified that: on a 1,000-element array the JVM's `aref` costs
-  **1.7 ns** and beats SBCL, and the cost rises with the array size
-  (1.7 / 15.6 / 34.9 / **55.5** ns at 10^3 / 10^4 / 10^5 / 10^6 elements) where
-  SBCL's stays flat. The helper inlines; what costs 55 ns is that a general
-  array is an `ArrayList` of boxed `Long`s, so a random read is two dependent
-  cold hops through 24 MB. Not the call -- the representation.
+- **`aref` -- `.todo/527`, CLOSED 2026-08-26.** Filed here as "`_aref1` is a
+  generic helper call". Re-measuring falsified that: on a 1,000-element array
+  the JVM's `aref` cost **1.7 ns** and beat SBCL, and the cost rose with the
+  array size (1.7 / 15.6 / 34.9 / **55.5** ns at 10^3 / 10^4 / 10^5 / 10^6
+  elements) where SBCL's stays flat. The helper inlines; what cost 55 ns was
+  that a general array was an `ArrayList` of boxed `Long`s, so a random read
+  was two dependent cold hops through 24 MB. Not the call -- the
+  representation.
+
+  **Landed** (`.kb/adjustable-arrays.md`, "A PLAIN general array starts
+  PACKED"): a plain `(make-array n)` now packs its elements into a flat
+  `long[]` behind a length-6 header, `Long.MIN_VALUE` as the nil sentinel, and
+  the first non-integer store widens the ArrayList in place (identity
+  preserved, every alias sees it). The sweep is flat the way SBCL's is --
+  3.0 / 2.0 / 9.0 / **12.0** ns against SBCL's 3.0 / 1.6 / 7.4 / 10.8 -- and
+  the acceptance row (top-level, JVM) is **0.51 s** against the baseline's
+  SBCL 0.26 / same-day SBCL 0.29, with the `defun` spelling at 0.29, AT SBCL.
 - **`random` -- `.todo/528`, CLOSED 2026-08-26.** The wasm draw was 177 ns
   against the JVM's 24 and SBCL's 7.5, because `WasmRandomCompiler` called the
   WASI `random_get` host function ONCE PER DRAW; a `perf` profile put 12% of

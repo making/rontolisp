@@ -22,6 +22,19 @@ import am.ik.jvm.Opcode;
  * element {@code (i)} at {@code 1 + i}.
  *
  * <p>
+ * A PLAIN general array (no fill pointer, not adjustable, not displaced, not a character
+ * vector) whose {@code :initial-element} is nil or an integer starts PACKED: the
+ * ArrayList holds ONLY a length-6 header {@code Object[]{dims, null, null, null, null,
+ * long[] data}} and the row-major elements live unboxed in the {@code long[]}, with
+ * {@code Long.MIN_VALUE} as the nil sentinel. A random {@code aref} is then one probe
+ * into one flat primitive array instead of a dependent pointer chase through boxed
+ * {@code Long}s -- the representation SBCL's simple-vector of immediate fixnums has. The
+ * first store that cannot be packed (a non-integer, or the sentinel value itself) widens
+ * the array IN PLACE to the boxed shape above ({@code _arrayWiden}); the ArrayList is the
+ * identity, so every alias sees the widened array. The length-6 header never reads as a
+ * displacement ({@code header[3]} is null) nor as a character vector (length != 4).
+ *
+ * <p>
  * A MUTABLE CHARACTER VECTOR ({@code make-array :element-type 'character} with
  * {@code :fill-pointer}/{@code :adjustable}) is the same representation holding
  * {@code java.lang.Character} elements, marked by a LENGTH-4 header {@code Object[]{dims,
@@ -151,6 +164,17 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String CHAR_VEC_MAKE = "_charVecMake";
 
+	static final String WIDEN = "_arrayWiden";
+
+	static final String WIDEN_DESC = "(Ljava/lang/Object;)V";
+
+	/**
+	 * The packed general array's nil sentinel: the one {@code long} value a packed
+	 * element cannot hold (storing the integer itself widens the array), so a
+	 * {@code long[]} slot can represent "nil" without a box.
+	 */
+	static final long NIL_SENTINEL = Long.MIN_VALUE;
+
 	static final String STRV = "_strv";
 
 	static final String STRV_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -166,7 +190,7 @@ final class JvmArrayRuntimeBuilder {
 	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
-			CHAR_VEC_MAKE, STRV);
+			CHAR_VEC_MAKE, STRV, WIDEN);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -202,6 +226,14 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC)));
 		MethodrefConstant rmSet = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC)));
+		MethodrefConstant widen = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC)));
+		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
+		MethodrefConstant longLongValue = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		MethodrefConstant arraysFillLong = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Arrays")),
+				cp.addNameAndType(cp.addUtf8("fill"), cp.addUtf8("([JJ)V")));
+		am.ik.jvm.ConstantPool.LongConstant nilSentinel = cp.addLong(NIL_SENTINEL);
 
 		List<ArrayMethod> methods = new ArrayList<>();
 
@@ -260,8 +292,62 @@ final class JvmArrayRuntimeBuilder {
 		m.iconst(0);
 		m.aaload();
 		m.astore(fpVal);
-		// list.add(new Object[]{dimsArr, fpVal, adj}); fill init total times
 		m.bind(afterFp);
+		// PACKED fast path: no fill pointer, not adjustable, and the initial element is
+		// nil or an integer (excluding the sentinel value, which must stay
+		// representable): the data is a flat long[] behind a length-6 header
+		// {dims, null, null, null, null, data} and the list holds ONLY the header.
+		int generalPath = m.label();
+		int packedNilFill = m.label();
+		int packedGo = m.label();
+		int fillVal = 12, data = 14;
+		m.aload(fpVal);
+		m.branch(Opcode.IFNONNULL, generalPath);
+		m.aload(adj);
+		m.branch(Opcode.IFNONNULL, generalPath);
+		m.aload(init);
+		m.branch(Opcode.IFNULL, packedNilFill);
+		m.aload(init);
+		m.instanceOf(longClass);
+		m.branch(Opcode.IFEQ, generalPath);
+		m.aload(init);
+		m.checkcast(longClass);
+		m.invokevirtual(longLongValue);
+		m.lstore(fillVal);
+		m.lload(fillVal);
+		m.ldc2Long(nilSentinel);
+		m.op(Opcode.LCMP);
+		m.branch(Opcode.IFEQ, generalPath);
+		m.branch(Opcode.GOTO, packedGo);
+		m.bind(packedNilFill);
+		m.ldc2Long(nilSentinel);
+		m.lstore(fillVal);
+		m.bind(packedGo);
+		// data = new long[total]; Arrays.fill(data, fillVal)
+		m.iload(total);
+		m.newarrayLong();
+		m.astore(data);
+		m.aload(data);
+		m.lload(fillVal);
+		m.invokestatic(arraysFillLong);
+		// list.add(new Object[]{dimsArr, null, null, null, null, data}); return list
+		m.aload(list);
+		m.iconst(6);
+		m.anewarray(objectClass);
+		m.dup();
+		m.iconst(0);
+		m.aload(dimsArr);
+		m.aastore();
+		m.dup();
+		m.iconst(5);
+		m.aload(data);
+		m.aastore();
+		m.invokevirtual(alAdd);
+		m.pop();
+		m.aload(list);
+		m.areturn();
+		// list.add(new Object[]{dimsArr, fpVal, adj}); fill init total times
+		m.bind(generalPath);
 		m.aload(list);
 		m.iconst(3);
 		m.anewarray(objectClass);
@@ -296,7 +382,7 @@ final class JvmArrayRuntimeBuilder {
 		m.bind(end);
 		m.aload(list);
 		m.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 5, 12, m.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 5, 15, m.finish()));
 
 		// _aref1(arr, i): return _rmGet(arr, 1 + ((Long) i).intValue()) -- _rmGet
 		// follows the displacement chain, so every accessor goes through it. A string
@@ -644,20 +730,83 @@ final class JvmArrayRuntimeBuilder {
 		// _rmGet(list, idx): the single data-read primitive (idx is the 1-based list
 		// index). Follows the displacement chain: while the header is a 5-element
 		// {dims, fp, adj, target, offset} with a non-null target, add the offset and
-		// hop to the target list. Locals: 0 = list, 1 = idx, 2 = header.
+		// hop to the target list. A length-6 header is the PACKED shape: the element is
+		// read from the long[] in header[5] (the sentinel reads back as nil).
+		// Locals: 0 = list, 1 = idx, 2 = header, 3/4 = v (long).
 		JvmAsm rg = new JvmAsm();
+		int rgGeneral = rg.label();
+		int rgBox = rg.label();
 		emitResolveDisplacement(rg, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 0, 1, 2);
+		rg.aload(2);
+		rg.arraylength();
+		rg.iconst(6);
+		rg.branch(Opcode.IF_ICMPNE, rgGeneral);
+		rg.aload(2);
+		rg.iconst(5);
+		rg.aaload();
+		rg.checkcast(longArrayClass);
+		rg.iload(1);
+		rg.iconst(1);
+		rg.op(Opcode.ISUB);
+		rg.laload();
+		rg.lstore(3);
+		rg.lload(3);
+		rg.ldc2Long(nilSentinel);
+		rg.op(Opcode.LCMP);
+		rg.branch(Opcode.IFNE, rgBox);
+		rg.aconstNull();
+		rg.areturn();
+		rg.bind(rgBox);
+		rg.lload(3);
+		rg.invokestatic(longValueOf);
+		rg.areturn();
+		rg.bind(rgGeneral);
 		rg.aload(0);
 		rg.checkcast(arrayListClass);
 		rg.iload(1);
 		rg.invokevirtual(alGet);
 		rg.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), 3, 3, rg.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), 4, 5, rg.finish()));
 
-		// _rmSet(list, idx, val): the single data-write primitive; returns val.
-		// Locals: 0 = list, 1 = idx, 2 = val, 3 = header.
+		// _rmSet(list, idx, val): the single data-write primitive; returns val. A
+		// PACKED array (length-6 header) stores an in-range Long unboxed; any other
+		// value -- or the sentinel integer itself -- widens the array in place first
+		// and falls through to the boxed store.
+		// Locals: 0 = list, 1 = idx, 2 = val, 3 = header, 4/5 = v (long).
 		JvmAsm rs = new JvmAsm();
+		int rsGeneral = rs.label();
+		int rsWiden = rs.label();
 		emitResolveDisplacement(rs, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 0, 1, 3);
+		rs.aload(3);
+		rs.arraylength();
+		rs.iconst(6);
+		rs.branch(Opcode.IF_ICMPNE, rsGeneral);
+		rs.aload(2);
+		rs.instanceOf(longClass);
+		rs.branch(Opcode.IFEQ, rsWiden);
+		rs.aload(2);
+		rs.checkcast(longClass);
+		rs.invokevirtual(longLongValue);
+		rs.lstore(4);
+		rs.lload(4);
+		rs.ldc2Long(nilSentinel);
+		rs.op(Opcode.LCMP);
+		rs.branch(Opcode.IFEQ, rsWiden);
+		rs.aload(3);
+		rs.iconst(5);
+		rs.aaload();
+		rs.checkcast(longArrayClass);
+		rs.iload(1);
+		rs.iconst(1);
+		rs.op(Opcode.ISUB);
+		rs.lload(4);
+		rs.lastore();
+		rs.aload(2);
+		rs.areturn();
+		rs.bind(rsWiden);
+		rs.aload(0);
+		rs.invokestatic(widen);
+		rs.bind(rsGeneral);
 		rs.aload(0);
 		rs.checkcast(arrayListClass);
 		rs.iload(1);
@@ -666,7 +815,75 @@ final class JvmArrayRuntimeBuilder {
 		rs.pop();
 		rs.aload(2);
 		rs.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), 4, 4, rs.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), 4, 6, rs.finish()));
+
+		// _arrayWiden(list): converts a PACKED array (length-6 header, long[] data) to
+		// the boxed shape IN PLACE -- header replaced by the ordinary length-3
+		// {dims, null, null}, each long[] element appended boxed (the sentinel as
+		// null/nil). A non-packed array passes through untouched; the ArrayList object
+		// is the array's identity, so every alias sees the widened shape.
+		// Locals: 0 = list, 1 = header, 2 = data, 3 = i, 4/5 = v (long).
+		JvmAsm wd = new JvmAsm();
+		int wdDone = wd.label();
+		int wdLoop = wd.label();
+		int wdBox = wd.label();
+		int wdAdd = wd.label();
+		emitLoadHeader(wd, arrayListClass, objectArrayClass, alGet, 0);
+		wd.astore(1);
+		wd.aload(1);
+		wd.arraylength();
+		wd.iconst(6);
+		wd.branch(Opcode.IF_ICMPNE, wdDone);
+		wd.aload(1);
+		wd.iconst(5);
+		wd.aaload();
+		wd.checkcast(longArrayClass);
+		wd.astore(2);
+		// list.set(0, new Object[]{header[0], null, null})
+		wd.aload(0);
+		wd.checkcast(arrayListClass);
+		wd.iconst(0);
+		wd.iconst(3);
+		wd.anewarray(objectClass);
+		wd.dup();
+		wd.iconst(0);
+		wd.aload(1);
+		wd.iconst(0);
+		wd.aaload();
+		wd.aastore();
+		wd.invokevirtual(alSet);
+		wd.pop();
+		// for (i = 0; i < data.length; i++) list.add(box(data[i]))
+		wd.iconst(0);
+		wd.istore(3);
+		wd.bind(wdLoop);
+		wd.iload(3);
+		wd.aload(2);
+		wd.arraylength();
+		wd.branch(Opcode.IF_ICMPGE, wdDone);
+		wd.aload(2);
+		wd.iload(3);
+		wd.laload();
+		wd.lstore(4);
+		wd.aload(0);
+		wd.checkcast(arrayListClass);
+		wd.lload(4);
+		wd.ldc2Long(nilSentinel);
+		wd.op(Opcode.LCMP);
+		wd.branch(Opcode.IFNE, wdBox);
+		wd.aconstNull();
+		wd.branch(Opcode.GOTO, wdAdd);
+		wd.bind(wdBox);
+		wd.lload(4);
+		wd.invokestatic(longValueOf);
+		wd.bind(wdAdd);
+		wd.invokevirtual(alAdd);
+		wd.pop();
+		wd.iinc(3, 1);
+		wd.branch(Opcode.GOTO, wdLoop);
+		wd.bind(wdDone);
+		wd.op(Opcode.RETURN);
+		methods.add(new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), 7, 6, wd.finish()));
 
 		// _arrayMakeDisplaced(dims, target, offset): a displaced view -- a fresh
 		// ArrayList holding ONLY the 5-element header {dimsArr, null, null, target,
@@ -743,9 +960,16 @@ final class JvmArrayRuntimeBuilder {
 
 		// _arrayBecome(a, b): replace a's dims, fill pointer and data with b's in place
 		// (the in-place half of adjust-array on an adjustable array); returns a. The
-		// adjustable flag (header slot 2) is kept. Locals: 0 = a, 1 = b, 2 = headerA,
-		// 3 = headerB, 4 = i.
+		// adjustable flag (header slot 2) is kept. Both arrays are widened first: the
+		// size-based element copy below reads the BOXED data slots, so a packed operand
+		// (a freshly made temp with neither fill pointer nor adjustability) must take
+		// the boxed shape before it. Locals: 0 = a, 1 = b, 2 = headerA, 3 = headerB,
+		// 4 = i.
 		JvmAsm bc = new JvmAsm();
+		bc.aload(0);
+		bc.invokestatic(widen);
+		bc.aload(1);
+		bc.invokestatic(widen);
 		emitLoadHeader(bc, arrayListClass, objectArrayClass, alGet, 0);
 		bc.astore(2);
 		emitLoadHeader(bc, arrayListClass, objectArrayClass, alGet, 1);
@@ -849,7 +1073,9 @@ final class JvmArrayRuntimeBuilder {
 		dt.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(DISP_TARGET), cp.addUtf8(DISP_TARGET_DESC), 3, 2, dt.finish()));
 
-		// _arrayDispOffset(arr): the displacement offset, or 0.
+		// _arrayDispOffset(arr): the displacement offset, or 0. Displacement is a
+		// length-5+ header WITH a non-null target -- a packed array's length-6 header
+		// has a null slot 3 and must answer 0 like any other non-displaced array.
 		// Locals: 0 = arr, 1 = header.
 		JvmAsm dofs = new JvmAsm();
 		emitLoadHeader(dofs, arrayListClass, objectArrayClass, alGet, 0);
@@ -859,6 +1085,10 @@ final class JvmArrayRuntimeBuilder {
 		dofs.arraylength();
 		dofs.iconst(4);
 		dofs.branch(Opcode.IF_ICMPLE, dofsNone);
+		dofs.aload(1);
+		dofs.iconst(3);
+		dofs.aaload();
+		dofs.branch(Opcode.IFNULL, dofsNone);
 		dofs.aload(1);
 		dofs.iconst(4);
 		dofs.aaload();
@@ -883,6 +1113,10 @@ final class JvmArrayRuntimeBuilder {
 		cv.invokestatic(selfArrayMake);
 		cv.checkcast(arrayListClass);
 		cv.astore(4);
+		// A character vector's elements are boxed CHARACTERs; if _arrayMake packed the
+		// allocation (a nil :initial-element), widen before stamping the marker header.
+		cv.aload(4);
+		cv.invokestatic(widen);
 		emitLoadHeader(cv, arrayListClass, objectArrayClass, alGet, 4);
 		cv.astore(5);
 		cv.iconst(4);
@@ -1012,7 +1246,10 @@ final class JvmArrayRuntimeBuilder {
 	// Follows the displacement chain of the array list in listSlot: while its header is
 	// a 5-element {dims, fp, adj, target, offset} with a non-null target, add the
 	// offset to the 1-based list index in idxSlot and hop listSlot to the target. A
-	// length-4 header (a mutable character vector) is NOT a displacement.
+	// length-4 header (a mutable character vector) is NOT a displacement, and neither
+	// is the length-6 PACKED header (its slot 3 is null, so the target test ends the
+	// loop); the caller reads the final header from headerSlot to pick the packed or
+	// boxed data access.
 	private static void emitResolveDisplacement(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
 			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant longIntValue, int listSlot,
 			int idxSlot, int headerSlot) {

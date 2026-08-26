@@ -65,6 +65,17 @@ case in `ci-spec.yaml`.
 Cons cells and function references are both `Object[]`, distinguished by
 `arr[0] instanceof Integer`.
 
+## General arrays on the JVM start packed
+
+A plain `(make-array n)` (no fill pointer / adjustability / displacement,
+initial element nil or an integer) is an `ArrayList` holding ONLY a length-6
+header whose last slot is a flat `long[]` of the elements, `Long.MIN_VALUE` as
+the nil sentinel; the first non-packable store widens it in place to the boxed
+shape. The header-length tag, the `_rmGet`/`_rmSet` branches and the
+`_arrayWiden` contract live in
+[adjustable-arrays.md](adjustable-arrays.md) ("A PLAIN general array starts
+PACKED").
+
 ## Three-pass compilation
 
 Pass 1 collects defuns; 2a compiles defun bodies, 2b top-level, 2c iteratively
