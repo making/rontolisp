@@ -3334,6 +3334,22 @@ public final class Environment implements Scope {
 			}
 			return new LispCons(item, lst);
 		}));
+		env.defineFunction(LispNames.SUBSETP, new LispFunction(LispNames.SUBSETP, args -> {
+			requireArgCount(LispNames.SUBSETP, args, 2);
+			// Fallback for first-class use (#'subsetp): eql compare only, like the
+			// UNION/INTERSECTION/SET-DIFFERENCE/ADJOIN fallbacks above -- the
+			// :test/:test-not/:key keywords are handled by the macro expansion in call
+			// position (LispMacroExpander.expandSubsetp).
+			List<LispVal> second = toJavaList(args.get(1));
+			LispVal cur = args.get(0);
+			while (cur instanceof LispCons cell) {
+				if (!listContains(second, cell.car())) {
+					return LispNil.INSTANCE;
+				}
+				cur = cell.cdr();
+			}
+			return LispTrue.INSTANCE;
+		}));
 	}
 
 	private static List<LispVal> toJavaList(LispVal list) {

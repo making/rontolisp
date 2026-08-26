@@ -6375,6 +6375,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSubsetp() throws Exception {
+		assertThat(compileAndRun(
+				"(print (subsetp '(1 2) '(1 2 3))) (print (subsetp '(1 2) '(2 3 4))) (print (subsetp nil '(1 2))) "
+						+ "(print (subsetp '(\"a\" \"z\") '(\"a\" \"b\") :test #'string=)) "
+						+ "(print (subsetp '((1 x)) '((1 a) (2 b)) :key #'car)) "
+						+ "(print (funcall #'subsetp '(1 2) '(1 2 3)))"))
+			.isEqualTo("T\nNIL\nT\nNIL\nT\nT");
+	}
+
+	@Test
 	void compileAndRunBitwiseOps() throws Exception {
 		assertThat(compileAndRun(
 				"(print (logand 12 10)) (print (logior 12 10)) (print (logxor 12 10)) (print (lognot 5)) (print (ash 1 4)) (print (ash 255 -4))"))

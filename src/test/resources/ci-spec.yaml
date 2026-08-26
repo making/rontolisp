@@ -2509,6 +2509,9 @@ cases:
       (print (set-difference '(1 2 3) '(2)))
       (print (adjoin 1 '(2 3)))
       (print (adjoin 2 '(1 2 3)))
+      (print (subsetp '(1 2) '(1 2 3)))
+      (print (subsetp '(1 2) '(2 3 4)))
+      (print (subsetp nil '(1 2)))
     expected: |
       42
       (1 2 3)
@@ -2519,6 +2522,9 @@ cases:
       (3 1)
       (1 2 3)
       (1 2 3)
+      T
+      NIL
+      T
   - name: bitwise-integer-operations-variadic
     source: |
       (print (logand 12 10))
@@ -5889,6 +5895,10 @@ cases:
       (print (adjoin "a" '("a" "b") :test #'string=))
       (print (adjoin "z" '("a" "b") :test #'string=))
       (print (adjoin '(1 x) '((1 a) (2 b)) :key #'car))
+      (print (subsetp '("a" "b") '("a" "b" "c") :test #'string=))
+      (print (subsetp '("a" "z") '("a" "b" "c") :test #'string=))
+      (print (subsetp '((1 x) (2 y)) '((1 a) (2 b)) :key #'car))
+      (print (subsetp '(1 3) '(3 2 1) :test-not #'eql))
     expected: |
       ("b" . 2)
       (1 . A)
@@ -5911,6 +5921,10 @@ cases:
       ("a" "b")
       ("z" "a" "b")
       ((1 A) (2 B))
+      T
+      NIL
+      T
+      T
   - name: sequence-and-set-extensions
     source: |
       (print (tree-equal '(1 (2 3)) '(1 (2 3))))

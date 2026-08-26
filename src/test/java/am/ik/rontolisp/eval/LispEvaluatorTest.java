@@ -3697,6 +3697,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSubsetp() {
+		assertThat(eval("(subsetp '(1 2) '(1 2 3))").print()).isEqualTo("T");
+		assertThat(eval("(subsetp '(1 2) '(2 3 4))").print()).isEqualTo("NIL");
+		assertThat(eval("(subsetp nil '(1 2))").print()).isEqualTo("T");
+		assertThat(eval("(subsetp '(\"a\" \"z\") '(\"a\" \"b\") :test #'string=)").print()).isEqualTo("NIL");
+		assertThat(eval("(subsetp '((1 x)) '((1 a) (2 b)) :key #'car)").print()).isEqualTo("T");
+		assertThat(eval("(funcall #'subsetp '(1 2) '(1 2 3))").print()).isEqualTo("T");
+	}
+
+	@Test
 	void evalBitwiseOps() {
 		assertThat(eval("(logand 12 10)").print()).isEqualTo("8");
 		assertThat(eval("(logior 12 10)").print()).isEqualTo("14");

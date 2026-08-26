@@ -86,6 +86,23 @@
 ;; character.
 (deftype babel:unicode-char () 'character)
 
+;; Upstream's unicode-string is (vector unicode-char *) and
+;; simple-unicode-string is (simple-array unicode-char (*)) -- since
+;; unicode-char above is exactly character, both degrade to the ordinary
+;; string types, with nothing narrower for them to mean. cffi's strings.lisp
+;; (the seam this shim exists for) reads both by these exact names.
+(deftype babel:unicode-string () 'string)
+(deftype babel:simple-unicode-string () 'simple-string)
+
+;; Upstream's code-point accessor pair over a simple-unicode-string --
+;; instantiate-concrete-mappings drives generated codecs through these two
+;; names. Internal upstream too (no export), spelled babel::name here for the
+;; same reason the codec functions above are.
+(defmacro babel::string-get (string index) `(char-code (schar ,string ,index)))
+
+(defmacro babel::string-set (code string index)
+  `(setf (schar ,string ,index) (code-char ,code)))
+
 ;;; Conditions. Upstream's hierarchy, slot for slot and report for report: the
 ;;; consumer's fallback path catches character-decoding-error, and the leaves
 ;;; say which malformed shape was found.

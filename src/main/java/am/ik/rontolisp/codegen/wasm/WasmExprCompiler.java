@@ -1398,6 +1398,7 @@ final class WasmExprCompiler {
 				case LispNames.SET_DIFFERENCE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSetDifference(cons), ctx);
 				case LispNames.ADJOIN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjoin(cons), ctx);
+				case LispNames.SUBSETP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSubsetp(cons), ctx);
 				case LispNames.EQ_GENERAL -> WasmEqGeneralCompiler.compile(cons, ctx);
 				case LispNames.EQL -> WasmEqGeneralCompiler.compileEql(cons, ctx);
 				case LispNames.EQUAL -> WasmEqualCompiler.compile(cons, ctx);

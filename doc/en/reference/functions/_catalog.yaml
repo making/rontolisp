@@ -245,6 +245,7 @@ categories:
       - { slug: set-difference, name: "set-difference" }
       - { slug: set-exclusive-or, name: "set-exclusive-or" }
       - { slug: adjoin, name: "adjoin" }
+      - { slug: subsetp, name: "subsetp" }
   - title: "Destructive Cell Operations"
     functions:
       - { slug: rplaca, name: "rplaca" }

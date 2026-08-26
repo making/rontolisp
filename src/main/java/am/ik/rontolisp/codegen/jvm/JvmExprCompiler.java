@@ -1027,6 +1027,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSetDifference(cons), ctx, className);
 				case LispNames.ADJOIN ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjoin(cons), ctx, className);
+				case LispNames.SUBSETP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSubsetp(cons), ctx, className);
 				case LispNames.EQ_GENERAL -> JvmEqGeneralCompiler.compileEq(cons, ctx, className);
 				case LispNames.EQL -> JvmEqGeneralCompiler.compile(cons, ctx, className);
 				case LispNames.EQUAL -> JvmEqualCompiler.compile(cons, ctx, className);

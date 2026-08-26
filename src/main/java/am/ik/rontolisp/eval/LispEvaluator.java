@@ -5247,6 +5247,8 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandSetDifference(cons), env);
 			case LispNames.ADJOIN:
 				return eval(LispMacroExpander.expandAdjoin(cons), env);
+			case LispNames.SUBSETP:
+				return eval(LispMacroExpander.expandSubsetp(cons), env);
 			case LispNames.SUBSTITUTE:
 				return eval(LispMacroExpander.expandSubstitute(cons), env);
 			case LispNames.NSUBSTITUTE:

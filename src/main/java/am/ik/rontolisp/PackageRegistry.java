@@ -106,13 +106,13 @@ public final class PackageRegistry {
 			LispNames.WRITE_BYTE, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.IDENTITY,
 			LispNames.COPY_LIST, LispNames.COPY_TREE, LispNames.TREE_EQUAL, LispNames.NREVERSE, LispNames.MAKE_LIST,
 			LispNames.UNION, LispNames.SET_EXCLUSIVE_OR, LispNames.COUNT_IF_NOT, LispNames.MERGE,
-			LispNames.INTERSECTION, LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.LOGAND, LispNames.LOGIOR,
-			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1,
-			LispNames.LOGORC2, LispNames.ASH, LispNames.INTEGER_LENGTH, LispNames.LOGBITP, LispNames.LOGTEST,
-			LispNames.BYTE, LispNames.BYTE_SIZE, LispNames.BYTE_POSITION, LispNames.LDB, LispNames.DPB,
-			LispNames.LIST_STAR, LispNames.ACONS, LispNames.ENDP, LispNames.ELT, LispNames.RASSOC, LispNames.RASSOC_IF,
-			LispNames.PAIRLIS, LispNames.COPY_ALIST, LispNames.REVAPPEND, LispNames.NRECONC, LispNames.MAPLIST,
-			LispNames.MAPCON, LispNames.MAPL, LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE,
+			LispNames.INTERSECTION, LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.SUBSETP, LispNames.LOGAND,
+			LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.LOGANDC1, LispNames.LOGANDC2,
+			LispNames.LOGORC1, LispNames.LOGORC2, LispNames.ASH, LispNames.INTEGER_LENGTH, LispNames.LOGBITP,
+			LispNames.LOGTEST, LispNames.BYTE, LispNames.BYTE_SIZE, LispNames.BYTE_POSITION, LispNames.LDB,
+			LispNames.DPB, LispNames.LIST_STAR, LispNames.ACONS, LispNames.ENDP, LispNames.ELT, LispNames.RASSOC,
+			LispNames.RASSOC_IF, LispNames.PAIRLIS, LispNames.COPY_ALIST, LispNames.REVAPPEND, LispNames.NRECONC,
+			LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL, LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE,
 			LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.SUBSTITUTE, LispNames.SUBST, LispNames.NSUBSTITUTE,
 			LispNames.SUBSTITUTE_IF, LispNames.SUBSTITUTE_IF_NOT, LispNames.NSUBSTITUTE_IF,
 			LispNames.NSUBSTITUTE_IF_NOT, LispNames.SEARCH, LispNames.MISMATCH, LispNames.GET_UNIVERSAL_TIME,
@@ -621,7 +621,14 @@ public final class PackageRegistry {
 						// asdf:missing-component / invokes asdf:retry around its runtime
 						// load-system call -- dead code here, since a missing system is
 						// a hard error, never a signaled missing-component.
-						"MISSING-COMPONENT", "RETRY"))));
+						"MISSING-COMPONENT", "RETRY",
+						// operate (and the load-op it names) is the general CLOS entry
+						// point real ASDF's load-system is defined in terms of --
+						// external and resolve-only here too, for the same reason:
+						// cffi's define-foreign-library calls (asdf:operate
+						// 'asdf:load-op 'cffi-libffi) inside a restart body that never
+						// runs here, and the READ must not fail on an unknown external.
+						"OPERATE", "LOAD-OP"))));
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
 		// (and its dependencies) from the real Quicklisp distribution into a local cache
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
@@ -786,7 +793,11 @@ public final class PackageRegistry {
 						// but a rontolisp :import-from resolves through the external
 						// list, so
 						// the shim exports it.
-						"*STRING-VECTOR-MAPPINGS*", "UNICODE-CHAR"));
+						// unicode-string / simple-unicode-string are upstream's
+						// degenerate
+						// aliases (unicode-char above is exactly character) -- external
+						// upstream, and cffi's strings.lisp reads them by that spelling.
+						"*STRING-VECTOR-MAPPINGS*", "UNICODE-CHAR", "UNICODE-STRING", "SIMPLE-UNICODE-STRING"));
 		// Real babel :uses babel-encodings and re-exports it, so every babel-encodings
 		// external must also answer to the babel: spelling -- as an IMPORT REDIRECT,
 		// not an owned symbol, so babel:X and babel-encodings:X canonicalize to the
@@ -809,7 +820,7 @@ public final class PackageRegistry {
 		// an unknown :: member.
 		babelSymbols.addAll(Set.of(LispNames.NORMALIZE_ENCODING, "%DECODING-ERROR", "%ENCODING-ERROR",
 				"%COUNT-CODE-POINTS", "%COUNT-OCTETS", "%DECODE-INTO", "%ENCODE-INTO", "%UTF-8-DECODE-1",
-				"%CONTINUATION-P", "%INVALID-CB-P"));
+				"%CONTINUATION-P", "%INVALID-CB-P", "STRING-GET", "STRING-SET"));
 		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals, babelImports));
 		// swank: the STUB behind the built-in ASDF system of the same name
 		// (swank.lisp, eval.ShimLibraries). The real swank is SLIME's server half --

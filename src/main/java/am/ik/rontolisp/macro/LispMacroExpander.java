@@ -5700,6 +5700,33 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (subsetp list1 list2) into a do/return scan that yields t when every
+	 * element of {@code list1} is a member of {@code list2} (compared with {@code eql})
+	 * and nil at the first element that is not. The {@code :test}/{@code :test-not}/
+	 * {@code :key} keywords forward to the inner {@code member}, exactly as
+	 * {@code union}/{@code intersection}/{@code set-difference} do; the {@code :key}
+	 * selector applies to both sides of the comparison (CL semantics).
+	 * @param cons the subsetp expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSubsetp(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.SUBSETP, parts, 3);
+		TestSpec testForm = testSpec(parts, 3);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
+		LispSymbol cur = new LispSymbol("__sp_cur");
+		// (do ((__sp_cur list1 (cdr __sp_cur)))
+		// ((atom __sp_cur) t)
+		// (if (member (car __sp_cur) list2 [:test fn] [:key fn]) nil (return nil)))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispTrue.INSTANCE));
+		LispVal elem = callOf(LispNames.CAR, cur);
+		LispVal match = memberCallForm(keyedForm(keyForm, elem), parts.get(2), testForm, keyForm);
+		LispVal body = makeIf(match, LispNil.INSTANCE, makeReturn(LispNil.INSTANCE));
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
 	 * Expands (every pred seq...) into a do/return scan that yields t when the predicate
 	 * holds for every element tuple and nil at the first tuple for which it fails. Any
 	 * number of sequences is accepted, as Common Lisp specifies ({@code every predicate

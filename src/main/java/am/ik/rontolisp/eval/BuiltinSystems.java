@@ -103,14 +103,19 @@ public final class BuiltinSystems {
 	 * all (WASM linear memory and the {@code :bytes} boundary of a reactor import) are
 	 * little-endian by the wasm spec, and the JVM backend exposes no such view to
 	 * disagree.</li>
+	 * <li>{@code :64-bit} -- every rontolisp backend has 64-bit fixnums, and every
+	 * pointer-shaped value (a JVM object reference, a WASM {@code i31}/{@code externref},
+	 * an FFM {@code MemorySegment} address) is 8 bytes wherever pointers exist at all.
+	 * {@code cffi}'s {@code types.lisp} reads exactly this feature to pick
+	 * {@code :size}'s base type, and no rontolisp backend could ever answer the 32-bit
+	 * half true, so stating it is not a claim a program could catch out.</li>
 	 * </ul>
-	 * The CPU/word-size names ({@code :x86-64}, {@code :64-bit}) are deliberately absent:
-	 * rontolisp has no machine-word surface to describe -- an integer degrades to a float
-	 * past the {@code i31} range on the WASM backends -- so a program branching on one
-	 * would be branching on a claim nothing here can keep.
+	 * The CPU name ({@code :x86-64}) stays absent: rontolisp has no instruction-set
+	 * surface to describe, only the word-size fact {@code :64-bit} states.
+	 * {@code :32-bit} stays absent too -- rontolisp is never that.
 	 */
 	private static final Map<String, List<String>> DECLARED_FEATURES = Map.of(TRIVIAL_FEATURES,
-			List.of("unix", "little-endian"));
+			List.of("unix", "little-endian", "64-bit"));
 
 	private BuiltinSystems() {
 	}

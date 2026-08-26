@@ -988,6 +988,14 @@ public final class LispNames {
 	public static final String ADJOIN = "ADJOIN";
 
 	/**
+	 * The {@code subsetp} built-in function (true when every element of the first list is
+	 * a member of the second, compared with {@code eql}; the {@code :test}/
+	 * {@code :test-not}/{@code :key} keywords are supported through the same macro
+	 * expansion as {@code union}/{@code intersection}/{@code set-difference}).
+	 */
+	public static final String SUBSETP = "SUBSETP";
+
+	/**
 	 * The {@code list*} built-in function (build a list whose final element is the last
 	 * argument used as the tail: {@code (list* a b c) -> (cons a (cons b c))}).
 	 */
