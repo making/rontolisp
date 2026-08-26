@@ -11,6 +11,7 @@
 | `lambda` | `(lambda (params...) body...)` | 無名関数 |
 | `progn` | `(progn expr1 expr2...)` | 式を順に評価し、最後の値を返します |
 | `setq` | `(setq name value ...)` | 変数に値を代入します。複数の `name value` ペアを受け付け、左から右へ代入し、最後の値を返します |
+| `define-symbol-macro` | `(define-symbol-macro name expansion)` | グローバルなシンボルマクロを定義します。`name` への参照は `expansion` を評価し、`name` への `setq`/`setf` は `expansion` を place として書き込みます。トップレベル専用で、`symbol-macrolet` のグローバル版です |
 | `while` | `(while test body...)` | testが非nilの間、bodyを繰り返し評価します。nilを返します |
 | `return` | `(return value?)` | 最も内側を囲むループ(`do`/`dolist`/`dotimes`/`loop`)からの非局所脱出。そのループは `value`(またはnil)に評価されます |
 | `unwind-protect` | `(unwind-protect protected cleanup...)` | `protected` を評価し、そこからのあらゆる脱出時(通常復帰・`error` 巻き戻し・`return`/`return-from`)に `cleanup` フォームを実行(`--no-gc` ではコンパイルエラー) |

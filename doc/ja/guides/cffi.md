@@ -158,13 +158,29 @@ CL-USER> (cffi:with-foreign-pointer (buf 64)
 "x-7"
 ```
 
+## Cのグローバル変数
+
+`defcvar` はCのグローバル変数に名前を付けます。以後、その Lisp 名は変数のように
+読み書きできます——実体は生成されたアクセサに対する
+[シンボルマクロ](../reference/special-forms/define-symbol-macro.md)であって変数では
+ないため、`setf` や `incf` はそのままC側の記憶域に届きます。
+
+```console
+CL-USER> (cffi:defcvar ("optind" *optind*) :int)
+CL-USER> *optind*
+1
+CL-USER> (setf *optind* 7)
+7
+CL-USER> (cffi:pointerp (cffi:get-var-pointer '*optind*))
+T
+```
+
 ## 動かないもの
 
 | | |
 |---|---|
 | `cffi-grovel` | grovel はCプログラムをコンパイル・実行してプラットフォームのヘッダを読むため、ロード時にCツールチェインが要ります。`:defsystem-depends-on` でこれを挙げるシステムは、中途半端にロードせず**その理由を述べて拒否されます**。大半のバインディングは grovel しません |
 | `cffi-libffi` | こちらも拒否されます。理由は逆で、構造体の値渡しがすでに動く（上記）ので、追加する余地がありません |
-| `cffi:defcvar` | 使えません——`define-symbol-macro` に展開されますが、rontolisp にはそれがありません。代わりに `cffi:foreign-symbol-pointer` と `cffi:mem-ref` で読んでください |
 | `with-pointer-to-vector-data` | ピン留めではなく**コピーイン・コピーアウト**です。本体は新しい外部バッファを見ることになり、C側が書いた内容が Lisp のベクタへ届くのは本体を抜けたときで、その前ではありません。本体の外へ持ち出したポインタはダングリングです |
 | `:long-double` | ここでは外部型ではありません |
 

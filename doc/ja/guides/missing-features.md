@@ -12,7 +12,6 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | 機能 | 状況 |
 | --- | --- |
 | リスタート | 利用可。デバッガ統合（`break`、`*debugger-hook*`）とコンディションとの関連付けはありません |
-| `define-symbol-macro` | 利用不可（レキシカルな `symbol-macrolet` は利用可能） |
 | `&environment` | `defmacro` のラムダリストで受け付けますが、常に `nil` に束縛されます（マクロ展開環境オブジェクトは存在しません）。`&whole` は `defmacro`・`destructuring-bind` の双方で動作します |
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット + 定義時 MOP サブセット） |

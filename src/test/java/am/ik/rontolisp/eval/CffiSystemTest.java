@@ -179,6 +179,25 @@ class CffiSystemTest {
 	}
 
 	@Test
+	void defcvarReadsAndWritesARealCGlobal() {
+		assumeTrue(FfiInterop.available(), FfiInterop.description());
+		Session session = cffi();
+		// defcvar is how every binding names a C global. Its expansion generates the
+		// accessor pair and then DEFINE-SYMBOL-MACRO, so the lisp name reads and writes
+		// like a variable while being a call: getopt's optind is an int the C library
+		// owns, on Linux and macOS alike.
+		assertThat(session.eval("(progn (cffi:defcvar (\"optind\" *optind*) :int) (integerp *optind*))"))
+			.isEqualTo("T");
+		assertThat(session.eval("(progn (setf *optind* 7) (incf *optind*) *optind*)")).isEqualTo("8");
+		// The generated foreign-var properties are what get-var-pointer reads back.
+		assertThat(session.eval("(cffi:pointerp (cffi:get-var-pointer '*optind*))")).isEqualTo("T");
+		// A read-only aggregate: environ is a char** the process owns.
+		assertThat(session.eval("(progn (cffi:defcvar (\"environ\" *environ*) :pointer)"
+				+ " (stringp (cffi:foreign-string-to-lisp (cffi:mem-ref *environ* :pointer))))"))
+			.isEqualTo("T");
+	}
+
+	@Test
 	void grovelAndLibffiRefuseWithTheReason() {
 		// Neither can work here, and a half-load or a silent download that ends in an
 		// unparseable system definition is worse than a sentence saying why.

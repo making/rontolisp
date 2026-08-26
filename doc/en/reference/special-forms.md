@@ -12,6 +12,7 @@ and a runnable example you can evaluate in your browser.
 | `lambda` | `(lambda (params...) body...)` | Anonymous function |
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value ...)` | Assign values to variables; accepts multiple `name value` pairs, assigned left to right, and returns the last value |
+| `define-symbol-macro` | `(define-symbol-macro name expansion)` | Define a global symbol macro: a reference to `name` evaluates `expansion`, and a `setq`/`setf` of it writes through `expansion` as a place. Top level only; the global sibling of `symbol-macrolet` |
 | `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
 | `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`/`loop`), which evaluates to `value` (or nil) |
 | `unwind-protect` | `(unwind-protect protected cleanup...)` | Evaluate `protected` and run the `cleanup` forms on every exit from it -- normal return, `error` unwind, or `return`/`return-from` (compile error under `--no-gc`) |

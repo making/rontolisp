@@ -4984,6 +4984,34 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalDefineSymbolMacroReadsAndWritesThroughTheExpansion() {
+		// The global sibling of symbol-macrolet: a value-position reference evaluates the
+		// expansion, and setq/setf/incf write through it as a place.
+		assertThat(evalMulti("""
+				(defvar *buf* (make-array 3 :initial-element 0))
+				(define-symbol-macro *slot0* (aref *buf* 0))
+				(setf *slot0* 42)
+				(setq *slot0* (+ *slot0* 1))
+				(incf *slot0*)
+				(list *slot0* *buf*)
+				""").print()).isEqualTo("(44 #(44 0 0))");
+		// It is not a variable: symbol-value does not see it, and a let of the name
+		// binds an ordinary lexical that shadows the symbol macro in its scope.
+		assertThat(evalMulti("(define-symbol-macro *sm-x* 42) (let ((*sm-x* 7)) *sm-x*)"))
+			.isEqualTo(new LispInteger(7));
+		// The expansion is code, re-evaluated at every reference.
+		assertThat(evalMulti("""
+				(defvar *sm-n* 0)
+				(define-symbol-macro *sm-next* (incf *sm-n*))
+				(list *sm-next* *sm-next* *sm-n*)
+				""").print()).isEqualTo("(1 2 2)");
+		// A definition inside a function body still registers globally (the interpreter
+		// has no compile-time top-level notion), and a computed name is an error.
+		assertThatThrownBy(() -> evalMulti("(define-symbol-macro (foo) 1)"))
+			.hasMessageContaining("DEFINE-SYMBOL-MACRO");
+	}
+
+	@Test
 	void evalDefineCompilerMacroRewritesCallSites() {
 		// A compiler macro rewrites calls to the function it names.
 		assertThat(evalMulti("(defun myinc (x) (+ x 1))" + " (define-compiler-macro myinc (x) `(+ ,x 100)) (myinc 10)"))

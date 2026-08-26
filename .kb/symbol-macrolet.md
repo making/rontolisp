@@ -72,10 +72,7 @@ rewritten to a funcall) + `expandBuiltinMacro` (so `macroexpand-1` works and
 
 ## Deliberate scope cuts (re-evaluation triggers)
 
-- **`define-symbol-macro` (global) is NOT implemented** — grep found zero uses on the
-  mito closure. If a library needs it, it cannot ride this walk as-is (there is no
-  enclosing form to expand); it would need a program-wide pass on the compile path and an
-  environment-level marker in the interpreter.
+- **`define-symbol-macro` (global) rides the same walk** — see the section below.
 - The interpreter re-runs the substitution on every evaluation of the form (same
   re-expansion cost model as every built-in macro there, `.todo/182`); the walk is linear
   per evaluation, not per iteration of loops inside the body. Measured 2026-08-02: a
@@ -93,3 +90,48 @@ Pinning tests: `LispEvaluatorTest#evalSymbolMacrolet*`,
 `JvmLispCompilerTest#compileAndRunSymbolMacrolet*` (incl. the user-macro-emits-it shape),
 `WasmLispCompilerIntegrationTest#symbolMacroletForms`, ci-spec
 `symbol-macrolet-substitution-and-setf`.
+
+## `define-symbol-macro`: the global sibling
+
+`(define-symbol-macro name expansion)` is the same substitution with no enclosing form to
+expand, so the two backends solve it differently and meet at the same answer:
+
+- **Interpreter**: `LispEvaluator.globalSymbolMacros`, written by the
+  `DEFINE-SYMBOL-MACRO` case in `evalConsRareOperator`. `evalSymbolRef` consults it ONLY
+  after `env.lookupOrNull` came up empty — a symbol macro is not a variable, so it can
+  never be bound, and every ordinary variable read stays off the path (the map is also
+  emptiness-gated). `evalSetq` checks the same two conditions before evaluating the value
+  form and rewrites the pair to `(setf expansion value)`, which is what makes `setf` and
+  `incf` write through. Nothing else changes: `symbol-value` does not see the name, and a
+  `let` of it binds an ordinary lexical that shadows the macro (CL signals
+  `program-error`; lite does not check, same as the lexical form).
+- **Compile paths**: `UserMacroExpander`, which is the only pass with the program in
+  top-level order. `harvestSymbolMacros` runs per top-level form, AFTER `expandAll`, and
+  registers every definition reachable through `progn`/`eval-when` nesting (the shape
+  `cffi:defcvar` emits), REMOVING it — a compiled program has no symbol-macro table, so
+  the definition cannot survive. Each registration remembers the index in the emitted
+  form list it becomes active at; one pass at the end
+  (`substituteGlobalSymbolMacros` → `LispMacroExpander.substituteGlobalSymbolMacros`,
+  the public door onto `substituteSymbolMacros`) substitutes each form through the
+  definitions in effect at it, so a reference in an EARLIER form does not see a later
+  definition. No user-macro hook is needed: every macro call was expanded above. The pass
+  is activated by the name appearing anywhere (`usesDefineSymbolMacro`), so a program
+  with no `defmacro` still gets it.
+- A definition that is NOT top level (inside a `let`, a `defun` body) is refused with
+  `must be a top-level form` on the compile paths — `nestedDefineSymbolMacro`, which
+  skips `quote`/`defmacro`/`macrolet` so a template that BUILDS one is not mistaken for
+  one. The interpreter, which has no compile-time top level, simply registers it.
+- **One compile-path fix travelled with it**: `expandAll`'s `SETF` case used to walk the
+  subforms before asking whether a place had a user setf expander, so a COMPILER MACRO on
+  the place's accessor rewrote the place into a call of another name and the expander —
+  keyed on the accessor name — missed it. cffi's `mem-ref` carries both an open-coding
+  compiler macro and a `define-setf-expander`, which is what defcvar's generated setter
+  writes through; the setf is now expanded FIRST when the unwalked form already has a
+  user setf place, and the expansion walked.
+
+Consumer: `cffi:defcvar` (`.kb/cffi.md`). Pinning tests:
+`LispEvaluatorTest#evalDefineSymbolMacroReadsAndWritesThroughTheExpansion`,
+`JvmLispCompilerTest#compileAndRunDefineSymbolMacro` (+ `…EmittedByUserMacro`, the
+defcvar shape), `WasmLispCompilerIntegrationTest#defineSymbolMacroForms`,
+`CffiSystemTest#defcvarReadsAndWritesARealCGlobal`, ci-spec
+`define-symbol-macro-read-and-write`.

@@ -6539,6 +6539,23 @@ cases:
       (99 2)
       ON
       100
+  # define-symbol-macro is the GLOBAL sibling: the definition is dropped on the
+  # compile paths and every later top-level form substituted, while the interpreter
+  # consults its table at the reference. Reads, setq/setf/incf write-through, a
+  # reference inside a defun, and a let of the name shadowing it.
+  - name: define-symbol-macro-read-and-write
+    source: |
+      (defvar *ci-dsm-buf* (make-array 3 :initial-element 0))
+      (define-symbol-macro ci-dsm-slot0 (aref *ci-dsm-buf* 0))
+      (setf ci-dsm-slot0 42)
+      (setq ci-dsm-slot0 (+ ci-dsm-slot0 1))
+      (defun ci-dsm-bump () (incf ci-dsm-slot0))
+      (ci-dsm-bump)
+      (print (list ci-dsm-slot0 *ci-dsm-buf*))
+      (print (let ((ci-dsm-slot0 7)) ci-dsm-slot0))
+    expected: |
+      (44 #(44 0 0))
+      7
   # ',@xs in a backquote template = (quote ,@xs) = (cons 'quote xs): the
   # one-element splice yields 'x (trivia level0's `(equal ,*what* ',@args)),
   # the empty splice (QUOTE), the two-element splice (QUOTE A B).

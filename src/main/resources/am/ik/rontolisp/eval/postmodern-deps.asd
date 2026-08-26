@@ -35,8 +35,7 @@
 ;;;;
 ;;;; :depends-on -- "global-vars" is dropped: upstream declares it but has ZERO
 ;;;; call sites (it is a bordeaux-threads dependency that leaked into this
-;;;; list), and its non-SBCL branch needs define-symbol-macro and remprop,
-;;;; neither of which exists here. "bordeaux-threads" is declared, matching the
+;;;; list). "bordeaux-threads" is declared, matching the
 ;;;; feature decision above. "cl-ppcre" (roles.lisp, execute-file.lisp) and
 ;;;; "uax-15" (util.lisp) are undeclared upstream and added here: they load
 ;;;; transitively through cl-postgres today, so leaving them out would make the

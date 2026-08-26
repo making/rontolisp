@@ -15278,8 +15278,8 @@ public final class LispMacroExpander {
 	 * ({@code defclass}/{@code defstruct}/{@code defgeneric}) are kept verbatim.</li>
 	 * </ul>
 	 *
-	 * The global {@code define-symbol-macro} is deliberately NOT supported -- no library
-	 * on the current closure uses it; re-evaluate if one appears.
+	 * The global {@code define-symbol-macro} runs the SAME walk over the forms that
+	 * follow it -- see {@link #substituteGlobalSymbolMacros}.
 	 * @param cons the symbol-macrolet expression
 	 * @param userMacros one-step user-macro expander, or {@code null} on the compile path
 	 * @return the expanded expression (a {@code progn} of the substituted body)
@@ -15299,6 +15299,42 @@ public final class LispMacroExpander {
 			body.add(substituteSymbolMacros(parts.get(i), macros, userMacros));
 		}
 		return prognOrNil(body);
+	}
+
+	/**
+	 * Substitutes the GLOBAL symbol macros of {@code macros} through one form -- the
+	 * {@code define-symbol-macro} half of the same shadow-aware walk
+	 * {@link #expandSymbolMacrolet(LispCons, UserMacroHook)} runs over a lexical body, so
+	 * a global and a lexical symbol macro behave identically. The interpreter never calls
+	 * it (it consults its table at the reference itself); the compile path does, once per
+	 * top-level form, after {@code UserMacroExpander} has expanded every user macro --
+	 * which is why the hook is optional there.
+	 * @param form one top-level form, already macro-expanded
+	 * @param macros the active global name -> expansion table (empty is a no-op)
+	 * @param userMacros one-step user-macro expander, or {@code null}
+	 * @return the substituted form ({@code form} itself when nothing matched)
+	 */
+	public static LispVal substituteGlobalSymbolMacros(LispVal form, java.util.Map<String, LispVal> macros,
+			@Nullable UserMacroHook userMacros) {
+		return substituteSymbolMacros(form, macros, userMacros);
+	}
+
+	/**
+	 * Validates a {@code (define-symbol-macro name expansion)} form and answers its
+	 * {@code name}; the expansion is {@code cons.toList().get(2)}. The name must be a
+	 * literal, non-keyword symbol -- a computed one is an error, the way
+	 * {@code defmacro}'s is.
+	 * @param cons the define-symbol-macro form
+	 * @return the defined name
+	 */
+	public static LispSymbol defineSymbolMacroName(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (!cons.isProperList() || parts.size() != 3 || !(parts.get(1) instanceof LispSymbol name)
+				|| name.isKeyword()) {
+			throw new IllegalArgumentException(
+					LispNames.DEFINE_SYMBOL_MACRO + " expects (define-symbol-macro name expansion): " + cons.print());
+		}
+		return name;
 	}
 
 	/** Parses the {@code ((name expansion)...)} binding list of a symbol-macrolet. */
@@ -15354,10 +15390,10 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		switch (head.name()) {
 			case LispNames.QUOTE, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.GO,
-					LispNames.DEFMACRO, LispNames.DEFPACKAGE, LispNames.IN_PACKAGE, LispNames.DEFSTRUCT,
-					LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION,
-					LispNames.DEFSETF, LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFINE_COMPILER_MACRO,
-					LispNames.DEFINE_MODIFY_MACRO: {
+					LispNames.DEFMACRO, LispNames.DEFINE_SYMBOL_MACRO, LispNames.DEFPACKAGE, LispNames.IN_PACKAGE,
+					LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFTYPE,
+					LispNames.DEFINE_CONDITION, LispNames.DEFSETF, LispNames.DEFINE_SETF_EXPANDER,
+					LispNames.DEFINE_COMPILER_MACRO, LispNames.DEFINE_MODIFY_MACRO: {
 				// Data-only shapes, and definition bodies that do not see the lexical
 				// environment: kept verbatim.
 				return form;

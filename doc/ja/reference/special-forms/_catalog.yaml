@@ -9,6 +9,7 @@ categories:
       - { slug: lambda, name: lambda }
       - { slug: progn, name: progn }
       - { slug: setq, name: setq }
+      - { slug: define-symbol-macro, name: define-symbol-macro }
       - { slug: while, name: while }
       - { slug: return, name: return }
       - { slug: unwind-protect, name: unwind-protect }

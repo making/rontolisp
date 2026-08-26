@@ -1968,10 +1968,23 @@ public final class LispNames {
 	 * compilers ({@code LispMacroExpander.expandSymbolMacrolet}): free references to a
 	 * bound name are replaced by its expansion, an inner binding form ({@code let},
 	 * {@code lambda}, ...) of the same name stops the substitution in its scope, and a
-	 * {@code setq}/{@code setf} of a bound name writes through the expansion place. The
-	 * global {@code define-symbol-macro} is deliberately absent (no consumer needs it).
+	 * {@code setq}/{@code setf} of a bound name writes through the expansion place. Its
+	 * global, top-level sibling is {@link #DEFINE_SYMBOL_MACRO}.
 	 */
 	public static final String SYMBOL_MACROLET = "SYMBOL-MACROLET";
+
+	/**
+	 * The {@code define-symbol-macro} macro (global symbol macros). Registers a
+	 * program-wide name whose value-position references expand to a form and whose
+	 * {@code setq}/{@code setf} writes through that form as a place. The interpreter
+	 * keeps the table in {@code LispEvaluator} and consults it when the name has no
+	 * variable binding; the compile paths keep it in {@code UserMacroExpander}, which
+	 * drops the definition and substitutes every later top-level form through
+	 * {@code LispMacroExpander.substituteGlobalSymbolMacros} -- so the backends never see
+	 * the form. A definition that is not top level, or whose name is not a literal
+	 * symbol, is an error. {@code cffi:defcvar} expands into this.
+	 */
+	public static final String DEFINE_SYMBOL_MACRO = "DEFINE-SYMBOL-MACRO";
 
 	/**
 	 * The {@code make-condition} operator. Lite expansion to the {@code :format-control}

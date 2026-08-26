@@ -8102,6 +8102,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void defineSymbolMacroForms() throws Exception {
+		// The global sibling of symbol-macrolet, dropped and substituted by
+		// UserMacroExpander before the compiler runs: a reference reads the expansion,
+		// setq/setf/incf write through it as a place, and a let of the name shadows it.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defvar *buf* (make-array 3 :initial-element 0))
+				(define-symbol-macro *slot0* (aref *buf* 0))
+				(setf *slot0* 42)
+				(setq *slot0* (+ *slot0* 1))
+				(defun bump () (incf *slot0*))
+				(bump)
+				(print (list *slot0* *buf*))
+				(print (let ((*slot0* 7)) *slot0*))
+				"""));
+		assertThat(compileAndRunProgram(program)).isEqualTo("(44 #(44 0 0))\n7");
+	}
+
+	@Test
 	void nestedBackquoteOnceOnly() throws Exception {
 		// once-only uses three levels of read-time backquote; the reader expands
 		// every level to list/cons/quote, so the WASM compiler only sees ordinary

@@ -91,8 +91,12 @@ the runtime probe would answer nil and functions.lisp's guarded fallback
 `%foreign-funcall-varargs` defmacro would run -- and die -- at run time); and
 `(setf (apply #'aref ...))` (CLHS 5.1.2.5, foreign-array-to-lisp's runtime-rank store)
 lowers through the row-major place in `LispMacroExpander.expandSetf`.
-`cffi:defcvar` does not work at all: it expands into `define-symbol-macro`, which
-rontolisp does not have (`.todo/546`).
+`cffi:defcvar` works: its expansion generates the accessor pair and then
+`define-symbol-macro` (`.kb/symbol-macrolet.md`), so the lisp name reads and writes like
+a variable while being a call. The generated SETTER writes through `(setf (mem-ref ...))`
+— a place whose accessor carries an open-coding compiler macro AND a
+`define-setf-expander`, which is the shape that forced `UserMacroExpander`'s setf case to
+expand before it walks.
 
 ## Leaf modules may now select a package
 
@@ -109,7 +113,7 @@ both loaders now BRACKET a leaf shim the way they bracket a real component:
 | what | where |
 |---|---|
 | upstream's portable source loads unmodified, needing NO native access; the type/enum/struct layers answer; `*foreign-structures-by-value*` is replaced | `eval/CffiSystemTest` |
-| `defcfun` / `foreign-funcall` / out parameters / strings / the flat namespace / struct by value / a callback / varargs / a shareable vector | `eval/CffiSystemTest` (skipped where the JVM denies native access) |
+| `defcfun` / `foreign-funcall` / out parameters / strings / the flat namespace / struct by value / a callback / varargs / a shareable vector / `defcvar` over a real C global | `eval/CffiSystemTest` (skipped where the JVM denies native access) |
 | `cffi-grovel` and `cffi-libffi` refuse with the reason | `eval/CffiSystemTest.grovelAndLibffiRefuseWithTheReason` |
 | the vendored upstream source (2026-01-01 release, MIT) | `src/test/resources/cffi` |
 

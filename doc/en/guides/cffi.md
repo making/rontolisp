@@ -156,13 +156,29 @@ CL-USER> (cffi:with-foreign-pointer (buf 64)
 "x-7"
 ```
 
+## C globals
+
+`defcvar` names a C global, and the Lisp name then reads and writes like a
+variable — it is a [symbol macro](../reference/special-forms/define-symbol-macro.md)
+over the generated accessor, not a variable, so `setf` and `incf` go straight to the
+C storage.
+
+```console
+CL-USER> (cffi:defcvar ("optind" *optind*) :int)
+CL-USER> *optind*
+1
+CL-USER> (setf *optind* 7)
+7
+CL-USER> (cffi:pointerp (cffi:get-var-pointer '*optind*))
+T
+```
+
 ## What does not work
 
 | | |
 |---|---|
 | `cffi-grovel` | Grovelling compiles and runs a C program to read the platform's headers, which needs a C toolchain at load time. A system naming it in `:defsystem-depends-on` is **refused with that sentence** rather than half-loaded. Most bindings do not grovel |
 | `cffi-libffi` | Refused too, and for the opposite reason: structures by value already work (above), so there is nothing for it to add |
-| `cffi:defcvar` | Not available — it expands into `define-symbol-macro`, which rontolisp does not have. Read the variable through `cffi:foreign-symbol-pointer` plus `cffi:mem-ref` instead |
 | `with-pointer-to-vector-data` | Copies **in and out** instead of pinning: the body sees a fresh foreign buffer, and what the C side wrote reaches the Lisp vector when the body returns, not before. A pointer kept past the body is dangling |
 | `:long-double` | Not a foreign type here |
 

@@ -210,6 +210,17 @@ public final class LispEvaluator {
 	private final java.util.Map<String, UserMacro> userMacros = new java.util.HashMap<>();
 
 	/**
+	 * Global symbol macros defined with {@code define-symbol-macro}, keyed by name. A
+	 * reference to one of these names in a VALUE position evaluates the expansion, and a
+	 * {@code setq}/{@code setf} of it writes through the expansion as a place -- the name
+	 * is not a variable, so {@code symbol-value} never sees it. The table is consulted
+	 * only after the ordinary lexical/global lookup has come up empty, which keeps every
+	 * variable read that is not a symbol macro off this path entirely (the compile paths
+	 * hold the same table in {@code UserMacroExpander} and substitute statically).
+	 */
+	private final java.util.Map<String, LispVal> globalSymbolMacros = new java.util.HashMap<>();
+
+	/**
 	 * Compiler macros defined with {@code define-compiler-macro}, keyed by name. Unlike a
 	 * {@code defmacro} these coexist with an ordinary function of the same name, so they
 	 * live in their own table: {@link #isUserMacro} must not see them, or the function
@@ -4047,6 +4058,16 @@ public final class LispEvaluator {
 			return this.dynamicBindings.get(name);
 		}
 		LispVal value = env.lookupOrNull(name);
+		if (value == null && !this.globalSymbolMacros.isEmpty()) {
+			// define-symbol-macro: the name is not a variable, so it only ever reaches
+			// here with nothing bound. Evaluating the expansion in the CURRENT
+			// environment is the whole semantics (cffi's defcvar reads a C global
+			// through a generated accessor call).
+			LispVal expansion = this.globalSymbolMacros.get(name);
+			if (expansion != null) {
+				return eval(expansion, env);
+			}
+		}
 		if (value == null && !this.usocketLibraryLoaded && UsocketLibrary.isUsocketQualified(name)) {
 			// The usocket library also exports variables (usocket:*wildcard-host*), so a
 			// program whose FIRST usocket reference is a variable read must trigger the
@@ -5169,6 +5190,8 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandProg(cons, false), env);
 			case LispNames.PROG_STAR:
 				return eval(LispMacroExpander.expandProg(cons, true), env);
+			case LispNames.DEFINE_SYMBOL_MACRO:
+				return evalDefineSymbolMacro(cons);
 			case LispNames.SYMBOL_MACROLET:
 				// The substitution walk expands a user macro it meets before substituting
 				// into its expansion (macro arguments may be data, the expansion is
@@ -5748,6 +5771,25 @@ public final class LispEvaluator {
 		}
 		putUserMacro(name.name(),
 				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
+		return name;
+	}
+
+	/**
+	 * Registers a {@code (define-symbol-macro name expansion)}: from here on a reference
+	 * to {@code name} in a value position evaluates {@code expansion}, and a
+	 * {@code setq}/{@code setf} of it writes through {@code expansion} as a place. The
+	 * expansion form is stored UNEVALUATED -- it is code, re-evaluated at every
+	 * reference.
+	 * @param cons the define-symbol-macro form
+	 * @return the defined name
+	 */
+	private LispVal evalDefineSymbolMacro(LispCons cons) {
+		LispSymbol name = LispMacroExpander.defineSymbolMacroName(cons);
+		if (PackageRegistry.isClSymbol(name.name())) {
+			throw new LispEvalException(
+					LispNames.DEFINE_SYMBOL_MACRO + " cannot redefine the standard operator " + name.name());
+		}
+		this.globalSymbolMacros.put(name.name(), cons.toList().get(2));
 		return name;
 	}
 
@@ -7840,8 +7882,17 @@ public final class LispEvaluator {
 		LispVal value = LispNil.INSTANCE;
 		for (int i = 1; i < parts.size(); i += 2) {
 			LispSymbol name = (LispSymbol) parts.get(i);
-			value = eval(parts.get(i + 1), env);
 			String n = name.name();
+			if (!this.globalSymbolMacros.isEmpty() && env.lookupOrNull(n) == null
+					&& this.globalSymbolMacros.containsKey(n)) {
+				// define-symbol-macro: assigning the name assigns its expansion PLACE,
+				// so the value form is evaluated by the setf machinery, not here.
+				value = eval(consList(
+						List.of(new LispSymbol(LispNames.SETF), this.globalSymbolMacros.get(n), parts.get(i + 1))),
+						env);
+				continue;
+			}
+			value = eval(parts.get(i + 1), env);
 			if (LispNames.PACKAGE_VAR.equals(n)) {
 				// *package* IS the resolver's current package (see currentPackageValue):
 				// the assignment writes straight through -- into the active let binding

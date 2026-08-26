@@ -11,7 +11,6 @@ the [Language Reference](../reference/special-forms.md).
 | Feature | Status |
 | --- | --- |
 | restarts | available; no debugger integration (`break`, `*debugger-hook*`) and no condition-restart association |
-| `define-symbol-macro` | not available (the lexical `symbol-macrolet` is) |
 | `&environment` | accepted in a `defmacro` lambda list but always bound to `nil` (there is no macro-expansion environment object). `&whole` works, in `defmacro` and `destructuring-bind` alike |
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset + a definition-time MOP subset) |

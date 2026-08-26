@@ -1430,6 +1430,46 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDefineSymbolMacro() throws Exception {
+		// The global symbol macro is a COMPILE-TIME fact: UserMacroExpander drops the
+		// definition and substitutes every later top-level form, so the backend never
+		// sees the form. A reference reads the expansion and setq/setf/incf write
+		// through it as a place.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defvar *buf* (make-array 3 :initial-element 0))
+				(define-symbol-macro *slot0* (aref *buf* 0))
+				(setf *slot0* 42)
+				(setq *slot0* (+ *slot0* 1))
+				(defun bump () (incf *slot0*))
+				(bump)
+				(print (list *slot0* *buf*))
+				(print (let ((*slot0* 7)) *slot0*))
+				"""));
+		assertThat(compileAndRun(program)).isEqualTo("(44 #(44 0 0))\n7");
+	}
+
+	@Test
+	void compileAndRunDefineSymbolMacroEmittedByUserMacro() throws Exception {
+		// The cffi defcvar shape: a user macro expands into a progn whose eval-when
+		// carries the definition, and the accessor defun it generates is what the
+		// reference resolves to.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defvar *cell* (list 1 2))
+				(defmacro defhead (name place)
+				  `(progn (defun ,(intern (concatenate 'string "%ACCESS-" (symbol-name name))) () ,place)
+				          (defun (setf ,(intern (concatenate 'string "%ACCESS-" (symbol-name name)))) (value)
+				            (setf ,place value))
+				          (eval-when (:compile-toplevel :load-toplevel :execute)
+				            (define-symbol-macro ,name
+				              (,(intern (concatenate 'string "%ACCESS-" (symbol-name name))))))))
+				(defhead head (car *cell*))
+				(setf head 99)
+				(print (list head *cell*))
+				"""));
+		assertThat(compileAndRun(program)).isEqualTo("(99 (99 2))");
+	}
+
+	@Test
 	void compileAndRunSymbolMacroletEmittedByUserMacro() throws Exception {
 		// The trivia shape: a user macro EXPANDS INTO symbol-macrolet, and user macro
 		// calls inside the binding expansions and the body are expanded away by
