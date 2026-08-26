@@ -753,6 +753,22 @@ examples:
       hide. The interpreter leg is the same program under `rontolisp` and blocks
       like the others here. :port is read from the PORT environment variable,
       which only the two socket transports look at.
+  - path: net/hello-clack-accesslog.lisp
+    backends: [jvm-compile, war-compile, wasm-component]
+    note: >-
+      the same application with lack's OWN accesslog middleware composed around
+      it by lack:builder -- the middleware quickloaded unpatched, so what this
+      pins is that a `(:accesslog ...)` builder keyword resolves on the compile
+      path at all: lack.util:find-middleware loads the middleware's system at
+      RUN time through quicklisp, which a compiled program has no way to do, so
+      the explicit `lack-middleware-accesslog` in the quickload list is what
+      makes the package exist before the builder form is expanded. The log line
+      itself goes to the transport's standard output on every leg here -- the
+      terminal, the Servlet container's log, and `stdout [0] ::` under
+      `wasmtime serve`, where the request carries no peer address and the line
+      opens with NIL. No wasm-reactor leg, and not because it fails to compile:
+      a --no-wasi module's standard output is a discarding sink, so the default
+      logger would write nowhere on a Worker.
   - path: net/httpbin-clack.lisp
     backends: [jvm-compile, war-compile, wasm-component, wasm-reactor]
     note: >-

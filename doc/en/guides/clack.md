@@ -185,6 +185,54 @@ Four differences are worth knowing before picking one:
   negotiation is built in, and `(setf (ningle:requirement app :key) fn)`
   registers your own; the closure runs on every dispatch.
 
+## Composing middleware: `lack:builder`
+
+A middleware is a function from application to application, and
+[lack](https://github.com/fukamachi/lack) — the layer under Clack — ships a set
+of them plus `lack:builder` to compose them around an application. `:accesslog`
+writes one Apache combined-format line per request to standard output:
+
+```console
+$ cat app.lisp
+(ql:quickload '("clack" "lack-middleware-accesslog"))
+
+(defun app (env)
+  (list 200 '(:content-type "text/plain; charset=utf-8")
+        (list (format nil "Hello, Clack!~%"))))
+
+(clack:clackup (lack:builder :accesslog #'app)
+               :server :rontolisp :port 5000 :use-thread nil)
+$ rontolisp app.lisp
+$ curl http://127.0.0.1:5000/hello
+Hello, Clack!
+```
+
+and on the server's own output:
+
+```console
+127.0.0.1 - [26/Aug/2026:20:57:40 +09:00] "GET /hello HTTP/1.1" 200 14 "-" "curl/8.7.1"
+```
+
+**Name the middleware's system in the `quickload`.** The `:accesslog` keyword
+expands to a `lack.util:find-middleware` call, which — when the package is not
+already there — loads `lack-middleware-accesslog` through quicklisp at *run*
+time. A compiled program has no way to do that, so it compiles cleanly and then
+fails with `Middleware "LACK/MIDDLEWARE/ACCESSLOG" is not found`. Quickloading
+the system by name puts the package in the program.
+
+Standard output here is the transport's: the terminal on the interpreter and the
+JVM, the container's log for `-o app.war`, and `stdout [0] ::` under
+`wasmtime serve` — where `wasi:http` carries no peer address, so the line opens
+with `NIL` rather than an IP. A `--no-wasi` reactor's standard output is a
+discarding sink, so on a Worker send the line somewhere the host can see:
+`(lack:builder (:accesslog :logger #'to-host) #'app)`. `:formatter` replaces the
+line format the same way — both are ordinary keyword arguments of the
+middleware, and a `(:keyword . args)` list is how `builder` passes them.
+
+[`examples/net/hello-clack-accesslog.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/hello-clack-accesslog.lisp)
+is this program with a second route that 404s, so the log shows the status and
+the content length the *application* returned.
+
 ## Backends
 
 The `:server :rontolisp` line does not change between these — it means "serve

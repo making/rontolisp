@@ -187,6 +187,54 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
   で、`(setf (ningle:requirement app :key) fn)` で独自の条件を登録できます。
   そのクロージャは毎回のディスパッチで実行されます。
 
+## ミドルウェアの合成: `lack:builder`
+
+ミドルウェアはアプリケーションからアプリケーションへの関数です。Clack の下層で
+ある [lack](https://github.com/fukamachi/lack) はそのセットと、アプリケーション
+に巻き付けるための `lack:builder` を提供します。`:accesslog` はリクエストごとに
+Apache combined 形式の 1 行を標準出力へ書きます:
+
+```console
+$ cat app.lisp
+(ql:quickload '("clack" "lack-middleware-accesslog"))
+
+(defun app (env)
+  (list 200 '(:content-type "text/plain; charset=utf-8")
+        (list (format nil "Hello, Clack!~%"))))
+
+(clack:clackup (lack:builder :accesslog #'app)
+               :server :rontolisp :port 5000 :use-thread nil)
+$ rontolisp app.lisp
+$ curl http://127.0.0.1:5000/hello
+Hello, Clack!
+```
+
+サーバ側の出力はこうなります:
+
+```console
+127.0.0.1 - [26/Aug/2026:20:57:40 +09:00] "GET /hello HTTP/1.1" 200 14 "-" "curl/8.7.1"
+```
+
+**ミドルウェアのシステム名を `quickload` に書いてください。** `:accesslog` という
+キーワードは `lack.util:find-middleware` の呼び出しに展開され、パッケージがまだ
+無ければ *実行時* に quicklisp 経由で `lack-middleware-accesslog` をロードします。
+コンパイル済みプログラムにはその手段がないため、コンパイルは通ったうえで
+`Middleware "LACK/MIDDLEWARE/ACCESSLOG" is not found` で失敗します。システムを
+名前で quickload しておけば、パッケージはプログラムの中にあります。
+
+ここでの標準出力はトランスポートのものです: インタプリタと JVM ではターミナル、
+`-o app.war` ではコンテナのログ、`wasmtime serve` では `stdout [0] ::` です
+— `wasi:http` はピアアドレスを伝えないので、この行は IP ではなく `NIL` で始まり
+ます。`--no-wasi` のリアクタの標準出力は捨てられるシンクなので、Worker では
+ホストから見える先へ行を送ってください:
+`(lack:builder (:accesslog :logger #'to-host) #'app)`。`:formatter` も同じ形で
+行のフォーマットを差し替えます — どちらもミドルウェアのただのキーワード引数で、
+`(:keyword . args)` のリストが `builder` からそれを渡す書き方です。
+
+[`examples/net/hello-clack-accesslog.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/hello-clack-accesslog.lisp)
+はこのプログラムに 404 を返すルートを足したもので、*アプリケーション* が返した
+ステータスとコンテンツ長がログに出ることが分かります。
+
 ## バックエンド
 
 `:server :rontolisp` の行はどのバックエンドでも変わりません — 「このターゲット
