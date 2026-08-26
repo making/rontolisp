@@ -220,11 +220,28 @@ matters because a missing native-image registration fails at BINDING time (below
   alike, in a `finally`. Two tests pin it and they are not the same test:
   `aRunOfSuccessfulProductsFreesEveryBufferItAllocates` runs 1000 products that WORK and
   `aDeclinedProductCostsTheDeviceNothing` twelve that FAIL, which is the path the first
-  never enters and the one that was wrong. Both bounds are two-sided -- free memory that
-  GREW would mean the test is measuring the rest of the machine -- and deliberately loose
-  (1.5 GB): `cuMemGetInfo` reports the DEVICE, not the thread, and the JVM backend's fork
-  defines a separate copy of the binding per compiled class. Measured drift with the
-  strided tier's tests in the set: 808 MB. Do not tighten without re-measuring.
+  never enters and the one that was wrong.
+  `aDeclinedProductCostsTheDeviceNothing` still asks `cuMemGetInfo`, which reports the
+  DEVICE, not the process -- unavoidable there, since a refused allocation is the pool
+  failing to grow in the first place, which has no pool-local counter to ask instead.
+- **The five `...FreesEveryBufferItAllocates` leak tests measure the POOL, not the
+  device** (`CudaGemm.poolBytesInUse`, `GpuTest.driftSample`; .todo/481). They used to
+  compare `cuMemGetInfo` before and after a 1000-call loop, two-sided (free memory that
+  GREW would mean the test was measuring the rest of the machine) and deliberately loose
+  (1.5 GB, `GpuTest.DRIFT_BOUND`) because `cuMemGetInfo` reports the whole DEVICE: the
+  JVM backend's fork defines a separate copy of the binding per compiled class (measured
+  drift with the strided tier's tests in the set: 808 MB), and on a unified-memory
+  machine (the GB10) it is the HOST's free memory too, which a sibling process --
+  another surefire fork, or anything else on the machine -- moves just by running.
+  Seen in a full `./mvnw test` on the GB10: 1.78-1.85 GB of drift against the 1.5 GB
+  bound, close enough to this suite's own real-leak sizes (as low as 1.2 GB for a single
+  buffer) that widening the bound further would have started hiding real leaks instead of
+  tolerating noise. `CU_MEMPOOL_ATTR_USED_MEM_CURRENT` is scoped to the pool HANDLE it is
+  asked of, which this process created and no other process can allocate from, so it
+  answers only for what this device object itself has outstanding -- measured immune to
+  an unrelated process actively touching 8 GB of host memory throughout the run, where
+  `cuMemGetInfo` drifted 1.3 GB and the pool's own count did not move. `GpuTest.driftBound`
+  falls back to `cuMemGetInfo` and the old loose bound only for a driver with no pool.
 - **On Metal the leak question changes shape** -- not "is every buffer freed" but "does
   the pool reach a steady state", which
   `MetalGpuTest.aRunOfCallsSettlesTheBufferPoolRatherThanGrowingIt` asserts over 400
@@ -1499,10 +1516,14 @@ Six things worth knowing before editing these:
   square (64 on CUDA, 208 on Metal), `MAP_N` twice the element threshold, `TYPE` is
   `single-float` where the device has no double. A hard-coded 64 would have made every
   accepted-product assertion vacuous on the second backend.
-- **The six tests that assert on FREE DEVICE MEMORY hold a `@ResourceLock`** and their
-  bound is 1.5 GB, because `cuMemGetInfo` reports the DEVICE and the JVM fork loads a
-  separate copy of the binding per compiled class. Every leak run is sized so a real leak is
-  2-8x the bound.
+- **The tests that assert on device memory hold a `@ResourceLock`.** Five of them
+  (`...FreesEveryBufferItAllocates`) ask the POOL, not the device, since .todo/481 --
+  immune to a sibling process, whether a second surefire fork or anything else on the
+  machine. Two more (`theResidentSetIsBoundedByItsBudgetAndAReleaseGivesTheMemoryBack`
+  and the lazy-results eviction test) still ask `cuMemGetInfo` against the 1.5 GB bound,
+  because their "before" is measured right after a release rather than a warm-up call and
+  the pool can legitimately read near zero there. Every leak run is sized so a real leak
+  is 2-8x whichever bound it uses.
 - **Exact-input operands must be exact IN THE FOLD too** -- a 64-long sum of products of
   1..4096 is not, at f32, because the defun accumulates in f64 and no f32 kernel can follow.
   That is `.kb/linalg-simd.md`'s reduction contract and not this seam.

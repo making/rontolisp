@@ -67,6 +67,15 @@ final class CudaDriver {
 	 */
 	static final int MEMPOOL_ATTR_RELEASE_THRESHOLD = 4;
 
+	/**
+	 * {@code CU_MEMPOOL_ATTR_USED_MEM_CURRENT}: bytes currently allocated out of a pool,
+	 * as a {@code cuuint64_t}. Unlike {@code cuMemGetInfo}, which answers for the whole
+	 * DEVICE, this is scoped to the pool HANDLE it is asked of -- a process-local count
+	 * that another process's allocations, sharing the same physical memory, do not move
+	 * (see {@code CudaGemm.poolBytesInUse}).
+	 */
+	static final int MEMPOOL_ATTR_USED_MEM_CURRENT = 7;
+
 	static final ValueLayout.OfInt I = ValueLayout.JAVA_INT;
 
 	static final ValueLayout.OfLong L = ValueLayout.JAVA_LONG;
@@ -110,6 +119,8 @@ final class CudaDriver {
 	private final @Nullable MethodHandle cuMemPoolTrimTo;
 
 	private final @Nullable MethodHandle cuMemPoolSetAttribute;
+
+	private final @Nullable MethodHandle cuMemPoolGetAttribute;
 
 	private final MethodHandle cuMemcpyHtoD;
 
@@ -169,6 +180,7 @@ final class CudaDriver {
 		this.cuDeviceGetDefaultMemPool = optional(lookup, "cuDeviceGetDefaultMemPool", FunctionDescriptor.of(I, P, I));
 		this.cuMemPoolTrimTo = optional(lookup, "cuMemPoolTrimTo", FunctionDescriptor.of(I, P, L));
 		this.cuMemPoolSetAttribute = optional(lookup, "cuMemPoolSetAttribute", FunctionDescriptor.of(I, P, I, P));
+		this.cuMemPoolGetAttribute = optional(lookup, "cuMemPoolGetAttribute", FunctionDescriptor.of(I, P, I, P));
 		this.cuMemcpyHtoD = handle(lookup, "cuMemcpyHtoD_v2", htod, critical);
 		this.cuMemcpyDtoH = handle(lookup, "cuMemcpyDtoH_v2", dtoh, critical);
 		this.cuMemcpyDtoHPinned = handle(lookup, "cuMemcpyDtoH_v2", dtoh);
@@ -369,6 +381,19 @@ final class CudaDriver {
 	 */
 	int memPoolSetAttribute(MemorySegment pool, int attribute, MemorySegment value) throws Throwable {
 		MethodHandle handle = this.cuMemPoolSetAttribute;
+		if (handle == null) {
+			return CuResult.CUDA_ERROR_NOT_SUPPORTED.code();
+		}
+		return (int) handle.invokeExact(pool, attribute, value);
+	}
+
+	/**
+	 * Reads one attribute of a memory pool into {@code value} ({@code cuuint64_t} for
+	 * {@link #MEMPOOL_ATTR_USED_MEM_CURRENT}). Optional in the same sense as the other
+	 * pool calls.
+	 */
+	int memPoolGetAttribute(MemorySegment pool, int attribute, MemorySegment value) throws Throwable {
+		MethodHandle handle = this.cuMemPoolGetAttribute;
 		if (handle == null) {
 			return CuResult.CUDA_ERROR_NOT_SUPPORTED.code();
 		}

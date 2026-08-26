@@ -82,16 +82,47 @@ class GpuTest {
 	private static final String DEVICE_MEMORY = "am.ik.gpu.device-memory";
 
 	/**
-	 * How far free device memory may drift across a leak test before it is called a leak.
-	 * It is deliberately LOOSE, and it had to be widened twice: {@code cuMemGetInfo}
-	 * reports the whole DEVICE, and the rest of the suite runs beside this one -- the JVM
-	 * backend's fork loads a separate copy of this binding, with its own primary context
-	 * and its own PTX module, for every compiled {@code --gpu} class it defines, and
-	 * there are now enough of those to move free memory by ~800 MB on their own. Every
-	 * leak test below is sized so that a real leak is 2-8x this, so widening the bound
-	 * costs the assertion nothing.
+	 * How far free device memory may drift across a leak test before it is called a leak,
+	 * on a driver with no memory pool -- the one case {@link #driftSample} still has to
+	 * ask {@code cuMemGetInfo} for (see {@link #driftBound}). It is deliberately LOOSE,
+	 * and it had to be widened twice: {@code cuMemGetInfo} reports the whole DEVICE, and
+	 * the rest of the suite runs beside this one -- the JVM backend's fork loads a
+	 * separate copy of this binding, with its own primary context and its own PTX module,
+	 * for every compiled {@code --gpu} class it defines, and there are now enough of
+	 * those to move free memory by ~800 MB on their own. Every leak test below is sized
+	 * so that a real leak is 2-8x this, so widening the bound costs the assertion
+	 * nothing.
 	 */
 	private static final long DRIFT_BOUND = 1536L << 20;
+
+	/**
+	 * The same bound where {@link #driftSample} answers from the pool instead --
+	 * {@code CU_MEMPOOL_ATTR_USED_MEM_CURRENT} is scoped to the pool HANDLE it is asked
+	 * of, not the device, so a sibling process's allocations -- another surefire fork, or
+	 * anything else running on the machine at the same time -- do not move it at all
+	 * (.todo/481, seen only in a full {@code ./mvnw test} on a unified-memory machine,
+	 * where {@code cuMemGetInfo}'s free figure is the HOST's free memory too). Measured
+	 * on the GB10 with an unrelated process actively touching 8 GB of host memory
+	 * throughout a 1000-call run: {@code cuMemGetInfo} drifted 1.3 GB and the pool's own
+	 * count did not move at all. So this can be tight -- every leak test below is still
+	 * sized so that a real leak is orders of magnitude past it.
+	 */
+	private static final long POOL_DRIFT_BOUND = 64L << 20;
+
+	/**
+	 * Bytes outstanding right now: the pool's own count when this driver has one, which
+	 * is what every leak test below should be asking, or the device-wide reading as the
+	 * fallback for a driver with no pool, where there is no other number to ask.
+	 */
+	private static long driftSample(GpuDevice gemm) {
+		long pool = ((CudaGemm) gemm).poolBytesInUse();
+		return pool >= 0 ? pool : gemm.freeDeviceMemory();
+	}
+
+	/** The bound that matches what {@link #driftSample} just answered. */
+	private static long driftBound(GpuDevice gemm) {
+		return ((CudaGemm) gemm).poolBytesInUse() >= 0 ? POOL_DRIFT_BOUND : DRIFT_BOUND;
+	}
 
 	/**
 	 * The smallest square product this machine will actually accept, times a safety
@@ -491,14 +522,14 @@ class GpuTest {
 		int n = 1 << 19;
 		double[] a = new double[n], c = new double[n];
 		assertThat(gemm.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
-		long before = gemm.freeDeviceMemory();
+		long before = driftSample(gemm);
 		assertThat(before).isGreaterThan(0);
 		for (int i = 0; i < 1000; i++) {
 			assertThat(gemm.map(Gpu.MAP_EXP, a, 0, c, 0, n)).isTrue();
 		}
 		// 1000 maps of two 4 MB buffers leak 8 GB if they leak at all. See the bound's
 		// reasoning under aRunOfSuccessfulProductsFreesEveryBufferItAllocates.
-		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
+		assertThat(Math.abs(before - driftSample(gemm))).isLessThan(driftBound(gemm));
 	}
 
 	@Test
@@ -695,7 +726,7 @@ class GpuTest {
 		int[] dims = { rows, cols };
 		assertThat(gemm.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, 1 }, y, 0, new int[] { 1, 0 }, out, 0, dims))
 			.isTrue();
-		long before = gemm.freeDeviceMemory();
+		long before = driftSample(gemm);
 		assertThat(before).isGreaterThan(0);
 		for (int i = 0; i < 800; i++) {
 			assertThat(gemm.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, 1 }, y, 0, new int[] { 1, 0 }, out, 0, dims))
@@ -703,7 +734,7 @@ class GpuTest {
 			assertThat(gemm.fold(Gpu.FOLD_SUM, x, 0, y, 0, rows, cols, 1)).isTrue();
 			assertThat(gemm.gather(x, 0, new int[] { 1, cols }, out, 0, new int[] { cols, rows })).isTrue();
 		}
-		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
+		assertThat(Math.abs(before - driftSample(gemm))).isLessThan(driftBound(gemm));
 	}
 
 	@Test
@@ -768,12 +799,12 @@ class GpuTest {
 		int n = 1 << 18;
 		double[] out = new double[n];
 		assertThat(gemm.rngFill(out, 0, n, 1, 0.0, 1.0, 1, 2, 3)).isTrue();
-		long before = gemm.freeDeviceMemory();
+		long before = driftSample(gemm);
 		assertThat(before).isGreaterThan(0);
 		for (int i = 0; i < 1000; i++) {
 			assertThat(gemm.rngFill(out, 0, n, i % 3, 0.0, 1.0, 1, 2, 3)).isTrue();
 		}
-		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
+		assertThat(Math.abs(before - driftSample(gemm))).isLessThan(driftBound(gemm));
 	}
 
 	// --- the matrix-by-vector product (vec:matvec, 2026-08-22) -----------------------
@@ -952,12 +983,12 @@ class GpuTest {
 		double[] w = new double[rows * cols], x = new double[cols], y = new double[rows];
 		assertThat(gemm.gemv(w, 0, x, 0, y, 0, rows, cols)).isFalse();
 		assertThat(gemm.gemv(w, 0, x, 0, y, 0, rows, cols)).isTrue();
-		long before = gemm.freeDeviceMemory();
+		long before = driftSample(gemm);
 		assertThat(before).isGreaterThan(0);
 		for (int i = 0; i < 1000; i++) {
 			assertThat(gemm.gemv(w, 0, x, 0, y, 0, rows, cols)).isTrue();
 		}
-		assertThat(Math.abs(before - gemm.freeDeviceMemory())).isLessThan(DRIFT_BOUND);
+		assertThat(Math.abs(before - driftSample(gemm))).isLessThan(driftBound(gemm));
 	}
 
 	@Test
@@ -970,21 +1001,18 @@ class GpuTest {
 		// One call first, so the driver's pool has reached its working size and the
 		// baseline is the steady state rather than the cold one.
 		assertThat(gemm.gemm(a, 0, b, 0, c, 0, n, n, n)).isTrue();
-		long before = gemm.freeDeviceMemory();
+		long before = driftSample(gemm);
 		assertThat(before).isGreaterThan(0);
 		for (int i = 0; i < 1000; i++) {
 			assertThat(gemm.gemm(a, 0, b, 0, c, 0, n, n, n)).isTrue();
 		}
-		long after = gemm.freeDeviceMemory();
+		long after = driftSample(gemm);
 		// 1000 products of three 1.2 MB buffers leak 3.5 GB if they leak at all, and
 		// leaking ONE of the three still costs 1.2 GB -- so the bound separates the two
-		// outcomes by a wide margin rather than measuring precisely. It cannot be tight:
-		// cuMemGetInfo is a property of the DEVICE, not of this thread, and the JVM
-		// backend's tests run in a second surefire fork where every compiled class
-		// defines its own copy of this binding and loads its own module. The assertion
-		// stays two-sided on purpose: free memory that GREW would mean this is measuring
-		// the rest of the machine rather than the buffers.
-		assertThat(Math.abs(before - after)).isLessThan(DRIFT_BOUND);
+		// outcomes by a wide margin rather than measuring precisely. The assertion stays
+		// two-sided on purpose: free memory that GREW would mean this is measuring the
+		// rest of the machine rather than the buffers.
+		assertThat(Math.abs(before - after)).isLessThan(driftBound(gemm));
 	}
 
 	@Test

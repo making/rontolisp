@@ -896,6 +896,35 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	/**
+	 * Bytes currently outstanding from THIS process's stream-ordered pool, or {@code -1}
+	 * when allocation is unpooled or the driver will not say. {@link #freeDeviceMemory()}
+	 * asks {@code cuMemGetInfo}, which answers for the whole DEVICE -- on a
+	 * unified-memory machine that is the whole MACHINE's free memory, so a sibling
+	 * process (another surefire fork, or anything else running at the same time) moving
+	 * it looks exactly like a leak. {@code CU_MEMPOOL_ATTR_USED_MEM_CURRENT} is scoped to
+	 * the pool HANDLE it is asked of, which this process created and no other process can
+	 * allocate from, so it answers only for what this device object itself has
+	 * outstanding -- the leak test's actual question, asked directly instead of inferred
+	 * from a shared counter.
+	 */
+	long poolBytesInUse() {
+		if (this.memoryPool.equals(MemorySegment.NULL)) {
+			return -1;
+		}
+		try (Arena arena = Arena.ofConfined()) {
+			if (this.driver.ctxSetCurrent(this.context) != CuResult.SUCCESS) {
+				return -1;
+			}
+			MemorySegment value = arena.allocate(L);
+			return this.driver.memPoolGetAttribute(this.memoryPool, CudaDriver.MEMPOOL_ATTR_USED_MEM_CURRENT,
+					value) == CuResult.SUCCESS ? value.get(L, 0) : -1;
+		}
+		catch (Throwable ex) {
+			return -1;
+		}
+	}
+
+	/**
 	 * {@code c = a x b} for a row-major {@code n x m} by {@code m x p} pair of packed
 	 * double-float arrays, each read from its own element offset.
 	 * @return {@code true} when {@code c} was filled, {@code false} when the product
