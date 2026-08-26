@@ -15,8 +15,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.net.Socket;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.reader.LispReader;
 import com.sun.net.httpserver.HttpServer;
@@ -167,6 +171,58 @@ class HttpHandlerTest {
 		// is a no-op.
 		RontoHttpServer.stopServer(handle);
 		assertThatThrownBy(() -> get(port, "/x")).isInstanceOf(IOException.class);
+	}
+
+	@Test
+	void aGracefulShutdownStopsAcceptingAtOnceAndLetsAnInFlightRequestFinish() throws Exception {
+		// What a terminating process does to a served program: the listener closes on
+		// the spot, so nothing new is accepted, while the request the handler is already
+		// inside runs to completion and its client reads a whole response. Before this
+		// the signal halted the JVM where it stood and that response died as a
+		// connection reset.
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		HttpServer server = RontoHttpServer.start(0, request -> {
+			entered.countDown();
+			try {
+				release.await(10, TimeUnit.SECONDS);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			return RontoHttpServer.Response.of(200, List.of(new RontoHttpServer.Header("content-type", "text/plain")),
+					"drained");
+		});
+		int port = server.getAddress().getPort();
+		HttpClient client = HttpClient.newHttpClient();
+		CompletableFuture<HttpResponse<String>> inFlight = client.sendAsync(
+				HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/slow")).GET().build(),
+				HttpResponse.BodyHandlers.ofString());
+		assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+		CompletableFuture<Void> shutdown = CompletableFuture.runAsync(() -> RontoHttpServer.shutdownGracefully(10));
+		// Asserted WHILE the handler is still inside the request: a shutdown that only
+		// closed the listener after the drain would keep accepting here.
+		assertThat(refusesConnectionsWithin(port, Duration.ofSeconds(5))).isTrue();
+		release.countDown();
+		HttpResponse<String> response = inFlight.get(10, TimeUnit.SECONDS);
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.body()).isEqualTo("drained");
+		shutdown.get(10, TimeUnit.SECONDS);
+	}
+
+	// Polls until the port refuses a connection, answering false if it still accepts
+	// after the given wait.
+	private static boolean refusesConnectionsWithin(int port, Duration wait) throws Exception {
+		long deadline = System.nanoTime() + wait.toNanos();
+		while (System.nanoTime() < deadline) {
+			try (Socket ignored = new Socket("127.0.0.1", port)) {
+				Thread.sleep(20);
+			}
+			catch (IOException refused) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	@Test

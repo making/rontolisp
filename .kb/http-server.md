@@ -70,6 +70,43 @@ mount point (`scriptName`, a RAW prefix of the target; `""` on every
 root-mounted transport — only the transport knows where it is mounted, so the
 value enters through the tuple, not through a special case in the library).
 
+## Graceful shutdown (the JDK transports)
+
+**A termination signal drains the JDK server; an explicit stop does not.** The
+first server started in the process installs a shutdown hook
+(`RontoHttpServer.registerServer`) that runs `shutdownGracefully(grace)`:
+`HttpServer.stop(delay)` closes the listener at once, then blocks until the
+in-flight exchanges finish or `delay` seconds elapse -- exactly the drain, and
+the JDK's own accounting of what is in flight, so nothing here counts requests.
+Without the hook SIGTERM halted the JVM where it stood and every in-flight
+response died as a connection reset on the client, which is what made a rolling
+deploy of `-o app.jar` lossy.
+
+- The grace period is `rontolisp.http.shutdown-grace` (system property), else
+  `RONTOLISP_HTTP_SHUTDOWN_GRACE` (environment), else **30 s** -- under
+  Kubernetes' default `terminationGracePeriodSeconds`, past which the SIGKILL
+  makes any longer grace unreachable. A value that is not a non-negative
+  integer falls back to the default rather than refusing to serve.
+- The servers drain CONCURRENTLY, one plain daemon thread each: `stop(delay)`
+  blocks per server, so a sequential loop would give N servers N times the
+  grace period and overrun the deadline it was sized against. A shutdown hook
+  cannot assume an executor of its own is still alive, hence platform threads.
+- `stopServer` (the `%http-server-*` seam, `clack:stop`) stays `stop(0)`. A
+  handler may stop its own server, and a drain there would have the stop wait
+  on the exchange that called it. A signal says the process is going away; an
+  explicit stop says what the program wants.
+- The hook does NOT release `joinServer`'s latches. Waking the main thread
+  mid-shutdown would race arbitrary Lisp against the JVM's halt for no gain --
+  the drain is already done by then.
+- The war and the component take their shutdown from the container and the
+  host; neither owns the socket.
+
+Pinned by `HttpHandlerTest.aGracefulShutdownStopsAcceptingAtOnceAndLetsAnInFlightRequestFinish`
+(the listener is asserted closed WHILE the handler is still inside the request,
+which is what separates a drain from a plain stop) and, on the deployment shape
+it exists for, `RontoLispCliTest.aServedProgramJarDrainsInFlightRequestsWhenTheProcessIsTerminated`
+-- a real `java -jar app.jar` taking a real SIGTERM mid-request.
+
 ## The fifth transport: the Servlet war (`-o app.war`)
 
 A `rontolisp:http-handler` program compiles to a Servlet war that deploys

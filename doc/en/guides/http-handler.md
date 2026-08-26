@@ -280,6 +280,36 @@ released `wasi:http@0.3.0`, so the imports fail to link even with GC turned on
 `--experimental-wasm-feature` option is compiled into canary builds only).
 **jco** cannot run it either — it does not implement the 0.3 async ABI.
 
+## Graceful shutdown
+
+A server started by the directive **drains on the way out**. When the process
+is asked to terminate — SIGTERM from a container or an orchestrator, SIGINT
+from Ctrl-C — the listening socket closes at once, so nothing new is accepted,
+and the requests already being handled are given up to **30 seconds** to
+finish before their connections are cut. A rolling deploy therefore ends with
+whole responses instead of connection resets:
+
+```console
+$ java -jar app.jar &
+$ curl http://127.0.0.1:8080/slow &   # a handler that takes a while
+$ kill %1                             # SIGTERM: the /slow response still arrives
+```
+
+Change the 30 seconds with the `rontolisp.http.shutdown-grace` system property
+or the `RONTOLISP_HTTP_SHUTDOWN_GRACE` environment variable, in seconds; `0`
+cuts in-flight requests immediately. Size it under the deadline your platform
+allows — Kubernetes sends SIGKILL after `terminationGracePeriodSeconds`
+(30 by default), and a grace period longer than that is never reached.
+
+This is the JDK server behind the interpreter and the compiled JVM class or
+jar. A [Servlet war](#compiled-to-a-servlet-war) drains the way its container
+does, and a [WASI component](#compiled-to-a-wasi-http-component) the way its
+host does; neither owns the socket, so neither takes its shutdown from here.
+
+An explicit stop from inside the program (`clack:stop`) is *not* graceful, and
+deliberately so: a handler may stop its own server, and waiting there would
+have the stop wait on the very request that asked for it.
+
 ## Query strings
 
 `:path-info` carries the (percent-decoded) path only, so route comparisons

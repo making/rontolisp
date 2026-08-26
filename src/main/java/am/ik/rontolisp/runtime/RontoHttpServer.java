@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -199,6 +200,27 @@ public final class RontoHttpServer {
 	private static final AtomicLong NEXT_HANDLE = new AtomicLong(1);
 
 	/**
+	 * System property naming the graceful-shutdown grace period in SECONDS -- how long a
+	 * terminating process lets requests already being served finish before their
+	 * connections are cut. {@code 0} cuts them at once (the pre-graceful behaviour).
+	 */
+	private static final String GRACE_PROPERTY = "rontolisp.http.shutdown-grace";
+
+	/** The environment variable behind {@link #GRACE_PROPERTY}, for a container. */
+	private static final String GRACE_ENV = "RONTOLISP_HTTP_SHUTDOWN_GRACE";
+
+	/**
+	 * The grace period when neither {@link #GRACE_PROPERTY} nor {@link #GRACE_ENV} says
+	 * otherwise: 30 seconds, under Kubernetes' default 30 s
+	 * {@code terminationGracePeriodSeconds}, so the drain finishes before the SIGKILL
+	 * that follows the SIGTERM.
+	 */
+	private static final int DEFAULT_GRACE_SECONDS = 30;
+
+	// Installed by the first server started in this process (registerServer).
+	private static final AtomicBoolean SHUTDOWN_HOOK_INSTALLED = new AtomicBoolean();
+
+	/**
 	 * Starts an embedded HTTP server bound to the given address and port and returns an
 	 * opaque handle for {@link #joinServer} / {@link #stopServer} -- the stoppable seam
 	 * behind the internal {@code rontolisp::%http-server-start} function (the
@@ -232,7 +254,7 @@ public final class RontoHttpServer {
 		server.createContext("/", exchange -> dispatch(exchange, handler));
 		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 		server.start();
-		SERVERS.add(server);
+		registerServer(server);
 		long handle = NEXT_HANDLE.getAndIncrement();
 		HANDLES.put(handle, new StoppableServer(server, new CountDownLatch(1)));
 		return handle;
@@ -308,7 +330,7 @@ public final class RontoHttpServer {
 		// servers never keep the JVM alive.
 		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 		server.start();
-		SERVERS.add(server);
+		registerServer(server);
 		return server;
 	}
 
@@ -316,17 +338,111 @@ public final class RontoHttpServer {
 	 * Start an embedded HTTP server and block the calling thread forever (serving until
 	 * the process is stopped, e.g. with Ctrl-C). This is what the
 	 * {@code rontolisp:http-handler} directive calls on the interpreter and JVM backends.
+	 * <p>
+	 * The termination signal that ends it drains first: the hook {@link #start} installed
+	 * closes the listener and lets in-flight requests finish
+	 * ({@link #shutdownGracefully}).
 	 * @param port the TCP port to bind
 	 * @param handler the request handler
 	 */
 	public static void serve(int port, Handler handler) {
 		start(port, handler);
 		try {
-			// Serve forever; the JVM exits on SIGINT regardless of this latch.
+			// Serve forever; the JVM exits on SIGINT regardless of this latch -- and the
+			// shutdown hook drains the server on the way out, so this thread never has to
+			// wake up to shut anything down.
 			new CountDownLatch(1).await();
 		}
 		catch (InterruptedException ex) {
 			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * Stops every server started in this process GRACEFULLY: each listening socket is
+	 * closed at once, so nothing new is accepted, and the requests already being served
+	 * are given up to {@code graceSeconds} to finish before their connections are cut.
+	 * The shutdown hook the first server of the process installs runs exactly this when
+	 * the process is asked to terminate (SIGTERM from a container or an orchestrator,
+	 * SIGINT from Ctrl-C), which is what makes a {@code java -jar app.jar} deployment of
+	 * a {@code rontolisp:http-handler} program safe to roll: without it the JVM halted
+	 * the instant the signal arrived and every in-flight response died as a connection
+	 * reset on the client.
+	 * <p>
+	 * It is NOT what an explicit {@code stopServer} does. A handler may stop its own
+	 * server (an application with a shutdown endpoint), and draining there would have the
+	 * stop wait on the very exchange that called it; a program that asks for a stop has
+	 * said what it wants, while a signal says only that the process is going away.
+	 * @param graceSeconds how long to let in-flight requests finish, {@code 0} to cut
+	 * them at once
+	 */
+	public static void shutdownGracefully(int graceSeconds) {
+		final List<HttpServer> live = List.copyOf(SERVERS);
+		if (live.isEmpty()) {
+			return;
+		}
+		SERVERS.removeAll(live);
+		// One thread per server rather than a loop: stop(delay) blocks until that
+		// server's in-flight exchanges have finished, so draining N of them in sequence
+		// would take N times the grace period and overrun the deadline the grace period
+		// was sized against. Plain daemon threads -- a shutdown hook cannot assume any
+		// executor of its own is still running.
+		final List<Thread> draining = new ArrayList<>();
+		for (HttpServer server : live) {
+			draining
+				.add(Thread.ofPlatform().daemon().name("rontolisp-http-drain").start(() -> server.stop(graceSeconds)));
+		}
+		for (Thread thread : draining) {
+			try {
+				thread.join();
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+		}
+	}
+
+	/**
+	 * The graceful-shutdown grace period in seconds: the
+	 * {@code rontolisp.http.shutdown-grace} system property, else the
+	 * {@code RONTOLISP_HTTP_SHUTDOWN_GRACE} environment variable, else 30. A value that
+	 * is not a non-negative integer is ignored rather than fatal -- a misspelled
+	 * deployment variable must not stop a server from serving.
+	 * @return the grace period in seconds
+	 */
+	public static int shutdownGraceSeconds() {
+		String configured = System.getProperty(GRACE_PROPERTY);
+		if (configured == null || configured.isBlank()) {
+			configured = System.getenv(GRACE_ENV);
+		}
+		if (configured == null || configured.isBlank()) {
+			return DEFAULT_GRACE_SECONDS;
+		}
+		try {
+			final int seconds = Integer.parseInt(configured.trim());
+			return seconds < 0 ? DEFAULT_GRACE_SECONDS : seconds;
+		}
+		catch (NumberFormatException ex) {
+			return DEFAULT_GRACE_SECONDS;
+		}
+	}
+
+	// Tracks a started server and, on the first one, installs the shutdown hook that
+	// drains them all. Installing it lazily keeps a program that never serves free of
+	// the hook (and of this class's initialization order mattering).
+	private static void registerServer(HttpServer server) {
+		SERVERS.add(server);
+		if (!SHUTDOWN_HOOK_INSTALLED.compareAndSet(false, true)) {
+			return;
+		}
+		try {
+			Runtime.getRuntime()
+				.addShutdownHook(
+						new Thread(() -> shutdownGracefully(shutdownGraceSeconds()), "rontolisp-http-shutdown"));
+		}
+		catch (IllegalStateException ex) {
+			// Shutdown is already under way; there is nothing left to install it for.
 		}
 	}
 

@@ -1,16 +1,27 @@
 package am.ik.rontolisp.cli;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.net.ServerSocket;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -200,6 +211,113 @@ class RontoLispCliTest {
 		assertThat(new String(entries(jar).get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8))
 			.contains("Main-Class: App");
 		assertThat(runJar(jar)).isEqualTo("3\n");
+	}
+
+	@Test
+	void aServedProgramJarDrainsInFlightRequestsWhenTheProcessIsTerminated() throws Exception {
+		// The deployment shape the graceful shutdown exists for: `java -jar app.jar`
+		// serving, then SIGTERM from whatever is rolling it. The request the handler is
+		// already inside has to come back whole -- before the drain the JVM halted where
+		// it stood and the client read a connection reset instead of a response.
+		int port = freePort();
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, """
+				(defun handle (env)
+				  (cond ((string= (getf env :path-info) "/slow")
+				         (format t "slow-begin~%%")
+				         (finish-output)
+				         (sleep 1)
+				         (list 200 '(:content-type "text/plain") (list "slow-done")))
+				        (t (list 200 '(:content-type "text/plain") (list "ready")))))
+
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port));
+		Path jar = this.tempDir.resolve("app.jar");
+		runCli("", program.toString(), "-o", jar.toString());
+		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-jar",
+				jar.toString())
+			.redirectErrorStream(true)
+			.start();
+		StringBuilder output = new StringBuilder();
+		Thread reader = Thread.ofVirtual().start(() -> readInto(process, output));
+		try {
+			awaitReady(port, process, output);
+			HttpClient client = HttpClient.newHttpClient();
+			CompletableFuture<HttpResponse<String>> inFlight = client.sendAsync(
+					HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/slow")).GET().build(),
+					HttpResponse.BodyHandlers.ofString());
+			// The signal must land while the handler is INSIDE the request; the handler
+			// says so on stdout before it starts sleeping.
+			assertThat(awaitOutput(output, "slow-begin", Duration.ofSeconds(20)))
+				.describedAs("the served jar said:%n%s", output)
+				.isTrue();
+			process.destroy(); // SIGTERM
+			HttpResponse<String> response = inFlight.get(30, TimeUnit.SECONDS);
+			assertThat(response.statusCode()).isEqualTo(200);
+			assertThat(response.body()).isEqualTo("slow-done");
+			assertThat(process.waitFor(30, TimeUnit.SECONDS)).describedAs("the terminated jar never exited").isTrue();
+		}
+		finally {
+			process.destroyForcibly();
+			reader.join();
+		}
+	}
+
+	// A free TCP port (bound then released; a tiny race, acceptable for a test).
+	private static int freePort() throws IOException {
+		try (ServerSocket socket = new ServerSocket(0)) {
+			return socket.getLocalPort();
+		}
+	}
+
+	// Drains the spawned jar's merged output into the buffer the test polls.
+	private static void readInto(Process process, StringBuilder output) {
+		try (BufferedReader lines = new BufferedReader(
+				new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+			for (String line = lines.readLine(); line != null; line = lines.readLine()) {
+				synchronized (output) {
+					output.append(line).append('\n');
+				}
+			}
+		}
+		catch (IOException closed) {
+			// The process went away mid-read; whatever it said is already in the buffer.
+		}
+	}
+
+	private static boolean awaitOutput(StringBuilder output, String marker, Duration wait) throws Exception {
+		long deadline = System.nanoTime() + wait.toNanos();
+		while (System.nanoTime() < deadline) {
+			synchronized (output) {
+				if (output.indexOf(marker) >= 0) {
+					return true;
+				}
+			}
+			Thread.sleep(20);
+		}
+		return false;
+	}
+
+	// Polls the spawned server until it answers, so the test never races its start-up.
+	private static void awaitReady(int port, Process process, StringBuilder output) throws Exception {
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest ping = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/ready"))
+			.timeout(Duration.ofSeconds(2))
+			.GET()
+			.build();
+		long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+		while (System.nanoTime() < deadline) {
+			assertThat(process.isAlive()).describedAs("the served jar died before serving:%n%s", output).isTrue();
+			try {
+				if (client.send(ping, HttpResponse.BodyHandlers.ofString()).statusCode() == 200) {
+					return;
+				}
+			}
+			catch (IOException notYet) {
+				Thread.sleep(50);
+			}
+		}
+		throw new AssertionError("the served jar never came up on port " + port + ":%n" + output);
 	}
 
 	@Test

@@ -282,6 +282,39 @@ allowed_outbound_hosts = ["https://dog.ceo"]
 `--experimental-wasm-feature` オプションは canary ビルドにのみ組み込まれて
 います）。**jco** もまだ実行できません — 0.3 の非同期 ABI が未実装です。
 
+## グレースフルシャットダウン
+
+ディレクティブが起動したサーバは、**終了時にドレインします**。プロセスに
+終了が要求されると — コンテナやオーケストレータからの SIGTERM、Ctrl-C に
+よる SIGINT — 待ち受けソケットは直ちに閉じられて新しい接続を受け付けなく
+なり、すでに処理中のリクエストには接続を切る前に最大 **30 秒** の猶予が
+与えられます。ローリングデプロイの終わりに接続リセットではなく完全な
+レスポンスが返るのはこのためです:
+
+```console
+$ java -jar app.jar &
+$ curl http://127.0.0.1:8080/slow &   # a handler that takes a while
+$ kill %1                             # SIGTERM: the /slow response still arrives
+```
+
+30 秒という値は `rontolisp.http.shutdown-grace` システムプロパティ、または
+`RONTOLISP_HTTP_SHUTDOWN_GRACE` 環境変数（単位は秒）で変更できます。`0` に
+すると処理中のリクエストも直ちに切断されます。値はプラットフォームが許す
+期限より短く設定してください — Kubernetes は
+`terminationGracePeriodSeconds`（デフォルト 30）の経過後に SIGKILL を送るため、
+それより長い猶予期間は決して使い切れません。
+
+これはインタープリタとコンパイル済み JVM クラス / jar が使う JDK サーバの
+振る舞いです。[Servlet war](#compiled-to-a-servlet-war) はコンテナの流儀で、
+[WASI コンポーネント](#compiled-to-a-wasi-http-component)はホストの流儀で
+ドレインします。どちらもソケットを所有していないため、シャットダウンの
+扱いはここには従いません。
+
+プログラム内部からの明示的な停止（`clack:stop`）はグレースフルでは
+**ありません**。これは意図的な設計です。ハンドラが自分自身のサーバを停止
+することがあり、そこで待ってしまうと停止を要求したリクエスト自身を待つ
+ことになるためです。
+
 ## クエリ文字列
 
 `:path-info` は（パーセントデコード済みの）パスのみを保持するため、
