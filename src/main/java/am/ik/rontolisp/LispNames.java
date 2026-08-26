@@ -768,6 +768,21 @@ public final class LispNames {
 	public static final String LOAD_PRINT_VAR = "*LOAD-PRINT*";
 
 	/**
+	 * The {@code *compile-verbose*} standard variable -- nil on every backend, for the
+	 * same reason as {@link #LOAD_VERBOSE_VAR}: there is no {@code compile-file} here to
+	 * announce anything. Portable sources READ it to decide whether to narrate a long
+	 * build step (cl-unicode's UCD pass is one), and an unbound variable is a hard error
+	 * there.
+	 */
+	public static final String COMPILE_VERBOSE_VAR = "*COMPILE-VERBOSE*";
+
+	/**
+	 * The {@code *compile-print*} standard variable -- nil on every backend, for the same
+	 * reason as {@link #COMPILE_VERBOSE_VAR}.
+	 */
+	public static final String COMPILE_PRINT_VAR = "*COMPILE-PRINT*";
+
+	/**
 	 * The {@code remove} built-in function (return a copy without items eql to the given
 	 * one).
 	 */

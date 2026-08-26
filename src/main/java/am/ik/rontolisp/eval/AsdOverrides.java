@@ -58,7 +58,15 @@ public final class AsdOverrides {
 			// path-template.lisp substituted with the ppcre-free matcher via
 			// ShimLibraries.leafModuleForms). The primary system is declared
 			// verbatim, so plain (ql:quickload "tiny-routes") is unchanged.
-			Map.entry("tiny-routes.asd", "tiny-routes-lite.asd"));
+			Map.entry("tiny-routes.asd", "tiny-routes-lite.asd"),
+			// Not unparseable but UNREACHABLE as written: cl-unicode/build declares
+			// :output-files and performs load-op by writing the three components the
+			// primary system names and the release does not ship, wired in through a
+			// component-depends-on method on prepare-op. None of that exists in the
+			// defsystem-as-data subset; rontolisp generates those three components
+			// from the same bundled UCD data instead (ClUnicodeTables), so the
+			// replacement drops the build system and the dependency on it.
+			Map.entry("cl-unicode.asd", "cl-unicode-built.asd"));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

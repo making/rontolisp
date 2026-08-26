@@ -552,7 +552,7 @@ public final class LoadInliner {
 				spliceSystem(dependency, out, ctx, system.baseDir());
 			}
 			for (String file : system.files()) {
-				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file);
+				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), ctx.loader());
 				if (leafShim != null) {
 					// A substituted leaf module: splice the shim forms in the file's
 					// place (they carry the replaced file's defpackage, no in-package,

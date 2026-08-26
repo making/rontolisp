@@ -447,6 +447,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/cl-unicode-built\\.asd"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.GrayStreamsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/gray\\.lisp"

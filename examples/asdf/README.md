@@ -3,7 +3,8 @@
 These demos load REAL third-party Common Lisp libraries — unmodified upstream
 sources — through `asdf:load-system` and exercise their public API. All run
 identically on all four backends (interpreter, JVM, WASM Preview 1,
-`--component`), and each is pinned by its own cross-backend E2E test.
+`--component`), and each is pinned by its own cross-backend E2E test —
+`str-demo.lisp` excepted, which is interpreter-only and says why in its header.
 
 | Demo | Library | Upstream |
 | --- | --- | --- |
@@ -25,6 +26,7 @@ identically on all four backends (interpreter, JVM, WASM Preview 1,
 | [`uax-15-demo.lisp`](uax-15-demo.lisp) | uax-15 v0.1.3 (MIT) | <https://github.com/sabracrolleton/uax-15> |
 | [`tiny-routes-demo.lisp`](tiny-routes-demo.lisp) | tiny-routes v0.1.1 (BSD 3-Clause). For a size-constrained module load the opt-in `"tiny-routes/lite"`, which drops the cl-ppcre dependency — see the [asdf-systems guide](../../doc/en/guides/asdf-systems.md) | <https://github.com/jeko2000/tiny-routes> |
 | [`clack-hello.lisp`](clack-hello.lisp) | clack v2.1.0 + lack (MIT), served by the built-in `clack-handler-rontolisp` backend; loads via `ql:quickload` (network on the first run) | <https://github.com/fukamachi/clack> |
+| [`str-demo.lisp`](str-demo.lisp) | cl-str 0.21 (MIT) over cl-unicode 0.1.6 (BSD 2-Clause) and cl-ppcre-unicode; loads via `ql:quickload` (network on the first run). **Interpreter only** — cl-unicode's ~5 MB of generated tables are more than one `.class` can name. It is also the one library whose sources are incomplete as shipped: three of its eight components do not exist in the release, and rontolisp generates them from the bundled Unicode character database at load time, in place of the second ASDF system that would normally write them to disk | <https://github.com/vindarel/cl-str> |
 
 jzon's three numeric leaf components (the eisel-lemire float reader and
 Schubfach float printer) are replaced at load time by built-in shims over

@@ -1905,6 +1905,10 @@ final class JvmReadRuntimeBuilder {
 		charName(a, "cr", 13);
 		charName(a, "page", 12);
 		charName(a, "backspace", 8);
+		charName(a, "vt", 11);
+		charName(a, "vertical-tab", 11);
+		charName(a, "bell", 7);
+		charName(a, "bel", 7);
 		charName(a, "nul", 0);
 		charName(a, "null", 0);
 		charName(a, "rubout", 127);

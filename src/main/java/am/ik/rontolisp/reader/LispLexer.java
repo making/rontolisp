@@ -591,11 +591,28 @@ public final class LispLexer {
 			case "return", "cr" -> '\r';
 			case "page" -> '\f';
 			case "backspace" -> '\b';
+			case "vt", "vertical-tab" -> 11;
+			case "bell", "bel" -> 7;
 			case "nul", "null" -> 0;
 			case "rubout", "delete", "del" -> 127;
 			case "escape", "altmode", "esc" -> 27;
-			default -> throw errAt(literalStart, "Unknown character name: #\\" + name);
+			default -> unicodeCharByName(name, literalStart);
 		};
+	}
+
+	// The long spelling: a Unicode character NAME, which is how a portable source names
+	// a character with no short name (#\No-break_space, #\Ideographic_space). The name is
+	// written with underscores for the spaces in the UCD name, and matched
+	// case-insensitively. Source is read by this lexer on every backend -- the table is
+	// the host JDK's, and none of it travels into a compiled program -- so a name that
+	// reads here reads on all four.
+	private int unicodeCharByName(String name, int literalStart) {
+		try {
+			return Character.codePointOf(name.replace('_', ' ').toUpperCase(java.util.Locale.ROOT));
+		}
+		catch (IllegalArgumentException ex) {
+			throw errAt(literalStart, "Unknown character name: #\\" + name);
+		}
 	}
 
 	private Token.SymbolToken readSymbol() {

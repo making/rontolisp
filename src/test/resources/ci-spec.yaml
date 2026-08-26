@@ -11293,6 +11293,43 @@ cases:
       #<E443!>
       #<E443!>
 
+  - name: radix-directive-non-number
+    source: |
+      ;; CLHS 22.3.2: ~D/~B/~O/~X/~R given a non-integer print it as if by ~A in
+      ;; decimal. The runtime renderer always did; the static (literal control
+      ;; string) expansion died in the digit loop instead, so the two paths have to
+      ;; be checked together -- the last line goes through the runtime renderer
+      ;; because the control string is a variable.
+      (print (format nil "HANGUL SYLLABLE ~X" "GA"))
+      (print (format nil "~X ~O ~B ~4R" 255 255 5 255))
+      (print (format nil "~:D ~@D ~D" 1234567 42 "str"))
+      (print (format nil "~:D ~@D ~R" "no" 'sym 1/2))
+      (print (let ((c "~X ~:D") (v "GA")) (format nil c v 1234567)))
+    expected: |
+      "HANGUL SYLLABLE GA"
+      "FF 377 101 3333"
+      "1,234,567 +42 str"
+      "no SYM 1/2"
+      "GA 1,234,567"
+
+  - name: character-names-short-and-unicode
+    source: |
+      ;; #\Vt is the semi-standard name for U+000B (a portable whitespace list is
+      ;; written with it); a character with no short name is spelled by its UNICODE
+      ;; NAME, spaces written as underscores. Source is read by the frontend lexer on
+      ;; every backend, so both spellings resolve identically on all four -- and the
+      ;; SHORT names round-trip through the runtime reader too.
+      (print (list (char-code #\Vt) (char-code #\Bell) (char-code #\vertical-tab)))
+      (print (list (char-code #\No-break_space) (char-code #\Ideographic_space)
+                   (char-code #\GREEK_SMALL_LETTER_ALPHA)))
+      (print (char-code (read-from-string "#\\Vt")))
+      (print (handler-case (read-from-string "#\\Nope") (error (e) :unknown)))
+    expected: |
+      (11 7 11)
+      (160 12288 945)
+      11
+      :UNKNOWN
+
   - name: cyclic-hash-key
     source: |
       ;; A hash table places a key by a DEPTH-CAPPED structural hash and decides it

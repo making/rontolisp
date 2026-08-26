@@ -20352,7 +20352,11 @@ public final class LispMacroExpander {
 		List<LispVal> bindings = List.of(listToCons(List.of(nstr, nstrInit)), listToCons(List.of(neg, negInit)),
 				listToCons(List.of(dig, digInit)));
 		LispVal body = fmtCall(LispNames.STRING_CONCAT, sign, grouped);
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
+		LispVal digits = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
+		// The same CLHS 22.3.2 rule as radixIntegerExpr, and the same runtime renderer
+		// to agree with (%fmt-dec). Plain ~D is already princ-to-string; this is the
+		// ~:D / ~@D arm, which would otherwise compare a non-number against zero.
+		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_TO_STRING, arg));
 	}
 
 	/** Builds the comma-grouping loop over a string of digits. */
@@ -20836,7 +20840,13 @@ public final class LispMacroExpander {
 				listToCons(List.of(listToCons(List.of(g, gInit)))), fmtCall(LispNames.STRING_CONCAT, sign, grouped)));
 		List<LispVal> bindings = List.of(listToCons(List.of(neg, negInit)), listToCons(List.of(m, mInit)),
 				listToCons(List.of(s, new LispString(""))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), loop, inner));
+		LispVal digits = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), loop, inner));
+		// CLHS 22.3.2: a non-INTEGER argument to ~D/~B/~O/~X/~R prints as if by ~A in
+		// decimal. The runtime renderer already answers that (%fmt-radix's own guard);
+		// without the same guard here the two paths disagree, and the static one dies
+		// inside the digit loop -- cl-unicode spells a Hangul syllable name with
+		// (format nil "HANGUL SYLLABLE ~X" "GA").
+		return makeIf(fmtCall(LispNames.INTEGERP, arg), digits, fmtCall(LispNames.PRINC_TO_STRING, arg));
 	}
 
 	/**
@@ -32137,7 +32147,8 @@ public final class LispMacroExpander {
 		}
 		for (String name : List.of(LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
 				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READTABLE_VAR,
-				LispNames.MODULES_VAR, LispNames.LOAD_VERBOSE_VAR, LispNames.LOAD_PRINT_VAR)) {
+				LispNames.MODULES_VAR, LispNames.LOAD_VERBOSE_VAR, LispNames.LOAD_PRINT_VAR,
+				LispNames.COMPILE_VERBOSE_VAR, LispNames.COMPILE_PRINT_VAR)) {
 			for (LispVal form : program) {
 				if (usesSymbol(form, name)) {
 					loadContextVars.add(name);

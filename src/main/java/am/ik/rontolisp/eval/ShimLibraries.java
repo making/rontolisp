@@ -203,9 +203,19 @@ public final class ShimLibraries {
 	 * @param systemName the ASDF system name (canonical lower-case)
 	 * @param componentFile the component source file, relative to the system's base
 	 * directory
+	 * @param baseDir the system's base directory (a GENERATED component's data files
+	 * resolve against it)
+	 * @param loader the loader those data files are read through
 	 * @return the shim forms, or {@code null} when the real file should be loaded
 	 */
-	@Nullable public static List<LispVal> leafModuleForms(String systemName, String componentFile) {
+	@Nullable public static List<LispVal> leafModuleForms(String systemName, String componentFile, @Nullable String baseDir,
+			SourceLoader loader) {
+		if (ClUnicodeTables.SYSTEM.equals(systemName) && ClUnicodeTables.generates(componentFile)) {
+			// Not a substitution but a GENERATION: the component does not exist in the
+			// release at all, and the build system that would have written it is outside
+			// the defsystem subset (see ClUnicodeTables).
+			return ClUnicodeTables.forms(componentFile, baseDir, loader);
+		}
 		Map<String, String> modules = LEAF_MODULES.get(systemName);
 		String resource = modules == null ? null : modules.get(componentFile);
 		if (resource == null) {
@@ -240,6 +250,9 @@ public final class ShimLibraries {
 		}
 		else if (QuriEtldTables.SYSTEM.equals(systemName)) {
 			rewritten = QuriEtldTables.rewrite(componentFile, source, baseDir);
+		}
+		else if (ClPpcreSharedSubseq.SYSTEM.equals(systemName)) {
+			rewritten = ClPpcreSharedSubseq.rewrite(componentFile, source);
 		}
 		return rewritten == null ? source : rewritten;
 	}

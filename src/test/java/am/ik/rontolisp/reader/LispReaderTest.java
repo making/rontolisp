@@ -3,6 +3,7 @@ package am.ik.rontolisp.reader;
 import java.util.List;
 
 import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInstance;
@@ -117,6 +118,24 @@ class LispReaderTest {
 		assertThat(ex.location().line()).isEqualTo(1);
 		assertThat(ex.location().column()).isGreaterThan(1);
 		assertThat(ex.location().file()).isEqualTo("lib.lisp");
+	}
+
+	@Test
+	void readsTheSemiStandardAndTheUnicodeCharacterNames() {
+		// The short names first: #\Vt is the one every implementation spells for
+		// U+000B, and it is what a portable whitespace list is written with.
+		assertThat(LispReader.readFromString("#\\Vt")).isEqualTo(new LispChar(11));
+		assertThat(LispReader.readFromString("#\\vertical-tab")).isEqualTo(new LispChar(11));
+		assertThat(LispReader.readFromString("#\\Bell")).isEqualTo(new LispChar(7));
+		// Then the long one: a character with no short name is spelled by its UNICODE
+		// NAME, with the spaces written as underscores. The table is the host JDK's and
+		// source is read here on every backend, so a name that reads reads on all four.
+		assertThat(LispReader.readFromString("#\\No-break_space")).isEqualTo(new LispChar(0x00A0));
+		assertThat(LispReader.readFromString("#\\Ideographic_space")).isEqualTo(new LispChar(0x3000));
+		assertThat(LispReader.readFromString("#\\GREEK_SMALL_LETTER_ALPHA")).isEqualTo(new LispChar(0x03B1));
+		// A name that is neither still names itself in the error.
+		assertThatThrownBy(() -> LispReader.readFromString("#\\Nope")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unknown character name: #\\Nope");
 	}
 
 	@Test

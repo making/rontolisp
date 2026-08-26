@@ -319,6 +319,32 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void parsesTheBundledClUnicodeReplacementAsd() {
+		// Upstream's cl-unicode.asd declares four systems, two of which are outside the
+		// defsystem-as-data subset: cl-unicode/build declares :output-files and performs
+		// load-op by WRITING the three components the primary system names and the
+		// release does not ship, wired in by a component-depends-on method on prepare-op.
+		// rontolisp generates those three itself (ClUnicodeTables), so the replacement
+		// drops the build system and the test system with it.
+		String source = AsdOverrides.replacementSource("cl-unicode.asd");
+		assertThat(source).isNotNull();
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/cl-unicode.asd",
+				Features.INTERPRETER);
+		assertThat(systems).hasSize(2);
+		assertThat(systems.get(0).name()).isEqualTo("cl-unicode/base");
+		assertThat(systems.get(0).dependsOn()).containsExactly("cl-ppcre");
+		assertThat(systems.get(0).files()).containsExactly("packages.lisp", "specials.lisp", "util.lisp");
+		assertThat(systems.get(1).name()).isEqualTo("cl-unicode");
+		assertThat(systems.get(1).dependsOn()).containsExactly("cl-unicode/base");
+		assertThat(systems.get(1).files()).containsExactly("conditions.lisp", "lists.lisp", "hash-tables.lisp",
+				"api.lisp", "methods.lisp", "test-functions.lisp", "derived.lisp", "alias.lisp");
+		// The three generated ones are exactly the ones ClUnicodeTables answers for.
+		for (String generated : List.of("lists.lisp", "hash-tables.lisp", "methods.lisp")) {
+			assertThat(ClUnicodeTables.generates(generated)).isTrue();
+		}
+	}
+
+	@Test
 	void parsesTheBundledDbiReplacementAsd() {
 		// The dbi.asd upstream ships parses fine as data, but its cache selection
 		// rides a thread-capability feature expression that can never match

@@ -202,6 +202,30 @@ interpreter uses `Character.isLetter(int)` and `equalsIgnoreCase`. Those need
 their own membership table (`isLetter`) and a fold-based compare; tracked
 separately, not closed by todo 267.
 
+## Character NAMES in `#\`
+
+Two spellings, and they are resolved in two different places.
+
+- **Short names** (`LispLexer.charByName`, mirrored by the two RUNTIME readers
+  `JvmReadRuntimeBuilder` / `WasmReadRuntimeBuilder`, whose tables must stay in
+  step with it): `Space`, `Newline`/`Linefeed`/`Lf`, `Tab`, `Return`/`Cr`,
+  `Page`, `Backspace`, `Vt`/`Vertical-Tab` (U+000B), `Bell`/`Bel` (U+0007),
+  `Nul`/`Null`, `Rubout`/`Delete`/`Del`, `Escape`/`Altmode`/`Esc`. `Vt` is the
+  one every implementation spells and the one a portable whitespace list is
+  written with (cl-str's `*whitespaces*` is the case that added it).
+- **Unicode names** (`LispLexer.unicodeCharByName` only): a character with no
+  short name is spelled by its UCD name with the spaces written as underscores
+  -- `#\No-break_space`, `#\Ideographic_space`, `#\GREEK_SMALL_LETTER_ALPHA`
+  -- matched case-insensitively through `Character.codePointOf`. Source is read
+  by the frontend lexer on EVERY backend and none of the JDK's table travels
+  into a compiled program, so a name that reads here reads on all four; pinned
+  by the ci-spec case `character-names-short-and-unicode`.
+
+The long spelling is deliberately NOT in the two runtime readers: a
+`(read-from-string "#\\IDEOGRAPHIC_SPACE")` at RUN TIME would need the name
+table inside the artifact, which is exactly the size problem `.todo/545`
+describes for cl-unicode. The short names round-trip through them.
+
 ## Print / read
 
 - `princ` on a CHARACTER prints its glyph via `Character.toString(int)`

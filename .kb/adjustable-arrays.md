@@ -469,6 +469,17 @@ each hop, so a view keeps aliasing an adjustable target after
 `adjust-displaced-arrays-cross-backend` ci-spec case). Rank may differ from the
 target's (vector view over a matrix row).
 
+**A STRING cannot be a displacement target** on any backend: a string is its own
+value type here (`.kb/characters-code-points.md`), not a `LispArray`, so
+`(make-array n :element-type 'character :displaced-to s)` signals
+`MAKE-ARRAY expects an array`. That is the idiom a portable library takes a
+substring with -- cl-ppcre's `nsubseq`, and with it every `regex-replace` with a
+FUNCTION replacement and every `:sharedp t` entry point -- so `eval/ClPpcreSharedSubseq`
+rewrites that one definition to `subseq` (`.kb/asdf.md`). Closing it for good means
+a string VIEW on all four backends, which is `.todo/544`; answering a COPY from
+`make-array` is explicitly not the fix, since it would make every other library's
+displacement silently stop aliasing.
+
 `array-displacement` returns target + offset as TWO values via the syntactic
 multiple-value tier: `isMvProducerForm`/`lowerMvProducer` recognize
 `(array-displacement x)` and read the two internal accessors

@@ -42,6 +42,8 @@ public final class LispHashTable implements LispVal {
 
 	private final boolean equalTest;
 
+	private final boolean equalpTest;
+
 	private final LinkedHashMap<Key, Entry> map = new LinkedHashMap<>();
 
 	/**
@@ -73,7 +75,23 @@ public final class LispHashTable implements LispVal {
 	 * for the default {@code eql} (informational only; lookup is always structural)
 	 */
 	public LispHashTable(boolean equalTest) {
+		this(equalTest, false);
+	}
+
+	/**
+	 * Creates an empty hash table with the given test.
+	 * @param equalTest {@code true} when the table was created with an aggregate test
+	 * ({@code equal} or {@code equalp})
+	 * @param equalpTest {@code true} when that test is {@code equalp} specifically, whose
+	 * keys are folded ({@link LispEquality#equalpKey}) before they are placed
+	 */
+	public LispHashTable(boolean equalTest, boolean equalpTest) {
 		this.equalTest = equalTest;
+		this.equalpTest = equalpTest;
+	}
+
+	private Key key(LispVal val) {
+		return Key.of(this.equalpTest ? LispEquality.equalpKey(val) : val);
 	}
 
 	/**
@@ -83,7 +101,7 @@ public final class LispHashTable implements LispVal {
 	 * @return the stored value, or {@code dflt}
 	 */
 	public LispVal get(LispVal key, LispVal dflt) {
-		Entry e = this.map.get(Key.of(key));
+		Entry e = this.map.get(key(key));
 		return (e == null) ? dflt : e.value();
 	}
 
@@ -94,7 +112,7 @@ public final class LispHashTable implements LispVal {
 	 * @return the stored value
 	 */
 	public LispVal put(LispVal key, LispVal value) {
-		this.map.put(Key.of(key), new Entry(key, value));
+		this.map.put(key(key), new Entry(key, value));
 		return value;
 	}
 
@@ -104,7 +122,7 @@ public final class LispHashTable implements LispVal {
 	 * @return {@code true} if an entry was removed
 	 */
 	public boolean remove(LispVal key) {
-		return this.map.remove(Key.of(key)) != null;
+		return this.map.remove(key(key)) != null;
 	}
 
 	/**

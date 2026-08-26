@@ -62,6 +62,63 @@ public final class LispEquality {
 	}
 
 	/**
+	 * Folds a value into the key an {@code equalp} hash table places it under: the
+	 * canonical representative of everything {@code equalp} calls the same. A string and
+	 * a character fold to their upper case, a number to its exact rational value (so
+	 * {@code 1}, {@code 1.0} and {@code 2/2} are one key), and a cons folds element-wise.
+	 * Everything else is its own representative -- an ARRAY deliberately included, since
+	 * {@link #equal} on a vector is identity on every backend and a folded copy would
+	 * never find itself. That is a real deviation from ANSI {@code equalp} tables and is
+	 * recorded in {@code .kb/hash-tables.md}.
+	 *
+	 * <p>
+	 * Folding rather than a second hash/compare pair is what keeps ONE structural table
+	 * behind both tests: {@code equalp} on two values is {@link #equal} on their folds,
+	 * so the existing {@link #hash} / {@link #equal} pair -- and every backend's own copy
+	 * of it -- carries {@code equalp} unchanged. The fold must stay in step with the
+	 * {@code equalp} predicate itself, which is defined once in Lisp
+	 * ({@code LispPreludeLibrary}) and shared by all four backends.
+	 * @param v the key as the caller wrote it
+	 * @return the folded key
+	 */
+	public static LispVal equalpKey(LispVal v) {
+		return equalpKey(v, HASH_DEPTH_CAP);
+	}
+
+	// Capped at the same depth as the hash, and for the same reason: a CYCLIC key must
+	// terminate. Past the cap the subtree is its own fold, so the pair (fold, then hash
+	// and equal) still agrees with itself -- what a deep key loses is only the case- and
+	// number-insensitivity below level 64, never a false match.
+	private static LispVal equalpKey(LispVal v, int depth) {
+		if (depth <= 0) {
+			return v;
+		}
+		return switch (v) {
+			case LispString string -> new LispString(string.value().toUpperCase(java.util.Locale.ROOT));
+			case LispChar character -> new LispChar(Character.toUpperCase(character.codePoint()));
+			case LispDouble number -> exactRational(number.value());
+			case LispCons cons -> new LispCons(equalpKey(cons.car(), depth - 1), equalpKey(cons.cdr(), depth - 1));
+			default -> v;
+		};
+	}
+
+	/**
+	 * The exact rational value of a double, so a float and the integer or ratio it equals
+	 * fold to one key. A non-finite value has no rational value and is its own key.
+	 */
+	private static LispVal exactRational(double value) {
+		if (Double.isNaN(value) || Double.isInfinite(value)) {
+			return new LispDouble(value);
+		}
+		java.math.BigDecimal decimal = new java.math.BigDecimal(value);
+		java.math.BigInteger scaled = decimal.unscaledValue();
+		int scale = decimal.scale();
+		java.math.BigInteger numerator = scale < 0 ? scaled.multiply(java.math.BigInteger.TEN.pow(-scale)) : scaled;
+		java.math.BigInteger denominator = scale > 0 ? java.math.BigInteger.TEN.pow(scale) : java.math.BigInteger.ONE;
+		return LispRatio.valueOf(numerator, denominator);
+	}
+
+	/**
 	 * The structural hash that agrees with {@link #equal}: equal values hash equal.
 	 * @param v the value to hash
 	 * @return the hash

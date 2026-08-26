@@ -660,6 +660,8 @@ public final class Environment implements Scope {
 		// accepted and ignored for the same reason (see LispNames.LOAD_VERBOSE_VAR).
 		env.define(LispNames.LOAD_VERBOSE_VAR, LispNil.INSTANCE);
 		env.define(LispNames.LOAD_PRINT_VAR, LispNil.INSTANCE);
+		env.define(LispNames.COMPILE_VERBOSE_VAR, LispNil.INSTANCE);
+		env.define(LispNames.COMPILE_PRINT_VAR, LispNil.INSTANCE);
 		// *features*: an ordinary special holding the interpreter's feature list. The
 		// compile paths seed the same variable with their own target set
 		// (LispMacroExpander.injectMvSpillGlobal); see .kb/reader-features.md.
@@ -702,6 +704,7 @@ public final class Environment implements Scope {
 			// is
 			// always structural, so :test is informational only (see LispHashTable).
 			boolean equalTest = false;
+			boolean equalpTest = false;
 			for (int i = 0; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw && LispNames.TEST_KEYWORD.equals(kw.name())) {
 					String testName = switch (args.get(i + 1)) {
@@ -709,10 +712,11 @@ public final class Environment implements Scope {
 						case LispFunction f -> f.name();
 						default -> "";
 					};
-					equalTest = "EQUAL".equals(testName) || "EQUALP".equals(testName);
+					equalpTest = LispNames.EQUALP.equals(testName);
+					equalTest = "EQUAL".equals(testName) || equalpTest;
 				}
 			}
-			return new LispHashTable(equalTest);
+			return new LispHashTable(equalTest, equalpTest);
 		}));
 		env.defineFunction(LispNames.GETHASH, new LispFunction(LispNames.GETHASH, args -> {
 			if (args.size() != 2 && args.size() != 3) {

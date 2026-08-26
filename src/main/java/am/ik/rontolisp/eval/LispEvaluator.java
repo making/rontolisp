@@ -483,6 +483,8 @@ public final class LispEvaluator {
 		// The compile paths get the same proclamation from the injected defvar.
 		this.specialVars.add(LispNames.LOAD_VERBOSE_VAR);
 		this.specialVars.add(LispNames.LOAD_PRINT_VAR);
+		this.specialVars.add(LispNames.COMPILE_VERBOSE_VAR);
+		this.specialVars.add(LispNames.COMPILE_PRINT_VAR);
 	}
 
 	/**
@@ -3665,7 +3667,7 @@ public final class LispEvaluator {
 				loadSystem(dependency);
 			}
 			for (String file : system.files()) {
-				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file);
+				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), this.sourceLoader);
 				if (leafShim != null) {
 					// A substituted leaf module: evaluate the shim forms through the
 					// package resolver (the defpackage must register before the

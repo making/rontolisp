@@ -9256,6 +9256,68 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void anEqualpHashTableFoldsItsKeys() {
+		// equalp on two values is equal on their folds, so one structural table carries
+		// both tests. A string and a character fold to upper case, so a key differs from
+		// another only by case is the SAME key -- which is what a case-insensitive
+		// lookup table (cl-unicode's name and property maps) is made with.
+		LispVal result = evalMulti("""
+				(defparameter *p* (make-hash-table :test 'equalp))
+				(setf (gethash "CS" *p*) 'separator)
+				(setf (gethash #\\a *p*) 'letter)
+				(setf (gethash (list "Lu" #\\B) *p*) 'pair)
+				(list (gethash "Cs" *p*) (gethash "cs" *p*) (gethash #\\A *p*)
+				      (gethash (list "LU" #\\b) *p*) (hash-table-count *p*))
+				""");
+		assertThat(result.print()).isEqualTo("(SEPARATOR SEPARATOR LETTER PAIR 3)");
+	}
+
+	@Test
+	void anEqualpHashTableFoldsANumberToItsExactValue() {
+		// equalp compares numbers with =, so a float and the integer or ratio it equals
+		// are one key.
+		LispVal result = evalMulti("""
+				(defparameter *n* (make-hash-table :test 'equalp))
+				(setf (gethash 1 *n*) 'one)
+				(setf (gethash 0.5d0 *n*) 'half)
+				(list (gethash 1.0d0 *n*) (gethash 1/2 *n*) (hash-table-count *n*))
+				""");
+		assertThat(result.print()).isEqualTo("(ONE HALF 2)");
+	}
+
+	@Test
+	void anEqualHashTableStillSeparatesTheCases() {
+		// The fold is the equalp table's alone: an equal table is unchanged.
+		LispVal result = evalMulti("""
+				(defparameter *e* (make-hash-table :test 'equal))
+				(setf (gethash "CS" *e*) 'upper)
+				(list (gethash "Cs" *e*) (gethash "CS" *e*) (hash-table-count *e*))
+				""");
+		assertThat(result.print()).isEqualTo("(NIL UPPER 1)");
+	}
+
+	@Test
+	void aRadixDirectivePrintsANonNumberAsIfByAesthetic() {
+		// CLHS 22.3.2. The runtime renderer always did this; the static expansion of a
+		// literal control string died in the digit loop, which is the path a real
+		// program takes -- cl-unicode spells a Hangul syllable name with
+		// (format nil "HANGUL SYLLABLE ~X" "GA").
+		assertThat(eval("(format nil \"HANGUL SYLLABLE ~X\" \"GA\")").print()).isEqualTo("\"HANGUL SYLLABLE GA\"");
+		assertThat(eval("(format nil \"~:D ~@D ~R\" \"no\" 'sym 1/2)").print()).isEqualTo("\"no SYM 1/2\"");
+		// ... and an integer is unaffected, in every radix.
+		assertThat(eval("(format nil \"~X ~O ~B ~4R ~:D\" 255 255 5 255 1234567)").print())
+			.isEqualTo("\"FF 377 101 3333 1,234,567\"");
+	}
+
+	@Test
+	void theCompileFileReportSwitchesAreBound() {
+		// *compile-verbose* / *compile-print*: nil here (there is no compile-file to
+		// announce anything), but a portable source READS them to decide whether to
+		// narrate a long build step, and an unbound variable is a hard error there.
+		assertThat(eval("(list *compile-verbose* *compile-print*)").print()).isEqualTo("(NIL NIL)");
+	}
+
+	@Test
 	void hashTableIncf() {
 		LispVal result = evalMulti("""
 				(defparameter *h* (make-hash-table :test 'equal))

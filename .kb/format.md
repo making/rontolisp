@@ -53,6 +53,17 @@ lowering from hiding its own constants, and both are shared by all four backends
   into the lowering directly. **The renderer gate calls the same function**, so the
   shape it predicts and the shape the expansion builds cannot diverge -- the same
   rule the gate already follows for the parser itself.
+- **The radix directives answer a NON-NUMBER as if by `~A`** (CLHS 22.3.2): `~D`,
+  `~B`, `~O`, `~X` and `~R` given something that is not an integer print it in
+  `~A` format and decimal base. The RUNTIME renderer always did (`%fmt-dec` /
+  `%fmt-radix` each open with their own guard); the STATIC expansion did not, and
+  died inside the digit loop with `Expected integer` -- so the two paths disagreed
+  on exactly the arguments the guard exists for. `radixIntegerExpr` and
+  `decimalExpr` now close with the same `(if (integerp x) DIGITS
+  (princ-to-string x))` (`numberp` for `~:D`/`~@D`, which is the arm that has an
+  expansion at all -- plain `~D` was already `princ-to-string`). Found through
+  cl-unicode, which spells a Hangul syllable name
+  `(format nil "HANGUL SYLLABLE ~X" (compute-hangul-name cp))` over a STRING.
 - **A piece that IS a `princ-to-string` / `prin1-to-string` call prints straight to
   the destination.** A plain `~a` / `~d` lowers to `(princ-to-string x)` and `~s` to
   `(prin1-to-string x)`; under a `t` destination `formatOutputForms` would have

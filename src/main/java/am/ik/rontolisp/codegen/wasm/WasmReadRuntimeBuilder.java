@@ -79,9 +79,9 @@ final class WasmReadRuntimeBuilder {
 	 * (Space...), which are all here, so print -> read round-trips.
 	 */
 	private static final Object[][] CHAR_NAMES = { { "space", 32 }, { "newline", 10 }, { "linefeed", 10 }, { "lf", 10 },
-			{ "tab", 9 }, { "return", 13 }, { "cr", 13 }, { "page", 12 }, { "backspace", 8 }, { "nul", 0 },
-			{ "null", 0 }, { "rubout", 127 }, { "delete", 127 }, { "del", 127 }, { "escape", 27 }, { "altmode", 27 },
-			{ "esc", 27 } };
+			{ "tab", 9 }, { "return", 13 }, { "cr", 13 }, { "page", 12 }, { "backspace", 8 }, { "vt", 11 },
+			{ "vertical-tab", 11 }, { "bell", 7 }, { "bel", 7 }, { "nul", 0 }, { "null", 0 }, { "rubout", 127 },
+			{ "delete", 127 }, { "del", 127 }, { "escape", 27 }, { "altmode", 27 }, { "esc", 27 } };
 
 	/**
 	 * Interns every blob and message the reader bodies reference and returns the bundle.
