@@ -19,8 +19,9 @@ Jetty, WildFly, a Spring Boot war, a container image someone else maintains.
 
 ## The spike says yes, and says why it is cheap
 
-Run 2026-08-26 on this machine, embedded Tomcat 11.0.24 (Servlet 6.1), adapter
-compiled against `jakarta.servlet-api` 6.0.0.
+Run 2026-08-26 on this machine: embedded Tomcat 11.0.24 (Servlet 6.1) and
+Jetty 12.0.31 EE10, one identical war on both, adapter compiled against
+`jakarta.servlet-api` 6.0.0.
 
 **The seam already exists and is already transport-neutral.** The Clack cutover
 (`.kb/http-server.md`) left `RontoHttpServer` holding two separable halves: the
@@ -42,12 +43,24 @@ javap -p -cp out App
 emitted runtime classes and nothing else. It is one `service` override plus a
 ten-field `Request` fill.
 
-**The war is an ordinary war.** `WEB-INF/classes/App.class` plus the runtime
-classes the `.class` output already writes beside the program
+**And the war needs no `web.xml` and no configuration at all.** A
+`ServletContainerInitializer` annotated
+`@HandlesTypes(RontoHttpServer.Handler.class)` is handed the program class by
+the container -- because implementing `Handler` is already what the JVM backend
+emits -- and registers the servlet at `/*` programmatically. Nothing has to
+carry the class name: not a `web.xml`, not an `<init-param>`, not a generated
+subclass. The war's only non-class file is one 52-byte line:
+
+```
+WEB-INF/classes/META-INF/services/jakarta.servlet.ServletContainerInitializer
+  -> am.ik.rontolisp.runtime.RontoHttpServletInitializer
+```
+
+**The war is otherwise an ordinary war.** `WEB-INF/classes/App.class` plus the
+runtime classes the `.class` output already writes beside the program
 (`RontoHttpServer` + nested types, `RontoHttpClack`, `RontoClackEnv`,
 `RontoHashTable` -- `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES`) plus
-`RontoHttpServlet.class` plus a generated `web.xml`. Deployed with
-`Tomcat.addWebapp`, no container configuration.
+the two adapter classes.
 
 **What the spike verified served correctly**, each by hand against the running
 container:
@@ -64,6 +77,9 @@ container:
 | an `(unsigned-byte 8)` response body | byte-exact (`ff fe 41` out as `ff fe 41`) |
 | `--optimize` | compiles; `handle` is already a shaker root under `usesHttpHandler` |
 | adapter compiled against Servlet 6.0, run on a 6.1 container | works |
+| the SAME war on Tomcat 11 and on Jetty 12 EE10 | works, unmodified |
+| `metadata-complete="true"` in a user `web.xml` | initializer still runs |
+| `<absolute-ordering/>` in a user `web.xml` | initializer still runs |
 
 The byte-exact row is free rather than lucky: `Response` already carries
 `byte[]`, so the todo-341 Phase 3b invariant (`.kb/http-server.md`, "A binary
@@ -75,6 +91,13 @@ The async row is the one that could have gone the other way. `handle` dispatches
 through `_invoke_1` + `_await`, and the JDK transport runs every request on a
 virtual thread; Tomcat's default pool is platform threads. `await` blocks there
 just as happily.
+
+The last two rows are the ones that decide where the service file goes.
+`metadata-complete` and `<absolute-ordering/>` are the two documented ways to
+suppress web-fragment and annotation processing, and neither reaches an
+initializer declared in `WEB-INF/classes` -- both target `WEB-INF/lib` jars. So
+the class-directory placement is not merely convenient (it is what makes the
+Maven route free, `.todo/533`); it is the more robust of the two placements.
 
 ## What is NOT free, and is what the children are
 
@@ -96,7 +119,8 @@ just as happily.
 5. **The Maven route is nearly free and should not be an afterthought**:
    `rontolisp-maven-plugin` already compiles `src/main/lisp` into
    `${project.build.outputDirectory}`, which `maven-war-plugin` copies into
-   `WEB-INF/classes` on its own. `.todo/533`.
+   `WEB-INF/classes` on its own -- and with the initializer there is no
+   `web.xml` for the plugin to generate or for the user to wire up. `.todo/533`.
 
 ## Why a war output and not "write the servlet yourself"
 

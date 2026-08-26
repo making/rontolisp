@@ -2,13 +2,11 @@ package am.ik.rontolisp.runtime;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
 
-import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -20,23 +18,10 @@ import jakarta.servlet.http.HttpServletResponse;
  */
 public final class RontoHttpServlet extends HttpServlet {
 
-	private RontoHttpServer.Handler handler;
+	private final RontoHttpServer.Handler handler;
 
-	@Override
-	public void init() throws ServletException {
-		String className = getInitParameter("rontolisp.program-class");
-		try {
-			Class<?> program = Class.forName(className, true, Thread.currentThread().getContextClassLoader());
-			// SPIKE ONLY: today's compiler runs the top level in main() unless the
-			// program has a jvm-export. A real war compile would run it in <clinit>,
-			// which Class.forName above has already triggered.
-			Method main = program.getMethod("main", String[].class);
-			main.invoke(null, (Object) new String[0]);
-			this.handler = (RontoHttpServer.Handler) program.getDeclaredConstructor().newInstance();
-		}
-		catch (ReflectiveOperationException ex) {
-			throw new ServletException("cannot start rontolisp program " + className, ex);
-		}
+	public RontoHttpServlet(RontoHttpServer.Handler handler) {
+		this.handler = handler;
 	}
 
 	@Override
@@ -61,8 +46,6 @@ public final class RontoHttpServlet extends HttpServlet {
 				headers.add(new RontoHttpServer.Header(name, values.nextElement()));
 			}
 		}
-		// The target as sent: still percent-encoded, query included. getRequestURI()
-		// includes the context path, which is exactly the :script-name problem.
 		String target = req.getRequestURI();
 		if (req.getQueryString() != null) {
 			target = target + "?" + req.getQueryString();

@@ -17,7 +17,10 @@
                               s)
                             ""))))))
 
-;; Register the handler in the single handler slot without holding a port:
-;; the WAR shape a real implementation would emit instead of a blocking serve.
+;; A jvm-export is what makes JvmLispCompiler set topLevelInClinit today: it is
+;; standing in for the war mode flag .todo/530 would add.
+(defun ping () 1)
+(rontolisp:jvm-export 'ping :params '() :returns :s32 :as "ping")
+
 (defvar *server* (rontolisp::%http-server-start #'handler 0 nil :raw-body :buffered))
 (rontolisp::%http-server-stop *server*)

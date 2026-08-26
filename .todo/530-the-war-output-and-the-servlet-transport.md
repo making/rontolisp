@@ -31,40 +31,26 @@ a fixed order, so two compiles of one program are byte-identical
 (`.kb/emitted-output-determinism.md`). Layout:
 
 ```
-WEB-INF/web.xml                                   generated
-WEB-INF/classes/App.class                         the program
-WEB-INF/classes/am/ik/rontolisp/runtime/*.class   the travelling closure + RontoHttpServlet
 META-INF/MANIFEST.MF                              no Main-Class: nobody java -jars a war
+WEB-INF/classes/App.class                         the program
+WEB-INF/classes/am/ik/rontolisp/runtime/*.class   the travelling closure + the two adapter classes
+WEB-INF/classes/META-INF/services/jakarta.servlet.ServletContainerInitializer
 ```
+
+**No `web.xml`, and no file naming the program class.** That last entry is the
+only non-class file in the war, it is one line, and it is the same line in every
+war rontolisp ever emits -- see section 2. `JvmWarWriter` therefore has no
+templating to do at all: it is `JvmJarWriter` with a different entry prefix and
+a different manifest.
 
 No `Main-Class`: a war has no entry point. `Enable-Native-Access` stays --
 inert when unused, and a `--blas`/`--gpu` war still wants it.
 
-The generated `web.xml` names the program class in an `<init-param>` rather
-than baking it into a generated servlet subclass, so one `RontoHttpServlet`
-class file serves every program and a hand-assembled war (the Maven route,
-`.todo/533`) writes the same five lines:
-
-```xml
-<servlet>
-  <servlet-name>rontolisp</servlet-name>
-  <servlet-class>am.ik.rontolisp.runtime.RontoHttpServlet</servlet-class>
-  <init-param>
-    <param-name>rontolisp.program-class</param-name>
-    <param-value>App</param-value>
-  </init-param>
-  <load-on-startup>1</load-on-startup>
-</servlet>
-<servlet-mapping>
-  <servlet-name>rontolisp</servlet-name>
-  <url-pattern>/*</url-pattern>
-</servlet-mapping>
-```
-
-`load-on-startup` is not decoration: without it the program's top level -- every
-`defvar`, every side effect, the whole `(load ...)`-inlined program -- runs on
-the FIRST request instead of at deploy, and a program that fails to initialize
-would look like a slow 500 rather than a failed deployment.
+A user who wants their own `web.xml` (a filter, a security constraint, a
+`<session-config>`) can add one to the war afterwards and the initializer keeps
+working -- verified against both `metadata-complete="true"` and
+`<absolute-ordering/>`, neither of which reaches an initializer declared in
+`WEB-INF/classes`. Emitting one ourselves would take that away for no gain.
 
 CLI plumbing that follows:
 
@@ -82,23 +68,55 @@ CLI plumbing that follows:
   `%http-server-start` is refused at compile time with the reason: there is
   nothing for the container to call.
 
-### 2. The transport: `runtime/RontoHttpServlet`
+### 2. The transport: `runtime/RontoHttpServlet` + `RontoHttpServletInitializer`
 
-The spike's `RontoHttpServlet.java` is close to shippable. One `service`
-override, one ten-field `Request` fill, `init()` resolving the program class.
-Points the spike leaves open:
+Two classes, both in the spike, both close to shippable.
 
-- **`init()` triggers `<clinit>`, not `main`.** `Class.forName(name, true,
-  loader)` runs the top level, and the servlet then instantiates the class as
-  its `Handler`. The spike called `main` reflectively because today's compiler
-  only moves the top level into `<clinit>` when the program has a
-  `rontolisp:jvm-export` (`JvmLispCompiler`'s `topLevelInClinit =
-  !exportDecls.isEmpty()`); war mode forces the same flag on. Failure shape,
-  which belongs in the docs: `_top$run` surfaces a condition nobody caught as
-  `ExceptionInInitializerError`, which poisons the class permanently -- in a
+**`RontoHttpServletInitializer implements ServletContainerInitializer`, annotated
+`@HandlesTypes(RontoHttpServer.Handler.class)`.** The container hands `onStartup`
+every class in the war that implements `Handler`, which is precisely what the
+JVM backend emits for an `http-handler` program -- so the war carries no name,
+no parameter and no generated code. It initializes the class, instantiates it,
+and registers the servlet:
+
+```java
+context.addServlet("rontolisp", new RontoHttpServlet(handler))
+       .addMapping("/*");
+```
+
+Details that are load-bearing rather than incidental:
+
+- **`Class.forName(name, true, loader)` is what runs the top level.** A
+  container loads `@HandlesTypes` candidates WITHOUT initializing them (it must
+  -- initializing every scanned class would be a disaster), so the initializer
+  has to ask. Instantiating would trigger it too; do it explicitly anyway, so
+  the ordering is stated rather than inherited from a side effect.
+- **Today's compiler only puts the top level in `<clinit>` when the program has
+  a `rontolisp:jvm-export`** (`JvmLispCompiler`'s
+  `topLevelInClinit = !exportDecls.isEmpty()`); war mode forces the same flag
+  on. This is not theoretical: the spike war built WITHOUT it deploys, finds the
+  class, and 500s on every request with
+  `NullPointerException: Cannot load from object array` -- the handler slot was
+  never filled because the top level lives in `main` and nothing called it.
+- **Failure shape, for the docs**: `_top$run` surfaces a condition nobody caught
+  as `ExceptionInInitializerError`, which poisons the class permanently -- in a
   container that is a permanently broken context, not a retryable 500. It is the
   reactor's documented failure shape (`.kb/jvm-export.md`), reached here through
-  the container.
+  the container. Catch it in `onStartup` and rethrow as `ServletException` so it
+  fails the DEPLOYMENT, which is where a broken program belongs.
+- **Zero matches, or two.** Zero means a war with no `http-handler` -- refused at
+  compile time (below), so the initializer's message is a backstop. Two means
+  two programs in one war; fail by name rather than pick one. Filter interfaces
+  and abstract classes out of the handed set: containers differ on whether the
+  annotated interface itself appears.
+- **No `load-on-startup` needed**: `onStartup` already ran the top level at
+  deploy, which is the thing `load-on-startup` would have been for. Set it
+  anyway for the servlet itself; it costs a line.
+
+**`RontoHttpServlet`** takes the `Handler` through its constructor -- no
+`init()`, no reflection, nothing to look up. One `service` override plus a
+ten-field `Request` fill.
+
 - **`destroy()` does nothing.** The war holds no port and no thread.
 - **`getServletInfo()`** answers the rontolisp version, so a container's manager
   page says what is deployed.
@@ -107,24 +125,32 @@ Points the spike leaves open:
   rontolisp wars in one container do NOT collide -- strictly better than the
   "one Clack server per process" the shim documents for the JDK transport
   (`.kb/clack.md`). Say so; someone will ask.
-- The adapter compiles against `jakarta.servlet-api` 6.0.0 and was verified
-  running on a Servlet 6.1 container. It touches only `HttpServlet`,
-  `HttpServletRequest`, `HttpServletResponse` and `ServletException`.
+- Both classes compile against `jakarta.servlet-api` 6.0.0 and were verified on
+  a Servlet 6.1 container. Between them they touch `HttpServlet`,
+  `HttpServletRequest`, `HttpServletResponse`, `ServletException`,
+  `ServletContainerInitializer`, `ServletContext`, `ServletRegistration` and
+  `@HandlesTypes`.
+
+**Portability caveat worth one line in the docs**: an embedded Jetty needs
+`AnnotationConfiguration` added to the context before it runs initializers at
+all (a standalone Jetty distribution enables the `annotations` module for a
+deployed webapp on its own). Tomcat needs nothing. That is a property of
+embedding Jetty, not of this war -- but the war E2E will hit it.
 
 ### 3. The invariant this bends, and how
 
 `am.ik.rontolisp.runtime` imports nothing -- not the project, not the build's
 `@Nullable` -- because its class files are COPIED into someone else's artifact
 and anything they imported would become that artifact's dependency
-(`.kb/jvm-export.md`, "What travels"; CLAUDE.md's package rules).
-`RontoHttpServlet` imports `jakarta.servlet`.
+(`.kb/jvm-export.md`, "What travels"; CLAUDE.md's package rules). Both adapter
+classes import `jakarta.servlet`.
 
 The exception is real but it is narrow, and stating it precisely is most of the
 work:
 
-- The class travels on a THIRD list, `WAR_RUNTIME_CLASS_FILES`, reached only by
-  a `.war` output. A `.class` or `.jar` compile never emits it, so no existing
-  artifact gains a dependency.
+- The two classes travel on a THIRD list, `WAR_RUNTIME_CLASS_FILES`, reached
+  only by a `.war` output. A `.class` or `.jar` compile never emits them, so no
+  existing artifact gains a dependency.
 - The dependency it does add is satisfied by definition: a war runs in a servlet
   container, and a container that has no `jakarta.servlet` is not a container.
   This is the same argument `RontoHttpServer`'s `com.sun.net.httpserver` import
@@ -132,8 +158,9 @@ work:
 - `jakarta.servlet-api` enters the root pom in `provided` scope: never in the
   exec jar, never in a `.class`/`.jar` output, never in the native image.
 - `resource-config.json` already globs `am/ik/rontolisp/runtime/.*\.class`, so
-  the class travels into the native binary as a resource with no new entry --
-  verify, do not assume.
+  the classes travel into the native binary as resources with no new entry --
+  verify, do not assume. The service file is emitted as one constant string and
+  needs no resource at all.
 
 Tests that must move with it:
 
@@ -183,14 +210,21 @@ change. Pick one and write down why.
 ## Acceptance
 
 - `java -jar $JAR examples/net/http-handler.lisp -o app.war` produces a war that
-  deploys unmodified on Tomcat and serves.
+  deploys unmodified, with no configuration, on Tomcat AND on Jetty.
 - An E2E (`WarE2eTest`, opt-in like the other served suites) compiles a war and
-  deploys it into embedded Tomcat, `test` scope. It must cover the eight rows
+  deploys it into an embedded container, `test` scope. It must cover the rows
   the spike covered by hand -- `.todo/529`'s table -- with the octet-body row
   asserting RAW bytes, because the text spelling passes on a double-encode
-  (`.kb/http-server.md`).
+  (`.kb/http-server.md`). Run it on BOTH containers if the second one is cheap:
+  initializer discovery is the one thing here that is a container behavior
+  rather than a spec guarantee, and it is exactly what a single-container test
+  would stop noticing.
+- A war built WITHOUT the `<clinit>` move must fail the E2E loudly, not subtly.
+  Assert the deployment fails rather than that requests 500 -- that is what
+  rethrowing from `onStartup` buys.
 - Two compiles of one program produce byte-identical wars.
 - `doc/{en,ja}/guides/http-handler.md` gains the war section, mirrored, with the
-  `ExceptionInInitializerError` failure shape and the one-slot-per-webapp note.
-  `.kb/http-server.md` gains the fifth transport; `.kb/jvm-export.md`'s "What
-  travels" table gains the third row.
+  `ExceptionInInitializerError` failure shape, the one-slot-per-webapp note and
+  the "you may add your own `web.xml`" note. `.kb/http-server.md` gains the
+  fifth transport; `.kb/jvm-export.md`'s "What travels" table gains the third
+  row.
