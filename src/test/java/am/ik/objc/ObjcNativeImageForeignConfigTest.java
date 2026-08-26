@@ -92,6 +92,14 @@ class ObjcNativeImageForeignConfigTest {
 			inst("NSWindow", "setAppearance:"), inst("NSWindow", "setTitlebarAppearsTransparent:"),
 			cls("NSTimer", "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"),
 			inst("NSTimer", "invalidate"),
+			// the menu bar: a status item, a menu whose entries are Lisp closures, and
+			// the way out of a program that has no window to close
+			cls("NSStatusBar", "systemStatusBar"), inst("NSStatusBar", "statusItemWithLength:"),
+			inst("NSStatusItem", "button"), inst("NSStatusItem", "setMenu:"), cls("NSMenu", "alloc"),
+			inst("NSMenu", "addItem:"), inst("NSMenu", "addItemWithTitle:action:keyEquivalent:"),
+			cls("NSMenuItem", "separatorItem"), inst("NSMenuItem", "setTarget:"), inst("NSApplication", "terminate:"),
+			// examples/macos/menubar.lisp: the clock the timer writes into the title
+			cls("NSDateFormatter", "alloc"), inst("NSDateFormatter", "setDateFormat:"), cls("NSDate", "date"),
 			// examples/macos/objc-runtime.lisp: the window-free half of the package --
 			// introspection, key-value coding, a run-time class Foundation calls back
 			// into

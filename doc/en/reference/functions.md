@@ -781,9 +781,12 @@ with the `appkit:` qualifier. See the [macOS GUI guide](../guides/objc-appkit.md
 | `appkit:on-click` | `(appkit:on-click tile (lambda (button) ...))` | the view; the closure runs on a click (1 left, 3 right) |
 | `appkit:click` | `(appkit:click button)` | `nil`; the action ran as a click would |
 | `appkit:timer` | `(appkit:timer 0.12 (lambda () ...))` | a repeating `NSTimer`; a `nil` answer stops it |
+| `appkit:menu` | `(appkit:menu (list (list "Quit" #'appkit:quit "q")))` | an `NSMenu` whose items are Lisp closures; `:separator` is a dividing line |
+| `appkit:status-item` | `(appkit:status-item "λ" :menu m :dock nil)` | an `NSStatusItem` in the system menu bar; `:dock nil` hides the Dock icon |
+| `appkit:quit` | `(appkit:quit)` | never answers: the application ends, as Cmd-Q ends it |
 | `appkit:close` | `(appkit:close win)` | `nil`; the window is closed (hidden) |
 | `appkit:visible-p` | `(appkit:visible-p win)` | whether the window is on screen |
-| `appkit:wait` | `(appkit:wait win)` | `nil`, once the window has been closed |
+| `appkit:wait` | `(appkit:wait win)` | `nil`, once the window has been closed; with no window, until the application ends |
 
 ## asdf Package Functions
 

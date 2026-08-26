@@ -168,6 +168,8 @@ A Cocoa window with no Swing, no `java:` and nothing installed: the built-in
 AppKit through the foreign function API. macOS, and every JVM-side
 shape of the language: under `java -jar`, in the `rontolisp` native binary — which
 is where `java:` cannot interpret at all — and compiled to a `.class` / `.jar`.
+A program need not open a window at all: [`menubar.lisp`](macos/menubar.lisp) is a
+menu bar item, its menu entries Lisp closures.
 `objc` reaches further than AppKit: every framework on the machine speaks the
 Objective-C runtime, and one that is not linked into the process is one `NSBundle`
 message away, which is what [`system-frameworks.lisp`](macos/system-frameworks.lisp)
@@ -186,6 +188,7 @@ See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 | [`minesweeper-macos.lisp`](browser/minesweeper/minesweeper-macos.lisp) | Minesweeper as a native Cocoa window, loading the same core as the browser and Swing builds |
 | [`life-macos.lisp`](macos/life-macos.lisp) | Game of Life on an `appkit:timer`, loading the same `life-core.lisp` as [`life-gui.lisp`](jvm/life-gui.lisp) -- the same world, a Cocoa surface instead of a Swing one; a click edits the world under the simulation |
 | [`listener.lisp`](macos/listener.lisp) | A Lisp listener in a Cocoa window, the way Clozure CL's IDE does it: an `NSTextView` transcript in an `NSScrollView`, an editable `NSTextField` whose Return key is a Lisp closure (`objc:define-class` again, this time for a target/action), and `eval` on what it reads -- printed output captured, an error shown as a line. The window and the evaluator are one image, so a form typed in opens the next window |
+| [`menubar.lisp`](macos/menubar.lisp) | A Lisp that lives in the menu bar and opens no window of its own: `appkit:status-item` with `:dock nil` (no Dock icon, no app switcher entry), an `appkit:menu` whose entries are Lisp closures, an `appkit:timer` writing a clock into the title, and one entry that opens a window — the menu and the evaluator are one image. `appkit:quit` is the way out |
 | [`system-frameworks.lisp`](macos/system-frameworks.lisp) | macOS itself as a Lisp library, with nothing installed: Vision, NaturalLanguage, Core Image and the speech synthesizer, each mapped in at run time by an `NSBundle` message. A string is drawn into an image by Core Image and read back out of it by Vision, and `equal` decides whether the round trip held; the speech is synthesized to an AIFF instead of the speakers, so the example is silent. Prints to a terminal |
 | [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
 
@@ -195,6 +198,7 @@ java -jar $JAR examples/macos/system-frameworks.lisp  # no window either; Vision
 java -jar $JAR examples/macos/counter.lisp
 java -jar $JAR examples/macos/life-macos.lisp
 java -jar $JAR examples/macos/listener.lisp
+java -jar $JAR examples/macos/menubar.lisp             # no window; look at the menu bar
 ./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp \

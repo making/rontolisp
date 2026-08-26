@@ -1,6 +1,7 @@
 ;; The appkit package: a small Cocoa widget layer -- a window, a label, a button
-;; whose action is a Lisp closure, a filled panel, a colour, a font, a click and a
-;; repeating timer -- written in rontolisp itself over the objc: verbs and shipped
+;; whose action is a Lisp closure, a filled panel, a colour, a font, a click, a
+;; repeating timer and a menu bar item -- written in rontolisp itself over the
+;; objc: verbs and shipped
 ;; inside the interpreter (see AppKitLibrary.java): the interpreter loads these
 ;; definitions lazily on the first use of an appkit: function, so a bare REPL can
 ;; type (appkit:window "hi") with nothing required. Nothing here is a hand-written
@@ -249,6 +250,11 @@
 (defun appkit::%panelp (view)
   (objc:send view "isKindOfClass:" (objc:class "NSBox")))
 
+;; A status item is not a view at all: the menu bar draws it through a button it
+;; owns, which is why set-text and text ask about it before anything else.
+(defun appkit::%status-item-p (object)
+  (objc:send object "isKindOfClass:" (objc:class "NSStatusItem")))
+
 ;; (appkit:on-click view (lambda (button) ...)): makes a panel or a label answer
 ;; a click, the handler taking the button number -- 1 for a left click, 3 for a
 ;; right one (or a Ctrl-click). Given a button it sets its action instead, so one
@@ -266,14 +272,15 @@
          (setf (gethash (objc:address view) appkit::*clicks*) handler))
      view)))
 
-;; (appkit:set-text view "text"): a button's title, any other control's string
-;; value. Answers the text.
+;; (appkit:set-text view "text"): a status item's or button's title, any other
+;; control's string value. Answers the text.
 (defun appkit:set-text (view text)
   (objc:on-main
    (lambda ()
-     (if (appkit::%buttonp view)
-         (objc:send view "setTitle:" text)
-         (objc:send view "setStringValue:" text))
+     (cond ((appkit::%status-item-p view)
+            (objc:send (objc:send view "button") "setTitle:" text))
+           ((appkit::%buttonp view) (objc:send view "setTitle:" text))
+           (t (objc:send view "setStringValue:" text)))
      text)))
 
 ;; (appkit:set-color view color): a panel's fill colour, any other control's text
@@ -288,14 +295,16 @@
          (objc:send view "setTextColor:" color))
      color)))
 
-;; (appkit:text view) -> the button's title or the control's string value, as a
-;; Lisp string.
+;; (appkit:text view) -> the status item's or button's title, or the control's
+;; string value, as a Lisp string.
 (defun appkit:text (view)
   (objc:on-main
    (lambda ()
-     (objc:send
-      (objc:send view (if (appkit::%buttonp view) "title" "stringValue"))
-      "UTF8String"))))
+     (objc:send (if (appkit::%status-item-p view)
+                    (objc:send (objc:send view "button") "title")
+                    (objc:send view
+                     (if (appkit::%buttonp view) "title" "stringValue")))
+                "UTF8String"))))
 
 ;; (appkit:click button): performs the button's action as a user's click would --
 ;; the way a script drives a window without a human.
@@ -342,6 +351,62 @@
        (setf (gethash (objc:address timer) appkit::*timers*) fn)
        timer))))
 
+;;; --- the menu bar -----------------------------------------------------------
+
+;; (appkit:menu (list (list "Say hi" (lambda () ...))
+;;                    :separator
+;;                    (list "Quit" (lambda () (appkit:quit)) "q")))
+;; -> an NSMenu whose items are Lisp closures. An entry is (title handler) with
+;; an optional key equivalent third, and the keyword :separator is a dividing
+;; line. The handler takes no arguments and runs on thread 0, like a button's --
+;; a menu item is wired exactly as a button is, target/action into
+;; appkit::*actions* keyed by the item's address, so one table answers for every
+;; widget in the layer.
+(defun appkit:menu (items)
+  (objc:on-main
+   (lambda ()
+     (let ((menu (objc:send (objc:send "NSMenu" "alloc") "init")))
+       (dolist (entry items)
+         (if (equal entry :separator)
+             (objc:send menu "addItem:"
+                        (objc:send "NSMenuItem" "separatorItem"))
+             (let ((item
+                    (objc:send menu "addItemWithTitle:action:keyEquivalent:"
+                               (car entry) "invoke:" (or (nth 2 entry) ""))))
+               (setf (gethash (objc:address item) appkit::*actions*)
+                     (cadr entry))
+               (objc:send item "setTarget:" (appkit::%action-target)))))
+       menu))))
+
+;; (appkit:status-item "title" :menu (appkit:menu ...) :dock nil) -> an
+;; NSStatusItem in the system menu bar, of variable width (-1), its title drawn
+;; by the button the status bar owns. :dock nil sets the accessory activation
+;; policy -- no Dock icon and no app switcher entry, the shape a menu bar program
+;; has -- and the default leaves the regular policy a window wants.
+;;
+;; KEEP THE ANSWER: outside the status bar the Lisp value owns the item's only
+;; reference, so letting it be collected takes the item out of the menu bar.
+(defun appkit:status-item (title &key menu (dock t))
+  (appkit::%app)
+  (objc:on-main
+   (lambda ()
+     (unless dock (objc:send (appkit::%app) "setActivationPolicy:" 1))
+     (let ((item
+            (objc:send (objc:send "NSStatusBar" "systemStatusBar")
+                       "statusItemWithLength:" -1.0)))
+       (objc:send (objc:send item "button") "setTitle:" title)
+       (when menu (objc:send item "setMenu:" menu))
+       item))))
+
+;; (appkit:quit): ends the application, the way Cmd-Q does. It is the only way
+;; out of a program whose whole interface is a menu bar, since there is no window
+;; to close; the process does not come back, so nothing after it runs.
+(defun appkit:quit ()
+  (objc:on-main
+   (lambda ()
+     (objc:send (appkit::%app) "terminate:" nil)
+     nil)))
+
 ;;; --- the window's life ------------------------------------------------------
 
 ;; (appkit:close window): closes (hides) the window. The Lisp value stays valid.
@@ -358,8 +423,11 @@
 ;; (appkit:wait window): blocks the calling thread until the window is closed --
 ;; what a script does after building its window, since the process ends when
 ;; the program does. Never call it from a button's handler (that thread is the
-;; one that would close the window).
-(defun appkit:wait (window)
+;; one that would close the window). With NO window it blocks until the
+;; application ends, which is what a menu bar program does after building its
+;; status item: there is no window whose closing could release it, and
+;; appkit:quit is the way out.
+(defun appkit:wait (&optional window)
   (do ((i 0 (+ i 1)))
-      ((not (appkit:visible-p window)) nil)
+      ((and window (not (appkit:visible-p window))) nil)
     (sleep 0.05)))

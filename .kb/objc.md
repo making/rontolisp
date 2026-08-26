@@ -13,13 +13,15 @@ description is `doc/{en,ja}/guides/objc-appkit.md`; the examples are
 `examples/macos/life-macos.lisp` (Conway's Life on an `appkit:timer`, the Swing
 front-end's twin over one shared core -- the second consumer that fixed the promoted
 API, "Where the line goes" below), and
-`examples/macos/listener.lisp` -- a Lisp listener in a Cocoa window (an `NSTextView`
+`examples/macos/menubar.lisp` -- a program with NO window at all, a status item in the
+system menu bar whose menu entries are Lisp closures (2026-08-26) --
+plus `examples/macos/listener.lisp` -- a Lisp listener in a Cocoa window (an `NSTextView`
 transcript, an editable field whose Return key is a Lisp closure, `eval` on what it
 reads), the shortest demonstration that the window and the evaluator are one image
-(GUI, so none of them is in `examples.yaml`), plus `examples/macos/objc-runtime.lisp` --
-the window-free half (introspection, NSMethodSignature, KVC, a run-time class whose
-`isEqual:` Foundation calls, an NSNotificationCenter observer), which opens nothing and
-is in `examples.yaml` under `os: [mac]` -- the field that gates a RUN leg on the platform
+(GUI, so none of them is in `examples.yaml`), plus the two examples that open nothing and are therefore in
+`examples.yaml` under `os: [mac]`. `examples/macos/objc-runtime.lisp` is the window-free
+half of the binding (introspection, NSMethodSignature, KVC, a run-time class whose
+`isEqual:` Foundation calls, an NSNotificationCenter observer) -- the field that gates a RUN leg on the platform
 and leaves the COMPILE legs alone, added for it -- so its output is checked on a Mac and
 its lowering everywhere: the one program that gates the blob on through the bare `objc:`
 verbs, with no `appkit:` reference and so no splice.
@@ -103,6 +105,19 @@ answer no click -- `appkit::%clickable-class` defines `RontoLispAppKitPanel` /
 `RontoLispAppKitLabel` over `mouseDown:` / `rightMouseDown:`, and every panel and label is
 an instance of one, so one address-keyed table lets a panel and the label drawn over it
 share a handler with no event forwarding.
+
+The menu bar joined them on the same argument (2026-08-26): `appkit:status-item`,
+`appkit:menu` and `appkit:quit`, plus `&optional` on `appkit:wait`. A menu bar program has
+no window, so nothing could release a `wait` that demands one and no red button could end
+it -- `quit` sends `terminate:`. Three decisions are load-bearing here too. A menu item is
+wired EXACTLY as a button is (target/action into `appkit::*actions*`, keyed by the item's
+address), so the one table answers for every widget in the layer and `%invoke` needed no
+change. `:dock nil` sets activation policy 1 (accessory) on the shared application
+`%app` already started with policy 0 -- the policy is the only difference between a menu
+bar program and a windowed one, and it is a keyword rather than a rung of its own.
+`appkit:set-text` / `appkit:text` accept the status item ahead of the button test, because
+an `NSStatusItem` is NOT a view: the bar draws it through a button it owns, and
+`appkit::%status-item-p` is what keeps a timer's `set-text` working on it.
 
 What stays OUT is LAYOUT: `examples/macos/cocoa.lisp` is now the grid alone -- rows
 top-down, a panel plus a label per cell, both wired to one handler -- board-game policy,
@@ -257,15 +272,22 @@ window, click, label mutated by Lisp, close survived, on `java -jar` AND the nat
 functions, an `NSTimer`) with `examples/browser/minesweeper/minesweeper-macos.lisp` and
 `examples/macos/life-macos.lisp` -- the latter on all three (`java -jar`, the native
 binary, `-o Life.class`), which is what a change to the widget layer costs, since it now
-travels into every compiled `appkit:` program;
+travels into every compiled `appkit:` program. The menu bar is
+`examples/macos/menubar.lisp` on the same three, and the part of it that needs no eyes --
+the item's title read back, the closure fired through the item's own target/action, the
+separator, the key equivalent, the accessory policy -- is a script anyone can re-run
+without clicking anything;
 the todo's probes stay under
 `.todo/512-*/` for re-running the mechanism on another Mac.
 
 ## Open items
 
-- No menu bar and no Cmd-Q (a process with no bundle sets no main menu); an app delegate
-  is one `objc:define-class` away and not written. With the event loop running the process
-  is a foreground application: it activates, takes focus and appears in the app switcher.
+- No MAIN menu (a process with no bundle sets none), so no Cmd-Q on a windowed program;
+  an app delegate is one `objc:define-class` away and not written. The STATUS bar is
+  served -- `appkit:status-item` -- and a status menu's own key equivalent works, which is
+  where `appkit:quit` is reached from. With the event loop running the process is a
+  foreground application unless `:dock nil` asked for the accessory policy: it activates,
+  takes focus and appears in the app switcher.
 - Callback shapes with struct or integer arguments, and block-taking selectors.
 - A VARIADIC selector is the one hole in "never a crash" (todo-516): the encoding does not
   mark it, so `arrayWithObjects:` is bound as `@@:@`, the nil terminator lands in a

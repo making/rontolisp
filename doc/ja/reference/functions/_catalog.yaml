@@ -677,6 +677,9 @@ categories:
       - { slug: appkit-on-click, name: "appkit:on-click" }
       - { slug: appkit-click, name: "appkit:click" }
       - { slug: appkit-timer, name: "appkit:timer" }
+      - { slug: appkit-menu, name: "appkit:menu" }
+      - { slug: appkit-status-item, name: "appkit:status-item" }
+      - { slug: appkit-quit, name: "appkit:quit" }
       - { slug: appkit-close, name: "appkit:close" }
       - { slug: appkit-visible-p, name: "appkit:visible-p" }
       - { slug: appkit-wait, name: "appkit:wait" }

@@ -371,7 +371,8 @@ public final class PackageRegistry {
 	 * Lisp-source defuns.
 	 */
 	private static final Set<String> APPKIT_FUNCTIONS = Set.of("WINDOW", "LABEL", "BUTTON", "PANEL", "COLOR", "FONT",
-			"SET-TEXT", "SET-COLOR", "TEXT", "ON-CLICK", "CLICK", "TIMER", "CLOSE", "VISIBLE-P", "WAIT");
+			"SET-TEXT", "SET-COLOR", "TEXT", "ON-CLICK", "CLICK", "TIMER", "MENU", "STATUS-ITEM", "QUIT", "CLOSE",
+			"VISIBLE-P", "WAIT");
 
 	private static final List<String> APPKIT_FUNCTION_NAMES = sorted(APPKIT_FUNCTIONS);
 

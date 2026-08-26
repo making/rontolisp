@@ -1,6 +1,6 @@
 # macOS GUI (objc / appkit)
 
-2 つの組み込みパッケージで、何もインストールせずに rontolisp の REPL から本物の Cocoa ウィンドウを開けます。`objc` は JVM の Foreign Function API を通じて Objective-C ランタイムと AppKit をバインドし (JNI なし、同梱ネイティブライブラリなし、リフレクションなし)、`appkit` はその上に rontolisp で書かれた小さなウィジェット層です — ウィンドウ、ラベル、Lisp クロージャをアクションに持つボタン、色付きパネル、クリック、繰り返しタイマー。
+2 つの組み込みパッケージで、何もインストールせずに rontolisp の REPL から本物の Cocoa ウィンドウを開けます。`objc` は JVM の Foreign Function API を通じて Objective-C ランタイムと AppKit をバインドし (JNI なし、同梱ネイティブライブラリなし、リフレクションなし)、`appkit` はその上に rontolisp で書かれた小さなウィジェット層です — ウィンドウ、ラベル、Lisp クロージャをアクションに持つボタン、色付きパネル、クリック、繰り返しタイマー、メニューバー項目。
 
 > **macOS 専用。インタプリタと JVM クラスで動作。** 両パッケージは `java -jar rontolisp.jar`、`rontolisp` ネイティブバイナリ (バインディングはリフレクションを必要としないためで、これが `java:` 連携にはできないことです)、そしてバインディングを内部に抱えた `.class` / `.jar` にコンパイルしたプログラムで動作します。どちらの WASM バックエンドにも foreign function API はないので、そうしたプログラムを `.wasm` にコンパイルすると `Cannot compile: appkit:window ...` エラーになります。Linux 上、またはネイティブアクセスを拒否する JVM (`--illegal-native-access=deny`) では、すべての `objc:` 関数が関数名で始まり理由を述べるメッセージの通常の `error` をシグナルします。
 
@@ -22,6 +22,23 @@
 
 `examples/macos/listener.lisp` は言語そのものをウィンドウに載せます。`NSTextView` のトランスクリプト、Return キーが Lisp のクロージャである編集可能な `NSTextField`、そして読み取った式への `eval` — 印字された出力も取り込み、エラーはプロセスを終わらせずに一行として表示されます。ウィンドウと評価器は同じイメージなので、そこに打ち込んだ式が次のウィンドウを開けます。
 
+ウィンドウがまったくなくても構いません。`appkit:status-item` はシステムのメニューバーにタイトルを置き、`appkit:menu` は項目が Lisp のクロージャであるメニューをそこにぶら下げます。`:dock nil` を付けるとプロセスには Dock アイコンもアプリケーションスイッチャの項目もなくなります。これがメニューバープログラムの姿で、そのときの出口が `appkit:quit` です。引数なしの `appkit:wait` はそれが起きるまでブロックします。
+
+```console
+> (defvar *n* 0)
+> (defvar *item*
+    (appkit:status-item "λ" :dock nil
+                        :menu (appkit:menu
+                               (list (list "Count" (lambda ()
+                                                     (setq *n* (+ *n* 1))
+                                                     (appkit:set-text *item*
+                                                                      (format nil "λ ~a" *n*))))
+                                     :separator
+                                     (list "Quit" #'appkit:quit "q")))))
+```
+
+`examples/macos/menubar.lisp` はそこに時計を入れたものです。`appkit:timer` が 1 秒ごとにタイトルを書き替え、メニュー項目の 1 つはウィンドウを開きます。`listener.lisp` と同じ証明を、メニューバーから行うわけです。
+
 | 関数 | 用途 |
 |------|------|
 | `appkit:window` | `(appkit:window title &key (width 480) (height 300) background dark)` — 表示済み・中央配置の `NSWindow` |
@@ -36,9 +53,12 @@
 | `appkit:on-click` | `(appkit:on-click view handler)` — ハンドラはボタン番号を取る。1 が左、3 が右 |
 | `appkit:click` | `(appkit:click button)` — クリックと同じようにアクションを実行 |
 | `appkit:timer` | `(appkit:timer seconds fn)` — 繰り返す `NSTimer`。`fn` が `nil` を返すと止まる |
+| `appkit:menu` | `(appkit:menu items)` — `NSMenu`。項目は `(title handler)` と省略可能なキー同値、`:separator` は区切り線 |
+| `appkit:status-item` | `(appkit:status-item title &key menu (dock t))` — システムのメニューバーの `NSStatusItem`。`:dock nil` はアクセサリポリシー |
+| `appkit:quit` | `(appkit:quit)` — Cmd-Q と同じようにアプリケーションを終了する |
 | `appkit:close` | `(appkit:close window)` — ウィンドウを閉じる (隠す)。値は有効なまま |
 | `appkit:visible-p` | `(appkit:visible-p window)` — 画面上にあるかどうか |
-| `appkit:wait` | `(appkit:wait window)` — ウィンドウが閉じられるまで呼び出し側スレッドをブロック |
+| `appkit:wait` | `(appkit:wait &optional window)` — ウィンドウが閉じられるまで、あるいはアプリケーションが終了するまで呼び出し側スレッドをブロック |
 
 座標系は AppKit のもので、原点はウィンドウの左下です。ラベルは与えられた矩形の中で垂直方向に中央寄せされ、それがタイルの中央に数字を置いてくれます。パネルはそのタイルそのもので、どちらもクリックに応えます:
 

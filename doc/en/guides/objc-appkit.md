@@ -4,8 +4,8 @@ Two built-in packages open a real Cocoa window from a rontolisp REPL with nothin
 installed: `objc` binds the Objective-C runtime and AppKit through the JVM's
 foreign function API (no JNI, no bundled native library, no reflection), and
 `appkit` is a small widget layer written in rontolisp on top of it — a window, a
-label, a button whose action is a Lisp closure, a coloured panel, a click and a
-repeating timer.
+label, a button whose action is a Lisp closure, a coloured panel, a click, a
+repeating timer and a menu bar item.
 
 > **macOS only; interpreter and JVM class.** Both packages work under
 > `java -jar rontolisp.jar`, in the `rontolisp` native binary — the binding needs no
@@ -48,6 +48,29 @@ an `NSTextView`, an editable `NSTextField` whose Return key is a Lisp closure, a
 ending the process. The window and the evaluator are the same image, so a form typed
 into it can open the next window.
 
+A program does not need a window at all. `appkit:status-item` puts a title in the system
+menu bar and `appkit:menu` hangs a menu off it whose entries are Lisp closures; with
+`:dock nil` the process has no Dock icon and no app switcher entry, which is what a menu
+bar program looks like, and `appkit:quit` is then the way out. `appkit:wait` with no
+argument blocks until that happens.
+
+```console
+> (defvar *n* 0)
+> (defvar *item*
+    (appkit:status-item "λ" :dock nil
+                        :menu (appkit:menu
+                               (list (list "Count" (lambda ()
+                                                     (setq *n* (+ *n* 1))
+                                                     (appkit:set-text *item*
+                                                                      (format nil "λ ~a" *n*))))
+                                     :separator
+                                     (list "Quit" #'appkit:quit "q")))))
+```
+
+`examples/macos/menubar.lisp` is that program with a clock in it: an `appkit:timer`
+rewrites the title once a second, and one of its menu entries opens a window — the same
+proof `listener.lisp` gives, from the menu bar instead.
+
 | Function | Purpose |
 |----------|---------|
 | `appkit:window` | `(appkit:window title &key (width 480) (height 300) background dark)` — a shown, centered `NSWindow` |
@@ -62,9 +85,12 @@ into it can open the next window.
 | `appkit:on-click` | `(appkit:on-click view handler)` — the handler takes the button number: 1 left, 3 right |
 | `appkit:click` | `(appkit:click button)` — performs the action as a click would |
 | `appkit:timer` | `(appkit:timer seconds fn)` — a repeating `NSTimer`; `fn` answering `nil` stops it |
+| `appkit:menu` | `(appkit:menu items)` — an `NSMenu`; an item is `(title handler)` plus an optional key equivalent, `:separator` a dividing line |
+| `appkit:status-item` | `(appkit:status-item title &key menu (dock t))` — an `NSStatusItem` in the system menu bar; `:dock nil` is the accessory policy |
+| `appkit:quit` | `(appkit:quit)` — ends the application, as Cmd-Q does |
 | `appkit:close` | `(appkit:close window)` — closes (hides) the window; the value stays valid |
 | `appkit:visible-p` | `(appkit:visible-p window)` — whether it is on screen |
-| `appkit:wait` | `(appkit:wait window)` — blocks the calling thread until the window is closed |
+| `appkit:wait` | `(appkit:wait &optional window)` — blocks the calling thread until the window is closed, or until the application ends |
 
 Coordinates are AppKit's: the origin is the window's bottom-left corner. A label is
 centred vertically in the rectangle it is given, which is what puts a digit in the

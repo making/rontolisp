@@ -723,9 +723,12 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `appkit:on-click` | `(appkit:on-click tile (lambda (button) ...))` | ビュー。クリック時にクロージャが走る (1 が左、3 が右) |
 | `appkit:click` | `(appkit:click button)` | `nil`。クリックと同じようにアクションが実行される |
 | `appkit:timer` | `(appkit:timer 0.12 (lambda () ...))` | 繰り返す `NSTimer`。`nil` を返すと止まる |
+| `appkit:menu` | `(appkit:menu (list (list "Quit" #'appkit:quit "q")))` | 項目が Lisp のクロージャである `NSMenu`。`:separator` は区切り線 |
+| `appkit:status-item` | `(appkit:status-item "λ" :menu m :dock nil)` | システムのメニューバーの `NSStatusItem`。`:dock nil` は Dock アイコンを消す |
+| `appkit:quit` | `(appkit:quit)` | 返らない。Cmd-Q と同じようにアプリケーションが終了する |
 | `appkit:close` | `(appkit:close win)` | `nil`。ウィンドウは閉じられる (隠される) |
 | `appkit:visible-p` | `(appkit:visible-p win)` | ウィンドウが画面上にあるかどうか |
-| `appkit:wait` | `(appkit:wait win)` | ウィンドウが閉じられた後に `nil` |
+| `appkit:wait` | `(appkit:wait win)` | ウィンドウが閉じられた後に `nil`。ウィンドウを渡さなければアプリケーション終了までブロック |
 
 ## asdf パッケージの関数
 
