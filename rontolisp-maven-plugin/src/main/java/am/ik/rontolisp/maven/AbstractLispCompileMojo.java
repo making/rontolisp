@@ -2,6 +2,10 @@ package am.ik.rontolisp.maven;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.cli.JvmSourceCompiler;
@@ -70,6 +74,26 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 	@Parameter(property = "rontolisp.noMain", defaultValue = "true")
 	private boolean noMain = true;
 
+	/**
+	 * Servlet mode ({@code -o app.war}'s mode): the class registers itself with a Servlet
+	 * 6 container instead of running a {@code main}, so the goal writes the
+	 * {@code jakarta.servlet.ServletContainerInitializer} service declaration beside the
+	 * classes and every compiled file is treated as its own program -- {@link #noMain} is
+	 * ignored (a war has no {@code main} to remove), so a file with neither a
+	 * {@code rontolisp:jvm-export} nor a {@code rontolisp:http-handler} directive fails
+	 * the build rather than silently staying Lisp. Shared code belongs in a file loaded
+	 * with {@code (load ...)} from the handler, not as a sibling under this source
+	 * directory. Requires {@code <packaging>war</packaging>} -- {@link CompileMojo}
+	 * refuses the build, naming which one is missing, when this and the packaging
+	 * disagree.
+	 */
+	@Parameter(property = "rontolisp.servlet", defaultValue = "false")
+	private boolean servlet;
+
+	/** The project's packaging, checked against {@link #servlet}. Not user-settable. */
+	@Parameter(defaultValue = "${project.packaging}", readonly = true)
+	private String packaging = "jar";
+
 	/** {@code --system-path}: extra directories the ASDF system loader searches. */
 	@Parameter
 	private List<String> systemPath = List.of();
@@ -79,6 +103,19 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 	 */
 	@Parameter
 	private List<String> dists = List.of();
+
+	/** Where a war built by this plugin writes its self-registration. */
+	private static final String SERVLET_SERVICE_FILE = "META-INF/services/jakarta.servlet.ServletContainerInitializer";
+
+	/**
+	 * The container hands {@code @HandlesTypes(RontoHttpServer.Handler.class)} candidates
+	 * to this class; it is the same one line in every war rontolisp ever emits
+	 * ({@link am.ik.rontolisp.cli.JvmSourceCompiler}'s CLI twin, {@code JvmWarWriter}, in
+	 * the core module writes it into an archive -- this goal writes it into loose
+	 * classes, for {@code maven-war-plugin} to pick up the same way it picks up every
+	 * other file under {@code target/classes}).
+	 */
+	private static final String SERVLET_INITIALIZER = "am.ik.rontolisp.runtime.RontoHttpServletInitializer";
 
 	/**
 	 * @return the directory holding the {@code .lisp} tree
@@ -101,19 +138,49 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 	 */
 	protected abstract String description();
 
+	/**
+	 * Checked by {@link CompileMojo} only: whether {@link #servlet} agrees with the
+	 * project's packaging. {@link TestCompileMojo}'s classes are never packaged into a
+	 * war, so it keeps the default no-op and places no such constraint on
+	 * {@code src/test/lisp}.
+	 */
+	protected void validateServletPackaging() throws MojoFailureException {
+	}
+
+	/**
+	 * @return the value {@link #servlet} was configured with
+	 */
+	protected final boolean servlet() {
+		return this.servlet;
+	}
+
+	/**
+	 * @return the project's packaging ({@code ${project.packaging}})
+	 */
+	protected final String packaging() {
+		return this.packaging;
+	}
+
 	@Override
 	public void execute() throws MojoExecutionException, MojoFailureException {
 		if (this.skip) {
 			getLog().info("Skipping rontolisp compilation (rontolisp.skip)");
 			return;
 		}
+		validateServletPackaging();
+		if (this.servlet) {
+			writeServletServiceFile();
+		}
 		File sourceDirectory = sourceDirectory();
 		if (!sourceDirectory.isDirectory()) {
 			getLog().debug("No " + description() + " directory: " + sourceDirectory);
 			return;
 		}
+		// A war has no main to remove: servlet mode forces every file to be its own
+		// program (compiled unconditionally, not gated on jvm-export), the same shape
+		// noMain(false) already gives the command line.
 		LispSourceSet sourceSet = new LispSourceSet(sourceDirectory.toPath(), outputDirectory().toPath(),
-				statusFile().toPath(), this.noMain, this::configure);
+				statusFile().toPath(), this.noMain && !this.servlet, this::configure);
 		LispSourceSet.Result result;
 		try {
 			result = sourceSet.compile();
@@ -162,8 +229,27 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 			.dynamic(this.dynamic)
 			.optimize(OptimizeLevel.parse(this.optimize))
 			.noPrune(this.noPrune)
+			.servlet(this.servlet)
 			.systemPath(this.systemPath == null ? List.of() : this.systemPath)
 			.dists(this.dists == null ? List.of() : this.dists);
+	}
+
+	// The war's only non-class file, and the same one line in every war rontolisp ever
+	// emits: no program name, no web.xml, nothing for a user to wire up. Written
+	// unconditionally (idempotent, one line) rather than gated on the compile actually
+	// running, so it exists even on an up-to-date build that recompiled nothing.
+	private void writeServletServiceFile() throws MojoExecutionException {
+		Path target = outputDirectory().toPath().resolve(SERVLET_SERVICE_FILE);
+		try {
+			Path parent = target.getParent();
+			if (parent != null) {
+				Files.createDirectories(parent);
+			}
+			Files.writeString(target, SERVLET_INITIALIZER + "\n", StandardCharsets.UTF_8);
+		}
+		catch (IOException | UncheckedIOException ex) {
+			throw new MojoExecutionException("failed writing " + SERVLET_SERVICE_FILE, ex);
+		}
 	}
 
 }

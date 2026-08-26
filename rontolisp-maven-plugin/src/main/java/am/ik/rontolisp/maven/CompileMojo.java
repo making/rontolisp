@@ -3,6 +3,7 @@ package am.ik.rontolisp.maven;
 import java.io.File;
 import java.util.Objects;
 
+import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
@@ -61,6 +62,29 @@ public class CompileMojo extends AbstractLispCompileMojo {
 	@Override
 	protected String description() {
 		return "Lisp source";
+	}
+
+	// Only this goal's classes are what maven-war-plugin packages into WEB-INF/classes,
+	// so only here does a mismatch mean "the war deploys and 404s" (servlet on, war
+	// packaging missing) or "this project will never reach maven-war-plugin at all"
+	// (war packaging declared, servlet forgotten) -- src/test/lisp is never packaged, so
+	// TestCompileMojo places no such constraint on itself.
+	@Override
+	protected void validateServletPackaging() throws MojoFailureException {
+		boolean war = "war".equals(packaging());
+		if (servlet() && !war) {
+			throw new MojoFailureException("rontolisp.servlet compiles for a Servlet container, but this project's"
+					+ " packaging is '" + packaging() + "': add <packaging>war</packaging> to the pom, or drop"
+					+ " rontolisp.servlet if this is not meant to serve rontolisp:http-handler");
+		}
+		if (!servlet() && war) {
+			throw new MojoFailureException("<packaging>war</packaging> packages target/classes into a war, but"
+					+ " rontolisp.servlet is not set: the compiled program has no"
+					+ " jakarta.servlet.ServletContainerInitializer to register it, so the war deploys and every"
+					+ " request 404s. Add <rontolisp.servlet>true</rontolisp.servlet> to the plugin's compile"
+					+ " execution, or use a non-war packaging if this project does not serve"
+					+ " rontolisp:http-handler");
+		}
 	}
 
 }

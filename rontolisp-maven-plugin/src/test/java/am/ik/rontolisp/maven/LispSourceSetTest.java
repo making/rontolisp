@@ -195,6 +195,47 @@ class LispSourceSetTest {
 		assertThat(classes.resolve("am/ik/rontolisp/runtime/RontoHttpClack.class")).exists();
 	}
 
+	@Test
+	void aServletProgramGetsTheWarAdapterClassesInTargetClasses() throws Exception {
+		Path source = this.project.resolve("src/main/lisp/com/example/Service.lisp");
+		Files.createDirectories(source.getParent());
+		Files.writeString(source, """
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain") (list (getf env :path-info))))
+
+				(rontolisp:http-handler 'handle)
+				""");
+		Path classes = this.project.resolve("target/classes");
+
+		// The mojo passes noMain(false) alongside servlet(true) -- a war has no main to
+		// remove, so every file compiles unconditionally rather than being gated on a
+		// jvm-export.
+		LispSourceSet.Result result = new LispSourceSet(this.project.resolve("src/main/lisp"), classes,
+				this.project.resolve("target/rontolisp/compile-status.txt"), false, compiler -> compiler.servlet(true))
+			.compile();
+
+		assertThat(result.classes()).containsExactly("com.example.Service");
+		// The two servlet adapter classes -- the third travelling list, gated on servlet
+		// mode alone -- ride beside the http-handler runtime the way RontoFloatArray
+		// rides beside a :float-vector export.
+		assertThat(classes.resolve("am/ik/rontolisp/runtime/RontoHttpServer.class")).exists();
+		assertThat(classes.resolve("am/ik/rontolisp/runtime/RontoHttpServlet.class")).exists();
+		assertThat(classes.resolve("am/ik/rontolisp/runtime/RontoHttpServletInitializer.class")).exists();
+	}
+
+	@Test
+	void aServletProgramWithNoHandlerFailsRatherThanDeployingSilently() throws Exception {
+		Path source = this.project.resolve("src/main/lisp/com/example/NotAHandler.lisp");
+		Files.createDirectories(source.getParent());
+		Files.writeString(source, "(print (+ 1 2))\n");
+		Path classes = this.project.resolve("target/classes");
+
+		assertThatThrownBy(() -> new LispSourceSet(this.project.resolve("src/main/lisp"), classes,
+				this.project.resolve("target/rontolisp/compile-status.txt"), false, compiler -> compiler.servlet(true))
+			.compile()).isInstanceOf(LispCompilationException.class)
+			.hasMessageContaining("no rontolisp:http-handler directive");
+	}
+
 	private Path writeKernels() throws Exception {
 		Path source = this.project.resolve("src/main/lisp/com/example/Kernels.lisp");
 		Files.createDirectories(source.getParent());

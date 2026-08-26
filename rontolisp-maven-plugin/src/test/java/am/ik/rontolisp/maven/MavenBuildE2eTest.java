@@ -1,6 +1,10 @@
 package am.ik.rontolisp.maven;
 
 import java.io.File;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +15,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
+import org.apache.catalina.startup.Tomcat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -44,20 +49,12 @@ class MavenBuildE2eTest {
 
 	@Test
 	void aRealBuildCompilesTheLispBeforeTheJavaAndJarsBoth() throws Exception {
-		assumeTrue("true".equals(System.getProperty("rontolisp.plugin.e2e")),
-				"the Maven build E2E is opt-in (it shells out to Maven): pass -Drontolisp.plugin.e2e=true");
-		Optional<Path> maven = maven();
-		assumeTrue(maven.isPresent(),
-				"no Maven executable found (mvn on PATH, MAVEN_HOME, or the ./mvnw distribution)");
-		String version = System.getProperty("rontolisp.plugin.version");
-		assumeTrue(version != null, "rontolisp.plugin.version is unset");
-		Path installed = Path.of(System.getProperty("user.home"), ".m2", "repository", "am", "ik", "rontolisp",
-				"rontolisp-maven-plugin", version, "rontolisp-maven-plugin-" + version + ".jar");
-		assumeTrue(Files.isRegularFile(installed),
-				"the plugin is not in the local repository: run `./mvnw -f rontolisp-maven-plugin/pom.xml install`");
+		Ready ready = assumeReady();
+		Path maven = ready.maven();
+		String version = ready.version();
 
 		writeProject(version);
-		run(maven.get(), this.project, "-o", "-q", "package");
+		run(maven, this.project, "-o", "-q", "package");
 
 		Path jar = this.project.resolve("target/consumer-1.0.0.jar");
 		assertThat(jar).exists();
@@ -70,7 +67,7 @@ class MavenBuildE2eTest {
 			.containsExactly("12.0", "5.0");
 
 		// And the second build compiles nothing, because nothing is stale.
-		assertThat(run(maven.get(), this.project, "-o", "package")).contains("Nothing to compile");
+		assertThat(run(maven, this.project, "-o", "package")).contains("Nothing to compile");
 	}
 
 	private void writeProject(String version) throws Exception {
@@ -153,6 +150,151 @@ class MavenBuildE2eTest {
 				""".formatted(Runtime.version().feature(), version));
 	}
 
+	/**
+	 * The war leg: {@code <packaging>war</packaging>}, a {@code provided}
+	 * jakarta.servlet-api and one execution's {@code <servlet>true</servlet>} is a
+	 * deployable war with no further configuration -- verified by deploying it,
+	 * UNMODIFIED, into an embedded Tomcat and driving it.
+	 */
+	@Test
+	void aWarProjectPackagesAWarThatServesOnTomcat() throws Exception {
+		Ready ready = assumeReady();
+		writeWarProject(ready.version(), "war", true);
+		run(ready.maven(), this.project, "-q", "package");
+
+		Path war = this.project.resolve("target/warconsumer-1.0.0.war");
+		assertThat(war).exists();
+		// No web.xml, no file naming the program class -- only the class files
+		// maven-war-plugin copied from target/classes on its own, plus the one-line
+		// service declaration this goal wrote there.
+		assertThat(entries(war)).contains("WEB-INF/classes/App.class",
+				"WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServer.class",
+				"WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServlet.class",
+				"WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServletInitializer.class",
+				"WEB-INF/classes/META-INF/services/jakarta.servlet.ServletContainerInitializer");
+		assertThat(entries(war)).noneMatch(entry -> entry.equals("WEB-INF/web.xml"));
+
+		Tomcat tomcat = new Tomcat();
+		Path base = Files.createDirectories(this.project.resolve("tomcat-base"));
+		Files.createDirectories(base.resolve("webapps"));
+		tomcat.setBaseDir(base.toAbsolutePath().toString());
+		tomcat.setPort(0);
+		tomcat.getConnector();
+		tomcat.addWebapp("", war.toAbsolutePath().toString());
+		tomcat.start();
+		try {
+			int port = tomcat.getConnector().getLocalPort();
+			HttpResponse<String> response = HttpClient.newHttpClient()
+				.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/")).build(),
+						HttpResponse.BodyHandlers.ofString());
+			assertThat(response.statusCode()).isEqualTo(200);
+			assertThat(response.body()).isEqualTo("hello from the war");
+		}
+		finally {
+			tomcat.stop();
+			tomcat.destroy();
+		}
+	}
+
+	@Test
+	void aWarPackagingWithoutTheServletFlagFailsNamingWhichIsMissing() throws Exception {
+		Ready ready = assumeReady();
+		writeWarProject(ready.version(), "war", false);
+
+		ProcessResult result = runAllowingFailure(ready.maven(), this.project, "package");
+		assertThat(result.status()).isNotZero();
+		assertThat(result.output()).contains("rontolisp.servlet").contains("packaging");
+	}
+
+	@Test
+	void theServletFlagWithoutWarPackagingFailsNamingWhichIsMissing() throws Exception {
+		Ready ready = assumeReady();
+		writeWarProject(ready.version(), "jar", true);
+
+		ProcessResult result = runAllowingFailure(ready.maven(), this.project, "package");
+		assertThat(result.status()).isNotZero();
+		assertThat(result.output()).contains("rontolisp.servlet").contains("<packaging>war</packaging>");
+	}
+
+	private void writeWarProject(String version, String packaging, boolean servlet) throws Exception {
+		Path app = this.project.resolve("src/main/lisp/App.lisp");
+		Files.createDirectories(app.getParent());
+		Files.writeString(app, """
+				(defun handle (env)
+				  (declare (ignore env))
+				  (list 200 '(:content-type "text/plain") (list "hello from the war")))
+
+				(rontolisp:http-handler 'handle)
+				""");
+		Files.writeString(this.project.resolve("pom.xml"), """
+				<project xmlns="http://maven.apache.org/POM/4.0.0">
+				  <modelVersion>4.0.0</modelVersion>
+				  <groupId>app</groupId>
+				  <artifactId>warconsumer</artifactId>
+				  <version>1.0.0</version>
+				  <packaging>%s</packaging>
+				  <properties>
+				    <maven.compiler.release>%d</maven.compiler.release>
+				    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+				  </properties>
+				  <dependencies>
+				    <dependency>
+				      <groupId>jakarta.servlet</groupId>
+				      <artifactId>jakarta.servlet-api</artifactId>
+				      <version>6.0.0</version>
+				      <scope>provided</scope>
+				    </dependency>
+				  </dependencies>
+				  <build>
+				    <plugins>
+				      <plugin>
+				        <groupId>org.apache.maven.plugins</groupId>
+				        <artifactId>maven-war-plugin</artifactId>
+				        <version>3.5.1</version>
+				        <configuration>
+				          <failOnMissingWebXml>false</failOnMissingWebXml>
+				        </configuration>
+				      </plugin>
+				      <plugin>
+				        <groupId>am.ik.rontolisp</groupId>
+				        <artifactId>rontolisp-maven-plugin</artifactId>
+				        <version>%s</version>
+				        <executions>
+				          <execution>
+				            <goals><goal>compile</goal></goals>
+				            <configuration>
+				              <servlet>%s</servlet>
+				            </configuration>
+				          </execution>
+				        </executions>
+				      </plugin>
+				    </plugins>
+				  </build>
+				</project>
+				""".formatted(packaging, Runtime.version().feature(), version, servlet));
+	}
+
+	private Ready assumeReady() {
+		assumeTrue("true".equals(System.getProperty("rontolisp.plugin.e2e")),
+				"the Maven build E2E is opt-in (it shells out to Maven): pass -Drontolisp.plugin.e2e=true");
+		Optional<Path> maven = maven();
+		assumeTrue(maven.isPresent(),
+				"no Maven executable found (mvn on PATH, MAVEN_HOME, or the ./mvnw distribution)");
+		String version = System.getProperty("rontolisp.plugin.version");
+		assumeTrue(version != null, "rontolisp.plugin.version is unset");
+		Path installed = Path.of(System.getProperty("user.home"), ".m2", "repository", "am", "ik", "rontolisp",
+				"rontolisp-maven-plugin", version, "rontolisp-maven-plugin-" + version + ".jar");
+		assumeTrue(Files.isRegularFile(installed),
+				"the plugin is not in the local repository: run `./mvnw -f rontolisp-maven-plugin/pom.xml install`");
+		return new Ready(maven.get(), version);
+	}
+
+	private record Ready(Path maven, String version) {
+	}
+
+	private record ProcessResult(int status, String output) {
+	}
+
 	private static List<String> entries(Path jar) throws Exception {
 		try (JarFile file = new JarFile(jar.toFile())) {
 			return file.stream().map(JarEntry::getName).toList();
@@ -190,14 +332,22 @@ class MavenBuildE2eTest {
 	}
 
 	private static String run(Path executable, Path directory, String... arguments) throws Exception {
+		ProcessResult result = runAllowingFailure(executable, directory, arguments);
+		assertThat(result.status())
+			.describedAs("%s %s exited %d:%n%s", executable, List.of(arguments), result.status(), result.output())
+			.isZero();
+		return result.output();
+	}
+
+	private static ProcessResult runAllowingFailure(Path executable, Path directory, String... arguments)
+			throws Exception {
 		List<String> command = new ArrayList<>();
 		command.add(executable.toString());
 		command.addAll(List.of(arguments));
 		Process process = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true).start();
 		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		int status = process.waitFor();
-		assertThat(status).describedAs("%s exited %d:%n%s", command, status, output).isZero();
-		return output;
+		return new ProcessResult(status, output);
 	}
 
 }

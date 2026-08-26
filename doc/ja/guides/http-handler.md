@@ -181,6 +181,11 @@ war には後から独自の `web.xml`（フィルタ、セキュリティ制約
 出力が `.war` なら `clack:clackup ... :server :rontolisp` が Servlet
 トランスポートを選ぶので、ソースを変更する必要はありません。
 
+[Maven プラグイン](jvm-library.md#a-war-project-srcmainlisp)は
+`<packaging>war</packaging>` プロジェクトの `src/main/lisp` から同じ war を
+ビルドします。プラグインのパラメータ 1 つ (`<servlet>true</servlet>`) が
+`-o app.war` の代わりになります。
+
 ## WASI HTTP コンポーネントにコンパイルする
 
 さらに **WASI HTTP コンポーネント** にもコンパイルでき、`wasmtime serve`

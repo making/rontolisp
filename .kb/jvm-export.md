@@ -116,7 +116,7 @@ else's artifact, and the mechanism is general -- not the handle's alone:
 | --- | --- | --- |
 | `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector` / `:float-matrix` export | `RontoFloatArray` + `RontoBoundary`, the handle type and its marshalling seam |
 | `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / the `%http-server-start` seam | `RontoHttpServer` (the embedded server, shared with the interpreter), `RontoHttpClack` (the per-request Clack glue) and the two declarations they read, `RontoClackEnv` + `RontoHashTable` (`.kb/http-server.md`) |
-| `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` output only (in ADDITION to the served list) | `RontoHttpServlet` + `RontoHttpServletInitializer`, the Servlet transport (`.kb/http-server.md`, "The fifth transport") -- the one sanctioned `jakarta.servlet` import, satisfied by definition (a war runs in a servlet container), `provided` scope in the pom, never in any other artifact |
+| `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` output, or the Maven plugin's `<servlet>true</servlet>` (in ADDITION to the served list either way) | `RontoHttpServlet` + `RontoHttpServletInitializer`, the Servlet transport (`.kb/http-server.md`, "The fifth transport") -- the one sanctioned `jakarta.servlet` import, satisfied by definition (a war runs in a servlet container), `provided` scope in the pom, never in any other artifact |
 
 Both go through `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` ->
 `RontoLispCli` (beside a `-o X.class`, INSIDE a `-o X.jar`) and `LispSourceSet` (the Maven
@@ -336,6 +336,27 @@ the interpreter — rather than failing the build. `<noMain>false</noMain>` give
 `JvmSourceCompiler.compileIfExported` is the seam, and it asks the EXPANDED program (the
 list the backend collects directives from), so an export a `(load ...)`ed file or a user
 macro contributes counts.
+
+**`<servlet>true</servlet>` is `-o app.war`'s mode, reached through the same mojo
+parameter shape** (`.todo/533`). It does two things `noMain` does not: it sets
+`JvmSourceCompiler.servlet`, which is what makes `runtimeClassFiles()` add
+`WAR_RUNTIME_CLASS_FILES` (the row above) to what `LispSourceSet` writes into
+`target/classes`, and the goal writes the one file that write loop cannot -- the
+`META-INF/services/jakarta.servlet.ServletContainerInitializer` line naming
+`RontoHttpServletInitializer`, `maven-war-plugin`'s only non-class input, so a war built
+from `target/classes` needs no `web.xml` and no further configuration. It also forces
+`noMain` off for the execution regardless of the `noMain` parameter's own value: a war has
+no `main` to remove, so (like the CLI's own refusal of `--no-main` with a `.war` output)
+every file compiles unconditionally rather than being gated on a `jvm-export`, and each
+one is then required to carry its own `rontolisp:http-handler` (or the internal
+`%http-server-start` seam) -- `JvmLispCompiler`'s existing `servletMode && !usesHttpHandler`
+check (`.kb/http-server.md`) is what a file lacking one fails against, so shared code has
+to be a `(load ...)`ed file rather than a sibling `.lisp` under the source directory.
+Finally, `servlet` and `${project.packaging}` are cross-checked in `CompileMojo` (not
+`TestCompileMojo`, whose classes are never packaged into a war): the two failure messages
+name which of the pair -- `<packaging>war</packaging>` or `<servlet>true</servlet>` -- is
+missing, so the defect surfaces as a build failure rather than as a deployed war that
+404s on every request.
 
 **The path-is-the-class-name rule follows the same line**: it is checked only for a file
 that earns a class, so the Lisp convention `string-utils.lisp` beside `Kernels.lisp` is

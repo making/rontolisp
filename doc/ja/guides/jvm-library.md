@@ -238,6 +238,63 @@ JVM バックエンドに届くフラグはすべて同じ名前のパラメー�
 はあるファイルを別のファイルに差し込むので、ファイル単位のタイムスタンプだけは信用で
 きないからです。
 
+## war プロジェクト: `src/main/lisp`
+
+同じゴールは [Servlet war](http-handler.md#compiled-to-a-servlet-war) もビルドできま
+す。パラメータを 1 つ足し、jar プロジェクトの代わりに `<packaging>war</packaging>` の
+プロジェクトにするだけです:
+
+```xml
+<plugin>
+    <groupId>am.ik.rontolisp</groupId>
+    <artifactId>rontolisp-maven-plugin</artifactId>
+    <version>VERSION</version>
+    <executions>
+        <execution>
+            <goals><goal>compile</goal></goals>
+            <configuration>
+                <servlet>true</servlet>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+```
+pom.xml                 <- <packaging>war</packaging>、provided の jakarta.servlet-api
+src/main/lisp/App.lisp  <- rontolisp:http-handler ディレクティブ
+```
+
+```bash
+mvn package     # target/app-1.0.0.war、追加の設定なしでデプロイできる
+```
+
+`maven-war-plugin` 自体には何の設定も要りません。他のソースセットの出力と同じように
+`target/classes` を `WEB-INF/classes` へコピーするだけで、それが war に必要なすべて
+です。このゴールは `maven-war-plugin` 自身では生成できない 1 つのファイル —
+`jakarta.servlet.ServletContainerInitializer` のサービス宣言、war の唯一の非クラス
+ファイルであり、どの rontolisp war も運ぶ同じ 1 行 — を書き込むので、あとに配線する
+ものは何も残りません: `web.xml` もプログラム名も初期化パラメータもありません。
+`jakarta.servlet-api` 依存関係 (`provided` スコープ、6.0.0 以上) はプロジェクト自身の
+もので、あらゆる Servlet プロジェクトが宣言するのと同じ形で宣言します —
+プラグインのものでは決してありません。rontolisp がコンパイルするどんなものにも
+バンドルされないからです。
+
+**servlet モードは `noMain` を無視します。** war には取り除くべき `main` がないので、
+`src/main/lisp` 以下のすべてのファイルは無条件にコンパイルされます — 既定のライブラリ
+モードのように `rontolisp:jvm-export` でゲートされることはありません — そして各ファ
+イルは自分自身の `rontolisp:http-handler` ディレクティブ (または [Clack](clack.md) アプ
+リケーションが乗る内部の `%http-server-start` シーム) を持たなければなりません。これ
+はコマンドラインの `-o app.war` が課すのと同じ要件です。共有コードはハンドラが
+`(load ...)` するファイルに置いてください。同じソースディレクトリの兄弟 `.lisp`
+ファイルにではありません。
+
+`servlet` とプロジェクトのパッケージングは互いにチェックされ、食い違えば
+どちらが足りないか名指ししてビルドを失敗させます — war がデプロイされてすべての
+リクエストに 404 を返すのではありません: `<packaging>war</packaging>` のない
+`<servlet>true</servlet>` は足りないパッケージングを、`<servlet>true</servlet>` の
+ない `<packaging>war</packaging>` は足りないパラメータを名指しします。
+
 ## Maven コンシューマ向けのパッケージング
 
 カーネルを使う側とは *別に* ビルドする場合 — 他チームへ配布する、Maven ではない

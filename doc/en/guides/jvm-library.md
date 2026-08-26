@@ -229,6 +229,60 @@ in `maven-compiler-plugin`'s sense: if nothing is stale, nothing is compiled, an
 anything is, the whole source set is — a `(load "...")` splices one file into another, so
 per-file timestamps cannot be trusted alone.
 
+## A war project: `src/main/lisp`
+
+The same goal also builds a [Servlet war](http-handler.md#compiled-to-a-servlet-war), with
+one more parameter and a `<packaging>war</packaging>` project instead of a jar one:
+
+```xml
+<plugin>
+    <groupId>am.ik.rontolisp</groupId>
+    <artifactId>rontolisp-maven-plugin</artifactId>
+    <version>VERSION</version>
+    <executions>
+        <execution>
+            <goals><goal>compile</goal></goals>
+            <configuration>
+                <servlet>true</servlet>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+```
+pom.xml                 <- <packaging>war</packaging>, a provided jakarta.servlet-api
+src/main/lisp/App.lisp  <- the rontolisp:http-handler directive
+```
+
+```bash
+mvn package     # target/app-1.0.0.war, deployable with no further configuration
+```
+
+`maven-war-plugin` needs no configuration of its own: it copies `target/classes` into
+`WEB-INF/classes` the way it copies any source set's output, and that is everything the
+war needs. This goal writes the one file `maven-war-plugin` cannot generate on its own —
+the `jakarta.servlet.ServletContainerInitializer` service declaration, the war's only
+non-class file and the same one line every rontolisp war carries — so there is nothing
+left to wire up: no `web.xml`, no program name, no init parameter. The
+`jakarta.servlet-api` dependency (`provided` scope, 6.0.0 or newer) is the project's own,
+declared the way every Servlet project declares it — never the plugin's, since it is
+never bundled into anything rontolisp compiles.
+
+**Servlet mode ignores `noMain`.** A war has no `main` to remove, so every file under
+`src/main/lisp` compiles unconditionally instead of being gated on a `rontolisp:jvm-export`
+the way the default library mode gates it — and each one must carry its own
+`rontolisp:http-handler` directive (or the internal `%http-server-start` seam a
+[Clack](clack.md) application rides on), the same requirement `-o app.war` places on the
+command line. Shared code belongs in a file the handler loads with `(load ...)`, not in a
+sibling `.lisp` file under the same source directory.
+
+`servlet` and the project's packaging are checked against each other, and a mismatch
+fails the build by name rather than producing a war that deploys and answers every
+request with a 404: `<servlet>true</servlet>` without `<packaging>war</packaging>` names
+the missing packaging, and `<packaging>war</packaging>` without `<servlet>true</servlet>`
+names the missing parameter.
+
 ## Packaging for Maven consumers
 
 When the kernels are built *separately* from the projects that use them — a team

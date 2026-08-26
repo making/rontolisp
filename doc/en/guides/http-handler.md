@@ -181,6 +181,10 @@ A [Clack](clack.md) application compiles to a war the same way — `clack:clacku
 ... :server :rontolisp` picks the servlet transport when the output is a
 `.war`, with no change to the source.
 
+The [Maven plugin](jvm-library.md#a-war-project-srcmainlisp) builds the same war from a
+`<packaging>war</packaging>` project's `src/main/lisp`, with one plugin parameter
+(`<servlet>true</servlet>`) standing in for `-o app.war`.
+
 ## Compiled to a WASI HTTP component
 
 It also compiles to a **WASI HTTP component** that runs under

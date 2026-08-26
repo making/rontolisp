@@ -107,6 +107,17 @@
 			<version>3.27.0</version>
 			<scope>test</scope>
 		</dependency>
+		<!--
+			For MavenBuildE2eTest's war leg only: deploys the war a shelled-out `mvn
+			package` produces into an embedded container and drives it. Pinned to the
+			same version the root project's WarE2eTest uses.
+		-->
+		<dependency>
+			<groupId>org.apache.tomcat.embed</groupId>
+			<artifactId>tomcat-embed-core</artifactId>
+			<version>11.0.24</version>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
