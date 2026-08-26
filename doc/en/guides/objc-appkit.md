@@ -143,7 +143,30 @@ whole side of the package in one runnable file: selectors carried around as stri
 guarded by `respondsToSelector:`, class hierarchies walked, a method's own type encoding
 read back, key-value coding and a sort by a text key, a class defined at run time whose
 `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter`
-observer. It is the one `objc:` example that opens no window.
+observer. It opens no window.
+
+### AppKit is not the boundary
+
+Every framework on the machine speaks the Objective-C runtime, and one that is not linked
+into this process is a single message away: `NSBundle` maps it and registers its classes,
+so from the next form on the class name resolves.
+
+```console
+> (objc:send (objc:send "NSBundle" "bundleWithPath:"
+    (objc:string "/System/Library/Frameworks/NaturalLanguage.framework")) "load")
+T
+> (objc:send (objc:send "NLLanguageRecognizer" "dominantLanguageForString:"
+    (objc:string "これは日本語の文章です")) "UTF8String")
+"ja"
+```
+
+That is the whole of dependency management here: no manifest, no classpath, no download.
+`examples/macos/system-frameworks.lisp` is the surface it opens, in one runnable file —
+Vision, NaturalLanguage, Core Image and the speech synthesizer, none of them wrapped for
+Lisp by anybody first. Its centre is a round trip: a Lisp string is drawn into an image by
+Core Image and read back out of it by Vision, and `equal` decides whether the machine read
+what it was given. It opens no window either, and it is silent, because the speech is
+synthesized to an AIFF file instead of the speakers.
 
 ### Typed by the selector's own encoding
 

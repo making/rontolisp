@@ -168,10 +168,15 @@ A Cocoa window with no Swing, no `java:` and nothing installed: the built-in
 AppKit through the foreign function API. macOS, and every JVM-side
 shape of the language: under `java -jar`, in the `rontolisp` native binary — which
 is where `java:` cannot interpret at all — and compiled to a `.class` / `.jar`.
-The window examples are not in `examples.yaml`: they need a display.
-[`objc-runtime.lisp`](macos/objc-runtime.lisp) is the exception — it opens nothing,
-so it runs in a terminal and is listed there, with its output checked on macOS
-(`os: [mac]`) and its compile leg everywhere.
+`objc` reaches further than AppKit: every framework on the machine speaks the
+Objective-C runtime, and one that is not linked into the process is one `NSBundle`
+message away, which is what [`system-frameworks.lisp`](macos/system-frameworks.lisp)
+is about.
+The window examples are not in `examples.yaml`: they need a display. The two that
+open nothing — [`objc-runtime.lisp`](macos/objc-runtime.lisp) and
+[`system-frameworks.lisp`](macos/system-frameworks.lisp) — run in a terminal and are
+listed there, with their output checked on macOS (`os: [mac]`) and their compile legs
+everywhere.
 See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 
 | File | What it demonstrates |
@@ -181,10 +186,12 @@ See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 | [`minesweeper-macos.lisp`](browser/minesweeper/minesweeper-macos.lisp) | Minesweeper as a native Cocoa window, loading the same core as the browser and Swing builds |
 | [`life-macos.lisp`](macos/life-macos.lisp) | Game of Life on an `appkit:timer`, loading the same `life-core.lisp` as [`life-gui.lisp`](jvm/life-gui.lisp) -- the same world, a Cocoa surface instead of a Swing one; a click edits the world under the simulation |
 | [`listener.lisp`](macos/listener.lisp) | A Lisp listener in a Cocoa window, the way Clozure CL's IDE does it: an `NSTextView` transcript in an `NSScrollView`, an editable `NSTextField` whose Return key is a Lisp closure (`objc:define-class` again, this time for a target/action), and `eval` on what it reads -- printed output captured, an error shown as a line. The window and the evaluator are one image, so a form typed in opens the next window |
+| [`system-frameworks.lisp`](macos/system-frameworks.lisp) | macOS itself as a Lisp library, with nothing installed: Vision, NaturalLanguage, Core Image and the speech synthesizer, each mapped in at run time by an `NSBundle` message. A string is drawn into an image by Core Image and read back out of it by Vision, and `equal` decides whether the round trip held; the speech is synthesized to an AIFF instead of the speakers, so the example is silent. Prints to a terminal |
 | [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
 
 ```bash
-java -jar $JAR examples/macos/objc-runtime.lisp     # no window; prints and exits
+java -jar $JAR examples/macos/objc-runtime.lisp        # no window; prints and exits
+java -jar $JAR examples/macos/system-frameworks.lisp  # no window either; Vision, speech, Core Image
 java -jar $JAR examples/macos/counter.lisp
 java -jar $JAR examples/macos/life-macos.lisp
 java -jar $JAR examples/macos/listener.lisp
@@ -339,6 +346,7 @@ stdout. GUI examples (`jvm/`, `macos/` and the `browser/` demos) are excluded: t
 window or run in a page and cannot be checked headless — though the part of one
 that is not GUI can be, which is what
 [`minesweeper-core-test.lisp`](browser/minesweeper/minesweeper-core-test.lisp)
-is, and what [`objc-runtime.lisp`](macos/objc-runtime.lisp) is throughout — it
-opens nothing, so its output is checked like any other example, under
-`os: [mac]` for the runtime it needs.
+is, and what [`objc-runtime.lisp`](macos/objc-runtime.lisp) and
+[`system-frameworks.lisp`](macos/system-frameworks.lisp) are throughout — they
+open nothing, so their output is checked like any other example, under
+`os: [mac]` for the runtime they need.

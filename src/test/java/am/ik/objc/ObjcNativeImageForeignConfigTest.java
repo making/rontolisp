@@ -125,7 +125,45 @@ class ObjcNativeImageForeignConfigTest {
 			cls("NSFont", "userFixedPitchFontOfSize:"), inst("NSTextField", "setPlaceholderString:"),
 			inst("NSTextField", "setTarget:"), inst("NSTextField", "setAction:"),
 			inst("NSTextField", "setAutoresizingMask:"), inst("NSButton", "setAutoresizingMask:"),
-			inst("NSWindow", "makeFirstResponder:"));
+			inst("NSWindow", "makeFirstResponder:"),
+			// examples/macos/system-frameworks.lisp: the frameworks BESIDE AppKit, each
+			// mapped into the process at run time -- text recognition, natural language,
+			// Core Image and speech, reached through the bare objc: verbs
+			cls("NSBundle", "bundleWithPath:"), inst("NSBundle", "load"),
+			cls("NLLanguageRecognizer", "dominantLanguageForString:"), cls("NSSpellChecker", "sharedSpellChecker"),
+			inst("NSSpellChecker", "checkSpellingOfString:startingAt:"),
+			inst("NSSpellChecker", "guessesForWordRange:inString:language:inSpellDocumentWithTag:"),
+			cls("NSDataDetector", "dataDetectorWithTypes:error:"),
+			inst("NSDataDetector", "matchesInString:options:range:"), inst("NSTextCheckingResult", "range"),
+			inst("NSTextCheckingResult", "resultType"), inst("NSString", "substringWithRange:"),
+			inst("NSString", "lastPathComponent"), cls("NSDateFormatter", "alloc"),
+			inst("NSDateFormatter", "setLocale:"), inst("NSDateFormatter", "setTimeZone:"),
+			inst("NSDateFormatter", "setDateStyle:"), inst("NSDateFormatter", "stringFromDate:"),
+			cls("NSLocale", "alloc"), inst("NSLocale", "initWithLocaleIdentifier:"),
+			cls("NSTimeZone", "timeZoneWithName:"), cls("NSDate", "dateWithTimeIntervalSince1970:"),
+			cls("CIFilter", "filterWithName:"), inst("CIFilter", "outputImage"),
+			// NSAttributedString leaves initWithString: to the private subclass alloc
+			// answers, so the class itself declares nothing to resolve here; the send is
+			// the @@:@ shape initWithLocaleIdentifier: above already pins
+			cls("NSAttributedString", "alloc"), cls("CIColor", "colorWithRed:green:blue:"),
+			inst("CIImage", "imageByCroppingToRect:"), inst("CIImage", "extent"), cls("VNImageRequestHandler", "alloc"),
+			inst("VNImageRequestHandler", "initWithCIImage:options:"),
+			inst("VNImageRequestHandler", "performRequests:error:"), cls("VNRecognizeTextRequest", "alloc"),
+			inst("VNRecognizeTextRequest", "results"), inst("VNRecognizedTextObservation", "topCandidates:"),
+			inst("VNRecognizedText", "string"), cls("NSDictionary", "dictionary"),
+			inst("NSDictionary", "objectForKey:"), cls("NSSpeechSynthesizer", "alloc"),
+			inst("NSSpeechSynthesizer", "startSpeakingString:toURL:"), inst("NSSpeechSynthesizer", "isSpeaking"),
+			cls("NSURL", "fileURLWithPath:"), inst("NSURL", "URLByAppendingPathComponent:"), inst("NSURL", "path"),
+			cls("NSFileManager", "defaultManager"), inst("NSFileManager", "temporaryDirectory"),
+			inst("NSFileManager", "attributesOfItemAtPath:error:"));
+
+	/**
+	 * The frameworks {@code examples/macos/system-frameworks.lisp} maps in with an
+	 * {@code NSBundle} message. None of them is linked into this process either, and
+	 * their classes do not exist until one is: the example's first section IS this step,
+	 * so the test takes it before it resolves anything below AppKit.
+	 */
+	private static final List<String> FRAMEWORKS = List.of("Vision", "NaturalLanguage", "CoreImage");
 
 	private static String[] cls(String name, String selector) {
 		return new String[] { name, selector, "class" };
@@ -140,6 +178,14 @@ class ObjcNativeImageForeignConfigTest {
 	void everySelectorTheWidgetLayerSendsHasARegisteredShape() {
 		assumeTrue(ObjcRuntime.available(), ObjcRuntime.description());
 		ObjcRuntime runtime = ObjcRuntime.get();
+		for (String framework : FRAMEWORKS) {
+			MemorySegment bundle = (MemorySegment) runtime
+				.send(runtime.objcClass("NSBundle"), "bundleWithPath:",
+						"/System/Library/Frameworks/" + framework + ".framework")
+				.value();
+			assumeTrue(bundle != null && Boolean.TRUE.equals(runtime.send(bundle, "load").value()),
+					framework + ".framework did not load on this machine");
+		}
 		Set<FunctionDescriptor> shapes = new LinkedHashSet<>();
 		List<String> unresolved = new ArrayList<>();
 		for (String[] row : SENT) {

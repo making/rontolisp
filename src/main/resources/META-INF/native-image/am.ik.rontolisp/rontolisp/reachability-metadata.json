@@ -61,6 +61,11 @@
     "appkit:timer, and the one before it is",
     "performSelectorOnMainThread:withObject:waitUntilDone:, which appkit.lisp uses to start",
     "-[NSApplication run] on thread 0 (without it no click is ever dispatched).",
+    "The last FOUR are the system frameworks examples/macos/system-frameworks.lisp reaches past",
+    "AppKit, the shapes the census over AppKit and Foundation did not already cover:",
+    "NSSpellChecker's checkSpellingOfString:startingAt: (an NSRange answer) and",
+    "guessesForWordRange:inString:language:inSpellDocumentWithTag: (an NSRange argument),",
+    "NSDataDetector's matchesInString:options:range:, and CIColor's colorWithRed:green:blue:.",
     "A selector whose shape is outside this table SIGNALS in the",
     "binary, naming the entry to add here; the JVM registers nothing ahead of time and binds any",
     "shape. ObjcNativeImageForeignConfigTest pins the runtime shapes on every machine and the",
@@ -478,6 +483,22 @@
       {
         "returnType": "void",
         "parameterTypes": ["void*", "void*", "void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "struct(jlong,jlong)",
+        "parameterTypes": ["void*", "void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "struct(jlong,jlong)", "void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "struct(jlong,jlong)"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jdouble", "jdouble", "jdouble"]
       }
     ],
     "upcalls": [

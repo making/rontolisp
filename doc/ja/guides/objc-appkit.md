@@ -113,7 +113,30 @@ T
 `respondsToSelector:` で守るセレクタ、辿るクラス階層、読み出すメソッド自身の型エンコーディ
 ング、キー値コーディングと文字列キーによるソート、`containsObject:` が呼び出す `isEqual:` が
 Lisp のクロージャである実行時定義クラス、そして `NSNotificationCenter` のオブザーバ。ウィン
-ドウを開かない唯一の `objc:` の例でもあります。
+ドウは開きません。
+
+### 境界は AppKit ではない
+
+このマシン上のあらゆるフレームワークが Objective-C ランタイムを話します。プロセスにリンク
+されていないフレームワークもメッセージ 1 つ分の距離にあり、`NSBundle` がそれをマップして
+クラスを登録するので、次のフォームからはそのクラス名が解決します。
+
+```console
+> (objc:send (objc:send "NSBundle" "bundleWithPath:"
+    (objc:string "/System/Library/Frameworks/NaturalLanguage.framework")) "load")
+T
+> (objc:send (objc:send "NLLanguageRecognizer" "dominantLanguageForString:"
+    (objc:string "これは日本語の文章です")) "UTF8String")
+"ja"
+```
+
+ここでの依存管理はこれで全部です。マニフェストもクラスパスもダウンロードもありません。
+`examples/macos/system-frameworks.lisp` はそうして開かれる面を 1 つの実行可能なファイルに
+したものです。Vision、NaturalLanguage、Core Image、そして音声合成 — どれも誰かが先に Lisp
+向けにラップしたものではありません。中心にあるのは往復です。Lisp の文字列を Core Image が
+画像に描き、それを Vision が読み戻し、機械が与えられたとおりに読んだかどうかを `equal` が
+判定します。こちらもウィンドウを開かず、そして無音です。音声はスピーカーではなく AIFF
+ファイルに合成されるためです。
 
 ### セレクタ自身のエンコーディングで型付け
 

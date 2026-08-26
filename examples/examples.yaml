@@ -74,10 +74,11 @@
 # minesweeper-core-test.lisp loads and checks with rove. A third one is of a
 # different kind: browser/minesweeper's macOS front-end has a jvm-compile leg,
 # because a GUI that cannot RUN here can still be COMPILED here, and compiling
-# it is exactly what the objc:/appkit: JVM path has to keep doing. A fourth,
-# macos/objc-runtime.lisp, opens no window at all: it is listed with its output
-# checked and `os: [mac]`, so the RUN legs gate on the platform the Objective-C
-# runtime needs while its compile leg keeps running everywhere.
+# it is exactly what the objc:/appkit: JVM path has to keep doing. A fourth and a
+# fifth, macos/objc-runtime.lisp and macos/system-frameworks.lisp, open no window
+# at all: they are listed with their output checked and `os: [mac]`, so the RUN
+# legs gate on the platform the Objective-C runtime needs while their compile legs
+# keep running everywhere.
 
 examples:
   # --- console: pure, cross-backend algorithms & I/O -------------------------
@@ -578,6 +579,37 @@ examples:
         - "indexOfObject: a seven -> 1"
         - "observed rontolisp.card.played carrying the ace"
         - "no window was opened, and nothing above declared a type"
+
+  - path: macos/system-frameworks.lisp
+    backends: [interpreter, jvm, jvm-compile]
+    os: [mac]
+    note: >-
+      the second macos/ example that opens nothing: the system's own frameworks
+      reached through the bare objc: verbs -- Vision, NaturalLanguage, Core Image
+      and the speech synthesizer, each mapped into the process at run time by an
+      NSBundle message rather than linked. Section 6 is the one that has to hold:
+      a Lisp string is drawn into an image by Core Image and read back out of it
+      by Vision, so the check is the round trip, not a rendering. Speech is
+      synthesized to an AIFF instead of the speakers, which is what makes the
+      example silent and checkable. The needles avoid what the machine is free to
+      vary -- the CIImage's address, the temporary directory, the file's byte
+      count -- and the jvm-compile leg keeps running everywhere, since a program
+      that gates the embedded am.ik.objc blob on compiles without macOS.
+    expect:
+      contains:
+        - "Vision           loaded=T"
+        - "ja -> これは日本語の文章です"
+        - "fr -> cette phrase est en français"
+        - "\"i recieve mail\": first misspelling at (2 7)"
+        - "guesses: receive, relieve"
+        - "date     September 1, 2026"
+        - "phone    090-1234-5678"
+        - "ja_JP   令和8年1月1日"
+        - "wrote     \"rontolisp\""
+        - "read back \"rontolisp\""
+        - "round trip T"
+        - "the file has audio in it: T"
+        - "nothing was installed, and no window was opened"
 
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp
