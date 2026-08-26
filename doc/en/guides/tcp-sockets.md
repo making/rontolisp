@@ -36,8 +36,8 @@ take a socket; render with `(format nil ...)` and send the result with
 > **component-only** (`--component`, over `wasi:sockets@0.3.0`): the tcp
 > functions compile in Preview 1 (core-module) mode but raise call-time
 > errors, hosts must be
-> IPv4 literals, and the component must run with `-W exceptions=y -S tcp=y
-> -S inherit-network=y` on top of the usual flags (a tcp component always
+> IPv4 literals, and the component must run with `-S tcp=y
+> -S inherit-network=y` (a tcp component always
 > compiles in exception-handling mode). Combining the tcp functions with
 > [`rontolisp:http-handler`](http-handler.md) compiles into one component
 > and runs under `wasmtime serve` — add `-S cli=y` to the flags above
@@ -138,7 +138,7 @@ returns `nil`):
 
 ```bash
 rontolisp echo-server.lisp -o echo-server.wasm --component
-wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y echo-server.wasm
+wasmtime run -S tcp=y -S inherit-network=y echo-server.wasm
 ```
 
 Whichever backend serves, talk to it with any TCP client, for example
@@ -775,8 +775,8 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
 - **The `with-*` macros close the socket on every exit** on the interpreter
   and the JVM (they expand over
   [`unwind-protect`](../reference/special-forms/unwind-protect.md)); this
-  includes the WASM component backend (every tcp component already runs with
-  `-W exceptions=y`). The compatibility keyword arguments
+  includes the WASM component backend (every tcp component already compiles
+  in exception-handling mode). The compatibility keyword arguments
   (`:element-type`, `:timeout`, `:nodelay`, `:reuse-address`, ...) are
   accepted and ignored.
 - **Backends**: interpreter and JVM are full; WASM is component-only like the

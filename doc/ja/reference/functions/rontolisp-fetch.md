@@ -93,13 +93,13 @@ JSON のレスポンスボディは
   コンポーネントは一様に WASI 0.3 です。future は処理中の非同期 `client.send`
   サブタスクをラップしているので、複数のリクエストが実際に並行します。
   `--component` でコンパイルし、
-  `wasmtime run -W gc=y -W exceptions=y -S http=y`
+  `wasmtime run -S http=y`
   で実行してください (wasmtime 46+。`-S http=y` はホストに `wasi:http` を提供させる
   フラグです)。ホストの `wasi:http` を持たない Preview 1 (コアモジュール) モードでは
   fetch はコンパイルエラーのままです。汎用の future 操作 (`await`、`then`、
   `futurep`) はどのモードでもコンパイルできます。fetch は
   [`rontolisp:http-handler`](rontolisp-http-handler.md) の serve コンポーネント内
-  (プロキシ型のハンドラ) でも動作します。`wasmtime serve -W gc=y -W exceptions=y` で
+  (プロキシ型のハンドラ) でも動作します。`wasmtime serve` で
   実行してください — serve ホストは `wasi:http/client` をデフォルトで提供するため、
   `-S http=y` は不要です。
 - **`--no-wasi` リアクタ + `--host-fetch`**: 同じソースが (WASI を一切インポート

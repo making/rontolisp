@@ -138,8 +138,7 @@ every backend; see the "Future-as-value combinators" section below).
   of one instance and observes the doorbell + context round trip). A
   completed task's doorbell ends and waitable-set are LEAKED (bounded by
   requests served on a reused instance; hosts today re-instantiate).
-  asyncMode FORCES EH mode, so an async component needs
-  `wasmtime -W exceptions=y`. Component streams: `TYPE_WASI_STREAM
+  asyncMode FORCES EH mode. Component streams: `TYPE_WASI_STREAM
   {eof, readFn, closeFn}` wraps the wasi-backed body streams http.lisp
   produces (`rontolisp::%stream-new` over two arity-0 Lisp thunks; the
   close protocol lives in http.lisp, runs once at EOF or stream-close).

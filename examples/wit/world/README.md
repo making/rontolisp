@@ -110,7 +110,7 @@ pointer arithmetic, no `__ronto_alloc`:
 
 ```console
 $ rontolisp analyzer.lisp --component -o analyzer.wasm
-$ W="wasmtime run -W gc=y"
+$ W="wasmtime run"
 
 $ $W --invoke 'word-count("the quick brown fox jumps over the lazy dog")' analyzer.wasm
 9
@@ -131,10 +131,9 @@ absent result as `()` after the four lines it printed. Those lines are the async
 lift working: the same `format` inside a *synchronous* export would have
 trapped.
 
-(`-W gc=y` because the full language compiles to a wasm-GC component.
-[`count-vowels/`](../../count-vowels) stays inside the
-[non-GC subset](../../../doc/en/guides/wasm-nogc.md#eligible-subset) and needs no
-engine flags at all.)
+([`count-vowels/`](../../count-vowels) stays inside the
+[non-GC subset](../../../doc/en/guides/wasm-nogc.md#eligible-subset), unlike the
+full language used here.)
 
 ## 5. Drift is a compile error, and it names the WIT line
 

@@ -64,7 +64,7 @@ backend — which [`examples/examples.yaml`](../../examples.yaml) pins:
 ```bash
 rontolisp check.lisp
 rontolisp check.lisp -o Check.class && java -cp . Check
-rontolisp check.lisp -o check.wasm && wasmtime run -W gc -W exceptions=y check.wasm
+rontolisp check.lisp -o check.wasm && wasmtime run check.wasm
 ```
 
 The two lines before the first `-->` are upstream clack's own banner and debug

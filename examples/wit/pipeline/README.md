@@ -110,7 +110,7 @@ inside it.
 ## 3. Run it
 
 ```bash
-wasmtime run -W gc=y pipeline.wasm
+wasmtime run pipeline.wasm
 ```
 ```console
 hello world  ->  HELLO WORLD!!!
@@ -133,4 +133,4 @@ app, all through the one interface.
 
 For the two-component examples, `plug` is the shortest path; a chain like this one
 is where `compose` earns its place. Only `string` and an `s32` cross the boundary
-here, the flat no-`result` subset, so no `-W exceptions=y` is needed.
+here, the flat no-`result` subset.

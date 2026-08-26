@@ -165,7 +165,7 @@ through the canonical ABI, and whatever the host plugs in answers.
 
 ```console
 $ rontolisp page-hits.lisp -o page-hits.wasm --component
-$ wasmtime run -W gc=y -W exceptions=y -S keyvalue=y page-hits.wasm
+$ wasmtime run -S keyvalue=y page-hits.wasm
 ```
 
 Character for character the interpreter's report -- from a store written in
@@ -218,7 +218,7 @@ business:
 
 ```console
 $ rontolisp page-hits-server.lisp -o server.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+$ wasmtime serve -S keyvalue=y server.wasm
 ```
 
 wasmtime's key-value host is an **in-memory store it rebuilds per instance**, so

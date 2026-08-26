@@ -44,8 +44,8 @@ from stdin, you run it by piping a call expression in. The same module works on
 either runtime:
 
 ```bash
-# wasmtime (needs WebAssembly GC: -W gc)
-echo '(fib 20)' | wasmtime run -W gc loaded.wasm
+# wasmtime (needs WebAssembly GC support)
+echo '(fib 20)' | wasmtime run loaded.wasm
 
 # Node.js 22+ — save run.mjs (node:wasi over the preview1 imports),
 # then pipe a call to it

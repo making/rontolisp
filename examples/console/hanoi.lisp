@@ -7,7 +7,7 @@
 ;;;; Run:
 ;;;;   rontolisp examples/console/hanoi.lisp
 ;;;;   rontolisp examples/console/hanoi.lisp -o Hanoi.class && java Hanoi
-;;;;   rontolisp examples/console/hanoi.lisp -o hanoi.wasm && wasmtime run -W gc hanoi.wasm
+;;;;   rontolisp examples/console/hanoi.lisp -o hanoi.wasm && wasmtime run hanoi.wasm
 
 (defun take (n lst)
   "Return the first N elements of LST."

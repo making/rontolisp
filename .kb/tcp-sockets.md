@@ -551,7 +551,7 @@ External state (a PostgreSQL row) survives; a defvar does not.
   `promotedSocketReadHoistsOutOfADispatchDefunArgument`.)
 - **EH/async run flags**: sockets.lisp carries async-defuns and handler-case,
   so a component tcp program is asyncMode + EH mode -- run with
-  `-W gc=y -W exceptions=y -S tcp=y -S inherit-network=y`. Unlike wasi:http
+  `-S tcp=y -S inherit-network=y`. Unlike wasi:http
   (absent without `-S http=y`, failing instantiation), wasmtime always hosts
   wasi:sockets and gates it by permission: without the `-S` flags the
   component instantiates and socket calls return errors -> `nil`

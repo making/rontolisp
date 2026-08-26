@@ -16,7 +16,7 @@
 ;;;;   rontolisp examples/console/roman.lisp --system-path $SP
 ;;;;   rontolisp examples/console/roman.lisp --system-path $SP -o Roman.class && java Roman
 ;;;;   rontolisp examples/console/roman.lisp --system-path $SP -o roman.wasm && \
-;;;;     wasmtime run -W gc -W exceptions=y roman.wasm
+;;;;     wasmtime run roman.wasm
 
 (asdf:load-system :rove)
 (use-package :rove)

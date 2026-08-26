@@ -144,7 +144,7 @@ pairing them by their WIT type:
 
 ```bash
 wac plug app.wasm --plug shouter.wasm -o textkit.wasm
-wasmtime run -W gc=y textkit.wasm
+wasmtime run textkit.wasm
 ```
 ```console
 hello world  ->  HELLO WORLD!
@@ -155,6 +155,6 @@ rust and lisp  ->  RUST AND LISP!
 ## Notes
 
 Only `string` crosses here, in both directions — the flat, no-`result` subset of
-rontolisp's WIT mapping, which is why no `-W exceptions=y` is needed. Full
+rontolisp's WIT mapping. Full
 mapping:
 [`rontolisp:wit-import`](../../../doc/en/reference/functions/rontolisp-wit-import.md).

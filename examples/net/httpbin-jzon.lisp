@@ -21,7 +21,7 @@
 ;;   java -jar $JAR examples/net/httpbin-jzon.lisp -o HttpbinJzon.class && java -cp . HttpbinJzon
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/httpbin-jzon.lisp -o httpbin-jzon.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y httpbin-jzon.wasm
+;;     wasmtime serve httpbin-jzon.wasm
 
 (ql:quickload '#:com.inuoe.jzon)
 

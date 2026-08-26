@@ -15,7 +15,7 @@
 ;; Run (interpreter):        java -jar $JAR examples/net/http-hello.lisp
 ;; Run (JVM):                java -jar $JAR examples/net/http-hello.lisp -o HttpHello.class && java HttpHello
 ;; Run (WASM component):     java -jar $JAR examples/net/http-hello.lisp -o http-hello.wasm --component && \
-;;                           wasmtime run -W gc=y -W exceptions=y \
+;;                           wasmtime run \
 ;;                             -S tcp=y -S inherit-network=y http-hello.wasm
 ;; Talk to it with:          curl http://127.0.0.1:8080/   (or a browser)
 

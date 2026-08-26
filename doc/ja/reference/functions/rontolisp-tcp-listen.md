@@ -36,7 +36,7 @@
   エラーを通知します。
 - **WASM**: コンポーネント専用で、`wasi:sockets@0.3.0` 上で動作します。`host`
   は IPv4 リテラルである必要があります。`--component` でコンパイルし、
-  `wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y` で
+  `wasmtime run -S tcp=y -S inherit-network=y` で
   実行します(wasmtime 46+)。バインド失敗は `nil` を返します。
   Preview 1(コアモジュール)モードでは呼び出し時エラーです。
 - **ブラウザプレイグラウンド**: 非対応(ブラウザのサンドボックスに生の TCP は

@@ -109,8 +109,8 @@ book-vs-tested shapes in [its README](llm-from-scratch/README.md).
 ## Networking, HTTP & services — `net/`
 
 Servers on WASM need `--component` plus
-`wasmtime run ... -W exceptions=y -S tcp=y -S inherit-network=y`; the
-`http-handler` ones run under `wasmtime serve -W gc=y -W exceptions=y`.
+`wasmtime run ... -S tcp=y -S inherit-network=y`; the
+`http-handler` ones run under `wasmtime serve`.
 
 | File | What it demonstrates |
 | --- | --- |
@@ -268,14 +268,14 @@ java -jar $JAR examples/console/nqueens.lisp
 java -jar $JAR examples/console/nqueens.lisp -o Prog.class && java Prog
 
 # 3. WASM (requires wasmtime 14+)
-java -jar $JAR examples/console/nqueens.lisp -o nqueens.wasm && wasmtime run -W gc nqueens.wasm
+java -jar $JAR examples/console/nqueens.lisp -o nqueens.wasm && wasmtime run nqueens.wasm
 ```
 
 Programs that touch files need a preopened directory on WASM:
 
 ```bash
 java -jar $JAR examples/console/line-numbers.lisp -o ln.wasm
-wasmtime run -W gc --dir . ln.wasm
+wasmtime run --dir . ln.wasm
 ```
 
 ## An example that checks itself
@@ -316,7 +316,7 @@ SP=src/test/resources/rove:src/test/resources/dissect:src/test/resources/cl-ppcr
 java -jar $JAR examples/console/roman.lisp --system-path $SP
 ```
 
-Both WASM runs need `-W exceptions=y`: rove records a failing test through
+rove records a failing test through
 `handler-bind`. The full story — the entry points, the exit code, and what does
 not work — is the [Testing guide](../doc/en/guides/testing.md).
 

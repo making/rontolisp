@@ -34,8 +34,8 @@ byte.
 
 **`zlib` is the row that carries the runtime, not just the library.** chipz
 calls `apply`, which turns the embedded `eval` runtime on, and it uses
-`catch`/`throw`, which puts the module in EH mode (hence `-W exceptions=y` in
-the run, and why the unoptimized row is hundreds of KB rather than the ~100 KB
+`catch`/`throw`, which puts the module in EH mode (hence the exception-handling
+support required at run time, and why the unoptimized row is hundreds of KB rather than the ~100 KB
 the inflate code alone would be). Both are properties of the library's own
 source, not of how the program was written.
 

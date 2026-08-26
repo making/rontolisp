@@ -14,7 +14,7 @@ and a runnable example you can evaluate in your browser.
 | `setq` | `(setq name value ...)` | Assign values to variables; accepts multiple `name value` pairs, assigned left to right, and returns the last value |
 | `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
 | `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`/`loop`), which evaluates to `value` (or nil) |
-| `unwind-protect` | `(unwind-protect protected cleanup...)` | Evaluate `protected` and run the `cleanup` forms on every exit from it -- normal return, `error` unwind, or `return`/`return-from` (on wasm-GC needs `wasmtime -W exceptions=y`; compile error under `--no-gc`) |
+| `unwind-protect` | `(unwind-protect protected cleanup...)` | Evaluate `protected` and run the `cleanup` forms on every exit from it -- normal return, `error` unwind, or `return`/`return-from` (compile error under `--no-gc`) |
 | `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
 | `defmacro` | `(defmacro name (params...) body...)` | Define a user macro; a call is expanded (the body runs with unevaluated argument forms bound) and the expansion is evaluated. Supports `&rest`/`&body`. Returns the name |
 | `defclass` | `(defclass name (super?) ((slot options...)...))` | Define a class (static CLOS subset: single inheritance; `:initarg`/`:initform`/`:reader`/`:accessor` slot options). Returns the name |
@@ -31,7 +31,7 @@ and a runnable example you can evaluate in your browser.
 | `rontolisp:await` | `(rontolisp:await value)` | Suspend the current asynchronous function until a future settles and return its value; a non-future passes through unchanged. Legal only in `async-defun`/`async-lambda` bodies and at top level |
 | `tagbody` | `(tagbody tag-or-form...)` | Body forms with go tags: `go` jumps to a tag (forward or backward), falling off the end returns nil |
 | `go` | `(go tag)` | Transfer control to a tag of the enclosing `tagbody` (compiled `go` is lexical, but one crossing a `lambda` re-enters the `tagbody` as a non-local exit) |
-| `catch` | `(catch tag body...)` | Establish a dynamic exit point named by `tag` (an `eq`-compared runtime value): the form's value is the body's, or the value of a matching `throw` fired in its dynamic extent (on wasm-GC needs `wasmtime -W exceptions=y`; compile error under `--no-gc`) |
+| `catch` | `(catch tag body...)` | Establish a dynamic exit point named by `tag` (an `eq`-compared runtime value): the form's value is the body's, or the value of a matching `throw` fired in its dynamic extent (compile error under `--no-gc`) |
 | `throw` | `(throw tag result)` | Transfer control (and `result`) to the innermost active `catch` with an `eq` tag, running every intervening `unwind-protect` cleanup; a `handler-case` in between does not catch it |
 
 rontolisp is a **Lisp-2** like Common Lisp: functions and variables live in separate

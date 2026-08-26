@@ -5,7 +5,7 @@
 ;;;; Run:
 ;;;;   rontolisp examples/console/word-frequency.lisp
 ;;;;   rontolisp examples/console/word-frequency.lisp -o WordFreq.class && java WordFreq
-;;;;   rontolisp examples/console/word-frequency.lisp -o word-frequency.wasm && wasmtime run -W gc word-frequency.wasm
+;;;;   rontolisp examples/console/word-frequency.lisp -o word-frequency.wasm && wasmtime run word-frequency.wasm
 
 (defun take (n lst)
   "Return the first N elements of LST."

@@ -18,7 +18,7 @@ rontolisp repl.lisp               # interpret
 rontolisp repl.lisp -o repl.class
 java repl                                                                  # REPL on the JVM
 rontolisp repl.lisp -o repl.wasm
-wasmtime run -W gc repl.wasm                                               # REPL on WASM
+wasmtime run repl.wasm                                                     # REPL on WASM
 ```
 
 セルフホスト REPL は入力の各行を埋め込みランタイムリーダー(`read-from-string`)で

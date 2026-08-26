@@ -48,11 +48,11 @@ import am.ik.wasm.ComponentWriter;
  * the core. The fixed block-declared interfaces http.lisp / wait.lisp bind are lowered
  * FROM the block ({@link WasmComponentBuilder#lowerFixedFromBlock}); anything else in the
  * import list is a genuine {@code rontolisp:wit-import} (e.g. {@code wasi:keyvalue}) and
- * rides {@link WasmComponentBuilder#appendUserImports}. Run under {@code wasmtime serve
- * -W gc=y -W exceptions=y} -- the handle export is a CALLBACK async lift over the
- * {@code $sched} built-ins this builder synthesizes (context slot 0, the u64 doorbell
- * stream, a waitable-set new/join pair), and every stream/future built-in is the
- * asynchronous variant, all base component-model-async.
+ * rides {@link WasmComponentBuilder#appendUserImports}. Run under {@code wasmtime
+ * serve} -- the handle export is a CALLBACK async lift over the {@code $sched} built-ins
+ * this builder synthesizes (context slot 0, the u64 doorbell stream, a waitable-set
+ * new/join pair), and every stream/future built-in is the asynchronous variant, all base
+ * component-model-async.
  */
 final class WasmServeComponentBuilder {
 

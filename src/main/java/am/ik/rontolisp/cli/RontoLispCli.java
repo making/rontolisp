@@ -1024,7 +1024,7 @@ public final class RontoLispCli {
 		this.out.println("                                kernel to ~4x on integer crypto.");
 		this.out.println("                                Accepted and identical to default on JVM and --no-gc");
 		this.out.println("  --no-gc            Emit a plain (non-wasm-GC) WASM module for pure-numeric exports");
-		this.out.println("                     Runs on any MVP runtime (no -W gc, no import object). Only");
+		this.out.println("                     Runs on any MVP runtime (no wasm-GC required, no import object). Only");
 		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");
 		this.out.println("                     ineligible (cons/string/I/O/...) functions are a compile error.");
 		this.out.println("                     Scalar vec: loops by default; add --simd for native v128.");

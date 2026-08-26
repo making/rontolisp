@@ -6,7 +6,7 @@
 ;;   rontolisp examples/net/hello-clack.lisp -o app.jar && java -jar app.jar
 ;;   rontolisp examples/net/hello-clack.lisp -o app.war                 # Servlet 6 container
 ;;   rontolisp examples/net/hello-clack.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y app.wasm
+;;     wasmtime serve -S cli=y app.wasm
 ;;   rontolisp examples/net/hello-clack.lisp -o worker.wasm --no-wasi   # Cloudflare Worker
 ;;
 ;;   curl http://127.0.0.1:8080/hello

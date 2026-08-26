@@ -9,7 +9,7 @@ core module** over the wasm-GC value model:
   Floating-point numbers are boxed in a `float_struct { f64 }`. All values on the stack are typed as
   `(ref eq)`. This is what supports the full language (cons cells, symbols,
   closures, hash tables, `eval`, ...), and why the module needs a wasm-GC
-  capable runtime such as wasmtime 14+ (`-W gc`), Node 22+, or a current
+  capable runtime such as wasmtime 14+, Node 22+, or a current
   browser.
 - **WASI Preview 1** — the module imports the eight `wasi_snapshot_preview1`
   functions (`fd_write` for stdout, `random_get`, clocks, environment, ...)
@@ -19,7 +19,7 @@ core module** over the wasm-GC value model:
 ```bash
 echo '(print (+ 1 2))' > hello.lisp
 rontolisp hello.lisp -o hello.wasm
-wasmtime run -W gc hello.wasm
+wasmtime run hello.wasm
 # 3
 ```
 
@@ -126,7 +126,7 @@ functions, so a host can instantiate it with no import object at all — a
 
 ```bash
 rontolisp fact.lisp --no-wasi -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
+wasmtime run --invoke fact fact.wasm 5      # => 120
 ```
 
 A reactor is just as easy to drive from JavaScript: there is **no import

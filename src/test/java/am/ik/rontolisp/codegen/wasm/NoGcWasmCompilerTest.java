@@ -21,8 +21,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Structural tests for {@link NoGcWasmCompiler}: the emitted module is a plain MVP module
  * (no wasm-GC types, no imports, no memory), exports the requested functions, and
  * ineligible functions reachable from an export are rejected with a clear error. These
- * run without Docker; the end-to-end {@code wasmtime --invoke} (without {@code -W gc})
- * checks live in {@link WasmLispCompilerIntegrationTest}.
+ * run without Docker; the end-to-end {@code wasmtime --invoke} checks live in
+ * {@link WasmLispCompilerIntegrationTest}.
  */
 class NoGcWasmCompilerTest {
 

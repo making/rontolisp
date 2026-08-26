@@ -147,6 +147,7 @@ run `./mvnw -f docs-tool/pom.xml test` after touching `doc/` layout.
 
 A program is "verified" only when it has run on **all four**. The component path uses a
 different I/O adapter (and entropy/clock source), so it can diverge from Preview 1.
+Assumes wasmtime 47+, which enables wasm-GC and exception-handling by default.
 
 ```bash
 JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
@@ -154,15 +155,14 @@ echo '(print (+ 1 2))' > test.lisp
 
 java -jar $JAR test.lisp                                                    # interpreter
 java -jar $JAR test.lisp -o Prog.class && java Prog                         # JVM (path-free name, or --class-name)
-java -jar $JAR test.lisp -o test.wasm && wasmtime run -W gc test.wasm       # WASM preview 1
+java -jar $JAR test.lisp -o test.wasm && wasmtime run test.wasm             # WASM preview 1
 java -jar $JAR test.lisp -o test-comp.wasm --component && \
-  wasmtime run -W gc=y test-comp.wasm                                       # WASM component (WASI 0.3)
+  wasmtime run test-comp.wasm                                               # WASM component (WASI 0.3)
 ```
 
 `handler-case`/`ignore-errors`/`unwind-protect`/`catch`/`throw`, an async component
 (incl. every fetch/serve program), and a cross-lambda `return-from`/`go` all compile in EH
-mode: add `-W exceptions=y` to both wasm runs or the module fails to parse. A fetch
-component also needs `-S http=y`.
+mode. A fetch component also needs `-S http=y`.
 
 ### Native Image E2E (run locally before every push)
 

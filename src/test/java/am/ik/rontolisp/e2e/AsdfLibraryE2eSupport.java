@@ -46,7 +46,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * <li>WASM Preview 1 ({@link WasmLispCompiler} run under {@code wasmtime} in a
  * container),</li>
  * <li>the WASM component / WASI 0.3 ({@code --component}, run under {@code wasmtime
- * run -W gc=y}).</li>
+ * run}).</li>
  * </ol>
  *
  * <p>

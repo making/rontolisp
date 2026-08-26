@@ -17,7 +17,7 @@
 ;; README beside it):
 ;;   rontolisp examples/db/postmodern-dao.lisp -o Prog.class && java Prog
 ;;   rontolisp examples/db/postmodern-dao.lisp -o postmodern-dao.wasm --component --optimize
-;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABASE_URL postmodern-dao.wasm
+;;   wasmtime run -S tcp=y -S inherit-network=y --env DATABASE_URL postmodern-dao.wasm
 
 (ql:quickload "postmodern")
 

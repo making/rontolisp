@@ -6,7 +6,7 @@
 ;;;; Run:
 ;;;;   rontolisp examples/console/sieve.lisp
 ;;;;   rontolisp examples/console/sieve.lisp -o Sieve.class && java Sieve
-;;;;   rontolisp examples/console/sieve.lisp -o sieve.wasm && wasmtime run -W gc sieve.wasm
+;;;;   rontolisp examples/console/sieve.lisp -o sieve.wasm && wasmtime run sieve.wasm
 
 (defun sieve-of-eratosthenes (limit)
   "Return a list of all primes up to LIMIT using the Sieve of Eratosthenes."

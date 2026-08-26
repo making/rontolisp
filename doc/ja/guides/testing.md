@@ -124,14 +124,14 @@ $T
 $T -o Tests.class && java Tests
 
 # 3. WASM Preview 1
-$T -o tests.wasm && wasmtime run -W gc=y -W exceptions=y tests.wasm
+$T -o tests.wasm && wasmtime run tests.wasm
 
 # 4. WASI 0.3 component
 $T -o tests-comp.wasm --component && \
-  wasmtime run -W gc=y -W exceptions=y tests-comp.wasm
+  wasmtime run tests-comp.wasm
 ```
 
-WASM の実行は両方とも `-W exceptions=y` が必要です: rove は失敗したテストを
+WASM のモジュールはどちらも EH モードでコンパイルされます: rove は失敗したテストを
 `handler-bind` で記録するため、モジュールは EH モードになります。自分自身が
 ランナーであるテストプログラム (後述) は、`test` を付けない素の `rontolisp`
 で同じようにコンパイルできます。

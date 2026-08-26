@@ -6,12 +6,11 @@
 ;;;;   rontolisp examples/asdf/chipz-demo.lisp --system-path $SYS
 ;;;;   rontolisp examples/asdf/chipz-demo.lisp -o Prog.class --system-path $SYS && java Prog
 ;;;;   rontolisp examples/asdf/chipz-demo.lisp -o demo.wasm --system-path $SYS \
-;;;;     && wasmtime run -W gc -W exceptions=y demo.wasm
+;;;;     && wasmtime run demo.wasm
 ;;;;   rontolisp examples/asdf/chipz-demo.lisp -o demo-c.wasm --component --system-path $SYS \
-;;;;     && wasmtime run -W gc=y -W exceptions=y demo-c.wasm
+;;;;     && wasmtime run demo-c.wasm
 ;;;;
-;;;; chipz uses catch/throw, so every compiled artifact is in EH mode -- hence
-;;;; -W exceptions=y on both WASM backends.
+;;;; chipz uses catch/throw, so every compiled artifact is in EH mode.
 
 (asdf:load-system "chipz")
 

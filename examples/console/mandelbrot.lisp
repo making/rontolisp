@@ -9,7 +9,7 @@
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/console/mandelbrot.lisp
 ;;;;   java -jar ...-exec.jar examples/console/mandelbrot.lisp -o Prog.class && java Prog
-;;;;   java -jar ...-exec.jar examples/console/mandelbrot.lisp -o mandelbrot.wasm && wasmtime run -W gc mandelbrot.wasm
+;;;;   java -jar ...-exec.jar examples/console/mandelbrot.lisp -o mandelbrot.wasm && wasmtime run mandelbrot.wasm
 
 ;;; Escape time for the complex point (cx, cy): the number of iterations of
 ;;; z <- z^2 + c before |z| > 2 (i.e. |z|^2 > 4), capped at `max-iter`.

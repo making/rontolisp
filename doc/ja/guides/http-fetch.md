@@ -218,7 +218,7 @@ WASM componentにコンパイルして (wasmtime 46+。外向きHTTPを許可す
 
 ```bash
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
-wasmtime run -W gc=y -W exceptions=y -S http=y fetch-post.wasm
+wasmtime run -S http=y fetch-post.wasm
 ```
 
 ## リアクタからのfetch (`--no-wasi --host-fetch`)

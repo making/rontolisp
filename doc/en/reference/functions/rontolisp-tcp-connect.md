@@ -52,7 +52,7 @@ the server closes:
   unlike `rontolisp:fetch`, no 0.2 hybrid is needed). `host` must be an
   **IPv4 literal** such as `"127.0.0.1"` (hostname resolution via
   `wasi:sockets/ip-name-lookup` is not wired yet). Compile with `--component`
-  and run with `wasmtime run -W gc=y -W exceptions=y -S tcp=y
+  and run with `wasmtime run -S tcp=y
   -S inherit-network=y` (wasmtime 46+). A
   failed connection returns `nil` instead of a handle (the same nil-on-failure
   convention as `rontolisp:fetch`); without the `-S` flags the component still

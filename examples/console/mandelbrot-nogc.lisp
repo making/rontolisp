@@ -2,7 +2,7 @@
 ;;;; The companion to examples/console/mandelbrot.lisp. That version prints to stdout;
 ;;;; this one RETURNS the rendered grid as a string, because --no-gc compiles a
 ;;;; pure-compute reactor with no WASI imports and no I/O (it runs on any
-;;;; MVP-class WebAssembly runtime with NO `-W gc`).
+;;;; MVP-class WebAssembly runtime, with no wasm-GC support required).
 ;;;;
 ;;;; Everything here stays within the --no-gc subset: floating-point arithmetic,
 ;;;; nested loops (dotimes/while/setq), cond, string literals and

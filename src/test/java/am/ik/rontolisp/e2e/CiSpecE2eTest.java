@@ -48,12 +48,12 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * on standard error, and its exit code. See {@link Standalone}.
  * <p>
  * The {@code WASM_COMPONENT} backend compiles with {@code --component} and runs the
- * resulting WASI 0.3 (Preview 3) component with {@code wasmtime run -W gc=y
- *} (the async canonical ABI and stackful lifts are on by default in wasmtime 46+; only
- * the synchronous stream/future built-ins are still feature-gated). The
- * {@code ci-spec.yaml} cases are deterministic and do no file I/O / random / time /
- * getenv, so the component's output is identical to the Preview 1 WASM backend and is
- * checked against the same {@code expected} lines.
+ * resulting WASI 0.3 (Preview 3) component with {@code wasmtime run} (the async canonical
+ * ABI and stackful lifts are on by default in wasmtime 46+; only the synchronous
+ * stream/future built-ins are still feature-gated). The {@code ci-spec.yaml} cases are
+ * deterministic and do no file I/O / random / time / getenv, so the component's output is
+ * identical to the Preview 1 WASM backend and is checked against the same
+ * {@code expected} lines.
  * <p>
  * Runs only when {@code -Drontolisp.binary=<path>} points at a built native binary;
  * otherwise the whole factory is skipped (the regular {@code mvn test} job runs on the

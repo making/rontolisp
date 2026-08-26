@@ -213,7 +213,7 @@ identical). See [[wasi-component]].
 ## Verifying the leak fix
 
 `(dotimes (i N) (grow "..." 10))` building ~16KB strings via concatenate-doubling on a
-wasm-GC host (wasmtime `-W gc`, Node/V8; NOT Chicory/Endive -- no wasm-GC): peak RSS is
+wasm-GC host (wasmtime, Node/V8; NOT Chicory/Endive -- no wasm-GC): peak RSS is
 FLAT vs N (N=50000 -> ~94MB, N=200000 -> ~91MB). A leak would scale linearly (multi-GB).
 
 ## `--simd` does NOT put anything in this memory

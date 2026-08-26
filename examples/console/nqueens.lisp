@@ -8,7 +8,7 @@
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/console/nqueens.lisp
 ;;;;   java -jar ...-exec.jar examples/console/nqueens.lisp -o Prog.class && java Prog
-;;;;   java -jar ...-exec.jar examples/console/nqueens.lisp -o nqueens.wasm && wasmtime run -W gc nqueens.wasm
+;;;;   java -jar ...-exec.jar examples/console/nqueens.lisp -o nqueens.wasm && wasmtime run nqueens.wasm
 
 ;;; A partial placement is a list of column positions, one per already-placed
 ;;; row, most recent row at the head. The queen `d` rows back sits at (nth (- d 1)

@@ -271,8 +271,7 @@ tiny-routes serve leg, whose routes are read in `:tr-app`; pinned by
 reference deliberately stays unqualified — qualifying it would break the
 user-directive case above.
 
-Run flags: `wasmtime serve -W
-gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y` — the socket
+Run flags: `wasmtime serve -S cli=y -S tcp=y -S inherit-network=y` — the socket
 flags because the spliced usocket shim (a clack dependency) wit-imports
 wasi:sockets. `:use-thread` is effectively nil (no `:thread-support` on WASM)
 and `clack:stop` is meaningless under `wasmtime serve`.

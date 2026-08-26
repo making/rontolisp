@@ -9,12 +9,12 @@
 ;;;; `typecase` / `with-slots` over condition objects.
 ;;;;
 ;;;; Runs on every backend except --no-gc; the WASM output uses the wasm
-;;;; exception-handling proposal, so wasmtime (37+) needs `-W exceptions=y`.
+;;;; exception-handling proposal.
 ;;;;
 ;;;; Run:
 ;;;;   rontolisp examples/console/error-handling.lisp
 ;;;;   rontolisp examples/console/error-handling.lisp -o Bank.class && java Bank
-;;;;   rontolisp examples/console/error-handling.lisp -o bank.wasm && wasmtime run -W gc -W exceptions=y bank.wasm
+;;;;   rontolisp examples/console/error-handling.lisp -o bank.wasm && wasmtime run bank.wasm
 
 ;;; The condition hierarchy: error > account-error > insufficient-funds.
 ;;; account-error exists so a handler can catch every account problem at once.

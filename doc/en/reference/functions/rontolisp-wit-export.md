@@ -40,7 +40,7 @@ world greeter {
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
+wasmtime run --invoke 'greet("world")' greet.wasm
 # "Hello, world!"
 ```
 

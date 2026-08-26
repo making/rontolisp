@@ -48,7 +48,7 @@ java -cp . App
 
 # WASI HTTP component under wasmtime serve (wasmtime 47+ for concurrent throughput)
 rontolisp examples/wasmcloud/http-hello-world/app.lisp -o app.wasm --component
-wasmtime serve -W gc=y -W exceptions=y app.wasm
+wasmtime serve app.wasm
 ```
 
 Each component directory keeps a `.wash/config.yaml` whose `build.command`

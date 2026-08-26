@@ -94,7 +94,7 @@ Or compile it to a WASI HTTP component and serve it with `wasmtime serve`:
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y app.wasm
+$ wasmtime serve app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello

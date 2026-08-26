@@ -6,8 +6,8 @@
 ;;;;   rontolisp examples/ml/simd-dot.lisp
 ;;;;   rontolisp examples/ml/simd-dot.lisp --simd
 ;;;;
-;;;;   rontolisp examples/ml/simd-dot.lisp -o dot.wasm        && wasmtime run -W gc dot.wasm
-;;;;   rontolisp examples/ml/simd-dot.lisp -o dot.wasm --simd && wasmtime run -W gc dot.wasm
+;;;;   rontolisp examples/ml/simd-dot.lisp -o dot.wasm        && wasmtime run dot.wasm
+;;;;   rontolisp examples/ml/simd-dot.lisp -o dot.wasm --simd && wasmtime run dot.wasm
 ;;;;
 ;;;; The sum must not change. The elapsed time should. Measured on an Apple M4:
 ;;;;

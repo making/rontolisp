@@ -32,7 +32,7 @@
 ;; lets the driver dial out -- the same flag set postgres-web.lisp needs, -S
 ;; cli=y included:
 ;;   rontolisp examples/db/bbs-api.lisp -o bbs-api.wasm --component --optimize
-;;   wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
+;;   wasmtime serve -S cli=y -S tcp=y -S inherit-network=y \
 ;;     --env DATABASE_URL bbs-api.wasm
 ;; See README.md for the wasmCloud and Spin manifests, and for why the
 ;; component reads DATABASE_URL through an interface of its own.

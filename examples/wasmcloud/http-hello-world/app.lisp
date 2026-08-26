@@ -12,7 +12,7 @@
 ;;     java -cp . App
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/wasmcloud/http-hello-world/app.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
+;;     wasmtime serve app.wasm
 ;; wasmCloud hosts it too: `wash dev` in this directory -- see ../README.md.
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/

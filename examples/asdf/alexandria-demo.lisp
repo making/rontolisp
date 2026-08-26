@@ -2,7 +2,7 @@
 ;; asdf:load-system and exercises its public API. Run with:
 ;;   rontolisp examples/asdf/alexandria-demo.lisp --system-path src/test/resources/alexandria
 ;; (see examples/asdf/README.md for the compile-path variants; this demo uses
-;; handler-case, so both wasm run commands need -W exceptions=y).
+;; handler-case, so both wasm run commands compile in EH mode).
 
 (asdf:load-system :alexandria)
 

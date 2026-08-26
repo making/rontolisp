@@ -50,7 +50,7 @@ TLS-wrapped protocols:
   port, untrusted certificate, hostname mismatch) signals an error.
 - **WASM `--component`** (WASI 0.3): supported, over wasmtime's
   `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the usual socket run
-  flags (`-W exceptions=y -S tcp=y -S inherit-network=y`). Like
+  flags (`-S tcp=y -S inherit-network=y`). Like
   `tcp-connect` there, `host` must be an **IPv4 literal** (or `localhost`) —
   and it doubles as the name the certificate is verified against, so for a
   real-world host prefer `tcp-connect` to its address plus

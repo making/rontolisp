@@ -8,7 +8,7 @@
 ;; doc/en/guides/clack.md); that works on the interpreter, the JVM and the WASM
 ;; component.
 ;; The demo uses with-input-from-string, whose expansion is an unwind-protect, so
-;; BOTH wasm run commands need -W exceptions=y.
+;; both wasm run commands compile in EH mode.
 
 (asdf:load-system :tiny-routes)
 

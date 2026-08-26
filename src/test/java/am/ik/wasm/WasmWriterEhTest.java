@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * branches the payload out to an enclosing block, so the exported function returns the
  * thrown value. The byte-level assertions pin the encoding; when {@code wasm-tools} /
  * {@code wasmtime} are on the {@code PATH} the module is additionally validated and
- * executed (wasmtime needs {@code -W exceptions=y}, 37+).
+ * executed.
  */
 class WasmWriterEhTest {
 

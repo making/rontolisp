@@ -29,7 +29,7 @@
 ;; Run (interpreter):        java -jar $JAR examples/net/kv-server.lisp
 ;; Run (JVM):                java -jar $JAR examples/net/kv-server.lisp -o KvServer.class && java KvServer
 ;; Run (WASM component):     java -jar $JAR examples/net/kv-server.lisp -o kv-server.wasm --component && \
-;;                           wasmtime run -W gc=y -W exceptions=y \
+;;                           wasmtime run \
 ;;                             -S tcp=y -S inherit-network=y kv-server.wasm
 ;; Talk to it with:          redis-cli -p 6379 set greeting hello
 ;;                           redis-cli -p 6379 get greeting

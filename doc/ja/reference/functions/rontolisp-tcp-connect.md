@@ -51,7 +51,7 @@ listen し、ループバック経由で自分自身へ接続して、
   (`rontolisp:fetch` と違い WASI 0.3 ネイティブで、0.2 ハイブリッドは不要)。
   `host` は `"127.0.0.1"` のような **IPv4 リテラル**である必要があります
   (`wasi:sockets/ip-name-lookup` によるホスト名解決は未対応)。`--component`
-  でコンパイルし、`wasmtime run -W gc=y -W exceptions=y -S tcp=y
+  でコンパイルし、`wasmtime run -S tcp=y
   -S inherit-network=y` で実行します(wasmtime 46+)。接続失敗はハンドルの代わりに `nil` を返します
   (`rontolisp:fetch` と同じ nil-on-failure 規約)。`-S` フラグなしでも
   コンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` になります。

@@ -171,7 +171,7 @@ java -jar $JAR $W -o DogFetcher.class && java -cp $JAR:. DogFetcher
 # 3. WASI component under wasmtime serve (the socket flags: clack's own
 #    socket leg keeps wasi:sockets in the import surface)
 java -jar $JAR $W -o dog-fetcher.wasm --component && \
-  wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y dog-fetcher.wasm
+  wasmtime serve -S cli=y -S tcp=y -S inherit-network=y dog-fetcher.wasm
 
 # 4. the Worker (this directory): build.sh + wrangler dev, as above
 ```

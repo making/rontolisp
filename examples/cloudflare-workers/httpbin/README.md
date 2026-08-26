@@ -236,8 +236,7 @@ replaces this whole section with the canonical ABI, at
 ## Errors stay in the Lisp
 
 Workers' engine supports the WebAssembly exception-handling proposal with no
-flag, and rontolisp compiles `handler-case` into it automatically (under
-wasmtime the same module needs `-W exceptions=y`). Two places use it: `body-json`
+flag, and rontolisp compiles `handler-case` into it automatically. Two places use it: `body-json`
 falls back to `null` when the body does not parse, and `handle-request` wraps the
 whole adapter so any other Lisp error answers 500 and the instance keeps
 serving. That is not optional on a reactor — an uncaught Lisp error is a **trap**,
@@ -259,7 +258,7 @@ SP=src/test/resources/rove:src/test/resources/dissect:src/test/resources/cl-ppcr
 rontolisp check.lisp --system-path $SP
 rontolisp check.lisp --system-path $SP -o Check.class && java -cp . Check
 rontolisp check.lisp --system-path $SP -o check.wasm --optimize && \
-  wasmtime run -W gc -W exceptions=y check.wasm
+  wasmtime run check.wasm
 ```
 
 Expect one difference when comparing the printed exchanges: the **order of keys

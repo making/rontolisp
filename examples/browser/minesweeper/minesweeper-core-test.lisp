@@ -16,7 +16,7 @@
 ;;;;   rontolisp minesweeper-core-test.lisp --system-path $SP
 ;;;;   rontolisp minesweeper-core-test.lisp --system-path $SP -o Tests.class && java Tests
 ;;;;   rontolisp minesweeper-core-test.lisp --system-path $SP -o tests.wasm --optimize && \
-;;;;     wasmtime run -W gc -W exceptions=y tests.wasm
+;;;;     wasmtime run tests.wasm
 
 (asdf:load-system :rove)
 (use-package :rove)

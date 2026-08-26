@@ -203,12 +203,11 @@ backend — the interpreter re-expands macros on every evaluation.
 - **Interpreter** — everything above.
 - **JVM class** — `rontolisp blog.lisp -o Blog.class && java Blog`. The
   compiled class is self-contained.
-- **WASM component** (`--component`) — needs both wasmtime features and both
-  socket permissions:
+- **WASM component** (`--component`) — needs both socket permissions:
 
   ```bash
   rontolisp blog.lisp -o blog.wasm --component
-  wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y blog.wasm
+  wasmtime run -S tcp=y -S inherit-network=y blog.wasm
   ```
 
   The `:host` must be an **IPv4 literal** — hostname lookup is unwired on WASM.

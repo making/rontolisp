@@ -517,7 +517,7 @@ fresh rank-1 vector of length `rows` in W's width; x (and out) must match W's wi
   0xE4) use the u32-LEB writer. A simd program flags the memory section via `usesFloatArray`
   (umbrella-based: any `LispFloatArray` literal, `make-array`, or `vec:` call).
 - wasmtime enables the SIMD proposal by default, so `--no-gc --simd` v128 runs with a plain
-  `wasmtime run` (no `-W gc`). Correctness alone no longer proves v128 ran (the scalar
+  `wasmtime run`. Correctness alone no longer proves v128 ran (the scalar
   default is numerically equivalent), so the unit tests assert `0xFD` presence (v128) /
   absence (scalar) directly.
 
@@ -639,7 +639,7 @@ Mechanics:
   peak; on wasm-GC it is now an allocation-rate optimization, exactly as on the JVM and the
   interpreter. `--no-gc` is the only WASM target left with a never-freed arena.
 - **Measured**: `vec:dot` over an 8192-element `#d` vector, 20000 iterations under
-  `wasmtime run -W gc` — 10.1 s scalar, 0.10 s `--simd`. The jump is large because `--simd`
+  `wasmtime run` — 10.1 s scalar, 0.10 s `--simd`. The jump is large because `--simd`
   replaces the boxing-heavy scalar defun AND scalarizes to lanes; it is not 2x-per-lane.
   The GC representation costs **1.93x** on the kernel loop against todo-101's linear arena
   (marginal loop time, startup + fill subtracted: 49.5 ms → 95.7 ms). A `.wat` microbenchmark
@@ -661,7 +661,7 @@ Mechanics:
 - Composes with `--optimize` (the shaker's `skipSimd` decodes 0xFD; todo-105 added
   `v128.const`/`i8x16.shuffle`'s 16 immediate bytes and `f32x4`/`f64x2.replace_lane`'s lane
   byte) and `--component` (verified end to end under
-  `wasmtime run -W gc=y -W component-model-async=y`).
+  `wasmtime run -W component-model-async=y`).
 - Tests: `WasmLispCompilerTest` (v128 local declarations present/absent — the local decls are
   the one part of a code section that decodes without a full opcode walker, so an opcode-byte
   scan would false-positive; the default type section is a strict prefix of the `--simd` one
@@ -731,8 +731,8 @@ ForSingleFloatVectors` uses `arange 200`, whose squared sum is 2646700). `ci-spe
   `noGcRunsDoubleFloatVecKernelsWithF64x2Simd` / `noGcRunsSingleFloatVecKernelsWithF32x4Simd`
   (both now pass `simd=true` to `compileNoGcAndInvoke`) and
   `noGcRunsVecKernelsScalarWithoutSimdMatchingTheV128Results` (the scalar default, `simd=false`)
-  compile with `--no-gc` and `wasmtime run --invoke` int-returning `truncate` wrappers (no
-  `-W gc`): `vec:dot`/`sum`/`scale`/`add` + `make-array` + `setf aref` correct across every
+  compile with `--no-gc` and `wasmtime run --invoke` int-returning `truncate` wrappers:
+  `vec:dot`/`sum`/`scale`/`add` + `make-array` + `setf aref` correct across every
   tail config (0 / 1 / 3 leftover elements) and matching the interpreter f64 oracle for
   integer-valued inputs, for BOTH widths and BOTH lowerings (the f32 v128 test also runs
   `--optimize`). This is the

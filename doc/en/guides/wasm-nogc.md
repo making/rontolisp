@@ -7,11 +7,12 @@ instead: no rec group, no `struct`/`array`/`i31` type, no `eqref` and no
 import (a plain linear memory is added only when the program uses strings —
 see [below](#strings) — and the single `fd_write` import only when it
 [prints](#printing-print--princ--terpri)). A print-free module instantiates
-with no import object and runs on any MVP-class runtime with **no `-W gc`**:
+with no import object and runs on any MVP-class runtime, **no wasm-GC support
+needed**:
 
 ```bash
 rontolisp fact.lisp --no-gc -o fact.wasm
-wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no -W gc needed
+wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no wasm-GC runtime needed
 ```
 
 It achieves this by lowering each value directly onto an unboxed wasm

@@ -66,9 +66,9 @@ final class ServeComponentE2eSupport {
 	 * @param component the compiled component
 	 * @param port the port to serve on
 	 * @param work the working directory; {@code serve.log} is written there
-	 * @param extraFlags flags beyond the {@code -W gc/exceptions} every served rontolisp
-	 * component needs (async EH mode) -- e.g. the {@code -S} grants a component whose
-	 * imports reach {@code wasi:cli} / {@code wasi:sockets} must be linked with
+	 * @param extraFlags flags beyond what every served rontolisp component needs (async
+	 * EH mode) -- e.g. the {@code -S} grants a component whose imports reach
+	 * {@code wasi:cli} / {@code wasi:sockets} must be linked with
 	 * @return the server process
 	 */
 	static Process startServe(Path component, int port, Path work, List<String> extraFlags) throws IOException {

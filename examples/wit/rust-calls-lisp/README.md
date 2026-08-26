@@ -145,7 +145,7 @@ wired inside. The host calls the export by name with a
 [WAVE](https://component-model.bytecodealliance.org/) argument:
 
 ```bash
-wasmtime run -W gc=y --invoke 'describe("hello world")' vowels.wasm
+wasmtime run --invoke 'describe("hello world")' vowels.wasm
 ```
 ```console
 "\"hello world\" has 3 vowels"
@@ -158,8 +158,8 @@ component.
 
 ## Notes
 
-Only `string` and an `s32` cross the boundary -- the flat, no-`result` subset, so
-no `-W exceptions=y` is needed. The Rust component is a reactor invoked by the
+Only `string` and an `s32` cross the boundary -- the flat, no-`result` subset.
+The Rust component is a reactor invoked by the
 host; making Rust a printing command instead would pull in WASI on the Rust side,
 which is a separate concern from the cross-language call this example is about.
 The full type mapping is documented in

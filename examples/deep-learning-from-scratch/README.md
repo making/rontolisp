@@ -43,10 +43,10 @@ rontolisp ch05/train-neuralnet.lisp --simd       # same output, much faster
 rontolisp ch05/train-neuralnet.lisp -o Prog.class && java -cp .:$JAR_CLASSPATH Prog
 
 rontolisp ch05/train-neuralnet.lisp -o prog.wasm --optimize && \
-  wasmtime run -W gc --dir . prog.wasm
+  wasmtime run --dir . prog.wasm
 
 rontolisp ch05/train-neuralnet.lisp -o comp.wasm --component && \
-  wasmtime run -W gc=y --dir . comp.wasm
+  wasmtime run --dir . comp.wasm
 ```
 
 The MNIST scripts read `dataset/*-ubyte` relative to this directory, so the

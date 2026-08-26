@@ -5,7 +5,7 @@
 ;;;; Run:
 ;;;;   rontolisp examples/console/contact-book.lisp
 ;;;;   rontolisp examples/console/contact-book.lisp -o ContactBook.class && java ContactBook
-;;;;   rontolisp examples/console/contact-book.lisp -o contact-book.wasm && wasmtime run -W gc contact-book.wasm
+;;;;   rontolisp examples/console/contact-book.lisp -o contact-book.wasm && wasmtime run contact-book.wasm
 
 (defstruct contact name email phone notes)
 

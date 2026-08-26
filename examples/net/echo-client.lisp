@@ -13,7 +13,7 @@
 ;; Run (JVM):                java -jar $JAR examples/net/echo-client.lisp -o EchoClient.class && \
 ;;                           echo hello | java EchoClient
 ;; Run (WASM component):     java -jar $JAR examples/net/echo-client.lisp -o echo-client.wasm --component && \
-;;                           echo hello | wasmtime run -W gc=y -W exceptions=y \
+;;                           echo hello | wasmtime run \
 ;;                             -S tcp=y -S inherit-network=y echo-client.wasm
 (handler-case (usocket:with-client-socket (sock stream "127.0.0.1" 7777)
                 (do ((line (read-line) (read-line)))

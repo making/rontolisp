@@ -20,8 +20,8 @@
 ;;;;   rontolisp examples/ml/simd-gemv.lisp                                    # scalar
 ;;;;   rontolisp examples/ml/simd-gemv.lisp --simd                             # Vector API
 ;;;;
-;;;;   rontolisp examples/ml/simd-gemv.lisp -o gemv.wasm        && wasmtime run -W gc gemv.wasm
-;;;;   rontolisp examples/ml/simd-gemv.lisp -o gemv.wasm --simd && wasmtime run -W gc gemv.wasm
+;;;;   rontolisp examples/ml/simd-gemv.lisp -o gemv.wasm        && wasmtime run gemv.wasm
+;;;;   rontolisp examples/ml/simd-gemv.lisp -o gemv.wasm --simd && wasmtime run gemv.wasm
 ;;;;
 ;;;; The printed indices must not change. The elapsed time should. Measured on an
 ;;;; Apple M4:

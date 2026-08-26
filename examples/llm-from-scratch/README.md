@@ -68,8 +68,8 @@ any directory. On all four backends:
 cd chapter02
 rontolisp section2.lisp                                     # interpreter
 rontolisp section2.lisp -o Prog.class && java Prog          # JVM
-rontolisp section2.lisp -o prog.wasm && wasmtime run -W gc prog.wasm
-rontolisp section2.lisp -o comp.wasm --component && wasmtime run -W gc=y comp.wasm
+rontolisp section2.lisp -o prog.wasm && wasmtime run prog.wasm
+rontolisp section2.lisp -o comp.wasm --component && wasmtime run comp.wasm
 ```
 
 Chapter 3 is the same, from `chapter03/` (or `gpt/` for `shapes.lisp`).

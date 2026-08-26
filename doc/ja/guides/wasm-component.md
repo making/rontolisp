@@ -4,16 +4,16 @@
 
 ```bash
 rontolisp hello.lisp --component -o hello.wasm
-wasmtime run -W gc=y hello.wasm
+wasmtime run hello.wasm
 ```
 
 ```
 3
 ```
 
-WASI 0.3 ではすべてのバイト I/O が組み込みのコンポーネントモデル型 `stream<u8>` / `future<T>` と非同期正準 ABI を流れます。rontolisp は同じ Preview 1 コアモジュールを無変更のまま保ち — 依然として 9 つの `wasi_snapshot_preview1` 関数をインポートします — **アダプタ**コアモジュールがそれらを WASI 0.3(`wasi:cli`、`wasi:filesystem`、`wasi:clocks`、`wasi:random`)の上に `stream.new`/`stream.read`/`stream.write` と `future.read` を使って実装します。これらの組み込みは**非同期**(ノンブロッキング)版です: BLOCKED が報告されると、タスクは完了イベントが届くまでブロッキング待機の `waitable-set.wait` で待つため、アダプタは直線的なコードのままです。コンポーネントの `wasi:cli/run@0.3.0` エクスポート(`async func`)は非同期型付きのエクスポートとしてリフトされ、そこからこのブロッキング待機は合法です。これらはすべて wasmtime 46+ でデフォルト有効な基本のコンポーネントモデル非同期 ABI の上に成り立っています — ゲートされた機能フラグは残っておらず、必要なのは(wasm-GC コアのための)`-W gc=y` だけです。
+WASI 0.3 ではすべてのバイト I/O が組み込みのコンポーネントモデル型 `stream<u8>` / `future<T>` と非同期正準 ABI を流れます。rontolisp は同じ Preview 1 コアモジュールを無変更のまま保ち — 依然として 9 つの `wasi_snapshot_preview1` 関数をインポートします — **アダプタ**コアモジュールがそれらを WASI 0.3(`wasi:cli`、`wasi:filesystem`、`wasi:clocks`、`wasi:random`)の上に `stream.new`/`stream.read`/`stream.write` と `future.read` を使って実装します。これらの組み込みは**非同期**(ノンブロッキング)版です: BLOCKED が報告されると、タスクは完了イベントが届くまでブロッキング待機の `waitable-set.wait` で待つため、アダプタは直線的なコードのままです。コンポーネントの `wasi:cli/run@0.3.0` エクスポート(`async func`)は非同期型付きのエクスポートとしてリフトされ、そこからこのブロッキング待機は合法です。これらはすべて wasmtime 46+ でデフォルト有効な基本のコンポーネントモデル非同期 ABI の上に成り立っています — ゲートされた機能フラグは残っていません。
 
-wasmtime の起動方法が出力の種類を選ぶわけでは**ありません**。`wasmtime run` は wasmtime のデフォルトサブコマンドで、コアモジュールかコンポーネントかを自動検出するため、`wasmtime run -W gc` は Preview 1 の `hello.wasm` も同様に実行します。Preview 1 コアモジュールと WASI 0.3 コンポーネントのどちらが生成されるかを決めるのは、コンパイル時の `--component` フラグだけです。(実際上の違いはコンポーネント専用ランタイムで現れます。そこではコンポーネントは動きますが Preview 1 コアモジュールは動きません。)
+wasmtime の起動方法が出力の種類を選ぶわけでは**ありません**。`wasmtime run` は wasmtime のデフォルトサブコマンドで、コアモジュールかコンポーネントかを自動検出するため、`wasmtime run` は Preview 1 の `hello.wasm` も同様に実行します。Preview 1 コアモジュールと WASI 0.3 コンポーネントのどちらが生成されるかを決めるのは、コンパイル時の `--component` フラグだけです。(実際上の違いはコンポーネント専用ランタイムで現れます。そこではコンポーネントは動きますが Preview 1 コアモジュールは動きません。)
 
 ## コンポーネント内で動くもの
 
@@ -29,13 +29,13 @@ cat > fileio.lisp <<'EOF'
   (print (read-line in)))
 EOF
 rontolisp fileio.lisp --component -o fileio.wasm
-wasmtime run -W gc=y --dir . fileio.wasm
+wasmtime run --dir . fileio.wasm
 # "hello"
 ```
 
 - `random` は組み込みの生成器から draw し、その生成器は実行ごとに一度だけ `wasi:random@0.3.0` でシードされます(Preview 1 はホストの `random_get` でシードします)。そのため `(random N)` は実行ごとに異なります。[`rontolisp:random-bytes`](../reference/functions/rontolisp-random-bytes.md) は 1 バイトずつホストのエントロピーを直接使います。`get-universal-time` / `get-internal-real-time` / `get-internal-run-time` は `wasi:clocks@0.3.0`(`system-clock`/`monotonic-clock`)を読み、`uiop:getenv` は `wasi:cli/environment@0.3.0` を読みます。
-- 送信 HTTP(`rontolisp:fetch` と `rontolisp:await` / `rontolisp:futurep` の future 操作)はコンポーネントモードで動作し、真の非同期性も含みます: `fetch` はリクエストを送って(処理中の `wasi:http` レスポンスハンドルをラップした)future を即座に返すため、`await` が各リクエストをサスペンドする前に複数のリクエストを重ねられます。future 操作自体はどのモードでもコンパイルできます。コンポーネント専用なのは `fetch` だけです。fetch は非同期の `wasi:http@0.3.0`(`wasi:http/types` + `wasi:http/client`)をインポートします — コンポーネントの他の部分と同じく一様に WASI 0.3 です。fetch コンポーネントは通常のフラグに加えて `-S http=y`(ホストに `wasi:http` を提供させるフラグ)で実行してください。fetch を使わないコンポーネントは `wasi:http` をインポートしないため、`-S http` は不要です。トランスポートの失敗(接続拒否、名前解決不能)はどのバックエンドでも `await` 時に `rontolisp:wit-error` をシグナルします。`nil` が返るのはリクエストを開始できなかった場合だけです。リクエスト/レスポンスの形については [HTTP fetch ガイド](http-fetch.md)を参照してください。
-- TCP ソケット(`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`)はコンポーネントモードで `wasi:sockets@0.3.0` の上で動作します(ネイティブに WASI 0.3 — 0.2 ハイブリッドではありません)。ソケットは双方向ストリームハンドルなので、`read-line` / `write-line` / `write-string` / `read-byte` / `write-byte` / `close` が直接使えます。ソケットコンポーネントは通常のフラグに加えて `-W exceptions=y -S tcp=y -S inherit-network=y` で実行してください(tcp コンポーネントは常に exception-handling モードでコンパイルされます)。`-S` フラグがなくてもコンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` を返します。ホストは IPv4 リテラルでなければなりません(ホスト名解決はまだありません)。`rontolisp:fetch` と tcp 関数は 1 つのコンポーネントで組み合わせられ、tcp は `rontolisp:http-handler`(serve)コンポーネントの中でも使えます。async 本体では、保留中の `tcp-accept` やソケット読み取りはそのタスクだけをサスペンドします — 他のタスク(`rontolisp:wait-for` タイマーや別のリクエスト)は動き続けます。API 全体は [TCP ソケットガイド](tcp-sockets.md)を参照してください。
+- 送信 HTTP(`rontolisp:fetch` と `rontolisp:await` / `rontolisp:futurep` の future 操作)はコンポーネントモードで動作し、真の非同期性も含みます: `fetch` はリクエストを送って(処理中の `wasi:http` レスポンスハンドルをラップした)future を即座に返すため、`await` が各リクエストをサスペンドする前に複数のリクエストを重ねられます。future 操作自体はどのモードでもコンパイルできます。コンポーネント専用なのは `fetch` だけです。fetch は非同期の `wasi:http@0.3.0`(`wasi:http/types` + `wasi:http/client`)をインポートします — コンポーネントの他の部分と同じく一様に WASI 0.3 です。fetch コンポーネントは `-S http=y`(ホストに `wasi:http` を提供させるフラグ)で実行してください。fetch を使わないコンポーネントは `wasi:http` をインポートしないため、`-S http` は不要です。トランスポートの失敗(接続拒否、名前解決不能)はどのバックエンドでも `await` 時に `rontolisp:wit-error` をシグナルします。`nil` が返るのはリクエストを開始できなかった場合だけです。リクエスト/レスポンスの形については [HTTP fetch ガイド](http-fetch.md)を参照してください。
+- TCP ソケット(`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`)はコンポーネントモードで `wasi:sockets@0.3.0` の上で動作します(ネイティブに WASI 0.3 — 0.2 ハイブリッドではありません)。ソケットは双方向ストリームハンドルなので、`read-line` / `write-line` / `write-string` / `read-byte` / `write-byte` / `close` が直接使えます。ソケットコンポーネントは `-S tcp=y -S inherit-network=y` で実行してください(tcp コンポーネントは常に exception-handling モードでコンパイルされます)。`-S` フラグがなくてもコンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` を返します。ホストは IPv4 リテラルでなければなりません(ホスト名解決はまだありません)。`rontolisp:fetch` と tcp 関数は 1 つのコンポーネントで組み合わせられ、tcp は `rontolisp:http-handler`(serve)コンポーネントの中でも使えます。async 本体では、保留中の `tcp-accept` やソケット読み取りはそのタスクだけをサスペンドします — 他のタスク(`rontolisp:wait-for` タイマーや別のリクエスト)は動き続けます。API 全体は [TCP ソケットガイド](tcp-sockets.md)を参照してください。
 - それ以外の点では、コンパイルされた Lisp はサポートされる機能について Preview 1 出力と同一に振る舞います。受信 HTTP のサービング(`rontolisp:http-handler`)もコンポーネントにコンパイルされますが、別種のコンポーネント(`wasi:http/handler@0.3.0` をエクスポート)で、`wasmtime serve` のもとで動きます — [HTTP ハンドラーガイド](http-handler.md)を参照してください。
 
 インポート表面は[ツリーシェイキング](../compiling/wasm.md#optimize-tree-shaking)によって狭められ、プログラムに追随します: 表示だけを行うコンポーネントは `wasi:cli/{types,stdout}` だけをインポートし、それ以外はありません — `wasi:cli/stderr` が加わるのは、プログラムが実際にそこへ書ける場合([`warn`](../reference/macros/warn.md)、`*error-output*`、または捕捉されなかったコンディションが出す報告)だけです。これは `wasm-tools component wit` の出力にも、後述の `--emit-wit` の出力にも現れます。実行時のフラグは何も変わりません — ホストが提供すべきものが減るだけです。`--optimize=off` でビルドしたコンポーネントは、代わりにプログラムがそれらを使うかどうかに関わらず上記すべてを宣言するため、インポート表面はどのプログラムでも同じになります。
@@ -52,9 +52,9 @@ wasmtime run -W gc=y --dir . fileio.wasm
 
 ```bash
 rontolisp sumsq.lisp --component -o sumsq.wasm
-wasmtime run -W gc=y --invoke 'sumsquared(2, 3)' sumsq.wasm
+wasmtime run --invoke 'sumsquared(2, 3)' sumsq.wasm
 # 25    (the export's return value, rendered by wasmtime)
-wasmtime run -W gc=y sumsq.wasm
+wasmtime run sumsq.wasm
 # 400    (the ordinary run entry executes the top-level program)
 ```
 
@@ -72,7 +72,7 @@ wasmtime run -W gc=y sumsq.wasm
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y --invoke 'greet("世界")' greet.wasm
+wasmtime run --invoke 'greet("世界")' greet.wasm
 # "Hello, 世界"
 ```
 
@@ -88,7 +88,7 @@ wasmtime run -W gc=y --invoke 'greet("世界")' greet.wasm
 
 ```bash
 rontolisp status.lisp --component -o status.wasm
-wasmtime run -W gc=y -W exceptions=y -S http=y \
+wasmtime run -S http=y \
   --invoke 'fetch-status("https://httpbin.ik.am/status/204")' status.wasm
 # "fetching"
 # 204
@@ -125,7 +125,7 @@ package root:component;
 world root {
   export greet: func(p0: string) -> string;
 }
-$ wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
+$ wasmtime run --invoke 'greet("world")' greet.wasm
 "hello, world"
 ```
 

@@ -7,7 +7,7 @@
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/console/sorting.lisp
 ;;;;   java -jar ...-exec.jar examples/console/sorting.lisp -o Sorting.class && java Sorting
-;;;;   java -jar ...-exec.jar examples/console/sorting.lisp -o sorting.wasm && wasmtime run -W gc sorting.wasm
+;;;;   java -jar ...-exec.jar examples/console/sorting.lisp -o sorting.wasm && wasmtime run sorting.wasm
 
 ;;; Quicksort: pivot on the first element, recurse on the two partitions.
 ;;; `less` is a two-argument comparator (e.g. #'< for ascending order).

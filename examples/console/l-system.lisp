@@ -5,7 +5,7 @@
 ;;;; Run:
 ;;;;   rontolisp examples/console/l-system.lisp
 ;;;;   rontolisp examples/console/l-system.lisp -o LSystem.class && java LSystem
-;;;;   rontolisp examples/console/l-system.lisp -o l-system.wasm && wasmtime run -W gc l-system.wasm
+;;;;   rontolisp examples/console/l-system.lisp -o l-system.wasm && wasmtime run l-system.wasm
 
 (defun make-rule-table (&rest pairs)
   "Build a hash table from alternating key-value pairs."

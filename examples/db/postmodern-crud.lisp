@@ -17,7 +17,7 @@
 ;; README beside it):
 ;;   rontolisp examples/db/postmodern-crud.lisp -o Prog.class && java Prog
 ;;   rontolisp examples/db/postmodern-crud.lisp -o postmodern-crud.wasm --component --optimize
-;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABASE_URL postmodern-crud.wasm
+;;   wasmtime run -S tcp=y -S inherit-network=y --env DATABASE_URL postmodern-crud.wasm
 ;;
 ;; This file shows the query, transaction and prepared-statement layers. The
 ;; DAO layer on top of them (defclass with :metaclass dao-class, get-dao /

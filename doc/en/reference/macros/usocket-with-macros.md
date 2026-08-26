@@ -27,7 +27,7 @@ On the interpreter and the JVM the expansion wraps the body in
 closed on **every** exit -- normal return, an error signaled inside the body,
 or a `return`/`return-from` (usocket proper's semantics). This holds on the WASM
 component backend too since the exception-handling support landed (such a
-program compiles in EH mode and needs `wasmtime -W exceptions=y`, 37+). Like `rontolisp:with-arena`, these are built-in
+program compiles in EH mode). Like `rontolisp:with-arena`, these are built-in
 macro expansions, so they cannot be passed to `funcall`/`apply`.
 
 ## Backend support

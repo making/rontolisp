@@ -15,7 +15,7 @@
 ;;   rontolisp examples/net/httpbin-tiny-routes.lisp -o HttpbinTinyRoutes.class && \
 ;;     java -cp . HttpbinTinyRoutes
 ;;   rontolisp examples/net/httpbin-tiny-routes.lisp -o httpbin-tiny-routes.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
+;;     wasmtime serve -S cli=y -S tcp=y -S inherit-network=y \
 ;;       httpbin-tiny-routes.wasm
 ;; Preview 1 has no incoming TCP: the program compiles, clackup fails at run
 ;; time. Under --component the host owns the socket, so :port is ignored.

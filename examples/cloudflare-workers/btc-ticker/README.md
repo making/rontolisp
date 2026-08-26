@@ -138,7 +138,7 @@ java -jar $JAR $W -o BtcTicker.class && java -cp $JAR:. BtcTicker
 
 # 3. WASI component under wasmtime serve
 java -jar $JAR $W -o btc-ticker.wasm --component && \
-  wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y btc-ticker.wasm
+  wasmtime serve -S cli=y -S tcp=y -S inherit-network=y btc-ticker.wasm
 
 # 4. the Worker (this directory): build.sh + wrangler dev, as above
 ```

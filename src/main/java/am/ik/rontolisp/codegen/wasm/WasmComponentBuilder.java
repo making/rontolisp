@@ -17,9 +17,9 @@ import org.jspecify.annotations.Nullable;
 /**
  * Wraps a rontolisp core module (compiled in component mode) into a WASI 0.3 (Preview 3)
  * <strong>component</strong> that prints through {@code wasi:cli/stdout@0.3.0} and is
- * runnable with {@code wasmtime run -W gc=y} (wasmtime 46+; the async canonical ABI and
- * stackful lifts are on by default there, only the synchronous stream/future built-ins
- * the adapter uses are still gated).
+ * runnable with {@code wasmtime run} (wasmtime 46+; the async canonical ABI and stackful
+ * lifts are on by default there, only the synchronous stream/future built-ins the adapter
+ * uses are still gated).
  *
  * <p>
  * In WASI 0.3 the {@code wasi:io} package is gone: all byte I/O flows through the
@@ -1377,8 +1377,7 @@ public final class WasmComponentBuilder {
 	 * {@code wasi:http/handler@0.3.0} export -- a pending handler returns the packed WAIT
 	 * code and the host drives it through the callback. The HTTP glue is Lisp
 	 * (http.lisp), so there is no hand-written serve adapter. Runs under
-	 * {@code wasmtime serve -W gc=y -W exceptions=y} (wasmtime 46+; everything is base
-	 * component-model-async).
+	 * {@code wasmtime serve} (wasmtime 46+; everything is base component-model-async).
 	 * @param coreModule the rontolisp core module compiled in serve mode
 	 * @return the wasi:http@0.3.0 handler component binary
 	 */

@@ -16,7 +16,7 @@
 ;; postgres-hello.lisp (see it, and the README beside it):
 ;;   rontolisp examples/db/postgres-crud.lisp -o Prog.class && java Prog
 ;;   rontolisp examples/db/postgres-crud.lisp -o postgres-crud.wasm --component --optimize
-;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABASE_URL postgres-crud.wasm
+;;   wasmtime run -S tcp=y -S inherit-network=y --env DATABASE_URL postgres-crud.wasm
 
 (ql:quickload "cl-postgres")
 

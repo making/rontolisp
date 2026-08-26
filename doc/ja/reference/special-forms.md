@@ -13,7 +13,7 @@
 | `setq` | `(setq name value ...)` | 変数に値を代入します。複数の `name value` ペアを受け付け、左から右へ代入し、最後の値を返します |
 | `while` | `(while test body...)` | testが非nilの間、bodyを繰り返し評価します。nilを返します |
 | `return` | `(return value?)` | 最も内側を囲むループ(`do`/`dolist`/`dotimes`/`loop`)からの非局所脱出。そのループは `value`(またはnil)に評価されます |
-| `unwind-protect` | `(unwind-protect protected cleanup...)` | `protected` を評価し、そこからのあらゆる脱出時(通常復帰・`error` 巻き戻し・`return`/`return-from`)に `cleanup` フォームを実行(wasm-GC では `wasmtime -W exceptions=y` が必要。`--no-gc` ではコンパイルエラー) |
+| `unwind-protect` | `(unwind-protect protected cleanup...)` | `protected` を評価し、そこからのあらゆる脱出時(通常復帰・`error` 巻き戻し・`return`/`return-from`)に `cleanup` フォームを実行(`--no-gc` ではコンパイルエラー) |
 | `defun` | `(defun name (params...) body...)` | 関数名前空間に関数を定義します。関数名を返します |
 | `defmacro` | `(defmacro name (params...) body...)` | ユーザーマクロを定義します。呼び出しは展開され(本体は未評価の引数フォームを束縛して実行)、展開形が評価されます。`&rest`/`&body` をサポートします。名前を返します |
 | `defclass` | `(defclass name (super?) ((slot options...)...))` | クラスを定義します(静的 CLOS サブセット: 単一継承、`:initarg`/`:initform`/`:reader`/`:accessor` スロットオプション)。名前を返します |
@@ -30,7 +30,7 @@
 | `rontolisp:await` | `(rontolisp:await value)` | future が確定するまで現在の非同期関数をサスペンドし、確定値を返します。future 以外はそのまま通過します。`async-defun`/`async-lambda` の本体内とトップレベルでのみ使えます |
 | `tagbody` | `(tagbody tag-or-form...)` | go タグ付きの本体フォーム: `go` がタグへ(前方・後方を問わず)ジャンプし、末尾到達で nil を返します |
 | `go` | `(go tag)` | 囲んでいる `tagbody` のタグへ制御を移します(コンパイルされた `go` は字句的ですが、`lambda` を跨ぐものは非局所脱出として `tagbody` に再入します) |
-| `catch` | `(catch tag body...)` | `tag`(`eq` で比較されるランタイム値)で名前を付けた動的な脱出点を確立します。フォームの値は本体の値、またはその動的エクステント内で発生した一致する `throw` の値です(wasm-GC では `wasmtime -W exceptions=y` が必要、`--no-gc` ではコンパイルエラー) |
+| `catch` | `(catch tag body...)` | `tag`(`eq` で比較されるランタイム値)で名前を付けた動的な脱出点を確立します。フォームの値は本体の値、またはその動的エクステント内で発生した一致する `throw` の値です(`--no-gc` ではコンパイルエラー) |
 | `throw` | `(throw tag result)` | タグが `eq` であるもっとも内側のアクティブな `catch` へ制御(と `result`)を移します。途中の `unwind-protect` の cleanup はすべて実行され、間にある `handler-case` はこれを捕捉しません |
 
 rontolispはCommon Lispのような **Lisp-2** です。関数と変数は別々の名前空間に存在します。裸のシンボルは変数として評価され(`car`

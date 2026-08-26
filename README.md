@@ -34,7 +34,7 @@ run a program on each backend.
 
 - Java 25+ (for building and running the JAR)
 - [GraalVM](https://www.graalvm.org/) 25+ (optional, for native image build)
-- [wasmtime](https://wasmtime.dev/) (for running `.wasm` output, optional)
+- [wasmtime](https://wasmtime.dev/) 47+ (for running `.wasm` output, optional; wasm-GC and exception-handling are enabled by default)
 
 ## Install
 
@@ -73,7 +73,7 @@ rontolisp                                # REPL
 rontolisp hello.lisp                     # interpret           -> 3
 rontolisp -e '(print (+ 1 2))'           # interpret this argument (--eval) -> 3
 rontolisp hello.lisp -o Hello.class && java Hello              # JVM -> 3
-rontolisp hello.lisp -o hello.wasm && wasmtime run -W gc hello.wasm  # WASM -> 3
+rontolisp hello.lisp -o hello.wasm && wasmtime run hello.wasm  # WASM -> 3
 
 rontolisp format hello.lisp               # re-indent (a directory works too)
 rontolisp test tests/main.lisp            # run a rove suite; the exit code is the verdict

@@ -57,8 +57,8 @@ operator and the position.
 ```bash
 rontolisp prog.lisp                                  # interpret
 rontolisp prog.lisp -o Prog.class && java Prog       # JVM (class name = file stem, no directories)
-rontolisp prog.lisp -o prog.wasm && wasmtime run -W gc prog.wasm
-rontolisp prog.lisp -o prog.wasm --component && wasmtime run -W gc=y prog.wasm   # WASI 0.3
+rontolisp prog.lisp -o prog.wasm && wasmtime run prog.wasm
+rontolisp prog.lisp -o prog.wasm --component && wasmtime run prog.wasm   # WASI 0.3
 rontolisp                                            # REPL
 rontolisp -e '(print (+ 1 2))'                       # one form
 rontolisp format prog.lisp                           # re-indent in place (whitespace only)
@@ -67,10 +67,8 @@ rontolisp test tests/main.lisp                       # run a rove suite; exit 0 
 
 `rontolisp` is the native binary; `references/getting-started/build.md` says how
 to get one, and `java -jar target/rontolisp-*-exec.jar` stands in for it inside a
-build tree. The `-o` extension picks the backend. Add `-W exceptions=y` to both wasmtime
-commands when the program uses `handler-case` / `ignore-errors` /
-`unwind-protect` / `catch` / `throw`, any async form, or a `return-from` or `go`
-that crosses a `lambda`; a fetch component also needs `-S http=y`. Other flags
+build tree. The `-o` extension picks the backend. A fetch component also needs
+`-S http=y`. Other flags
 that change the emitted artifact -- `--dynamic`, `--optimize=off`/`=size`, `--no-gc`,
 `--simd`, `--blas`, `--no-prune`, `--emit-wit` -- are described under
 `references/compiling/`.

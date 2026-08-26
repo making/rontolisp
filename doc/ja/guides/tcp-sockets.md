@@ -34,7 +34,7 @@
 > バックエンドは **componentモード専用** です (`--component`、
 > `wasi:sockets@0.3.0` 経由): tcp関数はPreview 1 (コアモジュール) モードでも
 > コンパイルは通りますが呼び出し時エラーになり、ホストはIPv4リテラルでなければならず、component
-> は通常のフラグに加えて `-W exceptions=y -S tcp=y -S inherit-network=y` を
+> は `-S tcp=y -S inherit-network=y` を
 > 付けて実行する必要があります (tcp componentは常にexception-handlingモードで
 > コンパイルされます)。tcp関数と
 > [`rontolisp:http-handler`](http-handler.md) の組み合わせは1つのcomponentに
@@ -139,7 +139,7 @@ WASM componentにコンパイルして (wasmtime 46+。ネットワークアク�
 
 ```bash
 rontolisp echo-server.lisp -o echo-server.wasm --component
-wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y echo-server.wasm
+wasmtime run -S tcp=y -S inherit-network=y echo-server.wasm
 ```
 
 どのバックエンドでサーブしていても、任意のTCPクライアント、たとえば
@@ -780,7 +780,7 @@ rontolisp のソケットはストリームハンドルそのものなので、�
 - **`with-*` マクロはインタープリタと JVM ではあらゆる脱出時にソケットを
   閉じます**([`unwind-protect`](../reference/special-forms/unwind-protect.md)
   に展開されます)。これは WASM コンポーネントバックエンドでも成り立ちます
-  (tcp コンポーネントはもともと `-W exceptions=y` 付きで実行されます)。互換性の
+  (tcp コンポーネントは常に exception-handling モードでコンパイルされます)。互換性の
   ためのキーワード引数(`:element-type`、`:timeout`、`:nodelay`、
   `:reuse-address` など)は受理して無視します。
 - **バックエンド**: インタープリタと JVM はフル対応。WASM は tcp 組み込みと

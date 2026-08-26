@@ -205,12 +205,11 @@ DELETE FROM article WHERE (id = ?)
 - **インタプリタ** — 上記すべて。
 - **JVM クラス** — `rontolisp blog.lisp -o Blog.class && java Blog`。
   生成されたクラスは自己完結しています。
-- **WASM コンポーネント** (`--component`) — wasmtime の 2 つの機能フラグと
-  2 つのソケット権限が必要です:
+- **WASM コンポーネント** (`--component`) — 2 つのソケット権限が必要です:
 
   ```bash
   rontolisp blog.lisp -o blog.wasm --component
-  wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y blog.wasm
+  wasmtime run -S tcp=y -S inherit-network=y blog.wasm
   ```
 
   `:host` は **IPv4 リテラル**でなければなりません — WASM ではホスト名解決が

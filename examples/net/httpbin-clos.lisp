@@ -23,7 +23,7 @@
 ;;   java -jar $JAR examples/net/httpbin-clos.lisp -o HttpbinClos.class && java -cp . HttpbinClos
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/httpbin-clos.lisp -o httpbin-clos.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y httpbin-clos.wasm
+;;     wasmtime serve httpbin-clos.wasm
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 ;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'

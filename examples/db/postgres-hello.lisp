@@ -26,7 +26,7 @@
 ;; On WASM the driver needs --component (TCP is WASI 0.3 sockets; Preview 1 has
 ;; no host socket API):
 ;;   rontolisp examples/db/postgres-hello.lisp -o postgres-hello.wasm --component --optimize
-;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABASE_URL postgres-hello.wasm
+;;   wasmtime run -S tcp=y -S inherit-network=y --env DATABASE_URL postgres-hello.wasm
 ;; TLS (sslmode) is interpreter/JVM only; use plain TCP on WASM.
 
 (ql:quickload "cl-postgres")

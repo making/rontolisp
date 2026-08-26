@@ -13,7 +13,7 @@
 #                     (the jar is on the classpath because a compiled program that
 #                     reaches a runtime support class -- an HTTP server, a socket,
 #                     a Gray stream -- needs it; most are self-contained and do not)
-#     wasm            <driver> FILE -o prog.wasm --optimize   then  wasmtime run -W gc --dir . prog.wasm [args]
+#     wasm            <driver> FILE -o prog.wasm --optimize   then  wasmtime run --dir . prog.wasm [args]
 #   COMPILE (blocking servers / host-invoked modules never return on their own --
 #   or are never run as a program at all: a war is deployed into a container and a
 #   reactor is called by its host -- so we only build them and assert the compile
@@ -100,7 +100,7 @@ examples:
         - "Alice (alice@newdomain.com)"
   - path: console/error-handling.lisp
     backends: [interpreter, jvm, wasm]
-    note: catching compiles via the wasm exception-handling proposal; the driver passes -W exceptions=y
+    note: catching compiles via the wasm exception-handling proposal
     expect:
       file: .expected/error-handling.txt
   - path: console/hanoi.lisp
@@ -642,7 +642,7 @@ examples:
       import lowering (canon lower: result / option / variant / record /
       list<u8> / list<string> / bool / resource handles all marshalled); the
       harness only compiles it, because RUNNING it needs a host that provides
-      wasi:keyvalue -- and wasmtime does: `wasmtime run -W gc=y -W exceptions=y
+      wasi:keyvalue -- and wasmtime does: `wasmtime run
       -S keyvalue=y prog.wasm` prints
       exactly the interpreter's lines, from a store that has never heard of this
       program. No Preview 1 leg: a core import carries flat values only, and every
@@ -671,8 +671,8 @@ examples:
       user WIT instance import alongside its fixed wasi:http surface; jvm-compile
       pins that the same source
       compiles where the store is a Lisp provider instead. Compile-only, like
-      every blocking server here: running it means `wasmtime serve -W gc=y -W
-      exceptions=y -S keyvalue=y server.wasm` (whose in-memory kv store is rebuilt
+      every blocking server here: running it means `wasmtime serve
+      -S keyvalue=y server.wasm` (whose in-memory kv store is rebuilt
       per instance, so the tally restarts each request) or `wash dev` on wasmCloud,
       where an out-of-process provider holds the counts and they accumulate
 
@@ -711,7 +711,7 @@ examples:
       composition.wac): imports example:pipeline/shout with rontolisp:wit-import.
       wasm-component pins the import lowering; RUNNING it needs the Rust shouter and
       the Lisp counter wired in with a single `wac compose` (a chain plug cannot
-      do in one step), off the test path. Assembled, `wasmtime run -W gc=y
+      do in one step), off the test path. Assembled, `wasmtime run
       pipeline.wasm` prints "hello world  ->  HELLO WORLD!!!"
   - path: wit/pipeline/stats.lisp
     backends: [wasm-component]

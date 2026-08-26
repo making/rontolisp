@@ -18,7 +18,7 @@ rontolisp repl.lisp               # interpret
 rontolisp repl.lisp -o repl.class
 java repl                                                                  # REPL on the JVM
 rontolisp repl.lisp -o repl.wasm
-wasmtime run -W gc repl.wasm                                               # REPL on WASM
+wasmtime run repl.wasm                                                     # REPL on WASM
 ```
 
 The self-hosted REPL parses each input line with the embedded runtime reader

@@ -15,7 +15,7 @@
 ;;   rontolisp examples/net/httpbin-ningle.lisp -o HttpbinNingle.class && \
 ;;     java -cp . HttpbinNingle
 ;;   rontolisp examples/net/httpbin-ningle.lisp -o httpbin-ningle.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
+;;     wasmtime serve -S cli=y -S tcp=y -S inherit-network=y \
 ;;       httpbin-ningle.wasm
 ;; Preview 1 has no incoming TCP: the program compiles, clackup fails at run
 ;; time. Under --component the host owns the socket, so :port is ignored.

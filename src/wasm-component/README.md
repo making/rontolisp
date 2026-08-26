@@ -80,7 +80,7 @@ and `WitOracleE2eTest` (live `wasm-tools` diff; skipped when the binary is not o
 Run a generated component with:
 
 ```bash
-wasmtime run -W gc=y --dir . prog.wasm
+wasmtime run --dir . prog.wasm
 ```
 
 ## What the blobs declare, and how to see it
@@ -173,7 +173,7 @@ end with:
 
 ```bash
 wasm-tools validate -f component-model -f cm-async prog.wasm
-wasmtime run -W gc=y --dir . prog.wasm
+wasmtime run --dir . prog.wasm
 ```
 
 ## Sockets (`rontolisp:tcp-*`) — the `sockets.lisp` library, no adapter blob
@@ -184,7 +184,7 @@ There is no sockets blob variant anymore: the tcp built-ins are the
 spliced by `eval/SocketsLibrary`), so a tcp program is the BASE variant plus
 one appended user import — which is why tcp now composes with fetch and with
 `rontolisp:http-handler` in one component. Run a socket component with
-`-W gc=y -W exceptions=y -S tcp=y -S inherit-network=y` (it is an async
+`-S tcp=y -S inherit-network=y` (it is an async
 component); IPv4 literals only (`wasi:sockets/ip-name-lookup` is not wired
 yet). Details: `../../.kb/tcp-sockets.md`.
 
@@ -205,7 +205,7 @@ the `stream<u8>` / `future<T>` built-ins bound off `http.wit`'s transparent type
 The user-facing API is unchanged (`fetch` returns an `await`-able future, same options,
 same response plist) except that a transport failure now SIGNALS `rontolisp:wit-error` at
 await time, like the interpreter and the JVM. Run a fetch component with
-`wasmtime run -W gc=y -W exceptions=y -S http=y` -- everything is base
+`wasmtime run -S http=y` -- everything is base
 `component-model-async` (default-on in wasmtime 46+), so no gated feature flag is needed.
 Mechanics: `../../.kb/fetch-http.md`.
 
@@ -271,9 +271,9 @@ A program using `rontolisp:http-handler` compiles to the http-server variant: a
 `wasi:http/handler@0.3.0` component for `wasmtime serve` (wasmtime 46+). ONE shape serves
 plain serve AND serve+fetch — the 0.3 `service` world always imports `client`, so the
 block declares it either way and a handler that never fetches simply binds no `send`. Run
-with `wasmtime serve -W gc=y -W exceptions=y` (the handle export is a CALLBACK async
+with `wasmtime serve` (the handle export is a CALLBACK async
 lift against a stub callback; the task's blocking is the parked `waitable-set.wait`
-inside the wrappers, so neither gated wasmtime feature is needed). The blob set is:
+inside the wrappers, so no gated wasmtime feature is needed). The blob set is:
 
 ```
 src/wasm-component/

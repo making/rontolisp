@@ -4,7 +4,7 @@
 ;;;;
 ;;;; Run:
 ;;;;   rontolisp size-report/programs/pi_approx/pi_approx.lisp -o pi.wasm --optimize=size
-;;;;   wasmtime run -W gc pi.wasm
+;;;;   wasmtime run pi.wasm
 
 (let ((sum 0.0) (sign 1.0))
   (dotimes (i 1000000)

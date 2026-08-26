@@ -41,7 +41,7 @@ import java.util.List;
  * The integer claims are the load-bearing half of {@code decode}: every one of jose's
  * claim checks is an {@code integerp} guard, so the JSON decoder has to answer an INTEGER
  * rather than the string it would fall back to. The exercise uses {@code handler-case},
- * so it compiles in EH mode and both WASM legs run with {@code -W exceptions=y}.
+ * so it compiles in EH mode on both WASM legs.
  */
 class JoseE2eTest extends AsdfLibraryE2eSupport {
 

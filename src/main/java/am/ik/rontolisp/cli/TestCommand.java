@@ -331,8 +331,8 @@ final class TestCommand {
 		out.println("  -o FILE            Compile the run instead of performing it: the");
 		out.println("                     emitted .class / .wasm carries the same exit");
 		out.println("                     contract. Every compiler flag applies (--component,");
-		out.println("                     --optimize=off, ...); a .wasm needs -W exceptions=y");
-		out.println("                     to run, rove's handler-bind putting it in EH mode");
+		out.println("                     --optimize=off, ...); a .wasm compiles in EH mode,");
+		out.println("                     since rove's handler-bind puts it there");
 		out.println("  --system-path DIRS Directories searched for NAME.asd (like PATH)");
 		out.println("  --dist DISTS       Dists ql:quickload may download from, beside");
 		out.println("                     quicklisp: a name (ultralisp) or a distinfo URL");

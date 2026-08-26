@@ -143,8 +143,8 @@ Chosen 2026-07-13 (user decision after weighing all three todo-124 options):
   (2026-07-14): the wasm-GC backends compile `handler-case` through the
   exception-handling proposal (`.kb/error-handling.md`, "WASM (todo-129)"), so
   the error arm is catchable on every backend except `--no-gc` and the
-  todo-128 prerequisite is SATISFIED. Programs that catch need
-  `wasmtime -W exceptions=y` (37+).
+  todo-128 prerequisite is SATISFIED. Programs that catch require
+  wasmtime 37+ (exception-handling support).
 - Why not (a) multiple values `(values ok err)`: it is implementable today with zero
   new machinery (a `(values ...)` tail in the synthesized stub rides the `%mv-spill`
   channel, `.kb/multiple-values.md`) and would even give wasm-GC recoverability now —
@@ -1285,8 +1285,8 @@ option (c) decision above.
   exists (wit-import canon lower, the async promotion rewrite, `%future-force`,
   `TYPE_WASI_STREAM` handles) -- it is the byte-stability/flag-neutrality CONTRACT for
   non-async programs: 0.3 file/stdio I/O is stream-based, so a Lisp-library
-  implementation makes every file- or print-using component an async+EH component
-  (`-W exceptions=y` for hello-world), exactly the flip the stdin migration deliberately
+  implementation makes every file- or print-using component an async+EH component,
+  exactly the flip the stdin migration deliberately
   avoided by keeping the adapter's sync branch. Per surface: env/clock/random are
   sync-lowerable TODAY but buy nothing (no promotion goal, no blob deletion since the
   `fd_*` surface stays, per-program WIT-world churn) -- declined; file I/O migration's

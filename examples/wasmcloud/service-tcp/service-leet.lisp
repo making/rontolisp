@@ -24,7 +24,7 @@
 ;;     java ServiceLeet
 ;; Run (WASI component under wasmtime run):
 ;;   rontolisp examples/wasmcloud/service-tcp/service-leet.lisp -o service-leet.wasm --component && \
-;;     wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y service-leet.wasm
+;;     wasmtime run -S tcp=y -S inherit-network=y service-leet.wasm
 ;; Run (wasmCloud, both halves in one host):
 ;;   cd examples/wasmcloud/service-tcp && wash dev
 ;; Talk to it with:

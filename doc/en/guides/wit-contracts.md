@@ -35,7 +35,7 @@ world greeter {
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
+wasmtime run --invoke 'greet("world")' greet.wasm
 # "Hello, world!"
 ```
 
@@ -123,7 +123,7 @@ top-level function:
 
 ```bash
 rontolisp adder.lisp --component -o adder.wasm
-wasmtime run -W gc=y --invoke 'add(20, 22)' adder.wasm
+wasmtime run --invoke 'add(20, 22)' adder.wasm
 # 42
 ```
 
@@ -325,7 +325,7 @@ by another Lisp module that exports the function under that field name:
 ```bash
 rontolisp host.lisp -o host.wasm --no-wasi
 rontolisp main.lisp -o main.wasm --no-wasi
-wasmtime run -W gc --preload math=host.wasm --invoke add10 main.wasm 32
+wasmtime run --preload math=host.wasm --invoke add10 main.wasm 32
 # 42
 ```
 
@@ -405,8 +405,7 @@ so a program written against it runs with no adapter and no rewriting:
 
 ```bash
 rontolisp counter.lisp -o counter.wasm --component
-wasmtime run -W gc=y -W exceptions=y \
-    -S keyvalue=y counter.wasm
+wasmtime run -S keyvalue=y counter.wasm
 ```
 
 The canonical ABI is what marshals the rich types, so the component boundary
@@ -470,7 +469,7 @@ while a store lives outside it:
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+wasmtime serve -S keyvalue=y server.wasm
 curl http://127.0.0.1:8080/index
 ```
 

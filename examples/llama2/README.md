@@ -45,9 +45,9 @@ rontolisp llama2.lisp -o Prog.class --simd && \
 rontolisp llama2.lisp -o Prog.class --gpu --simd && \
   java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog $ARGS  # + an NVIDIA GPU
 rontolisp llama2.lisp -o llama2.wasm --simd && \
-  wasmtime run -W gc --dir . llama2.wasm $ARGS
+  wasmtime run --dir . llama2.wasm $ARGS
 rontolisp llama2.lisp -o llama2.wasm --simd --component && \
-  wasmtime run -W gc --dir . llama2.wasm $ARGS
+  wasmtime run --dir . llama2.wasm $ARGS
 ```
 
 Every one of them prints

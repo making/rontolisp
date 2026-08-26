@@ -18,7 +18,7 @@
 ;;;   rontolisp check.lisp --system-path $SP
 ;;;   rontolisp check.lisp --system-path $SP -o Check.class && java -cp . Check
 ;;;   rontolisp check.lisp --system-path $SP -o check.wasm --optimize && \
-;;;     wasmtime run -W gc -W exceptions=y check.wasm
+;;;     wasmtime run check.wasm
 
 (asdf:load-system :rove)
 (use-package :rove)

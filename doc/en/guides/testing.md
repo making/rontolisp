@@ -124,14 +124,14 @@ $T
 $T -o Tests.class && java Tests
 
 # 3. WASM Preview 1
-$T -o tests.wasm && wasmtime run -W gc=y -W exceptions=y tests.wasm
+$T -o tests.wasm && wasmtime run tests.wasm
 
 # 4. WASI 0.3 component
 $T -o tests-comp.wasm --component && \
-  wasmtime run -W gc=y -W exceptions=y tests-comp.wasm
+  wasmtime run tests-comp.wasm
 ```
 
-Both WASM runs need `-W exceptions=y`: rove records a failing test through
+Both WASM modules compile in EH mode: rove records a failing test through
 `handler-bind`, which puts the module in EH mode. A test program that is its own
 runner (below) compiles the same way with a plain `rontolisp`, no `test`.
 

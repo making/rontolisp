@@ -120,7 +120,7 @@ java -jar $JAR $W -o DogRelay.class && java -cp $JAR:. DogRelay
 
 # 3. WASI component under wasmtime serve
 java -jar $JAR $W -o dog-relay.wasm --component && \
-  wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y dog-relay.wasm
+  wasmtime serve -S cli=y -S tcp=y -S inherit-network=y dog-relay.wasm
 
 # 4. the Worker (this directory): build.sh + wrangler dev, as above
 ```

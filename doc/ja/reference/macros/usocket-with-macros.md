@@ -28,7 +28,7 @@ usocket の便利マクロ群です: それぞれ本体の間だけソケット�
 `return`/`return-from` のいずれでも(本家 usocket のセマンティクス)。
 exception-handling サポートの導入以降、これは WASM コンポーネント
 バックエンドでも成り立ちます(そのようなプログラムは EH モードでコンパイル
-され、`wasmtime -W exceptions=y`(37+)が必要です)。`rontolisp:with-arena` と同じく組み込みマクロ
+されます)。`rontolisp:with-arena` と同じく組み込みマクロ
 展開なので、`funcall`/`apply` に渡すことはできません。
 
 ## バックエンドごとの対応

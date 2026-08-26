@@ -22,7 +22,7 @@ directive, declaring the WASM-boundary types of its parameters and result:
 
 ```bash
 rontolisp fact.lisp -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5
+wasmtime run --invoke fact fact.wasm 5
 ```
 
 ```
@@ -93,7 +93,7 @@ the `--no-gc` / `--component` flags:
 
 | | GC core module (default / `--no-wasi`) | GC `--component` | `--no-gc` core module | `--no-gc --component` |
 | --- | --- | --- | --- | --- |
-| Host requirements | wasm-GC engine (`wasmtime -W gc`, Node 22+, current browsers) | wasmtime 46+ (`-W gc=y`) or a component host with wasm-GC + JSPI (a [browser via jco](wasm-browser.md) loads and computes, but cannot print yet) | **any** WebAssembly engine | any component-model host, **no flags** — including a [browser via jco](wasm-browser.md), with no dependencies at all |
+| Host requirements | wasm-GC engine (wasmtime, Node 22+, current browsers) | wasmtime 46+ or a component host with wasm-GC + JSPI (a [browser via jco](wasm-browser.md) loads and computes, but cannot print yet) | **any** WebAssembly engine | any component-model host, **no flags** — including a [browser via jco](wasm-browser.md), with no dependencies at all |
 | Export shape | raw core function | typed component-model export (WAVE `--invoke`, jco) | raw core function | typed component-model export (WAVE `--invoke`, jco) |
 | Scalars | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void |
 | `:string` | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) |
@@ -137,7 +137,7 @@ $ cat host.lisp
 (rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
 $ rontolisp host.lisp -o host.wasm --no-wasi
 $ rontolisp main.lisp -o main.wasm --no-wasi
-$ wasmtime run -W gc --preload host=host.wasm --invoke add10 main.wasm 32
+$ wasmtime run --preload host=host.wasm --invoke add10 main.wasm 32
 42
 ```
 

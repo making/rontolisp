@@ -8,7 +8,7 @@
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/console/calc.lisp
 ;;;;   java -jar ...-exec.jar examples/console/calc.lisp -o Calc.class && java Calc
-;;;;   java -jar ...-exec.jar examples/console/calc.lisp -o calc.wasm && wasmtime run -W gc calc.wasm
+;;;;   java -jar ...-exec.jar examples/console/calc.lisp -o calc.wasm && wasmtime run calc.wasm
 
 ;;; Look a variable up in the environment (an alist of (symbol . value)).
 ;;; Symbols compare by eql, so plain `assoc` is enough -- no :test needed.

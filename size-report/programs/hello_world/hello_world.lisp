@@ -2,6 +2,6 @@
 ;;;;
 ;;;; Run:
 ;;;;   rontolisp size-report/programs/hello_world/hello_world.lisp -o hello.wasm --optimize=size
-;;;;   wasmtime run -W gc hello.wasm
+;;;;   wasmtime run hello.wasm
 
 (format t "Hello, World!~%")

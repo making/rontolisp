@@ -93,13 +93,13 @@ request `:body` from an s-expression.
   component is uniformly WASI 0.3. The future wraps the in-flight async
   `client.send` subtask, so multiple requests genuinely overlap. Compile with
   `--component` and run with
-  `wasmtime run -W gc=y -W exceptions=y -S http=y`
+  `wasmtime run -S http=y`
   (wasmtime 46+; `-S http=y` makes the host provide `wasi:http`). fetch remains
   a compile error in Preview 1 (core-module) mode, which has no host
   `wasi:http`; the generic future operations (`await`, `then`, `futurep`)
   compile in every mode. fetch also works inside a
   [`rontolisp:http-handler`](rontolisp-http-handler.md) serve component (a
-  proxy-style handler): run it with `wasmtime serve -W gc=y -W exceptions=y` —
+  proxy-style handler): run it with `wasmtime serve` —
   the serve host provides `wasi:http/client` by default, no `-S http=y` needed.
 - **`--no-wasi` reactor with `--host-fetch`**: the same source compiles on a
   reactor (which imports no WASI), lowered onto two injected host imports —

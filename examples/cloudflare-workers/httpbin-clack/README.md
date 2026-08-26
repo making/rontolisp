@@ -146,7 +146,7 @@ backend the compiler has:
 ```bash
 rontolisp check.lisp                                  # interpreter
 rontolisp check.lisp -o Check.class && java -cp . Check
-rontolisp check.lisp -o check.wasm && wasmtime run -W gc -W exceptions=y check.wasm
+rontolisp check.lisp -o check.wasm && wasmtime run check.wasm
 ```
 
 [`examples.yaml`](../../examples.yaml) pins all three. The report on standard

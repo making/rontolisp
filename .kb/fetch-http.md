@@ -279,9 +279,9 @@ compile error.
   arm (`rontolisp:wit-error`); `rontolisp:fetch` composes it through the async-defun
   `%fetch-run` and keeps the nil-on-start-failure contract. `:body` comes back as a
   `TYPE_WASI_STREAM` (see `.kb/async-await.md`). Run flags:
-  `wasmtime run -W gc=y -W exceptions=y -S http=y`
+  `wasmtime run -S http=y`
   (everything is base component-model-async, default-on; `-S http=y` links the
-  host's `wasi:http`; `-W exceptions=y` because asyncMode forces EH mode).
+  host's `wasi:http`).
   Non-fetch components do not import `wasi:http`.
 - **serve (incoming)**: the handler implements `handler.handle: async func(request) ->
   result<response, error-code>` as a CALLBACK async lift (stub callback; the task's
@@ -294,9 +294,8 @@ compile error.
   `WasmServeComponentBuilder.build` lowers http.lisp's own wasi:http surface FROM the
   block (`lowerServeIoFromBlock` emits every appendUserImports member kind against the
   block's instances) and an ADDITIONAL user `wit-import` (e.g. wasi:keyvalue) rides
-  `appendUserImports` alongside. Run flags: `wasmtime serve -W gc=y -W exceptions=y
-  ` -- no gated feature flags (the `service` world's client import is
-  host-provided by default -- no `-S http=y`).
+  `appendUserImports` alongside. Run flags: `wasmtime serve` -- no gated feature flags
+  (the `service` world's client import is host-provided by default -- no `-S http=y`).
 - **Bodies (shared, symmetric)**: request and response are the same 0.3 shape
   (`contents: option<stream<u8>>` + a trailers future), so `%http-body-value` serves
   both directions: it runs `consume-body` (which MOVES its resource) eagerly and
@@ -460,8 +459,7 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   order: task.return -> stream.write -> drop-writable -> future.write trailers).
   **Headers are marshalled both directions** (`fields-copy-all` in,
   `fields.append` out). http.lisp uses `handler-case`, so a serve component is
-  EH-mode. Run with `wasmtime serve -W gc=y -W exceptions=y
-  `.
+  EH-mode. Run with `wasmtime serve`.
   **Top-level init runs on the FIRST handle call, once per instance** -- and an
   instance serves MANY requests, not one: `wasmtime serve` (and Spin) retire a
   WASIp3 instance after `--max-instance-reuse-count` requests, 128 by default,

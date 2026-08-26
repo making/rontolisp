@@ -7,9 +7,9 @@
 ;; Data: run ../download-mnist.sh once, then from examples/deep-learning-from-scratch/:
 ;;   rontolisp ch03/mnist-show.lisp
 ;;   rontolisp ch03/mnist-show.lisp -o Prog.class && java -cp .:<rontolisp jar> Prog
-;;   rontolisp ch03/mnist-show.lisp -o prog.wasm --optimize && wasmtime run -W gc --dir . prog.wasm
+;;   rontolisp ch03/mnist-show.lisp -o prog.wasm --optimize && wasmtime run --dir . prog.wasm
 ;;   rontolisp ch03/mnist-show.lisp -o comp.wasm --component && \
-;;     wasmtime run -W gc=y --dir . comp.wasm
+;;     wasmtime run --dir . comp.wasm
 
 (load "../dataset/mnist.lisp")
 

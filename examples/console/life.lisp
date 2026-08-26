@@ -7,7 +7,7 @@
 ;;;;
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/console/life.lisp
-;;;;   java -jar ...-exec.jar examples/console/life.lisp -o life.wasm && wasmtime run -W gc life.wasm
+;;;;   java -jar ...-exec.jar examples/console/life.lisp -o life.wasm && wasmtime run life.wasm
 
 (load "life-core.lisp")
 

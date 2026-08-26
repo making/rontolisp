@@ -188,7 +188,7 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
   するプログラムの常として自己完結しており、サーバがクラスの隣に出力されます
   (`java -cp . App`。`-o app.jar` なら `java -jar app.jar`)。
 - **WASM コンポーネント** (`--component`) — ソケットはホストが所有します:
-  `wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y
+  `wasmtime serve -S cli=y -S tcp=y
   -S inherit-network=y app.wasm` で実行します。`:port` 引数は無視され、
   `:use-thread` は実質 `nil` (WASM バックエンドはシングルスレッドなので、
   そこではデフォルトが `nil`)、`clack:stop` は意味を持ちません — サーバの

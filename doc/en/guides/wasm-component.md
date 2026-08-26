@@ -6,7 +6,7 @@ Preview 1 core module. The component prints through
 
 ```bash
 rontolisp hello.lisp --component -o hello.wasm
-wasmtime run -W gc=y hello.wasm
+wasmtime run hello.wasm
 ```
 
 ```
@@ -25,12 +25,11 @@ variants: when one reports BLOCKED, the task parks on a blocking
 straight-line code. The component's `wasi:cli/run@0.3.0` export (an
 `async func`) is lifted as an async-typed export, from which that blocking
 wait is legal. All of this sits on the base component-model async ABI,
-enabled by default in wasmtime 46+ — no gated feature flags remain; only
-`-W gc=y` (for the wasm-GC core) is needed.
+enabled by default in wasmtime 46+ — no gated feature flags remain.
 
 The wasmtime invocation does **not** select the output kind. `wasmtime run`
 is wasmtime's default subcommand and auto-detects a core module vs a
-component, so `wasmtime run -W gc` runs a Preview 1 `hello.wasm` just as
+component, so `wasmtime run` runs a Preview 1 `hello.wasm` just as
 well. Only the `--component` compile flag decides whether a Preview 1 core
 module or a WASI 0.3 component is produced. (The practical difference shows
 up on a component-only runtime, which runs the component but not the
@@ -57,7 +56,7 @@ cat > fileio.lisp <<'EOF'
   (print (read-line in)))
 EOF
 rontolisp fileio.lisp --component -o fileio.wasm
-wasmtime run -W gc=y --dir . fileio.wasm
+wasmtime run --dir . fileio.wasm
 # "hello"
 ```
 
@@ -78,7 +77,7 @@ wasmtime run -W gc=y --dir . fileio.wasm
   component-only. fetch imports the async `wasi:http@0.3.0`
   (`wasi:http/types` + `wasi:http/client`) — uniformly WASI 0.3, like the
   rest of the component. Run a fetch component with `-S http=y` (which makes
-  the host provide `wasi:http`) in addition to the usual flags. Non-fetch
+  the host provide `wasi:http`). Non-fetch
   components do not import `wasi:http`, so they do not need `-S http`. A
   transport failure (refused connection, unresolvable host) signals
   `rontolisp:wit-error` at `await` time on every backend; `nil` comes back
@@ -89,8 +88,8 @@ wasmtime run -W gc=y --dir . fileio.wasm
   (natively WASI 0.3 — no 0.2 hybrid). A socket is a bidirectional stream
   handle, so `read-line` / `write-line` / `write-string` / `read-byte` /
   `write-byte` / `close` work on it directly. Run a socket component with
-  `-W exceptions=y -S tcp=y -S inherit-network=y` in addition to the usual
-  flags (a tcp component always compiles in exception-handling mode);
+  `-S tcp=y -S inherit-network=y`
+  (a tcp component always compiles in exception-handling mode);
   without the `-S` flags the component still starts but every socket
   operation fails and yields `nil`. Hosts must be IPv4 literals (no
   hostname resolution yet). `rontolisp:fetch` and the tcp functions can be
@@ -132,9 +131,9 @@ same component still runs as a command:
 
 ```bash
 rontolisp sumsq.lisp --component -o sumsq.wasm
-wasmtime run -W gc=y --invoke 'sumsquared(2, 3)' sumsq.wasm
+wasmtime run --invoke 'sumsquared(2, 3)' sumsq.wasm
 # 25    (the export's return value, rendered by wasmtime)
-wasmtime run -W gc=y sumsq.wasm
+wasmtime run sumsq.wasm
 # 400    (the ordinary run entry executes the top-level program)
 ```
 
@@ -165,7 +164,7 @@ stays flat across repeated calls:
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y --invoke 'greet("世界")' greet.wasm
+wasmtime run --invoke 'greet("世界")' greet.wasm
 # "Hello, 世界"
 ```
 
@@ -188,7 +187,7 @@ async-typed lift as the `run` entry — and remove that residual risk.
 
 ```bash
 rontolisp status.lisp --component -o status.wasm
-wasmtime run -W gc=y -W exceptions=y -S http=y \
+wasmtime run -S http=y \
   --invoke 'fetch-status("https://httpbin.ik.am/status/204")' status.wasm
 # "fetching"
 # 204
@@ -256,7 +255,7 @@ package root:component;
 world root {
   export greet: func(p0: string) -> string;
 }
-$ wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
+$ wasmtime run --invoke 'greet("world")' greet.wasm
 "hello, world"
 ```
 

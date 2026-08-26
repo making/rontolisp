@@ -194,7 +194,7 @@ war には後から独自の `web.xml`（フィルタ、セキュリティ制約
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y app.wasm
+$ wasmtime serve app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -202,10 +202,10 @@ GET /hello
 
 この場合モジュールは `wasi:http/handler@0.3.0`（非同期の WASI 0.3 HTTP
 world）をエクスポートし、ソケットはホストが所有するため `port` 引数は無視
-されます。フラグはコンポーネントが実際に使う機能を有効化するものです:
-WebAssembly GC プロポーザル（`-W gc=y`）と例外処理プロポーザル
-（`-W exceptions=y`。Lisp で書かれた HTTP グルーがボディの終端検出に使用
-します）です。ハンドラは**コールバック非同期リフト**のエクスポートで、
+されます。コンポーネントは WebAssembly GC プロポーザルと例外処理
+プロポーザル（Lisp で書かれた HTTP グルーがボディの終端検出に使用）を
+使い、どちらも wasmtime 47+ ではデフォルトで有効です。ハンドラは
+**コールバック非同期リフト**のエクスポートで、
 サスペンドしたハンドラ（タイマ・fetch・ボディ読みの await）は制御をホスト
 に返し、各完了イベントはコンポーネントのコールバック経由で届けられます —
 いずれも wasmtime 46+ でデフォルト有効な基本のコンポーネントモデル非同期
@@ -334,7 +334,7 @@ WASI コンポーネントバックエンドでは、外向きリクエストの
 
 ```console
 $ rontolisp proxy.lisp -o proxy.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y proxy.wasm
+$ wasmtime serve proxy.wasm
 ```
 
 完全な例は
@@ -385,7 +385,7 @@ JSON で応答します。
 
 ```console
 $ rontolisp page-hits-server.lisp -o server.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+$ wasmtime serve -S keyvalue=y server.wasm
 ```
 
 同じソースがインタープリタと JVM でも動きます。そこでは Lisp で書かれた

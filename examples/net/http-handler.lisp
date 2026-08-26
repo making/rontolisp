@@ -18,7 +18,7 @@
 ;;   java -jar $JAR examples/net/http-handler.lisp -o App.class && java -cp . App
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/http-handler.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
+;;     wasmtime serve app.wasm
 ;; Run (the same component under Spin, which owns the socket on :3000):
 ;;   cd examples/net/http-handler && spin build && spin up
 ;; Talk to it with:  curl http://127.0.0.1:8080/hello

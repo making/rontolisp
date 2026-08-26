@@ -45,8 +45,8 @@
 ;;;;   rontolisp examples/ml/tiny-llm.lisp                                   # scalar
 ;;;;   rontolisp examples/ml/tiny-llm.lisp --simd                            # Vector API
 ;;;;
-;;;;   rontolisp examples/ml/tiny-llm.lisp -o llm.wasm         && wasmtime run -W gc llm.wasm
-;;;;   rontolisp examples/ml/tiny-llm.lisp -o llm.wasm --simd  && wasmtime run -W gc llm.wasm
+;;;;   rontolisp examples/ml/tiny-llm.lisp -o llm.wasm         && wasmtime run llm.wasm
+;;;;   rontolisp examples/ml/tiny-llm.lisp -o llm.wasm --simd  && wasmtime run llm.wasm
 ;;;;
 ;;;; The token ids must not change. The elapsed time should. Measured on an M4
 ;;;; (decode only, weight init excluded):

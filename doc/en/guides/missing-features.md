@@ -70,8 +70,7 @@ Lisp:
   non-local exit that re-enters the `tagbody` at the tag and carries on.
 
 A cross-`lambda` `return-from` or `go`, `catch`/`throw`, `unwind-protect`, and
-condition catching all compile in exception-handling mode, so the emitted
-wasm-GC modules need `wasmtime -W exceptions=y` (37+); under `--no-gc`
+condition catching all compile in exception-handling mode; under `--no-gc`
 `catch`/`throw`, `unwind-protect` and the condition forms are a compile error.
 
 ## Restarts

@@ -142,10 +142,9 @@ compiled function. Machinery:
   the JVM handler
   rethrows a pending `_nleTl` before dispatching, and wasm uses a distinct tag with a
   block-exit passthrough that restores the handler depth (`JvmHandlerCaseCompiler` /
-  `WasmHandlerCaseCompiler`, both gated on the cross-lambda-exit flag). **EH-mode / flag
-  trigger:** a program with a cross-lambda exit compiles in EH mode and needs
-  `wasmtime -W exceptions=y` on both wasm run commands, exactly like `handler-case`; a
-  program without one is byte-identical and flag-free. `--no-gc` keeps the old
+  `WasmHandlerCaseCompiler`, both gated on the cross-lambda-exit flag). **EH-mode
+  trigger:** a program with a cross-lambda exit compiles in EH mode, exactly like
+  `handler-case`; a program without one is byte-identical. `--no-gc` keeps the old
   name-dropping `expandBlock` lowering and has no `return-from` at all (it never ran
   `desugarProgram`), so this does not apply there; the interpreter was already correct and
   is untouched.
@@ -198,8 +197,8 @@ qualification, not the constant, tells them apart.
 - **EH-mode / tag gating**: `catch`/`throw` join the `usesEhForm` list and widen the
   block-exit gate, renamed to what it now means -- `Ctx.blockExitTag` (wasm) /
   `Ctx.blockExitChannel` (JVM), true when EITHER a cross-lambda exit is lowered OR the
-  program uses `catch`/`throw`. So a program using them needs `wasmtime -W exceptions=y`
-  like every other EH form, and a program using neither stays byte-identical.
+  program uses `catch`/`throw`. So a program using them compiles in EH mode like every
+  other EH form, and a program using neither stays byte-identical.
 - **Limits**: `--no-gc` rejects both with a compile error (its contract is a zero-flag MVP
   module). An unmatched `throw` surfaces per backend: an error message on the interpreter,
   `RuntimeException: THROW: no enclosing catch for the tag` (a compile-time constant
@@ -248,7 +247,7 @@ wasm-GC).
   `prog`/`prog*` establish tags the same way (their body IS a tagbody body): the
   re-entry loop is spliced in as their single body item, leaving the `%block` a plain
   `(return)` exits in place. Same EH gating as the `return-from` crossing (it sets the
-  same `crossLambda.used()` flag), so such a program needs `wasmtime -W exceptions=y`.
+  same `crossLambda.used()` flag).
   Pinned by `JvmLispCompilerTest.compileAndRunGoInsideLambdaReentersOuterTagbody`, the
   wasm `goInsideLambdaReentersOuterTagbody`, and the `cross-lambda-go` ci-spec case.
   **Reason the lowering lives at the AST level**: restructuring the JVM `tagbody` into a

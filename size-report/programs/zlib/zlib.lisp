@@ -14,7 +14,7 @@
 ;;;;
 ;;;; Run (the first run downloads chipz into ~/.rontolisp/quicklisp):
 ;;;;   rontolisp size-report/programs/zlib/zlib.lisp -o zlib.wasm --optimize=size
-;;;;   wasmtime run -W gc -W exceptions=y zlib.wasm <input.gz >output
+;;;;   wasmtime run zlib.wasm <input.gz >output
 
 (ql:quickload "chipz")
 

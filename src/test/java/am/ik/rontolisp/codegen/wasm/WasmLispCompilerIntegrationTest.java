@@ -243,7 +243,7 @@ class WasmLispCompilerIntegrationTest {
 
 	// EH-mode variant (handler-case / ignore-errors / unwind-protect): the emitted
 	// module carries the $lisp-cond tag section, so wasmtime needs the
-	// exception-handling proposal enabled (`-W exceptions=y`, wasmtime 37+).
+	// exception-handling proposal enabled.
 	private static String compileAndRunEh(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
@@ -324,8 +324,7 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	// The non-EH twin of the above: no catching form, so the module carries no tag
-	// section and needs no `-W exceptions=y` -- an uncaught condition is the bare
-	// `unreachable` %error has always been.
+	// section -- an uncaught condition is the bare `unreachable` %error has always been.
 	private static String compileAndRunExpectTrap(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
@@ -1802,8 +1801,7 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	// Compiles with --no-gc (the non-GC lowering, scalar vec: kernels) and invokes an
-	// export
-	// WITHOUT `-W gc`, proving the module runs on a plain MVP runtime with no wasm-GC and
+	// export, proving the module runs on a plain MVP runtime with no wasm-GC and
 	// no import object.
 	private static String compileNoGcAndInvoke(OptimizeLevel optimize, String lispCode, String function, String... args)
 			throws Exception {
@@ -1834,8 +1832,8 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void noGcModuleRunsWithoutWasmGcAndMatchesTheInterpreter() throws Exception {
 		// The headline case: a recursive factorial compiled to a plain MVP module runs
-		// with no `-W gc`. Integers are unboxed i64, floats f64, so the results match the
-		// interpreter across the pure-numeric range.
+		// with no wasm-GC requirement. Integers are unboxed i64, floats f64, so the
+		// results match the interpreter across the pure-numeric range.
 		String fact = """
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
 				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
@@ -1877,7 +1875,7 @@ class WasmLispCompilerIntegrationTest {
 	// Compiles with --no-gc --component (the compact reactor component) and
 	// calls an export through the canonical ABI with WAVE syntax. The component carries
 	// the plain MVP core module with NO adapter / import block / mem module, so it runs
-	// with ZERO extra flags: no `-W gc`, no component-model-async flags -- assert that by
+	// with ZERO extra flags: no wasm-GC, no component-model-async flags -- assert that by
 	// passing none. Like the GC component path this is the supported invoke path, so
 	// stderr must carry no "experimental" warning.
 	private static String compileNoGcComponentAndInvoke(String lispCode, String waveInvocation) throws Exception {
@@ -1912,7 +1910,7 @@ class WasmLispCompilerIntegrationTest {
 		// Every --no-gc scalar type crosses the canonical ABI: :int -> s32, :long -> s64
 		// (the full 64-bit range -- :long is valid here, unlike the GC component),
 		// :float -> f64, :bool -> bool (WAVE prints true/false), omitted :returns -> no
-		// result. All with zero wasmtime flags (no -W gc, no async built-ins).
+		// result. All with zero wasmtime flags (no wasm-GC, no async built-ins).
 		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_PROGRAM, "sumsquared(2, 3)")).isEqualTo("13");
 		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_PROGRAM, "bigmul(3000000000, 3)"))
 			.isEqualTo("9000000000");
@@ -2063,7 +2061,7 @@ class WasmLispCompilerIntegrationTest {
 		// dropping anything unreachable from the exports while preserving behavior.
 		// `used`
 		// is reachable and kept; `dead` is not and is removed, yet the module still runs
-		// with no `-W gc`.
+		// with no wasm-GC requirement.
 		String program = """
 				(defun used (n) (* n 2))
 				(defun dead (n) (+ n 999))
@@ -2083,7 +2081,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void noGcSupportsFloatBoolAndCrossFunctionCalls() throws Exception {
 		// :float (f64) and :bool (i32 0/1) boundaries, mutual recursion / cross-calls,
-		// and mod -- all on the unboxed scalar path, invoked with no `-W gc`.
+		// and mod -- all on the unboxed scalar path, with no wasm-GC requirement.
 		String program = """
 				(defun gcd2 (a b) (if (= b 0) a (gcd2 b (mod a b))))
 				(defun area (r) (* 3.14159 (* r r)))
@@ -2102,9 +2100,9 @@ class WasmLispCompilerIntegrationTest {
 	void noGcSupportsIterationAndLocalMutation() throws Exception {
 		// dotimes / do loops with a let-bound accumulator mutated by setq -- the
 		// iterative
-		// counterparts of recursion, all on the unboxed scalar path with no `-W gc`. The
-		// accumulator in `sumsq` starts as integer 0 but is summed with floats, so its
-		// inferred type widens to f64.
+		// counterparts of recursion, all on the unboxed scalar path with no wasm-GC
+		// requirement. The accumulator in `sumsq` starts as integer 0 but is summed with
+		// floats, so its inferred type widens to f64.
 		String program = """
 				(defun sum-upto (n)
 				  (let ((acc 0)) (dotimes (i n) (setq acc (+ acc i))) acc))
@@ -2366,9 +2364,9 @@ class WasmLispCompilerIntegrationTest {
 		// Under --no-gc --simd, the packed double-float (F64VEC) vec: kernels lower to
 		// native
 		// f64x2 v128 SIMD and
-		// run on a plain MVP runtime (no `-W gc`). Results are wrapped in truncate so the
-		// host boundary is a deterministic :int (independent of wasmtime's float
-		// printing).
+		// run on a plain MVP runtime (no wasm-GC requirement). Results are wrapped in
+		// truncate so the host boundary is a deterministic :int (independent of
+		// wasmtime's float printing).
 		// vec:dot #d(1..5) with itself = 1+4+9+16+25 = 55 (count 5 = one f64x2 pair + odd
 		// tail); vec:sum over 7 elements = 280; vec:scale x3 then sum = 45; make-array
 		// 'double-float + setf aref building i*i sums to 30 (n=5) / 140 (n=8).
@@ -2406,8 +2404,8 @@ class WasmLispCompilerIntegrationTest {
 		// Under --no-gc --simd, the packed single-float (F32VEC) vec: kernels lower to
 		// native
 		// f32x4 v128 SIMD
-		// (four lanes per iteration) and run on a plain MVP runtime (no `-W gc`). Inputs
-		// are
+		// (four lanes per iteration) and run on a plain MVP runtime (no wasm-GC
+		// requirement). Inputs are
 		// f32-exact (integer-valued) so the f32-throughout computation matches the exact
 		// result. Covers every scalar-tail configuration of the count & 3 remainder loop:
 		// dot55 #f(1..5) . itself = 55 (count 5 = one f32x4 quad + 1 tail element)
@@ -2473,8 +2471,8 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'sum280 :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'scalesum :params '(:int) :returns :int)
 				""";
-		// simd=false -- the scalar loops, run with no `-W gc` (and no SIMD proposal
-		// needed).
+		// simd=false -- the scalar loops, run with no wasm-GC requirement (and no SIMD
+		// proposal needed).
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, doubles, "dot55", "0")).isEqualTo("55");
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, doubles, "sum280", "0")).isEqualTo("280");
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, doubles, "scalesum", "0")).isEqualTo("45");
@@ -3839,9 +3837,9 @@ class WasmLispCompilerIntegrationTest {
 		// with-muffled-conditions expands into call-with-muffled-conditions, a spliced
 		// defun the program never names -- the surface-form rule in UiopLibrary is what
 		// selects it, and without that this compiled to a call-time "undefined function".
-		// Its body is handler-bind + muffle-warning, so the whole module is in EH mode
-		// (compileAndRunProgram passes -W exceptions=y). style-warn signals uiop's own
-		// simple-style-warning, which really is a style-warning, so a handler for the CL
+		// Its body is handler-bind + muffle-warning, so the whole module is in EH mode.
+		// style-warn signals uiop's own simple-style-warning, which really is a
+		// style-warning, so a handler for the CL
 		// supertype catches it. The JVM twin is
 		// JvmLispCompilerTest.compileAndRunUiopMuffledConditionsAndStyleWarn.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
@@ -11737,9 +11735,8 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
-	// Compiles an asyncMode --component program (async surface forces EH mode, so the
-	// run needs -W exceptions=y) and invokes a component-model export by its WAVE
-	// signature.
+	// Compiles an asyncMode --component program (async surface forces EH mode) and
+	// invokes a component-model export by its WAVE signature.
 	private static String compileAsyncComponentAndInvoke(String lispCode, String invocation) throws Exception {
 		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
@@ -12090,7 +12087,7 @@ class WasmLispCompilerIntegrationTest {
 	// The combinators are LispPreludeLibrary defuns that expand to async-lambda + await
 	// + handler-case + unwind-protect, so each backend must run its own splice AND flip
 	// EH mode (the WASM compiler auto-detects the head symbols and produces the tag
-	// section, so wasmtime needs `-W exceptions=y` on both variants).
+	// section on both variants).
 	private static String compileAndRunCombinatorsP1(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
@@ -12690,8 +12687,8 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void componentNonAsyncStdinKeepsTheAdapterPathAndItsFlags() throws Exception {
 		// The byte-stability contract at run level: a synchronous stdin program is
-		// NOT migrated -- it keeps the preview1 adapter's stdin branch, so it still
-		// runs WITHOUT -W exceptions=y.
+		// NOT migrated -- it keeps the preview1 adapter's stdin branch, so it does not
+		// compile in EH mode.
 		String program = "(print (read-line))";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/stdin-sync.component.wasm");
@@ -16773,7 +16770,7 @@ class WasmLispCompilerIntegrationTest {
 
 	// --- The restart system: the wasm mirrors of the JVM restart pins.
 	// A restart-mode program is in EH mode (the expansions ride catch/throw +
-	// unwind-protect), so these all run under -W exceptions=y.
+	// unwind-protect).
 
 	@Test
 	void ehRestartCaseNormalCompletionReturnsPrimaryValues() throws Exception {
@@ -17423,7 +17420,8 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:http-handler 'handle)
 				""", null);
 		// blocking-read signals rontolisp:wit-error on the `closed` arm (a WIT result's
-		// error arm), so reading to EOF needs handler-case -- hence -W exceptions=y.
+		// error arm), so reading to EOF needs handler-case, which puts the module in EH
+		// mode.
 		byte[] fetchBytes = compileWitImportComponent(vendoredWasiHttpWit(), """
 				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.3.0" :package http)
 				(rontolisp:wit-import "iface.wit" :interface "wasi:http/client@0.3.0" :package client)

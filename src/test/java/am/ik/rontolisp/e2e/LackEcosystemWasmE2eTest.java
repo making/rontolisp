@@ -84,7 +84,7 @@ class LackEcosystemWasmE2eTest {
 	}
 
 	// Compiles the given exercise to WASM and runs it in the pinned wasmtime
-	// container. -W exceptions=y: every exercise compiles in EH mode (the substrate's
+	// container. Every exercise compiles in EH mode (the substrate's
 	// handler-case around the spill; the lack chain's handler-case/unwind-protect
 	// sites inside the loaded libraries; the served-body chain is async).
 	private String runWasm(Path workDir, String source, String output, List<String> extraFlags) throws Exception {

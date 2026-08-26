@@ -28,8 +28,8 @@ resolves it, and a handful of combinators build on top.
 > thread — after its first suspension it runs in *real parallelism* with the
 > caller. On **`--component`** the body compiles into a cooperative,
 > single-threaded state machine over the WASI 0.3 component-model async ABI
-> ([see below](#under-the-hood-wasi-preview-3-futures--streams)); such a
-> component must run with `wasmtime -W exceptions=y`. **Preview 1** WASM has no
+> ([see below](#under-the-hood-wasi-preview-3-futures--streams)).
+> **Preview 1** WASM has no
 > asynchronous host I/O, so async bodies run to completion eagerly (a
 > degenerate-but-observably-consistent synchronous mode), and `wait-for` /
 > the guest stream operations are compile errors there. **`--no-gc`** rejects
@@ -248,9 +248,7 @@ streams lower directly onto them:
   pending future, so a slow body read parks only its own task while another
   task's timer or fetch keeps running.
 
-Because the async ABI uses the component-model exception mechanism, any async
-component must run with `wasmtime -W exceptions=y` on top of `-W gc=y`. All of
-this rides the base component-model async support enabled by default in
+This rides the base component-model async support enabled by default in
 wasmtime 46+ — no experimental feature flags remain. See the
 [WASI 0.3 Component guide](wasm-component.md) for the component runtime as a
 whole.

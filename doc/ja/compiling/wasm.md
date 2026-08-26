@@ -1,11 +1,11 @@
 # WASM へのコンパイル
 
-`rontolisp` に `-o` で `.wasm` で終わる出力パスを与えると、ソースを解釈実行する代わりに WebAssembly バイナリへコンパイルします。JVM バックエンドと同様、出力の拡張子がターゲットを選択し、バイナリはサードパーティのアセンブラなしで直接出力されます:
+`rontolisp` に `-o` で `.wasm` で終わる出力パスを与えると、ソースを解釈実行する代わりに WebAssembly バイナリへコンパイルします。JVM バックエンドと同様、出力の拡張子がターゲットを選択し、バイナリはサードパーティのアセンブラなしで直接出力されます。以下の例は [wasmtime](https://wasmtime.dev/) 47+ を前提としており、wasm-GC と例外処理はデフォルトで有効です:
 
 ```bash
 echo '(print (+ 1 2))' > hello.lisp
 rontolisp hello.lisp -o hello.wasm
-wasmtime run -W gc hello.wasm
+wasmtime run hello.wasm
 ```
 
 ```lisp
@@ -27,7 +27,7 @@ wasmtime run -W gc hello.wasm
 
 | 出力形状 | フラグ | 言語 | 動作環境 | 詳細 |
 | --- | --- | --- | --- | --- |
-| WASI コマンドモジュール | (なし) | 全機能 | WASI Preview 1 対応の wasm-GC エンジン(`wasmtime run -W gc`) | [wasm-GC コアモジュール](../guides/wasm-gc-module.md) |
+| WASI コマンドモジュール | (なし) | 全機能 | WASI Preview 1 対応の wasm-GC エンジン(`wasmtime run`) | [wasm-GC コアモジュール](../guides/wasm-gc-module.md) |
 | ライブラリ(リアクター)モジュール | `--no-wasi` | 全機能(純粋計算エクスポート) | インポート不要の任意の wasm-GC エンジン(Node 22+、現行ブラウザ。`--host-random` を付けるとホストインポートが 1 つ、`--host-fetch` では 2 つ増える) | [`--no-wasi` リアクターモード](../guides/wasm-gc-module.md#no-wasi-reactor-mode) |
 | WASI 0.3 コンポーネント | `--component` | 全機能 + コンポーネント限定 I/O(`rontolisp:fetch`、TCP ソケット) | wasmtime 46+ または wasm-GC 対応の別のコンポーネントホスト | [WASI 0.3 コンポーネント](../guides/wasm-component.md) |
 | リアクターコンポーネント | `--component --no-wasi` | 全機能(純粋計算エクスポート) | wasm-GC 対応の任意のコンポーネントホスト、空のインポートオブジェクト | [リアクターコンポーネント](../guides/wasm-component.md#reactor-components---component---no-wasi) |
@@ -57,7 +57,7 @@ wasmtime run -W gc hello.wasm
 echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 (rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
 rontolisp fact.lisp --no-wasi -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~2.5 KB module
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~2.5 KB module
 ```
 
 `--optimize=off` を渡すと、モジュールは代わりに、関数インデックスがそのとき固定に保たれるために、プログラムが実際に使うものとは無関係に**ランタイム全体**(プリンター、有理数、文字列、リーダー、`eval` ヘルパー、WASI インポートスロットなど)を埋め込みます: 同じ `fact` のモジュールは約 2.5 KB ではなく約 155 KB になります。このシェイキングは動作を保存します: 実際の `call` 命令から呼び出しグラフを辿るため、到達可能なもの(組み込みの `eval`/`load` がディスパッチするコードを含む)はすべて保持されます。`--component` を含む**すべての**出力形状で有効です。同じレベルは [JVM 出力](jvm.md)のデッドコード除去も行います。
@@ -105,10 +105,10 @@ format の制御文字列に含まれる `~/name/` ディレクティブも該�
 
 ```bash
 rontolisp fact.lisp --no-gc -o fact.wasm
-wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~108 byte module (no -W gc)
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~108 byte module
 ```
 
-ソースは変更不要で（`wasm-export` は値モデルを問わず同じ挙動）、生成モジュールは `-W gc` の要求も落とします。
+ソースは変更不要で（`wasm-export` は値モデルを問わず同じ挙動）、生成モジュールは wasm-GC エンジンの要求も落とします。
 
 レベルとは独立に（`--component` を含むすべての出力モードで）、コンパイルは常にスプライスしたライブラリをツリーシェイキングします。対象は同梱の Lisp ソースライブラリ（`linalg:`、`vec:`、JSON、URL、`equalp`/`string<`）と、[`asdf:load-system` / `ql:quickload`](../guides/asdf-systems.md) で読み込んだシステムです。プログラムがソース中でその名前に一切言及しない（クォートされたシンボルや文字列リテラルの中も含む）関数・変数・定数はモジュールに含まれません。あなた自身のコードが刈られることはなく、`load`/`require` でスプライスされたファイルも刈られません。対象になるのはシステム由来のライブラリだけです。
 
@@ -146,7 +146,7 @@ wasm-GC のコード生成には、速度と引き換えにバイト数を費や
 
 `--simd` はすべてのバックエンドに共通する唯一のアクセラレーションスイッチです: ベクトル化可能な [`vec:` および `linalg:` カーネル](../guides/simd-acceleration.md)を本物のベクトル命令へローワリングします。WASM では値モデルと直交します:
 
-- **wasm-GC + `--simd`** はカーネルを GC 管理のレーングループ配列上のネイティブ固定幅 SIMD(`f64x2`/`f32x4`)へローワリングします — パック float 配列は通常の GC オブジェクトのままで、メモリはフラグなしの場合とまったく同じに振る舞います。`--component` およびすべての `--optimize` レベルと組み合わせられ、通常どおり `wasmtime run -W gc` で実行します(wasmtime は SIMD プロポーザルをデフォルトで有効にしています)。
+- **wasm-GC + `--simd`** はカーネルを GC 管理のレーングループ配列上のネイティブ固定幅 SIMD(`f64x2`/`f32x4`)へローワリングします — パック float 配列は通常の GC オブジェクトのままで、メモリはフラグなしの場合とまったく同じに振る舞います。`--component` およびすべての `--optimize` レベルと組み合わせられ、通常どおり `wasmtime run` で実行します(wasmtime は SIMD プロポーザルをデフォルトで有効にしています)。
 - **`--no-gc` + `--simd`** は同じカーネルをパックされたリニアメモリブロック上の `v128` へローワリングします。`--simd` なしの `--no-gc` は代わりに素のスカラーループを出力します — SIMD プロポーザルのないランタイムでも動く v128 フリーの MVP モジュールです。
 
 全体像 — どのカーネルがベクトル化されるか、単精度リダクションの精度規則、測定された効果、`linalg` のインターセプト — は [SIMD アクセラレーションガイド](../guides/simd-acceleration.md)にあります。

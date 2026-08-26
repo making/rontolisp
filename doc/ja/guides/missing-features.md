@@ -70,8 +70,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
   非局所脱出になります。
 
 `lambda` をまたぐ `return-from` と `go`、`catch`/`throw`、`unwind-protect`、
-条件の捕捉はいずれも例外処理モードでコンパイルされるため、出力される wasm-GC
-モジュールの実行には `wasmtime -W exceptions=y`（37+）が必要です。`--no-gc` では
+条件の捕捉はいずれも例外処理モードでコンパイルされます。`--no-gc` では
 `catch`/`throw`、`unwind-protect` と条件系のフォームはコンパイルエラーに
 なります。
 

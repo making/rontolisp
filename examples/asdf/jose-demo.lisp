@@ -2,8 +2,7 @@
 ;; / JWT -- loaded via asdf:load-system from the REAL upstream sources. Run with:
 ;;   SYS=src/test/resources/jose:src/test/resources/cl-json:src/test/resources/ironclad:src/test/resources/cl-base64:src/test/resources/split-sequence:src/test/resources/assoc-utils:src/test/resources/alexandria:src/test/resources/trivial-utf-8
 ;;   rontolisp examples/asdf/jose-demo.lisp --system-path $SYS
-;; Runs on all four backends. It uses handler-case, so both wasm runs need
-;; -W exceptions=y.
+;; Runs on all four backends. It uses handler-case.
 
 (asdf:load-system :jose)
 

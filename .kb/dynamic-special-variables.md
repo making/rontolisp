@@ -226,8 +226,7 @@ interpreter keeps its native `evalProgv`):
   the compilers cover for unwind-protect -- normal completion, an error
   unwinding past the form, a `return-from`/`go` out of the body -- restores
   through the same emitter, and the `.todo/192` holes are neither widened nor
-  narrowed. On WASM this is why `progv` FORCES EH MODE (`usesEhForm` lists it;
-  run with `-W exceptions=y`).
+  narrowed. On WASM this is why `progv` FORCES EH MODE (`usesEhForm` lists it).
 - A name in NO arm (CL lets `progv` bind an undeclared symbol) is bound in the
   eval runtime's global env mirror (`_genv`/`GLOBAL_ENV`) -- what
   `symbol-value`/`boundp` read on the compile paths -- via

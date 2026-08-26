@@ -185,7 +185,7 @@ on this target's native inbound transport", chosen at compile time:
   served program it is self-contained, its server travelling beside the class
   (`java -cp . App`, or `-o app.jar` and `java -jar app.jar`).
 - **WASM component** (`--component`) — the host owns the socket: run with
-  `wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y
+  `wasmtime serve -S cli=y -S tcp=y
   -S inherit-network=y app.wasm`. The `:port` argument is ignored,
   `:use-thread` is effectively `nil` (the WASM backends are single-threaded,
   so it defaults to `nil` there) and `clack:stop` is meaningless — the host

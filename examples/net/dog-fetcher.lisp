@@ -16,7 +16,7 @@
 ;; Run (WASI component under wasmtime serve; the wasi:http/client import that
 ;; carries the outbound fetch is host-provided by default):
 ;;   java -jar $JAR examples/net/dog-fetcher.lisp -o dog-fetcher.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y dog-fetcher.wasm
+;;     wasmtime serve dog-fetcher.wasm
 ;; Compile (--no-wasi reactor, THIS SAME SOURCE: http-handler becomes the
 ;; host-driven handle-request export, and --host-fetch lowers fetch onto the
 ;; host's own client, imported as env.fetch -- the Cloudflare Workers shape,

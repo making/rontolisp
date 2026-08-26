@@ -30,7 +30,7 @@ program names a host:
 | interpret | the program binds it | `PORT=3000 rontolisp ../../net/hello-clack.lisp` |
 | `-o App.class` | the program binds it | `java -cp . App`, `PORT` the same |
 | `-o app.war` | the Servlet container | `cp app.war $CATALINA_HOME/webapps/` |
-| `-o app.wasm --component` | the wasi:http host | `wasmtime serve -W gc=y -W exceptions=y -S cli=y app.wasm` |
+| `-o app.wasm --component` | the wasi:http host | `wasmtime serve -S cli=y app.wasm` |
 | `-o worker.wasm --no-wasi` | Cloudflare | this directory: the generated `src/worker.js` calls `handle-request` |
 
 ```bash
@@ -38,7 +38,7 @@ PORT=3000 rontolisp ../../net/hello-clack.lisp                            # :300
 rontolisp ../../net/hello-clack.lisp -o App.class && java -cp . App       # :8080
 rontolisp ../../net/hello-clack.lisp -o app.war                          # any Servlet 6 container
 rontolisp ../../net/hello-clack.lisp -o app.wasm --component && \
-  wasmtime serve -W gc=y -W exceptions=y -S cli=y app.wasm
+  wasmtime serve -S cli=y app.wasm
 ./build.sh                                                                # this Worker
 ```
 

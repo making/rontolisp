@@ -169,8 +169,7 @@ Preview 1 では、生成されるモジュールは手書きの等価物と**�
 
 ```bash
 rontolisp counter.lisp -o counter.wasm --component
-wasmtime run -W gc=y -W exceptions=y \
-    -S keyvalue=y counter.wasm             # the HOST is the provider
+wasmtime run -S keyvalue=y counter.wasm    # the HOST is the provider
 ```
 
 これは **serve される**コンポーネント
@@ -182,7 +181,7 @@ wasmtime run -W gc=y -W exceptions=y \
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+wasmtime serve -S keyvalue=y server.wasm
 ```
 
 その状態が実際に*残る*かどうかはコンポーネントではなくホストの都合です:

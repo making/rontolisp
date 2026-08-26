@@ -27,7 +27,7 @@ world greeter {
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
+wasmtime run --invoke 'greet("world")' greet.wasm
 # "Hello, world!"
 ```
 
@@ -80,7 +80,7 @@ world adder {
 
 ```bash
 rontolisp adder.lisp --component -o adder.wasm
-wasmtime run -W gc=y --invoke 'add(20, 22)' adder.wasm
+wasmtime run --invoke 'add(20, 22)' adder.wasm
 # 42
 ```
 
@@ -195,7 +195,7 @@ Preview 1 WASM では、各 WIT 関数が [`rontolisp:wasm-import`](wasm-host-bo
 ```bash
 rontolisp host.lisp -o host.wasm --no-wasi
 rontolisp main.lisp -o main.wasm --no-wasi
-wasmtime run -W gc --preload math=host.wasm --invoke add10 main.wasm 32
+wasmtime run --preload math=host.wasm --invoke add10 main.wasm 32
 # 42
 ```
 
@@ -241,8 +241,7 @@ WIT の `result<T, E>` は値ではありません。ok アームが戻り値で
 
 ```bash
 rontolisp counter.lisp -o counter.wasm --component
-wasmtime run -W gc=y -W exceptions=y \
-    -S keyvalue=y counter.wasm
+wasmtime run -S keyvalue=y counter.wasm
 ```
 
 豊かな型をマーシャリングするのは canonical ABI なので、コンポーネントの境界は Preview 1 の境界よりはるかに多くを運びます: `result` (その error アームは `rontolisp:wit-error` コンディションとして到着し、`handler-case` で捕捉できます)、`option`、`record` (キーワード plist)、`variant`、`enum`、`tuple`、`list<T>`、`list<u8>`、`string`、`bool`、そして `resource` ハンドル。
@@ -276,7 +275,7 @@ wasmtime run -W gc=y -W exceptions=y \
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+wasmtime serve -S keyvalue=y server.wasm
 curl http://127.0.0.1:8080/index
 ```
 

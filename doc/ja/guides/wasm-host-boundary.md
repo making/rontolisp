@@ -15,7 +15,7 @@
 
 ```bash
 rontolisp fact.lisp -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5
+wasmtime run --invoke fact fact.wasm 5
 ```
 
 ```
@@ -71,7 +71,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 
 | | GC core module (default / `--no-wasi`) | GC `--component` | `--no-gc` core module | `--no-gc --component` |
 | --- | --- | --- | --- | --- |
-| ホスト要件 | wasm-GC エンジン(`wasmtime -W gc`、Node 22+、現行ブラウザ) | wasmtime 46+(`-W gc=y`)または wasm-GC + JSPI 対応のコンポーネントホスト([jco 経由のブラウザ](wasm-browser.md)ではロードと計算はできるが、まだ印字はできない) | **任意の** WebAssembly エンジン | 任意のコンポーネントモデルホスト、**フラグ不要** — 依存ゼロで動く [jco 経由のブラウザ](wasm-browser.md)を含む |
+| ホスト要件 | wasm-GC エンジン(wasmtime、Node 22+、現行ブラウザ) | wasmtime 46+ または wasm-GC + JSPI 対応のコンポーネントホスト([jco 経由のブラウザ](wasm-browser.md)ではロードと計算はできるが、まだ印字はできない) | **任意の** WebAssembly エンジン | 任意のコンポーネントモデルホスト、**フラグ不要** — 依存ゼロで動く [jco 経由のブラウザ](wasm-browser.md)を含む |
 | エクスポートの形 | 生のコア関数 | 型付きコンポーネントモデルエクスポート(WAVE `--invoke`、jco) | 生のコア関数 | 型付きコンポーネントモデルエクスポート(WAVE `--invoke`、jco) |
 | スカラー | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void |
 | `:string` | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) |
@@ -107,7 +107,7 @@ $ cat host.lisp
 (rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
 $ rontolisp host.lisp -o host.wasm --no-wasi
 $ rontolisp main.lisp -o main.wasm --no-wasi
-$ wasmtime run -W gc --preload host=host.wasm --invoke add10 main.wasm 32
+$ wasmtime run --preload host=host.wasm --invoke add10 main.wasm 32
 42
 ```
 

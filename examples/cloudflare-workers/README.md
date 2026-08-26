@@ -86,8 +86,7 @@ All verified end to end under `npx wrangler dev` (workerd), not inferred:
 - **wasm-GC runs.** rontolisp's default output is WebAssembly GC, and workerd is
   V8, which has had WasmGC on by default since Chrome 119. No flag, no setting.
 - **wasm exception handling runs**, also with no flag — so `handler-case` can
-  answer 500 from inside the Lisp. Under wasmtime the same module needs
-  `-W exceptions=y`.
+  answer 500 from inside the Lisp.
 - **JSPI runs**, again with no flag and no compatibility-date opt-in, so a
   synchronous wasm import can be answered by an `async` JavaScript function —
   which is what lets a reactor, whose `rontolisp:fetch` is unavailable, make

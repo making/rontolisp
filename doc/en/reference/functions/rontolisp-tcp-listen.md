@@ -35,8 +35,8 @@ bidirectional stream (see
   `SO_REUSEADDR` on the interpreter); a failed bind (for example a port
   already in use) signals an error.
 - **WASM**: component-only, over `wasi:sockets@0.3.0`. `host` must be an IPv4
-  literal. Compile with `--component` and run with `wasmtime run -W gc=y
-  -W exceptions=y -S tcp=y -S inherit-network=y` (wasmtime 46+); a failed
+  literal. Compile with `--component` and run with `wasmtime run
+  -S tcp=y -S inherit-network=y` (wasmtime 46+); a failed
   bind returns `nil`. Call-time error in Preview 1 (core-module) mode.
 - **Browser playground**: not supported (no raw TCP in the browser sandbox).
 

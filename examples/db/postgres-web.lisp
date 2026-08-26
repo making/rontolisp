@@ -22,7 +22,7 @@
 ;; it the linker rejects the module with "resource implementation is missing",
 ;; which reads like the host has no sockets at all:
 ;;   rontolisp examples/db/postgres-web.lisp -o app.wasm --component --optimize
-;;   wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y --env DATABASE_URL app.wasm
+;;   wasmtime serve -S cli=y -S tcp=y -S inherit-network=y --env DATABASE_URL app.wasm
 ;; wasmCloud runs the same component (wash dev; its startup log lists 0.2
 ;; interfaces but it does provide wasi:sockets 0.3), and so does Spin (the
 ;; canary build, https://github.com/spinframework/spin/releases/tag/canary --

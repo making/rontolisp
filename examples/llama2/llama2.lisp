@@ -37,9 +37,9 @@
 ;;;;   rontolisp llama2.lisp -o Prog.class --gpu --simd && \
 ;;;;     java --enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector Prog $ARGS
 ;;;;   rontolisp llama2.lisp -o llama2.wasm --simd && \
-;;;;     wasmtime run -W gc --dir . llama2.wasm $ARGS
+;;;;     wasmtime run --dir . llama2.wasm $ARGS
 ;;;;   rontolisp llama2.lisp -o llama2.wasm --simd --component && \
-;;;;     wasmtime run -W gc --dir . llama2.wasm $ARGS
+;;;;     wasmtime run --dir . llama2.wasm $ARGS
 ;;;;
 ;;;; Temperature 0 is greedy decoding: the story is the same on every run, every
 ;;;; backend and in the C program (the whole 256-token story of the prompt above

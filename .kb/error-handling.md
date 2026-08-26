@@ -9,8 +9,8 @@ serve) are full; only `--no-gc` rejects `unwind-protect` / `handler-case` /
 its contract is a zero-flag MVP module). The wasm-GC implementation (todo-129)
 uses the WebAssembly exception-handling proposal and is gated: only a program
 containing one of the three catching forms is compiled in "EH mode" (one
-`$lisp-cond` tag, `try_table`/`throw`), and only such a program needs
-`wasmtime -W exceptions=y` (37+) — anything else is byte-identical to a build
+`$lisp-cond` tag, `try_table`/`throw`), and only such a program requires
+wasmtime 37+ (exception-handling support) — anything else is byte-identical to a build
 that never knew about EH. See "WASM (todo-129)" below. A NON-LOCAL EXIT is not a
 condition and must pass through a `handler-case` uncaught while still running every
 `unwind-protect` cleanup — that holds for a cross-lambda `return-from`/`go` and for
@@ -303,7 +303,7 @@ everywhere except `--no-gc`.
   `--optimize` compose (pinned in `WasmTreeShakerTest.shakesEhModeModules`).
 - **Component path**: core-module-internal only — no component-level section
   changes, blobs untouched, `--emit-wit` output unchanged; the async lift
-  needs no modification (spike-proven, run flags gain only `-W exceptions=y`).
+  needs no modification (spike-proven).
 - **V8 hosts** (playground / jco): wasm-EH with exnref is default-on in
   current V8 (Chrome 137+ / Node 24+); Node 22 needs
   `--experimental-wasm-exnref`. Gated emission keeps existing programs
@@ -433,8 +433,7 @@ belonged (cl-postgres surfaces every server NOTICE that way).
   The wasm-GC EH-mode gate (`programUsesEhForm`) scans the program for it — its
   interpreter/JVM expansion rides `unwind-protect` — and that scan runs AFTER
   `expandTopLevelDefinitions` splices these defuns in, so leaving the macro there
-  forced EH mode, and the `wasmtime -W exceptions=y` flag, on every program that
-  merely signals a typed condition. `renderedToString` therefore pre-expands it to
+  forced EH mode on every program that merely signals a typed condition. `renderedToString` therefore pre-expands it to
   the close-after-body shape; the pin that caught it is
   `WasmLispCompilerTest.typedErrorWithLambdaReportCompilesOutsideEhMode`.
 - **The interpreter loads the same generated AST** (`ensureConditionReportRuntimeLoaded`)

@@ -56,7 +56,7 @@ import org.jspecify.annotations.Nullable;
  * written against {@code eqref}), this compiler emits a plain MVP module: there is no rec
  * group, no {@code struct}/{@code array}/i31 type, no {@code eqref}, no linear memory and
  * no import. The result instantiates with no import object and runs on any MVP-class
- * runtime with no {@code -W gc}.
+ * runtime, with no wasm-GC requirement.
  *
  * <p>
  * It is viable only because, if an exported function's entire transitive call graph

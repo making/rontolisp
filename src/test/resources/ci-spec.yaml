@@ -7188,8 +7188,7 @@ cases:
   # Condition catching (see .kb/error-handling.md): handler-case / ignore-errors / unwind-protect
   # now compile on the wasm-GC backends via the exception-handling proposal (one
   # $lisp-cond tag; try_table/throw). NOTE: once any case below is present, the
-  # whole concatenated program is EH mode, so the driver runs wasmtime with
-  # `-W exceptions=y` (wasmtime 37+; see CiSpecE2eTest.runBackend).
+  # whole concatenated program is EH mode (see CiSpecE2eTest.runBackend).
   - name: handler-case-catches-typed-and-plain-errors
     source: |
       (define-condition ci-hc-err (error) ((v :initarg :v :reader ci-hc-err-v)))

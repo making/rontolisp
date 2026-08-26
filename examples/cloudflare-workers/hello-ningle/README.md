@@ -87,7 +87,7 @@ every backend, which [`examples/examples.yaml`](../../examples.yaml) pins:
 ```bash
 rontolisp check.lisp
 rontolisp check.lisp -o Check.class && java -cp . Check
-rontolisp check.lisp -o check.wasm --optimize && wasmtime run -W gc -W exceptions=y check.wasm
+rontolisp check.lisp -o check.wasm --optimize && wasmtime run check.wasm
 ```
 
 ```console

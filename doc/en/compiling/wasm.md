@@ -3,12 +3,14 @@
 Give `rontolisp` an output path ending in `.wasm` with `-o`, and it compiles the
 source to a WebAssembly binary instead of interpreting it. As with the JVM
 backend, the output extension selects the target, and the binary is emitted by
-hand without a third-party assembler:
+hand without a third-party assembler. Examples below assume
+[wasmtime](https://wasmtime.dev/) 47+, which enables wasm-GC and
+exception-handling by default:
 
 ```bash
 echo '(print (+ 1 2))' > hello.lisp
 rontolisp hello.lisp -o hello.wasm
-wasmtime run -W gc hello.wasm
+wasmtime run hello.wasm
 ```
 
 ```lisp
@@ -44,7 +46,7 @@ Crossing the two axes gives the six shapes:
 
 | Output shape | Flags | Language | Runs on | Details |
 | --- | --- | --- | --- | --- |
-| WASI command module | (none) | full | wasm-GC engine with WASI Preview 1 (`wasmtime run -W gc`) | [wasm-GC core module](../guides/wasm-gc-module.md) |
+| WASI command module | (none) | full | wasm-GC engine with WASI Preview 1 (`wasmtime run`) | [wasm-GC core module](../guides/wasm-gc-module.md) |
 | Library (reactor) module | `--no-wasi` | full (pure-compute exports) | any wasm-GC engine, no imports needed (Node 22+, current browsers; `--host-random` adds one host import, `--host-fetch` two) | [`--no-wasi` reactor mode](../guides/wasm-gc-module.md#no-wasi-reactor-mode) |
 | WASI 0.3 component | `--component` | full, plus component-only I/O (`rontolisp:fetch`, TCP sockets) | wasmtime 46+ or another component host with wasm-GC | [WASI 0.3 component](../guides/wasm-component.md) |
 | Reactor component | `--component --no-wasi` | full (pure-compute exports) | any component host with wasm-GC, empty import object | [Reactor components](../guides/wasm-component.md#reactor-components---component---no-wasi) |
@@ -96,7 +98,7 @@ handful of functions:
 echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 (rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
 rontolisp fact.lisp --no-wasi -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~2.5 KB module
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~2.5 KB module
 ```
 
 Pass `--optimize=off` and the module instead embeds the **entire** runtime
@@ -230,11 +232,11 @@ the printer):
 
 ```bash
 rontolisp fact.lisp --no-gc -o fact.wasm
-wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~108 byte module (no -W gc)
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~108 byte module
 ```
 
 The source is unchanged — `wasm-export` works identically on both value models
-— and the resulting module also drops the `-W gc` runtime requirement.
+— and the resulting module also drops the wasm-GC engine requirement.
 
 Independently of the level (and on every output mode, `--component`
 included), compilation always tree-shakes the libraries it splices in: the
@@ -320,7 +322,7 @@ real vector instructions. On WASM it is orthogonal to the value model:
   (`f64x2`/`f32x4`) over GC-managed lane-group arrays — packed float arrays
   stay ordinary GC objects, and memory behaves exactly as without the flag.
   Composes with `--component` and every `--optimize` level; run as usual with
-  `wasmtime run -W gc` (wasmtime enables the SIMD proposal by default).
+  `wasmtime run` (wasmtime enables the SIMD proposal by default).
 - **`--no-gc` + `--simd`** lowers the same kernels to `v128` over the packed
   linear-memory blocks. Without `--simd`, `--no-gc` emits plain scalar loops
   instead — a v128-free MVP module that also runs on a runtime lacking the

@@ -766,7 +766,7 @@ adapter builds a stream, a future and a waitable set for one constant write, and
 synchronous `stream.write` / `future.read` built-ins that would delete all of it — measured
 by hand on the emitted component of the day, 1,820 -> ~1,541 — but they sit behind the spec's
 "more async builtins" tier: `wasm-tools validate` and wasmtime 47 both reject them without
-`component-model-more-async-builtins`, which is NOT default-on (`wasmtime run -W gc=y`
+`component-model-more-async-builtins`, which is NOT default-on (`wasmtime run`
 alone fails to parse; adding `-W component-model-more-async-builtins=y` runs it and prints
 correctly). rontolisp's contract is that a component runs with **zero** flags, so this is
 the floor today. **Re-evaluation trigger: when more-async-builtins becomes default-on, drop
@@ -1242,8 +1242,7 @@ share, the 823,589 B zero-reference anchor, and the two settled non-levers).
 
 Per-feature probes, each `(ql:quickload "cl-ppcre")` plus the named calls,
 compiled to wasm-GC Preview 1 at `--optimize=size` and node/wasmtime-verified
-(**EH mode: quickloading cl-ppcre alone puts the module in EH mode**, so both
-wasm run lines need `-W exceptions=y`); gzip = `gzip -9 -n`:
+(**EH mode: quickloading cl-ppcre alone puts the module in EH mode**); gzip = `gzip -9 -n`:
 
 | probe | raw | gzip | Δ raw over zero-reference |
 | --- | --- | --- | --- |

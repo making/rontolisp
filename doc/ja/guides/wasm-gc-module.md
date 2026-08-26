@@ -2,13 +2,13 @@
 
 デフォルトの出力 — `-o file.wasm` 以外のフラグなし — は、wasm-GC 値モデル上の **WASI Preview 1 コアモジュール**です:
 
-- **wasm-GC** — 整数は `i31ref` として表現されます (fixnum 範囲を超える値は符号付き 64 ビット構造体に、それも超える値はリム表現の多倍長整数にボックス化され、算術は任意の大きさで正確です)。浮動小数点数は `float_struct { f64 }` にボックス化されます。スタック上のすべての値は `(ref eq)` として型付けされます。これが言語全機能(cons セル、シンボル、クロージャ、ハッシュテーブル、`eval` など)を支えるものであり、モジュールが wasmtime 14+(`-W gc`)、Node 22+、現行ブラウザといった wasm-GC 対応ランタイムを必要とする理由です。
+- **wasm-GC** — 整数は `i31ref` として表現されます (fixnum 範囲を超える値は符号付き 64 ビット構造体に、それも超える値はリム表現の多倍長整数にボックス化され、算術は任意の大きさで正確です)。浮動小数点数は `float_struct { f64 }` にボックス化されます。スタック上のすべての値は `(ref eq)` として型付けされます。これが言語全機能(cons セル、シンボル、クロージャ、ハッシュテーブル、`eval` など)を支えるものであり、モジュールが wasmtime 14+、Node 22+、現行ブラウザといった wasm-GC 対応ランタイムを必要とする理由です。
 - **WASI Preview 1** — モジュールは 8 つの `wasi_snapshot_preview1` 関数(標準出力の `fd_write`、`random_get`、クロック、環境変数など)をインポートし、`_start` エントリポイントを公開するため、`wasmtime run` はプログラムのトップレベルをコマンドのように実行します。
 
 ```bash
 echo '(print (+ 1 2))' > hello.lisp
 rontolisp hello.lisp -o hello.wasm
-wasmtime run -W gc hello.wasm
+wasmtime run hello.wasm
 # 3
 ```
 
@@ -63,7 +63,7 @@ const countVowels = (s) => {
 
 ```bash
 rontolisp fact.lisp --no-wasi -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
+wasmtime run --invoke fact fact.wasm 5      # => 120
 ```
 
 リアクターは JavaScript からも同様に簡単に駆動できます: **インポートオブジェクトがない**ため、ホスト側は「インスタンス化してからエクスポートを呼び出す」だけです(`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`)。コピー＆ペーストして実行できる完全な Node + ブラウザの例は、[ブラウザガイドのリアクターモジュールの節](wasm-browser.md#reactor-modules-by-hand)にあります。

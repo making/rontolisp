@@ -139,7 +139,7 @@ json_rows=()
 # -- so a first line is not what it has, and comparing every octet is the
 # stronger check anyway.
 #
-# zlib's -W exceptions=y is in RUN ARGS, not in the compile flags: chipz uses
+# zlib's exception-handling run flag is in RUN ARGS, not in the compile flags: chipz uses
 # catch/throw, so the module is built in EH mode and wasmtime needs the feature
 # to run it. Nothing about the build asks for it.
 hello_expected='Hello, World!'

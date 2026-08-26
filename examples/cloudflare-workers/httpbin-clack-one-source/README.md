@@ -37,7 +37,7 @@ PORT=3000 rontolisp ../../net/httpbin-clack.lisp                          # :300
 rontolisp ../../net/httpbin-clack.lisp -o App.class && java -cp . App     # :8080
 rontolisp ../../net/httpbin-clack.lisp -o app.war                         # any Servlet 6 container
 rontolisp ../../net/httpbin-clack.lisp -o serve.wasm --component && \
-  wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y serve.wasm
+  wasmtime serve -S cli=y -S tcp=y -S inherit-network=y serve.wasm
 ./build.sh                                                                # this Worker
 ```
 

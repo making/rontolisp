@@ -214,7 +214,7 @@ host hands them over.
 $ rontolisp args.lisp -o Args.class --class-name Args && java Args alpha beta
 "Args"
 ("alpha" "beta")
-$ rontolisp args.lisp -o args.wasm && wasmtime run -W gc args.wasm alpha beta
+$ rontolisp args.lisp -o args.wasm && wasmtime run args.wasm alpha beta
 "args.wasm"
 ("alpha" "beta")
 ```

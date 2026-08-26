@@ -125,8 +125,7 @@ version of the same reason: an ungated wrapper would put `(sleep x)` into EVERY 
 including the ones the splice skipped.
 
 **Cost of the component arm, accepted deliberately**: awaiting a host timer puts the
-module in async -- and therefore EH -- mode, so a sleeping component needs
-`-W exceptions=y` where the old spin needed no flag. That is a real change to the "a
+module in async -- and therefore EH -- mode, where the old spin needed neither. That is a real change to the "a
 program without those forms keeps its flags" line, taken because a busy-wait under
 `--component` blocks the whole instance and burns a core.
 

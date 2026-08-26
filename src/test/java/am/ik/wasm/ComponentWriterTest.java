@@ -14,8 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * The expected byte sequences are golden values captured from output that was validated
  * with {@code wasm-tools validate -f component-model} and executed with
- * {@code wasmtime run -W gc=y --invoke 'run()'}. Asserting against the golden bytes keeps
- * the encoder pinned without requiring wasmtime on the test host.
+ * {@code wasmtime run --invoke 'run()'}. Asserting against the golden bytes keeps the
+ * encoder pinned without requiring wasmtime on the test host.
  */
 class ComponentWriterTest {
 
@@ -227,7 +227,7 @@ class ComponentWriterTest {
 	// --- async canonical ABI (WASI 0.3 / Preview 3) ---------------------------------
 	// Golden bytes captured from `wasm-tools dump` of components validated with
 	// `wasm-tools validate -f component-model -f cm-async` and executed with
-	// `wasmtime run -W gc=y` (printed "hello from wasi 0.3"); nothing needs the
+	// `wasmtime run` (printed "hello from wasi 0.3"); nothing needs the
 	// more-async-builtins or stackful-lift features anymore.
 
 	@Test

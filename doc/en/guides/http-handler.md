@@ -193,7 +193,7 @@ concurrent load; see the throughput section below):
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y app.wasm
+$ wasmtime serve app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -201,9 +201,9 @@ GET /hello
 
 There the module exports `wasi:http/handler@0.3.0` (the async WASI 0.3 HTTP
 world) and the host owns the socket, so the `port` argument is ignored. The
-flags enable what the component actually uses: the WebAssembly GC proposal
-(`-W gc=y`) and the exception-handling proposal (`-W exceptions=y`, which the
-Lisp-written HTTP glue uses to detect end-of-body). The handler is lifted as a
+component uses the WebAssembly GC proposal and the exception-handling
+proposal (the Lisp-written HTTP glue uses it to detect end-of-body), both
+default-on in wasmtime 47+. The handler is lifted as a
 **callback async** export: a handler that suspends (awaiting a timer, a fetch
 or a body read) hands control back to the host, which delivers each completion
 event through the component's callback — all of it part of the base
@@ -331,7 +331,7 @@ the same component — serve and serve+fetch are one component shape, importing
 
 ```console
 $ rontolisp proxy.lisp -o proxy.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y proxy.wasm
+$ wasmtime serve proxy.wasm
 ```
 
 A complete example is
@@ -382,7 +382,7 @@ component imports it alongside its fixed `wasi:http` surface:
 
 ```console
 $ rontolisp page-hits-server.lisp -o server.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+$ wasmtime serve -S keyvalue=y server.wasm
 ```
 
 The same source runs on the interpreter and the JVM, where a

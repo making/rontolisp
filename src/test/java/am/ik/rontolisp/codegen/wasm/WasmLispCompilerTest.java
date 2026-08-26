@@ -241,7 +241,6 @@ class WasmLispCompilerTest {
 	void unwindProtectCompilesInEhMode() {
 		// The wasm exception-handling proposal: unwind-protect compiles into
 		// a try_table (catch_all_ref) whose landing runs the cleanups and rethrows.
-		// Running the output needs `wasmtime -W exceptions=y` (37+).
 		assertThat(compile("(unwind-protect 1 2)")).isNotEmpty();
 		assertThat(compileComponent("(unwind-protect 1 2)")).isNotEmpty();
 	}
@@ -668,7 +667,7 @@ class WasmLispCompilerTest {
 		// fetch inside a served handler compiles: serve.lisp and fetch.lisp are spliced
 		// together over the wider serve+fetch block (no hand-written adapter); the round
 		// trip
-		// under `wasmtime serve -W exceptions=y -S http=y` is exercised in
+		// under `wasmtime serve -S http=y` is exercised in
 		// WasmLispCompilerIntegrationTest.
 		List<LispVal> program = serveProgram("""
 				(rontolisp:async-defun h (env)

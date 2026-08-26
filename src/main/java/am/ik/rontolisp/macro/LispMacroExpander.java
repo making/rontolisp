@@ -24464,10 +24464,9 @@ public final class LispMacroExpander {
 	 * shape. The macro symbol must not survive into the generated defuns: the wasm-GC
 	 * backend decides EH mode by scanning the program for it (its interpreter/JVM
 	 * expansion rides {@code unwind-protect}), and that scan runs AFTER these defuns are
-	 * spliced in -- so leaving the symbol here would force EH mode, and the
-	 * {@code wasmtime -W exceptions=y} flag, on every program that merely signals a typed
-	 * condition. The stream is a string sink with nothing to release, so dropping the
-	 * cleanup is behavior-identical on the other backends too.
+	 * spliced in -- so leaving the symbol here would force EH mode on every program that
+	 * merely signals a typed condition. The stream is a string sink with nothing to
+	 * release, so dropping the cleanup is behavior-identical on the other backends too.
 	 */
 	private static LispVal renderedToString(LispSymbol stream, LispVal body) {
 		return expandWithOutputToString((LispCons) listToCons(

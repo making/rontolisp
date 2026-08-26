@@ -19,9 +19,9 @@
 ;;   rontolisp ch08/misclassified-mnist.lisp --simd
 ;;   rontolisp ch08/misclassified-mnist.lisp -o Prog.class && java -cp .:<rontolisp jar> Prog
 ;;   rontolisp ch08/misclassified-mnist.lisp -o prog.wasm --simd --optimize && \
-;;     wasmtime run -W gc --dir . prog.wasm
+;;     wasmtime run --dir . prog.wasm
 ;;   rontolisp ch08/misclassified-mnist.lisp -o comp.wasm --component --simd && \
-;;     wasmtime run -W gc=y --dir . comp.wasm
+;;     wasmtime run --dir . comp.wasm
 
 (load "deep-convnet.lisp")
 (load "../dataset/mnist.lisp")

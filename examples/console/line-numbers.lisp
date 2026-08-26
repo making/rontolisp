@@ -5,13 +5,13 @@
 ;;;; all three backends (interpreter / JVM / WASM).
 ;;;;
 ;;;; NOTE: the WASM backend needs a preopened directory for file access, and
-;;;; with-open-file rides the exception-handling proposal (wasmtime 37+):
-;;;;   wasmtime run -W gc -W exceptions=y --dir . line-numbers.wasm
+;;;; with-open-file rides the exception-handling proposal:
+;;;;   wasmtime run --dir . line-numbers.wasm
 ;;;;
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/console/line-numbers.lisp
 ;;;;   java -jar ...-exec.jar examples/console/line-numbers.lisp -o LineNumbers.class && java LineNumbers
-;;;;   java -jar ...-exec.jar examples/console/line-numbers.lisp -o ln.wasm && wasmtime run -W gc -W exceptions=y --dir . ln.wasm
+;;;;   java -jar ...-exec.jar examples/console/line-numbers.lisp -o ln.wasm && wasmtime run --dir . ln.wasm
 
 (defparameter *src* "poem.txt")
 (defparameter *dst* "poem-numbered.txt")
