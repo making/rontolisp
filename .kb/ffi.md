@@ -5,7 +5,7 @@ One built-in package (todo-538, 2026-08-26). **`ffi`** binds plain C through
 and shaped exactly like it: a handful of generic verbs named after the foreign system,
 no JNI, no bundled artifact, no reflection, which is what lets the `rontolisp` native
 binary interpret it. It exists for ONE consumer: upstream CFFI's `cffi-sys` layer
-(todo-539) is written over these verbs, and nothing else in the tree should be -- a
+(`.kb/cffi.md`) is written over these verbs, and nothing else in the tree should be -- a
 binding wants `cffi:defcfun`, not `ffi:call`.
 
 ```
@@ -36,8 +36,8 @@ Type designators are the CFFI keywords (`:char :uchar :short :ushort :int :uint 
 parsed at run time by `FfiType.of`; the C integer names are LP64 aliases of the fixed
 widths (`:long` is 8 -- Linux and macOS are the platforms the linker serves). A struct
 passed or returned BY VALUE is `(:struct member...)`, nested allowed, laid out with the
-C padding rule (`FfiType.Struct.layout()`) -- which is what will let todo-539 fill
-`*foreign-structures-by-value*` and leave `cffi-libffi` unloadable forever. A returned
+C padding rule (`FfiType.Struct.layout()`) -- which is what lets `cffi:*foreign-structures-by-value*` be the ordinary
+call path and leaves `cffi-libffi` unloadable forever (`.kb/cffi.md`). A returned
 struct is copied into `malloc`'d memory and answered as a pointer the caller frees.
 
 ## The decisions that are load-bearing

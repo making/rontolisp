@@ -3589,6 +3589,10 @@ public final class LispEvaluator {
 			throw new LispEvalException("Circular system :depends-on detected: "
 					+ String.join(" -> ", this.loadingSystems) + " -> " + name);
 		}
+		String refusal = ShimLibraries.refusalReason(name);
+		if (refusal != null) {
+			throw new LispEvalException("Cannot load system '" + name + "': " + refusal);
+		}
 		String conflict = ShimLibraries.conflictingSystem(name);
 		if (conflict != null && this.loadedSystems.contains(conflict)) {
 			throw new LispEvalException("Cannot load system '" + name + "': it defines the same packages as '"
@@ -3672,8 +3676,18 @@ public final class LispEvaluator {
 					// A substituted leaf module: evaluate the shim forms through the
 					// package resolver (the defpackage must register before the
 					// dependent components resolve), like the replaced file would.
-					for (LispVal form : leafShim) {
-						eval(form);
+					// Bracketed exactly as loadFile brackets a real component, so a
+					// shim that selects a package with (in-package ...) -- the cffi
+					// backend does, being a near-verbatim analogue of upstream's own
+					// implementation file -- confines it to itself.
+					this.packageResolver.pushPackage();
+					try {
+						for (LispVal form : leafShim) {
+							eval(form);
+						}
+					}
+					finally {
+						this.packageResolver.popPackage();
 					}
 					continue;
 				}

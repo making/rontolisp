@@ -66,7 +66,14 @@ public final class AsdOverrides {
 			// defsystem-as-data subset; rontolisp generates those three components
 			// from the same bundled UCD data instead (ClUnicodeTables), so the
 			// replacement drops the build system and the dependency on it.
-			Map.entry("cl-unicode.asd", "cl-unicode-built.asd"));
+			Map.entry("cl-unicode.asd", "cl-unicode-built.asd"),
+			// Unparseable for two independent reasons: it opens with (error
+			// "Sorry, this Lisp is not yet supported") for an implementation
+			// upstream's own list does not name, and it ends in a defmethod
+			// version-satisfies. The replacement declares the same components with
+			// rontolisp's cffi-sys backend as the implementation one, so upstream's
+			// portable source loads unmodified (.kb/cffi.md).
+			Map.entry("cffi.asd", "cffi-rontolisp.asd"));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

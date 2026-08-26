@@ -119,7 +119,30 @@ public final class ShimLibraries {
 			Map.of("eisel-lemire.lisp", "jzon-eisel-lemire.lisp", "ratio-to-double.lisp", "jzon-ratio-to-double.lisp",
 					"schubfach.lisp", "jzon-schubfach.lisp"),
 			"ironclad/core", Map.of("src/prng/prng.lisp", "ironclad-prng.lisp"), "tiny-routes/lite",
-			Map.of("src/middleware/path-template.lisp", "tiny-routes-lite-path-template.lisp"));
+			Map.of("src/middleware/path-template.lisp", "tiny-routes-lite-path-template.lisp"), "cffi",
+			// The cffi-sys backend is a component that exists ONLY as a resource:
+			// the replacement cffi.asd declares it (AsdOverrides) and upstream's
+			// tree has no such file, so nothing on disk is edited to add it.
+			// strings.lisp is the one portable file that cannot load -- it drives
+			// babel's instantiate-concrete-mappings code generator, which the babel
+			// shim does not have (.kb/cffi.md).
+			Map.of("src/cffi-rontolisp.lisp", "cffi-rontolisp.lisp", "src/strings.lisp", "cffi-strings.lisp"));
+
+	/**
+	 * Systems rontolisp REFUSES to load, with the reason. A system naming one of these
+	 * gets a message saying why instead of a download that ends in an unparseable
+	 * definition or a half-loaded library -- the {@code swank} shim's motive, at the end
+	 * of the ladder where even a stub would be a lie. Both loaders check the map before
+	 * anything else.
+	 */
+	private static final Map<String, String> REFUSED = Map.of("cffi-grovel",
+			"grovelling compiles and runs a C program to read the platform's headers, "
+					+ "which needs a C toolchain at load time -- rontolisp has none. "
+					+ "A binding that grovels cannot be loaded here; most (cl+ssl, static-vectors) do not.",
+			"cffi-libffi",
+			"structures by value need no libffi here: rontolisp's cffi-sys backend passes "
+					+ "and returns them through the foreign function API's own struct layout, "
+					+ "so cffi:*foreign-structures-by-value* already works.");
 
 	/**
 	 * System pairs that must not be loaded into one program: both define the same
@@ -156,6 +179,16 @@ public final class ShimLibraries {
 	 */
 	@Nullable public static String conflictingSystem(String name) {
 		return CONFLICTS.get(name);
+	}
+
+	/**
+	 * Returns why the named system is refused, or {@code null} when it is not one of the
+	 * refused ones. See {@code REFUSED}.
+	 * @param name the system name (canonical lower-case)
+	 * @return the reason, or {@code null}
+	 */
+	@Nullable public static String refusalReason(String name) {
+		return REFUSED.get(name);
 	}
 
 	/**

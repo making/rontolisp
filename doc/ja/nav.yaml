@@ -66,6 +66,8 @@ sections:
         title: Java 連携
       - file: guides/objc-appkit.md
         title: macOS GUI（objc / appkit）
+      - file: guides/cffi.md
+        title: Cライブラリ（cffi）
       - file: guides/jvm-library.md
         title: JVM ライブラリのエクスポート（jvm-export / --no-main）
       - file: guides/async.md

@@ -471,6 +471,10 @@ public final class LoadInliner {
 			throw new IllegalStateException("Circular system :depends-on detected: "
 					+ String.join(" -> ", ctx.loadingSystems()) + " -> " + name);
 		}
+		String refusal = ShimLibraries.refusalReason(name);
+		if (refusal != null) {
+			throw new IllegalStateException("Cannot load system '" + name + "': " + refusal);
+		}
 		String conflict = ShimLibraries.conflictingSystem(name);
 		if (conflict != null && ctx.loadedSystems().contains(conflict)) {
 			throw new IllegalStateException("Cannot load system '" + name + "': it defines the same packages as '"
@@ -555,9 +559,19 @@ public final class LoadInliner {
 				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), ctx.loader());
 				if (leafShim != null) {
 					// A substituted leaf module: splice the shim forms in the file's
-					// place (they carry the replaced file's defpackage, no in-package,
-					// so no package bracketing is needed).
+					// place, bracketed exactly as spliceFile brackets a real component
+					// -- most shims carry the replaced file's defpackage and select no
+					// package, so their output is unchanged; the cffi backend, a
+					// near-verbatim analogue of upstream's own implementation file,
+					// does select one and the bracket confines it.
+					boolean shimBracket = selectsAPackage(leafShim);
+					if (shimBracket) {
+						out.add(marker(LispNames.PUSH_PACKAGE));
+					}
 					out.addAll(leafShim);
+					if (shimBracket) {
+						out.add(marker(LispNames.POP_PACKAGE));
+					}
 					continue;
 				}
 				// A component is loaded by its RESOLVED path (real ASDF hands load the
