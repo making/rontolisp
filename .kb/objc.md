@@ -24,7 +24,9 @@ half of the binding (introspection, NSMethodSignature, KVC, a run-time class who
 `isEqual:` Foundation calls, an NSNotificationCenter observer) -- the field that gates a RUN leg on the platform
 and leaves the COMPILE legs alone, added for it -- so its output is checked on a Mac and
 its lowering everywhere: the one program that gates the blob on through the bare `objc:`
-verbs, with no `appkit:` reference and so no splice.
+verbs, with no `appkit:` reference and so no splice. `examples/macos/metal.lisp` +
+`metal-triangle.lisp` + `metal-cube.lisp` (todo-525, 2026-08-26) are the GPU pair, the
+AppKit twins of `examples/browser/webgl-triangle` and `webgl-cube` -- "Metal" below.
 
 What it is worth: the `rontolisp` native binary is the REPL people run, and `java:` cannot
 be INTERPRETED there at all (no reflection metadata). FFM needs none, so this is the one
@@ -184,6 +186,82 @@ the runtime cannot unregister). `performSelector...` answers are discarded: the 
 target's, and retaining the garbage a void method leaves in x0 SIGSEGVs (found the hard
 way).
 
+## Bytes and out-parameters: `objc:data`, `objc:bytes`, `:error`
+
+(todo-525, 2026-08-26) A generic send can express an object, a number, a string and a
+struct; it cannot express a BLOCK OF MEMORY or an out-parameter, and Cocoa is full of
+both. Three additions close that, and nothing else was needed to reach the GPU.
+
+`objc:data` answers an **`NSMutableData`** -- mutable so ONE verb serves both directions
+(`bytes` is the address a `^v` parameter wants, `mutableBytes` is writable scratch a
+callee fills) -- holding a packed buffer's bytes. Which bytes is not a new decision: the
+argument goes through `eval/PackedBuffer`, promoted out of `Environment` for this, so
+`objc:data` and `%write-sequence-packed` cannot disagree about what a `#f` matrix is on
+the wire (little-endian, row-major, `.kb/binary-sequence-io.md`). A string goes as its
+UTF-8. `objc:bytes` is the read direction, a packed `(unsigned-byte 8)` vector.
+
+`:error` in an argument position of `objc:send` allocates a pointer-sized out slot
+(`ObjcRuntime.Out`, filled from the arena after the call and before it closes), passes its
+address, and hands the pair to `ObjcRuntime.checkError`, which signals with
+`localizedDescription` + domain + code. The gate is `Sent.failed()` -- nil, `NO` or zero --
+NOT "the slot is non-NULL": Foundation's own rule is that the RESULT says whether a call
+failed, and an error object left behind by a call that succeeded is not an error. Without
+this a shader that does not compile is an unexplained `nil`; with it the Metal compiler's
+diagnostics, caret and all, arrive as an ordinary Lisp condition.
+
+Two costs are easy to miss. `ObjcRuntime$Out` is a new class file in `am.ik.objc`, so it
+is a new row in `JvmObjcRuntimeBuilder.OBJC_CLASSES` (the blob test catches this). And the
+compiled twin cannot reuse the interpreter's `PackedBuffer`: a packed float array is a
+`float[]`/`double[]` carrying its dimension header IN the array (`[rank, dim_0..., e_0...]`,
+`JvmFloatArrayRuntimeBuilder`) and a packed integer vector a `long[]{width, e_0, ...}`, so
+`JvmObjcTemplate.bufferBytes` skips what `LispSingleFloatArray.data()` never contained --
+the first cut sent the header down the wire and the two backends disagreed by two floats.
+
+## Metal: the GPU is reachable, OpenGL is not
+
+`examples/macos/metal.lisp` (the shared surface, `webgl-common/gl.lisp`'s twin) plus
+`examples/macos/metal-triangle.lisp` and `metal-cube.lisp` -- the AppKit answers to
+`examples/browser/webgl-triangle` and `webgl-cube`. They add no Java: Metal is an
+Objective-C API almost end to end, so `objc:send` drives all of it.
+
+- **OpenGL cannot be reached and never will be.** `glClear` / `glDrawArrays` are plain C
+  functions, outside `objc_msgSend` entirely; `objc:` binds no C entry points. Deprecated
+  on macOS since 10.14 besides.
+- The one C function Metal appears to need, `MTLCreateSystemDefaultDevice()`, is
+  avoidable: **`[[CAMetalLayer layer] preferredDevice]` is a property** and answers the
+  same device. This is the fact the whole thing stands on -- without it `am.ik.gpu`'s
+  `MetalDriver` would have had to be reached from `eval`, which the package graph forbids.
+- Shaders compile at run time from a Lisp string, `newLibraryWithSource:options:error:`.
+- The drawing surface is a `CAMetalLayer` set on `appkit:window`'s `contentView`
+  (`setLayer:` BEFORE `setWantsLayer:`, or AppKit makes its own layer first and the one
+  handed over never becomes the backing store), and the frame loop is `appkit:timer` --
+  an `NSTimer` on thread 0, which is where Metal wants the frame anyway.
+- The cube needs no depth attachment: a cube is CONVEX, so back-face culling alone leaves
+  exactly the visible faces.
+- The cube's MVP matrix is `linalg`'s, not hand-written arithmetic, and it reaches the GPU
+  with NO conversion: a linalg result is a packed float array and `objc:data` takes one of
+  any rank, so `linalg:matmul` -> `objc:data` -> `setVertexBytes:` is the whole path.
+  `:element-type 'single-float` picks float32 (a Metal `float4x4`) and every linalg
+  transform preserves the width (`.kb/linalg.md`). One `linalg:transpose` bridges
+  row-major storage to Metal's column-major `float4x4`.
+
+Every Metal object a program holds is PROTOCOL-typed (`id<MTLDevice>`), and the concrete
+class is private and machine-specific (`AGXG16CDevice` here), which is why
+`ObjcNativeImageForeignConfigTest` grew a `proto(...)` row that resolves through
+`protocol_getMethodDescription`. Metal's DESCRIPTOR classes are the other way round --
+`MTLRenderPipelineDescriptor` is abstract in public and `alloc` answers
+`MTLRenderPipelineDescriptorInternal`, which is where the properties are declared -- so
+the test falls back to the `...Internal` name for an instance row the public class does not
+declare. Only two shapes were outside the census:
+`newBufferWithBytes:length:options:` and `drawPrimitives:vertexStart:vertexCount:`.
+
+No test opens a Metal window either, but unlike AppKit the rendering can be checked with
+no display at all: render into an offscreen `MTLTexture` (storage mode shared, usage
+render-target), `getBytes:bytesPerRow:fromRegion:mipmapLevel:` into an `objc:data` block
+and read the pixels back with `objc:bytes` -- which is how the triangle and the cube were
+verified here, and the shortest demonstration that the two new verbs are the round trip
+they claim to be.
+
 ## Ownership: one retain per wrapper, released on thread 0
 
 `LispObjcObject(address, className)` -- a `LispVal` permittee, `equal` by address -- owns
@@ -228,7 +306,7 @@ alphabetical order died in `defineClass` with `NoClassDefFoundError`). **The blo
 UPCALLS into the program**: a `define-class` method and an `on-main` body are applied
 through `_apply`, handed over by `bind(Class)` from `_objcInit` (the `java:proxy`
 precedent), which is why `usesObjc` forces `usesEval` and roots `_apply` for the shaker.
-**The gate is the seven verbs**, qualified, and `appkit.lisp` reaches them: `AppKitLibrary
+**The gate is the nine verbs**, qualified, and `appkit.lisp` reaches them: `AppKitLibrary
 .process` splices the widget layer on the compile path (`CompileFrontend`, beside
 `LinalgLibrary`; pruned to what the program calls like every library), so an `appkit:`
 program compiles as ordinary Lisp whose `objc:send` gates the blob on.
@@ -260,6 +338,7 @@ through a hand-written shape table and could ride on `am.ik.objc`; it does not y
 | the encoding parser (pure) | `am.ik.objc.TypeEncodingTest` |
 | native-image registration: runtime downcalls + callback upcalls (any machine), appkit selectors (Mac) | `am.ik.objc.ObjcNativeImageForeignConfigTest` |
 | the verbs, headless (Foundation + a run-time class; Mac), the signal elsewhere (any machine) | `eval/ObjcInteropTest` |
+| `objc:data` / `objc:bytes` round trip and the `:error` slot, interpreted and compiled -- the same expectations byte for byte | `eval/ObjcInteropTest`, `codegen/jvm/JvmObjcInteropCompilerTest` |
 | the library defines exactly the registry's exports, lazy load, the WASM refusal and the JVM splice | `eval/AppKitLibraryTest` |
 | the verbs compiled to a class (the interpreter cases, mirrored), the embedded class list, one file per template | `codegen/jvm/JvmObjcInteropCompilerTest` |
 | `eval -> am.ik.objc`, and the library imports nothing | `PackageCycleTest` |

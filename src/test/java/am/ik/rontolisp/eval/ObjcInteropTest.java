@@ -33,8 +33,9 @@ class ObjcInteropTest {
 	@Test
 	void everyVerbIsDefinedOnEveryMachineAndAMachineWithoutTheRuntimeSignalsAtTheCall() {
 		assertThat(eval("(list (fboundp 'objc:class) (fboundp 'objc:send) (fboundp 'objc:define-class)"
-				+ " (fboundp 'objc:on-main) (fboundp 'objc:string) (fboundp 'objc:address) (fboundp 'objc:objectp))"))
-			.isEqualTo("(T T T T T T T)");
+				+ " (fboundp 'objc:on-main) (fboundp 'objc:string) (fboundp 'objc:data) (fboundp 'objc:bytes)"
+				+ " (fboundp 'objc:address) (fboundp 'objc:objectp))"))
+			.isEqualTo("(T T T T T T T T T)");
 		assertThat(ObjcInterop.description()).isNotBlank();
 		if (!ObjcInterop.available()) {
 			// The condition is an ordinary error naming the verb and the reason, so a
@@ -54,6 +55,59 @@ class ObjcInteropTest {
 		assertThat(eval("(objc:send nil \"length\")")).isEqualTo("NIL");
 		assertThat(eval("(handler-case (objc:address 42) (error (e) (princ-to-string e)))"))
 			.startsWith("\"objc:address expects an Objective-C object");
+		// Both new verbs validate their argument before the runtime is opened, so the
+		// message a Linux user sees names what they passed, not the absent library.
+		assertThat(eval("(handler-case (objc:data '(1 2 3)) (error (e) (princ-to-string e)))"))
+			.startsWith("\"objc:data expects a packed float array");
+		assertThat(eval("(handler-case (objc:bytes 42) (error (e) (princ-to-string e)))"))
+			.startsWith("\"objc:bytes expects an Objective-C object");
+	}
+
+	@Test
+	@EnabledOnOs(OS.MAC)
+	void aPackedBufferCrossesAsAnNsdataAndComesBackTheSameBytes() {
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		// The bytes are write-sequence's: little-endian, row-major, the dimension header
+		// of a packed float array left behind (eval/PackedBuffer, one definition for
+		// both).
+		assertThat(eval("(objc:bytes (objc:data (make-array 3 :element-type 'single-float"
+				+ " :initial-contents '(1.0 2.0 3.0))))"))
+			.isEqualTo("#(0 0 128 63 0 0 0 64 0 0 64 64)");
+		assertThat(eval("(objc:bytes (objc:data (make-array '(2 2) :element-type 'double-float"
+				+ " :initial-contents '((1.0d0 2.0d0) (3.0d0 4.0d0)))))"))
+			.isEqualTo("#(0 0 0 0 0 0 240 63 0 0 0 0 0 0 0 64 0 0 0 0 0 0 8 64 0 0 0 0 0 0 16 64)");
+		assertThat(eval("(objc:bytes (objc:data (make-array 3 :element-type '(unsigned-byte 16)"
+				+ " :initial-contents '(1 258 65535))))"))
+			.isEqualTo("#(1 0 2 1 255 255)");
+		assertThat(eval("(objc:bytes (objc:data \"hi\"))")).isEqualTo("#(104 105)");
+		assertThat(eval("(objc:bytes (objc:data (make-array 0 :element-type '(unsigned-byte 8))))")).isEqualTo("#()");
+		// It is an NSData that arrives, so every NSData selector answers for it -- and a
+		// mutable one, so mutableBytes is writable scratch a callee can be handed.
+		assertThat(eval("(objc:send (objc:data \"hello\") \"length\")")).isEqualTo("5");
+		assertThat(eval("(objc:send (objc:data \"hello\") \"isKindOfClass:\" (objc:class \"NSData\"))")).isEqualTo("T");
+		assertThat(eval("(integerp (objc:send (objc:data \"hello\") \"mutableBytes\"))")).isEqualTo("T");
+	}
+
+	@Test
+	@EnabledOnOs(OS.MAC)
+	void theErrorSlotRaisesWhatTheNserrorSaysAndIsSilentWhenTheCallSucceeded() {
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		// A failed call fills the NSError ** the binding allocated for :error, and the
+		// verb signals with what it says -- never the bare nil the selector answers.
+		assertThat(eval("(handler-case (objc:send \"NSJSONSerialization\" \"JSONObjectWithData:options:error:\""
+				+ " (objc:data \"not json\") 0 :error) (error (e) (princ-to-string e)))"))
+			.contains("objc:send: JSONObjectWithData:options:error:")
+			.contains("NSCocoaErrorDomain");
+		// A call that succeeded answers its value: the slot stays NULL and nothing is
+		// raised.
+		assertThat(eval("(objc:send (objc:send \"NSJSONSerialization\" \"JSONObjectWithData:options:error:\""
+				+ " (objc:data \"[1,2,3]\") 0 :error) \"count\")"))
+			.isEqualTo("3");
+		// :error is only for a pointer parameter; anywhere else it is the operand
+		// mismatch it would be without the marker.
+		assertThat(eval("(handler-case (objc:send (objc:string \"x\") \"isEqual:\" :error)"
+				+ " (error (e) (princ-to-string e)))"))
+			.contains("is declared object, not a pointer");
 	}
 
 	@Test

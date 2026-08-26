@@ -756,6 +756,8 @@ threads, ownership and the native binary's shape table.
 | `objc:define-class` | `(objc:define-class "Target" "NSObject" (list (list "invoke:" fn)))` | a class whose methods are Lisp functions |
 | `objc:on-main` | `(objc:on-main (lambda () ...))` | the function's value, computed on the main thread |
 | `objc:string` | `(objc:string "hi")` | an `NSString` |
+| `objc:data` | `(objc:data buffer)` | an `NSMutableData` holding the buffer's bytes |
+| `objc:bytes` | `(objc:bytes data)` | an `NSData`'s bytes as a packed `(unsigned-byte 8)` vector |
 | `objc:address` | `(objc:address obj)` | the object's address, an integer |
 | `objc:objectp` | `(objc:objectp x)` | `t` for an Objective-C object |
 

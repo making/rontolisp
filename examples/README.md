@@ -173,7 +173,10 @@ menu bar item, its menu entries Lisp closures.
 `objc` reaches further than AppKit: every framework on the machine speaks the
 Objective-C runtime, and one that is not linked into the process is one `NSBundle`
 message away, which is what [`system-frameworks.lisp`](macos/system-frameworks.lisp)
-is about.
+is about. Metal is one of them, and it is Objective-C nearly end to end, so the GPU
+is reachable with nothing added: [`metal-triangle.lisp`](macos/metal-triangle.lisp)
+and [`metal-cube.lisp`](macos/metal-cube.lisp) are the AppKit twins of the WebGL
+examples under [`browser/`](browser).
 The window examples are not in `examples.yaml`: they need a display. The two that
 open nothing — [`objc-runtime.lisp`](macos/objc-runtime.lisp) and
 [`system-frameworks.lisp`](macos/system-frameworks.lisp) — run in a terminal and are
@@ -190,6 +193,9 @@ See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 | [`listener.lisp`](macos/listener.lisp) | A Lisp listener in a Cocoa window, the way Clozure CL's IDE does it: an `NSTextView` transcript in an `NSScrollView`, an editable `NSTextField` whose Return key is a Lisp closure (`objc:define-class` again, this time for a target/action), and `eval` on what it reads -- printed output captured, an error shown as a line. The window and the evaluator are one image, so a form typed in opens the next window |
 | [`menubar.lisp`](macos/menubar.lisp) | A Lisp that lives in the menu bar and opens no window of its own: `appkit:status-item` with `:dock nil` (no Dock icon, no app switcher entry), an `appkit:menu` whose entries are Lisp closures, an `appkit:timer` writing a clock into the title, and one entry that opens a window — the menu and the evaluator are one image. `appkit:quit` is the way out |
 | [`system-frameworks.lisp`](macos/system-frameworks.lisp) | macOS itself as a Lisp library, with nothing installed: Vision, NaturalLanguage, Core Image and the speech synthesizer, each mapped in at run time by an `NSBundle` message. A string is drawn into an image by Core Image and read back out of it by Vision, and `equal` decides whether the round trip held; the speech is synthesized to an AIFF instead of the speakers, so the example is silent. Prints to a terminal |
+| [`metal.lisp`](macos/metal.lisp) | A Metal drawing surface on an `appkit:window`, in its own package -- the layer, the drawable, the render pass and the command buffer, which every Metal program writes identically; the macOS counterpart of [`webgl-common/gl.lisp`](browser/webgl-common/gl.lisp). The device comes from `CAMetalLayer`'s `preferredDevice`, so no C entry point is needed and the whole binding is `objc:send` |
+| [`metal-triangle.lisp`](macos/metal-triangle.lisp) | The WebGL hello world on a Mac GPU, the twin of [`webgl-triangle`](browser/webgl-triangle): one gradient triangle, no vertex buffer at all (the shader looks its corners up by `vertex_id`), Metal Shading Language compiled from a Lisp string at run time |
+| [`metal-cube.lisp`](macos/metal-cube.lisp) | The full pipeline, the twin of [`webgl-cube`](browser/webgl-cube): a vertex buffer and a per-frame MVP matrix, both `objc:data` over packed single-float arrays -- the matrix comes straight out of the built-in [`linalg`](../doc/en/guides/linear-algebra.md) package, since a linalg result IS a packed array and `objc:data` takes one of any rank; back-face culling instead of a depth buffer (a cube is convex) and face normals from `dfdx`/`dfdy`; the frame loop is an `appkit:timer` |
 | [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
 
 ```bash
@@ -199,6 +205,8 @@ java -jar $JAR examples/macos/counter.lisp
 java -jar $JAR examples/macos/life-macos.lisp
 java -jar $JAR examples/macos/listener.lisp
 java -jar $JAR examples/macos/menubar.lisp             # no window; look at the menu bar
+java -jar $JAR examples/macos/metal-triangle.lisp
+java -jar $JAR examples/macos/metal-cube.lisp
 ./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp \

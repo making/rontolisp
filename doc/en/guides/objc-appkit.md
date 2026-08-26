@@ -132,6 +132,8 @@ with a handful of generic verbs.
 | `objc:define-class` | `(objc:define-class "Name" "NSObject" methods &optional protocols)` — a class whose methods are Lisp functions |
 | `objc:on-main` | `(objc:on-main (lambda () ...))` — runs the function on the main thread and answers its value |
 | `objc:string` | `(objc:string "text")` — an `NSString` |
+| `objc:data` | `(objc:data buffer)` — an `NSMutableData` holding a packed buffer's bytes |
+| `objc:bytes` | `(objc:bytes data)` — an `NSData`'s bytes as a packed `(unsigned-byte 8)` vector |
 | `objc:address` | `(objc:address object)` — the object's address, an integer |
 | `objc:objectp` | `(objc:objectp x)` — whether `x` is an Objective-C object |
 
@@ -219,6 +221,36 @@ that does not fit its declared type is an `error`, never a crash. The answer of 
 `performSelector...` message is discarded (its type is the target method's, which the
 binding cannot see). Blocks, unions and bitfields are outside this first cut: a
 selector that takes one is refused by name.
+
+### Bytes, and the `:error` out-parameter
+
+Two things a generic message send cannot express on its own are a block of MEMORY and an
+out-parameter, and both are ordinary in Cocoa. `objc:data` covers the first: it answers an
+`NSMutableData` holding a packed buffer's bytes — a packed float array of any rank, a
+packed `(unsigned-byte 8|16|32)` vector, or a string's UTF-8 — laid out exactly as
+`write-sequence` would write them, little-endian and row-major. `[data bytes]` is then the
+address a `void *` parameter wants, `[data mutableBytes]` is writable scratch to hand a
+callee, and `objc:bytes` reads the block back.
+
+The second is the `...error:` convention: pass the keyword `:error` where the
+`NSError **` goes, and the binding allocates the slot, passes it, and — when the call
+reports failure and the slot was filled — signals with what the error says, instead of
+answering the bare `nil` the selector returns.
+
+```console
+> (objc:bytes (objc:data (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
+#(0 0 128 63 0 0 0 64)
+> (handler-case
+      (objc:send "NSJSONSerialization" "JSONObjectWithData:options:error:" (objc:data "nope") 0 :error)
+    (error (e) (princ-to-string e)))
+"objc:send: JSONObjectWithData:options:error:: The data couldn’t be read because it isn’t in the correct format. [NSCocoaErrorDomain 3840]"
+```
+
+Together they are what puts the GPU in reach: Metal is an Objective-C API almost
+end to end, so `objc:send` drives it with nothing added — `examples/macos/metal-triangle.lisp`
+draws the WebGL hello world and `examples/macos/metal-cube.lisp` a spinning, shaded cube,
+shaders compiled from Lisp strings at run time. (OpenGL is the opposite and stays out of
+reach: `glClear` and friends are plain C functions, which `objc_msgSend` does not reach.)
 
 ### Threads: everything happens on the main thread
 

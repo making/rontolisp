@@ -702,6 +702,8 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `objc:define-class` | `(objc:define-class "Target" "NSObject" (list (list "invoke:" fn)))` | メソッドが Lisp 関数であるクラス |
 | `objc:on-main` | `(objc:on-main (lambda () ...))` | メインスレッドで計算された関数の値 |
 | `objc:string` | `(objc:string "hi")` | `NSString` |
+| `objc:data` | `(objc:data buffer)` | バッファのバイト列を持つ `NSMutableData` |
+| `objc:bytes` | `(objc:bytes data)` | `NSData` のバイト列 (パックされた `(unsigned-byte 8)` ベクタ) |
 | `objc:address` | `(objc:address obj)` | オブジェクトのアドレス (整数) |
 | `objc:objectp` | `(objc:objectp x)` | Objective-C オブジェクトなら `t` |
 

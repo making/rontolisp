@@ -163,7 +163,45 @@ class ObjcNativeImageForeignConfigTest {
 			inst("NSSpeechSynthesizer", "startSpeakingString:toURL:"), inst("NSSpeechSynthesizer", "isSpeaking"),
 			cls("NSURL", "fileURLWithPath:"), inst("NSURL", "URLByAppendingPathComponent:"), inst("NSURL", "path"),
 			cls("NSFileManager", "defaultManager"), inst("NSFileManager", "temporaryDirectory"),
-			inst("NSFileManager", "attributesOfItemAtPath:error:"));
+			inst("NSFileManager", "attributesOfItemAtPath:error:"),
+			// the binding's own bytes and errors: objc:data / objc:bytes and the
+			// :error out slot send these, so a program that never spells them still
+			// needs them served
+			cls("NSMutableData", "dataWithBytes:length:"), inst("NSData", "length"), inst("NSData", "bytes"),
+			inst("NSMutableData", "mutableBytes"), inst("NSError", "localizedDescription"), inst("NSError", "domain"),
+			inst("NSError", "code"), cls("NSJSONSerialization", "JSONObjectWithData:options:error:"),
+			// examples/macos/metal.lisp + metal-triangle.lisp + metal-cube.lisp: a
+			// Metal surface on the window's content view. Metal is an Objective-C API,
+			// so objc:send reaches all of it; the objects are PROTOCOL-typed
+			// (id<MTLDevice> and friends), which is where the proto rows come in.
+			cls("CAMetalLayer", "layer"), inst("CAMetalLayer", "preferredDevice"), inst("CAMetalLayer", "setDevice:"),
+			inst("CAMetalLayer", "setPixelFormat:"), inst("CAMetalLayer", "setFramebufferOnly:"),
+			inst("CAMetalLayer", "setFrame:"), inst("CAMetalLayer", "setDrawableSize:"),
+			inst("CAMetalLayer", "nextDrawable"), inst("NSView", "frame"), inst("NSView", "setLayer:"),
+			inst("NSView", "setWantsLayer:"), proto("MTLDevice", "name"), proto("MTLDevice", "newCommandQueue"),
+			proto("MTLDevice", "newLibraryWithSource:options:error:"),
+			proto("MTLDevice", "newRenderPipelineStateWithDescriptor:error:"),
+			proto("MTLDevice", "newBufferWithBytes:length:options:"), proto("MTLLibrary", "newFunctionWithName:"),
+			cls("MTLRenderPipelineDescriptor", "alloc"), inst("MTLRenderPipelineDescriptor", "setVertexFunction:"),
+			inst("MTLRenderPipelineDescriptor", "setFragmentFunction:"),
+			inst("MTLRenderPipelineDescriptor", "colorAttachments"),
+			inst("MTLRenderPipelineColorAttachmentDescriptorArray", "objectAtIndexedSubscript:"),
+			inst("MTLRenderPipelineColorAttachmentDescriptor", "setPixelFormat:"),
+			cls("MTLRenderPassDescriptor", "renderPassDescriptor"), inst("MTLRenderPassDescriptor", "colorAttachments"),
+			inst("MTLRenderPassColorAttachmentDescriptorArray", "objectAtIndexedSubscript:"),
+			inst("MTLRenderPassColorAttachmentDescriptor", "setTexture:"),
+			inst("MTLRenderPassColorAttachmentDescriptor", "setLoadAction:"),
+			inst("MTLRenderPassColorAttachmentDescriptor", "setStoreAction:"),
+			inst("MTLRenderPassColorAttachmentDescriptor", "setClearColor:"), proto("MTLCommandQueue", "commandBuffer"),
+			proto("MTLCommandBuffer", "renderCommandEncoderWithDescriptor:"),
+			proto("MTLCommandBuffer", "presentDrawable:"), proto("MTLCommandBuffer", "commit"),
+			proto("MTLRenderCommandEncoder", "setRenderPipelineState:"),
+			proto("MTLRenderCommandEncoder", "setCullMode:"),
+			proto("MTLRenderCommandEncoder", "setFrontFacingWinding:"),
+			proto("MTLRenderCommandEncoder", "setVertexBuffer:offset:atIndex:"),
+			proto("MTLRenderCommandEncoder", "setVertexBytes:length:atIndex:"),
+			proto("MTLRenderCommandEncoder", "drawPrimitives:vertexStart:vertexCount:"),
+			proto("MTLRenderCommandEncoder", "endEncoding"), proto("CAMetalDrawable", "texture"));
 
 	/**
 	 * The frameworks {@code examples/macos/system-frameworks.lisp} maps in with an
@@ -171,7 +209,8 @@ class ObjcNativeImageForeignConfigTest {
 	 * their classes do not exist until one is: the example's first section IS this step,
 	 * so the test takes it before it resolves anything below AppKit.
 	 */
-	private static final List<String> FRAMEWORKS = List.of("Vision", "NaturalLanguage", "CoreImage");
+	private static final List<String> FRAMEWORKS = List.of("Vision", "NaturalLanguage", "CoreImage", "Metal",
+			"QuartzCore");
 
 	private static String[] cls(String name, String selector) {
 		return new String[] { name, selector, "class" };
@@ -179,6 +218,17 @@ class ObjcNativeImageForeignConfigTest {
 
 	private static String[] inst(String name, String selector) {
 		return new String[] { name, selector, "instance" };
+	}
+
+	/**
+	 * A selector declared by a PROTOCOL, not a class: every Metal object a program holds
+	 * is an {@code id<MTLDevice>} / {@code id<MTLCommandBuffer>} whose concrete class is
+	 * private and machine-specific, and the protocol is where its encoding is written
+	 * down -- which is also where {@link ObjcRuntime#send} finds it at run time when the
+	 * concrete class declares nothing.
+	 */
+	private static String[] proto(String name, String selector) {
+		return new String[] { name, selector, "protocol" };
 	}
 
 	@Test
@@ -197,9 +247,27 @@ class ObjcNativeImageForeignConfigTest {
 		Set<FunctionDescriptor> shapes = new LinkedHashSet<>();
 		List<String> unresolved = new ArrayList<>();
 		for (String[] row : SENT) {
-			MemorySegment cls = runtime.objcClass(row[0]);
-			MemorySegment owner = "class".equals(row[2]) ? runtime.classOf(cls) : cls;
-			String raw = runtime.rawEncoding(owner, row[1]);
+			String raw;
+			if ("protocol".equals(row[2])) {
+				raw = runtime.protocolEncoding(row[0], row[1]);
+			}
+			else {
+				MemorySegment cls = runtime.objcClass(row[0]);
+				MemorySegment owner = "class".equals(row[2]) ? runtime.classOf(cls) : cls;
+				raw = runtime.rawEncoding(owner, row[1]);
+				MemorySegment internal = "instance".equals(row[2]) ? runtime.classOrNull(row[0] + "Internal") : null;
+				if (raw == null && internal != null) {
+					// Metal's descriptor classes are abstract in public: alloc answers a
+					// private "...Internal" subclass and THAT is where the properties are
+					// declared, which is exactly what the runtime resolves against at
+					// send
+					// time (the receiver's own class). Naming the subclass here keeps the
+					// row exact; if Apple ever renames it the row stops resolving and
+					// this
+					// test says so, which is the failure we want.
+					raw = runtime.rawEncoding(internal, row[1]);
+				}
+			}
 			if (raw == null) {
 				unresolved.add(row[0] + " " + row[1]);
 				continue;

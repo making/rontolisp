@@ -12,15 +12,16 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the seven {@code objc:} verbs ({@code objc:class}, {@code objc:send},
+ * Compiles the nine {@code objc:} verbs ({@code objc:class}, {@code objc:send},
  * {@code objc:define-class}, {@code objc:on-main}, {@code objc:string},
- * {@code objc:address}, {@code objc:objectp}). Each call site first invokes the emitted
- * {@code _objcInit} helper (which lazily defines the embedded {@code am.ik.objc} blob and
- * the {@link JvmObjcTemplate bridge}, see {@link JvmObjcRuntimeBuilder}), then evaluates
- * the arguments -- the leading fixed arguments as-is, {@code objc:send}'s variadic tail
- * packed into an {@code Object[]} -- and calls the matching bridge entry point.
- * Marshalling, ownership and every run-time validation live in the bridge, so compiled
- * behavior matches the interpreter's {@code eval/ObjcBridge}.
+ * {@code objc:data}, {@code objc:bytes}, {@code objc:address}, {@code objc:objectp}).
+ * Each call site first invokes the emitted {@code _objcInit} helper (which lazily defines
+ * the embedded {@code am.ik.objc} blob and the {@link JvmObjcTemplate bridge}, see
+ * {@link JvmObjcRuntimeBuilder}), then evaluates the arguments -- the leading fixed
+ * arguments as-is, {@code objc:send}'s variadic tail packed into an {@code Object[]} --
+ * and calls the matching bridge entry point. Marshalling, ownership and every run-time
+ * validation live in the bridge, so compiled behavior matches the interpreter's
+ * {@code eval/ObjcBridge}.
  */
 final class JvmObjcInteropCompiler {
 
@@ -30,11 +31,12 @@ final class JvmObjcInteropCompiler {
 	/** Every member of the {@code objc} package, as the compiler gates on them. */
 	static List<String> members() {
 		return List.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS, LispNames.OBJC_ON_MAIN,
-				LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP);
+				LispNames.OBJC_STRING, LispNames.OBJC_DATA, LispNames.OBJC_BYTES, LispNames.OBJC_ADDRESS,
+				LispNames.OBJC_OBJECTP);
 	}
 
 	/**
-	 * Returns whether the given {@code objc} package member is one of the seven verbs.
+	 * Returns whether the given {@code objc} package member is one of the nine verbs.
 	 */
 	static boolean handles(String member) {
 		return members().contains(member);
@@ -71,8 +73,8 @@ final class JvmObjcInteropCompiler {
 				}
 				emitBridgeCall(ctx, ops, "define-class");
 			}
-			case LispNames.OBJC_CLASS, LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS,
-					LispNames.OBJC_OBJECTP -> {
+			case LispNames.OBJC_CLASS, LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_DATA,
+					LispNames.OBJC_BYTES, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP -> {
 				String spelled = "objc:" + member.toLowerCase(java.util.Locale.ROOT);
 				requireArity(args.size() == 2, spelled + " expects 1 argument, got " + (args.size() - 1));
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);

@@ -66,6 +66,10 @@
     "NSSpellChecker's checkSpellingOfString:startingAt: (an NSRange answer) and",
     "guessesForWordRange:inString:language:inSpellDocumentWithTag: (an NSRange argument),",
     "NSDataDetector's matchesInString:options:range:, and CIColor's colorWithRed:green:blue:.",
+    "The last TWO are Metal's, for examples/macos/metal-triangle.lisp and metal-cube.lisp:",
+    "MTLDevice's newBufferWithBytes:length:options: and MTLRenderCommandEncoder's",
+    "drawPrimitives:vertexStart:vertexCount:. Everything else those two programs send -- and every",
+    "selector objc:data, objc:bytes and the :error out slot send -- the census already covered.",
     "A selector whose shape is outside this table SIGNALS in the",
     "binary, naming the entry to add here; the JVM registers nothing ahead of time and binds any",
     "shape. ObjcNativeImageForeignConfigTest pins the runtime shapes on every machine and the",
@@ -499,6 +503,14 @@
       {
         "returnType": "void*",
         "parameterTypes": ["void*", "void*", "jdouble", "jdouble", "jdouble"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong"]
       }
     ],
     "upcalls": [

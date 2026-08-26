@@ -6,6 +6,9 @@ import java.lang.ref.Cleaner;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -18,7 +21,7 @@ import am.ik.objc.TypeEncoding;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code objc:} bridge injected into a compiled {@code .class} program: the seven
+ * The {@code objc:} bridge injected into a compiled {@code .class} program: the nine
  * verbs' bodies against the compiled value representation ({@code null} = nil, the symbol
  * {@code "T"} = true, a {@code String} with surrounding quotes = string, {@code Long} /
  * {@code Double} numbers, an exact {@code Object[]} pair = cons cell, a
@@ -114,12 +117,24 @@ final class JvmObjcTemplate {
 		try {
 			ObjcRuntime runtime = ObjcRuntime.get();
 			@Nullable Object[] operands = new @Nullable Object[args.length];
+			List<ObjcRuntime.Out> outs = new ArrayList<>(1);
 			for (int i = 0; i < args.length; i++) {
-				operands[i] = toJava(args[i]);
+				if (isErrorSlot(args[i])) {
+					ObjcRuntime.Out out = new ObjcRuntime.Out();
+					outs.add(out);
+					operands[i] = out;
+				}
+				else {
+					operands[i] = toJava(args[i]);
+				}
 			}
 			return onMain(runtime, () -> {
 				MemorySegment receiver = receiver(runtime, target);
-				return fromJava(runtime, runtime.send(receiver, sel, operands), sel);
+				ObjcRuntime.Sent sent = runtime.send(receiver, sel, operands);
+				for (ObjcRuntime.Out out : outs) {
+					runtime.checkError(out, sent, sel);
+				}
+				return fromJava(runtime, sent, sel);
 			});
 		}
 		catch (ObjcException ex) {
@@ -193,6 +208,87 @@ final class JvmObjcTemplate {
 		catch (ObjcException ex) {
 			throw fail("string", ex);
 		}
+	}
+
+	/** Implements {@code (objc:data buffer)}. */
+	static Object objcData(@Nullable Object buffer) {
+		byte[] bytes = bufferBytes(buffer);
+		try {
+			ObjcRuntime runtime = ObjcRuntime.get();
+			return onMainValue(runtime, () -> {
+				try (Arena arena = Arena.ofConfined()) {
+					return wrapObject(runtime, runtime.nsData(bytes, arena), true);
+				}
+			});
+		}
+		catch (ObjcException ex) {
+			throw fail("data", ex);
+		}
+	}
+
+	/** Implements {@code (objc:bytes data)}. */
+	static Object objcBytes(@Nullable Object data) {
+		if (!(data instanceof JvmObjcHandle handle)) {
+			throw new RuntimeException("objc:bytes expects an Objective-C object, got " + describe(data));
+		}
+		try {
+			ObjcRuntime runtime = ObjcRuntime.get();
+			byte[] bytes = onMainValue(runtime, () -> runtime.dataBytes(MemorySegment.ofAddress(handle.address())));
+			// The compiled packed (unsigned-byte 8) vector: long[]{width, e0, ...}.
+			long[] vector = new long[bytes.length + 1];
+			vector[0] = 8;
+			for (int i = 0; i < bytes.length; i++) {
+				vector[i + 1] = bytes[i] & 0xFFL;
+			}
+			return vector;
+		}
+		catch (ObjcException ex) {
+			throw fail("bytes", ex);
+		}
+	}
+
+	/**
+	 * The bytes {@code objc:data} sends, little-endian and row-major: a packed float
+	 * array is a {@code float[]} / {@code double[]} of any rank, a packed
+	 * {@code (unsigned-byte 8|16|32)} vector a {@code long[]{width, e0, ...}}, and a
+	 * string its UTF-8 bytes. The interpreter's {@code eval/PackedBuffer} decides the
+	 * same thing against the interpreted representation.
+	 */
+	private static byte[] bufferBytes(@Nullable Object buffer) {
+		String text = lispString(buffer);
+		if (text != null) {
+			return text.getBytes(StandardCharsets.UTF_8);
+		}
+		// A packed float array carries its dimension header IN the array --
+		// [rank, dim_0..dim_{rank-1}, e_0...] -- so the elements start at 1 + rank
+		// (JvmFloatArrayRuntimeBuilder). Only the elements go on the wire, which is what
+		// the interpreter's LispSingleFloatArray.data() is.
+		if (buffer instanceof float[] singles) {
+			int from = 1 + (int) singles[0];
+			ByteBuffer bytes = ByteBuffer.allocate((singles.length - from) * 4).order(ByteOrder.LITTLE_ENDIAN);
+			bytes.asFloatBuffer().put(singles, from, singles.length - from);
+			return bytes.array();
+		}
+		if (buffer instanceof double[] doubles) {
+			int from = 1 + (int) doubles[0];
+			ByteBuffer bytes = ByteBuffer.allocate((doubles.length - from) * 8).order(ByteOrder.LITTLE_ENDIAN);
+			bytes.asDoubleBuffer().put(doubles, from, doubles.length - from);
+			return bytes.array();
+		}
+		if (buffer instanceof long[] vector && vector.length >= 1) {
+			int width = (int) vector[0] / 8;
+			ByteBuffer bytes = ByteBuffer.allocate((vector.length - 1) * width).order(ByteOrder.LITTLE_ENDIAN);
+			for (int i = 1; i < vector.length; i++) {
+				switch (width) {
+					case 1 -> bytes.put((byte) vector[i]);
+					case 2 -> bytes.putShort((short) vector[i]);
+					default -> bytes.putInt((int) vector[i]);
+				}
+			}
+			return bytes.array();
+		}
+		throw new RuntimeException("objc:data expects a packed float array, a packed (unsigned-byte 8|16|32)"
+				+ " vector or a string, got " + describe(buffer));
 	}
 
 	/** Implements {@code (objc:address object)}. */
@@ -448,6 +544,14 @@ final class JvmObjcTemplate {
 	}
 
 	// --- the compiled value representation ------------------------------------------
+
+	/**
+	 * Whether an argument is the {@code :error} marker -- a keyword is a bare
+	 * {@code String} in the compiled representation, a Lisp string a quoted one.
+	 */
+	private static boolean isErrorSlot(@Nullable Object value) {
+		return value instanceof String symbol && symbol.equalsIgnoreCase(":ERROR");
+	}
 
 	private static boolean isLispString(@Nullable Object v) {
 		return v instanceof String s && !s.isEmpty() && s.charAt(0) == '"';

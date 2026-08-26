@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.ref.Cleaner;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -17,11 +18,13 @@ import am.ik.objc.TypeEncoding;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispObjcObject;
 import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -101,13 +104,50 @@ final class ObjcBridge {
 			}
 			ObjcRuntime runtime = ObjcRuntime.get();
 			@Nullable Object[] operands = new @Nullable Object[args.size() - 2];
+			List<ObjcRuntime.Out> outs = new ArrayList<>(1);
 			for (int i = 2; i < args.size(); i++) {
-				operands[i - 2] = toJava(args.get(i));
+				if (isErrorSlot(args.get(i))) {
+					ObjcRuntime.Out out = new ObjcRuntime.Out();
+					outs.add(out);
+					operands[i - 2] = out;
+				}
+				else {
+					operands[i - 2] = toJava(args.get(i));
+				}
 			}
 			return onMain(runtime, () -> {
 				MemorySegment receiver = receiver(runtime, target);
-				return fromJava(runtime, runtime.send(receiver, selector.value(), operands), selector.value());
+				ObjcRuntime.Sent sent = runtime.send(receiver, selector.value(), operands);
+				for (ObjcRuntime.Out out : outs) {
+					runtime.checkError(out, sent, selector.value());
+				}
+				return fromJava(runtime, sent, selector.value());
 			});
+		});
+		define(globalEnv, LispNames.OBJC_DATA, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException("objc:data expects 1 argument, got " + args.size());
+			}
+			byte[] bytes = dataBytes(args.get(0));
+			ObjcRuntime runtime = ObjcRuntime.get();
+			return onMain(runtime, () -> {
+				try (Arena arena = Arena.ofConfined()) {
+					return wrapObject(runtime, runtime.nsData(bytes, arena), true);
+				}
+			});
+		});
+		define(globalEnv, LispNames.OBJC_BYTES, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispObjcObject data)) {
+				throw new LispEvalException("objc:bytes expects an Objective-C object, got "
+						+ (args.isEmpty() ? "no arguments" : args.get(0).print()));
+			}
+			ObjcRuntime runtime = ObjcRuntime.get();
+			byte[] bytes = onMain(runtime, () -> runtime.dataBytes(MemorySegment.ofAddress(data.address())));
+			long[] elements = new long[bytes.length];
+			for (int i = 0; i < bytes.length; i++) {
+				elements[i] = bytes[i] & 0xFFL;
+			}
+			return new LispIntVector(8, elements);
 		});
 		define(globalEnv, LispNames.OBJC_DEFINE_CLASS, args -> {
 			if (args.size() < 3 || args.size() > 4 || !(args.get(0) instanceof LispString name)
@@ -199,6 +239,32 @@ final class ObjcBridge {
 					+ (args.size() <= index ? "no arguments" : args.get(index).print()));
 		}
 		return s.value();
+	}
+
+	/**
+	 * Whether an argument is the {@code :error} marker: the caller wants the out slot of
+	 * a {@code ^@} parameter allocated, passed, and raised if the call reported failure.
+	 */
+	private static boolean isErrorSlot(LispVal value) {
+		return value instanceof LispSymbol symbol && symbol.isKeyword()
+				&& LispNames.ERROR.equalsIgnoreCase(LispSymbol.displayName(symbol.name()));
+	}
+
+	/**
+	 * The bytes {@code objc:data} sends: a packed buffer's, exactly as
+	 * {@code write-sequence} would write them ({@link PackedBuffer}), or a string's UTF-8
+	 * ones.
+	 */
+	private static byte[] dataBytes(LispVal value) {
+		PackedBuffer buffer = PackedBuffer.of(value);
+		if (buffer != null) {
+			return buffer.bytes();
+		}
+		if (value instanceof LispString text) {
+			return text.value().getBytes(StandardCharsets.UTF_8);
+		}
+		throw new LispEvalException("objc:data expects a packed float array, a packed (unsigned-byte 8|16|32)"
+				+ " vector or a string, got " + value.print());
 	}
 
 	private static List<LispVal> elements(String member, LispVal list, String what) {

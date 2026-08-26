@@ -96,6 +96,8 @@
 | `objc:define-class` | `(objc:define-class "Name" "NSObject" methods &optional protocols)` — メソッドが Lisp 関数であるクラス |
 | `objc:on-main` | `(objc:on-main (lambda () ...))` — 関数をメインスレッドで実行してその値を返す |
 | `objc:string` | `(objc:string "text")` — `NSString` |
+| `objc:data` | `(objc:data buffer)` — パックバッファのバイト列を持つ `NSMutableData` |
+| `objc:bytes` | `(objc:bytes data)` — `NSData` のバイト列をパックされた `(unsigned-byte 8)` ベクタとして |
 | `objc:address` | `(objc:address object)` — オブジェクトのアドレス (整数) |
 | `objc:objectp` | `(objc:objectp x)` — `x` が Objective-C オブジェクトかどうか |
 
@@ -175,6 +177,35 @@ T
 | その他のポインタ (`^`) | オブジェクト、整数アドレス、または `nil` | 整数アドレス |
 
 receiver が応答しないセレクタ、引数の個数違い、宣言型に合わない引数はクラッシュではなく `error` になります。`performSelector...` メッセージの答えは捨てられます (その型はターゲットメソッドのもので、バインディングからは見えません)。ブロック、共用体、ビットフィールドはこの第一段階の範囲外で、それらを取るセレクタは名前を挙げて拒否されます。
+
+### バイト列と `:error` 出力引数
+
+汎用のメッセージ送信だけでは表現できないものが 2 つあります。メモリブロックと出力引数で
+すが、どちらも Cocoa ではありふれたものです。1 つ目を担うのが `objc:data` です。パックバッ
+ファ (任意ランクのパック float 配列、パックされた `(unsigned-byte 8|16|32)` ベクタ、文字列
+の UTF-8) のバイト列を持つ `NSMutableData` を返します。並びは `write-sequence` が書くもの
+とまったく同じで、リトルエンディアンの行優先です。あとは `[data bytes]` が `void *` 引数の
+求めるアドレスになり、`[data mutableBytes]` は呼び出し先に渡せる書き込み領域になり、
+`objc:bytes` がブロックを読み戻します。
+
+2 つ目は `...error:` の慣習です。`NSError **` の位置にキーワード `:error` を渡すと、バイン
+ディングがスロットを確保して渡し、呼び出しが失敗を報告しスロットが埋まっていたときには、
+セレクタが返す素の `nil` の代わりに、そのエラーの内容でシグナルします。
+
+```console
+> (objc:bytes (objc:data (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
+#(0 0 128 63 0 0 0 64)
+> (handler-case
+      (objc:send "NSJSONSerialization" "JSONObjectWithData:options:error:" (objc:data "nope") 0 :error)
+    (error (e) (princ-to-string e)))
+"objc:send: JSONObjectWithData:options:error:: The data couldn’t be read because it isn’t in the correct format. [NSCocoaErrorDomain 3840]"
+```
+
+この 2 つが GPU を射程に入れます。Metal はほぼ全面が Objective-C の API なので、`objc:send`
+だけで何も足さずに駆動できます。`examples/macos/metal-triangle.lisp` は WebGL の hello world
+を、`examples/macos/metal-cube.lisp` は陰影付きの回転する立方体を描き、シェーダは Lisp の文
+字列から実行時にコンパイルされます (OpenGL は逆で、射程外のままです。`glClear` などは素の C
+関数であり、`objc_msgSend` は届きません)。
 
 ### スレッド: すべてはメインスレッドで起きる
 

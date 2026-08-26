@@ -661,6 +661,8 @@ categories:
       - { slug: objc-define-class, name: "objc:define-class" }
       - { slug: objc-on-main, name: "objc:on-main" }
       - { slug: objc-string, name: "objc:string" }
+      - { slug: objc-data, name: "objc:data" }
+      - { slug: objc-bytes, name: "objc:bytes" }
       - { slug: objc-address, name: "objc:address" }
       - { slug: objc-objectp, name: "objc:objectp" }
   - title: "appkit Package (Cocoa Widgets)"

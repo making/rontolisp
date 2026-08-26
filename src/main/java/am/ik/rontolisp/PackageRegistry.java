@@ -598,8 +598,8 @@ public final class PackageRegistry {
 		// (LispObjcObject) cannot be lowered by any compiler.
 		define(new LispPackage(LispNames.OBJC_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS,
-						LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS,
-						LispNames.OBJC_OBJECTP))));
+						LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_DATA, LispNames.OBJC_BYTES,
+						LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP))));
 		// A Cocoa widget layer over objc:, implemented once in appkit.lisp and loaded on
 		// demand (AppKitLibrary). Does not use cl; every function is external.
 		define(new LispPackage(LispNames.APPKIT_PKG, List.of(), new HashSet<>(APPKIT_FUNCTIONS)));

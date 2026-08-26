@@ -6033,6 +6033,18 @@ public final class LispNames {
 	/** {@code objc:string} -- an {@code NSString} for a Lisp string. */
 	public static final String OBJC_STRING = "STRING";
 
+	/**
+	 * {@code objc:data} -- an {@code NSMutableData} for a packed buffer's bytes, the same
+	 * bytes {@code write-sequence} would write.
+	 */
+	public static final String OBJC_DATA = "DATA";
+
+	/**
+	 * {@code objc:bytes} -- an {@code NSData}'s contents as a packed
+	 * {@code (unsigned-byte 8)} vector.
+	 */
+	public static final String OBJC_BYTES = "BYTES";
+
 	/** {@code objc:address} -- an object's address, as an integer. */
 	public static final String OBJC_ADDRESS = "ADDRESS";
 

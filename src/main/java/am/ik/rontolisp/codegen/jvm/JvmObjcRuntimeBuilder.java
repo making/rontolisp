@@ -88,7 +88,7 @@ final class JvmObjcRuntimeBuilder {
 	 */
 	private static final List<String> OBJC_CLASSES = List.of("ObjcException", "MainThread", "MainThread$Slot",
 			"ObjcClasses", "ObjcClasses$Bound", "ObjcClasses$Method", "ObjcClasses$Shape", "ObjcClasses$Spec",
-			"ObjcRuntime", "ObjcRuntime$1", "ObjcRuntime$Sent", "TypeEncoding", "TypeEncoding$Kind",
+			"ObjcRuntime", "ObjcRuntime$1", "ObjcRuntime$Out", "ObjcRuntime$Sent", "TypeEncoding", "TypeEncoding$Kind",
 			"TypeEncoding$Parser", "TypeEncoding$Type");
 
 	/** The emitted init helper method name. */
@@ -107,7 +107,8 @@ final class JvmObjcRuntimeBuilder {
 	 * The ready-to-emit {@code _objcInit} method, its guard field, and the constant-pool
 	 * references the {@code objc:} call-site compiler needs ({@code ops} keys:
 	 * {@code init}, {@code class}, {@code send}, {@code define-class}, {@code on-main},
-	 * {@code string}, {@code address}, {@code objectp}, {@value #PRINT}).
+	 * {@code string}, {@code data}, {@code bytes}, {@code address}, {@code objectp},
+	 * {@value #PRINT}).
 	 */
 	record ObjcRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, FieldrefConstant initedField,
@@ -175,6 +176,10 @@ final class JvmObjcRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcOnMain"), cp.addUtf8(oneArgDesc))));
 		ops.put("string",
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcString"), cp.addUtf8(oneArgDesc))));
+		ops.put("data",
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcData"), cp.addUtf8(oneArgDesc))));
+		ops.put("bytes",
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcBytes"), cp.addUtf8(oneArgDesc))));
 		ops.put("address",
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcAddress"), cp.addUtf8(oneArgDesc))));
 		ops.put("objectp",

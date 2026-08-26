@@ -86,10 +86,11 @@ class JvmObjcInteropCompilerTest {
 
 	@Test
 	void everyVerbCompilesOnEveryMachineAndAMachineWithoutTheRuntimeSignalsAtTheCall() throws Exception {
-		// The seven verbs compile everywhere; the call is what needs the runtime.
+		// The nine verbs compile everywhere; the call is what needs the runtime.
 		byte[] all = compile("""
 				(defun f (x) (list (objc:class x) (objc:send x "length" 1) (objc:define-class x "NSObject" nil)
-				                   (objc:on-main x) (objc:string x) (objc:address x) (objc:objectp x)))
+				                   (objc:on-main x) (objc:string x) (objc:data x) (objc:bytes x)
+				                   (objc:address x) (objc:objectp x)))
 				""");
 		assertThat(embedsObjcBridge(all)).isTrue();
 		if (!ObjcInterop.available()) {
@@ -110,11 +111,62 @@ class JvmObjcInteropCompilerTest {
 		assertThat(compileAndRun("(print (objc:send nil \"length\"))")).isEqualTo("NIL");
 		assertThat(compileAndRun("(print (handler-case (objc:address 42) (error (e) (princ-to-string e))))"))
 			.startsWith("\"objc:address expects an Objective-C object");
+		assertThat(compileAndRun("(print (handler-case (objc:data '(1 2 3)) (error (e) (princ-to-string e))))"))
+			.startsWith("\"objc:data expects a packed float array");
+		assertThat(compileAndRun("(print (handler-case (objc:bytes 42) (error (e) (princ-to-string e))))"))
+			.startsWith("\"objc:bytes expects an Objective-C object");
+	}
+
+	@Test
+	@EnabledOnOs(OS.MAC)
+	void aPackedBufferCrossesAsAnNsdataAndComesBackTheSameBytes() throws Exception {
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		// The compiled packed float array carries its dimension header IN the array
+		// ([rank, dims..., elements...]) and the packed integer vector its width, so the
+		// twin has to skip what the interpreter's data() never included. These are the
+		// interpreter's expectations, byte for byte (ObjcInteropTest).
+		assertThat(compileAndRun("""
+				(print (objc:bytes (objc:data (make-array 3 :element-type 'single-float
+				                                         :initial-contents '(1.0 2.0 3.0)))))
+				(print (objc:bytes (objc:data (make-array '(2 2) :element-type 'double-float
+				                                         :initial-contents '((1.0d0 2.0d0) (3.0d0 4.0d0))))))
+				(print (objc:bytes (objc:data (make-array 3 :element-type '(unsigned-byte 16)
+				                                         :initial-contents '(1 258 65535)))))
+				(print (objc:bytes (objc:data "hi")))
+				(print (objc:bytes (objc:data (make-array 0 :element-type '(unsigned-byte 8)))))
+				(print (objc:send (objc:data "hello") "length"))
+				(print (objc:send (objc:data "hello") "isKindOfClass:" (objc:class "NSData")))
+				(print (integerp (objc:send (objc:data "hello") "mutableBytes")))
+				""")).isEqualTo("""
+				#(0 0 128 63 0 0 0 64 0 0 64 64)
+				#(0 0 0 0 0 0 240 63 0 0 0 0 0 0 0 64 0 0 0 0 0 0 8 64 0 0 0 0 0 0 16 64)
+				#(1 0 2 1 255 255)
+				#(104 105)
+				#()
+				5
+				T
+				T""");
+	}
+
+	@Test
+	@EnabledOnOs(OS.MAC)
+	void theErrorSlotRaisesWhatTheNserrorSaysAndIsSilentWhenTheCallSucceeded() throws Exception {
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		assertThat(compileAndRun("""
+				(print (handler-case (objc:send "NSJSONSerialization" "JSONObjectWithData:options:error:"
+				                                (objc:data "not json") 0 :error)
+				         (error (e) (princ-to-string e))))
+				""")).contains("objc:send: JSONObjectWithData:options:error:").contains("NSCocoaErrorDomain");
+		assertThat(compileAndRun("""
+				(print (objc:send (objc:send "NSJSONSerialization" "JSONObjectWithData:options:error:"
+				                             (objc:data "[1,2,3]") 0 :error)
+				                  "count"))
+				""")).isEqualTo("3");
 	}
 
 	@Test
 	void theBlobIsEmbeddedOnlyWhenTheProgramReachesTheObjcPackage() {
-		// The gate is the seven verbs, qualified; an appkit: program reaches them
+		// The gate is the nine verbs, qualified; an appkit: program reaches them
 		// through the spliced widget layer, whose every widget is objc:send.
 		assertThat(embedsObjcBridge(compile("(print (+ 1 2))"))).isFalse();
 		assertThat(embedsObjcBridge(compile("(print (objc:objectp 1))"))).isTrue();

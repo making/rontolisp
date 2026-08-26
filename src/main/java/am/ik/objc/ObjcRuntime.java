@@ -492,6 +492,41 @@ public final class ObjcRuntime {
 	 * @param type the declared return type
 	 */
 	public record Sent(@Nullable Object value, Type type) {
+
+		/**
+		 * Whether the answer is the Cocoa failure value -- nil, {@code NO}, or zero. It
+		 * is the RESULT, never the error slot, that says a call failed (Foundation's own
+		 * rule), so this is what {@link #checkError} gates on.
+		 * @return {@code true} when the call reported failure
+		 */
+		public boolean failed() {
+			return this.value == null || Boolean.FALSE.equals(this.value) || (this.value instanceof Long n && n == 0L);
+		}
+	}
+
+	/**
+	 * A pointer-sized out-parameter slot. Pass one to {@link #send} in place of a
+	 * {@code ^@} argument and the binding allocates the slot, passes its address, and
+	 * fills {@link #value()} with whatever the callee wrote -- the {@code NSError **} of
+	 * every {@code ...error:} selector in Cocoa, which the caller could otherwise neither
+	 * supply nor read.
+	 *
+	 * <p>
+	 * What the callee writes is AUTORELEASED, so a caller that keeps it must retain it
+	 * before the hop's pool drains, exactly as for any other object a send answers.
+	 */
+	public static final class Out {
+
+		private @Nullable MemorySegment value;
+
+		/**
+		 * What the callee wrote into the slot.
+		 * @return the object, or {@code null} when the slot was left NULL
+		 */
+		public @Nullable MemorySegment value() {
+			return this.value;
+		}
+
 	}
 
 	/**
@@ -533,8 +568,29 @@ public final class ObjcRuntime {
 			}
 			all.add(receiver);
 			all.add(selector(selector));
+			List<Out> outs = List.of();
+			List<MemorySegment> slots = List.of();
 			for (int i = 0; i < args.length; i++) {
-				all.add(marshal(params.get(i + 2), args[i], arena, selector, i));
+				if (args[i] instanceof Out out) {
+					Type param = params.get(i + 2);
+					if (param.kind() != Kind.POINTER) {
+						throw new ObjcException(selector + ": argument " + (i + 1) + " is declared "
+								+ param.kind().name().toLowerCase(Locale.ROOT) + ", not a pointer, so it takes no"
+								+ " out slot");
+					}
+					MemorySegment slot = arena.allocate(ValueLayout.ADDRESS);
+					slot.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+					all.add(slot);
+					if (outs.isEmpty()) {
+						outs = new ArrayList<>(1);
+						slots = new ArrayList<>(1);
+					}
+					outs.add(out);
+					slots.add(slot);
+				}
+				else {
+					all.add(marshal(params.get(i + 2), args[i], arena, selector, i));
+				}
 			}
 			Object raw;
 			try {
@@ -542,6 +598,10 @@ public final class ObjcRuntime {
 			}
 			catch (Throwable ex) {
 				throw new ObjcException(selector + " failed: " + ex, ex);
+			}
+			for (int i = 0; i < outs.size(); i++) {
+				MemorySegment written = slots.get(i).get(ValueLayout.ADDRESS, 0);
+				outs.get(i).value = written.address() == 0 ? null : written;
 			}
 			return new Sent(unmarshal(ret, raw), ret);
 		}
@@ -733,6 +793,67 @@ public final class ObjcRuntime {
 	public String string(MemorySegment string) {
 		Object chars = send(string, "UTF8String").value();
 		return chars == null ? "" : (String) chars;
+	}
+
+	/**
+	 * An autoreleased {@code NSMutableData} holding a COPY of the given bytes, staged in
+	 * the given arena. Mutable rather than an {@code NSData} so one object serves both
+	 * directions: {@code bytes} hands the block to a {@code ^v} parameter, and
+	 * {@code mutableBytes} is writable scratch a callee can fill.
+	 * @param bytes the contents
+	 * @param arena where the staging copy lives for the duration of the call
+	 * @return the data object
+	 */
+	public MemorySegment nsData(byte[] bytes, Arena arena) {
+		MemorySegment source = bytes.length == 0 ? MemorySegment.NULL
+				: arena.allocateFrom(ValueLayout.JAVA_BYTE, bytes);
+		Sent sent = send(objcClass("NSMutableData"), "dataWithBytes:length:", source, (long) bytes.length);
+		if (!(sent.value() instanceof MemorySegment data)) {
+			throw new ObjcException("dataWithBytes:length: answered nil");
+		}
+		return data;
+	}
+
+	/**
+	 * The bytes of an {@code NSData}, copied out.
+	 * @param data the data object
+	 * @return its contents
+	 */
+	public byte[] dataBytes(MemorySegment data) {
+		Object length = send(data, "length").value();
+		if (!(length instanceof Long size)) {
+			throw new ObjcException("length answered no integer; the receiver is not an NSData");
+		}
+		if (size == 0) {
+			return new byte[0];
+		}
+		Object pointer = send(data, "bytes").value();
+		if (!(pointer instanceof MemorySegment block) || block.address() == 0) {
+			throw new ObjcException("bytes answered NULL for a data of " + size + " byte(s)");
+		}
+		return block.reinterpret(size).toArray(ValueLayout.JAVA_BYTE);
+	}
+
+	/**
+	 * The {@code ...error:} convention: when the call reported failure AND filled the out
+	 * slot, raise what the {@code NSError} says. Nothing else in this binding answers a
+	 * bare nil for a failure, and neither does a selector asked for its error.
+	 * @param out the slot that was passed
+	 * @param sent what the call answered
+	 * @param selector the selector, for the message
+	 * @throws ObjcException when the call failed and named a reason
+	 */
+	public void checkError(Out out, Sent sent, String selector) {
+		MemorySegment error = out.value();
+		if (error == null || !sent.failed()) {
+			return;
+		}
+		Object description = send(error, "localizedDescription").value();
+		Object domain = send(error, "domain").value();
+		Object code = send(error, "code").value();
+		String reason = description instanceof MemorySegment text ? string(text) : "no reason given";
+		String where = domain instanceof MemorySegment name ? " [" + string(name) + " " + code + "]" : "";
+		throw new ObjcException(selector + ": " + reason + where);
 	}
 
 	/**
