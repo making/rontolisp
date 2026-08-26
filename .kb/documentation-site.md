@@ -84,6 +84,38 @@ than advisory: a tree whose page has a different heading COUNT fails the build
 any `#fragment` with no matching `id` -- the anchor half of the page-link check
 `SkillGenTest` already did.
 
+**Search is two JSON files docgen writes per language tree** (2026-08-26). The site is
+static, so the search runs in the browser: `SearchIndex` emits
+`<lang>/search-index.json` (page paths, titles, operator signatures, every H1-H3
+heading -- ~28 KB gzipped) and `<lang>/search-body.json` (the section bodies, ~450 KB
+gzipped). `docs.js` prefetches the first on idle, so `Ctrl+K` / `/` answers the dominant
+"I know the operator name, take me there" query with no round trip, and fetches the
+second on the first keystroke. Matching is plain **substring** -- deliberately, not a
+weakness: it needs no segmenter, which is what the Japanese tree wants, and in English a
+substring covers most of what stemming would (`compil` finds `compile` and `compiling`).
+A bigram inverted index was rejected because at this corpus size its postings are larger
+than the text they index; Pagefind is the fallback if the payload ever becomes a problem,
+and Algolia was rejected for ending the site's self-containment (it cannot work under
+`jwebserver` or offline). Rank, cheapest signal first: operator name > page title >
+signature > heading > body; then earlier offset.
+
+- Each tree gets its own pair and **a search never crosses languages** -- `<body>` carries
+  `data-search-base`, the relative path to this page's language root, and every result
+  link is resolved against it.
+- **Both files are keyed by POSITION** -- a hit is `pages[i]` and `pages[i].h[j]` -- so
+  EVERY heading is indexed, the `<h1>` that repeats the page title included. Skipping it
+  when it matched the title made the two trees' indexes diverge, because a `nav.yaml`
+  title is translated and an anchor is not; `docs.js` folds an `<h1>` hit into the page's
+  own result instead. `DocGenTest` pins the shape: every rendered page is in its
+  language's index, every entry's `page.html#anchor` resolves in the generated site, and
+  the two trees' indexes agree page for page and anchor for anchor.
+- Because the anchors come from `alignHeadingIds`, a `ja` hit links to the en anchor,
+  exactly like a `ja` cross-page link.
+- The index is a docgen OUTPUT, not a doc page: `SkillGen` reads `doc/`, so nothing of
+  this reaches the agent skill's bundle.
+- `fetch` needs a real origin -- previewing the search over `file://` gets you the dialog
+  and no results. Use the `jwebserver` recipe below.
+
 **Adding/editing pages.** Edit the Markdown; add new top-level pages to
 `doc/en/nav.yaml` (and `doc/ja/nav.yaml`). For a new function/macro/special form,
 add a per-operator page + a `_catalog.yaml` entry under the matching directory in

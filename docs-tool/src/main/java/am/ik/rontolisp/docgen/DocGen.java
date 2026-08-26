@@ -36,7 +36,8 @@ import com.vladsch.flexmark.util.data.MutableDataSet;
  * Each language directory that contains a {@code nav.yaml} becomes a localized site under
  * {@code <out>/<lang>/}. The default language also gets a redirect at
  * {@code <out>/index.html}. Markdown links to {@code *.md} are rewritten to
- * {@code *.html}.
+ * {@code *.html}. Each language also gets the two files of its client-side search index
+ * ({@link SearchIndex}).
  *
  * <p>
  * Usage:
@@ -72,6 +73,13 @@ public final class DocGen {
 
 	/** The language whose anchors every other language adopts. */
 	private String referenceLang;
+
+	/**
+	 * The client-side search index of the language currently being generated. Every page
+	 * rendered by this generator feeds it, and it is written out when the language is
+	 * done -- one index per tree, because a search never crosses languages.
+	 */
+	private SearchIndex searchIndex;
 
 	public DocGen(Path source, Path out, String defaultLang) {
 		this.source = source;
@@ -146,6 +154,7 @@ public final class DocGen {
 
 	private void generateLanguage(String lang, List<HtmlTemplate.Language> languageList) throws IOException {
 		Path langDir = this.source.resolve(lang);
+		this.searchIndex = new SearchIndex(lang);
 		Nav nav = Nav.load(langDir.resolve("nav.yaml"));
 		List<Catalog> catalogs = Catalog.discover(langDir);
 		// Each catalog's index page (the table) is linked to its detail pages.
@@ -166,6 +175,8 @@ public final class DocGen {
 		for (Catalog catalog : catalogs) {
 			renderDetailPages(lang, nav, languageList, langDir, catalog, indexTitle(nav, catalog));
 		}
+
+		this.searchIndex.write(this.out);
 	}
 
 	private void renderNavPage(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
@@ -174,14 +185,15 @@ public final class DocGen {
 		if (!Files.exists(mdPath)) {
 			throw new IOException("Missing Markdown source: " + mdPath);
 		}
-		String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang);
+		String docPath = lang + "/" + replaceExtension(page.file());
+		String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang, docPath,
+				page.title(), false);
 		// On a reference table page (functions/macros/special forms), link each
 		// operator name in the table to its detail page, so that one page is both
 		// the quick reference and the index of the detail pages.
 		if (catalog != null) {
 			body = TableLinkTransformer.transform(body, buildNameToSlug(catalog), catalog.linkPrefix());
 		}
-		String docPath = lang + "/" + replaceExtension(page.file());
 		HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
 				docPath, body, TocBuilder.build(body), null, prev, next, languageList);
 		writePage(docPath, HtmlTemplate.render(ctx));
@@ -211,7 +223,8 @@ public final class DocGen {
 			String docPath = lang + "/" + replaceExtension(page.file());
 			HtmlTemplate.Crumb prev = (i > 0) ? crumb(lang, subpages.get(i - 1)) : backlink;
 			HtmlTemplate.Crumb next = (i < subpages.size() - 1) ? crumb(lang, subpages.get(i + 1)) : null;
-			String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang);
+			String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang, docPath,
+					page.title(), false);
 			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
 					parentDocPath, body, TocBuilder.build(body), backlink, prev, next, languageList);
 			writePage(docPath, HtmlTemplate.render(ctx));
@@ -234,7 +247,7 @@ public final class DocGen {
 			HtmlTemplate.Crumb prev = (i > 0) ? detailCrumb(lang, catalog, entries.get(i - 1)) : backlink;
 			HtmlTemplate.Crumb next = (i < entries.size() - 1) ? detailCrumb(lang, catalog, entries.get(i + 1)) : null;
 			String detailBody = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), catalog.mdFile(entry),
-					lang);
+					lang, docPath, entry.name(), true);
 			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, entry.name(), docPath,
 					catalog.mdFile(entry), indexDocPath, detailBody, TocBuilder.build(detailBody), backlink, prev, next,
 					languageList);
@@ -271,10 +284,18 @@ public final class DocGen {
 		return map;
 	}
 
-	private String renderBody(String markdown, String mdFile, String lang) throws IOException {
+	/**
+	 * Renders one Markdown page and feeds the search index with it. The index is built
+	 * from the body as it stands after the anchors are aligned and the links rewritten,
+	 * but BEFORE the runnable cells are built: the cell chrome is markup nobody searches
+	 * for, and the section anchors have to be the ones the page will actually carry.
+	 */
+	private String renderBody(String markdown, String mdFile, String lang, String docPath, String title,
+			boolean operator) throws IOException {
 		String body = this.renderer.render(this.parser.parse(markdown));
 		body = alignHeadingIds(body, mdFile, lang);
 		body = rewriteMarkdownLinks(body);
+		this.searchIndex.addPage(docPath.substring(lang.length() + 1), title, body, operator);
 		return RunnableBlockTransformer.transform(body);
 	}
 

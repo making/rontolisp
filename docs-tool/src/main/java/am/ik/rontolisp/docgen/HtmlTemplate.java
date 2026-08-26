@@ -5,9 +5,11 @@ import java.util.List;
 
 /**
  * Renders the full HTML page shell around a rendered Markdown body: the top bar (site
- * title, playground link, language switcher, runtime status, reset), the left sidebar
- * navigation, the content, and previous/next links. The dark theme lives in
- * {@code assets/docs.css}; the runnable-cell wiring in {@code assets/docs.js}.
+ * title, search, playground link, language switcher, runtime status, reset), the left
+ * sidebar navigation, the content, and previous/next links. The dark theme lives in
+ * {@code assets/docs.css}; the runnable-cell wiring and the search dialog in
+ * {@code assets/docs.js}, which finds this language's {@link SearchIndex} files through
+ * the {@code data-search-base} the body carries.
  */
 public final class HtmlTemplate {
 
@@ -93,7 +95,13 @@ public final class HtmlTemplate {
 		html.append("<meta name=\"twitter:description\" content=\"").append(esc(SITE_DESCRIPTION)).append("\">\n");
 		html.append("<meta name=\"twitter:image\" content=\"").append(esc(ogImage)).append("\">\n");
 		html.append("</head>\n");
-		html.append("<body data-runtime-src=\"").append(runtimeSrc).append("\">\n");
+		// The search index lives beside the pages of this language tree; docs.js
+		// resolves both tiers and every result link against this base.
+		html.append("<body data-runtime-src=\"")
+			.append(runtimeSrc)
+			.append("\" data-search-base=\"")
+			.append(rel(ctx.currentDocPath(), ctx.lang()))
+			.append("\">\n");
 
 		appendTopbar(html, ctx, homeHref);
 
@@ -134,6 +142,12 @@ public final class HtmlTemplate {
 			.append(esc(ctx.nav().title()))
 			.append("<span class=\"paren\">)</span> docs</a>\n");
 		html.append("<nav class=\"topnav\">\n");
+		// Search is the first thing in the bar because it is the shortest way into
+		// a site of several hundred per-operator pages. docs.js builds the dialog.
+		html.append("<button type=\"button\" class=\"search-open\" aria-label=\"Search the documentation\">")
+			.append("<span class=\"search-open-label\">Search</span>")
+			.append("<kbd class=\"search-open-key\">Ctrl K</kbd>")
+			.append("</button>\n");
 		// The playground lives one level above the docs root.
 		String playgroundHref = runtimeSrc(ctx.currentDocPath()).replace("rontoplayground.js", "playground.html");
 		html.append("<a href=\"").append(playgroundHref).append("\">Playground</a>\n");

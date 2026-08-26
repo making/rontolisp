@@ -225,6 +225,167 @@ class DocGenTest {
 	}
 
 	@Test
+	void searchIndexPlainTextDropsMarkupAndDecodesEntities() {
+		assertThat(SearchIndex.plainText("<p>Compare with <code>eq</code>.</p>")).isEqualTo("Compare with eq.");
+		// An inline tag sits inside a word, so removing it must not split one...
+		assertThat(SearchIndex.plainText("<p><code>car</code>s</p>")).isEqualTo("cars");
+		// ...while a block tag separates two.
+		assertThat(SearchIndex.plainText("<ul><li>one</li><li>two</li></ul>")).isEqualTo("one two");
+		assertThat(SearchIndex.plainText("<pre><code>(if (&lt; a b) &quot;x&quot;)</code></pre>"))
+			.isEqualTo("(if (< a b) \"x\")");
+		assertThat(SearchIndex.plainText("<p>&amp;lt; is an escape</p>")).isEqualTo("&lt; is an escape");
+	}
+
+	@Test
+	void searchIndexSplitsAPageIntoSectionsKeyedToItsAnchors() {
+		SearchIndex index = new SearchIndex("en");
+		index.addPage("guides/x.html", "Title", """
+				<h1 id="title">Title</h1>
+				<p>lead text</p>
+				<h2 id="options">Options</h2>
+				<p>option text</p>
+				""", false);
+		// Every heading is an entry, the <h1> included, so the index shape follows
+		// the document rather than the (translated) nav title.
+		assertThat(index.tier1()).contains("\"p\":\"guides/x.html\"", "\"t\":\"Title\"",
+				"[[\"title\",\"Title\"],[\"options\",\"Options\"]]");
+		assertThat(index.tier2()).contains("[0,0,\"lead text\"]", "[0,1,\"option text\"]");
+	}
+
+	@Test
+	void searchIndexRecordsAnOperatorsSignature() {
+		SearchIndex index = new SearchIndex("en");
+		index.addPage("reference/functions/mapcar.html", "mapcar", """
+				<h1 id="mapcar">mapcar</h1>
+				<p><code>(mapcar function list &amp;rest more-lists)</code></p>
+				<p>Applies.</p>
+				""", true);
+		assertThat(index.tier1()).contains("\"s\":\"(mapcar function list &rest more-lists)\"", "\"o\":1");
+		// A page that is not an operator page carries neither.
+		SearchIndex plain = new SearchIndex("en");
+		plain.addPage("index.html", "Introduction", "<h1 id=\"i\">Introduction</h1><p><code>x</code></p>", false);
+		assertThat(plain.tier1()).doesNotContain("\"s\":").doesNotContain("\"o\":1");
+	}
+
+	@Test
+	void searchIndexQuotesJsonStrings() {
+		assertThat(SearchIndex.quote("a\"b\\c")).isEqualTo("\"a\\\"b\\\\c\"");
+		assertThat(SearchIndex.quote("tab\there")).isEqualTo("\"tab\\there\"");
+		// Non-ASCII stays verbatim: the files are served as UTF-8.
+		assertThat(SearchIndex.quote("リーダー")).isEqualTo("\"リーダー\"");
+	}
+
+	/**
+	 * The anti-rot gate for the search: every page the site renders is reachable through
+	 * the index, and every index entry lands on a real anchor of a real page.
+	 */
+	@Test
+	void everyRenderedPageIsInItsLanguagesSearchIndex() throws IOException {
+		for (String lang : List.of("en", "ja")) {
+			Set<String> indexed = new HashSet<>();
+			for (Object page : tier1Pages(lang)) {
+				indexed.add(String.valueOf(((Map<?, ?>) page).get("p")));
+			}
+			Set<String> rendered = new HashSet<>();
+			try (Stream<Path> pages = Files.walk(site.resolve(lang))) {
+				pages.filter(p -> p.toString().endsWith(".html"))
+					.forEach(p -> rendered.add(site.resolve(lang).relativize(p).toString().replace('\\', '/')));
+			}
+			assertThat(indexed).as("search index of " + lang).isEqualTo(rendered);
+		}
+	}
+
+	@Test
+	void everySearchHitResolvesToAnAnchorOfTheGeneratedSite() throws IOException {
+		for (String lang : List.of("en", "ja")) {
+			List<String> dead = new ArrayList<>();
+			for (Object rawPage : tier1Pages(lang)) {
+				Map<?, ?> page = (Map<?, ?>) rawPage;
+				Path html = site.resolve(lang).resolve(String.valueOf(page.get("p")));
+				if (!Files.exists(html)) {
+					dead.add(lang + "/" + page.get("p"));
+					continue;
+				}
+				Set<String> anchors = new HashSet<>();
+				Matcher matcher = ID.matcher(Files.readString(html, StandardCharsets.UTF_8));
+				while (matcher.find()) {
+					anchors.add(matcher.group(1));
+				}
+				for (Object rawHeading : (List<?>) page.get("h")) {
+					String anchor = String.valueOf(((List<?>) rawHeading).get(0));
+					if (!anchors.contains(anchor)) {
+						dead.add(lang + "/" + page.get("p") + "#" + anchor);
+					}
+				}
+			}
+			assertThat(dead).isEmpty();
+		}
+	}
+
+	/**
+	 * The trees are structurally identical by rule, so a divergence between their indexes
+	 * is a doc bug -- and a body tier that lost a language's sections would fail silently
+	 * at query time rather than at build time.
+	 */
+	@Test
+	void theLanguageIndexesHaveTheSameShape() throws IOException {
+		List<?> en = tier1Pages("en");
+		List<?> ja = tier1Pages("ja");
+		assertThat(ja).hasSameSizeAs(en);
+		for (int i = 0; i < en.size(); i++) {
+			Map<?, ?> a = (Map<?, ?>) en.get(i);
+			Map<?, ?> b = (Map<?, ?>) ja.get(i);
+			// Same page, same anchors -- only the titles and heading labels differ.
+			assertThat(b.get("p")).isEqualTo(a.get("p"));
+			assertThat(anchorsOf(b)).as(String.valueOf(a.get("p"))).isEqualTo(anchorsOf(a));
+		}
+		assertThat(tier2Sections("ja")).hasSameSizeAs(tier2Sections("en"));
+	}
+
+	@Test
+	void theSearchIndexReachesTheOperatorPagesWithTheirSignature() throws IOException {
+		Map<?, ?> mapcar = tier1Pages("en").stream()
+			.map(Map.class::cast)
+			.filter(page -> "reference/functions/mapcar.html".equals(page.get("p")))
+			.findFirst()
+			.orElseThrow();
+		assertThat(mapcar.get("t")).isEqualTo("mapcar");
+		assertThat(mapcar.get("o")).isEqualTo(1);
+		assertThat(mapcar.get("s")).isEqualTo("(mapcar function list &rest more-lists)");
+		// ...and its prose is in the body tier, which is what a phrase query hits.
+		assertThat(tier2Sections("en").stream()
+			.map(List.class::cast)
+			.anyMatch(section -> String.valueOf(section.get(2)).contains("Applies"))).isTrue();
+	}
+
+	@Test
+	void everyPageLinksTheSearchIndexOfItsOwnLanguage() throws IOException {
+		String deep = Files.readString(site.resolve("ja/reference/functions/mapcar.html"), StandardCharsets.UTF_8);
+		assertThat(deep).contains("data-search-base=\"../..\"").contains("class=\"search-open\"");
+		assertThat(Files.readString(site.resolve("en/index.html"), StandardCharsets.UTF_8))
+			.contains("data-search-base=\".\"");
+	}
+
+	@SuppressWarnings("unchecked")
+	private static List<Object> tier1Pages(String lang) throws IOException {
+		return (List<Object>) loadJson(site.resolve(lang).resolve("search-index.json")).get("pages");
+	}
+
+	@SuppressWarnings("unchecked")
+	private static List<Object> tier2Sections(String lang) throws IOException {
+		return (List<Object>) loadJson(site.resolve(lang).resolve("search-body.json")).get("s");
+	}
+
+	/** JSON is YAML, and snakeyaml is already here for the nav and the catalogs. */
+	private static Map<String, Object> loadJson(Path file) throws IOException {
+		return new org.yaml.snakeyaml.Yaml().load(Files.readString(file, StandardCharsets.UTF_8));
+	}
+
+	private static List<String> anchorsOf(Map<?, ?> page) {
+		return ((List<?>) page.get("h")).stream().map(h -> String.valueOf(((List<?>) h).get(0))).toList();
+	}
+
+	@Test
 	void relativeLinksAreComputedFromDocsRoot() {
 		assertThat(HtmlTemplate.rel("en/reference/data-types.html", "assets/docs.css"))
 			.isEqualTo("../../assets/docs.css");
