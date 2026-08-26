@@ -14,6 +14,10 @@ public final class HtmlTemplate {
 	private HtmlTemplate() {
 	}
 
+	private static final String SITE_BASE_URL = "https://making.github.io/rontolisp/docs/";
+
+	private static final String SITE_DESCRIPTION = "A Common Lisp subset implemented in Java, compiling to JVM bytecode and WebAssembly.";
+
 	/**
 	 * A language available on the site, used to render the language switcher.
 	 *
@@ -62,17 +66,32 @@ public final class HtmlTemplate {
 		String assetsJs = rel(ctx.currentDocPath(), "assets/docs.js");
 		String runtimeSrc = runtimeSrc(ctx.currentDocPath());
 		String homeHref = rel(ctx.currentDocPath(), ctx.lang() + "/index.html");
+		String faviconPng = rel(ctx.currentDocPath(), "assets/favicon.png");
+		String faviconIco = rel(ctx.currentDocPath(), "assets/favicon.ico");
+		String appleTouchIcon = rel(ctx.currentDocPath(), "assets/apple-touch-icon.png");
+		String pageTitle = ctx.title() + " · " + ctx.nav().title();
+		String pageUrl = SITE_BASE_URL + ctx.currentDocPath();
+		String ogImage = SITE_BASE_URL + "assets/og-image.png";
 
 		StringBuilder html = new StringBuilder();
 		html.append("<!DOCTYPE html>\n<html lang=\"").append(esc(ctx.lang())).append("\">\n<head>\n");
 		html.append("<meta charset=\"UTF-8\">\n");
 		html.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
-		html.append("<title>")
-			.append(esc(ctx.title()))
-			.append(" &middot; ")
-			.append(esc(ctx.nav().title()))
-			.append("</title>\n");
+		html.append("<title>").append(esc(pageTitle)).append("</title>\n");
+		html.append("<link rel=\"icon\" href=\"").append(faviconPng).append("\" type=\"image/png\">\n");
+		html.append("<link rel=\"icon\" href=\"").append(faviconIco).append("\" sizes=\"any\">\n");
+		html.append("<link rel=\"apple-touch-icon\" href=\"").append(appleTouchIcon).append("\">\n");
 		html.append("<link rel=\"stylesheet\" href=\"").append(assetsCss).append("\">\n");
+		html.append("<meta property=\"og:type\" content=\"website\">\n");
+		html.append("<meta property=\"og:site_name\" content=\"").append(esc(ctx.nav().title())).append("\">\n");
+		html.append("<meta property=\"og:title\" content=\"").append(esc(pageTitle)).append("\">\n");
+		html.append("<meta property=\"og:description\" content=\"").append(esc(SITE_DESCRIPTION)).append("\">\n");
+		html.append("<meta property=\"og:url\" content=\"").append(esc(pageUrl)).append("\">\n");
+		html.append("<meta property=\"og:image\" content=\"").append(esc(ogImage)).append("\">\n");
+		html.append("<meta name=\"twitter:card\" content=\"summary_large_image\">\n");
+		html.append("<meta name=\"twitter:title\" content=\"").append(esc(pageTitle)).append("\">\n");
+		html.append("<meta name=\"twitter:description\" content=\"").append(esc(SITE_DESCRIPTION)).append("\">\n");
+		html.append("<meta name=\"twitter:image\" content=\"").append(esc(ogImage)).append("\">\n");
 		html.append("</head>\n");
 		html.append("<body data-runtime-src=\"").append(runtimeSrc).append("\">\n");
 
