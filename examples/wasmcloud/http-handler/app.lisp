@@ -11,9 +11,9 @@
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   rontolisp examples/wasmcloud/http-handler/app.lisp
-;; Run (JVM class; running it needs the rontolisp jar on the classpath):
+;; Run (JVM class; self-contained -- the server travels beside it):
 ;;   rontolisp examples/wasmcloud/http-handler/app.lisp -o App.class && \
-;;     java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+;;     java -cp . App
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/wasmcloud/http-handler/app.lisp -o app.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y app.wasm

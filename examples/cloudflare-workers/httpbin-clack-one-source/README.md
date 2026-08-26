@@ -38,7 +38,7 @@ TCP, so the program compiles and `clackup` fails at run time.
 ```bash
 rontolisp ../../net/httpbin-clack.lisp                                  # :8080
 rontolisp ../../net/httpbin-clack.lisp -o Serve.class && \
-  java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Serve
+  java -cp . Serve
 rontolisp ../../net/httpbin-clack.lisp -o serve.wasm --component && \
   wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y serve.wasm
 rontolisp ../../net/httpbin-clack.lisp -o src/worker.wasm --no-wasi --optimize=size

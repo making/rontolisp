@@ -13,10 +13,10 @@
 ;;   rontolisp examples/db/postgres-web.lisp
 ;; Then open http://127.0.0.1:8080 in a browser.
 ;;
-;; Runs on the interpreter and on the JVM backend (keep the rontolisp jar on
-;; the classpath, it carries the runtime):
+;; Runs on the interpreter and on the JVM backend (self-contained: the server
+;; travels beside the class):
 ;;   rontolisp examples/db/postgres-web.lisp -o App.class && \
-;;     java -cp target/rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+;;     java -cp . App
 ;; And as a WASI component under wasmtime serve, which both serves the page and
 ;; lets the driver dial out -- but only with -S cli=y in the flag set. Without
 ;; it the linker rejects the module with "resource implementation is missing",

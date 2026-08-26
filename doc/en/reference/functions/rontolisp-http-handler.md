@@ -73,14 +73,13 @@ Hello from rontolisp!
 GET /hello
 ```
 
-Compile it to a JVM class (the class implements the embedded server's handler
-interface, so the rontolisp executable JAR must be on the classpath when
-running it — this is the one step that needs the JAR instead of the native
-binary):
+Compile it to a JVM class (self-contained: the embedded server travels beside
+the class, under `am/ik/rontolisp/runtime/`, so nothing else goes on the
+classpath — `-o app.jar` packages the two together):
 
 ```console
 $ rontolisp app.lisp -o App.class
-$ java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+$ java -cp . App
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -99,9 +98,9 @@ GET /hello
 ## Backend support
 
 `http-handler` runs on the **interpreter** backend (a blocking server), the
-**JVM** backend (the same blocking server; the compiled class needs the
-rontolisp executable JAR, `rontolisp-0.1.0-SNAPSHOT-exec.jar`, on the
-classpath) and the **WASI component** backend
+**JVM** backend (the same blocking server, travelling beside the compiled
+class so it needs nothing else on the classpath) and the **WASI component**
+backend
 (`--component`, a `wasi:http/handler@0.3.0` component for `wasmtime serve`).
 Request and response headers are marshalled on every backend, the WASI component
 included: the handler reads `:headers` (an `equal` hash table keyed by

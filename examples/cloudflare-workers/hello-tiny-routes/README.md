@@ -90,7 +90,7 @@ function, so the whole Worker runs on every backend, which
 
 ```bash
 rontolisp check.lisp
-rontolisp check.lisp -o Check.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Check
+rontolisp check.lisp -o Check.class && java -cp . Check
 rontolisp check.lisp -o check.wasm --optimize && wasmtime run -W gc -W exceptions=y check.wasm
 ```
 

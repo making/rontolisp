@@ -18,9 +18,9 @@
 ;;
 ;; Run (start service-leet.lisp first; then, interpreter):
 ;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp
-;; Run (JVM class; running it needs the rontolisp jar on the classpath):
+;; Run (JVM class; self-contained -- the server travels beside it):
 ;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp -o HttpApi.class && \
-;;     java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. HttpApi
+;;     java -cp . HttpApi
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp -o http-api.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y http-api.wasm

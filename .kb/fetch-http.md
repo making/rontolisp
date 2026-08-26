@@ -170,7 +170,7 @@ are bytes; the drain decodes" needs one prelude defun. Per backend:
   branch queues ONE `long[]{8, ...}` chunk built by `_iv_of_bytes` (`JvmAsyncRuntimeBuilder`);
   `_drain_body` drains octet chunks to one `long[]` (string chunks to their quoted
   concatenation, a mixed stream refused); `handle`'s `:raw-body` is
-  `HttpHandlerJvmRuntime.bodyOctets` in both modes -- which also retired the buffered mode
+  `RontoHttpClack.bodyOctets` in both modes -- which also retired the buffered mode
   passing `bodyString()` to `%http-body-stream`, a decode-then-encode of a binary POST; and
   `usesIntArray` is forced on by `usesFetch || usesHttpHandler`, since the chunks are
   packed vectors no scanned `make-array` built;
@@ -360,8 +360,9 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
 `.kb/concurrent-served-requests.md`; locks for program-level state are in
 `.kb/mutexes.md`.
 
-- **Interpreter (implemented)** -- `HttpHandlerSupport` (eval pkg, `public` for
-  the future web substitution): a blocking JDK `com.sun.net.httpserver.HttpServer`,
+- **Interpreter (implemented)** -- `RontoHttpServer` (**`runtime` pkg** -- it
+  TRAVELS with a compiled program, `.kb/jvm-export.md`; `public` for the web
+  substitution): a blocking JDK `com.sun.net.httpserver.HttpServer`,
   ONE VIRTUAL THREAD PER REQUEST (`Executors.newVirtualThreadPerTaskExecutor`).
   `serve(port, handler)` blocks forever (Ctrl-C to stop); `start(port, handler)`
   is the non-blocking test seam (port 0 = ephemeral) and `stopAllForTesting()`
@@ -382,7 +383,7 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   Tests: `HttpHandlerTest` (Java seam round trip + directive round trip via a
   background thread + validation + the stoppable-seam group).
   **Every entry point reachable from `LispEvaluator` must have a matching
-  `@Substitute` in `Target_HttpHandlerSupport` (`src/web/java`).** GraalVM Web
+  `@Substitute` in `Target_RontoHttpServer` (`src/web/java`).** GraalVM Web
   Image's points-to analysis reaches `java.lang.VirtualThread.runContinuation`
   -- which calls a `Thread.isInterrupted()` substitution unavailable on the
   `svm-wasm` platform -- from ANY un-substituted method that still touches the
@@ -395,37 +396,40 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   every JVM-side test (the class compiles and runs fine there) but broke the
   `Deploy playground to GitHub Pages` build, because the pages workflow is the
   only CI job that actually runs `-Pweb` `native-image --tool:svm-wasm`. Add
-  the stub to `Target_HttpHandlerSupport` in the SAME commit as any new
-  `HttpHandlerSupport` entry point, and verify with
+  the stub to `Target_RontoHttpServer` in the SAME commit as any new
+  `RontoHttpServer` entry point, and verify with
   `./mvnw -Pweb -DskipTests package` (needs a `wasm-as` on `PATH`, e.g. from
   the Binaryen release the pages workflow installs) -- `./mvnw test` does not
   catch this.
-- **JVM (implemented)** -- reuses the interpreter's `HttpHandlerSupport` server:
-  the generated class ITSELF implements `HttpHandlerSupport.Handler` (the same
+- **JVM (implemented)** -- reuses the interpreter's `RontoHttpServer` server:
+  the generated class ITSELF implements `RontoHttpServer.Handler` (the same
   mechanism as the tls-connect trust-all `X509TrustManager`; the public no-arg
   constructor is shared between the two and emitted when either is used, and
   `handle` joins the trust methods as an extra `--optimize` shaker root because
   the server invokes it through the interface). The directive site
   (`JvmHttpHandlerCompiler`) resolves the quoted handler name against the Pass-1
   function registry like `#'name`, stores the funcref in the `_httpHandlerFn`
-  static field, and emits `HttpHandlerSupport.serve(port, new Prog())` (port
+  static field, and emits `RontoHttpServer.serve(port, new Prog())` (port
   default 8080; a non-literal port expression compiles as `(int) Long`; the
   optional trailing `:raw-body` keyword pair is validated and dropped -- the
   mode is a compile-time constant `ClackEnv.usesBufferedBody` already read off
   the program). The injected `public handle(Request)` method
   (`JvmHttpHandlerRuntimeBuilder`) is thin glue since the Clack cutover: the
-  environment is built by `eval/HttpHandlerJvmRuntime.buildEnv` (real Java in
+  environment is built by `runtime/RontoHttpClack.buildEnv` (real Java in
   the runtime value rep), the handler runs via `_invoke_1` + `_await` (arity 1
   force-registered like the fetch runtime), the response goes through a DIRECT
   call to the compiled `%http-normalize-response` and `_drain_body`, and
-  `HttpHandlerJvmRuntime.toResponse` marshals the triple back
+  `RontoHttpClack.toResponse` marshals the triple back
   (`.kb/http-server.md` has the full division and its measurements).
-  CONSEQUENCE (pre-existing, now relied on even harder):
-  the compiled class is NOT standalone -- it needs the rontolisp jar on the
-  runtime classpath (`java -cp rontolisp.jar:. App`), unlike every other JVM
-  program. Tests: `HttpHandlerJvmTest` (eval pkg for the shutdown seam;
-  compile + curl round trips incl. `--optimize` and the buffered `:raw-body`)
-  and `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`.
+  The compiled class IS standalone: the two classes it calls live in
+  `am.ik.rontolisp.runtime`, import nothing but `java.base` + `jdk.httpserver`,
+  and travel with the output at their canonical names -- so `java -cp . App`
+  serves with no rontolisp jar anywhere (`.kb/jvm-export.md`, "What travels").
+  Tests: `HttpHandlerJvmTest` (eval pkg for the shutdown seam; compile + curl
+  round trips incl. `--optimize` and the buffered `:raw-body`),
+  `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`, and
+  `JvmHttpHandlerTravellingRuntimeTest` (the travelling set == the emitted
+  class's real closure, and the class served through an isolated class loader).
 - **WASM component (implemented, `--component`; serve and serve+fetch are ONE
   shape)** -- the HTTP glue is **`http.lisp`** over wit-imported `wasi:http@0.3.0`
   (see the fetch section above for the splice and the async machinery). There is

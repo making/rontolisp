@@ -19,8 +19,8 @@
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/httpbin.lisp
-;; Run (JVM class; needs the rontolisp jar on the classpath):
-;;   java -jar $JAR examples/net/httpbin.lisp -o Httpbin.class && java -cp $JAR:. Httpbin
+;; Run (JVM class; self-contained -- the embedded server travels beside it):
+;;   java -jar $JAR examples/net/httpbin.lisp -o Httpbin.class && java -cp . Httpbin
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/httpbin.lisp -o httpbin.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y httpbin.wasm

@@ -13,7 +13,7 @@
 ;; Run (the first run downloads clack/lack/ningle into ~/.rontolisp/quicklisp):
 ;;   rontolisp examples/net/httpbin-ningle.lisp
 ;;   rontolisp examples/net/httpbin-ningle.lisp -o HttpbinNingle.class && \
-;;     java -cp rontolisp-exec.jar:. HttpbinNingle
+;;     java -cp . HttpbinNingle
 ;;   rontolisp examples/net/httpbin-ningle.lisp -o httpbin-ningle.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
 ;;       httpbin-ningle.wasm

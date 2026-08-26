@@ -79,13 +79,13 @@ Hello from rontolisp!
 GET /hello
 ```
 
-JVM クラスにコンパイルします（生成クラスは組み込みサーバのハンドラインタフェースを
-実装するため、実行時に rontolisp の実行可能 JAR をクラスパスに含める必要が
-あります — ネイティブバイナリではなく JAR が必要になるのはこのステップだけです）。
+JVM クラスにコンパイルします（自己完結しています。組み込みサーバが
+`am/ik/rontolisp/runtime/` としてクラスの隣に出力されるので、クラスパスに他は
+不要です。`-o app.jar` なら両方が jar にまとまります）。
 
 ```console
 $ rontolisp app.lisp -o App.class
-$ java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+$ java -cp . App
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -104,8 +104,8 @@ GET /hello
 ## バックエンド対応
 
 `http-handler` は **インタープリタ** バックエンド（ブロッキングサーバ）、
-**JVM** バックエンド（同じブロッキングサーバ。生成クラスの実行には rontolisp の
-実行可能 JAR `rontolisp-0.1.0-SNAPSHOT-exec.jar` がクラスパスに必要）、
+**JVM** バックエンド（同じブロッキングサーバ。生成クラスの隣に出力されるので
+クラスパスに他は不要）、
 **WASI コンポーネント** バックエンド
 （`--component`、`wasmtime serve` 用の `wasi:http/handler@0.3.0`
 コンポーネント）で動作します。リクエスト／レスポンスのヘッダは WASI

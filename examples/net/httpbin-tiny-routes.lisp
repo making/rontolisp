@@ -13,7 +13,7 @@
 ;; Run (the first run downloads clack/lack/tiny-routes into ~/.rontolisp/quicklisp):
 ;;   rontolisp examples/net/httpbin-tiny-routes.lisp
 ;;   rontolisp examples/net/httpbin-tiny-routes.lisp -o HttpbinTinyRoutes.class && \
-;;     java -cp rontolisp-exec.jar:. HttpbinTinyRoutes
+;;     java -cp . HttpbinTinyRoutes
 ;;   rontolisp examples/net/httpbin-tiny-routes.lisp -o httpbin-tiny-routes.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
 ;;       httpbin-tiny-routes.wasm

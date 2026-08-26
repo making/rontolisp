@@ -101,20 +101,37 @@ GET /hello
 
 ## Compiled to a JVM class
 
-The same source compiles to a **JVM class** serving the same way. Unlike
-other compiled rontolisp programs, the class is not self-contained: it
-implements the embedded server's handler interface, so the rontolisp
-executable JAR (`rontolisp-0.1.0-SNAPSHOT-exec.jar`, the same download as in
-[Build & Install](../getting-started/build.md)) must be on the classpath when
-running it:
+The same source compiles to a **JVM class** serving the same way, and the
+class is self-contained: the embedded server it serves through travels
+beside it, at its canonical name, so nothing has to be on the classpath but
+the output directory itself.
 
 ```console
 $ rontolisp app.lisp -o App.class
-$ java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+$ ls
+App.class  am/  app.lisp
+$ java -cp . App
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
 ```
+
+The `am/ik/rontolisp/runtime/` directory beside `App.class` is that server:
+a handful of class files that import nothing outside the JDK, the same
+mechanism by which a [JVM library](jvm-library.md) hands out its
+`RontoFloatArray` handle. A program that does not serve still compiles to
+exactly one file.
+
+Compiling to a jar packages them together, so the result runs on its own:
+
+```console
+$ rontolisp app.lisp -o app.jar
+$ java -jar app.jar
+```
+
+The [Maven plugin](jvm-library.md#a-maven-project-srcmainlisp) writes them
+into `target/classes` the same way, so a `src/main/lisp` service ends up
+inside the jar the build produces.
 
 ## Compiled to a WASI HTTP component
 

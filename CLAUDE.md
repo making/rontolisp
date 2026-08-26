@@ -55,10 +55,10 @@ Package dependency direction (no cycles allowed):
 
 ```
 cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit
-codegen.jvm -> compiler, macro, am.ik.jvm, am.ik.gpu, am.ik.objc
+codegen.jvm -> compiler, macro, runtime, am.ik.jvm, am.ik.gpu, am.ik.objc
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
-compiler -> macro, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, rontolisp (AST types only), am.ik.gpu, am.ik.objc
+compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit
+eval -> macro, compiler, reader, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 format -> (nothing)
@@ -67,9 +67,15 @@ am.ik.gpu -> (nothing)
 am.ik.objc -> (nothing)
 ```
 
-- `runtime` imports nothing at all, project or otherwise: its classes are COPIED into a
-  compiled library's output as the `rontolisp:jvm-export` handle boundary types
-  (`.kb/jvm-export.md`), so anything they imported would become that artifact's dependency.
+- `runtime` imports nothing at all, project or otherwise — not even the build's
+  `@Nullable`, which is `RuntimeVisible` and would follow the class out. Its classes are
+  COPIED into a compiled program's output (beside a `.class`, inside a `.jar`, into the
+  Maven plugin's `target/classes`), so anything they imported would become that
+  artifact's dependency. What travels and when: `.kb/jvm-export.md`, "What travels" — the
+  `rontolisp:jvm-export` handle boundary types, and the embedded HTTP server a
+  `rontolisp:http-handler` program serves through (`.kb/http-server.md`). **A class added
+  to this package must be added to a travelling list** (`JvmRuntimeClassFilesTest` fails
+  otherwise).
 - `format` depends on nothing, not even `reader`: it needs the source verbatim and has its
   own lossless CST front end (`.kb/formatter.md`).
 - `compiler` holds backend-shared, backend-FREE front-ends and depends on no backend.

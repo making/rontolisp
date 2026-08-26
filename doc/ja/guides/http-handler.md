@@ -102,20 +102,35 @@ GET /hello
 
 ## JVM クラスにコンパイルする
 
-同じソースは **JVM クラス** にもコンパイルでき、同じ方式で提供します。他の
-コンパイル済み rontolisp プログラムと違い、このクラスは自己完結していません。
-組み込みサーバのハンドラインタフェースを実装するため、実行時に rontolisp の
-実行可能 JAR（`rontolisp-0.1.0-SNAPSHOT-exec.jar`。
-[ビルドとインストール](../getting-started/build.md)と同じダウンロード物）を
-クラスパスに含める必要があります。
+同じソースは **JVM クラス** にもコンパイルでき、同じ方式で提供します。この
+クラスは自己完結しています。提供に使う組み込みサーバが正規の名前のままクラスの
+隣に出力されるので、クラスパスに必要なのは出力ディレクトリ自身だけです。
 
 ```console
 $ rontolisp app.lisp -o App.class
-$ java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+$ ls
+App.class  am/  app.lisp
+$ java -cp . App
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
 ```
+
+`App.class` の隣にある `am/ik/rontolisp/runtime/` がそのサーバです。JDK の外を
+一切 import しない数個のクラスファイルで、[JVM ライブラリ](jvm-library.md)が
+`RontoFloatArray` ハンドルを引き渡すのと同じ仕組みです。提供を行わない
+プログラムは従来どおり 1 ファイルだけにコンパイルされます。
+
+jar にコンパイルすれば同梱されるので、成果物はそれ単体で動きます。
+
+```console
+$ rontolisp app.lisp -o app.jar
+$ java -jar app.jar
+```
+
+[Maven プラグイン](jvm-library.md#a-maven-project-srcmainlisp)も同じように
+`target/classes` へ書き出すので、`src/main/lisp` に置いたサービスはビルドが
+作る jar にそのまま入ります。
 
 ## WASI HTTP コンポーネントにコンパイルする
 

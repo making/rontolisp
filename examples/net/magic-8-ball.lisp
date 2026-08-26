@@ -11,8 +11,8 @@
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/magic-8-ball.lisp
-;; Run (JVM class; needs the rontolisp jar on the classpath):
-;;   java -jar $JAR examples/net/magic-8-ball.lisp -o Magic8Ball.class && java -cp $JAR:. Magic8Ball
+;; Run (JVM class; self-contained -- the embedded server travels beside it):
+;;   java -jar $JAR examples/net/magic-8-ball.lisp -o Magic8Ball.class && java -cp . Magic8Ball
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/magic-8-ball.lisp -o magic-8-ball.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y magic-8-ball.wasm

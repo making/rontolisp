@@ -182,8 +182,8 @@ on this target's native inbound transport", chosen at compile time:
 
 - **Interpreter** — everything above.
 - **JVM class** — the same program compiled with `-o App.class`; like every
-  served program it needs the rontolisp jar on the runtime classpath
-  (`java -cp rontolisp-exec.jar:. App`).
+  served program it is self-contained, its server travelling beside the class
+  (`java -cp . App`, or `-o app.jar` and `java -jar app.jar`).
 - **WASM component** (`--component`) — the host owns the socket: run with
   `wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y
   -S inherit-network=y app.wasm`. The `:port` argument is ignored,

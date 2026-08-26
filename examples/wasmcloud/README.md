@@ -42,9 +42,9 @@ pattern is the same for all of them:
 # interpreter (blocking server on :8080)
 rontolisp examples/wasmcloud/http-hello-world/app.lisp
 
-# JVM class (running it needs the rontolisp jar on the classpath)
+# JVM class (self-contained: the server travels beside the class)
 rontolisp examples/wasmcloud/http-hello-world/app.lisp -o App.class
-java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+java -cp . App
 
 # WASI HTTP component under wasmtime serve (wasmtime 47+ for concurrent throughput)
 rontolisp examples/wasmcloud/http-hello-world/app.lisp -o app.wasm --component

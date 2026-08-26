@@ -104,7 +104,7 @@ Consequences, each load-bearing:
 
 `run` follows the clack-handler-hunchentoot shape: it BLOCKS until the server
 stops, and cleans up in an unwind. On the interpreter/JVM it rides the internal
-`rontolisp::%http-server-*` seam (`HttpHandlerSupport.startServer/joinServer/
+`rontolisp::%http-server-*` seam (`RontoHttpServer.startServer/joinServer/
 stopServer/serverPort`; the handle is an opaque integer index, the socket/mutex
 convention; owned by the rontolisp package as INTERNAL symbols):
 

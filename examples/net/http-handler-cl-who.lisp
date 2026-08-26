@@ -20,9 +20,9 @@
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   rontolisp examples/net/http-handler-cl-who.lisp --system-path src/test/resources/cl-who
-;; Run (JVM class; keep the rontolisp jar on the classpath):
+;; Run (JVM class; self-contained -- the server travels beside it):
 ;;   rontolisp examples/net/http-handler-cl-who.lisp -o App.class --system-path src/test/resources/cl-who && \
-;;     java -cp target/rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+;;     java -cp . App
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/net/http-handler-cl-who.lisp -o app.wasm --component --system-path src/test/resources/cl-who && \
 ;;     wasmtime serve -W gc=y -W exceptions=y app.wasm

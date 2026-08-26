@@ -11,8 +11,8 @@
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/dog-fetcher.lisp
-;; Run (JVM class; needs the rontolisp jar on the classpath):
-;;   java -jar $JAR examples/net/dog-fetcher.lisp -o DogFetcher.class && java -cp $JAR:. DogFetcher
+;; Run (JVM class; self-contained -- the embedded server travels beside it):
+;;   java -jar $JAR examples/net/dog-fetcher.lisp -o DogFetcher.class && java -cp . DogFetcher
 ;; Run (WASI component under wasmtime serve; the wasi:http/client import that
 ;; carries the outbound fetch is host-provided by default):
 ;;   java -jar $JAR examples/net/dog-fetcher.lisp -o dog-fetcher.wasm --component && \

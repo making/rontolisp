@@ -106,14 +106,38 @@ and a caller could not feed one's result to the other's kernel, which is the fir
 anyone will try. A shared `rontolisp-runtime` artifact fixes that and is what every JVM
 language does -- at the cost of a dependency the artifact does not have today. What ships
 takes both: the class files are copied VERBATIM at their canonical names next to the output
-class (`JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` -> `JvmLispCompiler.runtimeClassFiles()`
--> `RontoLispCli`, and `resource-config.json` so the native binary carries them), so one
-canonical name makes chaining work while the jar still has no dependency, and identical
-bytes make the duplicate harmless. `am.ik.rontolisp.runtime` imports nothing outside
-`java.base`, so lifting it into a published artifact later is a packaging change and not a
-code motion. The travelling list is hand-kept (nothing can enumerate a package from a
-classpath, still less from inside a native image) and pinned against the package's actual
-class files by `JvmExportTest#theTravellingClassListIsEveryClassFileOfTheRuntimePackage`;
+class, so one canonical name makes chaining work while the jar still has no dependency, and
+identical bytes make the duplicate harmless.
+
+**What travels.** `am.ik.rontolisp.runtime` is THE package that ships inside someone
+else's artifact, and the mechanism is general -- not the handle's alone:
+
+| list | travels when | what it is |
+| --- | --- | --- |
+| `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector` / `:float-matrix` export | `RontoFloatArray` + `RontoBoundary`, the handle type and its marshalling seam |
+| `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / the `%http-server-start` seam | `RontoHttpServer` (the embedded server, shared with the interpreter), `RontoHttpClack` (the per-request Clack glue) and the two declarations they read, `RontoClackEnv` + `RontoHashTable` (`.kb/http-server.md`) |
+
+Both go through `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` ->
+`RontoLispCli` (beside a `-o X.class`, INSIDE a `-o X.jar`) and `LispSourceSet` (the Maven
+plugin, into `target/classes` before javac would run); `resource-config.json` matches the
+whole package by pattern so the native binary carries them too. **A served program is
+therefore self-contained -- `java -cp . App`, no rontolisp jar** (the guide
+`doc/{en,ja}/guides/http-handler.md` promises this).
+
+The price is the rule that makes it work: **a class in `runtime` imports nothing at all,
+not even the build's `@Nullable`** -- that annotation is `RuntimeVisible`, so its class
+file reference would follow the class into the consumer's artifact. Hence `RontoHashTable.get`
+takes the absent value instead of answering null, `RontoHttpServer.Request` spells "unknown"
+as `""`, and `RontoHttpServer` raises its own nested `ServerException` which the
+interpreter's call site turns back into a `LispEvalException`. Because the package imports
+nothing outside `java.base`, lifting it into a published artifact later is a packaging
+change and not a code motion.
+
+Each travelling list is hand-kept (nothing can enumerate a package from a classpath, still
+less from inside a native image). Two tests keep them honest:
+`JvmRuntimeClassFilesTest` pins their UNION against the package's actual class files, and
+`JvmHttpHandlerTravellingRuntimeTest` recomputes the served closure from the emitted
+class's own constant pool and serves it through a class loader that cannot see rontolisp.
 `package-info.class` deliberately stays behind, since it carries only the build's nullness
 annotation.
 

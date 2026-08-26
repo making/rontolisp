@@ -14,9 +14,8 @@
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/http-handler.lisp
-;; Run (JVM class; it implements the embedded server's handler interface, so
-;; keep the rontolisp jar on the classpath):
-;;   java -jar $JAR examples/net/http-handler.lisp -o App.class && java -cp $JAR:. App
+;; Run (JVM class; self-contained -- the embedded server travels beside it):
+;;   java -jar $JAR examples/net/http-handler.lisp -o App.class && java -cp . App
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/http-handler.lisp -o app.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y app.wasm

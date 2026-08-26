@@ -185,8 +185,8 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
 
 - **インタプリタ** — 上記のすべて。
 - **JVM クラス** — 同じプログラムを `-o App.class` でコンパイルします。serve
-  するプログラムの常として実行時クラスパスに rontolisp の jar が必要です
-  (`java -cp rontolisp-exec.jar:. App`)。
+  するプログラムの常として自己完結しており、サーバがクラスの隣に出力されます
+  (`java -cp . App`。`-o app.jar` なら `java -jar app.jar`)。
 - **WASM コンポーネント** (`--component`) — ソケットはホストが所有します:
   `wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y
   -S inherit-network=y app.wasm` で実行します。`:port` 引数は無視され、

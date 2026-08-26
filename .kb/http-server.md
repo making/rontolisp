@@ -10,7 +10,8 @@ rontolisp handler, and `clack.handler.rontolisp` converts nothing per request.
 
 **The shape is declared once; the construction is native to each backend.**
 
-- `compiler/ClackEnv.FIELDS` — the ordered 15-key declaration. Every consumer
+- `runtime/RontoClackEnv.FIELDS` — the ordered 15-key declaration, re-exported
+  name for name by `compiler/ClackEnv` (which adds the AST scan). Every consumer
   switches over the fields with a `default ->` that throws, so adding a key
   fails each backend loudly until its extraction is written. `ClackEnvTest`
   pins the key set.
@@ -37,9 +38,10 @@ measured division that stands:
   lazily when a program calls a `RONTOLISP::%HTTP-*` function directly (the
   ci-spec shape cases; the usocket/restart `resolveFunction` pattern).
 - **JVM** — the injected `handle(Request)` is THIN GLUE
-  (`JvmHttpHandlerRuntimeBuilder`): a compiled http-handler class is not
-  standalone anyway (it needs the rontolisp jar), so the environment is built
-  by `eval/HttpHandlerJvmRuntime.buildEnv` — real Java speaking the JVM
+  (`JvmHttpHandlerRuntimeBuilder`): hand-assembling the environment would buy
+  nothing a Java method does not already give at the same speed and without the
+  `maxStack` risk, so it is built by `runtime/RontoHttpClack.buildEnv` — real Java
+  speaking the JVM
   runtime value rep, including the `_hash*` HashMap convention (prin1-text
   keys) — and the response marshalled back by its `toResponse`. The emitted
   bytecode keeps only what must call into the generated class: the
@@ -48,13 +50,20 @@ measured division that stands:
   `ClackEnv.NORMALIZE_RESPONSE`; the direct call is the edge that keeps the
   normalizer chain alive under `--optimize`'s class shaker), and `_drain_body`
   over the triple's body. `usesHashTables` is forced on by `usesHttpHandler`.
+  Both classes, and the two declarations they read (`RontoClackEnv` for the key
+  set, `RontoHashTable` for the table shape), live in `am.ik.rontolisp.runtime`
+  and TRAVEL with the compiled output, so a served program runs on
+  `java -cp . App` (`.kb/jvm-export.md`, "What travels"). That is the whole
+  reason those four import nothing of the project's — the key set is declared
+  in `RontoClackEnv` and `compiler/ClackEnv` re-exports it name for name, so
+  the AST-scanning half can keep its rontolisp imports.
 - **WASM component** — compiled Lisp: http.lisp's `%serve-handle` builds the
   raw tuple and calls the library's `%http-serve-request` (env build + run +
   normalize, ONE async frame). Compiled, so the interpreter's cost argument
   does not apply.
 
 The transports keep only what is genuinely theirs (reading the wire, writing
-the answer): `HttpHandlerSupport.Request` carries the 10 raw transport facts —
+the answer): `RontoHttpServer.Request` carries the 10 raw transport facts —
 target verbatim (still percent-encoded, query included), headers in wire order
 with duplicates kept, the body as BYTES, protocol/scheme/local/remote.
 
@@ -134,7 +143,7 @@ The buffered construction is per backend too, and this is a measured decision:
 - JVM + WASM: the compiled Gray class (`http-request-body-stream` in
   http-server.lisp, over `rontolisp:fundamental-binary-input-stream`) built by
   `%http-body-stream` — over the request's OCTETS on both (the JVM's `handle`
-  hands `HttpHandlerJvmRuntime.bodyOctets` over; it used to pass
+  hands `RontoHttpClack.bodyOctets` over; it used to pass
   `bodyString()`, a decode the constructor then re-encoded, doubling every
   octet >= #x80 of a binary POST — closed with todo-370); the class carries a single-pass `stream-read-line`
   method so even compiled code never pays per-character generic dispatch for
@@ -257,12 +266,12 @@ them.**
   `http-response-normalizer`.
 - `%http-serve-request` hands a string OR an octet vector to the transport and
   resolves only a STREAM body (that is the arm that needs the await).
-- **JDK (interpreter + JVM)**: `HttpHandlerSupport.Response` holds `byte[] body`
+- **JDK (interpreter + JVM)**: `RontoHttpServer.Response` holds `byte[] body`
   — the shape `Request` already had — with a `Response.of(status, headers,
   String)` factory for the ordinary text body. `LispEvaluator.responseBody`
   answers octets (its cold arm reads the packed `LispIntVector`
   `%http-body-string` handed back; its stream arm drains octet chunks to bytes)
-  and `HttpHandlerJvmRuntime.toResponse` reads the JVM `long[]{width, e0, ...}`
+  and `RontoHttpClack.toResponse` reads the JVM `long[]{width, e0, ...}`
   (`_drain_body` answers one for an octet-chunk stream); `writeResponse` no
   longer encodes anything.
 - **`--component`**: the octets cross `%http:body-stream-write` as a `list<u8>`,

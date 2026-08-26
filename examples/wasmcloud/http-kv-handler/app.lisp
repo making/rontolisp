@@ -18,9 +18,9 @@
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   rontolisp examples/wasmcloud/http-kv-handler/app.lisp
-;; Run (JVM class; running it needs the rontolisp jar on the classpath):
+;; Run (JVM class; self-contained -- the server travels beside it):
 ;;   rontolisp examples/wasmcloud/http-kv-handler/app.lisp -o App.class && \
-;;     java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
+;;     java -cp . App
 ;; Talk to it with:
 ;;   curl -X POST -d '{"key":"greeting","value":"hello"}' http://127.0.0.1:8080/
 ;;   curl 'http://127.0.0.1:8080/?key=greeting'

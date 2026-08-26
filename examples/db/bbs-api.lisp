@@ -24,10 +24,10 @@
 ;;   export DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres
 ;;   rontolisp examples/db/bbs-api.lisp
 ;;
-;; Runs on the interpreter and on the JVM backend (keep the rontolisp jar on
-;; the classpath, it carries the runtime):
+;; Runs on the interpreter and on the JVM backend (self-contained: the server
+;; travels beside the class):
 ;;   rontolisp examples/db/bbs-api.lisp -o BbsApi.class && \
-;;     java -cp target/rontolisp-0.1.0-SNAPSHOT-exec.jar:. BbsApi
+;;     java -cp . BbsApi
 ;; And as a WASI component under wasmtime serve, which both serves the API and
 ;; lets the driver dial out -- the same flag set postgres-web.lisp needs, -S
 ;; cli=y included:

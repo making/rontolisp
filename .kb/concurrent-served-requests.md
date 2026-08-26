@@ -64,5 +64,5 @@ and a plain `HashMap` rehash can make a long-defined name momentarily invisible.
   concurrent POSTs against `examples/db/postgres-web.lisp` (a real PostgreSQL connection
   per request) on the interpreter AND on the compiled class, expecting 48/48. Anything
   less is a new instance of the bug family, and the 500 hides the cause -- the fastest
-  diagnosis is a temporary `ex.printStackTrace()` in `HttpHandlerSupport.dispatch`
+  diagnosis is a temporary `ex.printStackTrace()` in `RontoHttpServer.dispatch`
   (.todo/191 is the standing item for surfacing it properly).

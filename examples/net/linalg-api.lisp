@@ -26,8 +26,8 @@
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/linalg-api.lisp
-;; Run (JVM class; needs the rontolisp jar on the classpath):
-;;   java -jar $JAR examples/net/linalg-api.lisp -o LinalgApi.class && java -cp $JAR:. LinalgApi
+;; Run (JVM class; self-contained -- the embedded server travels beside it):
+;;   java -jar $JAR examples/net/linalg-api.lisp -o LinalgApi.class && java -cp . LinalgApi
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/linalg-api.lisp -o linalg-api.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y linalg-api.wasm

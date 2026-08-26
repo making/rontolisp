@@ -12,9 +12,9 @@
 ;;;;   rontolisp examples/asdf/clack-hello.lisp
 ;;;;   curl http://127.0.0.1:5000/hello
 ;;;;
-;;;; JVM (the served program needs the rontolisp jar on the runtime classpath):
+;;;; JVM (self-contained: the server travels beside the class):
 ;;;;   rontolisp examples/asdf/clack-hello.lisp -o ClackHello.class
-;;;;   java -cp rontolisp-exec.jar:. ClackHello
+;;;;   java -cp . ClackHello
 ;;;;
 ;;;; WASM component (the host owns the socket; the port argument is ignored):
 ;;;;   rontolisp examples/asdf/clack-hello.lisp -o clack-hello.wasm --component
