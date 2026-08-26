@@ -17,7 +17,7 @@ runs identically on the interpreter, the JVM and WASM.
 | [`browser/`](browser) | Browser demos: compile to WASM, run in a page |
 | [`count-vowels/`](count-vowels), [`wit/`](wit) | Crossing the WASM boundary: exporting to a host, implementing a WIT world, calling one, composing with Rust |
 | [`asdf/`](asdf) | Loading real third-party libraries with `asdf:load-system` / `ql:quickload` |
-| [`wasmcloud/`](wasmcloud), [`cloudflare-workers/`](cloudflare-workers) | Platform templates |
+| [`wasmcloud/`](wasmcloud), [`cloudflare-workers/`](cloudflare-workers), [`gae/`](gae) | Platform templates |
 
 How big the compiled artifacts are is measured, not documented here:
 [`size-report/`](../size-report).
@@ -254,6 +254,7 @@ needs no glue at all. Each directory has its own README.
 | [`asdf/`](asdf) | Loading unmodified upstream libraries — split-sequence, parse-number, cl-utilities, cl-who, cl-mustache, assoc-utils, cl-base64, md5, chipz, cl-ppcre, jzon, ironclad, jose, uax-15, tiny-routes, clack — on all four backends |
 | [`wasmcloud/`](wasmcloud) | The wasmCloud Rust templates ported to `rontolisp:http-handler`, each with a `.wash/config.yaml` so `wash dev` builds and serves it |
 | [`cloudflare-workers/`](cloudflare-workers) | Twelve independent Workers: two subjects written once with no library and then in the idiom of each web library, plus two that call out over HTTP on the two `--host-boundary` shapes — from a `--no-gc` module with zero imports to a routed application deployed by `npx wrangler deploy` |
+| [`gae/`](gae) | Google App Engine standard, two ways: `-o app.jar` on the second-generation Java runtime, and `-o app.war` unpacked under its Jetty. Both compile [`net/httpbin-clack.lisp`](net/httpbin-clack.lisp) unchanged; the README measures why the jar wins |
 
 ## Running
 

@@ -1,0 +1,22 @@
+# App Engine standard, second-generation Java runtime, Servlet path. Same
+# runtime as ../jar, three additions -- see ../README.md for why each is
+# needed and what it costs.
+runtime: java25
+instance_class: F1
+
+env_variables:
+  # THE one that is not optional and not documented anywhere: App Engine's
+  # Jetty 12.1 EE11 turns annotation scanning OFF unless this system property
+  # is set (or a WEB-INF/quickstart-web.xml exists). Without it the war's
+  # ServletContainerInitializer is never discovered, no servlet is registered,
+  # and every request answers 404 with nothing in the log. appengine-web.xml's
+  # <system-properties> cannot carry it -- only appengine.* names propagate --
+  # so it rides JAVA_TOOL_OPTIONS instead.
+  JAVA_TOOL_OPTIONS: "-Duse.annotationscanning=true"
+
+automatic_scaling:
+  min_instances: 0
+  # One F1 saturates around 75 req/s here -- half of ../jar, because App
+  # Engine's own filter chain refuses async and the servlet falls back to
+  # serving synchronously (../README.md).
+  max_instances: 1

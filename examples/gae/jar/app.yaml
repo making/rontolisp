@@ -1,0 +1,17 @@
+# App Engine standard, second-generation Java runtime. The whole configuration
+# of the recommended path: no appengine-web.xml, no web.xml, no system
+# property. The buildpack finds the one jar with a Main-Class manifest entry,
+# runs `java -jar` on it, and the program binds $PORT itself -- which is
+# exactly what `-o app.jar` emits and what `java -jar app.jar` does locally.
+runtime: java25
+
+# F1 is what the free tier's 28 instance-hours/day are counted in; F2 spends
+# them twice as fast. F1 is 256 MB and the runtime sizes the heap to -Xmx307M.
+instance_class: F1
+
+automatic_scaling:
+  # Scale to zero when idle: no instance, no instance-hours.
+  min_instances: 0
+  # A ceiling, not a target. Raise it for real traffic -- one F1 saturates
+  # around 150 req/s on the benchmark in ../README.md.
+  max_instances: 1
