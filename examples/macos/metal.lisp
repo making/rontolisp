@@ -194,4 +194,10 @@
 ;; frame runs where AppKit and Metal both want it.
 (defun run (ctx fn &key (fps 60))
   (frame ctx fn)
-  (appkit:timer (/ 1.0 fps) (lambda () (frame ctx fn))))
+  ;; The tick answers t whatever the frame did: appkit:timer reads a nil answer as
+  ;; "stop the clock", and a frame answers nil both when it draws (the last thing
+  ;; it sends is a void selector) and when it is dropped.
+  (appkit:timer (/ 1.0 fps)
+                (lambda ()
+                  (frame ctx fn)
+                  t)))
