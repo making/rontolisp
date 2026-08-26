@@ -18,5 +18,5 @@ it before compilation.
 
 ```lisp
 (let ((n 0))
-  (do-symbols (s :rontolisp n) (setq n (1+ n)))) ; => 103
+  (do-symbols (s :rontolisp n) (setq n (1+ n)))) ; => 100
 ```

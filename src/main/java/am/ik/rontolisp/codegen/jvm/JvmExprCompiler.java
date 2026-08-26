@@ -213,11 +213,6 @@ final class JvmExprCompiler {
 					JvmVersionCompiler.compile(cons, ctx, className);
 					return;
 				}
-				if (LispNames.LIST_FUNCTIONS.equals(qn.member()) || LispNames.LIST_MACROS.equals(qn.member())
-						|| LispNames.LIST_SPECIAL_FORMS.equals(qn.member())) {
-					JvmIntrospectionCompiler.compile(qn.member(), cons, ctx, className);
-					return;
-				}
 				if (LispNames.FETCH.equals(qn.member())) {
 					JvmFetchCompiler.compile(cons, ctx, className);
 					return;

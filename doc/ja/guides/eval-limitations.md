@@ -18,6 +18,6 @@
 - **`defmacro` とバッククォートはコンパイル時のみです。** コンパイルパスでは、ユーザーマクロはコンパイラの実行前に完全展開され（定義も取り除かれ）、バッククォートのテンプレートはリーダーで展開されます。コンパイル済みプログラムの実行時 `eval`/`read` は `defmacro` もバッククォート文字も認識しません。 `macroexpand`/`macroexpand-1` も同様です: リテラルのクォートされた引数を持つ呼び出しはコンパイル時に展開結果へ畳み込まれ、実行時 `eval` はこれらの関数を認識しません（対照的に `gensym` はファーストクラスのラッパーを持つため動作します）。
 - **`defstruct` はコンパイル時のみです。** トップレベルの `defstruct` はコンパイル前に生成関数へ展開されるため、コンストラクタ/アクセサ/述語を `eval` から呼び出すことはできますが、eval されるフォームの中で新しい構造体を定義したり、アクセサを `setf` の place として使うことはできません。`#S(...)` リテラルも同様にコンパイル前に解決されるため、`eval` の中では認識されません。
 - **CLOS サブセットはコンパイル時のみです。** `defstruct` と同様に、トップレベルの `defclass`/`defgeneric`/`defmethod` はコンパイル前に展開されます。総称関数・reader/accessor・コンストラクタを `eval` から呼び出すことはできますが、eval されるフォームの中でクラスやメソッドを定義することはできず、`make-instance`/`slot-value` は `eval` の中では認識されません（コンパイル時のクラスレジストリを通じて解決されるためです）。
-- **`rontolisp` パッケージの関数はサポートされません。** `rontolisp:version`、`rontolisp:list-functions`、`rontolisp:list-macros`、`rontolisp:list-special-forms`、`rontolisp:fetch`、`rontolisp:http-handler`、`rontolisp:await`、`rontolisp:futurep`、`rontolisp:json-parse`、`rontolisp:json-stringify` は直接コンパイルされます（定数、インライン呼び出し、または組み込まれるライブラリ関数）。実行時 `eval`/`load` はこれらを認識しません。
+- **`rontolisp` パッケージの関数はサポートされません。** `rontolisp:version`、`rontolisp:fetch`、`rontolisp:http-handler`、`rontolisp:await`、`rontolisp:futurep`、`rontolisp:json-parse`、`rontolisp:json-stringify` は直接コンパイルされます（定数、インライン呼び出し、または組み込まれるライブラリ関数）。実行時 `eval`/`load` はこれらを認識しません。
 
 これらの相違は設計に由来します。実行時 `eval` は、実際に出力にコンパイルされた関数のコンパイル時レジストリに対して名前で演算子を解決し、組み込み関数はコンパイルされたコードと共有されます。

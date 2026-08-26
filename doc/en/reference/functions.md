@@ -403,9 +403,6 @@ package system. Each name below links to its own page.
 | `rontolisp:thread-alive-p` | `(rontolisp:thread-alive-p th)` | `t` while the thread is still running (`nil` after a join) |
 | `rontolisp:destroy-thread` | `(rontolisp:destroy-thread th)` | interrupt the thread; returns the handle |
 | `rontolisp:current-thread` | `(rontolisp:current-thread)` | the calling thread's own handle, `eq`-stable per thread (works for any thread, not only `make-thread` spawns) |
-| `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | the function symbols of a package, sorted (defaults to `:cl`) |
-| `rontolisp:list-macros` | `(rontolisp:list-macros)` | the macro symbols of a package, sorted |
-| `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | the special-form symbols of a package, sorted |
 | `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | start an HTTP request asynchronously; returns a future |
 | `rontolisp:futurep` | `(rontolisp:futurep v)` | `t` if the value is a future (as returned by calling an `async-defun` function, `rontolisp:fetch`, `rontolisp:stream-read`, ...) |
 | `rontolisp:streamp` | `(rontolisp:streamp v)` | `t` if the value is an asynchronous stream (a different predicate from `cl:streamp`, which answers file streams) |
@@ -447,10 +444,7 @@ package system. Each name below links to its own page.
 | `rontolisp:wit-import` | `(rontolisp:wit-import "store.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)` | declare that the program calls a WIT interface: every function it declares is bound as an ordinary Lisp function (`kv:bucket-get`), against a provider on the interpreter/JVM, a WASM import on Preview 1, and a `canon lower`ed component-model import under `--component`, where the host is the provider |
 | `rontolisp:wit-provide` | `(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store)` | bind the implementation of a `wit-import`ed interface on the interpreter and JVM backends (inert on WASM, where the host provides it) |
 
-The introspection functions (`list-functions` / `list-macros` /
-`list-special-forms`) are described in detail under
-[Package introspection](packages.md#package-introspection). `rontolisp:fetch`
-starts an outgoing HTTP request and returns a future, resolved with
+`rontolisp:fetch` starts an outgoing HTTP request and returns a future, resolved with
 `rontolisp:await`; see the
 [HTTP Requests guide](../guides/http-fetch.md) for a worked overview, and the
 [fetch](functions/rontolisp-fetch.md),

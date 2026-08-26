@@ -436,10 +436,6 @@ public final class PackageRegistry {
 
 	private static final List<String> CL_FUNCTION_NAMES = sorted(CL_FUNCTIONS);
 
-	private static final List<String> CL_MACRO_NAMES = sorted(CL_MACROS);
-
-	private static final List<String> CL_SPECIAL_FORM_NAMES = sorted(CL_SPECIAL_FORMS);
-
 	private static final Set<String> SPECIAL_OPERATOR_NAMES = union(CL_SPECIAL_FORMS, CL_MACROS);
 
 	/**
@@ -526,24 +522,23 @@ public final class PackageRegistry {
 		// symbols are reachable as cl-user::name, never cl-user:name.
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
 		// Its canonical spelling is rontolisp; rl is a built-in nickname.
-		Set<String> rontolispExternals = new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS,
-				LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.ASYNC,
-				LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP, LispNames.ASYNC_STREAMP,
-				LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE, LispNames.STREAM_CLOSE,
-				LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.THEN, LispNames.THEN_STAR, LispNames.CATCH,
-				LispNames.FINALLY, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.PLIST_HASH_TABLE,
-				LispNames.HASH_TABLE_PLIST, LispNames.ALIST_HASH_TABLE, LispNames.HASH_TABLE_ALIST,
-				LispNames.ALIST_PLIST, LispNames.PLIST_ALIST, LispNames.URL_DECODE, LispNames.URL_ENCODE,
-				LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM, LispNames.URL_PATH, LispNames.URL_QUERY,
-				LispNames.WASM_EXPORT, LispNames.JVM_EXPORT, LispNames.WASM_IMPORT, LispNames.WIT_EXPORT,
-				LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE, LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD,
-				LispNames.WITH_ARENA, LispNames.MAKE_MUTEX, LispNames.MUTEX_ACQUIRE, LispNames.MUTEX_RELEASE,
-				LispNames.WITH_MUTEX, LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN,
-				LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
-				LispNames.TCP_PEER_PORT, LispNames.TCP_SET_TIMEOUT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN,
-				LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12, LispNames.TLS_UPGRADE, LispNames.RANDOM_BYTES,
-				LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P,
-				LispNames.DESTROY_THREAD, LispNames.CURRENT_THREAD,
+		Set<String> rontolispExternals = new HashSet<>(Set.of(LispNames.VERSION, LispNames.FETCH, LispNames.AWAIT,
+				LispNames.ASYNC, LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP,
+				LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE,
+				LispNames.STREAM_CLOSE, LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.THEN, LispNames.THEN_STAR,
+				LispNames.CATCH, LispNames.FINALLY, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY,
+				LispNames.PLIST_HASH_TABLE, LispNames.HASH_TABLE_PLIST, LispNames.ALIST_HASH_TABLE,
+				LispNames.HASH_TABLE_ALIST, LispNames.ALIST_PLIST, LispNames.PLIST_ALIST, LispNames.URL_DECODE,
+				LispNames.URL_ENCODE, LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM, LispNames.URL_PATH,
+				LispNames.URL_QUERY, LispNames.WASM_EXPORT, LispNames.JVM_EXPORT, LispNames.WASM_IMPORT,
+				LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE, LispNames.WIT_ERROR,
+				LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.MAKE_MUTEX, LispNames.MUTEX_ACQUIRE,
+				LispNames.MUTEX_RELEASE, LispNames.WITH_MUTEX, LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT,
+				LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS,
+				LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT, LispNames.TCP_SET_TIMEOUT, LispNames.TLS_CONNECT,
+				LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12, LispNames.TLS_UPGRADE,
+				LispNames.RANDOM_BYTES, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
+				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.CURRENT_THREAD,
 				// Read-time source literals (reader.LispReader), not functions.
 				LispNames.CURRENT_FILE, LispNames.CURRENT_LINE,
 				// rontolisp's own Gray-stream extension
@@ -885,22 +880,6 @@ public final class PackageRegistry {
 	 */
 	public static boolean isClFunctionName(String name) {
 		return CL_FUNCTIONS.contains(name);
-	}
-
-	/**
-	 * Returns the names of the {@code cl} macros, sorted alphabetically.
-	 * @return the sorted macro names
-	 */
-	public static List<String> clMacroNames() {
-		return CL_MACRO_NAMES;
-	}
-
-	/**
-	 * Returns the names of the {@code cl} special forms, sorted alphabetically.
-	 * @return the sorted special form names
-	 */
-	public static List<String> clSpecialFormNames() {
-		return CL_SPECIAL_FORM_NAMES;
 	}
 
 	/**

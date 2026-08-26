@@ -2,7 +2,7 @@
 
 `(macroexpand-1 form)`
 
-`form` の演算子がユーザーマクロ([`defmacro`](../special-forms/defmacro.md) で定義)または組み込みマクロ(`rontolisp:list-macros` が報告する名前)の場合に 1 段階だけ展開し、それ以外の場合はフォームをそのまま返します。展開されるのはトップレベルの演算子だけで、サブフォームには手を付けません。
+`form` の演算子がユーザーマクロ([`defmacro`](../special-forms/defmacro.md) で定義)または組み込みマクロの場合に 1 段階だけ展開し、それ以外の場合はフォームをそのまま返します。展開されるのはトップレベルの演算子だけで、サブフォームには手を付けません。
 
 2 番目の値は Common Lisp の `expanded-p` フラグです: `(multiple-value-list (macroexpand-1 '(unless c x)))` は `((IF C NIL X) T)` になります。環境引数は受け取って無視します(参照すべきレキシカルなマクロ環境が存在しないため)。
 

@@ -400,9 +400,6 @@
 | `rontolisp:thread-alive-p` | `(rontolisp:thread-alive-p th)` | スレッドが実行中の間 `t`(join 後は `nil`) |
 | `rontolisp:destroy-thread` | `(rontolisp:destroy-thread th)` | スレッドに割り込みをかけ、ハンドルを返します |
 | `rontolisp:current-thread` | `(rontolisp:current-thread)` | 呼び出したスレッド自身のハンドル。スレッドごとに `eq` 安定です (`make-thread` で生成したスレッドに限らず任意のスレッドで動作します) |
-| `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | パッケージの関数シンボルをソートしたもの(デフォルトは `:cl`) |
-| `rontolisp:list-macros` | `(rontolisp:list-macros)` | パッケージのマクロシンボルをソートしたもの |
-| `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | パッケージの特殊形式シンボルをソートしたもの |
 | `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | HTTPリクエストを非同期に開始します。future を返します |
 | `rontolisp:futurep` | `(rontolisp:futurep v)` | 値が future（`async-defun` で定義した関数の呼び出し、`rontolisp:fetch`、`rontolisp:stream-read` などが返す値）なら `t` |
 | `rontolisp:streamp` | `(rontolisp:streamp v)` | 値が非同期ストリームなら `t`（ファイルストリームに答える `cl:streamp` とは別の述語） |
@@ -444,10 +441,7 @@
 | `rontolisp:wit-import` | `(rontolisp:wit-import "store.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)` | プログラムがWITインターフェースを呼び出すことを宣言します。宣言された各関数が通常のLisp関数（`kv:bucket-get`）として束縛され、インタプリタ／JVMではプロバイダに、Preview 1ではWASMインポートに、`--component` ではホストをプロバイダとする `canon lower` 済みのコンポーネントモデルインポートに向かいます |
 | `rontolisp:wit-provide` | `(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store)` | `wit-import` したインターフェースの実装をインタプリタとJVMバックエンドで束縛します（WASMではホストが供給するため無効化されます） |
 
-イントロスペクション関数(`list-functions` / `list-macros` /
-`list-special-forms`)については
-[パッケージのイントロスペクション](packages.md#package-introspection)
-で詳しく説明しています。`rontolisp:fetch`
+`rontolisp:fetch`
 は外向きのHTTPリクエストを開始して future を返し、`rontolisp:await` がそれを解決します。全体像は
 [HTTPリクエストガイド](../guides/http-fetch.md)を、オプション、結果plist、バックエンドのサポート、制限については
 [fetch](functions/rontolisp-fetch.md)、

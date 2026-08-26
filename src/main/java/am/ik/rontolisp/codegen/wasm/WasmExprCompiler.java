@@ -297,11 +297,6 @@ final class WasmExprCompiler {
 					WasmVersionCompiler.compile(cons, ctx);
 					return;
 				}
-				if (LispNames.LIST_FUNCTIONS.equals(qn.member()) || LispNames.LIST_MACROS.equals(qn.member())
-						|| LispNames.LIST_SPECIAL_FORMS.equals(qn.member())) {
-					WasmIntrospectionCompiler.compile(qn.member(), cons, ctx);
-					return;
-				}
 				if (LispNames.FETCH.equals(qn.member())) {
 					if (ctx.component || ctx.hostFetch) {
 						// Under --component, fetch is the spliced http.lisp defun (over

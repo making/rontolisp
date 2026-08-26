@@ -2,7 +2,7 @@
 
 `(macroexpand-1 form)`
 
-Expands `form` once when its operator is a user macro (defined with [`defmacro`](../special-forms/defmacro.md)) or a built-in macro (the names `rontolisp:list-macros` reports), and returns the form unchanged otherwise. Only the top-level operator is expanded; subforms are left alone.
+Expands `form` once when its operator is a user macro (defined with [`defmacro`](../special-forms/defmacro.md)) or a built-in macro, and returns the form unchanged otherwise. Only the top-level operator is expanded; subforms are left alone.
 
 The second value is Common Lisp's `expanded-p` flag: `(multiple-value-list (macroexpand-1 '(unless c x)))` is `((IF C NIL X) T)`. The environment argument is accepted and ignored (there is no lexical macro environment to consult).
 

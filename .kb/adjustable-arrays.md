@@ -705,7 +705,7 @@ compile error ("--no-gc: unsupported operation 'vector-push' in function 'f'
 (`%array-become`), `ARRAY_DISP_TARGET`/`ARRAY_DISP_OFFSET`
 (`%array-disp-target`/`-offset`), `DISPLACED_TO_KEYWORD`,
 `DISPLACED_INDEX_OFFSET_KEYWORD`. `PackageRegistry`: the two public names in
-`CL_FUNCTIONS` (list-functions count 236 -> 238), the three `%`-names in
+`CL_FUNCTIONS`, the three `%`-names in
 `CL_INTERNALS`. Both compilers' `programUsesAnyArrayOp` gates list all five
 names. `BuiltinFunctionWrappers`: `binary(ADJUST_ARRAY)` (2-arg form) +
 `unary(ARRAY_DISPLACEMENT)` (primary value only) in the
@@ -734,6 +734,3 @@ its default unknown-operation error.
   adjustable-array-p,array-element-type,vector-push,vector-pop,
   vector-push-extend,adjust-array,array-displacement}.md` (en+ja) + the
   make-array page + the functions table.
-- The `list-functions` count (238) is pinned in `LispEvaluatorTest`,
-  `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`, and the
-  `rontolisp-package-introspection` ci-spec case.

@@ -271,10 +271,6 @@ in `defpackage` makes call sites resolve to the single-colon spelling and fail
 - Compiled runtime `eval`: generated functions are callable (normal registry
   defuns), but eval'd forms cannot define structs or setf accessor places
   (doc/en/guides/eval-limitations.md).
-- `defstruct` is in `PackageRegistry.CL_SPECIAL_FORMS`, so it appears in
-  `list-special-forms` — pinned in ci-spec
-  (`rontolisp-package-introspection`), the three backend tests, and the doc
-  pages; update all together if that set changes again.
 
 Pinning tests: `LispEvaluatorTest#defstruct*`,
 `JvmLispCompilerTest#compileAndRunDefstruct*` + `compileNestedDefstructFails`,

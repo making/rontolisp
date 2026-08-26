@@ -6,9 +6,7 @@ bytecode without a runtime metaobject protocol, many features of full Common Lis
 are intentionally left out.
 
 This page lists **only what is missing or partial**. For what *is* available, see
-the [Language Reference](../reference/special-forms.md), or list it at runtime
-with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
-`rontolisp:list-functions`.
+the [Language Reference](../reference/special-forms.md).
 
 | Feature | Status |
 | --- | --- |
@@ -229,7 +227,7 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
   the entry function itself.
 - `#.` read-time eval is skipped with a warning inside `.asd` files.
 - built-in macro names (`cond`, `case`, `when`, `setf`, `push`, ...) cannot be
-  redefined; list them with `(rontolisp:list-macros)`.
+  redefined.
 
 This list is not exhaustive; rontolisp implements a focused core rather than the
 full standard.

@@ -7,9 +7,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 このページでは **利用できない、または部分的にしか対応していないもの** だけを
 挙げます。**利用できる**ものについては、
-[言語リファレンス](../reference/special-forms.md)を参照するか、実行時に
-`rontolisp:list-special-forms`、`rontolisp:list-macros`、`rontolisp:list-functions`
-で一覧表示してください。
+[言語リファレンス](../reference/special-forms.md)を参照してください。
 
 | 機能 | 状況 |
 | --- | --- |
@@ -219,7 +217,7 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 - **プリティプリンタ**は、行が十分に広いものとしてのテキストを生成しますが、**レイアウト**は変えません。rontolisp のストリームは桁位置を持たないため、論理ブロックが折り返すことはなく、条件付き改行（`pprint-newline` の `:linear` / `:fill` / `:miser`、format の `~_` / `~:_` / `~@_` / `~i`）はすべて何もせず、`*print-right-margin*` / `*print-miser-width*` / `*print-lines*` は受理のみで無視されます。行を分けるのは `(pprint-newline :mandatory)` と `~:@_` だけです。その他の `*print-*` 変数はすべて存在し、プリンタが実際に行う動作そのものの値を保持します。既定値以外を束縛しても効果がないというだけです（`*print-escape*` / `*print-readably*` / `*print-pretty*` と `*print-case*` は例外で、実際に効きます）。`*print-case*` はプリンタが綴るシンボルの大小文字を変換しますが、構造体・CLOS インスタンス・ハッシュテーブル・階数が 1 以外の配列に入れ子になったシンボルは格納された綴りのままです（[リーダのケース](reader-case.md)）。通常の印字操作は `*print-pprint-dispatch*` を参照しません。エントリが効くのは、プログラム自身がエントリ関数を呼ぶ箇所です。
 - `#.` の read 時評価は `.asd` ファイル内では警告付きでスキップされます。
 - 組み込みマクロの名前（`cond`、`case`、`when`、`setf`、`push` など）は
-  再定義できません。一覧は `(rontolisp:list-macros)` で取得できます。
+  再定義できません。
 
 この一覧はすべてを網羅したものではありません。rontolisp は完全な標準ではなく、
 焦点を絞ったコアを実装しています。

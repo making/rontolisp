@@ -302,7 +302,4 @@ declaration specifiers); `expandBuiltinMacro`.
   `compileAndRunCheckType`, `compileAndRunAssert`.
 - `WasmLispCompilerIntegrationTest`: `declarationsTheAndEvalWhen`,
   `checkTypeAndAssertForms`.
-- ci-spec: `declarations-eval-when-check-type-assert`; the
-  `rontolisp-package-introspection` case's `list-macros` line now includes
-  the seven names (same expectation updated in all three backend test
-  classes).
+- ci-spec: `declarations-eval-when-check-type-assert`.

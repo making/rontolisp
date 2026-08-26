@@ -798,7 +798,7 @@ runtime nothing could invoke a `continue` restart anyway, and it keeps such a pr
 byte-identical. In restart mode `expandCerror(cons, registry, true)` emits the REAL
 `(restart-case (error datum args...) (continue () :report continue-format nil))`, so
 `(continue)` resumes past it with nil. Dispatched in the evaluator and both compilers
-like `error`; in `PackageRegistry.CL_MACROS` (pinned list-macros updated).
+like `error`; in `PackageRegistry.CL_MACROS`.
 
 `error`/`signal`/`warn` (and `cerror`) also have FUNCTION values, because cl-base64
 signals via `(apply #'error (list 'bad-base64-character :input ...))`:
@@ -1273,11 +1273,7 @@ below.
 
 ## Pinned lists and tests
 
-Adding operators changes `rontolisp:list-special-forms` (`unwind-protect`) and
-`list-macros` (`signal`, `with-slots`, `handler-case`, `ignore-errors`) — those
-lists are pinned in ci-spec (`rontolisp-package-introspection`), the three
-per-backend unit suites AND the doc detail pages, all updated together. ci-spec
-gained the cross-backend `condition-objects` case (define-condition /
+ci-spec gained the cross-backend `condition-objects` case (define-condition /
 make-condition / typecase / with-slots / signal → nil, valid on all four
 backends) and, with todo-129, three catching cases
 (`handler-case-catches-typed-and-plain-errors` &c) — their presence puts the

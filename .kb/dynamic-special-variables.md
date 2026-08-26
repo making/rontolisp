@@ -304,13 +304,6 @@ any program loading cl-json used to fail to compile whole; pinned by
    interpreter and compilers). Naming a parameter with a special name and expecting
    the parameter binding to be dynamic is unsupported (rare).
 
-## Introspection
-
-`progv` is in `PackageRegistry.CL_SPECIAL_FORMS`, so `list-special-forms` includes
-it on all backends (pinned in `ci-spec.yaml`, the three backend tests, and
-`doc/*/reference/functions/rontolisp-list-special-forms.md`). It sorts between
-`progn` and `quote`.
-
 ## Relationship to the two hand-rolled precedents
 
 - **`*package*` is a special with TWO faces (since 2026-08-15, todo-255).**

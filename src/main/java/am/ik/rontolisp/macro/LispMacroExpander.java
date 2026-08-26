@@ -92,9 +92,9 @@ public final class LispMacroExpander {
 	/**
 	 * Single-step expansion of a built-in macro call, used by
 	 * {@code macroexpand-1}/{@code macroexpand}. The case list must stay in sync with
-	 * {@code PackageRegistry.CL_MACROS} (the names {@code rontolisp:list-macros}
-	 * reports); function-like operators expanded through this class (e.g. {@code 1+},
-	 * {@code member}) are CL functions, not macros, and are deliberately absent.
+	 * {@code PackageRegistry.CL_MACROS}; function-like operators expanded through this
+	 * class (e.g. {@code 1+}, {@code member}) are CL functions, not macros, and are
+	 * deliberately absent.
 	 * @param cons the form to expand
 	 * @return the expansion, or {@code null} when the operator is not a built-in macro
 	 */

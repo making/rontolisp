@@ -8928,69 +8928,8 @@ class JvmLispCompilerTest {
 				(print (mypkg:greet "world"))
 				(print (mapcar #'mypkg:twice '(1 2 3)))
 				(print (mypkg::helper))
-				(print (rontolisp:list-functions :mypkg))
 				""";
-		assertThat(compileAndRun(code))
-			.isEqualTo("\"hello, world\"\n(2 4 6)\n42\n(MYPKG::HELPER MYPKG:GREET MYPKG:TWICE)");
-	}
-
-	@Test
-	void compileAndRunListMacros() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND CTYPECASE DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DO-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-COMPILATION-UNIT WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
-	}
-
-	@Test
-	void compileAndRunListSpecialForms() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)");
-	}
-
-	@Test
-	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("436");
-	}
-
-	@Test
-	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("436");
-	}
-
-	@Test
-	void compileAndRunListFunctionsForClUserListsUserDefunsOnly() throws Exception {
-		// Wrapper defuns injected for built-ins (car, +, ...) must not appear.
-		String code = """
-				(defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
-				(defun add2 (a) (+ a 2))
-				(print (rontolisp:list-functions :cl-user))
-				""";
-		assertThat(compileAndRun(code)).isEqualTo("(ADD2 FIB)");
-	}
-
-	@Test
-	void compileAndRunListFunctionsForClUserWithoutDefunsIsNil() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-functions :cl-user))")).isEqualTo("NIL");
-	}
-
-	@Test
-	void compileAndRunListFunctionsForRontolisp() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TCP-SET-TIMEOUT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
-		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("NIL");
-	}
-
-	@Test
-	void compileAndRunListFunctionsForJava() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-functions :java))"))
-			.isEqualTo("(CALL FIELD NEW PROXY STATIC)");
-		assertThat(compileAndRun("(print (rontolisp:list-macros :java))")).isEqualTo("NIL");
-	}
-
-	@Test
-	void compileListFunctionsUnknownPackageThrows() {
-		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:list-functions :foo))"))
-			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
-			.hasMessageContaining("No such package: FOO");
+		assertThat(compileAndRun(code)).isEqualTo("\"hello, world\"\n(2 4 6)\n42");
 	}
 
 	@Test
@@ -11239,15 +11178,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunJsonSplicedLibraryStaysOutOfClUserIntrospection() throws Exception {
-		assertThat(compileAndRunJson("""
-				(defun my-fn (x) x)
-				(print (rontolisp:json-parse "1"))
-				(print (rontolisp:list-functions :cl-user))
-				""")).isEqualTo("1\n(MY-FN)");
-	}
-
-	@Test
 	void compileAndRunPlistAndAlistHashTable() throws Exception {
 		// single-key objects: hash-table iteration order is backend-specific
 		List<LispVal> program = am.ik.rontolisp.eval.JsonLibrary
@@ -11322,15 +11252,6 @@ class JvmLispCompilerTest {
 				(print (mapcar #'rontolisp:url-decode (list "a%2Bb" "1+2")))
 				(print (funcall #'rontolisp:url-encode "x y"))
 				""")).isEqualTo("(\"a+b\" \"1 2\")\n\"x%20y\"");
-	}
-
-	@Test
-	void compileAndRunUrlSplicedLibraryStaysOutOfClUserIntrospection() throws Exception {
-		assertThat(compileAndRunUrl("""
-				(defun my-fn (x) x)
-				(print (rontolisp:url-decode "1"))
-				(print (rontolisp:list-functions :cl-user))
-				""")).isEqualTo("\"1\"\n(MY-FN)");
 	}
 
 	@Test

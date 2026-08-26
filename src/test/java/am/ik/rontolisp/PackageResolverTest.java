@@ -249,57 +249,6 @@ class PackageResolverTest {
 	}
 
 	@Test
-	void introspectionDesignatorIsNormalizedToKeyword() {
-		assertThat(resolve("(rontolisp:list-functions cl)")).isEqualTo("(RONTOLISP:LIST-FUNCTIONS :CL)");
-		assertThat(resolve("(RONTOLISP:LIST-FUNCTIONS :CL-USER)")).isEqualTo("(RONTOLISP:LIST-FUNCTIONS :CL-USER)");
-		assertThat(resolve("(rontolisp:list-macros \"CL\")")).isEqualTo("(RONTOLISP:LIST-MACROS :CL)");
-		assertThat(resolve("(rontolisp:list-special-forms 'rontolisp)"))
-			.isEqualTo("(RONTOLISP:LIST-SPECIAL-FORMS :RONTOLISP)");
-	}
-
-	@Test
-	void introspectionWithoutArgumentIsKeptAsIs() {
-		assertThat(resolve("(RONTOLISP:LIST-FUNCTIONS)")).isEqualTo("(RONTOLISP:LIST-FUNCTIONS)");
-	}
-
-	@Test
-	void introspectionIsNormalizedInNestedForms() {
-		assertThat(resolve("(print (rontolisp:list-macros cl))")).isEqualTo("(PRINT (RONTOLISP:LIST-MACROS :CL))");
-	}
-
-	@Test
-	void unqualifiedIntrospectionInRontolispBecomesQualified() {
-		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(in-package :rontolisp)");
-		assertThat(resolve(resolver, "(list-functions)")).isEqualTo("(RONTOLISP:LIST-FUNCTIONS)");
-	}
-
-	@Test
-	void introspectionUnknownPackageIsRejected() {
-		assertThatThrownBy(() -> resolve("(rontolisp:list-functions :foo)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("No such package: FOO");
-	}
-
-	@Test
-	void introspectionWithTooManyArgumentsIsRejected() {
-		assertThatThrownBy(() -> resolve("(rontolisp:list-functions :cl :cl-user)"))
-			.isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("at most one package-designator argument");
-	}
-
-	@Test
-	void introspectionWithNonLiteralDesignatorIsRejected() {
-		assertThatThrownBy(() -> resolve("(rontolisp:list-functions (car x))")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("expects a package name");
-	}
-
-	@Test
-	void unqualifiedListFunctionsInClUserStaysUserSymbol() {
-		// list-functions is not a cl symbol; in cl-user it remains a bare user symbol.
-		assertThat(resolve("(list-functions)")).isEqualTo("(LIST-FUNCTIONS)");
-	}
-
-	@Test
 	void jsonLibraryFormsAreAResolverFixedPoint() {
 		// JsonLibrary splices its forms into programs both before resolution (the
 		// compile-path pre-pass) and after it (the interpreter's lazy load), which is
@@ -589,14 +538,6 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(defun f () 1)")).isEqualTo("(DEFUN STRPKG:F NIL 1)");
 		assertThat(resolve(resolver, "(defun g () 2)")).isEqualTo("(DEFUN STRPKG:G NIL 2)");
 		assertThat(resolve(resolver, "(defun h () 3)")).isEqualTo("(DEFUN STRPKG:H NIL 3)");
-	}
-
-	@Test
-	void defpackageIntrospectionDesignatorIsAccepted() {
-		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(defpackage :mypkg (:use :cl))");
-		assertThat(resolve(resolver, "(rontolisp:list-functions :mypkg)"))
-			.isEqualTo("(RONTOLISP:LIST-FUNCTIONS :MYPKG)");
 	}
 
 	@Test

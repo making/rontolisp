@@ -4,7 +4,7 @@ rontolisp has a small namespace (package) system with a set of built-in packages
 
 - **`cl`** — the standard package. All built-in functions, macros, special forms and the `*package*` variable belong here.
 - **`cl-user`** — the default working package. It *uses* `cl`, so standard symbols are available unqualified. The current package when a program starts. User definitions go here.
-- **`rontolisp`** — a package for implementation-specific symbols. `rl` is a built-in nickname. It does **not** use `cl`. It owns the `version`, `list-functions`, `list-macros` and `list-special-forms` functions.
+- **`rontolisp`** — a package for implementation-specific symbols. `rl` is a built-in nickname. It does **not** use `cl`. It owns the `version` function.
 - **`linalg`** — numpy-style vector/matrix operations (`linalg:zeros`, `linalg:matmul`, `linalg:solve`, ...), implemented once in Lisp source and available in every backend. `la` is a built-in nickname. It does **not** use `cl`. See the [Vectors & Matrices guide](../guides/linear-algebra.md).
 - **`torch`** — a PyTorch-style tensor with reverse-mode automatic differentiation and an `nn`-style module layer, the optimizers and the training-loop plumbing (`torch:tensor`, `torch:matmul`, `torch:backward`, `torch:linear`, `torch:cross-entropy-loss`, `torch:adam`, `torch:step`, ...) over the `linalg` kernels, implemented once in Lisp source and available in every backend. It does **not** use `cl`. See the [Neural Networks guide](../guides/neural-networks.md).
 - **`java`** — Java interop by reflection, usable only under the JVM interpreter (`java -jar rontolisp.jar`), not the compilers or the native binary. It does **not** use `cl`. It owns `new`, `call`, `static`, `field` and `proxy`; see the [Java interop guide](../guides/java-interop.md).
@@ -137,42 +137,13 @@ forms that follow it, on every backend.
 `rename-package` are not available, and a `defpackage` inside another form (not
 top-level) is an error.
 
-## Package introspection
-
-`rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` return the symbols of a package by category, sorted alphabetically. The optional argument is a package designator — a keyword, a bare symbol, a quoted symbol or a string (`:cl`, `cl`, `'cl`, `"cl"`) — and defaults to `:cl`. An unknown package is an error (`No such package: foo`).
-
-```lisp
-(print (rontolisp:list-macros))
-; => (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND CTYPECASE DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DO-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-COMPILATION-UNIT WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
-(print (rontolisp:list-special-forms))
-; => (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-(print (length (rontolisp:list-functions)))
-; => 436
-(defun square (x) (* x x))
-(print (rontolisp:list-functions :cl-user))
-; => (SQUARE)
-(print (rontolisp:list-functions :rontolisp))
-; => (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TCP-SET-TIMEOUT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
-(print (rontolisp:list-functions :java))
-; => (CALL FIELD NEW PROXY STATIC)
-```
-
-The classification follows the function namespace: a name is listed as a function exactly when it is usable as a function value via `#'name` (so `first`, `length`, `1+`, ... are functions even though they compile via inline expansion), and `list-macros`/`list-special-forms` list the operators that have no function value. Notes:
-
-- `list-functions` of `cl-user` lists the user-defined functions (`defun`s); names that are package-qualified, `%`-prefixed internals or shadow a `cl` symbol are excluded. In compiled output it is a **compile-time snapshot** of the program's `defun`s — functions defined at runtime through `load`/`eval` (even with `--dynamic`) are not included, and functions defined while `(in-package :rontolisp)` is in effect are not listed for any package.
-- `list-functions` of a [user-defined package](#user-defined-packages-defpackage) lists the package's `defun`s under their canonical qualified names — `mypkg:fn` for an exported function, `mypkg::fn` for an internal one. `list-macros` and `list-special-forms` of a user package are `nil`.
-- Car/cdr compositions (`cadr`, `caddr`, ...) are recognized by pattern, not enumerated, so they do not appear in `list-functions`.
-- The package designator must be a literal; a computed designator is rejected at read/compile time (the interpreter additionally accepts a computed designator through `funcall`, where an unknown package yields `nil` instead of an error — user packages are known only at read/compile time).
-- Like `version`, these functions are not supported inside the compiled runtime `eval`/`load`.
-
-Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive: which package a symbol in the source belongs to is decided by the `in-package` above it, not by a runtime `setq` of `*package*` (in compiled output the whole file is resolved before it runs; the interpreter resolves each top-level form as it reaches it, so a runtime assignment does affect the forms after it there). In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, `list-functions`, ...) are not available as first-class values (they cannot be passed to `mapcar`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
+Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive: which package a symbol in the source belongs to is decided by the `in-package` above it, not by a runtime `setq` of `*package*` (in compiled output the whole file is resolved before it runs; the interpreter resolves each top-level form as it reaches it, so a runtime assignment does affect the forms after it there). In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, ...) are not available as first-class values (they cannot be passed to `mapcar`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
 
 ## rontolisp Package Extensions
 
 The symbols the `rontolisp` package owns are **implementation-specific and not
 part of Common Lisp**. They must be referenced with the `rontolisp:` qualifier
-(or used unqualified after `(in-package rontolisp)`). Besides the introspection
-helpers above (`version`, `list-functions`, `list-macros`, `list-special-forms`),
+(or used unqualified after `(in-package rontolisp)`). Besides `version`,
 the package provides asynchronous outgoing HTTP via `rontolisp:fetch` (which
 returns a future) together with `rontolisp:await` (resolve) and
 `rontolisp:futurep` (type predicate), and JSON conversion via

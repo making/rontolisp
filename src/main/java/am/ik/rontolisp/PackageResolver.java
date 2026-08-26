@@ -1096,9 +1096,6 @@ public final class PackageResolver {
 		if (car instanceof LispSymbol op) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
-				if (isIntrospectionMember(qn.member())) {
-					return resolveIntrospection(op, qn.member(), cons);
-				}
 				if (LispNames.WASM_IMPORT.equals(qn.member()) || LispNames.WASM_EXPORT.equals(qn.member())) {
 					return resolveWasmDirective(op, cons);
 				}
@@ -1191,38 +1188,6 @@ public final class PackageResolver {
 		finally {
 			this.inHostFacingData = saved;
 		}
-	}
-
-	private static boolean isIntrospectionMember(String member) {
-		return LispNames.LIST_FUNCTIONS.equals(member) || LispNames.LIST_MACROS.equals(member)
-				|| LispNames.LIST_SPECIAL_FORMS.equals(member);
-	}
-
-	/**
-	 * Normalizes an introspection call ({@code rontolisp:list-functions} and friends) so
-	 * the backends only ever see zero arguments or one canonical keyword literal: the
-	 * package-designator literal (keyword, bare symbol, quoted symbol or string) is
-	 * validated against the registry and rewritten to a keyword.
-	 */
-	private LispVal resolveIntrospection(LispSymbol op, String member, LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() == 1) {
-			return SourceProvenance.inherit(cons, LispCons.rebuilt(cons, op, LispNil.INSTANCE));
-		}
-		if (parts.size() > 2) {
-			throw new LispPackageException(member + " expects at most one package-designator argument");
-		}
-		LispVal designator = parts.get(1);
-		if (designator instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
-				&& LispNames.QUOTE.equals(operatorMember(quoteOp)) && quoted.cdr() instanceof LispCons datumCell) {
-			designator = datumCell.car();
-		}
-		String name = packageDesignator(member, designator);
-		if (!this.registry.contains(name)) {
-			throw new LispPackageException("No such package: " + name);
-		}
-		return SourceProvenance.inherit(cons,
-				new LispCons(op, new LispCons(new LispSymbol(":" + name), LispNil.INSTANCE)));
 	}
 
 	// Resolves every symbol inside a quoted datum (recursively through conses);

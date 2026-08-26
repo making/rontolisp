@@ -267,8 +267,7 @@ touching this area.
 
 ## Wiring points (the usual checklist)
 
-`LispNames` (VALUES + 4); `PackageRegistry` (CL_MACROS + CL_FUNCTIONS;
-list-functions count 207 -> 208); `LispEvaluator.evalCons` cases (+ the
+`LispNames` (VALUES + 4); `PackageRegistry` (CL_MACROS + CL_FUNCTIONS); `LispEvaluator.evalCons` cases (+ the
 floor-family arity branch); `Environment` `values` function;
 `Jvm/WasmExprCompiler` cases (+ floor-family branch around the IntConv
 compilers); `NoGcWasmCompiler.expandMacro` (mv forms then fail on

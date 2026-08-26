@@ -26,11 +26,8 @@ Every public entry point is a plain fixed-arity defun, so like
   spelling anywhere (quoted mentions and `#'` count), or a bare exported name
   under `(in-package rontolisp)`, prepends the library defuns.
 
-**Names registered in**: `LispNames` (URL_DECODE etc.), the `rontolisp`
-package set in `PackageRegistry` (externality), and
-`PackageIntrospection.RONTOLISP_FUNCTION_NAMES` (sorted -- shows up in
-`(rontolisp:list-functions :rontolisp)`, pinned by evaluator/JVM/WASM tests,
-ci-spec and the docs). The native binary embeds `url.lisp` via
+**Names registered in**: `LispNames` (URL_DECODE etc.) and the `rontolisp`
+package set in `PackageRegistry` (externality). The native binary embeds `url.lisp` via
 `resource-config.json` (typeReachable `UrlLibrary`).
 
 **Portability inside url.lisp** (same rules as json.lisp, `.kb/json.md`):

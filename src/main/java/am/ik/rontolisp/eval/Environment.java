@@ -28,7 +28,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -67,7 +66,6 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.PackageIntrospection;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
@@ -182,18 +180,6 @@ public final class Environment implements Scope {
 					return;
 				}
 			}
-		}
-
-		Set<String> names() {
-			Map<String, LispVal> map = this.overflow;
-			if (map != null) {
-				return Set.copyOf(map.keySet());
-			}
-			Set<String> result = new java.util.HashSet<>();
-			for (int i = 0; i < this.size; i++) {
-				result.add(this.keys[i]);
-			}
-			return Set.copyOf(result);
 		}
 
 	}
@@ -526,15 +512,6 @@ public final class Environment implements Scope {
 	 */
 	public void undefineFunction(String name) {
 		this.functions.remove(name);
-	}
-
-	/**
-	 * Returns the names bound in the function namespace of this environment (not
-	 * including parent scopes).
-	 * @return a snapshot of the function names
-	 */
-	public Set<String> globalFunctionNames() {
-		return this.functions.names();
 	}
 
 	/**
@@ -1655,12 +1632,6 @@ public final class Environment implements Scope {
 			}
 			return VersionInfo.plist();
 		}));
-		// The introspection functions list the symbols of a package by category. The
-		// cl listings come from the categorized sets in PackageRegistry; the cl-user
-		// function listing reflects the live global function namespace.
-		registerIntrospection(env, LispNames.LIST_FUNCTIONS);
-		registerIntrospection(env, LispNames.LIST_MACROS);
-		registerIntrospection(env, LispNames.LIST_SPECIAL_FORMS);
 		// rontolisp:wasm-export marks a function for direct WASM export (see the WASM
 		// compiler). It is a compile-time directive for that backend only; on the
 		// interpreter (and the JVM backend) it is a no-op that simply returns the named
@@ -1896,34 +1867,6 @@ public final class Environment implements Scope {
 			result = new LispCons(new LispCons(new LispString(header.name()), new LispString(header.value())), result);
 		}
 		return result;
-	}
-
-	private static void registerIntrospection(Environment env, String member) {
-		String qualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, member);
-		env.defineFunction(qualified, new LispFunction(qualified, args -> {
-			if (args.size() > 1) {
-				throw new LispEvalException(
-						member + " expects at most one package-designator argument, got " + args.size());
-			}
-			String pkg = args.isEmpty() ? LispNames.CL_PKG : designatorName(member, args.get(0));
-			try {
-				return PackageIntrospection
-					.symbolList(PackageIntrospection.listNames(member, pkg, env.globalFunctionNames()));
-			}
-			catch (IllegalArgumentException ex) {
-				throw new LispEvalException(Objects.requireNonNullElse(ex.getMessage(), "No such package: " + pkg));
-			}
-		}));
-	}
-
-	private static String designatorName(String member, LispVal designator) {
-		if (designator instanceof LispSymbol sym) {
-			return sym.isKeyword() ? sym.name().substring(1) : sym.name();
-		}
-		if (designator instanceof LispString str) {
-			return str.value();
-		}
-		throw new LispEvalException(member + " expects a package name, got: " + designator.print());
 	}
 
 	private static void registerArithmetic(Environment env) {

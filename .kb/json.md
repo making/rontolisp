@@ -73,9 +73,7 @@ sound). One implementation runs on every backend:
 extensions and both public functions are single-arity now (jzon's `parse`
 takes just the JSON string), so the dispatcher/wrapper indirection is a thin
 arity/first-class-value shim rather than an `&optional` desugaring; collapsing
-it is open cleanup, not a constraint. The `%json-`
-helper names are excluded from `cl-user` introspection by the existing
-`PackageIntrospection.userFunctionNames` filter (`%` prefix / `:` qualified).
+it is open cleanup, not a constraint.
 
 **Portability rules inside json.lisp** (why it runs unchanged on WASM):
 only ASCII structural characters are compared via `char-code`; any non-ASCII

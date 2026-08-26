@@ -793,10 +793,6 @@ Splice policy, exactly like the other Lisp-source libraries:
   own `:report` — so a textual reachability shake could only go wrong here and has nothing
   to win. Spliced, it survives whole.
 
-`(rontolisp:list-functions :rontolisp)` therefore grew two names, `wit-provide` and
-`wit-error-payload` (`wit-error` is a condition, not a function) — pinned by `ci-spec.yaml`
-and the `list-functions` tests on every backend.
-
 ### Name mapping (user-facing, pinned)
 
 `WitImportDirective.memberName`:

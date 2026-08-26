@@ -2,7 +2,7 @@
 
 `(macro-function symbol &optional environment)`
 
-The macro expander of `symbol`, or `nil` when the name is a function, one of the 25 [special operators](special-operator-p.md), or unknown. It answers non-nil for a user macro defined with [`defmacro`](../special-forms/defmacro.md), for every built-in macro (the names `rontolisp:list-macros` reports), and for the Common Lisp macros rontolisp implements as special forms of its own (`defun`, `handler-case`, `dolist`, ...) -- together, every name a caller may not `apply`.
+The macro expander of `symbol`, or `nil` when the name is a function, one of the 25 [special operators](special-operator-p.md), or unknown. It answers non-nil for a user macro defined with [`defmacro`](../special-forms/defmacro.md), for every built-in macro, and for the Common Lisp macros rontolisp implements as special forms of its own (`defun`, `handler-case`, `dolist`, ...) -- together, every name a caller may not `apply`.
 
 The `environment` argument is accepted and ignored: `macrolet` bodies are expanded away before any body runs, so the global answer is the only one there is.
 

@@ -65,7 +65,7 @@ annotations / output blocks); only prose, headings, link text, `nav.yaml`
 language tree (`DOC_ROOTS`), so a broken or stale `doc/ja` block fails the build
 on its own -- it was `doc/en`-only until 2026-08-16, and the ja tree had by then
 accumulated ~60 pages of hand-written results the interpreter never answered
-(lowercased symbols, a `list-functions` listing several releases old).
+(lowercased symbols, listings several releases old).
 
 **Heading ANCHORS are the reference language's, in every tree (2026-08-12).** A
 translated heading keeps its translated TEXT and takes en's `id`: `DocGen`
@@ -109,8 +109,8 @@ cd web/dist && jwebserver -p 8000                                 # open http://
 In CI, `pages.yaml` builds the playground (`-Pweb`) first, then the docs into the
 same `web/dist` (never deleting it), then the agent skill (below), then deploys --
 so the deployed playground wasm and the docs come from the same commit
-(introspection examples like `rontolisp:list-macros` therefore agree in the
-deployed site even if a local `rontoplayground.js.wasm` is stale).
+(examples therefore agree in the deployed site even if a local
+`rontoplayground.js.wasm` is stale).
 `DocExamplesTest` is exercised by `./mvnw test`; `docs-tool` is NOT in the root
 reactor, so ITS tests run only in `pages.yaml` (which builds it WITHOUT
 `-DskipTests` on purpose) or when you run `./mvnw -f docs-tool/pom.xml test`

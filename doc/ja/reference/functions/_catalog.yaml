@@ -425,9 +425,6 @@ categories:
       - { slug: rontolisp-thread-alive-p, name: "rontolisp:thread-alive-p" }
       - { slug: rontolisp-destroy-thread, name: "rontolisp:destroy-thread" }
       - { slug: rontolisp-current-thread, name: "rontolisp:current-thread" }
-      - { slug: rontolisp-list-functions, name: "rontolisp:list-functions" }
-      - { slug: rontolisp-list-macros, name: "rontolisp:list-macros" }
-      - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }
       - { slug: rontolisp-fetch, name: "rontolisp:fetch" }
       - { slug: rontolisp-futurep, name: "rontolisp:futurep" }
       - { slug: rontolisp-streamp, name: "rontolisp:streamp" }

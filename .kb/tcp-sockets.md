@@ -823,11 +823,7 @@ against a Testcontainers PostgreSQL, on the interpreter, the JVM and a
 component, with the Preview 1 behavior (call-time errors since todo-195) pinned alongside in `WasmLispCompilerTest`. The
 self-contained single-threaded echo choreography (listen 0 → tcp-local-port →
 connect → write → accept → read) never deadlocks because the connection waits
-in the listen backlog and small payloads sit in kernel/stream buffers. The
-rontolisp introspection list includes the seven tcp names — updating it
-touches `LispEvaluatorTest`, `JvmLispCompilerTest`,
-`WasmLispCompilerIntegrationTest`, `ci-spec.yaml` and the
-`rontolisp-list-functions` / `packages` doc pages.
+in the listen backlog and small payloads sit in kernel/stream buffers.
 
 ## Not supported
 

@@ -4281,17 +4281,6 @@ public final class LispNames {
 	/** The {@code version} function provided by the {@code rontolisp} package. */
 	public static final String VERSION = "VERSION";
 
-	/** The {@code list-functions} function provided by the {@code rontolisp} package. */
-	public static final String LIST_FUNCTIONS = "LIST-FUNCTIONS";
-
-	/** The {@code list-macros} function provided by the {@code rontolisp} package. */
-	public static final String LIST_MACROS = "LIST-MACROS";
-
-	/**
-	 * The {@code list-special-forms} function provided by the {@code rontolisp} package.
-	 */
-	public static final String LIST_SPECIAL_FORMS = "LIST-SPECIAL-FORMS";
-
 	/**
 	 * The {@code fetch} function provided by the {@code rontolisp} package. Starts an
 	 * outgoing HTTP request (JavaScript {@code fetch}-style) and immediately returns a

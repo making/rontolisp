@@ -4,7 +4,7 @@ rontolispには、一連の組み込みパッケージと[`defpackage` による
 
 - **`cl`** — 標準パッケージ。すべての組み込み関数、マクロ、特殊形式、および `*package*` 変数がここに属します。
 - **`cl-user`** — デフォルトの作業パッケージ。`cl` を *使用* するため、標準シンボルを修飾なしで利用できます。プログラム開始時のカレントパッケージです。ユーザ定義はここに置かれます。
-- **`rontolisp`** — 実装固有のシンボルのためのパッケージ。`rl` は組み込みのニックネームです。`cl` を **使用しません**。`version`、`list-functions`、`list-macros`、`list-special-forms` の各関数を所有します。
+- **`rontolisp`** — 実装固有のシンボルのためのパッケージ。`rl` は組み込みのニックネームです。`cl` を **使用しません**。`version` 関数を所有します。
 - **`linalg`** — numpy スタイルのベクトル・行列演算(`linalg:zeros`、`linalg:matmul`、`linalg:solve` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`la` は組み込みのニックネームです。`cl` を **使用しません**。[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
 - **`torch`** — `linalg` カーネル上の、逆方向自動微分、`nn` スタイルのモジュール層、オプティマイザ、学習ループの補助を備えた PyTorch スタイルのテンソル (`torch:tensor`、`torch:matmul`、`torch:backward`、`torch:linear`、`torch:cross-entropy-loss`、`torch:adam`、`torch:step` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`cl` を **使用しません**。[ニューラルネットワークガイド](../guides/neural-networks.md)を参照してください。
 - **`java`** — リフレクションによる Java 連携。JVM インタプリタ (`java -jar rontolisp.jar`) でのみ使え、コンパイラやネイティブバイナリでは使えません。`cl` を **使用しません**。`new`、`call`、`static`、`field`、`proxy` を所有します。[Java 連携ガイド](../guides/java-interop.md)を参照してください。
@@ -147,51 +147,9 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 `rename-package` は利用できず、(トップレベルでない)他のフォームの中の
 `defpackage` はエラーです。
 
-## パッケージのイントロスペクション
-
-`rontolisp:list-functions`、`rontolisp:list-macros`、`rontolisp:list-special-forms`
-はパッケージのシンボルをカテゴリ別に、アルファベット順にソートして返します。省略可能な引数はパッケージ指定子(キーワード、裸のシンボル、引用されたシンボル、または文字列:
-`:cl`、`cl`、`'cl`、`"cl"`)で、デフォルトは `:cl` です。未知のパッケージはエラーです(`No such package: foo`)。
-
-```lisp
-(print (rontolisp:list-macros))
-; => (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND CTYPECASE DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DO-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-COMPILATION-UNIT WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
-(print (rontolisp:list-special-forms))
-; => (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-(print (length (rontolisp:list-functions)))
-; => 436
-(defun square (x) (* x x))
-(print (rontolisp:list-functions :cl-user))
-; => (SQUARE)
-(print (rontolisp:list-functions :rontolisp))
-; => (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TCP-SET-TIMEOUT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM TLS-UPGRADE URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
-(print (rontolisp:list-functions :java))
-; => (CALL FIELD NEW PROXY STATIC)
-```
-
-この分類は関数名前空間に従います。ある名前が関数として列挙されるのは、`#'name`
-を通じて関数値として使用できる場合に限られます(そのため `first`、`length`、`1+`
-... はインライン展開でコンパイルされるにもかかわらず関数です)。一方
-`list-macros`/`list-special-forms` は関数値を持たない演算子を列挙します。注記:
-
-- `cl-user` の `list-functions` はユーザ定義関数(`defun`)を列挙します。パッケージ修飾された名前、`%`
-  プレフィックスの内部用、または `cl` シンボルをシャドウする名前は除外されます。コンパイル出力では、これはプログラムの
-  `defun` の **コンパイル時スナップショット** です。`load`/`eval` を通じて実行時に定義された関数(`--dynamic`
-  を使っても)は含まれず、`(in-package :rontolisp)`
-  が有効な間に定義された関数はどのパッケージにも列挙されません。
-- [ユーザー定義パッケージ](#user-defined-packages-defpackage)の `list-functions` は、そのパッケージの
-  `defun` を正規の修飾名で列挙します — export された関数は `mypkg:fn`、internal な関数は
-  `mypkg::fn` です。ユーザーパッケージの `list-macros` と `list-special-forms` は `nil` です。
-- car/cdrの合成(`cadr`、`caddr` ...)はパターンで認識され列挙されないため、`list-functions`
-  には現れません。
-- パッケージ指定子はリテラルでなければなりません。計算された指定子は読み込み/コンパイル時に拒否されます(インタプリタはさらに
-  `funcall` を通じて計算された指定子を受け付けますが、その場合、未知のパッケージはエラーではなく
-  `nil` になります — ユーザーパッケージは read/コンパイル時にのみ知られているためです)。
-- `version` と同様に、これらの関数はコンパイルされたランタイムの `eval`/`load` 内ではサポートされません。
-
 パッケージは読み込み/コンパイル時に(ソース順で)解決されるため、`in-package`
 はトップレベルのディレクティブです: ソース中のシンボルがどのパッケージに属するかは、その上にある `in-package` で決まり、実行時の `*package*` への `setq` では決まりません(コンパイル出力ではファイル全体が実行前に解決されます。インタプリタはトップレベルフォームに到達するたびに解決するため、そこでは実行時の代入が後続のフォームに影響します)。コンパイル出力では、実行時に読み込まれたファイルのパッケージディレクティブは処理されません。`rontolisp`
-パッケージの関数(`version`、`list-functions` ...)は第一級の値として利用できません(`mapcar`/`funcall`
+パッケージの関数(`version` ...)は第一級の値として利用できません(`mapcar`/`funcall`
 に渡せません)。また `cl` を使用しないパッケージ内では、`cl`
 シンボル名をローカル変数としてシャドウしてはいけません。
 
@@ -199,7 +157,7 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 
 `rontolisp` パッケージが所有するシンボルは **実装固有であり、Common Lispの一部ではありません**。`rontolisp:`
 修飾子で参照する(または `(in-package rontolisp)`
-の後に修飾なしで使用する)必要があります。上記のイントロスペクションヘルパー(`version`、`list-functions`、`list-macros`、`list-special-forms`)に加え、このパッケージは
+の後に修飾なしで使用する)必要があります。`version` に加え、このパッケージは
 `rontolisp:fetch` (future を返す) と、`rontolisp:await` (解決)、
 `rontolisp:futurep` (型述語) を通じて非同期の外向きHTTPを提供し、さらに
 [`rontolisp:json-parse`](functions/rontolisp-json-parse.md) /

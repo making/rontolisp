@@ -36,9 +36,7 @@ check before you write the code rather than after the error:
 1. **Reaching for an operator that is not there.** rontolisp ships a fixed set.
    Before using an operator you have not already seen working in this project,
    look it up in `references/operators.md` -- every name it has, by category. Not
-   listed means not there: reshape the code, or write the helper yourself. When
-   you can run code, `(rontolisp:list-functions)`, `(rontolisp:list-macros)` and
-   `(rontolisp:list-special-forms)` answer the same question at runtime.
+   listed means not there: reshape the code, or write the helper yourself.
 2. **Assuming full CL semantics behind a name that IS there.** `loop`, `format`,
    `defpackage`, CLOS, `values`, string mutation and non-local exits all exist
    and all stop short of the standard somewhere. The whole delta is inlined
