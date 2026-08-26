@@ -9,15 +9,15 @@ rontolisp
 ```
 
 ```
-> (+ 1 2)
+CL-USER> (+ 1 2)
 3
-> (* 3 (+ 4 5))
+CL-USER> (* 3 (+ 4 5))
 27
-> (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+CL-USER> (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
 FACT
-> (fact 10)
+CL-USER> (fact 10)
 3628800
-> (quit)
+CL-USER> (quit)
 ```
 
 Each top-level form is evaluated as soon as it is complete, and its value is
@@ -25,24 +25,42 @@ echoed back. Definitions persist across inputs: a `defun`, `defvar`, or `setq`
 entered at one prompt is visible at every later one, so you can build up state
 incrementally within a session.
 
+The prompt is the name of the [current package](../reference/packages.md),
+the way `CL-USER>` names it in any Common Lisp REPL. It is read again before
+every line, so an `(in-package ...)` typed at one prompt shows at the next --
+which package a bare symbol is read into is never left invisible:
+
+```console
+CL-USER> (defpackage :app (:use :cl))
+APP
+CL-USER> (in-package :app)
+:APP
+APP> (defun greet () "hi")
+APP::GREET
+APP> (in-package :cl-user)
+:CL-USER
+CL-USER> (app::greet)
+"hi"
+```
+
 A form that returns [multiple values](../reference/functions/values.md)
 echoes every value, one per line -- the quotient and the remainder of `floor`, the
 value and the present-p flag of `gethash`. `(values)` returns no value at all and
 echoes nothing:
 
 ```console
-> (floor 10 3)
+CL-USER> (floor 10 3)
 3
 1
-> (gethash 'b (make-hash-table))
+CL-USER> (gethash 'b (make-hash-table))
 NIL
 NIL
-> (values 1 2 3)
+CL-USER> (values 1 2 3)
 1
 2
 3
-> (values)
->
+CL-USER> (values)
+CL-USER>
 ```
 
 The prompt accepts multi-line input -- if an expression has unbalanced

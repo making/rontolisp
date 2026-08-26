@@ -20,6 +20,6 @@ Returns the value of the **global** variable named by `symbol`; an unbound name 
 An unbound variable signals an error:
 
 ```console
-> (symbol-value '*nope*)
+CL-USER> (symbol-value '*nope*)
 The variable *nope* is unbound
 ```

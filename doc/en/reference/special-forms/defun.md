@@ -46,8 +46,8 @@ An unknown keyword argument signals an error unless the lambda list declares `&a
 Calling a function with too few required arguments (or too many, for a fixed-arity function) signals an error in the interpreter and is a compile error on the JVM/WASM backends.
 
 ```console
-> (defun f (a b) (+ a b))
-> (f 1)
+CL-USER> (defun f (a b) (+ a b))
+CL-USER> (f 1)
 Function expects 2 arguments, got 1
 ```
 

@@ -18,7 +18,7 @@ Writing to a stream whose write end was closed with
 [`rontolisp:stream-close`](rontolisp-stream-close.md) signals an error:
 
 ```console
-> (let ((s (rontolisp:make-stream)))
+CL-USER> (let ((s (rontolisp:make-stream)))
     (rontolisp:stream-close s)
     (rontolisp:stream-write s "x"))
 stream-write: the stream is closed

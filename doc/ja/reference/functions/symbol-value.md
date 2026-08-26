@@ -20,6 +20,6 @@
 未束縛の変数はエラーを通知します:
 
 ```console
-> (symbol-value '*nope*)
+CL-USER> (symbol-value '*nope*)
 The variable *nope* is unbound
 ```

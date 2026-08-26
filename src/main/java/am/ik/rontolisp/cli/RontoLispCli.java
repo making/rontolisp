@@ -314,7 +314,7 @@ public final class RontoLispCli {
 
 	private void replWithBufferedReader(LispEvaluator evaluator, StringBuilder buffer) {
 		BufferedReader reader = new BufferedReader(new InputStreamReader(this.in));
-		this.out.print("> ");
+		this.out.print(ReplBuffer.prompt(evaluator, buffer));
 		this.out.flush();
 		try {
 			String line;
@@ -325,7 +325,7 @@ public final class RontoLispCli {
 				buffer.append(line).append('\n');
 				if (ReplBuffer.isBalanced(buffer.toString())) {
 					ReplBuffer.eval(evaluator, this.out, buffer);
-					this.out.print("> ");
+					this.out.print(ReplBuffer.prompt(evaluator, buffer));
 					this.out.flush();
 				}
 			}

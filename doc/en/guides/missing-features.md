@@ -195,7 +195,7 @@ rontolisp supports integers (including arbitrary-precision bignums), ratios
 yields a float `NaN` rather than a complex result:
 
 ```console
-> (sqrt -1)
+CL-USER> (sqrt -1)
 NaN      ; full Common Lisp would return #C(0.0 1.0)
 ```
 

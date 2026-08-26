@@ -82,9 +82,9 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
 
 ```console
 $ rontolisp
-> (ql:quickload "split-sequence")
+CL-USER> (ql:quickload "split-sequence")
 (split-sequence)
-> (split-sequence:split-sequence #\, "a,b,c")
+CL-USER> (split-sequence:split-sequence #\, "a,b,c")
 ("a" "b" "c")
 ```
 
@@ -109,9 +109,9 @@ Quicklisp の dist 形式を話すディストリビューションは 1 つで�
 
 ```console
 $ rontolisp
-> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
+CL-USER> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
 "ultralisp"
-> (ql:quickload "circular-buffer")
+CL-USER> (ql:quickload "circular-buffer")
 (circular-buffer)
 ```
 

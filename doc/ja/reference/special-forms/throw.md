@@ -22,6 +22,6 @@
 一致しない `throw` はプログラムを中断するため、その経路は静的な例で示します:
 
 ```console
-> (throw 'nope 1)
+CL-USER> (throw 'nope 1)
 Error: THROW: no enclosing catch for tag NOPE
 ```

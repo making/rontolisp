@@ -7,10 +7,10 @@
 ## REPL からウィンドウを
 
 ```console
-> (defvar *win* (appkit:window "counter" :width 420 :height 200))
-> (defvar *label* (appkit:label *win* "no clicks yet" :x 20 :y 120 :width 380))
-> (defvar *n* 0)
-> (appkit:button *win* "Click me" :x 20 :y 40
+CL-USER> (defvar *win* (appkit:window "counter" :width 420 :height 200))
+CL-USER> (defvar *label* (appkit:label *win* "no clicks yet" :x 20 :y 120 :width 380))
+CL-USER> (defvar *n* 0)
+CL-USER> (appkit:button *win* "Click me" :x 20 :y 40
     :on-click (lambda ()
                 (setq *n* (+ *n* 1))
                 (appkit:set-text *label* (format nil "clicked ~a time(s)" *n*))))
@@ -25,8 +25,8 @@
 ウィンドウがまったくなくても構いません。`appkit:status-item` はシステムのメニューバーにタイトルを置き、`appkit:menu` は項目が Lisp のクロージャであるメニューをそこにぶら下げます。`:dock nil` を付けるとプロセスには Dock アイコンもアプリケーションスイッチャの項目もなくなります。これがメニューバープログラムの姿で、そのときの出口が `appkit:quit` です。引数なしの `appkit:wait` はそれが起きるまでブロックします。
 
 ```console
-> (defvar *n* 0)
-> (defvar *item*
+CL-USER> (defvar *n* 0)
+CL-USER> (defvar *item*
     (appkit:status-item "λ" :dock nil
                         :menu (appkit:menu
                                (list (list "Count" (lambda ()
@@ -63,25 +63,25 @@
 座標系は AppKit のもので、原点はウィンドウの左下です。ラベルは与えられた矩形の中で垂直方向に中央寄せされ、それがタイルの中央に数字を置いてくれます。パネルはそのタイルそのもので、どちらもクリックに応えます:
 
 ```console
-> (defvar *board* (appkit:window "tiles" :width 200 :height 200
+CL-USER> (defvar *board* (appkit:window "tiles" :width 200 :height 200
                                  :background (appkit:color 26 29 38) :dark t))
-> (defvar *tile* (appkit:panel *board* :x 20 :y 20 :width 34 :height 34
+CL-USER> (defvar *tile* (appkit:panel *board* :x 20 :y 20 :width 34 :height 34
                                :fill (appkit:color 104 116 146) :radius 7))
-> (defvar *digit* (appkit:label *board* "3" :x 20 :y 20 :width 34 :height 34
+CL-USER> (defvar *digit* (appkit:label *board* "3" :x 20 :y 20 :width 34 :height 34
                                 :size 19 :align :center :bold t))
-> (appkit:on-click *tile*
+CL-USER> (appkit:on-click *tile*
     (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
 #<objc RontoLispAppKitPanel>
-> (appkit:timer 1 (lambda () (appkit:set-text *digit* "4") nil))
+CL-USER> (appkit:timer 1 (lambda () (appkit:set-text *digit* "4") nil))
 #<objc __NSCFTimer>
 ```
 
 すべてのウィジェットはただの Objective-C オブジェクトなので、この層にないものは `objc:send` 一つ分の距離にあります:
 
 ```console
-> (objc:send *win* "setBackgroundColor:"
+CL-USER> (objc:send *win* "setBackgroundColor:"
     (objc:send "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
-> (objc:send *win* "frame")
+CL-USER> (objc:send *win* "frame")
 (690.0 676.0 420.0 228.0)
 ```
 
@@ -102,13 +102,13 @@
 | `objc:objectp` | `(objc:objectp x)` — `x` が Objective-C オブジェクトかどうか |
 
 ```console
-> (objc:send (objc:string "hello world") "length")
+CL-USER> (objc:send (objc:string "hello world") "length")
 11
-> (objc:send (objc:send (objc:string "hello") "uppercaseString") "UTF8String")
+CL-USER> (objc:send (objc:send (objc:string "hello") "uppercaseString") "UTF8String")
 "HELLO"
-> (objc:send (objc:string "hello world") "rangeOfString:" "world")
+CL-USER> (objc:send (objc:string "hello world") "rangeOfString:" "world")
 (6 5)
-> (objc:send "NSNumber" "numberWithDouble:" 2.5)
+CL-USER> (objc:send "NSNumber" "numberWithDouble:" 2.5)
 #<objc __NSCFNumber>
 ```
 
@@ -119,13 +119,13 @@ Objective-C が実行のその瞬間に決めることは、その瞬間に読�
 か。
 
 ```console
-> (objc:send (objc:string "hi") "respondsToSelector:" "uppercaseString")
+CL-USER> (objc:send (objc:string "hi") "respondsToSelector:" "uppercaseString")
 T
-> (objc:send (objc:send (objc:send (objc:string "hi") "class") "description") "UTF8String")
+CL-USER> (objc:send (objc:send (objc:send (objc:string "hi") "class") "description") "UTF8String")
 "NSTaggedPointerString"
-> (objc:send (objc:send (objc:string "hi") "methodSignatureForSelector:" "hasPrefix:") "methodReturnType")
+CL-USER> (objc:send (objc:send (objc:string "hi") "methodSignatureForSelector:" "hasPrefix:") "methodReturnType")
 "B"
-> (objc:send (objc:send (objc:string "hello") "valueForKey:" "length") "doubleValue")
+CL-USER> (objc:send (objc:send (objc:string "hello") "valueForKey:" "length") "doubleValue")
 5.0
 ```
 
@@ -144,10 +144,10 @@ Lisp のクロージャである実行時定義クラス、そして `NSNotifica
 クラスを登録するので、次のフォームからはそのクラス名が解決します。
 
 ```console
-> (objc:send (objc:send "NSBundle" "bundleWithPath:"
+CL-USER> (objc:send (objc:send "NSBundle" "bundleWithPath:"
     (objc:string "/System/Library/Frameworks/NaturalLanguage.framework")) "load")
 T
-> (objc:send (objc:send "NLLanguageRecognizer" "dominantLanguageForString:"
+CL-USER> (objc:send (objc:send "NLLanguageRecognizer" "dominantLanguageForString:"
     (objc:string "これは日本語の文章です")) "UTF8String")
 "ja"
 ```
@@ -193,9 +193,9 @@ receiver が応答しないセレクタ、引数の個数違い、宣言型に�
 セレクタが返す素の `nil` の代わりに、そのエラーの内容でシグナルします。
 
 ```console
-> (objc:bytes (objc:data (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
+CL-USER> (objc:bytes (objc:data (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
 #(0 0 128 63 0 0 0 64)
-> (handler-case
+CL-USER> (handler-case
       (objc:send "NSJSONSerialization" "JSONObjectWithData:options:error:" (objc:data "nope") 0 :error)
     (error (e) (princ-to-string e)))
 "objc:send: JSONObjectWithData:options:error:: The data couldn’t be read because it isn’t in the correct format. [NSCocoaErrorDomain 3840]"
@@ -220,13 +220,13 @@ AppKit はプロセスの最初のスレッドのものであり、すべての 
 `objc:define-class` はメソッドが Lisp 関数であるクラスを登録します。各メソッドは最初に receiver、続いて自身の引数を受け取ります:
 
 ```console
-> (defvar *target-class*
+CL-USER> (defvar *target-class*
     (objc:define-class "MyTarget" "NSObject"
       (list (list "invoke:" (lambda (self sender)
                               (format t "clicked ~a~%" sender))))))
-> (defvar *target* (objc:send (objc:send *target-class* "alloc") "init"))
-> (objc:send button "setTarget:" *target*)
-> (objc:send button "setAction:" "invoke:")
+CL-USER> (defvar *target* (objc:send (objc:send *target-class* "alloc") "init"))
+CL-USER> (objc:send button "setTarget:" *target*)
+CL-USER> (objc:send button "setAction:" "invoke:")
 ```
 
 メソッドの型は、スーパークラスがそのセレクタを宣言していればそこから、そうでなければ採用したプロトコルから取られ (`(objc:define-class "Delegate" "NSObject" methods '("NSWindowDelegate"))` は `windowShouldClose:` を `BOOL` として型付けします)、どちらにもなければ target/action の形 — 結果なし、コロンごとに 1 つのオブジェクト引数 — がデフォルトになります。メソッドが取れる形は閉じた集合です: 引数なし、オブジェクト引数 1 つまたは 2 つ、オブジェクト引数 1 つで `BOOL`・オブジェクト・整数のいずれかを返す。定義を再評価すると失敗せずクラスのメソッドが束縛し直されるので、REPL でハンドラを反復できます。

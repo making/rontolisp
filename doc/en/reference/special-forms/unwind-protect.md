@@ -31,7 +31,7 @@ The cleanup also runs when the protected form exits early via `return`:
 Because an uncaught `error` aborts the program, the error path is shown statically:
 
 ```console
-> (unwind-protect (error "boom") (print :cleaned))
+CL-USER> (unwind-protect (error "boom") (print :cleaned))
 :cleaned
 Error: boom
 ```

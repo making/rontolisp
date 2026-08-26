@@ -22,6 +22,6 @@ A `throw` unwinding through a `handler-case` is not caught by it:
 Because an unmatched `throw` aborts the program, that path is shown statically:
 
 ```console
-> (throw 'nope 1)
+CL-USER> (throw 'nope 1)
 Error: THROW: no enclosing catch for tag NOPE
 ```

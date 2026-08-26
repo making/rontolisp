@@ -22,6 +22,6 @@
 ```
 
 ```console
-> (error 'my-parse-error :input "x")
+CL-USER> (error 'my-parse-error :input "x")
 Error: input did not parse
 ```

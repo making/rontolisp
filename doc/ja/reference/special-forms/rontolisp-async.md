@@ -18,6 +18,6 @@
 ラッパーの中身が単一の `defun` / `lambda` フォーム以外の場合はエラーになります:
 
 ```console
-> (rontolisp:async (+ 1 2))
+CL-USER> (rontolisp:async (+ 1 2))
 Error: rontolisp:async expects a single (defun ...) or (lambda ...) form to make asynchronous, got: (rontolisp:async (+ 1 2))
 ```

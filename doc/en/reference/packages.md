@@ -62,7 +62,7 @@ A single-colon reference to a non-external symbol is an error at read/compile
 time:
 
 ```console
-> (rontolisp:%json-parse "1")
+CL-USER> (rontolisp:%json-parse "1")
 Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
 ```
 

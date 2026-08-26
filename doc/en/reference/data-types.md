@@ -54,15 +54,15 @@ programs.)
 evenly returns a ratio instead of truncating:
 
 ```console
-> 1/3
+CL-USER> 1/3
 1/3
-> (/ 1 2)
+CL-USER> (/ 1 2)
 1/2
-> (+ 1/2 1/3)
+CL-USER> (+ 1/2 1/3)
 5/6
-> (/ 1 2.0)
+CL-USER> (/ 1 2.0)
 0.5
-> (float 1/2)
+CL-USER> (float 1/2)
 0.5
 ```
 

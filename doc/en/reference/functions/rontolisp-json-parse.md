@@ -59,9 +59,9 @@ Invalid JSON and trailing characters after the value signal an error when
 `json-parse` is called:
 
 ```console
-> (rontolisp:json-parse "{\"a\": ")
+CL-USER> (rontolisp:json-parse "{\"a\": ")
 Error: json-parse: unexpected end of input
-> (rontolisp:json-parse "1 2")
+CL-USER> (rontolisp:json-parse "1 2")
 Error: json-parse: unexpected trailing characters
 ```
 

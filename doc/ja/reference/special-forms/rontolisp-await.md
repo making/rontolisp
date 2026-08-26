@@ -17,7 +17,7 @@ future を与えると、future が確定するまで現在の非同期関数を
 `await` は特殊形式で、[`rontolisp:async-defun`](rontolisp-async-defun.md) / [`rontolisp:async-lambda`](rontolisp-async-lambda.md) の本体内とトップレベル (トップレベルは暗黙に非同期です) でのみ使えます。それ以外の場所 — 普通の `defun` や `lambda` の本体、たとえ非同期本体の内側にネストしていても — ではコンパイル/定義時のエラーになります:
 
 ```console
-> (defun bad () (rontolisp:await 1))
+CL-USER> (defun bad () (rontolisp:await 1))
 rontolisp:await is only allowed inside rontolisp:async-defun/async-lambda or at top level
 ```
 

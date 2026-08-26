@@ -663,6 +663,17 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The current package's name, UPCASED as Common Lisp prints it -- the value of
+	 * {@code *package*} named rather than printed. The REPL prompt reads it before every
+	 * line so that an {@code (in-package ...)} typed at one prompt is visible at the
+	 * next, the way {@code CL-USER>} names the package in any Common Lisp REPL.
+	 * @return the current package name, upcased
+	 */
+	public String currentPackageName() {
+		return this.packageResolver.currentPackageName().toUpperCase(java.util.Locale.ROOT);
+	}
+
+	/**
 	 * Sets the program's argument vector, argv0 first -- the value the {@code uiop/image}
 	 * command-line family reads ({@code (uiop:command-line-arguments)} is its rest,
 	 * {@code (uiop:argv0)} its first). The CLI threads the input file and the arguments

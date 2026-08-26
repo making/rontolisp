@@ -578,12 +578,21 @@ class RontoLispCliTest {
 		assertThat(runCli("(values 1 2 3)\n")).contains("1\n2\n3\n");
 		assertThat(runCli("(defun f () (values 1 2))\n(f)\n")).contains("1\n2\n");
 		// No values at all echoes nothing, and a single value stays a single line.
-		assertThat(runCli("(values)\n")).isEqualTo("> > ");
-		assertThat(runCli("(+ 1 2)\n")).isEqualTo("> 3\n> ");
+		assertThat(runCli("(values)\n")).isEqualTo("CL-USER> CL-USER> ");
+		assertThat(runCli("(+ 1 2)\n")).isEqualTo("CL-USER> 3\nCL-USER> ");
 		// Two forms on one line echo twice, as SBCL does reading them one at a time,
 		// and each form's own output precedes its own value.
-		assertThat(runCli("(values 1 2) (+ 3 4)\n")).isEqualTo("> 1\n2\n7\n> ");
-		assertThat(runCli("(print 'a) (print 'b)\n")).isEqualTo("> A\nA\nB\nB\n> ");
+		assertThat(runCli("(values 1 2) (+ 3 4)\n")).isEqualTo("CL-USER> 1\n2\n7\nCL-USER> ");
+		assertThat(runCli("(print 'a) (print 'b)\n")).isEqualTo("CL-USER> A\nA\nB\nB\nCL-USER> ");
+	}
+
+	@Test
+	void replPromptNamesTheCurrentPackage() {
+		// The prompt is the current package, as in any CL REPL: an (in-package ...)
+		// typed at one prompt shows at the next, so which package a bare symbol
+		// interns into is never invisible.
+		assertThat(runCli("(defpackage :app (:use :cl))\n(in-package :app)\n(+ 1 2)\n"))
+			.isEqualTo("CL-USER> APP\nCL-USER> :APP\nAPP> 3\nAPP> ");
 	}
 
 	@Test

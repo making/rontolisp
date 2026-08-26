@@ -5,9 +5,9 @@
 Answers the Objective-C class of that name, or signals when no loaded framework declares it. A class is a receiver like any other: send it a class method, or `alloc` it. Part of the macOS-only `objc` package -- the interpreter (`java -jar`, or the `rontolisp` native binary) and a compiled `.class` / `.jar`, never a `.wasm`; on a machine without the runtime it signals an `error`. See the [macOS GUI guide](../../guides/objc-appkit.md).
 
 ```console
-> (objc:class "NSString")
+CL-USER> (objc:class "NSString")
 #<objc NSString>
-> (objc:send (objc:class "NSString") "stringWithUTF8String:" "hi")
+CL-USER> (objc:send (objc:class "NSString") "stringWithUTF8String:" "hi")
 #<objc NSTaggedPointerString>
 ```
 

@@ -11,6 +11,6 @@ Returns the inverse of a square matrix, computed by Gauss-Jordan elimination on 
 A singular matrix (one whose [`linalg:det`](linalg-det.md) is 0) has no inverse and signals an error:
 
 ```console
-> (linalg:inv #2A((1 2) (2 4)))
+CL-USER> (linalg:inv #2A((1 2) (2 4)))
 Error: linalg: inv of a singular matrix
 ```

@@ -23,9 +23,9 @@ JVM/WASM backends.
 
 ```console
 $ rontolisp
-> (ql:update-dist "ultralisp")
+CL-USER> (ql:update-dist "ultralisp")
 "ultralisp"
-> (ql:quickload "split-sequence")
+CL-USER> (ql:quickload "split-sequence")
 (split-sequence)
 ```
 

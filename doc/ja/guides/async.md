@@ -77,7 +77,7 @@ future は本体の最後のフォームの値で確定するか、本体がシ�
 — たとえ非同期本体にネストしていても — 定義時にエラーです:
 
 ```console
-> (defun bad () (rontolisp:await 1))
+CL-USER> (defun bad () (rontolisp:await 1))
 rontolisp:await is only allowed inside rontolisp:async-defun/async-lambda or at top level
 ```
 

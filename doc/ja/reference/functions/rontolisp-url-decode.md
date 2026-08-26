@@ -18,7 +18,7 @@
 不正なバイト列)はエラーを通知します:
 
 ```console
-> (rontolisp:url-decode "%2")
+CL-USER> (rontolisp:url-decode "%2")
 Error: url-decode: unterminated percent escape
 ```
 

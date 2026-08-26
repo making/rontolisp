@@ -17,7 +17,7 @@ An invalid escape (`%` not followed by two hex digits, or bytes that are not
 valid UTF-8) signals an error:
 
 ```console
-> (rontolisp:url-decode "%2")
+CL-USER> (rontolisp:url-decode "%2")
 Error: url-decode: unterminated percent escape
 ```
 

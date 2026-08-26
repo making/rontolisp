@@ -9,14 +9,31 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 
 /**
- * The REPL's shared read-eval step over the line buffer: when the accumulated input
- * balances, every form in it is evaluated and echoed, and the buffer is cleared. Both
- * REPL drivers -- the plain {@code BufferedReader} loop and {@link JLineRepl} -- run
- * their lines through this class, so the two REPLs cannot drift.
+ * The REPL's shared prompt and read-eval step over the line buffer: when the accumulated
+ * input balances, every form in it is evaluated and echoed, and the buffer is cleared.
+ * Both REPL drivers -- the plain {@code BufferedReader} loop and {@link JLineRepl} --
+ * take their prompt from here and run their lines through here, so the two REPLs cannot
+ * drift.
  */
 final class ReplBuffer {
 
 	private ReplBuffer() {
+	}
+
+	/**
+	 * The prompt for the next line: {@code CL-USER> } -- the CURRENT package's name, read
+	 * fresh every line, as a Common Lisp REPL names it. An {@code (in-package :foo)}
+	 * typed at one prompt therefore shows as {@code FOO> } at the next, which is the
+	 * whole point: which package a bare symbol interns into is otherwise invisible. A
+	 * continuation line (the buffer holds an unbalanced form) is blanked to the same
+	 * width instead, so the typed text stays in one column.
+	 * @param evaluator the REPL's evaluator, holding the current package
+	 * @param buffer the accumulated input, empty unless a form is still unbalanced
+	 * @return the prompt to print
+	 */
+	static String prompt(LispEvaluator evaluator, StringBuilder buffer) {
+		String prompt = evaluator.currentPackageName() + "> ";
+		return buffer.isEmpty() ? prompt : " ".repeat(prompt.length());
 	}
 
 	static boolean isBalanced(String input) {

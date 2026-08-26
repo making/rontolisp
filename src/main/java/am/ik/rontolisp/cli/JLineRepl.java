@@ -65,7 +65,7 @@ final class JLineRepl {
 		try (Terminal terminal = TerminalBuilder.builder().system(true).graphemeCluster(false).build()) {
 			LineReader lineReader = buildLineReader(terminal);
 			while (true) {
-				String prompt = buffer.isEmpty() ? "> " : "  ";
+				String prompt = ReplBuffer.prompt(evaluator, buffer);
 				String line;
 				try {
 					line = lineReader.readLine(prompt);

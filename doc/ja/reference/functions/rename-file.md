@@ -9,9 +9,9 @@
 場合も含めてエラーになります。
 
 ```console
-> (rename-file "notes.txt" "notes.bak")
+CL-USER> (rename-file "notes.txt" "notes.bak")
 #P"notes.bak"
-> (rename-file "db/2026.up.sql" "2026.down.sql")
+CL-USER> (rename-file "db/2026.up.sql" "2026.down.sql")
 #P"db/2026.down.sql"
 ```
 

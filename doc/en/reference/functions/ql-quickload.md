@@ -10,9 +10,9 @@ The download happens at **interpret time or compile time** (on the Java side, no
 
 ```console
 $ rontolisp
-> (ql:quickload "split-sequence")
+CL-USER> (ql:quickload "split-sequence")
 (split-sequence)
-> (split-sequence:split-sequence #\, "a,b,c")
+CL-USER> (split-sequence:split-sequence #\, "a,b,c")
 ("a" "b" "c")
 ```
 

@@ -11,6 +11,6 @@
 特異行列（[`linalg:det`](linalg-det.md) が 0 の行列）には逆行列が存在せず、エラーを通知します。
 
 ```console
-> (linalg:inv #2A((1 2) (2 4)))
+CL-USER> (linalg:inv #2A((1 2) (2 4)))
 Error: linalg: inv of a singular matrix
 ```

@@ -10,9 +10,9 @@ dist のキャッシュ済み index を破棄し、次の [`ql:quickload`](ql-qu
 
 ```console
 $ rontolisp
-> (ql:update-dist "ultralisp")
+CL-USER> (ql:update-dist "ultralisp")
 "ultralisp"
-> (ql:quickload "split-sequence")
+CL-USER> (ql:quickload "split-sequence")
 (split-sequence)
 ```
 

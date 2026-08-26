@@ -31,7 +31,7 @@ protected フォームが `return` で早期脱出する場合も cleanup は実
 捕捉されない `error` はプログラムを中断するため、エラー経路は静的な例で示します:
 
 ```console
-> (unwind-protect (error "boom") (print :cleaned))
+CL-USER> (unwind-protect (error "boom") (print :cleaned))
 :cleaned
 Error: boom
 ```

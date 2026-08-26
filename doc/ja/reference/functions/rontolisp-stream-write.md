@@ -18,7 +18,7 @@
 ストリームへの書き込みはエラーをシグナルします:
 
 ```console
-> (let ((s (rontolisp:make-stream)))
+CL-USER> (let ((s (rontolisp:make-stream)))
     (rontolisp:stream-close s)
     (rontolisp:stream-write s "x"))
 stream-write: the stream is closed

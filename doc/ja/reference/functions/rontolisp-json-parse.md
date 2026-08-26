@@ -59,9 +59,9 @@ rontolisp 上でのみ動作します。
 呼び出し時にエラーを通知します:
 
 ```console
-> (rontolisp:json-parse "{\"a\": ")
+CL-USER> (rontolisp:json-parse "{\"a\": ")
 Error: json-parse: unexpected end of input
-> (rontolisp:json-parse "1 2")
+CL-USER> (rontolisp:json-parse "1 2")
 Error: json-parse: unexpected trailing characters
 ```
 

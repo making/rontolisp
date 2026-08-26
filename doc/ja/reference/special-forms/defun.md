@@ -46,8 +46,8 @@
 必須引数より少ない引数で関数を呼び出すと(固定アリティ関数では多すぎる場合も)、インタプリタではエラーを通知し、JVM/WASM バックエンドではコンパイルエラーになります。
 
 ```console
-> (defun f (a b) (+ a b))
-> (f 1)
+CL-USER> (defun f (a b) (+ a b))
+CL-USER> (f 1)
 Function expects 2 arguments, got 1
 ```
 

@@ -7,8 +7,8 @@
 メモリブロックが Objective-C 側へ渡る道はこれです。`[data bytes]` は `void *` 引数が求めるアドレスを返し、`[data mutableBytes]` は呼び出し先が書き込める領域になり、[`objc:bytes`](objc-bytes.md) が結果を読み戻します。macOS 専用の `objc` パッケージの一部です。`java -jar` のインタプリタ、`rontolisp` ネイティブバイナリ、コンパイル済み `.class` / `.jar` で動作し、`.wasm` では使えません。ランタイムのないマシンでは `error` をシグナルします。[macOS GUI ガイド](../../guides/objc-appkit.md)を参照してください。
 
 ```console
-> (objc:send (objc:data "hello") "length")
+CL-USER> (objc:send (objc:data "hello") "length")
 5
-> (objc:bytes (objc:data (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
+CL-USER> (objc:bytes (objc:data (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
 #(0 0 128 63 0 0 0 64)
 ```

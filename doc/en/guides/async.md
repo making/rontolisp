@@ -80,7 +80,7 @@ asynchronous). In any plain `defun`/`lambda` — even one nested inside an
 asynchronous body — it is an error at definition time:
 
 ```console
-> (defun bad () (rontolisp:await 1))
+CL-USER> (defun bad () (rontolisp:await 1))
 rontolisp:await is only allowed inside rontolisp:async-defun/async-lambda or at top level
 ```
 

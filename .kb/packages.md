@@ -130,6 +130,22 @@ file Q gets P where CL would use Q. Pinned by
 `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
 `TriviaE2eTest` and `SxqlE2eTest`.
 
+## The REPL prompt IS the current package (2026-08-26)
+
+`CL-USER> `, as a Common Lisp REPL names it: `ReplBuffer.prompt` asks
+`LispEvaluator.currentPackageName()` (the resolver's current package, upcased) BEFORE
+EVERY LINE, so an `(in-package :app)` typed at one prompt shows as `APP> ` at the next
+-- the one place that state was previously invisible. Both REPL drivers (the JLine one
+and the plain `BufferedReader` one behind a pipe) take the prompt from that single
+method, so the two cannot drift; the continuation line of an unbalanced form is blanked
+to the SAME WIDTH, keeping the typed text in one column. Correct because the resolver is
+one per evaluator and a REPL line is a top-level form: the resolution-time and run-time
+packages agree at every top-level point (see above), so the prompt cannot lie. Pinned by
+`RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrentPackage}`;
+the transcripts on every `doc/*/**` page and in `doc/*/getting-started/repl.md` show the
+prompt, EXCEPT `compiling/self-hosted-repl.md`, whose `> ` is the example program's own
+`princ`, not this one.
+
 Pinned by `PackageResolverTest#{packageVarStaysARuntimeVariableRead,inPackageAcceptsKeywordAndBareSymbolAndAssignsTheRuntimeVariable,popPackageMarkerRestoresTheRuntimeVariableToo}`,
 `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsPackageToClUser}`,
 `JvmLispCompilerTest#compileAndRunPackageVarIsReadWhenTheFormRuns`,

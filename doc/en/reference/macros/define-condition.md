@@ -22,6 +22,6 @@ The report is what `princ`/`~A` prints; `prin1`/`~S` still shows the instance:
 ```
 
 ```console
-> (error 'my-parse-error :input "x")
+CL-USER> (error 'my-parse-error :input "x")
 Error: input did not parse
 ```

@@ -10,9 +10,9 @@
 
 ```console
 $ rontolisp
-> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
+CL-USER> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
 "ultralisp"
-> (ql:quickload "split-sequence")
+CL-USER> (ql:quickload "split-sequence")
 (split-sequence)
 ```
 

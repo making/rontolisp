@@ -85,9 +85,9 @@ exactly the machinery above:
 
 ```console
 $ rontolisp
-> (ql:quickload "split-sequence")
+CL-USER> (ql:quickload "split-sequence")
 (split-sequence)
-> (split-sequence:split-sequence #\, "a,b,c")
+CL-USER> (split-sequence:split-sequence #\, "a,b,c")
 ("a" "b" "c")
 ```
 
@@ -112,9 +112,9 @@ same call real Quicklisp takes,
 
 ```console
 $ rontolisp
-> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
+CL-USER> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
 "ultralisp"
-> (ql:quickload "circular-buffer")
+CL-USER> (ql:quickload "circular-buffer")
 (circular-buffer)
 ```
 

@@ -9,38 +9,56 @@ rontolisp
 ```
 
 ```
-> (+ 1 2)
+CL-USER> (+ 1 2)
 3
-> (* 3 (+ 4 5))
+CL-USER> (* 3 (+ 4 5))
 27
-> (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+CL-USER> (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
 FACT
-> (fact 10)
+CL-USER> (fact 10)
 3628800
-> (quit)
+CL-USER> (quit)
 ```
 
 各トップレベルフォームは完成するとすぐに評価され、その値がエコーバックされます。
 定義は入力をまたいで保持されます。あるプロンプトで入力した `defun`、`defvar`、`setq`
 は以降のすべてのプロンプトで参照できるため、セッション内で段階的に状態を構築できます。
 
+プロンプトには[現在のパッケージ](../reference/packages.md)の名前が出ます。
+Common Lisp の REPL が `CL-USER>` と表示するのと同じものです。行ごとに読み直されるため、
+あるプロンプトで入力した `(in-package ...)` は次のプロンプトに反映されます。
+裸のシンボルがどのパッケージに読み込まれるかが見えないままにならない、ということです。
+
+```console
+CL-USER> (defpackage :app (:use :cl))
+APP
+CL-USER> (in-package :app)
+:APP
+APP> (defun greet () "hi")
+APP::GREET
+APP> (in-package :cl-user)
+:CL-USER
+CL-USER> (app::greet)
+"hi"
+```
+
 [多値](../reference/functions/values.md)を返すフォームは、すべての値を
 1 行ずつエコーバックします。`floor` の商と剰余、`gethash` の値と存在フラグなどです。
 `(values)` は値を 1 つも返さないため、何も表示されません。
 
 ```console
-> (floor 10 3)
+CL-USER> (floor 10 3)
 3
 1
-> (gethash 'b (make-hash-table))
+CL-USER> (gethash 'b (make-hash-table))
 NIL
 NIL
-> (values 1 2 3)
+CL-USER> (values 1 2 3)
 1
 2
 3
-> (values)
->
+CL-USER> (values)
+CL-USER>
 ```
 
 プロンプトは複数行入力を受け付けます。式の括弧が閉じていない場合、REPL は括弧が

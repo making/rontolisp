@@ -27,8 +27,8 @@ peer 系アクセサはリスナーハンドルを拒否します(リスナー�
 
 ```console
 $ rontolisp
-> (setq l (rontolisp:tcp-listen 0 "127.0.0.1"))
-> (rontolisp:tcp-peer-address l)
+CL-USER> (setq l (rontolisp:tcp-listen 0 "127.0.0.1"))
+CL-USER> (rontolisp:tcp-peer-address l)
 Error: tcp-peer-address expects a connected socket handle
 ```
 

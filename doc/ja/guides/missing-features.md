@@ -200,7 +200,7 @@ rontolisp は整数（任意精度の bignum を含む）、比（`1/3`）、倍
 ではなく浮動小数点の `NaN` を返します。
 
 ```console
-> (sqrt -1)
+CL-USER> (sqrt -1)
 NaN      ; full Common Lisp would return #C(0.0 1.0)
 ```
 

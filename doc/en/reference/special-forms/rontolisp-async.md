@@ -24,6 +24,6 @@ and the backend support are those of the canonical forms.
 Anything other than a single `defun` or `lambda` form inside the wrapper is an error:
 
 ```console
-> (rontolisp:async (+ 1 2))
+CL-USER> (rontolisp:async (+ 1 2))
 Error: rontolisp:async expects a single (defun ...) or (lambda ...) form to make asynchronous, got: (rontolisp:async (+ 1 2))
 ```

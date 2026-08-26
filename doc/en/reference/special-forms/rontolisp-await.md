@@ -17,7 +17,7 @@ Given a future, suspends the current asynchronous function until the future sett
 `await` is a special form, legal only inside [`rontolisp:async-defun`](rontolisp-async-defun.md) / [`rontolisp:async-lambda`](rontolisp-async-lambda.md) bodies and at top level (the top level is implicitly asynchronous). Anywhere else — a plain `defun` or `lambda` body, even one nested inside an asynchronous body — it is an error at compile/definition time:
 
 ```console
-> (defun bad () (rontolisp:await 1))
+CL-USER> (defun bad () (rontolisp:await 1))
 rontolisp:await is only allowed inside rontolisp:async-defun/async-lambda or at top level
 ```
 

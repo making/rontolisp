@@ -9,6 +9,6 @@ Constructs a condition object of the given type — a CLOS-subset instance whose
 ```
 
 ```console
-> (error (make-condition 'simple-error :format-control "something failed"))
+CL-USER> (error (make-condition 'simple-error :format-control "something failed"))
 Error: something failed
 ```

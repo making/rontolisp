@@ -8,7 +8,7 @@
 装うことになります。
 
 ```console
-> (logical-pathname "SYS:SRC;")
+CL-USER> (logical-pathname "SYS:SRC;")
 LOGICAL-PATHNAME: "SYS:SRC;" does not name a logical pathname (rontolisp defines no logical hosts)
 ```
 

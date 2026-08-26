@@ -9,6 +9,6 @@
 ```
 
 ```console
-> (complex 1 2)
+CL-USER> (complex 1 2)
 Error: complex numbers are not supported (imaginary part 2)
 ```
