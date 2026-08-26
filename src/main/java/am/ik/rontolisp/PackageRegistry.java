@@ -504,14 +504,16 @@ public final class PackageRegistry {
 	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
 	 * which must not depend on a registry instance.
 	 */
-	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
-			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
-			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.ASDF_PKG,
-			LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
-			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-			LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG,
-			LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG,
-			LispNames.CL_SSL_PKG, "KEYWORD"), Set.copyOf(UiopExports.subPackages()));
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
+			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
+					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
+					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
+					LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
+					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
+					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
+					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
+					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
+			Set.copyOf(UiopExports.subPackages()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -598,6 +600,15 @@ public final class PackageRegistry {
 		// A Cocoa widget layer over objc:, implemented once in appkit.lisp and loaded on
 		// demand (AppKitLibrary). Does not use cl; every function is external.
 		define(new LispPackage(LispNames.APPKIT_PKG, List.of(), new HashSet<>(APPKIT_FUNCTIONS)));
+		// Interpreter-only C interop through the foreign function API (no reflection,
+		// so it runs in the native binary too): the foreign primitives CFFI's backend
+		// stands on (eval.FfiInterop over am.ik.ffi). Does not use cl; its values
+		// (LispForeignPointer) cannot be lowered by any WASM backend.
+		define(new LispPackage(LispNames.FFI_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.FFI_OPEN, LispNames.FFI_SYMBOL, LispNames.FFI_CALL,
+						LispNames.FFI_CALLBACK, LispNames.FFI_ALLOC, LispNames.FFI_FREE, LispNames.FFI_PEEK,
+						LispNames.FFI_POKE, LispNames.FFI_SIZE, LispNames.FFI_ALIGN, LispNames.FFI_POINTERP,
+						LispNames.FFI_ADDRESS, LispNames.FFI_ERRNO))));
 		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
 		// files as plain data -- see eval.AsdfSystems; the runtime component metaobject
 		// family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp). Does not

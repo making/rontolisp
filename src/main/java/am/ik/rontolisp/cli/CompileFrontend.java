@@ -10,6 +10,7 @@ import am.ik.rontolisp.eval.AppKitLibrary;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.ExitLibrary;
+import am.ik.rontolisp.eval.FfiInterop;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HostFetchLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
@@ -171,6 +172,15 @@ final class CompileFrontend {
 			throw new IllegalArgumentException("Cannot compile: " + objcReference
 					+ " -- the objc: and appkit: packages run on the interpreter (java -jar, or the rontolisp "
 					+ "binary) and in a compiled .class or .jar, not in a .wasm");
+		}
+		// ffi: has no WASM lowering and never will either (no foreign function API in
+		// any WASM runtime); refused the same way, after load inlining, so the error
+		// names the reference.
+		String ffiReference = wasm ? FfiInterop.firstFfiReference(loaded) : null;
+		if (ffiReference != null) {
+			throw new IllegalArgumentException("Cannot compile: " + ffiReference
+					+ " -- the ffi: package runs on the interpreter (java -jar, or the rontolisp binary), "
+					+ "not in a .wasm");
 		}
 		// Under --component the inliner also prunes the interface members the program
 		// never references -- the core tree shaker cannot do that job even under

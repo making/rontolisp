@@ -2805,6 +2805,7 @@ public final class LispEvaluator {
 		}));
 		registerJava();
 		registerObjc();
+		registerFfi();
 	}
 
 	// Registers the interpreter side of the `objc` package (eval/ObjcInterop over
@@ -2815,6 +2816,15 @@ public final class LispEvaluator {
 	// (CompileFrontend).
 	private void registerObjc() {
 		ObjcInterop.register(this.globalEnv, (function, callArgs) -> apply(function, callArgs, this.globalEnv));
+	}
+
+	// Registers the interpreter side of the `ffi` package (eval/FfiInterop over
+	// am.ik.ffi, the foreign-function binding to plain C -- the primitives CFFI's
+	// backend stands on). Registered here beside objc: for the same reason -- a callback
+	// C calls applies a user function and so needs the evaluator's apply. No reflection,
+	// so it works in the native binary; both WASM backends refuse it (CompileFrontend).
+	private void registerFfi() {
+		FfiInterop.register(this.globalEnv, (function, callArgs) -> apply(function, callArgs, this.globalEnv));
 	}
 
 	/**
@@ -3973,6 +3983,7 @@ public final class LispEvaluator {
 			case am.ik.rontolisp.LispIntVector iv -> iv;
 			case LispJavaObject j -> j;
 			case LispObjcObject o -> o;
+			case am.ik.rontolisp.LispForeignPointer p -> p;
 			case LispFuture f -> f;
 			case am.ik.rontolisp.LispThread th -> th;
 			case LispStream s -> s;

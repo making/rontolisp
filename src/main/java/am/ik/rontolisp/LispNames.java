@@ -6057,6 +6057,78 @@ public final class LispNames {
 	public static final String APPKIT_PKG = "APPKIT";
 
 	/**
+	 * The {@code ffi} package name: the foreign primitives CFFI's backend stands on --
+	 * plain C through the foreign function API ({@code am.ik.ffi}, wired in
+	 * {@code eval.FfiInterop}). The C-flavoured sibling of {@code objc}: a handful of
+	 * generic verbs named after the foreign system, reflection-free, so it runs in the
+	 * native binary too. Interpreter-only for now; both WASM backends refuse it
+	 * permanently (no foreign function API there). Does not use {@code cl}.
+	 */
+	public static final String FFI_PKG = "FFI";
+
+	/**
+	 * {@code ffi:open} -- dlopen a library by name or path and answer its handle:
+	 * {@code (ffi:open "libm.so.6")}. With no argument, the handle of the process's own
+	 * symbols.
+	 */
+	public static final String FFI_OPEN = "OPEN";
+
+	/**
+	 * {@code ffi:symbol} -- the address of a symbol in an opened library, or {@code nil}
+	 * when it is not there: {@code (ffi:symbol lib "cos")}.
+	 */
+	public static final String FFI_SYMBOL = "SYMBOL";
+
+	/**
+	 * {@code ffi:call} -- calls a function address with a calling convention decided now:
+	 * {@code (ffi:call fn :double '(:double) 0.0)}. A {@code :varargs} marker in the
+	 * argument-type list starts the variadic tail.
+	 */
+	public static final String FFI_CALL = "CALL";
+
+	/**
+	 * {@code ffi:callback} -- a code address C can call, adapting a Lisp function:
+	 * {@code (ffi:callback fn :int '(:pointer :pointer))}.
+	 */
+	public static final String FFI_CALLBACK = "CALLBACK";
+
+	/** {@code ffi:alloc} -- {@code malloc}: {@code (ffi:alloc 16)} answers a pointer. */
+	public static final String FFI_ALLOC = "ALLOC";
+
+	/** {@code ffi:free} -- {@code free} of what {@code ffi:alloc} answered. */
+	public static final String FFI_FREE = "FREE";
+
+	/**
+	 * {@code ffi:peek} -- a typed load at pointer + offset: {@code (ffi:peek p :int)},
+	 * {@code (ffi:peek p :long 8)}.
+	 */
+	public static final String FFI_PEEK = "PEEK";
+
+	/**
+	 * {@code ffi:poke} -- a typed store at pointer + offset, answering the value:
+	 * {@code (ffi:poke p :int 42)}, {@code (ffi:poke p :long 42 8)}.
+	 */
+	public static final String FFI_POKE = "POKE";
+
+	/** {@code ffi:size} -- the byte size of a foreign type. */
+	public static final String FFI_SIZE = "SIZE";
+
+	/** {@code ffi:align} -- the byte alignment of a foreign type. */
+	public static final String FFI_ALIGN = "ALIGN";
+
+	/** {@code ffi:pointerp} -- whether a value is a foreign pointer. */
+	public static final String FFI_POINTERP = "POINTERP";
+
+	/**
+	 * {@code ffi:address} -- a pointer's integer address, and its own inverse: given an
+	 * integer, the pointer at that address ({@code (ffi:address 0)} is C's NULL).
+	 */
+	public static final String FFI_ADDRESS = "ADDRESS";
+
+	/** {@code ffi:errno} -- the {@code errno} the calling thread's last call left. */
+	public static final String FFI_ERRNO = "ERRNO";
+
+	/**
 	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF: system
 	 * definitions parsed from {@code .asd} files as plain data -- see
 	 * {@code eval.AsdfSystems}). Real ASDF is not ported; only {@code defsystem} and
