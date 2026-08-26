@@ -581,6 +581,7 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpy-style dispatch: vec.vec scalar, mat.vec / vec.mat vector, mat.mat matrix product |
 | `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))` (the matrix product; rank >= 3 stacks on the last two axes) |
 | `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))` (the outer product) |
+| `linalg:cross` | `(linalg:cross #(1 0 0) #(0 1 0))` | `#d(0.0 0.0 1.0)` (the 3-D cross product; length-2 vectors answer the implied scalar z) |
 | `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10` (a reduction follows the element type; `:axis` / `:keepdims` keywords) |
 | `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2` (a reduction follows the element type; `:axis` / `:keepdims` keywords) |
 | `linalg:var` | `(linalg:var #(1 2 3 4))` | `1.25` (variance; `:axis` / `:keepdims` / `:ddof` keywords) |

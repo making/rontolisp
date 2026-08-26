@@ -57,6 +57,7 @@
                     ((> jj *tip*))
                   (set-joint jj
                              (linalg:add (joint jj)
-                              (cross w (linalg:sub (joint jj) base)))))))))
+                                         (linalg:cross w
+                                          (linalg:sub (joint jj) base)))))))))
         ;; linearized rotations stretch the links; re-normalize them
         (dotimes (i *tip*) (place (+ i 1) i (aref *len* i)))))))

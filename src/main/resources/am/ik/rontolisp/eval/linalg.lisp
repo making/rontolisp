@@ -1318,6 +1318,29 @@
           ((>= j m))
         (setf (aref out i j) (* (aref uf i) (aref vf j)))))))
 
+(defun linalg:cross (a b)
+  ;; The 3-D cross product (numpy np.cross, without the axis/axisa/axisb/axisc
+  ;; keywords -- no caller here has a stack to broadcast). Two length-3
+  ;; vectors give the length-3 cross product, keeping a's element width like
+  ;; linalg:add. Two length-2 vectors give the scalar z of the cross product
+  ;; of the vectors extended with a zero third coordinate (numpy's own 2-D
+  ;; case). Any other rank or length signals.
+  (let ((da (array-dimensions a)) (db (array-dimensions b)))
+    (when (or (cdr da) (cdr db)) (error "linalg: cross expects rank-1 vectors"))
+    (let ((na (car da)) (nb (car db)))
+      (cond ((and (= na 3) (= nb 3))
+             (let ((out (linalg::%la-make 3 0.0 (linalg::%la-etype a))))
+               (setf (aref out 0)
+                     (- (* (aref a 1) (aref b 2)) (* (aref a 2) (aref b 1))))
+               (setf (aref out 1)
+                     (- (* (aref a 2) (aref b 0)) (* (aref a 0) (aref b 2))))
+               (setf (aref out 2)
+                     (- (* (aref a 0) (aref b 1)) (* (aref a 1) (aref b 0))))
+               out))
+            ((and (= na 2) (= nb 2))
+             (- (* (aref a 0) (aref b 1)) (* (aref a 1) (aref b 0))))
+            (t (error "linalg: cross expects length-3 or length-2 vectors"))))))
+
 ;; --- reductions --------------------------------------------------------------
 
 (defun linalg:sum (a &key axis keepdims)

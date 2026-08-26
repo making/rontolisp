@@ -10973,6 +10973,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void linalgCrossProduct() {
+		// Two length-3 vectors give the length-3 cross product.
+		assertThat(eval("(linalg:cross (linalg:from-list '(1 0 0)) (linalg:from-list '(0 1 0)))").print())
+			.isEqualTo("#d(0.0 0.0 1.0)");
+		assertThat(eval("(linalg:cross (linalg:from-list '(1 2 3)) (linalg:from-list '(4 5 6)))").print())
+			.isEqualTo("#d(-3.0 6.0 -3.0)");
+		// Two length-2 vectors answer the scalar z of the implied 3-D product (numpy
+		// parity).
+		assertThat(eval("(linalg:cross (linalg:from-list '(1 2)) (linalg:from-list '(3 4)))").print())
+			.isEqualTo("-2.0");
+		// The result keeps the FIRST array operand's element type, like linalg:add.
+		assertThat(eval("(array-element-type (linalg:cross (linalg:from-list '(1 0 0) :element-type 'single-float) "
+				+ "(linalg:from-list '(0 1 0))))")
+			.print()).isEqualTo("SINGLE-FLOAT");
+		assertThatThrownBy(() -> eval("(linalg:cross (linalg:from-list '(1 2 3 4)) (linalg:from-list '(1 2 3 4)))"))
+			.hasMessageContaining("linalg: cross");
+		assertThatThrownBy(
+				() -> eval("(linalg:cross (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((1 2) (3 4))))"))
+			.hasMessageContaining("linalg: cross");
+	}
+
+	@Test
 	void jsonParseReturnsHashTablesAndVectors() {
 		// jzon's defaults: objects become hash tables with string keys, arrays
 		// become vectors, and true/false/null become t/nil/the symbol null.

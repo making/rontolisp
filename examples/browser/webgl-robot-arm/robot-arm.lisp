@@ -205,12 +205,6 @@ void main() {
 
 (defun vec3 (x y z) (linalg:from-list (list x y z)))
 
-;; The one vector operation linalg does not carry (numpy spells it np.cross).
-(defun cross (a b)
-  (vec3 (- (* (aref a 1) (aref b 2)) (* (aref a 2) (aref b 1)))
-        (- (* (aref a 2) (aref b 0)) (* (aref a 0) (aref b 2)))
-        (- (* (aref a 0) (aref b 1)) (* (aref a 1) (aref b 0)))))
-
 (defun normalized (v)
   (let ((n (linalg:norm v)))
     (linalg:mul v (/ 1.0 (if (< n 0.000001) 0.000001 n)))))
@@ -282,8 +276,8 @@ void main() {
                             (* *radius* cp (cos *yaw*)))))
          (forward (normalized (linalg:sub *centre* eye)))
          ;; right = normalize(cross(forward, world-up)); up = cross(right, fwd)
-         (right (normalized (cross forward (vec3 0.0 1.0 0.0))))
-         (up (cross right forward))
+         (right (normalized (linalg:cross forward (vec3 0.0 1.0 0.0))))
+         (up (linalg:cross right forward))
          ;; the look-at rotation: its rows are the camera axes, with forward
          ;; negated because the camera looks down -z
          (r (linalg:stack (list right up (linalg:mul forward -1.0))))
@@ -397,8 +391,8 @@ void main() {
 (defun perp-basis (axis)
   (let* ((ay (if (< (aref axis 1) 0.0) (- 0.0 (aref axis 1)) (aref axis 1)))
          (helper (if (< ay 0.9) (vec3 0.0 1.0 0.0) (vec3 1.0 0.0 0.0)))
-         (u (normalized (cross axis helper))))
-    (linalg:stack (list u (cross axis u)))))
+         (u (normalized (linalg:cross axis helper))))
+    (linalg:stack (list u (linalg:cross axis u)))))
 
 ;; Tube radii travel through globals (set-radii) rather than parameters,
 ;; keeping every function within the WASM backend's 7-parameter limit.

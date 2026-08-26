@@ -532,6 +532,7 @@ categories:
       - { slug: linalg-dot, name: "linalg:dot" }
       - { slug: linalg-matmul, name: "linalg:matmul" }
       - { slug: linalg-outer, name: "linalg:outer" }
+      - { slug: linalg-cross, name: "linalg:cross" }
       - { slug: linalg-sum, name: "linalg:sum" }
       - { slug: linalg-mean, name: "linalg:mean" }
       - { slug: linalg-var, name: "linalg:var" }

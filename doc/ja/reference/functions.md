@@ -542,6 +542,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
 | `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))`(行列積。rank 3 以上は最後の 2 軸でスタック) |
 | `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))`(外積) |
+| `linalg:cross` | `(linalg:cross #(1 0 0) #(0 1 0))` | `#d(0.0 0.0 1.0)`(3 次元の外積。長さ 2 のベクタの場合は暗黙のスカラー z を返す) |
 | `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10`(リダクションは要素の型に従う。`:axis` / `:keepdims` キーワードで軸ごとの還元) |
 | `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2`(リダクションは要素の型に従う。`:axis` / `:keepdims` キーワード) |
 | `linalg:var` | `(linalg:var #(1 2 3 4))` | `1.25` (分散。`:axis` / `:keepdims` / `:ddof` キーワード) |
