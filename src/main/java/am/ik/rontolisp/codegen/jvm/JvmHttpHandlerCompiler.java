@@ -12,10 +12,10 @@ import am.ik.jvm.Opcode;
  * Compiles the {@code (rontolisp:http-handler 'name [port])} directive on the JVM
  * backend: stores the handler funcref (resolved like {@code #'name} against the Pass-1
  * function registry) into the {@code _httpHandlerFn} static field and calls
- * {@code HttpHandlerSupport.serve(port, new Prog())} -- the generated class itself
- * implements {@code HttpHandlerSupport.Handler} (see
- * {@link JvmHttpHandlerRuntimeBuilder}), so the fresh instance is the handler.
- * {@code serve} blocks forever; the nil result is emitted for stack discipline only.
+ * {@code RontoHttpServer.serve(port, new Prog())} -- the generated class itself
+ * implements {@code RontoHttpServer.Handler} (see {@link JvmHttpHandlerRuntimeBuilder}),
+ * so the fresh instance is the handler. {@code serve} blocks forever; the nil result is
+ * emitted for stack discipline only.
  */
 final class JvmHttpHandlerCompiler {
 
@@ -78,7 +78,7 @@ final class JvmHttpHandlerCompiler {
 		else {
 			JvmEmitHelper.emitIntConst(ctx, 8080);
 		}
-		// HttpHandlerSupport.serve(port, new Prog())
+		// RontoHttpServer.serve(port, new Prog())
 		ctx.emit(Opcode.NEW);
 		ctx.emitU2(runtime.progClass().index());
 		ctx.emit(Opcode.DUP);

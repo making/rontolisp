@@ -5652,8 +5652,8 @@ public final class LispNames {
 	 * an embedded HTTP server bound to {@code address:port} and returns an opaque server
 	 * handle (nothing portable may print or compare one) for {@link #HTTP_SERVER_JOIN} /
 	 * {@link #HTTP_SERVER_STOP}. Interpreter and JVM backend only
-	 * ({@code HttpHandlerSupport.startServer}); the {@code clack-handler-rontolisp} shim
-	 * is the driving consumer -- a WASM component serves through the exported
+	 * ({@code RontoHttpServer.startServer}); the {@code clack-handler-rontolisp} shim is
+	 * the driving consumer -- a WASM component serves through the exported
 	 * {@code wasi:http} handler instead (the host owns the socket), so the shim's
 	 * {@code #+rontolisp-wasm} branch never names this.
 	 */

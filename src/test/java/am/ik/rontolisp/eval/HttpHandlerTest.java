@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -24,13 +25,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for {@code rontolisp:http-handler} on the interpreter backend: the embedded HTTP
- * server seam ({@link HttpHandlerSupport#start}) and the end-to-end directive round trip.
+ * server seam ({@link RontoHttpServer#start}) and the end-to-end directive round trip.
  */
 class HttpHandlerTest {
 
 	@AfterEach
 	void shutDownServers() {
-		HttpHandlerSupport.stopAllForTesting();
+		RontoHttpServer.stopAllForTesting();
 	}
 
 	// A free TCP port (bound then released; a tiny race, acceptable for tests).
@@ -105,12 +106,12 @@ class HttpHandlerTest {
 		for (int i = 0; i < jpeg.length; i++) {
 			jpeg[i] = (byte) RELAY_OCTETS[i];
 		}
-		HttpServer upstream = HttpHandlerSupport.start(0,
+		HttpServer upstream = RontoHttpServer.start(0,
 				request -> request.target().startsWith("/jpeg")
-						? new HttpHandlerSupport.Response(200,
-								List.of(new HttpHandlerSupport.Header("content-type", "image/jpeg")), jpeg)
-						: HttpHandlerSupport.Response.of(200,
-								List.of(new HttpHandlerSupport.Header("content-type", "text/plain")), "こんにちは"));
+						? new RontoHttpServer.Response(200,
+								List.of(new RontoHttpServer.Header("content-type", "image/jpeg")), jpeg)
+						: RontoHttpServer.Response.of(200,
+								List.of(new RontoHttpServer.Header("content-type", "text/plain")), "こんにちは"));
 		return upstream.getAddress().getPort();
 	}
 
@@ -132,9 +133,9 @@ class HttpHandlerTest {
 
 	@Test
 	void startServesHandlerResponse() throws Exception {
-		HttpServer server = HttpHandlerSupport.start(0,
-				request -> HttpHandlerSupport.Response.of(201,
-						List.of(new HttpHandlerSupport.Header("content-type", "text/plain")),
+		HttpServer server = RontoHttpServer.start(0,
+				request -> RontoHttpServer.Response.of(201,
+						List.of(new RontoHttpServer.Header("content-type", "text/plain")),
 						"hello " + request.method() + " " + request.target()));
 		int port = server.getAddress().getPort();
 		HttpResponse<String> response = get(port, "/greet");
@@ -148,19 +149,19 @@ class HttpHandlerTest {
 		// The %http-server-* seam behind the clack-handler-rontolisp shim: start on an
 		// ephemeral port with a bind address, read the port back, serve, stop -- and
 		// the stop releases a blocked joiner.
-		long handle = HttpHandlerSupport.startServer(0, "127.0.0.1",
-				request -> HttpHandlerSupport.Response.of(200, List.of(), "stoppable " + request.target()));
-		int port = (int) HttpHandlerSupport.serverPort(handle);
+		long handle = RontoHttpServer.startServer(0, "127.0.0.1",
+				request -> RontoHttpServer.Response.of(200, List.of(), "stoppable " + request.target()));
+		int port = (int) RontoHttpServer.serverPort(handle);
 		assertThat(port).isPositive();
 		assertThat(get(port, "/x").body()).isEqualTo("stoppable /x");
-		Thread joiner = Thread.ofVirtual().start(() -> HttpHandlerSupport.joinServer(handle));
-		HttpHandlerSupport.stopServer(handle);
+		Thread joiner = Thread.ofVirtual().start(() -> RontoHttpServer.joinServer(handle));
+		RontoHttpServer.stopServer(handle);
 		joiner.join(Duration.ofSeconds(5));
 		assertThat(joiner.isAlive()).isFalse();
-		assertThat(HttpHandlerSupport.serverPort(handle)).isEqualTo(-1);
+		assertThat(RontoHttpServer.serverPort(handle)).isEqualTo(-1);
 		// Idempotent: a second stop (the unwind cleanup after an explicit clack:stop)
 		// is a no-op.
-		HttpHandlerSupport.stopServer(handle);
+		RontoHttpServer.stopServer(handle);
 		assertThatThrownBy(() -> get(port, "/x")).isInstanceOf(IOException.class);
 	}
 
@@ -169,24 +170,24 @@ class HttpHandlerTest {
 		// clack's :use-thread t stop path destroy-threads the acceptor: the interrupt
 		// must land in the join and return normally so the Lisp unwind-protect stops
 		// the server in an orderly unwind.
-		long handle = HttpHandlerSupport.startServer(0, "127.0.0.1",
-				request -> HttpHandlerSupport.Response.of(200, List.of(), "ok"));
-		Thread joiner = Thread.ofVirtual().start(() -> HttpHandlerSupport.joinServer(handle));
+		long handle = RontoHttpServer.startServer(0, "127.0.0.1",
+				request -> RontoHttpServer.Response.of(200, List.of(), "ok"));
+		Thread joiner = Thread.ofVirtual().start(() -> RontoHttpServer.joinServer(handle));
 		Thread.sleep(50);
 		joiner.interrupt();
 		joiner.join(Duration.ofSeconds(5));
 		assertThat(joiner.isAlive()).isFalse();
-		HttpHandlerSupport.stopServer(handle);
+		RontoHttpServer.stopServer(handle);
 	}
 
 	@Test
 	void startServerUnwrapsAQuoteWrappedAddress() throws Exception {
 		// The JVM backend passes its runtime string rep (quote-wrapped) as-is.
-		long handle = HttpHandlerSupport.startServer(0, "\"127.0.0.1\"",
-				request -> HttpHandlerSupport.Response.of(200, List.of(), "wrapped"));
-		int port = (int) HttpHandlerSupport.serverPort(handle);
+		long handle = RontoHttpServer.startServer(0, "\"127.0.0.1\"",
+				request -> RontoHttpServer.Response.of(200, List.of(), "wrapped"));
+		int port = (int) RontoHttpServer.serverPort(handle);
 		assertThat(get(port, "/").body()).isEqualTo("wrapped");
-		HttpHandlerSupport.stopServer(handle);
+		RontoHttpServer.stopServer(handle);
 	}
 
 	@Test
@@ -247,7 +248,7 @@ class HttpHandlerTest {
 		// The transport hands the shared library the raw facts only: the target stays
 		// unsplit and still percent-encoded (the Clack environment build owns the ?
 		// split and the decoding), and the body crosses as bytes.
-		HttpHandlerSupport.Request request = HttpHandlerSupport.Request.of("GET", "/a%20b?a=1&b=?x", List.of(), "ボディ");
+		RontoHttpServer.Request request = RontoHttpServer.Request.of("GET", "/a%20b?a=1&b=?x", List.of(), "ボディ");
 		assertThat(request.target()).isEqualTo("/a%20b?a=1&b=?x");
 		assertThat(request.bodyString()).isEqualTo("ボディ");
 		assertThat(request.body()).isEqualTo("ボディ".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -267,6 +268,22 @@ class HttpHandlerTest {
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).isEqualTo("path=/hello");
 		assertThat(response.headers().firstValue("content-type")).hasValue("text/plain");
+	}
+
+	@Test
+	void directiveReportsTheRealPeerAndTheHostAsServerName() throws Exception {
+		// The transport's twin of the JVM half's unknown-peer case
+		// (HttpHandlerJvmTest): a REAL request always has a peer, so what must never
+		// happen here is the "" the record carries for "unknown" leaking through as a
+		// string.
+		int port = freePort();
+		serveInBackground("""
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain")
+				        (list (getf env :remote-addr) " " (getf env :server-name))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		assertThat(get(port, "/").body()).isEqualTo("127.0.0.1 127.0.0.1");
 	}
 
 	@Test

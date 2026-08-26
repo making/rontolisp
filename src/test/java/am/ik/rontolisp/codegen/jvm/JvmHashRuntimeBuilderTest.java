@@ -3,8 +3,8 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.compiler.ClackEnv;
-import am.ik.rontolisp.eval.HttpHandlerJvmRuntime;
-import am.ik.rontolisp.eval.HttpHandlerSupport;
+import am.ik.rontolisp.runtime.RontoHttpClack;
+import am.ik.rontolisp.runtime.RontoHttpServer;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
@@ -18,18 +18,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * than to {@code java.util.Map}) so that {@code hash-table-p} and the printer can tell a
  * Lisp table from a host map a {@code java:} call returned. That makes the class part of
  * the contract for every hand-written runtime that builds a table for compiled code to
- * read -- today {@code HttpHandlerJvmRuntime}, whose {@code :headers} table would
- * otherwise fail the cast at the handler's first {@code gethash}
- * ({@code .kb/hash-tables.md}).
+ * read -- today {@code RontoHttpClack}, whose {@code :headers} table would otherwise fail
+ * the cast at the handler's first {@code gethash} ({@code .kb/hash-tables.md}).
  */
 class JvmHashRuntimeBuilderTest {
 
 	@Test
+	@SuppressWarnings("NullAway") // buildEnv is called from bytecode, where nil IS null
 	void theHandwrittenRuntimeBuildsTheSameTableClass() {
-		HttpHandlerSupport.Request request = HttpHandlerSupport.Request.of("GET", "/",
-				List.of(new HttpHandlerSupport.Header("X-Token", "secret42")), "");
+		RontoHttpServer.Request request = RontoHttpServer.Request.of("GET", "/",
+				List.of(new RontoHttpServer.Header("X-Token", "secret42")), "");
 
-		Object headers = plistGet(HttpHandlerJvmRuntime.buildEnv(request, null), ClackEnv.HEADERS);
+		Object headers = plistGet(RontoHttpClack.buildEnv(request, null), ClackEnv.HEADERS);
 
 		assertThat(headers).isNotNull();
 		assertThat(headers.getClass().getName().replace('.', '/')).isEqualTo(JvmHashRuntimeBuilder.MAP_CLASS);

@@ -1,4 +1,4 @@
-package am.ik.rontolisp.eval;
+package am.ik.rontolisp.runtime;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -17,9 +17,6 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpsExchange;
 
-import am.ik.rontolisp.LispNames;
-import org.jspecify.annotations.Nullable;
-
 /**
  * Runs a blocking embedded HTTP server for the {@code rontolisp:http-handler} directive
  * on the interpreter and JVM backends, using the JDK {@link HttpServer}. Each request is
@@ -32,10 +29,56 @@ import org.jspecify.annotations.Nullable;
  * When the program is compiled to a WASI component ({@code --component}) this class is
  * not used: the module instead exports {@code wasi:http/incoming-handler} so a host (e.g.
  * {@code wasmtime serve}) drives the handler.
+ *
+ * <p>
+ * It lives in {@code runtime} rather than in {@code eval} because a compiled
+ * {@code http-handler} class CALLS it: the class files of this package travel with the
+ * compiled output ({@code .kb/jvm-export.md}), which is what makes such a program run on
+ * a bare {@code java -cp .} instead of needing the rontolisp jar on the classpath. That
+ * is also why it imports nothing of the project's: a rontolisp name would drag the
+ * interpreter along behind it. The one name it would want,
+ * {@code LispNames.HTTP_HANDLER}, is spelled out in {@link #WHERE}.
  */
-public final class HttpHandlerSupport {
+public final class RontoHttpServer {
 
-	private HttpHandlerSupport() {
+	/**
+	 * The operator this server serves, for an error message --
+	 * {@code LispNames.HTTP_HANDLER} spelled out, because this package imports nothing.
+	 */
+	private static final String WHERE = "HTTP-HANDLER";
+
+	private RontoHttpServer() {
+	}
+
+	/**
+	 * A server-side failure this class raises -- today a bind that could not be made. It
+	 * is NOT {@code eval}'s {@code LispEvalException}: this package carries no rontolisp
+	 * import, so the interpreter catches this at its call sites and re-raises the Lisp
+	 * error, while a compiled program (which has no condition system around the bind)
+	 * lets it propagate as it did before.
+	 */
+	public static final class ServerException extends RuntimeException {
+
+		private final String reason;
+
+		/**
+		 * Creates the failure.
+		 * @param reason what went wrong
+		 */
+		public ServerException(String reason) {
+			super(reason);
+			this.reason = reason;
+		}
+
+		/**
+		 * What went wrong -- the same text {@code getMessage()} answers, but never
+		 * absent, so a caller can hand it straight to its own error constructor.
+		 * @return the reason
+		 */
+		public String reason() {
+			return this.reason;
+		}
+
 	}
 
 	/**
@@ -63,13 +106,13 @@ public final class HttpHandlerSupport {
 	 * buffered {@code :raw-body}
 	 * @param protocol the HTTP version token (e.g. {@code HTTP/1.1})
 	 * @param scheme {@code http} or {@code https}
-	 * @param localName the address this server is bound to, or {@code null}
+	 * @param localName the address this server is bound to, or {@code ""} when unknown
 	 * @param localPort the port this server is bound to
-	 * @param remoteAddr the peer address, or {@code null} when unknown
+	 * @param remoteAddr the peer address, or {@code ""} when unknown
 	 * @param remotePort the peer port, or {@code 0} when unknown
 	 */
 	public record Request(String method, String target, List<Header> headers, byte[] body, String protocol,
-			String scheme, @Nullable String localName, int localPort, @Nullable String remoteAddr, int remotePort) {
+			String scheme, String localName, int localPort, String remoteAddr, int remotePort) {
 
 		/**
 		 * Creates a request carrying only what a test needs, defaulting the transport
@@ -81,8 +124,8 @@ public final class HttpHandlerSupport {
 		 * @return the request
 		 */
 		public static Request of(String method, String target, List<Header> headers, String body) {
-			return new Request(method, target, headers, body.getBytes(StandardCharsets.UTF_8), "HTTP/1.1", "http", null,
-					0, null, 0);
+			return new Request(method, target, headers, body.getBytes(StandardCharsets.UTF_8), "HTTP/1.1", "http", "",
+					0, "", 0);
 		}
 
 		/**
@@ -158,16 +201,17 @@ public final class HttpHandlerSupport {
 	 * {@code http-handler} directive's {@link #serve}, the server is per-handle stoppable
 	 * and binds the given address instead of the wildcard.
 	 * @param port the TCP port to bind (0 = ephemeral)
-	 * @param address the bind address (a hostname or IP literal); {@code null} binds the
-	 * wildcard address. A JVM-runtime quote-wrapped string ({@code "\"host\""}) is
-	 * accepted and unwrapped, so the compiled backend can pass its string value rep
-	 * as-is.
+	 * @param address the bind address (a hostname or IP literal); anything that is not a
+	 * non-empty string -- {@code ""} from the interpreter, {@code null} from compiled
+	 * bytecode, where nil IS null -- binds the wildcard address. A JVM-runtime
+	 * quote-wrapped string ({@code "\"host\""}) is accepted and unwrapped, so the
+	 * compiled backend can pass its string value rep as-is.
 	 * @param handler the request handler
 	 * @return the opaque server handle
 	 */
-	public static long startServer(int port, @Nullable Object address, Handler handler) {
+	public static long startServer(int port, Object address, Handler handler) {
 		String bindAddress = null;
-		if (address instanceof String str) {
+		if (address instanceof String str && !str.isEmpty()) {
 			bindAddress = str.length() >= 2 && str.startsWith("\"") && str.endsWith("\"")
 					? str.substring(1, str.length() - 1) : str;
 		}
@@ -177,7 +221,7 @@ public final class HttpHandlerSupport {
 					bindAddress == null ? new InetSocketAddress(port) : new InetSocketAddress(bindAddress, port), 0);
 		}
 		catch (IOException ex) {
-			throw new LispEvalException(LispNames.HTTP_HANDLER + ": failed to bind "
+			throw new ServerException(WHERE + ": failed to bind "
 					+ (bindAddress == null ? "port " + port : bindAddress + ":" + port) + ": " + ex.getMessage());
 		}
 		server.createContext("/", exchange -> dispatch(exchange, handler));
@@ -252,8 +296,7 @@ public final class HttpHandlerSupport {
 			server = HttpServer.create(new InetSocketAddress(port), 0);
 		}
 		catch (IOException ex) {
-			throw new LispEvalException(
-					LispNames.HTTP_HANDLER + ": failed to bind port " + port + ": " + ex.getMessage());
+			throw new ServerException(WHERE + ": failed to bind port " + port + ": " + ex.getMessage());
 		}
 		server.createContext("/", exchange -> dispatch(exchange, handler));
 		// One virtual thread per request; virtual threads are always daemon, so leftover
@@ -283,7 +326,7 @@ public final class HttpHandlerSupport {
 	}
 
 	/** Stops every server started in this process. Intended for tests only. */
-	static void stopAllForTesting() {
+	public static void stopAllForTesting() {
 		for (HttpServer server : SERVERS) {
 			server.stop(0);
 		}
@@ -307,7 +350,7 @@ public final class HttpHandlerSupport {
 				// A handler that dies must not take the server down -- but it must not
 				// vanish either: without this the only trace of a broken handler (or of a
 				// response the shared normalizer rejected) was a bare 500.
-				System.err.println(LispNames.HTTP_HANDLER + ": handler failed: " + ex);
+				System.err.println(WHERE + ": handler failed: " + ex);
 				writeResponse(exchange,
 						Response.of(500, List.of(new Header("content-type", "text/plain")), "Internal Server Error"));
 				return;
@@ -329,9 +372,9 @@ public final class HttpHandlerSupport {
 		final InetSocketAddress local = exchange.getLocalAddress();
 		final InetSocketAddress remote = exchange.getRemoteAddress();
 		return new Request(method, target, headers, body, exchange.getProtocol(),
-				exchange instanceof HttpsExchange ? "https" : "http", local == null ? null : local.getHostString(),
+				exchange instanceof HttpsExchange ? "https" : "http", local == null ? "" : local.getHostString(),
 				local == null ? 0 : local.getPort(),
-				remote == null || remote.getAddress() == null ? null : remote.getAddress().getHostAddress(),
+				remote == null || remote.getAddress() == null ? "" : remote.getAddress().getHostAddress(),
 				remote == null ? 0 : remote.getPort());
 	}
 

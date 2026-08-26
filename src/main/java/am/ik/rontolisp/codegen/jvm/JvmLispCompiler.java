@@ -106,9 +106,16 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * Whether the last {@link #compile} declared a packed float-array boundary type, i.e.
-	 * whether the emitted class needs {@link #runtimeClassFiles()} beside it.
+	 * whether the emitted class needs the handle half of {@link #runtimeClassFiles()}
+	 * beside it.
 	 */
 	private boolean needsHandleRuntime;
+
+	/**
+	 * Whether the last {@link #compile} serves HTTP, i.e. whether the emitted class needs
+	 * the served-request half of {@link #runtimeClassFiles()} beside it.
+	 */
+	private boolean needsHttpRuntime;
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -342,18 +349,30 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * The runtime class files the compiled class needs BESIDE it — the packed float-array
-	 * handle a {@code :float-vector} / {@code :float-matrix} export hands out, and its
-	 * marshalling seam. Empty unless the program declared one of those designators, so an
-	 * ordinary compilation still produces exactly one file.
+	 * handle a {@code :float-vector} / {@code :float-matrix} export hands out with its
+	 * marshalling seam, and the embedded HTTP server a {@code rontolisp:http-handler}
+	 * program serves through. Empty unless the program does one of those, so an ordinary
+	 * compilation still produces exactly one file.
 	 *
 	 * <p>
 	 * They are written at their canonical names rather than renamed into the program's
-	 * package, because two rontolisp libraries have to agree on a boundary TYPE for a
-	 * caller to chain them ({@code .kb/jvm-export.md}). Valid after {@link #compile}.
+	 * package ({@link JvmRuntimeClassFiles}), and the {@code runtime} package they come
+	 * from imports nothing, which is what makes the output run with no rontolisp jar on
+	 * the classpath ({@code .kb/jvm-export.md}). Valid after {@link #compile}.
 	 * @return each class file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
-		return this.needsHandleRuntime ? JvmExportRuntimeBuilder.runtimeClassFiles() : Map.of();
+		if (!this.needsHandleRuntime && !this.needsHttpRuntime) {
+			return Map.of();
+		}
+		Map<String, byte[]> files = new LinkedHashMap<>();
+		if (this.needsHandleRuntime) {
+			files.putAll(JvmExportRuntimeBuilder.runtimeClassFiles());
+		}
+		if (this.needsHttpRuntime) {
+			files.putAll(JvmHttpHandlerRuntimeBuilder.runtimeClassFiles());
+		}
+		return Map.copyOf(files);
 	}
 
 	@Override
@@ -854,9 +873,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_UPGRADE));
 		// rontolisp:http-handler reuses the same "the generated class implements the
-		// interface" mechanism: the class implements HttpHandlerSupport.Handler, the
+		// interface" mechanism: the class implements RontoHttpServer.Handler, the
 		// directive stores the handler funcref in a static field and calls
-		// HttpHandlerSupport.serve(port, new Prog()), and the injected handle() method
+		// RontoHttpServer.serve(port, new Prog()), and the injected handle() method
 		// marshals the request/response plists through the _invoke_1 dispatcher.
 		// The async runtime is a third user: the class implements Runnable and
 		// _async_run does `new Prog()` per spawned body.
@@ -1015,7 +1034,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// hash-free program can still reference _hashP -- and forcedGroups carries the
 		// previous run's verdict when it did (see compile(List)).
 		// http-handler forces the group on: the Clack environment's :headers value is a
-		// hash table (built by HttpHandlerJvmRuntime in the _hash* runtime's HashMap
+		// hash table (built by RontoHttpClack in the _hash* runtime's HashMap
 		// representation), whether or not the program's own source names a hash op.
 		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH) || usesHttpHandler;
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
@@ -1354,6 +1373,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// representation is aref/length over its argument), so the declaration forces the
 		// packed float-array runtime on exactly as a #d(...) literal would.
 		this.needsHandleRuntime = JvmExportRuntimeBuilder.needsFloatArray(exportDecls);
+		// A served program calls the embedded server and the Clack glue, so those class
+		// files travel with the output and it runs on a bare `java -cp .`.
+		this.needsHttpRuntime = usesHttpHandler;
 		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime;
 
 		// Whether the program can produce a packed integer vector (a #N@(...) literal
@@ -3257,7 +3279,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (needsInstanceCtor) {
 					// No-arg constructor: super(). _tlsConnect does `new Prog()` for the
 					// :insecure trust-all manager; the http-handler directive does the
-					// same for the HttpHandlerSupport.Handler instance.
+					// same for the RontoHttpServer.Handler instance.
 					Utf8Constant initName = java.util.Objects.requireNonNull(instanceInitName);
 					Utf8Constant initDesc = java.util.Objects.requireNonNull(instanceInitDesc);
 					int objectInitIdx = java.util.Objects.requireNonNull(objectInitRef).index();
@@ -3301,7 +3323,7 @@ public final class JvmLispCompiler implements LispCompiler {
 										.writeU2(0))));
 				}
 				if (httpHandlerRuntime != null) {
-					// handle(Request): the HttpHandlerSupport.Handler implementation
+					// handle(Request): the RontoHttpServer.Handler implementation
 					// adapting each incoming request to the compiled Lisp handler.
 					JvmHttpHandlerRuntimeBuilder.HandleMethod hm = httpHandlerRuntime.handle();
 					methods.add(AccessFlag.ACC_PUBLIC, hm.name(), hm.desc(),
@@ -3549,7 +3571,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				roots.add("checkServerTrusted");
 				roots.add("getAcceptedIssuers");
 			}
-			// HttpHandlerSupport invokes handle through the Handler interface, another
+			// RontoHttpServer invokes handle through the Handler interface, another
 			// edge the call-graph tree-shaker cannot see.
 			if (usesHttpHandler) {
 				roots.add("handle");

@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.runtime.RontoClackEnv;
 
 /**
  * The single source of truth for the SERVER-side HTTP value model: the environment plist
@@ -15,12 +16,15 @@ import am.ik.rontolisp.PackageRegistry;
  * {@code clack.handler.rontolisp} converts nothing per request.
  *
  * <p>
- * The KEY SET and its order are declared once, here; every backend loops {@link #FIELDS}
- * and supplies only the per-field value, which is the one part that cannot be shared (the
- * interpreter and the JVM read a JDK {@code HttpExchange}, the WASI component reads a
- * {@code wasi:http} request resource). A consumer that switches over the fields must
- * throw on an unknown one, so adding a key here fails each backend loudly until its value
- * extraction is supplied:
+ * The KEY SET and its order are declared once, in {@link RontoClackEnv} -- which this
+ * class re-exports name for name, and which lives in {@code runtime} only because the JVM
+ * backend's builder reads it at RUN time and travels with the compiled program
+ * ({@code .kb/jvm-export.md}). Every backend loops {@link #FIELDS} and supplies only the
+ * per-field value, which is the one part that cannot be shared (the interpreter and the
+ * JVM read a JDK {@code HttpExchange}, the WASI component reads a {@code wasi:http}
+ * request resource). A consumer that switches over the fields must throw on an unknown
+ * one, so adding a key here fails each backend loudly until its value extraction is
+ * supplied:
  *
  * <ul>
  * <li><strong>Interpreter</strong> -- {@code LispEvaluator.buildClackEnv}.</li>
@@ -60,54 +64,52 @@ import am.ik.rontolisp.PackageRegistry;
 public final class ClackEnv {
 
 	/** {@code :request-method} -- the upcased method keyword ({@code :GET}). */
-	public static final String REQUEST_METHOD = ":REQUEST-METHOD";
+	public static final String REQUEST_METHOD = RontoClackEnv.REQUEST_METHOD;
 
 	/** {@code :script-name} -- always the empty string, never nil. */
-	public static final String SCRIPT_NAME = ":SCRIPT-NAME";
+	public static final String SCRIPT_NAME = RontoClackEnv.SCRIPT_NAME;
 
 	/** {@code :path-info} -- the percent-decoded path, no query. */
-	public static final String PATH_INFO = ":PATH-INFO";
+	public static final String PATH_INFO = RontoClackEnv.PATH_INFO;
 
 	/** {@code :query-string} -- the raw text after the first {@code ?}, or nil. */
-	public static final String QUERY_STRING = ":QUERY-STRING";
+	public static final String QUERY_STRING = RontoClackEnv.QUERY_STRING;
 
 	/** {@code :server-name} -- the {@code Host} host part, else the bind address. */
-	public static final String SERVER_NAME = ":SERVER-NAME";
+	public static final String SERVER_NAME = RontoClackEnv.SERVER_NAME;
 
 	/** {@code :server-port} -- an integer. */
-	public static final String SERVER_PORT = ":SERVER-PORT";
+	public static final String SERVER_PORT = RontoClackEnv.SERVER_PORT;
 
 	/** {@code :server-protocol} -- {@code :HTTP/1.1} or {@code :HTTP/1.0}. */
-	public static final String SERVER_PROTOCOL = ":SERVER-PROTOCOL";
+	public static final String SERVER_PROTOCOL = RontoClackEnv.SERVER_PROTOCOL;
 
 	/** {@code :request-uri} -- the request target verbatim, still encoded. */
-	public static final String REQUEST_URI = ":REQUEST-URI";
+	public static final String REQUEST_URI = RontoClackEnv.REQUEST_URI;
 
 	/** {@code :url-scheme} -- {@code "http"} or {@code "https"}. */
-	public static final String URL_SCHEME = ":URL-SCHEME";
+	public static final String URL_SCHEME = RontoClackEnv.URL_SCHEME;
 
 	/** {@code :remote-addr} -- the peer address, or nil. */
-	public static final String REMOTE_ADDR = ":REMOTE-ADDR";
+	public static final String REMOTE_ADDR = RontoClackEnv.REMOTE_ADDR;
 
 	/** {@code :remote-port} -- the peer port, or nil. */
-	public static final String REMOTE_PORT = ":REMOTE-PORT";
+	public static final String REMOTE_PORT = RontoClackEnv.REMOTE_PORT;
 
 	/** {@code :headers} -- an {@code equal} table, lowercased names, never nil. */
-	public static final String HEADERS = ":HEADERS";
+	public static final String HEADERS = RontoClackEnv.HEADERS;
 
 	/** {@code :content-type} -- the full header value, or nil. */
-	public static final String CONTENT_TYPE = ":CONTENT-TYPE";
+	public static final String CONTENT_TYPE = RontoClackEnv.CONTENT_TYPE;
 
 	/** {@code :content-length} -- an integer, or nil. */
-	public static final String CONTENT_LENGTH = ":CONTENT-LENGTH";
+	public static final String CONTENT_LENGTH = RontoClackEnv.CONTENT_LENGTH;
 
 	/** {@code :raw-body} -- the request body stream, or nil when there is none. */
-	public static final String RAW_BODY = ":RAW-BODY";
+	public static final String RAW_BODY = RontoClackEnv.RAW_BODY;
 
 	/** The environment keys, in cons order. */
-	public static final List<String> FIELDS = List.of(REQUEST_METHOD, SCRIPT_NAME, PATH_INFO, QUERY_STRING, SERVER_NAME,
-			SERVER_PORT, SERVER_PROTOCOL, REQUEST_URI, URL_SCHEME, REMOTE_ADDR, REMOTE_PORT, HEADERS, CONTENT_TYPE,
-			CONTENT_LENGTH, RAW_BODY);
+	public static final List<String> FIELDS = RontoClackEnv.FIELDS;
 
 	/**
 	 * The Clack response normalizer defun in {@code http-server.lisp} (member name,

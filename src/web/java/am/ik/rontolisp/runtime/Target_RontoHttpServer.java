@@ -1,10 +1,10 @@
-package am.ik.rontolisp.eval;
+package am.ik.rontolisp.runtime;
 
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 
 /**
- * Web Image substitution for {@link HttpHandlerSupport}. The browser playground compiles
+ * Web Image substitution for {@link RontoHttpServer}. The browser playground compiles
  * the interpreter to WebAssembly with GraalVM Web Image, where the JDK
  * {@code com.sun.net.httpserver.HttpServer} cannot be compiled (the browser sandbox
  * provides no host server socket). The interpreter only ever reaches {@link #serve} (the
@@ -15,38 +15,40 @@ import com.oracle.svm.core.annotate.TargetClass;
  * {@code java.lang.VirtualThread} scheduling code, which Web Image's points-to analysis
  * cannot compile for the {@code svm-wasm} platform -- out of the image; it is compiled
  * only under the {@code web} Maven profile (it lives in {@code src/web/java}), and the JVM
- * and regular native-image builds use the real {@link HttpHandlerSupport}.
+ * and regular native-image builds use the real {@link RontoHttpServer}. The failure is the
+ * runtime package's own exception, which the interpreter's call site turns into a Lisp
+ * error -- this package imports nothing of the project's.
  */
-@TargetClass(HttpHandlerSupport.class)
-final class Target_HttpHandlerSupport {
+@TargetClass(RontoHttpServer.class)
+final class Target_RontoHttpServer {
 
 	@Substitute
-	static void serve(int port, HttpHandlerSupport.Handler handler) {
-		throw new LispEvalException(
+	static void serve(int port, RontoHttpServer.Handler handler) {
+		throw new RontoHttpServer.ServerException(
 				"http-handler: serving HTTP is not supported in the browser playground");
 	}
 
 	@Substitute
-	static long startServer(int port, Object address, HttpHandlerSupport.Handler handler) {
-		throw new LispEvalException(
+	static long startServer(int port, Object address, RontoHttpServer.Handler handler) {
+		throw new RontoHttpServer.ServerException(
 				"http-handler: serving HTTP is not supported in the browser playground");
 	}
 
 	@Substitute
 	static void joinServer(long handle) {
-		throw new LispEvalException(
+		throw new RontoHttpServer.ServerException(
 				"http-handler: serving HTTP is not supported in the browser playground");
 	}
 
 	@Substitute
 	static void stopServer(long handle) {
-		throw new LispEvalException(
+		throw new RontoHttpServer.ServerException(
 				"http-handler: serving HTTP is not supported in the browser playground");
 	}
 
 	@Substitute
 	static long serverPort(long handle) {
-		throw new LispEvalException(
+		throw new RontoHttpServer.ServerException(
 				"http-handler: serving HTTP is not supported in the browser playground");
 	}
 

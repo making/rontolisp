@@ -1,4 +1,4 @@
-package am.ik.rontolisp.eval;
+package am.ik.rontolisp.runtime;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -6,28 +6,25 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 
-import am.ik.rontolisp.compiler.ClackEnv;
-import am.ik.rontolisp.compiler.JvmHashTableShape;
-import org.jspecify.annotations.Nullable;
-
 /**
  * The JVM backend's per-request Clack glue, called from the emitted
- * {@code handle(Request)} method. A compiled {@code rontolisp:http-handler} class is not
- * standalone (it needs the rontolisp jar on the runtime classpath -- documented since the
- * directive shipped), so the environment construction and the response marshalling run as
- * real Java here instead of hand-assembled bytecode: the same speed, none of the
- * hand-written {@code maxStack} risk. The emitted method keeps only what must be
- * bytecode: the {@code :raw-body} construction (the buffered stream is the compiled
- * {@code %http-body-stream} Gray instance), the handler dispatch through
- * {@code _invoke_1}/{@code _await}, and the compiled {@code %http-normalize-response}
- * call, whose delayed-response arm must {@code funcall} back into compiled code.
+ * {@code handle(Request)} method: the environment construction and the response
+ * marshalling run as real Java here instead of hand-assembled bytecode -- the same speed,
+ * none of the hand-written {@code maxStack} risk. It is in {@code runtime}, and imports
+ * nothing of the project's, so that it TRAVELS with the compiled class
+ * ({@code .kb/jvm-export.md}) and the program runs on a bare {@code java -cp .}. The
+ * emitted method keeps only what must be bytecode: the {@code :raw-body} construction
+ * (the buffered stream is the compiled {@code %http-body-stream} Gray instance), the
+ * handler dispatch through {@code _invoke_1}/{@code _await}, and the compiled
+ * {@code %http-normalize-response} call, whose delayed-response arm must {@code funcall}
+ * back into compiled code.
  *
  * <p>
  * Everything here speaks the JVM backend's RUNTIME VALUE REPRESENTATION: nil is
  * {@code null}, a cons is an {@code Object[2]}, an integer is a {@code Long}, a string is
  * its quote-wrapped text, a symbol its bare name, and a hash table is a bucket index
- * built through {@link JvmHashTableShape} -- the ONE declaration of that shape, shared
- * with the emitter of the {@code _hash*} helpers, so the table this builds and the table
+ * built through {@link RontoHashTable} -- the ONE declaration of that shape, shared with
+ * the emitter of the {@code _hash*} helpers, so the table this builds and the table
  * compiled code builds cannot drift apart. The table class is exact, not merely
  * map-shaped: the emitted helpers cast to it and both {@code hash-table-p} and the
  * printer key off it, so a plain {@code HashMap} here would fail the cast at the first
@@ -35,13 +32,13 @@ import org.jspecify.annotations.Nullable;
  * {@code JvmHashRuntimeBuilderTest#theHandwrittenRuntimeBuildsTheSameTableClass}).
  *
  * <p>
- * The environment's KEY SET and order are {@link ClackEnv#FIELDS}; only the per-field
- * value extraction is this backend's, and an unmapped field throws -- the same drift
- * guard every backend applies to the same declaration.
+ * The environment's KEY SET and order are {@link RontoClackEnv#FIELDS}; only the
+ * per-field value extraction is this backend's, and an unmapped field throws -- the same
+ * drift guard every backend applies to the same declaration.
  */
-public final class HttpHandlerJvmRuntime {
+public final class RontoHttpClack {
 
-	private HttpHandlerJvmRuntime() {
+	private RontoHttpClack() {
 	}
 
 	/**
@@ -49,27 +46,29 @@ public final class HttpHandlerJvmRuntime {
 	 * representation.
 	 * @param request the transport facts
 	 * @param rawBody the ready {@code :raw-body} value (the emitted code constructs it:
-	 * nil, the asynchronous stream, or the compiled Gray instance)
-	 * @return the environment plist ({@code Object[2]} cons chain; declared nullable only
-	 * for the accumulator's sake -- fifteen fields always cons at least one cell)
+	 * nil -- which is a real {@code null} in this representation -- the asynchronous
+	 * stream, or the compiled Gray instance)
+	 * @return the environment plist ({@code Object[2]} cons chain)
 	 */
-	public static @Nullable Object buildEnv(HttpHandlerSupport.Request request, @Nullable Object rawBody) {
+	public static Object buildEnv(RontoHttpServer.Request request, Object rawBody) {
 		String target = request.target();
 		int q = target.indexOf('?');
 		String path = q < 0 ? target : target.substring(0, q);
 		Object query = q < 0 ? null : quote(target.substring(q + 1));
 		// The header table: lowercased names, repeated headers joined with ", " in wire
 		// order (the Clack handler-backend rule), never nil.
-		LinkedHashMap<Object, Object> headers = JvmHashTableShape.newTable();
-		String host = null;
-		String contentType = null;
-		String contentLength = null;
-		for (HttpHandlerSupport.Header header : request.headers()) {
+		LinkedHashMap<Object, Object> headers = RontoHashTable.newTable();
+		// "" is "the header was not sent" throughout: this package carries no @Nullable
+		// (see RontoHashTable), and no HTTP header value that matters here is empty.
+		String host = "";
+		String contentType = "";
+		String contentLength = "";
+		for (RontoHttpServer.Header header : request.headers()) {
 			String name = header.name().toLowerCase(Locale.ROOT);
 			String key = quote(name);
-			Object seen = JvmHashTableShape.get(headers, key);
-			String value = seen == null ? header.value() : unquote((String) seen) + ", " + header.value();
-			JvmHashTableShape.put(headers, key, quote(value));
+			Object seen = RontoHashTable.get(headers, key, "");
+			String value = ((String) seen).isEmpty() ? header.value() : unquote((String) seen) + ", " + header.value();
+			RontoHashTable.put(headers, key, quote(value));
 			switch (name) {
 				case "host" -> host = value;
 				case "content-type" -> contentType = value;
@@ -80,7 +79,7 @@ public final class HttpHandlerJvmRuntime {
 		}
 		String serverName = request.localName();
 		long serverPort = request.localPort();
-		if (host != null) {
+		if (!host.isEmpty()) {
 			int colon = host.lastIndexOf(':');
 			String tail = colon < 0 ? "" : host.substring(colon + 1);
 			if (colon >= 0 && !tail.isEmpty() && tail.chars().allMatch(Character::isDigit)) {
@@ -91,41 +90,53 @@ public final class HttpHandlerJvmRuntime {
 				serverName = host;
 			}
 		}
-		// The plist, built back-to-front so it comes out in ClackEnv.FIELDS order --
+		// :content-length is an integer, or nil (null in this representation) when the
+		// header was absent or carried no leading digits.
+		Object contentLengthValue = null;
+		int digits = 0;
+		while (digits < contentLength.length() && Character.isDigit(contentLength.charAt(digits))) {
+			digits++;
+		}
+		if (digits > 0) {
+			contentLengthValue = Long.valueOf(Long.parseLong(contentLength.substring(0, digits)));
+		}
+		// The plist, built back-to-front so it comes out in RontoClackEnv.FIELDS order --
 		// freshly consed and proper on every request (lack-request rplacds its last
 		// cons, the mount / session middleware setf getf into it).
 		Object plist = null;
-		List<String> fields = ClackEnv.FIELDS;
+		List<String> fields = RontoClackEnv.FIELDS;
 		for (int i = fields.size() - 1; i >= 0; i--) {
 			String field = fields.get(i);
 			Object value = switch (field) {
-				case ClackEnv.REQUEST_METHOD -> ":" + request.method().toUpperCase(Locale.ROOT);
-				case ClackEnv.SCRIPT_NAME -> quote("");
-				case ClackEnv.PATH_INFO -> quote(LispEvaluator.percentDecode(path));
-				case ClackEnv.QUERY_STRING -> query;
-				case ClackEnv.SERVER_NAME -> quote(serverName == null ? "localhost" : serverName);
-				case ClackEnv.SERVER_PORT -> serverPort == 0 ? Long.valueOf(80) : serverPort;
-				case ClackEnv.SERVER_PROTOCOL -> ":" + request.protocol().toUpperCase(Locale.ROOT);
-				case ClackEnv.REQUEST_URI -> quote(target);
-				case ClackEnv.URL_SCHEME -> quote(request.scheme());
-				case ClackEnv.REMOTE_ADDR -> request.remoteAddr() == null ? null : quote(request.remoteAddr());
-				case ClackEnv.REMOTE_PORT -> request.remotePort() == 0 ? null : Long.valueOf(request.remotePort());
-				case ClackEnv.HEADERS -> headers;
-				case ClackEnv.CONTENT_TYPE -> contentType == null ? null : quote(contentType);
-				case ClackEnv.CONTENT_LENGTH -> parseContentLength(contentLength);
-				case ClackEnv.RAW_BODY -> rawBody;
+				case RontoClackEnv.REQUEST_METHOD -> ":" + request.method().toUpperCase(Locale.ROOT);
+				case RontoClackEnv.SCRIPT_NAME -> quote("");
+				case RontoClackEnv.PATH_INFO -> quote(percentDecode(path));
+				case RontoClackEnv.QUERY_STRING -> query;
+				case RontoClackEnv.SERVER_NAME -> quote(serverName.isEmpty() ? "localhost" : serverName);
+				case RontoClackEnv.SERVER_PORT -> serverPort == 0 ? Long.valueOf(80) : serverPort;
+				case RontoClackEnv.SERVER_PROTOCOL -> ":" + request.protocol().toUpperCase(Locale.ROOT);
+				case RontoClackEnv.REQUEST_URI -> quote(target);
+				case RontoClackEnv.URL_SCHEME -> quote(request.scheme());
+				case RontoClackEnv.REMOTE_ADDR -> request.remoteAddr().isEmpty() ? null : quote(request.remoteAddr());
+				case RontoClackEnv.REMOTE_PORT -> request.remotePort() == 0 ? null : Long.valueOf(request.remotePort());
+				case RontoClackEnv.HEADERS -> headers;
+				case RontoClackEnv.CONTENT_TYPE -> contentType.isEmpty() ? null : quote(contentType);
+				case RontoClackEnv.CONTENT_LENGTH -> contentLengthValue;
+				case RontoClackEnv.RAW_BODY -> rawBody;
 				default -> throw new IllegalStateException(
 						"http-handler has no JVM extraction for environment field " + field);
 			};
 			plist = new Object[] { field, new Object[] { value, plist } };
 		}
-		return plist;
+		// Fifteen fields always cons at least one cell, so the accumulator's nil start is
+		// gone by here.
+		return java.util.Objects.requireNonNull(plist);
 	}
 
 	/**
 	 * Marshals the canonical response triple the compiled
 	 * {@code %http-normalize-response} returned -- {@code (status header-alist body)} in
-	 * the JVM runtime representation -- into the {@link HttpHandlerSupport.Response} the
+	 * the JVM runtime representation -- into the {@link RontoHttpServer.Response} the
 	 * server writes.
 	 * @param triple the normalized response triple
 	 * @param drainedBody the triple's body after the emitted {@code _drain_body} pass (a
@@ -133,17 +144,17 @@ public final class HttpHandlerJvmRuntime {
 	 * as the packed vector the normalizer deliberately did not flatten)
 	 * @return the response to write back
 	 */
-	public static HttpHandlerSupport.Response toResponse(Object triple, @Nullable Object drainedBody) {
+	public static RontoHttpServer.Response toResponse(Object triple, Object drainedBody) {
 		Object[] cons = (Object[]) triple;
 		int status = (int) ((Long) cons[0]).longValue();
 		Object[] rest = (Object[]) cons[1];
-		List<HttpHandlerSupport.Header> headers = new ArrayList<>();
+		List<RontoHttpServer.Header> headers = new ArrayList<>();
 		Object cursor = rest[0];
 		while (cursor instanceof Object[] cell) {
 			// Each entry is a (name . value) pair of quoted strings; the normalizer
 			// already lowercased the names and dropped the framing headers.
 			if (cell[0] instanceof Object[] pair && pair[0] instanceof String name && pair[1] instanceof String value) {
-				headers.add(new HttpHandlerSupport.Header(unquote(name), unquote(value)));
+				headers.add(new RontoHttpServer.Header(unquote(name), unquote(value)));
 			}
 			cursor = cell[1];
 		}
@@ -155,7 +166,7 @@ public final class HttpHandlerJvmRuntime {
 			case long[] octets -> octetsBytes(octets);
 			case null, default -> EMPTY_BODY;
 		};
-		return new HttpHandlerSupport.Response(status, headers, body);
+		return new RontoHttpServer.Response(status, headers, body);
 	}
 
 	private static final byte[] EMPTY_BODY = new byte[0];
@@ -170,7 +181,7 @@ public final class HttpHandlerJvmRuntime {
 	 * @param request the served request
 	 * @return the body octets, {@code long[]{8, e0, ...}}
 	 */
-	public static long[] bodyOctets(HttpHandlerSupport.Request request) {
+	public static long[] bodyOctets(RontoHttpServer.Request request) {
 		byte[] bytes = request.body();
 		long[] out = new long[bytes.length + 1];
 		out[0] = 8;
@@ -190,15 +201,35 @@ public final class HttpHandlerJvmRuntime {
 		return out;
 	}
 
-	private static @Nullable Object parseContentLength(@Nullable String value) {
-		if (value == null) {
-			return null;
+	/**
+	 * Percent-decodes a request path. Lenient (a {@code %} not followed by two hex digits
+	 * stays literal -- a request target is attacker input) and never decodes {@code +},
+	 * which is a query-string rule; {@code http-server.lisp}'s
+	 * {@code %http-percent-decode} is the same function for the component backend, and
+	 * the interpreter calls this one.
+	 * @param s the raw path
+	 * @return the decoded path
+	 */
+	public static String percentDecode(String s) {
+		if (s.indexOf('%') < 0) {
+			return s;
 		}
-		int end = 0;
-		while (end < value.length() && Character.isDigit(value.charAt(end))) {
-			end++;
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(s.length());
+		int i = 0;
+		while (i < s.length()) {
+			char c = s.charAt(i);
+			int hi = i + 2 < s.length() && c == '%' ? Character.digit(s.charAt(i + 1), 16) : -1;
+			int lo = hi < 0 ? -1 : Character.digit(s.charAt(i + 2), 16);
+			if (lo >= 0) {
+				out.write((hi << 4) + lo);
+				i += 3;
+			}
+			else {
+				out.writeBytes(String.valueOf(c).getBytes(StandardCharsets.UTF_8));
+				i++;
+			}
 		}
-		return end == 0 ? null : Long.parseLong(value.substring(0, end));
+		return out.toString(StandardCharsets.UTF_8);
 	}
 
 	private static String quote(String s) {

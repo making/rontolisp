@@ -131,21 +131,8 @@ final class JvmExportRuntimeBuilder {
 
 	/**
 	 * The class files of {@code am.ik.rontolisp.runtime} that travel BESIDE a compiled
-	 * library that hands out a packed float-array handle.
-	 *
-	 * <p>
-	 * They are copied verbatim, at their canonical names — NOT renamed into the program's
-	 * package the way the acceleration bridges are
-	 * ({@code .kb/template-class-embedding.md}). The rename is what makes a bridge
-	 * private to one program, and privacy is exactly wrong for a boundary TYPE: two
-	 * rontolisp libraries must agree on the handle class or a caller cannot feed one
-	 * library's result to the other's kernel. One canonical name, identical bytes, and a
-	 * jar that still has no dependency ({@code .kb/jvm-export.md}, "Where the handle type
-	 * comes from").
-	 *
-	 * <p>
-	 * {@code package-info.class} is deliberately absent: it carries only the build's
-	 * nullness annotation, which is the compiler's business and not the artifact's.
+	 * library that hands out a packed float-array handle. How they travel, and why at
+	 * their canonical names: {@link JvmRuntimeClassFiles}.
 	 */
 	static final List<String> RUNTIME_CLASS_FILES = List.of("am/ik/rontolisp/runtime/RontoBoundary.class",
 			"am/ik/rontolisp/runtime/RontoFloatArray.class", "am/ik/rontolisp/runtime/RontoFloatArray$Width.class");
@@ -155,19 +142,7 @@ final class JvmExportRuntimeBuilder {
 	 * @return each class file's path within an output tree (or jar), mapped to its bytes
 	 */
 	static Map<String, byte[]> runtimeClassFiles() {
-		Map<String, byte[]> files = new java.util.LinkedHashMap<>();
-		for (String path : RUNTIME_CLASS_FILES) {
-			try (java.io.InputStream in = JvmExportRuntimeBuilder.class.getClassLoader().getResourceAsStream(path)) {
-				if (in == null) {
-					throw new IllegalStateException(path + " not found on the classpath");
-				}
-				files.put(path, in.readAllBytes());
-			}
-			catch (java.io.IOException ex) {
-				throw new java.io.UncheckedIOException(ex);
-			}
-		}
-		return Map.copyOf(files);
+		return JvmRuntimeClassFiles.read(RUNTIME_CLASS_FILES);
 	}
 
 	/** The rank a packed float-array designator declares. */

@@ -16,6 +16,8 @@ import java.time.Duration;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.runtime.RontoHttpClack;
+import am.ik.rontolisp.runtime.RontoHttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -24,8 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests for {@code rontolisp:http-handler} on the JVM backend: the compiled class
- * implements {@link HttpHandlerSupport.Handler} and the directive serves requests through
- * {@link HttpHandlerSupport#serve} using the same request/response property lists as the
+ * implements {@link RontoHttpServer.Handler} and the directive serves requests through
+ * {@link RontoHttpServer#serve} using the same request/response property lists as the
  * interpreter. Lives in this package so {@code stopAllForTesting} can shut the servers
  * down.
  */
@@ -36,7 +38,34 @@ class HttpHandlerJvmTest {
 
 	@AfterEach
 	void shutDownServers() {
-		HttpHandlerSupport.stopAllForTesting();
+		RontoHttpServer.stopAllForTesting();
+	}
+
+	@Test
+	@SuppressWarnings("NullAway") // buildEnv is called from bytecode, where nil IS null
+	void anUnknownPeerAndBindAddressStillReachTheEnvironmentAsNilAndLocalhost() {
+		// RontoHttpServer.Request spells "the transport does not know" as "", because the
+		// travelling package has no @Nullable to spell a null with -- so every consumer
+		// has to translate it back. Getting that wrong would put a bare "" in the
+		// environment where Clack requires nil (:remote-addr) or a host (:server-name).
+		Object env = RontoHttpClack.buildEnv(RontoHttpServer.Request.of("GET", "/", java.util.List.of(), ""), null);
+
+		assertThat(plistGet(env, ":REMOTE-ADDR")).isNull();
+		assertThat(plistGet(env, ":REMOTE-PORT")).isNull();
+		assertThat(plistGet(env, ":SERVER-NAME")).isEqualTo("\"localhost\"");
+	}
+
+	// Walks the JVM runtime representation of a plist: an Object[2] cons chain.
+	private static Object plistGet(Object plist, String key) {
+		Object cursor = plist;
+		while (cursor instanceof Object[] cell) {
+			Object[] rest = (Object[]) cell[1];
+			if (key.equals(cell[0])) {
+				return rest[0];
+			}
+			cursor = rest[1];
+		}
+		throw new IllegalStateException("no " + key + " in the environment plist");
 	}
 
 	// A free TCP port (bound then released; a tiny race, acceptable for tests).
@@ -241,7 +270,7 @@ class HttpHandlerJvmTest {
 
 	@Test
 	void compiledDirectiveSurvivesOptimize() throws Exception {
-		// --optimize (JvmClassShaker) must keep handle(): HttpHandlerSupport invokes it
+		// --optimize (JvmClassShaker) must keep handle(): RontoHttpServer invokes it
 		// through the Handler interface, an edge the call-graph shaker cannot see.
 		int port = freePort();
 		compileAndServeInBackground("""

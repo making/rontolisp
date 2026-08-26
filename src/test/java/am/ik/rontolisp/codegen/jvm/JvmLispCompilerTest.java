@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -9130,8 +9131,8 @@ class JvmLispCompilerTest {
 
 	// The serving round trip lives in HttpHandlerJvmTest (eval package, where the test
 	// server shutdown seam is accessible); this pins the class-level design: the
-	// generated class itself implements HttpHandlerSupport.Handler (like the
-	// tls-connect X509TrustManager trick) so HttpHandlerSupport.serve can drive it.
+	// generated class itself implements RontoHttpServer.Handler (like the
+	// tls-connect X509TrustManager trick) so RontoHttpServer.serve can drive it.
 	@Test
 	void compileHttpHandlerImplementsHandlerInterface() throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
@@ -9145,8 +9146,8 @@ class JvmLispCompilerTest {
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {
 			Class<?> clazz = loader.loadClass("Test");
-			assertThat(am.ik.rontolisp.eval.HttpHandlerSupport.Handler.class).isAssignableFrom(clazz);
-			assertThat(clazz.getMethod("handle", am.ik.rontolisp.eval.HttpHandlerSupport.Request.class)).isNotNull();
+			assertThat(am.ik.rontolisp.runtime.RontoHttpServer.Handler.class).isAssignableFrom(clazz);
+			assertThat(clazz.getMethod("handle", am.ik.rontolisp.runtime.RontoHttpServer.Request.class)).isNotNull();
 		}
 	}
 

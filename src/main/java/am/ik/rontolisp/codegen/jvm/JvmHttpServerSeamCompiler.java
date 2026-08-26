@@ -16,7 +16,7 @@ import am.ik.rontolisp.LispVal;
  * {@code _httpHandlerFn} static field the injected {@code handle(Request)} method
  * dispatches through (the same single-handler slot as the directive -- one clack server
  * per process, documented in the shim), and calls
- * {@code HttpHandlerSupport.startServer(port, address, new Prog())}, which returns the
+ * {@code RontoHttpServer.startServer(port, address, new Prog())}, which returns the
  * opaque long handle {@code %http-server-join} / {@code %http-server-stop} /
  * {@code %http-server-port} take back. The address argument is passed as the runtime
  * value (a quote-wrapped string or null); {@code startServer} unwraps it.
@@ -24,7 +24,7 @@ import am.ik.rontolisp.LispVal;
 final class JvmHttpServerSeamCompiler {
 
 	/** The internal name of the interpreter-shared HTTP server support class. */
-	private static final String SUPPORT_CLASS = "am/ik/rontolisp/eval/HttpHandlerSupport";
+	private static final String SUPPORT_CLASS = "am/ik/rontolisp/runtime/RontoHttpServer";
 
 	private JvmHttpServerSeamCompiler() {
 	}
@@ -67,7 +67,7 @@ final class JvmHttpServerSeamCompiler {
 			// address (runtime value: a quote-wrapped string or null; startServer
 			// unwraps)
 			JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
-			// HttpHandlerSupport.startServer(port, address, new Prog())
+			// RontoHttpServer.startServer(port, address, new Prog())
 			ctx.emit(Opcode.NEW);
 			ctx.emitU2(runtime.progClass().index());
 			ctx.emit(Opcode.DUP);

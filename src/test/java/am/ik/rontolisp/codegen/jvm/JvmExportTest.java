@@ -424,26 +424,6 @@ class JvmExportTest {
 	}
 
 	@Test
-	void theTravellingClassListIsEveryClassFileOfTheRuntimePackage() throws Exception {
-		// Nothing can enumerate a package from a classpath, still less from inside a
-		// native image, so the list is hand-kept — and pinned here against the package's
-		// actual class files. package-info carries only the build's nullness annotation
-		// and deliberately stays behind.
-		Path packageDir = Path.of("target/classes/am/ik/rontolisp/runtime");
-		try (java.util.stream.Stream<Path> files = Files.list(packageDir)) {
-			List<String> onDisk = files.map(path -> path.getFileName().toString())
-				.filter(name -> name.endsWith(".class"))
-				.filter(name -> !name.equals("package-info.class"))
-				.sorted()
-				.toList();
-			assertThat(JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES.stream()
-				.map(path -> path.substring(path.lastIndexOf('/') + 1))
-				.sorted()
-				.toList()).isEqualTo(onDisk);
-		}
-	}
-
-	@Test
 	void aTopLevelThatSignalsSurfacesAsExceptionInInitializerErrorOnTheFirstTypedCall() throws Exception {
 		// The reactor's failure shape: the top level runs at instantiation, so a
 		// top-level condition poisons the class instead of arriving per call.

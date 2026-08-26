@@ -170,6 +170,31 @@ class LispSourceSetTest {
 		assertThat(run(classes, "com.example.Report")).isEqualTo("3\n");
 	}
 
+	@Test
+	void aServingProgramGetsItsHttpRuntimeInTargetClasses() throws Exception {
+		Path source = this.project.resolve("src/main/lisp/com/example/Service.lisp");
+		Files.createDirectories(source.getParent());
+		Files.writeString(source, """
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain") (list (getf env :path-info))))
+
+				(rontolisp:http-handler 'handle 8080)
+				""");
+		Path classes = this.project.resolve("target/classes");
+
+		LispSourceSet.Result result = new LispSourceSet(this.project.resolve("src/main/lisp"), classes,
+				this.project.resolve("target/rontolisp/compile-status.txt"), false, compiler -> {
+				})
+			.compile();
+
+		assertThat(result.classes()).containsExactly("com.example.Service");
+		// The embedded server travels into the output directory too, so the built jar
+		// serves with no rontolisp jar on its classpath. Not running it here: it binds a
+		// port and blocks (JvmHttpHandlerTravellingRuntimeTest runs the served class).
+		assertThat(classes.resolve("am/ik/rontolisp/runtime/RontoHttpServer.class")).exists();
+		assertThat(classes.resolve("am/ik/rontolisp/runtime/RontoHttpClack.class")).exists();
+	}
+
 	private Path writeKernels() throws Exception {
 		Path source = this.project.resolve("src/main/lisp/com/example/Kernels.lisp");
 		Files.createDirectories(source.getParent());

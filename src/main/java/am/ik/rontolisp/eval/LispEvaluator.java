@@ -55,6 +55,8 @@ import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.runtime.RontoHttpClack;
+import am.ik.rontolisp.runtime.RontoHttpServer;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -86,7 +88,7 @@ public final class LispEvaluator {
 	 * Serializes every lazy load of a Lisp-source library / generated runtime into the
 	 * global environment, and every read of the flag that guards one. The evaluator is
 	 * SHARED across concurrently served requests (one virtual thread per request, see
-	 * {@link HttpHandlerSupport}), and the flags are set before the definitions are
+	 * {@link RontoHttpServer}), and the flags are set before the definitions are
 	 * installed -- so without this a request arriving mid-load skips the loader and then
 	 * fails to resolve the very function that is being defined. Reentrant: loading a
 	 * library evaluates its forms, which resolve further names through the same gates.
@@ -2193,7 +2195,16 @@ public final class LispEvaluator {
 			boolean bufferBody = httpHandlerBufferBody(args);
 			final LispVal handler = args.get(0);
 			ensureHttpServerLoaded();
-			HttpHandlerSupport.serve(port, request -> invokeHttpHandler(handler, request, bufferBody));
+			try {
+				RontoHttpServer.serve(port, request -> invokeHttpHandler(handler, request, bufferBody));
+			}
+			catch (RontoHttpServer.ServerException ex) {
+				// The server lives in the TRAVELLING runtime package, which carries no
+				// rontolisp import and so cannot raise a Lisp error itself; the
+				// interpreter is where its failure becomes one and handler-case can see
+				// it.
+				throw new LispEvalException(ex.reason());
+			}
 			return LispNil.INSTANCE; // serve() blocks forever; unreachable in practice
 		}));
 		// The stoppable HTTP server seam behind the clack-handler-rontolisp shim
@@ -2215,34 +2226,43 @@ public final class LispEvaluator {
 				throw new LispEvalException(
 						LispNames.HTTP_SERVER_START + " expects an integer port, got: " + args.get(1).print());
 			}
+			// "" is the wildcard: the server takes anything that is not a non-empty
+			// string that way, which is also how compiled bytecode's nil (a real null)
+			// arrives there.
 			String address = switch (args.get(2)) {
 				case LispString str -> str.value();
-				case LispNil ignored -> null;
+				case LispNil ignored -> "";
 				default -> throw new LispEvalException(LispNames.HTTP_SERVER_START
 						+ " expects a string (or nil) address, got: " + args.get(2).print());
 			};
 			ensureHttpServerLoaded();
-			long handle = HttpHandlerSupport.startServer((int) portArg.value(), address,
-					request -> invokeHttpHandler(handler, request, bufferBody));
+			final long handle;
+			try {
+				handle = RontoHttpServer.startServer((int) portArg.value(), address,
+						request -> invokeHttpHandler(handler, request, bufferBody));
+			}
+			catch (RontoHttpServer.ServerException ex) {
+				throw new LispEvalException(ex.reason());
+			}
 			return new LispInteger(handle);
 		}));
 		String httpServerJoinName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
 				LispNames.HTTP_SERVER_JOIN);
 		this.globalEnv.defineFunction(httpServerJoinName, new LispFunction(httpServerJoinName, args -> {
-			HttpHandlerSupport.joinServer(requireHttpServerHandle(LispNames.HTTP_SERVER_JOIN, args));
+			RontoHttpServer.joinServer(requireHttpServerHandle(LispNames.HTTP_SERVER_JOIN, args));
 			return LispNil.INSTANCE;
 		}));
 		String httpServerStopName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
 				LispNames.HTTP_SERVER_STOP);
 		this.globalEnv.defineFunction(httpServerStopName, new LispFunction(httpServerStopName, args -> {
-			HttpHandlerSupport.stopServer(requireHttpServerHandle(LispNames.HTTP_SERVER_STOP, args));
+			RontoHttpServer.stopServer(requireHttpServerHandle(LispNames.HTTP_SERVER_STOP, args));
 			return LispNil.INSTANCE;
 		}));
 		String httpServerPortName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
 				LispNames.HTTP_SERVER_PORT);
 		this.globalEnv.defineFunction(httpServerPortName, new LispFunction(httpServerPortName, args -> {
 			return new LispInteger(
-					HttpHandlerSupport.serverPort(requireHttpServerHandle(LispNames.HTTP_SERVER_PORT, args)));
+					RontoHttpServer.serverPort(requireHttpServerHandle(LispNames.HTTP_SERVER_PORT, args)));
 		}));
 		// The JSON functions live here because they dispatch to the Lisp-source
 		// library (JsonLibrary), evaluated into the global environment on first use.
@@ -8869,7 +8889,7 @@ public final class LispEvaluator {
 
 	// Adapts one incoming HTTP request to the Lisp handler: builds the request property
 	// list, applies the handler and reads the response property list back.
-	// The opaque %http-server-* handle: an integer index into HttpHandlerSupport's
+	// The opaque %http-server-* handle: an integer index into RontoHttpServer's
 	// handle table (the socket/mutex handle convention).
 	private static long requireHttpServerHandle(String fn, List<LispVal> args) {
 		if (args.size() != 1 || !(args.get(0) instanceof LispInteger handle)) {
@@ -8894,7 +8914,7 @@ public final class LispEvaluator {
 	 * stream
 	 * @return the response to write back
 	 */
-	private HttpHandlerSupport.Response invokeHttpHandler(LispVal handler, HttpHandlerSupport.Request request,
+	private RontoHttpServer.Response invokeHttpHandler(LispVal handler, RontoHttpServer.Request request,
 			boolean bufferBody) {
 		// :raw-body -- the default is rontolisp's asynchronous stream (one settled chunk;
 		// the server has already read the body), and :buffered is the Java-backed
@@ -8944,7 +8964,7 @@ public final class LispEvaluator {
 	 * an unmapped field fails loudly here -- the same drift guard every backend applies
 	 * to the same declaration.
 	 */
-	private LispVal buildClackEnv(HttpHandlerSupport.Request request, LispVal rawBody) {
+	private LispVal buildClackEnv(RontoHttpServer.Request request, LispVal rawBody) {
 		String target = request.target();
 		int q = target.indexOf('?');
 		String path = q < 0 ? target : target.substring(0, q);
@@ -8953,7 +8973,7 @@ public final class LispEvaluator {
 		// order (the Clack handler-backend rule), and never nil -- lack-request gethashes
 		// it unguarded.
 		LispHashTable headers = new LispHashTable(true);
-		for (HttpHandlerSupport.Header header : request.headers()) {
+		for (RontoHttpServer.Header header : request.headers()) {
 			LispString name = new LispString(header.name().toLowerCase(Locale.ROOT));
 			LispVal seen = headers.get(name, LispNil.INSTANCE);
 			headers.put(name, new LispString(
@@ -8980,15 +9000,17 @@ public final class LispEvaluator {
 			entries.add(switch (field) {
 				case ClackEnv.REQUEST_METHOD -> new LispSymbol(":" + request.method().toUpperCase(Locale.ROOT));
 				case ClackEnv.SCRIPT_NAME -> new LispString("");
-				case ClackEnv.PATH_INFO -> new LispString(percentDecode(path));
+				case ClackEnv.PATH_INFO -> new LispString(RontoHttpClack.percentDecode(path));
 				case ClackEnv.QUERY_STRING -> query;
-				case ClackEnv.SERVER_NAME -> new LispString(serverName == null ? "localhost" : serverName);
+				// "" is the transport's "unknown" (RontoHttpServer.Request carries no
+				// nulls -- the travelling package has no @Nullable to spell one with).
+				case ClackEnv.SERVER_NAME -> new LispString(serverName.isEmpty() ? "localhost" : serverName);
 				case ClackEnv.SERVER_PORT -> new LispInteger(serverPort == 0 ? 80 : serverPort);
 				case ClackEnv.SERVER_PROTOCOL -> new LispSymbol(":" + request.protocol().toUpperCase(Locale.ROOT));
 				case ClackEnv.REQUEST_URI -> new LispString(target);
 				case ClackEnv.URL_SCHEME -> new LispString(request.scheme());
 				case ClackEnv.REMOTE_ADDR ->
-					request.remoteAddr() == null ? LispNil.INSTANCE : new LispString(request.remoteAddr());
+					request.remoteAddr().isEmpty() ? LispNil.INSTANCE : new LispString(request.remoteAddr());
 				case ClackEnv.REMOTE_PORT ->
 					request.remotePort() == 0 ? LispNil.INSTANCE : new LispInteger(request.remotePort());
 				case ClackEnv.HEADERS -> headers;
@@ -9021,39 +9043,11 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Percent-decodes a request path. Lenient (a {@code %} not followed by two hex digits
-	 * stays literal -- a request target is attacker input) and never decodes {@code +},
-	 * which is a query-string rule; {@code http-server.lisp}'s
-	 * {@code %http-percent-decode} is the same function for the component backend.
-	 */
-	static String percentDecode(String s) {
-		if (s.indexOf('%') < 0) {
-			return s;
-		}
-		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(s.length());
-		int i = 0;
-		while (i < s.length()) {
-			char c = s.charAt(i);
-			int hi = i + 2 < s.length() && c == '%' ? Character.digit(s.charAt(i + 1), 16) : -1;
-			int lo = hi < 0 ? -1 : Character.digit(s.charAt(i + 2), 16);
-			if (lo >= 0) {
-				out.write((hi << 4) + lo);
-				i += 3;
-			}
-			else {
-				out.writeBytes(String.valueOf(c).getBytes(StandardCharsets.UTF_8));
-				i++;
-			}
-		}
-		return out.toString(StandardCharsets.UTF_8);
-	}
-
-	/**
 	 * Turns the Clack response a handler returned -- {@code (status headers)},
 	 * {@code (status headers body)} or the delayed {@code (lambda (responder) ...)} form
 	 * -- into the response this server writes.
 	 */
-	private HttpHandlerSupport.Response normalizeClackResponse(LispVal response) {
+	private RontoHttpServer.Response normalizeClackResponse(LispVal response) {
 		if (!(response instanceof LispCons res)) {
 			// Clack's DELAYED response: call it with a responder that captures the real
 			// response. The streaming WRITER form -- where the responder must answer a
@@ -9076,7 +9070,7 @@ public final class LispEvaluator {
 			throw new LispEvalException(LispNames.HTTP_HANDLER
 					+ ": a handler must return (status headers) or (status headers body), got: " + response.print());
 		}
-		return new HttpHandlerSupport.Response((int) status.value(), responseHeaders(second(res)),
+		return new RontoHttpServer.Response((int) status.value(), responseHeaders(second(res)),
 				responseBody(third(res)));
 	}
 
@@ -9084,8 +9078,8 @@ public final class LispEvaluator {
 	// :headers can be handed straight back) a dotted alist. Every pair becomes its own
 	// header line, which is what makes repeated :set-cookie correct by construction; the
 	// framing headers are dropped because the transport computes them from the body.
-	private static List<HttpHandlerSupport.Header> responseHeaders(LispVal headers) {
-		List<HttpHandlerSupport.Header> out = new ArrayList<>();
+	private static List<RontoHttpServer.Header> responseHeaders(LispVal headers) {
+		List<RontoHttpServer.Header> out = new ArrayList<>();
 		if (headers instanceof LispCons first && first.car() instanceof LispCons) {
 			for (LispVal cursor = headers; cursor instanceof LispCons cons; cursor = cons.cdr()) {
 				if (cons.car() instanceof LispCons pair) {
@@ -9102,7 +9096,7 @@ public final class LispEvaluator {
 		return out;
 	}
 
-	private static void addResponseHeader(List<HttpHandlerSupport.Header> out, LispVal key, LispVal value) {
+	private static void addResponseHeader(List<RontoHttpServer.Header> out, LispVal key, LispVal value) {
 		String name = switch (key) {
 			case LispString str -> str.value();
 			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
@@ -9115,7 +9109,7 @@ public final class LispEvaluator {
 		if ("content-length".equals(name) || "transfer-encoding".equals(name)) {
 			return;
 		}
-		out.add(new HttpHandlerSupport.Header(name,
+		out.add(new RontoHttpServer.Header(name,
 				value instanceof LispString str ? str.value() : Environment.displayString(value)));
 	}
 

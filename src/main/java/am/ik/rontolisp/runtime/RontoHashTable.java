@@ -1,12 +1,10 @@
-package am.ik.rontolisp.compiler;
+package am.ik.rontolisp.runtime;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-
-import org.jspecify.annotations.Nullable;
 
 /**
  * The runtime SHAPE of a hash table in the JVM backend's value representation, declared
@@ -27,8 +25,15 @@ import org.jspecify.annotations.Nullable;
  * The class is exact, not merely map-shaped: the emitted helpers cast to it, so a plain
  * {@code HashMap} built here would fail the cast at the first {@code gethash} (pinned by
  * {@code JvmHashRuntimeBuilderTest}).
+ *
+ * <p>
+ * It lives in {@code runtime} because {@link RontoHttpClack} builds a table at RUN time
+ * and travels with a compiled program ({@code .kb/jvm-export.md}); like everything in
+ * this package it therefore imports nothing but {@code java.base} -- not even the build's
+ * {@code @Nullable}, whose class file reference would follow the class into a consumer's
+ * artifact. That is why {@link #get} takes the absent value instead of answering null.
  */
-public final class JvmHashTableShape {
+public final class RontoHashTable {
 
 	/** The runtime class of a table, in internal (slash-separated) form. */
 	public static final String MAP_CLASS = "java/util/LinkedHashMap";
@@ -39,7 +44,7 @@ public final class JvmHashTableShape {
 	/** The key the insertion-order list hangs off inside the table. */
 	public static final String ORDER_KEY = "#order";
 
-	private JvmHashTableShape() {
+	private RontoHashTable() {
 	}
 
 	/**
@@ -62,7 +67,7 @@ public final class JvmHashTableShape {
 	 * @param value the value to store
 	 */
 	public static void put(Map<Object, Object> table, Object key, Object value) {
-		List<Object> bucket = Objects.requireNonNull(bucket(table, key, true));
+		List<Object> bucket = writeBucket(table, key);
 		for (Object entry : bucket) {
 			Object[] pair = (Object[]) entry;
 			if (key.equals(pair[0])) {
@@ -76,23 +81,22 @@ public final class JvmHashTableShape {
 	}
 
 	/**
-	 * Returns the value stored under an atom key, or null when absent.
+	 * Returns the value stored under an atom key, or {@code ifAbsent} when the key is not
+	 * in the table. The absent value is a PARAMETER rather than a null return because
+	 * this package carries no annotation of any kind -- see the class javadoc.
 	 * @param table the table
 	 * @param key the key
-	 * @return the stored value, or null
+	 * @param ifAbsent what to answer when the key is absent
+	 * @return the stored value, or {@code ifAbsent}
 	 */
-	public static @Nullable Object get(Map<Object, Object> table, Object key) {
-		List<Object> bucket = bucket(table, key, false);
-		if (bucket == null) {
-			return null;
-		}
-		for (Object entry : bucket) {
+	public static Object get(Map<Object, Object> table, Object key, Object ifAbsent) {
+		for (Object entry : readBucket(table, key)) {
 			Object[] pair = (Object[]) entry;
 			if (key.equals(pair[0])) {
 				return pair[1];
 			}
 		}
-		return null;
+		return ifAbsent;
 	}
 
 	/**
@@ -105,15 +109,24 @@ public final class JvmHashTableShape {
 		return (List<Object>) Objects.requireNonNull(table.get(ORDER_KEY));
 	}
 
+	// The bucket to SCAN: empty (and immutable) when the key has none yet.
 	@SuppressWarnings("unchecked")
-	private static @Nullable List<Object> bucket(Map<Object, Object> table, Object key, boolean create) {
+	private static List<Object> readBucket(Map<Object, Object> table, Object key) {
+		Object bucket = table.get(Integer.valueOf(key.hashCode()));
+		return bucket == null ? List.of() : (List<Object>) bucket;
+	}
+
+	// The bucket to APPEND to, created on first use.
+	@SuppressWarnings("unchecked")
+	private static List<Object> writeBucket(Map<Object, Object> table, Object key) {
 		Integer hash = key.hashCode();
-		List<Object> bucket = (List<Object>) table.get(hash);
-		if (bucket == null && create) {
-			bucket = new ArrayList<>();
-			table.put(hash, bucket);
+		Object bucket = table.get(hash);
+		if (bucket == null) {
+			List<Object> created = new ArrayList<>();
+			table.put(hash, created);
+			return created;
 		}
-		return bucket;
+		return (List<Object>) bucket;
 	}
 
 }

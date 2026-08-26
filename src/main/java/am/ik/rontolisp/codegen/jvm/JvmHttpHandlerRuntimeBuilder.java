@@ -18,18 +18,18 @@ import am.ik.rontolisp.compiler.ClackEnv;
 /**
  * Builds the JVM-backend runtime for the {@code rontolisp:http-handler} directive. The
  * generated program class itself implements
- * {@code am.ik.rontolisp.eval.HttpHandlerSupport.Handler} (the same mechanism as the
+ * {@code am.ik.rontolisp.runtime.RontoHttpServer.Handler} (the same mechanism as the
  * tls-connect trust-all {@code X509TrustManager}: the backend cannot emit an anonymous
  * class, so the program class takes on the interface), the directive stores the compiled
  * handler funcref in the {@code _httpHandlerFn} static field and calls
- * {@code HttpHandlerSupport.serve(port, new Prog())}.
+ * {@code RontoHttpServer.serve(port, new Prog())}.
  *
  * <p>
  * Since the Clack cutover the injected {@code handle(Request)} method is thin glue: a
  * compiled http-handler class is not standalone anyway (it needs the rontolisp jar on the
  * runtime classpath), so the Clack environment is built by
- * {@code HttpHandlerJvmRuntime.buildEnv} -- real Java, the backend's host language -- and
- * the response marshalled back by its {@code toResponse}. The emitted bytecode keeps only
+ * {@code RontoHttpClack.buildEnv} -- real Java, the backend's host language -- and the
+ * response marshalled back by its {@code toResponse}. The emitted bytecode keeps only
  * what must be bytecode, because it calls into the generated class itself:
  *
  * <ul>
@@ -51,12 +51,45 @@ import am.ik.rontolisp.compiler.ClackEnv;
 final class JvmHttpHandlerRuntimeBuilder {
 
 	/** The internal name of the interpreter-shared HTTP server support class. */
-	private static final String SUPPORT_CLASS = "am/ik/rontolisp/eval/HttpHandlerSupport";
+	private static final String SUPPORT_CLASS = "am/ik/rontolisp/runtime/RontoHttpServer";
 
 	/** The internal name of the JVM-backend Clack glue class. */
-	private static final String RUNTIME_CLASS = "am/ik/rontolisp/eval/HttpHandlerJvmRuntime";
+	private static final String RUNTIME_CLASS = "am/ik/rontolisp/runtime/RontoHttpClack";
 
 	private JvmHttpHandlerRuntimeBuilder() {
+	}
+
+	/**
+	 * The class files of {@code am.ik.rontolisp.runtime} that travel BESIDE a compiled
+	 * program that serves -- {@link #SUPPORT_CLASS} and {@link #RUNTIME_CLASS} with their
+	 * nested types, plus the two declarations they read (the environment key set and the
+	 * hash-table shape). This is the whole runtime closure of an emitted
+	 * {@code handle(Request)}: those classes import nothing but {@code java.base} and
+	 * {@code jdk.httpserver}, which is what lets a served program run on a bare
+	 * {@code java -cp .} instead of needing the rontolisp jar on its classpath.
+	 *
+	 * <p>
+	 * The list must follow the package: a class added to the closure and not added here
+	 * is a {@code NoClassDefFoundError} in the consumer, not an error at compile time --
+	 * which is why {@code JvmHttpHandlerTravellingRuntimeTest} recomputes the closure
+	 * from the emitted class and fails when the two disagree.
+	 */
+	static final List<String> RUNTIME_CLASS_FILES = List.of("am/ik/rontolisp/runtime/RontoHttpServer.class",
+			"am/ik/rontolisp/runtime/RontoHttpServer$Handler.class",
+			"am/ik/rontolisp/runtime/RontoHttpServer$Header.class",
+			"am/ik/rontolisp/runtime/RontoHttpServer$Request.class",
+			"am/ik/rontolisp/runtime/RontoHttpServer$Response.class",
+			"am/ik/rontolisp/runtime/RontoHttpServer$ServerException.class",
+			"am/ik/rontolisp/runtime/RontoHttpServer$StoppableServer.class",
+			"am/ik/rontolisp/runtime/RontoHttpClack.class", "am/ik/rontolisp/runtime/RontoClackEnv.class",
+			"am/ik/rontolisp/runtime/RontoHashTable.class");
+
+	/**
+	 * Reads {@link #RUNTIME_CLASS_FILES} off the compiler's own classpath.
+	 * @return each class file's path within an output tree (or jar), mapped to its bytes
+	 */
+	static Map<String, byte[]> runtimeClassFiles() {
+		return JvmRuntimeClassFiles.read(RUNTIME_CLASS_FILES);
 	}
 
 	/** The ready-to-emit {@code handle(Request)} method body. */
@@ -119,7 +152,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 						cp.addUtf8(JvmLispCompiler.mangleMethodName(
 								PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.NORMALIZE_RESPONSE))),
 						unaryDesc));
-		// The request body crosses as OCTETS -- HttpHandlerJvmRuntime.bodyOctets answers
+		// The request body crosses as OCTETS -- RontoHttpClack.bodyOctets answers
 		// the packed long[] vector -- for both :raw-body modes: the buffered Gray stream
 		// is a byte stream and stores them as they are (encoding a decoded body doubled
 		// every octet >= #x80 of a binary POST), and the default asynchronous stream is
@@ -186,7 +219,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 			a.u2(streamClose.index());
 			a.op(Opcode.POP);
 		}
-		// env = HttpHandlerJvmRuntime.buildEnv(request, rawBody)
+		// env = RontoHttpClack.buildEnv(request, rawBody)
 		a.aload(1);
 		a.aload(2);
 		a.op(Opcode.INVOKESTATIC);
@@ -218,7 +251,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(drainBody.index());
 		a.astore(5);
-		// return HttpHandlerJvmRuntime.toResponse(triple, drained)
+		// return RontoHttpClack.toResponse(triple, drained)
 		a.aload(4);
 		a.aload(5);
 		a.op(Opcode.INVOKESTATIC);

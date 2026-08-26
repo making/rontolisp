@@ -703,11 +703,14 @@ class ExamplesE2eTest {
 
 	/**
 	 * The classpath a compiled {@code Prog.class} runs on: the workspace, plus the
-	 * rontolisp runtime. Most compiled programs are self-contained and only need the
-	 * workspace, but one that reaches a runtime support class -- an HTTP server (which
-	 * quickloading clack pulls in whether or not the program starts a server), a socket,
-	 * a Gray stream -- needs the runtime, which is exactly what those examples' own
-	 * READMEs tell a reader to put on the classpath.
+	 * rontolisp runtime as a SUPERSET. Every example is self-contained today -- the last
+	 * ones that were not were the serving programs, whose embedded server now travels
+	 * beside the class ({@code .kb/jvm-export.md}, "What travels"), which is why their
+	 * READMEs say {@code java -cp . App}. The runtime stays on the classpath here because
+	 * a superset cannot break a leg, and dropping it would make this suite the only place
+	 * a future non-travelling support class is discovered -- as a
+	 * {@code NoClassDefFoundError} rather than as the compile-time list failure
+	 * {@code JvmRuntimeClassFilesTest} is for.
 	 * <p>
 	 * The runtime is the exec jar when one was built, and {@code target/classes}
 	 * otherwise: driven by {@code -Drontolisp.binary} (how CI runs this suite) nothing

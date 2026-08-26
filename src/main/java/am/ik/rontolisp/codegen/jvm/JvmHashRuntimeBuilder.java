@@ -13,7 +13,7 @@ import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispEquality;
-import am.ik.rontolisp.compiler.JvmHashTableShape;
+import am.ik.rontolisp.runtime.RontoHashTable;
 
 /**
  * Builds the JVM bytecode for the hash-table runtime helpers.
@@ -65,17 +65,17 @@ final class JvmHashRuntimeBuilder {
 	 * choice: the bucket index iterates deterministically, which keeps a rehash-free
 	 * table's internal walk independent of the host's hash spreading.
 	 */
-	static final String MAP_CLASS = JvmHashTableShape.MAP_CLASS;
+	static final String MAP_CLASS = RontoHashTable.MAP_CLASS;
 
 	/** The runtime class of a bucket and of the insertion-order list. */
-	static final String LIST_CLASS = JvmHashTableShape.LIST_CLASS;
+	static final String LIST_CLASS = RontoHashTable.LIST_CLASS;
 
 	/**
 	 * The key the insertion-order list hangs off inside the table. Every other key in the
 	 * map is the boxed {@code Integer} hash of a bucket, so a String can never collide
 	 * with one.
 	 */
-	static final String ORDER_KEY = JvmHashTableShape.ORDER_KEY;
+	static final String ORDER_KEY = RontoHashTable.ORDER_KEY;
 
 	static final String HASH = "_hash";
 
