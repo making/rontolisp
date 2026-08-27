@@ -204,12 +204,12 @@ public final class PackageRegistry {
 			"BIGNUM", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "UNSIGNED-BYTE", "SIGNED-BYTE",
 			"BOOLEAN", "SEQUENCE", "ARRAY", "SIMPLE-ARRAY", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING",
 			"CHARACTER", "BASE-CHAR", "STANDARD-CHAR", "SATISFIES", "OTHERWISE", "STREAM",
-			// The stream SUBtypes and the readtable type. A stream is an opaque integer
-			// handle, so `file-stream` is as wide as `stream` minus the two values that
-			// are not handles; `synonym-stream` has an exact test (it is the one stream
-			// kind that is a value); a "readtable" is the nil token the non-readtable-
-			// driven reader hands out. See LispMacroExpander.makeTypeTest.
-			"FILE-STREAM", "SYNONYM-STREAM", "READTABLE",
+			// The stream SUBtypes and the readtable type. Every stream is a
+			// self-describing value carrying its KIND, so `file-stream`,
+			// `string-stream` and `synonym-stream` all have exact tests; a "readtable"
+			// is the nil token the non-readtable-driven reader hands out. See
+			// LispMacroExpander.makeTypeTest.
+			"FILE-STREAM", "STRING-STREAM", "SYNONYM-STREAM", "READTABLE",
 			// More empty types (nothing satisfies them, by the same must-not-become-
 			// pkg::name rule): no bit-vector value exists (the bit type is dead), a
 			// defgeneric's dispatcher is a plain function, a defstruct's
@@ -277,7 +277,7 @@ public final class PackageRegistry {
 			LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.PATHNAME_DIRECTORY_STRING,
 			LispNames.PATHNAME_COMPONENT_STRING, LispNames.DELETE_FILE_INTERNAL, LispNames.SET_SYMBOL_FUNCTION_INTERNAL,
 			LispNames.FENV_FUNCTION_INTERNAL, LispNames.TEMP_FILE_NAME, LispNames.PROBE_FILE_INTERNAL,
-			LispNames.PATH_NS, LispNames.SYNONYM_TARGET, LispNames.CLOSE_INTERNAL, LispNames.MACRO_FN_INTERNAL,
+			LispNames.PATH_NS, LispNames.STREAM_TARGET, LispNames.CLOSE_INTERNAL, LispNames.MACRO_FN_INTERNAL,
 			LispNames.MACRO_EXPANDER_STUB, LispNames.WILD_COMPONENT_P, LispNames.WILD_CAPTURES,
 			LispNames.WILD_INFERIORS_AT, LispNames.PATHNAME_DIRECTORY_COMPONENT, LispNames.DIRECTORY_IN,
 			LispNames.DIRECTORY_SUBDIRS, LispNames.WILD_DIRS, LispNames.PATH_DIR_PARTS, LispNames.RENAME_FILE_INTERNAL,

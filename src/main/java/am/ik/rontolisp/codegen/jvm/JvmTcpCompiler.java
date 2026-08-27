@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -33,6 +34,7 @@ final class JvmTcpCompiler {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				invoke(ctx, ctx.tcpConnectHelper, member);
+				wrapStream(ctx, className, LispLayout.Kinds.SOCKET);
 			}
 			case LispNames.TLS_CONNECT -> {
 				// (tls-connect host port) or (tls-connect host port :insecure value):
@@ -56,6 +58,7 @@ final class JvmTcpCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 				}
 				invoke(ctx, ctx.tlsConnectHelper, member);
+				wrapStream(ctx, className, LispLayout.Kinds.SOCKET);
 			}
 			case LispNames.TLS_UPGRADE -> {
 				// (tls-upgrade stream host) or (tls-upgrade stream host :insecure
@@ -64,7 +67,7 @@ final class JvmTcpCompiler {
 				if (given != 2 && given != 4) {
 					throw new UnsupportedOperationException(member + " expects 2 or 4 arguments, got " + given);
 				}
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				compileStreamArg(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				if (given == 4) {
 					if (!(args.get(3) instanceof LispSymbol option) || !option.isKeyword()
@@ -78,6 +81,7 @@ final class JvmTcpCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 				}
 				invoke(ctx, ctx.tlsUpgradeHelper, member);
+				wrapStream(ctx, className, LispLayout.Kinds.SOCKET);
 			}
 			case LispNames.TLS_LISTEN -> {
 				requireArgs(member, args, 3, 4);
@@ -91,6 +95,7 @@ final class JvmTcpCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 				}
 				invoke(ctx, ctx.tlsListenHelper, member);
+				wrapStream(ctx, className, LispLayout.Kinds.SOCKET_SERVER);
 			}
 			case LispNames.TLS_LISTEN_P12 -> {
 				requireArgs(member, args, 3, 4);
@@ -104,6 +109,7 @@ final class JvmTcpCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 				}
 				invoke(ctx, ctx.tlsListenP12Helper, member);
+				wrapStream(ctx, className, LispLayout.Kinds.SOCKET_SERVER);
 			}
 			case LispNames.TCP_LISTEN -> {
 				requireArgs(member, args, 1, 2);
@@ -115,39 +121,57 @@ final class JvmTcpCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 				}
 				invoke(ctx, ctx.tcpListenHelper, member);
+				wrapStream(ctx, className, LispLayout.Kinds.SOCKET_SERVER);
 			}
 			case LispNames.TCP_ACCEPT -> {
 				requireArgs(member, args, 1, 1);
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				compileStreamArg(args.get(1), ctx, className);
 				invoke(ctx, ctx.tcpAcceptHelper, member);
+				wrapStream(ctx, className, LispLayout.Kinds.SOCKET);
 			}
 			case LispNames.TCP_LOCAL_PORT -> {
 				requireArgs(member, args, 1, 1);
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				compileStreamArg(args.get(1), ctx, className);
 				invoke(ctx, ctx.tcpLocalPortHelper, member);
 			}
 			case LispNames.TCP_LOCAL_ADDRESS -> {
 				requireArgs(member, args, 1, 1);
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				compileStreamArg(args.get(1), ctx, className);
 				invoke(ctx, ctx.tcpLocalAddressHelper, member);
 			}
 			case LispNames.TCP_PEER_ADDRESS -> {
 				requireArgs(member, args, 1, 1);
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				compileStreamArg(args.get(1), ctx, className);
 				invoke(ctx, ctx.tcpPeerAddressHelper, member);
 			}
 			case LispNames.TCP_PEER_PORT -> {
 				requireArgs(member, args, 1, 1);
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				compileStreamArg(args.get(1), ctx, className);
 				invoke(ctx, ctx.tcpPeerPortHelper, member);
 			}
 			case LispNames.TCP_SET_TIMEOUT -> {
 				requireArgs(member, args, 2, 2);
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				compileStreamArg(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				invoke(ctx, ctx.tcpSetTimeoutHelper, member);
 			}
 			default -> throw new UnsupportedOperationException("Unknown tcp built-in: " + member);
+		}
+	}
+
+	/**
+	 * Compiles a socket-op argument that is an existing STREAM: the value is resolved
+	 * down to the raw handle the {@code _tcp*} helpers index the table with.
+	 */
+	private static void compileStreamArg(LispVal arg, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(
+				java.util.Objects.requireNonNull(JvmStringStreamCompiler.streamDesignator(ctx, arg)), ctx, className);
+	}
+
+	/** Wraps the handle a socket CONSTRUCTOR just produced into the stream value. */
+	private static void wrapStream(JvmLispCompiler.Ctx ctx, String className, String kind) {
+		if (ctx.usesStreamValues) {
+			JvmObjCompiler.emitWrapStream(ctx, className, kind);
 		}
 	}
 

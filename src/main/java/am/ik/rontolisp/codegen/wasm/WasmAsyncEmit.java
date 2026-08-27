@@ -786,6 +786,7 @@ final class WasmAsyncEmit {
 			// built or written through at the SYNCHRONOUS top level must resolve like
 			// the same form inside a defun.
 			.usesSynonymStreams(proto.usesSynonymStreams)
+			.usesStreamValues(proto.usesStreamValues)
 			.usesSeqString(proto.usesSeqString)
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
 			// NOT optional: freshCtx builds the synchronous top level's CHUNKS, where an

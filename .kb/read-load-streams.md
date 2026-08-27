@@ -34,7 +34,7 @@ never a silently wrong value. The reader forces the JVM array machinery
 `Jvm/WasmLispCompilerTest#compileReadFromString{CharLiterals,RatiosAndRadix,VectorsAndArrays,StructLiterals,SymbolParityAndBlockComments,ReaderErrors*}`
 and the ci-spec cases `runtime-read-*` (all four backends).
 
-A runtime reader/parser is emitted into the compiled output (like `eval`). Interpreter uses `LispReader`/`Files`; JVM emits a recursive-descent reader (`JvmReadRuntimeBuilder`) with full JDK parity; WASM (`WasmReadRuntimeBuilder`) walks linear memory, interns symbols to shared string offsets; its integers are `i31` (ratio/radix tokens included) and it parses decimal floats (`emitTryFloat`, no exponent) into `TYPE_FLOAT`. All three readers parse dotted pairs `(a . b)`: `LispReader.readList` consumes a `Token.Dot`, and the runtime list parsers (`JvmReadRuntimeBuilder.buildReadList`, `WasmReadRuntimeBuilder.buildReadListBody`) treat a `.` as a dot token only when the following byte is a delimiter (whitespace, `(`, `)`, `'`, `"`, `;`) or end of input, so symbols/floats containing `.` are untouched. `with-open-file` is a plain macro (`LispMacroExpander.expandWithOpenFile`) over `open`/`close`, so no backend needed a new special form. A stream is an opaque integer handle, backend-local: interpreter/JVM index a stream table, WASM uses the WASI fd directly.
+A runtime reader/parser is emitted into the compiled output (like `eval`). Interpreter uses `LispReader`/`Files`; JVM emits a recursive-descent reader (`JvmReadRuntimeBuilder`) with full JDK parity; WASM (`WasmReadRuntimeBuilder`) walks linear memory, interns symbols to shared string offsets; its integers are `i31` (ratio/radix tokens included) and it parses decimal floats (`emitTryFloat`, no exponent) into `TYPE_FLOAT`. All three readers parse dotted pairs `(a . b)`: `LispReader.readList` consumes a `Token.Dot`, and the runtime list parsers (`JvmReadRuntimeBuilder.buildReadList`, `WasmReadRuntimeBuilder.buildReadListBody`) treat a `.` as a dot token only when the following byte is a delimiter (whitespace, `(`, `)`, `'`, `"`, `;`) or end of input, so symbols/floats containing `.` are untouched. `with-open-file` is a plain macro (`LispMacroExpander.expandWithOpenFile`) over `open`/`close`, so no backend needed a new special form. A stream is a self-describing VALUE over a backend-local handle: an instance of the fixed `LispLayout.STREAM` layout whose slot 0 is the handle (interpreter/JVM index a stream table, WASM uses the WASI fd directly, negative for a string stream) and slot 1 the `LispLayout.Kinds` keyword. See "A stream is a VALUE, not a handle" below.
 
 **CRLF parity**: `read-line` strips one trailing carriage return on every backend (interpreter/JVM inherit it from `BufferedReader.readLine`; the WASM `_read_line` does an explicit `pos--` when the byte before the newline is `0x0D`, added for the tcp built-ins -- CRLF-terminated socket lines such as HTTP must read as plain lines and a blank CRLF line must compare `string=` to `""`; see `.kb/tcp-sockets.md`). A lone `\r\n` line therefore reads as `""`, not `"\r"`, on all backends.
 
@@ -234,7 +234,7 @@ printers -- `#<SYNONYM-STREAM :SYMBOL *STANDARD-OUTPUT*>`, identical on all four
 while a closure prints `#<lambda>` on the interpreter and `#<function>` on the other three
 -- nor `equal`.
 
-**The resolution is one shared prelude defun, `%SYNONYM-TARGET`** (`LispPreludeLibrary`):
+**The resolution is one shared prelude defun, `%STREAM-TARGET`** (`LispPreludeLibrary`):
 "a synonym stream answers `(funcall (%obj-ref s 1))`, recursively; anything else answers
 itself", so a synonym over a synonym resolves and a cycle is the only thing that cannot.
 Reached from five places:
@@ -260,23 +260,26 @@ Reached from five places:
   hands the synonym to the handle-typed close and traps.
 - **The `--component` spliced dispatchers**, which resolve the designator themselves
   (`sockets.lisp` / `stdin-dispatch.lisp` / `stdin.lisp`): their `(or s *standard-input*)`
-  binding is now `(%synonym-target (or s *standard-input*))`. That rewrite REPLACES the
+  binding is wrapped in the resolution -- `%stream-target` for the two stdin files,
+  sockets.lisp's own `%sock-handle` copy of it. That rewrite REPLACES the
   read built-ins, so the compiler's own seam never sees those call sites and a synonym
   would read as "not a handle" and go to the host stdin cache. Same reason the explicit-nil
   designator is resolved there (`.kb/standard-output-redirect.md`).
 
-**Everything a program-level operator does is gated on `make-synonym-stream` appearing in
-the source** (`Ctx.usesSynonymStreams`, and `constructsInstance` for the instance gate): it is the only
-constructor and there is no read syntax for one, so a program that never spells it compiles
-byte-identically to before -- no `%SYNONYM-TARGET` call at any stream site, no synonym arm
-in `streamp`, no guard on `close`. **Two LIBRARY splices pay unconditionally**, and that is
+**The SYNONYM arm of a program-level operator is gated on `make-synonym-stream` appearing
+in the source** (`Ctx.usesSynonymStreams`, and `constructsInstance` for the instance gate):
+it is the only constructor and there is no read syntax for one, so a program that never
+spells it gets no synonym arm in `streamp` and no synonym guard on `close`. (The
+`%STREAM-TARGET` call itself is gated one level wider since todo-553 -- on
+`usesSynonymStreams || usesStreamValues`, because an OPEN stream needs the same
+resolution.) **Two LIBRARY splices pay unconditionally**, and that is
 the deliberate price: gray.lisp's dispatch helpers and the `--component` I/O dispatchers
 carry the hop whether or not their program can build a synonym stream, so any program using
-the Gray protocol or the component socket/stdin splice carries `%SYNONYM-TARGET` (one small
-defun) plus one call per dispatch. Making those two conditional would mean editing a
+the Gray protocol or the component stdin splice carries `%STREAM-TARGET` (one small
+defun) plus one call per dispatch -- sockets.lisp carries its own copy instead, see below. Making those two conditional would mean editing a
 spliced body per program -- a bypass branch in exchange for a couple of hundred bytes --
 and the shared resolution is worth more than that. It is also why
-`LispPreludeLibrary.referencedBySurfaceForm` splices `%SYNONYM-TARGET` for a program that
+`LispPreludeLibrary.referencedBySurfaceForm` splices `%STREAM-TARGET` for a program that
 merely uses the GRAY protocol (the same predicate roots it in `LibraryDefunPruner`): both
 compile-path seams insert the call inside the expression compilers, and
 `GrayStreamsLibrary.process` runs AFTER the prelude selection, so the reference the
@@ -509,22 +512,103 @@ Pinned by `LispEvaluatorTest#withOpenFileComputedOptionsDispatchAtRunTime` /
 `WasmLispCompilerIntegrationTest#withOpenFileComputedOptionsDispatchAtRunTime` and the
 ci-spec case `computed-stream-options-439` (all four backends).
 
-**The stream TYPE names, and why `file-stream` is as wide as `stream`** (todo-443,
-2026-08-18): `synonym-stream` gets an exact test -- `(%obj-is x '%SYNONYM-STREAM)` -- because
-it is the one stream kind that is a VALUE rather than an opaque handle. `file-stream`
-cannot have one: a handle carries no kind, only the WASM backends could tell a string
-stream's from a file's (by its sign), and the interpreter/JVM `streamPaths` tables are
-Java-side. Rather than diverge per backend, `file-stream` lowers to `integerp` -- the same
-lite `streamp` already has, minus the two values that are not handles (`t` and a synonym
-stream) -- so it is over-broad by exactly the string-stream kinds and identically so
-everywhere. **Re-evaluate when** a per-backend `%file-stream-p` primitive exists, or when
-string streams take negative handles on every backend: either makes the narrow test
-available without a divergence. `readtable` lowers to `null`, because the nil token
-`*readtable*` holds is the only value that can be one (`.kb/reader-features.md`); the
-alternative -- an empty type -- would make `(typep *readtable* 'readtable)` answer nil,
-which is the worse of the two lies. All three are in `PackageRegistry.CL_TYPES` and
-`LispMacroExpander.makeTypeTest`; a name in the first without a case in the second is a
-hard expansion error in `typecase`, not a silent nil.
+## A stream is a VALUE, not a handle (todo-553)
+
+**Every OPEN stream is an instance of the fixed `LispLayout.STREAM` layout** -- tag
+`%STREAM`, two declared slots `HANDLE` and `KIND` -- so `streamp` answers off the value
+rather than off "it happens to be an integer", and `file-stream` / `string-stream` are
+exact everywhere. It is the `%PATHNAME` / `%SYNONYM-STREAM` precedent: a LAYOUT ONLY in
+`ClosRegistry` (never a class, never a struct), so `%obj-new`/`%obj-is` resolve the tag
+on all four backends while the type joins no `typep` tag table, no
+`structure-object`/`standard-object` enumeration and no `%class-slot-defs` answer.
+
+- **The HANDLE is a declared slot, not machinery.** `equal` on two instances is
+  structural over the DECLARED slots, and CL's `equal` on streams is `eq`: with the kind
+  alone declared, any two file streams would compare `equal`. The price is that the
+  printed form carries a backend-local number -- `#<STREAM :HANDLE 3 :KIND :FILE>` on
+  the interpreter/JVM, a WASI fd or a negative string-stream record on wasm -- which is
+  exactly the divergence the bare handle already had.
+- **The KIND is a keyword** (`LispLayout.Kinds`): `:FILE`, `:STRING-INPUT`,
+  `:STRING-OUTPUT`, `:SOCKET`, `:SOCKET-SERVER`, `:BODY`, `:STANDARD`. Compared with
+  `equal`, not `eq` -- a keyword is a plain interned name on every backend.
+- **`*error-output*` holds one** (`:STANDARD` over the reserved handle 2), because `t`
+  already names the process standard OUTPUT and something has to name standard ERROR.
+  `*standard-output*` / `*standard-input*` keep the `t` DESIGNATOR: it is not a value and
+  does not become one.
+
+**One gate, both halves.** `LispMacroExpander.mayCreateStreamValues(program)` scans for
+the constructor names (plus `*error-output*`, whose seeded default IS a stream) and
+answers `Ctx.usesStreamValues` on both compile backends. That single boolean gates the
+WRAP a producer emits AND the UNWRAP a consumer emits, so the two can never disagree: a
+program the scan says no about keeps raw handles end to end and compiles byte-identically
+to a build that never knew about stream values. It also forces
+`LispMacroExpander.mayCreateInstances` on, because the value IS an instance.
+
+**Producers wrap in the BACKEND, not in an expansion.** `JvmObjCompiler.emitWrapStream`
+and `WasmInstanceCompiler.emitWrapStream` take the raw handle off the stack and build the
+instance, so the I/O runtime helpers (`_open`, `_makeStringInputStream`, `_tcpConnect`,
+`FUNC_OPEN`, `FUNC_MAKE_STR_ISTREAM`, ...) keep their exact bodies -- which matters on
+wasm, where their `FUNC_*` indices are fixed and the `--component` adapter blobs depend on
+them. The interpreter's producers answer `StreamDesignators.streamValue` directly.
+
+**Consumers unwrap at ONE seam per backend, plus the stragglers.**
+`StreamDesignators.throughStream` wraps a designator in `(%stream-target D)`, and
+`JvmStringStreamCompiler.streamArg`/`inputStreamArg` + `WasmEmitHelper`'s twins apply it
+to every print/read/byte/sequence operator. `streamDesignator(ctx, expr)` is the same
+resolution WITHOUT the `*standard-output*` designator rule, for the consumers that take
+their stream argument as written: `close`, `open-stream-p`, `force-output`,
+`%string-stream-contents`, `file-length`, `warn`'s `*error-output*` read and the whole
+`tcp-*` family. On the interpreter the twin is `Environment.streamTarget`, reached from
+`resolveOutputDest`/`resolveInputSrc` and applied by hand at the raw sites.
+
+**`%STREAM-TARGET` resolves BOTH kinds** (it is the old `%SYNONYM-TARGET`, renamed): a
+synonym stream forwards to what its variable holds now, recursively, and an open stream
+answers its handle slot. That is why gray.lisp's dispatch helpers -- which resolve
+through it before their `%obj-p` test -- keep working: an open stream unwraps to an
+integer and takes the handle arm, while a Gray instance and a synonym do not.
+**Two exceptions in gray.lisp**: `%gray-close-dispatch` does not resolve a synonym
+(closing a synonym closes the synonym) and so tests `%STREAM` by tag ahead of `%obj-p`;
+and the three PREDICATE dispatchers (`open-stream-p` / `input-stream-p` /
+`output-stream-p`) hand the ORIGINAL designator to the built-in rather than the resolved
+handle -- a bare handle is not a stream to those predicates any more, the value is.
+
+**The prelude splice of `%STREAM-TARGET` is best effort, so the seams have a fallback.**
+`LispPreludeLibrary.referencedBySurfaceForm` selects it from the surface facts it can
+see, but a stream value can also arrive from a form injected AFTER the selection ran (the
+generated condition renderer and the print-object seam each open a string output stream).
+When the defun is absent both seams emit `StreamDesignators.throughStreamInline` instead
+-- the `%obj-is`/`%obj-ref` unwrap written out of the primitives, which needs no splice.
+The synonym half never needs the fallback: a program that can build a synonym stream
+always spells `make-synonym-stream`, which the selection does see.
+
+**`sockets.lisp` carries its own `%sock-handle`** for the same reason, and carries the
+WHOLE resolution rather than half of it: the component socket splice is used by pipelines
+that do not run the prelude selection, so the synonym walk AND the stream unwrap are
+written out of `%obj-is`/`%obj-ref` there instead of calling `%stream-target` (which is
+what the `%io-*` read dispatchers used to do, and would have failed on every socket
+operation now that `%sock-entry` resolves too). `%sock-register` answers the wrapped
+value (`:SOCKET` / `:SOCKET-SERVER` by its kind field), so a component socket is a stream
+exactly as the interpreter's and the JVM's are; the TABLE stays keyed by the raw fd.
+
+Pinned by `LispEvaluatorTest#evalStreamp` / `#theStreamAndReadtableTypeNamesResolve`,
+`JvmLispCompilerTest#compileAndRunTheMissingStandardNames`,
+`WasmLispCompilerIntegrationTest#theMissingStandardNames` and the ci-spec case
+`a-stream-is-a-self-describing-value` (all four backends).
+
+**The stream TYPE names** (todo-443, rewritten by todo-553): all three are EXACT,
+because the value carries the kind it was built with. `synonym-stream` is
+`(%obj-is x '%SYNONYM-STREAM)`; `file-stream` and `string-stream` are
+`LispMacroExpander.makeStreamKindTest` -- `(%obj-is x '%STREAM)` and then an `equal`
+against the `KIND` slot, `:FILE` for the first and `:STRING-INPUT`/`:STRING-OUTPUT`
+for the second. The test has to be a `let` plus a nested `if` in that order:
+`%obj-ref` on a non-instance is undefined on the compile paths, so the tag test comes
+first (the shape `LispMacroExpander.coercePathArg` already used for a pathname).
+`readtable` lowers to `null`, because the nil token `*readtable*` holds is the only
+value that can be one (`.kb/reader-features.md`); the alternative -- an empty type --
+would make `(typep *readtable* 'readtable)` answer nil, which is the worse of the two
+lies. All four are in `PackageRegistry.CL_TYPES` and `LispMacroExpander.makeTypeTest`;
+a name in the first without a case in the second is a hard expansion error in
+`typecase`, not a silent nil.
 
 **`*load-verbose*` / `*load-print*`** (todo-443) are bound and nil on every backend --
 `load` prints no banner and echoes no form value, which is the same reason its own

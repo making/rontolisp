@@ -64,6 +64,10 @@ public final class ClosRegistry {
 		// is what resolves the %SYNONYM-STREAM tag for %obj-new/%obj-is on every
 		// backend without making it a class anything can specialize on or enumerate.
 		this.layoutsByTag.put(LispLayout.SYNONYM_STREAM_TAG, LispLayout.SYNONYM_STREAM);
+		// And for the OPEN stream layout, which is what made a stream self-describing:
+		// the value carries the backend handle plus the kind keyword, so streamp can
+		// tell a stream from a file descriptor and file-stream from string-stream.
+		this.layoutsByTag.put(LispLayout.STREAM_TAG, LispLayout.STREAM);
 		for (ConditionSeed seed : CONDITION_SEEDS) {
 			seedClass(seed.name(), seed.parent(), seed.slots().toArray(new String[0]));
 		}

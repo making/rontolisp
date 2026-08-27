@@ -32,7 +32,7 @@ is still byte-identical to before. The interpreter's half is one
 **A SYNONYM stream is a value that rides this seam, not a designator of its own.**
 `(make-synonym-stream 'sym)` builds an instance carrying a closure that reads
 `sym`, and `StreamDesignators.throughSynonym` wraps whatever the two functions
-above produce in a `%SYNONYM-TARGET` call -- so every operator that resolves its
+above produce in a `%STREAM-TARGET` call -- so every operator that resolves its
 destination here forwards through the synonym per operation, for ANY symbol
 (todo-377; the earlier lowering answered the `nil` designator for the two
 standard variables and snapshotted every other symbol). Gated on the program
@@ -97,13 +97,22 @@ so `(with-input-from-string (*standard-input* ...) (read-line))` has to sit
 inside a plain `defun` (a sync context) there. That is why the ci-spec case
 wraps the input assertions in `pm-input-designators`.
 
-## `*error-output*` is a HANDLE, not the `t` designator (landed 2026-07-31, `.todo/149`)
+## `*error-output*` is a stream VALUE, not the `t` designator (landed 2026-07-31, `.todo/149`)
 
 The third stream special closes `.todo/149`. `t` already names the process standard
 OUTPUT, so `*error-output*` cannot be seeded with it and still mean the error stream:
-its value is the reserved stream HANDLE `2` --
-`compiler.StreamDesignators.standardError()`, literally the WASI fd the wasm write
-helpers already send stderr through. So `(format *error-output* ...)` reaches stderr
+its value is a stream VALUE over the reserved handle `2` --
+`compiler.StreamDesignators.standardError()` (the constructor form the compile backends
+seed by compiling) / `standardErrorValue()` (the built instance the interpreter seeds),
+whose handle is literally the WASI fd the wasm write helpers already send stderr
+through. It was the bare handle until todo-553 made every open stream a self-describing
+value (`.kb/read-load-streams.md`), which is what makes `(streamp *error-output*)` and
+`(check-type *error-output* stream)` answer off the value rather than off "it happens to
+be an integer". Naming the variable is therefore what turns the instance gate on, the
+same rule `*default-pathname-defaults*` takes; a program given a global cell for it
+WITHOUT naming it (progv gives every special one) has the gate off and seeds the raw
+handle instead -- with no `%obj-is` in the module either, nothing it can ask tells the
+difference. So `(format *error-output* ...)` reaches stderr
 instead of stdout on every backend (before this it reached stdout everywhere, the
 deviation `PostmodernE2eTest.programOutput` used to filter out), and `warn`'s report
 DEFAULTS to the variable instead of hard-coding stderr, so
@@ -166,7 +175,7 @@ failure -- an NPE here, a zero-byte `fd_read` on wasm. Same remedy if something 
   into a trap. It traps rather than misdirects by design -- the stdout-only half answers
   fd 1 and `unreachable`s the rest. A fourth materializer joined in todo-283 -- the
   `_start` seed of the eval runtime's `GLOBAL_ENV` mirror, which is what makes
-  `(symbol-value '*error-output*)` answer the handle (`.kb/symbol-runtime-api.md`) --
+  `(symbol-value '*error-output*)` answer the stream value (`.kb/symbol-runtime-api.md`) --
   and it is safe by CONSTRUCTION rather than by remembering: its own gate is the very
   `programUsesSymbol(*ERROR-OUTPUT*)` scan above, so it cannot exist in a module the
   narrowing pruned. Keep any future one on that gate for the same reason.

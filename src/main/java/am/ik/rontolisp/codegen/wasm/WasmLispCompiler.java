@@ -2482,6 +2482,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// mode forces it on: the signal hook synthesizes simple-* instances for plain
 		// string signals.
 		this.usesInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode;
+		// The stream-value gate is decided on the SAME program snapshot, because
+		// mayCreateInstances above already answers for it: read them apart and a later
+		// desugaring could turn one on without the other, which is a %obj-new with no
+		// instance type behind it.
+		final boolean usesStreamValues = LispMacroExpander.mayCreateStreamValues(program);
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
 		// exit (before desugarProgram, so the %fn-block wrap for a same-function
 		// return-from naturally nests around the injected let/%nlx-catch).
@@ -3247,6 +3252,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.p1StreamFuncBase(this.usesP1Streams ? p1StreamFuncBase() : -1)
 			.instanceTypeIndex(this.usesInstances ? instanceTypeBase() : -1)
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
+			.usesStreamValues(usesStreamValues)
 			.layoutAddresses(layoutAddresses)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
@@ -3392,7 +3398,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
 			Integer streamGlobal = ctx.globalIndices.get(streamVar.getKey());
 			if (streamGlobal != null) {
-				emitStandardStreamDefault(startWriter, streamVar.getValue());
+				emitStandardStreamDefault(startWriter, streamVar.getValue(), ctx);
 				startWriter.write(Instruction.SET_GLOBAL);
 				startWriter.writeUnsignedLeb128(streamGlobal);
 			}
@@ -3411,7 +3417,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// than shadowing it. The name goes through the string table, so its offset is
 			// the one _env_lookup compares a runtime-interned symbol against.
 			WasmEmitHelper.compileStringLiteral(streamVar.getKey(), ctx);
-			emitStandardStreamDefault(startWriter, streamVar.getValue());
+			emitStandardStreamDefault(startWriter, streamVar.getValue(), ctx);
 			startWriter.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 			startWriter.writeUnsignedLeb128(TYPE_CONS);
 			startWriter.write(Instruction.GET_GLOBAL);
@@ -6745,11 +6751,30 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * mirror -- both push it through here, so neither can drift from
 	 * {@link StreamDesignators}' table.
 	 */
-	private static void emitStandardStreamDefault(WasmWriter w, LispVal value) {
+	private static void emitStandardStreamDefault(WasmWriter w, LispVal value, Ctx ctx) {
 		if (value instanceof LispInteger handle) {
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128((int) handle.value());
 			w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			return;
+		}
+		if (value instanceof LispCons) {
+			// *error-output*'s default is the stream VALUE over the reserved handle 2,
+			// i.e. the (%obj-new '%STREAM 2 :standard) form StreamDesignators hands out.
+			// ctx.writer IS this start-function writer here, so the ordinary expression
+			// compiler builds it -- no second copy of the instance layout.
+			//
+			// With the instance gate OFF there is nothing to build it out of: a program
+			// can be given a module global for a standard stream variable it never
+			// NAMES (progv gives every special one), and with no %obj-is in it either
+			// the raw handle is the same answer to everything it can ask.
+			if (ctx.instanceTypeIndex < 0) {
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128((int) StreamDesignators.STANDARD_ERROR_HANDLE);
+				w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+				return;
+			}
+			WasmExprCompiler.compileExpr(value, ctx);
 			return;
 		}
 		w.write(Instruction.CALL);
@@ -7461,6 +7486,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesSynonymStreams = false;
 
 		/**
+		 * True when an OPEN stream VALUE ({@code LispLayout.STREAM}) can exist in this
+		 * module -- the program spells a stream constructor, or names
+		 * {@code *error-output*} whose seeded default is one
+		 * ({@code LispMacroExpander.mayCreateStreamValues}). It gates BOTH halves of the
+		 * representation: the instance wrap a producer emits and the
+		 * {@code %STREAM-TARGET} unwrap a consumer emits, so the two can never disagree
+		 * and a program the scan says no about keeps raw handles end to end.
+		 */
+		boolean usesStreamValues = false;
+
+		/**
 		 * True when the {@code %seq-string} helper is injected for this program, i.e. the
 		 * program itself writes a {@code (concatenate 'string ...)} with an argument that
 		 * is not a literal string. Only then does the string-family lowering normalize
@@ -7846,6 +7882,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.signalClauseMatch = builder.signalClauseMatch;
 			this.printCase = builder.printCase;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
+			this.usesStreamValues = builder.usesStreamValues;
 			this.usesSeqString = builder.usesSeqString;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
@@ -7956,6 +7993,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean printCase = false;
 
 			private boolean usesSynonymStreams = false;
+
+			private boolean usesStreamValues = false;
 
 			private boolean usesSeqString = false;
 
@@ -8187,6 +8226,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder printCase(boolean printCase) {
 				this.printCase = printCase;
+				return this;
+			}
+
+			Builder usesStreamValues(boolean usesStreamValues) {
+				this.usesStreamValues = usesStreamValues;
 				return this;
 			}
 

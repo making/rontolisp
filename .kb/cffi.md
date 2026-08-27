@@ -160,22 +160,19 @@ cffi, the callback path or the struct layer was the obstacle at any point.
 
 What stops it short of a usable client, found by this run and not in cffi:
 
-- **A rontolisp stream IS an integer.** `install-handle-and-bio` chooses its BIO with
+- **(FIXED 2026-08-27) A rontolisp stream used to BE an integer.**
+  `install-handle-and-bio` chooses its BIO with
   `(etypecase socket (integer (ssl-set-fd handle socket)) (stream (ssl-set-bio ... (bio-new-lisp) ...)))`,
   and cl+ssl's default `(defmethod stream-fd (stream) stream)` hands the stream straight
-  back. A rontolisp stream handle is a small integer, so the `integer` arm wins and
-  OpenSSL is told to use handle 3 as a socket descriptor -- `SSL_get_error: 5`, with an
-  empty error queue. `:unwrap-stream-p nil` does not help: the etypecase dispatches on
-  the VALUE. The handshake above was measured with the etypecase forced onto the
-  Lisp-BIO arm in the scratch copy.
-  (HALF-FIXED 2026-08-27) The WRAP route out of this is now open: a Gray stream IS a
-  stream here -- `streamp` and `(typep x 'stream)` answer t for a
-  `rontolisp:fundamental-stream` subclass on all four backends, and the compile paths no
-  longer PRUNE such an etypecase's `stream` arm (`.kb/gray-streams.md`) -- so a socket
-  handed over inside a Gray wrapper reaches the Lisp BIO by dispatch rather than by
-  patching. What is unchanged is the raw handle: it is an integer and nothing about the
-  value says otherwise, so a library handed one directly still picks the descriptor arm.
-  That half is the representation question `.todo/553` carries.
+  back. A rontolisp stream handle was a small integer, so the `integer` arm won and
+  OpenSSL was told to use handle 3 as a socket descriptor -- `SSL_get_error: 5`, with an
+  empty error queue; `:unwrap-stream-p nil` did not help, because the etypecase
+  dispatches on the VALUE. Closed in two steps: todo-552 made a Gray stream answer
+  `streamp`/`(typep x 'stream)` and stopped the compile paths PRUNING such an etypecase's
+  `stream` arm (`.kb/gray-streams.md`), and todo-553 made every OPEN stream a
+  self-describing value, so a rontolisp socket handed over DIRECTLY reaches the Lisp BIO
+  by dispatch -- no wrapper, no patching (`.kb/read-load-streams.md`, "A stream is a
+  VALUE").
 - (FIXED 2026-08-27) An `(eql +constant+)` specializer used to be taken as the SYMBOL,
   so `x509.lisp`'s per-ASN.1-type
   `(defmethod decode-asn1-string (asn1-string (type (eql +v-asn1-iastring+))))` never

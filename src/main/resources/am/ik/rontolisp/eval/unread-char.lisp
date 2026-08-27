@@ -22,7 +22,8 @@
 
 ;; The stream KEY. An omitted stream and the nil designator both mean standard
 ;; input, which the t designator names, so the three compare equal; every other
-;; designator is its own handle and compares with eql.
+;; designator is its own value and compares with eql -- a stream value is one
+;; object per open stream, so eql identity is exactly "the same stream".
 (defun rontolisp::%unread-key (stream) (if stream stream t))
 
 (defun rontolisp::%unread-char-push (character stream)

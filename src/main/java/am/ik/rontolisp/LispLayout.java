@@ -118,6 +118,79 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 			List.of("SYMBOL"), List.of(LispNil.INSTANCE), 2);
 
 	/**
+	 * The instance tag of the built-in OPEN-STREAM type, spelled in upper case for the
+	 * same reason as {@link #PATHNAME_TAG}: prelude Lisp quotes it literally
+	 * ({@code (%obj-is s '%STREAM)}) and the reader upcases source symbols.
+	 */
+	public static final String STREAM_TAG = "%STREAM";
+
+	/**
+	 * The layout of every OPEN stream value -- what {@code open},
+	 * {@code make-string-input-stream}, {@code make-string-output-stream} and the socket
+	 * constructors answer. Slot 0 is the BACKEND HANDLE the I/O primitives act on (a
+	 * stream table index on the interpreter and the JVM, a WASI file descriptor or a
+	 * negative string-stream record on the wasm backends); slot 1 is the {@link Kinds}
+	 * keyword saying which kind of stream it is, which is what lets
+	 * {@code (typep s 'file-stream)} and {@code (typep s 'string-stream)} be told apart
+	 * identically on all four backends.
+	 *
+	 * <p>
+	 * The handle is a DECLARED slot rather than machinery so {@code equal} keeps CL's
+	 * "two streams are the same only when they are the same stream" -- a kind-only layout
+	 * would make any two file streams {@code equal}. It is therefore also visible in the
+	 * printed form, where the number is backend-local (a WASI fd is not a table index),
+	 * exactly as the bare handle was before this type existed.
+	 *
+	 * <p>
+	 * A FIXED layout, seeded into {@code ClosRegistry.layoutsByTag} as a LAYOUT ONLY like
+	 * {@link #PATHNAME} and {@link #SYNONYM_STREAM}, so {@code %obj-new}/{@code %obj-is}
+	 * resolve the tag on every backend while the type joins no {@code typep} tag table,
+	 * no {@code structure-object} / {@code standard-object} enumeration and no
+	 * {@code %class-slot-defs} answer.
+	 */
+	public static final LispLayout STREAM = new LispLayout(STREAM_TAG, "STREAM", Kind.CLASS, List.of("HANDLE", "KIND"),
+			List.of(LispNil.INSTANCE, LispNil.INSTANCE), 2);
+
+	/**
+	 * The {@code KIND} slot values of {@link #STREAM}, one keyword per stream kind. They
+	 * are compared with {@code equal} (the keyword is a plain interned name on every
+	 * backend), and the two type tests that read them are
+	 * {@code LispMacroExpander.makeTypeTest}'s {@code FILE-STREAM} and
+	 * {@code STRING-STREAM} arms.
+	 */
+	public static final class Kinds {
+
+		private Kinds() {
+		}
+
+		/** A stream {@code open} answers: {@code file-stream}. */
+		public static final String FILE = ":FILE";
+
+		/** A {@code make-string-input-stream} stream: {@code string-stream}. */
+		public static final String STRING_INPUT = ":STRING-INPUT";
+
+		/** A {@code make-string-output-stream} stream: {@code string-stream}. */
+		public static final String STRING_OUTPUT = ":STRING-OUTPUT";
+
+		/** A connected TCP/TLS socket stream. */
+		public static final String SOCKET = ":SOCKET";
+
+		/** A listening TCP/TLS server socket. */
+		public static final String SOCKET_SERVER = ":SOCKET-SERVER";
+
+		/** A buffered HTTP request body stream. */
+		public static final String BODY = ":BODY";
+
+		/**
+		 * A process standard stream named by a reserved handle -- the value
+		 * {@code *error-output*} holds. The {@code t} designator is NOT one of these: it
+		 * stays a designator rather than a value.
+		 */
+		public static final String STANDARD = ":STANDARD";
+
+	}
+
+	/**
 	 * Canonicalizes the collections so a layout is deeply immutable.
 	 * @param tag the instance tag symbol name
 	 * @param printName the type name as printed

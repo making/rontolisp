@@ -541,6 +541,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// instances. Restart mode forces it on: the signal hook synthesizes simple-*
 		// instances for plain string signals.
 		boolean mayUseInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode;
+		// The stream-value gate is decided on the SAME program snapshot, because
+		// mayCreateInstances above already answers for it: read them apart and a later
+		// desugaring could turn one on without the other, which is a %obj-new with no
+		// instance representation behind it.
+		final boolean usesStreamValues = LispMacroExpander.mayCreateStreamValues(program);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
@@ -1614,6 +1619,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesSeqString(usesSeqString)
 			.mayUseInstances(mayUseInstances)
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
+			.usesStreamValues(usesStreamValues)
 			.mayUseAsyncValues(usesAsyncRuntime)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.blasOps(blasRuntime != null ? blasRuntime.ops() : null)
@@ -2513,16 +2519,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<Integer> envLookupBody = envLookupCode;
 		final List<List<Integer>> lookupBodies = lookupSegments;
 
-		// The layout half of <clinit>, assembled HERE because it mints CONSTANT_String
-		// entries and the constant pool is serialized by .writeConstantPool(cp) below,
-		// before the writeFields/writeMethods lambdas run.
-		final List<Integer> layoutClinitCode = new ArrayList<>();
-		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
 		// A program that redirects *standard-output* (the variable is in globals only
 		// then) seeds its global default from StreamDesignators' table -- the designator
-		// t = stdout for the two stdio variables, the stream HANDLE 2 for
+		// t = stdout for the two stdio variables, a stream VALUE over handle 2 for
 		// *error-output*, which t cannot name; the constants are minted here for the
-		// same serialization-order reason as above.
+		// same serialization-order reason as the layout half below.
 		final Map<String, FieldrefConstant> streamGlobalSeeds = new LinkedHashMap<>();
 		// The eval runtime's global-environment mirror is the SECOND home of the same
 		// value, and symbol-value/boundp/eval read only that one -- so it seeds from the
@@ -2546,6 +2547,25 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		final boolean seedsStandardStream = !streamGlobalSeeds.isEmpty() || !streamGenvSeeds.isEmpty();
 		final ConstantPool.StringConstant standardOutputTStr = seedsTDesignator ? cp.addString("T") : null;
+		// *error-output*'s default is a stream VALUE, so its layout constant has to be
+		// interned BEFORE the layout half of <clinit> is assembled just below -- and
+		// emitted before the seed reads it, which is why the seed loop comes after
+		// layoutClinitCode in the <clinit> assembly.
+		boolean seedsStreamValue = false;
+		for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
+			seedsStreamValue |= streamVar.getValue() instanceof LispCons
+					&& (streamGlobalSeeds.containsKey(streamVar.getKey())
+							|| streamGenvSeeds.containsKey(streamVar.getKey()));
+		}
+		final @Nullable FieldrefConstant streamLayoutField = seedsStreamValue
+				? mainCtx.layoutPool.intern(cp, className, am.ik.rontolisp.LispLayout.STREAM) : null;
+		final ConstantPool.@Nullable StringConstant streamKindStandardStr = seedsStreamValue
+				? cp.addString(am.ik.rontolisp.LispLayout.Kinds.STANDARD) : null;
+		// The layout half of <clinit>, assembled HERE because it mints CONSTANT_String
+		// entries and the constant pool is serialized by .writeConstantPool(cp) below,
+		// before the writeFields/writeMethods lambdas run.
+		final List<Integer> layoutClinitCode = new ArrayList<>();
+		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
 		// When the standard-stream handles are reserved, the stream table must EXIST
 		// from the start with those slots empty. _addStream reserves the COUNT, but it
 		// runs only when something is opened -- while the reserved handle 2 is a live
@@ -2970,6 +2990,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						JvmRuntimeBuilder.emitU2(clinitCode,
 								java.util.Objects.requireNonNull(streamCountFieldRef).index());
 					}
+					clinitCode.addAll(layoutClinitCode);
 					// The standard stream variables' defaults, one table
 					// (StreamDesignators) feeding BOTH homes: the per-name global field
 					// a direct read uses, and the eval runtime's _genv mirror that
@@ -2977,7 +2998,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
 						FieldrefConstant globalField = streamGlobalSeeds.get(streamVar.getKey());
 						if (globalField != null) {
-							emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf);
+							emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf,
+									objectClass, streamLayoutField, streamKindStandardStr);
 							clinitCode.add(Opcode.PUTSTATIC);
 							JvmRuntimeBuilder.emitU2(clinitCode, globalField.index());
 						}
@@ -3001,7 +3023,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							clinitCode.add(Opcode.AASTORE);
 							clinitCode.add(Opcode.DUP);
 							clinitCode.add(Opcode.ICONST_1);
-							emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf);
+							emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf,
+									objectClass, streamLayoutField, streamKindStandardStr);
 							clinitCode.add(Opcode.AASTORE);
 							clinitCode.add(Opcode.AASTORE);
 							clinitCode.add(Opcode.DUP);
@@ -3013,7 +3036,6 @@ public final class JvmLispCompiler implements LispCompiler {
 							JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
 						}
 					}
-					clinitCode.addAll(layoutClinitCode);
 					clinitCode.addAll(structTableClinitFinal);
 					if (topRunnerRef != null) {
 						// Run the top level last, after every piece of runtime infra
@@ -3031,8 +3053,13 @@ public final class JvmLispCompiler implements LispCompiler {
 					// StackMapAugmenter copies the declared maximum verbatim, so an
 					// under-declaration is a VerifyError at class load, not a compile
 					// error.
+					// A stream-VALUE seed adds its own Object[3] build (array, dup,
+					// index, then a briefly-two-slot long) on top of whichever nest it
+					// sits in, hence the +6 -- an over-declared maximum is free, an
+					// under-declared one is a VerifyError at class load.
 					final int clinitMaxStack = Math.max(streamGenvSeeds.isEmpty() ? 0 : 8,
-							!structTableClinitFinal.isEmpty() ? 10 : (mainCtx.layoutPool.isEmpty() ? 2 : 4));
+							!structTableClinitFinal.isEmpty() ? 10 : (mainCtx.layoutPool.isEmpty() ? 2 : 4))
+							+ (streamLayoutField != null ? 6 : 0);
 					// A layout-only program never runs ensureThreadLocalInfra, so the
 					// channel's <clinit> name constants are null there; a
 					// bound-special-only
@@ -3838,9 +3865,46 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * push it through here, so neither can drift from {@code StreamDesignators}' table.
 	 */
 	private static void emitStreamDefault(List<Integer> code, LispVal value,
-			ConstantPool.@Nullable StringConstant tDesignator, MethodrefConstant longValueOf) {
+			ConstantPool.@Nullable StringConstant tDesignator, MethodrefConstant longValueOf,
+			ConstantPool.ClassConstant objectClass, @Nullable FieldrefConstant streamLayoutField,
+			ConstantPool.@Nullable StringConstant streamKindStr) {
+		if (value instanceof LispCons) {
+			// *error-output*'s default is the stream VALUE over the reserved handle 2:
+			// Object[]{layout, Long(2), ":STANDARD"} -- the same shape
+			// JvmObjCompiler.emitWrapStream builds at a producer, written out here
+			// because <clinit> has no expression compiler.
+			JvmRuntimeBuilder.emitIntConstStatic(code, 1 + am.ik.rontolisp.LispLayout.STREAM.capacity());
+			code.add(Opcode.ANEWARRAY);
+			JvmRuntimeBuilder.emitU2(code, objectClass.index());
+			code.add(Opcode.DUP);
+			code.add(Opcode.ICONST_0);
+			code.add(Opcode.GETSTATIC);
+			JvmRuntimeBuilder.emitU2(code, java.util.Objects.requireNonNull(streamLayoutField).index());
+			code.add(Opcode.AASTORE);
+			code.add(Opcode.DUP);
+			code.add(Opcode.ICONST_1);
+			JvmRuntimeBuilder.emitIntConstStatic(code, (int) StreamDesignators.STANDARD_ERROR_HANDLE);
+			code.add(Opcode.I2L);
+			code.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(code, longValueOf.index());
+			code.add(Opcode.AASTORE);
+			code.add(Opcode.DUP);
+			code.add(Opcode.ICONST_2);
+			code.add(Opcode.LDC_W);
+			JvmRuntimeBuilder.emitU2(code, java.util.Objects.requireNonNull(streamKindStr).index());
+			code.add(Opcode.AASTORE);
+			return;
+		}
 		if (value instanceof LispInteger handle) {
 			JvmRuntimeBuilder.emitIntConstStatic(code, (int) handle.value());
+			code.add(Opcode.I2L);
+			code.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(code, longValueOf.index());
+			return;
+		}
+		if (value instanceof LispCons) {
+			// The instance gate is off (see seedsStreamValue): the raw reserved handle.
+			JvmRuntimeBuilder.emitIntConstStatic(code, (int) StreamDesignators.STANDARD_ERROR_HANDLE);
 			code.add(Opcode.I2L);
 			code.add(Opcode.INVOKESTATIC);
 			JvmRuntimeBuilder.emitU2(code, longValueOf.index());
@@ -5035,10 +5099,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		/**
 		 * True when the program can build a SYNONYM STREAM ({@code make-synonym-stream}
 		 * is the only way to, and it has no read syntax), so every stream-designator
-		 * resolution has to run through {@code %SYNONYM-TARGET}. A program that never
+		 * resolution has to run through {@code %STREAM-TARGET}. A program that never
 		 * spells it keeps its exact bytes.
 		 */
 		boolean usesSynonymStreams = false;
+
+		/**
+		 * True when an OPEN stream VALUE ({@code LispLayout.STREAM}) can exist in this
+		 * class -- the program spells a stream constructor, or names
+		 * {@code *error-output*} whose seeded default is one
+		 * ({@code LispMacroExpander.mayCreateStreamValues}). It gates BOTH halves of the
+		 * representation: the {@code %obj-new} wrap a producer emits and the
+		 * {@code %STREAM-TARGET} unwrap a consumer emits, so the two can never disagree
+		 * and a program the scan says no about keeps raw handles end to end.
+		 */
+		boolean usesStreamValues = false;
 
 		/**
 		 * True when an async runtime value -- a stream or a stream-read token, both
@@ -5265,6 +5340,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesSeqString = builder.usesSeqString;
 			this.mayUseInstances = builder.mayUseInstances;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
+			this.usesStreamValues = builder.usesStreamValues;
 			this.mayUseAsyncValues = builder.mayUseAsyncValues;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
@@ -5548,6 +5624,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean mayUseInstances = false;
 
 			private boolean usesSynonymStreams = false;
+
+			private boolean usesStreamValues = false;
 
 			private boolean mayUseAsyncValues = false;
 
@@ -6020,6 +6098,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesSynonymStreams(boolean usesSynonymStreams) {
 				this.usesSynonymStreams = usesSynonymStreams;
+				return this;
+			}
+
+			Builder usesStreamValues(boolean usesStreamValues) {
+				this.usesStreamValues = usesStreamValues;
 				return this;
 			}
 

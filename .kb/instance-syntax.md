@@ -245,7 +245,10 @@ registry seeds 21 built-in condition classes, so it is never empty. Since
 todo-304 the scan also answers true for `read` / `read-from-string` / `load`
 heads (and `#'read`/`#'read-from-string`): the emitted runtime reader can
 construct a PATHNAME instance from `#P"..."`, so a read-using program is
-instance-capable.
+instance-capable. Since todo-553 it also answers true for
+`mayCreateStreamValues` -- an OPEN stream is an instance of the fixed `%STREAM`
+layout, and so is the `*error-output*` a program merely NAMES
+(`.kb/read-load-streams.md`, "A stream is a VALUE").
 
 ## Where the expansions live
 

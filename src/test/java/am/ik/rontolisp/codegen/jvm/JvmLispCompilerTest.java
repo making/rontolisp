@@ -49,7 +49,7 @@ class JvmLispCompilerTest {
 
 	// Gray-stream tests pre-process with LispPreludeLibrary.process +
 	// GrayStreamsLibrary.process, in the CLI pipeline's order: the dispatch helpers
-	// gray.lisp splices resolve their stream through the prelude's %synonym-target.
+	// gray.lisp splices resolve their stream through the prelude's %stream-target.
 	private String compileAndRunGray(String lispCode) throws Exception {
 		return compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
@@ -2485,7 +2485,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (boundp '*error-output*)) (print (symbol-value '*error-output*))"
 				+ "(print (boundp '*standard-output*)) (print (symbol-value '*standard-output*))"
 				+ "(print (boundp '*standard-input*)) (print (symbol-value '*standard-input*))"))
-			.isEqualTo("T\n2\nT\nT\nT\nT");
+			.isEqualTo("T\n#<STREAM :HANDLE 2 :KIND :STANDARD>\nT\nT\nT\nT");
 	}
 
 	@Test
@@ -2496,7 +2496,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(defvar *sv-stream-name* '*error-output*)"
 				+ "(print (boundp *sv-stream-name*)) (print (symbol-value *sv-stream-name*))"
 				+ "(setq *error-output* 7) (print (symbol-value '*error-output*))"))
-			.isEqualTo("T\n2\n7");
+			.isEqualTo("T\n#<STREAM :HANDLE 2 :KIND :STANDARD>\n7");
 	}
 
 	@Test
@@ -7952,11 +7952,13 @@ class JvmLispCompilerTest {
 				      (handle (make-string-input-stream "z")))
 				  (print (list (input-stream-p in) (output-stream-p in)))
 				  (print (list (input-stream-p out) (output-stream-p out)))
-				  (print (list (input-stream-p handle) (output-stream-p handle))))
+				  (print (list (input-stream-p handle) (output-stream-p handle)))
+				  (print (list (input-stream-p 3) (output-stream-p 3))))
 				""")).isEqualTo("""
 				(T NIL)
 				(NIL T)
-				(T T)""");
+				(T T)
+				(NIL NIL)""");
 	}
 
 	@Test
@@ -7982,9 +7984,9 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("""
 				(T T NIL)
 				(T T NIL)
-				(T NIL T T NIL)
+				(T NIL NIL T NIL)
 				:LISP-STREAM
-				(T NIL T)""");
+				(T NIL NIL)""");
 	}
 
 	@Test
@@ -11780,6 +11782,8 @@ class JvmLispCompilerTest {
 				             (typep *readtable* 'readtable)
 				             (typep 3 'file-stream)
 				             (typep "s" 'file-stream)))
+				(print (let ((s (make-string-input-stream "z")))
+				         (list (typep s 'file-stream) (typep s 'string-stream) (typep s 'stream))))
 				(print (symbol-name (copy-symbol 'jcs-name)))
 				(print (let ((h (user-homedir-pathname))) (or (null h) (pathnamep h))))
 				(print (list (handler-case (compile-file "x") (error (e) :cf))
@@ -11787,7 +11791,7 @@ class JvmLispCompilerTest {
 				             (handler-case (remove-method 1 2) (error (e) :rm))
 				             (handler-case (invoke-debugger (make-condition 'simple-error :format-control "b"))
 				               (error (e) :dbg))))
-				""")).isEqualTo("3\n(NIL NIL)\nT\n(T T T NIL)\n\"JCS-NAME\"\nT\n(:CF :CFP :RM :DBG)");
+				""")).isEqualTo("3\n(NIL NIL)\nT\n(T T NIL NIL)\n(NIL T T)\n\"JCS-NAME\"\nT\n(:CF :CFP :RM :DBG)");
 	}
 
 	@Test

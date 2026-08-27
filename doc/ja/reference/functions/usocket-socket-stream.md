@@ -3,8 +3,8 @@
 `(usocket:socket-stream socket)` -- `(usocket:socket-close socket)`
 
 `socket-stream` はソケットに対応するストリームを返し、`socket-close` は
-フラッシュして閉じます。このシムではソケットはストリームハンドルそのもの
-(`rontolisp:tcp-*` のハンドルはファイルストリームとハンドル空間を共有)
+フラッシュして閉じます。このシムではソケットはストリームそのもの
+(`rontolisp:tcp-*` は `open` と同じくストリーム値を返す)
 なので、`socket-stream` は恒等関数です --
 `(read-line (usocket:socket-stream sock))` のようなポータブルな usocket
 コードがそのまま動くために存在します -- そして `socket-close` は `close`

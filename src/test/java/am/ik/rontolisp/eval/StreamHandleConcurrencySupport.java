@@ -81,9 +81,9 @@ final class StreamHandleConcurrencySupport {
 	/**
 	 * The handler program both backends serve: every request opens its own TCP connection
 	 * to the echo server, sends its own path as the payload, reads the echo back and
-	 * answers {@code "<socket-handle> <echoed-path>"}. A handle shared between two
-	 * in-flight requests therefore shows up twice -- and the crossed reads show up as a
-	 * mismatched echo.
+	 * answers {@code "<socket-stream> <echoed-path>"}. A stream printed twice therefore
+	 * names one handle handed to two in-flight requests -- and the crossed reads show up
+	 * as a mismatched echo.
 	 * @param echoPort the port of {@link #startEchoServer}
 	 * @param servePort the port the handler serves on
 	 * @return the rontolisp program text
@@ -158,13 +158,17 @@ final class StreamHandleConcurrencySupport {
 		int index = 0;
 		for (String body : bodies) {
 			String expectedToken = "/token-" + round + "-" + index;
-			// "200 <handle> <echoed token>"
-			String[] parts = body.split(" ");
-			if (parts.length != 3 || !"200".equals(parts[0]) || !expectedToken.equals(parts[2])) {
+			// "200 <printed stream> <echoed token>" -- a stream PRINTS as a
+			// self-describing value (#<STREAM :HANDLE n :KIND :SOCKET>), which has
+			// spaces in it, so the token is what follows the LAST one.
+			int lastSpace = body.lastIndexOf(' ');
+			String token = lastSpace < 0 ? "" : body.substring(lastSpace + 1);
+			String prefix = lastSpace < 0 ? body : body.substring(0, lastSpace);
+			if (!prefix.startsWith("200 ") || !expectedToken.equals(token)) {
 				broken.add(expectedToken + " -> " + body);
 			}
 			else {
-				handles.add(parts[1]);
+				handles.add(prefix.substring("200 ".length()));
 			}
 			if (++index == CONCURRENCY) {
 				index = 0;

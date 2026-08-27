@@ -1352,8 +1352,8 @@ public final class LispEvaluator {
 		// the core knows no third-party name.
 		LispVal baseWriteString = this.globalEnv.lookupFunction(LispNames.WRITE_STRING);
 		this.globalEnv.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
-			if (args.size() >= 2 && args.get(1) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			if (args.size() >= 2 && dispatchesToGray(args.get(1))) {
 				ensureGrayStreamsLoaded();
 				LispVal generic = resolveFunction(
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.GRAY_STREAM_WRITE_STRING));
@@ -1370,8 +1370,8 @@ public final class LispEvaluator {
 		// routes non-instances straight to the base function).
 		LispVal baseReadByte = this.globalEnv.lookupFunction(LispNames.READ_BYTE);
 		this.globalEnv.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
-			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 				return applyGrayDispatch(GRAY_READ_BYTE_DISPATCH,
 						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
 								args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
@@ -1380,8 +1380,8 @@ public final class LispEvaluator {
 		}));
 		LispVal baseReadChar = this.globalEnv.lookupFunction(LispNames.READ_CHAR);
 		this.globalEnv.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
-			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 				return applyGrayDispatch(GRAY_READ_CHAR_DISPATCH,
 						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
 								args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
@@ -1390,8 +1390,8 @@ public final class LispEvaluator {
 		}));
 		LispVal baseReadLine = this.globalEnv.lookupFunction(LispNames.READ_LINE);
 		this.globalEnv.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
-			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 				// eof-error-p defaults to NIL, the read-line lite convention the
 				// handle-based built-in documents.
 				return applyGrayDispatch(GRAY_READ_LINE_DISPATCH,
@@ -1403,8 +1403,8 @@ public final class LispEvaluator {
 		LispVal baseReadCharNoHang = this.globalEnv.lookupFunction(LispNames.READ_CHAR_NO_HANG);
 		this.globalEnv.defineFunction(LispNames.READ_CHAR_NO_HANG,
 				new LispFunction(LispNames.READ_CHAR_NO_HANG, rawArgs -> {
-					List<LispVal> args = resolveSynonymArg(rawArgs, 0);
-					if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+					List<LispVal> args = resolveStreamArg(rawArgs, 0);
+					if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 						return applyGrayDispatch(GRAY_READ_CHAR_NO_HANG_DISPATCH,
 								List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
 										args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
@@ -1417,8 +1417,8 @@ public final class LispEvaluator {
 		// %peek-char loop, which cannot see an instance.
 		LispVal basePeekChar = this.globalEnv.lookupFunction(LispNames.PEEK_CHAR);
 		this.globalEnv.defineFunction(LispNames.PEEK_CHAR, new LispFunction(LispNames.PEEK_CHAR, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
-			if (args.size() >= 2 && args.get(1) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			if (args.size() >= 2 && dispatchesToGray(args.get(1))) {
 				return applyGrayDispatch(GRAY_PEEK_CHAR_DISPATCH,
 						List.of(args.get(0), args.get(1), args.size() >= 3 ? args.get(2) : LispTrue.INSTANCE,
 								args.size() >= 4 ? args.get(3) : LispNil.INSTANCE));
@@ -1427,8 +1427,8 @@ public final class LispEvaluator {
 		}));
 		LispVal baseUnreadChar = this.globalEnv.lookupFunction(LispNames.UNREAD_CHAR);
 		this.globalEnv.defineFunction(LispNames.UNREAD_CHAR, new LispFunction(LispNames.UNREAD_CHAR, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
-			if (args.size() == 2 && args.get(1) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			if (args.size() == 2 && dispatchesToGray(args.get(1))) {
 				return applyGrayDispatch(GRAY_UNREAD_CHAR_DISPATCH, List.of(args.get(0), args.get(1)));
 			}
 			return apply(baseUnreadChar, args, this.globalEnv);
@@ -1459,24 +1459,24 @@ public final class LispEvaluator {
 		}));
 		LispVal baseWriteByte = this.globalEnv.lookupFunction(LispNames.WRITE_BYTE);
 		this.globalEnv.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
-			if (args.size() == 2 && args.get(1) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			if (args.size() == 2 && dispatchesToGray(args.get(1))) {
 				return applyGrayDispatch(GRAY_WRITE_BYTE_DISPATCH, List.of(args.get(0), args.get(1)));
 			}
 			return apply(baseWriteByte, args, this.globalEnv);
 		}));
 		LispVal baseListen = this.globalEnv.lookupFunction(LispNames.LISTEN);
 		this.globalEnv.defineFunction(LispNames.LISTEN, new LispFunction(LispNames.LISTEN, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
-			if (args.size() == 1 && args.get(0) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (args.size() == 1 && dispatchesToGray(args.get(0))) {
 				return applyGrayDispatch(GRAY_LISTEN_DISPATCH, List.of(args.get(0)));
 			}
 			return apply(baseListen, args, this.globalEnv);
 		}));
 		LispVal baseFilePosition = this.globalEnv.lookupFunction(LispNames.FILE_POSITION);
 		this.globalEnv.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
-			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 				if (args.size() == 1) {
 					return applyGrayDispatch(GRAY_FILE_POSITION_DISPATCH, List.of(args.get(0)));
 				}
@@ -1519,14 +1519,15 @@ public final class LispEvaluator {
 		// checks, so the two seams agree. Deliberately NOT synonym-resolved either:
 		// closing a synonym stream closes the SYNONYM, not the stream it forwards to
 		// (CLHS 21.1.3), which the built-in already answers t for -- and the helper's
-		// instance arm answers the same. The :abort tail is accepted and ignored, like
-		// the built-in's.
+		// instance arm answers the same. An OPEN stream is an instance too and is the one
+		// kind that must NOT take the Gray arm -- it is what close really has work to do
+		// for -- so it goes to the built-in by tag. The :abort tail is accepted and
+		// ignored, like the built-in's.
 		LispVal baseClose = this.globalEnv.lookupFunction(LispNames.CLOSE);
 		this.globalEnv.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
 			boolean closeable = args.size() == 1
 					|| (args.size() == 3 && args.get(1) instanceof LispSymbol kw && ":ABORT".equals(kw.name()));
-			if (closeable && args.get(0) instanceof LispInstance
-					&& this.closRegistry.findGeneric(LispNames.CLOSE) == null) {
+			if (closeable && dispatchesToGray(args.get(0)) && this.closRegistry.findGeneric(LispNames.CLOSE) == null) {
 				return applyGrayDispatch(GRAY_CLOSE_DISPATCH, List.of(args.get(0)));
 			}
 			return apply(baseClose, args, this.globalEnv);
@@ -1737,7 +1738,7 @@ public final class LispEvaluator {
 						throw new LispEvalException(
 								LispNames.MAKE_SYNONYM_STREAM + " expects a symbol, got " + args.get(0).print());
 					}
-					LispFunction reader = new LispFunction(LispNames.SYNONYM_TARGET,
+					LispFunction reader = new LispFunction(LispNames.STREAM_TARGET,
 							ignored -> symbolValueOf(sym.name()));
 					return new LispInstance(LispLayout.SYNONYM_STREAM, new LispVal[] { sym, reader });
 				}));
@@ -4296,8 +4297,8 @@ public final class LispEvaluator {
 	private void wrapGrayOutputOperator(String name, int streamIndex, String helperName) {
 		LispVal base = this.globalEnv.lookupFunction(name);
 		this.globalEnv.defineFunction(name, new LispFunction(name, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, streamIndex);
-			if (args.size() == streamIndex + 1 && args.get(streamIndex) instanceof LispInstance) {
+			List<LispVal> args = resolveStreamArg(rawArgs, streamIndex);
+			if (args.size() == streamIndex + 1 && dispatchesToGray(args.get(streamIndex))) {
 				List<LispVal> forwarded = streamIndex == 0 ? List.of(args.get(0)) : List.of(args.get(0), args.get(1));
 				return applyGrayDispatch(helperName, forwarded);
 			}
@@ -4319,9 +4320,8 @@ public final class LispEvaluator {
 	private void wrapGrayOwnableOperator(String name, String helperName) {
 		LispVal base = this.globalEnv.lookupFunction(name);
 		this.globalEnv.defineFunction(name, new LispFunction(name, rawArgs -> {
-			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
-			if (args.size() == 1 && args.get(0) instanceof LispInstance
-					&& this.closRegistry.findGeneric(name) == null) {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (args.size() == 1 && dispatchesToGray(args.get(0)) && this.closRegistry.findGeneric(name) == null) {
 				return applyGrayDispatch(helperName, List.of(args.get(0)));
 			}
 			return apply(base, args, this.globalEnv);
@@ -4404,7 +4404,7 @@ public final class LispEvaluator {
 					env);
 		}
 		LispVal seq = eval(parts.get(1), env);
-		LispVal stream = Environment.synonymTarget(eval(parts.get(2), env));
+		LispVal stream = Environment.streamTarget(eval(parts.get(2), env));
 		if (stream instanceof LispInstance) {
 			LispVal start = new LispInteger(0);
 			LispVal end = LispNil.INSTANCE;
@@ -4451,7 +4451,7 @@ public final class LispEvaluator {
 			return eval(LispMacroExpander.expandWriteChar(cons), env);
 		}
 		LispVal ch = eval(parts.get(1), env);
-		LispVal stream = Environment.synonymTarget(eval(parts.get(2), env));
+		LispVal stream = Environment.streamTarget(eval(parts.get(2), env));
 		if (stream instanceof LispInstance) {
 			return applyGrayDispatch(GRAY_WRITE_CHAR_DISPATCH, List.of(ch, stream));
 		}
@@ -5124,7 +5124,7 @@ public final class LispEvaluator {
 			case LispNames.CONSTANTP:
 				return eval(LispMacroExpander.expandConstantp(cons), env);
 			case LispNames.STREAMP:
-				return eval(LispMacroExpander.expandStreamp(cons, true, this.closRegistry), env);
+				return eval(LispMacroExpander.expandStreamp(cons, true, true, this.closRegistry), env);
 			case LispNames.SIMPLE_STRING_P:
 				return eval(LispMacroExpander.expandSimpleStringP(cons), env);
 			// make-broadcast-stream goes through the SAME expansion the compile paths
@@ -7051,13 +7051,27 @@ public final class LispEvaluator {
 	 * @return the same list when nothing forwards, else a copy with the resolved
 	 * designator
 	 */
-	private static List<LispVal> resolveSynonymArg(List<LispVal> args, int index) {
+	private static List<LispVal> resolveStreamArg(List<LispVal> args, int index) {
 		if (index >= args.size() || !Environment.isSynonymStream(args.get(index))) {
 			return args;
 		}
 		List<LispVal> resolved = new java.util.ArrayList<>(args);
+		// The SYNONYM half only: the base built-ins resolve an open stream to its handle
+		// themselves, and the Gray arm below has to see the value to tell the two apart.
 		resolved.set(index, Environment.synonymTarget(args.get(index)));
 		return resolved;
+	}
+
+	/**
+	 * Whether a resolved stream argument goes to the Gray protocol rather than to the
+	 * handle-based built-in. Every stream is an instance now, so "is an instance" is no
+	 * longer the question: an OPEN stream ({@code LispLayout.STREAM}) is exactly the kind
+	 * the built-in owns.
+	 * @param value the resolved stream argument
+	 * @return true for a Gray (or synonym) instance, false for an open stream
+	 */
+	private static boolean dispatchesToGray(LispVal value) {
+		return value instanceof LispInstance && !Environment.isStreamValue(value);
 	}
 
 	private static int requireSlotIndex(String name, LispInstance inst, List<LispVal> args) {
@@ -9150,7 +9164,7 @@ public final class LispEvaluator {
 			}
 			else {
 				bodyHandle = this.globalEnv.openHttpBodyStream(request.body());
-				rawBody = new LispInteger(bodyHandle);
+				rawBody = am.ik.rontolisp.compiler.StreamDesignators.streamValue(bodyHandle, LispLayout.Kinds.BODY);
 			}
 		}
 		else if (request.body().length == 0) {

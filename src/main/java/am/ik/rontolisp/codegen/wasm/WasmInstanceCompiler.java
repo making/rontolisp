@@ -80,6 +80,46 @@ final class WasmInstanceCompiler {
 		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
 	}
 
+	/**
+	 * Wraps the raw stream HANDLE already on the stack into the OPEN stream value of
+	 * {@link am.ik.rontolisp.LispLayout#STREAM}. Emitted at every stream producer when
+	 * {@code ctx.usesStreamValues} is on -- which is exactly when
+	 * {@code WasmEmitHelper.streamDesignator} emits the matching unwrap, so the two
+	 * halves cannot disagree.
+	 * @param ctx the compile context (two temporaries are allocated)
+	 * @param kind one of {@code LispLayout.Kinds}
+	 */
+	static void emitWrapStream(WasmLispCompiler.Ctx ctx, String kind) {
+		requireGate(ctx, LispNames.OBJ_NEW);
+		int address = layoutAddress(ctx, LispLayout.STREAM_TAG);
+		int handleSlot = ctx.allocTemp();
+		setLocal(ctx, handleSlot);
+		refNull(ctx);
+		i32Const(ctx, LispLayout.STREAM.capacity());
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int slotsSlot = ctx.allocTemp();
+		setLocal(ctx, slotsSlot);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		i32Const(ctx, 0);
+		getLocal(ctx, handleSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		i32Const(ctx, 1);
+		// Through the ordinary keyword compilation, so the KIND slot holds exactly what
+		// the makeTypeTest kind comparison reads back.
+		WasmExprCompiler.compileExpr(new LispSymbol(kind), ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		i32Const(ctx, address);
+		getLocal(ctx, slotsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+	}
+
 	/** {@code (%obj-ref obj <k>)}. */
 	static void compileRef(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();

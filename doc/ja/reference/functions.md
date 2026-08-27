@@ -169,7 +169,7 @@
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |
 | `constantp` | `(constantp 5)`, `(constantp 'x)` | `t`, `nil` -- 自己評価オブジェクト（数値、文字列、文字、キーワード、`t`/`nil`）と `(quote x)` 形式で真（lite）。省略可能な環境引数は受け付けて無視します |
-| `streamp` | `(streamp s)` | `s` がストリームなら `t`、そうでなければ `nil`（lite: ストリームは整数ハンドルなので `integerp` に相当。`stream` 型指定子の裏付けでもある） |
+| `streamp` | `(streamp s)` | `s` がストリームなら `t`、そうでなければ `nil`（ストリームは自己記述的な値なので整数はストリームではない。`stream`/`file-stream`/`string-stream` 型指定子の裏付けでもある） |
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1`(`(car nil)` は `nil`) |
 | `cdr` | `(cdr (cons 1 2))` | `2`(`(cdr nil)` は `nil`) |

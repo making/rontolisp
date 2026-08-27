@@ -30,7 +30,12 @@ final class JvmFileMetaCompiler {
 					name + " expects " + arity + " argument(s), got " + (parts.size() - 1));
 		}
 		for (int i = 1; i <= arity; i++) {
-			JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
+			// file-length's argument is a STREAM designator, not a path: it is resolved
+			// to the raw handle the _fileLength helper looks the namestring up by.
+			LispVal arg = LispNames.FILE_LENGTH.equals(name)
+					? java.util.Objects.requireNonNull(JvmStringStreamCompiler.streamDesignator(ctx, parts.get(i)))
+					: parts.get(i);
+			JvmExprCompiler.compileExpr(arg, ctx, className);
 		}
 		String method = switch (name) {
 			case LispNames.FILE_WRITE_DATE -> JvmIoRuntimeBuilder.FILE_WRITE_DATE_METHOD;

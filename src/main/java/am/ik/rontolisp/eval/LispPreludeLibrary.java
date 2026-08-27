@@ -826,20 +826,24 @@ public final class LispPreludeLibrary {
 				(defun %make-broadcast-stream (%mbs-components)
 				  (make-instance '%broadcast-stream :components %mbs-components))
 				""");
-		// %synonym-target: the ONE resolution of a stream DESIGNATOR through a synonym
-		// stream. A synonym stream is a value (LispLayout.SYNONYM_STREAM) whose reserved
-		// cell holds a zero-argument closure reading the variable it names, so calling it
+		// %stream-target: the ONE resolution of a stream DESIGNATOR down to the raw
+		// handle the I/O primitives act on. Two things are resolved, in this order.
+		// A synonym stream is a value (LispLayout.SYNONYM_STREAM) whose reserved cell
+		// holds a zero-argument closure reading the variable it names, so calling it
 		// answers that variable's value AS OF NOW -- the per-operation forwarding CL
-		// prescribes -- and the recursion carries a synonym over a synonym. Reached from
-		// both compile-path seams (Jvm/Wasm streamArg, via
-		// StreamDesignators.throughSynonym)
-		// and from every gray.lisp dispatch helper, which must resolve BEFORE its %obj-p
-		// test or a synonym stream would take the CLOS arm.
-		SOURCES.put(LispNames.SYNONYM_TARGET, """
-				(defun %synonym-target (%st-s)
+		// prescribes -- and the recursion carries a synonym over a synonym. An OPEN
+		// stream is a value too (LispLayout.STREAM), and its slot 0 IS the handle.
+		// Reached from both compile-path seams (Jvm/Wasm streamArg, via
+		// StreamDesignators.throughStream) and from every gray.lisp dispatch helper,
+		// which must resolve BEFORE its %obj-p test or a stream value -- synonym or open
+		// -- would take the CLOS arm.
+		SOURCES.put(LispNames.STREAM_TARGET, """
+				(defun %stream-target (%st-s)
 				  (if (%obj-is %st-s '%SYNONYM-STREAM)
-				      (%synonym-target (funcall (%obj-ref %st-s 1)))
-				      %st-s))
+				      (%stream-target (funcall (%obj-ref %st-s 1)))
+				      (if (%obj-is %st-s '%STREAM)
+				          (%obj-ref %st-s 0)
+				          %st-s)))
 				""");
 		SOURCES.put(LispNames.SYNONYM_STREAM_SYMBOL, """
 				(defun synonym-stream-symbol (%sss-s)
@@ -2185,14 +2189,22 @@ public final class LispPreludeLibrary {
 		// compilers, after this pass: uiop:file-exists-p becomes (probe-file x) and
 		// uiop:namestring / uiop:native-namestring become (namestring x), so a program
 		// spelling only the uiop name must still splice the CL definition.
-		// %synonym-target has the same timing problem twice over: the compile-path
+		// %stream-target has the same timing problem three times over: the compile-path
 		// seams insert the call inside the expression compilers, and gray.lisp's
 		// dispatch helpers -- which call it unconditionally -- are spliced by
-		// GrayStreamsLibrary AFTER this pass. So the selection keys on the two SURFACE
-		// facts instead: the program builds a synonym stream, or it uses the Gray
-		// protocol (which is exactly when a dispatch helper can be spliced).
-		if (LispNames.SYNONYM_TARGET.equals(entry)) {
-			return referencesName(program, LispNames.MAKE_SYNONYM_STREAM, canonical)
+		// GrayStreamsLibrary AFTER this pass. So the selection keys on the SURFACE
+		// facts instead: the program can build an OPEN stream value (every stream
+		// consumer then resolves through it), it builds a synonym stream, or it uses
+		// the Gray protocol (which is exactly when a dispatch helper can be spliced).
+		//
+		// This is a best effort, not a guarantee: a stream value can also arrive from a
+		// form injected AFTER this pass (the generated condition renderer and the
+		// print-object seam both open a string output stream), which nothing here can
+		// see. That is why the compile-path seams fall back to the INLINE unwrap when
+		// the defun is absent -- see StreamDesignators.throughStreamInline.
+		if (LispNames.STREAM_TARGET.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.mayCreateStreamValues(program)
+					|| referencesName(program, LispNames.MAKE_SYNONYM_STREAM, canonical)
 					|| GrayStreamsLibrary.usesProtocol(program);
 		}
 		// %print-cased: the printing operators are rewritten onto it inside the

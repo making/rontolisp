@@ -259,7 +259,7 @@ public final class LibraryDefunPruner {
 		// that pass just spliced.
 		// uiop:with-temporary-file's two expansion callees are the same case: the macro
 		// expands inside the expression compilers, after this walk.
-		// %synonym-target is the same case twice over: both compile-path stream seams
+		// %stream-target is the same case twice over: both compile-path stream seams
 		// insert the call inside the expression compilers, and gray.lisp's dispatch
 		// helpers -- which call it -- are spliced after this walk.
 		// %print-cased is reached from the printing operators, rewritten onto it inside
@@ -268,7 +268,7 @@ public final class LibraryDefunPruner {
 		// :if-does-not-exist guard LispMacroExpander.lowerLoadOptions builds -- both
 		// inside the expression compilers, after this walk.
 		for (String synthesized : List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.TEMP_FILE_NAME,
-				LispNames.DELETE_FILE_IF_EXISTS, LispNames.SYNONYM_TARGET, LispNames.PRINT_CASED_INTERNAL,
+				LispNames.DELETE_FILE_IF_EXISTS, LispNames.STREAM_TARGET, LispNames.PRINT_CASED_INTERNAL,
 				LispNames.PROBE_FILE)) {
 			if (LispPreludeLibrary.referencedBySurfaceForm(synthesized, resolved, true)) {
 				roots.add(LispPreludeLibrary.definedName(synthesized));

@@ -145,7 +145,7 @@ class WasmLispCompilerIntegrationTest {
 
 	// Programs that reach a prelude defun mirror the CLI pipeline's prelude splice; the
 	// Gray variant adds GrayStreamsLibrary in the CLI's order, so the dispatch helpers
-	// gray.lisp splices resolve their stream through the prelude's %synonym-target.
+	// gray.lisp splices resolve their stream through the prelude's %stream-target.
 	private static String compileAndRunPrelude(String lispCode) throws Exception {
 		return compileAndRunProgram(
 				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
@@ -8946,7 +8946,7 @@ class WasmLispCompilerIntegrationTest {
 					  (print (mapcar #'streamp (list out other 3 t nil)))
 					  (print (etypecase out (integer :fd) (stream :lisp-stream)))
 					  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
-					"""))))).isEqualTo("(T T NIL)\n(T T NIL)\n(T NIL T T NIL)\n:LISP-STREAM\n(T NIL T)");
+					"""))))).isEqualTo("(T T NIL)\n(T T NIL)\n(T NIL NIL T NIL)\n:LISP-STREAM\n(T NIL NIL)");
 	}
 
 	@Test
@@ -11702,7 +11702,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (boundp '*error-output*)) (print (symbol-value '*error-output*))"
 				+ "(print (boundp '*standard-output*)) (print (symbol-value '*standard-output*))"
 				+ "(print (boundp '*standard-input*)) (print (symbol-value '*standard-input*))"))
-			.isEqualTo("T\n2\nT\nT\nT\nT");
+			.isEqualTo("T\n#<STREAM :HANDLE 2 :KIND :STANDARD>\nT\nT\nT\nT");
 	}
 
 	@Test
@@ -11713,7 +11713,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(defvar *sv-stream-name* '*error-output*)"
 				+ "(print (boundp *sv-stream-name*)) (print (symbol-value *sv-stream-name*))"
 				+ "(setq *error-output* 7) (print (symbol-value '*error-output*))"))
-			.isEqualTo("T\n2\n7");
+			.isEqualTo("T\n#<STREAM :HANDLE 2 :KIND :STANDARD>\n7");
 	}
 
 	@Test
@@ -15105,6 +15105,8 @@ class WasmLispCompilerIntegrationTest {
 				             (typep *readtable* 'readtable)
 				             (typep 3 'file-stream)
 				             (typep "s" 'file-stream)))
+				(print (let ((s (make-string-input-stream "z")))
+				         (list (typep s 'file-stream) (typep s 'string-stream) (typep s 'stream))))
 				(print-object 42 *standard-output*)
 				(terpri)
 				(defclass wpo-p () ())
@@ -15112,7 +15114,7 @@ class WasmLispCompilerIntegrationTest {
 				(print-object (make-instance 'wpo-p) *standard-output*)
 				(terpri)
 				(print (make-instance 'wpo-p))
-				""")).isEqualTo("3\n(NIL NIL)\n(T T T NIL)\n42\n#<WPO!>\n#<WPO!>");
+				""")).isEqualTo("3\n(NIL NIL)\n(T T NIL NIL)\n(NIL T T)\n42\n#<WPO!>\n#<WPO!>");
 	}
 
 	@Test

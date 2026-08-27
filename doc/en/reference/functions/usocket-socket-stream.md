@@ -3,8 +3,8 @@
 `(usocket:socket-stream socket)` -- `(usocket:socket-close socket)`
 
 `socket-stream` returns the stream associated with a socket; `socket-close`
-flushes and closes it. In this shim a socket IS its stream handle (the
-`rontolisp:tcp-*` handles share the file-stream handle space), so
+flushes and closes it. In this shim a socket IS its stream (the
+`rontolisp:tcp-*` constructors answer a stream value like `open` does), so
 `socket-stream` is the identity function -- it exists so portable usocket code
 like `(read-line (usocket:socket-stream sock))` runs unchanged -- and
 `socket-close` is `close`.

@@ -125,6 +125,43 @@ final class JvmObjCompiler {
 		}
 	}
 
+	/**
+	 * Wraps the raw stream HANDLE already on the stack into the OPEN stream value of
+	 * {@link LispLayout#STREAM}: {@code Object[]{layout, handle, :kind}}. Emitted at
+	 * every stream producer when {@code ctx.usesStreamValues} is on -- which is exactly
+	 * when {@code JvmStringStreamCompiler.streamDesignator} emits the matching unwrap, so
+	 * the two halves cannot disagree.
+	 * @param ctx the compile context (a temporary local is allocated)
+	 * @param className the class being emitted
+	 * @param kind one of {@link LispLayout.Kinds}
+	 */
+	static void emitWrapStream(JvmLispCompiler.Ctx ctx, String className, String kind) {
+		requireGate(ctx, LispNames.OBJ_NEW);
+		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, LispLayout.STREAM);
+		int handleSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(handleSlot);
+		JvmEmitHelper.emitIntConst(ctx, 1 + LispLayout.STREAM.capacity());
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(ctx.objectClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(lf.index());
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(handleSlot);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_2);
+		// Through the ordinary keyword compilation, so the KIND slot holds exactly what
+		// the makeTypeTest kind comparison reads back.
+		JvmExprCompiler.compileExpr(new LispSymbol(kind), ctx, className);
+		ctx.emit(Opcode.AASTORE);
+	}
+
 	/** {@code (%obj-ref obj <k>)}. */
 	static void compileRef(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();

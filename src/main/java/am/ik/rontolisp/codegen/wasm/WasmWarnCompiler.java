@@ -32,7 +32,9 @@ final class WasmWarnCompiler {
 		Integer errorOutputGlobal = ctx.globalIndices.get(am.ik.rontolisp.LispNames.ERROR_OUTPUT_VAR);
 		if (errorOutputGlobal != null) {
 			// The redirect is active: the destination is the variable's current value.
-			WasmExprCompiler.compileExpr(am.ik.rontolisp.compiler.StreamDesignators.errorOutput(), ctx);
+			WasmExprCompiler.compileExpr(java.util.Objects.requireNonNull(
+					WasmEmitHelper.streamDesignator(ctx, am.ik.rontolisp.compiler.StreamDesignators.errorOutput())),
+					ctx);
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_LINE);
 			ctx.writer.write(Instruction.DROP);

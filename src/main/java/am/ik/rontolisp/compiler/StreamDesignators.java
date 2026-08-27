@@ -5,7 +5,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -84,13 +86,57 @@ public final class StreamDesignators {
 	public static final long FIRST_USER_HANDLE = 3;
 
 	/**
-	 * The designator the {@code *error-output*} variable holds by default: the process
-	 * standard error. Unlike {@code *standard-output*}'s {@code t} this one is a stream
-	 * HANDLE, because {@code t} already names the process standard OUTPUT.
-	 * @return the seeded {@code *error-output*} value
+	 * The VALUE the {@code *error-output*} variable holds by default: the process
+	 * standard error as a stream value over the reserved handle
+	 * {@link #STANDARD_ERROR_HANDLE}. Unlike {@code *standard-output*}'s {@code t} this
+	 * one cannot be a designator, because {@code t} already names the process standard
+	 * OUTPUT -- so it is a real {@code %STREAM} instance, and {@code (streamp
+	 * *error-output*)} answers t off the value itself rather than off "it happens to be
+	 * an integer".
+	 *
+	 * <p>
+	 * Returned as the CONSTRUCTOR EXPRESSION rather than a built instance because the
+	 * compile backends seed the variable by compiling this form; the interpreter takes
+	 * {@link #standardErrorValue()} instead.
+	 * @return the {@code (%obj-new '%STREAM 2 :standard)} form
 	 */
 	public static LispVal standardError() {
-		return new LispInteger(STANDARD_ERROR_HANDLE);
+		return streamValueForm(new LispInteger(STANDARD_ERROR_HANDLE), LispLayout.Kinds.STANDARD);
+	}
+
+	/**
+	 * The interpreter's {@code *error-output*} default: the built instance
+	 * {@link #standardError()} is the constructor form of.
+	 * @return the process standard error stream value
+	 */
+	public static LispInstance standardErrorValue() {
+		return streamValue(STANDARD_ERROR_HANDLE, LispLayout.Kinds.STANDARD);
+	}
+
+	/**
+	 * Builds a stream VALUE over a backend handle -- the interpreter's half of what the
+	 * compile backends emit at every stream producer.
+	 * @param handle the stream table index / file descriptor
+	 * @param kind one of {@link LispLayout.Kinds}
+	 * @return the stream instance
+	 */
+	public static LispInstance streamValue(long handle, String kind) {
+		return new LispInstance(LispLayout.STREAM, new LispVal[] { new LispInteger(handle), new LispSymbol(kind) });
+	}
+
+	/**
+	 * The {@code (%obj-new '%STREAM <handle> :<kind>)} form that wraps a raw handle
+	 * EXPRESSION into a stream value on the compile paths.
+	 * @param handle the expression producing the raw handle
+	 * @param kind one of {@link LispLayout.Kinds}
+	 * @return the constructor form
+	 */
+	public static LispVal streamValueForm(LispVal handle, String kind) {
+		return new LispCons(new LispSymbol(LispNames.OBJ_NEW),
+				new LispCons(
+						new LispCons(new LispSymbol(LispNames.QUOTE),
+								new LispCons(new LispSymbol(LispLayout.STREAM_TAG), LispNil.INSTANCE)),
+						new LispCons(handle, new LispCons(new LispSymbol(kind), LispNil.INSTANCE))));
 	}
 
 	/**
@@ -162,28 +208,69 @@ public final class StreamDesignators {
 	}
 
 	/**
-	 * The same designator expression, resolved through a SYNONYM STREAM: a synonym stream
-	 * is a value ({@code LispLayout.SYNONYM_STREAM}), so the designator a stream
-	 * operation actually acts on is whatever the variable it names holds AT THAT MOMENT
-	 * -- which {@code %SYNONYM-TARGET} answers by calling the reader closure the value
-	 * carries, recursively (a synonym over a synonym resolves too).
+	 * The same designator expression, resolved down to the raw HANDLE the I/O primitives
+	 * act on. Two stream kinds are values rather than handles and both are unwrapped here
+	 * by {@code %STREAM-TARGET}: a synonym stream ({@code LispLayout.SYNONYM_STREAM}),
+	 * whose target is whatever the variable it names holds AT THAT MOMENT (the reader
+	 * closure the value carries, applied recursively so a synonym over a synonym resolves
+	 * too), and an OPEN stream ({@code LispLayout.STREAM}), whose slot 0 IS the handle.
 	 *
 	 * <p>
 	 * Applied by both backends' {@code streamArg}/{@code inputStreamArg} seams, and ONLY
-	 * when the program can build a synonym stream at all ({@code Ctx.usesSynonymStreams}
-	 * -- {@code make-synonym-stream} is the sole constructor and has no read syntax), so
-	 * every other program keeps its exact bytes. A literal that can never BE a synonym
-	 * stream -- an omitted argument, {@code t}, a handle -- is handed back untouched.
+	 * when the program can build a stream VALUE at all ({@code Ctx.usesStreamValues} /
+	 * {@code Ctx.usesSynonymStreams}), so every other program keeps its exact bytes. A
+	 * literal that can never BE one -- an omitted argument, {@code t}, a literal handle
+	 * -- is handed back untouched.
 	 * @param designator the already-resolved designator expression, or {@code null} for
 	 * the hard-coded standard stream
 	 * @return the expression to compile as the designator
 	 */
-	public static @Nullable LispVal throughSynonym(@Nullable LispVal designator) {
+	/** The binding the inline stream-designator unwrap introduces; nesting shadows. */
+	private static final String STREAM_ARG_VAR = "__stream-arg";
+
+	/**
+	 * The same resolution WITHOUT the {@code %STREAM-TARGET} defun: the open-stream
+	 * unwrap written out of the {@code %obj-*} primitives alone,
+	 * {@code (let ((__stream-arg D)) (if (%obj-is __stream-arg '%STREAM) (%obj-ref __stream-arg 0) __stream-arg))}
+	 * -- the shape {@code LispMacroExpander.coercePathArg} uses for a pathname.
+	 *
+	 * <p>
+	 * Used only when the prelude did not splice the defun, which happens for a stream
+	 * value that arrives from a form injected after the prelude selection ran (the
+	 * generated condition renderer and the print-object seam each open a string output
+	 * stream). It cannot resolve a SYNONYM stream and does not need to: a program that
+	 * can build one always names {@code make-synonym-stream}, which the selection sees.
+	 * @param designator the already-resolved designator expression, or {@code null}
+	 * @return the expression to compile as the designator
+	 */
+	public static @Nullable LispVal throughStreamInline(@Nullable LispVal designator) {
 		if (designator == null || designator instanceof LispTrue || designator instanceof LispInteger
 				|| designator instanceof LispNil) {
 			return designator;
 		}
-		return new LispCons(new LispSymbol(LispNames.SYNONYM_TARGET), new LispCons(designator, LispNil.INSTANCE));
+		LispSymbol var = new LispSymbol(STREAM_ARG_VAR);
+		LispVal tagTest = list(new LispSymbol(LispNames.OBJ_IS), var,
+				list(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispLayout.STREAM_TAG)));
+		LispVal unwrap = list(new LispSymbol(LispNames.IF), tagTest,
+				list(new LispSymbol(LispNames.OBJ_REF), var, new LispInteger(0)), var);
+		LispVal binding = list(list(var, designator));
+		return list(new LispSymbol(LispNames.LET), binding, unwrap);
+	}
+
+	private static LispVal list(LispVal... elements) {
+		LispVal tail = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			tail = new LispCons(elements[i], tail);
+		}
+		return tail;
+	}
+
+	public static @Nullable LispVal throughStream(@Nullable LispVal designator) {
+		if (designator == null || designator instanceof LispTrue || designator instanceof LispInteger
+				|| designator instanceof LispNil) {
+			return designator;
+		}
+		return new LispCons(new LispSymbol(LispNames.STREAM_TARGET), new LispCons(designator, LispNil.INSTANCE));
 	}
 
 	private static boolean isStandardOutputRead(LispVal expr) {

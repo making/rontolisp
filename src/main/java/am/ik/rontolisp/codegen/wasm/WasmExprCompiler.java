@@ -236,9 +236,11 @@ final class WasmExprCompiler {
 		}
 		if (LispNames.ERROR_OUTPUT_VAR.equals(name)) {
 			// *error-output* is the process standard ERROR, which t does not name: it is
-			// the handle 2 -- here literally the WASI fd the write helpers already send
-			// stderr to (the program never binds this one, so warn's redirect does not
-			// exist here).
+			// the stream VALUE over the reserved handle 2 -- the fd the write helpers
+			// already send stderr to (the program never binds this one, so warn's
+			// redirect does not exist here). Mentioning the variable is what turns the
+			// stream-value gate on (LispMacroExpander.mayCreateStreamValues), so the
+			// constructor form always compiles here.
 			compileExpr(StreamDesignators.standardError(), ctx);
 			return;
 		}
@@ -424,15 +426,18 @@ final class WasmExprCompiler {
 							WasmExprCompiler.compileExpr(LispMacroExpander.expandReadSequence(cons), ctx);
 						case LispNames.WRITE_SEQUENCE_RAW_INTERNAL ->
 							WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx);
-						// The synonym-stream guard has to apply under the alias too: the
-						// socket rewrite maps (close s) to (%io-close s), whose
+						// The designator resolution has to apply under the alias too:
+						// the socket rewrite maps (close s) to (%io-close s), whose
 						// non-socket arm lands here, so without it a component would
-						// hand a synonym stream to the handle-typed close and TRAP. The
-						// read/write aliases need nothing -- they share the compilers
-						// whose designator seam already resolves it.
+						// hand a synonym stream or an open-stream VALUE to the
+						// handle-typed close and TRAP. The read/write aliases need
+						// nothing -- they share the compilers whose designator seam
+						// already resolves it.
 						default -> {
-							if (ctx.usesSynonymStreams) {
-								WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverSynonym(cons), ctx);
+							if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
+								WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons,
+										ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)),
+										ctx);
 							}
 							else {
 								WasmCloseCompiler.compile(cons, ctx);
@@ -859,14 +864,18 @@ final class WasmExprCompiler {
 				}
 				case LispNames.MAKE_SYNONYM_STREAM ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx);
-				case LispNames.OPEN -> WasmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
+				case LispNames.OPEN -> {
+					WasmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
+					wrapStreamValue(ctx, am.ik.rontolisp.LispLayout.Kinds.FILE);
+				}
 				case LispNames.CLOSE -> {
 					// Closing a SYNONYM stream closes the synonym, not what it forwards
-					// to -- which is nothing to do. The guard is emitted only when the
-					// program can build one; %close is the plain-designator close it
-					// falls through to.
-					if (ctx.usesSynonymStreams) {
-						WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverSynonym(cons), ctx);
+					// to -- which is nothing to do; an OPEN stream resolves to its
+					// handle. The guard is emitted only when the program can build one
+					// of the two; %close is the raw-handle close it falls through to.
+					if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons,
+								ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)), ctx);
 					}
 					else {
 						WasmCloseCompiler.compile(cons, ctx);
@@ -945,14 +954,18 @@ final class WasmExprCompiler {
 				}
 				case LispNames.WRITE_TO_STRING ->
 					compilePrintOperator(cons, ctx, () -> WasmPrin1ToStringCompiler.compile(cons, ctx));
-				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL ->
+				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL -> {
 					WasmWriteStringCompiler.compileMakeOutputStream(cons, ctx);
+					wrapStreamValue(ctx, am.ik.rontolisp.LispLayout.Kinds.STRING_OUTPUT);
+				}
 				case LispNames.MAKE_STRING_OUTPUT_STREAM ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringOutputStream(cons), ctx);
 				case LispNames.GET_OUTPUT_STREAM_STRING ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandGetOutputStreamString(cons), ctx);
-				case LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL ->
+				case LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL -> {
 					WasmWriteStringCompiler.compileMakeInputStream(cons, ctx);
+					wrapStreamValue(ctx, am.ik.rontolisp.LispLayout.Kinds.STRING_INPUT);
+				}
 				case LispNames.MAKE_STRING_INPUT_STREAM ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringInputStream(cons), ctx);
 				case LispNames.STRING_STREAM_CONTENTS_INTERNAL -> WasmWriteStringCompiler.compileContents(cons, ctx);
@@ -1065,12 +1078,13 @@ final class WasmExprCompiler {
 				case LispNames.UPPER_CASE_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx);
 				case LispNames.CONSTANTP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx);
-				case LispNames.STREAMP -> WasmExprCompiler
-					.compileExpr(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams, ctx.closRegistry), ctx);
+				case LispNames.STREAMP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,
+						ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx);
 				case LispNames.SIMPLE_STRING_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx);
-				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> WasmExprCompiler
-					.compileExpr(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams), ctx);
+				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> WasmExprCompiler.compileExpr(
+						LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams, ctx.usesStreamValues),
+						ctx);
 				// file-length and file-write-date answer nil here rather than signalling:
 				// no WASI filestat call is imported, and "cannot be determined" is what
 				// Common Lisp prescribes for exactly that. %make-directories,
@@ -1853,6 +1867,18 @@ final class WasmExprCompiler {
 	 * the wrap keeps every instance-free program byte-identical to a build that never
 	 * knew about pathnames (the {@code .kb/instance-syntax.md} rule).
 	 */
+	/**
+	 * Wraps the raw handle a stream PRODUCER just left on the stack into the open stream
+	 * VALUE, when a stream value can exist in this module at all. With the gate off no
+	 * producer is wrapped and no consumer unwraps, so such a program keeps raw handles --
+	 * and its exact bytes.
+	 */
+	private static void wrapStreamValue(WasmLispCompiler.Ctx ctx, String kind) {
+		if (ctx.usesStreamValues) {
+			WasmInstanceCompiler.emitWrapStream(ctx, kind);
+		}
+	}
+
 	private static LispCons coercePathArgWhenGated(LispCons cons, int argIndex, WasmLispCompiler.Ctx ctx) {
 		return ctx.instanceTypeIndex >= 0 ? LispMacroExpander.coercePathArg(cons, argIndex) : cons;
 	}

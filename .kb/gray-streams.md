@@ -80,11 +80,16 @@ supported").
 **The dispatch helpers** (`rontolisp::%gray-*-dispatch` defuns at the bottom of
 gray.lisp) hold the ONE copy of "instance -> generic, anything else -> the
 built-in" plus the `:eof` translation, shared by both dispatch seams. **Each
-resolves its stream through `%synonym-target` FIRST**: a synonym stream
-(`.kb/read-load-streams.md`) is an instance too, so without that it would take
-the CLOS arm and die on "no applicable method", and its target -- which may
-itself be a Gray instance -- would never be reached. That is why the prelude
-splices `%SYNONYM-TARGET` for any program using this protocol
+resolves its stream through `%stream-target` FIRST**: a synonym stream and an
+OPEN stream (`.kb/read-load-streams.md`) are both instances, so without that they
+would take the CLOS arm and die on "no applicable method", and a synonym's target
+-- which may itself be a Gray instance -- would never be reached. Two exceptions:
+`%gray-close-dispatch` does not resolve a synonym (closing a synonym closes the
+synonym) and so tests `%STREAM` by tag ahead of `%obj-p`; and the three PREDICATE
+dispatchers (`open-stream-p` / `input-stream-p` / `output-stream-p`) hand the
+ORIGINAL designator to the built-in rather than the resolved handle, because a bare
+handle is not a stream to those predicates any more -- the value is. That is why the prelude
+splices `%STREAM-TARGET` for any program using this protocol
 (`LispPreludeLibrary.referencedBySurfaceForm`, `LibraryDefunPruner`'s root list):
 this pass runs AFTER the prelude selection, so the reference it would look for
 does not exist yet. A pipeline that splices gray.lisp must therefore run
@@ -171,7 +176,7 @@ its instance arm already answers.
 
 **Interpreter dispatch**: `LispEvaluator` wraps the built-ins — the wrap
 resolves a synonym stream first (`resolveSynonymArg`, the Java twin of the
-helpers' `%synonym-target` hop) and then, when the stream argument is an INSTANCE
+helpers' `%stream-target` hop) and then, when the stream argument is an INSTANCE
 (`%obj-p`, `.kb/instance-syntax.md`), the wrap
 lazy-loads `gray.lisp` (`ensureGrayStreamsLoaded`) and applies the matching
 `%gray-*-dispatch` defun (`applyGrayDispatch`); non-instances go straight to
@@ -361,17 +366,19 @@ ownable operators the Gray pre-pass rewrites at the CALL SITE, but `streamp` can
 be one of those: `(typep x 'stream)` lowers to `(streamp x)` in
 `LispMacroExpander.makeTypeTest`, which runs LONG AFTER `GrayStreamsLibrary.process`,
 so a call-site rewrite would have widened `streamp` and left `typep` behind. Instead
-`expandStreamp(cons, synonymStreams, closRegistry)` builds the test itself:
+`expandStreamp(cons, synonymStreams, streamValues, closRegistry)` builds the test itself:
 
 ```
-(let ((__s x)) (if (eq __s t) t (if (integerp __s) t (%obj-is __s '<tags>))))
+(let ((__s x)) (if (eq __s t) t (%obj-is __s '<tags>)))
 ```
 
-where `<tags>` is the synonym-stream layout tag (when the program can build one) FOLLOWED
-BY `closRegistry.descendantTags(rontolisp:fundamental-stream)` -- the same instance-tag
-membership a class specializer and a `typecase` class clause compile to. Both arms are
-emitted only for a program that can build such a value, so a program that touches
-neither keeps its `streamp` bytes exactly as before. The registry is complete by then on
+where `<tags>` is the OPEN-stream layout tag `%STREAM` and the synonym-stream layout tag
+(each when the program can build one) FOLLOWED BY
+`closRegistry.descendantTags(rontolisp:fundamental-stream)` -- the same instance-tag
+membership a class specializer and a `typecase` class clause compile to. Each arm is
+emitted only for a program that can build such a value, so a program that can build none
+keeps a bare `t` test. There is no `integerp` arm since todo-553: every stream is a
+VALUE, and an integer is a number (`.kb/read-load-streams.md`, "A stream is a VALUE"). The registry is complete by then on
 the compile paths (`expandTopLevelDefinitions` has registered every class before codegen)
 and current on the interpreter (a class exists before an instance of it does).
 
@@ -408,11 +415,11 @@ file-descriptor-vs-Lisp-stream dispatch, then reported "no clause matches" on a 
 `typep` had just called a stream. The interpreter does not prune, so this was a
 compile-path-only divergence that no `typep` test would have caught.
 
-What is still open is the larger half todo-552 states: a stream HANDLE is an integer, so
-`streamp` cannot tell one from a file descriptor either. Widening the predicate gives
-such a library a value it can route correctly (wrap the socket in a Gray stream); it does
-not make the handle representation self-describing. That question is `.todo/156`'s shape,
-not this one's.
+The larger half todo-552 left open -- a stream HANDLE being an integer, so `streamp`
+could not tell one from a file descriptor either -- is closed by todo-553: an open stream
+is now a value of the fixed `%STREAM` layout, so cl+ssl's etypecase routes a raw
+rontolisp socket to its `stream` arm with no Gray wrapper in between
+(`.kb/read-load-streams.md`).
 
 Pinning tests: `LispEvaluatorTest#grayStreamInstanceIsAStream`,
 `JvmLispCompilerTest#compileAndRunGrayStreamIsAStream`,

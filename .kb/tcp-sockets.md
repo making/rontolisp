@@ -10,7 +10,8 @@ cl+ssl shim's substrate), `tls-listen` (keystore
 password port &optional host) and `tls-listen-pem` (cert-file key-file port
 &optional host; the two clients run on interpreter/JVM AND the WASM component,
 the two listeners on interpreter/JVM only — see the TLS section), that return
-**bidirectional stream handles in the same handle space as file streams**, so
+**bidirectional stream VALUES over the same handle space as file streams**
+(`LispLayout.Kinds.SOCKET` / `:SOCKET-SERVER`, `.kb/read-load-streams.md`), so
 the standard stream built-ins (`read-line`, `write-line`, `write-string`,
 `write-char`, `read-char`, `read-byte`, `write-byte`, `close`) work on sockets
 unchanged on every backend -- the character three joined the list on the

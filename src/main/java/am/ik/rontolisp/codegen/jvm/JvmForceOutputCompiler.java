@@ -25,7 +25,9 @@ final class JvmForceOutputCompiler {
 			throw new UnsupportedOperationException("force-output expects 0 or 1 arguments, got " + (parts.size() - 1));
 		}
 		if (parts.size() == 2) {
-			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+			JvmExprCompiler.compileExpr(
+					java.util.Objects.requireNonNull(JvmStringStreamCompiler.streamDesignator(ctx, parts.get(1))), ctx,
+					className);
 		}
 		else {
 			ctx.emit(Opcode.ACONST_NULL);

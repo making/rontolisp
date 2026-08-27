@@ -40,7 +40,7 @@ final class WasmEmitHelper {
 		am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal resolved = ctx.globalIndices
 			.containsKey(am.ik.rontolisp.LispNames.STANDARD_OUTPUT_VAR)
 					? am.ik.rontolisp.compiler.StreamDesignators.resolveOutput(explicit) : explicit;
-		return ctx.usesSynonymStreams ? am.ik.rontolisp.compiler.StreamDesignators.throughSynonym(resolved) : resolved;
+		return streamDesignator(ctx, resolved);
 	}
 
 	/**
@@ -57,7 +57,30 @@ final class WasmEmitHelper {
 		am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal resolved = ctx.globalIndices
 			.containsKey(am.ik.rontolisp.LispNames.STANDARD_INPUT_VAR)
 					? am.ik.rontolisp.compiler.StreamDesignators.resolveInput(explicit) : explicit;
-		return ctx.usesSynonymStreams ? am.ik.rontolisp.compiler.StreamDesignators.throughSynonym(resolved) : resolved;
+		return streamDesignator(ctx, resolved);
+	}
+
+	/**
+	 * A stream designator expression resolved down to the raw HANDLE the I/O helpers act
+	 * on, for a consumer that takes its stream argument as written (no
+	 * {@code *standard-output*} designator rule): a stream VALUE is unwrapped, a synonym
+	 * stream is followed. With neither kind reachable in this module the expression is
+	 * handed back untouched, so such a program keeps its exact bytes.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile
+	 */
+	static am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal streamDesignator(WasmLispCompiler.Ctx ctx,
+			am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal explicit) {
+		if (!ctx.usesSynonymStreams && !ctx.usesStreamValues) {
+			return explicit;
+		}
+		// The shared %STREAM-TARGET defun when the prelude spliced it (one call per
+		// stream operation), the inline %obj-* unwrap when it did not -- which happens
+		// for a stream value injected after the prelude selection ran.
+		return ctx.functions.containsKey(am.ik.rontolisp.LispNames.STREAM_TARGET)
+				? am.ik.rontolisp.compiler.StreamDesignators.throughStream(explicit)
+				: am.ik.rontolisp.compiler.StreamDesignators.throughStreamInline(explicit);
 	}
 
 	/**

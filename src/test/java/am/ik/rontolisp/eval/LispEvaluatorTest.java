@@ -1611,8 +1611,11 @@ class LispEvaluatorTest {
 	@Test
 	void evalStreamp() {
 		assertThat(eval("(with-output-to-string (s) (princ (streamp s) s))")).isEqualTo(new LispString("T"));
-		assertThat(eval("(streamp 5)")).isEqualTo(LispTrue.INSTANCE);
+		// An INTEGER is a number, not a stream: a stream is a self-describing value now.
+		assertThat(eval("(streamp 5)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(streamp \"x\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(with-open-file (s \"target/streamp-value.txt\" :direction :output) (streamp s))"))
+			.isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(with-output-to-string (s) (check-type s stream) (write-string \"ok\" s))"))
 			.isEqualTo(new LispString("ok"));
 	}
@@ -10816,14 +10819,13 @@ class LispEvaluatorTest {
 		// lack's backtrace middleware reaches *error-output* exactly this way: it carries
 		// the SYMBOL and reports through (symbol-value output).
 		assertThat(evalMulti("(boundp '*error-output*)")).isEqualTo(LispTrue.INSTANCE);
-		assertThat(evalMulti("(symbol-value '*error-output*)"))
-			.isEqualTo(new LispInteger(StreamDesignators.STANDARD_ERROR_HANDLE));
+		assertThat(evalMulti("(symbol-value '*error-output*)")).isEqualTo(StreamDesignators.standardErrorValue());
 		assertThat(evalMulti("(boundp '*standard-output*)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(symbol-value '*standard-output*)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(boundp '*standard-input*)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(symbol-value '*standard-input*)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(defvar *sv-stream-name* '*error-output*) (symbol-value *sv-stream-name*)"))
-			.isEqualTo(new LispInteger(StreamDesignators.STANDARD_ERROR_HANDLE));
+			.isEqualTo(StreamDesignators.standardErrorValue());
 	}
 
 	@Test
@@ -12704,8 +12706,14 @@ class LispEvaluatorTest {
 				      (typep 3 'synonym-stream)
 				      (typep *readtable* 'readtable)
 				      (typep 3 'file-stream)
-				      (typep "s" 'file-stream))
-				""").print()).isEqualTo("(T NIL T T NIL)");
+				      (typep "s" 'file-stream)
+				      (with-open-file (s "target/type-names.txt" :direction :output)
+				        (list (typep s 'file-stream) (typep s 'string-stream)))
+				      (let ((s (make-string-input-stream "z")))
+				        (list (typep s 'file-stream) (typep s 'string-stream)))
+				      (let ((s (make-string-output-stream)))
+				        (list (typep s 'file-stream) (typep s 'string-stream))))
+				""").print()).isEqualTo("(T NIL T NIL NIL (T NIL) (NIL T) (NIL T))");
 	}
 
 	@Test
@@ -14732,8 +14740,9 @@ class LispEvaluatorTest {
 				      (input-stream-p (make-instance 'gdp-plain))
 				      (output-stream-p (make-instance 'gdp-plain))
 				      (input-stream-p (make-string-input-stream "z"))
-				      (output-stream-p (make-string-input-stream "z")))
-				""").print()).isEqualTo("(T NIL NIL T NIL NIL T T)");
+				      (output-stream-p (make-string-input-stream "z"))
+				      (input-stream-p 3))
+				""").print()).isEqualTo("(T NIL NIL T NIL NIL T T NIL)");
 	}
 
 	@Test
@@ -14758,7 +14767,7 @@ class LispEvaluatorTest {
 				        (streamp (make-pathname :name "a"))
 				        (etypecase out (integer :fd) (stream :lisp-stream))
 				        (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
-				""").print()).isEqualTo("(T T NIL T T NIL (T NIL T T NIL) NIL :LISP-STREAM (T NIL T))");
+				""").print()).isEqualTo("(T T NIL T T NIL (T NIL NIL T NIL) NIL :LISP-STREAM (T NIL NIL))");
 	}
 
 	@Test

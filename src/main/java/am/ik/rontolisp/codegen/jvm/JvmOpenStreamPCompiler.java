@@ -23,7 +23,9 @@ final class JvmOpenStreamPCompiler {
 		if (parts.size() != 2) {
 			throw new UnsupportedOperationException("open-stream-p expects 1 argument, got " + (parts.size() - 1));
 		}
-		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(
+				java.util.Objects.requireNonNull(JvmStringStreamCompiler.streamDesignator(ctx, parts.get(1))), ctx,
+				className);
 		Utf8Constant nameUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.OPEN_STREAM_P_METHOD);
 		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.OPEN_STREAM_P_DESC);
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),

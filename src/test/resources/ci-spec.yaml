@@ -5431,8 +5431,11 @@ cases:
         (write-string "out
       " b)
         (print (get-output-stream-string s)))
-      ;; and with NO components: the discarding sink handle, unchanged.
-      (print (typep (make-broadcast-stream) 'integer))
+      ;; and with NO components: the discarding sink, a string-stream VALUE (it is
+      ;; a fresh string output stream nobody reads) and not an integer.
+      (print (list (typep (make-broadcast-stream) 'integer)
+                   (streamp (make-broadcast-stream))
+                   (typep (make-broadcast-stream) 'string-stream)))
     expected: |
       ("a" "a" ".a" "a.b" "a" ".sql" NIL)
       ("sql" NIL NIL "c" "sql" NIL NIL)
@@ -5453,7 +5456,7 @@ cases:
       "fan1
       out
       "
-      T
+      (NIL T T)
   - name: pathname-algebra-over-the-flat-namestring
     source: |
       ;; The pathname operators that are pure computation over the namestring, so
@@ -6745,8 +6748,8 @@ cases:
       "z"
       ("A" "B")
       ("test" "TEST" "Test" "sym-api-kw" "abc")
-      (T 2 T T T T)
-      2
+      (T #<STREAM :HANDLE 2 :KIND :STANDARD> T T T T)
+      #<STREAM :HANDLE 2 :KIND :STANDARD>
       (CAR :EXTERNAL)
       (NIL NIL)
       (CAR :INHERITED)
@@ -7883,16 +7886,56 @@ cases:
         (print (mapcar #'streamp (list gis-s gis-o 3 t nil)))
         (print (streamp (make-pathname :name "gis")))
         (print (etypecase gis-s (integer :gis-fd) (stream :gis-lisp-stream)))
-        ; A COMPUTED type specifier answers the same, instance and handle alike.
+        ; A COMPUTED type specifier answers the same for an instance; an INTEGER is
+        ; a number, not a stream, which is what makes the etypecase above a real
+        ; dispatch rather than a coin toss.
         (print (list (gis-typep gis-s 'stream) (gis-typep gis-o 'stream)
                      (gis-typep 3 'stream))))
     expected: |
       (T T)
       (NIL NIL)
-      (T NIL T T NIL)
+      (T NIL NIL T NIL)
       NIL
       :GIS-LISP-STREAM
+      (T NIL NIL)
+  - name: a-stream-is-a-self-describing-value
+    source: |
+      ; A stream is a VALUE carrying its backend handle and its KIND, not a small
+      ; integer: streamp tells one from a file descriptor, and file-stream /
+      ; string-stream are exact tests rather than "an open handle". Identical on
+      ; all four backends.
+      (defvar *ci-sv-path* "ci-stream-value.txt")
+      (with-open-file (sv-f *ci-sv-path* :direction :output)
+        (write-line "sv-line" sv-f)
+        (print (list (streamp sv-f) (streamp 3) (streamp t) (streamp nil)))
+        (print (list (typep sv-f 'stream) (typep sv-f 'file-stream)
+                     (typep sv-f 'string-stream))))
+      (let ((sv-in (make-string-input-stream "read-me")))
+        (print (list (streamp sv-in) (typep sv-in 'file-stream)
+                     (typep sv-in 'string-stream)))
+        (print (read-line sv-in)))
+      (print (with-output-to-string (sv-o)
+               (princ (list (streamp sv-o) (typep sv-o 'string-stream)) sv-o)))
+      (let ((sv-r (open *ci-sv-path*)))
+        (print (read-line sv-r))
+        (print (close sv-r)))
+      ; The one stream variable that is a value rather than the t designator.
+      (print (list (streamp *error-output*) (typep *error-output* 'file-stream)))
+      ; cl+ssl's shape: an integer is a file descriptor, a stream is a stream.
+      (print (etypecase 3 (integer :sv-fd) (stream :sv-stream)))
+      (let ((sv-e (make-string-input-stream "x")))
+        (print (etypecase sv-e (integer :sv-fd) (stream :sv-stream))))
+    expected: |
+      (T NIL T NIL)
+      (T T NIL)
       (T NIL T)
+      "read-me"
+      "(T T)"
+      "sv-line"
+      T
+      (T NIL)
+      :SV-FD
+      :SV-STREAM
   - name: uiop-add-package-local-nickname
     source: |
       (defpackage #:com.example.apn.deep (:use #:cl) (:export #:apn-answer))
@@ -11370,6 +11413,8 @@ cases:
                    (typep *readtable* 'readtable)
                    (typep 3 'file-stream)
                    (typep "s" 'file-stream)))
+      (print (let ((s (make-string-input-stream "z")))
+               (list (typep s 'file-stream) (typep s 'string-stream) (typep s 'stream))))
       (print (let ((h (user-homedir-pathname))) (or (null h) (pathnamep h))))
       (print (symbol-name (copy-symbol 'e443-sym)))
       (print (list (handler-case (compile-file "x") (error (e) :cf))
@@ -11388,7 +11433,8 @@ cases:
       2
       (NIL NIL)
       T
-      (T T T NIL)
+      (T T NIL NIL)
+      (NIL T T)
       T
       "E443-SYM"
       (:CF :CFP :RM :DBG)

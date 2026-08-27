@@ -48,8 +48,20 @@
 (defvar rontolisp::*sock-table* (make-hash-table))
 (defvar rontolisp::*sock-next-fd* 200)
 
+;; The raw handle a stream designator names: an OPEN stream is a VALUE carrying its
+;; handle in slot 0, and a synonym stream forwards to whatever its variable holds
+;; now. This is the prelude's %stream-target written out of the %obj-* primitives,
+;; deliberately: sockets.lisp is spliced by pipelines that do not all run the
+;; prelude selection, and every socket operation goes through %sock-entry.
+(defun rontolisp::%sock-handle (s)
+  (if (%obj-is s '%SYNONYM-STREAM)
+      (rontolisp::%sock-handle (funcall (%obj-ref s 1)))
+      (if (%obj-is s '%STREAM) (%obj-ref s 0) s)))
+
+;; The table key is the RAW handle, so the designator is resolved first.
 (defun rontolisp::%sock-entry (fd)
-  (if (integerp fd) (gethash fd rontolisp::*sock-table*) nil))
+  (let ((h (rontolisp::%sock-handle fd)))
+    (if (integerp h) (gethash h rontolisp::*sock-table*) nil)))
 
 (defun rontolisp::%sock-handle-p (fd) (if (rontolisp::%sock-entry fd) t nil))
 
@@ -78,12 +90,16 @@
   (rplaca (cdr (cdr e)) recv)
   (rontolisp::%sock-set-tx e tx))
 
+;; Answers the stream VALUE over the freshly-minted handle: a socket is a stream
+;; like any other here, so streamp / (typep s 'stream) answer for it exactly as
+;; they do on the interpreter and the JVM. The TABLE is still keyed by the raw
+;; handle -- %sock-entry resolves a designator down to it.
 (defun rontolisp::%sock-register (sock kind recv tx)
   (let ((fd rontolisp::*sock-next-fd*))
     (setq rontolisp::*sock-next-fd* (+ fd 1))
     (setf (gethash fd rontolisp::*sock-table*)
           (list sock kind recv tx nil 0 nil))
-    fd))
+    (%obj-new '%STREAM fd (if (= kind 2) :socket-server :socket))))
 
 ;;; --- IPv4 literal parsing (hostname lookup is not wired; dotted quads only,
 ;;; matching the old adapter's $parse_ipv4) ---
@@ -410,18 +426,18 @@
 ;;; binds the variable compiles the bare read to the constant t, so the
 ;;; not-a-handle test below picks the same stdin path it always did.
 ;;;
-;;; %synonym-target is part of the SAME resolution: a synonym stream is a value,
-;;; not a handle, so without it the not-a-handle test would send a read through
-;;; one to the host stdin cache. This rewrite replaces the read built-ins, so the
-;;; compiler's own designator seam never sees these call sites.
+;;; %sock-handle is part of the SAME resolution: a synonym stream and an open
+;;; stream are both values, not handles, so without it the not-a-handle test would
+;;; send a read through one to the host stdin cache. This rewrite replaces the read
+;;; built-ins, so the compiler's own designator seam never sees these call sites.
 (defun rontolisp::%io-read-line (&optional s)
-  (let ((in (%synonym-target (or s *standard-input*))))
+  (let ((in (rontolisp::%sock-handle (or s *standard-input*))))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
         (rontolisp::%future-force (rontolisp::%read-line-future in))
         (rontolisp::%read-line-raw in))))
 
 (defun rontolisp::%io-read-char (&optional s)
-  (let ((in (%synonym-target (or s *standard-input*))))
+  (let ((in (rontolisp::%sock-handle (or s *standard-input*))))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
         (rontolisp::%future-force (rontolisp::%read-char-future in))
         (rontolisp::%read-char-raw in))))
@@ -494,7 +510,7 @@
         (rontolisp::%read-char-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-char-eof (s eof-error-p &optional eof-value)
-  (let ((in (%synonym-target (or s *standard-input*))))
+  (let ((in (rontolisp::%sock-handle (or s *standard-input*))))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
         (rontolisp::%future-force
          (rontolisp::%read-char-eof-future in eof-error-p eof-value))
@@ -509,7 +525,7 @@
         (rontolisp::%read-line-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-line-eof (s eof-error-p &optional eof-value)
-  (let ((in (%synonym-target (or s *standard-input*))))
+  (let ((in (rontolisp::%sock-handle (or s *standard-input*))))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
         (rontolisp::%future-force
          (rontolisp::%read-line-eof-future in eof-error-p eof-value))
@@ -605,9 +621,10 @@
   ;; answer t for any non-nil designator, the documented lite edge).
   (if (rontolisp::%sock-entry s)
       t
-      (if (and (integerp s) (>= s 200) (< s rontolisp::*sock-next-fd*))
-          nil
-          (if s t nil))))
+      (let ((h (rontolisp::%sock-handle s)))
+        (if (and (integerp h) (>= h 200) (< h rontolisp::*sock-next-fd*))
+            nil
+            (if s t nil)))))
 
 (defun rontolisp::%io-close (stream)
   (let ((e (rontolisp::%sock-entry stream)))
@@ -625,6 +642,6 @@
                   (when tx (%sock:sock-stream-drop-writable tx)))
                 (%sock:sock-stream-drop-readable (rontolisp::%sock-e-recv e))
                 (%sock:tcp-socket-drop (rontolisp::%sock-e-sock e))))
-          (remhash stream rontolisp::*sock-table*)
+          (remhash (rontolisp::%sock-handle stream) rontolisp::*sock-table*)
           t)
         (rontolisp::%close-raw stream))))

@@ -7339,7 +7339,7 @@ public final class LispMacroExpander {
 	 *
 	 * <p>
 	 * The closure is what makes the forwarding PER OPERATION on every backend: a stream
-	 * designator resolution calls it ({@code %SYNONYM-TARGET}) and gets the variable's
+	 * designator resolution calls it ({@code %STREAM-TARGET}) and gets the variable's
 	 * value as of that call -- the innermost dynamic binding on the interpreter, and on
 	 * the compile paths the dynamic-first read {@code let} of a special compiles to. No
 	 * backend runtime learns a new stream kind and nothing needs the symbol's name at run
@@ -7383,15 +7383,20 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (close s)} into {@code (let ((__close_s s)) (if (%obj-is __close_s
-	 * '%SYNONYM-STREAM) t (%close __close_s)))} -- CL's rule that closing a synonym
-	 * stream closes the SYNONYM, not the stream it forwards to, which here is nothing to
-	 * do. Emitted only when the program can build a synonym stream at all, so every other
+	 * Expands {@code (close s)} into
+	 * {@code (let ((__close_s s)) (if (%obj-is __close_s '%SYNONYM-STREAM) t (%close (%stream-target __close_s))))}
+	 * -- CL's rule that closing a synonym stream closes the SYNONYM, not the stream it
+	 * forwards to (which here is nothing to do), plus the open-stream unwrap every other
+	 * stream consumer takes. With no synonym stream in the program only the unwrap
+	 * survives; with neither the caller does not reach this expansion at all, so such a
 	 * program's {@code close} keeps its exact bytes.
 	 * @param cons the close expression
+	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param sharedResolver whether the prelude spliced {@code %STREAM-TARGET} (else the
+	 * unwrap is written inline out of the {@code %obj-*} primitives)
 	 * @return the expanded expression
 	 */
-	public static LispVal expandCloseOverSynonym(LispCons cons) {
+	public static LispVal expandCloseOverStream(LispCons cons, boolean synonymStreams, boolean sharedResolver) {
 		// (close s :abort t) is the same close; strip the keyword first, exactly like the
 		// backends' own close compilers do, so the guard accepts both shapes.
 		if (stripCloseAbort(cons) instanceof LispCons stripped) {
@@ -7401,11 +7406,33 @@ public final class LispMacroExpander {
 		if (parts.size() != 2) {
 			throw new UnsupportedOperationException(LispNames.CLOSE + " expects 1 argument, got " + (parts.size() - 1));
 		}
+		if (!synonymStreams) {
+			// No synonym stream can exist, so only the open-stream unwrap is needed.
+			return callOf(LispNames.CLOSE_INTERNAL, streamHandleOf(parts.get(1), sharedResolver));
+		}
 		LispSymbol temp = new LispSymbol("__close_s");
 		LispVal guard = listToCons(List.of(new LispSymbol(LispNames.IF),
 				listToCons(List.of(new LispSymbol(LispNames.OBJ_IS), temp, quoteOf(LispLayout.SYNONYM_STREAM_TAG))),
-				LispTrue.INSTANCE, callOf(LispNames.CLOSE_INTERNAL, temp)));
+				LispTrue.INSTANCE, callOf(LispNames.CLOSE_INTERNAL, streamHandleOf(temp, sharedResolver))));
 		return makeLet(temp.name(), parts.get(1), guard);
+	}
+
+	/** The binding the inline stream-designator unwrap introduces; nesting shadows. */
+	private static final String STREAM_ARG_VAR = "__stream-arg";
+
+	/**
+	 * The raw HANDLE of a stream designator expression: the shared {@code %STREAM-TARGET}
+	 * defun when the prelude spliced it, the inline {@code %obj-*} unwrap when it did not
+	 * -- the same two forms {@code StreamDesignators.throughStream} /
+	 * {@code throughStreamInline} produce at the backends' designator seams.
+	 */
+	private static LispVal streamHandleOf(LispVal designator, boolean sharedResolver) {
+		if (sharedResolver) {
+			return callOf(LispNames.STREAM_TARGET, designator);
+		}
+		LispSymbol var = new LispSymbol(STREAM_ARG_VAR);
+		return makeLet(STREAM_ARG_VAR, designator,
+				makeIf(objIs(var, List.of(LispLayout.STREAM_TAG)), objRef(var, 0), var));
 	}
 
 	/** Fixed temporaries of the read-family end-of-file lowering. */
@@ -8567,17 +8594,22 @@ public final class LispMacroExpander {
 			+ LispNames.GRAY_FUNDAMENTAL_STREAM;
 
 	/**
-	 * The instance tags {@code streamp} must answer true for: the synonym-stream layout
-	 * when the program can build one, then every registered descendant of
-	 * {@code rontolisp:fundamental-stream}. Empty for a program that builds neither,
-	 * which is what keeps such a program's {@code streamp} bytes exactly as they were.
+	 * The instance tags {@code streamp} must answer true for: the OPEN stream layout and
+	 * the synonym-stream layout when the program can build one of each, then every
+	 * registered descendant of {@code rontolisp:fundamental-stream}. Empty for a program
+	 * that builds none, whose {@code streamp} is then just the {@code t} designator test.
 	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param streamValues whether the program can build an OPEN stream value
 	 * @param closRegistry the registry holding the program's classes, or null when none
 	 * is in scope
 	 * @return the instance tags, in test order
 	 */
-	private static List<String> streamInstanceTags(boolean synonymStreams, @Nullable ClosRegistry closRegistry) {
+	private static List<String> streamInstanceTags(boolean synonymStreams, boolean streamValues,
+			@Nullable ClosRegistry closRegistry) {
 		List<String> tags = new java.util.ArrayList<>();
+		if (streamValues) {
+			tags.add(LispLayout.STREAM_TAG);
+		}
 		if (synonymStreams) {
 			tags.add(LispLayout.SYNONYM_STREAM_TAG);
 		}
@@ -8588,38 +8620,46 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (streamp x)} into {@code (let ((__s x)) (if (eq __s t) t (integerp
-	 * __s)))}: streams are opaque integer handles across all backends, and the standard
-	 * output designator {@code t} counts as a stream so it survives the
-	 * {@code check-type}/{@code streamp} guards of libraries handed
-	 * {@code *standard-output*} (lite).
+	 * Expands {@code (streamp x)} into
+	 * {@code (let ((__s x)) (if (eq __s t) t (%obj-is __s '<tags>)))}: EVERY stream is a
+	 * self-describing VALUE, so the test is instance-tag membership plus the one
+	 * designator that is not a value -- {@code t}, the process standard stream, which
+	 * counts as a stream so it survives the {@code check-type}/{@code streamp} guards of
+	 * libraries handed {@code *standard-output*}.
 	 *
 	 * <p>
-	 * The test gains an INSTANCE arm for every stream kind that is a VALUE rather than a
-	 * handle: a synonym stream ({@code LispLayout.SYNONYM_STREAM}) when the program can
-	 * build one, and every registered descendant of {@code rontolisp:fundamental-stream}
-	 * -- a Gray stream IS a stream in Common Lisp, so {@code streamp} and
-	 * {@code (typep x 'stream)} must both answer t for one. Each arm is emitted only for
-	 * a program that can build such a value, so every other program's {@code streamp}
-	 * keeps its exact bytes.
+	 * The tags are, in test order: the OPEN stream layout ({@code LispLayout.STREAM} --
+	 * what {@code open}, the string-stream constructors and the socket constructors
+	 * answer) when the program can build one, the synonym stream
+	 * ({@code LispLayout.SYNONYM_STREAM}) when it can build one, and every registered
+	 * descendant of {@code rontolisp:fundamental-stream} -- a Gray stream IS a stream in
+	 * Common Lisp, so {@code streamp} and {@code (typep x 'stream)} must both answer t
+	 * for one. Each arm is emitted only for a program that can build such a value, so a
+	 * program that can build NONE keeps a bare {@code t} test.
+	 *
+	 * <p>
+	 * There is deliberately no {@code integerp} arm any more: an integer is a NUMBER, not
+	 * a stream, which is what lets a library dispatching "an OS file descriptor vs. a
+	 * Lisp stream" ({@code (etypecase s (integer ...) (stream ...))}, cl+ssl's
+	 * {@code install-handle-and-bio}) route a rontolisp stream correctly.
 	 * @param cons the streamp expression
 	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param streamValues whether the program can build an OPEN stream value
 	 * @param closRegistry the registry whose Gray subclasses widen the test, or null when
 	 * none is in scope
 	 * @return the expanded expression
 	 */
-	public static LispVal expandStreamp(LispCons cons, boolean synonymStreams, @Nullable ClosRegistry closRegistry) {
+	public static LispVal expandStreamp(LispCons cons, boolean synonymStreams, boolean streamValues,
+			@Nullable ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException("streamp expects exactly one argument");
 		}
 		LispSymbol temp = new LispSymbol("__s");
-		List<String> instanceTags = streamInstanceTags(synonymStreams, closRegistry);
-		LispVal handleTest = instanceTags.isEmpty() ? callOf(LispNames.INTEGERP, temp)
-				: listToCons(List.of(new LispSymbol(LispNames.IF), callOf(LispNames.INTEGERP, temp), LispTrue.INSTANCE,
-						objIs(temp, instanceTags)));
+		List<String> instanceTags = streamInstanceTags(synonymStreams, streamValues, closRegistry);
+		LispVal valueTest = instanceTags.isEmpty() ? LispNil.INSTANCE : objIs(temp, instanceTags);
 		LispVal test = listToCons(List.of(new LispSymbol(LispNames.IF),
-				fmtCall(LispNames.EQ_GENERAL, temp, LispTrue.INSTANCE), LispTrue.INSTANCE, handleTest));
+				fmtCall(LispNames.EQ_GENERAL, temp, LispTrue.INSTANCE), LispTrue.INSTANCE, valueTest));
 		return makeLet("__s", parts.get(1), test);
 	}
 
@@ -8652,27 +8692,28 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (input-stream-p x)} / {@code (output-stream-p x)} into
-	 * {@code (streamp x)}: every stream handle is bidirectional-lite, so both predicates
-	 * coincide with {@code streamp} (including the {@code t} designator and a synonym
-	 * stream).
+	 * {@code (streamp x)}: every stream is bidirectional-lite, so both predicates
+	 * coincide with {@code streamp} (including the {@code t} designator, an open stream
+	 * value and a synonym stream).
 	 *
 	 * <p>
 	 * NO Gray arm, unlike {@link #expandStreamp}: a Gray instance answers the DIRECTION
 	 * its base class declares, not "is a stream", and that answer is
 	 * {@code %gray-input-stream-p-dispatch}'s -- the Gray pre-pass has already rewritten
-	 * every direction query in a program that carries the protocol, so this lowering only
-	 * ever sees the handle half.
+	 * every direction query in a program that carries the protocol, so this lowering
+	 * never has to decide for one.
 	 * @param cons the input-stream-p / output-stream-p expression
 	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param streamValues whether the program can build an OPEN stream value
 	 * @return the expanded expression
 	 */
-	public static LispVal expandStreamDirectionP(LispCons cons, boolean synonymStreams) {
+	public static LispVal expandStreamDirectionP(LispCons cons, boolean synonymStreams, boolean streamValues) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(
 					((LispSymbol) cons.car()).name() + " expects exactly one argument: " + cons.print());
 		}
-		return expandStreamp((LispCons) fmtCall(LispNames.STREAMP, parts.get(1)), synonymStreams, null);
+		return expandStreamp((LispCons) fmtCall(LispNames.STREAMP, parts.get(1)), synonymStreams, streamValues, null);
 	}
 
 	/**
@@ -14596,7 +14637,81 @@ public final class LispMacroExpander {
 	 * compiled too, but live outside the program)
 	 * @return whether an instance can be constructed
 	 */
+	/**
+	 * The names whose presence in a program means an OPEN stream VALUE
+	 * ({@code LispLayout.STREAM}) can exist in it -- every constructor, every surface
+	 * macro that expands into one, and the {@code *error-output*} variable whose seeded
+	 * default IS one.
+	 *
+	 * <p>
+	 * ONE set, read by {@link #mayCreateStreamValues} and by nothing else, because both
+	 * halves of the representation are gated on that single answer: the WRAP each backend
+	 * emits at a producer and the UNWRAP it emits at a consumer
+	 * ({@code StreamDesignators.throughStream}). A program the scan says no about
+	 * therefore keeps raw handles AND raw handle consumers -- consistent, and
+	 * byte-identical to a build that never knew about stream values. Over-approximating
+	 * costs one {@code %stream-target} call per stream operation and nothing else.
+	 */
+	private static final java.util.Set<String> STREAM_VALUE_PRODUCERS = streamValueProducers();
+
+	private static java.util.Set<String> streamValueProducers() {
+		java.util.Set<String> names = new java.util.HashSet<>(
+				List.of(LispNames.OPEN, LispNames.WITH_OPEN_FILE, LispNames.MAKE_STRING_OUTPUT_STREAM,
+						LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL, LispNames.MAKE_STRING_INPUT_STREAM,
+						LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL, LispNames.WITH_OUTPUT_TO_STRING,
+						LispNames.WITH_INPUT_FROM_STRING, LispNames.MAKE_BROADCAST_STREAM, LispNames.ERROR_OUTPUT_VAR));
+		for (String socketOp : List.of(LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT,
+				LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12,
+				LispNames.TLS_UPGRADE)) {
+			names.add(socketOp);
+			names.add(LispNames.RONTOLISP_PKG + ":" + socketOp);
+			names.add(LispNames.RONTOLISP_PKG + "::" + socketOp);
+		}
+		return java.util.Set.copyOf(names);
+	}
+
+	/**
+	 * Whether an OPEN stream value can exist in this program -- the gate for both halves
+	 * of the stream representation on the compile paths (see
+	 * {@link #STREAM_VALUE_PRODUCERS}). The interpreter needs no gate: its built-ins
+	 * build and unwrap the value directly.
+	 * @param program the top-level forms, AFTER the library splices
+	 * @return whether a stream value can be constructed
+	 */
+	public static boolean mayCreateStreamValues(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mentionsStreamProducer(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentionsStreamProducer(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			return STREAM_VALUE_PRODUCERS.contains(sym.name());
+		}
+		if (form instanceof LispCons cons) {
+			return mentionsStreamProducer(cons.car()) || mentionsStreamProducer(cons.cdr());
+		}
+		if (form instanceof LispArray array) {
+			for (LispVal element : array.data()) {
+				if (mentionsStreamProducer(element)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	public static boolean mayCreateInstances(List<LispVal> program, ClosRegistry closRegistry) {
+		if (mayCreateStreamValues(program)) {
+			// An OPEN stream is an instance of the fixed STREAM layout, so a program that
+			// can build one needs the instance representation -- including the program
+			// that merely NAMES *error-output*, whose seeded default is one (the same
+			// rule *default-pathname-defaults* takes below).
+			return true;
+		}
 		for (LispVal form : program) {
 			if (mayCreateInstance(form)) {
 				return true;
@@ -25148,6 +25263,32 @@ public final class LispMacroExpander {
 	 * bounds). The value form may be evaluated multiple times, so callers bind it to a
 	 * temporary first.
 	 */
+	/** The binding the {@code file-stream}/{@code string-stream} kind test introduces. */
+	private static final String STREAM_KIND_VAR = "__stream-kind";
+
+	/**
+	 * Builds the test for a stream SUBTYPE: the value must be an open stream
+	 * ({@code LispLayout.STREAM}) whose {@code KIND} slot is one of {@code kinds}. The
+	 * instance test has to come first -- {@code %obj-ref} on a non-instance is undefined
+	 * on the compile paths -- so the shape is a let plus a nested if, exactly like
+	 * {@link #coercePathArg}'s pathname unwrap.
+	 * @param value the value expression
+	 * @param kinds the accepted {@code LispLayout.Kinds} keywords
+	 * @return the type test
+	 */
+	private static LispVal makeStreamKindTest(LispVal value, List<String> kinds) {
+		LispSymbol var = new LispSymbol(STREAM_KIND_VAR);
+		LispVal kindRead = objRef(var, 1);
+		LispVal kindTest = null;
+		for (String kind : kinds) {
+			LispVal one = fmtCall(LispNames.EQUAL, kindRead, new LispSymbol(kind));
+			kindTest = kindTest == null ? one
+					: listToCons(List.of(new LispSymbol(LispNames.IF), kindTest, LispTrue.INSTANCE, one));
+		}
+		return makeLet(STREAM_KIND_VAR, value, makeIf(objIs(var, List.of(LispLayout.STREAM_TAG)),
+				java.util.Objects.requireNonNull(kindTest), LispNil.INSTANCE));
+	}
+
 	private static LispVal makeTypeTest(LispVal value, LispVal typeSpec) {
 		return makeTypeTest(value, typeSpec, EMPTY_CLOS_REGISTRY);
 	}
@@ -25229,16 +25370,19 @@ public final class LispMacroExpander {
 				// backend.
 				return objIs(value, List.of(LispLayout.SYNONYM_STREAM_TAG));
 			case "FILE-STREAM":
-				// Lite, and identically so on all four backends: a stream is an opaque
-				// integer handle here, and only the synonym stream carries a tag that
-				// tells its kind -- neither the interpreter nor the JVM can tell a
-				// string stream's handle from a file's (only the WASM backends can, by
-				// its sign), so the type is "an open handle stream" rather than "a
-				// stream open on a file". Over-broad by exactly the string-stream kinds.
-				// RE-EVALUATE when a per-backend %file-stream-p primitive exists, or
-				// when string streams take negative handles on every backend: either
-				// makes the narrower test available without a per-backend divergence.
-				return callOf(LispNames.INTEGERP, value);
+				// An OPEN stream is a self-describing value carrying the KIND it was
+				// built with (LispLayout.STREAM slot 1), so the test is exact on all four
+				// backends: the stream layout plus a :FILE kind. A string stream, a
+				// socket and the process standard error each answer their own kind and
+				// so are NOT file streams -- which is what the integerp test this
+				// replaced could never say.
+				return makeStreamKindTest(value, List.of(LispLayout.Kinds.FILE));
+			case "STRING-STREAM":
+				// The other half of the same slot: the two string-stream kinds. CL has
+				// string-input-stream / string-output-stream below this only as
+				// implementation classes, so one test over both kinds is the whole type.
+				return makeStreamKindTest(value,
+						List.of(LispLayout.Kinds.STRING_INPUT, LispLayout.Kinds.STRING_OUTPUT));
 			case "READTABLE":
 				// A readtable is the opaque nil token: the reader is not
 				// readtable-driven,
@@ -30589,12 +30733,13 @@ public final class LispMacroExpander {
 		// branch needs no PATHNAME case because no other value is one.
 		namesByTags.computeIfAbsent(List.of(LispLayout.PATHNAME_TAG), k -> new java.util.LinkedHashSet<>())
 			.add("PATHNAME");
-		// A synonym stream and a Gray stream are INSTANCES that streamp answers t for, so
-		// a runtime (typep x 'stream) answers through the same table. Unlike PATHNAME the
-		// non-instance branch DOES carry a STREAM case (a handle is an integer), so the
-		// two halves of the test are split across the table and RUNTIME_TYPEP_BUILTINS --
-		// which is exactly what the instance-first shape of this defun requires.
+		// Every stream is an INSTANCE now -- an open stream, a synonym stream and a Gray
+		// stream alike -- so a runtime (typep x 'stream) answers through this table for
+		// all three. The non-instance branch still carries a STREAM case in
+		// RUNTIME_TYPEP_BUILTINS, because the t designator is a stream too and is not an
+		// instance; the instance-first shape of this defun is why both halves exist.
 		List<String> streamTags = new java.util.ArrayList<>();
+		streamTags.add(LispLayout.STREAM_TAG);
 		streamTags.add(LispLayout.SYNONYM_STREAM_TAG);
 		streamTags.addAll(closRegistry.descendantTags(GRAY_FUNDAMENTAL_STREAM_CLASS));
 		namesByTags.computeIfAbsent(streamTags, k -> new java.util.LinkedHashSet<>()).add("STREAM");

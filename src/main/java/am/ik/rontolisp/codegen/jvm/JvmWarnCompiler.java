@@ -38,7 +38,10 @@ final class JvmWarnCompiler {
 		List<LispVal> args = cons.toList();
 		if (ctx.globals.contains(LispNames.ERROR_OUTPUT_VAR)) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			JvmExprCompiler.compileExpr(StreamDesignators.errorOutput(), ctx, className);
+			JvmExprCompiler.compileExpr(
+					java.util.Objects
+						.requireNonNull(JvmStringStreamCompiler.streamDesignator(ctx, StreamDesignators.errorOutput())),
+					ctx, className);
 			ConstantPool.MethodrefConstant writeLineRef = ctx.cp.addMethodref(
 					ctx.cp.addClass(ctx.cp.addUtf8(className)),
 					ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmIoRuntimeBuilder.WRITE_LINE_METHOD),

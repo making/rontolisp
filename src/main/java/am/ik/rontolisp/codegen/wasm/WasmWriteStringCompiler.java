@@ -76,7 +76,8 @@ final class WasmWriteStringCompiler {
 
 	static void compileContents(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		WasmExprCompiler
+			.compileExpr(java.util.Objects.requireNonNull(WasmEmitHelper.streamDesignator(ctx, parts.get(1))), ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_STREAM_CONTENTS);
 	}

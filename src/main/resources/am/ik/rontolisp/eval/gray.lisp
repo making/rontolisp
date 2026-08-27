@@ -350,14 +350,14 @@
 ;; back to the built-in. The interpreter needs no rewrite -- its built-in
 ;; wraps call these helpers directly.
 ;;
-;; Every helper resolves its stream through %synonym-target FIRST: a synonym
-;; stream is an instance too, so without that it would take the CLOS arm and
-;; die on "no applicable method", and its target -- which may itself be a Gray
-;; instance -- would never be reached. %gray-close-dispatch is the one
-;; exception; see its comment.
+;; Every helper resolves its stream through %stream-target FIRST: a synonym
+;; stream and an OPEN stream are both instances, so without that they would take
+;; the CLOS arm and die on "no applicable method", and a synonym's target --
+;; which may itself be a Gray instance -- would never be reached.
+;; %gray-close-dispatch is the one exception; see its comment.
 
 (defun rontolisp::%gray-write-string-dispatch (s stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (rontolisp:stream-write-string stream s)
         (write-string s stream))))
@@ -366,7 +366,7 @@
   ;; write-char reaches stream-write-char -- the one method full Gray requires
   ;; and, for a class that defines only it, the ONLY writer it has. The
   ;; non-instance fallback is what write-char lowers to everywhere else.
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-char stream c)
@@ -383,7 +383,7 @@
 ;; included, trailing where rontolisp's print puts it.
 
 (defun rontolisp::%gray-princ-dispatch (value stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-string stream (princ-to-string value))
@@ -391,7 +391,7 @@
         (princ value stream))))
 
 (defun rontolisp::%gray-prin1-dispatch (value stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-string stream (prin1-to-string value))
@@ -399,7 +399,7 @@
         (prin1 value stream))))
 
 (defun rontolisp::%gray-print-dispatch (value stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-string stream (prin1-to-string value))
@@ -408,7 +408,7 @@
         (print value stream))))
 
 (defun rontolisp::%gray-terpri-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-terpri stream)
@@ -420,7 +420,7 @@
   ;; depend on which kind of stream it was handed. stream-fresh-line's own
   ;; CL-shaped t/nil answer is still what a direct caller (and the shim's
   ;; delegation) sees.
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-fresh-line stream)
@@ -428,7 +428,7 @@
         (fresh-line stream))))
 
 (defun rontolisp::%gray-write-line-dispatch (s stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-string stream s)
@@ -437,7 +437,7 @@
         (write-line s stream))))
 
 (defun rontolisp::%gray-force-output-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-force-output stream)
@@ -445,7 +445,7 @@
         (force-output stream))))
 
 (defun rontolisp::%gray-finish-output-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-finish-output stream)
@@ -453,7 +453,7 @@
         (finish-output stream))))
 
 (defun rontolisp::%gray-clear-output-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-clear-output stream)
@@ -469,12 +469,16 @@
 ;; for a program that defines no close method of its own.
 ;; The ONE helper that does NOT resolve a synonym stream first: closing a
 ;; synonym closes the SYNONYM, not the stream it forwards to (CLHS 21.1.3), and
-;; a synonym is an instance, so the instance arm is already its answer.
+;; a synonym is an instance, so the instance arm is already its answer. An OPEN
+;; stream is an instance too and must NOT take that arm -- it is the one kind
+;; close really has work to do for, so it is tested by tag ahead of %obj-p.
 (defun rontolisp::%gray-close-dispatch (stream)
-  (if (%obj-p stream) t (close stream)))
+  (if (%obj-is stream '%STREAM)
+      (close stream)
+      (if (%obj-p stream) t (close stream))))
 
 (defun rontolisp::%gray-write-byte-dispatch (byte stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-byte stream byte)
@@ -482,14 +486,14 @@
         (write-byte byte stream))))
 
 (defun rontolisp::%gray-read-byte-dispatch (stream eof-error-p eof-value)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (let ((b (rontolisp:stream-read-byte stream)))
           (if (eq b :eof) (if eof-error-p (error 'end-of-file) eof-value) b))
         (read-byte stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-read-char-dispatch (stream eof-error-p eof-value)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (let ((c (rontolisp::%gray-read-char-1 stream)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
@@ -497,7 +501,7 @@
 
 (defun rontolisp::%gray-read-char-no-hang-dispatch
     (stream eof-error-p eof-value)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (let ((c (rontolisp:stream-read-char-no-hang stream)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
@@ -511,7 +515,7 @@
 ;; stream -- the same contract the handle-based built-in follows (CL 21.2).
 (defun rontolisp::%gray-peek-char-dispatch
     (peek-type stream eof-error-p eof-value)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (let ((result nil) (done nil))
           (do ()
@@ -538,7 +542,7 @@
         (peek-char peek-type stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-unread-char-dispatch (character stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-unread-char stream character)
@@ -552,9 +556,12 @@
 ;; Gray stream holds nothing that could be shut) and answers the element type
 ;; of the base class it extends.
 
+;; The three PREDICATES hand the ORIGINAL designator to the built-in, not the
+;; resolved handle: %stream-target unwraps an open stream to its handle, and a
+;; bare handle is not a stream to streamp / input-stream-p / output-stream-p any
+;; more -- the value is. Only the %obj-p test needs the resolution.
 (defun rontolisp::%gray-open-stream-p-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
-    (if (%obj-p stream) t (open-stream-p stream))))
+  (if (%obj-p (%stream-target stream)) t (open-stream-p stream)))
 
 ;; input-stream-p / output-stream-p: the same rule, answered by a typep against
 ;; the two direction base classes rather than by a direction generic per class.
@@ -565,15 +572,15 @@
 ;; approximation. A stream that is neither (a bare fundamental-stream
 ;; subclass) answers nil for both, like CL.
 (defun rontolisp::%gray-input-stream-p-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
-    (if (%obj-p stream)
-        (if (typep stream 'rontolisp:fundamental-input-stream) t nil)
+  (let ((%gisp-s (%stream-target stream)))
+    (if (%obj-p %gisp-s)
+        (if (typep %gisp-s 'rontolisp:fundamental-input-stream) t nil)
         (input-stream-p stream))))
 
 (defun rontolisp::%gray-output-stream-p-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
-    (if (%obj-p stream)
-        (if (typep stream 'rontolisp:fundamental-output-stream) t nil)
+  (let ((%gosp-s (%stream-target stream)))
+    (if (%obj-p %gosp-s)
+        (if (typep %gosp-s 'rontolisp:fundamental-output-stream) t nil)
         (output-stream-p stream))))
 
 (defun rontolisp::%gray-stream-element-type-dispatch (stream)
@@ -589,7 +596,7 @@
   ;; way (tiny-routes' read-stream-to-string) writes the result into a string
   ;; stream. Answering the binary type there signals on SBCL exactly as it does
   ;; here, so it is a divergence rather than a stricter reading.
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (if (or (typep stream 'rontolisp:fundamental-character-input-stream)
                 (typep stream 'rontolisp:fundamental-character-output-stream))
@@ -601,20 +608,20 @@
         (stream-element-type stream))))
 
 (defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (let ((l (rontolisp:stream-read-line stream)))
           (if (eq l :eof) (if eof-error-p (error 'end-of-file) eof-value) l))
         (read-line stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-listen-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (if (rontolisp:stream-listen stream) t nil)
         (listen stream))))
 
 (defun rontolisp::%gray-read-sequence-dispatch (sequence stream start end)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (rontolisp:stream-read-sequence stream sequence start
                                         (if end end (length sequence)))
@@ -624,7 +631,7 @@
         (read-sequence sequence stream :start start :end end))))
 
 (defun rontolisp::%gray-write-sequence-dispatch (sequence stream start end)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-sequence stream sequence start
@@ -633,13 +640,13 @@
         (write-sequence sequence stream :start start :end end))))
 
 (defun rontolisp::%gray-file-position-dispatch (stream)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (rontolisp:stream-file-position stream)
         (file-position stream))))
 
 (defun rontolisp::%gray-file-position-set-dispatch (stream position)
-  (let ((stream (%synonym-target stream)))
+  (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (setf (rontolisp:stream-file-position stream) position)
         (file-position stream position))))

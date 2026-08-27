@@ -400,7 +400,7 @@ public final class GrayStreamsLibrary {
 	 * Whether the program names any Gray protocol generic, i.e. whether {@link #process}
 	 * does anything at all -- and therefore whether a dispatch helper can be spliced.
 	 * {@code LispPreludeLibrary} asks, because those helpers resolve their stream through
-	 * the prelude's {@code %synonym-target} and this pass runs after the prelude's
+	 * the prelude's {@code %stream-target} and this pass runs after the prelude's
 	 * selection.
 	 * @param program the top-level forms
 	 * @return whether the Gray protocol is in play

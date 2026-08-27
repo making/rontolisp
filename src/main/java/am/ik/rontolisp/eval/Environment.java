@@ -677,10 +677,10 @@ public final class Environment implements Scope {
 		// The standard streams are the t designator (the process standard stream), which
 		// the whole print / read family accepts as a stream argument. The exception is
 		// *error-output*: t already names the process standard OUTPUT, so the error
-		// stream is the reserved HANDLE 2 instead (the WASI fd every backend writes
-		// stderr through) -- see StreamDesignators.
+		// stream is a stream VALUE over the reserved handle 2 instead (the WASI fd every
+		// backend writes stderr through) -- see StreamDesignators.
 		env.define(LispNames.STANDARD_OUTPUT_VAR, LispTrue.INSTANCE);
-		env.define(LispNames.ERROR_OUTPUT_VAR, StreamDesignators.standardError());
+		env.define(LispNames.ERROR_OUTPUT_VAR, StreamDesignators.standardErrorValue());
 		env.define(LispNames.STANDARD_INPUT_VAR, LispTrue.INSTANCE);
 		// A #. marker that survives into code position (a backquote template splits the
 		// marker list into construction code, so the load-time substitution walk never
@@ -3855,9 +3855,9 @@ public final class Environment implements Scope {
 		// that is itself nil falls through to standard output instead of looping.
 		java.util.function.UnaryOperator<@Nullable LispVal> resolveOutputDest = dest -> {
 			if ((dest == null || dest == LispNil.INSTANCE) && env.defaultOutput != null) {
-				return synonymTargetOrNull(env.defaultOutput.get());
+				return streamTargetOrNull(env.defaultOutput.get());
 			}
-			return synonymTargetOrNull(dest);
+			return streamTargetOrNull(dest);
 		};
 		// warn's destination: the current -- dynamic-first -- value of *error-output*,
 		// so (let ((*error-output* s)) (warn ...)) captures the report the way CL does.
@@ -3873,9 +3873,9 @@ public final class Environment implements Scope {
 		// denote *standard-input*. Only t is hard-wired to the process standard input.
 		java.util.function.UnaryOperator<@Nullable LispVal> resolveInputSrc = src -> {
 			if ((src == null || src == LispNil.INSTANCE) && env.defaultInput != null) {
-				return synonymTargetOrNull(env.defaultInput.get());
+				return streamTargetOrNull(env.defaultInput.get());
 			}
-			return synonymTargetOrNull(src);
+			return streamTargetOrNull(src);
 		};
 		// The socket arm of the character built-ins: a RESOLVED designator whose table
 		// entry is a raw Socket. write-string / write-char / read-char take it exactly
@@ -3984,7 +3984,7 @@ public final class Environment implements Scope {
 		java.util.function.Function<List<LispVal>, LispVal> makeStringOutputStream = args -> {
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, new StringWriter());
-			return new LispInteger(handle);
+			return streamValue(handle, LispLayout.Kinds.STRING_OUTPUT);
 		};
 		env.defineFunction(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL,
 				new LispFunction(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL, args -> {
@@ -4003,7 +4003,7 @@ public final class Environment implements Scope {
 					}
 					long handle = nextStreamHandle.getAndIncrement();
 					streams.put(handle, new BufferedReader(new StringReader(str.value())));
-					return new LispInteger(handle);
+					return streamValue(handle, LispLayout.Kinds.STRING_INPUT);
 				}));
 		// The public spelling. CL's lambda list is (string &optional start end); the
 		// bounded form is the stream over that subsequence, which is what the compile
@@ -4032,7 +4032,7 @@ public final class Environment implements Scope {
 					String bounded = text.substring(text.offsetByCodePoints(0, start), text.offsetByCodePoints(0, end));
 					long handle = nextStreamHandle.getAndIncrement();
 					streams.put(handle, new BufferedReader(new StringReader(bounded)));
-					return new LispInteger(handle);
+					return streamValue(handle, LispLayout.Kinds.STRING_INPUT);
 				}));
 		// Lite: with no component streams a broadcast stream is a discarding sink -- a
 		// fresh string output stream nobody ever reads. A CALL with components never
@@ -4046,14 +4046,14 @@ public final class Environment implements Scope {
 			}
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, new StringWriter());
-			return new LispInteger(handle);
+			return streamValue(handle, LispLayout.Kinds.STRING_OUTPUT);
 		}));
 		// Lite: streams do not support repositioning -- callers (which guard this with
 		// ignore-errors in portable code) take their fallback path -- EXCEPT the
 		// buffered served-request body, whose position is a real byte index (that is
 		// what lets circular-streams rewind a body lack-request already parsed).
 		env.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
-			if (!args.isEmpty() && args.get(0) instanceof LispInteger handle
+			if (!args.isEmpty() && streamTarget(args.get(0)) instanceof LispInteger handle
 					&& streams.get(handle.value()) instanceof HttpRequestBodyStream body) {
 				if (args.size() >= 2) {
 					if (!(args.get(1) instanceof LispInteger position)) {
@@ -4072,7 +4072,7 @@ public final class Environment implements Scope {
 		// Lisp prescribes for "the length cannot be determined".
 		env.defineFunction(LispNames.FILE_LENGTH, new LispFunction(LispNames.FILE_LENGTH, args -> {
 			requireArgCount(LispNames.FILE_LENGTH, args, 1);
-			if (!(args.get(0) instanceof LispInteger handle)) {
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)) {
 				return LispNil.INSTANCE;
 			}
 			String path = streamPaths.get(handle.value());
@@ -4098,18 +4098,18 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.INPUT_STREAM_P, new LispFunction(LispNames.INPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.INPUT_STREAM_P, args, 1);
-			// Lite: any stream handle answers t for both directions; the t designator
+			// Lite: any stream answers t for both directions; the t designator
 			// (standard output, what *standard-output* is bound to) and a synonym stream
 			// VALUE also pass -- both coincide with streamp.
 			LispVal inArg = args.get(0);
-			return (inArg instanceof LispInteger || inArg instanceof LispTrue || isSynonymStream(inArg))
-					? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (isStreamValue(inArg) || inArg instanceof LispTrue || isSynonymStream(inArg)) ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.OUTPUT_STREAM_P, new LispFunction(LispNames.OUTPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.OUTPUT_STREAM_P, args, 1);
 			LispVal out2 = args.get(0);
-			return (out2 instanceof LispInteger || out2 instanceof LispTrue || isSynonymStream(out2))
-					? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (isStreamValue(out2) || out2 instanceof LispTrue || isSynonymStream(out2)) ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
 		}));
 		// open-stream-p: REAL against the stream table (close removes the entry), so
 		// the close-if-open idiom (cl-postgres's ensure-socket-is-closed) neither
@@ -4122,7 +4122,7 @@ public final class Environment implements Scope {
 		// Gray dispatch stands down for (.kb/gray-streams.md).
 		env.defineFunction(LispNames.OPEN_STREAM_P, new LispFunction(LispNames.OPEN_STREAM_P, args -> {
 			requireArgCount(LispNames.OPEN_STREAM_P, args, 1);
-			return switch (args.get(0)) {
+			return switch (streamTarget(args.get(0))) {
 				case LispTrue ignored -> LispTrue.INSTANCE;
 				case LispInstance ignored -> LispTrue.INSTANCE;
 				case LispInteger handle -> switch (streams.get(handle.value())) {
@@ -4143,7 +4143,7 @@ public final class Environment implements Scope {
 		// and then closes, so it cannot tell the difference.
 		java.util.function.Function<List<LispVal>, LispVal> streamContents = args -> {
 			requireArgCount(LispNames.STRING_STREAM_CONTENTS_INTERNAL, args, 1);
-			if (!(args.get(0) instanceof LispInteger handle)
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)
 					|| !(streams.get(handle.value()) instanceof StringWriter writer)) {
 				throw new LispEvalException(
 						LispNames.STRING_STREAM_CONTENTS_INTERNAL + " expects a string output stream");
@@ -4366,7 +4366,7 @@ public final class Environment implements Scope {
 				long handle = nextStreamHandle.getAndIncrement();
 				streams.put(handle, stream);
 				streamPaths.put(handle, path.value());
-				return new LispInteger(handle);
+				return streamValue(handle, LispLayout.Kinds.FILE);
 			}
 			catch (IOException ex) {
 				throw new LispEvalException(
@@ -4442,7 +4442,7 @@ public final class Environment implements Scope {
 				// forwards to -- which is nothing to do (CLHS 21.1.3).
 				return LispTrue.INSTANCE;
 			}
-			if (!(args.get(0) instanceof LispInteger handle)) {
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.CLOSE + " expects a stream");
 			}
 			if (handle.value() < StreamDesignators.FIRST_USER_HANDLE) {
@@ -5056,7 +5056,7 @@ public final class Environment implements Scope {
 			Socket socket = SocketSupport.connect(host.value(), (int) port.value());
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, socket);
-			return new LispInteger(handle);
+			return streamValue(handle, LispLayout.Kinds.SOCKET);
 		}));
 		String tlsConnectName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT);
 		env.defineFunction(tlsConnectName, new LispFunction(tlsConnectName, args -> {
@@ -5083,7 +5083,7 @@ public final class Environment implements Scope {
 			Socket socket = SocketSupport.connectTls(host.value(), (int) port.value(), insecure);
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, socket);
-			return new LispInteger(handle);
+			return streamValue(handle, LispLayout.Kinds.SOCKET);
 		}));
 		// tls-upgrade wraps an ALREADY-CONNECTED socket handle in TLS as a client (the
 		// cl+ssl shim's make-ssl-client-stream substrate): same option shape as
@@ -5095,7 +5095,7 @@ public final class Environment implements Scope {
 			if (args.size() != 2 && args.size() != 4) {
 				throw new LispEvalException(LispNames.TLS_UPGRADE + " expects 2 or 4 arguments, got " + args.size());
 			}
-			if (!(args.get(0) instanceof LispInteger handle)
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)
 					|| !(streams.get(handle.value()) instanceof Socket socket)) {
 				throw new LispEvalException(
 						LispNames.TLS_UPGRADE + " expects a connected socket handle, got: " + args.get(0).print());
@@ -5116,7 +5116,7 @@ public final class Environment implements Scope {
 			Socket upgraded = SocketSupport.upgradeTls(socket, host.value(), insecure);
 			long upgradedHandle = nextStreamHandle.getAndIncrement();
 			streams.put(upgradedHandle, upgraded);
-			return new LispInteger(upgradedHandle);
+			return streamValue(upgradedHandle, LispLayout.Kinds.SOCKET);
 		}));
 		String tcpListenName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN);
 		env.defineFunction(tcpListenName, new LispFunction(tcpListenName, args -> {
@@ -5138,7 +5138,7 @@ public final class Environment implements Scope {
 			ServerSocket listener = SocketSupport.listen((int) port.value(), host);
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, listener);
-			return new LispInteger(handle);
+			return streamValue(handle, LispLayout.Kinds.SOCKET_SERVER);
 		}));
 		String tlsListenName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN);
 		env.defineFunction(tlsListenName, new LispFunction(tlsListenName, args -> {
@@ -5169,7 +5169,7 @@ public final class Environment implements Scope {
 					host);
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, listener);
-			return new LispInteger(handle);
+			return streamValue(handle, LispLayout.Kinds.SOCKET_SERVER);
 		}));
 		String tlsListenPemName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN_PEM);
 		env.defineFunction(tlsListenPemName, new LispFunction(tlsListenPemName, args -> {
@@ -5200,7 +5200,7 @@ public final class Environment implements Scope {
 					host);
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, listener);
-			return new LispInteger(handle);
+			return streamValue(handle, LispLayout.Kinds.SOCKET_SERVER);
 		}));
 		String tlsListenP12Name = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN_P12);
 		env.defineFunction(tlsListenP12Name, new LispFunction(tlsListenP12Name, args -> {
@@ -5231,24 +5231,24 @@ public final class Environment implements Scope {
 					host);
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, listener);
-			return new LispInteger(handle);
+			return streamValue(handle, LispLayout.Kinds.SOCKET_SERVER);
 		}));
 		String tcpAcceptName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT);
 		env.defineFunction(tcpAcceptName, new LispFunction(tcpAcceptName, args -> {
 			requireArgCount(LispNames.TCP_ACCEPT, args, 1);
-			if (!(args.get(0) instanceof LispInteger handle)
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)
 					|| !(streams.get(handle.value()) instanceof ServerSocket listener)) {
 				throw new LispEvalException(LispNames.TCP_ACCEPT + " expects a listener handle");
 			}
 			Socket socket = SocketSupport.accept(listener);
 			long acceptedHandle = nextStreamHandle.getAndIncrement();
 			streams.put(acceptedHandle, socket);
-			return new LispInteger(acceptedHandle);
+			return streamValue(acceptedHandle, LispLayout.Kinds.SOCKET);
 		}));
 		String tcpLocalPortName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT);
 		env.defineFunction(tcpLocalPortName, new LispFunction(tcpLocalPortName, args -> {
 			requireArgCount(LispNames.TCP_LOCAL_PORT, args, 1);
-			if (!(args.get(0) instanceof LispInteger handle)) {
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.TCP_LOCAL_PORT + " expects a socket or listener handle");
 			}
 			Closeable entry = streams.get(handle.value());
@@ -5261,7 +5261,7 @@ public final class Environment implements Scope {
 		String tcpLocalAddressName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_ADDRESS);
 		env.defineFunction(tcpLocalAddressName, new LispFunction(tcpLocalAddressName, args -> {
 			requireArgCount(LispNames.TCP_LOCAL_ADDRESS, args, 1);
-			if (!(args.get(0) instanceof LispInteger handle)) {
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.TCP_LOCAL_ADDRESS + " expects a socket or listener handle");
 			}
 			Closeable entry = streams.get(handle.value());
@@ -5274,7 +5274,7 @@ public final class Environment implements Scope {
 		String tcpPeerAddressName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_ADDRESS);
 		env.defineFunction(tcpPeerAddressName, new LispFunction(tcpPeerAddressName, args -> {
 			requireArgCount(LispNames.TCP_PEER_ADDRESS, args, 1);
-			if (!(args.get(0) instanceof LispInteger handle)) {
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.TCP_PEER_ADDRESS + " expects a connected socket handle");
 			}
 			Closeable entry = streams.get(handle.value());
@@ -5287,7 +5287,7 @@ public final class Environment implements Scope {
 		String tcpPeerPortName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_PORT);
 		env.defineFunction(tcpPeerPortName, new LispFunction(tcpPeerPortName, args -> {
 			requireArgCount(LispNames.TCP_PEER_PORT, args, 1);
-			if (!(args.get(0) instanceof LispInteger handle)) {
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.TCP_PEER_PORT + " expects a connected socket handle");
 			}
 			Closeable entry = streams.get(handle.value());
@@ -5304,7 +5304,7 @@ public final class Environment implements Scope {
 		String tcpSetTimeoutName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_SET_TIMEOUT);
 		env.defineFunction(tcpSetTimeoutName, new LispFunction(tcpSetTimeoutName, args -> {
 			requireArgCount(LispNames.TCP_SET_TIMEOUT, args, 2);
-			if (!(args.get(0) instanceof LispInteger handle)
+			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)
 					|| !(streams.get(handle.value()) instanceof Socket socket)) {
 				throw new LispEvalException(
 						LispNames.TCP_SET_TIMEOUT + " expects a connected socket handle, got: " + args.get(0).print());
@@ -5645,13 +5645,15 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.STREAMP, new LispFunction(LispNames.STREAMP, args -> {
 			requireArgCount(LispNames.STREAMP, args, 1);
-			// Streams are opaque integer handles, and the standard-output designator t
-			// counts as a stream too (lite) -- *standard-output* is bound to t.
-			// A synonym stream is a VALUE (LispLayout.SYNONYM_STREAM), not a handle, so
-			// it is the one non-integer stream this answers for.
+			// Every stream is a self-describing VALUE -- an open stream
+			// (LispLayout.STREAM) or a synonym stream (LispLayout.SYNONYM_STREAM) -- and
+			// the standard-output designator t counts as a stream too (lite):
+			// *standard-output* is bound to t. An INTEGER is a number, not a stream,
+			// which is what lets a library dispatch a file descriptor against a Lisp
+			// stream. A Gray instance is added on top of this by LispEvaluator's wrap.
 			LispVal v = args.get(0);
-			return (v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispTrue
-					|| isSynonymStream(v)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (isStreamValue(v) || v instanceof LispTrue || isSynonymStream(v)) ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.SIMPLE_STRING_P, new LispFunction(LispNames.SIMPLE_STRING_P, args -> {
 			requireArgCount(LispNames.SIMPLE_STRING_P, args, 1);
@@ -6667,18 +6669,32 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * The designator a stream operation actually acts on: a synonym stream answers the
+	 * The raw HANDLE a stream operation actually acts on. An OPEN stream
+	 * ({@link LispLayout#STREAM}) answers its handle slot; a synonym stream answers the
 	 * CURRENT value of the variable it names, by calling the reader closure it carries
-	 * beside its declared slot, and the walk repeats so a synonym over a synonym resolves
-	 * too. Anything else is itself.
+	 * beside its declared slot, and the walk repeats so a synonym over a synonym (or over
+	 * an open stream) resolves too. Anything else is itself.
 	 *
 	 * <p>
 	 * This is the interpreter's half of the resolution the compile paths get from
-	 * {@code %SYNONYM-TARGET} ({@code StreamDesignators.throughSynonym}); the reader is
+	 * {@code %STREAM-TARGET} ({@code StreamDesignators.throughStream}); the reader is
 	 * dynamic-binding aware on both. A cycle -- a variable holding a synonym stream over
 	 * itself -- is broken by the depth bound rather than hanging.
 	 * @param designator the stream designator as written, possibly null (omitted)
 	 * @return the resolved designator
+	 */
+	static LispVal streamTarget(LispVal designator) {
+		LispVal resolved = synonymTarget(designator);
+		return resolved instanceof LispInstance inst && inst.hasTag(LispLayout.STREAM_TAG) ? inst.slot(0) : resolved;
+	}
+
+	/**
+	 * The synonym half of {@link #streamTarget}: the value a synonym stream forwards to,
+	 * recursively, WITHOUT unwrapping an open stream at the end. This is what the Gray
+	 * dispatch wraps resolve with -- they need the stream VALUE, not its handle, to tell
+	 * a Gray instance from an open stream.
+	 * @param designator the stream designator as written
+	 * @return the designator a synonym stream forwards to, or the designator itself
 	 */
 	static LispVal synonymTarget(LispVal designator) {
 		LispVal current = designator;
@@ -6695,13 +6711,34 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * {@link #synonymTarget(LispVal)} over a designator that may be ABSENT, which is how
+	 * Whether a value is an OPEN stream -- an instance of the fixed
+	 * {@link LispLayout#STREAM} layout, which is what {@code open}, the string-stream
+	 * constructors and the socket constructors answer.
+	 * @param value any value
+	 * @return true for an open stream value
+	 */
+	static boolean isStreamValue(@Nullable LispVal value) {
+		return value instanceof LispInstance inst && inst.hasTag(LispLayout.STREAM_TAG);
+	}
+
+	/**
+	 * A stream VALUE over a backend handle: what every producer built-in answers.
+	 * @param handle the stream table index
+	 * @param kind one of {@code LispLayout.Kinds}
+	 * @return the stream value
+	 */
+	static LispVal streamValue(long handle, String kind) {
+		return StreamDesignators.streamValue(handle, kind);
+	}
+
+	/**
+	 * {@link #streamTarget(LispVal)} over a designator that may be ABSENT, which is how
 	 * the print/read families spell an omitted stream argument.
 	 * @param designator the stream designator as written, or null when omitted
 	 * @return the resolved designator, null when it was absent
 	 */
-	@Nullable static LispVal synonymTargetOrNull(@Nullable LispVal designator) {
-		return designator == null ? null : synonymTarget(designator);
+	@Nullable static LispVal streamTargetOrNull(@Nullable LispVal designator) {
+		return designator == null ? null : streamTarget(designator);
 	}
 
 	/** How deep a chain of synonym streams may nest before it is called a cycle. */

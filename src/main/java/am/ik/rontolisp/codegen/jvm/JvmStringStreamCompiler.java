@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.StreamDesignators;
@@ -53,7 +54,7 @@ final class JvmStringStreamCompiler {
 	static @Nullable LispVal streamArg(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
 		LispVal resolved = ctx.globals.contains(LispNames.STANDARD_OUTPUT_VAR)
 				? StreamDesignators.resolveOutput(explicit) : explicit;
-		return ctx.usesSynonymStreams ? StreamDesignators.throughSynonym(resolved) : resolved;
+		return streamDesignator(ctx, resolved);
 	}
 
 	/**
@@ -68,7 +69,28 @@ final class JvmStringStreamCompiler {
 	static @Nullable LispVal inputStreamArg(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
 		LispVal resolved = ctx.globals.contains(LispNames.STANDARD_INPUT_VAR) ? StreamDesignators.resolveInput(explicit)
 				: explicit;
-		return ctx.usesSynonymStreams ? StreamDesignators.throughSynonym(resolved) : resolved;
+		return streamDesignator(ctx, resolved);
+	}
+
+	/**
+	 * A stream designator expression resolved down to the raw HANDLE the I/O helpers act
+	 * on, for a consumer that takes its stream argument as written (no
+	 * {@code *standard-output*} designator rule): a stream VALUE is unwrapped, a synonym
+	 * stream is followed. With neither kind reachable in this class the expression is
+	 * handed back untouched, so such a program keeps its exact bytes.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile
+	 */
+	static @Nullable LispVal streamDesignator(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
+		if (!ctx.usesSynonymStreams && !ctx.usesStreamValues) {
+			return explicit;
+		}
+		// The shared %STREAM-TARGET defun when the prelude spliced it (one call per
+		// stream operation), the inline %obj-* unwrap when it did not -- which happens
+		// for a stream value injected after the prelude selection ran.
+		return ctx.functions.containsKey(LispNames.STREAM_TARGET) ? StreamDesignators.throughStream(explicit)
+				: StreamDesignators.throughStreamInline(explicit);
 	}
 
 	/**
@@ -114,6 +136,9 @@ final class JvmStringStreamCompiler {
 		ctx.emitU2(methodRef(ctx, className, JvmIoRuntimeBuilder.MAKE_STRING_OUTPUT_STREAM_METHOD,
 				JvmIoRuntimeBuilder.MAKE_STRING_OUTPUT_STREAM_DESC)
 			.index());
+		if (ctx.usesStreamValues) {
+			JvmObjCompiler.emitWrapStream(ctx, className, LispLayout.Kinds.STRING_OUTPUT);
+		}
 	}
 
 	/** Compiles {@code (%make-string-input-stream str)}. */
@@ -131,12 +156,16 @@ final class JvmStringStreamCompiler {
 		ctx.emitU2(methodRef(ctx, className, JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_METHOD,
 				JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_DESC)
 			.index());
+		if (ctx.usesStreamValues) {
+			JvmObjCompiler.emitWrapStream(ctx, className, LispLayout.Kinds.STRING_INPUT);
+		}
 	}
 
 	/** Compiles {@code (%string-stream-contents stream)}. */
 	static void compileContents(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
-		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(java.util.Objects.requireNonNull(streamDesignator(ctx, parts.get(1))), ctx,
+				className);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(methodRef(ctx, className, JvmIoRuntimeBuilder.STRING_STREAM_CONTENTS_METHOD,
 				JvmIoRuntimeBuilder.STRING_STREAM_CONTENTS_DESC)

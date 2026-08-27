@@ -4100,7 +4100,7 @@ public final class LispNames {
 	 * calling the reader closure reserved beside its declared slot), recursively, so a
 	 * synonym over a synonym resolves too; anything else answers itself.
 	 */
-	public static final String SYNONYM_TARGET = "%SYNONYM-TARGET";
+	public static final String STREAM_TARGET = "%STREAM-TARGET";
 
 	/**
 	 * The internal spelling of {@link #CLOSE} that skips the synonym-stream guard -- the

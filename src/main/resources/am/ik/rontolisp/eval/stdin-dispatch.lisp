@@ -24,13 +24,13 @@
 ;;; The stream DESIGNATOR is resolved HERE, before the nil test -- a synonym
 ;;; stream included. See the same comment in sockets.lisp.
 (defun rontolisp::%io-read-line (&optional s)
-  (let ((in (%synonym-target (or s *standard-input*))))
+  (let ((in (%stream-target (or s *standard-input*))))
     (if (integerp in)
         (rontolisp::%read-line-raw in)
         (rontolisp::%future-force (rontolisp::%read-line-future in)))))
 
 (defun rontolisp::%io-read-char (&optional s)
-  (let ((in (%synonym-target (or s *standard-input*))))
+  (let ((in (%stream-target (or s *standard-input*))))
     (if (integerp in)
         (rontolisp::%read-char-raw in)
         (rontolisp::%future-force (rontolisp::%read-char-future in)))))

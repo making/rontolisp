@@ -153,9 +153,12 @@ final class JvmExprCompiler {
 		}
 		else if (LispNames.ERROR_OUTPUT_VAR.equals(name)) {
 			// *error-output* is the process standard ERROR, which t does not name: it is
-			// the reserved handle 2, the same designator the interpreter holds (the
-			// program never binds this one, so warn's redirect does not exist here).
-			JvmEmitHelper.compileLong(StreamDesignators.STANDARD_ERROR_HANDLE, ctx);
+			// the stream VALUE over the reserved handle 2, the same value the interpreter
+			// holds (the program never binds this one, so warn's redirect does not exist
+			// here). Mentioning the variable is what turns the stream-value gate on
+			// (LispMacroExpander.mayCreateStreamValues), so the constructor form always
+			// compiles here.
+			JvmExprCompiler.compileExpr(StreamDesignators.standardError(), ctx, ctx.className);
 		}
 		else {
 			// Lisp-2: a bare symbol is a variable reference only; functions must be
@@ -586,14 +589,19 @@ final class JvmExprCompiler {
 				}
 				case LispNames.MAKE_SYNONYM_STREAM ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx, className);
-				case LispNames.OPEN -> JvmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
+				case LispNames.OPEN -> {
+					JvmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
+					wrapStreamValue(ctx, className, am.ik.rontolisp.LispLayout.Kinds.FILE);
+				}
 				case LispNames.CLOSE -> {
 					// Closing a SYNONYM stream closes the synonym, not what it forwards
-					// to -- which is nothing to do. The guard is emitted only when the
-					// program can build one; %close is the plain-designator close it
-					// falls through to.
-					if (ctx.usesSynonymStreams) {
-						JvmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverSynonym(cons), ctx, className);
+					// to -- which is nothing to do; an OPEN stream resolves to its
+					// handle. The guard is emitted only when the program can build one
+					// of the two; %close is the raw-handle close it falls through to.
+					if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons,
+								ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)), ctx,
+								className);
 					}
 					else {
 						JvmCloseCompiler.compile(cons, ctx, className);
@@ -724,13 +732,13 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx, className);
 				case LispNames.CONSTANTP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
-				case LispNames.STREAMP -> JvmExprCompiler.compileExpr(
-						LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams, ctx.closRegistry), ctx,
-						className);
+				case LispNames.STREAMP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,
+						ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx, className);
 				case LispNames.SIMPLE_STRING_P ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx, className);
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> JvmExprCompiler.compileExpr(
-						LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams), ctx, className);
+						LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams, ctx.usesStreamValues),
+						ctx, className);
 				case LispNames.FILE_POSITION -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, className);
 				case LispNames.PATHNAMEP ->
@@ -1709,6 +1717,18 @@ final class JvmExprCompiler {
 	 * the wrap keeps every instance-free program byte-identical to a build that never
 	 * knew about pathnames (the {@code .kb/instance-syntax.md} rule).
 	 */
+	/**
+	 * Wraps the raw handle a stream PRODUCER just left on the stack into the open stream
+	 * VALUE, when a stream value can exist in this class at all. With the gate off no
+	 * producer is wrapped and no consumer unwraps, so such a program keeps raw handles --
+	 * and its exact bytes.
+	 */
+	private static void wrapStreamValue(JvmLispCompiler.Ctx ctx, String className, String kind) {
+		if (ctx.usesStreamValues) {
+			JvmObjCompiler.emitWrapStream(ctx, className, kind);
+		}
+	}
+
 	private static LispCons coercePathArgWhenGated(LispCons cons, int argIndex, JvmLispCompiler.Ctx ctx) {
 		return ctx.mayUseInstances ? LispMacroExpander.coercePathArg(cons, argIndex) : cons;
 	}
