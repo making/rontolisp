@@ -108,7 +108,8 @@
 | `alpha-char-p` | `(alpha-char-p #\x)`, `(alpha-char-p #\5)` | `t`, `nil`(WASMバックエンドではASCII文字) |
 | `alphanumericp` | `(alphanumericp #\x)`, `(alphanumericp #\-)` | `t`, `nil`(英字または10進数字) |
 | `graphic-char-p` `standard-char-p` | `(graphic-char-p #\Space)`, `(standard-char-p #\Newline)` | `t`, `t`(印字可能な文字 / 96 個の標準文字) |
-| `make-load-form-saving-slots` | `(make-load-form-saving-slots obj)` | ライト版スタブ: エラーをシグナル(faslダンパなし)。`make-load-form` メソッドをコンパイル可能にするために存在 |
+| `make-load-form` | `(make-load-form obj)` | コード中のリテラル**オブジェクト**に対してコンパイラが参照する総称関数。メソッドが返すフォームがそれを再構築する(`print-object` 同様、システムメソッドなし) |
+| `make-load-form-saving-slots` | `(make-load-form-saving-slots obj)` | 出来合いの答え: 現在のスロット値でオブジェクトを再構築するフォーム |
 | `sxhash` | `(sxhash "ab")` | 構造的ハッシュ(整数/文字/文字列/シンボル/コンス)。実行内では安定、バックエンド間では非規定 |
 | `sbit` | `(sbit #*0110 1)` | ビットベクタ要素の読み取り。`(setf (sbit v i) b)` で書き込み |
 | `bit` | `(bit #*0110 1)` | ビット配列の要素読み出し。`(setf (bit v i) b)` で書き込み |

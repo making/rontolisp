@@ -33,13 +33,15 @@ class BuiltinFunctionWrapperCatalogTest {
 
 	/**
 	 * The CL function names with no function value, deliberately. Each is a standard
-	 * GENERIC function with no built-in definition of its own: the value appears when the
-	 * program's own {@code defmethod} generates the dispatcher defun, exactly as in CL,
-	 * and there is nothing for a wrapper to call before that. A wrapper here would be a
-	 * lambda whose body resolves back to itself.
+	 * GENERIC function with no built-in definition of its own ({@code make-load-form} is
+	 * the compile path's literal-object protocol, {@code .kb/make-load-form.md}): the
+	 * value appears when the program's own {@code defmethod} generates the dispatcher
+	 * defun, exactly as in CL, and there is nothing for a wrapper to call before that. A
+	 * wrapper here would be a lambda whose body resolves back to itself.
 	 */
 	private static final Set<String> USER_DEFINED_GENERICS = Set.of(LispNames.PRINT_OBJECT,
-			LispNames.INITIALIZE_INSTANCE, LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE);
+			LispNames.INITIALIZE_INSTANCE, LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE,
+			LispNames.MAKE_LOAD_FORM);
 
 	@Test
 	void everyClFunctionNameHasAFunctionValue() {
@@ -71,6 +73,7 @@ class BuiltinFunctionWrapperCatalogTest {
 				(defmethod initialize-instance ((p point) &rest args) p)
 				(defmethod reinitialize-instance ((p point) &rest args) p)
 				(defmethod shared-initialize ((p point) slots &rest args) p)
+				(defmethod make-load-form ((p point) &optional environment) nil)
 				""")) {
 			evaluator.eval(form);
 		}

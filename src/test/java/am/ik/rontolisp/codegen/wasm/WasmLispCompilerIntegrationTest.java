@@ -8389,6 +8389,36 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("T\nT\nT\nT\nNIL\nT\nT\nNIL\nT\n(:CAUGHT 42)");
 	}
 
+	// CLHS 3.2.4.4, the WASM half of JvmLispCompilerTest's pair: a literal object a
+	// macro spliced into its expansion is dumped through its own make-load-form method
+	// (eval.LoadFormSubstituter substitutes the creation form before either backend
+	// sees the object), and make-load-form-saving-slots answers the same creation form
+	// the quote compilers dump an instance as. See .kb/make-load-form.md.
+	@Test
+	void literalObjectDumpedByMakeLoadForm() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defclass box () ((name :initarg :name :accessor box-name) (cache :initarg :cache)))
+					(defmethod make-load-form ((b box) &optional env)
+					  (declare (ignore env))
+					  (list 'make-instance ''box :name (box-name b)))
+					(defparameter *box* (make-instance 'box :name "dumped" :cache (make-hash-table)))
+					(defmacro splice-box () *box*)
+					(princ (box-name (splice-box)))
+					(terpri)
+					(defstruct pt x y)
+					(defmethod make-load-form ((p pt) &optional env)
+					  (make-load-form-saving-slots p :environment env))
+					(defparameter *p* (make-pt :x 3 :y "four"))
+					(defmacro splice-pt () *p*)
+					(princ (make-load-form *p*))
+					(terpri)
+					(princ (list (pt-x (splice-pt)) (pt-y (splice-pt))))
+					""")));
+		assertThat(compileAndRunProgram(program))
+			.isEqualTo("dumped\n(%OBJ-NEW (QUOTE %struct-PT) (QUOTE 3) (QUOTE four))\n(3 four)");
+	}
+
 	// define-setf-expander / defsetf are consumed by the compile-path pass
 	// (eval.UserMacroExpander) and the setf call sites rewritten before the WASM
 	// compiler.

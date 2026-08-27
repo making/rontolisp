@@ -145,6 +145,7 @@ categories:
       - { slug: alpha-char-p, name: "alpha-char-p" }
       - { slug: alphanumericp, name: "alphanumericp" }
       - { slug: graphic-char-p, name: "graphic-char-p standard-char-p" }
+      - { slug: make-load-form, name: "make-load-form" }
       - { slug: make-load-form-saving-slots, name: "make-load-form-saving-slots" }
       - { slug: sxhash, name: "sxhash" }
       - { slug: sbit, name: "sbit" }

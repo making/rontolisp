@@ -111,7 +111,8 @@ page.
 | `alpha-char-p` | `(alpha-char-p #\x)`, `(alpha-char-p #\5)` | `t`, `nil` (ASCII letters in the WASM backend) |
 | `alphanumericp` | `(alphanumericp #\x)`, `(alphanumericp #\-)` | `t`, `nil` (letter or decimal digit) |
 | `graphic-char-p` `standard-char-p` | `(graphic-char-p #\Space)`, `(standard-char-p #\Newline)` | `t`, `t` (printing character / the 96 standard characters) |
-| `make-load-form-saving-slots` | `(make-load-form-saving-slots obj)` | Lite stub: signals (no fasl dumper); exists so `make-load-form` methods compile |
+| `make-load-form` | `(make-load-form obj)` | Generic function the compiler consults for a literal OBJECT in code; a method's form reconstructs it (no system method, like `print-object`) |
+| `make-load-form-saving-slots` | `(make-load-form-saving-slots obj)` | The ready-made answer: the form that rebuilds the object with its current slot values |
 | `sxhash` | `(sxhash "ab")` | Structural hash (integers/characters/strings/symbols/conses); stable within a run, not across backends |
 | `sbit` | `(sbit #*0110 1)` | Bit-vector element read; `(setf (sbit v i) b)` writes |
 | `bit` | `(bit #*0110 1)` | Bit-array element read; `(setf (bit v i) b)` writes |

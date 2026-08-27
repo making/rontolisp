@@ -119,6 +119,14 @@ class JvmLispCompilerTest {
 		}
 	}
 
+	// The CLI pipeline's order: UserMacroExpander first (it is what expands a user
+	// macro, and what substitutes a spliced literal object's make-load-form), then the
+	// prelude splice.
+	private String compileAndRunExpanded(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString(lispCode))));
+	}
+
 	// warn writes its "WARNING: ..." line to standard ERROR, which compileAndRun drops.
 	private String compileAndRunCapturingErr(String lispCode) throws Exception {
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -11434,6 +11442,53 @@ class JvmLispCompilerTest {
 				             (%obj-p (cons #'car 2)) (%obj-p (cons "x" 2))))
 				(print (%obj-tag (cons 1 2)))
 				""")).isEqualTo("(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)\nNIL");
+	}
+
+	// CLHS 3.2.4.4: a literal object a macro spliced into its expansion is dumped
+	// through its own make-load-form method, not by structure -- which is the only way
+	// an object with an unspellable slot (the hash table here, a cffi foreign type's
+	// keyword map in the real case) can travel into compiled code at all.
+	@Test
+	void compileAndRunLiteralObjectDumpedByMakeLoadForm() throws Exception {
+		assertThat(compileAndRunExpanded("""
+				(defclass box () ((name :initarg :name :accessor box-name) (cache :initarg :cache)))
+				(defmethod make-load-form ((b box) &optional env)
+				  (declare (ignore env))
+				  (list 'make-instance ''box :name (box-name b)))
+				(defparameter *box* (make-instance 'box :name "dumped" :cache (make-hash-table)))
+				(defmacro splice-box () *box*)
+				(princ (box-name (splice-box)))
+				""")).isEqualTo("dumped");
+	}
+
+	// The built-in default is unchanged: a type nobody wrote a method for is still
+	// dumped by STRUCTURE, so an unspellable slot still fails the compile. This is the
+	// half that keeps every #S(...) literal in every other program travelling as before.
+	@Test
+	void compileRefusesALiteralObjectWithNoMakeLoadFormMethod() {
+		assertThatThrownBy(() -> compileAndRunExpanded("""
+				(defclass box () ((name :initarg :name :accessor box-name) (cache :initarg :cache)))
+				(defparameter *box* (make-instance 'box :name "dumped" :cache (make-hash-table)))
+				(defmacro splice-box () *box*)
+				(princ (box-name (splice-box)))
+				""")).hasMessageContaining("Cannot quote");
+	}
+
+	// make-load-form-saving-slots answers the same creation form the quote compilers
+	// dump an instance as, so a method delegating to it (cl-ppcre's charmap/charset)
+	// gets the built-in answer rather than an error.
+	@Test
+	void compileAndRunMakeLoadFormSavingSlots() throws Exception {
+		assertThat(compileAndRunExpanded("""
+				(defstruct pt x y)
+				(defmethod make-load-form ((p pt) &optional env)
+				  (make-load-form-saving-slots p :environment env))
+				(defparameter *p* (make-pt :x 3 :y "four"))
+				(defmacro splice-pt () *p*)
+				(princ (make-load-form *p*))
+				(terpri)
+				(princ (list (pt-x (splice-pt)) (pt-y (splice-pt))))
+				""")).isEqualTo("(%OBJ-NEW (QUOTE %struct-PT) (QUOTE 3) (QUOTE four))\n(3 four)");
 	}
 
 	@Test

@@ -106,26 +106,25 @@ is the item's own scoreboard.
 
 | library | result | what happened |
 |---|---|---|
-| **cl-sqlite** (`sqlite`) | **loads and runs** | `(ql:quickload "sqlite")` then a live database: table, inserts, an update, `execute-to-list` / `execute-single`, `with-transaction`, and a prepared statement stepped by hand (`examples/jvm/cffi-sqlite.lisp`). Two gaps outside cffi had to close first -- `(coerce 0 type)` with a COMPUTED type (iterate's `make-initial-value`, which every `iter` clause with a `:type` reaches) now follows CLHS's "already of that type" rule, and an address at or above 2^63 is accepted as the unsigned integer it is (`SQLITE_TRANSIENT` is `(mod -1 (expt 2 64))`). **Interpreter and native binary only**: see the `defcenum` limit below |
+| **cl-sqlite** (`sqlite`) | **loads and runs** | `(ql:quickload "sqlite")` then a live database: table, inserts, an update, `execute-to-list` / `execute-single`, `with-transaction`, and a prepared statement stepped by hand (`examples/jvm/cffi-sqlite.lisp`). Two gaps outside cffi had to close first -- `(coerce 0 type)` with a COMPUTED type (iterate's `make-initial-value`, which every `iter` clause with a `:type` reaches) now follows CLHS's "already of that type" rule, and an address at or above 2^63 is accepted as the unsigned integer it is (`SQLITE_TRANSIENT` is `(mod -1 (expt 2 64))`). Compiles to a `.class` as well, through the `make-load-form` method cffi declares on its foreign types (see below) |
 | **static-vectors** | **does not load, and cannot** | not a CFFI consumer at all but a SECOND implementation seam: its `.asd` opens with `(error "static-vectors does not support this Common Lisp implementation!")` under `#-(or abcl allegro ... sbcl)`, and past that the system needs an `impl-<lisp>.lisp` supplying a vector whose storage is non-moving memory a pointer can be taken into. rontolisp has no such array type -- `with-pointer-to-vector-data` copies in and out here -- so an `impl-rontolisp.lisp` could not keep the library's one promise. Not worth a shim: what a consumer wants from it (`fast-io`'s buffers) is reachable through `cffi:foreign-alloc` directly |
 | **cl+ssl** (the real one) | **does not load** -- and the FFI layer was never reached | a probe, never a migration: the `cl+ssl` shim over `rontolisp:tls-upgrade` stays the default (`.kb/tcp-sockets.md`), because it works on the WASM component backend and needs no OpenSSL. Every blocker found was in a DEPENDENCY SHIM, none in cffi. In order: (1) `defpackage :cl+ssl` signals, because rontolisp pre-registers `CL+SSL` for its own shim -- probed past by renaming the package in a scratch copy; (2) flexi-streams had no in-memory OUTPUT stream (`make-in-memory-output-stream` / `get-output-stream-sequence`) -- ADDED; (3) trivial-garbage had no `make-weak-hash-table` -- ADDED (weakness is not observable from CL, so it degrades to an ordinary table); (4) bordeaux-threads had no `make-recursive-lock` / `with-recursive-lock-held` -- ADDED (the shim's `make-lock` is already reentrant, so the pair is one object and one expansion); (5) `flexi-streams:flexi-stream` as a real WRAPPER CLASS with `flexi-stream-stream`, which the shim deliberately does not have -- a flexi stream here IS the underlying stream. That fifth one is where the probe stopped; `.todo/550` carries the rest |
 
 `cffi-grovel` consumers were not probed and never will be: grovelling compiles and runs a
 C program to read the platform's headers.
 
-## The `defcenum` limit: cffi relies on `make-load-form`
+## `defcenum` and `make-load-form`
 
 A `defcfun` whose return or argument type is a `defcenum` (or any other
 `translatable-foreign-type`) expands to a form containing the foreign-type OBJECT itself
 -- `expand-to-foreign` splices `,type` -- and upstream makes that legal by defining
 `(defmethod make-load-form ((type foreign-type)) `(parse-type ',(unparse-type type)))`
-in `early-types.lisp`. The interpreter is fine: the object is live. **The compile paths
-are not**: they quote a literal by structure, the enum object's slots hold hash tables,
-and the program dies with `Cannot quote: #<HASH-TABLE ...>` -- so honoring
-`make-load-form` for a literal instance (`.todo/549`) is what the enum-using half of the
-ecosystem waits on. cl-sqlite's every entry point returns a `defcenum`, which is why its example
-declares the interpreter only. An enum-free binding (the `use.lisp` shape) still compiles
-to a `.class` and answers the interpreter byte for byte.
+in `early-types.lisp`. The interpreter is fine: the object is live. The compile paths
+used to quote such a literal by STRUCTURE, reach the enum object's hash-table slots and
+die with `Cannot quote: #<HASH-TABLE ...>`; they now honor the method
+(`.kb/make-load-form.md`), which is what gives `examples/jvm/cffi-sqlite.lisp` -- whose
+every entry point returns a `defcenum` -- its `jvm` leg, byte for byte the interpreter's
+answer.
 
 ## Leaf modules may now select a package
 

@@ -3107,10 +3107,24 @@ public final class LispNames {
 	public static final String ALPHANUMERICP = "ALPHANUMERICP";
 
 	/**
-	 * The {@code make-load-form-saving-slots} standard function. A prelude STUB that
-	 * signals when called: rontolisp has no fasl dumper, but a library's
-	 * {@code make-load-form} methods (cl-ppcre's charmap/charset) must still compile --
-	 * the call sites are dead at run time.
+	 * The {@code make-load-form} generic function (CLHS 3.2.4.4): the one protocol for
+	 * "this object appears as a literal in code that will be compiled; here is a form
+	 * that reconstructs it". Like {@link #PRINT_OBJECT} it is cl-owned, so a
+	 * {@code defmethod} written inside a package that uses cl joins the ONE generic every
+	 * consumer reaches, and like it there is no system method: the compile path routes
+	 * only a type some method specializes on, and dumps every other instance by structure
+	 * (see {@code eval/LoadFormSubstituter} and {@code .kb/make-load-form.md}).
+	 */
+	public static final String MAKE_LOAD_FORM = "MAKE-LOAD-FORM";
+
+	/**
+	 * The {@code make-load-form-saving-slots} standard function: a prelude defun
+	 * answering the {@code (%obj-new '<tag> 'v1 ... 'vn)} creation form that rebuilds the
+	 * instance with its current slot values -- which is exactly what the quote compilers
+	 * dump an instance as, so a library method delegating to it (cl-ppcre's
+	 * charmap/charset) gets the built-in answer. Lite: {@code :slot-names} is ignored
+	 * (every slot travels) and the object is rebuilt, not allocated-then-filled, so a
+	 * circular reference back to it is not supported.
 	 */
 	public static final String MAKE_LOAD_FORM_SAVING_SLOTS = "MAKE-LOAD-FORM-SAVING-SLOTS";
 
@@ -6588,6 +6602,13 @@ public final class LispNames {
 	 * The slot holds a one-element list, {@code nil} meaning "not computed yet".
 	 */
 	public static final String LOAD_TIME_VALUE_SLOT_PREFIX = "%LOAD-TIME-VALUE-";
+
+	/**
+	 * Prefix of the binding a {@code make-load-form} method's INIT form is run against:
+	 * {@code (let ((%LOAD-FORM-OBJECT-1 <creation>)) <init> %LOAD-FORM-OBJECT-1)}. See
+	 * {@code eval/LoadFormSubstituter}.
+	 */
+	public static final String LOAD_FORM_OBJECT_PREFIX = "%LOAD-FORM-OBJECT-";
 
 	/** The {@code mask-field} built-in function (ldb shifted back into position). */
 	public static final String MASK_FIELD = "MASK-FIELD";

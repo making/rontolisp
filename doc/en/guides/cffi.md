@@ -200,7 +200,6 @@ has actually been tried here:
 | `cffi-libffi` | Refused too, and for the opposite reason: structures by value already work (above), so there is nothing for it to add |
 | `with-pointer-to-vector-data` | Copies **in and out** instead of pinning: the body sees a fresh foreign buffer, and what the C side wrote reaches the Lisp vector when the body returns, not before. A pointer kept past the body is dangling |
 | `:long-double` | Not a foreign type here |
-| `defcenum` in a compiled program | A `defcfun` whose argument or return type is a `defcenum` (or another translated type) makes CFFI embed the foreign-type OBJECT in its expansion, which upstream makes legal with a `make-load-form` method. The interpreter and the native binary are fine — the object is live. A `-o Prog.class` is not: it cannot dump the object, and the compile fails with `Cannot quote: #<HASH-TABLE ...>`. An enum-free binding compiles normally |
 
 ## In the native binary
 

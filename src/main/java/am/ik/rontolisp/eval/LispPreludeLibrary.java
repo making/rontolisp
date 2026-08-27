@@ -202,7 +202,11 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, """
 				(defun make-load-form-saving-slots (object &key slot-names environment)
-				  (error "make-load-form-saving-slots is not supported (no fasl dumper)"))
+				  (declare (ignore slot-names environment))
+				  (list* '%obj-new
+				         (list 'quote (%obj-tag object))
+				         (mapcar (lambda (%mlfss-v) (list 'quote %mlfss-v))
+				                 (%obj-slots object))))
 				""");
 		SOURCES.put(LispNames.SXHASH, """
 				(defun sxhash (obj)

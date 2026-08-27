@@ -52,6 +52,21 @@ class LispEvaluatorTest {
 		return result;
 	}
 
+	// make-load-form is a cl-owned generic with no system method (the print-object
+	// pattern): a defmethod anywhere joins the one generic, and the prelude's
+	// make-load-form-saving-slots answers the creation form that rebuilds the instance
+	// -- the same one the quote compilers dump an instance as. See
+	// .kb/make-load-form.md.
+	@Test
+	void makeLoadFormSavingSlotsAnswersTheInstanceCreationForm() {
+		assertThat(evalMulti("""
+				(defstruct pt x y)
+				(defmethod make-load-form ((p pt) &optional env)
+				  (make-load-form-saving-slots p :environment env))
+				(make-load-form (make-pt :x 3 :y "four"))
+				""").print()).isEqualTo("(%OBJ-NEW (QUOTE %struct-PT) (QUOTE 3) (QUOTE \"four\"))");
+	}
+
 	@Test
 	void evalInteger() {
 		assertThat(eval("(+ 1 2)")).isEqualTo(new LispInteger(3));

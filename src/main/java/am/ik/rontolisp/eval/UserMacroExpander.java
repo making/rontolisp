@@ -311,6 +311,20 @@ public final class UserMacroExpander {
 			}
 		}
 		substituteGlobalSymbolMacros(result, symbolMacros);
+		// CLHS 3.2.4.4, over the WHOLE emitted program: a literal object a macro spliced
+		// into its expansion (cffi's parsed foreign type, in every defcfun body) is
+		// dumped through its own make-load-form method rather than by structure. Done
+		// here rather than per form, because a form reaches `result` by several routes
+		// (an expanded eval-when's kept members, a defsection residue) and every one of
+		// them can carry such an object; and done in this pass at all because it is the
+		// last one holding an evaluator to ask -- the quote compilers see only the
+		// creation form. See LoadFormSubstituter and .kb/make-load-form.md.
+		for (int i = 0; i < result.size(); i++) {
+			// The failing position is the form being dumped: a method that signals, or
+			// an object whose creation form reaches itself, has no source of its own.
+			SourceProvenance.enterTopLevelForm(result.get(i));
+			result.set(i, LoadFormSubstituter.substitute(result.get(i), macroEval));
+		}
 		emitMacroGeneratedDeftypes(macroEval, result);
 		emitMacroFunctionTable(macroEval, result);
 		return result;

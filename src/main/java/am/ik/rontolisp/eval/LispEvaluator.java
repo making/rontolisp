@@ -7609,6 +7609,90 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Whether the program defines any {@code make-load-form} method at all -- the cheap
+	 * gate {@link LoadFormSubstituter} tests before walking a top-level form for literal
+	 * instances. Almost no program has one, and those pay nothing.
+	 * @return {@code true} when a {@code make-load-form} generic with at least one
+	 * specialized method is registered
+	 */
+	public boolean hasMakeLoadFormMethods() {
+		ClosRegistry.GenericInfo generic = this.closRegistry.findGeneric(LispNames.MAKE_LOAD_FORM);
+		return generic != null && generic.methods().values().stream().anyMatch(m -> !m.isDefault());
+	}
+
+	/**
+	 * The {@code make-load-form} values of a literal instance the compile path is about
+	 * to dump, or null when the program defines no method specialized on its type.
+	 *
+	 * <p>
+	 * Null is the ORDINARY answer: rontolisp's built-in default for an instance literal
+	 * is the structural dump the quote compilers implement (the CLHS
+	 * {@code structure-object} licence to answer a constructor form), which is also what
+	 * {@code make-load-form-saving-slots} spells, so a type nobody wrote a method for
+	 * keeps travelling exactly as before. A method REPLACES that default -- see
+	 * {@code .kb/make-load-form.md} and {@link LoadFormSubstituter}, the only caller.
+	 * @param instance the literal instance
+	 * @return the creation form and the optional init form, or null when no method
+	 * specializes on the instance's type
+	 */
+	@org.jspecify.annotations.Nullable
+	public List<LispVal> makeLoadFormValues(LispInstance instance) {
+		if (!hasMakeLoadFormMethodFor(instance)) {
+			return null;
+		}
+		LispVal call = consListOf(List.of(new LispSymbol(LispNames.MAKE_LOAD_FORM), instance));
+		this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		LispVal primary = evalResolved(call);
+		List<LispVal> values = new ArrayList<>();
+		values.add(primary);
+		values.addAll(spilledValues(this.globalEnv.lookup(LispNames.MV_SPILL)));
+		this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		return values;
+	}
+
+	/**
+	 * Whether some {@code make-load-form} method specializes on the instance's own type
+	 * or one of its ancestors (class precedence list for a class, {@code :include} chain
+	 * for a struct). An unspecialized (default) method does not count: it would answer
+	 * every instance in the program, and the built-in structural dump is the better
+	 * answer for the ones nobody wrote a method for.
+	 */
+	private boolean hasMakeLoadFormMethodFor(LispInstance instance) {
+		ClosRegistry.GenericInfo generic = this.closRegistry.findGeneric(LispNames.MAKE_LOAD_FORM);
+		if (generic == null) {
+			return false;
+		}
+		String typeName = instance.layout().printName();
+		java.util.Set<String> names = new java.util.LinkedHashSet<>();
+		names.add(typeKey(typeName));
+		ClosRegistry.ClassInfo info = this.closRegistry.findClass(typeName);
+		if (info != null) {
+			names.add(typeKey(info.name()));
+			info.cpl().forEach(c -> names.add(typeKey(c)));
+		}
+		this.closRegistry.structAncestorNames(typeName).forEach(a -> names.add(typeKey(a)));
+		for (ClosRegistry.MethodInfo method : generic.methods().values()) {
+			if (method.specializers().isEmpty()) {
+				continue;
+			}
+			ClosRegistry.Specializer first = method.specializers().get(0);
+			if ((first.kind() == ClosRegistry.SpecializerKind.CLASS
+					|| first.kind() == ClosRegistry.SpecializerKind.TYPE) && first.name() != null
+					&& names.contains(typeKey(first.name()))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The package-stripped, upcased spelling a specializer and a type name compare by.
+	 */
+	private static String typeKey(String name) {
+		return memberName(name).toUpperCase(Locale.ROOT);
+	}
+
+	/**
 	 * Pre-expands user macros (macrolet included) inside an {@code flet}/{@code labels}
 	 * form when its body contains a {@code macrolet}: the flet expansion rewrites its
 	 * local-function CALL SITES textually, so a call site that only appears after a

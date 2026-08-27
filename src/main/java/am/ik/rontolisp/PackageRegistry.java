@@ -125,7 +125,7 @@ public final class PackageRegistry {
 			LispNames.CHAR_EQUAL, LispNames.CHAR_NOT_EQUAL, LispNames.CHAR_LESSP, LispNames.CHAR_GREATERP,
 			LispNames.CHAR_NOT_LESSP, LispNames.CHAR_NOT_GREATERP, LispNames.GRAPHIC_CHAR_P, LispNames.STANDARD_CHAR_P,
 			LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P,
-			LispNames.ALPHANUMERICP, LispNames.LDIFF, LispNames.SUBLIS, LispNames.GENTEMP,
+			LispNames.ALPHANUMERICP, LispNames.LDIFF, LispNames.SUBLIS, LispNames.GENTEMP, LispNames.MAKE_LOAD_FORM,
 			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BIT,
 			LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
 			LispNames.COMPILED_FUNCTION_P, LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.LIST_ALL_PACKAGES,

@@ -623,19 +623,20 @@ examples:
 
   # --- jvm: a C library through upstream CFFI (JVM family only) ----------------
   - path: jvm/cffi-sqlite.lisp
-    backends: [interpreter]
+    backends: [interpreter, jvm]
     library: [libsqlite3.so.0, libsqlite3.so, libsqlite3.dylib]
     note: >-
       a real SQLite database through cl-sqlite -- upstream CFFI, quickloaded and
       bound to libsqlite3 by the foreign function API, with no SQL engine of our
       own underneath it. `library:` gates the RUN leg the way `os:` gates the
       macOS ones: the C library is the engine, and a machine without it skips
-      rather than fails. Interpreter only, and the reason is exact: a defcenum
+      rather than fails. The jvm leg is what `make-load-form` bought: a defcenum
       return type -- which cl-sqlite's every entry point has -- makes cffi embed
-      the foreign-type OBJECT in its expansion and rely on make-load-form, which
-      the compile paths do not honor yet, so the jvm leg cannot be claimed;
-      neither WASM backend has a foreign function API at all. The version line
-      is the machine's libsqlite3, hence `contains` rather than `equals`.
+      the foreign-type OBJECT in its expansion, and the compile path now dumps it
+      through the method cffi declares on it (.kb/make-load-form.md) instead of
+      by structure. Neither WASM backend has a foreign function API at all. The
+      version line is the machine's libsqlite3, hence `contains` rather than
+      `equals`.
     expect:
       contains:
         - "rows 3"
