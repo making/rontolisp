@@ -26,8 +26,9 @@ and leaves the COMPILE legs alone, added for it -- so its output is checked on a
 its lowering everywhere: the one program that gates the blob on through the bare `objc:`
 verbs, with no `appkit:` reference and so no splice. `examples/macos/metal.lisp` +
 `metal-triangle.lisp` + `metal-cube.lisp` + `metal-robot-arm.lisp` (todo-525,
-2026-08-26) are the GPU set, the AppKit twins of `examples/browser/webgl-triangle`,
-`webgl-cube` and `webgl-robot-arm` -- "Metal" below.
+2026-08-26) + `metal-pagoda-garden.lisp` (2026-08-27) are the GPU set, the first three the
+AppKit twins of `examples/browser/webgl-triangle`, `webgl-cube` and `webgl-robot-arm` and the
+last one with no browser twin -- "Metal" below.
 
 What it is worth: the `rontolisp` native binary is the REPL people run, and `java:` cannot
 be INTERPRETED there at all (no reflection metadata). FFM needs none, so this is the one
@@ -222,7 +223,8 @@ the first cut sent the header down the wire and the two backends disagreed by tw
 
 `examples/macos/metal.lisp` (the shared surface, `webgl-common/gl.lisp`'s twin) plus
 `examples/macos/metal-triangle.lisp`, `metal-cube.lisp` and `metal-robot-arm.lisp` -- the
-AppKit answers to `examples/browser/webgl-triangle`, `webgl-cube` and `webgl-robot-arm`.
+AppKit answers to `examples/browser/webgl-triangle`, `webgl-cube` and `webgl-robot-arm` --
+and `metal-pagoda-garden.lisp`, which has no browser twin.
 They add no Java: Metal is an Objective-C API almost end to end, so `objc:send` drives all
 of it.
 
@@ -273,6 +275,34 @@ of it.
   `:element-type 'single-float` picks float32 (a Metal `float4x4`) and every linalg
   transform preserves the width (`.kb/linalg.md`). One `linalg:transpose` bridges
   row-major storage to Metal's column-major `float4x4`.
+
+`metal-pagoda-garden.lisp` (2026-08-27) is the scene-scale one: a voxel garden of ~13,000
+cubes, three pipelines, and four things that move. Four facts are worth keeping.
+
+- **The whole scene is ONE cube.** The vertex function takes `id / 36` for the voxel and
+  `id % 36` for the corner out of a 36-entry `constant` array, so a 13,000-voxel scene is
+  ONE `drawPrimitives:vertexStart:vertexCount:` over a buffer of 13,000 32-byte records --
+  no vertex descriptor, no index buffer, and deliberately no `...instanceCount:`, whose
+  four-integer shape is not in the closed objc_msgSend table above (which this example
+  therefore leaves unchanged). `(id % 36) / 6` is the face, so the normal is exact and the
+  per-face key voxel art wants is free.
+- **A point sprite carries ONE depth, the centre's.** A glow emitted where its own stone
+  lantern is loses the depth test to the lantern and never appears; the fix is `sp-near`,
+  which nudges such a sprite a couple of voxels toward the eye. Found the hard way -- the
+  lantern halos, the lit windows and the spire's jewel were all invisible until it existed.
+- **The sky has to work BELOW the horizon.** The camera looks down on the garden by more
+  than its own half-FOV, so every pixel of visible "sky" is under the horizon; the first cut
+  put its clouds, stars and moon in `dir.y > 0` and rendered two thirds of the window one
+  flat colour. The gradient is now symmetric in `abs(dir.y)`, and the lower half is the sea
+  of cloud the island floats over -- which is also what makes it read as floating.
+- **A procedural hash must stay where `fract` still has bits.** The star field's first hash
+  multiplied its way past 10^6, where float32 leaves `fract` four distinct answers, and the
+  stars switched off in whole directions of the sky depending on where the camera pointed.
+  Both hashes are Hoskins-style now and stay under ~10^4.
+
+The scene draws no random number from the machine: one 32-bit LCG seeded by a constant
+builds it, so the same garden grows on the interpreter, the native binary and the compiled
+JVM class -- checked by eye against all three.
 
 Every Metal object a program holds is PROTOCOL-typed (`id<MTLDevice>`), and the concrete
 class is private and machine-specific (`AGXG16CDevice` here), which is why

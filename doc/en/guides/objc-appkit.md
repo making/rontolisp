@@ -250,7 +250,11 @@ Together they are what puts the GPU in reach: Metal is an Objective-C API almost
 end to end, so `objc:send` drives it with nothing added — `examples/macos/metal-triangle.lisp`
 draws the WebGL hello world, `examples/macos/metal-cube.lisp` a spinning, shaded cube, and
 `examples/macos/metal-robot-arm.lisp` a robot arm that solves its own inverse kinematics and
-reaches for wherever you click, with shaders compiled from Lisp strings at run time. (OpenGL
+reaches for wherever you click, and `examples/macos/metal-pagoda-garden.lisp` a voxel garden --
+a five-storey pagoda over a koi pond under falling cherry blossom, and a night that comes on
+when you click -- whose thirteen thousand voxels are ONE cube drawn thirteen thousand times,
+the vertex function dividing `vertex_id` by 36 to find which voxel it is on. Shaders are
+compiled from Lisp strings at run time. (OpenGL
 is the opposite and stays out of reach: `glClear` and friends are plain C functions, which
 `objc_msgSend` does not reach.)
 

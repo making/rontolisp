@@ -205,7 +205,10 @@ CL-USER> (handler-case
 だけで何も足さずに駆動できます。`examples/macos/metal-triangle.lisp` は WebGL の hello world
 を、`examples/macos/metal-cube.lisp` は陰影付きの回転する立方体を、
 `examples/macos/metal-robot-arm.lisp` は自分で逆運動学を解いてクリックした先へ手を伸ばすロ
-ボットアームを描き、シェーダは Lisp の文字列から実行時にコンパイルされます (OpenGL は逆で、
+ボットアームを、`examples/macos/metal-pagoda-garden.lisp` はボクセルの庭 — 鯉の池の上に立つ
+五重塔、舞い散る桜、クリックで訪れる夜 — を描きます。その 1 万 3 千個のボクセルは 1 個の立方
+体を 1 万 3 千回描いたもので、頂点関数が `vertex_id` を 36 で割ってどのボクセルの上にいるかを
+求めます。シェーダは Lisp の文字列から実行時にコンパイルされます (OpenGL は逆で、
 射程外のままです。`glClear` などは素の C 関数であり、`objc_msgSend` は届きません)。
 
 そこにマウスを運ぶのが `objc:define-class` です。描画面は実行時に定義した `NSView` のサブク

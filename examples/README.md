@@ -190,7 +190,9 @@ is about. Metal is one of them, and it is Objective-C nearly end to end, so the 
 is reachable with nothing added: [`metal-triangle.lisp`](macos/metal-triangle.lisp),
 [`metal-cube.lisp`](macos/metal-cube.lisp) and
 [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) are the AppKit twins of the WebGL
-examples under [`browser/`](browser).
+examples under [`browser/`](browser), and
+[`metal-pagoda-garden.lisp`](macos/metal-pagoda-garden.lisp) is a voxel scene with no twin
+anywhere.
 The window examples are not in `examples.yaml`: they need a display. The two that
 open nothing — [`objc-runtime.lisp`](macos/objc-runtime.lisp) and
 [`system-frameworks.lisp`](macos/system-frameworks.lisp) — run in a terminal and are
@@ -211,6 +213,7 @@ See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 | [`metal-triangle.lisp`](macos/metal-triangle.lisp) | The WebGL hello world on a Mac GPU, the twin of [`webgl-triangle`](browser/webgl-triangle): one gradient triangle, no vertex buffer at all (the shader looks its corners up by `vertex_id`), Metal Shading Language compiled from a Lisp string at run time |
 | [`metal-cube.lisp`](macos/metal-cube.lisp) | The full pipeline, the twin of [`webgl-cube`](browser/webgl-cube): a vertex buffer and a per-frame MVP matrix, both `objc:data` over packed single-float arrays -- the matrix comes straight out of the built-in [`linalg`](../doc/en/guides/linear-algebra.md) package, since a linalg result IS a packed array and `objc:data` takes one of any rank; back-face culling instead of a depth buffer (a cube is convex) and face normals from `dfdx`/`dfdy`; the frame loop is an `appkit:timer` |
 | [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) | The twin of [`webgl-robot-arm`](browser/webgl-robot-arm), and the whole of a renderer: a depth attachment, a lit-triangle pipeline and an additive glow-sprite one, geometry re-tessellated every frame into shared `MTLBuffer`s rotated through three slots, and the mouse -- an `NSView` subclass defined at run time whose `mouseDown:` / `mouseDragged:` / `scrollWheel:` are Lisp closures, installed as the window's content view. Click and the arm solves damped-least-squares Jacobian IK onto the unprojected point along a minimum-jerk trajectory; drag to orbit, scroll to zoom. Every coordinate is a packed single-float vector and every combination of them a [`linalg`](../doc/en/guides/linear-algebra.md) call, so the look-at, the Jacobian and the damped normal equations read as the matrix expressions they are |
+| [`metal-pagoda-garden.lisp`](macos/metal-pagoda-garden.lisp) | A voxel garden: a five-storey pagoda over a koi pond, cherry trees always in bloom, a torii, an arched bridge, stone lanterns and a raked karesansui, on an island floating over a sea of cloud. Its ~13,000 voxels are ONE cube drawn 13,000 times -- the vertex function divides `vertex_id` by 36 to find its voxel and takes the remainder for the corner, so the buffer holds one 32-byte record per voxel and no vertex descriptor, index buffer or instancing selector is involved. Three pipelines: a procedural sky (gradient, sun, clouds, stars, a moon) generated from three vertices and no buffer at all, the lit voxels, and additive glow sprites. The water, the koi, the petals and the sun move; click for night and the lanterns, the windows and the fireflies come up. The whole scene is built by one seeded 32-bit LCG, so the same garden grows on every backend |
 | [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
 
 ```bash
@@ -223,6 +226,7 @@ java -jar $JAR examples/macos/menubar.lisp             # no window; look at the 
 java -jar $JAR examples/macos/metal-triangle.lisp
 java -jar $JAR examples/macos/metal-cube.lisp
 java -jar $JAR examples/macos/metal-robot-arm.lisp
+java -jar $JAR examples/macos/metal-pagoda-garden.lisp
 ./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp \
