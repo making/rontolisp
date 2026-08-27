@@ -4465,8 +4465,10 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(optimized.length).as("--optimize should shrink the serve component").isLessThan(plain.length);
 		wasmtime.copyFileToContainer(Transferable.of(optimized), "/tmp/serve-opt.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8093 serve-opt.wasm"
-						+ " >/tmp/serve-opt.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8093 /tmp/serve-opt.wasm"
+						+ " >/tmp/serve-opt.log 2>&1 & pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-opt.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8093/hello) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-opt.log; exit 1");
 		assertThat(result.getExitCode()).as("optimized wasmtime serve round trip; log: %s", result.getStderr())
@@ -4481,6 +4483,11 @@ class WasmLispCompilerIntegrationTest {
 		// hit
 		// it with curl (installed in the image), asserting the handler echoes the
 		// request.
+		//
+		// An explicit --addr matters here: `wasmtime serve`'s default is 0.0.0.0:8080,
+		// and this suite runs wasmtime as a HOST process (HostWasmtime), so 8080 would
+		// be the developer's own -- on a machine already serving that port, curl would
+		// reach whatever else is listening there instead of this test's server.
 		byte[] componentBytes = compileServeComponent("""
 				(defun handle (env)
 				  (list 200 nil
@@ -4489,8 +4496,11 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y serve.wasm >/tmp/serve.log 2>&1 &"
-						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8080/hello) && [ -n \"$out\" ]"
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8088 /tmp/serve.wasm"
+						+ " >/tmp/serve.log 2>&1 & pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve.log 1>&2; exit 1; };"
+						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8088/hello) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve round trip; log: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("GET /hello");
@@ -4512,7 +4522,10 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-big.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8081 serve-big.wasm >/tmp/serve-big.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8081 /tmp/serve-big.wasm >/tmp/serve-big.log 2>&1 &"
+						+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-big.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do code=$(curl -s -m 20 -o /tmp/big.out -w '%{http_code}'"
 						+ " http://127.0.0.1:8081/big) && [ \"$code\" != 000 ]"
 						+ " && { echo \"$code $(wc -c < /tmp/big.out)\"; exit 0; }; sleep 0.25; done;"
@@ -4541,8 +4554,10 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-octets.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8094 serve-octets.wasm"
-						+ " >/tmp/serve-octets.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8094 /tmp/serve-octets.wasm"
+						+ " >/tmp/serve-octets.log 2>&1 & pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-octets.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do code=$(curl -s -m 20 -o /tmp/octets.out -w '%{http_code}'"
 						+ " http://127.0.0.1:8094/) && [ \"$code\" != 000 ]"
 						+ " && { od -An -tx1 /tmp/octets.out | tr -d ' \\n'; echo; exit 0; }; sleep 0.25; done;"
@@ -4569,7 +4584,10 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-rand.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8082 serve-rand.wasm >/tmp/serve-rand.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8082 /tmp/serve-rand.wasm >/tmp/serve-rand.log 2>&1 &"
+						+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-rand.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8082/) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-rand.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve random/clock round trip; log: %s", result.getStderr())
@@ -4610,7 +4628,13 @@ class WasmLispCompilerIntegrationTest {
 		// would end the poll loop with the wrong output (a startup race, not a bug).
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8083 /tmp/serve-backend.wasm >/tmp/serve-backend.log 2>&1 &"
+						+ " pid1=$!;"
 						+ " wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
+						+ " pid2=$!; trap 'kill $pid1 $pid2 2>/dev/null' EXIT;" + " sleep 0.3;"
+						+ " kill -0 $pid1 2>/dev/null || { echo 'backend wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-backend.log 1>&2; exit 1; };"
+						+ " kill -0 $pid2 2>/dev/null || { echo 'proxy wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-proxy.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8083/up >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8083/up >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/serve-backend.log 1>&2; exit 1; };"
@@ -4659,7 +4683,13 @@ class WasmLispCompilerIntegrationTest {
 		wasmtime.copyFileToContainer(Transferable.of(proxyBytes), "/tmp/relay-proxy.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8095 /tmp/relay-backend.wasm >/tmp/relay-backend.log 2>&1 &"
+						+ " pid1=$!;"
 						+ " wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8096 /tmp/relay-proxy.wasm >/tmp/relay-proxy.log 2>&1 &"
+						+ " pid2=$!; trap 'kill $pid1 $pid2 2>/dev/null' EXIT;" + " sleep 0.3;"
+						+ " kill -0 $pid1 2>/dev/null || { echo 'backend wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/relay-backend.log 1>&2; exit 1; };"
+						+ " kill -0 $pid2 2>/dev/null || { echo 'proxy wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/relay-proxy.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8095/text >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8095/text >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/relay-backend.log 1>&2; exit 1; };"
@@ -4722,6 +4752,9 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y -S keyvalue-in-memory-data=/hits=41"
 						+ " --addr 127.0.0.1:8085 /tmp/serve-kv.wasm >/tmp/serve-kv.log 2>&1 &"
+						+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-kv.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8085/hits) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-kv.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve keyvalue round trip; log: %s", result.getStderr()).isZero();
@@ -4747,11 +4780,14 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:http-handler 'handle)
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-env.wasm");
-		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y --env RLENV=hello"
-						+ " --addr 127.0.0.1:8092 /tmp/serve-env.wasm >/tmp/serve-env.log 2>&1 &"
-						+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:8092/) && [ -n \"$out\" ]"
-						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-env.log 1>&2; exit 1");
+		ExecResult result = wasmtime
+			.execInContainer("bash", "-c", "wasmtime serve -W gc=y -W exceptions=y --env RLENV=hello"
+					+ " --addr 127.0.0.1:8092 /tmp/serve-env.wasm >/tmp/serve-env.log 2>&1 &"
+					+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+					+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+					+ " cat /tmp/serve-env.log 1>&2; exit 1; };"
+					+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:8092/) && [ -n \"$out\" ]"
+					+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-env.log 1>&2; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve getenv; log: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("hello nil");
 	}
@@ -4771,6 +4807,9 @@ class WasmLispCompilerIntegrationTest {
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-global.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8090 /tmp/serve-global.wasm >/tmp/serve-global.log 2>&1 &"
+						+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-global.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:8090/) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-global.log 1>&2; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve top-level global; log: %s", result.getStderr()).isZero();
@@ -4802,10 +4841,46 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y"
 						+ " --addr 127.0.0.1:8091 /tmp/serve-tcp.wasm >/tmp/serve-tcp.log 2>&1 &"
+						+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-tcp.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:8091/) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-tcp.log 1>&2; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve tcp-connect; log: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("connected");
+	}
+
+	@Test
+	void wasmtimeServeProcessDoesNotOutliveTheTest() throws Exception {
+		// Every case above backgrounds `wasmtime serve` with `&` inside a `bash -c`
+		// script and lets the script exit as soon as curl gets an answer. A
+		// non-interactive bash does not SIGHUP a background job when the script's own
+		// process exits, so without an explicit kill the server is orphaned and keeps
+		// holding its port -- this host has, at times, accumulated a dozen of them
+		// across runs. Prove the launch pattern kills what it starts: run a bare
+		// serve+curl round trip, then, once the script has exited, confirm nothing is
+		// still listening on the port it used.
+		byte[] componentBytes = compileServeComponent("""
+				(defun handle (env)
+				  (list 200 nil (list "GET" " " (getf env :path-info))))
+				(rontolisp:http-handler 'handle)
+				""", null);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-leak.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8089 /tmp/serve-leak.wasm"
+						+ " >/tmp/serve-leak.log 2>&1 & pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/serve-leak.log 1>&2; exit 1; };"
+						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8089/hello) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-leak.log; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve round trip; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("GET /hello");
+		// Give a killed process a moment to release the socket, then confirm the port
+		// was actually freed rather than still answering.
+		ExecResult probe = wasmtime.execInContainer("bash", "-c",
+				"sleep 0.5; curl -s -o /dev/null --max-time 1 http://127.0.0.1:8089/hello; echo $?");
+		assertThat(probe.getStdout().trim()).as("wasmtime serve must not outlive its test; port 8089 still answers")
+			.isEqualTo("7");
 	}
 
 	@Test
@@ -17598,6 +17673,9 @@ class WasmLispCompilerIntegrationTest {
 		// refused would be reported as a wit-error, not as this test's answer.
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8086 /tmp/wit-fetch-backend.wasm >/tmp/wit-fetch-backend.log 2>&1 &"
+						+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'backend wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/wit-fetch-backend.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8086/hello >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8086/hello >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/wit-fetch-backend.log 1>&2; exit 1; };"
@@ -17678,6 +17756,9 @@ class WasmLispCompilerIntegrationTest {
 		wasmtime.copyFileToContainer(Transferable.of(postBytes), "/tmp/wit-post.component.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8087 /tmp/wit-post-backend.wasm >/tmp/wit-post-backend.log 2>&1 &"
+						+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+						+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'backend wasmtime serve exited immediately; log:' 1>&2;"
+						+ " cat /tmp/wit-post-backend.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8087/echo -d probe >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8087/echo -d probe >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/wit-post-backend.log 1>&2; exit 1; };"
