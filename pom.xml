@@ -273,7 +273,7 @@ gitBranch=${git.branch}
 			<plugin>
 				<groupId>io.spring.javaformat</groupId>
 				<artifactId>spring-javaformat-maven-plugin</artifactId>
-				<version>0.0.47</version>
+				<version>0.0.48</version>
 				<executions>
 					<execution>
 						<phase>validate</phase>
