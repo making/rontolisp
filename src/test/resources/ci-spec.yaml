@@ -5294,6 +5294,17 @@ cases:
     expected: |
       ((:DEFAULT 5) (:SPECIAL :BR))
       (:DEFAULT 9)
+  - name: clos-defmethod-eql-specializer-over-a-constant
+    source: |
+      (defconstant +clos-eql-utf8+ 12)
+      (defconstant +clos-eql-tag+ :tag)
+      (defgeneric clos-decode-it (a b))
+      (defmethod clos-decode-it (a b) (list :default a b))
+      (defmethod clos-decode-it (a (b (eql +clos-eql-utf8+))) (list :utf8 a b))
+      (defmethod clos-decode-it (a (b (eql +clos-eql-tag+))) (list :tag a b))
+      (print (list (clos-decode-it 1 12) (clos-decode-it 1 :tag) (clos-decode-it 1 99)))
+    expected: |
+      ((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))
   - name: clos-defclass-slots-inheritance-and-dispatch
     source: |
       (defclass clos-animal () ((name :initarg :name :accessor clos-animal-name)))

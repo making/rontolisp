@@ -16562,7 +16562,7 @@ public final class LispMacroExpander {
 		if (spec instanceof LispCons specCons && specCons.car() instanceof LispSymbol specHead
 				&& LispNames.EQL.equals(plainTypeName(specHead))) {
 			return new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.EQL,
-					parseEqlSpecializerValue(specCons, form), null);
+					parseEqlSpecializerValue(specCons, form, closRegistry), null);
 		}
 		if (spec instanceof LispTrue) {
 			return ClosRegistry.Specializer.DEFAULT;
@@ -16819,7 +16819,8 @@ public final class LispMacroExpander {
 	}
 
 	/** The literal compared against by an {@code (eql ...)} specializer. */
-	private static LispVal parseEqlSpecializerValue(LispCons specCons, LispCons defmethodForm) {
+	private static LispVal parseEqlSpecializerValue(LispCons specCons, LispCons defmethodForm,
+			ClosRegistry closRegistry) {
 		List<LispVal> specParts = specCons.toList();
 		if (specParts.size() != 2) {
 			throw new IllegalArgumentException(LispNames.DEFMETHOD + " expects (eql literal), got " + specCons.print());
@@ -16832,13 +16833,62 @@ public final class LispMacroExpander {
 				&& !(quotedRest.car() instanceof LispCons)) {
 			value = quotedRest.car();
 		}
-		if (value instanceof LispSymbol || value instanceof LispInteger || value instanceof LispBigInteger
-				|| value instanceof LispDouble || value instanceof LispRatio || value instanceof LispChar
-				|| value instanceof LispTrue || value instanceof LispNil) {
+		else if (value instanceof LispSymbol bare
+				&& closRegistry.findConstant(bare.name()) instanceof LispVal constant) {
+			// (eql +k+) where +k+ is a defconstant: CLHS 7.6.2 evaluates the specializer
+			// form when the method is defined, so the method dispatches on the CONSTANT'S
+			// VALUE. A bare symbol naming no constant keeps standing for itself -- not
+			// CL, but what existing sources spelling (eql foo) already get.
+			value = constant;
+		}
+		if (isEqlSpecializerLiteral(value)) {
 			return value;
 		}
 		throw new UnsupportedOperationException(LispNames.DEFMETHOD
 				+ " eql specializers support keyword/symbol/number/character literals only: " + defmethodForm.print());
+	}
+
+	/** Whether a value is one an {@code (eql ...)} specializer can compare against. */
+	private static boolean isEqlSpecializerLiteral(LispVal value) {
+		return value instanceof LispSymbol || value instanceof LispInteger || value instanceof LispBigInteger
+				|| value instanceof LispDouble || value instanceof LispRatio || value instanceof LispChar
+				|| value instanceof LispTrue || value instanceof LispNil;
+	}
+
+	/**
+	 * Records a {@code (defconstant name value)} whose value is a literal an
+	 * {@code (eql ...)} specializer can compare against, so a later {@code defmethod}
+	 * naming the constant dispatches on its value (CLHS 7.6.2). Anything else -- a
+	 * computed value, a string -- is left unrecorded and the name keeps standing for the
+	 * symbol.
+	 * @param cons the defconstant form
+	 * @param closRegistry the registry to record into
+	 */
+	public static void registerDefconstant(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol name)) {
+			return;
+		}
+		registerConstantValue(name.name(), parts.get(2), closRegistry);
+	}
+
+	/**
+	 * Records one constant's value under the {@code (eql ...)} specializer literal rule
+	 * (a quoted atom counts as its atom).
+	 * @param name the constant name as spelled
+	 * @param value the value form (compile path) or the evaluated value (interpreter)
+	 * @param closRegistry the registry to record into
+	 */
+	public static void registerConstantValue(String name, LispVal value, ClosRegistry closRegistry) {
+		LispVal literal = value;
+		if (literal instanceof LispCons quoteCons && quoteCons.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoteCons.cdr() instanceof LispCons quotedRest
+				&& !(quotedRest.car() instanceof LispCons)) {
+			literal = quotedRest.car();
+		}
+		if (isEqlSpecializerLiteral(literal)) {
+			closRegistry.registerConstant(name, literal);
+		}
 	}
 
 	/**
@@ -18394,6 +18444,13 @@ public final class LispMacroExpander {
 				// would register it after the table is frozen. The form is replaced by
 				// its value (the target's metaobject), like the interpreter's.
 				out.add(expandSetf((LispCons) form, structAccessors, closRegistry));
+			}
+			else if (isNamedForm(form, LispNames.DEFCONSTANT)) {
+				// Record the value before the form is emitted so a LATER defmethod's
+				// (eql +name+) specializer resolves to it (CLHS 7.6.2); the form itself
+				// is untouched and still defines the global.
+				registerDefconstant((LispCons) form, closRegistry);
+				out.add(form);
 			}
 			else if (isLetWithNestedDefmethod(form)) {
 				// The closure-over-let method idiom (cl-ppcre's

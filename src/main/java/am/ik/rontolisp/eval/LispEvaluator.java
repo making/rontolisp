@@ -4700,8 +4700,9 @@ public final class LispEvaluator {
 				case LispNames.DEFVAR:
 					return evalDefvar(cons, env, false);
 				case LispNames.DEFPARAMETER:
-				case LispNames.DEFCONSTANT:
 					return evalDefvar(cons, env, true);
+				case LispNames.DEFCONSTANT:
+					return evalDefconstant(cons, env);
 				case LispNames.ASDF_DEFSYSTEM:
 					// A special form: the system options are plain data, not evaluated.
 					return evalDefsystem(cons);
@@ -6840,6 +6841,21 @@ public final class LispEvaluator {
 			return new LispCons(new LispSymbol(name), cons.cdr());
 		}
 		return form;
+	}
+
+	/**
+	 * {@code (defconstant name value)}: an ordinary forcing defvar, plus the value
+	 * recorded for {@code (eql name)} parameter specializers -- CLHS 7.6.2 evaluates an
+	 * eql specializer form when the method is defined, so a method naming a constant
+	 * dispatches on the constant's VALUE. Recorded from the EVALUATED value, which the
+	 * interpreter has and the compile-path walk (literal value forms only) does not.
+	 */
+	private LispVal evalDefconstant(LispCons cons, Environment env) {
+		LispVal name = evalDefvar(cons, env, true);
+		if (name instanceof LispSymbol sym && this.globalEnv.isBound(sym.name())) {
+			LispMacroExpander.registerConstantValue(sym.name(), this.globalEnv.lookup(sym.name()), this.closRegistry);
+		}
+		return name;
 	}
 
 	private LispVal evalDefvar(LispCons cons, Environment env, boolean force) {

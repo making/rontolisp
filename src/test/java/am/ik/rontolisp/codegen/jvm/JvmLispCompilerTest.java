@@ -11658,6 +11658,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDefmethodEqlSpecializerNamingAConstant() throws Exception {
+		assertThat(compileAndRun("""
+				(defconstant +eql-spec-utf8+ 12)
+				(defconstant +eql-spec-tag+ :tag)
+				(defgeneric decode-it (a b))
+				(defmethod decode-it (a b) (list :default a b))
+				(defmethod decode-it (a (b (eql +eql-spec-utf8+))) (list :utf8 a b))
+				(defmethod decode-it (a (b (eql +eql-spec-tag+))) (list :tag a b))
+				(print (list (decode-it 1 12) (decode-it 1 :tag) (decode-it 1 99)))
+				""")).isEqualTo("((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))");
+	}
+
+	@Test
 	void compileAndRunDefgenericDefmethodEqlDispatch() throws Exception {
 		assertThat(compileAndRun("""
 				(defgeneric describe-it (x))

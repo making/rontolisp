@@ -123,7 +123,7 @@ through cl+ssl's LISP BIO, i.e. OpenSSL calling back into Lisp through FFM upcal
 handshake, with `read-byte`/`write-byte` on a rontolisp socket underneath. Nothing in
 cffi, the callback path or the struct layer was the obstacle at any point.
 
-What stops it short of a usable client, both found by this run and neither in cffi:
+What stops it short of a usable client, found by this run and not in cffi:
 
 - **A rontolisp stream IS an integer.** `install-handle-and-bio` chooses its BIO with
   `(etypecase socket (integer (ssl-set-fd handle socket)) (stream (ssl-set-bio ... (bio-new-lisp) ...)))`,
@@ -136,18 +136,15 @@ What stops it short of a usable client, both found by this run and neither in cf
   subclass is not `stream`-typed, where CL says every Gray stream is a stream. The
   handshake above was measured with the etypecase forced onto the Lisp-BIO arm in the
   scratch copy.
-- **An `(eql ...)` specializer whose form is a CONSTANT VARIABLE is not evaluated.**
-  Past the handshake, certificate handling dies in `x509.lisp`:
+- (FIXED 2026-08-27) An `(eql +constant+)` specializer used to be taken as the SYMBOL,
+  so `x509.lisp`'s per-ASN.1-type
   `(defmethod decode-asn1-string (asn1-string (type (eql +v-asn1-iastring+))))` never
-  applies to the `22` the certificate yields, because rontolisp takes the bare symbol as
-  the eql VALUE where CLHS 7.6.2 evaluates the form at method-definition time. It fails
-  silently -- no error at definition, a "no applicable method" much later. Five-line
-  repro, nothing to do with cl+ssl:
-  `(defconstant +k+ 22)` + `(defmethod g (a (b (eql +k+))) ...)` + `(g 1 22)`.
+  applied to the `22` a certificate yields. A bare name now resolves through the
+  registry's `defconstant` table (`.kb/clos.md`, the dispatcher section).
 
-Both are general language gaps rather than binding ones, which is the whole finding: the
-CFFI backend reaches as far as the largest binding in the ecosystem asks it to, and the
-next wall is the stream model and CLOS. `.todo/552` and `.todo/551` carry them.
+The remaining one is a general language gap rather than a binding one, which is the whole
+finding: the CFFI backend reaches as far as the largest binding in the ecosystem asks it
+to, and the next wall is the stream model. `.todo/552` carries it.
 
 ## `defcenum` and `make-load-form`
 

@@ -123,6 +123,28 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   a class test is `(%obj-is x '%class-C ...)` over the statically-known
   descendant tags. The dispatcher is an ordinary defun, so
   `#'name`/`funcall`/mapcar work with no `BuiltinFunctionWrappers` entry.
+  An `(eql form)` specializer's form is EVALUATED when the method is defined
+  (CLHS 7.6.2), and the one such form a static walk can evaluate is a constant
+  name: `ClosRegistry` carries a `defconstant` name -> literal value table
+  (`registerConstant`/`findConstant`), filled in DEFINITION ORDER -- by the
+  compile path's top-level walk (`expandTopLevelDefinitions`, from the literal
+  value form, so the `PureBuiltinFolder` pass that runs first widens what
+  counts) and by the interpreter's `evalDefconstant` (from the EVALUATED value,
+  which it has and the walk does not). `parseEqlSpecializerValue` consults it
+  for a BARE symbol only; a quoted `(eql 'x)` is the symbol `x` as before, and
+  a bare symbol naming no constant keeps standing for itself -- not CL, but
+  what sources spelling `(eql foo)` already get, so nothing that worked breaks.
+  Constants are not a CLOS concept; the table lives on the registry because
+  that is the one definition-scoped object the specializer parse already
+  carries, and `macro` sits below `eval` with no macro-time evaluator to ask.
+  Found by the cl+ssl probe, whose `x509.lisp` writes one method per ASN.1
+  string-type constant. Pinned by
+  `LispEvaluatorTest.defmethodEqlSpecializerNamingAConstantDispatchesOnItsValue`
+  / `...NamingNoConstantStaysTheSymbol`, the
+  `compileAndRunDefmethodEqlSpecializerNamingAConstant` twins in
+  `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`, and the
+  `clos-defmethod-eql-specializer-over-a-constant` ci-spec case (all four
+  backends).
   - Two bodies: `simpleDispatchBody` (unchanged single-call-per-branch) is used
     when the generic has NO qualifier and NO `call-next-method` usage; otherwise
     `combinedDispatchBody` emits standard method combination. Combined = one

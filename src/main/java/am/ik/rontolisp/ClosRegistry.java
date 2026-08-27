@@ -985,6 +985,24 @@ public final class ClosRegistry {
 	private final Map<String, LispVal> deftypes = new LinkedHashMap<>();
 
 	/**
+	 * {@code defconstant} name (normalized) to the LITERAL value it was defined with --
+	 * the table an {@code (eql +name+)} parameter specializer resolves through. CLHS
+	 * 7.6.2 evaluates the form of an eql specializer when the method is defined, and a
+	 * constant name is the one such form that carries a value a static walk can know.
+	 * Populated in DEFINITION ORDER (the compile path's top-level walk, the interpreter's
+	 * {@code defconstant} evaluation), so -- as CL requires -- only a constant defined
+	 * BEFORE the {@code defmethod} resolves; a name with no entry keeps the historic
+	 * lenience of standing for the symbol itself.
+	 *
+	 * <p>
+	 * Constants are not a CLOS concept. The table lives here because this registry is the
+	 * one definition-scoped object the specializer parse already carries (one per
+	 * evaluator, one per compilation) and the {@code macro} package sits BELOW
+	 * {@code eval}, so there is no macro-time evaluator to ask instead.
+	 */
+	private final Map<String, LispVal> constants = new LinkedHashMap<>();
+
+	/**
 	 * {@code defstruct} accessor name (normalized) to the declared {@code :type} of the
 	 * slot it reads, and struct name (normalized) to its per-slot {@code :type} table
 	 * (what an {@code :include} child inherits). Registered by
@@ -1087,6 +1105,34 @@ public final class ClosRegistry {
 	 */
 	public void registerDeftype(String name, LispVal expansion) {
 		this.deftypes.put(normalize(name), expansion);
+	}
+
+	/**
+	 * Records the value of a {@code defconstant} so an {@code (eql name)} parameter
+	 * specializer naming it dispatches on the value, not on the symbol.
+	 * @param name the constant name as spelled in the defconstant
+	 * @param value the literal value
+	 */
+	public void registerConstant(String name, LispVal value) {
+		this.constants.put(normalize(name), value);
+	}
+
+	/**
+	 * The recorded value of a {@code defconstant} name, or null when the name names no
+	 * constant this registry has seen. Single- and double-colon spellings match, like
+	 * {@link #findDeftype}.
+	 * @param name the constant name as spelled at the use site
+	 * @return the constant's literal value, or null
+	 */
+	@Nullable public LispVal findConstant(String name) {
+		LispVal exact = this.constants.get(normalize(name));
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			return this.constants.get(qn.member());
+		}
+		return null;
 	}
 
 	/**

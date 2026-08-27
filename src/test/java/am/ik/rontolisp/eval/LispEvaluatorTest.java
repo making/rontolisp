@@ -11940,6 +11940,31 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defmethodEqlSpecializerNamingAConstantDispatchesOnItsValue() {
+		// CLHS 7.6.2: the form of an (eql form) specializer is evaluated when the method
+		// is defined, so a constant name stands for its value.
+		assertThat(evalMulti("""
+				(defconstant +eql-spec-utf8+ 12)
+				(defconstant +eql-spec-tag+ :tag)
+				(defgeneric decode-it (a b))
+				(defmethod decode-it (a b) (list :default a b))
+				(defmethod decode-it (a (b (eql +eql-spec-utf8+))) (list :utf8 a b))
+				(defmethod decode-it (a (b (eql +eql-spec-tag+))) (list :tag a b))
+				(list (decode-it 1 12) (decode-it 1 :tag) (decode-it 1 99))
+				""").print()).isEqualTo("((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))");
+	}
+
+	@Test
+	void defmethodEqlSpecializerNamingNoConstantStaysTheSymbol() {
+		assertThat(evalMulti("""
+				(defgeneric name-it (x))
+				(defmethod name-it (x) :default)
+				(defmethod name-it ((x (eql not-a-constant))) :symbol)
+				(list (name-it 'not-a-constant) (name-it 1))
+				""").print()).isEqualTo("(:SYMBOL :DEFAULT)");
+	}
+
+	@Test
 	void defclassSlotsAccessorsInheritanceAndClassDispatch() {
 		assertThat(evalMulti("""
 				(defclass animal () ((name :initarg :name :accessor animal-name)))
