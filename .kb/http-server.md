@@ -112,7 +112,12 @@ it exists for, `RontoLispCliTest.aServedProgramJarDrainsInFlightRequestsWhenTheP
 A `rontolisp:http-handler` program compiles to a Servlet war that deploys
 unmodified on any Servlet 6 container. The transport is two classes in
 `runtime` — `RontoHttpServlet` (an eleven-field `Request` fill in, a `Response`
-write out; byte-exact, no encode of its own; its `scriptName` is
+write out; byte-exact, no encode of its own — including the content-type it
+declares: a handler's charset-less `text/*` gets the container's default
+charset appended (Jetty does this, Tomcat does not), which relabels UTF-8
+octets as Latin-1, so the write clears the response encoding with
+`setCharacterEncoding(null)` AFTER adding a charset-less content-type and
+never when the handler declared one; its `scriptName` is
 `getContextPath() + getServletPath()` — the context path is UNDECODED per the
 Servlet spec, which is what makes the sum a raw strippable prefix of the
 target, and the sum generalizes past `/*`: a servlet prefix-mapped at `/api/*`

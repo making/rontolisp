@@ -57,6 +57,7 @@
 		<!-- The rontolisp the plugin compiles with: always this plugin's own version. -->
 		<rontolisp.version>${project.version}</rontolisp.version>
 		<maven.version>3.9.9</maven.version>
+		<spring-boot.version>4.1.1</spring-boot.version>
 	</properties>
 
 	<dependencies>
@@ -109,16 +110,27 @@
 		</dependency>
 		<!--
 			For MavenBuildE2eTest's war leg only: deploys the war a shelled-out `mvn
-			package` produces into an embedded container and drives it. Pinned to the
-			same version the root project's WarE2eTest uses.
+			package` produces into an embedded container and drives it. The version is
+			Spring Boot's, the same one the root project's WarE2eTest uses.
 		-->
 		<dependency>
 			<groupId>org.apache.tomcat.embed</groupId>
 			<artifactId>tomcat-embed-core</artifactId>
-			<version>11.0.24</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-dependencies</artifactId>
+				<version>${spring-boot.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
 	<build>
 		<plugins>

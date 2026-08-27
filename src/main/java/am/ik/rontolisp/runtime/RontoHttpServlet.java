@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -155,8 +156,21 @@ public final class RontoHttpServlet extends HttpServlet {
 
 	private static void write(RontoHttpServer.Response response, HttpServletResponse res) throws IOException {
 		res.setStatus(response.status());
+		boolean charsetLess = false;
 		for (RontoHttpServer.Header header : response.headers()) {
 			res.addHeader(header.name(), header.value());
+			if (header.name().equalsIgnoreCase("content-type")) {
+				charsetLess = !header.value().toLowerCase(Locale.ROOT).contains("charset=");
+			}
+		}
+		// A container may append the Servlet default charset (ISO-8859-1) to a text/*
+		// content-type the handler declared WITHOUT one -- Jetty does, Tomcat does not
+		// -- relabelling UTF-8 octets as Latin-1 on the wire. Null means "no charset of
+		// the container's own", so the declared content-type travels verbatim. It has
+		// to run AFTER the header is added: setting it first is overwritten by the
+		// default the content-type re-derives.
+		if (charsetLess) {
+			res.setCharacterEncoding((String) null);
 		}
 		// The octets exactly as the normalizer answered them -- no encode of this
 		// transport's own, the byte-exact rule every wire-writing transport follows

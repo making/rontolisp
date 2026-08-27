@@ -24,8 +24,8 @@ import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.cli.RontoLispCli;
 import org.apache.catalina.Context;
 import org.apache.catalina.startup.Tomcat;
-import org.eclipse.jetty.ee10.annotations.AnnotationConfiguration;
-import org.eclipse.jetty.ee10.webapp.WebAppContext;
+import org.eclipse.jetty.ee11.annotations.AnnotationConfiguration;
+import org.eclipse.jetty.ee11.webapp.WebAppContext;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.junit.jupiter.api.Test;
@@ -198,6 +198,10 @@ class WarE2eTest {
 		HttpResponse<String> decoded = client.send(HttpRequest.newBuilder(uri(port, "/caf%C3%A9%20bar")).build(),
 				HttpResponse.BodyHandlers.ofString());
 		assertThat(decoded.body()).startsWith("path=/café bar ");
+		// ...which holds only because the declared content-type reached the wire
+		// verbatim: a container that appends its default charset to a charset-less
+		// text/* relabels these UTF-8 octets as Latin-1 (.kb/http-server.md).
+		assertThat(decoded.headers().firstValue("content-type")).hasValue("text/plain");
 
 		// HEAD.
 		HttpResponse<String> head = client.send(
