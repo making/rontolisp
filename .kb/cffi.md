@@ -147,7 +147,7 @@ What stops it short of a usable client, both found by this run and neither in cf
 
 Both are general language gaps rather than binding ones, which is the whole finding: the
 CFFI backend reaches as far as the largest binding in the ecosystem asks it to, and the
-next wall is the stream model and CLOS. `.todo/551` carries them.
+next wall is the stream model and CLOS. `.todo/552` and `.todo/551` carry them.
 
 ## `defcenum` and `make-load-form`
 
