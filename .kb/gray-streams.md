@@ -476,8 +476,8 @@ class shape), `JvmLispCompilerTest#compileAndRunGrayStreamInstanceDispatch`,
 
 ## flexi-streams' in-memory octet streams are REAL Gray streams (todo-231)
 
-`flexi-streams.lisp` is otherwise a lite shim (a flexi WRAPPER is the underlying
-stream), but `flex:make-in-memory-input-stream` is not: an octet vector is not a
+`flexi-streams.lisp` is otherwise a lite shim, but `flex:make-in-memory-input-stream`
+is not: an octet vector is not a
 stream on any backend, and smart-buffer's `finalize-buffer` hands one to the
 multipart parser for every request body that stayed under the memory limit. The
 shim therefore defines
@@ -502,6 +502,41 @@ shim therefore defines
   answers a PACKED `(unsigned-byte 8)` array. Deliberately NOT a
   `vector-stream`: that class is what http-body type-tests to take its no-copy
   INPUT path, and a sink has no readable vector to hand it.
+
+## The flexi-stream WRAPPER is a real class too (2026-08-27)
+
+`flex:make-flexi-stream` used to answer the stream it was given -- "a flexi
+wrapper IS the underlying stream", which held only as long as nothing wrapped an
+octet sink. It is now a Gray stream of its own,
+`flexi-streams:flexi-stream`, subclassing all four base classes (bivalent) with
+slots `stream` / `external-format` / `element-type` / `position` / `bound` and
+the matching `flexi-stream-*` readers, every one of them EXTERNAL (upstream
+cl+ssl spells `flexi-streams:flexi-stream` and `flexi-streams:flexi-stream-stream`
+with a single colon, and specializes `ssl-stream-handle` on the class).
+
+- **It reads and writes OCTETS on the stream it wraps**, so that stream must be
+  binary-capable (an in-memory octet stream, a socket, a binary file stream) --
+  the same requirement upstream states. `stream-read-char`/`stream-write-char`
+  are a UTF-8 codec over `read-byte`/`write-byte`; `stream-read-byte` /
+  `stream-write-byte` pass through. UTF-8 is the only external format here, as
+  for `string-to-octets`: `:external-format` is recorded and readable back but
+  selects no codec.
+- `:bound` is honoured (the absolute octet position reading stops at) and
+  `:position` seeds the octet counter, which is what `jzon:span` over a stream
+  passes; `:column` is accepted and ignored.
+- `stream-force-output` / `stream-finish-output` delegate to the wrapped stream
+  -- without that a caller's `finish-output` would flush nothing.
+- **There is deliberately no `close` method.** `close` is one of the
+  OWNABLE_OPERATORS above, and the stand-down is PROGRAM-wide: a single
+  `(defmethod close ...)` anywhere disables the Gray `close` rewrite for every
+  class in the program, so a shim that every lack/clack program loads must not
+  define one. Closing a flexi-stream therefore answers `t` and leaves the
+  wrapped stream open. Re-evaluate if the built-in `close` ever grows the
+  "a CLOS instance is a Gray stream, answer t" arm `open-stream-p` already has
+  on all four backends -- the stand-down is safe from that point on.
+
+Motive: the cffi consumer probe (`.kb/cffi.md`). Pinned by
+`LispEvaluatorTest#{evalFlexiStreamWrapperLendsCharactersToAnOctetStream,evalFlexiStreamWrapperStopsAtItsBound}`.
 
 Ordering consequence: `BuiltinSystems.DEPENDENCIES` records
 `flexi-streams -> trivial-gray-streams`, the same edge real flexi-streams'

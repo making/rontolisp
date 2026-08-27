@@ -541,13 +541,28 @@ class PackageResolverTest {
 	}
 
 	@Test
-	void defpackageExistingPackageIsRejected() {
-		assertThatThrownBy(() -> resolve("(defpackage :cl-user)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Package already exists: CL-USER");
+	void defpackageOverAnExistingPackageModifiesIt() {
+		// CLHS 11.1.2.1: defpackage over a package that already exists modifies it.
+		// Upstream cl+ssl opens with its own (defpackage :cl+ssl ...) over the CL+SSL
+		// package rontolisp pre-seeds for the shim, and a file re-read in one session
+		// declares its package twice.
 		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(defpackage :mypkg)");
-		assertThatThrownBy(() -> resolve(resolver, "(defpackage :mypkg)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Package already exists: MYPKG");
+		resolve(resolver, "(defpackage :mypkg (:use :cl) (:export #:foo))");
+		assertThat(resolve(resolver, "(defpackage :mypkg (:export #:bar))")).isEqualTo("(QUOTE MYPKG)");
+		// Both the first definition's export and the second's are external.
+		assertThat(resolve(resolver, "(mypkg:foo)")).isEqualTo("(MYPKG:FOO)");
+		assertThat(resolve(resolver, "(mypkg:bar)")).isEqualTo("(MYPKG:BAR)");
+		// The first definition's use list survives a second that does not repeat it.
+		resolve(resolver, "(in-package :mypkg)");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(CAR MYPKG::X)");
+	}
+
+	@Test
+	void defpackageRepeatingItsOwnNicknameIsAccepted() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :mypackage (:nicknames :mp) (:export :greet))");
+		assertThat(resolve(resolver, "(defpackage :mypackage (:nicknames :mp))")).isEqualTo("(QUOTE MYPACKAGE)");
+		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(MYPACKAGE:GREET)");
 	}
 
 	@Test
@@ -714,6 +729,9 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(MYPACKAGE:GREET)");
 		assertThat(resolve(resolver, "(mypkg2:greet)")).isEqualTo("(MYPACKAGE:GREET)");
 		assertThat(resolve(resolver, "(in-package :mp)")).isEqualTo("(SETQ *PACKAGE* :MYPACKAGE)");
+		// A defpackage whose NAME is another package's nickname is still refused:
+		// modifying through it would silently apply the definition to a package of a
+		// different name.
 		assertThatThrownBy(() -> resolve(resolver, "(defpackage :mp)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("Package already exists: MP");
 	}

@@ -108,10 +108,46 @@ is the item's own scoreboard.
 |---|---|---|
 | **cl-sqlite** (`sqlite`) | **loads and runs** | `(ql:quickload "sqlite")` then a live database: table, inserts, an update, `execute-to-list` / `execute-single`, `with-transaction`, and a prepared statement stepped by hand (`examples/jvm/cffi-sqlite.lisp`). Two gaps outside cffi had to close first -- `(coerce 0 type)` with a COMPUTED type (iterate's `make-initial-value`, which every `iter` clause with a `:type` reaches) now follows CLHS's "already of that type" rule, and an address at or above 2^63 is accepted as the unsigned integer it is (`SQLITE_TRANSIENT` is `(mod -1 (expt 2 64))`). Compiles to a `.class` as well, through the `make-load-form` method cffi declares on its foreign types (see below) |
 | **static-vectors** | **does not load, and cannot** | not a CFFI consumer at all but a SECOND implementation seam: its `.asd` opens with `(error "static-vectors does not support this Common Lisp implementation!")` under `#-(or abcl allegro ... sbcl)`, and past that the system needs an `impl-<lisp>.lisp` supplying a vector whose storage is non-moving memory a pointer can be taken into. rontolisp has no such array type -- `with-pointer-to-vector-data` copies in and out here -- so an `impl-rontolisp.lisp` could not keep the library's one promise. Not worth a shim: what a consumer wants from it (`fast-io`'s buffers) is reachable through `cffi:foreign-alloc` directly |
-| **cl+ssl** (the real one) | **does not load** -- and the FFI layer was never reached | a probe, never a migration: the `cl+ssl` shim over `rontolisp:tls-upgrade` stays the default (`.kb/tcp-sockets.md`), because it works on the WASM component backend and needs no OpenSSL. Every blocker found was in a DEPENDENCY SHIM, none in cffi. In order: (1) `defpackage :cl+ssl` signals, because rontolisp pre-registers `CL+SSL` for its own shim -- probed past by renaming the package in a scratch copy; (2) flexi-streams had no in-memory OUTPUT stream (`make-in-memory-output-stream` / `get-output-stream-sequence`) -- ADDED; (3) trivial-garbage had no `make-weak-hash-table` -- ADDED (weakness is not observable from CL, so it degrades to an ordinary table); (4) bordeaux-threads had no `make-recursive-lock` / `with-recursive-lock-held` -- ADDED (the shim's `make-lock` is already reentrant, so the pair is one object and one expansion); (5) `flexi-streams:flexi-stream` as a real WRAPPER CLASS with `flexi-stream-stream`, which the shim deliberately does not have -- a flexi stream here IS the underlying stream. That fifth one is where the probe stopped; `.todo/550` carries the rest |
+| **cl+ssl** (the real one) | **LOADS, and reaches OpenSSL** -- the TLS handshake completes; what is left is not TLS | a probe, never a migration: the `cl+ssl` shim over `rontolisp:tls-upgrade` stays the default (`.kb/tcp-sockets.md`), because it works on the WASM component backend and needs no OpenSSL. **Not one blocker was ever in cffi.** The five that stood between the library and a load, in order: (1) `defpackage :cl+ssl` signalled, because rontolisp pre-registers `CL+SSL` for its own shim -- FIXED generally: `defpackage` over an existing package now MODIFIES it, as CLHS requires (`.kb/packages.md`); (2) flexi-streams had no in-memory OUTPUT stream (`make-in-memory-output-stream` / `get-output-stream-sequence`) -- ADDED; (3) trivial-garbage had no `make-weak-hash-table` -- ADDED (weakness is not observable from CL, so it degrades to an ordinary table); (4) bordeaux-threads had no `make-recursive-lock` / `with-recursive-lock-held` -- ADDED (the shim's `make-lock` is already reentrant, so the pair is one object and one expansion); (5) `flexi-streams:flexi-stream` as a real WRAPPER CLASS with `flexi-stream-stream` -- ADDED, and it is a better shim for it (`.kb/gray-streams.md`). With those five gone, `(asdf:load-system "cl+ssl")` completes: the whole `defcvar`/`defcallback`/`defcstruct` surface of the largest binding in Quicklisp parses, expands and runs here. See the row below for what running it then measured |
 
 `cffi-grovel` consumers were not probed and never will be: grovelling compiles and runs a
 C program to read the platform's headers.
+
+### How far the real cl+ssl runs (2026-08-27)
+
+Loading is not using, so the probe went on: a live `GET https://example.com/` over
+`usocket` + upstream cl+ssl on `java -jar` (Linux x86-64, OpenSSL 3). The point of the
+measurement is that **the TLS layer works** -- `SSL_connect` completes a real handshake
+through cl+ssl's LISP BIO, i.e. OpenSSL calling back into Lisp through FFM upcalls
+(`bio.lisp`'s `lisp-read`/`lisp-write`/`lisp-ctrl` `defcallback`s) for every octet of the
+handshake, with `read-byte`/`write-byte` on a rontolisp socket underneath. Nothing in
+cffi, the callback path or the struct layer was the obstacle at any point.
+
+What stops it short of a usable client, both found by this run and neither in cffi:
+
+- **A rontolisp stream IS an integer.** `install-handle-and-bio` chooses its BIO with
+  `(etypecase socket (integer (ssl-set-fd handle socket)) (stream (ssl-set-bio ... (bio-new-lisp) ...)))`,
+  and cl+ssl's default `(defmethod stream-fd (stream) stream)` hands the stream straight
+  back. A rontolisp stream handle is a small integer, so the `integer` arm wins and
+  OpenSSL is told to use handle 3 as a socket descriptor -- `SSL_get_error: 5`, with an
+  empty error queue. `:unwrap-stream-p nil` does not help: the etypecase dispatches on
+  the VALUE. The other arm cannot be reached by wrapping either, because
+  `(typep <Gray instance> 'stream)` is nil here -- a `rontolisp:fundamental-stream`
+  subclass is not `stream`-typed, where CL says every Gray stream is a stream. The
+  handshake above was measured with the etypecase forced onto the Lisp-BIO arm in the
+  scratch copy.
+- **An `(eql ...)` specializer whose form is a CONSTANT VARIABLE is not evaluated.**
+  Past the handshake, certificate handling dies in `x509.lisp`:
+  `(defmethod decode-asn1-string (asn1-string (type (eql +v-asn1-iastring+))))` never
+  applies to the `22` the certificate yields, because rontolisp takes the bare symbol as
+  the eql VALUE where CLHS 7.6.2 evaluates the form at method-definition time. It fails
+  silently -- no error at definition, a "no applicable method" much later. Five-line
+  repro, nothing to do with cl+ssl:
+  `(defconstant +k+ 22)` + `(defmethod g (a (b (eql +k+))) ...)` + `(g 1 22)`.
+
+Both are general language gaps rather than binding ones, which is the whole finding: the
+CFFI backend reaches as far as the largest binding in the ecosystem asks it to, and the
+next wall is the stream model and CLOS. `.todo/551` carries them.
 
 ## `defcenum` and `make-load-form`
 

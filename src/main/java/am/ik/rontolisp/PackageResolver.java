@@ -654,16 +654,18 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * Defines a new package from a literal, top-level {@code (defpackage NAME
-	 * (:use ...) (:export ...))} directive. Exported names become owned and external;
-	 * symbols interned later (defuns under {@code (in-package NAME)}, free variables) are
-	 * internal. Without a {@code :use} clause nothing is visible unqualified (like SBCL),
-	 * so {@code (:use :cl)} must be spelled out. {@code :nicknames} registers alternate
-	 * package names, {@code :import-from} maps the named symbols to their source package
-	 * (resolution is textual, so an imported name simply resolves to the source package's
-	 * canonical spelling), and {@code :documentation}/{@code :size} are accepted and
-	 * ignored. {@code :shadow} records the named symbols so their unqualified uses inside
-	 * the package resolve package-locally (see {@link #resolveUnqualified}).
+	 * Defines a package from a literal, top-level {@code (defpackage NAME
+	 * (:use ...) (:export ...))} directive -- or, when one of that name already exists,
+	 * MODIFIES it, merging the clauses into what is there (CLHS 11.1.2.1). Exported names
+	 * become owned and external; symbols interned later (defuns under
+	 * {@code (in-package NAME)}, free variables) are internal. Without a {@code :use}
+	 * clause nothing is visible unqualified (like SBCL), so {@code (:use :cl)} must be
+	 * spelled out. {@code :nicknames} registers alternate package names,
+	 * {@code :import-from} maps the named symbols to their source package (resolution is
+	 * textual, so an imported name simply resolves to the source package's canonical
+	 * spelling), and {@code :documentation}/{@code :size} are accepted and ignored.
+	 * {@code :shadow} records the named symbols so their unqualified uses inside the
+	 * package resolve package-locally (see {@link #resolveUnqualified}).
 	 * {@code :shadowing-import-from} (and any other clause) is an error.
 	 */
 	// The registered spelling of a package name: the exact spelling when registered,
@@ -708,15 +710,27 @@ public final class PackageResolver {
 			throw new LispPackageException(LispNames.DEFPACKAGE + " expects a package name");
 		}
 		String name = designator(LispNames.DEFPACKAGE, "a package name", parts.get(1));
+		// CLHS 11.1.2.1: defpackage over an EXISTING package modifies it -- the new
+		// definition is merged into what is already there rather than replacing it or
+		// signalling. That is what lets a library declare a package rontolisp has
+		// pre-seeded (upstream cl+ssl's own (defpackage :cl+ssl ...) over the seeded
+		// CL+SSL, .kb/cffi.md) and what makes a file re-read in one session idempotent.
+		// A name that is a NICKNAME of some other package is still refused: adjusting
+		// through it would silently apply the definition to a package of a different
+		// name.
+		LispPackage existing = null;
 		if (this.registry.contains(name)) {
-			throw new LispPackageException("Package already exists: " + name);
+			if (!this.registry.canonicalName(name).equals(name)) {
+				throw new LispPackageException("Package already exists: " + name);
+			}
+			existing = this.registry.get(name);
 		}
-		List<String> useList = new ArrayList<>();
-		Set<String> exports = new HashSet<>();
+		List<String> useList = existing == null ? new ArrayList<>() : new ArrayList<>(existing.useList());
+		Set<String> exports = existing == null ? new HashSet<>() : new HashSet<>(existing.externals());
 		List<String> nicknames = new ArrayList<>();
-		Map<String, String> imports = new HashMap<>();
+		Map<String, String> imports = existing == null ? new HashMap<>() : new HashMap<>(existing.imports());
 		Map<String, String> shadowingImports = new HashMap<>();
-		Set<String> shadows = new HashSet<>();
+		Set<String> shadows = existing == null ? new HashSet<>() : new HashSet<>(existing.shadows());
 		for (LispVal clause : parts.subList(2, parts.size())) {
 			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
 					|| !keyword.isKeyword()) {
@@ -770,7 +784,10 @@ public final class PackageResolver {
 				case LispNames.NICKNAMES_KEYWORD -> {
 					for (LispVal arg : args.subList(1, args.size())) {
 						String nickname = designator(LispNames.NICKNAMES_KEYWORD, "a package name", arg);
-						if (this.registry.contains(nickname)) {
+						// A nickname this same package already answers to is a
+						// re-declaration, not a collision (a modifying defpackage
+						// repeats its own :nicknames clause).
+						if (this.registry.contains(nickname) && !this.registry.canonicalName(nickname).equals(name)) {
 							throw new LispPackageException("Package already exists: " + nickname);
 						}
 						nicknames.add(nickname);
@@ -845,6 +862,9 @@ public final class PackageResolver {
 		}
 		Set<String> owned = new HashSet<>(exports);
 		owned.addAll(shadows);
+		if (existing != null) {
+			owned.addAll(existing.symbols());
+		}
 		this.registry.define(new LispPackage(name, List.copyOf(useList), Set.copyOf(owned), Set.copyOf(exports),
 				Map.copyOf(imports), Set.copyOf(shadows)));
 		for (String nickname : nicknames) {

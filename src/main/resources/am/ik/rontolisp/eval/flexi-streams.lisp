@@ -1,14 +1,10 @@
 ;; The flexi-streams package: a lite shim satisfying the built-in ASDF system
-;; "flexi-streams". A flexi stream WRAPPER is the underlying stream itself
-;; (rontolisp picks the element type at open time, not per wrapper), but the
-;; IN-MEMORY streams below are real: an octet vector is not a stream on any
-;; backend, and smart-buffer hands one to the multipart parser for every
-;; request body that stayed under the memory limit. Written in canonical
-;; shape; the package is seeded in PackageRegistry.
-
-(defun flexi-streams:make-flexi-stream (stream &rest args)
-  (declare (ignore args))
-  stream)
+;; "flexi-streams". The IN-MEMORY streams are real -- an octet vector is not a
+;; stream on any backend, and smart-buffer hands one to the multipart parser
+;; for every request body that stayed under the memory limit -- and so is the
+;; flexi-stream WRAPPER at the bottom of the file, a Gray stream that lends
+;; characters to the octet stream it wraps. Written in canonical shape; the
+;; package is seeded in PackageRegistry.
 
 ;; UTF-8 is the only external format the shim implements: callers reaching it
 ;; pass :utf-8 or :default (md5's md5sum-string does), and rontolisp strings
@@ -166,3 +162,142 @@
     (dotimes (i (fill-pointer buffer)) (setf (aref result i) (aref buffer i)))
     (setf (fill-pointer buffer) 0)
     (if as-list (coerce result 'list) result)))
+
+;; The WRAPPER, for real. Upstream's flexi-stream wraps a BINARY stream and
+;; lends it characters through an external format -- that is what the name
+;; means everywhere it appears, and cl+ssl's
+;; (defmethod ssl-stream-handle ((stream flexi-streams:flexi-stream)) ...)
+;; needs the class to exist at all. The wrapper therefore reads and writes
+;; OCTETS on the stream it wraps, so that stream must be binary-capable (an
+;; in-memory octet stream, a socket, a binary file stream) -- the same
+;; requirement upstream states. Before this the shim answered the underlying
+;; stream itself, which made (make-flexi-stream <octet sink>) a lie: writing a
+;; character to the answer found no applicable method.
+;;
+;; UTF-8 is the only external format here, as for string-to-octets above:
+;; :external-format is recorded (and readable back) but selects no codec.
+
+(defclass flexi-streams:flexi-stream (rontolisp:fundamental-character-input-stream
+                                      rontolisp:fundamental-character-output-stream
+                                      rontolisp:fundamental-binary-input-stream
+                                      rontolisp:fundamental-binary-output-stream)
+  ((flexi-streams::stream :initarg :stream
+                          :initform nil
+                          :reader flexi-streams:flexi-stream-stream)
+   (flexi-streams::external-format :initarg :external-format
+    :initform :utf-8
+    :accessor flexi-streams:flexi-stream-external-format)
+   (flexi-streams::element-type :initarg :element-type
+    :initform 'character
+    :accessor flexi-streams:flexi-stream-element-type)
+   ;; The octet counter, and the absolute octet position reading stops at.
+   ;; jzon's (jzon:span stream :start s :end e) is the caller that passes both.
+   (flexi-streams::position :initarg :position
+                            :initform 0
+                            :accessor flexi-streams:flexi-stream-position)
+   (flexi-streams::bound :initarg :bound
+                         :initform nil
+                         :accessor flexi-streams:flexi-stream-bound)))
+
+;; :column is accepted and ignored (upstream seeds the output column counter
+;; with it, and nothing here tracks one).
+(defun flexi-streams:make-flexi-stream (stream &key (external-format :utf-8)
+                                               (element-type 'character)
+                                               (position 0) bound column)
+  (declare (ignore column))
+  (make-instance 'flexi-streams:flexi-stream
+                 :stream stream
+                 :external-format external-format
+                 :element-type element-type
+                 :position position
+                 :bound bound))
+
+(defun flexi-streams::%flexi-read-octet (stream)
+  (let ((bound (flexi-streams:flexi-stream-bound stream)))
+    (if (and bound (>= (flexi-streams:flexi-stream-position stream) bound))
+        :eof (let ((byte
+                    (read-byte (flexi-streams:flexi-stream-stream stream) nil
+                               nil)))
+               (if byte
+                   (progn
+                     (setf (flexi-streams:flexi-stream-position stream)
+                           (+ (flexi-streams:flexi-stream-position stream) 1))
+                     byte)
+                   :eof)))))
+
+;; A truncated sequence decodes as if the missing continuation bytes were
+;; zero, the same tolerance octets-to-string above has: the shim never
+;; signals on malformed input.
+(defun flexi-streams::%flexi-continuation (stream)
+  (let ((byte (flexi-streams::%flexi-read-octet stream)))
+    (if (eq byte :eof) 0 (logand byte #x3F))))
+
+(defun flexi-streams::%flexi-decode (stream lead)
+  (cond ((< lead #x80) lead)
+        ((< lead #xE0)
+         (logior (ash (logand lead #x1F) 6)
+                 (flexi-streams::%flexi-continuation stream)))
+        ((< lead #xF0)
+         (let ((second (flexi-streams::%flexi-continuation stream)))
+           (logior (ash (logand lead #x0F) 12) (ash second 6)
+                   (flexi-streams::%flexi-continuation stream))))
+        (t (let* ((second (flexi-streams::%flexi-continuation stream))
+                  (third (flexi-streams::%flexi-continuation stream)))
+             (logior (ash (logand lead #x07) 18) (ash second 12) (ash third 6)
+                     (flexi-streams::%flexi-continuation stream))))))
+
+(defmethod rontolisp:stream-read-byte ((stream flexi-streams:flexi-stream))
+  (flexi-streams::%flexi-read-octet stream))
+
+(defmethod rontolisp:stream-read-char ((stream flexi-streams:flexi-stream))
+  (let ((lead (flexi-streams::%flexi-read-octet stream)))
+    (if (eq lead :eof)
+        :eof (code-char (flexi-streams::%flexi-decode stream lead)))))
+
+(defmethod rontolisp:stream-write-byte
+    ((stream flexi-streams:flexi-stream) byte)
+  (write-byte byte (flexi-streams:flexi-stream-stream stream))
+  byte)
+
+(defmethod rontolisp:stream-write-char
+    ((stream flexi-streams:flexi-stream) char)
+  (let ((inner (flexi-streams:flexi-stream-stream stream))
+        (code (char-code char)))
+    (cond ((< code #x80) (write-byte code inner))
+          ((< code #x800)
+           (write-byte (logior #xC0 (ash code -6)) inner)
+           (write-byte (logior #x80 (logand code #x3F)) inner))
+          ((< code #x10000)
+           (write-byte (logior #xE0 (ash code -12)) inner)
+           (write-byte (logior #x80 (logand (ash code -6) #x3F)) inner)
+           (write-byte (logior #x80 (logand code #x3F)) inner))
+          (t
+           (write-byte (logior #xF0 (ash code -18)) inner)
+           (write-byte (logior #x80 (logand (ash code -12) #x3F)) inner)
+           (write-byte (logior #x80 (logand (ash code -6) #x3F)) inner)
+           (write-byte (logior #x80 (logand code #x3F)) inner))))
+  char)
+
+(defmethod rontolisp:stream-listen ((stream flexi-streams:flexi-stream))
+  (let ((bound (flexi-streams:flexi-stream-bound stream)))
+    (if (and bound (>= (flexi-streams:flexi-stream-position stream) bound))
+        nil
+        (listen (flexi-streams:flexi-stream-stream stream)))))
+
+;; The position is the wrapper's own octet counter, as upstream: the writer
+;; seeks the underlying stream and re-bases the counter on the answer.
+(defmethod rontolisp:stream-file-position ((stream flexi-streams:flexi-stream))
+  (flexi-streams:flexi-stream-position stream))
+
+(defmethod (setf rontolisp:stream-file-position)
+    (position (stream flexi-streams:flexi-stream))
+  (file-position (flexi-streams:flexi-stream-stream stream) position)
+  (setf (flexi-streams:flexi-stream-position stream) position))
+
+(defmethod rontolisp:stream-force-output ((stream flexi-streams:flexi-stream))
+  (force-output (flexi-streams:flexi-stream-stream stream))
+  nil)
+
+(defmethod rontolisp:stream-finish-output ((stream flexi-streams:flexi-stream))
+  (finish-output (flexi-streams:flexi-stream-stream stream))
+  nil)

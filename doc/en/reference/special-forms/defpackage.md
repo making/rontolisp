@@ -11,7 +11,7 @@ Defines a new package named `name` and returns the name symbol. Like `in-package
 - `(:local-nicknames (nick actual)...)` registers a shorthand for **another** package, so `nick:symbol` resolves like `actual:symbol` — the idiom libraries use to shorten long package names. Lite: the nickname is **global** (rontolisp has no per-package nickname scoping), so it follows the same collision rules as `:nicknames`. The same registration is available outside a `defpackage` as [`uiop:add-package-local-nickname`](../functions/uiop-add-package-local-nickname.md).
 - `(:documentation "...")` and `(:size n)` are accepted and ignored.
 
-Redefining an existing package is an error, and so are `:shadow`/`:shadowing-import-from` (rontolisp has no symbol shadowing) and any other clause (`:intern`, ...). See [Packages](../packages.md#user-defined-packages-defpackage) for the full rules.
+A `defpackage` naming a package that already exists **modifies** it, as Common Lisp requires: the clauses are merged into what is there, so nothing the earlier definition declared is lost. (A name that is another package's *nickname* is still an error — adjusting through it would silently apply the definition to a package of a different name.) `:shadowing-import-from` and any other clause (`:intern`, ...) are errors. See [Packages](../packages.md#user-defined-packages-defpackage) for the full rules.
 
 ```lisp
 (defpackage :util (:use :cl) (:export :trim)) ; => UTIL

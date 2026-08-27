@@ -15592,6 +15592,47 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFlexiStreamWrapperLendsCharactersToAnOctetStream() {
+		// The wrapper is a REAL class: it encodes what is written to it and decodes
+		// what is read from it, over the octet stream it wraps. Before it,
+		// make-flexi-stream answered that stream itself, so writing a character to an
+		// octet sink found no applicable method.
+		assertThat(evalMulti("""
+				(asdf:load-system "flexi-streams")
+				(let* ((sink (flex:make-in-memory-output-stream))
+				       (out (flex:make-flexi-stream sink :external-format :utf-8)))
+				  (write-string "h\u00e9!" out)
+				  (finish-output out)
+				  (let* ((bytes (flex:get-output-stream-sequence sink))
+				         (in (flex:make-flexi-stream (flex:make-in-memory-input-stream bytes)
+				                                     :external-format :utf-8)))
+				    (list (and (typep out 'flex:flexi-stream) t)
+				          (eq (flex:flexi-stream-stream out) sink)
+				          (flex:flexi-stream-external-format out)
+				          (coerce bytes 'list)
+				          (read-line in nil :eof)
+				          (read-char in nil :eof))))
+				""").print()).isEqualTo("(T T :UTF-8 (104 195 169 33) \"h\u00e9!\" :EOF)");
+	}
+
+	@Test
+	void evalFlexiStreamWrapperStopsAtItsBound() {
+		// :bound is the absolute octet position reading stops at -- jzon's
+		// (jzon:span stream :end n) is the caller that passes one. Octets read
+		// through the wrapper also pass through unchanged.
+		assertThat(evalMulti("""
+				(asdf:load-system "flexi-streams")
+				(let* ((v (make-array 4 :element-type '(unsigned-byte 8)
+				                        :initial-contents '(97 98 99 100)))
+				       (s (flex:make-flexi-stream (flex:make-in-memory-input-stream v) :bound 2)))
+				  (list (read-byte s nil :eof)
+				        (read-char s nil :eof)
+				        (read-char s nil :eof)
+				        (flex:flexi-stream-position s)))
+				""").print()).isEqualTo("(97 #\\b :EOF 2)");
+	}
+
+	@Test
 	void evalTrivialGarbageWeakHashTableIsAnOrdinaryOne() {
 		// Weakness is not observable from within Common Lisp, so the shim answers a
 		// plain table: :weakness and :weakness-matters are dropped, every other

@@ -104,8 +104,11 @@ symbols, strings, or uninterned symbols (`#:name`, the portable defpackage
 idiom). A `:shadow`ed name always resolves to the package's own symbol inside
 the package -- never to the `cl` (or any used package's) symbol of the same
 name -- so a library can define its own `digit-char-p` or `defconstant`.
-`:shadowing-import-from` is an error, and so is any other clause, redefining
-an existing package, or using a package that does not exist yet.
+`:shadowing-import-from` is an error, and so is any other clause or using a
+package that does not exist yet. A `defpackage` naming a package that already
+exists MODIFIES it (Common Lisp's rule): the clauses merge into what is there,
+which is what lets a library declare a package rontolisp has already seeded.
+A name that is another package's nickname stays an error.
 
 - `:use` makes the **external** symbols of the used packages visible
   unqualified, as in Common Lisp — internal symbols of a used package still

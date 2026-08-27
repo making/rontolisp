@@ -7436,8 +7436,44 @@ public final class LispNames {
 	/** The {@code flexi-streams} shim package (and built-in ASDF system) name. */
 	public static final String FLEXI_STREAMS_PKG = "FLEXI-STREAMS";
 
-	/** {@code flexi-streams:make-flexi-stream} -- lite: the underlying stream. */
+	/**
+	 * {@code flexi-streams:make-flexi-stream} -- a {@link #FLEXI_STREAM} over the octet
+	 * stream it is given.
+	 */
 	public static final String MAKE_FLEXI_STREAM = "MAKE-FLEXI-STREAM";
+
+	/**
+	 * {@code flexi-streams:flexi-stream} -- the WRAPPER class: a Gray stream that lends
+	 * characters (UTF-8, the shim's one external format) to the octet stream it wraps. A
+	 * class rather than the identity the shim used to answer, because that is what the
+	 * name means everywhere else -- upstream cl+ssl specializes {@code ssl-stream-handle}
+	 * on it -- and because writing a character to an octet sink found no applicable
+	 * method as long as the "wrapper" WAS the sink.
+	 */
+	public static final String FLEXI_STREAM = "FLEXI-STREAM";
+
+	/** {@code flexi-streams:flexi-stream-stream} -- the wrapped stream. */
+	public static final String FLEXI_STREAM_STREAM = "FLEXI-STREAM-STREAM";
+
+	/**
+	 * {@code flexi-streams:flexi-stream-external-format} -- recorded and readable back,
+	 * but it selects no codec: UTF-8 is the shim's only external format.
+	 */
+	public static final String FLEXI_STREAM_EXTERNAL_FORMAT = "FLEXI-STREAM-EXTERNAL-FORMAT";
+
+	/**
+	 * {@code flexi-streams:flexi-stream-element-type} -- {@code character} by default.
+	 */
+	public static final String FLEXI_STREAM_ELEMENT_TYPE = "FLEXI-STREAM-ELEMENT-TYPE";
+
+	/** {@code flexi-streams:flexi-stream-position} -- the wrapper's octet counter. */
+	public static final String FLEXI_STREAM_POSITION = "FLEXI-STREAM-POSITION";
+
+	/**
+	 * {@code flexi-streams:flexi-stream-bound} -- the absolute octet position reading
+	 * stops at, or nil.
+	 */
+	public static final String FLEXI_STREAM_BOUND = "FLEXI-STREAM-BOUND";
 
 	/** {@code string-to-octets} -- the flexi-streams shim's UTF-8 encoder. */
 	public static final String STRING_TO_OCTETS = "STRING-TO-OCTETS";
