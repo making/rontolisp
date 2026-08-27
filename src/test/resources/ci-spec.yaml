@@ -7867,6 +7867,32 @@ cases:
       "cd"
       "UNREAD-CHAR without an intervening READ-CHAR"
       (T T)
+  - name: gray-stream-is-a-stream
+    source: |
+      ; A Gray stream IS a stream in Common Lisp, so streamp and
+      ; (typep x 'stream) both answer t for one, and an etypecase that splits
+      ; "an OS file descriptor" from "a Lisp stream" (cl+ssl's shape) reaches the
+      ; stream arm. A non-stream instance and a pathname stay nil.
+      (defclass gis-out (rontolisp:fundamental-character-output-stream) ())
+      (defmethod rontolisp:stream-write-string ((gis-s gis-out) gis-str) gis-str)
+      (defclass gis-other () ())
+      (defun gis-typep (gis-x gis-ty) (typep gis-x gis-ty))
+      (let ((gis-s (make-instance 'gis-out)) (gis-o (make-instance 'gis-other)))
+        (print (list (streamp gis-s) (typep gis-s 'stream)))
+        (print (list (streamp gis-o) (typep gis-o 'stream)))
+        (print (mapcar #'streamp (list gis-s gis-o 3 t nil)))
+        (print (streamp (make-pathname :name "gis")))
+        (print (etypecase gis-s (integer :gis-fd) (stream :gis-lisp-stream)))
+        ; A COMPUTED type specifier answers the same, instance and handle alike.
+        (print (list (gis-typep gis-s 'stream) (gis-typep gis-o 'stream)
+                     (gis-typep 3 'stream))))
+    expected: |
+      (T T)
+      (NIL NIL)
+      (T NIL T T NIL)
+      NIL
+      :GIS-LISP-STREAM
+      (T NIL T)
   - name: uiop-add-package-local-nickname
     source: |
       (defpackage #:com.example.apn.deep (:use #:cl) (:export #:apn-answer))

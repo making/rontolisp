@@ -352,6 +352,72 @@ open reports "would block" separately from "read one". `unread-char`'s handle ar
 is the pushback described in its own section below. Neither operator needed a
 per-backend compiler class.
 
+## A Gray stream IS a stream: `streamp` and `(typep x 'stream)` (todo-552)
+
+**`streamp` answers `t` for a Gray instance, on all four backends, and it is the
+LOWERING that says so -- not a dispatch helper.** The other stream predicates
+(`open-stream-p`, `input-stream-p`, `output-stream-p`, `stream-element-type`) are
+ownable operators the Gray pre-pass rewrites at the CALL SITE, but `streamp` cannot
+be one of those: `(typep x 'stream)` lowers to `(streamp x)` in
+`LispMacroExpander.makeTypeTest`, which runs LONG AFTER `GrayStreamsLibrary.process`,
+so a call-site rewrite would have widened `streamp` and left `typep` behind. Instead
+`expandStreamp(cons, synonymStreams, closRegistry)` builds the test itself:
+
+```
+(let ((__s x)) (if (eq __s t) t (if (integerp __s) t (%obj-is __s '<tags>))))
+```
+
+where `<tags>` is the synonym-stream layout tag (when the program can build one) FOLLOWED
+BY `closRegistry.descendantTags(rontolisp:fundamental-stream)` -- the same instance-tag
+membership a class specializer and a `typecase` class clause compile to. Both arms are
+emitted only for a program that can build such a value, so a program that touches
+neither keeps its `streamp` bytes exactly as before. The registry is complete by then on
+the compile paths (`expandTopLevelDefinitions` has registered every class before codegen)
+and current on the interpreter (a class exists before an instance of it does).
+
+The interpreter has ONE more seam, because its `streamp` FUNCTION VALUE is a Java
+built-in rather than the lowering: `LispEvaluator` wraps it beside the Gray ownable
+operators, answering `t` for an instance whose layout tag is in that same descendant set
+(`isGrayStreamInstance`). On the compile paths `#'streamp` is
+`BuiltinFunctionWrappers`' generated `(streamp x)` wrapper, so it goes through the
+lowering and needs no second rule.
+
+**`input-stream-p` / `output-stream-p` deliberately do NOT get the arm**
+(`expandStreamDirectionP` passes a null registry): a Gray instance answers the DIRECTION
+its base class declares, which is `%gray-input-stream-p-dispatch`'s job, and the Gray
+pre-pass has already rewritten every direction query in a program carrying the protocol
+-- so that lowering only ever sees the handle half.
+
+**A COMPUTED type specifier answers the same, and needed BOTH halves of the runtime
+typep machinery.** `(typep x ty)` with a non-literal `ty` goes to the lite runtime
+dispatch (`.kb/clos.md`): the interpreter's inline `expandRuntimeTypep` cond, the compile
+paths' shared `%typep-runtime` defun. `STREAM` was in neither, so a computed specifier
+answered nil for a HANDLE too -- consistently across all four backends, which is why it
+had never surfaced. It is now in `RUNTIME_TYPEP_BUILTINS` (the non-instance half, whose
+arm is the same `(streamp v)` the literal specifier compiles to) AND as a row in the
+`%typep-tag-table%` over the synonym-stream tag plus the `fundamental-stream`
+descendants (the instance half). Both are needed because `%typep-runtime` tests
+`%obj-p` FIRST and an instance never reaches the built-in name arms -- the same split
+`STANDARD-OBJECT` / `STRUCTURE-OBJECT` take, in the other direction.
+
+**`ArgumentShapes.Shape.INSTANCE` had to gain `STREAM` with it.** The dead-branch pruner
+deletes a `typecase` clause no value of the key's shape can satisfy; with `STREAM` a
+DECIDED type and absent from the `INSTANCE` row, the compile paths DELETED the very arm
+this change exists to select -- `(etypecase socket (integer ...) (stream ...))`, cl+ssl's
+file-descriptor-vs-Lisp-stream dispatch, then reported "no clause matches" on a value
+`typep` had just called a stream. The interpreter does not prune, so this was a
+compile-path-only divergence that no `typep` test would have caught.
+
+What is still open is the larger half todo-552 states: a stream HANDLE is an integer, so
+`streamp` cannot tell one from a file descriptor either. Widening the predicate gives
+such a library a value it can route correctly (wrap the socket in a Gray stream); it does
+not make the handle representation self-describing. That question is `.todo/156`'s shape,
+not this one's.
+
+Pinning tests: `LispEvaluatorTest#grayStreamInstanceIsAStream`,
+`JvmLispCompilerTest#compileAndRunGrayStreamIsAStream`,
+`WasmLispCompilerIntegrationTest#grayStreamIsAStream`, ci-spec `gray-stream-is-a-stream`.
+
 ## The handle-side pushback of `unread-char` (todo-411)
 
 **A stream HANDLE has a pushback too, and it is ORDINARY LISP on the compile

@@ -131,11 +131,16 @@ What stops it short of a usable client, found by this run and not in cffi:
   back. A rontolisp stream handle is a small integer, so the `integer` arm wins and
   OpenSSL is told to use handle 3 as a socket descriptor -- `SSL_get_error: 5`, with an
   empty error queue. `:unwrap-stream-p nil` does not help: the etypecase dispatches on
-  the VALUE. The other arm cannot be reached by wrapping either, because
-  `(typep <Gray instance> 'stream)` is nil here -- a `rontolisp:fundamental-stream`
-  subclass is not `stream`-typed, where CL says every Gray stream is a stream. The
-  handshake above was measured with the etypecase forced onto the Lisp-BIO arm in the
-  scratch copy.
+  the VALUE. The handshake above was measured with the etypecase forced onto the
+  Lisp-BIO arm in the scratch copy.
+  (HALF-FIXED 2026-08-27) The WRAP route out of this is now open: a Gray stream IS a
+  stream here -- `streamp` and `(typep x 'stream)` answer t for a
+  `rontolisp:fundamental-stream` subclass on all four backends, and the compile paths no
+  longer PRUNE such an etypecase's `stream` arm (`.kb/gray-streams.md`) -- so a socket
+  handed over inside a Gray wrapper reaches the Lisp BIO by dispatch rather than by
+  patching. What is unchanged is the raw handle: it is an integer and nothing about the
+  value says otherwise, so a library handed one directly still picks the descriptor arm.
+  That half is the representation question `.todo/553` carries.
 - (FIXED 2026-08-27) An `(eql +constant+)` specializer used to be taken as the SYMBOL,
   so `x509.lisp`'s per-ASN.1-type
   `(defmethod decode-asn1-string (asn1-string (type (eql +v-asn1-iastring+))))` never
@@ -144,7 +149,7 @@ What stops it short of a usable client, found by this run and not in cffi:
 
 The remaining one is a general language gap rather than a binding one, which is the whole
 finding: the CFFI backend reaches as far as the largest binding in the ecosystem asks it
-to, and the next wall is the stream model. `.todo/552` carries it.
+to, and the next wall is the stream model. `.todo/553` carries what is left of it.
 
 ## `defcenum` and `make-load-form`
 

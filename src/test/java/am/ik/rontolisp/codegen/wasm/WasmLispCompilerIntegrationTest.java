@@ -8928,6 +8928,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void grayStreamIsAStream() throws Exception {
+		// streamp / (typep x 'stream) on a Gray instance: t here as well, from the same
+		// instance arm the JVM lowering emits. Same answers as the interpreter.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
+					(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
+					(defclass gsp-other () ())
+					(defmethod rontolisp:stream-write-string ((s gsp-out) str) str)
+					(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
+					(defun gsp-typep (x ty) (typep x ty))
+					(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
+					      (other (make-instance 'gsp-other)))
+					  (print (list (streamp out) (streamp in) (streamp other)))
+					  (print (list (typep out 'stream) (typep in 'stream) (typep other 'stream)))
+					  (print (mapcar #'streamp (list out other 3 t nil)))
+					  (print (etypecase out (integer :fd) (stream :lisp-stream)))
+					  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
+					"""))))).isEqualTo("(T T NIL)\n(T T NIL)\n(T NIL T T NIL)\n:LISP-STREAM\n(T NIL T)");
+	}
+
+	@Test
 	void unreadCharOnAStreamHandleRoundTrips() throws Exception {
 		// The handle-side pushback of unread-char is ordinary Lisp (unread-char.lisp),
 		// spliced and wired to the call sites by eval/UnreadCharLibrary -- so read-char,

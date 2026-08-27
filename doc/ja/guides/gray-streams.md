@@ -32,6 +32,7 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `read-line` | `rontolisp:stream-read-line` (デフォルトメソッドは `stream-read-char` をループ) |
 | `listen` | `rontolisp:stream-listen` (デフォルトメソッドは `nil` を返す) |
 | `open-stream-p` | `t` を返します -- `close` と同じく、プログラムが所有できる名前です |
+| `streamp`, `(typep x 'stream)` | `t` を返します -- Gray ストリームはストリームそのものなので、型で分岐するライブラリは Lisp ストリーム側の枝を選びます |
 | `stream-element-type` | `character`、バイナリ基底クラスなら `(unsigned-byte 8)`。両方を継承したクラス (バイバレントなストリーム) は `character` を返します。この答えはどちらのバッファを確保すべきかを示すものだからです。プログラムが所有できる名前です |
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (デフォルトメソッドは要素総称関数をループ) |
 | `file-position` | `rontolisp:stream-file-position`。2 引数形式は `(setf rontolisp:stream-file-position)` ライタ総称関数を呼ぶ |

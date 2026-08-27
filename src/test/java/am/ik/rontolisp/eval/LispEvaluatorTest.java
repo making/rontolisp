@@ -14737,6 +14737,31 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void grayStreamInstanceIsAStream() {
+		// A Gray stream IS a stream in Common Lisp: streamp and (typep x 'stream) both
+		// answer t for one, so a library that dispatches "an OS file descriptor vs. a
+		// Lisp stream" (cl+ssl's etypecase) can be handed a wrapper and route it. A
+		// non-stream instance -- and a pathname, which is an instance of its own fixed
+		// layout -- stays nil.
+		assertThat(evalMulti("""
+				(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
+				(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
+				(defclass gsp-other () ())
+				(defmethod rontolisp:stream-write-string ((s gsp-out) str) str)
+				(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
+				(defun gsp-typep (x ty) (typep x ty))
+				(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
+				      (other (make-instance 'gsp-other)))
+				  (list (streamp out) (streamp in) (streamp other)
+				        (typep out 'stream) (typep in 'stream) (typep other 'stream)
+				        (mapcar #'streamp (list out other 3 t nil))
+				        (streamp (make-pathname :name "a"))
+				        (etypecase out (integer :fd) (stream :lisp-stream))
+				        (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
+				""").print()).isEqualTo("(T T NIL T T NIL (T NIL T T NIL) NIL :LISP-STREAM (T NIL T))");
+	}
+
+	@Test
 	void grayShimBinaryInputStreamWithMixinAndSetfFilePosition() {
 		// The trivial-gray-streams shim, circular-streams' exact class shape:
 		// trivial-gray-stream-mixin plus fundamental-binary-input-stream, methods

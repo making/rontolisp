@@ -1446,6 +1446,17 @@ public final class LispEvaluator {
 		wrapGrayOwnableOperator(LispNames.INPUT_STREAM_P, GRAY_INPUT_STREAM_P_DISPATCH);
 		wrapGrayOwnableOperator(LispNames.OUTPUT_STREAM_P, GRAY_OUTPUT_STREAM_P_DISPATCH);
 		wrapGrayOwnableOperator(LispNames.STREAM_ELEMENT_TYPE, GRAY_STREAM_ELEMENT_TYPE_DISPATCH);
+		// streamp: a Gray stream IS a stream in Common Lisp, so the FUNCTION VALUE has to
+		// answer what the operator form's lowering answers. The lowering bakes the
+		// registry's descendant tags; this one reads them at call time, which is the same
+		// set.
+		LispVal baseStreamp = this.globalEnv.lookupFunction(LispNames.STREAMP);
+		this.globalEnv.defineFunction(LispNames.STREAMP, new LispFunction(LispNames.STREAMP, args -> {
+			if (args.size() == 1 && isGrayStreamInstance(args.get(0))) {
+				return LispTrue.INSTANCE;
+			}
+			return apply(baseStreamp, args, this.globalEnv);
+		}));
 		LispVal baseWriteByte = this.globalEnv.lookupFunction(LispNames.WRITE_BYTE);
 		this.globalEnv.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, rawArgs -> {
 			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
@@ -4318,6 +4329,19 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Whether the value is an instance of a class that subclasses
+	 * {@code rontolisp:fundamental-stream} -- i.e. a Gray stream, which {@code streamp}
+	 * and {@code (typep x 'stream)} must both answer t for.
+	 * @param value the value to test
+	 * @return true when the value is a Gray stream instance
+	 */
+	private boolean isGrayStreamInstance(LispVal value) {
+		return value instanceof LispInstance inst
+				&& this.closRegistry.descendantTags(LispMacroExpander.GRAY_FUNDAMENTAL_STREAM_CLASS)
+					.contains(inst.layout().tag());
+	}
+
+	/**
 	 * Wraps a printing operator's FUNCTION VALUE so a {@code #'}-reference honors
 	 * {@code *print-case*} exactly as the operator form does: while the variable holds a
 	 * converting value the call is rebuilt as the source form it would have been (its
@@ -5100,7 +5124,7 @@ public final class LispEvaluator {
 			case LispNames.CONSTANTP:
 				return eval(LispMacroExpander.expandConstantp(cons), env);
 			case LispNames.STREAMP:
-				return eval(LispMacroExpander.expandStreamp(cons, true), env);
+				return eval(LispMacroExpander.expandStreamp(cons, true, this.closRegistry), env);
 			case LispNames.SIMPLE_STRING_P:
 				return eval(LispMacroExpander.expandSimpleStringP(cons), env);
 			// make-broadcast-stream goes through the SAME expansion the compile paths

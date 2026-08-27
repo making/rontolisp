@@ -129,8 +129,12 @@ public final class ArgumentShapes {
 		// An instance answers to its own class name and to its superclasses' -- none of
 		// which this class decides, so all of them stay satisfiable through the default
 		// arm of maySatisfyNamed. What it must NOT answer to is another instance type,
-		// pathname above all.
-		table.put(Shape.INSTANCE, Set.of("STANDARD-OBJECT", "STRUCTURE-OBJECT", "ATOM", "T"));
+		// pathname above all. STREAM is in the row because a Gray stream and a synonym
+		// stream are both INSTANCES that streamp answers t for: without it an
+		// (etypecase x (integer ...) (stream ...)) -- cl+ssl's file-descriptor-vs-Lisp-
+		// stream dispatch, the shape this row exists to serve -- lost the arm the value
+		// actually selects.
+		table.put(Shape.INSTANCE, Set.of("STANDARD-OBJECT", "STRUCTURE-OBJECT", "STREAM", "ATOM", "T"));
 		return java.util.Collections.unmodifiableMap(table);
 	}
 

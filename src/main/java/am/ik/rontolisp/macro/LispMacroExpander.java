@@ -8558,6 +8558,36 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The registry name of the Gray protocol's root base class,
+	 * {@code rontolisp:fundamental-stream}. A class reaches the Gray protocol by
+	 * subclassing it (directly or through one of the direction/element base classes), so
+	 * its descendant set IS the set of stream INSTANCES a program can build.
+	 */
+	public static final String GRAY_FUNDAMENTAL_STREAM_CLASS = LispNames.RONTOLISP_PKG + ":"
+			+ LispNames.GRAY_FUNDAMENTAL_STREAM;
+
+	/**
+	 * The instance tags {@code streamp} must answer true for: the synonym-stream layout
+	 * when the program can build one, then every registered descendant of
+	 * {@code rontolisp:fundamental-stream}. Empty for a program that builds neither,
+	 * which is what keeps such a program's {@code streamp} bytes exactly as they were.
+	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param closRegistry the registry holding the program's classes, or null when none
+	 * is in scope
+	 * @return the instance tags, in test order
+	 */
+	private static List<String> streamInstanceTags(boolean synonymStreams, @Nullable ClosRegistry closRegistry) {
+		List<String> tags = new java.util.ArrayList<>();
+		if (synonymStreams) {
+			tags.add(LispLayout.SYNONYM_STREAM_TAG);
+		}
+		if (closRegistry != null && closRegistry.findClass(GRAY_FUNDAMENTAL_STREAM_CLASS) != null) {
+			tags.addAll(closRegistry.descendantTags(GRAY_FUNDAMENTAL_STREAM_CLASS));
+		}
+		return tags;
+	}
+
+	/**
 	 * Expands {@code (streamp x)} into {@code (let ((__s x)) (if (eq __s t) t (integerp
 	 * __s)))}: streams are opaque integer handles across all backends, and the standard
 	 * output designator {@code t} counts as a stream so it survives the
@@ -8565,25 +8595,29 @@ public final class LispMacroExpander {
 	 * {@code *standard-output*} (lite).
 	 *
 	 * <p>
-	 * With {@code synonymStreams} the test gains its one non-handle arm: a synonym stream
-	 * is a VALUE ({@code LispLayout.SYNONYM_STREAM}), so it must answer true as well.
-	 * That arm is emitted only for a program that can build one, so every other program's
-	 * {@code streamp} keeps its exact bytes.
+	 * The test gains an INSTANCE arm for every stream kind that is a VALUE rather than a
+	 * handle: a synonym stream ({@code LispLayout.SYNONYM_STREAM}) when the program can
+	 * build one, and every registered descendant of {@code rontolisp:fundamental-stream}
+	 * -- a Gray stream IS a stream in Common Lisp, so {@code streamp} and
+	 * {@code (typep x 'stream)} must both answer t for one. Each arm is emitted only for
+	 * a program that can build such a value, so every other program's {@code streamp}
+	 * keeps its exact bytes.
 	 * @param cons the streamp expression
 	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param closRegistry the registry whose Gray subclasses widen the test, or null when
+	 * none is in scope
 	 * @return the expanded expression
 	 */
-	public static LispVal expandStreamp(LispCons cons, boolean synonymStreams) {
+	public static LispVal expandStreamp(LispCons cons, boolean synonymStreams, @Nullable ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException("streamp expects exactly one argument");
 		}
 		LispSymbol temp = new LispSymbol("__s");
-		LispVal handleTest = synonymStreams
-				? listToCons(List
-					.of(new LispSymbol(LispNames.IF), callOf(LispNames.INTEGERP, temp), LispTrue.INSTANCE, listToCons(
-							List.of(new LispSymbol(LispNames.OBJ_IS), temp, quoteOf(LispLayout.SYNONYM_STREAM_TAG)))))
-				: callOf(LispNames.INTEGERP, temp);
+		List<String> instanceTags = streamInstanceTags(synonymStreams, closRegistry);
+		LispVal handleTest = instanceTags.isEmpty() ? callOf(LispNames.INTEGERP, temp)
+				: listToCons(List.of(new LispSymbol(LispNames.IF), callOf(LispNames.INTEGERP, temp), LispTrue.INSTANCE,
+						objIs(temp, instanceTags)));
 		LispVal test = listToCons(List.of(new LispSymbol(LispNames.IF),
 				fmtCall(LispNames.EQ_GENERAL, temp, LispTrue.INSTANCE), LispTrue.INSTANCE, handleTest));
 		return makeLet("__s", parts.get(1), test);
@@ -8621,6 +8655,13 @@ public final class LispMacroExpander {
 	 * {@code (streamp x)}: every stream handle is bidirectional-lite, so both predicates
 	 * coincide with {@code streamp} (including the {@code t} designator and a synonym
 	 * stream).
+	 *
+	 * <p>
+	 * NO Gray arm, unlike {@link #expandStreamp}: a Gray instance answers the DIRECTION
+	 * its base class declares, not "is a stream", and that answer is
+	 * {@code %gray-input-stream-p-dispatch}'s -- the Gray pre-pass has already rewritten
+	 * every direction query in a program that carries the protocol, so this lowering only
+	 * ever sees the handle half.
 	 * @param cons the input-stream-p / output-stream-p expression
 	 * @param synonymStreams whether the program can build a synonym stream
 	 * @return the expanded expression
@@ -8631,7 +8672,7 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					((LispSymbol) cons.car()).name() + " expects exactly one argument: " + cons.print());
 		}
-		return expandStreamp((LispCons) fmtCall(LispNames.STREAMP, parts.get(1)), synonymStreams);
+		return expandStreamp((LispCons) fmtCall(LispNames.STREAMP, parts.get(1)), synonymStreams, null);
 	}
 
 	/**
@@ -29693,7 +29734,7 @@ public final class LispMacroExpander {
 	private static final List<String> RUNTIME_TYPEP_BUILTINS = List.of("NULL", "BOOLEAN", "KEYWORD", "SYMBOL",
 			"INTEGER", "FIXNUM", "RATIONAL", "RATIO", "FLOAT", "REAL", "NUMBER", "CHARACTER", "STRING", "CONS", "LIST",
 			"ATOM", "VECTOR", "ARRAY", "SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT",
-			"UNSIGNED-BYTE", "PACKAGE", "T");
+			"UNSIGNED-BYTE", "PACKAGE", "STREAM", "T");
 
 	/**
 	 * Expands a {@code typep} whose type specifier is computed at run time: a
@@ -30548,6 +30589,15 @@ public final class LispMacroExpander {
 		// branch needs no PATHNAME case because no other value is one.
 		namesByTags.computeIfAbsent(List.of(LispLayout.PATHNAME_TAG), k -> new java.util.LinkedHashSet<>())
 			.add("PATHNAME");
+		// A synonym stream and a Gray stream are INSTANCES that streamp answers t for, so
+		// a runtime (typep x 'stream) answers through the same table. Unlike PATHNAME the
+		// non-instance branch DOES carry a STREAM case (a handle is an integer), so the
+		// two halves of the test are split across the table and RUNTIME_TYPEP_BUILTINS --
+		// which is exactly what the instance-first shape of this defun requires.
+		List<String> streamTags = new java.util.ArrayList<>();
+		streamTags.add(LispLayout.SYNONYM_STREAM_TAG);
+		streamTags.addAll(closRegistry.descendantTags(GRAY_FUNDAMENTAL_STREAM_CLASS));
+		namesByTags.computeIfAbsent(streamTags, k -> new java.util.LinkedHashSet<>()).add("STREAM");
 		List<LispVal> entries = new java.util.ArrayList<>();
 		for (java.util.Map.Entry<List<String>, java.util.LinkedHashSet<String>> entry : namesByTags.entrySet()) {
 			List<LispVal> entryParts = new java.util.ArrayList<>();

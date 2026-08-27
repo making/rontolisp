@@ -1065,8 +1065,8 @@ final class WasmExprCompiler {
 				case LispNames.UPPER_CASE_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx);
 				case LispNames.CONSTANTP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx);
-				case LispNames.STREAMP ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams), ctx);
+				case LispNames.STREAMP -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams, ctx.closRegistry), ctx);
 				case LispNames.SIMPLE_STRING_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx);
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> WasmExprCompiler

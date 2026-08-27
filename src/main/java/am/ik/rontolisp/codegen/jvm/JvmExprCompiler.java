@@ -724,8 +724,9 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx, className);
 				case LispNames.CONSTANTP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
-				case LispNames.STREAMP -> JvmExprCompiler
-					.compileExpr(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams), ctx, className);
+				case LispNames.STREAMP -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams, ctx.closRegistry), ctx,
+						className);
 				case LispNames.SIMPLE_STRING_P ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx, className);
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> JvmExprCompiler.compileExpr(
