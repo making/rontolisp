@@ -104,6 +104,27 @@ class CffiSystemTest {
 	}
 
 	@Test
+	void theHostsOwnOsPicksTheLibraryClauseAndTheDefaultSuffix() {
+		// cl-sqlite's own define-foreign-library, verbatim. Every clause here is chosen
+		// by featurep at RUN time, so *features* has to name the machine: while only
+		// :unix was announced, a Mac asked the loader for libsqlite3.so.0 and the load
+		// failed with "Unable to load any of the alternatives". No native access is
+		// needed -- nothing is loaded, only the clause and the suffix are decided.
+		Session session = cffi();
+		session.eval("(cffi:define-foreign-library sqlite3-lib"
+				+ " (:darwin (:default \"libsqlite3\")) (:unix (:or \"libsqlite3.so.0\" \"libsqlite3.so\"))"
+				+ " (t (:or (:default \"libsqlite3\") (:default \"sqlite3\"))))");
+		assertThat(session.eval("(cffi::foreign-library-spec (cffi::get-foreign-library 'sqlite3-lib))"))
+			.isEqualTo(mac() ? "(:DEFAULT \"libsqlite3\")" : "(:OR \"libsqlite3.so.0\" \"libsqlite3.so\")");
+		assertThat(session.eval("(cffi::default-library-suffix)")).isEqualTo(mac() ? "\".dylib\"" : "\".so\"");
+		// ... and the :if-feature :darwin component of cffi's own .asd follows the same
+		// announcement: on a Mac libraries.lisp's :framework arm has its callee, and the
+		// DYLD fallback search path (where a Homebrew /opt/homebrew/lib enters, behind
+		// #+arm64) is the one that file installs.
+		assertThat(session.eval("(and (fboundp 'cffi::load-darwin-framework) t)")).isEqualTo(mac() ? "T" : "NIL");
+	}
+
+	@Test
 	void theProcessesOwnSymbolsAnswerADefcfunAndAForeignFuncall() {
 		assumeTrue(FfiInterop.available(), FfiInterop.description());
 		Session session = cffi();
@@ -174,11 +195,16 @@ class CffiSystemTest {
 				+ "                        :pointer (cffi:callback cmp) :void)"
 				+ "  (loop for i below 4 collect (cffi:mem-aref arr :int i))))"))
 			.isEqualTo("(1 2 4 9)");
-		// The variadic tail is marked where it starts; without the marker the call is
-		// silently wrong on AArch64 and Apple silicon.
+		// The variadic tail is marked where it starts -- cffi's own spelling for it is
+		// foreign-funcall-varargs, whose fixed prefix and tail arrive separately, and the
+		// backend's %foreign-funcall-varargs turns the split into the ffi: :varargs
+		// marker. Spelling the same call as a plain foreign-funcall (every argument
+		// FIXED) is what a Linux x86-64 machine cannot tell apart and Apple silicon can:
+		// there a variadic argument goes on the stack whatever its type, so the callee
+		// reads garbage.
 		assertThat(session.eval("(cffi:with-foreign-pointer (buf 64)"
-				+ " (cffi:foreign-funcall \"snprintf\" :pointer buf :long 64 :string \"%s-%d\""
-				+ "                       :string \"x\" :int 7 :int)" + " (cffi:foreign-string-to-lisp buf))"))
+				+ " (cffi:foreign-funcall-varargs \"snprintf\" (:pointer buf :long 64 :string \"%s-%d\")"
+				+ "                               :string \"x\" :int 7 :int)" + " (cffi:foreign-string-to-lisp buf))"))
 			.isEqualTo("\"x-7\"");
 	}
 

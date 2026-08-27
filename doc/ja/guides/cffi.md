@@ -68,6 +68,14 @@ CL-USER> (sqlite-version)
 ライブラリをロード順に保持して順に探します。結果として、バインディングが前提にしている
 振る舞いになります。
 
+どの節が選ばれるかは `*features*` が決めます。そしてそこにはホストの名前が入ります。
+macOS なら `:unix` と並んで `:darwin`・`:bsd`・`:arm64`（または `:x86-64`）が、Linux なら
+`:linux` が入ります。`(:default "libsqlite3")` という節が一方のマシンでは
+`libsqlite3.dylib` を、他方では `libsqlite3.so` を意味するのはこのためです。macOS では
+さらに、システムのローダーが見つけられなかったときに CFFI が使うフォールバックの探索パスに
+Homebrew の `/opt/homebrew/lib` が入るのもこの名前のおかげです。これらの名前は `cffi` が
+依存している `trivial-features` が持ち込みます。
+
 ## メモリ・型・ポインタ
 
 `with-foreign-object` は本体の範囲で確保し、`mem-ref` と `mem-aref` はポインタ越しに

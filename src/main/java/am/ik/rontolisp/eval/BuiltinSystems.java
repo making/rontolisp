@@ -56,7 +56,7 @@ public final class BuiltinSystems {
 			// The platform-feature announcer (dexador's :defsystem-depends-on entry).
 			// Its whole content is the announcement, so the forms are generated from
 			// the same list the .asd parse reads (DECLARED_FEATURES).
-			Map.entry(TRIVIAL_FEATURES, features -> trivialFeaturesForms()),
+			Map.entry(TRIVIAL_FEATURES, BuiltinSystems::trivialFeaturesForms),
 			// The Clack handler backend: both the hyphenated ecosystem spelling and the
 			// dotted spelling lack's find-package-or-load derives from the package name
 			// resolve to the one shim (see ShimLibraries.RESOURCES).
@@ -110,9 +110,9 @@ public final class BuiltinSystems {
 	 * {@code :size}'s base type, and no rontolisp backend could ever answer the 32-bit
 	 * half true, so stating it is not a claim a program could catch out.</li>
 	 * </ul>
-	 * The CPU name ({@code :x86-64}) stays absent: rontolisp has no instruction-set
-	 * surface to describe, only the word-size fact {@code :64-bit} states.
-	 * {@code :32-bit} stays absent too -- rontolisp is never that.
+	 * Beside them the announcement carries the HOST the program will run on
+	 * ({@link #hostFeatures}), which is the other half of what upstream trivial-features
+	 * exists to normalize and cannot be a constant here.
 	 */
 	private static final Map<String, List<String>> DECLARED_FEATURES = Map.of(TRIVIAL_FEATURES,
 			List.of("unix", "little-endian", "64-bit"));
@@ -121,15 +121,17 @@ public final class BuiltinSystems {
 	}
 
 	/**
-	 * The features the named built-in systems announce, merged in order. A name that is
-	 * not built in (or announces nothing) contributes nothing.
+	 * The features the named built-in systems announce to a given target, merged in
+	 * order. A name that is not built in (or announces nothing) contributes nothing.
 	 * @param names the system names, canonical lower-case
+	 * @param target the reader features of the target backend -- the HOST half of the
+	 * trivial-features announcement follows it (see {@link #announcedFeatures})
 	 * @return the announced feature names, without the leading colon
 	 */
-	public static List<String> declaredFeatures(List<String> names) {
+	public static List<String> declaredFeatures(List<String> names, Features target) {
 		List<String> declared = new ArrayList<>();
 		for (String name : names) {
-			for (String feature : DECLARED_FEATURES.getOrDefault(name, List.of())) {
+			for (String feature : announcedFeatures(name, target)) {
 				if (!declared.contains(feature)) {
 					declared.add(feature);
 				}
@@ -139,15 +141,84 @@ public final class BuiltinSystems {
 	}
 
 	/**
+	 * What ONE built-in system announces to the given target: its static table entry,
+	 * plus -- for trivial-features, and only where the target really runs on a host OS --
+	 * the machine the program will run on ({@link #hostFeatures}).
+	 * <p>
+	 * The host half is excluded from both WASM backends on purpose: a wasm module runs on
+	 * WASI, not on the machine that compiled it, and {@code :unix} above is already the
+	 * whole truth there. Everywhere else the target IS the host, exactly as it is for a
+	 * fasl.
+	 * @param name the system name, canonical lower-case
+	 * @param target the reader features of the target backend
+	 * @return the announced feature names, without the leading colon
+	 */
+	private static List<String> announcedFeatures(String name, Features target) {
+		List<String> declared = DECLARED_FEATURES.getOrDefault(name, List.of());
+		if (!name.equals(TRIVIAL_FEATURES) || target.contains("rontolisp-wasm")) {
+			return declared;
+		}
+		List<String> announced = new ArrayList<>(declared);
+		announced.addAll(hostFeatures());
+		return List.copyOf(announced);
+	}
+
+	/**
+	 * The machine the program will run on, in the ecosystem's own spelling -- the OS
+	 * ({@code :darwin} plus {@code :bsd}, or {@code :linux}) and the CPU ({@code :arm64}
+	 * or {@code :x86-64}), which is what SBCL puts in {@code *features*} natively and
+	 * what upstream trivial-features documents itself as normalizing.
+	 * <p>
+	 * These are not decoration: CFFI's whole library-resolution layer runs on them.
+	 * {@code define-foreign-library} picks its clause with {@code featurep}, so
+	 * cl-sqlite's {@code (:darwin (:default "libsqlite3")) (:unix (:or "libsqlite3.so.0"
+	 * ...))} resolved to the LINUX names on a Mac while only {@code :unix} was announced,
+	 * and the load failed with "Unable to load any of the alternatives"; the
+	 * {@code :default} suffix ({@code .dylib} vs {@code .so}) is chosen by the same
+	 * predicate, cffi's own {@code darwin-frameworks.lisp} component is
+	 * {@code :if-feature :darwin}, and its fallback search path is where a Homebrew
+	 * {@code /opt/homebrew/lib} enters -- behind {@code #+arm64}. cl-autowrap needs the
+	 * CPU name to give {@code size-t} a width at all.
+	 * <p>
+	 * An unrecognized OS or CPU announces NOTHING for that half rather than guessing:
+	 * {@code :unix} is already claimed unconditionally above, and a wrong OS name is
+	 * worse than a missing one. Windows is not announced -- no rontolisp backend claims
+	 * it, and {@code :unix} would have to come off first
+	 * ({@code .kb/reader-features.md}).
+	 * @return the host feature names, without the leading colon
+	 */
+	private static List<String> hostFeatures() {
+		List<String> host = new ArrayList<>();
+		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+		String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+		if (os.contains("mac") || os.contains("darwin")) {
+			// Darwin is a BSD, and SBCL pushes both -- a library branching on :bsd for
+			// a POSIX detail (a `file -bI`-shaped tool flag, a sysctl) means this one.
+			host.add("darwin");
+			host.add("bsd");
+		}
+		else if (os.contains("linux")) {
+			host.add("linux");
+		}
+		if (arch.equals("aarch64") || arch.equals("arm64")) {
+			host.add("arm64");
+		}
+		else if (arch.equals("x86_64") || arch.equals("amd64")) {
+			host.add("x86-64");
+		}
+		return List.copyOf(host);
+	}
+
+	/**
 	 * The trivial-features shim's forms: the run-time half of the announcement, one
 	 * {@code (pushnew :F *features*)} per declared name, so a program that reads
 	 * {@code *features*} at run time sees what its {@code #+} conditionals saw while it
 	 * was read ({@code *features*} is an ordinary special variable on every backend,
 	 * {@code .kb/reader-features.md}).
 	 */
-	private static List<LispVal> trivialFeaturesForms() {
+	private static List<LispVal> trivialFeaturesForms(Features target) {
 		List<LispVal> forms = new ArrayList<>();
-		for (String feature : DECLARED_FEATURES.getOrDefault(TRIVIAL_FEATURES, List.of())) {
+		for (String feature : announcedFeatures(TRIVIAL_FEATURES, target)) {
 			LispVal push = new LispCons(new LispSymbol(LispNames.PUSHNEW),
 					new LispCons(new LispSymbol(":" + feature.toUpperCase(Locale.ROOT)),
 							new LispCons(new LispSymbol(LispNames.FEATURES_VAR), LispNil.INSTANCE)));

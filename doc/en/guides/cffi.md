@@ -67,6 +67,14 @@ API has none of its own (a lookup is per library, and the process's own lookup n
 sees a library opened later), so the backend keeps the opened libraries in load
 order and searches them. The effect is the one every binding assumes.
 
+Which clause is chosen is decided by `*features*`, and it names the host: on macOS
+`:darwin`, `:bsd` and `:arm64` (or `:x86-64`) sit beside `:unix`, on Linux `:linux`
+does. That is what makes a `(:default "libsqlite3")` clause mean `libsqlite3.dylib`
+on one machine and `libsqlite3.so` on the other, and on macOS it is also what puts
+Homebrew's `/opt/homebrew/lib` on the fallback search path CFFI uses when the
+system loader comes up empty. The names arrive with `trivial-features`, which
+`cffi` depends on.
+
 ## Memory, types and pointers
 
 `with-foreign-object` allocates for the extent of its body, `mem-ref` and `mem-aref`

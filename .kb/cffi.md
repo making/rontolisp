@@ -27,6 +27,41 @@ the replacement `.asd`. It comes from `:defsystem-depends-on (:trivial-features)
 is upstream's own route and is decided in `BuiltinSystems.DECLARED_FEATURES`
 (`.kb/asdf.md`).
 
+## The host is part of the announcement
+
+The same route carries the MACHINE (`.kb/asdf.md`, "The HOST half is a probe"): `:darwin`
++ `:bsd` or `:linux`, and `:arm64` or `:x86-64`, on the JVM family only. cffi is the
+reason it exists, because every step of library resolution is `featurep` and nothing
+else:
+
+- `%foreign-library-spec` picks the FIRST clause `featurep` accepts, so cl-sqlite's
+  `(:darwin (:default "libsqlite3")) (:unix (:or "libsqlite3.so.0" "libsqlite3.so"))`
+  resolved to the Linux names on a Mac while only `:unix` was announced, and
+  `examples/jvm/cffi-sqlite.lisp` died with `Unable to load any of the alternatives`
+  (2026-08-27). Every `define-foreign-library` in the ecosystem is shaped this way, so
+  this was every binding, not one.
+- `default-library-suffix` is `assoc-if #'featurep` over `*cffi-feature-suffix-map*`:
+  `:default` means `.dylib` here and `.so` there.
+- `darwin-frameworks.lisp` is `:if-feature :darwin` in the replacement `.asd` (which also
+  keeps upstream's `(:feature :darwin :uiop)` dependency for it). Loading it is what
+  gives `*foreign-library-directories*` the DYLD fallback list -- and `/opt/homebrew/lib`
+  is in that list behind `#+arm64`. dyld does not search Homebrew's prefix itself, so
+  without the CPU name a brew-installed library is unreachable even when `:darwin` is
+  right.
+
+Pinned by `CffiSystemTest.theHostsOwnOsPicksTheLibraryClauseAndTheDefaultSuffix` (clause,
+suffix and the darwin component, all without native access) and
+`AsdfSystemsTest.parsesTheBundledCffiReplacementAsd`, whose component list is host-shaped
+for exactly this reason.
+
+A variadic call is the other place the host is not a detail. cffi's spelling for one is
+`foreign-funcall-varargs` (fixed prefix and tail arrive separately, and
+`%foreign-funcall-varargs` turns the split into the `ffi:` `:varargs` marker); spelling
+the same call as a plain `foreign-funcall` with every argument FIXED is an accident that
+holds on Linux x86-64 and CANNOT on Apple silicon, where a variadic argument goes on the
+stack whatever its type. `CffiSystemTest.aCallbackAndAVariadicCallReachTheForeignSide`
+asserted the accident until a Mac ran it.
+
 ## The backend's four decisions
 
 - **The flat namespace is a list this file keeps.** SBCL and most others push
@@ -106,7 +141,7 @@ is the item's own scoreboard.
 
 | library | result | what happened |
 |---|---|---|
-| **cl-sqlite** (`sqlite`) | **loads and runs** | `(ql:quickload "sqlite")` then a live database: table, inserts, an update, `execute-to-list` / `execute-single`, `with-transaction`, and a prepared statement stepped by hand (`examples/jvm/cffi-sqlite.lisp`). Two gaps outside cffi had to close first -- `(coerce 0 type)` with a COMPUTED type (iterate's `make-initial-value`, which every `iter` clause with a `:type` reaches) now follows CLHS's "already of that type" rule, and an address at or above 2^63 is accepted as the unsigned integer it is (`SQLITE_TRANSIENT` is `(mod -1 (expt 2 64))`). Compiles to a `.class` as well, through the `make-load-form` method cffi declares on its foreign types (see below) |
+| **cl-sqlite** (`sqlite`) | **loads and runs** (Linux x86-64 and macOS arm64) | `(ql:quickload "sqlite")` then a live database: table, inserts, an update, `execute-to-list` / `execute-single`, `with-transaction`, and a prepared statement stepped by hand (`examples/jvm/cffi-sqlite.lisp`). Two gaps outside cffi had to close first -- `(coerce 0 type)` with a COMPUTED type (iterate's `make-initial-value`, which every `iter` clause with a `:type` reaches) now follows CLHS's "already of that type" rule, and an address at or above 2^63 is accepted as the unsigned integer it is (`SQLITE_TRANSIENT` is `(mod -1 (expt 2 64))`). Compiles to a `.class` as well, through the `make-load-form` method cffi declares on its foreign types (see below) |
 | **static-vectors** | **does not load, and cannot** | not a CFFI consumer at all but a SECOND implementation seam: its `.asd` opens with `(error "static-vectors does not support this Common Lisp implementation!")` under `#-(or abcl allegro ... sbcl)`, and past that the system needs an `impl-<lisp>.lisp` supplying a vector whose storage is non-moving memory a pointer can be taken into. rontolisp has no such array type -- `with-pointer-to-vector-data` copies in and out here -- so an `impl-rontolisp.lisp` could not keep the library's one promise. Not worth a shim: what a consumer wants from it (`fast-io`'s buffers) is reachable through `cffi:foreign-alloc` directly |
 | **cl+ssl** (the real one) | **LOADS, and reaches OpenSSL** -- the TLS handshake completes; what is left is not TLS | a probe, never a migration: the `cl+ssl` shim over `rontolisp:tls-upgrade` stays the default (`.kb/tcp-sockets.md`), because it works on the WASM component backend and needs no OpenSSL. **Not one blocker was ever in cffi.** The five that stood between the library and a load, in order: (1) `defpackage :cl+ssl` signalled, because rontolisp pre-registers `CL+SSL` for its own shim -- FIXED generally: `defpackage` over an existing package now MODIFIES it, as CLHS requires (`.kb/packages.md`); (2) flexi-streams had no in-memory OUTPUT stream (`make-in-memory-output-stream` / `get-output-stream-sequence`) -- ADDED; (3) trivial-garbage had no `make-weak-hash-table` -- ADDED (weakness is not observable from CL, so it degrades to an ordinary table); (4) bordeaux-threads had no `make-recursive-lock` / `with-recursive-lock-held` -- ADDED (the shim's `make-lock` is already reentrant, so the pair is one object and one expansion); (5) `flexi-streams:flexi-stream` as a real WRAPPER CLASS with `flexi-stream-stream` -- ADDED, and it is a better shim for it (`.kb/gray-streams.md`). With those five gone, `(asdf:load-system "cl+ssl")` completes: the whole `defcvar`/`defcallback`/`defcstruct` surface of the largest binding in Quicklisp parses, expands and runs here. See the row below for what running it then measured |
 

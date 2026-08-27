@@ -905,7 +905,8 @@ public final class AsdfSystems {
 		List<String> defsystemDependsOn = dependencyNames(":DEFSYSTEM-DEPENDS-ON", name, items, asd, preFeatures);
 		List<String> announcers = new ArrayList<>(defsystemDependsOn);
 		announcers.addAll(dependencyNames(":DEPENDS-ON", name, items, asd, preFeatures));
-		declaredFeatures = mergeFeatureNames(declaredFeatures, BuiltinSystems.declaredFeatures(announcers));
+		declaredFeatures = mergeFeatureNames(declaredFeatures,
+				BuiltinSystems.declaredFeatures(announcers, givenFeatures));
 		Features features = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
 		List<String> dependsOn = new ArrayList<>();
 		String version = null;

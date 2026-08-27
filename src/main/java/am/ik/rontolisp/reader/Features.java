@@ -27,6 +27,13 @@ import am.ik.rontolisp.LispVal;
  * {@code push}/{@code setq} it at run time like any other. See
  * {@code .kb/reader-features.md}.
  * <p>
+ * Every set here is machine-INDEPENDENT, and deliberately: the names describing the host
+ * a program will run on ({@code :darwin}/{@code :linux}, {@code :arm64}/{@code :x86-64})
+ * are carried by the trivial-features ANNOUNCEMENT instead
+ * ({@code BuiltinSystems.hostFeatures}, {@code .kb/asdf.md}), so a {@code Features}
+ * constant -- and the {@code *features*} list a program that asked for nothing sees -- is
+ * the same on every build machine.
+ * <p>
  * {@code :unicode} is the portable spelling (CLISP / ECL / CMUCL / LispWorks) of "this
  * implementation's characters are Unicode code points, not octets", which is true of
  * every rontolisp backend. A library that branches on it selects its UTF-8 string path --

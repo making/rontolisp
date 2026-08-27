@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
@@ -198,6 +199,40 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void trivialFeaturesAnnouncesTheHostOsAndCpuToAJvmFamilyTarget() {
+		// The other half of what upstream trivial-features exists to normalize, and the
+		// half that cannot be a constant: cffi picks its define-foreign-library clause
+		// and its :default suffix with featurep, so a Mac reading only :unix asked the
+		// loader for libsqlite3.so.
+		AsdfSystems.LispSystem system = parse("(asdf:defsystem :lib :depends-on (\"trivial-features\"))");
+		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+		if (os.contains("mac") || os.contains("darwin")) {
+			assertThat(system.features()).contains("darwin", "bsd").doesNotContain("linux");
+		}
+		else if (os.contains("linux")) {
+			assertThat(system.features()).contains("linux").doesNotContain("darwin", "bsd");
+		}
+		String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+		if (arch.equals("aarch64") || arch.equals("arm64")) {
+			assertThat(system.features()).contains("arm64").doesNotContain("x86-64");
+		}
+		else if (arch.equals("x86_64") || arch.equals("amd64")) {
+			assertThat(system.features()).contains("x86-64").doesNotContain("arm64");
+		}
+	}
+
+	@Test
+	void trivialFeaturesAnnouncesNoHostNameToAWasmTarget() {
+		// A wasm module runs on WASI, not on the machine that compiled it, so the
+		// portable half (:unix, :little-endian, :64-bit) is the whole truth there --
+		// whichever machine the build happens to run on.
+		AsdfSystems.LispSystem system = AsdfSystems
+			.parseDefsystem(form("(asdf:defsystem :lib :depends-on (\"trivial-features\"))"), null, Features.WASM);
+		assertThat(system.features()).contains("unix", "little-endian", "64-bit")
+			.doesNotContain("darwin", "bsd", "linux", "arm64", "x86-64");
+	}
+
+	@Test
 	void aThirdPartyDefsystemDependsOnAnnouncesNothing() {
 		// A real system announces its features by RUNNING, and a .asd is parsed as data
 		// -- so it is loaded first and contributes no read-time feature.
@@ -359,16 +394,26 @@ class AsdfSystemsTest {
 		AsdfSystems.LispSystem cffi = systems.get(0);
 		assertThat(cffi.name()).isEqualTo("cffi");
 		// :64-bit comes from upstream's own route -- trivial-features named in
-		// :defsystem-depends-on -- not from a feature this file declares.
+		// :defsystem-depends-on -- not from a feature this file declares. The same
+		// announcement carries the HOST, which is what the two darwin-only clauses this
+		// file keeps from upstream are for: on a Mac (:feature :darwin :uiop) resolves
+		// and darwin-frameworks.lisp joins the components, which is where cffi's DYLD
+		// fallback search path comes from (.kb/cffi.md).
+		boolean darwin = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
 		assertThat(cffi.defsystemDependsOn()).containsExactly("trivial-features");
-		assertThat(cffi.dependsOn()).containsExactly("alexandria", "babel");
+		assertThat(cffi.dependsOn()).containsExactly(
+				darwin ? new String[] { "uiop", "alexandria", "babel" } : new String[] { "alexandria", "babel" });
 		// The portable files are upstream's, in upstream's order, with the backend
 		// spliced in where the per-implementation component goes and strings.lisp still
 		// named (ShimLibraries substitutes its CONTENT, not its place).
-		assertThat(cffi.files()).containsExactly("src/package.lisp", "src/sys-utils.lisp", "src/cffi-rontolisp.lisp",
-				"src/utils.lisp", "src/libraries.lisp", "src/early-types.lisp", "src/types.lisp", "src/enum.lisp",
-				"src/strings.lisp", "src/structures.lisp", "src/functions.lisp", "src/foreign-vars.lisp",
-				"src/features.lisp");
+		List<String> expected = new java.util.ArrayList<>(List.of("src/package.lisp", "src/sys-utils.lisp",
+				"src/cffi-rontolisp.lisp", "src/utils.lisp", "src/libraries.lisp", "src/early-types.lisp",
+				"src/types.lisp", "src/enum.lisp", "src/strings.lisp", "src/structures.lisp", "src/functions.lisp",
+				"src/foreign-vars.lisp", "src/features.lisp"));
+		if (darwin) {
+			expected.add(expected.indexOf("src/libraries.lisp"), "src/darwin-frameworks.lisp");
+		}
+		assertThat(cffi.files()).containsExactlyElementsOf(expected);
 	}
 
 	@Test
