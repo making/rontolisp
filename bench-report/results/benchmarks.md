@@ -24,19 +24,19 @@ How the report is built and run: [../README.md](../README.md).
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | sbcl | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| [fib](../programs/fib.lisp) | 4,748 | **42** | 163 | 89 | 275 | 495 |
-| [mandelbrot](../programs/mandelbrot.lisp) | 8,648 | 109 | 700 | 236 | 972 | **70** |
-| [matmul](../programs/matmul.lisp) | 8,226 | **58** | 573 | 153 | 599 | 899 |
-| [sieve](../programs/sieve.lisp) | 12,697 | 202 | 569 | **46** | 226 | 279 |
-| [sort](../programs/sort.lisp) | 962 | 282 | 328 | **98** | 253 | 639 |
-| [hash](../programs/hash.lisp) | 2,137 | 441 | 386 | **69** | 328 | 386 |
-| [string](../programs/string.lisp) | 7,608 | 156 | 147 | **51** | 452 | 358 |
-| [clos](../programs/clos.lisp) | 14,256 | **72** | 368 | 79 | 730 | 894 |
-| [bignum](../programs/bignum.lisp) | 298 | 106 | 530 | **37** | 94 | 91 |
-| [list](../programs/list.lisp) | 2,148 | 140 | 138 | **46** | 394 | 206 |
-| **startup** | 298 | 62 | 15 | **11** | 44 | 1,485 |
+| [fib](../programs/fib.lisp) | 4,748 | **`42`** | 163 | 89 | 275 | 495 |
+| [mandelbrot](../programs/mandelbrot.lisp) | 8,648 | 109 | 700 | 236 | 972 | **`70`** |
+| [matmul](../programs/matmul.lisp) | 8,226 | **`58`** | 573 | 153 | 599 | 899 |
+| [sieve](../programs/sieve.lisp) | 12,697 | 202 | 569 | **`46`** | 226 | 279 |
+| [sort](../programs/sort.lisp) | 962 | 282 | 328 | **`98`** | 253 | 639 |
+| [hash](../programs/hash.lisp) | 2,137 | 441 | 386 | **`69`** | 328 | 386 |
+| [string](../programs/string.lisp) | 7,608 | 156 | 147 | **`51`** | 452 | 358 |
+| [clos](../programs/clos.lisp) | 14,256 | **`72`** | 368 | 79 | 730 | 894 |
+| [bignum](../programs/bignum.lisp) | 298 | 106 | 530 | **`37`** | 94 | 91 |
+| [list](../programs/list.lisp) | 2,148 | 140 | 138 | **`46`** | 394 | 206 |
+| **startup** | 298 | 62 | 15 | **`11`** | 44 | 1,485 |
 
-The fastest cell in each row is **bold**.
+The fastest cell in each row is highlighted.
 
 `startup` is the whole process, wall clock, for a program that computes
 nothing. Every other row is the benchmark timing ITSELF -- the program

@@ -466,9 +466,11 @@ row_best_ms() {
   printf '%s' "$best"
 }
 
-# A run-time cell, bold when it is the row's best. Ties are all bold: they are
-# the same measurement, and picking one of them would be a coin toss the reader
-# would read as a result.
+# A run-time cell, marked when it is the row's best. The mark is a bold code
+# span, not bold alone: rendered, weight barely separates one right-aligned
+# number from five others, while a code span carries a background the eye finds
+# without reading. Ties are all marked -- they are the same measurement, and
+# picking one of them would be a coin toss the reader would read as a result.
 run_cell() {
   local impl="$1" key="$2" best="$3"
   local ms="${run_ms["$impl|$key"]:-}"
@@ -477,7 +479,7 @@ run_cell() {
   elif [[ -z "$ms" ]]; then
     printf '%s' "${cell_note["$impl|$key"]:--}"
   elif [[ -n "$best" && "$ms" -eq "$best" ]]; then
-    printf '**%s**' "$(commas "$ms")"
+    printf '**`%s`**' "$(commas "$ms")"
   else
     commas "$ms"
   fi
@@ -530,7 +532,7 @@ f="$results/benchmarks.md"
   for impl in "${requested[@]}"; do printf ' %s |' "$(run_cell "$impl" __startup "$best")"; done
   echo ""
   echo ""
-  echo "The fastest cell in each row is **bold**."
+  echo "The fastest cell in each row is highlighted."
   echo ""
   echo "\`startup\` is the whole process, wall clock, for a program that computes"
   echo "nothing. Every other row is the benchmark timing ITSELF -- the program"
