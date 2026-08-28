@@ -171,6 +171,14 @@ final class JvmHashRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("remove"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
 		MethodrefConstant mapClear = cp.addMethodref(mapClass,
 				cp.addNameAndType(cp.addUtf8("clear"), cp.addUtf8("()V")));
+		// A BUCKET is created with room for one entry, not with ArrayList's default
+		// ten: a bucket holds exactly one pair unless two structurally distinct keys
+		// hash alike, and the default backing array is 56 bytes per bucket against 24
+		// -- on a table with a million keys that difference IS the allocation profile.
+		// The insertion-order list keeps the no-argument constructor (it grows to the
+		// table's whole size).
+		MethodrefConstant listInitCapacity = cp.addMethodref(listClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(I)V")));
 		MethodrefConstant listInit = cp.addMethodref(listClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 		MethodrefConstant listAdd = cp.addMethodref(listClass,
@@ -230,8 +238,8 @@ final class JvmHashRuntimeBuilder {
 
 		methods.add(buildGet(cp, mapClass, listClass, objectArrayClass, mapGet, listGet, listSize, integerValueOf,
 				hashRef, equalMethod));
-		methods.add(buildPut(cp, mapClass, listClass, objectClass, objectArrayClass, mapGet, mapPut, listInit, listAdd,
-				listGet, listSize, integerValueOf, hashRef, ordRef, equalMethod));
+		methods.add(buildPut(cp, mapClass, listClass, objectClass, objectArrayClass, mapGet, mapPut, listInitCapacity,
+				listAdd, listGet, listSize, integerValueOf, hashRef, ordRef, equalMethod));
 		methods.add(buildRem(cp, mapClass, listClass, objectArrayClass, mapGet, mapRemove, listGet, listSize,
 				listRemoveAt, listRemoveObj, integerValueOf, hashRef, ordRef, equalMethod, trueStr));
 
@@ -536,6 +544,7 @@ final class JvmHashRuntimeBuilder {
 		a.branch(Opcode.IFNONNULL, haveBucket);
 		a.anew(listClass);
 		a.dup();
+		a.iconst(1);
 		a.invokespecial(listInit);
 		a.astore(3);
 		a.aload(1);

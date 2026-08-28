@@ -122,7 +122,9 @@ public final class RontoHashTable {
 		Integer hash = key.hashCode();
 		Object bucket = table.get(hash);
 		if (bucket == null) {
-			List<Object> created = new ArrayList<>();
+			// Room for one entry, like the emitted _hashPut: a bucket holds exactly
+			// one pair unless two structurally distinct keys hash alike.
+			List<Object> created = new ArrayList<>(1);
 			table.put(hash, created);
 			return created;
 		}
