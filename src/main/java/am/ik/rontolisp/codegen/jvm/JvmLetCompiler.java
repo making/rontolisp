@@ -16,6 +16,7 @@ import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.LetBoundDesignators;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.Opcode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the {@code let} special form.
@@ -39,6 +40,17 @@ final class JvmLetCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compile(cons, ctx, className, null);
+	}
+
+	/**
+	 * @param tail the tail spine this {@code let} ends, or null. When it has one, the
+	 * body forms JOIN the spine and the after-the-body work (the dynamic-binding
+	 * restores, then the compile-time scope restore) becomes a {@code Cleanup} item on it
+	 * -- the same emission in the same order, with a split point between any two body
+	 * forms ({@link JvmBodyOutliner}).
+	 */
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, JvmBodyOutliner.@Nullable Tail tail) {
 		// A binding that only holds a literal designator for the body's funcall sites is
 		// propagated into them and dropped, so the designator never becomes a VALUE here
 		// (LetBoundDesignators; the WASM twin does the same).
@@ -204,34 +216,52 @@ final class JvmLetCompiler {
 				}
 			}
 		}
+		final List<int[]> restores = dynamicRestores;
+		// Restore each dynamically bound special to its saved previous cell (possibly
+		// null = no binding on this thread). This runs with the body's result on top of
+		// the stack; each restore is stack-neutral (getstatic tl; aload cell;
+		// ThreadLocal.set) so the result is preserved.
+		Runnable afterBody = () -> {
+			if (restores != null) {
+				int tlSetIndex = Objects.requireNonNull(ctx.dynVars).tlSet().index();
+				for (int i = restores.size() - 1; i >= 0; i--) {
+					int[] restore = restores.get(i);
+					ctx.emit(Opcode.GETSTATIC);
+					ctx.emitU2(restore[0]);
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(restore[1]);
+					ctx.emit(Opcode.INVOKEVIRTUAL);
+					ctx.emitU2(tlSetIndex);
+					ctx.specialBindScopes.pop();
+				}
+			}
+			ctx.locals = savedLocals;
+			ctx.boxedVars = savedBoxedVars;
+			ctx.rawLocals = savedRawLocals;
+			ctx.localIntLambdas = savedLocalIntLambdas;
+			ctx.nextLocal = savedNextLocal;
+		};
+		// A body-less (let ((x 1))) has no value to push and no split point; it keeps
+		// the historical emission rather than joining the spine.
+		if (tail != null && parts.size() > 2) {
+			List<JvmBodyOutliner.Item> items = new ArrayList<>();
+			for (int i = 2; i < parts.size(); i++) {
+				if (i > 2) {
+					items.add(new JvmBodyOutliner.PopValue());
+				}
+				items.add(new JvmBodyOutliner.ValueForm(parts.get(i)));
+			}
+			items.add(new JvmBodyOutliner.Cleanup(afterBody));
+			tail.pushFront(items);
+			return;
+		}
 		for (int i = 2; i < parts.size(); i++) {
 			if (i > 2) {
 				ctx.emit(Opcode.POP);
 			}
 			JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
 		}
-		// Restore each dynamically bound special to its saved previous cell (possibly
-		// null = no binding on this thread). This runs with the body's result on top of
-		// the stack; each restore is stack-neutral (getstatic tl; aload cell;
-		// ThreadLocal.set) so the result is preserved.
-		if (dynamicRestores != null) {
-			int tlSetIndex = Objects.requireNonNull(ctx.dynVars).tlSet().index();
-			for (int i = dynamicRestores.size() - 1; i >= 0; i--) {
-				int[] restore = dynamicRestores.get(i);
-				ctx.emit(Opcode.GETSTATIC);
-				ctx.emitU2(restore[0]);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(restore[1]);
-				ctx.emit(Opcode.INVOKEVIRTUAL);
-				ctx.emitU2(tlSetIndex);
-				ctx.specialBindScopes.pop();
-			}
-		}
-		ctx.locals = savedLocals;
-		ctx.boxedVars = savedBoxedVars;
-		ctx.rawLocals = savedRawLocals;
-		ctx.localIntLambdas = savedLocalIntLambdas;
-		ctx.nextLocal = savedNextLocal;
+		afterBody.run();
 	}
 
 }
