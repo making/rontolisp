@@ -451,6 +451,38 @@ cell() {
   fi
 }
 
+# The fastest time in one run-time row, so the table can point at it. Only cells
+# that produced a number compete: `timeout` and `-` are absences, not times, and
+# a row where nothing finished simply has no winner to mark.
+row_best_ms() {
+  local key="$1"
+  local impl ms best=""
+  for impl in "${requested[@]}"; do
+    [[ "${have[$impl]:-0}" == 1 ]] || continue
+    ms="${run_ms["$impl|$key"]:-}"
+    [[ -n "$ms" ]] || continue
+    if [[ -z "$best" || "$ms" -lt "$best" ]]; then best="$ms"; fi
+  done
+  printf '%s' "$best"
+}
+
+# A run-time cell, bold when it is the row's best. Ties are all bold: they are
+# the same measurement, and picking one of them would be a coin toss the reader
+# would read as a result.
+run_cell() {
+  local impl="$1" key="$2" best="$3"
+  local ms="${run_ms["$impl|$key"]:-}"
+  if [[ "${have[$impl]:-0}" != 1 ]]; then
+    printf -- '-'
+  elif [[ -z "$ms" ]]; then
+    printf '%s' "${cell_note["$impl|$key"]:--}"
+  elif [[ -n "$best" && "$ms" -eq "$best" ]]; then
+    printf '**%s**' "$(commas "$ms")"
+  else
+    commas "$ms"
+  fi
+}
+
 f="$results/benchmarks.md"
 {
   echo "# Common Lisp implementation benchmarks"
@@ -488,19 +520,17 @@ f="$results/benchmarks.md"
   echo ""
   for row in "${programs[@]}"; do
     prog="${row%%|*}"
+    best="$(row_best_ms "$prog")"
     printf '| [%s](../programs/%s.lisp) |' "$prog" "$prog"
-    for impl in "${requested[@]}"; do printf ' %s |' "$(cell "$impl" "$prog")"; done
+    for impl in "${requested[@]}"; do printf ' %s |' "$(run_cell "$impl" "$prog" "$best")"; done
     echo ""
   done
+  best="$(row_best_ms __startup)"
   printf '| **startup** |'
-  for impl in "${requested[@]}"; do
-    if [[ -n "${run_ms["$impl|__startup"]:-}" ]]; then
-      printf ' %s |' "$(commas "${run_ms["$impl|__startup"]}")"
-    else
-      printf ' - |'
-    fi
-  done
+  for impl in "${requested[@]}"; do printf ' %s |' "$(run_cell "$impl" __startup "$best")"; done
   echo ""
+  echo ""
+  echo "The fastest cell in each row is **bold**."
   echo ""
   echo "\`startup\` is the whole process, wall clock, for a program that computes"
   echo "nothing. Every other row is the benchmark timing ITSELF -- the program"
