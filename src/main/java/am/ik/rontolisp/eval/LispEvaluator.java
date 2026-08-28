@@ -9015,11 +9015,14 @@ public final class LispEvaluator {
 	}
 
 	// Sort a list ascending using the comparison predicate (Common Lisp sort semantics;
-	// the
-	// predicate is true when its first argument strictly precedes its second).
-	// Implemented
-	// with insertion sort calling the predicate, which keeps the ordering
-	// self-consistent.
+	// the predicate is true when its first argument strictly precedes its second).
+	// A merge sort, arm for arm the one the compile paths call
+	// (LispMacroExpander.sortRuntimeWrapper): the same middle split -- the left half is
+	// the longer one on an odd length -- and the same one question per step,
+	// (pred right left), answering the left element unless that is true. So the four
+	// backends answer one permutation, and it is a stable one (.kb/sort.md). A fresh
+	// list is built: the argument's cells are left alone here, unlike the compile
+	// paths, which relink them.
 	private LispVal sortValues(LispVal list, LispVal predicate) {
 		List<LispVal> elems = new ArrayList<>();
 		LispVal cursor = list;
@@ -9027,20 +9030,43 @@ public final class LispEvaluator {
 			elems.add(cell.car());
 			cursor = cell.cdr();
 		}
-		for (int i = 1; i < elems.size(); i++) {
-			LispVal key = elems.get(i);
-			int j = i - 1;
-			while (j >= 0 && isTruthy(apply(predicate, List.of(key, elems.get(j)), this.globalEnv))) {
-				elems.set(j + 1, elems.get(j));
-				j--;
-			}
-			elems.set(j + 1, key);
-		}
+		LispVal[] values = elems.toArray(new LispVal[0]);
+		mergeSortRange(values, new LispVal[values.length], 0, values.length, predicate);
 		LispVal result = LispNil.INSTANCE;
-		for (int i = elems.size() - 1; i >= 0; i--) {
-			result = new LispCons(elems.get(i), result);
+		for (int i = values.length - 1; i >= 0; i--) {
+			result = new LispCons(values[i], result);
 		}
 		return result;
+	}
+
+	// One merge sort level over values[from, to): sort both halves, then merge them
+	// through buffer and copy back.
+	private void mergeSortRange(LispVal[] values, LispVal[] buffer, int from, int to, LispVal predicate) {
+		int length = to - from;
+		if (length < 2) {
+			return;
+		}
+		int middle = from + (length + 1) / 2;
+		mergeSortRange(values, buffer, from, middle, predicate);
+		mergeSortRange(values, buffer, middle, to, predicate);
+		int left = from;
+		int right = middle;
+		int out = 0;
+		while (left < middle && right < to) {
+			if (isTruthy(apply(predicate, List.of(values[right], values[left]), this.globalEnv))) {
+				buffer[out++] = values[right++];
+			}
+			else {
+				buffer[out++] = values[left++];
+			}
+		}
+		while (left < middle) {
+			buffer[out++] = values[left++];
+		}
+		while (right < to) {
+			buffer[out++] = values[right++];
+		}
+		System.arraycopy(buffer, 0, values, from, length);
 	}
 
 	// Apply a function to a spread argument list (Common Lisp apply semantics): the

@@ -1229,7 +1229,16 @@ final class JvmExprCompiler {
 							JvmExprCompiler.compileExpr(wrappedSort, ctx, className);
 						}
 						else {
-							JvmSortCompiler.compile(cons, ctx, className);
+							// The list sort itself: the shared merge sort when the
+							// program carries it, else the inline one (.kb/sort.md).
+							LispVal sharedSort = LispMacroExpander.sortRuntimeCall(cons,
+									ctx.functions.containsKey(LispNames.SORT_RUNTIME));
+							if (sharedSort != null) {
+								JvmExprCompiler.compileExpr(sharedSort, ctx, className);
+							}
+							else {
+								JvmSortCompiler.compile(cons, ctx, className);
+							}
 						}
 					}
 				}

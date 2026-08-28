@@ -7,10 +7,12 @@ import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
 /**
- * Compiles the {@code sort} built-in function. Generates an inline selection sort over
- * the cons cells of the list, swapping car values (not relinking) according to the
- * comparison predicate, so the original list head is returned in sorted order. Common
- * Lisp {@code sort} is destructive and not required to be stable.
+ * Compiles the {@code sort} built-in function when the program does not carry the shared
+ * {@code %sort-runtime} merge sort -- which only a program that defines that name itself
+ * does not (see {@code .kb/sort.md}). Generates an inline selection sort over the cons
+ * cells of the list, swapping car values (not relinking) according to the comparison
+ * predicate, so the original list head is returned in sorted order: correct, and
+ * quadratic, which is why every other program calls the helper instead.
  */
 final class WasmSortCompiler {
 

@@ -404,6 +404,33 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void theSortRuntimeIsOneMergeSortEveryCompiledSortSiteCalls() {
+		// The site is a call when the program carries the helper, and keeps its
+		// backend's inline sort when it does not (.kb/sort.md). Only the plain
+		// two-argument shape routes: a :key call is rewritten to stable-sort first, and
+		// its inner sort is what reaches here.
+		LispCons site = (LispCons) LispReader.readAllFromString("(sort l #'<)").get(0);
+		LispVal routed = java.util.Objects.requireNonNull(LispMacroExpander.sortRuntimeCall(site, true));
+		assertThat(routed.print()).isEqualTo("(%SORT-RUNTIME L (FUNCTION <))");
+		assertThat(LispMacroExpander.sortRuntimeCall(site, false)).isNull();
+		// The helper: (setq %sort-runtime (lambda (list predicate) ...)), and its body
+		// is a MERGE sort -- it splits the list, calls itself on both halves and relinks
+		// with rplacd. A quadratic sort has none of that (.kb/sort.md).
+		LispVal helper = LispMacroExpander.sortRuntimeWrapper();
+		assertThat(((LispSymbol) ((LispCons) ((LispCons) helper).cdr()).car()).name()).isEqualTo("%SORT-RUNTIME");
+		assertThat(helper.print()).contains("(%SORT-RUNTIME %SRT-LST %SRT-PRED)").contains("RPLACD");
+		// The gate: a program that sorts, or whose stable-sort expansion will, and one
+		// that does neither.
+		assertThat(usesSort("(defun f (l) (sort l #'<))")).isTrue();
+		assertThat(usesSort("(defun f (l) (stable-sort l #'< :key #'car))")).isTrue();
+		assertThat(usesSort("(defun f (l) (reverse l))")).isFalse();
+	}
+
+	private static boolean usesSort(String source) {
+		return LispMacroExpander.programUsesSort(LispReader.readAllFromString(source));
+	}
+
+	@Test
 	void aDestructiveSequenceOperatorSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch() {
 		// replace / fill / map-into each inline a whole runtime dispatch -- a
 		// %row-major-aset copy loop, a list arm, an immutable-string rebuild made of

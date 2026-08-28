@@ -2764,6 +2764,17 @@ public final class LispNames {
 	}
 
 	/**
+	 * The {@code %sort-runtime} internal helper: the shared merge sort every {@code sort}
+	 * site on a compile path calls, {@code (%sort-runtime list predicate)} over a list
+	 * whose cells it relinks. Injected once per program by each compiler backend, beside
+	 * the builtin wrappers -- which is where a program's {@code #'sort} site lives -- so
+	 * no site carries a sort of its own; see {@code .kb/sort.md}. The interpreter never
+	 * sees it (its {@code sort} is native), but runs the same algorithm, so the four
+	 * backends answer one permutation.
+	 */
+	public static final String SORT_RUNTIME = "%SORT-RUNTIME";
+
+	/**
 	 * The {@code %no-applicable-method} internal helper: the generic-function
 	 * dispatchers' shared last-resort signal, {@code (error (%string-concat prefix
 	 * (princ-to-string (%class-designator arg))))} as ONE defun. Injected once per

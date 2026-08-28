@@ -1707,6 +1707,27 @@ cases:
       (1 3 5)
       (2 4)
       (1 2 3)
+  - name: sort-is-linearithmic-and-stable
+    source: |
+      ;; 20,000 elements: instant for the shared merge sort, and out of reach for
+      ;; the quadratic sort every backend used to carry (.kb/sort.md).
+      (let ((ci-sort-data nil) (ci-sort-s 42))
+        (dotimes (ci-sort-i 20000)
+          (setq ci-sort-s (mod (+ (* ci-sort-s 1103515245) 12345) 2147483648))
+          (setq ci-sort-data (cons ci-sort-s ci-sort-data)))
+        (let ((ci-sort-out (sort ci-sort-data #'<)) (ci-sort-ordered t) (ci-sort-n 0))
+          (do ((ci-sort-c ci-sort-out (cdr ci-sort-c))) ((null (cdr ci-sort-c)) nil)
+            (if (> (car ci-sort-c) (car (cdr ci-sort-c))) (setq ci-sort-ordered nil)))
+          (do ((ci-sort-c ci-sort-out (cdr ci-sort-c))) ((null ci-sort-c) nil)
+            (setq ci-sort-n (+ ci-sort-n 1)))
+          (print (list ci-sort-ordered ci-sort-n))))
+      ;; The permutation of elements the predicate calls equal, identical on all four
+      ;; backends because they run one algorithm.
+      (print (sort (list (cons 1 'a) (cons 1 'b) (cons 0 'c) (cons 1 'd) (cons 0 'e))
+                   (lambda (ci-sort-x ci-sort-y) (< (car ci-sort-x) (car ci-sort-y)))))
+    expected: |
+      (T 20000)
+      ((0 . C) (0 . E) (1 . A) (1 . B) (1 . D))
   - name: mapcan-sort-apply
     source: |
       (print (mapcan (lambda (x) (list x x)) '(1 2 3)))

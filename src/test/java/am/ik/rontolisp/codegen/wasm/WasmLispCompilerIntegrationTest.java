@@ -9225,6 +9225,27 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void sortOfALargeListIsLinearithmicAndOrdersEqualElementsLikeEveryOtherBackend() throws Exception {
+		// The site calls the shared %sort-runtime merge sort (.kb/sort.md): 50,000
+		// elements are instant where the selection sort this replaced took minutes, and
+		// elements the predicate calls equal come out in input order -- the same
+		// permutation the interpreter and the JVM backend answer.
+		assertThat(compileAndRun("""
+				(let ((data nil) (s 42))
+				  (dotimes (i 50000)
+				    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				    (setq data (cons s data)))
+				  (let ((sorted (sort data #'<)) (ordered t) (n 0))
+				    (do ((c sorted (cdr c))) ((null (cdr c)) nil)
+				      (if (> (car c) (car (cdr c))) (setq ordered nil)))
+				    (do ((c sorted (cdr c))) ((null c) nil) (setq n (+ n 1)))
+				    (print (list ordered n))))
+				(print (sort (list (cons 1 'a) (cons 1 'b) (cons 0 'c) (cons 1 'd) (cons 0 'e))
+				             (lambda (x y) (< (car x) (car y)))))
+				""")).isEqualTo("(T 50000)\n((0 . C) (0 . E) (1 . A) (1 . B) (1 . D))");
+	}
+
+	@Test
 	void applyFunction() throws Exception {
 		// In compiled code apply dispatches by the actual argument count, so the applied
 		// function must have a matching arity (the eval-runtime limitation).

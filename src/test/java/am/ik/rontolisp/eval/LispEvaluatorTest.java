@@ -5844,6 +5844,34 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSortOfALargeListIsLinearithmicAndOrdersEqualElementsLikeEveryOtherBackend() {
+		// sort is a merge sort on all four backends, from one algorithm
+		// (.kb/sort.md): the same permutation everywhere, and 100,000 elements in a
+		// fraction of a second where the insertion sort this replaced took minutes.
+		// Preemptive so a quadratic regression fails instead of hanging the suite.
+		assertTimeoutPreemptively(Duration.ofSeconds(30), () -> {
+			assertThat(eval("""
+					(let ((data nil) (s 42))
+					  (dotimes (i 100000)
+					    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+					    (setq data (cons s data)))
+					  (let ((sorted (sort data #'<)) (ordered t) (n 0))
+					    (do ((c sorted (cdr c))) ((null (cdr c)) nil)
+					      (if (> (car c) (car (cdr c))) (setq ordered nil)))
+					    (do ((c sorted (cdr c))) ((null c) nil) (setq n (+ n 1)))
+					    (list ordered n)))
+					""").print()).isEqualTo("(T 100000)");
+		});
+		// The permutation of elements the predicate calls equal: the merge takes the
+		// left run first, so they come out in input order. The compile paths answer
+		// this same list (ci-spec.yaml's sort-is-linearithmic-and-stable case).
+		assertThat(eval("""
+				(sort (list (cons 1 'a) (cons 1 'b) (cons 0 'c) (cons 1 'd) (cons 0 'e))
+				      (lambda (x y) (< (car x) (car y))))
+				""").print()).isEqualTo("((0 . C) (0 . E) (1 . A) (1 . B) (1 . D))");
+	}
+
+	@Test
 	void evalApply() {
 		assertThat(eval("(apply #'+ '(1 2 3))").print()).isEqualTo("6");
 		assertThat(eval("(apply #'+ 1 2 '(3 4))").print()).isEqualTo("10");

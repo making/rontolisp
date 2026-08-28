@@ -2922,6 +2922,16 @@ public final class WasmLispCompiler implements LispCompiler {
 			injectedRuntimeDefuns.add(decl.name);
 			defuns.add(decl);
 		}
+		// The shared merge sort, once per program that sorts -- from its own source or
+		// from the #'sort wrapper just added, which is why this sits here beside the
+		// other shared sequence helpers (.kb/sort.md). When it is absent
+		// WasmExprCompiler keeps the inline sort.
+		if (!userDefinedNames.contains(LispNames.SORT_RUNTIME)
+				&& (LispMacroExpander.programUsesSort(program) || LispMacroExpander.programUsesSort(wrappers))) {
+			DefunDecl sortDecl = extractSetqLambda(LispMacroExpander.sortRuntimeWrapper());
+			injectedRuntimeDefuns.add(sortDecl.name);
+			defuns.add(sortDecl);
+		}
 		// The shared subseq dispatch, once per program that calls subseq -- from its own
 		// source or from a wrapper body just added, which is why this is here and not in
 		// expandTopLevelDefinitions (.kb/subseq-runtime.md). No array gate: this backend

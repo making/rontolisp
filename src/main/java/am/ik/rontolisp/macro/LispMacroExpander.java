@@ -10262,6 +10262,109 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.SUBSEQ_RUNTIME), lambda));
 	}
 
+	// The shared sort: a top-down merge sort over the list's OWN cells -- the halves are
+	// cut apart at the middle cell (found by the two-pointer walk, so the left half is
+	// the longer one on an odd length), sorted, then merged by relinking cdrs. It asks
+	// the predicate exactly one question, (pred right left), and takes the LEFT element
+	// unless that answers true, which makes the merge stable and the whole sort's
+	// permutation a function of the answers alone -- LispEvaluator.sortValues runs the
+	// same algorithm over the same split, so the four backends answer one permutation.
+	// Nothing here allocates: a sorted list is the argument's cells, relinked.
+	private static final String SORT_RUNTIME_SOURCE = """
+			(setq %sort-runtime
+			  (lambda (%srt-lst %srt-pred)
+			    (if (atom %srt-lst)
+			        %srt-lst
+			        (if (atom (cdr %srt-lst))
+			            %srt-lst
+			            (let ((%srt-slow %srt-lst) (%srt-fast (cdr %srt-lst))
+			                  (%srt-a nil) (%srt-b nil) (%srt-head nil) (%srt-tail nil))
+			              (do () ((atom %srt-fast) nil)
+			                (setq %srt-fast (cdr %srt-fast))
+			                (if (consp %srt-fast)
+			                    (progn (setq %srt-slow (cdr %srt-slow))
+			                           (setq %srt-fast (cdr %srt-fast)))))
+			              (setq %srt-b (cdr %srt-slow))
+			              (rplacd %srt-slow nil)
+			              (setq %srt-a (%sort-runtime %srt-lst %srt-pred))
+			              (setq %srt-b (%sort-runtime %srt-b %srt-pred))
+			              (if (funcall %srt-pred (car %srt-b) (car %srt-a))
+			                  (progn (setq %srt-head %srt-b) (setq %srt-b (cdr %srt-b)))
+			                  (progn (setq %srt-head %srt-a) (setq %srt-a (cdr %srt-a))))
+			              (setq %srt-tail %srt-head)
+			              (do () ((or (atom %srt-a) (atom %srt-b)) nil)
+			                (if (funcall %srt-pred (car %srt-b) (car %srt-a))
+			                    (progn (rplacd %srt-tail %srt-b)
+			                           (setq %srt-tail %srt-b)
+			                           (setq %srt-b (cdr %srt-b)))
+			                    (progn (rplacd %srt-tail %srt-a)
+			                           (setq %srt-tail %srt-a)
+			                           (setq %srt-a (cdr %srt-a)))))
+			              (rplacd %srt-tail (if (atom %srt-a) %srt-b %srt-a))
+			              %srt-head)))))
+			""";
+
+	/**
+	 * Builds the shared {@code %sort-runtime} defun: the merge sort every {@code sort}
+	 * site on a compile path calls, over a list and a predicate designator.
+	 *
+	 * <p>
+	 * <strong>Why one callee and not code at the site.</strong> Both backends used to
+	 * emit a SELECTION sort inline -- quadratic, so a 400,000-element sort was hours
+	 * rather than the fraction of a second SBCL takes, and the one benchmark cell that
+	 * timed out on all three rontolisp backends. A merge sort is not something to spell
+	 * twice in two assemblers: written once here it is the same algorithm on the JVM, on
+	 * both wasm backends, and (in Java, arm for arm) in the interpreter. See
+	 * {@code .kb/sort.md}; do not inline it back.
+	 * <p>
+	 * Answered in the {@code (setq name (lambda ...))} shape
+	 * {@code BuiltinFunctionWrappers.generate} uses, because a backend injects it in the
+	 * same loop and for the same reason as {@link #subseqRuntimeWrapper()}: the
+	 * {@code #'sort} wrapper body is a site of its own, and it does not exist until the
+	 * backend generates it.
+	 * @return the helper's definition, wrapper-shaped
+	 */
+	public static LispVal sortRuntimeWrapper() {
+		return LispReader.readAllFromString(SORT_RUNTIME_SOURCE, Features.INTERPRETER).get(0);
+	}
+
+	/**
+	 * Rewrites a two-argument {@code (sort list predicate)} site into a call to the
+	 * shared {@link #sortRuntimeWrapper()} helper, or answers null when the program does
+	 * not carry it -- in which case the backend keeps its own inline sort, which is still
+	 * correct.
+	 * @param cons the sort expression, already past the {@code :key} and string-sequence
+	 * rewrites (so its sequence argument is a list)
+	 * @param helperPresent whether the program defines {@code %sort-runtime}
+	 * @return the helper call, or null when there is no helper to call
+	 */
+	public static @Nullable LispVal sortRuntimeCall(LispCons cons, boolean helperPresent) {
+		List<LispVal> parts = cons.toList();
+		if (!helperPresent || parts.size() != 3) {
+			return null;
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.SORT_RUNTIME), parts.get(1), parts.get(2)));
+	}
+
+	/**
+	 * Whether any form names {@code sort} or {@code stable-sort}, i.e. whether the
+	 * program can hold a {@code sort} site for {@link #sortRuntimeWrapper()} to serve.
+	 * {@code stable-sort} counts because its expansion sorts the decorated list, and a
+	 * generated {@code #'sort} wrapper body counts because a backend asks this of the
+	 * wrappers too. The same pre-expansion name scan as {@link #programUsesSubseq(List)},
+	 * used the same way by both compiler backends.
+	 * @param forms the program's (or the generated wrappers') top-level forms
+	 * @return true when a sort site can occur
+	 */
+	public static boolean programUsesSort(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (namesAnySymbol(form, java.util.Set.of(LispNames.SORT, LispNames.STABLE_SORT))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Builds the shared sequence-conversion trio -- {@code %seq-to-list},
 	 * {@code %seq-to-string}, {@code %seq-to-vector} -- each the body a literal

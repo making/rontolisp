@@ -1528,7 +1528,26 @@ final class WasmExprCompiler {
 							WasmExprCompiler.compileExpr(wrappedSort, ctx);
 						}
 						else {
-							WasmSortCompiler.compile(cons, ctx);
+							// The list sort itself: the shared merge sort when the
+							// program carries it, else the inline one (.kb/sort.md).
+							LispVal sharedSort = LispMacroExpander.sortRuntimeCall(cons,
+									ctx.functions.containsKey(LispNames.SORT_RUNTIME));
+							if (sharedSort != null) {
+								// The predicate is dispatched one frame down, inside the
+								// helper, whose body is injected runtime and therefore
+								// arms nothing -- so the SITE says a designator it
+								// cannot read reaches a call, exactly as the inline sort
+								// did through WasmDesignatorCall
+								// (Ctx.runtimeDesignatorDispatch).
+								if (!ctx.injectedRuntimeBody
+										&& !LispMacroExpander.isStaticFunctionDesignator(cons.toList().get(2))) {
+									ctx.runtimeDesignatorDispatch[0] = true;
+								}
+								WasmExprCompiler.compileExpr(sharedSort, ctx);
+							}
+							else {
+								WasmSortCompiler.compile(cons, ctx);
+							}
 						}
 					}
 				}
