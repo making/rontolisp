@@ -14351,6 +14351,55 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileDisplacedStringView() throws Exception {
+		// Displacing onto a STRING answers a string VIEW, not a bare array view: it is
+		// stringp, prints and measures as a string, and aliases the target's characters
+		// in both directions -- including a view of a view.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-string 6 :initial-element #\\a))
+				(dotimes (i 6) (setf (char *s* i) (char "abcdef" i)))
+				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
+				                                :displaced-index-offset 1))
+				(print (list (stringp *v*) (length *v*) *v* (char *v* 0) (subseq *v* 1)))
+				(setf (char *v* 0) #\\X)
+				(print (list *v* *s*))
+				(setf (char *s* 3) #\\Y)
+				(print (list *v* *s* (string= *v* "XcY")))
+				(multiple-value-bind (tgt off) (array-displacement *v*)
+				  (print (list (eq tgt *s*) off)))
+				(defparameter *w* (make-array 2 :element-type 'character :displaced-to *v*
+				                                :displaced-index-offset 1))
+				(setf (char *w* 1) #\\Q)
+				(print (list *w* *v* *s*))
+				""")).isEqualTo("""
+				(T 3 "bcd" #\\b "cd")
+				("Xcd" "aXcdef")
+				("XcY" "aXcYef" T)
+				(T 1)
+				("cQ" "XcQ" "aXcQef")""");
+	}
+
+	@Test
+	void compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite() throws Exception {
+		// A string this backend represents as an immutable TYPE_STRING (anything but a
+		// character vector -- here a copy-seq result) can be VIEWED without a copy, and
+		// reads alias it. A write cannot reach it (a string's bytes never change once
+		// built), so the view promotes its target to a character vector once and
+		// mutates that: the view is a mutable string from then on, and the original
+		// value is untouched -- which is what (setf (char s i) c) on that same string
+		// already does. The interpreter, whose strings are all mutable, writes through
+		// to the target instead (`.todo/559`).
+		assertThat(compileAndRun("""
+				(defparameter *s* (copy-seq "abcdef"))
+				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
+				                                :displaced-index-offset 1))
+				(print (list *v* (length *v*) (string= *v* "bcd")))
+				(setf (char *v* 0) #\\X)
+				(print (list *v* *s*))
+				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"abcdef\")");
+	}
+
+	@Test
 	void compileCharVectorAccumulator() throws Exception {
 		// A fill-pointered/adjustable character vector is a mutable string on the
 		// wasm-GC backend: stringp, length, string=, princ (bare content) and prin1

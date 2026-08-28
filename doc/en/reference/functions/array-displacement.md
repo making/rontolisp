@@ -2,7 +2,7 @@
 
 `(array-displacement array)`
 
-Returns two values: the array `array` was displaced to with [`make-array`](make-array.md) `:displaced-to`, and the `:displaced-index-offset` it was created with. For a non-displaced array the values are nil and 0. The second value is only observable through a multiple-value consumer such as `multiple-value-bind`.
+Returns two values: the array `array` was displaced to with [`make-array`](make-array.md) `:displaced-to`, and the `:displaced-index-offset` it was created with. For a non-displaced array the values are nil and 0. The second value is only observable through a multiple-value consumer such as `multiple-value-bind`. A string view (a `:displaced-to` over a string) reports its target string the same way.
 
 ```lisp
 (defparameter *base* (make-array 5 :initial-element 0))

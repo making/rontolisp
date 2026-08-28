@@ -1010,8 +1010,17 @@ final class WasmEmitHelper {
 	 * @param ctx the compilation context (its writer receives the instructions)
 	 */
 	static void emitStrCharAtCall(WasmLispCompiler.Ctx ctx) {
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_AT);
+		emitStrCharAtCall(ctx.writer);
+	}
+
+	/**
+	 * The runtime-builder half of {@link #emitStrCharAtCall(WasmLispCompiler.Ctx)}, for a
+	 * body being written straight to a {@link WasmWriter}.
+	 * @param w the writer receiving the instructions
+	 */
+	static void emitStrCharAtCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_AT);
 	}
 
 	/**

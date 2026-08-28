@@ -3550,6 +3550,36 @@ cases:
       (T 2)
       (NIL 0)
       55
+  - name: displaced-string-views-cross-backend
+    source: |
+      (defun ci-string-views ()
+        (let ((s (make-string 6 :initial-element #\a)))
+          (dotimes (i 6) (setf (char s i) (char "abcdef" i)))
+          (let ((v (make-array 3 :element-type 'character :displaced-to s
+                                 :displaced-index-offset 1)))
+            (print (list (stringp v) (length v) v (char v 0) (subseq v 1)))
+            (setf (char v 0) #\X)
+            (print (list v s))
+            (setf (char s 3) #\Y)
+            (print (list v s (string= v "XcY")))
+            (multiple-value-bind (tgt off) (array-displacement v)
+              (print (list (eq tgt s) off)))
+            (let ((w (make-array 2 :element-type 'character :displaced-to v
+                                   :displaced-index-offset 1)))
+              (setf (char w 1) #\Q)
+              (print (list w v s)))))
+        (let* ((s (make-string 5 :initial-element #\z))
+               (v (make-array 2 :element-type 'character :displaced-to s)))
+          (print (list (array-has-fill-pointer-p v) (array-element-type v)
+                       (vectorp v) (arrayp v)))))
+      (ci-string-views)
+    expected: |
+      (T 3 "bcd" #\b "cd")
+      ("Xcd" "aXcdef")
+      ("XcY" "aXcYef" T)
+      (T 1)
+      ("cQ" "XcQ" "aXcQef")
+      (NIL CHARACTER T T)
   - name: mutable-strings-cross-backend
     source: |
       (defun ci-mutable-strings ()

@@ -24,6 +24,14 @@ import java.util.List;
  * as LEXICAL exits ({@code %fn-block} function boundaries plus name-keyed goto/br
  * targets), which covers the scanner closures' {@code (block scan ...)} and the
  * {@code collect-char-class} loop-crossing returns.
+ *
+ * <p>
+ * The SHARED-substring surface is in the exercise too -- a FUNCTION replacement to
+ * {@code regex-replace-all} and {@code :sharedp t} on {@code scan-to-strings} /
+ * {@code register-groups-bind} -- because all of it runs through the library's own
+ * {@code nsubseq}, a displaced array over a STRING ({@code .kb/adjustable-arrays.md},
+ * "Displacing a STRING"). That definition used to signal on every backend and was
+ * rewritten to copy; it now loads and runs verbatim.
  */
 class ClPpcreE2eTest extends AsdfLibraryE2eSupport {
 
@@ -55,12 +63,19 @@ class ClPpcreE2eTest extends AsdfLibraryE2eSupport {
 			(print (cl-ppcre:all-matches "an" "banana"))
 			(print (cl-ppcre:scan-to-strings '(:sequence "b" (:greedy-repetition 1 nil #\\a)) "xbaaay"))
 			(print (cl-ppcre:split "(,)" "a,b" :with-registers-p t))
+			(print (cl-ppcre:regex-replace-all "[a-z]+" "one 2 three" #'string-upcase
+			                                   :simple-calls t))
+			(print (cl-ppcre:scan-to-strings "[0-9]+" "ab 123 cd" :sharedp t))
+			(print (cl-ppcre:register-groups-bind (area num)
+			           ("(\\\\d+)-(\\\\d+)" "tel 03-1234 end" :sharedp t)
+			         (list area num)))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(1 5 #(3) #(4))", "(NIL NIL)", "(\"123\" #())",
 			"(\"a\" \"b\" \"c\")", "(\"foo\" \"bar\" \"baz\")", "\"frob bar\"", "\"bonono\"",
 			"(\"one\" \"three\" \"five\")", "(\"03-1234\" #(\"03\" \"1234\"))", "\"HELLO\"", "(\"1\" \"22\" \"333\")",
-			"(\"03\" \"1234\")", "\"a\\\\.b\\\\*c\"", "3", "(1 3 3 5)", "\"baaa\"", "(\"a\" \",\" \"b\")");
+			"(\"03\" \"1234\")", "\"a\\\\.b\\\\*c\"", "3", "(1 3 3 5)", "\"baaa\"", "(\"a\" \",\" \"b\")",
+			"\"ONE 2 THREE\"", "\"123\"", "(\"03\" \"1234\")");
 
 	@Override
 	protected String systemDir() {

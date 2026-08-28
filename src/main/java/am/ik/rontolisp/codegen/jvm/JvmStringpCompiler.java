@@ -113,10 +113,24 @@ final class JvmStringpCompiler {
 			ctx.emit(Opcode.CHECKCAST);
 			ctx.emitU2(ctx.objectArrayClass.index());
 			ctx.emit(Opcode.ARRAYLENGTH);
+			// Header length 4 is a character vector; 7 is a displaced STRING VIEW (a
+			// view whose target is a string). Length 3 / 5 / 6 -- the ordinary, the
+			// bare array view and the packed shapes -- are not strings.
+			ctx.emit(Opcode.DUP);
+			JvmEmitHelper.emitIntConst(ctx, 7);
+			int ifNotSeven = ctx.code.size();
+			ctx.emit(Opcode.IF_ICMPNE);
+			ctx.emitU2(0);
+			ctx.emit(Opcode.POP);
+			int gotoIsString = ctx.code.size();
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, ifNotSeven, ctx.code.size());
 			JvmEmitHelper.emitIntConst(ctx, 4);
 			nilBranches.add(ctx.code.size());
 			ctx.emit(Opcode.IF_ICMPNE);
 			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, gotoIsString, ctx.code.size());
 			JvmEmitHelper.compileTrue(ctx);
 			gotoEnds.add(ctx.code.size());
 			ctx.emit(Opcode.GOTO);
