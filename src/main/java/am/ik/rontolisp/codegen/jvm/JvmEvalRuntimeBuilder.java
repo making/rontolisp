@@ -981,8 +981,16 @@ final class JvmEvalRuntimeBuilder {
 
 	// === _lookup(String name) -> Object[]{Integer funcId, Integer arity} or null ===
 
-	/** Segment budget in code bytes; see {@link #buildLookupSegments}. */
-	private static final int LOOKUP_SEGMENT_BUDGET = 24_000;
+	/**
+	 * Segment budget in code bytes; see {@link #buildLookupSegments}. Below HotSpot's
+	 * 8000-bytecode {@code HugeMethodLimit}, the same margin the {@code _invoke_<arity>}
+	 * dispatch segments keep -- this registry answers every late-bound function
+	 * designator, so a segment over the cliff runs interpreted for the life of the
+	 * process ({@code .kb/hot-path-method-size.md}). It used to be 24000, chosen only
+	 * against the 64 KB method-code limit, which at clack/ningle scale left four segments
+	 * of 24 KB each.
+	 */
+	private static final int LOOKUP_SEGMENT_BUDGET = 6_000;
 
 	private List<List<Integer>> lookupSegments(ConstantPool.ClassConstant thisClass,
 			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,

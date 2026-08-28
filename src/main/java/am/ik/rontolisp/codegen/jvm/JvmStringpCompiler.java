@@ -23,10 +23,9 @@ final class JvmStringpCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		int tempSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tempSlot);
-		emitStringpCheck(ctx, tempSlot);
+		// The check depends on nothing but the value, so it lives in one per-class
+		// helper (JvmEmitHelper.emitSharedCall) rather than ~90 bytecodes per site.
+		JvmEmitHelper.emitSharedCall(ctx, className, "_pStringp", 1, helper -> emitStringpCheck(helper, 0));
 	}
 
 	/**

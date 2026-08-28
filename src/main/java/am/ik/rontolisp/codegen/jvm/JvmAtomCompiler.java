@@ -7,7 +7,10 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the {@code atom} predicate.
+ * Compiles the {@code atom} predicate. The decision itself lives in one per-class helper
+ * ({@code _pAtom}, {@link JvmEmitHelper#emitSharedCall}): it depends on nothing but the
+ * value, and inline it is ~90 bytecodes -- enough that a generated dispatch writing it
+ * once per clause crosses HotSpot's {@code HugeMethodLimit}.
  */
 final class JvmAtomCompiler {
 
@@ -17,9 +20,12 @@ final class JvmAtomCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		int tempSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tempSlot);
+		JvmEmitHelper.emitSharedCall(ctx, className, "_pAtom", 1, JvmAtomCompiler::emitCheck);
+	}
+
+	/** Emits the predicate over the value in local slot 0. */
+	private static void emitCheck(JvmLispCompiler.Ctx ctx) {
+		int tempSlot = 0;
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(tempSlot);
 		ctx.emit(Opcode.INSTANCEOF);

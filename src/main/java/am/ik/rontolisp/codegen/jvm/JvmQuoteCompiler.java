@@ -5,6 +5,7 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
@@ -318,6 +319,17 @@ final class JvmQuoteCompiler {
 		ctx.emit(Opcode.POP);
 	}
 
+	/**
+	 * Emitted bytes a spine chunk is allowed to reach before the rest of the literal
+	 * moves into another {@code _ql$N} builder, and -- doubled -- the size a whole
+	 * literal has to exceed before it is chunked at all. A literal under that is emitted
+	 * inline, byte for byte as it always was.
+	 */
+	private static final int QUOTE_CHUNK_BUDGET = 2000;
+
+	/** Bytes one spine cell costs, without its car. */
+	private static final int CELL_BYTES = 15;
+
 	private static void compileQuotedCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// Walk the cdr spine and build the list tail-first through a temp slot, like
 		// JvmListCompiler: recursing through the cdr would grow the operand stack
@@ -331,6 +343,44 @@ final class JvmQuoteCompiler {
 			tail = cell.cdr();
 		}
 		compileQuotedVal(tail, ctx, className);
+		List<int[]> chunks = spineChunks(cars);
+		if (chunks.size() == 1) {
+			emitSpineCells(cars, 0, cars.size(), ctx, className);
+			return;
+		}
+		// A table literal big enough to put its own function past HotSpot's
+		// HugeMethodLimit (a package use-list is ~5 KB of cells, and the function
+		// holding it nothing else) is built by a chain of one-argument builders
+		// instead: each takes the tail built so far and answers the head of its chunk.
+		// The cells are still fresh at every evaluation -- this moves the construction,
+		// it does not memoize it.
+		for (int c = chunks.size() - 1; c >= 0; c--) {
+			int[] chunk = chunks.get(c);
+			String methodName = "_ql$" + ctx.nextOutlinedBodyId[0]++;
+			String desc = "(Ljava/lang/Object;)Ljava/lang/Object;";
+			Utf8Constant nameUtf8 = ctx.cp.addUtf8(methodName);
+			Utf8Constant descUtf8 = ctx.cp.addUtf8(desc);
+			MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc);
+			JvmLispCompiler.Ctx builder = ctx.ctxBuilder.build();
+			builder.evalStoreRef = ctx.evalStoreRef;
+			builder.nextLocal = 1;
+			builder.maxLocals = 1;
+			builder.emit(Opcode.ALOAD);
+			builder.emit(0);
+			emitSpineCells(cars, chunk[0], chunk[1], builder, className);
+			builder.emit(Opcode.ARETURN);
+			ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, builder));
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ref.index());
+		}
+	}
+
+	/**
+	 * Builds the cells for {@code cars[from, to)} on top of the tail the operand stack
+	 * already holds, front cell last, and leaves the head there.
+	 */
+	private static void emitSpineCells(List<LispVal> cars, int from, int to, JvmLispCompiler.Ctx ctx,
+			String className) {
 		// One temp for the whole spine: it holds the tail only while the cell in front of
 		// it is built, and is dead again by the next iteration. A sublist compiled into
 		// the car allocates ABOVE it and gives its slots back, so the locals a literal
@@ -338,7 +388,7 @@ final class JvmQuoteCompiler {
 		// cannot walk past the highest slot a one-byte operand can name.
 		int savedNextLocal = ctx.nextLocal;
 		int tempSlot = ctx.allocTemp();
-		for (int i = cars.size() - 1; i >= 0; i--) {
+		for (int i = to - 1; i >= from; i--) {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(tempSlot);
 			ctx.emit(Opcode.ICONST_2);
@@ -355,6 +405,66 @@ final class JvmQuoteCompiler {
 			ctx.emit(Opcode.AASTORE);
 		}
 		ctx.nextLocal = savedNextLocal;
+	}
+
+	/**
+	 * {@return the {@code [from, to)} ranges of the spine, one per builder method}
+	 *
+	 * One range covering the whole spine means "emit it inline", which is what every
+	 * literal under twice {@link #QUOTE_CHUNK_BUDGET} gets, so nothing that already fits
+	 * in a method changes.
+	 */
+	private static List<int[]> spineChunks(List<LispVal> cars) {
+		int total = 0;
+		int[] sizes = new int[cars.size()];
+		for (int i = 0; i < cars.size(); i++) {
+			sizes[i] = CELL_BYTES + estimateQuoted(cars.get(i));
+			total += sizes[i];
+		}
+		if (total <= 2 * QUOTE_CHUNK_BUDGET) {
+			return List.of(new int[] { 0, cars.size() });
+		}
+		List<int[]> chunks = new ArrayList<>();
+		int start = 0;
+		int running = 0;
+		for (int i = 0; i < cars.size(); i++) {
+			running += sizes[i];
+			// Cut AFTER the element that crossed, so a single oversized car (a nested
+			// literal, which chunks itself) still lands in a chunk of its own.
+			if (running >= QUOTE_CHUNK_BUDGET && i + 1 < cars.size()) {
+				chunks.add(new int[] { start, i + 1 });
+				start = i + 1;
+				running = 0;
+			}
+		}
+		chunks.add(new int[] { start, cars.size() });
+		return chunks;
+	}
+
+	/**
+	 * {@return a rough count of the bytes {@link #compileQuotedVal} emits for a value}
+	 *
+	 * Only ever compared against {@link #QUOTE_CHUNK_BUDGET}, so every leaf is charged
+	 * the width of the widest constant load and no emitter is consulted.
+	 */
+	private static int estimateQuoted(LispVal val) {
+		if (val instanceof LispCons cons) {
+			int size = 0;
+			LispVal rest = cons;
+			while (rest instanceof LispCons cell) {
+				size += CELL_BYTES + estimateQuoted(cell.car());
+				rest = cell.cdr();
+			}
+			return size + estimateQuoted(rest);
+		}
+		if (val instanceof LispArray array) {
+			int size = 16;
+			for (LispVal element : array.data()) {
+				size += 8 + estimateQuoted(element);
+			}
+			return size;
+		}
+		return 6;
 	}
 
 }
