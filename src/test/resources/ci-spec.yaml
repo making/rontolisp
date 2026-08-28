@@ -3319,6 +3319,48 @@ cases:
       "#<HASH-TABLE :TEST EQUAL :COUNT 2>"
       #<HASH-TABLE :TEST EQUAL :COUNT 1>
       #<HASH-TABLE :TEST EQUAL :COUNT 0>
+  - name: equalp-hash-table-key-fold
+    source: |
+      (defparameter *htq* (make-hash-table :test 'equalp))
+      (setf (gethash "CS" *htq*) 'separator)
+      (setf (gethash #\a *htq*) 'letter)
+      (setf (gethash 1 *htq*) 'one)
+      (setf (gethash (list "Lu" #\B) *htq*) 'pair)
+      (print (list (gethash "Cs" *htq*) (gethash "cs" *htq*) (gethash #\A *htq*)
+                   (gethash 1.0 *htq*) (gethash (list "LU" #\b) *htq*)
+                   (hash-table-count *htq*)))
+      (print (list (hash-table-test *htq*) (hash-table-p *htq*)))
+      (princ *htq*)
+      (terpri)
+      (remhash "cS" *htq*)
+      (print (list (gethash "CS" *htq*) (hash-table-count *htq*)))
+      (clrhash *htq*)
+      (setf (gethash "x" *htq*) 'kept)
+      (print (list (gethash "X" *htq*) (hash-table-test *htq*)))
+      (defparameter *htn* (make-hash-table :test 'equalp))
+      (setf (gethash 100000000000000000000 *htn*) 'big)
+      (setf (gethash 0 *htn*) 'zero)
+      (setf (gethash 0.5 *htn*) 'half)
+      (print (list (gethash 1.0e20 *htn*) (gethash -0.0 *htn*) (gethash 1/2 *htn*)
+                   (hash-table-count *htn*)))
+      (defparameter *htm* (make-hash-table :test 'equalp))
+      (setf (gethash "cs" *htm*) 1)
+      (setf (gethash #\b *htm*) 2)
+      (let ((acc nil))
+        (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) *htm*)
+        (print (sort acc #'string<)))
+      (defparameter *hte* (make-hash-table :test 'equal))
+      (setf (gethash "CS" *hte*) 'upper)
+      (print (list (gethash "Cs" *hte*) (hash-table-count *hte*) (hash-table-test *hte*)))
+    expected: |
+      (SEPARATOR SEPARATOR LETTER ONE PAIR 4)
+      (EQUALP T)
+      #<HASH-TABLE :TEST EQUALP :COUNT 4>
+      (NIL 3)
+      (KEPT EQUALP)
+      (BIG ZERO NIL 3)
+      ("B" "CS")
+      (NIL 1 EQUAL)
   - name: hash-table-functions-first-class
     source: |
       (defun ci-ht-fc ()
@@ -3582,6 +3624,36 @@ cases:
       (T 2)
       (NIL 0)
       55
+  - name: displaced-string-views-cross-backend
+    source: |
+      (defun ci-string-views ()
+        (let ((s (make-string 6 :initial-element #\a)))
+          (dotimes (i 6) (setf (char s i) (char "abcdef" i)))
+          (let ((v (make-array 3 :element-type 'character :displaced-to s
+                                 :displaced-index-offset 1)))
+            (print (list (stringp v) (length v) v (char v 0) (subseq v 1)))
+            (setf (char v 0) #\X)
+            (print (list v s))
+            (setf (char s 3) #\Y)
+            (print (list v s (string= v "XcY")))
+            (multiple-value-bind (tgt off) (array-displacement v)
+              (print (list (eq tgt s) off)))
+            (let ((w (make-array 2 :element-type 'character :displaced-to v
+                                   :displaced-index-offset 1)))
+              (setf (char w 1) #\Q)
+              (print (list w v s)))))
+        (let* ((s (make-string 5 :initial-element #\z))
+               (v (make-array 2 :element-type 'character :displaced-to s)))
+          (print (list (array-has-fill-pointer-p v) (array-element-type v)
+                       (vectorp v) (arrayp v)))))
+      (ci-string-views)
+    expected: |
+      (T 3 "bcd" #\b "cd")
+      ("Xcd" "aXcdef")
+      ("XcY" "aXcYef" T)
+      (T 1)
+      ("cQ" "XcQ" "aXcQef")
+      (NIL CHARACTER T T)
   - name: mutable-strings-cross-backend
     source: |
       (defun ci-mutable-strings ()

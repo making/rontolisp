@@ -9432,16 +9432,64 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void anEqualpHashTableFoldsANumberToItsExactValue() {
-		// equalp compares numbers with =, so a float and the integer or ratio it equals
-		// are one key.
+	void anEqualpHashTableFoldsAFloatToTheIntegerItEquals() {
+		// equalp compares numbers with =, so a float and the integer it equals are one
+		// key -- at any magnitude, since the fold reads the exact mantissa * 2^exponent
+		// out of the bits. A float with a FRACTION is its own key on every backend: the
+		// WASM ratio holds two i32 components and cannot represent the power-of-two
+		// denominator a float's exact value has (.kb/hash-tables.md).
 		LispVal result = evalMulti("""
 				(defparameter *n* (make-hash-table :test 'equalp))
 				(setf (gethash 1 *n*) 'one)
 				(setf (gethash 0.5d0 *n*) 'half)
-				(list (gethash 1.0d0 *n*) (gethash 1/2 *n*) (hash-table-count *n*))
+				(setf (gethash 1099511627776 *n*) 'big)
+				(list (gethash 1.0d0 *n*) (gethash 2/2 *n*) (gethash 1/2 *n*)
+				      (gethash 1.099511627776d12 *n*) (hash-table-count *n*))
 				""");
-		assertThat(result.print()).isEqualTo("(ONE HALF 2)");
+		assertThat(result.print()).isEqualTo("(ONE ONE NIL BIG 3)");
+	}
+
+	@Test
+	void aHashTableReportsAndPrintsTheTestItImplements() {
+		// EQUALP for a table whose keys are folded, EQUAL for every other -- an eql table
+		// still places structurally (.todo/012), so reporting eql would describe behavior
+		// that does not exist. The same two answers on all four backends.
+		LispVal result = evalMulti("""
+				(defparameter *tp* (make-hash-table :test 'equalp))
+				(setf (gethash "a" *tp*) 1)
+				(list (hash-table-test *tp*) (hash-table-test (make-hash-table :test 'equal))
+				      (hash-table-test (make-hash-table)) (princ-to-string *tp*))
+				""");
+		assertThat(result.print()).isEqualTo("(EQUALP EQUAL EQUAL \"#<HASH-TABLE :TEST EQUALP :COUNT 1>\")");
+	}
+
+	@Test
+	void anEqualpHashTableStoresTheFoldedKey() {
+		// A bucket decides by equal against the keys already in it, so the fold has to be
+		// the key that is THERE -- maphash therefore hands back the representative, on
+		// all four backends (.kb/hash-tables.md).
+		LispVal result = evalMulti("""
+				(defparameter *tm* (make-hash-table :test 'equalp))
+				(setf (gethash "cs" *tm*) 1)
+				(setf (gethash #\\b *tm*) 2)
+				(let ((acc nil))
+				  (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) *tm*)
+				  (sort acc #'string<))
+				""");
+		assertThat(result.print()).isEqualTo("(\"B\" \"CS\")");
+	}
+
+	@Test
+	void anEmptiedEqualpHashTableKeepsItsTest() {
+		// clrhash empties the table; it does not turn it into an equal one.
+		LispVal result = evalMulti("""
+				(defparameter *tc* (make-hash-table :test 'equalp))
+				(setf (gethash "a" *tc*) 1)
+				(clrhash *tc*)
+				(setf (gethash "b" *tc*) 2)
+				(list (gethash "B" *tc*) (hash-table-test *tc*) (hash-table-count *tc*))
+				""");
+		assertThat(result.print()).isEqualTo("(2 EQUALP 1)");
 	}
 
 	@Test
@@ -13679,6 +13727,50 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(make-array 4 :displaced-to (make-array 3) :displaced-index-offset 2)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("too small");
+		assertThatThrownBy(() -> evalMulti("(make-array 9 :displaced-to \"abc\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("too small");
+	}
+
+	@Test
+	void displacedStringViewAliasesTheTargetString() {
+		// The TARGET decides the shape: displacing onto a string answers a STRING view,
+		// not a bare array view, so it is stringp, prints as a string and writes through
+		// to the target's buffer.
+		assertThat(evalMulti("""
+				(setq s (copy-seq "abcdef"))
+				(setq v (make-array 3 :element-type 'character :displaced-to s
+				                      :displaced-index-offset 1))
+				(setf (char v 0) #\\X)
+				(setf (char s 3) #\\Y)
+				(list (stringp v) (length v) v s (char v 1) (subseq v 1) (string= v "XcY"))
+				""").print()).isEqualTo("(T 3 \"XcY\" \"aXcYef\" #\\c \"cY\" T)");
+	}
+
+	@Test
+	void displacedStringViewChainsAndReportsItsDisplacement() {
+		assertThat(evalMulti("""
+				(setq s (copy-seq "abcdef"))
+				(setq v (make-array 4 :element-type 'character :displaced-to s
+				                      :displaced-index-offset 1))
+				(setq w (make-array 2 :element-type 'character :displaced-to v
+				                      :displaced-index-offset 2))
+				(setf (char w 0) #\\Z)
+				(multiple-value-bind (tgt off) (array-displacement w)
+				  (list w v s (eq tgt v) off))
+				""").print()).isEqualTo("(\"Ze\" \"bcZe\" \"abcZef\" T 2)");
+	}
+
+	@Test
+	void displacedStringViewIsNotAdjustableAndHasNoFillPointer() {
+		assertThat(evalMulti("""
+				(setq s (copy-seq "abcdef"))
+				(setq v (make-array 3 :element-type 'character :displaced-to s))
+				(list (array-has-fill-pointer-p v) (adjustable-array-p v) (array-element-type v))
+				""").print()).isEqualTo("(NIL NIL CHARACTER)");
+		assertThatThrownBy(() -> evalMulti("""
+				(adjust-array (make-array 2 :element-type 'character :displaced-to (copy-seq "abc")) 3)
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("displaced arrays are not supported");
 	}
 
 	// --- Dynamic (special) variable binding ---

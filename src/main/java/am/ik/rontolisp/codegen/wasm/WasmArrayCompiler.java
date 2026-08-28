@@ -728,6 +728,17 @@ final class WasmArrayCompiler {
 	// into productSlot (mSlot is boxed-i31 scratch).
 	private static void emitTargetDimsProduct(WasmLispCompiler.Ctx ctx, int targetSlot, int productSlot, int mSlot) {
 		int dimsBucketsSlot = ctx.allocTemp();
+		// A STRING target has no dims header: its element count is its character count,
+		// and the view built over it is a string VIEW (the target decides the shape).
+		getLocal(ctx, targetSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.IF, 0x40);
+		getLocal(ctx, targetSlot);
+		WasmEmitHelper.emitStrCharCountCall(ctx);
+		boxI31(ctx);
+		setLocal(ctx, productSlot);
+		ctx.writer.write(Instruction.ELSE);
 		getLocal(ctx, targetSlot);
 		castCellGet0(ctx);
 		castConsGet(ctx, 0);
@@ -765,6 +776,7 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.BR, 0);
 		ctx.writer.write(Instruction.END); // loop
 		ctx.writer.write(Instruction.END); // block
+		ctx.writer.write(Instruction.END); // string-vs-array if
 	}
 
 	static void compileAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -1851,15 +1863,26 @@ final class WasmArrayCompiler {
 		castConsGet(ctx, 1);
 		castConsGet(ctx, 1);
 		int dataSlot = setTemp(ctx);
-		getLocal(ctx, dataSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		emitDataSlotIsTarget(ctx, dataSlot);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		getLocal(ctx, dataSlot);
 		ctx.writer.write(Instruction.ELSE);
 		refNull(ctx);
 		ctx.writer.write(Instruction.END);
+	}
+
+	// Leaves 1 when the data slot in dataSlot is a displacement TARGET rather than the
+	// array's own storage: a general array's target CELL, or the STRING a string view
+	// aliases.
+	private static void emitDataSlotIsTarget(WasmLispCompiler.Ctx ctx, int dataSlot) {
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.I32_OR);
 	}
 
 	static void compileDispOffset(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -1875,8 +1898,8 @@ final class WasmArrayCompiler {
 		getLocal(ctx, headerSlot);
 		castConsGet(ctx, 1);
 		castConsGet(ctx, 1);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		int offDataSlot = setTemp(ctx);
+		emitDataSlotIsTarget(ctx, offDataSlot);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		getLocal(ctx, headerSlot);

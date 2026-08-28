@@ -700,10 +700,9 @@ public final class Environment implements Scope {
 
 	private static void registerHashTables(Environment env) {
 		env.defineFunction(LispNames.MAKE_HASH_TABLE, new LispFunction(LispNames.MAKE_HASH_TABLE, args -> {
-			// Accepts :test (eql/equal) and ignores other keywords such as :size. Lookup
-			// is
-			// always structural, so :test is informational only (see LispHashTable).
-			boolean equalTest = false;
+			// Reads :test and ignores other keywords such as :size. Only equalp changes
+			// placement (its keys are folded); every other test places structurally, so
+			// eql and equal are one table here (see LispHashTable, .todo/012).
 			boolean equalpTest = false;
 			for (int i = 0; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw && LispNames.TEST_KEYWORD.equals(kw.name())) {
@@ -713,10 +712,9 @@ public final class Environment implements Scope {
 						default -> "";
 					};
 					equalpTest = LispNames.EQUALP.equals(testName);
-					equalTest = "EQUAL".equals(testName) || equalpTest;
 				}
 			}
-			return new LispHashTable(equalTest, equalpTest);
+			return new LispHashTable(equalpTest);
 		}));
 		env.defineFunction(LispNames.GETHASH, new LispFunction(LispNames.GETHASH, args -> {
 			if (args.size() != 2 && args.size() != 3) {
@@ -767,14 +765,14 @@ public final class Environment implements Scope {
 					requireHashTable(LispNames.HASH_TABLE_REHASH_THRESHOLD, args.get(0));
 					return new LispDouble(1.0);
 				}));
-		// hash-table-test: always 'equal. Lookup is structural on every backend
-		// (the :test argument is recorded but never consulted), so equal is the test
-		// the table actually implements -- reporting the requested one would describe
-		// behavior that does not exist here.
+		// hash-table-test: the test the table actually implements, which is equalp for a
+		// table whose keys are folded and equal for every other -- an eql table still
+		// places structurally (.todo/012), so reporting eql would describe behavior that
+		// does not exist here.
 		env.defineFunction(LispNames.HASH_TABLE_TEST, new LispFunction(LispNames.HASH_TABLE_TEST, args -> {
 			requireArgCount(LispNames.HASH_TABLE_TEST, args, 1);
-			requireHashTable(LispNames.HASH_TABLE_TEST, args.get(0));
-			return new LispSymbol(LispNames.EQUAL);
+			LispHashTable table = requireHashTable(LispNames.HASH_TABLE_TEST, args.get(0));
+			return new LispSymbol(table.equalpTest() ? LispNames.EQUALP : LispNames.EQUAL);
 		}));
 		env.defineFunction(LispNames.HASH_TABLE_P, new LispFunction(LispNames.HASH_TABLE_P, args -> {
 			requireArgCount(LispNames.HASH_TABLE_P, args, 1);
@@ -866,8 +864,24 @@ public final class Environment implements Scope {
 					throw new LispEvalException(LispNames.MAKE_ARRAY
 							+ ": :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
 				}
-				LispArray target = requireArray(LispNames.MAKE_ARRAY, displacedToArg);
 				int offset = displacedOffsetArg == null ? 0 : (int) asLong(displacedOffsetArg);
+				// The TARGET decides the shape, not :element-type: displacing onto a
+				// string answers a string view (a string is its own value type here, so
+				// a LispArray view could not alias its buffer), and the portable
+				// substring idiom -- cl-ppcre's nsubseq -- passes the target's own
+				// (array-element-type sequence) rather than a literal.
+				if (displacedToArg instanceof LispString targetString) {
+					if (dims.length != 1) {
+						throw new LispEvalException(
+								LispNames.MAKE_ARRAY + ": a string :displaced-to target needs a rank-1 view");
+					}
+					if (offset < 0 || total + offset > targetString.capacity()) {
+						throw new LispEvalException(
+								LispNames.MAKE_ARRAY + ": :displaced-to string is too small for the requested view");
+					}
+					return new LispString(targetString, offset, total);
+				}
+				LispArray target = requireArray(LispNames.MAKE_ARRAY, displacedToArg);
 				if (offset < 0 || total + offset > target.totalSize()) {
 					throw new LispEvalException(
 							LispNames.MAKE_ARRAY + ": :displaced-to array is too small for the requested view");
@@ -1247,6 +1261,9 @@ public final class Environment implements Scope {
 				if (strDims.length != 1) {
 					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": a string is rank 1");
 				}
+				if (str.displacedTo() != null) {
+					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
+				}
 				str.adjustCapacity(strDims[0]);
 				return str;
 			}
@@ -1288,6 +1305,9 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector) {
 				return LispNil.INSTANCE;
 			}
+			if (args.get(0) instanceof LispString str) {
+				return str.displacedTo() == null ? LispNil.INSTANCE : str.displacedTo();
+			}
 			LispArray array = requireArray(LispNames.ARRAY_DISPLACEMENT, args.get(0));
 			return array.displacedTo() == null ? LispNil.INSTANCE : array.displacedTo();
 		});
@@ -1299,6 +1319,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ARRAY_DISP_OFFSET, args, 1);
 			if (args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector) {
 				return new LispInteger(0);
+			}
+			if (args.get(0) instanceof LispString str) {
+				return new LispInteger(str.displacedOffset());
 			}
 			return new LispInteger(requireArray(LispNames.ARRAY_DISP_OFFSET, args.get(0)).displacedOffset());
 		}));

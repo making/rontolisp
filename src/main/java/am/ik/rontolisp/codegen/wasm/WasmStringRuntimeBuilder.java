@@ -457,14 +457,26 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		emitFalseUnless(w);
-		// header.cdr.cdr (the data slot) is an element array? (a displaced array's data
-		// slot holds the target TYPE_CELL)
-		emitConsField(w, header, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(1);
+		// header.cdr.cdr is the data slot. A STRING there is a string VIEW -- the
+		// make-array :displaced-to shape over a string -- and so is a view whose target
+		// (a TYPE_CELL) is itself one, which is the same question one hop along.
+		emitDataSlot(w, header);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		emitDataSlot(w, header);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.IF, 0x40);
+		emitDataSlot(w, header);
+		WasmEmitHelper.emitCharvecPCall(w);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// otherwise the data slot must be the element array
+		emitDataSlot(w, header);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		emitFalseUnless(w);
@@ -498,6 +510,18 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END); // result block
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	// Pushes the data slot (header.cdr.cdr) of the array header in headerSlot: the
+	// element buckets, the target CELL of an array view, or the STRING a string view
+	// aliases.
+	private static void emitDataSlot(WasmWriter w, int headerSlot) {
+		emitConsField(w, headerSlot, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 	}
 
 	// Consumes the i32 test on top of the stack: when it is 0, leaves 0 as the enclosing
@@ -641,7 +665,15 @@ final class WasmStringRuntimeBuilder {
 		get(w, n);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
-		// code = data[i].code (the i32 code point stored in the TYPE_CHAR at slot i)
+		// code = data[i].code (the i32 code point stored in the TYPE_CHAR at slot i).
+		// A string VIEW owns no data slot, so its element comes from the shared
+		// displacement walk instead -- one ref.test per character, against the whole
+		// UTF-8 encode below.
+		get(w, data);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
 		get(w, data);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
@@ -653,6 +685,17 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.writeUnsignedLeb128(0);
+		w.write(Instruction.ELSE);
+		get(w, header);
+		get(w, i);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_GET);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
 		set(w, code);
 		emitUtf8Encode(w, code, cur);
 		get(w, i);

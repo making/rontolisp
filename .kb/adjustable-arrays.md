@@ -34,8 +34,8 @@ adjustable flag). On the COMPILED backends it is the GENERAL array
 representation holding character elements, marked "character vector" —
 JVM: a **length-4** slot-0 header `Object[]{dims, fp, adj, null}` built by
 `_charVecMake` (displacement detection tightened to `header.length > 4`,
-i.e. displaced ⇔ length 5, at `emitResolveDisplacement` /
-`_arrayDispTarget` / `_arrayDispOffset`); WASM: the **meta offset i31 == 1**
+i.e. displaced ⇔ length 5, or 7 for the string VIEW added later, at
+`emitResolveDisplacement` / `_arrayDispTarget` / `_arrayDispOffset`); WASM: the **meta offset i31 == 1**
 (an ordinary array's is 0; a displaced array's data slot is a cell, so the
 marker is unambiguous, and `%array-disp-offset` now reports the offset only
 when the data slot IS a cell). The whole fill-pointer surface
@@ -469,17 +469,6 @@ each hop, so a view keeps aliasing an adjustable target after
 `adjust-displaced-arrays-cross-backend` ci-spec case). Rank may differ from the
 target's (vector view over a matrix row).
 
-**A STRING cannot be a displacement target** on any backend: a string is its own
-value type here (`.kb/characters-code-points.md`), not a `LispArray`, so
-`(make-array n :element-type 'character :displaced-to s)` signals
-`MAKE-ARRAY expects an array`. That is the idiom a portable library takes a
-substring with -- cl-ppcre's `nsubseq`, and with it every `regex-replace` with a
-FUNCTION replacement and every `:sharedp t` entry point -- so `eval/ClPpcreSharedSubseq`
-rewrites that one definition to `subseq` (`.kb/asdf.md`). Closing it for good means
-a string VIEW on all four backends, which is `.todo/544`; answering a COPY from
-`make-array` is explicitly not the fix, since it would make every other library's
-displacement silently stop aliasing.
-
 `array-displacement` returns target + offset as TWO values via the syntactic
 multiple-value tier: `isMvProducerForm`/`lowerMvProducer` recognize
 `(array-displacement x)` and read the two internal accessors
@@ -517,6 +506,86 @@ Interpreter/JVM errors carry `fn: message` text (e.g. "vector-pop: empty
 vector"); WASM traps (`unreachable`) on the same conditions. Compiled `list`
 argument evaluation is right-to-left (.todo/014), so tests/ci-spec sequence
 side-effecting pushes/pops through separate bindings.
+
+## Displacing a STRING (`.todo/544`, 2026-08-28)
+
+`(make-array n :element-type 'character :displaced-to s :displaced-index-offset k)`
+where `s` is a STRING answers a **string view**: `stringp`, `length` n, the
+target's characters from k on, printing/`string=`/`subseq`/`char` all seeing the
+slice, `array-displacement` reporting the target and k -- and NO copy. Views
+chain, and each hop is resolved at access time like an array view's.
+
+**The TARGET decides the shape, not `:element-type`.** The portable substring
+idiom -- cl-ppcre's `nsubseq`, and with it every `regex-replace` with a FUNCTION
+replacement and every `:sharedp t` entry point -- passes the target's own
+`(array-element-type sequence)`, which is a RUNTIME value, so a rule keyed on
+the element type would not fire for the one caller that matters. Both compilers
+therefore keep the `:displaced-to` branch AHEAD of the runtime-element-type
+lowering, and the shape decision happens at run time inside the displacement
+helper. That whole surface signalled `MAKE-ARRAY expects an array` until this,
+and `eval/ClPpcreSharedSubseq` rewrote `nsubseq` to copy; the rewrite is retired
+and the verbatim definition runs on all four backends (`ClPpcreE2eTest` exercises
+it). Answering a COPY from `make-array` was explicitly not the fix, since it
+would make every other library's displacement silently stop aliasing.
+
+**Writing through a view reaches the target's storage where the backend has
+one.** The interpreter's strings are all mutable, so a write always writes
+through. On the compiled backends only a mutable CHARACTER VECTOR is; a string
+that is a literal or a `copy-seq`/`subseq`/`concatenate` result is an immutable
+value (a Java `String` / a `TYPE_STRING` whose bytes never change,
+`.kb/string-write-runtime.md`) that no write can reach. Such a view is still
+built without a copy and READS through it; the first write PROMOTES -- the
+view's target slot is replaced by a character vector holding the same
+characters, and the store lands there. The view is a mutable string from then
+on and `array-displacement` reports the promoted vector; the original string
+value is untouched, which is exactly what `(setf (char s i) c)` on that same
+string already does (it re-binds the variable, `LispMacroExpander
+.expandScharSetFunctional`). So the ONE cross-backend divergence a string view
+has is the pre-existing immutable-string one, held with its measurements in
+`.todo/559`; pinned deliberately by
+`compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` on both
+compiled backends, so a fix there fails these tests rather than passing
+silently.
+
+Per backend:
+
+- **Interpreter** -- `LispString` gained `displacedTo`/`displacedOffset`/
+  `viewLength` beside the fill-pointer fields; `storage()`/`base()` walk the
+  chain and every read/write (`value`, `charAt`, `setCharAt`, `capacity`,
+  `length`, `replaceInPlace`) goes through them. A view has no fill pointer and
+  is not adjustable, so `setFillPointer`/`vectorPushExtend`/`adjustCapacity`
+  reject it. `Environment`'s `make-array` returns the view when the
+  `:displaced-to` argument is a `LispString` (rank-1 only, bounds-checked
+  against the target's capacity), and `%array-disp-target`/`%array-disp-offset`
+  accept a `LispString`.
+- **JVM** -- the header-LENGTH tag gained **7 = displaced string view**
+  (`{dims, null, null, target, offsetLong, null, null}`), chosen at view
+  creation by `_arrayMakeDisplaced` when the target is a `String` or an array
+  whose own header is a character vector (4) or a string view (7); a String
+  target is bounds-checked with `_scount`. `stringp`'s length-4 arm accepts 7
+  too, and `_strv` renders a 7-header by resolving the chain: a character-vector
+  target renders element by element from the resolved base, a String target in
+  ONE `substring` between two `_cpoff` translations. `emitResolveDisplacement`
+  ends the walk on a non-ArrayList target with the offset already folded in, so
+  one test (`header.length > 4 && header[3] != null`) tells `_rmGet`/`_rmSet`
+  they landed on a string: `_rmGet` reads `_cpoff` + `codePointAt` and boxes
+  `int[]{cp}`, `_rmSet` promotes through the new `_strToCharVec` helper (in
+  `METHOD_NAMES`, so it lives and dies with the array gate).
+- **WASM** -- no new heap type and no new `FUNC_*` index. A string view stores
+  the TARGET STRING in the header's data slot, where an array view stores the
+  target cell, which makes the shape self-describing. `WasmArrayRuntimeBuilder
+  .emitResolve` now leaves the final header in its cursor local (rather than
+  pushing the buckets array) and folds in this view's own offset when the data
+  slot is a `TYPE_STRING`; `_arr_get` then reads it with `_str_char_at` and
+  boxes a `TYPE_CHAR`, and `_arr_set` builds the promoted character-vector cell
+  INLINE and `struct.set`s it into the `(meta . data)` cons. Offsets stay in
+  CHARACTER units on both sides, so the byte-offset question the todo raised
+  never arises -- the three shared accessors already translate. `_charvec_p`
+  answers true for a string data slot and recurses one hop for a cell one;
+  `_charvec_to_str` reads the element through `_arr_get` when the data slot is
+  not a buckets array (one `ref.test` per character against the whole UTF-8
+  encode); `%array-disp-target`/`%array-disp-offset` treat a string data slot as
+  a target.
 
 ## Representation
 
@@ -603,7 +672,7 @@ SBCL's is (~3 -> ~12 ns), taking `.todo/517`'s top-level `aref` row from 1.22 s
 to 0.51 s against SBCL's 0.26-0.29. The mechanics:
 
 - The tag is the header LENGTH: 3 = ordinary boxed, 4 = character vector,
-  5 = displaced, **6 = packed**. `emitResolveDisplacement`'s loop already ends
+  5 = displaced, **6 = packed**, 7 = displaced STRING VIEW. `emitResolveDisplacement`'s loop already ends
   on the null `header[3]`, so a packed header never reads as a displacement,
   and `_strv`/`stringp`'s `length == 4` test never sees it as a character
   vector. `_arrayDispOffset` gained a `header[3] != null` test (length > 4
@@ -643,7 +712,8 @@ cost is size-INdependent dispatch, a different defect -- `.todo/517`'s residual
 note).
 
 A DISPLACED array carries a 5-element header
-`Object[]{dims, null, null, target, offsetLong}` and holds NO data slots
+`Object[]{dims, null, null, target, offsetLong}` (7 elements when the target is
+a string, see "Displacing a STRING") and holds NO data slots
 (`_arrayMakeDisplaced(dims, target, offset)`, bounds-checked against the
 target's dims product). Every data access now funnels through the two
 displacement-aware primitives `_rmGet(list, idx1based)` / `_rmSet(...)`: a loop
@@ -736,16 +806,21 @@ its default unknown-operation error.
   `setfFillPointer`, `simpleVectorHasNoFillPointer`,
   `fillPointerOnNonFillPointerVectorSignals`, `clUtilitiesCopyArrayRunsOnInterpreter`,
   `adjustArray*`, `displacedArray*`, `arrayDisplacementReturnsTargetAndOffset`,
-  `makeArrayDisplacedErrors`.
+  `makeArrayDisplacedErrors`, `displacedStringView*`.
 - JVM: `JvmLispCompilerTest.compileFillPointer*` / `compileVectorP*` /
   `compileSetfFillPointer` / `compileSimpleVectorHasNoFillPointer` /
   `compileFillPointerFirstClassWrappers` / `compileClUtilitiesCopyArray` /
   `compileAdjustArray` / `compileDisplacedArrays` /
   `compileArrayDisplacementValues` /
-  `compileMakeArrayDisplacedKeywordComboIsACompileError`.
+  `compileMakeArrayDisplacedKeywordComboIsACompileError` /
+  `compileDisplacedStringView` /
+  `compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite`.
 - WASM: the same set in `WasmLispCompilerIntegrationTest`.
 - E2E: ci-spec `fill-pointer-arrays-cross-backend` +
-  `adjust-displaced-arrays-cross-backend` (all four backends).
+  `adjust-displaced-arrays-cross-backend` +
+  `displaced-string-views-cross-backend` (all four backends), and the
+  shared-substring lines of `ClPpcreE2eTest`'s exercise (the verbatim
+  `nsubseq`).
 - Docs: `reference/functions/{fill-pointer,array-has-fill-pointer-p,
   adjustable-array-p,array-element-type,vector-push,vector-pop,
   vector-push-extend,adjust-array,array-displacement}.md` (en+ja) + the

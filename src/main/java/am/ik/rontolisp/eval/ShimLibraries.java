@@ -284,9 +284,6 @@ public final class ShimLibraries {
 		else if (QuriEtldTables.SYSTEM.equals(systemName)) {
 			rewritten = QuriEtldTables.rewrite(componentFile, source, baseDir);
 		}
-		else if (ClPpcreSharedSubseq.SYSTEM.equals(systemName)) {
-			rewritten = ClPpcreSharedSubseq.rewrite(componentFile, source);
-		}
 		return rewritten == null ? source : rewritten;
 	}
 

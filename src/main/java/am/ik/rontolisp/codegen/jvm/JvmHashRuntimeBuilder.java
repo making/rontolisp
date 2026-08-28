@@ -53,6 +53,16 @@ import am.ik.rontolisp.runtime.RontoHashTable;
  * <li>{@code _hashValues(table)} -&gt; the entry pairs as an {@code Object[]} (for
  * {@code maphash})</li>
  * </ul>
+ *
+ * <p>
+ * Three more ride on a gate of their own, the program writing {@code :test 'equalp}
+ * somewhere ({@code .kb/hash-tables.md}): {@code _hashMakeP()} marks a table as one whose
+ * keys are FOLDED, {@code _hashEqp(table)} answers that mark (what the printer and
+ * {@code hash-table-test} read), and {@code _hashKey(key, table)} folds a key through the
+ * travelling {@code RontoHashTable.equalpKey} when the table asks for it -- which
+ * {@code _hashGet}/{@code _hashPut}/{@code _hashRem} then do before they place or look
+ * up. Placement stays ONE structural table: {@code equalp} on two values is {@code equal}
+ * on their folds.
  */
 final class JvmHashRuntimeBuilder {
 
@@ -121,13 +131,43 @@ final class JvmHashRuntimeBuilder {
 
 	static final String VALUES_DESC = "(Ljava/lang/Object;)[Ljava/lang/Object;";
 
+	static final String MAKE_EQUALP = "_hashMakeP";
+
+	static final String MAKE_EQUALP_DESC = "()Ljava/lang/Object;";
+
+	static final String KEY = "_hashKey";
+
+	static final String KEY_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String EQUALP_P = "_hashEqp";
+
+	static final String EQUALP_P_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	/**
-	 * Every method name {@link #build} emits, i.e. exactly the group the hash gate
-	 * switches on and off; {@code JvmLispCompiler} matches an unresolved own-class call
-	 * against it to recognize an under-predicted gate. Pinned by
-	 * {@code JvmRuntimeGroupNamesTest}.
+	 * The travelling class the {@code equalp} fold is written in -- plain Java over the
+	 * JVM value model, which a bytecode transcription of the same walk would only make
+	 * harder to keep in step with the interpreter's. It goes BESIDE a compiled program
+	 * that makes an {@code equalp} table, like the handle and served-request runtimes
+	 * ({@code .kb/jvm-export.md}, "What travels"); every other program still compiles to
+	 * exactly one file.
+	 */
+	static final List<String> RUNTIME_CLASS_FILES = List.of("am/ik/rontolisp/runtime/RontoHashTable.class");
+
+	/**
+	 * Every method name {@link #build} emits for the {@code equal} placement every table
+	 * shares, i.e. exactly the group the hash gate switches on and off;
+	 * {@code JvmLispCompiler} matches an unresolved own-class call against it to
+	 * recognize an under-predicted gate. Pinned by {@code JvmRuntimeGroupNamesTest}.
 	 */
 	static final Set<String> METHOD_NAMES = Set.of(HASH, MAKE, ORD, GET, PUT, REM, CLR, COUNT, SIZE, P, VALUES);
+
+	/**
+	 * The three helpers the {@code equalp} fold adds on top, emitted only for a program
+	 * that writes {@code :test 'equalp}. Its own roster because its own gate switches it:
+	 * an unresolved call to one of these says the FOLD gate under-predicted, not the hash
+	 * gate.
+	 */
+	static final Set<String> EQUALP_METHOD_NAMES = Set.of(MAKE_EQUALP, KEY, EQUALP_P);
 
 	/** A hash-table helper method body ready to be emitted into the generated class. */
 	record HashMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -151,11 +191,14 @@ final class JvmHashRuntimeBuilder {
 	 * string with the same content, which is what {@code _equal} compares it as
 	 * @param stringArrayClass {@code String[]}, the interned layout of an instance, or
 	 * null when the program can build none
+	 * @param equalpFold whether the program writes {@code :test 'equalp} somewhere, in
+	 * which case the three fold helpers are emitted and the get/put/remove trio runs
+	 * every key through {@link #KEY} first
 	 * @return the helper methods
 	 */
 	static List<HashMethod> build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, MethodrefConstant longValueOf, MethodrefConstant equalMethod,
-			@Nullable MethodrefConstant strvMethod, @Nullable ClassConstant stringArrayClass) {
+			@Nullable MethodrefConstant strvMethod, @Nullable ClassConstant stringArrayClass, boolean equalpFold) {
 		ClassConstant mapClass = cp.addClass(cp.addUtf8(MAP_CLASS));
 		ClassConstant listClass = cp.addClass(cp.addUtf8(LIST_CLASS));
 		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
@@ -205,6 +248,11 @@ final class JvmHashRuntimeBuilder {
 		StringConstant orderKey = cp.addString(ORDER_KEY);
 		// The compiled representation of the boolean t is the symbol "T" (a bare String).
 		StringConstant trueStr = cp.addString("T");
+		// The equalp fold: the key each of get/put/remove places by, and the marker the
+		// table carries. Null in a program that writes no equalp table, which is then
+		// emitted exactly as it was before the fold existed.
+		final @Nullable MethodrefConstant keyRef = equalpFold
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(KEY), cp.addUtf8(KEY_DESC))) : null;
 
 		List<HashMethod> methods = new ArrayList<>();
 		methods.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass,
@@ -237,15 +285,28 @@ final class JvmHashRuntimeBuilder {
 		methods.add(new HashMethod(cp.addUtf8(ORD), cp.addUtf8(ORD_DESC), 2, 1, ord.code));
 
 		methods.add(buildGet(cp, mapClass, listClass, objectArrayClass, mapGet, listGet, listSize, integerValueOf,
-				hashRef, equalMethod));
+				hashRef, equalMethod, keyRef));
 		methods.add(buildPut(cp, mapClass, listClass, objectClass, objectArrayClass, mapGet, mapPut, listInitCapacity,
-				listAdd, listGet, listSize, integerValueOf, hashRef, ordRef, equalMethod));
+				listAdd, listGet, listSize, integerValueOf, hashRef, ordRef, equalMethod, keyRef));
 		methods.add(buildRem(cp, mapClass, listClass, objectArrayClass, mapGet, mapRemove, listGet, listSize,
-				listRemoveAt, listRemoveObj, integerValueOf, hashRef, ordRef, equalMethod, trueStr));
+				listRemoveAt, listRemoveObj, integerValueOf, hashRef, ordRef, equalMethod, trueStr, keyRef));
+
+		if (equalpFold) {
+			methods.addAll(buildEqualpFold(cp, thisClass, mapClass, mapGet, mapPut, trueStr));
+		}
 
 		// _hashClr(table): the order list is emptied and re-hung, so every bucket goes
-		// with the clear and the table keeps its identity
+		// with the clear and the table keeps its identity -- and, in a program that
+		// folds, so does its TEST: the marker is read before the clear and hung back
+		// beside the order list, or an emptied equalp table would place structurally
+		// from there on.
 		JvmAsm clr = new JvmAsm();
+		if (equalpFold) {
+			clr.aload(0);
+			clr.invokestatic(
+					cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(EQUALP_P), cp.addUtf8(EQUALP_P_DESC))));
+			clr.astore(2);
+		}
 		clr.aload(0);
 		clr.invokestatic(ordRef);
 		clr.astore(1);
@@ -260,9 +321,22 @@ final class JvmHashRuntimeBuilder {
 		clr.aload(1);
 		clr.invokevirtual(mapPut);
 		clr.pop();
+		if (equalpFold) {
+			int notFolding = clr.label();
+			clr.aload(2);
+			clr.branch(Opcode.IFNULL, notFolding);
+			clr.aload(0);
+			clr.checkcast(mapClass);
+			clr.ldcString(cp.addString(RontoHashTable.EQUALP_KEY));
+			clr.aload(2);
+			clr.invokevirtual(mapPut);
+			clr.pop();
+			clr.bind(notFolding);
+		}
 		clr.aload(0);
 		clr.areturn();
-		methods.add(new HashMethod(cp.addUtf8(CLR), cp.addUtf8(CLR_DESC), 3, 2, clr.code));
+		methods.add(new HashMethod(cp.addUtf8(CLR), cp.addUtf8(CLR_DESC), equalpFold ? 4 : 3, equalpFold ? 3 : 2,
+				clr.code));
 
 		// _hashCount(table): return Long.valueOf(_hashOrd(table).size())
 		JvmAsm count = new JvmAsm();
@@ -473,8 +547,9 @@ final class JvmHashRuntimeBuilder {
 	private static HashMethod buildGet(ConstantPool cp, ClassConstant mapClass, ClassConstant listClass,
 			ClassConstant objectArrayClass, MethodrefConstant mapGet, MethodrefConstant listGet,
 			MethodrefConstant listSize, MethodrefConstant integerValueOf, MethodrefConstant hashRef,
-			MethodrefConstant equalMethod) {
+			MethodrefConstant equalMethod, @Nullable MethodrefConstant keyRef) {
 		JvmAsm a = new JvmAsm();
+		emitFoldKey(a, keyRef);
 		a.aload(1);
 		a.checkcast(mapClass);
 		emitKeyHash(a, hashRef, integerValueOf);
@@ -529,8 +604,9 @@ final class JvmHashRuntimeBuilder {
 			ClassConstant objectClass, ClassConstant objectArrayClass, MethodrefConstant mapGet,
 			MethodrefConstant mapPut, MethodrefConstant listInit, MethodrefConstant listAdd, MethodrefConstant listGet,
 			MethodrefConstant listSize, MethodrefConstant integerValueOf, MethodrefConstant hashRef,
-			MethodrefConstant ordRef, MethodrefConstant equalMethod) {
+			MethodrefConstant ordRef, MethodrefConstant equalMethod, @Nullable MethodrefConstant keyRef) {
 		JvmAsm a = new JvmAsm();
+		emitFoldKey(a, keyRef);
 		emitKeyHash(a, hashRef, integerValueOf);
 		a.astore(6);
 		a.aload(1);
@@ -622,8 +698,10 @@ final class JvmHashRuntimeBuilder {
 			ClassConstant objectArrayClass, MethodrefConstant mapGet, MethodrefConstant mapRemove,
 			MethodrefConstant listGet, MethodrefConstant listSize, MethodrefConstant listRemoveAt,
 			MethodrefConstant listRemoveObj, MethodrefConstant integerValueOf, MethodrefConstant hashRef,
-			MethodrefConstant ordRef, MethodrefConstant equalMethod, StringConstant trueStr) {
+			MethodrefConstant ordRef, MethodrefConstant equalMethod, StringConstant trueStr,
+			@Nullable MethodrefConstant keyRef) {
 		JvmAsm a = new JvmAsm();
+		emitFoldKey(a, keyRef);
 		emitKeyHash(a, hashRef, integerValueOf);
 		a.astore(5);
 		a.aload(1);
@@ -687,6 +765,84 @@ final class JvmHashRuntimeBuilder {
 		a.aconstNull();
 		a.areturn();
 		return new HashMethod(cp.addUtf8(REM), cp.addUtf8(REM_DESC), 3, 6, a.code);
+	}
+
+	// The equalp trio, emitted only for a program that writes :test 'equalp.
+	//
+	// _hashMakeP() marks a fresh table with the reserved EQUALP_KEY (a String key, so it
+	// collides with no Integer bucket key, exactly like ORDER_KEY); _hashEqp(table)
+	// answers that marker, which is what the printer and hash-table-test read; and
+	// _hashKey(key, table) folds a key through the travelling RontoHashTable.equalpKey
+	// when the table carries the marker. Placement stays ONE structural table: equalp on
+	// two values is equal on their folds, so _hash and _equal are untouched.
+	private static List<HashMethod> buildEqualpFold(ConstantPool cp, ClassConstant thisClass, ClassConstant mapClass,
+			MethodrefConstant mapGet, MethodrefConstant mapPut, StringConstant trueStr) {
+		StringConstant equalpKey = cp.addString(RontoHashTable.EQUALP_KEY);
+		MethodrefConstant makeRef = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
+		MethodrefConstant equalpPRef = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(EQUALP_P), cp.addUtf8(EQUALP_P_DESC)));
+		MethodrefConstant foldRef = cp.addMethodref(
+				cp.addClass(cp.addUtf8(RontoHashTable.class.getName().replace('.', '/'))),
+				cp.addNameAndType(cp.addUtf8("equalpKey"), cp.addUtf8("(Ljava/lang/Object;I)Ljava/lang/Object;")));
+
+		List<HashMethod> methods = new ArrayList<>();
+
+		JvmAsm make = new JvmAsm();
+		make.invokestatic(makeRef);
+		make.astore(0);
+		make.aload(0);
+		make.checkcast(mapClass);
+		make.ldcString(equalpKey);
+		make.ldcString(trueStr);
+		make.invokevirtual(mapPut);
+		make.pop();
+		make.aload(0);
+		make.areturn();
+		methods.add(new HashMethod(cp.addUtf8(MAKE_EQUALP), cp.addUtf8(MAKE_EQUALP_DESC), 4, 1, make.code));
+
+		JvmAsm eqp = new JvmAsm();
+		eqp.aload(0);
+		eqp.instanceOf(mapClass);
+		int notTable = eqp.label();
+		eqp.branch(Opcode.IFEQ, notTable);
+		eqp.aload(0);
+		eqp.checkcast(mapClass);
+		eqp.ldcString(equalpKey);
+		eqp.invokevirtual(mapGet);
+		eqp.areturn();
+		eqp.bind(notTable);
+		eqp.aconstNull();
+		eqp.areturn();
+		methods.add(new HashMethod(cp.addUtf8(EQUALP_P), cp.addUtf8(EQUALP_P_DESC), 2, 1, eqp.code));
+
+		JvmAsm key = new JvmAsm();
+		key.aload(1);
+		key.invokestatic(equalpPRef);
+		int unfolded = key.label();
+		key.branch(Opcode.IFNULL, unfolded);
+		key.aload(0);
+		key.iconst(RontoHashTable.FOLD_DEPTH_CAP);
+		key.invokestatic(foldRef);
+		key.areturn();
+		key.bind(unfolded);
+		key.aload(0);
+		key.areturn();
+		methods.add(new HashMethod(cp.addUtf8(KEY), cp.addUtf8(KEY_DESC), 2, 2, key.code));
+
+		return methods;
+	}
+
+	// Replaces local 0 (the key) with its equalp fold when the table in local 1 asks for
+	// one. A no-op -- not one instruction -- in a program with no equalp table.
+	private static void emitFoldKey(JvmAsm a, @Nullable MethodrefConstant keyRef) {
+		if (keyRef == null) {
+			return;
+		}
+		a.aload(0);
+		a.aload(1);
+		a.invokestatic(keyRef);
+		a.astore(0);
 	}
 
 	// Pushes Integer.valueOf(_hash(local 0, HASH_DEPTH_CAP)) -- the bucket key.

@@ -117,8 +117,9 @@ else's artifact, and the mechanism is general -- not the handle's alone:
 | `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector` / `:float-matrix` export | `RontoFloatArray` + `RontoBoundary`, the handle type and its marshalling seam |
 | `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / the `%http-server-start` seam | `RontoHttpServer` (the embedded server, shared with the interpreter), `RontoHttpClack` (the per-request Clack glue) and the two declarations they read, `RontoClackEnv` + `RontoHashTable` (`.kb/http-server.md`) |
 | `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` output, or the Maven plugin's `<servlet>true</servlet>` (in ADDITION to the served list either way) | `RontoHttpServlet` + `RontoHttpServletInitializer`, the Servlet transport (`.kb/http-server.md`, "The fifth transport") -- the one sanctioned `jakarta.servlet` import, satisfied by definition (a war runs in a servlet container), `provided` scope in the pom, never in any other artifact |
+| `JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES` | a `(make-hash-table :test 'equalp)` in the source | `RontoHashTable` again, this time for `equalpKey` -- the `equalp` key fold, written in plain Java over the JVM value model rather than transcribed into bytecode (`.kb/hash-tables.md`) |
 
-Both go through `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` ->
+They all go through `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` ->
 `RontoLispCli` (beside a `-o X.class`, INSIDE a `-o X.jar`) and `LispSourceSet` (the Maven
 plugin, into `target/classes` before javac would run); `resource-config.json` matches the
 whole package by pattern so the native binary carries them too. **A served program is

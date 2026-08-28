@@ -13598,6 +13598,54 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	// An equalp table places its keys by the equalp FOLD -- upper case for a string and a
+	// character, the integer it equals for a float, element-wise for a cons -- so the
+	// four backends agree on which keys are one key (.kb/hash-tables.md). The table's
+	// test rides in the low bit of the header count, so the count read back past it, the
+	// clrhash that keeps the test, and hash-table-p all still answer.
+	void compileEqualpHashTableFoldsItsKeys() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash "CS" h) 1)
+				  (print (list (gethash "Cs" h) (gethash "cs" h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash 1 h) :one)
+				  (setf (gethash #\\a h) :a)
+				  (setf (gethash (list "x" 2) h) :pair)
+				  (print (list (gethash 1.0 h) (gethash 2/2 h) (gethash #\\A h)
+				               (gethash (list "X" 2.0) h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash "CS" h) 1)
+				  (print (list (gethash "Cs" h) (hash-table-count h) (hash-table-p h))))
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash "a" h) 1)
+				  (remhash "A" h)
+				  (clrhash h)
+				  (setf (gethash "b" h) 2)
+				  (print (list (gethash "B" h) (hash-table-count h) (hash-table-test h))))
+				(let ((h (make-hash-table :test 'equalp)) (acc nil))
+				  (setf (gethash "cs" h) 1)
+				  (maphash (lambda (k v) (setq acc (cons k acc))) h)
+				  (print acc))
+				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1 T)\n(2 1 EQUALP)\n(\"CS\")");
+	}
+
+	@Test
+	// The printed :TEST field and hash-table-test report the test lookup implements, now
+	// that a table knows whether it folds.
+	void compileEqualpHashTablePrintsAndReportsItsTest() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((p (make-hash-table :test 'equalp)) (q (make-hash-table :test 'equal)))
+				  (setf (gethash "a" p) 1)
+				  (print (list (hash-table-test p) (hash-table-test q)))
+				  (princ p)
+				  (terpri)
+				  (princ q))
+				"""))
+			.isEqualTo("(EQUALP EQUAL)\n#<HASH-TABLE :TEST EQUALP :COUNT 1>\n#<HASH-TABLE :TEST EQUAL :COUNT 0>");
+	}
+
+	@Test
 	void compileHashTableMaphashRemhashAndClrhash() throws Exception {
 		assertThat(compileAndRun("""
 				(defun sum-values (h)
@@ -14368,6 +14416,55 @@ class WasmLispCompilerIntegrationTest {
 				(multiple-value-bind (tgt off) (array-displacement *base*)
 				  (print (list tgt off)))
 				""")).isEqualTo("(T 3)\n(NIL 0)");
+	}
+
+	@Test
+	void compileDisplacedStringView() throws Exception {
+		// Displacing onto a STRING answers a string VIEW, not a bare array view: it is
+		// stringp, prints and measures as a string, and aliases the target's characters
+		// in both directions -- including a view of a view.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-string 6 :initial-element #\\a))
+				(dotimes (i 6) (setf (char *s* i) (char "abcdef" i)))
+				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
+				                                :displaced-index-offset 1))
+				(print (list (stringp *v*) (length *v*) *v* (char *v* 0) (subseq *v* 1)))
+				(setf (char *v* 0) #\\X)
+				(print (list *v* *s*))
+				(setf (char *s* 3) #\\Y)
+				(print (list *v* *s* (string= *v* "XcY")))
+				(multiple-value-bind (tgt off) (array-displacement *v*)
+				  (print (list (eq tgt *s*) off)))
+				(defparameter *w* (make-array 2 :element-type 'character :displaced-to *v*
+				                                :displaced-index-offset 1))
+				(setf (char *w* 1) #\\Q)
+				(print (list *w* *v* *s*))
+				""")).isEqualTo("""
+				(T 3 "bcd" #\\b "cd")
+				("Xcd" "aXcdef")
+				("XcY" "aXcYef" T)
+				(T 1)
+				("cQ" "XcQ" "aXcQef")""");
+	}
+
+	@Test
+	void compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite() throws Exception {
+		// A string this backend represents as an immutable TYPE_STRING (anything but a
+		// character vector -- here a copy-seq result) can be VIEWED without a copy, and
+		// reads alias it. A write cannot reach it (a string's bytes never change once
+		// built), so the view promotes its target to a character vector once and
+		// mutates that: the view is a mutable string from then on, and the original
+		// value is untouched -- which is what (setf (char s i) c) on that same string
+		// already does. The interpreter, whose strings are all mutable, writes through
+		// to the target instead (`.todo/559`).
+		assertThat(compileAndRun("""
+				(defparameter *s* (copy-seq "abcdef"))
+				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
+				                                :displaced-index-offset 1))
+				(print (list *v* (length *v*) (string= *v* "bcd")))
+				(setf (char *v* 0) #\\X)
+				(print (list *v* *s*))
+				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"abcdef\")");
 	}
 
 	@Test
