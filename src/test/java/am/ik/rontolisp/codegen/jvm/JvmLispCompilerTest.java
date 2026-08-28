@@ -13325,6 +13325,35 @@ class JvmLispCompilerTest {
 			  (print (1- (* k k))))
 			(print (ldb (byte 8 8) 305419896))
 			(print (loop for i from 1 to 10 sum i))
+			(let ((a (make-array 5)))
+			  (dotimes (i 5) (setf (aref a i) (* i 7)))
+			  (print (+ (aref a 3) 1))
+			  (print (+ (aref a (random 1)) 100))
+			  (let ((k 4)) (print (+ (aref a k) 2)))
+			  (handler-case (print (+ (aref a 9) 1)) (error (e) (print 'aref-oob)))
+			  (handler-case (print (+ (aref a 1.0) 1)) (error (e) (print 'aref-float))))
+			(let ((a (make-array 3)))
+			  (handler-case (print (+ (aref a 0) 1)) (error (e) (print 'aref-nil))))
+			(let ((a (make-array 3)))
+			  (setf (aref a 0) "s")
+			  (setf (aref a 1) 5)
+			  (print (+ (aref a 1) 1)))
+			(let ((base (make-array 5)))
+			  (dotimes (i 5) (setf (aref base i) (* i 3)))
+			  (let ((d (make-array 2 :displaced-to base :displaced-index-offset 1)))
+			    (print (+ (aref d 1) 0))))
+			(handler-case (print (+ 1 (aref "abc" 1))) (error (e) (print 'aref-string)))
+			(print (+ 100 (random 1)))
+			(let ((lim 1)) (print (+ 200 (random lim))))
+			(let ((lim 1.0)) (print (floatp (random lim))))
+			(let ((r (random 1000))) (print (and (>= r 0) (< r 1000))))
+			(print (* 4611686018427387904 (+ 2 (random 1))))
+			(let ((v (make-array 4 :element-type '(unsigned-byte 8))))
+			  (dotimes (i 4) (setf (aref v i) (* i 3)))
+			  (print (+ (aref v (random 1)) 50)))
+			(defun fused-dif (x) (- x x))
+			(let ((flim 1000000.0)) (print (fused-dif (random flim))))
+			(let ((ilim 1000000)) (print (fused-dif (random ilim))))
 			""";
 
 	private static final String INT_FUSION_EXPECTED = """
@@ -13354,7 +13383,24 @@ class JvmLispCompilerTest {
 			101
 			99
 			86
-			55""";
+			55
+			22
+			100
+			30
+			AREF-OOB
+			AREF-FLOAT
+			AREF-NIL
+			6
+			6
+			AREF-STRING
+			100
+			200
+			T
+			T
+			9223372036854775808
+			50
+			0.0
+			0""";
 
 	@Test
 	void fusedIntegerExpressionTreesMatchTheGenericPath() throws Exception {
@@ -13372,6 +13418,46 @@ class JvmLispCompilerTest {
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
 		assertThat(runClass(fast)).isEqualTo(INT_FUSION_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(INT_FUSION_EXPECTED);
+	}
+
+	private static final String GENERAL_ARRAY_LEAF_PROGRAM = """
+			(defparameter *a* (make-array 6))
+			(dotimes (i 6) (setf (aref *a* i) (* i 11)))
+			(let ((s 0))
+			  (dotimes (i 6) (setq s (+ s (aref *a* i))))
+			  (print s))
+			(print (+ (aref *a* 5) (aref *a* (random 1))))
+			(let ((fp (make-array 4 :fill-pointer 0)))
+			  (vector-push 3 fp)
+			  (print (+ (aref fp 0) 1)))
+			(let ((adj (make-array 2 :adjustable t :initial-element 4)))
+			  (print (+ (aref adj 1) 1)))
+			(print (+ 7 (random 1)))
+			""";
+
+	private static final String GENERAL_ARRAY_LEAF_EXPECTED = """
+			165
+			55
+			4
+			5
+			7""";
+
+	@Test
+	void fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther() throws Exception {
+		// The packed-aref leaf's OTHER representation: the general array's length-6
+		// header over a flat long[] (.kb/adjustable-arrays.md), in a program that holds
+		// no packed integer vector at all -- so the leaf emits only the ArrayList
+		// dispatch. A fill-pointered, an adjustable and a non-packed array all take the
+		// bail into the same _aref1 the unfused emission would have called, and answer
+		// what the size level (which emits no fused site) answers.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(GENERAL_ARRAY_LEAF_PROGRAM));
+		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
+		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
+		assertThat(runClass(fast)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
 	}
 
 	private String runClass(byte[] classBytes) throws Exception {

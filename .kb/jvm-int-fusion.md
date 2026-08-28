@@ -92,12 +92,49 @@ register-allocated `long`s inside.
   rolls back the leaves it registered so a side-effecting argument is not
   evaluated twice. An accessor-shaped defun body (exactly `(aref P I)`) maps
   onto an ArefLeaf over the caller's bare-symbol/literal operands.
-- **Packed aref leaves** (only when `Ctx.usesIntArray`): a rank-1
-  `(aref a i)` leaf passes array and index as two arguments; the fast path
-  reads the `long[]` element raw (same `1 + (int) i` indexing as `_ivAref1`,
-  bounds bail included), the fallback calls the same rank-1 helper the
-  ordinary emission would (`_ivAref1`/`_fvAref1`/`_arrayAref1` by the same
-  gate), so strings, floats, general arrays and every error shape reproduce.
+- **Packed aref leaves** (whenever the program uses arrays at all,
+  `Ctx.usesArrays`): a rank-1 `(aref a i)` leaf passes the array as one
+  argument and the fast path reads the element raw from EITHER packed
+  representation -- the bare `long[]` packed integer vector (elements from slot
+  1, past the width header; only emitted under `Ctx.usesIntArray`) and the
+  general array's length-6 header over a flat `long[]` (elements from slot 0,
+  `.kb/adjustable-arrays.md`). The general shape's discriminator is the same
+  one `_arrayp` uses plus the header length: `instanceof ArrayList`,
+  `size() != 0`, `get(0) instanceof Object[]`, `length == 6` -- 4 is a
+  character vector, 5 a displacement, 3 the boxed general array. The nil
+  sentinel (`Long.MIN_VALUE`), an out-of-range index and every non-packed shape
+  bail; the fallback calls the same rank-1 helper the ordinary emission would
+  (`_ivAref1`/`_fvAref1`/`_arrayAref1` by the same gate), so strings, floats,
+  displaced arrays, fill-pointered arrays and every error shape reproduce.
+  The INDEX is itself a fusion node: a literal folds into the method, a symbol
+  and a `random` draw read the raw slot the prologue filled, and anything else
+  (an arithmetic index, a call) is one opaque guarded argument -- so
+  `(aref a (random n))` and `(aref a i)` over an unboxed `i` pay no box on the
+  way in either. A bailing site is ~1.5 ns/read
+  slower than the unfused emission (the guard chain, then the same helper) --
+  the price of speculation, paid only by a general array that has been WIDENED
+  out of the packed shape, since a packed float array and a string fail the
+  first `instanceof` and a fresh `(make-array n)` starts packed.
+- **Random leaves**: `(random <integer>)` draws straight into a raw slot --
+  the same expression `_random` computes for a `Long` limit,
+  `(long) (ThreadLocalRandom.current().nextDouble() * limit)`, so the two are
+  ONE formula, not two generators (`.kb/random.md`). A LITERAL limit needs no
+  call argument at all, so the `Long.valueOf` the call site used to pay per
+  draw disappears with the boxed return.
+  **This is the only IMPURE leaf, and its whole protocol follows from that.**
+  The fallback re-emits its tree, and a node bound to a substituted parameter
+  used twice re-emits TWICE -- so a fallback allowed to draw would draw a
+  different number in each occurrence, and `(defun dif (x) (- x x))` over
+  `(dif (random lim))` would stop answering 0 (it did, for the length of one
+  commit during `.todo/534`). So the draw happens exactly once per leaf, in
+  the prologue, on every path, and the fallback only READS it: a `Long` limit
+  draws raw and sets the leaf's flag; anything else takes its one draw from
+  `_random` into a boxed slot, clears the flag and raises the method's shared
+  bail flag, which is tested ONCE after all the draws -- no draw can be jumped
+  over, because nothing in the draw phase branches away. Moving the draw inside
+  the method reorders it against the other leaves' call-site evaluation, which
+  is unobservable: rontolisp has no random-state objects, so nothing can see
+  the generator except through the numbers.
 - **Unboxed dual-representation locals** (`RawLocal`): an eligible `let`
   binding -- plain lexical, not special, not captured
   (`FreeVarAnalyzer.findCapturedVars`), not a promoted top-level global, not a
@@ -145,9 +182,9 @@ register-allocated `long`s inside.
   `-Drontolisp.debug.nointfusion=true` force-disables at COMPILE time for A/B
   profiling. With fusion off every site falls through to the per-op path
   byte-identically (`theSizeLevelChangesNothingWithoutASpeedForSizeTrade`).
-- A single fusable operation with neither a raw-reading leaf (RawLeaf/ArefLeaf)
-  nor a literal operand -- two plain boxed leaves under one op run no leaner
-  fused.
+- A single fusable operation with neither a raw-reading leaf
+  (RawLeaf/ArefLeaf/RandomLeaf) nor a literal operand -- two plain boxed leaves
+  under one op run no leaner fused.
 - A node `JvmLispCompiler.hasDoubleLiteral` claims (the recursive
   double-literal routing predicate the per-op compilers read): it keeps the
   unboxed-double path, as a leaf here. An immediate `BigInteger`/ratio literal
@@ -162,6 +199,12 @@ register-allocated `long`s inside.
   emission owns it.
 
 ## Mechanics
+
+The method PROLOGUE runs in four passes, because a leaf's raw value can be
+another leaf's input: the random slots are pre-set, then the draws run (before
+any guard, so a bail always finds the value already drawn), then the
+`ExprLeaf`/`RawLeaf` guards fill their slots, and last the aref reads, whose
+index reads a slot one of the earlier passes filled.
 
 `JvmIntFusionCompiler` (classify -> leaves-as-arguments -> outlined method),
 hooked into `JvmExprCompiler`'s arithmetic/bitwise/comparison cases, the
@@ -195,20 +238,64 @@ closed), 10^7 `random` 0.45 -> 0.43 s and 10^7 general-array `aref` 1.22 ->
 understood, not yet filed": the `_random` helper and the generic `_aref1`
 ArrayList read), 10^9 `cdr` unchanged.
 
+### The random and general-aref leaves (2026-08-28, `.todo/534`, same machine)
+
+`.todo/517`'s two rows, 10^7 iterations, compute only (best of 7, JVM startup
+0.075 s subtracted). The DEFUN spelling is the one the leaves own; the
+top-level spelling of the same program carries a second, larger term the
+leaves cannot touch -- see the trigger below.
+
+| row | before | after | Java, primitive | SBCL |
+| --- | --- | --- | --- | --- |
+| `(+ s (random 10^6))`, defun | 0.087 | **0.072** | 0.050 | -- |
+| `(+ s (aref a (random 10^6)))`, defun | 0.201 | **0.178** | 0.094 | -- |
+| the same, top-level spelling | 0.391 | 0.351 | -- | 0.261 |
+| `(+ s (random 10^6))`, top-level | 0.214 | 0.204 | -- | 0.148 |
+
+The hot loop of both spikes' `_top$0` now holds NO `Long.valueOf` and no
+`_add`: the limit is baked into the fused method, the draw and the element
+read stay raw, and the whole tree is one `invokestatic`. On the defun spelling
+that is 1.4x and 1.9x of hand-written primitive Java, both inside 2x.
+Isolated on a 1,000-element array (cache-resident, so the row measures the
+read and not the memory system): the packed hit is 0.088, the unfused
+emission 0.108, and a WIDENED general array -- which runs the guard chain and
+then bails into the same `_aref1` -- 0.123. The speculation wins 2 ns/read
+where it hits and loses 1.5 ns where it misses.
+
+**The other integer-valued built-ins do NOT earn a leaf**, measured the same
+day rather than assumed: `char-code` over `(char s i)` costs 1.3 ns/iteration
+more than the same loop without it (HotSpot inlines `_charCode` and escape
+analysis removes both the `int[1]` character and the box, so a leaf would save
+under a nanosecond); `elt` on a packed vector is 0.7 ns/read behind the fused
+`aref` (the whole gap a leaf could close), and it is not the spelling a hot
+vector loop uses; `length` has no cheap tag test at all -- its answer IS a
+three-way dispatch over string/vector/list, so a leaf would reproduce
+`_length` and save only the return box.
+
 ## Pinning tests
 
 `JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath` (overflow
 promotion, float/nil bails, mod/rem/ash sign semantics, the strength
 reductions, side-effects-once under substitution, the raw-local nil re-read,
-packed-aref raw reads and their error shapes, NaN comparisons, zero divisors;
-and that `SIZE` compiles the same program to different bytes),
+packed-aref raw reads and their error shapes, the general array's packed
+shape with a literal / symbol / `random` index, its nil-element, widened,
+displaced, string and float-index bails, a `random` leaf with a literal and a
+variable limit, a float limit's bail into `_random`, a `random` leaf under an
+overflow promotion, and a `random` leaf substituted into a defun body that
+uses its parameter TWICE -- which must still answer `(- x x)` = 0, the
+once-only-draw pin -- NaN comparisons, zero divisors; and that `SIZE`
+compiles the same program to different bytes),
+`fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther` (the same
+general-array leaf in a program holding NO packed integer vector, so only the
+ArrayList dispatch is emitted, plus the fill-pointered and adjustable bails),
 `theSizeLevelChangesNothingWithoutASpeedForSizeTrade` (a program with neither a
 typed loop nor a fused site stays byte-identical across levels),
 `JvmLibraryMethodSizeTest` (no emitted defun/lambda method of the
 ironclad-loading program crosses 8000 bytecodes -- LIBRARY code, the guard
 `.todo/412` demanded), and the existing `fused-integer-expression-trees` /
 `flet-fusion-and-unboxed-locals` / `fused-comparisons-and-raw-leaf-stores`
-ci-spec cases, which pin all four backends' outputs against each other.
+`fused-random-and-aref-leaves` ci-spec cases, which pin all four backends'
+outputs against each other.
 
 ## Re-evaluation triggers
 
@@ -222,3 +309,14 @@ ci-spec cases, which pin all four backends' outputs against each other.
   same trigger as the wasm file's.
 - `%aset` values fuse boxed (the value tree collapses but `_ivAset1` still
   takes a boxed operand); a raw store path would shave one box per store.
+- **A top-level `defparameter` accumulator is now the dominant term in both of
+  `.todo/517`'s top-level rows and neither fusion nor the leaves can reach it**:
+  a promoted top-level global is a static `Object` field, so
+  `(setq s (+ s ...))` re-boxes and stores through a GC write barrier every
+  iteration -- the one allocation escape analysis cannot remove, because the
+  value escapes into a static. Isolated (2026-08-28, 10^7 iterations of
+  `(setq s (+ s 1))`, compute only): 0.160 s as a global against 0.033 s as a
+  `let` local, i.e. **12.7 ns per assignment** for the representation alone.
+  That is 0.13 of the 0.20 s `random` row and of the 0.35 s `aref` row. The
+  fix is the `RawLocal` dual representation applied to a promoted global (a
+  `long` field + a shadow + a flag), which is its own item, not a leaf.

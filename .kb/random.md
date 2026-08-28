@@ -46,11 +46,25 @@ per-thread by construction (so a threaded program's draws neither contend nor co
 and 1.6 ns/draw is 0.016 s on a 10^7-draw row that the change moved by 0.17 s. Re-open
 this only if a profile shows the draw itself dominating again.
 
-Three call sites move together and must keep agreeing:
+Four call sites move together and must keep agreeing:
 `Environment.createGlobal` (interpreter), `JvmRandomCompiler` (the float-LITERAL path,
-which emits `current().nextDouble() * limit` straight) and
-`JvmNumericRuntimeBuilder.buildRandom` (`_random`, the runtime-typed path). The
-constant-pool halves are `JvmMathFnCompiler.TLR_CURRENT` / `TLR_NEXT_DOUBLE`.
+which emits `current().nextDouble() * limit` straight),
+`JvmNumericRuntimeBuilder.buildRandom` (`_random`, the runtime-typed path) and
+`JvmIntFusionCompiler.emitRandomDraw` (the raw leaf inside a fused integer tree,
+`.kb/jvm-int-fusion.md`). The constant-pool halves are
+`JvmMathFnCompiler.TLR_CURRENT` / `TLR_NEXT_DOUBLE`.
+
+The fused leaf is the reason "agreeing" means the FORMULA, not just the contract: it
+computes `(long) (current().nextDouble() * limit)` -- character for character what
+`_random` computes for a `Long` limit, including a zero or negative one -- straight into
+a raw `long` slot, so the draw a fused site takes and the draw its own fallback would
+take are the same expression, and a bail cannot change a program's answers by changing
+its generator. It draws exactly once per site whichever path answers -- the draw runs in
+the fused method's prologue, before any guard, and the fallback only reads the value it
+left, because a fallback re-emits and a substituted parameter used twice re-emits twice
+(`(defun dif (x) (- x x))` over `(dif (random lim))` must still be 0). It also reorders
+the draw against the site's other operands, which is unobservable precisely because
+there is no random-state object to see it with.
 
 ### The wasm half: one SplitMix64 step, inlined at the call site
 

@@ -622,6 +622,11 @@ to 0.51 s against SBCL's 0.26-0.29. The mechanics:
   `_charVecMake` widens before stamping the length-4 marker.
 - The one non-helper consumer of the representation, `JavaBridgeTemplate
   .marshal` (the `java:` interop sequence bridge), got its own packed branch.
+  A SECOND one arrived with `.todo/534`: the JVM integer-fusion pass reads the
+  shape raw inside a fused tree (`JvmIntFusionCompiler`'s aref leaf,
+  `.kb/jvm-int-fusion.md`), re-testing the same tag -- ArrayList, `size() != 0`,
+  `get(0) instanceof Object[]`, `length == 6` -- and bailing into `_aref1` for
+  everything else, so it must move with any change to what the tag means.
 - The fill-pointer surface (`_vectorPush`/`Pop`/`PushExtend`,
   `_fillPointer`/`_setFillPointer`) never meets a packed array: packing
   requires fp == null, and those helpers error on a missing fill pointer

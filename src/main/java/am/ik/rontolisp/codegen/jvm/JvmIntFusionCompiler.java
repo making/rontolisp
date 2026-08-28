@@ -93,7 +93,7 @@ final class JvmIntFusionCompiler {
 
 	// ------------------------------------------------------------------ the tree model
 
-	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RawLeaf {
+	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RandomLeaf, RawLeaf {
 
 	}
 
@@ -121,29 +121,82 @@ final class JvmIntFusionCompiler {
 	}
 
 	/**
-	 * A rank-1 {@code (aref a i)} leaf (only when the program can hold a packed integer
-	 * vector): array and index evaluate once as two call arguments, and the fast path
-	 * reads the element RAW from the {@code long[]} representation -- no
-	 * {@code Long.valueOf} per read. Any other array shape, a non-{@code Long} index or
-	 * an out-of-range position bails to the fallback, which reruns the ordinary rank-1
-	 * aref dispatch from the same arguments (the read is pure), reproducing today's
-	 * behavior including the error shapes.
+	 * A rank-1 {@code (aref a i)} leaf: the array evaluates once as a call argument and
+	 * the fast path reads the element RAW -- no {@code Long.valueOf} per read -- from
+	 * either packed representation, the bare {@code long[]} packed integer vector
+	 * ({@code _iv*}) or the general array's length-6 header over a flat {@code long[]}
+	 * ({@code .kb/adjustable-arrays.md}). Any other array shape, a non-{@code Long}
+	 * index, an out-of-range position or the nil sentinel bails to the fallback, which
+	 * reruns the ordinary rank-1 aref dispatch from the same arguments (the read is
+	 * pure), reproducing today's behavior including the error shapes.
+	 *
+	 * <p>
+	 * The INDEX is itself a fusion node ({@link #arefIndexNode}): a literal folds into
+	 * the method, an unboxed local and a {@code random} draw read the raw slot the
+	 * prologue filled, and anything else is an ordinary guarded {@code Object} argument
+	 * -- so {@code (aref a (random n))} and {@code (aref a i)} over an unboxed {@code i}
+	 * pay no box on the way in either.
 	 */
 	private static final class ArefLeaf implements Node {
 
 		final LispVal arrayExpr;
 
-		final LispVal indexExpr;
+		@Nullable Node indexNode;
 
 		int arrParam = -1;
 
-		int idxParam = -1;
+		int longSlot = -1;
+
+		ArefLeaf(LispVal arrayExpr) {
+			this.arrayExpr = arrayExpr;
+		}
+
+	}
+
+	/**
+	 * A {@code (random <integer>)} leaf: the draw is a {@code long} internally already
+	 * ({@code .kb/random.md}), so the tree takes the generator's raw result instead of
+	 * {@code _random}'s boxed return -- and a LITERAL limit needs no call argument at
+	 * all, so the boxed limit disappears from the call site too.
+	 *
+	 * <p>
+	 * The fast path computes the same expression {@code _random} computes for a
+	 * {@code Long} limit ({@code (long) (ThreadLocalRandom.current().nextDouble() *
+	 * limit)}), so the two are one formula, not two generators.
+	 *
+	 * <p>
+	 * This is the only leaf kind that is NOT pure, and the whole draw protocol exists for
+	 * that: the fallback re-emits its tree, and a node bound to a substituted parameter
+	 * used twice is re-emitted twice, so a fallback that could draw would draw a
+	 * different number in each occurrence -- {@code (defun dif (x) (- x x))} over
+	 * {@code (dif (random lim))} would stop answering 0. So the draw happens EXACTLY
+	 * ONCE, in the prologue, for every leaf, on every path: a {@code Long} limit draws
+	 * raw into {@code longSlot} (flag set), anything else calls {@code _random} into
+	 * {@code boxSlot} (flag clear) and raises the method's bail flag, which is tested
+	 * once after all the draws. Both branches assign every slot, so nothing here can bail
+	 * past another leaf's draw, and the fallback only ever READS what the prologue
+	 * already decided.
+	 */
+	private static final class RandomLeaf implements Node {
+
+		/** The limit expression, or {@code null} when {@link #limitConst} is it. */
+		@Nullable final LispVal limitExpr;
+
+		final long limitConst;
+
+		int limitParam = -1;
 
 		int longSlot = -1;
 
-		ArefLeaf(LispVal arrayExpr, LispVal indexExpr) {
-			this.arrayExpr = arrayExpr;
-			this.indexExpr = indexExpr;
+		/** Only for a non-literal limit: 0 means {@link #boxSlot} holds the draw. */
+		int flagSlot = -1;
+
+		/** Only for a non-literal limit: {@code _random}'s boxed draw. */
+		int boxSlot = -1;
+
+		RandomLeaf(@Nullable LispVal limitExpr, long limitConst) {
+			this.limitExpr = limitExpr;
+			this.limitConst = limitConst;
 		}
 
 	}
@@ -845,13 +898,19 @@ final class JvmIntFusionCompiler {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 1;
 		String op = sym.name();
-		if (LispNames.AREF.equals(op) && arity == 2 && env.isEmpty() && ctx.usesIntArray) {
-			// A rank-1 aref where a packed integer vector can exist: the fast path
+		if (LispNames.AREF.equals(op) && arity == 2 && env.isEmpty() && ctx.usesArrays) {
+			// A rank-1 aref where a packed representation can exist: the fast path
 			// reads the long[] element raw. Inside an inlined body (env non-empty) the
 			// operands may be parameter references, which the argument-position
 			// ArefLeaf cannot express; substituteCall handles the parameter-shaped
 			// accessor case.
-			return registerLeaf(new ArefLeaf(parts.get(1), parts.get(2)), leaves);
+			return arefLeaf(parts.get(1), parts.get(2), ctx, site, depth);
+		}
+		if (LispNames.RANDOM.equals(op) && arity == 1 && env.isEmpty()) {
+			RandomLeaf leaf = randomLeaf(parts, ctx);
+			if (leaf != null) {
+				return registerLeaf(leaf, leaves);
+			}
 		}
 		if (LispNames.LDB.equals(op) && arity == 2) {
 			// (ldb (byte s p) x) with a literal byte spec lowers to its pure
@@ -1007,14 +1066,14 @@ final class JvmIntFusionCompiler {
 		// is a bare symbol or literal at the top env (pure, so re-reading and eliding
 		// the call are unobservable). This lets a typed-struct accessor call read a
 		// packed vector's element raw inside a fused tree.
-		if (env.isEmpty() && ctx.usesIntArray && body instanceof LispCons bodyCons && bodyCons.isProperList()
+		if (env.isEmpty() && ctx.usesArrays && body instanceof LispCons bodyCons && bodyCons.isProperList()
 				&& bodyCons.car() instanceof LispSymbol bodyHead && LispNames.AREF.equals(bodyHead.name())) {
 			List<LispVal> bodyParts = bodyCons.toList();
 			if (bodyParts.size() == 3) {
 				LispVal arr = inlineArefOperand(bodyParts.get(1), params, args);
 				LispVal idx = inlineArefOperand(bodyParts.get(2), params, args);
 				if (arr != null && idx != null) {
-					return registerLeaf(new ArefLeaf(arr, idx), leaves);
+					return arefLeaf(arr, idx, ctx, site, depth);
 				}
 			}
 		}
@@ -1035,6 +1094,59 @@ final class JvmIntFusionCompiler {
 			leaves.subList(mark, leaves.size()).clear();
 		}
 		return substituted;
+	}
+
+	/**
+	 * Builds and registers a rank-1 aref leaf. The leaf registers BEFORE its index, so
+	 * the call site pushes the array first and the index's own leaves after it -- the
+	 * generic {@code (aref a i)} argument order.
+	 */
+	private static Node arefLeaf(LispVal arrayExpr, LispVal indexExpr, JvmLispCompiler.Ctx ctx, Site site, int depth) {
+		ArefLeaf leaf = new ArefLeaf(arrayExpr);
+		registerLeaf(leaf, site.leaves);
+		leaf.indexNode = arefIndexNode(indexExpr, ctx, site, depth);
+		return leaf;
+	}
+
+	/**
+	 * The index of an aref leaf as a node the prologue can resolve into a raw
+	 * {@code long} slot (or a constant). A literal, a symbol (an unboxed local's slot
+	 * triple, else an ordinary guarded argument) and a {@code random} draw classify;
+	 * anything else -- an arithmetic index, a call -- becomes one opaque guarded
+	 * argument, exactly the boxed index the leaf always took.
+	 */
+	private static Node arefIndexNode(LispVal indexExpr, JvmLispCompiler.Ctx ctx, Site site, int depth) {
+		boolean resolvable = indexExpr instanceof LispInteger || indexExpr instanceof LispSymbol
+				|| (indexExpr instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+						&& LispNames.RANDOM.equals(head.name()) && cons.toList().size() == 2);
+		if (!resolvable) {
+			return registerLeaf(new ExprLeaf(indexExpr), site.leaves);
+		}
+		Node node = classify(indexExpr, ctx, Map.of(), site, depth);
+		if (!(node instanceof ConstLeaf || node instanceof ExprLeaf || node instanceof RawLeaf
+				|| node instanceof RandomLeaf)) {
+			throw new IllegalStateException("aref index did not resolve to a slot: " + indexExpr);
+		}
+		return node;
+	}
+
+	/**
+	 * A {@code (random <limit>)} leaf, or {@code null} when the generic {@code _random}
+	 * keeps the form: a float limit (whose result is a Double), and a big-integer or
+	 * ratio literal, which the fast path's {@code Long} formula cannot answer.
+	 */
+	@Nullable private static RandomLeaf randomLeaf(List<LispVal> parts, JvmLispCompiler.Ctx ctx) {
+		if (!enabled(ctx) || JvmLispCompiler.hasDoubleLiteral(parts)) {
+			return null;
+		}
+		LispVal limit = parts.get(1);
+		if (limit instanceof LispInteger lit) {
+			return new RandomLeaf(null, lit.value());
+		}
+		if (limit instanceof am.ik.rontolisp.LispBigInteger || limit instanceof am.ik.rontolisp.LispRatio) {
+			return null;
+		}
+		return new RandomLeaf(limit, 0);
 	}
 
 	private static Node registerLeaf(Node leaf, List<Node> leaves) {
@@ -1061,6 +1173,7 @@ final class JvmIntFusionCompiler {
 		return switch (node) {
 			case ExprLeaf ignored -> 0;
 			case ArefLeaf ignored -> 0;
+			case RandomLeaf ignored -> 0;
 			case RawLeaf ignored -> 0;
 			case ConstLeaf ignored -> 0;
 			case OpNode op -> {
@@ -1075,7 +1188,7 @@ final class JvmIntFusionCompiler {
 
 	private static boolean hasRawRead(List<Node> leaves) {
 		for (Node leaf : leaves) {
-			if (leaf instanceof RawLeaf || leaf instanceof ArefLeaf) {
+			if (leaf instanceof RawLeaf || leaf instanceof ArefLeaf || leaf instanceof RandomLeaf) {
 				return true;
 			}
 		}
@@ -1098,7 +1211,8 @@ final class JvmIntFusionCompiler {
 		for (Node leaf : leaves) {
 			switch (leaf) {
 				case ExprLeaf ignored -> desc.append("Ljava/lang/Object;");
-				case ArefLeaf ignored -> desc.append("Ljava/lang/Object;Ljava/lang/Object;");
+				case ArefLeaf ignored -> desc.append("Ljava/lang/Object;");
+				case RandomLeaf l -> desc.append(l.limitExpr == null ? "" : "Ljava/lang/Object;");
 				case RawLeaf ignored -> desc.append("JLjava/lang/Object;I");
 				default -> throw new IllegalStateException("not a registered leaf: " + leaf);
 			}
@@ -1138,7 +1252,14 @@ final class JvmIntFusionCompiler {
 				sb.append(')');
 			}
 			case ExprLeaf leaf -> sb.append('e').append(leafIndex(leaf, leaves));
-			case ArefLeaf leaf -> sb.append('a').append(leafIndex(leaf, leaves));
+			case ArefLeaf leaf -> {
+				sb.append('a').append(leafIndex(leaf, leaves)).append('[');
+				appendKey(java.util.Objects.requireNonNull(leaf.indexNode), leaves, sb);
+				sb.append(']');
+			}
+			case RandomLeaf leaf -> sb.append('n')
+				.append(leafIndex(leaf, leaves))
+				.append(leaf.limitExpr == null ? "#" + leaf.limitConst : "");
 			case RawLeaf leaf -> sb.append('r').append(leafIndex(leaf, leaves));
 		}
 	}
@@ -1163,9 +1284,11 @@ final class JvmIntFusionCompiler {
 		for (Node node : leaves) {
 			switch (node) {
 				case ExprLeaf leaf -> JvmExprCompiler.compileExpr(leaf.expr, ctx, className);
-				case ArefLeaf leaf -> {
-					JvmExprCompiler.compileExpr(leaf.arrayExpr, ctx, className);
-					JvmExprCompiler.compileExpr(leaf.indexExpr, ctx, className);
+				case ArefLeaf leaf -> JvmExprCompiler.compileExpr(leaf.arrayExpr, ctx, className);
+				case RandomLeaf leaf -> {
+					if (leaf.limitExpr != null) {
+						JvmExprCompiler.compileExpr(leaf.limitExpr, ctx, className);
+					}
 				}
 				case RawLeaf leaf -> {
 					ctx.emit(Opcode.LLOAD);
@@ -1195,9 +1318,11 @@ final class JvmIntFusionCompiler {
 		for (Node leaf : pending.leaves()) {
 			switch (leaf) {
 				case ExprLeaf l -> l.paramSlot = slot++;
-				case ArefLeaf l -> {
-					l.arrParam = slot++;
-					l.idxParam = slot++;
+				case ArefLeaf l -> l.arrParam = slot++;
+				case RandomLeaf l -> {
+					if (l.limitExpr != null) {
+						l.limitParam = slot++;
+					}
 				}
 				case RawLeaf l -> {
 					l.rawParam = slot;
@@ -1212,6 +1337,43 @@ final class JvmIntFusionCompiler {
 		ctx.maxLocals = Math.max(ctx.maxLocals, slot);
 		List<Integer> bails = new ArrayList<>();
 		ClassConstant longArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[J"));
+		// Every random leaf draws ONCE, here, before any guard and without any bail of
+		// its own: a leaf whose limit is not a Long takes its draw through _random and
+		// raises the shared bail flag instead of jumping, so no draw can be skipped and
+		// the fallback never draws (it must not -- it re-emits, and a substituted
+		// parameter used twice re-emits twice). One test of the flag after the draws
+		// is the bail.
+		int bailFlag = -1;
+		int limitScratch = -1;
+		for (Node leaf : pending.leaves()) {
+			if (leaf instanceof RandomLeaf l && l.limitExpr != null) {
+				// One shared scratch pair for every non-literal limit: each draw
+				// unboxes into it and reads it back immediately.
+				limitScratch = ctx.allocTemp();
+				ctx.allocTemp();
+				bailFlag = ctx.allocTemp();
+				ctx.emit(Opcode.ICONST_0);
+				ctx.emit(Opcode.ISTORE);
+				ctx.emit(bailFlag);
+				break;
+			}
+		}
+		for (Node leaf : pending.leaves()) {
+			if (leaf instanceof RandomLeaf l) {
+				l.longSlot = ctx.allocTemp();
+				ctx.allocTemp();
+				if (l.limitExpr != null) {
+					l.flagSlot = ctx.allocTemp();
+					l.boxSlot = ctx.allocTemp();
+				}
+				emitRandomDraw(l, ctx, ctx.numOp(JvmNumericRuntimeBuilder.RANDOM), limitScratch, bailFlag);
+			}
+		}
+		if (bailFlag >= 0) {
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(bailFlag);
+			bails.add(branch(ctx, Opcode.IFNE));
+		}
 		for (Node leaf : pending.leaves()) {
 			switch (leaf) {
 				case ExprLeaf l -> {
@@ -1248,57 +1410,23 @@ final class JvmIntFusionCompiler {
 					JvmEmitHelper.patchBranch(ctx, isRaw, ctx.code.size());
 					l.longSlot = l.rawParam;
 				}
-				case ArefLeaf l -> {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.arrParam);
-					ctx.emit(Opcode.INSTANCEOF);
-					ctx.emitU2(longArrayClass.index());
-					bails.add(branch(ctx, Opcode.IFEQ));
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.idxParam);
-					ctx.emit(Opcode.INSTANCEOF);
-					ctx.emitU2(ctx.longClass.index());
-					bails.add(branch(ctx, Opcode.IFEQ));
-					// idx = ((Long) i).intValue() -- the same truncation _ivAref1
-					// applies; out of [0, arr.length - 1) bails so the fallback throws
-					// the helper's own error.
-					int idxSlot = ctx.allocTemp();
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.idxParam);
-					ctx.emit(Opcode.CHECKCAST);
-					ctx.emitU2(ctx.longClass.index());
-					ctx.emit(Opcode.INVOKEVIRTUAL);
-					ctx.emitU2(longIntValue(ctx).index());
-					ctx.emit(Opcode.ISTORE);
-					ctx.emit(idxSlot);
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(idxSlot);
-					bails.add(branch(ctx, Opcode.IFLT));
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(idxSlot);
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.arrParam);
-					ctx.emit(Opcode.CHECKCAST);
-					ctx.emitU2(longArrayClass.index());
-					ctx.emit(Opcode.ARRAYLENGTH);
-					ctx.emit(Opcode.ICONST_1);
-					ctx.emit(Opcode.ISUB);
-					bails.add(branch(ctx, Opcode.IF_ICMPGE));
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.arrParam);
-					ctx.emit(Opcode.CHECKCAST);
-					ctx.emitU2(longArrayClass.index());
-					ctx.emit(Opcode.ICONST_1);
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(idxSlot);
-					ctx.emit(Opcode.IADD);
-					ctx.emit(Opcode.LALOAD);
-					l.longSlot = ctx.allocTemp();
-					ctx.allocTemp();
-					ctx.emit(Opcode.LSTORE);
-					ctx.emit(l.longSlot);
+				case ArefLeaf ignored -> {
+					// Read in a later pass: the index resolves through another leaf's
+					// slot, which this pass is still filling.
+				}
+				case RandomLeaf ignored -> {
+					// Drawn above, before the guards.
 				}
 				default -> throw new IllegalStateException("not a registered leaf: " + leaf);
+			}
+		}
+		ArefScratch arefScratch = null;
+		for (Node leaf : pending.leaves()) {
+			if (leaf instanceof ArefLeaf l) {
+				if (arefScratch == null) {
+					arefScratch = new ArefScratch(ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
+				}
+				emitArefRead(l, ctx, bails, longArrayClass, arefScratch);
 			}
 		}
 		// The fast path, protected: an ArithmeticException (Math.*Exact overflow,
@@ -1350,6 +1478,252 @@ final class JvmIntFusionCompiler {
 			fallbackBails = doubleBails;
 		}
 		emitBailAndFallback(pending, ctx, state, fallbackBails, tryStart, tryEnd, className);
+	}
+
+	/**
+	 * The prologue's {@code random} draw -- exactly one per leaf, on every path. A
+	 * {@code Long} limit (and a literal one, which needs no argument at all) computes the
+	 * same expression {@code _random} evaluates for it,
+	 * {@code (long) (ThreadLocalRandom.current().nextDouble() * limit)}, straight into a
+	 * raw slot, with the box on both ends gone; any other limit (a float reaching
+	 * {@code random} through a variable) takes its ONE draw from {@code _random} into the
+	 * boxed slot and raises the bail flag, so the tree falls back with the value already
+	 * drawn.
+	 */
+	private static void emitRandomDraw(RandomLeaf leaf, JvmLispCompiler.Ctx ctx, MethodrefConstant randomHelper,
+			int limitScratch, int bailFlag) {
+		if (leaf.limitExpr == null) {
+			emitDrawTimesDouble(ctx, -1, leaf.limitConst);
+			ctx.emit(Opcode.LSTORE);
+			ctx.emit(leaf.longSlot);
+			return;
+		}
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(leaf.limitParam);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.longClass.index());
+		int notLong = branch(ctx, Opcode.IFEQ);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(leaf.limitParam);
+		JvmEmitHelper.unboxLong(ctx);
+		ctx.emit(Opcode.LSTORE);
+		ctx.emit(limitScratch);
+		emitDrawTimesDouble(ctx, limitScratch, 0);
+		ctx.emit(Opcode.LSTORE);
+		ctx.emit(leaf.longSlot);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ISTORE);
+		ctx.emit(leaf.flagSlot);
+		ctx.emit(Opcode.ACONST_NULL);
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(leaf.boxSlot);
+		int drawn = branch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, notLong, ctx.code.size());
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(leaf.limitParam);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(randomHelper.index());
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(leaf.boxSlot);
+		JvmEmitHelper.emitRawLong(0, ctx);
+		ctx.emit(Opcode.LSTORE);
+		ctx.emit(leaf.longSlot);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.ISTORE);
+		ctx.emit(leaf.flagSlot);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ISTORE);
+		ctx.emit(bailFlag);
+		JvmEmitHelper.patchBranch(ctx, drawn, ctx.code.size());
+	}
+
+	/**
+	 * {@code (long) (ThreadLocalRandom.current().nextDouble() * limit)} -- {@code
+	 * _random}'s own Long-limit expression, over a raw slot or a constant.
+	 */
+	private static void emitDrawTimesDouble(JvmLispCompiler.Ctx ctx, int limitSlot, long limitConst) {
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).index());
+		if (limitSlot >= 0) {
+			ctx.emit(Opcode.LLOAD);
+			ctx.emit(limitSlot);
+			ctx.emit(Opcode.L2D);
+		}
+		else {
+			JvmEmitHelper.emitRawDouble(limitConst, ctx);
+		}
+		ctx.emit(Opcode.DMUL);
+		ctx.emit(Opcode.D2L);
+	}
+
+	/**
+	 * The prologue's raw rank-1 aref read, over whichever packed representation the
+	 * program can hold: the bare {@code long[]} packed integer vector (elements from slot
+	 * 1, past the width header) and the general array's length-6 header over a flat
+	 * {@code long[]} (elements from slot 0, {@code Long.MIN_VALUE} for nil). Every other
+	 * shape -- a string, a boxed general array, a displaced array, a character vector, an
+	 * out-of-range index, a nil element -- bails into the same {@code _aref1} the unfused
+	 * emission would have called.
+	 */
+	private static void emitArefRead(ArefLeaf leaf, JvmLispCompiler.Ctx ctx, List<Integer> bails,
+			ClassConstant longArrayClass, ArefScratch scratch) {
+		// idx = (int) <index> -- the same truncation _aref1's ((Long) i).intValue()
+		// applies.
+		int idxSlot = scratch.idxSlot();
+		Node index = java.util.Objects.requireNonNull(leaf.indexNode);
+		if (index instanceof ConstLeaf c) {
+			JvmEmitHelper.emitIntConst(ctx, (int) c.value());
+		}
+		else {
+			emitLongLoad(rawSlotOf(index), ctx);
+			ctx.emit(Opcode.L2I);
+		}
+		ctx.emit(Opcode.ISTORE);
+		ctx.emit(idxSlot);
+		leaf.longSlot = ctx.allocTemp();
+		ctx.allocTemp();
+		List<Integer> done = new ArrayList<>();
+		if (ctx.usesIntArray) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(longArrayClass.index());
+			int notPackedVector = branch(ctx, Opcode.IFEQ);
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			bails.add(branch(ctx, Opcode.IFLT));
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(longArrayClass.index());
+			ctx.emit(Opcode.ARRAYLENGTH);
+			ctx.emit(Opcode.ICONST_1);
+			ctx.emit(Opcode.ISUB);
+			bails.add(branch(ctx, Opcode.IF_ICMPGE));
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(longArrayClass.index());
+			ctx.emit(Opcode.ICONST_1);
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			ctx.emit(Opcode.IADD);
+			ctx.emit(Opcode.LALOAD);
+			ctx.emit(Opcode.LSTORE);
+			ctx.emit(leaf.longSlot);
+			done.add(branch(ctx, Opcode.GOTO));
+			JvmEmitHelper.patchBranch(ctx, notPackedVector, ctx.code.size());
+		}
+		if (ctx.usesArrays) {
+			ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
+			ClassConstant objectArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[Ljava/lang/Object;"));
+			MethodrefConstant alSize = ctx.cp.addMethodref(arrayListClass,
+					ctx.cp.addNameAndType(ctx.cp.addUtf8("size"), ctx.cp.addUtf8("()I")));
+			MethodrefConstant alGet = ctx.cp.addMethodref(arrayListClass,
+					ctx.cp.addNameAndType(ctx.cp.addUtf8("get"), ctx.cp.addUtf8("(I)Ljava/lang/Object;")));
+			int headerSlot = scratch.headerSlot();
+			int dataSlot = scratch.dataSlot();
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(arrayListClass.index());
+			bails.add(branch(ctx, Opcode.IFEQ));
+			// The same "is this an array?" shape test _arrayp makes, so get(0) on an
+			// ArrayList that is not one cannot throw past the bail.
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(arrayListClass.index());
+			ctx.emit(Opcode.INVOKEVIRTUAL);
+			ctx.emitU2(alSize.index());
+			bails.add(branch(ctx, Opcode.IFEQ));
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(arrayListClass.index());
+			ctx.emit(Opcode.ICONST_0);
+			ctx.emit(Opcode.INVOKEVIRTUAL);
+			ctx.emitU2(alGet.index());
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(headerSlot);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(headerSlot);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(objectArrayClass.index());
+			bails.add(branch(ctx, Opcode.IFEQ));
+			// Header length 6 IS the packed shape: 4 is a character vector, 5 a
+			// displaced array, 3 the boxed general array -- all of them _aref1's.
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(headerSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(objectArrayClass.index());
+			ctx.emit(Opcode.ARRAYLENGTH);
+			JvmEmitHelper.emitIntConst(ctx, 6);
+			bails.add(branch(ctx, Opcode.IF_ICMPNE));
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(headerSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(objectArrayClass.index());
+			ctx.emit(Opcode.ICONST_5);
+			ctx.emit(Opcode.AALOAD);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(longArrayClass.index());
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(dataSlot);
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			bails.add(branch(ctx, Opcode.IFLT));
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(dataSlot);
+			ctx.emit(Opcode.ARRAYLENGTH);
+			bails.add(branch(ctx, Opcode.IF_ICMPGE));
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(dataSlot);
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			ctx.emit(Opcode.LALOAD);
+			ctx.emit(Opcode.LSTORE);
+			ctx.emit(leaf.longSlot);
+			// The nil sentinel is not an integer: the fallback reads it back as nil.
+			ctx.emit(Opcode.LLOAD);
+			ctx.emit(leaf.longSlot);
+			JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
+			ctx.emit(Opcode.LCMP);
+			bails.add(branch(ctx, Opcode.IFEQ));
+		}
+		else {
+			bails.add(branch(ctx, Opcode.GOTO));
+		}
+		for (int pos : done) {
+			JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
+		}
+	}
+
+	/**
+	 * The scratch slots every aref read in one fused method shares: the narrowed index,
+	 * the header the ArrayList's slot 0 lands in, and the packed {@code long[]}. Each is
+	 * dead the instant the read that filled it is done, and every read stores the same
+	 * type into it, so one triple serves the whole method -- keeping a leaf-heavy method
+	 * away from the 255-slot ceiling the one-byte load/store operand imposes
+	 * ({@code .todo/137}).
+	 */
+	private record ArefScratch(int idxSlot, int headerSlot, int dataSlot) {
+	}
+
+	/** The raw {@code long} slot a resolved aref index reads back from. */
+	private static int rawSlotOf(Node index) {
+		return switch (index) {
+			case ExprLeaf l -> l.longSlot;
+			case RawLeaf l -> l.longSlot;
+			case RandomLeaf l -> l.longSlot;
+			default -> throw new IllegalStateException("not a slot-resolved index: " + index);
+		};
 	}
 
 	/** The compare methods' tail: 0 or 1 on the operand stack, returned. */
@@ -1476,6 +1850,7 @@ final class JvmIntFusionCompiler {
 			case ExprLeaf leaf -> emitDoubleLoad(leaf.dblSlot, ctx);
 			case RawLeaf leaf -> emitDoubleLoad(leaf.dblSlot, ctx);
 			case ArefLeaf ignored -> throw new IllegalStateException("aref leaf on the double path");
+			case RandomLeaf ignored -> throw new IllegalStateException("random leaf on the double path");
 			case OpNode op -> {
 				emitFastDouble(op.args().get(0), ctx);
 				for (int i = 1; i < op.args().size(); i++) {
@@ -1548,6 +1923,7 @@ final class JvmIntFusionCompiler {
 			case ConstLeaf c -> JvmEmitHelper.emitRawLong(c.value(), ctx);
 			case ExprLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
 			case ArefLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
+			case RandomLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
 			case RawLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
 			case OpNode op -> {
 				// (mod x 2^k) with a positive power-of-two literal is a plain mask --
@@ -1701,10 +2077,32 @@ final class JvmIntFusionCompiler {
 			case ArefLeaf leaf -> {
 				ctx.emit(Opcode.ALOAD);
 				ctx.emit(leaf.arrParam);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(leaf.idxParam);
+				emitFallback(java.util.Objects.requireNonNull(leaf.indexNode), ctx, className);
 				ctx.emit(Opcode.INVOKESTATIC);
 				ctx.emitU2(aref1Helper(ctx, className).index());
+			}
+			// The ONE draw the prologue took, re-boxed: raw from the slot, or the
+			// boxed value _random answered for a limit the raw path could not take.
+			// Never a draw -- this emission repeats for a node used twice.
+			case RandomLeaf leaf -> {
+				if (leaf.limitExpr == null) {
+					ctx.emit(Opcode.LLOAD);
+					ctx.emit(leaf.longSlot);
+					JvmEmitHelper.boxLong(ctx);
+				}
+				else {
+					ctx.emit(Opcode.ILOAD);
+					ctx.emit(leaf.flagSlot);
+					int boxed = branch(ctx, Opcode.IFEQ);
+					ctx.emit(Opcode.LLOAD);
+					ctx.emit(leaf.longSlot);
+					JvmEmitHelper.boxLong(ctx);
+					int done = branch(ctx, Opcode.GOTO);
+					JvmEmitHelper.patchBranch(ctx, boxed, ctx.code.size());
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(leaf.boxSlot);
+					JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+				}
 			}
 			// The snapshot re-boxed: the raw param when the flag is set, else the
 			// shadow.

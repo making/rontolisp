@@ -188,6 +188,42 @@ cases:
       123
       111
       3454992811
+  - name: fused-random-and-aref-leaves
+    source: |
+      (let ((fral-a (make-array 6)))
+        (dotimes (fral-i 6) (setf (aref fral-a fral-i) (* fral-i 11)))
+        (let ((fral-s 0))
+          (dotimes (fral-i 6) (setq fral-s (+ fral-s (aref fral-a fral-i))))
+          (print fral-s))
+        (print (+ (aref fral-a 5) (aref fral-a (random 1))))
+        (print (+ (aref fral-a (random 1)) 100)))
+      (print (+ 100 (random 1)))
+      (let ((fral-lim 1)) (print (+ 200 (random fral-lim))))
+      (let ((fral-lim 1.0)) (print (floatp (random fral-lim))))
+      (let ((fral-r (random 1000))) (print (and (>= fral-r 0) (< fral-r 1000))))
+      (print (* 4611686018427387904 (+ 2 (random 1))))
+      (let ((fral-v (make-array 4 :element-type '(unsigned-byte 8))))
+        (dotimes (fral-i 4) (setf (aref fral-v fral-i) (* fral-i 3)))
+        (print (+ (aref fral-v (random 1)) 50)))
+      (let ((fral-fp (make-array 4 :fill-pointer 0)))
+        (vector-push 3 fral-fp)
+        (print (+ (aref fral-fp 0) 1)))
+      (defun fral-dif (x) (- x x))
+      (let ((fral-flim 1000000.0)) (print (fral-dif (random fral-flim))))
+      (let ((fral-ilim 1000000)) (print (fral-dif (random fral-ilim))))
+    expected: |
+      165
+      55
+      100
+      100
+      200
+      T
+      T
+      9223372036854775808
+      50
+      4
+      0.0
+      0
   - name: packed-integer-vectors
     source: |
       (let* ((piv-a (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
