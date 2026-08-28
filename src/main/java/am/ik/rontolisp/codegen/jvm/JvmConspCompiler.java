@@ -7,7 +7,8 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the {@code consp} predicate.
+ * Compiles the {@code consp} predicate, through the same one-per-class helper shape as
+ * {@link JvmAtomCompiler} ({@code _pConsp}).
  */
 final class JvmConspCompiler {
 
@@ -17,9 +18,12 @@ final class JvmConspCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		int tempSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tempSlot);
+		JvmEmitHelper.emitSharedCall(ctx, className, "_pConsp", 1, JvmConspCompiler::emitCheck);
+	}
+
+	/** Emits the predicate over the value in local slot 0. */
+	private static void emitCheck(JvmLispCompiler.Ctx ctx) {
+		int tempSlot = 0;
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(tempSlot);
 		ctx.emit(Opcode.INSTANCEOF);

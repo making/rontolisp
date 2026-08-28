@@ -203,11 +203,10 @@ final class JvmHandlerCaseCompiler {
 		}
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensure(ctx.cp, className);
+		ConstantPool.MethodrefConstant landingPad = guardLandingPad(ctx, className);
 		int savedNextLocal = ctx.nextLocal;
 		JvmLispCompiler.Ctx.Spill spill = ctx.spillOperandStack();
 		int resultSlot = ctx.allocTemp();
-		int excSlot = ctx.allocTemp();
-		int condSlot = ctx.allocTemp();
 		if (!spill.live().isEmpty()) {
 			ctx.spillScopes.push(new JvmLispCompiler.SpillScope(spill, ctx.blockTargets.size()));
 		}
@@ -219,10 +218,79 @@ final class JvmHandlerCaseCompiler {
 		int gotoDonePos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
+		// The pad itself is the shared method: it takes the caught throwable and answers
+		// it, so the site is a call and a rethrow whatever the program's condition
+		// classes are.
 		int handler = ctx.code.size();
 		ctx.stack.enterHandler();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(excSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(landingPad.index());
+		ctx.emit(Opcode.ATHROW);
+		int done = ctx.code.size();
+		JvmEmitHelper.patchBranch(ctx, gotoDonePos, done);
+		if (!spill.live().isEmpty()) {
+			ctx.spillScopes.pop();
+			spill.restore(ctx);
+		}
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(resultSlot);
+		if (start < end) {
+			ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(start, end, handler, 0));
+		}
+		ctx.nextLocal = savedNextLocal;
+	}
+
+	/**
+	 * The descriptor of the shared landing-pad method: the caught throwable in, the same
+	 * throwable out, so the call site rethrows it and the verifier sees a
+	 * {@code Throwable} under the {@code athrow}.
+	 */
+	private static final String GUARD_PAD_DESC = "(Ljava/lang/Throwable;)Ljava/lang/Throwable;";
+
+	/**
+	 * {@return the shared {@code %hb-guard} landing-pad method, built on first use}
+	 *
+	 * Every {@code handler-bind} in a program emits the SAME pad -- read and clear the
+	 * condition channel, synthesize the instance of a condition-less throw, run the
+	 * cluster stack unless it already ran for this instance, restore the channel -- over
+	 * nothing but the caught throwable, so it is emitted once per class and called from
+	 * each site. It has to be: the pad is ~500 bytecodes (the classification switch
+	 * builds one condition instance per raw-failure class), and in restart mode
+	 * {@code restart-case} expands through {@code handler-bind}, so a function that
+	 * writes {@code check-type} in a macro used forty times carried forty copies of it --
+	 * 20 KB, most of {@code fast-http}'s {@code parse-header-field-and-value} being past
+	 * HotSpot's {@code HugeMethodLimit} ({@code .kb/hot-path-method-size.md}).
+	 */
+	private static ConstantPool.MethodrefConstant guardLandingPad(JvmLispCompiler.Ctx ctx, String className) {
+		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		if (channel.hbGuardPad != null) {
+			return channel.hbGuardPad;
+		}
+		String methodName = "_hbGuard";
+		ConstantPool.Utf8Constant nameUtf8 = ctx.cp.addUtf8(methodName);
+		ConstantPool.Utf8Constant descUtf8 = ctx.cp.addUtf8(GUARD_PAD_DESC);
+		ConstantPool.MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, methodName, GUARD_PAD_DESC);
+		// Recorded BEFORE the body is emitted: the body compiles ordinary Lisp forms,
+		// and a nested handler-bind in one of them must find the pad already claimed
+		// rather than start a second.
+		channel.hbGuardPad = ref;
+		JvmLispCompiler.Ctx pad = ctx.ctxBuilder.build();
+		pad.evalStoreRef = ctx.evalStoreRef;
+		pad.nextLocal = 1;
+		pad.maxLocals = 1;
+		emitGuardPadBody(pad, className);
+		ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, pad));
+		return ref;
+	}
+
+	/**
+	 * Emits the landing pad's body over its single parameter (slot 0, the caught
+	 * throwable), answering that throwable so the call site can rethrow it.
+	 */
+	private static void emitGuardPadBody(JvmLispCompiler.Ctx ctx, String className) {
+		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		int excSlot = 0;
+		int condSlot = ctx.allocTemp();
 		// A cross-lambda non-local exit must pass through untouched (same gate as
 		// handler-case).
 		if (ctx.blockExitChannel) {
@@ -259,7 +327,7 @@ final class JvmHandlerCaseCompiler {
 		}
 		ctx.emit(Opcode.POP);
 		// Restore the channel (the outer catcher must see the instance the handlers
-		// saw, a synthesized one included) and rethrow.
+		// saw, a synthesized one included) and hand the throwable back to be rethrown.
 		ctx.emit(Opcode.GETSTATIC);
 		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
 		ctx.emit(Opcode.ALOAD);
@@ -268,19 +336,7 @@ final class JvmHandlerCaseCompiler {
 		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(excSlot);
-		ctx.emit(Opcode.ATHROW);
-		int done = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, gotoDonePos, done);
-		if (!spill.live().isEmpty()) {
-			ctx.spillScopes.pop();
-			spill.restore(ctx);
-		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(resultSlot);
-		if (start < end) {
-			ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(start, end, handler, 0));
-		}
-		ctx.nextLocal = savedNextLocal;
+		ctx.emit(Opcode.ARETURN);
 	}
 
 	/**

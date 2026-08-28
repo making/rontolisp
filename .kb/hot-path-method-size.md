@@ -8,11 +8,15 @@ process. Nothing reports it -- no warning, no flag in a stack trace, and every
 functional test still passes. It shows up only as a program that is several times
 slower than it should be, which is exactly how it hid twice (todo 188).
 
-The first two sites below are dispatch tables whose size tracks how much the
-program loads, so the cliff is crossed by adding a LIBRARY, not by editing the
-method. The third is a LIBRARY'S OWN function, compiled by us into something
-larger than the limit -- the split is ours to make, because the library has no
-say in how big its function's bytecode comes out.
+There are three ways to cross it. A DISPATCH TABLE grows with how much the
+program loads, so the cliff comes from adding a LIBRARY, not from editing the
+method. A LIBRARY'S OWN function is compiled by us into something larger than the
+limit -- the split is ours to make, because the library has no say in how big its
+function's bytecode comes out. And a SEQUENCE WE EMIT PER SITE is ours entirely:
+a landing pad, a type predicate, a literal's cells, written once in the source
+and a hundred times in the bytecode. The last is the cheapest to fix and helps
+every method at once, so it is the first thing to measure when a function is over
+(`-Drontolisp.jvm.debug-method-sizes=true` ranks what the emitter produced).
 
 ## `LispEvaluator.evalCons` (the interpreter)
 
@@ -52,6 +56,12 @@ Two changes, both in `JvmRuntimeBuilder`:
 
 Both matter, but the budget is the one worth the most: `-XX:-DontCompileHugeMethods`
 alone recovered 2.8x on the measured workload, i.e. nearly all of it.
+
+`_lookup` (`JvmEvalRuntimeBuilder`), the name-to-funcId registry every late-bound
+function designator resolves through, is the same shape and had the same bug:
+`LOOKUP_SEGMENT_BUDGET` was 24000 -- again the 64 KB method cap rather than the
+cliff -- so a clack/ningle program carried four chained segments of 24 KB. It is
+**6000** now, like the dispatch segments.
 
 A true O(1) `tableswitch`/`lookupswitch` is still available and is NOT used: the
 emitters, `JvmClassShaker` and `StackMapAugmenter` would all have to learn to
@@ -118,22 +128,88 @@ over the 220 programs of `examples/` and `src/test/resources/` that compile
 standalone: 210 byte-identical, 10 differing, and every one of those 10 differs
 because a method really did split.
 
-Two shapes still have no split point, both because the spine is linear and a
-split point is between two ITEMS:
+One shape still has no split point, because the spine is linear and a split
+point is between two ITEMS: **a branch**. A `cond` chain in tail position is one
+`if` item; splitting inside it would need both arms to carry the same
+continuation, which means emitting it twice.
 
-- **One huge form.** `fast-http`'s `parse-header-field-and-value` (56,513
-  bytecodes) and `http-multipart-parse` (32,183) are `tagbody` state machines --
-  one item, and `tagbodyScopes` would decline anyway, because a `go` names a
-  position in the frame it was emitted in.
-- **A branch.** A `cond` chain in tail position is one `if` item; splitting
-  inside it would need both arms to carry the same continuation, which means
-  emitting it twice.
+That is what `fast-http`'s two parsers are -- 37,913 bytecodes for
+`parse-header-field-and-value` (down from 56,513 with the per-site work below)
+and 30,509 for `http-multipart-parse` (from 32,183). NOT tagbody state machines,
+which is what they look like from the source: `proc-parse`'s `match-i-case`
+generates a decision tree over the header bytes -- one `if` per character
+position per spelling -- with the whole "not one of ours" continuation
+(`handle-otherwise`: scan to the colon, skip the spaces, parse the value)
+duplicated at every one of them. The body is 9,801 AST nodes holding 143 `if`s,
+141 `go`s and only 3 tagbodies, and the emitted bytes are spread evenly over all
+of it: after the per-site work below no single operator accounts for even 15% of
+the method. Cutting it needs a splitter that can put a BRANCH ARM in its own
+method, which means a `go` or a `return-from` that leaves the arm has to become
+something other than a jump -- at the AST level (an `flet`, which the existing
+cross-lambda exit lowering already rewrites), or as a state machine the
+enclosing method dispatches over. Both are open.
 
 Splitting is what the SIZE cliff needs, and it is not by itself a speed-up: what
 the JIT then compiles has to be where the time goes. On SHA-512 it is not --
 `-XX:-DontCompileHugeMethods` on the unsplit build measures no difference,
 because the body's glue is 4% of the run and `new BigInteger(String)` per
 `#xFFFFFFFFFFFFFFFF` literal is 40% (`.todo/557`).
+
+## The sequences we emit per site
+
+Nothing above helps a method whose size is one sequence OF OURS written once per
+site. Three were, and each is now one method per class, built on first use:
+
+- **`_hbGuard`** (`JvmHandlerCaseCompiler.guardLandingPad`). Every
+  `handler-bind` wraps its body in a `%hb-guard` landing pad, and the pad is
+  ~500 bytecodes: read and clear the condition channel, synthesize the instance
+  of a condition-less throw (one construction per raw-failure class), run the
+  cluster stack unless it already ran for this instance, restore the channel,
+  rethrow. It reads nothing but the caught throwable, so it takes one
+  (`(Throwable)Throwable`, answering what to rethrow) and the site is
+  `invokestatic; athrow`. In RESTART MODE `restart-case` expands through
+  `handler-bind`, so a `check-type` inside a macro used forty times carried
+  forty pads: 18,600 bytecodes of `parse-header-field-and-value` alone.
+- **The type predicates** (`JvmEmitHelper.emitSharedCall`). `atom`, `consp`,
+  `listp` and `stringp` each decide over a dozen host classes (~90 bytecodes),
+  and `eq`/`eql` carry their own nil handling (~45); all of them depend on
+  nothing but the values. `_pAtom`, `_pConsp`, `_pListp`, `_pStringp`, `_pEq`
+  and `_pEql` are those bodies, and a site is four bytes. This is what the
+  GENERATED dispatches are made of -- `%typep-runtime`, `%error-runtime`, the
+  `%sbr-*` slot-boundp chain, `%mmi-*`, `%slot-value-runtime` are a `cond` over
+  40-57 clauses each testing a list with `atom`/`eql` -- and it took every one of
+  them (8.5-13.8 KB) under the cliff at once.
+- **`_ql$N`** (`JvmQuoteCompiler`). A quoted list is built tail-first, cell by
+  cell, ~15 bytecodes each plus its car; a table literal is thousands. Past
+  `2 * QUOTE_CHUNK_BUDGET` the spine is cut into chunks of `QUOTE_CHUNK_BUDGET`
+  (2000) estimated bytes, each a `(Object)Object` builder taking the tail so far
+  and answering its chunk's head. The cells are still fresh at every evaluation
+  -- this moves the construction, it does not memoize it. `package-use-list` and
+  `lack/util:find-package-or-load` were 10-12 KB of which ~9.5 KB was two
+  literals.
+
+The shared helper is a static call the JIT inlines, so this costs nothing at run
+time and is the FIRST thing to try: it shrinks every method that writes the
+sequence, not one.
+
+## The clack/ningle measurement
+
+`examples/net/httpbin-ningle.lisp` compiled with `-o Prog.class`, one keep-alive
+connection, 1000 warm-up requests then 10,000 timed (2026-08-28, linux/x86-64):
+
+| | 10,000 requests | with `-XX:-DontCompileHugeMethods` |
+| --- | --- | --- |
+| before | 11.2 s | 6.5 s |
+| after | **6.2 s** | 6.4 s |
+
+**1.8x**, and the second column is what says the work is done: the flag no longer
+buys anything, because nothing on the request path is over the limit any more.
+What was over it: the CLOS runtime every ningle controller runs through
+(`%slot-value-runtime`, `%slot-boundp-runtime`, `%typep-runtime`, the `%sbr-*`
+and `%mmi-*` dispatches), `_lookup`'s four 24 KB segments, and
+`package-use-list` / `find-package-or-load`. NOT fast-http's two parsers, which
+are still 30-38 KB and cost nothing measurable here -- the same lesson SHA-512
+taught: size is the cliff, but the time has to be there for closing it to show.
 
 ## Not covered by the invariant
 
@@ -146,9 +222,14 @@ not a factor on every evaluated form.
 
 - `LispEvaluatorHotMethodSizeTest` -- no method of `LispEvaluator` crosses the
   limit.
-- `JvmLibraryMethodSizeTest` -- no emitted defun/lambda/continuation method of
-  the ironclad-loading compile crosses it either, which is the guard over
-  LIBRARY code and what the splitter has to keep true.
+- `JvmLibraryMethodSizeTest` -- no emitted method of the ironclad-loading
+  compile crosses it either, which is the guard over LIBRARY code and what the
+  splitter has to keep true. Its second case runs the same guard over the
+  clack/ningle stack (`examples/net/httpbin-ningle.lisp` through
+  `JvmSourceCompiler`), which is where an HTTP request's whole hot path lives;
+  it needs the Quicklisp cache, so it is gated on `RONTOLISP_NINGLE_E2E=1`. The
+  two fast-http parsers are named there with the size they compile to today, so
+  the shape that has no split point cannot GROW while it waits for one.
 - `JvmLispCompilerTest.aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations`
   (the running values, a closure built before the split reading variables
   mutated after it, and a special binding whose restore is emitted past the

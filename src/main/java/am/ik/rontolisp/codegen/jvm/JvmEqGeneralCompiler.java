@@ -31,13 +31,18 @@ final class JvmEqGeneralCompiler {
 		List<LispVal> args = cons.toList();
 		// Evaluate both args
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		int aSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(aSlot);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		int bSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(bSlot);
+		// The nil handling around the numeric helper is the same wherever it is
+		// written, so it lives in one per-class method (JvmEmitHelper.emitSharedCall)
+		// instead of ~45 bytecodes per site.
+		JvmEmitHelper.emitSharedCall(ctx, className, JvmNumericRuntimeBuilder.EQV.equals(opName) ? "_pEql" : "_pEq", 2,
+				helper -> emitCompare(helper, opName));
+	}
+
+	/** Emits the comparison over the two values in local slots 0 and 1. */
+	private static void emitCompare(JvmLispCompiler.Ctx ctx, String opName) {
+		int aSlot = 0;
+		int bSlot = 1;
 		// If a is null: return (b == null) ? t : nil
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(aSlot);

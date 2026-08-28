@@ -392,6 +392,49 @@ final class JvmEmitHelper {
 	}
 
 	/**
+	 * Calls a per-class helper holding a sequence that is the SAME wherever it is
+	 * emitted, building the method on first use. The arguments are already on the operand
+	 * stack, in order; the helper's value replaces them.
+	 *
+	 * <p>
+	 * A type predicate is the shape this is for: {@code atom}, {@code consp} and
+	 * {@code stringp} each decide over a dozen host classes and compile to ~90 bytecodes
+	 * that depend on nothing but the value, so a generated dispatch that writes
+	 * {@code atom} once per clause carried a kilobyte per forty clauses and crossed
+	 * HotSpot's {@code HugeMethodLimit} ({@code .kb/hot-path-method-size.md}) --
+	 * {@code %error-runtime}'s 57 {@code atom}s alone were 5 KB of its 13.8 KB. As a
+	 * static call of four bytes it costs the JIT nothing (the callee is small enough to
+	 * inline everywhere) and keeps the caller compilable.
+	 * @param ctx the emission context
+	 * @param className the class being generated
+	 * @param name the helper method's name, which also keys the one-per-class memo
+	 * @param arity how many {@code Object} arguments it takes
+	 * @param body emits the helper's value over its parameters (slots {@code 0..arity-1})
+	 */
+	static void emitSharedCall(JvmLispCompiler.Ctx ctx, String className, String name, int arity,
+			java.util.function.Consumer<JvmLispCompiler.Ctx> body) {
+		ConstantPool.MethodrefConstant ref = ctx.sharedHelpers.get(name);
+		if (ref == null) {
+			String desc = "(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;";
+			ConstantPool.Utf8Constant nameUtf8 = ctx.cp.addUtf8(name);
+			ConstantPool.Utf8Constant descUtf8 = ctx.cp.addUtf8(desc);
+			ref = selfMethod(ctx, className, name, desc);
+			// Recorded BEFORE the body is emitted so a helper whose own body reaches the
+			// same emitter finds it claimed rather than starting a second one.
+			ctx.sharedHelpers.put(name, ref);
+			JvmLispCompiler.Ctx helper = ctx.ctxBuilder.build();
+			helper.evalStoreRef = ctx.evalStoreRef;
+			helper.nextLocal = arity;
+			helper.maxLocals = arity;
+			body.accept(helper);
+			helper.emit(Opcode.ARETURN);
+			ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(name, nameUtf8, descUtf8, helper));
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ref.index());
+	}
+
+	/**
 	 * Coerces the {@code Object} on the stack (Long or BigInteger) to a
 	 * {@code BigInteger}.
 	 */

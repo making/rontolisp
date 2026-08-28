@@ -4492,6 +4492,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		@Nullable Utf8Constant nleFieldName;
 
 		/**
+		 * The shared {@code %hb-guard} landing pad ({@code _hbGuard}), built on the first
+		 * {@code handler-bind} the program compiles and called by every one after it.
+		 * Held here rather than per method because the pad reads only the caught
+		 * throwable and the class-wide channel, so one copy serves the whole class.
+		 */
+		@Nullable MethodrefConstant hbGuardPad;
+
+		/**
 		 * Lazily creates the constant-pool entries (idempotent adds) and marks the
 		 * channel used, so the class writer emits the two ThreadLocal fields and their
 		 * {@code <clinit>}.
@@ -4967,6 +4975,15 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		/** The next {@code _k$N} name, shared like {@link #nextFuncId}. */
 		final int[] nextOutlinedBodyId;
+
+		/**
+		 * The shared per-class emission helpers, by name -- one method holding a sequence
+		 * that is the same wherever it is emitted, so a program that writes it a hundred
+		 * times pays for it once ({@link JvmEmitHelper#emitSharedCall}). One map for the
+		 * whole compilation, like {@link #outlinedBodies}, whose list the built bodies
+		 * join.
+		 */
+		final Map<String, MethodrefConstant> sharedHelpers;
 
 		/**
 		 * The tail spine this form belongs to, or null. Set by {@link JvmBodyOutliner}
@@ -5477,6 +5494,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.ctxBuilder = builder;
 			this.outlinedBodies = builder.outlinedBodies;
 			this.nextOutlinedBodyId = builder.nextOutlinedBodyId;
+			this.sharedHelpers = builder.sharedHelpers;
 			this.numOps = builder.numOps;
 			this.mathOps = builder.mathOps;
 			this.systemOps = builder.systemOps;
@@ -5643,6 +5661,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private final List<JvmBodyOutliner.OutlinedBody> outlinedBodies = new ArrayList<>();
 
 			private final int[] nextOutlinedBodyId = new int[1];
+
+			private final Map<String, MethodrefConstant> sharedHelpers = new LinkedHashMap<>();
 
 			private boolean dynamic = false;
 
