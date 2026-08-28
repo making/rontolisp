@@ -86,9 +86,20 @@ anyway, and for an unrelated reason -- most of it is the JVM starting up, the
 same seconds its `startup` row reports.
 
 ABCL and rontolisp's JVM backend are the pair that share a machine: both emit
-JVM bytecode, both run under the same `java`, both pay the same JIT warm-up and
-the same startup. Differences between those two columns are differences in code
-generation and runtime representation, with the platform held fixed.
+JVM bytecode and both run under the same `java`. Differences between those two
+columns are mostly differences in code generation and runtime representation,
+with the platform held fixed.
+
+They do NOT pay the same JIT warm-up, and one row says so. Each benchmark is
+timed on a single cold run, so a row whose work is a JDK library -- `bignum`,
+which is `BigInteger.multiply` and almost nothing else -- measures how warm that
+library already was. ABCL spends 1.6 seconds starting its image before the
+benchmark begins (its `startup` row), and that image is itself Java exercising
+the same JDK code; rontolisp's compiled class starts in 67 ms and meets a cold
+`BigInteger`. On `bignum` rontolisp's first run costs what the identical loop
+hand-written in Java costs on ITS first run, and its third run is twice as fast
+as ABCL's steady state -- the column is measuring the tax the fast startup does
+not get to amortise, not the arithmetic.
 
 rontolisp's wasm column runs under wasmtime, and its interpreter column walks
 the AST. Neither has a counterpart among the other three; they are in the table
