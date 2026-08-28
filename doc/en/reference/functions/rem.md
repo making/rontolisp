@@ -11,3 +11,7 @@ Returns the remainder of `number` divided by `divisor` using truncated division,
 ```lisp
 (rem -13 4) ; => -1
 ```
+
+```lisp
+(rem 7/2 3) ; => 1/2
+```

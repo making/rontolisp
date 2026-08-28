@@ -2001,6 +2001,9 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(r);
 			}
+			if (hasRatio(args)) {
+				return rationalRemainder(args.get(0), args.get(1), true);
+			}
 			if (hasBigInteger(args)) {
 				BigInteger a = asBigInteger(args.get(0));
 				BigInteger b = asBigInteger(args.get(1));
@@ -2017,6 +2020,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.REM, args, 2);
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) % asDouble(args.get(1)));
+			}
+			if (hasRatio(args)) {
+				return rationalRemainder(args.get(0), args.get(1), false);
 			}
 			if (hasBigInteger(args)) {
 				return normalizeBig(asBigInteger(args.get(0)).remainder(asBigInteger(args.get(1))));
@@ -6472,6 +6478,28 @@ public final class Environment implements Scope {
 			return BigInteger.ONE;
 		}
 		throw new LispEvalException("Expected rational, got: " + val.print());
+	}
+
+	/**
+	 * The rational arm shared by {@code mod} and {@code rem}. With a = an/ad and b =
+	 * bn/bd the quotient a/b is (an*bd)/(ad*bn), so the integer remainder of THAT
+	 * division, read over the common denominator ad*bd, is the answer -- the same
+	 * computation the integer arm does, one level up. {@code divisorSigned} corrects the
+	 * remainder to the divisor's sign, which is what makes it {@code mod}.
+	 */
+	private static LispVal rationalRemainder(LispVal a, LispVal b, boolean divisorSigned) {
+		BigInteger aDen = denominatorOf(a);
+		BigInteger bDen = denominatorOf(b);
+		BigInteger quotientDen = aDen.multiply(numeratorOf(b));
+		if (quotientDen.signum() == 0) {
+			throw LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, "Division by zero");
+		}
+		BigInteger r = numeratorOf(a).multiply(bDen).remainder(quotientDen);
+		// Denominators are positive, so quotientDen carries the divisor's sign.
+		if (divisorSigned && r.signum() != 0 && r.signum() != quotientDen.signum()) {
+			r = r.add(quotientDen);
+		}
+		return LispRatio.valueOf(r, aDen.multiply(bDen));
 	}
 
 	private static LispVal addRational(List<LispVal> args) {

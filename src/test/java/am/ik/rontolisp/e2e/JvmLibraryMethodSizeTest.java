@@ -66,21 +66,16 @@ class JvmLibraryMethodSizeTest {
 															Features.JVM))),
 							WitExportDirective.Backend.OTHER));
 		byte[] classBytes = new JvmLispCompiler("IroncladSize").compile(program);
-		// Every method that can run per evaluated form must stay under the limit. The
-		// top-level chunks (and main, which only calls them) run once per process and
-		// are bounded by the 64 KB method cap instead, so they are the one exclusion.
+		// Every method that can run per evaluated form must stay under the limit --
+		// including the tail continuations a body that would have crossed it is split
+		// into (_k$N, JvmBodyOutliner), which is what keeps ironclad's 80-round
+		// UPDATE-SHA512-BLOCK off the cliff. The top-level chunks (and main, which only
+		// calls them) run once per process and are bounded by the 64 KB method cap
+		// instead, so they are the one exclusion.
 		Map<String, Integer> oversized = new LinkedHashMap<>();
 		for (MethodModel method : ClassFile.of().parse(classBytes).methods()) {
 			String name = method.methodName().stringValue();
 			if (name.equals("main") || name.startsWith("_top$") || name.equals("<clinit>")) {
-				continue;
-			}
-			if (name.equals("IRONCLAD$colon$colonUPDATE-SHA512-BLOCK")) {
-				// A pre-existing offender, NOT a regression: the 80 unrolled SHA-512
-				// rounds compiled past the limit before integer fusion existed (15,043
-				// bytecodes then, smaller now but still over). Splitting the function
-				// is its own item (.todo/526); this exclusion is pinned by name so a
-				// second method joining it fails the build.
 				continue;
 			}
 			int codeLength = method.findAttribute(Attributes.code()).orElseThrow().codeLength();

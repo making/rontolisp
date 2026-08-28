@@ -2275,6 +2275,38 @@ cases:
       1
       1/2
       (1/2 2/3)
+  # ANSI defines mod/rem over any REAL, so a ratio operand answers a rational on
+  # every backend. The let binding is load-bearing: it hides the operand type from
+  # both emitters, which is the path that used to diverge (the interpreter refused
+  # a non-integer, the JVM's _mod/_rem fell into the BigInteger arm).
+  - name: ratio-mod-rem
+    source: |
+      (let ((r 7/2))
+        (print (mod r 3))
+        (print (rem r 3))
+        (print (mod (- 0 r) 3))
+        (print (rem (- 0 r) 3))
+        (print (mod r -3))
+        (print (rem r -3)))
+      (print (mod 5 3/4))
+      (print (rem 5 3/4))
+      (print (mod -7/3 -2/5))
+      (print (rem -7/3 -2/5))
+      (print (mod 7/2 1/2))
+      (print (rem 22/7 22/7))
+    expected: |
+      1/2
+      1/2
+      5/2
+      -1/2
+      -5/2
+      1/2
+      1/2
+      1/2
+      -1/3
+      -1/3
+      0
+      0
   - name: common-lisp-fidelity-mod-rem-sign
     source: |
       (print (mod -13 4))

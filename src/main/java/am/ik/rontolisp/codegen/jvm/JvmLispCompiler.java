@@ -1720,12 +1720,11 @@ public final class JvmLispCompiler implements LispCompiler {
 					// no-op interface stubs are this shape).
 					JvmExprCompiler.compileExpr(LispNil.INSTANCE, funcCtx, this.className);
 				}
-				for (int i = 0; i < defun.bodyExprs.size(); i++) {
-					if (i > 0) {
-						funcCtx.emit(Opcode.POP);
-					}
-					JvmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx, this.className);
-				}
+				// Emitted through the tail-spine driver, which splits the body into
+				// continuation methods if it would cross HotSpot's HugeMethodLimit
+				// (JvmBodyOutliner); a body that stays under it is emitted exactly as
+				// the plain loop this replaced did.
+				JvmBodyOutliner.compileFunctionBody(defun.bodyExprs, funcCtx, this.className);
 				// Inside the try so an underflow here (a valueless body) still reports
 				// WHICH defun it was.
 				funcCtx.emit(Opcode.ARETURN);
@@ -1939,12 +1938,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 			}
 			try {
-				for (int i = 0; i < lambda.bodyExprs.size(); i++) {
-					if (i > 0) {
-						lambdaCtx.emit(Opcode.POP);
-					}
-					JvmExprCompiler.compileExpr(lambda.bodyExprs.get(i), lambdaCtx, this.className);
-				}
+				JvmBodyOutliner.compileFunctionBody(lambda.bodyExprs, lambdaCtx, this.className);
 			}
 			catch (IllegalStateException ex) {
 				if (Boolean.getBoolean("rontolisp.jvm.debug-method-sizes")) {
@@ -1994,6 +1988,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			// forms, so one oversized form has no split point (see chunkCodeBudget).
 			for (int i = 0; i < topChunks.size(); i++) {
 				sized.add(new Sized("_top$" + i, topChunks.get(i).code.size()));
+			}
+			for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
+				sized.add(new Sized(outlined.name(), outlined.ctx().code.size()));
 			}
 			sized.stream()
 				.sorted(java.util.Comparator.comparingInt(Sized::size).reversed())
@@ -2652,6 +2649,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		for (Ctx fusedCtx : fusedCtxs) {
 			am.ik.jvm.BranchRelaxer.relax(fusedCtx.code, fusedCtx.deferredBranches, fusedCtx.exceptionTable);
+		}
+		for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
+			am.ik.jvm.BranchRelaxer.relax(outlined.ctx().code, outlined.ctx().deferredBranches,
+					outlined.ctx().exceptionTable);
 		}
 		// The fusion helpers, built HERE (before assembly) because their bodies mint
 		// constant-pool entries: _ubRead whenever a raw local exists, _fxAsh whenever a
@@ -3598,6 +3599,20 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(fusedCtx.maxLocals)
 									.writeCode((Object[]) fusedCtx.code.toArray(new Integer[0]))
 									.writeExceptionTable(fusedCtx.exceptionTable)
+									.writeU2(0);
+							})));
+				}
+				// The outlined tail continuations of a body that would have compiled
+				// past HotSpot's HugeMethodLimit (JvmBodyOutliner); empty for every
+				// program whose bodies stay under the budget.
+				for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
+					final Ctx outlinedCtx = outlined.ctx();
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, outlined.nameUtf8(),
+							outlined.descUtf8(), method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(outlinedCtx.maxStack())
+									.writeU2(outlinedCtx.maxLocals)
+									.writeCode((Object[]) outlinedCtx.code.toArray(new Integer[0]))
+									.writeExceptionTable(outlinedCtx.exceptionTable)
 									.writeU2(0);
 							})));
 				}
@@ -4978,6 +4993,30 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int[] nextFuncId;
 
+		/**
+		 * The builder every context of this compilation was built from, so a body that
+		 * crosses the method-size budget can mint a continuation context with the same
+		 * shared runtime ({@link JvmBodyOutliner}).
+		 */
+		final Builder ctxBuilder;
+
+		/**
+		 * The outlined continuation bodies of this compilation, in the order they were
+		 * split off; one shared list, like {@link #lambdaDecls}.
+		 */
+		final List<JvmBodyOutliner.OutlinedBody> outlinedBodies;
+
+		/** The next {@code _k$N} name, shared like {@link #nextFuncId}. */
+		final int[] nextOutlinedBodyId;
+
+		/**
+		 * The tail spine this form belongs to, or null. Set by {@link JvmBodyOutliner}
+		 * immediately before a value-position form is compiled and cleared by
+		 * {@link JvmExprCompiler#compileExpr} on the way in, so only a construct that IS
+		 * the method's tail ever sees it.
+		 */
+		JvmBodyOutliner.@Nullable Tail tailBody;
+
 		int nextLocal = 1;
 
 		int maxLocals = 1;
@@ -5487,6 +5526,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.valueFuncIds = builder.valueFuncIds;
 			this.spelledLiterals = builder.spelledLiterals;
 			this.nextFuncId = builder.nextFuncId;
+			this.ctxBuilder = builder;
+			this.outlinedBodies = builder.outlinedBodies;
+			this.nextOutlinedBodyId = builder.nextOutlinedBodyId;
 			this.numOps = builder.numOps;
 			this.mathOps = builder.mathOps;
 			this.systemOps = builder.systemOps;
@@ -5649,6 +5691,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<String> spelledLiterals = new HashSet<>();
 
 			private int[] nextFuncId = new int[1];
+
+			private final List<JvmBodyOutliner.OutlinedBody> outlinedBodies = new ArrayList<>();
+
+			private final int[] nextOutlinedBodyId = new int[1];
 
 			private boolean dynamic = false;
 

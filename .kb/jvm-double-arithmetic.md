@@ -98,15 +98,27 @@ instead of pushing the value back through `_ubRead` for the caller to `pop`. Eve
 loop's counter step and every loop accumulator is that shape, so this is one `_ubRead` per
 name per iteration that no longer runs.
 
-## `_mod` and `_rem` over floats
+## `_mod` and `_rem` over floats and ratios
 
 Both generic helpers had a `Long` fast path and a `BigInteger` fallback and NO float arm,
 so a `Double` reaching them died casting `Double` to `BigInteger` -- reachable whenever
 the emitter could not see the operand type (a variable rather than a literal), including
 from a fused site's bail. They now begin with the same double prologue the other binary
 helpers use: `mod` through `_fmod` (CL's divisor-signed float modulo, what the
-double-literal emission already called), `rem` through `DREM` (the dividend's sign). A
-RATIO operand still fails here, and differently on each backend -- `.todo/555`.
+double-literal emission already called), `rem` through `DREM` (the dividend's sign).
+
+A RATIO operand was the same hole one level up -- it fell past the `Long` guard into
+`_big`, which cannot cast the `BigInteger[2]` representation. Both helpers now carry the
+`_ratnum`/`_ratden` prologue `_add`/`_sub`/`_mul` have (`emitRatioGuard`, so EITHER
+operand being a ratio takes it): with a = an/ad and b = bn/bd the quotient a/b is
+`(an*bd)/(ad*bn)`, so the integer remainder of THAT division, read over the common
+denominator `ad*bd`, is the answer -- one `_rat` call, which reduces and demotes an exact
+division to an integer. Denominators are positive, so the quotient's denominator carries
+the DIVISOR's sign and `_mod`'s existing correction (`emitDivisorSignCorrection`, now
+shared with the `BigInteger` arm) applies unchanged. ANSI defines `mod`/`rem` over any
+REAL and both wasm backends already answered rationals, so the divergence was the
+interpreter (whose integer check was too narrow -- `Environment.rationalRemainder` is the
+matching arm) and the JVM. All four are pinned by ci-spec case `ratio-mod-rem`.
 
 ## Gates
 
