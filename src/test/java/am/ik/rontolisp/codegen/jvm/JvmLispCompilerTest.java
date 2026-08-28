@@ -10128,6 +10128,48 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	// An equalp table places its keys by the equalp FOLD -- upper case for a string and a
+	// character, the exact rational value for a float, element-wise for a cons -- so the
+	// four backends agree on which keys are one key (.kb/hash-tables.md). An equal table
+	// in the same program keeps placing structurally, and the fold reaches neither.
+	void compileEqualpHashTableFoldsItsKeys() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash "CS" h) 1)
+				  (print (list (gethash "Cs" h) (gethash "cs" h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash 1 h) :one)
+				  (setf (gethash #\\a h) :a)
+				  (setf (gethash (list "x" 2) h) :pair)
+				  (print (list (gethash 1.0 h) (gethash 2/2 h) (gethash #\\A h)
+				               (gethash (list "X" 2.0) h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash "CS" h) 1)
+				  (print (list (gethash "Cs" h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equalp)) (acc nil))
+				  (setf (gethash "cs" h) 1)
+				  (setf (gethash #\\b h) 2)
+				  (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) h)
+				  (print (sort acc #'string<)))
+				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1)\n(\"B\" \"CS\")");
+	}
+
+	@Test
+	// The printed :TEST field and hash-table-test report the test lookup implements, now
+	// that a table knows whether it folds.
+	void compileEqualpHashTablePrintsAndReportsItsTest() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((p (make-hash-table :test 'equalp)) (q (make-hash-table :test 'equal)))
+				  (setf (gethash "a" p) 1)
+				  (print (list (hash-table-test p) (hash-table-test q)))
+				  (princ p)
+				  (terpri)
+				  (princ q))
+				"""))
+			.isEqualTo("(EQUALP EQUAL)\n#<HASH-TABLE :TEST EQUALP :COUNT 1>\n#<HASH-TABLE :TEST EQUAL :COUNT 0>");
+	}
+
+	@Test
 	void compileHashTableIncf() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *h* (make-hash-table :test 'equal))

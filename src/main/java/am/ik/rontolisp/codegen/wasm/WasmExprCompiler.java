@@ -1427,8 +1427,7 @@ final class WasmExprCompiler {
 				case LispNames.REMHASH -> WasmHashTableCompiler.compileRem(cons, ctx);
 				case LispNames.CLRHASH -> WasmHashTableCompiler.compileClr(cons, ctx);
 				case LispNames.HASH_TABLE_COUNT -> WasmHashTableCompiler.compileCount(cons, ctx);
-				case LispNames.HASH_TABLE_TEST ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableTest(cons), ctx);
+				case LispNames.HASH_TABLE_TEST -> WasmHashTableCompiler.compileTest(cons, ctx);
 				case LispNames.HASH_TABLE_SIZE -> WasmHashTableCompiler.compileCount(cons, ctx);
 				case LispNames.HASH_TABLE_REHASH_SIZE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx);

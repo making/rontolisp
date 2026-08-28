@@ -315,7 +315,7 @@
 | `remhash` | `(remhash key table)` | `key` のエントリを削除します。削除されたら `t`、そうでなければ `nil` を返します |
 | `clrhash` | `(clrhash table)` | すべてのエントリを削除します。テーブルを返します |
 | `hash-table-count` | `(hash-table-count table)` | エントリ数 |
-| `hash-table-test` | `(hash-table-test table)` | 常に `EQUAL`。`:test` に関わらずどのバックエンドも構造的にキーを比較する |
+| `hash-table-test` | `(hash-table-test table)` | 検索が実装しているテスト。畳み込むテーブルは `EQUALP`、それ以外は `EQUAL` (`eql` テーブルも構造的に比較する) |
 | `hash-table-size` | `(hash-table-size table)` | 格納数 (rontolisp のテーブルは独自の容量を持たない) |
 | `hash-table-rehash-size` | `(hash-table-rehash-size table)` | 標準の既定値 `1.5` (拡張はホスト側のマップに任せている) |
 | `hash-table-rehash-threshold` | `(hash-table-rehash-threshold table)` | 標準の既定値 `1.0` |

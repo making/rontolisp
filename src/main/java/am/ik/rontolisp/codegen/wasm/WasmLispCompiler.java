@@ -567,6 +567,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	private boolean usesInstances;
 
 	/**
+	 * Whether the program writes {@code (make-hash-table :test 'equalp)} somewhere. It
+	 * adds one {@code (mut i32)} global and one real body in the fixed function slot
+	 * every module already carries, and tags the header count with the fold flag -- so a
+	 * program without it is byte-identical to a build that never knew about the fold.
+	 */
+	private boolean usesEqualpHashTables;
+
+	/**
 	 * Whether the degenerate (non-asyncMode) tier's first-class stream value can exist in
 	 * this module: the program names {@code rontolisp::%stream-new}, its one producer.
 	 * Adds ONE type entry ({@code TYPE_P1_STREAM}) and the two-function
@@ -1380,7 +1388,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// nil-answering stub body and imports nothing.
 	static final int FUNC_ARGV = FUNC_WRITE_PACKED + 1;
 
-	static final int FX_FUNC_LAST = FUNC_ARGV;
+	// _equalp_key (key) -> key: the fold an equalp hash table places its keys by
+	// (WasmEqualpKeyRuntimeBuilder). Recursive over a cons, so it is a real function
+	// rather than inline code at each gethash/puthash/remhash site. Reuses the
+	// ((ref null eq)) -> (ref null eq) signature (TYPE_CALLABLE_BASE + 0), so no new type
+	// entry; appended after the last fixed helper so no index above shifts. A program
+	// that writes no :test 'equalp gets an identity stub body and calls it nowhere.
+	static final int FUNC_EQUALP_KEY = FUNC_ARGV + 1;
+
+	static final int FX_FUNC_LAST = FUNC_EQUALP_KEY;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -2482,6 +2498,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// mode forces it on: the signal hook synthesizes simple-* instances for plain
 		// string signals.
 		this.usesInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode;
+		// The equalp key fold, decided on the same snapshot: a table whose keys are
+		// folded carries a flag in its header count, so every count read in the module
+		// has to agree about whether the flag is there. One program-wide answer is what
+		// makes that agreement structural rather than a convention.
+		this.usesEqualpHashTables = LispMacroExpander.programMakesEqualpHashTable(program);
 		// The stream-value gate is decided on the SAME program snapshot, because
 		// mayCreateInstances above already answers for it: read them apart and a later
 		// desugaring could turn one on without the other, which is a %obj-new with no
@@ -3063,6 +3084,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the source scan under-predicts, _hash simply keeps its uncapped recursion.
 		// Appended AFTER the three above for the same reason they are last.
 		int hashDepthGlobalIndex = programUsesAnyHashOp(program) ? ostreamTableGlobalIndex + 1 : -1;
+		// The live recursion depth of _equalp_key, capped for the same reason and by the
+		// same rule. Emitted only for a program that writes a :test 'equalp table --
+		// which is also the whole gate on the fold -- so every other module keeps the
+		// globals it had. Last, after the hash depth it sits beside.
+		int equalpDepthGlobalIndex = usesEqualpHashTables ? hashDepthGlobalIndex + 1 : -1;
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -3070,7 +3096,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// memory, so it keeps the Preview 1 base and stops reserving 384 KB of address
 		// space per instance.
 		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
-		StringTable stringTable = new StringTable(dataBase);
+		StringTable stringTable = new StringTable(dataBase, this.usesEqualpHashTables);
 		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
 		// The Schubfach float-printer tables (todo-431): ONE shakeable blob whose only
 		// readers are the _schub_* helper bodies built later, so a program that never
@@ -3262,6 +3288,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.p1StreamFuncBase(this.usesP1Streams ? p1StreamFuncBase() : -1)
 			.instanceTypeIndex(this.usesInstances ? instanceTypeBase() : -1)
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
+			.usesEqualpHashTables(this.usesEqualpHashTables)
 			.usesStreamValues(usesStreamValues)
 			.layoutAddresses(layoutAddresses)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
@@ -5460,6 +5487,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _write_packed (seq, stream,
 															// start, end) -> value
 				fnDef.addFunction(TYPE_READ_LINE); // _argv () -> arg list (FUNC_ARGV)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _equalp_key (key) -> key
+															// (FUNC_EQUALP_KEY)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -5747,6 +5776,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				// incremented on entry and restored on exit, so the cap is by DEPTH and
 				// two equal keys still fold identically.
 				if (hashDepthGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
+				// The _equalp_key recursion depth at equalpDepthGlobalIndex, the same
+				// (mut i32) = 0 counter for the same depth cap, present only for a
+				// program that folds a key.
+				if (equalpDepthGlobalIndex >= 0) {
 					gs.add(g -> {
 						g.write(Type.I32);
 						g.write(am.ik.wasm.Mutability.VAR.code());
@@ -6174,6 +6215,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(argvOrdinals == null ? WasmArgvRuntimeBuilder.buildStub()
 						: WasmArgvRuntimeBuilder.build(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[0],
 								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + argvOrdinals[1]));
+				// equalp key-fold body (FUNC_EQUALP_KEY); an identity stub unless the
+				// program writes a :test 'equalp table, since nothing else calls it.
+				code.addFunction(equalpDepthGlobalIndex < 0 ? WasmEqualpKeyRuntimeBuilder.buildStub()
+						: WasmEqualpKeyRuntimeBuilder.build(equalpDepthGlobalIndex));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
@@ -7496,6 +7541,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesSynonymStreams = false;
 
 		/**
+		 * True when the program writes {@code (make-hash-table :test 'equalp)} somewhere,
+		 * so a table can carry the FOLD FLAG in its header count and the three table
+		 * primitives run a key through {@code _equalp_key} before placing it. A program
+		 * that writes none keeps its exact bytes: the count is the plain entry count and
+		 * no site emits a fold.
+		 */
+		boolean usesEqualpHashTables = false;
+
+		/**
 		 * True when an OPEN stream VALUE ({@code LispLayout.STREAM}) can exist in this
 		 * module -- the program spells a stream constructor, or names
 		 * {@code *error-output*} whose seeded default is one
@@ -7892,6 +7946,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.signalClauseMatch = builder.signalClauseMatch;
 			this.printCase = builder.printCase;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
+			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesStreamValues = builder.usesStreamValues;
 			this.usesSeqString = builder.usesSeqString;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
@@ -8003,6 +8058,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean printCase = false;
 
 			private boolean usesSynonymStreams = false;
+
+			private boolean usesEqualpHashTables = false;
 
 			private boolean usesStreamValues = false;
 
@@ -8246,6 +8303,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder usesSynonymStreams(boolean usesSynonymStreams) {
 				this.usesSynonymStreams = usesSynonymStreams;
+				return this;
+			}
+
+			Builder usesEqualpHashTables(boolean usesEqualpHashTables) {
+				this.usesEqualpHashTables = usesEqualpHashTables;
 				return this;
 			}
 
@@ -8653,6 +8715,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// LispHashTable.print() answers on the interpreter.
 		final StringEntry hashTableStr;
 
+		// The same tag for a table whose keys are FOLDED, interned only by a module that
+		// can build one -- every other module prints the constant EQUAL tag it always
+		// did, and carries these bytes no more than it carries the fold.
+		final @Nullable StringEntry hashTableEqualpStr;
+
 		final StringEntry hashTableEnd;
 
 		// Vector/array literal printing: the "#(" prefix for rank-1; a rank-n array
@@ -8703,7 +8770,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry charRubout;
 
-		StringTable(int baseOffset) {
+		StringTable(int baseOffset, boolean equalpTables) {
 			this.nextOffset = baseOffset;
 			// The printer prologue. Every entry below is read by a RUNTIME body -- the
 			// generic printer arms (_print_val / _princ_val), the float printer, the
@@ -8723,6 +8790,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.funcStr = addBodyString("#<function>");
 			this.futureStr = addBodyString("#<FUTURE>");
 			this.hashTableStr = addBodyString(LispHashTable.HASH_TABLE_PREFIX);
+			this.hashTableEqualpStr = equalpTables ? addBodyString(LispHashTable.HASH_TABLE_PREFIX_EQUALP) : null;
 			this.hashTableEnd = addBodyString(">");
 			this.vecPrefix = addBodyString("#(");
 			this.hashPrefix = addBodyString("#");

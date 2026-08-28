@@ -44,7 +44,117 @@ public final class RontoHashTable {
 	/** The key the insertion-order list hangs off inside the table. */
 	public static final String ORDER_KEY = "#order";
 
+	/**
+	 * The key an {@code equalp} table's marker hangs off inside the table -- present (any
+	 * non-null value) exactly when the table folds its keys through
+	 * {@link #equalpKey(Object, int)} before placing them. A second String key beside
+	 * {@link #ORDER_KEY}, so it collides with no {@code Integer} bucket key and the table
+	 * stays ONE object.
+	 */
+	public static final String EQUALP_KEY = "#equalp";
+
+	/**
+	 * How many levels {@link #equalpKey(Object, int)} descends before answering the
+	 * subtree unfolded -- the same cap the structural hash uses, and for the same reason:
+	 * a CYCLIC key must terminate.
+	 */
+	public static final int FOLD_DEPTH_CAP = 64;
+
 	private RontoHashTable() {
+	}
+
+	/**
+	 * Folds a key into the representative an {@code equalp} table places it under:
+	 * {@code equalp} on two values is the structural {@code equal} on their folds, so ONE
+	 * table carries both tests and the emitted {@code _hash}/{@code _equal} pair is
+	 * untouched.
+	 *
+	 * <p>
+	 * Over the JVM backend's value representation: a Lisp string (a Java String with its
+	 * framing quotes) and a character (an {@code int[]} of one code point) fold to upper
+	 * case ONE CODE POINT AT A TIME, a float whose value is an INTEGER to that integer
+	 * (so {@code 1}, {@code 1.0} and {@code 2/2} are one key), and a cons
+	 * ({@code Object[2]}) folds element-wise. Everything else is its own representative
+	 * -- a SYMBOL (a bare String, with no framing quotes), a general ARRAY and a float
+	 * with a fraction deliberately included.
+	 *
+	 * <p>
+	 * The specification is {@code LispEquality.equalpKey}, which folds the same values in
+	 * the interpreter's representation; the two are pinned against each other so an
+	 * {@code equalp} table places the same keys on every backend
+	 * ({@code .kb/hash-tables.md}).
+	 * @param key the key as the caller wrote it
+	 * @param depth how many levels are left to descend; at zero the value is its own fold
+	 * @return the folded key
+	 */
+	public static Object equalpKey(Object key, int depth) {
+		if (depth <= 0 || key == null) {
+			return key;
+		}
+		if (key instanceof String text) {
+			// A framed string folds its content; a SYMBOL (unframed) is its own key.
+			return (text.length() >= 2 && text.charAt(0) == '"') ? upcase(text) : text;
+		}
+		if (key instanceof int[] character) {
+			return character.length == 1 ? new int[] { Character.toUpperCase(character[0]) } : key;
+		}
+		if (key instanceof Double number) {
+			return integerValued(number.doubleValue());
+		}
+		// The cons discrimination the emitted _hash makes: an Object[] that is neither a
+		// ratio (a BigInteger[]) nor a function reference (an Integer funcId in slot 0)
+		// nor an instance (its interned String[] layout in slot 0).
+		if (key instanceof Object[] cell && !(key instanceof java.math.BigInteger[]) && !(key instanceof String[])
+				&& cell.length == 2 && !(cell[0] instanceof Integer) && !(cell[0] instanceof String[])) {
+			return new Object[] { equalpKey(cell[0], depth - 1), equalpKey(cell[1], depth - 1) };
+		}
+		return key;
+	}
+
+	// Upper case one code point at a time -- the mapping every backend's char-upcase
+	// applies, which a whole-string toUpperCase would part company with wherever one
+	// code point expands into several.
+	private static String upcase(String text) {
+		StringBuilder folded = new StringBuilder(text.length());
+		int i = 0;
+		while (i < text.length()) {
+			int codePoint = text.codePointAt(i);
+			folded.appendCodePoint(Character.toUpperCase(codePoint));
+			i += Character.charCount(codePoint);
+		}
+		return folded.toString();
+	}
+
+	// The exact integer a double equals, in the shape the emitted _norm produces: a Long
+	// when it fits one, a BigInteger otherwise. A finite double is exactly
+	// mantissa * 2^exponent, which is where the integer is read from -- no decimal
+	// detour, exact at every magnitude. A float with a FRACTION does not fold to the
+	// ratio it equals (the WASM ratio cannot hold one, so folding it here would split
+	// the backends) and neither does a non-finite one; both are their own key.
+	private static Object integerValued(double value) {
+		if (Double.isNaN(value) || Double.isInfinite(value)) {
+			return Double.valueOf(value);
+		}
+		if (value == 0.0) {
+			// Both zeros fold to the integer 0, which is what (= -0.0 0) answers.
+			return Long.valueOf(0);
+		}
+		long bits = Double.doubleToLongBits(value);
+		long fraction = bits & 0x000fffffffffffffL;
+		int biasedExponent = (int) ((bits >> 52) & 0x7ff);
+		long mantissa = (biasedExponent == 0) ? fraction : (fraction | 0x0010000000000000L);
+		int exponent = (biasedExponent == 0) ? -1074 : biasedExponent - 1075;
+		while (exponent < 0 && (mantissa & 1L) == 0L) {
+			mantissa >>= 1;
+			exponent++;
+		}
+		if (exponent < 0) {
+			// An odd mantissa still owing a division by a power of two: a fraction.
+			return Double.valueOf(value);
+		}
+		java.math.BigInteger magnitude = java.math.BigInteger.valueOf(bits < 0 ? -mantissa : mantissa)
+			.shiftLeft(exponent);
+		return magnitude.bitLength() < 64 ? (Object) Long.valueOf(magnitude.longValue()) : magnitude;
 	}
 
 	/**

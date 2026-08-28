@@ -126,11 +126,25 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	private boolean needsHttpRuntime;
 
+	/**
+	 * Whether the last {@link #compile} builds an {@code equalp} hash table, i.e. whether
+	 * the emitted class needs {@code RontoHashTable} -- the class the key fold is written
+	 * in -- beside it.
+	 */
+	private boolean needsHashFoldRuntime;
+
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
 
 	/** The hash-table runtime helper group ({@link JvmHashRuntimeBuilder}). */
 	private static final String GROUP_HASH = "hash-tables";
+
+	/**
+	 * The {@code equalp} key-fold helpers
+	 * ({@link JvmHashRuntimeBuilder#EQUALP_METHOD_NAMES}), a group of their own so a
+	 * program that folds no key carries none of them.
+	 */
+	private static final String GROUP_HASH_EQUALP = "hash-tables-equalp";
 
 	/** The embedded eval/apply runtime group ({@link JvmEvalRuntimeBuilder}). */
 	private static final String GROUP_EVAL = "eval";
@@ -150,6 +164,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static @Nullable String gateGroupFor(String helperName) {
 		if (JvmArrayRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
 			return GROUP_ARRAYS;
+		}
+		if (JvmHashRuntimeBuilder.EQUALP_METHOD_NAMES.contains(helperName)) {
+			return GROUP_HASH_EQUALP;
 		}
 		if (JvmHashRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
 			return GROUP_HASH;
@@ -387,12 +404,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @return each class file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
-		if (!this.needsHandleRuntime && !this.needsHttpRuntime) {
+		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashFoldRuntime) {
 			return Map.of();
 		}
 		Map<String, byte[]> files = new LinkedHashMap<>();
 		if (this.needsHandleRuntime) {
 			files.putAll(JvmExportRuntimeBuilder.runtimeClassFiles());
+		}
+		if (this.needsHashFoldRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsHttpRuntime) {
 			files.putAll(JvmHttpHandlerRuntimeBuilder.runtimeClassFiles());
@@ -1089,7 +1109,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// http-handler forces the group on: the Clack environment's :headers value is a
 		// hash table (built by RontoHttpClack in the _hash* runtime's HashMap
 		// representation), whether or not the program's own source names a hash op.
-		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH) || usesHttpHandler;
+		// A table whose keys are FOLDED: the three extra helpers and the fold call in
+		// get/put/remove ride on their own gate, so a program that writes no
+		// :test 'equalp is emitted exactly as it was before the fold existed -- and the
+		// travelling RontoHashTable stays out of its output.
+		boolean usesEqualpHashTables = LispMacroExpander.programMakesEqualpHashTable(program)
+				|| forcedGroups.contains(GROUP_HASH_EQUALP);
+		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH) || usesHttpHandler
+				|| usesEqualpHashTables;
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
 		// it pulls in the eval runtime as well.
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
@@ -1438,6 +1465,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A served program calls the embedded server and the Clack glue, so those class
 		// files travel with the output and it runs on a bare `java -cp .`.
 		this.needsHttpRuntime = usesHttpHandler;
+		// An equalp table folds its keys through RontoHashTable.equalpKey, so that class
+		// travels with the output too -- and with nothing else, since no other program
+		// emits a call to it.
+		this.needsHashFoldRuntime = usesEqualpHashTables;
 		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime;
 
 		// Whether the program can produce a packed integer vector (a #N@(...) literal
@@ -1625,6 +1656,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesPackedSequenceIo(usesPackedSequenceIo)
 			.usesArrays(usesArrays)
 			.usesHashTables(usesHashTables)
+			.usesEqualpHashTables(usesEqualpHashTables)
 			.usesSeqString(usesSeqString)
 			.mayUseInstances(mayUseInstances)
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
@@ -2140,7 +2172,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables
 				? JvmHashRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, longValueOf,
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)), strvMethod,
-						instanceLayoutClass)
+						instanceLayoutClass, usesEqualpHashTables)
 				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
@@ -2262,8 +2294,17 @@ public final class JvmLispCompiler implements LispCompiler {
 				.addNameAndType(cp.addUtf8(JvmHashRuntimeBuilder.SIZE), cp.addUtf8(JvmHashRuntimeBuilder.SIZE_DESC)));
 			MethodrefConstant intToString = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Integer")),
 					cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
+			// The :TEST field is the test lookup implements. Only a program that can
+			// build an equalp table interns the second tag and asks the table which one
+			// it is; in every other program no table folds, so the EQUAL tag is a
+			// constant exactly as it was.
 			hashPrint = new JvmRuntimeBuilder.HashPrint(mapClassForPrint, cp.addString(LispHashTable.HASH_TABLE_PREFIX),
-					mapSize, intToString, stringConcat, cp.addString(">"));
+					mapSize, intToString, stringConcat, cp.addString(">"),
+					usesEqualpHashTables ? cp.addString(LispHashTable.HASH_TABLE_PREFIX_EQUALP) : null,
+					usesEqualpHashTables
+							? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmHashRuntimeBuilder.EQUALP_P),
+									cp.addUtf8(JvmHashRuntimeBuilder.EQUALP_P_DESC)))
+							: null);
 		}
 		else {
 			hashPrint = null;
@@ -5087,6 +5128,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesHashTables = false;
 
 		/**
+		 * True when the {@code equalp} key-fold helpers are emitted for this program,
+		 * i.e. when its source writes {@code (make-hash-table :test 'equalp)} somewhere.
+		 * Gates the fold at the {@code make-hash-table} site and the real
+		 * {@code hash-table-test} answer: with no folding table in the program both are
+		 * calls to helpers that were never generated, and the constant answer is the true
+		 * one.
+		 */
+		boolean usesEqualpHashTables = false;
+
+		/**
 		 * True when the {@code %seq-string} helper is injected for this program, i.e. the
 		 * program itself writes a {@code (concatenate 'string ...)} with an argument that
 		 * is not a literal string. Only then does the string-family lowering normalize
@@ -5346,6 +5397,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesPackedSequenceIo = builder.usesPackedSequenceIo;
 			this.usesArrays = builder.usesArrays;
 			this.usesHashTables = builder.usesHashTables;
+			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesSeqString = builder.usesSeqString;
 			this.mayUseInstances = builder.mayUseInstances;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
@@ -5627,6 +5679,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesArrays = false;
 
 			private boolean usesHashTables = false;
+
+			private boolean usesEqualpHashTables = false;
 
 			private boolean usesSeqString = false;
 
@@ -6092,6 +6146,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesHashTables(boolean usesHashTables) {
 				this.usesHashTables = usesHashTables;
+				return this;
+			}
+
+			Builder usesEqualpHashTables(boolean usesEqualpHashTables) {
+				this.usesEqualpHashTables = usesEqualpHashTables;
 				return this;
 			}
 

@@ -57,10 +57,32 @@ class JvmRuntimeGroupNamesTest {
 		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
 
 		List<JvmHashRuntimeBuilder.HashMethod> emitted = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, strv, stringArrayClass);
+				objectArrayClass, longValueOf, equal, strv, stringArrayClass, false);
 
 		assertThat(emitted.stream().map(m -> m.name().index()).collect(Collectors.toSet()))
 			.isEqualTo(indicesOf(cp, JvmHashRuntimeBuilder.METHOD_NAMES));
+	}
+
+	@Test
+	void theEqualpFoldRosterIsExactlyWhatTheBuilderAddsForIt() {
+		ConstantPool cp = new ConstantPool();
+		ClassConstant selfClass = cp.addClass(cp.addUtf8("Test"));
+		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
+		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
+		MethodrefConstant longValueOf = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
+		MethodrefConstant equal = selfMethod(cp, selfClass, "_equal", "(Ljava/lang/Object;Ljava/lang/Object;)I");
+		MethodrefConstant strv = selfMethod(cp, selfClass, "_strv", "(Ljava/lang/Object;)Ljava/lang/Object;");
+		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
+
+		List<JvmHashRuntimeBuilder.HashMethod> folding = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
+				objectArrayClass, longValueOf, equal, strv, stringArrayClass, true);
+
+		Set<String> names = new java.util.LinkedHashSet<>(JvmHashRuntimeBuilder.METHOD_NAMES);
+		names.addAll(JvmHashRuntimeBuilder.EQUALP_METHOD_NAMES);
+		assertThat(folding.stream().map(m -> m.name().index()).collect(Collectors.toSet()))
+			.isEqualTo(indicesOf(cp, names));
 	}
 
 	private static MethodrefConstant selfMethod(ConstantPool cp, ClassConstant selfClass, String name, String desc) {

@@ -786,6 +786,12 @@ final class WasmAsyncEmit {
 			// built or written through at the SYNCHRONOUS top level must resolve like
 			// the same form inside a defun.
 			.usesSynonymStreams(proto.usesSynonymStreams)
+			// NOT optional either: the fold flag rides in a table's header COUNT, so a
+			// chunk that reads or writes a count has to agree with the rest of the
+			// module about whether the flag is there -- a table made at the synchronous
+			// top level would otherwise be counted in units of one and printed in units
+			// of two.
+			.usesEqualpHashTables(proto.usesEqualpHashTables)
 			.usesStreamValues(proto.usesStreamValues)
 			.usesSeqString(proto.usesSeqString)
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)

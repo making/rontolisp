@@ -3287,6 +3287,48 @@ cases:
       "#<HASH-TABLE :TEST EQUAL :COUNT 2>"
       #<HASH-TABLE :TEST EQUAL :COUNT 1>
       #<HASH-TABLE :TEST EQUAL :COUNT 0>
+  - name: equalp-hash-table-key-fold
+    source: |
+      (defparameter *htq* (make-hash-table :test 'equalp))
+      (setf (gethash "CS" *htq*) 'separator)
+      (setf (gethash #\a *htq*) 'letter)
+      (setf (gethash 1 *htq*) 'one)
+      (setf (gethash (list "Lu" #\B) *htq*) 'pair)
+      (print (list (gethash "Cs" *htq*) (gethash "cs" *htq*) (gethash #\A *htq*)
+                   (gethash 1.0 *htq*) (gethash (list "LU" #\b) *htq*)
+                   (hash-table-count *htq*)))
+      (print (list (hash-table-test *htq*) (hash-table-p *htq*)))
+      (princ *htq*)
+      (terpri)
+      (remhash "cS" *htq*)
+      (print (list (gethash "CS" *htq*) (hash-table-count *htq*)))
+      (clrhash *htq*)
+      (setf (gethash "x" *htq*) 'kept)
+      (print (list (gethash "X" *htq*) (hash-table-test *htq*)))
+      (defparameter *htn* (make-hash-table :test 'equalp))
+      (setf (gethash 100000000000000000000 *htn*) 'big)
+      (setf (gethash 0 *htn*) 'zero)
+      (setf (gethash 0.5 *htn*) 'half)
+      (print (list (gethash 1.0e20 *htn*) (gethash -0.0 *htn*) (gethash 1/2 *htn*)
+                   (hash-table-count *htn*)))
+      (defparameter *htm* (make-hash-table :test 'equalp))
+      (setf (gethash "cs" *htm*) 1)
+      (setf (gethash #\b *htm*) 2)
+      (let ((acc nil))
+        (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) *htm*)
+        (print (sort acc #'string<)))
+      (defparameter *hte* (make-hash-table :test 'equal))
+      (setf (gethash "CS" *hte*) 'upper)
+      (print (list (gethash "Cs" *hte*) (hash-table-count *hte*) (hash-table-test *hte*)))
+    expected: |
+      (SEPARATOR SEPARATOR LETTER ONE PAIR 4)
+      (EQUALP T)
+      #<HASH-TABLE :TEST EQUALP :COUNT 4>
+      (NIL 3)
+      (KEPT EQUALP)
+      (BIG ZERO NIL 3)
+      ("B" "CS")
+      (NIL 1 EQUAL)
   - name: hash-table-functions-first-class
     source: |
       (defun ci-ht-fc ()

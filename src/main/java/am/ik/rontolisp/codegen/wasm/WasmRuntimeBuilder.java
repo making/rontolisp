@@ -3911,7 +3911,41 @@ final class WasmRuntimeBuilder {
 		// same reason rather than trapping: the count is emitted only when the header
 		// car really is an i31, and such a box prints the tag with a 0 count instead of
 		// trapping on the cast.
-		writeStr(w, st.hashTableStr);
+		// The tagged count carries the table's TEST in its low bit when the module can
+		// build a folding table (WasmHashTableCompiler); the tag says which test lookup
+		// implements, and the count is shifted past the flag. A module that folds no key
+		// writes the EQUAL tag and the count as they always were.
+		if (st.hashTableEqualpStr == null) {
+			writeStr(w, st.hashTableStr);
+		}
+		else {
+			emitHashTableCount(w);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.IF, 0x40);
+			writeStr(w, st.hashTableEqualpStr);
+			w.write(Instruction.ELSE);
+			writeStr(w, st.hashTableStr);
+			w.write(Instruction.END);
+		}
+		emitHashTableCount(w);
+		if (st.hashTableEqualpStr != null) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_SHR_S);
+		}
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
+		writeStr(w, st.hashTableEnd);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // is-cell if
+	}
+
+	// Pushes the cell's header count as an i32 -- 0 for a cell that is not a table, so an
+	// unexposed internal box prints the tag with a zero count instead of trapping on the
+	// i31 cast (the arm must answer for EVERY cell; see the comment above).
+	private static void emitHashTableCount(WasmWriter w) {
 		cellHeader(w);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
@@ -3934,11 +3968,6 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.END);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
-		writeStr(w, st.hashTableEnd);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END); // is-cell if
 	}
 
 	// stride = the product of the i31 dimension sizes dims[j..rank-1] (the flat-index

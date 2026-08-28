@@ -19119,6 +19119,71 @@ public final class LispMacroExpander {
 		return false;
 	}
 
+	/**
+	 * Whether the program can build a hash table whose keys are folded, i.e. whether any
+	 * {@code (make-hash-table ... :test 'equalp ...)} form is written in it. The gate
+	 * both compiled backends switch the {@code equalp} key fold on with, in ONE place so
+	 * they cannot disagree about which programs get it: a program with no such form is
+	 * emitted exactly as it was before the fold existed, and every table in a program
+	 * that has one carries the flag the fold reads.
+	 *
+	 * <p>
+	 * The test is read from the SOURCE because the compiled backends never evaluate
+	 * {@code make-hash-table}'s arguments ({@code .kb/hash-tables.md}); a test computed
+	 * at run time is therefore not seen, and the table places structurally as it did
+	 * before.
+	 * @param forms the program to scan
+	 * @return whether an {@code equalp} table can exist in this program
+	 */
+	public static boolean programMakesEqualpHashTable(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (makesEqualpHashTable(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean makesEqualpHashTable(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_HASH_TABLE.equals(head.name())
+				&& isEqualpHashTableMake(cons)) {
+			return true;
+		}
+		return makesEqualpHashTable(cons.car()) || makesEqualpHashTable(cons.cdr());
+	}
+
+	/**
+	 * Whether one {@code (make-hash-table ...)} form asks for the {@code equalp} test,
+	 * written as {@code 'equalp} or {@code #'equalp} -- the per-site half of
+	 * {@link #programMakesEqualpHashTable}, read by both backends' {@code make} compiler
+	 * so the site and the gate agree on the same forms.
+	 * @param form the {@code make-hash-table} call
+	 * @return whether its {@code :test} argument names {@code equalp}
+	 */
+	public static boolean isEqualpHashTableMake(LispCons form) {
+		List<LispVal> parts = form.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol keyword && LispNames.TEST_KEYWORD.equals(keyword.name())
+					&& namesEqualp(parts.get(i + 1))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesEqualp(LispVal test) {
+		LispVal named = test;
+		if (test instanceof LispCons quoted && quoted.car() instanceof LispSymbol head
+				&& (LispNames.QUOTE.equals(head.name()) || LispNames.FUNCTION.equals(head.name()))
+				&& quoted.cdr() instanceof LispCons rest) {
+			named = rest.car();
+		}
+		return named instanceof LispSymbol test0 && LispNames.EQUALP.equals(test0.name());
+	}
+
 	private static boolean usesGeneralArrayOp(LispVal form) {
 		if (form instanceof LispArray || form instanceof LispFloatArray) {
 			return true;

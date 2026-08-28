@@ -1338,7 +1338,9 @@ final class JvmRuntimeBuilder {
 	 * and {@code hash-table-count} cannot disagree.
 	 */
 	record HashPrint(ClassConstant mapClass, ConstantPool.StringConstant tag, MethodrefConstant mapSize,
-			MethodrefConstant intToString, MethodrefConstant stringConcat, ConstantPool.StringConstant suffix) {
+			MethodrefConstant intToString, MethodrefConstant stringConcat, ConstantPool.StringConstant suffix,
+			ConstantPool.@org.jspecify.annotations.Nullable StringConstant equalpTag,
+			@org.jspecify.annotations.Nullable MethodrefConstant equalpTest) {
 	}
 
 	/**
@@ -1709,7 +1711,26 @@ final class JvmRuntimeBuilder {
 		int skip = code.size();
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
-		emitLdc(code, hashPrint.tag().index());
+		if (hashPrint.equalpTag() != null && hashPrint.equalpTest() != null) {
+			// The table says which test it implements: equalp when it folds its keys,
+			// equal otherwise. Only a program that can build one carries the branch.
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, hashPrint.equalpTest().index());
+			int notEqualp = code.size();
+			code.add(Opcode.IFNULL);
+			emitU2(code, 0);
+			emitLdc(code, hashPrint.equalpTag().index());
+			int haveTag = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, notEqualp, code.size());
+			emitLdc(code, hashPrint.tag().index());
+			patchBranch(code, haveTag, code.size());
+		}
+		else {
+			emitLdc(code, hashPrint.tag().index());
+		}
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, hashPrint.mapSize().index());

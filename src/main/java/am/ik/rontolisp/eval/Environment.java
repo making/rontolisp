@@ -700,10 +700,9 @@ public final class Environment implements Scope {
 
 	private static void registerHashTables(Environment env) {
 		env.defineFunction(LispNames.MAKE_HASH_TABLE, new LispFunction(LispNames.MAKE_HASH_TABLE, args -> {
-			// Accepts :test (eql/equal) and ignores other keywords such as :size. Lookup
-			// is
-			// always structural, so :test is informational only (see LispHashTable).
-			boolean equalTest = false;
+			// Reads :test and ignores other keywords such as :size. Only equalp changes
+			// placement (its keys are folded); every other test places structurally, so
+			// eql and equal are one table here (see LispHashTable, .todo/012).
 			boolean equalpTest = false;
 			for (int i = 0; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw && LispNames.TEST_KEYWORD.equals(kw.name())) {
@@ -713,10 +712,9 @@ public final class Environment implements Scope {
 						default -> "";
 					};
 					equalpTest = LispNames.EQUALP.equals(testName);
-					equalTest = "EQUAL".equals(testName) || equalpTest;
 				}
 			}
-			return new LispHashTable(equalTest, equalpTest);
+			return new LispHashTable(equalpTest);
 		}));
 		env.defineFunction(LispNames.GETHASH, new LispFunction(LispNames.GETHASH, args -> {
 			if (args.size() != 2 && args.size() != 3) {
@@ -767,14 +765,14 @@ public final class Environment implements Scope {
 					requireHashTable(LispNames.HASH_TABLE_REHASH_THRESHOLD, args.get(0));
 					return new LispDouble(1.0);
 				}));
-		// hash-table-test: always 'equal. Lookup is structural on every backend
-		// (the :test argument is recorded but never consulted), so equal is the test
-		// the table actually implements -- reporting the requested one would describe
-		// behavior that does not exist here.
+		// hash-table-test: the test the table actually implements, which is equalp for a
+		// table whose keys are folded and equal for every other -- an eql table still
+		// places structurally (.todo/012), so reporting eql would describe behavior that
+		// does not exist here.
 		env.defineFunction(LispNames.HASH_TABLE_TEST, new LispFunction(LispNames.HASH_TABLE_TEST, args -> {
 			requireArgCount(LispNames.HASH_TABLE_TEST, args, 1);
-			requireHashTable(LispNames.HASH_TABLE_TEST, args.get(0));
-			return new LispSymbol(LispNames.EQUAL);
+			LispHashTable table = requireHashTable(LispNames.HASH_TABLE_TEST, args.get(0));
+			return new LispSymbol(table.equalpTest() ? LispNames.EQUALP : LispNames.EQUAL);
 		}));
 		env.defineFunction(LispNames.HASH_TABLE_P, new LispFunction(LispNames.HASH_TABLE_P, args -> {
 			requireArgCount(LispNames.HASH_TABLE_P, args, 1);
