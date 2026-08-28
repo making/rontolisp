@@ -3,6 +3,8 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Stream;
@@ -10,6 +12,7 @@ import java.util.stream.Stream;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -124,11 +127,13 @@ class ClUnicodeTablesTest {
 	}
 
 	@Test
-	void dumpTemp() throws Exception {
-		for (Map.Entry<String, String> e : generate().entrySet()) {
-			java.nio.file.Files.writeString(java.nio.file.Path.of(
-					"/tmp/claude-1000/-home-administrator-rontolisp/c7419e68-f427-40f2-af70-963b668fe641/scratchpad/fixture",
-					e.getKey()), e.getValue());
+	void everyGeneratedComponentRoundTripsThroughAFile(@TempDir Path dir) throws Exception {
+		Map<String, String> sources = generate();
+		assertThat(sources.keySet()).containsExactlyInAnyOrder("lists.lisp", "hash-tables.lisp", "methods.lisp");
+		for (Map.Entry<String, String> e : sources.entrySet()) {
+			Path file = dir.resolve(e.getKey());
+			Files.writeString(file, e.getValue());
+			assertThat(Files.readString(file)).isEqualTo(e.getValue());
 		}
 	}
 
