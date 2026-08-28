@@ -3,10 +3,13 @@
 ;; on the first run. Run with:
 ;;   rontolisp examples/asdf/str-demo.lisp
 ;;
-;; INTERPRETER ONLY, unlike every other demo here. cl-unicode's tables are ~5 MB
-;; of data: more than one .class can name, and the WASM module that does build
-;; then misses its own case-insensitive property lookup. See the asdf-systems
-;; guide.
+;; Runs on all four backends, like every other demo here -- but it is the only
+;; one with no E2E test of its own, because cl-unicode ships 30 MB of Unicode
+;; character database and is not vendored into this repository.  Its tables are
+;; a few MB of data: more constants than one .class may name, so they travel as
+;; their own printed text in a couple of hundred string literals and are read
+;; back at load, and each range table is built the first time its property is
+;; asked for.  A compiled artifact is around 5 MB.
 ;;
 ;; cl-unicode is also the one library here whose sources are INCOMPLETE as
 ;; shipped: three of the eight components its system names do not exist in the

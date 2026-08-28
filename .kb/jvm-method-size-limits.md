@@ -130,19 +130,44 @@ rejects an operand whose entry is not a method descriptor, as a backstop for any
 other way an index could go wrong. `toByteArray`'s check is now unreachable and
 kept only as a serialization-time backstop.
 
-The design consequence for generated data: encode bulk numeric tables as STRING
-literals scanned at run time, not as thousands of numeric literals. The
+The design consequence for generated data: bulk tables travel inside STRING
+literals decoded at run time, not as thousands of literals of their own. The
 `--optimize` chunking that keeps a data form under the 64 KB METHOD limit (one
 `defun` per 250 entries) does nothing for the pool — it makes it worse, by
 adding a name and descriptor per chunk. `Uax15Tables`' derived forms are built
 this way for exactly this reason (`.kb/asdf.md`; they are derived forms, not
-`ShimLibraries` leaf modules — uax-15 has none of those).
-
-Two follow-on constraints that came out of the same data, both in `.kb/asdf.md`:
-the literals are **many short chunks, not a few long ones** — `(char s i)` is
-O(i) on the compile paths, so scanning one long literal is quadratic — and the
-scan runs on **first read of the table, not at load**, so a program that never
+`ShimLibraries` leaf modules — uax-15 has none of those). Its constraints were
+that the literals are **many short chunks, not a few long ones** (`(char s i)`
+was then O(i) on the compile paths, so scanning one long literal was quadratic —
+no longer true since `.todo/185`, `.kb/string-index-cost.md`) and that the scan
+runs on **first read of the table, not at load**, so a program that never
 normalizes never pays for it.
+
+**Read the text back; do not scan it** (`ClUnicodeTables`, todo-545). cl-unicode
+is 25x uax-15's problem — ~140,000 numbers and ~68,000 character names, ~208,000
+pool entries against the 65534 ceiling — and the decimal-run shape does not
+survive that size. A Lisp-level character scan costs ~8 µs PER CHARACTER
+interpreted, which is 60 s of load for these tables, while `read-from-string`
+over the same data is ~1.5 µs per ELEMENT because the reader is native on all
+four backends. (Everything else measured on the way there is slower still:
+`parse-integer` 36 µs a call, `remove` on a 22-character string 156 µs, and
+`position` with `:start` is quadratic because it materializes the string as a
+list per call.) So the generated components carry each table as its own PRINTED
+TEXT — `("LATIN CAPITAL LETTER A" . 65) ...` — inside ~230 string literals and
+read it back: 570 pool entries instead of 208,000, and a load no slower than the
+literal dump's. Two constraints on the cut, both real: a string constant may not
+exceed 65535 UTF-8 bytes, and the reader recurses per element (a 30,000-element
+chunk overflows the stack), so a chunk is capped at 20,000 characters AND 1,000
+elements.
+
+A package-qualified symbol read at run time is `eq` to the literal the compiler
+resolved — checked on all four backends, and what lets a range table's VALUES be
+text too rather than an index into a literal symbol vector. What the technique
+costs is the READER, which now travels into any program holding such a table:
++390 KB of class and ~2,450 pool entries, measured on a program whose only
+content is one `read-from-string`. For a library that is itself megabytes of data
+that is the cheaper half of the trade; for a small table it is not, which is why
+uax-15's runs are left as they are.
 
 ## Symbol function designators (same session, adjacent seam)
 
@@ -172,4 +197,7 @@ compiling and running a live query on the JVM backend (todo 115's session
 records). The 255-local-slot ceiling is the remaining unguarded sibling
 (`.todo/137`). The pool ceiling is pinned by
 `am.ik.jvm.ConstantPoolTest#refusesTheEntryThatWouldCrossTheFormatLimit` /
-`#refusesATwoSlotEntryThatWouldStraddleTheFormatLimit`.
+`#refusesATwoSlotEntryThatWouldStraddleTheFormatLimit`, and the read-back-text
+answer to it by `ClUnicodeTablesTest` (the emitted shape, and the decoders run
+through the evaluator over a chunked table with a hole at the top of the code
+space).

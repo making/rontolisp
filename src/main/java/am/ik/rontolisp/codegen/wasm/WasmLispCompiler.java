@@ -1867,6 +1867,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// same ~2x margin over the live set that the todo-188 sweep found the plateau at.
 	static final int GC_HEAP_PREGROW_CODE_FACTOR = 16;
 
+	/** The bump heap a program with no static data of its own still gets, in pages. */
+	static final int HEAP_HEADROOM_MIN_PAGES = 3;
+
 	// The serve-mode counterpart. A served component is instantiated MANY times over a
 	// process lifetime (wasmtime serve retires an instance after
 	// --max-instance-reuse-count requests, 128 by default for a WASIp3 component; Spin
@@ -5232,15 +5235,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.component && !this.noWasi) {
 					// Import the linear memory from the shared canonical-memory module so
 					// the lowered WASI imports and this module share one memory. The min
-					// page count matches the P1 own-memory declaration (heap base rounded
-					// up plus three growth pages, floored at four) so a program whose
-					// static data / intern pool needs more than the mem module's default
-					// six pages tells its component builder to grow that module too --
-					// otherwise instantiation traps on the first data-segment write.
+					// page count matches the P1 own-memory declaration
+					// ({@link #memoryMinPages}) so a program whose static data / intern
+					// pool needs more than the mem module's default six pages tells its
+					// component builder to grow that module too -- otherwise
+					// instantiation traps on the first data-segment write.
 					// A --no-wasi reactor is this module's ONLY writer of linear memory,
 					// so it declares and exports its own (the memory section below),
 					// exactly like the Preview 1 build.
-					final int componentMemMinPages = Math.max(4, (heapBase + 65535) / 65536 + 3);
+					final int componentMemMinPages = memoryMinPages(heapBase);
 					imports.add(w -> {
 						w.write("mem".length(), "mem", "memory".length(), "memory");
 						w.write(ExternalKind.MEMORY);
@@ -5589,10 +5592,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// (the canonical realloc heap is page 1+ in component mode).
 			.writeMemory(memories -> {
 				if (!this.component || this.noWasi) {
-					// At least 4 pages (getenv places the environ buffer in page 3); a
-					// program whose computed heap base approaches that keeps the same
-					// ~3.7 pages of heap headroom the fixed 16384 base used to leave.
-					memories.addMemory(Math.max(4, (heapBase + 65535) / 65536 + 3));
+					memories.addMemory(memoryMinPages(heapBase));
 				}
 			});
 		// Tag section (EH mode only): the one $lisp-cond exception tag, whose payload
@@ -7162,6 +7162,28 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * nothing)
 	 * @return the allocation size in bytes
 	 */
+	/**
+	 * {@return the minimum page count the module's linear memory declares} At least four
+	 * (getenv places the environ buffer in page 3), and always the static data plus a
+	 * bump heap at least as large as that data.
+	 * <p>
+	 * The headroom follows the program for the same reason the GC pre-grow does
+	 * ({@code .kb/wasm-gc-heap-pregrow.md}): what the bump heap above {@code heapBase}
+	 * holds is one identity per runtime-created string, so its need scales with how much
+	 * a program builds at load time, not with a constant. Three fixed growth pages is
+	 * ~192 KB, which cl-unicode -- 68,000 character names plus 11,172 computed Hangul
+	 * ones -- exhausts before it finishes loading, trapping out of bounds with no
+	 * diagnostic beyond the address. Measured there: 18 to 32 pages needed against the 76
+	 * of static data this rule matches. A program with little static data keeps the old
+	 * three, which is what leaves a memory-capped host (a Cloudflare Worker reactor) on
+	 * the old floor rather than on a large constant.
+	 * @param heapBase the first address above the static data and the intern region
+	 */
+	static int memoryMinPages(int heapBase) {
+		int dataPages = (heapBase + 65535) / 65536;
+		return Math.max(4, dataPages + Math.max(HEAP_HEADROOM_MIN_PAGES, dataPages));
+	}
+
 	private int gcHeapPregrowBytes(List<byte[]> userFunctionBodies) {
 		long code = 0;
 		for (byte[] body : userFunctionBodies) {

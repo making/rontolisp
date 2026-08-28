@@ -47,19 +47,40 @@ import org.jspecify.annotations.Nullable;
  * are rewritten, here the file is the output.
  *
  * <p>
- * Faithfulness is the point, so the emitted shapes match {@code build/dump.lisp} exactly,
- * quirks included: {@code build-range-list} stops at {@code +code-point-limit+ - 1}, so
- * the last range ends at {@code #x10FFFE} and {@code #x10FFFF} is covered by no range;
- * {@code split-range-list} picks its middle with {@code (round (1- length) 2)}, which is
- * round-half-to-EVEN; and the {@code pushnew} lists come out in reverse order of first
- * appearance. Reproducing them keeps the generated data identical to what a real
- * {@code cl-unicode/build} run would have written, which is what makes the upstream test
- * suite meaningful against it.
+ * Faithfulness is the point, so the emitted DATA matches what {@code build/dump.lisp}
+ * writes, quirks included: {@code build-range-list} stops at
+ * {@code +code-point-limit+ - 1}, so the last range ends at {@code #x10FFFE} and
+ * {@code #x10FFFF} is covered by no range; {@code dump-hash-table} drops a nil value; and
+ * the {@code pushnew} lists come out in reverse order of first appearance. Reproducing
+ * them keeps the generated data identical to what a real {@code cl-unicode/build} run
+ * would have written, which is what makes the upstream test suite meaningful against it.
+ * The one quirk that is NOT reproduced is {@code split-range-list}'s round-half-to-EVEN
+ * middle, because the balanced tree it shaped is gone (below) and its shape was never
+ * visible in an answer.
  *
  * <p>
- * The one deliberate deviation is chunking: a hash-table dump is emitted as a series of
- * bounded {@code loop ... in '(...)} forms rather than one 40,000-element literal,
- * because a quoted list is walked recursively when a form is resolved and read.
+ * The deliberate deviations are all about SIZE, because {@code build/dump.lisp}'s own
+ * shape does not fit a compiled program: written out literally the three components are
+ * ~5 MB holding ~140,000 integer literals and ~68,000 distinct name strings, and a
+ * {@code .class} may name 65534 constants in total ({@code .kb/jvm-method-size-limits.md}
+ * -- an integer costs two entries, a string two more). So the data travels as its own
+ * PRINTED TEXT inside ~230 string literals and is read back with
+ * {@code read-from-string}, through the generated helpers in {@code lists.lisp}
+ * ({@link #HELPERS}). Reading is what makes that affordable: the reader is native on
+ * every backend, where a Lisp-level scan of the same characters is 40x slower.
+ *
+ * <p>
+ * A range tree additionally becomes the flat ascending range table {@link #HELPERS}'
+ * {@code %lookup} binary-searches, built on the FIRST lookup of that property and never
+ * again -- so a program that never asks for a decomposition never reads that table's
+ * 17,272 ranges, and one that asks for no property at all reads none of the fourteen.
+ *
+ * <p>
+ * What the deviations do NOT change is any answer: every table is filled with the same
+ * entries in the same order, the range list is the same partition
+ * {@code build-range-list} computes, and {@code %lookup} returns what {@code tree-lookup}
+ * returns for every code point -- the balanced tree was only ever an index over that
+ * list.
  */
 final class ClUnicodeTables {
 
@@ -75,8 +96,23 @@ final class ClUnicodeTables {
 	/** {@code +code-point-limit+}: the smallest integer that is not a code point. */
 	private static final int LIMIT = 0x110000;
 
-	/** How many pairs one emitted hash-table fill form carries. */
-	private static final int CHUNK = 400;
+	/**
+	 * How many characters the printed text of one emitted chunk carries. The text is cut
+	 * into chunks rather than left as one literal because a JVM string constant may not
+	 * exceed 65535 UTF-8 bytes and these tables are megabytes; the chunks are as large as
+	 * that ceiling comfortably allows, so there are ~230 of them in all against the
+	 * ~208,000 constants the literal dump wanted. It is NOT about scan cost -- nothing
+	 * scans a chunk character by character, the reader reads it whole.
+	 */
+	private static final int RUN_CHUNK = 20_000;
+
+	/**
+	 * How many elements one chunk carries, whatever its length. The reader recurses per
+	 * element, so an unbounded list is a stack overflow waiting for the biggest table --
+	 * a 30,000-element one overflows. Only the short elements (a range start) ever reach
+	 * this bound before {@link #RUN_CHUNK}.
+	 */
+	private static final int RUN_ELEMENTS = 1_000;
 
 	/**
 	 * The Hangul syllable block, whose decomposition is derived rather than tabulated.
@@ -103,6 +139,56 @@ final class ClUnicodeTables {
 	 * endings (see UTR #18).
 	 */
 	private static final Pattern CANONICALIZE = Pattern.compile("[ _](-A|O-E)$|[-_\\s]");
+
+	/**
+	 * The decoders the emitted runs are read back with, emitted at the top of
+	 * {@code lists.lisp} -- the first of the three generated components, so both of the
+	 * others can call them. Every name is prefixed, so nothing here depends on which
+	 * package a canonical-shape component is read in.
+	 */
+	private static final String HELPERS = """
+
+			;;; The tables below travel as the PRINTED TEXT of their data inside a handful of
+			;;; string literals, read back with READ-FROM-STRING, rather than as literals of
+			;;; their own: an integer literal costs two JVM constant pool entries and a
+			;;; distinct string two more, and the written-out dump wants ~208,000 of them
+			;;; against the 65534 a class may name (.kb/jvm-method-size-limits.md).  Reading
+			;;; is what keeps that affordable -- the reader is native on every backend, at
+			;;; ~1.5us an element, where a Lisp-level scan of the same characters costs 8us
+			;;; EACH.  A run is a LIST of chunks for two reasons: a string constant may not
+			;;; exceed 65535 UTF-8 bytes, and the reader recurses per element.
+
+			(defun cl-unicode::%read (chunks)
+			  "The elements of CHUNKS -- each the printed representation of one list -- in
+			order.  Appended right to left, so each chunk is copied exactly once."
+			  (let ((all '()))
+			    (dolist (chunk (reverse chunks))
+			      (setq all (append (read-from-string chunk) all)))
+			    all))
+
+			(defun cl-unicode::%table (start-chunks value-chunks)
+			  "The range table a generated method looks up: the ascending vector of the
+			inclusive starts of BUILD-RANGE-LIST's ranges, and the parallel vector of their
+			values.  The ranges partition the code space, so a start is all a range needs."
+			  (cons (coerce (cl-unicode::%read start-chunks) 'vector)
+			        (coerce (cl-unicode::%read value-chunks) 'vector)))
+
+			(defun cl-unicode::%lookup (code-point table)
+			  "What TREE-LOOKUP answers, over the flat range table TABLE: the value of the
+			range holding CODE-POINT, or nil when no range does.  BUILD-RANGE-LIST returns at
+			(1- +code-point-limit+), so the ranges cover 0..#x10FFFE and #x10FFFF is in none."
+			  (if (or (< code-point 0) (> code-point 1114110))
+			      nil
+			      (let* ((starts (car table))
+			             (low 0)
+			             (high (- (length starts) 1)))
+			        (loop while (< low high) do
+			          (let ((middle (floor (+ low high 1) 2)))
+			            (if (<= (aref starts middle) code-point)
+			                (setq low middle)
+			                (setq high (- middle 1)))))
+			        (aref (cdr table) low))))
+			""";
 
 	/** Parsed forms per system base directory: the parse is the expensive half. */
 	private static final Map<String, Map<String, List<LispVal>>> CACHE = new ConcurrentHashMap<>();
@@ -763,6 +849,9 @@ final class ClUnicodeTables {
 		String dumpLists() {
 			StringBuilder out = new StringBuilder();
 			header(out, "lists.lisp");
+			// lists.lisp loads before the two components that scan the runs, so the
+			// decoders ride along with it rather than in a component of their own.
+			out.append(HELPERS);
 			dumpList(out, "*general-categories*", this.generalCategories);
 			dumpList(out, "*compatibility-formatting-tags*", this.compatibilityFormattingTags);
 			dumpList(out, "*scripts*", this.scripts);
@@ -848,31 +937,30 @@ final class ClUnicodeTables {
 			return out;
 		}
 
+		/**
+		 * Emits one {@code dump-hash-table}, filled in the shape upstream's own dump uses
+		 * -- except that the entries arrive from {@code %read} rather than as a quoted
+		 * literal, which is what keeps 68,000 names and 45,000 numbers off the constant
+		 * pool.
+		 */
 		private void dumpTable(StringBuilder out, String name, List<Map.Entry<Object, Object>> entries) {
 			out.append("(clrhash cl-unicode::").append(name).append(")\n");
-			// dump-hash-table drops a nil value: the table answers nil for a missing key
-			// anyway, so an entry for one is pure size.
-			List<Map.Entry<Object, Object>> pairs = new ArrayList<>(entries.size());
+			Chunks chunks = new Chunks();
 			for (Map.Entry<Object, Object> entry : entries) {
-				if (entry.getValue() != null) {
-					pairs.add(entry);
+				// dump-hash-table drops a nil value: the table answers nil for a missing
+				// key anyway, so an entry for one is pure size.
+				if (entry.getValue() == null) {
+					continue;
 				}
+				StringBuilder pair = new StringBuilder("(");
+				print(pair, entry.getKey());
+				pair.append(" . ");
+				print(pair, entry.getValue());
+				chunks.add(pair.append(')').toString());
 			}
-			for (int start = 0; start < pairs.size(); start += CHUNK) {
-				out.append("(loop for (key . value) in '(");
-				for (int i = start; i < Math.min(start + CHUNK, pairs.size()); i++) {
-					Map.Entry<Object, Object> pair = pairs.get(i);
-					if (i > start) {
-						out.append(' ');
-					}
-					out.append('(');
-					print(out, pair.getKey());
-					out.append(" . ");
-					print(out, pair.getValue());
-					out.append(')');
-				}
-				out.append(") do (setf (gethash key cl-unicode::").append(name).append(") value))\n");
-			}
+			out.append("(loop for (key . value) in (cl-unicode::%read");
+			chunks.appendTo(out);
+			out.append(") do (setf (gethash key cl-unicode::").append(name).append(") value))\n");
 		}
 
 		// ------------------------------------------------------------------
@@ -911,18 +999,43 @@ final class ClUnicodeTables {
 
 		}
 
+		/**
+		 * Emits one {@code char-info} slot as a lazily built range table plus the method
+		 * that looks it up.
+		 * <p>
+		 * {@code dump-method} writes the whole balanced tree as one literal; here the
+		 * ranges travel as the printed text of two parallel lists -- the ascending
+		 * inclusive starts and their values -- and the table is built on the first lookup
+		 * of that property, never at load. A program that asks only for a general
+		 * category therefore never reads the 17,272-range decomposition table, and one
+		 * that asks for nothing reads none of the fourteen.
+		 */
 		private void dumpMethod(StringBuilder out, String name, Slot slot, boolean propertyPair) {
 			List<Object[]> ranges = buildRangeList(slot);
+			Chunks starts = new Chunks();
+			Chunks values = new Chunks();
+			for (Object[] range : ranges) {
+				starts.add(range[0].toString());
+				StringBuilder value = new StringBuilder();
+				print(value, range[2]);
+				values.add(value.toString());
+			}
+			out.append("(defvar cl-unicode::*%").append(name).append("-table* nil)\n");
+			out.append("(defun cl-unicode::%").append(name).append("-table ()\n");
+			out.append("  (or cl-unicode::*%").append(name).append("-table*\n");
+			out.append("      (setq cl-unicode::*%").append(name).append("-table*\n");
+			out.append("            (cl-unicode::%table");
+			starts.appendTo(out);
+			values.appendTo(out);
+			out.append("))))\n");
 			out.append("(defmethod cl-unicode::").append(name).append(" ((code-point integer))\n");
 			if (propertyPair) {
-				out.append("  (let ((symbol (cl-unicode::tree-lookup code-point '");
-				printTree(out, ranges, 0, ranges.size());
-				out.append(")))\n    (values (cl-unicode::property-name symbol) symbol)))\n");
+				out.append("  (let ((symbol (cl-unicode::%lookup code-point (cl-unicode::%")
+					.append(name)
+					.append("-table))))\n    (values (cl-unicode::property-name symbol) symbol)))\n");
 			}
 			else {
-				out.append("  (cl-unicode::tree-lookup code-point '");
-				printTree(out, ranges, 0, ranges.size());
-				out.append("))\n");
+				out.append("  (cl-unicode::%lookup code-point (cl-unicode::%").append(name).append("-table)))\n");
 			}
 		}
 
@@ -945,29 +1058,6 @@ final class ClUnicodeTables {
 			}
 			ranges.add(new Object[] { lastCodePoint, LIMIT - 2, last });
 			return ranges;
-		}
-
-		/**
-		 * {@code split-range-list}: the balanced search tree {@code tree-lookup} walks,
-		 * {@code (((from . to) . value) left right)}. The middle is
-		 * {@code (round (1- length) 2)} -- round half to EVEN, as CL's {@code round}
-		 * does.
-		 */
-		private void printTree(StringBuilder out, List<Object[]> ranges, int from, int to) {
-			int length = to - from;
-			if (length == 0) {
-				out.append("nil");
-				return;
-			}
-			int middle = from + (int) Math.rint((length - 1) / 2.0);
-			Object[] range = ranges.get(middle);
-			out.append("(((").append(range[0]).append(" . ").append(range[1]).append(") . ");
-			print(out, range[2]);
-			out.append(") ");
-			printTree(out, ranges, from, middle);
-			out.append(' ');
-			printTree(out, ranges, middle + 1, to);
-			out.append(')');
 		}
 
 		// ------------------------------------------------------------------
@@ -1048,6 +1138,60 @@ final class ClUnicodeTables {
 			last = matcher.end();
 		}
 		return out.append(name, last, name.length()).toString();
+	}
+
+	/**
+	 * The printed text of one emitted list, cut into string literals between elements.
+	 * Everything bulky cl-unicode's tables hold travels this way rather than as a
+	 * literal; the reason and the two ceilings the cut answers are on {@link #RUN_CHUNK}
+	 * and {@link #RUN_ELEMENTS}.
+	 */
+	private static final class Chunks {
+
+		private final List<String> chunks = new ArrayList<>();
+
+		private final StringBuilder chunk = new StringBuilder();
+
+		private int count;
+
+		void add(String printed) {
+			if (!this.chunk.isEmpty()
+					&& (this.chunk.length() + 1 + printed.length() > RUN_CHUNK || this.count >= RUN_ELEMENTS)) {
+				this.chunks.add(this.chunk.toString());
+				this.chunk.setLength(0);
+				this.count = 0;
+			}
+			if (!this.chunk.isEmpty()) {
+				this.chunk.append(' ');
+			}
+			this.chunk.append(printed);
+			this.count++;
+		}
+
+		/**
+		 * Appends the chunks as a quoted list of string literals, each holding one
+		 * printed LIST, on its own line.
+		 */
+		void appendTo(StringBuilder out) {
+			List<String> all = new ArrayList<>(this.chunks);
+			// Always at least one chunk, so an empty table reads back as an empty list
+			// rather than as a missing argument.
+			all.add(this.chunk.toString());
+			out.append("\n  '(");
+			for (int i = 0; i < all.size(); i++) {
+				out.append(i == 0 ? "" : "\n    ").append("\"(");
+				for (int j = 0; j < all.get(i).length(); j++) {
+					char c = all.get(i).charAt(j);
+					if (c == '"' || c == '\\') {
+						out.append('\\');
+					}
+					out.append(c);
+				}
+				out.append(")\"");
+			}
+			out.append(')');
+		}
+
 	}
 
 }

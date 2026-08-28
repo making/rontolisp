@@ -46,6 +46,34 @@ stack here (cl-postgres + rove, 3.3 MB of emitted defuns): a 26.5 MiB heap still
 collects, 32 MiB does not, i.e. ~9x the emitted code; the factor is 16 for the same ~2x
 margin the plateau above wants.
 
+## The sibling knob: the LINEAR memory's declared minimum (todo-545)
+
+Different memory, same shape of mistake. Above the static data and the runtime
+intern region sits the linear bump heap, and `WasmLispCompiler.memoryMinPages`
+is what asks the host for it. The rule used to be "static data rounded up to a
+page, **plus three**, floored at four" — a fixed ~192 KB of heap no matter how
+big the program is. What the bump heap holds is one identity per
+runtime-created string, so its need follows what a program BUILDS at load time,
+and cl-unicode (68,000 character names plus 11,172 computed Hangul ones)
+exhausts 192 KB before it finishes loading, trapping `out of bounds memory
+access` with nothing to go on but the address — which is exactly the memory
+size, in a five-frame backtrace of unnamed functions.
+
+The rule is now **the static data plus a heap at least as large as it**
+(`HEAP_HEADROOM_MIN_PAGES` = 3 is the floor a program with almost no static data
+keeps, so nothing small moves). Measured on `(ql:quickload "str")` plus one
+`str:title-case`: 76 pages of static data, 18 to 32 pages of heap actually
+needed, 76 given. Both emission sites take it — the Preview 1 / `--no-wasi`
+memory section and the component's `mem` import minimum, which is what tells
+`WasmComponentBuilder.memModuleFor` to grow the shared mem module too. Declaring
+more pages costs nothing at rest (untouched pages are never committed), which is
+why the answer is a bigger minimum rather than a bigger constant floor: a
+memory-capped host still gets the small program's four pages. Pinned by
+`WasmLinearMemoryHeadroomTest`.
+
+The unguarded bump sites `.todo/027` still names are the reason this has to be
+right up front rather than grown on demand at every writer.
+
 ## The copying collector loses a reference when the heap has no headroom (todo-409)
 
 On **wasmtime 47.0.3** the pre-grow is what keeps a large `--component` program

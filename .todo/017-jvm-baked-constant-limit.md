@@ -125,6 +125,28 @@ all three. Before optimizing, dump the pool by tag for the n=700 class -- if it
 is dominated by duplicated symbol-name strings, interning at emit time is cheap
 and helps every large program.
 
+## Approach 1 is now proven in-repo (`.todo/545`, 2026-08-28)
+
+cl-unicode's generated tables were ~208,000 pool entries -- 3x the ceiling, the
+biggest instance of this problem the repo has had -- and approach 1 cleared it
+at 570 entries with no codegen change at all: `eval/ClUnicodeTables` emits each
+table as its own PRINTED TEXT inside ~230 string literals and reads it back with
+`read-from-string` at load. Two things learned there that this file's approach 1
+does not say, and that anyone taking it should know:
+
+- **Read the text, do not scan it.** A Lisp-level character scan is ~8 us PER
+  CHARACTER interpreted; `read-from-string` is ~1.5 us per ELEMENT, because the
+  reader is native on all four backends. That is a 40x difference and it decides
+  whether the technique is usable at all. Details and the surrounding
+  measurements: `.kb/jvm-method-size-limits.md`.
+- **It buys the pool with the reader**: +390 KB of class and ~2,450 pool entries
+  for any program that did not already carry it. Fine for megabytes of data,
+  not for a small table.
+
+So the honest state of this file is narrower than before: approach 1 is no
+longer hypothetical, and what is left open is only the general ceiling that a
+program with no baked data can also reach (approach 2 or 3).
+
 ## Recommended next step
 Decide whether we care. There is no in-repo program left that wants to bake this
 much data, so the honest options are (a) close this as "load your data instead",

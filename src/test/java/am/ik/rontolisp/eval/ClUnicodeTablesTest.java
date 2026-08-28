@@ -1,10 +1,17 @@
 package am.ik.rontolisp.eval;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Stream;
 
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
+import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
@@ -117,6 +124,15 @@ class ClUnicodeTablesTest {
 	}
 
 	@Test
+	void dumpTemp() throws Exception {
+		for (Map.Entry<String, String> e : generate().entrySet()) {
+			java.nio.file.Files.writeString(java.nio.file.Path.of(
+					"/tmp/claude-1000/-home-administrator-rontolisp/c7419e68-f427-40f2-af70-963b668fe641/scratchpad/fixture",
+					e.getKey()), e.getValue());
+		}
+	}
+
+	@Test
 	void generatesTheThreeComponentsTheReleaseDoesNotShip() {
 		assertThat(ClUnicodeTables.generates("lists.lisp")).isTrue();
 		assertThat(ClUnicodeTables.generates("hash-tables.lisp")).isTrue();
@@ -150,51 +166,68 @@ class ClUnicodeTablesTest {
 	}
 
 	@Test
-	void aMethodIsABalancedTreeOfConstantRanges() {
+	void aMethodIsAFlatRangeTableReadOnFirstLookup() {
 		String methods = generate().get("methods.lisp");
+		// The table is a defun over the printed text of the range starts and their
+		// values, memoized in a global -- nothing is read until the property is asked
+		// for, and the tree dump-method writes is gone (%lookup binary-searches the
+		// starts instead, for the same answer).
+		assertThat(methods).contains("(defvar cl-unicode::*%general-category-table* nil)").contains("""
+				(defun cl-unicode::%general-category-table ()
+				  (or cl-unicode::*%general-category-table*
+				      (setq cl-unicode::*%general-category-table*
+				            (cl-unicode::%table""").doesNotContain("tree-lookup");
 		// The property-symbol methods answer the NAME and the symbol, as dump-method
 		// does when it is given no equality test.
-		assertThat(methods).contains("(defmethod cl-unicode::general-category ((code-point integer))")
-			.contains("(let ((symbol (cl-unicode::tree-lookup code-point '(((")
-			.contains("(values (cl-unicode::property-name symbol) symbol)))");
+		assertThat(methods).contains("""
+				(defmethod cl-unicode::general-category ((code-point integer))
+				  (let ((symbol (cl-unicode::%lookup code-point (cl-unicode::%general-category-table))))
+				    (values (cl-unicode::property-name symbol) symbol)))""");
 		// The others are a bare lookup.
-		assertThat(methods).contains("(defmethod cl-unicode::combining-class ((code-point integer))\n"
-				+ "  (cl-unicode::tree-lookup code-point '(((");
+		assertThat(methods).contains("""
+				(defmethod cl-unicode::combining-class ((code-point integer))
+				  (cl-unicode::%lookup code-point (cl-unicode::%combining-class-table)))""");
 		// U+0300's combining class is 230 and it is a range of exactly one code point;
-		// every unassigned neighbour folds into the surrounding 0 range.
-		assertThat(methods).contains("((768 . 768) . 230)");
-		// The last range stops at #x10FFFE, not #x10FFFF: build-range-list's loop
-		// returns at (1- +code-point-limit+) without covering it.
-		assertThat(methods).contains(" . 1114110) . nil)");
+		// every unassigned neighbour folds into the surrounding range. Ranges are
+		// contiguous, so 769 is the start of the range that follows it.
+		assertThat(methods).contains("768 769").contains("230 nil");
+		// The last range starts inside #x10FFFE and nothing covers #x10FFFF:
+		// build-range-list's loop returns at (1- +code-point-limit+).
+		assertThat(methods).doesNotContain("1114111");
 		// A ratio prints as a ratio, and an integral numeric value as an integer.
 		assertThat(methods).contains("(defmethod cl-unicode::numeric-value ((code-point integer))")
-			.contains("((189 . 189) . 1/2)")
-			.contains("((1632 . 1632) . 0)");
+			.contains("nil 1/2 nil")
+			.contains("nil 0 nil");
 		// A decomposition keeps its tag symbol in front of the code points.
-		assertThat(methods).contains("((189 . 189) . (cl-unicode-names::<FRACTION> 49 8260 50))");
+		assertThat(methods).contains("(cl-unicode-names::<FRACTION> 49 8260 50)");
 		// disallowed is the one IDNA status read-idna-mapping drops, so the surrogate
 		// range it covers has no mapping while a mapped one does.
 		assertThat(methods).contains("(defmethod cl-unicode::idna-mapping ((code-point integer))")
-			.contains("((65 . 65) . (cl-unicode-names::MAPPED (97) nil))")
-			.contains("((768 . 768) . (cl-unicode-names::VALID nil cl-unicode-names::NV8))");
+			.contains("(cl-unicode-names::MAPPED (97) nil)")
+			.contains("(cl-unicode-names::VALID nil cl-unicode-names::NV8)");
 	}
 
 	@Test
-	void aHashTableIsFilledInBoundedChunks() {
+	void aHashTableIsFilledFromItsPrintedText() {
 		String tables = generate().get("hash-tables.lisp");
 		assertThat(tables).contains("(clrhash cl-unicode::*canonical-names*)")
 			.contains("(clrhash cl-unicode::*names-to-code-points*)")
 			.contains("(clrhash cl-unicode::*code-points-to-names*)")
 			.contains("(clrhash cl-unicode::*composition-mappings*)")
+			// The entries arrive from %read rather than as a quoted literal: that is what
+			// keeps 68,000 names and 45,000 numbers off the JVM constant pool.
+			.contains("(loop for (key . value) in (cl-unicode::%read")
 			// The Hangul syllable names are computed at load time, not tabulated.
 			.endsWith("(cl-unicode::add-hangul-names)\n");
 		// A name is keyed by its canonicalized form, which is why the lookup table is
-		// equalp: nothing here upcases, the UCD names simply are upper case.
-		assertThat(tables).contains("(\"LATINCAPITALLETTERA\" . 65)").contains("(65 . \"LATIN CAPITAL LETTER A\")");
+		// equalp: nothing here upcases, the UCD names simply are upper case. A quote
+		// inside a chunk is escaped, since the chunk is itself a string literal.
+		assertThat(tables).contains("(\\\"LATINCAPITALLETTERA\\\" . 65)")
+			.contains("(65 . \\\"LATIN CAPITAL LETTER A\\\")");
 		// A <...> name is not a name: read-character-data nils it out.
-		assertThat(tables).doesNotContain("\"<control>\"").doesNotContain("\"<Non Private Use High Surrogate");
+		assertThat(tables).doesNotContain("<control>").doesNotContain("<Non Private Use High Surrogate");
 		// ... but its Unicode 1.0 name is still a name.
-		assertThat(tables).contains("(0 . \"NULL\")");
+		assertThat(tables).contains("(0 . \\\"NULL\\\")");
 		// The case-mapping triple is (lower upper title) with nil for the ones the row
 		// left empty.
 		assertThat(tables).contains("(65 . (97 nil nil))").contains("(97 . (nil 65 65))");
@@ -204,11 +237,11 @@ class ClUnicodeTablesTest {
 		// A special-casing rule is (conditions lower upper title); an unconditional one
 		// carries nil where the conditions go.
 		assertThat(tables).contains("(223 . ((nil (223) (83 83) (83 115))))")
-			.contains("((\"Final_Sigma\") (962) (931) (931))");
+			.contains("((\\\"Final_Sigma\\\") (962) (931) (931))");
 		// Every alias of a property maps to the property's own symbol, canonicalized
 		// and upcased.
-		assertThat(tables).contains("(\"GENERALCATEGORY\" . cl-unicode-names::GENERALCATEGORY)")
-			.contains("(\"GC\" . cl-unicode-names::GENERALCATEGORY)");
+		assertThat(tables).contains("(\\\"GENERALCATEGORY\\\" . cl-unicode-names::GENERALCATEGORY)")
+			.contains("(\\\"GC\\\" . cl-unicode-names::GENERALCATEGORY)");
 	}
 
 	@Test
@@ -217,7 +250,39 @@ class ClUnicodeTablesTest {
 		// the First one, so it never becomes a record of its own -- and the whole range
 		// gets the category.
 		String methods = generate().get("methods.lisp");
-		assertThat(methods).contains("((55296 . 56191) . cl-unicode-names::CS)");
+		assertThat(methods).contains("55296 56192").contains("cl-unicode-names::CS nil");
+	}
+
+	@Test
+	void theEmittedDecodersReadTheRangeTableBackAndLookItUp() {
+		// The decoders ride in lists.lisp, so run THEM -- the shape of methods.lisp is
+		// only correct if %read / %table / %lookup answer what tree-lookup answered over
+		// the same range list, holes included.
+		String lists = Objects.requireNonNull(generate().get("lists.lisp"));
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(defpackage :cl-unicode (:use :cl))"));
+		evaluator.eval(LispReader.readFromString("(defpackage :cl-unicode-names (:use))"));
+		for (LispVal form : LispReader.readAllFromString(lists)) {
+			evaluator.eval(form);
+		}
+		// One chunked table: two chunks, a hole with no range at the top, and a value
+		// that is a list rather than an atom.
+		String table = """
+				(cl-unicode::%table '("(0 65 66)" "(97 1114110)")
+				                    '("(nil (1 2) nil)" "(3 nil)"))""";
+		String probe = "(let ((table " + table + "))\n  (list "
+				+ Stream.of("-1", "0", "64", "65", "66", "96", "97", "1114109", "1114110", "1114111", "1234567")
+					.map(codePoint -> "(cl-unicode::%lookup " + codePoint + " table)")
+					.collect(joining(" "))
+				+ "))";
+		assertThat(evaluator.eval(LispReader.readFromString(probe)).print())
+			.isEqualTo("(NIL NIL NIL (1 2) NIL NIL 3 3 NIL NIL NIL)");
+		// %read concatenates its chunks in order and reads each one whole, so a name is
+		// a string and a property symbol is the very symbol a literal would have been.
+		assertThat(evaluator.eval(LispReader.readFromString("""
+				(let ((entries (cl-unicode::%read '("((1 . \\"A B\\"))" "((2 . cl-unicode-names::LU))"))))
+				  (list (length entries) (cdr (first entries))
+				        (eq (cdr (second entries)) 'cl-unicode-names::LU)))""")).print()).isEqualTo("(2 \"A B\" T)");
 	}
 
 	@Test
