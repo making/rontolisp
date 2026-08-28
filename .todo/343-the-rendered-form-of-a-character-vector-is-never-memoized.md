@@ -44,3 +44,16 @@ backends at once, since the cache would live in the shared representation.
 
 Non-goal: the predicate. `.todo/342` closed that, and `_charvec_p` answers
 without touching the cache either way.
+
+## Re-scope (measured 2026-08-28 under `.todo/559`)
+
+`char`/`schar` are listed above as callers to memoize for. They should be
+REMOVED from this todo's scope: measurement shows a per-character index wants no
+rendered string at all, cached or otherwise. `(aref v j)` on a character vector
+is already an O(1) element read and is 47x faster than `(char v j)` on the same
+object (JVM, n=2048: 92 ms vs 4330 ms over 200 scans); `(elt v j)` shares
+`char`'s cost. Those three sites are a rendering to DELETE, not to cache, and
+`.todo/559` carries the plan. What is left here is the callers that genuinely
+want the whole string -- `string=`/`string-equal`, the case and trim families,
+`concatenate`, `write-string`, `read-from-string`, `intern`, `make-symbol`, and
+the `_equal` / `_hash` / `_print_val` / `_princ_val` entries.
