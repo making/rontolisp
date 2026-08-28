@@ -124,15 +124,6 @@ class ClUnicodeTablesTest {
 	}
 
 	@Test
-	void dumpTemp() throws Exception {
-		for (Map.Entry<String, String> e : generate().entrySet()) {
-			java.nio.file.Files.writeString(java.nio.file.Path.of(
-					"/tmp/claude-1000/-home-administrator-rontolisp/c7419e68-f427-40f2-af70-963b668fe641/scratchpad/fixture",
-					e.getKey()), e.getValue());
-		}
-	}
-
-	@Test
 	void generatesTheThreeComponentsTheReleaseDoesNotShip() {
 		assertThat(ClUnicodeTables.generates("lists.lisp")).isTrue();
 		assertThat(ClUnicodeTables.generates("hash-tables.lisp")).isTrue();
