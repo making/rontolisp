@@ -11,10 +11,13 @@ backend and wasm backend. One script measures everything,
 re-runs it **on request only** and commits the diff.
 
 By hand rather than on a schedule, unlike [`size-report/`](../size-report): a
-size is the same on any machine, a timing is not. Two runs on differently loaded
-GitHub runners differ by more than most real changes do, so a nightly job would
-commit noise every night. Trigger it after a change that is expected to move the
-numbers, and read the run-to-run difference as meaningful only past ~10%.
+size is the same on any machine, a timing is not -- which is also why every
+generated table names the machine it ran on (OS, kernel, architecture, CPU and
+RAM), so two reports can be told apart from two runners. Two runs on
+differently loaded GitHub runners differ by more than most real changes do, so a
+nightly job would commit noise every night. Trigger it after a change that is
+expected to move the numbers, and read the run-to-run difference as meaningful
+only past ~10%.
 
 ## The report
 

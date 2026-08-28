@@ -112,6 +112,57 @@ impl_host() {
   esac
 }
 
+# ============================================================================
+# The machine
+# ============================================================================
+# A run time is a property of the HOST as much as of the implementation, so the
+# report records the box it ran on. Without that a reader diffing two tables
+# cannot tell a real change from a different machine -- and these tables are
+# regenerated on a CI runner, which is not the machine anyone reads them on.
+# Every probe answers empty rather than failing, and the caller defaults it.
+machine_os() {
+  if [[ -r /etc/os-release ]]; then
+    (. /etc/os-release && printf '%s' "${PRETTY_NAME:-${NAME:-}}")
+  elif command -v sw_vers >/dev/null 2>&1; then
+    printf '%s %s' "$(sw_vers -productName 2>/dev/null)" "$(sw_vers -productVersion 2>/dev/null)"
+  else
+    uname -s 2>/dev/null
+  fi
+}
+
+# The CPU as it names itself: /proc/cpuinfo on Linux, sysctl on macOS (where
+# Apple silicon answers e.g. "Apple M2 Pro").
+machine_cpu() {
+  if [[ -r /proc/cpuinfo ]]; then
+    sed -n 's/^model name[[:space:]]*: *//p;s/^Model name[[:space:]]*: *//p' /proc/cpuinfo | head -1
+  elif command -v sysctl >/dev/null 2>&1; then
+    sysctl -n machdep.cpu.brand_string 2>/dev/null || true
+  fi
+}
+
+# LOGICAL cores -- what a runtime's default thread pool sizes itself from, and
+# what a loaded machine shares out.
+machine_cpu_count() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc 2>/dev/null
+  elif command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.logicalcpu 2>/dev/null || true
+  fi
+}
+
+# Total RAM in whole GiB: the JVM and wasmtime heaps size themselves from it,
+# so a row is not comparable across two machines that disagree about it.
+machine_memory_gib() {
+  local kb bytes
+  if [[ -r /proc/meminfo ]]; then
+    kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+    [[ -n "$kb" ]] && awk -v k="$kb" 'BEGIN { printf "%.0f", k / 1048576 }'
+  elif command -v sysctl >/dev/null 2>&1; then
+    bytes="$(sysctl -n hw.memsize 2>/dev/null || true)"
+    [[ -n "$bytes" ]] && awk -v b="$bytes" 'BEGIN { printf "%.0f", b / 1073741824 }'
+  fi
+}
+
 # --- build ------------------------------------------------------------------
 # $1 implementation, $2 benchmark name, $3 source path. Writes its artifact
 # under $out/$impl/; a non-zero exit is a build failure and the cell reads `n/a`.
@@ -377,6 +428,18 @@ today="$(date -u +%Y-%m-%d)"
 # different lengths and every hand run would conflict with the scheduled one.
 commit="$(git -C "$repo_root" rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
 
+# The machine the numbers below are a property of (see the machine_* probes).
+machine_os_name="$(machine_os 2>/dev/null || true)"
+machine_kernel="$(uname -sr 2>/dev/null || true)"
+machine_arch="$(uname -m 2>/dev/null || true)"
+machine_cpu_name="$(machine_cpu 2>/dev/null || true)"
+machine_cpus="$(machine_cpu_count 2>/dev/null || true)"
+machine_mem_gib="$(machine_memory_gib 2>/dev/null || true)"
+: "${machine_os_name:=unknown}"
+: "${machine_kernel:=unknown}"
+: "${machine_arch:=unknown}"
+: "${machine_cpu_name:=unknown}"
+
 cell() {
   local impl="$1" prog="$2"
   if [[ "${have[$impl]:-0}" != 1 ]]; then
@@ -399,6 +462,9 @@ f="$results/benchmarks.md"
   echo "- measured: $today"
   echo "- rontolisp commit: \`$commit\`"
   echo "- best of $reps runs per cell, ${timeout_s}s budget each"
+  echo "- machine: $machine_os_name ($machine_kernel, $machine_arch)"
+  echo "- cpu: $machine_cpu_name, ${machine_cpus:-?} logical cores"
+  echo "- memory: ${machine_mem_gib:-?} GiB"
   echo ""
   echo "| Implementation | Version | Runs on |"
   echo "| --- | --- | --- |"
@@ -513,6 +579,10 @@ echo "wrote $f"
   echo "  \"commit\": \"$commit\","
   echo "  \"reps\": $reps,"
   echo "  \"timeout_seconds\": $timeout_s,"
+  printf '  "machine": {"os": "%s", "kernel": "%s", "arch": "%s", "cpu": "%s", "cpu_logical": %s, "memory_gib": %s},\n' \
+    "$(json_escape "$machine_os_name")" "$(json_escape "$machine_kernel")" \
+    "$(json_escape "$machine_arch")" "$(json_escape "$machine_cpu_name")" \
+    "${machine_cpus:-null}" "${machine_mem_gib:-null}"
   echo "  \"implementations\": {"
   n=${#requested[@]}
   i=0

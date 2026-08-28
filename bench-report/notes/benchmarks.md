@@ -53,6 +53,14 @@ interpreting the source is what that mode IS.
 that a faster run shows was avoidable; the fastest run is the one the machine is
 actually capable of. Under CI, treat a change under ~10% as noise.
 
+**Every number is a property of the machine at the top of this file** -- the OS,
+kernel, architecture, CPU and RAM the run had -- as much as of the
+implementation. The header records them for the one comparison this report
+cannot otherwise support: two tables measured on different hardware are not
+comparable at all, and without the block a reader diffing them would read a
+faster runner as a faster compiler. Compare rows within one table freely, and
+across two tables only when their machine lines match.
+
 **`timeout` is a result.** A cell that cannot finish inside the per-run budget
 is reported as `timeout` rather than dropped, and it is not retried. It means
 what it says: on that implementation the benchmark is slower than the budget, by
