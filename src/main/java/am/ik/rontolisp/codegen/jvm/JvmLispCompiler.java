@@ -392,9 +392,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * The runtime class files the compiled class needs BESIDE it — the packed float-array
 	 * handle a {@code :float-vector} / {@code :float-matrix} export hands out with its
-	 * marshalling seam, and the embedded HTTP server a {@code rontolisp:http-handler}
-	 * program serves through. Empty unless the program does one of those, so an ordinary
-	 * compilation still produces exactly one file.
+	 * marshalling seam, the embedded HTTP server a {@code rontolisp:http-handler} program
+	 * serves through, and the {@code equalp} key fold a program that writes
+	 * {@code :test 'equalp} places its keys by. Empty unless the program does one of
+	 * those, so an ordinary compilation still produces exactly one file.
 	 *
 	 * <p>
 	 * They are written at their canonical names rather than renamed into the program's

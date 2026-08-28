@@ -53,6 +53,16 @@ import am.ik.rontolisp.runtime.RontoHashTable;
  * <li>{@code _hashValues(table)} -&gt; the entry pairs as an {@code Object[]} (for
  * {@code maphash})</li>
  * </ul>
+ *
+ * <p>
+ * Three more ride on a gate of their own, the program writing {@code :test 'equalp}
+ * somewhere ({@code .kb/hash-tables.md}): {@code _hashMakeP()} marks a table as one whose
+ * keys are FOLDED, {@code _hashEqp(table)} answers that mark (what the printer and
+ * {@code hash-table-test} read), and {@code _hashKey(key, table)} folds a key through the
+ * travelling {@code RontoHashTable.equalpKey} when the table asks for it -- which
+ * {@code _hashGet}/{@code _hashPut}/{@code _hashRem} then do before they place or look
+ * up. Placement stays ONE structural table: {@code equalp} on two values is {@code equal}
+ * on their folds.
  */
 final class JvmHashRuntimeBuilder {
 

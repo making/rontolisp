@@ -25,6 +25,16 @@ import am.ik.wasm.Type;
  * {@link WasmLispCompiler#FUNC_HASH_RESIZE}) once the load factor exceeds 0.75, keeping
  * {@code gethash}/{@code puthash}/{@code remhash} amortized O(1) -- unlike the previous
  * O(n) single-alist representation.
+ *
+ * <p>
+ * In a module that writes {@code (make-hash-table :test 'equalp)} anywhere
+ * ({@code Ctx.usesEqualpHashTables}), that {@code count} is TAGGED --
+ * {@code entries * 2 + fold} -- so a table carries its own test without a second field
+ * and without disturbing {@code hash-table-p}, whose discrimination is that the header
+ * car is an i31 at all. Every count read then shifts past the flag, and
+ * {@code gethash}/{@code puthash}/{@code remhash} run the key through
+ * {@link WasmLispCompiler#FUNC_EQUALP_KEY} when it is set ({@code .kb/hash-tables.md}).
+ * In every other module the count is the plain entry count and no site emits a fold.
  */
 final class WasmHashTableCompiler {
 
