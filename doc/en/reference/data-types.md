@@ -359,14 +359,24 @@ which is how a weight file or a numpy dump is loaded.
 `hash-table-count`, `hash-table-p` and `maphash` work in all three backends.
 Keys are compared structurally (as if by `equal`): a list key like `(list r c)`
 matches an equal list, and numbers, symbols, characters and strings match by
-value. `:test` is accepted for familiarity but does not change this -- an `eql`
-table also matches structurally-equal aggregate keys. Iteration order (`maphash`)
-is not guaranteed across backends, so portable code should not depend on it. A
-table itself prints as SBCL's unreadable tag minus its trailing identity hash --
+value. `:test 'equalp` widens that: such a table FOLDS each key before placing
+it, so `"CS"`, `"Cs"` and `"cs"` are one key, `#\a` and `#\A` are one key, `1`
+and `1.0` are one key, and a list of them folds element-wise. Two things
+deliberately do not fold -- an array (a vector key is compared by identity, so a
+folded copy would never find itself) and a float with a fraction (`0.5` and
+`1/2` stay two keys) -- and on the compiled backends the `:test` has to be
+written literally, since `make-hash-table`'s arguments are not evaluated there.
+The folded key is also the one that is stored, so `maphash` over such a table
+hands back `"CS"` for an entry written under `"cs"`.
+Every other test keys structurally: an `eql` table also matches
+structurally-equal aggregate keys. Iteration order (`maphash`) is not guaranteed
+across backends, so portable code should not depend on it. A table itself prints
+as SBCL's unreadable tag minus its trailing identity hash --
 `#<HASH-TABLE :TEST EQUAL :COUNT n>`, the same text on every backend, with no
-entry content. `:TEST` is always `EQUAL`, the test lookup actually implements and
-the one `hash-table-test` reports, whatever `:test` the table was made with;
-`:COUNT` is the live entry count, the same number `hash-table-count` returns.
+entry content. `:TEST` is the test lookup actually implements, i.e. `EQUALP` for
+a folding table and `EQUAL` for every other one -- the same answer
+`hash-table-test` gives; `:COUNT` is the live entry count, the same number
+`hash-table-count` returns.
 A key is placed by a depth-capped structural hash and then decided by `equal`, so
 lookup does not depend on the size of the key's printed form and a key whose
 structure is CYCLIC is usable -- stored and retrieved under the same object:
@@ -375,6 +385,13 @@ structure is CYCLIC is usable -- stored and retrieved under the same object:
 (let ((h (make-hash-table)))
   (setf (gethash 'a h) 1)
   (princ-to-string h))                      ; => "#<HASH-TABLE :TEST EQUAL :COUNT 1>"
+```
+
+```lisp
+(let ((h (make-hash-table :test 'equalp)))
+  (setf (gethash "CS" h) 1)
+  (list (gethash "Cs" h) (hash-table-count h)
+        (hash-table-test h)))               ; => (1 1 EQUALP)
 ```
 
 They

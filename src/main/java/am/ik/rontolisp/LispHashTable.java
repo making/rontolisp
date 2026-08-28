@@ -16,31 +16,45 @@ import java.util.LinkedHashMap;
  * terminated.
  *
  * <p>
+ * A table made with {@code :test 'equalp} FOLDS each key first
+ * ({@link LispEquality#equalpKey}), which is how one structural table carries both tests;
+ * see {@link #placed}.
+ *
+ * <p>
  * Insertion order is preserved for {@code maphash}, but portable programs should not rely
  * on iteration order (the JVM/WASM backends do not guarantee it).
  */
 public final class LispHashTable implements LispVal {
 
 	/**
-	 * One stored entry: the original key object (so {@code maphash} can hand it back) and
-	 * its value.
+	 * One stored entry: the key as it was PLACED (so {@code maphash} can hand it back)
+	 * and its value. For an {@code equalp} table that is the folded key, not the spelling
+	 * the caller stored it under -- see {@link #placed}.
 	 *
-	 * @param key the original key value
+	 * @param key the placed key value
 	 * @param value the stored value
 	 */
 	public record Entry(LispVal key, LispVal value) {
 	}
 
 	/**
-	 * The unreadable-object prefix every backend prints before a table's entry count. The
-	 * test is always {@code EQUAL} -- lookup is structural on every backend, so that is
-	 * the test the table actually implements and the one {@code hash-table-test} reports;
+	 * The unreadable-object prefix every backend prints before an {@code equal} table's
+	 * entry count. {@code EQUAL} is the test lookup implements for every table that is
+	 * not an {@code equalp} one -- an {@code eql} table still matches structurally
+	 * ({@code .todo/012}) -- and it is what {@code hash-table-test} answers for them;
 	 * SBCL's trailing identity hash is deliberately absent (it would vary between runs of
 	 * one program).
 	 */
 	public static final String HASH_TABLE_PREFIX = "#<HASH-TABLE :TEST EQUAL :COUNT ";
 
-	private final boolean equalTest;
+	/**
+	 * The same prefix for an {@code equalp} table, whose keys are folded
+	 * ({@link LispEquality#equalpKey}) before they are placed. Two whole constants rather
+	 * than one assembled at run time: each backend interns only the one it can print, so
+	 * a program with no {@code equalp} table carries exactly the bytes it carried before
+	 * the fold existed.
+	 */
+	public static final String HASH_TABLE_PREFIX_EQUALP = "#<HASH-TABLE :TEST EQUALP :COUNT ";
 
 	private final boolean equalpTest;
 
@@ -70,28 +84,44 @@ public final class LispHashTable implements LispVal {
 	}
 
 	/**
-	 * Creates an empty hash table.
-	 * @param equalTest {@code true} if created with {@code :test 'equal}, {@code false}
-	 * for the default {@code eql} (informational only; lookup is always structural)
+	 * Creates an empty {@code equal} hash table -- the structural placement every table
+	 * that is not {@code equalp} uses.
 	 */
-	public LispHashTable(boolean equalTest) {
-		this(equalTest, false);
+	public LispHashTable() {
+		this(false);
 	}
 
 	/**
 	 * Creates an empty hash table with the given test.
-	 * @param equalTest {@code true} when the table was created with an aggregate test
-	 * ({@code equal} or {@code equalp})
-	 * @param equalpTest {@code true} when that test is {@code equalp} specifically, whose
-	 * keys are folded ({@link LispEquality#equalpKey}) before they are placed
+	 * @param equalpTest {@code true} when the table was created with
+	 * {@code :test 'equalp}, whose keys are folded ({@link LispEquality#equalpKey})
+	 * before they are placed; {@code false} for every other test, all of which place
+	 * structurally
 	 */
-	public LispHashTable(boolean equalTest, boolean equalpTest) {
-		this.equalTest = equalTest;
+	public LispHashTable(boolean equalpTest) {
 		this.equalpTest = equalpTest;
 	}
 
-	private Key key(LispVal val) {
-		return Key.of(this.equalpTest ? LispEquality.equalpKey(val) : val);
+	/**
+	 * Whether this table places its keys by the {@code equalp} fold -- what
+	 * {@code hash-table-test} and the printed {@code :TEST} field report.
+	 * @return {@code true} for a table made with {@code :test 'equalp}
+	 */
+	public boolean equalpTest() {
+		return this.equalpTest;
+	}
+
+	/**
+	 * The value this table PLACES {@code val} under: {@code val} itself, or its
+	 * {@code equalp} fold. The folded value is also what is STORED as the entry's key --
+	 * a bucket decides by {@code equal} against the keys already in it, so the fold has
+	 * to be what is there, and {@code maphash} therefore hands back the representative
+	 * rather than the spelling the caller stored it under. Every backend does the same;
+	 * keeping the original as well would cost a second slot in every entry of every table
+	 * ({@code .kb/hash-tables.md}).
+	 */
+	private LispVal placed(LispVal val) {
+		return this.equalpTest ? LispEquality.equalpKey(val) : val;
 	}
 
 	/**
@@ -101,7 +131,7 @@ public final class LispHashTable implements LispVal {
 	 * @return the stored value, or {@code dflt}
 	 */
 	public LispVal get(LispVal key, LispVal dflt) {
-		Entry e = this.map.get(key(key));
+		Entry e = this.map.get(Key.of(placed(key)));
 		return (e == null) ? dflt : e.value();
 	}
 
@@ -112,7 +142,8 @@ public final class LispHashTable implements LispVal {
 	 * @return the stored value
 	 */
 	public LispVal put(LispVal key, LispVal value) {
-		this.map.put(key(key), new Entry(key, value));
+		LispVal placed = placed(key);
+		this.map.put(Key.of(placed), new Entry(placed, value));
 		return value;
 	}
 
@@ -122,7 +153,7 @@ public final class LispHashTable implements LispVal {
 	 * @return {@code true} if an entry was removed
 	 */
 	public boolean remove(LispVal key) {
-		return this.map.remove(key(key)) != null;
+		return this.map.remove(Key.of(placed(key))) != null;
 	}
 
 	/**
@@ -150,7 +181,7 @@ public final class LispHashTable implements LispVal {
 
 	@Override
 	public String print() {
-		return HASH_TABLE_PREFIX + count() + ">";
+		return (this.equalpTest ? HASH_TABLE_PREFIX_EQUALP : HASH_TABLE_PREFIX) + count() + ">";
 	}
 
 }

@@ -9244,7 +9244,7 @@ public final class LispEvaluator {
 		// The header table: lowercased names, repeated headers joined with ", " in wire
 		// order (the Clack handler-backend rule), and never nil -- lack-request gethashes
 		// it unguarded.
-		LispHashTable headers = new LispHashTable(true);
+		LispHashTable headers = new LispHashTable();
 		for (RontoHttpServer.Header header : request.headers()) {
 			LispString name = new LispString(header.name().toLowerCase(Locale.ROOT));
 			LispVal seen = headers.get(name, LispNil.INSTANCE);

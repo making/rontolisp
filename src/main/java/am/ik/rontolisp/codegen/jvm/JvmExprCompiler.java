@@ -1097,8 +1097,7 @@ final class JvmExprCompiler {
 				case LispNames.REMHASH -> JvmHashTableCompiler.compileRem(cons, ctx, className);
 				case LispNames.CLRHASH -> JvmHashTableCompiler.compileClr(cons, ctx, className);
 				case LispNames.HASH_TABLE_COUNT -> JvmHashTableCompiler.compileCount(cons, ctx, className);
-				case LispNames.HASH_TABLE_TEST ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandHashTableTest(cons), ctx, className);
+				case LispNames.HASH_TABLE_TEST -> JvmHashTableCompiler.compileTest(cons, ctx, className);
 				case LispNames.HASH_TABLE_SIZE -> JvmHashTableCompiler.compileCount(cons, ctx, className);
 				case LispNames.HASH_TABLE_REHASH_SIZE -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx, className);

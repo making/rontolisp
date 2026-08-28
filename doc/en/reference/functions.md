@@ -318,7 +318,7 @@ page.
 | `remhash` | `(remhash key table)` | Remove the entry for `key`; returns `t` if one was removed, else `nil` |
 | `clrhash` | `(clrhash table)` | Remove all entries; returns the table |
 | `hash-table-count` | `(hash-table-count table)` | The number of entries |
-| `hash-table-test` | `(hash-table-test table)` | Always `EQUAL`: every backend keys structurally, whatever `:test` was requested |
+| `hash-table-test` | `(hash-table-test table)` | The test lookup implements: `EQUALP` for a folding table, `EQUAL` for every other (an `eql` table keys structurally) |
 | `hash-table-size` | `(hash-table-size table)` | The entry count (a rontolisp table has no separate capacity) |
 | `hash-table-rehash-size` | `(hash-table-rehash-size table)` | The standard default `1.5` (growth belongs to the host map) |
 | `hash-table-rehash-threshold` | `(hash-table-rehash-threshold table)` | The standard default `1.0` |

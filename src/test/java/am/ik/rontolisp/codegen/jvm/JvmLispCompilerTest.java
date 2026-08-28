@@ -4229,6 +4229,70 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aBignumLiteralIsBuiltOnceAndLoadedFromAField() throws Exception {
+		// A BigInteger is immutable, so every use of one literal is the same value: the
+		// compiler interns it into a static field built once in <clinit> and each use
+		// site is a GETSTATIC, not a fresh allocation plus a decimal-string parse. Two
+		// uses of the SAME literal share one field; a second, different literal gets its
+		// own.
+		String source = """
+				(defun mask (x) (logand x 18446744073709551615))
+				(defun mask2 (x) (logand x 18446744073709551615))
+				(print (mask 12345678901234567890))
+				(print (mask2 99999999999999999999))
+				""";
+		byte[] classBytes = compileToBytes(source);
+		assertThat(bignumPoolFieldNames(classBytes)).containsExactly("_bi$0", "_bi$1", "_bi$2");
+		assertThat(compileAndRun(source)).isEqualTo("""
+				12345678901234567890
+				7766279631452241919""");
+	}
+
+	@Test
+	void aProgramWithoutABignumLiteralGetsNoPoolAndNoClassInitializer() throws Exception {
+		// The pool must not perturb a program that has no bignum literal: no field, and
+		// -- the part that would otherwise change every emitted class -- no <clinit>
+		// where there was none.
+		byte[] classBytes = compileToBytes("(print (+ 1 2))");
+		assertThat(bignumPoolFieldNames(classBytes)).isEmpty();
+		assertThat(countOccurrences(classBytes, "_bi$")).isZero();
+		assertThat(countOccurrences(classBytes, "<clinit>")).isZero();
+	}
+
+	private byte[] compileToBytes(String lispCode) {
+		return new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	// The pooled bignum field names, in emission order, read back off the class file
+	// through the class loader (the fields are private static, so reflection sees them).
+	private List<String> bignumPoolFieldNames(byte[] classBytes) throws Exception {
+		Path dir = Files.createDirectories(this.tempDir.resolve("pool"));
+		Files.write(dir.resolve("Test.class"), classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			return java.util.Arrays.stream(loader.loadClass("Test").getDeclaredFields())
+				.filter(f -> f.getName().startsWith("_bi$"))
+				.map(java.lang.reflect.Field::getName)
+				.toList();
+		}
+	}
+
+	private static int countOccurrences(byte[] classBytes, String needle) {
+		byte[] pattern = needle.getBytes(StandardCharsets.UTF_8);
+		int count = 0;
+		outer: for (int i = 0; i + pattern.length <= classBytes.length; i++) {
+			for (int j = 0; j < pattern.length; j++) {
+				if (classBytes[i + j] != pattern[j]) {
+					continue outer;
+				}
+			}
+			count++;
+		}
+		return count;
+	}
+
+	@Test
 	void compileAndRunModFloat() throws Exception {
 		assertThat(compileAndRun("(print (mod -5.5 2.0))")).isEqualTo("0.5");
 	}
@@ -10221,6 +10285,48 @@ class JvmLispCompilerTest {
 				  (setf (gethash v h) :self)
 				  (print (list (gethash v h) (gethash (vector 1 2) h))))
 				""")).isEqualTo("(:CYCLIC 1)\n(:DEEP NIL)\n(:SELF NIL)");
+	}
+
+	@Test
+	// An equalp table places its keys by the equalp FOLD -- upper case for a string and a
+	// character, the exact rational value for a float, element-wise for a cons -- so the
+	// four backends agree on which keys are one key (.kb/hash-tables.md). An equal table
+	// in the same program keeps placing structurally, and the fold reaches neither.
+	void compileEqualpHashTableFoldsItsKeys() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash "CS" h) 1)
+				  (print (list (gethash "Cs" h) (gethash "cs" h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash 1 h) :one)
+				  (setf (gethash #\\a h) :a)
+				  (setf (gethash (list "x" 2) h) :pair)
+				  (print (list (gethash 1.0 h) (gethash 2/2 h) (gethash #\\A h)
+				               (gethash (list "X" 2.0) h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash "CS" h) 1)
+				  (print (list (gethash "Cs" h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equalp)) (acc nil))
+				  (setf (gethash "cs" h) 1)
+				  (setf (gethash #\\b h) 2)
+				  (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) h)
+				  (print (sort acc #'string<)))
+				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1)\n(\"B\" \"CS\")");
+	}
+
+	@Test
+	// The printed :TEST field and hash-table-test report the test lookup implements, now
+	// that a table knows whether it folds.
+	void compileEqualpHashTablePrintsAndReportsItsTest() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((p (make-hash-table :test 'equalp)) (q (make-hash-table :test 'equal)))
+				  (setf (gethash "a" p) 1)
+				  (print (list (hash-table-test p) (hash-table-test q)))
+				  (princ p)
+				  (terpri)
+				  (princ q))
+				"""))
+			.isEqualTo("(EQUALP EQUAL)\n#<HASH-TABLE :TEST EQUALP :COUNT 1>\n#<HASH-TABLE :TEST EQUAL :COUNT 0>");
 	}
 
 	@Test

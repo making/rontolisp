@@ -33,13 +33,20 @@ Keep `equal` the default-friendly behavior; only narrow `eql`/`eq` tables.
 
 ## Also update when this lands
 
-A table prints as `#<HASH-TABLE :TEST EQUAL :COUNT n>` on all four backends, and
-the `EQUAL` there is a CONSTANT for exactly the reason above: it is the test
-lookup actually implements, and WASM does not store the requested one. Once the
-test is stored and honored, the printer must report the table's real test
-(`.kb/hash-tables.md` "Printing" -- the three print sites plus the ci-spec case
-`hash-table-print-syntax`), and `hash-table-test` must stop being folded to a
-constant (`LispMacroExpander.expandHashTableTest`).
+The WIDENING half is done (`.todo/543`, 2026-08-28): a table already knows
+whether it is an `equalp` one, on all four backends, and both the printed
+`:TEST` and `hash-table-test` already report `EQUALP` for it. What is left for
+this item is the same two sites answering `EQL` once an `eql` table stops
+matching structurally -- `LispHashTable.equalpTest()` / `_hashEqp` / the WASM
+header count's fold bit each become a three-way answer, and the ci-spec case
+`hash-table-print-syntax` grows an `eql` row. `LispMacroExpander.expandHashTableTest`
+is the remaining constant-`EQUAL` path, still taken by a program that can build
+no folding table.
+
+The machinery to reuse: `LispMacroExpander.programMakesEqualpHashTable` is the
+shared source scan that gates the fold, and the flag it sets is exactly where an
+`eql` flag would go (a second reserved map key on the JVM, a second header bit on
+WASM).
 
 ## Definition of done
 

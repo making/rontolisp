@@ -2,7 +2,26 @@
 
 A table separates PLACEMENT from COMPARISON on every backend, which is what a hash table is: a key is placed by a structural hash and decided against the other keys in its bucket by the real `equal`. Nothing prints the key. Keying on the key's `prin1` TEXT (what the interpreter and the JVM did until `.todo/438`) cost the size of the key's whole printed graph on every lookup, and never terminated at all on a cyclic key.
 
-**`equalp` is a KEY FOLD, and it exists on the INTERPRETER only (2026-08-26).** `equalp` on two values is `equal` on their folds, so one structural table carries both tests and no backend needs a second hash/compare pair: `LispHashTable` runs a key through `LispEquality.equalpKey` before it reaches the map when the table was made `:test 'equalp`. A string and a character fold to upper case, a number to its exact rational value (`1`, `1.0` and `2/2` are one key), a cons folds element-wise. An ARRAY key deliberately does NOT fold -- `equal` on a vector is identity on every backend, so a folded copy would never find itself -- which is a real deviation from ANSI `equalp` tables. The JVM and both WASM backends still place every key by the plain `equal` hash, so `"CS"` and `"Cs"` are two keys there and one key here: **the one topic in this file where the four backends do not agree**, tracked in `.todo/543` together with `.todo/012` (the narrowing half, an `eql` table still matching structurally). It was fixed on the interpreter because cl-unicode's whole name and property lookup is `equalp` tables (`.kb/asdf.md`), and cl-unicode does not fit a compiled program at all yet (`.todo/545`) -- so nothing that needs the fold reaches the compile paths. Both `hash-table-test` and the printed `:TEST` still report the constant `EQUAL` for the reason below, and both change when `.todo/543` lands.
+**`equalp` is a KEY FOLD, and all four backends apply it (2026-08-28).** `equalp` on two values is `equal` on their folds, so one structural table carries both tests and no backend needs a second hash/compare pair -- which would have to be written four times, kept in step with the first, and tree-shaken separately on WASM. The fold, in every model: a string and a character fold to UPPER CASE one code point at a time, a float whose value is an INTEGER folds to that integer (`1`, `1.0` and `2/2` are one key, exact at any magnitude because the integer is read out of the float's `mantissa * 2^exponent` bits), a cons folds element-wise, everything else is its own key. It is capped at the same `HASH_DEPTH_CAP` levels the hash is, and for the same reason: a cyclic key must terminate.
+
+Two things deliberately do NOT fold, and both are real deviations from ANSI `equalp` tables:
+
+- an ARRAY, because `equal` on a vector is identity on every backend and a folded copy would never find itself;
+- a float with a FRACTION, which does not fold to the ratio it equals (`0.5` and `1/2` are two keys), because the WASM `TYPE_RATIO` holds two **i32** components and cannot represent the power-of-two denominator a float's exact value has -- folding it on the other three would split the backends rather than join them.
+
+Both are a MISS, never a false match: the fold only ever declines to merge two keys `equalp` would call the same.
+
+**The fold is also what is STORED**, so `maphash` (and `loop being the hash-keys`) hands back the representative -- `"CS"` for an entry written under `"cs"` -- on all four backends. That is forced by the design rather than chosen: a bucket decides by `equal` against the keys already in it, so the fold has to be the key that is there. Keeping the original as well would cost a second slot in every entry of every table (or a fold per comparison, plus one inside `FUNC_HASH_RESIZE`), for a difference from SBCL that only an enumeration can see.
+
+Per backend, the fold and the flag that switches it on:
+
+- **interpreter**: `LispHashTable` runs a key through `LispEquality.equalpKey` before it reaches the map when the table was made `:test 'equalp`.
+- **JVM**: the fold is plain Java over the JVM value model in `runtime/RontoHashTable.equalpKey` -- a bytecode transcription would only be harder to keep in step with the interpreter's -- so that class TRAVELS beside a compiled program that makes an `equalp` table (`.kb/jvm-export.md`, "What travels"). The flag is a second reserved String key (`#equalp`) beside `#order`, so it collides with no `Integer` bucket key; `_hashKey(key, table)` folds when it is present, and `_hashGet`/`_hashPut`/`_hashRem` run every key through it. `_hashClr` reads the marker before the clear and hangs it back, or an emptied table would stop folding.
+- **WASM**: `_equalp_key` (`WasmEqualpKeyRuntimeBuilder`, `FUNC_EQUALP_KEY`, appended after the last fixed helper so no index above shifts; an identity stub in a module that folds nothing). It calls `_string_upcase` / `_char_upcase` -- both always emitted, both dropped by the shaker in a module that does not reach them -- and builds the integer through `_int_new` / `_big_ash`. The flag rides in the LOW BIT of the header's count, which is stored as `entries * 2 + fold`: the header car stays an i31, so `hash-table-p`'s discrimination (an i31 count here, a dims array for the general array sharing the `TYPE_CELL` box) is untouched, and every count read shifts past the flag.
+
+**The gate is `LispMacroExpander.programMakesEqualpHashTable`**, one scan shared by both compiled backends: a program that writes no `(make-hash-table :test 'equalp)` is emitted exactly as it was before the fold existed -- no fold call, no tagged count, no travelling class, no `(mut i32)` depth global, and the fixed `_equalp_key` slot holds an identity stub the shaker drops under the default `--optimize`. That is also why the compile paths read the test from the SOURCE: `make-hash-table`'s arguments are never evaluated there, so `:test` must be written literally (`'equalp` or `#'equalp`) to be seen; a test computed at run time leaves the table placing structurally. The interpreter evaluates the argument as usual. **Every count in a WASM module has to agree about whether the flag is there**, so the gate is one program-wide answer that also has to be carried into each top-level CHUNK context (`WasmAsyncEmit.freshCtx`) -- a chunk built without it counted in units of one while the printer read units of two.
+
+This is the WIDENING half of the `:test` story; `.todo/012` is the NARROWING half (an `eql` table still matching structurally, which is why `hash-table-test` answers `EQUAL` and not `EQL` for one). Pinned by `LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`'s `*EqualpHashTable*` tests, the ci-spec case `equalp-hash-table-key-fold`, and `RontoHashTableEqualpKeyTest`, which folds one value in BOTH Java models and asserts the two representatives are the same value -- the two folds are written over different value models and cannot be one function.
 
 **The hash is capped at `LispEquality.HASH_DEPTH_CAP` (64) levels of DEPTH** and folds a constant below it. That is free correctness -- a hash need not be injective -- and it is what makes a cyclic key hashable. The cap may only ever be by depth/count, never by anything order- or address-dependent, or `equal` keys would stop hashing equal: two `equal` keys have the same shape, so a depth cap folds them identically (pinned by the ci-spec case `cyclic-hash-key-438`, whose 200- and 199-element list keys are both past the cap and still one key / two keys respectively).
 
@@ -27,20 +46,21 @@ just as widely: `equal` on a vector is identity, so the hash is an identity hash
 WASM) and two distinct vectors with equal elements are two keys. `puthash` grows (doubles, `FUNC_HASH_RESIZE`) past load factor 0.75. `FUNC_HASH`/`FUNC_HASH_RESIZE` sit just before `FUNC_USER_BASE`; both are present in Preview 1 and `--component` (no import/`FUNC_START` index shift, so the component blobs are unaffected). `maphash` order is unspecified (README) -- interpreter and JVM both walk insertion order (the JVM through the `#order` list above, which is why the bucket index may reorder freely), WASM walks bucket order.
 
 **Printing**: a table prints as SBCL's unreadable tag MINUS its trailing identity hash --
-`#<HASH-TABLE :TEST EQUAL :COUNT n>` on all four backends, through
+`#<HASH-TABLE :TEST EQUAL :COUNT n>` (`EQUALP` for a folding table) on all four backends, through
 `print`/`princ`/`prin1`/`princ-to-string`/`format ~A`/`~S`, nested positions included
 (pinned by the ci-spec case `hash-table-print-syntax` plus one test per backend). Still no
 entry content. The two fields are exactly the two SBCL details that can be printed here
 without lying or drifting:
 
-- `:TEST` is the CONSTANT `EQUAL`, not the `:test` the table was made with. Lookup is
-  structural on every backend (`make-hash-table` records `:test` on the interpreter and
-  ignores it entirely on WASM), so `EQUAL` is the test the table actually implements and
-  is what `hash-table-test` already reports on all four backends
-  (`LispMacroExpander.expandHashTableTest` compiles the accessor to a constant). Printing
-  the REQUESTED test would describe behavior that does not exist, and would diverge by
-  construction on WASM, which does not store it -- print it only if the WASM table first
-  learns its test AND lookup starts honoring it.
+- `:TEST` is the test LOOKUP IMPLEMENTS, which is `EQUALP` for a table whose keys are
+  folded and `EQUAL` for every other one -- an `eql` table still places structurally
+  (`.todo/012`), so printing the REQUESTED test would describe behavior that does not
+  exist. It is the same answer `hash-table-test` gives, from the same place on each
+  backend: `LispHashTable.equalpTest()`, `_hashEqp` (the JVM marker), the header count's
+  low bit (WASM). The two tags are two whole constants
+  (`LispHashTable.HASH_TABLE_PREFIX`, `HASH_TABLE_PREFIX_EQUALP`) rather than one
+  assembled at run time, so a program with no `equalp` table interns only the one it can
+  print and its printer keeps the branch-free shape it had.
 - `:COUNT` is the live entry count, the same O(1) number `hash-table-count` reads, taken
   from the same place on each backend so the two cannot disagree.
 

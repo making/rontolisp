@@ -64,12 +64,21 @@ public final class LispEquality {
 	/**
 	 * Folds a value into the key an {@code equalp} hash table places it under: the
 	 * canonical representative of everything {@code equalp} calls the same. A string and
-	 * a character fold to their upper case, a number to its exact rational value (so
-	 * {@code 1}, {@code 1.0} and {@code 2/2} are one key), and a cons folds element-wise.
-	 * Everything else is its own representative -- an ARRAY deliberately included, since
-	 * {@link #equal} on a vector is identity on every backend and a folded copy would
-	 * never find itself. That is a real deviation from ANSI {@code equalp} tables and is
-	 * recorded in {@code .kb/hash-tables.md}.
+	 * a character fold to their upper case, a float WHOSE VALUE IS AN INTEGER to that
+	 * integer (so {@code 1}, {@code 1.0} and {@code 2/2} are one key), and a cons folds
+	 * element-wise. Everything else is its own representative, and two of those are real
+	 * deviations from ANSI {@code equalp} tables, both recorded in
+	 * {@code .kb/hash-tables.md}:
+	 * <ul>
+	 * <li>an ARRAY does not fold, since {@link #equal} on a vector is identity on every
+	 * backend and a folded copy would never find itself;</li>
+	 * <li>a float with a FRACTION does not fold to the ratio it equals, because the WASM
+	 * backends' ratio holds two i32 components and cannot represent one (a float's exact
+	 * value has a power-of-two denominator far outside that range), so {@code 0.5} and
+	 * {@code 1/2} are two keys everywhere rather than one key here and two there.</li>
+	 * </ul>
+	 * Both deviations are a MISS, never a false match: the fold only ever refuses to
+	 * merge two keys {@code equalp} would call the same.
 	 *
 	 * <p>
 	 * Folding rather than a second hash/compare pair is what keeps ONE structural table
@@ -94,28 +103,68 @@ public final class LispEquality {
 			return v;
 		}
 		return switch (v) {
-			case LispString string -> new LispString(string.value().toUpperCase(java.util.Locale.ROOT));
+			case LispString string -> new LispString(upcase(string.value()));
 			case LispChar character -> new LispChar(Character.toUpperCase(character.codePoint()));
-			case LispDouble number -> exactRational(number.value());
+			case LispDouble number -> integerValued(number.value());
 			case LispCons cons -> new LispCons(equalpKey(cons.car(), depth - 1), equalpKey(cons.cdr(), depth - 1));
 			default -> v;
 		};
 	}
 
 	/**
-	 * The exact rational value of a double, so a float and the integer or ratio it equals
-	 * fold to one key. A non-finite value has no rational value and is its own key.
+	 * Upper case ONE CODE POINT AT A TIME, which is the mapping every backend can apply:
+	 * the compiled backends fold through their own {@code char-upcase} table (generated
+	 * from {@link Character#toUpperCase(int)}), and a whole-string
+	 * {@code String.toUpperCase} would part company with them wherever it expands one
+	 * code point into several ({@code ss} for a sharp s). It is also the mapping the
+	 * {@code equalp} PREDICATE uses -- {@code string-equal} compares character by
+	 * character -- so the fold and the predicate agree on the same strings.
 	 */
-	private static LispVal exactRational(double value) {
+	private static String upcase(String value) {
+		StringBuilder folded = new StringBuilder(value.length());
+		int i = 0;
+		while (i < value.length()) {
+			int codePoint = value.codePointAt(i);
+			folded.appendCodePoint(Character.toUpperCase(codePoint));
+			i += Character.charCount(codePoint);
+		}
+		return folded.toString();
+	}
+
+	/**
+	 * The exact integer a double equals, so a float and the integer it equals fold to one
+	 * key. A float with a fraction, and a non-finite one, have no integer value and are
+	 * their own key -- see the {@link #equalpKey} note on why the fraction is not folded
+	 * to a ratio.
+	 *
+	 * <p>
+	 * A finite double is exactly {@code mantissa * 2^exponent}, which is what the
+	 * compiled backends read out of its bits too, so the three folds answer the same
+	 * integer at every magnitude without a decimal detour.
+	 */
+	private static LispVal integerValued(double value) {
 		if (Double.isNaN(value) || Double.isInfinite(value)) {
 			return new LispDouble(value);
 		}
-		java.math.BigDecimal decimal = new java.math.BigDecimal(value);
-		java.math.BigInteger scaled = decimal.unscaledValue();
-		int scale = decimal.scale();
-		java.math.BigInteger numerator = scale < 0 ? scaled.multiply(java.math.BigInteger.TEN.pow(-scale)) : scaled;
-		java.math.BigInteger denominator = scale > 0 ? java.math.BigInteger.TEN.pow(scale) : java.math.BigInteger.ONE;
-		return LispRatio.valueOf(numerator, denominator);
+		if (value == 0.0) {
+			// Both zeros fold to the integer 0, which is what (= -0.0 0) answers.
+			return new LispInteger(0);
+		}
+		long bits = Double.doubleToLongBits(value);
+		long fraction = bits & 0x000fffffffffffffL;
+		int biasedExponent = (int) ((bits >> 52) & 0x7ff);
+		long mantissa = (biasedExponent == 0) ? fraction : (fraction | 0x0010000000000000L);
+		int exponent = (biasedExponent == 0) ? -1074 : biasedExponent - 1075;
+		while (exponent < 0 && (mantissa & 1L) == 0L) {
+			mantissa >>= 1;
+			exponent++;
+		}
+		if (exponent < 0) {
+			// An odd mantissa still owing a division by a power of two: a fraction.
+			return new LispDouble(value);
+		}
+		java.math.BigInteger magnitude = java.math.BigInteger.valueOf(bits < 0 ? -mantissa : mantissa);
+		return LispRatio.valueOf(magnitude.shiftLeft(exponent), java.math.BigInteger.ONE);
 	}
 
 	/**

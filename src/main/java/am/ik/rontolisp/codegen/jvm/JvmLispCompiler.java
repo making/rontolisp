@@ -126,11 +126,25 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	private boolean needsHttpRuntime;
 
+	/**
+	 * Whether the last {@link #compile} builds an {@code equalp} hash table, i.e. whether
+	 * the emitted class needs {@code RontoHashTable} -- the class the key fold is written
+	 * in -- beside it.
+	 */
+	private boolean needsHashFoldRuntime;
+
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
 
 	/** The hash-table runtime helper group ({@link JvmHashRuntimeBuilder}). */
 	private static final String GROUP_HASH = "hash-tables";
+
+	/**
+	 * The {@code equalp} key-fold helpers
+	 * ({@link JvmHashRuntimeBuilder#EQUALP_METHOD_NAMES}), a group of their own so a
+	 * program that folds no key carries none of them.
+	 */
+	private static final String GROUP_HASH_EQUALP = "hash-tables-equalp";
 
 	/** The embedded eval/apply runtime group ({@link JvmEvalRuntimeBuilder}). */
 	private static final String GROUP_EVAL = "eval";
@@ -150,6 +164,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static @Nullable String gateGroupFor(String helperName) {
 		if (JvmArrayRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
 			return GROUP_ARRAYS;
+		}
+		if (JvmHashRuntimeBuilder.EQUALP_METHOD_NAMES.contains(helperName)) {
+			return GROUP_HASH_EQUALP;
 		}
 		if (JvmHashRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
 			return GROUP_HASH;
@@ -375,9 +392,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * The runtime class files the compiled class needs BESIDE it — the packed float-array
 	 * handle a {@code :float-vector} / {@code :float-matrix} export hands out with its
-	 * marshalling seam, and the embedded HTTP server a {@code rontolisp:http-handler}
-	 * program serves through. Empty unless the program does one of those, so an ordinary
-	 * compilation still produces exactly one file.
+	 * marshalling seam, the embedded HTTP server a {@code rontolisp:http-handler} program
+	 * serves through, and the {@code equalp} key fold a program that writes
+	 * {@code :test 'equalp} places its keys by. Empty unless the program does one of
+	 * those, so an ordinary compilation still produces exactly one file.
 	 *
 	 * <p>
 	 * They are written at their canonical names rather than renamed into the program's
@@ -387,12 +405,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @return each class file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
-		if (!this.needsHandleRuntime && !this.needsHttpRuntime) {
+		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashFoldRuntime) {
 			return Map.of();
 		}
 		Map<String, byte[]> files = new LinkedHashMap<>();
 		if (this.needsHandleRuntime) {
 			files.putAll(JvmExportRuntimeBuilder.runtimeClassFiles());
+		}
+		if (this.needsHashFoldRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsHttpRuntime) {
 			files.putAll(JvmHttpHandlerRuntimeBuilder.runtimeClassFiles());
@@ -1089,7 +1110,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// http-handler forces the group on: the Clack environment's :headers value is a
 		// hash table (built by RontoHttpClack in the _hash* runtime's HashMap
 		// representation), whether or not the program's own source names a hash op.
-		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH) || usesHttpHandler;
+		// A table whose keys are FOLDED: the three extra helpers and the fold call in
+		// get/put/remove ride on their own gate, so a program that writes no
+		// :test 'equalp is emitted exactly as it was before the fold existed -- and the
+		// travelling RontoHashTable stays out of its output.
+		boolean usesEqualpHashTables = LispMacroExpander.programMakesEqualpHashTable(program)
+				|| forcedGroups.contains(GROUP_HASH_EQUALP);
+		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH) || usesHttpHandler
+				|| usesEqualpHashTables;
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
 		// it pulls in the eval runtime as well.
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
@@ -1438,6 +1466,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A served program calls the embedded server and the Clack glue, so those class
 		// files travel with the output and it runs on a bare `java -cp .`.
 		this.needsHttpRuntime = usesHttpHandler;
+		// An equalp table folds its keys through RontoHashTable.equalpKey, so that class
+		// travels with the output too -- and with nothing else, since no other program
+		// emits a call to it.
+		this.needsHashFoldRuntime = usesEqualpHashTables;
 		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead || this.needsHandleRuntime;
 
 		// Whether the program can produce a packed integer vector (a #N@(...) literal
@@ -1625,6 +1657,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesPackedSequenceIo(usesPackedSequenceIo)
 			.usesArrays(usesArrays)
 			.usesHashTables(usesHashTables)
+			.usesEqualpHashTables(usesEqualpHashTables)
 			.usesSeqString(usesSeqString)
 			.mayUseInstances(mayUseInstances)
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
@@ -2137,7 +2170,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables
 				? JvmHashRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, longValueOf,
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)), strvMethod,
-						instanceLayoutClass)
+						instanceLayoutClass, usesEqualpHashTables)
 				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
@@ -2259,8 +2292,17 @@ public final class JvmLispCompiler implements LispCompiler {
 				.addNameAndType(cp.addUtf8(JvmHashRuntimeBuilder.SIZE), cp.addUtf8(JvmHashRuntimeBuilder.SIZE_DESC)));
 			MethodrefConstant intToString = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Integer")),
 					cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
+			// The :TEST field is the test lookup implements. Only a program that can
+			// build an equalp table interns the second tag and asks the table which one
+			// it is; in every other program no table folds, so the EQUAL tag is a
+			// constant exactly as it was.
 			hashPrint = new JvmRuntimeBuilder.HashPrint(mapClassForPrint, cp.addString(LispHashTable.HASH_TABLE_PREFIX),
-					mapSize, intToString, stringConcat, cp.addString(">"));
+					mapSize, intToString, stringConcat, cp.addString(">"),
+					usesEqualpHashTables ? cp.addString(LispHashTable.HASH_TABLE_PREFIX_EQUALP) : null,
+					usesEqualpHashTables
+							? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmHashRuntimeBuilder.EQUALP_P),
+									cp.addUtf8(JvmHashRuntimeBuilder.EQUALP_P_DESC)))
+							: null);
 		}
 		else {
 			hashPrint = null;
@@ -2572,6 +2614,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// before the writeFields/writeMethods lambdas run.
 		final List<Integer> layoutClinitCode = new ArrayList<>();
 		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
+		// The bignum-literal half of <clinit>, assembled HERE for the same reason: it
+		// mints the CONSTANT_String decimal forms, and the pool is complete because
+		// every body (defun, top-level chunk, lambda, outlined fused site) has been
+		// compiled by now. Empty for a program with no bignum literal, which is then
+		// emitted byte for byte as before.
+		final List<Integer> bigIntClinitCode = new ArrayList<>();
+		mainCtx.bigIntPool.emitClinitInit(bigIntClinitCode, cp);
 		// When the standard-stream handles are reserved, the stream table must EXIST
 		// from the start with those slots empty. _addStream reserves the COUNT, but it
 		// runs only when something is opened -- while the reserved handle 2 is a live
@@ -2857,6 +2906,17 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(java.util.Objects.requireNonNull(mainCtx.layoutPool.fieldDesc))
 						.writeU2(0));
 				}
+				// One private static BigInteger per DISTINCT bignum literal, built once
+				// in <clinit> so a use site is a GETSTATIC. The attribute count MUST stay
+				// 0 -- JvmClassShaker rejects field attributes -- which is also why the
+				// field is not marked ACC_FINAL-with-ConstantValue: a BigInteger has no
+				// constant-pool form.
+				for (BigIntPool.BigIntField bf : mainCtx.bigIntPool.fields()) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(bf.name())
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.bigIntPool.fieldDesc))
+						.writeU2(0));
+				}
 			})
 			.writeMethods(methods -> {
 				if (!this.noMain) {
@@ -2941,7 +3001,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
-						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null || initsClinit) {
+						|| !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty() || dynVarRuntime != null
+						|| initsClinit) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -3000,6 +3061,10 @@ public final class JvmLispCompiler implements LispCompiler {
 						JvmRuntimeBuilder.emitU2(clinitCode,
 								java.util.Objects.requireNonNull(streamCountFieldRef).index());
 					}
+					// The bignum literals go in before the layouts: they are plain
+					// values with no dependency of their own, and every later fragment
+					// (and the top-level runner, invoked last) may read them.
+					clinitCode.addAll(bigIntClinitCode);
 					clinitCode.addAll(layoutClinitCode);
 					// The standard stream variables' defaults, one table
 					// (StreamDesignators) feeding BOTH homes: the per-name global field
@@ -3067,7 +3132,10 @@ public final class JvmLispCompiler implements LispCompiler {
 					// index, then a briefly-two-slot long) on top of whichever nest it
 					// sits in, hence the +6 -- an over-declared maximum is free, an
 					// under-declared one is a VerifyError at class load.
-					final int clinitMaxStack = Math.max(streamGenvSeeds.isEmpty() ? 0 : 8,
+					// A bignum initializer peaks at 3 (the uninitialized BigInteger, its
+					// dup, the decimal string).
+					final int clinitMaxStack = Math.max(
+							Math.max(streamGenvSeeds.isEmpty() ? 0 : 8, mainCtx.bigIntPool.isEmpty() ? 0 : 3),
 							!structTableClinitFinal.isEmpty() ? 10 : (mainCtx.layoutPool.isEmpty() ? 2 : 4))
 							+ (streamLayoutField != null ? 6 : 0);
 					// A layout-only program never runs ensureThreadLocalInfra, so the
@@ -3077,11 +3145,13 @@ public final class JvmLispCompiler implements LispCompiler {
 					Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName
 							: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
 									: dynVarRuntime != null ? dynVarRuntime.clinitName()
-											: java.util.Objects.requireNonNull(standardOutputClinitName);
+											: standardOutputClinitName != null ? standardOutputClinitName
+													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitName);
 					Utf8Constant clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
 							: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
 									: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
-											: java.util.Objects.requireNonNull(standardOutputClinitDesc);
+											: standardOutputClinitDesc != null ? standardOutputClinitDesc
+													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
 					methods.add(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(clinitMaxStack)
@@ -4689,6 +4759,108 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The compilation-wide bignum-literal interner. A {@code BigInteger} is immutable, so
+	 * every use of one literal is the same value: one {@code private static} field per
+	 * DISTINCT value, built once in {@code <clinit>}, turns each use site from
+	 * {@code new BigInteger(String)} (12 bytes and a full decimal parse plus an
+	 * allocation, every time round the loop) into a 3-byte {@code GETSTATIC}. Nothing new
+	 * travels: the field lives in the generated class.
+	 *
+	 * <p>
+	 * The pool is filled during body compilation and drained into {@code <clinit>} at
+	 * class assembly, exactly like {@link LayoutPool}. A program with no bignum literal
+	 * interns nothing and is emitted byte for byte as before.
+	 */
+	static final class BigIntPool {
+
+		/**
+		 * One interned bignum literal.
+		 *
+		 * @param name the field name constant
+		 * @param ref the fieldref used by {@code GETSTATIC}/{@code PUTSTATIC}
+		 * @param value the value the field holds
+		 */
+		record BigIntField(Utf8Constant name, FieldrefConstant ref, java.math.BigInteger value) {
+		}
+
+		private final Map<java.math.BigInteger, BigIntField> byValue = new java.util.LinkedHashMap<>();
+
+		@Nullable Utf8Constant fieldDesc;
+
+		@Nullable ClassConstant bigIntegerCls;
+
+		@Nullable MethodrefConstant ctor;
+
+		@Nullable Utf8Constant clinitName;
+
+		@Nullable Utf8Constant clinitDesc;
+
+		/**
+		 * Whether no bignum literal has been interned, i.e. the program has none.
+		 * @return true when nothing has to be emitted
+		 */
+		boolean isEmpty() {
+			return this.byValue.isEmpty();
+		}
+
+		/**
+		 * The interned bignum fields, in interning order.
+		 * @return the fields to emit
+		 */
+		java.util.Collection<BigIntField> fields() {
+			return this.byValue.values();
+		}
+
+		/**
+		 * Interns the static field holding one bignum literal; idempotent per value.
+		 * @param cp the constant pool
+		 * @param className the internal name of the class being emitted
+		 * @param value the literal to intern
+		 * @return the fieldref of the constant
+		 */
+		FieldrefConstant intern(ConstantPool cp, String className, java.math.BigInteger value) {
+			BigIntField existing = this.byValue.get(value);
+			if (existing != null) {
+				return existing.ref();
+			}
+			if (this.bigIntegerCls == null) {
+				this.bigIntegerCls = cp.addClass(cp.addUtf8("java/math/BigInteger"));
+				this.ctor = cp.addMethodref(this.bigIntegerCls,
+						cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+				this.fieldDesc = cp.addUtf8("Ljava/math/BigInteger;");
+				this.clinitName = cp.addUtf8("<clinit>");
+				this.clinitDesc = cp.addUtf8("()V");
+			}
+			Utf8Constant nameUtf = cp.addUtf8("_bi$" + this.byValue.size());
+			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
+			FieldrefConstant ref = cp.addFieldref(thisClass,
+					cp.addNameAndType(nameUtf, Objects.requireNonNull(this.fieldDesc)));
+			this.byValue.put(value, new BigIntField(nameUtf, ref, value));
+			return ref;
+		}
+
+		/**
+		 * Appends the bignum initializers to the shared {@code <clinit>} body. Peak
+		 * operand depth is 3 (the uninitialized instance, its dup, the string).
+		 * @param code the {@code <clinit>} body being assembled
+		 * @param cp the constant pool (mints the decimal strings)
+		 */
+		void emitClinitInit(List<Integer> code, ConstantPool cp) {
+			for (BigIntField bf : this.byValue.values()) {
+				code.add(Opcode.NEW);
+				JvmRuntimeBuilder.emitU2(code, Objects.requireNonNull(this.bigIntegerCls).index());
+				code.add(Opcode.DUP);
+				JvmRuntimeBuilder.emitLdc(code, cp.addString(bf.value().toString()).index());
+				code.add(Opcode.INVOKESPECIAL);
+				JvmRuntimeBuilder.emitU2(code, Objects.requireNonNull(this.ctor).index());
+				code.add(Opcode.PUTSTATIC);
+				JvmRuntimeBuilder.emitU2(code, bf.ref().index());
+			}
+		}
+
+	}
+
+	/**
 	 * An active {@code unwind-protect} protected region during compilation.
 	 * {@code cleanupForms} are re-compiled inline at every {@code return} escape site (a
 	 * cleanup runs once per exit path); {@code blockDepth} is the {@code %block} stack
@@ -5126,6 +5298,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesHashTables = false;
 
 		/**
+		 * True when the {@code equalp} key-fold helpers are emitted for this program,
+		 * i.e. when its source writes {@code (make-hash-table :test 'equalp)} somewhere.
+		 * Gates the fold at the {@code make-hash-table} site and the real
+		 * {@code hash-table-test} answer: with no folding table in the program both are
+		 * calls to helpers that were never generated, and the constant answer is the true
+		 * one.
+		 */
+		boolean usesEqualpHashTables = false;
+
+		/**
 		 * True when the {@code %seq-string} helper is injected for this program, i.e. the
 		 * program itself writes a {@code (concatenate 'string ...)} with an argument that
 		 * is not a literal string. Only then does the string-family lowering normalize
@@ -5367,9 +5549,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final LayoutPool layoutPool;
 
+		/**
+		 * The compilation-wide bignum-literal interner (one static
+		 * {@code java.math.BigInteger} field per distinct literal); one instance shared
+		 * across every context of a compilation through the single builder, like
+		 * {@link #layoutPool}.
+		 */
+		final BigIntPool bigIntPool;
+
 		private Ctx(Builder builder) {
 			this.conditionChannel = builder.conditionChannel;
 			this.layoutPool = builder.layoutPool;
+			this.bigIntPool = builder.bigIntPool;
 			this.dynamic = builder.dynamic;
 			this.servletMode = builder.servletMode;
 			this.blockExitChannel = builder.blockExitChannel;
@@ -5385,6 +5576,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesPackedSequenceIo = builder.usesPackedSequenceIo;
 			this.usesArrays = builder.usesArrays;
 			this.usesHashTables = builder.usesHashTables;
+			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesSeqString = builder.usesSeqString;
 			this.mayUseInstances = builder.mayUseInstances;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
@@ -5499,6 +5691,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * the same builder shares it.
 			 */
 			private final LayoutPool layoutPool = new LayoutPool();
+
+			/**
+			 * One bignum-literal pool per builder (= per compilation): every context
+			 * built from the same builder shares it.
+			 */
+			private final BigIntPool bigIntPool = new BigIntPool();
 
 			private @Nullable ConstantPool cp;
 
@@ -5673,6 +5871,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesArrays = false;
 
 			private boolean usesHashTables = false;
+
+			private boolean usesEqualpHashTables = false;
 
 			private boolean usesSeqString = false;
 
@@ -6138,6 +6338,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesHashTables(boolean usesHashTables) {
 				this.usesHashTables = usesHashTables;
+				return this;
+			}
+
+			Builder usesEqualpHashTables(boolean usesEqualpHashTables) {
+				this.usesEqualpHashTables = usesEqualpHashTables;
 				return this;
 			}
 
