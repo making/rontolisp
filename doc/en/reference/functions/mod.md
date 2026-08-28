@@ -11,3 +11,7 @@ Returns the remainder of `number` divided by `divisor` using floored division, s
 ```lisp
 (mod -13 4) ; => 3
 ```
+
+```lisp
+(mod 7/2 3) ; => 1/2
+```

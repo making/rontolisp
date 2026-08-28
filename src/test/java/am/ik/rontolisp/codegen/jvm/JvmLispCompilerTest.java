@@ -4160,6 +4160,29 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (mod -5.5 2.0))")).isEqualTo("0.5");
 	}
 
+	// ANSI defines mod/rem over any REAL. A ratio operand used to fall through the Long
+	// fast path into _big and die casting the BigInteger[2] representation; it now takes
+	// the rational path, sign rules and exact-division demotion included. The variable
+	// binding matters: it is what stops the emitter from seeing the operand type.
+	@Test
+	void compileAndRunModAndRemOfRatio() throws Exception {
+		assertThat(compileAndRun("(let ((r 7/2)) (print (mod r 3)) (print (rem r 3)))")).isEqualTo("""
+				1/2
+				1/2""");
+		assertThat(compileAndRun("(print (mod -7/2 3))")).isEqualTo("5/2");
+		assertThat(compileAndRun("(print (rem -7/2 3))")).isEqualTo("-1/2");
+		assertThat(compileAndRun("(print (mod 7/2 -3))")).isEqualTo("-5/2");
+		assertThat(compileAndRun("(print (rem 7/2 -3))")).isEqualTo("1/2");
+		assertThat(compileAndRun("(print (mod 5 3/4))")).isEqualTo("1/2");
+		assertThat(compileAndRun("(print (rem 5 3/4))")).isEqualTo("1/2");
+		assertThat(compileAndRun("(print (mod -7/3 -2/5))")).isEqualTo("-1/3");
+		assertThat(compileAndRun("(print (rem -7/3 -2/5))")).isEqualTo("-1/3");
+		assertThat(compileAndRun("(print (mod 7/2 1/2))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (rem 22/7 22/7))")).isEqualTo("0");
+		assertThat(compileAndRun("(handler-case (mod 7/2 0) (error (e) (print 'divzero)))")).isEqualTo("DIVZERO");
+		assertThat(compileAndRun("(handler-case (rem 7/2 0) (error (e) (print 'divzero)))")).isEqualTo("DIVZERO");
+	}
+
 	@Test
 	void compileAndRunVariadicComparison() throws Exception {
 		// A true boolean is the symbol t, like the interpreter.
