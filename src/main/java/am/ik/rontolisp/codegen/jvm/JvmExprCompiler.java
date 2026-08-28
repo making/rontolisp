@@ -127,7 +127,8 @@ final class JvmExprCompiler {
 	static void compileSymbolRef(LispSymbol sym, JvmLispCompiler.Ctx ctx) {
 		String name = sym.name();
 		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): never special,
-		// never captured, never in ctx.locals -- resolved first.
+		// never captured, never in ctx.locals -- resolved first. (A raw GLOBAL is
+		// resolved in compileSpecialRead, below every lexical binding of the name.)
 		JvmIntFusionCompiler.RawLocal rawLocal = ctx.rawLocals.get(name);
 		if (rawLocal != null) {
 			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawLocal, ctx);
@@ -209,6 +210,14 @@ final class JvmExprCompiler {
 	 * special that is never {@code let}-bound -- stays a single {@code getstatic}.
 	 */
 	static void compileSpecialRead(String name, JvmLispCompiler.Ctx ctx) {
+		// A promoted global carrying the unboxed dual representation (JvmRawGlobals):
+		// the raw field when the flag is set, the _g$ shadow otherwise. Never a
+		// dynamically bound special, so this cannot skip the _dget path.
+		JvmIntFusionCompiler.RawLocal rawGlobal = ctx.rawGlobals.get(name);
+		if (rawGlobal != null) {
+			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawGlobal, ctx);
+			return;
+		}
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
 		if (dyn != null) {
 			am.ik.jvm.ConstantPool.FieldrefConstant tlField = dyn.fields().get(name);

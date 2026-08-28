@@ -13652,6 +13652,126 @@ class JvmLispCompilerTest {
 			0.0
 			0""";
 
+	private static final String RAW_GLOBAL_PROGRAM = """
+			(defparameter s 0)
+			(defvar v 10)
+			(defvar v 99)
+			(dotimes (i 5) (setq s (+ s i)))
+			(print s)
+			(print v)
+			(setq s 1.5d0)
+			(print s)
+			(setq s (+ s 1))
+			(print s)
+			(setq s "str")
+			(print s)
+			(setq s nil)
+			(print s)
+			(setq s 7)
+			(print s)
+			(print (let ((s 100)) (setq s (+ s 1)) s))
+			(print s)
+			(defparameter big 0)
+			(setq big (* 4611686018427387904 4))
+			(print big)
+			(setq big (+ big 1))
+			(print big)
+			(defun bump () (setq s (+ s 10)) s)
+			(print (bump))
+			(print s)
+			(defparameter arr (make-array 3))
+			(defparameter acc 0)
+			(dotimes (i 3) (setf (aref arr i) (* i i)))
+			(dotimes (i 3) (setq acc (+ acc (aref arr i))))
+			(print acc)
+			(setq g 0)
+			(dotimes (i 3) (setq g (+ g i)))
+			(print g)
+			(print (let ((g 100)) (setq g (+ g 1)) g))
+			(print g)
+			""";
+
+	private static final String RAW_GLOBAL_EXPECTED = """
+			10
+			10
+			1.5
+			2.5
+			"str"
+			NIL
+			7
+			101
+			7
+			18446744073709551616
+			18446744073709551617
+			17
+			17
+			5
+			3
+			101
+			3""";
+
+	@Test
+	void unboxedTopLevelGlobalsAnswerWhatTheBoxedStaticFieldAnswers() throws Exception {
+		// A promoted top-level global carrying the dual representation
+		// (.kb/jvm-int-fusion.md): a raw long field and an int flag beside the _g$
+		// field, which stays the boxed shadow. Every tier the shadow used to hold has
+		// to read back unchanged -- a float, a string, nil, a bignum promotion out of
+		// long range -- and a LEXICAL binding of the same name (g, promoted by a
+		// top-level setq, so not special) must still win over the global, both to read
+		// and to assign. In the same program s declines, because the let that names it
+		// binds it DYNAMICALLY (a defparameter name is special), which pins that one
+		// global's representation does not follow another's. --optimize=size declines
+		// the trade, so the same program compiles without the extra fields and answers
+		// the same.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(RAW_GLOBAL_PROGRAM));
+		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(declaredFieldNames(fast)).contains("_gr$G", "_gk$G", "_gr$ACC", "_gr$BIG", "_g$S");
+		assertThat(declaredFieldNames(fast)).noneMatch(name -> name.equals("_gr$S"));
+		assertThat(declaredFieldNames(small)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(fast)).isEqualTo(RAW_GLOBAL_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(RAW_GLOBAL_EXPECTED);
+	}
+
+	@Test
+	void aDynamicallyBoundSpecialAndAnEvaldGlobalDeclineTheUnboxedRepresentation() throws Exception {
+		// The two seams a let local does not have. A special some let binds keeps its
+		// save/restore over the ONE _g$ field, and an eval runtime mirrors the BOX into
+		// _genv -- so neither name may split into a triple. Both programs assign an
+		// integer in a loop, which is the shape that would otherwise qualify.
+		List<LispVal> dynamicBinding = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defparameter *n* 0)
+				(defun show () *n*)
+				(setq *n* (+ *n* 1))
+				(print (show))
+				(let ((*n* 100))
+				  (print (show))
+				  (setq *n* (+ *n* 1))
+				  (print (show)))
+				(print (show))
+				"""));
+		byte[] dynamicBindingClass = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(dynamicBinding);
+		assertThat(declaredFieldNames(dynamicBindingClass)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(dynamicBindingClass)).isEqualTo("""
+				1
+				100
+				101
+				1""");
+		List<LispVal> evaluated = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defparameter s 0)
+				(dotimes (i 5) (setq s (+ s i)))
+				(print (eval 's))
+				(setq s (+ s 100))
+				(print (eval 's))
+				"""));
+		byte[] evaluatedClass = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(evaluated);
+		assertThat(declaredFieldNames(evaluatedClass)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(evaluatedClass)).isEqualTo("""
+				10
+				110""");
+	}
+
 	@Test
 	void fusedIntegerExpressionTreesMatchTheGenericPath() throws Exception {
 		// The fused emission is an optimization with a total fallback; this pins that
@@ -13801,6 +13921,15 @@ class JvmLispCompilerTest {
 	}
 
 	/** Every method the class declares, in declaration order. */
+	private static List<String> declaredFieldNames(byte[] classBytes) {
+		return java.lang.classfile.ClassFile.of()
+			.parse(classBytes)
+			.fields()
+			.stream()
+			.map(field -> field.fieldName().stringValue())
+			.toList();
+	}
+
 	private static List<String> declaredMethodNames(byte[] classBytes) {
 		return java.lang.classfile.ClassFile.of()
 			.parse(classBytes)

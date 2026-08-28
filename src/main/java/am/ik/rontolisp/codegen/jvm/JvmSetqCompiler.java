@@ -62,23 +62,27 @@ final class JvmSetqCompiler {
 			return false;
 		}
 		for (int p = 0; p < pairCount; p++) {
-			if (!(parts.get(1 + 2 * p) instanceof LispSymbol target) || !ctx.rawLocals.containsKey(target.name())) {
+			if (!(parts.get(1 + 2 * p) instanceof LispSymbol target)
+					|| JvmIntFusionCompiler.resolveRaw(target.name(), ctx) == null) {
 				return false;
 			}
 		}
 		for (int p = 0; p < pairCount; p++) {
 			String name = ((LispSymbol) parts.get(1 + 2 * p)).name();
 			JvmIntFusionCompiler.compileRawStore(parts.get(2 + 2 * p), ctx, className,
-					java.util.Objects.requireNonNull(ctx.rawLocals.get(name)));
+					java.util.Objects.requireNonNull(JvmIntFusionCompiler.resolveRaw(name, ctx)));
 		}
 		return true;
 	}
 
 	private static void compilePair(String name, LispVal valueExpr, JvmLispCompiler.Ctx ctx, String className) {
-		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): the store
-		// funnels through the fused raw-store path, and the setq's value is re-read
-		// boxed. Never special, never captured, never in ctx.locals.
-		JvmIntFusionCompiler.RawLocal rawLocal = ctx.rawLocals.get(name);
+		// An unboxed dual representation (.kb/jvm-int-fusion.md) -- a let local, or a
+		// promoted top-level global no lexical binding shadows here: the store funnels
+		// through the fused raw-store path, and the setq's value is re-read boxed. A raw
+		// LOCAL is never special, never captured, never in ctx.locals; a raw GLOBAL is
+		// never dynamically bound, so neither reaches the dual-bound special store below
+		// (and its eval mirror is off by construction -- JvmRawGlobals).
+		JvmIntFusionCompiler.RawLocal rawLocal = JvmIntFusionCompiler.resolveRaw(name, ctx);
 		if (rawLocal != null) {
 			JvmIntFusionCompiler.compileRawStore(valueExpr, ctx, className, rawLocal);
 			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawLocal, ctx);
