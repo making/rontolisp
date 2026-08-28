@@ -132,24 +132,20 @@ final class JvmEmitHelper {
 		}
 	}
 
+	/**
+	 * Pushes a bignum literal. A {@code BigInteger} is immutable, so the value is
+	 * interned into a per-compilation pool ({@link JvmLispCompiler.BigIntPool}) and built
+	 * once in {@code <clinit>}: the use site is a 3-byte {@code GETSTATIC} rather than an
+	 * allocation and a decimal-string parse per execution. In the hottest loops a program
+	 * has -- every {@code (ldb (byte 64 0) ...)} masks with a literal past
+	 * {@code Long.MAX_VALUE} -- rebuilding it per use dominated the run.
+	 * @param value the literal
+	 * @param ctx the compilation context
+	 */
 	static void compileBigInteger(java.math.BigInteger value, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.ClassConstant bigClass = ctx.cp.addClass(ctx.cp.addUtf8("java/math/BigInteger"));
-		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(bigClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ConstantPool.StringConstant sc = ctx.cp.addString(value.toString());
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(bigClass.index());
-		ctx.emit(Opcode.DUP);
-		if (sc.index() <= 255) {
-			ctx.emit(Opcode.LDC);
-			ctx.emit(sc.index());
-		}
-		else {
-			ctx.emit(Opcode.LDC_W);
-			ctx.emitU2(sc.index());
-		}
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(ctor.index());
+		ConstantPool.FieldrefConstant ref = ctx.bigIntPool.intern(ctx.cp, ctx.className, value);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(ref.index());
 	}
 
 	/**
