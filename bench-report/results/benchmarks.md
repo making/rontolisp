@@ -5,7 +5,7 @@ the prose below the tables is [`../notes/benchmarks.md`](../notes/benchmarks.md)
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-28
-- rontolisp commit: `2385748`
+- rontolisp commit: `5f2ea3c`
 - best of 3 runs per cell, 120s budget each
 
 | Implementation | Version | Runs on |
@@ -21,17 +21,17 @@ How the report is built and run: [../README.md](../README.md).
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | sbcl | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| [fib](../programs/fib.lisp) | 10,202 | 63 | 237 | 129 | 365 | 1,546 |
-| [mandelbrot](../programs/mandelbrot.lisp) | 15,266 | 212 | 1,083 | 438 | 1,762 | 139 |
-| [matmul](../programs/matmul.lisp) | 16,581 | 107 | 969 | 292 | 1,083 | 2,309 |
-| [sieve](../programs/sieve.lisp) | 25,917 | 521 | 972 | 173 | 413 | 626 |
-| [sort](../programs/sort.lisp) | timeout | timeout | timeout | 144 | 362 | 1,416 |
-| [hash](../programs/hash.lisp) | 4,086 | 576 | 740 | 178 | 599 | 665 |
-| [string](../programs/string.lisp) | 13,226 | 266 | 257 | 151 | 903 | 909 |
-| [clos](../programs/clos.lisp) | 26,153 | 104 | 642 | 97 | 1,400 | 1,992 |
-| [bignum](../programs/bignum.lisp) | 546 | 323 | 843 | 116 | 194 | 252 |
-| [list](../programs/list.lisp) | 4,420 | 394 | 217 | 114 | 667 | 421 |
-| **startup** | 444 | 97 | 37 | 14 | 95 | 2,862 |
+| [fib](../programs/fib.lisp) | 6,569 | 56 | 218 | 112 | 327 | 590 |
+| [mandelbrot](../programs/mandelbrot.lisp) | 12,018 | 141 | 890 | 319 | 1,245 | 91 |
+| [matmul](../programs/matmul.lisp) | 11,379 | 71 | 712 | 202 | 743 | 1,115 |
+| [sieve](../programs/sieve.lisp) | 18,262 | 245 | 698 | 61 | 288 | 339 |
+| [sort](../programs/sort.lisp) | timeout | timeout | timeout | 228 | 324 | 790 |
+| [hash](../programs/hash.lisp) | 2,883 | 571 | 488 | 98 | 411 | 524 |
+| [string](../programs/string.lisp) | 10,319 | 201 | 190 | 75 | 567 | 482 |
+| [clos](../programs/clos.lisp) | 19,719 | 95 | 440 | 90 | 928 | 1,058 |
+| [bignum](../programs/bignum.lisp) | 397 | 141 | 672 | 48 | 122 | 123 |
+| [list](../programs/list.lisp) | 2,944 | 183 | 174 | 56 | 478 | 248 |
+| **startup** | 383 | 84 | 17 | 12 | 54 | 2,048 |
 
 `startup` is the whole process, wall clock, for a program that computes
 nothing. Every other row is the benchmark timing ITSELF -- the program
@@ -41,31 +41,31 @@ reads the clock either side of its own work -- so no other row contains it.
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| fib | 79.09 | 0.49 | 1.84 | 2.83 | 11.98 |
-| mandelbrot | 34.85 | 0.48 | 2.47 | 4.02 | 0.32 |
-| matmul | 56.78 | 0.37 | 3.32 | 3.71 | 7.91 |
-| sieve | 149.81 | 3.01 | 5.62 | 2.39 | 3.62 |
-| sort | timeout | timeout | timeout | 2.51 | 9.83 |
-| hash | 22.96 | 3.24 | 4.16 | 3.37 | 3.74 |
-| string | 87.59 | 1.76 | 1.70 | 5.98 | 6.02 |
-| clos | 269.62 | 1.07 | 6.62 | 14.43 | 20.54 |
-| bignum | 4.71 | 2.78 | 7.27 | 1.67 | 2.17 |
-| list | 38.77 | 3.46 | 1.90 | 5.85 | 3.69 |
+| fib | 58.65 | 0.50 | 1.95 | 2.92 | 5.27 |
+| mandelbrot | 37.67 | 0.44 | 2.79 | 3.90 | 0.29 |
+| matmul | 56.33 | 0.35 | 3.52 | 3.68 | 5.52 |
+| sieve | 299.38 | 4.02 | 11.44 | 4.72 | 5.56 |
+| sort | timeout | timeout | timeout | 1.42 | 3.46 |
+| hash | 29.42 | 5.83 | 4.98 | 4.19 | 5.35 |
+| string | 137.59 | 2.68 | 2.53 | 7.56 | 6.43 |
+| clos | 219.10 | 1.06 | 4.89 | 10.31 | 11.76 |
+| bignum | 8.27 | 2.94 | 14.00 | 2.54 | 2.56 |
+| list | 52.57 | 3.27 | 3.11 | 8.54 | 4.43 |
 
 ## Build time (ms: source to the artifact that was then run)
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | sbcl | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fib | n/a | 926 | 970 | 13 | 399 | 4,848 |
-| mandelbrot | n/a | 935 | 979 | 20 | 388 | 4,760 |
-| matmul | n/a | 931 | 1,049 | 33 | 431 | 4,906 |
-| sieve | n/a | 966 | 1,017 | 17 | 387 | 4,850 |
-| sort | n/a | 970 | 1,019 | 22 | 402 | 4,901 |
-| hash | n/a | 946 | 1,031 | 14 | 346 | 4,807 |
-| string | n/a | 1,067 | 1,019 | 16 | 384 | 4,868 |
-| clos | n/a | 971 | 1,033 | 22 | 425 | 5,052 |
-| bignum | n/a | 996 | 1,011 | 14 | 377 | 4,820 |
-| list | n/a | 970 | 1,015 | 18 | 417 | 4,868 |
+| fib | n/a | 760 | 850 | 11 | 410 | 3,325 |
+| mandelbrot | n/a | 760 | 899 | 13 | 249 | 3,465 |
+| matmul | n/a | 792 | 914 | 22 | 296 | 3,413 |
+| sieve | n/a | 798 | 879 | 14 | 267 | 3,386 |
+| sort | n/a | 788 | 879 | 15 | 255 | 3,385 |
+| hash | n/a | 795 | 898 | 11 | 235 | 3,367 |
+| string | n/a | 902 | 904 | 12 | 254 | 3,361 |
+| clos | n/a | 821 | 890 | 13 | 257 | 3,464 |
+| bignum | n/a | 766 | 844 | 10 | 242 | 3,421 |
+| list | n/a | 796 | 851 | 12 | 258 | 3,377 |
 
 The rontolisp interpreter has no build column: interpreting the source is
 its mode, so there is no artifact between the two.
