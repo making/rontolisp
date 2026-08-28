@@ -174,6 +174,31 @@ register-allocated `long`s inside.
   dispatch bytes thousands of times. A name in `Ctx.rawLocals` is never in
   `Ctx.locals`; `JvmLetCompiler` saves/restores both maps and removes a name
   from either on shadowing, and `JvmDefvarCompiler` checks both.
+- **The counted-loop STEP is emitted INLINE, ahead of the outlined method**
+  (`emitRawStepFastPath`). `(+ i c)` / `(- i c)` / `(1+ i)` / `(1- i)` over an
+  unboxed local, assigned straight back into an unboxed local, is the shape
+  every `dotimes` / `do` / `loop for` steps with, and the outlined method boxed
+  at its root for the site to unbox it one instruction later. The site now
+  emits the raw case itself -- guarded by the source's flag and by
+  `Math.addExact`'s overflow condition spelled out for the constant addend --
+  and branches into the outlined call for exactly the two cases it declines: a
+  raw slot the flag says is stale (the local holds a bignum, a float, nil) and
+  a step that would overflow. Both guards keep the fallback's answer, so
+  nothing about promotion changes.
+  **What this buys is not the call, and not even the allocation: it is the
+  LAYOUT of whatever the loop builds.** C2 scalar-replaces a box that dies one
+  instruction later -- but only once it COMPILES the loop, and a loop that
+  builds a data structure runs far too few iterations to be compiled at all
+  (1000 is orders below any OSR threshold), so every dead counter box was a
+  real object interleaved with the cells the loop allocated:
+  `(loop for i from 1 to 1000 collect i)` laid its list out over 64 bytes per
+  element instead of 48, and every later walk paid a third more cache footprint
+  for the life of the list (nothing compacts it away -- a program that never
+  fills the young generation never runs a GC). Measured on `.todo/517`'s `nth`
+  row, 10^9 `cdr` steps over exactly that list: 3.50 s -> 2.49 s, against
+  2.69 s for the same walk hand-written in Java over `Object[]` cells. Pinned
+  by `aCountedLoopStepPromotesAtTheFixnumBoundaryAndKeepsSteppingOnABignum`
+  (`JvmLispCompilerTest`), which crosses both guards in both directions.
 
 ## When fusion does NOT trigger (and must keep not triggering)
 

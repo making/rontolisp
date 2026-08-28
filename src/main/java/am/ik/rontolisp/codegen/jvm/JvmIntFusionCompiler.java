@@ -644,7 +644,12 @@ final class JvmIntFusionCompiler {
 			}
 			if ((root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
 					&& site.leaves.size() <= MAX_EXPR_LEAVES) {
+				int @Nullable [] step = emitRawStepFastPath(root, ctx, target);
 				MethodrefConstant ref = methodFor(root, site.leaves, -1, ctx);
+				if (step != null) {
+					JvmEmitHelper.patchBranch(ctx, step[0], ctx.code.size());
+					JvmEmitHelper.patchBranch(ctx, step[1], ctx.code.size());
+				}
 				pushLeaves(site.leaves, ctx, className);
 				ctx.emit(Opcode.INVOKESTATIC);
 				ctx.emitU2(ref.index());
@@ -672,6 +677,9 @@ final class JvmIntFusionCompiler {
 				ctx.emit(tmp);
 				emitShadowSlotStore(target, ctx);
 				JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+				if (step != null) {
+					JvmEmitHelper.patchBranch(ctx, step[2], ctx.code.size());
+				}
 				return;
 			}
 		}
@@ -679,6 +687,84 @@ final class JvmIntFusionCompiler {
 		// then authoritative -- lists, floats, nil, anything.
 		JvmExprCompiler.compileExpr(expr, ctx, className);
 		emitShadowSlotStore(target, ctx);
+	}
+
+	/**
+	 * The counted-loop STEP -- {@code (+ i c)} / {@code (- i c)} / {@code (1+ i)} over an
+	 * unboxed local, assigned straight back into an unboxed local -- emitted inline as
+	 * raw {@code long} arithmetic ahead of the outlined method, which stays as the
+	 * fallback for the only two cases the inline form cannot answer: a raw slot the flag
+	 * says is not authoritative, and an addition that would overflow into a bignum.
+	 *
+	 * <p>
+	 * What this saves is not the call. The outlined method boxes at its root and this
+	 * site unboxes it back one instruction later, so every step of every {@code dotimes}
+	 * / {@code do} / {@code loop for} allocated a {@code Long} that died immediately. C2
+	 * scalar-replaces that box once it compiles the loop -- but a loop that BUILDS a data
+	 * structure typically runs far too few iterations to be compiled at all, and then the
+	 * dead counter boxes are real objects INTERLEAVED with the cells the loop allocates:
+	 * {@code (loop for i from 1 to 1000 collect i)} laid its list out over 64 bytes per
+	 * element instead of 48, a third more cache footprint for every walk of it
+	 * afterwards. Measured on {@code .todo/517}'s {@code nth} row (10^9 {@code cdr} steps
+	 * over that list), the interleave -- not the allocation -- is what the walk pays for.
+	 *
+	 * <p>
+	 * The overflow guard is {@code Math.addExact}'s condition spelled out for a constant
+	 * addend, so the fallback sees exactly the cases the outlined method's
+	 * {@code addExact} would have thrown on.
+	 * @return the two branch positions to patch to the fallback's first instruction,
+	 * followed by the position of the jump past it, or {@code null} when the shape does
+	 * not apply
+	 */
+	private static int @Nullable [] emitRawStepFastPath(Node root, JvmLispCompiler.Ctx ctx, RawLocal target) {
+		if (!(root instanceof OpNode op) || op.args().size() != 2) {
+			return null;
+		}
+		boolean sub = LispNames.SUB.equals(op.op());
+		if (!sub && !LispNames.ADD.equals(op.op())) {
+			return null;
+		}
+		RawLeaf leaf;
+		long addend;
+		if (op.args().get(0) instanceof RawLeaf r && op.args().get(1) instanceof ConstLeaf c) {
+			leaf = r;
+			addend = sub ? -c.value() : c.value();
+			// (- i most-negative-fixnum) has no negation; leave it to the fallback.
+			if (sub && c.value() == Long.MIN_VALUE) {
+				return null;
+			}
+		}
+		else if (!sub && op.args().get(0) instanceof ConstLeaf c && op.args().get(1) instanceof RawLeaf r) {
+			leaf = r;
+			addend = c.value();
+		}
+		else {
+			return null;
+		}
+		if (addend == 0) {
+			return null;
+		}
+		ctx.emit(Opcode.ILOAD);
+		ctx.emit(leaf.src.flagSlot());
+		int notRaw = ctx.code.size();
+		ctx.emit(Opcode.IFEQ);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.LLOAD);
+		ctx.emit(leaf.src.longSlot());
+		JvmEmitHelper.emitRawLong(addend > 0 ? Long.MAX_VALUE - addend : Long.MIN_VALUE - addend, ctx);
+		ctx.emit(Opcode.LCMP);
+		int overflows = ctx.code.size();
+		ctx.emit(addend > 0 ? Opcode.IFGT : Opcode.IFLT);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.LLOAD);
+		ctx.emit(leaf.src.longSlot());
+		JvmEmitHelper.emitRawLong(addend, ctx);
+		ctx.emit(Opcode.LADD);
+		emitRawSlotStore(target, ctx);
+		int joins = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		return new int[] { notRaw, overflows, joins };
 	}
 
 	/** Raw {@code long} on the stack -> the raw slot; the flag marks it authoritative. */

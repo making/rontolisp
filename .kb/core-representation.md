@@ -65,6 +65,30 @@ case in `ci-spec.yaml`.
 Cons cells and function references are both `Object[]`, distinguished by
 `arr[0] instanceof Integer`.
 
+### What the `Object[]` shape actually costs (measured, 2026-08-28)
+
+The shape is regularly blamed for the JVM list walk, because every `cdr` step
+reads through a `checkcast [Ljava/lang/Object;` and an array bounds check where
+a two-field class would read a field. Priced against hand-written Java on the
+same machine, 10^9 dependent `cdr` steps over a 1000-cell list:
+
+| walk | ns/step |
+| --- | --- |
+| `Object[]{car, cdr}`, cast per step (what we emit) | 2.62 |
+| a two-field class with an `Object` cdr, cast per step | 2.51 |
+| a two-field class with a `Cons`-typed cdr, no cast | 2.05 |
+
+A Lisp cons cannot have the typed cdr -- an improper list's cdr is any object --
+so the reachable saving from swapping the representation is the first two rows:
+**4%**, against 55 cons-creation sites, ~265 element reads, ~237 writes, the
+`consp`/`functionp`/`atom`/`listp`/`_equal`/`_hash`/printer discriminations, the
+three copies of `properListElements` in the embedded Java templates, and a new
+class in the travelling runtime (`.kb/jvm-export.md`). It is not worth it, and
+the cast is not separately removable: `aaload` yields `Object`, so the verifier
+requires the cast on every step whatever Pass 2 knows. The 30% that WAS on that
+row is `.kb/jvm-int-fusion.md`'s counted-loop step -- the list's cache footprint,
+not the cell's shape.
+
 ## General arrays on the JVM start packed
 
 A plain `(make-array n)` (no fill pointer / adjustability / displacement,

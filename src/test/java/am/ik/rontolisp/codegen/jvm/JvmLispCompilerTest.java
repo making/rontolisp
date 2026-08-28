@@ -13662,6 +13662,68 @@ class JvmLispCompilerTest {
 		assertThat(runClass(small)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
 	}
 
+	private static final String COUNTED_STEP_PROGRAM = """
+			(defun step-up (n)
+			  (let ((i (- 9223372036854775807 2)))
+			    (dotimes (k n) (setq i (+ i 1)))
+			    i))
+			(defun step-down (n)
+			  (let ((i (+ -9223372036854775808 2)))
+			    (dotimes (k n) (setq i (- i 1)))
+			    i))
+			(print (step-up 2))
+			(print (step-up 3))
+			(print (step-up 5))
+			(print (step-down 2))
+			(print (step-down 3))
+			(print (step-down 5))
+			(let ((i 1))
+			  (dotimes (k 5) (setq i (* i 1000000000000)))
+			  (setq i (+ i 1))
+			  (print i))
+			(print (loop for i from 1 to 5 collect (1+ i)))
+			(print (loop for i from 5 downto 1 collect (1- i)))
+			(let ((i 0))
+			  (setq i (+ i 3))
+			  (setq i (- i 5))
+			  (setq i (+ 7 i))
+			  (print i))
+			(let ((i 0))
+			  (dotimes (k 3) (setq i (+ i 1)) (setq i (- i 2)))
+			  (print i))
+			""";
+
+	private static final String COUNTED_STEP_EXPECTED = """
+			9223372036854775807
+			9223372036854775808
+			9223372036854775810
+			-9223372036854775808
+			-9223372036854775809
+			-9223372036854775811
+			1000000000000000000000000000000000000000000000000000000000001
+			(2 3 4 5 6)
+			(4 3 2 1 0)
+			5
+			-3""";
+
+	@Test
+	void aCountedLoopStepPromotesAtTheFixnumBoundaryAndKeepsSteppingOnABignum() throws Exception {
+		// The counted-loop step (+ i c) / (- i c) into an unboxed local is emitted
+		// inline as raw long arithmetic, with the outlined fused method kept as the
+		// fallback for the two cases the inline form declines: a raw slot the flag says
+		// is stale, and a step that would overflow (.kb/jvm-int-fusion.md). Both are
+		// crossed here -- a counter walked ACROSS most-positive-fixnum and
+		// most-negative-fixnum in both directions, and a local that already holds a
+		// bignum when the next step runs -- and the answer must stay what the generic
+		// path (--optimize=size, which emits no fused site at all) answers.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(COUNTED_STEP_PROGRAM));
+		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(runClass(fast)).isEqualTo(COUNTED_STEP_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(COUNTED_STEP_EXPECTED);
+	}
+
 	private String runClass(byte[] classBytes) throws Exception {
 		Path classFile = tempDir.resolve("Test.class");
 		Files.write(classFile, classBytes);
