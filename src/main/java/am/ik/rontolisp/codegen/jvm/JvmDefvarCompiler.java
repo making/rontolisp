@@ -41,6 +41,20 @@ final class JvmDefvarCompiler {
 			// if not already bound (idempotent); defparameter/defconstant (force) always
 			// rebind. definedGlobals tracks compile-time "already bound".
 			if (parts.size() > 2 && (force || !ctx.definedGlobals.contains(name.name()))) {
+				JvmIntFusionCompiler.RawLocal rawGlobal = ctx.rawGlobals.get(name.name());
+				if (rawGlobal != null) {
+					// The unboxed dual representation (.kb/jvm-int-fusion.md): the init
+					// lands in the raw field or in the _g$ shadow, and leaves nothing on
+					// the stack. Never mirrored -- an eval runtime disqualifies the name.
+					JvmIntFusionCompiler.compileRawStore(parts.get(2), ctx, className, rawGlobal);
+					ctx.definedGlobals.add(name.name());
+					if (emitName) {
+						JvmExprCompiler.compileExpr(
+								new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(name, LispNil.INSTANCE)),
+								ctx, className);
+					}
+					return;
+				}
 				JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 				ctx.emit(Opcode.DUP);
 				ctx.emit(Opcode.PUTSTATIC);

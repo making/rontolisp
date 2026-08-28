@@ -13727,6 +13727,50 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(make-array 4 :displaced-to (make-array 3) :displaced-index-offset 2)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("too small");
+		assertThatThrownBy(() -> evalMulti("(make-array 9 :displaced-to \"abc\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("too small");
+	}
+
+	@Test
+	void displacedStringViewAliasesTheTargetString() {
+		// The TARGET decides the shape: displacing onto a string answers a STRING view,
+		// not a bare array view, so it is stringp, prints as a string and writes through
+		// to the target's buffer.
+		assertThat(evalMulti("""
+				(setq s (copy-seq "abcdef"))
+				(setq v (make-array 3 :element-type 'character :displaced-to s
+				                      :displaced-index-offset 1))
+				(setf (char v 0) #\\X)
+				(setf (char s 3) #\\Y)
+				(list (stringp v) (length v) v s (char v 1) (subseq v 1) (string= v "XcY"))
+				""").print()).isEqualTo("(T 3 \"XcY\" \"aXcYef\" #\\c \"cY\" T)");
+	}
+
+	@Test
+	void displacedStringViewChainsAndReportsItsDisplacement() {
+		assertThat(evalMulti("""
+				(setq s (copy-seq "abcdef"))
+				(setq v (make-array 4 :element-type 'character :displaced-to s
+				                      :displaced-index-offset 1))
+				(setq w (make-array 2 :element-type 'character :displaced-to v
+				                      :displaced-index-offset 2))
+				(setf (char w 0) #\\Z)
+				(multiple-value-bind (tgt off) (array-displacement w)
+				  (list w v s (eq tgt v) off))
+				""").print()).isEqualTo("(\"Ze\" \"bcZe\" \"abcZef\" T 2)");
+	}
+
+	@Test
+	void displacedStringViewIsNotAdjustableAndHasNoFillPointer() {
+		assertThat(evalMulti("""
+				(setq s (copy-seq "abcdef"))
+				(setq v (make-array 3 :element-type 'character :displaced-to s))
+				(list (array-has-fill-pointer-p v) (adjustable-array-p v) (array-element-type v))
+				""").print()).isEqualTo("(NIL NIL CHARACTER)");
+		assertThatThrownBy(() -> evalMulti("""
+				(adjust-array (make-array 2 :element-type 'character :displaced-to (copy-seq "abc")) 3)
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("displaced arrays are not supported");
 	}
 
 	// --- Dynamic (special) variable binding ---

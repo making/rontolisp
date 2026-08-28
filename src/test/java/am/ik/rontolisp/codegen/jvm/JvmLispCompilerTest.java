@@ -11029,6 +11029,54 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileDisplacedStringView() throws Exception {
+		// Displacing onto a STRING answers a string VIEW, not a bare array view: it is
+		// stringp, prints and measures as a string, and aliases the target's characters
+		// in both directions -- including a view of a view.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-string 6 :initial-element #\\a))
+				(dotimes (i 6) (setf (char *s* i) (char "abcdef" i)))
+				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
+				                                :displaced-index-offset 1))
+				(print (list (stringp *v*) (length *v*) *v* (char *v* 0) (subseq *v* 1)))
+				(setf (char *v* 0) #\\X)
+				(print (list *v* *s*))
+				(setf (char *s* 3) #\\Y)
+				(print (list *v* *s* (string= *v* "XcY")))
+				(multiple-value-bind (tgt off) (array-displacement *v*)
+				  (print (list (eq tgt *s*) off)))
+				(defparameter *w* (make-array 2 :element-type 'character :displaced-to *v*
+				                                :displaced-index-offset 1))
+				(setf (char *w* 1) #\\Q)
+				(print (list *w* *v* *s*))
+				""")).isEqualTo("""
+				(T 3 "bcd" #\\b "cd")
+				("Xcd" "aXcdef")
+				("XcY" "aXcYef" T)
+				(T 1)
+				("cQ" "XcQ" "aXcQef")""");
+	}
+
+	@Test
+	void compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite() throws Exception {
+		// A string this backend represents as an immutable runtime string (anything but
+		// a character vector -- here a copy-seq result) can be VIEWED without a copy,
+		// and reads alias it. A write cannot reach it, so the view promotes its target
+		// to a character vector once and mutates that: the view is a mutable string
+		// from then on, and the original value is untouched -- which is what
+		// (setf (char s i) c) on that same string already does. The interpreter, whose
+		// strings are all mutable, writes through to the target instead (`.todo/559`).
+		assertThat(compileAndRun("""
+				(defparameter *s* (copy-seq "abcdef"))
+				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
+				                                :displaced-index-offset 1))
+				(print (list *v* (length *v*) (string= *v* "bcd")))
+				(setf (char *v* 0) #\\X)
+				(print (list *v* *s*))
+				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"abcdef\")");
+	}
+
+	@Test
 	void compileMakeArrayDisplacedKeywordComboIsACompileError() {
 		assertThatThrownBy(() -> compileAndRun("(print (make-array 3 :displaced-to (make-array 5) :fill-pointer 2))"))
 			.isInstanceOf(UnsupportedOperationException.class)
@@ -13604,6 +13652,126 @@ class JvmLispCompilerTest {
 			0.0
 			0""";
 
+	private static final String RAW_GLOBAL_PROGRAM = """
+			(defparameter s 0)
+			(defvar v 10)
+			(defvar v 99)
+			(dotimes (i 5) (setq s (+ s i)))
+			(print s)
+			(print v)
+			(setq s 1.5d0)
+			(print s)
+			(setq s (+ s 1))
+			(print s)
+			(setq s "str")
+			(print s)
+			(setq s nil)
+			(print s)
+			(setq s 7)
+			(print s)
+			(print (let ((s 100)) (setq s (+ s 1)) s))
+			(print s)
+			(defparameter big 0)
+			(setq big (* 4611686018427387904 4))
+			(print big)
+			(setq big (+ big 1))
+			(print big)
+			(defun bump () (setq s (+ s 10)) s)
+			(print (bump))
+			(print s)
+			(defparameter arr (make-array 3))
+			(defparameter acc 0)
+			(dotimes (i 3) (setf (aref arr i) (* i i)))
+			(dotimes (i 3) (setq acc (+ acc (aref arr i))))
+			(print acc)
+			(setq g 0)
+			(dotimes (i 3) (setq g (+ g i)))
+			(print g)
+			(print (let ((g 100)) (setq g (+ g 1)) g))
+			(print g)
+			""";
+
+	private static final String RAW_GLOBAL_EXPECTED = """
+			10
+			10
+			1.5
+			2.5
+			"str"
+			NIL
+			7
+			101
+			7
+			18446744073709551616
+			18446744073709551617
+			17
+			17
+			5
+			3
+			101
+			3""";
+
+	@Test
+	void unboxedTopLevelGlobalsAnswerWhatTheBoxedStaticFieldAnswers() throws Exception {
+		// A promoted top-level global carrying the dual representation
+		// (.kb/jvm-int-fusion.md): a raw long field and an int flag beside the _g$
+		// field, which stays the boxed shadow. Every tier the shadow used to hold has
+		// to read back unchanged -- a float, a string, nil, a bignum promotion out of
+		// long range -- and a LEXICAL binding of the same name (g, promoted by a
+		// top-level setq, so not special) must still win over the global, both to read
+		// and to assign. In the same program s declines, because the let that names it
+		// binds it DYNAMICALLY (a defparameter name is special), which pins that one
+		// global's representation does not follow another's. --optimize=size declines
+		// the trade, so the same program compiles without the extra fields and answers
+		// the same.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(RAW_GLOBAL_PROGRAM));
+		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(declaredFieldNames(fast)).contains("_gr$G", "_gk$G", "_gr$ACC", "_gr$BIG", "_g$S");
+		assertThat(declaredFieldNames(fast)).noneMatch(name -> name.equals("_gr$S"));
+		assertThat(declaredFieldNames(small)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(fast)).isEqualTo(RAW_GLOBAL_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(RAW_GLOBAL_EXPECTED);
+	}
+
+	@Test
+	void aDynamicallyBoundSpecialAndAnEvaldGlobalDeclineTheUnboxedRepresentation() throws Exception {
+		// The two seams a let local does not have. A special some let binds keeps its
+		// save/restore over the ONE _g$ field, and an eval runtime mirrors the BOX into
+		// _genv -- so neither name may split into a triple. Both programs assign an
+		// integer in a loop, which is the shape that would otherwise qualify.
+		List<LispVal> dynamicBinding = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defparameter *n* 0)
+				(defun show () *n*)
+				(setq *n* (+ *n* 1))
+				(print (show))
+				(let ((*n* 100))
+				  (print (show))
+				  (setq *n* (+ *n* 1))
+				  (print (show)))
+				(print (show))
+				"""));
+		byte[] dynamicBindingClass = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(dynamicBinding);
+		assertThat(declaredFieldNames(dynamicBindingClass)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(dynamicBindingClass)).isEqualTo("""
+				1
+				100
+				101
+				1""");
+		List<LispVal> evaluated = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defparameter s 0)
+				(dotimes (i 5) (setq s (+ s i)))
+				(print (eval 's))
+				(setq s (+ s 100))
+				(print (eval 's))
+				"""));
+		byte[] evaluatedClass = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(evaluated);
+		assertThat(declaredFieldNames(evaluatedClass)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(evaluatedClass)).isEqualTo("""
+				10
+				110""");
+	}
+
 	@Test
 	void fusedIntegerExpressionTreesMatchTheGenericPath() throws Exception {
 		// The fused emission is an optimization with a total fallback; this pins that
@@ -13691,6 +13859,12 @@ class JvmLispCompilerTest {
 			(let ((i 0))
 			  (dotimes (k 3) (setq i (+ i 1)) (setq i (- i 2)))
 			  (print i))
+			(defparameter *g* (- 9223372036854775807 2))
+			(dotimes (k 5) (setq *g* (+ *g* 1)))
+			(print *g*)
+			(defparameter *h* 0)
+			(dotimes (k 4) (setq *h* (- *h* 3)))
+			(print *h*)
 			""";
 
 	private static final String COUNTED_STEP_EXPECTED = """
@@ -13704,7 +13878,9 @@ class JvmLispCompilerTest {
 			(2 3 4 5 6)
 			(4 3 2 1 0)
 			5
-			-3""";
+			-3
+			9223372036854775810
+			-12""";
 
 	@Test
 	void aCountedLoopStepPromotesAtTheFixnumBoundaryAndKeepsSteppingOnABignum() throws Exception {
@@ -13715,7 +13891,10 @@ class JvmLispCompilerTest {
 		// crossed here -- a counter walked ACROSS most-positive-fixnum and
 		// most-negative-fixnum in both directions, and a local that already holds a
 		// bignum when the next step runs -- and the answer must stay what the generic
-		// path (--optimize=size, which emits no fused site at all) answers.
+		// path (--optimize=size, which emits no fused site at all) answers. The last
+		// two loops step a PROMOTED GLOBAL, whose triple lives in class fields rather
+		// than local slots: the inline step must read the flag and the raw half through
+		// the field-aware emitters, not as slots.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(COUNTED_STEP_PROGRAM));
 		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
@@ -13815,6 +13994,15 @@ class JvmLispCompilerTest {
 	}
 
 	/** Every method the class declares, in declaration order. */
+	private static List<String> declaredFieldNames(byte[] classBytes) {
+		return java.lang.classfile.ClassFile.of()
+			.parse(classBytes)
+			.fields()
+			.stream()
+			.map(field -> field.fieldName().stringValue())
+			.toList();
+	}
+
 	private static List<String> declaredMethodNames(byte[] classBytes) {
 		return java.lang.classfile.ClassFile.of()
 			.parse(classBytes)

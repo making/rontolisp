@@ -8,6 +8,8 @@
 
 `:displaced-to` は、ストレージを割り当てる代わりに別の配列のストレージへのビューを構築します。ビューの (行優先の) 要素 `i` はターゲットの要素 `i + offset` を読み書きします (`:displaced-index-offset` のデフォルトは 0)。変更は双方向に見えます。ビューは独自の次元を持ち (ターゲットとランクが異なってもよく、例えば行列の行に対するベクタビューが作れます)、ターゲット内に収まる必要があり、[`array-displacement`](array-displacement.md) で調べられます。displaced ビューは `:fill-pointer`/`:adjustable`/`:initial-element` と併用できず、それ自体を adjust することもできません。
 
+**文字列**に対して displace すると文字列ビューになります。形を決めるのは要素型ではなくターゲットなので、結果は `stringp` を満たし、オフセット以降のターゲットの文字を持ち、文字列として印字・比較され、`subseq`/`char`/`length` はその範囲を見ます。コピーは発生しません。移植性のあるライブラリが部分文字列を共有するのはこの形です。ビュー経由の書き込みはターゲットに書き込まれます (ビューのビューも同じ文字に届きます)。コンパイル済みバックエンドでは、可変文字ベクタでない文字列 (リテラルや `copy-seq`/`subseq`/`concatenate` の結果) は書き込みの届かない不変値です。ビューはそれをコピーせずに読み、ビュー経由の最初の書き込みでビューは可変コピーに移り、元の文字列はそのまま残ります。これはその文字列に対する `(setf (char s i) c)` の挙動とまったく同じです。
+
 ```lisp
 (let ((a (make-array 3 :initial-element 0)))
   (aref a 0)) ; => 0
@@ -16,6 +18,11 @@
        (view (make-array 2 :displaced-to base :displaced-index-offset 1)))
   (setf (aref view 0) 9)
   (aref base 1)) ; => 9
+(let* ((s (make-string 3 :initial-element #\a))
+       (view (make-array 2 :element-type 'character :displaced-to s
+                           :displaced-index-offset 1)))
+  (setf (char view 0) #\X)
+  (list view s)) ; => ("Xa" "aXa")
 (let ((bytes (make-array 3 :element-type '(unsigned-byte 8))))
   (setf (aref bytes 0) 300) ; stores 300 mod 256
   (aref bytes 0)) ; => 44

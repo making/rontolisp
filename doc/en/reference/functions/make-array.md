@@ -8,6 +8,8 @@ Creates and returns a new array. `dimensions` is an integer for a rank-1 vector,
 
 `:displaced-to` builds a view over another array's storage instead of allocating one: element `i` (row-major) of the view reads and writes element `i + offset` of the target, where `:displaced-index-offset` defaults to 0, so changes are visible in both directions. The view has its own dimensions (they may differ in rank from the target's, e.g. a vector view over a matrix row), must fit inside the target, and is inspected with [`array-displacement`](array-displacement.md). A displaced view cannot be combined with `:fill-pointer`, `:adjustable` or `:initial-element`, and cannot itself be adjusted.
 
+Displacing onto a **string** answers a string view: the target decides the shape, so the result is `stringp`, has the target's characters from the offset on, prints and compares as a string, and `subseq`/`char`/`length` see the slice -- with no copy, which is how a portable library takes a shared substring. Writing through the view writes into the target (and a view of a view reaches the same characters). On the compiled backends a string that is not a mutable character vector -- a literal, or a `copy-seq`/`subseq`/`concatenate` result -- is an immutable value that no write can reach; the view reads it without copying, and the first write through the view moves the view onto a mutable copy, leaving the original string as it was, exactly as `(setf (char s i) c)` on that string already does.
+
 ```lisp
 (let ((a (make-array 3 :initial-element 0)))
   (aref a 0)) ; => 0
@@ -16,6 +18,11 @@ Creates and returns a new array. `dimensions` is an integer for a rank-1 vector,
        (view (make-array 2 :displaced-to base :displaced-index-offset 1)))
   (setf (aref view 0) 9)
   (aref base 1)) ; => 9
+(let* ((s (make-string 3 :initial-element #\a))
+       (view (make-array 2 :element-type 'character :displaced-to s
+                           :displaced-index-offset 1)))
+  (setf (char view 0) #\X)
+  (list view s)) ; => ("Xa" "aXa")
 (let ((bytes (make-array 3 :element-type '(unsigned-byte 8))))
   (setf (aref bytes 0) 300) ; stores 300 mod 256
   (aref bytes 0)) ; => 44

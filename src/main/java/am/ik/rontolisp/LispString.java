@@ -1,5 +1,7 @@
 package am.ik.rontolisp;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * A string value. Backed by a mutable code-point buffer so that destructive operations
  * (notably {@code replace} into a {@code make-string} result) can update the string in
@@ -22,8 +24,18 @@ package am.ik.rontolisp;
  * paths. A supplementary code point (above {@code U+FFFF}) occupies exactly one indexed
  * slot on every backend, so {@code (setf (schar s i) (code-char 128512))} stores in one
  * indexed step and prints as its glyph on every backend.
+ *
+ * <p>
+ * A string may also be a VIEW over another string ({@code make-array :element-type
+ * 'character :displaced-to s :displaced-index-offset k}): it owns no buffer, and every
+ * read and write resolves to the target's current buffer at {@code offset + index}, so a
+ * write through the view is visible through the target and vice versa. Views chain (a
+ * view of a view), and each hop is resolved at access time, so a view keeps aliasing a
+ * target whose buffer was reallocated by {@code vector-push-extend}/{@code adjust-array}.
  */
 public final class LispString implements LispVal {
+
+	private static final int[] NO_CHARS = new int[0];
 
 	private int[] chars;
 
@@ -31,6 +43,16 @@ public final class LispString implements LispVal {
 	private int fillPointer = -1;
 
 	private boolean adjustable;
+
+	// The displacement target (make-array :displaced-to), or null when the string owns
+	// its buffer. A view owns no buffer (chars is the shared empty array): every access
+	// walks the chain through storage()/base(). A view has no fill pointer and is not
+	// adjustable, so its length is its dimension (viewLength).
+	@Nullable private final LispString displacedTo;
+
+	private final int displacedOffset;
+
+	private final int viewLength;
 
 	/**
 	 * Creates a string with the given content. Each Unicode code point of {@code value}
@@ -40,6 +62,9 @@ public final class LispString implements LispVal {
 	 */
 	public LispString(String value) {
 		this.chars = value.codePoints().toArray();
+		this.displacedTo = null;
+		this.displacedOffset = 0;
+		this.viewLength = 0;
 	}
 
 	/**
@@ -54,6 +79,70 @@ public final class LispString implements LispVal {
 		this.chars = value.codePoints().toArray();
 		this.fillPointer = fillPointer;
 		this.adjustable = adjustable;
+		this.displacedTo = null;
+		this.displacedOffset = 0;
+		this.viewLength = 0;
+	}
+
+	/**
+	 * Creates a VIEW over {@code target}: a string of {@code length} characters sharing
+	 * the target's buffer from {@code offset} on. The view owns no storage, has no fill
+	 * pointer and is not adjustable; reads and writes go straight to the target's current
+	 * buffer, so mutation is visible in both directions.
+	 * @param target the string supplying the storage
+	 * @param offset the character index in {@code target} where the view starts
+	 * @param length the view's length in characters
+	 */
+	public LispString(LispString target, int offset, int length) {
+		this.chars = NO_CHARS;
+		this.displacedTo = target;
+		this.displacedOffset = offset;
+		this.viewLength = length;
+	}
+
+	/**
+	 * Returns the displacement target ({@code make-array :displaced-to}), or {@code null}
+	 * when the string owns its buffer.
+	 * @return the target string, or {@code null}
+	 */
+	@Nullable public LispString displacedTo() {
+		return this.displacedTo;
+	}
+
+	/**
+	 * Returns the displacement offset ({@code :displaced-index-offset}; 0 when the string
+	 * is not a view).
+	 * @return the character offset into the displacement target
+	 */
+	public int displacedOffset() {
+		return this.displacedOffset;
+	}
+
+	// The string that actually owns the buffer: this one, or the end of the view chain.
+	private LispString storage() {
+		LispString s = this;
+		while (s.displacedTo != null) {
+			s = s.displacedTo;
+		}
+		return s;
+	}
+
+	// The index in storage()'s buffer that this string's index 0 maps to. Each hop is
+	// read now rather than at creation, so a reallocated target buffer is followed.
+	private int base() {
+		int offset = 0;
+		LispString s = this;
+		while (s.displacedTo != null) {
+			offset += s.displacedOffset;
+			s = s.displacedTo;
+		}
+		return offset;
+	}
+
+	private void rejectView(String operation) {
+		if (this.displacedTo != null) {
+			throw new IllegalStateException(operation + " is not available on a displaced string view");
+		}
 	}
 
 	/**
@@ -64,6 +153,9 @@ public final class LispString implements LispVal {
 	 * @return the string content
 	 */
 	public String value() {
+		if (this.displacedTo != null) {
+			return new String(this.storage().chars, this.base(), this.viewLength);
+		}
 		int end = this.fillPointer >= 0 ? this.fillPointer : this.chars.length;
 		return new String(this.chars, 0, end);
 	}
@@ -84,13 +176,14 @@ public final class LispString implements LispVal {
 		int srcCpLen = source.codePointCount(0, source.length());
 		int srcCu = source.offsetByCodePoints(0, Math.min(sourceStart, srcCpLen));
 		int srcSlot = sourceStart;
+		int capacity = this.capacity();
 		for (int i = 0; i < count; i++) {
 			int t = targetStart + i;
-			if (t < 0 || t >= this.chars.length || srcSlot >= srcCpLen) {
+			if (t < 0 || t >= capacity || srcSlot >= srcCpLen) {
 				break;
 			}
 			int cp = source.codePointAt(srcCu);
-			this.chars[t] = cp;
+			this.setCharAt(t, cp);
 			srcCu += Character.charCount(cp);
 			srcSlot++;
 		}
@@ -104,6 +197,9 @@ public final class LispString implements LispVal {
 	 * @return the code-point length
 	 */
 	public int length() {
+		if (this.displacedTo != null) {
+			return this.viewLength;
+		}
 		return this.fillPointer >= 0 ? this.fillPointer : this.chars.length;
 	}
 
@@ -124,7 +220,7 @@ public final class LispString implements LispVal {
 	 * @return the code point at that position
 	 */
 	public int codePointAt(int cpIndex) {
-		return this.chars[cpIndex];
+		return this.charAt(cpIndex);
 	}
 
 	/**
@@ -133,7 +229,7 @@ public final class LispString implements LispVal {
 	 * @return the capacity
 	 */
 	public int capacity() {
-		return this.chars.length;
+		return this.displacedTo != null ? this.viewLength : this.chars.length;
 	}
 
 	/**
@@ -157,6 +253,7 @@ public final class LispString implements LispVal {
 	 * @param fillPointer the new active length (0..capacity, in code points)
 	 */
 	public void setFillPointer(int fillPointer) {
+		this.rejectView("setting a fill pointer");
 		if (fillPointer < 0 || fillPointer > this.chars.length) {
 			throw new IllegalArgumentException("fill pointer " + fillPointer + " out of range 0.." + this.chars.length);
 		}
@@ -171,6 +268,7 @@ public final class LispString implements LispVal {
 	 * @return the index the code point was stored at
 	 */
 	public int vectorPushExtend(int codePoint) {
+		this.rejectView("vector-push-extend");
 		if (this.fillPointer < 0) {
 			throw new IllegalStateException("string has no fill pointer");
 		}
@@ -191,6 +289,7 @@ public final class LispString implements LispVal {
 	 * @param newCapacity the new capacity (in code points)
 	 */
 	public void adjustCapacity(int newCapacity) {
+		this.rejectView("adjust-array");
 		int[] resized = new int[newCapacity];
 		System.arraycopy(this.chars, 0, resized, 0, Math.min(this.chars.length, newCapacity));
 		this.chars = resized;
@@ -207,6 +306,10 @@ public final class LispString implements LispVal {
 	 * @param codePoint the replacement code point
 	 */
 	public void setCharAt(int index, int codePoint) {
+		if (this.displacedTo != null) {
+			this.storage().chars[this.base() + index] = codePoint;
+			return;
+		}
 		this.chars[index] = codePoint;
 	}
 
@@ -217,6 +320,9 @@ public final class LispString implements LispVal {
 	 * @return the code point
 	 */
 	public int charAt(int index) {
+		if (this.displacedTo != null) {
+			return this.storage().chars[this.base() + index];
+		}
 		return this.chars[index];
 	}
 

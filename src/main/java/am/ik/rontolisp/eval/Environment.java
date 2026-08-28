@@ -864,8 +864,24 @@ public final class Environment implements Scope {
 					throw new LispEvalException(LispNames.MAKE_ARRAY
 							+ ": :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
 				}
-				LispArray target = requireArray(LispNames.MAKE_ARRAY, displacedToArg);
 				int offset = displacedOffsetArg == null ? 0 : (int) asLong(displacedOffsetArg);
+				// The TARGET decides the shape, not :element-type: displacing onto a
+				// string answers a string view (a string is its own value type here, so
+				// a LispArray view could not alias its buffer), and the portable
+				// substring idiom -- cl-ppcre's nsubseq -- passes the target's own
+				// (array-element-type sequence) rather than a literal.
+				if (displacedToArg instanceof LispString targetString) {
+					if (dims.length != 1) {
+						throw new LispEvalException(
+								LispNames.MAKE_ARRAY + ": a string :displaced-to target needs a rank-1 view");
+					}
+					if (offset < 0 || total + offset > targetString.capacity()) {
+						throw new LispEvalException(
+								LispNames.MAKE_ARRAY + ": :displaced-to string is too small for the requested view");
+					}
+					return new LispString(targetString, offset, total);
+				}
+				LispArray target = requireArray(LispNames.MAKE_ARRAY, displacedToArg);
 				if (offset < 0 || total + offset > target.totalSize()) {
 					throw new LispEvalException(
 							LispNames.MAKE_ARRAY + ": :displaced-to array is too small for the requested view");
@@ -1245,6 +1261,9 @@ public final class Environment implements Scope {
 				if (strDims.length != 1) {
 					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": a string is rank 1");
 				}
+				if (str.displacedTo() != null) {
+					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
+				}
 				str.adjustCapacity(strDims[0]);
 				return str;
 			}
@@ -1286,6 +1305,9 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector) {
 				return LispNil.INSTANCE;
 			}
+			if (args.get(0) instanceof LispString str) {
+				return str.displacedTo() == null ? LispNil.INSTANCE : str.displacedTo();
+			}
 			LispArray array = requireArray(LispNames.ARRAY_DISPLACEMENT, args.get(0));
 			return array.displacedTo() == null ? LispNil.INSTANCE : array.displacedTo();
 		});
@@ -1297,6 +1319,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ARRAY_DISP_OFFSET, args, 1);
 			if (args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector) {
 				return new LispInteger(0);
+			}
+			if (args.get(0) instanceof LispString str) {
+				return new LispInteger(str.displacedOffset());
 			}
 			return new LispInteger(requireArray(LispNames.ARRAY_DISP_OFFSET, args.get(0)).displacedOffset());
 		}));

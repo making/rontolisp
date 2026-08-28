@@ -240,7 +240,78 @@ final class JvmIntFusionCompiler {
 	 * {@link JvmLetCompiler}; every assignment funnels through {@link #compileRawStore}
 	 * and every boxed read through {@link #emitRawLocalBoxedRead}.
 	 */
-	record RawLocal(int longSlot, int shadowSlot, int flagSlot) {
+	record RawLocal(int longSlot, int shadowSlot, int flagSlot, @Nullable FieldrefConstant longField,
+			@Nullable FieldrefConstant shadowField, @Nullable FieldrefConstant flagField) {
+
+		/** The triple as JVM local slots -- an eligible {@code let} binding. */
+		static RawLocal slots(int longSlot, int shadowSlot, int flagSlot) {
+			return new RawLocal(longSlot, shadowSlot, flagSlot, null, null, null);
+		}
+
+		/**
+		 * The triple as static CLASS FIELDS -- an eligible promoted top-level global
+		 * ({@code JvmRawGlobals}). The shadow IS the ordinary {@code _g$} field every
+		 * other emission already reads, so a store that leaves the raw slot stale is
+		 * exactly what the unfused compiler would have written.
+		 */
+		static RawLocal fields(FieldrefConstant longField, FieldrefConstant shadowField, FieldrefConstant flagField) {
+			return new RawLocal(-1, -1, -1, longField, shadowField, flagField);
+		}
+
+		/** Whether the triple lives in class fields rather than local slots. */
+		boolean isField() {
+			return this.longField != null;
+		}
+	}
+
+	/**
+	 * Resolves a bare symbol to the dual representation that reads it HERE, in the same
+	 * order {@link JvmExprCompiler#compileSymbolRef} does: an unboxed {@code let} local
+	 * first, then -- only when no lexical binding of the name is in scope -- an unboxed
+	 * promoted global. Answers null when the name is read some other way.
+	 */
+	@Nullable static RawLocal resolveRaw(String name, JvmLispCompiler.Ctx ctx) {
+		RawLocal local = ctx.rawLocals.get(name);
+		if (local != null) {
+			return local;
+		}
+		if (ctx.locals.containsKey(name) || ctx.captures.containsKey(name)) {
+			return null;
+		}
+		return ctx.rawGlobals.get(name);
+	}
+
+	/** Pushes the raw {@code long} half of the triple. */
+	private static void emitRawLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
+		if (raw.isField()) {
+			ctx.emit(Opcode.GETSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(raw.longField()).index());
+			return;
+		}
+		ctx.emit(Opcode.LLOAD);
+		ctx.emit(raw.longSlot());
+	}
+
+	/** Pushes the boxed shadow half of the triple. */
+	private static void emitShadowLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
+		if (raw.isField()) {
+			ctx.emit(Opcode.GETSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(raw.shadowField()).index());
+			return;
+		}
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(raw.shadowSlot());
+	}
+
+	/** Pushes the {@code int} flag half of the triple. */
+	private static void emitFlagLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
+		if (raw.isField()) {
+			ctx.emit(Opcode.GETSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(raw.flagField()).index());
+			return;
+		}
+		ctx.emit(Opcode.ILOAD);
+		ctx.emit(raw.flagSlot());
 	}
 
 	/**
@@ -616,21 +687,15 @@ final class JvmIntFusionCompiler {
 			emitRawSlotStore(target, ctx);
 			return;
 		}
-		if (expr instanceof LispSymbol sym && ctx.rawLocals.get(sym.name()) instanceof RawLocal src) {
+		if (expr instanceof LispSymbol sym && resolveRaw(sym.name(), ctx) instanceof RawLocal src) {
 			// A raw-to-raw copy ((setq a b) with both unboxed) transfers ALL slots:
 			// total for every tier, so no guard and no dispatch.
-			ctx.emit(Opcode.LLOAD);
-			ctx.emit(src.longSlot());
-			ctx.emit(Opcode.LSTORE);
-			ctx.emit(target.longSlot());
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(src.shadowSlot());
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(target.shadowSlot());
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(src.flagSlot());
-			ctx.emit(Opcode.ISTORE);
-			ctx.emit(target.flagSlot());
+			emitRawLoad(src, ctx);
+			emitRawHalfStore(target, ctx);
+			emitShadowLoad(src, ctx);
+			emitShadowHalfStore(target, ctx);
+			emitFlagLoad(src, ctx);
+			emitFlagStore(target, ctx);
 			return;
 		}
 		if (enabled(ctx)) {
@@ -690,11 +755,12 @@ final class JvmIntFusionCompiler {
 	}
 
 	/**
-	 * The counted-loop STEP -- {@code (+ i c)} / {@code (- i c)} / {@code (1+ i)} over an
-	 * unboxed local, assigned straight back into an unboxed local -- emitted inline as
-	 * raw {@code long} arithmetic ahead of the outlined method, which stays as the
-	 * fallback for the only two cases the inline form cannot answer: a raw slot the flag
-	 * says is not authoritative, and an addition that would overflow into a bignum.
+	 * The counted-loop STEP -- {@code (+ i c)} / {@code (- i c)} / {@code (1+ i)} over a
+	 * dual-representation local or promoted global, assigned straight back into one --
+	 * emitted inline as raw {@code long} arithmetic ahead of the outlined method, which
+	 * stays as the fallback for the only two cases the inline form cannot answer: a raw
+	 * slot the flag says is not authoritative, and an addition that would overflow into a
+	 * bignum.
 	 *
 	 * <p>
 	 * What this saves is not the call. The outlined method boxes at its root and this
@@ -744,20 +810,17 @@ final class JvmIntFusionCompiler {
 		if (addend == 0) {
 			return null;
 		}
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(leaf.src.flagSlot());
+		emitFlagLoad(leaf.src, ctx);
 		int notRaw = ctx.code.size();
 		ctx.emit(Opcode.IFEQ);
 		ctx.emitU2(0);
-		ctx.emit(Opcode.LLOAD);
-		ctx.emit(leaf.src.longSlot());
+		emitRawLoad(leaf.src, ctx);
 		JvmEmitHelper.emitRawLong(addend > 0 ? Long.MAX_VALUE - addend : Long.MIN_VALUE - addend, ctx);
 		ctx.emit(Opcode.LCMP);
 		int overflows = ctx.code.size();
 		ctx.emit(addend > 0 ? Opcode.IFGT : Opcode.IFLT);
 		ctx.emitU2(0);
-		ctx.emit(Opcode.LLOAD);
-		ctx.emit(leaf.src.longSlot());
+		emitRawLoad(leaf.src, ctx);
 		JvmEmitHelper.emitRawLong(addend, ctx);
 		ctx.emit(Opcode.LADD);
 		emitRawSlotStore(target, ctx);
@@ -769,18 +832,47 @@ final class JvmIntFusionCompiler {
 
 	/** Raw {@code long} on the stack -> the raw slot; the flag marks it authoritative. */
 	private static void emitRawSlotStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.LSTORE);
-		ctx.emit(target.longSlot());
+		emitRawHalfStore(target, ctx);
 		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(target.flagSlot());
+		emitFlagStore(target, ctx);
 	}
 
 	/** Boxed value on the stack -> the shadow slot; the flag marks the raw slot stale. */
 	private static void emitShadowSlotStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
+		emitShadowHalfStore(target, ctx);
+		ctx.emit(Opcode.ICONST_0);
+		emitFlagStore(target, ctx);
+	}
+
+	/** Raw {@code long} on the stack -> the raw half; the flag is NOT touched. */
+	private static void emitRawHalfStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
+		if (target.isField()) {
+			ctx.emit(Opcode.PUTSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(target.longField()).index());
+			return;
+		}
+		ctx.emit(Opcode.LSTORE);
+		ctx.emit(target.longSlot());
+	}
+
+	/** Boxed value on the stack -> the shadow half; the flag is NOT touched. */
+	private static void emitShadowHalfStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
+		if (target.isField()) {
+			ctx.emit(Opcode.PUTSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(target.shadowField()).index());
+			return;
+		}
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(target.shadowSlot());
-		ctx.emit(Opcode.ICONST_0);
+	}
+
+	/** {@code int} on the stack -> the flag half. */
+	private static void emitFlagStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
+		if (target.isField()) {
+			ctx.emit(Opcode.PUTSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(target.flagField()).index());
+			return;
+		}
 		ctx.emit(Opcode.ISTORE);
 		ctx.emit(target.flagSlot());
 	}
@@ -792,12 +884,9 @@ final class JvmIntFusionCompiler {
 	 */
 	static void emitRawLocalBoxedRead(RawLocal raw, JvmLispCompiler.Ctx ctx) {
 		State state = java.util.Objects.requireNonNull(ctx.fusedState);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(raw.shadowSlot());
-		ctx.emit(Opcode.LLOAD);
-		ctx.emit(raw.longSlot());
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(raw.flagSlot());
+		emitShadowLoad(raw, ctx);
+		emitRawLoad(raw, ctx);
+		emitFlagLoad(raw, ctx);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ubReadRef(ctx, state).index());
 	}
@@ -962,7 +1051,7 @@ final class JvmIntFusionCompiler {
 				// is a defensive bail, not a reachable path.
 				return null;
 			}
-			RawLocal raw = ctx.rawLocals.get(sym.name());
+			RawLocal raw = resolveRaw(sym.name(), ctx);
 			if (raw != null) {
 				if (!site.assignedNames.contains(sym.name())) {
 					// No leaf in this site can reassign the local, so every occurrence
@@ -1377,12 +1466,9 @@ final class JvmIntFusionCompiler {
 					}
 				}
 				case RawLeaf leaf -> {
-					ctx.emit(Opcode.LLOAD);
-					ctx.emit(leaf.src.longSlot());
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(leaf.src.shadowSlot());
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(leaf.src.flagSlot());
+					emitRawLoad(leaf.src, ctx);
+					emitShadowLoad(leaf.src, ctx);
+					emitFlagLoad(leaf.src, ctx);
 				}
 				default -> throw new IllegalStateException("not a registered leaf: " + node);
 			}

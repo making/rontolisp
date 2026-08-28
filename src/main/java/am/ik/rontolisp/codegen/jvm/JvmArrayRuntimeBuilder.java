@@ -180,6 +180,17 @@ final class JvmArrayRuntimeBuilder {
 	static final String STRV_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/**
+	 * {@code _strToCharVec(String) -> Object}: the immutable runtime string copied into a
+	 * fresh mutable character vector. A string view over an immutable string PROMOTES its
+	 * target through this on the first write, so the view is mutable from then on (the
+	 * immutable string value itself cannot be written -- exactly what
+	 * {@code (setf (char s i) c)} on that same string already cannot do).
+	 */
+	static final String STR_TO_CHAR_VEC = "_strToCharVec";
+
+	static final String STR_TO_CHAR_VEC_DESC = "(Ljava/lang/String;)Ljava/lang/Object;";
+
+	/**
 	 * Every method name {@link #build} and {@link #buildToStringMethods} emit, i.e.
 	 * exactly the group the array gate switches on and off. {@code JvmLispCompiler}
 	 * matches an unresolved own-class call against this set to tell "the gate
@@ -190,7 +201,7 @@ final class JvmArrayRuntimeBuilder {
 	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
-			CHAR_VEC_MAKE, STRV, WIDEN);
+			CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, WIDEN);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -397,6 +408,9 @@ final class JvmArrayRuntimeBuilder {
 						cp.addUtf8(JvmStringIndexRuntimeBuilder.OFFSET_DESC)));
 		MethodrefConstant strCodePointAt = cp.addMethodref(strClass,
 				cp.addNameAndType(cp.addUtf8("codePointAt"), cp.addUtf8("(I)I")));
+		MethodrefConstant strCount = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_METHOD),
+						cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_DESC)));
 		JvmAsm a1 = new JvmAsm();
 		a1.aload(0);
 		a1.instanceOf(strClass);
@@ -736,7 +750,9 @@ final class JvmArrayRuntimeBuilder {
 		JvmAsm rg = new JvmAsm();
 		int rgGeneral = rg.label();
 		int rgBox = rg.label();
+		int rgString = rg.label();
 		emitResolveDisplacement(rg, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 0, 1, 2);
+		emitLandedOnString(rg, 2, rgString);
 		rg.aload(2);
 		rg.arraylength();
 		rg.iconst(6);
@@ -766,7 +782,33 @@ final class JvmArrayRuntimeBuilder {
 		rg.iload(1);
 		rg.invokevirtual(alGet);
 		rg.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), 4, 5, rg.finish()));
+		// The string-view arm: header[3] is the immutable runtime string this view
+		// aliases and idx is the 1-based character index into it. Reads by CODE POINT
+		// through _cpoff (the content lives in [1, length-1), inside the framing
+		// quotes) and boxes as the runtime CHARACTER int[]{cp}, exactly like _aref1's
+		// own string branch.
+		rg.bind(rgString);
+		rg.aload(2);
+		rg.iconst(3);
+		rg.aaload();
+		rg.checkcast(strClass);
+		rg.astore(5);
+		rg.aload(5);
+		rg.aload(5);
+		rg.iload(1);
+		rg.iconst(1);
+		rg.op(Opcode.ISUB);
+		rg.invokestatic(strCpOffset);
+		rg.invokevirtual(strCodePointAt);
+		rg.istore(6);
+		rg.iconst(1);
+		rg.newarrayInt();
+		rg.op(Opcode.DUP);
+		rg.iconst(0);
+		rg.iload(6);
+		rg.iastore();
+		rg.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), 4, 7, rg.finish()));
 
 		// _rmSet(list, idx, val): the single data-write primitive; returns val. A
 		// PACKED array (length-6 header) stores an in-range Long unboxed; any other
@@ -776,7 +818,11 @@ final class JvmArrayRuntimeBuilder {
 		JvmAsm rs = new JvmAsm();
 		int rsGeneral = rs.label();
 		int rsWiden = rs.label();
+		int rsString = rs.label();
+		MethodrefConstant strToCharVec = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC)));
 		emitResolveDisplacement(rs, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 0, 1, 3);
+		emitLandedOnString(rs, 3, rsString);
 		rs.aload(3);
 		rs.arraylength();
 		rs.iconst(6);
@@ -815,7 +861,90 @@ final class JvmArrayRuntimeBuilder {
 		rs.pop();
 		rs.aload(2);
 		rs.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), 4, 6, rs.finish()));
+		// The string-view arm: the view aliases an IMMUTABLE runtime string, which no
+		// write can reach. Promote it once -- header[3] becomes a mutable character
+		// vector holding the same characters -- and store into that; every later access
+		// through this view (and through array-displacement's answer) sees the promoted
+		// vector, so the view behaves as a mutable string from here on.
+		rs.bind(rsString);
+		rs.aload(3);
+		rs.iconst(3);
+		rs.aaload();
+		rs.checkcast(strClass);
+		rs.invokestatic(strToCharVec);
+		rs.astore(6);
+		rs.aload(3);
+		rs.iconst(3);
+		rs.aload(6);
+		rs.aastore();
+		rs.aload(6);
+		rs.astore(0);
+		rs.branch(Opcode.GOTO, rsGeneral);
+		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), 4, 7, rs.finish()));
+
+		// _strToCharVec(s): the immutable runtime string s copied into a fresh mutable
+		// character vector -- an ArrayList whose slot 0 is the length-4 header
+		// {dims, fillPointer, null, null} and whose slots 1.. hold one int[]{codePoint}
+		// per character. Characters are read BY CODE POINT (_cpoff + codePointAt), so a
+		// supplementary code point becomes one element, as everywhere else.
+		// Locals: 0 = s, 1 = n, 2 = list, 3 = i.
+		JvmAsm tv = new JvmAsm();
+		tv.aload(0);
+		tv.invokestatic(strCount);
+		tv.istore(1);
+		tv.anew(arrayListClass);
+		tv.dup();
+		tv.invokespecial(alInit);
+		tv.astore(2);
+		tv.aload(2);
+		tv.iconst(4);
+		tv.anewarray(objectClass);
+		tv.dup();
+		tv.iconst(0);
+		tv.iconst(1);
+		tv.anewarray(objectClass);
+		tv.dup();
+		tv.iconst(0);
+		tv.iload(1);
+		tv.op(Opcode.I2L);
+		tv.invokestatic(longValueOf);
+		tv.aastore();
+		tv.aastore();
+		tv.dup();
+		tv.iconst(1);
+		tv.iload(1);
+		tv.op(Opcode.I2L);
+		tv.invokestatic(longValueOf);
+		tv.aastore();
+		tv.invokevirtual(alAdd);
+		tv.pop();
+		tv.iconst(0);
+		tv.istore(3);
+		int tvLoop = tv.label();
+		int tvDone = tv.label();
+		tv.bind(tvLoop);
+		tv.iload(3);
+		tv.iload(1);
+		tv.branch(Opcode.IF_ICMPGE, tvDone);
+		tv.aload(2);
+		tv.iconst(1);
+		tv.newarrayInt();
+		tv.op(Opcode.DUP);
+		tv.iconst(0);
+		tv.aload(0);
+		tv.aload(0);
+		tv.iload(3);
+		tv.invokestatic(strCpOffset);
+		tv.invokevirtual(strCodePointAt);
+		tv.iastore();
+		tv.invokevirtual(alAdd);
+		tv.pop();
+		tv.iinc(3, 1);
+		tv.branch(Opcode.GOTO, tvLoop);
+		tv.bind(tvDone);
+		tv.aload(2);
+		tv.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC), 10, 4, tv.finish()));
 
 		// _arrayWiden(list): converts a PACKED array (length-6 header, long[] data) to
 		// the boxed shape IN PLACE -- header replaced by the ordinary length-3
@@ -893,7 +1022,7 @@ final class JvmArrayRuntimeBuilder {
 		// 11 = targetTotal (product scratch), 12 = m (product scratch).
 		JvmAsm md = new JvmAsm();
 		int mdDims = 0, mdTarget = 1, mdOffset = 2, mdList = 3, mdTotal = 4, mdDimsArr = 5, mdIdx = 6, mdCur = 7,
-				mdN = 8, mdOff = 9, mdTargetHeader = 10, mdProduct = 11, mdM = 12;
+				mdN = 8, mdOff = 9, mdTargetHeader = 10, mdProduct = 11, mdM = 12, mdHeaderSize = 13;
 		md.anew(arrayListClass);
 		md.dup();
 		md.invokespecial(alInit);
@@ -914,12 +1043,43 @@ final class JvmArrayRuntimeBuilder {
 		md.invokevirtual(longIntValue);
 		md.istore(mdOff);
 		md.bind(offDone);
-		// targetTotal = product of the target's dims; require 0 <= off and
-		// total + off <= targetTotal
+		// targetTotal = the target's element count, and headerSize = 7 when the target
+		// is a STRING (an immutable runtime string, a mutable character vector, or
+		// another string view) so the result is a string VIEW rather than a bare array
+		// view: 7 is the header-length tag _strv and stringp read, exactly as 4 marks a
+		// character vector. The shape follows the TARGET, not :element-type -- the
+		// portable substring idiom passes the target's own (array-element-type seq).
+		int mdStr = md.label();
+		int mdHaveTotal = md.label();
+		int mdViewTag = md.label();
+		md.iconst(5);
+		md.istore(mdHeaderSize);
+		md.aload(mdTarget);
+		md.instanceOf(strClass);
+		md.branch(Opcode.IFNE, mdStr);
 		emitLoadHeader(md, arrayListClass, objectArrayClass, alGet, mdTarget);
 		md.astore(mdTargetHeader);
 		emitDimsProduct(md, longClass, objectArrayClass, longIntValue, mdTargetHeader, mdProduct, mdM);
 		md.istore(mdProduct);
+		md.aload(mdTargetHeader);
+		md.arraylength();
+		md.iconst(4);
+		md.branch(Opcode.IF_ICMPEQ, mdViewTag);
+		md.aload(mdTargetHeader);
+		md.arraylength();
+		md.iconst(7);
+		md.branch(Opcode.IF_ICMPEQ, mdViewTag);
+		md.branch(Opcode.GOTO, mdHaveTotal);
+		md.bind(mdStr);
+		md.aload(mdTarget);
+		md.checkcast(strClass);
+		md.invokestatic(strCount);
+		md.istore(mdProduct);
+		md.bind(mdViewTag);
+		md.iconst(7);
+		md.istore(mdHeaderSize);
+		md.bind(mdHaveTotal);
+		// require 0 <= off and total + off <= targetTotal
 		int mdBad = md.label();
 		int mdOk = md.label();
 		md.iload(mdOff);
@@ -934,9 +1094,10 @@ final class JvmArrayRuntimeBuilder {
 		emitThrow(md, rtExClass, rtExInit,
 				cp.addString("make-array: :displaced-to array is too small for the requested view"));
 		md.bind(mdOk);
-		// list.add(new Object[]{dimsArr, null, null, target, Long.valueOf(off)})
+		// list.add(new Object[headerSize]{dimsArr, null, null, target,
+		// Long.valueOf(off)})
 		md.aload(mdList);
-		md.iconst(5);
+		md.iload(mdHeaderSize);
 		md.anewarray(objectClass);
 		md.dup();
 		md.iconst(0);
@@ -956,7 +1117,7 @@ final class JvmArrayRuntimeBuilder {
 		md.pop();
 		md.aload(mdList);
 		md.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC), 6, 13, md.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC), 6, 14, md.finish()));
 
 		// _arrayBecome(a, b): replace a's dims, fill pointer and data with b's in place
 		// (the in-place half of adjust-array on an adjustable array); returns a. The
@@ -1157,8 +1318,13 @@ final class JvmArrayRuntimeBuilder {
 		MethodrefConstant sbToString = cp.addMethodref(sbClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 		am.ik.jvm.ConstantPool.StringConstant quoteStr = cp.addString("\"");
+		MethodrefConstant strSubstring = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
 		JvmAsm sv = new JvmAsm();
 		int svNotCv = sv.label();
+		int svView = sv.label();
+		int svRender = sv.label();
+		int svStr = sv.label();
 		sv.aload(0);
 		sv.instanceOf(arrayListClass);
 		sv.branch(Opcode.IFEQ, svNotCv);
@@ -1180,9 +1346,16 @@ final class JvmArrayRuntimeBuilder {
 		sv.astore(2);
 		sv.aload(2);
 		sv.arraylength();
+		sv.iconst(7);
+		sv.branch(Opcode.IF_ICMPEQ, svView);
+		sv.aload(2);
+		sv.arraylength();
 		sv.iconst(4);
 		sv.branch(Opcode.IF_ICMPNE, svNotCv);
+		// A character vector reads its own slots: base = 1, and
 		// n = header[1] != null ? fill pointer : dims[0]
+		sv.iconst(1);
+		sv.istore(6);
 		int svUseDim = sv.label();
 		int svHaveN = sv.label();
 		sv.aload(2);
@@ -1200,7 +1373,24 @@ final class JvmArrayRuntimeBuilder {
 		emitLoadDim0(sv, longClass, objectArrayClass, longIntValue, 2);
 		sv.istore(3);
 		sv.bind(svHaveN);
-		// sb = new StringBuilder("\""); for i in 0..n-1: sb.append(char at 1 + i)
+		sv.branch(Opcode.GOTO, svRender);
+		// A STRING VIEW (length-7 header) has no storage of its own: n is its
+		// dimension, and the walk hands back either the character vector it aliases
+		// (rendered element by element from the resolved base) or the immutable string
+		// it aliases (sliced by code point in one substring).
+		sv.bind(svView);
+		emitLoadDim0(sv, longClass, objectArrayClass, longIntValue, 2);
+		sv.istore(3);
+		sv.iconst(1);
+		sv.istore(6);
+		emitResolveDisplacement(sv, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 1, 6, 2);
+		emitLandedOnString(sv, 2, svStr);
+		sv.aload(2);
+		sv.arraylength();
+		sv.iconst(4);
+		sv.branch(Opcode.IF_ICMPNE, svNotCv);
+		// sb = new StringBuilder("\""); for i in 0..n-1: sb.append(char at base + i)
+		sv.bind(svRender);
 		sv.anew(sbClass);
 		sv.dup();
 		sv.ldcString(quoteStr);
@@ -1216,7 +1406,8 @@ final class JvmArrayRuntimeBuilder {
 		sv.branch(Opcode.IF_ICMPGE, svDone);
 		sv.aload(4);
 		sv.aload(1);
-		sv.iconst(1);
+		sv.checkcast(arrayListClass);
+		sv.iload(6);
 		sv.iload(5);
 		sv.op(Opcode.IADD);
 		sv.invokevirtual(alGet);
@@ -1235,21 +1426,64 @@ final class JvmArrayRuntimeBuilder {
 		sv.aload(4);
 		sv.invokevirtual(sbToString);
 		sv.areturn();
+		// s = (String) header[3]; the view's characters are s[base - 1 .. base - 1 + n)
+		// by CODE POINT, so both ends translate through _cpoff.
+		sv.bind(svStr);
+		sv.aload(2);
+		sv.iconst(3);
+		sv.aaload();
+		sv.checkcast(strClass);
+		sv.astore(7);
+		sv.anew(sbClass);
+		sv.dup();
+		sv.ldcString(quoteStr);
+		sv.invokespecial(sbInit);
+		sv.astore(4);
+		sv.aload(4);
+		sv.aload(7);
+		sv.aload(7);
+		sv.iload(6);
+		sv.iconst(1);
+		sv.op(Opcode.ISUB);
+		sv.invokestatic(strCpOffset);
+		sv.aload(7);
+		sv.iload(6);
+		sv.iconst(1);
+		sv.op(Opcode.ISUB);
+		sv.iload(3);
+		sv.op(Opcode.IADD);
+		sv.invokestatic(strCpOffset);
+		sv.invokevirtual(strSubstring);
+		sv.invokevirtual(sbAppendStr);
+		sv.pop();
+		sv.aload(4);
+		sv.ldcString(quoteStr);
+		sv.invokevirtual(sbAppendStr);
+		sv.pop();
+		sv.aload(4);
+		sv.invokevirtual(sbToString);
+		sv.areturn();
 		sv.bind(svNotCv);
 		sv.aload(0);
 		sv.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(STRV), cp.addUtf8(STRV_DESC), 5, 6, sv.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(STRV), cp.addUtf8(STRV_DESC), 7, 8, sv.finish()));
 
 		return methods;
 	}
 
 	// Follows the displacement chain of the array list in listSlot: while its header is
-	// a 5-element {dims, fp, adj, target, offset} with a non-null target, add the
-	// offset to the 1-based list index in idxSlot and hop listSlot to the target. A
+	// a 5- or 7-element {dims, fp, adj, target, offset, ...} with a non-null target, add
+	// the offset to the 1-based list index in idxSlot and hop listSlot to the target. A
 	// length-4 header (a mutable character vector) is NOT a displacement, and neither
 	// is the length-6 PACKED header (its slot 3 is null, so the target test ends the
 	// loop); the caller reads the final header from headerSlot to pick the packed or
 	// boxed data access.
+	//
+	// A STRING target (the length-7 string-view header over an immutable runtime
+	// string) ends the walk WITHOUT hopping: the offset is already folded into idxSlot,
+	// and headerSlot keeps the view's own header so the caller can read slot 3 as the
+	// string. That is the one exit where {@code header.length > 4 && header[3] != null}
+	// still holds afterwards, so a single test tells the caller it landed on a string.
 	private static void emitResolveDisplacement(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
 			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant longIntValue, int listSlot,
 			int idxSlot, int headerSlot) {
@@ -1266,7 +1500,7 @@ final class JvmArrayRuntimeBuilder {
 		a.iconst(3);
 		a.aaload();
 		a.branch(Opcode.IFNULL, done);
-		// idx += ((Long) header[4]).intValue(); list = header[3]
+		// idx += ((Long) header[4]).intValue()
 		a.iload(idxSlot);
 		a.aload(headerSlot);
 		a.iconst(4);
@@ -1275,12 +1509,35 @@ final class JvmArrayRuntimeBuilder {
 		a.invokevirtual(longIntValue);
 		a.op(Opcode.IADD);
 		a.istore(idxSlot);
+		// A non-array target is the immutable string a string view aliases: stop here.
+		a.aload(headerSlot);
+		a.iconst(3);
+		a.aaload();
+		a.instanceOf(arrayListClass);
+		a.branch(Opcode.IFEQ, done);
+		// list = header[3]
 		a.aload(headerSlot);
 		a.iconst(3);
 		a.aaload();
 		a.astore(listSlot);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(done);
+	}
+
+	// Emits the "the displacement walk ended on a STRING target" test: leaves 1 on the
+	// stack when headerSlot holds a length &gt; 4 header whose slot 3 is non-null (see
+	// emitResolveDisplacement), 0 otherwise. Costs two compares on the ordinary path.
+	private static void emitLandedOnString(JvmAsm a, int headerSlot, int yes) {
+		int no = a.label();
+		a.aload(headerSlot);
+		a.arraylength();
+		a.iconst(4);
+		a.branch(Opcode.IF_ICMPLE, no);
+		a.aload(headerSlot);
+		a.iconst(3);
+		a.aaload();
+		a.branch(Opcode.IFNONNULL, yes);
+		a.bind(no);
 	}
 
 	// Parses a make-array dimensions argument in the local dims (a Long for the rank-1
