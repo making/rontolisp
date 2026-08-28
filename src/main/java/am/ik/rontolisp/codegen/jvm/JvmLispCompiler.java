@@ -2572,6 +2572,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// before the writeFields/writeMethods lambdas run.
 		final List<Integer> layoutClinitCode = new ArrayList<>();
 		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
+		// The bignum-literal half of <clinit>, assembled HERE for the same reason: it
+		// mints the CONSTANT_String decimal forms, and the pool is complete because
+		// every body (defun, top-level chunk, lambda, outlined fused site) has been
+		// compiled by now. Empty for a program with no bignum literal, which is then
+		// emitted byte for byte as before.
+		final List<Integer> bigIntClinitCode = new ArrayList<>();
+		mainCtx.bigIntPool.emitClinitInit(bigIntClinitCode, cp);
 		// When the standard-stream handles are reserved, the stream table must EXIST
 		// from the start with those slots empty. _addStream reserves the COUNT, but it
 		// runs only when something is opened -- while the reserved handle 2 is a live
@@ -2857,6 +2864,17 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(java.util.Objects.requireNonNull(mainCtx.layoutPool.fieldDesc))
 						.writeU2(0));
 				}
+				// One private static BigInteger per DISTINCT bignum literal, built once
+				// in <clinit> so a use site is a GETSTATIC. The attribute count MUST stay
+				// 0 -- JvmClassShaker rejects field attributes -- which is also why the
+				// field is not marked ACC_FINAL-with-ConstantValue: a BigInteger has no
+				// constant-pool form.
+				for (BigIntPool.BigIntField bf : mainCtx.bigIntPool.fields()) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(bf.name())
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.bigIntPool.fieldDesc))
+						.writeU2(0));
+				}
 			})
 			.writeMethods(methods -> {
 				if (!this.noMain) {
@@ -2941,7 +2959,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
-						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null || initsClinit) {
+						|| !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty() || dynVarRuntime != null
+						|| initsClinit) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -3000,6 +3019,10 @@ public final class JvmLispCompiler implements LispCompiler {
 						JvmRuntimeBuilder.emitU2(clinitCode,
 								java.util.Objects.requireNonNull(streamCountFieldRef).index());
 					}
+					// The bignum literals go in before the layouts: they are plain
+					// values with no dependency of their own, and every later fragment
+					// (and the top-level runner, invoked last) may read them.
+					clinitCode.addAll(bigIntClinitCode);
 					clinitCode.addAll(layoutClinitCode);
 					// The standard stream variables' defaults, one table
 					// (StreamDesignators) feeding BOTH homes: the per-name global field
@@ -3067,7 +3090,10 @@ public final class JvmLispCompiler implements LispCompiler {
 					// index, then a briefly-two-slot long) on top of whichever nest it
 					// sits in, hence the +6 -- an over-declared maximum is free, an
 					// under-declared one is a VerifyError at class load.
-					final int clinitMaxStack = Math.max(streamGenvSeeds.isEmpty() ? 0 : 8,
+					// A bignum initializer peaks at 3 (the uninitialized BigInteger, its
+					// dup, the decimal string).
+					final int clinitMaxStack = Math.max(
+							Math.max(streamGenvSeeds.isEmpty() ? 0 : 8, mainCtx.bigIntPool.isEmpty() ? 0 : 3),
 							!structTableClinitFinal.isEmpty() ? 10 : (mainCtx.layoutPool.isEmpty() ? 2 : 4))
 							+ (streamLayoutField != null ? 6 : 0);
 					// A layout-only program never runs ensureThreadLocalInfra, so the
@@ -3077,11 +3103,13 @@ public final class JvmLispCompiler implements LispCompiler {
 					Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName
 							: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
 									: dynVarRuntime != null ? dynVarRuntime.clinitName()
-											: java.util.Objects.requireNonNull(standardOutputClinitName);
+											: standardOutputClinitName != null ? standardOutputClinitName
+													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitName);
 					Utf8Constant clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
 							: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
 									: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
-											: java.util.Objects.requireNonNull(standardOutputClinitDesc);
+											: standardOutputClinitDesc != null ? standardOutputClinitDesc
+													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
 					methods.add(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(clinitMaxStack)
@@ -4689,6 +4717,108 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The compilation-wide bignum-literal interner. A {@code BigInteger} is immutable, so
+	 * every use of one literal is the same value: one {@code private static} field per
+	 * DISTINCT value, built once in {@code <clinit>}, turns each use site from
+	 * {@code new BigInteger(String)} (12 bytes and a full decimal parse plus an
+	 * allocation, every time round the loop) into a 3-byte {@code GETSTATIC}. Nothing new
+	 * travels: the field lives in the generated class.
+	 *
+	 * <p>
+	 * The pool is filled during body compilation and drained into {@code <clinit>} at
+	 * class assembly, exactly like {@link LayoutPool}. A program with no bignum literal
+	 * interns nothing and is emitted byte for byte as before.
+	 */
+	static final class BigIntPool {
+
+		/**
+		 * One interned bignum literal.
+		 *
+		 * @param name the field name constant
+		 * @param ref the fieldref used by {@code GETSTATIC}/{@code PUTSTATIC}
+		 * @param value the value the field holds
+		 */
+		record BigIntField(Utf8Constant name, FieldrefConstant ref, java.math.BigInteger value) {
+		}
+
+		private final Map<java.math.BigInteger, BigIntField> byValue = new java.util.LinkedHashMap<>();
+
+		@Nullable Utf8Constant fieldDesc;
+
+		@Nullable ClassConstant bigIntegerCls;
+
+		@Nullable MethodrefConstant ctor;
+
+		@Nullable Utf8Constant clinitName;
+
+		@Nullable Utf8Constant clinitDesc;
+
+		/**
+		 * Whether no bignum literal has been interned, i.e. the program has none.
+		 * @return true when nothing has to be emitted
+		 */
+		boolean isEmpty() {
+			return this.byValue.isEmpty();
+		}
+
+		/**
+		 * The interned bignum fields, in interning order.
+		 * @return the fields to emit
+		 */
+		java.util.Collection<BigIntField> fields() {
+			return this.byValue.values();
+		}
+
+		/**
+		 * Interns the static field holding one bignum literal; idempotent per value.
+		 * @param cp the constant pool
+		 * @param className the internal name of the class being emitted
+		 * @param value the literal to intern
+		 * @return the fieldref of the constant
+		 */
+		FieldrefConstant intern(ConstantPool cp, String className, java.math.BigInteger value) {
+			BigIntField existing = this.byValue.get(value);
+			if (existing != null) {
+				return existing.ref();
+			}
+			if (this.bigIntegerCls == null) {
+				this.bigIntegerCls = cp.addClass(cp.addUtf8("java/math/BigInteger"));
+				this.ctor = cp.addMethodref(this.bigIntegerCls,
+						cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+				this.fieldDesc = cp.addUtf8("Ljava/math/BigInteger;");
+				this.clinitName = cp.addUtf8("<clinit>");
+				this.clinitDesc = cp.addUtf8("()V");
+			}
+			Utf8Constant nameUtf = cp.addUtf8("_bi$" + this.byValue.size());
+			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
+			FieldrefConstant ref = cp.addFieldref(thisClass,
+					cp.addNameAndType(nameUtf, Objects.requireNonNull(this.fieldDesc)));
+			this.byValue.put(value, new BigIntField(nameUtf, ref, value));
+			return ref;
+		}
+
+		/**
+		 * Appends the bignum initializers to the shared {@code <clinit>} body. Peak
+		 * operand depth is 3 (the uninitialized instance, its dup, the string).
+		 * @param code the {@code <clinit>} body being assembled
+		 * @param cp the constant pool (mints the decimal strings)
+		 */
+		void emitClinitInit(List<Integer> code, ConstantPool cp) {
+			for (BigIntField bf : this.byValue.values()) {
+				code.add(Opcode.NEW);
+				JvmRuntimeBuilder.emitU2(code, Objects.requireNonNull(this.bigIntegerCls).index());
+				code.add(Opcode.DUP);
+				JvmRuntimeBuilder.emitLdc(code, cp.addString(bf.value().toString()).index());
+				code.add(Opcode.INVOKESPECIAL);
+				JvmRuntimeBuilder.emitU2(code, Objects.requireNonNull(this.ctor).index());
+				code.add(Opcode.PUTSTATIC);
+				JvmRuntimeBuilder.emitU2(code, bf.ref().index());
+			}
+		}
+
+	}
+
+	/**
 	 * An active {@code unwind-protect} protected region during compilation.
 	 * {@code cleanupForms} are re-compiled inline at every {@code return} escape site (a
 	 * cleanup runs once per exit path); {@code blockDepth} is the {@code %block} stack
@@ -5367,9 +5497,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final LayoutPool layoutPool;
 
+		/**
+		 * The compilation-wide bignum-literal interner (one static
+		 * {@code java.math.BigInteger} field per distinct literal); one instance shared
+		 * across every context of a compilation through the single builder, like
+		 * {@link #layoutPool}.
+		 */
+		final BigIntPool bigIntPool;
+
 		private Ctx(Builder builder) {
 			this.conditionChannel = builder.conditionChannel;
 			this.layoutPool = builder.layoutPool;
+			this.bigIntPool = builder.bigIntPool;
 			this.dynamic = builder.dynamic;
 			this.servletMode = builder.servletMode;
 			this.blockExitChannel = builder.blockExitChannel;
@@ -5499,6 +5638,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * the same builder shares it.
 			 */
 			private final LayoutPool layoutPool = new LayoutPool();
+
+			/**
+			 * One bignum-literal pool per builder (= per compilation): every context
+			 * built from the same builder shares it.
+			 */
+			private final BigIntPool bigIntPool = new BigIntPool();
 
 			private @Nullable ConstantPool cp;
 
