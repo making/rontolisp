@@ -174,6 +174,31 @@ register-allocated `long`s inside.
   dispatch bytes thousands of times. A name in `Ctx.rawLocals` is never in
   `Ctx.locals`; `JvmLetCompiler` saves/restores both maps and removes a name
   from either on shadowing, and `JvmDefvarCompiler` checks both.
+- **Unboxed promoted GLOBALS** (`Ctx.rawGlobals`, `JvmRawGlobals`): the same
+  triple as CLASS FIELDS -- `_gr$X` (`long`), `_gk$X` (`int` flag) beside the
+  ordinary `_g$X`, which stays the boxed shadow, so a store that cannot be raw
+  is byte-for-byte the `putstatic` the unfused compiler emits and the field a
+  program starts with (flag 0, shadow null = nil) is the state a plain global
+  starts in. Without it a top-level `(setq s (+ s 1))` boxed the sum into a
+  static every iteration -- the one allocation escape analysis cannot remove,
+  because the value ESCAPES -- plus a GC write barrier: 16.0 ns an assignment
+  against the same accumulator's 3.3 ns as a `let` local. Eligibility is
+  program-wide and deliberately narrow, because a global has seams a local does
+  not: fusion on and not `--dynamic`, NO eval runtime (the `_genv` mirror holds
+  the box, and `eval`/`load`/the FFI seams reach a variable by name), nothing
+  concurrent (threads, an http handler, async, sockets -- three fields where
+  there was one, and a non-volatile `long` may tear), never DYNAMICALLY bound
+  (a `defvar` name is special by CL's rule, but only a `let` that names it makes
+  it bindable, and that keeps the save/restore over the single `_g$` field), not
+  a compiler-internal cell (`%MV-SPILL`, the stream specials), at least one
+  integer-shaped assignment and few enough assignment sites. Everything else
+  keeps working untouched because a LEXICAL binding of the name still wins at
+  every site (resolved before the global, `JvmIntFusionCompiler.resolveRaw`,
+  which is the whole resolution order `compileSymbolRef` uses) and a
+  non-integer value still lands in the shadow. Three emissions know the
+  representation and every read and write goes through one of them:
+  `JvmExprCompiler.compileSpecialRead`, `JvmSetqCompiler` and
+  `JvmDefvarCompiler`.
 
 ## When fusion does NOT trigger (and must keep not triggering)
 
@@ -262,6 +287,25 @@ emission 0.108, and a WIDENED general array -- which runs the guard chain and
 then bails into the same `_aref1` -- 0.123. The speculation wins 2 ns/read
 where it hits and loses 1.5 ns where it misses.
 
+### The promoted global's triple (2026-08-28, `.todo/556`, same machine)
+
+10^7 iterations of `(setq s (+ s 1))`, compute only (best of 5, JVM startup
+0.075 s subtracted), the accumulator spelled two ways:
+
+| accumulator | before | after |
+| --- | --- | --- |
+| `(let ((s 0)) ...)` -- `RawLocal` | 0.033 | 0.033 |
+| `(defparameter s 0)` -- static field | 0.160 | **0.036** |
+
+The two spellings now cost the same per assignment, which is the whole point.
+`.todo/517`'s two top-level rows follow it down (compute only): 10^7 x `random`
+0.204 -> **0.075** (the defun spelling is 0.072, hand-written primitive Java
+0.050), 10^7 x `aref` 0.351 -> **0.205** (defun 0.178, Java 0.094). The
+top-level spelling is no longer a different program from the defun spelling.
+The root box `_fx$N` still returns is unboxed at the store site and dies there,
+so escape analysis removes it -- re-evaluation trigger 1 below is what would
+remove the box itself.
+
 **The other integer-valued built-ins do NOT earn a leaf**, measured the same
 day rather than assumed: `char-code` over `(char s i)` costs 1.3 ns/iteration
 more than the same loop without it (HotSpot inlines `_charCode` and escape
@@ -288,6 +332,13 @@ compiles the same program to different bytes),
 `fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther` (the same
 general-array leaf in a program holding NO packed integer vector, so only the
 ArrayList dispatch is emitted, plus the fill-pointered and adjustable bails),
+`unboxedTopLevelGlobalsAnswerWhatTheBoxedStaticFieldAnswers` (a promoted global's
+every tier -- float, string, nil, a bignum promotion out of `long` range -- read
+back through the shadow, a lexical binding of the name still winning over the
+global, and one global declining in the same program another takes),
+`aDynamicallyBoundSpecialAndAnEvaldGlobalDeclineTheUnboxedRepresentation` (the
+two seams a local does not have, pinned by the absence of the `_gr$` field as
+well as by the answers),
 `theSizeLevelChangesNothingWithoutASpeedForSizeTrade` (a program with neither a
 typed loop nor a fused site stays byte-identical across levels),
 `JvmLibraryMethodSizeTest` (no emitted defun/lambda method of the
@@ -309,14 +360,9 @@ outputs against each other.
   same trigger as the wasm file's.
 - `%aset` values fuse boxed (the value tree collapses but `_ivAset1` still
   takes a boxed operand); a raw store path would shave one box per store.
-- **A top-level `defparameter` accumulator is now the dominant term in both of
-  `.todo/517`'s top-level rows and neither fusion nor the leaves can reach it**:
-  a promoted top-level global is a static `Object` field, so
-  `(setq s (+ s ...))` re-boxes and stores through a GC write barrier every
-  iteration -- the one allocation escape analysis cannot remove, because the
-  value escapes into a static. Isolated (2026-08-28, 10^7 iterations of
-  `(setq s (+ s 1))`, compute only): 0.160 s as a global against 0.033 s as a
-  `let` local, i.e. **12.7 ns per assignment** for the representation alone.
-  That is 0.13 of the 0.20 s `random` row and of the 0.35 s `aref` row. The
-  fix is the `RawLocal` dual representation applied to a promoted global (a
-  `long` field + a shadow + a flag), which is its own item, not a leaf.
+- A global that the eligibility gate refuses WHOLESALE -- any program that
+  touches `eval`, threads, an http handler, async or sockets keeps the boxed
+  static field for every one of its globals. The concurrency half is the
+  conservative reading (a torn non-volatile `long`), not a measured problem; a
+  `volatile` triple, or a per-name "assigned only from the main thread" proof,
+  would narrow it if a real program ever wants the fast path there.

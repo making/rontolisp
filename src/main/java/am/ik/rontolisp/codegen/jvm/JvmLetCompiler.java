@@ -155,7 +155,7 @@ final class JvmLetCompiler {
 					ctx.allocTemp();
 					int shadowSlot = ctx.allocTemp();
 					int flagSlot = ctx.allocTemp();
-					JvmIntFusionCompiler.RawLocal rawLocal = new JvmIntFusionCompiler.RawLocal(longSlot, shadowSlot,
+					JvmIntFusionCompiler.RawLocal rawLocal = JvmIntFusionCompiler.RawLocal.slots(longSlot, shadowSlot,
 							flagSlot);
 					// Pre-initialize the raw and shadow slots: a store writes only its
 					// own pair, so every slot must be DEFINED on every path or a later

@@ -1560,6 +1560,30 @@ public final class JvmLispCompiler implements LispCompiler {
 		// redefinition); the whole feature is a speed-for-size trade --optimize=size
 		// declines.
 		boolean intFusion = !this.optimize.prefersSizeOverSpeed();
+		// The unboxed dual representation for a promoted top-level global
+		// (.kb/jvm-int-fusion.md): a raw long field and an int flag beside the _g$ field,
+		// which stays the boxed shadow. Same gate as the local version, plus the seams a
+		// local does not have -- an eval runtime that mirrors the BOX, and anything
+		// concurrent (three fields where there was one).
+		Set<String> rawGlobalNames = JvmRawGlobals.collect(program, globals, boundSpecialVars, intFusion
+				&& !this.dynamic && !usesEval && !usesThreads && !usesHttpHandler && !usesAsyncRuntime && !usesSockets);
+		Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = new HashMap<>();
+		List<Utf8Constant> rawGlobalLongFieldNameUtfs = new ArrayList<>();
+		List<Utf8Constant> rawGlobalFlagFieldNameUtfs = new ArrayList<>();
+		Utf8Constant rawGlobalLongDescUtf = rawGlobalNames.isEmpty() ? null : cp.addUtf8("J");
+		Utf8Constant rawGlobalFlagDescUtf = rawGlobalNames.isEmpty() ? null : cp.addUtf8("I");
+		for (String g : rawGlobalNames) {
+			Utf8Constant longNameUtf = cp.addUtf8("_gr$" + mangleMethodName(g));
+			Utf8Constant flagNameUtf = cp.addUtf8("_gk$" + mangleMethodName(g));
+			rawGlobalLongFieldNameUtfs.add(longNameUtf);
+			rawGlobalFlagFieldNameUtfs.add(flagNameUtf);
+			rawGlobals.put(g,
+					JvmIntFusionCompiler.RawLocal.fields(
+							cp.addFieldref(thisClass,
+									cp.addNameAndType(longNameUtf, Objects.requireNonNull(rawGlobalLongDescUtf))),
+							Objects.requireNonNull(globalFields.get(g)), cp.addFieldref(thisClass,
+									cp.addNameAndType(flagNameUtf, Objects.requireNonNull(rawGlobalFlagDescUtf)))));
+		}
 		JvmIntFusionCompiler.State fusedState = new JvmIntFusionCompiler.State(this.className);
 		Map<String, DefunDecl> inlinableDefuns = new HashMap<>();
 		if (intFusion && !this.dynamic) {
@@ -1573,6 +1597,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.intFusion(intFusion)
+			.rawGlobals(rawGlobals)
 			.inlinableDefuns(inlinableDefuns)
 			.fusedState(fusedState)
 			.cp(cp)
@@ -2794,6 +2819,22 @@ public final class JvmLispCompiler implements LispCompiler {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(gfName)
 						.writeU2(globalFieldDescUtf)
+						.writeU2(0));
+				}
+				// The raw long half and the int flag of an unboxed global's triple; the
+				// _g$ field above is its boxed shadow. Both default to 0, so the flag
+				// starts clear and the shadow's null (nil) is authoritative -- exactly
+				// the state a plain global starts in.
+				for (Utf8Constant rgName : rawGlobalLongFieldNameUtfs) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(rgName)
+						.writeU2(Objects.requireNonNull(rawGlobalLongDescUtf))
+						.writeU2(0));
+				}
+				for (Utf8Constant rkName : rawGlobalFlagFieldNameUtfs) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(rkName)
+						.writeU2(Objects.requireNonNull(rawGlobalFlagDescUtf))
 						.writeU2(0));
 				}
 				if (dynVarRuntime != null) {
@@ -5464,6 +5505,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, FieldrefConstant> globalFields = Map.of();
 
 		/**
+		 * The promoted top-level globals that carry the unboxed dual representation
+		 * ({@code .kb/jvm-int-fusion.md}): a raw {@code long} field and an {@code int}
+		 * flag beside the ordinary {@code _g$} field, which stays the boxed shadow. A
+		 * name here is a plain global everywhere the flag is clear, so a store that
+		 * cannot be raw is byte-for-byte the store the unfused compiler emits.
+		 * Eligibility is program-wide ({@link JvmRawGlobals}); shared across every
+		 * context.
+		 */
+		Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = Map.of();
+
+		/**
 		 * The thread-scoped dynamic-binding runtime for the specials that are dynamically
 		 * bound somewhere in the program (a {@code _d$} ThreadLocal per name next to the
 		 * {@code _g$} global default, plus the {@code _dget}/{@code _dbind}/{@code _dset}
@@ -5594,6 +5646,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.globals = builder.globals;
 			this.specialVars = builder.specialVars;
 			this.globalFields = builder.globalFields;
+			this.rawGlobals = builder.rawGlobals;
 			this.dynVars = builder.dynVars;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.stack = new OperandStack(this.cp);
@@ -5907,6 +5960,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<String> specialVars = Set.of();
 
 			private Map<String, FieldrefConstant> globalFields = Map.of();
+
+			private Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = Map.of();
 
 			private JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
 
@@ -6433,6 +6488,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder globalFields(Map<String, FieldrefConstant> globalFields) {
 				this.globalFields = globalFields;
+				return this;
+			}
+
+			Builder rawGlobals(Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals) {
+				this.rawGlobals = rawGlobals;
 				return this;
 			}
 
