@@ -68,3 +68,103 @@ a symptom.
 The three programs above answer identically on all four backends, matching
 SBCL, with a ci-spec case and the two promote-on-write tests updated (or
 deleted) to say so.
+
+## Measured 2026-08-28: the proposed lever costs 100x, and why
+
+"Make `copy-seq` / `subseq` / ... answer a character vector and every later op
+on the result re-renders it, O(n) per op" was written above as the obvious
+approach with an unknown price. It was measured, and the price is not O(n) per
+op -- it is **O(n^2) per scan**, because the ops a string scan is made of are
+per-CHARACTER ops. Reading one character out of a character vector renders the
+WHOLE vector into a fresh runtime string and then indexes it.
+
+`(dotimes (j (length s)) (char-code (char s j)))`, 200 repetitions, ms:
+
+| n | JVM immutable | JVM char vector | WASM immutable | WASM char vector |
+| ---: | ---: | ---: | ---: | ---: |
+| 256 | 36 | 166 | 3 | 134 |
+| 512 | 18 | 436 | 3 | 497 |
+| 1024 | 1 | 1663 | 7 | 2417 |
+| 2048 | 1 | 5289 | 29 | 11293 |
+
+The character-vector column quadruples per doubling on both backends -- exactly
+quadratic -- while the immutable column is linear and, once JIT-warm on the JVM,
+below the clock's resolution. At n=2048 the same scan is **5289 ms vs 1 ms** on
+the JVM and **11.3 s vs 29 ms** on wasmtime. Flipping the producers today would
+put that multiplier on every string-heavy program in the corpus (jzon, ironclad,
+trivial-utf-8, the JSON parse path), so the answer is not "measure and choose"
+any more: **559 cannot land on the current character-vector read path**, whatever
+the producers do.
+
+## The prerequisite is NOT `.todo/343`, and 343's framing needs correcting
+
+`.todo/343` (memoize the rendered form) reads like the fix for the table above.
+It is not the right one, and the measurement says so directly. Compare the three
+index spellings against the SAME character vector on the JVM (200 reps, ms):
+
+| n | `(char s j)` | `(aref s j)` | `(elt s j)` |
+| ---: | ---: | ---: | ---: |
+| 512 | 387 | **30** | 408 |
+| 2048 | 4330 | **92** | 3770 |
+
+`aref` is already O(1) on a character vector -- it reads the element out of the
+general array and never builds a string -- and is **47x faster than `char` on the
+identical object**. So the rendered string is not something to cache: on this
+path it is something never to build. `char` / `schar` / `elt` normalize to a
+string first only because that is how the immutable arm works, and the mutable
+arm inherited it.
+
+That also means `.kb/string-index-cost.md`'s stated invariant ("`(char s i)` /
+`(elt s i)` ... are O(1) ... on ALL FOUR backends. A left-to-right scan of one
+string is LINEAR in its length, never quadratic") is **false today for a mutable
+character vector** -- i.e. for every `make-string` buffer. The file's whole
+argument is about translating a character index into a UTF-16 / UTF-8 offset,
+which is the immutable representation's problem; the character vector, whose
+elements ARE code points, has no such problem and pays a rendering instead. The
+invariant is right; a representation escaped it.
+
+## Revised plan
+
+1. **Make an index into a character vector read the element** (this is the
+   prerequisite, and it stands on its own as a live O(n^2) bug against
+   `.kb/string-index-cost.md`; it is not `.todo/343`, which should be re-scoped
+   to the callers that genuinely want the whole string -- `string=`, `intern`,
+   `write-string`, `_equal`/`_hash`/`_print_val`).
+   - JVM: `JvmCharCompiler.compileChar` (`JvmCharCompiler.java:38`) opens with an
+     unconditional `JvmArrayCompiler.emitStrvNormalize` at line 41, then
+     `CHECKCAST String` + `_cpoff` + `codePointAt`. Replace the site with ONE
+     call to a new `_charRef(Object, int)` in `JvmStringIndexRuntimeBuilder`
+     that tests the character-vector shape (the length-4 slot-0 header,
+     `JvmArrayRuntimeBuilder.java:38-45`) and does the `_rmGet` element read,
+     falling back to today's `_strv` path otherwise. One call per site is FEWER
+     bytes than the current two-call sequence, so `.kb/string-write-runtime.md`'s
+     size argument points the same way.
+   - WASM: the twin already has its shape test -- `_charvec_p`
+     (`FUNC_CHARVEC_P`, 213 bytes, O(1), built for `.todo/342`). A
+     `_str_char_ref(str, i)` calling `_charvec_p` -> `_rmGet` or
+     `_str_char_at` replaces the `emitCharvecToStrCall` + `FUNC_STR_CHAR_AT`
+     pair at each `char`/`schar`/`aref`-on-string site.
+   - `elt` on a string is the same site through a different head and must move
+     with it (its 3770 ms above is the same rendering).
+   - The interpreter is already correct (its character vector IS a mutable
+     `LispString`) and must not change.
+2. **Then** flip the producers, re-measuring the table above first: it should
+   have collapsed to the immutable column before any producer changes.
+   `copy-seq` needs no work of its own -- `LispMacroExpander.expandCopySeq`
+   (`LispMacroExpander.java:2858`) is `(subseq seq 0)` on every backend, so
+   `subseq`'s string lane is the single producer that decides both of the todo's
+   first two programs: `JvmSubseqCompiler` (`substring` + re-quote) and
+   `WasmSubseqCompiler.java:37-38` (which calls `_charvec_to_str` FIRST, so it
+   currently launders a mutable vector into an immutable string).
+3. A literal still must not become mutable. On WASM the discriminator is free
+   and already exists: `_str_build` ids are interned offsets `< heapBase`,
+   `_str_fresh` ids are the counter `>= heapBase` (`.kb/wasm-gc-strings.md`), so
+   "was this string built at run time" is an `i32.lt_u`.
+
+## Not done
+
+Nothing of the above is implemented. The three programs still answer as the
+table at the top of this file says, and the two
+`compileDisplacedStringViewOverAnImmutableStringPromotesOnWrite` tests still
+pin the promote-on-write behavior; they are still the tests to rewrite when
+step 2 lands.
