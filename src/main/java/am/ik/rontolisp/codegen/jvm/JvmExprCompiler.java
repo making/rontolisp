@@ -24,6 +24,7 @@ import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.StreamDesignators;
 
 import am.ik.jvm.Opcode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles Lisp expressions to JVM bytecode. Serves as the entry point and dispatcher,
@@ -59,15 +60,28 @@ final class JvmExprCompiler {
 	 * @param className the class being generated
 	 */
 	static void compileForEffect(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
-		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol head && LispNames.SETQ.equals(head.name())
-				&& JvmSetqCompiler.compileForEffect(cons, ctx, className)) {
+		if (compileStatementSetq(expr, ctx, className)) {
 			return;
 		}
 		compileExpr(expr, ctx, className);
 		ctx.emit(Opcode.POP);
 	}
 
+	/**
+	 * {@return true when the form was an assignment that stored and stopped there} The
+	 * statement half of {@link #compileForEffect}, split out so the tail-spine driver
+	 * ({@link JvmBodyOutliner}) can take it before falling back to "value, then pop".
+	 */
+	static boolean compileStatementSetq(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
+		return expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.SETQ.equals(head.name()) && JvmSetqCompiler.compileForEffect(cons, ctx, className);
+	}
+
 	static void compileExpr(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
+		// The tail spine (JvmBodyOutliner) reaches exactly one form at a time: it is
+		// handed over here and taken away again, so a nested form never inherits it.
+		JvmBodyOutliner.@Nullable Tail tail = ctx.tailBody;
+		ctx.tailBody = null;
 		switch (expr) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
 			case LispBigInteger b -> JvmEmitHelper.compileBigInteger(b.value(), ctx);
@@ -85,7 +99,10 @@ final class JvmExprCompiler {
 					compileSymbolRef(sym, ctx);
 				}
 			}
-			case LispCons cons -> compileCons(cons, ctx, className);
+			case LispCons cons -> {
+				ctx.tailBody = tail;
+				compileCons(cons, ctx, className);
+			}
 			case am.ik.rontolisp.LispArray array -> JvmQuoteCompiler.compileLiteralArray(array, ctx, className);
 			// An instance is self-evaluating (CLHS 3.1.2.1.3: neither a symbol nor a
 			// cons), so a #S(...) literal in code position builds the same
@@ -221,6 +238,8 @@ final class JvmExprCompiler {
 	}
 
 	private static void compileConsLocated(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmBodyOutliner.@Nullable Tail tail = ctx.tailBody;
+		ctx.tailBody = null;
 		LispVal head = cons.car();
 		// A dotted tail is only meaningful as data (inside quote); in call position it
 		// would otherwise be silently dropped by the toList() walks below.
@@ -882,7 +901,7 @@ final class JvmExprCompiler {
 					JvmEmitHelper.compileUnspelledLiteral(((LispSymbol) ((LispCons) cons.cdr()).car()).name(), ctx);
 				case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);
 				case LispNames.WHILE -> JvmWhileCompiler.compile(cons, ctx, className);
-				case LispNames.LET -> JvmLetCompiler.compile(cons, ctx, className);
+				case LispNames.LET -> JvmLetCompiler.compile(cons, ctx, className, tail);
 				case LispNames.PROGV ->
 					// The symbols are runtime-computed, but the candidate SPECIALS are
 					// static: lower to a loop dispatching each name over that set, with
@@ -896,7 +915,7 @@ final class JvmExprCompiler {
 				case LispNames.PROGV_GENV -> JvmProgvCompiler.compileGenvRead(ctx, className);
 				case LispNames.PROGV_GENV_SET -> JvmProgvCompiler.compileGenvWrite(cons, ctx, className);
 				case LispNames.SYMBOL_VALUE_RAW -> JvmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx, className);
-				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className);
+				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className, tail);
 				case LispNames.TAGBODY -> JvmTagbodyCompiler.compile(cons, ctx, className);
 				case LispNames.GO -> JvmGoCompiler.compile(cons, ctx, className);
 				case LispNames.PRINT_UNREADABLE_OBJECT ->
@@ -958,8 +977,12 @@ final class JvmExprCompiler {
 				case LispNames.PUSH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx, className);
 				case LispNames.POP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx, className);
 				case LispNames.REMF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx, className);
-				case LispNames.LET_STAR ->
+				case LispNames.LET_STAR -> {
+					// A pass-through lowering: the expansion sits where this form sat, so
+					// it inherits the tail spine (JvmBodyOutliner).
+					ctx.tailBody = tail;
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLetStar(cons), ctx, className);
+				}
 				case LispNames.DOLIST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx, className);
 				case LispNames.DO -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx, className);
@@ -1526,15 +1549,28 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx, className);
 				case LispNames.WITH_COMPILATION_UNIT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithCompilationUnit(cons), ctx, className);
-				case LispNames.LOCALLY ->
+				case LispNames.LOCALLY -> {
+					// A pass-through lowering: the expansion sits where this form sat, so
+					// it inherits the tail spine (JvmBodyOutliner).
+					ctx.tailBody = tail;
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx, className);
+				}
 				case LispNames.WITH_STANDARD_IO_SYNTAX ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx, className);
 				case LispNames.WRITE_CHAR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx, className);
-				case LispNames.FLET -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx, className);
-				case LispNames.LABELS ->
+				case LispNames.FLET -> {
+					// A pass-through lowering: the expansion sits where this form sat, so
+					// it inherits the tail spine (JvmBodyOutliner).
+					ctx.tailBody = tail;
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx, className);
+				}
+				case LispNames.LABELS -> {
+					// A pass-through lowering: the expansion sits where this form sat, so
+					// it inherits the tail spine (JvmBodyOutliner).
+					ctx.tailBody = tail;
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx, className);
+				}
 				case LispNames.VALUES ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx, className);
 				case LispNames.MULTIPLE_VALUE_BIND ->

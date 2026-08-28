@@ -412,9 +412,10 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildDiv(nDiv, dBinary, rRatNum, rRatDen, rRat, biMul, doubleClass, rDbl, numberClass,
 				numDoubleValue, doubleValueOf));
 		methods.add(buildMod(nMod, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, floorModLong,
-				biSignum, biAdd, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, rFmod));
+				biSignum, biAdd, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, rFmod, ratArrClass,
+				rRatNum, rRatDen, rRat, biMul));
 		methods.add(buildRem(nRem, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, doubleClass, rDbl,
-				numberClass, numDoubleValue, doubleValueOf));
+				numberClass, numDoubleValue, doubleValueOf, ratArrClass, rRatNum, rRatDen, rRat, biMul));
 		methods.add(buildFmod(nFmod, dFmod));
 		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
 				doubleClass, rDbl, numberClass, numDoubleValue));
@@ -814,13 +815,16 @@ final class JvmNumericRuntimeBuilder {
 			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
 			MethodrefConstant biRem, MethodrefConstant floorModLong, MethodrefConstant biSignum,
 			MethodrefConstant biAdd, ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant rFmod) {
+			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant rFmod,
+			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat,
+			MethodrefConstant biMul) {
 		List<Integer> c = new ArrayList<>();
 		// A float operand takes CL's divisor-signed float modulo, the same _fmod the
 		// double-literal emission calls -- without this arm a Double reaching the
 		// generic helper (a fused site's bail, an argument the emitter could not see
 		// the type of) fell through to _big and died casting Double to BigInteger.
 		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, Opcode.DREM, rFmod);
+		int[] ratJumps = emitRatioGuard(c, ratArrClass);
 		int[] slowJumps = emitLongLongGuard(c, longClass);
 		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
 		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
@@ -847,41 +851,20 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, biRem.index());
 		c.add(Opcode.ASTORE);
 		c.add(4);
-		// if (r.signum() == 0) goto done
-		c.add(Opcode.ALOAD);
-		c.add(4);
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, biSignum.index());
-		int ifZero = c.size();
-		c.add(Opcode.IFEQ);
-		JvmRuntimeBuilder.emitU2(c, 0);
-		// if (r.signum() == B.signum()) goto done
-		c.add(Opcode.ALOAD);
-		c.add(4);
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, biSignum.index());
-		c.add(Opcode.ALOAD_3);
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, biSignum.index());
-		int ifSameSign = c.size();
-		c.add(Opcode.IF_ICMPEQ);
-		JvmRuntimeBuilder.emitU2(c, 0);
-		// r = r.add(B)
-		c.add(Opcode.ALOAD);
-		c.add(4);
-		c.add(Opcode.ALOAD_3);
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, biAdd.index());
-		c.add(Opcode.ASTORE);
-		c.add(4);
-		int done = c.size();
-		JvmRuntimeBuilder.patchBranch(c, ifZero, done);
-		JvmRuntimeBuilder.patchBranch(c, ifSameSign, done);
+		emitDivisorSignCorrection(c, biSignum, biAdd);
 		c.add(Opcode.ALOAD);
 		c.add(4);
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rNorm.index());
 		c.add(Opcode.ARETURN);
+		int rat = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ratJumps[0], rat);
+		JvmRuntimeBuilder.patchBranch(c, ratJumps[1], rat);
+		emitRatioRemainderPrefix(c, rRatNum, rRatDen, biMul, biRem);
+		emitDivisorSignCorrection(c, biSignum, biAdd);
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		emitRatioRemainderDenominator(c, rRatDen, biMul, rRat);
 		return new NumericMethod(name, desc, c, 4, 5, List.of());
 	}
 
@@ -890,12 +873,14 @@ final class JvmNumericRuntimeBuilder {
 	private static NumericMethod buildRem(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
 			MethodrefConstant biRem, ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf) {
+			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, ClassConstant ratArrClass,
+			MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biMul) {
 		List<Integer> c = new ArrayList<>();
 		// A float operand keeps the dividend's sign -- Java's DREM, which is what the
 		// double-literal emission of (rem ...) already emits (see buildMod for why the
 		// arm has to exist here too).
 		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, Opcode.DREM);
+		int[] ratJumps = emitRatioGuard(c, ratArrClass);
 		int[] slowJumps = emitLongLongGuard(c, longClass);
 		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
 		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
@@ -907,7 +892,14 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, slowJumps[0], slow);
 		JvmRuntimeBuilder.patchBranch(c, slowJumps[1], slow);
 		emitBigBinary(c, rBig, biRem, rNorm);
-		return new NumericMethod(name, desc, c, 4, 2, List.of());
+		int rat = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ratJumps[0], rat);
+		JvmRuntimeBuilder.patchBranch(c, ratJumps[1], rat);
+		emitRatioRemainderPrefix(c, rRatNum, rRatDen, biMul, biRem);
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		emitRatioRemainderDenominator(c, rRatDen, biMul, rRat);
+		return new NumericMethod(name, desc, c, 4, 5, List.of());
 	}
 
 	// _fmod(double a, double b): floating-point modulo whose result takes the sign of the
@@ -2580,6 +2572,96 @@ final class JvmNumericRuntimeBuilder {
 			c.add(Opcode.INVOKEVIRTUAL);
 			JvmRuntimeBuilder.emitU2(c, biMul.index());
 		}
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRatDen.index());
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRatDen.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biMul.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRat.index());
+		c.add(Opcode.ARETURN);
+	}
+
+	// Corrects the remainder in local 4 to the sign of the divisor in local 3, which is
+	// what turns a remainder into CL's mod: when the remainder is non-zero and its sign
+	// differs from the divisor's, the divisor is added. Shared by _mod's BigInteger and
+	// rational paths.
+	private static void emitDivisorSignCorrection(List<Integer> c, MethodrefConstant biSignum,
+			MethodrefConstant biAdd) {
+		// if (r.signum() == 0) goto done
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifZero = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// if (r.signum() == B.signum()) goto done
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifSameSign = c.size();
+		c.add(Opcode.IF_ICMPEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// r = r.add(B)
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biAdd.index());
+		c.add(Opcode.ASTORE);
+		c.add(4);
+		int done = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifZero, done);
+		JvmRuntimeBuilder.patchBranch(c, ifSameSign, done);
+	}
+
+	// Emits the head of _mod/_rem's rational path. With a = an/ad and b = bn/bd the
+	// quotient a/b is (an*bd)/(ad*bn), so the integer remainder of THAT division, read
+	// over the common denominator ad*bd, is the answer -- the same computation the
+	// integer path does, one level up. Leaves the quotient's denominator (which carries
+	// the divisor's sign, denominators being positive) in local 3 and the remainder in
+	// local 4, the same slots the BigInteger path uses, so _mod's sign correction is
+	// shared.
+	private static void emitRatioRemainderPrefix(List<Integer> c, MethodrefConstant rRatNum, MethodrefConstant rRatDen,
+			MethodrefConstant biMul, MethodrefConstant biRem) {
+		// BigInteger d = _ratden(a).multiply(_ratnum(b));
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRatDen.index());
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRatNum.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biMul.index());
+		c.add(Opcode.ASTORE_3);
+		// BigInteger r = _ratnum(a).multiply(_ratden(b)).remainder(d);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRatNum.index());
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRatDen.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biMul.index());
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biRem.index());
+		c.add(Opcode.ASTORE);
+		c.add(4);
+	}
+
+	// Emits the tail of _mod/_rem's rational path: consumes the numerator on the stack,
+	// pushes the common denominator ad*bd, and returns the normalized _rat.
+	private static void emitRatioRemainderDenominator(List<Integer> c, MethodrefConstant rRatDen,
+			MethodrefConstant biMul, MethodrefConstant rRat) {
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rRatDen.index());

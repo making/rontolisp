@@ -1553,6 +1553,26 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndInvoke(ints, "irem", "-7", "3")).isEqualTo("-1");
 		assertThat(compileAndInvoke(ints, "imod", "7", "-3")).isEqualTo("-2");
 		assertThat(compileAndInvoke(ints, "irem", "7", "-3")).isEqualTo("1");
+
+		// A RATIO operand takes the same a - b*(floor|trunc)(a/b) shape through the
+		// exact rational helpers. This half was already right; it is pinned here
+		// because the interpreter and the JVM had to be brought up to it
+		// (ci-spec case ratio-mod-rem).
+		assertThat(compileAndRun("""
+				(let ((r 7/2))
+				  (print (mod r 3))
+				  (print (rem r 3))
+				  (print (mod (- 0 r) 3))
+				  (print (rem (- 0 r) 3))
+				  (print (mod 5 3/4))
+				  (print (mod r 1/2)))
+				""")).isEqualTo("""
+				1/2
+				1/2
+				5/2
+				-1/2
+				1/2
+				0""");
 	}
 
 	// Compiles in --no-wasi (reactor) mode -- the module has no wasi_snapshot_preview1

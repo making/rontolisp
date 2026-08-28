@@ -289,6 +289,28 @@ class LispEvaluatorTest {
 		assertThat(eval("(rem -13 -4)")).isEqualTo(new LispInteger(-1));
 	}
 
+	// ANSI defines mod/rem over any REAL, so a ratio operand answers a rational -- the
+	// same values every compile backend answers (ci-spec case ratio-mod-rem).
+	@Test
+	void evalModAndRemOfRatio() {
+		LispRatio half = new LispRatio(BigInteger.ONE, BigInteger.TWO);
+		assertThat(eval("(mod 7/2 3)")).isEqualTo(half);
+		assertThat(eval("(rem 7/2 3)")).isEqualTo(half);
+		assertThat(eval("(mod -7/2 3)")).isEqualTo(new LispRatio(BigInteger.valueOf(5), BigInteger.TWO));
+		assertThat(eval("(rem -7/2 3)")).isEqualTo(new LispRatio(BigInteger.valueOf(-1), BigInteger.TWO));
+		assertThat(eval("(mod 7/2 -3)")).isEqualTo(new LispRatio(BigInteger.valueOf(-5), BigInteger.TWO));
+		assertThat(eval("(rem 7/2 -3)")).isEqualTo(half);
+		assertThat(eval("(mod 5 3/4)")).isEqualTo(half);
+		assertThat(eval("(rem 5 3/4)")).isEqualTo(half);
+		assertThat(eval("(mod -7/3 -2/5)")).isEqualTo(new LispRatio(BigInteger.valueOf(-1), BigInteger.valueOf(3)));
+		assertThat(eval("(rem -7/3 -2/5)")).isEqualTo(new LispRatio(BigInteger.valueOf(-1), BigInteger.valueOf(3)));
+		// An exact division demotes to an integer, as every other rational answer does.
+		assertThat(eval("(mod 7/2 1/2)")).isEqualTo(new LispInteger(0));
+		assertThat(eval("(rem 22/7 22/7)")).isEqualTo(new LispInteger(0));
+		assertThatThrownBy(() -> eval("(mod 7/2 0)")).hasMessageContaining("Division by zero");
+		assertThatThrownBy(() -> eval("(rem 7/2 0)")).hasMessageContaining("Division by zero");
+	}
+
 	@Test
 	void evalVariadicComparison() {
 		assertThat(eval("(< 1 2 3 4)")).isEqualTo(LispTrue.INSTANCE);
