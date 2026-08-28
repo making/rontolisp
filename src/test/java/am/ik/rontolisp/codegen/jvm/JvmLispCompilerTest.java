@@ -2668,6 +2668,79 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations() throws Exception {
+		// A defun body that would compile past HotSpot's 8000-bytecode HugeMethodLimit
+		// is split into _k$N tail continuations (.kb/hot-path-method-size.md). The
+		// program pins what the split has to preserve, all of it ACROSS the boundary:
+		// the running values of the let variables (they travel as the continuation's
+		// arguments), a closure built BEFORE the split reading variables mutated AFTER
+		// it (a captured variable travels as its cell, not its value), and a special
+		// binding established on the spine whose restore is emitted in the caller, past
+		// the continuation's return.
+		int rounds = 400;
+		StringBuilder sb = new StringBuilder("""
+				(defvar *depth* 0)
+				(defun spine (n)
+				  (let ((a 0) (b 1) (peek nil))
+				    (setq peek (lambda () (+ (* 1000 a) b)))
+				    (let ((*depth* (+ n 100)))
+				      (setq a (+ a *depth*))
+				""");
+		long a = 107;
+		long b = 1;
+		for (int k = 1; k <= rounds; k++) {
+			sb.append("      (setq a (+ a ").append(k).append("))\n");
+			sb.append("      (setq b (logxor b (car (list ").append(k).append(" 0))))\n");
+			a += k;
+			b ^= k;
+		}
+		sb.append("""
+				      (list a b *depth* (funcall peek)))))
+				(print (spine 7))
+				(print *depth*)
+				""");
+		String program = sb.toString();
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(program));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes).as("the split actually happened").containsKey("_k$0");
+		assertThat(sizes.get("SPINE")).as("the body kept the callable half under the cliff").isLessThan(8000);
+		assertThat(sizes.get("_k$0")).isLessThan(8000);
+		assertThat(compileAndRun(forms)).isEqualTo("(" + a + " " + b + " 107 " + (1000 * a + b) + ")\n0");
+	}
+
+	@Test
+	void aSplitFunctionBodyCarriesItsUnboxedLocalsAcross() throws Exception {
+		// The other representation a live local can have at a split point: an unboxed
+		// dual-representation local (.kb/jvm-int-fusion.md), whose raw slot has no
+		// parameter to travel in. It crosses boxed and lands in the continuation as an
+		// ordinary local, so its value -- and every later assignment to it -- has to
+		// come out the same. The padding forms allocate rather than assign, so the
+		// let body stays under the raw-local assignment-site caps while its bytecode
+		// crosses the budget.
+		StringBuilder sb = new StringBuilder("""
+				(defun counted (n)
+				  (let ((c n))
+				""");
+		for (int k = 1; k <= 90; k++) {
+			sb.append("    (nth 3 (list n 2 ").append(k).append(" 4 5 6 7 8 9 10 n 12 13 14 15 16))\n");
+			if (k % 10 == 0) {
+				sb.append("    (setq c (+ c ").append(k).append("))\n");
+			}
+		}
+		sb.append("""
+				    c))
+				(print (counted 5))
+				""");
+		// 10 + 20 + ... + 90 = 450, plus the initial 5.
+		assertThat(compileAndRun(sb.toString())).isEqualTo("455");
+	}
+
+	@Test
 	void compileAndRunNestedFreeSetqSurvivesTopLevelSplit() throws Exception {
 		// A variable assigned by a setq nested inside a top-level form (never a direct
 		// top-level setq) is, per Common Lisp, a global. It must get a persistent backing
