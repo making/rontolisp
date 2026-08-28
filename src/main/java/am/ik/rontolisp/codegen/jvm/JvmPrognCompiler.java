@@ -21,12 +21,10 @@ final class JvmPrognCompiler {
 			ctx.emit(Opcode.ACONST_NULL);
 			return;
 		}
-		for (int i = 1; i < parts.size(); i++) {
-			if (i > 1) {
-				ctx.emit(Opcode.POP);
-			}
-			JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
+		for (int i = 1; i < parts.size() - 1; i++) {
+			JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);
 		}
+		JvmExprCompiler.compileExpr(parts.get(parts.size() - 1), ctx, className);
 	}
 
 }

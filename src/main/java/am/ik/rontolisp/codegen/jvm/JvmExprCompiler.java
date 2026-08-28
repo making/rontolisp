@@ -49,6 +49,24 @@ final class JvmExprCompiler {
 		compileExpr(hooked, ctx, className);
 	}
 
+	/**
+	 * Compiles a form in STATEMENT position -- a body form that is not the body's last, a
+	 * tagbody form, a cleanup -- leaving nothing on the operand stack. The default is the
+	 * value emission plus a {@code pop}; a form that can skip pushing the value skips it
+	 * ({@link JvmSetqCompiler#compileForEffect}).
+	 * @param expr the form whose value is discarded
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 */
+	static void compileForEffect(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
+		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol head && LispNames.SETQ.equals(head.name())
+				&& JvmSetqCompiler.compileForEffect(cons, ctx, className)) {
+			return;
+		}
+		compileExpr(expr, ctx, className);
+		ctx.emit(Opcode.POP);
+	}
+
 	static void compileExpr(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
 		switch (expr) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);

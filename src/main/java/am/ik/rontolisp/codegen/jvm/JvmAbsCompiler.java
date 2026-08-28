@@ -16,14 +16,14 @@ final class JvmAbsCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (JvmLispCompiler.hasDoubleLiteral(args)) {
-			JvmEmitHelper.unboxDouble(ctx);
+			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.mathAbsDouble.index());
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.ABS).index());
 		}

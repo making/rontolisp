@@ -105,7 +105,10 @@ register-allocated `long`s inside.
   capture analyzer skips `defun` by design) and REASSIGNS the name an
   integer-shaped value (`rawBindingEligible`; an init-only binding boxes once
   either way, and admitting ironclad's functional round-temp chains nearly
-  doubled `update-sha512-block`) -- gets a raw `long` slot, a boxed shadow
+  doubled `update-sha512-block`), whose init is not float-contaminated and
+  whose assignment values are not either (a Double never fills the raw slot, so
+  the representation would be per-site dispatch plus `_ubRead` for nothing --
+  `.kb/jvm-double-arithmetic.md`) -- gets a raw `long` slot, a boxed shadow
   slot and an `int` flag slot instead of an ordinary local. The flag is
   non-zero while the raw slot is authoritative; cleared, the shadow is -- 
   INCLUDING when it holds nil (null cannot be the raw marker: a local
@@ -125,7 +128,10 @@ register-allocated `long`s inside.
   shared `_ubRead(Object, long, int)` helper. `dotimes`/`loop` counters and
   accumulators are this shape (the expansions are `let` + `while` + `setq`),
   which with fused compares makes a counted integer loop's head and step
-  allocation-free after JIT. Per-name and per-body assignment-site caps
+  allocation-free after JIT. An assignment in STATEMENT position stores and
+  stops there, instead of re-reading the value through `_ubRead` for the caller
+  to `pop` (`JvmSetqCompiler.compileForEffect`, reached from
+  `JvmExprCompiler.compileForEffect`). Per-name and per-body assignment-site caps
   (`MAX_RAW_ASSIGN_SITES`, `MAX_LET_BODY_ASSIGN_SITES`) keep generated
   straight-line code (fast-http state machines) from paying the per-site
   dispatch bytes thousands of times. A name in `Ctx.rawLocals` is never in
@@ -145,7 +151,10 @@ register-allocated `long`s inside.
 - A node `JvmLispCompiler.hasDoubleLiteral` claims (the recursive
   double-literal routing predicate the per-op compilers read): it keeps the
   unboxed-double path, as a leaf here. An immediate `BigInteger`/ratio literal
-  likewise leaves the node to the generic compiler.
+  likewise leaves the node to the generic compiler. A tree the classifier DOES
+  take, over leaves that turn out to be `Double`s, no longer bails to the
+  generic path: the method carries a second, all-Double fast path where the
+  `Long` guards jump (`.kb/jvm-double-arithmetic.md`).
 - More than 64 ops or 32 leaves (the method carries the tree twice).
 - Division (`/`) is never fused (exact ratios); a comparison over two plain
   leaves stays generic.

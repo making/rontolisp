@@ -81,8 +81,7 @@ final class JvmTagbodyCompiler {
 				pending.clear();
 			}
 			else {
-				JvmExprCompiler.compileExpr(part, ctx, className);
-				ctx.emit(Opcode.POP);
+				JvmExprCompiler.compileForEffect(part, ctx, className);
 			}
 		}
 		ctx.tagbodyScopes.pop();

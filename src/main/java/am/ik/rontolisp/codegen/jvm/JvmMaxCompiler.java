@@ -17,10 +17,8 @@ final class JvmMaxCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		if (JvmLispCompiler.hasDoubleLiteral(args)) {
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			JvmEmitHelper.unboxDouble(ctx);
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			JvmEmitHelper.unboxDouble(ctx);
+			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
+			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.mathMaxDouble.index());
 			JvmEmitHelper.boxDouble(ctx);

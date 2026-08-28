@@ -13181,6 +13181,100 @@ class JvmLispCompilerTest {
 	 * zero-divisor error shape, 1+/1- normalization, a literal ldb, and a loop head's
 	 * fused compare).
 	 */
+	private static final String DOUBLE_ARITH_PROGRAM = """
+			(let ((x 3.0d0) (y 2.0d0) (z 1.0d0))
+			  (print (+ (* 2.0d0 x y) z))
+			  (print (- (/ 1.0d0 x) y))
+			  (print (- (* x y) z))
+			  (print (+ (- x y) z))
+			  (print (> (+ (* x x) (* y y)) 4.0d0))
+			  (print (< (+ (* x x) (* y y)) 4.0d0)))
+			(print (* 3 1.5d0))
+			(print (+ 1/2 1.0d0))
+			(print (- 0.0d0))
+			(print (+ -0.0d0 0.0d0))
+			(let ((nan (/ 0.0d0 0.0d0)))
+			  (print (list (> nan 4.0d0) (< nan 4.0d0) (= nan nan) (>= nan nan))))
+			(let ((a 5) (b 2) (c 1.5d0))
+			  (print (+ (- a b) c)))
+			(let ((big 100000000000000000000) (f 1.0d0))
+			  (print (+ (* big 2) 1))
+			  (print (+ big f)))
+			(let ((z 0.0d0))
+			  (dotimes (i 3) (setq z (+ z 1.5d0)))
+			  (print z))
+			(let ((n 0))
+			  (dotimes (i 5) (setq n (+ n i)))
+			  (print n))
+			(let ((a 0) (b 0))
+			  (dotimes (i 3) (setq a (+ a 1) b (+ b 2)))
+			  (print (list a b)))
+			(let ((q 0))
+			  (print (progn (setq q 1) (setq q 2)))
+			  (print q))
+			(print (max 1.5d0 (+ 1 1.0d0)))
+			(print (min 1.5d0 (* 2 1.0d0)))
+			(print (abs (- 0.0d0 2.5d0)))
+			(print (sqrt (* 2.0d0 8.0d0)))
+			(print (expt (+ 1.0d0 1.0d0) 10))
+			(let ((a 7.5d0) (b -7.5d0))
+			  (print (mod a 2))
+			  (print (mod b 2))
+			  (print (rem a 2))
+			  (print (rem b 2)))
+			(print (mod (+ 7.0d0 0.0d0) 3))
+			(print (rem -7.5d0 2))
+			""";
+
+	private static final String DOUBLE_ARITH_EXPECTED = """
+			13.0
+			-1.6666666666666667
+			5.0
+			2.0
+			T
+			NIL
+			4.5
+			1.5
+			-0.0
+			0.0
+			(NIL NIL NIL NIL)
+			4.5
+			200000000000000000001
+			1.0e20
+			4.5
+			10
+			(3 6)
+			2
+			2
+			2.0
+			1.5
+			2.5
+			4.0
+			1024.0
+			1.5
+			0.5
+			1.5
+			-1.5
+			1.0
+			-1.5""";
+
+	@Test
+	void doubleArithmeticMatchesTheInterpreterOnBothOptimizeLevels() throws Exception {
+		// The double-literal path emits raw IEEE arithmetic and the fused methods carry
+		// an all-Double fast path beside the all-Long one; both are optimizations whose
+		// fallback is the generic helper, so every shape here must answer exactly what
+		// the interpreter and the wasm backends answer -- literal widening, -0.0, the
+		// NaN comparison rule, a mixed Long/Double tree that BAILS off both fast paths,
+		// a bignum leaf, and mod/rem over floats (the generic helpers' own double
+		// branch, which the fused fallback lands in).
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(DOUBLE_ARITH_PROGRAM));
+		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(runClass(fast)).isEqualTo(DOUBLE_ARITH_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(DOUBLE_ARITH_EXPECTED);
+	}
+
 	private static final String INT_FUSION_PROGRAM = """
 			(defun mod32+ (a b) (logand (+ a b) 4294967295))
 			(defun rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))

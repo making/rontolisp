@@ -81,9 +81,8 @@ final class JvmMathFnCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String name) {
 		List<LispVal> args = cons.toList();
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// Number.doubleValue() coerces both Long and Double arguments to double.
-		JvmEmitHelper.unboxDouble(ctx);
+		JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ctx.mathOp(name).index());
 		JvmEmitHelper.boxDouble(ctx);

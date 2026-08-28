@@ -412,8 +412,9 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildDiv(nDiv, dBinary, rRatNum, rRatDen, rRat, biMul, doubleClass, rDbl, numberClass,
 				numDoubleValue, doubleValueOf));
 		methods.add(buildMod(nMod, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, floorModLong,
-				biSignum, biAdd));
-		methods.add(buildRem(nRem, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem));
+				biSignum, biAdd, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, rFmod));
+		methods.add(buildRem(nRem, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, doubleClass, rDbl,
+				numberClass, numDoubleValue, doubleValueOf));
 		methods.add(buildFmod(nFmod, dFmod));
 		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
 				doubleClass, rDbl, numberClass, numDoubleValue));
@@ -427,8 +428,8 @@ final class JvmNumericRuntimeBuilder {
 				longValueOf, tlrCurrent, tlrNextDouble));
 		methods.add(buildSelect(nMin, dBinary, rCmp, Opcode.IFGT));
 		methods.add(buildSelect(nMax, dBinary, rCmp, Opcode.IFLT));
-		methods.add(buildDbl(nDbl, dUnary, ratArrClass, numberClass, bigDecClass, bdInit, bdDivide, bdDoubleValue,
-				mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen));
+		methods.add(buildDbl(nDbl, dUnary, ratArrClass, doubleClass, numberClass, bigDecClass, bdInit, bdDivide,
+				bdDoubleValue, mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
 				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl));
 		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, objEquals, strvMethod));
@@ -812,8 +813,14 @@ final class JvmNumericRuntimeBuilder {
 	private static NumericMethod buildMod(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
 			MethodrefConstant biRem, MethodrefConstant floorModLong, MethodrefConstant biSignum,
-			MethodrefConstant biAdd) {
+			MethodrefConstant biAdd, ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
+			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant rFmod) {
 		List<Integer> c = new ArrayList<>();
+		// A float operand takes CL's divisor-signed float modulo, the same _fmod the
+		// double-literal emission calls -- without this arm a Double reaching the
+		// generic helper (a fused site's bail, an argument the emitter could not see
+		// the type of) fell through to _big and died casting Double to BigInteger.
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, Opcode.DREM, rFmod);
 		int[] slowJumps = emitLongLongGuard(c, longClass);
 		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
 		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
@@ -882,8 +889,13 @@ final class JvmNumericRuntimeBuilder {
 	// (Java/BigInteger remainder). Long fast path, BigInteger.remainder otherwise.
 	private static NumericMethod buildRem(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
-			MethodrefConstant biRem) {
+			MethodrefConstant biRem, ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
+			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf) {
 		List<Integer> c = new ArrayList<>();
+		// A float operand keeps the dividend's sign -- Java's DREM, which is what the
+		// double-literal emission of (rem ...) already emits (see buildMod for why the
+		// arm has to exist here too).
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, Opcode.DREM);
 		int[] slowJumps = emitLongLongGuard(c, longClass);
 		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
 		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
@@ -1247,11 +1259,27 @@ final class JvmNumericRuntimeBuilder {
 	// _dbl(Object x): boxed Double for any numeric value. A ratio divides numerator by
 	// denominator via BigDecimal so huge components do not overflow to infinity first;
 	// Long/BigInteger/Double go through Number.doubleValue().
+	//
+	// A value that is ALREADY a Double is answered as-is rather than re-boxed. Every
+	// caller (JvmEmitHelper.unboxDouble and the double branch of every helper below)
+	// unboxes the result immediately, so the identity of the box is unobservable -- and
+	// the re-box was an allocation on the hot path of every float program, one per
+	// operand of every double-path operation.
 	private static NumericMethod buildDbl(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			ClassConstant numberClass, ClassConstant bigDecClass, MethodrefConstant bdInit, MethodrefConstant bdDivide,
-			MethodrefConstant bdDoubleValue, FieldrefConstant mcDecimal64, MethodrefConstant doubleValueOf,
-			MethodrefConstant numDoubleValue, MethodrefConstant rRatNum, MethodrefConstant rRatDen) {
+			ClassConstant doubleClass, ClassConstant numberClass, ClassConstant bigDecClass, MethodrefConstant bdInit,
+			MethodrefConstant bdDivide, MethodrefConstant bdDoubleValue, FieldrefConstant mcDecimal64,
+			MethodrefConstant doubleValueOf, MethodrefConstant numDoubleValue, MethodrefConstant rRatNum,
+			MethodrefConstant rRatDen) {
 		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotDouble, c.size());
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
 		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
@@ -2421,6 +2449,14 @@ final class JvmNumericRuntimeBuilder {
 	private static void emitDoubleBinaryPrologue(List<Integer> c, ClassConstant doubleClass, MethodrefConstant rDbl,
 			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
 			int doubleOpcode) {
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, doubleOpcode, null);
+	}
+
+	// The same, with an optional (DD)D HELPER standing in for the single opcode -- what
+	// _mod needs, whose float case is CL's divisor-signed modulo (_fmod), not DREM.
+	private static void emitDoubleBinaryPrologue(List<Integer> c, ClassConstant doubleClass, MethodrefConstant rDbl,
+			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
+			int doubleOpcode, @Nullable MethodrefConstant doubleHelper) {
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
 		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
@@ -2436,7 +2472,13 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, ifADouble, c.size());
 		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
 		emitToDouble(c, Opcode.ALOAD_1, rDbl, numberClass, numDoubleValue);
-		c.add(doubleOpcode);
+		if (doubleHelper != null) {
+			c.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(c, doubleHelper.index());
+		}
+		else {
+			c.add(doubleOpcode);
+		}
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
 		c.add(Opcode.ARETURN);

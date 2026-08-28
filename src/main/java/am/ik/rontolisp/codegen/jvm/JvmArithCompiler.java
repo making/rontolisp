@@ -3,6 +3,10 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
@@ -19,40 +23,8 @@ final class JvmArithCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode, String className) {
 		List<LispVal> args = cons.toList();
 		boolean unaryDiv = JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2;
-		boolean isMod = JvmNumericRuntimeBuilder.MOD.equals(opKey);
 		if (JvmLispCompiler.hasDoubleLiteral(args)) {
-			// Unary (/ x) is the reciprocal: 1.0 / x.
-			if (unaryDiv) {
-				ctx.emit(Opcode.DCONST_1);
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-				JvmEmitHelper.unboxDouble(ctx);
-				ctx.emit(doubleOpcode);
-				JvmEmitHelper.boxDouble(ctx);
-				return;
-			}
-			// Unary (- x) is IEEE negation: DNEG. (Falling through to the loop below
-			// would return x unchanged, and 0 - x would turn -0.0 into +0.0.)
-			if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
-				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-				JvmEmitHelper.unboxDouble(ctx);
-				ctx.emit(Opcode.DNEG);
-				JvmEmitHelper.boxDouble(ctx);
-				return;
-			}
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			JvmEmitHelper.unboxDouble(ctx);
-			for (int i = 2; i < args.size(); i++) {
-				JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-				JvmEmitHelper.unboxDouble(ctx);
-				if (isMod) {
-					// Common Lisp float modulo (sign of the divisor), not Java's DREM.
-					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FMOD).index());
-				}
-				else {
-					ctx.emit(doubleOpcode);
-				}
-			}
+			compileUnboxed(args, ctx, opKey, doubleOpcode, className);
 			JvmEmitHelper.boxDouble(ctx);
 			return;
 		}
@@ -77,6 +49,93 @@ final class JvmArithCompiler {
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.numOp(opKey).index());
 		}
+	}
+
+	/**
+	 * The double-literal path, leaving a RAW {@code double} on the stack: the operands
+	 * unbox once, the left fold runs as IEEE machine arithmetic, and only the caller
+	 * boxes. Split out so a nested operand that is itself on this path
+	 * ({@link #compileUnboxedOperand}) folds straight into the same expression instead of
+	 * boxing at every interior node.
+	 */
+	private static void compileUnboxed(List<LispVal> args, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode,
+			String className) {
+		boolean isMod = JvmNumericRuntimeBuilder.MOD.equals(opKey);
+		// Unary (/ x) is the reciprocal: 1.0 / x.
+		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2) {
+			ctx.emit(Opcode.DCONST_1);
+			compileUnboxedOperand(args.get(1), ctx, className);
+			ctx.emit(doubleOpcode);
+			return;
+		}
+		// Unary (- x) is IEEE negation: DNEG. (Falling through to the loop below
+		// would return x unchanged, and 0 - x would turn -0.0 into +0.0.)
+		if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
+			compileUnboxedOperand(args.get(1), ctx, className);
+			ctx.emit(Opcode.DNEG);
+			return;
+		}
+		compileUnboxedOperand(args.get(1), ctx, className);
+		for (int i = 2; i < args.size(); i++) {
+			compileUnboxedOperand(args.get(i), ctx, className);
+			if (isMod) {
+				// Common Lisp float modulo (sign of the divisor), not Java's DREM.
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FMOD).index());
+			}
+			else {
+				ctx.emit(doubleOpcode);
+			}
+		}
+	}
+
+	/**
+	 * One operand of a double-literal operation, as a raw {@code double}. A numeric
+	 * literal pushes its constant directly ({@code _dbl} of a {@code Long} is exactly the
+	 * widening this does), and an arithmetic operand that would ITSELF take the
+	 * double-literal path emits inline -- both are the same IEEE value the boxed emission
+	 * produced, without the {@code Double.valueOf} / {@code _dbl} round trip that stood
+	 * between every pair of interior nodes. Anything else compiles as an ordinary
+	 * expression and unboxes, which is what keeps ratios, bignums and error shapes
+	 * unchanged.
+	 */
+	static void compileUnboxedOperand(LispVal arg, JvmLispCompiler.Ctx ctx, String className) {
+		if (arg instanceof LispDouble d) {
+			JvmEmitHelper.emitRawDouble(d.value(), ctx);
+			return;
+		}
+		if (arg instanceof LispInteger i) {
+			JvmEmitHelper.emitRawDouble(i.value(), ctx);
+			return;
+		}
+		if (arg instanceof LispCons nested && nested.isProperList() && nested.car() instanceof LispSymbol head) {
+			// The heads JvmExprCompiler routes here, with the (helper, opcode) pair it
+			// routes them with -- so an inlined operand compiles to exactly what the
+			// boxed emission of the same node would have computed.
+			String opKey = switch (head.name()) {
+				case LispNames.ADD -> JvmNumericRuntimeBuilder.ADD;
+				case LispNames.SUB -> JvmNumericRuntimeBuilder.SUB;
+				case LispNames.MUL -> JvmNumericRuntimeBuilder.MUL;
+				case LispNames.DIV -> JvmNumericRuntimeBuilder.DIV;
+				case LispNames.MOD -> JvmNumericRuntimeBuilder.MOD;
+				case LispNames.REM -> JvmNumericRuntimeBuilder.REM;
+				default -> null;
+			};
+			List<LispVal> parts = nested.toList();
+			if (opKey != null && parts.size() >= 2 && JvmLispCompiler.hasDoubleLiteral(parts)) {
+				int doubleOpcode = switch (head.name()) {
+					case LispNames.ADD -> Opcode.DADD;
+					case LispNames.SUB -> Opcode.DSUB;
+					case LispNames.MUL -> Opcode.DMUL;
+					case LispNames.DIV -> Opcode.DDIV;
+					default -> Opcode.DREM;
+				};
+				compileUnboxed(parts, ctx, opKey, doubleOpcode, className);
+				return;
+			}
+		}
+		JvmExprCompiler.compileExpr(arg, ctx, className);
+		JvmEmitHelper.unboxDouble(ctx);
 	}
 
 }

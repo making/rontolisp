@@ -119,6 +119,38 @@ cases:
       DEMOTE-YES
       ORDER-YES
       515377520732011331036461129765621272702107522001
+  - name: double-arithmetic-unboxed-and-fused
+    source: |
+      (let ((dbl-x 3.0d0) (dbl-y 2.0d0) (dbl-z 1.0d0))
+        (print (+ (* 2.0d0 dbl-x dbl-y) dbl-z))
+        (print (- (* dbl-x dbl-y) dbl-z))
+        (print (+ (- dbl-x dbl-y) dbl-z))
+        (print (> (+ (* dbl-x dbl-x) (* dbl-y dbl-y)) 4.0d0)))
+      (print (* 3 1.5d0))
+      (print (+ 1/2 1.0d0))
+      (print (+ -0.0d0 0.0d0))
+      (let ((dbl-nan (/ 0.0d0 0.0d0)))
+        (print (list (> dbl-nan 4.0d0) (< dbl-nan 4.0d0) (= dbl-nan dbl-nan))))
+      (let ((dbl-a 5) (dbl-b 2) (dbl-c 1.5d0))
+        (print (+ (- dbl-a dbl-b) dbl-c)))
+      (let ((dbl-acc 0.0d0))
+        (dotimes (i 3) (setq dbl-acc (+ dbl-acc 1.5d0)))
+        (print dbl-acc))
+      (let ((dbl-p 7.5d0) (dbl-q -7.5d0))
+        (print (list (mod dbl-p 2) (mod dbl-q 2) (rem dbl-p 2) (rem dbl-q 2))))
+    expected: |
+      13.0
+      5.0
+      2.0
+      T
+      4.5
+      1.5
+      0.0
+      (NIL NIL NIL)
+      4.5
+      4.5
+      (1.5 0.5 1.5 -1.5)
+
   - name: fused-integer-expression-trees
     source: |
       (print (logand (+ 3 4) 5))

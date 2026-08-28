@@ -112,8 +112,7 @@ final class JvmUnwindProtectCompiler {
 			ctx.emit(spillSlot);
 		}
 		for (LispVal form : cleanups) {
-			JvmExprCompiler.compileExpr(form, ctx, className);
-			ctx.emit(Opcode.POP);
+			JvmExprCompiler.compileForEffect(form, ctx, className);
 		}
 		if (spillField != null) {
 			ctx.emit(Opcode.ALOAD);

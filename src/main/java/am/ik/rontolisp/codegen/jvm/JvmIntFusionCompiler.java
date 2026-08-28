@@ -112,6 +112,8 @@ final class JvmIntFusionCompiler {
 
 		int longSlot = -1;
 
+		int dblSlot = -1;
+
 		ExprLeaf(LispVal expr) {
 			this.expr = expr;
 		}
@@ -164,6 +166,8 @@ final class JvmIntFusionCompiler {
 		int flagParam = -1;
 
 		int longSlot = -1;
+
+		int dblSlot = -1;
 
 		RawLeaf(RawLocal src) {
 			this.src = src;
@@ -428,6 +432,13 @@ final class JvmIntFusionCompiler {
 		if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
 			return false;
 		}
+		if (cons.isProperList() && JvmLispCompiler.hasDoubleLiteral(cons.toList())) {
+			// Float-contaminated: the value can never land in the raw long slot, so the
+			// dual representation would pay its per-site dispatch to always take the
+			// shadow store -- and every read of the name would pay _ubRead for a value
+			// the raw slot never holds.
+			return false;
+		}
 		return switch (head.name()) {
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM, LispNames.LOGAND,
 					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.ONE_PLUS,
@@ -471,6 +482,12 @@ final class JvmIntFusionCompiler {
 	 */
 	static boolean rawBindingEligible(String name, LispVal init, List<LispVal> bodyForms, JvmLispCompiler.Ctx ctx) {
 		if (!enabled(ctx) || ctx.globals.contains(name)) {
+			return false;
+		}
+		if (JvmLispCompiler.containsDouble(init)) {
+			// A float initializer settles the representation: mandelbrot's (let ((zr
+			// 0.0d0)) ...) accumulators are Doubles for the whole loop, and a raw long
+			// slot they never fill only adds _ubRead to every read of them.
 			return false;
 		}
 		int[] rawShapedAndSites = new int[3];
@@ -1294,30 +1311,189 @@ final class JvmIntFusionCompiler {
 			emitFast(root.args().get(0), ctx, state);
 			emitFast(root.args().get(1), ctx, state);
 			ctx.emit(Opcode.LCMP);
-			int mask = pending.cmpMask();
-			int branchOpcode = switch (mask) {
-				case 0b010 -> Opcode.IFEQ;
-				case 0b001 -> Opcode.IFLT;
-				case 0b100 -> Opcode.IFGT;
-				case 0b011 -> Opcode.IFLE;
-				case 0b110 -> Opcode.IFGE;
-				default -> throw new IllegalStateException("unexpected compare mask: " + mask);
-			};
-			int isTrue = branch(ctx, branchOpcode);
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.IRETURN);
-			JvmEmitHelper.patchBranch(ctx, isTrue, ctx.code.size());
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.IRETURN);
-			emitBailAndFallback(pending, ctx, state, bails, tryStart, ctx.code.size(), className);
+			emitCompareResult(branchForMask(pending.cmpMask()), ctx);
 		}
 		else {
 			emitFast(pending.root(), ctx, state);
 			JvmEmitHelper.boxLong(ctx);
 			ctx.emit(Opcode.ARETURN);
-			int tryEnd = ctx.code.size();
-			emitBailAndFallback(pending, ctx, state, bails, tryStart, tryEnd, className);
 		}
+		int tryEnd = ctx.code.size();
+		// The IEEE double fast path: the same tree over leaves that are all Doubles,
+		// tried when the Long guards fail. It sits OUTSIDE the checked region -- an
+		// overflow means the exact integer result did not fit, which the fallback owns,
+		// not the doubles.
+		List<Integer> fallbackBails = bails;
+		if (doubleEligible(pending.root(), pending.leaves()) && ctx.nextLocal + 2 * pending.leaves().size() <= 250) {
+			int doubleEntry = ctx.code.size();
+			for (int pos : bails) {
+				JvmEmitHelper.patchBranch(ctx, pos, doubleEntry);
+			}
+			List<Integer> doubleBails = new ArrayList<>();
+			emitDoubleGuards(pending.leaves(), ctx, doubleBails);
+			if (pending.isCompare()) {
+				OpNode root = (OpNode) pending.root();
+				emitFastDouble(root.args().get(0), ctx);
+				emitFastDouble(root.args().get(1), ctx);
+				int branchOpcode = branchForMask(pending.cmpMask());
+				// javac's NaN rule, which is exactly the bitmask _cmpb answers: DCMPG
+				// for < and <= (unordered falls out as +1, failing IFLT/IFLE), DCMPL
+				// for the rest (unordered falls out as -1, failing IFEQ/IFGT/IFGE).
+				ctx.emit(branchOpcode == Opcode.IFLT || branchOpcode == Opcode.IFLE ? Opcode.DCMPG : Opcode.DCMPL);
+				emitCompareResult(branchOpcode, ctx);
+			}
+			else {
+				emitFastDouble(pending.root(), ctx);
+				JvmEmitHelper.boxDouble(ctx);
+				ctx.emit(Opcode.ARETURN);
+			}
+			fallbackBails = doubleBails;
+		}
+		emitBailAndFallback(pending, ctx, state, fallbackBails, tryStart, tryEnd, className);
+	}
+
+	/** The compare methods' tail: 0 or 1 on the operand stack, returned. */
+	private static void emitCompareResult(int branchOpcode, JvmLispCompiler.Ctx ctx) {
+		int isTrue = branch(ctx, branchOpcode);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.IRETURN);
+		JvmEmitHelper.patchBranch(ctx, isTrue, ctx.code.size());
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.IRETURN);
+	}
+
+	private static int branchForMask(int mask) {
+		return switch (mask) {
+			case 0b010 -> Opcode.IFEQ;
+			case 0b001 -> Opcode.IFLT;
+			case 0b100 -> Opcode.IFGT;
+			case 0b011 -> Opcode.IFLE;
+			case 0b110 -> Opcode.IFGE;
+			default -> throw new IllegalStateException("unexpected compare mask: " + mask);
+		};
+	}
+
+	// ----------------------------------------------------------- the double fast path
+
+	/**
+	 * Whether this tree admits the IEEE double path. Only {@code + - *} (and the
+	 * synthetic compare root) carry over: {@code mod}/{@code rem}/the bitwise operators
+	 * are integer-only, and a packed-{@code aref} leaf reads a {@code long[]}. Every
+	 * non-constant leaf is guarded as a strict {@code Double} and every integer CONSTANT
+	 * widens exactly as {@code _dbl} widens a {@code Long}, so the path computes what the
+	 * generic helpers compute for the same operands -- float contagion included, since a
+	 * leaf that is not a Double bails.
+	 */
+	private static boolean doubleEligible(Node root, List<Node> leaves) {
+		for (Node leaf : leaves) {
+			if (!(leaf instanceof ExprLeaf) && !(leaf instanceof RawLeaf)) {
+				return false;
+			}
+		}
+		return doubleOps(root);
+	}
+
+	private static boolean doubleOps(Node node) {
+		if (!(node instanceof OpNode op)) {
+			return true;
+		}
+		boolean ok = CMP_ROOT.equals(op.op()) || LispNames.ADD.equals(op.op()) || LispNames.SUB.equals(op.op())
+				|| LispNames.MUL.equals(op.op());
+		if (!ok) {
+			return false;
+		}
+		for (Node arg : op.args()) {
+			if (!doubleOps(arg)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Unboxes every leaf into a {@code double} local behind a strict
+	 * {@code instanceof Double}; anything else -- a Long, a BigInteger, a ratio, nil, an
+	 * unboxed local whose raw slot is authoritative -- branches to the generic fallback.
+	 */
+	private static void emitDoubleGuards(List<Node> leaves, JvmLispCompiler.Ctx ctx, List<Integer> bails) {
+		ClassConstant doubleClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Double"));
+		MethodrefConstant doubleValue = ctx.cp.addMethodref(doubleClass,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("doubleValue"), ctx.cp.addUtf8("()D")));
+		for (Node leaf : leaves) {
+			switch (leaf) {
+				case ExprLeaf l -> {
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(l.paramSlot);
+					ctx.emit(Opcode.INSTANCEOF);
+					ctx.emitU2(doubleClass.index());
+					bails.add(branch(ctx, Opcode.IFEQ));
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(l.paramSlot);
+					l.dblSlot = storeDouble(ctx, doubleClass, doubleValue);
+				}
+				case RawLeaf l -> {
+					// The flag set means the raw long slot is authoritative -- an
+					// integer, which this path does not mix in.
+					ctx.emit(Opcode.ILOAD);
+					ctx.emit(l.flagParam);
+					bails.add(branch(ctx, Opcode.IFNE));
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(l.shadowParam);
+					ctx.emit(Opcode.INSTANCEOF);
+					ctx.emitU2(doubleClass.index());
+					bails.add(branch(ctx, Opcode.IFEQ));
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(l.shadowParam);
+					l.dblSlot = storeDouble(ctx, doubleClass, doubleValue);
+				}
+				default -> throw new IllegalStateException("not a double-path leaf: " + leaf);
+			}
+		}
+	}
+
+	/** Unboxes the reference on the stack into a fresh {@code double} local. */
+	private static int storeDouble(JvmLispCompiler.Ctx ctx, ClassConstant doubleClass, MethodrefConstant doubleValue) {
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(doubleClass.index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(doubleValue.index());
+		int slot = ctx.allocTemp();
+		ctx.allocTemp();
+		ctx.emit(Opcode.DSTORE);
+		ctx.emit(slot);
+		return slot;
+	}
+
+	/**
+	 * The raw {@code double} evaluation over the pre-unboxed leaf locals: the same left
+	 * fold the generic helpers perform, with no intermediate box. An integer constant
+	 * widens here exactly as {@code _dbl} widens the {@code Long} the generic path would
+	 * have seen.
+	 */
+	private static void emitFastDouble(Node node, JvmLispCompiler.Ctx ctx) {
+		switch (node) {
+			case ConstLeaf c -> JvmEmitHelper.emitRawDouble(c.value(), ctx);
+			case ExprLeaf leaf -> emitDoubleLoad(leaf.dblSlot, ctx);
+			case RawLeaf leaf -> emitDoubleLoad(leaf.dblSlot, ctx);
+			case ArefLeaf ignored -> throw new IllegalStateException("aref leaf on the double path");
+			case OpNode op -> {
+				emitFastDouble(op.args().get(0), ctx);
+				for (int i = 1; i < op.args().size(); i++) {
+					emitFastDouble(op.args().get(i), ctx);
+					ctx.emit(switch (op.op()) {
+						case LispNames.ADD -> Opcode.DADD;
+						case LispNames.SUB -> Opcode.DSUB;
+						case LispNames.MUL -> Opcode.DMUL;
+						default -> throw new IllegalStateException("not a double-path operator: " + op.op());
+					});
+				}
+			}
+		}
+	}
+
+	private static void emitDoubleLoad(int slot, JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.DLOAD);
+		ctx.emit(slot);
 	}
 
 	private static void emitBailAndFallback(Pending pending, JvmLispCompiler.Ctx ctx, State state, List<Integer> bails,

@@ -19,10 +19,8 @@ final class JvmComparisonCompiler {
 		List<LispVal> args = cons.toList();
 		int branch;
 		if (JvmLispCompiler.hasDoubleLiteral(args)) {
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			JvmEmitHelper.unboxDouble(ctx);
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			JvmEmitHelper.unboxDouble(ctx);
+			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
+			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			// IEEE: a comparison against NaN is false. javac's rule: DCMPG for < and
 			// <= (NaN falls out as +1, failing IFLT/IFLE), DCMPL for the others (NaN
 			// falls out as -1, failing IFGT/IFGE/IFEQ).

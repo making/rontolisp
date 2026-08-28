@@ -45,8 +45,7 @@ final class JvmWhileCompiler {
 		ctx.emitU2(0);
 		// Body: every expression leaves a (boxed) reference, which is discarded.
 		for (int i = 2; i < parts.size(); i++) {
-			JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
-			ctx.emit(Opcode.POP);
+			JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);
 		}
 		// Jump back to re-evaluate the test.
 		int gotoPos = ctx.code.size();

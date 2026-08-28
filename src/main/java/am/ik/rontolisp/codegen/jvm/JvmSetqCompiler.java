@@ -36,6 +36,44 @@ final class JvmSetqCompiler {
 		}
 	}
 
+	/**
+	 * Compiles a {@code setq} whose value is DISCARDED, leaving NOTHING on the operand
+	 * stack -- or answers false, having emitted nothing, when the ordinary emission plus
+	 * a {@code pop} is what the form needs.
+	 *
+	 * <p>
+	 * The shape this exists for is an assignment into an unboxed dual-representation
+	 * local ({@code .kb/jvm-int-fusion.md}): the store itself leaves the stack empty, so
+	 * {@link #compile}'s re-read of the value -- the {@code _ubRead} call every counted
+	 * loop's counter step and every accumulator paid once an iteration -- is pure waste
+	 * when the caller is only going to pop it.
+	 * @param cons the {@code setq} form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @return true when the assignment was compiled for effect
+	 */
+	static boolean compileForEffect(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		if (!cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		int pairCount = (parts.size() - 1) / 2;
+		if (pairCount == 0 || (parts.size() - 1) % 2 != 0) {
+			return false;
+		}
+		for (int p = 0; p < pairCount; p++) {
+			if (!(parts.get(1 + 2 * p) instanceof LispSymbol target) || !ctx.rawLocals.containsKey(target.name())) {
+				return false;
+			}
+		}
+		for (int p = 0; p < pairCount; p++) {
+			String name = ((LispSymbol) parts.get(1 + 2 * p)).name();
+			JvmIntFusionCompiler.compileRawStore(parts.get(2 + 2 * p), ctx, className,
+					java.util.Objects.requireNonNull(ctx.rawLocals.get(name)));
+		}
+		return true;
+	}
+
 	private static void compilePair(String name, LispVal valueExpr, JvmLispCompiler.Ctx ctx, String className) {
 		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): the store
 		// funnels through the fused raw-store path, and the setq's value is re-read
