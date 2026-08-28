@@ -1,0 +1,85 @@
+name: Benchmark report
+
+# Re-run bench-report/ against SBCL, ECL, ABCL and all three rontolisp backends
+# and commit the refreshed results/, so the timings age with the compiler
+# instead of with whoever last remembered to run measure.sh.
+#
+# workflow_dispatch ONLY, deliberately -- unlike the size and ANSI reports,
+# which are nightly. A size is the same on any machine; a timing is not. Two
+# runs on differently loaded hosted runners differ by more than most real
+# changes do, so a scheduled job would commit noise every night and bury the one
+# diff that meant something. Run it by hand after a change expected to move the
+# numbers.
+on:
+  workflow_dispatch:
+    inputs:
+      reps:
+        description: 'Runs per cell; the fastest is reported'
+        required: false
+        default: '3'
+      timeout:
+        description: 'Seconds one run may take before the cell reads `timeout`'
+        required: false
+        default: '120'
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    # Ten benchmarks x six implementations x three repetitions, plus the cells
+    # that spend the whole budget before being recorded as a timeout.
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # The wasm column. Pinned to the same version size-report measures on, so
+    # the two reports never disagree about which runtime "wasmtime" meant.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v47.0.3"
+    # The three reference implementations. ECL's compile-file shells out to cc,
+    # which the runner image already has.
+    # ABCL's launcher runs whatever `java` resolves to -- after the step above
+    # that is GraalVM 25, not the default-jre apt pulls in as ABCL's dependency.
+    # The report records the JVM each row actually ran on, so the two JVM
+    # columns cannot silently disagree about which one that was.
+    - name: Install SBCL, ECL and ABCL
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends sbcl ecl abcl
+    - name: Build the compiler
+      run: ./mvnw -V --no-transfer-progress -DskipTests clean package
+    - name: Measure
+      env:
+        BENCH_REPS: ${{ inputs.reps }}
+        BENCH_TIMEOUT: ${{ inputs.timeout }}
+      run: ./bench-report/measure.sh
+    - name: Commit the refreshed results
+      run: |
+        set -e
+        if git diff --quiet -- bench-report/results; then
+          echo "benchmarks unchanged"
+          exit 0
+        fi
+        # Unlike the size report, this one does NOT try to tell a real change
+        # from a stamp-only one: every cell is a timing, so every run rewrites
+        # nearly every number whether or not anything about the compiler moved.
+        # The run is manual, so a commit here is one somebody asked for.
+        git diff --stat -- bench-report/results
+        git config user.name  'github-actions[bot]'
+        git config user.email 'github-actions[bot]@users.noreply.github.com'
+        git add bench-report/results
+        # [skip ci]: the commit touches only generated numbers, so nothing it
+        # can push is worth a CI run.
+        git commit -m 'Refresh the benchmark report [skip ci]'
+        # A concurrent push during the run should retry, not clobber.
+        git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+        git push origin "HEAD:${GITHUB_REF_NAME}"

@@ -204,7 +204,7 @@ exercise:
 
 ## After Task Completion
 
-- Format Lisp: `java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar format examples/ src/main/resources/ size-report/programs/`
+- Format Lisp: `java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar format examples/ src/main/resources/ size-report/programs/ bench-report/programs/`
 - A GUI change (`objc:`/`appkit:`, `RontoLispCli.main`'s thread hand-over, the embedded JVM blob)
   is verified by hand on `java -jar`, the native binary AND the compiled outputs
   (`-o Counter.class --class-name Counter` under `java Counter`, `-o counter.jar` under
