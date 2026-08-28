@@ -5,7 +5,7 @@ the prose below the tables is [`../notes/benchmarks.md`](../notes/benchmarks.md)
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-28
-- rontolisp commit: `776fe41`
+- rontolisp commit: `6c1f554`
 - best of 3 runs per cell, 120s budget each
 - machine: Ubuntu 24.04.4 LTS (Linux 6.17.0-1022-azure, x86_64)
 - cpu: AMD EPYC 9V74 80-Core Processor, 4 logical cores
@@ -24,17 +24,17 @@ How the report is built and run: [../README.md](../README.md).
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | sbcl | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| [fib](../programs/fib.lisp) | 4,806 | **`40`** | 164 | 89 | 274 | 496 |
-| [mandelbrot](../programs/mandelbrot.lisp) | 8,765 | 111 | 704 | 243 | 989 | **`73`** |
-| [matmul](../programs/matmul.lisp) | 8,399 | **`59`** | 571 | 156 | 624 | 949 |
-| [sieve](../programs/sieve.lisp) | 12,819 | 206 | 583 | **`50`** | 227 | 289 |
-| [sort](../programs/sort.lisp) | 975 | 372 | 437 | **`104`** | 262 | 665 |
-| [hash](../programs/hash.lisp) | 2,129 | 463 | 387 | **`71`** | 549 | 438 |
-| [string](../programs/string.lisp) | 7,641 | 162 | 158 | **`53`** | 463 | 360 |
-| [clos](../programs/clos.lisp) | 14,516 | 77 | 359 | **`75`** | 751 | 819 |
-| [bignum](../programs/bignum.lisp) | 317 | 103 | 534 | **`37`** | 99 | 90 |
-| [list](../programs/list.lisp) | 2,296 | 148 | 141 | **`47`** | 394 | 248 |
-| **startup** | 299 | 67 | 17 | **`12`** | 45 | 1,602 |
+| [fib](../programs/fib.lisp) | 6,157 | **`61`** | 210 | 115 | 352 | 645 |
+| [mandelbrot](../programs/mandelbrot.lisp) | 11,128 | **`95`** | 904 | 302 | 1,242 | 114 |
+| [matmul](../programs/matmul.lisp) | 10,280 | **`68`** | 739 | 199 | 773 | 1,144 |
+| [sieve](../programs/sieve.lisp) | 16,397 | 253 | 744 | **`61`** | 287 | 345 |
+| [sort](../programs/sort.lisp) | 1,279 | 360 | 414 | **`128`** | 328 | 806 |
+| [hash](../programs/hash.lisp) | 2,637 | 436 | 494 | **`87`** | 454 | 532 |
+| [string](../programs/string.lisp) | 9,317 | 211 | 188 | **`64`** | 582 | 450 |
+| [clos](../programs/clos.lisp) | 18,224 | **`94`** | 464 | 102 | 964 | 1,017 |
+| [bignum](../programs/bignum.lisp) | 396 | 120 | 683 | **`46`** | 124 | 121 |
+| [list](../programs/list.lisp) | 2,820 | 178 | 181 | **`60`** | 499 | 270 |
+| **startup** | 368 | 79 | 18 | **`14`** | 56 | 1,939 |
 
 The fastest cell in each row is highlighted.
 
@@ -46,31 +46,31 @@ reads the clock either side of its own work -- so no other row contains it.
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| fib | 54.00 | 0.45 | 1.84 | 3.08 | 5.57 |
-| mandelbrot | 36.07 | 0.46 | 2.90 | 4.07 | 0.30 |
-| matmul | 53.84 | 0.38 | 3.66 | 4.00 | 6.08 |
-| sieve | 256.38 | 4.12 | 11.66 | 4.54 | 5.78 |
-| sort | 9.38 | 3.58 | 4.20 | 2.52 | 6.39 |
-| hash | 29.99 | 6.52 | 5.45 | 7.73 | 6.17 |
-| string | 144.17 | 3.06 | 2.98 | 8.74 | 6.79 |
-| clos | 193.55 | 1.03 | 4.79 | 10.01 | 10.92 |
-| bignum | 8.57 | 2.78 | 14.43 | 2.68 | 2.43 |
-| list | 48.85 | 3.15 | 3.00 | 8.38 | 5.28 |
+| fib | 53.54 | 0.53 | 1.83 | 3.06 | 5.61 |
+| mandelbrot | 36.85 | 0.31 | 2.99 | 4.11 | 0.38 |
+| matmul | 51.66 | 0.34 | 3.71 | 3.88 | 5.75 |
+| sieve | 268.80 | 4.15 | 12.20 | 4.70 | 5.66 |
+| sort | 9.99 | 2.81 | 3.23 | 2.56 | 6.30 |
+| hash | 30.31 | 5.01 | 5.68 | 5.22 | 6.11 |
+| string | 145.58 | 3.30 | 2.94 | 9.09 | 7.03 |
+| clos | 178.67 | 0.92 | 4.55 | 9.45 | 9.97 |
+| bignum | 8.61 | 2.61 | 14.85 | 2.70 | 2.63 |
+| list | 47.00 | 2.97 | 3.02 | 8.32 | 4.50 |
 
 ## Build time (ms: source to the artifact that was then run)
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | sbcl | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fib | n/a | 640 | 680 | 9 | 211 | 2,727 |
-| mandelbrot | n/a | 629 | 700 | 10 | 213 | 2,741 |
-| matmul | n/a | 718 | 742 | 22 | 250 | 2,707 |
-| sieve | n/a | 647 | 707 | 13 | 221 | 2,715 |
-| sort | n/a | 644 | 701 | 12 | 215 | 2,699 |
-| hash | n/a | 613 | 702 | 9 | 205 | 2,682 |
-| string | n/a | 692 | 729 | 12 | 214 | 2,705 |
-| clos | n/a | 641 | 719 | 13 | 215 | 2,614 |
-| bignum | n/a | 620 | 722 | 10 | 201 | 2,550 |
-| list | n/a | 619 | 702 | 11 | 220 | 2,523 |
+| fib | n/a | 729 | 839 | 12 | 267 | 3,263 |
+| mandelbrot | n/a | 739 | 856 | 14 | 262 | 3,404 |
+| matmul | n/a | 774 | 829 | 20 | 318 | 3,330 |
+| sieve | n/a | 755 | 840 | 13 | 271 | 3,256 |
+| sort | n/a | 754 | 882 | 14 | 276 | 3,284 |
+| hash | n/a | 741 | 812 | 11 | 249 | 3,313 |
+| string | n/a | 839 | 905 | 13 | 263 | 3,320 |
+| clos | n/a | 781 | 841 | 16 | 271 | 3,503 |
+| bignum | n/a | 752 | 830 | 11 | 249 | 3,435 |
+| list | n/a | 736 | 836 | 13 | 268 | 3,342 |
 
 The rontolisp interpreter has no build column: interpreting the source is
 its mode, so there is no artifact between the two.
@@ -163,9 +163,20 @@ anyway, and for an unrelated reason -- most of it is the JVM starting up, the
 same seconds its `startup` row reports.
 
 ABCL and rontolisp's JVM backend are the pair that share a machine: both emit
-JVM bytecode, both run under the same `java`, both pay the same JIT warm-up and
-the same startup. Differences between those two columns are differences in code
-generation and runtime representation, with the platform held fixed.
+JVM bytecode and both run under the same `java`. Differences between those two
+columns are mostly differences in code generation and runtime representation,
+with the platform held fixed.
+
+They do NOT pay the same JIT warm-up, and one row says so. Each benchmark is
+timed on a single cold run, so a row whose work is a JDK library -- `bignum`,
+which is `BigInteger.multiply` and almost nothing else -- measures how warm that
+library already was. ABCL spends 1.6 seconds starting its image before the
+benchmark begins (its `startup` row), and that image is itself Java exercising
+the same JDK code; rontolisp's compiled class starts in 67 ms and meets a cold
+`BigInteger`. On `bignum` rontolisp's first run costs what the identical loop
+hand-written in Java costs on ITS first run, and its third run is twice as fast
+as ABCL's steady state -- the column is measuring the tax the fast startup does
+not get to amortise, not the arithmetic.
 
 rontolisp's wasm column runs under wasmtime, and its interpreter column walks
 the AST. Neither has a counterpart among the other three; they are in the table
