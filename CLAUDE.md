@@ -27,6 +27,12 @@ Three documentation layers, no duplication between them:
   `.kb/README.md`. **Before changing behavior in any area, grep `.kb/` for the topic and
   read the matching file** -- this file does not list the constraints.
 
+A premise recorded in `.kb/` is a measurement, not a law: it was true when it was written
+and the code has moved since. When a number you measure contradicts one, **the finding is
+the deliverable** -- write the new numbers and the date into that file rather than working
+around it or forcing the planned change through. A change that measurement says is not
+worth its blast radius is a result; land the measurement, not the change.
+
 ## Architecture
 
 ```
@@ -188,6 +194,28 @@ exercise:
 ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false -Drontolisp.examples=true test
 # narrow it while iterating: -Drontolisp.examples.only=cloudflare
 ```
+
+It is the longest run in the repo. **Split it with `-Drontolisp.examples.only=` from the
+start** -- one slice per surface -- and run each slice to completion in the foreground. A
+run detached into the background loses its result if the session ends before it finishes,
+which is indistinguishable from never having run it.
+
+## Working Alongside Other Sessions
+
+Several sessions push to `develop` at once, so what you tested is not what you push.
+
+- **Take upstream in once, immediately before the final test run** (`git fetch origin`,
+  `git merge origin/develop`), so the suite runs over the merged tree.
+- **A merge you do AFTER that run does not require re-running the suite.** Merge the
+  conflict, push, and let CI cover the combination; a second full pass per push costs more
+  than it finds.
+- In a worktree, `develop` is held by the main tree: `git checkout develop` and
+  `git pull --rebase` are unavailable. The sequence is `git fetch origin` ->
+  `git merge origin/develop` -> `git push origin HEAD:develop`, retried from the fetch if
+  the push is rejected.
+- A semantic conflict passes `git merge` cleanly. When both sides touched one mechanism,
+  read the other side's diff before pushing -- two changes to the same representation can
+  each be correct alone and emit nonsense together.
 
 ## Requirements
 
