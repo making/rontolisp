@@ -250,9 +250,11 @@
    (wire-cache :initform nil :accessor geom::%wire)
    ;; A slot a consumer hangs its own state on -- a renderer keeps its GPU
    ;; buffers here, where they live with the mesh they describe and cannot be
-   ;; orphaned by a detach. It is a slot rather than the renderer's own eq hash
-   ;; table for a second reason today: gethash is not identity-keyed and does
-   ;; not terminate for a key that is part of a scene graph (.kb/geom.md).
+   ;; orphaned by a detach. It is a slot rather than the renderer's own hash
+   ;; table because a table cannot key on a node AT ALL: :test 'eq is accepted
+   ;; and ignored, so keys are compared STRUCTURALLY, and two sibling nodes with
+   ;; equal slots collide into one entry -- a wrong answer, not a slow one
+   ;; (.kb/geom.md, .kb/hash-tables.md).
    (user-data :initform nil :accessor geom:user-data)))
 
 (defun geom::%build-solid (points facets &key color label)

@@ -9,6 +9,12 @@
 ;;;;
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repro.lisp
 ;;;;
+;;;; HISTORICAL as of 2026-08-29: the WORK half is fixed -- the hash spends a node
+;;;; budget as well as a depth cap now (.kb/hash-tables.md) and every line below
+;;;; prints 0 ms, at n = 60 and at d = 6. What the `eq` table still gets wrong is
+;;;; the COMPARISON (../012-hash-table-test-semantics.md), which this file does not
+;;;; measure. Kept as the shape that found it.
+;;;;
 ;;;; Reproduces on the compiled JVM class and on WASM as well; see ../README.md
 ;;;; result 5.
 

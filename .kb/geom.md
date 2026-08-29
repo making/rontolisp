@@ -127,13 +127,16 @@ place that has to invalidate: it drops `%mesh`, `%wire` AND `user-data`. Any fut
 vertex mutation must call `geom::%invalidate-mesh`.
 
 `user-data` is a slot a consumer hangs its own state on -- a renderer keeps its GPU
-buffers there. Today it exists for two reasons and only one of them is design: an `eq`
-hash table is not identity-keyed and does not terminate for a key that is part of a
-scene graph (`hash-tables.md`; `.todo/567-an-eq-hash-table-is-not-identity-keyed.md`),
-so a renderer CANNOT key a table by a node. **When 567 lands, re-examine this** -- the
-slot is probably still the better design (the cache lives with the thing it caches, and
-`detach` cannot orphan it), but the comment in `geom.lisp` must then state the true
-reason rather than the defect.
+buffers there. **It is a slot because a hash table cannot key on a node at all.** The
+spike's reason was liveness (a hash of a node was exponential in the graph reachable
+from it) and that half is gone -- the work budget bounds it, so such a `gethash`
+RETURNS (`hash-tables.md`, 2026-08-29). What remains is correctness, and it is the
+worse half: `:test 'eq` is accepted and IGNORED, so a table compares its keys
+STRUCTURALLY (`.todo/012-hash-table-test-semantics.md`), and two sibling nodes with
+equal slots -- routine in a scene graph -- collide into ONE entry. A wrong answer, not
+a slow one. The slot would still be the right design after 012 lands (the cache lives
+with the thing it caches, and `detach` cannot orphan it), so nothing here changes then;
+only the comment's reason would shrink to that last sentence.
 
 ## Pruning
 

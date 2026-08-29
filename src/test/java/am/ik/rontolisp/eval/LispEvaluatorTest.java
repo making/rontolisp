@@ -11324,6 +11324,41 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	// The depth cap bounds the hash's HEIGHT and nothing about its SIZE, which a WORK
+	// budget does. Both keys here have SHARED substructure: a DAG of 60 conses holds 60
+	// cells and 2^60 root-to-leaf paths, and an instance that knows its parent is worse
+	// still. An un-budgeted hash could not place either one inside this suite's lifetime,
+	// so a regression shows up as a HANG rather than as a slow number -- the only way to
+	// pin "terminates SOON" without a flaky wall-clock assertion.
+	void hashTableSharedGraphKeysArePlacedInBoundedWork() {
+		assertThat(evalMulti("""
+				(defun shared-dag (n)
+				  (let ((node :leaf))
+				    (dotimes (i n node) (setq node (cons node node)))))
+				(defclass linked-node ()
+				  ((up :initarg :up :initform nil)
+				   (down :initform nil :accessor node-down)))
+				(defun linked-chain (n)
+				  (let ((node (make-instance 'linked-node)))
+				    (dotimes (i n node)
+				      (let ((next (make-instance 'linked-node :up node)))
+				        (setf (node-down node) (cons next (node-down node)))
+				        (setq node next)))))
+				(let ((h (make-hash-table :test 'equal))
+				      (dag (shared-dag 60))
+				      (node (linked-chain 8)))
+				  (setf (gethash dag h) :dag)
+				  (setf (gethash node h) :node)
+				  (list (gethash dag h) (gethash node h) (hash-table-count h)
+				        (let ((e (make-hash-table :test 'eq)))
+				          (list (gethash (shared-dag 60) e) (gethash (linked-chain 8) e)))
+				        (let ((p (make-hash-table :test 'equalp)))
+				          (setf (gethash "cs" p) 1)
+				          (list (gethash "CS" p) (gethash (shared-dag 60) p)))))""").print())
+			.isEqualTo("(:DAG :NODE 2 (NIL NIL) (1 NIL))");
+	}
+
+	@Test
 	void plistHashTableAndHashTablePlist() {
 		// subsets of alexandria:plist-hash-table / hash-table-plist; keyword keys
 		// downcase in the JSON, so the pair builds JSON objects ergonomically
