@@ -81,7 +81,10 @@
 # module with no host imports, so its COMPILE leg pins its WIT world against the
 # program even though its jco/browser half cannot run here; and
 # browser/minesweeper's rules live in a rendering-free core, which
-# minesweeper-core-test.lisp loads and checks with rove. A third one is of a
+# minesweeper-core-test.lisp loads and checks with rove. browser/webgl-solids is
+# a third of that kind, with a COMPILE leg only: nothing here can drive its page,
+# but its model half is the shipped geom package and its compile leg is what says
+# the geom + linalg splice still lowers to a --no-wasi reactor. A further one is of a
 # different kind: browser/minesweeper's macOS front-end has a jvm-compile leg,
 # because a GUI that cannot RUN here can still be COMPILED here, and compiling
 # it is exactly what the objc:/appkit: JVM path has to keep doing. A fourth and a
@@ -646,6 +649,18 @@ examples:
         - "total 62"
         - "over-ten bolt"
         - "over-ten nut"
+
+  # --- browser/webgl-solids: the geom modeller, drawn in a page ----------------
+  - path: browser/webgl-solids/solids.lisp
+    backends: [wasm-reactor]
+    note: >-
+      the browser twin of the macOS `scene` viewer: geom's solids, its booleans
+      and its world transforms consumed UNCHANGED and drawn with WebGL2
+      (.kb/geom.md, "The browser twin"). Browsers cannot be driven headless here,
+      so only the COMPILE leg runs -- and it is the leg that matters, since it
+      pins that the shared gl package's require, the geom-inside-linalg splice
+      and the tree-shaker still lower the whole program to a --no-wasi reactor.
+      What it looks like is examples/browser/webgl-solids/index.html
 
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp

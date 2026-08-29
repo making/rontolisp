@@ -411,11 +411,11 @@ public final class PackageRegistry {
 	 * {@code attach}/{@code pipeline}/{@code frame}'s own business rather than a decision
 	 * a caller makes.
 	 */
-	private static final Set<String> METAL_FUNCTIONS = Set.of("CONTEXT", "ATTACH", "DEVICE", "LAYER", "QUEUE",
-			"LIBRARY", "PIPELINE", "DEPTH-STATE", "FLOATS", "BUFFER", "SHARED-BUFFER", "UPLOAD", "UNIFORM", "FRAME",
-			"RUN", "RESIZE", "SET-CLEAR-COLOR", "+POINT+", "+LINE+", "+TRIANGLE+", "+TRIANGLE-STRIP+", "+CULL-NONE+",
-			"+CULL-FRONT+", "+CULL-BACK+", "+WINDING-CLOCKWISE+", "+WINDING-COUNTER-CLOCKWISE+", "+COMPARE-LESS+",
-			"+COMPARE-ALWAYS+");
+	private static final Set<String> METAL_FUNCTIONS = Set.of("CONTEXT", "ATTACH", "OFFSCREEN", "PIXELS", "DEVICE",
+			"LAYER", "QUEUE", "LIBRARY", "PIPELINE", "DEPTH-STATE", "FLOATS", "BUFFER", "SHARED-BUFFER", "UPLOAD",
+			"UNIFORM", "FRAME", "RUN", "RESIZE", "SET-CLEAR-COLOR", "+POINT+", "+LINE+", "+TRIANGLE+",
+			"+TRIANGLE-STRIP+", "+CULL-NONE+", "+CULL-FRONT+", "+CULL-BACK+", "+WINDING-CLOCKWISE+",
+			"+WINDING-COUNTER-CLOCKWISE+", "+COMPARE-LESS+", "+COMPARE-ALWAYS+");
 
 	private static final List<String> METAL_FUNCTION_NAMES = sorted(METAL_FUNCTIONS);
 
@@ -426,9 +426,9 @@ public final class PackageRegistry {
 	 * instance of, registered here for the same reason geom's class names are -- a
 	 * {@code (typep x 'scene:viewer-state)} spelling has to resolve.
 	 */
-	private static final Set<String> SCENE_FUNCTIONS = Set.of("VIEWER", "VIEWER-STATE", "WINDOW-OF", "CONTEXT-OF",
-			"ADD", "DROP", "CLEAR", "CONTENTS", "FIT", "CAMERA", "GRID", "GRID-COLOR", "BACKGROUND", "SHADING", "AXES",
-			"REFRESH", "ANIMATE", "WAIT");
+	private static final Set<String> SCENE_FUNCTIONS = Set.of("VIEWER", "OFFSCREEN", "SNAPSHOT", "VIEWER-STATE",
+			"WINDOW-OF", "CONTEXT-OF", "ADD", "DROP", "CLEAR", "CONTENTS", "FIT", "CAMERA", "GRID", "GRID-COLOR",
+			"BACKGROUND", "SHADING", "AXES", "REFRESH", "ANIMATE", "WAIT");
 
 	private static final List<String> SCENE_FUNCTION_NAMES = sorted(SCENE_FUNCTIONS);
 

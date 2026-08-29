@@ -540,6 +540,12 @@ gitBranch=${git.branch}
 												<include name="battlefront.wasm"/>
 											</fileset>
 										</copy>
+										<copy todir="${web.dist}/webgl-solids">
+											<fileset dir="${project.basedir}/examples/browser/webgl-solids">
+												<include name="index.html"/>
+												<include name="solids.wasm"/>
+											</fileset>
+										</copy>
 										<!-- Stage the Minesweeper demo as another subpath (/minesweeper/).
 											 Its .wasm is checked in, so no compilation is needed here. The
 											 page is copied to index.html so the demo is reachable at
