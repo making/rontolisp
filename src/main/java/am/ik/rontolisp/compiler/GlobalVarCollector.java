@@ -75,6 +75,39 @@ public final class GlobalVarCollector {
 		return globals;
 	}
 
+	/**
+	 * Returns the names of {@code defun}s nested inside a top-level {@code defun}'s BODY,
+	 * in program order. The companion of the nested-defun branch of {@link #collect}: a
+	 * top-level {@code defun} is removed from the top-level forms before that runs (it
+	 * declares a function, not a variable), so its body is the one place a nested defun
+	 * could hide from the collector.
+	 * <p>
+	 * A nested {@code defun} lowers to {@code (setq name (lambda ...))} on both compile
+	 * backends whatever encloses it, so the name needs the same global backing store in a
+	 * function body as under a top-level {@code let} -- call sites dispatch through the
+	 * variable ({@code LispMacroExpander.expandCallThroughVariable}). Without it the call
+	 * compiled to the generic undefined-function error while the interpreter (and SBCL)
+	 * answered. The definition still does not exist until the enclosing function is
+	 * CALLED, and calling it twice rebinds the name; that is the shape's semantics, not a
+	 * limitation of the store.
+	 * @param program the whole program, top-level {@code defun}s included
+	 * @return the nested defun names in program order
+	 */
+	public static LinkedHashSet<String> collectNestedInDefunBodies(List<LispVal> program) {
+		LinkedHashSet<String> names = new LinkedHashSet<>();
+		for (LispVal expr : program) {
+			if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !LispNames.DEFUN.equals(head.name())) {
+				continue;
+			}
+			// Skip the head, the defun's own name and its lambda list; walk the body.
+			if (cons.cdr() instanceof LispCons nameCell && nameCell.cdr() instanceof LispCons paramsCell) {
+				collectNestedDefunNames(paramsCell.cdr(), names);
+			}
+		}
+		return names;
+	}
+
 	private static void collectNestedDefunNames(LispVal form, Set<String> globals) {
 		if (!(form instanceof LispCons cons)) {
 			return;

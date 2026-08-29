@@ -445,9 +445,17 @@ cases:
                   (funcall co-g)
                   co-n))
               0))
+      (defun co-install (co-seed)
+        (defun co-read-seed () co-seed)
+        (lambda () (setq co-seed (+ co-seed 1)) co-seed))
+      (setq co-step (co-install 10))
+      (funcall co-step)
+      (funcall co-step)
+      (print (list (co-read-seed) (funcall co-step)))
     expected: |
       (2 LATER)
       2
+      (12 13)
   - name: jvm-typed-numeric-loops
     source: |
       (defun tl-softmax (att scores pos inv)

@@ -1360,6 +1360,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// readable/assignable from a defun/lambda (not just from main). Field names are
 		// prefixed to avoid colliding with runtime helper fields (e.g. _genv).
 		Set<String> globals = new java.util.LinkedHashSet<>(GlobalVarCollector.collect(topLevelExprs));
+		// A defun nested in a top-level defun's BODY needs the same store: it lowers to
+		// (setq name (lambda ...)) like every other non-top-level defun, and a top-level
+		// defun is not among topLevelExprs, so this is the one spelling collect() cannot
+		// see.
+		globals.addAll(GlobalVarCollector.collectNestedInDefunBodies(program));
 		// Promote any top-level *free* variable that is also assigned somewhere (a setq /
 		// setf bare-symbol place) to a global field. Per Common Lisp such an assignment
 		// targets the global namespace; giving it a persistent static field (rather than

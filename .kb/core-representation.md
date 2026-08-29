@@ -167,9 +167,46 @@ bindings). Pinned by
 `WasmLispCompilerIntegrationTest` twins, and the `closure-binders-share-one-cell`
 ci-spec case (all four backends).
 
-**A nested `defun` inside a `defun` is still not reachable by name** -- the
-call site compiles to `The function <NAME> is undefined` -- so only the
-closure-over-`let` spelling of the idiom works today.
+### The NAME half: every non-top-level `defun` is a global variable (todo-571)
+
+The capture half above makes the nested definition share the right cell; the
+call site still has to find it. Both backends lower a non-top-level `defun` to
+`(setq name (lambda ...))` and resolve a call to a name that is not a compiled
+function but IS a known global VARIABLE through
+`LispMacroExpander.expandCallThroughVariable` -> `(funcall name ...)`, so the
+whole mechanism hangs on the name reaching the globals set --
+`GlobalVarCollector`, which mints the JVM static field / WASM module global.
+
+`collect` walks the TOP-LEVEL forms, and Pass 1 removes every top-level `defun`
+from that list before it runs (a defun declares a function, not a variable). So
+a `defun` nested in a `let`, a `when`, a `progn` -- any top-level non-defun form
+-- was collected, and a `defun` nested in a `defun` BODY was the one spelling
+nothing could see: `(defun install (seed) (defun read-seed () seed) ...)` gave
+`warning: the function READ-SEED is undefined` and then the run-time
+undefined-function error, where the interpreter and SBCL answer. The bodies are
+walked by `GlobalVarCollector.collectNestedInDefunBodies(program)`, unioned into
+the globals set by both `JvmLispCompiler` and `WasmLispCompiler` right after
+`collect` -- the same names, one seam, both spellings.
+
+The shape's own semantics are unchanged and are CL's: the definition does not
+exist until the enclosing function is CALLED, and calling it twice rebinds the
+name. `CompileTimeBoundp` already models that -- a `defun` head is in its
+`DEFERRING` set, so a name defined inside a function body is POISONED (no
+`(boundp 'name)` fold) rather than asserted bound.
+
+One spelling stays divergent and is NOT this seam's: a nested `defun` that
+REDEFINES an existing top-level `defun`. Every by-name call site resolves the
+compiled function first and only falls through to the global variable when
+there is none (`Jvm`/`WasmFunctionCallCompiler`), so
+`(defun over () 'top) (defun redefiner () (defun over () 'nested) ...)` answers
+`TOP` after `(redefiner)` on all three compile backends where the interpreter
+and SBCL answer `NESTED` -- the same whole-program static resolution the
+"redefined defun binds every call to its LAST definition" section below
+describes, not a missing store.
+
+Pinned by `JvmLispCompilerTest#aDefunNestedInADefunBodyIsReachableByName`, its
+`WasmLispCompilerIntegrationTest` twin, and the second half of the
+`closure-binders-share-one-cell` ci-spec case (all four backends).
 
 ## A redefined defun binds every call to its LAST definition (todo-256)
 

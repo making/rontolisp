@@ -6364,6 +6364,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aDefunNestedInADefunBodyIsReachableByName() throws Exception {
+		// The same lowering as the closure-over-let idiom above, one level deeper: the
+		// nested defun becomes (setq read-seed (lambda () seed)) inside install's body,
+		// so the NAME needs the same global backing store for a call site to dispatch
+		// through it. Collecting it only from top-level non-defun forms left the call
+		// compiled as "The function READ-SEED is undefined".
+		assertThat(compileAndRun("""
+				(defun install (seed)
+				  (defun read-seed () seed)
+				  (lambda () (setq seed (+ seed 1)) seed))
+				(setq *step* (install 10))
+				(funcall *step*)
+				(funcall *step*)
+				(print (list (read-seed) (funcall *step*)))
+				""")).isEqualTo("(12 13)");
+	}
+
+	@Test
 	void anInlineLambdaCallBoxesAParameterItsBodyClosesOver() throws Exception {
 		// ((lambda (n) ...) 0) binds n in the CALLER's frame, and that binder never
 		// asked whether the body closes over it -- so the nested lambda was handed a
