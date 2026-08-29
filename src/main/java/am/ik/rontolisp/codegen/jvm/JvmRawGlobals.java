@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
@@ -68,12 +69,15 @@ final class JvmRawGlobals {
 	/**
 	 * The names eligible for the unboxed dual representation, in declaration order.
 	 * @param program the whole macro-expanded program
-	 * @param globals the promoted top-level global names
+	 * @param globals the promoted top-level global names. ITERATION ORDER REACHES EMITTED
+	 * BYTES (it mints the raw-global fields), hence {@code SequencedSet}
+	 * (.kb/emitted-output-determinism.md)
 	 * @param boundSpecials the specials some {@code let} binds dynamically
 	 * @param enabled the whole-program gate (see the class comment)
 	 * @return the eligible names, empty when the gate is closed
 	 */
-	static Set<String> collect(List<LispVal> program, Set<String> globals, Set<String> boundSpecials, boolean enabled) {
+	static Set<String> collect(List<LispVal> program, SequencedSet<String> globals, SequencedSet<String> boundSpecials,
+			boolean enabled) {
 		LinkedHashSet<String> eligible = new LinkedHashSet<>();
 		if (!enabled) {
 			return eligible;

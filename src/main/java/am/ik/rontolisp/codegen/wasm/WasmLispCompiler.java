@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
@@ -3009,7 +3010,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (WasmLetCompiler). Collected over the WHOLE program: a local (declare
 		// (special x)) inside a defun body (cl-ppcre's remove-registers-p) must make x
 		// a global cell for its free readers too.
-		Set<String> specialVars = SpecialVarCollector.collect(program);
+		// A SequencedSet, not a plain Set: this order assigns the module-global indices,
+		// and collectDynamicallyBound copies it wholesale when the program has a progv,
+		// so an unordered set here makes the emitted module differ per JVM run
+		// (.kb/emitted-output-determinism.md).
+		SequencedSet<String> specialVars = SpecialVarCollector.collect(program);
 		globals.addAll(specialVars);
 		// --reentrant: the specials that are ever DYNAMICALLY BOUND get a slot in the
 		// per-call task record (WasmDynVars); every other special keeps its plain

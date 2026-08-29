@@ -868,7 +868,7 @@ public final class LibraryDefunPruner {
 					LispMacroExpander.StructDefinedNames summary = LispMacroExpander.defstructDefinedNames(form);
 					if (summary != null) {
 						structAt.put(i, summary);
-						for (String spelling : spellingsOf(summary.structName())) {
+						for (String spelling : PackageRegistry.spellings(summary.structName())) {
 							structBySpelling.put(spelling, summary);
 							gateBySpelling.put(spelling, summary.instantiatorNames());
 						}
@@ -886,7 +886,7 @@ public final class LibraryDefunPruner {
 						// subclass's superclass list, error 'c) -- an accessor reference
 						// keeps the form for compilability but proves no instance.
 						// classDefinedNames puts the name's spellings first.
-						List<String> nameSpellings = List.copyOf(spellingsOf(names.get(0)));
+						List<String> nameSpellings = PackageRegistry.spellings(names.get(0));
 						for (String spelling : nameSpellings) {
 							gateBySpelling.put(spelling, nameSpellings);
 						}
@@ -895,7 +895,7 @@ public final class LibraryDefunPruner {
 				else if (isOperatorForm(form, LispNames.DEFGENERIC)) {
 					String generic = LispMacroExpander.prunableGenericName(form);
 					if (generic != null && !PackageRegistry.isClSymbol(LispSymbol.memberName(generic))) {
-						List<String> spellings = List.copyOf(spellingsOf(generic));
+						List<String> spellings = PackageRegistry.spellings(generic);
 						keyedNames.put(i, spellings);
 						ownedGenerics.addAll(spellings);
 					}
@@ -926,7 +926,7 @@ public final class LibraryDefunPruner {
 					continue;
 				}
 				boolean clProtocolName = PackageRegistry.isClSymbol(LispSymbol.memberName(generic));
-				List<String> genericGate = clProtocolName ? List.of() : List.copyOf(spellingsOf(generic));
+				List<String> genericGate = clProtocolName ? List.of() : PackageRegistry.spellings(generic);
 				// The specializer gate needs the generic's method set to be closed: it
 				// holds for a generic the trees own (its defgeneric is a candidate, so a
 				// live name keeps a dispatcher even when every method is gated away) and
@@ -935,7 +935,7 @@ public final class LibraryDefunPruner {
 				// name is live, or a live call site would compile against no definition
 				// at all.
 				List<List<String>> specializerGates = new ArrayList<>();
-				if (clProtocolName || spellingsOf(generic).stream().anyMatch(ownedGenerics::contains)) {
+				if (clProtocolName || PackageRegistry.spellings(generic).stream().anyMatch(ownedGenerics::contains)) {
 					for (String specializer : LispMacroExpander.defmethodSpecializerNames(resolved.get(i))) {
 						List<String> gate = gateBySpelling.get(specializer);
 						if (gate != null) {
@@ -967,7 +967,8 @@ public final class LibraryDefunPruner {
 				if (parent == null) {
 					return slotBases;
 				}
-				LispMacroExpander.StructDefinedNames parentStruct = spellingsOf(parent).stream()
+				LispMacroExpander.StructDefinedNames parentStruct = PackageRegistry.spellings(parent)
+					.stream()
 					.map(structBySpelling::get)
 					.filter(java.util.Objects::nonNull)
 					.findFirst()
@@ -984,15 +985,6 @@ public final class LibraryDefunPruner {
 					&& operator.equals(LispSymbol.memberName(op.name())) && cons.isProperList();
 		}
 
-		/** Both colon spellings of a qualified name; the name itself otherwise. */
-		private static Set<String> spellingsOf(String name) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
-			if (qn == null) {
-				return Set.of(name);
-			}
-			return Set.of(PackageRegistry.qualify(qn.pkg(), qn.member()),
-					PackageRegistry.qualifyInternal(qn.pkg(), qn.member()));
-		}
 	}
 
 	/**

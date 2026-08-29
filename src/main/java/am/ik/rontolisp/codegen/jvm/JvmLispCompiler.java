@@ -12,6 +12,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
@@ -1359,7 +1360,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A reference compiles to getstatic from any method body, so a global is
 		// readable/assignable from a defun/lambda (not just from main). Field names are
 		// prefixed to avoid colliding with runtime helper fields (e.g. _genv).
-		Set<String> globals = new java.util.LinkedHashSet<>(GlobalVarCollector.collect(topLevelExprs));
+		SequencedSet<String> globals = new java.util.LinkedHashSet<>(GlobalVarCollector.collect(topLevelExprs));
 		// Promote any top-level *free* variable that is also assigned somewhere (a setq /
 		// setf bare-symbol place) to a global field. Per Common Lisp such an assignment
 		// targets the global namespace; giving it a persistent static field (rather than
@@ -1391,7 +1392,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// binding rather than a lexical slot (JvmLetCompiler). Collected over the WHOLE
 		// program: a local (declare (special x)) inside a defun body (cl-ppcre's
 		// remove-registers-p) must make x a global cell for its free readers too.
-		Set<String> specialVars = SpecialVarCollector.collect(program);
+		// A SequencedSet, not a plain Set: this order mints the _g$ static fields, and
+		// collectDynamicallyBound copies it wholesale when the program has a progv, so an
+		// unordered set here makes the emitted class differ per JVM run
+		// (.kb/emitted-output-determinism.md).
+		SequencedSet<String> specialVars = SpecialVarCollector.collect(program);
 		if (usesThreads) {
 			// make-thread's bindings alist names specials at runtime, and the canonical
 			// consumer (clack's handler.lisp) binds the stream specials that way -- a
@@ -1417,7 +1422,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// interpreter parity (its DynamicBindings is a ThreadLocal for the same reason).
 		// A special never let-bound keeps the bare static field, so its reads stay a
 		// single getstatic and a binding-free program compiles byte-identically.
-		Set<String> boundSpecialVars = SpecialVarCollector.collectDynamicallyBound(program, specialVars);
+		SequencedSet<String> boundSpecialVars = SpecialVarCollector.collectDynamicallyBound(program, specialVars);
 		if (usesThreads) {
 			// Every special becomes runtime-bindable by name through make-thread's
 			// bindings alist, so each needs its _d$ ThreadLocal (the _dtl dispatch in

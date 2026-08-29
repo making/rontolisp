@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.wit.Wit;
@@ -86,7 +87,7 @@ final class WitImportWorldEmitter {
 		// functions -- there may be none at all -- would never reach it: printing the
 		// block
 		// without it would leave a `use` clause pointing at nothing.
-		Map<String, Set<String>> provides = new LinkedHashMap<>();
+		Map<String, SequencedSet<String>> provides = new LinkedHashMap<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			for (WitComponentTypeEncoder.ForeignResource foreign : WitComponentTypeEncoder
 				.foreignResourcesOf(imported)) {
@@ -104,7 +105,8 @@ final class WitImportWorldEmitter {
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			WitPackageName pkg = packageOf(imported.ifaceId());
 			byPackage.computeIfAbsent(pkg, ignored -> new ArrayList<>())
-				.add(new WitImportWorldEmitter(imported).iface(provides.getOrDefault(imported.ifaceId(), Set.of())));
+				.add(new WitImportWorldEmitter(imported)
+					.iface(provides.getOrDefault(imported.ifaceId(), new LinkedHashSet<>())));
 		}
 		List<WitItem> blocks = new ArrayList<>();
 		byPackage
@@ -114,7 +116,10 @@ final class WitImportWorldEmitter {
 
 	// The pruned interface: the named definitions the bound functions reach, in discovery
 	// order, then the bound freestanding functions.
-	private WitItem.InterfaceDef iface(Set<String> provided) {
+	// `provided` is a SequencedSet, not a plain Set: the resources are discovered in its
+	// iteration order and that becomes the item order of the generated WIT text
+	// (.kb/emitted-output-determinism.md).
+	private WitItem.InterfaceDef iface(SequencedSet<String> provided) {
 		for (String resource : provided) {
 			discoverResource(resource);
 		}

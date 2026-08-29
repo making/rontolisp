@@ -102,7 +102,7 @@ final class WitComponentTypeEncoder {
 	 * @return the encoded instance type bytes
 	 */
 	static byte[] encode(WasmComponentImportCompiler.Import imported, OuterResources outer,
-			java.util.Set<String> provided) {
+			java.util.SequencedSet<String> provided) {
 		WitComponentTypeEncoder encoder = new WitComponentTypeEncoder(imported, outer);
 		for (String resource : provided) {
 			encoder.resourceIndex(encoder.abi, resource);
@@ -147,7 +147,7 @@ final class WitComponentTypeEncoder {
 				found.add(new ForeignResource(ownerIfaceId, resource));
 			}
 			return 0; // a dummy: the collecting pass throws its bytes away
-		}, java.util.Set.of());
+		}, new java.util.LinkedHashSet<>());
 		return found;
 	}
 

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
@@ -71,8 +72,13 @@ final class JvmDynVarRuntimeBuilder {
 	record HelperMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, List<Integer> code, int maxStack, int maxLocals) {
 	}
 
+	// `boundSpecials` is a SequencedSet, not a plain Set: its iteration order is the mint
+	// order of the _d$ ThreadLocal fields and of the constant-pool entries behind them,
+	// so
+	// an unordered one emits a different-but-equivalent class per JVM run
+	// (.kb/emitted-output-determinism.md).
 	static DynVarRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectArrayClass,
-			Set<String> boundSpecials) {
+			SequencedSet<String> boundSpecials) {
 		ClassConstant threadLocalClass = cp.addClass(cp.addUtf8("java/lang/ThreadLocal"));
 		MethodrefConstant tlCtor = cp.addMethodref(threadLocalClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
