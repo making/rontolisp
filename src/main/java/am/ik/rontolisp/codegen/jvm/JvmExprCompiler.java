@@ -63,6 +63,15 @@ final class JvmExprCompiler {
 		if (compileStatementSetq(expr, ctx, className)) {
 			return;
 		}
+		// A let whose value is discarded compiles its WHOLE body for effect, so a final
+		// body form that is a raw-local assignment stores and stops -- the shape every
+		// loop body ends with once its accumulators live in raw slots
+		// (.kb/jvm-double-arithmetic.md). The recursion covers let* (nested lets).
+		if (expr instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+				&& LispNames.LET.equals(head.name()) && cons.toList().size() > 2) {
+			JvmLetCompiler.compileForEffect(cons, ctx, className);
+			return;
+		}
 		compileExpr(expr, ctx, className);
 		ctx.emit(Opcode.POP);
 	}
@@ -132,6 +141,17 @@ final class JvmExprCompiler {
 		JvmIntFusionCompiler.RawLocal rawLocal = ctx.rawLocals.get(name);
 		if (rawLocal != null) {
 			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawLocal, ctx);
+			return;
+		}
+		// A declared-float local kept in a raw double slot
+		// (.kb/jvm-double-arithmetic.md): like a raw local, never special, never
+		// captured, never in ctx.locals. A read outside the routed double path boxes
+		// fresh -- the slot is always authoritative.
+		Integer rawDoubleSlot = ctx.rawDoubleLocals.get(name);
+		if (rawDoubleSlot != null) {
+			ctx.emit(Opcode.DLOAD);
+			ctx.emit(rawDoubleSlot);
+			JvmEmitHelper.boxDouble(ctx);
 			return;
 		}
 		// DYNAMIC-FIRST read of a dual-bound special (see JvmLetCompiler): in the

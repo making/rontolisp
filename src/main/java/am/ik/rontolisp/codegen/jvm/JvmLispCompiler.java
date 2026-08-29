@@ -1792,6 +1792,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(defun.bodyExprs,
 					new HashSet<>(defun.paramNames), functions.keySet());
 			funcCtx.boxedVars = capturedVars;
+			// The body-head float declarations (behind the sole %fn-block/block wrapper
+			// too) route the body's arithmetic onto the unboxed IEEE path
+			// (.kb/jvm-double-arithmetic.md); parameters stay boxed Object slots and
+			// read through the strict cast. Specials are never registered.
+			Set<String> funcDeclaredDoubles = new HashSet<>(am.ik.rontolisp.compiler.DeclaredScalarTypes
+				.functionBodyDeclaredDoubles(defun.bodyExprs, closRegistry));
+			funcDeclaredDoubles.removeAll(specialVars);
+			funcCtx.declaredDoubles = funcDeclaredDoubles.isEmpty() ? Set.of() : funcDeclaredDoubles;
 			// Box captured params
 			for (String paramName : defun.paramNames) {
 				if (capturedVars.contains(paramName)) {
@@ -2015,6 +2023,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(lambda.bodyExprs, lambdaLocalVars,
 					functions.keySet());
 			lambdaCtx.boxedVars = capturedVars;
+			// Body-head float declarations, as in Pass 2a (.kb/jvm-double-arithmetic.md).
+			Set<String> lambdaDeclaredDoubles = new HashSet<>(am.ik.rontolisp.compiler.DeclaredScalarTypes
+				.functionBodyDeclaredDoubles(lambda.bodyExprs, closRegistry));
+			lambdaDeclaredDoubles.removeAll(specialVars);
+			lambdaCtx.declaredDoubles = lambdaDeclaredDoubles.isEmpty() ? Set.of() : lambdaDeclaredDoubles;
 			// Box captured params of this lambda
 			for (String paramName : lambda.paramNames) {
 				if (capturedVars.contains(paramName)) {
@@ -4466,9 +4479,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		return usesEval(cons.car()) || usesEval(cons.cdr());
 	}
 
-	static boolean hasDoubleLiteral(List<LispVal> args) {
+	static boolean hasDoubleLiteral(List<LispVal> args, Ctx ctx) {
 		for (int i = 1; i < args.size(); i++) {
-			if (containsDouble(args.get(i))) {
+			if (containsDouble(args.get(i), ctx)) {
 				return true;
 			}
 		}
@@ -4479,8 +4492,43 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static final java.util.Set<String> INTEGER_VALUED_FORMS = java.util.Set.of(LispNames.ROUND,
 			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING);
 
-	static boolean containsDouble(LispVal val) {
+	/**
+	 * The SYNTACTIC half of {@link #containsDouble(LispVal, Ctx)} alone -- a double
+	 * literal in the tree, no scope. For the program-wide pre-passes
+	 * ({@link JvmRawGlobals}) that run before any lexical scope exists; everything inside
+	 * a method body asks the scoped form.
+	 * @param val the expression tree
+	 * @return true when a double literal occurs outside an integer-valued form
+	 */
+	static boolean containsDoubleLiteral(LispVal val) {
 		if (val instanceof LispDouble) {
+			return true;
+		}
+		if (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && INTEGER_VALUED_FORMS.contains(head.name())) {
+				return false;
+			}
+			for (LispVal element : cons.toList()) {
+				if (containsDoubleLiteral(element)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	static boolean containsDouble(LispVal val, Ctx ctx) {
+		if (val instanceof LispDouble) {
+			return true;
+		}
+		// A lexical variable declared to be a float counts like a double literal: its
+		// value -- when the declaration is true -- is always a Double, so the unboxed
+		// path answers the same bits the generic helpers would. A FALSE declaration is
+		// undefined behavior; the routed emission reads the variable through a strict
+		// cast, so it fails as a deterministic ClassCastException, never a silently
+		// different value (.kb/declarations-type-checks.md).
+		if (val instanceof LispSymbol sym
+				&& (ctx.declaredDoubles.contains(sym.name()) || ctx.rawDoubleLocals.containsKey(sym.name()))) {
 			return true;
 		}
 		if (val instanceof LispCons cons) {
@@ -4491,7 +4539,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				return false;
 			}
 			for (LispVal element : cons.toList()) {
-				if (containsDouble(element)) {
+				if (containsDouble(element, ctx)) {
 					return true;
 				}
 			}
@@ -5415,6 +5463,31 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * registers, shadows and restores; a name here is never in {@link #locals}.
 		 */
 		Map<String, JvmIntFusionCompiler.RawLocal> rawLocals = new HashMap<>();
+
+		/**
+		 * The lexical variable names declared to be floats in scope
+		 * ({@code (declare (type double-float ...))}, read by
+		 * {@link am.ik.rontolisp.compiler.DeclaredScalarTypes}): the routing predicate
+		 * ({@link JvmLispCompiler#containsDouble(LispVal, Ctx)}) counts a reference to
+		 * one as a double literal, so arithmetic over declared floats takes the unboxed
+		 * IEEE path with no literal in sight ({@code .kb/jvm-double-arithmetic.md}).
+		 * Registered from body-head declarations by the defun/lambda setup and by
+		 * {@link JvmLetCompiler} (bound AND free declarations); shadowed names removed,
+		 * restored on scope exit. Specials are never registered.
+		 */
+		Set<String> declaredDoubles = Set.of();
+
+		/**
+		 * The declared-float locals kept in a raw {@code double} slot pair, keyed by name
+		 * to the base slot ({@code .kb/jvm-double-arithmetic.md}): a plain lexical
+		 * {@code let}/{@code let*} binding covered by a bound float declaration -- never
+		 * special, never captured -- whose reads push the raw slot and whose assignments
+		 * store into it ({@code checkcast Double} on an operand the emitter cannot prove,
+		 * so a FALSE declaration is a deterministic cast error at the site, never a
+		 * silently coerced value). Scoped like {@link #locals}; a name here is never in
+		 * {@link #locals} or {@link #rawLocals}.
+		 */
+		Map<String, Integer> rawDoubleLocals = new HashMap<>();
 
 		/**
 		 * The let-bound local functions eligible for fused-call substitution

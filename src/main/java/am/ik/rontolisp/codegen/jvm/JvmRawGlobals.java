@@ -154,7 +154,10 @@ final class JvmRawGlobals {
 		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
 			return false;
 		}
-		if (JvmLispCompiler.hasDoubleLiteral(cons.toList())) {
+		// Syntactic only, no scope: this is a program-wide pre-pass, so a declared
+		// float lexical is invisible here. A miss is harmless -- the store site
+		// dispatches on the RESULT's runtime type, and a Double lands in the shadow.
+		if (JvmLispCompiler.containsDoubleLiteral(cons)) {
 			return false;
 		}
 		return switch (head.name()) {

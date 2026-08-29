@@ -13725,6 +13725,161 @@ class JvmLispCompilerTest {
 		assertThat(runClass(small)).isEqualTo(DOUBLE_ARITH_EXPECTED);
 	}
 
+	private static final String DECLARED_FLOAT_PROGRAM = """
+			(defun dcl-acc (a b)
+			  (declare (type double-float a b))
+			  (let ((acc 0.0d0) (tmp 0.0d0))
+			    (declare (type double-float acc tmp))
+			    (dotimes (i 5)
+			      (setq tmp (* a b))
+			      (setq acc (+ acc tmp (- a b) (/ a b) (mod a b))))
+			    acc))
+			(defun udl-acc (a b)
+			  (let ((acc 0.0d0) (tmp 0.0d0))
+			    (dotimes (i 5)
+			      (setq tmp (* a b))
+			      (setq acc (+ acc tmp (- a b) (/ a b) (mod a b))))
+			    acc))
+			(print (dcl-acc 3.5d0 -1.25d0))
+			(print (= (dcl-acc 3.5d0 -1.25d0) (udl-acc 3.5d0 -1.25d0)))
+			(let ((z 0.0d0))
+			  (declare (type double-float z))
+			  (print (- z)))
+			(let ((nan (/ 0.0d0 0.0d0)) (c 0))
+			  (declare (type double-float nan))
+			  (if (< nan 1.0d0) (setq c 1) (setq c 2))
+			  (print c)
+			  (print (>= nan 0.0d0))
+			  (print (= nan nan)))
+			(let ((x 1.5d0))
+			  (declare (type double-float x))
+			  (print (+ x 1/2))
+			  (print (+ x 200000000000000000000))
+			  (print (* x 4)))
+			(defun dcl-capture (x)
+			  (declare (type double-float x))
+			  (let ((s x))
+			    (declare (type double-float s))
+			    (let ((fn (lambda () s)))
+			      (setq s (+ s 1.0d0))
+			      (funcall fn))))
+			(print (dcl-capture 2.0d0))
+			(defvar *dspec* 1.5d0)
+			(defun dspec-read () *dspec*)
+			(print (let ((*dspec* 2.5d0)) (declare (type double-float *dspec*)) (dspec-read)))
+			(let ((v 1.0d0))
+			  (declare (type double-float v))
+			  (let ((v "str")) (print (length v)))
+			  (print v))
+			(let ((w 3.0d0))
+			  (declare (type double-float w))
+			  (print ((lambda (w) (length w)) "abcd"))
+			  (print w))
+			(let* ((p 1.5d0) (q (+ p 1.0d0)))
+			  (declare (type double-float p q))
+			  (print (+ p q)))
+			(let ((m 2.0d0) (n 0.0d0))
+			  (declare (type double-float m n))
+			  (print (setq m 4.5d0 n (* m 2.0d0)))
+			  (print m))
+			(let ((acc 1.0d0))
+			  (declare (type double-float acc))
+			  (print (dotimes (i 10 acc) (when (> acc 5.0d0) (return acc)) (setq acc (* acc 2.0d0)))))
+			(let ((acc 0.0d0))
+			  (declare (type double-float acc))
+			  (print (handler-case (progn (setq acc 5.5d0) (error "boom")) (error (e) acc))))
+			(let ((acc 1.0d0))
+			  (declare (type double-float acc))
+			  (incf acc 1.5d0)
+			  (setf acc (* acc 2.0d0))
+			  (print acc))
+			(let ((r 0.5d0))
+			  (declare (type single-float r))
+			  (print (* r 2)))
+			(defun dcl-widen ()
+			  (let ((x 2.0d0)) (declare (type double-float x)) (setq x 1) x))
+			(print (dcl-widen))
+			(defun dcl-store-trap ()
+			  (let ((x 1.0d0)) (declare (type double-float x)) (setq x (car (list 5))) x))
+			(print (handler-case (dcl-store-trap) (error (e) :store-trap)))
+			(print (handler-case
+			         (let ((tlx 1.0d0)) (declare (type double-float tlx)) (setq tlx (car (list 5))) tlx)
+			         (error (e) :top-level-store-trap)))
+			(defun dcl-read-trap (x) (declare (type double-float x)) (* x x))
+			(print (handler-case (dcl-read-trap (car (list 3))) (error (e) :read-trap)))
+			(print (dcl-read-trap 3.0d0))
+			(let ((k 2.5d0))
+			  (declare (type double-float k))
+			  (print (round (* k 2)))
+			  (print (sqrt (* k k))))
+			(defun dcl-hc-shadow ()
+			  (let ((d 1.0d0))
+			    (declare (type double-float d))
+			    (setq d 2.0d0)
+			    (handler-case (error "boom") (error (d) (format nil "~a" d)))))
+			(print (dcl-hc-shadow))
+			(defun int-hc-shadow ()
+			  (let ((n 1))
+			    (setq n 2)
+			    (handler-case (error "boom") (error (n) (format nil "~a" n)))))
+			(print (int-hc-shadow))
+			""";
+
+	private static final String DECLARED_FLOAT_EXPECTED = """
+			-13.375
+			T
+			-0.0
+			2
+			NIL
+			NIL
+			2.0
+			2.0e20
+			6.0
+			3.0
+			2.5
+			3
+			1.0
+			4
+			3.0
+			4.0
+			9.0
+			4.5
+			8.0
+			5.5
+			5.0
+			1.0
+			1.0
+			:STORE-TRAP
+			5
+			:READ-TRAP
+			9.0
+			5
+			2.5
+			"boom"
+			"boom"\
+			""";
+
+	@Test
+	void declaredFloatLocalsMatchTheUndeclaredEmissionOnBothOptimizeLevels() throws Exception {
+		// A (declare (type double-float ...)) routes the emitters the double-literal
+		// path routes and keeps the declared let locals in raw double slots
+		// (.kb/jvm-double-arithmetic.md). A TRUE declaration never changes an answer:
+		// the declared accumulator equals its undeclared twin, -0.0 and the NaN rules
+		// survive, a captured or special or shadowed declared name keeps the boxed
+		// semantics, and ratio/bignum operands keep float contagion. A FALSE
+		// declaration is the pinned UB shape (.kb/declarations-type-checks.md): a
+		// deterministic catchable error at the declared store or routed read inside a
+		// function (:STORE-TRAP / :READ-TRAP), the interpreter's answer at top level
+		// (bindings there keep the boxed representation), and compile-time widening for
+		// an integer LITERAL assigned to a declared float.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(DECLARED_FLOAT_PROGRAM));
+		byte[] fast = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Test", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(runClass(fast)).isEqualTo(DECLARED_FLOAT_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(DECLARED_FLOAT_EXPECTED);
+	}
+
 	private static final String INT_FUSION_PROGRAM = """
 			(defun mod32+ (a b) (logand (+ a b) 4294967295))
 			(defun rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))

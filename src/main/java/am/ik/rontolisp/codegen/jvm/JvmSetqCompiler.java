@@ -63,16 +63,46 @@ final class JvmSetqCompiler {
 		}
 		for (int p = 0; p < pairCount; p++) {
 			if (!(parts.get(1 + 2 * p) instanceof LispSymbol target)
-					|| JvmIntFusionCompiler.resolveRaw(target.name(), ctx) == null) {
+					|| (JvmIntFusionCompiler.resolveRaw(target.name(), ctx) == null
+							&& !ctx.rawDoubleLocals.containsKey(target.name()))) {
 				return false;
 			}
 		}
 		for (int p = 0; p < pairCount; p++) {
 			String name = ((LispSymbol) parts.get(1 + 2 * p)).name();
+			Integer rawDoubleSlot = ctx.rawDoubleLocals.get(name);
+			if (rawDoubleSlot != null) {
+				// The statement-position shape every float loop accumulator steps
+				// with: the value lands raw and NOTHING is re-read for the caller to
+				// pop (.kb/jvm-double-arithmetic.md).
+				compileRawDoubleValue(parts.get(2 + 2 * p), ctx, className);
+				ctx.emit(Opcode.DSTORE);
+				ctx.emit(rawDoubleSlot);
+				continue;
+			}
 			JvmIntFusionCompiler.compileRawStore(parts.get(2 + 2 * p), ctx, className,
 					java.util.Objects.requireNonNull(JvmIntFusionCompiler.resolveRaw(name, ctx)));
 		}
 		return true;
+	}
+
+	/**
+	 * Compiles a value destined for a raw {@code double} slot, leaving a raw
+	 * {@code double} on the stack. A value the routing predicate claims (a double
+	 * literal, a declared variable, arithmetic over either) computes raw; an integer
+	 * LITERAL widens at compile time, exactly as the double path's literal operands
+	 * always have. Everything else compiles boxed and lands through the strict cast: a
+	 * true declaration makes the cast free, a false one is a deterministic
+	 * {@code ClassCastException} at the store ({@code .kb/declarations-type-checks.md}).
+	 */
+	static void compileRawDoubleValue(LispVal valueExpr, JvmLispCompiler.Ctx ctx, String className) {
+		if (valueExpr instanceof am.ik.rontolisp.LispDouble || valueExpr instanceof am.ik.rontolisp.LispInteger
+				|| JvmLispCompiler.containsDouble(valueExpr, ctx)) {
+			JvmArithCompiler.compileUnboxedOperand(valueExpr, ctx, className);
+			return;
+		}
+		JvmExprCompiler.compileExpr(valueExpr, ctx, className);
+		JvmEmitHelper.unboxDeclaredDouble(ctx);
 	}
 
 	private static void compilePair(String name, LispVal valueExpr, JvmLispCompiler.Ctx ctx, String className) {
@@ -82,6 +112,18 @@ final class JvmSetqCompiler {
 		// LOCAL is never special, never captured, never in ctx.locals; a raw GLOBAL is
 		// never dynamically bound, so neither reaches the dual-bound special store below
 		// (and its eval mirror is off by construction -- JvmRawGlobals).
+		// A declared-float local in a raw double slot (.kb/jvm-double-arithmetic.md):
+		// the value lands raw and the setq's value is re-boxed from the slot.
+		Integer rawDoubleSlot = ctx.rawDoubleLocals.get(name);
+		if (rawDoubleSlot != null) {
+			compileRawDoubleValue(valueExpr, ctx, className);
+			ctx.emit(Opcode.DSTORE);
+			ctx.emit(rawDoubleSlot);
+			ctx.emit(Opcode.DLOAD);
+			ctx.emit(rawDoubleSlot);
+			JvmEmitHelper.boxDouble(ctx);
+			return;
+		}
 		JvmIntFusionCompiler.RawLocal rawLocal = JvmIntFusionCompiler.resolveRaw(name, ctx);
 		if (rawLocal != null) {
 			JvmIntFusionCompiler.compileRawStore(valueExpr, ctx, className, rawLocal);

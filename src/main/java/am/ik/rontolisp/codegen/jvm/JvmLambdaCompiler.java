@@ -112,6 +112,8 @@ final class JvmLambdaCompiler {
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
 		Set<String> savedBoxedVars = ctx.boxedVars;
 		Map<String, JvmIntFusionCompiler.RawLocal> savedRawLocals = new HashMap<>(ctx.rawLocals);
+		Map<String, Integer> savedRawDoubleLocals = new HashMap<>(ctx.rawDoubleLocals);
+		Set<String> savedDeclaredDoubles = ctx.declaredDoubles;
 		Map<String, JvmIntFusionCompiler.LocalIntLambda> savedLocalIntLambdas = new HashMap<>(ctx.localIntLambdas);
 		int savedNextLocal = ctx.nextLocal;
 		// The parameters are bound HERE, in the caller's frame, so this is a binder and
@@ -192,6 +194,18 @@ final class JvmLambdaCompiler {
 			}
 			bindName(restName, capturedParams.contains(restName), ctx);
 		}
+		// Body-head float declarations of the inline lambda, for its body only: a
+		// bound param name shadows an outer declared name whatever it declares
+		// (.kb/jvm-double-arithmetic.md).
+		Set<String> bodyDeclaredDoubles = new HashSet<>(ctx.declaredDoubles);
+		bodyDeclaredDoubles.removeAll(paramNames);
+		for (String declared : am.ik.rontolisp.compiler.DeclaredScalarTypes.declaredDoubles(bodyExprs,
+				ctx.closRegistry)) {
+			if (!ctx.specialVars.contains(declared)) {
+				bodyDeclaredDoubles.add(declared);
+			}
+		}
+		ctx.declaredDoubles = bodyDeclaredDoubles;
 		for (int i = 0; i < bodyExprs.size(); i++) {
 			if (i > 0) {
 				ctx.emit(Opcode.POP);
@@ -201,6 +215,8 @@ final class JvmLambdaCompiler {
 		ctx.locals = savedLocals;
 		ctx.boxedVars = savedBoxedVars;
 		ctx.rawLocals = savedRawLocals;
+		ctx.rawDoubleLocals = savedRawDoubleLocals;
+		ctx.declaredDoubles = savedDeclaredDoubles;
 		ctx.localIntLambdas = savedLocalIntLambdas;
 		ctx.nextLocal = savedNextLocal;
 	}
@@ -213,6 +229,7 @@ final class JvmLambdaCompiler {
 	 */
 	private static void bindName(String name, boolean boxed, JvmLispCompiler.Ctx ctx) {
 		ctx.rawLocals.remove(name);
+		ctx.rawDoubleLocals.remove(name);
 		ctx.localIntLambdas.remove(name);
 		if (boxed) {
 			ctx.boxedVars.add(name);

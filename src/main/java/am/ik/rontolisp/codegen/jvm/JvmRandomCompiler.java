@@ -28,7 +28,7 @@ final class JvmRandomCompiler {
 			throw new UnsupportedOperationException("random expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		if (JvmLispCompiler.hasDoubleLiteral(args)) {
+		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			// Float limit: tlr.nextDouble() * limit, kept as a double.
 			JvmEmitHelper.unboxDouble(ctx);
 			ctx.emit(Opcode.INVOKESTATIC);
