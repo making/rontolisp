@@ -474,6 +474,21 @@ final class JvmEmitHelper {
 	}
 
 	/**
+	 * Unboxes a value the emitter routed on the strength of a FLOAT DECLARATION alone:
+	 * {@code checkcast Double} + {@code doubleValue}, no {@code _dbl} coercion. A true
+	 * declaration makes the cast free (the value IS a Double); a false one fails as a
+	 * deterministic {@code ClassCastException} at this site -- the JVM spelling of the
+	 * wasm-GC {@code ref.cast} trap, never a silently coerced value
+	 * ({@code .kb/declarations-type-checks.md}).
+	 */
+	static void unboxDeclaredDouble(JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.doubleClass.index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(ctx.numberDoubleValue.index());
+	}
+
+	/**
 	 * Pushes an {@code int} constant in its shortest encoding.
 	 *
 	 * <p>

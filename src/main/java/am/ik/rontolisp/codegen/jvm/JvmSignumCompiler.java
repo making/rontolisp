@@ -19,7 +19,7 @@ final class JvmSignumCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		if (JvmLispCompiler.hasDoubleLiteral(args)) {
+		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			JvmEmitHelper.unboxDouble(ctx);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.SIGNUM_D).index());

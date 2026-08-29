@@ -197,6 +197,7 @@ final class JvmBodyOutliner {
 	private static List<String> liveNames(JvmLispCompiler.Ctx ctx) {
 		TreeSet<String> names = new TreeSet<>(ctx.locals.keySet());
 		names.addAll(ctx.rawLocals.keySet());
+		names.addAll(ctx.rawDoubleLocals.keySet());
 		return new ArrayList<>(names);
 	}
 
@@ -223,10 +224,18 @@ final class JvmBodyOutliner {
 		}
 		for (String name : names) {
 			JvmIntFusionCompiler.RawLocal raw = ctx.rawLocals.get(name);
+			Integer rawDouble = ctx.rawDoubleLocals.get(name);
 			if (raw != null) {
 				// A dual-representation local crosses boxed and lands as an ordinary
 				// one: the continuation re-derives nothing, it just holds the value.
 				JvmIntFusionCompiler.emitRawLocalBoxedRead(raw, ctx);
+			}
+			else if (rawDouble != null) {
+				// A raw double local crosses boxed the same way; the continuation
+				// holds it as an ordinary Object local (.kb/jvm-double-arithmetic.md).
+				ctx.emit(Opcode.DLOAD);
+				ctx.emit(rawDouble);
+				JvmEmitHelper.boxDouble(ctx);
 			}
 			else {
 				ctx.emit(Opcode.ALOAD);

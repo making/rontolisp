@@ -8,9 +8,49 @@ macro-exporting libraries wrap `defmacro` in `eval-when`.
 **Since 2026-08-11 declarations are no longer PURE no-ops on the wasm-GC
 backend**: a `(declare (type ...))` (and a `defstruct` slot `:type`) can drive
 single-arm array-access EMISSION -- see "Declaration-driven array emission"
-below. The VALUE semantics are unchanged everywhere: no declaration ever
-changes a result, and the interpreter/JVM/`--no-gc` backends still ignore them
-entirely.
+below. **Since 2026-08-29 the JVM backend reads the SCALAR float family too**
+(`.todo/569`): a `(declare (type double-float ...))` routes arithmetic onto the
+unboxed IEEE path and keeps declared let locals in raw `double` slots -- the
+mechanics live in `.kb/jvm-double-arithmetic.md`, the policy below. The VALUE
+semantics are unchanged everywhere for a CORRECT declaration: no true
+declaration ever changes a result, and the interpreter/`--no-gc` backends still
+ignore every declaration entirely.
+
+## The false-declaration policy (all backends, decided once)
+
+**A declaration may change EMISSION, never the RESULT of a correctly-declared
+program -- and where a backend TRUSTS a declaration, a FALSE one becomes a
+DETERMINISTIC error at the site the trusted representation meets the
+contradicting value, never a silently coerced or wrong value.** Decided by
+todo-320 for the wasm-GC array kinds and adopted unchanged by todo-569 for the
+JVM scalar floats; per-backend shape:
+
+- **wasm-GC** (Preview 1 and `--component`): a `ref.cast` TRAP at the access.
+  Uncatchable; the cheapest diagnosable shape, since a checked signal would
+  cost the dispatch bytes the feature removes.
+- **JVM**: a `checkcast java/lang/Double` failure at the declared read or
+  store -- a `ClassCastException`, which the condition bridge surfaces as a
+  CATCHABLE Lisp error (`handler-case` sees it). Catchability is a side effect
+  of the JVM's existing error channel, not a promise; the guarantee is only
+  determinism-at-the-site. One deliberate softening: an integer LITERAL
+  assigned to a declared float variable widens at compile time (`(setq sum 0)`
+  on a declared accumulator answers `0.0d0`) -- the same widening the double
+  path's literal operands always had, chosen over a trap because the shape is
+  common in sloppy-but-working sources and the widened value is what the very
+  next float operation would have computed anyway.
+- **Interpreter and `--no-gc`**: declarations ignored, the generic answer. The
+  interpreter is the oracle for CORRECTLY-declared programs only.
+
+So a falsely-declared program DIVERGES across backends (defined answer where
+declarations are ignored, deterministic trap/error where they drive emission)
+-- CL calls it undefined behavior, and the divergence is documented in
+`doc/*/reference/macros/declare.md` rather than papered over. The alternative
+-- coercing through `_dbl` so every backend answers SOMETHING -- was rejected
+because it answers silently WRONG data (`(setq x n)` of an integer reading
+back as a float) and still diverges from the interpreter, which keeps the
+integer. Cross-backend agreement for true declarations is pinned by the
+`declared-float-scalars-answer-what-undeclared-code-answers` ci-spec case and
+the wasm `declared-array-types-single-arm-access` case.
 
 ## What ships
 
@@ -45,9 +85,9 @@ deterministic trap at the access, never silent wrong data.** wasm-GC backends
 only (Preview 1 AND `--component`); the interpreter, the JVM and `--no-gc`
 still treat every declaration as a no-op, so a program with a false
 declaration DIVERGES across backends (works there, traps here). That is the
-todo-320 design decision: CL calls a false declaration undefined behavior, and
-a trap is the cheapest diagnosable shape -- a checked signal would cost the
-very dispatch bytes the feature removes. Re-evaluation trigger: if a real
+todo-320 design decision (now the shared policy above): CL calls a false
+declaration undefined behavior, and a trap is the cheapest diagnosable shape --
+a checked signal would cost the very dispatch bytes the feature removes. Re-evaluation trigger: if a real
 library ever needs the failure catchable, route the cast failure through a
 shared trap-with-message helper instead of widening per-site code.
 
