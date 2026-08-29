@@ -44,6 +44,12 @@ public final class LispString implements LispVal {
 
 	private boolean adjustable;
 
+	// Whether this object is the SOURCE CONSTANT the reader built for a "..." in the
+	// program text. It is shared by every evaluation of that form for the life of the
+	// program, so a destructive write into it would rewrite the source; the indexed-write
+	// lowering rebinds the place instead (see LispEvaluator's %schar-set arm).
+	private boolean sourceLiteral;
+
 	// The displacement target (make-array :displaced-to), or null when the string owns
 	// its buffer. A view owns no buffer (chars is the shared empty array): every access
 	// walks the chain through storage()/base(). A view has no fill pointer and is not
@@ -98,6 +104,47 @@ public final class LispString implements LispVal {
 		this.displacedTo = target;
 		this.displacedOffset = offset;
 		this.viewLength = length;
+	}
+
+	/**
+	 * Creates the SOURCE CONSTANT for a {@code "..."} in the program text. Only the
+	 * reader builds one: every evaluation of that form answers this same object, which is
+	 * why an indexed write through it is a rebind of the place rather than a mutation
+	 * (see {@code .kb/string-write-runtime.md}).
+	 * @param value the string content
+	 * @return the literal string
+	 */
+	public static LispString literal(String value) {
+		LispString string = new LispString(value);
+		string.sourceLiteral = true;
+		return string;
+	}
+
+	/**
+	 * Whether this object is the source constant the reader built for a {@code "..."} in
+	 * the program text (as opposed to a string a running program allocated).
+	 * @return true for a source literal
+	 */
+	public boolean sourceLiteral() {
+		return this.sourceLiteral;
+	}
+
+	/**
+	 * Answers a FRESH string equal to this one with the code point at {@code index}
+	 * replaced -- the rebuild the compiled backends' {@code %schar-set-runtime} performs
+	 * for an immutable string. The result is an ordinary allocated string, not a source
+	 * literal.
+	 * @param index the code-point index to replace
+	 * @param codePoint the replacement code point
+	 * @return the rebuilt string
+	 */
+	public LispString withCharAt(int index, int codePoint) {
+		int length = this.length();
+		StringBuilder rebuilt = new StringBuilder(length + 1);
+		for (int i = 0; i < length; i++) {
+			rebuilt.appendCodePoint(i == index ? codePoint : this.charAt(i));
+		}
+		return new LispString(rebuilt.toString());
 	}
 
 	/**

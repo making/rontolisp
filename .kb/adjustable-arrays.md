@@ -146,7 +146,11 @@ vectors, but a half-contract builtin is worse than none), and the string rebuild
 splices a `(make-array n :element-type 'character :initial-element item)` filler
 between the untouched head and tail. The interpreter writes a string in place
 through `LispString.setCharAt`, so that one deviation is compile-path-only,
-exactly as it is for `replace`. `nstring-upcase` / `nstring-downcase` /
+exactly as it is for `replace` — with ONE exception since todo-580: a string
+LITERAL is never written in place on any backend, `%schar-set` included, because
+the literal is the source constant (`.kb/string-write-runtime.md`, "A string
+LITERAL is never written"). `replace`/`fill`/`nstring-*` do not yet honour that
+and still corrupt a literal on the interpreter — `.todo/581`. `nstring-upcase` / `nstring-downcase` /
 `nstring-capitalize` (todo-402) join that family rather than forming a second
 one: they are prelude Lisp that folds with the NON-destructive sibling and then
 walks `%nstring-replace`'s `(setf (aref s i) c)` over the result, so they inherit

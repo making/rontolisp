@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import java.util.function.DoubleUnaryOperator;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
@@ -5571,29 +5572,57 @@ public final class Environment implements Scope {
 		});
 	}
 
+	/**
+	 * The {@code %schar-set} primitive: writes {@code c} into slot {@code i} of the
+	 * string and answers {@code c}.
+	 *
+	 * <p>
+	 * A SOURCE LITERAL is refused here. The literal is the constant in the program text,
+	 * shared by every evaluation of its form, so a write into it would rewrite the source
+	 * -- which is exactly what the compiled backends never do, their
+	 * {@code %schar-set-runtime} rebuilding the string and {@code setq}ing it back into
+	 * the place. {@code LispEvaluator} performs that same rebind before reaching here
+	 * whenever the place is a variable; when it is not there is nowhere to put the
+	 * result, and the compiled backends refuse such a place outright, so this refuses it
+	 * too ({@code .kb/string-write-runtime.md}).
+	 * @param args the string, the index and the character
+	 * @param rebindPlace how to store a rebuilt string back into the place the string
+	 * came from, or {@code null} when the place cannot take one
+	 * @return the character written
+	 */
+	static LispVal scharSet(List<LispVal> args, @Nullable Consumer<LispString> rebindPlace) {
+		requireArgCount(LispNames.SCHAR_SET, args, 3);
+		if (!(args.get(0) instanceof LispString str)) {
+			throw new LispEvalException(LispNames.SCHAR_SET + " expects a string, got " + args.get(0).print());
+		}
+		int index = requireIndex(LispNames.SCHAR_SET, args.get(1));
+		// Capacity, not the fill pointer: a (setf (char s i) c) past the fill pointer
+		// writes an inactive slot in CL and on all three compile backends, and the
+		// fill pointer bounds the sequence view only (.kb/adjustable-arrays.md).
+		if (index < 0 || index >= str.capacity()) {
+			throw new LispEvalException(
+					LispNames.SCHAR_SET + ": index " + index + " out of bounds for string of length " + str.capacity());
+		}
+		LispChar c = requireChar(LispNames.SCHAR_SET, args.get(2));
+		if (str.sourceLiteral()) {
+			if (rebindPlace == null) {
+				throw new LispEvalException("setf on " + LispNames.SCHAR + "/" + LispNames.CHAR
+						+ " requires a variable string place when the string is a literal, got " + str.print());
+			}
+			rebindPlace.accept(str.withCharAt(index, c.codePoint()));
+			return c;
+		}
+		str.setCharAt(index, c.codePoint());
+		return c;
+	}
+
 	private static void registerCharacters(Environment env) {
 		env.defineFunction(LispNames.CHAR, new LispFunction(LispNames.CHAR, args -> charRef(LispNames.CHAR, args)));
 		env.defineFunction(LispNames.SCHAR, new LispFunction(LispNames.SCHAR, args -> charRef(LispNames.SCHAR, args)));
 		// %schar-set: the (setf (schar s i) c) lowering -- mutate in place, return c.
 		// One indexed slot holds one full code point (including supplementary code
 		// points), matching the JVM and WASM char-vec representations.
-		env.defineFunction(LispNames.SCHAR_SET, new LispFunction(LispNames.SCHAR_SET, args -> {
-			requireArgCount(LispNames.SCHAR_SET, args, 3);
-			if (!(args.get(0) instanceof LispString str)) {
-				throw new LispEvalException(LispNames.SCHAR_SET + " expects a string, got " + args.get(0).print());
-			}
-			int index = requireIndex(LispNames.SCHAR_SET, args.get(1));
-			// Capacity, not the fill pointer: a (setf (char s i) c) past the fill pointer
-			// writes an inactive slot in CL and on all three compile backends, and the
-			// fill pointer bounds the sequence view only (.kb/adjustable-arrays.md).
-			if (index < 0 || index >= str.capacity()) {
-				throw new LispEvalException(LispNames.SCHAR_SET + ": index " + index
-						+ " out of bounds for string of length " + str.capacity());
-			}
-			LispChar c = requireChar(LispNames.SCHAR_SET, args.get(2));
-			str.setCharAt(index, c.codePoint());
-			return c;
-		}));
+		env.defineFunction(LispNames.SCHAR_SET, new LispFunction(LispNames.SCHAR_SET, args -> scharSet(args, null)));
 		env.defineFunction(LispNames.CHAR_CODE, new LispFunction(LispNames.CHAR_CODE, args -> {
 			requireArgCount(LispNames.CHAR_CODE, args, 1);
 			return new LispInteger(requireChar(LispNames.CHAR_CODE, args.get(0)).codePoint());

@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
@@ -4946,6 +4947,11 @@ public final class LispEvaluator {
 					ensurePreludeSetfPlacesLoaded(cons);
 					return eval(expandSetfMaybeUserExpander(expandUserMacroPlaces(cons)), env);
 				}
+				case LispNames.SCHAR_SET:
+					// Not a plain builtin call: a write through a place holding a string
+					// LITERAL rebinds that place instead of mutating the source constant,
+					// which the callee cannot do for itself.
+					return evalScharSet(cons, env);
 				case LispNames.PUSH:
 					return eval(LispMacroExpander.expandPush(cons), env);
 				case LispNames.POP:
@@ -8145,25 +8151,67 @@ public final class LispEvaluator {
 				continue;
 			}
 			value = eval(parts.get(i + 1), env);
-			if (LispNames.PACKAGE_VAR.equals(n)) {
-				// *package* IS the resolver's current package (see currentPackageValue):
-				// the assignment writes straight through -- into the active let binding
-				// when one is in extent (evalLet restores the saved package on exit),
-				// else permanently, which is what a top-level (in-package P) resolves to.
-				assignCurrentPackage(value);
-				continue;
-			}
-			// A special with an active dynamic binding is assigned in that binding
-			// (visible to callees within the extent); otherwise env.set walks to the
-			// global default (a special never has a lexical binding to shadow).
-			if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(n)) {
-				this.dynamicBindings.setCurrent(n, value);
-			}
-			else {
-				env.set(n, value);
-			}
+			assignVariable(n, value, env);
 		}
 		return value;
+	}
+
+	/**
+	 * Stores {@code value} into the variable {@code name}, the way {@code setq} does:
+	 * through the active dynamic binding of a special, into the resolver's current
+	 * package for {@code *package*}, and lexically otherwise.
+	 * @param name the variable name
+	 * @param value the value to store
+	 * @param env the lexical environment
+	 */
+	private void assignVariable(String name, LispVal value, Environment env) {
+		if (LispNames.PACKAGE_VAR.equals(name)) {
+			// *package* IS the resolver's current package (see currentPackageValue):
+			// the assignment writes straight through -- into the active let binding
+			// when one is in extent (evalLet restores the saved package on exit),
+			// else permanently, which is what a top-level (in-package P) resolves to.
+			assignCurrentPackage(value);
+			return;
+		}
+		// A special with an active dynamic binding is assigned in that binding
+		// (visible to callees within the extent); otherwise env.set walks to the
+		// global default (a special never has a lexical binding to shadow).
+		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
+			this.dynamicBindings.setCurrent(name, value);
+		}
+		else {
+			env.set(name, value);
+		}
+	}
+
+	/**
+	 * Evaluates {@code (%schar-set place index char)} -- the indexed string write every
+	 * {@code (setf (schar|char|aref|elt ...) ...)} place lowers to.
+	 *
+	 * <p>
+	 * A string LITERAL is the source constant, shared by every evaluation of its form, so
+	 * writing into it would rewrite the program text. The compiled backends never do:
+	 * their {@code %schar-set-runtime} rebuilds the string and {@code setq}s it back into
+	 * the place, which is why that place must be a VARIABLE. This is the interpreter's
+	 * half of the same rule, so all four backends agree -- and it carries the same limit,
+	 * an alias taken before the write still sees the literal's own content
+	 * ({@code .kb/string-write-runtime.md}). Every other string is still written in
+	 * place, which is what a {@code make-string} buffer needs.
+	 * @param cons the %schar-set call
+	 * @param env the lexical environment
+	 * @return the character written
+	 */
+	private LispVal evalScharSet(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4) {
+			throw new LispEvalException(LispNames.SCHAR_SET + " expects a string, an index and a character");
+		}
+		LispVal target = eval(parts.get(1), env);
+		LispVal index = eval(parts.get(2), env);
+		LispVal character = eval(parts.get(3), env);
+		Consumer<LispString> rebind = parts.get(1) instanceof LispSymbol place
+				? rebuilt -> assignVariable(place.name(), rebuilt, env) : null;
+		return Environment.scharSet(List.of(target, index, character), rebind);
 	}
 
 	private LispVal evalWhile(LispCons cons, Environment env) {

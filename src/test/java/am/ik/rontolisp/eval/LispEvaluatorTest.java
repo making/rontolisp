@@ -9724,6 +9724,49 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aStringLiteralIsSharedAcrossEvaluationsOnEveryBackend() {
+		// Unlike an array literal, a string literal is NOT a constructor: the same
+		// object answers every evaluation here and on both compile backends.
+		assertThat(eval("(let ((f (lambda () \"abc\"))) (eq (funcall f) (funcall f)))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(let ((f (lambda () #(\"abc\")))) (eq (aref (funcall f) 0) (aref (funcall f) 0)))"))
+			.isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void aWriteThroughAStringLiteralRebindsThePlaceAndLeavesTheConstant() {
+		// The compiled backends' %schar-set-runtime rebuilds the string and setq's it
+		// back into the variable; the source constant is never written.
+		assertThat(evalMulti("""
+				(defun %lit-str () "abc")
+				(list (let ((a (%lit-str))) (setf (char a 0) #\\Z) a)
+				      (let ((a (%lit-str))) (setf (elt a 1) #\\Y) a)
+				      (let ((a (%lit-str))) (setf (aref a 2) #\\X) a)
+				      (%lit-str))
+				""").print()).isEqualTo("(\"Zbc\" \"aYc\" \"abX\" \"abc\")");
+	}
+
+	@Test
+	void aWriteThroughAStringLiteralWithNoVariablePlaceIsAnError() {
+		// The compiled backends refuse such a place at compile time; the interpreter has
+		// nowhere to store the rebuilt string either, so it refuses it at run time.
+		assertThatThrownBy(() -> eval("(setf (char \"abc\" 0) #\\Z)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("requires a variable string place");
+		assertThatThrownBy(() -> eval("(let ((v #(\"abc\"))) (setf (char (aref v 0) 0) #\\Z))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("requires a variable string place");
+	}
+
+	@Test
+	void aWriteThroughAnAllocatedStringBufferIsStillInPlace() {
+		// Only the source constant is protected: a make-string buffer is the mutable
+		// character vector every "allocate then fill" program needs, alias included.
+		assertThat(evalMulti("""
+				(let ((s (make-string 3 :initial-element #\\a)))
+				  (let ((alias s)) (setf (char s 0) #\\Z) (list s alias)))
+				""").print()).isEqualTo("(\"Zaa\" \"Zaa\")");
+	}
+
+	@Test
 	void lengthOfVectorReturnsElementCount() {
 		assertThat(eval("(length (make-array 5 :initial-element 0))")).isEqualTo(new LispInteger(5));
 		assertThat(eval("(length #(10 20 30))")).isEqualTo(new LispInteger(3));

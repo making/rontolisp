@@ -44,11 +44,15 @@ it only had programs to break.
 
 **The premise the todo argued from was false.** `.todo/578` proposed the immutable
 reading as "consistent with how string literals already behave here". Measured, a string
-literal is NOT immutable here: it is shared (`(eq (fs) (fs))` is `t` on all four), and a
-write to one succeeds -- corrupting the source constant on the interpreter, rebuilding
-per binding on the compile paths (`.kb/string-write-runtime.md`). The tree's real,
-pinned rule for a literal write is "it is legal and it is local to the binding you wrote
-through", which is what fresh-per-evaluation gives exactly and coalescing gives never.
+literal is NOT immutable here: it is shared (`(eq (fs) (fs))` is `t` on all four) and a
+write to one succeeds. The tree's real, pinned rule for a literal write is "it is legal
+and it is local to the binding you wrote through", which is what fresh-per-evaluation
+gives exactly and coalescing gives never. (When this was written the interpreter did not
+keep the second half of that rule -- its write corrupted the source constant while the
+compile paths rebuilt per binding. `.todo/580` closed that on 2026-08-29 by giving the
+interpreter the same rebind, so the string half now holds on all four:
+`.kb/string-write-runtime.md`, "A string LITERAL is never written". The conclusion below
+is unaffected -- it rests on the rule, not on which backends implemented it.)
 
 **`PureBuiltinFolder` rests on freshness.** `.kb/pure-builtin-fold.md` admits a packed
 integer-vector result into the fold *because* "both compile backends allocate the array
