@@ -162,3 +162,59 @@ these raise the requirement. The one exception is a program that uses the
 [`java:` interop package](../guides/java-interop.md): the compiler embeds a
 reflection bridge (compiled with the project's own Java release) into the
 class, so it needs a JRE at least as new as the one rontolisp was built with.
+
+## Skip the JIT Warm-Up with an AOT Cache
+
+A compiled program starts as bytecode, so its first few dozen milliseconds run in
+the JVM's interpreter and first-tier compiler while the JIT works out which
+methods are hot. For a long-running program that cost disappears into the run.
+For a short one it can be most of it: `bench-report`'s `mandelbrot` finishes in
+about 95 ms on its first in-process run and about 22 ms on its third, and every
+new process starts over at 95.
+
+JDK 25 can persist what that first run learned. Compile to a **jar**, do one
+training run, build a cache from it, and pass the cache to every run after:
+
+```bash
+rontolisp mandelbrot.lisp -o app.jar
+java -XX:AOTMode=record -XX:AOTConfiguration=app.aotconf -jar app.jar
+java -XX:AOTMode=create -XX:AOTConfiguration=app.aotconf -XX:AOTCache=app.aot -cp app.jar
+java -XX:AOTCache=app.aot -jar app.jar
+```
+
+On a 64-core Linux box with GraalVM 25 that takes `mandelbrot`'s first run from
+95 ms to 51 and `matmul`'s from 94 to 57 (medians). The gain is the JIT not
+re-deriving a profile it has already been handed, so it shows up where warm-up
+was a large share of a short run and nowhere else: of the ten `bench-report`
+programs, only those two move more than 10%.
+
+Four things to know before relying on it.
+
+**It needs `-o app.jar`.** The cache cannot be built from a classpath that
+contains a directory, so a bare `-o Prog.class` run under `java -cp . Prog`
+cannot be trained. The jar is the same compiled class plus a manifest, so this
+costs nothing else.
+
+**The training run has to do the real work.** The cache stores a profile, not
+compiled code, and a profile only exists once the training run has itself warmed
+up. Training `mandelbrot` on a quarter-size grid -- 32 ms of work -- buys the
+full run nothing. Train on a representative workload, not a smoke test.
+
+**The cache belongs to one jar file.** It records the jar's path and timestamp,
+so rebuilding the program invalidates it. Nothing breaks when that happens: the
+JVM prints a few `[error][aot]` lines on stderr, ignores the cache and runs the
+program correctly at the usual speed. Rebuild the cache whenever you rebuild the
+jar, or drop the flag. A cache is around 11 MB.
+
+**On GraalVM, use the two-step flow above rather than the one-command
+`-XX:AOTCacheOutput`.** That shortcut assembles the cache in a child JVM which
+loses GraalVM's `jdk.internal.vm.ci` module, and the cache it writes is rejected
+at load -- with the error only on stderr, so the program still runs, just with no
+gain at all.
+
+The same works on `rontolisp` itself, where it is worth roughly 3x on start-up
+(`java -jar rontolisp.jar` on a program that computes nothing: 476 ms to 144 ms;
+a cache trained on a compile invocation halves `-o out.class` instead, 978 ms to
+480 ms). If you have a GraalVM to hand, the [native binary](../getting-started/build.md)
+is the better answer to the same problem -- it does those in 12 ms and 109 ms
+with no cache file and no training step.
