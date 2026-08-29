@@ -123,6 +123,54 @@ form's FULL argument list, not the shape its commonest spelling has. Pinned by
 `WasmLispCompilerIntegrationTest#multiPairSetqBuildsAClosureInALaterPair`, which
 must move together.
 
+### One owner decides "this name needs a cell", and every BINDER asks it (todo-561)
+
+Two questions have to give the same answer for a capture to work, and they are
+asked by different code: the closure EMITTER (`JvmLambdaCompiler.compile` /
+`WasmLambdaCompiler.compileValue`) decides what to capture from
+`findFreeVars`, while the BINDER that created the variable decides whether its
+slot holds the value or an `Object[1]` / `$cell`. The binder's owner is
+`FreeVarAnalyzer.findCapturedVars` -- and a binder that does not ask it hands
+the closure a FRESH cell holding a COPY, which is not a crash: the two sides
+then mutate different cells and the compiled program answers the value the
+binding started with, for good. Every binder consults it:
+`Jvm`/`WasmLetCompiler` (the `let` bindings), the defun/lambda prologues in
+`Jvm`/`WasmLispCompiler` (captured parameters), and
+`Jvm`/`WasmLambdaCompiler.compileCall` (an inline `((lambda (p) ...) a)` binds
+`p` in the CALLER's frame).
+
+Two of those did not, and both were silent wrong answers found in 2026-08:
+
+- **A `defun` nested in a `let` or a function body.** The capture walk SKIPPED
+  `defun`, on the reading that a defun is a definition rather than a closure.
+  It is not one here: both backends lower a non-top-level `defun` to
+  `(setq name (lambda ...))` and call it through the variable
+  (`LispMacroExpander.expandCallThroughVariable`), so every nested definition
+  got its own copy of the binding. The CL closure-over-`let` idiom -- how
+  cl-ppcre spells its scanner caches -- answered the INITIAL value from every
+  definition: `(let ((counter 0)) (defun bump () (setq counter (+ counter 1)))
+  (defun peek () counter))` printed 0 after two `bump`s on both compile paths,
+  2 in the interpreter and in SBCL. The walk now descends a nested `defun`'s
+  body with its own parameters removed, exactly as it descends a `lambda`.
+- **An inline `((lambda (n) ...) 0)` call**, whose parameters
+  `compileCall` bound as plain locals with no capture analysis at all, so a
+  closure in the body wrote a snapshot: 0 where the interpreter and SBCL say 2.
+
+The JVM emitter no longer has a fallback for the disagreement: a free variable
+whose binding left it unboxed is an `IllegalStateException` naming the name,
+not a fresh cell. Measured over all 219 `examples/**.lisp` compiles, the
+fallback fired 0 times after the two binders were fixed (11 distinct names
+before, all of them cl-ppcre / cl-postgres / uax-15 closure-over-`let`
+bindings). Pinned by
+`JvmLispCompilerTest#nestedDefunsShareTheEnclosingLetsBindingRatherThanEachTakingACopy`
+/ `#anInlineLambdaCallBoxesAParameterItsBodyClosesOver`, their
+`WasmLispCompilerIntegrationTest` twins, and the `closure-binders-share-one-cell`
+ci-spec case (all four backends).
+
+**A nested `defun` inside a `defun` is still not reachable by name** -- the
+call site compiles to `The function <NAME> is undefined` -- so only the
+closure-over-`let` spelling of the idiom works today.
+
 ## A redefined defun binds every call to its LAST definition (todo-256)
 
 Both compile backends resolve a defun call site through the per-NAME map built

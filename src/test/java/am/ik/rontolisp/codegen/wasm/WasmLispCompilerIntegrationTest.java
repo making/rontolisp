@@ -6344,6 +6344,41 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void nestedDefunsShareTheEnclosingLetsBindingRatherThanEachTakingACopy() throws Exception {
+		// The CL closure-over-let idiom (cl-ppcre spells its scanner caches this way).
+		// A nested defun is not a definition on the compile paths: it lowers to
+		// (setq name (lambda ...)), a closure over the let variables, so the capture
+		// analysis must see it. Skipping defun left the binding unboxed and gave every
+		// nested definition a private copy -- the compiled answer was (0 START) where
+		// the interpreter says (2 LATER).
+		assertThat(compileAndRun("""
+				(let ((counter 0) (tag 'start))
+				  (defun bump () (setq counter (+ counter 1)))
+				  (defun retag (v) (setq tag v))
+				  (defun peek () (list counter tag)))
+				(bump)
+				(bump)
+				(retag 'later)
+				(print (peek))
+				""")).isEqualTo("(2 LATER)");
+	}
+
+	@Test
+	void anInlineLambdaCallBoxesAParameterItsBodyClosesOver() throws Exception {
+		// ((lambda (n) ...) 0) binds n in the CALLER's frame, and that binder never
+		// asked whether the body closes over it -- so the nested lambda was handed a
+		// snapshot cell and its assignments never reached n. Answered 0, not 2.
+		assertThat(compileAndRun("""
+				(print ((lambda (n)
+				          (let ((g (lambda () (setq n (+ n 1)))))
+				            (funcall g)
+				            (funcall g)
+				            n))
+				        0))
+				""")).isEqualTo("2");
+	}
+
+	@Test
 	void closureMutation() throws Exception {
 		assertThat(compileAndRun("""
 				(defun make-counter ()

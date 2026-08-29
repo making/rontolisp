@@ -137,9 +137,13 @@ register-allocated `long`s inside.
   the generator except through the numbers.
 - **Unboxed dual-representation locals** (`RawLocal`): an eligible `let`
   binding -- plain lexical, not special, not captured
-  (`FreeVarAnalyzer.findCapturedVars`), not a promoted top-level global, not a
-  duplicate in its `let`, in a body that defines no nested `defun` (the
-  capture analyzer skips `defun` by design) and REASSIGNS the name an
+  (`FreeVarAnalyzer.findCapturedVars`, asked by `JvmLetCompiler` BEFORE
+  `rawBindingEligible` is consulted at all: "does this name need a cell" has
+  ONE owner and the raw path is simply never offered a captured name --
+  `.kb/core-representation.md`), not a promoted top-level global, not a
+  duplicate in its `let`, in a body that defines no nested `defun` (which
+  lowers to a closure over the binding AND reaches it through the global
+  backing store) and REASSIGNS the name an
   integer-shaped value (`rawBindingEligible`; an init-only binding boxes once
   either way, and admitting ironclad's functional round-temp chains nearly
   doubled `update-sha512-block`), whose init is not float-contaminated and
@@ -373,6 +377,21 @@ ironclad-loading program crosses 8000 bytecodes -- LIBRARY code, the guard
 `flet-fusion-and-unboxed-locals` / `fused-comparisons-and-raw-leaf-stores`
 `fused-random-and-aref-leaves` ci-spec cases, which pin all four backends'
 outputs against each other.
+
+### What the dual representation was NOT responsible for (2026-08-29, todo-561)
+
+A `let` variable captured by a closure in one branch arm and assigned INLINE in
+a sibling arm was reported as compiling to a raw store past a size threshold,
+with `class java.lang.Long cannot be cast to class [Ljava/lang/Object;` from
+the inline arm. Measured: the failure reproduces byte-identically with fusion
+OFF, under both `--optimize=size` and
+`-Drontolisp.debug.nointfusion=true` -- no `_fx$N`, no `RawLocal`, same
+exception. It is the ONE-BYTE local index (todo-562, `.kb/jvm-method-size-limits.md`):
+the frame passed 255 slots, `astore 256/257/258` truncated to `astore 0/1/2`,
+and slots 0/1/2 held the parameter and the two capture cells, so the next
+`aload 2; checkcast [Ljava/lang/Object;` read a `Long`. A 162-program sweep of
+the reported shape at every arm size found no divergence below that ceiling.
+`rawBindingEligible` was never asked about the name in the first place.
 
 ## Re-evaluation triggers
 

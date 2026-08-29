@@ -533,7 +533,26 @@ public final class FreeVarAnalyzer {
 							}
 						}
 						case LispNames.DEFUN -> {
-							// skip
+							// A defun that is NOT at top level is not a definition: both
+							// backends lower it to (setq name (lambda ...)) and call it
+							// through the variable
+							// (LispMacroExpander.expandCallThroughVariable), so it closes
+							// over the enclosing bindings exactly as a lambda does and
+							// they need the same cell. Skipping it left the binding
+							// unboxed and handed every nested definition a private
+							// snapshot copy -- the CL closure-over-let idiom (cl-ppcre's
+							// scanner caches) then answered the INITIAL value for good.
+							// A top-level defun's body never reaches here: it is walked
+							// with its own parameters as the local set, so a name in
+							// this set can only be an enclosing binding.
+							List<LispVal> parts = cons.toList();
+							if (parts.size() >= 3) {
+								Set<String> outerVars = new HashSet<>(localVars);
+								outerVars.removeAll(extractParamNames(parts.get(2)));
+								for (int i = 3; i < parts.size(); i++) {
+									collectCapturedVars(parts.get(i), outerVars, knownFunctions, captured, true);
+								}
+							}
 						}
 						case LispNames.LET_STAR -> collectCapturedVars(LispMacroExpander.expandLetStar(cons), localVars,
 								knownFunctions, captured, insideLambda);
@@ -756,9 +775,9 @@ public final class FreeVarAnalyzer {
 	 * "Cannot find variable for closure" without one).
 	 * <ul>
 	 * <li>a {@code defun} nested in a top-level {@code let} -- the CL closure-over-let
-	 * idiom -- which {@link #findCapturedVars} skips by design: in a function body a
-	 * {@code defun} is not a closure, and the nested one reaches the binding through the
-	 * global backing store {@code GlobalVarCollector} mints for it;</li>
+	 * idiom -- which {@link #findCapturedVars} DOES see (it lowers to a lambda), but
+	 * which also reaches the binding through the global backing store
+	 * {@code GlobalVarCollector} mints for it;</li>
 	 * <li>an {@code async-lambda}/{@code async-defun}, whose head that walk does not read
 	 * as a lambda (the async emitter runs its own free-variable pass instead).</li>
 	 * </ul>
