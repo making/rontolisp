@@ -159,6 +159,38 @@ declared 30 and 20 -- so most of what their cells report is the cold run
 executing pre-JIT tiers, not the emitted code
 (`.kb/jvm-double-arithmetic.md` has the tier-by-tier numbers).
 
+**A JDK 25 AOT cache would move two of those rows, and the table does not use
+one.** JDK 25 can persist a program's method profiles between runs
+(`-XX:AOTMode=record` on a training run, `-XX:AOTMode=create`, then
+`-XX:AOTCache=` on every run after), which is the JVM's answer to paying warm-up
+once. Measured on a 64-core Linux box on 2026-08-29, the JVM backend's ten
+benchmarks compiled to `-o Bench.jar`, cold in-program milliseconds, best/median
+of five alternated runs each:
+
+| ms | fib | mandelbrot | matmul | sieve | sort | hash | string | clos | bignum | list |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| no cache | 73/82 | 82/96 | 90/94 | 438/506 | 427/452 | 491/512 | 229/242 | 88/101 | 303/307 | 357/401 |
+| AOT cache | 71/74 | 48/56 | 48/57 | 426/460 | 393/399 | 436/460 | 224/244 | 85/94 | 305/310 | 369/375 |
+
+`mandelbrot` -42% and `matmul` -39%; the other eight sit inside the ~10% this
+report calls noise. That is the same finding from the other direction -- only a
+row that was mostly warm-up has warm-up to give back.
+
+It is left out of the table because the training run has to BE the workload. The
+cache holds a profile, not compiled code, and a profile only exists if the
+training run itself got warm: the same `mandelbrot` jar trained on a quarter-size
+grid (32 ms of work) buys the full run nothing, and only a training run past
+~60 ms buys all of it. So "train the JVM column" means "run each benchmark at
+full size first and optimize the measured run from its own profile" --
+profile-guided optimization that SBCL, ECL and ABCL do not get here, in a table
+whose only purpose is comparing them. It would also mean moving the JVM column's
+artifact from a `.class` to a `.jar`, because the cache cannot be trained on a
+directory classpath at all -- changing how the measurement is taken in order to
+improve one column. The run-time table keeps timing one cold run of a compiled
+class, which is what a person running the program gets.
+`.kb/jvm-aot-cache.md` has the rest, including what it does to `rontolisp`'s own
+startup.
+
 rontolisp's wasm column runs under wasmtime, and its interpreter column walks
 the AST. Neither has a counterpart among the other three; they are in the table
 because they are what rontolisp also is.

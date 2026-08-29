@@ -218,6 +218,13 @@ remaining cold-run distance to SBCL's 30 ms is JIT latency and tier-0
 execution of already-good code -- SBCL pays its compilation in `compile-file`
 (the build column), this backend pays it at first execution, and no emission
 change removes that; an AOT/CDS-style answer is out of this file's scope.
+That scope is now `.kb/jvm-aot-cache.md`, and it was measured on 2026-08-29:
+a JDK 25 Leyden AOT cache DOES cut this row's cold run roughly in half
+(95 -> 51 ms median, matmul 94 -> 57), entirely through replayed method
+profiles rather than class loading -- but only from a training run that
+itself ran the workload to steady state, and only over a `-o app.jar`
+classpath. It is documented for users and deliberately kept out of the
+harness; that file has the numbers and the reasoning.
 
 ## Numbers (2026-08-28, linux/x86-64, exec jar, GraalVM 25)
 

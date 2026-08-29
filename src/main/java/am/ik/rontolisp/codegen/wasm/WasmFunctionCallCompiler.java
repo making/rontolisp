@@ -127,6 +127,14 @@ final class WasmFunctionCallCompiler {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 		}
+		else if (ctx.nestedDefunNames.contains(name) && ctx.globalIndices.containsKey(name)) {
+			// A defun nested inside a top-level let or a function body compiles to
+			// (setq name (lambda ...)) and the assigned name is a global variable
+			// holding the closure: dispatch the call through it. BEFORE the dynamic
+			// fallback below, which resolves the runtime FUNCTION namespace -- a
+			// namespace this definition never enters.
+			WasmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx);
+		}
 		else if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileCall(name, cons, ctx);
 		}
@@ -137,9 +145,7 @@ final class WasmFunctionCallCompiler {
 				return;
 			}
 			if (ctx.globalIndices.containsKey(name)) {
-				// A defun nested inside a top-level let compiles to (setq name
-				// (lambda ...)) and the assigned name is a global variable holding the
-				// closure: dispatch the call through it.
+				// A top-level (setq name (lambda ...)) the same way.
 				WasmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx);
 				return;
 			}

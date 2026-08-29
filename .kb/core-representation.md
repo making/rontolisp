@@ -194,19 +194,65 @@ name. `CompileTimeBoundp` already models that -- a `defun` head is in its
 `DEFERRING` set, so a name defined inside a function body is POISONED (no
 `(boundp 'name)` fold) rather than asserted bound.
 
-One spelling stays divergent and is NOT this seam's: a nested `defun` that
-REDEFINES an existing top-level `defun`. Every by-name call site resolves the
-compiled function first and only falls through to the global variable when
-there is none (`Jvm`/`WasmFunctionCallCompiler`), so
-`(defun over () 'top) (defun redefiner () (defun over () 'nested) ...)` answers
-`TOP` after `(redefiner)` on all three compile backends where the interpreter
-and SBCL answer `NESTED` -- the same whole-program static resolution the
-"redefined defun binds every call to its LAST definition" section below
-describes, not a missing store.
+### A nested `defun` that REDEFINES a top-level one (todo-574)
 
-Pinned by `JvmLispCompilerTest#aDefunNestedInADefunBodyIsReachableByName`, its
-`WasmLispCompilerIntegrationTest` twin, and the second half of the
-`closure-binders-share-one-cell` ci-spec case (all four backends).
+A name with BOTH spellings had two resolution rules and the wrong one won:
+every by-name call site resolved the compiled function first and only fell
+through to the global variable when there was none, so the nested definition
+was written to a store nothing read. The fix gives such a name ONE rule --
+`compiler/NestedDefunRedefinition`, a front-end rewrite both compilers run
+right after `ShadowedBuiltins.process` (after every pass that can mint a
+top-level defun of its own, before Pass 1):
+
+```lisp
+(defun over () 'top)          ->  (defun %top-defun$over () 'top)
+                                  (setq over (function %top-defun$over))
+```
+
+The name is then a global variable and nothing else, so every mechanism that
+already serves a nested `defun` serves it -- the call sites dispatch through
+the variable, `#'over` reads it, and the LAST assignment executed wins, which
+is the interpreter's and SBCL's answer (`TOP DONE NESTED`). The assignment sits
+where the `defun` sat, so a top-level call before it is as undefined as it is in
+the interpreter, and the two definitions need not share an arity (the call is a
+`funcall`, not a fixed direct call). A program where the two spellings never
+meet is returned unchanged, so the indirect call is paid only where it buys the
+right answer.
+
+Three cases it deliberately does NOT paper over:
+
+- The name is also declared by a top-level `defvar`/`defparameter`/
+  `defconstant`. One cell cannot hold both the function value and the
+  variable's, so the compile REFUSES and names the function and the
+  declaration. Silently picking one is what this whole item was about.
+- The name is exported (`rontolisp:jvm-export` / `rontolisp:wasm-export`). An
+  export binds ONE static definition -- the host calls the typed wrapper beside
+  the defun method, and there is no defun method once the name resolves through
+  a variable. The compile refuses and says so; without the guard the directive
+  itself failed with "names an unknown function (must be a top-level defun)"
+  about a name that IS one.
+- The `(setq name (lambda ...))` a non-top-level `defun` lowers to assigns the
+  global VARIABLE, and `--dynamic`'s late-binding fallback resolves the runtime
+  FUNCTION namespace -- which that definition never enters, so a `--dynamic`
+  build answered nil for the plain nested case too. Both call sites now ask the
+  variable first for exactly the names in `Ctx.nestedDefunNames`
+  (`GlobalVarCollector.collectAllNestedDefunNames`, copied by
+  `WasmAsyncEmit.freshCtx`), which is BEFORE the dynamic branch;
+  `--dynamic` for any OTHER global is untouched.
+
+Pinned by `JvmLispCompilerTest#aDefunNestedInADefunBodyIsReachableByName`,
+`#aDefunNestedInADefunBodyRedefinesAnExistingTopLevelDefun`,
+`#aRedefinedDefunIsAlsoRedefinedForFunctionReferencesAndCallers`,
+`#aNestedDefunIsReachableByNameUnderDynamicMode`,
+`#aTopLevelDefunRedefinedByANestedOneMayNotAlsoBeAGlobalVariable`,
+`#aTopLevelDefunRedefinedByANestedOneMayNotBeExported`, the
+`WasmLispCompilerIntegrationTest` twins of the first three, and the second half
+of the `closure-binders-share-one-cell` ci-spec case (all four backends).
+
+Note the boundary with the section below: two TOP-LEVEL definitions of one name
+still bind every call to the LAST one (whole-program static resolution). Only a
+non-top-level redefinition is late-bound, because only that one can run after a
+call has already been made.
 
 ## A redefined defun binds every call to its LAST definition (todo-256)
 

@@ -108,6 +108,34 @@ public final class GlobalVarCollector {
 		return names;
 	}
 
+	/**
+	 * Returns the names of every NON-top-level {@code defun} in the program, in program
+	 * order -- the union of the two spellings the collectors above cover separately (a
+	 * defun nested in a top-level non-defun form, and one nested in a top-level defun's
+	 * body). Every one of these names is a global variable holding a closure rather than
+	 * a compiled function, which is what a call site has to know to dispatch through the
+	 * variable ({@code NestedDefunRedefinition}, and the late-binding order in the
+	 * backends' call compilers).
+	 * @param program the whole program, top-level {@code defun}s included
+	 * @return the non-top-level defun names in program order
+	 */
+	public static LinkedHashSet<String> collectAllNestedDefunNames(List<LispVal> program) {
+		LinkedHashSet<String> names = new LinkedHashSet<>();
+		for (LispVal expr : program) {
+			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name())) {
+				// A top-level defun is not itself nested; its BODY is where one hides.
+				if (cons.cdr() instanceof LispCons nameCell && nameCell.cdr() instanceof LispCons paramsCell) {
+					collectNestedDefunNames(paramsCell.cdr(), names);
+				}
+			}
+			else {
+				collectNestedDefunNames(expr, names);
+			}
+		}
+		return names;
+	}
+
 	private static void collectNestedDefunNames(LispVal form, Set<String> globals) {
 		if (!(form instanceof LispCons cons)) {
 			return;
