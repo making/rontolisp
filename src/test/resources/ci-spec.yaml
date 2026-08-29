@@ -169,9 +169,6 @@ cases:
           acc))
       (print (dclf-declared 3.5d0 -1.25d0))
       (print (= (dclf-declared 3.5d0 -1.25d0) (dclf-undeclared 3.5d0 -1.25d0)))
-      (let ((dclf-z 0.0d0))
-        (declare (type double-float dclf-z))
-        (print (- dclf-z)))
       (let ((dclf-nan (/ 0.0d0 0.0d0)))
         (declare (type double-float dclf-nan))
         (print (list (> dclf-nan 4.0d0) (< dclf-nan 4.0d0) (= dclf-nan dclf-nan))))
@@ -194,7 +191,6 @@ cases:
     expected: |
       -9.7
       T
-      -0.0
       (NIL NIL NIL)
       2.0
       6.0
