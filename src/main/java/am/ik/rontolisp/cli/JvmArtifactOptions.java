@@ -34,9 +34,9 @@ record JvmArtifactOptions(@Nullable String className, @Nullable MavenCoordinates
 	 * Without {@code --class-name} the {@code -o} path IS the class name -- that is how
 	 * {@code -o com/acme/Kernels.class} has always produced {@code com.acme.Kernels}. A
 	 * jar path names no class, so a jar DERIVES one from its own file name
-	 * ({@link #classNameFromJarPath}): for a program that name is an implementation
-	 * detail behind the manifest's {@code Main-Class}, and making the flag mandatory
-	 * there would mean {@code -o app.jar} could not produce a runnable app on its own. A
+	 * ({@link #classNameFromStem}): for a program that name is an implementation detail
+	 * behind the manifest's {@code Main-Class}, and making the flag mandatory there would
+	 * mean {@code -o app.jar} could not produce a runnable app on its own. A
 	 * {@code --no-main} library is the other case -- its class IS the artifact's Java API
 	 * -- and {@code RontoLispCli} requires the flag for one.
 	 * @param outputFile the {@code -o} path
@@ -59,7 +59,62 @@ record JvmArtifactOptions(@Nullable String className, @Nullable MavenCoordinates
 			throw new UnsupportedOperationException("-o " + outputFile + " does not name a class, so the class name"
 					+ " has to be given: add --class-name com.example.Kernels");
 		}
-		return outputFile.substring(0, outputFile.length() - ".class".length());
+		return classNameFromClassPath(outputFile);
+	}
+
+	/**
+	 * The class name a {@code .class} output takes from its own path: the path with
+	 * {@code .class} taken off, whose directories are the class's PACKAGE -- but only
+	 * when they can be one.
+	 * <p>
+	 * A package segment is not a Java identifier, it is a JVM unqualified name (JVMS
+	 * 4.2.2): non-empty, and free of {@code . ; [ /}. That is a WIDER rule than javac's,
+	 * deliberately -- {@code -o out-dir/T.class} emits {@code out-dir.T} and
+	 * {@code java -cp . out-dir.T} runs it, so nothing that works today is taken away.
+	 * What the rule catches is the path a package was never plausible for: an ABSOLUTE
+	 * path opens the name with an empty segment ({@code /tmp/out/T} is
+	 * {@code ClassFormatError: Illegal class name}), and {@code ./} or {@code ../} put a
+	 * {@code .} inside one. There the directory is just a directory, the file's stem is
+	 * the whole name, and what lands there is the class {@code java -cp thatDirectory T}
+	 * runs -- the same name a path-free {@code -o T.class} already produces.
+	 * {@code --class-name} is how an absolute path still names a package (see
+	 * {@link #classRoot}).
+	 * <p>
+	 * A stem that cannot be a class name either is refused rather than emitted: the class
+	 * file is written under the {@code -o} name, so no fallback is left that the JVM
+	 * would load under it. Silence was the whole cost of this -- a compile that reports
+	 * success and produces an unloadable artifact is only found by running it.
+	 * @param outputFile the {@code -o} path, ending in {@code .class}
+	 * @return the internal class name
+	 */
+	private static String classNameFromClassPath(String outputFile) {
+		String path = outputFile.substring(0, outputFile.length() - ".class".length())
+			.replace(java.io.File.separatorChar, '/');
+		if (isLoadableClassName(path)) {
+			return path;
+		}
+		String stem = path.substring(path.lastIndexOf('/') + 1);
+		if (!isLoadableClassName(stem)) {
+			throw new UnsupportedOperationException("-o " + outputFile + " cannot name a class: '" + stem
+					+ "' is not a name the JVM loads. Give the class its own name with"
+					+ " --class-name com.example.Kernels, or name the output file after it.");
+		}
+		return stem;
+	}
+
+	/**
+	 * Whether an internal (slash-separated) name is one the JVM will load: every segment
+	 * non-empty and holding none of the four characters JVMS 4.2.2 keeps for itself.
+	 * @param internalName the candidate internal class name
+	 * @return whether a class may carry it
+	 */
+	private static boolean isLoadableClassName(String internalName) {
+		for (String segment : internalName.split("/", -1)) {
+			if (segment.isEmpty() || segment.chars().anyMatch(c -> c == '.' || c == ';' || c == '[')) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
