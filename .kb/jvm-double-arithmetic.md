@@ -131,7 +131,8 @@ since the method it lives in only exists when fusion is on.
 
 ## Numbers (2026-08-28, linux/x86-64, exec jar, GraalVM 25)
 
-`bench-report/programs/mandelbrot.lisp` (400x400 grid, 200 iterations, no declarations),
+`bench-report/programs/mandelbrot.lisp` (400x400 grid, 200 iterations; the file carries
+`double-float` declarations today, and this backend ignores every one of them),
 `-o Bench.class` under `java`, best of three: **206 ms -> 100 ms**, against ABCL's 133 ms
 on the same JVM -- the row's whole gap, closed, and the only benchmark ABCL had a real
 lead on. `hash.lisp` 544 -> 494 ms (the `compileForEffect` half, plus the one-entry bucket
