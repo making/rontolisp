@@ -73,7 +73,15 @@ either sorts, or accumulates into something order-neutral (a `contains` set, a b
 monotone fixpoint, a `HashMap` of `String`), or feeds a map that is only looked up by key
 while the emitted order comes from a `List`. `am.ik.wasm` holds no hash collection at all.
 
-Six places are one careless refactor away from the same bug:
+Five places are one careless refactor away from the same bug (the sixth,
+`LibraryDefunPruner.spellingsOf` / `ConstantCaseArmPruner.spellingsOf`, was closed on
+2026-08-29 while landing the `DistClient` sort below: both private copies returned a
+two-element `Set.of` that `List.copyOf` turned into a List whose element order varied
+per run, and both are now the one shared `PackageRegistry.spellings`, which returns a
+`List.of` in a fixed order -- external `pkg:member` first, then internal `pkg::member`.
+Same principle as the `SequencedSet` parameters: the ORDER IS IN THE TYPE, so no
+consumer can inherit a scrambled one. Pinned by
+`PackageRegistryTest#bothSpellingsOfAQualifiedNameComeBackInAFixedOrder`):
 
 - `BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS` -- a `Set.copyOf` that IS iterated,
   but only into an exclusion set consulted with `contains`; the emitted wrapper order
@@ -89,11 +97,6 @@ Six places are one careless refactor away from the same bug:
   that are emitted wholesale. Safe only because no name is defined in two different
   `uiop-*.lisp` files. (The method already comments its OUTPUT maps against `Map.copyOf`;
   the input map is the half that was missed.)
-- `LibraryDefunPruner.spellingsOf` / `ConstantCaseArmPruner.spellingsOf` -- return a
-  `Set.of`, and `List.copyOf(spellingsOf(...))` turns it into a **List whose element order
-  differs per run**. Every consumer today is `contains`/`anyMatch`/`HashSet`, so nothing
-  is emitted -- but a per-run-varying List inside the pruner's data model is the exact
-  ingredient of the two bugs above. `List.of(...)` in a fixed order would cost nothing.
 - The `LinkedHashSet` chains in `FreeVarAnalyzer`/`GlobalVarCollector` that mint JVM
   static fields.
 
@@ -129,6 +132,41 @@ is reproducible even when the JVM build is not. `CiSpecE2eTest` runs the native 
 the way the bug was found: compile the same program N times with `java -jar` and
 compare the bytes.
 
+## What the DistClient sort moved (2026-08-29)
+
+The sort was landed with the measurement, because reordering a search path can pick a
+different `.asd` for one system name and therefore change a program's emitted bytes.
+Measured on this host's real quicklisp cache (82 releases, 194 `.asd` files):
+
+- **The search path does reorder.** Four of the cached releases hold `.asd` files in more
+  than one directory, and every one of them came back in an order the host chose:
+  `jzon-v1.1.4` walked `test/` before `src/`, `mgl-pax` walked `autoload/` before its own
+  top level, `iterate`'s five `ext/*` directories came back permuted, and `cffi`'s
+  `uffi-compat/` sat after the root by accident rather than by rule. After the sort all
+  four are in path order, top level first.
+- **Nothing resolved differently.** No cached release ships two `.asd` files with the same
+  basename, and `AsdfSystems.locate` asks each search directory for `NAME.asd` -- so on
+  this corpus exactly one directory can answer for any system name, whatever the order.
+  (The two duplicated basenames in the cache, `alexandria.asd` and `rt.asd`, are duplicated
+  ACROSS releases -- `iterate`'s vendored `ext/alexandria` beside the real alexandria
+  release -- and which of those wins is decided by the PROJECT order in `ensureAvailable`,
+  which this change does not touch.)
+- **So no emitted bytes moved.** Eleven quicklisp-backed examples were compiled to
+  `.class` with the jar before and after the change; the eight that compile offline here
+  (`asdf/str-demo`, `net/hello-clack`, `net/httpbin-clack`, `net/httpbin-ningle`,
+  `net/httpbin-tiny-routes`, `net/httpbin-jzon`, `db/postgres-hello`, `jvm/cffi-sqlite` --
+  including the jzon and cffi releases that reordered) are byte-identical, md5 for md5.
+- **Nothing else consumes the order.** The list only ever becomes `Ctx.systemPath` /
+  the evaluator's search path, which is read by `AsdfSystems.locate` and never emitted;
+  no runtime variable exposes it (there is no `asdf:*central-registry*` here). Hence this
+  change cannot shift cross-backend output, and `CiSpecE2eTest` -- which downloads
+  nothing -- is unaffected.
+
+The exposure the sort closes is therefore not on this machine's corpus: it is a release
+that ships a top-level `foo.asd` beside a `test/foo.asd`, where the two developers'
+filesystems disagree about which one `locate` sees first. That case is synthesized by
+`DistClientTest#aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd`.
+
 ## Rules
 
 - A collection whose iteration order can reach emitted bytes, generated AST, or WIT
@@ -143,12 +181,18 @@ compare the bytes.
   stable hash codes. A map keyed by an object that does not override `hashCode` uses
   identity hashes and varies per run.
 - Filesystem order (`Files.list`, `File.listFiles`, `Files.walk`) is not an order.
-  Sort it. `cli/FormatCommand` does; `eval/DistClient.collectAsdDirs` does NOT
-  (2026-08-29), so the quicklisp `.asd` search path -- and therefore which `.asd` wins
-  when a release ships two defining one system name -- is in host directory order.
-  That one is machine-dependent rather than run-dependent, so compiling twice on one
-  host cannot see it. Open as `.todo/572`. (`eval/SourceLoader.list` is also unsorted
-  but only feeds the RUNTIME `directory` built-in, which CL leaves unordered anyway.)
+  Sort it. `cli/FormatCommand` does, and `eval/DistClient` now does too
+  (`addAsdDirs`, 2026-08-29): the quicklisp `.asd` search path was the `Files.walk`
+  order of each extracted release, so which `.asd` won when a release ships two
+  defining one system name was the host's directory order. Machine-dependent rather
+  than run-dependent, so compiling twice on one host could not see it -- the
+  measurement is in the "What the DistClient sort moved" section above. Pinned by
+  `DistClientTest#theAsdDirectoriesOfAReleaseAreSortedWhateverOrderTheHostWalkedThemIn`
+  (the ordering itself, on a synthetic walk order) and
+  `#aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd` (the consequence: a
+  release's top-level `.asd` beats one nested under it, because a parent path is a
+  prefix of its children). (`eval/SourceLoader.list` is also unsorted but only feeds
+  the RUNTIME `directory` built-in, which CL leaves unordered anyway.)
 - Generated temp names (`__mv<N>`, `__db<N>`, `__flet<N>`, `gensym`) come from
   counters and may legitimately renumber when the amount of macro-time evaluation
   changes (`.kb/flet-labels.md`, `.kb/gensym-macroexpand.md`). Renumbering across two

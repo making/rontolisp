@@ -1248,6 +1248,27 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * Returns every spelling {@code name} can be written as: both colon spellings of a
+	 * package-qualified name (external {@code pkg:member} first, then internal
+	 * {@code pkg::member}), or the name alone when it is not qualified.
+	 * <p>
+	 * A {@link List} rather than a {@code Set} on purpose: the pruners that ask this
+	 * question carry the answer around in their data model, and a {@code Set.of} of two
+	 * elements iterates in a per-JVM-run order, which is the exact ingredient of the
+	 * emitted-output bugs {@code .kb/emitted-output-determinism.md} records. The order
+	 * here is fixed and costs nothing.
+	 * @param name the symbol name, qualified or not
+	 * @return the spellings, in a fixed order
+	 */
+	public static List<String> spellings(String name) {
+		QualifiedName qn = splitQualified(name);
+		if (qn == null) {
+			return List.of(name);
+		}
+		return List.of(qualify(qn.pkg(), qn.member()), qualifyInternal(qn.pkg(), qn.member()));
+	}
+
+	/**
 	 * Returns whether the given (lowercase) name is a built-in package name or built-in
 	 * nickname. Static, like {@link #canonicalBuiltinName}: user {@code defpackage}
 	 * packages are unknown here, which is exactly what the upcase reader mode needs (a

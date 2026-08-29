@@ -3,6 +3,9 @@ package am.ik.rontolisp.eval;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -122,6 +125,57 @@ class DistClientTest {
 		assertThatThrownBy(() -> client.ensureAvailable("nope/extra")).isInstanceOf(IOException.class)
 			.hasMessageContaining("nope/extra")
 			.hasMessageContaining("installed dists");
+	}
+
+	// --- search-path order ---
+
+	@Test
+	void theAsdDirectoriesOfAReleaseAreSortedWhateverOrderTheHostWalkedThemIn() {
+		// Files.walk hands back the host's directory order, so the order this list
+		// arrives in is a property of the machine, not of the release. Pinning the
+		// SORTED result (rather than whatever this filesystem happens to return) is the
+		// point: two developers must get one search path from one release.
+		List<Path> hostWalkOrder = List.of(//
+				Path.of("/dist/mylib-1.0/test/mylib.asd"), //
+				Path.of("/dist/mylib-1.0/ext/dep/dep.asd"), //
+				Path.of("/dist/mylib-1.0/mylib.asd"), //
+				Path.of("/dist/mylib-1.0/contrib/extra.asd"), //
+				Path.of("/dist/mylib-1.0/test/mylib-tests.asd"));
+		List<String> out = new ArrayList<>();
+
+		DistClient.addAsdDirs(hostWalkOrder, out, new HashSet<>());
+
+		// Sorted, deduplicated -- and the release's top level comes first, because a
+		// parent path is a prefix of every path below it. That is what decides which
+		// mylib.asd asdf:load-system reads.
+		assertThat(out).containsExactly(//
+				"/dist/mylib-1.0", //
+				"/dist/mylib-1.0/contrib", //
+				"/dist/mylib-1.0/ext/dep", //
+				"/dist/mylib-1.0/test");
+	}
+
+	@Test
+	void aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd(@TempDir Path base) throws IOException {
+		// Releases do ship a second .asd under test/ defining the same system name.
+		// The tarball writes the nested one first on purpose: the search path must not
+		// depend on the order the files landed in.
+		LinkedHashMap<String, String> files = new LinkedHashMap<>();
+		files.put("mylib-1.0/test/mylib.asd", "(defsystem \"mylib\" :components ((:file \"nested\")))");
+		files.put("mylib-1.0/test/nested.lisp", "(defun mylib-answer () 0)");
+		files.put("mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))");
+		files.put("mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)");
+		DistTestSupport.RecordingDownloader downloader = DistTestSupport.dist(//
+				"mylib mylib mylib\n", //
+				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				Map.of(MYLIB_TARBALL_URL, DistTestSupport.tarGz(files)));
+		DistClient client = new DistClient(base, downloader);
+
+		List<String> asdDirs = client.ensureAvailable("mylib");
+
+		Path extracted = base.resolve("quicklisp").resolve("software").resolve("mylib-1.0");
+		assertThat(asdDirs).containsExactly(extracted.toAbsolutePath().normalize().toString(),
+				extracted.resolve("test").toAbsolutePath().normalize().toString());
 	}
 
 	// --- multiple dists ---
