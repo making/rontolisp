@@ -5,11 +5,11 @@ the prose below the tables is [`../notes/benchmarks.md`](../notes/benchmarks.md)
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-29
-- rontolisp commit: `d933cd3`
+- rontolisp commit: `8628351`
 - best of 3 runs per cell, 120s budget each
-- machine: Ubuntu 24.04 LTS (Linux 6.8.0-136-generic, x86_64)
-- cpu: Intel(R) Xeon(R) CPU E5-2697A v4 @ 2.60GHz, 64 logical cores
-- memory: 252 GiB
+- machine: Ubuntu 24.04.4 LTS (Linux 6.17.0-1022-azure, x86_64)
+- cpu: AMD EPYC 7763 64-Core Processor, 4 logical cores
+- memory: 16 GiB
 
 | Implementation | Version | Runs on |
 | --- | --- | --- |
@@ -24,17 +24,17 @@ How the report is built and run: [../README.md](../README.md).
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | sbcl | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| [fib](../programs/fib.lisp) | 11,173 | 81 | 286 | **`57`** | 159 | 83 |
-| [mandelbrot](../programs/mandelbrot.lisp) | 15,897 | 113 | 1,270 | **`30`** | 36 | 409 |
-| [matmul](../programs/matmul.lisp) | 16,934 | 80 | 1,178 | **`20`** | 22 | 987 |
-| [sieve](../programs/sieve.lisp) | 29,269 | 537 | 729 | **`91`** | 126 | 197 |
-| [sort](../programs/sort.lisp) | 1,814 | 498 | 639 | **`156`** | 396 | 1,441 |
-| [hash](../programs/hash.lisp) | 4,382 | 508 | 792 | **`198`** | 779 | 601 |
-| [string](../programs/string.lisp) | 14,727 | 262 | 341 | **`118`** | 861 | 918 |
-| [clos](../programs/clos.lisp) | 30,476 | 107 | 706 | **`92`** | 1,667 | 795 |
-| [bignum](../programs/bignum.lisp) | 734 | 326 | 995 | **`114`** | 183 | 289 |
-| [list](../programs/list.lisp) | 5,091 | 386 | 251 | **`115`** | 489 | 524 |
-| **startup** | 468 | 92 | 37 | **`16`** | 98 | 2,999 |
+| [fib](../programs/fib.lisp) | 6,933 | 59 | 218 | **`45`** | 119 | 64 |
+| [mandelbrot](../programs/mandelbrot.lisp) | 12,931 | 60 | 887 | **`20`** | 26 | 154 |
+| [matmul](../programs/matmul.lisp) | 11,540 | 61 | 702 | **`13`** | 17 | 503 |
+| [sieve](../programs/sieve.lisp) | 19,056 | 213 | 522 | **`31`** | 56 | 117 |
+| [sort](../programs/sort.lisp) | 1,283 | 305 | 399 | **`141`** | 325 | 743 |
+| [hash](../programs/hash.lisp) | 2,916 | 440 | 496 | **`101`** | 411 | 422 |
+| [string](../programs/string.lisp) | 10,848 | 188 | 193 | **`60`** | 569 | 464 |
+| [clos](../programs/clos.lisp) | 20,502 | **`77`** | 439 | **`77`** | 946 | 542 |
+| [bignum](../programs/bignum.lisp) | 388 | 129 | 648 | **`46`** | 121 | 114 |
+| [list](../programs/list.lisp) | 3,096 | 163 | 171 | **`43`** | 420 | 248 |
+| **startup** | 396 | 80 | 16 | **`12`** | 54 | 2,037 |
 
 The fastest cell in each row is highlighted.
 
@@ -46,31 +46,31 @@ reads the clock either side of its own work -- so no other row contains it.
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| fib | 196.02 | 1.42 | 5.02 | 2.79 | 1.46 |
-| mandelbrot | 529.90 | 3.77 | 42.33 | 1.20 | 13.63 |
-| matmul | 846.70 | 4.00 | 58.90 | 1.10 | 49.35 |
-| sieve | 321.64 | 5.90 | 8.01 | 1.38 | 2.16 |
-| sort | 11.63 | 3.19 | 4.10 | 2.54 | 9.24 |
-| hash | 22.13 | 2.57 | 4.00 | 3.93 | 3.04 |
-| string | 124.81 | 2.22 | 2.89 | 7.30 | 7.78 |
-| clos | 331.26 | 1.16 | 7.67 | 18.12 | 8.64 |
-| bignum | 6.44 | 2.86 | 8.73 | 1.61 | 2.54 |
-| list | 44.27 | 3.36 | 2.18 | 4.25 | 4.56 |
+| fib | 154.07 | 1.31 | 4.84 | 2.64 | 1.42 |
+| mandelbrot | 646.55 | 3.00 | 44.35 | 1.30 | 7.70 |
+| matmul | 887.69 | 4.69 | 54.00 | 1.31 | 38.69 |
+| sieve | 614.71 | 6.87 | 16.84 | 1.81 | 3.77 |
+| sort | 9.10 | 2.16 | 2.83 | 2.30 | 5.27 |
+| hash | 28.87 | 4.36 | 4.91 | 4.07 | 4.18 |
+| string | 180.80 | 3.13 | 3.22 | 9.48 | 7.73 |
+| clos | 266.26 | 1.00 | 5.70 | 12.29 | 7.04 |
+| bignum | 8.43 | 2.80 | 14.09 | 2.63 | 2.48 |
+| list | 72.00 | 3.79 | 3.98 | 9.77 | 5.77 |
 
 ## Build time (ms: source to the artifact that was then run)
 
 | Benchmark | rontolisp (interp) | rontolisp (jvm) | rontolisp (wasm) | sbcl | ecl | abcl |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fib | n/a | 977 | 987 | 13 | 352 | 5,311 |
-| mandelbrot | n/a | 1,019 | 1,165 | 18 | 402 | 5,513 |
-| matmul | n/a | 1,040 | 1,013 | 30 | 407 | 5,479 |
-| sieve | n/a | 1,012 | 1,081 | 18 | 406 | 5,128 |
-| sort | n/a | 994 | 1,054 | 17 | 394 | 5,243 |
-| hash | n/a | 1,006 | 1,109 | 16 | 353 | 5,026 |
-| string | n/a | 1,108 | 1,043 | 25 | 391 | 4,947 |
-| clos | n/a | 1,002 | 1,051 | 21 | 470 | 5,083 |
-| bignum | n/a | 965 | 988 | 15 | 383 | 6,107 |
-| list | n/a | 1,108 | 1,003 | 18 | 420 | 5,417 |
+| fib | n/a | 781 | 872 | 10 | 240 | 3,444 |
+| mandelbrot | n/a | 785 | 893 | 12 | 254 | 3,453 |
+| matmul | n/a | 854 | 907 | 22 | 264 | 3,455 |
+| sieve | n/a | 817 | 888 | 15 | 245 | 3,456 |
+| sort | n/a | 798 | 878 | 11 | 236 | 3,398 |
+| hash | n/a | 762 | 868 | 10 | 235 | 3,458 |
+| string | n/a | 902 | 934 | 18 | 249 | 3,427 |
+| clos | n/a | 814 | 900 | 15 | 257 | 3,523 |
+| bignum | n/a | 785 | 855 | 10 | 243 | 3,475 |
+| list | n/a | 819 | 855 | 11 | 244 | 3,389 |
 
 The rontolisp interpreter has no build column: interpreting the source is
 its mode, so there is no artifact between the two.
@@ -213,9 +213,12 @@ same seconds its `startup` row reports.
 ABCL and rontolisp's JVM backend are the pair that share a machine: both emit
 JVM bytecode and both run under the same `java`. Differences between those two
 columns are mostly differences in code generation and runtime representation,
-with the platform held fixed -- and, since the declarations went in, with one
-asymmetry left in on purpose: ABCL acts on them and rontolisp does not, which is
-most of what moved ABCL's `fib` from 1,848 ms to under 110.
+with the platform held fixed. Since the declarations went in, ABCL acts on all
+of them (most of what moved its `fib` from 1,848 ms to under 110) and
+rontolisp's JVM backend acts on the float type declarations (`mandelbrot`'s
+accumulators live in raw double slots); the integer declarations rontolisp
+still ignores on purpose -- its integer paths infer the same representation
+untold.
 
 They do NOT pay the same JIT warm-up, and one row says so. Each benchmark is
 timed on a single cold run, so a row whose work is a JDK library -- `bignum`,
@@ -226,7 +229,44 @@ the same JDK code; rontolisp's compiled class starts in 67 ms and meets a cold
 `BigInteger`. On `bignum` rontolisp's first run costs what the identical loop
 hand-written in Java costs on ITS first run, and its third run is twice as fast
 as ABCL's steady state -- the column is measuring the tax the fast startup does
-not get to amortise, not the arithmetic.
+not get to amortise, not the arithmetic. The float rows are the same story
+measured from the other side: `mandelbrot` and `matmul` on the JVM backend
+reach 21-26 ms and 13-18 ms by their third in-process run -- ahead of SBCL's
+declared 30 and 20 -- so most of what their cells report is the cold run
+executing pre-JIT tiers, not the emitted code
+(`.kb/jvm-double-arithmetic.md` has the tier-by-tier numbers).
+
+**A JDK 25 AOT cache would move two of those rows, and the table does not use
+one.** JDK 25 can persist a program's method profiles between runs
+(`-XX:AOTMode=record` on a training run, `-XX:AOTMode=create`, then
+`-XX:AOTCache=` on every run after), which is the JVM's answer to paying warm-up
+once. Measured on a 64-core Linux box on 2026-08-29, the JVM backend's ten
+benchmarks compiled to `-o Bench.jar`, cold in-program milliseconds, best/median
+of five alternated runs each:
+
+| ms | fib | mandelbrot | matmul | sieve | sort | hash | string | clos | bignum | list |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| no cache | 73/82 | 82/96 | 90/94 | 438/506 | 427/452 | 491/512 | 229/242 | 88/101 | 303/307 | 357/401 |
+| AOT cache | 71/74 | 48/56 | 48/57 | 426/460 | 393/399 | 436/460 | 224/244 | 85/94 | 305/310 | 369/375 |
+
+`mandelbrot` -42% and `matmul` -39%; the other eight sit inside the ~10% this
+report calls noise. That is the same finding from the other direction -- only a
+row that was mostly warm-up has warm-up to give back.
+
+It is left out of the table because the training run has to BE the workload. The
+cache holds a profile, not compiled code, and a profile only exists if the
+training run itself got warm: the same `mandelbrot` jar trained on a quarter-size
+grid (32 ms of work) buys the full run nothing, and only a training run past
+~60 ms buys all of it. So "train the JVM column" means "run each benchmark at
+full size first and optimize the measured run from its own profile" --
+profile-guided optimization that SBCL, ECL and ABCL do not get here, in a table
+whose only purpose is comparing them. It would also mean moving the JVM column's
+artifact from a `.class` to a `.jar`, because the cache cannot be trained on a
+directory classpath at all -- changing how the measurement is taken in order to
+improve one column. The run-time table keeps timing one cold run of a compiled
+class, which is what a person running the program gets.
+`.kb/jvm-aot-cache.md` has the rest, including what it does to `rontolisp`'s own
+startup.
 
 rontolisp's wasm column runs under wasmtime, and its interpreter column walks
 the AST. Neither has a counterpart among the other three; they are in the table
