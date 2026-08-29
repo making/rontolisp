@@ -198,8 +198,9 @@ the inline-lambda binder; specials never register, shadowed names drop out,
   With both, `escapes-p`'s inner loop allocates NOTHING per iteration.
 - **Interactions**: a raw double name is never in `locals`/`rawLocals`;
   `resolveRaw` declines it (a raw GLOBAL of the same name must not answer);
-  the typed-loop compiler treats it as unresolvable and falls back boxed
-  (admitting it as a typed free var is an open follow-up); the body outliner
+  the typed-loop compiler takes it as a free variable of its own, in place --
+  strictly `DOUBLE`, no entry guard, no typed copy, no write-back, since the
+  slot is already authoritative (todo-576, `.kb/jvm-typed-loops.md`); the body outliner
   carries it across a `_k$N` split boxed, as it does raw longs. A
   handler-case clause variable now shadows raw longs, raw doubles AND the
   boxed set for the clause body (`compileClauseBody`) -- before todo-569 an
@@ -217,6 +218,13 @@ remaining cold-run distance to SBCL's 30 ms is JIT latency and tier-0
 execution of already-good code -- SBCL pays its compilation in `compile-file`
 (the build column), this backend pays it at first execution, and no emission
 change removes that; an AOT/CDS-style answer is out of this file's scope.
+That scope is now `.kb/jvm-aot-cache.md`, and it was measured on 2026-08-29:
+a JDK 25 Leyden AOT cache DOES cut this row's cold run roughly in half
+(95 -> 51 ms median, matmul 94 -> 57), entirely through replayed method
+profiles rather than class loading -- but only from a training run that
+itself ran the workload to steady state, and only over a `-o app.jar`
+classpath. It is documented for users and deliberately kept out of the
+harness; that file has the numbers and the reasoning.
 
 ## Numbers (2026-08-28, linux/x86-64, exec jar, GraalVM 25)
 
