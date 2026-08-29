@@ -333,6 +333,28 @@ buffer rotate copies -- which costs the twin nothing, since a mesh here is uploa
 and never rewritten. Culling needs no statement at all on that side: GL's default front
 winding is already counter-clockwise, which is geom's.
 
+**The two renderers must orbit the same way, and one sign is all that separates them**
+(2026-08-29). Both drive the identical two constants -- `(- azimuth (* 3.4 dx))`
+and a 2.6-scaled elevation term, clamped to +-1.5 -- over a drag normalized by the viewer's
+height, so a gesture that orbits one must orbit the other. The trap is that the two
+dialects disagree about which way is up: a DOM client delta puts +y DOWN, and AppKit's
+`locationInWindow` puts +y UP, so the same code is two opposite cameras. The elevation term
+is therefore negated in `scene::%orbit`, and NOT in `scene::%view-point` -- the pan arm
+reads the same delta and wants AppKit's sense as it stands, since a target moved AGAINST
+the drag is what makes the model follow the cursor; flipping the point would invert the pan
+along with the orbit. (`dx` needs no flip: right is +x in both.) The browser twin has no
+pan at all, so the pan's convention is the native side's own.
+
+Splitting the arithmetic out of `%on-mouse-dragged` into `scene::%orbit` / `scene::%pan` is
+what makes any of this testable: an NSEvent cannot be built in a test, but a delta can, and
+`SceneOffscreenRenderTest` drives both functions directly -- the elevation and azimuth a
+30-pixel drag lands on, the clamp at either pole, the target a pan moves against the drag,
+and the pixel composite the numbers cannot see (a marker on an opaque plate, in view when
+dragging down puts the camera above it and hidden when dragging up puts the camera below).
+What stays untested is the ONE line that reads the event, `scene::%view-point`: that
+AppKit's `locationInWindow` is y-up is a premise, not an assertion, so a flip introduced
+there would invert both gestures with every test still green.
+
 ## `IndentRules`
 
 **No entry is needed.** Not one member of this package takes a body -- every one is a

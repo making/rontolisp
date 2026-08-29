@@ -463,6 +463,30 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
       (setf (scene::%last-point v) (scene::%view-point event))))
   nil)
 
+;; A drag arrives as a delta in VIEW coordinates, and AppKit's view coordinates
+;; put +y UP. The browser twin (examples/browser/webgl-solids/) drives the very
+;; same two constants from DOM client coordinates, where +y is DOWN, so the
+;; elevation term is the one place the two dialects disagree about a sign. It is
+;; negated HERE, in the orbit arm, and not in %view-point: the pan arm below
+;; wants the y-up delta exactly as AppKit reports it, since moving the target
+;; AGAINST the drag is what makes the model follow the cursor. Flipping the
+;; point would invert the pan along with the orbit.
+(defun scene::%orbit (v dx dy)
+  (setf (scene::%azimuth v)
+        (- (scene::%azimuth v) (* 3.4 (/ dx (scene::%height v)))))
+  (let ((e (- (scene::%elevation v) (* 2.6 (/ dy (scene::%height v))))))
+    (setf (scene::%elevation v) (cond ((< e -1.5) -1.5) ((> e 1.5) 1.5) (t e))))
+  nil)
+
+(defun scene::%pan (v dx dy)
+  (setf (scene::%target v)
+        (linalg:sub (scene::%target v)
+                    (linalg:add (linalg:mul (linalg:row (scene::%basis v) 0)
+                                            (* dx (scene::%distance v) 0.0016))
+                                (linalg:mul (linalg:row (scene::%basis v) 1)
+                                 (* dy (scene::%distance v) 0.0016)))))
+  nil)
+
 (defun scene::%on-mouse-dragged (self event)
   (let ((v (scene::%viewer-for self)))
     (when (and v (scene::%dragging v))
@@ -471,24 +495,7 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
              (dx (aref d 0))
              (dy (aref d 1)))
         (setf (scene::%last-point v) p)
-        (if (scene::%panning v)
-            (setf (scene::%target v)
-                  (linalg:sub (scene::%target v)
-                              (linalg:add (linalg:mul
-                                           (linalg:row (scene::%basis v) 0)
-                                           (* dx (scene::%distance v) 0.0016))
-                                          (linalg:mul
-                                           (linalg:row (scene::%basis v) 1)
-                                           (* dy (scene::%distance v)
-                                              0.0016)))))
-            (progn
-              (setf (scene::%azimuth v)
-                    (- (scene::%azimuth v) (* 3.4 (/ dx (scene::%height v)))))
-              (let ((e
-                     (+ (scene::%elevation v)
-                        (* 2.6 (/ dy (scene::%height v))))))
-                (setf (scene::%elevation v)
-                      (cond ((< e -1.5) -1.5) ((> e 1.5) 1.5) (t e))))))
+        (if (scene::%panning v) (scene::%pan v dx dy) (scene::%orbit v dx dy))
         ;; A camera change has to be SHOWN. The mutators below do not redraw --
         ;; a loop adding sixty solids must not draw sixty frames, and the REPL
         ;; step after them is scene:refresh -- but a drag is the one place where
