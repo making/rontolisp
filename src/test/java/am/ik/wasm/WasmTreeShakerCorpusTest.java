@@ -52,7 +52,13 @@ class WasmTreeShakerCorpusTest {
 	private static String corpusSource() throws IOException {
 		try (InputStream in = WasmTreeShakerCorpusTest.class.getResourceAsStream("/ci-spec.yaml")) {
 			assertThat(in).as("ci-spec.yaml test resource").isNotNull();
-			Spec spec = new YAMLMapper().readValue(in, Spec.class);
+			// Decoded to a String FIRST, deliberately: handing the byte stream to the
+			// YAML mapper lets its own reader split a multi-byte UTF-8 character across
+			// an internal buffer boundary, and the corpus carries non-ASCII source (the
+			// code-point cases). Which characters land on a boundary depends on every
+			// byte before them, so an unrelated ci-spec edit can make it throw.
+			Spec spec = new YAMLMapper()
+				.readValue(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8), Spec.class);
 			StringBuilder sb = new StringBuilder();
 			for (Case c : spec.cases()) {
 				sb.append(c.source());
