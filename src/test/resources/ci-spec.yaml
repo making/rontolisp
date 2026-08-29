@@ -429,6 +429,25 @@ cases:
       4294967294
       T
       (8 NIL 7 8)
+  - name: closure-binders-share-one-cell
+    source: |
+      (let ((co-counter 0) (co-tag 'start))
+        (defun co-bump () (setq co-counter (+ co-counter 1)))
+        (defun co-retag (v) (setq co-tag v))
+        (defun co-peek () (list co-counter co-tag)))
+      (co-bump)
+      (co-bump)
+      (co-retag 'later)
+      (print (co-peek))
+      (print ((lambda (co-n)
+                (let ((co-g (lambda () (setq co-n (+ co-n 1)))))
+                  (funcall co-g)
+                  (funcall co-g)
+                  co-n))
+              0))
+    expected: |
+      (2 LATER)
+      2
   - name: jvm-typed-numeric-loops
     source: |
       (defun tl-softmax (att scores pos inv)

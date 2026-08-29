@@ -62,20 +62,22 @@ final class JvmLambdaCompiler {
 			JvmEmitHelper.emitIntConst(ctx, 1 + captureIdx);
 			Integer slot = ctx.locals.get(freeVar);
 			if (slot != null) {
-				if (ctx.boxedVars.contains(freeVar)) {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(slot);
+				if (!ctx.boxedVars.contains(freeVar)) {
+					// The binder and this emitter must agree on which names need a
+					// cell, and ONE owner answers that -- FreeVarAnalyzer's capture
+					// walk, which every binder consults. Landing here means the binder
+					// was not asked (or answered differently), and what used to happen
+					// was silent: the closure got a FRESH one-element cell holding a
+					// COPY, so an assignment on either side never reached the other.
+					// Two binders were missing the question (a defun nested in a let,
+					// an inline ((lambda (p) ...) a) call) and both were wrong answers,
+					// not crashes -- so this is loud on purpose.
+					throw new IllegalStateException("closure over " + freeVar
+							+ " whose binding left it unboxed: the capture analysis and the closure emitter"
+							+ " disagree about this name (FreeVarAnalyzer.findCapturedVars)");
 				}
-				else {
-					ctx.emit(Opcode.ICONST_1);
-					ctx.emit(Opcode.ANEWARRAY);
-					ctx.emitU2(ctx.objectClass.index());
-					ctx.emit(Opcode.DUP);
-					ctx.emit(Opcode.ICONST_0);
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(slot);
-					ctx.emit(Opcode.AASTORE);
-				}
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slot);
 			}
 			else if (ctx.captures.containsKey(freeVar)) {
 				ctx.emit(Opcode.ALOAD);
@@ -108,12 +110,38 @@ final class JvmLambdaCompiler {
 					+ " argument" + (required == 1 ? "" : "s") + ", got " + supplied);
 		}
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
+		Set<String> savedBoxedVars = ctx.boxedVars;
+		Map<String, JvmIntFusionCompiler.RawLocal> savedRawLocals = new HashMap<>(ctx.rawLocals);
+		Map<String, JvmIntFusionCompiler.LocalIntLambda> savedLocalIntLambdas = new HashMap<>(ctx.localIntLambdas);
 		int savedNextLocal = ctx.nextLocal;
+		// The parameters are bound HERE, in the caller's frame, so this is a binder and
+		// it owes the same question every other binder asks: does a closure in the body
+		// read this name? One owner answers it -- FreeVarAnalyzer.findCapturedVars, the
+		// same call JvmLetCompiler and the defun/lambda prologues make -- because the
+		// closure emitter below decides capture from findFreeVars, and a binder that
+		// does not agree with it hands the closure a private snapshot cell instead of
+		// the binding (.kb/core-representation.md).
+		Set<String> capturedParams = FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
+				ctx.functions.keySet());
+		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
 		for (int i = 0; i < required; i++) {
-			JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
-			int slot = ctx.allocLocal(paramNames.get(i));
+			String name = paramNames.get(i);
+			if (capturedParams.contains(name)) {
+				ctx.emit(Opcode.ICONST_1);
+				ctx.emit(Opcode.ANEWARRAY);
+				ctx.emitU2(ctx.objectClass.index());
+				ctx.emit(Opcode.DUP);
+				ctx.emit(Opcode.ICONST_0);
+				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
+				ctx.emit(Opcode.AASTORE);
+			}
+			else {
+				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
+			}
+			int slot = ctx.allocLocal(name);
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slot);
+			bindName(name, capturedParams.contains(name), ctx);
 		}
 		if (nf.variadic()) {
 			// Evaluate the surplus arguments left to right into temps, then link them
@@ -126,7 +154,8 @@ final class JvmLambdaCompiler {
 				ctx.emit(s);
 				extraSlots.add(s);
 			}
-			int restSlot = ctx.allocLocal(paramNames.get(required));
+			String restName = paramNames.get(required);
+			int restSlot = ctx.allocLocal(restName);
 			ctx.emit(Opcode.ACONST_NULL);
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(restSlot);
@@ -147,6 +176,21 @@ final class JvmLambdaCompiler {
 				ctx.emit(Opcode.ASTORE);
 				ctx.emit(restSlot);
 			}
+			if (capturedParams.contains(restName)) {
+				// The list is built in place, so the cell is wrapped around the
+				// finished value rather than around the build.
+				ctx.emit(Opcode.ICONST_1);
+				ctx.emit(Opcode.ANEWARRAY);
+				ctx.emitU2(ctx.objectClass.index());
+				ctx.emit(Opcode.DUP);
+				ctx.emit(Opcode.ICONST_0);
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(restSlot);
+				ctx.emit(Opcode.AASTORE);
+				ctx.emit(Opcode.ASTORE);
+				ctx.emit(restSlot);
+			}
+			bindName(restName, capturedParams.contains(restName), ctx);
 		}
 		for (int i = 0; i < bodyExprs.size(); i++) {
 			if (i > 0) {
@@ -155,7 +199,27 @@ final class JvmLambdaCompiler {
 			JvmExprCompiler.compileExpr(bodyExprs.get(i), ctx, className);
 		}
 		ctx.locals = savedLocals;
+		ctx.boxedVars = savedBoxedVars;
+		ctx.rawLocals = savedRawLocals;
+		ctx.localIntLambdas = savedLocalIntLambdas;
 		ctx.nextLocal = savedNextLocal;
+	}
+
+	/**
+	 * Records what representation a freshly bound name has, REPLACING whatever a shadowed
+	 * outer binding of the same name had: the maps are keyed on names, so an outer
+	 * unboxed dual-representation local or local integer lambda would otherwise still
+	 * answer for this one.
+	 */
+	private static void bindName(String name, boolean boxed, JvmLispCompiler.Ctx ctx) {
+		ctx.rawLocals.remove(name);
+		ctx.localIntLambdas.remove(name);
+		if (boxed) {
+			ctx.boxedVars.add(name);
+		}
+		else {
+			ctx.boxedVars.remove(name);
+		}
 	}
 
 }
