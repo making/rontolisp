@@ -37,6 +37,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.AstOutliner;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -192,6 +193,43 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 	}
+
+	/**
+	 * HotSpot refuses to JIT-compile a method over 8000 bytecodes and reports nothing
+	 * ({@code .kb/hot-path-method-size.md}), so a library function we compile into
+	 * something bigger runs interpreted for the life of the process. The tail-spine
+	 * splitter ({@code JvmBodyOutliner}) cuts what it can; what it cannot -- a decision
+	 * tree that is ONE form, which is what {@code proc-parse}'s {@code match-i-case}
+	 * generates -- has to be cut at the AST level, before this attempt began. So the
+	 * attempt reports the function and the size it came out at, and the next one cuts it
+	 * to fit ({@link AstOutliner}). Never escapes {@link #compile(List)}.
+	 */
+	private static final class MethodTooLarge extends RuntimeException {
+
+		private final Map<String, Integer> oversized;
+
+		private MethodTooLarge(Map<String, Integer> oversized) {
+			super(null, null, false, false);
+			this.oversized = oversized;
+		}
+
+	}
+
+	/** HotSpot's {@code HugeMethodLimit}: a method over this is never JIT-compiled. */
+	private static final int HUGE_METHOD_LIMIT = 8000;
+
+	/**
+	 * What an outlined piece should come in at -- the same margin under the cliff the
+	 * dispatch segments and the body splitter keep.
+	 */
+	private static final int OUTLINE_TARGET_BYTES = 6000;
+
+	/**
+	 * Below this, another whole compile is not worth it: the function is one the pass
+	 * cannot cut small enough, and it stays over the limit rather than being cut into
+	 * pieces so small the closures cost more than the cliff.
+	 */
+	private static final int OUTLINE_TARGET_FLOOR_BYTES = 2000;
 
 	/**
 	 * Create a new JVM compiler targeting the given class name.
@@ -443,6 +481,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// See .kb/adjustable-arrays.md ("The array gate is a consequence, not a
 		// prediction").
 		Set<String> forced = new LinkedHashSet<>();
+		// The second retry dimension: the functions to cut into their own methods
+		// because the attempt that just ran MEASURED them over HotSpot's limit. Like
+		// `forced` it strictly grows -- a name is added, or its target shrinks toward
+		// the floor -- so the loop terminates.
+		Map<String, AstOutliner.Budget> outline = new LinkedHashMap<>();
 		while (true) {
 			// A retried attempt's bytecode is thrown away, and so are its warnings: a
 			// warning printed as it was emitted said the same thing twice for one compile
@@ -450,9 +493,17 @@ public final class JvmLispCompiler implements LispCompiler {
 			// only the attempt that SHIPS gets to print.
 			CompileWarnings.startAttempt();
 			try {
-				byte[] bytes = compile(program, forced);
+				byte[] bytes = compile(program, forced, outline);
 				CompileWarnings.flushAttempt();
 				return bytes;
+			}
+			catch (MethodTooLarge signal) {
+				CompileWarnings.discardAttempt();
+				signal.oversized.forEach((name, size) -> {
+					AstOutliner.Budget known = outline.get(name);
+					outline.put(name, known == null ? new AstOutliner.Budget(size, OUTLINE_TARGET_BYTES)
+							: new AstOutliner.Budget(known.measuredBytes(), known.targetBytes() * 2 / 3));
+				});
 			}
 			catch (GateUnderpredicted signal) {
 				CompileWarnings.discardAttempt();
@@ -470,7 +521,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 	}
 
-	private byte[] compile(List<LispVal> program, Set<String> forcedGroups) {
+	private byte[] compile(List<LispVal> program, Set<String> forcedGroups,
+			Map<String, AstOutliner.Budget> outlineBudgets) {
 		// The load-context brackets LoadInliner put around each spliced file become
 		// assignments of *load-pathname* / *load-truename* -- when the program reads
 		// either; otherwise they are dropped here and nothing downstream sees them.
@@ -567,6 +619,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// desugaring could turn one on without the other, which is a %obj-new with no
 		// instance representation behind it.
 		final boolean usesStreamValues = LispMacroExpander.mayCreateStreamValues(program);
+		// Cut a function an earlier attempt measured over HotSpot's HugeMethodLimit
+		// into pieces small enough to be JIT-compiled: an oversized evaluated
+		// sub-form becomes a local function, which is what reaches the shape the
+		// tail-spine splitter cannot cut (.kb/hot-path-method-size.md). Before the
+		// lowering below, because that is what turns the go/return-from LEAVING an
+		// outlined form into a non-local exit; empty (and a no-op) on a first
+		// attempt, so a program with no oversized method never sees this pass.
+		AstOutliner.Result astOutlined = AstOutliner.outline(program, outlineBudgets);
+		program = astOutlined.program();
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
@@ -1995,6 +2056,35 @@ public final class JvmLispCompiler implements LispCompiler {
 			fusedCtxs.add(fusedCtx);
 		}
 
+		// The invariant the whole class is measured against: no method that runs per
+		// evaluated form may cross HotSpot's HugeMethodLimit, or it is never
+		// JIT-compiled and nothing says so (.kb/hot-path-method-size.md). Every body
+		// has been emitted by now, so this is where a REAL size exists to check --
+		// which is why the cut is made by re-running the compile rather than by
+		// predicting the size from the AST (bytecodes per node ranges over an order of
+		// magnitude, because the surface macros expand during Pass 2). Only a defun is
+		// reported: a lambda's generated name cannot be pointed back at a form for the
+		// next attempt to cut.
+		Map<String, Integer> tooLarge = new LinkedHashMap<>();
+		for (int i = 0; i < defuns.size(); i++) {
+			int size = funcCtxs.get(i).code.size();
+			if (size <= HUGE_METHOD_LIMIT) {
+				continue;
+			}
+			String name = defuns.get(i).name;
+			AstOutliner.Budget budget = outlineBudgets.get(name);
+			// Ask again only when there is something new to ask: an untried function,
+			// or one this attempt really did cut and whose target can still shrink. A
+			// function the pass cannot cut is left over the limit rather than costing
+			// a compile per attempt to learn that again.
+			if (budget == null
+					|| (astOutlined.outlined().contains(name) && budget.targetBytes() > OUTLINE_TARGET_FLOOR_BYTES)) {
+				tooLarge.put(name, size);
+			}
+		}
+		if (!tooLarge.isEmpty()) {
+			throw new MethodTooLarge(tooLarge);
+		}
 		// Debug hook (-Drontolisp.jvm.debug-method-sizes=true): rank the emitted
 		// method bodies by code size. The JVM caps a method at 65535 code bytes and
 		// a branch at a signed 16-bit offset, so this is the first thing to run when

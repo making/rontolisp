@@ -2668,6 +2668,52 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aBranchArmPastTheMethodSizeBudgetBecomesItsOwnMethod() throws Exception {
+		// The shape the tail-spine splitter cannot cut: the whole body is one BRANCH, so
+		// there are never two items to split between (.kb/hot-path-method-size.md).
+		// compiler/AstOutliner moves the arm into a local function instead, and the two
+		// splitters then COMPOSE -- the arm is a run of statements, which is exactly
+		// what JvmBodyOutliner cuts once the arm is a method's own tail spine. The
+		// program pins what the move has to preserve: the arm ASSIGNS a variable of the
+		// enclosing frame that is read after the arm returns (it travels as a cell, not
+		// a value), and it LEAVES through a go to a label of the tagbody it sits in,
+		// which stops being a jump and becomes a non-local exit.
+		int rounds = 200;
+		StringBuilder sb = new StringBuilder();
+		sb.append("(defun tree (x)\n  (let ((acc 0) (hit nil))\n    (block done\n      (tagbody\n");
+		sb.append("         (if (= x 0)\n             (progn\n");
+		long acc = 0;
+		for (int k = 1; k <= rounds; k++) {
+			sb.append("               (setq acc (+ acc ").append(k).append("))\n");
+			sb.append("               (setq acc (logxor acc (car (list ").append(k * 7).append(" 0))))\n");
+			acc = (acc + k) ^ (k * 7L);
+		}
+		sb.append("               (setq hit 'zero)\n               (go finish))\n");
+		sb.append("             (progn\n               (setq acc 42)\n");
+		sb.append("               (setq hit 'other)\n               (go finish)))\n");
+		sb.append("       finish\n         (return-from done (list acc hit))))))\n");
+		sb.append("(print (tree 0))\n(print (tree 1))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes.get("TREE")).as("the branch was cut, so the function fits under the cliff").isLessThan(8000);
+		// The source builds no closure of its own, so a local function in the class is
+		// one this pass introduced.
+		assertThat(sizes.keySet()).as("the arm became a method of its own").anyMatch(n -> n.startsWith("_lambda_"));
+		assertThat(sizes.entrySet()
+			.stream()
+			.filter(e -> !e.getKey().equals("main") && !e.getKey().startsWith("_top$") && !e.getKey().equals("<clinit>")
+					&& e.getValue() > 8000)
+			.toList()).as("no method that runs per evaluated form crosses the limit").isEmpty();
+		assertThat(compileAndRun(forms)).isEqualTo("(" + acc + " ZERO)\n(42 OTHER)");
+	}
+
+	@Test
 	void aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations() throws Exception {
 		// A defun body that would compile past HotSpot's 8000-bytecode HugeMethodLimit
 		// is split into _k$N tail continuations (.kb/hot-path-method-size.md). The

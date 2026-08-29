@@ -128,32 +128,78 @@ over the 220 programs of `examples/` and `src/test/resources/` that compile
 standalone: 210 byte-identical, 10 differing, and every one of those 10 differs
 because a method really did split.
 
-One shape still has no split point, because the spine is linear and a split
-point is between two ITEMS: **a branch**. A `cond` chain in tail position is one
-`if` item; splitting inside it would need both arms to carry the same
-continuation, which means emitting it twice.
+One shape has no split point HERE, because the spine is linear and a split point
+is between two ITEMS: **a branch**. A `cond` chain in tail position is one `if`
+item; splitting inside it would need both arms to carry the same continuation,
+which means emitting it twice.
 
-That is what `fast-http`'s two parsers are -- 37,913 bytecodes for
+That is what `fast-http`'s two parsers were -- 37,913 bytecodes for
 `parse-header-field-and-value` (down from 56,513 with the per-site work below)
-and 30,509 for `http-multipart-parse` (from 32,183). NOT tagbody state machines,
-which is what they look like from the source: `proc-parse`'s `match-i-case`
-generates a decision tree over the header bytes -- one `if` per character
-position per spelling -- with the whole "not one of ours" continuation
-(`handle-otherwise`: scan to the colon, skip the spaces, parse the value)
-duplicated at every one of them. The body is 9,801 AST nodes holding 143 `if`s,
-141 `go`s and only 3 tagbodies, and the emitted bytes are spread evenly over all
-of it: after the per-site work below no single operator accounts for even 15% of
-the method. Cutting it needs a splitter that can put a BRANCH ARM in its own
-method, which means a `go` or a `return-from` that leaves the arm has to become
-something other than a jump -- at the AST level (an `flet`, which the existing
-cross-lambda exit lowering already rewrites), or as a state machine the
-enclosing method dispatches over. Both are open.
+and 30,977 for `http-multipart-parse`. NOT tagbody state machines, which is what
+they look like from the source: `proc-parse`'s `match-i-case` generates a
+decision tree over the header bytes -- one `if` per character position per
+spelling -- with the whole "not one of ours" continuation (`handle-otherwise`:
+scan to the colon, skip the spaces, parse the value) duplicated at every one of
+them. The body is 9,801 AST nodes holding 143 `if`s, 141 `go`s and only 3
+tagbodies, and the emitted bytes are spread evenly over all of it: after the
+per-site work below no single operator accounts for even 15% of the method.
 
-Splitting is what the SIZE cliff needs, and it is not by itself a speed-up: what
-the JIT then compiles has to be where the time goes. On SHA-512 it is not --
-`-XX:-DontCompileHugeMethods` on the unsplit build measures no difference,
-because the body's glue is 4% of the run and `new BigInteger(String)` per
-`#xFFFFFFFFFFFFFFFF` literal is 40% (`.todo/557`).
+## The branch cut (`compiler/AstOutliner`)
+
+Cutting a branch means a `go` or a `return-from` that LEAVES the arm stops being
+a jump. Doing it at the AST level is what makes that somebody else's problem: an
+oversized evaluated sub-form is rewritten, before `CrossLambdaExitLowering` runs,
+into the `let`-bound lambda an `flet` expands into --
+
+```lisp
+(let ((__outlined_N (lambda () F))) (funcall __outlined_N))
+```
+
+-- and every existing mechanism finishes the job. Closure conversion captures and
+BOXES what `F` assigns, the exit lowering turns a crossing `go`/`return-from`
+into a `%nlx-throw` the establishing frame catches, and the backend emits `F` as
+its own method. Neither backend learns a new form; the pass is in `compiler/`
+because the WASM chunker has the same problem and can adopt it.
+
+**The two splitters compose, and each covers what the other cannot.** This one
+cuts a BRANCH and cannot cut a run of statements; `JvmBodyOutliner` cuts a run of
+statements and only along a method's tail spine. So a sequence buried in a branch
+arm is reachable by neither -- until the arm becomes a method, and its statements
+ARE a tail spine. That is why the wrapper is spelled as a `let`-bound lambda
+rather than as `flet`: `flet` gives its local the block CL mandates, a body
+wrapped in a `block` is ONE item, and the splitter would find nothing to cut
+inside the piece. (It is also why an over-budget piece is still outlined when it
+is a sequence -- moving it is what hands it to the other splitter.)
+
+**The budget is measured, not predicted.** Bytecodes per AST node ranges from 3.4
+to 39 across one program's methods, because the surface macros (`loop`, `cond`,
+`case`, `handler-bind`) expand during the backend's own pass and the node count
+at AST time does not see it -- so an absolute node budget is useless. Instead
+`JvmLispCompiler.compile` MEASURES: every body is emitted, any defun over the
+limit is reported through a `MethodTooLarge` signal, and the compile is re-run
+with that function's emitted size and a 6000-byte target. The node budget is the
+function's own measured bytes-per-node ratio applied to that target, and the next
+compile verifies it -- a function still over comes back with a target two thirds
+as large, down to a 2000-byte floor. This rides the retry loop
+`GateUnderpredicted` already established, and a program with no oversized method
+never runs the pass at all, so everything else is byte-identical.
+
+Only a DEFUN is reported: a lambda's generated name (`_lambda_<funcId>`) cannot
+be pointed back at a form for the next attempt to cut.
+
+What it does NOT reach, measured over every program in `examples/` (2026-08-29):
+the only other method any of them compiles over the limit is
+`lack/util:find-package-or-load` at 8,125-8,193 bytes, and the pass answers
+`pieces=0` for it -- 60 AST nodes, almost all of it two quoted literals the
+`_ql$N` chunking below already cut as far as it goes. There is no branch to cut,
+so it stays marginally over; the cost is one wasted compile attempt for the
+`tiny-routes` programs, whose output is byte-identical either way.
+
+Two pre-existing backend bugs surfaced while building this, both reproducible
+from hand-written Lisp with the pass making no change -- `.todo/561` (a captured
+`let` variable assigned inline in a sibling arm compiles to a raw store: a WRONG
+ANSWER, and the shape this pass creates on purpose) and `.todo/562` (a method
+past 255 local slots emits a truncated index).
 
 ## The sequences we emit per site
 
@@ -207,9 +253,25 @@ buys anything, because nothing on the request path is over the limit any more.
 What was over it: the CLOS runtime every ningle controller runs through
 (`%slot-value-runtime`, `%slot-boundp-runtime`, `%typep-runtime`, the `%sbr-*`
 and `%mmi-*` dispatches), `_lookup`'s four 24 KB segments, and
-`package-use-list` / `find-package-or-load`. NOT fast-http's two parsers, which
-are still 30-38 KB and cost nothing measurable here -- the same lesson SHA-512
-taught: size is the cliff, but the time has to be there for closing it to show.
+`package-use-list` / `find-package-or-load`.
+
+fast-http's two parsers were NOT among them -- they stayed at 30-38 KB and cost
+nothing measurable here, the same lesson SHA-512 taught: size is the cliff, but
+the time has to be there for closing it to show. The branch cut above closed them
+anyway, because the invariant is the point (2026-08-29):
+
+| method | before | after |
+| --- | --- | --- |
+| `FAST-HTTP.PARSER::PARSE-HEADER-FIELD-AND-VALUE` | 37,913 | under 4,000 |
+| `FAST-HTTP.MULTIPART-PARSER:HTTP-MULTIPART-PARSE` | 30,977 | 4,088 |
+
+and the request loop is unchanged, as predicted: 6.07 s per 10,000 requests
+against 6.51 s for the same build without the cut, medians of interleaved runs
+whose spread is ±0.4 s. The emitted class got SMALLER (3,579,492 -> 3,527,967
+bytes): a piece emitted once carries one set of stack map frames. NO method of
+the clack/ningle compile is over the limit now except the once-per-process
+`_top$0` / `_top$1` / `<clinit>`, so `JvmLibraryMethodSizeTest` carries no
+by-name allowance at all.
 
 ## Not covered by the invariant
 
@@ -227,9 +289,13 @@ not a factor on every evaluated form.
   splitter has to keep true. Its second case runs the same guard over the
   clack/ningle stack (`examples/net/httpbin-ningle.lisp` through
   `JvmSourceCompiler`), which is where an HTTP request's whole hot path lives;
-  it needs the Quicklisp cache, so it is gated on `RONTOLISP_NINGLE_E2E=1`. The
-  two fast-http parsers are named there with the size they compile to today, so
-  the shape that has no split point cannot GROW while it waits for one.
+  it needs the Quicklisp cache, so it is gated on `RONTOLISP_NINGLE_E2E=1`.
+  Neither case allows a method by name: the compiler now MAKES the invariant
+  true rather than the test policing a list of exceptions.
+- `JvmLispCompilerTest.aBranchArmPastTheMethodSizeBudgetBecomesItsOwnMethod` --
+  the branch cut over a body with no tail spine, pinning that the arm's
+  assignment to an enclosing variable survives the move and that the `go`
+  leaving the arm still reaches its label.
 - `JvmLispCompilerTest.aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations`
   (the running values, a closure built before the split reading variables
   mutated after it, and a special binding whose restore is emitted past the

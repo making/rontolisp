@@ -75,23 +75,9 @@ class JvmLibraryMethodSizeTest {
 		// UPDATE-SHA512-BLOCK off the cliff. The top-level chunks (and main, which only
 		// calls them) run once per process and are bounded by the 64 KB method cap
 		// instead, so they are the one exclusion.
-		assertThat(oversizedMethods(classBytes, Map.of())).as("methods past HotSpot's HugeMethodLimit (8000 bytecodes)")
+		assertThat(oversizedMethods(classBytes)).as("methods past HotSpot's HugeMethodLimit (8000 bytecodes)")
 			.isEmpty();
 	}
-
-	/**
-	 * The two {@code fast-http} parsers that have no split point on the compile path:
-	 * {@code proc-parse}'s {@code match-i-case} generates a decision tree over the header
-	 * bytes with the whole "not one of ours" continuation duplicated at every character
-	 * position, and the result is one form -- no tail spine for {@code JvmBodyOutliner}
-	 * to cut, and every candidate sub-form contains a {@code go} to a label in the frame
-	 * it was emitted in. They are named here with the size they compile to today, so they
-	 * cannot GROW while the shape waits for a splitter that can cut a branch
-	 * ({@code .kb/hot-path-method-size.md}, "Two shapes still have no split point").
-	 */
-	private static final Map<String, Integer> CLACK_SHAPES_WITHOUT_A_SPLIT_POINT = Map.of(
-			"FAST-HTTP$dotPARSER$colon$colonPARSE-HEADER-FIELD-AND-VALUE", 40_000,
-			"FAST-HTTP$dotMULTIPART-PARSER$colonHTTP-MULTIPART-PARSE", 33_000);
 
 	/**
 	 * The same guard over the clack / ningle stack, which is where the invariant actually
@@ -117,8 +103,7 @@ class JvmLibraryMethodSizeTest {
 		Path example = Path.of("examples", "net", "httpbin-ningle.lisp").toAbsolutePath();
 		String source = Files.readString(example);
 		byte[] classBytes = new JvmSourceCompiler("HttpbinNingleSize").compile(source, example.toString()).classBytes();
-		assertThat(oversizedMethods(classBytes, CLACK_SHAPES_WITHOUT_A_SPLIT_POINT))
-			.as("methods past HotSpot's HugeMethodLimit (8000 bytecodes)")
+		assertThat(oversizedMethods(classBytes)).as("methods past HotSpot's HugeMethodLimit (8000 bytecodes)")
 			.isEmpty();
 	}
 
@@ -132,9 +117,8 @@ class JvmLibraryMethodSizeTest {
 	 * chunks (and {@code main}, which only calls them) run once per process and are
 	 * bounded by the 64 KB method cap instead, so they are the one blanket exclusion.
 	 * @param classBytes the emitted class
-	 * @param allowances methods with a HIGHER ceiling than the cliff, by name
 	 */
-	private static Map<String, Integer> oversizedMethods(byte[] classBytes, Map<String, Integer> allowances) {
+	private static Map<String, Integer> oversizedMethods(byte[] classBytes) {
 		Map<String, Integer> oversized = new LinkedHashMap<>();
 		for (MethodModel method : ClassFile.of().parse(classBytes).methods()) {
 			String name = method.methodName().stringValue();
@@ -142,7 +126,7 @@ class JvmLibraryMethodSizeTest {
 				continue;
 			}
 			int codeLength = method.findAttribute(Attributes.code()).orElseThrow().codeLength();
-			if (codeLength > allowances.getOrDefault(name, 8000)) {
+			if (codeLength > 8000) {
 				oversized.put(name, codeLength);
 			}
 		}
