@@ -2890,6 +2890,53 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aDefunNestedInADefunBodyRedefinesAnExistingTopLevelDefun() throws Exception {
+		// The NAME half's last spelling: the redefined name has BOTH a top-level defun
+		// and a nested one, and every call site resolved the compiled function first --
+		// so the nested definition was written to a store nothing read and the call
+		// after (redefiner) still answered TOP. The top-level definition is renamed and
+		// its function value assigned to the global in its place, so the one variable
+		// carries both answers in order (.kb/core-representation.md, "The NAME half").
+		assertThat(compileAndRun("(defun over () 'top)" + "(defun redefiner () (defun over () 'nested) 'done)"
+				+ "(print (over)) (print (redefiner)) (print (over))"))
+			.isEqualTo("TOP\nDONE\nNESTED");
+	}
+
+	@Test
+	void aRedefinedDefunIsAlsoRedefinedForFunctionReferencesAndCallers() throws Exception {
+		// #'over and a caller compiled BEFORE the redefinition must see it too: both
+		// read the same global variable, and the call is a funcall rather than a fixed
+		// direct call, so the two definitions need not share an arity.
+		assertThat(compileAndRun("(defun over (x) (list 'top x))" + "(defun call-it (x) (over x))"
+				+ "(defun redefiner () (defun over (x) (list 'nested x)) 'done)"
+				+ "(print (call-it 1)) (print (funcall #'over 2)) (redefiner)"
+				+ "(print (call-it 3)) (print (funcall #'over 4))"))
+			.isEqualTo("(TOP 1)\n(TOP 2)\n(NESTED 3)\n(NESTED 4)");
+	}
+
+	@Test
+	void aNestedDefunIsReachableByNameUnderDynamicMode() throws Exception {
+		// --dynamic defers an unresolved name to the runtime FUNCTION namespace, which a
+		// nested defun never enters (it assigns the global VARIABLE): the call answered
+		// nil instead of the closure's value. The variable is asked first for exactly
+		// the names that are non-top-level defuns.
+		assertThat(compileAndRunDynamic(
+				"(defun install (seed) (defun read-seed () seed) 'ok)" + "(print (install 7)) (print (read-seed))"))
+			.isEqualTo("OK\n7");
+	}
+
+	@Test
+	void aTopLevelDefunRedefinedByANestedOneMayNotAlsoBeAGlobalVariable() {
+		// One cell cannot hold both the function value the redefinition needs and the
+		// variable's own value, and picking either silently is what this whole shape was
+		// about -- so the compile says which name and which declaration.
+		assertThatThrownBy(() -> compileAndRun("(defvar over 1)" + "(defun over () 'top)"
+				+ "(defun redefiner () (defun over () 'nested) 'done)" + "(print (over))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("OVER");
+	}
+
+	@Test
 	void aCapturedLetVariableAssignedInlineInASiblingBranchKeepsOneCell() throws Exception {
 		// One arm builds a closure over acc/hit, the sibling arm assigns them INLINE in
 		// the enclosing frame -- the shape compiler/AstOutliner creates on purpose when

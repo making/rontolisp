@@ -112,6 +112,14 @@ final class JvmFunctionCallCompiler {
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(fi.methodref().index());
 		}
+		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
+			// A defun nested inside a top-level let or a function body compiles to
+			// (setq name (lambda ...)) and the assigned name is a global variable
+			// holding the closure: dispatch the call through it. BEFORE the dynamic
+			// fallback below, which resolves the runtime FUNCTION namespace -- a
+			// namespace this definition never enters, so --dynamic answered nil.
+			JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx, className);
+		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileCall(name, cons, ctx, className);
 		}
@@ -122,9 +130,7 @@ final class JvmFunctionCallCompiler {
 				return;
 			}
 			if (ctx.globals.contains(name)) {
-				// A defun nested inside a top-level let compiles to (setq name
-				// (lambda ...)) and the assigned name is a global variable holding the
-				// closure: dispatch the call through it.
+				// A top-level (setq name (lambda ...)) the same way.
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx, className);
 				return;
 			}

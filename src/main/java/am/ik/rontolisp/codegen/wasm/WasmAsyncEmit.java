@@ -816,6 +816,10 @@ final class WasmAsyncEmit {
 			.structAccessors(proto.structAccessors)
 			.closRegistry(proto.closRegistry)
 			.globals(proto.globals)
+			// NOT optional: a chunk built here compiles call sites too, and a name whose
+			// only definition is its global variable must dispatch through it there as
+			// well (WasmFunctionCallCompiler).
+			.nestedDefunNames(proto.nestedDefunNames)
 			.specialVars(proto.specialVars)
 			.globalIndices(proto.globalIndices)
 			.futureTypeIndex(proto.futureTypeIndex)

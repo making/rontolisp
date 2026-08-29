@@ -44,6 +44,7 @@ import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.NestedDefunRedefinition;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.StreamDesignators;
@@ -608,6 +609,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// methods): rename its dispatcher, keep the built-in as the default method, and
 		// route the program's call sites through it. No-op without such a generic.
 		program = ShadowedBuiltins.process(program, closRegistry);
+		// A defun nested in a function body REDEFINES a top-level defun of the same name
+		// at run time, and only a global variable can hold both answers: the top-level
+		// definition is renamed and an assignment of its function value takes its place,
+		// so the name resolves through the variable like every other non-top-level defun
+		// (.kb/core-representation.md, "The NAME half"). A no-op unless the two
+		// spellings actually meet, and placed after every pass that can introduce a
+		// top-level defun of its own (defstruct/defclass accessors, ShadowedBuiltins).
+		program = NestedDefunRedefinition.rewrite(program);
 		// Whether an instance value can exist in this class at all. The predicates and
 		// _equal need the answer BEFORE any body is compiled (their shape changes), and
 		// with the gate off nothing they would guard against can be constructed -- so an
@@ -1366,6 +1375,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// defun is not among topLevelExprs, so this is the one spelling collect() cannot
 		// see.
 		globals.addAll(GlobalVarCollector.collectNestedInDefunBodies(program));
+		// Both spellings of a non-top-level defun, for the call sites: the function value
+		// of such a name is only ever in its global variable, so a call and a #'name have
+		// to reach the variable before the --dynamic late-binding fallback does.
+		Set<String> nestedDefunNames = GlobalVarCollector.collectAllNestedDefunNames(program);
 		// Promote any top-level *free* variable that is also assigned somewhere (a setq /
 		// setf bare-symbol place) to a global field. Per Common Lisp such an assignment
 		// targets the global namespace; giving it a persistent static field (rather than
@@ -1770,6 +1783,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
 			.globals(globals)
+			.nestedDefunNames(nestedDefunNames)
 			.specialVars(specialVars)
 			.globalFields(globalFields)
 			.dynVars(dynVarRuntime)
@@ -5620,6 +5634,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> globals = Set.of();
 
 		/**
+		 * Names of the program's NON-top-level {@code defun}s (a subset of
+		 * {@link #globals}): each lowers to {@code (setq name (lambda ...))}, so the
+		 * function value lives in the global variable and nowhere else. A call site and a
+		 * {@code #'name} must therefore dispatch through the variable BEFORE the
+		 * late-binding fallback, which under {@code --dynamic} resolves the runtime
+		 * FUNCTION namespace -- where a nested defun never appears (it answered nil).
+		 * Shared across every context.
+		 */
+		Set<String> nestedDefunNames = Set.of();
+
+		/**
 		 * Names of special (dynamically bound) variables (a subset of {@link #globals}).
 		 * A {@code let}/{@code let*} of one of these names saves its global static field,
 		 * assigns the init value, and restores the field on normal exit -- a dynamic
@@ -5773,6 +5798,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
+			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
 			this.globalFields = builder.globalFields;
 			this.rawGlobals = builder.rawGlobals;
@@ -6088,6 +6114,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private ClosRegistry closRegistry = new ClosRegistry();
 
 			private Set<String> globals = Set.of();
+
+			private Set<String> nestedDefunNames = Set.of();
 
 			private Set<String> specialVars = Set.of();
 
@@ -6605,6 +6633,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder globals(Set<String> globals) {
 				this.globals = globals;
+				return this;
+			}
+
+			Builder nestedDefunNames(Set<String> nestedDefunNames) {
+				this.nestedDefunNames = nestedDefunNames;
 				return this;
 			}
 
