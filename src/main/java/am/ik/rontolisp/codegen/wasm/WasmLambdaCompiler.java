@@ -129,12 +129,43 @@ final class WasmLambdaCompiler {
 		}
 
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
+		Set<String> savedBoxed = ctx.boxedVars;
+		// The parameters are bound HERE, in the caller's frame, so this is a binder and
+		// it owes the same question every other binder asks: does a closure in the body
+		// read this name? One owner answers it -- FreeVarAnalyzer.findCapturedVars, the
+		// same call WasmLetCompiler and the lambda prologue make -- because the closure
+		// emitter decides capture from findFreeVars, and a binder that does not agree
+		// with it hands the closure a private snapshot cell instead of the binding
+		// (.kb/core-representation.md).
+		Set<String> capturedParams = FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
+				ctx.functions.keySet());
+		ctx.boxedVars = new HashSet<>(savedBoxed);
+		// The maps are keyed on names, so an outer unboxed dual-representation local or
+		// local integer lambda the parameters SHADOW must stop answering for the body.
+		Map<String, WasmIntFusionCompiler.RawLocal> savedRawLocals = ctx.rawLocals;
+		Map<String, WasmIntFusionCompiler.LocalIntLambda> savedLocalLambdas = ctx.localIntLambdas;
+		if (paramNames.stream().anyMatch(savedRawLocals::containsKey)) {
+			Map<String, WasmIntFusionCompiler.RawLocal> shadowed = new HashMap<>(savedRawLocals);
+			paramNames.forEach(shadowed::remove);
+			ctx.rawLocals = shadowed;
+		}
+		if (paramNames.stream().anyMatch(savedLocalLambdas::containsKey)) {
+			Map<String, WasmIntFusionCompiler.LocalIntLambda> shadowed = new HashMap<>(savedLocalLambdas);
+			paramNames.forEach(shadowed::remove);
+			ctx.localIntLambdas = shadowed;
+		}
 
 		for (int i = 0; i < required; i++) {
+			String name = paramNames.get(i);
 			WasmExprCompiler.compileExpr(callArgs.get(i + 1), ctx);
-			int slot = ctx.allocLocal(paramNames.get(i));
+			if (capturedParams.contains(name)) {
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			}
+			int slot = ctx.allocLocal(name);
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(slot);
+			bindName(name, capturedParams.contains(name), ctx);
 		}
 		if (nf.variadic()) {
 			// Evaluate the surplus arguments left to right into temps, then link them
@@ -147,7 +178,8 @@ final class WasmLambdaCompiler {
 				ctx.writer.writeUnsignedLeb128(s);
 				extraSlots.add(s);
 			}
-			int restSlot = ctx.allocLocal(paramNames.get(required));
+			String restName = paramNames.get(required);
+			int restSlot = ctx.allocLocal(restName);
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 			ctx.writer.write(Instruction.SET_LOCAL);
@@ -162,6 +194,17 @@ final class WasmLambdaCompiler {
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(restSlot);
 			}
+			if (capturedParams.contains(restName)) {
+				// The list is built in place, so the cell wraps the finished value
+				// rather than the build.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(restSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(restSlot);
+			}
+			bindName(restName, capturedParams.contains(restName), ctx);
 		}
 
 		for (int i = 0; i < bodyExprs.size(); i++) {
@@ -172,6 +215,23 @@ final class WasmLambdaCompiler {
 		}
 
 		ctx.locals = savedLocals;
+		ctx.boxedVars = savedBoxed;
+		ctx.rawLocals = savedRawLocals;
+		ctx.localIntLambdas = savedLocalLambdas;
+	}
+
+	/**
+	 * Records what representation a freshly bound name has, REPLACING whatever a shadowed
+	 * outer binding of the same name had: the set is keyed on names, so an outer boxed
+	 * binding would otherwise still answer for this one.
+	 */
+	private static void bindName(String name, boolean boxed, WasmLispCompiler.Ctx ctx) {
+		if (boxed) {
+			ctx.boxedVars.add(name);
+		}
+		else {
+			ctx.boxedVars.remove(name);
+		}
 	}
 
 }

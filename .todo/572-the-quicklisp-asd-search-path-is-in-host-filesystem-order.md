@@ -1,4 +1,4 @@
-# 571. The quicklisp `.asd` search path is in host filesystem order
+# 572. The quicklisp `.asd` search path is in host filesystem order
 
 Difficulty: Low (one `.sorted()`, plus deciding whether the resulting order change
 moves any pinned expectation)

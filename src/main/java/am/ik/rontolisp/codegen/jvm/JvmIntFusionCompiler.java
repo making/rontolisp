@@ -599,10 +599,12 @@ final class JvmIntFusionCompiler {
 	 * {@link #MAX_RAW_ASSIGN_SITES}, the name is not a promoted top-level global (a
 	 * nested assignment inside a top-level form gives the name a global backing store
 	 * other code reads -- the two homes must not diverge), and the body defines no nested
-	 * {@code defun} ({@code FreeVarAnalyzer.findCapturedVars} skips {@code defun} by
-	 * design, so a closure-over-let function body would resolve the name elsewhere). A
-	 * false positive only costs a shadow store; a false negative only costs the fast
-	 * path.
+	 * {@code defun} (which lowers to a closure over this binding, and reaches the name
+	 * through the global backing store as well). Whether the name is CAPTURED is not
+	 * asked here at all: {@link JvmLetCompiler} asks
+	 * {@code FreeVarAnalyzer.findCapturedVars} first and never offers a captured name to
+	 * the raw path -- one owner, one answer ({@code .kb/core-representation.md}). A false
+	 * positive only costs a shadow store; a false negative only costs the fast path.
 	 */
 	static boolean rawBindingEligible(String name, LispVal init, List<LispVal> bodyForms, JvmLispCompiler.Ctx ctx) {
 		if (!enabled(ctx) || ctx.globals.contains(name)) {

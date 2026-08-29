@@ -2861,6 +2861,76 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void nestedDefunsShareTheEnclosingLetsBindingRatherThanEachTakingACopy() throws Exception {
+		// The CL closure-over-let idiom (cl-ppcre spells its scanner caches this way).
+		// A nested defun is NOT a definition on this backend: it lowers to
+		// (setq name (lambda ...)), a closure over the let variables
+		// (LispMacroExpander.expandCallThroughVariable). The capture analysis used to
+		// SKIP defun, so the binding stayed unboxed and every nested definition's
+		// closure was handed a FRESH one-element cell -- a private copy. bump's
+		// increments then never reached peek and retag's write reached neither: the
+		// compiled answer was (0 START) where the interpreter says (2 LATER).
+		assertThat(compileAndRun("(let ((counter 0) (tag 'start))" + "  (defun bump () (setq counter (+ counter 1)))"
+				+ "  (defun retag (v) (setq tag v))" + "  (defun peek () (list counter tag)))"
+				+ "(bump) (bump) (retag 'later) (print (peek))"))
+			.isEqualTo("(2 LATER)");
+	}
+
+	@Test
+	void aCapturedLetVariableAssignedInlineInASiblingBranchKeepsOneCell() throws Exception {
+		// One arm builds a closure over acc/hit, the sibling arm assigns them INLINE in
+		// the enclosing frame -- the shape compiler/AstOutliner creates on purpose when
+		// it cuts a branch, at a size that crosses both the tail-spine body splitter and
+		// that cut. Both arms must reach the one cell, and the unboxed
+		// dual-representation local must never be chosen for a name a closure reads
+		// (.kb/jvm-int-fusion.md).
+		StringBuilder inline = new StringBuilder();
+		StringBuilder captured = new StringBuilder();
+		for (int i = 0; i < 90; i++) {
+			inline.append("(setq acc (+ acc 2)) (setq acc (logxor acc (car (list 1 0)))) ");
+			captured.append("(setq acc (+ acc 1)) (setq acc (logxor acc (car (list 1 0)))) ");
+		}
+		String program = "(defun tree (x)" + "  (let ((acc 0) (hit nil))" + "    (block done" + "      (tagbody"
+				+ "         (if (= x 0)" + "             (let ((a0 (lambda () " + captured
+				+ " (setq hit 'zero) (go finish))))" + "               (funcall a0))" + "             (progn " + inline
+				+ " (setq hit 'other) (go finish)))" + "       finish"
+				+ "         (return-from done (list acc hit))))))" + "(print (tree 0)) (print (tree 1))";
+		assertThat(compileAndRun(program)).isEqualTo("(0 ZERO)\n(180 OTHER)");
+	}
+
+	@Test
+	void anInlineLambdaCallBoxesAParameterItsBodyClosesOver() throws Exception {
+		// ((lambda (n) ...) 0) binds n in the CALLER's frame, and that binder never
+		// asked whether the body closes over it -- so the nested lambda was handed a
+		// snapshot cell and its assignments never reached n. Answered 0, not 2.
+		assertThat(compileAndRun(
+				"(print ((lambda (n)" + " (let ((g (lambda () (setq n (+ n 1))))) (funcall g) (funcall g) n)) 0))"))
+			.isEqualTo("2");
+	}
+
+	@Test
+	void aCapturedLetVariableAssignedInlineInASiblingBranchPastTheSlotCeiling() throws Exception {
+		// todo-561's reproducer. One arm closes over acc/hit, the SIBLING arm assigns
+		// them inline -- and because both are captured, every inline setq mints a temp
+		// that ctx.nextLocal never reuses, so the frame passes 255 slots at ~4 KB of
+		// code, far under the HugeMethodLimit that would have made AstOutliner cut it.
+		// It was filed as a raw-store bug in the dual-representation machinery; it is
+		// the one-byte local index (astore 256/257/258 -> 0/1/2, over the parameter and
+		// the two capture cells, so the next read of hit's cell found a Long). Fusion
+		// off reproduced it byte for byte, which is what ruled the raw store out.
+		// .kb/jvm-method-size-limits.md carries the measurement.
+		StringBuilder inline = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			inline.append("(setq hit ").append(i % 5).append(") ");
+		}
+		assertThat(compileAndRun("(defun tree (x)" + "  (let ((acc 0) (hit nil))" + "    (if (= x 0)"
+				+ "        (let ((a0 (lambda () (setq acc (+ acc 1)) (setq hit 'zero))))" + "          (funcall a0))"
+				+ "        (progn " + inline + " (setq acc (+ acc 2)) (setq hit 'other)))" + "    (list acc hit)))"
+				+ "(print (tree 0)) (print (tree 1))"))
+			.isEqualTo("(1 ZERO)\n(2 OTHER)");
+	}
+
+	@Test
 	void compileAndRunGlobalReadInsideLambda() throws Exception {
 		// A global referenced from a lambda nested in a defun (it must be resolved from
 		// its static field, not captured as a free variable).

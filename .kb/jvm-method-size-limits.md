@@ -184,6 +184,34 @@ whose ARITY exceeds the WASM backend's fixed dispatch range
 (`MAX_CALLABLE_ARITY` = 7) compiles to a call-time signal instead of silently
 calling the neighboring runtime helper (which produced an invalid module).
 
+## What the truncated index looked like (measured 2026-08-29, todo-561/562)
+
+Before todo-562's `wide` prefix, `ALOAD`/`ASTORE` carried a one-byte local
+index, so slot 256 silently became slot 0. `ctx.nextLocal` only grows (a temp is
+never freed) and a boxed `setq` costs one temp per SITE, so a straight-line run
+of a few hundred assignments into a CAPTURED variable reached it: measured at
+~15 emitted bytes per burnt slot, which crosses 255 slots at roughly 4 KB of
+code -- **well under the 8000-byte `HugeMethodLimit` that `AstOutliner` reacts
+to, so nothing rescued the frame**. Recorded because the slot COUNT is still
+what it was: what the wrap landed on decided the symptom, and the low slots are
+the load-bearing ones -- slot 0 is the first parameter and slots 1..n are the
+enclosing `let`'s capture cells.
+
+Worked reproducer (`(defun tree (x) (let ((acc 0) (hit nil)) (if (= x 0)
+<closure over acc/hit> <300 inline (setq hit i)>) (list acc hit)))`, both
+variables captured so every inline `setq` mints a temp): 308 locals in `TREE`,
+`astore 256/257/258` decode as `astore 0/1/2`, and the next `aload 2; checkcast
+[Ljava/lang/Object;` reads a `Long` -- `class java.lang.Long cannot be cast to
+class [Ljava/lang/Object;`, from the arm that assigns inline while the other
+arm's closure ran fine. The threshold was sharp and luck-dependent, which was
+the danger: 254 locals correct, 256/258/260 locals correct BUT already
+truncating (the wrapped temps happened to be written and read back within one
+form), 262 locals throwing. A truncated index landing on a slot of the same
+type is a silent wrong answer, and todo-561 was filed as an int-fusion bug on
+that evidence -- it is not one (`.kb/jvm-int-fusion.md`, "What the dual
+representation was NOT responsible for"). Pinned by
+`JvmLispCompilerTest#aCapturedLetVariableAssignedInlineInASiblingBranchPastTheSlotCeiling`.
+
 ## Pinning tests
 
 `JvmLispCompilerTest#compileAndRunABranchSpanningPastTheSigned16BitOffset`
@@ -199,7 +227,9 @@ store takes the `wide` prefix and a two-byte index (todo-562,
 [stackmap-augmenter.md](stackmap-augmenter.md), "The `wide` prefix"), and the
 hard limit is the u2 `max_locals`, which `Ctx.allocTemp` refuses to cross by
 name. What is left of `.todo/137` is the slot COUNT -- a temporary's slot is
-never reused, which now costs bytes rather than correctness. The pool ceiling is pinned by
+never reused, which now costs bytes rather than correctness. The measurement
+that made the ceiling reachable is above ("What the truncated index looked
+like"). The pool ceiling is pinned by
 `am.ik.jvm.ConstantPoolTest#refusesTheEntryThatWouldCrossTheFormatLimit` /
 `#refusesATwoSlotEntryThatWouldStraddleTheFormatLimit`, and the read-back-text
 answer to it by `ClUnicodeTablesTest` (the emitted shape, and the decoders run

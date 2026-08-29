@@ -147,7 +147,7 @@ compare the bytes.
   (2026-08-29), so the quicklisp `.asd` search path -- and therefore which `.asd` wins
   when a release ships two defining one system name -- is in host directory order.
   That one is machine-dependent rather than run-dependent, so compiling twice on one
-  host cannot see it. Open as `.todo/571`. (`eval/SourceLoader.list` is also unsorted
+  host cannot see it. Open as `.todo/572`. (`eval/SourceLoader.list` is also unsorted
   but only feeds the RUNTIME `directory` built-in, which CL leaves unordered anyway.)
 - Generated temp names (`__mv<N>`, `__db<N>`, `__flet<N>`, `gensym`) come from
   counters and may legitimately renumber when the amount of macro-time evaluation
