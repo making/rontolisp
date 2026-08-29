@@ -6143,6 +6143,16 @@ public final class LispNames {
 	public static final String APPKIT_PKG = "APPKIT";
 
 	/**
+	 * The {@code geom} package name: solid modeling -- rigid transforms, a scene graph
+	 * and boundary-represented solids with a cached triangle mesh -- written in rontolisp
+	 * itself over {@code linalg} ({@code geom.lisp}, see {@code eval.GeomLibrary}) and
+	 * loaded lazily on the first {@code geom:} resolution, the {@code linalg} pattern. It
+	 * reaches for nothing outside {@code linalg}, so it runs on all four backends and in
+	 * the browser playground. Does not use {@code cl}; every exported name is external.
+	 */
+	public static final String GEOM_PKG = "GEOM";
+
+	/**
 	 * The {@code ffi} package name: the foreign primitives CFFI's backend stands on --
 	 * plain C through the foreign function API ({@code am.ik.ffi}, wired in
 	 * {@code eval.FfiInterop}). The C-flavoured sibling of {@code objc}: a handful of

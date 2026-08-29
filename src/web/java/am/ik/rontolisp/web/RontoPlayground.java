@@ -24,6 +24,7 @@ import am.ik.rontolisp.eval.ExitLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.GeomLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.TorchLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
@@ -196,7 +197,9 @@ public final class RontoPlayground {
 		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
 				.process(VecLibrary.process(LispPreludeLibrary.process(
-						UrlLibrary.process(LinalgLibrary.process(TorchLibrary.process(JsonLibrary.process(read)))), features))))));
+						UrlLibrary.process(LinalgLibrary
+							.process(GeomLibrary.process(TorchLibrary.process(JsonLibrary.process(read))))),
+						features))))));
 		// uiop:quit on the WASM button is exit.lisp's wasi_snapshot_preview1 proc_exit
 		// binding (eval/ExitLibrary), like the CLI's Preview 1 output; a no-op for the
 		// JVM button and for a program that never quits.

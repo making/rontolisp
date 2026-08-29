@@ -4651,6 +4651,117 @@ cases:
       DOUBLE-FLOAT
       10.0
       14.0
+  # The geom package (solid modeling over linalg, .kb/geom.md): the primitives, the
+  # measurements and the cached model-space mesh. Everything here is float32 and every
+  # number a renderer would use comes out of trigonometry, which is exactly where four
+  # backends could disagree -- so the closed-form volumes are printed as ROUNDED
+  # integers (the polyhedral approximation converges from below, and a facet wound the
+  # wrong way would SUBTRACT from the divergence-theorem sum rather than shave a
+  # percent). The exact prints -- a box's volume and area, its bounds and centroid, the
+  # 120.0 prism -- are f32-exact, so they pin the packed single-float printer too.
+  - name: geom-solids-cross-backend
+    source: |
+      (defun ci-geom-solids ()
+        (let ((b (geom:box '(100 200 300))))
+          (print (geom:volume b))
+          (print (geom:surface-area b))
+          (print (geom:centroid b))
+          (print (geom:bounds-extent (geom:bounds b)))
+          (print (geom:mesh-triangle-count b))
+          (print (length (geom:wireframe b)))
+          (print (eq (geom:mesh b) (geom:mesh b)))
+          (print (array-element-type (geom:mesh b)))
+          (print (array-element-type (geom:vertices-of b))))
+        (print (geom:volume (geom:extrusion '((0 0 0) (4 0 0) (4 3 0) (0 3 0)) :along 10)))
+        (print (round (* 6 (geom:volume (geom:polyhedron '((0 0 0) (1 0 0) (0 1 0) (0 0 1))
+                                                         '((0 2 1) (0 1 3) (0 3 2) (1 2 3)))))))
+        (print (round (geom:volume (geom:cylinder :radius 50 :height 100 :sides 64))))
+        (print (round (geom:volume (geom:sphere :radius 50 :sides 32 :stacks 24))))
+        (print (round (geom:volume (geom:torus :radius 60 :tube 20 :sides 48 :rings 24))))
+        (print (round (geom:volume (geom:cone :radius 50 :height 120 :sides 64))))
+        (print (round (geom:surface-area (geom:sphere :radius 50 :sides 32 :stacks 24))))
+        (let ((s (geom:box 10)))
+          (setf (geom:user-data s) :mine)
+          (geom:scale s 2)
+          (print (list (geom:user-data s) (geom:volume s)))))
+      (ci-geom-solids)
+    expected: |
+      6000000.0
+      220000.0
+      #f(0.0 0.0 0.0)
+      #f(100.0 200.0 300.0)
+      12
+      72
+      T
+      SINGLE-FLOAT
+      SINGLE-FLOAT
+      120.0
+      1
+      784137
+      518015
+      467012
+      313655
+      31248
+      (NIL 8000.0)
+  # The other half: rigid transforms as VALUES and the scene graph over them. A
+  # three-link chain's forward kinematics, the memo invalidated down the subtree by a
+  # pose change at the root, :frame :local vs :frame :parent, and the invert / compose /
+  # inverse-transform-point algebra. Every trigonometric answer is scaled and ROUNDED
+  # (ci-geom-r3), so a float32 last bit that differs between backends does not fail the
+  # case; the pose reads that are exact stay exact prints.
+  - name: geom-transforms-cross-backend
+    source: |
+      (defun ci-geom-r3 (v scale)
+        (list (round (* scale (aref v 0))) (round (* scale (aref v 1))) (round (* scale (aref v 2)))))
+      (defun ci-geom-frames ()
+        (let* ((base (geom:make-node))
+               (j1 (geom:make-node :parent base))
+               (j2 (geom:make-node :translation (geom:vec3 0 0 100)))
+               (link (geom:cylinder :radius 8 :height 80)))
+          (geom:attach j1 j2)
+          (geom:attach j2 link)
+          (print (geom:world-translation link))
+          (geom:turn j2 (/ 3.141592653589793 2) :y)
+          (geom:move base (geom:vec3 0 0 500))
+          (print (geom:world-translation link))
+          (print (ci-geom-r3 (linalg:row (geom:world-rotation link) 0) 1000))
+          (print (ci-geom-r3 (geom:bounds-center (geom:bounds link)) 1))
+          (print (eq (geom:parent-of link) j2))
+          (geom:detach link)
+          (print (geom:world-translation link)))
+        (let ((n (geom:make-node :axis :z :angle (/ 3.141592653589793 2))))
+          (geom:move n (geom:vec3 10 0 0) :frame :parent)
+          (print (ci-geom-r3 (geom:world-translation n) 1000)))
+        (let ((n (geom:make-node :axis :z :angle (/ 3.141592653589793 2))))
+          (geom:move n (geom:vec3 10 0 0))
+          (print (ci-geom-r3 (geom:world-translation n) 1000)))
+        (let* ((tf (geom:make-transform :translation (geom:vec3 1 2 3) :axis :z :angle 0.5))
+               (p (geom:vec3 7 -3 2)))
+          (print (ci-geom-r3 (geom:transform-point (geom:invert tf) (geom:transform-point tf p)) 1000))
+          (print (ci-geom-r3 (geom:inverse-transform-point tf (geom:transform-point tf p)) 1000))
+          (print (ci-geom-r3 (linalg:sub (geom:transform-point (geom:compose tf tf) p)
+                                         (geom:transform-point tf (geom:transform-point tf p)))
+                             1000))
+          (print (geom:translation-of tf)))
+        (print (ci-geom-r3 (linalg:row (geom:rpy-matrix 0 0 (/ 3.141592653589793 2)) 0) 1000))
+        (print (list (typep (geom:box 1) 'geom:node) (typep (geom:box 1) 'geom:solid)
+                     (typep (geom:make-transform) 'geom:node))))
+      (ci-geom-frames)
+    expected: |
+      #f(0.0 0.0 100.0)
+      #f(0.0 0.0 600.0)
+      (0 0 1000)
+      (40 0 600)
+      T
+      #f(0.0 0.0 0.0)
+      (10000 0 0)
+      (0 10000 0)
+      (7000 -3000 2000)
+      (7000 -3000 2000)
+      (0 0 0)
+      #f(1.0 2.0 3.0)
+      (0 -1000 0)
+      (T T NIL)
   # The torch package (reverse-mode autograd over linalg): fit y = 2x by gradient
   # descent on the MSE -- ten forward/backward/update steps, the update inside
   # torch:no-grad (which rebinds the torch::*grad-enabled* special). Every quantity

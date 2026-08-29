@@ -1129,12 +1129,16 @@ public final class LibraryDefunPruner {
 	}
 
 	/**
-	 * The union of every definition name in the prunable libraries (linalg, torch, vec,
-	 * json + its {@code #'} wrappers, url, prelude). usocket is deliberately absent: its
-	 * {@code with-*} built-in macros synthesize calls not textually present in the
-	 * pre-expansion AST; torch's one built-in macro ({@code torch:no-grad}) synthesizes
-	 * only {@code torch::*grad-enabled*}, which is a hardcoded edge of the macro name
-	 * (see {@code collectReferences}), so the rest of the library stays prunable.
+	 * The union of every definition name in the prunable libraries (linalg, geom, torch,
+	 * vec, json + its {@code #'} wrappers, url, prelude). geom's four {@code defclass}
+	 * forms are not keyed here and stay roots (the class-shaped candidates below are the
+	 * third-party trees'), which is what a program using {@code geom:box} alone carries
+	 * beyond its own reachable defuns: the type model, not {@code geom:revolution}'s
+	 * tessellator. usocket is deliberately absent: its {@code with-*} built-in macros
+	 * synthesize calls not textually present in the pre-expansion AST; torch's one
+	 * built-in macro ({@code torch:no-grad}) synthesizes only
+	 * {@code torch::*grad-enabled*}, which is a hardcoded edge of the macro name (see
+	 * {@code collectReferences}), so the rest of the library stays prunable.
 	 */
 	private static Set<String> prunableNames() {
 		Set<String> cached = prunableNames;
@@ -1144,6 +1148,7 @@ public final class LibraryDefunPruner {
 				if (cached == null) {
 					Set<String> names = new HashSet<>();
 					collectDefinitionNames(LinalgLibrary.forms(), names);
+					collectDefinitionNames(GeomLibrary.forms(), names);
 					collectDefinitionNames(TorchLibrary.forms(), names);
 					collectDefinitionNames(VecLibrary.forms(), names);
 					collectDefinitionNames(JsonLibrary.forms(), names);
