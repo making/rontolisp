@@ -3002,7 +3002,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV (indices 2+).
 		// A reference compiles to global.get from any function body, so a defun/lambda
 		// can read a defvar/defparameter global. Indices follow declaration order.
-		Set<String> globals = GlobalVarCollector.collect(topLevelExprs);
+		// A SequencedSet for the same reason specialVars below is one: this set's
+		// iteration order assigns the module-global indices
+		// (.kb/emitted-output-determinism.md).
+		SequencedSet<String> globals = GlobalVarCollector.collect(topLevelExprs);
+		// A defun nested in a top-level defun's BODY needs the same store: it lowers to
+		// (setq name (lambda ...)) like every other non-top-level defun, and a top-level
+		// defun is not among topLevelExprs, so this is the one spelling collect() cannot
+		// see.
+		globals.addAll(GlobalVarCollector.collectNestedInDefunBodies(program));
 		// Special (dynamically bound) variables need the same module-global backing store
 		// (a
 		// let of a special save/restores over it), so union them in before indices are
