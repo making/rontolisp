@@ -687,7 +687,9 @@ public final class RontoLispCli {
 			}
 		}
 		else {
-			// The class name is the -o path with .class taken off, or --class-name where
+			// The class name is the -o path with .class taken off (its directories the
+			// class's package, but only where the JVM would load one -- an absolute path
+			// leaves just the file's stem), or --class-name where
 			// one was given -- and a jar output has no path to read one from, so a
 			// program jar derives one from its file name and a --no-main library jar
 			// (whose class is its API) has to be given one
@@ -860,7 +862,10 @@ public final class RontoLispCli {
 		this.out.println("  (no args)          REPL mode");
 		this.out.println("  file               Interpret the file");
 		this.out.println("  -e \"FORMS\"         Interpret the given program instead of a file (--eval)");
-		this.out.println("  file -o out.class   Compile to JVM bytecode");
+		this.out.println("  file -o out.class   Compile to JVM bytecode (the -o path names the class:");
+		this.out.println("                     com/acme/K.class is com.acme.K, and a directory that");
+		this.out.println("                     cannot be a package -- an absolute path above all --");
+		this.out.println("                     leaves just the file's own name. See --class-name)");
 		this.out.println("  file -o out.jar     Compile to an executable jar (java -jar out.jar)");
 		this.out.println("  file -o app.war     Compile an http-handler program to a Servlet war that");
 		this.out.println("                     deploys unmodified on any Servlet 6 container (Tomcat,");
@@ -935,7 +940,8 @@ public final class RontoLispCli {
 		this.out.println("                     jar derives one from the -o file name (app.jar -> App) and is");
 		this.out.println("                     entered through the manifest. For a .class it replaces the");
 		this.out.println("                     name the -o path would give, so -o build/K.class can still be");
-		this.out.println("                     com.example.Kernels");
+		this.out.println("                     com.example.Kernels -- and it is how an ABSOLUTE -o path names");
+		this.out.println("                     a package at all, a leading / being no package name");
 		this.out.println("  --maven-coordinates G:A:V");
 		this.out.println("                     With a .jar or .war output: embed META-INF/maven/G/A/pom.xml and");
 		this.out.println("                     pom.properties, so the coordinates travel INSIDE the jar and");

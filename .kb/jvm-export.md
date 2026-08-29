@@ -243,6 +243,29 @@ missing parent directories (`RontoLispCli`), since the `-o` path IS the package.
 that used to test "the JVM class output only" (`--blas` / `--gpu` / `--parallel` /
 `--no-main`) now tests `RontoLispCli.jvmOutput`, which is the two extensions.
 
+- **A `.class` path's directory is the PACKAGE only when it can be one.**
+  `JvmArtifactOptions.classNameFromClassPath` derives the name; the test of "can be one"
+  is the JVM's, not javac's — JVMS 4.2.2 asks each segment to be non-empty and free of
+  `. ; [ /`, and nothing more. That is deliberately WIDER than a Java identifier:
+  measured 2026-08-29, `-o out-dir/T3.class` emits `out-dir.T3` and `java -cp . out-dir.T3`
+  prints its output, so the dashes and digits a directory routinely carries take nothing
+  away. What the rule catches is the path for which a package was never plausible: an
+  ABSOLUTE path opens the name with an EMPTY segment (`/tmp/out/T2` is
+  `ClassFormatError: Illegal class name "/tmp/out/T2"`), and `./` or `../` put a `.`
+  inside one. There the directory is just a directory, the file's stem is the whole name,
+  and `-o /tmp/out/T2.class` is the same `T2` a path-free `-o T2.class` produces —
+  `classRoot` already roots the travelling runtime classes at `/tmp/out/`, so
+  `java -cp /tmp/out T2` runs. A stem that cannot be a class name either (`out/my.prog.class`)
+  is REFUSED naming `--class-name`, since the class file is written under the `-o` name and
+  no fallback is left the JVM would load under it. `--class-name` is how an absolute path
+  still names a package. **Silence was the whole cost**: until 2026-08-29 the compile
+  reported success and only running the artifact reported the illegal name, which cost
+  a `.todo/573` measurement round — two builds emitted into two temp directories differed
+  in every byte for this reason alone, and a harness reads that as a regression. Pinned by
+  `JvmArtifactOptionsTest` (the naming rule, every arm) and
+  `RontoLispCliTest#anAbsoluteOutputPathEmitsALoadableClass` /
+  `#anAbsoluteOutputPathTakesItsPackageFromClassName`, which LOAD the emitted class
+  through a `URLClassLoader` — the check a compiled `.class` exists to pass.
 - **`--class-name` is required by the LIBRARY jar, not by jar output.** The class name
   WAS the `-o` path (`outputFile.replace(".class","")` handed straight to the
   compiler) and a jar path names no class, so the flag started out mandatory for every
@@ -250,7 +273,7 @@ that used to test "the JVM class output only" (`--blas` / `--gpu` / `--parallel`
   thing a jar is for. The split is what the class IS: a `--no-main` library's class is
   the artifact's Java API and the caller's `import`, so `RontoLispCli` refuses that jar
   without the flag; a program jar is entered through the manifest, so its class name is
-  an implementation detail and `JvmArtifactOptions.classNameFromJarPath` DERIVES one
+  an implementation detail and `JvmArtifactOptions.classNameFromStem` DERIVES one
   from the file's stem — split on everything a Java identifier cannot hold and rejoined
   in CamelCase (`app.jar` -> `App`, `my-app-1.0.0.jar` -> `MyApp100`, a digit-leading
   stem prefixed `_`). Sanitizing is load-bearing rather than cosmetic: a stem is a FILE
