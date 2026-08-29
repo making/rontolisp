@@ -1882,8 +1882,8 @@ final class JvmIntFusionCompiler {
 	 * the header the ArrayList's slot 0 lands in, and the packed {@code long[]}. Each is
 	 * dead the instant the read that filled it is done, and every read stores the same
 	 * type into it, so one triple serves the whole method -- keeping a leaf-heavy method
-	 * away from the 255-slot ceiling the one-byte load/store operand imposes
-	 * ({@code .todo/137}).
+	 * away from the slot number past which every load and store costs a {@code wide}
+	 * prefix ({@code .todo/137}).
 	 */
 	private record ArefScratch(int idxSlot, int headerSlot, int dataSlot) {
 	}

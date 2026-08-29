@@ -5039,8 +5039,19 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	static final class Ctx {
 
-		/** The highest local slot a one-byte load/store operand can name. */
-		private static final int MAX_LOCAL_SLOT = 255;
+		/**
+		 * The highest local slot a one-byte load/store operand can name. Past it
+		 * {@link #emit(int)} rewrites the instruction into its {@code wide} form, whose
+		 * two-byte index reaches {@link #MAX_LOCAL_SLOT}.
+		 */
+		private static final int MAX_ONE_BYTE_LOCAL_SLOT = 255;
+
+		/**
+		 * The highest local slot a method can have at all: {@code max_locals} is a u2, so
+		 * no encoding names a higher one. Reaching it is a loud compile error, never a
+		 * wrapped write.
+		 */
+		private static final int MAX_LOCAL_SLOT = 65535;
 
 		final ConstantPool cp;
 
@@ -5304,8 +5315,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * The one local {@code %error}'s message rides in, allocated on first use. The
 		 * value is written and read five instructions later with no control flow in
 		 * between and the throw never returns, so every {@code error} site in the method
-		 * shares it rather than burning a slot each (the 255-slot ceiling is real:
-		 * {@code JvmEmitHelper.enterLoopScope} already declines a spill against it).
+		 * shares it rather than burning a slot each. Past slot 255 every load and store
+		 * of it would cost the three extra bytes of a {@code wide} prefix, and
+		 * {@code max_locals} sizes every frame the method carries.
 		 */
 		private int errorMessageSlot = -1;
 
@@ -6649,6 +6661,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		void emit(int opcode) {
+			if (opcode > MAX_ONE_BYTE_LOCAL_SLOT && this.stack.awaitingLocalIndex()) {
+				// A local index past 255 does not fit the one-byte operand of the plain
+				// load/store opcodes; rewrite the instruction just emitted into its
+				// `wide` form rather than writing a truncated index that names a
+				// DIFFERENT slot (which the frame walk only sometimes notices -- a
+				// wrapped index landing on a same-typed slot is a silent wrong answer).
+				int op = this.code.removeLast();
+				this.code.add(Opcode.WIDE);
+				this.code.add(op);
+				this.code.add((opcode >> 8) & 0xFF);
+				this.code.add(opcode & 0xFF);
+				this.stack.widenPendingLocalIndex();
+				return;
+			}
 			this.code.add(opcode);
 			this.stack.feed(opcode);
 		}
@@ -6735,10 +6761,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					this.allocTemp();
 				}
 				if (this.nextLocal - 1 > MAX_LOCAL_SLOT) {
-					// A spilled value must survive the protected region, so it cannot
-					// ride
-					// a slot whose number the one-byte operand of the load/store opcodes
-					// (there is no `wide` form here) silently wraps into another slot's.
+					// A spilled value must survive the protected region, so it needs a
+					// slot of its own; past the u2 `max_locals` ceiling there is none.
 					throw new UnsupportedOperationException(
 							"Cannot compile " + what + " here: the function is out of local variable slots");
 				}
@@ -6833,6 +6857,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int allocTemp() {
 			int slot = this.nextLocal++;
+			if (slot > MAX_LOCAL_SLOT) {
+				// max_locals is a u2: no load or store, `wide` included, can name a
+				// higher slot. Say so instead of writing an index that wraps.
+				throw new IllegalStateException(
+						"this function needs more than " + MAX_LOCAL_SLOT + " local variable slots");
+			}
 			if (this.nextLocal > this.maxLocals) {
 				this.maxLocals = this.nextLocal;
 			}

@@ -953,6 +953,10 @@ public final class StackMapAugmenter {
 		// --- The transfer function ---
 
 		private void interpret(Frame frame, int pc, int op) {
+			if (op == Opcode.WIDE) {
+				this.interpretWide(frame, pc);
+				return;
+			}
 			switch (op) {
 				case Opcode.NOP, Opcode.INEG, Opcode.LNEG, Opcode.FNEG, Opcode.DNEG, Opcode.IINC, Opcode.I2B,
 						Opcode.I2C, Opcode.I2S, Opcode.GOTO, Opcode.GOTO_W, Opcode.RETURN ->
@@ -1307,6 +1311,29 @@ public final class StackMapAugmenter {
 
 		// --- Instruction shape ---
 
+		/**
+		 * The transfer function of a {@code wide}-prefixed instruction: the same effect
+		 * as the plain form, over a two-byte local index. Only the load/store family and
+		 * {@code iinc} can carry the prefix here -- {@code ret} belongs to {@code jsr},
+		 * which the emitters never produce.
+		 */
+		private void interpretWide(Frame frame, int pc) {
+			int op = this.code[pc + 1] & 0xff;
+			int index = u2At(pc + 2);
+			switch (op) {
+				case Opcode.IINC -> {
+				}
+				case Opcode.ILOAD -> push(frame, VType.INT);
+				case Opcode.LLOAD -> push(frame, VType.LONG);
+				case Opcode.FLOAD -> push(frame, VType.FLOAT);
+				case Opcode.DLOAD -> push(frame, VType.DOUBLE);
+				case Opcode.ALOAD -> push(frame, refLocal(frame, index));
+				case Opcode.ISTORE, Opcode.LSTORE, Opcode.FSTORE, Opcode.DSTORE, Opcode.ASTORE -> store(frame, index);
+				default -> throw new IllegalStateException(
+						"unsupported wide opcode 0x" + Integer.toHexString(op) + " at " + pc);
+			}
+		}
+
 		private List<Integer> branchTargets(int pc, int op) {
 			if ((op >= Opcode.IFEQ && op <= Opcode.IF_ACMPNE) || op == Opcode.GOTO || op == Opcode.IFNULL
 					|| op == Opcode.IFNONNULL) {
@@ -1341,7 +1368,10 @@ public final class StackMapAugmenter {
 					2;
 				case Opcode.MULTIANEWARRAY -> 3;
 				case Opcode.INVOKEINTERFACE, Opcode.GOTO_W -> 4;
-				case Opcode.TABLESWITCH, Opcode.LOOKUPSWITCH, Opcode.WIDE, Opcode.JSR, Opcode.JSR_W, Opcode.RET ->
+				// wide: the widened opcode plus a two-byte local index -- four more for
+				// `iinc`, whose constant widens with it.
+				case Opcode.WIDE -> (this.code[pc + 1] & 0xff) == Opcode.IINC ? 5 : 3;
+				case Opcode.TABLESWITCH, Opcode.LOOKUPSWITCH, Opcode.JSR, Opcode.JSR_W, Opcode.RET ->
 					throw new IllegalStateException("unsupported opcode 0x" + Integer.toHexString(op) + " at " + pc);
 				default -> 0;
 			};

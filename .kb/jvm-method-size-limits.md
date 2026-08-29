@@ -194,8 +194,12 @@ calling the neighboring runtime helper (which produced an invalid module).
 `runtime-type-dispatch-and-symbol-designators` ci-spec case, and — as the
 scale witness — the cl-postgres full stack (quickloads + all driver files)
 compiling and running a live query on the JVM backend (todo 115's session
-records). The 255-local-slot ceiling is the remaining unguarded sibling
-(`.todo/137`). The pool ceiling is pinned by
+records). The 255-local-slot ceiling is no longer a ceiling: past it a load or
+store takes the `wide` prefix and a two-byte index (todo-562,
+[stackmap-augmenter.md](stackmap-augmenter.md), "The `wide` prefix"), and the
+hard limit is the u2 `max_locals`, which `Ctx.allocTemp` refuses to cross by
+name. What is left of `.todo/137` is the slot COUNT -- a temporary's slot is
+never reused, which now costs bytes rather than correctness. The pool ceiling is pinned by
 `am.ik.jvm.ConstantPoolTest#refusesTheEntryThatWouldCrossTheFormatLimit` /
 `#refusesATwoSlotEntryThatWouldStraddleTheFormatLimit`, and the read-back-text
 answer to it by `ClUnicodeTablesTest` (the emitted shape, and the decoders run
