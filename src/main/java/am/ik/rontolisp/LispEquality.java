@@ -14,13 +14,16 @@ package am.ik.rontolisp;
  *
  * <p>
  * <strong>The cap is what makes a cyclic key safe.</strong> A hash need not be injective,
- * so refusing to descend past {@value #HASH_DEPTH_CAP} levels is free correctness: two
+ * so refusing to descend past {@value #HASH_DEPTH_CAP} levels is free CORRECTNESS: two
  * {@code equal} keys still hash equal, because the cap is by DEPTH -- a deterministic
- * function of the structure alone, never of insertion order or of an address. Comparison
- * terminates for the same reason {@code equal} does: {@link #equal} answers true on
- * identity before it recurses, so storing and retrieving under the SAME cyclic object
- * works. Two DISTINCT cyclic structures compared with {@code equal} may still not
- * terminate; ANSI leaves that undefined and so does this implementation.
+ * function of the structure alone, never of insertion order or of an address. It is not
+ * free COST, which is why {@linkplain #HASH_WORK_CAP a work budget} runs beside it: a key
+ * whose substructure is SHARED has exponentially many root-to-leaf paths, so bounding the
+ * height of the walk bounds nothing about its size. Comparison terminates for the same
+ * reason {@code equal} does: {@link #equal} answers true on identity before it recurses,
+ * so storing and retrieving under the SAME cyclic object works. Two DISTINCT cyclic
+ * structures compared with {@code equal} may still not terminate; ANSI leaves that
+ * undefined and so does this implementation.
  */
 public final class LispEquality {
 
@@ -32,6 +35,33 @@ public final class LispEquality {
 	 * every backend.
 	 */
 	public static final int HASH_DEPTH_CAP = 64;
+
+	/**
+	 * How many NODES {@link #hash} may visit in one whole traversal before it folds a
+	 * constant instead of descending -- the budget that bounds the WORK the depth cap
+	 * bounds only the height of.
+	 *
+	 * <p>
+	 * The depth cap alone admits at most {@code 2 * } {@value #HASH_DEPTH_CAP} nodes for
+	 * a LINEAR key (a list, a string, a chain of instances), and the number of
+	 * root-to-leaf PATHS through a key whose substructure is SHARED is exponential in its
+	 * height -- a scene graph, a doubly-linked list, a parse tree with parent pointers
+	 * and an ORM entity are all that shape, and at 64 levels the walk is astronomical.
+	 * {@value} is 32x what a linear key can cost, so no key a program plausibly places (a
+	 * list, a small tree, an instance and its slots) is truncated by it, and it bounds
+	 * one placement at a few thousand field reads -- the same order as the ONE
+	 * {@link #equal} comparison the bucket scan then runs against the key it finds.
+	 *
+	 * <p>
+	 * <strong>The soundness argument is the depth cap's.</strong> Two {@code equal} keys
+	 * have the same shape, so the deterministic traversal below visits them in the same
+	 * order and exhausts the budget at the same place, and they still hash equal. Like
+	 * the depth cap, the budget may NEVER be made order-of-insertion or address
+	 * dependent: it is reset at the start of every top-level {@link #hash} call, so what
+	 * a key hashes to is a function of that key alone and not of what was hashed before
+	 * it. All four backends carry the same number ({@code .kb/hash-tables.md}).
+	 */
+	public static final int HASH_WORK_CAP = 4096;
 
 	private LispEquality() {
 	}
@@ -91,22 +121,26 @@ public final class LispEquality {
 	 * @return the folded key
 	 */
 	public static LispVal equalpKey(LispVal v) {
-		return equalpKey(v, HASH_DEPTH_CAP);
+		return equalpKey(v, HASH_DEPTH_CAP, new int[] { HASH_WORK_CAP });
 	}
 
-	// Capped at the same depth as the hash, and for the same reason: a CYCLIC key must
-	// terminate. Past the cap the subtree is its own fold, so the pair (fold, then hash
-	// and equal) still agrees with itself -- what a deep key loses is only the case- and
-	// number-insensitivity below level 64, never a false match.
-	private static LispVal equalpKey(LispVal v, int depth) {
-		if (depth <= 0) {
+	// Capped at the same depth as the hash, and by the same work budget, for the same two
+	// reasons: a CYCLIC key must terminate, and a key with SHARED substructure has
+	// exponentially many root-to-leaf paths -- which the fold does not merely walk, it
+	// ALLOCATES. Past either cap the subtree is its own fold, so the pair (fold, then
+	// hash and equal) still agrees with itself -- what a deep or wide key loses is only
+	// the case- and number-insensitivity below the cut, never a false match.
+	private static LispVal equalpKey(LispVal v, int depth, int[] budget) {
+		if (depth <= 0 || budget[0] <= 0) {
 			return v;
 		}
+		budget[0]--;
 		return switch (v) {
 			case LispString string -> new LispString(upcase(string.value()));
 			case LispChar character -> new LispChar(Character.toUpperCase(character.codePoint()));
 			case LispDouble number -> integerValued(number.value());
-			case LispCons cons -> new LispCons(equalpKey(cons.car(), depth - 1), equalpKey(cons.cdr(), depth - 1));
+			case LispCons cons ->
+				new LispCons(equalpKey(cons.car(), depth - 1, budget), equalpKey(cons.cdr(), depth - 1, budget));
 			default -> v;
 		};
 	}
@@ -173,7 +207,7 @@ public final class LispEquality {
 	 * @return the hash
 	 */
 	public static int hash(LispVal v) {
-		return hash(v, HASH_DEPTH_CAP);
+		return hash(v, HASH_DEPTH_CAP, new int[] { HASH_WORK_CAP });
 	}
 
 	// The two recursive containers -- a cons and an instance -- are folded here rather
@@ -181,17 +215,23 @@ public final class LispEquality {
 	// cyclic key used to run out of stack on). Everything else answers with its own
 	// hashCode, which its equals agrees with by the Java contract, and which is identity
 	// exactly where equal is identity.
-	private static int hash(LispVal v, int depth) {
-		if (depth <= 0) {
+	//
+	// budget is the WHOLE traversal's remaining node visits, a one-cell array because it
+	// has to be shared by the siblings rather than handed down each branch -- a
+	// per-branch
+	// count bounds nothing when the branches share their substructure.
+	private static int hash(LispVal v, int depth, int[] budget) {
+		if (depth <= 0 || budget[0] <= 0) {
 			return 0;
 		}
+		budget[0]--;
 		if (v instanceof LispCons cons) {
-			return 31 * hash(cons.car(), depth - 1) + hash(cons.cdr(), depth - 1) + 1;
+			return 31 * hash(cons.car(), depth - 1, budget) + hash(cons.cdr(), depth - 1, budget) + 1;
 		}
 		if (v instanceof LispInstance inst) {
 			int h = inst.layout().tag().hashCode();
 			for (int i = 0; i < inst.slotCount(); i++) {
-				h = 31 * h + hash(inst.slot(i), depth - 1);
+				h = 31 * h + hash(inst.slot(i), depth - 1, budget);
 			}
 			return h;
 		}

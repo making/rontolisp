@@ -104,6 +104,28 @@ class RontoHashTableEqualpKeyTest {
 		assertThat(folded).isEqualTo("\"cs\"");
 	}
 
+	@Test
+	void theWorkBudgetStopsBothFoldsOnASharedGraphKey() {
+		// The depth cap bounds the fold's HEIGHT and nothing about its SIZE: a DAG of 60
+		// conses holds 60 cells and 2^60 root-to-leaf paths, and the fold does not merely
+		// WALK those, it allocates one cons per path. Both models spend the same budget,
+		// or one backend would place such a key differently. An un-budgeted fold would
+		// not return at all, so a regression here is a HANG rather than a slow number.
+		assertThat(RontoHashTable.FOLD_WORK_CAP).isEqualTo(LispEquality.HASH_WORK_CAP);
+
+		LispVal dag = new LispString("cs");
+		for (int i = 0; i < 60; i++) {
+			dag = new LispCons(dag, dag);
+		}
+		assertThat(interpreterFold(dag)).isInstanceOf(LispCons.class);
+
+		Object jvmDag = "\"cs\"";
+		for (int i = 0; i < 60; i++) {
+			jvmDag = new Object[] { jvmDag, jvmDag };
+		}
+		assertThat(jvmFold(jvmDag)).isInstanceOf(Object[].class);
+	}
+
 	private static LispVal interpreterFold(LispVal value) {
 		return LispEquality.equalpKey(value);
 	}

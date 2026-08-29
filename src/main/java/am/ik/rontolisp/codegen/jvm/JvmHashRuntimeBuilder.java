@@ -39,8 +39,9 @@ import am.ik.rontolisp.runtime.RontoHashTable;
  * <p>
  * The generated static helpers (all gated on the program actually using hash tables):
  * <ul>
- * <li>{@code _hash(key, depth)} -&gt; the structural hash, capped at {@code depth} levels
- * so a cyclic key terminates</li>
+ * <li>{@code _hash(key, depth, gas)} -&gt; the structural hash, capped at {@code depth}
+ * levels so a cyclic key terminates and at {@code gas} node visits so a key with SHARED
+ * substructure does not cost the exponentially many paths through it</li>
  * <li>{@code _hashMake()} -&gt; a fresh table</li>
  * <li>{@code _hashOrd(table)} -&gt; the insertion-order list</li>
  * <li>{@code _hashGet(key, table, default)} -&gt; the stored value or the default</li>
@@ -89,7 +90,7 @@ final class JvmHashRuntimeBuilder {
 
 	static final String HASH = "_hash";
 
-	static final String HASH_DESC = "(Ljava/lang/Object;I)I";
+	static final String HASH_DESC = "(Ljava/lang/Object;I[I)I";
 
 	static final String MAKE = "_hashMake";
 
@@ -380,11 +381,16 @@ final class JvmHashRuntimeBuilder {
 		return methods;
 	}
 
-	// _hash(Object v, int d): the structural hash _equal agrees with -- equal values
-	// hash equal. d is the REMAINING depth: at zero the fold answers a constant instead
-	// of descending, which is free correctness (a hash need not be injective) and is what
-	// makes a cyclic key terminate. The cap is by depth alone, never by anything
-	// order- or address-dependent, so two equal keys still fold identically.
+	// _hash(Object v, int d, int[] gas): the structural hash _equal agrees with -- equal
+	// values hash equal. d is the REMAINING depth: at zero the fold answers a constant
+	// instead of descending, which is free correctness (a hash need not be injective) and
+	// is what makes a cyclic key terminate. gas is the whole traversal's remaining NODE
+	// budget, a one-cell array because siblings must SHARE it: a per-branch count would
+	// bound nothing when the branches share their substructure, and the paths through a
+	// shared graph are exponential in its height. Both caps are by depth or count alone,
+	// never by anything order- or address-dependent, so two equal keys still fold
+	// identically: they have the same shape, so this traversal visits them in the same
+	// order and runs out of gas in the same place.
 	private static HashMethod buildHash(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant ratArrClass,
 			ClassConstant intArrClass, ClassConstant integerClass, @Nullable ClassConstant stringArrayClass,
 			@Nullable MethodrefConstant strvMethod, MethodrefConstant objectHashCode, MethodrefConstant hashRef) {
@@ -396,6 +402,22 @@ final class JvmHashRuntimeBuilder {
 		a.iconst(0);
 		a.ireturn();
 		a.bind(haveDepth);
+		// if (gas[0] <= 0) return 0; else gas[0]--
+		a.aload(2);
+		a.iconst(0);
+		a.iaload();
+		int haveGas = a.label();
+		a.branch(Opcode.IFGT, haveGas);
+		a.iconst(0);
+		a.ireturn();
+		a.bind(haveGas);
+		a.aload(2);
+		a.iconst(0);
+		a.dup2();
+		a.iaload();
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.iastore();
 		// if (v == null) return 0 -- nil
 		a.aload(0);
 		int notNull = a.label();
@@ -430,37 +452,38 @@ final class JvmHashRuntimeBuilder {
 			a.branch(Opcode.IFEQ, notInstance);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
-			a.astore(2);
-			a.aload(2);
+			a.astore(3);
+			a.aload(3);
 			a.iconst(0);
 			a.aaload();
 			a.invokevirtual(objectHashCode);
-			a.istore(4);
+			a.istore(5);
 			a.iconst(1);
-			a.istore(3);
+			a.istore(4);
 			int slotTop = a.label();
 			int slotDone = a.label();
 			a.bind(slotTop);
-			a.iload(3);
-			a.aload(2);
+			a.iload(4);
+			a.aload(3);
 			a.arraylength();
 			a.branch(Opcode.IF_ICMPGE, slotDone);
-			a.iload(4);
+			a.iload(5);
 			a.iconst(31);
 			a.op(Opcode.IMUL);
-			a.aload(2);
-			a.iload(3);
+			a.aload(3);
+			a.iload(4);
 			a.aaload();
 			a.iload(1);
 			a.iconst(1);
 			a.op(Opcode.ISUB);
+			a.aload(2);
 			a.invokestatic(hashRef);
 			a.op(Opcode.IADD);
-			a.istore(4);
-			a.iinc(3, 1);
+			a.istore(5);
+			a.iinc(4, 1);
 			a.branch(Opcode.GOTO, slotTop);
 			a.bind(slotDone);
-			a.iload(4);
+			a.iload(5);
 			a.ireturn();
 			a.bind(notInstance);
 		}
@@ -488,6 +511,7 @@ final class JvmHashRuntimeBuilder {
 		a.iload(1);
 		a.iconst(1);
 		a.op(Opcode.ISUB);
+		a.aload(2);
 		a.invokestatic(hashRef);
 		a.op(Opcode.IMUL);
 		a.aload(0);
@@ -497,6 +521,7 @@ final class JvmHashRuntimeBuilder {
 		a.iload(1);
 		a.iconst(1);
 		a.op(Opcode.ISUB);
+		a.aload(2);
 		a.invokestatic(hashRef);
 		a.op(Opcode.IADD);
 		a.iconst(1);
@@ -540,7 +565,7 @@ final class JvmHashRuntimeBuilder {
 		a.aload(0);
 		a.invokevirtual(objectHashCode);
 		a.ireturn();
-		return new HashMethod(cp.addUtf8(HASH), cp.addUtf8(HASH_DESC), 4, 5, a.code);
+		return new HashMethod(cp.addUtf8(HASH), cp.addUtf8(HASH_DESC), 6, 6, a.code);
 	}
 
 	// _hashGet(key, table, default): scan the key's bucket with _equal.
@@ -593,7 +618,7 @@ final class JvmHashRuntimeBuilder {
 		a.bind(miss);
 		a.aload(2);
 		a.areturn();
-		return new HashMethod(cp.addUtf8(GET), cp.addUtf8(GET_DESC), 3, 6, a.code);
+		return new HashMethod(cp.addUtf8(GET), cp.addUtf8(GET_DESC), 7, 6, a.code);
 	}
 
 	// _hashPut(key, table, value): replace the value of the equal key in the bucket, or
@@ -689,7 +714,7 @@ final class JvmHashRuntimeBuilder {
 		a.pop();
 		a.aload(2);
 		a.areturn();
-		return new HashMethod(cp.addUtf8(PUT), cp.addUtf8(PUT_DESC), 4, 7, a.code);
+		return new HashMethod(cp.addUtf8(PUT), cp.addUtf8(PUT_DESC), 7, 7, a.code);
 	}
 
 	// _hashRem(key, table): drop the pair from its bucket and from the order list; an
@@ -764,7 +789,7 @@ final class JvmHashRuntimeBuilder {
 		a.bind(miss);
 		a.aconstNull();
 		a.areturn();
-		return new HashMethod(cp.addUtf8(REM), cp.addUtf8(REM_DESC), 3, 6, a.code);
+		return new HashMethod(cp.addUtf8(REM), cp.addUtf8(REM_DESC), 7, 6, a.code);
 	}
 
 	// The equalp trio, emitted only for a program that writes :test 'equalp.
@@ -845,10 +870,18 @@ final class JvmHashRuntimeBuilder {
 		a.astore(0);
 	}
 
-	// Pushes Integer.valueOf(_hash(local 0, HASH_DEPTH_CAP)) -- the bucket key.
+	// Pushes Integer.valueOf(_hash(local 0, HASH_DEPTH_CAP, new int[]{HASH_WORK_CAP})) --
+	// the bucket key. The gas cell is allocated PER PLACEMENT, so what a key hashes to is
+	// a function of that key alone and never of what the table hashed before it.
 	private static void emitKeyHash(JvmAsm a, MethodrefConstant hashRef, MethodrefConstant integerValueOf) {
 		a.aload(0);
 		a.iconst(LispEquality.HASH_DEPTH_CAP);
+		a.iconst(1);
+		a.newarrayInt();
+		a.dup();
+		a.iconst(0);
+		a.iconst(LispEquality.HASH_WORK_CAP);
+		a.iastore();
 		a.invokestatic(hashRef);
 		a.invokestatic(integerValueOf);
 	}

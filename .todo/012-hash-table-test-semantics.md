@@ -31,6 +31,39 @@ backends:
 
 Keep `equal` the default-friendly behavior; only narrow `eql`/`eq` tables.
 
+## What `.todo/567` handed over (2026-08-29)
+
+567 was filed as two defects with one symptom, and the second of them -- the hash capping
+DEPTH but not WORK, so a key with SHARED substructure cost the exponentially many
+root-to-leaf paths through it -- is FIXED on all four backends by a node budget beside the
+depth cap (`.kb/hash-tables.md`). What that leaves for this item, and what it changes about
+it:
+
+- **The cliff is survivable, so this is no longer a liveness bug.** A program that wrote
+  `:test 'eq` precisely BECAUSE its keys are large linked objects used to get the most
+  expensive possible behaviour -- 61 ms for one `gethash` on an EMPTY table keyed by a node
+  two links down a parent-linked chain, and no return at all at three. It is now bounded.
+  What remains is the WRONG ANSWER: two distinct-but-equal aggregates are still ONE key in
+  a table the caller asked to compare by identity, which for sibling scene-graph nodes,
+  ORM entities or parse-tree nodes with equal slots is a silent collision.
+- **The hash does NOT have to narrow, only the comparison does.** `eql` implies `equal`
+  implies the same structural hash, so the existing `_hash` stays a SOUND placement
+  function for an `eql` table -- it merely over-collides, which the bucket scan then
+  decides correctly. That removes the part of the WASM design this item was stuck on:
+  wasm-GC has no address-of, so an identity hash of a struct ref is not expressible, and
+  it turns out none is needed. What each backend needs is the test FLAG plus an `eql`
+  bucket comparison.
+- **The blast radius is the default test, and it has to be measured before this lands.**
+  `(make-hash-table)` is `eql` by default, so narrowing `eql` changes every table in every
+  bundled Lisp library (`src/main/resources/*.lisp`) and in every example that relies on a
+  list or a runtime-built string key matching structurally under the default test. The
+  ci-spec case `cyclic-hash-key` is one already in the tree: its 200-element list key is
+  looked up through a DISTINCT list in a default table and expects `:DEEP`. Audit that set
+  first; the change is mechanical, the fallout is not.
+- On WASM the header count's fold flag becomes two bits (`entries * 4 + test`), and every
+  count read and write has to agree about that in one program-wide answer -- the same
+  invariant the fold bit already has.
+
 ## Also update when this lands
 
 The WIDENING half is done (`.todo/543`, 2026-08-28): a table already knows

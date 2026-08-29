@@ -60,6 +60,16 @@ public final class RontoHashTable {
 	 */
 	public static final int FOLD_DEPTH_CAP = 64;
 
+	/**
+	 * How many NODES {@link #equalpKey(Object, int)} may visit across one whole fold
+	 * before it answers the rest of the key unfolded -- the same budget the structural
+	 * hash spends, and for the same reason: the depth cap bounds the walk's HEIGHT and
+	 * says nothing about its SIZE, and a key whose substructure is SHARED has
+	 * exponentially many root-to-leaf paths. The fold BUILDS a structure, so an
+	 * un-budgeted one does not merely take that long, it allocates that much.
+	 */
+	public static final int FOLD_WORK_CAP = 4096;
+
 	private RontoHashTable() {
 	}
 
@@ -88,9 +98,20 @@ public final class RontoHashTable {
 	 * @return the folded key
 	 */
 	public static Object equalpKey(Object key, int depth) {
-		if (depth <= 0 || key == null) {
+		return equalpKey(key, depth, new int[] { FOLD_WORK_CAP });
+	}
+
+	// gas is the WHOLE fold's remaining node budget, a one-cell array because the
+	// siblings have to share it: a per-branch count bounds nothing when the branches
+	// share their substructure, and the paths through a shared graph are exponential in
+	// its height. Sound for the same reason the depth cap is -- two keys equalp calls the
+	// same have the same shape, so this walk visits them in the same order and runs out
+	// in the same place, and their folds stay equal.
+	private static Object equalpKey(Object key, int depth, int[] gas) {
+		if (depth <= 0 || gas[0] <= 0 || key == null) {
 			return key;
 		}
+		gas[0]--;
 		if (key instanceof String text) {
 			// A framed string folds its content; a SYMBOL (unframed) is its own key.
 			return (text.length() >= 2 && text.charAt(0) == '"') ? upcase(text) : text;
@@ -106,7 +127,7 @@ public final class RontoHashTable {
 		// nor an instance (its interned String[] layout in slot 0).
 		if (key instanceof Object[] cell && !(key instanceof java.math.BigInteger[]) && !(key instanceof String[])
 				&& cell.length == 2 && !(cell[0] instanceof Integer) && !(cell[0] instanceof String[])) {
-			return new Object[] { equalpKey(cell[0], depth - 1), equalpKey(cell[1], depth - 1) };
+			return new Object[] { equalpKey(cell[0], depth - 1, gas), equalpKey(cell[1], depth - 1, gas) };
 		}
 		return key;
 	}

@@ -66,13 +66,19 @@ interpreter, a compiled JVM class, WASM preview 1 and the WASI 0.3 component. So
    axes, solid/wireframe shading, `fit`, an animation hook.
 3. `566-constructive-solid-geometry-for-geom-solids.md` -- union, difference, intersection
    and a planar section. The hard half of solid modeling, and independent of the viewer.
-4. `567-an-eq-hash-table-is-not-identity-keyed.md` -- a defect the spike ran into and
-   worked around. Not scoped to this feature; filed here because this is where it surfaced.
-5. `568-an-offscreen-renderer-and-a-browser-twin.md` -- what makes the viewer TESTABLE (no
+4. `568-an-offscreen-renderer-and-a-browser-twin.md` -- what makes the viewer TESTABLE (no
    test may open a window) and what takes `geom` beyond macOS.
 
-Members 1-2 are the feature. 3 and 5 extend it, 4 is a bug found under it; none of the
-three blocks the first two.
+Members 1-2 are the feature; 3 and 4 extend it, and neither blocks the first two.
+
+A fifth member was the hash-table defect the spike ran into and worked around. Its
+expensive half is FIXED (2026-08-29): the structural hash caps depth but used to cap no
+WORK, so a key with shared substructure -- which every scene-graph node is -- cost the
+exponentially many paths through it. A node budget beside the depth cap landed on all four
+backends (`.kb/hash-tables.md`). Its other half is `.todo/012`, which always owned it:
+`:test 'eq` is still accepted and ignored, so an `eq` table returns SOON but still matches
+structurally, which is why the renderer's per-solid state belongs in `geom:user-data` and
+would even after 012 lands.
 
 ## What must be true when the parent closes
 
