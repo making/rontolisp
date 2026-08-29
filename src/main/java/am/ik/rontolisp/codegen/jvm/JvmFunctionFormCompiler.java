@@ -83,12 +83,18 @@ final class JvmFunctionFormCompiler {
 			ctx.emitU2(ctx.integerValueOf.index());
 			ctx.emit(Opcode.AASTORE);
 		}
+		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
+			// A defun nested inside a top-level let or a function body compiles to
+			// (setq name (lambda ...)): the global variable already HOLDS the function
+			// value. Before the dynamic fallback for the same reason the call site
+			// checks it first (JvmFunctionCallCompiler).
+			JvmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx, className);
+		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileFunctionRef(name, ctx, className);
 		}
 		else if (ctx.globals.contains(name)) {
-			// A defun nested inside a top-level let compiles to (setq name
-			// (lambda ...)): the global variable already HOLDS the function value.
+			// A top-level (setq name (lambda ...)) the same way.
 			JvmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx, className);
 		}
 		else {

@@ -82,12 +82,18 @@ final class WasmFunctionFormCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
 		}
+		else if (ctx.nestedDefunNames.contains(name) && ctx.globalIndices.containsKey(name)) {
+			// A defun nested inside a top-level let or a function body compiles to
+			// (setq name (lambda ...)): the global variable already HOLDS the function
+			// value. Before the dynamic fallback for the same reason the call site
+			// checks it first (WasmFunctionCallCompiler).
+			WasmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx);
+		}
 		else if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileFunctionRef(name, ctx);
 		}
 		else if (ctx.globalIndices.containsKey(name)) {
-			// A defun nested inside a top-level let compiles to (setq name
-			// (lambda ...)): the global variable already HOLDS the function value.
+			// A top-level (setq name (lambda ...)) the same way.
 			WasmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx);
 		}
 		else {

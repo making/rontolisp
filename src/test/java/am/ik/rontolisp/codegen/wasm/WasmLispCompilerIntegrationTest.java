@@ -6382,6 +6382,44 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aDefunNestedInADefunBodyRedefinesAnExistingTopLevelDefun() throws Exception {
+		// The JvmLispCompilerTest twin: the redefined name has BOTH a top-level defun
+		// and a nested one, and the call site resolved the compiled function first -- so
+		// the nested definition was written to a store nothing read and the call after
+		// (redefiner) still answered TOP. The top-level definition is renamed and its
+		// function value assigned to the global in its place, so the one variable
+		// carries both answers in order (.kb/core-representation.md, "The NAME half").
+		assertThat(compileAndRun("""
+				(defun over () 'top)
+				(defun redefiner ()
+				  (defun over () 'nested)
+				  'done)
+				(print (over))
+				(print (redefiner))
+				(print (over))
+				""")).isEqualTo("TOP\nDONE\nNESTED");
+	}
+
+	@Test
+	void aRedefinedDefunIsAlsoRedefinedForFunctionReferencesAndCallers() throws Exception {
+		// #'over and a caller compiled BEFORE the redefinition must see it too: both
+		// read the same global variable, and the call is a funcall rather than a fixed
+		// direct call, so the two definitions need not share an arity.
+		assertThat(compileAndRun("""
+				(defun over (x) (list 'top x))
+				(defun call-it (x) (over x))
+				(defun redefiner ()
+				  (defun over (x) (list 'nested x))
+				  'done)
+				(print (call-it 1))
+				(print (funcall #'over 2))
+				(redefiner)
+				(print (call-it 3))
+				(print (funcall #'over 4))
+				""")).isEqualTo("(TOP 1)\n(TOP 2)\n(NESTED 3)\n(NESTED 4)");
+	}
+
+	@Test
 	void anInlineLambdaCallBoxesAParameterItsBodyClosesOver() throws Exception {
 		// ((lambda (n) ...) 0) binds n in the CALLER's frame, and that binder never
 		// asked whether the body closes over it -- so the nested lambda was handed a

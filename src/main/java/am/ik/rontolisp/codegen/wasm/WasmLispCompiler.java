@@ -43,6 +43,7 @@ import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
+import am.ik.rontolisp.compiler.NestedDefunRedefinition;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.NoWasiFilesystemStubs;
@@ -2496,6 +2497,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// %io-* defun (whose socket-table bookkeeping must stay in the loop).
 		program = ShadowedBuiltins.process(program, closRegistry,
 				this.component ? WasmSocketsRewrite.builtinDispatchAliases(program) : java.util.Map.of());
+		// A defun nested in a function body REDEFINES a top-level defun of the same name
+		// at run time, and only a global variable can hold both answers: the top-level
+		// definition is renamed and an assignment of its function value takes its place,
+		// so the name resolves through the variable like every other non-top-level defun
+		// (.kb/core-representation.md, "The NAME half"). A no-op unless the two
+		// spellings actually meet, and placed after every pass that can introduce a
+		// top-level defun of its own (defstruct/defclass accessors, ShadowedBuiltins).
+		program = NestedDefunRedefinition.rewrite(program);
 		// Every struct/class layout is registered by the pass above, so the instance gate
 		// can be decided here -- it must be, because the struct type index and the baked
 		// layout addresses are needed as constants before any body is compiled. Restart
@@ -3011,6 +3020,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// defun is not among topLevelExprs, so this is the one spelling collect() cannot
 		// see.
 		globals.addAll(GlobalVarCollector.collectNestedInDefunBodies(program));
+		// Both spellings of a non-top-level defun, for the call sites: the function value
+		// of such a name is only ever in its global variable, so a call and a #'name have
+		// to reach the variable before the --dynamic late-binding fallback does.
+		Set<String> nestedDefunNames = GlobalVarCollector.collectAllNestedDefunNames(program);
 		// Special (dynamically bound) variables need the same module-global backing store
 		// (a
 		// let of a special save/restores over it), so union them in before indices are
@@ -3305,6 +3318,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry)
 			.globals(globals)
+			.nestedDefunNames(nestedDefunNames)
 			.specialVars(specialVars)
 			.globalIndices(globalIndices)
 			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
@@ -7767,6 +7781,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> globals = Set.of();
 
 		/**
+		 * Names of the program's NON-top-level {@code defun}s (a subset of
+		 * {@link #globals}): each lowers to {@code (setq name (lambda ...))}, so the
+		 * function value lives in the global variable and nowhere else. A call site and a
+		 * {@code #'name} must therefore dispatch through the variable BEFORE the
+		 * late-binding fallback, which under {@code --dynamic} resolves the runtime
+		 * FUNCTION namespace -- where a nested defun never appears.
+		 */
+		Set<String> nestedDefunNames = Set.of();
+
+		/**
 		 * Names of special (dynamically bound) variables (a subset of {@link #globals}).
 		 * A {@code let}/{@code let*} of one of these names saves its module-level wasm
 		 * global, assigns the init value, and restores the global on normal exit -- a
@@ -8035,6 +8059,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
+			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
 			this.globalIndices = builder.globalIndices;
 			this.futureTypeIndex = builder.futureTypeIndex;
@@ -8166,6 +8191,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private ClosRegistry closRegistry = new ClosRegistry();
 
 			private Set<String> globals = Set.of();
+
+			private Set<String> nestedDefunNames = Set.of();
 
 			private Set<String> specialVars = Set.of();
 
@@ -8458,6 +8485,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder globals(Set<String> globals) {
 				this.globals = globals;
+				return this;
+			}
+
+			Builder nestedDefunNames(Set<String> nestedDefunNames) {
+				this.nestedDefunNames = nestedDefunNames;
 				return this;
 			}
 

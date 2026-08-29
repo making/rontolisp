@@ -499,10 +499,21 @@ cases:
       (funcall co-step)
       (funcall co-step)
       (print (list (co-read-seed) (funcall co-step)))
+      (defun co-over (co-x) (list 'top co-x))
+      (defun co-call-it (co-x) (co-over co-x))
+      (defun co-redefiner ()
+        (defun co-over (co-x) (list 'nested co-x))
+        'done)
+      (print (list (co-call-it 1) (funcall #'co-over 2)))
+      (print (co-redefiner))
+      (print (list (co-call-it 3) (funcall #'co-over 4)))
     expected: |
       (2 LATER)
       2
       (12 13)
+      ((TOP 1) (TOP 2))
+      DONE
+      ((NESTED 3) (NESTED 4))
   - name: jvm-typed-numeric-loops
     source: |
       (defun tl-softmax (att scores pos inv)
