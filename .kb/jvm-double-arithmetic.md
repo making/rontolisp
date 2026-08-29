@@ -198,8 +198,9 @@ the inline-lambda binder; specials never register, shadowed names drop out,
   With both, `escapes-p`'s inner loop allocates NOTHING per iteration.
 - **Interactions**: a raw double name is never in `locals`/`rawLocals`;
   `resolveRaw` declines it (a raw GLOBAL of the same name must not answer);
-  the typed-loop compiler treats it as unresolvable and falls back boxed
-  (admitting it as a typed free var is an open follow-up); the body outliner
+  the typed-loop compiler takes it as a free variable of its own, in place --
+  strictly `DOUBLE`, no entry guard, no typed copy, no write-back, since the
+  slot is already authoritative (todo-576, `.kb/jvm-typed-loops.md`); the body outliner
   carries it across a `_k$N` split boxed, as it does raw longs. A
   handler-case clause variable now shadows raw longs, raw doubles AND the
   boxed set for the clause body (`compileClauseBody`) -- before todo-569 an

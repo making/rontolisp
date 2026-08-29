@@ -13594,6 +13594,28 @@ class JvmLispCompilerTest {
 			    (error (e) (print 'caught)))
 			  (print z)
 			  (print n))
+			(defun tl-dsum (v n)
+			  (let ((sum 0.0d0))
+			    (declare (type double-float sum))
+			    (dotimes (i n)
+			      (setq sum (+ sum (* (aref v i) (aref v i)))))
+			    sum))
+			(let ((dv (make-array 4 :element-type 'double-float :initial-element 0.0d0))
+			      (sv (make-array 4 :element-type 'single-float :initial-element 0.0)))
+			  (dotimes (i 4) (setf (aref dv i) (+ i 1.5d0)))
+			  (dotimes (i 4) (setf (aref sv i) (+ i 1.5)))
+			  (print (tl-dsum dv 4))
+			  (print (tl-dsum sv 4)))
+			(let ((a (make-array 3 :element-type 'double-float :initial-element 1.0d0)))
+			  (let ((acc 0.0d0) (scale 2.0d0))
+			    (declare (type double-float acc scale))
+			    (dotimes (i 3) (setq acc (+ acc (* scale (aref a i)))))
+			    (print acc)
+			    (dotimes (i 3) (setq acc (+ acc 1)))
+			    (print acc)
+			    (handler-case (dotimes (i 10) (setq acc (+ acc (* scale (aref a i)))))
+			      (error (e) (print 'caught-raw)))
+			    (print acc)))
 			""";
 
 	private static final String TYPED_LOOP_EXPECTED = """
@@ -13615,7 +13637,13 @@ class JvmLispCompilerTest {
 			21.0
 			CAUGHT
 			3.0
-			3""";
+			3
+			41.0
+			41.0
+			6.0
+			9.0
+			CAUGHT-RAW
+			15.0""";
 
 	@Test
 	void typedLoopsMatchTheBoxedPathAndTheSizeLevelDeclinesThem() throws Exception {

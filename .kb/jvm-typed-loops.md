@@ -74,7 +74,8 @@ Two static types, `LONG` and `DOUBLE`, and the rules that type a body:
 
 Every symbol the body reads that is not bound inside the loop is a FREE variable, read
 ONCE at entry (through `compileSymbolRef`, so locals, captures and globals all qualify;
-nothing in the loop can change them -- there are no calls) and GUARDED:
+nothing in the loop can change them -- there are no calls) and GUARDED -- except a raw
+double local, which is already raw and is used in place:
 
 | speculated as | when | guard at entry |
 |---|---|---|
@@ -82,6 +83,17 @@ nothing in the loop can change them -- there are no calls) and GUARDED:
 | `LONG` | it appears inside a subscript or count expression, or feeds one through a `let` binding / `setq` (a fixpoint over the body), or it is assigned and never assigned a double | `instanceof Long` AND `(int) v == v` (the 2^31 bound the typing used) |
 | `DOUBLE`, strict | it is assigned a double expression anywhere in the loop | `instanceof Double` |
 | `DOUBLE`, Long-accepting | read-only, and every use is a position where the boxed path converts a Long to double anyway: beside a static-double operand of `+ - * /` or a comparison, the argument of a Math function, the value of an `aset` | `instanceof Double`, else `instanceof Long` + `L2D` |
+| `DOUBLE`, strict, IN PLACE | it is a raw double local -- a bound-declared float `let` binding in a `Ctx.rawDoubleLocals` slot (`.kb/jvm-double-arithmetic.md`) | NONE |
+
+A raw double local is the one free variable that needs no guard and no copy: the slot IS
+the value (always authoritative, no flag and no boxed shadow), so the loop `dload`s and
+`dstore`s it in place. Nothing is read at entry, nothing is written back at exit, and a
+loop whose only assigned free variables are raw doubles needs no catch-all handler either
+-- an exception mid-loop leaves the slot holding exactly what the boxed path's `setq`s
+would have left there -- so such a loop is eligible even with operands of an enclosing
+expression live on the stack. It is declined only where a double cannot be what the body
+wants: used as a subscript, a count, or an array (`freeVar`); a `setq` of a `LONG`-typed
+value falls out of the ordinary type rule and keeps the whole loop boxed.
 
 A guard that fails jumps to the bail label, where the ordinary `expandDotimes` emission
 sits -- exactly what the loop compiled to before, so a wrong speculation costs speed and
@@ -154,6 +166,39 @@ JVM class only gets faster.
   104, `--gpu --simd` 278 -> 458 -- above kishida's Java Vector API port of run.c on
   the same thread counts (312 one thread, 513 as published on 20), measured beside it.
   The README of the example carries the table.
+
+## Numbers: composing with a declared-float accumulator (todo-576)
+
+Before todo-576 a `dotimes` whose free accumulator was a bound-declared float local was
+INELIGIBLE (`resolvable` knew `locals`/`captures`/`globals` only), so the two features
+cancelled: the whole loop fell back to the boxed emission -- correct, and slower than
+either feature alone.
+
+2M-iteration `(setq sum (+ sum (* (aref v i) (aref v i))))` over a `double-float` array,
+`sum` a bound-declared float local, `-o Bench.class` under `java`, best of 5 (2026-08-29,
+64-core linux/x86-64, GraalVM 25):
+
+| ms per call | boxed fallback (before) | typed in place (after) |
+| --- | ---: | ---: |
+| first call (cold) | 20 | **8** |
+| steady state (call 20) | 1-2 | 1-2 |
+| C1-only, steady (`-XX:TieredStopAtLevel=1`) | 108 | **2** |
+
+The steady-state claim is that there is NO steady-state difference: Graal's escape
+analysis already removes every box the boxed emission allocates, exactly as
+`.kb/jvm-double-arithmetic.md`'s todo-569 measurement found. The win is the tier a
+short-lived run actually executes in -- C1 does no escape analysis, so the boxed
+emission's `_fvAref1` + `_add` + `Long`/`Double` allocations are real there. The typed
+emission for this shape is also the CHEAPEST the typed loop has: +305 bytes against the
+same loop with an undeclared accumulator's +452, because there is no guard, no entry
+read, no write-back and no handler.
+
+`bench-report/programs/matmul.lisp`'s diagonal-sum loop -- the live example the item was
+filed from -- is still boxed, for an unrelated reason: its result form `(round diagonal)`
+is a call, and only a symbol or a number is taken along. 200 iterations, so it costs
+nothing. Its `matmul` kernel was never affected: the typed path claims the whole
+`i`/`k`/`j` nest from the outer `dotimes`, so `aik` is a typed LET variable there and
+never becomes a raw double slot at all.
 
 ## Pinning tests
 

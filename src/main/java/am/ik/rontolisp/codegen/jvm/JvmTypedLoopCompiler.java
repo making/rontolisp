@@ -123,6 +123,15 @@ final class JvmTypedLoopCompiler {
 		boolean acceptsLong;
 
 		/**
+		 * A FREE variable that already lives in a raw {@code double} slot -- a
+		 * bound-declared float local ({@code Ctx.rawDoubleLocals},
+		 * {@code .kb/jvm-double-arithmetic.md}). The slot is always authoritative, so
+		 * there is nothing to read, guard, copy or write back: the typed loop uses that
+		 * slot directly.
+		 */
+		boolean rawDouble;
+
+		/**
 		 * Emission: the typed local (2 slots for LONG/DOUBLE, the array ref for ARRAY).
 		 */
 		int slot = -1;
@@ -532,7 +541,7 @@ final class JvmTypedLoopCompiler {
 
 		private boolean resolvable(String name) {
 			return this.ctx.locals.containsKey(name) || this.ctx.captures.containsKey(name)
-					|| this.ctx.globals.contains(name);
+					|| this.ctx.globals.contains(name) || this.ctx.rawDoubleLocals.containsKey(name);
 		}
 
 		private boolean plainLocal(String name) {
@@ -551,6 +560,22 @@ final class JvmTypedLoopCompiler {
 			Spec sp = this.specs.get(name);
 			if (sp == null) {
 				throw Ineligible.INSTANCE;
+			}
+			Integer rawDoubleSlot = this.ctx.rawDoubleLocals.get(name);
+			if (rawDoubleSlot != null) {
+				// A bound-declared float local: already a raw double, and its slot is
+				// always authoritative (no flag, no boxed shadow), so it is the EASIEST
+				// free variable this loop can have -- strictly DOUBLE with no entry
+				// guard, no typed copy and no write-back. It is not an index and not an
+				// array; a body that uses it as one keeps the boxed emission.
+				if (sp.arrayRank != 0 || sp.indexUse) {
+					throw Ineligible.INSTANCE;
+				}
+				v = new Var(name, Kind.FREE, T.DOUBLE, BigInteger.ZERO, 0);
+				v.rawDouble = true;
+				v.assigned = sp.assigned;
+				this.free.put(name, v);
+				return v;
 			}
 			if (sp.arrayRank != 0) {
 				if (sp.arrayRank < 0 || sp.arrayRank > 2 || sp.indexUse || sp.assigned) {
@@ -1048,7 +1073,10 @@ final class JvmTypedLoopCompiler {
 				}
 				else {
 					numbers.add(v);
-					anyAssigned |= v.assigned;
+					// A raw double local needs no write-back, so it needs no handler
+					// either -- its slot already holds what the boxed path would have
+					// left there.
+					anyAssigned |= v.assigned && !v.rawDouble;
 				}
 			}
 			// An exception handler writes the assigned variables back; entering a
@@ -1057,8 +1085,8 @@ final class JvmTypedLoopCompiler {
 			if (anyAssigned && !this.ctx.stack.snapshot().isEmpty()) {
 				return false;
 			}
-			int needed = numbers.size() * 3 + 1 + arrays.size() * 4 + this.an.loopDepth() * 4 + this.an.letDepth() * 2
-					+ 4;
+			int guarded = (int) numbers.stream().filter(v -> !v.rawDouble).count();
+			int needed = guarded * 3 + 1 + arrays.size() * 4 + this.an.loopDepth() * 4 + this.an.letDepth() * 2 + 4;
 			if (this.ctx.nextLocal + needed > SLOT_BUDGET) {
 				return false;
 			}
@@ -1066,6 +1094,13 @@ final class JvmTypedLoopCompiler {
 			List<Integer> bails = new ArrayList<>();
 			// 1. read and guard every free variable
 			for (Var v : numbers) {
+				if (v.rawDouble) {
+					// Nothing to read and nothing to guard: the loop reads and writes
+					// the program's own raw slot in place, so an exception mid-loop
+					// leaves exactly what the boxed emission would have left.
+					v.slot = java.util.Objects.requireNonNull(this.ctx.rawDoubleLocals.get(v.name));
+					continue;
+				}
 				v.refSlot = this.ctx.allocTemp();
 				JvmExprCompiler.compileSymbolRef(new LispSymbol(v.name), this.ctx);
 				this.ctx.emit(Opcode.ASTORE);
@@ -1289,7 +1324,7 @@ final class JvmTypedLoopCompiler {
 			int start = this.ctx.code.size();
 			loop(this.an.ctr(), this.an.count(), this.an.body());
 			int end = this.ctx.code.size();
-			List<Var> assigned = numbers.stream().filter(v -> v.assigned).toList();
+			List<Var> assigned = numbers.stream().filter(v -> v.assigned && !v.rawDouble).toList();
 			writeBack(assigned);
 			// the value: nil, or the result form with the counter bound to its final
 			// value
