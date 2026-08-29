@@ -261,6 +261,7 @@ needs no glue at all. Each directory has its own README.
 | [`webgl-robot-arm/`](browser/webgl-robot-arm) | A 3-D arm that reaches where you click: damped-least-squares Jacobian IK every frame (FABRIK and the analytic closed form on a HUD toggle), on a minimum-jerk trajectory. Every coordinate is a float vector and every combination of them a `linalg` call; [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) is the same program with the host boundary removed |
 | [`webgl-platformer/`](browser/webgl-platformer) | A one-stage 3D platformer: gravity, coyote time, per-axis AABB collision, enemy patrols and the follow camera, all in Lisp |
 | [`webgl-battlefront/`](browser/webgl-battlefront) | A Pointer-Lock snow battle: third-person aim camera, blaster bolts, a lightsaber that hits *and* deflects, and stormtrooper/AT-AT/boss AI |
+| [`webgl-solids/`](browser/webgl-solids) | The [`geom`](../doc/en/guides/solid-modeling.md) solid modeller in a browser, and the twin of the macOS viewer `scene` ([`scene-solids.lisp`](macos/scene-solids.lisp)): the same solids, the same booleans and the same one-buffer-per-solid design, Metal there and WebGL here. No modeling code of its own — every triangle is `geom:mesh` and every pose `geom:world-transform` |
 | [`webgl-common/`](browser/webgl-common) | Not a demo but the shared `gl` package the others splice in with `(require :gl ...)`; `--optimize` tree-shakes the entries a demo never calls |
 
 ## Crossing the WASM boundary — `count-vowels/`, `wit/`

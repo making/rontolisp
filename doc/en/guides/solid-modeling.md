@@ -232,6 +232,35 @@ display. Both `scene` and `metal` are macOS only, and a `.wasm` output for a
 program that references either is refused by name, exactly as an `objc:` program
 is.
 
+### A viewer with no window
+
+`scene:offscreen` is the same viewer drawing into a texture instead of a
+drawable, and `scene:snapshot` hands back its pixels -- `width * height * 4`
+bytes, BGRA, row 0 at the top. It is the same render function, not a second one
+that resembles it, which is what lets a picture be checked: a red box is red in
+the middle of the frame, a solid behind another is occluded, a facet wound the
+wrong way is culled and `scene:fit` keeps the whole bounding box inside the
+frame. `metal:offscreen` and `metal:pixels` are the rung underneath, for a
+`metal:` program with no `geom` in it.
+
+```console
+CL-USER> (defvar *v* (scene:offscreen :width 320 :height 240))
+CL-USER> (scene:add *v* (geom:box 200 :color (geom:vec3 1.0 0.2 0.2)))
+CL-USER> (scene:fit *v*)
+CL-USER> (length (scene:snapshot *v*))
+307200
+```
+
+### Seeing it anywhere: the browser twin
+
+`geom` runs wherever rontolisp does, and so can a renderer for it:
+`examples/browser/webgl-solids/` is `scene`'s design ported to WebGL2 --
+one vertex buffer per solid uploaded once, a per-draw model matrix uniform, one
+draw call a solid, and `geom:mesh` and `geom:world-transform` consumed
+unchanged. The only real difference is the projection: OpenGL's clip space puts
+z in [-1, 1] where Metal's puts it in [0, 1]. There is deliberately no second
+modelling layer in it -- that is what would make `geom` grow a browser dialect.
+
 ## What is not here
 
 Convex hulls, offsetting, filleting, mesh repair, mesh file formats, and

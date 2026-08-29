@@ -411,11 +411,11 @@ public final class PackageRegistry {
 	 * {@code attach}/{@code pipeline}/{@code frame}'s own business rather than a decision
 	 * a caller makes.
 	 */
-	private static final Set<String> METAL_FUNCTIONS = Set.of("CONTEXT", "ATTACH", "DEVICE", "LAYER", "QUEUE",
-			"LIBRARY", "PIPELINE", "DEPTH-STATE", "FLOATS", "BUFFER", "SHARED-BUFFER", "UPLOAD", "UNIFORM", "FRAME",
-			"RUN", "RESIZE", "SET-CLEAR-COLOR", "+POINT+", "+LINE+", "+TRIANGLE+", "+TRIANGLE-STRIP+", "+CULL-NONE+",
-			"+CULL-FRONT+", "+CULL-BACK+", "+WINDING-CLOCKWISE+", "+WINDING-COUNTER-CLOCKWISE+", "+COMPARE-LESS+",
-			"+COMPARE-ALWAYS+");
+	private static final Set<String> METAL_FUNCTIONS = Set.of("CONTEXT", "ATTACH", "OFFSCREEN", "PIXELS", "DEVICE",
+			"LAYER", "QUEUE", "LIBRARY", "PIPELINE", "DEPTH-STATE", "FLOATS", "BUFFER", "SHARED-BUFFER", "UPLOAD",
+			"UNIFORM", "FRAME", "RUN", "RESIZE", "SET-CLEAR-COLOR", "+POINT+", "+LINE+", "+TRIANGLE+",
+			"+TRIANGLE-STRIP+", "+CULL-NONE+", "+CULL-FRONT+", "+CULL-BACK+", "+WINDING-CLOCKWISE+",
+			"+WINDING-COUNTER-CLOCKWISE+", "+COMPARE-LESS+", "+COMPARE-ALWAYS+");
 
 	private static final List<String> METAL_FUNCTION_NAMES = sorted(METAL_FUNCTIONS);
 
@@ -426,9 +426,9 @@ public final class PackageRegistry {
 	 * instance of, registered here for the same reason geom's class names are -- a
 	 * {@code (typep x 'scene:viewer-state)} spelling has to resolve.
 	 */
-	private static final Set<String> SCENE_FUNCTIONS = Set.of("VIEWER", "VIEWER-STATE", "WINDOW-OF", "CONTEXT-OF",
-			"ADD", "DROP", "CLEAR", "CONTENTS", "FIT", "CAMERA", "GRID", "GRID-COLOR", "BACKGROUND", "SHADING", "AXES",
-			"REFRESH", "ANIMATE", "WAIT");
+	private static final Set<String> SCENE_FUNCTIONS = Set.of("VIEWER", "OFFSCREEN", "SNAPSHOT", "VIEWER-STATE",
+			"WINDOW-OF", "CONTEXT-OF", "ADD", "DROP", "CLEAR", "CONTENTS", "FIT", "CAMERA", "GRID", "GRID-COLOR",
+			"BACKGROUND", "SHADING", "AXES", "REFRESH", "ANIMATE", "WAIT");
 
 	private static final List<String> SCENE_FUNCTION_NAMES = sorted(SCENE_FUNCTIONS);
 
@@ -1245,6 +1245,27 @@ public final class PackageRegistry {
 	 */
 	public static String qualifyInternal(String pkg, String member) {
 		return pkg + "::" + member;
+	}
+
+	/**
+	 * Returns every spelling {@code name} can be written as: both colon spellings of a
+	 * package-qualified name (external {@code pkg:member} first, then internal
+	 * {@code pkg::member}), or the name alone when it is not qualified.
+	 * <p>
+	 * A {@link List} rather than a {@code Set} on purpose: the pruners that ask this
+	 * question carry the answer around in their data model, and a {@code Set.of} of two
+	 * elements iterates in a per-JVM-run order, which is the exact ingredient of the
+	 * emitted-output bugs {@code .kb/emitted-output-determinism.md} records. The order
+	 * here is fixed and costs nothing.
+	 * @param name the symbol name, qualified or not
+	 * @return the spellings, in a fixed order
+	 */
+	public static List<String> spellings(String name) {
+		QualifiedName qn = splitQualified(name);
+		if (qn == null) {
+			return List.of(name);
+		}
+		return List.of(qualify(qn.pkg(), qn.member()), qualifyInternal(qn.pkg(), qn.member()));
 	}
 
 	/**

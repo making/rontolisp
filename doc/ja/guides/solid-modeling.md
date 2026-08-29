@@ -219,6 +219,34 @@ CL-USER> (scene:refresh *v*)
 れらを参照するプログラムの `.wasm` 出力は、`objc:` のプログラムと同様に名前を挙げて
 拒否されます。
 
+### ウィンドウを持たないビューア
+
+`scene:offscreen` は、ドローアブルの代わりにテクスチャに描く同じビューアで、
+`scene:snapshot` がそのピクセルを返します -- `width * height * 4` バイト、BGRA、行
+0 が上です。似て非なる第二の描画関数ではなく同じ描画関数なので、絵そのものを検査で
+きます。赤い箱はフレーム中央で赤い、別の立体の背後にあるものは隠れる、巻き方が逆の
+面はカリングされる、`scene:fit` はバウンディングボックス全体をフレーム内に収める、
+といった具合です。`metal:offscreen` と `metal:pixels` はその一段下で、`geom` を使わ
+ない `metal:` プログラム向けです。
+
+```console
+CL-USER> (defvar *v* (scene:offscreen :width 320 :height 240))
+CL-USER> (scene:add *v* (geom:box 200 :color (geom:vec3 1.0 0.2 0.2)))
+CL-USER> (scene:fit *v*)
+CL-USER> (length (scene:snapshot *v*))
+307200
+```
+
+### どこでも見る: ブラウザの双子
+
+`geom` は rontolisp が動く場所ならどこでも動き、そのレンダラも同じです。
+`examples/browser/webgl-solids/` は `scene` の設計を WebGL2 に移植したもので、立体ご
+とに 1 つの頂点バッファを一度だけアップロードし、描画ごとにモデル行列のユニフォーム
+を渡し、立体 1 つにつき 1 回の描画コールを出し、`geom:mesh` と
+`geom:world-transform` をそのまま利用します。実質的な違いは射影だけで、OpenGL のク
+リップ空間は z を [-1, 1] に、Metal は [0, 1] に置きます。第二のモデリング層は意図的
+に置いていません -- それこそが `geom` にブラウザ方言を生やすものだからです。
+
 ## ここにないもの
 
 凸包、オフセット、フィレット、メッシュ修復、メッシュのファイル形式、そして描画に関

@@ -825,7 +825,7 @@ public final class WasmComponentBuilder {
 		// in a fetch component purely to own the `error` resource wasi:io/streams' own
 		// `stream-error` carries), and it is knowable only here, with every import in
 		// hand.
-		final java.util.Map<String, java.util.Set<String>> provides = new java.util.LinkedHashMap<>();
+		final java.util.Map<String, java.util.SequencedSet<String>> provides = new java.util.LinkedHashMap<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			for (WitComponentTypeEncoder.ForeignResource foreign : WitComponentTypeEncoder
 				.foreignResourcesOf(imported)) {
@@ -909,7 +909,7 @@ public final class WasmComponentBuilder {
 			byte[] instanceType = WitComponentTypeEncoder.encode(imported,
 					(ownerId, resource) -> Objects.requireNonNull(outerOf.get(ownerId + "#" + resource),
 							() -> ownerId + "#" + resource),
-					provides.getOrDefault(imported.ifaceId(), java.util.Set.of()));
+					provides.getOrDefault(imported.ifaceId(), new java.util.LinkedHashSet<>()));
 			c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(List.of(instanceType)));
 			c.rawSection(ComponentWriter.SEC_IMPORT,
 					ComponentWriter.vec(List.of(ComponentWriter.importInstance(imported.ifaceId(), typeIdx++))));

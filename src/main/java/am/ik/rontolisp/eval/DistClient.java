@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
@@ -556,21 +557,36 @@ public final class DistClient {
 	 * sits in the release.
 	 */
 	private static void collectAsdDirs(Path root, List<String> out, Set<String> seen) throws IOException {
+		List<Path> asdFiles;
 		try (Stream<Path> walk = Files.walk(root)) {
-			for (Path p : (Iterable<Path>) walk::iterator) {
-				if (!Files.isRegularFile(p) || !p.getFileName().toString().endsWith(".asd")) {
-					continue;
-				}
-				Path parent = p.getParent();
-				if (parent == null) {
-					continue;
-				}
-				String dir = parent.toAbsolutePath().normalize().toString();
+			asdFiles = walk.filter(p -> p.getFileName().toString().endsWith(".asd") && Files.isRegularFile(p)).toList();
+		}
+		addAsdDirs(asdFiles, out, seen);
+	}
+
+	/**
+	 * Appends the directories holding {@code asdFiles} to {@code out} (deduplicated via
+	 * {@code seen}).
+	 * <p>
+	 * The caller's list comes from {@link Files#walk}, whose order is the host's
+	 * directory order -- a different search path on two machines from one release, hence
+	 * a different {@code .asd} chosen when a release defines one system name twice, hence
+	 * different emitted bytes for one program. Filesystem order is not an order
+	 * ({@code .kb/emitted-output-determinism.md}), so the directories are SORTED here.
+	 * Sorting also puts a release's top-level {@code .asd} ahead of any nested under it,
+	 * since a parent path is a prefix of every path below it.
+	 */
+	static void addAsdDirs(List<Path> asdFiles, List<String> out, Set<String> seen) {
+		asdFiles.stream()
+			.map(Path::getParent)
+			.filter(Objects::nonNull)
+			.map(dir -> dir.toAbsolutePath().normalize().toString())
+			.sorted()
+			.forEachOrdered(dir -> {
 				if (seen.add(dir)) {
 					out.add(dir);
 				}
-			}
-		}
+			});
 	}
 
 	// --- tar.gz extraction (USTAR / GNU tar, no external dependencies) ---

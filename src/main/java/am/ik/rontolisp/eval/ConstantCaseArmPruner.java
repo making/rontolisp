@@ -567,7 +567,8 @@ final class ConstantCaseArmPruner {
 					case LispNames.DEFSTRUCT -> {
 						LispMacroExpander.StructDefinedNames summary = LispMacroExpander.defstructDefinedNames(form);
 						if (summary != null) {
-							Set<String> structSpellings = new HashSet<>(spellingsOf(summary.structName()));
+							Set<String> structSpellings = new HashSet<>(
+									PackageRegistry.spellings(summary.structName()));
 							for (String instantiator : summary.instantiatorNames()) {
 								if (!structSpellings.contains(instantiator)) {
 									this.instanceConstructors.add(instantiator);
@@ -1810,15 +1811,6 @@ final class ConstantCaseArmPruner {
 		// Code points above the BMP collide after the cast; a collision only KEEPS an
 		// arm, never deletes one.
 		return Character.valueOf((char) codePoint);
-	}
-
-	private static Set<String> spellingsOf(String name) {
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
-		if (qn == null) {
-			return Set.of(name);
-		}
-		return Set.of(PackageRegistry.qualify(qn.pkg(), qn.member()),
-				PackageRegistry.qualifyInternal(qn.pkg(), qn.member()));
 	}
 
 	// ------------------------------------------------------------------

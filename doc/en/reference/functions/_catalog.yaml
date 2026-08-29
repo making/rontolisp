@@ -763,6 +763,8 @@ categories:
   - title: "metal Package (GPU Drawing)"
     functions:
       - { slug: metal-attach, name: "metal:attach" }
+      - { slug: metal-offscreen, name: "metal:offscreen" }
+      - { slug: metal-pixels, name: "metal:pixels" }
       - { slug: metal-device, name: "metal:device" }
       - { slug: metal-layer, name: "metal:layer" }
       - { slug: metal-queue, name: "metal:queue" }
@@ -782,6 +784,8 @@ categories:
   - title: "scene Package (3-D Viewer)"
     functions:
       - { slug: scene-viewer, name: "scene:viewer" }
+      - { slug: scene-offscreen, name: "scene:offscreen" }
+      - { slug: scene-snapshot, name: "scene:snapshot" }
       - { slug: scene-add, name: "scene:add" }
       - { slug: scene-drop, name: "scene:drop" }
       - { slug: scene-clear, name: "scene:clear" }

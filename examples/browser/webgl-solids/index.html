@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>solids.lisp — geom's solid modeller, drawn with WebGL</title>
+    <style>
+      :root {
+        --space: #0b0d14;
+        --ink: #e8ecff;
+        --muted: #737a94;
+        --cyan: #6fe0cf;
+        --line: #23273d;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--space);
+        color: var(--ink);
+        font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      }
+
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+      }
+
+      h1 .lisp { color: var(--cyan); }
+
+      p {
+        margin: 0;
+        font-size: 0.8rem;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+
+      p em { font-style: normal; color: var(--ink); }
+
+      canvas {
+        width: 100%;
+        max-width: 40rem;
+        aspect-ratio: 4 / 3;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        touch-action: none;
+        cursor: grab;
+      }
+
+      canvas.dragging { cursor: grabbing; }
+
+      dl {
+        margin: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 1.5rem;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      dl div { display: flex; gap: 0.4rem; }
+
+      dd { margin: 0; color: var(--ink); }
+
+      a { color: var(--cyan); }
+
+      a:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
+      }
+
+      #error {
+        display: none;
+        font-size: 0.8rem;
+        line-height: 1.6;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1><span class="lisp">solids.lisp</span> → WebGL</h1>
+      <p>
+        The <em>geom</em> solid modeller shipped inside rontolisp, drawn in a
+        browser. Every shape here comes from geom's own constructors — and the
+        drilled block from <em>geom:difference</em>, a boundary-representation
+        CSG subtraction — running as WebAssembly. This page is the twin of the
+        macOS viewer <em>scene</em>: same model, same design, Metal there and
+        WebGL here.
+      </p>
+      <canvas id="stage"
+              aria-label="Five solids on a ground grid — a plate, a block with three bored holes, a sphere, a slowly turning torus and a cone; drag to orbit, scroll to zoom"></canvas>
+      <p>
+        <em>Drag to orbit, scroll to zoom.</em> No triangle is touched per
+        frame: each solid's model-space mesh went into a vertex buffer of its
+        own once, and a frame sends one 4×4 matrix and one colour per solid.
+      </p>
+      <dl>
+        <div><dt>solids</dt><dd id="m-solids">–</dd></div>
+        <div><dt>triangles</dt><dd id="m-triangles">–</dd></div>
+        <div><dt>fps</dt><dd id="m-fps">–</dd></div>
+      </dl>
+      <p>
+        <a href="https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-solids">source</a> ·
+        simpler: <a href="../webgl-cube/">webgl-cube</a> ·
+        related: <a href="../webgl-robot-arm/">webgl-robot-arm</a>
+      </p>
+      <p id="error" role="alert"></p>
+    </main>
+
+    <script type="module">
+      import { glImports, uiImports } from "../webgl-common/gl-imports.js";
+
+      const canvas = document.getElementById("stage");
+      const errorBox = document.getElementById("error");
+      const mSolids = document.getElementById("m-solids");
+      const mTriangles = document.getElementById("m-triangles");
+      const mFps = document.getElementById("m-fps");
+
+      function fail(message) {
+        errorBox.textContent = message;
+        errorBox.style.display = "block";
+      }
+
+      const gl = canvas.getContext("webgl2");
+      if (!gl) {
+        fail("This page needs WebGL2. Any current Chrome, Firefox, Safari or Edge has it.");
+        throw new Error("no webgl2");
+      }
+
+      let lisp;
+      const handles = [];
+      const addHandle = (obj) => handles.push(obj) - 1;
+      const str = (ptr, len) =>
+        new TextDecoder().decode(new Uint8Array(lisp.memory.buffer, ptr, len));
+      const retStr = (s) => {
+        const bytes = new TextEncoder().encode(s);
+        const ptr = lisp.__ronto_alloc(bytes.length);
+        new Uint8Array(lisp.memory.buffer).set(bytes, ptr);
+        return [ptr, bytes.length];
+      };
+
+      // One staging array for everything bulk: a solid's mesh at startup (the
+      // biggest here is the torus, ~20k floats) and a 4x4 matrix per draw.
+      const staging = new Float32Array(1 << 17);
+
+      const ui = {
+        fail: (message) => {
+          fail(message);
+          throw new Error("solids.lisp failed");
+        },
+      };
+
+      const imports = {
+        gl: {
+          ...glImports({ gl, handles, addHandle, str, retStr }),
+          setFloat: (i, v) => { staging[i] = v; },
+          bufferDataFloats: (target, count, usage) =>
+            gl.bufferData(target, staging.subarray(0, count), usage),
+          uniformMatrix4fv: (loc) =>
+            gl.uniformMatrix4fv(handles[loc], false, staging.subarray(0, 16)),
+        },
+        canvas: {
+          width: () => canvas.width,
+          height: () => canvas.height,
+        },
+        ui: uiImports({ ui, str }),
+      };
+
+      // ---- canvas sizing ----------------------------------------------------
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(canvas.clientWidth * dpr);
+        canvas.height = Math.round(canvas.clientHeight * dpr);
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      // ---- load the reactor -------------------------------------------------
+
+      try {
+        const bytes = await (await fetch("./solids.wasm")).arrayBuffer();
+        ({ instance: { exports: lisp } } = await WebAssembly.instantiate(bytes, imports));
+      }
+      catch (e) {
+        fail(
+          "Could not instantiate solids.wasm — this page needs WebAssembly GC support " +
+          "(Chrome 119+, Firefox 120+, Safari 18.2+, Edge 119+).\n" + e
+        );
+        throw e;
+      }
+      // --no-wasi reactor init: runs the top-level forms, so geom builds the
+      // model (booleans included) and every mesh reaches the GPU before this
+      // line returns.
+      lisp._initialize();
+
+      mSolids.textContent = "5";
+      mTriangles.textContent = lisp.triangleCount().toLocaleString("en-US");
+
+      // ---- pointer gestures: the page classifies, Lisp owns the camera ------
+
+      let dragging = false;
+      let lastX = 0, lastY = 0;
+
+      canvas.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        canvas.classList.add("dragging");
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+      });
+
+      canvas.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        lisp.orbit(dx / canvas.clientHeight, dy / canvas.clientHeight);
+        if (reducedMotion.matches) lisp.frame(still);
+      });
+
+      const stopDrag = () => {
+        dragging = false;
+        canvas.classList.remove("dragging");
+      };
+      canvas.addEventListener("pointerup", stopDrag);
+      canvas.addEventListener("pointercancel", stopDrag);
+
+      canvas.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        lisp.zoom(e.deltaY * 0.002);
+        if (reducedMotion.matches) lisp.frame(still);
+      }, { passive: false });
+
+      // ---- the frame loop ---------------------------------------------------
+
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const still = 0.9;
+      const start = performance.now();
+      let lastFpsUpdate = start;
+      let framesSince = 0;
+
+      function tick(now) {
+        lisp.frame((now - start) / 1000);
+        framesSince++;
+        if (now - lastFpsUpdate > 500) {
+          mFps.textContent = Math.round((framesSince * 1000) / (now - lastFpsUpdate));
+          lastFpsUpdate = now;
+          framesSince = 0;
+        }
+        if (!reducedMotion.matches) {
+          requestAnimationFrame(tick);
+        }
+      }
+
+      if (reducedMotion.matches) {
+        lisp.frame(still);
+        mFps.textContent = "still";
+        reducedMotion.addEventListener("change", () => {
+          if (!reducedMotion.matches) requestAnimationFrame(tick);
+        });
+      }
+      else {
+        requestAnimationFrame(tick);
+      }
+    </script>
+  </body>
+</html>

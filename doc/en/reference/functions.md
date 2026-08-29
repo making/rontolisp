@@ -905,6 +905,8 @@ surface as a whole.
 | Function | Example | Result |
 |----------|---------|--------|
 | `metal:attach` | `(metal:attach win :depth t)` | a `metal:context`: a `CAMetalLayer` on the window's content view, its device and its command queue |
+| `metal:offscreen` | `(metal:offscreen :width 256 :height 192)` | a `metal:context` with no window: the same pipelines and the same `metal:frame`, drawing into a texture |
+| `metal:pixels` | `(metal:pixels ctx)` | the last offscreen frame: `width * height * 4` bytes, BGRA, row 0 at the top |
 | `metal:device` | `(metal:device ctx)` | the `MTLDevice` -- the GPU, and the receiver of every `new...` selector |
 | `metal:layer` | `(metal:layer ctx)` | the `CAMetalLayer` frames are presented to |
 | `metal:queue` | `(metal:queue ctx)` | the `MTLCommandQueue` command buffers are committed to |
@@ -938,13 +940,15 @@ guide](../guides/solid-modeling.md) covers the model half.
 | Function | Example | Result |
 |----------|---------|--------|
 | `scene:viewer` | `(scene:viewer :title "arm")` | a window with a Metal surface on it, and the viewer that drives it |
+| `scene:offscreen` | `(scene:offscreen :width 320 :height 240)` | a viewer with no window, over the same render function -- what makes the renderer testable |
+| `scene:snapshot` | `(scene:snapshot v)` | one frame of an offscreen viewer as its pixels, BGRA |
 | `scene:add` | `(scene:add v s1 s2)` | the last solid added; its mesh reaches the GPU when it is first drawn |
 | `scene:drop` | `(scene:drop v s)` | the solid, removed from the viewer and its GPU buffers released |
 | `scene:clear` | `(scene:clear v)` | `nil`; every solid removed, the grid and camera untouched |
 | `scene:contents` | `(scene:contents v)` | the solids being drawn, in the order they were added |
 | `scene:fit` | `(scene:fit v)` | `nil`; the camera points at the contents and backs off far enough to frame them |
 | `scene:camera` | `(scene:camera v :azimuth 0.85)` | `nil`; sets any of azimuth / elevation / distance / target and leaves the rest |
-| `scene:grid` | `(scene:grid v :extent 1200 :spacing 100)` | `nil`; rebuilds the ground grid |
+| `scene:grid` | `(scene:grid v :extent 1200 :spacing 100)` | `nil`; rebuilds the ground grid, or drops it when `:extent` is `nil` |
 | `scene:grid-color` | `(scene:grid-color v (geom:vec3 0.2 0.5 0.4))` | `nil`; the grid's colour |
 | `scene:background` | `(scene:background v '(0 0 0 1))` | `nil`; the colour a frame starts from |
 | `scene:shading` | `(scene:shading v :wireframe)` | `nil`; `:solid`, `:wireframe` or `:both` (the default) |

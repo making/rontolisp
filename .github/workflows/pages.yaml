@@ -23,6 +23,7 @@ on:
     - examples/browser/webgl-battlefront/**
     - examples/browser/webgl-triangle/**
     - examples/browser/webgl-cube/**
+    - examples/browser/webgl-solids/**
     - src/**
     - pom.xml
     - doc/**

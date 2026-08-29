@@ -268,15 +268,70 @@ and the shipped file does:
   opposite mistake. So `scene::%on-mouse-dragged` / `%on-scroll` / `%on-frame-changed` call
   `scene:refresh` and `scene:add` / `camera` / `grid` / `shading` / `axes` do not.
 
-**Nothing here is tested, and cannot be until something renders without a display**
-(`.todo/568`). `MetalLibraryTest` and `SceneLibraryTest` cover the library as a LIBRARY
-(the public names match the registry exactly, the splice fires exactly when referenced, the
-pruner drops what a program does not call, the WASM refusal names the package) and no test
-opens a window. Verified by hand on all three carriers on 2026-08-29 -- `java -jar`, the
-native binary, and `-o Two.class` under `java` plus `-o two.jar` under `java -jar` -- with
-a probe that asserts two viewers route independently, that a frame reaches the encoder,
-that the per-solid buffers are built once, and that a `setFrame:display:` on the window
-moves the viewer's width.
+`MetalLibraryTest` and `SceneLibraryTest` cover the library as a LIBRARY (the public names
+match the registry exactly, the splice fires exactly when referenced, the pruner drops what
+a program does not call, the WASM refusal names the package) and no test opens a window.
+Verified by hand on all three carriers on 2026-08-29 -- `java -jar`, the native binary, and
+`-o Two.class` under `java` plus `-o two.jar` under `java -jar` -- with a probe that
+asserts two viewers route independently, that a frame reaches the encoder, that the
+per-solid buffers are built once, and that a `setFrame:display:` on the window moves the
+viewer's width. What the RENDERER does is the section below.
+
+## How the renderer is tested (todo-568, 2026-08-29)
+
+No test may open a window (`.kb/objc.md`), which left the camera, the projection, the
+per-solid model matrix, the winding convention and the depth test -- arithmetic that breaks
+silently and is obvious in a picture -- with nothing checking them. **`scene:offscreen`
+closes that, and the load-bearing fact is that it is not a second render path.**
+`metal:offscreen` builds a `metal:context` whose `target` slot holds a shared-storage
+BGRA8 texture instead of a `CAMetalLayer`; `metal:frame` asks that slot once per frame and
+takes the drawable's texture or the context's own, so ONE encoding path serves both, and an
+offscreen frame is `waitUntilCompleted`'d instead of presented. `metal:pixels` reads it
+back with `getBytes:bytesPerRow:fromRegion:mipmapLevel:` into an `objc:data` block --
+`width*height*4` bytes, BGRA, row 0 at the top, deliberately NOT converted to RGBA, since
+the format is the layer's. `scene:offscreen` and `scene:viewer` then differ only in the
+context they hand `scene::%viewer-over`.
+
+`SceneOffscreenRenderTest` (macOS-gated, skipped without a Metal device) asserts the five
+things a picture makes obvious and a number does not: a red box is red in the middle and
+background in the corners; a solid added FIRST is not overwritten by one added behind it
+(the depth attachment); a single facet wound counter-clockwise seen from outside draws and
+the same facet reversed is culled (the winding); `scene:fit` leaves no solid pixel on the
+frame border from four camera angles; and the same scene renders byte-identical twice. Each
+frame is also written to `target/scene-frames/*.png` and every assertion names its file --
+the PNG writer is `javax.imageio` in the TEST, not a rung of `metal`, because a diagnostic
+does not belong on the shipped surface.
+
+Two changes the test forced, both improvements:
+
+- **`scene::%render` now sets `setFrontFacingWinding:` + `setCullMode:` explicitly.** It
+  culled nothing before. geom winds a facet counter-clockwise seen from outside and Metal
+  decides facing in CLIP space (y up), not in the y-down framebuffer, so the front winding
+  is `metal:+winding-counter-clockwise+` -- measured, not reasoned: the first cut said
+  clockwise and drew every solid's FAR surface, which a centrally symmetric test object
+  (a cube) cannot tell apart from the near one. The pinning shape is therefore a single
+  quad, not a box.
+- **`(scene:grid v :extent nil)` drops the grid**, the way `(scene:axes v nil)` drops the
+  triads. A viewer that is a picture of one solid wanted it and there was no way to say it.
+
+**A `geom:volume` oracle cannot detect an inverted solid**: the divergence integral is
+`abs`'d, and a point reflection (`(geom:scale s -1)`, the cheap way to invert a mesh) leaves
+each triangle's normal unchanged while moving it to the antipode. So the winding check is
+the renderer's, not the modeller's, and the two agree by construction rather than by
+measurement.
+
+## The browser twin
+
+`examples/browser/webgl-solids/` is the renderer `scene` cannot be: the same design over
+WebGL2, so `geom` has a viewer wherever it runs (`.kb/wit.md`, a `--no-wasi` reactor). It
+consumes `geom:mesh` and `geom:world-transform` UNCHANGED and contains no modeling code at
+all -- a second modelling layer in the browser is exactly how `geom` would grow a browser
+dialect and how the two renderers would drift. The differences are the two that were
+expected: OpenGL's clip space puts z in [-1, 1] where Metal's puts it in [0, 1] (one row of
+the projection), and WebGL renames a buffer behind your back where Metal makes a rewritten
+buffer rotate copies -- which costs the twin nothing, since a mesh here is uploaded once
+and never rewritten. Culling needs no statement at all on that side: GL's default front
+winding is already counter-clockwise, which is geom's.
 
 ## `IndentRules`
 

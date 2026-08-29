@@ -230,6 +230,12 @@ class ObjcNativeImageForeignConfigTest {
 			inst("MTLRenderPassDepthAttachmentDescriptor", "setClearDepth:"), proto("MTLBuffer", "contents"),
 			inst("NSData", "getBytes:length:"), proto("MTLRenderCommandEncoder", "setFragmentBytes:length:atIndex:"),
 			proto("MTLRenderCommandEncoder", "setDepthStencilState:"),
+			// metal:offscreen / metal:pixels: a frame with no window at all --
+			// drawn into a shared-storage texture, waited for rather than
+			// presented, and read back into an objc:data block. The whole reason
+			// the renderer above can be tested (todo-568).
+			proto("MTLCommandBuffer", "waitUntilCompleted"),
+			proto("MTLTexture", "getBytes:bytesPerRow:fromRegion:mipmapLevel:"),
 			// The shipped scene package (eval/scene.lisp): the window's content view is
 			// an NSView subclass whose mouse and scroll selectors are Lisp closures, and
 			// a resize arrives as an NSViewFrameDidChangeNotification.
