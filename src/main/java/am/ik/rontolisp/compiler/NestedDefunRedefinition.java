@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
 
 import org.jspecify.annotations.Nullable;
@@ -84,6 +85,7 @@ public final class NestedDefunRedefinition {
 			return program;
 		}
 		rejectVariableCollision(program, redefined);
+		rejectExportCollision(program, redefined);
 		List<LispVal> rewritten = new ArrayList<>(program.size() + redefined.size());
 		for (LispVal expr : program) {
 			String name = topLevelDefunName(expr);
@@ -125,6 +127,34 @@ public final class NestedDefunRedefinition {
 				}
 				default -> {
 				}
+			}
+		}
+	}
+
+	/**
+	 * An exported name binds ONE static definition -- the host calls the typed wrapper
+	 * beside the defun method, and there is no defun method once the name resolves
+	 * through a variable. Left alone the export directive would fail with "names an
+	 * unknown function (must be a top-level defun)" about a name that IS one, which is
+	 * exactly the kind of misdirection this item was closing.
+	 */
+	private static void rejectExportCollision(List<LispVal> program, Set<String> redefined) {
+		for (LispVal expr : program) {
+			if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !(cons.cdr() instanceof LispCons argCell)) {
+				continue;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+			if (qn == null || !LispNames.RONTOLISP_PKG.equals(qn.pkg())
+					|| !(LispNames.JVM_EXPORT.equals(qn.member()) || LispNames.WASM_EXPORT.equals(qn.member()))) {
+				continue;
+			}
+			if (argCell.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+					&& LispNames.QUOTE.equals(quote.name()) && quoted.cdr() instanceof LispCons nameCell
+					&& nameCell.car() instanceof LispSymbol name && redefined.contains(name.name())) {
+				throw new UnsupportedOperationException(SourceProvenance.prefix(cons) + "the function " + name.name()
+						+ " is exported (" + head.name() + ") and also redefined by a nested defun. An export binds "
+						+ "one static definition, which a redefinable name does not have. Rename one of the two.");
 			}
 		}
 	}

@@ -2937,6 +2937,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aTopLevelDefunRedefinedByANestedOneMayNotBeExported() {
+		// An export binds one static definition, which a name resolved through a global
+		// variable does not have. Refused HERE so the message names the real conflict:
+		// the export directive's own check would have said GREET is not a top-level
+		// defun, about a name that plainly is one.
+		assertThatThrownBy(() -> compileAndRun(
+				"(defun greet (n) n)" + "(rontolisp:jvm-export 'greet :params '(:string) :returns :string)"
+						+ "(defun swap () (defun greet (n) n) 'done)" + "(print (greet \"a\"))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("GREET")
+			.hasMessageContaining("exported");
+	}
+
+	@Test
 	void aCapturedLetVariableAssignedInlineInASiblingBranchKeepsOneCell() throws Exception {
 		// One arm builds a closure over acc/hit, the sibling arm assigns them INLINE in
 		// the enclosing frame -- the shape compiler/AstOutliner creates on purpose when

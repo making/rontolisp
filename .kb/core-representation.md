@@ -219,12 +219,18 @@ the interpreter, and the two definitions need not share an arity (the call is a
 meet is returned unchanged, so the indirect call is paid only where it buys the
 right answer.
 
-Two cases it deliberately does NOT paper over:
+Three cases it deliberately does NOT paper over:
 
 - The name is also declared by a top-level `defvar`/`defparameter`/
   `defconstant`. One cell cannot hold both the function value and the
   variable's, so the compile REFUSES and names the function and the
   declaration. Silently picking one is what this whole item was about.
+- The name is exported (`rontolisp:jvm-export` / `rontolisp:wasm-export`). An
+  export binds ONE static definition -- the host calls the typed wrapper beside
+  the defun method, and there is no defun method once the name resolves through
+  a variable. The compile refuses and says so; without the guard the directive
+  itself failed with "names an unknown function (must be a top-level defun)"
+  about a name that IS one.
 - The `(setq name (lambda ...))` a non-top-level `defun` lowers to assigns the
   global VARIABLE, and `--dynamic`'s late-binding fallback resolves the runtime
   FUNCTION namespace -- which that definition never enters, so a `--dynamic`
@@ -238,7 +244,8 @@ Pinned by `JvmLispCompilerTest#aDefunNestedInADefunBodyIsReachableByName`,
 `#aDefunNestedInADefunBodyRedefinesAnExistingTopLevelDefun`,
 `#aRedefinedDefunIsAlsoRedefinedForFunctionReferencesAndCallers`,
 `#aNestedDefunIsReachableByNameUnderDynamicMode`,
-`#aTopLevelDefunRedefinedByANestedOneMayNotAlsoBeAGlobalVariable`, the
+`#aTopLevelDefunRedefinedByANestedOneMayNotAlsoBeAGlobalVariable`,
+`#aTopLevelDefunRedefinedByANestedOneMayNotBeExported`, the
 `WasmLispCompilerIntegrationTest` twins of the first three, and the second half
 of the `closure-binders-share-one-cell` ci-spec case (all four backends).
 
