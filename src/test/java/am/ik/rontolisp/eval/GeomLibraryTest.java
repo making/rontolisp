@@ -395,4 +395,237 @@ class GeomLibraryTest {
 				""").print()).isEqualTo("(T T NIL NIL)");
 	}
 
+	// --- constructive solid geometry ---------------------------------------------
+	//
+	// BSP clipping over world-space boundary polygons (.kb/geom.md, "Boolean
+	// operations"). Volume is the oracle: vol(A u B) + vol(A n B) = vol(A) + vol(B)
+	// for ANY pair, within the tessellation error the primitives already carry --
+	// and because volume is the divergence theorem, every equality below is also
+	// the normals/winding check on the result.
+
+	@Test
+	void theBooleansOfTwoOverlappingBoxesAreExact() {
+		// Axis-aligned splits land on exact dyadic coordinates, so every volume is
+		// exact: overlap 50^3, union 2e6 - 125000, difference 1e6 - 125000.
+		String setUp = """
+				(defvar *a* (geom:box 100))
+				(defvar *b* (geom:box 100))
+				(geom:move *b* (geom:vec3 50 50 50))
+				""";
+		assertThat(number(setUp + "(geom:volume (geom:union *a* *b*))")).isEqualTo(1875000.0);
+		assertThat(number(setUp + "(geom:volume (geom:difference *a* *b*))")).isEqualTo(875000.0);
+		assertThat(number(setUp + "(geom:volume (geom:intersection *a* *b*))")).isEqualTo(125000.0);
+	}
+
+	@Test
+	void theVolumeOracleHoldsForCurvedOverlappingSolids() {
+		// vol(union) + vol(intersection) = vol(a) + vol(b), and vol(a \ b) =
+		// vol(a) - vol(a n b), for a sphere overlapping an offset box.
+		String setUp = """
+				(defvar *a* (geom:sphere :radius 40 :sides 16 :stacks 8))
+				(defvar *b* (geom:box 60))
+				(geom:move *b* (geom:vec3 30 10 20))
+				""";
+		double va = number(setUp + "(geom:volume *a*)");
+		double vb = number(setUp + "(geom:volume *b*)");
+		double vu = number(setUp + "(geom:volume (geom:union *a* *b*))");
+		double vi = number(setUp + "(geom:volume (geom:intersection *a* *b*))");
+		double vd = number(setUp + "(geom:volume (geom:difference *a* *b*))");
+		assertThat(vu + vi).isCloseTo(va + vb, org.assertj.core.data.Offset.offset((va + vb) * 1e-4));
+		assertThat(vd).isCloseTo(va - vi, org.assertj.core.data.Offset.offset(va * 1e-4));
+	}
+
+	@Test
+	void coplanarFacesAreTheFirstDegenerateCase() {
+		// Two boxes sharing the x = 50 face EXACTLY: the union is their sum with the
+		// shared face gone (surface area says so), the intersection is empty, and the
+		// difference leaves a untouched.
+		String setUp = """
+				(defvar *a* (geom:box 100))
+				(defvar *b* (geom:box 100))
+				(geom:move *b* (geom:vec3 100 0 0))
+				""";
+		assertThat(number(setUp + "(geom:volume (geom:union *a* *b*))")).isEqualTo(2000000.0);
+		assertThat(number(setUp + "(geom:surface-area (geom:union *a* *b*))")).isEqualTo(100000.0);
+		assertThat(number(setUp + "(geom:volume (geom:intersection *a* *b*))")).isEqualTo(0.0);
+		assertThat(number(setUp + "(geom:volume (geom:difference *a* *b*))")).isEqualTo(1000000.0);
+	}
+
+	@Test
+	void anEdgeLyingExactlyOnAFaceIsTheSecondDegenerateCase() {
+		// b turned 45 degrees about z and pushed until its corner edge lies ON a's
+		// x = 50 face (to float32 rounding -- the near-degenerate contact the
+		// tolerance model exists for). The two sides of that edge must classify
+		// consistently: union = sum, intersection empty, no torn shell.
+		String setUp = """
+				(defvar *a* (geom:box 100))
+				(defvar *b* (geom:box 100))
+				(geom:turn *b* 0.7853981633974483 :z)
+				(geom:move *b* (geom:vec3 120.71068 0 0) :frame :parent)
+				""";
+		assertThat(number(setUp + "(geom:volume (geom:union *a* *b*))")).isCloseTo(2000000.0,
+				org.assertj.core.data.Offset.offset(20.0));
+		assertThat(number(setUp + "(geom:volume (geom:intersection *a* *b*))")).isCloseTo(0.0,
+				org.assertj.core.data.Offset.offset(20.0));
+	}
+
+	@Test
+	void aHoleExactlyAsDeepAsThePlateIsThickGoesAllTheWayThrough() {
+		// Both cylinder caps coplanar with the plate faces. The volume must be the
+		// plate minus the full prism -- a hole that stops one epsilon short would
+		// leave a membrane and answer the plate's volume.
+		String setUp = """
+				(defvar *plate* (geom:box '(100 100 20)))
+				(defvar *hole* (geom:cylinder :radius 10 :height 20 :sides 24))
+				(geom:move *hole* (geom:vec3 0 0 -10))
+				""";
+		double prism = 0.5 * 24 * 100 * Math.sin(2 * PI / 24) * 20;
+		assertThat(number(setUp + "(geom:volume (geom:difference *plate* *hole*))")).isCloseTo(200000.0 - prism,
+				org.assertj.core.data.Offset.offset(1.0));
+		// The bore's lateral surface is part of the result: total area = plate faces
+		// minus the two cap disks plus the 24-gon prism wall.
+		double wall = 24 * 2 * 10 * Math.sin(PI / 24) * 20;
+		assertThat(number(setUp + "(geom:surface-area (geom:difference *plate* *hole*))")).isCloseTo(
+				2 * (10000 - 0.5 * 24 * 100 * Math.sin(2 * PI / 24)) + 4 * 100 * 20 + wall,
+				org.assertj.core.data.Offset.offset(1.0));
+	}
+
+	@Test
+	void disjointSolidsUniteToTheirSumAndIntersectToTheEmptySolid() {
+		String setUp = """
+				(defvar *a* (geom:box 10))
+				(defvar *b* (geom:box 10))
+				(geom:move *b* (geom:vec3 100 0 0))
+				""";
+		assertThat(number(setUp + "(geom:volume (geom:union *a* *b*))")).isEqualTo(2000.0);
+		assertThat(eval(setUp + """
+				(let ((i (geom:intersection *a* *b*)))
+				  (list (geom:volume i) (geom:mesh-triangle-count i) (geom:facets-of i)))
+				""").print()).isEqualTo("(0.0 0 NIL)");
+	}
+
+	@Test
+	void theToleranceIsRelativeSoBothTinyAndHugeModelsSurvive() {
+		// The same overlapping pair at 0.001 scale and 1000 scale: an absolute
+		// epsilon would swallow the small model whole or misclassify nothing on the
+		// large one. Relative volume error stays at float32 noise for both.
+		double tiny = number("""
+				(let ((a (geom:box 0.001)) (b (geom:box 0.001)))
+				  (geom:move b (geom:vec3 0.0005 0.0005 0.0005))
+				  (* 1e9 (geom:volume (geom:union a b))))
+				""");
+		assertThat(tiny).isCloseTo(1.875, org.assertj.core.data.Offset.offset(1e-4));
+		double huge = number("""
+				(let ((a (geom:box 1000)) (b (geom:box 1000)))
+				  (geom:move b (geom:vec3 500 500 500))
+				  (geom:volume (geom:union a b)))
+				""");
+		assertThat(huge).isEqualTo(1.875e9);
+	}
+
+	@Test
+	void theOperandsAreUntouchedAndTheResultRecordsItsHistory() {
+		assertThat(eval("""
+				(let* ((a (geom:box 100))
+				       (b (geom:box 100))
+				       (va (geom:vertices-of a))
+				       (d (progn (geom:move b (geom:vec3 50 50 50)) (geom:difference a b))))
+				  (list (eq va (geom:vertices-of a)) (geom:volume a) (geom:volume b)
+				        (first (geom:history d)) (eq (second (geom:history d)) a)
+				        (eq (third (geom:history d)) b) (geom:history a)))
+				""").print()).isEqualTo("(T 1000000.0 1000000.0 :DIFFERENCE T T NIL)");
+	}
+
+	@Test
+	void theBooleansTakeTheirOperandsInWorldCoordinates() {
+		// (geom:difference plate hole) means what it looks like after both have been
+		// placed: the result is a new ROOT solid whose vertices are world
+		// coordinates, not a node in either operand's frame.
+		assertThat(eval("""
+				(let* ((base (geom:make-node :translation (geom:vec3 0 0 500)))
+				       (a (geom:box 100))
+				       (b (geom:box 100)))
+				  (geom:attach base a)
+				  (geom:move b (geom:vec3 0 0 450))
+				  (let ((u (geom:union a b)))
+				    (list (geom:volume u) (geom:parent-of u)
+				          (mapcar (lambda (x) (round x))
+				                  (coerce (geom:bounds-center (geom:bounds u)) 'list)))))
+				""").print()).isEqualTo("(1500000.0 NIL (0 0 475))");
+	}
+
+	@Test
+	void aResultIsAnOrdinarySolidTheRestOfThePackageAccepts() {
+		assertThat(eval("""
+				(let ((u (geom:union (geom:box 10) (geom:box '(4 4 30)))))
+				  (list (typep u 'geom:solid) (array-element-type (geom:mesh u))
+				        (array-element-type (geom:vertices-of u))
+				        (coerce (geom:bounds-extent (geom:bounds u)) 'list)))
+				""").print()).isEqualTo("(T SINGLE-FLOAT SINGLE-FLOAT (10.0 10.0 30.0))");
+	}
+
+	// --- planar section ----------------------------------------------------------
+
+	@Test
+	void aSectionOfABoxIsOneRectangularLoop() {
+		assertThat(eval("""
+				(let ((loops (geom:section (geom:box '(100 200 300)))))
+				  (list (length loops) (linalg:shape (first loops))))
+				""").print()).isEqualTo("(1 (4 3))");
+		// Wound counter-clockwise seen from the +normal side.
+		assertThat(eval("(first (geom:section (geom:box '(100 200 300))))").print())
+			.isEqualTo("#f((-50.0 -100.0 0.0) (50.0 -100.0 0.0) (50.0 100.0 0.0) (-50.0 100.0 0.0))");
+	}
+
+	@Test
+	void aSectionOfATorusIsTwoLoops() {
+		// z = 0 cuts the tube twice: an outer boundary and the hole.
+		assertThat(number("(length (geom:section (geom:torus :radius 60 :tube 20 :sides 24 :rings 12)))"))
+			.isEqualTo(2.0);
+	}
+
+	@Test
+	void aSectionExactlyOnAFaceIsThatFacesBoundary() {
+		// The plane coincides with the box top: the coplanar facet itself is skipped
+		// and its boundary comes from the side facets' edges lying ON the plane.
+		assertThat(eval("""
+				(let ((loops (geom:section (geom:box 100) :offset 50)))
+				  (list (length loops) (linalg:shape (first loops))))
+				""").print()).isEqualTo("(1 (4 3))");
+	}
+
+	@Test
+	void aSectionTakesAnAxisOrAVectorAndAnOffsetOrAnOrigin() {
+		assertThat(eval("""
+				(let ((s (geom:box '(100 200 300))))
+				  (list (linalg:shape (first (geom:section s :normal :x)))
+				        (length (geom:section s :normal (geom:vec3 0 0 1)
+				                              :origin (geom:vec3 0 0 100)))
+				        (geom:section s :normal :y :offset 500)))
+				""").print()).isEqualTo("((4 3) 1 NIL)");
+	}
+
+	@Test
+	void aSectionFollowsThePose() {
+		// The solid is placed before it is cut: a box lifted 100 up is missed by
+		// z = 0 and cut by z = 100.
+		assertThat(eval("""
+				(let ((s (geom:box 10)))
+				  (geom:move s (geom:vec3 0 0 100))
+				  (list (geom:section s) (length (geom:section s :offset 100))))
+				""").print()).isEqualTo("(NIL 1)");
+	}
+
+	@Test
+	void theCsgDefinitionsArePrunedFromAProgramThatDoesNotUseThem() {
+		List<LispVal> pruned = LibraryDefunPruner
+			.prune(GeomLibrary.process(LispReader.readAllFromString("(print (geom:volume (geom:box 2)))")));
+		assertThat(definitionNames(pruned)).doesNotContain("GEOM:UNION", "GEOM:DIFFERENCE", "GEOM:INTERSECTION",
+				"GEOM:SECTION");
+		List<LispVal> kept = LibraryDefunPruner.prune(GeomLibrary
+			.process(LispReader.readAllFromString("(print (geom:volume (geom:union (geom:box 2) (geom:box 3))))")));
+		assertThat(definitionNames(kept)).contains("GEOM:UNION", "GEOM:*TOLERANCE*")
+			.doesNotContain("GEOM:SECTION", "GEOM:SPHERE");
+	}
+
 }

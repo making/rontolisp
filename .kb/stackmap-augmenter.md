@@ -93,13 +93,91 @@ implemented.
   replaced it with a genuinely mutable `ArrayList`, and a survey of every
   `Jvm*RuntimeBuilder` found no other avoidance site. Nothing to simplify;
   future emitters may just use interface statics.
-- `wide` loads/stores would fix `.todo/137`'s silent local-slot aliasing; the
-  augmenter/shaker would need `wide` decoding.
+
+## The `wide` prefix (todo-562, 2026-08-29)
+
+A local slot past 255 has no one-byte operand, so the load/store takes a `wide`
+prefix and a two-byte index. Every reader of the finished bytes therefore has to
+MEASURE it -- `wide` is 4 bytes (6 for `iinc`, whose constant widens with the
+index), not the 2 a bare opcode-plus-index would be:
+
+- `StackMapAugmenter.operandLength` sizes it, and `interpret` dispatches a
+  `wide`-prefixed opcode to `interpretWide`, which applies the same push/store
+  over the two-byte index (both `augment` and `osrHostileBackedges` walk through
+  these, so both follow).
+- `BranchRelaxer.operandLength` sizes it too -- a mis-measured instruction there
+  shifts every later branch offset. Its `operandLength` takes the code list now,
+  because the widened opcode is a byte of the instruction.
+- `JvmClassShaker` already sized it (it carries no constant-pool index, so
+  nothing else changes).
+- `OperandStack` models it: `feed` consumes the prefix and sizes the widened
+  instruction from the opcode that follows.
+
+The EMISSION side is one chokepoint per code list. `JvmLispCompiler.Ctx.emit`
+sees `emit(opcode)` then `emit(slot)` as two calls, so it asks
+`OperandStack.awaitingLocalIndex()` and, for a slot past 255, retroactively
+rewrites the one opcode byte it already appended into `wide opcode u2`
+(`widenPendingLocalIndex` moves the model's position bookkeeping; the stack
+effect is unchanged). Because the rewrite only ever extends the TAIL of the
+list, every label and branch position recorded earlier stays valid.
+`JvmAsm.localOp` does the same for the blocks spliced in whole by
+`Ctx.emitBlock` -- those look like hand-assembled runtime bodies but their slots
+come from `Ctx.allocTemp` (`JvmStringCaseFold`, `JvmSubseqCompiler`,
+`JvmStringTrimCompiler`, `JvmIntFusionCompiler`), so they grow with the
+enclosing method. That second site was found by putting a loud check where the
+"this cannot happen" assumption was: it fired immediately, on the existing
+`JvmLispCompilerTest.aFoldedCallPrintsWhatTheRuntimeWouldHave`, whose
+`string-upcase` block was writing slot 494 as `astore 238`. That test PASSED
+with the truncation, which is the whole hazard -- a store and its matching load
+wrap the same way, so an aliased pair is invisible until the slot it landed on
+is also live. Everything else that appends a load/store to a raw list is a
+`Jvm*RuntimeBuilder` whose slots are literals, plus `JvmUncaughtHandler` (slot 1
+in practice, and now a loud check rather than an assumption).
+
+Before this, `astore 300` was written as `astore 44`. The frame walk catches
+that only when the wrapped slot holds a DIFFERENT verification type -- the
+`.todo/562` reproducer surfaced as `aaload at 8659 on non-array type
+java/lang/Object` because slot 256 wrapped onto the closure environment in slot
+0. When the types agree nothing notices, and the program simply answers wrong:
+a `let`-bound `keep` overwritten by a temporary gave `(0 0)` where the
+interpreter gives `(7 0)`.
+
+### What it costs, measured 2026-08-29
+
+Compiling every example under `examples/` with the jar before and after, byte
+for byte (193 of 219 compile on the JVM backend): **189 are byte-identical**.
+Three are not -- `examples/browser/hiragana/{train,dataset,prototypes}.lisp`,
+which genuinely reach slots 256..294 and were therefore being written as slots
+0..38 before this. `train.lisp` grows 399,944 -> 401,004 bytes (+0.27%) for 287
+`wide` instructions. The fourth apparent difference,
+`examples/jvm/cffi-sqlite.lisp`, is the SAME SIZE and is not this change at all:
+it is a pre-existing per-run permutation of two global static fields
+(`.todo/570`, recorded in
+[emitted-output-determinism.md](emitted-output-determinism.md)).
+
+The concatenated ci-spec corpus (420 cases, a 3.9 MB class) is byte-identical
+apart from a build-timestamp literal the program itself embeds -- so
+`CiSpecE2eTest`'s output cannot shift, and nothing outside `am.ik.jvm` /
+`codegen.jvm` was touched, so the interpreter and both WASM backends cannot
+either.
+
+The hard ceiling is now `max_locals`, a u2: `Ctx.allocTemp` throws past 65535
+naming the limit. What is left of `.todo/137` is the COUNT, not the index --
+`ctx.nextLocal` only grows, so a straight-line body still burns a slot per
+temporary; past 255 each of its loads and stores costs three extra bytes, and
+`max_locals` sizes every full_frame the method carries.
 
 ## Pinning tests
 
 - `ByteCodeWriterTest.generateAndRun{TypedCatch,CatchAny}Handler` pin the RAW
   assembler contract the emitters still rely on: version-50 output verifies
   exception handlers without a StackMapTable.
+- `ByteCodeWriterTest.generateAndRunAWideLocalIndexAcrossARelaxedBranch` pins
+  the `wide` decoding in both readers at once: a `wide astore`/`wide aload` of
+  slot 300 around a branch far enough out that `BranchRelaxer` has to size the
+  body past it, augmented to version 61 and run.
+- `JvmLispCompilerTest.compileAndRunABodyPastTheOneByteLocalSlotIndex` (the
+  SILENT wrong answer) and `#...UnderAnUnsplittableTail` (the same overflow
+  where the frame walk notices) pin the end-to-end path.
 - `JvmLispCompilerTest` (all output augmented) + `JvmClassShakerTest` and its
   corpus exercise the shake -> augment pipeline.

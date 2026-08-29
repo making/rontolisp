@@ -1195,6 +1195,55 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunABodyPastTheOneByteLocalSlotIndex() throws Exception {
+		// A straight-line run of statements burns a local slot per temporary, so a few
+		// hundred of them walk past slot 255 -- which a one-byte load/store operand
+		// cannot name. Wrapping used to alias a live `let` variable SILENTLY: `keep`
+		// sits in a low slot, the temporary whose number wrapped onto it overwrote it,
+		// and the compiled program answered 0 where the interpreter answers 7.
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			body.append("             (setq acc (logxor acc (car (list 1 0))))\n");
+		}
+		String source = """
+				(defun slot-overflow ()
+				  (flet ((run ()
+				           (let ((keep (list 7)) (acc 0))
+				%s             (list (car keep) acc))))
+				    (run)))
+				(print (slot-overflow))
+				""".formatted(body);
+		assertThat(compileAndRun(source)).isEqualTo("(7 0)");
+	}
+
+	@Test
+	void compileAndRunABodyPastTheOneByteLocalSlotIndexUnderAnUnsplittableTail() throws Exception {
+		// The same overflow where the frame walk notices instead of the answer being
+		// silently wrong: `flet` wraps its body in a `block`, so JvmBodyOutliner finds
+		// no tail spine to cut and the whole run lands in one frame. The truncated
+		// `astore 0` overwrote the closure environment, which surfaced as "aaload on
+		// non-array type" out of StackMapAugmenter.
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			body.append("                  (setq acc (+ acc 1))\n");
+			body.append("                  (setq acc (logxor acc (car (list 1 0))))\n");
+		}
+		String source = """
+				(defun tree (x)
+				  (let ((acc 0) (hit nil))
+				    (block done
+				      (tagbody
+				         (flet ((a0 ()
+				%s                  (go finish)))
+				           (a0))
+				       finish
+				         (return-from done (list acc hit))))))
+				(print (tree 1))
+				""".formatted(body);
+		assertThat(compileAndRun(source)).isEqualTo("(0 NIL)");
+	}
+
+	@Test
 	void compileAndRunHandlerCaseAsTheMessageOfAnError() throws Exception {
 		// The throw shape allocates the exception before evaluating its message, so this
 		// pins that the message is bound to a local first: an object under construction

@@ -7,6 +7,7 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,81 @@ class ByteCodeWriterTest {
 			unsigned[i] = bytes[i] & 0xFF;
 		}
 		return unsigned;
+	}
+
+	// A local slot past 255 has no one-byte operand: the instruction takes the `wide`
+	// prefix and a two-byte index, and every reader of the finished bytes has to measure
+	// it -- BranchRelaxer (which sizes the body to place relaxed branches) and
+	// StackMapAugmenter (which walks it to derive the frames). This pins both at once:
+	// a `wide astore`/`wide aload` of slot 300 around a branch far enough out to force
+	// relaxation, augmented to version 61 and run.
+	@Test
+	void generateAndRunAWideLocalIndexAcrossARelaxedBranch() throws Exception {
+		ConstantPool cp = new ConstantPool();
+		ConstantPool.ClassConstant thisClass = cp.addClass(cp.addUtf8("WideLocal"));
+		ConstantPool.ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
+		ConstantPool.StringConstant ok = cp.addString("ok");
+		ConstantPool.Utf8Constant runName = cp.addUtf8("run");
+		ConstantPool.Utf8Constant runDesc = cp.addUtf8("()Ljava/lang/String;");
+		ConstantPool.Utf8Constant codeAttr = cp.addUtf8("Code");
+
+		int slot = 300;
+		List<Integer> code = new ArrayList<>();
+		code.add(Opcode.LDC_W);
+		code.add((ok.index() >> 8) & 0xFF);
+		code.add(ok.index() & 0xFF);
+		code.add(Opcode.WIDE);
+		code.add(Opcode.ASTORE);
+		code.add((slot >> 8) & 0xFF);
+		code.add(slot & 0xFF);
+		code.add(Opcode.ICONST_0);
+		int branchPos = code.size();
+		code.add(Opcode.IFEQ);
+		code.add(0);
+		code.add(0);
+		// Far enough that the signed 16-bit offset cannot reach the target.
+		for (int i = 0; i < 40000; i++) {
+			code.add(Opcode.NOP);
+		}
+		int targetPos = code.size();
+		code.add(Opcode.WIDE);
+		code.add(Opcode.ALOAD);
+		code.add((slot >> 8) & 0xFF);
+		code.add(slot & 0xFF);
+		code.add(Opcode.ARETURN);
+
+		List<ByteCodeWriter.ExceptionTableEntry> exceptionTable = new ArrayList<>();
+		BranchRelaxer.relax(code, List.of(new int[] { branchPos, targetPos }), exceptionTable);
+		assertThat(code.get(branchPos)).isEqualTo(Opcode.IFNE);
+
+		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
+		new ByteCodeWriter(classOut).write(0xCA, 0xFE, 0xBA, 0xBE)
+			.writeVersion(0, 50)
+			.writeConstantPool(cp)
+			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass)
+			.writeInterfaces(i -> {
+			})
+			.writeFields(f -> {
+			})
+			.writeMethods(methods -> methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, runName, runDesc,
+					method -> method.writeAttributes(attrs -> attrs.add(codeAttr, attr -> {
+						attr.writeU2(2) // max_stack
+							.writeU2(slot + 1) // max_locals
+							.writeCode(code.toArray())
+							.writeExceptionTable(exceptionTable)
+							.writeU2(0); // attributes_count
+					}))))
+			.writeAttributes(a -> {
+			});
+
+		byte[] augmented = StackMapAugmenter.augment(classOut.toByteArray(), 61);
+		Path classFile = tempDir.resolve("WideLocal.class");
+		Files.write(classFile, augmented);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Method run = loader.loadClass("WideLocal").getMethod("run");
+			assertThat(run.invoke(null)).isEqualTo("ok");
+		}
 	}
 
 	@Test

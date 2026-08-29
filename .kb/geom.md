@@ -5,8 +5,10 @@ One hand-written Lisp-source library,
 `appkit.lisp` pattern (`linalg.md`, `objc.md`) so a single implementation runs
 identically on every backend: rigid `geom:transform` values, a scene-graph
 `geom:node`, boundary-represented `geom:solid`s with a cached model-space triangle
-mesh, eight primitive constructors, and the measurements (`bounds`, `volume`,
-`centroid`, `surface-area`). 50 exported functions plus four CLOS class names.
+mesh, eight primitive constructors, the measurements (`bounds`, `volume`,
+`centroid`, `surface-area`), and the booleans (`union`, `difference`,
+`intersection`, `section` -- see "Boolean operations" below). 55 exported
+functions plus `geom:*tolerance*` and four CLOS class names.
 
 **It reaches for nothing but `linalg`** -- no `objc:`, no `java:`, no filesystem, no
 `SourceLoader`. That is the whole reason it ships rather than living in
@@ -24,8 +26,8 @@ package, not a peer of it. Nothing may be added here that breaks that.
 | interpreter | `LispEvaluator.ensureGeomLoaded()` on the first `geom:`-qualified FUNCTION resolution, plus `ensureGeomClassesFor(form)` at the seven `ensureAsdfClassesFor` sites |
 | compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too; the browser playground repeats the nesting |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
-| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend` and `geom-transforms-cross-backend` (all four backends) |
-| docs | `doc/{en,ja}/guides/solid-modeling.md`, 50 pages under `reference/functions/geom-*.md` |
+| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-transforms-cross-backend` and `geom-csg-cross-backend` (all four backends) |
+| docs | `doc/{en,ja}/guides/solid-modeling.md`, 55 pages under `reference/functions/geom-*.md` |
 
 **The class-mention trigger is not optional.** The interpreter's lazy load fires on
 FUNCTION resolution, but a `defmethod` specializer, a `typep`, a `typecase` clause, a
@@ -137,6 +139,56 @@ equal slots -- routine in a scene graph -- collide into ONE entry. A wrong answe
 a slow one. The slot would still be the right design after 012 lands (the cache lives
 with the thing it caches, and `detach` cannot orphan it), so nothing here changes then;
 only the comment's reason would shrink to that last sentence.
+
+## Boolean operations (union / difference / intersection / section)
+
+**The algorithm is BSP-tree clipping -- the csg.js formulation -- chosen over the
+classic face-splitting/classification pipeline** (decided 2026-08-29, `.todo/566`).
+Each operand's world-space boundary polygons go into a binary space partition, the
+two trees clip each other, and the surviving fragments are the result's boundary
+(`geom::%bsp-*` in geom.lisp, ~250 lines). Why this trade:
+
+- the BSP formulation has NO per-degeneracy special cases -- one epsilon in
+  `geom::%split-polygon` classifies every point, so coplanar faces, a vertex/edge on
+  a face, exact touching and a through-hole with coplanar caps are all the same code
+  path (the ci-spec case and `GeomLibraryTest` pin each one);
+- its weakness -- it fragments faces that did not strictly need splitting -- costs
+  `geom` nothing, because a facet is fan-triangulated for rendering anyway and
+  `volume`/`surface-area` are per-triangle sums. The face-splitting pipeline earns
+  its complexity only when face structure must survive (feature naming, exact face
+  counts), which nothing here needs. Revisit only if that changes.
+
+The load-bearing decisions:
+
+- **The pipeline runs in float64 and narrows on the way out.** Scalar arithmetic is
+  double and an `aref` of a packed float32 vertex WIDENS, so the pipeline points
+  (plain `(x y z)` lists) carry 29 more bits than the data; the result narrows to
+  float32 once, in `%build-solid`'s vertex array. No representation change was
+  needed and the cost is unmeasurable next to the interpretation overhead.
+- **`geom:*tolerance*` is RELATIVE** (default 1.0e-5): the classification epsilon is
+  `(* geom:*tolerance* extent)` with extent the largest side of the operands'
+  combined world bounds (`geom::%operand-epsilon`). geom has no unit of length, so
+  an absolute epsilon cannot serve a 0.001-scale and a 1000-scale model at once;
+  `GeomLibraryTest.theToleranceIsRelative...` pins both scales.
+- **Operands in WORLD coordinates, untouched; the result is a new ROOT solid** with
+  world-coordinate vertices and an identity local transform. `(geom:history result)`
+  answers `(op a b)` (the `history` slot on `geom:solid`, nil for primitives), which
+  is what lets a program re-run a model at a different parameter.
+- **Result vertices are welded on the epsilon grid** (`geom::%weld-key` in
+  `geom::%csg-solid`): a shared edge split from both sides lands on one key even
+  when the two interpolations differ in the last bits, so the shell closes; the
+  winding survives clipping (an inverted polygon is reversed), so `volume` stays the
+  winding check on the RESULT too -- the volume oracle
+  `vol(A u B) + vol(A n B) = vol(A) + vol(B)` in the tests is also the normals test.
+- **An empty result is an EMPTY solid** (zero-row vertex array, no facets, volume
+  0.0), not an error: disjoint operands intersected answer it.
+- **`geom:section`** is the same classification with one operand trivial: per-facet
+  plane segments (`geom::%facet-section`, oriented along plane-normal x facet-normal
+  so outer loops wind counter-clockwise seen from +normal and holes clockwise),
+  stitched on the weld grid into closed loops; an unclosed chain -- a tangent touch
+  -- is dropped rather than answered broken. A facet lying IN the plane is skipped;
+  its boundary comes from its neighbours' edges (a section exactly on a box face
+  answers that face's loop).
 
 ## Pruning
 

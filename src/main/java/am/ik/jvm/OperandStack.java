@@ -30,8 +30,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The model is exact for the instruction set an emitter can produce through this library;
- * an instruction it cannot model ({@code tableswitch}/{@code lookupswitch}/{@code wide}/
- * {@code jsr}) raises rather than silently desynchronizing.
+ * an instruction it cannot model ({@code tableswitch}/{@code lookupswitch}/{@code jsr})
+ * raises rather than silently desynchronizing. The {@code wide} prefix IS modelled: a
+ * local index past 255 has no other encoding, and an emitter rewrites the pending
+ * instruction into that form through {@link #awaitingLocalIndex()} /
+ * {@link #widenPendingLocalIndex()}.
  */
 public final class OperandStack {
 
@@ -103,6 +106,9 @@ public final class OperandStack {
 
 	private int operandsExpected = 0;
 
+	/** True between a {@code wide} prefix and the opcode it widens. */
+	private boolean pendingWide = false;
+
 	/**
 	 * Creates a model for a method body whose constants come from the given pool (the
 	 * pool resolves the descriptors of {@code invoke*}, the field ops and {@code ldc}).
@@ -131,6 +137,20 @@ public final class OperandStack {
 			}
 			return;
 		}
+		if (this.pendingWide) {
+			// The opcode a `wide` prefix widens: the same instruction with a two-byte
+			// local index (four operand bytes for `iinc`, whose constant widens too).
+			this.pendingWide = false;
+			this.opcode = value;
+			this.opcodePc = this.pc - 2;
+			this.operandCount = 0;
+			this.operandsExpected = value == Opcode.IINC ? 4 : 2;
+			return;
+		}
+		if (value == Opcode.WIDE) {
+			this.pendingWide = true;
+			return;
+		}
 		this.opcode = value;
 		this.opcodePc = this.pc - 1;
 		this.operandCount = 0;
@@ -138,6 +158,41 @@ public final class OperandStack {
 		if (this.operandsExpected == 0) {
 			this.apply();
 		}
+	}
+
+	/**
+	 * {@return true when the last byte fed was a load/store opcode still waiting for its
+	 * one-byte local index} An emitter that is about to write an index past 255 asks
+	 * this, rewrites the instruction into its {@code wide} form, and reports it with
+	 * {@link #widenPendingLocalIndex()}.
+	 */
+	public boolean awaitingLocalIndex() {
+		return !this.pendingWide && this.operandsExpected == 1 && this.operandCount == 0
+				&& isOneByteLocalOp(this.opcode);
+	}
+
+	/**
+	 * Accounts for the pending load/store having been rewritten into its {@code wide}
+	 * form: the one opcode byte already fed became four ({@code wide}, the opcode, and a
+	 * two-byte local index). The instruction's operand-stack effect is unchanged -- a
+	 * load pushes and a store pops whatever slot number it names -- so only the model's
+	 * position bookkeeping moves.
+	 * @throws IllegalStateException when no such instruction is pending
+	 */
+	public void widenPendingLocalIndex() {
+		if (!this.awaitingLocalIndex()) {
+			throw new IllegalStateException("operand-stack model: no one-byte local index is pending at " + this.pc);
+		}
+		this.pc += 3;
+		this.opcodePc--;
+		this.operandCount = 1;
+		this.operandsExpected = 0;
+		this.apply();
+	}
+
+	private static boolean isOneByteLocalOp(int opcode) {
+		return (opcode >= Opcode.ILOAD && opcode <= Opcode.ALOAD)
+				|| (opcode >= Opcode.ISTORE && opcode <= Opcode.ASTORE);
 	}
 
 	/**
@@ -570,7 +625,9 @@ public final class OperandStack {
 				2;
 			case Opcode.MULTIANEWARRAY -> 3;
 			case Opcode.INVOKEINTERFACE, Opcode.INVOKEDYNAMIC, Opcode.GOTO_W, Opcode.JSR_W -> 4;
-			case Opcode.TABLESWITCH, Opcode.LOOKUPSWITCH, Opcode.WIDE, Opcode.JSR, Opcode.RET ->
+			// `wide` never reaches here: feed() consumes the prefix and sizes the widened
+			// instruction from the opcode that follows it.
+			case Opcode.TABLESWITCH, Opcode.LOOKUPSWITCH, Opcode.JSR, Opcode.RET ->
 				throw new IllegalStateException("operand-stack model: opcode 0x" + Integer.toHexString(opcode)
 						+ " has a variable length and is not modelled");
 			default -> 0;

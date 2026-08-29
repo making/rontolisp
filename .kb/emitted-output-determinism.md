@@ -33,6 +33,15 @@ runs, always the same permutation of the same 1,954 emitted strings. Fixed with
 `classes()` is documented as "in definition order" precisely because that order is
 emitted.
 
+**The second one** (found 2026-08-29 while checking whether todo-562 shifted any
+emitted bytes): `SpecialVarCollector` passes the three standard-stream specials as a
+`Set.of` to `collectDynamicallyBound`, whose `progv` over-collection arm does
+`bound.addAll(specials)` into a `LinkedHashSet` -- so a program containing `progv`
+mints `_g$*ERROR-OUTPUT*` and `_g$*STANDARD-INPUT*` in a per-run order. Two compiles
+of the concatenated ci-spec corpus with one unmodified jar differ by 211 bytes, all
+of it that swap and the pool indices it shifts. Open as `.todo/570`; the sweep claim
+below therefore describes 2026-07-26, not today.
+
 A sweep of all 313 such sites in `src/main/java` (2026-07-26) found that one and no
 other: every remaining `Map.of`/`Set.of` is queried, never iterated, and `am.ik.wasm`
 holds no hash collection at all. Three places are one careless refactor away from the

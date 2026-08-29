@@ -19,8 +19,8 @@ import java.util.Set;
  * on the caller's side); only an out-of-range patch is deferred to this pass, so a method
  * whose branches all fit is returned untouched, byte for byte. The decoder understands
  * exactly the instruction set the emitters produce -- like {@link StackMapAugmenter},
- * {@code tableswitch}/{@code lookupswitch}/{@code wide}/ {@code jsr} are rejected loudly
- * rather than mis-measured.
+ * {@code tableswitch}/{@code lookupswitch}/{@code jsr} are rejected loudly rather than
+ * mis-measured. The {@code wide} prefix a past-255 local index needs IS measured.
  *
  * <p>
  * The 65535-byte method code limit is NOT lifted by this pass ({@code goto_w} cannot
@@ -65,7 +65,7 @@ public final class BranchRelaxer {
 						: pos + (short) (((code.get(pos + 1) & 0xff) << 8) | (code.get(pos + 2) & 0xff));
 				branchTarget.put(pos, target);
 			}
-			pos += 1 + operandLength(op, pos);
+			pos += 1 + operandLength(code, op, pos);
 		}
 
 		// Fixpoint sizing: widening one branch moves every later offset, which can push
@@ -101,7 +101,7 @@ public final class BranchRelaxer {
 		List<Integer> out = new ArrayList<>(n + widened.size() * 5);
 		for (int start : starts) {
 			int op = code.get(start) & 0xff;
-			int len = 1 + operandLength(op, start);
+			int len = 1 + operandLength(code, op, start);
 			if (!branchTarget.containsKey(start)) {
 				for (int i = 0; i < len; i++) {
 					out.add(code.get(start + i));
@@ -189,7 +189,7 @@ public final class BranchRelaxer {
 	/**
 	 * Operand byte count -- the same instruction subset {@link StackMapAugmenter} walks.
 	 */
-	private static int operandLength(int op, int pc) {
+	private static int operandLength(List<Integer> code, int op, int pc) {
 		return switch (op) {
 			case Opcode.BIPUSH, Opcode.LDC, Opcode.ILOAD, Opcode.LLOAD, Opcode.FLOAD, Opcode.DLOAD, Opcode.ALOAD,
 					Opcode.ISTORE, Opcode.LSTORE, Opcode.FSTORE, Opcode.DSTORE, Opcode.ASTORE, Opcode.NEWARRAY ->
@@ -203,7 +203,10 @@ public final class BranchRelaxer {
 				2;
 			case Opcode.MULTIANEWARRAY -> 3;
 			case Opcode.INVOKEINTERFACE, Opcode.GOTO_W -> 4;
-			case Opcode.TABLESWITCH, Opcode.LOOKUPSWITCH, Opcode.WIDE, Opcode.JSR, Opcode.JSR_W, Opcode.RET ->
+			// wide: the widened opcode plus a two-byte local index -- four more for
+			// `iinc`, whose constant widens with it. It carries no branch offset.
+			case Opcode.WIDE -> (code.get(pc + 1) & 0xff) == Opcode.IINC ? 5 : 3;
+			case Opcode.TABLESWITCH, Opcode.LOOKUPSWITCH, Opcode.JSR, Opcode.JSR_W, Opcode.RET ->
 				throw new IllegalStateException("unsupported opcode 0x" + Integer.toHexString(op) + " at " + pc);
 			default -> 0;
 		};

@@ -24,6 +24,12 @@ import am.ik.jvm.Opcode;
  */
 final class JvmAsm {
 
+	/**
+	 * The highest local slot the one-byte operand of a load/store can name; past it the
+	 * instruction takes a {@code wide} prefix and a two-byte index.
+	 */
+	private static final int MAX_ONE_BYTE_LOCAL_SLOT = 255;
+
 	final List<Integer> code = new ArrayList<>();
 
 	private final Map<Integer, Integer> labelPos = new HashMap<>();
@@ -69,29 +75,50 @@ final class JvmAsm {
 	}
 
 	void aload(int slot) {
-		this.code.add(Opcode.ALOAD);
-		this.code.add(slot);
+		this.localOp(Opcode.ALOAD, slot);
 	}
 
 	void astore(int slot) {
-		this.code.add(Opcode.ASTORE);
-		this.code.add(slot);
+		this.localOp(Opcode.ASTORE, slot);
 	}
 
 	void iload(int slot) {
-		this.code.add(Opcode.ILOAD);
-		this.code.add(slot);
+		this.localOp(Opcode.ILOAD, slot);
 	}
 
 	void istore(int slot) {
-		this.code.add(Opcode.ISTORE);
-		this.code.add(slot);
+		this.localOp(Opcode.ISTORE, slot);
 	}
 
 	void iinc(int slot, int delta) {
+		if (slot > MAX_ONE_BYTE_LOCAL_SLOT) {
+			this.code.add(Opcode.WIDE);
+			this.code.add(Opcode.IINC);
+			JvmRuntimeBuilder.emitU2(this.code, slot);
+			JvmRuntimeBuilder.emitU2(this.code, delta);
+			return;
+		}
 		this.code.add(Opcode.IINC);
 		this.code.add(slot);
 		this.code.add(delta & 0xFF);
+	}
+
+	/**
+	 * Emits a load or store of a local slot, in the {@code wide} form past slot 255. The
+	 * blocks assembled here are spliced into a Ctx-compiled body whole
+	 * ({@code Ctx.emitBlock}), so their slots come from {@code Ctx.allocTemp} and grow
+	 * with the enclosing method: a one-byte operand would silently name a different slot
+	 * exactly as it did before {@code Ctx.emit} learned to widen.
+	 */
+	private void localOp(int opcode, int slot) {
+		if (slot > MAX_ONE_BYTE_LOCAL_SLOT) {
+			this.code.add(Opcode.WIDE);
+			this.code.add(opcode);
+			JvmRuntimeBuilder.emitU2(this.code, slot);
+			return;
+		}
+		this.code.add(opcode);
+		this.code.add(slot);
 	}
 
 	void aconstNull() {
@@ -231,13 +258,11 @@ final class JvmAsm {
 	}
 
 	void dload(int slot) {
-		this.code.add(Opcode.DLOAD);
-		this.code.add(slot);
+		this.localOp(Opcode.DLOAD, slot);
 	}
 
 	void dstore(int slot) {
-		this.code.add(Opcode.DSTORE);
-		this.code.add(slot);
+		this.localOp(Opcode.DSTORE, slot);
 	}
 
 	void dreturn() {
@@ -273,13 +298,11 @@ final class JvmAsm {
 	}
 
 	void lload(int slot) {
-		this.code.add(Opcode.LLOAD);
-		this.code.add(slot);
+		this.localOp(Opcode.LLOAD, slot);
 	}
 
 	void lstore(int slot) {
-		this.code.add(Opcode.LSTORE);
-		this.code.add(slot);
+		this.localOp(Opcode.LSTORE, slot);
 	}
 
 	void l2i() {

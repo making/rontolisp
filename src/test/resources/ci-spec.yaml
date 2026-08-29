@@ -4762,6 +4762,61 @@ cases:
       #f(1.0 2.0 3.0)
       (0 -1000 0)
       (T T NIL)
+  # Constructive solid geometry (BSP clipping over the world-space boundary
+  # polygons, .kb/geom.md "Boolean operations"): union / difference /
+  # intersection / section, the volume oracle, the degenerate cases (coplanar
+  # faces, a hole exactly as deep as the plate is thick, an empty
+  # intersection), and the history a boolean result records. The box booleans
+  # are axis-aligned so every split lands on exact dyadic coordinates and the
+  # volumes print as exact integers on all four backends; the one answer built
+  # from trigonometry (the drilled plate) is ROUNDED like every other trig case
+  # here.
+  - name: geom-csg-cross-backend
+    source: |
+      (defun ci-geom-csg ()
+        (let ((a (geom:box 100)) (b (geom:box 100)))
+          (geom:move b (geom:vec3 50 50 50))
+          (let ((u (geom:union a b)))
+            (print (geom:volume u))
+            (print (geom:volume (geom:difference a b)))
+            (print (geom:volume (geom:intersection a b)))
+            (print (geom:volume a))
+            (print (first (geom:history u)))
+            (print (eq (second (geom:history u)) a))
+            (print (array-element-type (geom:vertices-of u)))))
+        (let ((a (geom:box 100)) (b (geom:box 100)))
+          (geom:move b (geom:vec3 100 0 0))
+          (print (geom:volume (geom:union a b)))
+          (print (geom:surface-area (geom:union a b)))
+          (print (geom:volume (geom:intersection a b))))
+        (let ((plate (geom:box '(100 100 20)))
+              (hole (geom:cylinder :radius 10 :height 20 :sides 24)))
+          (geom:move hole (geom:vec3 0 0 -10))
+          (print (round (geom:volume (geom:difference plate hole)))))
+        (let ((loops (geom:section (geom:box '(100 200 300)))))
+          (print (length loops))
+          (print (linalg:shape (first loops)))
+          (print (first loops)))
+        (print (length (geom:section (geom:torus :radius 60 :tube 20 :sides 24 :rings 12))))
+        (print (geom:section (geom:box 100) :normal :x :offset 200)))
+      (ci-geom-csg)
+    expected: |
+      1875000.0
+      875000.0
+      125000.0
+      1000000.0
+      :UNION
+      T
+      SINGLE-FLOAT
+      2000000.0
+      100000.0
+      0.0
+      193788
+      1
+      (4 3)
+      #f((-50.0 -100.0 0.0) (50.0 -100.0 0.0) (50.0 100.0 0.0) (-50.0 100.0 0.0))
+      2
+      NIL
   # The torch package (reverse-mode autograd over linalg): fit y = 2x by gradient
   # descent on the MSE -- ten forward/backward/update steps, the update inside
   # torch:no-grad (which rebinds the torch::*grad-enabled* special). Every quantity

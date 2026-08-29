@@ -69,9 +69,14 @@ final class JvmUncaughtHandler {
 		ConstantPool cp = mainCtx.cp;
 		int bodyEnd = mainCtx.code.size();
 		// Slot 1 in practice: main's body is a list of invokestatic chunk calls and
-		// allocates no local of its own, so the one-byte aload/astore operand below is
-		// never in reach of the 255-slot wrap that would need the `wide` prefix.
+		// allocates no local of its own. The raw appends below bypass Ctx.emit, which is
+		// where a past-255 index would be rewritten into its `wide` form, so say so
+		// rather than write an index that wraps onto another slot.
 		int exSlot = mainCtx.allocTemp();
+		if (exSlot > 255) {
+			throw new IllegalStateException("the uncaught-condition handler needs a local slot, and main is at "
+					+ exSlot + " -- past the one-byte load/store operand these raw appends carry");
+		}
 		ConstantPool.ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
 		ConstantPool.ClassConstant throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
 		ConstantPool.FieldrefConstant systemErr = cp.addFieldref(systemClass,
