@@ -110,10 +110,11 @@ the way `../512-a-native-macos-gui-from-the-repl-through-ffm/README.md` document
 
 `metal.lisp` needed no change -- the one constant it does not carry,
 `MTLPrimitiveTypeLine` = 1, `scene.lisp` defines locally, and any renderer that draws a
-grid or a wireframe needs it. Where that constant ends up is part of a larger question the
-spike leaves open and `../565-the-scene-package-a-3d-viewer-over-metal.md` owns: `scene` is
-written over a Metal surface that is an EXAMPLE today, reached by relative path, so a
-shipped `scene` cannot reach it at all.
+grid or a wireframe needs it. Where that constant ends up was an open question when the
+spike ran -- `scene` is written over a Metal surface that is an EXAMPLE today, reached by
+relative path, which a shipped `scene` could not do. It has since been settled: `metal`
+becomes a shipped package too, and
+`../565-the-scene-package-a-3d-viewer-over-metal.md` carries the promotion.
 
 **5. A defect found on the way: a hash table's key cost is exponential in shared structure.**
 The renderer's first cut kept its GPU buffers in an `(make-hash-table :test 'eq)` keyed by
@@ -153,6 +154,6 @@ the right design anyway, and what `scene.lisp` does now.
 - **Nothing here is tested.** The modeling half is testable as ordinary Lisp; the renderer
   is not, until something can render without a display.
 - **Where the Metal surface lives.** `scene.lisp` reaches it by relative path, which only
-  an example can do. If `scene` ships, `metal` has to ship with it or be duplicated inside
-  it -- `../565-the-scene-package-a-3d-viewer-over-metal.md` owns that decision and must
-  make it before it ports anything.
+  an example can do. That question is now answered -- `metal` is promoted to a shipped
+  package alongside `geom` and `scene` (decided 2026-08-29) -- but the spike was written
+  before it, so it still copies the file in.

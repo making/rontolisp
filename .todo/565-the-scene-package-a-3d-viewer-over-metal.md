@@ -1,4 +1,4 @@
-# The `scene` package: a 3D viewer for `geom` solids, over Metal
+# The `metal` and `scene` packages: a shipped Metal surface, and a 3D viewer over it
 
 Difficulty: Medium
 
@@ -27,42 +27,51 @@ A window that shows `geom` solids and lets you move around them:
 Drag orbits, shift-drag pans, scroll dollies. A viewer is a CLOS instance, not a set of
 globals, so two windows can exist.
 
-## Where it belongs, and what it drags with it -- decide this FIRST
+## Three packages ship, not one (decided 2026-08-29)
 
 `scene` is `objc:`-dependent and macOS-only, so it cannot ship on `geom`'s terms -- both
-WASM backends refuse a program that references `objc` (`.kb/objc.md`). The choice is
-between shipping it the way `appkit.lisp` ships (spliced only when referenced, refused on
-WASM by the existing `firstObjcReference` check, so a Mac user gets `(scene:viewer)` from a
-bare REPL) and leaving it in `examples/macos/`. The parent's argument for shipping `geom`
--- "the binary is what people install and a binary user has no `examples/` directory to
-copy from", `.kb/objc.md`'s "Where the line goes" -- applies here too and is probably
-decisive.
+WASM backends refuse a program that references `objc` (`.kb/objc.md`). It ships anyway, the
+way `appkit.lisp` does: spliced only when the program references it, refused on WASM by the
+existing `firstObjcReference` check, so a Mac user gets `(scene:viewer)` from a bare REPL
+with nothing to copy. The argument is `.kb/objc.md`'s "Where the line goes" -- the binary
+is what people install, and a binary user has no `examples/` directory.
 
-**But shipping `scene` forces a decision about `metal` as well, and that is the harder
-half.** `scene` is written over `examples/macos/metal.lisp`, which is an EXAMPLE today: a
-program reaches it with `(require :metal "metal.lisp")` and a relative path. A shipped
-`scene` cannot do that -- there is no `examples/` directory beside an installed binary.
-Three ways out, and the item has to pick one on the record:
+**`metal` ships with it, as its own package.** `scene` is written over
+`examples/macos/metal.lisp`, which is an EXAMPLE today, reached with
+`(require :metal "metal.lisp")` and a relative path -- which a shipped `scene` cannot do.
+Promoting it is the right answer rather than the forced one: `metal-triangle`,
+`metal-cube`, `metal-robot-arm` and `metal-pagoda-garden` already share that file, which is
+the same "a second consumer fixed the API" argument that promoted the `appkit` rungs. The
+two rejected alternatives, so they are not re-litigated: absorbing what `scene` uses into
+`scene`'s internals duplicates the layer, the pipeline, the frame loop and the buffer
+helpers into two files that will not stay in step; leaving `scene` an example gives up the
+reason for shipping `geom` at all, since a binary user who has `geom` and cannot draw with
+it is in a strange position.
 
-1. **Ship `metal` too, as its own package**, next to `geom` and `scene`. It has earned it
-   independently of this feature -- `metal-triangle`, `metal-cube`, `metal-robot-arm` and
-   `metal-pagoda-garden` all already share it, which is the same "second consumer fixed the
-   API" argument that promoted the `appkit` rungs (`.kb/objc.md`, "Where the line goes").
-   The cost is real: `metal.lisp` becomes a supported surface with reference docs and a
-   compatibility obligation, `examples/macos/metal.lisp` is deleted and its four consumers
-   switch to the shipped package, and `.kb/objc.md`'s "Metal" section -- which names that
-   file as the shared surface in several places -- is rewritten. Its enum constants
-   (`+triangle+`, `+point+`, the cull and compare modes) become public names, so audit them
-   before they are frozen, and add the `MTLPrimitiveTypeLine` = 1 that this item needs.
-2. **Absorb what `scene` uses into `scene`'s own internals** and leave the example file
-   alone. Cheapest, and wrong: the layer, the pipeline, the frame loop and the buffer
-   helpers would then exist twice, in two files that must stay in step and will not.
-3. **Leave `scene` an example too**, so both keep the `require`-by-path shape. Coherent,
-   and it gives up the reason for shipping `geom` at all -- a binary user who has `geom`
-   and cannot draw with it is in a strange position.
+So the tree is three packages: `geom` on every backend, `metal` and `scene` on macOS.
 
-(1) is the recommendation. Whatever is chosen, record the reason in `.kb/geom.md` and, if
-`metal` moves, in `.kb/objc.md` beside the sentences it invalidates.
+### What promoting `metal` costs, and what it obliges
+
+- `examples/macos/metal.lisp` is DELETED and its four consumers drop their `require` line.
+  Check each still runs -- they are GUI programs, so by hand
+  (`.kb/objc.md` names them); `metal-pagoda-garden.lisp` is the one that exercises the most
+  of the surface.
+- Its names become public and frozen. Audit them before that happens rather than after:
+  the enum constants (`+triangle+`, `+point+`, `+cull-back+`, the compare and winding
+  modes) are currently whatever the examples happened to need, and this item adds
+  `MTLPrimitiveTypeLine` = 1 to them. Decide whether the whole enum family belongs or only
+  the members a program actually names.
+- `.kb/objc.md`'s "Metal" section names `examples/macos/metal.lisp` as the shared surface in
+  several sentences and describes it as the twin of `webgl-common/gl.lisp`. Rewrite those
+  rather than leaving them pointing at a deleted file; the twin relationship is still true
+  and is worth keeping, but one side is now shipped and the other is not.
+- A `MetalLibrary` splice class beside `AppKitLibrary`, a `PackageRegistry` entry, and
+  reference docs in `doc/{en,ja}` -- a shipped package with no documentation is not
+  shipped. `LibraryDefunPruner` matters here too: a program using `metal:frame` must not
+  carry `metal:depth-state`.
+- `metal` must remain usable WITHOUT `geom` or `scene`. It is the low-level surface the
+  four existing examples use directly, and the promotion must not turn it into a private
+  detail of the viewer.
 
 ## The design that must not be lost
 
@@ -84,10 +93,11 @@ carries -- into whichever file the decision above leaves it in.
 
 ## Do
 
-1. Settle the placement question above -- `scene`, and `metal` with it -- before porting a
-   line. It decides where the file goes, what its package name may be, and whether four
-   existing examples and a `.kb` section move with it.
-2. Port `scene.lisp`.
+1. Promote `metal` first, on its own: move the file, splice it, audit and freeze its names,
+   switch the four examples, rewrite the `.kb/objc.md` sentences, document it. It is a
+   self-contained change that leaves the tree working, and `scene` has nothing to stand on
+   until it lands.
+2. Port `scene.lisp` over the shipped `metal`.
 3. **Fix the one thing the spike deliberately did not.** Its `NSView` subclass routes every
    callback through a single `*active*` viewer, because AppKit callbacks are process-wide.
    Key the handler by the view that received the event instead -- `appkit::*actions*` is

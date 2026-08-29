@@ -32,7 +32,7 @@ are noun constructors taking keywords, and there is no message-send protocol at 
 functions and CLOS accessors throughout. Members must keep it that way. Design against the
 problem.
 
-## The two halves, and where the line falls
+## Three packages, and where the line falls
 
 The spike's first result decides the architecture. The modeling half is CLOS over `linalg`
 and touches nothing else, and `oracle.lisp` prints byte-identical output on the
@@ -44,22 +44,26 @@ interpreter, a compiled JVM class, WASM preview 1 and the WASI 0.3 component. So
   `LinalgLibrary`, reachable from a bare REPL with nothing required. It works in the
   browser playground too, which is what makes it worth shipping rather than exiling to
   `examples/macos/`.
-- **`scene` is macOS-only**, over `objc:`/`appkit:`/Metal, and refuses to compile to WASM
-  for the same reason every `objc:` program does. Whether it SHIPS or stays an example is
-  open, and it does not decide alone: `scene` is written over the Metal surface that lives
-  in `examples/macos/metal.lisp` today, and a shipped `scene` cannot reach an example by
-  relative path. Shipping `scene` therefore means shipping `metal` as a third package --
-  which it has arguably earned on its own, four examples already sharing it -- and moving
-  four consumers and a `.kb/objc.md` section with it. Member 2 owns the decision and must
-  make it before it ports a line.
+- **`scene` is macOS-only** and SHIPS too, over `objc:`/`appkit:`/Metal, the `appkit.lisp`
+  way: spliced when referenced, refused on WASM for the same reason every `objc:` program
+  is. The binary is what people install, and a binary user who has `geom` and cannot draw
+  with it is in a strange position.
+- **`metal` ships with it** (decided 2026-08-29). `scene` is written over the Metal surface
+  that lives in `examples/macos/metal.lisp` today, reached by relative path -- which a
+  shipped `scene` cannot do. It is promoted rather than duplicated, and it has earned that
+  on its own: four existing examples already share it. The cost is that its names become
+  public, `examples/macos/metal.lisp` is deleted, its four consumers move, and
+  `.kb/objc.md`'s "Metal" section is rewritten. Member 2 owns the work and does it FIRST,
+  as a self-contained change that leaves the tree working.
 
 ## Members
 
 1. `564-the-geom-package-transforms-scene-graph-and-solids.md` -- the modeling half:
    `transform`, `node`, `solid`, the primitive constructors, the cached mesh, the
    measurements. Everything else depends on it. **Start here.**
-2. `565-the-scene-package-a-3d-viewer-over-metal.md` -- the window: orbit/pan/dolly camera,
-   ground grid, world and body axes, solid/wireframe shading, `fit`, an animation hook.
+2. `565-the-scene-package-a-3d-viewer-over-metal.md` -- promoting `metal` to a shipped
+   package, then the window over it: orbit/pan/dolly camera, ground grid, world and body
+   axes, solid/wireframe shading, `fit`, an animation hook.
 3. `566-constructive-solid-geometry-for-geom-solids.md` -- union, difference, intersection
    and a planar section. The hard half of solid modeling, and independent of the viewer.
 4. `567-an-eq-hash-table-is-not-identity-keyed.md` -- a defect the spike ran into and
@@ -74,8 +78,11 @@ three blocks the first two.
 
 - `geom` ships in the jar and in the native binary, works on all four backends, and has a
   `.kb/geom.md` naming the cross-backend pin.
-- `scene` opens a window from the interpreter, the native binary and a compiled JVM class,
-  and `doc/{en,ja}` document both packages with runnable examples.
+- `metal` and `scene` ship beside it, `scene` opens a window from the interpreter, the
+  native binary and a compiled JVM class, and `doc/{en,ja}` document all three packages
+  with runnable examples.
+- `examples/macos/metal.lisp` is gone and its four consumers run against the shipped
+  `metal`, checked by hand as GUI programs must be.
 - The renderer does no per-triangle work in a frame -- the spike's result 3 is the
   invariant, and `.kb/geom.md` records the two numbers so a later change that regresses it
   is visible.
