@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
@@ -323,7 +324,7 @@ public final class WitImportDirective {
 		List<LispVal> bindings = new ArrayList<>();
 		List<LispVal> componentMembers = new ArrayList<>();
 		Set<String> allMembers = new LinkedHashSet<>();
-		Set<String> boundMembers = new LinkedHashSet<>();
+		SequencedSet<String> boundMembers = new LinkedHashSet<>();
 		for (WitResolver.Func func : funcs) {
 			String member = memberName(func);
 			if (!allMembers.add(member)) {
@@ -1156,7 +1157,11 @@ public final class WitImportDirective {
 	// (defpackage kv (:use cl) (:export get set ...)) -- the bound names are the
 	// package's
 	// external symbols, so a call site spells them kv:get like any other package.
-	private static LispVal defpackageForm(String pkg, Set<String> members) {
+	// `members` is a SequencedSet, not a plain Set: its iteration order becomes the
+	// :export list of generated Lisp source, so an unordered one (a Set.of, a Set.copyOf)
+	// would emit a different-but-equivalent program per JVM run
+	// (.kb/emitted-output-determinism.md).
+	private static LispVal defpackageForm(String pkg, SequencedSet<String> members) {
 		List<LispVal> exports = new ArrayList<>();
 		exports.add(new LispSymbol(":EXPORT"));
 		for (String member : members) {

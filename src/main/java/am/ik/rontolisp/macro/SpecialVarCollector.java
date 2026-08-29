@@ -6,8 +6,10 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.SequencedSet;
 import java.util.Set;
 
 /**
@@ -35,6 +37,19 @@ import java.util.Set;
  * which may not depend on the {@code compiler} package -- needs it too.
  */
 public final class SpecialVarCollector {
+
+	/**
+	 * The stream specials every program gets for free, in the order they are minted as
+	 * globals. A {@link SequencedSet}, not a {@code Set.of}: a {@code progv} makes
+	 * {@link #collectDynamicallyBound} sweep this whole set into its result, and that
+	 * result fixes the order both compilers mint their static fields in --
+	 * {@code ImmutableCollections} re-salts its iteration order once per JVM process, so
+	 * a {@code Set.of} here emitted a different-but-equivalent class on every compile
+	 * (.kb/emitted-output-determinism.md).
+	 */
+	private static final SequencedSet<String> SEEDED_STREAM_SPECIALS = Collections
+		.unmodifiableSequencedSet(new LinkedHashSet<>(
+				List.of(LispNames.STANDARD_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR, LispNames.ERROR_OUTPUT_VAR)));
 
 	private SpecialVarCollector() {
 	}
@@ -72,8 +87,7 @@ public final class SpecialVarCollector {
 		// directly or via `(with-output-to-string (*standard-output*) ...)` /
 		// `(with-input-from-string (*standard-input* s) ...)` -- which is also the only
 		// case whose behavior differs from the plain-stdio default.
-		out.addAll(collectDynamicallyBound(List.of(form),
-				Set.of(LispNames.STANDARD_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR, LispNames.ERROR_OUTPUT_VAR)));
+		out.addAll(collectDynamicallyBound(List.of(form), SEEDED_STREAM_SPECIALS));
 		List<LispVal> parts = cons.toList();
 		switch (head.name()) {
 			case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {
@@ -114,10 +128,16 @@ public final class SpecialVarCollector {
 	 * under-collection is a loud compile error in {@code JvmLetCompiler}, never a silent
 	 * process-global binding.
 	 * @param topLevelExprs the fully macro-expanded top-level forms
-	 * @param specials the special-variable names ({@link #collect})
-	 * @return the names that are dynamically bound, in first-binding order
+	 * @param specials the special-variable names ({@link #collect}). ITERATION ORDER
+	 * REACHES EMITTED BYTES: a {@code progv} anywhere in the program makes the fallback
+	 * below copy this set wholesale into the result, which is the order both compilers
+	 * mint their global fields in -- hence {@link SequencedSet}, which no {@code Set.of}
+	 * satisfies (.kb/emitted-output-determinism.md)
+	 * @return the names that are dynamically bound, in first-binding order, with the ones
+	 * only the {@code progv} fallback found appended in {@code specials} order
 	 */
-	public static LinkedHashSet<String> collectDynamicallyBound(List<LispVal> topLevelExprs, Set<String> specials) {
+	public static LinkedHashSet<String> collectDynamicallyBound(List<LispVal> topLevelExprs,
+			SequencedSet<String> specials) {
 		LinkedHashSet<String> bound = new LinkedHashSet<>();
 		if (specials.isEmpty()) {
 			return bound;
