@@ -1,4 +1,4 @@
-# 563. A type declaration buys the JVM backend nothing, so the float rows go back to SBCL
+# 569. A type declaration buys the JVM backend nothing, so the float rows go back to SBCL
 
 Difficulty: High (declarations are erased to `nil` before any backend sees them,
 so this is a front-end carrier plus a routing change in two emitters -- and it
