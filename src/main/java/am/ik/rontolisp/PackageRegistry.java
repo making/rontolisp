@@ -401,6 +401,38 @@ public final class PackageRegistry {
 	private static final List<String> GEOM_FUNCTION_NAMES = sorted(GEOM_FUNCTIONS);
 
 	/**
+	 * The names exported by the {@code metal} package (a Metal drawing surface on an
+	 * {@code appkit} window), implemented in {@code metal.lisp} (see
+	 * {@code MetalLibrary}). Plain strings, like {@code appkit}: they exist only as
+	 * Lisp-source definitions. {@code context} is the CLOS class the surface hands back
+	 * and the constants are the enum members a drawing PROGRAM names -- the primitive it
+	 * draws and the pipeline state it configures. The pixel formats, load/store actions,
+	 * blend factors and storage modes stay internal ({@code metal::}), because they are
+	 * {@code attach}/{@code pipeline}/{@code frame}'s own business rather than a decision
+	 * a caller makes.
+	 */
+	private static final Set<String> METAL_FUNCTIONS = Set.of("CONTEXT", "ATTACH", "DEVICE", "LAYER", "QUEUE",
+			"LIBRARY", "PIPELINE", "DEPTH-STATE", "FLOATS", "BUFFER", "SHARED-BUFFER", "UPLOAD", "UNIFORM", "FRAME",
+			"RUN", "RESIZE", "SET-CLEAR-COLOR", "+POINT+", "+LINE+", "+TRIANGLE+", "+TRIANGLE-STRIP+", "+CULL-NONE+",
+			"+CULL-FRONT+", "+CULL-BACK+", "+WINDING-CLOCKWISE+", "+WINDING-COUNTER-CLOCKWISE+", "+COMPARE-LESS+",
+			"+COMPARE-ALWAYS+");
+
+	private static final List<String> METAL_FUNCTION_NAMES = sorted(METAL_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code scene} package (a 3-D viewer for {@code geom}
+	 * solids over {@code metal}), implemented in {@code scene.lisp} (see
+	 * {@code SceneLibrary}). {@code viewer-state} is the CLOS class a viewer is an
+	 * instance of, registered here for the same reason geom's class names are -- a
+	 * {@code (typep x 'scene:viewer-state)} spelling has to resolve.
+	 */
+	private static final Set<String> SCENE_FUNCTIONS = Set.of("VIEWER", "VIEWER-STATE", "WINDOW-OF", "CONTEXT-OF",
+			"ADD", "DROP", "CLEAR", "CONTENTS", "FIT", "CAMERA", "GRID", "GRID-COLOR", "BACKGROUND", "SHADING", "AXES",
+			"REFRESH", "ANIMATE", "WAIT");
+
+	private static final List<String> SCENE_FUNCTION_NAMES = sorted(SCENE_FUNCTIONS);
+
+	/**
 	 * The functions exported by the {@code usocket} package (a usocket-compatible shim
 	 * over the {@code rontolisp:tcp-*} built-ins), implemented in {@code usocket.lisp}
 	 * (see {@code UsocketLibrary}). Plain strings, like {@code linalg}: no evaluator or
@@ -550,16 +582,15 @@ public final class PackageRegistry {
 	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
 	 * which must not depend on a registry instance.
 	 */
-	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
-			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
-					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
-					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG,
-					LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
-					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
-					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
-					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
-			Set.copyOf(UiopExports.subPackages()));
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
+			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
+			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG,
+			LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
+			LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG,
+			LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG,
+			LispNames.BT2_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG,
+			LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG,
+			"KEYWORD"), Set.copyOf(UiopExports.subPackages()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -651,6 +682,13 @@ public final class PackageRegistry {
 		// nothing but linalg -- so unlike appkit it runs everywhere. Does not use cl;
 		// every registered name is external.
 		define(new LispPackage(LispNames.GEOM_PKG, List.of(), new HashSet<>(GEOM_FUNCTIONS)));
+		// A Metal drawing surface over objc:, implemented once in metal.lisp and
+		// spliced/loaded on demand (MetalLibrary). macOS only, like appkit; usable
+		// WITHOUT geom or scene, which is what four examples do. Does not use cl.
+		define(new LispPackage(LispNames.METAL_PKG, List.of(), new HashSet<>(METAL_FUNCTIONS)));
+		// A 3-D viewer for geom solids over metal, implemented once in scene.lisp and
+		// spliced/loaded on demand (SceneLibrary). macOS only. Does not use cl.
+		define(new LispPackage(LispNames.SCENE_PKG, List.of(), new HashSet<>(SCENE_FUNCTIONS)));
 		// C interop through the foreign function API (no reflection, so it runs in the
 		// native binary too, against the registered shape grid): the foreign primitives
 		// CFFI's backend stands on (eval.FfiInterop over am.ik.ffi). Does not use cl;
@@ -1032,6 +1070,22 @@ public final class PackageRegistry {
 	 */
 	public static List<String> geomFunctionNames() {
 		return GEOM_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code metal} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> metalFunctionNames() {
+		return METAL_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code scene} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> sceneFunctionNames() {
+		return SCENE_FUNCTION_NAMES;
 	}
 
 	/**

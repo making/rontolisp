@@ -202,18 +202,53 @@ CL-USER> (handler-case
 ```
 
 この 2 つが GPU を射程に入れます。Metal はほぼ全面が Objective-C の API なので、`objc:send`
-だけで何も足さずに駆動できます。`examples/macos/metal-triangle.lisp` は WebGL の hello world
+だけで何も足さずに駆動できます。
+
+### `metal` パッケージ
+
+どの Metal プログラムも同じように書く定型 — ウィンドウのコンテンツビュー上の
+`CAMetalLayer`、デバイス、コマンドキュー、レンダーパス、ドローアブル、present と commit、
+そしてシェーダ・パイプライン・バッファのヘルパ — が組み込みの **`metal`** パッケージです。
+`appkit` と同じくインタプリタに同梱され、初回使用時に読み込まれます。意図的に含めていない
+のはシェーダのソース、形状、描画コールです。それらはプログラム側のものです。
+
+```console
+CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
+CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
+CL-USER> (defvar *pipe* (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main" "fragment_main"))
+CL-USER> (metal:run *ctx*
+    (lambda (encoder)
+      (objc:send encoder "setRenderPipelineState:" *pipe*)
+      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
+#<objc __NSCFTimer>
+```
+
+Metal が必要とするように見える唯一の C 関数 `MTLCreateSystemDefaultDevice()` は回避できま
+す。`CAMetalLayer` の `preferredDevice` はプロパティで同じデバイスを返すからで、パッケージ
+全体はその事実の上に立っています。シェーダは Lisp の文字列から実行時にコンパイルされ、コン
+パイルに失敗したシェーダは Metal コンパイラ自身の診断 (キャレット付き) で送出します。
+`metal:buffer` は数値を一度だけ GPU にコピーし、毎フレーム書き直す形状には
+`metal:shared-buffer` と `metal:upload`、Metal がインラインで受け取りたがる小さな値には
+`metal:uniform` を使います。パックド単精度配列はバッファのバイト列そのものなので、`linalg`
+の行列も `geom:mesh` も一切変換なしに GPU へ届きます。全体は
+[関数リファレンス](../reference/functions.md#metal-package-functions)にあります。
+
+`metal` は単独で成立します。`examples/macos/metal-triangle.lisp` は WebGL の hello world
 を、`examples/macos/metal-cube.lisp` は陰影付きの回転する立方体を、
 `examples/macos/metal-robot-arm.lisp` は自分で逆運動学を解いてクリックした先へ手を伸ばすロ
 ボットアームを、`examples/macos/metal-pagoda-garden.lisp` はボクセルの庭 — 鯉の池の上に立つ
 五重塔、舞い散る桜、クリックで訪れる夜 — を描きます。その 1 万 3 千個のボクセルは 1 個の立方
 体を 1 万 3 千回描いたもので、頂点関数が `vertex_id` を 36 で割ってどのボクセルの上にいるかを
-求めます。シェーダは Lisp の文字列から実行時にコンパイルされます (OpenGL は逆で、
+求めます。4 本とも `metal` を直接使っており、`geom` も `scene` も使っていません (OpenGL は逆で、
 射程外のままです。`glClear` などは素の C 関数であり、`objc_msgSend` は届きません)。
 
 そこにマウスを運ぶのが `objc:define-class` です。描画面は実行時に定義した `NSView` のサブク
 ラスで、その `mouseDown:` / `mouseDragged:` / `scrollWheel:` は Lisp のクロージャ — ウィ
 ジェット層が `NSBox` にクリックを答えさせるのと同じ動詞です。
+
+`metal` の 1 つ上の段が **`scene`** パッケージです。`geom` ソリッドの 3D ビューアで、カメラ・
+グリッド・フレームループがすでに書かれているので、モデル化した機械はウィンドウまで 3 行です。
+[ソリッドモデリングガイド](solid-modeling.md#seeing-it-the-scene-viewer)を参照してください。
 
 ### スレッド: すべてはメインスレッドで起きる
 

@@ -760,6 +760,44 @@ categories:
       - { slug: geom-intersection, name: "geom:intersection" }
       - { slug: geom-section, name: "geom:section" }
       - { slug: geom-history, name: "geom:history" }
+  - title: "metal パッケージ (GPU 描画)"
+    functions:
+      - { slug: metal-attach, name: "metal:attach" }
+      - { slug: metal-device, name: "metal:device" }
+      - { slug: metal-layer, name: "metal:layer" }
+      - { slug: metal-queue, name: "metal:queue" }
+      - { slug: metal-library, name: "metal:library" }
+      - { slug: metal-pipeline, name: "metal:pipeline" }
+      - { slug: metal-depth-state, name: "metal:depth-state" }
+      - { slug: metal-floats, name: "metal:floats" }
+      - { slug: metal-buffer, name: "metal:buffer" }
+      - { slug: metal-shared-buffer, name: "metal:shared-buffer" }
+      - { slug: metal-upload, name: "metal:upload" }
+      - { slug: metal-uniform, name: "metal:uniform" }
+      - { slug: metal-frame, name: "metal:frame" }
+      - { slug: metal-run, name: "metal:run" }
+      - { slug: metal-resize, name: "metal:resize" }
+      - { slug: metal-set-clear-color, name: "metal:set-clear-color" }
+      - { slug: metal-constants, name: "metal:+triangle+ metal:+line+ metal:+point+ metal:+triangle-strip+ metal:+cull-none+ metal:+cull-front+ metal:+cull-back+ metal:+winding-clockwise+ metal:+winding-counter-clockwise+ metal:+compare-less+ metal:+compare-always+" }
+  - title: "scene パッケージ (3D ビューア)"
+    functions:
+      - { slug: scene-viewer, name: "scene:viewer" }
+      - { slug: scene-add, name: "scene:add" }
+      - { slug: scene-drop, name: "scene:drop" }
+      - { slug: scene-clear, name: "scene:clear" }
+      - { slug: scene-contents, name: "scene:contents" }
+      - { slug: scene-fit, name: "scene:fit" }
+      - { slug: scene-camera, name: "scene:camera" }
+      - { slug: scene-grid, name: "scene:grid" }
+      - { slug: scene-grid-color, name: "scene:grid-color" }
+      - { slug: scene-background, name: "scene:background" }
+      - { slug: scene-shading, name: "scene:shading" }
+      - { slug: scene-axes, name: "scene:axes" }
+      - { slug: scene-refresh, name: "scene:refresh" }
+      - { slug: scene-animate, name: "scene:animate" }
+      - { slug: scene-wait, name: "scene:wait" }
+      - { slug: scene-window-of, name: "scene:window-of" }
+      - { slug: scene-context-of, name: "scene:context-of" }
   - title: "asdf パッケージ (システム定義)"
     functions:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }

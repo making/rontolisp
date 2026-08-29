@@ -13,8 +13,8 @@ functions plus `geom:*tolerance*` and four CLOS class names.
 **It reaches for nothing but `linalg`** -- no `objc:`, no `java:`, no filesystem, no
 `SourceLoader`. That is the whole reason it ships rather than living in
 `examples/macos/`: the same solids tessellate in the browser playground and in a
-`.wasm`, and `scene` (the macOS viewer, `.todo/565`) is a CONSUMER of this package,
-not a peer of it. Nothing may be added here that breaks that.
+`.wasm`, and `scene` (the macOS viewer, "The renderer" below) is a CONSUMER of this
+package, not a peer of it. Nothing may be added here that breaks that.
 
 ## Wiring (the `linalg` pair, exactly)
 
@@ -212,6 +212,71 @@ and pin the packed single-float printer too, while every trigonometric answer is
 and ROUNDED so a float32 last bit cannot fail the case. Verified byte-identical on the
 interpreter, a compiled JVM class, WASM preview 1 and the WASI 0.3 component
 (2026-08-29).
+
+## The renderer: `metal` and `scene` (todo-565, 2026-08-29)
+
+Two more shipped Lisp-source libraries, `eval/metal.lisp` + `eval/MetalLibrary` and
+`eval/scene.lisp` + `eval/SceneLibrary`, wired exactly as the table above wires geom
+(splice class, `PackageRegistry` entry, `LispEvaluator` lazy load, `LibraryDefunPruner`,
+`resource-config.json`, `doc/{en,ja}`) with three differences:
+
+- **They are macOS-only.** Both bottom out in `objc:send`, so `CompileFrontend` refuses a
+  `.wasm` output naming the reference -- `AppKitLibrary.firstObjcReference` answers for all
+  four macOS packages (`objc`, `appkit`, `metal`, `scene`), which is why it lives there and
+  not in one library per package. The browser playground refuses them the same way.
+- **The splice chain runs them in dependency order, innermost first:** `SceneLibrary`
+  before `MetalLibrary` before `GeomLibrary`/`LinalgLibrary` before `AppKitLibrary`, so
+  each pass sees the references the previous one introduced (`scene` names `geom:`,
+  `metal:`, `linalg:` and `appkit:`; `metal:run`'s clock is `appkit:timer`).
+- **`metal` must stay usable without `geom` or `scene`** -- the four
+  `examples/macos/metal-*.lisp` drive it directly. Its promotion, its frozen export list
+  and what it cost are `.kb/objc.md`, "Metal".
+
+The thread facts it inherits are `.kb/objc.md`'s and are not restated here: `appkit:timer`
+is the clock, every hop is `objc:on-main` (inline when already on thread 0), and a callback
+runs on thread 0 with the interpreter's GLOBAL dynamic bindings.
+
+**No triangle is touched by Lisp during a frame.** That is the invariant the two numbers
+above buy, and `scene.lisp` is built for it:
+
+- each solid's `geom:mesh` and `geom:wireframe` go into `MTLBuffer`s of their own the
+  FIRST time the solid is drawn, and the entry -- `(mesh-buffer tri-count wire-buffer
+  segment-count axis-length)` -- lives in `geom:user-data`, not in a table keyed by the
+  solid (the reason is the `user-data` paragraph above);
+- the vertex function takes `vp` and `model` as SEPARATE uniforms and transforms the normal
+  by `model` too, so a solid that moves needs no re-upload and a frame's whole CPU cost is
+  one 4x4 matrix and one draw call per solid;
+- lines -- the ground grid, the axis triads, every wireframe -- go through a second
+  pipeline with `metal:+line+` (`MTLPrimitiveTypeLine` = 1), which the promotion added to
+  the `metal` surface rather than leaving it defined locally.
+
+Three things the spike (`.todo/563-solid-modeling-and-a-3d-viewer/scene.lisp`) did not do
+and the shipped file does:
+
+- **The callbacks are keyed by VIEW, not by an `*active*` global.** AppKit's callbacks are
+  process-wide, so one `objc:define-class "RontoLispSceneView"` serves every viewer and
+  `scene::*views*` maps `(objc:address view)` -> viewer -- `appkit::*actions*` keyed by
+  widget address is the precedent (`.kb/objc.md`). Two viewers therefore orbit
+  independently, which is the whole reason a viewer is an instance.
+- **Resize follows the window.** The view posts `NSViewFrameDidChangeNotification` to one
+  shared observer (`setPostsFrameChangedNotifications:` is not optional -- without it
+  NSView posts nothing), which finds the viewer by the notification's object and calls
+  `metal:resize` plus a redraw; the projection's aspect follows the stored width/height.
+- **The camera gestures redraw themselves and the mutators do not.** A drag that changed
+  the camera and drew nothing would make the documented "drag to orbit" false on a viewer
+  that is not animating; a loop adding sixty solids that drew sixty frames would be the
+  opposite mistake. So `scene::%on-mouse-dragged` / `%on-scroll` / `%on-frame-changed` call
+  `scene:refresh` and `scene:add` / `camera` / `grid` / `shading` / `axes` do not.
+
+**Nothing here is tested, and cannot be until something renders without a display**
+(`.todo/568`). `MetalLibraryTest` and `SceneLibraryTest` cover the library as a LIBRARY
+(the public names match the registry exactly, the splice fires exactly when referenced, the
+pruner drops what a program does not call, the WASM refusal names the package) and no test
+opens a window. Verified by hand on all three carriers on 2026-08-29 -- `java -jar`, the
+native binary, and `-o Two.class` under `java` plus `-o two.jar` under `java -jar` -- with
+a probe that asserts two viewers route independently, that a frame reaches the encoder,
+that the per-solid buffers are built once, and that a `setFrame:display:` on the window
+moves the viewer's width.
 
 ## `IndentRules`
 

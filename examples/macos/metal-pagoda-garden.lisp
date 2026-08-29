@@ -6,7 +6,8 @@
 ;;;; trees, including some cherry blossoms -- impressive, varied, colourful --
 ;;;; use whatever libraries, one HTML file I can paste into Chrome". There is no
 ;;;; page here and no library to pull in: `objc:send` IS the graphics API
-;;;; (metal.lisp), a packed single-float array IS the buffer's bytes, and the
+;;;; (the built-in `metal` package), a packed single-float array IS the buffer's
+;;;; bytes, and the
 ;;;; scene itself -- every voxel of it -- is built by the Lisp below.
 ;;;;
 ;;;; What the GPU is asked to draw is ONE cube, 36 vertices, and nothing else.
@@ -46,8 +47,6 @@
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/macos/metal-pagoda-garden.lisp
 ;;;;   rontolisp examples/macos/metal-pagoda-garden.lisp
 ;;;;   rontolisp examples/macos/metal-pagoda-garden.lisp -o Garden.class --class-name Garden && java Garden
-
-(require :metal "metal.lisp")
 
 ;;; --- the shaders --------------------------------------------------------------
 ;;;

@@ -297,6 +297,27 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void metalLibraryFormsAreAResolverFixedPoint() {
+		// MetalLibrary splices its forms into programs both before resolution (the
+		// compile-path pre-pass) and after it (the interpreter's lazy load), which is
+		// only sound while metal.lisp is written in canonical shape: resolving it must
+		// be a no-op.
+		PackageResolver resolver = new PackageResolver();
+		for (LispVal form : am.ik.rontolisp.eval.MetalLibrary.forms()) {
+			assertThat(resolver.resolve(form).print()).isEqualTo(form.print());
+		}
+	}
+
+	@Test
+	void sceneLibraryFormsAreAResolverFixedPoint() {
+		// SceneLibrary, the same way.
+		PackageResolver resolver = new PackageResolver();
+		for (LispVal form : am.ik.rontolisp.eval.SceneLibrary.forms()) {
+			assertThat(resolver.resolve(form).print()).isEqualTo(form.print());
+		}
+	}
+
+	@Test
 	void urlLibraryFormsAreAResolverFixedPoint() {
 		// UrlLibrary splices its forms into programs both before resolution (the
 		// compile-path pre-pass) and after it (the interpreter's lazy load), which is

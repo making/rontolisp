@@ -888,6 +888,73 @@ convention and the cached mesh.
 | `geom:section` | `(geom:section s :normal :z)` | the cross-section loops where a plane cuts the solid |
 | `geom:history` | `(geom:history s)` | what built the solid: `nil`, or `(op a b)` for a boolean result |
 
+## metal Package Functions
+
+The `metal` package is a Metal drawing surface on an `appkit` window -- the
+layer, the device, the command queue, the render pass, the drawable, present and
+commit, plus the shader, pipeline and buffer helpers every Metal program writes
+identically. Written in rontolisp over the `objc` verbs and loaded on first use,
+so it is macOS only, on the interpreter and a compiled `.class` / `.jar`; never
+a `.wasm`. It is **not part of Common Lisp**; reference its names with the
+`metal:` qualifier. `metal:context` is also a CLOS class name. It stands on its
+own -- `geom` and `scene` are not needed to use it -- and the four
+`examples/macos/metal-*.lisp` programs drive it directly. Each name below links
+to its own page; the [macOS GUI guide](../guides/objc-appkit.md) covers the
+surface as a whole.
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `metal:attach` | `(metal:attach win :depth t)` | a `metal:context`: a `CAMetalLayer` on the window's content view, its device and its command queue |
+| `metal:device` | `(metal:device ctx)` | the `MTLDevice` -- the GPU, and the receiver of every `new...` selector |
+| `metal:layer` | `(metal:layer ctx)` | the `CAMetalLayer` frames are presented to |
+| `metal:queue` | `(metal:queue ctx)` | the `MTLCommandQueue` command buffers are committed to |
+| `metal:library` | `(metal:library ctx source)` | an `MTLLibrary`: Metal Shading Language compiled at run time, signalling with the compiler's own diagnostics |
+| `metal:pipeline` | `(metal:pipeline ctx lib "v" "f")` | an `MTLRenderPipelineState` over two named shader functions; `:blend t` makes it additive |
+| `metal:depth-state` | `(metal:depth-state ctx :writes nil)` | an `MTLDepthStencilState`: how a pipeline uses the depth attachment |
+| `metal:floats` | `(metal:floats '(1 2 3))` | a packed single-float array -- a Metal buffer's exact bytes |
+| `metal:buffer` | `(metal:buffer ctx (geom:mesh s))` | an `MTLBuffer` holding those numbers, copied once and never changed |
+| `metal:shared-buffer` | `(metal:shared-buffer ctx 4096)` | an `MTLBuffer` in shared storage, whose contents the CPU rewrites |
+| `metal:upload` | `(metal:upload buf values)` | copies the numbers into a shared buffer |
+| `metal:uniform` | `(metal:uniform enc 1 m)` | sets a small per-frame uniform inline; `:stage` is `:vertex` (default) or `:fragment` |
+| `metal:frame` | `(metal:frame ctx fn)` | draws one frame, calling `fn` with the render command encoder; skips the frame when no drawable is free |
+| `metal:run` | `(metal:run ctx fn :fps 30)` | the timer that calls `metal:frame`, an `NSTimer` on the main thread |
+| `metal:resize` | `(metal:resize ctx 1024 640)` | follows the layer, the drawable size and the depth texture to a new content size |
+| `metal:set-clear-color` | `(metal:set-clear-color ctx '(0 0 0 1))` | the colour a frame starts from |
+| `metal:+triangle+` ... | `metal:+line+` | the enum members a drawing program spells out: the primitive, the cull mode, the winding and the depth comparison |
+
+## scene Package Functions
+
+The `scene` package is a 3-D viewer for `geom` solids, over `metal` and
+`appkit`: an orbit/pan/dolly camera, a ground grid, world and body axis triads,
+solid/wireframe shading and an animation hook. macOS only, for the same reason
+`metal` is. It is **not part of Common Lisp**; reference its names with the
+`scene:` qualifier, and `scene:viewer-state` is also a CLOS class name. A viewer
+is an instance rather than a set of globals, so two windows can exist in one
+image and orbit independently. **No triangle is touched by Lisp during a frame**
+-- each solid's mesh goes to the GPU once and a frame hands it one 4x4 matrix
+per solid. Each name below links to its own page; the [solid modeling
+guide](../guides/solid-modeling.md) covers the model half.
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `scene:viewer` | `(scene:viewer :title "arm")` | a window with a Metal surface on it, and the viewer that drives it |
+| `scene:add` | `(scene:add v s1 s2)` | the last solid added; its mesh reaches the GPU when it is first drawn |
+| `scene:drop` | `(scene:drop v s)` | the solid, removed from the viewer and its GPU buffers released |
+| `scene:clear` | `(scene:clear v)` | `nil`; every solid removed, the grid and camera untouched |
+| `scene:contents` | `(scene:contents v)` | the solids being drawn, in the order they were added |
+| `scene:fit` | `(scene:fit v)` | `nil`; the camera points at the contents and backs off far enough to frame them |
+| `scene:camera` | `(scene:camera v :azimuth 0.85)` | `nil`; sets any of azimuth / elevation / distance / target and leaves the rest |
+| `scene:grid` | `(scene:grid v :extent 1200 :spacing 100)` | `nil`; rebuilds the ground grid |
+| `scene:grid-color` | `(scene:grid-color v (geom:vec3 0.2 0.5 0.4))` | `nil`; the grid's colour |
+| `scene:background` | `(scene:background v '(0 0 0 1))` | `nil`; the colour a frame starts from |
+| `scene:shading` | `(scene:shading v :wireframe)` | `nil`; `:solid`, `:wireframe` or `:both` (the default) |
+| `scene:axes` | `(scene:axes v :both)` | `nil`; `:world` (the default), `:bodies`, `:both` or `nil` |
+| `scene:refresh` | `(scene:refresh v)` | `nil`; draws exactly one frame |
+| `scene:animate` | `(scene:animate v hook)` | `nil`; draws at 60 fps, calling `hook` once before each frame |
+| `scene:wait` | `(scene:wait v)` | `nil`, once the viewer's window has been closed |
+| `scene:window-of` | `(scene:window-of v)` | the `NSWindow` -- the escape hatch to `appkit:` and raw `objc:send` |
+| `scene:context-of` | `(scene:context-of v)` | the `metal:context` -- the escape hatch to the drawing surface |
+
 ## asdf Package Functions
 
 The `asdf` package is a limited, API-compatible subset of ASDF for loading

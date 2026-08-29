@@ -24,11 +24,14 @@ half of the binding (introspection, NSMethodSignature, KVC, a run-time class who
 `isEqual:` Foundation calls, an NSNotificationCenter observer) -- the field that gates a RUN leg on the platform
 and leaves the COMPILE legs alone, added for it -- so its output is checked on a Mac and
 its lowering everywhere: the one program that gates the blob on through the bare `objc:`
-verbs, with no `appkit:` reference and so no splice. `examples/macos/metal.lisp` +
-`metal-triangle.lisp` + `metal-cube.lisp` + `metal-robot-arm.lisp` (todo-525,
-2026-08-26) + `metal-pagoda-garden.lisp` (2026-08-27) are the GPU set, the first three the
-AppKit twins of `examples/browser/webgl-triangle`, `webgl-cube` and `webgl-robot-arm` and the
-last one with no browser twin -- "Metal" below.
+verbs, with no `appkit:` reference and so no splice. `examples/macos/metal-triangle.lisp` +
+`metal-cube.lisp` + `metal-robot-arm.lisp` (todo-525,
+2026-08-26) + `metal-pagoda-garden.lisp` (2026-08-27) are the GPU set, the first two the
+AppKit twins of `examples/browser/webgl-triangle` and `webgl-cube`, the third of
+`webgl-robot-arm` and the last one with no browser twin; the surface they share is the
+shipped **`metal`** package (todo-565, 2026-08-29), and the rung above it is **`scene`**,
+the 3-D viewer for `geom` solids (`examples/macos/scene-solids.lisp`,
+`scene-robot-arm.lisp`; `.kb/geom.md`) -- "Metal" below.
 
 What it is worth: the `rontolisp` native binary is the REPL people run, and `java:` cannot
 be INTERPRETED there at all (no reflection metadata). FFM needs none, so this is the one
@@ -221,12 +224,51 @@ the first cut sent the header down the wire and the two backends disagreed by tw
 
 ## Metal: the GPU is reachable, OpenGL is not
 
-`examples/macos/metal.lisp` (the shared surface, `webgl-common/gl.lisp`'s twin) plus
-`examples/macos/metal-triangle.lisp`, `metal-cube.lisp` and `metal-robot-arm.lisp` -- the
-AppKit answers to `examples/browser/webgl-triangle`, `webgl-cube` and `webgl-robot-arm` --
-and `metal-pagoda-garden.lisp`, which has no browser twin.
+The shared surface is the **shipped `metal` package**,
+`src/main/resources/am/ik/rontolisp/eval/metal.lisp` + `eval/MetalLibrary` (todo-565,
+2026-08-29). It is `webgl-common/gl.lisp`'s twin in substance -- that file imports a WebGL
+context from the page, this one builds a Metal one from the `objc:` verbs -- but the two
+sides are no longer symmetric in STATUS: the browser half is an example a demo copies, and
+this half ships inside the interpreter and the binary, loaded lazily on the first
+`metal:` resolution the way `appkit.lisp` is. It was an example (`examples/macos/metal.lisp`,
+reached by `(require :metal "metal.lisp")`) until `scene` needed it: a shipped package
+cannot reach an example by relative path, and four examples already shared the file, which
+is the same "a second consumer fixed the API" argument that promoted the `appkit` rungs.
+The consumers are `examples/macos/metal-triangle.lisp`, `metal-cube.lisp` and
+`metal-robot-arm.lisp` -- the AppKit answers to `examples/browser/webgl-triangle`,
+`webgl-cube` and `webgl-robot-arm` -- plus `metal-pagoda-garden.lisp`, which has no browser
+twin, and the `scene` viewer (`.kb/geom.md`). All four examples use `metal` DIRECTLY, with
+no `geom` and no `scene`: the promotion must not turn the surface into a private detail of
+the viewer.
 They add no Java: Metal is an Objective-C API almost end to end, so `objc:send` drives all
 of it.
+
+What the promotion froze, and what it costs:
+
+- **The exported names are the decisions a CALLER makes.** `attach` / `device` / `layer` /
+  `queue` / `library` / `pipeline` / `depth-state` / `floats` / `buffer` / `shared-buffer`
+  / `upload` / `uniform` / `frame` / `run` / `resize` / `set-clear-color`, the class
+  `metal:context`, and eleven enum members: the primitive (`+point+` `+line+` `+triangle+`
+  `+triangle-strip+`), the cull mode, the winding and the depth comparison. The pixel
+  formats, load/store actions, blend factors and storage modes stayed INTERNAL
+  (`metal::+bgra8-unorm+` and friends) because `attach`/`pipeline`/`frame` own them; a
+  caller never picks one. `+line+` = `MTLPrimitiveTypeLine` is new with the promotion --
+  every renderer that draws a grid or a wireframe needs it, and the spike had defined it
+  locally.
+- **The context is a CLOS class, not the hash table the example used.** The type is public
+  now, so its slots have to be the ones it means to promise; `(setf (gethash 'clear ctx))`
+  was part of the surface by accident and is `metal:set-clear-color` instead. `resize` is
+  the other addition: a resizable window needs the layer's frame, its drawable size and a
+  fresh depth texture, and only this file knows all three.
+- Its splice runs BEFORE `AppKitLibrary`'s in `CompileFrontend`, because `metal:run`'s
+  clock is `appkit:timer`; the interpreter reaches the same thing lazily.
+  `LibraryDefunPruner` keys it by name, so a program using `metal:frame` does not carry
+  `metal:depth-state` (`MetalLibraryTest`).
+- **Its selectors are now the shipped layer's**, so the closed native-image table applies
+  to all of them: `ObjcNativeImageForeignConfigTest`'s `SENT` list carries the depth
+  texture and depth-stencil descriptors, the blend setters, `newBufferWithLength:options:`,
+  `getBytes:length:`, `contents`, `setFragmentBytes:length:atIndex:` and the render-pass
+  depth attachment, which the robot arm and the garden sent as examples and nothing pinned.
 
 - **OpenGL cannot be reached and never will be.** `glClear` / `glDrawArrays` are plain C
   functions, outside `objc_msgSend` entirely; `objc:` binds no C entry points. Deprecated

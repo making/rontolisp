@@ -195,6 +195,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.MetalLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/metal\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SceneLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/scene\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.TorchLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/torch\\.lisp"

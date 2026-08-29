@@ -54,8 +54,11 @@ that package must be added to the list that travels. `am.ik.objc` is the Objecti
 AppKit through FFM (`.kb/objc.md`), reached from `eval/ObjcInterop` -> `eval/ObjcBridge` only,
 so `-Pweb` substitutes the one entry class; the JVM backend EMBEDS it the same way as `am.ik.gpu`
 (`codegen/jvm/JvmObjcRuntimeBuilder`, whose class list must follow the package, in an order the
-verifier accepts); the `appkit` widget layer is `appkit.lisp`, shipped like `linalg.lisp` and
-spliced on the compile path by `AppKitLibrary.process`. Neither package compiles to WASM.
+verifier accepts); the `appkit` widget layer is `appkit.lisp`, the `metal` drawing surface
+`metal.lisp` and the `scene` 3D viewer `scene.lisp`, all shipped like `linalg.lisp` and spliced
+on the compile path by `AppKitLibrary` / `MetalLibrary` / `SceneLibrary`'s `process` (in dependency
+order, `.kb/geom.md`). None of the four compiles to WASM -- `AppKitLibrary.firstObjcReference`
+answers for all of them and `CompileFrontend` refuses by the reference.
 
 Package dependency direction (no cycles allowed):
 

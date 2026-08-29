@@ -188,8 +188,53 @@ points -- a cross-section drawing in one call.
 The equator cuts the tube twice: the boundary and the hole. Outer loops are
 wound counter-clockwise seen from the normal's positive side, holes clockwise.
 
+## Seeing it: the `scene` viewer
+
+`geom` draws nothing -- it runs on every backend, and most of them have no
+screen. On **macOS** the `scene` package is the other half: a window with a
+Metal surface on it, an orbit/pan/dolly camera, a ground grid and axis triads.
+It ships inside the interpreter the way `geom` does, so a bare REPL is three
+lines away from a picture.
+
+```console
+CL-USER> (defvar *v* (scene:viewer :title "arm" :width 900 :height 640))
+CL-USER> (scene:add *v* (geom:cylinder :radius 60 :height 140))
+CL-USER> (scene:fit *v*)
+CL-USER> (scene:refresh *v*)
+```
+
+Drag to orbit, shift-drag to pan, scroll to dolly, resize the window. The camera
+gestures redraw by themselves; the mutators do not, because a loop adding sixty
+solids must not draw sixty frames -- the step after a batch of them is
+`scene:refresh`, or `scene:animate` for a scene that moves. A viewer is a CLOS
+instance rather than a set of globals, so two windows can exist in one image and
+orbit independently.
+
+**This is what the cached mesh above is for.** Each solid's model-space mesh
+goes into a GPU buffer of its own the first time it is drawn -- kept in that
+solid's `geom:user-data` -- and a frame sets one 4x4 model matrix and one colour
+per solid and issues one draw call. Nothing in Lisp touches a triangle during a
+frame, which is the difference between 9.0 ms and 380 ms on the model measured
+above. So a joint that moves costs one matrix, and `scene:animate`'s hook is
+free to re-pose the whole chain every frame.
+
+`scene:shading` picks `:solid`, `:wireframe` or `:both`; `scene:axes` picks
+`:world`, `:bodies` (each solid's OWN frame, which is what makes a kinematic
+chain readable), `:both` or `nil`. `scene:window-of` and `scene:context-of` are
+the escape hatches to `appkit:` and to the `metal` drawing surface underneath.
+
+`examples/macos/scene-solids.lisp` is every primitive on a shelf and
+`examples/macos/scene-robot-arm.lisp` a four-joint arm solving its own inverse
+kinematics onto a moving target -- the same machine as
+`examples/macos/metal-robot-arm.lisp`, which builds its geometry by hand, and
+the pair is worth reading together. Neither is in `examples.yaml`: they need a
+display. Both `scene` and `metal` are macOS only, and a `.wasm` output for a
+program that references either is refused by name, exactly as an `objc:` program
+is.
+
 ## What is not here
 
 Convex hulls, offsetting, filleting, mesh repair, mesh file formats, and
-anything that draws. A solid whose facets came from an STL file is just a
-`geom:polyhedron`.
+anything that draws -- drawing is `scene`'s half, above, and it is a consumer
+of this package rather than a part of it. A solid whose facets came from an STL
+file is just a `geom:polyhedron`.

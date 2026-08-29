@@ -103,6 +103,10 @@ public final class LispEvaluator {
 
 	private boolean geomLibraryLoaded = false;
 
+	private boolean metalLibraryLoaded = false;
+
+	private boolean sceneLibraryLoaded = false;
+
 	private boolean torchLibraryLoaded = false;
 
 	private boolean vecLibraryLoaded = false;
@@ -3561,6 +3565,22 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Evaluates the {@code metal} library (metal.lisp -- a Metal drawing surface over the
+	 * {@code objc:} verbs, {@code MetalLibrary}) into the global environment once.
+	 */
+	private void ensureMetalLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.metalLibraryLoaded) {
+				return;
+			}
+			this.metalLibraryLoaded = true;
+			for (LispVal form : MetalLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
 	 * The class-mention half of geom's lazy trigger, the {@link #ensureAsdfClassesFor}
 	 * twin: a {@code defmethod} specializer, a {@code typep}, a {@code typecase} clause,
 	 * a {@code make-instance} or a {@code defclass} superclass may name
@@ -4116,6 +4136,13 @@ public final class LispEvaluator {
 			// program whose FIRST usocket reference is a variable read must trigger the
 			// same lazy load as a function resolution.
 			ensureUsocketLoaded();
+			value = this.globalEnv.lookupOrNull(name);
+		}
+		if (value == null && !this.metalLibraryLoaded && MetalLibrary.isMetalQualified(name)) {
+			// The metal library exports CONSTANTS (metal:+triangle+, metal:+line+, the
+			// cull and compare modes), and a program may well read one before it calls
+			// any metal function -- so a variable read triggers the lazy load too.
+			ensureMetalLoaded();
 			value = this.globalEnv.lookupOrNull(name);
 		}
 		if (value == null && UiopLibrary.definesName(name)) {
@@ -7260,6 +7287,31 @@ public final class LispEvaluator {
 			// call.
 			if (!this.geomLibraryLoaded && GeomLibrary.isGeomQualified(name)) {
 				ensureGeomLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The metal package is a Lisp-source library (metal.lisp) over the objc:
+			// verbs: a Metal drawing surface on an appkit window, loaded the same way on
+			// the first resolution of a metal:-qualified function. Its appkit:timer
+			// clock loads the widget layer through this same hook on its first call.
+			if (!this.metalLibraryLoaded && MetalLibrary.isMetalQualified(name)) {
+				ensureMetalLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The scene package is a Lisp-source library (scene.lisp) over geom and
+			// metal: the 3-D viewer, loaded the same way on the first resolution of a
+			// scene:-qualified function. Everything it stands on -- geom, metal, linalg,
+			// appkit -- loads through this same hook on first call.
+			if (!this.sceneLibraryLoaded && SceneLibrary.isSceneQualified(name)) {
+				this.sceneLibraryLoaded = true;
+				for (LispVal form : SceneLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;
