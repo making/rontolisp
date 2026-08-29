@@ -703,6 +703,58 @@ categories:
       - { slug: appkit-close, name: "appkit:close" }
       - { slug: appkit-visible-p, name: "appkit:visible-p" }
       - { slug: appkit-wait, name: "appkit:wait" }
+  - title: "geom パッケージ (ソリッドモデリング)"
+    functions:
+      - { slug: geom-vec3, name: "geom:vec3" }
+      - { slug: geom-axis-vector, name: "geom:axis-vector" }
+      - { slug: geom-axis-angle-matrix, name: "geom:axis-angle-matrix" }
+      - { slug: geom-rpy-matrix, name: "geom:rpy-matrix" }
+      - { slug: geom-make-transform, name: "geom:make-transform" }
+      - { slug: geom-translation-of, name: "geom:translation-of" }
+      - { slug: geom-rotation-of, name: "geom:rotation-of" }
+      - { slug: geom-compose, name: "geom:compose" }
+      - { slug: geom-invert, name: "geom:invert" }
+      - { slug: geom-transform-point, name: "geom:transform-point" }
+      - { slug: geom-inverse-transform-point, name: "geom:inverse-transform-point" }
+      - { slug: geom-make-node, name: "geom:make-node" }
+      - { slug: geom-local-transform, name: "geom:local-transform" }
+      - { slug: geom-world-transform, name: "geom:world-transform" }
+      - { slug: geom-world-translation, name: "geom:world-translation" }
+      - { slug: geom-world-rotation, name: "geom:world-rotation" }
+      - { slug: geom-parent-of, name: "geom:parent-of" }
+      - { slug: geom-children-of, name: "geom:children-of" }
+      - { slug: geom-attach, name: "geom:attach" }
+      - { slug: geom-detach, name: "geom:detach" }
+      - { slug: geom-move, name: "geom:move" }
+      - { slug: geom-turn, name: "geom:turn" }
+      - { slug: geom-place, name: "geom:place" }
+      - { slug: geom-reorient, name: "geom:reorient" }
+      - { slug: geom-box, name: "geom:box" }
+      - { slug: geom-cylinder, name: "geom:cylinder" }
+      - { slug: geom-cone, name: "geom:cone" }
+      - { slug: geom-sphere, name: "geom:sphere" }
+      - { slug: geom-torus, name: "geom:torus" }
+      - { slug: geom-extrusion, name: "geom:extrusion" }
+      - { slug: geom-revolution, name: "geom:revolution" }
+      - { slug: geom-polyhedron, name: "geom:polyhedron" }
+      - { slug: geom-vertices-of, name: "geom:vertices-of" }
+      - { slug: geom-facets-of, name: "geom:facets-of" }
+      - { slug: geom-color-of, name: "geom:color-of" }
+      - { slug: geom-label-of, name: "geom:label-of" }
+      - { slug: geom-user-data, name: "geom:user-data" }
+      - { slug: geom-scale, name: "geom:scale" }
+      - { slug: geom-mesh, name: "geom:mesh" }
+      - { slug: geom-wireframe, name: "geom:wireframe" }
+      - { slug: geom-mesh-triangle-count, name: "geom:mesh-triangle-count" }
+      - { slug: geom-bounds, name: "geom:bounds" }
+      - { slug: geom-lower-of, name: "geom:lower-of" }
+      - { slug: geom-upper-of, name: "geom:upper-of" }
+      - { slug: geom-bounds-center, name: "geom:bounds-center" }
+      - { slug: geom-bounds-extent, name: "geom:bounds-extent" }
+      - { slug: geom-bounds-union, name: "geom:bounds-union" }
+      - { slug: geom-volume, name: "geom:volume" }
+      - { slug: geom-centroid, name: "geom:centroid" }
+      - { slug: geom-surface-area, name: "geom:surface-area" }
   - title: "asdf パッケージ (システム定義)"
     functions:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }

@@ -285,6 +285,18 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void geomLibraryFormsAreAResolverFixedPoint() {
+		// GeomLibrary splices its forms into programs both before resolution (the
+		// compile-path pre-pass) and after it (the interpreter's lazy load), which is
+		// only sound while geom.lisp is written in canonical shape: resolving it must
+		// be a no-op.
+		PackageResolver resolver = new PackageResolver();
+		for (LispVal form : am.ik.rontolisp.eval.GeomLibrary.forms()) {
+			assertThat(resolver.resolve(form).print()).isEqualTo(form.print());
+		}
+	}
+
+	@Test
 	void urlLibraryFormsAreAResolverFixedPoint() {
 		// UrlLibrary splices its forms into programs both before resolution (the
 		// compile-path pre-pass) and after it (the interpreter's lazy load), which is

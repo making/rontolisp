@@ -189,6 +189,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.GeomLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/geom\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.TorchLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/torch\\.lisp"

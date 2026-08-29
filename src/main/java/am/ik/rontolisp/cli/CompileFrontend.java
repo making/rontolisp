@@ -11,6 +11,7 @@ import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.ExitLibrary;
 import am.ik.rontolisp.eval.FfiInterop;
+import am.ik.rontolisp.eval.GeomLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HostFetchLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
@@ -307,14 +308,15 @@ final class CompileFrontend {
 		// all -- reaches the cell too; a program that never names unread-char is
 		// returned unchanged.
 		// TorchLibrary runs BEFORE LinalgLibrary so the linalg: references inside the
-		// spliced torch definitions pull the linalg library in too. AppKitLibrary splices
-		// appkit.lisp (the widget layer over the objc: verbs) the same way, so a JVM
-		// class compiled from an appkit: program carries the widgets and, through their
-		// objc:send, gates the embedded binding on.
+		// spliced torch definitions pull the linalg library in too, and GeomLibrary
+		// (solid modeling over the same kernels) sits beside it for the same reason.
+		// AppKitLibrary splices appkit.lisp (the widget layer over the objc: verbs) the
+		// same way, so a JVM class compiled from an appkit: program carries the widgets
+		// and, through their objc:send, gates the embedded binding on.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(AppKitLibrary.process(LinalgLibrary
-						.process(TorchLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded)))))),
+					UrlLibrary.process(AppKitLibrary.process(LinalgLibrary.process(GeomLibrary
+						.process(TorchLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /

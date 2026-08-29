@@ -81,11 +81,12 @@ class JvmOsrBackedgeCorpusTest {
 			throw new java.io.FileNotFoundException(path);
 		}, null, List.of(), am.ik.rontolisp.reader.Features.JVM);
 		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary.process(
-				am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.LinalgLibrary
-					.process(am.ik.rontolisp.eval.TorchLibrary.process(am.ik.rontolisp.eval.JsonLibrary
-						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
-							.process(am.ik.rontolisp.eval.HttpReactorLibrary.process(inlined),
-									am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined))))))),
+				am.ik.rontolisp.eval.UrlLibrary
+					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.GeomLibrary
+						.process(am.ik.rontolisp.eval.TorchLibrary.process(am.ik.rontolisp.eval.JsonLibrary.process(
+								am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
+									.process(am.ik.rontolisp.eval.HttpReactorLibrary.process(inlined),
+											am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))),
 				am.ik.rontolisp.reader.Features.JVM);
 		return am.ik.rontolisp.eval.LibraryDefunPruner.prune(am.ik.rontolisp.eval.UnreadCharLibrary
 			.process(am.ik.rontolisp.eval.UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary

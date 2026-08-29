@@ -101,6 +101,8 @@ public final class LispEvaluator {
 
 	private boolean appkitLibraryLoaded = false;
 
+	private boolean geomLibraryLoaded = false;
+
 	private boolean torchLibraryLoaded = false;
 
 	private boolean vecLibraryLoaded = false;
@@ -3543,6 +3545,35 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Evaluates the {@code geom} library (geom.lisp -- solid modeling over linalg,
+	 * {@code GeomLibrary}) into the global environment once.
+	 */
+	private void ensureGeomLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.geomLibraryLoaded) {
+				return;
+			}
+			this.geomLibraryLoaded = true;
+			for (LispVal form : GeomLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * The class-mention half of geom's lazy trigger, the {@link #ensureAsdfClassesFor}
+	 * twin: a {@code defmethod} specializer, a {@code typep}, a {@code typecase} clause,
+	 * a {@code make-instance} or a {@code defclass} superclass may name
+	 * {@code geom:solid} before any geom FUNCTION has been resolved, and without this it
+	 * would see no such class. Cheap after the first load (one boolean).
+	 */
+	private void ensureGeomClassesFor(LispVal form) {
+		if (!this.geomLibraryLoaded && GeomLibrary.mentionsGeomClass(form)) {
+			ensureGeomLoaded();
+		}
+	}
+
+	/**
 	 * A runtime system designator that also accepts the component METAOBJECT
 	 * {@code asdf:find-system} answers (rove passes the object straight back into
 	 * {@code load-system}): an asdf component instance answers its name slot, anything
@@ -4703,14 +4734,17 @@ public final class LispEvaluator {
 					return evalDefstruct(cons, env);
 				case LispNames.DEFCLASS:
 					ensureAsdfClassesFor(cons);
+					ensureGeomClassesFor(cons);
 					return evalDefclass(cons, env);
 				case LispNames.DEFGENERIC:
 					return evalDefgeneric(cons, env);
 				case LispNames.DEFMETHOD:
 					ensureAsdfClassesFor(cons);
+					ensureGeomClassesFor(cons);
 					return evalDefmethod(cons, env);
 				case LispNames.MAKE_INSTANCE:
 					ensureAsdfClassesFor(cons);
+					ensureGeomClassesFor(cons);
 					return eval(LispMacroExpander.expandMakeInstance(cons, this.closRegistry), env);
 				case LispNames.CHANGE_CLASS:
 					return eval(LispMacroExpander.expandChangeClass(resolveChangeClassDesignator(cons, env),
@@ -5143,12 +5177,15 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandPsetf(cons), env);
 			case LispNames.TYPECASE:
 				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
 				return eval(LispMacroExpander.expandTypecase(cons, this.closRegistry), env);
 			case LispNames.ETYPECASE:
 				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
 				return eval(LispMacroExpander.expandEtypecase(cons, this.closRegistry), env);
 			case LispNames.CTYPECASE:
 				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
 				return eval(LispMacroExpander.expandCtypecase(cons, this.closRegistry), env);
 			case LispNames.CHECK_TYPE:
 				return eval(LispMacroExpander.expandCheckType(cons), env);
@@ -5201,6 +5238,7 @@ public final class LispEvaluator {
 			case LispNames.TYPEP:
 				seedMopClassesForTypepForm(cons);
 				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
 				return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
 			case LispNames.PRINT_UNREADABLE_OBJECT:
 				return eval(LispMacroExpander.expandPrintUnreadableObject(cons), env);
@@ -7210,6 +7248,18 @@ public final class LispEvaluator {
 				for (LispVal form : AppKitLibrary.forms()) {
 					eval(form, this.globalEnv);
 				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The geom package is a Lisp-source library (geom.lisp) over linalg: solid
+			// modeling, loaded the same way on the first resolution of a geom:-qualified
+			// function. Unlike appkit it needs nothing of the host -- the linalg
+			// definitions its bodies call load through this same hook on their first
+			// call.
+			if (!this.geomLibraryLoaded && GeomLibrary.isGeomQualified(name)) {
+				ensureGeomLoaded();
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;

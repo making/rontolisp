@@ -380,6 +380,26 @@ public final class PackageRegistry {
 	private static final List<String> APPKIT_FUNCTION_NAMES = sorted(APPKIT_FUNCTIONS);
 
 	/**
+	 * The names exported by the {@code geom} package (solid modeling: rigid transforms, a
+	 * scene graph and boundary-represented solids), implemented in {@code geom.lisp} (see
+	 * {@code GeomLibrary}). Plain strings, like {@code linalg}: they exist only as
+	 * Lisp-source definitions. The three type names ({@code transform}, {@code node},
+	 * {@code solid}) and {@code bounds} are CLOS classes rather than functions, and are
+	 * registered here for the same reason -- a {@code (typep x 'geom:solid)} spelling has
+	 * to resolve.
+	 */
+	private static final Set<String> GEOM_FUNCTIONS = Set.of("TRANSFORM", "MAKE-TRANSFORM", "TRANSLATION-OF",
+			"ROTATION-OF", "COMPOSE", "INVERT", "TRANSFORM-POINT", "INVERSE-TRANSFORM-POINT", "AXIS-ANGLE-MATRIX",
+			"RPY-MATRIX", "AXIS-VECTOR", "VEC3", "NODE", "MAKE-NODE", "LOCAL-TRANSFORM", "WORLD-TRANSFORM",
+			"WORLD-TRANSLATION", "WORLD-ROTATION", "PARENT-OF", "CHILDREN-OF", "ATTACH", "DETACH", "MOVE", "TURN",
+			"PLACE", "REORIENT", "SOLID", "BOX", "CYLINDER", "CONE", "SPHERE", "TORUS", "EXTRUSION", "REVOLUTION",
+			"POLYHEDRON", "FACETS-OF", "VERTICES-OF", "COLOR-OF", "LABEL-OF", "SCALE", "MESH", "WIREFRAME",
+			"MESH-TRIANGLE-COUNT", "USER-DATA", "BOUNDS", "LOWER-OF", "UPPER-OF", "BOUNDS-CENTER", "BOUNDS-EXTENT",
+			"BOUNDS-UNION", "VOLUME", "CENTROID", "SURFACE-AREA");
+
+	private static final List<String> GEOM_FUNCTION_NAMES = sorted(GEOM_FUNCTIONS);
+
+	/**
 	 * The functions exported by the {@code usocket} package (a usocket-compatible shim
 	 * over the {@code rontolisp:tcp-*} built-ins), implemented in {@code usocket.lisp}
 	 * (see {@code UsocketLibrary}). Plain strings, like {@code linalg}: no evaluator or
@@ -532,8 +552,8 @@ public final class PackageRegistry {
 	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
 			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
 					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
-					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
-					LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
+					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG,
+					LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
 					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
 					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
 					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
@@ -625,6 +645,11 @@ public final class PackageRegistry {
 		// A Cocoa widget layer over objc:, implemented once in appkit.lisp and loaded on
 		// demand (AppKitLibrary). Does not use cl; every function is external.
 		define(new LispPackage(LispNames.APPKIT_PKG, List.of(), new HashSet<>(APPKIT_FUNCTIONS)));
+		// Solid modeling over the linalg kernels, implemented once in geom.lisp and
+		// spliced/loaded on demand (GeomLibrary). Backend-independent -- it reaches for
+		// nothing but linalg -- so unlike appkit it runs everywhere. Does not use cl;
+		// every registered name is external.
+		define(new LispPackage(LispNames.GEOM_PKG, List.of(), new HashSet<>(GEOM_FUNCTIONS)));
 		// C interop through the foreign function API (no reflection, so it runs in the
 		// native binary too, against the registered shape grid): the foreign primitives
 		// CFFI's backend stands on (eval.FfiInterop over am.ik.ffi). Does not use cl;
@@ -998,6 +1023,14 @@ public final class PackageRegistry {
 	 */
 	public static List<String> appkitFunctionNames() {
 		return APPKIT_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code geom} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> geomFunctionNames() {
+		return GEOM_FUNCTION_NAMES;
 	}
 
 	/**
