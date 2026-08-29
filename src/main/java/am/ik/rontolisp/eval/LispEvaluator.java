@@ -4068,9 +4068,13 @@ public final class LispEvaluator {
 			case LispFunction f -> f;
 			case LispLambda l -> l;
 			case LispHashTable h -> h;
-			case LispArray a -> a;
-			case LispFloatArray fa -> fa;
-			case am.ik.rontolisp.LispIntVector iv -> iv;
+			// An array literal is a CONSTRUCTOR, not a constant: each evaluation answers
+			// a
+			// fresh, independently mutable array, which is what both compile backends
+			// already emit at the site (LiteralArrays).
+			case LispArray a -> LiteralArrays.materialize(a);
+			case LispFloatArray fa -> LiteralArrays.materialize(fa);
+			case am.ik.rontolisp.LispIntVector iv -> LiteralArrays.materialize(iv);
 			case LispJavaObject j -> j;
 			case LispObjcObject o -> o;
 			case am.ik.rontolisp.LispForeignPointer p -> p;
@@ -7673,6 +7677,12 @@ public final class LispEvaluator {
 
 	private LispVal evalQuote(LispCons cons) {
 		LispCons rest = (LispCons) cons.cdr();
+		// Hands the datum back AS IS, and must: at run time a (quote <value>) form is
+		// also how a LIVE value is spliced back into a form for re-evaluation
+		// (quoteValue, four sites, one of them read-sequence's Gray-dispatch rebuild),
+		// so materializing an array here would hand a destructive operation a copy.
+		// That is why '#(1 2 3) is the array the reader built while a bare #(1 2 3) is
+		// fresh -- see .kb/array-literals.md, "What quote still shares".
 		return rest.car();
 	}
 

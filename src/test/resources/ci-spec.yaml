@@ -3888,6 +3888,49 @@ cases:
       #3A(((1 2) (3 4)) ((5 6) (7 8)))
       6
       #2A((1 9) (3 4))
+  # An array literal is a CONSTRUCTOR, not a constant (.kb/array-literals.md): every
+  # evaluation answers a fresh, independently mutable array, so two evaluations are never
+  # eq and a write through one is invisible to the next. This is what PureBuiltinFolder's
+  # packed-table fold rests on, and it must hold for every array syntax on every backend.
+  - name: array-literal-freshness-cross-backend
+    source: |
+      (defun ci-alit-vec () #(1 2 3))
+      (defun ci-alit-rank2 () #2A((1 2) (3 4)))
+      (defun ci-alit-bits () #*1011)
+      (defun ci-alit-single () #f(1.0 2.0))
+      (defun ci-alit-double () #d(1.0 2.0))
+      (defun ci-alit-octets () #8@(1 2 3))
+      (defun ci-array-literal-freshness ()
+        (print (list (eq (ci-alit-vec) (ci-alit-vec)) (eq (ci-alit-rank2) (ci-alit-rank2))
+                     (eq (ci-alit-bits) (ci-alit-bits)) (eq (ci-alit-single) (ci-alit-single))
+                     (eq (ci-alit-double) (ci-alit-double)) (eq (ci-alit-octets) (ci-alit-octets))))
+        (let ((v (ci-alit-vec))) (setf (aref v 0) 99) (print v))
+        (print (ci-alit-vec))
+        (let ((m (ci-alit-rank2))) (setf (aref m 0 1) 99) (print m))
+        (print (ci-alit-rank2))
+        (let ((b (ci-alit-bits))) (setf (aref b 0) 0) (print b))
+        (print (ci-alit-bits))
+        (let ((s (ci-alit-single))) (setf (aref s 0) 99) (print s))
+        (print (ci-alit-single))
+        (let ((d (ci-alit-double))) (setf (aref d 0) 99) (print d))
+        (print (ci-alit-double))
+        (let ((o (ci-alit-octets))) (setf (aref o 0) 99) (print o))
+        (print (ci-alit-octets)))
+      (ci-array-literal-freshness)
+    expected: |
+      (NIL NIL NIL NIL NIL NIL)
+      #(99 2 3)
+      #(1 2 3)
+      #2A((1 99) (3 4))
+      #2A((1 2) (3 4))
+      #(0 0 1 1)
+      #(1 0 1 1)
+      #f(99.0 2.0)
+      #f(1.0 2.0)
+      #d(99.0 2.0)
+      #d(1.0 2.0)
+      #(99 2 3)
+      #(1 2 3)
   - name: vector-svref-and-array-introspection-cross-backend
     source: |
       (defun ci-array-intro ()

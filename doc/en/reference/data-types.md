@@ -312,6 +312,21 @@ quoting string elements and `princ` not:
 (make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
 ```
 
+An array literal is a **constructor, not a constant**: every evaluation of it builds a
+fresh, independently mutable array, so a literal in a function body is a convenient
+spelling for the array it describes and writing into the result never reaches the next
+call. This holds for every array syntax (`#(...)`, `#nA(...)`, `#*1011`, `#d(...)`,
+`#f(...)`) on every backend. Common Lisp instead leaves a literal shared and its
+mutation undefined, so `(eq (f) (f))` below answers `T` in a conforming Lisp and `NIL`
+here:
+
+```lisp
+(defun tri () #(1 2 3))
+(eq (tri) (tri))                          ; => NIL
+(let ((v (tri))) (setf (aref v 0) 99) v)  ; => #(99 2 3)
+(tri)                                     ; => #(1 2 3)
+```
+
 ### Packed float arrays (`#d` / `#f`)
 
 `#d(...)` and `#f(...)` denote a **packed float array**: a float-typed array whose

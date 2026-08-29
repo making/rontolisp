@@ -170,8 +170,11 @@ The rule this pass commits to, in order:
   backends a string literal materializes FRESH on each evaluation (the JVM copies the
   constant-pool string into its mutable representation; the wasm backend allocates a
   `$str_bytes` array), so a folded `(string-upcase "ab")` is as mutable and as
-  unshared as the call it replaced. On the INTERPRETER a literal is one shared object
-  and mutating it persists — which is exactly why the interpreter does not fold.
+  unshared as the call it replaced. On the INTERPRETER a STRING literal is one shared
+  object and mutating it persists — which is exactly why the interpreter does not fold.
+  (Since 2026-08-29 that is true of the string literal only: an ARRAY literal is fresh
+  per evaluation on the interpreter too, `.kb/array-literals.md`. The string half still
+  holds, so the interpreter still does not fold.)
   A PACKED INTEGER VECTOR result is in for that same reason, and it is the reason
   rather than the type that decides: both compile backends allocate the array and fill
   it AT THE SITE (`JvmQuoteCompiler.compileLiteralIntVector` builds a new `long[]`;

@@ -9679,6 +9679,51 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void everyArrayLiteralSyntaxIsFreshAtEveryEvaluation() {
+		// .kb/array-literals.md: a literal is a constructor, not a constant -- the same
+		// answer both compile backends give, so all four agree.
+		assertThat(eval("(let ((f (lambda () #(1 2 3)))) (eq (funcall f) (funcall f)))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((f (lambda () #2A((1 2) (3 4))))) (eq (funcall f) (funcall f)))"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((f (lambda () #*1011))) (eq (funcall f) (funcall f)))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((f (lambda () #f(1.0 2.0)))) (eq (funcall f) (funcall f)))"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((f (lambda () #d(1.0 2.0)))) (eq (funcall f) (funcall f)))"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((f (lambda () #8@(1 2 3)))) (eq (funcall f) (funcall f)))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void aQuotedArrayIsStillTheDatumOnTheInterpreter() {
+		// The residual .kb/array-literals.md records: quote hands back the datum, because
+		// (quote <value>) is also the interpreter's live-value splice. '#(...) therefore
+		// stays shared here while both compile backends rebuild it -- the same thing
+		// quote already does with a cons, and it moves with that, not with this.
+		assertThat(eval("(let ((f (lambda () '#(1 2 3)))) (eq (funcall f) (funcall f)))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void writingThroughAnArrayLiteralDoesNotReachTheNextEvaluation() {
+		assertThat(eval("""
+				(progn (defun %lit-vec () #(1 2 3))
+				       (let ((v (%lit-vec))) (setf (aref v 0) 99))
+				       (%lit-vec))
+				""").print()).isEqualTo("#(1 2 3)");
+		assertThat(eval("""
+				(progn (defun %lit-single () #f(1.0 2.0))
+				       (let ((v (%lit-single))) (setf (aref v 0) 99))
+				       (%lit-single))
+				""").print()).isEqualTo("#f(1.0 2.0)");
+	}
+
+	@Test
+	void anArrayNestedInAnArrayLiteralIsFreshToo() {
+		// The compile backends rebuild the whole literal, inner arrays included.
+		assertThat(eval("(let ((f (lambda () #(#(1 2) #(3 4))))) (eq (aref (funcall f) 0) (aref (funcall f) 0)))"))
+			.isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void lengthOfVectorReturnsElementCount() {
 		assertThat(eval("(length (make-array 5 :initial-element 0))")).isEqualTo(new LispInteger(5));
 		assertThat(eval("(length #(10 20 30))")).isEqualTo(new LispInteger(3));
