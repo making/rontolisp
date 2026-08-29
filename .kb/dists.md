@@ -42,11 +42,33 @@ which is the whole ordering API: `--dist ultralisp` = quicklisp then ultralisp,
 is that the list is short and an explicit order is auditable where a numeric preference
 per dist is not.
 
-**Within one release the `.asd` directories are SORTED, not walked.** `ensureAvailable`
+**A release contributes the `.asd` files its dist index NAMES, not every `.asd` in its
+tarball.** `releases.txt`'s trailing `file...` column lists a release's system files as
+paths relative to the extraction prefix (`alexandria.asd`, `src/com.inuoe.jzon.asd`), and
+`collectAsdDirs` puts the directories holding THOSE on the search path -- the same set
+Quicklisp itself registers. Walking the whole tarball instead (before 2026-08-29) also
+contributed a release's VENDORED snapshot of ANOTHER library --
+`iterate-release-*/ext/alexandria/alexandria.asd`, `cffi-*/uffi-compat/uffi.asd`, which no
+dist index attributes to that release -- where it competed for the same system name with
+that library's own release. The winner was the PROJECT order in `ensureAvailable`, i.e.
+whichever release the program quickloaded first, so `(ql:quickload "iterate")` then
+`(ql:quickload "alexandria")` got iterate's snapshot and the two forms in the other order
+got a different alexandria. The contribution is per DIRECTORY, not per file, because a
+directory is what `AsdfSystems.locate` consumes (it asks each one for `NAME.asd`): a
+release's own extra `.asd` beside a named one stays reachable (cl-sqlite's
+`sqlite-tests.asd`, trivia's `trivia.benchmark.asd`), which is what an unindexed secondary
+system relies on. The whole-release walk remains the FALLBACK for a release whose index
+names no `.asd` that exists -- a dist is not obliged to write the column, and contributing
+nothing would make the system unloadable. What this moved on a real cache (nothing:
+6 directories dropped out of 94, no emitted byte changed) is measured in
+`.kb/emitted-output-determinism.md`.
+
+**Within one release the contributed `.asd` directories are SORTED.** `ensureAvailable`
 returns one search path per requested system: the projects in dependency order (the
-`LinkedHashMap` `collectProjects` fills), and within each project every directory holding
-a `.asd`, in path order (`addAsdDirs`). The sort is not cosmetic -- `Files.walk` hands
-back the host's directory order, so before it (2026-08-29) a release shipping
+`LinkedHashMap` `collectProjects` fills), and within each project every contributed
+directory, in path order (`addAsdDirs`). The sort is not cosmetic -- the index's file
+order is the publisher's, and the fallback walk hands back the host's directory order, so
+before it (2026-08-29) a release shipping
 `foo.asd` beside `test/foo.asd` gave two developers two different search paths and
 therefore two different compiled programs from one lockfile. Sorting also settles that
 case by rule rather than by luck: a parent path is a prefix of its children, so a
@@ -92,7 +114,12 @@ network, which is the same message it had before dists existed.
 **Coverage**: `DistClientTest` (index parsing, extraction, caching, transitive deps, the
 secondary-`NAME/SUB` fallback, the two search-path order tests above
 (`theAsdDirectoriesOfAReleaseAreSortedWhateverOrderTheHostWalkedThemIn`,
-`aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd`), plus the multi-dist group: second-dist-only system, first
+`aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd`), the three
+what-a-release-contributes tests
+(`aVendoredExtCopyOfAnotherLibraryNeverReachesTheSearchPath`,
+`aVendoredCopyDoesNotShadowThatLibrarysOwnReleaseInEitherQuickloadOrder`,
+`aReleaseWhoseIndexNamesNoSystemFileFallsBackToTheWholeReleaseWalk`),
+plus the multi-dist group: second-dist-only system, first
 dist wins + no index fetch behind it, explicit reordering, URL-vs-name identity, unknown
 spec, `update-dist` refetch and its not-installed error), `LispEvaluatorQuicklispTest`
 (the interpreter's `install-dist` + `quickload` and the "installed dists (quicklisp)"

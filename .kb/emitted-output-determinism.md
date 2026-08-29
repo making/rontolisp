@@ -167,6 +167,32 @@ that ships a top-level `foo.asd` beside a `test/foo.asd`, where the two develope
 filesystems disagree about which one `locate` sees first. That case is synthesized by
 `DistClientTest#aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd`.
 
+## What narrowing a release's contribution moved (2026-08-29)
+
+The follow-up to the sort: a release now contributes only the `.asd` files its dist index
+names, instead of every one in its tarball (`.kb/dists.md`). Same method, same host cache
+(82 releases, 194 `.asd` files):
+
+- **Six directories out of 94 stop being contributed**, all of them a vendored copy of
+  ANOTHER library: `cffi-20260101-git/uffi-compat` and iterate's five
+  `ext/{alexandria,asdf-flv,fiveam,rt,trivial-backtrace}`. Every other release's set is
+  unchanged, jzon's `src/` + `test/` and mgl-pax's eight directories included -- those
+  paths are all named by `releases.txt`.
+- **Two unindexed `.asd` files stay reachable** because the contribution is per
+  directory: cl-sqlite's `sqlite-tests.asd` and trivia's `trivia.benchmark.asd` sit in a
+  directory the index already names. Both are the release's OWN extra system, which is the
+  distinction that makes directory granularity the right level.
+- **No emitted bytes moved.** All 21 quicklisp-backed `examples/` programs that compile
+  offline here were compiled to `.class` before and after: md5-identical, every one
+  (including cffi-sqlite, whose release is one of the two that lost a directory). Compile
+  to a FIXED output path when comparing -- the emitted class name is derived from the `-o`
+  path, so two temp directories differ in every byte for that reason alone.
+- **The behavior change is real, and only visible across two releases**: with the warm
+  cache, `(ql:quickload "iterate")` + `(ql:quickload "alexandria")` +
+  `(asdf:find-system "alexandria/tests")` raised "system not registered" before and prints
+  `"found"` after, on all four backends. Pinned without a network by
+  `DistClientTest#aVendoredCopyDoesNotShadowThatLibrarysOwnReleaseInEitherQuickloadOrder`.
+
 ## Rules
 
 - A collection whose iteration order can reach emitted bytes, generated AST, or WIT
@@ -191,8 +217,11 @@ filesystems disagree about which one `locate` sees first. That case is synthesiz
   (the ordering itself, on a synthetic walk order) and
   `#aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd` (the consequence: a
   release's top-level `.asd` beats one nested under it, because a parent path is a
-  prefix of its children). (`eval/SourceLoader.list` is also unsorted but only feeds
-  the RUNTIME `directory` built-in, which CL leaves unordered anyway.)
+  prefix of its children). The walk is now only the fallback -- a release contributes
+  the `.asd` files its dist index names -- and the sort still covers it, plus the
+  publisher's arbitrary order in that index column. (`eval/SourceLoader.list` is also
+  unsorted but only feeds the RUNTIME `directory` built-in, which CL leaves unordered
+  anyway.)
 - Generated temp names (`__mv<N>`, `__db<N>`, `__flet<N>`, `gensym`) come from
   counters and may legitimately renumber when the amount of macro-time evaluation
   changes (`.kb/flet-labels.md`, `.kb/gensym-macroexpand.md`). Renumbering across two

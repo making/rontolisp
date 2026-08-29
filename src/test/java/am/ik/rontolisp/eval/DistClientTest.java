@@ -34,7 +34,7 @@ class DistClientTest {
 		DistTestSupport.RecordingDownloader downloader = DistTestSupport.dist(//
 				"# project system-file system-name [dependency1..dependencyN]\nmylib mylib mylib\n", //
 				"# project url size file-md5 content-sha1 prefix [system-file1..system-fileN]\n" + "mylib "
-						+ MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+						+ MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib.asd\n", //
 				Map.of(MYLIB_TARBALL_URL, DistTestSupport.tarGz(Map.of(//
 						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
 						"mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)"))));
@@ -53,7 +53,7 @@ class DistClientTest {
 	void reusesTheCacheOnASecondCall(@TempDir Path base) throws IOException {
 		DistTestSupport.RecordingDownloader downloader = DistTestSupport.dist(//
 				"mylib mylib mylib\n", //
-				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib.asd\n", //
 				Map.of(MYLIB_TARBALL_URL, DistTestSupport.tarGz(Map.of(//
 						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
 						"mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)"))));
@@ -71,8 +71,8 @@ class DistClientTest {
 	void resolvesTransitiveDependencies(@TempDir Path base) throws IOException {
 		DistTestSupport.RecordingDownloader downloader = DistTestSupport.dist(//
 				"parent parent parent child\nchild child child\n", //
-				"parent " + MYLIB_TARBALL_URL + " 100 md5 sha1 parent-1.0 parent\n" //
-						+ "child " + CHILD_TARBALL_URL + " 100 md5 sha1 child-1.0 child\n", //
+				"parent " + MYLIB_TARBALL_URL + " 100 md5 sha1 parent-1.0 parent.asd\n" //
+						+ "child " + CHILD_TARBALL_URL + " 100 md5 sha1 child-1.0 child.asd\n", //
 				Map.of(//
 						MYLIB_TARBALL_URL,
 						DistTestSupport.tarGz(Map.of("parent-1.0/parent.asd",
@@ -94,7 +94,7 @@ class DistClientTest {
 	@Test
 	void reportsAnUnknownSystemClearly(@TempDir Path base) {
 		DistTestSupport.RecordingDownloader downloader = DistTestSupport.dist("mylib mylib mylib\n",
-				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib\n", Map.of());
+				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib.asd\n", Map.of());
 		DistClient client = new DistClient(base, downloader);
 
 		assertThatThrownBy(() -> client.ensureAvailable("nope")).isInstanceOf(IOException.class)
@@ -112,7 +112,7 @@ class DistClientTest {
 		// name against that same file and reports loudly if it is not defined there.
 		DistTestSupport.RecordingDownloader downloader = DistTestSupport.dist(//
 				"mylib mylib mylib\n", //
-				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib.asd\n", //
 				Map.of(MYLIB_TARBALL_URL, DistTestSupport.tarGz(Map.of(//
 						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
 						"mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)"))));
@@ -155,6 +155,101 @@ class DistClientTest {
 				"/dist/mylib-1.0/test");
 	}
 
+	// --- what a release contributes to the search path ---
+
+	private static final String ITERATE_TARBALL_URL = "http://fake.quicklisp/archive/iterate-1.0.tar.gz";
+
+	private static final String ALEXANDRIA_TARBALL_URL = "http://fake.quicklisp/archive/alexandria-1.0.tar.gz";
+
+	/**
+	 * The real shape of the shadow: iterate's release vendors a snapshot of alexandria
+	 * under {@code ext/}, which no dist index attributes to the iterate release, while
+	 * alexandria has a release of its own.
+	 */
+	private static DistTestSupport.RecordingDownloader vendoredExtDist() {
+		LinkedHashMap<String, String> iterate = new LinkedHashMap<>();
+		iterate.put("iterate-1.0/iterate.asd", "(defsystem \"iterate\" :components ((:file \"iterate\")))");
+		iterate.put("iterate-1.0/iterate.lisp", "(defun iter () 1)");
+		iterate.put("iterate-1.0/ext/alexandria/alexandria.asd",
+				"(defsystem \"alexandria\" :components ((:file \"vendored\")))");
+		iterate.put("iterate-1.0/ext/alexandria/vendored.lisp", "(defun alexandria-answer () 0)");
+		return DistTestSupport.dist(//
+				"iterate iterate iterate\nalexandria alexandria alexandria\n", //
+				"iterate " + ITERATE_TARBALL_URL + " 100 md5 sha1 iterate-1.0 iterate.asd\n" //
+						+ "alexandria " + ALEXANDRIA_TARBALL_URL + " 100 md5 sha1 alexandria-1.0 alexandria.asd\n", //
+				Map.of(//
+						ITERATE_TARBALL_URL, DistTestSupport.tarGz(iterate), //
+						ALEXANDRIA_TARBALL_URL, DistTestSupport.tarGz(Map.of(//
+								"alexandria-1.0/alexandria.asd",
+								"(defsystem \"alexandria\" :components ((:file \"alexandria\")))", //
+								"alexandria-1.0/alexandria.lisp", "(defun alexandria-answer () 42)"))));
+	}
+
+	@Test
+	void aVendoredExtCopyOfAnotherLibraryNeverReachesTheSearchPath(@TempDir Path base) throws IOException {
+		// A release contributes the .asd files its dist index attributes to it, which is
+		// what Quicklisp itself registers -- so the snapshot iterate happens to carry
+		// under ext/ is not a candidate for the name "alexandria" at all.
+		DistClient client = new DistClient(base, vendoredExtDist());
+
+		List<String> asdDirs = client.ensureAvailable("iterate");
+
+		Path extracted = base.resolve("quicklisp").resolve("software").resolve("iterate-1.0");
+		assertThat(asdDirs).containsExactly(extracted.toAbsolutePath().normalize().toString());
+	}
+
+	@Test
+	void aVendoredCopyDoesNotShadowThatLibrarysOwnReleaseInEitherQuickloadOrder(@TempDir Path base) throws IOException {
+		// The consequence, pinned the way a program meets it: quickload accumulates each
+		// call's directories onto one search path, so before this rule the release
+		// loaded FIRST decided which alexandria the program got.
+		List<String> iterateFirst = quickloadPath(base.resolve("a"), "iterate", "alexandria");
+		List<String> alexandriaFirst = quickloadPath(base.resolve("b"), "alexandria", "iterate");
+
+		// Both orders resolve "alexandria" to alexandria's own release.
+		assertThat(AsdfSystems.locate("alexandria", iterateFirst, DistClientTest::readFile).source())
+			.contains("(:file \"alexandria\")");
+		assertThat(AsdfSystems.locate("alexandria", alexandriaFirst, DistClientTest::readFile).source())
+			.contains("(:file \"alexandria\")");
+	}
+
+	/** The search path a program gets by quickloading the named systems in order. */
+	private static List<String> quickloadPath(Path base, String... systems) throws IOException {
+		DistClient client = new DistClient(base, vendoredExtDist());
+		List<String> path = new ArrayList<>();
+		for (String system : systems) {
+			for (String dir : client.ensureAvailable(system)) {
+				if (!path.contains(dir)) {
+					path.add(dir);
+				}
+			}
+		}
+		return path;
+	}
+
+	private static String readFile(String path) throws IOException {
+		return Files.readString(Path.of(path));
+	}
+
+	@Test
+	void aReleaseWhoseIndexNamesNoSystemFileFallsBackToTheWholeReleaseWalk(@TempDir Path base) throws IOException {
+		// Not every dist writes the trailing file list (and a release can be published
+		// with an empty one), so the walk stays as the fallback: contributing nothing
+		// would make the system unloadable.
+		DistTestSupport.RecordingDownloader downloader = DistTestSupport.dist(//
+				"mylib mylib mylib\n", //
+				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0\n", //
+				Map.of(MYLIB_TARBALL_URL, DistTestSupport.tarGz(Map.of(//
+						"mylib-1.0/src/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
+						"mylib-1.0/src/mylib.lisp", "(defun mylib-answer () 42)"))));
+		DistClient client = new DistClient(base, downloader);
+
+		List<String> asdDirs = client.ensureAvailable("mylib");
+
+		Path extracted = base.resolve("quicklisp").resolve("software").resolve("mylib-1.0");
+		assertThat(asdDirs).containsExactly(extracted.resolve("src").toAbsolutePath().normalize().toString());
+	}
+
 	@Test
 	void aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd(@TempDir Path base) throws IOException {
 		// Releases do ship a second .asd under test/ defining the same system name.
@@ -167,7 +262,7 @@ class DistClientTest {
 		files.put("mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)");
 		DistTestSupport.RecordingDownloader downloader = DistTestSupport.dist(//
 				"mylib mylib mylib\n", //
-				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib.asd test/mylib.asd\n", //
 				Map.of(MYLIB_TARBALL_URL, DistTestSupport.tarGz(files)));
 		DistClient client = new DistClient(base, downloader);
 
@@ -184,7 +279,7 @@ class DistClientTest {
 		return DistTestSupport.dists(//
 				DistTestSupport.quicklisp(//
 						"mylib mylib mylib\n", //
-						"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+						"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib.asd\n", //
 						Map.of(MYLIB_TARBALL_URL, DistTestSupport.tarGz(Map.of(//
 								"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
 								"mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)")))),
@@ -192,8 +287,8 @@ class DistClientTest {
 						// The same system name in both dists, plus one only ultralisp
 						// has.
 						"fresh fresh fresh\nmylib mylib mylib\n", //
-						"fresh " + ULTRA_TARBALL_URL + " 100 md5 sha1 fresh-1.0 fresh\n" //
-								+ "mylib " + ULTRA_TARBALL_URL + " 100 md5 sha1 fresh-1.0 fresh\n", //
+						"fresh " + ULTRA_TARBALL_URL + " 100 md5 sha1 fresh-1.0 fresh.asd\n" //
+								+ "mylib " + ULTRA_TARBALL_URL + " 100 md5 sha1 fresh-1.0 fresh.asd\n", //
 						Map.of(ULTRA_TARBALL_URL, DistTestSupport.tarGz(Map.of(//
 								"fresh-1.0/fresh.asd", "(defsystem \"fresh\" :components ((:file \"fresh\")))", //
 								"fresh-1.0/fresh.lisp", "(defun fresh-answer () 7)")))));
