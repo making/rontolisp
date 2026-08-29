@@ -823,6 +823,11 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `geom:volume` | `(geom:volume s)` | 発散定理による体積。巻き方の検査も兼ねる |
 | `geom:centroid` | `(geom:centroid s)` | モデル座標での体積中心 |
 | `geom:surface-area` | `(geom:surface-area s)` | メッシュ三角形の面積の合計 |
+| `geom:union` | `(geom:union a b)` | 両オペランドのいずれかが占める領域を覆う新しい立体 |
+| `geom:difference` | `(geom:difference a b)` | `a` から `b` を取り除いた新しい立体 |
+| `geom:intersection` | `(geom:intersection a b)` | 両オペランドが共通に占める領域だけの新しい立体 |
+| `geom:section` | `(geom:section s :normal :z)` | 平面が立体を切る断面ループ |
+| `geom:history` | `(geom:history s)` | その立体を作ったもの: `nil` またはブール演算の `(op a b)` |
 
 ## asdf パッケージの関数
 

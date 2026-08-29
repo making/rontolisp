@@ -755,6 +755,11 @@ categories:
       - { slug: geom-volume, name: "geom:volume" }
       - { slug: geom-centroid, name: "geom:centroid" }
       - { slug: geom-surface-area, name: "geom:surface-area" }
+      - { slug: geom-union, name: "geom:union" }
+      - { slug: geom-difference, name: "geom:difference" }
+      - { slug: geom-intersection, name: "geom:intersection" }
+      - { slug: geom-section, name: "geom:section" }
+      - { slug: geom-history, name: "geom:history" }
   - title: "asdf Package (System Definitions)"
     functions:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }

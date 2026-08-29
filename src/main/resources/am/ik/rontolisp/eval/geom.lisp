@@ -255,7 +255,10 @@
    ;; and ignored, so keys are compared STRUCTURALLY, and two sibling nodes with
    ;; equal slots collide into one entry -- a wrong answer, not a slow one
    ;; (.kb/geom.md, .kb/hash-tables.md).
-   (user-data :initform nil :accessor geom:user-data)))
+   (user-data :initform nil :accessor geom:user-data)
+   ;; What built this solid: nil for a primitive, (op a b) for a boolean result
+   ;; -- so a program can re-run a model at a different parameter.
+   (history :initform nil :accessor geom::%history)))
 
 (defun geom::%build-solid (points facets &key color label)
   (make-instance 'geom:solid
@@ -598,3 +601,440 @@
              (cy (- (* uz vx) (* ux vz)))
              (cz (- (* ux vy) (* uy vx))))
         (setq sum (+ sum (sqrt (+ (* cx cx) (* cy cy) (* cz cz)))))))))
+
+;; --- constructive solid geometry ---------------------------------------------
+;;
+;; Boolean operations by BSP-tree clipping (the csg.js formulation): each
+;; operand's boundary polygons -- taken in WORLD coordinates, so
+;; (geom:difference plate hole) means what it looks like after both have been
+;; placed -- are sorted into a binary space partition, the two trees clip each
+;; other's polygons, and the surviving fragments are the result's boundary.
+;; The trade against the classic face-splitting/classification pipeline is
+;; recorded in .kb/geom.md: the BSP formulation has no per-degeneracy special
+;; cases (one epsilon classifies everything), at the cost of fragmenting faces
+;; that did not strictly need splitting -- which costs geom nothing, because a
+;; facet is fan-triangulated for rendering anyway.
+;;
+;; Every operation answers a NEW root solid (world-coordinate vertices, an
+;; identity local transform) and leaves its operands untouched; the result
+;; records what built it in (geom:history result) => (op a b).
+;;
+;; Precision: the whole pipeline runs in float64 -- scalar arithmetic here is
+;; double, and reading an operand's packed float32 vertex widens on the aref
+;; -- and narrows back to float32 only when the result's vertex array is built.
+;; The near-degenerate classification the tolerance below guards against is
+;; therefore judged with 29 more bits than the data carries.
+
+;; The classification tolerance, RELATIVE to the operands: a point within
+;; (* geom:*tolerance* extent) of a cutting plane counts as ON it, where extent
+;; is the largest side of the operands' combined world bounding box. geom has
+;; no unit of length, so an absolute epsilon cannot be right for both a
+;; 0.001-scale and a 1000-scale model; a relative one survives both. Rebind it
+;; around a call to loosen or tighten a single operation.
+(defparameter geom:*tolerance* 1.0e-5)
+
+(defun geom::%operand-epsilon (solids)
+  (let* ((e (geom:bounds-extent (geom:bounds solids)))
+         (m (max (aref e 0) (aref e 1) (aref e 2))))
+    (* geom:*tolerance* (if (< m 1e-30) 1.0 m))))
+
+;; Points are (x y z) lists of doubles inside the pipeline; a plane is
+;; (nx ny nz w) with unit normal and n.p = w; a polygon is (plane . vertices)
+;; wound counter-clockwise seen from its front.
+
+(defun geom::%v- (a b)
+  (list (- (first a) (first b)) (- (second a) (second b))
+        (- (third a) (third b))))
+
+(defun geom::%vdot (a b)
+  (+ (* (first a) (first b)) (* (second a) (second b)) (* (third a) (third b))))
+
+(defun geom::%vcross (a b)
+  (list (- (* (second a) (third b)) (* (third a) (second b)))
+        (- (* (third a) (first b)) (* (first a) (third b)))
+        (- (* (first a) (second b)) (* (second a) (first b)))))
+
+(defun geom::%vlerp (a b tt)
+  (list (+ (first a) (* tt (- (first b) (first a))))
+        (+ (second a) (* tt (- (second b) (second a))))
+        (+ (third a) (* tt (- (third b) (third a))))))
+
+(defun geom::%as-point (p)
+  (if (listp p)
+      (list (float (first p) 1.0) (float (second p) 1.0) (float (third p) 1.0))
+      (list (aref p 0) (aref p 1) (aref p 2))))
+
+;; Newell over the loop (correct for a slightly non-planar fragment), w
+;; averaged over the vertices; nil for a fully degenerate loop.
+(defun geom::%loop-plane (verts)
+  (let ((nx 0.0)
+        (ny 0.0)
+        (nz 0.0)
+        (m (length verts))
+        (vv (coerce verts 'vector)))
+    (dotimes (i m)
+      (let ((a (aref vv i)) (b (aref vv (mod (+ i 1) m))))
+        (setq nx (+ nx (* (- (second a) (second b)) (+ (third a) (third b)))))
+        (setq ny (+ ny (* (- (third a) (third b)) (+ (first a) (first b)))))
+        (setq nz (+ nz (* (- (first a) (first b)) (+ (second a) (second b)))))))
+    (let ((len (sqrt (+ (* nx nx) (* ny ny) (* nz nz)))))
+      (if (< len 1e-30)
+          nil
+          (let ((x (/ nx len)) (y (/ ny len)) (z (/ nz len)) (w 0.0))
+            (dolist (v verts)
+              (setq w
+                    (+ w (+ (* x (first v)) (* y (second v)) (* z (third v))))))
+            (list x y z (/ w m)))))))
+
+(defun geom::%plane-flip (pl)
+  (list (- (first pl)) (- (second pl)) (- (third pl)) (- (nth 3 pl))))
+
+(defun geom::%poly-flip (poly)
+  (cons (geom::%plane-flip (car poly)) (reverse (cdr poly))))
+
+;; A solid's boundary polygons in world coordinates (each facet one polygon,
+;; with its plane computed once and inherited by every fragment split from it).
+(defun geom::%world-polygons (s)
+  (let* ((tf (geom:world-transform s))
+         (v
+          (linalg:add (linalg:matmul (geom::%vertices s)
+                                     (linalg:transpose (geom:rotation-of tf)))
+                      (linalg:reshape (geom:translation-of tf) '(1 3))))
+         (out '()))
+    (dolist (facet (geom:facets-of s) (nreverse out))
+      (let ((verts '()))
+        (dolist (i facet)
+          (push (list (aref v i 0) (aref v i 1) (aref v i 2)) verts))
+        (let* ((vl (nreverse verts)) (pl (geom::%loop-plane vl)))
+          (when pl (push (cons pl vl) out)))))))
+
+;; Split POLY by PLANE into (coplanar-front coplanar-back front back), each a
+;; list of polygons. The single place a point is classified: within EPS of the
+;; plane is ON, and a polygon all of whose points are ON goes with the side its
+;; own normal faces. Fragments inherit the parent polygon's plane.
+(defun geom::%split-polygon (plane poly eps)
+  (let* ((n (list (first plane) (second plane) (third plane)))
+         (w (nth 3 plane))
+         (verts (cdr poly))
+         (m (length verts))
+         (vv (coerce verts 'vector))
+         (tv (make-array m :initial-element 0))
+         (has-front nil)
+         (has-back nil))
+    (dotimes (i m)
+      (let ((d (- (geom::%vdot n (aref vv i)) w)))
+        (cond ((> d eps)
+               (setf (aref tv i) 1)
+               (setq has-front t))
+              ((< d (- eps))
+               (setf (aref tv i) 2)
+               (setq has-back t))
+              (t (setf (aref tv i) 0)))))
+    (cond ((and (not has-front) (not has-back))
+           (if (> (geom::%vdot n (car poly)) 0)
+               (list (list poly) '() '() '())
+               (list '() (list poly) '() '())))
+          ((not has-back) (list '() '() (list poly) '()))
+          ((not has-front) (list '() '() '() (list poly)))
+          (t (let ((f '()) (b '()))
+               (dotimes (i m)
+                 (let* ((j (mod (+ i 1) m))
+                        (vi (aref vv i))
+                        (ti (aref tv i))
+                        (tj (aref tv j)))
+                   (when (not (= ti 2)) (push vi f))
+                   (when (not (= ti 1)) (push vi b))
+                   (when (or (and (= ti 1) (= tj 2)) (and (= ti 2) (= tj 1)))
+                     (let* ((vj (aref vv j))
+                            (tt
+                             (/ (- w (geom::%vdot n vi))
+                                (geom::%vdot n (geom::%v- vj vi))))
+                            (v (geom::%vlerp vi vj tt)))
+                       (push v f)
+                       (push v b)))))
+               (list '() '()
+                (if (>= (length f) 3) (list (cons (car poly) (nreverse f))) '())
+                (if (>= (length b) 3)
+                    (list (cons (car poly) (nreverse b)))
+                    '())))))))
+
+;; A BSP node is #(plane polygons front back), built and clipped in place.
+(defun geom::%bsp () (make-array 4 :initial-element nil))
+
+(defun geom::%bsp-build (node polys eps)
+  (when polys
+    (when (null (aref node 0)) (setf (aref node 0) (car (first polys))))
+    (let ((plane (aref node 0)) (keep '()) (front '()) (back '()))
+      (dolist (p polys)
+        (let ((sp (geom::%split-polygon plane p eps)))
+          (dolist (q (first sp)) (push q keep))
+          (dolist (q (second sp)) (push q keep))
+          (dolist (q (nth 2 sp)) (push q front))
+          (dolist (q (nth 3 sp)) (push q back))))
+      (setf (aref node 1) (append (aref node 1) (nreverse keep)))
+      (when front
+        (when (null (aref node 2)) (setf (aref node 2) (geom::%bsp)))
+        (geom::%bsp-build (aref node 2) (nreverse front) eps))
+      (when back
+        (when (null (aref node 3)) (setf (aref node 3) (geom::%bsp)))
+        (geom::%bsp-build (aref node 3) (nreverse back) eps))))
+  node)
+
+;; Turns the tree's solid inside out.
+(defun geom::%bsp-invert (node)
+  (when node
+    (setf (aref node 1)
+          (mapcar (lambda (p) (geom::%poly-flip p)) (aref node 1)))
+    (when (aref node 0) (setf (aref node 0) (geom::%plane-flip (aref node 0))))
+    (let ((f (aref node 2)))
+      (setf (aref node 2) (aref node 3))
+      (setf (aref node 3) f))
+    (geom::%bsp-invert (aref node 2))
+    (geom::%bsp-invert (aref node 3)))
+  node)
+
+;; The fragments of POLYS outside the solid NODE describes; a fragment behind
+;; every plane on its path (inside) is dropped with the leaf it lands in.
+(defun geom::%bsp-clip-polygons (node polys eps)
+  (if (null (aref node 0))
+      polys
+      (let ((front '()) (back '()))
+        (dolist (p polys)
+          (let ((sp (geom::%split-polygon (aref node 0) p eps)))
+            (dolist (q (first sp)) (push q front))
+            (dolist (q (nth 2 sp)) (push q front))
+            (dolist (q (second sp)) (push q back))
+            (dolist (q (nth 3 sp)) (push q back))))
+        (append (if (aref node 2)
+                    (geom::%bsp-clip-polygons (aref node 2) (nreverse front)
+                                              eps)
+                    (nreverse front))
+                (if (aref node 3)
+                    (geom::%bsp-clip-polygons (aref node 3) (nreverse back) eps)
+                    '())))))
+
+(defun geom::%bsp-clip-to (node other eps)
+  (setf (aref node 1) (geom::%bsp-clip-polygons other (aref node 1) eps))
+  (when (aref node 2) (geom::%bsp-clip-to (aref node 2) other eps))
+  (when (aref node 3) (geom::%bsp-clip-to (aref node 3) other eps))
+  node)
+
+(defun geom::%bsp-all-polygons (node)
+  (append (aref node 1)
+          (if (aref node 2) (geom::%bsp-all-polygons (aref node 2)) '())
+          (if (aref node 3) (geom::%bsp-all-polygons (aref node 3)) '())))
+
+;; The three csg.js clip sequences, over the operands' world polygons.
+(defun geom::%csg (op a b eps)
+  (let ((an (geom::%bsp-build (geom::%bsp) (geom::%world-polygons a) eps))
+        (bn (geom::%bsp-build (geom::%bsp) (geom::%world-polygons b) eps)))
+    (cond ((eq op :union)
+           (geom::%bsp-clip-to an bn eps)
+           (geom::%bsp-clip-to bn an eps)
+           (geom::%bsp-invert bn)
+           (geom::%bsp-clip-to bn an eps)
+           (geom::%bsp-invert bn)
+           (geom::%bsp-build an (geom::%bsp-all-polygons bn) eps))
+          ((eq op :difference)
+           (geom::%bsp-invert an)
+           (geom::%bsp-clip-to an bn eps)
+           (geom::%bsp-clip-to bn an eps)
+           (geom::%bsp-invert bn)
+           (geom::%bsp-clip-to bn an eps)
+           (geom::%bsp-invert bn)
+           (geom::%bsp-build an (geom::%bsp-all-polygons bn) eps)
+           (geom::%bsp-invert an))
+          (t
+           (geom::%bsp-invert an)
+           (geom::%bsp-clip-to bn an eps)
+           (geom::%bsp-invert bn)
+           (geom::%bsp-clip-to an bn eps)
+           (geom::%bsp-clip-to bn an eps)
+           (geom::%bsp-build an (geom::%bsp-all-polygons bn) eps)
+           (geom::%bsp-invert an)))
+    (geom::%bsp-all-polygons an)))
+
+(defun geom::%weld-key (v q)
+  (list (round (/ (first v) q)) (round (/ (second v) q))
+        (round (/ (third v) q))))
+
+;; Result polygons -> a solid: vertices welded on an EPS grid (a shared edge
+;; split from both sides lands on the same key even when the two interpolations
+;; differ in the last bits), degenerate loops dropped, winding kept -- so the
+;; result satisfies the same normals/winding invariant as a primitive and
+;; volume stays the winding check. An empty polygon set (disjoint operands
+;; intersected) answers an EMPTY solid: no vertices, no facets, volume 0.
+(defun geom::%csg-solid (polys eps color label history)
+  (let ((q (if (< eps 1e-30) 1e-30 eps))
+        (weld (make-hash-table :test 'equal))
+        (points '())
+        (npts 0)
+        (facets '()))
+    (dolist (poly polys)
+      (let ((idxs '()))
+        (dolist (v (cdr poly))
+          (let* ((key (geom::%weld-key v q)) (idx (gethash key weld)))
+            (when (null idx)
+              (setq idx npts)
+              (setf (gethash key weld) idx)
+              (push v points)
+              (setq npts (+ npts 1)))
+            (when (or (null idxs) (not (= idx (car idxs)))) (push idx idxs))))
+        (let ((cleaned (nreverse idxs)))
+          (when (and (>= (length cleaned) 2)
+                     (= (car cleaned) (car (last cleaned))))
+            (setq cleaned (reverse (cdr (reverse cleaned)))))
+          (when (>= (length cleaned) 3) (push cleaned facets)))))
+    (let ((sol
+           (if (null points)
+               (make-instance 'geom:solid
+                :local (geom:make-transform)
+                :vertices (linalg:zeros '(0 3) :element-type 'single-float)
+                :facets '()
+                :color (if color color (geom:vec3 0.72 0.76 0.84))
+                :label label)
+               (geom::%build-solid (nreverse points) (nreverse facets)
+                                   :color color
+                                   :label label))))
+      (setf (geom::%history sol) history)
+      sol)))
+
+;; What built a solid: nil for a primitive, (op a b) -- e.g. (:union a b) --
+;; for a boolean result, with the operand solids themselves.
+(defun geom:history (s) (geom::%history s))
+
+;; a united with b. Operands in world coordinates, untouched; the result is a
+;; new root solid whose vertices are world coordinates.
+(defun geom:union (a b &key color label)
+  (let ((eps (geom::%operand-epsilon (list a b))))
+    (geom::%csg-solid (geom::%csg :union a b eps) eps
+                      (if color color (geom:color-of a)) label
+                      (list :union a b))))
+
+;; a with b removed.
+(defun geom:difference (a b &key color label)
+  (let ((eps (geom::%operand-epsilon (list a b))))
+    (geom::%csg-solid (geom::%csg :difference a b eps) eps
+                      (if color color (geom:color-of a)) label
+                      (list :difference a b))))
+
+;; The overlap of a and b; EMPTY (a solid with no facets) when they are
+;; disjoint.
+(defun geom:intersection (a b &key color label)
+  (let ((eps (geom::%operand-epsilon (list a b))))
+    (geom::%csg-solid (geom::%csg :intersection a b eps) eps
+                      (if color color (geom:color-of a)) label
+                      (list :intersection a b))))
+
+;; --- planar section ----------------------------------------------------------
+;;
+;; The cross-section loops where a plane cuts a solid: each loop a rank-2
+;; (n 3) packed float32 array of WORLD points, outer boundaries wound
+;; counter-clockwise seen from the normal's positive side and holes clockwise.
+;; The same classification problem as the booleans with one operand trivial,
+;; under the same relative tolerance.
+
+;; One facet against the plane: the segment where the facet's loop crosses (or
+;; touches, edge-on) the plane, oriented along plane-normal x facet-normal so
+;; the stitched loops wind consistently; nil for a miss, a single touch point,
+;; or a facet lying in the plane (its boundary is covered by its neighbours).
+(defun geom::%facet-section (poly n w eps)
+  (let* ((verts (cdr poly))
+         (m (length verts))
+         (vv (coerce verts 'vector))
+         (all-on t)
+         (pts '()))
+    (dolist (v verts)
+      (when (> (abs (- (geom::%vdot n v) w)) eps) (setq all-on nil)))
+    (if all-on
+        nil
+        (let ((q (if (< eps 1e-30) 1e-30 eps)))
+          (dotimes (i m)
+            (let* ((j (mod (+ i 1) m))
+                   (vi (aref vv i))
+                   (vj (aref vv j))
+                   (di (- (geom::%vdot n vi) w))
+                   (dj (- (geom::%vdot n vj) w)))
+              (cond ((<= (abs di) eps) (push vi pts))
+                    ((or (and (> di eps) (< dj (- eps)))
+                         (and (< di (- eps)) (> dj eps)))
+                     (push (geom::%vlerp vi vj (/ (- 0.0 di) (- dj di)))
+                           pts)))))
+          (let ((distinct '()) (keys (make-hash-table :test 'equal)))
+            (dolist (p (nreverse pts))
+              (let ((k (geom::%weld-key p q)))
+                (when (null (gethash k keys))
+                  (setf (gethash k keys) t)
+                  (push p distinct))))
+            (setq distinct (nreverse distinct))
+            (if (not (= (length distinct) 2))
+                nil
+                (let* ((p1 (first distinct))
+                       (p2 (second distinct))
+                       (fp (car poly))
+                       (fn (list (first fp) (second fp) (third fp)))
+                       (d (geom::%vcross n fn)))
+                  (if (< (geom::%vdot (geom::%v- p2 p1) d) 0)
+                      (list p2 p1)
+                      (list p1 p2)))))))))
+
+(defun geom::%loop->array (pts)
+  (let ((out
+         (make-array (list (length pts) 3)
+                     :element-type 'single-float
+                     :initial-element 0.0))
+        (i 0))
+    (dolist (p pts out)
+      (setf (aref out i 0) (float (first p) 1.0))
+      (setf (aref out i 1) (float (second p) 1.0))
+      (setf (aref out i 2) (float (third p) 1.0))
+      (setq i (+ i 1)))))
+
+;; Chains segments end to start (endpoints matched on the weld grid) into
+;; closed loops; an unclosed chain -- a tangent touch -- is dropped rather
+;; than answered as a broken loop.
+(defun geom::%stitch-loops (segs eps)
+  (let ((q (if (< eps 1e-30) 1e-30 eps))
+        (start (make-hash-table :test 'equal))
+        (loops '()))
+    (dolist (seg segs)
+      (setf (gethash (geom::%weld-key (first seg) q) start) seg))
+    (dolist (seg segs (nreverse loops))
+      (let ((k0 (geom::%weld-key (first seg) q)))
+        (when (gethash k0 start)
+          (let ((pts '())
+                (cur seg)
+                (steps 0)
+                (limit (+ (length segs) 1))
+                (closed nil))
+            (do ((walking t))
+                ((or (not walking) (null cur) (> steps limit)) nil)
+              (setf (gethash (geom::%weld-key (first cur) q) start) nil)
+              (push (first cur) pts)
+              (let ((nk (geom::%weld-key (second cur) q)))
+                (if (equal nk k0)
+                    (progn
+                      (setq closed t)
+                      (setq walking nil))
+                    (setq cur (gethash nk start))))
+              (setq steps (+ steps 1)))
+            (when (and closed (>= (length pts) 3))
+              (push (geom::%loop->array (nreverse pts)) loops))))))))
+
+;; The plane is :normal (an axis keyword or a vector) plus either :offset (the
+;; signed distance from the origin along the normal) or :origin (a point on
+;; the plane).
+(defun geom:section (s &key (normal :z) (offset 0.0) origin)
+  (let* ((n0 (geom::%as-point (geom:axis-vector normal)))
+         (len (sqrt (geom::%vdot n0 n0)))
+         (n (list (/ (first n0) len) (/ (second n0) len) (/ (third n0) len)))
+         (w
+          (if origin
+              (geom::%vdot n (geom::%as-point origin))
+              (float offset 1.0)))
+         (eps (geom::%operand-epsilon (list s)))
+         (segs '()))
+    (dolist (poly (geom::%world-polygons s))
+      (let ((seg (geom::%facet-section poly n w eps)))
+        (when seg (push seg segs))))
+    (geom::%stitch-loops (nreverse segs) eps)))

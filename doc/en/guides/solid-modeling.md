@@ -143,8 +143,53 @@ slightly small one. `geom:centroid` is the same signed-tetrahedron sum, and
 ; => (100.0 0.0 0.0)
 ```
 
+## Booleans
+
+`geom:union`, `geom:difference` and `geom:intersection` are what turn scenery
+into parts: a plate with four bolt holes, a block with a slot milled in it, a
+housing that is the outside minus the inside. Each takes its operands in
+**world** coordinates -- `(geom:difference plate hole)` means what it looks
+like after both have been placed -- leaves them untouched, and answers a new
+root solid whose vertices are world coordinates. Volume is the oracle: for any
+pair, `vol(A ∪ B) + vol(A ∩ B) = vol(A) + vol(B)` within the tessellation
+error the primitives already carry.
+
+```lisp
+(let ((plate (geom:box '(100 100 20)))
+      (hole (geom:cylinder :radius 10 :height 20 :sides 24)))
+  (geom:move hole (geom:vec3 0 0 -10))
+  (round (geom:volume (geom:difference plate hole))))
+; => 193788
+```
+
+The hole is exactly as deep as the plate is thick, and goes all the way
+through: coplanar faces, a vertex or an edge lying exactly on a face, and two
+solids exactly touching are handled cases. Disjoint solids intersect to an
+**empty** solid (no facets, volume `0.0`) rather than an error, and a result
+records what built it -- `(geom:history result)` answers `(op a b)` with the
+untouched operands, so a program can re-run a model at a different parameter.
+
+The pipeline is BSP clipping, run in float64 and narrowed back to float32 only
+in the result's vertex array. Its classification tolerance is
+`geom:*tolerance*` (default `1.0e-5`), **relative** to the operands' combined
+bounding box -- `geom` has no unit of length, so an absolute epsilon could not
+be right for both a 0.001-scale and a 1000-scale model. Rebind it around a
+call to loosen or tighten one operation.
+
+`geom:section` is the same classification with one operand trivial: the loops
+where a plane cuts a solid, each a rank-2 `(n 3)` packed array of world
+points -- a cross-section drawing in one call.
+
+```lisp
+(length (geom:section (geom:torus :radius 60 :tube 20 :sides 24 :rings 12)))
+; => 2
+```
+
+The equator cuts the tube twice: the boundary and the hole. Outer loops are
+wound counter-clockwise seen from the normal's positive side, holes clockwise.
+
 ## What is not here
 
-Boolean operations (union, difference, intersection), mesh file formats, and
+Convex hulls, offsetting, filleting, mesh repair, mesh file formats, and
 anything that draws. A solid whose facets came from an STL file is just a
 `geom:polyhedron`.

@@ -882,6 +882,11 @@ convention and the cached mesh.
 | `geom:volume` | `(geom:volume s)` | the volume by the divergence theorem -- also a winding check |
 | `geom:centroid` | `(geom:centroid s)` | the centre of volume, in model coordinates |
 | `geom:surface-area` | `(geom:surface-area s)` | the total area of the mesh triangles |
+| `geom:union` | `(geom:union a b)` | a new solid covering everything either operand covers |
+| `geom:difference` | `(geom:difference a b)` | a new solid: `a` with `b` removed |
+| `geom:intersection` | `(geom:intersection a b)` | a new solid covering only what both operands cover |
+| `geom:section` | `(geom:section s :normal :z)` | the cross-section loops where a plane cuts the solid |
+| `geom:history` | `(geom:history s)` | what built the solid: `nil`, or `(op a b)` for a boolean result |
 
 ## asdf Package Functions
 
