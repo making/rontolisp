@@ -11704,6 +11704,46 @@ cases:
       (:SELF NIL)
       (2 1)
 
+  - name: shared-graph-hash-key
+    source: |
+      ;; The depth cap bounds the hash's HEIGHT and nothing about its SIZE. Both keys
+      ;; below have SHARED substructure -- a DAG of 60 conses holds 60 cells and 2^60
+      ;; root-to-leaf paths, and an instance that knows its parent is worse still -- so
+      ;; an un-budgeted hash could not place either one inside this run's lifetime. A
+      ;; regression is therefore a HANG, not a slow number, which is how "terminates
+      ;; SOON" is pinned without a wall-clock assertion. The budget is spent across the
+      ;; WHOLE traversal and refilled per placement, so equal keys still hash equal.
+      (defun shared-dag (n)
+        (let ((node :leaf))
+          (dotimes (i n node) (setq node (cons node node)))))
+      (defclass linked-node ()
+        ((up :initarg :up :initform nil)
+         (down :initform nil :accessor node-down)))
+      (defun linked-chain (n)
+        (let ((node (make-instance 'linked-node)))
+          (dotimes (i n node)
+            (let ((next (make-instance 'linked-node :up node)))
+              (setf (node-down node) (cons next (node-down node)))
+              (setq node next)))))
+      (let ((h (make-hash-table :test 'equal))
+            (dag (shared-dag 60))
+            (node (linked-chain 8)))
+        (setf (gethash dag h) :dag)
+        (setf (gethash node h) :node)
+        (print (list (gethash dag h) (gethash node h) (hash-table-count h))))
+      (let ((e (make-hash-table :test 'eq)))
+        (print (list (gethash (shared-dag 60) e) (gethash (linked-chain 8) e))))
+      ;; The equalp key FOLD needs the same budget for a sharper reason: it BUILDS the
+      ;; structure it walks, so an unbudgeted fold of a shared key allocates one cons
+      ;; per path. A key it can fold in full still folds in full.
+      (let ((p (make-hash-table :test 'equalp)))
+        (setf (gethash "cs" p) 1)
+        (print (list (gethash "CS" p) (gethash (shared-dag 60) p))))
+    expected: |
+      (:DAG :NODE 2)
+      (NIL NIL)
+      (1 NIL)
+
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
 # subject a backend does not have at all. Each is compiled and run on its own.
 # What an ending case asserts is the standard-error report plus a non-zero exit

@@ -3087,11 +3087,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the source scan under-predicts, _hash simply keeps its uncapped recursion.
 		// Appended AFTER the three above for the same reason they are last.
 		int hashDepthGlobalIndex = programUsesAnyHashOp(program) ? ostreamTableGlobalIndex + 1 : -1;
+		// The other piece of state the cap needs: _hash's remaining WORK budget, which
+		// the depth cap does not bound (a key with shared substructure has exponentially
+		// many root-to-leaf paths, so 64 levels of them is astronomical). Refilled by the
+		// outermost entry rather than restored on the way out, so it is the whole
+		// traversal's. Present exactly when the depth global is, and beside it.
+		int hashGasGlobalIndex = hashDepthGlobalIndex >= 0 ? hashDepthGlobalIndex + 1 : -1;
 		// The live recursion depth of _equalp_key, capped for the same reason and by the
 		// same rule. Emitted only for a program that writes a :test 'equalp table --
 		// which is also the whole gate on the fold -- so every other module keeps the
-		// globals it had. Last, after the hash depth it sits beside.
-		int equalpDepthGlobalIndex = usesEqualpHashTables ? hashDepthGlobalIndex + 1 : -1;
+		// globals it had. Last, after the two hash counters it sits beside.
+		int equalpDepthGlobalIndex = usesEqualpHashTables ? hashGasGlobalIndex + 1 : -1;
+		// And _equalp_key's work budget, the counterpart of the hash's: the fold BUILDS a
+		// structure, so an unbudgeted walk of a shared key does not merely take
+		// exponential time, it allocates exponential space.
+		int equalpGasGlobalIndex = equalpDepthGlobalIndex >= 0 ? equalpDepthGlobalIndex + 1 : -1;
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -5784,10 +5794,35 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// The _hash work budget at hashGasGlobalIndex, a (mut i32) whose initial
+				// value never matters: the outermost entry (depth == 0) refills it before
+				// it is read, which is what keeps a key's hash a function of that key
+				// alone.
+				if (hashGasGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
 				// The _equalp_key recursion depth at equalpDepthGlobalIndex, the same
 				// (mut i32) = 0 counter for the same depth cap, present only for a
 				// program that folds a key.
 				if (equalpDepthGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
+				// The _equalp_key work budget at equalpGasGlobalIndex, refilled by the
+				// outermost entry exactly like the hash's, so its initial value never
+				// matters.
+				if (equalpGasGlobalIndex >= 0) {
 					gs.add(g -> {
 						g.write(Type.I32);
 						g.write(am.ik.wasm.Mutability.VAR.code());
@@ -6047,7 +6082,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmPlistRuntimeBuilder.buildPlistGet());
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1,
-						hashDepthGlobalIndex));
+						hashDepthGlobalIndex, hashGasGlobalIndex));
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody());
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(false));
@@ -6218,7 +6253,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// equalp key-fold body (FUNC_EQUALP_KEY); an identity stub unless the
 				// program writes a :test 'equalp table, since nothing else calls it.
 				code.addFunction(equalpDepthGlobalIndex < 0 ? WasmEqualpKeyRuntimeBuilder.buildStub()
-						: WasmEqualpKeyRuntimeBuilder.build(equalpDepthGlobalIndex));
+						: WasmEqualpKeyRuntimeBuilder.build(equalpDepthGlobalIndex, equalpGasGlobalIndex));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

@@ -217,8 +217,9 @@
    (wire-cache :initform nil :accessor %wire)
    ;; A slot a consumer hangs its own state on -- the renderer keeps its GPU
    ;; buffers here. It is here rather than in the renderer's own `eq` hash table
-   ;; because `gethash` is not identity-keyed and does not terminate for a key
-   ;; that is part of a scene graph (../564-...md, and ../567-...md).
+   ;; because `gethash` is not identity-keyed: `:test 'eq` is accepted and
+   ;; ignored, so two sibling nodes with equal slots are ONE entry (../564-...md,
+   ;; and ../012-hash-table-test-semantics.md).
    (user-data :initform nil :accessor user-data)))
 
 (defun make-solid (points facets &key color label)

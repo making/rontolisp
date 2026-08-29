@@ -347,13 +347,26 @@ final class WasmRuntimeBuilder {
 	 * and so fold identically. Retrieving under such a key terminates for the matching
 	 * reason on {@code _equal}'s side: its {@code ref.eq} fast path answers before it
 	 * recurses.
+	 *
+	 * <p>
+	 * The depth cap bounds the walk's HEIGHT and nothing about its SIZE, so a second
+	 * counter in {@code gasGlobalIndex} bounds the whole traversal at
+	 * {@link LispEquality#HASH_WORK_CAP} node visits: a key whose substructure is SHARED
+	 * has exponentially many root-to-leaf paths, and 64 levels of them is astronomical.
+	 * The gas is REFILLED by the outermost entry -- the one that finds the depth counter
+	 * at zero -- so what a key hashes to is a function of that key alone and not of what
+	 * the table hashed before it, which is the rule the depth cap obeys too and the
+	 * reason two {@code equal} keys still hash equal: same shape, same traversal order,
+	 * same place to run out.
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
 	 * @param depthGlobalIndex the {@code (mut i32)} recursion-depth global, or -1 to emit
 	 * the uncapped body (a program with no hash table never calls {@code _hash}, and
-	 * carries neither the global nor the guard)
+	 * carries neither the globals nor the guard)
+	 * @param gasGlobalIndex the {@code (mut i32)} work-budget global, present exactly
+	 * when {@code depthGlobalIndex} is
 	 * @return the function body
 	 */
-	static byte[] buildHashBody(int instanceTypeIndex, int depthGlobalIndex) {
+	static byte[] buildHashBody(int instanceTypeIndex, int depthGlobalIndex, int gasGlobalIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -368,20 +381,45 @@ final class WasmRuntimeBuilder {
 		w.write(1); // 1 local
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 
-		// Depth cap: at the limit answer 0 without descending (and without counting a
-		// level, so the counter is exact); otherwise count this level, fold, and restore
-		// the counter on the way out. The fold's i32 result sits under the restore.
+		// The OUTERMOST entry -- the one that finds the depth counter at zero -- refills
+		// the work budget, so one placement's gas never depends on the last one's.
+		if (depthGlobalIndex >= 0) {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(depthGlobalIndex);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF);
+			w.write(0x40); // void block type
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(LispEquality.HASH_WORK_CAP);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(gasGlobalIndex);
+			w.write(Instruction.END);
+		}
+
+		// Depth cap AND work budget: at either limit answer 0 without descending (and
+		// without counting a level or spending gas, so both counters stay exact);
+		// otherwise spend one node, count this level, fold, and restore the DEPTH counter
+		// on the way out. The fold's i32 result sits under the restore. The gas is not
+		// restored -- it belongs to the whole traversal, which is the point: a per-branch
+		// count bounds nothing when the branches share their substructure.
 		if (depthGlobalIndex >= 0) {
 			w.write(Instruction.GET_GLOBAL);
 			w.writeUnsignedLeb128(depthGlobalIndex);
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(LispEquality.HASH_DEPTH_CAP);
 			w.write(Instruction.I32_GE_S);
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(gasGlobalIndex);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.I32_LE_S);
+			w.write(Instruction.I32_OR);
 			w.write(Instruction.IF);
 			w.write(Type.I32);
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(0);
 			w.write(Instruction.ELSE);
+			emitDepthAdjust(w, gasGlobalIndex, Instruction.I32_SUB);
 			emitDepthAdjust(w, depthGlobalIndex, Instruction.I32_ADD);
 		}
 
@@ -616,7 +654,10 @@ final class WasmRuntimeBuilder {
 		return body.toByteArray();
 	}
 
-	/** Emits {@code depth = depth +/- 1} for the {@code _hash} recursion counter. */
+	/**
+	 * Emits {@code g = g +/- 1} for one of {@code _hash}'s two counters -- the recursion
+	 * depth, restored on the way out, or the work budget, which is not.
+	 */
 	private static void emitDepthAdjust(WasmWriter w, int depthGlobalIndex, int op) {
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(depthGlobalIndex);

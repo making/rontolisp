@@ -60,11 +60,15 @@ a frame on a 60-solid model where one that caches spends 9.0. `mesh` must theref
 of the PUBLIC surface, not an internal detail of a renderer.
 
 A `user-data` slot rides along for a consumer's own state -- the renderer keeps its GPU
-buffers there. That slot exists because of `567-an-eq-hash-table-is-not-identity-keyed.md`:
-a renderer cannot key an `eq` hash table by a node today. **When 565 lands, re-examine
-this** -- if an `eq` table becomes usable, `user-data` may still be the better design (the
-cache lives with the thing it caches, and `detach` cannot orphan it), but the reason it
-exists changes and the comment in the source must say the true one.
+buffers there. **Re-examined 2026-08-29, and the reason it exists has changed**: the
+liveness half of the old reason is gone -- a hash of a node used to be exponential in the
+graph reachable from it, and a work budget now bounds it (`.kb/hash-tables.md`), so an
+`eq` table keyed by a node RETURNS. What has not changed is `.todo/012`: `:test 'eq` is
+accepted and ignored, so the table compares its keys STRUCTURALLY, and two distinct nodes
+with equal slots -- which sibling scene nodes routinely are -- collide into ONE entry.
+That is a wrong answer, not a slow one, so `user-data` is still the correct design and
+would be even after 012 lands (the cache lives with the thing it caches, and `detach`
+cannot orphan it). The comment in the source must say THAT, not the cost story.
 
 ### Measurements
 

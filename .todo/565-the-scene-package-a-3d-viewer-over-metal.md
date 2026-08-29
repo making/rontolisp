@@ -82,7 +82,9 @@ parent's result 3: the alternative costs 380 ms a frame against 9.0 on a 60-soli
 Two consequences a reviewer should check for:
 
 - the per-solid GPU buffers live in `geom:user-data`, NOT in a hash table keyed by the
-  solid (`567-an-eq-hash-table-is-not-identity-keyed.md`);
+  solid. A table keyed by a node RETURNS now (the hash's work budget, 2026-08-29,
+  `.kb/hash-tables.md`) but `:test 'eq` still compares STRUCTURALLY (`.todo/012`), so two
+  sibling solids with equal slots would be one entry -- a wrong answer, not a slow one;
 - the vertex function takes `vp` and `model` as separate uniforms and transforms the
   normal by `model` too, so a solid that moves needs no re-upload.
 

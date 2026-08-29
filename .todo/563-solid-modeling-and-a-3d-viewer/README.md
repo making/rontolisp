@@ -137,10 +137,12 @@ parent-linked chain, takes 61 ms at depth 1 and did not return in 55 s at depth 
 not interpreter-only -- a compiled JVM class behaves the same (37 ms, then no return), and
 the WASM output did not finish either.
 
-`eq` is defined as identity, so this is a real bug with a real user-visible cost, and it is
-its own item (`../567-an-eq-hash-table-is-not-identity-keyed.md`). The spike works around
-it by keeping the renderer's per-solid state in a `user-data` slot on the solid -- which is
-the right design anyway, and what `scene.lisp` does now.
+`eq` is defined as identity, so this is a real bug with a real user-visible cost. Its COST
+half is fixed (2026-08-29): the hash now spends a node budget as well as a depth cap, and
+every number above is 0 ms (`.kb/hash-tables.md`). Its SEMANTIC half is `../012-hash-table-test-semantics.md`
+-- `:test 'eq` is still accepted and ignored -- so the spike's workaround stands: the
+renderer's per-solid state lives in a `user-data` slot on the solid, which is the right
+design anyway and what `scene.lisp` does now.
 
 ## What the spike did not settle
 

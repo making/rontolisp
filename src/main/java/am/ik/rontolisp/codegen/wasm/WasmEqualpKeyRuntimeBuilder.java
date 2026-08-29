@@ -37,7 +37,11 @@ import am.ik.wasm.WasmWriter;
  * <p>
  * The walk is capped at {@link LispEquality#HASH_DEPTH_CAP} levels the way {@code _hash}
  * is, counting the live recursion depth in a {@code (mut i32)} global, so a CYCLIC key
- * folds to a finite structure instead of exhausting the stack.
+ * folds to a finite structure instead of exhausting the stack; and at
+ * {@link LispEquality#HASH_WORK_CAP} node visits across the whole fold, in a second
+ * global refilled by the outermost entry, so a key whose substructure is SHARED does not
+ * fold to the exponentially many root-to-leaf paths through it -- which this function
+ * would not merely walk but ALLOCATE.
  */
 final class WasmEqualpKeyRuntimeBuilder {
 
@@ -64,9 +68,10 @@ final class WasmEqualpKeyRuntimeBuilder {
 	/**
 	 * The real fold.
 	 * @param depthGlobalIndex the {@code (mut i32)} recursion-depth global
+	 * @param gasGlobalIndex the {@code (mut i32)} work-budget global
 	 * @return the function body
 	 */
-	static byte[] build(int depthGlobalIndex) {
+	static byte[] build(int depthGlobalIndex, int gasGlobalIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -80,18 +85,42 @@ final class WasmEqualpKeyRuntimeBuilder {
 		w.write(1);
 		w.writeRefType(true, Type.EQ.code());
 
-		// Depth cap: at the limit the value is its own fold, and no level is counted so
-		// the counter stays exact. Otherwise count this level and restore it on the way
-		// out, under the folded value.
+		// The OUTERMOST entry -- the one that finds the depth counter at zero -- refills
+		// the work budget, so one fold's gas never depends on the last one's and a key's
+		// fold stays a function of that key alone.
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.write(0x40); // void block type
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(LispEquality.HASH_WORK_CAP);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(gasGlobalIndex);
+		w.write(Instruction.END);
+
+		// Depth cap AND work budget: at either limit the value is its own fold, and
+		// neither a level nor a node is counted so both counters stay exact. Otherwise
+		// spend one node, count this level, and restore the DEPTH counter on the way out,
+		// under the folded value. The gas is not restored -- it belongs to the whole
+		// fold, which is the point: a per-branch count bounds nothing when the branches
+		// share their substructure.
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(depthGlobalIndex);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(LispEquality.HASH_DEPTH_CAP);
 		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(gasGlobalIndex);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_OR);
 		w.write(Instruction.IF);
 		w.writeRefType(true, Type.EQ.code());
 		getLocal(w, 0);
 		w.write(Instruction.ELSE);
+		adjustDepth(w, gasGlobalIndex, Instruction.I32_SUB);
 		adjustDepth(w, depthGlobalIndex, Instruction.I32_ADD);
 
 		// A framed string -> _string_upcase
