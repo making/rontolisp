@@ -2,14 +2,20 @@
 ;;;
 ;;; 48 runs of 3000!, which grows past 32,000 bits, so almost every multiply is
 ;;; a bignum multiply. INTEGER-LENGTH of the product is the checksum.
+(declaim (optimize (speed 3) (safety 0) (debug 0)))
+
 (defun fact (n)
+  (declare (type fixnum n))
   (let ((acc 1))
+    (declare (type integer acc))
     (do ((i 2 (+ i 1)))
         ((> i n) acc)
+      (declare (type fixnum i))
       (setq acc (* acc i)))))
 
 (defun bench ()
   (let ((total 0))
+    (declare (type fixnum total))
     (dotimes (i 48 total) (setq total (+ total (integer-length (fact 3000)))))))
 
 ;; Every benchmark ends with this identical footer: run BENCH once, print the

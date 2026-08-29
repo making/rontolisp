@@ -2,8 +2,14 @@
 ;;;
 ;;; EQL keys, so the table does no hashing of its own beyond the integers.
 ;;; What it separates is the cost of GETHASH and of growing a table.
+(declaim (optimize (speed 3) (safety 0) (debug 0)))
+
 (defun bench ()
+  ;; SUM passes 3.8e12 and a fixnum is 31 bits wide on ABCL, so it is declared
+  ;; INTEGER: a FIXNUM here would be a false promise on the implementations
+  ;; with the narrower one.
   (let ((h (make-hash-table :test 'eql)) (n 1600000) (sum 0))
+    (declare (type hash-table h) (type fixnum n) (type integer sum))
     (dotimes (i n) (setf (gethash i h) (* i 3)))
     (dotimes (i n) (setq sum (+ sum (gethash i h))))
     (+ sum (hash-table-count h))))

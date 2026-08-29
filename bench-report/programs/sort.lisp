@@ -7,14 +7,19 @@
 ;;; The input is a linear congruential generator rather than RANDOM: every
 ;;; implementation seeds and steps its own RANDOM differently, and a benchmark
 ;;; whose answer depends on which one ran is not checkable.
+(declaim (optimize (speed 3) (safety 0) (debug 0)))
+
 (defun lcg-vector (n seed)
+  (declare (type fixnum n seed))
   (let ((v (make-array n)) (s seed))
+    (declare (type simple-vector v) (type fixnum s))
     (dotimes (i n v)
       (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
       (setf (aref v i) s))))
 
 (defun bench ()
   (let ((v (sort (lcg-vector 400000 42) #'<)))
+    (declare (type simple-vector v))
     (+ (aref v 0) (aref v 200000) (aref v 399999))))
 
 ;; Every benchmark ends with this identical footer: run BENCH once, print the

@@ -1,9 +1,10 @@
 ## What is measured
 
 [`programs/`](../programs) holds the benchmarks. Each is one file of portable
-ANSI Common Lisp -- no library, no implementation-specific form, no declaration
--- that defines `bench` and ends with the same four-line footer: read the clock,
-call `bench`, read the clock, print `result=<answer> ms=<elapsed>`.
+ANSI Common Lisp -- no library, no implementation-specific form -- that defines
+`bench`, declares the types its inner loops run on, and ends with the same
+four-line footer: read the clock, call `bench`, read the clock, print
+`result=<answer> ms=<elapsed>`.
 
 | Benchmark | What it exercises |
 | --- | --- |
@@ -18,9 +19,13 @@ call `bench`, read the clock, print `result=<answer> ms=<elapsed>`.
 | [`bignum`](../programs/bignum.lisp) | 48 runs of 3000!, which passes 32,000 bits: arbitrary-precision multiplication |
 | [`list`](../programs/list.lisp) | 240 rounds of cons / `mapcar` / `reverse` over a 20,000-element list: the allocation-heavy one, where the garbage collector shows up |
 
-The sizes are chosen so SBCL lands between 90 ms and 460 ms on each: large
+The sizes were chosen so that SBCL lands between 90 ms and 460 ms on each: large
 enough that process noise does not dominate, small enough that the slowest
-implementation in the table still finishes.
+implementation in the table still finishes. The declarations moved SBCL's
+floating-point rows well below that floor (`matmul` around 20 ms, `mandelbrot`
+around 30), so those two cells are now small enough that a few milliseconds of
+machine noise is a visible fraction of them -- read them as "an order of
+magnitude under the JVM backend", not as a ratio.
 
 **Every benchmark's answer is the same integer on every implementation**, and
 the harness refuses a run that prints a different one. That rules out the
@@ -66,12 +71,55 @@ is reported as `timeout` rather than dropped, and it is not retried. It means
 what it says: on that implementation the benchmark is slower than the budget, by
 an unknown factor.
 
-**No declarations anywhere.** Every benchmark is written the way ordinary
-portable Common Lisp is written, with no `declare` and no `optimize`. An
-implementation that infers types from the code is rewarded for it here; one that
-needs to be told will look worse than a tuned benchmark would make it look. That
-is the comparison this report intends -- what the same portable source costs --
-and not the one where each implementation gets its own hand-tuned variant.
+**Declared, and the same declarations on every implementation.** Every
+benchmark opens with `(declaim (optimize (speed 3) (safety 0) (debug 0)))` and
+declares the types of the variables its inner loops run on. That is ONE source
+read by all six columns and not a hand-tuned variant per implementation: it is
+how performance-sensitive portable Common Lisp is written, and every word of it
+is something an implementation is allowed to trust. What each column DOES with
+it is where they differ -- rontolisp's interpreter and JVM backend ignore
+declarations entirely, and its wasm-GC backend reads them only to pick a rank-1
+array accessor (`.kb/declarations-type-checks.md`), so the rontolisp columns
+measure almost the same code they measured undeclared and the other three do
+not.
+
+The same programs with every declaration removed, measured on one machine on
+2026-08-29 (a 64-core Linux box -- not necessarily the machine at the top of
+this file, so read this table against itself and against the run-time table
+above only for direction, not for ratios):
+
+| Undeclared, ms | fib | mandelbrot | matmul | sieve | sort | hash | string | clos | bignum | list |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| sbcl | 130 | 542 | 325 | 208 | 161 | 223 | 139 | 100 | 105 | 110 |
+| ecl | 526 | 3,296 | 2,177 | 787 | 411 | 894 | 859 | 1,485 | 193 | 742 |
+| abcl | 1,848 | 211 | 2,623 | 654 | 1,601 | 739 | 924 | 2,239 | 256 | 423 |
+| rontolisp (jvm) | 85 | 112 | 93 | 468 | 406 | 468 | 231 | 130 | 309 | 390 |
+| rontolisp (wasm) | 274 | 1,077 | 989 | 1,263 | 538 | 743 | 270 | 667 | 862 | 227 |
+
+Three rows changed hands when the declarations went in. Undeclared, rontolisp's
+JVM backend held `fib`, `mandelbrot` and `matmul`; declared, SBCL takes all
+three -- with ECL within a millisecond of it on `matmul` -- by unboxing float
+and integer arithmetic rontolisp still boxes. That lead was never over SBCL's
+float code; it was over SBCL's float code with the types withheld, and SBCL now
+leads every row in the table. The closest rontolisp cell is `clos`, where no
+declaration here says anything about the dispatch and the two columns land
+inside each other's run-to-run noise. The one rontolisp cell a
+declaration does move is wasm `sieve` (1,263 ms undeclared): `flags` is declared
+`simple-vector`, so every `aref` on it emits one accessor instead of the
+four-way dispatch chain. ABCL is the one column a declaration can also COST --
+it reads them, and its `mandelbrot` is slower declared than undeclared.
+
+**The quality setting is not what does it.** With the `optimize` proclamation
+alone and no type declarations, SBCL runs fib / mandelbrot / matmul in
+105 / 508 / 315 ms against the 130 / 542 / 325 above -- a few percent. The types
+are what unbox.
+
+**A `fixnum` is 31 bits wide on ABCL** and 62 on SBCL, so a declaration that is
+true on one is a lie on the other, and at `(safety 0)` nothing diagnoses a lie.
+`sieve`'s inner `j` starts at `(* i i)`, which passes 2^31 at this limit:
+declared `fixnum` it wrapped negative on ABCL and the inner loop never ended --
+a `timeout` cell rather than an error. Every variable here that outgrows 2^31
+carries the range it really has, or plain `integer`.
 
 ## The comparison
 
@@ -88,7 +136,9 @@ same seconds its `startup` row reports.
 ABCL and rontolisp's JVM backend are the pair that share a machine: both emit
 JVM bytecode and both run under the same `java`. Differences between those two
 columns are mostly differences in code generation and runtime representation,
-with the platform held fixed.
+with the platform held fixed -- and, since the declarations went in, with one
+asymmetry left in on purpose: ABCL acts on them and rontolisp does not, which is
+most of what moved ABCL's `fib` from 1,848 ms to under 110.
 
 They do NOT pay the same JIT warm-up, and one row says so. Each benchmark is
 timed on a single cold run, so a row whose work is a JDK library -- `bignum`,

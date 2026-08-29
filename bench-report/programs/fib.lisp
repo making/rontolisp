@@ -2,6 +2,10 @@
 ;;;
 ;;; Nothing but function calls and small-integer arithmetic: 18 million calls,
 ;;; no allocation, no data structure. What it separates is how cheap a call is.
+(declaim (optimize (speed 3) (safety 0) (debug 0)))
+
+(declaim (ftype (function (fixnum) fixnum) fib))
+
 (defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
 
 (defun bench () (fib 34))
