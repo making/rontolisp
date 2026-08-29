@@ -64,6 +64,8 @@ be positional; nothing else is.
 | `(geom:extrusion profile :along 10)` | a closed profile swept along a vector -- the general prism |
 | `(geom:revolution profile :sides 64)` | a profile turned about z, capped where it leaves the axis |
 | `(geom:polyhedron points facets)` | raw points and index loops -- the escape hatch |
+| `(geom:arrow :length 200 :radius 6)` | a shaft and a pointed head as one solid, along `:direction` |
+| `(geom:triad :at (geom:vec3 0 0 0))` | three of those -- +x red, +y green, +z blue -- as a list |
 
 `:sides` and `:stacks` are the tessellation. A tessellated primitive is
 *inscribed* in its smooth ideal, so a measured volume converges on the closed
@@ -75,6 +77,26 @@ form **from below**:
 ```
 
 against `pi r^2 h = 785398`, 0.16% low.
+
+`geom:arrow` is the one that is not a shape from a geometry textbook, and it is
+here rather than in the viewer for a reason. An origin indicator drawn as three
+line segments cannot be given a thickness -- a line primitive has no width --
+and cannot be tipped. An arrow that is a solid can be both, and it also gets
+bounds, a volume, a place on a kinematic chain, the CSG booleans, all four
+backends and the browser renderer without a line of renderer code. Its tail is
+the model origin and its tip is `:length` along `:direction`; every measurement
+left unstated is a fraction of the length, so `(geom:arrow :length 200)` is one
+call. `geom:triad` is three of them in the conventional tints, as a list of
+solids the caller owns:
+
+```lisp
+(mapcar #'geom:label-of (geom:triad :at (geom:vec3 0 0 0)))
+; => ("x" "y" "z")
+```
+
+Unlike the tessellated primitives, its volume is *exact* against the closed form
+of the shape actually built -- a prism plus a pyramid on the same n-gon -- which
+is what pins its winding on every backend.
 
 ## A scene graph
 
@@ -219,8 +241,13 @@ above. So a joint that moves costs one matrix, and `scene:animate`'s hook is
 free to re-pose the whole chain every frame.
 
 `scene:shading` picks `:solid`, `:wireframe` or `:both`; `scene:axes` picks
-`:world`, `:bodies` (each solid's OWN frame, which is what makes a kinematic
-chain readable), `:both` or `nil`. `scene:window-of` and `scene:context-of` are
+`nil` (the default -- nothing), `:world`, `:bodies` (each solid's OWN frame,
+which is what makes a kinematic chain readable) or `:both`. Those are the
+viewer's own furniture: line triads with no thickness, the world one scaled by
+the view distance so it stays legible at any zoom. An origin indicator that is
+an OBJECT -- placed where you say, with a shaft thickness and a pointed tip --
+is `(geom:triad)` above, three solids added like any other, which is why a
+viewer draws no triad unless it was asked for. `scene:window-of` and `scene:context-of` are
 the escape hatches to `appkit:` and to the `metal` drawing surface underneath.
 
 `examples/macos/scene-solids.lisp` is every primitive on a shelf and

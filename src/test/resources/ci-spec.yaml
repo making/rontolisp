@@ -4884,6 +4884,46 @@ cases:
       313655
       31248
       (NIL 8000.0)
+  # The arrow, and the three of them a coordinate frame is drawn as (.kb/geom.md, "The
+  # arrow"). It is the one primitive whose volume has a closed form on the TESSELLATED
+  # shape rather than a limit it approaches -- a prism plus a pyramid on the same n-gon
+  # -- so 32201 is exact arithmetic, not a convergence: 3.1058285 * (36 * 156 + 324 *
+  # 44/3). The three volumes that follow it are the SAME shell rotated, which is why
+  # they must print the same integer on every backend; the last block is the origin
+  # indicator, three labelled solids the caller places, that replaced the triad the
+  # viewer used to draw whether it was asked for or not.
+  - name: geom-arrow-cross-backend
+    source: |
+      (defun ci-geom-arrow ()
+        (let ((a (geom:arrow :length 200 :sides 24)))
+          (print (geom:mesh-triangle-count a))
+          (print (round (geom:volume a)))
+          (print (geom:bounds-extent (geom:bounds a)))
+          (print (array-element-type (geom:vertices-of a))))
+        (print (round (geom:volume (geom:arrow :length 200 :direction :x))))
+        (print (geom:bounds-extent (geom:bounds (geom:arrow :length 200 :direction :x))))
+        (print (round (geom:volume (geom:arrow :length 200 :direction (geom:vec3 1 2 -3)))))
+        (print (round (geom:volume (geom:arrow :length 200 :radius 12 :head-radius 30
+                                               :head-length 40 :sides 32))))
+        (let ((tri (geom:triad :length 100 :at (geom:vec3 10 20 30))))
+          (print (mapcar #'geom:label-of tri))
+          (print (geom:color-of (first tri)))
+          (print (geom:world-translation (third tri)))
+          (print (round (geom:volume (second tri))))))
+      (ci-geom-arrow)
+    expected: |
+      142
+      32201
+      #f(36.0 36.0 200.0)
+      SINGLE-FLOAT
+      32201
+      #f(200.0 36.0 36.0)
+      32201
+      109375
+      ("x" "y" "z")
+      #f(1.0 0.28 0.28)
+      #f(10.0 20.0 30.0)
+      4025
   # The other half: rigid transforms as VALUES and the scene graph over them. A
   # three-link chain's forward kinematics, the memo invalidated down the subtree by a
   # pose change at the root, :frame :local vs :frame :parent, and the invert / compose /

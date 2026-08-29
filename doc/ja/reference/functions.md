@@ -805,6 +805,8 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `geom:extrusion` | `(geom:extrusion profile :along 10)` | 閉じた輪郭をベクトルに沿って掃引した一般の角柱 |
 | `geom:revolution` | `(geom:revolution profile :sides 64)` | 輪郭を z 軸まわりに回した立体。軸を離れる端に蓋が付く |
 | `geom:polyhedron` | `(geom:polyhedron points facets)` | 生の点列とインデックスループ（逃げ道） |
+| `geom:arrow` | `(geom:arrow :length 200 :radius 6)` | 軸と尖った頭を1つのソリッドにした矢印。向きは `:direction` |
+| `geom:triad` | `(geom:triad :at (geom:vec3 0 0 0))` | 3本の `geom:arrow`（+x 赤、+y 緑、+z 青）のリスト |
 | `geom:vertices-of` | `(geom:vertices-of s)` | モデル座標のランク2 `(n 3)` パック配列 |
 | `geom:facets-of` | `(geom:facets-of s)` | インデックスループ。外側から見て反時計回り |
 | `geom:color-of` | `(geom:color-of s)` | ソリッドの色（成分 0..1 の3次元ベクトル）。`setf` 可能 |

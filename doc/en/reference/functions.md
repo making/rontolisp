@@ -864,6 +864,8 @@ convention and the cached mesh.
 | `geom:extrusion` | `(geom:extrusion profile :along 10)` | a closed profile swept along a vector -- the general prism |
 | `geom:revolution` | `(geom:revolution profile :sides 64)` | a profile turned about z, capped where it leaves the axis |
 | `geom:polyhedron` | `(geom:polyhedron points facets)` | raw points and index loops -- the escape hatch |
+| `geom:arrow` | `(geom:arrow :length 200 :radius 6)` | a shaft and a pointed head as one solid, along `:direction` |
+| `geom:triad` | `(geom:triad :at (geom:vec3 0 0 0))` | three `geom:arrow`s -- +x red, +y green, +z blue -- as a list |
 | `geom:vertices-of` | `(geom:vertices-of s)` | a rank-2 `(n 3)` packed array of MODEL coordinates |
 | `geom:facets-of` | `(geom:facets-of s)` | the index loops, each counter-clockwise seen from outside |
 | `geom:color-of` | `(geom:color-of s)` | the solid's colour, a 3-vector of 0..1 components; `setf`-able |

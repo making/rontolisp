@@ -118,7 +118,7 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
    (grid-points :initform 0 :accessor scene::%grid-points)
    (grid-rgb :initarg :grid-rgb :accessor scene::%grid-rgb)
    (axes-buffer :initform nil :accessor scene::%axes-buffer)
-   (axes-mode :initform :world :accessor scene::%axes-mode)
+   (axes-mode :initform nil :accessor scene::%axes-mode)
    (shading :initform :both :accessor scene::%shading)
    (width :initarg :width :accessor scene::%width)
    (height :initarg :height :accessor scene::%height)
@@ -316,10 +316,18 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
   (setf (scene::%shading v) mode)
   nil)
 
-;; :world (the default), :bodies, :both, or nil for none. A body triad draws each
-;; solid's OWN frame, which is what makes a joint chain readable; there is no
-;; text -- geom:label-of names a frame and the triad locates it, and glyph
-;; rendering in Metal is a sub-problem of its own.
+;; nil (the default -- nothing), :world, :bodies or :both. These are the
+;; viewer's FURNITURE: line triads with no thickness, and the world one is
+;; scaled by the view distance so it stays legible at any zoom. An origin
+;; indicator that is an OBJECT -- placed where the caller says, with a shaft
+;; thickness and a pointed tip -- is (geom:triad), three geom:arrow solids added
+;; like any other, which is why nothing is drawn here unless it was asked for
+;; (.kb/geom.md).
+;;
+;; A body triad draws each solid's OWN frame, sized from that body's extent,
+;; which is what makes a joint chain readable; there is no text -- geom:label-of
+;; names a frame and the triad locates it, and glyph rendering in Metal is a
+;; sub-problem of its own.
 (defun scene:axes (v mode)
   (setf (scene::%axes-mode v) mode)
   nil)

@@ -57,7 +57,16 @@
                            (44.0 0.0 60.0) (0.0 0.0 78.0))
                          :sides 48
                          :color (geom:vec3 0.60 0.85 0.90)
-                         :label "vase")))
+                         :label "vase")
+        ;; a shaft and a pointed head as ONE solid -- the primitive the origin
+        ;; indicator below is three of
+        (geom:arrow :length 160
+                    :radius 12
+                    :head-radius 32
+                    :head-length 48
+                    :sides 32
+                    :color (geom:vec3 0.95 0.70 0.30)
+                    :label "arrow")))
 
 (let ((x -540.0))
   (dolist (s *shelf*)
@@ -70,7 +79,13 @@
 ;;; --- the view ----------------------------------------------------------------
 
 (scene:grid *view* :extent 700 :spacing 50)
-(scene:axes *view* :both) ; the world frame AND each solid's own
+
+;;; The origin indicator is an OBJECT: three geom:arrow solids placed where the
+;;; caller says, with a shaft thickness and three tips. The viewer's own axes
+;;; are its furniture -- hairlines with no width -- and :bodies asks for the one
+;;; kind that is genuinely about viewing, each solid's OWN frame.
+(dolist (a (geom:triad :at (geom:vec3 0 0 0))) (scene:add *view* a))
+(scene:axes *view* :bodies)
 (scene:camera *view* :azimuth 1.05 :elevation 0.38)
 (scene:fit *view*)
 (scene:refresh *view*)

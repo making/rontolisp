@@ -102,7 +102,7 @@
         WebGL here.
       </p>
       <canvas id="stage"
-              aria-label="Five solids on a ground grid — a plate, a block with three bored holes, a sphere, a slowly turning torus and a cone; drag to orbit, scroll to zoom"></canvas>
+              aria-label="Solids on a ground grid — a plate, a block with three bored holes, a sphere, a slowly turning torus, a cone, and a red, green and blue arrow marking the origin; drag to orbit, scroll to zoom"></canvas>
       <p>
         <em>Drag to orbit, scroll to zoom.</em> No triangle is touched per
         frame: each solid's model-space mesh went into a vertex buffer of its
@@ -208,7 +208,7 @@
       // line returns.
       lisp._initialize();
 
-      mSolids.textContent = "5";
+      mSolids.textContent = String(lisp.solidCount());
       mTriangles.textContent = lisp.triangleCount().toLocaleString("en-US");
 
       // ---- pointer gestures: the page classifies, Lisp owns the camera ------

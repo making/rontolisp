@@ -35,7 +35,12 @@ generated from the same `gl.wit`.
 (geom:sphere :radius 95.0 :sides 24 :stacks 16 ...)
 (geom:torus :radius 85.0 :tube 24.0 :sides 32 :rings 16 ...)
 (geom:cone :radius 80.0 :height 240.0 :sides 32 ...)
+(geom:triad :length 260.0 :radius 10.0 :at (geom:vec3 0.0 0.0 0.0))
 ```
+
+The origin indicator is three of those calls: `geom:triad` answers three `geom:arrow`
+solids — a shaft and a pointed head, with a thickness — and the renderer here knows
+nothing about arrows, so a primitive added to the modeller reaches this page for free.
 
 and the orange block is a **boundary-representation CSG subtraction** — three cylinders
 bored through a box with `geom:difference`, whose BSP-clipping pipeline is the same one

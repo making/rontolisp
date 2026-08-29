@@ -138,7 +138,17 @@
     ;; triangles never move.
     (setq *spinner* (geom:make-node :translation (geom:vec3 270.0 270.0 190.0)))
     (geom:attach *spinner* ring)
-    (setq *solids* (list plate drilled ball ring spire))))
+    ;; The origin indicator is an OBJECT here too: three geom:arrow solids with
+    ;; a shaft thickness and three tips, placed where this program says. The
+    ;; renderer below knows nothing about arrows -- it consumes geom:mesh, so a
+    ;; new primitive in the modeller reaches the browser for free.
+    (setq *solids*
+          (append (list plate drilled ball ring spire)
+                  (geom:triad :length 260.0
+                              :radius 10.0
+                              :head-radius 26.0
+                              :head-length 60.0
+                              :at (geom:vec3 0.0 0.0 0.0))))))
 
 ;; --- matrices ----------------------------------------------------------------
 ;;
@@ -413,6 +423,10 @@ void main() { color = vec4(uTint, 1.0); }")
     (dolist (s *solids* total)
       (setq total (+ total (geom:mesh-triangle-count s))))))
 
+;; And how many solids, likewise counted rather than written into the page: the
+;; model decides what is in it.
+(defun solid-count () (length *solids*))
+
 (setup-gl)
 
 (rontolisp:wasm-export 'frame :params '(:float) :returns :void)
@@ -425,3 +439,5 @@ void main() { color = vec4(uTint, 1.0); }")
                        :as "triangleCount"
                        :params '()
                        :returns :int)
+
+(rontolisp:wasm-export 'solid-count :as "solidCount" :params '() :returns :int)

@@ -737,6 +737,8 @@ categories:
       - { slug: geom-extrusion, name: "geom:extrusion" }
       - { slug: geom-revolution, name: "geom:revolution" }
       - { slug: geom-polyhedron, name: "geom:polyhedron" }
+      - { slug: geom-arrow, name: "geom:arrow" }
+      - { slug: geom-triad, name: "geom:triad" }
       - { slug: geom-vertices-of, name: "geom:vertices-of" }
       - { slug: geom-facets-of, name: "geom:facets-of" }
       - { slug: geom-color-of, name: "geom:color-of" }

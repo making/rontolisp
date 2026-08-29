@@ -5,10 +5,10 @@ One hand-written Lisp-source library,
 `appkit.lisp` pattern (`linalg.md`, `objc.md`) so a single implementation runs
 identically on every backend: rigid `geom:transform` values, a scene-graph
 `geom:node`, boundary-represented `geom:solid`s with a cached model-space triangle
-mesh, eight primitive constructors, the measurements (`bounds`, `volume`,
-`centroid`, `surface-area`), and the booleans (`union`, `difference`,
-`intersection`, `section` -- see "Boolean operations" below). 55 exported
-functions plus `geom:*tolerance*` and four CLOS class names.
+mesh, nine primitive constructors plus the `triad` convenience, the measurements
+(`bounds`, `volume`, `centroid`, `surface-area`), and the booleans (`union`,
+`difference`, `intersection`, `section` -- see "Boolean operations" below). 57
+exported functions plus `geom:*tolerance*` and four CLOS class names.
 
 **It reaches for nothing but `linalg`** -- no `objc:`, no `java:`, no filesystem, no
 `SourceLoader`. That is the whole reason it ships rather than living in
@@ -26,8 +26,8 @@ package, not a peer of it. Nothing may be added here that breaks that.
 | interpreter | `LispEvaluator.ensureGeomLoaded()` on the first `geom:`-qualified FUNCTION resolution, plus `ensureGeomClassesFor(form)` at the seven `ensureAsdfClassesFor` sites |
 | compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too; the browser playground repeats the nesting |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
-| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-transforms-cross-backend` and `geom-csg-cross-backend` (all four backends) |
-| docs | `doc/{en,ja}/guides/solid-modeling.md`, 55 pages under `reference/functions/geom-*.md` |
+| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend` and `geom-csg-cross-backend` (all four backends) |
+| docs | `doc/{en,ja}/guides/solid-modeling.md`, 57 pages under `reference/functions/geom-*.md` |
 
 **The class-mention trigger is not optional.** The interpreter's lazy load fires on
 FUNCTION resolution, but a `defmethod` specializer, a `typep`, a `typecase` clause, a
@@ -212,6 +212,68 @@ and pin the packed single-float printer too, while every trigonometric answer is
 and ROUNDED so a float32 last bit cannot fail the case. Verified byte-identical on the
 interpreter, a compiled JVM class, WASM preview 1 and the WASI 0.3 component
 (2026-08-29).
+
+## The arrow, and where the origin indicator lives (todo-582, 2026-08-29)
+
+`geom:arrow` is a shaft and a pointed head as ONE solid, and `geom:triad` is three of
+them -- +x red, +y green, +z blue, labelled `"x"` / `"y"` / `"z"` -- as a LIST of
+solids. They replace the origin indicator the viewer used to draw by itself: three
+`metal:+line+` segments out of a private buffer (`scene::%build-axes`) under a model
+matrix scaled by `0.16 * distance`, drawn whether or not the program asked for one.
+The report against that was three complaints and they were one complaint -- **it was
+not an object**: a line primitive has no width, so it could be neither thickened nor
+tipped, and it was furniture rather than something a caller placed.
+
+**Built directly, not `union`-ed.** A cylinder plus a cone through `geom:union` would
+be correct and is one line, but it is a BSP clip ("Boolean operations" above) for a
+composition whose seam is known at construction time, and the arrow is the one solid a
+program may build several of per frame's worth of furniture. The shell is a base cap,
+`n` shaft quads, `n` quads of the head's underside annulus and `n` head triangles:
+`3n + 1` facets, `142` triangles at the default 24 sides.
+
+**Its volume is exact, which is what pins the winding.** Every other tessellated
+primitive converges on its closed form from below, so its test is a tolerance. The
+arrow's closed form is the shape actually built -- a prism plus a pyramid on the same
+regular n-gon, `(n/2) sin(2pi/n) * (r^2 * (len - head) + hr^2 * head / 3)` -- so
+`(geom:arrow :length 200 :sides 24)` is `32201.23...` exactly, and a facet wound the
+wrong way in any of the four families misses it by a mile rather than by a percent
+(`GeomLibraryTest.anArrowIsAPrismPlusAPyramidAndIsExact`, `geom-arrow-cross-backend`).
+
+The four decisions the report left open, and what they are:
+
+- **A constructed arrow does NOT scale with the view distance, and the viewer's line
+  triads still do.** A solid has a size in world units; that is what "an object placed
+  at a point" means, and a `geom` that asked the camera anything would no longer be the
+  backend-independent modeller the whole package rests on. The auto-scaled behavior is
+  genuinely what a viewer's own furniture wants, so it stays exactly where it was, on
+  `scene:axes`. `geom:triad`'s default length is **200**, which is what
+  `0.16 * distance` draws at the viewer's default distance of 1200 (192, rounded to a
+  number a caller can type); `geom:arrow`'s own default length is `1.0`, like every
+  other constructor in the package, and every other measurement it takes is a fraction
+  of the length so one keyword resizes the whole arrow.
+- **`scene:axes`' `:bodies` and `:both` are unchanged.** The report is about the origin.
+  A per-body triad is a different thing: it marks a frame at every solid, it is sized
+  from that body's own model extent (`scene::%gpu-buffers`), and it is drawn under the
+  body's world transform -- furniture that follows the model, not an object in it.
+  Making those solids would mean building and uploading three meshes per body, per
+  frame's worth of poses, to say something a hairline is better at.
+- **The triad is a `geom` function returning solids, not a viewer mode.** Three arrows
+  hung where the caller wants them is the honest spelling; `geom:triad` only saves the
+  three calls and fixes the tints, and `:at` places all three. It returns a list, so it
+  is added with `(dolist (a (geom:triad)) (scene:add *v* a))`.
+- **`scene:axes`' initform is now `nil`.** Nothing is drawn that was not asked for. The
+  modes are all still there, so this is a default change and not a removal;
+  `scene::%build-axes` and the unit line buffer therefore survive, since `:world`,
+  `:bodies` and `:both` all still draw out of it. Both shipped examples
+  (`examples/macos/scene-*.lisp`) and every existing offscreen test already said
+  `(scene:axes v ...)` explicitly, so nothing else moved.
+
+The pixel evidence is `SceneOffscreenRenderTest`: an arrow's shaft is a measurable
+number of pixels across and its head narrows to nothing at the tip, the head sits at
+the end `:direction` names (`:-z` moves it to the other end of the frame), a bigger
+`:radius` draws a wider shaft, a triad at the origin draws red, green and blue, and an
+empty viewer is empty until `(scene:axes v :world)` is asked for. `target/scene-frames/
+arrow-*.png` and `triad-at-the-origin.png` are the pictures.
 
 ## The renderer: `metal` and `scene` (todo-565, 2026-08-29)
 

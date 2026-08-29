@@ -12,6 +12,7 @@ import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.data.Offset.offset;
 
 /**
  * The {@code geom} package ({@code geom.lisp}, spliced/loaded by {@link GeomLibrary}):
@@ -143,6 +144,81 @@ class GeomLibraryTest {
 		assertThat(number("""
 				(geom:volume (geom:extrusion '((0 0 0) (4 0 0) (4 3 0) (0 3 0)) :along 10))
 				""")).isEqualTo(120.0);
+	}
+
+	@Test
+	void anArrowIsAPrismPlusAPyramidAndIsExact() {
+		// The arrow is built as ONE shell -- a base cap, the shaft's sides, the head's
+		// underside annulus and the head's cone -- so its volume has a closed form on
+		// the TESSELLATED shape, not just a limit it approaches: a regular n-gon of
+		// circumradius r has area (n/2) r^2 sin(2pi/n), and the solid is that prism
+		// plus the pyramid over the wider n-gon. An inverted facet in any of the four
+		// families would subtract and miss this by a mile.
+		double ngon = 24 / 2.0 * Math.sin(2 * PI / 24);
+		double exact = ngon * (6 * 6 * 156.0 + 18 * 18 * 44.0 / 3.0);
+		assertThat(number("(geom:volume (geom:arrow :length 200 :sides 24))")).isCloseTo(exact, offset(1e-2));
+		// The defaults are fractions of the length, so naming them changes nothing.
+		assertThat(number("""
+				(geom:volume (geom:arrow :length 200 :radius 6 :head-radius 18 :head-length 44 :sides 24))
+				""")).isCloseTo(exact, offset(1e-2));
+		// 142 triangles: (n - 2) for the cap, 2n for the shaft, 2n for the annulus,
+		// n for the cone.
+		assertThat(number("(geom:mesh-triangle-count (geom:arrow :length 200 :sides 24))")).isEqualTo(142.0);
+	}
+
+	@Test
+	void anArrowPointsWhereItWasAimedAndIsTheSameSolidEveryWay() {
+		// The tail is the model origin and the tip is LENGTH along the direction, so
+		// the bounds say which way it points: 2 * head-radius across, length along.
+		assertThat(vector("(geom:bounds-extent (geom:bounds (geom:arrow :length 200)))"))
+			.usingComparatorWithPrecision(1e-3)
+			.containsExactly(36.0, 36.0, 200.0);
+		assertThat(vector("(geom:bounds-extent (geom:bounds (geom:arrow :length 200 :direction :x)))"))
+			.usingComparatorWithPrecision(1e-3)
+			.containsExactly(200.0, 36.0, 36.0);
+		assertThat(vector("(geom:upper-of (geom:bounds (geom:arrow :length 200 :direction :y)))"))
+			.usingComparatorWithPrecision(1e-3)
+			.containsExactly(18.0, 200.0, 18.0);
+		assertThat(vector("(geom:lower-of (geom:bounds (geom:arrow :length 200 :direction :-z)))"))
+			.usingComparatorWithPrecision(1e-3)
+			.containsExactly(-18.0, -18.0, -200.0);
+		// A direction is a rigid rotation of the same shell, so it cannot change the
+		// volume -- an arbitrary vector included.
+		double along = number("(geom:volume (geom:arrow :length 200))");
+		assertThat(number("(geom:volume (geom:arrow :length 200 :direction :x))")).isCloseTo(along, offset(1e-2));
+		assertThat(number("(geom:volume (geom:arrow :length 200 :direction (geom:vec3 1 2 -3)))")).isCloseTo(along,
+				offset(1e-2));
+	}
+
+	@Test
+	void aThickerShaftIsAThickerArrow() {
+		// The point of the whole exercise: a line has no width and a solid does.
+		double thin = number("(geom:volume (geom:arrow :length 200 :radius 2 :head-radius 8 :head-length 40))");
+		double thick = number("(geom:volume (geom:arrow :length 200 :radius 12 :head-radius 30 :head-length 40))");
+		assertThat(thick).isGreaterThan(4 * thin);
+		assertThat(vector("""
+				(geom:bounds-extent (geom:bounds (geom:arrow :length 200 :radius 12 :head-radius 30)))
+				""")).usingComparatorWithPrecision(1e-3).containsExactly(60.0, 60.0, 200.0);
+	}
+
+	@Test
+	void aTriadIsThreeArrowsAndNotAViewerMode() {
+		// The origin indicator, as solids the caller owns: three labelled arrows in
+		// the tints the viewer's line triad draws, placeable by :at.
+		assertThat(eval("(length (geom:triad))").print()).isEqualTo("3");
+		assertThat(eval("(mapcar #'geom:label-of (geom:triad))").print()).isEqualTo("(\"x\" \"y\" \"z\")");
+		assertThat(eval("""
+				(mapcar (lambda (a) (typep a 'geom:solid)) (geom:triad))
+				""").print()).isEqualTo("(T T T)");
+		assertThat(vector("(geom:color-of (first (geom:triad)))")).usingComparatorWithPrecision(1e-6)
+			.containsExactly(1.0, 0.28, 0.28);
+		// Each arrow points down its own axis, from the point :at names.
+		assertThat(vector("""
+				(geom:world-translation (third (geom:triad :at (geom:vec3 10 20 30))))
+				""")).usingComparatorWithPrecision(1e-4).containsExactly(10.0, 20.0, 30.0);
+		assertThat(vector("""
+				(geom:upper-of (geom:bounds (second (geom:triad :length 100 :at (geom:vec3 0 0 0)))))
+				""")).usingComparatorWithPrecision(1e-3).containsExactly(9.0, 100.0, 9.0);
 	}
 
 	@Test

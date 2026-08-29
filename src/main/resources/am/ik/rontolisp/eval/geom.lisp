@@ -484,6 +484,104 @@
                      :color color
                      :label label)))
 
+;; --- the arrow, and the three of them a frame is drawn as --------------------
+;;
+;; An arrow is a SOLID: a shaft and a pointed head, built as one shell rather
+;; than as (geom:union (cylinder) (cone)). The union would be correct, but it is
+;; a BSP clip for a composition whose seam is known here at construction time,
+;; and the arrow is the one solid a viewer may build several of per frame's
+;; worth of furniture.
+
+;; Two unit vectors spanning the plane perpendicular to W, right-handed with it
+;; (u x v = w). The helper axis is chosen so that a :z arrow's rings are the
+;; very rings geom:cylinder builds -- u = x, v = y -- rather than some rotated
+;; pair of them.
+(defun geom::%arrow-basis (w)
+  (let* ((h (if (< (abs (aref w 1)) 0.9) (geom:vec3 0 1 0) (geom:vec3 0 0 1)))
+         (u (geom::%unit (linalg:cross h w))))
+    (list u (linalg:cross w u))))
+
+;; A RADIUS-wide ring around W at OFFSET along it, counter-clockwise seen from
+;; +W, as (x y z) lists.
+(defun geom::%arrow-ring (u v w radius offset sides)
+  (let ((out '()))
+    (dotimes (i sides (nreverse out))
+      (let* ((a (/ (* geom::+tau+ i) sides))
+             (c (* radius (cos a)))
+             (s (* radius (sin a))))
+        (push (list (+ (* c (aref u 0)) (* s (aref v 0)) (* offset (aref w 0)))
+                    (+ (* c (aref u 1)) (* s (aref v 1)) (* offset (aref w 1)))
+                    (+ (* c (aref u 2)) (* s (aref v 2)) (* offset (aref w 2))))
+              out)))))
+
+;; The tail is the model origin and the tip is LENGTH along DIRECTION (:x / :y /
+;; :z / :-x ... or a vector). RADIUS is the shaft's, so its thickness is twice
+;; that; the head is a cone of HEAD-RADIUS over the last HEAD-LENGTH, ending at
+;; the tip. Every unstated measurement is a fraction of LENGTH, so
+;; (geom:arrow :length 200) is this arrow 200 long and nothing else has to move.
+;;
+;; Wound counter-clockwise seen from outside like every other primitive: the
+;; base cap, the shaft's sides, the head's underside annulus and the head's
+;; cone. geom:volume is therefore exact against the closed form -- a prism plus
+;; a pyramid on the same n-gon.
+(defun geom:arrow (&key (length 1.0) (direction :z) radius head-radius
+                        head-length (sides 24) color label)
+  (let* ((len (float length 1.0))
+         (r (if radius (float radius 1.0) (* 0.03 len)))
+         (hr (if head-radius (float head-radius 1.0) (* 3.0 r)))
+         (hl (min (if head-length (float head-length 1.0) (* 0.22 len)) len))
+         (shaft (- len hl))
+         (w (geom::%unit (geom:axis-vector direction)))
+         (basis (geom::%arrow-basis w))
+         (u (first basis))
+         (v (second basis))
+         (n sides)
+         (points
+          (append (geom::%arrow-ring u v w r 0.0 n)
+                  (geom::%arrow-ring u v w r shaft n)
+                  (geom::%arrow-ring u v w hr shaft n)
+                  (list
+                   (list (* len (aref w 0)) (* len (aref w 1))
+                         (* len (aref w 2))))))
+         (facets (list (reverse (geom::%iota-list n)))))
+    (dotimes (i n)
+      (let ((j (mod (+ i 1) n)))
+        ;; the shaft's side, the head's underside (facing back down the shaft)
+        ;; and the head's cone
+        (push (list i j (+ j n) (+ i n)) facets)
+        (push (list (+ i n) (+ j n) (+ j n n) (+ i n n)) facets)
+        (push (list (+ i n n) (+ j n n) (* 3 n)) facets)))
+    (geom::%build-solid points (nreverse facets) :color color :label label)))
+
+;; The three arrows a coordinate frame is drawn as -- +x red, +y green, +z blue,
+;; the tints the viewer's own triads use -- as a LIST of solids, labelled "x" /
+;; "y" / "z". A geom function answering solids rather than a viewer mode: the
+;; caller adds them like anything else -- (dolist (a (geom:triad)) (scene:add v a))
+;; -- and may move, colour, attach or measure them afterwards.
+;;
+;; :at places all three, so (geom:triad :at (geom:vec3 0 0 0)) is the origin
+;; indicator. The default length is the one the viewer's line triad draws at its
+;; default camera distance (.kb/geom.md).
+(defun geom:triad
+    (&key (length 200.0) radius head-radius head-length (sides 24) at)
+  (let ((out '()))
+    (dolist (row
+             (list (list :x (geom:vec3 1.0 0.28 0.28) "x")
+                   (list :y (geom:vec3 0.30 1.0 0.40) "y")
+                   (list :z (geom:vec3 0.38 0.55 1.0) "z")))
+      (let ((a
+             (geom:arrow :length length
+                         :direction (first row)
+                         :radius radius
+                         :head-radius head-radius
+                         :head-length head-length
+                         :sides sides
+                         :color (second row)
+                         :label (third row))))
+        (when at (geom:place a :translation at))
+        (push a out)))
+    (nreverse out)))
+
 ;; The escape hatch: raw points and index loops, for a mesh that came from a
 ;; file or an algorithm.
 (defun geom:polyhedron (points facets &key color label)

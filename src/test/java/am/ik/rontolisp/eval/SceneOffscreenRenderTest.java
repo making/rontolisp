@@ -189,6 +189,117 @@ class SceneOffscreenRenderTest {
 		assertThat(again.pixels).as("a second frame of the same scene").isEqualTo(first.pixels);
 	}
 
+	// --- the origin indicator is an object -----------------------------------------
+
+	/**
+	 * An arrow seen edge-on from +x, filling most of the frame: the camera is level with
+	 * the middle of it, world +z is screen up and world +y is screen right, so a row's
+	 * red width IS the shaft's or the head's diameter and the topmost red row is the tip.
+	 * At this camera 300 world units are about 87 pixels tall, a 90-wide head about 26
+	 * across and a 30-wide shaft about 9.
+	 */
+	private static final String ARROW_SCENE = sized("""
+			(defvar *v* (scene:offscreen :width %d :height %d))
+			(scene:grid *v* :extent nil)
+			(scene:shading *v* :solid)
+			(scene:camera *v* :azimuth 0.0 :elevation 0.0 :distance 500.0
+			                  :target (geom:vec3 0 0 150))
+			""");
+
+	@Test
+	void anArrowHasAThickShaftAndComesToAPoint() {
+		// The whole point of making the origin indicator a SOLID: metal:+line+ has no
+		// width, so a triad of segments could be neither thickened nor tipped. Here
+		// the shaft is a measurable number of pixels across and the head narrows to
+		// nothing at the tip.
+		Frame frame = render("arrow-along-z", ARROW_SCENE + """
+				(scene:add *v* (geom:arrow :length 300 :radius 15 :head-radius 45 :head-length 90
+				                           :color (geom:vec3 1.0 0.2 0.2)))
+				(scene:snapshot *v*)
+				""");
+		int top = frame.firstRedRow();
+		int bottom = frame.lastRedRow();
+		assertThat(bottom - top).as("%s: 300 units tall at this camera", frame).isBetween(70, 100);
+		int widest = frame.widestRedRow();
+		assertThat(frame.redRowWidth(widest)).as("%s: the head is 90 units across", frame).isBetween(18, 34);
+		assertThat(frame.redRowWidth(top + 2)).as("%s: and it comes to a point", frame)
+			.isLessThan(frame.redRowWidth(widest) / 2);
+		assertThat(frame.redRowWidth(bottom - 3)).as("%s: the shaft is 30 units across", frame).isBetween(4, 16);
+		assertThat(widest).as("%s: the head is at the TIP end, which is +z here", frame).isLessThan((top + bottom) / 2);
+	}
+
+	@Test
+	void anArrowsHeadIsAtTheEndItPointsAt() {
+		// The same arrow aimed the other way: nothing but :direction changes, and the
+		// wide end moves to the other end of the frame. A tip that pointed the wrong
+		// way would be invisible to every volume oracle geom has.
+		Frame frame = render("arrow-along-minus-z", ARROW_SCENE + """
+				(scene:add *v* (geom:arrow :length 300 :direction :-z :radius 15 :head-radius 45
+				                           :head-length 90 :color (geom:vec3 1.0 0.2 0.2)))
+				(scene:camera *v* :target (geom:vec3 0 0 -150))
+				(scene:snapshot *v*)
+				""");
+		int top = frame.firstRedRow();
+		int bottom = frame.lastRedRow();
+		assertThat(frame.widestRedRow()).as("%s: the head is at the BOTTOM for a :-z arrow", frame)
+			.isGreaterThan((top + bottom) / 2);
+	}
+
+	@Test
+	void aThickerShaftDrawsMorePixels() {
+		// Thickness is a parameter of the object, not a property of the renderer.
+		String scene = ARROW_SCENE + """
+				(scene:add *v* (geom:arrow :length 300 :radius %s :head-radius 45 :head-length 90
+				                           :color (geom:vec3 1.0 0.2 0.2)))
+				(scene:snapshot *v*)
+				""";
+		Frame thin = render("arrow-thin", scene.formatted("4"));
+		Frame thick = render("arrow-thick", scene.formatted("30"));
+		assertThat(thin.redRowWidth(thin.lastRedRow() - 3)).as("%s: an 8-unit shaft", thin).isBetween(1, 6);
+		assertThat(thick.redRowWidth(thick.lastRedRow() - 3)).as("%s: a 60-unit shaft", thick)
+			.isGreaterThan(3 * thin.redRowWidth(thin.lastRedRow() - 3));
+	}
+
+	@Test
+	void aTriadAtTheOriginDrawsThreeColouredArrows() {
+		// What replaces the world triad the viewer used to draw whether it was asked
+		// for or not: three geom:arrow solids, in the same three tints, added like
+		// anything else. Placed at the origin it is the picture the viewer used to
+		// draw by itself -- with a thickness and three tips.
+		Frame frame = render("triad-at-the-origin", sized("""
+				(defvar *v* (scene:offscreen :width %d :height %d))
+				(scene:grid *v* :extent nil)
+				(scene:shading *v* :solid)
+				(scene:camera *v* :azimuth 0.9 :elevation 0.45 :distance 620.0)
+				(dolist (a (geom:triad :at (geom:vec3 0 0 0))) (scene:add *v* a))
+				(scene:snapshot *v*)
+				"""));
+		assertThat(frame.redPixels()).as("%s: the x arrow", frame).isGreaterThan(30);
+		assertThat(frame.greenPixels()).as("%s: the y arrow", frame).isGreaterThan(30);
+		assertThat(frame.bluePixels()).as("%s: the z arrow", frame).isGreaterThan(30);
+	}
+
+	@Test
+	void aViewerDrawsNoTriadUntilItIsAskedFor() {
+		// The behavior change 582 landed: scene:axes' mode used to be :world from the
+		// initform, so every viewer drew a triad at the origin whether the program
+		// wanted furniture or not. An empty viewer is now empty, and the modes are
+		// still there for a caller who does want them.
+		Frame bare = render("axes-off-by-default", sized("""
+				(defvar *v* (scene:offscreen :width %d :height %d))
+				(scene:grid *v* :extent nil)
+				(scene:snapshot *v*)
+				"""));
+		assertThat(bare.nonBackgroundPixels()).as("%s: nothing was asked for, so nothing is drawn", bare).isZero();
+		Frame asked = render("axes-world-asked-for", sized("""
+				(defvar *v* (scene:offscreen :width %d :height %d))
+				(scene:grid *v* :extent nil)
+				(scene:axes *v* :world)
+				(scene:snapshot *v*)
+				"""));
+		assertThat(asked.nonBackgroundPixels()).as("%s: the line triad is still available", asked).isPositive();
+	}
+
 	// --- the camera's signs, and the browser twin's ------------------------------
 
 	/**
@@ -364,6 +475,74 @@ class SceneOffscreenRenderTest {
 		boolean isBackground(int x, int y) {
 			return Math.abs(red(x, y) - BACKGROUND[0]) <= 2 && Math.abs(green(x, y) - BACKGROUND[1]) <= 2
 					&& Math.abs(blue(x, y) - BACKGROUND[2]) <= 2;
+		}
+
+		boolean isGreen(int x, int y) {
+			return green(x, y) > 90 && green(x, y) > 2 * red(x, y);
+		}
+
+		/** The first row holding a solid pixel, counting from the top of the frame. */
+		int firstRedRow() {
+			for (int y = 0; y < HEIGHT; y++) {
+				if (redRowWidth(y) > 0) {
+					return y;
+				}
+			}
+			return -1;
+		}
+
+		int lastRedRow() {
+			for (int y = HEIGHT - 1; y >= 0; y--) {
+				if (redRowWidth(y) > 0) {
+					return y;
+				}
+			}
+			return -1;
+		}
+
+		/** The widest row, which for an arrow seen edge-on is the head's base. */
+		int widestRedRow() {
+			int best = 0;
+			for (int y = 0; y < HEIGHT; y++) {
+				if (redRowWidth(y) > redRowWidth(best)) {
+					best = y;
+				}
+			}
+			return best;
+		}
+
+		int redRowWidth(int y) {
+			int count = 0;
+			for (int x = 0; x < WIDTH; x++) {
+				if (isRed(x, y)) {
+					count++;
+				}
+			}
+			return count;
+		}
+
+		int greenPixels() {
+			return count(this::isGreen);
+		}
+
+		int bluePixels() {
+			return count(this::isBlue);
+		}
+
+		int nonBackgroundPixels() {
+			return count((x, y) -> !isBackground(x, y));
+		}
+
+		private int count(java.util.function.BiPredicate<Integer, Integer> test) {
+			int found = 0;
+			for (int y = 0; y < HEIGHT; y++) {
+				for (int x = 0; x < WIDTH; x++) {
+					if (test.test(x, y)) {
+						found++;
+					}
+				}
+			}
+			return found;
 		}
 
 		int redPixels() {
