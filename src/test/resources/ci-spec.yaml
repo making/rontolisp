@@ -3954,6 +3954,36 @@ cases:
       #d(1.0 2.0)
       #(99 2 3)
       #(1 2 3)
+  - name: string-literal-write-cross-backend
+    source: |
+      (defun ci-slit () "abc")
+      (defun ci-slit-vec () #("abc" "def"))
+      (defun ci-slit-bang (s) (setf (char s 0) #\Z) s)
+      (defun ci-string-literal-write ()
+        (print (list (eq (ci-slit) (ci-slit)) (eq (aref (ci-slit-vec) 0) (aref (ci-slit-vec) 0))))
+        (let ((a (ci-slit))) (setf (char a 0) #\Z) (print a))
+        (print (ci-slit))
+        (let ((a (ci-slit))) (setf (elt a 1) #\Y) (print a))
+        (print (ci-slit))
+        (let ((a (ci-slit))) (setf (aref a 2) #\X) (print a))
+        (print (ci-slit))
+        (print (ci-slit-bang (ci-slit)))
+        (print (ci-slit))
+        (let* ((v (ci-slit-vec)) (s (aref v 0))) (setf (char s 0) #\Z) (print s))
+        (print (aref (ci-slit-vec) 0)))
+      (ci-string-literal-write)
+    expected: |
+      (T T)
+      "Zbc"
+      "abc"
+      "aYc"
+      "abc"
+      "abX"
+      "abc"
+      "Zbc"
+      "abc"
+      "Zbc"
+      "abc"
   - name: vector-svref-and-array-introspection-cross-backend
     source: |
       (defun ci-array-intro ()

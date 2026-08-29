@@ -42,6 +42,76 @@ byte-identical without it in every program measured; under-injecting would be a 
 a function that does not exist. The interpreter never sees any of this -- it does not
 run `expandTopLevelDefinitions`, and its `%schar-set` is a real in-place primitive.
 
+## A string LITERAL is never written, on any backend
+
+**Invariant: `(setf (char s i) c)` / `(setf (schar s i) c)` / `(setf (aref s i) c)` /
+`(setf (elt s i) c)` where `s` holds a string LITERAL rebuilds the string and rebinds
+the place on ALL FOUR backends; the source constant is untouched and
+`(eq (f) (f))` on a literal stays `T`.** Where the place cannot be rebound the write is
+an ERROR on all four -- refused at compile time by the three compile paths, at run time
+by the interpreter. Pinned by the `string-literal-write-cross-backend` ci-spec case.
+
+The reader marks its own `LispString`s (`LispString.literal`, `LispReader`'s
+`StringToken` arm; `LispString.sourceLiteral()` reads the mark), because that object IS
+the program text: it answers every evaluation of the form it appears in, for the life of
+the program. Nothing else is marked -- a `copy-seq`, `concatenate`, `subseq` or `format`
+result is an ordinary allocated string, and the rebuilt string a literal write answers is
+ordinary too.
+
+The interpreter's half is `LispEvaluator.evalScharSet` (a `%SCHAR-SET` arm in
+`evalCons`, not a plain builtin call, because the callee cannot rebind its caller's
+variable): it evaluates the three subforms once, then hands
+`Environment.scharSet` a rebind hook when -- and only when -- the place subform is a
+SYMBOL. `Environment.scharSet` owns the whole rule: bounds first, then the literal
+branch (rebuild via `LispString.withCharAt` through the hook, or throw when there is no
+hook), then the in-place write every other string still gets. `%schar-set` as a
+first-class function value has no hook, so it refuses a literal too.
+
+### Measured 2026-08-29, all four backends, before and after
+
+| program | before | after |
+|---|---|---|
+| `(eq (fs) (fs))` for `(defun fs () "abc")` | `T` on all four | unchanged, `T` on all four |
+| `(let ((a (fs))) (setf (char a 0) #\Z) a)` | `"Zbc"` on all four | unchanged |
+| the next `(fs)` | interp `"Zbc"`, compiled `"abc"` | `"abc"` on all four |
+| `(setf (char "abc" 0) #\Z)` | interp silently mutates, compiled = compile error | error on all four |
+| `(setf (char (aref v 0) 0) #\Z)`, `v` a `#("abc")` | interp corrupts, compiled = compile error | error on all four |
+| a literal passed to `(defun f (s) (setf (char s 0) #\Z))` | interp corrupts the constant | rebinds the parameter only, on all four |
+
+**The limits come with the rule and are not silent.** The place must be a VARIABLE (the
+rebuilt string has nowhere else to go), and the update is invisible through an alias
+taken before the write -- `.kb/asdf.md`, cl-base64 item 3.
+
+### What this does NOT cover, measured the same day
+
+The line is drawn at the SOURCE CONSTANT, not at immutability, and the two do not
+coincide:
+
+- **An allocated immutable string still diverges on an alias.** For
+  `(let* ((s (copy-seq "abc")) (b s)) (setf (char s 0) #\Z) (list s b))` the interpreter
+  answers `("Zbc" "Zbc")` and all three compile paths `("Zbc" "abc")`. That is
+  `.todo/559`'s subject -- the compiled backends give a string identity only in the
+  character-vector representation -- and it is confined to an alias the PROGRAM made. A
+  literal's sharing is made by the READER, which is why it is fixed here and this is not;
+  559 says in as many words that a literal must stay immutable whichever way it goes, so
+  the two answers do not collide.
+- **`replace` / `fill` / `(setf (subseq ...))` / `nstring-upcase` still corrupt a literal
+  on the interpreter**, and the compile paths' answer for them is not the rebind but the
+  write being DISCARDED (their functional branch's result is dropped in statement
+  position). Measured on `(let ((a (r))) (replace a "Z") a)` with `(defun r () "abc")`:
+  interpreter `"Zbc"` and the constant gone, all three compile paths `"abc"` with the
+  write lost. So no one backend is right there and `%schar-set`'s answer does not
+  transfer -- `.todo/581`.
+- **A `#P"..."` pathname literal is `eq` to itself on the interpreter and NOT on the
+  three compile paths** (`(defun fp () #P"a/b.txt")`, `(eq (fp) (fp))`: `T` / `NIL` /
+  `NIL` / `NIL`). The reader folds `#P` to a `LispInstance` that self-evaluates here and
+  is rebuilt at the site there. Nothing writes into one, so it is a latent `eq`
+  divergence only -- recorded, not fixed, in `.todo/581`.
+- A string nested inside an array literal is SHARED on all four (`#("abc")`:
+  `(eq (aref (f) 0) (aref (f) 0))` is `T` everywhere) even though the array around it is
+  fresh per evaluation, because `LiteralArrays.materialize` passes a non-array element
+  through by identity. Writing through it obeys the rule above.
+
 ## Why it is a function
 
 The rebuild is two `subseq`s, a `string` and two `%string-concat`s. `subseq` lowers to
@@ -110,3 +180,11 @@ from one definition.
   ci-spec case, `LispEvaluatorTest.evalSetfEltDispatchesOverListStringAndVector`,
   `JvmLispCompilerTest.compileSetfEltOnAStringMutatesIt`, and
   `WasmLispCompilerIntegrationTest.compileSetfEltDispatchesOverListStringAndVector`.
+- The LITERAL rule above: the `string-literal-write-cross-backend` ci-spec case (all
+  four backends -- `eq`, the three place spellings, the argument case and the nested
+  one), plus `LispEvaluatorTest.aStringLiteralIsSharedAcrossEvaluationsOnEveryBackend` /
+  `#aWriteThroughAStringLiteralRebindsThePlaceAndLeavesTheConstant` /
+  `#aWriteThroughAStringLiteralWithNoVariablePlaceIsAnError` /
+  `#aWriteThroughAnAllocatedStringBufferIsStillInPlace` (the last one is the guard that
+  the mark stayed on literals only and a `make-string` buffer is still written in place,
+  alias included).
