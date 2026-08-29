@@ -21,8 +21,6 @@
 ;;;; When you outgrow this, metal-cube.lisp is the full-pipeline version: a
 ;;;; vertex buffer, a per-frame uniform, back-face culling and an animation loop.
 
-(require :metal "metal.lisp")
-
 ;;; --- the shaders --------------------------------------------------------------
 ;;; Metal Shading Language, compiled by the Metal compiler inside this process
 ;;; when metal:library runs. A syntax error here is an ordinary Lisp condition

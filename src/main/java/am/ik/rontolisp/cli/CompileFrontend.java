@@ -22,6 +22,8 @@ import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
+import am.ik.rontolisp.eval.MetalLibrary;
+import am.ik.rontolisp.eval.SceneLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.StdinLibrary;
@@ -163,16 +165,17 @@ final class CompileFrontend {
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.
 		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
-		// objc: and appkit: have no WASM lowering and never will (no foreign function
-		// API, no AppKit); the JVM backend carries the binding as an embedded blob
-		// (JvmObjcRuntimeBuilder). Refuse the WASM outputs here, after load inlining, so
-		// a (load ...)-ed file is caught too and the error names the reference rather
-		// than an undefined function somewhere inside a spliced library.
+		// objc:, appkit:, metal: and scene: have no WASM lowering and never will (no
+		// foreign function API, no AppKit, no Metal); the JVM backend carries the
+		// binding as an embedded blob (JvmObjcRuntimeBuilder). Refuse the WASM outputs
+		// here, after load inlining, so a (load ...)-ed file is caught too and the error
+		// names the reference rather than an undefined function somewhere inside a
+		// spliced library.
 		String objcReference = wasm ? AppKitLibrary.firstObjcReference(loaded) : null;
 		if (objcReference != null) {
 			throw new IllegalArgumentException("Cannot compile: " + objcReference
-					+ " -- the objc: and appkit: packages run on the interpreter (java -jar, or the rontolisp "
-					+ "binary) and in a compiled .class or .jar, not in a .wasm");
+					+ " -- the objc:, appkit:, metal: and scene: packages run on the interpreter (java -jar, or "
+					+ "the rontolisp binary) and in a compiled .class or .jar, not in a .wasm");
 		}
 		// ffi: has no WASM lowering and never will either (no foreign function API in
 		// any WASM runtime); refused the same way, after load inlining, so the error
@@ -313,10 +316,15 @@ final class CompileFrontend {
 		// AppKitLibrary splices appkit.lisp (the widget layer over the objc: verbs) the
 		// same way, so a JVM class compiled from an appkit: program carries the widgets
 		// and, through their objc:send, gates the embedded binding on.
+		// The macOS three run in DEPENDENCY order, innermost first: SceneLibrary (the
+		// 3-D viewer) before MetalLibrary (the drawing surface it is written over)
+		// before GeomLibrary/LinalgLibrary (the model and the kernels both reach for)
+		// and before AppKitLibrary (metal:run's clock is appkit:timer).
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(AppKitLibrary.process(LinalgLibrary.process(GeomLibrary
-						.process(TorchLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))))),
+					UrlLibrary.process(AppKitLibrary
+						.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary.process(SceneLibrary
+							.process(TorchLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /

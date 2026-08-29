@@ -95,15 +95,18 @@ public final class AppKitLibrary {
 	}
 
 	/**
-	 * The first reference to the {@code objc} or {@code appkit} package in a program -- a
-	 * qualified symbol anywhere, or a bare exported name while {@code (in-package
-	 * objc)} / {@code (in-package appkit)} is in effect -- or {@code null} when the
-	 * program uses neither. The compile path refuses a program on this answer.
+	 * The first reference to a macOS-only package in a program -- {@code objc},
+	 * {@code appkit}, {@code metal} or {@code scene}, as a qualified symbol anywhere or
+	 * as a bare exported name while {@code (in-package <that>)} is in effect -- or
+	 * {@code null} when the program uses none of them. The compile path refuses a
+	 * {@code .wasm} output on this answer, naming the reference. All four are one
+	 * question because they are one refusal: every one of them bottoms out in
+	 * {@code objc:send}, which no WASM backend has an API for.
 	 * @param program the top-level forms
 	 * @return the symbol as written, or {@code null}
 	 */
 	public static @Nullable String firstObjcReference(List<LispVal> program) {
-		Walker walker = new Walker();
+		ReferenceWalker walker = new ReferenceWalker();
 		for (LispVal form : program) {
 			walker.trackTopLevelInPackage(form);
 			walker.detect(form);
@@ -112,6 +115,90 @@ public final class AppKitLibrary {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Finds the FIRST reference to any of the four macOS-only packages and stops. Kept
+	 * apart from {@link Walker}, which answers a different question (does this program
+	 * need the appkit SPLICE) and may therefore stop earlier.
+	 */
+	private static final class ReferenceWalker {
+
+		private @Nullable String found;
+
+		private String currentPackage = LispNames.CL_USER_PKG;
+
+		private void trackTopLevelInPackage(LispVal form) {
+			this.currentPackage = trackInPackage(form, this.currentPackage);
+		}
+
+		private void detect(LispVal form) {
+			if (this.found != null) {
+				return;
+			}
+			switch (form) {
+				case LispSymbol sym -> {
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					if (qn != null) {
+						if (MACOS_PACKAGES.contains(qn.pkg())) {
+							this.found = sym.name();
+						}
+					}
+					else if (exportedBy(this.currentPackage, sym.name())) {
+						this.found = this.currentPackage + ":" + sym.name();
+					}
+				}
+				case LispCons cons -> {
+					detect(cons.car());
+					detect(cons.cdr());
+				}
+				default -> {
+				}
+			}
+		}
+
+	}
+
+	/**
+	 * The packages that make a program macOS-only, and therefore un-compilable to WASM.
+	 */
+	private static final List<String> MACOS_PACKAGES = List.of(LispNames.OBJC_PKG, LispNames.APPKIT_PKG,
+			LispNames.METAL_PKG, LispNames.SCENE_PKG);
+
+	/** Whether {@code name} is an exported name of {@code pkg}, one of the four above. */
+	private static boolean exportedBy(String pkg, String name) {
+		String upper = name.toUpperCase(Locale.ROOT);
+		if (LispNames.OBJC_PKG.equals(pkg)) {
+			return OBJC_VERBS.contains(upper);
+		}
+		if (LispNames.APPKIT_PKG.equals(pkg)) {
+			return PackageRegistry.appkitFunctionNames().contains(upper);
+		}
+		if (LispNames.METAL_PKG.equals(pkg)) {
+			return PackageRegistry.metalFunctionNames().contains(upper);
+		}
+		if (LispNames.SCENE_PKG.equals(pkg)) {
+			return PackageRegistry.sceneFunctionNames().contains(upper);
+		}
+		return false;
+	}
+
+	private static String trackInPackage(LispVal form, String current) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.IN_PACKAGE.equals(memberName(op.name())) && cons.cdr() instanceof LispCons argCell) {
+			String name = switch (argCell.car()) {
+				case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
+				case LispString str -> str.value();
+				default -> current;
+			};
+			return PackageRegistry.canonicalBuiltinName(name);
+		}
+		return current;
+	}
+
+	private static String memberName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
 	}
 
 	/**
@@ -139,8 +226,6 @@ public final class AppKitLibrary {
 
 	private static final class Walker {
 
-		private @Nullable String found;
-
 		/**
 		 * Whether an {@code appkit} reference (not merely an {@code objc} one) was seen.
 		 */
@@ -148,34 +233,13 @@ public final class AppKitLibrary {
 
 		private String currentPackage = LispNames.CL_USER_PKG;
 
-		/** Records the FIRST reference; later ones only matter for {@link #appkit}. */
-		private void reference(String name) {
-			if (this.found == null) {
-				this.found = name;
-			}
-		}
-
 		private void trackTopLevelInPackage(LispVal form) {
-			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-					&& LispNames.IN_PACKAGE.equals(member(op.name())) && cons.cdr() instanceof LispCons argCell) {
-				String name = switch (argCell.car()) {
-					case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
-					case LispString str -> str.value();
-					default -> this.currentPackage;
-				};
-				this.currentPackage = PackageRegistry.canonicalBuiltinName(name);
-			}
-		}
-
-		private static String member(String name) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
-			return qn == null ? name : qn.member();
+			this.currentPackage = trackInPackage(form, this.currentPackage);
 		}
 
 		private void detect(LispVal form) {
 			if (this.appkit) {
-				// Nothing left to learn: the first reference is recorded and the
-				// library is needed.
+				// Nothing left to learn: the library is needed.
 				return;
 			}
 			switch (form) {
@@ -184,20 +248,11 @@ public final class AppKitLibrary {
 					if (qn != null) {
 						if (LispNames.APPKIT_PKG.equals(qn.pkg())) {
 							this.appkit = true;
-							reference(sym.name());
-						}
-						else if (LispNames.OBJC_PKG.equals(qn.pkg())) {
-							reference(sym.name());
 						}
 					}
 					else if (LispNames.APPKIT_PKG.equals(this.currentPackage)
 							&& PackageRegistry.appkitFunctionNames().contains(sym.name().toUpperCase(Locale.ROOT))) {
 						this.appkit = true;
-						reference(this.currentPackage + ":" + sym.name());
-					}
-					else if (LispNames.OBJC_PKG.equals(this.currentPackage)
-							&& OBJC_VERBS.contains(sym.name().toUpperCase(Locale.ROOT))) {
-						reference(this.currentPackage + ":" + sym.name());
 					}
 				}
 				case LispCons cons -> {

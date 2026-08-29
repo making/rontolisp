@@ -53,7 +53,7 @@
     "downcalls (objc_getClass, sel_registerName, class_addMethod, protocol_getMethodDescription with",
     "its struct { SEL; const char* } answer, dispatch_sync_f/dispatch_async_f, pthread_main_np,",
     "CFRunLoopRunInMode / CFRunLoopSourceCreate / CFRunLoopAddSource -- the run loop thread 0 parks in) and then the CLOSED TABLE of objc_msgSend shapes a native image",
-    "can serve: the shapes appkit.lisp and the documented examples send, plus the 60 most common",
+    "can serve: the shapes appkit.lisp, metal.lisp, scene.lisp and the documented examples send, plus the 60 most common",
     "shapes of a census over the instance and class methods of 29 core AppKit/Foundation classes",
     "(13,065 methods on macOS 26.3; the top 60 reach 90.6% of them, ObjcRuntime derives a shape from",
     "the selector's own type encoding). The last one is outside the census: it is NSTimer's",
@@ -222,6 +222,10 @@
       {
         "returnType": "void*",
         "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong", "jint"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong", "jboolean"]
       },
       {
         "returnType": "void*",

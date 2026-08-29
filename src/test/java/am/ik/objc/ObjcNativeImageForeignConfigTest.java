@@ -54,10 +54,10 @@ class ObjcNativeImageForeignConfigTest {
 	}
 
 	/**
-	 * Every selector the widget layer and the documented examples send: a class, a
+	 * Every selector the shipped layers and the documented examples send: a class, a
 	 * selector, and whether it is a class method. Kept in step with {@code appkit.lisp},
-	 * {@code doc/en/guides/objc-appkit.md}, the runtime example
-	 * ({@code examples/macos/objc-runtime.lisp}) and the listener example
+	 * {@code metal.lisp}, {@code scene.lisp}, {@code doc/en/guides/objc-appkit.md}, the
+	 * runtime example ({@code examples/macos/objc-runtime.lisp}) and the listener example
 	 * ({@code examples/macos/listener.lisp}) by hand; a new selector there is a row here,
 	 * so the binary is known to serve it before it ships.
 	 */
@@ -170,7 +170,8 @@ class ObjcNativeImageForeignConfigTest {
 			cls("NSMutableData", "dataWithBytes:length:"), inst("NSData", "length"), inst("NSData", "bytes"),
 			inst("NSMutableData", "mutableBytes"), inst("NSError", "localizedDescription"), inst("NSError", "domain"),
 			inst("NSError", "code"), cls("NSJSONSerialization", "JSONObjectWithData:options:error:"),
-			// examples/macos/metal.lisp + metal-triangle.lisp + metal-cube.lisp: a
+			// The shipped metal package (eval/metal.lisp) + metal-triangle.lisp +
+			// metal-cube.lisp: a
 			// Metal surface on the window's content view. Metal is an Objective-C API,
 			// so objc:send reaches all of it; the objects are PROTOCOL-typed
 			// (id<MTLDevice> and friends), which is where the proto rows come in.
@@ -201,7 +202,41 @@ class ObjcNativeImageForeignConfigTest {
 			proto("MTLRenderCommandEncoder", "setVertexBuffer:offset:atIndex:"),
 			proto("MTLRenderCommandEncoder", "setVertexBytes:length:atIndex:"),
 			proto("MTLRenderCommandEncoder", "drawPrimitives:vertexStart:vertexCount:"),
-			proto("MTLRenderCommandEncoder", "endEncoding"), proto("CAMetalDrawable", "texture"));
+			proto("MTLRenderCommandEncoder", "endEncoding"), proto("CAMetalDrawable", "texture"),
+			// The rest of the shipped metal surface, which was an example until todo-565
+			// and is now the layer every metal: program stands on: the depth attachment
+			// (metal:attach :depth t, metal:depth-state, metal:pipeline's declaration
+			// and metal:frame's pass), additive blending (metal:pipeline :blend t), the
+			// rewritable buffer pair (metal:shared-buffer / metal:upload) and the
+			// fragment-stage uniform.
+			cls("MTLTextureDescriptor", "texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+			inst("MTLTextureDescriptor", "setStorageMode:"), inst("MTLTextureDescriptor", "setUsage:"),
+			proto("MTLDevice", "newTextureWithDescriptor:"), proto("MTLDevice", "newDepthStencilStateWithDescriptor:"),
+			proto("MTLDevice", "newBufferWithLength:options:"), cls("MTLDepthStencilDescriptor", "alloc"),
+			inst("MTLDepthStencilDescriptor", "setDepthCompareFunction:"),
+			inst("MTLDepthStencilDescriptor", "setDepthWriteEnabled:"),
+			inst("MTLRenderPipelineDescriptor", "setDepthAttachmentPixelFormat:"),
+			inst("MTLRenderPipelineColorAttachmentDescriptor", "setBlendingEnabled:"),
+			inst("MTLRenderPipelineColorAttachmentDescriptor", "setRgbBlendOperation:"),
+			inst("MTLRenderPipelineColorAttachmentDescriptor", "setAlphaBlendOperation:"),
+			inst("MTLRenderPipelineColorAttachmentDescriptor", "setSourceRGBBlendFactor:"),
+			inst("MTLRenderPipelineColorAttachmentDescriptor", "setSourceAlphaBlendFactor:"),
+			inst("MTLRenderPipelineColorAttachmentDescriptor", "setDestinationRGBBlendFactor:"),
+			inst("MTLRenderPipelineColorAttachmentDescriptor", "setDestinationAlphaBlendFactor:"),
+			inst("MTLRenderPassDescriptor", "depthAttachment"),
+			inst("MTLRenderPassDepthAttachmentDescriptor", "setTexture:"),
+			inst("MTLRenderPassDepthAttachmentDescriptor", "setLoadAction:"),
+			inst("MTLRenderPassDepthAttachmentDescriptor", "setStoreAction:"),
+			inst("MTLRenderPassDepthAttachmentDescriptor", "setClearDepth:"), proto("MTLBuffer", "contents"),
+			inst("NSData", "getBytes:length:"), proto("MTLRenderCommandEncoder", "setFragmentBytes:length:atIndex:"),
+			proto("MTLRenderCommandEncoder", "setDepthStencilState:"),
+			// The shipped scene package (eval/scene.lisp): the window's content view is
+			// an NSView subclass whose mouse and scroll selectors are Lisp closures, and
+			// a resize arrives as an NSViewFrameDidChangeNotification.
+			inst("NSWindow", "setContentView:"), cls("NSView", "alloc"), inst("NSView", "initWithFrame:"),
+			inst("NSView", "setPostsFrameChangedNotifications:"), inst("NSEvent", "locationInWindow"),
+			inst("NSEvent", "modifierFlags"), inst("NSEvent", "scrollingDeltaY"),
+			inst("NSEvent", "hasPreciseScrollingDeltas"));
 
 	/**
 	 * The frameworks {@code examples/macos/system-frameworks.lisp} maps in with an

@@ -247,20 +247,57 @@ CL-USER> (handler-case
 ```
 
 Together they are what puts the GPU in reach: Metal is an Objective-C API almost
-end to end, so `objc:send` drives it with nothing added — `examples/macos/metal-triangle.lisp`
+end to end, so `objc:send` drives it with nothing added.
+
+### The `metal` package
+
+The boilerplate every Metal program writes identically — the `CAMetalLayer` on the
+window's content view, the device, the command queue, the render pass, the drawable,
+present and commit, plus the shader, pipeline and buffer helpers — is the built-in
+**`metal`** package, shipped inside the interpreter and loaded on first use like
+`appkit`. What it deliberately does NOT carry is the shader source, the geometry and
+the draw calls: those are the program.
+
+```console
+CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
+CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
+CL-USER> (defvar *pipe* (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main" "fragment_main"))
+CL-USER> (metal:run *ctx*
+    (lambda (encoder)
+      (objc:send encoder "setRenderPipelineState:" *pipe*)
+      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
+#<objc __NSCFTimer>
+```
+
+The one C function Metal appears to need, `MTLCreateSystemDefaultDevice()`, is
+avoidable: `CAMetalLayer`'s `preferredDevice` is a property and answers the same
+device, which is the fact the whole package stands on. Shaders are compiled from Lisp
+strings at run time, and a shader that does not compile signals with the Metal
+compiler's own diagnostics, caret and all. `metal:buffer` copies numbers to the GPU
+once; `metal:shared-buffer` plus `metal:upload` is for geometry rewritten every frame;
+`metal:uniform` sets the small per-frame values Metal wants inline. A packed
+single-float array IS a buffer's bytes, so a `linalg` matrix and a `geom:mesh` reach
+the GPU with no conversion at all. The [function reference](../reference/functions.md#metal-package-functions)
+lists the whole surface.
+
+`metal` stands on its own — `examples/macos/metal-triangle.lisp`
 draws the WebGL hello world, `examples/macos/metal-cube.lisp` a spinning, shaded cube, and
 `examples/macos/metal-robot-arm.lisp` a robot arm that solves its own inverse kinematics and
 reaches for wherever you click, and `examples/macos/metal-pagoda-garden.lisp` a voxel garden --
 a five-storey pagoda over a koi pond under falling cherry blossom, and a night that comes on
 when you click -- whose thirteen thousand voxels are ONE cube drawn thirteen thousand times,
-the vertex function dividing `vertex_id` by 36 to find which voxel it is on. Shaders are
-compiled from Lisp strings at run time. (OpenGL
+the vertex function dividing `vertex_id` by 36 to find which voxel it is on. All four use
+`metal` directly and none of them uses `geom` or `scene`. (OpenGL
 is the opposite and stays out of reach: `glClear` and friends are plain C functions, which
 `objc_msgSend` does not reach.)
 
 `objc:define-class` is what carries the mouse there: the drawing surface is an `NSView`
 subclass defined at run time whose `mouseDown:` / `mouseDragged:` / `scrollWheel:` are Lisp
 closures, the same verb the widget layer uses to make an `NSBox` answer a click.
+
+The rung above `metal` is the **`scene`** package: a 3-D viewer for `geom` solids, with
+the camera, the grid and the frame loop already written, so a modelled machine is three
+lines from a window. See the [Solid Modeling guide](solid-modeling.md#seeing-it-the-scene-viewer).
 
 ### Threads: everything happens on the main thread
 

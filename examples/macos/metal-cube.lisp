@@ -26,8 +26,6 @@
 ;;;;   rontolisp examples/macos/metal-cube.lisp
 ;;;;   rontolisp examples/macos/metal-cube.lisp -o Cube.class --class-name Cube && java Cube
 
-(require :metal "metal.lisp")
-
 ;;; --- the shaders --------------------------------------------------------------
 
 (defvar *shaders*

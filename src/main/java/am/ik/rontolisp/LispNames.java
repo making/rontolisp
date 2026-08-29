@@ -6153,6 +6153,27 @@ public final class LispNames {
 	public static final String GEOM_PKG = "GEOM";
 
 	/**
+	 * The {@code metal} package name: a Metal drawing surface on an {@code appkit} window
+	 * -- the layer, the device, the command queue, the render pass and the buffer helpers
+	 * every Metal program writes identically -- written in rontolisp itself over the
+	 * {@code objc} verbs ({@code metal.lisp}, see {@code eval.MetalLibrary}) and loaded
+	 * lazily on the first {@code metal:} resolution, the {@code appkit} pattern. macOS
+	 * only, like everything that reaches {@code objc}. Does not use {@code cl}; every
+	 * exported name is external.
+	 */
+	public static final String METAL_PKG = "METAL";
+
+	/**
+	 * The {@code scene} package name: a 3-D viewer for {@code geom} solids -- an
+	 * orbit/pan/dolly camera, a ground grid, axis triads and an animation hook -- written
+	 * in rontolisp itself over {@code geom}, {@code metal} and {@code appkit}
+	 * ({@code scene.lisp}, see {@code eval.SceneLibrary}) and loaded lazily on the first
+	 * {@code scene:} resolution. macOS only, like {@code metal}. Does not use {@code cl};
+	 * every exported name is external.
+	 */
+	public static final String SCENE_PKG = "SCENE";
+
+	/**
 	 * The {@code ffi} package name: the foreign primitives CFFI's backend stands on --
 	 * plain C through the foreign function API ({@code am.ik.ffi}, wired in
 	 * {@code eval.FfiInterop}). The C-flavoured sibling of {@code objc}: a handful of

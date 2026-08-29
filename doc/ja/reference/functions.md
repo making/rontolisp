@@ -824,6 +824,72 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `geom:centroid` | `(geom:centroid s)` | モデル座標での体積中心 |
 | `geom:surface-area` | `(geom:surface-area s)` | メッシュ三角形の面積の合計 |
 
+## metal パッケージの関数
+
+`metal` パッケージは `appkit` ウィンドウ上の Metal 描画サーフェスです。レイヤ、デバイス、
+コマンドキュー、レンダーパス、ドローアブル、present と commit、そしてどの Metal
+プログラムも同じように書くシェーダ・パイプライン・バッファのヘルパをまとめています。
+`objc` の動詞の上に rontolisp で書かれ初回使用時に読み込まれるので、macOS 専用です
+(インタプリタとコンパイル済み `.class` / `.jar`。`.wasm` は不可)。
+**Common Lisp の一部ではありません**。名前は `metal:` 修飾子で参照してください。
+`metal:context` は CLOS クラス名でもあります。単独で成立しており (`geom` や `scene`
+は不要)、`examples/macos/metal-*.lisp` の 4 本が直接これを使っています。
+以下の各名前は個別ページへリンクします。サーフェス全体は
+[macOS GUI ガイド](../guides/objc-appkit.md)を参照してください。
+
+| 関数 | 例 | 結果 |
+|------|-----|------|
+| `metal:attach` | `(metal:attach win :depth t)` | `metal:context`。ウィンドウのコンテンツビュー上の `CAMetalLayer`、そのデバイスとコマンドキュー |
+| `metal:device` | `(metal:device ctx)` | `MTLDevice`。GPU そのもので、あらゆる `new...` セレクタのレシーバ |
+| `metal:layer` | `(metal:layer ctx)` | フレームが提示される `CAMetalLayer` |
+| `metal:queue` | `(metal:queue ctx)` | コマンドバッファをコミットする `MTLCommandQueue` |
+| `metal:library` | `(metal:library ctx source)` | `MTLLibrary`。Metal Shading Language を実行時にコンパイルし、失敗時はコンパイラ自身の診断で送出 |
+| `metal:pipeline` | `(metal:pipeline ctx lib "v" "f")` | 2 つの名前付きシェーダ関数から作る `MTLRenderPipelineState`。`:blend t` で加算合成 |
+| `metal:depth-state` | `(metal:depth-state ctx :writes nil)` | `MTLDepthStencilState`。パイプラインが深度アタッチメントをどう使うか |
+| `metal:floats` | `(metal:floats '(1 2 3))` | パックド単精度配列。Metal バッファのバイト列そのもの |
+| `metal:buffer` | `(metal:buffer ctx (geom:mesh s))` | その数値を保持する `MTLBuffer`。一度コピーされたきり変更されない |
+| `metal:shared-buffer` | `(metal:shared-buffer ctx 4096)` | 共有ストレージ上の `MTLBuffer`。CPU が中身を書き換える |
+| `metal:upload` | `(metal:upload buf values)` | 共有バッファに数値をコピー |
+| `metal:uniform` | `(metal:uniform enc 1 m)` | フレームごとの小さなユニフォームをインラインで設定。`:stage` は `:vertex` (既定) か `:fragment` |
+| `metal:frame` | `(metal:frame ctx fn)` | 1 フレーム描画し、レンダーコマンドエンコーダを引数に `fn` を呼ぶ。空きドローアブルがなければスキップ |
+| `metal:run` | `(metal:run ctx fn :fps 30)` | `metal:frame` を呼ぶタイマー。メインスレッド上の `NSTimer` |
+| `metal:resize` | `(metal:resize ctx 1024 640)` | レイヤ・ドローアブルサイズ・深度テクスチャを新しいコンテンツサイズに追随させる |
+| `metal:set-clear-color` | `(metal:set-clear-color ctx '(0 0 0 1))` | フレーム開始時の色 |
+| `metal:+triangle+` ほか | `metal:+line+` | 描画プログラムが実際に書き下す列挙メンバー。プリミティブ、カルモード、巻き、深度比較 |
+
+## scene パッケージの関数
+
+`scene` パッケージは `metal` と `appkit` の上に載る `geom` ソリッドの 3D
+ビューアです。軌道回転・パン・ドリーのカメラ、地面グリッド、ワールドとボディの座標軸、
+ソリッド/ワイヤフレーム表示、アニメーションフックを備えます。macOS 専用である理由は
+`metal` と同じです。**Common Lisp の一部ではありません**。名前は `scene:`
+修飾子で参照してください。`scene:viewer-state` は CLOS クラス名でもあります。
+ビューアはグローバル変数の集合ではなくインスタンスなので、1 つのイメージに 2
+つのウィンドウが同時に存在し独立に回せます。**フレーム中に Lisp
+は三角形に一切触りません**。各ソリッドのメッシュは一度だけ GPU に送られ、フレームは
+ソリッドごとに 4x4 行列を 1 つ渡すだけです。以下の各名前は個別ページへリンクします。
+モデル側は[ソリッドモデリングガイド](../guides/solid-modeling.md)を参照してください。
+
+| 関数 | 例 | 結果 |
+|------|-----|------|
+| `scene:viewer` | `(scene:viewer :title "arm")` | Metal サーフェスを載せたウィンドウと、それを駆動するビューア |
+| `scene:add` | `(scene:add v s1 s2)` | 最後に追加したソリッド。メッシュは最初に描画されたとき GPU に届く |
+| `scene:drop` | `(scene:drop v s)` | ビューアから外し GPU バッファを解放したソリッド |
+| `scene:clear` | `(scene:clear v)` | `nil`。すべてのソリッドを除去。グリッドとカメラはそのまま |
+| `scene:contents` | `(scene:contents v)` | 描画中のソリッドを追加順に |
+| `scene:fit` | `(scene:fit v)` | `nil`。カメラを内容に向け、全体が収まるまで引く |
+| `scene:camera` | `(scene:camera v :azimuth 0.85)` | `nil`。方位角/仰角/距離/注視点のうち与えたものだけ設定 |
+| `scene:grid` | `(scene:grid v :extent 1200 :spacing 100)` | `nil`。地面グリッドを作り直す |
+| `scene:grid-color` | `(scene:grid-color v (geom:vec3 0.2 0.5 0.4))` | `nil`。グリッドの色 |
+| `scene:background` | `(scene:background v '(0 0 0 1))` | `nil`。フレーム開始時の色 |
+| `scene:shading` | `(scene:shading v :wireframe)` | `nil`。`:solid`、`:wireframe`、`:both` (既定) |
+| `scene:axes` | `(scene:axes v :both)` | `nil`。`:world` (既定)、`:bodies`、`:both`、`nil` |
+| `scene:refresh` | `(scene:refresh v)` | `nil`。ちょうど 1 フレーム描画 |
+| `scene:animate` | `(scene:animate v hook)` | `nil`。60 fps で描画し、各フレーム前に `hook` を 1 回呼ぶ |
+| `scene:wait` | `(scene:wait v)` | ビューアのウィンドウが閉じられたら `nil` |
+| `scene:window-of` | `(scene:window-of v)` | `NSWindow`。`appkit:` や生の `objc:send` への抜け道 |
+| `scene:context-of` | `(scene:context-of v)` | `metal:context`。描画サーフェスへの抜け道 |
+
 ## asdf パッケージの関数
 
 `asdf` パッケージは、`.asd` 定義から複数ファイルのシステムをロードするための、ASDF の

@@ -36,8 +36,6 @@
 ;;;;   rontolisp examples/macos/metal-robot-arm.lisp
 ;;;;   rontolisp examples/macos/metal-robot-arm.lisp -o Arm.class --class-name Arm && java Arm
 
-(require :metal "metal.lisp")
-
 ;;; --- the shaders --------------------------------------------------------------
 ;;;
 ;;; One library, four functions, two pipelines: lit triangles for the solid
