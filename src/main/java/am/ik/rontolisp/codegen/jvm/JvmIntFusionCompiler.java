@@ -275,7 +275,7 @@ final class JvmIntFusionCompiler {
 		if (local != null) {
 			return local;
 		}
-		if (ctx.locals.containsKey(name) || ctx.captures.containsKey(name)) {
+		if (ctx.locals.containsKey(name) || ctx.captures.containsKey(name) || ctx.rawDoubleLocals.containsKey(name)) {
 			return null;
 		}
 		return ctx.rawGlobals.get(name);
@@ -483,7 +483,7 @@ final class JvmIntFusionCompiler {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
-		if (JvmLispCompiler.hasDoubleLiteral(parts)) {
+		if (JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
 			// The double-literal path owns this shape (IEEE compare over unboxed
 			// doubles); fusing it would change nothing for the better.
 			return false;
@@ -556,7 +556,7 @@ final class JvmIntFusionCompiler {
 		if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
 			return false;
 		}
-		if (cons.isProperList() && JvmLispCompiler.hasDoubleLiteral(cons.toList())) {
+		if (cons.isProperList() && JvmLispCompiler.hasDoubleLiteral(cons.toList(), ctx)) {
 			// Float-contaminated: the value can never land in the raw long slot, so the
 			// dual representation would pay its per-site dispatch to always take the
 			// shadow store -- and every read of the name would pay _ubRead for a value
@@ -610,7 +610,7 @@ final class JvmIntFusionCompiler {
 		if (!enabled(ctx) || ctx.globals.contains(name)) {
 			return false;
 		}
-		if (JvmLispCompiler.containsDouble(init)) {
+		if (JvmLispCompiler.containsDouble(init, ctx)) {
 			// A float initializer settles the representation: mandelbrot's (let ((zr
 			// 0.0d0)) ...) accumulators are Doubles for the whole loop, and a raw long
 			// slot they never fill only adds _ubRead to every read of them.
@@ -1138,7 +1138,7 @@ final class JvmIntFusionCompiler {
 			// an ordinary guarded leaf.
 			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
 		}
-		if (JvmLispCompiler.hasDoubleLiteral(parts)) {
+		if (JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
 			// The double-literal routing predicate the per-op compilers read: such a
 			// node takes the unboxed-double path today and keeps it (as a leaf here).
 			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
@@ -1313,7 +1313,7 @@ final class JvmIntFusionCompiler {
 	 * ratio literal, which the fast path's {@code Long} formula cannot answer.
 	 */
 	@Nullable private static RandomLeaf randomLeaf(List<LispVal> parts, JvmLispCompiler.Ctx ctx) {
-		if (!enabled(ctx) || JvmLispCompiler.hasDoubleLiteral(parts)) {
+		if (!enabled(ctx) || JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
 			return null;
 		}
 		LispVal limit = parts.get(1);

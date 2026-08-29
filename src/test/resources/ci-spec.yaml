@@ -151,6 +151,53 @@ cases:
       4.5
       (1.5 0.5 1.5 -1.5)
 
+  - name: declared-float-scalars-answer-what-undeclared-code-answers
+    source: |
+      (defun dclf-declared (a b)
+        (declare (type double-float a b))
+        (let ((acc 0.0d0) (tmp 0.0d0))
+          (declare (type double-float acc tmp))
+          (dotimes (i 4)
+            (setq tmp (* a b))
+            (setq acc (+ acc tmp (- a b) (/ a b))))
+          acc))
+      (defun dclf-undeclared (a b)
+        (let ((acc 0.0d0) (tmp 0.0d0))
+          (dotimes (i 4)
+            (setq tmp (* a b))
+            (setq acc (+ acc tmp (- a b) (/ a b))))
+          acc))
+      (print (dclf-declared 3.5d0 -1.25d0))
+      (print (= (dclf-declared 3.5d0 -1.25d0) (dclf-undeclared 3.5d0 -1.25d0)))
+      (let ((dclf-nan (/ 0.0d0 0.0d0)))
+        (declare (type double-float dclf-nan))
+        (print (list (> dclf-nan 4.0d0) (< dclf-nan 4.0d0) (= dclf-nan dclf-nan))))
+      (let ((dclf-x 1.5d0))
+        (declare (type double-float dclf-x))
+        (print (+ dclf-x 1/2))
+        (print (* dclf-x 4))
+        (print (mod dclf-x 1.0d0)))
+      (defun dclf-capture (x)
+        (declare (type double-float x))
+        (let ((s x))
+          (declare (type double-float s))
+          (let ((fn (lambda () s)))
+            (setq s (+ s 1.0d0))
+            (funcall fn))))
+      (print (dclf-capture 2.0d0))
+      (let* ((dclf-p 1.5d0) (dclf-q (+ dclf-p 1.0d0)))
+        (declare (type double-float dclf-p dclf-q))
+        (print (+ dclf-p dclf-q)))
+    expected: |
+      -9.7
+      T
+      (NIL NIL NIL)
+      2.0
+      6.0
+      0.5
+      3.0
+      4.0
+
   - name: fused-integer-expression-trees
     source: |
       (print (logand (+ 3 4) 5))

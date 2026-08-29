@@ -40,7 +40,17 @@ final class JvmLetCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compile(cons, ctx, className, null);
+		compile(cons, ctx, className, null, false);
+	}
+
+	/**
+	 * Compiles a {@code let} whose VALUE is discarded, leaving nothing on the operand
+	 * stack: every body form compiles for effect, so a final form that is a raw-local
+	 * assignment stores and stops ({@link JvmSetqCompiler#compileForEffect}) instead of
+	 * boxing a value the caller pops.
+	 */
+	static void compileForEffect(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compile(cons, ctx, className, null, true);
 	}
 
 	/**
@@ -51,6 +61,11 @@ final class JvmLetCompiler {
 	 * forms ({@link JvmBodyOutliner}).
 	 */
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, JvmBodyOutliner.@Nullable Tail tail) {
+		compile(cons, ctx, className, tail, false);
+	}
+
+	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			JvmBodyOutliner.@Nullable Tail tail, boolean forEffect) {
 		// A binding that only holds a literal designator for the body's funcall sites is
 		// propagated into them and dropped, so the designator never becomes a VALUE here
 		// (LetBoundDesignators; the WASM twin does the same).
@@ -61,8 +76,19 @@ final class JvmLetCompiler {
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
 		Set<String> savedBoxedVars = new HashSet<>(ctx.boxedVars);
 		Map<String, JvmIntFusionCompiler.RawLocal> savedRawLocals = new HashMap<>(ctx.rawLocals);
+		Map<String, Integer> savedRawDoubleLocals = new HashMap<>(ctx.rawDoubleLocals);
+		Set<String> savedDeclaredDoubles = ctx.declaredDoubles;
 		Map<String, JvmIntFusionCompiler.LocalIntLambda> savedLocalIntLambdas = new HashMap<>(ctx.localIntLambdas);
 		int savedNextLocal = ctx.nextLocal;
+		// The body-head float declarations (.kb/declarations-type-checks.md): a BOUND
+		// declaration makes its binding eligible for a raw double slot below; bound and
+		// free ones together route the body's arithmetic
+		// (JvmLispCompiler.containsDouble). Registered for the BODY after the bindings
+		// compiled (a free declaration covers the outer binding within this body only,
+		// never this let's own inits); specials are never registered.
+		Set<String> declaredFloats = am.ik.rontolisp.compiler.DeclaredScalarTypes
+			.declaredDoubles(parts.subList(2, parts.size()), ctx.closRegistry);
+		boolean bodyDefinesFunction = definesNestedFunction(parts.subList(2, parts.size()));
 		// Every binding name takes part in capture analysis: a special-named binding is
 		// DUAL-BOUND (dynamic set + a lexical slot, mirroring the interpreter), so a
 		// closure built in the body captures the entry value and can read it after the
@@ -135,6 +161,7 @@ final class JvmLetCompiler {
 					ctx.emit(Opcode.ASTORE);
 					ctx.emit(lexSlot);
 					ctx.rawLocals.remove(name);
+					ctx.rawDoubleLocals.remove(name);
 					ctx.localIntLambdas.remove(name);
 					if (capturedInLet.contains(name)) {
 						ctx.boxedVars.add(name);
@@ -142,6 +169,31 @@ final class JvmLetCompiler {
 					else {
 						ctx.boxedVars.remove(name);
 					}
+					continue;
+				}
+				// A declared-float binding kept in a raw double slot
+				// (.kb/jvm-double-arithmetic.md): a plain lexical covered by a bound
+				// (declare (type double-float ...)) in this body. The slot is always
+				// authoritative -- the init and every assignment land raw, through the
+				// strict cast when the emitter cannot prove the value
+				// (.kb/declarations-type-checks.md: a false declaration is a
+				// deterministic ClassCastException, never a coerced value). A nested
+				// defun in the body reaches the name through its global backing store,
+				// so such a body declines, like the raw longs.
+				if (declaredFloats.contains(name) && !ctx.specialVars.contains(name) && !capturedInLet.contains(name)
+						&& !boundInThisLet.contains(name) && !ctx.globals.contains(name) && !ctx.dynamic
+						&& !bodyDefinesFunction && ctx.nextLocal + 2 <= 250) {
+					JvmSetqCompiler.compileRawDoubleValue(pairList.get(1), ctx, className);
+					int doubleSlot = ctx.allocTemp();
+					ctx.allocTemp();
+					ctx.emit(Opcode.DSTORE);
+					ctx.emit(doubleSlot);
+					ctx.rawDoubleLocals.put(name, doubleSlot);
+					ctx.locals.remove(name);
+					ctx.rawLocals.remove(name);
+					ctx.localIntLambdas.remove(name);
+					ctx.boxedVars.remove(name);
+					boundInThisLet.add(name);
 					continue;
 				}
 				// An unboxed dual-representation binding (.kb/jvm-int-fusion.md): a
@@ -169,6 +221,7 @@ final class JvmLetCompiler {
 					JvmIntFusionCompiler.compileRawStore(pairList.get(1), ctx, className, rawLocal);
 					ctx.rawLocals.put(name, rawLocal);
 					ctx.locals.remove(name);
+					ctx.rawDoubleLocals.remove(name);
 					ctx.localIntLambdas.remove(name);
 					ctx.boxedVars.remove(name);
 					boundInThisLet.add(name);
@@ -191,6 +244,7 @@ final class JvmLetCompiler {
 				ctx.emit(Opcode.ASTORE);
 				ctx.emit(slot);
 				ctx.rawLocals.remove(name);
+				ctx.rawDoubleLocals.remove(name);
 				ctx.localIntLambdas.remove(name);
 				// A let-bound lambda whose body is a closed integer tree over its
 				// parameters (the flet lowering's __FLETn_f shape) registers for
@@ -216,6 +270,18 @@ final class JvmLetCompiler {
 				}
 			}
 		}
+		// The float declarations take effect for the BODY: shadowed outer names drop
+		// out whatever this let bound them as; the declared names (bound and free,
+		// specials excluded) route the body's arithmetic. The let's own inits compiled
+		// above under the OUTER set, as CL scopes free declarations.
+		Set<String> bodyDeclaredDoubles = new HashSet<>(savedDeclaredDoubles);
+		bodyDeclaredDoubles.removeAll(letVarNames);
+		for (String name : declaredFloats) {
+			if (!ctx.specialVars.contains(name)) {
+				bodyDeclaredDoubles.add(name);
+			}
+		}
+		ctx.declaredDoubles = bodyDeclaredDoubles;
 		final List<int[]> restores = dynamicRestores;
 		// Restore each dynamically bound special to its saved previous cell (possibly
 		// null = no binding on this thread). This runs with the body's result on top of
@@ -238,6 +304,8 @@ final class JvmLetCompiler {
 			ctx.locals = savedLocals;
 			ctx.boxedVars = savedBoxedVars;
 			ctx.rawLocals = savedRawLocals;
+			ctx.rawDoubleLocals = savedRawDoubleLocals;
+			ctx.declaredDoubles = savedDeclaredDoubles;
 			ctx.localIntLambdas = savedLocalIntLambdas;
 			ctx.nextLocal = savedNextLocal;
 		};
@@ -246,22 +314,69 @@ final class JvmLetCompiler {
 		if (tail != null && parts.size() > 2) {
 			List<JvmBodyOutliner.Item> items = new ArrayList<>();
 			for (int i = 2; i < parts.size(); i++) {
-				if (i > 2) {
-					items.add(new JvmBodyOutliner.PopValue());
+				if (i < parts.size() - 1) {
+					// A non-final body form's value is discarded: the effect item lets
+					// a statement assignment store and stop (the raw-local shapes,
+					// .kb/jvm-int-fusion.md / .kb/jvm-double-arithmetic.md).
+					items.add(new JvmBodyOutliner.EffectForm(parts.get(i)));
 				}
-				items.add(new JvmBodyOutliner.ValueForm(parts.get(i)));
+				else {
+					items.add(new JvmBodyOutliner.ValueForm(parts.get(i)));
+				}
 			}
 			items.add(new JvmBodyOutliner.Cleanup(afterBody));
 			tail.pushFront(items);
 			return;
 		}
 		for (int i = 2; i < parts.size(); i++) {
-			if (i > 2) {
-				ctx.emit(Opcode.POP);
+			if (forEffect || i < parts.size() - 1) {
+				JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);
 			}
-			JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
+			else {
+				JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
+			}
 		}
 		afterBody.run();
+	}
+
+	/**
+	 * Whether the body defines a nested named function ({@code defun} and its async
+	 * forms), which lowers to a closure over the enclosing bindings AND reaches them
+	 * through the global backing store -- the same veto
+	 * {@link JvmIntFusionCompiler#rawBindingEligible} applies to the raw longs. Quoted
+	 * data is skipped.
+	 */
+	private static boolean definesNestedFunction(List<LispVal> bodyForms) {
+		for (LispVal form : bodyForms) {
+			if (definesNestedFunction(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean definesNestedFunction(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (am.ik.rontolisp.LispNames.QUOTE.equals(head.name())) {
+				return false;
+			}
+			if (am.ik.rontolisp.LispNames.DEFUN.equals(head.name())
+					|| am.ik.rontolisp.LispNames.ASYNC_DEFUN.equals(head.name())
+					|| am.ik.rontolisp.LispNames.ASYNC_DEFUN_QUALIFIED.equals(head.name())) {
+				return true;
+			}
+		}
+		LispVal cur = cons;
+		while (cur instanceof LispCons cell) {
+			if (definesNestedFunction(cell.car())) {
+				return true;
+			}
+			cur = cell.cdr();
+		}
+		return false;
 	}
 
 }

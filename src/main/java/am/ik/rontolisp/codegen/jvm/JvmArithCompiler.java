@@ -23,7 +23,7 @@ final class JvmArithCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode, String className) {
 		List<LispVal> args = cons.toList();
 		boolean unaryDiv = JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2;
-		if (JvmLispCompiler.hasDoubleLiteral(args)) {
+		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			compileUnboxed(args, ctx, opKey, doubleOpcode, className);
 			JvmEmitHelper.boxDouble(ctx);
 			return;
@@ -108,6 +108,24 @@ final class JvmArithCompiler {
 			JvmEmitHelper.emitRawDouble(i.value(), ctx);
 			return;
 		}
+		// A declared-float variable (.kb/declarations-type-checks.md): a raw double
+		// local pushes its slot directly; a declared name still held boxed (a parameter,
+		// a captured or outer binding) reads through the strict cast -- a true
+		// declaration makes both exactly the Double the generic path saw, and a false
+		// one is a deterministic ClassCastException here, never a coerced value.
+		if (arg instanceof LispSymbol sym) {
+			Integer rawDoubleSlot = ctx.rawDoubleLocals.get(sym.name());
+			if (rawDoubleSlot != null) {
+				ctx.emit(Opcode.DLOAD);
+				ctx.emit(rawDoubleSlot);
+				return;
+			}
+			if (ctx.declaredDoubles.contains(sym.name())) {
+				JvmExprCompiler.compileExpr(arg, ctx, className);
+				JvmEmitHelper.unboxDeclaredDouble(ctx);
+				return;
+			}
+		}
 		if (arg instanceof LispCons nested && nested.isProperList() && nested.car() instanceof LispSymbol head) {
 			// The heads JvmExprCompiler routes here, with the (helper, opcode) pair it
 			// routes them with -- so an inlined operand compiles to exactly what the
@@ -122,7 +140,7 @@ final class JvmArithCompiler {
 				default -> null;
 			};
 			List<LispVal> parts = nested.toList();
-			if (opKey != null && parts.size() >= 2 && JvmLispCompiler.hasDoubleLiteral(parts)) {
+			if (opKey != null && parts.size() >= 2 && JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
 				int doubleOpcode = switch (head.name()) {
 					case LispNames.ADD -> Opcode.DADD;
 					case LispNames.SUB -> Opcode.DSUB;

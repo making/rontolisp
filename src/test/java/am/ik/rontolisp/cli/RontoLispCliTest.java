@@ -80,6 +80,48 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void anAbsoluteOutputPathEmitsALoadableClass() throws Exception {
+		// -o /abs/dir/T2.class cannot mean a package (the leading separator opens the
+		// name with an empty segment, which the JVM refuses at load time), so the
+		// directory is just a directory and the class is T2 -- what `java -cp dir T2`
+		// runs. It used to compile successfully into a class nothing could load.
+		Path program = this.tempDir.resolve("prog.lisp");
+		Files.writeString(program, "(print (+ 1 2))\n");
+		Path output = this.tempDir.resolve("out/T2.class");
+		runCli("", program.toString(), "-o", output.toString());
+		assertThat(output).exists();
+		assertThat(loadClassName(this.tempDir.resolve("out"), "T2")).isEqualTo("T2");
+	}
+
+	@Test
+	void anAbsoluteOutputPathTakesItsPackageFromClassName() throws Exception {
+		// The escape hatch the refusal message names: an absolute path that ends in the
+		// package path still emits a packaged class, because --class-name says the
+		// package the path cannot. (JvmArtifactOptions.classRoot then roots the output
+		// at the package root, so the class loads from there.)
+		Path program = this.tempDir.resolve("prog.lisp");
+		Files.writeString(program, "(print (+ 1 2))\n");
+		Path output = this.tempDir.resolve("classes/com/acme/Kernels.class");
+		runCli("", program.toString(), "-o", output.toString(), "--class-name", "com.acme.Kernels");
+		assertThat(loadClassName(this.tempDir.resolve("classes"), "com.acme.Kernels")).isEqualTo("com.acme.Kernels");
+	}
+
+	/**
+	 * Loads the emitted class file by the name it is expected to carry, which is the
+	 * check a compiled {@code .class} exists to pass: a name the JVM refuses fails here
+	 * with {@code ClassFormatError} exactly as {@code java -cp root Name} would.
+	 * @param root the class path root the emitted class file sits under
+	 * @param binaryName the name the class is expected to answer to
+	 * @return the loaded class's name
+	 */
+	private String loadClassName(Path root, String binaryName) throws Exception {
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { root.toUri().toURL() },
+				ClassLoader.getPlatformClassLoader())) {
+			return Class.forName(binaryName, false, loader).getName();
+		}
+	}
+
+	@Test
 	void noMainCompilesALibraryClass() throws Exception {
 		Path program = this.tempDir.resolve("lib.lisp");
 		Files.writeString(program,

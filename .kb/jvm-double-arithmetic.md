@@ -129,6 +129,95 @@ replaces a `Double.valueOf` + `_dbl` + `checkcast` + `invokevirtual` chain with 
 too. The double fast path inside `_fx$N` rides the fusion's own `Ctx.intFusion` gate,
 since the method it lives in only exists when fusion is on.
 
+## The todo-569 premise measurement: the SBCL gap was warm-up, not the setq round trip
+
+The item's premise -- "the remaining gap to SBCL's 30 ms is the round trip
+through an Object local at every setq" -- was measured 2026-08-29 (64-core
+linux/x86-64 dev box, GraalVM 25, exec jar) and OVERTURNED. `bench-report`
+times ONE COLD run per process; wrapping mandelbrot's footer in
+`(dotimes (r 10) ...)` separates warm-up from code quality:
+
+| mandelbrot, ms | run 1 (what the row reports) | runs 3-10 |
+| --- | ---: | ---: |
+| rontolisp (jvm), pre-569 emission | 116-129 | **25-26** |
+| sbcl, declared | 30 | 30 |
+
+matmul: cold 84-99, steady **13-14** vs SBCL's 20. **At steady state the JVM
+backend already beat SBCL's declared build on both float rows** -- Graal's
+escape analysis removes every box the boxed emission allocates -- so no
+steady-state "round trip" existed to remove. What the reported number measures
+is the PRE-C2 tiers running the boxed emission: interpreter-tier full-run rate
+~8.4 s, C1-only (`-XX:TieredStopAtLevel=1`) 1,063 ms -- C1 does no escape
+analysis, so every generic-helper call allocated for real -- against 26 ms for
+the same loop hand-written over raw doubles (C1 compiles THAT near-optimally).
+The Java twins put the cold-run ceiling at 32-36 ms: a raw-double emission
+buys the cold row, not the steady state. That is what the declared-float
+carrier below is for, and why its win concentrates in short-lived runs.
+`matmul`'s kernel was ALREADY raw (`.kb/jvm-typed-loops.md` owns its loops),
+so its cold time is pure tier-0/JIT-latency warm-up plus `make-matrix`'s
+`mod`-disqualified boxed loop, and declarations move it ~nothing.
+
+## Declared floats: routing + raw double slots (todo-569)
+
+`am.ik.rontolisp.compiler.DeclaredScalarTypes` (beside `DeclaredArrayTypes`)
+reads the float family -- `double-float`/`single-float`/`short-float`/
+`long-float`/`float`, bare or bounded, through deftype aliases -- out of body
+heads; integer declarations are deliberately NOT read (the fusion infers, and
+was measured at SBCL parity untold). Registration mirrors the wasm array
+kinds: defun/lambda setup (`functionBodyDeclaredDoubles`, behind the sole
+trailing `%fn-block`/`block` wrapper), `JvmLetCompiler` (bound and free
+declarations; let* nests, so only its INNERMOST binding is bound-declared),
+the inline-lambda binder; specials never register, shadowed names drop out,
+`Ctx.declaredDoubles` restored on scope exit. Two effects:
+
+- **Routing**: `containsDouble(val, ctx)` counts a declared (or raw-slotted)
+  variable as a double literal, so `(* zr zr)` -- no literal anywhere -- takes
+  the unboxed IEEE path, routes away from the int fusion, and inlines as an
+  interior node. A declared variable read on the routed path unboxes through
+  `checkcast Double` (`JvmEmitHelper.unboxDeclaredDouble`), NOT `_dbl`: the
+  false-declaration policy (`.kb/declarations-type-checks.md`) -- coercion
+  stays only where a genuine literal routed the node, because there it IS
+  float contagion.
+- **Raw double slots** (`Ctx.rawDoubleLocals`, name -> 2-slot base): a plain
+  lexical let binding covered by a BOUND float declaration -- not special, not
+  captured, not a duplicate, not a promoted-global name (program-wide set, so
+  a top-level let of the same name declines the defun-local binding too), not
+  under `--dynamic`, no nested defun in the body, slot budget -- lives as a
+  raw `double`. The slot is ALWAYS authoritative (no flag, no shadow, unlike
+  the integer dual representation): reads in routed positions `dload`, reads
+  anywhere else box fresh (`compileSymbolRef`), assignments compile the value
+  raw when the routing claims it and land through the strict cast when it
+  cannot (`JvmSetqCompiler.compileRawDoubleValue`; an integer LITERAL widens
+  at emit time). Registration is skipped at top level by the promoted-global
+  exclusion -- the eval mirror owns those slots, as on wasm.
+- **Statement position, completed**: a let body's non-final forms compile
+  through `compileForEffect` (previously value-plus-pop), and a let whose OWN
+  value is discarded -- every loop body is `(let ...)` after expansion --
+  compiles its final form for effect too (`JvmLetCompiler.compileForEffect`,
+  reached from `JvmExprCompiler.compileForEffect`; recurses through let*).
+  With both, `escapes-p`'s inner loop allocates NOTHING per iteration.
+- **Interactions**: a raw double name is never in `locals`/`rawLocals`;
+  `resolveRaw` declines it (a raw GLOBAL of the same name must not answer);
+  the typed-loop compiler treats it as unresolvable and falls back boxed
+  (admitting it as a typed free var is an open follow-up); the body outliner
+  carries it across a `_k$N` split boxed, as it does raw longs. A
+  handler-case clause variable now shadows raw longs, raw doubles AND the
+  boxed set for the clause body (`compileClauseBody`) -- before todo-569 an
+  outer RawLocal of the clause variable's name answered reads inside the
+  clause, a real latent bug this work found and fixed.
+
+### Numbers (2026-08-29, 64-core linux/x86-64, GraalVM 25, best of 5)
+
+`bench-report/programs/mandelbrot.lisp`, `-o Bench.class` under `java`,
+declarations present vs stripped from the source: cold run **105-119 ms ->
+88-102 ms**; C1-only **1,063 -> 125 ms** (the tier the cold run mostly
+executes in); steady state 21-26 ms either way (Graal EA already had it).
+matmul unchanged (~95 ms cold, 13-18 steady), as predicted above. The
+remaining cold-run distance to SBCL's 30 ms is JIT latency and tier-0
+execution of already-good code -- SBCL pays its compilation in `compile-file`
+(the build column), this backend pays it at first execution, and no emission
+change removes that; an AOT/CDS-style answer is out of this file's scope.
+
 ## Numbers (2026-08-28, linux/x86-64, exec jar, GraalVM 25)
 
 `bench-report/programs/mandelbrot.lisp` (400x400 grid, 200 iterations; the file carries
@@ -146,4 +235,10 @@ widening, `-0.0`, the NaN comparison rule, a mixed Long/Double tree that bails o
 fast paths, a bignum leaf, `mod`/`rem` over floats, the float-initialised accumulator, the
 statement-position `setq` shapes -- at `DEFAULT` and at `SIZE`), and the
 `double-arithmetic-unboxed-and-fused` ci-spec case, which pins the same answers across all
-four backends.
+four backends. The declared-float carrier is pinned by
+`declaredFloatLocalsMatchTheUndeclaredEmissionOnBothOptimizeLevels` (the declared/
+undeclared twin equality, -0.0, NaN, ratio/bignum contagion, the captured / special /
+shadowed / top-level declines, the handler-case clause-variable shadowing, and the three
+pinned UB shapes: :STORE-TRAP, :READ-TRAP, literal widening) and the
+`declared-float-scalars-answer-what-undeclared-code-answers` ci-spec case (true
+declarations only -- a false declaration diverges across backends by policy).

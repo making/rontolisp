@@ -391,9 +391,22 @@ final class JvmHandlerCaseCompiler {
 			JvmLispCompiler.Ctx ctx, String className) {
 		String varName = null;
 		Integer shadowedSlot = null;
+		JvmIntFusionCompiler.RawLocal shadowedRaw = null;
+		Integer shadowedRawDouble = null;
+		java.util.Set<String> savedBoxedVars = ctx.boxedVars;
 		if (clauseParts.get(1) instanceof LispCons varList && varList.car() instanceof LispSymbol var) {
 			varName = var.name();
 			shadowedSlot = ctx.locals.put(varName, valueSlot);
+			// The clause variable is a fresh plain binding of the name: an outer
+			// unboxed dual-representation local, raw double local or boxed (captured)
+			// binding of the same name must not answer reads inside the clause body --
+			// compileSymbolRef resolves those representations before the plain slot.
+			shadowedRaw = ctx.rawLocals.remove(varName);
+			shadowedRawDouble = ctx.rawDoubleLocals.remove(varName);
+			if (ctx.boxedVars.contains(varName)) {
+				ctx.boxedVars = new java.util.HashSet<>(savedBoxedVars);
+				ctx.boxedVars.remove(varName);
+			}
 		}
 		try {
 			if (clauseParts.size() <= 2) {
@@ -418,6 +431,13 @@ final class JvmHandlerCaseCompiler {
 				else {
 					ctx.locals.remove(varName);
 				}
+				if (shadowedRaw != null) {
+					ctx.rawLocals.put(varName, shadowedRaw);
+				}
+				if (shadowedRawDouble != null) {
+					ctx.rawDoubleLocals.put(varName, shadowedRawDouble);
+				}
+				ctx.boxedVars = savedBoxedVars;
 			}
 		}
 	}

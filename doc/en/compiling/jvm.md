@@ -16,7 +16,12 @@ The generated class is named after the output file, so the name you pass to
 `java Hello`. A directory in the path becomes the class's Java **package**:
 `-o com/example/Kernels.class` produces `com.example.Kernels`, which you run
 with `java -cp . com.example.Kernels` from the directory the path started in
-(the missing directories are created). The program's top-level forms
+(the missing directories are created). A directory that could not BE a package is
+just a directory instead: an absolute path (whose leading `/` would open the name
+with an empty package, which no JVM loads) and a `./` or `../` segment leave only
+the file's stem, so `-o /tmp/out/Hello.class` is again the class `Hello` that
+`java -cp /tmp/out Hello` runs. `--class-name` is how an absolute path names a
+package anyway. The program's top-level forms
 become the class's entry point and run in order when you launch it.
 
 `-o out.jar` writes a jar rather than a bare class: the class, the runtime

@@ -115,10 +115,12 @@ public final class DistClient {
 	}
 
 	/**
-	 * A {@code releases.txt} entry: the tarball URL and the archive's top-level directory
-	 * name (the extraction prefix).
+	 * A {@code releases.txt} entry: the tarball URL, the archive's top-level directory
+	 * name (the extraction prefix) and the {@code .asd} files the index attributes to the
+	 * release, as paths relative to that directory ({@code alexandria.asd},
+	 * {@code src/com.inuoe.jzon.asd}).
 	 */
-	private record ReleaseEntry(String url, String prefix) {
+	private record ReleaseEntry(String url, String prefix, List<String> asdFiles) {
 	}
 
 	/**
@@ -315,14 +317,21 @@ public final class DistClient {
 		List<String> searchDirs = new ArrayList<>();
 		Set<String> seen = new HashSet<>();
 		for (ProjectRef ref : projects.values()) {
-			Path root = ensureProject(ref);
-			collectAsdDirs(root, searchDirs, seen);
+			Extracted extracted = ensureProject(ref);
+			collectAsdDirs(extracted.root(), extracted.asdFiles(), searchDirs, seen);
 		}
 		return searchDirs;
 	}
 
 	/** A release project to extract, and the dist it comes from. */
 	private record ProjectRef(Dist dist, String project) {
+	}
+
+	/**
+	 * An extracted release: its root directory and the {@code .asd} files its dist index
+	 * attributes to it, relative to that root.
+	 */
+	private record Extracted(Path root, List<String> asdFiles) {
 	}
 
 	/**
@@ -374,10 +383,11 @@ public final class DistClient {
 
 	/**
 	 * Ensures a release project's tarball is downloaded and extracted under
-	 * {@code <dist home>/software/<prefix>/}, and returns that directory. An
-	 * already-extracted project is reused (no network I/O).
+	 * {@code <dist home>/software/<prefix>/}, and returns that directory together with
+	 * the {@code .asd} files the index attributes to the release. An already-extracted
+	 * project is reused (no network I/O).
 	 */
-	private Path ensureProject(ProjectRef ref) throws IOException {
+	private Extracted ensureProject(ProjectRef ref) throws IOException {
 		ReleaseEntry release = releases(ref.dist()).get(ref.project());
 		if (release == null) {
 			throw new IOException("ql:quickload: no release found for project '" + ref.project() + "' in dist '"
@@ -386,7 +396,7 @@ public final class DistClient {
 		Path software = ref.dist().home.resolve("software");
 		Path root = software.resolve(release.prefix());
 		if (Files.isDirectory(root)) {
-			return root;
+			return new Extracted(root, release.asdFiles());
 		}
 		byte[] tarGz = this.downloader.get(release.url());
 		Files.createDirectories(software);
@@ -395,7 +405,7 @@ public final class DistClient {
 			throw new IOException("ql:quickload: archive for '" + ref.project() + "' did not contain the expected"
 					+ " directory '" + release.prefix() + "'");
 		}
-		return root;
+		return new Extracted(root, release.asdFiles());
 	}
 
 	private Map<String, SystemEntry> systems(Dist dist) throws IOException {
@@ -533,7 +543,9 @@ public final class DistClient {
 
 	/**
 	 * Parses {@code releases.txt}: each non-comment line is
-	 * {@code project url size md5 sha1 prefix file...}, keyed by project.
+	 * {@code project url size md5 sha1 prefix file...}, keyed by project. The trailing
+	 * {@code file...} column names the release's {@code .asd} files and is what decides
+	 * its search-path contribution ({@link #collectAsdDirs}).
 	 */
 	private static Map<String, ReleaseEntry> parseReleases(String text) {
 		Map<String, ReleaseEntry> index = new HashMap<>();
@@ -545,21 +557,54 @@ public final class DistClient {
 			if (parts.length < 6) {
 				continue;
 			}
-			index.put(parts[0], new ReleaseEntry(parts[1], parts[5]));
+			List<String> files = parts.length > 6 ? List.copyOf(List.of(parts).subList(6, parts.length)) : List.of();
+			index.put(parts[0], new ReleaseEntry(parts[1], parts[5], files));
 		}
 		return index;
 	}
 
 	/**
-	 * Adds every directory under {@code root} that contains a {@code .asd} file to
-	 * {@code out} (deduplicated via {@code seen}). This makes each system's definition
-	 * locatable by {@link AsdfSystems#locate} regardless of how deep the {@code .asd}
-	 * sits in the release.
+	 * Adds the directories a release contributes to the search path to {@code out}
+	 * (deduplicated via {@code seen}): the ones holding the {@code .asd} files its dist
+	 * index NAMES ({@code releases.txt}'s trailing {@code file...} column,
+	 * {@code indexFiles}), which is exactly the set Quicklisp itself registers for the
+	 * release.
+	 * <p>
+	 * Walking the whole release instead would put a vendored snapshot of ANOTHER library
+	 * on the path -- iterate's release carries {@code ext/alexandria/alexandria.asd},
+	 * cffi's {@code uffi-compat/uffi.asd} -- where it competes with that library's own
+	 * release for the name, and the winner is whichever release the program happened to
+	 * quickload first. No dist index attributes those files to the release, so they are
+	 * not candidates at all.
+	 * <p>
+	 * The contribution stays per DIRECTORY, not per file, because that is what
+	 * {@link AsdfSystems#locate} consumes (it asks each directory for {@code NAME.asd}).
+	 * A release's own extra {@code .asd} beside a named one is therefore still reachable
+	 * -- cl-sqlite's {@code sqlite-tests.asd}, trivia's {@code trivia.benchmark.asd} --
+	 * which is the behavior an unindexed secondary system relies on.
+	 * <p>
+	 * The whole-release walk remains the FALLBACK for a release whose index names no
+	 * {@code .asd} file that exists: contributing nothing would make the system
+	 * unloadable, and a dist is not required to write the column.
 	 */
-	private static void collectAsdDirs(Path root, List<String> out, Set<String> seen) throws IOException {
-		List<Path> asdFiles;
-		try (Stream<Path> walk = Files.walk(root)) {
-			asdFiles = walk.filter(p -> p.getFileName().toString().endsWith(".asd") && Files.isRegularFile(p)).toList();
+	private static void collectAsdDirs(Path root, List<String> indexFiles, List<String> out, Set<String> seen)
+			throws IOException {
+		List<Path> asdFiles = new ArrayList<>();
+		for (String file : indexFiles) {
+			if (!file.endsWith(".asd")) {
+				continue;
+			}
+			// Confined to the release, like the tar extractor's traversal guard.
+			Path candidate = root.resolve(file).normalize();
+			if (candidate.startsWith(root) && Files.isRegularFile(candidate)) {
+				asdFiles.add(candidate);
+			}
+		}
+		if (asdFiles.isEmpty()) {
+			try (Stream<Path> walk = Files.walk(root)) {
+				asdFiles = walk.filter(p -> p.getFileName().toString().endsWith(".asd") && Files.isRegularFile(p))
+					.toList();
+			}
 		}
 		addAsdDirs(asdFiles, out, seen);
 	}

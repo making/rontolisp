@@ -136,9 +136,12 @@ same seconds its `startup` row reports.
 ABCL and rontolisp's JVM backend are the pair that share a machine: both emit
 JVM bytecode and both run under the same `java`. Differences between those two
 columns are mostly differences in code generation and runtime representation,
-with the platform held fixed -- and, since the declarations went in, with one
-asymmetry left in on purpose: ABCL acts on them and rontolisp does not, which is
-most of what moved ABCL's `fib` from 1,848 ms to under 110.
+with the platform held fixed. Since the declarations went in, ABCL acts on all
+of them (most of what moved its `fib` from 1,848 ms to under 110) and
+rontolisp's JVM backend acts on the float type declarations (`mandelbrot`'s
+accumulators live in raw double slots); the integer declarations rontolisp
+still ignores on purpose -- its integer paths infer the same representation
+untold.
 
 They do NOT pay the same JIT warm-up, and one row says so. Each benchmark is
 timed on a single cold run, so a row whose work is a JDK library -- `bignum`,
@@ -149,7 +152,12 @@ the same JDK code; rontolisp's compiled class starts in 67 ms and meets a cold
 `BigInteger`. On `bignum` rontolisp's first run costs what the identical loop
 hand-written in Java costs on ITS first run, and its third run is twice as fast
 as ABCL's steady state -- the column is measuring the tax the fast startup does
-not get to amortise, not the arithmetic.
+not get to amortise, not the arithmetic. The float rows are the same story
+measured from the other side: `mandelbrot` and `matmul` on the JVM backend
+reach 21-26 ms and 13-18 ms by their third in-process run -- ahead of SBCL's
+declared 30 and 20 -- so most of what their cells report is the cold run
+executing pre-JIT tiers, not the emitted code
+(`.kb/jvm-double-arithmetic.md` has the tier-by-tier numbers).
 
 rontolisp's wasm column runs under wasmtime, and its interpreter column walks
 the AST. Neither has a counterpart among the other three; they are in the table
