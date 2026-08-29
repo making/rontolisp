@@ -12,7 +12,14 @@
 ;;
 ;; macOS only, like everything that reaches objc:: the interpreter (java -jar or
 ;; the rontolisp binary) and a compiled .class / .jar carry it; both WASM
-;; backends refuse a program that references the package.
+;; backends refuse a program that references the package. The browser answer to
+;; the same model is examples/browser/webgl-solids/, a renderer over WebGL2 that
+;; consumes geom:mesh and geom:world-transform exactly as this one does.
+;;
+;; scene:offscreen is the same viewer with no window, drawing into a texture
+;; scene:snapshot reads back. It exists because no test may open a window, and
+;; because it is the SAME scene::%render an offscreen frame is evidence about
+;; what a window shows (.kb/geom.md, "How the renderer is tested").
 ;;
 ;; THE DESIGN POINT, and the reason this file is shaped the way it is: no
 ;; triangle is touched by Lisp during a frame. A solid's model-space mesh
@@ -175,19 +182,16 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
                 "frameChanged:" "NSViewFrameDidChangeNotification" view)))
   nil)
 
-(defun scene:viewer (&key (title "rontolisp scene") (width 900) (height 640)
-                          (background '(0.055 0.065 0.09 1.0)))
-  (let* ((win (appkit:window title :width width :height height :dark t))
-         (view (scene::%make-view win width height))
-         (ctx
-          (metal:attach win
-                        :clear background
-                        :scale scene::+backing-scale+
-                        :depth t))
-         (lib (metal:library ctx scene::*shaders*))
+;; Everything a viewer is that does not depend on WHERE it draws: two pipelines
+;; over the one shader library, the depth state, the camera and the fixed
+;; furniture. The two constructors below differ only in the metal:context they
+;; hand it -- and therefore share the render function, which is the only way an
+;; offscreen frame can be evidence about the window's.
+(defun scene::%viewer-over (ctx window view width height)
+  (let* ((lib (metal:library ctx scene::*shaders*))
          (v
           (make-instance 'scene:viewer-state
-           :window win
+           :window window
            :view view
            :ctx ctx
            :solid-pipeline (metal:pipeline ctx lib "solid_vertex"
@@ -198,11 +202,45 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
            :height (float height 1.0)
            :target (geom:vec3 0 0 0)
            :grid-rgb (geom:vec3 0.30 0.34 0.42))))
-    (setf (gethash (objc:address view) scene::*views*) v)
-    (scene::%watch-resize view)
     (scene:grid v)
     (scene::%build-axes v)
     v))
+
+(defun scene:viewer (&key (title "rontolisp scene") (width 900) (height 640)
+                          (background '(0.055 0.065 0.09 1.0)))
+  (let* ((win (appkit:window title :width width :height height :dark t))
+         (view (scene::%make-view win width height))
+         (ctx
+          (metal:attach win
+                        :clear background
+                        :scale scene::+backing-scale+
+                        :depth t))
+         (v (scene::%viewer-over ctx win view width height)))
+    (setf (gethash (objc:address view) scene::*views*) v)
+    (scene::%watch-resize view)
+    v))
+
+;; A viewer with no window: the same pipelines, the same camera and the same
+;; scene::%render, drawing into a texture metal:pixels can read back. WIDTH and
+;; HEIGHT are pixels. It has no input -- there is nothing to click -- so the
+;; camera moves through scene:camera and scene:fit, and a frame is
+;; scene:snapshot.
+;;
+;; This is what makes the renderer testable: no test may open a window, so
+;; without it the camera, the projection, the model matrices, the winding and
+;; the depth test would ship with nothing checking them (.kb/geom.md).
+(defun scene:offscreen
+    (&key (width 640) (height 480) (background '(0.055 0.065 0.09 1.0)))
+  (scene::%viewer-over
+   (metal:offscreen :width width :height height :clear background :depth t) nil
+   nil width height))
+
+;; One frame of an offscreen viewer, as its pixels: width*height*4 bytes, BGRA,
+;; row 0 at the top (metal:pixels). Drawn through scene:refresh like every other
+;; frame.
+(defun scene:snapshot (v)
+  (scene:refresh v)
+  (metal:pixels (scene:context-of v)))
 
 ;; --- helpers -------------------------------------------------------------------
 
@@ -357,31 +395,38 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
 
 ;; --- the fixed furniture: a ground grid and the axis triad ---------------------
 
+;; The ground plane, or none of it: :extent nil drops the grid the way
+;; (scene:axes v nil) drops the triads, which a viewer that is a picture of one
+;; solid and nothing else wants.
 (defun scene:grid (v &key (extent 600.0) (spacing 50.0))
-  (let* ((e (float extent 1.0))
-         (sp (float spacing 1.0))
-         (n (floor e sp))
-         (lines (* 2 (+ (* 2 n) 1)))
-         (pts
-          (make-array (* lines 6)
-                      :element-type 'single-float
-                      :initial-element 0.0))
-         (k 0))
-    (do ((i (- n) (+ i 1)))
-        ((> i n) nil)
-      (let ((x (* i sp)))
-        (setf (aref pts k) x)
-        (setf (aref pts (+ k 1)) (- e))
-        (setf (aref pts (+ k 3)) x)
-        (setf (aref pts (+ k 4)) e)
-        (setq k (+ k 6))
-        (setf (aref pts k) (- e))
-        (setf (aref pts (+ k 1)) x)
-        (setf (aref pts (+ k 3)) e)
-        (setf (aref pts (+ k 4)) x)
-        (setq k (+ k 6))))
-    (setf (scene::%grid-buffer v) (metal:buffer (scene:context-of v) pts))
-    (setf (scene::%grid-points v) (* lines 2)))
+  (if (null extent)
+      (progn
+        (setf (scene::%grid-buffer v) nil)
+        (setf (scene::%grid-points v) 0))
+      (let* ((e (float extent 1.0))
+             (sp (float spacing 1.0))
+             (n (floor e sp))
+             (lines (* 2 (+ (* 2 n) 1)))
+             (pts
+              (make-array (* lines 6)
+                          :element-type 'single-float
+                          :initial-element 0.0))
+             (k 0))
+        (do ((i (- n) (+ i 1)))
+            ((> i n) nil)
+          (let ((x (* i sp)))
+            (setf (aref pts k) x)
+            (setf (aref pts (+ k 1)) (- e))
+            (setf (aref pts (+ k 3)) x)
+            (setf (aref pts (+ k 4)) e)
+            (setq k (+ k 6))
+            (setf (aref pts k) (- e))
+            (setf (aref pts (+ k 1)) x)
+            (setf (aref pts (+ k 3)) e)
+            (setf (aref pts (+ k 4)) x)
+            (setq k (+ k 6))))
+        (setf (scene::%grid-buffer v) (metal:buffer (scene:context-of v) pts))
+        (setf (scene::%grid-points v) (* lines 2))))
   nil)
 
 (defun scene:grid-color (v rgb)
@@ -530,10 +575,22 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
         (eye (scene::%float4 (scene::%eye v) 0.0))
         (mode (scene::%axes-mode v)))
     (objc:send encoder "setDepthStencilState:" (scene::%depth v))
+    ;; geom winds a facet counter-clockwise seen from OUTSIDE in a right-handed
+    ;; world, and Metal decides facing in CLIP space (y up), not in the y-down
+    ;; framebuffer -- so an outward face arrives counter-clockwise and that is
+    ;; the front. Stated rather than left to Metal's default (which is the other
+    ;; one), because this is where the renderer agrees with the convention
+    ;; geom's volume integral rests on: a facet wound the wrong way is invisible
+    ;; here and subtracts there. Cull mode is a triangle rule, so the line
+    ;; pipelines below are unaffected.
+    (objc:send encoder "setFrontFacingWinding:"
+               metal:+winding-counter-clockwise+)
+    (objc:send encoder "setCullMode:" metal:+cull-back+)
     ;; the ground grid, in world coordinates
-    (scene::%draw-lines v encoder vp (scene::%grid-buffer v)
-                        (scene::%grid-points v) (scene::%identity4)
-                        (scene::%float4 (scene::%grid-rgb v) 1.0))
+    (when (> (scene::%grid-points v) 0)
+      (scene::%draw-lines v encoder vp (scene::%grid-buffer v)
+                          (scene::%grid-points v) (scene::%identity4)
+                          (scene::%float4 (scene::%grid-rgb v) 1.0)))
     ;; the world axes, scaled by the current view distance so they stay legible
     (when (or (eq mode :world) (eq mode :both))
       (scene::%draw-axes v encoder vp

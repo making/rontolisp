@@ -1,7 +1,9 @@
 ;; The metal package: a Metal drawing surface on an appkit window -- the layer,
 ;; the device, the command queue, the render pass, the drawable, present and
 ;; commit, plus the shader, pipeline and buffer helpers every Metal program
-;; writes identically. Written in rontolisp itself over the objc: verbs and
+;; writes identically -- or on no window at all (metal:offscreen /
+;; metal:pixels), which is the same surface drawing into a texture the CPU can
+;; read. Written in rontolisp itself over the objc: verbs and
 ;; shipped inside the interpreter (see MetalLibrary.java): the interpreter loads
 ;; these definitions lazily on the first use of a metal: function, so a bare REPL
 ;; can draw with nothing required and nothing to copy.
@@ -71,6 +73,8 @@
 
 (defconstant metal::+factor-one+ 1) ; MTLBlendFactorOne
 
+(defconstant metal::+storage-shared+ 0) ; MTLStorageModeShared
+
 (defconstant metal::+storage-private+ 2) ; MTLStorageModePrivate
 
 (defconstant metal::+usage-render-target+ 4)
@@ -91,7 +95,14 @@
    ;; whether attach was asked for a depth attachment, so resize knows to
    ;; rebuild one; the texture itself changes with the drawable size.
    (depth-wanted :initarg :depth-wanted :reader metal::%depth-wanted)
-   (depth :initarg :depth :accessor metal::%depth)))
+   (depth :initarg :depth :accessor metal::%depth)
+   ;; The colour texture a frame draws into when there is no layer -- what
+   ;; metal:offscreen builds and nothing else sets. nil here IS the question
+   ;; "is this context on screen?", which metal:frame asks once per frame.
+   (target :initarg :target :initform nil :accessor metal::%target)
+   (target-size :initarg :target-size
+                :initform nil
+                :accessor metal::%target-size)))
 
 ;; A depth attachment the size of the drawable. Nothing but a convex shape can be
 ;; drawn without one (metal-cube.lisp is that exception and asks for none): a
@@ -104,6 +115,18 @@
                     "texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
                     metal::+depth32-float+ (floor width) (floor height) nil)))
     (objc:send desc "setStorageMode:" metal::+storage-private+)
+    (objc:send desc "setUsage:" metal::+usage-render-target+)
+    (objc:send dev "newTextureWithDescriptor:" desc)))
+
+;; The colour attachment an offscreen context draws into: the layer's pixel
+;; format, so the pipelines are the SAME pipelines a window gets, and SHARED
+;; storage, so the CPU can read the pixels back without a blit.
+(defun metal::%color-texture (dev width height)
+  (let ((desc
+         (objc:send (objc:class "MTLTextureDescriptor")
+                    "texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
+                    metal::+bgra8-unorm+ (floor width) (floor height) nil)))
+    (objc:send desc "setStorageMode:" metal::+storage-shared+)
     (objc:send desc "setUsage:" metal::+usage-render-target+)
     (objc:send dev "newTextureWithDescriptor:" desc)))
 
@@ -143,6 +166,58 @@
                                                         (* scale height))
                                  nil))))))
 
+;; A context with no window at all: the frame is drawn into a texture of its own
+;; and metal:pixels reads it back. WIDTH and HEIGHT are PIXELS (there is no
+;; backing scale without a screen to have one), and everything else -- library,
+;; pipeline, depth-state, buffer, uniform, frame -- is the same function a
+;; layer-backed context takes, which is the whole point: what this renders is
+;; what the window renders, not a second path that resembles it.
+;;
+;; The device comes from a throwaway CAMetalLayer's preferredDevice, exactly as
+;; attach's does; no display is needed for that property to answer (.kb/objc.md).
+(defun metal:offscreen
+    (&key (width 512) (height 512) (clear '(0.05 0.06 0.09 1.0)) depth)
+  (objc:on-main
+   (lambda ()
+     (let* ((w (floor width))
+            (h (floor height))
+            (lyr (objc:send (objc:class "CAMetalLayer") "layer"))
+            (dev (objc:send lyr "preferredDevice")))
+       (unless dev (error "metal: this machine has no Metal device"))
+       (make-instance 'metal:context
+                      :device dev
+                      :layer nil
+                      :queue (objc:send dev "newCommandQueue")
+                      :clear clear
+                      :scale 1
+                      :depth-wanted (if depth t nil)
+                      :depth (if depth (metal::%depth-texture dev w h) nil)
+                      :target (metal::%color-texture dev w h)
+                      :target-size (list w h))))))
+
+;; The last frame an offscreen context drew, as a packed (unsigned-byte 8)
+;; vector of width*height*4 bytes in the texture's own order: BGRA, row 0 at the
+;; TOP, tightly packed. Not converted to RGBA -- the format is the layer's
+;; format, and a reader that has to know one order can as well know the real one.
+(defun metal:pixels (ctx)
+  (let ((tex (metal::%target ctx)))
+    (unless tex
+      (error "metal:pixels: this context draws into a window, not a texture"))
+    (let* ((size (metal::%target-size ctx))
+           (w (first size))
+           (h (second size))
+           (store
+            (objc:data
+             (make-array (* w h 4)
+                         :element-type '(unsigned-byte 8)
+                         :initial-element 0))))
+      (objc:on-main
+       (lambda ()
+         (objc:send tex "getBytes:bytesPerRow:fromRegion:mipmapLevel:"
+                    (objc:send store "mutableBytes") (* w 4) (list 0 0 0 w h 1)
+                    0)))
+      (objc:bytes store))))
+
 ;; The colour a frame starts from, as an (r g b a) list. A viewer changes it
 ;; after the fact and the context owns it, so this is a function rather than a
 ;; slot the caller reaches into.
@@ -162,8 +237,17 @@
             (h (float height 1.0))
             (s (metal::%scale ctx))
             (lyr (metal:layer ctx)))
-       (objc:send lyr "setFrame:" (list 0.0 0.0 w h))
-       (objc:send lyr "setDrawableSize:" (list (* s w) (* s h)))
+       ;; an offscreen context has no layer to follow: the target texture IS the
+       ;; drawable, and it is rebuilt at the new size
+       (if lyr
+           (progn
+             (objc:send lyr "setFrame:" (list 0.0 0.0 w h))
+             (objc:send lyr "setDrawableSize:" (list (* s w) (* s h))))
+           (progn
+             (setf (metal::%target ctx)
+                   (metal::%color-texture (metal:device ctx) (* s w) (* s h)))
+             (setf (metal::%target-size ctx)
+                   (list (floor (* s w)) (floor (* s h))))))
        (when (metal::%depth-wanted ctx)
          (setf (metal::%depth ctx)
                (metal::%depth-texture (metal:device ctx) (* s w) (* s h)))))))
@@ -281,18 +365,28 @@
 
 ;; --- a frame -----------------------------------------------------------------
 
-;; One frame: take the next drawable, clear it, call FN with the render command
-;; encoder so the program can set its pipeline and draw, then present. FN runs on
-;; thread 0, inside the same hop as everything around it.
+;; One frame: take the texture to draw into, clear it, call FN with the render
+;; command encoder so the program can set its pipeline and draw, then present.
+;; FN runs on thread 0, inside the same hop as everything around it.
 ;;
-;; nextDrawable answers nil when the layer has none free (the window is off
-;; screen, or the display is ahead of us); the frame is then skipped, which is
-;; what a dropped frame is.
+;; The texture is the next drawable's on a layer-backed context and the context's
+;; own on an offscreen one -- ONE encoding path, so a test that reads the pixels
+;; back is reading the window's frame. nextDrawable answers nil when the layer
+;; has none free (the window is off screen, or the display is ahead of us); the
+;; frame is then skipped, which is what a dropped frame is. An offscreen frame is
+;; never dropped and is WAITED for instead of presented, since the caller reads
+;; its bytes on the next line.
 (defun metal:frame (ctx fn)
   (objc:on-main
    (lambda ()
-     (let ((drawable (objc:send (metal:layer ctx) "nextDrawable")))
-       (when drawable
+     (let* ((offscreen (metal::%target ctx))
+            (drawable
+             (if offscreen nil (objc:send (metal:layer ctx) "nextDrawable")))
+            (texture
+             (if offscreen
+                 offscreen
+                 (if drawable (objc:send drawable "texture") nil))))
+       (when texture
          (let* ((pass
                  (objc:send (objc:class "MTLRenderPassDescriptor")
                             "renderPassDescriptor"))
@@ -300,7 +394,7 @@
                  (objc:send (objc:send pass "colorAttachments")
                             "objectAtIndexedSubscript:" 0))
                 (commands (objc:send (metal:queue ctx) "commandBuffer")))
-           (objc:send color "setTexture:" (objc:send drawable "texture"))
+           (objc:send color "setTexture:" texture)
            (objc:send color "setLoadAction:" metal::+load-clear+)
            (objc:send color "setStoreAction:" metal::+store-store+)
            (objc:send color "setClearColor:" (metal::%clear ctx))
@@ -318,8 +412,9 @@
                              pass)))
              (funcall fn encoder)
              (objc:send encoder "endEncoding"))
-           (objc:send commands "presentDrawable:" drawable)
-           (objc:send commands "commit")))))))
+           (when drawable (objc:send commands "presentDrawable:" drawable))
+           (objc:send commands "commit")
+           (unless drawable (objc:send commands "waitUntilCompleted"))))))))
 
 ;; Draws FN on a timer. The clock is appkit:timer, an NSTimer on thread 0, so the
 ;; frame runs where AppKit and Metal both want it.

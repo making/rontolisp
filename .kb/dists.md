@@ -42,6 +42,17 @@ which is the whole ordering API: `--dist ultralisp` = quicklisp then ultralisp,
 is that the list is short and an explicit order is auditable where a numeric preference
 per dist is not.
 
+**Within one release the `.asd` directories are SORTED, not walked.** `ensureAvailable`
+returns one search path per requested system: the projects in dependency order (the
+`LinkedHashMap` `collectProjects` fills), and within each project every directory holding
+a `.asd`, in path order (`addAsdDirs`). The sort is not cosmetic -- `Files.walk` hands
+back the host's directory order, so before it (2026-08-29) a release shipping
+`foo.asd` beside `test/foo.asd` gave two developers two different search paths and
+therefore two different compiled programs from one lockfile. Sorting also settles that
+case by rule rather than by luck: a parent path is a prefix of its children, so a
+release's top-level `.asd` is always ahead of one nested under it.
+`.kb/emitted-output-determinism.md` carries the invariant and the measurement.
+
 **Index loading is lazy per dist, and that is what makes the default free.** `ensureIndex`
 runs on the first lookup that REACHES a dist, so a second installed dist costs nothing
 until the first comes up short -- and a program whose systems are all in Quicklisp never
@@ -79,7 +90,9 @@ there -- it performs no I/O -- and the failure lands on the `quickload` that nee
 network, which is the same message it had before dists existed.
 
 **Coverage**: `DistClientTest` (index parsing, extraction, caching, transitive deps, the
-secondary-`NAME/SUB` fallback, plus the multi-dist group: second-dist-only system, first
+secondary-`NAME/SUB` fallback, the two search-path order tests above
+(`theAsdDirectoriesOfAReleaseAreSortedWhateverOrderTheHostWalkedThemIn`,
+`aReleaseDefiningOneSystemTwiceResolvesToItsTopLevelAsd`), plus the multi-dist group: second-dist-only system, first
 dist wins + no index fetch behind it, explicit reordering, URL-vs-name identity, unknown
 spec, `update-dist` refetch and its not-installed error), `LispEvaluatorQuicklispTest`
 (the interpreter's `install-dist` + `quickload` and the "installed dists (quicklisp)"

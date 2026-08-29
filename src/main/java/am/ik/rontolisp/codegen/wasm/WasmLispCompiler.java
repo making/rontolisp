@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
@@ -3001,7 +3002,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV (indices 2+).
 		// A reference compiles to global.get from any function body, so a defun/lambda
 		// can read a defvar/defparameter global. Indices follow declaration order.
-		Set<String> globals = GlobalVarCollector.collect(topLevelExprs);
+		// A SequencedSet for the same reason specialVars below is one: this set's
+		// iteration order assigns the module-global indices
+		// (.kb/emitted-output-determinism.md).
+		SequencedSet<String> globals = GlobalVarCollector.collect(topLevelExprs);
+		// A defun nested in a top-level defun's BODY needs the same store: it lowers to
+		// (setq name (lambda ...)) like every other non-top-level defun, and a top-level
+		// defun is not among topLevelExprs, so this is the one spelling collect() cannot
+		// see.
+		globals.addAll(GlobalVarCollector.collectNestedInDefunBodies(program));
 		// Special (dynamically bound) variables need the same module-global backing store
 		// (a
 		// let of a special save/restores over it), so union them in before indices are
@@ -3009,7 +3018,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (WasmLetCompiler). Collected over the WHOLE program: a local (declare
 		// (special x)) inside a defun body (cl-ppcre's remove-registers-p) must make x
 		// a global cell for its free readers too.
-		Set<String> specialVars = SpecialVarCollector.collect(program);
+		// A SequencedSet, not a plain Set: this order assigns the module-global indices,
+		// and collectDynamicallyBound copies it wholesale when the program has a progv,
+		// so an unordered set here makes the emitted module differ per JVM run
+		// (.kb/emitted-output-determinism.md).
+		SequencedSet<String> specialVars = SpecialVarCollector.collect(program);
 		globals.addAll(specialVars);
 		// --reentrant: the specials that are ever DYNAMICALLY BOUND get a slot in the
 		// per-call task record (WasmDynVars); every other special keeps its plain

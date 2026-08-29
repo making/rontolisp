@@ -2877,6 +2877,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aDefunNestedInADefunBodyIsReachableByName() throws Exception {
+		// The same lowering as the closure-over-let idiom above, one level deeper: the
+		// nested defun becomes (setq read-seed (lambda () seed)) inside install's body,
+		// so the NAME needs the same global backing store for a call site to dispatch
+		// through it. Collecting it only from top-level non-defun forms left the call
+		// compiled as "The function READ-SEED is undefined".
+		assertThat(compileAndRun("(defun install (seed)" + "  (defun read-seed () seed)"
+				+ "  (lambda () (setq seed (+ seed 1)) seed))" + "(setq *step* (install 10))" + "(funcall *step*)"
+				+ "(funcall *step*)" + "(print (list (read-seed) (funcall *step*)))"))
+			.isEqualTo("(12 13)");
+	}
+
+	@Test
 	void aCapturedLetVariableAssignedInlineInASiblingBranchKeepsOneCell() throws Exception {
 		// One arm builds a closure over acc/hit, the sibling arm assigns them INLINE in
 		// the enclosing frame -- the shape compiler/AstOutliner creates on purpose when

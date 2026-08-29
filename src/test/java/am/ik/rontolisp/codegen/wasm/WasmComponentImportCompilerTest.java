@@ -477,7 +477,7 @@ class WasmComponentImportCompilerTest {
 				"(\"read-body\" \"SX:READ-BODY\")");
 		byte[] instanceType = WitComponentTypeEncoder.encode(imported, (ownerId, resource) -> {
 			throw new AssertionError("no foreign resource expected: " + ownerId + "#" + resource);
-		}, java.util.Set.of());
+		}, new java.util.LinkedHashSet<>());
 		// stream<u8> inlines its u8 element -- the exact bytes the base adapter's
 		// stream<u8>
 		// uses.

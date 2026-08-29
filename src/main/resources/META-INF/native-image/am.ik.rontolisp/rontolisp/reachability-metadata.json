@@ -66,10 +66,14 @@
     "NSSpellChecker's checkSpellingOfString:startingAt: (an NSRange answer) and",
     "guessesForWordRange:inString:language:inSpellDocumentWithTag: (an NSRange argument),",
     "NSDataDetector's matchesInString:options:range:, and CIColor's colorWithRed:green:blue:.",
-    "The last TWO are Metal's, for examples/macos/metal-triangle.lisp and metal-cube.lisp:",
+    "The next TWO are Metal's, for examples/macos/metal-triangle.lisp and metal-cube.lisp:",
     "MTLDevice's newBufferWithBytes:length:options: and MTLRenderCommandEncoder's",
     "drawPrimitives:vertexStart:vertexCount:. Everything else those two programs send -- and every",
     "selector objc:data, objc:bytes and the :error out slot send -- the census already covered.",
+    "The LAST one is metal:pixels' readback, MTLTexture's",
+    "getBytes:bytesPerRow:fromRegion:mipmapLevel: -- an MTLRegion (six NSUIntegers) by value, the",
+    "widest struct argument in the table, and the shape a window-free frame is read back through",
+    "(.kb/geom.md, \"How the renderer is tested\").",
     "A selector whose shape is outside this table SIGNALS in the",
     "binary, naming the entry to add here; the JVM registers nothing ahead of time and binds any",
     "shape. ObjcNativeImageForeignConfigTest pins the runtime shapes on every machine and the",
@@ -534,6 +538,10 @@
       {
         "returnType": "void",
         "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "struct(jlong,jlong,jlong,jlong,jlong,jlong)", "jlong"]
       },
       {
         "returnType": "void",

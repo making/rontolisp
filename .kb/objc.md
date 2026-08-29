@@ -245,7 +245,8 @@ of it.
 
 What the promotion froze, and what it costs:
 
-- **The exported names are the decisions a CALLER makes.** `attach` / `device` / `layer` /
+- **The exported names are the decisions a CALLER makes.** `attach` / `offscreen` /
+  `pixels` / `device` / `layer` /
   `queue` / `library` / `pipeline` / `depth-state` / `floats` / `buffer` / `shared-buffer`
   / `upload` / `uniform` / `frame` / `run` / `resize` / `set-clear-color`, the class
   `metal:context`, and eleven enum members: the primitive (`+point+` `+line+` `+triangle+`
@@ -361,7 +362,12 @@ no display at all: render into an offscreen `MTLTexture` (storage mode shared, u
 render-target), `getBytes:bytesPerRow:fromRegion:mipmapLevel:` into an `objc:data` block
 and read the pixels back with `objc:bytes` -- which is how the triangle and the cube were
 verified here, and the shortest demonstration that the two new verbs are the round trip
-they claim to be.
+they claim to be. **That technique is now the shipped `metal:offscreen` / `metal:pixels`
+pair** (todo-568, 2026-08-29), and `metal:frame` takes the drawable's texture or the
+context's own so there is ONE encoding path: `.kb/geom.md`, "How the renderer is tested",
+is where the design and the assertions it buys are written down. Its readback shape --
+an `MTLRegion`, six `NSUInteger`s by value -- is the widest struct argument in the closed
+`objc_msgSend` table and the one row `reachability-metadata.json` gained for it.
 
 ## Ownership: one retain per wrapper, released on thread 0
 

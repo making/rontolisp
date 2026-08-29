@@ -845,6 +845,8 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | 関数 | 例 | 結果 |
 |------|-----|------|
 | `metal:attach` | `(metal:attach win :depth t)` | `metal:context`。ウィンドウのコンテンツビュー上の `CAMetalLayer`、そのデバイスとコマンドキュー |
+| `metal:offscreen` | `(metal:offscreen :width 256 :height 192)` | ウィンドウを持たない `metal:context`。パイプラインも `metal:frame` も同じまま、テクスチャに描く |
+| `metal:pixels` | `(metal:pixels ctx)` | 直前のオフスクリーンフレーム。`width * height * 4` バイト、BGRA、行 0 が上 |
 | `metal:device` | `(metal:device ctx)` | `MTLDevice`。GPU そのもので、あらゆる `new...` セレクタのレシーバ |
 | `metal:layer` | `(metal:layer ctx)` | フレームが提示される `CAMetalLayer` |
 | `metal:queue` | `(metal:queue ctx)` | コマンドバッファをコミットする `MTLCommandQueue` |
@@ -878,13 +880,15 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | 関数 | 例 | 結果 |
 |------|-----|------|
 | `scene:viewer` | `(scene:viewer :title "arm")` | Metal サーフェスを載せたウィンドウと、それを駆動するビューア |
+| `scene:offscreen` | `(scene:offscreen :width 320 :height 240)` | ウィンドウを持たないビューア。描画関数は同一で、レンダラをテスト可能にしているもの |
+| `scene:snapshot` | `(scene:snapshot v)` | オフスクリーンビューアの 1 フレームをピクセル (BGRA) として |
 | `scene:add` | `(scene:add v s1 s2)` | 最後に追加したソリッド。メッシュは最初に描画されたとき GPU に届く |
 | `scene:drop` | `(scene:drop v s)` | ビューアから外し GPU バッファを解放したソリッド |
 | `scene:clear` | `(scene:clear v)` | `nil`。すべてのソリッドを除去。グリッドとカメラはそのまま |
 | `scene:contents` | `(scene:contents v)` | 描画中のソリッドを追加順に |
 | `scene:fit` | `(scene:fit v)` | `nil`。カメラを内容に向け、全体が収まるまで引く |
 | `scene:camera` | `(scene:camera v :azimuth 0.85)` | `nil`。方位角/仰角/距離/注視点のうち与えたものだけ設定 |
-| `scene:grid` | `(scene:grid v :extent 1200 :spacing 100)` | `nil`。地面グリッドを作り直す |
+| `scene:grid` | `(scene:grid v :extent 1200 :spacing 100)` | `nil`。地面グリッドを作り直す。`:extent` が `nil` ならグリッドを消す |
 | `scene:grid-color` | `(scene:grid-color v (geom:vec3 0.2 0.5 0.4))` | `nil`。グリッドの色 |
 | `scene:background` | `(scene:background v '(0 0 0 1))` | `nil`。フレーム開始時の色 |
 | `scene:shading` | `(scene:shading v :wireframe)` | `nil`。`:solid`、`:wireframe`、`:both` (既定) |
