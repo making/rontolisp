@@ -56,6 +56,12 @@ examples/browser/hiragana/data/
 /c439.dat
 /wpc-a.txt
 /wpc-b.txt
+/ci-model.obj
+/ci-model.stl
+/ci-model-ascii.stl
+/ci-model.ply
+/scene-model-file-vase.obj
+/scene-model-file-bracket.stl
 
 ### Compiled-program scratch: the docs' `rontolisp prog.lisp -o Prog.class` writes to the CWD ###
 /*.class

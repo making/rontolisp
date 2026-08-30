@@ -5045,6 +5045,89 @@ cases:
       1.0
       6000000.0
       "geom:scale: a scale factor must be nonzero: 0"
+  # Reading a mesh out of a model file (.kb/geom.md, "Reading a model file"). A box is
+  # written out as an OBJ and as a binary STL and read straight back, so the round trip
+  # is what is pinned on all four backends: the text scanner's floats (exponents
+  # included -- read-from-string answers a SYMBOL for those on wasm, which is why the
+  # readers have a scanner of their own), the packed read-sequence that moves a binary
+  # triangle's twelve float32s in one transfer, the shape test that tells the two STL
+  # dialects apart without file-length (which both WASM backends answer nil for by
+  # design), and the sniffer naming a format it cannot read instead of guessing at it.
+  - name: geom-read-model-cross-backend
+    source: |
+      (defun ci-geom-write-obj (path s)
+        (with-open-file (out path :direction :output :if-exists :supersede)
+          (let ((v (geom:vertices-of s)))
+            (dotimes (i (first (linalg:shape v)))
+              (format out "v ~a ~a ~a~%" (aref v i 0) (aref v i 1) (aref v i 2))))
+          (write-line "# a comment, then faces carrying texture indices" out)
+          (dolist (f (geom:facets-of s))
+            (write-string "f" out)
+            (dolist (i f) (format out " ~a/1" (+ i 1)))
+            (terpri out))))
+      (defun ci-geom-write-stl (path s)
+        (let ((m (geom:mesh s))
+              (tri (make-array 12 :element-type 'single-float))
+              (hdr (make-array 80 :element-type '(unsigned-byte 8) :initial-element 32))
+              (n (make-array 1 :element-type '(unsigned-byte 32)))
+              (attr (make-array 1 :element-type '(unsigned-byte 16))))
+          (with-open-file (out path :direction :output :if-exists :supersede
+                               :element-type '(unsigned-byte 8))
+            (write-sequence hdr out)
+            (setf (aref n 0) (geom:mesh-triangle-count s))
+            (write-sequence n out)
+            (setf (aref attr 0) 0)
+            (do ((i 0 (+ i 18)))
+                ((>= i (length m)))
+              (dotimes (k 3) (setf (aref tri k) (aref m (+ i 3 k))))
+              (dotimes (c 3)
+                (dotimes (k 3)
+                  (setf (aref tri (+ 3 (* c 3) k)) (aref m (+ i (* c 6) k)))))
+              (write-sequence tri out)
+              (write-sequence attr out)))))
+      (defun ci-geom-read-model ()
+        (let ((b (geom:box 10)))
+          (ci-geom-write-obj "ci-model.obj" b)
+          (ci-geom-write-stl "ci-model.stl" b))
+        (let ((o (geom:read-model "ci-model.obj" :label "obj"))
+              (s (geom:read-model "ci-model.stl" :label "stl")))
+          (print (list (geom::%model-format "ci-model.obj")
+                       (geom::%model-format "ci-model.stl")))
+          (print (list (geom:volume o) (geom:surface-area o)
+                       (length (geom:facets-of o))))
+          (print (list (geom:volume s) (geom:surface-area s)
+                       (length (geom:facets-of s))))
+          (print o)
+          (print s))
+        (with-open-file (out "ci-model-ascii.stl" :direction :output
+                             :if-exists :supersede)
+          (write-line "solid ci" out)
+          (write-line "  facet normal 0 0 1" out)
+          (write-line "    outer loop" out)
+          (write-line "      vertex 0.0 0.0 0.0" out)
+          (write-line "      vertex 1.0e1 0 0" out)
+          (write-line "      vertex 0 1.0E+1 0" out)
+          (write-line "    endloop" out)
+          (write-line "  endfacet" out)
+          (write-line "endsolid ci" out))
+        (let ((a (geom:read-stl "ci-model-ascii.stl")))
+          (print (list (geom::%model-format "ci-model-ascii.stl")
+                       (geom:surface-area a) (geom:facets-of a))))
+        (with-open-file (out "ci-model.ply" :direction :output :if-exists :supersede)
+          (write-line "ply" out)
+          (write-line "format ascii 1.0" out)
+          (write-line "end_header" out))
+        (print (handler-case (geom:read-model "ci-model.ply")
+                 (error (e) (princ-to-string e)))))
+      (ci-geom-read-model)
+    expected: |
+      (:OBJ :STL)
+      (1000.0 600.0 6)
+      (1000.0 600.0 12)
+      #<GEOM:SOLID "obj" 8 vertices 6 facets>
+      #<GEOM:SOLID "stl" 36 vertices 12 facets>
+      (:STL 50.0 ((0 1 2)))
+      "geom:read-model: ci-model.ply is PLY, which this build does not read yet"
   # The arrow, and the three of them a coordinate frame is drawn as (.kb/geom.md, "The
   # arrow"). It is the one primitive whose volume has a closed form on the TESSELLATED
   # shape rather than a limit it approaches -- a prism plus a pyramid on the same n-gon

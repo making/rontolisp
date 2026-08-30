@@ -767,6 +767,9 @@ categories:
       - { slug: geom-extrusion, name: "geom:extrusion" }
       - { slug: geom-revolution, name: "geom:revolution" }
       - { slug: geom-polyhedron, name: "geom:polyhedron" }
+      - { slug: geom-read-model, name: "geom:read-model" }
+      - { slug: geom-read-obj, name: "geom:read-obj" }
+      - { slug: geom-read-stl, name: "geom:read-stl" }
       - { slug: geom-arrow, name: "geom:arrow" }
       - { slug: geom-triad, name: "geom:triad" }
       - { slug: geom-vertices-of, name: "geom:vertices-of" }

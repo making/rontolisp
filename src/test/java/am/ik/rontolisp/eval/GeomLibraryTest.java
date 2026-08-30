@@ -1,7 +1,15 @@
 package am.ik.rontolisp.eval;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
+import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -828,6 +836,241 @@ class GeomLibraryTest {
 					+ " :ROTATION #f((1.0 0.0 0.0) (0.0 1.0 0.0) (0.0 0.0 1.0))>\"");
 		assertThat(eval("(prin1-to-string (geom:bounds (geom:box 2)))").print())
 			.isEqualTo("\"#<GEOM:BOUNDS :LOWER #f(-1.0 -1.0 -1.0) :UPPER #f(1.0 1.0 1.0)>\"");
+	}
+
+	// --- reading a mesh out of a model file (.kb/geom.md, "Reading a model file") ---
+
+	/**
+	 * Writes CONTENT into a scratch file and answers a Lisp string naming it, so a reader
+	 * test is a file on disk rather than a fixture checked into the repository.
+	 */
+	private String textFile(String name, String content) {
+		try {
+			Path path = Files.createDirectories(Path.of("target", "geom-models")).resolve(name);
+			Files.writeString(path, content);
+			return "\"" + path.toString().replace("\\", "\\\\") + "\"";
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	/** A binary STL: 80 header bytes, the triangle count, then 50 bytes a triangle. */
+	private String binaryStl(String name, String header, float[][] triangles) {
+		ByteBuffer buffer = ByteBuffer.allocate(84 + 50 * triangles.length).order(ByteOrder.LITTLE_ENDIAN);
+		byte[] head = new byte[80];
+		Arrays.fill(head, (byte) ' ');
+		byte[] text = header.getBytes(StandardCharsets.US_ASCII);
+		System.arraycopy(text, 0, head, 0, Math.min(text.length, 80));
+		buffer.put(head).putInt(triangles.length);
+		for (float[] triangle : triangles) {
+			// The stored normal is deliberately garbage: geom computes Newell's from
+			// the geometry, and half the writers in the world store zeros here.
+			buffer.putFloat(9f).putFloat(9f).putFloat(9f);
+			for (float value : triangle) {
+				buffer.putFloat(value);
+			}
+			buffer.putShort((short) 0);
+		}
+		try {
+			Path path = Files.createDirectories(Path.of("target", "geom-models")).resolve(name);
+			Files.write(path, buffer.array());
+			return "\"" + path.toString().replace("\\", "\\\\") + "\"";
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	/** The eight corners and six quads of a 10-unit cube, as an OBJ body. */
+	private static final String CUBE_OBJ = """
+			# a comment line, and a blank one follows
+
+			mtllib nothing.mtl
+			o cube
+			v -5.0 -5.0 -5.0
+			v 5.0 -5.0 -5.0
+			v 5.0 5.0 -5.0
+			v -5.0 5.0 -5.0
+			v -5.0 -5.0 5.0
+			v 5.0 -5.0 5.0
+			v 5.0 5.0 5.0
+			v -5.0 5.0 5.0
+			vn 0.0 0.0 1.0
+			vt 0.0 0.0
+			usemtl none
+			f 1 4 3 2
+			f 5 6 7 8
+			f 1 2 6 5
+			f 2 3 7 6
+			f 3 4 8 7
+			f 4 1 5 8
+			""";
+
+	@Test
+	void anObjFileBecomesASolidWhoseFacetsAreTheFacesItNames() {
+		// Every record but v and f is read past: a comment, a blank line, mtllib, o,
+		// vn, vt and usemtl. What comes back is the cube those six quads describe,
+		// wound the way geom winds one -- which its volume, not its facet count, is
+		// what proves.
+		String file = textFile("cube.obj", CUBE_OBJ);
+		assertThat(eval("""
+				(let ((s (geom:read-obj %s :label "cube")))
+				  (list (geom:volume s) (geom:surface-area s)
+				        (length (geom:facets-of s)) (geom:label-of s)
+				        (first (linalg:shape (geom:vertices-of s)))))
+				""".formatted(file)).print()).isEqualTo("(1000.0 600.0 6 \"cube\" 8)");
+	}
+
+	@Test
+	void anObjFaceMayCarryTextureAndNormalIndicesAndMayCountBackwards() {
+		// v, v/vt, v/vt/vn and v//vn are all one token shape, and a NEGATIVE index
+		// counts back from the vertices seen so far -- which is how an exporter that
+		// streams objects one after another writes them.
+		String file = textFile("triangles.obj", """
+				v 0 0 0
+				v 10 0 0
+				v 0 10 0
+				f 1/1 2/1/2 3//2
+				f -3 -2 -1
+				""");
+		assertThat(eval("(geom:facets-of (geom:read-obj %s))".formatted(file)).print()).isEqualTo("((0 1 2) (0 1 2))");
+	}
+
+	@Test
+	void anObjScannerReadsTheExponentsTheReaderCannot() {
+		// read-from-string answers the SYMBOL |1.0E1| for this on the WASM backends
+		// (doc/*/reference/functions/read-from-string.md), which is the whole reason
+		// these readers scan numbers with char-code instead of borrowing the reader.
+		String file = textFile("exponents.obj", """
+				v -3.4101800e-003 1.3031957E+002 2.1754370e2
+				v 0 0 0
+				v 1 1 1
+				f 1 2 3
+				""");
+		assertThat(eval("(linalg:row (geom:vertices-of (geom:read-obj %s)) 0)".formatted(file)).print())
+			.isEqualTo("#f(-0.00341018 130.31956 217.5437)");
+	}
+
+	@Test
+	void aBinaryStlIsToldFromAnAsciiOneByTheFileSShapeAndNotByItsHeader() {
+		// The trap the length test exists for, and which the shape test has to survive
+		// too: a BINARY writer putting "solid <name>" in its 80-byte header is
+		// routine, so the prefix alone can never be the test. (file-length would
+		// settle it exactly and answers nil on both WASM backends by design, so the
+		// shape of the file is what decides -- identically everywhere.)
+		String binary = binaryStl("solid-header.stl", "solid a binary file pretending to be text",
+				new float[][] { { 0, 0, 0, 10, 0, 0, 0, 10, 0 } });
+		String ascii = textFile("real.stl", """
+				solid a real ascii file
+				  facet normal 0 0 1
+				    outer loop
+				      vertex 0 0 0
+				      vertex 10 0 0
+				      vertex 0 10 0
+				    endloop
+				  endfacet
+				endsolid a real ascii file
+				""");
+		assertThat(eval("""
+				(list (geom::%%model-format %s) (geom::%%model-format %s)
+				      (geom:surface-area (geom:read-stl %s))
+				      (geom:surface-area (geom:read-stl %s)))
+				""".formatted(binary, ascii, binary, ascii)).print()).isEqualTo("(:STL :STL 50.0 50.0)");
+	}
+
+	@Test
+	void anStlSolidCarriesThreeVerticesPerFacetBecauseTheFormatSharesNone() {
+		// A triangle soup with no index table: twelve triangles come back as
+		// thirty-six vertices, and the measurements are the box's all the same.
+		String file = binaryStl("cube.stl", "a cube", cubeTriangles());
+		assertThat(eval("""
+				(let ((s (geom:read-stl %s)))
+				  (list (geom:volume s) (geom:surface-area s)
+				        (length (geom:facets-of s))
+				        (first (linalg:shape (geom:vertices-of s)))))
+				""".formatted(file)).print()).isEqualTo("(1000.0 600.0 12 36)");
+	}
+
+	@Test
+	void theFormatIsSniffedFromTheFileAndTheExtensionIsOnlyTheLastResort() {
+		// Content first: a .txt holding an OBJ reads as one, and a .obj holding an
+		// ASCII STL reads as an STL. A binary STL has no magic number of its own --
+		// that is a wart of the format -- so its extension is what names it.
+		String misnamedObj = textFile("mesh.txt", CUBE_OBJ);
+		String misnamedStl = textFile("mesh.obj", """
+				solid s
+				  facet normal 0 0 1
+				    outer loop
+				      vertex 0 0 0
+				      vertex 10 0 0
+				      vertex 0 10 0
+				    endloop
+				  endfacet
+				endsolid s
+				""");
+		String headerless = binaryStl("headerless.stl", "\0\0\0", cubeTriangles());
+		assertThat(eval("(list (geom::%%model-format %s) (geom::%%model-format %s) (geom::%%model-format %s))"
+			.formatted(misnamedObj, misnamedStl, headerless)).print()).isEqualTo("(:OBJ :STL :STL)");
+		assertThat(eval("(geom:volume (geom:read-model %s))".formatted(misnamedObj)).print()).isEqualTo("1000.0");
+	}
+
+	@Test
+	void aFormatTheSnifferKnowsAndThisBuildCannotReadIsRefusedByName() {
+		// The seam's other half: a reader that is not here yet must not be a garbage
+		// parse. PLY and glTF are recognized so the refusal can name them.
+		String ply = textFile("scan.ply", "ply\nformat ascii 1.0\nend_header\n");
+		String gltf = textFile("scene.gltf", "{\"asset\":{\"version\":\"2.0\"}}\n");
+		String unknown = textFile("mystery.dat", "?????\n");
+		assertThat(eval("""
+				(list (handler-case (geom:read-model %s) (error (e) (princ-to-string e)))
+				      (handler-case (geom:read-model %s) (error (e) (princ-to-string e)))
+				      (handler-case (geom:read-model %s) (error (e) (princ-to-string e))))
+				""".formatted(ply, gltf, unknown)).print()).contains("is PLY, which this build does not read yet")
+			.contains("is GLTF, which this build does not read yet")
+			.contains("cannot tell what format")
+			.contains("mystery.dat");
+	}
+
+	@Test
+	void anExplicitFormatKeywordOverridesTheSniffer() {
+		String misnamed = textFile("mesh.model", CUBE_OBJ);
+		assertThat(eval("(geom:volume (geom:read-model %s :format :obj))".formatted(misnamed)).print())
+			.isEqualTo("1000.0");
+	}
+
+	@Test
+	void theReadersArePrunedFromAProgramThatReadsNoModelFile() {
+		// They are the only members of the package that open a file, so a program
+		// that reads none must not carry them -- which is what keeps geom's "runs
+		// everywhere" promise true in the browser, where there is no filesystem.
+		List<LispVal> pruned = LibraryDefunPruner
+			.prune(GeomLibrary.process(LispReader.readAllFromString("(print (geom:volume (geom:box 2)))")));
+		assertThat(definitionNames(pruned)).doesNotContain("GEOM:READ-OBJ", "GEOM:READ-STL", "GEOM:READ-MODEL",
+				"GEOM::%SCAN-NUMBER");
+		List<LispVal> kept = LibraryDefunPruner
+			.prune(GeomLibrary.process(LispReader.readAllFromString("(print (geom:read-obj \"m.obj\"))")));
+		assertThat(definitionNames(kept)).contains("GEOM:READ-OBJ", "GEOM::%SCAN-NUMBER")
+			.doesNotContain("GEOM:READ-STL", "GEOM:READ-MODEL", "GEOM:SPHERE");
+	}
+
+	/** The twelve triangles of a 10-unit cube, wound counter-clockwise from outside. */
+	private static float[][] cubeTriangles() {
+		float[][] corners = { { -5, -5, -5 }, { 5, -5, -5 }, { 5, 5, -5 }, { -5, 5, -5 }, { -5, -5, 5 }, { 5, -5, 5 },
+				{ 5, 5, 5 }, { -5, 5, 5 } };
+		int[][] quads = { { 0, 3, 2, 1 }, { 4, 5, 6, 7 }, { 0, 1, 5, 4 }, { 1, 2, 6, 5 }, { 2, 3, 7, 6 },
+				{ 3, 0, 4, 7 } };
+		float[][] triangles = new float[12][9];
+		int at = 0;
+		for (int[] quad : quads) {
+			for (int[] triangle : new int[][] { { quad[0], quad[1], quad[2] }, { quad[0], quad[2], quad[3] } }) {
+				for (int corner = 0; corner < 3; corner++) {
+					System.arraycopy(corners[triangle[corner]], 0, triangles[at], corner * 3, 3);
+				}
+				at++;
+			}
+		}
+		return triangles;
 	}
 
 	@Test

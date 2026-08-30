@@ -6,17 +6,24 @@ One hand-written Lisp-source library,
 identically on every backend: rigid `geom:transform` values, a scene-graph
 `geom:node`, boundary-represented `geom:solid`s with a cached model-space triangle
 mesh, nine primitive constructors plus the `triad` convenience, the measurements
-(`bounds`, `volume`, `centroid`, `surface-area`), and the booleans (`union`,
-`difference`, `intersection`, `section` -- see "Boolean operations" below). 58
+(`bounds`, `volume`, `centroid`, `surface-area`), the booleans (`union`,
+`difference`, `intersection`, `section` -- see "Boolean operations" below) and the
+three model-file readers ("Reading a model file" below). 61
 exported functions plus `geom:*tolerance*` and four CLOS class names
 (todo-586: `move`/`turn` became `translate`/`rotate`, and `scale` split into
 the functional `scale` and the destructive `nscale` -- "Scaling" below).
 
-**It reaches for nothing but `linalg`** -- no `objc:`, no `java:`, no filesystem, no
+**The MODELLING half reaches for nothing but `linalg`** -- no `objc:`, no `java:`, no
 `SourceLoader`. That is the whole reason it ships rather than living in
 `examples/macos/`: the same solids tessellate in the browser playground and in a
 `.wasm`, and `scene` (the macOS viewer, "The renderer" below) is a CONSUMER of this
 package, not a peer of it. Nothing may be added here that breaks that.
+
+**The one exception is the three READERS** (`read-obj` / `read-stl` / `read-model`,
+"Reading a model file" below), which open a file, and it is an exception the promise
+survives rather than a hole in it: they are ANSI CL I/O on all four backends, and
+`LibraryDefunPruner` drops them from every program that does not call one, so the
+browser demo's module is measurably free of them. Nothing else here may do I/O.
 
 ## Wiring (the `linalg` pair, exactly)
 
@@ -28,8 +35,8 @@ package, not a peer of it. Nothing may be added here that breaks that.
 | interpreter | `LispEvaluator.ensureGeomLoaded()` on the first `geom:`-qualified FUNCTION resolution, plus `ensureGeomClassesFor(form)` at the seven `ensureAsdfClassesFor` sites |
 | compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too; the browser playground repeats the nesting |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
-| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend` and `geom-scale-cross-backend` (all four backends) |
-| docs | `doc/{en,ja}/guides/solid-modeling.md`, 58 pages under `reference/functions/geom-*.md` |
+| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend`, `geom-scale-cross-backend` and `geom-read-model-cross-backend` (all four backends) |
+| docs | `doc/{en,ja}/guides/solid-modeling.md`, 61 pages under `reference/functions/geom-*.md` |
 
 **The class-mention trigger is not optional.** The interpreter's lazy load fires on
 FUNCTION resolution, but a `defmethod` specializer, a `typep`, a `typecase` clause, a
@@ -249,6 +256,172 @@ their routing decision BEFORE evaluating the argument, so the first
 `(print (geom:box ...))` of a session must load geom first --
 `LispEvaluator.referencesGeom`, the twin of the torch pre-load beside it (torch and
 geom are the only lazily loaded libraries with `print-object` methods).
+
+## Reading a model file (2026-08-30)
+
+`geom:read-obj`, `geom:read-stl` and the dispatcher `geom:read-model` answer a
+`geom:solid` built through `geom::%build-solid` -- the other half of
+`geom:polyhedron`'s own sentence, "for a mesh that came from a file". They are the
+only members of the package that open a file, and the reason they belong HERE rather
+than in a package of their own is that everything they answer is this package's type:
+a `mesh:read-obj` would be a package whose entire vocabulary is geom's.
+
+### The seam a fourth format plugs into
+
+Stated before the second reader was written, and the second reader is what proved it:
+
+- **A reader is `(path color label) -> a geom:solid`, or a LIST of them** for a format
+  carrying several meshes. A list is what `scene:add` already splices and what
+  `geom:triad` already answers, and a NODE HIERARCHY rides inside one: the solids are
+  attached to a shared `geom:node`, so each one's `world-transform` carries its
+  parents and the flat list still draws right. That is the mapping glTF's node tree
+  takes when it lands.
+- **The one internal representation is `geom::%build-solid`'s arguments**: a list of
+  points, a list of index loops, a colour and a label. It is rich enough for OBJ, STL
+  and PLY as they stand. It is NOT rich enough for glTF's per-primitive materials
+  (one RGB per solid is all there is), and no format's per-vertex normals, texture
+  coordinates or per-vertex colours survive it -- `geom` has no slot for any of them
+  and facet normals are Newell's, computed from the geometry. A reader reads those
+  records past rather than half-keeping them, and that is a decision, not an omission.
+- **Numbers** come out of text through `geom::%scan-number` and out of binary through
+  `read-sequence` over a packed buffer. Nothing else is shared and nothing else needs
+  to be.
+- **Dispatch is a `case`, deliberately not a table.** A Lisp-level registry of reader
+  functions would make every reader reachable from the dispatcher, so a program
+  reading one format would carry them all; a `case` keeps `LibraryDefunPruner` able to
+  see which arm a program can reach. Three entries do not earn a plugin framework.
+- **Adding a format is four localized edits**: one reader defun, one
+  `geom::%model-format` clause, one `geom:read-model` case arm, and a
+  `PackageRegistry.GEOM_FUNCTIONS` entry for the public name.
+
+### How a format is decided, and why the extension is last
+
+`geom::%model-format` sniffs the file's own bytes (one 512-byte read) and falls back
+to the extension only where no content test can answer:
+
+| test | answer |
+|---|---|
+| opens with `glTF` | `:glb` |
+| opens with `ply` + a line break | `:ply` |
+| first token `solid` | `:stl` |
+| first token `v`/`vn`/`vt`/`f`/`g`/`o`/`s`/`usemtl`/`mtllib` | `:obj` |
+| first token opens with `{` | `:gltf` |
+| otherwise | the extension |
+
+**A binary STL has no magic number at all** -- a wart of the format -- so a binary
+`.stl` whose 80-byte header is not the word `solid` is named by its extension, and
+`:format` overrides everything. What the extension NEVER decides is the ASCII/binary
+split, and that is the split that matters: both dialects are `.stl`.
+
+`:ply` / `:gltf` / `:glb` are recognized and REFUSED BY NAME. A sniffer that knows a
+format it cannot read is worth more than one that does not: the alternative to
+"dragon.ply is PLY, which this build does not read yet" is a garbage parse.
+
+### The dialect test does not use `file-length`, and cannot
+
+`file-length` answers **nil on both WASM backends by design** (no WASI filestat is
+imported -- `doc/*/reference/functions/file-length.md`). The classic STL test is the
+exact `84 + 50n` length arithmetic, and a reader resting on it classifies a file on
+the JVM and TRAPS on wasm (measured: `(min 4096 (file-length in))` is
+`min` of nil). So the dialect is decided by the file's SHAPE instead -- an ASCII file
+opens with `solid` and carries `facet`/`endsolid` on its next line -- which is one
+code path, identical on all four backends, and survives the trap the length test
+exists for (`trimesh`'s own `unit_cube.STL` is BINARY with `solid unit_cube` in its
+header). `read-sequence`'s short-fill answer is what replaces `file-length` for
+"how much did I get", and it is identical on all four (verified 2026-08-30).
+
+### Measured (2026-08-30, Apple M4 Max)
+
+Real files: the Stanford bunny (`bunny-big.obj`, 35,947 v / 69,451 f, 2.4 MB), the
+armadillo (49,990 v / 99,976 f, 4.6 MB OBJ and the same mesh as a 5.0 MB binary STL),
+`trimesh`'s `featuretype.STL` (3,476 triangles) and the Utah teapot.
+
+| stage | interpreter | JVM `.class` | wasm preview 1 |
+|---|---|---|---|
+| armadillo.obj parse (150k lines, 450k numbers) | 8,944 ms | **81 ms** | -- |
+| bunny-big.obj parse (105k lines, 316k numbers) | 5,315 ms | 39 ms | 2,679 ms |
+| `geom:polyhedron` of 50k points / 100k facets | 148 ms | 22 ms | -- |
+| armadillo.stl binary read (100k triangles) | 498 ms | -- | -- |
+| `geom:mesh` of 100k triangles (PRE-EXISTING) | ~5,200 ms | ~67 ms | -- |
+| `geom:volume` of 100k triangles | 606 ms | 28 ms | -- |
+
+Three things those numbers say:
+
+- **The interpreter is the slow backend and it is still usable**: 9 s to load the
+  biggest test file in the corpus, once, at load time. Compiled, it is 170 ms.
+- **`geom:mesh` costs as much as parsing does** (~52 us a triangle on the
+  interpreter). The loader did not introduce that and cannot fix it; it is the price
+  of the cached mesh the whole renderer rests on, and it is paid once.
+- **Rendering a loaded mesh is unaffected**: a 69,451-triangle bunny in
+  `scene:offscreen` costs 1,075 ms for the frame that uploads the GPU buffers and
+  **7 ms** for every frame after it. "No triangle is touched by Lisp during a frame"
+  holds at 69k triangles exactly as it does at 13.8k.
+
+**Text parsing has no faster spelling available.** Measured per float on the
+interpreter: `read-from-string` 0.68 us, a whole parenthesised line through the reader
+1.85 us, a hand-rolled `char-code` scan 20 us. The reader is 30x faster and is
+UNUSABLE: it answers the SYMBOL `|1.30E-2|` for exponent notation on the WASM
+backends, chokes on `#` and `|`, and reads `739/1` as a ratio -- and `json.lisp`
+already declines it for the second reason, that it drags the runtime reader into
+compiled output. `parse-integer` is no help either (5.2 us a call). So the scanner is
+`char-code`, like `json.lisp`'s, and the JVM backend is where a big model gets loaded
+fast.
+
+**Two interpreter primitives are pathologically slow and were measured on the way
+past**: `position` on a string is **27.6 us a call** (a 46-character string!) against
+`subseq`'s 0.5 us and `char`'s 0.3 us, and `parse-integer` is 5.2 us. Both look like
+generic-sequence dispatch in Lisp rather than a Java builtin. Neither is on the
+readers' path any more, and neither has been investigated.
+
+### What a real file taught, none of it a bug in the reader
+
+- **A file carries its own units.** The Stanford bunny is 0.2 across (metres); a
+  printable part is 200 (millimetres). `scene:fit` had a floor of 100 world units on
+  the camera distance, the projection had `(max d 100.0)` in its frustum and the
+  scroll clamp was `10 .. 200000` -- three absolute constants in a package that has no
+  unit of length -- so a metre-scale model rendered as **zero pixels**. All three are
+  now relative (`SceneOffscreenRenderTest.fitFramesASolidWhoseUnitsAreMetresRather
+  ShrinkingItToADot` renders a box at four scales three decades apart). `scene:grid`'s
+  600-unit default extent is NOT one of them: it is a documented keyword the caller
+  sets, and `:extent nil` drops it.
+- **`:solid` is the shading a dense mesh wants.** The default `:both` draws the
+  wireframe over the triangles, which at 69,451 of them is a dark stipple.
+- **Winding is the file's own.** `geom:volume` is the test, as it is for every
+  constructor; a negative volume means the file is wound clockwise seen from outside,
+  and the reader does not silently fix it.
+- **Cross-format agreement is the parse's oracle.** The teapot read from an OBJ and
+  from an ASCII STL answer the same volume (25.770105759541867) and area to all 17
+  digits, and the armadillo read from an OBJ and from a binary STL written by
+  `struct.pack('<f')` answer the same 237926.39344717923 -- so the `char-code` scanner
+  produces the correctly-rounded float32 for all 450,000 numbers in that file.
+
+### Cost, pruning and the pin
+
+A program that calls `geom:read-stl` costs **+20,521 B** on a `.class` (137,915 ->
+158,436) and **+18,880 B** on a `.wasm` (144,437 -> 163,317). A program that reads no
+model file carries none of it -- verified by the absence of the readers' error strings
+from `examples/browser/webgl-solids/solids.wasm` and from a `(geom:volume (geom:box
+10))` module, and by `GeomLibraryTest.theReadersArePrunedFromAProgramThatReadsNo
+ModelFile`. (`solids.wasm` is not byte-identical to a pre-change build -- it is 505
+bytes SMALLER, an index/encoding shift, not inclusion.)
+
+Pinned by nine `GeomLibraryTest` cases, the `geom-read-model-cross-backend` ci-spec
+case (a box written out as an OBJ and as a binary STL and read straight back: 1000.0
+and 600.0 both ways, on all four backends) and
+`SceneOffscreenRenderTest.aMeshReadOutOfAModelFileDrawsLikeAnyOtherSolid`.
+
+### What is deliberately not here
+
+- **PLY and glTF/GLB** -- recognized, refused by name, and the seam they plug into is
+  above.
+- **WRITING any format.** `read-`/`write-` is the pair the naming leaves room for.
+- **Vertex welding.** An STL solid carries three vertices per facet because the format
+  has no index table; welding is a different operation, on a mesh from any source.
+- **A byte-vector or stream entry point.** The browser can fetch bytes but cannot open
+  a file, so a content-taking reader is the only one it could ever use -- and
+  `read-sequence`'s packed fast path declines every in-memory stream, so a binary
+  format read out of a byte vector would have to decode IEEE-754 in Lisp. The missing
+  primitive is an in-memory byte stream the packed path accepts, not a second API.
 
 ## Boolean operations (union / difference / intersection / section)
 

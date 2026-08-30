@@ -688,6 +688,382 @@
 (defun geom:polyhedron (points facets &key color label)
   (geom::%build-solid points facets :color color :label label))
 
+;; --- reading a mesh out of a model file --------------------------------------
+;;
+;; The other half of polyhedron's sentence above. The readers are the only
+;; members of this package that open a file, and they are the only ones that
+;; need to: a mesh someone else authored is the ordinary way a solid this big
+;; enters a program, and building it by hand is not an alternative. They answer
+;; an ordinary geom:solid, so everything the package does -- volume, bounds,
+;; the booleans, a viewer -- applies unchanged.
+;;
+;; THE SEAM, so a fourth format is a localised edit rather than a redesign
+;; (.kb/geom.md, "Reading a model file"):
+;;
+;;   - A reader is (path color label) -> a geom:solid, or a LIST of them for a
+;;     format that carries several meshes. A list is what scene:add already
+;;     splices and what geom:triad already answers, and a hierarchy rides along
+;;     inside it: the solids are attached to a shared geom:node, so each one's
+;;     world-transform carries its parents and the flat list still draws right.
+;;   - It builds its answer with geom::%build-solid, whose arguments -- a list
+;;     of points, a list of index loops, a colour and a label -- ARE the one
+;;     internal representation. Numbers come out of text with
+;;     geom::%scan-number and out of binary with read-sequence over a packed
+;;     buffer; nothing else is shared and nothing else needs to be.
+;;   - geom::%model-format sniffs the file's own bytes and geom:read-model
+;;     dispatches on the answer with a case. A table of reader functions would
+;;     make every reader reachable from the dispatcher, so a program that reads
+;;     one format would carry them all; a case keeps LibraryDefunPruner able to
+;;     see which arm a program can reach.
+;;   - Adding a format is: one reader defun, one geom::%model-format clause,
+;;     one geom:read-model case arm, and a PackageRegistry entry if it gets a
+;;     public per-format name.
+;;
+;; What the representation does NOT carry, on any format: materials beyond one
+;; RGB, texture coordinates, per-vertex normals and per-vertex colours. geom
+;; has no slot for any of them -- a solid is one colour and its facet normals
+;; are Newell's, computed from the geometry -- so those records are read past
+;; rather than half-kept.
+;;
+;; Numbers are scanned with char-code alone (json.lisp's shape), so the readers
+;; run identically on every backend, and every definition here is keyed by
+;; LibraryDefunPruner: a program that reads no model file carries none of this.
+
+;; A number scanned out of S from I, answered as (value . next-index), or NIL
+;; when nothing there parses. Leading blanks are skipped; the syntax is the one
+;; every text mesh format writes, [+-]d*[.d*][eE[+-]d*].
+(defun geom::%scan-number (s i n)
+  (let ((j i))
+    (do ()
+        ((not
+          (and (< j n)
+           (let ((c (char-code (char s j)))) (or (= c 32) (= c 9) (= c 13))))))
+      (setq j (+ j 1)))
+    (if (>= j n)
+        nil
+        (let ((neg nil)
+              (m 0.0)
+              (frac 0)
+              (e 0)
+              (es 1)
+              (digits 0)
+              (c (char-code (char s j))))
+          (cond ((= c 45)
+                 (setq neg t)
+                 (setq j (+ j 1)))
+                ((= c 43) (setq j (+ j 1))))
+          (do ()
+              ((>= j n))
+            (setq c (char-code (char s j)))
+            (if (and (>= c 48) (<= c 57))
+                (progn
+                  (setq m (+ (* m 10.0) (- c 48)))
+                  (setq digits (+ digits 1))
+                  (setq j (+ j 1)))
+                (return)))
+          (when (and (< j n) (= (char-code (char s j)) 46))
+            (setq j (+ j 1))
+            (do ()
+                ((>= j n))
+              (setq c (char-code (char s j)))
+              (if (and (>= c 48) (<= c 57))
+                  (progn
+                    (setq m (+ (* m 10.0) (- c 48)))
+                    (setq frac (+ frac 1))
+                    (setq digits (+ digits 1))
+                    (setq j (+ j 1)))
+                  (return))))
+          (if (= digits 0)
+              nil
+              (progn
+                (when (and (< j n)
+                           (let ((k (char-code (char s j))))
+                             (or (= k 101) (= k 69))))
+                  (setq j (+ j 1))
+                  (when (< j n)
+                    (setq c (char-code (char s j)))
+                    (cond ((= c 45)
+                           (setq es -1)
+                           (setq j (+ j 1)))
+                          ((= c 43) (setq j (+ j 1)))))
+                  (do ()
+                      ((>= j n))
+                    (setq c (char-code (char s j)))
+                    (if (and (>= c 48) (<= c 57))
+                        (progn
+                          (setq e (+ (* e 10) (- c 48)))
+                          (setq j (+ j 1)))
+                        (return))))
+                (let ((v (* m (expt 10.0 (- (* es e) frac)))))
+                  (cons (if neg (- v) v) j))))))))
+
+;; Wavefront OBJ. "v" lines are the vertices (a fourth w component is ignored),
+;; "f" lines the facets: each of their tokens is v, v/vt, v/vt/vn or v//vn, an
+;; index that is 1-based when positive and relative to the vertices seen so far
+;; when negative. Every other record -- vn, vt, g, o, s, usemtl, mtllib, a
+;; comment -- is skipped, so a file naming several objects reads as ONE solid,
+;; which is what a solid is.
+(defun geom:read-obj (path &key color label)
+  (let ((verts '()) (facets '()) (nv 0))
+    (with-open-file (in path)
+      (do ((line (read-line in nil nil) (read-line in nil nil)))
+          ((null line))
+        (let ((n (length line)))
+          (when (> n 1)
+            (let ((c0 (char-code (char line 0))) (c1 (char-code (char line 1))))
+              (cond ((and (= c0 118) (= c1 32))
+                     (let* ((x (geom::%scan-number line 2 n))
+                            (y (if x (geom::%scan-number line (cdr x) n) nil))
+                            (z (if y (geom::%scan-number line (cdr y) n) nil)))
+                       (when (null z)
+                         (error "geom:read-obj: a vertex line short of three numbers in ~a"
+                                path))
+                       (push (list (car x) (car y) (car z)) verts)
+                       (setq nv (+ nv 1))))
+                    ((and (= c0 102) (= c1 32))
+                     (let ((loop-indices '()) (p 2) (m 0))
+                       (do ((r
+                             (geom::%scan-number line p n)
+                             (geom::%scan-number line p n)))
+                           ((null r))
+                         (setq p (cdr r))
+                         (let ((i (floor (car r))))
+                           (push (if (< i 0) (+ nv i) (- i 1)) loop-indices))
+                         (setq m (+ m 1))
+                         ;; read past the /vt/vn of this token
+                         (do ()
+                             ((not
+                               (and (< p n) (= (char-code (char line p)) 47))))
+                           (setq p (+ p 1))
+                           (let ((q (geom::%scan-number line p n)))
+                             (when q (setq p (cdr q))))))
+                       (when (>= m 3)
+                         (push (nreverse loop-indices) facets))))))))))
+    (geom::%build-solid (nreverse verts) (nreverse facets)
+                        :color color
+                        :label label)))
+
+;; --- sniffing bytes ----------------------------------------------------------
+;;
+;; Enough of a file to say what it is, without reading it: the first few hundred
+;; bytes and two tests over them. Shared by geom:read-stl (which dialect) and
+;; geom::%model-format (which format).
+
+;; The first COUNT bytes of PATH (fewer at a short file), as a packed byte
+;; vector. Read in one transfer, so sniffing costs one syscall.
+(defun geom::%head-bytes (path count)
+  (with-open-file (in path :element-type '(unsigned-byte 8))
+    (let* ((bytes (make-array count :element-type '(unsigned-byte 8)))
+           (n (read-sequence bytes in)))
+      (if (= n count) bytes (subseq bytes 0 n)))))
+
+(defun geom::%bytes-match (bytes at word)
+  (let ((n (length word)))
+    (if (> (+ at n) (length bytes))
+        nil
+        (let ((ok t))
+          (dotimes (i n ok)
+            (when (not (= (aref bytes (+ at i)) (char-code (char word i))))
+              (setq ok nil)
+              (return nil)))))))
+
+;; The first token of the first line that is neither blank nor a comment, as a
+;; lower-case string. Answers "" when there is none.
+(defun geom::%first-token (bytes)
+  (let ((n (length bytes)) (i 0) (out nil))
+    (do ()
+        ((or (>= i n) out))
+      ;; skip blanks and line breaks
+      (do ()
+          ((not
+            (and (< i n)
+                 (let ((c (aref bytes i)))
+                   (or (= c 32) (= c 9) (= c 10) (= c 13))))))
+        (setq i (+ i 1)))
+      (if (>= i n)
+          nil
+          (if (= (aref bytes i) 35)
+              ;; a comment: to the end of the line and round again
+              (do ()
+                  ((or (>= i n) (= (aref bytes i) 10)))
+                (setq i (+ i 1)))
+              (let ((start i))
+                (do ()
+                    ((not
+                      (and (< i n)
+                           (let ((c (aref bytes i)))
+                             (and (not (= c 32)) (not (= c 9)) (not (= c 10))
+                                  (not (= c 13)))))))
+                  (setq i (+ i 1)))
+                (let ((token (make-string (- i start))))
+                  (do ((k start (+ k 1)))
+                      ((>= k i))
+                    (setf (char token (- k start))
+                          (char-downcase (code-char (aref bytes k)))))
+                  (setq out token))))))
+    (if out out "")))
+
+;; Which STL dialect a file is written in, decided from the FILE'S SHAPE and
+;; nothing else, so all four backends take the same decision.
+;;
+;; The 84 + 50*n length test is exact and is the one every desktop tool uses --
+;; and it is unavailable here: file-length answers nil on both WASM backends by
+;; design (no WASI filestat is imported, see doc/*/reference/functions/
+;; file-length.md), so a reader resting on it would classify a file one way on
+;; the JVM and trap on wasm. The shape test costs one 512-byte read and needs
+;; no size: an ASCII file opens with the token "solid" AND, on its next line,
+;; "facet" or "endsolid". A binary writer putting "solid <name>" in its 80-byte
+;; header -- routine, and the reason the prefix ALONE is not a test -- is
+;; followed by float bytes, which spell neither.
+(defun geom::%stl-ascii-p (head)
+  (if (not (string= (geom::%first-token head) "solid"))
+      nil
+      (let ((n (length head)) (i 0))
+        ;; to the end of the "solid <name>" line
+        (do ()
+            ((or (>= i n) (= (aref head i) 10)))
+          (setq i (+ i 1)))
+        (let ((next (geom::%first-token (subseq head (min n (+ i 1)) n))))
+          (or (string= next "facet") (string= next "endsolid"))))))
+
+;; A little-endian unsigned 32-bit integer out of a byte vector.
+(defun geom::%u32-at (bytes at)
+  (+ (aref bytes at) (* 256 (aref bytes (+ at 1)))
+     (* 65536 (aref bytes (+ at 2))) (* 16777216 (aref bytes (+ at 3)))))
+
+;; 84 bytes of header, then 50 a triangle: twelve little-endian float32s (a
+;; normal this reader does not keep -- geom computes Newell's from the geometry,
+;; and half the writers in the world store zeros there) and a two-byte
+;; attribute. read-sequence over a packed single-float array moves the twelve in
+;; one native transfer on every backend (.kb/binary-sequence-io.md), which is
+;; what makes reading a binary mesh cost no per-number Lisp arithmetic at all.
+(defun geom::%read-stl-binary (path triangles color label)
+  (with-open-file (in path :element-type '(unsigned-byte 8))
+    (let ((header (make-array 84 :element-type '(unsigned-byte 8)))
+          (triangle (make-array 12 :element-type 'single-float))
+          (attribute (make-array 1 :element-type '(unsigned-byte 16)))
+          (points '())
+          (facets '())
+          (k 0))
+      (read-sequence header in)
+      (dotimes (i triangles)
+        (read-sequence triangle in)
+        (read-sequence attribute in)
+        (push (list (aref triangle 3) (aref triangle 4) (aref triangle 5))
+              points)
+        (push (list (aref triangle 6) (aref triangle 7) (aref triangle 8))
+              points)
+        (push (list (aref triangle 9) (aref triangle 10) (aref triangle 11))
+              points)
+        (push (list k (+ k 1) (+ k 2)) facets)
+        (setq k (+ k 3)))
+      (geom::%build-solid (nreverse points) (nreverse facets)
+                          :color color
+                          :label label))))
+
+;; The ASCII dialect says the same thing in words. Only the "vertex" lines carry
+;; anything this reader keeps, and they arrive three to a facet in order, so
+;; nothing else has to be understood.
+(defun geom::%read-stl-ascii (path color label)
+  (let ((points '()) (facets '()) (k 0))
+    (with-open-file (in path)
+      (do ((line (read-line in nil nil) (read-line in nil nil)))
+          ((null line))
+        (let ((n (length line)) (i 0))
+          (do ()
+              ((not
+                (and (< i n)
+                 (let ((c (char-code (char line i)))) (or (= c 32) (= c 9))))))
+            (setq i (+ i 1)))
+          (when (and (< (+ i 6) n) (= (char-code (char line i)) 118)
+                     (= (char-code (char line (+ i 1))) 101)
+                     (= (char-code (char line (+ i 2))) 114))
+            (let* ((x (geom::%scan-number line (+ i 6) n))
+                   (y (if x (geom::%scan-number line (cdr x) n) nil))
+                   (z (if y (geom::%scan-number line (cdr y) n) nil)))
+              (when (null z)
+                (error
+                 "geom:read-stl: a vertex line short of three numbers in ~a"
+                 path))
+              (push (list (car x) (car y) (car z)) points)
+              (setq k (+ k 1))
+              (when (= (mod k 3) 0)
+                (push (list (- k 3) (- k 2) (- k 1)) facets)))))))
+    (when (not (= (mod k 3) 0))
+      (error "geom:read-stl: ~a vertices, which is not a whole number of triangles, in ~a"
+             k path))
+    (geom::%build-solid (nreverse points) (nreverse facets)
+                        :color color
+                        :label label)))
+
+;; STL, either dialect. A triangle soup with no vertex sharing at all, so the
+;; solid carries three vertices per facet -- the format has no index table and
+;; welding one back would be a different operation, on a mesh from any source.
+(defun geom:read-stl (path &key color label)
+  (let ((head (geom::%head-bytes path 512)))
+    (if (geom::%stl-ascii-p head)
+        (geom::%read-stl-ascii path color label)
+        (progn
+          (when (< (length head) 84)
+            (error "geom:read-stl: ~a is too short to be an STL file" path))
+          (geom::%read-stl-binary path (geom::%u32-at head 80) color label)))))
+
+(defun geom::%extension-format (path)
+  (let* ((s (string path)) (n (length s)) (dot -1))
+    (do ((i (- n 1) (- i 1)))
+        ((or (< i 0) (>= dot 0)))
+      (when (= (char-code (char s i)) 46) (setq dot i)))
+    (if (< dot 0)
+        nil
+        (let ((ext (string-downcase (subseq s (+ dot 1) n))))
+          (cond ((string= ext "obj") :obj)
+                ((string= ext "stl") :stl)
+                ((string= ext "ply") :ply)
+                ((string= ext "gltf") :gltf)
+                ((string= ext "glb") :glb)
+                (t nil))))))
+
+;; What format PATH is, from its content where the format says so and from its
+;; extension only where no content test can. The order is the honest one:
+;;
+;;   - glTF-Binary and PLY carry a magic number, so they are decided outright.
+;;   - An OBJ, a JSON glTF and an ASCII STL each open with a keyword of their
+;;     own, which is a content test too.
+;;   - A BINARY STL has no magic number at all -- that is a wart of the format,
+;;     not a gap here -- so a binary .stl whose 80-byte header is not the word
+;;     "solid" is named by its extension, and :format overrides.
+;;
+;; What the extension never decides is the ASCII/binary split: both dialects of
+;; STL are ".stl" and geom:read-stl settles it from the bytes (%stl-ascii-p).
+;;
+;; :ply / :gltf / :glb are recognized but not read, so the refusal can NAME the
+;; format instead of letting a reader eat the file sideways.
+(defun geom::%model-format (path)
+  (let* ((head (geom::%head-bytes path 512)) (token (geom::%first-token head)))
+    (cond ((geom::%bytes-match head 0 "glTF") :glb)
+          ((and (geom::%bytes-match head 0 "ply") (>= (length head) 4)
+                (let ((c (aref head 3))) (or (= c 10) (= c 13))))
+           :ply)
+          ((string= token "solid") :stl)
+          ((or (string= token "v") (string= token "vn") (string= token "vt")
+               (string= token "f") (string= token "g") (string= token "o")
+               (string= token "s") (string= token "usemtl")
+               (string= token "mtllib"))
+           :obj)
+          ((and (> (length token) 0) (= (char-code (char token 0)) 123)) :gltf)
+          (t (geom::%extension-format path)))))
+
+(defun geom:read-model (path &key format color label)
+  (let ((kind (if format format (geom::%model-format path))))
+    (cond ((eq kind :obj) (geom:read-obj path :color color :label label))
+          ((eq kind :stl) (geom:read-stl path :color color :label label))
+          ((null kind)
+           (error "geom:read-model: cannot tell what format ~a is; pass :format"
+                  path))
+          (t (error
+              "geom:read-model: ~a is ~a, which this build does not read yet"
+              path kind)))))
+
 ;; --- bounds, volume, centroid ------------------------------------------------
 
 (defclass geom:bounds ()

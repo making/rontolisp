@@ -199,7 +199,9 @@ frame loop every Metal program writes identically -- and the rung above it is `s
 [`scene-robot-arm.lisp`](macos/scene-robot-arm.lisp) and
 [`scene-robot-reach.lisp`](macos/scene-robot-reach.lisp) are what a modelled machine looks
 like when the camera and the frame loop are already written — the last of them is the whole
-of `metal-robot-arm.lisp`, click and gripper included, in a quarter of the lines.
+of `metal-robot-arm.lisp`, click and gripper included, in a quarter of the lines —
+and [`scene-model-file.lisp`](macos/scene-model-file.lisp) is the same viewer over a mesh
+that came off disk rather than out of a constructor.
 The window examples are not in `examples.yaml`: they need a display. The two that
 open nothing — [`objc-runtime.lisp`](macos/objc-runtime.lisp) and
 [`system-frameworks.lisp`](macos/system-frameworks.lisp) — run in a terminal and are
@@ -223,6 +225,7 @@ See the [macOS GUI guide](../doc/en/guides/objc-appkit.md).
 | [`scene-solids.lisp`](macos/scene-solids.lisp) | Every [`geom`](../doc/en/guides/solid-modeling.md) primitive on a shelf, in a window: `scene:viewer` opens it, `scene:add` fills it and `scene:fit` frames it -- three lines from a model to a picture, with nothing required and nothing copied, since `geom`, `metal` and `scene` all ship inside the interpreter. `scene:axes :bodies` draws each solid's own frame, the origin is a `geom:triad` -- three `geom:arrow` solids placed there rather than viewer furniture -- and `geom:volume` is printed to the terminal beside each shape as the gauge |
 | [`scene-robot-arm.lisp`](macos/scene-robot-arm.lisp) | The same machine as [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp), written the other way round, and the pair is the point: there the program tessellates tapered tubes into shared `MTLBuffer`s every frame, here it is six `geom` solids on a kinematic chain and the whole per-frame cost is four joint angles -- a rigid solid's mesh went to the GPU once, and a frame hands it one 4x4 matrix per solid. What did NOT move into the library is the solver: the damped-least-squares Jacobian iteration is ordinary Lisp over [`linalg`](../doc/en/guides/linear-algebra.md), and reads as the matrix expression it is because a `geom` transform answers world positions and axes outright |
 | [`scene-robot-reach.lisp`](macos/scene-robot-reach.lisp) | The same program as [`metal-robot-arm.lisp`](macos/metal-robot-arm.lisp) — click and the arm reaches for that point in 3-D on a minimum-jerk trajectory, the three-finger gripper opening for the flight and closing on arrival — with the renderer deleted. The machine is fifty-odd `geom` solids on a kinematic chain and a frame changes nothing but poses; the gripper is a sub-chain of nodes rather than a mesh, and the wake is 24 spheres whose radius and colour ARE their age, so no triangle is touched between frames. `scene:on-click` does the unprojection, which is the one thing that moved INTO the library: a pixel names a line through the world and only the viewer knows the camera. What stayed in the program is the arithmetic — the min-jerk profile and the damped-least-squares Jacobian IK over [`linalg`](../doc/en/guides/linear-algebra.md), stated in each joint's own frame, where a link cannot stretch and there is nothing to re-normalize |
+| [`scene-model-file.lisp`](macos/scene-model-file.lisp) | A mesh off disk, in a window: `geom:read-obj` / `geom:read-stl` / `geom:read-model` answer an ordinary `geom:solid`, so a file someone else authored goes into the viewer exactly the way a `geom:box` does and `geom:volume` measures it the same. Hand it a path and it views that; with no argument it writes its own two files first — a lathed vase as a Wavefront OBJ and a slotted bracket as a binary STL — and reads them straight back, which is also the honest test of a reader: the volume that comes back has to be the volume that went out. The format is decided from the file's own bytes, which is the only thing that can tell the two STL dialects apart |
 | [`objc-runtime.lisp`](macos/objc-runtime.lisp) | The package with the windows left out: selectors as strings guarded by `respondsToSelector:`, class clusters found by walking the hierarchy, a method's own type encoding read through `NSMethodSignature`, key-value coding and a sort by a text key, a run-time class whose `isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter` observer. Prints to a terminal |
 
 ```bash
@@ -238,6 +241,7 @@ java -jar $JAR examples/macos/metal-robot-arm.lisp
 java -jar $JAR examples/macos/metal-pagoda-garden.lisp
 java -jar $JAR examples/macos/scene-solids.lisp
 java -jar $JAR examples/macos/scene-robot-arm.lisp
+java -jar $JAR examples/macos/scene-model-file.lisp    # or hand it a path: ... -- model.obj
 ./target/rontolisp examples/macos/counter.lisp        # the native binary, after ./mvnw -Pnative package
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp
 java -jar $JAR examples/browser/minesweeper/minesweeper-macos.lisp \

@@ -173,6 +173,81 @@ class SceneOffscreenRenderTest {
 	}
 
 	@Test
+	void fitFramesASolidWhoseUnitsAreMetresRatherThanShrinkingItToADot() {
+		// A model file carries its own units: a scanned mesh in metres is 0.2 across
+		// and a printable part in millimetres 200. fit must frame BOTH -- a floor on
+		// the camera distance would leave the small one a handful of pixels in the
+		// middle of an empty frame, which is what a loaded .obj looks like when the
+		// floor is wrong.
+		String scene = """
+				(defvar *v* (scene:offscreen :width %d :height %d))
+				(scene:grid *v* :extent nil)
+				(scene:axes *v* nil)
+				(scene:shading *v* :solid)
+				(scene:add *v* (geom:box '%s :color (geom:vec3 1.0 0.2 0.2)))
+				(scene:camera *v* :azimuth 0.9 :elevation 0.45)
+				(scene:fit *v*)
+				(scene:snapshot *v*)
+				""";
+		for (String size : new String[] { "(0.2 0.26 0.18)", "(2 2.6 1.8)", "(200 260 180)", "(2000 2600 1800)" }) {
+			Frame frame = render("fit-units-" + size.replace(' ', '-'), scene.formatted(WIDTH, HEIGHT, size));
+			assertThat(frame.redPixels()).as("%s: a box of %s fills a real part of the frame", frame, size)
+				.isGreaterThan(WIDTH * HEIGHT / 8);
+			assertThat(frame.redOnTheBorder()).as("%s: a box of %s is not cut off", frame, size).isZero();
+		}
+	}
+
+	@Test
+	void aMeshReadOutOfAModelFileDrawsLikeAnyOtherSolid() {
+		// The acceptance test for geom:read-obj / geom:read-stl (.kb/geom.md, "Reading
+		// a model file"): a file on disk, through geom:polyhedron's representation,
+		// onto the same pipelines every primitive uses. Its units are metres, which is
+		// what a scanned mesh carries and what scene:fit has to frame.
+		String path;
+		try {
+			path = Files.createDirectories(Path.of("target", "scene-models")).resolve("octahedron.obj").toString();
+			Files.writeString(Path.of(path), """
+					# an octahedron 0.2 across, in metres
+					o octahedron
+					v 0.1 0.0 0.0
+					v 0.0 0.1 0.0
+					v -0.1 0.0 0.0
+					v 0.0 -0.1 0.0
+					v 0.0 0.0 0.1
+					v 0.0 0.0 -0.1
+					f 1 2 5
+					f 2 3 5
+					f 3 4 5
+					f 4 1 5
+					f 2 1 6
+					f 3 2 6
+					f 4 3 6
+					f 1 4 6
+					""");
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+		Frame frame = render("read-obj-octahedron", sized("""
+				(defvar *v* (scene:offscreen :width %%d :height %%d))
+				(scene:grid *v* :extent nil)
+				(scene:axes *v* nil)
+				(scene:shading *v* :solid)
+				(scene:add *v* (geom:read-model "%s" :color (geom:vec3 1.0 0.2 0.2)))
+				(scene:camera *v* :azimuth 0.9 :elevation 0.45)
+				(scene:fit *v*)
+				(scene:snapshot *v*)
+				""".formatted(path.replace("\\", "\\\\"))));
+		assertThat(frame.isRed(WIDTH / 2, HEIGHT / 2)).as("%s: the middle of the frame", frame).isTrue();
+		// An octahedron is a sixth of its bounding box, so it covers less of the frame
+		// than a box does at the same fit distance -- but it is a SHAPE, which is the
+		// whole point: with a floor on the camera distance this was zero pixels.
+		assertThat(frame.redPixels()).as("%s: the mesh fills a real part of the frame", frame)
+			.isGreaterThan(WIDTH * HEIGHT / 32);
+		assertThat(frame.redOnTheBorder()).as("%s: no part of it is cut off", frame).isZero();
+	}
+
+	@Test
 	void theSameSceneRendersTheSameBytesTwice() {
 		// A frame is arithmetic over float32 and one draw call per solid, so it has
 		// no business varying -- the way an emitted module has none

@@ -402,8 +402,14 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
     (when cs
       (let ((b (geom:bounds cs)))
         (setf (scene::%target v) (geom:bounds-center b))
-        (setf (scene::%distance v)
-              (max 100.0 (* 1.9 (linalg:norm (geom:bounds-extent b))))))))
+        ;; The distance is RELATIVE to what is being framed and nothing else. An
+        ;; absolute floor would be a unit -- and a model file brings its own: a
+        ;; scanned mesh is 0.2 across in metres, a printable part 200 in
+        ;; millimetres, and both have to fill the frame. The only guard left is
+        ;; against a degenerate extent (one point, an empty solid), which names
+        ;; no distance at all.
+        (let ((extent (linalg:norm (geom:bounds-extent b))))
+          (when (> extent 0.0) (setf (scene::%distance v) (* 1.9 extent)))))))
   nil)
 
 (defun scene::%update-camera (v)
@@ -429,7 +435,10 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
                                     (linalg:from-list '((0.0 0.0 0.0 1.0))
                                      :element-type 'single-float))
                               :axis 0))
-         (far (* 8.0 (max d 100.0))))
+         ;; The frustum follows the view distance, so it carries no unit either:
+         ;; a near plane pinned at an absolute number puts a metre-scale model
+         ;; behind it and the frame comes back empty (scene:fit above).
+         (far (* 8.0 (if (> d 0.0) d 1.0))))
     (setf (scene::%eye v) eye)
     (setf (scene::%basis v) (linalg:stack (list right up forward)))
     (setf (scene::%view-projection v)
@@ -626,8 +635,12 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
       (let* ((dy (objc:send event "scrollingDeltaY"))
              (k (if (objc:send event "hasPreciseScrollingDeltas") -0.004 -0.20))
              (d (* (scene::%distance v) (+ 1.0 (* dy k)))))
+        ;; The clamp exists to stop the scroll reaching zero (a degenerate
+        ;; frustum and a dead orbit) or overflowing, not to say how big a world
+        ;; is -- the old 10 .. 200000 window was a unit, and a model measured in
+        ;; metres started outside it.
         (setf (scene::%distance v)
-              (cond ((< d 10.0) 10.0) ((> d 200000.0) 200000.0) (t d)))
+              (cond ((< d 1.0e-6) 1.0e-6) ((> d 1.0e9) 1.0e9) (t d)))
         (scene:refresh v))))
   nil)
 
