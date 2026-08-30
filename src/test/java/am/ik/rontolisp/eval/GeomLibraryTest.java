@@ -269,18 +269,19 @@ class GeomLibraryTest {
 
 	@Test
 	void aTransformIsAValueAndTheMutatorsDoNotWriteThroughIt() {
-		// move/turn/place REPLACE a node's local transform, so a transform handed to two
+		// translate/rotate/place REPLACE a node's local transform, so a transform handed
+		// to two
 		// nodes stays what the caller built.
 		assertThat(vector("""
 				(let* ((tf (geom:make-transform :translation (geom:vec3 1 2 3)))
 				       (n (geom:make-node :transform tf)))
-				  (geom:move n (geom:vec3 10 0 0))
+				  (geom:translate n (geom:vec3 10 0 0))
 				  (geom:translation-of tf))
 				""")).containsExactly(1.0, 2.0, 3.0);
 	}
 
 	@Test
-	void anAxisAngleMatrixTurnsTheAxisItNames() {
+	void anAxisAngleMatrixRotatesAboutTheAxisItNames() {
 		assertThat(vector("(linalg:row (geom:axis-angle-matrix (/ 3.141592653589793 2) :z) 0)"))
 			.usingComparatorWithPrecision(1e-6)
 			.containsExactly(0.0, -1.0, 0.0);
@@ -300,8 +301,8 @@ class GeomLibraryTest {
 				(defvar *link* (geom:cylinder :radius 8 :height 80))
 				(geom:attach *j1* *j2*)
 				(geom:attach *j2* *link*)
-				(geom:turn *j2* (/ 3.141592653589793 2) :y)
-				(geom:move *base* (geom:vec3 0 0 500))
+				(geom:rotate *j2* (/ 3.141592653589793 2) :y)
+				(geom:translate *base* (geom:vec3 0 0 500))
 				""";
 		assertThat(vector(chain + "(geom:world-translation *link*)")).usingComparatorWithPrecision(1e-4)
 			.containsExactly(0.0, 0.0, 600.0);
@@ -333,20 +334,20 @@ class GeomLibraryTest {
 	}
 
 	@Test
-	void moveInTheParentFrameIgnoresTheNodesOwnRotation() {
+	void translateInTheParentFrameIgnoresTheNodesOwnRotation() {
 		assertThat(vector("""
 				(let ((n (geom:make-node :axis :z :angle (/ 3.141592653589793 2))))
-				  (geom:move n (geom:vec3 10 0 0) :frame :parent)
+				  (geom:translate n (geom:vec3 10 0 0) :frame :parent)
 				  (geom:world-translation n))
 				""")).usingComparatorWithPrecision(1e-5).containsExactly(10.0, 0.0, 0.0);
 	}
 
 	@Test
-	void moveInTheLocalFrameFollowsTheNodesOwnAxes() {
+	void translateInTheLocalFrameFollowsTheNodesOwnAxes() {
 		// Turned a quarter about z, the node's own +x is the parent's +y.
 		assertThat(vector("""
 				(let ((n (geom:make-node :axis :z :angle (/ 3.141592653589793 2))))
-				  (geom:move n (geom:vec3 10 0 0))
+				  (geom:translate n (geom:vec3 10 0 0))
 				  (geom:world-translation n))
 				""")).usingComparatorWithPrecision(1e-5).containsExactly(0.0, 10.0, 0.0);
 	}
@@ -355,8 +356,8 @@ class GeomLibraryTest {
 	void placeSetsThePoseOutrightRatherThanAccumulating() {
 		assertThat(vector("""
 				(let ((n (geom:make-node)))
-				  (geom:turn n 0.4 :z)
-				  (geom:turn n 0.4 :z)
+				  (geom:rotate n 0.4 :z)
+				  (geom:rotate n 0.4 :z)
 				  (geom:place n :axis :z :angle 0.4)
 				  (linalg:row (geom:world-rotation n) 0))
 				""")).usingComparatorWithPrecision(1e-6).containsExactly(Math.cos(0.4), -Math.sin(0.4), 0.0);
@@ -369,7 +370,7 @@ class GeomLibraryTest {
 				       (mid (geom:make-node :parent base))
 				       (leaf (geom:make-node :parent mid)))
 				  (geom:world-translation leaf)
-				  (geom:move base (geom:vec3 0 0 7))
+				  (geom:translate base (geom:vec3 0 0 7))
 				  (geom:world-translation leaf))
 				""")).containsExactly(0.0, 0.0, 7.0);
 	}
@@ -381,7 +382,7 @@ class GeomLibraryTest {
 		assertThat(vector("""
 				(let ((a (geom:box 10))
 				      (b (geom:box 10)))
-				  (geom:move b (geom:vec3 100 0 0))
+				  (geom:translate b (geom:vec3 100 0 0))
 				  (geom:bounds-extent (geom:bounds (list a b))))
 				""")).containsExactly(110.0, 10.0, 10.0);
 	}
@@ -414,14 +415,84 @@ class GeomLibraryTest {
 	}
 
 	@Test
-	void scaleInvalidatesBothCachesAndTheUserDataSlot() {
+	void nscaleMutatesInPlaceAndInvalidatesBothCachesAndTheUserDataSlot() {
 		assertThat(eval("""
 				(let* ((s (geom:box 10))
 				       (m (geom:mesh s)))
 				  (setf (geom:user-data s) :mine)
-				  (geom:scale s 2)
-				  (list (eq m (geom:mesh s)) (geom:user-data s) (geom:volume s)))
-				""").print()).isEqualTo("(NIL NIL 8000.0)");
+				  (list (eq (geom:nscale s 2) s) (eq m (geom:mesh s)) (geom:user-data s) (geom:volume s)))
+				""").print()).isEqualTo("(T NIL NIL 8000.0)");
+	}
+
+	@Test
+	void scaleAnswersANewSolidAndLeavesTheOriginalUntouched() {
+		// Functional like the booleans beside it: the copy carries vertices, facets,
+		// color and label, records (:scale s factor) in its history, and is a fresh
+		// ROOT solid -- parent, children and user-data are not carried.
+		assertThat(eval("""
+				(let* ((s (geom:box 10))
+				       (m (geom:mesh s))
+				       (p (geom:make-node)))
+				  (geom:attach p s)
+				  (setf (geom:user-data s) :mine)
+				  (let ((c (geom:scale s 2)))
+				    (list (geom:volume c) (geom:volume s) (eq m (geom:mesh s))
+				          (geom:parent-of c) (geom:user-data c)
+				          (first (geom:history c)) (eq (second (geom:history c)) s)
+				          (third (geom:history c)))))
+				""").print()).isEqualTo("(8000.0 1000.0 T NIL NIL :SCALE T 2)");
+	}
+
+	@Test
+	void scaleCopiesColourAndLabel() {
+		assertThat(eval("""
+				(let ((c (geom:scale (geom:box 1 :color (geom:vec3 1 0 0) :label "b") 3)))
+				  (list (geom:label-of c) (geom:color-of c)))
+				""").print()).isEqualTo("(\"b\" #f(1.0 0.0 0.0))");
+	}
+
+	@Test
+	void aScaleFactorMayBeAVectorOrAListForANonUniformScale() {
+		// The mesh is rebuilt from the facets with a fresh Newell normal per
+		// triangle, so a non-uniform factor costs nothing once the cache is dropped.
+		assertThat(eval("""
+				(list (geom:volume (geom:scale (geom:box 10) (geom:vec3 1 2 3)))
+				      (geom:volume (geom:nscale (geom:box 10) '(1 2 3)))
+				      (geom:surface-area (geom:scale (geom:box 1) (geom:vec3 2 3 4))))
+				""").print()).isEqualTo("(6000.0 6000.0 52.0)");
+	}
+
+	@Test
+	void aMirroringFactorFlipsTheFacetsSoTheWindingStaysOutward() {
+		// A factor with a negative determinant MIRRORS, which inverts every loop's
+		// sense, so scale reverses each facet. Volume (the abs'd divergence
+		// integral) cannot see the difference; the +x face's mesh normal can -- it
+		// must still point OUT of the mirrored box.
+		assertThat(eval("""
+				(defun face-normal-x (s)
+				  (let ((m (geom:mesh s)) (nx 0.0))
+				    (do ((i 0 (+ i 18)))
+				        ((>= i (length m)) nx)
+				      (when (and (= (aref m i) 1.0) (= (aref m (+ i 6)) 1.0)
+				                 (= (aref m (+ i 12)) 1.0))
+				        (setq nx (aref m (+ i 3)))))))
+				(list (face-normal-x (geom:box 2))
+				      (face-normal-x (geom:scale (geom:box 2) (geom:vec3 -1 1 1)))
+				      (face-normal-x (geom:nscale (geom:box 2) -1))
+				      (geom:volume (geom:scale (geom:box '(100 200 300)) -1)))
+				""").print()).isEqualTo("(1.0 1.0 1.0 6000000.0)");
+	}
+
+	@Test
+	void aZeroScaleFactorIsRefusedNamingIt() {
+		// A zero component flattens the boundary representation into a degenerate
+		// shell; refuse it rather than answer a solid with no inside.
+		assertThat(eval("""
+				(list (handler-case (geom:scale (geom:box 1) 0) (error (e) (princ-to-string e)))
+				      (handler-case (geom:nscale (geom:box 1) (geom:vec3 1 0 1))
+				        (error (e) (princ-to-string e))))
+				""").print()).isEqualTo(
+				"(\"geom:scale: a scale factor must be nonzero: 0\" \"geom:nscale: a scale factor must be nonzero: #f(1.0 0.0 1.0)\")");
 	}
 
 	@Test
@@ -429,7 +500,7 @@ class GeomLibraryTest {
 		assertThat(eval("""
 				(let* ((s (geom:box 10))
 				       (m (geom:mesh s)))
-				  (geom:move s (geom:vec3 1000 0 0))
+				  (geom:translate s (geom:vec3 1000 0 0))
 				  (eq m (geom:mesh s)))
 				""").print()).isEqualTo("T");
 	}
@@ -486,7 +557,7 @@ class GeomLibraryTest {
 		String setUp = """
 				(defvar *a* (geom:box 100))
 				(defvar *b* (geom:box 100))
-				(geom:move *b* (geom:vec3 50 50 50))
+				(geom:translate *b* (geom:vec3 50 50 50))
 				""";
 		assertThat(number(setUp + "(geom:volume (geom:union *a* *b*))")).isEqualTo(1875000.0);
 		assertThat(number(setUp + "(geom:volume (geom:difference *a* *b*))")).isEqualTo(875000.0);
@@ -500,7 +571,7 @@ class GeomLibraryTest {
 		String setUp = """
 				(defvar *a* (geom:sphere :radius 40 :sides 16 :stacks 8))
 				(defvar *b* (geom:box 60))
-				(geom:move *b* (geom:vec3 30 10 20))
+				(geom:translate *b* (geom:vec3 30 10 20))
 				""";
 		double va = number(setUp + "(geom:volume *a*)");
 		double vb = number(setUp + "(geom:volume *b*)");
@@ -519,7 +590,7 @@ class GeomLibraryTest {
 		String setUp = """
 				(defvar *a* (geom:box 100))
 				(defvar *b* (geom:box 100))
-				(geom:move *b* (geom:vec3 100 0 0))
+				(geom:translate *b* (geom:vec3 100 0 0))
 				""";
 		assertThat(number(setUp + "(geom:volume (geom:union *a* *b*))")).isEqualTo(2000000.0);
 		assertThat(number(setUp + "(geom:surface-area (geom:union *a* *b*))")).isEqualTo(100000.0);
@@ -536,8 +607,8 @@ class GeomLibraryTest {
 		String setUp = """
 				(defvar *a* (geom:box 100))
 				(defvar *b* (geom:box 100))
-				(geom:turn *b* 0.7853981633974483 :z)
-				(geom:move *b* (geom:vec3 120.71068 0 0) :frame :parent)
+				(geom:rotate *b* 0.7853981633974483 :z)
+				(geom:translate *b* (geom:vec3 120.71068 0 0) :frame :parent)
 				""";
 		assertThat(number(setUp + "(geom:volume (geom:union *a* *b*))")).isCloseTo(2000000.0,
 				org.assertj.core.data.Offset.offset(20.0));
@@ -553,7 +624,7 @@ class GeomLibraryTest {
 		String setUp = """
 				(defvar *plate* (geom:box '(100 100 20)))
 				(defvar *hole* (geom:cylinder :radius 10 :height 20 :sides 24))
-				(geom:move *hole* (geom:vec3 0 0 -10))
+				(geom:translate *hole* (geom:vec3 0 0 -10))
 				""";
 		double prism = 0.5 * 24 * 100 * Math.sin(2 * PI / 24) * 20;
 		assertThat(number(setUp + "(geom:volume (geom:difference *plate* *hole*))")).isCloseTo(200000.0 - prism,
@@ -571,7 +642,7 @@ class GeomLibraryTest {
 		String setUp = """
 				(defvar *a* (geom:box 10))
 				(defvar *b* (geom:box 10))
-				(geom:move *b* (geom:vec3 100 0 0))
+				(geom:translate *b* (geom:vec3 100 0 0))
 				""";
 		assertThat(number(setUp + "(geom:volume (geom:union *a* *b*))")).isEqualTo(2000.0);
 		assertThat(eval(setUp + """
@@ -587,13 +658,13 @@ class GeomLibraryTest {
 		// large one. Relative volume error stays at float32 noise for both.
 		double tiny = number("""
 				(let ((a (geom:box 0.001)) (b (geom:box 0.001)))
-				  (geom:move b (geom:vec3 0.0005 0.0005 0.0005))
+				  (geom:translate b (geom:vec3 0.0005 0.0005 0.0005))
 				  (* 1e9 (geom:volume (geom:union a b))))
 				""");
 		assertThat(tiny).isCloseTo(1.875, org.assertj.core.data.Offset.offset(1e-4));
 		double huge = number("""
 				(let ((a (geom:box 1000)) (b (geom:box 1000)))
-				  (geom:move b (geom:vec3 500 500 500))
+				  (geom:translate b (geom:vec3 500 500 500))
 				  (geom:volume (geom:union a b)))
 				""");
 		assertThat(huge).isEqualTo(1.875e9);
@@ -605,7 +676,7 @@ class GeomLibraryTest {
 				(let* ((a (geom:box 100))
 				       (b (geom:box 100))
 				       (va (geom:vertices-of a))
-				       (d (progn (geom:move b (geom:vec3 50 50 50)) (geom:difference a b))))
+				       (d (progn (geom:translate b (geom:vec3 50 50 50)) (geom:difference a b))))
 				  (list (eq va (geom:vertices-of a)) (geom:volume a) (geom:volume b)
 				        (first (geom:history d)) (eq (second (geom:history d)) a)
 				        (eq (third (geom:history d)) b) (geom:history a)))
@@ -622,7 +693,7 @@ class GeomLibraryTest {
 				       (a (geom:box 100))
 				       (b (geom:box 100)))
 				  (geom:attach base a)
-				  (geom:move b (geom:vec3 0 0 450))
+				  (geom:translate b (geom:vec3 0 0 450))
 				  (let ((u (geom:union a b)))
 				    (list (geom:volume u) (geom:parent-of u)
 				          (mapcar (lambda (x) (round x))
@@ -687,7 +758,7 @@ class GeomLibraryTest {
 		// z = 0 and cut by z = 100.
 		assertThat(eval("""
 				(let ((s (geom:box 10)))
-				  (geom:move s (geom:vec3 0 0 100))
+				  (geom:translate s (geom:vec3 0 0 100))
 				  (list (geom:section s) (length (geom:section s :offset 100))))
 				""").print()).isEqualTo("(NIL 1)");
 	}

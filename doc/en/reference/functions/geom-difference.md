@@ -7,7 +7,7 @@ A new solid: `a` with `b` removed -- a plate with a bolt hole, a block with a sl
 ```lisp
 (let ((plate (geom:box '(100 100 20)))
       (hole (geom:cylinder :radius 10 :height 20 :sides 24)))
-  (geom:move hole (geom:vec3 0 0 -10))
+  (geom:translate hole (geom:vec3 0 0 -10))
   (round (geom:volume (geom:difference plate hole))))
 ; => 193788
 ```

@@ -91,9 +91,9 @@
 ;; which applies the node's own rotation -- is what centres it on the block.
 (defun bore (x)
   (let ((c (geom:cylinder :radius 50.0 :height 400.0 :sides 24)))
-    (geom:turn c 1.5707963267948966 :x)
-    (geom:move c (geom:vec3 0.0 0.0 -200.0))
-    (geom:move c (geom:vec3 x 0.0 0.0) :frame :parent)
+    (geom:rotate c 1.5707963267948966 :x)
+    (geom:translate c (geom:vec3 0.0 0.0 -200.0))
+    (geom:translate c (geom:vec3 x 0.0 0.0) :frame :parent)
     c))
 
 (defun build-model ()
@@ -129,10 +129,10 @@
                      :sides 32
                      :color (geom:vec3 0.95 0.80 0.35)
                      :label "spire")))
-    (geom:move plate (geom:vec3 0.0 0.0 -20.0))
-    (geom:move drilled (geom:vec3 -170.0 -170.0 100.0))
-    (geom:move ball (geom:vec3 210.0 -190.0 95.0))
-    (geom:move spire (geom:vec3 -210.0 210.0 0.0))
+    (geom:translate plate (geom:vec3 0.0 0.0 -20.0))
+    (geom:translate drilled (geom:vec3 -170.0 -170.0 100.0))
+    (geom:translate ball (geom:vec3 210.0 -190.0 95.0))
+    (geom:translate spire (geom:vec3 -210.0 210.0 0.0))
     ;; The ring hangs off a joint of its own, and the joint is what the frame
     ;; hook turns: geom:world-transform composes down the graph and the ring's
     ;; triangles never move.

@@ -32,8 +32,8 @@
 | `geom:children-of` | `(geom:children-of n)` | 接続されている子ノードのリスト |
 | `geom:attach` | `(geom:attach parent child)` | 子。以後は親の座標系で姿勢が解釈される |
 | `geom:detach` | `(geom:detach child)` | 親の座標系から外された子 |
-| `geom:move` | `(geom:move n v :frame :parent)` | ノードを平行移動する。`:frame` は `:local`（既定）か `:parent` |
-| `geom:turn` | `(geom:turn n 0.5 :z)` | 現在の姿勢に積み重ねてノードを回転する |
+| `geom:translate` | `(geom:translate n v :frame :parent)` | ノードを平行移動し、積み重ねる。`:frame` は `:local`（既定）か `:parent` |
+| `geom:rotate` | `(geom:rotate n 0.5 :z)` | 現在の姿勢に積み重ねてノードを回転する |
 | `geom:place` | `(geom:place n :rpy '(0 0 1.5))` | 姿勢を直接設定する。アニメーションループ向け |
 | `geom:reorient` | `(geom:reorient n 0.5 :z)` | 並進を保ったまま回転を設定する |
 | `geom:box` | `(geom:box '(100 200 300))` | 原点を中心とする直方体（スカラーなら立方体） |
@@ -51,7 +51,8 @@
 | `geom:color-of` | `(geom:color-of s)` | ソリッドの色（成分 0..1 の3次元ベクトル）。`setf` 可能 |
 | `geom:label-of` | `(geom:label-of s)` | `:label` に渡された値。`setf` 可能 |
 | `geom:user-data` | `(geom:user-data s)` | 利用側が独自の状態を置くスロット。`setf` 可能 |
-| `geom:scale` | `(geom:scale s 2)` | モデル座標を拡大し、両方のキャッシュを破棄する |
+| `geom:scale` | `(geom:scale s 2)` | モデル座標を拡大した新しいソリッド。オペランドは変更されない |
+| `geom:nscale` | `(geom:nscale s 2)` | その場で拡大し、両方のキャッシュと `geom:user-data` を破棄する |
 | `geom:mesh` | `(geom:mesh s)` | モデル空間の三角形。1つ 18 float、1度計算してキャッシュ |
 | `geom:wireframe` | `(geom:wireframe s)` | 各辺1回。1線分 6 float、同様にキャッシュ |
 | `geom:mesh-triangle-count` | `(geom:mesh-triangle-count s)` | メッシュが持つ三角形の数 |

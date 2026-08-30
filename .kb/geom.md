@@ -7,8 +7,10 @@ identically on every backend: rigid `geom:transform` values, a scene-graph
 `geom:node`, boundary-represented `geom:solid`s with a cached model-space triangle
 mesh, nine primitive constructors plus the `triad` convenience, the measurements
 (`bounds`, `volume`, `centroid`, `surface-area`), and the booleans (`union`,
-`difference`, `intersection`, `section` -- see "Boolean operations" below). 57
-exported functions plus `geom:*tolerance*` and four CLOS class names.
+`difference`, `intersection`, `section` -- see "Boolean operations" below). 58
+exported functions plus `geom:*tolerance*` and four CLOS class names
+(todo-586: `move`/`turn` became `translate`/`rotate`, and `scale` split into
+the functional `scale` and the destructive `nscale` -- "Scaling" below).
 
 **It reaches for nothing but `linalg`** -- no `objc:`, no `java:`, no filesystem, no
 `SourceLoader`. That is the whole reason it ships rather than living in
@@ -26,8 +28,8 @@ package, not a peer of it. Nothing may be added here that breaks that.
 | interpreter | `LispEvaluator.ensureGeomLoaded()` on the first `geom:`-qualified FUNCTION resolution, plus `ensureGeomClassesFor(form)` at the seven `ensureAsdfClassesFor` sites |
 | compile path | `cli/CompileFrontend`, `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`) so the `linalg:` references in the spliced geom bodies pull linalg in too; the browser playground repeats the nesting |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
-| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend` and `geom-csg-cross-backend` (all four backends) |
-| docs | `doc/{en,ja}/guides/solid-modeling.md`, 57 pages under `reference/functions/geom-*.md` |
+| tests | `eval/GeomLibraryTest` (interpreter), `ci-spec.yaml` cases `geom-solids-cross-backend`, `geom-arrow-cross-backend`, `geom-transforms-cross-backend`, `geom-csg-cross-backend` and `geom-scale-cross-backend` (all four backends) |
+| docs | `doc/{en,ja}/guides/solid-modeling.md`, 58 pages under `reference/functions/geom-*.md` |
 
 **The class-mention trigger is not optional.** The interpreter's lazy load fires on
 FUNCTION resolution, but a `defmethod` specializer, a `typep`, a `typecase` clause, a
@@ -49,7 +51,7 @@ of `geom:solid` and every `make-instance` then landed in the wrong lambda list
 - **`transform` is a VALUE, not a superclass.** A translation 3-vector and a 3x3
   rotation, both read-only slots; no parent, no identity, no cache. `compose` /
   `invert` / `transform-point` / `inverse-transform-point` build new ones, and so do
-  the node mutators -- `move` / `turn` / `place` / `reorient` REPLACE `geom::%local`
+  the node mutators -- `translate` / `rotate` / `place` / `reorient` REPLACE `geom::%local`
   with a fresh transform rather than assigning into the old one. That is what makes it
   safe to hand one transform to several nodes, and it is a deliberate divergence from
   the spike (`.todo/563-solid-modeling-and-a-3d-viewer/geom.lisp`), which mutated in
@@ -65,7 +67,7 @@ of `geom:solid` and every `make-instance` then landed in the wrong lambda list
   `(n 3)` packed array of MODEL coordinates, which is what makes a whole-solid
   transform a single `linalg:matmul` (`%solid-bounds` is the one place that does it);
   `facets` is a list of index loops.
-- **`:frame` is a keyword, not a positional flag.** `(geom:move n v :frame :parent)`
+- **`:frame` is a keyword, not a positional flag.** `(geom:translate n v :frame :parent)`
   needs no manual; `:local` is the default.
 
 ## float32 everywhere
@@ -124,9 +126,10 @@ the PUBLIC surface rather than a renderer's internal detail, and a renderer must
 no triangle during a frame. A later change that regresses this is visible against those
 two numbers.
 
-`geom:scale` is the only vertex mutation the package offers and therefore the only
-place that has to invalidate: it drops `%mesh`, `%wire` AND `user-data`. Any future
-vertex mutation must call `geom::%invalidate-mesh`.
+`geom:nscale` is the only vertex mutation the package offers and therefore the only
+place that has to invalidate: it drops `%mesh`, `%wire` AND `user-data` (`geom:scale`
+is FUNCTIONAL and builds a new solid -- "Scaling" below). Any future vertex mutation
+must call `geom::%invalidate-mesh`.
 
 `user-data` is a slot a consumer hangs its own state on -- a renderer keeps its GPU
 buffers there. **It is a slot because a hash table cannot key on a node at all.** The
@@ -139,6 +142,51 @@ equal slots -- routine in a scene graph -- collide into ONE entry. A wrong answe
 a slow one. The slot would still be the right design after 012 lands (the cache lives
 with the thing it caches, and `detach` cannot orphan it), so nothing here changes then;
 only the comment's reason would shrink to that last sentence.
+
+## Scaling: the pose/geometry split, and the package's verb convention (todo-586, 2026-08-30)
+
+`translate` and `rotate` ACCUMULATE onto a node's local transform; `place` and
+`reorient` SET it. They are POSE mutators: they change where a node is, never what a
+solid is, and CL does not `n`-prefix such operations, so they stay plain verbs. Scaling
+is different in kind -- it rewrites a `solid`'s MODEL vertices -- so it follows CL's own
+functional/destructive convention (`reverse`/`nreverse`, `union`/`nunion`), and that
+convention is the package's RULE for future additions: a GEOMETRY operation builds by
+default and offers an `n`-spelling for in-place, a pose or graph mutator (`attach`,
+`detach`, `place`...) does neither.
+
+- **`geom:scale` is functional**, like the booleans beside it: a new, UNATTACHED root
+  solid carrying the scaled vertices, the facets, color and label, with
+  `(:scale s factor)` in its `history`. Parent, children and `user-data` are not
+  carried -- a solid already in a viewer wants `nscale`.
+- **`geom:nscale` is the in-place version** and the package's ONLY vertex mutation:
+  caches and `user-data` dropped, the same solid answered.
+- **The factor may be a number or a 3-vector/list.** The mesh is rebuilt from the
+  facets with a fresh Newell normal per triangle, so a non-uniform scale of a BREP
+  costs nothing extra once the cache is dropped.
+- **A mirroring factor (negative determinant -- an odd number of negative components)
+  FLIPS the facets**, reversing each loop so the winding stays counter-clockwise seen
+  from outside: mirroring is a real CAD operation (a left-hand part from a right-hand
+  one) and this is its only spelling in the package, so refusing it would be an
+  arbitrary limit, and answering an inside-out solid would be a bug. The pin is the
+  mesh normal of a mirrored box's `+x` face, which volume cannot see (the integral is
+  `abs`'d). A ZERO component would flatten the shell into a degenerate one and is
+  refused naming the function and the factor.
+- **The transform stays RIGID -- no scale slot on `geom:transform` or `geom:node`,
+  settled.** A uniform scale would close mathematically (similarities form a group),
+  but `volume`, `centroid` and `surface-area` are computed from the MODEL-space mesh
+  and know nothing of the node's transform, so a scaled NODE would silently report its
+  unscaled measurements; the CSG path (`%world-polygons`), `%solid-bounds`, the
+  per-draw model uniform in `metal.lisp`/`scene.lisp` and `invert` would each need the
+  scale threaded through. This is a CAD-flavoured package -- a boundary representation
+  with booleans and real measurements -- and in CAD scaling changes the PART; the scene
+  graph is for placement.
+
+Pinned by `GeomLibraryTest` (`scaleAnswersANewSolidAndLeavesTheOriginalUntouched`,
+`nscaleMutatesInPlaceAndInvalidatesBothCachesAndTheUserDataSlot`,
+`aScaleFactorMayBeAVectorOrAListForANonUniformScale`,
+`aMirroringFactorFlipsTheFacetsSoTheWindingStaysOutward`,
+`aZeroScaleFactorIsRefusedNamingIt`) and the `geom-scale-cross-backend` ci-spec case
+(all four backends).
 
 ## The printed representation (todo-584, 2026-08-30)
 
@@ -455,10 +503,12 @@ Two changes the test forced, both improvements:
   triads. A viewer that is a picture of one solid wanted it and there was no way to say it.
 
 **A `geom:volume` oracle cannot detect an inverted solid**: the divergence integral is
-`abs`'d, and a point reflection (`(geom:scale s -1)`, the cheap way to invert a mesh) leaves
-each triangle's normal unchanged while moving it to the antipode. So the winding check is
-the renderer's, not the modeller's, and the two agree by construction rather than by
-measurement.
+`abs`'d, and a point reflection leaves each triangle's normal unchanged while moving it
+to the antipode. (Since todo-586 `geom:scale`/`geom:nscale` by `-1` no longer produce
+that inverted mesh -- a mirroring factor flips the facets, "Scaling" above -- so an
+inverted solid can only be built by hand through `geom:polyhedron`.) So the winding
+check is the renderer's, not the modeller's, and the two agree by construction rather
+than by measurement.
 
 ## The browser twin
 

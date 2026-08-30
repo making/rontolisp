@@ -101,7 +101,7 @@ is what pins its winding on every backend.
 ## A scene graph
 
 `geom:attach` hangs one node off another; `geom:detach` takes it back out. The
-mutators are `geom:move`, `geom:turn`, `geom:place` and `geom:reorient`, and
+mutators are `geom:translate`, `geom:rotate`, `geom:place` and `geom:reorient`, and
 each takes a named `:frame` rather than a positional flag -- `:local` (the
 node's own axes, the default) or `:parent` (the axes it is attached to). A call
 site reading `:frame :parent` needs no manual.
@@ -111,14 +111,15 @@ site reading `:frame :parent` needs no manual.
        (joint (geom:make-node :translation (geom:vec3 0 0 100) :parent base))
        (link (geom:cylinder :radius 8 :height 80)))
   (geom:attach joint link)
-  (geom:turn joint (/ 3.141592653589793 2) :y)
-  (geom:move base (geom:vec3 0 0 500))
+  (geom:rotate joint (/ 3.141592653589793 2) :y)
+  (geom:translate base (geom:vec3 0 0 500))
   (mapcar (lambda (x) (round x)) (coerce (geom:world-translation link) 'list)))
 ; => (0 0 600)
 ```
 
-`geom:move` accumulates; `geom:place` sets the pose outright. An animation loop
-wants `geom:place`, because repeated `geom:turn` deltas drift.
+`geom:translate` and `geom:rotate` accumulate; `geom:place` sets the pose
+outright. An animation loop wants `geom:place`, because repeated `geom:rotate`
+deltas drift.
 
 ## The mesh, and why it is cached
 
@@ -142,8 +143,22 @@ it built from it.
 ; => (12 T)
 ```
 
-`geom:scale` is the one vertex mutation the package offers, and therefore the
-one place that drops both caches and `geom:user-data`.
+Scaling rewrites the model vertices -- it changes the *part*, where the pose
+mutators change only a node's placement -- so it follows CL's own
+functional/destructive convention (`reverse`/`nreverse`, `union`/`nunion`):
+`geom:scale` builds a **new** solid like the booleans, recording
+`(:scale s factor)` in its history, and `geom:nscale` rewrites the solid in
+place -- the one vertex mutation the package offers, and therefore the one
+place that drops both caches and `geom:user-data`. The factor is a number, or
+a 3-vector or list for a non-uniform scale; a mirroring factor flips the
+facets so the winding stays outward, and a zero component is refused.
+
+```lisp
+(let* ((s (geom:box 10))
+       (c (geom:scale s '(1 2 3))))
+  (list (geom:volume c) (geom:volume s) (geom:volume (geom:nscale s 2))))
+; => (6000.0 1000.0 8000.0)
+```
 
 ## Measurements
 
@@ -160,7 +175,7 @@ slightly small one. `geom:centroid` is the same signed-tetrahedron sum, and
 
 ```lisp
 (let ((b (geom:box 10)))
-  (geom:move b (geom:vec3 100 0 0))
+  (geom:translate b (geom:vec3 100 0 0))
   (coerce (geom:bounds-center (geom:bounds b)) 'list))
 ; => (100.0 0.0 0.0)
 ```
@@ -179,7 +194,7 @@ error the primitives already carry.
 ```lisp
 (let ((plate (geom:box '(100 100 20)))
       (hole (geom:cylinder :radius 10 :height 20 :sides 24)))
-  (geom:move hole (geom:vec3 0 0 -10))
+  (geom:translate hole (geom:vec3 0 0 -10))
   (round (geom:volume (geom:difference plate hole))))
 ; => 193788
 ```

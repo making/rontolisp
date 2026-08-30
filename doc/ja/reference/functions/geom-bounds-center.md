@@ -6,7 +6,7 @@
 
 ```lisp
 (let ((b (geom:box 10)))
-  (geom:move b (geom:vec3 100 0 0))
+  (geom:translate b (geom:vec3 100 0 0))
   (coerce (geom:bounds-center (geom:bounds b)) 'list))
 ; => (100.0 0.0 0.0)
 ```

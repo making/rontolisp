@@ -195,7 +195,7 @@
 ;; caller reading `:frame :parent` needs no manual. Each one REPLACES the local
 ;; transform with a fresh one, which is what keeps a transform a value.
 
-(defun geom:move (n offset &key (frame :local))
+(defun geom:translate (n offset &key (frame :local))
   (let ((tf (geom::%local n)))
     (setf (geom::%local n)
           (geom:make-transform :translation
@@ -207,7 +207,7 @@
                                :rotation (geom:rotation-of tf))))
   (geom::%stale n))
 
-(defun geom:turn (n angle axis &key (frame :local))
+(defun geom:rotate (n angle axis &key (frame :local))
   (let ((tf (geom::%local n)) (r (geom:axis-angle-matrix angle axis)))
     (setf (geom::%local n)
           (geom:make-transform :translation (geom:translation-of tf)
@@ -218,7 +218,7 @@
   (geom::%stale n))
 
 ;; Sets the pose outright rather than accumulating -- what an animation loop
-;; wants, since repeated `turn` deltas drift. An omitted half is kept.
+;; wants, since repeated `rotate` deltas drift. An omitted half is kept.
 (defun geom:place (n &key transform translation rotation rpy axis (angle 0.0))
   (let ((tf (geom::%local n)))
     (setf (geom::%local n)
@@ -243,7 +243,7 @@
 
 (defclass geom:solid (geom:node)
   ((vertices :initarg :vertices :accessor geom::%vertices)
-   (facets :initarg :facets :reader geom:facets-of)
+   (facets :initarg :facets :accessor geom::%facets)
    (color :initarg :color :accessor geom:color-of)
    (label :initarg :label :initform nil :accessor geom:label-of)
    (mesh-cache :initform nil :accessor geom::%mesh)
@@ -269,6 +269,8 @@
                  :label label))
 
 (defun geom:vertices-of (s) (geom::%vertices s))
+
+(defun geom:facets-of (s) (geom::%facets s))
 
 ;; --- how a node and a solid print (.kb/geom.md, "The printed representation") -
 ;;
@@ -305,10 +307,63 @@
   (setf (geom:user-data s) nil)
   s)
 
-;; The one vertex mutation the package offers, so it is also the one place that
-;; has to drop the caches below.
+;; --- scaling -----------------------------------------------------------------
+;;
+;; Scaling rewrites the MODEL vertices -- it changes the part, where the pose
+;; mutators above change only a node's placement -- so it follows CL's own
+;; functional/destructive convention (reverse/nreverse, union/nunion):
+;; geom:scale BUILDS a new solid like the booleans beside it, and geom:nscale
+;; is the in-place version and therefore the one vertex mutation the package
+;; offers -- the one place that has to drop the caches (.kb/geom.md).
+;;
+;; FACTOR is a number or a 3-vector/list (non-uniform costs nothing extra: the
+;; mesh is rebuilt from the facets with a fresh Newell normal per triangle). A
+;; factor with a NEGATIVE determinant mirrors, which inverts every loop's
+;; sense, so the facets are reversed to keep the winding counter-clockwise
+;; seen from outside; a zero component would flatten the boundary
+;; representation into a degenerate shell and is refused naming it.
+
+(defun geom::%scale-factors (who factor)
+  (let ((fs
+         (cond ((numberp factor) (list factor factor factor))
+               ((consp factor) factor)
+               (t (list (aref factor 0) (aref factor 1) (aref factor 2))))))
+    (dolist (f fs fs)
+      (when (zerop f)
+        (error "~a: a scale factor must be nonzero: ~a" who factor)))))
+
+(defun geom::%scaled-vertices (v fs)
+  (linalg:mul v (geom:vec3 (first fs) (second fs) (third fs))))
+
+(defun geom::%mirrorp (fs) (minusp (* (first fs) (second fs) (third fs))))
+
+;; Functional: a NEW solid with the scaled vertices, the original untouched.
+;; The copy carries color, label and its provenance -- (:scale s factor), the
+;; way a boolean records (op a b) -- and is a fresh, UNATTACHED root solid:
+;; parent, children and user-data are not carried. A solid already in a viewer
+;; wants the destructive geom:nscale instead.
 (defun geom:scale (s factor)
-  (setf (geom::%vertices s) (linalg:mul (geom::%vertices s) (float factor 1.0)))
+  (let* ((fs (geom::%scale-factors "geom:scale" factor))
+         (c
+          (make-instance 'geom:solid
+           :local (geom:make-transform)
+           :vertices (geom::%scaled-vertices (geom::%vertices s) fs)
+           :facets (if (geom::%mirrorp fs)
+                       (mapcar #'reverse (geom::%facets s))
+                       (geom::%facets s))
+           :color (geom:color-of s)
+           :label (geom:label-of s))))
+    (setf (geom::%history c) (list :scale s factor))
+    c))
+
+;; Destructive: rewrites S's own vertices and answers S. The one vertex
+;; mutation the package offers, so it is also the one place that has to drop
+;; the caches below.
+(defun geom:nscale (s factor)
+  (let ((fs (geom::%scale-factors "geom:nscale" factor)))
+    (setf (geom::%vertices s) (geom::%scaled-vertices (geom::%vertices s) fs))
+    (when (geom::%mirrorp fs)
+      (setf (geom::%facets s) (mapcar #'reverse (geom::%facets s)))))
   (geom::%invalidate-mesh s))
 
 ;; --- the mesh ----------------------------------------------------------------

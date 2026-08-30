@@ -6,7 +6,7 @@ A new solid covering only what both operands cover. The operands are taken in **
 
 ```lisp
 (let ((a (geom:box 100)) (b (geom:box 100)))
-  (geom:move b (geom:vec3 50 50 50))
+  (geom:translate b (geom:vec3 50 50 50))
   (geom:volume (geom:intersection a b)))
 ; => 125000.0
 ```

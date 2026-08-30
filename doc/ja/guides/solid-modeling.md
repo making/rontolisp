@@ -96,7 +96,7 @@
 ## シーングラフ
 
 `geom:attach` はノードを別のノードにぶら下げ、`geom:detach` は外します。変更子は
-`geom:move`、`geom:turn`、`geom:place`、`geom:reorient` で、それぞれ位置引数のフラ
+`geom:translate`、`geom:rotate`、`geom:place`、`geom:reorient` で、それぞれ位置引数のフラ
 グではなく名前付きの `:frame` を取ります。`:local`（ノード自身の軸、既定）か
 `:parent`（接続先の軸）です。`:frame :parent` と書かれた呼び出しはマニュアルなしで
 読めます。
@@ -106,14 +106,15 @@
        (joint (geom:make-node :translation (geom:vec3 0 0 100) :parent base))
        (link (geom:cylinder :radius 8 :height 80)))
   (geom:attach joint link)
-  (geom:turn joint (/ 3.141592653589793 2) :y)
-  (geom:move base (geom:vec3 0 0 500))
+  (geom:rotate joint (/ 3.141592653589793 2) :y)
+  (geom:translate base (geom:vec3 0 0 500))
   (mapcar (lambda (x) (round x)) (coerce (geom:world-translation link) 'list)))
 ; => (0 0 600)
 ```
 
-`geom:move` は積み重ね、`geom:place` は姿勢を直接設定します。`geom:turn` の差分を
-繰り返すとドリフトするため、アニメーションループでは `geom:place` を使います。
+`geom:translate` と `geom:rotate` は積み重ね、`geom:place` は姿勢を直接設定しま
+す。`geom:rotate` の差分を繰り返すとドリフトするため、アニメーションループでは
+`geom:place` を使います。
 
 ## メッシュと、それをキャッシュする理由
 
@@ -136,8 +137,21 @@
 ; => (12 T)
 ```
 
-`geom:scale` はパッケージが提供する唯一の頂点変更であり、したがって両方のキャッ
-シュと `geom:user-data` を破棄する唯一の箇所です。
+スケーリングはモデル頂点を書き換えます。姿勢のミューテータがノードの配置だけを
+変えるのに対し、これは*部品そのもの*を変える操作です。そのため CL 自身の関数的／
+破壊的の慣習（`reverse`/`nreverse`、`union`/`nunion`）に従います。`geom:scale` は
+ブーリアン演算と同じく**新しい**ソリッドを作り、`history` に `(:scale s factor)`
+を記録します。`geom:nscale` はその場で書き換えます。これがパッケージが提供する唯
+一の頂点変更であり、したがって両方のキャッシュと `geom:user-data` を破棄する唯一
+の箇所です。係数は数値、または非一様スケール用の3次元ベクトルかリストです。鏡映
+になる係数では巻き方が外向きのままになるよう面を反転し、成分 0 は拒否します。
+
+```lisp
+(let* ((s (geom:box 10))
+       (c (geom:scale s '(1 2 3))))
+  (list (geom:volume c) (geom:volume s) (geom:volume (geom:nscale s 2))))
+; => (6000.0 1000.0 8000.0)
+```
 
 ## 計測
 
@@ -152,7 +166,7 @@
 
 ```lisp
 (let ((b (geom:box 10)))
-  (geom:move b (geom:vec3 100 0 0))
+  (geom:translate b (geom:vec3 100 0 0))
   (coerce (geom:bounds-center (geom:bounds b)) 'list))
 ; => (100.0 0.0 0.0)
 ```
@@ -169,7 +183,7 @@
 ```lisp
 (let ((plate (geom:box '(100 100 20)))
       (hole (geom:cylinder :radius 10 :height 20 :sides 24)))
-  (geom:move hole (geom:vec3 0 0 -10))
+  (geom:translate hole (geom:vec3 0 0 -10))
   (round (geom:volume (geom:difference plate hole))))
 ; => 193788
 ```

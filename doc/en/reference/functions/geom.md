@@ -33,8 +33,8 @@ convention and the cached mesh.
 | `geom:children-of` | `(geom:children-of n)` | the nodes attached to it, as a list |
 | `geom:attach` | `(geom:attach parent child)` | the child, now posed in the parent's frame |
 | `geom:detach` | `(geom:detach child)` | the child, out of its parent's frame |
-| `geom:move` | `(geom:move n v :frame :parent)` | translates the node; `:frame` is `:local` (default) or `:parent` |
-| `geom:turn` | `(geom:turn n 0.5 :z)` | rotates the node, accumulating on its current orientation |
+| `geom:translate` | `(geom:translate n v :frame :parent)` | translates the node, accumulating; `:frame` is `:local` (default) or `:parent` |
+| `geom:rotate` | `(geom:rotate n 0.5 :z)` | rotates the node, accumulating on its current orientation |
 | `geom:place` | `(geom:place n :rpy '(0 0 1.5))` | sets the pose outright, which is what an animation loop wants |
 | `geom:reorient` | `(geom:reorient n 0.5 :z)` | sets the rotation, keeping the translation |
 | `geom:box` | `(geom:box '(100 200 300))` | a rectangular solid centred on its origin (a scalar gives a cube) |
@@ -52,7 +52,8 @@ convention and the cached mesh.
 | `geom:color-of` | `(geom:color-of s)` | the solid's colour, a 3-vector of 0..1 components; `setf`-able |
 | `geom:label-of` | `(geom:label-of s)` | whatever the caller passed as `:label`; `setf`-able |
 | `geom:user-data` | `(geom:user-data s)` | a slot a consumer hangs its own state on; `setf`-able |
-| `geom:scale` | `(geom:scale s 2)` | scales the model coordinates and drops both caches |
+| `geom:scale` | `(geom:scale s 2)` | a NEW solid with scaled model coordinates; the operand is untouched |
+| `geom:nscale` | `(geom:nscale s 2)` | scales in place, dropping both caches and `geom:user-data` |
 | `geom:mesh` | `(geom:mesh s)` | the model-space triangles, 18 floats each, computed once and cached |
 | `geom:wireframe` | `(geom:wireframe s)` | each edge once, 6 floats a segment, likewise cached |
 | `geom:mesh-triangle-count` | `(geom:mesh-triangle-count s)` | how many triangles the mesh holds |

@@ -755,8 +755,8 @@ categories:
       - { slug: geom-children-of, name: "geom:children-of" }
       - { slug: geom-attach, name: "geom:attach" }
       - { slug: geom-detach, name: "geom:detach" }
-      - { slug: geom-move, name: "geom:move" }
-      - { slug: geom-turn, name: "geom:turn" }
+      - { slug: geom-translate, name: "geom:translate" }
+      - { slug: geom-rotate, name: "geom:rotate" }
       - { slug: geom-place, name: "geom:place" }
       - { slug: geom-reorient, name: "geom:reorient" }
       - { slug: geom-box, name: "geom:box" }
@@ -775,6 +775,7 @@ categories:
       - { slug: geom-label-of, name: "geom:label-of" }
       - { slug: geom-user-data, name: "geom:user-data" }
       - { slug: geom-scale, name: "geom:scale" }
+      - { slug: geom-nscale, name: "geom:nscale" }
       - { slug: geom-mesh, name: "geom:mesh" }
       - { slug: geom-wireframe, name: "geom:wireframe" }
       - { slug: geom-mesh-triangle-count, name: "geom:mesh-triangle-count" }

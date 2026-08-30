@@ -109,7 +109,7 @@ class SceneOffscreenRenderTest {
 				""");
 		Frame far = render("occlusion-far-only", scene + """
 				(scene:add *v* (geom:box '(140 140 140) :color (geom:vec3 0.15 0.3 1.0)))
-				(geom:move (car (scene:contents *v*)) (geom:vec3 -320 0 0))
+				(geom:translate (car (scene:contents *v*)) (geom:vec3 -320 0 0))
 				(scene:snapshot *v*)
 				""");
 		assertThat(far.isBlue(WIDTH / 2, HEIGHT / 2)).as("%s: the far box alone is what is seen", far).isTrue();
@@ -117,7 +117,7 @@ class SceneOffscreenRenderTest {
 		Frame both = render("occlusion", scene + """
 				(defvar *near* (geom:box '(140 140 140) :color (geom:vec3 1.0 0.15 0.15)))
 				(defvar *far* (geom:box '(140 140 140) :color (geom:vec3 0.15 0.3 1.0)))
-				(geom:move *far* (geom:vec3 -320 0 0))
+				(geom:translate *far* (geom:vec3 -320 0 0))
 				(scene:add *v* *near* *far*)
 				(scene:snapshot *v*)
 				""");
@@ -157,7 +157,7 @@ class SceneOffscreenRenderTest {
 				(scene:axes *v* nil)
 				(scene:shading *v* :solid)
 				(defvar *b* (geom:box '(200 260 180) :color (geom:vec3 1.0 0.2 0.2)))
-				(geom:move *b* (geom:vec3 150 -80 60))
+				(geom:translate *b* (geom:vec3 150 -80 60))
 				(scene:add *v* *b*)
 				(scene:camera *v* :azimuth %s :elevation %s)
 				(scene:fit *v*)
@@ -370,7 +370,7 @@ class SceneOffscreenRenderTest {
 			                  :target (geom:vec3 0 0 0))
 			(defvar *plate* (geom:box '(400 400 10) :color (geom:vec3 0.15 0.3 1.0)))
 			(defvar *m* (geom:box '(60 60 60) :color (geom:vec3 1.0 0.2 0.2)))
-			(geom:move *m* (geom:vec3 0 0 60))
+			(geom:translate *m* (geom:vec3 0 0 60))
 			(scene:add *v* *plate* *m*)
 			""");
 
