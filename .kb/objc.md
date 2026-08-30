@@ -388,12 +388,12 @@ released without `endEncoding` is a Metal ASSERTION:
 -[_MTLCommandEncoder dealloc]:134: failed assertion `Command encoder released without endEncoding'
 ```
 
-and an assertion is an `abort()`, which no `catch (Throwable)` can be under. The native
-binary died on the FOURTH such frame; `java -jar` printed eight and exited normally.
-That difference is timing, not semantics -- when the JUnit fork ran the same eight frames
-it aborted with exit code 134 as well, and the surefire report is
-`The forked VM terminated without properly saying goodbye`. **A carrier that survives it
-is lucky, not immune.**
+and an assertion is an `abort()`, which no `catch (Throwable)` can be under. Driven from
+a callback in a loop, the native binary died on the FOURTH such frame while `java -jar`
+printed eight and exited normally -- but that difference is TIMING, not semantics: the
+same defect took the JUnit fork down with `Process Exit Code: 134` and
+`The forked VM terminated without properly saying goodbye`, on the JVM. **A carrier that
+survives it is lucky, not immune.**
 
 The fix is `metal:frame`'s: the encoder is ended, the drawable presented and the buffer
 committed from an `unwind-protect` cleanup, so a frame is closed out whether its body
