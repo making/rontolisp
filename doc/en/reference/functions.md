@@ -944,8 +944,8 @@ guide](../guides/solid-modeling.md) covers the model half.
 | `scene:viewer` | `(scene:viewer :title "arm")` | a window with a Metal surface on it, and the viewer that drives it |
 | `scene:offscreen` | `(scene:offscreen :width 320 :height 240)` | a viewer with no window, over the same render function -- what makes the renderer testable |
 | `scene:snapshot` | `(scene:snapshot v)` | one frame of an offscreen viewer as its pixels, BGRA |
-| `scene:add` | `(scene:add v s1 s2)` | the last solid added; its mesh reaches the GPU when it is first drawn |
-| `scene:drop` | `(scene:drop v s)` | the solid, removed from the viewer and its GPU buffers released |
+| `scene:add` | `(scene:add v s1 (geom:triad))` | the last solid added; a list argument is spliced, and its mesh reaches the GPU when it is first drawn |
+| `scene:drop` | `(scene:drop v s1 (geom:triad))` | the last solid removed from the viewer, its GPU buffers released |
 | `scene:clear` | `(scene:clear v)` | `nil`; every solid removed, the grid and camera untouched |
 | `scene:contents` | `(scene:contents v)` | the solids being drawn, in the order they were added |
 | `scene:fit` | `(scene:fit v)` | `nil`; the camera points at the contents and backs off far enough to frame them |

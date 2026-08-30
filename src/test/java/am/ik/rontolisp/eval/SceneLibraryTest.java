@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.TreeSet;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -108,6 +109,76 @@ class SceneLibraryTest {
 				.hasMessageContaining("Cannot compile: SCENE:VIEWER")
 				.hasMessageContaining("not in a .wasm");
 		}
+	}
+
+	// --- what a viewer's contents may hold ---------------------------------------
+	//
+	// A viewer needs a window and a Metal device, but its CONTENTS need neither: the
+	// state class is a plain CLOS instance whose contents slot has an initform, so
+	// scene:add and scene:drop can be driven anywhere. The library loads on the first
+	// scene:-qualified FUNCTION resolution, which is why each program asks for one
+	// before it names the class.
+
+	private static final String VIEWER = "(defvar *v* (progn #'scene:add (make-instance 'scene:viewer-state)))\n";
+
+	@Test
+	void addSplicesAListSoATriadGoesInAsOneArgument() {
+		// geom:triad answers three solids where geom:box answers one. Handed the list
+		// itself, scene:add used to cons it in whole and the report arrived a frame
+		// later, from inside the draw callback, as a geom:user-data dispatch failure on
+		// a CONS -- naming nothing the caller wrote (.kb/geom.md).
+		assertThat(eval(VIEWER + """
+				(scene:add *v* (geom:triad))
+				(length (scene:contents *v*))
+				""")).isEqualTo("3");
+		// A solid, a list and a solid compose the same way, in order.
+		assertThat(eval(VIEWER + """
+				(scene:add *v* (geom:box 10) (geom:triad) (geom:sphere :radius 5))
+				(mapcar #'geom:label-of (scene:contents *v*))
+				""")).isEqualTo("(NIL \"x\" \"y\" \"z\" NIL)");
+		// nil is the empty list and adds nothing.
+		assertThat(eval(VIEWER + """
+				(scene:add *v* nil)
+				(scene:contents *v*)
+				""")).isEqualTo("NIL");
+		// The answer is still the last solid that went in.
+		assertThat(eval(VIEWER + "(geom:label-of (scene:add *v* (geom:triad)))")).isEqualTo("\"z\"");
+	}
+
+	@Test
+	void addRefusesANonSolidNamingItAndLeavesTheViewerAsItWas() {
+		assertThatThrownBy(() -> eval(VIEWER + "(scene:add *v* (geom:box 10) 5)")).hasMessageContaining("scene:add")
+			.hasMessageContaining("5")
+			.hasMessageContaining("not a geom:solid");
+		// Nothing was added: the check runs over every argument before the first one is
+		// consed in, so a refused call leaves no half-filled viewer behind.
+		assertThat(eval(VIEWER + """
+				(ignore-errors (scene:add *v* (geom:box 10) 5))
+				(scene:contents *v*)
+				""")).isEqualTo("NIL");
+	}
+
+	@Test
+	void dropTakesTheShapeAddTakes() {
+		// What went in as one argument comes back out as one argument; scene:clear
+		// names no solid at all and therefore needs no equivalent.
+		assertThat(eval(VIEWER + """
+				(defvar *t* (geom:triad))
+				(scene:add *v* (geom:box 10) *t*)
+				(scene:drop *v* *t*)
+				(length (scene:contents *v*))
+				""")).isEqualTo("1");
+		assertThatThrownBy(() -> eval(VIEWER + "(scene:drop *v* \"x\")")).hasMessageContaining("scene:drop")
+			.hasMessageContaining("not a geom:solid");
+	}
+
+	private static String eval(String program) {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		LispVal answer = LispNil.INSTANCE;
+		for (LispVal form : read(program)) {
+			answer = evaluator.eval(form);
+		}
+		return answer.print();
 	}
 
 	private static void compile(Path source, String... options) {

@@ -246,8 +246,11 @@ which is what makes a kinematic chain readable) or `:both`. Those are the
 viewer's own furniture: line triads with no thickness, the world one scaled by
 the view distance so it stays legible at any zoom. An origin indicator that is
 an OBJECT -- placed where you say, with a shaft thickness and a pointed tip --
-is `(geom:triad)` above, three solids added like any other, which is why a
-viewer draws no triad unless it was asked for. `scene:window-of` and `scene:context-of` are
+is `(geom:triad)` above, three solids added like any other -- `scene:add`
+splices a list argument, so `(scene:add *v* (geom:triad))` is one call -- which
+is why a viewer draws no triad unless it was asked for. `scene:add` also refuses
+anything that is not a solid, naming it, rather than letting the draw callback
+discover it a frame later. `scene:window-of` and `scene:context-of` are
 the escape hatches to `appkit:` and to the `metal` drawing surface underneath.
 
 `examples/macos/scene-solids.lisp` is every primitive on a shelf and

@@ -407,14 +407,22 @@
                  ;; nothing reads the depth after the frame, so it never leaves
                  ;; tile memory
                  (objc:send z "setStoreAction:" metal::+store-dont-care+))))
+           ;; The frame is closed out even when FN signals. An encoder released
+           ;; without endEncoding is a Metal ASSERTION, and an assertion is an
+           ;; abort() -- it kills the process from under the callback guard that
+           ;; caught the Lisp error a moment earlier (.kb/objc.md, "A frame that
+           ;; signals"). So the cleanup ends the encoder, presents whatever was
+           ;; drawn and commits; a half-drawn frame is a picture, an aborted
+           ;; process is not.
            (let ((encoder
                   (objc:send commands "renderCommandEncoderWithDescriptor:"
                              pass)))
-             (funcall fn encoder)
-             (objc:send encoder "endEncoding"))
-           (when drawable (objc:send commands "presentDrawable:" drawable))
-           (objc:send commands "commit")
-           (unless drawable (objc:send commands "waitUntilCompleted"))))))))
+             (unwind-protect (funcall fn encoder)
+               (objc:send encoder "endEncoding")
+               (when drawable (objc:send commands "presentDrawable:" drawable))
+               (objc:send commands "commit")
+               (unless drawable
+                 (objc:send commands "waitUntilCompleted"))))))))))
 
 ;; Draws FN on a timer. The clock is appkit:timer, an NSTimer on thread 0, so the
 ;; frame runs where AppKit and Metal both want it.

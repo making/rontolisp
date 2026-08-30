@@ -259,8 +259,8 @@ The four decisions the report left open, and what they are:
   frame's worth of poses, to say something a hairline is better at.
 - **The triad is a `geom` function returning solids, not a viewer mode.** Three arrows
   hung where the caller wants them is the honest spelling; `geom:triad` only saves the
-  three calls and fixes the tints, and `:at` places all three. It returns a list, so it
-  is added with `(dolist (a (geom:triad)) (scene:add *v* a))`.
+  three calls and fixes the tints, and `:at` places all three. It returns a list, which
+  `scene:add` splices -- see "What `scene:add` accepts" below.
 - **`scene:axes`' initform is now `nil`.** Nothing is drawn that was not asked for. The
   modes are all still there, so this is a default change and not a removal;
   `scene::%build-axes` and the unit line buffer therefore survive, since `:world`,
@@ -274,6 +274,35 @@ the end `:direction` names (`:-z` moves it to the other end of the frame), a big
 `:radius` draws a wider shaft, a triad at the origin draws red, green and blue, and an
 empty viewer is empty until `(scene:axes v :world)` is asked for. `target/scene-frames/
 arrow-*.png` and `triad-at-the-origin.png` are the pictures.
+
+## What `scene:add` accepts (todo-583, 2026-08-30)
+
+**Every argument is a solid or a LIST of solids, spliced in order**, and anything
+else is refused THERE, naming it. The report was `(scene:add *v* (geom:triad))`:
+`triad` answers three solids by design, the list itself was consed into
+`scene::%contents`, and the complaint arrived one frame later from inside the draw
+callback as `No applicable method: GEOM:USER-DATA on CONS` -- a message naming
+nothing the caller wrote, on a thread the caller is not on.
+
+The two halves are one decision. Splicing is what makes the package compose: the
+nine constructors that answer one solid and the one that answers three then go into
+a viewer the same way, and no doc page has to spell a `dolist` around the odd one
+out. The check is what makes a mistake a message: `scene::%check-solid` runs over
+every argument BEFORE the first one is consed in, so a refused call leaves the
+viewer exactly as it was.
+
+`scene:drop` took the matching shape for the reason a container's two verbs should
+agree -- what went in as one argument comes back out as one argument, so a viewer
+given `(geom:triad)` is emptied of it by `(scene:drop v *triad*)` rather than by
+three calls. `scene:clear` names no solid at all and needed nothing. `nil` is the
+empty list and adds nothing; it is not an error, because splicing an empty list is
+what `dolist` and `append` do with one.
+
+Pinned by `SceneLibraryTest` (the splice, the order, the refusal's message, the
+untouched viewer, `drop`'s shape) -- which needs no display, since a viewer's
+CONTENTS need no window: `scene:viewer-state`'s contents slot has an initform, so
+`(make-instance 'scene:viewer-state)` is a viewer as far as `add` and `drop` are
+concerned. The picture is `SceneOffscreenRenderTest.aTriadIsAddedAsOneArgument`.
 
 ## The renderer: `metal` and `scene` (todo-565, 2026-08-29)
 

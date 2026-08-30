@@ -556,8 +556,9 @@
 ;; The three arrows a coordinate frame is drawn as -- +x red, +y green, +z blue,
 ;; the tints the viewer's own triads use -- as a LIST of solids, labelled "x" /
 ;; "y" / "z". A geom function answering solids rather than a viewer mode: the
-;; caller adds them like anything else -- (dolist (a (geom:triad)) (scene:add v a))
-;; -- and may move, colour, attach or measure them afterwards.
+;; caller adds them like anything else -- scene:add splices a list argument, so
+;; (scene:add v (geom:triad)) is one call -- and may move, colour, attach or
+;; measure them afterwards.
 ;;
 ;; :at places all three, so (geom:triad :at (geom:vec3 0 0 0)) is the origin
 ;; indicator. The default length is the one the viewer's line triad draws at its

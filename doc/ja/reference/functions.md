@@ -884,8 +884,8 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `scene:viewer` | `(scene:viewer :title "arm")` | Metal サーフェスを載せたウィンドウと、それを駆動するビューア |
 | `scene:offscreen` | `(scene:offscreen :width 320 :height 240)` | ウィンドウを持たないビューア。描画関数は同一で、レンダラをテスト可能にしているもの |
 | `scene:snapshot` | `(scene:snapshot v)` | オフスクリーンビューアの 1 フレームをピクセル (BGRA) として |
-| `scene:add` | `(scene:add v s1 s2)` | 最後に追加したソリッド。メッシュは最初に描画されたとき GPU に届く |
-| `scene:drop` | `(scene:drop v s)` | ビューアから外し GPU バッファを解放したソリッド |
+| `scene:add` | `(scene:add v s1 (geom:triad))` | 最後に追加したソリッド。リスト引数は展開され、メッシュは最初に描画されたとき GPU に届く |
+| `scene:drop` | `(scene:drop v s1 (geom:triad))` | ビューアから外し GPU バッファを解放した最後のソリッド |
 | `scene:clear` | `(scene:clear v)` | `nil`。すべてのソリッドを除去。グリッドとカメラはそのまま |
 | `scene:contents` | `(scene:contents v)` | 描画中のソリッドを追加順に |
 | `scene:fit` | `(scene:fit v)` | `nil`。カメラを内容に向け、全体が収まるまで引く |

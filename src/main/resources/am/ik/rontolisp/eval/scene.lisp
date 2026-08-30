@@ -295,15 +295,46 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
 
 ;; --- contents ------------------------------------------------------------------
 
-(defun scene:add (v &rest solids)
-  (dolist (s solids)
-    (setf (scene::%contents v) (append (scene::%contents v) (list s))))
-  (car (last solids)))
-
-(defun scene:drop (v s)
-  (setf (scene::%contents v) (remove s (scene::%contents v)))
-  (setf (geom:user-data s) nil)
+;; What a viewer's contents may hold, refused HERE rather than one frame later.
+;; A non-solid used to be consed straight in, and the report arrived from inside
+;; the draw callback as "No applicable method: GEOM:USER-DATA on CONS" -- a
+;; message naming nothing the caller wrote, on a thread the caller is not on.
+(defun scene::%check-solid (who s)
+  (unless (typep s 'geom:solid) (error "~a: ~a is not a geom:solid" who s))
   s)
+
+;; Every argument is a solid or a LIST of solids, spliced in order. geom:triad
+;; answers three solids where geom:box answers one, so (scene:add v (geom:triad))
+;; has to compose the same way as (scene:add v (geom:box 10)) -- otherwise every
+;; caller and every doc page spells a dolist around the one constructor that
+;; returns more than one thing. nil is the empty list and adds nothing.
+;;
+;; Nothing is added until every argument has been checked, so a bad one leaves
+;; the viewer as it was.
+(defun scene:add (v &rest solids)
+  (let ((new '()))
+    (dolist (s solids)
+      (dolist (x (if (listp s) s (list s)))
+        (scene::%check-solid "scene:add" x)
+        (push x new)))
+    (let ((ordered (nreverse new)))
+      (setf (scene::%contents v) (append (scene::%contents v) ordered))
+      (car (last ordered)))))
+
+;; The shape scene:add takes, so what went in can come back out: a viewer given
+;; (geom:triad) is emptied of it by (scene:drop v *triad*), not by three calls.
+;; scene:clear needs no equivalent -- it names no solid at all.
+(defun scene:drop (v &rest solids)
+  (let ((victims '()))
+    (dolist (s solids)
+      (dolist (x (if (listp s) s (list s)))
+        (scene::%check-solid "scene:drop" x)
+        (push x victims)))
+    (let ((ordered (nreverse victims)))
+      (dolist (x ordered)
+        (setf (scene::%contents v) (remove x (scene::%contents v)))
+        (setf (geom:user-data x) nil))
+      (car (last ordered)))))
 
 (defun scene:clear (v)
   (dolist (s (scene::%contents v)) (setf (geom:user-data s) nil))

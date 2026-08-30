@@ -300,6 +300,59 @@ class SceneOffscreenRenderTest {
 		assertThat(asked.nonBackgroundPixels()).as("%s: the line triad is still available", asked).isPositive();
 	}
 
+	@Test
+	void aTriadIsAddedAsOneArgument() {
+		// geom:triad answers a LIST where geom:box answers one solid, so scene:add
+		// splices a list argument -- otherwise the one constructor that returns more
+		// than one thing is the one a caller cannot hand straight to the viewer, and
+		// the list itself used to be consed into the contents and surface a frame
+		// later as a geom:user-data dispatch failure (.kb/geom.md).
+		Frame frame = render("triad-added-as-a-list", sized("""
+				(defvar *v* (scene:offscreen :width %d :height %d))
+				(scene:grid *v* :extent nil)
+				(scene:shading *v* :solid)
+				(scene:camera *v* :azimuth 0.9 :elevation 0.45 :distance 620.0)
+				(scene:add *v* (geom:triad :at (geom:vec3 0 0 0)))
+				(scene:snapshot *v*)
+				"""));
+		assertThat(frame.redPixels()).as("%s: the x arrow", frame).isGreaterThan(30);
+		assertThat(frame.greenPixels()).as("%s: the y arrow", frame).isGreaterThan(30);
+		assertThat(frame.bluePixels()).as("%s: the z arrow", frame).isGreaterThan(30);
+	}
+
+	@Test
+	void aFrameWhoseBodySignalsIsStillEndedAndCommitted() {
+		// metal:frame used to leave the render command encoder un-ended when the body
+		// signalled. An encoder released without endEncoding is a Metal ASSERTION and
+		// an assertion is an abort(): the native binary died on the fourth such frame
+		// while java -jar happened to outlive it (.kb/objc.md, "A frame that signals").
+		// The abort is timing-dependent; the COMMIT is not. An un-committed frame never
+		// reaches the texture at all, so the previous frame's red box survives it; a
+		// frame that was closed out cleared the texture on its way through.
+		Frame drawn = render("signalling-frame-before", RED_BOX + "(scene:snapshot *v*)\n");
+		assertThat(drawn.isRed(WIDTH / 2, HEIGHT / 2)).as("%s: the box is drawn to begin with", drawn).isTrue();
+
+		Frame after = render("signalling-frame-after", RED_BOX + """
+				(scene:snapshot *v*)
+				(setf (scene::%frame-hook *v*) (lambda () (error "the frame's body signals")))
+				(ignore-errors (scene:refresh *v*))
+				(metal:pixels (scene:context-of *v*))
+				""");
+		assertThat(after.isBackground(WIDTH / 2, HEIGHT / 2))
+			.as("%s: the frame that signalled was still ended and committed", after)
+			.isTrue();
+	}
+
+	/** One red box filling the middle of the frame, and nothing else drawn. */
+	private static final String RED_BOX = sized("""
+			(defvar *v* (scene:offscreen :width %d :height %d))
+			(scene:grid *v* :extent nil)
+			(scene:axes *v* nil)
+			(scene:shading *v* :solid)
+			(scene:add *v* (geom:box '(200 200 200) :color (geom:vec3 1.0 0.2 0.2)))
+			(scene:camera *v* :azimuth 0.9 :elevation 0.45 :distance 700.0)
+			""");
+
 	// --- the camera's signs, and the browser twin's ------------------------------
 
 	/**

@@ -84,7 +84,7 @@
 ;;; caller says, with a shaft thickness and three tips. The viewer's own axes
 ;;; are its furniture -- hairlines with no width -- and :bodies asks for the one
 ;;; kind that is genuinely about viewing, each solid's OWN frame.
-(dolist (a (geom:triad :at (geom:vec3 0 0 0))) (scene:add *view* a))
+(scene:add *view* (geom:triad :at (geom:vec3 0 0 0)))
 (scene:axes *view* :bodies)
 (scene:camera *view* :azimuth 1.05 :elevation 0.38)
 (scene:fit *view*)

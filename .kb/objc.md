@@ -369,6 +369,46 @@ is where the design and the assertions it buys are written down. Its readback sh
 an `MTLRegion`, six `NSUInteger`s by value -- is the widest struct argument in the closed
 `objc_msgSend` table and the one row `reachability-metadata.json` gained for it.
 
+## A frame that signals: the callback guard is not the last word (todo-583, 2026-08-30)
+
+`ObjcClasses.dispatch` catches `Throwable`, hands it to the error sink and answers the
+method's zero value, so a Lisp error inside a callback prints
+`objc: error in a callback: ...` and the process continues. **That guard holds under
+native-image too** -- measured 2026-08-30 on macOS 26.3.1 / Apple silicon, with a
+`RontoLispProbe` class whose one method signals: `java -jar` and the `rontolisp` binary
+print the same line and both run on. So when a report says the binary crashes where
+`java -jar` does not, the guard is not where to look.
+
+What killed the binary was DOWNSTREAM of continuing. `metal:frame` built a render
+command encoder, called the program's body, and ended the encoder AFTER it -- so a body
+that signalled left the encoder un-ended and the command buffer un-committed. An encoder
+released without `endEncoding` is a Metal ASSERTION:
+
+```
+-[_MTLCommandEncoder dealloc]:134: failed assertion `Command encoder released without endEncoding'
+```
+
+and an assertion is an `abort()`, which no `catch (Throwable)` can be under. The native
+binary died on the FOURTH such frame; `java -jar` printed eight and exited normally.
+That difference is timing, not semantics -- when the JUnit fork ran the same eight frames
+it aborted with exit code 134 as well, and the surefire report is
+`The forked VM terminated without properly saying goodbye`. **A carrier that survives it
+is lucky, not immune.**
+
+The fix is `metal:frame`'s: the encoder is ended, the drawable presented and the buffer
+committed from an `unwind-protect` cleanup, so a frame is closed out whether its body
+returned or signalled. A half-drawn frame is a picture; an aborted process is not.
+
+The pin is a COMMIT, not a crash, because the abort is timing-dependent and the commit is
+not: an un-committed frame never reaches the texture, so the previous frame's pixels
+survive it, and a frame that was closed out cleared them
+(`SceneOffscreenRenderTest.aFrameWhoseBodySignalsIsStillEndedAndCommitted`).
+
+The general rule this leaves: **a callback that touches a native object with a
+begin/end protocol must close it on the signalling path too.** The guard keeps the error
+out of the native frame; it cannot keep a half-finished native object from asserting when
+it is released.
+
 ## Ownership: one retain per wrapper, released on thread 0
 
 `LispObjcObject(address, className)` -- a `LispVal` permittee, `equal` by address -- owns
