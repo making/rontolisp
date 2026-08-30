@@ -2718,15 +2718,13 @@ public final class Environment implements Scope {
 	 */
 	static LispVal seqAsList(LispVal val) {
 		if (val instanceof LispString str) {
-			String s = str.value();
 			// Walk by CODE POINT: a supplementary code point produces one LispChar, not
-			// two surrogate halves (which #\? would print).
+			// two surrogate halves (which #\? would print). Read the buffer slot by slot
+			// rather than through value(), which rebuilds the whole Java String -- the
+			// per-access whole-string allocation .kb/string-index-cost.md records.
 			LispVal result = LispNil.INSTANCE;
-			int codeUnit = s.length();
-			while (codeUnit > 0) {
-				int cp = s.codePointBefore(codeUnit);
-				result = new LispCons(new LispChar(cp), result);
-				codeUnit -= Character.charCount(cp);
+			for (int i = str.codePointCount() - 1; i >= 0; i--) {
+				result = new LispCons(new LispChar(str.codePointAt(i)), result);
 			}
 			return result;
 		}

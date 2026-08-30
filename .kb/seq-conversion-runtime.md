@@ -171,3 +171,11 @@ SOURCE program, never the injected wrappers. So three things must stay in step:
   `ci-spec.yaml` (all four backends), `LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest`, and `ExamplesE2eTest` over every checked-in
   browser artifact.
+
+## Related
+
+- [[seq-coerce-runtime]] -- the INTERPRETER's half of the same conversion. This file
+  makes a compiled module carry ONE copy of the body for SIZE; that one converts in
+  Java for SPEED, because the interpreter has no compiler to make the inline `map`
+  loop cheap and was paying a funcall of `#'identity` per element. The two never meet:
+  the interpreter passes `helpersPresent` false and never carries the trio.

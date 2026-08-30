@@ -11437,6 +11437,80 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theNativeSequenceCoerceArmAnswersEveryRepresentationTheExpansionDoes() {
+		// The interpreter converts a sequence in Java rather than through the expansion's
+		// (map 'list #'identity ...), so a scan no longer pays an interpreted funcall per
+		// element (.kb/seq-coerce-runtime.md). Every representation the expansion's
+		// (length v)/(aref v i) walk reaches must answer the same thing.
+		assertThat(eval("(coerce \"ab\" 'list)").print()).isEqualTo("(#\\a #\\b)");
+		// A supplementary code point is ONE element, not two surrogate halves.
+		assertThat(eval("(length (coerce (string (code-char 128512)) 'list))").print()).isEqualTo("1");
+		// A fill pointer bounds the conversion: only the active prefix is elements.
+		assertThat(evalMulti("""
+				(let ((s (make-array 5 :element-type 'character :fill-pointer 2 :initial-element #\\z)))
+				  (coerce s 'list))
+				""").print()).isEqualTo("(#\\z #\\z)");
+		assertThat(evalMulti("(let ((a (make-array 5 :fill-pointer 2 :initial-element 7))) (coerce a 'list))").print())
+			.isEqualTo("(7 7)");
+		// A displaced string reads through to its target.
+		assertThat(evalMulti("""
+				(let* ((s "hello")
+				       (d (make-array 3 :element-type 'character :displaced-to s :displaced-index-offset 1)))
+				  (coerce d 'list))
+				""").print()).isEqualTo("(#\\e #\\l #\\l)");
+		// Packed vectors: an (unsigned-byte 8) vector yields integers, a float array
+		// floats.
+		assertThat(evalMulti("""
+				(coerce (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)) 'list)
+				""").print()).isEqualTo("(1 2 3)");
+		assertThat(evalMulti("""
+				(coerce (make-array 2 :element-type 'double-float :initial-contents '(1d0 2d0)) 'list)
+				""").print()).isEqualTo("(1.0 2.0)");
+		assertThat(eval("(coerce '(#\\a #\\b) 'string)").print()).isEqualTo("\"ab\"");
+		assertThat(eval("(coerce #(#\\p #\\q) 'string)").print()).isEqualTo("\"pq\"");
+		assertThat(eval("(coerce nil 'string)").print()).isEqualTo("\"\"");
+		assertThat(eval("(coerce \"ab\" 'vector)").print()).isEqualTo("#(#\\a #\\b)");
+		assertThat(eval("(coerce nil 'vector)").print()).isEqualTo("#()");
+		// The "simple"/"base" aliases collapse the same way the expansion collapses them.
+		assertThat(eval("(coerce '(#\\a) 'simple-string)").print()).isEqualTo("\"a\"");
+		assertThat(eval("(coerce '(1) 'simple-vector)").print()).isEqualTo("#(1)");
+	}
+
+	@Test
+	void theNativeSequenceCoerceArmDeclinesEverythingItCannotAnswerIdentically() {
+		// Declining means the shared expansion runs unchanged over the already-evaluated
+		// value, so every answer below -- error, oddity and identity alike -- is the one
+		// the expansion has always given.
+		// A non-sequence answers nil rather than signalling here (the expansion's (length
+		// x) fallthrough walks a cons chain and finds none) -- an oddity, but the fast
+		// arm must reproduce it, not improve on it.
+		assertThat(eval("(coerce 5 'list)").print()).isEqualTo("NIL");
+		assertThatThrownBy(() -> eval("(coerce (make-array '(2 2)) 'list)")).hasMessageContaining("not a sequence");
+		// A non-character element on the way to a string is the expansion's business.
+		assertThat(eval("(coerce '(1 2) 'string)").print()).isEqualTo("\"12\"");
+		// (coerce x 'vector) over a non-list, non-string is the identity, packed arrays
+		// included.
+		assertThat(eval("(coerce 5 'vector)").print()).isEqualTo("5");
+		assertThat(evalMulti("""
+				(coerce (make-array 2 :element-type 'double-float :initial-contents '(1d0 2d0)) 'vector)
+				""").print()).isEqualTo("#d(1.0 2.0)");
+		// A result type outside the list/string/vector family never reaches the fast arm:
+		// a float designator, a packed compound spec and an unresolvable name each keep
+		// the lowering they had.
+		assertThat(eval("(coerce 1 'float)").print()).isEqualTo("1.0");
+		assertThat(eval("(array-element-type (coerce '(1 2) '(vector (unsigned-byte 8))))").print())
+			.isEqualTo("(UNSIGNED-BYTE 8)");
+		assertThat(eval("(coerce '(1 2) 'cons)").print()).isEqualTo("#(1 2)");
+		// The value form is evaluated ONCE whichever arm answers.
+		assertThat(evalMulti("""
+				(let ((n 0))
+				  (list (coerce (progn (setq n (+ n 1)) "ab") 'list)
+				        (coerce (progn (setq n (+ n 1)) 5) 'vector)
+				        n))
+				""").print()).isEqualTo("((#\\a #\\b) 5 2)");
+	}
+
+	@Test
 	void coerceAcceptsAComputedResultType() {
 		// The result type in a VARIABLE dispatches at run time over the same families
 		// the literal path handles -- alexandria:copy-sequence / median / coercef.
