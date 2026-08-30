@@ -333,6 +333,11 @@ much as for a quoted array, so `(eq (f) (f))` is `T` for `(defun f () '(1 2 3))`
 destructive write through the result reaches the next call. Treat quoted data as
 read-only, as you would in any Common Lisp.
 
+A **structure or pathname literal is a constant even outside `quote`**: `#S(...)` and
+`#P"..."` are self-evaluating, and every evaluation of one site answers the same shared
+object on every backend, so `(eq (f) (f))` is `T` for `(defun f () #P"a/b.txt")`. This
+is the one literal syntax that does not follow the constructor rule above.
+
 ### Packed float arrays (`#d` / `#f`)
 
 `#d(...)` and `#f(...)` denote a **packed float array**: a float-typed array whose

@@ -161,6 +161,44 @@ invariant is right; a representation escaped it.
    `_str_fresh` ids are the counter `>= heapBase` (`.kb/wasm-gc-strings.md`), so
    "was this string built at run time" is an `i32.lt_u`.
 
+## The BULK writes belong here too (measured 2026-08-30, from `.todo/581`)
+
+`.todo/581` was opened over `replace` / `fill` / `(setf (subseq ...))` diverging on a
+string LITERAL. Measured on all four backends, that split cleanly in two and only one
+half was 581's:
+
+- The LITERAL half is closed. A bulk write into a source constant lands on a fresh copy
+  and comes back as the return value, on all four (`.kb/string-write-runtime.md`, "The
+  BULK writes, settled 2026-08-30").
+- The remaining half is **this item's**, and it is the same sentence as the alias case
+  at the top of this file with a different operator:
+
+```lisp
+(let ((s (copy-seq "abc"))) (replace s "Z") s)
+;; SBCL / interpreter: "Zbc"
+;; JVM / WASM P1 / WASM component: "abc"   ; the write is DISCARDED
+```
+
+The mechanism is the one already described here: `expandReplace`/`expandFill` see
+`%arrayp` false for an immutable string, take their functional branch, build the right
+string, and drop it -- `replace` is a FUNCTION call whose result the caller usually
+ignores, so unlike `expandScharSetFunctional` there is no `setq` to catch it. Step 2 of
+the revised plan above (flip the producers so `copy-seq`/`subseq` answer a character
+vector) fixes it as a side effect, because the destructive branch then applies. **Do not
+try to fix it separately by making the functional branch write further** -- that is the
+same "the setq is a symptom" the section above already rejects, one operator over.
+
+Add these two programs to the definition of done:
+
+```lisp
+(let ((s (copy-seq "abc"))) (replace s "Z") s)          ; want "Zbc" on all four
+(let ((s (copy-seq "abc"))) (fill s #\Q) s)             ; want "QQQ" on all four
+```
+
+A literal target must keep answering what it answers today (the copy, not a write) --
+the two rules do not collide, for exactly the reason the paragraph above about `subseq`
+gives: a literal's sharing is made by the READER.
+
 ## Not done
 
 Nothing of the above is implemented. The three programs still answer as the

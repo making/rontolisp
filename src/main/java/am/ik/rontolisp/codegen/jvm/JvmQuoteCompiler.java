@@ -43,27 +43,41 @@ final class JvmQuoteCompiler {
 		// inline emission below; a BARE array literal never comes here and stays a
 		// constructor (.kb/array-literals.md).
 		if (isSharedAggregate(quoted)) {
-			am.ik.jvm.ConstantPool.FieldrefConstant ref = ctx.quotePool.lookup(quoted);
-			if (ref == null) {
-				ref = ctx.quotePool.intern(ctx.cp, className, quoted);
-			}
-			// GETSTATIC f; DUP; IFNONNULL end; POP; <build>; DUP; PUTSTATIC f; end:
-			// -- one value on the stack on both paths.
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(ref.index());
-			ctx.emit(Opcode.DUP);
-			int branchPos = ctx.code.size();
-			ctx.emit(Opcode.IFNONNULL);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.POP);
-			compileQuotedVal(quoted, ctx, className);
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(ref.index());
-			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+			emitSharedConstant(quoted, ctx, className, () -> compileQuotedVal(quoted, ctx, className));
 			return;
 		}
 		compileQuotedVal(quoted, ctx, className);
+	}
+
+	/**
+	 * Emits one datum's build behind its lazy {@code _qd$N} field, so every evaluation of
+	 * the site answers the same object. Shared by the {@code quote} path and the
+	 * bare-instance-literal path, which have the same identity rule and differ only in
+	 * what they build.
+	 * @param datum the datum the field is keyed by (identity, not equality)
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 * @param build emits the construction, leaving exactly one value on the stack
+	 */
+	private static void emitSharedConstant(LispVal datum, JvmLispCompiler.Ctx ctx, String className, Runnable build) {
+		am.ik.jvm.ConstantPool.FieldrefConstant ref = ctx.quotePool.lookup(datum);
+		if (ref == null) {
+			ref = ctx.quotePool.intern(ctx.cp, className, datum);
+		}
+		// GETSTATIC f; DUP; IFNONNULL end; POP; <build>; DUP; PUTSTATIC f; end:
+		// -- one value on the stack on both paths.
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(ref.index());
+		ctx.emit(Opcode.DUP);
+		int branchPos = ctx.code.size();
+		ctx.emit(Opcode.IFNONNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.POP);
+		build.run();
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.PUTSTATIC);
+		ctx.emitU2(ref.index());
+		JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
 	}
 
 	/**
@@ -278,12 +292,20 @@ final class JvmQuoteCompiler {
 	/**
 	 * Compiles a self-evaluating instance literal in code position (an instance is
 	 * neither a symbol nor a cons, CLHS 3.1.2.1.3).
+	 * <p>
+	 * It is one SHARED constant, exactly as under {@code quote} (.kb/quoted-data.md): the
+	 * interpreter's {@code LispInstance} arm hands the reader's own instance back at
+	 * every evaluation, so the site memoizes into the same lazy {@code _qd$N} field a
+	 * quoted datum uses. This is the one literal family that does NOT follow the
+	 * fresh-per-evaluation rule of an array literal (.kb/array-literals.md): there the
+	 * interpreter could be moved, here it cannot -- the same arm carries every live
+	 * instance the evaluator splices back through {@code (quote <value>)}.
 	 * @param inst the instance literal
 	 * @param ctx the compilation context
 	 * @param className the class being emitted
 	 */
 	static void compileLiteralInstance(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx, String className) {
-		compileQuotedInstance(inst, ctx, className);
+		emitSharedConstant(inst, ctx, className, () -> compileQuotedInstance(inst, ctx, className));
 	}
 
 	// Builds Object[]{String[] layout, v1, ..., vn} -- the same shape %obj-new emits.

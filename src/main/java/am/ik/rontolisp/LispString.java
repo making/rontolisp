@@ -148,6 +148,23 @@ public final class LispString implements LispVal {
 	}
 
 	/**
+	 * Answers a FRESH ordinary string holding this one's content -- the copy a
+	 * DESTRUCTIVE BULK operation ({@code replace}, {@code fill}, and the
+	 * {@code (setf (subseq ...))} that lowers to {@code replace}) works on when its
+	 * target is a source literal, so the source constant is never written (see
+	 * {@code .kb/string-write-runtime.md}).
+	 * <p>
+	 * Unlike {@link #withCharAt} there is no place to rebind -- {@code replace} is a
+	 * FUNCTION call, not a place form -- so the copy reaches the program only as the
+	 * operation's return value, which is exactly what the three compile paths already
+	 * answer for the same program.
+	 * @return the mutable copy
+	 */
+	public LispString copyForBulkWrite() {
+		return new LispString(this.value());
+	}
+
+	/**
 	 * Returns the displacement target ({@code make-array :displaced-to}), or {@code null}
 	 * when the string owns its buffer.
 	 * @return the target string, or {@code null}

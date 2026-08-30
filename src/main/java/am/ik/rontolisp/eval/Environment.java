@@ -5502,6 +5502,15 @@ public final class Environment implements Scope {
 					op + ": index " + index + " out of bounds for string of capacity " + str.capacity());
 		}
 		LispChar c = requireChar(op, value);
+		// A SOURCE LITERAL is never written (.kb/string-write-runtime.md). These two
+		// entries -- %aset and %row-major-aset -- carry no rebind hook, so like
+		// %schar-set as a first-class value they refuse rather than rewrite the program
+		// text. The (setf (aref s i) c) spelling never arrives here: expandSetf routes
+		// it through %schar-set, which rebinds the place.
+		if (str.sourceLiteral()) {
+			throw new LispEvalException(
+					op + " on a string literal requires a variable string place, got " + str.print());
+		}
 		str.setCharAt(index, c.codePoint());
 		return c;
 	}
@@ -5839,8 +5848,15 @@ public final class Environment implements Scope {
 			// (setf (subseq vec beg end) sorted)) accumulate correctly.
 			if (target instanceof LispString targetStr) {
 				String s2 = requireString(LispNames.REPLACE, source);
-				targetStr.replaceInPlace(start1, s2, start2, copied);
-				return targetStr;
+				// ... except into a SOURCE LITERAL, which is never written on any
+				// backend (.kb/string-write-runtime.md): the write lands on a fresh
+				// copy and reaches the program only through the return value, since a
+				// function call has no place to rebind. That is what the three compile
+				// paths already answer -- their functional branch builds the new string
+				// and the source constant never moves.
+				LispString into = targetStr.sourceLiteral() ? targetStr.copyForBulkWrite() : targetStr;
+				into.replaceInPlace(start1, s2, start2, copied);
+				return into;
 			}
 			if (target instanceof LispArray targetArr && targetArr.dimensions().length == 1) {
 				for (int k = 0; k < copied; k++) {
@@ -5894,10 +5910,13 @@ public final class Environment implements Scope {
 			// salza2's bitstream reset).
 			if (target instanceof LispString targetStr) {
 				int codePoint = requireChar(LispNames.FILL, item).codePoint();
+				// A SOURCE LITERAL is never written: the fill lands on a fresh copy,
+				// exactly as in replace above (.kb/string-write-runtime.md).
+				LispString into = targetStr.sourceLiteral() ? targetStr.copyForBulkWrite() : targetStr;
 				for (int k = start; k < end; k++) {
-					targetStr.setCharAt(k, codePoint);
+					into.setCharAt(k, codePoint);
 				}
-				return targetStr;
+				return into;
 			}
 			if (target instanceof LispIntVector targetIv) {
 				long masked = exactIntElement(LispNames.FILL, item);

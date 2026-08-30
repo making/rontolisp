@@ -9826,6 +9826,60 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aBulkWriteThroughAStringLiteralLandsOnACopyAndLeavesTheConstant() {
+		// replace / fill / (setf (subseq ...)) are FUNCTION calls, so unlike
+		// (setf (char a i) c) there is no place to rebind: the write lands on a fresh
+		// copy and reaches the program only through the return value. The source
+		// constant is untouched, and this is what the three compile paths already
+		// answer -- their functional branch builds the string and drops it
+		// (.kb/string-write-runtime.md).
+		assertThat(evalMulti("""
+				(defun %lit-bulk () "abc")
+				(list (let ((a (%lit-bulk))) (list (replace a "Z") a))
+				      (let ((a (%lit-bulk))) (list (fill a #\\Q) a))
+				      (let ((a (%lit-bulk))) (list (setf (subseq a 0 1) "Y") a))
+				      (%lit-bulk))
+				""").print()).isEqualTo("((\"Zbc\" \"abc\") (\"QQQ\" \"abc\") (\"Y\" \"abc\") \"abc\")");
+	}
+
+	@Test
+	void aBulkWriteThroughAnAllocatedStringBufferIsStillInPlace() {
+		// The guard that the copy is keyed on the SOURCE MARK and not on immutability:
+		// a make-string buffer is still filled in place, alias included, which is what
+		// every "allocate then replace" program depends on.
+		assertThat(evalMulti("""
+				(let* ((s (make-string 3 :initial-element #\\a)) (alias s))
+				  (replace s "Z")
+				  (fill s #\\Q :start 1)
+				  (list s alias (eq s alias)))
+				""").print()).isEqualTo("(\"ZQQ\" \"ZQQ\" T)");
+	}
+
+	@Test
+	void aRowMajorWriteThroughAStringLiteralIsAnError() {
+		// %aset / %row-major-aset carry no rebind hook, so like %schar-set as a
+		// first-class value they refuse a source literal rather than rewrite the
+		// program text (.kb/string-write-runtime.md).
+		assertThatThrownBy(() -> eval("(let ((a \"abc\")) (setf (row-major-aref a 0) #\\Z))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("requires a variable string place");
+	}
+
+	@Test
+	void anInstanceLiteralIsOneSharedConstantOnEveryBackend() {
+		// A bare #P"..." / #S(...) is the one literal family that is a CONSTANT rather
+		// than a constructor: the interpreter's self-evaluating LispInstance arm hands
+		// the reader's own instance back, and since todo 581 both compile backends
+		// memoize it into the same lazy slot a quoted datum uses (.kb/quoted-data.md).
+		assertThat(eval("(let ((f (lambda () #P\"a/b.txt\"))) (eq (funcall f) (funcall f)))"))
+			.isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("""
+				(defstruct %lit-pt x y)
+				(let ((f (lambda () #S(%lit-pt :x 1 :y 2)))) (eq (funcall f) (funcall f)))
+				""")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
 	void lengthOfVectorReturnsElementCount() {
 		assertThat(eval("(length (make-array 5 :initial-element 0))")).isEqualTo(new LispInteger(5));
 		assertThat(eval("(length #(10 20 30))")).isEqualTo(new LispInteger(3));

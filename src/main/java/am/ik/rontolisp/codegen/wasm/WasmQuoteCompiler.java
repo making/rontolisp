@@ -35,20 +35,33 @@ final class WasmQuoteCompiler {
 		// constructor (.kb/array-literals.md), which is what PureBuiltinFolder's
 		// packed-table fold rests on.
 		if (isSharedAggregate(quoted)) {
-			int global = ctx.quoteGlobals.indexFor(quoted);
-			ctx.writer.write(Instruction.GET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(global);
-			ctx.writer.write(Instruction.REF_IS_NULL);
-			ctx.writer.write(Instruction.IF, 0x40);
-			compileQuotedVal(quoted, ctx);
-			ctx.writer.write(Instruction.SET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(global);
-			ctx.writer.write(Instruction.END);
-			ctx.writer.write(Instruction.GET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(global);
+			emitSharedConstant(quoted, ctx, () -> compileQuotedVal(quoted, ctx));
 			return;
 		}
 		compileQuotedVal(quoted, ctx);
+	}
+
+	/**
+	 * Emits one datum's build behind its lazy module global, so every evaluation of the
+	 * site answers the same object. Shared by the {@code quote} path and the
+	 * bare-instance-literal path, which have the same identity rule and differ only in
+	 * what they build.
+	 * @param datum the datum the global is keyed by (identity, not equality)
+	 * @param ctx the compilation context
+	 * @param build emits the construction, leaving exactly one value on the stack
+	 */
+	private static void emitSharedConstant(LispVal datum, WasmLispCompiler.Ctx ctx, Runnable build) {
+		int global = ctx.quoteGlobals.indexFor(datum);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(global);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF, 0x40);
+		build.run();
+		ctx.writer.write(Instruction.SET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(global);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(global);
 	}
 
 	/**
@@ -564,11 +577,19 @@ final class WasmQuoteCompiler {
 	/**
 	 * Compiles a self-evaluating instance literal in code position (an instance is
 	 * neither a symbol nor a cons, CLHS 3.1.2.1.3).
+	 * <p>
+	 * It is one SHARED constant, exactly as under {@code quote} (.kb/quoted-data.md): the
+	 * interpreter's {@code LispInstance} arm hands the reader's own instance back at
+	 * every evaluation, so the site memoizes into the same lazy module global a quoted
+	 * datum uses. This is the one literal family that does NOT follow the
+	 * fresh-per-evaluation rule of an array literal (.kb/array-literals.md): there the
+	 * interpreter could be moved, here it cannot -- the same arm carries every live
+	 * instance the evaluator splices back through {@code (quote <value>)}.
 	 * @param inst the instance literal
 	 * @param ctx the compilation context
 	 */
 	static void compileLiteralInstance(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
-		compileQuotedInstance(inst, ctx);
+		emitSharedConstant(inst, ctx, () -> compileQuotedInstance(inst, ctx));
 	}
 
 	// Builds a TYPE_INSTANCE over the layout the value already carries: the slots array

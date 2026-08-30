@@ -838,6 +838,29 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aBareInstanceLiteralIsOneSharedConstantAcrossEvaluations() throws Exception {
+		// A bare #P"..." / #S(...) in code position is a CONSTANT, not a constructor:
+		// the interpreter's self-evaluating LispInstance arm hands the reader's own
+		// instance back at every evaluation, and cannot be moved (the same arm carries
+		// every live instance spliced back through (quote <value>)), so the site
+		// memoizes into the lazy module global a quoted datum uses
+		// (.kb/quoted-data.md).
+		String program = """
+				(defun %fp () #P"a/b.txt")
+				(print (eq (%fp) (%fp)))
+				(print (namestring (%fp)))
+				(defstruct %pt x y)
+				(defun %fs () #S(%pt :x 1 :y 2))
+				(print (eq (%fs) (%fs)))
+				(print (%pt-x (%fs)))
+				""";
+		assertThat(compileAndRunPrelude(program)).isEqualTo("T\n\"a/b.txt\"\nT\n1");
+		// The component path shares the codegen but not the I/O adapter; the constant
+		// table is codegen, so the answer must be identical.
+		assertThat(compileComponentAndRunPrelude(program)).isEqualTo("T\n\"a/b.txt\"\nT\n1");
+	}
+
+	@Test
 	void concatenateStringTakesAnySequence() throws Exception {
 		// The string family walks any character sequence, nil (the empty list) included:
 		// s-sql builds "CREATE TABLE x" as

@@ -3984,6 +3984,64 @@ cases:
       "abc"
       "Zbc"
       "abc"
+  # The BULK destructive writes into the same literal. replace / fill / the
+  # (setf (subseq ...)) that lowers to replace are FUNCTION calls, so unlike
+  # (setf (char a i) c) above there is no place to rebind: the write lands on a fresh copy
+  # and reaches the program only through the return value, leaving the source constant
+  # untouched on all four backends (.kb/string-write-runtime.md). The make-string buffer
+  # at the end is the guard that the rule is keyed on the SOURCE MARK, not on
+  # immutability: an allocated character vector is still filled in place.
+  - name: string-literal-bulk-write-cross-backend
+    source: |
+      (defun ci-sbulk () "abc")
+      (defun ci-string-literal-bulk-write ()
+        (let ((a (ci-sbulk))) (print (replace a "Z")) (print a))
+        (print (ci-sbulk))
+        (let ((a (ci-sbulk))) (print (fill a #\Q)) (print a))
+        (print (ci-sbulk))
+        (let ((a (ci-sbulk))) (print (setf (subseq a 0 1) "Y")) (print a))
+        (print (ci-sbulk))
+        (let ((a (ci-sbulk))) (print (nstring-upcase a)) (print a))
+        (print (ci-sbulk))
+        (let ((b (make-string 3 :initial-element #\a)))
+          (replace b "Z")
+          (fill b #\Q :start 1)
+          (print b)))
+      (ci-string-literal-bulk-write)
+    expected: |
+      "Zbc"
+      "abc"
+      "abc"
+      "QQQ"
+      "abc"
+      "abc"
+      "Y"
+      "abc"
+      "abc"
+      "ABC"
+      "abc"
+      "abc"
+      "ZQQ"
+  # A BARE #P"..." / #S(...) instance literal is a CONSTANT, not a constructor: the
+  # interpreter's self-evaluating LispInstance arm hands the reader's own instance back at
+  # every evaluation, and cannot be moved (the same arm carries every live instance the
+  # evaluator splices back through (quote <value>)), so both compile backends memoize the
+  # site into the lazy slot a quoted datum uses (.kb/quoted-data.md). This is the one
+  # literal family that does NOT follow array-literal-freshness-cross-backend.
+  - name: instance-literal-shared-cross-backend
+    source: |
+      (defstruct ci-ilit-pt x y)
+      (defun ci-ilit-path () #P"a/b.txt")
+      (defun ci-ilit-struct () #S(ci-ilit-pt :x 1 :y 2))
+      (defun ci-instance-literal-shared ()
+        (print (list (eq (ci-ilit-path) (ci-ilit-path)) (eq (ci-ilit-struct) (ci-ilit-struct))))
+        (print (namestring (ci-ilit-path)))
+        (print (ci-ilit-pt-x (ci-ilit-struct))))
+      (ci-instance-literal-shared)
+    expected: |
+      (T T)
+      "a/b.txt"
+      1
   # A QUOTED datum is one shared constant per quote site (.kb/quoted-data.md): every
   # evaluation of one quote site answers the SAME object on every backend, so eq holds
   # across evaluations and a write through it is visible to the next one -- the

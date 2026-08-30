@@ -11165,6 +11165,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aBareInstanceLiteralIsOneSharedConstantAcrossEvaluations() throws Exception {
+		// A bare #P"..." / #S(...) in code position is a CONSTANT, not a constructor:
+		// the interpreter's self-evaluating LispInstance arm hands the reader's own
+		// instance back at every evaluation, and cannot be moved (the same arm carries
+		// every live instance spliced back through (quote <value>)), so the site
+		// memoizes into the lazy _qd$N field a quoted datum uses (.kb/quoted-data.md).
+		assertThat(compileAndRun("""
+				(defun %fp () #P"a/b.txt")
+				(print (eq (%fp) (%fp)))
+				(print (namestring (%fp)))
+				(defstruct %pt x y)
+				(defun %fs () #S(%pt :x 1 :y 2))
+				(print (eq (%fs) (%fs)))
+				(print (%pt-x (%fs)))
+				""")).isEqualTo("T\n\"a/b.txt\"\nT\n1");
+	}
+
+	@Test
 	void anArrayFreeProgramReferencesNoArrayRuntimeHelper() {
 		// the injected built-in wrappers used to carry an array arm each
 		// (#'+ / #'reverse / #'sort / #'subseq / #'string= ... all fold or scan through

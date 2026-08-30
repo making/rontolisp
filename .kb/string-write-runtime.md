@@ -82,6 +82,55 @@ first-class function value has no hook, so it refuses a literal too.
 rebuilt string has nowhere else to go), and the update is invisible through an alias
 taken before the write -- `.kb/asdf.md`, cl-base64 item 3.
 
+### The BULK writes, settled 2026-08-30
+
+**Invariant: a DESTRUCTIVE BULK operation whose target is a string literal --
+`replace`, `fill`, and the `(setf (subseq s start end) v)` that lowers to `replace` --
+lands on a FRESH COPY on all four backends. The modified string reaches the program
+only as the operation's RETURN VALUE; the variable is not rebound and the source
+constant is untouched.** Pinned by the `string-literal-bulk-write-cross-backend`
+ci-spec case and
+`LispEvaluatorTest.aBulkWriteThroughAStringLiteralLandsOnACopyAndLeavesTheConstant` /
+`#aBulkWriteThroughAnAllocatedStringBufferIsStillInPlace`.
+
+**Why the copy and not the rebind `%schar-set` performs.** `replace` and `fill` are
+FUNCTION calls, not place forms: there is no place to rebind, and `(setf (subseq ...))`
+hoists its sequence subform into a temporary before reaching `replace`, so it has none
+either. The return value is the only channel, and it is already the channel all three
+compile paths use -- their functional branch builds the new string and hands it back.
+So the answer costs nothing on the compile side: the INTERPRETER moved, alone, and
+`Environment`'s `replace` / `fill` string arms copy through `LispString.copyForBulkWrite`
+when `sourceLiteral()` says the target is program text.
+
+Measured 2026-08-30, `(defun r () "abc")`, each row run as
+`(let ((a (r))) <form> a)` and then a fresh `(r)`. The compile-path column never moved:
+
+| form | interpreter before | interpreter after | JVM / WASM P1 / WASM component |
+|---|---|---|---|
+| `(replace a "Z")` | `"Zbc"`, next `(r)` `"Zbc"` | returns `"Zbc"`, `a` and next `(r)` `"abc"` | same as after |
+| `(fill a #\Q)` | `"QQQ"`, next `(r)` `"QQQ"` | returns `"QQQ"`, both `"abc"` | same |
+| `(setf (subseq a 0 1) "Y")` | `"Ybc"`, next `(r)` `"Ybc"` | returns `"Y"`, both `"abc"` | same |
+| `(nstring-upcase a)` | already correct | unchanged | same |
+| `(nreverse a)` / `(nsubstitute ...)` / `(map-into a ...)` / `(sort a ...)` | already correct | unchanged | same |
+
+So only three of the family ever diverged: the two that reach `LispString`'s in-place
+`replaceInPlace` / `setCharAt`, plus the `setf` that lowers to one of them. The `n*`
+operators and `map-into` were already functional on the interpreter, which is why the
+2026-08-29 table in `.todo/581` -- taken before `.todo/580` landed -- listed
+`nstring-upcase` as diverging and this one does not.
+
+`%aset` / `%row-major-aset` on a literal REFUSES rather than copies
+(`(setf (row-major-aref a 0) #\Z)`, `LispEvaluatorTest.aRowMajorWriteThroughAStringLiteralIsAnError`):
+they are indexed writes with no rebind hook, exactly `%schar-set`'s first-class-value
+case. The `(setf (aref s i) c)` spelling never arrives there -- `expandSetf` routes it
+through `%schar-set`, which rebinds. **The compile paths answer that spelling only for a
+mutable character vector**: `(setf (row-major-aref <make-string buffer> i) c)` writes in
+place on all four, while the same form on any IMMUTABLE string -- a literal or a
+`copy-seq` result alike -- traps there (a `String`-to-`ArrayList` cast on the JVM,
+`cast failure` on both wasm backends). That is a hole in the `row-major-aref` place, not
+in this rule: it is the one place head `expandSetf` does not route through `%schar-set`
+-- `.todo/586`.
+
 ### What this does NOT cover, measured the same day
 
 The line is drawn at the SOURCE CONSTANT, not at immutability, and the two do not
@@ -95,18 +144,18 @@ coincide:
   literal's sharing is made by the READER, which is why it is fixed here and this is not;
   559 says in as many words that a literal must stay immutable whichever way it goes, so
   the two answers do not collide.
-- **`replace` / `fill` / `(setf (subseq ...))` / `nstring-upcase` still corrupt a literal
-  on the interpreter**, and the compile paths' answer for them is not the rebind but the
-  write being DISCARDED (their functional branch's result is dropped in statement
-  position). Measured on `(let ((a (r))) (replace a "Z") a)` with `(defun r () "abc")`:
-  interpreter `"Zbc"` and the constant gone, all three compile paths `"abc"` with the
-  write lost. So no one backend is right there and `%schar-set`'s answer does not
-  transfer -- `.todo/581`.
-- **A `#P"..."` pathname literal is `eq` to itself on the interpreter and NOT on the
-  three compile paths** (`(defun fp () #P"a/b.txt")`, `(eq (fp) (fp))`: `T` / `NIL` /
-  `NIL` / `NIL`). The reader folds `#P` to a `LispInstance` that self-evaluates here and
-  is rebuilt at the site there. Nothing writes into one, so it is a latent `eq`
-  divergence only -- recorded, not fixed, in `.todo/581`.
+- **An allocated immutable string still loses a BULK write on the compile paths.** For
+  `(let ((s (copy-seq "abc"))) (replace s "Z") s)` the interpreter answers `"Zbc"` and
+  all three compile paths `"abc"`: `expandReplace`/`expandFill` take their functional
+  branch (`%arrayp` is false for an immutable string), build the right string, and drop
+  it in statement position, because `replace` is a FUNCTION call whose result the caller
+  usually ignores. Same subject as the alias row above -- `.todo/559`, which owns it in
+  as many words -- and NOT a literal question: the literal row below holds on all four.
+- **A `#P"..."` / `#S(...)` literal is `eq` to itself only on the interpreter.** CLOSED
+  2026-08-30 by `.todo/581`: both compile backends now memoize a bare instance literal
+  into the same lazy slot a quoted datum uses, so `(eq (fp) (fp))` for
+  `(defun fp () #P"a/b.txt")` is `T` on all four. `.kb/quoted-data.md` carries the
+  mechanics and the cost.
 - A string nested inside an array literal is SHARED on all four (`#("abc")`:
   `(eq (aref (f) 0) (aref (f) 0))` is `T` everywhere) even though the array around it is
   fresh per evaluation, because `LiteralArrays.materialize` passes a non-array element
@@ -188,3 +237,9 @@ from one definition.
   `#aWriteThroughAnAllocatedStringBufferIsStillInPlace` (the last one is the guard that
   the mark stayed on literals only and a `make-string` buffer is still written in place,
   alias included).
+- The BULK rule: the `string-literal-bulk-write-cross-backend` ci-spec case (all four
+  backends -- `replace`, `fill`, `(setf (subseq ...))`, `nstring-upcase`, and a
+  `make-string` buffer as the guard), plus
+  `LispEvaluatorTest.aBulkWriteThroughAStringLiteralLandsOnACopyAndLeavesTheConstant` /
+  `#aBulkWriteThroughAnAllocatedStringBufferIsStillInPlace` /
+  `#aRowMajorWriteThroughAStringLiteralIsAnError`.

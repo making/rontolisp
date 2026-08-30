@@ -116,6 +116,17 @@ because `(quote <value>)` is also the interpreter's live-value splice
 (`LispEvaluator.quoteValue`), and since `.todo/579` both compile backends memoize the
 datum instead of rebuilding it.
 
+**The one literal family that goes the other way is an INSTANCE.** A bare `#P"..."` /
+`#S(...)` in code position is a CONSTANT, not a constructor: one shared object per site
+on all four backends since `.todo/581` (`.kb/quoted-data.md`, "A BARE instance literal
+shares the same slot"). The rule of this file did not lose a case -- the two are decided
+by the same question and it has different answers. An array literal reaches the
+interpreter through three arms of `LispEvaluator.eval` that carry NOTHING but literals,
+so materializing there was free; an instance reaches it through the `LispInstance` arm,
+which also carries every live instance the evaluator splices back through
+`(quote <value>)` and cannot tell the two apart. The interpreter could be moved for an
+array and cannot be for an instance, so the compile side meets it instead.
+
 ## Where to look when this changes
 
 - `eval/LiteralArrays` -- the interpreter's materialization.
