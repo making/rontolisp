@@ -129,7 +129,7 @@ place on all four, while the same form on any IMMUTABLE string -- a literal or a
 `copy-seq` result alike -- traps there (a `String`-to-`ArrayList` cast on the JVM,
 `cast failure` on both wasm backends). That is a hole in the `row-major-aref` place, not
 in this rule: it is the one place head `expandSetf` does not route through `%schar-set`
--- `.todo/586`.
+-- `.todo/587`.
 
 ### What this does NOT cover, measured the same day
 
