@@ -105,10 +105,13 @@ class JvmClassShakerTest {
 				ClassLoader.getSystemClassLoader())) {
 			// (print 1) tracks the stdout column (_col) but touches no stream/stdin
 			// state, so those fields are dropped with the I/O helpers that used them.
+			// The renderers' cycle-guard pair survives: _consToString (reachable from
+			// _lispToString, which print uses) reads and writes both
+			// (.kb/pretty-printer.md, "A cyclic value prints finitely").
 			List<String> fieldNames = Arrays.stream(loader.loadClass("Test").getDeclaredFields())
 				.map(java.lang.reflect.Field::getName)
 				.toList();
-			assertThat(fieldNames).containsExactly("_col");
+			assertThat(fieldNames).containsExactly("_renderPath", "_renderDepth", "_col");
 		}
 	}
 

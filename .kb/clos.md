@@ -1151,9 +1151,12 @@ protocol). Two consequences worth knowing:
   fallback would re-enter the very rewrite that produced it. The interpreter INLINES
   the renderer instead of calling the defun, because it re-expands per call and must
   see a `defmethod` that follows the first print. The raw renderer those aliases reach
-  carries the instance cycle guard since todo-584 (`.kb/pretty-printer.md`, "A cyclic
-  instance graph"), so a routed instance with no method still prints finitely when its
-  slots cycle.
+  carries the shared cycle guard since todo-584/585 (`.kb/pretty-printer.md`, "A cyclic
+  value prints finitely"), so a routed instance with no method still prints finitely
+  when its slots cycle -- and the walk's own cons and vector arms carry the guard's
+  Lisp twin (`%pos-walk` threads the rendering path and depth through itself,
+  `%pos-chain-stop` is Floyd over the cdr chain), so a cyclic cons prints the same
+  finite text routed and unrouted.
 - **`*print-escape*` is BOUND around the method call** (`printObjectCall` wraps it in a
   `let`), `t` for prin1/print/`~S` and `nil` for princ/`~A` -- the escape flag the hook
   already threads through `%print-object-str` is exactly the value CL binds there, so a

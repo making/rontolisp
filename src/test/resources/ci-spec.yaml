@@ -5205,6 +5205,35 @@ cases:
     expected: |
       #<CI-CYC :NEXT #<CI-CYC :NEXT # :TAG 2> :TAG 1>
       #S(CI-KNOT :NEXT #)
+  # The cons and vector arms' cycle guard (todo-585), here exercised under the
+  # print-object route the geom case turned on for the whole concatenated program
+  # (the %print-object-str walk carries the same guard as the raw renderers): a
+  # cdr chain that re-enters itself prints every element once and then the
+  # improper tail " . #" (the chain's cycle is detected up front); a cons or
+  # vector already on the current rendering path prints as "#". Identical on all
+  # four backends (.kb/pretty-printer.md, "A cyclic cons").
+  - name: print-cyclic-cons
+    source: |
+      (let ((cc-x (list 1)))
+        (setf (cdr cc-x) cc-x)
+        (print cc-x))
+      (let ((cc-y (list 1 2 3)))
+        (setf (cdr (cdr (cdr cc-y))) (cdr cc-y))
+        (print cc-y))
+      (let ((cc-z (list 1 2)))
+        (setf (car cc-z) cc-z)
+        (print cc-z))
+      (let ((cc-v (vector 1 2)))
+        (setf (aref cc-v 0) cc-v)
+        (print cc-v))
+      (let ((cc-s (list 9)))
+        (print (list cc-s cc-s)))
+    expected: |
+      (1 . #)
+      (1 2 3 . #)
+      (# 2)
+      #(# 2)
+      ((9) (9))
   # The torch package (reverse-mode autograd over linalg): fit y = 2x by gradient
   # descent on the MSE -- ten forward/backward/update steps, the update inside
   # torch:no-grad (which rebinds the torch::*grad-enabled* special). Every quantity

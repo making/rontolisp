@@ -13,7 +13,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
-import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.RenderCycleGuard;
 
 /**
  * Builds JVM bytecode for runtime helper methods: dispatch, _lispToString, and
@@ -25,10 +25,10 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * The instance renderer's depth cap, shared with the interpreter so the truncated
-	 * rendering is byte-identical on every backend.
+	 * The renderers' depth cap, shared with the interpreter so the truncated rendering is
+	 * byte-identical on every backend.
 	 */
-	private static final int INST_RENDER_DEPTH_CAP = LispInstance.MAX_RENDER_DEPTH;
+	private static final int RENDER_DEPTH_CAP = RenderCycleGuard.MAX_RENDER_DEPTH;
 
 	/**
 	 * The byte budget of one {@code _invoke_<arity>} dispatch segment. The case bodies
@@ -870,8 +870,72 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
 			MethodrefConstant lispToStringMethod, ConstantPool.StringConstant openParenStr,
 			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
-			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass) {
+			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass, RenderGuardRefs guard) {
 		List<Integer> code = new ArrayList<>();
+		// The cycle guard (the shared RenderGuardRefs discipline, kept in step by
+		// JvmLispCompilerTest.compileAndRunPrintOfACyclicConsIsFinite): a chain whose
+		// HEAD is already on the current rendering path -- a car reaching back to a
+		// list still being rendered -- or the frame past the 256-frame depth cap
+		// returns "#", the *print-level* cutoff marker. Locals here: 0 = arg, 1 = sb,
+		// 2 = current (Floyd's slow first), 3 = first flag (guard scratch first),
+		// 4 = cell, 5 = the chain's cycle-start cell or null, 6 = its seen flag,
+		// 7 = Floyd's fast cursor.
+		emitRenderGuardEnter(code, guard);
+		// The cdr chain is walked ITERATIVELY below, so the path guard alone cannot see
+		// a chain that cycles into itself: Floyd's cycle detection finds the cell where
+		// the cycle begins (into local 5; null for a terminating chain) before anything
+		// is rendered, and the loop prints the SECOND arrival at that cell as the
+		// improper tail " . #" -- every element exactly once, then the marker. The
+		// chain-cell test mirrors the loop's own (an Object[] that is not a ratio), so
+		// the two walks agree on where the chain ends.
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ASTORE);
+		code.add(5);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.ISTORE);
+		code.add(6);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ASTORE_2);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ASTORE);
+		code.add(7);
+		int floydLoop = code.size();
+		List<Integer> floydDonePatches = new ArrayList<>();
+		emitConsCellCheck(code, objectArrayClass, ratioArrayClass, 7, floydDonePatches);
+		emitCdrStep(code, objectArrayClass, 7);
+		emitConsCellCheck(code, objectArrayClass, ratioArrayClass, 7, floydDonePatches);
+		emitCdrStep(code, objectArrayClass, 7);
+		emitCdrStep(code, objectArrayClass, 2);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ALOAD);
+		code.add(7);
+		int floydMissPos = code.size();
+		code.add(Opcode.IF_ACMPNE);
+		emitU2(code, 0);
+		patchBranch(code, floydMissPos, floydLoop);
+		// A cycle: walk head and the meeting point in step to the cycle-start cell.
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ASTORE_2);
+		int startLoop = code.size();
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ALOAD);
+		code.add(7);
+		int startFoundPos = code.size();
+		code.add(Opcode.IF_ACMPEQ);
+		emitU2(code, 0);
+		emitCdrStep(code, objectArrayClass, 2);
+		emitCdrStep(code, objectArrayClass, 7);
+		int startAgainPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, startAgainPos, startLoop);
+		patchBranch(code, startFoundPos, code.size());
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ASTORE);
+		code.add(5);
+		for (int patchPos : floydDonePatches) {
+			patchBranch(code, patchPos, code.size());
+		}
 		code.add(Opcode.NEW);
 		emitU2(code, stringBuilderClass.index());
 		code.add(Opcode.DUP);
@@ -898,6 +962,38 @@ final class JvmRuntimeBuilder {
 		int ifRatioTailPos = code.size();
 		code.add(Opcode.IFNE);
 		emitU2(code, 0);
+		// if (current == stop) { if (seen) { sb.append(" . ").append("#"); close; }
+		// seen = 1; } -- the chain's cycle-start cell renders once, and its second
+		// arrival becomes the improper tail marker.
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ALOAD);
+		code.add(5);
+		int notStopPos = code.size();
+		code.add(Opcode.IF_ACMPNE);
+		emitU2(code, 0);
+		code.add(Opcode.ILOAD);
+		code.add(6);
+		int stopUnseenPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		emitLdc(code, dotStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+		code.add(Opcode.ALOAD_1);
+		emitLdc(code, guard.depthMarkerStr().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+		int stopClosePos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, stopUnseenPos, code.size());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISTORE);
+		code.add(6);
+		patchBranch(code, notStopPos, code.size());
 		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, objectArrayClass.index());
@@ -953,6 +1049,7 @@ final class JvmRuntimeBuilder {
 		emitU2(code, sbAppendStr.index());
 		code.add(Opcode.POP);
 		patchBranch(code, ifNullPos, code.size());
+		patchBranch(code, stopClosePos, code.size());
 		code.add(Opcode.ALOAD_1);
 		emitLdc(code, closeParenStr.index());
 		code.add(Opcode.INVOKEVIRTUAL);
@@ -961,8 +1058,43 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, sbToString.index());
-		code.add(Opcode.ARETURN);
+		emitRenderGuardExitAndReturn(code, guard);
 		return code;
+	}
+
+	// Emits "if (local is not a cons cell) goto <patched later>": an Object[] that is
+	// not a ratio (BigInteger[]) -- the same test the render loop's chain walk applies,
+	// so Floyd's walk and the render walk agree on where a chain ends.
+	private static void emitConsCellCheck(List<Integer> code, ClassConstant objectArrayClass,
+			ClassConstant ratioArrayClass, int local, List<Integer> notConsPatches) {
+		code.add(Opcode.ALOAD);
+		code.add(local);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, objectArrayClass.index());
+		notConsPatches.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(local);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, ratioArrayClass.index());
+		notConsPatches.add(code.size());
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+	}
+
+	// Emits "local = ((Object[]) local)[1]" -- one cdr step of a chain walk. The cast
+	// cannot fail: every cell stepped through has passed emitConsCellCheck (Floyd's
+	// slow cursor and the cycle-start walk only revisit cells the fast cursor checked).
+	private static void emitCdrStep(List<Integer> code, ClassConstant objectArrayClass, int local) {
+		code.add(Opcode.ALOAD);
+		code.add(local);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE);
+		code.add(local);
 	}
 
 	/**
@@ -1199,9 +1331,9 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
 			MethodrefConstant lispToDisplayStringMethod, ConstantPool.StringConstant openParenStr,
 			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
-			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass) {
+			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass, RenderGuardRefs guard) {
 		return buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
-				lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr, dotStr, ratioArrayClass);
+				lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr, dotStr, ratioArrayClass, guard);
 	}
 
 	/**
@@ -1421,21 +1553,21 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Constant-pool references for the instance renderer's cycle guard -- the emitted
-	 * twin of {@code LispInstance.render}'s: an instance already on the current rendering
-	 * path, or the frame past {@code LispInstance.MAX_RENDER_DEPTH}, returns {@code "#"}
-	 * (CL's {@code *print-level*} cutoff marker) instead of recursing without end. The
-	 * two static fields are shared by {@code _instToString} and
-	 * {@code _instToDisplayString}: whichever escape mode a nested render runs in, the
-	 * path is one path.
+	 * Constant-pool references for the renderers' shared cycle guard -- the emitted twin
+	 * of {@code RenderCycleGuard}: a value already on the current rendering path, or the
+	 * frame past {@code RenderCycleGuard.MAX_RENDER_DEPTH}, renders as {@code "#"} (CL's
+	 * {@code *print-level*} cutoff marker) instead of recursing without end. The two
+	 * static fields are shared by both escape modes of the instance, cons and array
+	 * renderers: whichever arm a nested render runs in, the path is one path.
 	 *
-	 * @param pathField the {@code _instPath} static ({@code Object[]}, lazily allocated)
-	 * @param depthField the {@code _instDepth} static ({@code int})
+	 * @param pathField the {@code _renderPath} static ({@code Object[]}, lazily
+	 * allocated)
+	 * @param depthField the {@code _renderDepth} static ({@code int})
 	 * @param objectClass the {@code java/lang/Object} class constant (for the lazy
 	 * {@code anewarray})
 	 * @param depthMarkerStr the {@code "#"} marker
 	 */
-	record InstCycleGuard(FieldrefConstant pathField, FieldrefConstant depthField, ClassConstant objectClass,
+	record RenderGuardRefs(FieldrefConstant pathField, FieldrefConstant depthField, ClassConstant objectClass,
 			ConstantPool.StringConstant depthMarkerStr) {
 	}
 
@@ -1479,7 +1611,7 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant openClassStr, ConstantPool.StringConstant closeStructStr,
 			ConstantPool.StringConstant closeClassStr, ConstantPool.StringConstant keySepStr,
 			ConstantPool.StringConstant spaceStr, ConstantPool.StringConstant pathnameKindStr,
-			ConstantPool.@org.jspecify.annotations.Nullable StringConstant pathnamePrefixStr, InstCycleGuard guard) {
+			ConstantPool.@org.jspecify.annotations.Nullable StringConstant pathnamePrefixStr, RenderGuardRefs guard) {
 		List<Integer> code = new ArrayList<>();
 		// layout = (String[]) arr[0]
 		code.add(Opcode.ALOAD_0);
@@ -1529,82 +1661,14 @@ final class JvmRuntimeBuilder {
 			code.add(Opcode.ARETURN);
 		}
 		patchBranch(code, ifNotPathnamePos, code.size());
-		// The cycle guard, the emitted twin of LispInstance.render's (kept in step by
+		// The cycle guard (the shared RenderGuardRefs discipline, kept in step by
 		// JvmLispCompilerTest.compileAndRunPrintOfACyclicInstanceGraphIsFinite): an
 		// instance already on the current rendering path -- a scene graph's
 		// parent/children pair is the everyday case -- or the frame past the 256-frame
 		// depth cap returns "#", the *print-level* cutoff marker, instead of
-		// overflowing the stack. Identity (if_acmpne), not equals: the same instance
-		// REACHABLE twice on a finite path still renders twice. Placed AFTER the
-		// pathname arm, whose one slot is a string and cannot recurse, so only the one
-		// return below needs the pop.
-		// if (_instPath == null) _instPath = new Object[256];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.pathField().index());
-		int ifPathInitedPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		emitIntConstStatic(code, INST_RENDER_DEPTH_CAP);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, guard.objectClass().index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, guard.pathField().index());
-		patchBranch(code, ifPathInitedPos, code.size());
-		// for (i = 0; i < _instDepth; i++) if (_instPath[i] == arr) return "#";
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ISTORE_3);
-		int scanStart = code.size();
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.depthField().index());
-		int scanDonePos = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.pathField().index());
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ALOAD_0);
-		int scanMissPos = code.size();
-		code.add(Opcode.IF_ACMPNE);
-		emitU2(code, 0);
-		emitLdc(code, guard.depthMarkerStr().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, scanMissPos, code.size());
-		code.add(Opcode.IINC);
-		code.add(3);
-		code.add(1);
-		int scanLoopPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, scanLoopPos, scanStart);
-		patchBranch(code, scanDonePos, code.size());
-		// The push, over ONE read of _instDepth (i = _instDepth; if (i >= 256) return
-		// "#"; _instPath[i] = arr; _instDepth = i + 1): a served program's request
-		// threads may print concurrently over these shared statics, so every array
-		// index is bounds-checked against the SAME read that stores it -- a race can at
-		// worst misplace a "#" marker, never index out of the path array.
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.depthField().index());
-		code.add(Opcode.ISTORE_3);
-		code.add(Opcode.ILOAD_3);
-		emitIntConstStatic(code, INST_RENDER_DEPTH_CAP);
-		int underCapPos = code.size();
-		code.add(Opcode.IF_ICMPLT);
-		emitU2(code, 0);
-		emitLdc(code, guard.depthMarkerStr().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, underCapPos, code.size());
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.pathField().index());
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, guard.depthField().index());
+		// overflowing the stack. Placed AFTER the pathname arm, whose one slot is a
+		// string and cannot recurse, so only the one return below needs the pop.
+		emitRenderGuardEnter(code, guard);
 		// The opener is chosen into a local BEFORE the StringBuilder is allocated: a
 		// branch merge with an uninitialized NEW on the operand stack is exactly what
 		// the offline StackMapTable computation should never have to model.
@@ -1674,12 +1738,98 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, sbToString.index());
-		// The guard's pop, over one read like the push (i = _instDepth - 1; if (i < 0)
-		// _instDepth = 0 else { _instPath[i] = null; _instDepth = i; }). Runs under
-		// the rendered string already on the stack -- the field traffic leaves it
-		// untouched. No finally is needed: the render helpers this body calls do not
-		// throw; the clamp is for a rendering RACE (concurrent request threads), which
-		// may misplace a marker but never index out of the array.
+		emitRenderGuardExitAndReturn(code, guard);
+		return code;
+	}
+
+	/**
+	 * Emits the shared cycle guard's ENTER: lazily allocates the {@code _renderPath}
+	 * array, scans it for the value in local 0 (identity, {@code if_acmpne} -- the same
+	 * value REACHABLE twice on a finite path still renders twice), and pushes the value
+	 * over ONE read of {@code _renderDepth} -- a served program's request threads may
+	 * print concurrently over these shared statics, so every array index is
+	 * bounds-checked against the SAME read that stores it: a race can at worst misplace a
+	 * {@code "#"} marker, never index out of the path array. A value already on the path,
+	 * or the frame past the depth cap, RETURNS {@code "#"} instead of entering. Local 3
+	 * is scratch (an int); callers run this before local 3's own use begins.
+	 */
+	private static void emitRenderGuardEnter(List<Integer> code, RenderGuardRefs guard) {
+		// if (_renderPath == null) _renderPath = new Object[256];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.pathField().index());
+		int ifPathInitedPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		emitIntConstStatic(code, RENDER_DEPTH_CAP);
+		code.add(Opcode.ANEWARRAY);
+		emitU2(code, guard.objectClass().index());
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, guard.pathField().index());
+		patchBranch(code, ifPathInitedPos, code.size());
+		// for (i = 0; i < _renderDepth; i++) if (_renderPath[i] == arg) return "#";
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.ISTORE_3);
+		int scanStart = code.size();
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.depthField().index());
+		int scanDonePos = code.size();
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.pathField().index());
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ALOAD_0);
+		int scanMissPos = code.size();
+		code.add(Opcode.IF_ACMPNE);
+		emitU2(code, 0);
+		emitLdc(code, guard.depthMarkerStr().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, scanMissPos, code.size());
+		code.add(Opcode.IINC);
+		code.add(3);
+		code.add(1);
+		int scanLoopPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, scanLoopPos, scanStart);
+		patchBranch(code, scanDonePos, code.size());
+		// i = _renderDepth; if (i >= 256) return "#"; _renderPath[i] = arg;
+		// _renderDepth = i + 1;
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.depthField().index());
+		code.add(Opcode.ISTORE_3);
+		code.add(Opcode.ILOAD_3);
+		emitIntConstStatic(code, RENDER_DEPTH_CAP);
+		int underCapPos = code.size();
+		code.add(Opcode.IF_ICMPLT);
+		emitU2(code, 0);
+		emitLdc(code, guard.depthMarkerStr().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, underCapPos, code.size());
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.pathField().index());
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.AASTORE);
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.IADD);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, guard.depthField().index());
+	}
+
+	/**
+	 * Emits the shared cycle guard's EXIT under the rendered string already on the
+	 * operand stack, then the {@code areturn}: over one read like the push
+	 * ({@code i = _renderDepth - 1; if (i < 0) _renderDepth = 0 else { _renderPath[i] =
+	 * null; _renderDepth = i; }}). No finally is needed -- the render helpers the guarded
+	 * bodies call do not throw; the clamp is for a rendering RACE (concurrent request
+	 * threads), which may misplace a marker but never index out of the array. Local 3 is
+	 * scratch.
+	 */
+	private static void emitRenderGuardExitAndReturn(List<Integer> code, RenderGuardRefs guard) {
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, guard.depthField().index());
 		code.add(Opcode.ICONST_1);
@@ -1703,7 +1853,6 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.PUTSTATIC);
 		emitU2(code, guard.depthField().index());
 		code.add(Opcode.ARETURN);
-		return code;
 	}
 
 	// Stores structText or classText into local 4, depending on layout[2].equals("S").

@@ -6062,6 +6062,54 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileComponentAndRun(CYCLIC_PRINT_PROGRAM)).isEqualTo(CYCLIC_PRINT_EXPECTED);
 	}
 
+	// The cons and vector arms' cycle guard (todo-585): a cdr chain that re-enters
+	// itself prints every element once and then the improper tail " . #" (Floyd's
+	// cycle detection over the chain); a cons or vector already on the current
+	// rendering path prints as "#" -- byte-identical to the interpreter and the JVM
+	// backend (LispEvaluatorTest.evalPrintOfACyclicConsIsFinite,
+	// JvmLispCompilerTest.compileAndRunPrintOfACyclicConsIsFinite). Without it a
+	// cyclic chain streamed elements until the write trapped mid-buffer.
+	private static final String CYCLIC_CONS_PRINT_PROGRAM = """
+			(let ((x (list 1)))
+			  (setf (cdr x) x)
+			  (prin1 x)
+			  (terpri)
+			  (princ x))
+			(terpri)
+			(let ((x (list 1 2 3)))
+			  (setf (cdr (cdr (cdr x))) (cdr x))
+			  (prin1 x))
+			(terpri)
+			(let ((x (list 1 2)))
+			  (setf (car x) x)
+			  (prin1 x))
+			(terpri)
+			(let ((v (vector 1 2)))
+			  (setf (aref v 0) v)
+			  (prin1 v))
+			(terpri)
+			(let ((s (list 9)))
+			  (prin1 (list s s)))
+			""";
+
+	private static final String CYCLIC_CONS_PRINT_EXPECTED = """
+			(1 . #)
+			(1 . #)
+			(1 2 3 . #)
+			(# 2)
+			#(# 2)
+			((9) (9))""";
+
+	@Test
+	void printOfACyclicConsIsFinite() throws Exception {
+		assertThat(compileAndRun(CYCLIC_CONS_PRINT_PROGRAM)).isEqualTo(CYCLIC_CONS_PRINT_EXPECTED);
+	}
+
+	@Test
+	void printOfACyclicConsIsFiniteOnTheComponentPath() throws Exception {
+		assertThat(compileComponentAndRun(CYCLIC_CONS_PRINT_PROGRAM)).isEqualTo(CYCLIC_CONS_PRINT_EXPECTED);
+	}
+
 	@Test
 	void printCase() throws Exception {
 		// *print-case* converts the case of every SYMBOL the printer spells, through the

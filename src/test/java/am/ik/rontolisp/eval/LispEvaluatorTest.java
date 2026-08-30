@@ -4397,6 +4397,107 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalPrintOfACyclicConsIsFinite() {
+		// A cons whose cdr chain re-enters itself used to loop the renderer without end
+		// (an OutOfMemoryError, not the StackOverflowError the car cycle throws): the
+		// chain is walked iteratively, so the todo-584 path guard alone cannot see it.
+		// The chain's cycle is detected up front and the cycle-start cell's second
+		// arrival prints as " . #" -- every element exactly once, then the same "#"
+		// cutoff marker the instance guard uses.
+		assertThat(evalMulti("""
+				(let ((x (list 1)))
+				  (setf (cdr x) x)
+				  (list (prin1-to-string x) (princ-to-string x)))
+				""").print()).isEqualTo("(\"(1 . #)\" \"(1 . #)\")");
+		// A tail cycle back into the MIDDLE of the chain: the cycle-start cell is c2,
+		// so 1 2 3 print once each and the marker closes the list.
+		assertThat(evalMulti("""
+				(let ((x (list 1 2 3)))
+				  (setf (cdr (cdr (cdr x))) (cdr x))
+				  (prin1-to-string x))
+				""").print()).isEqualTo("\"(1 2 3 . #)\"");
+		// A car cycle recurses, so the shared rendering-path guard catches it: a cons
+		// already being rendered on the current path prints as "#".
+		assertThat(evalMulti("""
+				(let ((x (list 1 2)))
+				  (setf (car x) x)
+				  (prin1-to-string x))
+				""").print()).isEqualTo("\"(# 2)\"");
+		assertThat(evalMulti("""
+				(let ((x (list 1)))
+				  (setf (car x) x)
+				  (setf (cdr x) x)
+				  (prin1-to-string x))
+				""").print()).isEqualTo("\"(# . #)\"");
+		// A general vector holding itself, and one closing a cycle through a list.
+		assertThat(evalMulti("""
+				(let ((v (vector 1 2)))
+				  (setf (aref v 0) v)
+				  (prin1-to-string v))
+				""").print()).isEqualTo("\"#(# 2)\"");
+		assertThat(evalMulti("""
+				(let* ((v (vector 1)) (x (list v)))
+				  (setf (aref v 0) x)
+				  (prin1-to-string x))
+				""").print()).isEqualTo("\"(#(#))\"");
+		// Shared substructure WITHOUT a cycle is not truncated: the guard tracks the
+		// rendering PATH, not everything rendered so far, and a terminating chain has
+		// no cycle-start cell.
+		assertThat(evalMulti("""
+				(let ((s (list 9)))
+				  (prin1-to-string (list s s)))
+				""").print()).isEqualTo("\"((9) (9))\"");
+	}
+
+	@Test
+	void evalPrintOfConsesNestedPastTheDepthCapIsTruncatedNotAStackOverflow() {
+		// Nesting through cars shares the instance guard's 256-frame depth cap, so a
+		// finite tower past it prints "#" where frame 257 would open.
+		String rendered = evalMulti("""
+				(let ((x (list 0)))
+				  (dotimes (i 300)
+				    (setq x (list x)))
+				  (prin1-to-string x))
+				""").print();
+		assertThat(rendered).contains("(#)");
+		assertThat(rendered.chars().filter(c -> c == '(').count()).isEqualTo(256);
+	}
+
+	@Test
+	void evalPrintOfACyclicConsIsFiniteThroughThePrintObjectRoute() {
+		// With a print-object method defined, the printing operators render through the
+		// %print-object-str walk (todo-437); its cons and vector arms carry the same
+		// chain detection and path guard as the raw renderer, so the text is identical.
+		assertThat(evalMulti("""
+				(defclass tagged () ())
+				(defmethod print-object ((o tagged) s) (write-string "#<TAGGED>" s))
+				(let ((x (list 1 (make-instance 'tagged))))
+				  (setf (cdr (cdr x)) x)
+				  (prin1-to-string x))
+				""").print()).isEqualTo("\"(1 #<TAGGED> . #)\"");
+		assertThat(evalMulti("""
+				(defclass tagged () ())
+				(defmethod print-object ((o tagged) s) (write-string "#<TAGGED>" s))
+				(let ((v (vector (make-instance 'tagged) 2)))
+				  (setf (aref v 1) v)
+				  (prin1-to-string v))
+				""").print()).isEqualTo("\"#(#<TAGGED> #)\"");
+	}
+
+	@Test
+	void evalPrintOfACyclicConsIsFiniteUnderPrintCase() {
+		// Binding *print-case* routes printing through the %print-cased walk; its cons
+		// arm carries the same guard, so a cyclic list of symbols still prints finitely
+		// and cased.
+		assertThat(evalMulti("""
+				(let ((*print-case* :downcase))
+				  (let ((x (list 'a)))
+				    (setf (cdr x) x)
+				    (prin1-to-string x)))
+				""").print()).isEqualTo("\"(a . #)\"");
+	}
+
+	@Test
 	void evalPrintCase() {
 		// *print-case* converts the case of every SYMBOL the printer spells -- the value
 		// verified against SBCL 2.2.9. :downcase and :capitalize are the two that

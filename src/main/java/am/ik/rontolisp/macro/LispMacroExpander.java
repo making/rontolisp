@@ -24233,16 +24233,67 @@ public final class LispMacroExpander {
 	 */
 	private static final String PRINT_OBJECT_CONS_ARM = """
 			((consp %pos-x)
-			 (let ((%pos-acc "(") (%pos-cur %pos-x) (%pos-sep ""))
-			   (while (consp %pos-cur)
-			     (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
-			                                 (%print-object-str (car %pos-cur) %pos-esc)))
-			     (setq %pos-sep " ")
-			     (setq %pos-cur (cdr %pos-cur)))
-			   (unless (null %pos-cur)
-			     (setq %pos-acc (concatenate 'string %pos-acc " . "
-			                                 (%print-object-str %pos-cur %pos-esc))))
-			   (concatenate 'string %pos-acc ")")))
+			 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256))
+			     "#"
+			     (let ((%pos-acc "(") (%pos-cur %pos-x) (%pos-sep "")
+			           (%pos-stop (%pos-chain-stop %pos-x)) (%pos-seen nil) (%pos-done nil)
+			           (%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1)))
+			       (while (and (consp %pos-cur) (not %pos-done))
+			         (if (and %pos-seen (eq %pos-cur %pos-stop))
+			             (setq %pos-done t)
+			             (progn
+			               (when (eq %pos-cur %pos-stop)
+			                 (setq %pos-seen t))
+			               (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
+			                                           (%pos-walk (car %pos-cur) %pos-esc %pos-sub %pos-subd)))
+			               (setq %pos-sep " ")
+			               (setq %pos-cur (cdr %pos-cur)))))
+			       (if %pos-done
+			           (concatenate 'string %pos-acc " . #)")
+			           (progn
+			             (unless (null %pos-cur)
+			               (setq %pos-acc (concatenate 'string %pos-acc " . "
+			                                           (%pos-walk %pos-cur %pos-esc %pos-sub %pos-subd))))
+			             (concatenate 'string %pos-acc ")"))))))
+			""";
+
+	/**
+	 * The walk's guard helpers, twins of the raw renderers' ({@code RenderCycleGuard} and
+	 * the chain scan in {@code LispCons}): the walk must reproduce the raw text byte for
+	 * byte, a cyclic value included. {@code %pos-on-path} is the identity scan over the
+	 * rendering path the walk threads through itself as an argument;
+	 * {@code %pos-chain-stop} is Floyd's cycle detection over a cdr chain, answering the
+	 * cell where the cycle begins (or nil), whose SECOND arrival the cons arm prints as
+	 * the {@code " . #"} improper tail. The depth literal (256) is
+	 * {@code RenderCycleGuard.MAX_RENDER_DEPTH}, spelled inline because {@code macro} may
+	 * reach the root package for AST types only.
+	 */
+	private static final String PRINT_OBJECT_GUARD_HELPERS = """
+			(defun %pos-on-path (%pos-x %pos-path)
+			  (let ((%pos-c %pos-path) (%pos-hit nil))
+			    (while (consp %pos-c)
+			      (when (eq (car %pos-c) %pos-x)
+			        (setq %pos-hit t))
+			      (setq %pos-c (cdr %pos-c)))
+			    %pos-hit))
+			(defun %pos-chain-stop (%pos-x)
+			  (let ((%pos-slow %pos-x) (%pos-fast %pos-x) (%pos-hit nil) (%pos-end nil))
+			    (while (and (not %pos-hit) (not %pos-end))
+			      (if (and (consp %pos-fast) (consp (cdr %pos-fast)))
+			          (progn
+			            (setq %pos-fast (cdr (cdr %pos-fast)))
+			            (setq %pos-slow (cdr %pos-slow))
+			            (when (eq %pos-slow %pos-fast)
+			              (setq %pos-hit t)))
+			          (setq %pos-end t)))
+			    (if %pos-hit
+			        (progn
+			          (setq %pos-slow %pos-x)
+			          (while (not (eq %pos-slow %pos-fast))
+			            (setq %pos-slow (cdr %pos-slow))
+			            (setq %pos-fast (cdr %pos-fast)))
+			          %pos-slow)
+			        nil)))
 			""";
 
 	/**
@@ -24263,13 +24314,16 @@ public final class LispMacroExpander {
 			((and (vectorp %pos-x) (not (stringp %pos-x)) (eql (array-rank %pos-x) 1)
 			      (not (equal (array-element-type %pos-x) 'single-float))
 			      (not (equal (array-element-type %pos-x) 'double-float)))
-			 (let ((%pos-acc "#(") (%pos-i 0) (%pos-n (length %pos-x)) (%pos-sep ""))
-			   (while (< %pos-i %pos-n)
-			     (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
-			                                 (%print-object-str (aref %pos-x %pos-i) %pos-esc)))
-			     (setq %pos-sep " ")
-			     (setq %pos-i (+ %pos-i 1)))
-			   (concatenate 'string %pos-acc ")")))
+			 (if (or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256))
+			     "#"
+			     (let ((%pos-acc "#(") (%pos-i 0) (%pos-n (length %pos-x)) (%pos-sep "")
+			           (%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1)))
+			       (while (< %pos-i %pos-n)
+			         (setq %pos-acc (concatenate 'string %pos-acc %pos-sep
+			                                     (%pos-walk (aref %pos-x %pos-i) %pos-esc %pos-sub %pos-subd)))
+			         (setq %pos-sep " ")
+			         (setq %pos-i (+ %pos-i 1)))
+			       (concatenate 'string %pos-acc ")"))))
 			""";
 
 	/**
@@ -24295,8 +24349,10 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> printObjectStrDefuns(ClosRegistry closRegistry, boolean printCase,
 			boolean walkVectors) {
-		String source = "(defun %print-object-str (%pos-x %pos-esc) (cond " + PRINT_OBJECT_CONS_ARM
-				+ (walkVectors ? PRINT_OBJECT_VECTOR_ARM : "") + "(t (%print-object-leaf %pos-x %pos-esc))))";
+		String source = "(defun %print-object-str (%pos-x %pos-esc) (%pos-walk %pos-x %pos-esc nil 0))\n"
+				+ "(defun %pos-walk (%pos-x %pos-esc %pos-path %pos-depth) (cond " + PRINT_OBJECT_CONS_ARM
+				+ (walkVectors ? PRINT_OBJECT_VECTOR_ARM : "") + "(t (%print-object-leaf %pos-x %pos-esc))))\n"
+				+ PRINT_OBJECT_GUARD_HELPERS;
 		List<LispVal> walker = LispReader.readAllFromString(source, Features.INTERPRETER);
 		LispSymbol value = new LispSymbol("__pox");
 		LispSymbol escape = new LispSymbol("__poe");

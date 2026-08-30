@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispEquality;
-import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.RenderCycleGuard;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -1027,16 +1027,16 @@ final class WasmRuntimeBuilder {
 	 * @param st the module string table, still open for appends
 	 * @param elementFunc the per-slot-value renderer
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
-	 * @param instPathGlobalIndex the rendering-path global (a lazily allocated
+	 * @param renderPathGlobalIndex the rendering-path global (a lazily allocated
 	 * {@code TYPE_HASH_BUCKETS} array behind a {@code (mut (ref null eq))})
-	 * @param instDepthGlobalIndex the rendering-depth global (a {@code (mut i32)})
+	 * @param renderDepthGlobalIndex the rendering-depth global (a {@code (mut i32)})
 	 * @param addrSlot an i32 local holding the layout record address
 	 * @param idxSlot an i32 local holding the slot loop counter (also the guard's scan
 	 * counter -- the guard runs before the slot loop initializes it)
 	 * @param cntSlot an i32 local holding the slot count
 	 */
 	private static void emitPrintInstance(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc,
-			int instanceTypeIndex, int instPathGlobalIndex, int instDepthGlobalIndex, int addrSlot, int idxSlot,
+			int instanceTypeIndex, int renderPathGlobalIndex, int renderDepthGlobalIndex, int addrSlot, int idxSlot,
 			int cntSlot) {
 		if (instanceTypeIndex < 0) {
 			return;
@@ -1091,87 +1091,8 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(elementFunc);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// The cycle guard (see the method comment). Lazily allocate the path array:
-		// if (path == null) path = array.new_default $buckets CAP
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instPathGlobalIndex);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(LispInstance.MAX_RENDER_DEPTH);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.SET_GLOBAL);
-		w.writeUnsignedLeb128(instPathGlobalIndex);
-		w.write(Instruction.END);
-		// for (i = 0; i < depth; i++) if (path[i] == arg) { write "#"; return; }
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(idxSlot);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(idxSlot);
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instDepthGlobalIndex);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.BR_IF);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instPathGlobalIndex);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(idxSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.REF_EQ);
-		w.write(Instruction.IF, 0x40);
-		emitWriteString(w, depthMarker);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(idxSlot);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(idxSlot);
-		w.write(Instruction.BR);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		// if (depth >= CAP) { write "#"; return; }
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instDepthGlobalIndex);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(LispInstance.MAX_RENDER_DEPTH);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, 0x40);
-		emitWriteString(w, depthMarker);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		// path[depth] = arg; depth++
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instPathGlobalIndex);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instDepthGlobalIndex);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instDepthGlobalIndex);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_GLOBAL);
-		w.writeUnsignedLeb128(instDepthGlobalIndex);
+		// The cycle guard (see the method comment).
+		emitRenderGuardEnter(w, depthMarker, renderPathGlobalIndex, renderDepthGlobalIndex, idxSlot);
 		// kind == CLASS ? "#<" : "#S("
 		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_KIND);
 		w.write(Instruction.IF, 0x40);
@@ -1244,25 +1165,318 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 		// The guard's pop: path[--depth] = null. No unwind protection is needed --
 		// nothing on this path throws.
+		emitRenderGuardExit(w, renderPathGlobalIndex, renderDepthGlobalIndex);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Emits the shared cycle guard's ENTER (the wasm twin of {@code RenderCycleGuard}):
+	 * lazily allocates the rendering-path array behind {@code pathGlobal}, scans it for
+	 * the value in local 0 (identity, {@code ref.eq} -- the same value REACHABLE twice on
+	 * a finite path still renders twice), checks the depth cap, and pushes the value. A
+	 * value already on the path, or the frame past
+	 * {@code RenderCycleGuard.MAX_RENDER_DEPTH}, writes {@code #} (the
+	 * {@code *print-level*} cutoff marker) and RETURNS instead of entering. Shared by the
+	 * instance, cons and array arms of both printers -- one path, one mechanism.
+	 * @param scanSlot an i32 local free for the scan counter
+	 */
+	private static void emitRenderGuardEnter(WasmWriter w, WasmLispCompiler.StringTable.StringEntry depthMarker,
+			int pathGlobalIndex, int depthGlobalIndex, int scanSlot) {
+		// if (path == null) path = array.new_default $buckets CAP
 		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instDepthGlobalIndex);
+		w.writeUnsignedLeb128(pathGlobalIndex);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(RenderCycleGuard.MAX_RENDER_DEPTH);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(pathGlobalIndex);
+		w.write(Instruction.END);
+		// for (i = 0; i < depth; i++) if (path[i] == arg) { write "#"; return; }
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(scanSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(scanSlot);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(pathGlobalIndex);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(scanSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.REF_EQ);
+		w.write(Instruction.IF, 0x40);
+		emitWriteString(w, depthMarker);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(scanSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(scanSlot);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// if (depth >= CAP) { write "#"; return; }
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(RenderCycleGuard.MAX_RENDER_DEPTH);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		emitWriteString(w, depthMarker);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// path[depth] = arg; depth++
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(pathGlobalIndex);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
+	}
+
+	/**
+	 * Emits the printers' cons arm -- the tail of {@code print_val}/{@code princ_val},
+	 * shared so the two escape modes cannot drift: the value in local 0 is rendered as a
+	 * list, elements through {@code elementFunc}. Two cycle defenses, the same discipline
+	 * as the interpreter's {@code LispCons} renderer and the JVM's emitted
+	 * {@code _consToString} (kept in step by
+	 * {@code WasmLispCompilerIntegrationTest.printOfACyclicConsIsFinite}): the chain HEAD
+	 * opens one frame on the shared rendering path ({@link #emitRenderGuardEnter}), so a
+	 * car reaching back to a list still being rendered -- or the frame past the depth cap
+	 * -- writes {@code #}; and the cdr chain, walked iteratively, is pre-scanned with
+	 * Floyd's cycle detection, the second arrival at the cycle-start cell writing the
+	 * improper tail {@code " . #"} -- every element exactly once, then the marker. Emits
+	 * no trailing {@code Instruction.END}: the caller closes the function body.
+	 * @param elementFunc the per-element printer ({@code FUNC_PRINT_VAL} /
+	 * {@code FUNC_PRINC_VAL})
+	 * @param stopSlot a (ref null eq) local for the chain's cycle-start cell (local 1
+	 * doubles as Floyd's slow cursor before the render loop claims it as the chain
+	 * cursor)
+	 * @param fastSlot a (ref null eq) local for Floyd's fast cursor
+	 * @param seenSlot an i32 local for the cycle-start cell's seen flag
+	 * @param scanSlot an i32 local for the guard's path scan
+	 */
+	private static void emitPrintConsList(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc,
+			int pathGlobalIndex, int depthGlobalIndex, int stopSlot, int fastSlot, int seenSlot, int scanSlot) {
+		WasmLispCompiler.StringTable.StringEntry depthMarker = st.addString("#");
+		emitRenderGuardEnter(w, depthMarker, pathGlobalIndex, depthGlobalIndex, scanSlot);
+		// Floyd's cycle detection over the cdr chain: stop = the cell where the cycle
+		// begins, or null for a terminating chain. slow rides local 1 (the render
+		// loop's cursor, still unclaimed), fast rides fastSlot.
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(stopSlot);
+		getLocal(w, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(fastSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		refTest(w, fastSlot, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		consField(w, fastSlot, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(fastSlot);
+		refTest(w, fastSlot, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		consField(w, fastSlot, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(fastSlot);
+		consField(w, 1, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, 1);
+		getLocal(w, fastSlot);
+		w.write(Instruction.REF_EQ);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		// The cursors met: walk head and meeting point in step to the cycle start.
+		getLocal(w, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, 1);
+		getLocal(w, fastSlot);
+		w.write(Instruction.REF_EQ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		consField(w, 1, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		consField(w, fastSlot, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(fastSlot);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		getLocal(w, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(stopSlot);
+		w.write(Instruction.END);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(seenSlot);
+
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.lparen.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.lparen.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+
+		getLocal(w, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(2);
+
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+
+		getLocal(w, 1);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+
+		refTest(w, 1, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.dot.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.dot.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		getLocal(w, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(elementFunc);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+
+		// The cycle-start cell: rendered once, its second arrival closes the list as
+		// the improper tail " . #".
+		getLocal(w, 1);
+		getLocal(w, stopSlot);
+		w.write(Instruction.REF_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, seenSlot);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.dot.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.dot.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		emitWriteString(w, depthMarker);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(3);
+		w.write(Instruction.END);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(seenSlot);
+		w.write(Instruction.END);
+
+		getLocal(w, 2);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.space.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.space.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.END);
+
+		consField(w, 1, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(elementFunc);
+
+		consField(w, 1, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(1);
+
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(2);
+
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.rparen.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.rparen.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		emitRenderGuardExit(w, pathGlobalIndex, depthGlobalIndex);
+	}
+
+	/** Emits the shared cycle guard's EXIT: {@code path[--depth] = null}. */
+	private static void emitRenderGuardExit(WasmWriter w, int pathGlobalIndex, int depthGlobalIndex) {
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(depthGlobalIndex);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.SET_GLOBAL);
-		w.writeUnsignedLeb128(instDepthGlobalIndex);
+		w.writeUnsignedLeb128(depthGlobalIndex);
 		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instPathGlobalIndex);
+		w.writeUnsignedLeb128(pathGlobalIndex);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(instDepthGlobalIndex);
+		w.writeUnsignedLeb128(depthGlobalIndex);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
 	}
 
 	// Pushes the i32 word at addrSlot + offset out of a layout record.
@@ -2500,7 +2714,7 @@ final class WasmRuntimeBuilder {
 	 * cons struct (list).
 	 */
 	static byte[] buildPrintValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
-			int p1StreamTypeIndex, int instanceTypeIndex, int instPathGlobalIndex, int instDepthGlobalIndex) {
+			int p1StreamTypeIndex, int instanceTypeIndex, int renderPathGlobalIndex, int renderDepthGlobalIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -2701,101 +2915,16 @@ final class WasmRuntimeBuilder {
 		emitPrintStream(w, st, p1StreamTypeIndex);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINT_VAL, instanceTypeIndex, instPathGlobalIndex,
-				instDepthGlobalIndex, 5, 6, 7);
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, simd);
+		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINT_VAL, instanceTypeIndex, renderPathGlobalIndex,
+				renderDepthGlobalIndex, 5, 6, 7);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, simd,
+				renderPathGlobalIndex, renderDepthGlobalIndex);
 
-		// Must be cons struct - print as list
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.lparen.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.lparen.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(2);
-
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.BR_IF, 1);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.dot.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.dot.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_VAL);
-		w.write(Instruction.BR, 2);
-		w.write(Instruction.END);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(2);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.space.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.space.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-		w.write(Instruction.END);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_VAL);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1);
-
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(2);
-
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.rparen.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.rparen.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		// Must be cons struct - print as list (the shared cons arm, with the cycle
+		// guard and the cdr-chain cycle detection; ref locals 3-4 and i32 locals 5-6
+		// are the array printer's, free while the cons arm runs).
+		emitPrintConsList(w, st, WasmLispCompiler.FUNC_PRINT_VAL, renderPathGlobalIndex, renderDepthGlobalIndex, 3, 4,
+				5, 6);
 
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -2806,7 +2935,7 @@ final class WasmRuntimeBuilder {
 	 * strings and uses FUNC_PRINC_VAL for recursive cons printing.
 	 */
 	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
-			int p1StreamTypeIndex, int instanceTypeIndex, int instPathGlobalIndex, int instDepthGlobalIndex) {
+			int p1StreamTypeIndex, int instanceTypeIndex, int renderPathGlobalIndex, int renderDepthGlobalIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -3064,101 +3193,15 @@ final class WasmRuntimeBuilder {
 		emitPrintStream(w, st, p1StreamTypeIndex);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINC_VAL, instanceTypeIndex, instPathGlobalIndex,
-				instDepthGlobalIndex, 6, 7, 8);
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, simd);
+		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINC_VAL, instanceTypeIndex, renderPathGlobalIndex,
+				renderDepthGlobalIndex, 6, 7, 8);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, simd,
+				renderPathGlobalIndex, renderDepthGlobalIndex);
 
-		// Must be cons struct - print as list
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.lparen.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.lparen.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(2);
-
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.BR_IF, 1);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.dot.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.dot.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_VAL);
-		w.write(Instruction.BR, 2);
-		w.write(Instruction.END);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(2);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.space.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.space.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-		w.write(Instruction.END);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_VAL);
-
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(1);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1);
-
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(2);
-
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.rparen.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.rparen.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		// Must be cons struct - print as list (the shared cons arm; ref locals 4-5 and
+		// i32 locals 6-7 are the array printer's, free while the cons arm runs).
+		emitPrintConsList(w, st, WasmLispCompiler.FUNC_PRINC_VAL, renderPathGlobalIndex, renderDepthGlobalIndex, 4, 5,
+				6, 7);
 
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -3561,7 +3604,7 @@ final class WasmRuntimeBuilder {
 	// = i32 locals.
 	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
 			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot, int baseSlot,
-			int packedSlot, int singleSlot, boolean simd) {
+			int packedSlot, int singleSlot, boolean simd, int renderPathGlobalIndex, int renderDepthGlobalIndex) {
 		// `simd` selects the --simd lowering: the packed data is a TYPE_VBLOCK of v128
 		// lane groups, read one element at a time through the _v_get helper, not a
 		// TYPE_F64ARR/TYPE_F32ARR GC array.
@@ -3796,6 +3839,15 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.IF, 0x40);
+
+		// The cycle guard (the shared discipline, see emitRenderGuardEnter): an array
+		// already on the current rendering path -- one holding itself, directly or
+		// through a list -- or the frame past the depth cap writes "#" instead of
+		// recursing without end. A packed array arrives here converted to a FRESH
+		// general cell in param 0, so it opens one frame and never matches the path --
+		// the same one frame the interpreter's packed renderers and the JVM's
+		// _arrayToString open. idxSlot is free until the render loop below claims it.
+		emitRenderGuardEnter(w, st.addString("#"), renderPathGlobalIndex, renderDepthGlobalIndex, idxSlot);
 
 		// dims = header.car; dataSlot temporarily holds the (meta . data) inner cons
 		cellHeader(w);
@@ -4060,6 +4112,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // block
 
 		writeStr(w, st.rparen);
+		emitRenderGuardExit(w, renderPathGlobalIndex, renderDepthGlobalIndex);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // is-array if
 

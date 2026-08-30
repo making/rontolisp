@@ -2327,6 +2327,18 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
 		// the
+		// The renderers' cycle-guard statics (_renderPath/_renderDepth), shared by the
+		// two escape modes AND the three guarded arms (instance, cons, array): the cons
+		// renderer is unconditional, so the pair is declared in every class -- one
+		// path, one mechanism, the emitted twin of RenderCycleGuard.
+		final Utf8Constant renderPathFieldName = cp.addUtf8("_renderPath");
+		final Utf8Constant renderPathFieldDesc = cp.addUtf8("[Ljava/lang/Object;");
+		final Utf8Constant renderDepthFieldName = cp.addUtf8("_renderDepth");
+		final Utf8Constant renderDepthFieldDesc = cp.addUtf8("I");
+		final JvmRuntimeBuilder.RenderGuardRefs renderGuard = new JvmRuntimeBuilder.RenderGuardRefs(
+				cp.addFieldref(thisClass, cp.addNameAndType(renderPathFieldName, renderPathFieldDesc)),
+				cp.addFieldref(thisClass, cp.addNameAndType(renderDepthFieldName, renderDepthFieldDesc)),
+				cp.addClass(cp.addUtf8("java/lang/Object")), cp.addString("#"));
 		// two array-printing helpers (_arrayToString / _arrayToDisplayString) so a
 		// literal
 		// or make-array result prints as #(...) / #2A(...).
@@ -2335,7 +2347,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(
 					JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass));
 			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
-					thisClass));
+					thisClass, renderGuard));
 			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and
 			// delegate to the general _array* helpers above for a non-packed array, so
 			// they are emitted alongside (and depend on) them.
@@ -2483,24 +2495,6 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addMethodref(thisClass,
 						cp.addNameAndType(Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf)))
 				: null;
-		// The instance renderer's cycle-guard statics (_instPath/_instDepth), shared by
-		// the two escape modes; the fields are declared below only when the program can
-		// build an instance, so every instance-free class is unchanged.
-		final Utf8Constant instPathFieldName = usesInstances ? cp.addUtf8("_instPath") : null;
-		final Utf8Constant instPathFieldDesc = usesInstances ? cp.addUtf8("[Ljava/lang/Object;") : null;
-		final Utf8Constant instDepthFieldName = usesInstances ? cp.addUtf8("_instDepth") : null;
-		final Utf8Constant instDepthFieldDesc = usesInstances ? cp.addUtf8("I") : null;
-		final JvmRuntimeBuilder.@Nullable InstCycleGuard instCycleGuard = usesInstances
-				? new JvmRuntimeBuilder.InstCycleGuard(
-						cp.addFieldref(thisClass,
-								cp.addNameAndType(Objects.requireNonNull(instPathFieldName),
-										Objects.requireNonNull(instPathFieldDesc))),
-						cp.addFieldref(thisClass,
-								cp.addNameAndType(Objects.requireNonNull(instDepthFieldName),
-										Objects.requireNonNull(instDepthFieldDesc))),
-						cp.addClass(cp.addUtf8("java/lang/Object")), cp.addString("#"))
-				: null;
-
 		// _strEsc: the *print-escape* escaping the readable renderer applies to a string
 		// value's content (todo 216). Always emitted -- _lispToString is unconditional.
 		Utf8Constant strEscName = cp.addUtf8("_strEsc");
@@ -2532,28 +2526,28 @@ public final class JvmLispCompiler implements LispCompiler {
 				ffiPrint, futurePrint, packedPrint, packedIntPrint, instPrint, strEscMethod, hashPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
-				ratioArrayClass);
+				ratioArrayClass, renderGuard);
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToDisplayStringMethod, nilStr, funcStr, stringCharAt, stringLength, stringSubstring,
 				stringLastIndexOf, ratioArrayClass, stringConcat, slashStr, charBoxClass, characterToString,
 				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, objcPrint, ffiPrint,
 				futurePrint, packedPrint, packedIntPrint, instPrint, hashPrint);
-		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
-				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
-				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
-				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), cp.addString("#P"),
-				Objects.requireNonNull(instCycleGuard)) : List.of();
-		List<Integer> instDisplayCode = usesInstances
+		List<Integer> instCode = usesInstances
 				? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass, mainCtx.layoutPool.stringArrayClass(cp),
-						stringBuilderClass, sbInitStr, sbAppendStr, sbToString, objectEquals, lispToDisplayStringMethod,
+						stringBuilderClass, sbInitStr, sbAppendStr, sbToString, objectEquals, lispToStringMethod,
 						cp.addString("S"), cp.addString("#S("), cp.addString("#<"), closeParenStr, cp.addString(">"),
-						cp.addString(" :"), spaceStr, cp.addString("P"), null, Objects.requireNonNull(instCycleGuard))
+						cp.addString(" :"), spaceStr, cp.addString("P"), cp.addString("#P"), renderGuard)
+				: List.of();
+		List<Integer> instDisplayCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
+				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
+				objectEquals, lispToDisplayStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
+				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), null, renderGuard)
 				: List.of();
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
-				dotStr, ratioArrayClass);
+				dotStr, ratioArrayClass, renderGuard);
 		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(objectArrayClass, objectClass, appendMethod);
 		ConstantPool.StringConstant quoteStr = cp.addString("\"");
 		List<Integer> readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
@@ -2900,22 +2894,21 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(java.util.Objects.requireNonNull(streamPathsFieldDesc))
 						.writeU2(0));
 				}
-				if (usesInstances) {
-					// The instance renderer's cycle guard: the current rendering path
-					// (lazily allocated) and its depth, shared by _instToString and
-					// _instToDisplayString. Not volatile: the guard's emitted reads are
-					// bounds-checked so a rendering race between request threads can at
-					// worst misplace a "#" marker; the interpreter twin is a
-					// ThreadLocal.
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(java.util.Objects.requireNonNull(instPathFieldName))
-						.writeU2(java.util.Objects.requireNonNull(instPathFieldDesc))
-						.writeU2(0));
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(java.util.Objects.requireNonNull(instDepthFieldName))
-						.writeU2(java.util.Objects.requireNonNull(instDepthFieldDesc))
-						.writeU2(0));
-				}
+				// The renderers' cycle guard: the current rendering path (lazily
+				// allocated) and its depth, shared by the two escape modes of the
+				// instance, cons and array renderers. Unconditional -- the cons
+				// renderer is in every class. Not volatile: the guard's emitted reads
+				// are bounds-checked so a rendering race between request threads can at
+				// worst misplace a "#" marker; the interpreter twin is a ThreadLocal
+				// (RenderCycleGuard).
+				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+					.writeU2(renderPathFieldName)
+					.writeU2(renderPathFieldDesc)
+					.writeU2(0));
+				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+					.writeU2(renderDepthFieldName)
+					.writeU2(renderDepthFieldDesc)
+					.writeU2(0));
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 					.writeU2(colFieldName)
 					.writeU2(colFieldDesc)
@@ -3431,8 +3424,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName, consToStringDescUtf,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(3)
-								.writeU2(5)
+							attr.writeU2(4)
+								.writeU2(8)
 								.writeCode((Object[]) ctsCode.toArray(new Integer[0]))
 								.writeU2(0)
 								.writeU2(0);
@@ -3881,8 +3874,8 @@ public final class JvmLispCompiler implements LispCompiler {
 						})));
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
 						consToStringDescUtf, method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(3)
-								.writeU2(5)
+							attr.writeU2(4)
+								.writeU2(8)
 								.writeCode((Object[]) ctdsCode.toArray(new Integer[0]))
 								.writeU2(0)
 								.writeU2(0);

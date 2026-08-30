@@ -168,12 +168,28 @@ public sealed interface LispFloatArray extends LispVal permits LispDoubleFloatAr
 
 	@Override
 	default String print() {
-		return LispArray.renderArrayData(dims(), totalSize(), openPrefix(), this::elementText);
+		return renderGuarded();
 	}
 
 	@Override
 	default String display() {
-		return LispArray.renderArrayData(dims(), totalSize(), openPrefix(), this::elementText);
+		return renderGuarded();
+	}
+
+	// A packed float array holds no references, so it cannot close a cycle -- but it
+	// still opens one render frame (RenderCycleGuard) so the depth cap truncates at the
+	// same frame on every backend: the JVM backend renders a packed array through the
+	// guarded _arrayToString, and the WASM printers' array arm is guarded as a whole.
+	private String renderGuarded() {
+		if (!RenderCycleGuard.enter(this)) {
+			return "#";
+		}
+		try {
+			return LispArray.renderArrayData(dims(), totalSize(), openPrefix(), this::elementText);
+		}
+		finally {
+			RenderCycleGuard.exit();
+		}
 	}
 
 }

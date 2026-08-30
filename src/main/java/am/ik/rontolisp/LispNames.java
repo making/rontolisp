@@ -7122,6 +7122,28 @@ public final class LispNames {
 	public static final String PRINT_CASE_FOLD_INTERNAL = "%PRINT-CASE-FOLD";
 
 	/**
+	 * The internal {@code (%pc-walk x escape path depth)} helper: the recursive half of
+	 * {@link #PRINT_CASED_INTERNAL}, threading the rendering path and depth of the shared
+	 * cycle guard ({@code RenderCycleGuard}) through itself so a cyclic cons or vector
+	 * prints finitely -- the twin of the {@code %print-object-str} walk's
+	 * {@code %pos-walk}.
+	 */
+	public static final String PRINT_CASED_WALK_INTERNAL = "%PC-WALK";
+
+	/**
+	 * The internal {@code (%pc-on-path x path)} helper: the identity scan over
+	 * {@link #PRINT_CASED_WALK_INTERNAL}'s rendering path.
+	 */
+	public static final String PRINT_CASED_ON_PATH_INTERNAL = "%PC-ON-PATH";
+
+	/**
+	 * The internal {@code (%pc-chain-stop x)} helper: Floyd's cycle detection over a cdr
+	 * chain for {@link #PRINT_CASED_WALK_INTERNAL} -- the cell where the cycle begins, or
+	 * nil for a terminating chain.
+	 */
+	public static final String PRINT_CASED_CHAIN_STOP_INTERNAL = "%PC-CHAIN-STOP";
+
+	/**
 	 * The {@code type-error-datum} condition reader (prelude): the {@code datum} slot of
 	 * a {@code type-error}. Its {@code expected-type} twin is
 	 * {@link #TYPE_ERROR_EXPECTED_TYPE}.

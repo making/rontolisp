@@ -9,6 +9,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.RenderCycleGuard;
 
 /**
  * Builds the JVM bytecode for the array runtime helpers. An array is represented at
@@ -1775,7 +1776,8 @@ final class JvmArrayRuntimeBuilder {
 	 * @return the two helper methods
 	 */
 	static List<ArrayMethod> buildToStringMethods(ConstantPool cp, MethodrefConstant lispToString,
-			MethodrefConstant lispToDisplayString, ClassConstant selfClass) {
+			MethodrefConstant lispToDisplayString, ClassConstant selfClass,
+			JvmRuntimeBuilder.RenderGuardRefs renderGuard) {
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
@@ -1799,12 +1801,12 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
 
 		List<ArrayMethod> methods = new ArrayList<>();
-		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 5, 11,
+		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 5, 12,
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
-						sbAppend, sbToString, stringValueOfInt, lispToString, rmGet)));
-		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 5, 11,
+						sbAppend, sbToString, stringValueOfInt, lispToString, rmGet, renderGuard)));
+		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 5, 12,
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
-						sbAppend, sbToString, stringValueOfInt, lispToDisplayString, rmGet)));
+						sbAppend, sbToString, stringValueOfInt, lispToDisplayString, rmGet, renderGuard)));
 		return methods;
 	}
 
@@ -1819,9 +1821,62 @@ final class JvmArrayRuntimeBuilder {
 			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant alSize,
 			MethodrefConstant longIntValue, MethodrefConstant sbInit, MethodrefConstant sbAppend,
 			MethodrefConstant sbToString, MethodrefConstant stringValueOfInt, MethodrefConstant elementFormat,
-			MethodrefConstant rmGet) {
-		int arr = 0, list = 1, sb = 2, n = 3, dimsArr = 4, k = 5, j = 6, stride = 7, m = 8, rank = 9, header = 10;
+			MethodrefConstant rmGet, JvmRuntimeBuilder.RenderGuardRefs renderGuard) {
+		int arr = 0, list = 1, sb = 2, n = 3, dimsArr = 4, k = 5, j = 6, stride = 7, m = 8, rank = 9, header = 10,
+				guardScratch = 11;
 		JvmAsm a = new JvmAsm();
+		// The cycle guard (the shared RenderGuardRefs discipline over the
+		// _renderPath/_renderDepth statics, kept in step by
+		// JvmLispCompilerTest.compileAndRunPrintOfACyclicConsIsFinite): an array
+		// already on the current rendering path -- an array holding itself, directly or
+		// through a list -- or the frame past the 256-frame depth cap renders as "#",
+		// the *print-level* cutoff marker. A packed array routes here through its
+		// boxed-general conversion, so it opens the same one frame the interpreter's
+		// packed renderers open.
+		int pathInited = a.label();
+		a.getstatic(renderGuard.pathField());
+		a.branch(Opcode.IFNONNULL, pathInited);
+		a.iconst(RenderCycleGuard.MAX_RENDER_DEPTH);
+		a.anewarray(renderGuard.objectClass());
+		a.putstatic(renderGuard.pathField());
+		a.bind(pathInited);
+		a.iconst(0);
+		a.istore(guardScratch);
+		int scanLoop = a.label();
+		int scanDone = a.label();
+		int scanMiss = a.label();
+		a.bind(scanLoop);
+		a.iload(guardScratch);
+		a.getstatic(renderGuard.depthField());
+		a.branch(Opcode.IF_ICMPGE, scanDone);
+		a.getstatic(renderGuard.pathField());
+		a.iload(guardScratch);
+		a.aaload();
+		a.aload(arr);
+		a.branch(Opcode.IF_ACMPNE, scanMiss);
+		a.ldcString(renderGuard.depthMarkerStr());
+		a.areturn();
+		a.bind(scanMiss);
+		a.iinc(guardScratch, 1);
+		a.branch(Opcode.GOTO, scanLoop);
+		a.bind(scanDone);
+		int underCap = a.label();
+		a.getstatic(renderGuard.depthField());
+		a.istore(guardScratch);
+		a.iload(guardScratch);
+		a.iconst(RenderCycleGuard.MAX_RENDER_DEPTH);
+		a.branch(Opcode.IF_ICMPLT, underCap);
+		a.ldcString(renderGuard.depthMarkerStr());
+		a.areturn();
+		a.bind(underCap);
+		a.getstatic(renderGuard.pathField());
+		a.iload(guardScratch);
+		a.aload(arr);
+		a.aastore();
+		a.iload(guardScratch);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.putstatic(renderGuard.depthField());
 		// list = (ArrayList) arr; header = (Object[]) list.get(0)
 		a.aload(arr);
 		a.checkcast(arrayListClass);
@@ -1953,10 +2008,29 @@ final class JvmArrayRuntimeBuilder {
 		a.iinc(k, 1);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(end);
-		// sb.append(")"); return sb.toString()
+		// sb.append(")"); return sb.toString() -- under the guard's pop, the twin of
+		// JvmRuntimeBuilder.emitRenderGuardExitAndReturn: over one read, clamped so a
+		// rendering race between request threads can at worst misplace a marker.
 		appendStr(a, sb, sbAppend, cp.addString(")"));
 		a.aload(sb);
 		a.invokevirtual(sbToString);
+		int popClamp = a.label();
+		a.getstatic(renderGuard.depthField());
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.istore(guardScratch);
+		a.iload(guardScratch);
+		a.branch(Opcode.IFLT, popClamp);
+		a.getstatic(renderGuard.pathField());
+		a.iload(guardScratch);
+		a.op(Opcode.ACONST_NULL);
+		a.aastore();
+		a.iload(guardScratch);
+		a.putstatic(renderGuard.depthField());
+		a.areturn();
+		a.bind(popClamp);
+		a.iconst(0);
+		a.putstatic(renderGuard.depthField());
 		a.areturn();
 		return a.finish();
 	}
