@@ -485,6 +485,61 @@ cases:
       3
       "bnn"
       1
+  - name: search-and-mismatch-across-representations
+    source: |
+      (print (search "bc" "abcd"))
+      (print (search "x" "abcd"))
+      (print (search "" "abcd"))
+      (print (search "ab" "ab-ab" :from-end t))
+      (print (search "" "abcd" :from-end t))
+      (print (search "xxabyy" "ab-ab" :start1 2 :end1 4 :start2 1 :end2 5 :from-end t))
+      (print (search '(3 4) '(1 2 3 4 5)))
+      (print (search "bc" (coerce "abcd" 'vector)))
+      (print (search '(#\b #\c) "abcd"))
+      (print (search nil "abcd"))
+      (print (search #(2 3) (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4))))
+      (print (search '(2.0d0) (make-array 3 :element-type 'double-float :initial-contents '(1d0 2d0 3d0))))
+      (let ((sm-s (make-array 6 :element-type 'character :fill-pointer 3
+                                :initial-contents '(#\a #\b #\c #\d #\e #\f))))
+        (print (list (search "bc" sm-s) (search "cd" sm-s))))
+      (print (search (string (code-char 128512)) (concatenate 'string "ab" (string (code-char 128512)) "cd")))
+      (print (search "bc" "abcd" :test #'char=))
+      (print (search "BC" "abcd" :test #'char-equal))
+      (print (search "BC" "abcd" :key #'char-upcase))
+      (print (search "ab" "xab" :end2 99))
+      (print (search "abcd" "xab" :start1 3 :end1 1))
+      (print (mismatch "abc" "abd"))
+      (print (mismatch "abc" "abc"))
+      (print (mismatch "abc" "ab"))
+      (print (mismatch '(1 2 3) '(1 2 4)))
+      (print (mismatch "xxabyy" "zzab" :start1 2 :end1 4 :start2 2))
+      (print (mismatch "abcd" "xbcd" :from-end t))
+    expected: |
+      1
+      NIL
+      0
+      3
+      4
+      3
+      2
+      1
+      1
+      0
+      1
+      1
+      (1 NIL)
+      2
+      1
+      1
+      1
+      1
+      0
+      2
+      NIL
+      2
+      2
+      NIL
+      0
   - name: flet-fusion-and-unboxed-locals
     source: |
       (defun s3-rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))

@@ -131,6 +131,10 @@ after taken in the same locked benchmark, three alternating rounds (spread under
 | `(reduce #'(lambda (a b) a) *line*)` | 27.1 | 3.23 | 8.4x |
 | `(search "e-001" *line*)` | 107.4 | 106.6 | **1.0x** |
 
+The last row is the one this change could not reach; it got its own arm the next
+day (see "`search` and `mismatch` are a different defect" below), and is 0.50 us
+now.
+
 `position` on a 46-character string is now 8.8x `(char s 3)` where it was 63x.
 Every keyword arm improves, because the keywords ride on the same scan and it was
 the conversion that was slow -- the `:test`/`:key`/`:start`/`:end`/`:from-end`
@@ -169,18 +173,153 @@ them** -- a declining primitive in front of the shared expansion would have cost
 every wasm module bytes (`position` is 449 B a site, `.kb/sequence-op-runtimes.md`)
 to fix a problem those backends do not have.
 
-## `search` is a different defect and was deliberately left alone
+## `search` and `mismatch` are a different defect, and got their own scan
 
-`search` is the worst number in the table on the interpreter (107 us for a
-5-character needle in a 46-character haystack) and it did not move, because it
-never reaches `coerce`: it is a Lisp-source prelude `defun`
-(`LispPreludeLibrary.SOURCES`, `LispNames.SEARCH`), an O(n*m) double loop whose
-inner body is two `(elt seq i)` calls and a `(funcall test ...)` per character
-PAIR. Measured on the interpreter: `elt` 0.83 us, a `funcall` 0.33 us, so ~2.5 us
-per character pair is the whole of it. The same source compiles to 0.5 us (JVM) /
-1.4 us (WASM), so fixing it means a native interpreter arm or a cross-backend
-primitive, neither of which the conversion work reaches. Carried as its own item
-with these numbers.
+`search` was the worst number in the table above and did not move, because it
+never reaches `coerce`. Fixed the next day (2026-08-31) with the arm this section
+records; `mismatch`, measured at the same time, has the identical shape and the
+identical cost, and is served by the same arm.
+
+**Why they are not the conversion's problem.** Both are Lisp-source prelude
+`defun`s (`LispPreludeLibrary.SOURCES`, `LispNames.SEARCH` / `MISMATCH`) on every
+backend, and neither uses `seqAsListForm`: they index both operands with
+`(elt seq i)` and compare with `(funcall test ...)`, so on the interpreter each
+element PAIR costs two `elt` calls plus a funcall. Measured: `elt` 1.0 us,
+`char` 0.45, a funcall 0.33 -- ~2.5 us a pair, which multiplied by `search`'s
+O(n*m) double loop is the whole 104 us. There is nothing pathological in the
+algorithm; it is the tree-walking interpreter's per-node cost times n*m. The same
+source compiles to 0.9 us (JVM) and 1.4 us (both WASM).
+
+### The seam
+
+`LispEvaluator.evalConsRareOperator` gained a `SEARCH` / `MISMATCH` case calling
+`evalSequenceScan`, which does exactly what the ordinary call path does -- resolve
+the function, then evaluate the arguments, in that order -- and puts
+`SequenceScanFast` in front of the `apply`. A decline costs one pass over the
+argument array and then applies the same function to the same values, so the
+evaluation order, the number of evaluations and every error are unchanged.
+
+The arm serves only what it can prove answers identically:
+
+- **The comparison must be `eql`** -- an absent `:test` (the prelude's own
+  default), an explicit `#'eql`, or `#'char=` when BOTH operands are strings,
+  where every element is a character and char= is the code-point equality `eql`
+  already answers for a `LispChar`. `:key` non-nil, a user function, a lambda and
+  an explicit `:test nil` all decline; serving them would mean an interpreted call
+  per element, which is the cost this exists to avoid.
+- **Both operands must be sequences `(length x)` measures the way the arm does**
+  -- a string (by code point), a PROPER list (materialized once into a
+  `LispVal[]`, which also removes the `nth`-per-element O(n^2*m) a two-list
+  `search` had), a rank-1 `LispArray` (`effectiveLength`/`readFlat`, so a fill
+  pointer bounds it and a displaced view reads through), a `LispIntVector`, a
+  rank-1 `LispFloatArray`. A dotted list, a rank-2 array and a non-sequence
+  decline, so the prelude keeps owning what it answers for them -- including
+  `(search "ab" 5)` being NIL rather than an error, the same `(length x)` oddity
+  this file records for `coerce`.
+- **Every bounding index must be inside its sequence, with start <= end.** What
+  the prelude does outside that depends on which `elt` call it reaches first
+  (`(search "ab" "xab" :end2 99)` is 1, not an error, because the match is found
+  before the loop walks off the end), so the arm never guesses. An END of `nil`
+  IS the default (the body or-defaults it); a START of `nil` is not (the lambda
+  list binds it and the arithmetic signals) -- those two are handled apart.
+- **`mismatch` with `:from-end` declines.** The prelude accepts the keyword and
+  IGNORES it, scanning forward -- `(mismatch "abcd" "xbcd" :from-end t)` is 0 on
+  all four backends where CLHS says 1. That is a DELIBERATE, documented deviation
+  (`doc/{en,ja}/reference/functions/mismatch.md` marks it "Lite"), not a defect
+  found here; declining keeps it in the one place that owns it instead of
+  spreading it to a second implementation.
+
+**A user redefinition takes the call back WHOLE.** The lazy prelude loader already
+honours a `(defun search ...)` by never loading its entry over one; the arm
+honours a redefinition made AFTERWARDS by serving only while the name still
+resolves to the object the loader installed. `LispEvaluator.loadPreludeDefinition`
+-- now the single load site both callers use -- records that object in
+`preludeDefinitions`. Without this the fast shapes would silently ignore a
+redefinition the declined shapes honour, which is worse than either alone.
+
+### Measured
+
+Interpreter, Apple M4 Max, 20,000 timed iterations after a 5,000-iteration warmup,
+one locked benchmark, us per call. Haystack is the same 46-character string as the
+table above; the first three rows are unchanged reference shapes. (The
+100,000-iteration baseline the previous day read 106.6 / 11.9 / 130.0 / 18.3 for
+rows 4, 5, 6 and 16 -- the same numbers within noise.)
+
+| form | before | after | |
+| --- | ---: | ---: | ---: |
+| the `dotimes` loop itself | 0.95 | 1.00 | |
+| `(char *line* 3)` | 0.50 | 0.45 | |
+| `(elt *line* 3)` | 1.05 | 1.00 | |
+| `(search "e-001" *line*)` -- a hit at 27 | 104.4 | **0.50** | 209x |
+| `(search "v " *line*)` -- a hit at 0 | 11.7 | **0.35** | 33x |
+| `(search "zzzz" *line*)` -- a full miss | 136.2 | **0.50** | 272x |
+| `(search "" *line*)` -- an empty needle | 7.70 | **0.30** | 26x |
+| `(search "e-0" *line* :from-end t)` | 157.3 | **0.55** | 286x |
+| `(search "e-001" *line* :start2 20)` | 41.6 | **0.40** | 104x |
+| `(search "e-001" *line* :end2 40)` | 107.5 | **0.40** | 269x |
+| `(search "xxe-001yy" *line* :start1 2 :end1 7)` | 111.0 | **0.40** | 277x |
+| `(search "e-001" *line* :test #'char=)` | 108.9 | **0.55** | 198x |
+| `(search "E-001" *line* :key #'char-upcase)` -- DECLINED | 113.9 | 116.4 | **1.0x** |
+| `(search <needle> <line>)`, both as VECTORS | 109.3 | **0.70** | 156x |
+| `(search "e-001" <line as a vector>)` -- mixed | 107.3 | **0.75** | 143x |
+| `(search '(3 4) '(1 2 ... 10))` -- two LISTS | 19.1 | **0.50** | 38x |
+| `(mismatch *line* <differs at the last character>)` | 110.1 | **0.50** | 220x |
+| `(mismatch *line* *line*)` -- equal | 110.2 | **0.45** | 245x |
+| `(mismatch "x" *line*)` -- differs at 0 | 8.15 | **0.20** | 41x |
+| `(mismatch '(1 ... 10) '(1 ... 11))` | 31.3 | **0.40** | 78x |
+
+`search` on this string is now 1.1x `(char s 3)` where it was 209x. The one row
+that does not move is the declined one, and that is the design: `:key` and a
+user `:test` still run the prelude at its old cost.
+
+### The compile paths were never the problem, and nothing was added to them
+
+Same program, same locked run, us per call. The change is interpreter-only, and
+provably so: **both wasm modules are byte-identical between the two jars**
+(`cmp`), and the two `.class` files differ only in the class NAME the benchmark
+gave them, so each pair below is one artifact measured twice and the spread is
+JIT/measurement noise.
+
+| form | JVM | | WASM p1 | | `--component` | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| | before | after | before | after | before | after |
+| `(char *line* 3)` | 0.15 | 0.15 | 0.00 | 0.00 | 0.00 | 0.00 |
+| `(search "e-001" *line*)` | 0.90 | 1.15 | 1.40 | 1.40 | 1.40 | 1.40 |
+| `(search "zzzz" *line*)` | 2.20 | 1.70 | 1.70 | 1.70 | 1.70 | 1.75 |
+| `(search "e-0" *line* :from-end t)` | 2.20 | 1.95 | 2.20 | 2.20 | 2.20 | 2.25 |
+| `(search "E-001" *line* :key #'char-upcase)` | 1.60 | 2.10 | 2.30 | 2.30 | 2.25 | 2.35 |
+| `(search '(3 4) '(1 2 ... 10))` | 0.45 | 1.35 | 0.15 | 0.15 | 0.15 | 0.15 |
+| `(mismatch *line* <differs at the last char>)` | 0.60 | 0.55 | 1.55 | 1.55 | 1.50 | 1.55 |
+
+**A cross-backend primitive was rejected for the same reason `position`'s was.**
+Three of the four backends were already 75-150x cheaper than the interpreter here,
+and a declining primitive in front of the prelude body would cost every wasm
+module bytes to fix a problem they do not have -- `search` is 15 bytes a site
+today (`.kb/sequence-op-runtimes.md`) precisely because the prelude `defun` is
+already a shared callee. Replacing the prelude entry with a native
+`Environment` built-in was rejected too: the prelude loads only when the name is
+unresolved, so a native registration is a REPLACEMENT, not a fast path, and the
+interpreter would then hold a second full implementation of the keyword set that
+has to agree with the compile paths in every corner. The declining arm holds only
+the eql scan.
+
+### The list arm fixes a real complexity, not just a constant
+
+`(elt list i)` lowers to `(nth i list)`, an O(i) walk from the head, so the
+prelude's inner loop over two lists is O(n^2*m) and `mismatch` over two lists is
+O(n^2) -- the same defect `.kb/sequence-op-runtimes.md` records fixing in
+`replace`'s list SOURCE arm. Materializing each list into a `LispVal[]` once makes
+the served path O(n*m) / O(n). The compile paths still have the quadratic walk;
+they still have it, and it bites at size: `(search '(3 5) <n-element list>)` on
+wasm-GC is 0.05 / 0.20 / 0.70 / 2.65 ms for n = 250 / 500 / 1000 / 2000 -- a clean
+4x per doubling -- against **0.06 ms** for the interpreter's arm at n=2000, so a
+compiled program is now 44x (WASM) to 740x (JVM) SLOWER than the interpreter on a
+long-list `search`. That is not this arm's to fix: the honest repair is the
+`nthcdr`/`cdr` cursor rewrite in the PRELUDE SOURCE, which moves all four backends
+at once, and it is carried as `.todo/593` with the ladder above. Nothing measured
+today passes a long list (`uiop-utility.lisp`'s `frob-substrings`,
+`cffi-rontolisp.lisp` and `examples/db/database-url.lisp` all search strings), so
+it is a latent complexity bug rather than a profile.
 
 ## Re-evaluation triggers
 
@@ -197,6 +336,21 @@ with these numbers.
 - **`LispFloatArray` is served for `'list` but is the identity for `'vector`,**
   matching the expansion. If `coerceToVectorBody` ever learns to rebuild a packed
   array, this arm must learn it in the same commit.
+- **`SequenceScanFast` must stay a strict subset of the prelude `defun`.** If
+  `LispPreludeLibrary`'s `search`/`mismatch` source changes -- a bound, an
+  argument order, the `:from-end` scan direction -- the arm has to follow it or
+  start declining the shape, in the same commit. The ci-spec case below is what
+  catches the drift, because the interpreter runs the arm and three backends run
+  the defun.
+- **The declined shapes still cost 110-120 us.** `:key`, a user `:test` and an
+  out-of-range bound run the prelude at its old price. Serving them means calling
+  back into `apply` per element, which is a different trade (~0.4 us a pair
+  rather than 2.5, not 0.01) and a much wider agreement surface; measure a real
+  consumer before taking it.
+- **`mismatch` ignores `:from-end` on ALL FOUR backends**, documented as a "Lite"
+  deviation. If it is ever made CLHS-correct, that is a prelude-SOURCE change --
+  it moves every backend at once -- and the arm's decline can then be lifted in
+  the same commit.
 
 ## Pinning tests
 
@@ -215,7 +369,24 @@ with these numbers.
   and `WasmLispCompilerIntegrationTest.sequenceCoerceAnswersTheSameForEveryRepresentation`
   -- the same answers from the backends that keep the expansion, which is where a
   divergence would hide.
+- `src/test/resources/ci-spec.yaml` --
+  `search-and-mismatch-across-representations`, all four backends: every
+  representation and keyword the scan arm serves, and the ones it declines
+  (`:key`, `#'char-equal`, an out-of-range `:end2`, `start1 > end1`, `mismatch
+  :from-end`) in one program.
+- `LispEvaluatorTest.theNativeSearchAndMismatchArmAnswerWhatThePreludeDefunAnswers`
+  and `#theNativeSearchAndMismatchArmDeclineEverythingTheyCannotAnswerIdentically`
+  -- every case checked BOTH against a literal expectation and against
+  `(funcall #'search ...)`, which applies the prelude `defun` directly and never
+  reaches the arm; plus the user-redefinition guard in both directions and that
+  the operands are evaluated ONCE whichever arm answers.
+- `JvmLispCompilerTest.compileSearchAndMismatchAnswerTheSameAsTheInterpretersNativeArm`
+  and `WasmLispCompilerIntegrationTest.searchAndMismatchAnswerTheSameAsTheInterpretersNativeArm`
+  -- the same program on the backends that run the `defun`. The wasm one must use
+  `compileAndRunPrelude`, not `compileAndRun`: without the prelude splice the
+  module has no `search` at all and traps.
 - The behavior is pinned where it already was:
+  `LispEvaluatorTest.evalCopyTreeAndSearch`,
   `LispEvaluatorTest.coerceConvertsBetweenListVectorAndString` /
   `#coerceAcceptsAComputedResultType`, `JvmLispCompilerTest.compileCoerceConversions`,
   and the sequence cases of all three per-backend suites.

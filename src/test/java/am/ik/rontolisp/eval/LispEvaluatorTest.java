@@ -4071,6 +4071,180 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theNativeSearchAndMismatchArmAnswerWhatThePreludeDefunAnswers() {
+		// search and mismatch are Lisp-source prelude defuns whose inner loop costs two
+		// elt calls and a funcall per element PAIR -- 107 us for a five-character needle
+		// in a 46-character string on the interpreter, against 0.7 us for the same source
+		// compiled. A native arm answers the shapes it can prove identical
+		// (.kb/seq-coerce-runtime.md).
+		//
+		// (funcall #'search ...) applies the prelude defun DIRECTLY and never reaches the
+		// arm, so it is the oracle every case below is checked against as well as the
+		// literal expectation.
+		String both = """
+				(defun both (label fast slow)
+				  (if (equal fast slow) fast (list :diverged label fast slow)))
+				""";
+		assertThat(evalMulti(both + """
+				(list (both :hit (search "bc" "abcd") (funcall #'search "bc" "abcd"))
+				      (both :miss (search "x" "abcd") (funcall #'search "x" "abcd"))
+				      (both :empty (search "" "abcd") (funcall #'search "" "abcd"))
+				      (both :from-end (search "ab" "ab-ab" :from-end t)
+				            (funcall #'search "ab" "ab-ab" :from-end t))
+				      (both :empty-from-end (search "" "abcd" :from-end t)
+				            (funcall #'search "" "abcd" :from-end t)))
+				""").print()).isEqualTo("(1 NIL 0 3 4)");
+		// Every bounding index, alone and together; nil on an END is the default, and a
+		// bound that excludes the match is honoured.
+		assertThat(evalMulti(both + """
+				(list (both :start2 (search "ab" "ab-ab" :start2 1) (funcall #'search "ab" "ab-ab" :start2 1))
+				      (both :end2 (search "ab" "ab-ab" :end2 4) (funcall #'search "ab" "ab-ab" :end2 4))
+				      (both :end2-nil (search "ab" "ab-ab" :end2 nil) (funcall #'search "ab" "ab-ab" :end2 nil))
+				      (both :start1-end1 (search "xxabyy" "zzab" :start1 2 :end1 4)
+				            (funcall #'search "xxabyy" "zzab" :start1 2 :end1 4))
+				      (both :all (search "xxabyy" "ab-ab" :start1 2 :end1 4 :start2 1 :end2 5 :from-end t)
+				            (funcall #'search "xxabyy" "ab-ab" :start1 2 :end1 4 :start2 1 :end2 5 :from-end t)))
+				""").print()).isEqualTo("(3 0 0 2 3)");
+		// Every representation elt reaches, in both operands and mixed: a string, a list,
+		// a general vector, a packed integer vector, a packed float array, a
+		// fill-pointered string (whose length is the active prefix) and a displaced view.
+		assertThat(evalMulti(both + """
+				(list (both :list (search '(3 4) '(1 2 3 4 5)) (funcall #'search '(3 4) '(1 2 3 4 5)))
+				      (both :vector (search #(3 4) #(1 2 3 4 5)) (funcall #'search #(3 4) #(1 2 3 4 5)))
+				      (both :mixed (search "bc" (coerce "abcd" 'vector))
+				            (funcall #'search "bc" (coerce "abcd" 'vector)))
+				      (both :list-in-string (search '(#\\b #\\c) "abcd")
+				            (funcall #'search '(#\\b #\\c) "abcd"))
+				      (both :nil (search nil "abcd") (funcall #'search nil "abcd"))
+				      (both :packed (search #(2 3) (make-array 4 :element-type '(unsigned-byte 8)
+				                                              :initial-contents '(1 2 3 4)))
+				            (funcall #'search #(2 3) (make-array 4 :element-type '(unsigned-byte 8)
+				                                                :initial-contents '(1 2 3 4))))
+				      (both :float (search '(2.0d0) (make-array 3 :element-type 'double-float
+				                                               :initial-contents '(1d0 2d0 3d0)))
+				            (funcall #'search '(2.0d0) (make-array 3 :element-type 'double-float
+				                                                  :initial-contents '(1d0 2d0 3d0))))
+				      (let ((s (make-array 6 :element-type 'character :fill-pointer 3
+				                             :initial-contents '(#\\a #\\b #\\c #\\d #\\e #\\f))))
+				        (list (both :fill-in (search "bc" s) (funcall #'search "bc" s))
+				              (both :fill-out (search "cd" s) (funcall #'search "cd" s))))
+				      (let* ((s "hello")
+				             (d (make-array 3 :element-type 'character :displaced-to s
+				                              :displaced-index-offset 1)))
+				        (both :displaced (search "ll" d) (funcall #'search "ll" d))))
+				""").print()).isEqualTo("(2 2 1 1 0 1 1 (1 NIL) 1)");
+		// A supplementary code point is ONE element, as it is for char/length.
+		assertThat(evalMulti(both + """
+				(let ((hay (concatenate 'string "ab" (string (code-char 128512)) "cd")))
+				  (both :astral (search (string (code-char 128512)) hay)
+				        (funcall #'search (string (code-char 128512)) hay)))
+				""").print()).isEqualTo("2");
+		// The tests the arm serves: the default, an explicit #'eql, and #'char= over two
+		// strings (where every element is a character, on which char= is the code-point
+		// equality eql already answers). :key nil is "no key", not a key.
+		assertThat(evalMulti(both + """
+				(list (both :eql (search "bc" "abcd" :test #'eql) (funcall #'search "bc" "abcd" :test #'eql))
+				      (both :char= (search "bc" "abcd" :test #'char=) (funcall #'search "bc" "abcd" :test #'char=))
+				      (both :key-nil (search "bc" "abcd" :key nil) (funcall #'search "bc" "abcd" :key nil)))
+				""").print()).isEqualTo("(1 1 1)");
+		// mismatch: the index into sequence-1 of the first difference, nil when the two
+		// bounded subsequences agree, and the shorter length when one runs out first.
+		assertThat(evalMulti(both + """
+				(list (both :differ (mismatch "abc" "abd") (funcall #'mismatch "abc" "abd"))
+				      (both :equal (mismatch "abc" "abc") (funcall #'mismatch "abc" "abc"))
+				      (both :prefix (mismatch "ab" "abc") (funcall #'mismatch "ab" "abc"))
+				      (both :longer (mismatch "abc" "ab") (funcall #'mismatch "abc" "ab"))
+				      (both :list (mismatch '(1 2 3) '(1 2 4)) (funcall #'mismatch '(1 2 3) '(1 2 4)))
+				      (both :bounds (mismatch "xxabyy" "zzab" :start1 2 :end1 4 :start2 2)
+				            (funcall #'mismatch "xxabyy" "zzab" :start1 2 :end1 4 :start2 2))
+				      (both :eql (mismatch "abc" "abd" :test #'eql) (funcall #'mismatch "abc" "abd" :test #'eql)))
+				""").print()).isEqualTo("(2 NIL 2 2 2 NIL 2)");
+	}
+
+	@Test
+	void theNativeSearchAndMismatchArmDeclineEverythingTheyCannotAnswerIdentically() {
+		// A decline runs the prelude defun over the arguments already evaluated, so every
+		// answer below -- oddity, error and all -- is the one the defun has always given.
+		// (funcall #'search ...) is that defun reached directly, so the two agreeing IS
+		// the decline.
+		String both = """
+				(defun both (label fast slow)
+				  (if (equal fast slow) fast (list :diverged label fast slow)))
+				""";
+		// A :key, and a :test that is not provably eql on these elements, would each need
+		// an interpreted call per element -- the cost the arm exists to avoid.
+		assertThat(evalMulti(both + """
+				(list (both :key (search "BC" "abcd" :key #'char-upcase)
+				            (funcall #'search "BC" "abcd" :key #'char-upcase))
+				      (both :test (search "BC" "abcd" :test #'char-equal)
+				            (funcall #'search "BC" "abcd" :test #'char-equal))
+				      (both :lambda (search '(1) '(0 1 2) :test (lambda (a b) (= a b)))
+				            (funcall #'search '(1) '(0 1 2) :test (lambda (a b) (= a b))))
+				      (both :m-key (mismatch "AB" "ab" :key #'char-upcase)
+				            (funcall #'mismatch "AB" "ab" :key #'char-upcase)))
+				""").print()).isEqualTo("(1 1 1 NIL)");
+		// #'char= is served only when BOTH operands are strings; over a list its elements
+		// are not characters by construction, so the call goes back to the defun (and
+		// signals there, exactly as it always did).
+		assertThatThrownBy(() -> eval("(search '(1) '(0 1 2) :test #'char=)")).hasMessageContaining("CHAR=");
+		// A bounding index outside its sequence, and start > end: what the defun answers
+		// there depends on which elt call it reaches first, so the arm never guesses.
+		assertThat(evalMulti(both + """
+				(list (both :end2-past (search "ab" "xab" :end2 99) (funcall #'search "ab" "xab" :end2 99))
+				      (both :start2-past (search "ab" "xab" :start2 99) (funcall #'search "ab" "xab" :start2 99))
+				      (both :backwards (search "abcd" "xab" :start1 3 :end1 1)
+				            (funcall #'search "abcd" "xab" :start1 3 :end1 1)))
+				""").print()).isEqualTo("(1 NIL 0)");
+		// An explicit nil START is not the default -- the defun's lambda list binds it
+		// and
+		// its arithmetic signals; an explicit nil END is.
+		assertThatThrownBy(() -> eval("(search \"ab\" \"xab\" :start1 nil)")).isInstanceOf(LispEvalException.class);
+		assertThat(eval("(search \"ab\" \"xab\" :end1 nil)").print()).isEqualTo("1");
+		// An unknown keyword stays the defun's lambda-list error.
+		assertThatThrownBy(() -> eval("(search \"ab\" \"xab\" :bogus 1)")).isInstanceOf(LispEvalException.class);
+		// Sequences (length seq) does not measure the way the arm does: a dotted list, a
+		// rank-2 array, a non-sequence.
+		assertThat(evalMulti(both + """
+				(both :dotted (search '(1) '(1 2 . 3)) (funcall #'search '(1) '(1 2 . 3)))
+				""").print()).isEqualTo("0");
+		assertThatThrownBy(() -> eval("(search '(1) (make-array '(2 2)))")).isInstanceOf(LispEvalException.class);
+		// A non-sequence answers NIL rather than signalling -- (length 5) falls through
+		// the defun's cons walk and finds none, the same oddity .kb/seq-coerce-runtime.md
+		// records for coerce. The arm reproduces it by declining, not by copying it.
+		assertThat(evalMulti(both + """
+				(both :non-sequence (search "ab" 5) (funcall #'search "ab" 5))
+				""").print()).isEqualTo("NIL");
+		// mismatch's :from-end: the defun ACCEPTS the keyword and ignores it, which is
+		// not
+		// what CLHS specifies. The arm declines rather than spreading that to a second
+		// implementation, so the answer stays the one every backend gives.
+		assertThat(evalMulti(both + """
+				(both :m-from-end (mismatch "abcd" "xbcd" :from-end t)
+				      (funcall #'mismatch "abcd" "xbcd" :from-end t))
+				""").print()).isEqualTo("0");
+		// A user redefinition takes the call back WHOLE. The lazy prelude loader already
+		// honours one by never loading its entry; the arm honours one made afterwards by
+		// serving only while the name still resolves to the object the loader installed.
+		assertThat(evalMulti("""
+				(defun search (a b) (list :mine a b))
+				(list (search "bc" "abcd") (search "x" "abcd"))
+				""").print()).isEqualTo("((:MINE \"bc\" \"abcd\") (:MINE \"x\" \"abcd\"))");
+		assertThat(evalMulti("""
+				(search "bc" "abcd")
+				(defun search (a b) (list :later a b))
+				(search "bc" "abcd")
+				""").print()).isEqualTo("(:LATER \"bc\" \"abcd\")");
+		// The operands are evaluated ONCE whichever arm answers.
+		assertThat(evalMulti("""
+				(let ((n 0))
+				  (list (search (progn (setq n (+ n 1)) "bc") (progn (setq n (+ n 1)) "abcd"))
+				        (search (progn (setq n (+ n 1)) "BC") (progn (setq n (+ n 1)) "abcd")
+				                :test #'char-equal)
+				        n))
+				""").print()).isEqualTo("(1 1 4)");
+	}
+
+	@Test
 	void evalTreeEqual() {
 		assertThat(eval("(tree-equal (list 1 (list 2 3)) (list 1 (list 2 3)))").print()).isEqualTo("T");
 		assertThat(eval("(tree-equal (list 1 (list 2 3)) (list 1 (list 2 4)))").print()).isEqualTo("NIL");

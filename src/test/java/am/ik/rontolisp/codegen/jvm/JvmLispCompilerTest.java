@@ -11565,6 +11565,47 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileSearchAndMismatchAnswerTheSameAsTheInterpretersNativeArm() throws Exception {
+		// search and mismatch are Lisp-source prelude defuns, and only the INTERPRETER
+		// answers them natively (.kb/seq-coerce-runtime.md): this backend runs the defun.
+		// Both must answer the same thing for every representation and keyword the arm
+		// serves -- and for the ones it DECLINES, which is where a divergence would hide.
+		assertThat(compileAndRun("""
+				(print (search "bc" "abcd"))
+				(print (search "x" "abcd"))
+				(print (search "" "abcd"))
+				(print (search "ab" "ab-ab" :from-end t))
+				(print (search "" "abcd" :from-end t))
+				(print (search "xxabyy" "ab-ab" :start1 2 :end1 4 :start2 1 :end2 5 :from-end t))
+				(print (search '(3 4) '(1 2 3 4 5)))
+				(print (search "bc" (coerce "abcd" 'vector)))
+				(print (search '(#\\b #\\c) "abcd"))
+				(print (search nil "abcd"))
+				(print (search #(2 3) (make-array 4 :element-type '(unsigned-byte 8)
+				                                 :initial-contents '(1 2 3 4))))
+				(print (search '(2.0d0) (make-array 3 :element-type 'double-float
+				                                   :initial-contents '(1d0 2d0 3d0))))
+				(let ((s (make-array 6 :element-type 'character :fill-pointer 3
+				                       :initial-contents '(#\\a #\\b #\\c #\\d #\\e #\\f))))
+				  (print (list (search "bc" s) (search "cd" s))))
+				(print (search (string (code-char 128512))
+				               (concatenate 'string "ab" (string (code-char 128512)) "cd")))
+				(print (search "bc" "abcd" :test #'char=))
+				(print (search "BC" "abcd" :test #'char-equal))
+				(print (search "BC" "abcd" :key #'char-upcase))
+				(print (search "ab" "xab" :end2 99))
+				(print (search "abcd" "xab" :start1 3 :end1 1))
+				(print (mismatch "abc" "abd"))
+				(print (mismatch "abc" "abc"))
+				(print (mismatch "abc" "ab"))
+				(print (mismatch '(1 2 3) '(1 2 4)))
+				(print (mismatch "xxabyy" "zzab" :start1 2 :end1 4 :start2 2))
+				(print (mismatch "abcd" "xbcd" :from-end t))
+				"""))
+			.isEqualTo("1\nNIL\n0\n3\n4\n3\n2\n1\n1\n0\n1\n1\n(1 NIL)\n2\n1\n1\n1\n1\n0\n2\nNIL\n2\n2\nNIL\n0");
+	}
+
+	@Test
 	void compileAndRunLinalgConstructorsAndShape() throws Exception {
 		assertThat(compileAndRunLinalg("""
 				(print (linalg:zeros 3))

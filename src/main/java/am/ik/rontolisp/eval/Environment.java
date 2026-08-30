@@ -2673,6 +2673,18 @@ public final class Environment implements Scope {
 		return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 	}
 
+	/**
+	 * The {@code eql} predicate as a Java boolean, for evaluator internals that compare
+	 * two sequence elements under the DEFAULT sequence test without building a Lisp value
+	 * ({@link SequenceScanFast}, the native {@code search}/{@code mismatch} arm).
+	 * @param a the first value
+	 * @param b the second value
+	 * @return whether the two values are {@code eql}
+	 */
+	static boolean isEql(LispVal a, LispVal b) {
+		return eqlValue(a, b) instanceof LispTrue;
+	}
+
 	// equal: structural equality. Cons cells are compared recursively by car and cdr;
 	// everything else falls back to eql (so numbers, symbols, strings, and nil compare by
 	// value). The predicate itself lives in the root package next to the structural hash
