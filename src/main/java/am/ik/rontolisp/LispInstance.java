@@ -2,8 +2,6 @@ package am.ik.rontolisp;
 
 import java.util.Arrays;
 
-import org.jspecify.annotations.Nullable;
-
 /**
  * An instance of a {@code defstruct} type or of a CLOS class (a {@code define-condition}
  * condition included): a {@link LispLayout} plus the slot values, in layout order.
@@ -24,31 +22,11 @@ import org.jspecify.annotations.Nullable;
 public final class LispInstance implements LispVal {
 
 	/**
-	 * The instance-frame depth the default renderer will open before writing {@code #}
-	 * instead -- the cycle guard's capacity, and the bound on the render stack. The same
-	 * cap, with the same marker, is emitted into the JVM backend's
-	 * {@code _instToString}/{@code _instToDisplayString} and the WASM backends' instance
-	 * print branch, so the four renderings stay byte-identical.
-	 */
-	public static final int MAX_RENDER_DEPTH = 256;
-
-	/**
 	 * CL's {@code *print-level*} cutoff marker (CLHS 22.1.3.12): what a slot prints when
 	 * it closes a cycle back onto an instance still being rendered, or when the depth cap
-	 * is reached.
+	 * ({@link RenderCycleGuard#MAX_RENDER_DEPTH}) is reached.
 	 */
 	private static final String DEPTH_MARKER = "#";
-
-	/** The instances the CURRENT thread is rendering, outermost first. */
-	private static final ThreadLocal<RenderPath> RENDER_PATH = ThreadLocal.withInitial(RenderPath::new);
-
-	private static final class RenderPath {
-
-		private final @Nullable LispInstance[] path = new @Nullable LispInstance[MAX_RENDER_DEPTH];
-
-		private int depth;
-
-	}
 
 	private LispLayout layout;
 
@@ -174,22 +152,16 @@ public final class LispInstance implements LispVal {
 		if (this.layout.kind() == LispLayout.Kind.PATHNAME) {
 			return escape ? "#P" + this.slots[0].print() : this.slots[0].display();
 		}
-		// The cycle guard: an instance whose slots reach back to an instance still being
-		// rendered would recurse without end (a scene graph's parent/children pair is
-		// the everyday case), so an instance already on the current rendering path --
-		// and the frame that would exceed the depth cap -- prints as "#", the
-		// *print-level* cutoff marker, instead of overflowing the stack. Identity, not
-		// equality: the same instance REACHABLE twice on a finite path renders twice.
-		RenderPath rp = RENDER_PATH.get();
-		for (int i = 0; i < rp.depth; i++) {
-			if (rp.path[i] == this) {
-				return DEPTH_MARKER;
-			}
-		}
-		if (rp.depth == MAX_RENDER_DEPTH) {
+		// The cycle guard (RenderCycleGuard, shared with the cons and array renderers):
+		// an instance whose slots reach back to an instance still being rendered would
+		// recurse without end (a scene graph's parent/children pair is the everyday
+		// case), so an instance already on the current rendering path -- and the frame
+		// that would exceed the depth cap -- prints as "#", the *print-level* cutoff
+		// marker, instead of overflowing the stack. Identity, not equality: the same
+		// instance REACHABLE twice on a finite path renders twice.
+		if (!RenderCycleGuard.enter(this)) {
 			return DEPTH_MARKER;
 		}
-		rp.path[rp.depth++] = this;
 		try {
 			StringBuilder sb = new StringBuilder(this.layout.openDelimiter()).append(this.layout.printName());
 			for (int i = 0; i < this.layout.slotCount(); i++) {
@@ -201,7 +173,7 @@ public final class LispInstance implements LispVal {
 			return sb.append(this.layout.closeDelimiter()).toString();
 		}
 		finally {
-			rp.path[--rp.depth] = null;
+			RenderCycleGuard.exit();
 		}
 	}
 

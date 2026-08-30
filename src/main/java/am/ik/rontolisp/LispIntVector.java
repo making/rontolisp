@@ -127,14 +127,25 @@ public final class LispIntVector implements LispVal {
 
 	@Override
 	public String print() {
-		StringBuilder sb = new StringBuilder("#(");
-		for (int i = 0; i < this.data.length; i++) {
-			if (i > 0) {
-				sb.append(' ');
-			}
-			sb.append(this.data[i]);
+		// A packed integer vector cannot close a cycle, but it still opens one render
+		// frame (RenderCycleGuard) so the depth cap truncates at the same frame on
+		// every backend -- see LispFloatArray's twin note.
+		if (!RenderCycleGuard.enter(this)) {
+			return "#";
 		}
-		return sb.append(')').toString();
+		try {
+			StringBuilder sb = new StringBuilder("#(");
+			for (int i = 0; i < this.data.length; i++) {
+				if (i > 0) {
+					sb.append(' ');
+				}
+				sb.append(this.data[i]);
+			}
+			return sb.append(')').toString();
+		}
+		finally {
+			RenderCycleGuard.exit();
+		}
 	}
 
 }

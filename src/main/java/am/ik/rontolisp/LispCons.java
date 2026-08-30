@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * A mutable cons cell holding a car and cdr pair.
  */
@@ -134,42 +136,79 @@ public final class LispCons implements LispVal {
 
 	@Override
 	public String print() {
-		StringBuilder sb = new StringBuilder("(");
-		LispVal current = this;
-		boolean first = true;
-		while (current instanceof LispCons cons) {
-			if (!first) {
-				sb.append(' ');
-			}
-			sb.append(cons.car().print());
-			current = cons.cdr();
-			first = false;
-		}
-		if (!(current instanceof LispNil)) {
-			sb.append(" . ").append(current.print());
-		}
-		sb.append(')');
-		return sb.toString();
+		return render(true);
 	}
 
 	@Override
 	public String display() {
-		StringBuilder sb = new StringBuilder("(");
-		LispVal current = this;
-		boolean first = true;
-		while (current instanceof LispCons cons) {
-			if (!first) {
-				sb.append(' ');
+		return render(false);
+	}
+
+	// Renders the chain as a list. Two cycle defenses, shared discipline with the
+	// instance and array renderers (RenderCycleGuard, .kb/pretty-printer.md): the chain
+	// HEAD opens one render frame, so a car that reaches back to a list still being
+	// rendered -- and the frame past the depth cap -- prints as "#", the *print-level*
+	// cutoff marker; and the CDR chain, which is walked iteratively and so never
+	// re-enters this method, is pre-scanned for a cycle (Floyd), the second arrival at
+	// the cycle-start cell printing as the improper tail " . #" -- every element exactly
+	// once, then the marker.
+	private String render(boolean escape) {
+		if (!RenderCycleGuard.enter(this)) {
+			return "#";
+		}
+		try {
+			LispCons stop = cycleStart();
+			StringBuilder sb = new StringBuilder("(");
+			LispVal current = this;
+			boolean first = true;
+			boolean seenStop = false;
+			while (current instanceof LispCons cons) {
+				if (cons == stop) {
+					if (seenStop) {
+						return sb.append(" . #)").toString();
+					}
+					seenStop = true;
+				}
+				if (!first) {
+					sb.append(' ');
+				}
+				sb.append(escape ? cons.car().print() : cons.car().display());
+				current = cons.cdr();
+				first = false;
 			}
-			sb.append(cons.car().display());
-			current = cons.cdr();
-			first = false;
+			if (!(current instanceof LispNil)) {
+				sb.append(" . ").append(escape ? current.print() : current.display());
+			}
+			sb.append(')');
+			return sb.toString();
 		}
-		if (!(current instanceof LispNil)) {
-			sb.append(" . ").append(current.display());
+		finally {
+			RenderCycleGuard.exit();
 		}
-		sb.append(')');
-		return sb.toString();
+	}
+
+	// Floyd's cycle detection over the cdr chain: answers the cell where the cycle
+	// begins, or null for a terminating chain. Constant space, so a million-element
+	// proper list costs one extra traversal and no allocation.
+	private @Nullable LispCons cycleStart() {
+		LispVal slow = this;
+		LispVal fast = this;
+		while (true) {
+			if (!(fast instanceof LispCons fc) || !(fc.cdr() instanceof LispCons fcc)) {
+				return null;
+			}
+			fast = fcc.cdr();
+			slow = ((LispCons) slow).cdr();
+			if (slow == fast) {
+				break;
+			}
+		}
+		LispVal p = this;
+		while (p != slow) {
+			p = ((LispCons) p).cdr();
+			slow = ((LispCons) slow).cdr();
+		}
+		return (LispCons) p;
 	}
 
 	@Override

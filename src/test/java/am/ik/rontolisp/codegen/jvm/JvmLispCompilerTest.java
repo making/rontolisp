@@ -5099,6 +5099,65 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunPrintOfACyclicConsIsFinite() throws Exception {
+		// A cons whose cdr chain re-enters itself used to loop the emitted
+		// _consToString without end; a car cycle overflowed the stack. The chain's
+		// cycle-start cell prints as the improper tail " . #" on its second arrival
+		// (every element exactly once), a cons or vector already on the current
+		// rendering path prints as "#" -- byte-identical to the interpreter
+		// (LispEvaluatorTest.evalPrintOfACyclicConsIsFinite).
+		assertThat(compileAndRun("""
+				(let ((x (list 1)))
+				  (setf (cdr x) x)
+				  (prin1 x)
+				  (terpri)
+				  (princ x))
+				(terpri)
+				(let ((x (list 1 2 3)))
+				  (setf (cdr (cdr (cdr x))) (cdr x))
+				  (prin1 x))
+				(terpri)
+				(let ((x (list 1 2)))
+				  (setf (car x) x)
+				  (prin1 x))
+				(terpri)
+				(let ((v (vector 1 2)))
+				  (setf (aref v 0) v)
+				  (prin1 v))
+				(terpri)
+				(let ((s (list 9)))
+				  (prin1 (list s s)))
+				""")).isEqualTo("""
+				(1 . #)
+				(1 . #)
+				(1 2 3 . #)
+				(# 2)
+				#(# 2)
+				((9) (9))""");
+	}
+
+	@Test
+	void compileAndRunPrintOfACyclicConsIsFiniteThroughTheWalks() throws Exception {
+		// With a print-object method defined the operators render through the
+		// %print-object-str walk; a program that binds *print-case* without methods
+		// renders through %print-cased. Both walks carry the same guard as the raw
+		// renderers, so the text is identical.
+		assertThat(compileAndRun("""
+				(defclass tagged () ())
+				(defmethod print-object ((o tagged) s) (write-string "#<TAGGED>" s))
+				(let ((x (list 1 (make-instance 'tagged))))
+				  (setf (cdr (cdr x)) x)
+				  (prin1 x))
+				""")).isEqualTo("(1 #<TAGGED> . #)");
+		assertThat(compileAndRun("""
+				(let ((*print-case* :downcase))
+				  (let ((x (list 'a)))
+				    (setf (cdr x) x)
+				    (prin1 x)))
+				""")).isEqualTo("(a . #)");
+	}
+
+	@Test
 	void compileAndRunPrintCase() throws Exception {
 		// *print-case* converts the case of every SYMBOL the printer spells, on the
 		// compile path as on the interpreter (the shared %print-cased renderer, spliced

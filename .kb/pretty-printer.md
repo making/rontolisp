@@ -105,43 +105,72 @@ text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
   `:case` to the prelude `write` would make every `write` user MENTION `*print-case*` and
   so pull the renderer into modules that never bind it.
 
-## A cyclic instance graph prints finitely instead of overflowing the stack
+## A cyclic value prints finitely instead of overflowing the stack
 
-**Invariant (todo 584, 2026-08-30): the default INSTANCE renderer never
-StackOverflowErrors on a cycle.** An instance already being rendered somewhere on the
-current rendering path -- two instances pointing at each other, a scene graph's
-parent/children pair -- prints as **`#`**, CL's `*print-level*` cutoff marker, in both
-escape modes; so does the frame that would open past **256** nested instance frames
-(`LispInstance.MAX_RENDER_DEPTH`), which bounds the render stack for a deep FINITE
-chain too. The check is IDENTITY along the current path, not equality and not
-"rendered before": the same instance reachable twice on a finite path still renders
-twice, so every existing finite rendering under 256 frames is byte-identical to what
-it was.
+**Invariant (todo 584 for instances, todo 585 for conses and arrays, 2026-08-30): no
+default renderer runs without bound on a cycle.** One shared mechanism
+(`RenderCycleGuard`), two disciplines:
+
+- **The rendering path + depth cap.** An instance, a cons chain or an array
+  (general OR packed -- a packed one cannot cycle but opens the same frame, so the cap
+  truncates at the same frame on every backend) opens ONE render frame when its
+  rendering begins. A value already on the current path -- a car reaching back to a
+  list still being rendered, an instance graph's parent/children pair, a vector holding
+  itself -- prints as **`#`**, CL's `*print-level*` cutoff marker, in both escape
+  modes; so does the frame that would open past **256** frames
+  (`RenderCycleGuard.MAX_RENDER_DEPTH`), which bounds the render stack for a deep
+  FINITE nest too. The check is IDENTITY along the current path, not equality and not
+  "rendered before": the same value reachable twice on a finite path still renders
+  twice, so every finite rendering under 256 frames is byte-identical to what it was.
+- **Floyd over the cdr chain.** A chain is walked ITERATIVELY (todo 585's measurement:
+  a cdr cycle was an OutOfMemoryError / an unbounded streamed write, NOT the
+  StackOverflowError the todo predicted -- only the car and vector cycles overflowed),
+  so the path guard alone cannot see it. The chain's cycle is detected up front
+  (constant space, one extra traversal), and the SECOND arrival at the cycle-start cell
+  prints as the improper tail **`" . #"`**: `(1 . #)` for `(setf (cdr x) x)`,
+  `(1 2 3 . #)` for a tail cycle back into the middle -- every element exactly once,
+  then the marker.
 
 Four implementations, one behavior, pinned together:
 
-- interpreter: `LispInstance.render` (a `ThreadLocal` path array);
-- JVM backend: the guard emitted into `_instToString`/`_instToDisplayString`
-  (`JvmRuntimeBuilder.buildInstToStringBody`, `_instPath`/`_instDepth` statics shared by
-  the two escape modes, declared only when the program can build an instance);
-- both WASM backends: the guard in the printers' instance branch
-  (`WasmRuntimeBuilder.emitPrintInstance`, two module globals appended after the
-  hash/equalp recursion counters, emitted only under `usesInstances`).
+- interpreter: `RenderCycleGuard` (a `ThreadLocal` path array) entered by
+  `LispInstance.render`, `LispCons.render` (+ its `cycleStart` Floyd scan),
+  `LispArray.render`, `LispFloatArray`/`LispIntVector.print`;
+- JVM backend: the `_renderPath`/`_renderDepth` statics, declared in EVERY class (the
+  cons renderer is unconditional), shared by the emitted
+  `_instToString`/`_instToDisplayString`, `_consToString`/`_consToDisplayString`
+  (`JvmRuntimeBuilder.emitRenderGuardEnter`/`ExitAndReturn` + the Floyd prewalk in
+  `buildConsToStringBody`) and `_arrayToString`/`_arrayToDisplayString`;
+- both WASM backends: two module globals appended after the hash/equalp recursion
+  counters, now unconditional, shared by `emitPrintInstance`, the cons arm
+  (`WasmRuntimeBuilder.emitPrintConsList`, one method for both escape modes) and the
+  array arm of both printers;
+- the two Lisp-level WALKS carry the guard's Lisp twin, since a routed program never
+  reaches the raw cons arm: `%print-object-str`'s `%pos-walk` and `%print-cased`'s
+  `%pc-walk` thread the path and depth through themselves as arguments and pre-scan the
+  chain with Floyd (`%pos-chain-stop` / `%pc-chain-stop`) -- same text, byte for byte.
+  Their path is SEPARATE from the raw renderers' (a cycle threading through an
+  instance's raw-rendered slots restarts the count at the instance), so only a mixed
+  nest past 256 frames can render differently routed vs unrouted -- bounded either way.
 
-A program that cannot build an instance is BYTE-IDENTICAL to a pre-guard build
-(measured 2026-08-30 on `(print (+ 1 2))`, `.class` and `.wasm`); one that can pays
-~174 B of `.class` / ~129 B of `.wasm`. Pinned by
-`LispEvaluatorTest.evalPrintOfACyclicInstanceGraphIsFinite` (+ the depth-cap twin),
-`JvmLispCompilerTest.compileAndRunPrintOfACyclicInstanceGraphIsFinite`,
-`WasmLispCompilerIntegrationTest.printOfACyclicInstanceGraphIsFinite` (+ the component
-twin) and the `print-cyclic-instance-graph` ci-spec case.
+The guard is unconditional, so every artifact pays for it (measured 2026-08-30 against
+the pre-585 build): `(print (+ 1 2))` +430 B of `.class` and +17 B of `.wasm` (the two
+globals alone -- the folded module carries no printer); `(print (list 1 2))` +430 B of
+`.class` and +405 B of `.wasm`; the todo-584 instance probe +362 B of `.class` and
++395 B of `.wasm` on top of what it already paid.
+Pinned by `LispEvaluatorTest.evalPrintOfACyclicConsIsFinite` (+ the depth-cap,
+print-object-route and print-case twins),
+`JvmLispCompilerTest.compileAndRunPrintOfACyclicConsIsFinite` (+ the walks twin),
+`WasmLispCompilerIntegrationTest.printOfACyclicConsIsFinite` (+ the component twin),
+their todo-584 instance siblings, and the `print-cyclic-instance-graph` /
+`print-cyclic-cons` ci-spec cases (the latter runs under the print-object route the
+concatenated program turns on, so it pins the walk too).
 
-**A cyclic CONS (or self-holding vector) still overflows** -- the cons renderer is a
-separate arm in each backend and CL's real answer there is `*print-circle*`, which
-deserves a design of its own; `.todo/585` owns it. The guard sits UNDER the
-`print-object` route: a routed instance reaches the raw fallback and the guard with it,
-and a `print-object` method that prints only what it should (geom's, `.kb/geom.md`)
-never reaches the guard at all.
+The guard sits UNDER the `print-object` route: a routed instance reaches the raw
+fallback and the guard with it, and a `print-object` method that prints only what it
+should (geom's, `.kb/geom.md`) never reaches the guard at all. `*print-circle*` proper
+(`#1=`/`#1#` labels, honoring the variable) remains unimplemented -- the finite `#`
+cutoff is deliberately label-free, consistent between a data cycle and the depth cap.
 
 ## What a stream with no column cannot do, and the re-evaluation trigger
 
@@ -189,7 +218,7 @@ binding); the compile paths get a top-level `(defvar name value)` from
 | `*print-escape*` | `t` | yes -- picks prin1 vs princ, and the `print-object` route binds it |
 | `*print-readably*` | `nil` | yes -- forces escaping |
 | `*print-pretty*` | `t` | yes -- gates the MANDATORY line break |
-| `*print-circle*` | `nil` | no labels -- but the INSTANCE renderer carries a cycle guard (section below) |
+| `*print-circle*` | `nil` | no labels -- but every default renderer carries a cycle guard (section below): a cycle prints finitely as `#` / `" . #"` |
 | `*print-right-margin*` / `*print-miser-width*` / `*print-lines*` | `nil` | no (no column) |
 | `*print-length*` / `*print-level*` | `nil` | the value IS the behavior (no truncation) |
 | `*print-base*` | `10` | the value IS the behavior |

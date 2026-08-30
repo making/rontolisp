@@ -37,7 +37,15 @@ class JvmRuntimeGroupNamesTest {
 
 		List<JvmArrayRuntimeBuilder.ArrayMethod> emitted = new ArrayList<>(
 				JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, selfClass));
-		emitted.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToString, lispToDisplayString, selfClass));
+		emitted.addAll(
+				JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToString, lispToDisplayString, selfClass,
+						new JvmRuntimeBuilder.RenderGuardRefs(
+								cp.addFieldref(selfClass,
+										cp.addNameAndType(cp.addUtf8("_renderPath"),
+												cp.addUtf8("[Ljava/lang/Object;"))),
+								cp.addFieldref(selfClass,
+										cp.addNameAndType(cp.addUtf8("_renderDepth"), cp.addUtf8("I"))),
+								objectClass, cp.addString("#"))));
 
 		assertThat(emitted.stream().map(m -> m.name().index()).collect(Collectors.toSet()))
 			.isEqualTo(indicesOf(cp, JvmArrayRuntimeBuilder.METHOD_NAMES));

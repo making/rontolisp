@@ -1866,33 +1866,88 @@ public final class LispPreludeLibrary {
 				(defun %print-cased (%pc-x %pc-esc)
 				  (if (eq *print-case* :upcase)
 				      (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x))
-				      (cond ((symbolp %pc-x)
-				             (%print-case-fold (if %pc-esc
-				                                   (%prin1-to-string %pc-x)
-				                                   (%princ-to-string %pc-x))))
-				            ((consp %pc-x)
-				             (let ((%pc-acc "(") (%pc-cur %pc-x) (%pc-sep ""))
-				               (while (consp %pc-cur)
-				                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
-				                                            (%print-cased (car %pc-cur) %pc-esc)))
-				                 (setq %pc-sep " ")
-				                 (setq %pc-cur (cdr %pc-cur)))
-				               (unless (null %pc-cur)
-				                 (setq %pc-acc (concatenate 'string %pc-acc " . "
-				                                            (%print-cased %pc-cur %pc-esc))))
-				               (concatenate 'string %pc-acc ")")))
-				            ((and (vectorp %pc-x) (not (stringp %pc-x)) (eql (array-rank %pc-x) 1)
-				                  (not (equal (array-element-type %pc-x) 'single-float))
-				                  (not (equal (array-element-type %pc-x) 'double-float)))
-				             (let ((%pc-acc "#(") (%pc-i 0) (%pc-n (length %pc-x)) (%pc-sep ""))
+				      (%pc-walk %pc-x %pc-esc nil 0)))
+				""");
+		// The recursive half of %print-cased, carrying the cycle guard the raw
+		// renderers carry (RenderCycleGuard, .kb/pretty-printer.md): the rendering path
+		// and its depth thread through as arguments, a cons or vector already on the
+		// path -- or the frame past 256 -- prints "#", and the cdr chain's cycle-start
+		// cell (Floyd, %pc-chain-stop) prints as the " . #" improper tail on its second
+		// arrival. The guard is the twin of the %print-object-str walk's (%pos-walk);
+		// the two walks are never both live in one program, and have to stay in step.
+		SOURCES.put(LispNames.PRINT_CASED_WALK_INTERNAL, """
+				(defun %pc-walk (%pc-x %pc-esc %pc-path %pc-depth)
+				  (cond ((symbolp %pc-x)
+				         (%print-case-fold (if %pc-esc
+				                               (%prin1-to-string %pc-x)
+				                               (%princ-to-string %pc-x))))
+				        ((consp %pc-x)
+				         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
+				             "#"
+				             (let ((%pc-acc "(") (%pc-cur %pc-x) (%pc-sep "")
+				                   (%pc-stop (%pc-chain-stop %pc-x)) (%pc-seen nil) (%pc-done nil)
+				                   (%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1)))
+				               (while (and (consp %pc-cur) (not %pc-done))
+				                 (if (and %pc-seen (eq %pc-cur %pc-stop))
+				                     (setq %pc-done t)
+				                     (progn
+				                       (when (eq %pc-cur %pc-stop)
+				                         (setq %pc-seen t))
+				                       (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
+				                                                  (%pc-walk (car %pc-cur) %pc-esc %pc-sub %pc-subd)))
+				                       (setq %pc-sep " ")
+				                       (setq %pc-cur (cdr %pc-cur)))))
+				               (if %pc-done
+				                   (concatenate 'string %pc-acc " . #)")
+				                   (progn
+				                     (unless (null %pc-cur)
+				                       (setq %pc-acc (concatenate 'string %pc-acc " . "
+				                                                  (%pc-walk %pc-cur %pc-esc %pc-sub %pc-subd))))
+				                     (concatenate 'string %pc-acc ")"))))))
+				        ((and (vectorp %pc-x) (not (stringp %pc-x)) (eql (array-rank %pc-x) 1)
+				              (not (equal (array-element-type %pc-x) 'single-float))
+				              (not (equal (array-element-type %pc-x) 'double-float)))
+				         (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256))
+				             "#"
+				             (let ((%pc-acc "#(") (%pc-i 0) (%pc-n (length %pc-x)) (%pc-sep "")
+				                   (%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1)))
 				               (while (< %pc-i %pc-n)
 				                 (setq %pc-acc (concatenate 'string %pc-acc %pc-sep
-				                                            (%print-cased (aref %pc-x %pc-i) %pc-esc)))
+				                                            (%pc-walk (aref %pc-x %pc-i) %pc-esc %pc-sub %pc-subd)))
 				                 (setq %pc-sep " ")
 				                 (setq %pc-i (+ %pc-i 1)))
-				               (concatenate 'string %pc-acc ")")))
-				            (%pc-esc (%prin1-to-string %pc-x))
-				            (t (%princ-to-string %pc-x)))))
+				               (concatenate 'string %pc-acc ")"))))
+				        (%pc-esc (%prin1-to-string %pc-x))
+				        (t (%princ-to-string %pc-x))))
+				""");
+		SOURCES.put(LispNames.PRINT_CASED_ON_PATH_INTERNAL, """
+				(defun %pc-on-path (%pc-x %pc-path)
+				  (let ((%pc-c %pc-path) (%pc-hit nil))
+				    (while (consp %pc-c)
+				      (when (eq (car %pc-c) %pc-x)
+				        (setq %pc-hit t))
+				      (setq %pc-c (cdr %pc-c)))
+				    %pc-hit))
+				""");
+		SOURCES.put(LispNames.PRINT_CASED_CHAIN_STOP_INTERNAL, """
+				(defun %pc-chain-stop (%pc-x)
+				  (let ((%pc-slow %pc-x) (%pc-fast %pc-x) (%pc-hit nil) (%pc-end nil))
+				    (while (and (not %pc-hit) (not %pc-end))
+				      (if (and (consp %pc-fast) (consp (cdr %pc-fast)))
+				          (progn
+				            (setq %pc-fast (cdr (cdr %pc-fast)))
+				            (setq %pc-slow (cdr %pc-slow))
+				            (when (eq %pc-slow %pc-fast)
+				              (setq %pc-hit t)))
+				          (setq %pc-end t)))
+				    (if %pc-hit
+				        (progn
+				          (setq %pc-slow %pc-x)
+				          (while (not (eq %pc-slow %pc-fast))
+				            (setq %pc-slow (cdr %pc-slow))
+				            (setq %pc-fast (cdr %pc-fast)))
+				          %pc-slow)
+				        nil)))
 				""");
 		// One symbol spelling under the current *print-case*. :downcase is
 		// string-downcase (char-downcase leaves a lower-case character alone, which is

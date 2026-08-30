@@ -339,8 +339,20 @@ public final class LispArray implements LispVal {
 	// flat index is a multiple of that dimension's stride and closes where the next
 	// index is.
 	private String render(java.util.function.Function<LispVal, String> renderElement) {
-		int rank = this.dimensions.length;
-		return render(renderElement, rank == 1 ? "#(" : "#" + rank + "A(");
+		// The cycle guard (RenderCycleGuard, shared with the instance and cons
+		// renderers): an array holding itself -- directly or through a list -- would
+		// recurse without end, so an array already on the current rendering path, or the
+		// frame past the depth cap, prints as "#", the *print-level* cutoff marker.
+		if (!RenderCycleGuard.enter(this)) {
+			return "#";
+		}
+		try {
+			int rank = this.dimensions.length;
+			return render(renderElement, rank == 1 ? "#(" : "#" + rank + "A(");
+		}
+		finally {
+			RenderCycleGuard.exit();
+		}
 	}
 
 	// Renders the array data with a caller-supplied opening prefix (up to and including
