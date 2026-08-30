@@ -7,7 +7,7 @@ embeds when wrapping a rontolisp core module into a WASI 0.3 (Preview 3) compone
 In WASI 0.3 the `wasi:io` package is gone: byte I/O flows through the built-in
 component-model `stream<u8>` / `future<T>` types and the async canonical ABI. rontolisp
 keeps its Preview 1 core module unchanged and an **adapter** core module implements the
-nine `wasi_snapshot_preview1` functions over WASI 0.3, driving the `stream.*` / `future.*`
+twelve `wasi_snapshot_preview1` functions over WASI 0.3, driving the `stream.*` / `future.*`
 canon built-ins. The component's `wasi:cli/run@0.3.0` export (an `async func`) is lifted as
 an async-typed export, and the adapters call the ASYNC (non-blocking) stream/future
 built-ins, parking on a blocking `waitable-set.wait` when one reports BLOCKED -- all of
@@ -107,6 +107,7 @@ import wasi:clocks/system-clock@0.3.0; // now -> instant{seconds s64, nanosecond
 import wasi:clocks/monotonic-clock@0.3.0; // now -> u64; wait-for (async, rontolisp:wait-for's host timer)
                                           // (pulls in wasi:clocks/types for `duration`, dependency-hoisted)
 import wasi:filesystem/types@0.3.0;    // descriptor.open-at / read-via-stream / append-via-stream
+                                       // / read-directory / stat
 import wasi:filesystem/preopens@0.3.0; // get-directories
 import wasi:random/random@0.3.0;       // get-random-u64
 import wasi:cli/stderr@0.3.0;          // write-via-stream (fd 2, for warn); appended last
@@ -127,7 +128,7 @@ async-typed lift of the rontolisp core's `run`) is emitted programmatically by
   (avoids the instantiate-before-memory cycle without a lazy funcref trampoline).
 - `adapter.wat` -> `adapter.wasm` — the preview1-to-0.3 adapter. Imports the shared memory,
   the lowered WASI 0.3 functions and the async canonical built-ins (under `"w"`), and
-  exports the nine `wasi_snapshot_preview1` functions rontolisp imports **plus two extra
+  exports the twelve `wasi_snapshot_preview1` functions rontolisp imports **plus two extra
   entry points**, `fd_write_stdio` and `fd_read_stdin`: the stdio-only halves of the two
   fd-polymorphic shims, which `WasmComponentBuilder` retains UNDER the preview1 names for a
   program whose core imports no `path_open` (see "Pruning"). Writes use
@@ -299,7 +300,7 @@ stream/future built-ins (the base `adapter.wat`'s cli path), a zero environment 
 world). The `environ_*` pair is unreachable from Lisp: a serve program calling
 `uiop:getenv` binds `wasi:cli/environment@0.3.0` itself through `environment.lisp` (an
 appended user import, since the service world declares no such interface), so the stub
-stays only because the core's eight preview1 import slots are index-pinned. Off serve the
+stays only because the core's twelve preview1 import slots are index-pinned. Off serve the
 same library binds the interface FROM the base block, which already declares it, leaving
 `adapter.wat`'s environ decode equally unreachable (`../../.kb/time-environment-builtins.md`).
 

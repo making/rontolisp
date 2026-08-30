@@ -53,7 +53,7 @@ class ComponentImportBlockTest {
 				"wasi:cli/environment@0.3.0", "wasi:clocks/types@0.3.0", "wasi:clocks/system-clock@0.3.0",
 				"wasi:clocks/monotonic-clock@0.3.0", FS_TYPES, FS_PREOPENS, "wasi:random/random@0.3.0", STDERR);
 		assertThat(block.instanceOf()).containsEntry(CLI_TYPES, 0).containsEntry(STDERR, 10);
-		assertThat(block.typeCount()).isEqualTo(16);
+		assertThat(block.typeCount()).isEqualTo(17);
 	}
 
 	@Test
@@ -111,11 +111,15 @@ class ComponentImportBlockTest {
 		// out
 		// of that interface's instance: a resource is its defining interface's type, so
 		// the
-		// projection cannot outlive it.
+		// projection cannot outlive it. The chain is TRANSITIVE and two links long here:
+		// wasi:filesystem/types in turn projects wasi:clocks/system-clock's `instant`,
+		// which it `use`s for descriptor-stat's three timestamps, so asking for
+		// preopens alone keeps the clock too.
 		ComponentImportBlock.Pruned pruned = ComponentImportBlock.parse(blob("import-block.bin"))
 			.prune(Set.of(FS_PREOPENS));
 
-		assertThat(pruned.instanceOf().keySet()).containsExactly(FS_TYPES, FS_PREOPENS);
+		assertThat(pruned.instanceOf().keySet()).containsExactly("wasi:clocks/system-clock@0.3.0", FS_TYPES,
+				FS_PREOPENS);
 	}
 
 	@Test

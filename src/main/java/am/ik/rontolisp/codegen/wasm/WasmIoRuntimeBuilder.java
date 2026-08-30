@@ -918,6 +918,144 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
+	 * The bytes of a preview1 {@code filestat} record: {@code dev} u64 at 0, {@code ino}
+	 * u64 at 8, {@code filetype} u8 at 16, {@code nlink} u64 at 24, {@code size} u64 at
+	 * 32, then the three timestamps. Only the two fields {@code _file_length} reads are
+	 * named below.
+	 */
+	private static final int FILESTAT_BYTES = 64;
+
+	private static final int FILESTAT_FILETYPE_OFFSET = 16;
+
+	private static final int FILESTAT_SIZE_OFFSET = 32;
+
+	/** preview1 {@code filetype::regular_file}. */
+	private static final int FILETYPE_REGULAR_FILE = 4;
+
+	/**
+	 * Builds the _file_length(stream) function body: the byte length of the file the
+	 * stream is open on as an exact integer, or {@code ref.null eq} (nil) when the length
+	 * cannot be determined.
+	 *
+	 * <p>
+	 * The fd is already in hand -- a stream value on this backend IS its WASI descriptor
+	 * -- so the length is one {@code fd_filestat_get} away, and the answer is REAL here
+	 * exactly as it is on the interpreter and the JVM. What still answers nil is what
+	 * genuinely has no length, which is the same set those two answer nil for: a
+	 * non-handle designator ({@code t}, nil, a synonym stream the caller did not
+	 * resolve), a string stream (a NEGATIVE handle), one of the process standard streams
+	 * (below {@link am.ik.rontolisp.compiler.StreamDesignators#FIRST_USER_HANDLE}), and
+	 * anything the host does not report as a REGULAR FILE -- a socket, a directory, a
+	 * closed descriptor, a character device. Nil rather than a trap for all of them: CL
+	 * says {@code file-length} answers nil when the length cannot be determined, and a
+	 * wasm trap is not catchable.
+	 *
+	 * <p>
+	 * The 64-byte {@code filestat} is staged at {@code HEAP_PTR}, which is ADVANCED over
+	 * it for the duration of the call and popped back after -- the {@code _open}
+	 * discipline, load-bearing under {@code --component} for the same reason it is there
+	 * (the adapter may allocate through {@code cabi_realloc}, which bumps that very cell,
+	 * while the syscall runs).
+	 *
+	 * <p>
+	 * No flush is needed before the stat, unlike the interpreter and the JVM: a write on
+	 * this backend goes straight through {@code fd_write}, so there is no buffer between
+	 * {@code write-byte} and the file.
+	 * @return the function body bytes
+	 */
+	static byte[] buildFileLengthBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3
+		w.write(1);
+		w.write(3);
+		w.write(Type.I32);
+		final int STREAM = 0, FD = 1, OFF = 2, ERR = 3;
+
+		// A non-handle designator has no file behind it.
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		// A negative handle is a string stream; 0/1/2 are the process standard streams.
+		getLocal(w, FD);
+		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// off = align8(HEAP_PTR), grown to cover the record; HEAP_PTR advanced over it
+		// and
+		// popped back to off afterwards. The alignment is REQUIRED, not tidiness: the
+		// preview1 filestat's u64 fields make the whole record 8-aligned, and a host that
+		// checks (wasmtime does) rejects an unaligned buffer with "Pointer not aligned to
+		// 8" rather than writing it. HEAP_PTR is a bump pointer over values of every
+		// width, so it is 8-aligned only by luck.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, OFF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, OFF);
+			i32(w, FILESTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		i32(w, FILESTAT_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = fd_filestat_get(fd, off)
+		getLocal(w, FD);
+		getLocal(w, OFF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_FILESTAT_GET);
+		setLocal(w, ERR);
+		// pop the staged record
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a non-zero errno: the host cannot stat this descriptor -> nil
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// only a regular file HAS a length
+		getLocal(w, OFF);
+		w.write(Instruction.I32_LOAD8_U, 0x00, FILESTAT_FILETYPE_OFFSET);
+		i32(w, FILETYPE_REGULAR_FILE);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// return _int_new(mem_i64[off + 32])
+		getLocal(w, OFF);
+		w.write(Instruction.I64_LOAD, 0x03, FILESTAT_SIZE_OFFSET);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	private static void emitNil(WasmWriter w) {
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+	}
+
+	/**
 	 * Builds the _close(stream) function body. Closes the file descriptor via WASI
 	 * fd_close and returns the symbol {@code T}.
 	 * @param st the string table (for the {@code T} symbol)

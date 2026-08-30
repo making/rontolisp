@@ -104,11 +104,12 @@ again as heap. A preopen name longer than 256 bytes is recorded with length 0 ra
 truncated -- a truncated name would compare equal to a prefix that is not the directory it
 names, and a preopen the core cannot see is merely unreachable.
 
-**What this does NOT reach**: `file-write-date` and `file-length` still answer nil on both
-WASM backends and `%delete-file` / `%rename-file` / `%make-directories` still signal --
-they resolve no path at all, because the imports they need (`fd_filestat_get`,
-`path_unlink_file`, `path_rename`, `path_create_directory`) do not exist here. That is
-`.todo/257`, unchanged by this work. Pinned by
+**What this does NOT reach**: `file-write-date` still answers nil on both WASM backends
+and `%delete-file` / `%rename-file` / `%make-directories` still signal -- they resolve no
+path at all, because the imports they need (`path_unlink_file`, `path_rename`,
+`path_create_directory`) do not exist here. (`file-length` was in this list until
+2026-08-31; the twelfth import, `fd_filestat_get`, is now there and it answers for real --
+see below.) Pinned by
 `WasmLispCompilerIntegrationTest#absoluteRuntimePathResolvesAgainstThePreopenThatCoversIt`
 and its `component` twin (both staging the file one level BELOW the preopened directory, so
 the prefix match is what is under test, and both keeping a `-sibling` tree that a match
@@ -392,32 +393,65 @@ Pinned by `HttpHandlerTest#concurrentRequestsGetTheirOwnSocketHandle` and
 own socket to an echo server; the assertion is both "no handle handed out twice" and "the
 echo that came back is my own").
 
-**`file-length` is REAL on the interpreter and the JVM, and `nil` everywhere else -- which
-is in contract, not a stub** (todo-225, the clack milestone). A `Reader`/`Writer` does not
-remember the path it came from, so both backends keep a side table alongside the stream
-table and `file-length` stats what it finds there: interpreter = a `Map<Long, String>
-streamPaths` in `Environment` filled by `open` and cleared by `close`; JVM = an
-`Object[] _streamPaths` field indexed by handle exactly like `_streams`, written by
-`_setStreamPath` (which `_open` wraps its `_addStream` call in) and nulled by
-`_closeStream`. `_fileLength` runs the handle through `_forceOutput` first, so an output
-stream's answer counts what was WRITTEN rather than what happened to reach the disk (the
-interpreter flushes a `Flushable` entry for the same reason). Only `open` fills the table,
-so every other stream kind -- string streams, sockets, the standard streams, a handle
-already closed -- answers nil. **Both WASM backends always answer nil, file streams
-included**, and so does `file-write-date`: CL says both answer nil when the value "cannot
-be determined", and no WASI `filestat` call is imported here. **Reason for the
-divergence**: the fix is a tenth preview1 import (`fd_filestat_get` covers both -- length
-from a live fd, mtime via the `probe-file` open/stat/close shape), which shifts every
-defined function index and needs `adapter.wat` + `adapter-http-server-p1.wat` + the
-`--no-wasi` trap stub in step, the way `fd_readdir` did (`.kb/directory-listing.md`).
-**Re-evaluation trigger**: if any consumer needs a real length or timestamp on WASM, that
-import is the change to make -- nothing else is missing. The JVM side is GATED per
-operator (`JvmIoRuntimeBuilder.FileMeta`), so a program that asks for neither keeps its
-exact bytes; `#'file-length` / `#'file-write-date` are in `REFERENCE_GATED_FUNCTIONS`
-because their wrapper bodies call those helpers and the gate scans the SOURCE program, not
-the injected wrappers. Pinned by `LispEvaluatorTest#evalFileWriteDateAndFileLength`,
-`JvmLispCompilerTest#compileAndRunFileWriteDateAndFileLength` and
-`WasmLispCompilerIntegrationTest#fileMetadataAnswersNilAndDirectoryCreationSignals`.
+**`file-length` is REAL on ALL FOUR backends, and `nil` only where a stream genuinely has
+no length** (todo-225 for the JVM family, todo-589 for WASM, 2026-08-31). A `Reader`/
+`Writer` does not remember the path it came from, so the interpreter and the JVM keep a
+side table alongside the stream table and `file-length` stats what it finds there:
+interpreter = a `Map<Long, String> streamPaths` in `Environment` filled by `open` and
+cleared by `close`; JVM = an `Object[] _streamPaths` field indexed by handle exactly like
+`_streams`, written by `_setStreamPath` (which `_open` wraps its `_addStream` call in) and
+nulled by `_closeStream`. `_fileLength` runs the handle through `_forceOutput` first, so an
+output stream's answer counts what was WRITTEN rather than what happened to reach the disk
+(the interpreter flushes a `Flushable` entry for the same reason). Only `open` fills the
+table, so every other stream kind -- string streams, sockets, the standard streams, a
+handle already closed -- answers nil.
+
+**The two WASM backends need no side table**: a stream value there IS its WASI descriptor,
+so `_file_length` (`WasmIoRuntimeBuilder.buildFileLengthBody`, fixed index
+`FUNC_FILE_LENGTH` appended after `FUNC_EQUALP_KEY`, called by `WasmFileLengthCompiler`
+through `WasmEmitHelper.streamDesignator`) stats the fd directly through the TWELFTH
+preview1 import, `fd_filestat_get`. It answers nil for exactly the set the other two do:
+a non-i31 designator (`t`, nil, an unresolved synonym stream), a NEGATIVE handle (a string
+stream), a handle below `StreamDesignators.FIRST_USER_HANDLE` (the process standard
+streams), a non-zero errno (a closed descriptor, a socket handle past the adapter's fd
+table), and any `filetype` that is not `regular_file` (a directory, a character device, a
+socket). No flush first, unlike the other two: a write there goes straight through
+`fd_write`. The 64-byte `filestat` is staged at `HEAP_PTR`, advanced over for the call and
+popped after -- the `_open` discipline, load-bearing under `--component` because the
+adapter allocates through `cabi_realloc` at that very cell -- and the staged pointer is
+rounded UP to 8 first. That rounding is required, not tidiness: preview1's `filestat` has
+u64 fields, so the record is 8-aligned by definition and wasmtime REFUSES an unaligned
+buffer (`Pointer not aligned to 8`) instead of writing it, while `HEAP_PTR` is a bump
+pointer over values of every width and is 8-aligned only by luck. The first cut of this
+passed by hand and failed in the test on the one program whose heap happened to be at an
+odd multiple of 4. Under `--component`
+`adapter.wat`'s `$fd_filestat_get` re-encodes the preview1 `filestat` from a
+SYNC-lowered `wasi:filesystem` `descriptor.stat` (`result<descriptor-stat, error-code>` at
+`0x51600`: result disc @0, `type` @8, `link-count` @24, `size` @32); it fills dev/ino and
+the three timestamps with 0, because the core reads only filetype and size and a stub may
+not name a time that is not the time. `adapter-http-server-p1.wat` answers EBADF (the
+service world has no filesystem) and `--no-wasi` gets the EBADF trap stub.
+
+**`file-write-date` still answers nil on both WASM backends.** It names a PATH rather than
+an open stream, so it needs an open/stat/close of its own, not the fd call `file-length`
+already has; and the component adapter zero-fills the `filestat` timestamps. CL says nil
+when the value "cannot be determined". **Re-evaluation trigger**: the wiring is now half
+there -- lifting `data-modification-timestamp` out of `descriptor-stat` in `adapter.wat`
+and adding a path-stat runtime beside `_probe_file` is the whole remaining change.
+
+The JVM side is GATED per operator (`JvmIoRuntimeBuilder.FileMeta`), so a program that asks
+for neither keeps its exact bytes; `#'file-length` / `#'file-write-date` are in
+`REFERENCE_GATED_FUNCTIONS` because their wrapper bodies call those helpers and the gate
+scans the SOURCE program, not the injected wrappers. The WASM side is not gated -- the
+helper is one always-emitted body like `_list_directory`, and `--optimize` drops it (and
+the import with it) for a program that never calls it.
+
+Pinned by `LispEvaluatorTest#evalFileWriteDateAndFileLength` / `#fileLengthOverEveryStreamKind`,
+`JvmLispCompilerTest#compileAndRunFileWriteDateAndFileLength` /
+`#compileAndRunFileLengthOverEveryStreamKind`,
+`WasmLispCompilerIntegrationTest#fileMetadataAnswersNilAndDirectoryCreationSignals` /
+`#fileLengthAnswersTheSizeOfARealFile` / `#componentFileLength`, and the
+`file-length-of-a-file-of-a-known-size` ci-spec case (all four backends, byte-identical).
 
 **`ensure-directories-exist` is Lisp source over ONE creating primitive** (`%make-directories`,
 the write-side sibling of `%list-directory`): `LispPreludeLibrary` holds the defun, so the
@@ -459,9 +493,10 @@ name keeps the directory. Pinned by
 prelude Lisp over `with-open-file` + a CHUNKED `read-sequence` loop, and both properties of
 that loop are load-bearing rather than stylistic:
 
-- `file-length` answers nil on both WASM backends (see the paragraph above), so
-  `(make-string (file-length s))` traps there -- an uncatchable `unreachable`, not an error
-  a caller could handle.
+- `file-length` answered nil on both WASM backends when this was written (it answers for
+  real since 2026-08-31, see the paragraph above), so `(make-string (file-length s))`
+  trapped there. The chunked loop stays for its OTHER property, below, which is the one
+  that still bites.
 - The loop stops on the first SHORT read, so end of file is read at most ONCE. A SECOND read
   past EOF traps on the `--component` backend alone: `adapter.wat`'s `$fd_read` calls
   `stream.read` after the writable end has dropped, which wasmtime rejects

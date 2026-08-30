@@ -65,9 +65,10 @@ parent forever.
 
 ### `fd_readdir` is a NINTH preview1 import
 
-(The count is 11 since todo-432 added `fd_prestat_get` / `fd_prestat_dir_name` for
-absolute-path resolution -- `.kb/read-load-streams.md`. What follows is the recipe,
-and it is the same one for any tenth or twelfth.)
+(The count is 12: todo-432 added `fd_prestat_get` / `fd_prestat_dir_name` for
+absolute-path resolution and todo-589 added `fd_filestat_get` for `file-length` --
+`.kb/read-load-streams.md`. What follows is the recipe, and it is the same one for any
+thirteenth.)
 
 `IMPORT_FUNC_COUNT` went 8 -> 9 and `FUNC_START` with it, so **every emitted WASM
 function index shifted** -- that is inherent to extending the import surface, not

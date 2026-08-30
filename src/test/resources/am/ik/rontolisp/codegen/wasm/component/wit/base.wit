@@ -75,10 +75,13 @@ package wasi:clocks@0.3.0 {
 
 package wasi:filesystem@0.3.0 {
   interface types {
+    use wasi:clocks/system-clock@0.3.0.{instant};
+
     resource descriptor {
       read-via-stream: func(offset: filesize) -> tuple<stream<u8>, future<result<_, error-code>>>;
       append-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
       read-directory: func() -> tuple<stream<directory-entry>, future<result<_, error-code>>>;
+      stat: async func() -> result<descriptor-stat, error-code>;
       open-at: async func(path-flags: path-flags, path: string, open-flags: open-flags, %flags: descriptor-flags) -> result<descriptor, error-code>;
     }
 
@@ -158,6 +161,17 @@ package wasi:filesystem@0.3.0 {
     record directory-entry {
       %type: descriptor-type,
       name: string,
+    }
+
+    type link-count = u64;
+
+    record descriptor-stat {
+      %type: descriptor-type,
+      link-count: link-count,
+      size: filesize,
+      data-access-timestamp: option<instant>,
+      data-modification-timestamp: option<instant>,
+      status-change-timestamp: option<instant>,
     }
   }
   interface preopens {

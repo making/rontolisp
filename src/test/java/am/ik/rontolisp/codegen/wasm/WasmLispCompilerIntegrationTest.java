@@ -10013,19 +10013,58 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void fileMetadataAnswersNilAndDirectoryCreationSignals() throws Exception {
-		// The documented WASM divergence (.kb/read-load-streams.md): no WASI filestat
-		// call is imported, and "cannot be determined" IS Common Lisp's answer for
-		// file-length / file-write-date -- so they answer nil here while the interpreter
-		// and the JVM answer for real. ensure-directories-exist has no such escape in its
-		// contract, so it SIGNALS rather than pretending the directory is there.
+		// The remaining WASM divergence (.kb/read-load-streams.md): no timestamp call is
+		// imported, and "cannot be determined" IS Common Lisp's answer for
+		// file-write-date -- so it answers nil here while the interpreter and the JVM
+		// answer for real. file-length is REAL on all four since the fd_filestat_get
+		// import landed (fileLengthAnswersTheSizeOfARealFile below).
+		// ensure-directories-exist has no such escape in its contract, so it SIGNALS
+		// rather than pretending the directory is there.
 		String code = """
 				(with-open-file (out "meta.txt" :direction :output) (write-line "hello" out))
 				(print (file-write-date "meta.txt"))
-				(with-open-file (in "meta.txt") (print (file-length in)))
 				(print (ignore-errors (ensure-directories-exist "sub/dir/x.txt")))
 				(print (if (probe-file "sub/dir/x.txt") 'made 'absent))
 				""";
-		assertThat(compileAndRunWithDir(code)).isEqualTo("NIL\nNIL\nNIL\nABSENT");
+		assertThat(compileAndRunWithDir(code)).isEqualTo("NIL\nNIL\nABSENT");
+	}
+
+	/**
+	 * The program both {@code file-length} tests run: a file of a KNOWN size, its length
+	 * read back through the output stream that wrote it and through a fresh input stream,
+	 * then every designator that genuinely has no length. The last line is the shape that
+	 * used to TRAP one call later -- {@code (min 4096 nil)} is a cast failure on this
+	 * backend, not an error -- which is what made the nil answer worse than a wrong
+	 * number would have been.
+	 */
+	private static final String FILE_LENGTH_PROGRAM = """
+			(with-open-file (out "len.bin" :direction :output :if-exists :supersede
+			                     :element-type '(unsigned-byte 8))
+			  (dotimes (i 300) (write-byte (mod i 256) out))
+			  (print (file-length out)))
+			(with-open-file (in "len.bin" :element-type '(unsigned-byte 8))
+			  (print (file-length in)))
+			(with-input-from-string (s "abcdef") (print (file-length s)))
+			(print (file-length *standard-output*))
+			(print (file-length t))
+			(let ((h (open "len.bin"))) (close h) (print (file-length h)))
+			(with-open-file (in "len.bin" :element-type '(unsigned-byte 8))
+			  (print (min 4096 (file-length in))))
+			""";
+
+	private static final String FILE_LENGTH_EXPECTED = "300\n300\nNIL\nNIL\nNIL\nNIL\n300";
+
+	@Test
+	void fileLengthAnswersTheSizeOfARealFile() throws Exception {
+		assertThat(compileAndRunWithDir(FILE_LENGTH_PROGRAM)).isEqualTo(FILE_LENGTH_EXPECTED);
+	}
+
+	@Test
+	void componentFileLength() throws Exception {
+		// The component path stats over wasi:filesystem's descriptor.stat through a
+		// different adapter (the preview1 filestat is re-encoded from a lowered
+		// descriptor-stat), so the whole answer is verified there too.
+		assertThat(compileAndRunComponentWithDir(FILE_LENGTH_PROGRAM)).isEqualTo(FILE_LENGTH_EXPECTED);
 	}
 
 	@Test
@@ -18432,7 +18471,7 @@ class WasmLispCompilerIntegrationTest {
 		return c.toByteArray();
 	}
 
-	// The eleven wasi_snapshot_preview1 imports of a component-mode core, as trap stubs:
+	// The twelve wasi_snapshot_preview1 imports of a component-mode core, as trap stubs:
 	// the probe never does I/O, so reaching one is a probe bug worth trapping on.
 	private static byte[] probePreview1Stub() {
 		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
@@ -18471,7 +18510,8 @@ class WasmLispCompilerIntegrationTest {
 			.addFunction(3) // environ_get
 			.addFunction(5) // fd_readdir
 			.addFunction(3) // fd_prestat_get
-			.addFunction(6)); // fd_prestat_dir_name
+			.addFunction(6) // fd_prestat_dir_name
+			.addFunction(3)); // fd_filestat_get
 		w.writeExport(e -> e.addExport("fd_write", am.ik.wasm.ExternalKind.FUNCTION, 0)
 			.addExport("fd_read", am.ik.wasm.ExternalKind.FUNCTION, 1)
 			.addExport("path_open", am.ik.wasm.ExternalKind.FUNCTION, 2)
@@ -18482,9 +18522,10 @@ class WasmLispCompilerIntegrationTest {
 			.addExport("environ_get", am.ik.wasm.ExternalKind.FUNCTION, 7)
 			.addExport("fd_readdir", am.ik.wasm.ExternalKind.FUNCTION, 8)
 			.addExport("fd_prestat_get", am.ik.wasm.ExternalKind.FUNCTION, 9)
-			.addExport("fd_prestat_dir_name", am.ik.wasm.ExternalKind.FUNCTION, 10));
+			.addExport("fd_prestat_dir_name", am.ik.wasm.ExternalKind.FUNCTION, 10)
+			.addExport("fd_filestat_get", am.ik.wasm.ExternalKind.FUNCTION, 11));
 		w.writeCode(codes -> {
-			for (int i = 0; i < 11; i++) {
+			for (int i = 0; i < 12; i++) {
 				codes.addFunction(new byte[] { 0x00, 0x00, 0x0b }); // unreachable
 			}
 		});

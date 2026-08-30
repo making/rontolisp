@@ -328,18 +328,19 @@ re-sniffs the carrier itself). What survives of the refuse-by-name rule is
 per-reader: the file-level refusal is only "cannot tell what format", and each
 reader names what IT cannot carry ("PLY" and "glTF" below).
 
-### The dialect test does not use `file-length`, and cannot
+### The dialect test does not use `file-length`
 
-`file-length` answers **nil on both WASM backends by design** (no WASI filestat is
-imported -- `doc/*/reference/functions/file-length.md`). The classic STL test is the
-exact `84 + 50n` length arithmetic, and a reader resting on it classifies a file on
-the JVM and TRAPS on wasm (measured: `(min 4096 (file-length in))` is
-`min` of nil). So the dialect is decided by the file's SHAPE instead -- an ASCII file
-opens with `solid` and carries `facet`/`endsolid` on its next line -- which is one
-code path, identical on all four backends, and survives the trap the length test
-exists for (`trimesh`'s own `unit_cube.STL` is BINARY with `solid unit_cube` in its
-header). `read-sequence`'s short-fill answer is what replaces `file-length` for
-"how much did I get", and it is identical on all four (verified 2026-08-30).
+It was written that way because it could not: `file-length` answered nil on both WASM
+backends, so the classic STL test (the exact `84 + 50n` length arithmetic) classified a
+file on the JVM and TRAPPED on wasm one call later, in `min`. **That gap is closed since
+2026-08-31** (todo-589: `fd_filestat_get` is the twelfth preview1 import, and
+`file-length` answers on all four) -- so the constraint is gone, but the design stays on
+its own merits: deciding the dialect from the file's SHAPE (an ASCII file opens with
+`solid` and carries `facet`/`endsolid` on its next line) is one code path, identical on
+all four backends, and it also survives the file the length test does not
+(`trimesh`'s own `unit_cube.STL` is BINARY with `solid unit_cube` in its header).
+`read-sequence`'s short-fill answer is what replaces `file-length` for "how much did I
+get", and it is identical on all four (verified 2026-08-30).
 
 ### Measured (2026-08-30, Apple M4 Max)
 

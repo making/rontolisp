@@ -111,7 +111,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	/**
 	 * The WASI Preview 1 module name, for the imports that are APPENDED rather than
-	 * declared in the eleven index-pinned fixed slots: the {@code args_sizes_get} /
+	 * declared in the twelve index-pinned fixed slots: the {@code args_sizes_get} /
 	 * {@code args_get} pair {@code %host-argv} reads its vector from, bound the way
 	 * {@code exit.lisp} binds {@code proc_exit} -- as an ordinary user import, so a
 	 * program that never asks for them imports nothing new.
@@ -710,10 +710,17 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_FD_PRESTAT_DIR_NAME = 10; // imported
 
-	/** Number of preview1-style imported functions (fd_write..fd_prestat_dir_name). */
-	static final int IMPORT_FUNC_COUNT = 11;
+	// The SIZE call, in both modes like the eleven above: preview1 binds the real
+	// wasi_snapshot_preview1 fd_filestat_get, component mode the adapter's
+	// implementation over wasi:filesystem's descriptor.stat. It is what file-length
+	// answers from -- a file's length is a fact about the file that no sequence of
+	// path_open / fd_read can establish without reading the whole thing.
+	static final int FUNC_FD_FILESTAT_GET = 11; // imported
 
-	static final int FUNC_START = IMPORT_FUNC_COUNT; // 11
+	/** Number of preview1-style imported functions (fd_write..fd_filestat_get). */
+	static final int IMPORT_FUNC_COUNT = 12;
+
+	static final int FUNC_START = IMPORT_FUNC_COUNT; // 12
 
 	static final int FUNC_PRINT_I32 = FUNC_START + 1;
 
@@ -1383,7 +1390,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// argv0 first -- the host read behind %host-argv, and therefore behind the whole
 	// uiop/image command-line family. It scans the buffer args_sizes_get / args_get
 	// fill, the pair being APPENDED USER IMPORTS rather than fixed slots
-	// (WasmArgvRuntimeBuilder), so the eleven index-pinned preview1 imports do not
+	// (WasmArgvRuntimeBuilder), so the twelve index-pinned preview1 imports do not
 	// grow and no --component adapter export list changes. Reuses the () -> (ref null
 	// eq) signature (TYPE_READ_LINE), so no new type entry; appended after the last
 	// fixed helper so no index above shifts. A program that reads no arguments gets a
@@ -1398,7 +1405,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// that writes no :test 'equalp gets an identity stub body and calls it nowhere.
 	static final int FUNC_EQUALP_KEY = FUNC_ARGV + 1;
 
-	static final int FX_FUNC_LAST = FUNC_EQUALP_KEY;
+	// _file_length (stream) -> integer | nil: the byte length of the file behind a file
+	// stream, read from the fd_filestat_get import (WasmIoRuntimeBuilder). Everything
+	// that genuinely has no length -- a string stream (a negative handle), a standard
+	// stream, a socket, a closed or non-handle designator -- answers nil, which is what
+	// CL prescribes for "cannot be determined". Reuses the ((ref null eq)) ->
+	// (ref null eq) signature (TYPE_CALLABLE_BASE + 0), so no new type entry; appended
+	// after the last fixed helper so no index above shifts.
+	static final int FUNC_FILE_LENGTH = FUNC_EQUALP_KEY + 1;
+
+	static final int FX_FUNC_LAST = FUNC_FILE_LENGTH;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -5286,7 +5302,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						// like _rd_memeq -- no new type entry for either.
 						.addImport("wasi_snapshot_preview1", "fd_prestat_get", ExternalKind.FUNCTION, TYPE_INTERN)
 						.addImport("wasi_snapshot_preview1", "fd_prestat_dir_name", ExternalKind.FUNCTION,
-								TYPE_RD_MEMEQ);
+								TYPE_RD_MEMEQ)
+						// fd_filestat_get backs file-length. fd_filestat_get(fd, buf) ->
+						// errno is (i32,i32)->i32 like _intern, so no new type entry.
+						// Component mode binds the adapter's implementation over
+						// wasi:filesystem's descriptor.stat.
+						.addImport("wasi_snapshot_preview1", "fd_filestat_get", ExternalKind.FUNCTION, TYPE_INTERN);
 				}
 				if (this.component && !this.noWasi) {
 					// Import the linear memory from the shared canonical-memory module so
@@ -5310,13 +5331,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Function section
 			.writeFunction(fnDef -> {
-				// No-wasi mode: the eleven wasi imports were omitted, so define eleven
+				// No-wasi mode: the twelve wasi imports were omitted, so define twelve
 				// trap
-				// stubs at function indices 0-10 with the SAME type indices the imports
+				// stubs at function indices 0-11 with the SAME type indices the imports
 				// used
 				// (fd_write, fd_read, path_open, fd_close, random_get, clock_time_get,
 				// environ_sizes_get, environ_get, fd_readdir, fd_prestat_get,
-				// fd_prestat_dir_name). This keeps every FUNC_*
+				// fd_prestat_dir_name, fd_filestat_get). This keeps every FUNC_*
 				// constant
 				// valid.
 				if (this.noWasi) {
@@ -5330,7 +5351,8 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addFunction(TYPE_INTERN) // 7: environ_get
 						.addFunction(TYPE_FD_READDIR) // 8: fd_readdir
 						.addFunction(TYPE_INTERN) // 9: fd_prestat_get
-						.addFunction(TYPE_RD_MEMEQ); // 10: fd_prestat_dir_name
+						.addFunction(TYPE_RD_MEMEQ) // 10: fd_prestat_dir_name
+						.addFunction(TYPE_INTERN); // 11: fd_filestat_get
 				}
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
@@ -5548,6 +5570,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_READ_LINE); // _argv () -> arg list (FUNC_ARGV)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _equalp_key (key) -> key
 															// (FUNC_EQUALP_KEY)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _file_length (stream) ->
+															// length (FUNC_FILE_LENGTH)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -6047,20 +6071,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		mainWriter
 			// Code section
 			.writeCode(code -> {
-				// No-wasi mode: bodies for the eleven stubs at indices 0-10. TWO are
+				// No-wasi mode: bodies for the twelve stubs at indices 0-11. TWO are
 				// `unreachable; end` (no locals) -- fd_read and clock_time_get;
 				// unreachable is stack-polymorphic so one shape satisfies every WASI
 				// signature, and calling one traps.
-				// The other nine ANSWER, each for its own reason (see the builders):
+				// The other ten ANSWER, each for its own reason (see the builders):
 				// fd_write is a SINK, so writing to stdout/stderr on a reactor discards
 				// the bytes instead of killing the instance; random_get is a
 				// self-contained SplitMix64 generator over a linear-memory state cell
 				// (which nothing calls here any more -- `random` inlines the same step
 				// at the draw site, .kb/random.md -- so the shaker drops it unless
 				// --host-random makes it the seeding forwarder);
-				// the two environ functions report an EMPTY environment; and the three
+				// the two environ functions report an EMPTY environment; and the four
 				// filesystem slots report an errno, which the _open / _probe_file /
-				// _list_directory / _load runtimes already turn into nil. EBADF on
+				// _list_directory / _file_length / _load runtimes already turn into
+				// nil. EBADF on
 				// fd_prestat_get is what ends _path_dirfd's preopen walk at the FIRST
 				// fd, so a reactor answers "no preopen covers this path" instead of
 				// looping.
@@ -6089,7 +6114,8 @@ public final class WasmLispCompiler implements LispCompiler {
 							case FUNC_ENVIRON_GET -> WasmIoRuntimeBuilder.buildNoWasiErrnoBody(0);
 							case FUNC_PATH_OPEN ->
 								WasmIoRuntimeBuilder.buildNoWasiErrnoBody(WasmIoRuntimeBuilder.ERRNO_NOENT);
-							case FUNC_FD_CLOSE, FUNC_FD_READDIR, FUNC_FD_PRESTAT_GET, FUNC_FD_PRESTAT_DIR_NAME ->
+							case FUNC_FD_CLOSE, FUNC_FD_READDIR, FUNC_FD_PRESTAT_GET, FUNC_FD_PRESTAT_DIR_NAME,
+									FUNC_FD_FILESTAT_GET ->
 								WasmIoRuntimeBuilder.buildNoWasiErrnoBody(WasmIoRuntimeBuilder.ERRNO_BADF);
 							default -> new byte[] { 0x00, 0x00, 0x0b };
 						});
@@ -6331,6 +6357,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// program writes a :test 'equalp table, since nothing else calls it.
 				code.addFunction(equalpDepthGlobalIndex < 0 ? WasmEqualpKeyRuntimeBuilder.buildStub()
 						: WasmEqualpKeyRuntimeBuilder.build(equalpDepthGlobalIndex, equalpGasGlobalIndex));
+				// file-length body (FUNC_FILE_LENGTH), over the fd_filestat_get import.
+				code.addFunction(WasmIoRuntimeBuilder.buildFileLengthBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

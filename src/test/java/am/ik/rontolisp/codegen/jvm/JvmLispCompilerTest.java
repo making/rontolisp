@@ -3488,6 +3488,29 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFileLengthOverEveryStreamKind() throws Exception {
+		// The cross-backend shape (.kb/read-load-streams.md): a real file answers its
+		// byte count -- from the OUTPUT stream that wrote it as well, so the answer
+		// counts what was written rather than what happened to reach the disk -- and
+		// everything with no file behind it answers nil. The trailing (min 4096 ...) is
+		// the caller shape the WASM backends used to trap on.
+		String file = tempDir.resolve("len.bin").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (dotimes (i 300) (write-byte (mod i 256) out))
+				  (print (file-length out)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (file-length in)))
+				(with-input-from-string (s "abcdef") (print (file-length s)))
+				(print (file-length *standard-output*))
+				(print (file-length t))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (min 4096 (file-length in))))
+				""".formatted(file, file, file))).isEqualTo("300\n300\nNIL\nNIL\nNIL\n300");
+	}
+
+	@Test
 	void compileAndRunEnsureDirectoriesExist() throws Exception {
 		String base = tempDir.toString().replace("\\", "\\\\");
 		assertThat(compileAndRun("""
