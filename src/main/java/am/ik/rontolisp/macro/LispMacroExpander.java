@@ -23911,10 +23911,18 @@ public final class LispMacroExpander {
 		LispVal accStep;
 		LispVal resultForm;
 		if ("STRING".equals(resultType)) {
-			accInit = new LispString("");
-			accStep = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), accVar,
-					listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), call))));
-			resultForm = accVar;
+			// A LIST of the per-element pieces, joined pairwise at the end. The
+			// accumulator used to be (%string-concat acc (princ-to-string call)), which
+			// rebuilds the WHOLE result once per element and is O(n^2) in the OUTPUT --
+			// a different defect from the O(n^2) head-walk the cursor above removes from
+			// the READ, and one the cursor could not touch. Every literal
+			// (coerce x 'string) reaches this too (coerceToStringBody is a
+			// (map 'string #'identity ...) form), so the string arm of the shared
+			// %seq-to-string conversion carries the join once for the whole program.
+			accInit = LispNil.INSTANCE;
+			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS),
+					listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), call)), accVar));
+			resultForm = joinStringPiecesReversed(accVar);
 		}
 		else if ("LIST".equals(resultType)) {
 			accInit = LispNil.INSTANCE;
@@ -23938,6 +23946,60 @@ public final class LispMacroExpander {
 		LispVal endClause = listToCons(List.of(endTest, resultForm));
 		LispVal doStar = listToCons(List.of(new LispSymbol(LispNames.DO_STAR), listToCons(bindings), endClause));
 		return expandDoStar((LispCons) doStar);
+	}
+
+	/**
+	 * Joins the REVERSED list of string pieces {@code acc} holds into one string, by
+	 * repeated pairwise concatenation:
+	 *
+	 * <pre>
+	 * (let ((ps (nreverse acc)))
+	 *   (do () ((null (cdr ps)) (if (consp ps) (car ps) ""))
+	 *     (let ((q nil) (c ps))
+	 *       (do () ((null c))
+	 *         (if (consp (cdr c))
+	 *             (progn (setq q (cons (%string-concat (car c) (car (cdr c))) q))
+	 *                    (setq c (cdr (cdr c))))
+	 *             (progn (setq q (cons (car c) q)) (setq c (cdr c)))))
+	 *       (setq ps (nreverse q)))))
+	 * </pre>
+	 *
+	 * A LEFT FOLD -- one {@code %string-concat} of the whole accumulator per element --
+	 * is O(n^2) characters copied; halving the list until one string is left is O(n log
+	 * n), with no mutable buffer and no representation this expansion did not already use
+	 * (cons/car/cdr/nreverse and the same {@code %string-concat}). It answers the empty
+	 * string for an empty sequence and the single piece for a one-element one, so the
+	 * text is character for character what the fold built.
+	 * @param acc the accumulator variable, holding the pieces in reverse order
+	 * @return the join form
+	 */
+	private static LispVal joinStringPiecesReversed(LispSymbol acc) {
+		LispSymbol ps = new LispSymbol("__map_ps");
+		LispSymbol q = new LispSymbol("__map_q");
+		LispSymbol c = new LispSymbol("__map_c");
+		LispVal cdrC = callOf(LispNames.CDR, c);
+		LispVal second = listToCons(List.of(new LispSymbol(LispNames.CAR), cdrC));
+		LispVal pair = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), callOf(LispNames.CAR, c), second));
+		LispVal takeTwo = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), q,
+						listToCons(List.of(new LispSymbol(LispNames.CONS), pair, q)))),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), c, listToCons(List.of(new LispSymbol(LispNames.CDR),
+						listToCons(List.of(new LispSymbol(LispNames.CDR), c))))))));
+		LispVal takeOne = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), q,
+						listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, c), q)))),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), c, callOf(LispNames.CDR, c)))));
+		LispVal inner = listToCons(List.of(new LispSymbol(LispNames.DO), LispNil.INSTANCE,
+				listToCons(List.of(callOf(LispNames.NULL, c), LispNil.INSTANCE)),
+				makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), cdrC)), takeTwo, takeOne)));
+		LispVal onePass = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(q, LispNil.INSTANCE)), listToCons(List.of(c, ps)))), inner,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), ps, callOf(LispNames.NREVERSE, q)))));
+		LispVal result = makeIf(callOf(LispNames.CONSP, ps), callOf(LispNames.CAR, ps), new LispString(""));
+		LispVal outer = listToCons(List.of(new LispSymbol(LispNames.DO), LispNil.INSTANCE,
+				listToCons(List.of(callOf(LispNames.NULL, callOf(LispNames.CDR, ps)), result)), onePass));
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(ps, callOf(LispNames.NREVERSE, acc))))), outer));
 	}
 
 	/** Returns the symbol name inside a {@code (quote name)} form, or null otherwise. */

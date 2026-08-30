@@ -12,9 +12,11 @@
 ;;; not grow without bound (.kb/wasm-function-body-size.md).
 ;;;
 ;;; The argument cursor is an (all . index) pair rather than a shrinking list, so
-;;; `~*` can move backwards and `~n@*` can jump absolutely. Renderers return a
-;;; state LIST rather than multiple values: multiple values do not cross a
-;;; function boundary on every backend (.kb/multiple-values.md).
+;;; `~*` can move backwards and `~n@*` can jump absolutely -- and `all` is itself
+;;; the pair %fmt-args builds, read only through %fmt-arg / %fmt-count (see "the
+;;; argument set" below). Renderers return a state LIST rather than multiple
+;;; values: multiple values do not cross a function boundary on every backend
+;;; (.kb/multiple-values.md).
 
 ;;; ---------------------------------------------------------------- primitives
 
@@ -46,6 +48,66 @@
       (setq r (* r 10))
       (setq k (+ k 1)))
     r))
+
+;;; ---------------------------------------------------------- the argument set
+;;; `all` is not the argument LIST any more: it is the pair
+;;; (list <the list as given> <a vector of it, or nil>), built once per rendering
+;;; level by %fmt-args, and every read goes through %fmt-arg / %fmt-count.
+;;;
+;;; Why a vector and not a cursor. The argument pointer moves in four directions
+;;; -- ~* forward, ~:* backward, ~n@* absolutely, and ~? / ~{ recurse with their
+;;; own pointer -- so the access pattern is RANDOM and a monotone cons cursor
+;;; cannot serve it. One O(n) pass up front buys O(1) reads for the whole level
+;;; instead. Without it `(nth i all)` per directive and `(length items)` twice per
+;;; ~{ pass made every iteration over a long list quadratic in its length.
+;;;
+;;; Only a PROPER list is materialized, and the vector is only ever consulted for
+;;; an index INSIDE it: a dotted list, a non-sequence, a short list and every
+;;; out-of-range or negative index fall through to the very (nth i list) /
+;;; (length list) the renderer used to make, so nothing it answered -- nil past
+;;; the end, whatever a non-list makes those two operators do -- moves.
+;;; A short list is left alone because the vector costs more than the walk it
+;;; saves; the two paths answer identically, so the threshold is a cost choice
+;;; only.
+
+(defun %fmt-args (x)
+  (let ((c x) (n 0))
+    (while (consp c)
+      (setq n (+ n 1))
+      (setq c (cdr c)))
+    (if (and (null c) (>= n 8)) (list x (coerce x 'vector)) (list x nil))))
+
+(defun %fmt-arg (all i)
+  (let ((v (nth 1 all)))
+    (if (and v (>= i 0) (< i (length v))) (aref v i) (nth i (nth 0 all)))))
+
+(defun %fmt-count (all)
+  (let ((v (nth 1 all))) (if v (length v) (length (nth 0 all)))))
+
+;;; ------------------------------------------------------- joining the output
+;;; The iteration directives used to grow one accumulator with (%fmt-cat acc
+;;; piece) per pass, which rebuilds the whole text every pass and is quadratic in
+;;; the OUTPUT even once the argument reads are O(1). Collecting the pieces and
+;;; halving the list until one string is left copies O(n log n) characters
+;;; instead, with no mutable buffer -- the renderer has none on any backend.
+;;; `pieces` arrives in REVERSE order, the order the loops push it in.
+
+(defun %fmt-join (pieces)
+  (let ((ps (nreverse pieces)))
+    (while (consp (cdr ps)) (setq ps (%fmt-join-pass ps)))
+    (if (consp ps) (car ps) "")))
+
+(defun %fmt-join-pass (ps)
+  (let ((acc nil) (c ps))
+    (while (consp c)
+      (if (consp (cdr c))
+          (progn
+            (setq acc (cons (%fmt-cat (car c) (car (cdr c))) acc))
+            (setq c (cdr (cdr c))))
+          (progn
+            (setq acc (cons (car c) acc))
+            (setq c (cdr c)))))
+    (nreverse acc)))
 
 ;;; ------------------------------------------------------------ prefix params
 ;;; A parameter is an integer, a character ('c or a runtime v), or nil for an
@@ -92,16 +154,18 @@
 ;;; (list value pos i)
 (defun %fmt-param (ctrl pos end all i)
   (let ((c (if (< pos end) (char ctrl pos) #\,)))
-    (cond
-     ((char= c #\')
-      (list (if (< (+ pos 1) end) (char ctrl (+ pos 1)) #\Space) (+ pos 2) i))
-     ((or (char= c #\v) (char= c #\V)) (list (nth i all) (+ pos 1) (+ i 1)))
-     ((char= c #\#) (list (- (length all) i) (+ pos 1) i))
-     ((or (%fmt-digitp c) (char= c #\-))
-      (let ((start pos) (p (+ pos 1)))
-        (while (and (< p end) (%fmt-digitp (char ctrl p))) (setq p (+ p 1)))
-        (list (%fmt-parse-int (subseq ctrl start p)) p i)))
-     (t (list nil pos i)))))
+    (cond ((char= c #\')
+           (list (if (< (+ pos 1) end) (char ctrl (+ pos 1)) #\Space) (+ pos 2)
+                 i))
+          ((or (char= c #\v) (char= c #\V))
+           (list (%fmt-arg all i) (+ pos 1) (+ i 1)))
+          ((char= c #\#) (list (- (%fmt-count all) i) (+ pos 1) i))
+          ((or (%fmt-digitp c) (char= c #\-))
+           (let ((start pos) (p (+ pos 1)))
+             (while (and (< p end) (%fmt-digitp (char ctrl p)))
+               (setq p (+ p 1)))
+             (list (%fmt-parse-int (subseq ctrl start p)) p i)))
+          (t (list nil pos i)))))
 
 ;;; --------------------------------------------------------------- the tokens
 ;;; (list pos params colon at directive-char i) for the directive whose ~ is at
@@ -368,7 +432,7 @@
 ;;; The entry point: control string x argument list -> string.
 (defun %fmt-render (ctrl args)
   (if (stringp ctrl)
-      (nth 0 (%fmt-run ctrl 0 (length ctrl) args 0))
+      (nth 0 (%fmt-run ctrl 0 (length ctrl) (%fmt-args args) 0))
       (princ-to-string ctrl)))
 
 ;;; Renders ctrl[start, end) with the argument cursor at i.
@@ -486,7 +550,7 @@
          (pre (if (> n 1) (nth 0 segs) nil))
          (suf (if (> n 2) (nth 2 segs) nil))
          ;; Without @ the block's arguments are the elements of ONE argument.
-         (items (if at all (nth i all)))
+         (items (if at all (%fmt-args (%fmt-arg all i))))
          (start (if at i 0))
          (r (%fmt-run ctrl (nth 0 body) (nth 1 body) items start))
          (acc out))
@@ -524,7 +588,7 @@
 ;;; ~^ fires when the current argument list is exhausted; ~n^ when n is zero and
 ;;; ~n,m^ when n and m are equal.
 (defun %fmt-escape (all i params)
-  (cond ((null params) (if (>= i (length all)) t nil))
+  (cond ((null params) (if (>= i (%fmt-count all)) t nil))
         ((null (%fmt-nth params 1)) (if (= (%fmt-int params 0 0) 0) t nil))
         (t (if (= (%fmt-int params 0 0) (%fmt-int params 1 0)) t nil))))
 
@@ -533,24 +597,24 @@
 (defun %fmt-value (ctrl end all out pos i params colon at d)
   (cond ((char= d #\?) (%fmt-recursive ctrl end all out pos i at))
         ((char= d #\p) (%fmt-plural out pos all i colon at))
-        (t (list (%fmt-cat out (%fmt-field (nth i all) params colon at d)) pos
-                 (+ i 1) nil))))
+        (t (list (%fmt-cat out (%fmt-field (%fmt-arg all i) params colon at d))
+                 pos (+ i 1) nil))))
 
 ;;; ~? / ~@?: the next argument is a control string. Plain ~? takes its arguments
 ;;; from the following argument (a list); ~@? takes them from the remaining
 ;;; arguments of the current level and consumes what it uses.
 (defun %fmt-recursive (ctrl end all out pos i at)
-  (let ((inner (nth i all)))
+  (let ((inner (%fmt-arg all i)))
     (if at
         (let ((r (%fmt-run inner 0 (length inner) all (+ i 1))))
           (list (%fmt-cat out (nth 0 r)) pos (nth 1 r) nil))
-        (list (%fmt-cat out (%fmt-render inner (nth (+ i 1) all))) pos (+ i 2)
-              nil))))
+        (list (%fmt-cat out (%fmt-render inner (%fmt-arg all (+ i 1)))) pos
+              (+ i 2) nil))))
 
 ;;; ~P: ~:P re-uses the preceding argument instead of consuming a new one.
 (defun %fmt-plural (out pos all i colon at)
   (let* ((k (if colon (- i 1) i))
-         (v (nth (if (< k 0) 0 k) all))
+         (v (%fmt-arg all (if (< k 0) 0 k)))
          (one (and (numberp v) (= v 1)))
          (s (if at (if one "y" "ies") (if one "" "s"))))
     (list (%fmt-cat out s) pos (if colon i (+ i 1)) nil)))
@@ -677,16 +741,16 @@
           (t (%fmt-cond-index ctrl all out after segs i params)))))
 
 (defun %fmt-cond-at (ctrl all out after segs i)
-  (if (null (nth i all))
+  (if (null (%fmt-arg all i))
       (list out after (+ i 1) nil)
       (%fmt-clause ctrl all out after (nth 0 segs) i)))
 
 (defun %fmt-cond-colon (ctrl all out after segs i)
-  (%fmt-clause ctrl all out after (nth (if (nth i all) 1 0) segs) (+ i 1)))
+  (%fmt-clause ctrl all out after (nth (if (%fmt-arg all i) 1 0) segs) (+ i 1)))
 
 (defun %fmt-cond-index (ctrl all out after segs i params)
   (let* ((given (%fmt-nth params 0))
-         (sel (if (null given) (nth i all) given))
+         (sel (if (null given) (%fmt-arg all i) given))
          (ni (if (null given) (+ i 1) i)))
     (%fmt-clause ctrl all out after (%fmt-select segs sel) ni)))
 
@@ -717,7 +781,7 @@
          (force (nth 2 sh))
          (after (nth 0 sh))
          (empty (= pos close))
-         (body (if empty (nth i all) ctrl))
+         (body (if empty (%fmt-arg all i) ctrl))
          (bstart (if empty 0 pos))
          (bend (if empty (length body) close))
          (bi (if empty (+ i 1) i))
@@ -725,45 +789,49 @@
          (maxn (if (integerp maxp) maxp -1)))
     (if at
         (%fmt-iterate-args body bstart bend all out after bi maxn force colon)
-        (%fmt-iterate-list body bstart bend (nth bi all) out after (+ bi 1) maxn
-                           force colon))))
+        (%fmt-iterate-list body bstart bend (%fmt-args (%fmt-arg all bi)) out
+                           after (+ bi 1) maxn force colon))))
 
 ;;; ~{ over one list argument (~:{ over a list of sublists).
+;;; The pieces are COLLECTED and joined once (%fmt-join): growing one accumulator
+;;; with %fmt-cat per pass rebuilds the whole text every pass, which is quadratic
+;;; in the output on its own. The pass count is bounded by %fmt-count, an O(1)
+;;; read of the level's argument set rather than a list walk per test.
 (defun %fmt-iterate-list (ctrl start end items out after i maxn force sublists)
-  (let ((acc out) (cur 0) (passes 0) (go t))
+  (let ((pieces (list out)) (n (%fmt-count items)) (cur 0) (passes 0) (go t))
     (while go
-      (if (and (>= cur (length items)) (not (and force (= passes 0))))
+      (if (and (>= cur n) (not (and force (= passes 0))))
           (setq go nil)
           (if (and (>= maxn 0) (>= passes maxn))
               (setq go nil)
               (let* ((r
                       (if sublists
-                          (%fmt-run ctrl start end (nth cur items) 0)
+                          (%fmt-run ctrl start end
+                                    (%fmt-args (%fmt-arg items cur)) 0)
                           (%fmt-run ctrl start end items cur)))
                      (next (if sublists (+ cur 1) (nth 1 r))))
-                (setq acc (%fmt-cat acc (nth 0 r)))
+                (setq pieces (cons (nth 0 r) pieces))
                 (setq passes (+ passes 1))
-                (if (or (nth 2 r) (<= next cur) (>= next (length items)))
-                    (setq go nil))
+                (if (or (nth 2 r) (<= next cur) (>= next n)) (setq go nil))
                 (setq cur next)))))
-    (list acc after i nil)))
+    (list (%fmt-join pieces) after i nil)))
 
 ;;; ~@{ over the remaining arguments (~:@{ treating each as a sublist).
 (defun %fmt-iterate-args (ctrl start end all out after i maxn force sublists)
-  (let ((acc out) (cur i) (passes 0) (go t))
+  (let ((pieces (list out)) (n (%fmt-count all)) (cur i) (passes 0) (go t))
     (while go
-      (if (and (>= cur (length all)) (not (and force (= passes 0))))
+      (if (and (>= cur n) (not (and force (= passes 0))))
           (setq go nil)
           (if (and (>= maxn 0) (>= passes maxn))
               (setq go nil)
               (let* ((r
                       (if sublists
-                          (%fmt-run ctrl start end (nth cur all) 0)
+                          (%fmt-run ctrl start end
+                                    (%fmt-args (%fmt-arg all cur)) 0)
                           (%fmt-run ctrl start end all cur)))
                      (next (if sublists (+ cur 1) (nth 1 r))))
-                (setq acc (%fmt-cat acc (nth 0 r)))
+                (setq pieces (cons (nth 0 r) pieces))
                 (setq passes (+ passes 1))
-                (if (or (nth 2 r) (<= next cur) (>= next (length all)))
-                    (setq go nil))
+                (if (or (nth 2 r) (<= next cur) (>= next n)) (setq go nil))
                 (setq cur next)))))
-    (list acc after cur nil)))
+    (list (%fmt-join pieces) after cur nil)))

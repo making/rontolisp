@@ -400,9 +400,18 @@ the helper is injected and then fully shaken out, the same residue
   string split `replace` and `fill` share, and no measured artifact carries a live
   `%map-into-runtime-<n>` -- zlib has none. Reopen it against a module that does.
   Its LOWERING carries a cursor per source and one for the result
-  (`mapIntoDispatch`); the `#'map-into` WRAPPER
-  (`BuiltinFunctionWrappers.mapIntoWrapper`) does NOT -- its store is still
-  `(setf (elt r i) v)`, quadratic into a list destination. `.todo/595`.
+  (`mapIntoDispatch`), and since 2026-08-31 the `#'map-into` WRAPPER
+  (`BuiltinFunctionWrappers.mapIntoWrapper`) carries the same result cursor --
+  its store was `(setf (elt r i) v)`, an O(i) head-walk into a list destination
+  and the last member of the `elt`-per-element family
+  (`.kb/seq-coerce-runtime.md`). `(funcall #'map-into <n-element list> #'1+
+  <n-element list>)`, ms per call, before -> after: n = 4000 reads 11.40 ->
+  **0.031** on the JVM (365x), 21.85 -> **0.181** on wasm-GC (121x) and 18.13 ->
+  **3.89** in the interpreter (4.7x, where what is left is the tree-walker's
+  per-node cost), and every after-row DOUBLES per doubling of n where every
+  before-row quadrupled. An ARRAY destination keeps the indexed store exactly as
+  it was and pays one `consp` per element for a cursor it never uses: +25% in the
+  interpreter (5.10 -> 6.38 ms at n = 4000), flat on the JVM and on wasm.
 - **`%SEQ-INT-VECTOR` (2,136 B), `%SEQ-TO-LIST` (1,592) and `%SUBSEQ-RUNTIME`
   (1,114) are still whole-representation bodies** in the same artifact, and were
   todo-325's table alongside `replace`/`fill`. They are NOT this shape: the

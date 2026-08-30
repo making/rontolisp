@@ -6335,6 +6335,111 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theFormatRendererReadsItsArgumentListThroughAMaterializedVector() throws Exception {
+		// The renderer indexed its argument list with (nth i all) per directive and
+		// measured (length items) TWICE per ~{ pass: 3.00 ms a call at n = 2000, 50x
+		// building the same text by hand. `all` is now the (list vector) pair %fmt-args
+		// builds, read through %fmt-arg / %fmt-count -- the argument pointer moves in
+		// FOUR directions, so a monotone cursor could not have served it.
+		assertThat(compileAndRun("""
+				(let ((c "~a~a~:*~a~2:*~a~@*~a~5@*~a~11@*~a~12@*~a|"))
+				  (princ (apply #'format nil c '(a b c d e f g h i j k l)))
+				  (princ (apply #'format nil c '(a b c))))
+				""")).isEqualTo("ABBAAFLNIL|ABBAANILNILNIL|");
+		assertThat(compileAndRun("""
+				(let ((c "~a~*~a~*~a"))
+				  (princ (apply #'format nil c '(1 2 3 4 5)))
+				  (princ (apply #'format nil c '(1 2 3 4 5 6 7 8 9 10))))
+				""")).isEqualTo("135135");
+		assertThat(compileAndRun("""
+				(let ((c "~#a~a"))
+				  (princ (apply #'format nil c '(x y z)))
+				  (princ (apply #'format nil c '(x y z 1 2 3 4 5 6 7))))
+				""")).isEqualTo("X  YX         Y");
+		assertThat(compileAndRun("""
+				(let ((c "~{~a~^,~}"))
+				  (print (list (format nil c '(1 2 3))
+				               (format nil c '(1 2 3 4 5 6 7 8 9 10 11 12))
+				               (format nil c nil)
+				               (format nil "~:{[~a ~a]~}" '((1 2) (3 4) (5 6) (7 8) (9 10)))
+				               (apply #'format nil "|~@{~a~^-~}" '(1 2 3 4 5 6 7 8 9)))))
+				""")).isEqualTo("(\"1,2,3\" \"1,2,3,4,5,6,7,8,9,10,11,12\" \"\" \"[1 2][3 4][5 6][7 8][9 10]\" "
+				+ "\"|1-2-3-4-5-6-7-8-9\")");
+		assertThat(compileAndRun("""
+				(let ((c "~{~a~}[~a]"))
+				  (princ (format nil c 5 'tail))
+				  (princ (format nil c nil 'tail)))
+				""")).isEqualTo("[TAIL][TAIL]");
+		assertThat(compileAndRun("""
+				(let* ((c "~{~a~}")
+				       (long (let ((out nil))
+				               (dotimes (i 3000) (setq out (cons (mod i 7) out)))
+				               (nreverse out)))
+				       (s (format nil c long)))
+				  (print (list (length s) (subseq s 0 9) (subseq s 2991))))
+				""")).isEqualTo("(3000 \"012345601\" \"234560123\")");
+	}
+
+	@Test
+	void theMapIntoWrapperWalksAListDestinationWithACursor() throws Exception {
+		// #'map-into as a VALUE stored with (setf (elt r i) v), an O(i) head-walk for a
+		// list destination: 2.14 ms a call at n = 2000, 54x the same operation in call
+		// position. The wrapper now carries the result cursor its lowering has always
+		// had; every other representation keeps the indexed store.
+		assertThat(compileAndRun("""
+				(print (list (funcall #'map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40))
+				             (funcall #'map-into (make-array 3) #'* #(2 3 4) #(5 6 7))
+				             (funcall #'map-into (list 0 0 0) (lambda () 42))
+				             (funcall #'map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30))
+				             (funcall #'map-into nil #'1+ '(1 2 3))
+				             (funcall #'map-into (list 0) #'1+ '(1 2 3))
+				             (funcall #'map-into (copy-seq "xxxxx") #'char-upcase "abc")
+				             (funcall #'map-into (make-array 6 :fill-pointer 3 :initial-element 0)
+				                      #'1+ '(1 2 3 4 5 6))))
+				""")).isEqualTo("((11 22 33 0) #(10 18 28) (42 42 42) (11 22 33) NIL (2) \"ABCxx\" #(2 3 4))");
+		assertThat(
+				compileAndRun("(let ((d (list 0 0 0))) (print (list (eq (funcall #'map-into d #'1+ '(1 2 3)) d) d)))"))
+			.isEqualTo("(T (2 3 4))");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (print (list (funcall #'map-into l #'1+ l) l)))"))
+			.isEqualTo("((2 3 4 5) (2 3 4 5))");
+		assertThat(compileAndRun("""
+				(let* ((n 2000)
+				       (src (let ((out nil))
+				              (dotimes (i n) (setq out (cons (mod i 7) out)))
+				              (nreverse out)))
+				       (dst (make-list n)))
+				  (funcall #'map-into dst #'1+ src)
+				  (print (list (car dst) (car (last dst)) (length dst))))
+				""")).isEqualTo("(1 5 2000)");
+	}
+
+	@Test
+	void theStringResultOfMapJoinsItsPiecesOnce() throws Exception {
+		// (map 'string ...) rebuilt the whole result once per element, quadratic in the
+		// OUTPUT: 56.2 ms a call at n = 4000 on wasm-GC, and the cursor beside it could
+		// not move it because the defect is the STORE. The pieces are collected and
+		// joined pairwise now.
+		assertThat(compileAndRun("""
+				(print (list (map 'string #'identity nil)
+				             (map 'string #'identity (list #\\a))
+				             (map 'string #'identity (list #\\a #\\b))
+				             (map 'string #'identity (list #\\a #\\b #\\c))
+				             (map 'string #'identity (list #\\a #\\b #\\c #\\d))
+				             (map 'string #'identity (list #\\a #\\b #\\c #\\d #\\e))
+				             (map 'string #'identity (list 1 2 33))
+				             (map 'string #'char-upcase "abc")
+				             (map 'string #'identity "")
+				             (map 'string #'identity #(#\\x #\\y))))
+				""")).isEqualTo("(\"\" \"a\" \"ab\" \"abc\" \"abcd\" \"abcde\" \"1233\" \"ABC\" \"\" \"xy\")");
+		assertThat(compileAndRun("(print (list (coerce (list #\\x #\\y #\\z) 'string) (coerce '(1 2) 'string)))"))
+			.isEqualTo("(\"xyz\" \"12\")");
+		assertThat(compileAndRun("""
+				(let ((s (map 'string #'char-upcase (make-string 5000 :initial-element #\\q))))
+				  (print (list (length s) (subseq s 0 4) (char s 4999))))
+				""")).isEqualTo("(5000 \"QQQQ\" #\\Q)");
+	}
+
+	@Test
 	void sequenceOpRuntimeArmRouting() throws Exception {
 		// The narrowing gate of .kb/sequence-op-runtimes.md, from both sides IN ONE
 		// PROGRAM: sites whose destination this compile proves to be an array call the

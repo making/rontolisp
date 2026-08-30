@@ -222,3 +222,30 @@ shape that escapes both, now in geom.lisp and recorded in `.kb/geom.md`
 wrong); the readers' `geom-read-ply-gltf-cross-backend` ci-spec case is an
 end-to-end canary for any producer flip, since it feeds json-parse a
 runtime-built string on all four backends.
+
+## The scan half, re-measured against a sequence operator (2026-08-31)
+
+Working `.todo/595` (the `format` renderer and `map`'s `'string` accumulator) put
+a number on what the `(char v i)` render costs a whole OPERATOR rather than a
+microbenchmark, and it is the largest one in that round.
+`(map 'string #'char-upcase <4000-character source>)`, ms per call, Apple M4 Max,
+each row its own `defun`, before and after 595's accumulator fix in one locked
+acquisition:
+
+| source | interpreter | JVM | WASM p1 |
+| --- | --- | --- | --- |
+| an ORDINARY string, before / after | 9.80 / **6.01** | 0.85 / 0.21 | 11.95 / **0.475** |
+| a `make-string` CHARACTER VECTOR, before / after | 9.75 / 6.44 | 22.15 / **20.63** | 55.1 / **45.9** |
+
+The two sources differ only in representation and the operator is identical, so
+the gap IS the render: at n = 4000 a character-vector source costs **97x** an
+ordinary string's on the JVM and **97x** on wasm-GC, and 595's fix -- which
+removed a genuine O(n^2) from the accumulator, 25x on wasm over an ordinary
+string -- moves the character-vector row by only 1.2x because the READ is what
+is left. The interpreter, whose character vector IS a `LispString`, shows no gap
+at all, which is the control.
+
+This is step 1's payoff measured on something a program would actually write:
+`(map 'string ...)`, `(coerce v 'string)`, `remove`, `substitute`, `sort` and
+every other generic sequence operator over a `make-string` buffer pays it, not
+just a hand-written `(dotimes (i n) (char v i))`.

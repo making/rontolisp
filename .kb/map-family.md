@@ -102,6 +102,29 @@ the indexed read as its fallback (`.kb/seq-coerce-runtime.md`, "The rest of the
 `elt`-per-element family"); `mapcar` and the rest of this family never had the
 defect, because a list is all they take and a `cdr` walk is all they do.
 
+**`(map 'string ...)` was quadratic a SECOND time, in the OUTPUT, and the cursor
+could not reach it.** The `'string` accumulator was `(%string-concat acc
+(princ-to-string call))` per element -- one rebuild of the whole result per
+element -- where `'list` conses and `nreverse`s. Since 2026-08-31 it collects the
+pieces into a list and joins them by repeated PAIRWISE concatenation, O(n log n)
+characters copied instead of O(n^2), with no mutable buffer (the expansion has
+none on any backend) and no operator the loop did not already use.
+`joinStringPiecesReversed` is the whole of it. **Every literal `(coerce x
+'string)` runs this body** -- `coerceToStringBody` is a `(map 'string #'identity
+...)` form, so the shared `%seq-to-string` conversion carries the join once for
+the program. `(coerce <n-element character list> 'string)`, ms per call,
+before -> after at n = 4000: wasm-GC 11.85 -> **0.43** (28x), the JVM 1.10 ->
+**0.73**, and the interpreter's native `coerce` arm never ran this at all.
+
+**The number `.todo/595` carried for it was measuring something else.** It read
+`(map 'string #'char-upcase <4000-char string>)` at 56.2 ms on wasm-GC, and the
+source there was a `make-string`, which on the compiled backends is a mutable
+character VECTOR whose `(char v i)` renders the whole vector per access
+(`.kb/adjustable-arrays.md`, `.kb/geom.md`). That row is quadratic in the READ,
+which this change does not touch and which is a separate known defect; over an
+ORDINARY string the accumulator is what the row measures. Both numbers are in the
+table `.kb/seq-coerce-runtime.md` records.
+
 A call with no list -- `(mapcan #'list)` -- is a `<NAME> expects at least 2 arguments`
 error: `LispEvaluator.requireMapLists` for the interpreter and the built-in function
 objects, `expandMapFamily` for the shared three, and an `UnsupportedOperationException`
