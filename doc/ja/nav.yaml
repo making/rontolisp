@@ -35,6 +35,37 @@ sections:
         title: マクロ
       - file: reference/functions.md
         title: 関数
+        subpages:
+          - file: reference/functions/cl.md
+            title: cl パッケージの関数
+          - file: reference/functions/rontolisp.md
+            title: rontolisp パッケージの関数
+          - file: reference/functions/linalg.md
+            title: linalg パッケージの関数
+          - file: reference/functions/torch.md
+            title: torch パッケージの関数
+          - file: reference/functions/java.md
+            title: java パッケージの関数
+          - file: reference/functions/ffi.md
+            title: ffi パッケージの関数
+          - file: reference/functions/objc.md
+            title: objc パッケージの関数
+          - file: reference/functions/appkit.md
+            title: appkit パッケージの関数
+          - file: reference/functions/geom.md
+            title: geom パッケージの関数
+          - file: reference/functions/metal.md
+            title: metal パッケージの関数
+          - file: reference/functions/scene.md
+            title: scene パッケージの関数
+          - file: reference/functions/asdf.md
+            title: asdf パッケージの関数
+          - file: reference/functions/uiop.md
+            title: uiop パッケージの関数
+          - file: reference/functions/ql-and-ql-dist.md
+            title: ql / ql-dist パッケージの関数
+          - file: reference/functions/usocket.md
+            title: usocket パッケージの関数
       - file: reference/packages.md
         title: パッケージ
       - file: reference/uiop.md

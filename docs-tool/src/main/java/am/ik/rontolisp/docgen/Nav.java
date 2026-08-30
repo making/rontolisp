@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.yaml.snakeyaml.Yaml;
 
@@ -68,6 +69,34 @@ public record Nav(String title, String langName, List<Section> sections) {
 			all.addAll(section.pages());
 		}
 		return all;
+	}
+
+	/**
+	 * Finds a page by its Markdown file path, searching top-level pages and every nesting
+	 * of {@code subpages} -- used to resolve a catalog category's {@code index_page} for
+	 * its title and position, whether that page is a sidebar row or a subpage.
+	 */
+	public Optional<Page> findPage(String file) {
+		for (Section section : this.sections) {
+			Optional<Page> found = findPage(section.pages(), file);
+			if (found.isPresent()) {
+				return found;
+			}
+		}
+		return Optional.empty();
+	}
+
+	private static Optional<Page> findPage(List<Page> pages, String file) {
+		for (Page page : pages) {
+			if (page.file().equals(file)) {
+				return Optional.of(page);
+			}
+			Optional<Page> found = findPage(page.subpages(), file);
+			if (found.isPresent()) {
+				return found;
+			}
+		}
+		return Optional.empty();
 	}
 
 	/** Loads a {@code nav.yaml} into a {@link Nav}. */

@@ -1,6 +1,7 @@
 index_page: reference/functions.md
 categories:
   - title: "Arithmetic"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: plus, name: "+" }
       - { slug: minus, name: "-" }
@@ -17,6 +18,7 @@ categories:
       - { slug: lcm, name: "lcm" }
       - { slug: signum, name: "signum" }
   - title: "Comparison & Number Predicates"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: numeq, name: "=" }
       - { slug: ne, name: "/=" }
@@ -30,6 +32,7 @@ categories:
       - { slug: evenp, name: "evenp" }
       - { slug: oddp, name: "oddp" }
   - title: "Number Conversion & Rounding"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: float, name: "float" }
       - { slug: truncate, name: "truncate" }
@@ -39,6 +42,7 @@ categories:
       - { slug: numerator, name: "numerator" }
       - { slug: denominator, name: "denominator" }
   - title: "Math Functions"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: sqrt, name: "sqrt" }
       - { slug: isqrt, name: "isqrt" }
@@ -53,6 +57,7 @@ categories:
       - { slug: scale-float, name: "scale-float" }
       - { slug: decode-float, name: "decode-float" }
   - title: "Bitwise Operations"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: logand, name: "logand" }
       - { slug: logior, name: "logior" }
@@ -73,6 +78,7 @@ categories:
       - { slug: dpb, name: "dpb" }
       - { slug: mask-field, name: "mask-field" }
   - title: "Equality & Type Predicates"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: eq, name: "eq" }
       - { slug: eql, name: "eql" }
@@ -103,6 +109,7 @@ categories:
       - { slug: type-of, name: "type-of" }
       - { slug: pathnamep, name: "pathnamep" }
   - title: "Output"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: print, name: "print" }
       - { slug: prin1, name: "prin1" }
@@ -116,6 +123,7 @@ categories:
       - { slug: pprint, name: "pprint pprint-newline pprint-indent pprint-tab" }
       - { slug: pprint-dispatch, name: "copy-pprint-dispatch set-pprint-dispatch pprint-dispatch" }
   - title: "Strings"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: concatenate, name: "concatenate" }
       - { slug: string, name: "string" }
@@ -135,6 +143,7 @@ categories:
       - { slug: string-left-trim, name: "string-left-trim" }
       - { slug: string-right-trim, name: "string-right-trim" }
   - title: "Characters"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: char, name: "char schar" }
       - { slug: char-code, name: "char-code" }
@@ -167,6 +176,7 @@ categories:
       - { slug: digit-char, name: "digit-char" }
       - { slug: char-name, name: "char-name" }
   - title: "Cons & List Construction"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: cons, name: "cons" }
       - { slug: car, name: "car" }
@@ -186,6 +196,7 @@ categories:
       - { slug: copy-tree, name: "copy-tree" }
       - { slug: sublis, name: "sublis" }
   - title: "List Operations"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: length, name: "length" }
       - { slug: reverse, name: "reverse" }
@@ -202,6 +213,7 @@ categories:
       - { slug: merge, name: "merge" }
       - { slug: copy-seq, name: "copy-seq" }
   - title: "List Search"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: member, name: "member" }
       - { slug: member-if, name: "member-if" }
@@ -222,6 +234,7 @@ categories:
       - { slug: copy-alist, name: "copy-alist" }
       - { slug: getf, name: "getf" }
   - title: "List Filtering & Modification"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: remove, name: "remove" }
       - { slug: remove-if, name: "remove-if" }
@@ -242,6 +255,7 @@ categories:
       - { slug: nsubstitute-if, name: "nsubstitute-if" }
       - { slug: nsubstitute-if-not, name: "nsubstitute-if-not" }
   - title: "Sets"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: union, name: "union" }
       - { slug: intersection, name: "intersection" }
@@ -250,10 +264,12 @@ categories:
       - { slug: adjoin, name: "adjoin" }
       - { slug: subsetp, name: "subsetp" }
   - title: "Destructive Cell Operations"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: rplaca, name: "rplaca" }
       - { slug: rplacd, name: "rplacd" }
   - title: "Higher-Order Functions"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: funcall, name: "funcall" }
       - { slug: apply, name: "apply" }
@@ -276,6 +292,7 @@ categories:
       - { slug: constantly, name: "constantly" }
       - { slug: symbol-function, name: "symbol-function" }
   - title: "Hash Tables"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: make-hash-table, name: "make-hash-table" }
       - { slug: gethash, name: "gethash" }
@@ -289,6 +306,7 @@ categories:
       - { slug: hash-table-p, name: "hash-table-p" }
       - { slug: maphash, name: "maphash" }
   - title: "Arrays"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: make-array, name: "make-array" }
       - { slug: aref, name: "aref" }
@@ -311,6 +329,7 @@ categories:
       - { slug: adjust-array, name: "adjust-array" }
       - { slug: array-displacement, name: "array-displacement" }
   - title: "Reader & Evaluation"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: read, name: "read" }
       - { slug: read-line, name: "read-line" }
@@ -330,6 +349,7 @@ categories:
       - { slug: require, name: "require" }
       - { slug: provide, name: "provide" }
   - title: "Symbols & Macros"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: gensym, name: "gensym" }
       - { slug: gentemp, name: "gentemp" }
@@ -356,6 +376,7 @@ categories:
       - { slug: unexport, name: "unexport" }
       - { slug: import, name: "import" }
   - title: "Streams & Files"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: open, name: "open" }
       - { slug: close, name: "close" }
@@ -406,6 +427,7 @@ categories:
       - { slug: output-stream-p, name: "output-stream-p" }
       - { slug: stream-element-type, name: "stream-element-type" }
   - title: "System & Time"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: get-universal-time, name: "get-universal-time" }
       - { slug: encode-universal-time, name: "encode-universal-time" }
@@ -418,6 +440,7 @@ categories:
       - { slug: invoke-debugger, name: "invoke-debugger" }
       - { slug: compile-file, name: "compile-file compile-file-pathname remove-method" }
   - title: "rontolisp Package"
+    index_page: reference/functions/rontolisp.md
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }
       - { slug: rontolisp-random-bytes, name: "rontolisp:random-bytes" }
@@ -475,6 +498,7 @@ categories:
       - { slug: rontolisp-wit-import, name: "rontolisp:wit-import" }
       - { slug: rontolisp-wit-provide, name: "rontolisp:wit-provide" }
   - title: "linalg Package"
+    index_page: reference/functions/linalg.md
     functions:
       - { slug: linalg-zeros, name: "linalg:zeros" }
       - { slug: linalg-ones, name: "linalg:ones" }
@@ -570,6 +594,7 @@ categories:
       - { slug: linalg-choice, name: "linalg:choice" }
       - { slug: linalg-permutation, name: "linalg:permutation" }
   - title: "torch Package"
+    index_page: reference/functions/torch.md
     functions:
       - { slug: torch-tensor, name: "torch:tensor" }
       - { slug: torch-tensorp, name: "torch:tensorp" }
@@ -651,6 +676,7 @@ categories:
       - { slug: torch-padding-mask, name: "torch:padding-mask" }
       - { slug: torch-subsequent-mask, name: "torch:subsequent-mask" }
   - title: "java Package (JVM only)"
+    index_page: reference/functions/java.md
     functions:
       - { slug: java-new, name: "java:new" }
       - { slug: java-call, name: "java:call" }
@@ -658,6 +684,7 @@ categories:
       - { slug: java-field, name: "java:field" }
       - { slug: java-proxy, name: "java:proxy" }
   - title: "ffi Package (C Libraries)"
+    index_page: reference/functions/ffi.md
     functions:
       - { slug: ffi-open, name: "ffi:open" }
       - { slug: ffi-symbol, name: "ffi:symbol" }
@@ -673,6 +700,7 @@ categories:
       - { slug: ffi-address, name: "ffi:address" }
       - { slug: ffi-errno, name: "ffi:errno" }
   - title: "objc Package (Objective-C Runtime)"
+    index_page: reference/functions/objc.md
     functions:
       - { slug: objc-class, name: "objc:class" }
       - { slug: objc-send, name: "objc:send" }
@@ -684,6 +712,7 @@ categories:
       - { slug: objc-address, name: "objc:address" }
       - { slug: objc-objectp, name: "objc:objectp" }
   - title: "appkit Package (Cocoa Widgets)"
+    index_page: reference/functions/appkit.md
     functions:
       - { slug: appkit-window, name: "appkit:window" }
       - { slug: appkit-label, name: "appkit:label" }
@@ -704,6 +733,7 @@ categories:
       - { slug: appkit-visible-p, name: "appkit:visible-p" }
       - { slug: appkit-wait, name: "appkit:wait" }
   - title: "geom Package (Solid Modeling)"
+    index_page: reference/functions/geom.md
     functions:
       - { slug: geom-vec3, name: "geom:vec3" }
       - { slug: geom-axis-vector, name: "geom:axis-vector" }
@@ -763,6 +793,7 @@ categories:
       - { slug: geom-section, name: "geom:section" }
       - { slug: geom-history, name: "geom:history" }
   - title: "metal Package (GPU Drawing)"
+    index_page: reference/functions/metal.md
     functions:
       - { slug: metal-attach, name: "metal:attach" }
       - { slug: metal-offscreen, name: "metal:offscreen" }
@@ -784,6 +815,7 @@ categories:
       - { slug: metal-set-clear-color, name: "metal:set-clear-color" }
       - { slug: metal-constants, name: "metal:+triangle+ metal:+line+ metal:+point+ metal:+triangle-strip+ metal:+cull-none+ metal:+cull-front+ metal:+cull-back+ metal:+winding-clockwise+ metal:+winding-counter-clockwise+ metal:+compare-less+ metal:+compare-always+" }
   - title: "scene Package (3-D Viewer)"
+    index_page: reference/functions/scene.md
     functions:
       - { slug: scene-viewer, name: "scene:viewer" }
       - { slug: scene-offscreen, name: "scene:offscreen" }
@@ -805,6 +837,7 @@ categories:
       - { slug: scene-window-of, name: "scene:window-of" }
       - { slug: scene-context-of, name: "scene:context-of" }
   - title: "asdf Package (System Definitions)"
+    index_page: reference/functions/asdf.md
     functions:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }
       - { slug: asdf-load-system, name: "asdf:load-system" }
@@ -820,6 +853,7 @@ categories:
       - { slug: asdf-component-parent, name: "asdf:component-parent" }
       - { slug: asdf-component-system, name: "asdf:component-system" }
   - title: "uiop Package (ASDF portability layer)"
+    index_page: reference/uiop.md
     functions:
       - { slug: uiop-getenv, name: "uiop:getenv" }
       - { slug: uiop-file-exists-p, name: "uiop:file-exists-p" }
@@ -851,11 +885,13 @@ categories:
       - { slug: uiop-symbol-call, name: "uiop:symbol-call" }
       - { slug: uiop-print-condition-backtrace, name: "uiop/image:print-condition-backtrace" }
   - title: "ql / ql-dist Packages (Quicklisp)"
+    index_page: reference/functions/ql-and-ql-dist.md
     functions:
       - { slug: ql-quickload, name: "ql:quickload" }
       - { slug: ql-dist-install-dist, name: "ql-dist:install-dist" }
       - { slug: ql-update-dist, name: "ql:update-dist" }
   - title: "usocket Package (usocket-compatible sockets)"
+    index_page: reference/functions/usocket.md
     functions:
       - { slug: usocket-socket-connect, name: "usocket:socket-connect" }
       - { slug: usocket-socket-listen, name: "usocket:socket-listen" }
@@ -864,6 +900,7 @@ categories:
       - { slug: usocket-accessors, name: "usocket:get-local-port usocket:get-local-address usocket:get-local-name usocket:get-peer-address usocket:get-peer-port usocket:get-peer-name" }
       - { slug: usocket-host-names, name: "usocket:host-to-hostname usocket:get-host-by-name" }
   - title: "Conditions"
+    index_page: reference/functions/cl.md
     functions:
       - { slug: simple-condition-format-control, name: "simple-condition-format-control" }
       - { slug: type-error-datum, name: "type-error-datum" }

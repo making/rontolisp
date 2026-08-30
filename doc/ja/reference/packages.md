@@ -169,7 +169,7 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 [`rontolisp:json-parse`](functions/rontolisp-json-parse.md) /
 [`rontolisp:json-stringify`](functions/rontolisp-json-stringify.md)
 によるJSON変換(JavaScriptの `JSON.parse`/`JSON.stringify` 相当)を提供します。これらはすべて
-[関数](functions.md#rontolisp-package-functions)
+[関数](functions/rontolisp.md)
 リファレンスに独自のページを持ち、完全な
 [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
 [`rontolisp:await`](special-forms/rontolisp-await.md) /

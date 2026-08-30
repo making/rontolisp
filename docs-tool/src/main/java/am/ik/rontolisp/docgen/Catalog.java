@@ -25,20 +25,34 @@ import org.yaml.snakeyaml.Yaml;
  * index_page: reference/functions.md
  * categories:
  *   - title: Arithmetic
+ *     index_page: reference/functions/cl.md   # optional; falls back to the file's index_page
  *     functions:
  *       - { slug: plus, name: "+" }
  * </pre>
  *
+ * A category's own {@code index_page} lets several table pages share one catalog (and one
+ * directory of detail pages): each category routes its entries' "back" link and table
+ * auto-linking to its own page instead of the whole file's single default, which is how
+ * one {@code reference/functions/_catalog.yaml} backs the per-package function pages
+ * ({@code reference/functions/cl.md}, {@code reference/functions/uiop.md}, ...) without
+ * moving a single detail page.
+ *
  * @param baseDir the directory holding the detail pages and {@code _catalog.yaml},
  * relative to the language directory (e.g. {@code reference/functions})
- * @param indexPage the table page whose names link to the detail pages, relative to the
- * language directory (e.g. {@code reference/functions.md})
+ * @param indexPage the file's default table page, relative to the language directory
+ * (e.g. {@code reference/functions.md}); a category without its own {@code index_page}
+ * uses this one
  * @param categories the ordered groups of entries
  */
 public record Catalog(String baseDir, String indexPage, List<Category> categories) {
 
-	/** A titled group of detail pages. */
-	public record Category(String title, List<Entry> functions) {
+	/**
+	 * A titled group of detail pages.
+	 *
+	 * @param indexPage the table page this category's names link to and its entries'
+	 * detail pages link back to
+	 */
+	public record Category(String title, List<Entry> functions, String indexPage) {
 	}
 
 	/**
@@ -56,12 +70,19 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 	}
 
 	/**
-	 * The relative href prefix from the index page to the detail pages (e.g.
-	 * {@code functions/}).
+	 * The relative href prefix from {@code indexPage} to this catalog's detail pages
+	 * (e.g. {@code functions/} from {@code reference/functions.md} to
+	 * {@code reference/functions/plus.md}, or {@code ""} from
+	 * {@code reference/functions/cl.md}, which already lives in {@link #baseDir}).
 	 */
-	public String linkPrefix() {
-		int slash = this.baseDir.lastIndexOf('/');
-		return (slash < 0 ? this.baseDir : this.baseDir.substring(slash + 1)) + "/";
+	public String linkPrefix(String indexPage) {
+		int slash = indexPage.lastIndexOf('/');
+		String indexDir = slash < 0 ? "" : indexPage.substring(0, slash);
+		if (indexDir.equals(this.baseDir)) {
+			return "";
+		}
+		String suffix = indexDir.isEmpty() ? this.baseDir : this.baseDir.substring(indexDir.length() + 1);
+		return suffix + "/";
 	}
 
 	/** Returns every entry in catalog order (drives previous/next links). */
@@ -71,6 +92,34 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 			all.addAll(category.functions());
 		}
 		return all;
+	}
+
+	/** One entry paired with the index page its category routes it to. */
+	public record EntryRef(Entry entry, String indexPage) {
+	}
+
+	/** Returns every entry in catalog order, paired with its category's index page. */
+	public List<EntryRef> flatEntryRefs() {
+		List<EntryRef> all = new ArrayList<>();
+		for (Category category : this.categories) {
+			for (Entry entry : category.functions()) {
+				all.add(new EntryRef(entry, category.indexPage()));
+			}
+		}
+		return all;
+	}
+
+	/**
+	 * The distinct index pages used by this catalog's categories, in first-seen order.
+	 */
+	public List<String> indexPages() {
+		List<String> pages = new ArrayList<>();
+		for (Category category : this.categories) {
+			if (!pages.contains(category.indexPage())) {
+				pages.add(category.indexPage());
+			}
+		}
+		return pages;
 	}
 
 	/**
@@ -107,6 +156,8 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 				for (Object rawCategory : categoryList) {
 					Map<String, Object> categoryMap = (Map<String, Object>) rawCategory;
 					String title = String.valueOf(categoryMap.getOrDefault("title", ""));
+					String categoryIndexPage = categoryMap.containsKey("index_page")
+							? String.valueOf(categoryMap.get("index_page")) : indexPage;
 					List<Entry> entries = new ArrayList<>();
 					Object rawFunctions = categoryMap.get("functions");
 					if (rawFunctions instanceof List<?> functionList) {
@@ -117,7 +168,7 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 							entries.add(new Entry(slug, name));
 						}
 					}
-					categories.add(new Category(title, entries));
+					categories.add(new Category(title, entries, categoryIndexPage));
 				}
 			}
 			return new Catalog(baseDir, indexPage, categories);

@@ -260,4 +260,4 @@
 
 ## パッケージ
 
-`torch` は `cl` を使用しないため、プログラムは `cl-user` のまま修飾名で呼び出します。`#'torch:name` も使えます (すべての関数は普通の defun です)。微分可能な演算は対応する `linalg` の関数を鏡写しにしています。全リストは[関数リファレンス](../reference/functions.md#torch-package-functions)に、`torch:no-grad` は[マクロのページ](../reference/macros/torch-no-grad.md)にあります。
+`torch` は `cl` を使用しないため、プログラムは `cl-user` のまま修飾名で呼び出します。`#'torch:name` も使えます (すべての関数は普通の defun です)。微分可能な演算は対応する `linalg` の関数を鏡写しにしています。全リストは[関数リファレンス](../reference/functions/torch.md)に、`torch:no-grad` は[マクロのページ](../reference/macros/torch-no-grad.md)にあります。

@@ -231,7 +231,7 @@ Metal が必要とするように見える唯一の C 関数 `MTLCreateSystemDef
 `metal:shared-buffer` と `metal:upload`、Metal がインラインで受け取りたがる小さな値には
 `metal:uniform` を使います。パックド単精度配列はバッファのバイト列そのものなので、`linalg`
 の行列も `geom:mesh` も一切変換なしに GPU へ届きます。全体は
-[関数リファレンス](../reference/functions.md#metal-package-functions)にあります。
+[関数リファレンス](../reference/functions/metal.md)にあります。
 
 `metal` は単独で成立します。`examples/macos/metal-triangle.lisp` は WebGL の hello world
 を、`examples/macos/metal-cube.lisp` は陰影付きの回転する立方体を、

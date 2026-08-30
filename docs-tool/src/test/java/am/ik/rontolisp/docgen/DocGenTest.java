@@ -40,17 +40,46 @@ class DocGenTest {
 	}
 
 	private static Catalog functionCatalog() {
-		return new Catalog("reference/functions", "reference/functions.md",
-				List.of(new Catalog.Category("c", List.of(new Catalog.Entry("plus", "+"), new Catalog.Entry("lt", "<"),
-						new Catalog.Entry("char-compare", "char= char< char<=")))));
+		return new Catalog(
+				"reference/functions", "reference/functions.md", List
+					.of(new Catalog.Category("c",
+							List.of(new Catalog.Entry("plus", "+"), new Catalog.Entry("lt", "<"),
+									new Catalog.Entry("char-compare", "char= char< char<=")),
+							"reference/functions.md")));
 	}
 
 	@Test
 	void catalogResolvesDetailPathAndLinkPrefix() {
 		Catalog catalog = functionCatalog();
 		assertThat(catalog.mdFile(new Catalog.Entry("plus", "+"))).isEqualTo("reference/functions/plus.md");
-		assertThat(catalog.linkPrefix()).isEqualTo("functions/");
-		assertThat(new Catalog("reference/macros", "reference/macros.md", List.of()).linkPrefix()).isEqualTo("macros/");
+		assertThat(catalog.linkPrefix("reference/functions.md")).isEqualTo("functions/");
+		assertThat(new Catalog("reference/macros", "reference/macros.md", List.of()).linkPrefix("reference/macros.md"))
+			.isEqualTo("macros/");
+	}
+
+	@Test
+	void linkPrefixIsEmptyWhenTheIndexPageAlreadyLivesInTheBaseDir() {
+		Catalog catalog = functionCatalog();
+		assertThat(catalog.linkPrefix("reference/functions/cl.md")).isEqualTo("");
+	}
+
+	@Test
+	void categoryIndexPageOverridesTheCatalogDefault() {
+		Catalog catalog = new Catalog("reference/functions", "reference/functions.md",
+				List.of(new Catalog.Category("cl", List.of(new Catalog.Entry("plus", "+")),
+						"reference/functions/cl.md"),
+						new Catalog.Category("torch", List.of(new Catalog.Entry("tensor", "torch:tensor")),
+								"reference/functions/torch.md")));
+		assertThat(catalog.indexPages()).containsExactly("reference/functions/cl.md", "reference/functions/torch.md");
+		assertThat(catalog.flatEntryRefs()).extracting(Catalog.EntryRef::indexPage)
+			.containsExactly("reference/functions/cl.md", "reference/functions/torch.md");
+	}
+
+	@Test
+	void categoryWithoutItsOwnIndexPageFallsBackToTheCatalogDefault() {
+		Catalog catalog = new Catalog("reference/macros", "reference/macros.md", List
+			.of(new Catalog.Category("c", List.of(new Catalog.Entry("when-let", "when-let")), "reference/macros.md")));
+		assertThat(catalog.indexPages()).containsExactly("reference/macros.md");
 	}
 
 	@Test
@@ -188,6 +217,25 @@ class DocGenTest {
 		String sub = Files.readString(site.resolve("en/reference/uiop/os.html"), StandardCharsets.UTF_8);
 		assertThat(sub).contains("<a class=\"nav-link active\" href=\"../uiop.html\">The uiop Package</a>")
 			.contains("<a class=\"backlink\" href=\"../uiop.html\">&larr; The uiop Package</a>");
+	}
+
+	/**
+	 * The per-package function pages are subpages of "Functions" that are ALSO catalog
+	 * index pages: their table names must be auto-linked like a top-level index page's,
+	 * and each detail page's back link must point at its own package's page rather than
+	 * "Functions" itself.
+	 */
+	@Test
+	void perPackageFunctionSubpagesActAsCatalogIndexPages() throws IOException {
+		String cl = Files.readString(site.resolve("en/reference/functions/cl.html"), StandardCharsets.UTF_8);
+		assertThat(cl).contains("<a class=\"fn-link\" href=\"plus.html\">");
+
+		String plus = Files.readString(site.resolve("en/reference/functions/plus.html"), StandardCharsets.UTF_8);
+		assertThat(plus).contains("<a class=\"backlink\" href=\"cl.html\">");
+
+		String rontolispVersion = Files.readString(site.resolve("en/reference/functions/rontolisp-version.html"),
+				StandardCharsets.UTF_8);
+		assertThat(rontolispVersion).contains("<a class=\"backlink\" href=\"rontolisp.html\">");
 	}
 
 	@Test

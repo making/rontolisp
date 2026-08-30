@@ -119,7 +119,8 @@ together, never one backend in isolation.
 6. A case in `src/test/resources/ci-spec.yaml` if it deserves end-to-end coverage.
 7. Docs: a per-operator page under `reference/{functions,macros,special-forms}/` (H1 = name,
    signature, one runnable ```lisp example with a `; => value`), a `_catalog.yaml` entry, and
-   a row in `reference/functions.md`.
+   a row in that package's function page (`reference/functions/<package>.md` -- `cl.md` for
+   the standard package; see the category's `index_page` in `_catalog.yaml`).
 8. If its trailing arguments are a BODY, an `am.ik.rontolisp.format.IndentRules` entry --
    without one `rontolisp format` lays the body out as a function call (`.kb/formatter.md`).
 
