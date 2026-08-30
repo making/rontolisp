@@ -196,11 +196,14 @@ public final class RontoPlayground {
 					+ " -- the objc:, appkit:, metal: and scene: packages are not available in the browser "
 					+ "playground");
 		}
+		// JsonLibrary runs AFTER GeomLibrary here too: geom:read-gltf parses its JSON
+		// chunk through rontolisp:json-parse, so the geom splice introduces the
+		// reference (the readers are then pruned out again -- no filesystem here).
 		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
 				.process(VecLibrary.process(LispPreludeLibrary.process(
-						UrlLibrary.process(LinalgLibrary
-							.process(GeomLibrary.process(TorchLibrary.process(JsonLibrary.process(read))))),
+						UrlLibrary.process(JsonLibrary
+							.process(LinalgLibrary.process(GeomLibrary.process(TorchLibrary.process(read))))),
 						features))))));
 		// uiop:quit on the WASM button is exit.lisp's wasi_snapshot_preview1 proc_exit
 		// binding (eval/ExitLibrary), like the CLI's Preview 1 output; a no-op for the

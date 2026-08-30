@@ -60,6 +60,10 @@ examples/browser/hiragana/data/
 /ci-model.stl
 /ci-model-ascii.stl
 /ci-model.ply
+/ci-model-a.ply
+/ci-model-b.ply
+/ci-model-be.ply
+/ci-model.glb
 /scene-model-file-vase.obj
 /scene-model-file-bracket.stl
 

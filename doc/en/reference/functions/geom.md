@@ -48,6 +48,8 @@ convention and the cached mesh.
 | `geom:read-model` | `(geom:read-model "bunny.obj")` | the mesh in a model file, its format sniffed from its bytes |
 | `geom:read-obj` | `(geom:read-obj "bunny.obj")` | the mesh in a Wavefront OBJ file |
 | `geom:read-stl` | `(geom:read-stl "part.stl")` | the mesh in an STL file, either dialect |
+| `geom:read-ply` | `(geom:read-ply "scan.ply")` | the mesh in a PLY file, ASCII or binary little-endian |
+| `geom:read-gltf` | `(geom:read-gltf "duck.glb")` | the scene in a glTF 2.0 / GLB file, as a LIST of solids |
 | `geom:arrow` | `(geom:arrow :length 200 :radius 6)` | a shaft and a pointed head as one solid, along `:direction` |
 | `geom:triad` | `(geom:triad :at (geom:vec3 0 0 0))` | three `geom:arrow`s -- +x red, +y green, +z blue -- as a list |
 | `geom:vertices-of` | `(geom:vertices-of s)` | a rank-2 `(n 3)` packed array of MODEL coordinates |

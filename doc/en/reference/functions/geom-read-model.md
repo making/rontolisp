@@ -2,7 +2,7 @@
 
 `(geom:read-model path &key format color label)`
 
-The mesh in a model file, as a [`geom:solid`](geom-polyhedron.md) -- the one entry point for a file whose format the program does not know, such as a viewer opening whatever it was handed. The format is decided from the file's own bytes; `:format` (`:obj`, `:stl`) says it outright and skips the sniffing. Naming the format instead -- [`geom:read-obj`](geom-read-obj.md), [`geom:read-stl`](geom-read-stl.md) -- is the smaller artifact: this one can reach every reader, so it carries every reader.
+The mesh in a model file, as a [`geom:solid`](geom-polyhedron.md) -- the one entry point for a file whose format the program does not know, such as a viewer opening whatever it was handed. The format is decided from the file's own bytes; `:format` (`:obj`, `:stl`, `:ply`, `:gltf`, `:glb`) says it outright and skips the sniffing. Naming the format instead -- [`geom:read-obj`](geom-read-obj.md), [`geom:read-stl`](geom-read-stl.md), [`geom:read-ply`](geom-read-ply.md), [`geom:read-gltf`](geom-read-gltf.md) -- is the smaller artifact: this one can reach every reader, so it carries every reader. A glTF answers a **list** of solids, as [`geom:read-gltf`](geom-read-gltf.md) documents; every other format answers one solid.
 
 `:color` and `:label` are the solid's, exactly as on every constructor in the package. See the [solid modeling guide](../../guides/solid-modeling.md).
 
@@ -28,11 +28,11 @@ Content first, and the name only where no content test can answer:
 
 A **binary STL has no magic number at all** -- a wart of the format -- so a binary `.stl` whose 80-byte header is not the word `solid` is named by its extension. What the extension never decides is the ASCII/binary split: both dialects are `.stl`, and `geom:read-stl` settles that from the bytes.
 
-PLY and glTF are recognized but not read, so a file this build cannot handle is refused by name rather than parsed sideways:
+A file no test recognizes is refused naming the file rather than parsed sideways, and what a reader itself cannot carry -- a `binary_big_endian` PLY, a compressed or skinned glTF -- is refused by name on that reader's own page:
 
 ```console
-CL-USER> (geom:read-model "dragon.ply")
-; Error: geom:read-model: dragon.ply is PLY, which this build does not read yet
+CL-USER> (geom:read-model "mystery.dat")
+; Error: geom:read-model: cannot tell what format mystery.dat is; pass :format
 ```
 
 ## Backend support

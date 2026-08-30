@@ -1016,18 +1016,12 @@ class GeomLibraryTest {
 	}
 
 	@Test
-	void aFormatTheSnifferKnowsAndThisBuildCannotReadIsRefusedByName() {
-		// The seam's other half: a reader that is not here yet must not be a garbage
-		// parse. PLY and glTF are recognized so the refusal can name them.
-		String ply = textFile("scan.ply", "ply\nformat ascii 1.0\nend_header\n");
-		String gltf = textFile("scene.gltf", "{\"asset\":{\"version\":\"2.0\"}}\n");
+	void aFormatTheSnifferCannotNameIsStillRefusedNamingTheFile() {
+		// PLY and glTF are read now, so the only whole-format refusal left is a file
+		// no test recognizes -- and it still names the file rather than guessing.
 		String unknown = textFile("mystery.dat", "?????\n");
-		assertThat(eval("""
-				(list (handler-case (geom:read-model %s) (error (e) (princ-to-string e)))
-				      (handler-case (geom:read-model %s) (error (e) (princ-to-string e)))
-				      (handler-case (geom:read-model %s) (error (e) (princ-to-string e))))
-				""".formatted(ply, gltf, unknown)).print()).contains("is PLY, which this build does not read yet")
-			.contains("is GLTF, which this build does not read yet")
+		assertThat(
+				eval("(handler-case (geom:read-model %s) (error (e) (princ-to-string e)))".formatted(unknown)).print())
 			.contains("cannot tell what format")
 			.contains("mystery.dat");
 	}
@@ -1047,11 +1041,361 @@ class GeomLibraryTest {
 		List<LispVal> pruned = LibraryDefunPruner
 			.prune(GeomLibrary.process(LispReader.readAllFromString("(print (geom:volume (geom:box 2)))")));
 		assertThat(definitionNames(pruned)).doesNotContain("GEOM:READ-OBJ", "GEOM:READ-STL", "GEOM:READ-MODEL",
-				"GEOM::%SCAN-NUMBER");
+				"GEOM:READ-PLY", "GEOM:READ-GLTF", "GEOM::%SCAN-NUMBER");
 		List<LispVal> kept = LibraryDefunPruner
 			.prune(GeomLibrary.process(LispReader.readAllFromString("(print (geom:read-obj \"m.obj\"))")));
 		assertThat(definitionNames(kept)).contains("GEOM:READ-OBJ", "GEOM::%SCAN-NUMBER")
-			.doesNotContain("GEOM:READ-STL", "GEOM:READ-MODEL", "GEOM:SPHERE");
+			.doesNotContain("GEOM:READ-STL", "GEOM:READ-MODEL", "GEOM:READ-PLY", "GEOM:READ-GLTF", "GEOM:SPHERE");
+	}
+
+	@Test
+	void aProgramReadingOnePlyCarriesNeitherGltfNorJson() {
+		// The case dispatch, still holding at five formats: read-ply's arm reaches
+		// neither read-gltf nor the JSON library it parses with, so JsonLibrary
+		// (which now runs OUTSIDE GeomLibrary on the compile path, .kb/geom.md)
+		// splices nothing a PLY program keeps.
+		List<LispVal> kept = LibraryDefunPruner.prune(JsonLibrary
+			.process(GeomLibrary.process(LispReader.readAllFromString("(print (geom:read-ply \"m.ply\"))"))));
+		List<String> names = definitionNames(kept);
+		assertThat(names).contains("GEOM:READ-PLY", "GEOM::%PLY-HEADER");
+		assertThat(names).doesNotContain("GEOM:READ-GLTF", "GEOM::%GLTF-WALK", "RONTOLISP::%JSON-PARSE");
+		List<LispVal> gltf = LibraryDefunPruner.prune(JsonLibrary
+			.process(GeomLibrary.process(LispReader.readAllFromString("(print (geom:read-gltf \"m.glb\"))"))));
+		assertThat(definitionNames(gltf)).contains("GEOM:READ-GLTF", "RONTOLISP::%JSON-PARSE")
+			.doesNotContain("GEOM:READ-PLY", "GEOM:READ-OBJ");
+	}
+
+	// --- PLY ---------------------------------------------------------------------
+
+	private String binaryFile(String name, byte[] bytes) {
+		try {
+			Path path = Files.createDirectories(Path.of("target", "geom-models")).resolve(name);
+			Files.write(path, bytes);
+			return "\"" + path.toString().replace("\\", "\\\\") + "\"";
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	/** The eight corners of a 10-unit cube and its six quads, wound CCW from outside. */
+	private static final float[][] CUBE_CORNERS = { { -5, -5, -5 }, { 5, -5, -5 }, { 5, 5, -5 }, { -5, 5, -5 },
+			{ -5, -5, 5 }, { 5, -5, 5 }, { 5, 5, 5 }, { -5, 5, 5 } };
+
+	private static final int[][] CUBE_QUADS = { { 0, 3, 2, 1 }, { 4, 5, 6, 7 }, { 0, 1, 5, 4 }, { 1, 2, 6, 5 },
+			{ 2, 3, 7, 6 }, { 3, 0, 4, 7 } };
+
+	@Test
+	void anAsciiPlyTakesXYZFromWhereverTheHeaderPutThem() {
+		// The Stanford bunny's own header shape: x y z followed by properties this
+		// reader reads past (a confidence, an intensity), and quad faces as a list
+		// property -- so the columns come from the header, not from a fixed order.
+		StringBuilder ply = new StringBuilder("""
+				ply
+				format ascii 1.0
+				comment a cube with two extra vertex properties
+				element vertex 8
+				property float x
+				property float y
+				property float z
+				property float confidence
+				property float intensity
+				element face 6
+				property list uchar int vertex_indices
+				end_header
+				""");
+		for (float[] corner : CUBE_CORNERS) {
+			ply.append("%s %s %s 0.85 0.5\n".formatted(corner[0], corner[1], corner[2]));
+		}
+		for (int[] quad : CUBE_QUADS) {
+			ply.append("4 %d %d %d %d\n".formatted(quad[0], quad[1], quad[2], quad[3]));
+		}
+		String file = textFile("cube.ply", ply.toString());
+		assertThat(eval("""
+				(let ((s (geom:read-ply %s :label "cube")))
+				  (list (geom:volume s) (geom:surface-area s)
+				        (length (geom:facets-of s)) (geom:label-of s)
+				        (first (linalg:shape (geom:vertices-of s)))))
+				""".formatted(file)).print()).isEqualTo("(1000.0 600.0 6 \"cube\" 8)");
+		assertThat(eval("(geom::%%model-format %s)".formatted(file)).print()).isEqualTo(":PLY");
+		assertThat(eval("(geom:volume (geom:read-model %s))".formatted(file)).print()).isEqualTo("1000.0");
+	}
+
+	/** A binary_little_endian PLY shaped like trimesh's cycloidal.ply. */
+	private byte[] colouredBinaryPly() {
+		String header = """
+				ply
+				format binary_little_endian 1.0
+				element vertex 8
+				property float x
+				property float y
+				property float z
+				property uchar red
+				property uchar green
+				property uchar blue
+				property uchar alpha
+				element face 6
+				property list uchar int vertex_indices
+				property uchar red
+				property uchar green
+				property uchar blue
+				property uchar alpha
+				end_header
+				""";
+		ByteBuffer body = ByteBuffer.allocate(8 * 16 + 6 * (1 + 16 + 4)).order(ByteOrder.LITTLE_ENDIAN);
+		for (float[] corner : CUBE_CORNERS) {
+			body.putFloat(corner[0]).putFloat(corner[1]).putFloat(corner[2]);
+			body.put((byte) 200).put((byte) 100).put((byte) 50).put((byte) 255);
+		}
+		for (int[] quad : CUBE_QUADS) {
+			body.put((byte) 4).putInt(quad[0]).putInt(quad[1]).putInt(quad[2]).putInt(quad[3]);
+			body.put((byte) 10).put((byte) 20).put((byte) 30).put((byte) 255);
+		}
+		byte[] head = header.getBytes(StandardCharsets.US_ASCII);
+		byte[] out = new byte[head.length + body.capacity()];
+		System.arraycopy(head, 0, out, 0, head.length);
+		System.arraycopy(body.array(), 0, out, head.length, body.capacity());
+		return out;
+	}
+
+	@Test
+	void aBinaryPlyReadsItsColouredVerticesAndFacesThroughThePackedPath() {
+		// cycloidal.ply's shape: a 16-byte vertex stride that is NOT uniform (float
+		// x y z + four uchars), and per-FACE colours after the index list. Both
+		// colours are read past -- a solid has one colour -- and the numbers are the
+		// cube's own.
+		String file = binaryFile("coloured.ply", colouredBinaryPly());
+		assertThat(eval("""
+				(let ((s (geom:read-ply %s)))
+				  (list (geom:volume s) (geom:surface-area s)
+				        (length (geom:facets-of s))
+				        (first (linalg:shape (geom:vertices-of s)))))
+				""".formatted(file)).print()).isEqualTo("(1000.0 600.0 6 8)");
+	}
+
+	@Test
+	void anAllFloatVertexBlockIsOneBulkTransfer() {
+		// bun_zipper's binary shape: every vertex property float32 with x y z first,
+		// which is the one-read-sequence fast path -- count*k floats in one native
+		// transfer, columns sliced.
+		String header = """
+				ply
+				format binary_little_endian 1.0
+				element vertex 8
+				property float x
+				property float y
+				property float z
+				property float confidence
+				property float intensity
+				element face 6
+				property list uchar int vertex_indices
+				end_header
+				""";
+		ByteBuffer body = ByteBuffer.allocate(8 * 20 + 6 * 17).order(ByteOrder.LITTLE_ENDIAN);
+		for (float[] corner : CUBE_CORNERS) {
+			body.putFloat(corner[0]).putFloat(corner[1]).putFloat(corner[2]).putFloat(0.85f).putFloat(0.5f);
+		}
+		for (int[] quad : CUBE_QUADS) {
+			body.put((byte) 4).putInt(quad[0]).putInt(quad[1]).putInt(quad[2]).putInt(quad[3]);
+		}
+		byte[] head = header.getBytes(StandardCharsets.US_ASCII);
+		byte[] out = new byte[head.length + body.capacity()];
+		System.arraycopy(head, 0, out, 0, head.length);
+		System.arraycopy(body.array(), 0, out, head.length, body.capacity());
+		String file = binaryFile("allfloat.ply", out);
+		assertThat(eval("""
+				(let ((s (geom:read-ply %s)))
+				  (list (geom:volume s) (geom:surface-area s) (length (geom:facets-of s))))
+				""".formatted(file)).print()).isEqualTo("(1000.0 600.0 6)");
+	}
+
+	@Test
+	void aBigEndianPlyIsRefusedByName() {
+		// The packed read-sequence path is little-endian by contract
+		// (.kb/binary-sequence-io.md); mis-reading every float would be strictly
+		// worse than saying so.
+		String file = textFile("big.ply", "ply\nformat binary_big_endian 1.0\nelement vertex 0\nend_header\n");
+		assertThat(eval("(handler-case (geom:read-ply %s) (error (e) (princ-to-string e)))".formatted(file)).print())
+			.contains("binary_big_endian");
+	}
+
+	@Test
+	void aPlyWithNoFaceElementIsAPointCloud() {
+		// The bunny's raw range scans carry vertices and no face element; the honest
+		// answer is the vertices with no facets, not an error.
+		String file = textFile("cloud.ply", """
+				ply
+				format ascii 1.0
+				element vertex 3
+				property float x
+				property float y
+				property float z
+				end_header
+				0 0 0
+				1 0 0
+				0 1 0
+				""");
+		assertThat(eval("""
+				(let ((s (geom:read-ply %s)))
+				  (list (first (linalg:shape (geom:vertices-of s)))
+				        (length (geom:facets-of s)) (geom:volume s)))
+				""".formatted(file)).print()).isEqualTo("(3 0 0.0)");
+	}
+
+	// --- glTF 2.0 / GLB ----------------------------------------------------------
+
+	/** The 10-unit indexed cube as a glTF BIN payload: 8 vec3 float32 + 36 uint16. */
+	private static byte[] cubeBin() {
+		ByteBuffer bin = ByteBuffer.allocate(8 * 12 + 36 * 2).order(ByteOrder.LITTLE_ENDIAN);
+		for (float[] corner : CUBE_CORNERS) {
+			bin.putFloat(corner[0]).putFloat(corner[1]).putFloat(corner[2]);
+		}
+		for (int[] quad : CUBE_QUADS) {
+			bin.putShort((short) quad[0]).putShort((short) quad[1]).putShort((short) quad[2]);
+			bin.putShort((short) quad[0]).putShort((short) quad[2]).putShort((short) quad[3]);
+		}
+		return bin.array();
+	}
+
+	/** The accessor/bufferView/buffer tail every cube glTF below shares. */
+	private static final String CUBE_GLTF_TAIL = """
+			"accessors":[{"bufferView":0,"componentType":5126,"count":8,"type":"VEC3"},
+			             {"bufferView":1,"componentType":5123,"count":36,"type":"SCALAR"}],
+			"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":96},
+			               {"buffer":0,"byteOffset":96,"byteLength":72}],
+			"buffers":[{"byteLength":168%s}]""";
+
+	private static byte[] glb(String json, byte[] bin) {
+		byte[] jsonBytes = json.getBytes(StandardCharsets.UTF_8);
+		int jsonPadded = (jsonBytes.length + 3) / 4 * 4;
+		int binPadded = (bin.length + 3) / 4 * 4;
+		ByteBuffer out = ByteBuffer.allocate(12 + 8 + jsonPadded + 8 + binPadded).order(ByteOrder.LITTLE_ENDIAN);
+		out.put("glTF".getBytes(StandardCharsets.US_ASCII)).putInt(2).putInt(out.capacity());
+		out.putInt(jsonPadded).putInt(0x4E4F534A).put(jsonBytes);
+		for (int i = jsonBytes.length; i < jsonPadded; i++) {
+			out.put((byte) ' ');
+		}
+		out.putInt(binPadded).putInt(0x004E4942).put(bin);
+		return out.array();
+	}
+
+	@Test
+	void aGlbSceneBecomesAListOfSolidsPosedByItsNodes() {
+		// One primitive -> one solid coloured by its material's baseColorFactor; the
+		// node's translation stays POSE (world-translation) while its scale is baked
+		// into the VERTICES -- geom:transform is rigid by decision (.kb/geom.md,
+		// "Scaling"), so a 2x cube measures 8x the volume rather than carrying a
+		// scale the measurements cannot see.
+		String json = """
+				{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+				"nodes":[{"mesh":0,"translation":[10,0,0],"scale":[2,2,2]}],
+				"meshes":[{"name":"cube","primitives":[{"attributes":{"POSITION":0},"indices":1,"material":0}]}],
+				"materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}],
+				%s}""".formatted(CUBE_GLTF_TAIL.formatted(""));
+		String file = binaryFile("cube.glb", glb(json, cubeBin()));
+		assertThat(eval("""
+				(let* ((solids (geom:read-gltf %s)) (s (first solids)))
+				  (list (length solids) (geom:volume s) (geom:surface-area s)
+				        (geom:label-of s) (geom:color-of s)
+				        (geom:world-translation s)))
+				""".formatted(file)).print()).isEqualTo("(1 8000.0 2400.0 \"cube\" #f(1.0 0.0 0.0) #f(10.0 0.0 0.0))");
+		assertThat(eval("(geom::%%model-format %s)".formatted(file)).print()).isEqualTo(":GLB");
+		assertThat(eval("(geom:volume (first (geom:read-model %s)))".formatted(file)).print()).isEqualTo("8000.0");
+	}
+
+	@Test
+	void aGltfWithABase64DataUriDecodesTheSameBuffer() {
+		// The .gltf carrier with the buffer embedded: base64 through Lisp
+		// arithmetic, including the IEEE-754 float32 decode the stream path never
+		// needs. Same cube, same numbers.
+		String uri = ",\"uri\":\"data:application/octet-stream;base64,"
+				+ java.util.Base64.getEncoder().encodeToString(cubeBin()) + "\"";
+		String json = """
+				{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+				"nodes":[{"mesh":0}],
+				"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
+				%s}""".formatted(CUBE_GLTF_TAIL.formatted(uri));
+		String file = textFile("cube-embedded.gltf", json);
+		assertThat(eval("""
+				(let ((s (first (geom:read-gltf %s))))
+				  (list (geom:volume s) (geom:surface-area s)))
+				""".formatted(file)).print()).isEqualTo("(1000.0 600.0)");
+		assertThat(eval("(geom::%%model-format %s)".formatted(file)).print()).isEqualTo(":GLTF");
+	}
+
+	@Test
+	void aGltfReadsItsBinFromBesideTheFile() {
+		binaryFile("cube0.bin", cubeBin());
+		String json = """
+				{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+				"nodes":[{"mesh":0}],
+				"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
+				%s}""".formatted(CUBE_GLTF_TAIL.formatted(",\"uri\":\"cube0.bin\""));
+		String file = textFile("cube-external.gltf", json);
+		assertThat(eval("(geom:volume (first (geom:read-gltf %s)))".formatted(file)).print()).isEqualTo("1000.0");
+	}
+
+	@Test
+	void aParentsScaleLandsOnAChildsTranslationAndVertices() {
+		// The hierarchy arm, and the whole point of it: a parent scaled 2x moves a
+		// child translated by 5 out to 10 AND doubles its cube -- the composition a
+		// flat per-node read would get wrong.
+		String json = """
+				{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+				"nodes":[{"children":[1],"scale":[2,2,2]},{"mesh":0,"translation":[5,0,0]}],
+				"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
+				%s}""".formatted(CUBE_GLTF_TAIL.formatted(""));
+		String file = binaryFile("scaled-child.glb", glb(json, cubeBin()));
+		assertThat(eval("""
+				(let ((s (first (geom:read-gltf %s))))
+				  (list (geom:volume s) (geom:world-translation s)))
+				""".formatted(file)).print()).isEqualTo("(8000.0 #f(10.0 0.0 0.0))");
+	}
+
+	@Test
+	void whatAGltfCannotCarryIsRefusedByName() {
+		// A silent partial read of a glTF is worse than a refusal
+		// (.kb/geom.md): lines, sparse accessors, compression extensions, skins,
+		// animations, glTF 1.x and a non-uniform scale above a rotated child are
+		// each refused naming what they are.
+		String base = """
+				{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+				"nodes":[{"mesh":0}],
+				"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1%s}]}],
+				%s%s}""";
+		String lines = binaryFile("mode1.glb",
+				glb(base.formatted(",\"mode\":1", CUBE_GLTF_TAIL.formatted(""), ""), cubeBin()));
+		String draco = binaryFile("draco.glb", glb(base.formatted("", CUBE_GLTF_TAIL.formatted(""),
+				",\"extensionsRequired\":[\"KHR_draco_mesh_compression\"]"), cubeBin()));
+		String skins = binaryFile("skins.glb",
+				glb(base.formatted("", CUBE_GLTF_TAIL.formatted(""), ",\"skins\":[{\"joints\":[0]}]"), cubeBin()));
+		String animations = binaryFile("animations.glb", glb(
+				base.formatted("", CUBE_GLTF_TAIL.formatted(""), ",\"animations\":[{\"channels\":[]}]"), cubeBin()));
+		String sparse = binaryFile("sparse.glb", glb("""
+				{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+				"nodes":[{"mesh":0}],
+				"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
+				"accessors":[{"bufferView":0,"componentType":5126,"count":8,"type":"VEC3",
+				              "sparse":{"count":1}},
+				             {"bufferView":1,"componentType":5123,"count":36,"type":"SCALAR"}],
+				"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":96},
+				               {"buffer":0,"byteOffset":96,"byteLength":72}],
+				"buffers":[{"byteLength":168}]}""", cubeBin()));
+		String v1 = textFile("one.gltf", "{\"asset\":{\"version\":\"1.0\"},\"nodes\":[{}]}");
+		String sheared = binaryFile("sheared.glb", glb("""
+				{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+				"nodes":[{"children":[1],"scale":[1,2,1]},
+				         {"mesh":0,"rotation":[0,0,0.7071068,0.7071068]}],
+				"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],
+				%s}""".formatted(CUBE_GLTF_TAIL.formatted("")), cubeBin()));
+		String refusal = "(handler-case (geom:read-gltf %s) (error (e) (princ-to-string e)))";
+		assertThat(eval(refusal.formatted(lines)).print()).contains("mode 1").contains("triangles");
+		assertThat(eval(refusal.formatted(draco)).print()).contains("KHR_draco_mesh_compression");
+		assertThat(eval(refusal.formatted(skins)).print()).contains("skins");
+		assertThat(eval(refusal.formatted(animations)).print()).contains("animations");
+		assertThat(eval(refusal.formatted(sparse)).print()).contains("sparse");
+		assertThat(eval(refusal.formatted(v1)).print()).contains("version 1.0").contains("2.0");
+		assertThat(eval(refusal.formatted(sheared)).print()).contains("non-uniform scale");
 	}
 
 	/** The twelve triangles of a 10-unit cube, wound counter-clockwise from outside. */

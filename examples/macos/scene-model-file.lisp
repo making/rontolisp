@@ -1,9 +1,12 @@
 ;;;; scene-model-file.lisp -- a mesh off disk, in a window.
 ;;;;
-;;;; `geom:read-obj` / `geom:read-stl` / `geom:read-model` answer an ordinary
-;;;; `geom:solid`, so a mesh someone else authored goes into the viewer exactly
-;;;; the way a `geom:box` does -- and `geom:volume`, `geom:bounds` and the
-;;;; booleans all apply to it unchanged (doc/en/guides/solid-modeling.md).
+;;;; `geom:read-obj` / `geom:read-stl` / `geom:read-ply` / `geom:read-gltf` /
+;;;; `geom:read-model` answer an ordinary `geom:solid` (a glTF, being a scene,
+;;;; answers a LIST of them), so a mesh someone else authored goes into the
+;;;; viewer exactly the way a `geom:box` does -- and `geom:volume`,
+;;;; `geom:bounds` and the booleans all apply to it unchanged
+;;;; (doc/en/guides/solid-modeling.md). Hand it a `.obj`, `.stl`, `.ply`,
+;;;; `.gltf` or `.glb` and the format comes out of the file's own bytes.
 ;;;;
 ;;;; Run it (macOS, on any of the three backends that carry the binding):
 ;;;;
@@ -98,10 +101,13 @@
 (defvar *models*
   (if *given*
       ;; Whatever was handed over: the format comes out of the file's own bytes.
+      ;; A glTF answers a LIST of solids (it is a scene, not a mesh), so the
+      ;; answer is spliced rather than assumed to be one solid.
       (let ((out nil))
         (dolist (path *given* (nreverse out))
           (format t "reading ~a~%" path)
-          (push (show (geom:read-model path :label path)) out)))
+          (let ((m (geom:read-model path :label path)))
+            (dolist (s (if (listp m) m (list m))) (push (show s) out)))))
       (let ((vase-path "scene-model-file-vase.obj")
             (bracket-path "scene-model-file-bracket.stl"))
         (format t "no file given; writing two and reading them back~%")

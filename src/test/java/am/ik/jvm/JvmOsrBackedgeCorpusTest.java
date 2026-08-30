@@ -86,10 +86,12 @@ class JvmOsrBackedgeCorpusTest {
 		List<LispVal> inlined = am.ik.rontolisp.cli.LoadInliner.inline(read, path -> {
 			throw new java.io.FileNotFoundException(path);
 		}, null, List.of(), am.ik.rontolisp.reader.Features.JVM);
+		// JsonLibrary runs OUTSIDE GeomLibrary, like the CLI: geom:read-gltf parses
+		// through rontolisp:json-parse, so the geom splice introduces the reference.
 		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary.process(
 				am.ik.rontolisp.eval.UrlLibrary
-					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.GeomLibrary
-						.process(am.ik.rontolisp.eval.TorchLibrary.process(am.ik.rontolisp.eval.JsonLibrary.process(
+					.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.LinalgLibrary
+						.process(am.ik.rontolisp.eval.GeomLibrary.process(am.ik.rontolisp.eval.TorchLibrary.process(
 								am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
 									.process(am.ik.rontolisp.eval.HttpReactorLibrary.process(inlined),
 											am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))),

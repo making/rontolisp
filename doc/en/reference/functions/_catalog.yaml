@@ -770,6 +770,8 @@ categories:
       - { slug: geom-read-model, name: "geom:read-model" }
       - { slug: geom-read-obj, name: "geom:read-obj" }
       - { slug: geom-read-stl, name: "geom:read-stl" }
+      - { slug: geom-read-ply, name: "geom:read-ply" }
+      - { slug: geom-read-gltf, name: "geom:read-gltf" }
       - { slug: geom-arrow, name: "geom:arrow" }
       - { slug: geom-triad, name: "geom:triad" }
       - { slug: geom-vertices-of, name: "geom:vertices-of" }
