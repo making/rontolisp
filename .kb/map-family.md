@@ -93,6 +93,15 @@ Every list position is guarded, not just the first: a non-list (e.g. a string) s
 and on the JVM, and traps (`unreachable`) on WASM. `nil` is a valid empty list. Use
 `map` for strings/vectors.
 
+**CL's `map` is a different lowering, and was 400x slower than this family over a
+list until 2026-08-31.** `expandMap` reads each operand by INDEX -- it has to
+serve a vector and a string as well -- and its list read was `(nth i s)`, an
+`nth` walk from the head, so `(map 'list #'1+ <4000-element list>)` cost 22.2 ms
+on wasm-GC against `mapcar`'s 0.027. Each operand now carries a cons cursor with
+the indexed read as its fallback (`.kb/seq-coerce-runtime.md`, "The rest of the
+`elt`-per-element family"); `mapcar` and the rest of this family never had the
+defect, because a list is all they take and a `cdr` walk is all they do.
+
 A call with no list -- `(mapcan #'list)` -- is a `<NAME> expects at least 2 arguments`
 error: `LispEvaluator.requireMapLists` for the interpreter and the built-in function
 objects, `expandMapFamily` for the shared three, and an `UnsupportedOperationException`

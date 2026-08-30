@@ -8292,10 +8292,24 @@ public final class LispMacroExpander {
 		LispSymbol cell = new LispSymbol("__rpl_c");
 		LispVal cellStep = listToCons(List.of(cell, fmtCall(LispNames.NTHCDR, vs1, r1), callOf(LispNames.CDR, cell)));
 		LispVal kStep = listToCons(List.of(k, new LispInteger(0), fmtCall(LispNames.ADD, k, new LispInteger(1))));
-		LispVal listLoop = listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(cellStep, kStep)),
-				listToCons(
-						List.of(fmtCall(LispNames.OR, fmtCall(LispNames.GE, k, n), callOf(LispNames.NULL, cell)), r1)),
-				fmtCall(LispNames.RPLACA, cell, fmtCall(LispNames.ELT, r2, fmtCall(LispNames.ADD, vs2, k)))));
+		// ... and its SOURCE is read through a second cursor, for the same reason the
+		// %arrayp arm's list-source loop below has one: elt on a list is an nth walk
+		// from the head, so a list-into-list replace was O(n^2) here long after the
+		// array arm stopped being. This cursor does NOT take the array arm's
+		// (null cell) stop -- it falls back to the very elt call this loop used to
+		// make, so an out-of-range or non-integer :start2, a non-list source and a
+		// dotted tail all answer and signal exactly what they did before.
+		LispSymbol dstSrcCell = new LispSymbol("__rpl_dc");
+		LispVal dstSrcSeed = makeIf(
+				fmtCall(LispNames.AND, callOf(LispNames.LISTP, r2), callOf(LispNames.INTEGERP, vs2),
+						fmtCall(LispNames.GE, vs2, new LispInteger(0))),
+				fmtCall(LispNames.NTHCDR, vs2, r2), LispNil.INSTANCE);
+		LispVal listLoop = makeLet(dstSrcCell.name(), dstSrcSeed,
+				listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(cellStep, kStep)),
+						listToCons(List
+							.of(fmtCall(LispNames.OR, fmtCall(LispNames.GE, k, n), callOf(LispNames.NULL, cell)), r1)),
+						fmtCall(LispNames.RPLACA, cell,
+								readElementAdvancing(dstSrcCell, r2, fmtCall(LispNames.ADD, vs2, k))))));
 		LispVal nonArray = makeIf(callOf(LispNames.LISTP, r1), listLoop, functional);
 		if (!arraysExist && arms != SeqOpArms.ARRAY_ONLY) {
 			// No array can exist, so seq1 is a string or a list and the destructive
@@ -23205,6 +23219,28 @@ public final class LispMacroExpander {
 		return makeIf(callOf(LispNames.CONSP, cur), callOf(LispNames.CDR, cur), cur);
 	}
 
+	// (if (consp cur) (prog1 (car cur) (setq cur (cdr cur))) (elt seq i)) -- the same
+	// read as readElement above with the ADVANCE folded in. The fold is not cosmetic: a
+	// separate advanceCursor step form evaluates consp a SECOND time per element, which
+	// on the operands where the cursor never fires (a string, a vector) measured
+	// +26%/+36% against +7%/+16% for this shape when search/mismatch took it. It also
+	// works where there is no do binding to hang a step form on at all.
+	// Whatever the cursor cannot answer -- a non-list operand, a cursor run off the end
+	// of a proper list, a cursor sitting on a dotted tail -- falls through to the very
+	// elt call the loop used to make, so the answer and the error are unchanged.
+	private static LispVal readElementAdvancing(LispSymbol cur, LispVal seq, LispVal i) {
+		return cursorRead(cur, listToCons(List.of(new LispSymbol(LispNames.ELT), seq, i)));
+	}
+
+	// (if (consp cur) (prog1 (car cur) (setq cur (cdr cur))) fallback) -- the cursor read
+	// above over an arbitrary fallback, for a loop whose non-list read is not a plain elt
+	// (map's is a stringp/listp/aref three-way).
+	private static LispVal cursorRead(LispSymbol cur, LispVal fallback) {
+		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal take = listToCons(List.of(new LispSymbol(LispNames.PROG1), callOf(LispNames.CAR, cur), advance));
+		return makeIf(callOf(LispNames.CONSP, cur), take, fallback);
+	}
+
 	// Builds a (do ...) form collecting the elements of the vector named by {@code vec}
 	// into a fresh list, scanning backwards so the conses come out in order.
 	private static LispVal coerceVectorToList(LispSymbol vec) {
@@ -23839,18 +23875,35 @@ public final class LispMacroExpander {
 		}
 		bindings.add(listToCons(List.of(nVar, lenExpr)));
 
-		// call = (funcall fn (elt s0 i) (elt s1 i) ...) where elt dispatches on
-		// stringp/listp (arrays read with aref, like expandElt).
+		// One cons cursor per sequence, bound after the sequences and stepped from
+		// INSIDE the read (a do* binding with no step form is a plain let* binding a
+		// setq persists through). A LIST operand was read with (nth i s), an nth walk
+		// from the head per element, so (map 'list ...) over a list -- and (map 'vector
+		// ...), which routes through it -- was O(n^2) on every backend that runs this
+		// expansion. A non-list operand pins a non-cons cursor and keeps reading through
+		// the stringp/listp/aref three-way exactly as before, so nothing else moves.
+		List<LispSymbol> curVars = new java.util.ArrayList<>();
+		for (int k = 0; k < seqVars.size(); k++) {
+			LispSymbol cv = new LispSymbol("__map_c" + k);
+			curVars.add(cv);
+			bindings.add(listToCons(List.of(cv, seqVars.get(k))));
+		}
+
+		// call = (funcall fn (read s0) (read s1) ...) where each read is the cursor above
+		// over a stringp/listp/aref three-way (arrays read with aref, like expandElt).
 		List<LispVal> callParts = new java.util.ArrayList<>();
 		callParts.add(new LispSymbol(LispNames.FUNCALL));
 		callParts.add(fnVar);
-		for (LispSymbol sv : seqVars) {
+		for (int k = 0; k < seqVars.size(); k++) {
+			LispSymbol sv = seqVars.get(k);
 			LispVal stringElt = listToCons(List.of(new LispSymbol(LispNames.CHAR), sv, iVar));
 			LispVal listElt = listToCons(List.of(new LispSymbol(LispNames.NTH), iVar, sv));
 			LispVal arrayElt = listToCons(List.of(new LispSymbol(LispNames.AREF), sv, iVar));
 			LispVal listOrArray = arraysExist
 					? makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), sv)), listElt, arrayElt) : listElt;
-			callParts.add(makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), sv)), stringElt, listOrArray));
+			LispVal indexed = makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), sv)), stringElt,
+					listOrArray);
+			callParts.add(cursorRead(curVars.get(k), indexed));
 		}
 		LispVal call = listToCons(callParts);
 
@@ -27876,15 +27929,21 @@ public final class LispMacroExpander {
 		LispSymbol idxVar = new LispSymbol("__mk_i");
 		LispSymbol contentsVar = new LispSymbol("__mk_c");
 		LispSymbol lenVar = new LispSymbol("__mk_n");
+		LispSymbol curVar = new LispSymbol("__mk_cur");
 		// The contents can be ANY sequence (cl-ppcre passes a string), so the fill
-		// indexes it with elt instead of walking it as a list.
+		// cannot simply walk them as a list -- but elt on a LIST is an nth walk from the
+		// head, which made this loop quadratic on every compiled backend (the
+		// interpreter never sees it; make-array is native there). A cons cursor beside
+		// the index serves the list case in O(1) and pins itself to a non-cons for every
+		// other representation, which keeps indexing with elt exactly as before.
 		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DO),
 				listToCons(List.of(listToCons(
 						List.of(idxVar, new LispInteger(0), fmtCall(LispNames.ADD, idxVar, new LispInteger(1)))))),
-				listToCons(List.of(fmtCall(LispNames.GE, idxVar, lenVar), arrVar)), listToCons(List
-					.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, fmtCall(LispNames.ELT, contentsVar, idxVar)))));
-		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents,
-				makeLet(lenVar.name(), callOf(LispNames.LENGTH, contentsVar), fill)));
+				listToCons(List.of(fmtCall(LispNames.GE, idxVar, lenVar), arrVar)),
+				listToCons(List.of(new LispSymbol(LispNames.ASET), arrVar, idxVar,
+						readElementAdvancing(curVar, contentsVar, idxVar)))));
+		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents, makeLet(lenVar.name(),
+				callOf(LispNames.LENGTH, contentsVar), makeLet(curVar.name(), contentsVar, fill))));
 	}
 
 	/**
@@ -27915,15 +27974,22 @@ public final class LispMacroExpander {
 	}
 
 	// One dimension level of the nested-fill loop: (dotimes (idx size [arr]) body),
-	// where body either descends one more level (elt-binding the next level's sequence)
-	// or, at the innermost dimension, stores the leaf value. idxVars accumulates the
-	// loop variables bound so far (outermost first) so the leaf level can compute its
-	// flat row-major index directly from them and the precomputed strides.
-	private static LispVal buildNestedInitialContentsFillLevel(LispSymbol arrVar, LispVal seqExpr, int[] sizes,
+	// where body either descends one more level (cursor-reading the next level's
+	// sequence) or, at the innermost dimension, stores the leaf value. idxVars
+	// accumulates the loop variables bound so far (outermost first) so the leaf level
+	// can compute its flat row-major index directly from them and the precomputed
+	// strides. Each level gets its OWN cons cursor over its own sequence, bound just
+	// outside its dotimes -- so a level below is re-seeded per iteration of the level
+	// above, which is exactly what a nested list of lists needs. Without it every level
+	// re-walked its sequence from the head per index and a nested LIST was quadratic at
+	// every dimension.
+	private static LispVal buildNestedInitialContentsFillLevel(LispSymbol arrVar, LispSymbol seqExpr, int[] sizes,
 			int[] strides, int level, List<LispSymbol> idxVars) {
 		LispSymbol idxVar = new LispSymbol("__mk_i" + level);
+		LispSymbol curVar = new LispSymbol("__mk_cur" + level);
 		List<LispSymbol> withThisLevel = new java.util.ArrayList<>(idxVars);
 		withThisLevel.add(idxVar);
+		LispVal read = readElementAdvancing(curVar, seqExpr, idxVar);
 		LispVal body;
 		if (level == sizes.length - 1) {
 			LispVal index = strides[0] == 1 ? withThisLevel.get(0)
@@ -27933,16 +27999,16 @@ public final class LispMacroExpander {
 						: fmtCall(LispNames.MUL, withThisLevel.get(d), new LispInteger(strides[d]));
 				index = fmtCall(LispNames.ADD, index, term);
 			}
-			body = fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, index, fmtCall(LispNames.ELT, seqExpr, idxVar));
+			body = fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, index, read);
 		}
 		else {
 			LispSymbol rowVar = new LispSymbol("__mk_row" + (level + 1));
-			body = makeLet(rowVar.name(), fmtCall(LispNames.ELT, seqExpr, idxVar),
+			body = makeLet(rowVar.name(), read,
 					buildNestedInitialContentsFillLevel(arrVar, rowVar, sizes, strides, level + 1, withThisLevel));
 		}
 		LispVal resultForm = (level == 0) ? arrVar : LispNil.INSTANCE;
 		LispVal spec = listToCons(List.of(idxVar, new LispInteger(sizes[level]), resultForm));
-		return listToCons(List.of(new LispSymbol(LispNames.DOTIMES), spec, body));
+		return makeLet(curVar.name(), seqExpr, listToCons(List.of(new LispSymbol(LispNames.DOTIMES), spec, body)));
 	}
 
 	/**

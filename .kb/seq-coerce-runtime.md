@@ -437,6 +437,169 @@ Nothing shipped passes a long list -- `uiop-utility.lisp`'s `frob-substrings`,
 complexity bug rather than a profile, and the numbers above are what a consumer
 that does pass one would have paid.
 
+## The rest of the `elt`-per-element family
+
+Measured 2026-08-31, hours after the prelude cursor above. `.todo/594` carried
+two more sites and asked whether the family had more; the survey found two more
+again. **Five sites, one cursor.** The prelude is not where the family lived --
+four of the five are lowerings in `LispMacroExpander` and one is a native
+interpreter builtin, and each was quadratic on exactly the half of the world the
+one beside it was fine on.
+
+| the site | who ran the quadratic loop | the indexed read it made |
+| --- | --- | --- |
+| `lowerInitialContentsMakeArray` (rank 1) | the 3 compile paths | `(elt contents i)` |
+| `buildNestedInitialContentsFillLevel` (rank >= 2) | the 3 compile paths | `(elt <this level's seq> idx)`, once per LEVEL |
+| `replaceDispatch`'s list-DESTINATION arm | all four | `(elt source (+ start2 k))` |
+| `expandMap`, per operand | all four | `(nth i s)` |
+| `Environment`'s native `replace`, source side | the INTERPRETER only | `sequenceRef(source, start2 + k)` |
+
+The first four take the SAME read the prelude bodies took --
+`(if (consp c) (prog1 (car c) (setq c (cdr c))) <the indexed read>)`, spelled once
+as `LispMacroExpander.readElementAdvancing` / `cursorRead` -- and for the same
+reason: the fallback is what reproduces every answer and every error, so nothing
+had to be re-derived about NIL past a proper list, a signal past a dotted tail,
+or a negative index. The fifth is Java (`Environment.SequenceSourceCursor`) and
+keeps `sequenceRef` for every non-list representation, so a string, a general
+array and a packed vector read exactly the slot they read before.
+
+**No site took a `(null cell)` stop.** `replace`'s ARRAY-arm list source has one
+and changed what an invalid call answers doing it
+(`.kb/sequence-op-runtimes.md`); none of these five could afford that, and the
+differential below is what proves none of them took it by accident.
+
+**Two of the five are one cursor per something, not one per call.** The rank >= 2
+fill binds a cursor per DIMENSION LEVEL, re-seeded on every iteration of the
+level above -- which is what a nested list of lists needs, since each row is a
+fresh list. `map` binds one per OPERAND, all advanced by the same read, since
+they all sit at index `i`.
+
+### The ladders
+
+Apple M4 Max, one locked acquisition, before and after in the same run, two
+rounds, the faster taken. Elements are `(mod i 7)`. **ms per call.** The internal
+clock is millisecond-resolution on every backend, so the AFTER rows come from a
+third pass at 8x the iteration count -- a linear ladder is otherwise read off a
+handful of ticks.
+
+`(make-array n :initial-contents <n-element list>)` -- the interpreter never runs
+this (native `make-array`), which is why the inversion was so wide:
+
+| n | 250 | 500 | 1000 | 2000 | 4000 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| WASM p1 before | 0.036 | 0.135 | 0.519 | 2.93 | **16.6** |
+| WASM p1 **after** | 0.0035 | 0.0067 | 0.0138 | 0.0296 | **0.062** |
+| `--component` before / after | 0.035 / 0.0034 | 0.133 / 0.0067 | 0.520 / 0.0138 | 2.92 / 0.0294 | 16.6 / **0.062** |
+| JVM `.class` before | 0.066 | 0.217 | 0.791 | 3.01 | **11.8** |
+| JVM `.class` **after** | 0.017 | 0.034 | 0.067 | 0.133 | **0.266** |
+| interpreter, native (unchanged) | 0.0015 | 0.0022 | 0.0041 | 0.0083 | 0.016 |
+
+**268x on WASM and 44x on the JVM at n = 4000**, and every after-row doubles
+where the before-row quadrupled. A compiled program was 1,100x (WASM) slower
+than the interpreter on this call; it is now 3.9x, which is the constant, not the
+class.
+
+The rank >= 2 fill, `(make-array '(R 4) :initial-contents <R rows of 4>)`:
+
+| R | 250 | 500 | 1000 | 2000 |
+| --- | ---: | ---: | ---: | ---: |
+| WASM p1 before | 0.049 | 0.163 | 0.570 | **3.56** |
+| WASM p1 **after** | 0.0131 | 0.0260 | 0.0514 | **0.1025** |
+| JVM before / after | 0.163 / 0.082 | 0.416 / 0.161 | 1.16 / 0.325 | 3.76 / **0.646** |
+
+`(replace <4000-element array> <n-element list>)` -- the mirror, quadratic on the
+INTERPRETER and linear on the three compile paths since todo-413:
+
+| n | 500 | 1000 | 2000 | 4000 |
+| --- | ---: | ---: | ---: | ---: |
+| interpreter before | 0.141 | 0.626 | 2.63 | **10.6** |
+| interpreter **after** | 0.0023 | 0.0042 | 0.0083 | **0.0169** |
+| JVM (unchanged) | 0.0015 | 0.0028 | 0.0051 | 0.0125 |
+| WASM p1 (unchanged) | 0.0069 | 0.0138 | 0.0295 | 0.0625 |
+
+**627x at n = 4000**, and the interpreter goes from 850x SLOWER than the compiled
+program to 3.7x faster than WASM.
+
+`(replace <4000-element list> <4000-element list>)` -- a list on BOTH sides, which
+was quadratic everywhere at once, and `(map 'list #'1+ <n-element list>)`:
+
+| shape at n = 4000 | interpreter | JVM | WASM p1 | `--component` |
+| --- | ---: | ---: | ---: | ---: |
+| list-into-list `replace` before | 10.6 | 11.35 | 16.5 | 16.6 |
+| list-into-list `replace` **after** | **0.023** | **0.019** | **0.051** | **0.051** |
+| `(map 'list #'1+ ...)` before | 12.7 | 11.3 | 22.2 | 22.2 |
+| `(map 'list #'1+ ...)` **after** | **2.21** | **0.491** | **0.069** | **0.069** |
+| `(map 'vector #'1+ <list>)` before / after | 12.9 / 2.24 | 11.3 / 0.503 | 22.5 / **0.123** | 22.5 / 0.122 |
+| `(mapcar #'1+ ...)`, for scale | 0.059 | 0.028 | 0.027 | 0.027 |
+
+`map`'s ladder over a list, WASM p1: 0.131 / 0.510 / 2.52 / **22.2** before,
+0.0051 / 0.0104 / 0.0356 / **0.069** after -- **320x**, and the `'vector` result
+type routes through the `'list` walk, so it moved with it. The interpreter's
+after-row is 2.2 ms rather than 0.069 because what is left there is the
+tree-walking interpreter's own per-node cost, the same residue `search` left; it
+is linear now (0.274 / 0.546 / 1.10 / 2.21 doubles cleanly) where it was not.
+
+### What it costs
+
+**A non-list operand pays one `consp` per element for a cursor it never uses --
+and the honest number needs its own program.** In the ladder above every row is
+inlined into ONE toplevel method, and there the JVM's declined rows move by far
+more than this change does: `(map 'vector #'1+ <vector>)` reads 0.105 -> 0.645
+and `(mapcar #'1+ ...)` reads 0.028 -> 0.252, and **`mapcar` is not touched by
+this change at all**. Growing one row's inline body moves the JIT's decisions for
+its neighbours. Re-measured with each row in its own `defun` and the whole thing
+in its own program, ms per call at n = 4000, before -> after:
+
+| declined row | interpreter | JVM | WASM p1 |
+| --- | --- | --- | --- |
+| `(map 'vector #'1+ <vector>)` | 1.807 -> **2.168** (+20%) | 0.0400 -> 0.0385 | 0.1485 -> 0.1500 (+1%) |
+| `(make-array 4000 :initial-contents <vector>)` | 0.0090 -> 0.0090 (native) | 0.0025 -> 0.0020 | 0.1120 -> 0.1145 (+2%) |
+| `(replace <array> <vector>)` | 0.0095 -> 0.0095 | 0.0110 -> 0.0095 | 0.0770 -> 0.0775 |
+| `(replace <string> <string>)` | 0.0015 -> 0.0015 | 0.0075 -> 0.0075 | 0.0760 -> 0.0765 |
+| `(mapcar #'1+ ...)` -- untouched, the control | 0.0480 -> 0.0480 | 0.0235 -> 0.0230 | 0.0135 -> 0.0135 |
+
+The control row is identical to three digits on all three backends, which is what
+says the rest of this table is the change and not the harness. **The only real
+cost is +20% for `map` over a vector in the interpreter** -- the same band the
+prelude cursor's declined path cost -- with the JVM flat and WASM within 2%. The
+interpreter's `replace` rows do not move at all: its cursor is a NULL CHECK for a
+non-list source, not a `consp` per element, which is the one place a Java cursor
+beats the Lisp one. (Absolute values differ between the two harnesses -- a
+per-`defun` body JITs differently -- so read each table against itself.)
+
+**Bytes.** wasm-GC, marginal cost of one more site, `--optimize=size`:
+
+| site | before | after | |
+| --- | ---: | ---: | ---: |
+| `(make-array 3 :initial-contents c)` | 1,134 | 1,207 | +73 |
+| `(make-array '(2 2) :initial-contents c)` | 2,548 | 2,952 | +404 (two levels) |
+| `(map 'list #'1+ c)` | 591 | 664 | +73 |
+| `(replace d c)` | 43 | 43 | 0 -- a shared callee |
+
+`replace`'s cursor is paid ONCE, inside `%REPLACE-RUNTIME`: +248 B on the module
+and nothing per site. Whole artifacts: `size-report hello_world` and `pi_approx`
+are **byte-identical** at every optimize level (no site survives their shake),
+and `zlib` grows **365 B** -- +0.29% at `--optimize`, +0.36% at
+`--optimize=size` -- for a quadratic class removed from four lowerings.
+
+**Nothing shipped passes a long list to any of the five**, the same finding as
+the prelude cursor: this was a latent complexity bug in every case, and the
+ladders are what a consumer that does pass one would have paid.
+
+### Proving the answers did not move
+
+16,414 comparisons, zero divergence: the same generated program run on the jar
+built from the parent commit and the jar built from this one, output diffed byte
+for byte per backend. 3,697 cases x 4 backends (a deterministic LCG over
+list/general-vector/packed-vector/string operands, bounds drawn in range, at the
+edge, past the end, negative, nil and absent, plus hand-picked dotted lists,
+non-sequences, empty sequences, self-aliased `replace`, short and absent nested
+rows) and 813 cases x 2 backends for the shapes that TRAP on WASM and so can only
+be compared on the interpreter and the JVM -- a rank-1 `:initial-contents` longer
+than the array (a write past its end) and a dotted source read past its tail
+(`car` of a non-cons). Both trap identically before and after; they are
+pre-existing and not this change's to move.
+
 ## Re-evaluation triggers
 
 - **A full-scan sequence operator on the interpreter is now bounded by the
@@ -479,6 +642,22 @@ that does pass one would have paid.
   deviation. If it is ever made CLHS-correct, that is a prelude-SOURCE change --
   it moves every backend at once -- and the arm's decline can then be lifted in
   the same commit.
+- **A new loop over a sequence whose representation is a RUNTIME fact must carry
+  a cursor from the start.** Five sites had the defect and none of them was in
+  the prelude; the shape is a generated `do`/`dotimes` whose body reads
+  `(elt s i)` or `(nth i s)`, and the fix is `readElementAdvancing` (a plain
+  `elt` fallback) or `cursorRead` (any other fallback). `LispMacroExpander`'s
+  `readElement`/`advanceCursor` pair is the OTHER spelling, for a loop that has a
+  `do` binding to hang the step on; `map-into`'s dispatch is its only user.
+- **The family is not closed.** `.todo/595` carries what the 594 survey found and
+  did not fix, with its ladders: the runtime `format` renderer's argument list
+  (`format-render.lisp` reads `(nth i all)` per directive AND calls
+  `(length items)` twice per `~{` pass), the `#'map-into` WRAPPER's
+  `(setf (elt r i) ...)` store into a list destination
+  (`BuiltinFunctionWrappers.mapIntoWrapper` -- the one map-into site that never
+  got the cursor its lowering has), and `(map 'string ...)`, whose accumulator is
+  a `string-concat` per element and is quadratic for a different reason
+  (56 ms at n = 4000 on WASM, unmoved by this change).
 
 ## Pinning tests
 
@@ -522,6 +701,22 @@ that does pass one would have paid.
   bound past the end and a negative one, a dotted list, and a 400-element list
   whose answers the quadratic body gave just as slowly. The interpreter one goes
   through `(funcall #'search ...)`, which is the `defun` and never the arm.
+- The rest of the family (the section above), all four backends:
+  `ci-spec.yaml`'s `make-array-rank2-initial-contents` (extended with run-time
+  list, vector, string and packed contents at rank 1, 2 and 3, and both
+  mixed-representation nestings), `replace-into-a-list` (extended with a LIST
+  source into a list destination, bounded and past the end) and `map` (extended
+  with list, vector and string operands, both arities and every result type);
+  `LispEvaluatorTest.replaceReadsAListSourceThroughACursorRatherThanIndexingItFromTheHead`
+  -- including the three `sequence-ref: index N out of range` signals a silent
+  cursor stop would have erased, and a self-aliased `replace`;
+  `JvmLispCompilerTest.compileAndRunMakeArrayInitialContentsWalksAListWithACursor`
+  / `#compileAndRunMapWalksAListWithACursor` /
+  `#compileAndRunAListIntoAListReplaceReadsItsSourceWithACursor` and the WASM
+  twins `makeArrayInitialContentsWalksAListWithACursor` /
+  `mapWalksAListWithACursor` / the list-source rows appended to
+  `replaceIntoAList`. Each includes a 2,000-element operand -- the length at
+  which the head-walk was already seconds of test time.
 - The behavior is pinned where it already was:
   `LispEvaluatorTest.evalCopyTreeAndSearch`,
   `LispEvaluatorTest.coerceConvertsBetweenListVectorAndString` /

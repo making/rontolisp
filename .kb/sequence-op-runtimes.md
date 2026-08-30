@@ -180,6 +180,58 @@ keep owning what they answer there, so their cursor falls back to the original
 also why theirs GREW (+634 B of `--optimize=size` wasm a body) where this one
 shrank -- a branch in front of the `elt` loop rather than a replacement for it.
 
+### The list DESTINATION arm read its source with `elt` for another fifteen days
+
+**Fixed 2026-08-31.** The change above gave the `%arrayp` arm's LIST SOURCE a
+cursor and left the arm six lines below it -- the list DESTINATION rewrite --
+still spelling `(rplaca cell (elt r2 (+ vs2 k)))`. Its destination had walked a
+`nthcdr`/`cdr` cursor since the arm existed; its SOURCE had not. So a
+list-into-list `replace` -- which is what `(setf (subseq <list> ...))` lowers to
+-- stayed quadratic on all three compile paths. ms per call, 4,000 elements on
+both sides, one locked run:
+
+| `(replace <4000-list> <4000-list>)` | interpreter | JVM | WASM p1 | `--component` |
+| --- | ---: | ---: | ---: | ---: |
+| before | 10.6 | 11.35 | 16.5 | 16.6 |
+| **after** | **0.023** | **0.019** | **0.051** | **0.051** |
+
+**This cursor could not take the `(null cell)` stop either**, for the reason the
+prelude bodies could not: the stop belongs to the destination walk, which owns
+running out of cells, and putting one on the SOURCE would change what a bad
+`:start2`/`:end2` answers a second time. It falls back to the same `elt` call
+instead -- `(if (consp c) (prog1 (car c) (setq c (cdr c))) (elt r2 (+ vs2 k)))`,
+seeded `(nthcdr start2 source)` only when the source is a `listp` and `start2` is
+a non-negative integer, so a non-list source, a computed non-integer bound and a
+negative one all keep indexing exactly as they did. It costs **+248 B once**,
+inside `%REPLACE-RUNTIME`, and **0 per site** (43 B before and after) -- the
+sharing this file is about, working as designed.
+
+**The INTERPRETER's native `replace` had the mirror defect, on the source side.**
+`Environment`'s `replace` entry read `sequenceRef(source, start2 + k)` per
+element, and `sequenceRef`'s list arm walks from the head -- so a LIST source was
+quadratic HERE while the compile paths, fixed by todo-413 above, were linear:
+
+| `(replace <4000-element array> <n-element list>)` | 500 | 1000 | 2000 | 4000 |
+| --- | ---: | ---: | ---: | ---: |
+| interpreter before | 0.141 | 0.626 | 2.63 | **10.6** |
+| interpreter **after** | 0.0023 | 0.0042 | 0.0083 | **0.0169** |
+| JVM `.class`, unchanged | 0.0015 | 0.0028 | 0.0051 | 0.0125 |
+
+**627x at n = 4000**, and the interpreter goes from 850x SLOWER than the compiled
+program to slightly faster than WASM. One `Environment.SequenceSourceCursor`
+serves all three destination arms (`LispArray`, `LispIntVector`, list), since all
+three read the source the same way; it is monotonic, re-seeds if a caller ever
+reads backwards, and keeps `sequenceRef` for every non-list representation, so a
+string, a general array and a packed vector read the same slot they always did
+and their timings do not move at all (a null check, not a `consp` per element).
+
+**It still SIGNALS.** The stop this arm's compile-path twin took would have
+erased `sequence-ref: index N out of range`, and with it the one surviving
+three-way disagreement recorded above. The cursor raises the same message from
+the same element instead -- for a proper list run out, for a dotted tail, and for
+a `:start2` past the end -- so **interpreter-signals / compile-paths-truncate is
+unchanged**, and the re-evaluation trigger above still stands as written.
+
 **2. The `%arrayp` arm is its own function, and a site that proves an array calls
 it.** `%replace-runtime-array` / `%fill-runtime-array` hold that arm; the wide
 helper's array arm is a CALL to it, so the two hold ONE copy of the copy loop
@@ -347,6 +399,10 @@ the helper is injected and then fully shaken out, the same residue
   runtime-dispatching `(setf (elt ...))` store rather than the `%arrayp`/`listp`/
   string split `replace` and `fill` share, and no measured artifact carries a live
   `%map-into-runtime-<n>` -- zlib has none. Reopen it against a module that does.
+  Its LOWERING carries a cursor per source and one for the result
+  (`mapIntoDispatch`); the `#'map-into` WRAPPER
+  (`BuiltinFunctionWrappers.mapIntoWrapper`) does NOT -- its store is still
+  `(setf (elt r i) v)`, quadratic into a list destination. `.todo/595`.
 - **`%SEQ-INT-VECTOR` (2,136 B), `%SEQ-TO-LIST` (1,592) and `%SUBSEQ-RUNTIME`
   (1,114) are still whole-representation bodies** in the same artifact, and were
   todo-325's table alongside `replace`/`fill`. They are NOT this shape: the
@@ -407,3 +463,13 @@ been: `_dispatch_11` costs 975 B where it cost 12,156. zlib `--optimize=size`
   the gate in one program) and the sequence cases in `ci-spec.yaml` (all four
   backends), `LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest` (`replaceIntoAList`, `sequenceOpRuntimeArmRouting`).
+- The two source cursors above:
+  `LispEvaluatorTest.replaceReadsAListSourceThroughACursorRatherThanIndexingItFromTheHead`
+  -- every destination arm, a self-aliased `replace`, a 2,000-element source, and
+  the three `sequence-ref: index N out of range` signals a silent cursor stop
+  would have erased;
+  `JvmLispCompilerTest.compileAndRunAListIntoAListReplaceReadsItsSourceWithACursor`
+  and the list-source rows appended to `WasmLispCompilerIntegrationTest.replaceIntoAList`;
+  the LIST-source rows added to `ci-spec.yaml`'s `replace-into-a-list`, which runs
+  all four backends over the same program and is what would catch the interpreter
+  and the compile paths drifting apart on this arm.

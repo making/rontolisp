@@ -3624,6 +3624,55 @@ public final class Environment implements Scope {
 		throw new LispEvalException("sequence-ref: index " + index + " out of range for " + val.print());
 	}
 
+	/**
+	 * A forward reader over a {@code replace} SOURCE sequence. Every representation but a
+	 * list is read by {@link #sequenceRef} exactly as before -- a slot read either way --
+	 * while a LIST is walked with a cons cursor instead of re-indexed from the head per
+	 * element, which is what made the element loop quadratic: 10.6 ms for a 4,000-element
+	 * list source against 0.013 ms for the same call compiled, which is the wrong way
+	 * round. The cursor is monotonic and re-seeds if a caller ever reads backwards, so it
+	 * answers the same element for the same index however it is driven.
+	 * <p>
+	 * It also raises the SAME {@code sequence-ref: index N out of range} error at the
+	 * same element, rather than stopping silently when the list runs out. That error is
+	 * the one surviving three-way disagreement with the compile paths, which truncate
+	 * (see {@code .kb/sequence-op-runtimes.md}); erasing it here would be a behavior
+	 * change hiding inside a performance fix.
+	 */
+	private static final class SequenceSourceCursor {
+
+		private final LispVal source;
+
+		// null exactly when the source is not a list: then every read is a sequenceRef.
+		private @Nullable LispVal cursor;
+
+		private int at;
+
+		private SequenceSourceCursor(LispVal source) {
+			this.source = source;
+			this.cursor = (source instanceof LispCons || source instanceof LispNil) ? source : null;
+		}
+
+		private LispVal read(int index) {
+			if (this.cursor == null) {
+				return sequenceRef(this.source, index);
+			}
+			if (index < this.at) {
+				this.cursor = this.source;
+				this.at = 0;
+			}
+			while (this.at < index && this.cursor instanceof LispCons cell) {
+				this.cursor = cell.cdr();
+				this.at++;
+			}
+			if (this.at == index && this.cursor instanceof LispCons cell) {
+				return cell.car();
+			}
+			throw new LispEvalException("sequence-ref: index " + index + " out of range for " + this.source.print());
+		}
+
+	}
+
 	// Coerces a Common Lisp string designator (a string, a symbol, or a character) to a
 	// String, dropping a keyword's leading package colon like (string ...) does. Used by
 	// the string comparison functions (string=/string-equal), which accept designators --
@@ -5873,17 +5922,21 @@ public final class Environment implements Scope {
 				into.replaceInPlace(start1, s2, start2, copied);
 				return into;
 			}
+			// All three destructive arms below read the source the same way, so one
+			// cursor serves them all: a list source is walked once rather than indexed
+			// from its head per element, every other representation is the slot read it
+			// always was, and an exhausted list source still signals (above).
+			SequenceSourceCursor reader = new SequenceSourceCursor(source);
 			if (target instanceof LispArray targetArr && targetArr.dimensions().length == 1) {
 				for (int k = 0; k < copied; k++) {
-					targetArr.writeFlat(start1 + k, sequenceRef(source, start2 + k));
+					targetArr.writeFlat(start1 + k, reader.read(start2 + k));
 				}
 				return targetArr;
 			}
 			if (target instanceof LispIntVector targetIv) {
 				// Mask-store each element (a non-integer source element is a type error).
 				for (int k = 0; k < copied; k++) {
-					targetIv.setElement(start1 + k,
-							exactIntElement(LispNames.REPLACE, sequenceRef(source, start2 + k)));
+					targetIv.setElement(start1 + k, exactIntElement(LispNames.REPLACE, reader.read(start2 + k)));
 				}
 				return targetIv;
 			}
@@ -5896,7 +5949,7 @@ public final class Environment implements Scope {
 					idx++;
 				}
 				for (int k = 0; k < copied && cur instanceof LispCons cell; k++) {
-					cell.setCar(sequenceRef(source, start2 + k));
+					cell.setCar(reader.read(start2 + k));
 					cur = cell.cdr();
 				}
 				return target;

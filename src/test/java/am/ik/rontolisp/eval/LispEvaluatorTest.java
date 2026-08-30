@@ -4317,6 +4317,58 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void replaceReadsAListSourceThroughACursorRatherThanIndexingItFromTheHead() {
+		// The native replace read its source with sequenceRef per element, and that walks
+		// a LIST from the head -- so a list source was quadratic on the INTERPRETER while
+		// the three compile paths, which took a cursor with todo-413, were linear: 26.5
+		// ms against 0.06 at n=4000. One cursor now serves all three destination arms.
+		// Every answer below is the one the indexed read gave.
+		assertThat(evalMulti("""
+				(list (replace (make-array 4 :initial-element 0) '(1 2 3))
+				      (replace (make-array 4 :initial-element 0) '(1 2 3 4 5) :start1 1)
+				      (replace (make-array 4 :initial-element 0) '(1 2 3 4 5) :start2 2)
+				      (replace (make-array 4 :element-type '(unsigned-byte 8) :initial-element 0) '(1 2 3))
+				      (replace (list 0 0 0 0) '(1 2 3))
+				      (replace (list 0 0 0 0) '(1 2 3 4 5) :start1 1 :start2 1)
+				      (replace (make-array 3 :initial-element 0) nil)
+				      (replace (make-array 3 :initial-element 0) #(7 8))
+				      (replace (list 0 0 0) "ab"))
+				""").print())
+			.isEqualTo("(#(1 2 3 0) #(0 1 2 3) #(3 4 5 0) #(1 2 3 0) (1 2 3 0) (0 2 3 4) #(0 0 0) #(7 8 0) "
+					+ "(#\\a #\\b 0))");
+		// A source and a destination that are the SAME list: the cursor reads the cell it
+		// is standing on, which is the cell the indexed read reached at that step, so a
+		// self-replace copies forward exactly as it did.
+		assertThat(evalMulti("(let ((l (list 1 2 3 4))) (list (replace l l :start1 1) l))").print())
+			.isEqualTo("((1 1 1 1) (1 1 1 1))");
+		assertThat(evalMulti("(let ((l (list 1 2 3 4))) (list (replace l l :start2 1) l))").print())
+			.isEqualTo("((2 3 4 4) (2 3 4 4))");
+		// A bounding index the source does not have still SIGNALS, from the same element
+		// and with the same message. That is the one surviving three-way disagreement
+		// with the compile paths (which truncate), and a cursor that stopped silently
+		// would have erased it -- .kb/sequence-op-runtimes.md.
+		assertThatThrownBy(() -> evalMulti("(replace (make-array 4 :initial-element 0) '(1 2) :end2 4)"))
+			.hasMessageContaining("sequence-ref: index 2 out of range for (1 2)");
+		assertThatThrownBy(() -> evalMulti("(replace (list 0 0 0 0) '(1 2) :end2 4)"))
+			.hasMessageContaining("sequence-ref: index 2 out of range for (1 2)");
+		assertThatThrownBy(() -> evalMulti("(replace (make-array 4 :initial-element 0) '(1 2) :start2 5 :end2 8)"))
+			.hasMessageContaining("sequence-ref: index 5 out of range for (1 2)");
+		// A DOTTED source signals where the walk runs off the tail, not where the list
+		// would have ended.
+		assertThatThrownBy(() -> evalMulti("(replace (make-array 4 :initial-element 0) '(1 2 . 3) :end2 3)"))
+			.hasMessageContaining("sequence-ref: index 2 out of range for (1 2 . 3)");
+		// Long enough that the old head-walk showed. Same answer, different complexity.
+		assertThat(evalMulti("""
+				(let* ((long (let ((out nil))
+				               (dotimes (i 2000) (setq out (cons (mod i 7) out)))
+				               (nreverse out)))
+				       (dst (make-array 2000 :initial-element 0)))
+				  (replace dst long)
+				  (list (aref dst 0) (aref dst 1999) (length dst)))
+				""").print()).isEqualTo("(0 4 2000)");
+	}
+
+	@Test
 	void evalTreeEqual() {
 		assertThat(eval("(tree-equal (list 1 (list 2 3)) (list 1 (list 2 3)))").print()).isEqualTo("T");
 		assertThat(eval("(tree-equal (list 1 (list 2 3)) (list 1 (list 2 4)))").print()).isEqualTo("NIL");

@@ -5620,6 +5620,97 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAListIntoAListReplaceReadsItsSourceWithACursor() throws Exception {
+		// The list-DESTINATION arm was the one arm still spelling (elt source (+ start2
+		// k)), so a list-into-list replace stayed quadratic here long after the array arm
+		// took a cursor. It reads through a cursor now, with a fallback to the same elt
+		// call for everything the cursor cannot reach, so no answer moved.
+		assertThat(compileAndRun("(print (replace (list 0 0 0 0 0) (list 1 2 3 4 5) :start1 1 :start2 2))"))
+			.isEqualTo("(0 3 4 5 0)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0 0) (list 7 8) :start1 2))")).isEqualTo("(0 0 7 8)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0) \"xy\"))")).isEqualTo("(#\\x #\\y 0)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0) (coerce (list 4 5 6) 'vector)))")).isEqualTo("(4 5 6)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0 0) (list 1 2) :start2 9))")).isEqualTo("(0 0 0 0)");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (replace l l :start1 1) (print l))"))
+			.isEqualTo("(1 1 1 1)");
+		// Long enough that the head-walk showed.
+		assertThat(compileAndRun("""
+				(let* ((long (let ((out nil))
+				               (dotimes (i 2000) (setq out (cons (mod i 7) out)))
+				               (nreverse out)))
+				       (dst (let ((out nil)) (dotimes (i 2000) (setq out (cons 0 out))) out)))
+				  (replace dst long)
+				  (print (list (first dst) (nth 1999 dst) (length dst))))
+				""")).isEqualTo("(0 4 2000)");
+	}
+
+	@Test
+	void compileAndRunMakeArrayInitialContentsWalksAListWithACursor() throws Exception {
+		// The fill indexed the contents with elt so it could serve ANY sequence, and elt
+		// on a list is an nth walk from the head: the whole fill was quadratic here (12.2
+		// ms at n=4000 against the interpreter's native 0.045). A cons cursor beside the
+		// index serves a list in O(1) and pins itself to a non-cons for every other
+		// representation, which keeps indexing exactly as before.
+		assertThat(compileAndRun("(let ((c (list 1 2 3 4))) (print (make-array 4 :initial-contents c)))"))
+			.isEqualTo("#(1 2 3 4)");
+		assertThat(compileAndRun(
+				"(let ((c (list 1 2 3 4))) (print (make-array 4 :element-type '(unsigned-byte 8) :initial-contents c)))"))
+			.isEqualTo("#(1 2 3 4)");
+		assertThat(
+				compileAndRun("(let ((c (coerce (list 1 2 3) 'vector))) (print (make-array 3 :initial-contents c)))"))
+			.isEqualTo("#(1 2 3)");
+		assertThat(compileAndRun("(print (make-array 3 :initial-contents \"xyz\"))")).isEqualTo("#(#\\x #\\y #\\z)");
+		assertThat(compileAndRun(
+				"(print (make-array 3 :element-type 'character :initial-contents (list #\\a #\\b #\\c)))"))
+			.isEqualTo("\"abc\"");
+		// Rank >= 2 has one cursor per LEVEL, re-seeded per iteration of the level above.
+		assertThat(compileAndRun(
+				"(let ((c (list (list 1 2 3) (list 4 5 6)))) (print (make-array '(2 3) :initial-contents c)))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun(
+				"(print (make-array '(2 3) :initial-contents (list (coerce (list 1 2 3) 'vector) (list 4 5 6))))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun(
+				"(print (make-array '(2 3) :initial-contents (coerce (list (list 1 2 3) (list 4 5 6)) 'vector)))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun("""
+				(print (make-array '(2 2 2) :initial-contents
+					(list (list (list 1 2) (list 3 4)) (list (list 5 6) (list 7 8)))))
+				""")).isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+		// A row the contents do not have, and a row shorter than the dimension: the
+		// cursor runs out and the read falls back to the elt call this fill always made,
+		// which answers NIL past a proper list's end.
+		assertThat(compileAndRun("(print (make-array '(2 3) :initial-contents (list (list 1 2) (list 4 5 6))))"))
+			.isEqualTo("#2A((1 2 NIL) (4 5 6))");
+		assertThat(compileAndRun("(print (make-array '(2 3) :initial-contents (list (list 1 2 3))))"))
+			.isEqualTo("#2A((1 2 3) (NIL NIL NIL))");
+	}
+
+	@Test
+	void compileAndRunMapWalksAListWithACursor() throws Exception {
+		// map read each operand with (nth i s) for a list, an nth walk from the head, so
+		// (map 'list ...) over a list -- and (map 'vector ...), which routes through it
+		// -- was O(n^2). Each operand now carries a cons cursor; a non-list operand pins
+		// a non-cons cursor and keeps reading through the stringp/listp/aref three-way.
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (print (map 'list #'1+ l)))")).isEqualTo("(2 3 4 5)");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (print (map 'vector #'1+ l)))")).isEqualTo("#(2 3 4 5)");
+		assertThat(compileAndRun("(let ((l (list 1 2 3))) (print (map 'list #'+ l (coerce (list 10 20) 'vector))))"))
+			.isEqualTo("(11 22)");
+		assertThat(compileAndRun("(let ((l (list 1 2 3))) (print (map 'list #'list l \"ab\")))"))
+			.isEqualTo("((1 #\\a) (2 #\\b))");
+		assertThat(compileAndRun("(print (map 'string #'char-upcase (coerce (list #\\a #\\b) 'string)))"))
+			.isEqualTo("\"AB\"");
+		assertThat(compileAndRun("(let ((l (list 1 2 3))) (print (map nil #'1+ l)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("""
+				(let ((long (let ((out nil))
+				              (dotimes (i 2000) (setq out (cons (mod i 7) out)))
+				              (nreverse out))))
+				  (print (list (first (map 'list #'1+ long)) (car (last (map 'list #'1+ long)))
+				               (length (map 'vector #'1+ long)))))
+				""")).isEqualTo("(1 5 2000)");
+	}
+
+	@Test
 	void compileAndRunWriteSequenceString() throws Exception {
 		assertThat(compileAndRun("(princ (with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3)))"))
 			.isEqualTo("bc");
