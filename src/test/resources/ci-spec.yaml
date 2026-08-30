@@ -514,6 +514,21 @@ cases:
       (print (mismatch '(1 2 3) '(1 2 4)))
       (print (mismatch "xxabyy" "zzab" :start1 2 :end1 4 :start2 2))
       (print (mismatch "abcd" "xbcd" :from-end t))
+      (print (search '(3 4) '(1 2 3 4 3 4) :from-end t))
+      (print (search '(9 3 4 9) '(1 2 3 4 5) :start1 1 :end1 3))
+      (print (search "bc" '(#\b #\c #\d)))
+      (print (search '(1 2) '(1 2 3) :end2 99))
+      (print (search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
+      (print (search '(1 2 3) '(1 2 3) :start2 -1))
+      (print (search '(1) '(1 2 . 3)))
+      (print (mismatch '(1 2 3) '(1 2 3) :end1 99))
+      (print (mismatch '(9 1 2 3) '(1 2 3) :start1 1))
+      (let ((sm-long (let ((out nil))
+                       (dotimes (i 400) (setq out (cons (mod i 7) out)))
+                       (nreverse out))))
+        (print (list (search '(3 5) sm-long) (search '(5 6) sm-long)
+                     (search '(5 6) sm-long :from-end t) (mismatch sm-long sm-long)
+                     (mismatch sm-long (append (butlast sm-long) (list 99))))))
     expected: |
       1
       NIL
@@ -540,6 +555,16 @@ cases:
       2
       NIL
       0
+      4
+      2
+      0
+      0
+      NIL
+      0
+      0
+      3
+      NIL
+      (NIL 5 397 NIL 399)
   - name: flet-fusion-and-unboxed-locals
     source: |
       (defun s3-rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))

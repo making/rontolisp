@@ -172,6 +172,14 @@ interpreter-signals / compile-paths-store-nil. **Re-evaluation trigger: if the
 error case is ever made uniform, the honest fix is the interpreter's check on both
 sides of both arms, not an `elt` per element back in the loop.**
 
+**The `search`/`mismatch` prelude bodies took the same cursor and could NOT take
+the same stop** (2026-08-31, `.kb/seq-coerce-runtime.md`): the interpreter's
+native scan arm declines every out-of-range bound specifically so those bodies
+keep owning what they answer there, so their cursor falls back to the original
+`elt` call instead of stopping, and the rewrite changed no answer at all. That is
+also why theirs GREW (+634 B of `--optimize=size` wasm a body) where this one
+shrank -- a branch in front of the `elt` loop rather than a replacement for it.
+
 **2. The `%arrayp` arm is its own function, and a site that proves an array calls
 it.** `%replace-runtime-array` / `%fill-runtime-array` hold that arm; the wide
 helper's array arm is a CALL to it, so the two hold ONE copy of the copy loop

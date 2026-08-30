@@ -15118,6 +15118,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void searchAndMismatchWalkAListWithACursor() throws Exception {
+		// This backend runs the prelude defun, which used to index a LIST operand with
+		// (elt seq i) -- an nth walk from the head, so O(n^2*m) for search and O(n^2)
+		// for mismatch. It reads a list through a cons cursor now; every answer here is
+		// the one the elt-indexed body gave, out-of-range and negative bounds included
+		// (the cursor cannot answer those, so the read falls back to the same elt call).
+		assertThat(compileAndRunPrelude("""
+				(print (search '(3 4) '(1 2 3 4 5)))
+				(print (search '(3 4) '(1 2 3 4 5) :start2 3))
+				(print (search '(3 4) '(1 2 3 4 3 4) :from-end t))
+				(print (search '(9 3 4 9) '(1 2 3 4 5) :start1 1 :end1 3))
+				(print (search '(3 4) '(1 2 3 4 5) :end2 3))
+				(print (search '(#\\b #\\c) "abcd"))
+				(print (search "bc" '(#\\a #\\b #\\c #\\d)))
+				(print (search '(1 2) '(1 2 3) :end2 99))
+				(print (search '(1 2) '(1 2 3) :start2 99))
+				(print (search '(1 2 3) '(1 2 3) :start1 99))
+				(print (search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
+				(print (search '(1 2 3) '(1 2 3) :start2 -1))
+				(print (search '(1 2 3) '(1 2 3) :start1 -1))
+				(print (search '(1) '(1 2 . 3)))
+				(print (search '(3 4) '(1 2 3 4 5) :key #'identity))
+				(print (mismatch '(1 2 3) '(1 2 4)))
+				(print (mismatch '(1 2 3) '(1 2 3) :end1 99))
+				(print (mismatch '(1 2 3) '(1 2 3) :end2 99))
+				(print (mismatch '(1 2 3) "abc"))
+				(print (mismatch '(9 1 2 3) '(1 2 3) :start1 1))
+				(print (mismatch '(1 2 3) '(1 2 4) :from-end t))
+				(let ((long (let ((out nil))
+				              (dotimes (i 400) (setq out (cons (mod i 7) out)))
+				              (nreverse out))))
+				  (print (list (search '(3 5) long) (search '(5 6) long)
+				               (search '(5 6) long :from-end t) (mismatch long long)
+				               (mismatch long (append (butlast long) (list 99))))))
+				""")).isEqualTo(
+				"2\nNIL\n4\n2\nNIL\n1\n1\n0\nNIL\n0\nNIL\n0\nNIL\n0\n2\n2\n3\n3\n0\nNIL\n2\n" + "(NIL 5 397 NIL 399)");
+	}
+
+	@Test
 	void linalgOpsWorkInPreview1Mode() throws Exception {
 		// The Lisp-source linalg library (spliced by LinalgLibrary.process, mirroring
 		// the cli pre-pass) runs in Preview 1: constructors, shape ops, broadcasting
