@@ -439,6 +439,52 @@ cases:
       "abXYef"
       (1 9 9)
       "abzzef"
+  # The interpreter answers (coerce x 'list|'string|'vector) in Java for the
+  # representations it can serve identically and DECLINES the rest to the shared
+  # expansion (.kb/seq-coerce-runtime.md); the compile paths keep the expansion
+  # everywhere. This case is where a divergence between the two would show, so it
+  # deliberately mixes the served representations (string, code point above the BMP,
+  # fill-pointered string and general vector, packed integer and float arrays) with
+  # the declined ones (a non-character element on the way to a string, a non-sequence
+  # to 'vector and to 'list). Below the conversion sit the operators that reach it
+  # through seqAsListForm.
+  - name: sequence-coerce-across-representations
+    source: |
+      (print (length (coerce (string (code-char 128512)) 'list)))
+      (let ((sc-s (make-array 5 :element-type 'character :fill-pointer 2 :initial-element #\z)))
+        (print (coerce sc-s 'list)))
+      (let ((sc-a (make-array 5 :fill-pointer 2 :initial-element 7)))
+        (print (coerce sc-a 'list)))
+      (print (coerce (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)) 'list))
+      (print (coerce (make-array 2 :element-type 'double-float :initial-contents '(1d0 2d0)) 'list))
+      (print (coerce #(#\p #\q) 'string))
+      (print (coerce nil 'string))
+      (print (coerce nil 'vector))
+      (print (coerce '(1 2) 'string))
+      (print (coerce 5 'vector))
+      (print (coerce 5 'list))
+      (print (position #\Space "a b c"))
+      (print (position #\Space "a b c" :from-end t))
+      (print (count #\a "banana"))
+      (print (remove #\a "banana"))
+      (print (search "an" "banana"))
+    expected: |
+      1
+      (#\z #\z)
+      (7 7)
+      (1 2 3)
+      (1.0 2.0)
+      "pq"
+      ""
+      #()
+      "12"
+      5
+      NIL
+      1
+      3
+      3
+      "bnn"
+      1
   - name: flet-fusion-and-unboxed-locals
     source: |
       (defun s3-rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))

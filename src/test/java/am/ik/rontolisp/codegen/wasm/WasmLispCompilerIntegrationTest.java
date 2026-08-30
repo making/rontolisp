@@ -15009,6 +15009,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void sequenceCoerceAnswersTheSameForEveryRepresentation() throws Exception {
+		// The interpreter converts these in Java rather than through the expansion's
+		// (map 'list #'identity ...) loop (.kb/seq-coerce-runtime.md); the compile paths
+		// keep the expansion. Both must answer the same thing for every representation
+		// the walk reaches -- and for the ones the interpreter's fast arm DECLINES, which
+		// is where a divergence would hide.
+		assertThat(compileAndRun("""
+				(print (length (coerce (string (code-char 128512)) 'list)))
+				(let ((s (make-array 5 :element-type 'character :fill-pointer 2 :initial-element #\\z)))
+				  (print (coerce s 'list)))
+				(let ((a (make-array 5 :fill-pointer 2 :initial-element 7)))
+				  (print (coerce a 'list)))
+				(print (coerce (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)) 'list))
+				(print (coerce (make-array 2 :element-type 'double-float :initial-contents '(1d0 2d0)) 'list))
+				(print (coerce #(#\\p #\\q) 'string))
+				(print (coerce nil 'string))
+				(print (coerce nil 'vector))
+				(print (coerce '(1 2) 'string))
+				(print (coerce 5 'vector))
+				(print (coerce 5 'list))
+				(print (position #\\Space "a b c"))
+				(print (position #\\Space "a b c" :from-end t))
+				(print (count #\\a "banana"))
+				(print (remove #\\a "banana"))
+				""")).isEqualTo(
+				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n\"12\"\n5\nNIL\n1\n3\n3\n\"bnn\"");
+	}
+
+	@Test
 	void linalgOpsWorkInPreview1Mode() throws Exception {
 		// The Lisp-source linalg library (spliced by LinalgLibrary.process, mirroring
 		// the cli pre-pass) runs in Preview 1: constructors, shape ops, broadcasting

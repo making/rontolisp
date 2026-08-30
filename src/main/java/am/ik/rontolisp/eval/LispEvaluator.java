@@ -5409,7 +5409,10 @@ public final class LispEvaluator {
 				// the shared lowering answers the same %seq-int-vector call every backend
 				// uses (.kb/concatenate-result-families.md).
 				LispVal packed = ConcatenateForms.packedVectorCoerce(cons, this.closRegistry);
-				return eval(packed != null ? packed : LispMacroExpander.expandCoerce(cons), env);
+				if (packed != null) {
+					return eval(packed, env);
+				}
+				return evalSequenceCoerce(cons, env);
 			}
 			case LispNames.MAP_INTO:
 				return eval(LispMacroExpander.expandMapInto(cons), env);
@@ -9017,6 +9020,156 @@ public final class LispEvaluator {
 			cur = cell.cdr();
 		}
 		return found;
+	}
+
+	/**
+	 * Evaluates {@code (coerce value 'list|'string|'vector)} through a native converter
+	 * when the value's representation is one this arm can answer for, and through the
+	 * shared {@code expandCoerce} lowering otherwise.
+	 *
+	 * <p>
+	 * This is the declining-primitive shape ({@code .kb/binary-sequence-io.md}): the fast
+	 * arm answers or DECLINES, and a decline runs exactly the expansion that ran before,
+	 * over the value it has already evaluated (re-quoted, so the value form is evaluated
+	 * once either way). Nothing about the operator's contract moves -- an unsupported
+	 * result type, a rank-2 array, a non-character element on the way to a string all
+	 * fall through and signal what they always signalled.
+	 *
+	 * <p>
+	 * It matters far beyond {@code coerce} itself: every generic sequence expansion wraps
+	 * its scan in {@code (coerce seq 'list)} and its result in {@code (coerce res
+	 * 'string)} ({@code seqAsListForm} / {@code seqResultDispatchForm}), and the
+	 * expansion's own conversion is {@code (map 'list #'identity s)} -- a funcall of
+	 * {@code #'identity} per element, INTERPRETED. That was ~0.5 us per character, so
+	 * {@code (position #\Space <46-char string>)} spent 23.5 us of its 28.8 us building a
+	 * list it then stopped scanning at element 1. See {@code .kb/seq-coerce-runtime.md}.
+	 * @param cons the coerce expression
+	 * @param env the evaluation environment
+	 * @return the coerced value
+	 */
+	private LispVal evalSequenceCoerce(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		String type = parts.size() == 3 ? coerceSequenceTypeName(parts.get(2)) : null;
+		if (type == null) {
+			return eval(LispMacroExpander.expandCoerce(cons), env);
+		}
+		LispVal value = eval(parts.get(1), env);
+		LispVal fast = coerceSequenceFast(value, type);
+		if (fast != null) {
+			return fast;
+		}
+		// Declined. The value is already evaluated, so the expansion runs over a quote
+		// of it rather than over the original form.
+		LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+		LispVal rebuilt = new LispCons(new LispSymbol(LispNames.COERCE),
+				new LispCons(quoted, new LispCons(parts.get(2), LispNil.INSTANCE)));
+		return eval(LispMacroExpander.expandCoerce((LispCons) rebuilt), env);
+	}
+
+	// The literal sequence result type a (coerce x 'type) form names, normalized the way
+	// expandCoerce normalizes it (the "simple"/"base" aliases collapse, a package
+	// qualifier is dropped), or null for anything else -- a computed designator, a
+	// compound spec, a float type, an unresolvable deftype name. Only LIST, STRING and
+	// VECTOR are answered, because those are the three the native converter serves.
+	private static @Nullable String coerceSequenceTypeName(LispVal typeForm) {
+		if (!(typeForm instanceof LispCons quote) || !(quote.car() instanceof LispSymbol head)
+				|| !LispNames.QUOTE.equals(head.name()) || !(quote.cdr() instanceof LispCons rest)
+				|| !(rest.cdr() instanceof LispNil) || !(rest.car() instanceof LispSymbol name)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name.name());
+		String member = qualified == null ? name.name() : qualified.member();
+		return switch (member) {
+			case "LIST" -> "LIST";
+			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> "STRING";
+			case "VECTOR", "SIMPLE-VECTOR" -> "VECTOR";
+			default -> null;
+		};
+	}
+
+	// The native conversion, or null when this arm declines and the shared expansion has
+	// to run. Each arm answers exactly what the matching expandCoerce body answers:
+	// 'list is (if (listp x) x (if (stringp x) <chars> <aref scan>)), 'string is
+	// (if (stringp x) x (map 'string #'identity <as list>)), and 'vector is
+	// (if (or (listp x) (stringp x)) <fill> x) -- the identity tail included, which is
+	// why the vector arm never declines.
+	private static @Nullable LispVal coerceSequenceFast(LispVal value, String type) {
+		if ("LIST".equals(type)) {
+			if (value instanceof LispCons || value instanceof LispNil) {
+				return value;
+			}
+			return sequenceElementsAsList(value);
+		}
+		if ("STRING".equals(type)) {
+			if (value instanceof LispString) {
+				return value;
+			}
+			LispVal elements = (value instanceof LispCons || value instanceof LispNil) ? value
+					: sequenceElementsAsList(value);
+			if (elements == null) {
+				return null;
+			}
+			StringBuilder sb = new StringBuilder();
+			for (LispVal cur = elements; cur instanceof LispCons cell; cur = cell.cdr()) {
+				if (!(cell.car() instanceof LispChar c)) {
+					// A non-character element is the expansion's error to raise.
+					return null;
+				}
+				sb.appendCodePoint(c.codePoint());
+			}
+			return new LispString(sb.toString());
+		}
+		if (!(value instanceof LispCons) && !(value instanceof LispNil) && !(value instanceof LispString)) {
+			// (coerce x 'vector) over anything that is neither a list nor a string is
+			// the identity, exactly as coerceToVectorBody's else arm is.
+			return value;
+		}
+		LispVal elements = (value instanceof LispString) ? sequenceElementsAsList(value) : value;
+		if (elements == null) {
+			return null;
+		}
+		List<LispVal> flat = new ArrayList<>();
+		for (LispVal cur = elements; cur instanceof LispCons cell; cur = cell.cdr()) {
+			flat.add(cell.car());
+		}
+		LispVal[] data = flat.toArray(new LispVal[0]);
+		return new LispArray(new int[] { data.length }, data);
+	}
+
+	// The elements of a rank-1 non-list sequence as a fresh list, or null when the value
+	// is not a representation this arm serves (a rank-2 array, a hash table, a number).
+	// Element by element this is what (aref v i) over (length v) answers, and for a
+	// string what (map 'list #'identity s) answers -- one LispChar per CODE POINT.
+	private static @Nullable LispVal sequenceElementsAsList(LispVal value) {
+		if (value instanceof LispString str) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = str.codePointCount() - 1; i >= 0; i--) {
+				result = new LispCons(new LispChar(str.codePointAt(i)), result);
+			}
+			return result;
+		}
+		if (value instanceof LispArray arr && arr.dimensions().length == 1) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = arr.effectiveLength() - 1; i >= 0; i--) {
+				result = new LispCons(arr.readFlat(i), result);
+			}
+			return result;
+		}
+		if (value instanceof LispFloatArray packed && packed.rank() == 1) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = packed.totalSize() - 1; i >= 0; i--) {
+				result = new LispCons(packed.readFlat(i), result);
+			}
+			return result;
+		}
+		if (value instanceof LispIntVector vector) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = vector.length() - 1; i >= 0; i--) {
+				result = new LispCons(new LispInteger(vector.elementAt(i)), result);
+			}
+			return result;
+		}
+		return null;
 	}
 
 	// Return the number of elements satisfying the predicate (Common Lisp count-if),
