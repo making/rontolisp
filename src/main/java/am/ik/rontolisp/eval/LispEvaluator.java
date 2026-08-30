@@ -124,6 +124,15 @@ public final class LispEvaluator {
 
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
 
+	// The function object each loaded LispPreludeLibrary entry installed. A native fast
+	// arm over a prelude operator (search/mismatch, SequenceScanFast) serves ONLY while
+	// the name still resolves to this exact object, so a user redefinition -- which the
+	// lazy loader already honours by never loading the prelude entry over it -- takes the
+	// call back whole rather than half. Concurrent because a served request may resolve a
+	// name while another thread is loading one (the libraryLoadLock covers the load, not
+	// this read).
+	private final java.util.Map<String, LispVal> preludeDefinitions = new java.util.concurrent.ConcurrentHashMap<>();
+
 	// The uiop definitions already evaluated into the global environment, keyed by their
 	// home-package spelling. uiop is 429 externals of which a program touches a handful,
 	// so it loads ONE name at a time (the loadedPreludeNames pattern) rather than whole.
@@ -5416,6 +5425,12 @@ public final class LispEvaluator {
 			}
 			case LispNames.MAP_INTO:
 				return eval(LispMacroExpander.expandMapInto(cons), env);
+			case LispNames.SEARCH:
+			case LispNames.MISMATCH:
+				// The ordinary function call, with a native scan in front of it: both are
+				// prelude defuns whose elt-per-element inner loop costs the interpreter
+				// ~2.5 us per element PAIR. The arm declines to this same call.
+				return evalSequenceScan(cons, env, name);
 			case LispNames.RASSOC:
 				return eval(LispMacroExpander.expandRassoc(cons), env);
 			// The sequence/alist functions taking :test/:key evaluate through the
@@ -7455,10 +7470,7 @@ public final class LispEvaluator {
 			// equalp/string< are recursive rontolisp-source defuns (LispPreludeLibrary),
 			// loaded on first resolution like the linalg/url libraries.
 			if (LispPreludeLibrary.isPreludeFunction(name) && this.loadedPreludeNames.add(name)) {
-				for (LispVal form : LispPreludeLibrary.formsFor(name)) {
-					eval(form, this.globalEnv);
-				}
-				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				LispVal loaded = loadPreludeDefinition(name);
 				if (loaded != null) {
 					return loaded;
 				}
@@ -7747,6 +7759,67 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Evaluates one {@link LispPreludeLibrary} entry into the global environment and
+	 * records the function object it installed.
+	 *
+	 * <p>
+	 * The record is what lets a native fast arm tell the prelude's own definition from a
+	 * user's: {@link SequenceScanFast} serves a {@code search}/{@code mismatch} call only
+	 * while the name still resolves to the object this method saw, so a
+	 * {@code (defun search ...)} of the caller's own keeps the whole call, not the shapes
+	 * the arm happens to decline.
+	 * @param name the prelude entry to load; the caller has already claimed it in
+	 * {@code loadedPreludeNames}
+	 * @return the function the entry installed, or {@code null} when it defines no
+	 * function of that name (a {@code (setf PLACE)} writer)
+	 */
+	private @Nullable LispVal loadPreludeDefinition(String name) {
+		for (LispVal form : LispPreludeLibrary.formsFor(name)) {
+			eval(form, this.globalEnv);
+		}
+		LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+		if (loaded != null) {
+			this.preludeDefinitions.put(name, loaded);
+		}
+		return loaded;
+	}
+
+	/**
+	 * Evaluates a {@code search} or {@code mismatch} call: the ordinary function call,
+	 * with {@link SequenceScanFast}'s native scan in front of it.
+	 *
+	 * <p>
+	 * Both are Lisp-source prelude {@code defun}s on every backend, and both index their
+	 * operands with {@code elt} inside an interpreted loop -- 104 us for a five-character
+	 * needle in a 46-character string, against 0.9 us for the same source compiled. The
+	 * arm answers only the shapes it can prove identical and DECLINES the rest, which
+	 * then run the prelude body unchanged; see {@link SequenceScanFast} and
+	 * {@code .kb/seq-coerce-runtime.md}.
+	 *
+	 * <p>
+	 * The function is resolved and the arguments evaluated exactly as the ordinary call
+	 * path does, in that order, so a decline costs one array scan and changes nothing --
+	 * not the evaluation order, not the number of evaluations, not the error a bad
+	 * operand raises.
+	 * @param cons the call
+	 * @param env the evaluation environment
+	 * @param name {@link LispNames#SEARCH} or {@link LispNames#MISMATCH}
+	 * @return the operator's value
+	 */
+	private LispVal evalSequenceScan(LispCons cons, Environment env, String name) {
+		LispVal function = resolveFunction(name);
+		List<LispVal> args = evalArgs(cons, env);
+		if (function == this.preludeDefinitions.get(name)) {
+			LispVal fast = LispNames.SEARCH.equals(name) ? SequenceScanFast.search(args)
+					: SequenceScanFast.mismatch(args);
+			if (fast != null) {
+				return fast;
+			}
+		}
+		return apply(function, args, env);
+	}
+
+	/**
 	 * Loads the prelude entry of every {@code (setf (PLACE ...) v)} place head that is a
 	 * prelude function not yet loaded, so a prelude-provided {@code (defun (setf PLACE)
 	 * ...)} writer (the {@code get} entry) registers its place before the setf expansion
@@ -7757,9 +7830,7 @@ public final class LispEvaluator {
 		for (int i = 1; i + 1 < parts.size(); i += 2) {
 			if (parts.get(i) instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol head
 					&& LispPreludeLibrary.isPreludeFunction(head.name()) && this.loadedPreludeNames.add(head.name())) {
-				for (LispVal form : LispPreludeLibrary.formsFor(head.name())) {
-					eval(form, this.globalEnv);
-				}
+				loadPreludeDefinition(head.name());
 			}
 		}
 	}
