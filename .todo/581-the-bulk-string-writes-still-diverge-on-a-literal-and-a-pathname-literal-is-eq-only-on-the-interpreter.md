@@ -83,6 +83,27 @@ worth fixing it should move with `.todo/579`, not on its own.
 - Either fix the `#P` `eq` divergence together with `.todo/579` or write the decision not
   to into `.kb/array-literals.md`'s "What `quote` still shares" section.
 
+## What `.todo/579` left here (2026-08-30)
+
+579 landed "a quoted datum is one shared constant per quote site on all four backends"
+(`.kb/quoted-data.md`) and deliberately did NOT take part 2: a BARE `#P"..."` / `#S(...)`
+instance literal in code position is still rebuilt per evaluation on the three compile
+paths while the interpreter's self-evaluating `LispInstance` arm shares it. What 579
+leaves you:
+
+- The memoization machinery to reuse: `JvmLispCompiler.QuotePool` (lazy volatile
+  `_qd$N` statics -- lazy because `JvmClassShaker` must drop a shaken wrapper's
+  constants; a `<clinit>` initializer measured +13 KB per program) and
+  `WasmLispCompiler.QuoteGlobals` (lazy `(mut (ref null eq))` globals appended after
+  every fixed index, shared into `WasmAsyncEmit`'s contexts). An instance literal
+  nested INSIDE quoted data is already shared through them; wrapping
+  `Jvm/WasmQuoteCompiler.compileLiteralInstance`'s bare-position callers in the same
+  intern is the remaining step.
+- The constraint that still stands: the interpreter's `LispInstance` arm also carries
+  every live instance the evaluator splices back through `(quote <value>)`, so the fix
+  must stay on the compile side (share there too) -- materializing on the interpreter
+  is the direction 579's decision record rejects.
+
 ## Related
 
 - `.todo/580` -- the `%schar-set` half, closed; `.kb/string-write-runtime.md` carries its

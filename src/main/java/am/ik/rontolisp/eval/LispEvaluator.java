@@ -7736,8 +7736,10 @@ public final class LispEvaluator {
 		// also how a LIVE value is spliced back into a form for re-evaluation
 		// (quoteValue, four sites, one of them read-sequence's Gray-dispatch rebuild),
 		// so materializing an array here would hand a destructive operation a copy.
-		// That is why '#(1 2 3) is the array the reader built while a bare #(1 2 3) is
-		// fresh -- see .kb/array-literals.md, "What quote still shares".
+		// This sharing is also the RULE, not a residual: since todo 579 both compile
+		// backends memoize a quoted datum to the same effect, so '#(1 2 3) is one
+		// shared constant everywhere while a bare #(1 2 3) is fresh everywhere --
+		// .kb/quoted-data.md.
 		return rest.car();
 	}
 

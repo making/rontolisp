@@ -3139,6 +3139,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				: hashGasGlobalIndex >= 0 ? hashGasGlobalIndex : ostreamTableGlobalIndex;
 		int instPathGlobalIndex = this.usesInstances ? lastCounterGlobalIndex + 1 : -1;
 		int instDepthGlobalIndex = this.usesInstances ? lastCounterGlobalIndex + 2 : -1;
+		// The quoted-datum constants (.kb/quoted-data.md): one (mut (ref null eq)) =
+		// null per quoted aggregate the bodies compile, discovered DURING body
+		// compilation, so they are appended after every fixed-index global above and
+		// nothing renumbers. A program with no quoted aggregate allocates none and is
+		// byte-identical to a build that never knew about them.
+		QuoteGlobals quoteGlobals = new QuoteGlobals(
+				(instDepthGlobalIndex >= 0 ? instDepthGlobalIndex : lastCounterGlobalIndex) + 1);
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -3332,6 +3339,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.nestedDefunNames(nestedDefunNames)
 			.specialVars(specialVars)
 			.globalIndices(globalIndices)
+			.quoteGlobals(quoteGlobals)
 			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
 			.frameTypeIndex(this.asyncMode ? asyncTypeBase() + 1 : -1)
 			.wasiStreamTypeIndex(this.asyncMode ? asyncTypeBase() + 2 : -1)
@@ -5888,6 +5896,19 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// One (mut (ref null eq)) = null per quoted aggregate datum
+				// (.kb/quoted-data.md), filled lazily by its quote site's first
+				// evaluation (WasmQuoteCompiler.compile). Discovered during body
+				// compilation, hence appended after every fixed-index global.
+				for (int i = 0; i < quoteGlobals.count(); i++) {
+					gs.add(g -> {
+						g.writeRefType(true, Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+				}
 			})
 			// Export section -- component mode exports `run` (the i32-returning _start)
 			// for
@@ -7349,6 +7370,52 @@ public final class WasmLispCompiler implements LispCompiler {
 		return out.toByteArray();
 	}
 
+	/**
+	 * The compilation-wide quoted-datum global allocator (.kb/quoted-data.md): one module
+	 * global -- a {@code (mut (ref null eq))} = null, appended after every fixed-index
+	 * global so nothing renumbers -- per DISTINCT quoted aggregate datum, filled lazily
+	 * by the quote site's first evaluation, so every evaluation of one site answers the
+	 * SAME object: the CL-conformant constant reading, and the interpreter's. Keyed by
+	 * datum IDENTITY, so a macro expansion splicing one template datum into several sites
+	 * shares one constant across them, exactly like the interpreter's shared template
+	 * datum. One instance is shared across every context of a compilation,
+	 * {@link WasmAsyncEmit}'s fresh contexts included.
+	 */
+	static final class QuoteGlobals {
+
+		private final int base;
+
+		private final java.util.IdentityHashMap<LispVal, Integer> byDatum = new java.util.IdentityHashMap<>();
+
+		QuoteGlobals(int base) {
+			this.base = base;
+		}
+
+		/**
+		 * The module global holding this datum, allocating the next index on first sight.
+		 * @param datum the quoted datum (keyed by identity)
+		 * @return the global index
+		 */
+		int indexFor(LispVal datum) {
+			Integer existing = this.byDatum.get(datum);
+			if (existing != null) {
+				return existing;
+			}
+			int index = this.base + this.byDatum.size();
+			this.byDatum.put(datum, index);
+			return index;
+		}
+
+		/**
+		 * How many quoted-datum globals the global section must append.
+		 * @return the allocated count
+		 */
+		int count() {
+			return this.byDatum.size();
+		}
+
+	}
+
 	static final class Ctx {
 
 		final WasmWriter writer;
@@ -7834,6 +7901,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, Integer> globalIndices = Map.of();
 
 		/**
+		 * The quoted-datum global allocator ({@link QuoteGlobals}), shared across every
+		 * context of a compilation so a quote site compiled anywhere -- a defun body, a
+		 * lambda, a top-level chunk, an async resume body -- reaches the one table.
+		 */
+		QuoteGlobals quoteGlobals = new QuoteGlobals(0);
+
+		/**
 		 * Top-level globals already initialized by a defvar/defparameter in this
 		 * compilation, for defvar's compile-time idempotence. Only the top-level context
 		 * mutates it.
@@ -8092,6 +8166,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
 			this.globalIndices = builder.globalIndices;
+			this.quoteGlobals = builder.quoteGlobals;
 			this.futureTypeIndex = builder.futureTypeIndex;
 			this.frameTypeIndex = builder.frameTypeIndex;
 			this.wasiStreamTypeIndex = builder.wasiStreamTypeIndex;
@@ -8227,6 +8302,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> specialVars = Set.of();
 
 			private Map<String, Integer> globalIndices = Map.of();
+
+			private QuoteGlobals quoteGlobals = new QuoteGlobals(0);
 
 			private int futureTypeIndex = -1;
 
@@ -8530,6 +8607,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder globalIndices(Map<String, Integer> globalIndices) {
 				this.globalIndices = globalIndices;
+				return this;
+			}
+
+			Builder quoteGlobals(QuoteGlobals quoteGlobals) {
+				this.quoteGlobals = quoteGlobals;
 				return this;
 			}
 

@@ -9751,12 +9751,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void aQuotedArrayIsStillTheDatumOnTheInterpreter() {
-		// The residual .kb/array-literals.md records: quote hands back the datum, because
-		// (quote <value>) is also the interpreter's live-value splice. '#(...) therefore
-		// stays shared here while both compile backends rebuild it -- the same thing
-		// quote already does with a cons, and it moves with that, not with this.
+	void aQuotedDatumIsOneSharedConstantOnEveryBackend() {
+		// quote hands back the datum -- necessarily so here, because (quote <value>) is
+		// also the interpreter's live-value splice (quoteValue) -- and since todo 579
+		// both compile backends MEMOIZE the datum instead of rebuilding it, so this is
+		// the shared rule, not an interpreter residual (.kb/quoted-data.md, pinned
+		// cross-backend by the quoted-datum-shared ci-spec case).
 		assertThat(eval("(let ((f (lambda () '#(1 2 3)))) (eq (funcall f) (funcall f)))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(let ((f (lambda () '(1 2 3)))) (eq (funcall f) (funcall f)))")).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test

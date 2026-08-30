@@ -512,14 +512,13 @@ class WasmImportCompilerTest {
 				""";
 		byte[] guarded = compileNoWasi(asyncSrc);
 		byte[] unguarded = compileNoWasi(syncSrc);
-		// One guard global (a mut i32, fourth from last -- the cached-t, raw-local
-		// sentinel and string-stream table globals stay the LAST three); a module that
-		// cannot suspend gains no global and no guard instruction.
+		// One guard global (a mut i32); a module that cannot suspend gains no global
+		// and no guard instruction.
 		assertThat(globalCount(guarded)).isEqualTo(globalCount(unguarded) + 1);
 		assertThat(countOf(unguarded, GUARD_TRAP_AND_SET)).isZero();
 		// Both wrappers check-and-set on entry (global.get g; if; unreachable; end;
 		// i32.const 1; global.set g) and clear on return (i32.const 0; global.set g).
-		int g = globalCount(guarded) - UNCONDITIONAL_TRAILING_GLOBALS - 1;
+		int g = guardGlobalIndex(guarded);
 		assertThat(countOf(guarded, prependGlobalGet(g, GUARD_TRAP_AND_SET), (byte) g)).isEqualTo(2);
 		assertThat(countOf(guarded, new byte[] { 0x41, 0x00, 0x24, (byte) g })).isGreaterThanOrEqualTo(2);
 	}
@@ -538,13 +537,7 @@ class WasmImportCompilerTest {
 				(defun run () (rontolisp::%future-force (dog)))
 				(rontolisp:wasm-export 'run :params '() :returns :string)
 				""");
-		// A fetching module builds header tables, so it also carries the _hash
-		// recursion-depth and work-budget globals, which are appended after the
-		// unconditional three (.kb/hash-tables.md) -- and it can build an instance (a
-		// condition), so the instance renderer's cycle-guard pair
-		// (.kb/pretty-printer.md) follows those; all of them push the guard further
-		// down.
-		int g = globalCount(fetching) - UNCONDITIONAL_TRAILING_GLOBALS - HASH_DEPTH_GLOBAL - INSTANCE_GUARD_GLOBALS - 1;
+		int g = guardGlobalIndex(fetching);
 		assertThat(countOf(fetching, prependGlobalGet(g, GUARD_TRAP_AND_SET), (byte) g)).isEqualTo(1);
 		byte[] noFetch = compileHostFetch("""
 				(defun run () 1)
@@ -553,24 +546,23 @@ class WasmImportCompilerTest {
 		assertThat(countOf(noFetch, GUARD_TRAP_AND_SET)).isZero();
 	}
 
-	// The globals every module ends with, whatever its mode: the cached symbol t, the
-	// raw-local sentinel and the string output-stream buffer table. The re-entry guard
-	// is the last MODE-GATED global, so it sits just below them.
-	private static final int UNCONDITIONAL_TRAILING_GLOBALS = 3;
-
-	// The two _hash counters -- the recursion depth and the work budget -- present
-	// exactly when the program uses a hash table; they are appended after the three
-	// above, so they are the very last globals.
-	private static final int HASH_DEPTH_GLOBAL = 2;
-
-	// The instance renderer's cycle-guard pair -- the rendering path and its depth --
-	// present exactly when the program can build an instance; appended after the hash
-	// counters (.kb/pretty-printer.md, "A cyclic instance graph").
-	private static final int INSTANCE_GUARD_GLOBALS = 2;
-
 	// if (blocktype empty); unreachable; end; i32.const 1; global.set -- the re-entry
 	// guard's trap-and-set, minus the leading global.get whose index varies by module.
 	private static final byte[] GUARD_TRAP_AND_SET = { 0x04, 0x40, 0x00, 0x0b, 0x41, 0x01, 0x24 };
+
+	// The guard global's index, recovered from the wrapper's own bytes (the global.get
+	// that leads the trap-and-set). It cannot be computed from the global section's END
+	// any more: the quoted-datum globals (.kb/quoted-data.md) are appended after every
+	// fixed-index global, and how many a module carries depends on the quote sites its
+	// injected wrappers compile.
+	private static int guardGlobalIndex(byte[] module) {
+		for (int g = 0; g < 128; g++) {
+			if (countOf(module, prependGlobalGet(g, GUARD_TRAP_AND_SET)) > 0) {
+				return g;
+			}
+		}
+		throw new AssertionError("no re-entry guard trap-and-set found in the module");
+	}
 
 	private static byte[] prependGlobalGet(int globalIndex, byte[] tail) {
 		byte[] result = new byte[tail.length + 2];

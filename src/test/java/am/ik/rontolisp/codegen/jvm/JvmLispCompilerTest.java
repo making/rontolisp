@@ -11145,6 +11145,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aQuotedDatumIsOneSharedConstantAcrossEvaluations() throws Exception {
+		// quote is the CONSTANT syntax: every evaluation of one quote site answers the
+		// SAME object, like the interpreter and like a real CL (CLHS leaves writes into
+		// it undefined; here they reach the shared constant, as they always did on the
+		// interpreter). A bare #(...) literal stays a constructor -- the freshness
+		// invariant of .kb/array-literals.md is about literals OUTSIDE quote.
+		assertThat(compileAndRun("""
+				(defun %ql () '(1 2 3))
+				(print (eq (%ql) (%ql)))
+				(let ((a (%ql))) (setf (car a) 99))
+				(print (%ql))
+				(let ((f (lambda () '#(7 8)))) (print (eq (funcall f) (funcall f))))
+				(defun %qn () '(1 #(2 3)))
+				(print (eq (cadr (%qn)) (cadr (%qn))))
+				(defun %qd () '#d(1.0 2.0))
+				(print (eq (%qd) (%qd)))
+				""")).isEqualTo("T\n(99 2 3)\nT\nT\nT");
+	}
+
+	@Test
 	void anArrayFreeProgramReferencesNoArrayRuntimeHelper() {
 		// the injected built-in wrappers used to carry an array arm each
 		// (#'+ / #'reverse / #'sort / #'subseq / #'string= ... all fold or scan through

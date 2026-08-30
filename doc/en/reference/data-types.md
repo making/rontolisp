@@ -327,6 +327,12 @@ here:
 (tri)                                     ; => #(1 2 3)
 ```
 
+The same syntax **under `quote` is a constant**, as in Common Lisp: every evaluation of
+one quote site answers the same shared object on every backend, for a quoted list as
+much as for a quoted array, so `(eq (f) (f))` is `T` for `(defun f () '(1 2 3))` and a
+destructive write through the result reaches the next call. Treat quoted data as
+read-only, as you would in any Common Lisp.
+
 ### Packed float arrays (`#d` / `#f`)
 
 `#d(...)` and `#f(...)` denote a **packed float array**: a float-typed array whose

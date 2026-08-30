@@ -28,7 +28,55 @@ final class JvmQuoteCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal quoted = ((LispCons) cons.cdr()).car();
+		// A quoted AGGREGATE is one shared constant (.kb/quoted-data.md): the site
+		// caches its build in a volatile static field -- GETSTATIC; on null build and
+		// PUTSTATIC -- so every evaluation answers the SAME object, like the
+		// interpreter, whose evalQuote hands back the reader's datum. Lazy AT THE SITE
+		// rather than in <clinit> on purpose: JvmClassShaker runs on every build, and a
+		// quote site inside a shaken wrapper defun must go with it -- a <clinit>
+		// initializer would keep every quoted table of every dropped wrapper alive
+		// (measured +13 KB on a three-defun program). The field is ACC_VOLATILE so the
+		// racing first evaluations of two threads each publish a fully-built datum; the
+		// site converges on one object right after. Keyed by datum IDENTITY
+		// (JvmLispCompiler.QuotePool), so a macro expansion splicing one template datum
+		// into several sites shares one constant across them too. An atom keeps the
+		// inline emission below; a BARE array literal never comes here and stays a
+		// constructor (.kb/array-literals.md).
+		if (isSharedAggregate(quoted)) {
+			am.ik.jvm.ConstantPool.FieldrefConstant ref = ctx.quotePool.lookup(quoted);
+			if (ref == null) {
+				ref = ctx.quotePool.intern(ctx.cp, className, quoted);
+			}
+			// GETSTATIC f; DUP; IFNONNULL end; POP; <build>; DUP; PUTSTATIC f; end:
+			// -- one value on the stack on both paths.
+			ctx.emit(Opcode.GETSTATIC);
+			ctx.emitU2(ref.index());
+			ctx.emit(Opcode.DUP);
+			int branchPos = ctx.code.size();
+			ctx.emit(Opcode.IFNONNULL);
+			ctx.emitU2(0);
+			ctx.emit(Opcode.POP);
+			compileQuotedVal(quoted, ctx, className);
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.PUTSTATIC);
+			ctx.emitU2(ref.index());
+			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+			return;
+		}
 		compileQuotedVal(quoted, ctx, className);
+	}
+
+	/**
+	 * Whether a quoted datum is memoized into one shared constant. Exactly the mutable
+	 * aggregates: an atom (a number, a string, a symbol, a character, nil, t) has no
+	 * identity a program can observe diverging, so it keeps its inline emission.
+	 * @param val the quoted datum
+	 * @return true when the datum gets a shared {@code _qd$N} field
+	 */
+	private static boolean isSharedAggregate(LispVal val) {
+		return val instanceof LispCons || val instanceof LispArray || val instanceof am.ik.rontolisp.LispInstance
+				|| val instanceof am.ik.rontolisp.LispDoubleFloatArray
+				|| val instanceof am.ik.rontolisp.LispSingleFloatArray || val instanceof am.ik.rontolisp.LispIntVector;
 	}
 
 	/**

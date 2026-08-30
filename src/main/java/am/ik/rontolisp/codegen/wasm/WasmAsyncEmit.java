@@ -822,6 +822,11 @@ final class WasmAsyncEmit {
 			.nestedDefunNames(proto.nestedDefunNames)
 			.specialVars(proto.specialVars)
 			.globalIndices(proto.globalIndices)
+			// NOT optional: a quote site compiled in a fresh context (a top-level
+			// chunk, an async resume body) must reach the one compilation-wide
+			// quoted-datum table, or its global.get names an index the module never
+			// declares.
+			.quoteGlobals(proto.quoteGlobals)
 			.futureTypeIndex(proto.futureTypeIndex)
 			.frameTypeIndex(proto.frameTypeIndex)
 			.wasiStreamTypeIndex(proto.wasiStreamTypeIndex)

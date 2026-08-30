@@ -22,7 +22,46 @@ final class WasmQuoteCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		LispVal quoted = ((LispCons) cons.cdr()).car();
+		// A quoted AGGREGATE is one shared constant (.kb/quoted-data.md): the site
+		// caches its build in a dedicated module global -- global.get; build and
+		// global.set when still null; global.get -- so every evaluation answers the
+		// SAME object, like the interpreter, whose evalQuote hands back the reader's
+		// datum. Lazy rather than start-time because the global count is only known
+		// once every body has compiled; wasm is single-threaded here, so the first
+		// evaluation wins with no race. Keyed by datum IDENTITY
+		// (WasmLispCompiler.QuoteGlobals), so a macro expansion splicing one template
+		// datum into several sites shares one constant across them too. An atom keeps
+		// the inline emission below; a BARE array literal never comes here and stays a
+		// constructor (.kb/array-literals.md), which is what PureBuiltinFolder's
+		// packed-table fold rests on.
+		if (isSharedAggregate(quoted)) {
+			int global = ctx.quoteGlobals.indexFor(quoted);
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(global);
+			ctx.writer.write(Instruction.REF_IS_NULL);
+			ctx.writer.write(Instruction.IF, 0x40);
+			compileQuotedVal(quoted, ctx);
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(global);
+			ctx.writer.write(Instruction.END);
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(global);
+			return;
+		}
 		compileQuotedVal(quoted, ctx);
+	}
+
+	/**
+	 * Whether a quoted datum is memoized into one shared constant. Exactly the mutable
+	 * aggregates: an atom (a number, a string, a symbol, a character, nil, t) has no
+	 * identity a program can observe diverging, so it keeps its inline emission.
+	 * @param val the quoted datum
+	 * @return true when the datum gets a shared module global
+	 */
+	private static boolean isSharedAggregate(LispVal val) {
+		return val instanceof LispCons || val instanceof LispArray || val instanceof am.ik.rontolisp.LispInstance
+				|| val instanceof am.ik.rontolisp.LispDoubleFloatArray
+				|| val instanceof am.ik.rontolisp.LispSingleFloatArray || val instanceof am.ik.rontolisp.LispIntVector;
 	}
 
 	/**

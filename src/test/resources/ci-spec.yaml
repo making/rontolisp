@@ -3984,6 +3984,34 @@ cases:
       "abc"
       "Zbc"
       "abc"
+  # A QUOTED datum is one shared constant per quote site (.kb/quoted-data.md): every
+  # evaluation of one quote site answers the SAME object on every backend, so eq holds
+  # across evaluations and a write through it is visible to the next one -- the
+  # CL-conformant reading, and what the interpreter always did. This is quote's
+  # complement to array-literal-freshness-cross-backend above: a BARE array literal is
+  # a constructor, the same syntax under quote is a constant.
+  - name: quoted-datum-shared-cross-backend
+    source: |
+      (defun ci-qd-list () '(1 2 3))
+      (defun ci-qd-vec () '#(1 2 3))
+      (defun ci-qd-nested () '(1 #(2 3)))
+      (defun ci-qd-double () '#d(1.0 2.0))
+      (defun ci-qd-single () '#f(1.0 2.0))
+      (defun ci-qd-octets () '#8@(1 2 3))
+      (defun ci-quoted-datum-shared ()
+        (print (list (eq (ci-qd-list) (ci-qd-list)) (eq (ci-qd-vec) (ci-qd-vec))
+                     (eq (cadr (ci-qd-nested)) (cadr (ci-qd-nested)))
+                     (eq (ci-qd-double) (ci-qd-double)) (eq (ci-qd-single) (ci-qd-single))
+                     (eq (ci-qd-octets) (ci-qd-octets))))
+        (let ((a (ci-qd-list))) (setf (car a) 99))
+        (print (ci-qd-list))
+        (let ((v (ci-qd-vec))) (setf (aref v 0) 99))
+        (print (ci-qd-vec)))
+      (ci-quoted-datum-shared)
+    expected: |
+      (T T T T T T)
+      (99 2 3)
+      #(99 2 3)
   - name: vector-svref-and-array-introspection-cross-backend
     source: |
       (defun ci-array-intro ()

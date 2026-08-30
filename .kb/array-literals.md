@@ -104,33 +104,17 @@ iteration, of which the added `float[3]` + `int[1]` copy is tens of nanoseconds.
 Interpretation dominates; the allocation is noise. On the compile backends nothing
 changed, because nothing there was shared to begin with.
 
-## What `quote` still shares
+## What `quote` does instead (settled 2026-08-30)
 
-`'#(1 2 3)` is **not** covered: `evalQuote` hands the datum back as is, so on the
-interpreter two evaluations of one quoted array literal are `eq` while both compile
-backends rebuild it.
-
-That is deliberate and it is `quote`'s constraint, not this one. At run time the
-interpreter also uses `(quote <value>)` to splice a LIVE value back into a form for
-re-evaluation -- `LispEvaluator.quoteValue`, four sites, one of them
-`evalSequenceWithGrayDispatch`'s rebuild. Materializing in `evalQuote` was implemented,
-and it broke `read-sequence` outright: the destructive fill landed in a copy and every
-`read-sequence`/`write-sequence` test read back its initial contents. There are ~15 more
-`(quote <value>)` constructions in `eval` and `macro`, so the splice pattern cannot be
-audited cheaply.
-
-A quoted CONS has exactly the same divergence and always has -- measured 2026-08-29:
-
-```lisp
-(defun ql () '(1 2 3))
-(eq (ql) (ql))                       ; interpreter T, JVM/WASM NIL
-(let ((a (ql))) (setf (car a) 99))
-(ql)                                 ; interpreter (99 2 3), JVM/WASM (1 2 3)
-```
-
-So the quoted-datum question is one topic covering conses and arrays together, and it
-moves as one. Pinned as it stands by
-`LispEvaluatorTest.aQuotedArrayIsStillTheDatumOnTheInterpreter`.
+`'#(1 2 3)` is **not** covered, by design: the same syntax under `quote` is a
+CONSTANT, one shared object per quote site on ALL FOUR backends -- for a cons as much
+as for an array. The freshness rule of this file is about literals OUTSIDE quote, and
+the two rules meet exactly at the `'`. The quoted-datum topic (the decision, the
+per-backend memoization, the shaker measurement that made the JVM's lazy, and the
+pinning tests) is `.kb/quoted-data.md`; `evalQuote` still hands the datum back as is,
+because `(quote <value>)` is also the interpreter's live-value splice
+(`LispEvaluator.quoteValue`), and since `.todo/579` both compile backends memoize the
+datum instead of rebuilding it.
 
 ## Where to look when this changes
 
