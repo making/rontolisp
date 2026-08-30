@@ -6,5 +6,5 @@
 
 ```console
 CL-USER> (scene:drop *v* *hand*)
-#<instance GEOM:SOLID>
+#<GEOM:SOLID 8 vertices 6 facets>
 ```

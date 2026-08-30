@@ -3128,6 +3128,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		// structure, so an unbudgeted walk of a shared key does not merely take
 		// exponential time, it allocates exponential space.
 		int equalpGasGlobalIndex = equalpDepthGlobalIndex >= 0 ? equalpDepthGlobalIndex + 1 : -1;
+		// The instance renderer's cycle guard (the wasm twin of LispInstance.render's):
+		// the current rendering path -- a TYPE_HASH_BUCKETS array lazily allocated by
+		// the print branch -- and its depth. An instance already on the path, or the
+		// frame past LispInstance.MAX_RENDER_DEPTH, prints as "#" instead of exhausting
+		// the wasm stack. Emitted only for a program that can build an instance, so
+		// every other module keeps the globals it had; appended after the recursion
+		// counters for the same reason they are last.
+		int lastCounterGlobalIndex = equalpGasGlobalIndex >= 0 ? equalpGasGlobalIndex
+				: hashGasGlobalIndex >= 0 ? hashGasGlobalIndex : ostreamTableGlobalIndex;
+		int instPathGlobalIndex = this.usesInstances ? lastCounterGlobalIndex + 1 : -1;
+		int instDepthGlobalIndex = this.usesInstances ? lastCounterGlobalIndex + 2 : -1;
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -4242,7 +4253,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] writeStrBody = WasmRuntimeBuilder.buildWriteStrBody();
 		byte[] printValBody = WasmRuntimeBuilder.buildPrintValBody(stringTable, this.simd,
 				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
-				this.usesInstances ? instanceTypeBase() : -1);
+				this.usesInstances ? instanceTypeBase() : -1, instPathGlobalIndex, instDepthGlobalIndex);
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
 		byte[] schubUmulhiBody = WasmSchubfachRuntimeBuilder.buildUmulhiBody();
 		byte[] schubGBody = WasmSchubfachRuntimeBuilder.buildGBody(FUNC_SCHUB_UMULHI, schubBlobBase);
@@ -4259,7 +4270,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
 		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd,
 				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
-				this.usesInstances ? instanceTypeBase() : -1);
+				this.usesInstances ? instanceTypeBase() : -1, instPathGlobalIndex, instDepthGlobalIndex);
 
 		// Build the eval runtime (interpreter + function-name registry). The registry
 		// maps a symbol-name string offset to (funcId, arity). Because the string table
@@ -5850,6 +5861,25 @@ public final class WasmLispCompiler implements LispCompiler {
 				// outermost entry exactly like the hash's, so its initial value never
 				// matters.
 				if (equalpGasGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
+				// The instance renderer's cycle guard at instPathGlobalIndex (the
+				// rendering path, a (mut (ref null eq)) = null lazily allocated by the
+				// print branch) and instDepthGlobalIndex (its depth, a (mut i32) = 0).
+				if (instPathGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.writeRefType(true, Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
 					gs.add(g -> {
 						g.write(Type.I32);
 						g.write(am.ik.wasm.Mutability.VAR.code());

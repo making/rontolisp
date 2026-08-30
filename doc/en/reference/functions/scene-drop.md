@@ -6,5 +6,5 @@ Removes solids from the viewer and releases the GPU buffers they kept in `geom:u
 
 ```console
 CL-USER> (scene:drop *v* *hand*)
-#<instance GEOM:SOLID>
+#<GEOM:SOLID 8 vertices 6 facets>
 ```

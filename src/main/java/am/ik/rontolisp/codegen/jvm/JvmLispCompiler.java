@@ -2483,6 +2483,23 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addMethodref(thisClass,
 						cp.addNameAndType(Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf)))
 				: null;
+		// The instance renderer's cycle-guard statics (_instPath/_instDepth), shared by
+		// the two escape modes; the fields are declared below only when the program can
+		// build an instance, so every instance-free class is unchanged.
+		final Utf8Constant instPathFieldName = usesInstances ? cp.addUtf8("_instPath") : null;
+		final Utf8Constant instPathFieldDesc = usesInstances ? cp.addUtf8("[Ljava/lang/Object;") : null;
+		final Utf8Constant instDepthFieldName = usesInstances ? cp.addUtf8("_instDepth") : null;
+		final Utf8Constant instDepthFieldDesc = usesInstances ? cp.addUtf8("I") : null;
+		final JvmRuntimeBuilder.@Nullable InstCycleGuard instCycleGuard = usesInstances
+				? new JvmRuntimeBuilder.InstCycleGuard(
+						cp.addFieldref(thisClass,
+								cp.addNameAndType(Objects.requireNonNull(instPathFieldName),
+										Objects.requireNonNull(instPathFieldDesc))),
+						cp.addFieldref(thisClass,
+								cp.addNameAndType(Objects.requireNonNull(instDepthFieldName),
+										Objects.requireNonNull(instDepthFieldDesc))),
+						cp.addClass(cp.addUtf8("java/lang/Object")), cp.addString("#"))
+				: null;
 
 		// _strEsc: the *print-escape* escaping the readable renderer applies to a string
 		// value's content (todo 216). Always emitted -- _lispToString is unconditional.
@@ -2525,12 +2542,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
-				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), cp.addString("#P"))
+				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), cp.addString("#P"),
+				Objects.requireNonNull(instCycleGuard)) : List.of();
+		List<Integer> instDisplayCode = usesInstances
+				? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass, mainCtx.layoutPool.stringArrayClass(cp),
+						stringBuilderClass, sbInitStr, sbAppendStr, sbToString, objectEquals, lispToDisplayStringMethod,
+						cp.addString("S"), cp.addString("#S("), cp.addString("#<"), closeParenStr, cp.addString(">"),
+						cp.addString(" :"), spaceStr, cp.addString("P"), null, Objects.requireNonNull(instCycleGuard))
 				: List.of();
-		List<Integer> instDisplayCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
-				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
-				objectEquals, lispToDisplayStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
-				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), null) : List.of();
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -2879,6 +2898,22 @@ public final class JvmLispCompiler implements LispCompiler {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
 						.writeU2(streamPathsFieldName)
 						.writeU2(java.util.Objects.requireNonNull(streamPathsFieldDesc))
+						.writeU2(0));
+				}
+				if (usesInstances) {
+					// The instance renderer's cycle guard: the current rendering path
+					// (lazily allocated) and its depth, shared by _instToString and
+					// _instToDisplayString. Not volatile: the guard's emitted reads are
+					// bounds-checked so a rendering race between request threads can at
+					// worst misplace a "#" marker; the interpreter twin is a
+					// ThreadLocal.
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(java.util.Objects.requireNonNull(instPathFieldName))
+						.writeU2(java.util.Objects.requireNonNull(instPathFieldDesc))
+						.writeU2(0));
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(java.util.Objects.requireNonNull(instDepthFieldName))
+						.writeU2(java.util.Objects.requireNonNull(instDepthFieldDesc))
 						.writeU2(0));
 				}
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)

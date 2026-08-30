@@ -5978,6 +5978,42 @@ class WasmLispCompilerIntegrationTest {
 			foo|:foo
 			*Foo*|foo-Bar""";
 
+	// The default instance renderer's cycle guard: an instance already on the current
+	// rendering path -- or the frame past the 256-frame depth cap -- prints as "#",
+	// CL's *print-level* cutoff marker, byte-identical to the interpreter and the JVM
+	// backend (LispEvaluatorTest.evalPrintOfACyclicInstanceGraphIsFinite,
+	// JvmLispCompilerTest.compileAndRunPrintOfACyclicInstanceGraphIsFinite). Without it
+	// two instances pointing at each other exhausted the wasm stack mid-write.
+	private static final String CYCLIC_PRINT_PROGRAM = """
+			(defclass cyc () ((next :initform nil :accessor cyc-next)
+			                  (tag :initarg :tag :reader cyc-tag)))
+			(let ((p (make-instance 'cyc :tag 1)) (q (make-instance 'cyc :tag 2)))
+			  (setf (cyc-next p) q)
+			  (setf (cyc-next q) p)
+			  (print p)
+			  (princ p))
+			(terpri)
+			(defstruct knot next)
+			(let ((k (make-knot)))
+			  (setf (knot-next k) k)
+			  (prin1 k))
+			""";
+
+	private static final String CYCLIC_PRINT_EXPECTED = """
+			#<CYC :NEXT #<CYC :NEXT # :TAG 2> :TAG 1>
+			#<CYC :NEXT #<CYC :NEXT # :TAG 2> :TAG 1>
+			#S(KNOT :NEXT #)""";
+
+	@Test
+	void printOfACyclicInstanceGraphIsFinite() throws Exception {
+		assertThat(compileAndRun(CYCLIC_PRINT_PROGRAM)).isEqualTo(CYCLIC_PRINT_EXPECTED);
+	}
+
+	@Test
+	void printOfACyclicInstanceGraphIsFiniteOnTheComponentPath() throws Exception {
+		assertThat(compileComponentAndRun(CYCLIC_PRINT_PROGRAM)).isEqualTo(CYCLIC_PRINT_EXPECTED);
+	}
+
 	@Test
 	void printCase() throws Exception {
 		// *print-case* converts the case of every SYMBOL the printer spells, through the

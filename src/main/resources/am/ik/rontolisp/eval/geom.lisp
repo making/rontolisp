@@ -270,6 +270,35 @@
 
 (defun geom:vertices-of (s) (geom::%vertices s))
 
+;; --- how a node and a solid print (.kb/geom.md, "The printed representation") -
+;;
+;; The default instance renderer prints every slot, which for a solid is the
+;; whole vertex array and the mesh cache, and for a node in a scene graph a
+;; parent/children cycle. A method prints what a caller can read: the label if
+;; there is one, and the counts that say what the thing is. transform and
+;; bounds keep the default rendering deliberately -- their slots ARE the value,
+;; they hold no cache and cannot cycle.
+
+(defmethod print-object ((n geom:node) stream)
+  (print-unreadable-object (n stream :type t)
+    (let ((k (length (geom::%children n))))
+      (write-string (princ-to-string k) stream)
+      (write-string (if (= k 1) " child" " children") stream)))
+  n)
+
+(defmethod print-object ((s geom:solid) stream)
+  (print-unreadable-object (s stream :type t)
+    (let ((label (geom:label-of s)))
+      (when label
+        (write-string (prin1-to-string label) stream)
+        (write-string " " stream)))
+    (write-string (princ-to-string (first (linalg:shape (geom::%vertices s))))
+                  stream)
+    (write-string " vertices " stream)
+    (write-string (princ-to-string (length (geom:facets-of s))) stream)
+    (write-string " facets" stream))
+  s)
+
 (defun geom::%invalidate-mesh (s)
   (setf (geom::%mesh s) nil)
   (setf (geom::%wire s) nil)

@@ -5073,6 +5073,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunPrintOfACyclicInstanceGraphIsFinite() throws Exception {
+		// Two instances pointing at each other used to StackOverflowError the emitted
+		// _instToString: the default instance renderer had no cycle guard. An instance
+		// already on the current rendering path -- or past the 256-frame depth cap --
+		// prints as "#", CL's *print-level* cutoff marker, byte-identical to the
+		// interpreter (LispEvaluatorTest.evalPrintOfACyclicInstanceGraphIsFinite).
+		assertThat(compileAndRun("""
+				(defclass cyc () ((next :initform nil :accessor cyc-next)
+				                  (tag :initarg :tag :reader cyc-tag)))
+				(let ((p (make-instance 'cyc :tag 1)) (q (make-instance 'cyc :tag 2)))
+				  (setf (cyc-next p) q)
+				  (setf (cyc-next q) p)
+				  (print p)
+				  (princ p))
+				(terpri)
+				(defstruct knot next)
+				(let ((k (make-knot)))
+				  (setf (knot-next k) k)
+				  (prin1 k))
+				""")).isEqualTo("""
+				#<CYC :NEXT #<CYC :NEXT # :TAG 2> :TAG 1>
+				#<CYC :NEXT #<CYC :NEXT # :TAG 2> :TAG 1>
+				#S(KNOT :NEXT #)""");
+	}
+
+	@Test
 	void compileAndRunPrintCase() throws Exception {
 		// *print-case* converts the case of every SYMBOL the printer spells, on the
 		// compile path as on the interpreter (the shared %print-cased renderer, spliced

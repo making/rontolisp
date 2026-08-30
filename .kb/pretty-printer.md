@@ -105,6 +105,44 @@ text identical to SBCL 2.2.9 (`LispEvaluatorTest.evalPrintCase`,
   `:case` to the prelude `write` would make every `write` user MENTION `*print-case*` and
   so pull the renderer into modules that never bind it.
 
+## A cyclic instance graph prints finitely instead of overflowing the stack
+
+**Invariant (todo 584, 2026-08-30): the default INSTANCE renderer never
+StackOverflowErrors on a cycle.** An instance already being rendered somewhere on the
+current rendering path -- two instances pointing at each other, a scene graph's
+parent/children pair -- prints as **`#`**, CL's `*print-level*` cutoff marker, in both
+escape modes; so does the frame that would open past **256** nested instance frames
+(`LispInstance.MAX_RENDER_DEPTH`), which bounds the render stack for a deep FINITE
+chain too. The check is IDENTITY along the current path, not equality and not
+"rendered before": the same instance reachable twice on a finite path still renders
+twice, so every existing finite rendering under 256 frames is byte-identical to what
+it was.
+
+Four implementations, one behavior, pinned together:
+
+- interpreter: `LispInstance.render` (a `ThreadLocal` path array);
+- JVM backend: the guard emitted into `_instToString`/`_instToDisplayString`
+  (`JvmRuntimeBuilder.buildInstToStringBody`, `_instPath`/`_instDepth` statics shared by
+  the two escape modes, declared only when the program can build an instance);
+- both WASM backends: the guard in the printers' instance branch
+  (`WasmRuntimeBuilder.emitPrintInstance`, two module globals appended after the
+  hash/equalp recursion counters, emitted only under `usesInstances`).
+
+A program that cannot build an instance is BYTE-IDENTICAL to a pre-guard build
+(measured 2026-08-30 on `(print (+ 1 2))`, `.class` and `.wasm`); one that can pays
+~174 B of `.class` / ~129 B of `.wasm`. Pinned by
+`LispEvaluatorTest.evalPrintOfACyclicInstanceGraphIsFinite` (+ the depth-cap twin),
+`JvmLispCompilerTest.compileAndRunPrintOfACyclicInstanceGraphIsFinite`,
+`WasmLispCompilerIntegrationTest.printOfACyclicInstanceGraphIsFinite` (+ the component
+twin) and the `print-cyclic-instance-graph` ci-spec case.
+
+**A cyclic CONS (or self-holding vector) still overflows** -- the cons renderer is a
+separate arm in each backend and CL's real answer there is `*print-circle*`, which
+deserves a design of its own; `.todo/585` owns it. The guard sits UNDER the
+`print-object` route: a routed instance reaches the raw fallback and the guard with it,
+and a `print-object` method that prints only what it should (geom's, `.kb/geom.md`)
+never reaches the guard at all.
+
 ## What a stream with no column cannot do, and the re-evaluation trigger
 
 **Every conditional line break is a no-op** -- `pprint-newline` with `:linear` / `:fill` /
@@ -151,7 +189,7 @@ binding); the compile paths get a top-level `(defvar name value)` from
 | `*print-escape*` | `t` | yes -- picks prin1 vs princ, and the `print-object` route binds it |
 | `*print-readably*` | `nil` | yes -- forces escaping |
 | `*print-pretty*` | `t` | yes -- gates the MANDATORY line break |
-| `*print-circle*` | `nil` | no (the printer does no circle detection) |
+| `*print-circle*` | `nil` | no labels -- but the INSTANCE renderer carries a cycle guard (section below) |
 | `*print-right-margin*` / `*print-miser-width*` / `*print-lines*` | `nil` | no (no column) |
 | `*print-length*` / `*print-level*` | `nil` | the value IS the behavior (no truncation) |
 | `*print-base*` | `10` | the value IS the behavior |

@@ -4340,6 +4340,63 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalPrintOfACyclicInstanceGraphIsFinite() {
+		// Two instances pointing at each other used to StackOverflowError every printing
+		// operator: the default instance renderer recursed into slot values
+		// with no cycle guard. An instance already being rendered on the current path
+		// now prints as "#", CL's *print-level* cutoff marker, in both escape modes.
+		assertThat(evalMulti("""
+				(defclass cyc () ((next :initform nil :accessor cyc-next)
+				                  (tag :initarg :tag :reader cyc-tag)))
+				(let ((p (make-instance 'cyc :tag 1)) (q (make-instance 'cyc :tag 2)))
+				  (setf (cyc-next p) q)
+				  (setf (cyc-next q) p)
+				  (list (prin1-to-string p) (princ-to-string p)))
+				""").print()).isEqualTo(
+				"(\"#<CYC :NEXT #<CYC :NEXT # :TAG 2> :TAG 1>\"" + " \"#<CYC :NEXT #<CYC :NEXT # :TAG 2> :TAG 1>\")");
+		// A self-cycle, and a struct: the guard is the renderer's, not the class's.
+		assertThat(evalMulti("""
+				(defclass cyc () ((next :initform nil :accessor cyc-next)
+				                  (tag :initarg :tag :reader cyc-tag)))
+				(let ((s (make-instance 'cyc :tag 3)))
+				  (setf (cyc-next s) s)
+				  (prin1-to-string s))
+				""").print()).isEqualTo("\"#<CYC :NEXT # :TAG 3>\"");
+		assertThat(evalMulti("""
+				(defstruct knot next)
+				(let ((k (make-knot)))
+				  (setf (knot-next k) k)
+				  (prin1-to-string k))
+				""").print()).isEqualTo("\"#S(KNOT :NEXT #)\"");
+		// The same instance reachable twice WITHOUT a cycle is not truncated: the guard
+		// tracks the rendering PATH, not everything rendered so far.
+		assertThat(evalMulti("""
+				(defstruct leaf v)
+				(let ((shared (make-leaf :v 9)))
+				  (prin1-to-string (list shared shared)))
+				""").print()).isEqualTo("\"(#S(LEAF :V 9) #S(LEAF :V 9))\"");
+	}
+
+	@Test
+	void evalPrintOfInstancesNestedPastTheDepthCapIsTruncatedNotAStackOverflow() {
+		// A finite chain past 256 instance frames prints "#" where frame 256 would
+		// open -- the same marker the cycle guard uses, bounding the render stack on
+		// every backend instead of overflowing it.
+		String rendered = evalMulti("""
+				(defstruct lnk next)
+				(let ((head (make-lnk)))
+				  (dotimes (i 300)
+				    (let ((n (make-lnk)))
+				      (setf (lnk-next n) head)
+				      (setq head n)))
+				  (prin1-to-string head))
+				""").print();
+		assertThat(rendered).contains("#S(LNK :NEXT #S(LNK :NEXT ");
+		assertThat(rendered).contains(" #)");
+		assertThat(rendered.chars().filter(c -> c == '(').count()).isEqualTo(256);
+	}
+
+	@Test
 	void evalPrintCase() {
 		// *print-case* converts the case of every SYMBOL the printer spells -- the value
 		// verified against SBCL 2.2.9. :downcase and :capitalize are the two that

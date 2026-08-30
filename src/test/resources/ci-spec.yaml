@@ -5038,6 +5038,47 @@ cases:
       #f((-50.0 -100.0 0.0) (50.0 -100.0 0.0) (50.0 100.0 0.0) (-50.0 100.0 0.0))
       2
       NIL
+  # The printed representation of a solid and a node (the print-object methods in
+  # geom.lisp): the label when there is one and the two counts, not the vertex
+  # array -- and an ATTACHED node prints at all, where the default renderer walked
+  # the parent/children cycle into a stack overflow. transform keeps the default
+  # slot rendering deliberately (.kb/geom.md, "The printed representation").
+  - name: geom-print-object-cross-backend
+    source: |
+      (print (geom:box 2 :label "b"))
+      (princ (geom:box 2))
+      (terpri)
+      (let ((a (geom:make-node)) (b (geom:make-node)))
+        (geom:attach a b)
+        (print b)
+        (print a))
+      (print (geom:make-transform))
+    expected: |
+      #<GEOM:SOLID "b" 8 vertices 6 facets>
+      #<SOLID 8 vertices 6 facets>
+      #<GEOM:NODE 0 children>
+      #<GEOM:NODE 1 child>
+      #<GEOM:TRANSFORM :TRANSLATION #f(0.0 0.0 0.0) :ROTATION #f((1.0 0.0 0.0) (0.0 1.0 0.0) (0.0 0.0 1.0))>
+  # The default instance renderer's cycle guard, under the method route: an
+  # instance already on the current rendering path -- or the frame past the
+  # 256-frame depth cap -- prints as "#", CL's *print-level* cutoff marker,
+  # instead of a StackOverflowError / exhausted wasm stack, identically on all
+  # four backends (.kb/pretty-printer.md, "A cyclic instance graph").
+  - name: print-cyclic-instance-graph
+    source: |
+      (defclass ci-cyc () ((next :initform nil :accessor ci-cyc-next)
+                           (tag :initarg :tag :reader ci-cyc-tag)))
+      (let ((p (make-instance 'ci-cyc :tag 1)) (q (make-instance 'ci-cyc :tag 2)))
+        (setf (ci-cyc-next p) q)
+        (setf (ci-cyc-next q) p)
+        (print p))
+      (defstruct ci-knot next)
+      (let ((k (make-ci-knot)))
+        (setf (ci-knot-next k) k)
+        (print k))
+    expected: |
+      #<CI-CYC :NEXT #<CI-CYC :NEXT # :TAG 2> :TAG 1>
+      #S(CI-KNOT :NEXT #)
   # The torch package (reverse-mode autograd over linalg): fit y = 2x by gradient
   # descent on the MSE -- ten forward/backward/update steps, the update inside
   # torch:no-grad (which rebinds the torch::*grad-enabled* special). Every quantity

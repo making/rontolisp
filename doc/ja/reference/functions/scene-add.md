@@ -6,5 +6,5 @@
 
 ```console
 CL-USER> (scene:add *v* (geom:box 100) (geom:triad :at (geom:vec3 0 0 0)))
-#<instance GEOM:SOLID>
+#<GEOM:SOLID "z" 73 vertices 73 facets>
 ```

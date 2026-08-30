@@ -13,6 +13,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.LispInstance;
 
 /**
  * Builds JVM bytecode for runtime helper methods: dispatch, _lispToString, and
@@ -22,6 +23,12 @@ final class JvmRuntimeBuilder {
 
 	private JvmRuntimeBuilder() {
 	}
+
+	/**
+	 * The instance renderer's depth cap, shared with the interpreter so the truncated
+	 * rendering is byte-identical on every backend.
+	 */
+	private static final int INST_RENDER_DEPTH_CAP = LispInstance.MAX_RENDER_DEPTH;
 
 	/**
 	 * The byte budget of one {@code _invoke_<arity>} dispatch segment. The case bodies
@@ -1414,6 +1421,25 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
+	 * Constant-pool references for the instance renderer's cycle guard -- the emitted
+	 * twin of {@code LispInstance.render}'s: an instance already on the current rendering
+	 * path, or the frame past {@code LispInstance.MAX_RENDER_DEPTH}, returns {@code "#"}
+	 * (CL's {@code *print-level*} cutoff marker) instead of recursing without end. The
+	 * two static fields are shared by {@code _instToString} and
+	 * {@code _instToDisplayString}: whichever escape mode a nested render runs in, the
+	 * path is one path.
+	 *
+	 * @param pathField the {@code _instPath} static ({@code Object[]}, lazily allocated)
+	 * @param depthField the {@code _instDepth} static ({@code int})
+	 * @param objectClass the {@code java/lang/Object} class constant (for the lazy
+	 * {@code anewarray})
+	 * @param depthMarkerStr the {@code "#"} marker
+	 */
+	record InstCycleGuard(FieldrefConstant pathField, FieldrefConstant depthField, ClassConstant objectClass,
+			ConstantPool.StringConstant depthMarkerStr) {
+	}
+
+	/**
 	 * Builds {@code _instToString}/{@code _instToDisplayString}: renders an instance
 	 * {@code Object[]{String[] layout, v1, ..., vn}} as {@code #S(NAME :SLOT v ...)} or
 	 * {@code #&lt;NAME :SLOT v ...&gt;}, where the layout is
@@ -1453,7 +1479,7 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant openClassStr, ConstantPool.StringConstant closeStructStr,
 			ConstantPool.StringConstant closeClassStr, ConstantPool.StringConstant keySepStr,
 			ConstantPool.StringConstant spaceStr, ConstantPool.StringConstant pathnameKindStr,
-			ConstantPool.@org.jspecify.annotations.Nullable StringConstant pathnamePrefixStr) {
+			ConstantPool.@org.jspecify.annotations.Nullable StringConstant pathnamePrefixStr, InstCycleGuard guard) {
 		List<Integer> code = new ArrayList<>();
 		// layout = (String[]) arr[0]
 		code.add(Opcode.ALOAD_0);
@@ -1503,6 +1529,82 @@ final class JvmRuntimeBuilder {
 			code.add(Opcode.ARETURN);
 		}
 		patchBranch(code, ifNotPathnamePos, code.size());
+		// The cycle guard, the emitted twin of LispInstance.render's (kept in step by
+		// JvmLispCompilerTest.compileAndRunPrintOfACyclicInstanceGraphIsFinite): an
+		// instance already on the current rendering path -- a scene graph's
+		// parent/children pair is the everyday case -- or the frame past the 256-frame
+		// depth cap returns "#", the *print-level* cutoff marker, instead of
+		// overflowing the stack. Identity (if_acmpne), not equals: the same instance
+		// REACHABLE twice on a finite path still renders twice. Placed AFTER the
+		// pathname arm, whose one slot is a string and cannot recurse, so only the one
+		// return below needs the pop.
+		// if (_instPath == null) _instPath = new Object[256];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.pathField().index());
+		int ifPathInitedPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		emitIntConstStatic(code, INST_RENDER_DEPTH_CAP);
+		code.add(Opcode.ANEWARRAY);
+		emitU2(code, guard.objectClass().index());
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, guard.pathField().index());
+		patchBranch(code, ifPathInitedPos, code.size());
+		// for (i = 0; i < _instDepth; i++) if (_instPath[i] == arr) return "#";
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.ISTORE_3);
+		int scanStart = code.size();
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.depthField().index());
+		int scanDonePos = code.size();
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.pathField().index());
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ALOAD_0);
+		int scanMissPos = code.size();
+		code.add(Opcode.IF_ACMPNE);
+		emitU2(code, 0);
+		emitLdc(code, guard.depthMarkerStr().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, scanMissPos, code.size());
+		code.add(Opcode.IINC);
+		code.add(3);
+		code.add(1);
+		int scanLoopPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, scanLoopPos, scanStart);
+		patchBranch(code, scanDonePos, code.size());
+		// The push, over ONE read of _instDepth (i = _instDepth; if (i >= 256) return
+		// "#"; _instPath[i] = arr; _instDepth = i + 1): a served program's request
+		// threads may print concurrently over these shared statics, so every array
+		// index is bounds-checked against the SAME read that stores it -- a race can at
+		// worst misplace a "#" marker, never index out of the path array.
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.depthField().index());
+		code.add(Opcode.ISTORE_3);
+		code.add(Opcode.ILOAD_3);
+		emitIntConstStatic(code, INST_RENDER_DEPTH_CAP);
+		int underCapPos = code.size();
+		code.add(Opcode.IF_ICMPLT);
+		emitU2(code, 0);
+		emitLdc(code, guard.depthMarkerStr().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, underCapPos, code.size());
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.pathField().index());
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.AASTORE);
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.IADD);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, guard.depthField().index());
 		// The opener is chosen into a local BEFORE the StringBuilder is allocated: a
 		// branch merge with an uninitialized NEW on the operand stack is exactly what
 		// the offline StackMapTable computation should never have to model.
@@ -1572,6 +1674,34 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, sbToString.index());
+		// The guard's pop, over one read like the push (i = _instDepth - 1; if (i < 0)
+		// _instDepth = 0 else { _instPath[i] = null; _instDepth = i; }). Runs under
+		// the rendered string already on the stack -- the field traffic leaves it
+		// untouched. No finally is needed: the render helpers this body calls do not
+		// throw; the clamp is for a rendering RACE (concurrent request threads), which
+		// may misplace a marker but never index out of the array.
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.depthField().index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.ISTORE_3);
+		code.add(Opcode.ILOAD_3);
+		int popClampPos = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, guard.pathField().index());
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.AASTORE);
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, guard.depthField().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, popClampPos, code.size());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, guard.depthField().index());
 		code.add(Opcode.ARETURN);
 		return code;
 	}

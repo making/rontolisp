@@ -3931,6 +3931,35 @@ public final class LispEvaluator {
 		return values;
 	}
 
+	/**
+	 * Renders a value the way {@code prin1} would: through the {@code print-object} route
+	 * when this evaluation has turned it on (a {@code defmethod print-object}, a
+	 * condition in reach, a converting {@code *print-case*}), else the raw readable
+	 * rendering. The REPL echoes results through this, so a value whose class carries a
+	 * {@code print-object} method -- a {@code geom:solid}, a torch tensor -- echoes as
+	 * the method prints it, exactly as the printing operators would. An unrouted
+	 * evaluation takes {@code value.print()} directly, so the everyday echo is unchanged;
+	 * a failure inside the routed rendering falls back to it too, because an echo must
+	 * never turn a computed value into an error.
+	 * @param value the value to render
+	 * @return the prin1 text
+	 */
+	public String prin1ToStringRouted(LispVal value) {
+		boolean routed = !LispMacroExpander.printObjectTags(this.closRegistry).isEmpty()
+				|| this.closRegistry.routesConditionReports() || printCaseInEffect();
+		if (!routed) {
+			return value.print();
+		}
+		LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+		LispVal form = new LispCons(new LispSymbol(LispNames.PRIN1_TO_STRING), new LispCons(quoted, LispNil.INSTANCE));
+		try {
+			return eval(form) instanceof LispString rendered ? rendered.value() : value.print();
+		}
+		catch (RuntimeException ex) {
+			return value.print();
+		}
+	}
+
 	/** The elements of a value list (nil -- no values -- included). */
 	private static List<LispVal> spilledValues(LispVal list) {
 		return list instanceof LispCons cons ? cons.toList() : List.of();
@@ -4243,6 +4272,22 @@ public final class LispEvaluator {
 		return switch (form) {
 			case LispSymbol sym -> TorchLibrary.isTorchQualified(sym.name());
 			case LispCons cons -> referencesTorch(cons.car()) || referencesTorch(cons.cdr());
+			default -> false;
+		};
+	}
+
+	/**
+	 * The {@code geom} twin of {@link #referencesTorch}: {@code geom.lisp} carries
+	 * {@code print-object} methods on {@code geom:node}/{@code geom:solid}, so the first
+	 * {@code (print (geom:box ...))} of a session must load the library BEFORE the
+	 * routing decision, not during the argument evaluation after it.
+	 * @param form the form to scan
+	 * @return whether a geom-qualified symbol occurs in it
+	 */
+	private static boolean referencesGeom(LispVal form) {
+		return switch (form) {
+			case LispSymbol sym -> GeomLibrary.isGeomQualified(sym.name());
+			case LispCons cons -> referencesGeom(cons.car()) || referencesGeom(cons.cdr());
 			default -> false;
 		};
 	}
@@ -5145,10 +5190,14 @@ public final class LispEvaluator {
 				// method has not reached yet and renders the raw #S(...) form, while
 				// every
 				// later print routes. The same ordering seam as the torch:no-grad case
-				// above (.kb/torch.md); torch is the only lazily loaded library that
-				// defines a print-object method.
+				// above (.kb/torch.md); torch and geom are the only lazily loaded
+				// libraries that define a print-object method (geom's are on
+				// geom:node/geom:solid, .kb/geom.md).
 				if (!this.torchLibraryLoaded && referencesTorch(cons)) {
 					ensureTorchLoaded();
+				}
+				if (!this.geomLibraryLoaded && referencesGeom(cons)) {
+					ensureGeomLoaded();
 				}
 				boolean printCase = printCaseInEffect();
 				ensurePrintObjectRuntimeLoadedIfRouted(printCase);

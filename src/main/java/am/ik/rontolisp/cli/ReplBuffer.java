@@ -82,7 +82,9 @@ final class ReplBuffer {
 				List<LispVal> values = evaluator.evalValues(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
 				freshLine(evaluator);
 				for (LispVal value : values) {
-					out.println(value.print());
+					// prin1 semantics, print-object route included: a geom:solid echoes
+					// as its method prints it, as in any CL REPL.
+					out.println(evaluator.prin1ToStringRouted(value));
 				}
 			}
 		}

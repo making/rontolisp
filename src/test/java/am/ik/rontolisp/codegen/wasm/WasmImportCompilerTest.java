@@ -540,8 +540,11 @@ class WasmImportCompilerTest {
 				""");
 		// A fetching module builds header tables, so it also carries the _hash
 		// recursion-depth and work-budget globals, which are appended after the
-		// unconditional three (.kb/hash-tables.md) and push the guard further down.
-		int g = globalCount(fetching) - UNCONDITIONAL_TRAILING_GLOBALS - HASH_DEPTH_GLOBAL - 1;
+		// unconditional three (.kb/hash-tables.md) -- and it can build an instance (a
+		// condition), so the instance renderer's cycle-guard pair
+		// (.kb/pretty-printer.md) follows those; all of them push the guard further
+		// down.
+		int g = globalCount(fetching) - UNCONDITIONAL_TRAILING_GLOBALS - HASH_DEPTH_GLOBAL - INSTANCE_GUARD_GLOBALS - 1;
 		assertThat(countOf(fetching, prependGlobalGet(g, GUARD_TRAP_AND_SET), (byte) g)).isEqualTo(1);
 		byte[] noFetch = compileHostFetch("""
 				(defun run () 1)
@@ -559,6 +562,11 @@ class WasmImportCompilerTest {
 	// exactly when the program uses a hash table; they are appended after the three
 	// above, so they are the very last globals.
 	private static final int HASH_DEPTH_GLOBAL = 2;
+
+	// The instance renderer's cycle-guard pair -- the rendering path and its depth --
+	// present exactly when the program can build an instance; appended after the hash
+	// counters (.kb/pretty-printer.md, "A cyclic instance graph").
+	private static final int INSTANCE_GUARD_GLOBALS = 2;
 
 	// if (blocktype empty); unreachable; end; i32.const 1; global.set -- the re-entry
 	// guard's trap-and-set, minus the leading global.get whose index varies by module.

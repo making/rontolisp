@@ -692,6 +692,53 @@ class GeomLibraryTest {
 				""").print()).isEqualTo("(NIL 1)");
 	}
 
+	// --- the printed representation -----------------------------------
+
+	@Test
+	void aSolidPrintsItsLabelAndItsTwoCounts() {
+		// print-object on geom:solid: the label when there is one, then the two counts
+		// that say what it is -- not the whole vertex array (520 characters for a box,
+		// 2,180 for a cylinder).
+		assertThat(eval("(prin1-to-string (geom:box 2 :label \"b\"))").print())
+			.isEqualTo("\"#<GEOM:SOLID \\\"b\\\" 8 vertices 6 facets>\"");
+		// No label: the counts alone. princ drops the package qualifier (CLHS 22.1.3.3).
+		assertThat(eval("(princ-to-string (geom:box 2))").print()).isEqualTo("\"#<SOLID 8 vertices 6 facets>\"");
+	}
+
+	@Test
+	void aNodeInASceneGraphPrintsItsChildCountInsteadOfOverflowingTheStack() {
+		// geom:node's parent and children slots point at each other, so the default
+		// renderer StackOverflowError'd on ANY attached node. The method
+		// prints the child count and never walks the graph.
+		assertThat(eval("""
+				(let ((a (geom:make-node)) (b (geom:make-node)))
+				  (geom:attach a b)
+				  (list (prin1-to-string b) (prin1-to-string a)))
+				""").print()).isEqualTo("(\"#<GEOM:NODE 0 children>\" \"#<GEOM:NODE 1 child>\")");
+	}
+
+	@Test
+	void anAttachedSolidPrintsToo() {
+		// The more serious half: an attached SOLID was unprintable.
+		assertThat(eval("""
+				(let ((a (geom:box 2 :label "a")) (b (geom:box 3)))
+				  (geom:attach a b)
+				  (prin1-to-string a))
+				""").print()).isEqualTo("\"#<GEOM:SOLID \\\"a\\\" 8 vertices 6 facets>\"");
+	}
+
+	@Test
+	void aTransformAndABoundsStillPrintTheirSlots() {
+		// Deliberately NO print-object method on geom:transform / geom:bounds: their
+		// slots ARE the value (12 numbers of rigid motion, two corner points), they hold
+		// no cache and cannot cycle, so the full default rendering is the honest print.
+		assertThat(eval("(prin1-to-string (geom:make-transform))").print())
+			.isEqualTo("\"#<GEOM:TRANSFORM :TRANSLATION #f(0.0 0.0 0.0)"
+					+ " :ROTATION #f((1.0 0.0 0.0) (0.0 1.0 0.0) (0.0 0.0 1.0))>\"");
+		assertThat(eval("(prin1-to-string (geom:bounds (geom:box 2)))").print())
+			.isEqualTo("\"#<GEOM:BOUNDS :LOWER #f(-1.0 -1.0 -1.0) :UPPER #f(1.0 1.0 1.0)>\"");
+	}
+
 	@Test
 	void theCsgDefinitionsArePrunedFromAProgramThatDoesNotUseThem() {
 		List<LispVal> pruned = LibraryDefunPruner

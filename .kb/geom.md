@@ -140,6 +140,53 @@ a slow one. The slot would still be the right design after 012 lands (the cache 
 with the thing it caches, and `detach` cannot orphan it), so nothing here changes then;
 only the comment's reason would shrink to that last sentence.
 
+## The printed representation (todo-584, 2026-08-30)
+
+`geom.lisp` carries `defmethod print-object` on exactly TWO of its four classes:
+
+- **`geom:solid`** -- `#<GEOM:SOLID "b" 8 vertices 6 facets>`: the label when there is
+  one (prin1-quoted, so it cannot be misread as a count), then the two counts that say
+  what the solid is. The default rendering was 520 characters for a box and 2,180 for a
+  cylinder (measured 2026-08-30, the todo's numbers confirmed): every slot, the whole
+  `:VERTICES` array, the full facet list, and -- once built -- 18 floats per triangle of
+  `:MESH-CACHE` plus a renderer's GPU handles in `:USER-DATA`.
+- **`geom:node`** -- `#<GEOM:NODE 1 child>` / `#<GEOM:NODE 2 children>`: the child
+  count, and NOTHING that walks the graph. This is the correctness half, not the
+  cosmetic one: `parent` and `children` point at each other, so after `(geom:attach a
+  b)` the default renderer recursed the cycle into a `StackOverflowError` -- an attached
+  node (every solid in a scene) could not be printed at all. The default renderer's own
+  cycle guard (`.kb/pretty-printer.md`, "A cyclic instance graph") now makes that
+  finite rather than fatal, but `#` markers are a fallback, not a representation; the
+  method is what a caller should see.
+- **`geom:transform` and `geom:bounds` deliberately have NO method.** Their slots ARE
+  the value -- a rigid motion is its 12 numbers, a bounds its two corner points -- they
+  hold no cache, and they cannot cycle (read-only slots, no node references), so the
+  full default rendering is the honest print and a method would only hide it.
+
+Both methods use `print-unreadable-object :type t`, so `princ` drops the package
+qualifier exactly as every other typed `#<...>` does (`.kb/clos.md`).
+
+**The cost, measured 2026-08-30** (`(print (geom:volume (geom:box 10)))`, before ->
+after): `.class` 121,902 -> 137,123 (+15,221 B, +12.5%); `.wasm` (Preview 1) 130,351 ->
+141,841 (+11,490 B, +8.8%). A `defmethod print-object` in the spliced library turns on
+the printer route (`printObjectTags`, `.kb/clos.md`) for EVERY program that splices
+geom, on all three compile backends -- that delta is the `%print-object-str` pair, the
+dispatcher and the two methods. Judged payable: it buys every geom program a readable
+solid and a printable scene graph, on an artifact already >120 KB. A program that does
+NOT reference geom is byte-identical to a pre-change build (measured on
+`(print (+ 1 2))` and on `(defstruct pt x y)`-plus-print, whose only delta is the
+~130-175 B cycle guard the pretty-printer file owns). Pinned by
+`GeomLibraryTest.aSolidPrintsItsLabelAndItsTwoCounts` /
+`aNodeInASceneGraphPrintsItsChildCountInsteadOfOverflowingTheStack` /
+`anAttachedSolidPrintsToo` / `aTransformAndABoundsStillPrintTheirSlots` and the
+`geom-print-object-cross-backend` ci-spec case (all four backends, byte-identical).
+
+The interpreter's lazy load has one ordering seam here: the printing operators take
+their routing decision BEFORE evaluating the argument, so the first
+`(print (geom:box ...))` of a session must load geom first --
+`LispEvaluator.referencesGeom`, the twin of the torch pre-load beside it (torch and
+geom are the only lazily loaded libraries with `print-object` methods).
+
 ## Boolean operations (union / difference / intersection / section)
 
 **The algorithm is BSP-tree clipping -- the csg.js formulation -- chosen over the
@@ -195,7 +242,9 @@ The load-bearing decisions:
 `geom` is large and a program that uses `box` alone must not carry `revolution`'s
 tessellator. Every geom definition is a `defun`/`defconstant`, so `LibraryDefunPruner`
 keys it by name and the fixpoint reaches only what the program calls; the four
-`defclass` forms are unkeyed and stay roots, which is the type model and nothing more.
+`defclass` forms -- and, since todo-584, the two `defmethod print-object` forms -- are
+unkeyed and stay roots, which is the type model plus the printed representation and
+nothing more.
 Measured: `(print (geom:volume (geom:box 10)))` compiled to a `.class` carries 15 geom
 methods (vec3, %unit, %identity-rotation, axis-vector, axis-angle-matrix, rpy-matrix,
 make-transform, %build-solid, mesh, %facet-normal, box, volume and the generated
